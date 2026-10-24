@@ -51,7 +51,7 @@ def patched_sources(monkeypatch):
     monkeypatch.setattr(aa, "_collect_jobs", mk("jobs", state["jobs"]))
     # R3 6th source: default-empty in the aggregation fixture so the existing
     # count assertions (6 items) stay valid; exercised in isolation below.
-    monkeypatch.setattr(aa, "_collect_community_digests", mk("digests", []))
+    monkeypatch.setattr(aa, "_collect_job_digests", mk("digests", []))
     # db_recovery: default-empty in the aggregation fixture so the existing count
     # assertions (6 items) stay valid; its own behavior is covered in isolation.
     monkeypatch.setattr(aa, "_collect_db_recovery", mk("db_recovery", []))
@@ -61,11 +61,11 @@ def patched_sources(monkeypatch):
 def test_aggregates_all_sources(patched_sources):
     res = collect(Path("/tmp"))
     sources = {it.source for it in res.items}
-    # 6 collectors wired; community_digest is patched-empty in this fixture (its
-    # own behavior is covered by the _collect_community_digests isolation tests),
+    # 6 collectors wired; job_digest is patched-empty in this fixture (its
+    # own behavior is covered by the _collect_job_digests isolation tests),
     # so it contributes no source here — the other 5 all appear.
     assert sources == {"escalation", "cultivation", "governance", "paused_run", "job"}
-    assert "community_digest" not in sources  # patched-empty in this fixture
+    assert "job_digest" not in sources  # patched-empty in this fixture
     assert len(res.items) == 6  # 2 esc + 1 cult + 1 gov + 1 paused + 1 job
 
 
@@ -305,15 +305,16 @@ def test_sense_tool_registered_in_ui_server():
     assert "ui_action" in names and "surface_run_outputs" not in names   # retired (R3)
 
 
-# ── R3 闭环 dispatch: _collect_community_digests ──────────────────────────────
-# A fresh community daily-digest / weekly-report surfaces as a REVIEW item whose
-# dispatch.message tells the agent to LEARN + s_persist from it — closing the loop
-# (job → 🔔 → click → digest in chat → sediment). Time-windowed (read-only, no
-# marker file): a digest ages out of the window naturally, so no perpetual noise.
+# ── R3 闭环 dispatch: _collect_job_digests ──────────────────────────────────────
+# A fresh, successful result of a job some DDD declares (bindings.yaml `kind: job`,
+# indexed in .context/ddd_job_registry.json) surfaces as a REVIEW item owned by that
+# DDD, telling the agent to learn from it and s_persist into that brain. Which jobs
+# qualify comes only from the registry, never from a job-name pattern (P7).
 
+import json
 import textwrap
 from datetime import datetime, timezone, timedelta
-from core.attention_authority import _collect_community_digests, TIER_REVIEW
+from core.attention_authority import _collect_job_digests, TIER_REVIEW
 
 
 def _write_jobresult(dir_: Path, name: str, job_id: str, status: str, run_at: datetime):
@@ -331,68 +332,70 @@ def _write_jobresult(dir_: Path, name: str, job_id: str, status: str, run_at: da
     """))
 
 
-def test_community_digest_surfaces_as_review(tmp_path):
-    """A recent SUCCESSFUL community digest → one REVIEW AttentionItem with a
-    learn+persist dispatch.message."""
+def _own(ws: Path, **jobs):
+    (ws / ".context").mkdir(parents=True, exist_ok=True)
+    (ws / ".context" / "ddd_job_registry.json").write_text(json.dumps({"version": 1, "jobs": [
+        {"job_id": j, "owner_ddd": o} for j, o in jobs.items()]}))
+
+
+def test_ddd_job_digest_surfaces_for_its_owner(tmp_path):
     jr = tmp_path / "Knowledge" / "JobResults"
+    _own(tmp_path, **{"daily-scan": "Research"})
     fresh = datetime.now(timezone.utc) - timedelta(hours=2)
-    _write_jobresult(jr, "2026-08-09-github-community-morning.md",
-                     "github-community-morning", "success", fresh)
-    items = _collect_community_digests(tmp_path)
+    _write_jobresult(jr, "2026-08-09-daily-scan.md", "daily-scan", "success", fresh)
+    items = _collect_job_digests(tmp_path)
     assert len(items) == 1
     it = items[0]
-    assert it.source == "community_digest"
-    assert it.tier == TIER_REVIEW  # a digest is review-worthy, never blocking
-    msg = it.dispatch.get("message", "").lower()
-    assert "learn" in msg or "persist" in msg or "沉淀" in msg
-    assert "github-community-morning" in it.dispatch.get("context", {}).get("path", "") \
-        or "github-community-morning" in it.dispatch.get("message", "")
+    assert it.source == "job_digest"
+    assert it.tier == TIER_REVIEW
+    assert it.brain == "Research"
+    msg = it.dispatch.get("message", "")
+    assert "s_persist" in msg and "Research" in msg
+    assert "daily-scan" in it.dispatch["context"]["path"]
+
+
+def test_job_no_ddd_declares_is_not_a_digest(tmp_path):
+    """No name pattern: a 'github-community-*' job no DDD declares does not surface."""
+    jr = tmp_path / "Knowledge" / "JobResults"
+    _own(tmp_path, **{"other": "Research"})
+    fresh = datetime.now(timezone.utc) - timedelta(hours=1)
+    _write_jobresult(jr, "a.md", "github-community-morning", "success", fresh)
+    assert _collect_job_digests(tmp_path) == []
+    (tmp_path / ".context" / "ddd_job_registry.json").unlink()
+    assert _collect_job_digests(tmp_path) == []
 
 
 def test_stale_digest_ages_out(tmp_path):
-    """A digest older than the window does NOT surface (no perpetual noise —
-    the window IS the state, no read-marker needed)."""
     jr = tmp_path / "Knowledge" / "JobResults"
+    _own(tmp_path, **{"daily-scan": "Research"})
     old = datetime.now(timezone.utc) - timedelta(hours=48)
-    _write_jobresult(jr, "2026-08-07-github-community-morning.md",
-                     "github-community-morning", "success", old)
-    assert _collect_community_digests(tmp_path) == []
+    _write_jobresult(jr, "old.md", "daily-scan", "success", old)
+    assert _collect_job_digests(tmp_path) == []
 
 
 def test_failed_digest_not_surfaced(tmp_path):
-    """A FAILED community job is NOT a digest-to-review (that's _collect_jobs'
-    circuit-breaker concern) — only status:success digests surface here."""
     jr = tmp_path / "Knowledge" / "JobResults"
+    _own(tmp_path, **{"daily-scan": "Research"})
     fresh = datetime.now(timezone.utc) - timedelta(hours=1)
-    _write_jobresult(jr, "2026-08-09-github-community-evening.md",
-                     "github-community-evening", "failed", fresh)
-    assert _collect_community_digests(tmp_path) == []
+    _write_jobresult(jr, "f.md", "daily-scan", "failed", fresh)
+    assert _collect_job_digests(tmp_path) == []
 
-
-def test_non_community_jobresult_ignored(tmp_path):
-    """Only community digests/reports surface — an unrelated job result is ignored."""
-    jr = tmp_path / "Knowledge" / "JobResults"
-    fresh = datetime.now(timezone.utc) - timedelta(hours=1)
-    _write_jobresult(jr, "2026-08-09-memory-health.md", "memory-health", "success", fresh)
-    assert _collect_community_digests(tmp_path) == []
 
 
 def test_only_newest_digest_per_job(tmp_path):
-    """If a job produced 2 fresh digests, surface only the NEWEST (avoid stacking
-    the same job's review items)."""
+    """Two fresh results of one job surface only the NEWEST (no stacking)."""
     jr = tmp_path / "Knowledge" / "JobResults"
+    _own(tmp_path, **{"daily-scan": "Research"})
     now = datetime.now(timezone.utc)
-    _write_jobresult(jr, "2026-08-09-github-community-morning.md",
-                     "github-community-morning", "success", now - timedelta(hours=6))
-    _write_jobresult(jr, "2026-08-09b-github-community-morning.md",
-                     "github-community-morning", "success", now - timedelta(hours=1))
-    items = _collect_community_digests(tmp_path)
-    assert len(items) == 1  # newest only
+    _write_jobresult(jr, "a.md", "daily-scan", "success", now - timedelta(hours=6))
+    _write_jobresult(jr, "b.md", "daily-scan", "success", now - timedelta(hours=1))
+    items = _collect_job_digests(tmp_path)
+    assert len(items) == 1 and items[0].dispatch["context"]["path"].endswith("b.md")
 
 
 def test_missing_jobresults_dir_returns_empty(tmp_path):
-    """No JobResults dir → [] (fail-soft, never crash the channel)."""
-    assert _collect_community_digests(tmp_path) == []
+    _own(tmp_path, **{"daily-scan": "Research"})
+    assert _collect_job_digests(tmp_path) == []
 
 
 # --- governance card readability (the "governance rule" empty-card fix) ---

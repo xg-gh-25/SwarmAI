@@ -70,11 +70,6 @@ describe('communityService — request paths (single /api, added by the intercep
     expect(mockApi.get).toHaveBeenCalledWith('/community/sources');
   });
 
-  it('fetchEngagement calls /community/engagement', async () => {
-    await communityService.fetchEngagement();
-    expect(mockApi.get).toHaveBeenCalledWith('/community/engagement');
-  });
-
   it('addSource POSTs to /community/feeds', async () => {
     await communityService.addSource({ id: 'x', name: 'X', type: 'rss' });
     expect(mockApi.post).toHaveBeenCalledWith('/community/feeds', { id: 'x', name: 'X', type: 'rss' });
@@ -103,7 +98,6 @@ describe('communityService — request paths (single /api, added by the intercep
   it('no community path is ever double-prefixed with /api', async () => {
     await communityService.fetchFeed();
     await communityService.fetchSources();
-    await communityService.fetchEngagement();
     await communityService.addSource({ id: 'x', name: 'X', type: 'rss' });
     await communityService.updateSource('x', { tier: 'leaders' });
     await communityService.deleteSource('x');
@@ -115,7 +109,7 @@ describe('communityService — request paths (single /api, added by the intercep
       ...mockApi.put.mock.calls,
       ...mockApi.delete.mock.calls,
     ].map((c) => c[0] as string);
-    expect(allPaths.length).toBe(8);
+    expect(allPaths.length).toBe(7);
     for (const p of allPaths) {
       expect(p.startsWith('/community/')).toBe(true);
       expect(p.startsWith('/api/')).toBe(false); // the bug: '/api/community/...'
@@ -154,39 +148,5 @@ describe('communityService — snake→camel normalization', () => {
     expect(out[0].memberCount).toBe(0);
     expect(out[0].membersTruncated).toBe(false);
     expect(out[0].memberKind).toBeNull();
-  });
-
-  it('fetchEngagement maps the {kpis, items} contract + the latest reply → camelCase', async () => {
-    mockApi.get.mockResolvedValue({
-      data: {
-        kpis: { comments_posted: 216, replies_received: 387, maintainer_replies: 21, stars: null },
-        items: [
-          {
-            repo: 'a/b', issue_number: 1, topic: 'T-MEM', status: 'published',
-            comment_url: 'https://github.com/a/b/issues/1#c1', posted_at: '2026-08-01T10:00:00Z',
-            confidence: 9, reply_count: 1, has_maintainer_reply: true, needs_followup: true,
-            latest_reply: { author: 'm1', body: 'merged', is_maintainer: true, created_at: '2026-08-02T10:00:00Z' },
-          },
-        ],
-      },
-    });
-    const out = await communityService.fetchEngagement();
-    expect(out.kpis).toEqual({ commentsPosted: 216, repliesReceived: 387, maintainerReplies: 21, stars: null });
-    expect(out.items).toHaveLength(1);
-    expect(out.items[0]).toEqual({
-      repo: 'a/b', issueNumber: 1, topic: 'T-MEM', status: 'published',
-      commentUrl: 'https://github.com/a/b/issues/1#c1', postedAt: '2026-08-01T10:00:00Z',
-      confidence: 9, replyCount: 1, hasMaintainerReply: true, needsFollowup: true,
-      latestReply: { author: 'm1', body: 'merged', isMaintainer: true, createdAt: '2026-08-02T10:00:00Z' },
-    });
-  });
-
-  it('fetchEngagement falls back to a flat pre-list backend (no kpis wrapper → still maps counts)', async () => {
-    // A rolling deploy where the backend still returns the old flat shape must NOT
-    // silently zero the strip — the d.kpis ?? d fallback reads the top-level counts.
-    mockApi.get.mockResolvedValue({ data: { comments_posted: 2 } });
-    const out = await communityService.fetchEngagement();
-    expect(out.kpis).toEqual({ commentsPosted: 2, repliesReceived: 0, maintainerReplies: 0, stars: null });
-    expect(out.items).toEqual([]);
   });
 });

@@ -354,11 +354,10 @@ function LeftSidebar() {
           <A10Card navId="pipeline" onPrefetch={() => prefetch('pipeline')} icon="pipeline" isActive={newActiveOverlay === 'pipeline'} onClick={() => activateNav('pipeline')} data-testid="nav-pipeline" />
           <A10Card navId="pollinate" onPrefetch={() => prefetch('pollinate')} icon="hive" isActive={newActiveOverlay === 'pollinate'} onClick={() => activateNav('pollinate')} data-testid="nav-pollinate" />
           <A10Card navId="swarmws" onPrefetch={() => prefetch('swarmws')} icon="folder" highlight isActive={newActiveOverlay === 'swarmws'} onClick={() => activateNav('swarmws')} data-testid="nav-swarmws" />
-          {/* Community — SwarmAI's two-way membrane with the outside world (inbound
-              signals + outbound engagement). Moved to the Work zone as a resident
+          {/* Community — inbound signals + the feeds being watched. Moved to the Work zone as a resident
               main entry (run_5165013e): it's an active daily surface, not a
               low-attention System tool — and upgraded from the old soft signal-file
-              opener to a real OverlayHost surface (3 tabs). Last in Work. */}
+              opener to a real OverlayHost surface. Last in Work. */}
           <A10Card navId="community" onPrefetch={() => prefetch('community')} icon="public" isActive={newActiveOverlay === 'community'} onClick={() => activateNav('community')} data-testid="nav-community" />
         </A10Group>
 

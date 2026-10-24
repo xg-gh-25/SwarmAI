@@ -40,13 +40,11 @@ const getJson = <T,>(url: string) => async (): Promise<T> => (await api.get<T>(u
 /** The workspace Artifacts reads (one workspace today). */
 export const ARTIFACTS_WORKSPACE = 'default';
 
-/** Community's parts (one query each; the Inbound tab shows feed + hot topics). */
-export type CommunityPart = 'feed' | 'hotTopics' | 'sources' | 'engagement';
+/** Community's parts (one query each). */
+export type CommunityPart = 'feed' | 'sources';
 const COMMUNITY_FETCH: Record<CommunityPart, () => Promise<unknown>> = {
   feed: () => communityService.fetchFeed(),
-  hotTopics: () => communityService.fetchHotTopics(),
   sources: () => communityService.fetchSources(),
-  engagement: () => communityService.fetchEngagement(),
 };
 import type { OverlayId } from './overlayIds';
 import { loadOverlayChunk } from './overlayChunks';
@@ -213,7 +211,7 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   jobs: () => [overlayQuery.jobsRoster(), overlayQuery.jobsOverview()],
   hive: () => [overlayQuery.hiveAccounts(), overlayQuery.hiveInstances()],
   capabilities: () => [overlayQuery.capabilities(), overlayQuery.capabilitiesHealth()],
-  community: () => [overlayQuery.community('feed'), overlayQuery.community('hotTopics')],
+  community: () => [overlayQuery.community('feed')],
   'needs-you': () => [overlayQuery.needsYou()],
   // the list + the last-shown location's own summary (its tree loads on open)
   swarmws: () => [overlayQuery.workspaceLocations(), overlayQuery.workspaceSummary(lastWorkspaceLocation)],

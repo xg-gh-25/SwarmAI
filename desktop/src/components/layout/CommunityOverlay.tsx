@@ -2,22 +2,18 @@
  * CommunityOverlay — SwarmAI's two-way membrane with the outside world.
  *
  * Design: Knowledge/Designs/2026-08-12-community-overlay-redesign-mockup.html (approved),
- * rebuilt by run_ced271e8. Three tabs = the two hands of the flywheel + reports:
- *   Inbound   — recent signal digests + community reports (local files → Canvas) + Hot Topics
+ * rebuilt by run_ced271e8. Two tabs:
+ *   Inbound   — recent signal digests + reports (local files → Canvas)
  *   Watching  — configured feeds — add/toggle/tier/delete a feed AND members
- *   Outbound  — GitHub community engagement (needs-followup hero + collapsed handled)
+ * (Hot Topics and the Outbound GitHub-engagement tab read one user's GitHub_Community
+ *  DDD artifacts and were removed: usable-by-anyone P7.)
  *
  * UI craft (KNOWLEDGE.md 5-check + s_frontend-design/data/design-judgment.md):
  *   - NO per-row border box-wall — whitespace + hover-highlight groups (Tufte data-ink,
  *     Refactoring UI "fewer borders").
- *   - ONE focus per tab (Von Restorff): Inbound = latest-report hero + demand ranking;
- *     Outbound = needs-followup accent rows, "Posted/handled" DEMOTED to a collapsed count.
+ *   - One focus per tab (Von Restorff): Inbound = the latest-report hero.
  *
- * Link routing (run_ced271e8):
- *   - LOCAL synthesis files (our Signals/Reports .md) → Canvas via swarm:open-file.
- *   - EXTERNAL github links (Hot Topics top thread, Outbound comment) → the SYSTEM
- *     browser via openExternal(). A raw window.open is SILENTLY IGNORED by the Tauri v2
- *     WKWebview (see openExternal.ts / ToDoOverlay.tsx) — never use it for external URLs.
+ * Link routing: LOCAL synthesis files (our Signals/Reports .md) → Canvas via swarm:open-file.
  *
  * Honesty rules (Gate-1, run_5165013e): no fabricated data; every tab has loading/error/
  * empty branches (the 5-overlay fetch pattern). Clone lineage: NeedYouOverlay + BrainHub.
@@ -30,27 +26,20 @@ import {
   communityService,
   type CommunityFeed,
   type CommunitySource,
-  type CommunityEngagement,
-  type CommunityEngagementItem,
-  type CommunityHotTopics,
-  type CommunityHotTopic,
 } from '../../services/community';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
-import { openExternal } from '../../utils/openExternal';
 
 interface CommunityContentProps {
   /** Close the overlay (host-owned) — called before opening a file in Canvas. */
   close: () => void;
 }
 
-type TabId = 'inbound' | 'watching' | 'outbound';
+type TabId = 'inbound' | 'watching';
 
-// Two-hands-of-the-membrane IA (run_edcd9672): Inbound = what we read from the world,
-// Watching = what we watch, Outbound = what we say back. Subtitles make each self-evident.
+// Inbound = what we read from the world, Watching = what we watch.
 const TABS: Array<{ id: TabId; label: string; sub: string }> = [
   { id: 'inbound', label: 'Inbound', sub: 'read the world' },
   { id: 'watching', label: 'Watching', sub: 'what we watch' },
-  { id: 'outbound', label: 'Outbound', sub: 'speak back' },
 ];
 
 export function CommunityContent({ close }: CommunityContentProps) {
@@ -61,7 +50,7 @@ export function CommunityContent({ close }: CommunityContentProps) {
       <div className="px-5 pt-4 pb-0">
         <h2 className="text-heading font-semibold text-[var(--color-text)]">Community</h2>
         <p className="mt-0.5 text-meta text-[var(--color-text-dim)]">
-          SwarmAI's two-way membrane — what you learn from the world, what you give back.
+          What you read from the world, and the feeds you watch.
         </p>
       </div>
 
@@ -91,7 +80,6 @@ export function CommunityContent({ close }: CommunityContentProps) {
       <div className="flex-1 overflow-y-auto px-5 py-4">
         {tab === 'inbound' && <InboundTab close={close} />}
         {tab === 'watching' && <SourcesTab />}
-        {tab === 'outbound' && <OutboundTab />}
       </div>
     </div>
   );
@@ -149,7 +137,7 @@ function SectionLabel({ children, className = '' }: { children: React.ReactNode;
   );
 }
 
-// ── Inbound tab — latest-report hero + Hot Topics demand ranking + daily signals ──
+// ── Inbound tab — latest-report hero + daily signals ──
 // IA (run_edcd9672 + redesign run_ced271e8): the latest weekly Report is the ONE hero;
 // Hot Topics is the live demand ranking (heat bar); daily Signals are a plain list below.
 // De-boxed: no per-row borders — whitespace + hover-highlight (Tufte / Refactoring UI).
@@ -198,7 +186,7 @@ function InboundTab({ close }: { close: () => void }) {
             <span className="material-symbols-outlined icon-lg text-[var(--color-text-muted)]">bar_chart</span>
             <span className="flex-1 min-w-0">
               <span className="block text-heading font-semibold text-[var(--color-text)] truncate">{latestReport.name}</span>
-              <span className="block text-meta text-[var(--color-text-dim)]">Weekly community report</span>
+              <span className="block text-meta text-[var(--color-text-dim)]">Weekly report</span>
             </span>
             {pastReports.length > 0 && (
               <span className="text-meta text-[var(--color-text-faint)] shrink-0">+{pastReports.length} past</span>
@@ -207,9 +195,6 @@ function InboundTab({ close }: { close: () => void }) {
           </button>
         </div>
       )}
-
-      {/* Hot Topics — live community demand ranking (heat bar + thread count) */}
-      <HotTopicsSection />
 
       {/* Daily signals — Signals only, newest-first, click → Canvas (LOCAL files) */}
       <div>
@@ -245,102 +230,6 @@ function InboundTab({ close }: { close: () => void }) {
         )}
       </div>
     </div>
-  );
-}
-
-// ── Hot Topics section — live community DEMAND from signals.json, read-only ──────
-// Freshness-honest: the label reflects the feed's real scan time (scanned_at). Because
-// the feed auto-refreshes weekly, a >21d gap now signals the SCAN may be DOWN (not human
-// neglect). Each row's external GitHub thread opens in the system browser (openExternal).
-const _STALE_DAYS = 21;
-
-/** Derive a freshness label from an ISO scan timestamp. Defensive parse (H3): the
- *  timestamp is a full ISO string with microseconds and no 'Z' (e.g.
- *  "2026-08-11T17:50:56.037632"). The backend writes it from Python's naive
- *  datetime.isoformat() (UTC, no offset) — and `new Date("...T...")` WITHOUT a
- *  timezone is parsed as LOCAL time by the JS engine, which would skew the age by
- *  the machine's UTC offset (e.g. read 8h newer in UTC-8, under-reporting
- *  staleness). So append 'Z' to force UTC (matching BottomBar.tsx's fix) unless an
- *  offset is already present. A NaN result still degrades to "unknown", never
- *  crashes. For an auto-refreshed feed, >21d stale means the weekly scan may be
- *  down (H4), not that a human forgot. */
-function _freshnessLabel(scannedAt: string | null): { text: string; stale: boolean } {
-  if (!scannedAt) return { text: 'scan time unknown', stale: true };
-  const normalized = scannedAt.includes('Z') || scannedAt.includes('+') ? scannedAt : scannedAt + 'Z';
-  const then = new Date(normalized).getTime();
-  if (Number.isNaN(then)) return { text: 'scan time unknown', stale: true };
-  const days = Math.floor((Date.now() - then) / 86_400_000);
-  if (days > _STALE_DAYS) {
-    return { text: `scan may be down — last ${days}d ago`, stale: true };
-  }
-  if (days <= 0) return { text: 'synced today · auto weekly', stale: false };
-  return { text: `synced ${days}d ago · auto weekly`, stale: false };
-}
-
-function HotTopicsSection() {
-  const { data, loading, error } = useFetch<CommunityHotTopics>('hotTopics');
-  // Fail-quiet: hot topics is secondary — on load-fail or empty, render NOTHING
-  // (don't push a red error banner above the primary content). It's additive context.
-  if (loading || error) return null;
-  const topics = data?.topics ?? [];
-  if (topics.length === 0) return null;
-  const fresh = _freshnessLabel(data?.scannedAt ?? null);
-  // Heat bar is scaled to the top topic's comment count (small-multiples on a shared
-  // scale — Tufte). Guard div-by-zero when the leader has 0 comments.
-  const maxComments = Math.max(...topics.map((t) => t.comments), 1);
-
-  return (
-    <div data-testid="community-hot-topics">
-      <div className="flex items-baseline justify-between mb-2">
-        <SectionLabel>This week the community is discussing</SectionLabel>
-        <span
-          data-testid="hot-topics-freshness"
-          className={`text-meta flex items-center gap-1.5 ${fresh.stale ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-status-success)]'}`}
-        >
-          <span className={`w-[5px] h-[5px] rounded-full ${fresh.stale ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-success)]'}`} aria-hidden />
-          {fresh.text}
-        </span>
-      </div>
-      <div className="flex flex-col gap-0.5">
-        {topics.map((t) => (
-          <HotTopicRow key={t.id} topic={t} widthPct={Math.round((t.comments / maxComments) * 100)} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function HotTopicRow({ topic, widthPct }: { topic: CommunityHotTopic; widthPct: number }) {
-  const hasUrl = !!topic.url.trim();
-  const open = useCallback(() => {
-    // External GitHub discussion → SYSTEM browser (openExternal), NOT window.open
-    // (dead in the Tauri v2 WKWebview). No-op when the URL couldn't be built.
-    // openExternal already falls back internally + never throws meaningfully, but
-    // attach a .catch so a rejected promise is logged, not an unhandled rejection.
-    if (hasUrl) openExternal(topic.url).catch((e) => console.warn('openExternal failed:', topic.url, e));
-  }, [topic.url, hasUrl]);
-
-  return (
-    <button
-      type="button"
-      onClick={open}
-      disabled={!hasUrl}
-      data-testid="hot-topic-row"
-      title={topic.topTitle || topic.topic}
-      className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
-    >
-      <span className="tabular-nums text-meta text-[var(--color-text-faint)] w-3.5 text-right shrink-0">{topic.rank}</span>
-      <span className="flex-1 min-w-0 text-body text-[var(--color-text)] truncate group-hover:text-[var(--panel-accent,var(--color-primary))]">
-        {topic.topic}
-        {topic.threads > 0 && (
-          <span className="ml-2 text-meta text-[var(--color-text-faint)]">{topic.threads} threads</span>
-        )}
-      </span>
-      <span className="w-16 h-1 rounded-full bg-[var(--color-border)] shrink-0 overflow-hidden" aria-hidden>
-        <span className="block h-full rounded-full bg-[var(--panel-accent,var(--color-primary))]" style={{ width: `${widthPct}%` }} />
-      </span>
-      <span className="text-meta text-[var(--color-text-dim)] w-8 text-right shrink-0">{topic.comments}</span>
-    </button>
   );
 }
 
@@ -662,172 +551,5 @@ function AddSourceForm({ onAdded, busy }: { onAdded: () => void; busy: boolean }
         </button>
       </div>
     </div>
-  );
-}
-
-// ── Outbound tab — demoted KPI strip + needs-followup HERO + collapsed handled ──
-// The answer is "who is waiting on me": needs-followup rows are the accent hero. The
-// KPI strip is one muted line (context, not the answer). "Posted / handled" is DEMOTED
-// to a collapsed expandable count — not a wall of stacked boxes (run_ced271e8 redesign).
-
-function OutboundTab() {
-  const { data, loading, error, reload } = useFetch<CommunityEngagement>('engagement');
-  const [showHandled, setShowHandled] = useState(false); // Posted/handled default COLLAPSED
-
-  if (loading || error) return <StateBanner loading={loading} error={error} onRetry={reload} empty={false} emptyMsg="" />;
-  const e = data!;
-  const items = e.items ?? [];
-
-  const kpiParts: string[] = [
-    `${e.kpis.commentsPosted} posted`,
-    `${e.kpis.repliesReceived} replies`,
-    `${e.kpis.maintainerReplies} maintainer`,
-  ];
-  if (e.kpis.stars !== null) kpiParts.push(`${e.kpis.stars} stars`);
-
-  const followups = items.filter((it) => it.needsFollowup);
-  const posted = items.filter((it) => !it.needsFollowup);
-  // Honest cap disclosure: the KPI count is the TRUE total (e.g. 216) but the list is
-  // capped. Show it only when the list is actually shorter than the posted total.
-  const capped = e.kpis.commentsPosted > items.length;
-
-  return (
-    <div className="max-w-[760px] flex flex-col gap-5">
-      {/* Demoted KPI strip — one muted line, not a wall of big numbers */}
-      <div data-testid="community-kpi-strip" className="text-meta text-[var(--color-text-muted)]">
-        {kpiParts.join('  ·  ')}
-        <span className="text-[var(--color-text-faint)]"> — outbound GitHub engagement (data-backed only)</span>
-      </div>
-
-      {items.length === 0 ? (
-        <StateBanner loading={false} error={false} empty emptyMsg="No engagements yet." />
-      ) : (
-        <>
-          {/* HERO: needs-your-reply — the one thing that stands out */}
-          {followups.length > 0 && (
-            <div>
-              <SectionLabel className="mb-2 !text-[color-mix(in_srgb,var(--color-status-warning)_90%,transparent)]">
-                Needs your reply — someone answered last, waiting on you ({followups.length})
-              </SectionLabel>
-              <div className="flex flex-col gap-2">
-                {followups.map((it) => (
-                  <FollowupRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* DEMOTED: posted / handled — collapsed to a count, expand on demand */}
-          {posted.length > 0 && (
-            <div>
-              <button
-                type="button"
-                data-testid="handled-toggle"
-                onClick={() => setShowHandled((v) => !v)}
-                aria-expanded={showHandled}
-                className="w-full text-left flex items-center gap-2 text-small text-[var(--color-text-faint)] hover:text-[var(--color-text-muted)] py-1.5"
-              >
-                <span className="w-[7px] h-[7px] rounded-full bg-[var(--color-text-faint)]" aria-hidden />
-                Posted · handled ({posted.length}{capped ? ` shown of ${e.kpis.commentsPosted}` : ''})
-                <span className="material-symbols-outlined icon-sm">{showHandled ? 'expand_more' : 'chevron_right'}</span>
-              </button>
-              {showHandled && (
-                <div data-testid="handled-list" className="mt-1 flex flex-col gap-0.5">
-                  {posted.map((it) => (
-                    <PostedRow key={`${it.repo}#${it.issueNumber}-${it.commentUrl}`} item={it} />
-                  ))}
-                  {capped && (
-                    <div data-testid="community-list-cap" className="mt-1 px-2 text-meta text-[var(--color-text-faint)] italic">
-                      Showing the {items.length} most recent of {e.kpis.commentsPosted} posted comments.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Open an engagement's GitHub comment in the SYSTEM browser (openExternal — a raw
- *  window.open is silently ignored by the Tauri v2 WKWebview). Shared by both row
- *  variants. Returns {hasUrl, open}. */
-function useOpenComment(commentUrl: string) {
-  const hasUrl = !!commentUrl.trim();
-  const open = useCallback(() => {
-    // .catch: openExternal falls back internally, but log a rejection rather than
-    // leak an unhandled promise rejection.
-    if (hasUrl) openExternal(commentUrl).catch((e) => console.warn('openExternal failed:', commentUrl, e));
-  }, [commentUrl, hasUrl]);
-  return { hasUrl, open };
-}
-
-// A needs-followup row — the accent hero: shows the latest reply inline so the user
-// knows WHAT they're being asked, without expanding.
-function FollowupRow({ item }: { item: CommunityEngagementItem }) {
-  const { hasUrl, open } = useOpenComment(item.commentUrl);
-  const latest = item.latestReply;
-
-  return (
-    <button
-      type="button"
-      onClick={open}
-      disabled={!hasUrl}
-      data-testid="engagement-followup-row"
-      title={item.commentUrl || 'no comment URL'}
-      className="group relative w-full text-left rounded-[10px] bg-[var(--color-status-warning)]/[0.06] hover:bg-[var(--color-status-warning)]/[0.11] transition-colors pl-4 pr-3.5 py-3 disabled:cursor-default disabled:opacity-50
- before:content-[''] before:absolute before:left-0 before:top-2.5 before:bottom-2.5 before:w-[3px] before:rounded before:bg-[var(--color-status-warning)]"
-    >
-      <div className="flex items-center gap-2.5">
-        <span className="flex-1 min-w-0 text-body font-semibold text-[var(--color-text)] truncate">
-          {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
-        </span>
-        {item.hasMaintainerReply && (
-          <span className="text-meta uppercase tracking-wide text-[var(--color-status-warning)] border border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] rounded px-1.5 py-0.5 shrink-0">
-            maintainer
-          </span>
-        )}
-        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] shrink-0">open_in_new</span>
-      </div>
-      {latest && (
-        <div className="mt-1.5 flex items-baseline gap-2 text-small">
-          <span className="text-[var(--color-text)] shrink-0">{latest.author}</span>
-          <span className="text-[var(--color-text-dim)] truncate">{latest.body}</span>
-        </div>
-      )}
-      <div className="mt-1 text-meta text-[var(--color-text-faint)]">
-        {item.topic && <span className="tabular-nums">{item.topic}</span>}
-        {item.postedAt && <span> · posted {item.postedAt.slice(0, 10)}</span>}
-        {item.confidence != null && <span> · conf {item.confidence}</span>}
-      </div>
-    </button>
-  );
-}
-
-// A posted/handled row — demoted, compact, one line. Reply count shown as a subtle badge.
-function PostedRow({ item }: { item: CommunityEngagementItem }) {
-  const { hasUrl, open } = useOpenComment(item.commentUrl);
-  return (
-    <button
-      type="button"
-      onClick={open}
-      disabled={!hasUrl}
-      data-testid="engagement-posted-row"
-      title={item.commentUrl || 'no comment URL'}
-      className="group flex items-center gap-3 px-2 py-1.5 rounded-lg text-left hover:bg-[var(--color-hover)] transition-colors disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent"
-    >
-      <span className="w-[6px] h-[6px] rounded-full bg-[var(--color-text-faint)] shrink-0" aria-hidden />
-      <span className="flex-1 min-w-0 text-small text-[var(--color-text-dim)] truncate group-hover:text-[var(--color-text)]">
-        {item.repo}{item.issueNumber != null ? ` #${item.issueNumber}` : ''}
-      </span>
-      {item.replyCount > 0 && (
-        <span className={`text-meta shrink-0 ${item.hasMaintainerReply ? 'text-[var(--panel-accent,var(--color-primary))]' : 'text-[var(--color-status-success)]'}`}>
-          ● {item.replyCount}
-        </span>
-      )}
-      <span className="material-symbols-outlined icon-xs text-[var(--color-text-faint)] opacity-0 group-hover:opacity-100 shrink-0">open_in_new</span>
-    </button>
   );
 }

@@ -167,9 +167,8 @@ registerOverlay({
   ),
 });
 
-// ── community (run_5165013e) — SwarmAI's two-way membrane with the outside
-// world: inbound signals (Feed + Sources) + outbound engagement. Work-zone
-// card (spouts teal). width 'l' — a 3-tab list/roster surface (like todo),
+// ── community (run_5165013e) — inbound signals (Feed) + the watched feeds
+// (Sources). Work-zone card (spouts teal). width 'l' — a tabbed list surface (like todo),
 // wider than a single-column list but not the full dashboard 'xl'.
 registerOverlay({
   id: 'community',

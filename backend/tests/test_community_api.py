@@ -1,12 +1,10 @@
 """Tests for community_data — the read-only data layer behind the Community overlay.
 
 Phase-1 is READ-ONLY: three pure functions parse existing on-disk sources
-(config.yaml feeds, Knowledge/Signals+Reports files, GitHub_Community engagement
-jsonl) into overlay-ready shapes. No mutation, no self_tune coupling.
+(config.yaml feeds and Knowledge/Signals+Reports files) into overlay-ready shapes.
 
 Methodology: tmp_path fixtures that mirror the REAL on-disk shapes verified live
-during PLAN (config.yaml feeds LACK managed_by; engagement_log has confidence/
-status; reply_archive has is_maintainer) — so the tests encode reality, not an
+during PLAN (config.yaml feeds LACK managed_by) — so the tests encode reality, not an
 assumed schema. The functions take explicit paths (dependency injection) so no
 test touches the real workspace.
 """
@@ -20,19 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from core.community_data import (
-    parse_sources,
-    aggregate_engagement,
-    engagement_items,
-    build_feed,
-)
-
-# A fixed "now" near the fixed-date fixtures below, so staleness (14d demotion in
-# _needs_followup) is deterministic and does NOT drift with wall-clock. The engagement
-# fixtures use 2026-08-02..09 timestamps; pin now to 2026-08-10 so those threads read
-# as FRESH (<14d) — the pre-staleness behaviour the original assertions encode.
-_FIXED_NOW = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
-
+from core.community_data import parse_sources, build_feed
 
 # ── Sources (config.yaml feeds) ──────────────────────────────────────────────
 
@@ -194,435 +180,6 @@ def test_parse_sources_skips_blank_id(tmp_path: Path) -> None:
     )
     ids = [s["id"] for s in parse_sources(p)]
     assert ids == ["good"]
-
-
-def test_aggregate_engagement_maintainer_case_insensitive(tmp_path: Path) -> None:
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "reply_archive.jsonl").write_text(
-        "\n".join(
-            json.dumps(x)
-            for x in [
-                {"id": "r1", "is_maintainer": "TRUE"},   # uppercase string
-                {"id": "r2", "is_maintainer": True},     # real bool
-                {"id": "r3", "is_maintainer": "false"},  # not a maintainer
-            ]
-        )
-        + "\n"
-    )
-    agg = aggregate_engagement(d)
-    assert agg["maintainer_replies"] == 2  # TRUE + True, not false
-
-
-def test_aggregate_engagement_maintainer_whitespace_padded(tmp_path: Path) -> None:
-    # P8 door-parity (Gate-2 LOW): a whitespace-padded is_maintainer string must count,
-    # matching the skill's _identity.is_external_maintainer which strips. Otherwise the
-    # backend door and the skill door disagree on the SAME datum.
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "reply_archive.jsonl").write_text(
-        "\n".join(
-            json.dumps(x)
-            for x in [
-                {"id": "r1", "author": "extmaint", "is_maintainer": " true "},  # padded
-                {"id": "r2", "author": "extmaint2", "is_maintainer": "1 "},      # padded
-            ]
-        )
-        + "\n"
-    )
-    agg = aggregate_engagement(d)
-    assert agg["maintainer_replies"] == 2  # both padded strings coerced true
-
-
-# ── Engagement (GitHub_Community jsonl aggregation) ──────────────────────────
-
-
-@pytest.fixture
-def artifacts_dir(tmp_path: Path) -> Path:
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    # engagement_log.jsonl — PRODUCTION shape: publish.py writes status="published"
-    # on a successful post (community engine publish.py:136), NOT "posted". The old
-    # fixture used "posted" — a value the writer never emits — which made the green
-    # test mask the live comments_posted=0 bug (O009: a fixture encoding the wrong
-    # assumption). issue_number + comment_url are real fields used by the Outbound list.
-    (d / "engagement_log.jsonl").write_text(
-        "\n".join(
-            json.dumps(x)
-            for x in [
-                {"comment_id": "c1", "status": "published", "posted_at": "2026-08-01T10:00:00Z", "repo": "a/b", "issue_number": 1, "topic": "memory", "confidence": 9, "comment_url": "https://github.com/a/b/issues/1#c1"},
-                {"comment_id": "c2", "status": "published", "posted_at": "2026-08-05T10:00:00Z", "repo": "c/d", "issue_number": 2, "topic": "pipeline", "confidence": 8, "comment_url": "https://github.com/c/d/issues/2#c2"},
-                {"comment_id": "c3", "status": "draft", "posted_at": "2026-08-06T10:00:00Z", "repo": "e/f", "issue_number": 3, "topic": "skills"},
-            ]
-        )
-        + "\n"
-    )
-    # reply_archive.jsonl — real shape: author/is_maintainer/created_at/source_repo/
-    # source_issue/body. Joins to engagement on (source_repo,source_issue)==(repo,issue_number).
-    (d / "reply_archive.jsonl").write_text(
-        "\n".join(
-            json.dumps(x)
-            for x in [
-                {"id": "r1", "author": "maintainer1", "is_maintainer": True, "created_at": "2026-08-02T10:00:00Z", "source_repo": "a/b", "source_issue": 1, "body": "great point, merged"},
-                {"id": "r2", "author": "user9", "is_maintainer": False, "created_at": "2026-08-03T10:00:00Z", "source_repo": "a/b", "source_issue": 1, "body": "+1"},
-            ]
-        )
-        + "\n"
-    )
-    # star_log.jsonl
-    (d / "star_log.jsonl").write_text(
-        json.dumps({"count": 42, "logged_at": "2026-08-06T10:00:00Z"}) + "\n"
-    )
-    return d
-
-
-def test_aggregate_engagement_counts_published_comments(artifacts_dir: Path) -> None:
-    agg = aggregate_engagement(artifacts_dir)
-    # Only status=published count (2 of 3 — the draft is excluded). This is the
-    # value publish.py actually writes; the pre-fix code matched "posted" → 0.
-    assert agg["comments_posted"] == 2
-
-
-def test_aggregate_engagement_reply_stats(artifacts_dir: Path) -> None:
-    agg = aggregate_engagement(artifacts_dir)
-    assert agg["replies_received"] == 2
-    assert agg["maintainer_replies"] == 1  # real, data-backed
-
-
-def test_aggregate_engagement_no_fabricated_quality(artifacts_dir: Path) -> None:
-    # There is NO quality-score data on disk -> the aggregate MUST NOT invent one.
-    agg = aggregate_engagement(artifacts_dir)
-    assert "avg_quality" not in agg
-
-
-def test_aggregate_engagement_missing_dir(tmp_path: Path) -> None:
-    # No artifacts dir -> zeros, not a crash.
-    agg = aggregate_engagement(tmp_path / "nope")
-    assert agg["comments_posted"] == 0
-    assert agg["replies_received"] == 0
-
-
-def test_aggregate_engagement_skips_bad_jsonl_lines(tmp_path: Path) -> None:
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "engagement_log.jsonl").write_text(
-        json.dumps({"comment_id": "c1", "status": "published"}) + "\nNOT JSON\n"
-        + json.dumps({"comment_id": "c2", "status": "published"}) + "\n"
-    )
-    agg = aggregate_engagement(d)
-    assert agg["comments_posted"] == 2  # bad line skipped, not fatal
-
-
-# ── Engagement items (Outbound clickable list — join engagement × replies) ───
-
-
-def test_engagement_items_shape_and_join(artifacts_dir: Path) -> None:
-    items = engagement_items(artifacts_dir, now=_FIXED_NOW)
-    # 2 published comments become rows; the draft (c3) is KPI-only, not a row.
-    assert len(items) == 2
-    # a/b #1 received 2 replies (1 maintainer) → surfaced first (needs_followup).
-    first = items[0]
-    assert first["repo"] == "a/b" and first["issue_number"] == 1
-    assert first["comment_url"] == "https://github.com/a/b/issues/1#c1"
-    assert first["reply_count"] == 2
-    assert first["has_maintainer_reply"] is True
-    assert first["needs_followup"] is True
-    assert {r["author"] for r in first["replies"]} == {"maintainer1", "user9"}
-    assert any(r["is_maintainer"] and r["body"] == "great point, merged" for r in first["replies"])
-
-
-def test_engagement_items_needs_followup_sorts_first(artifacts_dir: Path) -> None:
-    items = engagement_items(artifacts_dir, now=_FIXED_NOW)
-    # c/d #2 has no reply → not needs_followup → sorts AFTER a/b #1.
-    assert items[0]["needs_followup"] is True
-    assert items[1]["repo"] == "c/d" and items[1]["needs_followup"] is False
-
-
-def test_engagement_items_cap_covers_real_history(tmp_path: Path) -> None:
-    """run_897a4427: the item cap must be large enough that the FULL published
-    history (incl. reconcile-backfilled rows) survives into the Outbound list, so a
-    user who expands the 'handled' group sees ALL of it — not just the newest 200.
-    The real corpus is ~294 published; a 200 cap silently dropped the ~31 oldest
-    backfilled rows. This test writes 300 published rows and asserts none are
-    truncated. Mutation-proof: reverting the cap to 200 makes this RED (300 → 200)."""
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    log = d / "engagement_log.jsonl"
-    with open(log, "w", encoding="utf-8") as f:
-        for i in range(300):
-            f.write(json.dumps({
-                "repo": "o/r", "issue_number": i, "comment_id": 10000 + i,
-                "comment_url": f"https://github.com/o/r/issues/{i}#c{i}",
-                "posted_at": f"2026-{1 + i % 9:02d}-15T00:00:00+00:00",
-                "status": "published", "published": True,
-            }) + "\n")
-    items = engagement_items(d)
-    assert len(items) == 300, (
-        f"cap truncated real history to {len(items)} — backfilled history must "
-        f"stay visible when handled is expanded")
-    assert items[1]["replies"] == []
-
-
-def test_engagement_items_excludes_unpublished(artifacts_dir: Path) -> None:
-    items = engagement_items(artifacts_dir)
-    # the draft engagement (e/f #3) must NOT appear as an actionable row.
-    assert all(it["status"] == "published" for it in items)
-    assert not any(it["repo"] == "e/f" for it in items)
-
-
-def test_engagement_items_missing_dir(tmp_path: Path) -> None:
-    assert engagement_items(tmp_path / "nope") == []
-
-
-def _eng_reply_fixture(tmp_path: Path, replies: list[dict]) -> Path:
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "engagement_log.jsonl").write_text(
-        json.dumps({"comment_id": "c1", "status": "published", "repo": "a/b", "issue_number": 1, "comment_url": "u1", "posted_at": "2026-08-01T00:00:00Z"}) + "\n"
-    )
-    (d / "reply_archive.jsonl").write_text("\n".join(json.dumps(r) for r in replies) + "\n")
-    return d
-
-
-def test_needs_followup_false_when_we_replied_last(tmp_path: Path) -> None:
-    # A thread where OUR login (xg-gh-25) posted the LAST reply is handled — NOT
-    # awaiting our response. This is the fix for the 72%-noise bug.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "q"},
-        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our answer"},
-    ])
-    items = engagement_items(d, now=_FIXED_NOW)
-    assert items[0]["reply_count"] == 2
-    assert items[0]["needs_followup"] is False  # we replied last → handled
-
-
-def test_needs_followup_true_when_other_replied_last(tmp_path: Path) -> None:
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "our comment"},
-        {"author": "maintainer1", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "reply to us"},
-    ])
-    items = engagement_items(d, now=_FIXED_NOW)
-    assert items[0]["needs_followup"] is True  # they replied last → we owe a response
-    assert items[0]["has_maintainer_reply"] is True
-
-
-def test_needs_followup_false_when_bot_replied_last(tmp_path: Path) -> None:
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "github-actions[bot]", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "triage"},
-    ])
-    items = engagement_items(d)
-    assert items[0]["needs_followup"] is False  # a bot is not a human waiting on us
-
-
-def test_needs_followup_ignores_reply_archive_order(tmp_path: Path) -> None:
-    # Even if reply_archive is out of chronological order, the LATEST by created_at
-    # decides — here 'other' is chronologically last despite being written first.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "other", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-09T00:00:00Z", "body": "later"},
-        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "earlier"},
-    ])
-    items = engagement_items(d, now=_FIXED_NOW)
-    assert items[0]["needs_followup"] is True  # 'other' at 08-09 is the true last
-
-
-def test_needs_followup_our_login_case_insensitive(tmp_path: Path) -> None:
-    # Adversarial HIGH: our login may appear with different casing in reply_archive —
-    # "XG-GH-25" must still count as US (handled), not a stranger awaiting a reply.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "q"},
-        {"author": "XG-GH-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our answer, upper-cased login"},
-    ])
-    items = engagement_items(d)
-    assert items[0]["needs_followup"] is False  # case-insensitive: we replied last
-
-
-def test_needs_followup_missing_created_at_on_our_last_reply(tmp_path: Path) -> None:
-    # Adversarial HIGH: our reply has NO created_at (just-fetched). It must still sort
-    # LAST (newest) so the thread reads as handled — not buried under the timestamped
-    # human reply, which would falsely flag needs_followup.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "human q"},
-        {"author": "xg-gh-25", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "body": "our answer, no timestamp"},
-    ])
-    items = engagement_items(d)
-    assert items[0]["needs_followup"] is False  # our untimestamped reply sorts newest
-
-
-# ── Self-login exclusion from the EXTERNAL-maintainer signal (DEFECT1) ────────
-# is_maintainer is stored true for xg-gh-25's own replies on its OWN repo (bot is
-# OWNER there). But every consumer wants the EXTERNAL-maintainer signal — a reply BY
-# us is not an external maintainer's acknowledgment. Exclude self-login at every read.
-
-
-def test_maintainer_replies_excludes_self_login(tmp_path: Path) -> None:
-    # AC2: 3 is_maintainer=true rows, 1 is our own login → external count = 2, not 3.
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "reply_archive.jsonl").write_text(
-        "\n".join(
-            json.dumps(x)
-            for x in [
-                {"id": "r1", "author": "danielmiessler", "is_maintainer": True},
-                {"id": "r2", "author": "Panniantong", "is_maintainer": True},
-                {"id": "r3", "author": "xg-gh-25", "is_maintainer": True},  # OUR own reply on our repo
-            ]
-        )
-        + "\n"
-    )
-    agg = aggregate_engagement(d)
-    assert agg["maintainer_replies"] == 2  # xg-gh-25 self-reply excluded (was 3)
-
-
-def test_maintainer_replies_excludes_self_login_case_insensitive(tmp_path: Path) -> None:
-    # AC2: our login casing varies in the archive — must still be excluded.
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "reply_archive.jsonl").write_text(
-        "\n".join(
-            json.dumps(x)
-            for x in [
-                {"id": "r1", "author": "external_maint", "is_maintainer": True},
-                {"id": "r2", "author": "XG-GH-25", "is_maintainer": True},  # upper-cased self
-            ]
-        )
-        + "\n"
-    )
-    agg = aggregate_engagement(d)
-    assert agg["maintainer_replies"] == 1  # only the external one
-
-
-def test_has_maintainer_reply_excludes_self_login(tmp_path: Path) -> None:
-    # AC3: a thread whose ONLY is_maintainer reply is our own login must NOT be
-    # flagged has_maintainer_reply — it is not external acknowledgment.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "xg-gh-25", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "our own reply on our repo"},
-    ])
-    items = engagement_items(d, now=_FIXED_NOW)
-    assert items[0]["has_maintainer_reply"] is False  # self-maintainer excluded
-
-
-def test_has_maintainer_reply_true_for_external_maintainer(tmp_path: Path) -> None:
-    # AC3 companion: an EXTERNAL maintainer reply still flags has_maintainer_reply.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "danielmiessler", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "merged, thanks"},
-    ])
-    items = engagement_items(d, now=_FIXED_NOW)
-    assert items[0]["has_maintainer_reply"] is True
-
-
-# ── tier-0 uses LAST reply is external maintainer, not ANY (DEFECT2, FLAW-A) ──
-
-
-def test_tier0_requires_last_reply_is_maintainer(tmp_path: Path) -> None:
-    # AC5: an early external maintainer reply, then a later non-maintainer reply.
-    # has_maintainer_reply is True (ANY), but the LAST voice is a non-maintainer, so
-    # this must rank tier-1 (someone waiting), NOT tier-0 (maintainer waiting).
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
-    d_maintainer_last = _eng_reply_fixture(tmp_path / "a", [
-        {"author": "randomuser", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-04T00:00:00Z", "body": "q"},
-        {"author": "extmaint", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "maintainer replied last"},
-    ])
-    d_other_last = _eng_reply_fixture(tmp_path / "b", [
-        {"author": "extmaint", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-04T00:00:00Z", "body": "maintainer early"},
-        {"author": "randomuser", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-05T00:00:00Z", "body": "other replied last"},
-    ])
-    # Both are needs_followup (external last, fresh). The maintainer-last one is tier-0,
-    # the other-last one is tier-1 — verified by which sorts first when we build a
-    # combined view is not possible across dirs, so assert the tier signal directly:
-    # a thread whose last reply is a non-maintainer must still be has_maintainer_reply
-    # True but NOT rank as a maintainer-waiting row.
-    items_a = engagement_items(d_maintainer_last, now=_FIXED_NOW)
-    items_b = engagement_items(d_other_last, now=_FIXED_NOW)
-    # both have a maintainer somewhere → has_maintainer_reply True on both
-    assert items_a[0]["has_maintainer_reply"] is True
-    assert items_b[0]["has_maintainer_reply"] is True
-    # the tier-0 discriminator: last reply is an external maintainer
-    assert items_a[0]["maintainer_waiting"] is True   # maintainer replied last
-    assert items_b[0]["maintainer_waiting"] is False  # non-maintainer replied last
-
-
-# ── staleness demotion: a >14d-old external reply is no longer active (DEFECT2) ──
-
-
-def test_needs_followup_false_when_last_reply_stale(tmp_path: Path) -> None:
-    # AC6: last external reply is 20 days before now → demoted (not an active todo).
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-07-21T00:00:00Z", "body": "old question"},
-    ])
-    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)  # 20d later
-    items = engagement_items(d, now=now)
-    assert items[0]["needs_followup"] is False  # stale > 14d → demoted
-
-
-def test_needs_followup_true_when_last_reply_fresh(tmp_path: Path) -> None:
-    # AC6: last external reply is 2 days before now → still active.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-08T00:00:00Z", "body": "recent question"},
-    ])
-    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)  # 2d later
-    items = engagement_items(d, now=now)
-    assert items[0]["needs_followup"] is True  # fresh < 14d → active
-
-
-def test_needs_followup_stale_boundary_exactly_14d(tmp_path: Path) -> None:
-    # AC6 boundary: exactly 14 days is still active (only STRICTLY older demotes).
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-07-27T00:00:00Z", "body": "14 days"},
-    ])
-    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)  # exactly 14d
-    items = engagement_items(d, now=now)
-    assert items[0]["needs_followup"] is True  # 14d is the edge — not yet stale
-
-
-def test_needs_followup_stale_missing_created_at_is_fresh(tmp_path: Path) -> None:
-    # AC7: a last external reply with NO created_at must be treated as FRESH (never
-    # false-demoted) — a just-fetched reply commonly lacks a timestamp.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "body": "no timestamp"},
-    ])
-    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
-    items = engagement_items(d, now=now)
-    assert items[0]["needs_followup"] is True  # missing created_at → fresh, still active
-
-
-def test_needs_followup_stale_unparseable_created_at_is_fresh(tmp_path: Path) -> None:
-    # AC7: a naive/garbage created_at must NOT crash and must be treated as fresh.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "not-a-date", "body": "garbage ts"},
-    ])
-    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
-    items = engagement_items(d, now=now)  # must not raise
-    assert items[0]["needs_followup"] is True  # unparseable → fresh
-
-
-def test_needs_followup_stale_naive_created_at_no_crash(tmp_path: Path) -> None:
-    # AC7: a NAIVE (no tz) created_at must not crash the aware-datetime subtraction.
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "someone", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-07-21T00:00:00", "body": "naive ts, 20d old"},
-    ])
-    now = datetime.datetime(2026, 8, 10, 0, 0, 0, tzinfo=datetime.timezone.utc)
-    items = engagement_items(d, now=now)  # must not raise TypeError
-    # naive is normalized to UTC and IS parseable → 20d old → stale → demoted
-    assert items[0]["needs_followup"] is False
-
-
-def test_engagement_items_none_keys_do_not_false_join(tmp_path: Path) -> None:
-    # REVIEW HIGH: a reply missing source_issue must NOT cross-attach to a published
-    # comment that also happens to be missing issue_number via a (repo, None) match.
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    (d / "engagement_log.jsonl").write_text(
-        json.dumps({"comment_id": "c1", "status": "published", "repo": "a/b", "issue_number": None, "comment_url": "u1"}) + "\n"
-    )
-    (d / "reply_archive.jsonl").write_text(
-        # a reply on a/b but with a MISSING source_issue — must be dropped from the join
-        json.dumps({"id": "r1", "author": "x", "is_maintainer": False, "source_repo": "a/b", "source_issue": None, "body": "unrelated"}) + "\n"
-    )
-    items = engagement_items(d)
-    assert len(items) == 1
-    assert items[0]["reply_count"] == 0  # NOT false-joined via (a/b, None)
-    assert items[0]["needs_followup"] is False
 
 
 # ── Feed (recent signal digests + reports files) ─────────────────────────────
@@ -805,112 +362,6 @@ def test_build_feed_md_default_show_unchanged(tmp_path: Path) -> None:
     assert "2026-08-01-openworker-research.md" in names
 
 
-# ── Hot Topics — parse the LIVE signals.json hot_topics feed (run_ced271e8) ──────
-# Was: parse a hand-maintained TECH.md Rankings table (went 2 months stale). Now:
-# read the weekly monitor's signals.json, the same artifact backing daily signals.
-
-import json as _json
-
-
-def _write_signals(tmp_path: Path, payload: dict) -> Path:
-    p = tmp_path / "signals.json"
-    p.write_text(_json.dumps(payload))
-    return p
-
-
-# A realistic signals.json shaped exactly like the live producer (compute_hot_topics):
-# hot_topics[] = {id, total_comments, thread_count, top_thread{repo,number,title,...}}.
-# Deliberately NOT pre-sorted by total_comments, to prove the parser sorts (H1).
-_SIGNALS_FIXTURE = {
-    "scanned_at": "2026-08-11T17:50:56.037632",
-    "hot_topics": [
-        {"id": "HT-COORDINATION", "total_comments": 7, "thread_count": 8,
-         "top_thread": {"repo": "anthropics/claude-code-action", "number": 1367,
-                        "title": "Workflow keyword trigger collides", "category": "General"}},
-        {"id": "HT-SKILL-ARCH", "total_comments": 15, "thread_count": 18,
-         "top_thread": {"repo": "danielmiessler/Personal_AI_Infrastructure", "number": 1613,
-                        "title": "Surviving upgrades with a local delta", "category": "Ideas"}},
-        {"id": "HT-MEMORY", "total_comments": 13, "thread_count": 4,
-         "top_thread": {"repo": "MemPalace/mempalace", "number": 759,
-                        "title": "MemPalace needs to be able to forget", "category": "Ideas"}},
-    ],
-}
-
-
-def test_parse_hot_topics_reads_signals_and_ranks_by_comments(tmp_path: Path) -> None:
-    from core.community_data import parse_hot_topics
-    result = parse_hot_topics(_write_signals(tmp_path, _SIGNALS_FIXTURE))
-    assert result["scanned_at"] == "2026-08-11T17:50:56.037632"
-    topics = result["topics"]
-    assert len(topics) == 3
-    # H1: sorted by comments DESC + rank assigned from that order (fixture was unsorted).
-    assert [t["comments"] for t in topics] == [15, 13, 7]
-    assert [t["rank"] for t in topics] == [1, 2, 3]
-    assert topics[0]["id"] == "HT-SKILL-ARCH"
-    # id → human label (closed-set map), NOT the raw id.
-    assert topics[0]["topic"] == "Skill / capability architecture"
-    assert topics[0]["threads"] == 18
-    assert topics[0]["top_repo"] == "danielmiessler/Personal_AI_Infrastructure"
-    assert topics[0]["top_number"] == 1613
-
-
-def test_parse_hot_topics_builds_discussions_url_not_issues(tmp_path: Path) -> None:
-    # H2: hot_topics top_thread is a DISCUSSION (fetch_hot_discussions feeds
-    # compute_hot_topics), so the URL path is /discussions/<n>, NEVER /issues/<n>.
-    from core.community_data import parse_hot_topics
-    topics = parse_hot_topics(_write_signals(tmp_path, _SIGNALS_FIXTURE))["topics"]
-    top = topics[0]
-    assert top["url"] == "https://github.com/danielmiessler/Personal_AI_Infrastructure/discussions/1613"
-    assert "/issues/" not in top["url"]
-
-
-def test_parse_hot_topics_accepts_github_explicit_url_and_guards_missing(tmp_path: Path) -> None:
-    from core.community_data import parse_hot_topics
-    payload = {"scanned_at": "2026-08-11T00:00:00", "hot_topics": [
-        {"id": "HT-MEMORY", "total_comments": 5, "thread_count": 1,
-         "top_thread": {"repo": "a/b", "number": 9,
-                        "url": "https://github.com/a/b/discussions/9"}},  # valid github explicit → kept
-        {"id": "HT-STREAMING", "total_comments": 2, "thread_count": 1,
-         "top_thread": {"title": "no repo/number here"}},  # → empty url, still renders
-    ]}
-    topics = parse_hot_topics(_write_signals(tmp_path, payload))["topics"]
-    by_id = {t["id"]: t for t in topics}
-    assert by_id["HT-MEMORY"]["url"] == "https://github.com/a/b/discussions/9"  # github explicit preferred
-    assert by_id["HT-STREAMING"]["url"] == ""                                    # missing repo/number → empty
-    assert by_id["HT-STREAMING"]["topic"]                                        # row still has a label
-
-
-def test_parse_hot_topics_url_is_hardened_against_injection(tmp_path: Path) -> None:
-    # SECURITY (Gate-2): the URL is handed to the system browser. signals.json is a
-    # local file a future producer / local edit could taint. A non-github explicit
-    # url, a javascript:/file: scheme, or a path-traversal repo must NEVER reach the
-    # browser as-is: drop the tainted explicit + reject a malformed repo → empty url.
-    from core.community_data import parse_hot_topics
-    payload = {"scanned_at": "2026-08-11T00:00:00", "hot_topics": [
-        {"id": "HT-A", "total_comments": 9, "thread_count": 1,
-         "top_thread": {"repo": "a/b", "number": 1, "url": "https://evil.com/phish"}},   # non-github explicit → drop, reconstruct
-        {"id": "HT-B", "total_comments": 8, "thread_count": 1,
-         "top_thread": {"repo": "a/b", "number": 2, "url": "javascript:alert(1)"}},      # dangerous scheme → drop, reconstruct
-        {"id": "HT-C", "total_comments": 7, "thread_count": 1,
-         "top_thread": {"repo": "../evil.com", "number": 3}},                            # path-traversal repo → empty
-        {"id": "HT-D", "total_comments": 6, "thread_count": 1,
-         "top_thread": {"repo": "a/b", "number": "3; rm -rf"}},                          # non-int number → empty
-        {"id": "HT-E", "total_comments": 5, "thread_count": 1,
-         "top_thread": {"repo": "a/b", "number": 5,
-                        "url": "https://github.com/@evil/discussions/1"}},               # @-userinfo-ish path → drop explicit, reconstruct
-        {"id": "HT-F", "total_comments": 4, "thread_count": 1,
-         "top_thread": {"repo": "a/b", "number": 6,
-                        "url": "https://github.com.evil.com/x/discussions/1"}},          # look-alike host → drop explicit, reconstruct
-    ]}
-    by_id = {t["id"]: t for t in parse_hot_topics(_write_signals(tmp_path, payload))["topics"]}
-    assert by_id["HT-A"]["url"] == "https://github.com/a/b/discussions/1"  # tainted explicit dropped, safe reconstruct
-    assert by_id["HT-B"]["url"] == "https://github.com/a/b/discussions/2"  # javascript: dropped, safe reconstruct
-    assert by_id["HT-C"]["url"] == ""                                       # path-traversal repo (..) rejected
-    assert by_id["HT-D"]["url"] == ""                                       # non-int number rejected
-    assert by_id["HT-E"]["url"] == "https://github.com/a/b/discussions/5"  # @-path explicit dropped, safe reconstruct
-    assert by_id["HT-F"]["url"] == "https://github.com/a/b/discussions/6"  # look-alike host dropped, safe reconstruct
-
-
 def test_build_feed_html_prefix_leak_guard(tmp_path: Path) -> None:
     # Gate-2 HIGH (run_03b5d04f): the stem allowlist must be EXACT for "weekly"/
     # "community_report", NOT a prefix — else a future confidential
@@ -942,43 +393,6 @@ def test_build_feed_html_meta_audience_reversed_order(tmp_path: Path) -> None:
     assert "2026-08-09-weekly.html" not in names, "reversed-order audience:internal must exclude"
 
 
-def test_parse_hot_topics_missing_hot_topics_key_fail_soft(tmp_path: Path) -> None:
-    # A valid signals.json that has no hot_topics list (e.g. an old scan) → empty
-    # topics but still surface scanned_at (never silently drop the freshness).
-    from core.community_data import parse_hot_topics
-    result = parse_hot_topics(_write_signals(tmp_path, {"scanned_at": "2026-08-11T00:00:00", "signals": []}))
-    assert result == {"scanned_at": "2026-08-11T00:00:00", "topics": []}
-
-
-def test_parse_hot_topics_missing_file_fail_soft(tmp_path: Path) -> None:
-    from core.community_data import parse_hot_topics
-    result = parse_hot_topics(tmp_path / "nope.json")
-    assert result == {"scanned_at": None, "topics": []}
-
-
-def test_parse_hot_topics_malformed_json_fail_soft(tmp_path: Path) -> None:
-    # A corrupt/half-written signals.json must not 500 the endpoint.
-    from core.community_data import parse_hot_topics
-    p = tmp_path / "signals.json"
-    p.write_text("{not valid json,,,")
-    result = parse_hot_topics(p)
-    assert result == {"scanned_at": None, "topics": []}
-
-
-def test_parse_hot_topics_skips_malformed_entries(tmp_path: Path) -> None:
-    # A malformed row (missing id, not a dict) is skipped, never fatal.
-    from core.community_data import parse_hot_topics
-    payload = {"scanned_at": "2026-08-11T00:00:00", "hot_topics": [
-        "not a dict",
-        {"total_comments": 9},  # no id → skip
-        {"id": "HT-MEMORY", "total_comments": 4, "thread_count": 2,
-         "top_thread": {"repo": "a/b", "number": 1}},
-    ]}
-    topics = parse_hot_topics(_write_signals(tmp_path, payload))["topics"]
-    assert len(topics) == 1
-    assert topics[0]["id"] == "HT-MEMORY"
-
-
 def test_build_feed_drops_symlink_escaping_knowledge(tmp_path: Path) -> None:
     # A symlink under Signals/ pointing OUTSIDE Knowledge/ must NOT be emitted
     # (defense-in-depth vs the /workspace/file/resolve infoleak class).
@@ -999,17 +413,6 @@ def test_build_feed_drops_symlink_escaping_knowledge(tmp_path: Path) -> None:
     names = {it["name"] for it in items}
     assert "real-digest.md" in names
     assert "escape.md" not in names  # escaping symlink dropped
-
-
-def test_read_jsonl_skips_oversized_file(tmp_path: Path) -> None:
-    from core.community_data import _read_jsonl, _MAX_JSONL_BYTES
-
-    d = tmp_path / ".artifacts"
-    d.mkdir()
-    big = d / "engagement_log.jsonl"
-    # write just over the cap, cheaply (one line padded)
-    big.write_text('{"x":"' + ("a" * (_MAX_JSONL_BYTES + 10)) + '"}\n')
-    assert _read_jsonl(big) == []  # oversized → skipped, not OOM
 
 
 # ── Phase-2: Sources CRUD write endpoints ────────────────────────────────────
@@ -1499,18 +902,6 @@ def test_member_write_serializes_with_self_tune_lock(tmp_config_members: Path) -
 # ── Router wiring (AC5 — endpoints reachable through the real ASGI app) ──────
 
 
-def test_router_endpoints_registered() -> None:
-    """The 3 GET endpoints must be wired into the app (import smoke — catches an
-    unregistered router / bad prefix without a full HTTP round-trip)."""
-    from routers.community_api import router
-
-    paths = {r.path for r in router.routes}
-    assert "/api/community/feed" in paths
-    assert "/api/community/sources" in paths
-    assert "/api/community/engagement" in paths
-    assert "/api/community/hot-topics" in paths  # gap2
-
-
 def test_router_handlers_return_real_shapes() -> None:
     """Call the handlers directly (they resolve live workspace paths via jobs/paths
     SSOT). Read-only — must return the documented shape and never raise, even if the
@@ -1527,9 +918,10 @@ def test_router_handlers_return_real_shapes() -> None:
     from routers.community_api import (
         community_feed,
         community_sources,
-        community_engagement,
-        community_hot_topics,
     )
+    import routers.community_api as api
+    # Hot Topics / Outbound were GitHub_Community-only and are gone (P7)
+    assert not hasattr(api, "community_engagement") and not hasattr(api, "community_hot_topics")
 
     try:
         prev_loop = asyncio.get_event_loop()
@@ -1548,18 +940,6 @@ def test_router_handlers_return_real_shapes() -> None:
         for s in sources["sources"]:
             assert "managed_by" in s
 
-        eng = loop.run_until_complete(community_engagement())
-        # New contract: {kpis:{...counts...}, items:[...list...]}.
-        assert "kpis" in eng and "items" in eng
-        assert "comments_posted" in eng["kpis"]
-        assert isinstance(eng["items"], list)
-        assert "avg_quality" not in eng["kpis"]  # no fabricated metric, even live
-
-        hot = loop.run_until_complete(community_hot_topics())
-        assert "topics" in hot and isinstance(hot["topics"], list)
-        assert "scanned_at" in hot  # freshness anchor (ISO scan time; None if no signals.json)
-        assert "updated" not in hot  # old TECH.md-date field is gone (migrated to scanned_at)
-        assert hot["count"] == len(hot["topics"])
     finally:
         loop.close()
         # restore whatever loop policy state was here before (never leave None)
@@ -1617,30 +997,3 @@ def test_add_member_rejects_http_url_for_rss(tmp_config_members: Path) -> None:
     assert "https" in str(ei.value.detail).lower()
 
 
-# ── /engagement carries only the latest reply per item (the list renders only it) ──
-# The full nested thread made the response ~560 KB for 334 items (2026-10-23 measure)
-# while the Outbound list shows one reply line + reply_count. engagement_items() keeps
-# the full thread for its own callers; only the endpoint trims.
-
-def test_engagement_endpoint_returns_latest_reply_only(tmp_path: Path, monkeypatch) -> None:
-    import asyncio
-    import routers.community_api as api_mod
-    d = _eng_reply_fixture(tmp_path, [
-        {"author": "a1", "is_maintainer": False, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-02T00:00:00Z", "body": "first"},
-        {"author": "m1", "is_maintainer": True, "source_repo": "a/b", "source_issue": 1, "created_at": "2026-08-03T00:00:00Z", "body": "latest"},
-    ])
-    monkeypatch.setattr(api_mod, "_engagement_dir", lambda: d)
-    eng = asyncio.run(api_mod.community_engagement())
-    item = eng["items"][0]
-    assert "replies" not in item
-    assert item["latest_reply"]["body"] == "latest" and item["latest_reply"]["author"] == "m1"
-    assert item["reply_count"] == 2                       # the total stays
-
-
-def test_engagement_endpoint_latest_reply_none_without_replies(tmp_path: Path, monkeypatch) -> None:
-    import asyncio
-    import routers.community_api as api_mod
-    d = _eng_reply_fixture(tmp_path, [])
-    monkeypatch.setattr(api_mod, "_engagement_dir", lambda: d)
-    item = asyncio.run(api_mod.community_engagement())["items"][0]
-    assert item["latest_reply"] is None and item["reply_count"] == 0

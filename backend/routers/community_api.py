@@ -7,7 +7,6 @@ Sources EDITABLE at both the FEED level and the MEMBER level.
     GET    /api/community/feed              — recent Signals + community Reports files (newest-first)
     GET    /api/community/sources           — configured feeds (id/name/type/tier/enabled/managed_by
                                               + members/member_count/member_kind/members_truncated)
-    GET    /api/community/engagement        — GitHub community engagement metrics (data-backed only)
     POST   /api/community/feeds             — add a source (managed_by:user)
     PUT    /api/community/feeds/{id}         — toggle enabled / change tier
     DELETE /api/community/feeds/{id}         — remove a source (idempotent)
@@ -30,7 +29,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from core.community_data import aggregate_engagement, build_feed, engagement_items, parse_hot_topics, parse_sources
+from core.community_data import build_feed, parse_sources
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/community", tags=["community"])
@@ -46,22 +45,6 @@ def _knowledge_dir():
     from jobs.paths import SWARMWS
 
     return SWARMWS / "Knowledge"
-
-
-def _engagement_dir():
-    from jobs.paths import PROJECTS_DIR
-
-    return PROJECTS_DIR / "GitHub_Community" / ".artifacts"
-
-
-def _signals_path():
-    # Hot Topics reads the LIVE community-demand feed the weekly monitor job writes
-    # (run_ced271e8) — the same signals.json that backs the daily-signals scan — NOT
-    # the hand-maintained TECH.md Rankings table (which nobody refreshed → 2-month
-    # stale). Sibling of _engagement_dir(): same GitHub_Community/.artifacts dir.
-    from jobs.paths import PROJECTS_DIR
-
-    return PROJECTS_DIR / "GitHub_Community" / ".artifacts" / "signals.json"
 
 
 @router.get("/feed")
@@ -80,29 +63,6 @@ async def community_feed() -> dict:
     return {"count": len(items), "items": items, "truncated": len(items) >= feed_cap()}
 
 
-@router.get("/hot-topics")
-async def community_hot_topics() -> dict:
-    """GitHub Hot Topics (community DEMAND) read LIVE from the GitHub_Community
-    monitor's signals.json `hot_topics` feed (run_ced271e8 — was the stale
-    hand-maintained TECH.md Rankings table).
-
-    Returns {scanned_at, topics:[{rank,id,topic,comments,threads,top_repo,
-    top_number,top_title,url}], count}. `scanned_at` is the feed's real scan
-    timestamp (ISO) — the frontend derives a freshness label from it, so a
-    weekly-refreshed feed reads as fresh (and a >21d gap now signals the SCAN is
-    down, not human neglect). Each topic's `url` is the top discussion thread on
-    GitHub (opened in the system browser). Fail-soft: a missing/unreadable
-    signals.json → empty topics list (never 500). Read-only; blocking file read
-    runs off the event loop.
-    """
-    result = await executors.run_nav(parse_hot_topics, _signals_path())
-    return {
-        "scanned_at": result["scanned_at"],
-        "topics": result["topics"],
-        "count": len(result["topics"]),
-    }
-
-
 @router.get("/sources")
 async def community_sources() -> dict:
     """Configured signal feeds (a view of config.yaml `feeds:`).
@@ -117,34 +77,6 @@ async def community_sources() -> dict:
     # parse_sources reads + yaml-parses config.yaml (blocking) — off the event loop.
     sources = await executors.run_nav(parse_sources, _config_path())
     return {"count": len(sources), "sources": sources}
-
-
-@router.get("/engagement")
-async def community_engagement() -> dict:
-    """GitHub community engagement metrics + actionable list (data-backed only).
-
-    Returns {kpis: {comments_posted, replies_received, maintainer_replies, stars},
-    items: [per-engagement rows with comment_url + latest_reply]}. `kpis` is the
-    scalar summary (Outbound strip); `items` is the clickable engagement list
-    (needs-followup first — see engagement_items). No fabricated quality score —
-    there is no quality-score source on disk. Empty/zeros when GitHub_Community has
-    no engagement history yet.
-    """
-    # Both read JSONL files (blocking) — off the event loop. One dir read each.
-    d = _engagement_dir()
-    kpis = await executors.run_nav(aggregate_engagement, d)
-    items = await executors.run_nav(engagement_items, d)
-    # Each row carries only its latest reply (the list renders one reply line next to
-    # reply_count); the whole nested thread made the body ~560 KB for 334 rows.
-    return {"kpis": kpis, "items": [_with_latest_reply(it) for it in items]}
-
-
-def _with_latest_reply(item: dict) -> dict:
-    """An engagement row with `replies` replaced by `latest_reply` (the last one, or None)."""
-    replies = item.get("replies") or []
-    out = {k: v for k, v in item.items() if k != "replies"}
-    out["latest_reply"] = replies[-1] if replies else None
-    return out
 
 
 # ── Phase-2: Sources CRUD (writes config.yaml via the shared serialization authority) ──

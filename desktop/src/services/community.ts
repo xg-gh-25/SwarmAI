@@ -1,14 +1,11 @@
 /**
  * community — client for the Community overlay's read-only endpoints (Phase-1).
  *
- * The Community overlay is SwarmAI's two-way membrane with the outside world:
- * inbound signals (Feed + Sources) and outbound engagement (Engagement & Reports).
- * Phase-1 is READ-ONLY — three GET endpoints; Phase-2 adds /sources CRUD.
+ * The Community overlay shows inbound signals (Feed) and the configured feeds
+ * (Sources, editable through the /feeds endpoints).
  *
  *   GET /api/community/feed        → recent signal digests + reports (files)
  *   GET /api/community/sources     → configured feeds (read-only)
- *   GET /api/community/engagement  → GitHub community metrics (data-backed only)
- *   GET /api/community/hot-topics  → community DEMAND (live signals.json feed, read-only)
  *
  * Backend is snake_case (FastAPI); this layer normalizes to the shapes the
  * overlay renders. All numbers come from the backend (never frontend .length).
@@ -51,108 +48,6 @@ export interface CommunitySource {
   /** The config key the members live under (e.g. "urls"), or null = no editable members. */
   memberKind: string | null;
   tags: string[];
-}
-
-/** One GitHub Hot Topic row (community DEMAND) — read LIVE from signals.json. */
-export interface CommunityHotTopic {
-  /** 1-based rank by comment volume (backend sorts by comments desc). */
-  rank: number;
-  /** Stable hot-topic id (e.g. "HT-MEMORY") — used as a React key. */
-  id: string;
-  /** Human label for the topic (backend maps the id → a readable name). */
-  topic: string;
-  /** Total comments across all threads in this topic (the heat metric). */
-  comments: number;
-  /** Number of distinct discussion threads in this topic. */
-  threads: number;
-  /** The hottest thread's repo (owner/name), or "". */
-  topRepo: string;
-  /** The hottest thread's number, or null. */
-  topNumber: number | null;
-  /** The hottest thread's title, or "". */
-  topTitle: string;
-  /** GitHub URL for the hottest thread (a Discussion) — "" when unbuildable.
-   *  Opened in the SYSTEM browser via openExternal (external link). */
-  url: string;
-}
-
-/** Hot Topics payload — the live topics + the feed's real scan timestamp. */
-export interface CommunityHotTopics {
-  /** ISO timestamp of the last scan (from signals.json scanned_at). null if no feed.
-   *  The overlay derives a freshness label from this — a weekly feed reads fresh. */
-  scannedAt: string | null;
-  topics: CommunityHotTopic[];
-}
-
-/** Scalar KPI summary for the Outbound strip — data-backed only (no fabricated score). */
-export interface CommunityEngagementKpis {
-  commentsPosted: number;
-  repliesReceived: number;
-  maintainerReplies: number;
-  stars: number | null;
-}
-
-/** One reply we received on a comment we posted (nested under an engagement item). */
-export interface CommunityReply {
-  author: string;
-  body: string;
-  isMaintainer: boolean;
-  createdAt: string;
-}
-
-/** One outbound engagement — a comment we posted, with the latest reply it drew
- *  (the endpoint sends only that one; `replyCount` is the total). */
-export interface CommunityEngagementItem {
-  repo: string;
-  issueNumber: number | null;
-  topic: string;
-  status: string;
-  commentUrl: string;
-  postedAt: string;
-  confidence: number | null;
-  replyCount: number;
-  hasMaintainerReply: boolean;
-  needsFollowup: boolean;
-  latestReply: CommunityReply | null;
-}
-
-/** Outbound engagement — scalar KPIs + the clickable per-engagement list. */
-export interface CommunityEngagement {
-  kpis: CommunityEngagementKpis;
-  items: CommunityEngagementItem[];
-}
-
-interface RawReply {
-  author?: string;
-  body?: string;
-  is_maintainer?: boolean;
-  created_at?: string;
-}
-
-interface RawEngagementItem {
-  repo?: string;
-  issue_number?: number | null;
-  topic?: string;
-  status?: string;
-  comment_url?: string;
-  posted_at?: string;
-  confidence?: number | null;
-  reply_count?: number;
-  has_maintainer_reply?: boolean;
-  needs_followup?: boolean;
-  latest_reply?: RawReply | null;
-}
-
-interface RawHotTopic {
-  rank?: number;
-  id?: string;
-  topic?: string;
-  comments?: number;
-  threads?: number;
-  top_repo?: string;
-  top_number?: number | null;
-  top_title?: string;
-  url?: string;
 }
 
 interface RawSource {
@@ -201,66 +96,6 @@ export const communityService = {
       tags: s.tags ?? [],
     }));
   },
-
-  async fetchHotTopics(): Promise<CommunityHotTopics> {
-    // Backend returns {scanned_at, topics:[{rank,id,topic,comments,threads,
-    // top_repo,top_number,top_title,url}], count}. Map the snake_case topic
-    // fields → camelCase (top_repo→topRepo etc.); scanned_at→scannedAt.
-    const res = await api.get('/community/hot-topics');
-    const raw = (res.data?.topics ?? []) as RawHotTopic[];
-    return {
-      scannedAt: res.data?.scanned_at ?? null,
-      topics: raw.map((t) => ({
-        rank: t.rank ?? 0,
-        id: t.id ?? '',
-        topic: t.topic ?? '',
-        comments: t.comments ?? 0,
-        threads: t.threads ?? 0,
-        topRepo: t.top_repo ?? '',
-        topNumber: t.top_number ?? null,
-        topTitle: t.top_title ?? '',
-        url: t.url ?? '',
-      })),
-    };
-  },
-
-  async fetchEngagement(): Promise<CommunityEngagement> {
-    // New contract: {kpis:{...counts}, items:[...list]}. The old response was the
-    // flat counts object; read from d.kpis now (a flat-shape fallback keeps an old
-    // backend from silently zeroing the strip during a rolling deploy).
-    const res = await api.get('/community/engagement');
-    const d = res.data ?? {};
-    const k = d.kpis ?? d; // fallback: pre-list backend returned counts at top level
-    const rawItems = (d.items ?? []) as RawEngagementItem[];
-    return {
-      kpis: {
-        commentsPosted: k.comments_posted ?? 0,
-        repliesReceived: k.replies_received ?? 0,
-        maintainerReplies: k.maintainer_replies ?? 0,
-        stars: k.stars ?? null,
-      },
-      items: rawItems.map((it) => ({
-        repo: it.repo ?? '',
-        issueNumber: it.issue_number ?? null,
-        topic: it.topic ?? '',
-        status: it.status ?? '',
-        commentUrl: it.comment_url ?? '',
-        postedAt: it.posted_at ?? '',
-        confidence: it.confidence ?? null,
-        replyCount: it.reply_count ?? 0,
-        hasMaintainerReply: it.has_maintainer_reply ?? false,
-        needsFollowup: it.needs_followup ?? false,
-        latestReply: it.latest_reply ? {
-          author: it.latest_reply.author ?? '',
-          body: it.latest_reply.body ?? '',
-          isMaintainer: it.latest_reply.is_maintainer ?? false,
-          createdAt: it.latest_reply.created_at ?? '',
-        } : null,
-      })),
-    };
-  },
-
-  // ── Phase-2 writes (Sources editable) — all serialize with self_tune on one lock ──
 
   async addSource(feed: { id: string; name: string; type: string; tier?: string }): Promise<void> {
     await api.post('/community/feeds', feed);

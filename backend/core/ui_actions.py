@@ -104,8 +104,8 @@ UI_COMMAND_ALLOWLIST: dict[str, UiCommandEntry] = {
     # AlertsPill's fullscreen view). Payload-less show-only nav; the agent uses it
     # to ACT on its own attention queue when the user says "show me Need You".
     "show-needs-you": {"event": "swarm:show-needs-you", "target": "window"},
-    # Community overlay (run_5165013e) — opens the CommunityOverlay (SwarmAI's
-    # two-way membrane: inbound signals + outbound engagement). Payload-less
+    # Community overlay (run_5165013e) — opens the CommunityOverlay (inbound
+    # signals + the feeds being watched). Payload-less
     # show-only nav; the agent opens it when the user asks about signals /
     # community / subscriptions. Read-only in Phase-1.
     "show-community": {"event": "swarm:show-community", "target": "window"},

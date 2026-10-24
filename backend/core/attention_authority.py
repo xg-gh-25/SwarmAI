@@ -50,12 +50,10 @@ logger = logging.getLogger(__name__)
 # the next scheduled run and are NOT the user's problem — only a broken streak is.
 _JOB_CIRCUIT_BREAKER_THRESHOLD = 3
 
-# R3 闭环 dispatch: a fresh community digest/report surfaces as REVIEW for this many
+# R3 闭环 dispatch: a fresh result of a DDD-owned job surfaces as REVIEW for this many
 # hours, then ages out (the window IS the state — no read-marker file, keeps collect()
 # read-only). 20h covers the daily-scan cadence gap without perpetual re-surfacing.
 _DIGEST_FRESH_HOURS = 20
-# Which JobResults belong to the community engine (by job_id substring).
-_COMMUNITY_JOB_MARKER = "github-community"
 
 # Tiers
 TIER_BLOCKING = "blocking"
@@ -674,14 +672,15 @@ def _collect_db_recovery() -> list[AttentionItem]:
     return items
 
 
-def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
-    """A fresh, SUCCESSFUL community daily-digest / weekly-report → a REVIEW item
-    whose dispatch.message tells the agent to LEARN + s_persist from it (R3 闭环).
+def _collect_job_digests(workspace_root: Path) -> list[AttentionItem]:
+    """A fresh, SUCCESSFUL result of a job some DDD owns → a REVIEW item for that
+    DDD whose dispatch.message tells the agent to learn from it and s_persist the
+    useful bits into that brain (R3 闭环: job → 🔔 → click → result in chat → sediment).
 
-    This closes the community loop: job → 🔔 → click → digest injected into chat →
-    agent runs s_learn-content + s_persist to sediment the useful bits into DDD /
-    Library. Distinct from _collect_jobs (which surfaces circuit-BROKEN jobs as
-    BLOCKING) — here we surface a SUCCEEDED digest as REVIEW.
+    Which jobs qualify comes only from the DDD job registry (each DDD's bindings.yaml
+    `kind: job`, indexed in .context/ddd_job_registry.json); no job-name pattern and
+    no project name (usable-by-anyone P7; this was GitHub_Community-only). Distinct
+    from _collect_jobs (circuit-BROKEN jobs as BLOCKING).
 
     Time-windowed + read-only (design constraint: collect() never writes disk): a
     digest surfaces for _DIGEST_FRESH_HOURS then ages out on its own — no marker
@@ -692,12 +691,15 @@ def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
         from datetime import datetime, timezone, timedelta
         from core.daily_activity_writer import parse_frontmatter
 
+        from core import ddd_job_registry
+        owner_of = {r["job_id"]: r["owner_ddd"]
+                    for r in ddd_job_registry.read_manifest(workspace_root)}
         jr_dir = workspace_root / "Knowledge" / "JobResults"
-        if not jr_dir.is_dir():
+        if not owner_of or not jr_dir.is_dir():
             return []
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=_DIGEST_FRESH_HOURS)
-        # newest fresh, successful community digest per job_id
+        # newest fresh, successful result per DDD-owned job_id
         newest: dict[str, tuple[datetime, Path, dict]] = {}
         for p in jr_dir.glob("*.md"):
             try:
@@ -711,12 +713,12 @@ def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
                     head = _fh.read(600)
                 fm, _ = parse_frontmatter(head)
             except Exception:
-                logger.debug("_collect_community_digests: suppressed exception on a fail-safe path", exc_info=True)
+                logger.debug("_collect_job_digests: suppressed exception on a fail-safe path", exc_info=True)
                 continue
             if not fm:
                 continue
             job_id = str(fm.get("job_id", ""))
-            if _COMMUNITY_JOB_MARKER not in job_id:
+            if job_id not in owner_of:
                 continue
             if str(fm.get("status", "")).lower() != "success":
                 continue
@@ -735,29 +737,29 @@ def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
 
         for job_id, (run_at, path, fm) in newest.items():
             job_name = str(fm.get("job_name", job_id))
+            owner = owner_of[job_id]
             items.append(AttentionItem(
-                id=f"community_digest:{path.name}",
-                source="community_digest",
+                id=f"job_digest:{path.name}",
+                source="job_digest",
                 tier=TIER_REVIEW,  # a fresh digest is review-worthy, never blocking
-                brain="GitHub_Community",
-                title="A new community digest is ready to learn from",
+                brain=owner,
+                title=f"A new {owner} digest is ready to learn from",
                 summary=job_name,
-                detail=f"A fresh community digest from {job_name}.",
+                detail=f"A fresh result from {job_name}, a job of {owner}.",
                 dispatch={
                     "message": _prompt(
-                        (f"A new community digest from \u201c{job_name}\u201d is ready. Read it, tell me "
-                         "in a few plain bullets what is worth keeping (what worked, a new topic, a "
-                         "maintainer relationship), and save those to the GitHub_Community brain with "
-                         "s_persist. Skip the routine items."),
+                        (f"A new result from \u201c{job_name}\u201d ({owner}) is ready. Read it, tell me "
+                         "in a few plain bullets what is worth keeping, and save those to the "
+                         f"{owner} brain with s_persist. Skip the routine items."),
                         [],
                         [f"digest file {path}"],
                     ),
-                    "context": {"kind": "community_digest", "job_id": job_id,
+                    "context": {"kind": "job_digest", "job_id": job_id,
                                 "path": str(path)},
                 },
             ))
     except Exception as exc:
-        logger.warning("attention: community_digest source failed: %s", exc)
+        logger.warning("attention: job_digest source failed: %s", exc)
     return items
 
 
@@ -790,7 +792,7 @@ def collect(
     items += _collect_governance()
     items += _collect_paused_runs(pipeline_runs)
     items += _collect_jobs()
-    items += _collect_community_digests(workspace_root)
+    items += _collect_job_digests(workspace_root)
     items += _collect_db_recovery()  # OS-level (brain=None), like governance
 
     if brain is not None:
