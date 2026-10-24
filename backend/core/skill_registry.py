@@ -32,15 +32,14 @@ logger = logging.getLogger(__name__)
 # Category mapping for known skill prefixes/names
 SKILL_CATEGORIES: dict[str, list[str]] = {
     "Memory": ["persist", "save-activity", "save-context", "memory-distill"],
-    "Development": ["code-review", "qa", "skill-builder", "skill-feedback", "skillify-session", "estimate-tokens"],
-    "Research": ["deep-research", "github-research", "consulting-report", "tavily-search", "summarize"],
-    "Writing": ["narrative-writing", "humanize", "translate", "pptx", "docx", "xlsx", "pdf"],
-    "Integrations": ["slack", "outlook-assistant", "google-workspace", "apple-reminders", "sonos"],
-    "Automation": ["autonomous-pipeline", "browser-agent", "peekaboo", "tmux", "job-manager"],
-    "Workspace": ["workspace-finder", "workspace-git", "workspace-organizer", "ws-context-init", "project-manager"],
-    "Ops": ["radar-todo", "system-health", "health-check", "chat-brain-check", "deliver", "evaluate", "custom-agents"],
-    "Content": ["image-gen", "video-gen", "podcast-gen", "weather", "finance"],
-    "UI": ["frontend-design", "web-design-review", "wireframe"],
+    "Development": ["code-review", "qa", "skill-builder", "estimate-tokens"],
+    "Research": ["deep-research", "github-research", "tavily-search", "summarize"],
+    "Writing": ["narrative-writing", "humanize", "pptx", "docx", "xlsx", "pdf"],
+    "Automation": ["autonomous-pipeline", "browser-agent", "peekaboo", "job-manager"],
+    "Workspace": ["workspace-git", "project-manager"],
+    "Ops": ["radar-todo", "system-health", "health-check", "chat-brain-check", "deliver", "evaluate"],
+    "Content": ["weather"],
+    "UI": ["frontend-design"],
     "System": ["self-evolution"],
 }
 
@@ -57,8 +56,10 @@ for _cat, _skills in SKILL_CATEGORIES.items():
 # list. Consumed by routers/skills.py::_skill_info_to_response.
 # ---------------------------------------------------------------------------
 
-# Valid load tiers. A skill is `always` (full SKILL.md loaded at session start) or
-# `lazy` (stub + on-invocation Read). Anything else is clamped to `lazy` (see resolve_tier).
+# Valid load tiers: `always` (SKILL.md is the full body) or `lazy` (SKILL.md is a stub
+# pointing at INSTRUCTIONS.md). Either way the body loads only when the skill is invoked;
+# the model sees name + description in the CLI's skill listing. Anything else is clamped
+# to `lazy` (see resolve_tier).
 _VALID_TIERS: tuple[str, ...] = ("always", "lazy")
 DEFAULT_TIER = "lazy"
 

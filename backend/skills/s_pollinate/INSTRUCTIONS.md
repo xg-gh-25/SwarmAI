@@ -1515,7 +1515,7 @@ article headers, social thumbnails).
 **Read the full track instructions:** `tracks/track-j-interactive-report.md`
 
 Single-file branded HTML with interactivity (tabs, expandable sections, traffic lights).
-Built on s_html-artifact templates (base.css + report/scorecard/comparison). Direction
+Built on `templates/html-report/` (base.css + report/scorecard/comparison). Direction
 tokens override base palette. Three modes: Dashboard, Scorecard, Comparison.
 
 ---

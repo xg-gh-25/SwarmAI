@@ -15,6 +15,6 @@ Send notifications to configured channels. Read INSTRUCTIONS.md for full docs.
 TRIGGER: "notify", "send notification", "push to feishu", "send to dingtalk",
          "alert via telegram", "notify channels", "send to slack",
          "push notification", "send alert"
-DO NOT USE: for Slack DM conversations (use s_slack), calendar events
+DO NOT USE: for Slack DM conversations, calendar events
   (use outlook-assistant), or Apple Reminders (use apple-reminders).
-SIBLINGS: s_slack = Slack DM/channel conversations | s_notify = one-way push to 9 channels
+s_notify = one-way push to 9 channels

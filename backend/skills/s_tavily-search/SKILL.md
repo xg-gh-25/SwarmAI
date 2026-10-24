@@ -293,8 +293,6 @@ Tavily is a building block for other skills:
 |---|---|
 | s_deep-research | Primary search engine for multi-round research |
 | s_summarize | Fetch content from URLs before summarizing |
-| s_consulting-report | Market data, competitor info, industry news |
-| s_podcast-gen | Research topics before scripting |
 
 ---
 

@@ -71,12 +71,12 @@ def test_discover_skills(registry: SkillRegistry):
 
 def test_categorize_known_skills(registry: SkillRegistry):
     """Known skills placed in correct category."""
-    skills = ["persist", "code-review", "deep-research", "slack", "browser-agent"]
+    skills = ["persist", "code-review", "deep-research", "pptx", "browser-agent"]
     categories = registry._categorize(skills)
     assert "persist" in categories.get("Memory", [])
     assert "code-review" in categories.get("Development", [])
     assert "deep-research" in categories.get("Research", [])
-    assert "slack" in categories.get("Integrations", [])
+    assert "pptx" in categories.get("Writing", [])
     assert "browser-agent" in categories.get("Automation", [])
 
 

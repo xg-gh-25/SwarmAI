@@ -72,14 +72,6 @@ def _run(script: Path, *args):
                           timeout=60, stdin=subprocess.DEVNULL)
 
 
-def test_web_design_review_search_answers_a_ux_query():
-    script = SKILLS / "s_web-design-review" / "scripts" / "search.py"
-    r = _run(script, "touch target accessibility", "--domain", "ux", "--json")
-    assert r.returncode == 0, r.stderr
-    out = json.loads(r.stdout)
-    assert out["domain"] == "ux" and out["file"] == "ux-guidelines.csv" and out["count"] >= 1
-
-
 def test_pollinate_migrate_prefs(tmp_path):
     script = SKILLS / "s_pollinate" / "scripts" / "migrate_prefs.py"
     template = json.loads((SKILLS / "s_pollinate" / "user_prefs.template.json").read_text())

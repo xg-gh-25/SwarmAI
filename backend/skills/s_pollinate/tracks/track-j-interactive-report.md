@@ -2,7 +2,7 @@
 
 > Single-file HTML artifacts with interactive elements: tabs, filters, traffic lights,
 > expandable sections, and data visualizations. Branded with direction tokens.
-> Built on s_html-artifact's proven template system.
+> Built on the HTML report templates in `templates/html-report/`.
 
 ## When This Track Runs
 
@@ -14,7 +14,7 @@ This track executes during BUILD stage when `"interactive_report"` is in
 - `content/{name}/content_package.md` — Data Layer (metrics, comparisons, time series)
 - `content/{name}/discovery.json` — audience, outcome, analysis context
 - Active design direction YAML — color tokens for branded styling
-- s_html-artifact templates (at `$WORKSPACE/.claude/skills/s_html-artifact/templates/`): `base.css`, `report.html`, `scorecard.html`, `comparison.html`
+- HTML report templates (at `$WORKSPACE/.claude/skills/s_pollinate/templates/html-report/`): `base.css`, `report.html`, `scorecard.html`, `comparison.html`
 
 ## Modes (Template Selection)
 
@@ -97,7 +97,7 @@ From `content_package.md` Data Layer, extract:
 
 ### Token Override System
 
-Load `base.css` from s_html-artifact as foundation. Override with direction tokens:
+Load `templates/html-report/base.css` as foundation. Override with direction tokens:
 
 ```css
 /* Direction token overrides (injected after base.css) */
@@ -263,16 +263,14 @@ content/{name}/tracks/interactive-report/
 └── screenshot.png         — Playwright screenshot for chat preview (if available)
 ```
 
-## Relationship to s_html-artifact
+## The HTML report templates
 
-Track J uses s_html-artifact's **templates** as starting points, NOT the skill itself.
-The skill's trigger conditions and escalation logic do not apply — Track J always
-produces HTML (it IS the confirmed format). What we reuse:
+Track J starts from the templates in `templates/html-report/`. Track J always produces
+HTML (it IS the confirmed format). What each one gives it:
 
-| From s_html-artifact | How Track J uses it |
+| Template | How Track J uses it |
 |---------------------|-------------------|
 | `base.css` | Foundation design system (overridden by direction tokens) |
 | `report.html` | Dashboard template structure |
 | `scorecard.html` | Evaluation card layout pattern |
 | `comparison.html` | Multi-column grid structure |
-| P0 constraint (inline markdown) | **Does NOT apply** — Track J's output IS the artifact |
