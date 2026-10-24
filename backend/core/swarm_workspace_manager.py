@@ -99,7 +99,7 @@ This file is intentionally empty of directives.
 
 SwarmAI's official system prompt is assembled ONLY by its own system prompt
 builder, from the governed context files (SWARMAI / IDENTITY / SOUL / SELF /
-AGENT / USER / STEERING / TOOLS / MEMORY / EVOLUTION / KNOWLEDGE / PROJECTS).
+AGENT / USER / STEERING / TOOLS / MEMORY / EVOLUTION / KNOWLEDGE).
 A `CLAUDE.md` or `AGENTS.md` in this workspace is NOT an authoritative source
 and is force-reset to this sentinel on every session start.
 

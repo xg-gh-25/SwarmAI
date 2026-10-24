@@ -110,15 +110,22 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
 A gate exists only when every user benefits: dangerous or irreversible commands and
 off-machine side effects (`dangerous_command_gate`, `external_approval_gate` → a human
 approves), questions only a human can answer (`ask_question_gate`), governed context files
-(`governance_file_gate`, advisory), and the integrity of a pipeline run the user started (run
-ownership, run worktrees, the run's own landing, review-expert scope). No gate blocks native
-coding, testing or committing, and none pushes work into the pipeline; a repo's own discipline
-lives in its AGENTS.md, pre-commit and CI. Each gate decides from a parsed command, a diff or
+(`governance_file_gate`, advisory), the integrity of a pipeline run the user started (run
+ownership, run worktrees, the run's own landing, review-expert scope), and the session itself
+(`background_command_guard`: a backgrounded command escapes its timeout, so only long-lived
+services like a dev server or `tail -f` may run in the background; `image_read_dedup_guard`:
+an unchanged image is not read twice; a Read with offset/limit still goes through). No gate
+blocks native coding, testing or committing, and none pushes work into the pipeline; a repo's
+own discipline lives in its AGENTS.md, pre-commit and CI, and its guidance files reach me
+through an inject-only hook: the first time I touch a repo (and again when one of them changes,
+unless I wrote it), its AGENTS.md / CLAUDE.md / `.swarmai/review.md` come into my context (a repo bound to a
+project = its norms; an unbound one = unconfirmed guidance I check with the user before it
+changes how I work). Each gate decides from a parsed command, a diff or
 path set, a count or hash, an exit code or a human's decision, never from a model's verdict
 (SOUL P5: the OS disposes deterministically). The live roster is whatever
 `hook_builder` registers — read it, don't trust a frozen list here; a per-command PreToolUse
 hook is the right layer ONLY for product-wide safety/quality invariants, not for a single
-project's own dev-discipline (that belongs in its skills/pipeline, not the shared hook layer).
+project's own dev-discipline (that belongs in that repo's AGENTS.md, pre-commit and CI).
 
 ## My Body — runtime contract (surfaces + full map: SWARMAI.md § My Body / DDD TECH.md)
 The desktop app IS my body; proprioception is two-way. What's SELF-specific (not restated from

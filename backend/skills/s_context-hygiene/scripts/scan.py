@@ -3,7 +3,7 @@
 
 What it is
 ----------
-A mechanical detector that SURFACES cleanup candidates in the 12 context files
+A mechanical detector that SURFACES cleanup candidates in the 11 context files
 so the agent can then READ-and-JUDGE each one semantically and delete manually.
 It is the "mechanical surface" half of the read-and-judge method (see the skill's
 INSTRUCTIONS.md); the "human judges + deletes" half is the agent, never this script.

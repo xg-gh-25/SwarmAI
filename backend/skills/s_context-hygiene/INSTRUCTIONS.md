@@ -10,8 +10,7 @@ adversarial delete-gate). Both share the same cleaning rules (§2) and red line 
 
 > **What this is NOT (scope-away — read first, avoid the trap):**
 > - **NOT `context_health_hook`** — that hook runs every session and does AUTONOMOUS
->   age-decay + dedup + regen (MEMORY/KNOWLEDGE/EVOLUTION lifecycle, KNOWLEDGE-Index
->   regeneration). It does NOT do semantic compression — proof: echoed-titles + dated-pointer
+>   age-decay + dedup + archive (MEMORY/KNOWLEDGE/EVOLUTION lifecycle). It does NOT do semantic compression — proof: echoed-titles + dated-pointer
 >   fragments + drift numbers survive it for months. This skill is the SEMANTIC sweep
 >   the hook cannot do. **Never rebuild or duplicate the hook's autonomous cleanup.**
 > - **NOT `s_persist`** — that routes NEW knowledge by content-type to the right section.
@@ -43,7 +42,7 @@ The three classes (read out of `user_customized` + the auto-gen set):
 |-------|-------|-----------------|---------------------|
 | **System** (`user_customized=False`) | SWARMAI · IDENTITY · SOUL · AGENT | `backend/context/<F>.md` | Startup **always-overwrites** `.context/` from source + `chmod 0444`. **Edit the SOURCE in `backend/context/`, then BUILD + RESTART.** Editing `.context/` is silently overwritten. |
 | **Runtime** (`user_customized=True`) | SELF · USER · STEERING · TOOLS · MEMORY · EVOLUTION | `.context/<F>.md` (copy-if-missing) | The `.context/` copy IS the real store. **Edit `.context/` directly — instant effect next session, no build.** |
-| **Auto-generated** | PROJECTS (whole file) · KNOWLEDGE (bottom *Index* section only) | regenerated on startup / by `context_health_hook` | **Never hand-edit the auto part** — it's rewritten. KNOWLEDGE's body ABOVE the index IS agent-authored and editable. |
+| **Auto-generated** | none today — PROJECTS.md and KNOWLEDGE's auto *Index* section were removed 2026-08-14 | — | KNOWLEDGE is a `Knowledge/` directory index, edited directly like the other runtime files. |
 
 **Discriminator code (cite, re-verify — do not memorize a frozen list):**
 - `backend/core/context_directory_loader.py` seeding block (~L490-526): `spec.user_customized`

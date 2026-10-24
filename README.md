@@ -89,7 +89,7 @@ Each engine is independently useful; together they form the loop that makes the 
 | **Context Management** | Governed-file prompt architecture, tiered ownership, live-measured budget | [docs](./docs/DDD-Platform-Overview.md) |
 | **Memory** | Tiered persistence: DailyActivity → distillation → compound recall (pure-filesystem FTS/BM25) | [docs](./docs/Memory-Management-Design.md) |
 | **DDD Cultivation** | Self-growing domain brains, 7-type × 3-layer ontology, Darwinian decay | [docs](./docs/DDD-Cultivation-Engine-HLD.md) |
-| **Self-Evolution** | Cognitive L0→L3 patching — recurring error classes become structural gates | [docs](./docs/Self-Evolution-Harness-Design.md) |
+| **Self-Evolution** | Cognitive L0→L3 patching — recurring error classes get structural fixes | [docs](./docs/Self-Evolution-Harness-Design.md) |
 | **Autonomous Pipeline** | One requirement → push-ready code. 9 stages · 3 gates · 2 modes | [docs](./docs/Autonomous-Pipeline-Design.md) |
 | **Pollinate** | One message → multi-format content. Same DDD-driven pattern, for media | [docs](./docs/Pollinate-Content-Engine.md) |
 | **Self-Healing** | Invisible recovery: sensors, auto-respawn, the user sees nothing | [code](./backend/core/session_healing.py) |

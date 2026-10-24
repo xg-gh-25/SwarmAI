@@ -158,7 +158,10 @@ work to hit a number.
 When the same judgment-class fails 3+ times, prose alone is not the fix — but neither is a gate
 by reflex. The product builds a gate only when every user benefits from it: it guards a
 dangerous or irreversible action, an off-machine side effect, a question only a human can
-answer, or the integrity of a pipeline run the user started. A gate never blocks native coding,
+answer, the integrity of a pipeline run the user started, or the session itself (a command
+that would escape its timeout and hang, a read that only burns tokens) — and only when it
+leaves normal work a way through (a dev server or `tail -f` may still run in the background,
+a changed image may be read again). A gate never blocks native coding,
 testing or committing, and never exists to push work into the pipeline or to suit one repo,
 person or machine. A repo's own discipline (commit-time review, lint, test policy) lives in
 that repo: its AGENTS.md / CONTRIBUTING guidance, its pre-commit hooks and its CI. Before adding

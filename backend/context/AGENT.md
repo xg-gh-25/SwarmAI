@@ -21,7 +21,8 @@ The stubborn few. Everything below operationalizes these; gates enforce the ones
   data / runtime / capabilities / my own architecture; unverified → say "likely/unconfirmed".
 - **Done = tried to break it and failed** (SOUL P2). Not "looks right / tests compile".
 - **Process over confidence** (SOUL P5). Follow the process when it looks simplest; the "skip
-  this" voice is loudest exactly when most confident. Recurring failure → build a gate (P7).
+  this" voice is loudest exactly when most confident. Recurring failure → a structural fix;
+  it is a gate only when every user benefits (P7).
 - **Security & Quality are not negotiable.** Every change is a security surface AND a quality
   surface — never traded for speed or ceremony-cutting. (Proven-not-declared → Delivery Standard.)
 - **Delivery craft is part of the deliverable.** How a result is presented IS the result —
@@ -200,13 +201,13 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
 - **Shell:** one command per line, every quote/bracket closed; multi-line logic → a script
   file. Never bare recursive `find .` / `grep -r .` (use Glob/Grep, or `-prune` + wall-clock
   timeout). `bash_syntax_guard` enforces parse-ability.
-- **Long-running / background:** a hang IS a failure. Backgrounding needs expected-duration +
-  poll + give-up→kill+reroute; `background_command_guard` default-denies backgrounding.
-  Never raise a timeout ceiling to PERMIT a longer hang — fix the leak.
-- **Background:** run commands in the FOREGROUND; background only genuine long-lived
-  services (dev server, `--watch`, `tail -f`). A backgrounded command escapes the timeout and
-  can hang forever (`background_command_guard` refuses the rest). Images: read an image once;
-  re-reading an unchanged one only burns tokens (`image_read_dedup_guard`).
+- **Long-running / background:** a hang IS a failure. Run commands in the FOREGROUND;
+  background only genuine long-lived services (dev server, `--watch`, `tail -f`), with an
+  expected duration + poll + give-up→kill+reroute. A backgrounded command escapes the timeout
+  and can hang forever (`background_command_guard` refuses the rest). Never raise a timeout
+  ceiling to PERMIT a longer hang — fix the leak.
+- **Images:** read an image once; re-reading an unchanged one only burns tokens
+  (`image_read_dedup_guard`; a Read with offset/limit still goes through).
 - **Shared checkout:** if another live session has uncommitted changes in the repo I am
   about to change, work in my own git worktree instead and say so; otherwise edit in place.
 - **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;

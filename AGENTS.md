@@ -28,10 +28,14 @@ distinction is load-bearing for anyone editing this repo:
   shouldn't be. Post-session hooks fire *between* runs (distillation, evolution,
   context-health, cultivation), so the next session starts warmer than the last. Code
   that runs after a session ends is not an afterthought here — it's the mechanism.
-- **A recurring error class becomes a structural gate.** When the same mistake shows up
-  3+ times, the fix is not another prose rule — it's a gate in `security_hooks.py` where
-  the wrong move physically cannot happen. If you're tempted to "add a warning comment,"
-  consider whether a gate is the real fix.
+- **A recurring error class gets a structural fix.** When the same mistake shows up
+  3+ times, the fix is not another prose rule — it's a mechanism that makes the wrong move
+  unlikely or impossible. It becomes a gate in `security_hooks.py` only when every user
+  benefits (dangerous or off-machine actions, questions only a human can answer, a pipeline
+  run's integrity, the session itself) and normal work keeps a way through; a gate never
+  blocks native coding, testing or committing. A repo's own discipline lives in its
+  AGENTS.md, pre-commit and CI (design `docs/design/2026-10-24-swarmai-usable-by-anyone.md`
+  P3/P7).
 - **Every project is a domain brain (a DDD).** A project is not a folder of files — it's
   a brain with one universal six-section structure (Identity · Knowledge · Gates ·
   Capabilities · Delivery · Refresher), identical for every domain, governing `0..N`
@@ -310,7 +314,8 @@ One operator switch replaces the ten per-gate `SWARM_*_FORCE=1` variables (2026-
 `audit_marker_write_gate` cannot be forced: every other gate trusts what they protect.
 
 Plus `can_use_tool` file-access control, workspace isolation, and error sanitization. These
-gates are the concrete form of "when prose fails, build a gate". When adding one, register
+gates are the product-level ones SOUL P7 allows (every user benefits, normal work keeps a way
+through). When adding one, register
 it in `hook_builder.py` and update this list — don't restate it in other docs.
 
 ## Debugging
