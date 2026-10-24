@@ -183,10 +183,12 @@ def test_a_progress_file_written_before_message_and_branch_were_bound_resumes(tm
     a = Path(roots["a"])
     msg = "land"
     import os
+    # a plan row written before author/trailer were recorded landed as Swarm with the
+    # Swarm trailer (the only identity the landing had then)
     env = {**os.environ, **landing._IDENTITY}
     commit = subprocess.run(["git", "-C", str(a), "commit-tree", bindings["a"]["delivery_tree"],
-                             "-p", bases["a"], "-m", msg], check=True, capture_output=True,
-                            text=True, env=env).stdout.strip()
+                             "-p", bases["a"], "-m", landing.with_trailer(msg).rstrip("\n")],
+                            check=True, capture_output=True, text=True, env=env).stdout.strip()
     _git(a, "merge", "--ff-only", "-q", commit)
     old = {"schema": 1, "run_id": "run_one", "commits": {"a": commit},
            "plan": {n: {"base": bases[n], "delivery_tree": bindings[n]["delivery_tree"]}
@@ -229,21 +231,23 @@ def test_a_fast_forward_that_moved_the_ref_before_failing_counts_as_landed(tmp_p
     assert set(commits) == {"a", "b"}
 
 
-def test_adoption_needs_the_exact_swarm_name_and_message(tmp_path):
+def test_adoption_needs_the_exact_landing_identity_and_message(tmp_path):
     import os
     roots, bases, bindings = _repos(tmp_path)
     a = Path(roots["a"])
-    env = {**os.environ, **landing._IDENTITY, "GIT_AUTHOR_NAME": "Mallory",
+    env = {**os.environ, **{"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}, "GIT_AUTHOR_NAME": "Mallory",
            "GIT_COMMITTER_NAME": "Mallory"}
     impostor = subprocess.run(["git", "-C", str(a), "commit-tree", bindings["a"]["delivery_tree"],
                                "-p", bases["a"], "-m", "land"], check=True, capture_output=True,
                               text=True, env=env).stdout.strip()
-    assert not landing._ours(str(a), impostor, bases["a"], bindings["a"]["delivery_tree"], "land")
-    env = {**os.environ, **landing._IDENTITY}
+    assert not landing._ours(str(a), impostor, bases["a"], bindings["a"]["delivery_tree"], "land",
+                            "t <t@t>")
+    env = {**os.environ, **{"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}}
     padded = subprocess.run(["git", "-C", str(a), "commit-tree", bindings["a"]["delivery_tree"],
                              "-p", bases["a"], "-m", " land "], check=True, capture_output=True,
                             text=True, env=env).stdout.strip()
-    assert not landing._ours(str(a), padded, bases["a"], bindings["a"]["delivery_tree"], "land")
+    assert not landing._ours(str(a), padded, bases["a"], bindings["a"]["delivery_tree"], "land",
+                            "t <t@t>")
 
 
 def test_a_later_manual_partial_land_is_the_audits_outcome():
@@ -270,7 +274,7 @@ def test_a_recovered_landed_repo_then_a_preflight_failure_is_a_partial_land(tmp_
     roots, bases, bindings = _repos(tmp_path)
     a = Path(roots["a"])
     made = landing._prepare_commit(roots["a"], bases["a"], bindings["a"]["delivery_tree"],
-                                   "land", in_place=False)
+                                   "land", author="t <t@t>", in_place=False)
     landing._fast_forward(roots["a"], made)          # the crash came right after this
     b = Path(roots["b"])
     (b / "other.py").write_text("moved\n")

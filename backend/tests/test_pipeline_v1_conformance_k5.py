@@ -459,7 +459,7 @@ def test_an_adopted_shared_commit_is_settled_or_named(tmp_path):
     from core.run_protocol import landing
     repo, base, tree, report = _shared_repo(tmp_path)
     import os
-    env = {**os.environ, **landing._IDENTITY}
+    env = {**os.environ, **{"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}}    # the repo's own identity (no pipeline.toml)
     commit = subprocess.run(["git", "-C", str(repo), "commit-tree", tree, "-p", base, "-m",
                              "normal land"], check=True, capture_output=True, text=True,
                             env=env).stdout.strip()

@@ -1521,8 +1521,8 @@ class RunEngine:
             return self._execute_land_request(request_id, message=message)
 
     def _execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
-        from core.run_protocol.landing import with_trailer
-        message = with_trailer(message)
+        from core.run_protocol.landing import check_message
+        message = check_message(message)    # each repo's trailer is added by the landing
         from core.run_protocol import auth, landing
 
         try:
@@ -2313,8 +2313,8 @@ class RunEngine:
         conflict) returns ``retry``; the lifecycle turns the third one, and any
         non-retryable guard, into the not-landed path, which this call then finishes.
         A run already on the not-landed path never commits."""
-        from core.run_protocol.landing import LandingError, with_trailer
-        message = with_trailer(message)
+        from core.run_protocol.landing import LandingError, check_message
+        message = check_message(message)    # each repo's trailer is added by the landing
         import dataclasses
         from core.run_protocol import landing, tree
         state = self.projection()

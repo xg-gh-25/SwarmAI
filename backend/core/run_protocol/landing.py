@@ -259,18 +259,75 @@ def _record_double_consume(store: AuditStore, request_id: str, auth_event_id: st
                                             request_id, exc)
 
 
-TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
+TRAILER = "Co-Authored-By: Swarm <swarm@swarmai.dev>"   # the trailer of legacy plans
 
 
-def with_trailer(message: str) -> str:
-    """The project commit trailer (AGENTS.md "Git Commits"), added once if missing:
-    a landing is the only commit path a run has, so it owns the trailer."""
+def check_message(message: str) -> str:
+    """*message* without trailing whitespace; LandingError when it is empty."""
     text = str(message or "").rstrip()
     if not text:
         raise LandingError("landing commit message is empty")
-    if TRAILER in text.splitlines():
+    return text
+
+
+def with_trailer(message: str, trailer: str = TRAILER) -> str:
+    """*message* with the repo's landing *trailer* line added once if missing (none when
+    *trailer* is empty). The trailer comes from the repo's ``.swarmai/pipeline.toml``
+    (``repo_pipeline_config``), frozen in the landing plan."""
+    text = check_message(message)
+    if not trailer or trailer in text.splitlines():
         return text + "\n"
-    return f"{text}\n\n{TRAILER}\n"
+    return f"{text}\n\n{trailer}\n"
+
+
+def _swarm_ident() -> str:
+    from core.repo_pipeline_config import SWARM_IDENTITY
+    return f"{SWARM_IDENTITY[0]} <{SWARM_IDENTITY[1]}>"
+
+
+def repo_ident(root: str) -> str:
+    """``Name <email>`` git would use for a commit in *root* (its own user config).
+    LandingError when the repo has no user configured."""
+    try:
+        out = _git(root, "var", "GIT_AUTHOR_IDENT")
+    except LandingError as exc:
+        raise LandingError(f"{root}: git has no user.name / user.email configured; set "
+                           "them, or declare [landing] author = \"swarm\" in "
+                           ".swarmai/pipeline.toml") from exc
+    ident = out.rsplit(" ", 2)[0] if out.count(" ") >= 2 else ""
+    if "<" not in ident or not ident.endswith(">"):
+        raise LandingError(f"{root}: cannot read the git identity ({out[:80]!r})")
+    return ident
+
+
+def landing_settings(root: str, base: str) -> dict:
+    """{"author": "Name <email>", "trailer": str} for one repo's landing, read from its
+    ``.swarmai/pipeline.toml`` as committed in *base* (the landing's parent)."""
+    from core.repo_pipeline_config import load_at
+    cfg = load_at(root, base)
+    author = _swarm_ident() if cfg.author == "swarm" else repo_ident(root)
+    return {"author": author, "trailer": cfg.trailer}
+
+
+def _ident_env(author: str) -> dict:
+    name, _, email = author.rpartition(" <")
+    email = email.rstrip(">")
+    return {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
+            "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
+
+
+def _row_message(message: str, row: Mapping[str, Any]) -> str:
+    """The exact commit message of one plan row (legacy rows: the Swarm trailer)."""
+    return with_trailer(message, row.get("trailer", TRAILER) if isinstance(row, Mapping) else TRAILER)
+
+
+# the Swarm identity as git environment variables (legacy plans and author = "swarm")
+_IDENTITY = {"GIT_AUTHOR_NAME": "Swarm", "GIT_AUTHOR_EMAIL": "swarm@swarmai.dev",
+             "GIT_COMMITTER_NAME": "Swarm", "GIT_COMMITTER_EMAIL": "swarm@swarmai.dev"}
+
+
+def _row_author(row: Mapping[str, Any]) -> str:
+    return row.get("author") if isinstance(row, Mapping) and row.get("author") else _swarm_ident()
 
 
 def _git(root: str, *args: str, env: Mapping[str, str] | None = None) -> str:
@@ -283,8 +340,6 @@ def _git(root: str, *args: str, env: Mapping[str, str] | None = None) -> str:
     return result.stdout.strip()
 
 
-_IDENTITY = {"GIT_AUTHOR_NAME": "Swarm", "GIT_AUTHOR_EMAIL": "swarm@swarmai.dev",
-             "GIT_COMMITTER_NAME": "Swarm", "GIT_COMMITTER_EMAIL": "swarm@swarmai.dev"}
 
 
 class PartialLanding(LandingError):
@@ -299,7 +354,7 @@ class PartialLanding(LandingError):
 
 
 def _prepare_commit(root: str, base: str, delivery_tree: str, message: str, *,
-                    in_place: bool = False) -> str:
+                    author: str, in_place: bool = False) -> str:
     """Phase 1 for one repo: everything that can fail, and no ref moves (§A3.7).
     The integration branch is still at *base*; the commit object is written; and git
     itself, in a dry run of the same two-tree checkout ``merge --ff-only`` performs,
@@ -309,7 +364,7 @@ def _prepare_commit(root: str, base: str, delivery_tree: str, message: str, *,
     if _git(root, "rev-parse", "HEAD") != base:
         raise LandingError("integration branch moved since the run's base")
     commit = _git(root, "commit-tree", delivery_tree, "-p", base, "-m", message,
-                  env={**os.environ, **_IDENTITY})
+                  env={**os.environ, **_ident_env(author)})
     if len(commit) != 40:
         raise LandingError("commit-tree returned invalid sha")
     if in_place:
@@ -329,10 +384,11 @@ def _prepare_commit(root: str, base: str, delivery_tree: str, message: str, *,
     return commit
 
 
-def _ours(root: str, commit: str, base: str, delivery_tree: str, message: str) -> bool:
+def _ours(root: str, commit: str, base: str, delivery_tree: str, message: str,
+          author: str) -> bool:
     """*commit* is the one this landing makes: same parent and tree, the exact message
-    bytes commit-tree stores, and the exact Swarm author and committer (name and
-    email) — not merely a commit that happens to have the same tree."""
+    bytes commit-tree stores, and the exact author and committer the plan names (name
+    and email) — not merely a commit that happens to have the same tree."""
     try:
         parent, tree_id = _commit_identity(root, commit)
         raw = subprocess.run(["git", "-C", root, "cat-file", "commit", commit], check=True,
@@ -342,11 +398,11 @@ def _ours(root: str, commit: str, base: str, delivery_tree: str, message: str) -
     body = raw.partition("\n\n")[2]
     return (parent, tree_id) == (base, delivery_tree) \
         and body == (message if message.endswith("\n") else message + "\n") \
-        and _swarm_made(root, commit)
+        and _made_by(root, commit, author)
 
 
-def _swarm_made(root: str, commit: str) -> bool:
-    """*commit*'s author and committer are exactly the landing's Swarm identity."""
+def _made_by(root: str, commit: str, author: str) -> bool:
+    """*commit*'s author and committer are exactly *author* (``Name <email>``)."""
     try:
         raw = subprocess.run(["git", "-C", root, "cat-file", "commit", commit], check=True,
                              capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
@@ -355,8 +411,7 @@ def _swarm_made(root: str, commit: str) -> bool:
     header = raw.partition("\n\n")[0]
     people = {line.split(" ", 1)[0]: line.split(" ", 1)[1].rsplit(" ", 2)[0]
               for line in header.splitlines() if line.startswith(("author ", "committer "))}
-    want = f"{_IDENTITY['GIT_AUTHOR_NAME']} <{_IDENTITY['GIT_AUTHOR_EMAIL']}>"
-    return people.get("author") == want and people.get("committer") == want
+    return people.get("author") == author and people.get("committer") == author
 
 
 def _fast_forward(root: str, commit: str) -> None:
@@ -589,7 +644,8 @@ def adoptable(integration_roots: Mapping[str, str], plan: Mapping[str, Any],
         except LandingError:
             continue
         if head != row.get("base") and _ours(root, head, row.get("base"),
-                                             row.get("delivery_tree"), message):
+                                             row.get("delivery_tree"),
+                                             _row_message(message, row), _row_author(row)):
             return True
     return False
 
@@ -618,12 +674,29 @@ def commit_repos(
     expected = set(integration_roots)
     if not expected or set(bases) != expected or set(bindings) != expected:
         raise LandingError("landing plan must contain the exact non-empty repo set")
-    plan = {name: {"base": bases[name],
-                   "delivery_tree": bindings[name]["delivery_tree"],
-                   "message_sha": hashlib.sha256(message.encode()).hexdigest(),
-                   "branch": _branch(integration_roots[name], (branches or {}).get(name))}
-            for name in sorted(expected)}
     path = Path(progress_path)
+    old_plan = None
+    if path.exists():
+        try:
+            old_plan = json.loads(path.read_text(encoding="utf-8")).get("plan")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            old_plan = None
+    plan = {}
+    for name in sorted(expected):
+        prior = old_plan.get(name) if isinstance(old_plan, Mapping) else None
+        # a plan's author and trailer are frozen when it is first written; a plan written
+        # before they existed landed as Swarm with the Swarm trailer (legacy rows)
+        if isinstance(prior, Mapping):
+            settings = {"author": _row_author(prior), "trailer": prior.get("trailer", TRAILER)}
+        else:
+            settings = landing_settings(integration_roots[name], bases[name])
+        plan[name] = {"base": bases[name],
+                      "delivery_tree": bindings[name]["delivery_tree"],
+                      "message_sha": hashlib.sha256(
+                          with_trailer(message, settings["trailer"]).encode()).hexdigest(),
+                      "branch": _branch(integration_roots[name], (branches or {}).get(name)),
+                      **settings}
+    msgs = {name: with_trailer(message, plan[name]["trailer"]) for name in plan}
     if path.exists():
         try:
             progress = json.loads(path.read_text(encoding="utf-8"))
@@ -649,7 +722,7 @@ def commit_repos(
         except LandingError:
             parent = None
         if not isinstance(commit, str) or len(commit) != 40 or parent != bases[name] \
-                or not _swarm_made(root, commit) \
+                or not _made_by(root, commit, plan[name]["author"]) \
                 or subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor", commit,
                                    plan[name]["branch"]], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
@@ -662,7 +735,8 @@ def commit_repos(
             continue
         root, base = integration_roots[name], bases[name]
         if not isinstance(recorded, str) or len(recorded) != 40 \
-                or not _ours(root, recorded, base, plan[name]["delivery_tree"], message) \
+                or not _ours(root, recorded, base, plan[name]["delivery_tree"], msgs[name],
+                             plan[name]["author"]) \
                 or subprocess.run(["git", "-C", root, "merge-base", "--is-ancestor",
                                    recorded, "HEAD"], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
@@ -682,14 +756,15 @@ def commit_repos(
             raise LandingError(why)
         root, base, delivery_tree = integration_roots[name], bases[name], bindings[name]["delivery_tree"]
         head = _git(root, "rev-parse", "HEAD")
-        if head != base and _ours(root, head, base, delivery_tree, message):
+        if head != base and _ours(root, head, base, delivery_tree, msgs[name],
+                                  plan[name]["author"]):
             commits[name] = head        # a crash after the ff, before the progress write
             if in_place and not _settled(root, base, head, reserved):
                 unsettled.append(name)
             continue
         try:
-            prepared[name] = _prepare_commit(root, base, delivery_tree, message,
-                                             in_place=in_place)
+            prepared[name] = _prepare_commit(root, base, delivery_tree, msgs[name],
+                                             author=plan[name]["author"], in_place=in_place)
         except LandingError as exc:
             if commits:
                 # a repo recovered above IS landed: this is a partial land, never

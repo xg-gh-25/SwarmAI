@@ -46,12 +46,17 @@ STALE_DAYS = 14
 _LIVE = ("active", "awaiting_human", "paused", "reflecting")   # = run_index.LIVE_STATUSES
 _IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
 # Dependency dirs of the main checkout made visible in a new worktree as symlinks (the
-# worktree holds tracked files only). Each link is excluded from git (info/exclude:
-# a symlink does not match a ``node_modules/`` gitignore line).
-DEP_LINKS = ("desktop/node_modules",)
-# No other dependency dir (.venv, venv, a top-level node_modules): an install or sync run
-# in the worktree would write through the link into the main checkout's environment.
-# Environments for other repos come with the multi-repo test runner.
+# worktree holds tracked files only): each repo declares its own in
+# ``.swarmai/pipeline.toml`` ``[worktree] link`` (core/repo_pipeline_config.py; none by
+# default). Each link is excluded from git (info/exclude: a symlink does not match a
+# ``node_modules/`` gitignore line). Linking an environment an install or sync would
+# write through (a .venv) is the repo's own choice and risk.
+
+
+def dep_links(repo: "str | Path", rev: str = "HEAD") -> "tuple[str, ...]":
+    """The dirs *repo* declares to link into a run worktree, as committed in *rev*."""
+    from core.repo_pipeline_config import load_at
+    return load_at(str(repo), rev).links
 
 
 class WorktreeError(Exception):
@@ -487,10 +492,10 @@ def _ignored(wt: Path, rel: str) -> bool:
 
 
 def _link_dependencies(main: Path, wt: Path) -> "list[str]":
-    """Symlink each DEP_LINKS dir of *main* into *wt* when the worktree lacks it (so it
-    is not tracked) → the repo-relative paths linked."""
+    """Symlink each dir *main* declares (``dep_links``) into *wt* when the worktree lacks
+    it (so it is not tracked) → the repo-relative paths linked."""
     linked = []
-    for rel in DEP_LINKS:
+    for rel in dep_links(main):
         src, dst = main / rel, wt / rel
         if not src.is_dir() or not dst.parent.is_dir() or os.path.lexists(dst):
             continue
@@ -627,7 +632,7 @@ def untracked_new_files(wt: "str | Path", run_id: str) -> "list[str]":
     b = deliverable_prefix(run_id)
     return sorted(p for p in out.split("\0")
                   if p and not p.startswith(b)
-                  and not any(p == d or p.startswith(d + "/") for d in DEP_LINKS))
+                  and not any(p == d or p.startswith(d + "/") for d in dep_links(wt)))
 
 
 def changed_paths(wt: "str | Path", base: str, tree: str) -> "list[str]":
@@ -1234,7 +1239,7 @@ def snapshot_to_ledger(run_id: str, entry: dict, main: "str | Path", reason: str
         # git refuses `add` when a pathspec — even an :(exclude) one — names an ignored
         # path ("paths are ignored", rc=1), and the whole snapshot then failed. Only a
         # link git would otherwise pick up is excluded explicitly.
-        _out(wt, "add", "-A", "--", ".", *(f":(exclude){d}" for d in DEP_LINKS
+        _out(wt, "add", "-A", "--", ".", *(f":(exclude){d}" for d in dep_links(wt)
                                             if os.path.lexists(wt / d) and not _ignored(wt, d)),
              env=env, timeout=300)
         tree = _out(wt, "write-tree", env=env).strip()
@@ -1348,7 +1353,7 @@ def is_listed(main, path: "str | Path") -> "bool | None":
 def _remove(run_id: str, entry: dict, main: Path, merged: bool,
             *, keep_branch: bool = False) -> None:
     path = _safe_to_touch(run_id, entry["repo_name"], main)
-    for rel in DEP_LINKS:  # the dependency links point INTO main: drop them first
+    for rel in (*dep_links(path), *entry.get("dep_links", ())):  # they point INTO main: drop them first
         link = path / rel
         if os.path.islink(link):
             os.unlink(link)

@@ -1,0 +1,9 @@
+# SwarmAI repo settings for pipeline runs (docs/design/2026-10-24-swarmai-usable-by-anyone.md
+# §3.3.6). Any repo can declare the same fields; nothing here is special to SwarmAI.
+
+[landing]
+author = "swarm"
+trailer = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
+
+[worktree]
+link = ["desktop/node_modules"]

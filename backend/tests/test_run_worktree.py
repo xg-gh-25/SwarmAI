@@ -552,6 +552,8 @@ def test_repo_key_is_basename_until_it_collides(env):
 def test_create_pins_main_and_links_dependency_dirs(env):
     (env["main"] / "desktop").mkdir()
     (env["main"] / "desktop" / "app.ts").write_text("x\n")
+    (env["main"] / ".swarmai").mkdir()
+    (env["main"] / ".swarmai" / "pipeline.toml").write_text('[worktree]\nlink = ["desktop/node_modules"]\n')
     _g(env["main"], "add", "-A")
     _g(env["main"], "commit", "-q", "-m", "desktop")
     (env["main"] / "desktop" / "node_modules" / "pkg").mkdir(parents=True)
@@ -701,6 +703,8 @@ def test_release_unintegrated_with_dependency_link_snapshots(env):
     (main / "desktop").mkdir()
     (main / "desktop" / "package.json").write_text("{}\n")
     (main / ".gitignore").write_text("node_modules/\n")
+    (main / ".swarmai").mkdir()
+    (main / ".swarmai" / "pipeline.toml").write_text('[worktree]\nlink = ["desktop/node_modules"]\n')
     _g(main, "add", "-A")
     _g(main, "commit", "-q", "-m", "desktop")
     (main / "desktop" / "node_modules" / "dep").mkdir(parents=True)
@@ -837,3 +841,16 @@ def test_deliver_done_reads_the_v1_stage_map():
     assert not rw._deliver_done({"stages": {"deliver": "open"}})
     assert not rw._deliver_done({"stages": [{"stage": "deliver", "status": "completed"}]})
     assert not rw._deliver_done({})
+
+
+def test_without_a_declaration_nothing_is_linked(env):
+    """Design 2026-10-24-swarmai-usable-by-anyone §3.3.6: links come from the repo's own
+    .swarmai/pipeline.toml; a repo that declares none gets none."""
+    (env["main"] / "desktop").mkdir()
+    (env["main"] / "desktop" / "app.ts").write_text("x\n")
+    _g(env["main"], "add", "-A")
+    _g(env["main"], "commit", "-q", "-m", "desktop")
+    (env["main"] / "desktop" / "node_modules" / "pkg").mkdir(parents=True)
+    e = rw.create(RUN, "swarmai", env["main"])
+    assert e["dep_links"] == []
+    assert not os.path.lexists(rw.wt_path(RUN, "swarmai") / "desktop" / "node_modules")
