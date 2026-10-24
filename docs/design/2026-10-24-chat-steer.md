@@ -26,7 +26,7 @@ CLI 没赶上并入、把它当成下一轮的，由我们像普通 turn 一样�
 | 环节 | 位置 | 行为 |
 |---|---|---|
 | 前端判断忙 | `desktop/src/hooks/streaming-guards.ts` `shouldQueueSend` | tab 在 streaming / sending / 等忙 / 重连 / heal grace 时为真 |
-| 前端发送 | `desktop/src/pages/ChatPage.tsx` `sendWhileBusy` | 气泡加在 store 末尾，`isQueued: true`；单独 POST，只等 `accepted` |
+| 前端发送 | `desktop/src/pages/chat/turnControls.ts` `sendWhileBusy`（A1 从 ChatPage 移出） | 气泡加在 store 末尾，`isQueued: true`；单独 POST，只等 `accepted` |
 | 后端受理 | `backend/core/session_router.py` `_run_conversation_impl` | 先写 user 行（`created_at` = POST 时间），`opener.open` 抢不到 turn → `_queue_admitted_send` → `mark_pending_by_id`，回执 `queued: true` + `SESSION_BUSY` |
 | 投递 | `session_router.py` `drain_pending` | 会话不忙、IDLE/COLD、没有未答的 AskUserQuestion / 权限（`has_outstanding_tool_use`）、`cli_quiescent` 时，原子 claim 全部待发，合并成一个 turn 发出 |
 | 写给 CLI | `backend/core/streaming_orchestrator.py` `write_user_message` | 先 `reader.claim(uuid, kind)`，再 `client.query`；消息带 `uuid`，不带 `priority`；写完把 claim 设成 `unit._turn_stream` |
@@ -128,7 +128,8 @@ CLI 会把消息当下一轮（X7），由 D6 接住，不需要再判断一次�
 
 1. 把手上暂存的 tool result 先写进本 turn 最新的 assistant 行（`append_to_turn_row`），
    否则它们会被挂到 steer 之后的那一行，和 tool_use 分开；
-2. 把 steer 的 user 行 `created_at` 改成现在（回显时间），`sent = 1`；
+2. 把 steer 的 user 行 `created_at` 改成现在（回显时间），`sent = 1`，两者在同一条 UPDATE 里。
+   这条行从 POST 写入到回显之前保持 `sent = 0`（和排队行一样不显示），见下方"回显前的 user 行"；
 3. 之后的 assistant 行改用 row_key `"{steer_client_id}-asst"`，也就是"这条 steer 消息的回复"；
 4. 发 turn 事件 `user_steered {client_id, row_id}`，和内容事件同一通道、同一顺序。
 
@@ -137,6 +138,14 @@ reconcile 按 client_id 一一对上，不会出现两个占位共用一个 clie
 排序，显示为 [原回复的前半] [steer 气泡] [后半]，和直播一致。
 
 ResultMessage 的用量、耗时、turn 结束事件仍属于原 turn，显示在最后一段之后。
+
+**回显前的 user 行。** 现在的 `_run_conversation_impl` 在 POST 时就写 user 行（`created_at` =
+POST 时间），排队时再由 `mark_pending_by_id` 转成 `sent = 0`。steer 写入后、回显之前，这条行
+如果是 `sent = 1`，任何一次非 streaming 的 reconcile（另一个 tab 开着同一会话、重载）都会按
+`created_at` 把它排进正在跑的 turn 中间，正是 `6a75af694` 修掉的排队错位。所以 steer 和排队
+一样先把行转成 `sent = 0`，回显时（D4 第 2 步，或 D6 回退成新 turn 时）一次改成 `sent = 1` +
+回显时间。这条 UPDATE 改了 `sent`，也就触发 `transcript_revs`（见 §5）。D6 转 pending 时行
+已经是 `sent = 0`，只需补上 `pending_seq`。
 
 ### D5 快照与事件
 
@@ -194,7 +203,10 @@ drain 不会和回退抢：claim 还在 `_claims` 里时 `cli_quiescent` 为假�
 
 代码确认：
 
-- `messages` 的 UPDATE 是否触发 `transcript_revs`（D5）；
+- ~~`messages` 的 UPDATE 是否触发 `transcript_revs`（D5）~~ **已确认（2026-10-24）：只有
+  `UPDATE OF content, sent, metadata` 触发**（`database/sqlite.py` `_TRANSCRIPT_REV_DDL`，
+  `messages_rev_update`）。只改 `created_at` 不触发：别的 tab 和 resync 看不到顺序变化。D4 第 2
+  步因此要和 `sent` 0→1 放在同一条 UPDATE 里（见"回显前的 user 行"），不必改触发器；
 - 所有用 `"{client_id}-asst"` 找本 turn 行的读者（`TurnWriter`、`persisted_frames` 的
   `turn_client_id`、`mark_sent_batch`、turn 结束的 reconcile、前端 `local-{cid}-asst`），
   改 row_key 后逐个确认（AGENT R27，含测试）。
@@ -246,10 +258,18 @@ P1 动 reader、router、写入路径，属于跨模块改动，开工前问 XG 
 
 ## 10. 已知问题（本设计之外）
 
-- 排队消息被 drain 发出时，user 行保留 POST 时间的 `created_at`（`mark_sent_batch` 不改它），
-  重载后可能排进上一轮的 assistant 行中间。这是读代码的推断，未在真实数据上确认；和 D4 第 2 步
-  同一种修法（在 CLI 读到时改时间），但不在本设计范围内，单独记录。
+- ~~排队消息被 drain 发出时，user 行保留 POST 时间的 `created_at`，重载后可能排进上一轮的
+  assistant 行中间。~~ **已修复（`6a75af694`，2026-10-24）**，并在真实数据上确认（会话
+  `63d28a0f`：22:42:20 排队的消息排在那一轮 22:40–22:55 的 assistant 行中间，它的回答被合进了
+  上一轮的气泡）。修法：`claim_pending_batch` claim 时把 `created_at` 改成 claim 时间（不是
+  `mark_sent_batch`）；claim 在 `sent = 0` 时发生，之后 `mark_sent` 的 `sent` 0→1 触发 rev。
+  同一次修复还改了前端：`MessageStore._applyMerge` 对只在 store 里的消息（排队、未发出、未持久化）
+  原来按时间字符串插入，气泡是 UTC 带 `Z`、记录是无时区的本地时间，在 UTC+8 下会往上错约 8 小时；
+  现在它留在 store 里它后面那条消息之前，没有就放最后。D7 的 steer 气泡按 client_id 对上记录行，
+  不走这条规则。
 
 ## 修订记录
 
 - 2026-10-24 v1：初稿。依据 X1–X8 实测和现有代码阅读。
+- 2026-10-24 v1.1：§10 已修复（`6a75af694`）；§5 `transcript_revs` 已确认；D4 补"回显前的
+  user 行"（回显前 `sent = 0`，回显时 `sent` 与 `created_at` 同一条 UPDATE）；§1 `sendWhileBusy` 位置更正。
