@@ -3,7 +3,7 @@ title: SwarmAI 让别人装上就能用 — 安装包、pipeline 运行时、任
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: r5 — pipeline 与语言无关（不逐个适配）；profile 来源：仓库声明 → agent 提议并在 base 上试跑 → 未验证。r4：XG 2026-10-24 定：pipeline 在任何仓库都不强制，方向是 autonomy；产品默认"相称"；只有显式开启的仓库才强制 commit 前审查，开关在 Settings；冻结"防 agent 作恶"类加固，先量成本和 gate 实效
+status: r6 — skeptic r5（edec2210）的 3 个 BLOCKER / 5 个 MAJOR 已并入：行为规则代替字面禁令、agent 提议须有先红后绿见证、argv 模板、选择脚本从 base 执行。r5：pipeline 与语言无关（不逐个适配）；profile 来源：仓库声明 → agent 提议并在 base 上试跑 → 未验证。r4：XG 2026-10-24 定：pipeline 在任何仓库都不强制，方向是 autonomy；产品默认"相称"；只有显式开启的仓库才强制 commit 前审查，开关在 Settings；冻结"防 agent 作恶"类加固，先量成本和 gate 实效
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -140,7 +140,7 @@ skeptic 证伪了 r1 的"换成可搬移 CPython"：现有的 PyInstaller onedir
 - 用户仓库的测试**永远不用后端程序本身跑**：用 3.3 解析出的仓库自己的工具链。SwarmAI 自己的仓库在它的 `.swarmai/pipeline.toml` 里声明用 `backend/.venv`。
 - 打包版里如果子命令方案在某平台走不通（例如 pytest 插件或原生依赖），再评估可搬移 CPython，那时要带实测的体积、冷启动、签名对比。
 
-### 3.3 L2（r5）：pipeline 核心与语言无关
+### 3.3 L2（r6）：pipeline 核心与语言无关
 
 **定位（XG 2026-10-24）**：pipeline 是 SwarmAI 的高级自主编码能力，不是默认路径。它支持的仓库不按语言划界：核心不认识任何语言，只认三样东西。
 
@@ -153,47 +153,67 @@ skeptic 证伪了 r1 的"换成可搬移 CPython"：现有的 PyInstaller onedir
 | Settings 里按项目 / 仓库的同名开关 | 同上；与仓库声明不一致时取 Settings |
 | 都没有 | `manual`，即默认 native |
 
-#### 3.3.2 硬约束：pipeline 与语言无关，不逐个语言适配（XG 2026-10-24）
+#### 3.3.2 硬约束：pipeline 与语言无关，不逐个语言适配（XG 2026-10-24；r6 措辞）
 
-- pipeline 的代码里**不出现任何语言、框架、包管理器的名字**：没有 pytest / npm / go 分支，没有"manifest → 命令"的表，没有按后缀的白名单。
-- "这个仓库怎么测"只有两个来源：**仓库自己声明**，或 **agent 读仓库后提议**。认识语言是 LLM 的事，不是 pipeline 的事。
-- 验收里有一条结构测试：pipeline 核心模块（`core/run_protocol/`、`scripts/pipeline_v1.py`、`scripts/pipeline_test.py` 的通用部分）的源码里搜不到语言/工具名（白名单只有 `git`）。SwarmAI 自己仓库的专用逻辑搬出核心，见 3.3.5。
+- **行为规则**：pipeline 核心没有任何按语言、框架、包管理器分支的发现、选测或执行逻辑；没有"manifest → 命令"的表；没有按文件后缀的白名单。
+- 允许出现在核心里的只有两类通用东西：`git`（仓库、tree、diff），和标准的测试结果格式 **JUnit XML**（几乎所有测试框架都能输出）。
+- "这个仓库怎么测"只有两个来源：**仓库自己声明**，或 **agent 读仓库后提议**。认识语言是 LLM 的事。
+- 结构测试：核心模块里不出现语言/框架/包管理器名（允许列表：`git`、`junit`）。
 
 #### 3.3.3 核心只认三样东西
 
-1. **组件**：一个根目录，加上"哪些文件是源码、哪些是测试"的 glob。
-2. **命令**：一个 argv 列表（不经 shell），在组件根目录下跑。可选声明 `accepts_files = true`：选中的测试文件追加在末尾；否则每次跑整套。
-3. **证据**：退出码，加可选的 JUnit XML 输出路径（`junit = "<路径>"`）。几乎所有测试框架都能输出 JUnit XML；有就按测试 id 记录每个测试的结果，没有就只看退出码。
+1. **组件**：根目录 + `sources` glob + `tests` glob。
+2. **命令**：argv 模板（不经 shell）+ `cwd`（相对组件根）。模板里**最多一个** `{files}` 占位：有它，就把选中的测试文件（相对 `cwd` 的路径）展开在那个位置；没有，就每次跑整套。需要按测试 id 选、或者有更复杂路由的仓库，自己提供一个选择脚本作为命令。
+3. **证据**：退出码 + 可选的 JUnit XML 路径（`junit = "<路径>"`）。有 XML 就按测试 id 记录每个测试；没有就只有命令级的通过/失败。
 
 #### 3.3.4 profile 从哪里来：仓库声明 → agent 提议 → 未验证
 
-建 run 时按顺序取第一个能用的，写进受保护的 contract，run 中途不变：
+建 run 时按顺序取第一个能用的，连同 profile 和选择脚本的 **base blob 摘要**一起写进受保护的 contract，run 中途不变：
 
-1. **仓库声明**：base commit 里的 `.swarmai/pipeline.toml`（分支改不掉自己的验证方式）。
-2. **agent 提议（XG 选 B）**：没有声明时，agent 在 `create` 时提交一份 profile 提议：组件、命令、依据（例如"README 写了 `make check`"、"CI 配置里跑的是 `./scripts/test.sh`"、"package.json 的 test 脚本"）。规则：
-   - 只能在 run 的第一次代码改动之前提交，之后不可改；
-   - 命令必须在 **base commit** 上就能跑：daemon 在 base 的 worktree 里试跑一次并记录（退出码、耗时、是否产出 JUnit）。试跑通过的才被采纳；试跑失败（包括本机缺工具）的不采纳，原因写进 contract；
-   - 提议内容和试跑结果展示在 run 卡片和 REPORT 里；
-   - 由它得到的结论标为 `verified(agent_profile)`，和仓库声明来源的 `verified` 区分开。
-   - agent 可以把采纳的提议写成 `.swarmai/pipeline.toml` 一并提交，下次就是仓库声明。
-3. **兜底（A）**：agent 也找不到能在 base 上跑通的命令时，该组件为 `unverified(no_signal)`（或 `unverified(tool_missing)`，当试跑失败是因为命令不存在），照样落地，REPORT 首行写明"未经测试验证"和原因。
+1. **仓库声明**：base commit 里的 `.swarmai/pipeline.toml`。信任由仓库负责：命令级通过即可得 `verified`。
+2. **agent 提议（XG 选 B）**：没有声明时，agent 在 `create` 时、第一次改代码之前提交提议（组件、命令、依据：README、CI 配置、Makefile 等）。daemon 在 base 的 worktree 里试跑一次，跑不起来的不采纳。由提议得到 `verified(agent_profile)` 的**最低证据**（skeptic r5 #2：只看退出码等于什么都没证明）：
+   - 改动后的命令通过；
+   - JUnit 至少报告 1 个测试；
+   - 至少一个改动或新增的测试有**先红后绿的见证**：把改动/新增的测试文件叠到 base 源码上跑，失败；在改动后的 tree 上跑，通过。
+   做不到就是 `unverified(no_nonvacuous_evidence)`，照样落地。agent 可以把被采纳的提议写进 `.swarmai/pipeline.toml` 一起提交，下次就是仓库声明。
+3. **兜底（A）**：没有声明、提议也没跑起来：`unverified(no_signal)`；命令不存在：`unverified(tool_missing)`。照样落地，REPORT 首行写明原因。
 
-unborn 仓库（没有任何 commit）：没有 base，直接 `unverified(no_base)`。
+unborn 仓库：没有 base，`unverified(no_base)`。
 
-#### 3.3.5 核心里要改成通用的地方
+#### 3.3.5 选测（通用）
 
-| 现在（写死 SwarmAI / Python） | 改成 |
+改动里匹配组件 `tests` glob 的文件 → 有 `{files}` 时只跑它们；改动了组件里的其他文件（源码、配置、依赖清单）→ 跑组件整套。不做"同目录推断"（`src/` 和 `tests/` 分开的仓库里它不成立）。更细的选测是仓库自己的事：声明一个选择脚本当命令。
+
+#### 3.3.6 先红后绿（通用定义）
+
+- **base 侧** = base 源码 + 改动里的测试文件叠上去（新增的测试在 base 上本来不存在，必须叠上去才能跑）。
+- 判定：base 侧连续两次失败、改动后一次通过 → 见证成立。超时、报错、跳过、两次结果不一致 → `unverified(flaky_or_inconclusive)`，不算通过也不算失败。
+- 成本：这一项至少让被选中的测试多跑两次；只对被选中的测试做，不对整套做。
+
+#### 3.3.7 检查怎么迁移
+
+| 检查 | r6 处理 |
 |---|---|
-| 测试只在 `backend/tests`、`desktop/src` 下发现 | 组件的 `tests` glob |
-| 选测靠 Python AST 依赖图 | 通用三级：改动的测试文件本身 + 与改动源码同目录的测试文件 → 组件整套；命令不接收文件参数时直接整套 |
-| L4"只改了注释 / 格式"只支持 Python AST | 删除这类判断：组件 `sources` 里任何非空白的改动都算代码改动（只会多测，不会少测）。纯文档仍按 `doc_paths` |
-| DS-2a 等测试引用按后缀白名单 | 引用在组件 `tests` glob 内，或是 JUnit 里出现过的测试 id |
-| BX-2 先红后绿只支持 pytest | 通用：同一个测试（文件或 JUnit id）在 base tree 上失败、改动后通过，用组件命令分别在两个 tree 上跑；命令不接收文件参数时，退化为"改动后整套通过" |
-| risk_selection 写死 SwarmAI 路径 | 通用：改动落在组件根目录、但不在 `sources` / `tests` 里的文件（构建配置、依赖清单等），一律跑该组件整套 |
-| worktree 只软链 `desktop/node_modules` | 由组件 `link` 声明（agent 提议时一并提议） |
-| 落地作者固定 Swarm + Swarm trailer | 默认用仓库自己的 git 身份、不加 trailer；由仓库声明覆盖 |
+| LG-2 | 有 `failed` 挡；`unverified` 放行、Quality = WARN |
+| BX-2（direct） | 含义统一为"先红后绿见证"：仓库声明的 profile 有见证就算，没有见证时按命令级通过；agent 提议的 profile 必须有见证，否则 `unverified` |
+| DS-2a / DS-9a | 引用在组件 `tests` glob 内，或是 JUnit 报告里的测试 id |
+| DS-2b / DS-4b | 只在有 JUnit 时适用（引用的 id 必须出现在报告里）；没有 JUnit 时标"不适用"，不挡 |
+| DS-9b / BX-1 | 读签名的命令证据 |
+| LG-5 | 校验项来自 base 的 `pipeline.toml [[validation]]`（`validations.json` 兼容读一版） |
+| QX-1（风险扩展上限） | 删除：没有风险扩展了，未知改动直接跑组件整套 |
+| QX-2（选测规则不许被本 run 改） | 保留并加强：绑定 base profile 摘要、选择脚本 base blob 摘要、validation 定义 |
+| 基线缓存 | 只保留整条命令级缓存，键 = base / 当前 tree + profile 与选择脚本摘要 + 组件根 + 展开后的 argv + 工具环境指纹；删除按文件复用 |
+| review 触发 | 源码/测试的分类改用组件 glob，不再特判 `*.py` |
 
-**SwarmAI 自己的仓库**：它现在的精细选测（AST 依赖图、BVT、风险扩展、vitest related）从 pipeline 核心搬出去，变成 SwarmAI 仓库自己的测试命令（`backend/scripts/swarm_select_tests.py`，在它的 `.swarmai/pipeline.toml` 里声明为组件命令，`accepts_files = true`）。对核心来说它和任何仓库的命令一样。冻结规则（`pipeline-test-speed.md` §11）随之约束这个脚本。
+#### 3.3.8 SwarmAI 自己的仓库
+
+现有的精细选测（Python import 图、BVT、vitest related、tsc、分片、按时长均衡、flaky 判定、mutation、probe 等）**全部搬出核心**，成为 SwarmAI 仓库自己的选择脚本 `backend/scripts/swarm_select_tests.py`，在 SwarmAI 仓库的 `.swarmai/pipeline.toml` 里声明为命令。
+
+- 执行的是 **base commit 里的那份脚本**（不是改动后的），防止本 run 改选测规则让自己过关；QX-2 绑定它的 base blob 摘要。
+- 冻结守卫（`test_test_selection_frozen.py`，现在按函数源码哈希）改为"选择脚本的 base blob 身份 + 迁移等价测试"：在现有测试夹具上，新脚本选出的测试集合必须和旧 `_plan` 完全一样。
+- `pipeline_test.py` 拆成两部分：通用 runner（加载 profile、执行 argv、记录签名证据、三档结论、组件整套兜底）留在核心；其余全部进 `swarm_select_tests.py`。
+
+**这是 r6 里工作量最大的一步**：`pipeline_test.py` 约 5700 行，大部分是 SwarmAI 专用逻辑。搬迁必须做到 SwarmAI 仓库上的行为不变（迁移等价测试 + 现有 pipeline 测试全绿）。
 
 ### 3.4 执行仓库自己的命令（r4：不做批准和 sandbox，只清理凭证类环境变量；下文只作记录）
 
@@ -209,10 +229,12 @@ skeptic #4：`npm test`、conftest、Makefile 本身就是仓库控制的代码�
 | 结论 | 含义 |
 |---|---|
 | `verified` | 组件的测试由 runner 跑过且全绿，覆盖这个路径；profile 来自仓库声明 |
-| `verified(agent_profile)` | 同上，但 profile 是 agent 在动代码前提议、并在 base 上试跑通过的（§3.3.3） |
+| `verified(agent_profile)` | 同上，但 profile 是 agent 在动代码前提议的，且满足 §3.3.4 的最低证据（≥1 个测试 + 先红后绿见证） |
 | `failed` | 跑了，有失败 |
 | `unverified(tool_missing)` | 组件识别出来了，但本机缺工具（比如没有 Go） |
 | `unverified(no_signal)` | 没有仓库声明，agent 也提不出能在 base 上跑通的命令 |
+| `unverified(no_nonvacuous_evidence)` | agent 提议的命令跑通了，但没有 ≥1 个测试或没有先红后绿见证 |
+| `unverified(flaky_or_inconclusive)` | 先红后绿的结果不一致、超时或报错 |
 | `unverified(unmapped)` | 改动路径不属于任何组件 |
 | `unverified(no_base)` | unborn 仓库 |
 
@@ -220,13 +242,7 @@ skeptic #4：`npm test`、conftest、Makefile 本身就是仓库控制的代码�
 
 这守住了 fail-closed：结论只来自 contract 里的 profile、runner 签名的结果和 daemon 的环境探测；agent 写不了"测不了"。一个能测的组件，只有在真的跑过且通过时才是 `verified`；没跑就是 `unverified`，绝不会被当成通过。
 
-检查改写（统一按上表判，不再各写一套）：
-- **LG-2**：有 `failed` 挡；其余放行，`unverified` 记 Quality = WARN。
-- **BX-2（direct）**：有可执行组件的改动路径要求 runner 跑过相关测试；`unverified` 的路径不要求。
-- **DS-2a/9a**：测试引用改为"在所属组件 `tests` glob 内，或 JUnit 里出现过的测试 id"，不再按后缀白名单。
-- **DS-2b/4b/9b、BX-1**：用组件命令执行；有 JUnit 就按测试 id 判，没有就按"所在测试文件跑过且通过"判。
-- **LG-5**：校验项来自 `pipeline.toml [[validation]]`（`validations.json` 兼容读一版）。
-- **risk_selection**：删除核心里的规则；改动落在组件根目录但不在 `sources`/`tests` 里，就跑组件整套。SwarmAI 的规则搬进它自己的测试命令。
+检查改写：见 §3.3.7（r6）。
 
 ### 3.6 不强制（r4：以 §0.3、§0.4 为准，下文只作记录）
 
@@ -258,10 +274,10 @@ skeptic #9：打包改动必须和证明它能用的测试同一步落地。
 | S3 | 子命令分发 + `SWARM_BACKEND_BIN` + gate 确切路径识别 + 删 perl 外壳 + MCP 子命令（3.2） | L1 |
 | S4 | 按 §0.4 改 gate：第 1 类全部降为提示；`adversarial_commit_gate` 改为按仓库开关生效（SwarmAI 标记文件默认开 + Settings 里按仓库的开关 + 用户看得懂的提示）；Windows 上 pipeline 命令返回"不支持" | 不强制 |
 | S4b | 度量（§0.5）：每个 run 的成本报表 + 每个 gate 的拦截次数和抽样真假 | 决策依据 |
-| S5 | profile 解析（仓库声明 → agent 提议 + base 试跑 → 未验证）+ contract 字段 + 触发方式（§3.3.1）| — |
-| S6 | 按路径的验证结论 + 核心检查通用化（§3.3.4、§3.5）+ 清理凭证类环境变量 | L2 落地 |
+| S5 | 通用 runner：profile 解析（仓库声明 → agent 提议 + base 试跑 → 未验证）+ argv 模板 / `{files}` / `cwd` + JUnit 读取 + contract 字段（profile 与选择脚本的 base 摘要）+ 触发方式（§3.3.1） | — |
+| S6 | 按路径的验证结论 + 先红后绿通用定义 + 检查迁移（§3.3.6、§3.3.7）+ 清理凭证类环境变量 | L2 落地 |
 | S7 | ~~首次批准 + 受限子进程~~（r3 不做） | — |
-| S8 | SwarmAI 现有选测搬出核心，成为 `swarm_select_tests.py` + SwarmAI 仓库的 `pipeline.toml`（行为不变，冻结规则随之）+ 核心"无语言名"结构测试 + worktree 软链 + 落地身份 | 语言无关 |
+| S8 | 拆 `pipeline_test.py`：SwarmAI 专用逻辑搬进 `swarm_select_tests.py`（从 base 执行）+ SwarmAI 仓库的 `pipeline.toml` + 迁移等价测试取代函数哈希冻结守卫 + 核心"无语言名"结构测试 + worktree 软链 + 落地身份。工作量最大的一步 | 语言无关 |
 | S9 | ~~Windows 传输层~~（r3 不做：Windows 不启用 pipeline，默认 native） | — |
 
 **发布节奏**：S1–S4 一起构成第一个"别人装上能用"的版本（app 能起、能聊天、能用原生方式改代码、SwarmAI 仓库照旧受保护）；S5–S8 构成"pipeline 能用在任意语言的仓库上"的版本（能识别或 agent 能提议测试方式的仓库可验证，其余标"未验证"照样落地）。S4 不单独发版：单独发的安装包里仍然没有后端。
