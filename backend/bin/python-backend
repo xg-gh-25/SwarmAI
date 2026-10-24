@@ -1,0 +1,8 @@
+#!/bin/sh
+# Dev shim for the backend program (design 2026-10-24-swarmai-usable-by-anyone §3.2): runs
+# backend/desktop_main.py with this checkout's venv, so a dev build and a packaged build take
+# the same commands — "$SWARM_BACKEND_BIN" daemon | pipeline-v1 ... | py <script> ...
+here="$(cd "$(dirname "$0")/.." && pwd)"
+py="$here/.venv/bin/python"
+[ -x "$py" ] || py="$(command -v python3)"
+exec "$py" "$here/desktop_main.py" "$@"

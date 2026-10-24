@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from utils.backend_bin import bundled_path, py_command
+
 from .models import Job, JobSafety
 
 
@@ -50,6 +52,18 @@ def _get_swarmai_root() -> str:
 
 # swarmai/ root — used as cwd for script jobs that need `python -m backend.jobs.*`
 _SWARMAI_ROOT = _get_swarmai_root()
+
+
+def _py(*args: str) -> str:
+    """A script job's command run by the backend program's own Python
+    (``python-backend py ...``, design 2026-10-24-swarmai-usable-by-anyone §3.2): no
+    system Python and no source checkout needed."""
+    import shlex
+    return shlex.join(py_command(*args))
+
+
+# the product's Python script jobs need no source checkout; they run from the app data dir
+_JOB_CWD = "${HOME}/.swarm-ai"
 
 # All times in UTC
 SYSTEM_JOBS: list[Job] = [
@@ -385,8 +399,8 @@ SYSTEM_JOBS: list[Job] = [
         # is the real control (see comment above).
         safety=JobSafety(max_budget_usd=0, timeout_seconds=1800),
         config={
-            "command": "python -m backend.jobs.run_evolution",
-            "cwd": _SWARMAI_ROOT,
+            "command": _py("-m", "jobs.run_evolution"),
+            "cwd": _JOB_CWD,
         },
     ),
 
@@ -395,8 +409,8 @@ SYSTEM_JOBS: list[Job] = [
     # git backup, and infrastructure health (31 checks). Auto-fixes safe mechanical
     # issues. Reports Found/Fixed/Pending with a health score (0-100).
     # Script uses Path.home()/.swarm-ai — works in daemon context without shell env.
-    # NOTE: directory has hyphen (s_loops-health) so python -m doesn't work;
-    # use direct script path relative to _SWARMAI_ROOT (cwd).
+    # NOTE: directory has hyphen (s_loops-health) so `py -m` doesn't work;
+    # run the script file the program ships (bundled_path).
     Job(
         id="loops-health",
         name="Self-Loops Health Monitor",
@@ -405,13 +419,11 @@ SYSTEM_JOBS: list[Job] = [
         enabled=True,
         category="system",
         config={
-            "command": (
-                "python backend/skills/s_loops-health/scripts/loops_health_check.py"
-                " --auto-fix"
-                " --output-dir ${HOME}/.swarm-ai/SwarmWS/Knowledge/JobResults"
-                " --alert-threshold 70"
-            ),
-            "cwd": _SWARMAI_ROOT,
+            "command": _py(
+                str(bundled_path("skills", "s_loops-health", "scripts", "loops_health_check.py")),
+                "--auto-fix", "--alert-threshold", "70",
+            ) + " --output-dir ${HOME}/.swarm-ai/SwarmWS/Knowledge/JobResults",
+            "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
@@ -432,8 +444,8 @@ SYSTEM_JOBS: list[Job] = [
         enabled=True,
         category="system",
         config={
-            "command": "python backend/scripts/judge_telemetry_report.py --days 7 --write",
-            "cwd": _SWARMAI_ROOT,
+            "command": _py("-m", "scripts.judge_telemetry_report", "--days", "7", "--write"),
+            "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
     ),
@@ -450,8 +462,8 @@ SYSTEM_JOBS: list[Job] = [
         enabled=True,
         category="system",
         config={
-            "command": "python -m backend.jobs.handlers.code_intel_reindex",
-            "cwd": _SWARMAI_ROOT,
+            "command": _py("-m", "jobs.handlers.code_intel_reindex"),
+            "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
     ),
@@ -467,8 +479,8 @@ SYSTEM_JOBS: list[Job] = [
         enabled=True,
         category="system",
         config={
-            "command": "python -m backend.jobs.handlers.code_intel_reindex --full",
-            "cwd": _SWARMAI_ROOT,
+            "command": _py("-m", "jobs.handlers.code_intel_reindex", "--full"),
+            "cwd": _JOB_CWD,
         },
         # 300s (was 120): the AGGREGATE full-reindex (fans out over ALL projects
         # in SwarmWS/Projects/ — parse+clear+insert+export each) measured 81-114.5s

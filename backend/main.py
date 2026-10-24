@@ -1057,6 +1057,11 @@ async def lifespan(app: FastAPI):
     t0 = time.monotonic()
     phase_timings: dict[str, float] = {}
 
+    # SWARM_BACKEND_BIN for every child (agent sessions, jobs, MCP servers): the backend
+    # program that runs `pipeline-v1` and `py` (utils/backend_bin.py, design §3.2)
+    from utils.backend_bin import export_backend_bin
+    export_backend_bin()
+
     # One-time migration: ~/.swarm-ai/.context/ → ~/.swarm-ai/state/
     from jobs.paths import _migrate_legacy_state_dir
     _migrate_legacy_state_dir()
@@ -2454,15 +2459,15 @@ except Exception as e:
     pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
 """
 
-    # F1: Use get_python_executable() — sys.executable points to frozen binary
-    # in PyInstaller bundles (e.g. ~/.swarm-ai/daemon/python-backend), which
-    # doesn't accept -c flag. get_python_executable() resolves to a real Python.
-    from utils.bundle_paths import get_python_executable
+    # The bundled Python runs the upgrader (`python-backend py -c`, design §3.2): no
+    # system Python is needed. The packaged process keeps its open files when rsync
+    # replaces the bundle under it.
+    from utils.backend_bin import python_argv
 
-    python_path = get_python_executable()
+    python_path = " ".join(python_argv())
 
     subprocess.Popen(
-        [python_path, "-c", upgrader_script],
+        [*python_argv(), "-c", upgrader_script],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

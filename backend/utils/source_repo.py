@@ -53,8 +53,12 @@ def pipeline_python() -> str:
     venv = base / "backend" / ".venv" / "bin" / "python" if base else None
     if venv is not None and venv.exists():
         return str(venv)
-    from utils.bundle_paths import get_python_executable
-    return get_python_executable()
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+    # the legacy `python <checkout>/backend/scripts/...` form needs a real interpreter for
+    # the checkout's source; the packaged form is `"$SWARM_BACKEND_BIN" pipeline-v1`
+    import shutil
+    return shutil.which("python3") or shutil.which("python") or "python3"
 
 
 __all__ = ["pipeline_python", "pipeline_script", "root"]

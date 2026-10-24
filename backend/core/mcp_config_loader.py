@@ -36,7 +36,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from utils.bundle_paths import get_python_executable
+from utils.backend_bin import python_argv
 from utils.mcp_validation import validate_config_entry
 
 logger = logging.getLogger(__name__)
@@ -416,8 +416,9 @@ def inject_channel_mcp(
     if mcp_script.exists():
         mcp_servers["channel-tools"] = {
             "type": "stdio",
-            "command": get_python_executable(),
-            "args": [str(mcp_script)],
+            # the bundled Python (`python-backend py <script>`), never a system one
+            "command": python_argv()[0],
+            "args": [*python_argv()[1:], str(mcp_script)],
             "env": env_vars,
         }
     else:
