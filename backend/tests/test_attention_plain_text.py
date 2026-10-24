@@ -36,7 +36,7 @@ def _projects(monkeypatch, names):
 def test_cultivation_note_is_shown_without_its_tag_and_keeps_full_text(monkeypatch):
     import core.ddd_cultivation as dc
     _projects(monkeypatch, ["SwarmAI"])
-    long_note = "Stamp a cached derived value with the identity it was measured under. " * 10
+    long_note = "Stamp a cached derived value with the identity it was measured under. " * 10 + "END-OF-NOTE"
     monkeypatch.setattr(dc, "read_pending_proposals", lambda ws, p: [SimpleNamespace(
         proposal_id="proposal_a8c9", target_doc="PROJECT.md", content=f"[decision] {long_note}")])
     it = aa._collect_cultivation(Path("/ws"))[0]
@@ -44,7 +44,7 @@ def test_cultivation_note_is_shown_without_its_tag_and_keeps_full_text(monkeypat
     assert it.title == "Approve a note SwarmAI wants to add to its memory"
     assert it.summary.startswith("Stamp a cached derived value") and len(it.summary) <= 160
     assert "the SwarmAI brain (PROJECT.md, decisions)" in body
-    assert long_note.split()[-1] in body          # full note, not the 80-char title
+    assert "END-OF-NOTE" in body                  # full note, not a truncated title
     assert refs == "proposal proposal_a8c9"
 
 
