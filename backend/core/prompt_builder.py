@@ -1450,11 +1450,8 @@ class PromptBuilder:
                     # are DELETED, not offloaded. The to_thread wrap is kept as cheap
                     # insurance (fs reads are still I/O), but the function no longer
                     # opens a sqlite connection on the assembly path.
-                    # io pool (NOT briefing): build_session_briefing is fs-only now
-                    # (sqlite/glob legs deleted); the briefing pool (cap=1) already
-                    # carries the ~28s Welcome-Screen build_session_briefing_data —
-                    # routing this cheap read there would head-of-line stall session
-                    # start (Gate-1, run_6a7e5a2f).
+                    # io pool: build_session_briefing is fs-only now (sqlite/glob
+                    # legs deleted).
                     briefing = await executors.run_in("io", build_session_briefing, working_directory)
                     if briefing:
                         ephemeral_text += f"\n\n{briefing}"

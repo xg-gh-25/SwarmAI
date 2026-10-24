@@ -25,7 +25,7 @@ import pytest
 def test_registry_exposes_named_bounded_pools():
     from core import executors
     # Each class of slow work has its own pool.
-    for name in ("io", "subprocess", "llm", "briefing", "spawn"):
+    for name in ("io", "subprocess", "llm", "spawn"):
         pool = executors.get_pool(name)
         assert pool is not None, f"missing dedicated pool: {name}"
         # bounded (not unbounded / not the default)

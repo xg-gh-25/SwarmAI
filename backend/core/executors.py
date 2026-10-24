@@ -38,7 +38,6 @@ another, and MUST never touch the default pool the event loop schedules on):
   subprocess  — git subprocess, ada/aws CLI probes (slow WRITERS: commit, clone,
                 index rebuild — can block many seconds to ~100s)
   llm         — Bedrock inference (memory extract, summarization) (very slow)
-  briefing    — Welcome-Screen briefing_data pre-warm (glob + sqlite) (spiky)
   spawn       — LATENCY-SENSITIVE cold-spawn READERS only (STS preflight, resume
                 git) — isolated from the slow 'subprocess' writers so a 100s index
                 or an unbounded git-clone never delays a cold-session TTFT
@@ -80,7 +79,6 @@ _POOL_SPECS: dict[str, int] = {
                       # uncancellable once its timeout fires): alone, so it can
                       # neither hold a 'subprocess' worker nor queue another hook.
     "llm": 2,         # Bedrock inference — very slow, low concurrency by design
-    "briefing": 1,    # Welcome-Screen pre-warm — serialize; at most one recompute
     "spawn": 2,       # LATENCY-SENSITIVE cold-spawn READERS ONLY (run_e76b3ea5):
                       # credential STS preflight (blocks _ensure_spawned → TTFT) +
                       # resume git status/diff. Isolated from 'subprocess' so a
