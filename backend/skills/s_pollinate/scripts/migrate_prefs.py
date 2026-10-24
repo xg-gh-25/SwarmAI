@@ -14,20 +14,55 @@ Strategy:
 Idempotent: re-running on already-current prefs is a no-op (version match).
 
 Usage:
-    python3 scripts/migrate_prefs.py            # migrate ${SKILL_DIR}/user_prefs.json in place
-    python3 scripts/migrate_prefs.py --dry-run  # report what would change without writing
+    "$SWARM_BACKEND_BIN" py scripts/migrate_prefs.py            # migrate ${SKILL_DIR}/user_prefs.json in place
+    "$SWARM_BACKEND_BIN" py scripts/migrate_prefs.py --dry-run  # report what would change without writing
 """
 import argparse
+import copy
+import json
 import os
-import sys
+import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from learn_design import (  # noqa: E402
-    PREFS_VERSION,
-    _load_template,
-    _deep_merge,
-    save_prefs,
-)
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMPLATE_PATH = os.path.join(SKILL_DIR, "user_prefs.template.json")
+
+
+# These helpers used to be imported from a `learn_design` module that never existed in this
+# skill, so the script failed with ModuleNotFoundError on every run. They are small enough to
+# live here.
+def _load_template():
+    with open(TEMPLATE_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+PREFS_VERSION = _load_template().get("version", "1.0")
+
+
+def _deep_merge(base, override):
+    """Return base with override merged in: dicts merge recursively, any other value in
+    override (lists included) replaces base's. Neither input is modified."""
+    out = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def save_prefs(prefs, path):
+    """Write prefs atomically (temp file in the same directory, then rename)."""
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".user_prefs.", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(prefs, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 # Default voice map for v1.1 -> v1.2 conversion. Old prefs only had a single
