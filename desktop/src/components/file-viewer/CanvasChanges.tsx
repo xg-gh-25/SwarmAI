@@ -71,11 +71,12 @@ export function ChangesCount() {
 }
 
 export function ChangesRefresh() {
-  const { loading } = useCanvasSession();
+  const { loading, streaming } = useCanvasSession();
   return (
-    <button type="button" onClick={() => void refreshCanvasChanges()} title="Refresh"
+    <button type="button" onClick={() => void refreshCanvasChanges()}
+      title={streaming ? 'Refreshes when this turn ends' : 'Refresh'} disabled={streaming}
       aria-label="Refresh changes" data-testid="canvas-changes-refresh"
-      className="ml-1 icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+      className="ml-1 icon-btn hover:bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-40 disabled:pointer-events-none">
       <span className={`material-symbols-outlined icon-sm block ${loading.changes ? 'animate-spin' : ''}`}>refresh</span>
     </button>
   );
@@ -198,7 +199,7 @@ export function ChangesNav({ selected, onSelect }: {
       {c.commits.length > 0 && <div className={`${SECTION} mt-1`}>Commits mentioned</div>}
       {c.commits.map((m) => <CommitRow key={`${m.root}@${m.sha}`} c={m} on={key === `${m.root}@${m.sha}`} onSelect={onSelect} />)}
       {!c.scannedAll && (
-        <div data-testid="changes-not-scanned" className={NOTE}>Earlier messages of this session were not scanned.</div>
+        <div data-testid="changes-not-scanned" className={NOTE}>Some earlier messages of this session were not scanned.</div>
       )}
     </div>
   );
@@ -241,12 +242,22 @@ function usePatch(load: () => Promise<{ diff: string; truncated: boolean } | nul
   return state;
 }
 
-/** A turn file's diff: its card row's two trees, read in the row's repo. */
+/** A turn file's diff: its card row's two trees, read in the row's repo. A binary or
+ *  "file only" row (the card's own `binary` / `diffable`) is not requested. */
 function FileDiff({ f }: { f: ChangedFile }) {
+  const noDiff = f.binary === true || f.diffable === false;
   const state = usePatch(async () => {
+    if (noDiff) return null;
     const diff = await canvasSessionService.treeDiff(f.gitRoot, f.start, f.end, f.path);
     return diff === null ? null : { diff, truncated: false };
-  }, [f.gitRoot, f.start, f.end, f.path]);
+  }, [f.gitRoot, f.start, f.end, f.path, noDiff]);
+  if (noDiff) {
+    return (
+      <div data-testid="changes-no-diff" className="py-2 text-[12px] text-[var(--color-text-muted)]">
+        {f.binary ? 'A binary file: no text diff.' : 'Too large to show as a diff.'}
+      </div>
+    );
+  }
   return <PatchView state={state} gone="The diff is no longer available." />;
 }
 

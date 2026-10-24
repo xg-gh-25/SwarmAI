@@ -31,8 +31,8 @@ vi.mock('../../../services/canvasSession', async (orig) => {
   return real;
 });
 
-import { ChangesCount, ChangesDetail, ChangesNav, diffLineClass, type ChangesSelection } from '../CanvasChanges';
-import { refreshCanvasChanges, resetCanvasSession, setActiveCanvasSession } from '../../../services/canvasSession';
+import { ChangesCount, ChangesDetail, ChangesNav, ChangesRefresh, diffLineClass, type ChangesSelection } from '../CanvasChanges';
+import { refreshCanvasChanges, resetCanvasSession, setActiveCanvasSession, setCanvasStreaming } from '../../../services/canvasSession';
 
 const SHA = 'a'.repeat(40);
 const file = (path: string, over: Record<string, unknown> = {}) => ({
@@ -111,6 +111,33 @@ describe('Changes tab (this session\'s transcript)', () => {
     render(<Tab />);
     fireEvent.click((await screen.findAllByTestId('changes-file'))[1]);
     expect(await screen.findByText(/no longer available/)).toBeTruthy();
+  });
+
+  it('a binary or file-only row asks for no diff', async () => {
+    await load({ ...CHANGES, turns: [{ id: 'm9:0', at: 't', omitted: 0, files: [
+      file('logo.png', { binary: true, added: null, deleted: null }), file('huge.json', { diffable: false })] }] });
+    render(<Tab />);
+    fireEvent.click((await screen.findAllByTestId('changes-file'))[0]);
+    expect((await screen.findByTestId('changes-no-diff')).textContent).toContain('binary');
+    fireEvent.click(screen.getAllByTestId('changes-file')[1]);
+    expect((await screen.findByTestId('changes-no-diff')).textContent).toContain('Too large');
+    expect(treeDiff).not.toHaveBeenCalled();
+  });
+
+  it('while the turn streams: no Changes request, refresh disabled; at its end exactly one', async () => {
+    await load(CHANGES);
+    changes.mockClear();
+    await act(async () => { await setCanvasStreaming('s1', true); });
+    render(<><ChangesRefresh /><Tab /></>);           // opening the tab mid-turn reads nothing
+    const btn = screen.getByTestId('canvas-changes-refresh') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await act(async () => { await refreshCanvasChanges(); await refreshCanvasChanges('s1'); });
+    expect(changes).not.toHaveBeenCalled();
+    await act(async () => { await setCanvasStreaming('s1', false); });
+    expect(changes).toHaveBeenCalledTimes(1);
+    expect(btn.disabled).toBe(false);
+    await act(async () => { await setCanvasStreaming('s1', false); });   // no edge: nothing
+    expect(changes).toHaveBeenCalledTimes(1);
   });
 
   it('commits mentioned: pushed / committed / no state; a commit opens its files', async () => {

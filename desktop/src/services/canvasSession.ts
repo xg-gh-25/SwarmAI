@@ -21,7 +21,7 @@
  * Tabs map to sessions as useCanvasHost reports them (`setActiveCanvasSession`), so a
  * background tab's event refreshes ITS session and its count stays right.
  *
- * @exports canvasSessionService, refreshCanvasSession, refreshCanvasArtifacts, refreshCanvasChanges,
+ * @exports canvasSessionService, refreshCanvasSession, refreshCanvasArtifacts, refreshCanvasChanges, setCanvasStreaming,
  *   setActiveCanvasSession, sessionForTab, cachedArtifacts, useCanvasSession,
  *   useCanvasSessionArtifacts, resetCanvasSession, LIVE_REFRESH_MS, and the types
  */
@@ -163,6 +163,8 @@ export interface CanvasSessionState {
   error: string | null;
   /** a request for that part is running */
   loading: { artifacts: boolean; changes: boolean };
+  /** the session's turn is streaming: Changes is not requested until it ends */
+  streaming: boolean;
 }
 interface Entry { data: SessionOutputs | null; error: string | null; loading: { artifacts: boolean; changes: boolean } }
 
@@ -176,13 +178,17 @@ const listeners = new Set<() => void>();
 // after it, so its answer is read after the event that asked for it
 const inflight = new Map<string, { p: Promise<void>; again: boolean }>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
+// sessions whose turn is streaming (useCanvasHost reports it): no Changes request
+// for them until the turn ends, then exactly one
+const streaming = new Set<string>();
 let gen = 0;
 let unsubscribe: (() => void) | null = null;
-let activeSnap: CanvasSessionState = { sessionId: null, ...EMPTY };
+let activeSnap: CanvasSessionState = { sessionId: null, ...EMPTY, streaming: false };
 
 function emit() {
   const e = (active && entries.get(active)) || EMPTY;
-  activeSnap = { sessionId: active, data: e.data, error: e.error, loading: e.loading };
+  activeSnap = { sessionId: active, data: e.data, error: e.error, loading: e.loading,
+    streaming: !!active && streaming.has(active) };
   listeners.forEach((l) => l());
 }
 /** The new value of a part, or the cached one when the answer is the same: an
@@ -241,6 +247,7 @@ export function setActiveCanvasSession(sessionId: string | null, tabId?: string 
 }
 
 function load(sid: string, part: Part): Promise<void> {
+  if (part === 'changes' && streaming.has(sid)) return Promise.resolve();   // after the turn
   const key = `${sid}\u0000${part}`;
   const cur = inflight.get(key);
   if (cur) { cur.again = true; return cur.p; }
@@ -284,6 +291,18 @@ export function refreshCanvasChanges(sessionId?: string | null): Promise<void> {
   return sid ? load(sid, 'changes') : Promise.resolve();
 }
 
+/** Whether *sessionId*'s turn is streaming (useCanvasHost). While it is, Changes is
+ *  not requested; when it ends, Changes is requested once. */
+export function setCanvasStreaming(sessionId: string | null, on: boolean): Promise<void> {
+  if (!sessionId) return Promise.resolve();
+  const was = streaming.has(sessionId);
+  if (on === was) return Promise.resolve();
+  if (on) streaming.add(sessionId);
+  else streaming.delete(sessionId);
+  emit();
+  return on ? Promise.resolve() : load(sessionId, 'changes');
+}
+
 /** Test seam. */
 export function resetCanvasSession() {
   gen++;
@@ -293,7 +312,8 @@ export function resetCanvasSession() {
   inflight.clear();
   timers.forEach((t) => clearTimeout(t));
   timers.clear();
-  activeSnap = { sessionId: null, ...EMPTY };
+  streaming.clear();
+  activeSnap = { sessionId: null, ...EMPTY, streaming: false };
 }
 
 const snapshot = () => activeSnap;

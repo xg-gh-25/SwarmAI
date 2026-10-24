@@ -191,6 +191,85 @@ def test_turn_cap_counts_older_turns(db, monkeypatch):
     assert len(out["turns"]) == 2 and out["olderTurns"] == 1
 
 
+def test_a_row_over_the_byte_cap_is_not_read_and_counts_as_not_scanned(db, monkeypatch):
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    monkeypatch.setattr(sc, "ROW_MAX_BYTES", 2000)
+    put(db, "m1", "t1", [card("small.py")])
+    put(db, "m2", "t2", [card("big.py"), text("x" * 5000)])
+    out = sc.read("s1", db)
+    assert [t["files"][0]["path"] for t in out["turns"]] == ["small.py"]
+    assert out["scannedAll"] is False
+    put(db, "m3", "t3", [card("later.py"), text("y" * 5000)])        # by increment too
+    assert [t["files"][0]["path"] for t in sc.read("s1", db)["turns"]] == ["small.py"]
+
+
+def test_the_byte_budget_is_checked_before_content_is_fetched(db, monkeypatch):
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    monkeypatch.setattr(sc, "WINDOW_BYTES", 1500)
+    for i in range(4):
+        put(db, f"m{i}", f"t{i}", [card(f"f{i}.py"), text("z" * 400)])
+    out = sc.read("s1", db)
+    assert 1 <= len(out["turns"]) < 4 and out["scannedAll"] is False
+
+
+def test_row_facts_are_capped_per_row():
+    many = {"type": "turn_changes", "files": [{"path": f"f{i}.py"} for i in range(70)], "omitted": 5}
+    f = sc.row_facts("m", "t", json.dumps([many] * 5 + [text(" ".join(f"`abcdef{i:x}0`" for i in range(30)))]))
+    assert len(f["cards"]) == sc.ROW_MAX_CARDS
+    assert len(f["cards"][0]["files"]) == 60 and f["cards"][0]["omitted"] == 15
+    assert len(f["shas"]) == sc.ROW_MAX_SHAS
+
+
+def test_the_session_cache_is_bounded_by_count(db, monkeypatch):
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    monkeypatch.setattr(sc, "MAX_SESSIONS", 3)
+    for i in range(6):
+        sc.read(f"empty{i}", db)
+    assert len(sc._SESSIONS) == 3
+
+
+def test_clear_cache_resets_the_facts_size():
+    sc._FACTS_SIZE[0] = 10**9
+    sc.clear_cache()
+    assert sc._FACTS_SIZE[0] == 0
+
+
+def test_concurrent_reads_of_one_session_are_consistent(db, monkeypatch):
+    import threading
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    for i in range(30):
+        put(db, f"m{i}", f"t{i:02d}", [card(f"f{i}.py")])
+    errors, results = [], []
+
+    def worker():
+        try:
+            for _ in range(20):
+                results.append(len(sc.read("s1", db)["turns"]))
+        except Exception as exc:  # noqa: BLE001 — the test records it
+            errors.append(exc)
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for i in range(30, 40):
+        put(db, f"m{i}", f"t{i:02d}", [card(f"f{i}.py")])
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert all(30 <= n <= 40 for n in results)
+    assert len(sc.read("s1", db)["turns"]) == 40
+
+
+def test_an_abbreviated_hit_expires_a_full_id_does_not(monkeypatch):
+    ident = {"store": "S", "root": "/nowhere"}
+    sc._CONFIRMED[("S", "abcdef1")] = ("abcdef1" + "0" * 33, 0.0)
+    sc._CONFIRMED[("S", "a" * 40)] = ("a" * 40, 0.0)
+    asked = []
+    monkeypatch.setattr(sc, "_git", lambda root, *a, stdin=None, **k: asked.append(stdin) or "")
+    monkeypatch.setattr(sc.time, "monotonic", lambda: sc.PREFIX_TTL_S + 1)
+    out = sc._confirm(ident, ["abcdef1", "a" * 40])
+    assert out == {"a" * 40: "a" * 40} and asked == ["abcdef1\n"]
+
+
 # ── commits and diffs (real git) ─────────────────────────────────────────────
 
 @pytest.fixture
@@ -265,6 +344,30 @@ def test_commit_diff_no_longer_falls_back_to_code_roots(repo, monkeypatch):
         rc.commit_diff(str(repo), _git(repo, "rev-parse", "HEAD"), "b.py")
 
 
+def test_bad_input_costs_no_git_and_sha256_is_accepted(repo, monkeypatch):
+    called = []
+    monkeypatch.setattr(rc, "repo_identities", lambda: called.append(1) or [])
+    with pytest.raises(rc.RepoChangesError, match="bad sha"):
+        rc.commit_diff(str(repo), "zz", "b.py")
+    with pytest.raises(rc.RepoChangesError, match="bad path"):
+        rc.commit_diff(str(repo), "a" * 40, "../x")
+    assert sc.tree_diff(str(repo), "bad", "b" * 40, "b.py") is None
+    assert called == []
+    with pytest.raises(rc.RepoChangesError, match="unknown repo"):
+        rc.commit_diff(str(repo), "a" * 64, "b.py")      # passes the sha rule, then authorization
+    assert called == [1]
+
+
+def test_a_replaced_repo_at_the_same_path_is_looked_up_again(repo, tmp_path, monkeypatch):
+    import shutil
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj"})
+    first = rc.repo_identities()[0]["store"]
+    backup = tmp_path / "gone"
+    shutil.move(str(repo / ".git"), str(backup))
+    _git(repo, "init", "-q")
+    assert rc.repo_identities()[0]["store"] != first
+
+
 def test_the_changes_path_reads_no_run_json(db, repo, monkeypatch):
     import builtins
     real_open = builtins.open
@@ -310,3 +413,42 @@ def test_endpoint_returns_changes_through_fastapi(db, repo, monkeypatch):
     r = TestClient(app).get("/api/canvas/changes/tree-diff",
                             params={"root": "/elsewhere", "start": start, "end": end, "path": "b.py"})
     assert r.status_code == 404
+
+
+def test_reads_of_one_session_are_serialized_and_other_sessions_do_not_wait(db, monkeypatch):
+    import threading
+    import time as _time
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    real = sc._read_window
+    live: dict[str, int] = {}
+    peak: dict[str, int] = {}
+    overlap = []
+    lock = threading.Lock()
+
+    def slow(conn, sid, rev):
+        with lock:
+            live[sid] = live.get(sid, 0) + 1
+            peak[sid] = max(peak.get(sid, 0), live[sid])
+            if len([s for s, n in live.items() if n]) > 1:
+                overlap.append(True)
+        _time.sleep(0.15)
+        try:
+            return real(conn, sid, rev)
+        finally:
+            with lock:
+                live[sid] -= 1
+    monkeypatch.setattr(sc, "_read_window", slow)
+    put(db, "a1", "t1", [card("a.py")], session="A")
+    put(db, "b1", "t1", [card("b.py")], session="B")
+
+    def go(sid):
+        with sc._SESSIONS_LOCK:
+            sc._SESSIONS.pop(sid, None)      # force a window read
+        sc.read(sid, db)
+    threads = [threading.Thread(target=go, args=(s,)) for s in ("A", "A", "B")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert peak["A"] == 1            # the two reads of A never ran at once
+    assert overlap                   # B ran while A did: no global lock

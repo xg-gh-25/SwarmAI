@@ -243,9 +243,29 @@ with a backtick, a card every 10th row; never the user's data.db):
 
 | read | p50 | p95 |
 |---|---|---|
-| window read, cold cache (worker thread) | 108 ms | 119 ms |
-| unchanged re-read | 0.57 ms | 0.92 ms |
-| one new row | 0.73 ms | 0.93 ms |
+| window read, cold cache (worker thread) | 137 ms | 148 ms |
+| unchanged re-read | 0.67 ms | 1.25 ms |
+| one new row | 1.06 ms | 1.71 ms |
 
 In that worst case the 400-row window holds about 40 turns and the list says
 "earlier messages of this session were not scanned".
+
+Code review (fresh-context reviewer, 2026-10-24) found no blocker; its fixes, each
+with a test that its revert turns red:
+
+- Bounds: a page lists row lengths first and content is fetched only within the byte
+  budget; a row over 1 MB is not read (counted as not scanned); per row at most 3
+  cards, 60 files per card (the rest added to `omitted`), 20 commit candidates; at most
+  64 cached sessions; `clear_cache` resets the facts byte count; the upstream cache is
+  an LRU of 256.
+- Concurrency: one lock per session (its entry's only mutator) and a copied snapshot
+  returned; the global lock guards only the LRU, so sessions never wait on each other.
+- SHA-256: `repo_changes._SHA` accepts 64 hex digits, like the extraction.
+- Staleness: an abbreviated id's hit expires (600 s); repo identity and every commit
+  cache key include the store's inode, so a repo replaced at the same path is a new
+  store.
+- No request while streaming: the store holds every Changes request of a session whose
+  turn streams (`setCanvasStreaming`, set by useCanvasHost before its session refresh)
+  and sends exactly one when it ends; the refresh button is disabled meanwhile.
+- A binary or "file only" row asks for no diff; bad sha / path are refused before any
+  git call; the read-only connection is closed if its setup fails.

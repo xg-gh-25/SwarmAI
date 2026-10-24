@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 MAX_DIFF_CHARS = 400_000
 GIT_TIMEOUT_S = 10.0
-_SHA = re.compile(r"[0-9a-f]{7,40}")
+_SHA = re.compile(r"(?:[0-9a-f]{7,40}|[0-9a-f]{64})")   # SHA-1 (or a prefix) or SHA-256
 
 
 class RepoChangesError(Exception):
@@ -89,13 +89,25 @@ _IDENT_CACHE: tuple[tuple, list[dict]] = ((), [])
 _IDENT_LOCK = threading.Lock()
 
 
+def _git_entry_id(root: str) -> tuple[int, int] | None:
+    """(device, inode) of *root*/.git (a directory or a worktree's file); None if absent."""
+    try:
+        st = os.stat(os.path.join(root, ".git"))
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
 def repo_identities() -> list[dict]:
-    """One entry per object store among the bound repos: ``{common, root, name,
-    roots}`` — ``root`` the store's main checkout (else its first bound path),
-    ``roots`` every bound path of it plus that main checkout. Blocking."""
+    """One entry per object store among the bound repos: ``{common, store, root, name,
+    roots}`` — ``store`` the common dir plus its inode (a cache key that changes when
+    the store is replaced), ``root`` the store's main checkout (else its first bound
+    path), ``roots`` every bound path of it plus that main checkout. Blocking."""
     global _IDENT_CACHE
     bound = allowed_roots()
-    key = tuple(sorted(bound.items()))
+    # the .git entry's identity is in the key: a repo replaced at the same path
+    # (re-cloned, relinked) is looked up again
+    key = tuple(sorted((root, name, _git_entry_id(root)) for root, name in bound.items()))
     with _IDENT_LOCK:
         if _IDENT_CACHE[0] == key and key:
             return _IDENT_CACHE[1]
@@ -108,7 +120,13 @@ def repo_identities() -> list[dict]:
             logger.info("repo_changes: %s has no git store: %s", root, exc)
             continue
         main = os.path.dirname(common) if os.path.basename(common) == ".git" else root
-        ident = by_common.setdefault(common, {"common": common, "root": main if os.path.isdir(main) else root,
+        try:
+            st = os.stat(common)
+            store = f"{common}|{st.st_dev}:{st.st_ino}"
+        except OSError:
+            store = common
+        ident = by_common.setdefault(common, {"common": common, "store": store,
+                                              "root": main if os.path.isdir(main) else root,
                                               "name": name, "roots": set()})
         ident["roots"].update({root, ident["root"]})
     out = list(by_common.values())
@@ -137,11 +155,12 @@ def _checked_root(root: str) -> str:
 
 
 def commit_diff(root: str, sha: str, path: str) -> dict[str, Any]:
-    root = _checked_root(root)
+    # input first: a malformed request costs no git call
     if not _SHA.fullmatch(sha or ""):
         raise RepoChangesError("bad sha")
     if not path or path.startswith(("/", "-")) or ".." in path.split("/") or "\0" in path:
         raise RepoChangesError("bad path")
+    root = _checked_root(root)
     text = _git(root, "show", "--format=", "--no-renames", "--no-ext-diff", sha, "--", path)
     truncated = len(text) > MAX_DIFF_CHARS
     return {"diff": text[:MAX_DIFF_CHARS], "truncated": truncated}

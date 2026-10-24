@@ -45,16 +45,23 @@ logger = logging.getLogger(__name__)
 PAGE_ROWS = 100
 WINDOW_ROWS = 400
 WINDOW_BYTES = 8 * 1024 * 1024
+ROW_MAX_BYTES = 1024 * 1024       # a larger single row is not read ("not scanned")
+ROW_MAX_CARDS = 3                 # per row (a row normally holds one card)
+CARD_MAX_FILES = 60               # the card's own cap (turn_changes.MAX_FILES)
+ROW_MAX_SHAS = 20                 # commit candidates kept per row
 INCR_ROWS = 100
 INCR_BYTES = 2 * 1024 * 1024
 MAX_TURNS = 200
 MAX_SHAS = 200
 CACHE_BYTES = 4 * 1024 * 1024
+MAX_SESSIONS = 64
 FACTS_BYTES = 2 * 1024 * 1024
 MAX_COMMIT_FILES = 200
 PUSHED_FOR = 20
 PUSHED_TTL_S = 60.0
 MISSING_TTL_S = 300.0
+PREFIX_TTL_S = 600.0              # an abbreviated id can become ambiguous later
+UPSTREAM_MAX = 256
 GIT_TIMEOUT_S = 10.0
 
 _HEX = re.compile(r"(?:[0-9a-f]{7,40}|[0-9a-f]{64})")
@@ -143,16 +150,16 @@ def row_facts(row_id: str, created_at: str, content: str) -> Optional[dict]:
         if not isinstance(blk, dict):
             continue
         kind = blk.get("type")
-        if kind == "turn_changes":
-            files = [{k: f.get(k) for k in _FILE_FIELDS}
-                     for f in blk.get("files") or [] if isinstance(f, dict) and f.get("path")]
+        if kind == "turn_changes" and len(cards) < ROW_MAX_CARDS:
+            rows = [f for f in blk.get("files") or [] if isinstance(f, dict) and f.get("path")]
+            files = [{k: f.get(k) for k in _FILE_FIELDS} for f in rows[:CARD_MAX_FILES]]
             if files:
                 omitted = blk.get("omitted")
-                cards.append({"id": f"{row_id}:{i}", "at": created_at, "files": files,
-                              "omitted": omitted if isinstance(omitted, int) and omitted > 0 else 0})
+                omitted = (omitted if isinstance(omitted, int) and omitted > 0 else 0) + max(0, len(rows) - CARD_MAX_FILES)
+                cards.append({"id": f"{row_id}:{i}", "at": created_at, "files": files, "omitted": omitted})
         elif kind == "text" and isinstance(blk.get("text"), str):
             for c in code_span_shas(blk["text"]):
-                if c not in shas:
+                if c not in shas and len(shas) < ROW_MAX_SHAS:
                     shas.append(c)
     if not cards and not shas:
         return None
@@ -173,7 +180,11 @@ def _is_candidate(role: Any, sent: Any, content: Any) -> bool:
 def _connect(db_path: str) -> sqlite3.Connection:
     uri = Path(db_path).resolve().as_uri() + "?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=5.0, check_same_thread=False)
-    conn.execute("PRAGMA query_only = 1")
+    try:
+        conn.execute("PRAGMA query_only = 1")
+    except sqlite3.Error:
+        conn.close()
+        raise
     return conn
 
 
@@ -226,29 +237,44 @@ class _Entry:
 
 
 def _read_window(conn: sqlite3.Connection, session_id: str, rev: int) -> _Entry:
-    """The newest candidate rows, page by page, until WINDOW_ROWS / WINDOW_BYTES."""
+    """The newest candidate rows, page by page, until WINDOW_ROWS / WINDOW_BYTES. Each
+    page lists row lengths first; content is fetched only for the rows the byte budget
+    still admits, and a row over ROW_MAX_BYTES is not read (it counts as not scanned)."""
     entry = _Entry(rev)
-    rows_read, bytes_read, last = 0, 0, None
+    rows_read, bytes_read, last, skipped = 0, 0, None, False
+    head = "SELECT m.created_at, m.rowid, m.id, length(m.content) FROM messages m WHERE " + _CANDIDATE
     while True:
         if last is None:
-            page = conn.execute(
-                f"SELECT m.created_at, m.rowid, m.id, m.content FROM messages m WHERE {_CANDIDATE} "
-                "ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?", (session_id, PAGE_ROWS)).fetchall()
+            page = conn.execute(head + " ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
+                                (session_id, PAGE_ROWS)).fetchall()
         else:
-            page = conn.execute(
-                f"SELECT m.created_at, m.rowid, m.id, m.content FROM messages m WHERE {_CANDIDATE} "
-                "AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < ?)) "
-                "ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
-                (session_id, last[0], last[0], last[1], PAGE_ROWS)).fetchall()
-        for created_at, rowid, row_id, content in page:
+            page = conn.execute(head + " AND (m.created_at < ? OR (m.created_at = ? AND m.rowid < ?)) "
+                                "ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?",
+                                (session_id, last[0], last[0], last[1], PAGE_ROWS)).fetchall()
+        take: list[tuple[str, int, str]] = []
+        budget_hit = False
+        for created_at, rowid, row_id, length in page:
+            length = int(length or 0)
+            if rows_read + len(take) >= WINDOW_ROWS or (rows_read or take) and bytes_read + length > WINDOW_BYTES:
+                budget_hit = True
+                break
             last = (str(created_at), int(rowid))
-            entry.put(row_id, last, row_facts(row_id, str(created_at), content))
-            rows_read += 1
-            bytes_read += len(content or "")
-        if len(page) < PAGE_ROWS:
-            entry.scanned_all = True
+            if length > ROW_MAX_BYTES:
+                skipped = True
+                continue
+            take.append((last[0], last[1], row_id))
+            bytes_read += length
+        if take:
+            marks = ",".join("?" for _ in take)
+            contents = dict(conn.execute(f"SELECT id, content FROM messages WHERE id IN ({marks})",
+                                         [t[2] for t in take]).fetchall())
+            for created_at, rowid, row_id in take:
+                entry.put(row_id, (created_at, rowid), row_facts(row_id, created_at, contents.get(row_id)))
+            rows_read += len(take)
+        if budget_hit:
             break
-        if rows_read >= WINDOW_ROWS or bytes_read >= WINDOW_BYTES:
+        if len(page) < PAGE_ROWS:
+            entry.scanned_all = not skipped
             break
     entry.boundary = last
     entry.trim()
@@ -264,7 +290,11 @@ def _apply_increment(conn: sqlite3.Connection, session_id: str, entry: _Entry, r
         (session_id, entry.rev, INCR_ROWS + 1)).fetchall()
     if len(heads) > INCR_ROWS or sum(int(h[1] or 0) for h in heads) > INCR_BYTES:
         return False
-    ids = [h[0] for h in heads]
+    large = {h[0] for h in heads if int(h[1] or 0) > ROW_MAX_BYTES}
+    ids = [h[0] for h in heads if h[0] not in large]
+    for row_id in large:               # not read: its old facts go, and it counts as not scanned
+        entry.put(row_id, (), None)
+        entry.scanned_all = False
     if ids:
         marks = ",".join("?" for _ in ids)
         rows = conn.execute(
@@ -284,38 +314,57 @@ def _apply_increment(conn: sqlite3.Connection, session_id: str, entry: _Entry, r
 
 
 _SESSIONS: "OrderedDict[str, _Entry]" = OrderedDict()
-_SESSIONS_LOCK = threading.Lock()
+_SESSIONS_LOCK = threading.Lock()       # the LRU and _LOCKS only, held briefly
+_LOCKS: dict[str, threading.Lock] = {}  # one per session: its entry's only mutator
 
 
-def _window(session_id: str, db_path: str) -> _Entry:
-    """The session's current window (cached; see the module docstring)."""
+def _session_lock(session_id: str) -> threading.Lock:
     with _SESSIONS_LOCK:
+        lock = _LOCKS.get(session_id)
+        if lock is None:
+            if len(_LOCKS) > 4 * MAX_SESSIONS:   # drop the idle locks of uncached sessions
+                for sid in [s for s, lk in _LOCKS.items() if s not in _SESSIONS and not lk.locked()]:
+                    del _LOCKS[sid]
+            lock = _LOCKS[session_id] = threading.Lock()
+        return lock
+
+
+def _window(session_id: str, db_path: str) -> tuple[list[dict], bool]:
+    """A snapshot of the session's current window: its rows newest first (copies) and
+    whether everything was scanned. Reads of one session are serialized by its lock;
+    other sessions never wait on them."""
+    with _session_lock(session_id):
+        with _SESSIONS_LOCK:
+            entry = _SESSIONS.get(session_id)
         conn = _connect(db_path)
         try:
             rev, deleted = _revs(conn, session_id)
-            entry = _SESSIONS.get(session_id)
-            if entry is not None and entry.rev == rev and deleted <= entry.rev:
-                _SESSIONS.move_to_end(session_id)
-                return entry
-            if entry is None or deleted > entry.rev or not _apply_increment(conn, session_id, entry, rev):
+            fresh = entry is not None and entry.rev == rev and deleted <= entry.rev
+            if not fresh and (entry is None or deleted > entry.rev
+                              or not _apply_increment(conn, session_id, entry, rev)):
                 entry = _read_window(conn, session_id, rev)
         finally:
             conn.close()
-        _SESSIONS[session_id] = entry
-        _SESSIONS.move_to_end(session_id)
-        total = sum(e.size for e in _SESSIONS.values())
-        while len(_SESSIONS) > 1 and total > CACHE_BYTES:
-            _, gone = _SESSIONS.popitem(last=False)
-            total -= gone.size
-        return entry
+        rows = sorted((dict(r) for r in entry.rows.values()), key=lambda r: r["key"], reverse=True)
+        scanned_all = entry.scanned_all
+        with _SESSIONS_LOCK:
+            _SESSIONS[session_id] = entry
+            _SESSIONS.move_to_end(session_id)
+            total = sum(e.size for e in _SESSIONS.values())
+            while len(_SESSIONS) > 1 and (total > CACHE_BYTES or len(_SESSIONS) > MAX_SESSIONS):
+                _, gone = _SESSIONS.popitem(last=False)
+                total -= gone.size
+        return rows, scanned_all
 
 
 def clear_cache() -> None:
     """Drop every cached window and commit fact (tests; a session's delete)."""
     with _SESSIONS_LOCK:
         _SESSIONS.clear()
+        _LOCKS.clear()
     with _GIT_LOCK:
         _FACTS.clear()
+        _FACTS_SIZE[0] = 0
         _CONFIRMED.clear()
         _PUSHED.clear()
         _UPSTREAM.clear()
@@ -324,17 +373,18 @@ def clear_cache() -> None:
 # ── commits (git, object reads only) ─────────────────────────────────────────
 
 _GIT_LOCK = threading.Lock()
-#: (common, full sha) -> commit facts (immutable); bounded by bytes
+#: (store, full sha) -> commit facts (immutable); bounded by bytes. "store" is
+#: repo_changes.repo_identities' common dir + inode: a replaced repo is a new store.
 _FACTS: "OrderedDict[tuple[str, str], dict]" = OrderedDict()
 _FACTS_SIZE = [0]
-#: (common, candidate) -> (full sha or None, when): a miss expires, a hit does not
+#: (store, candidate) -> (full sha or None, when): a miss and an abbreviated hit expire
 _CONFIRMED: "OrderedDict[tuple[str, str], tuple[Optional[str], float]]" = OrderedDict()
 _CONFIRMED_MAX = 4000
-#: (common, full sha) -> (pushed, when)
+#: (store, full sha) -> (pushed, when)
 _PUSHED: "OrderedDict[tuple[str, str], tuple[bool, float]]" = OrderedDict()
 _PUSHED_MAX = 2000
-#: common -> (upstream ref or "", when)
-_UPSTREAM: dict[str, tuple[str, float]] = {}
+#: store -> (upstream ref or "", when)
+_UPSTREAM: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
 
 
 def _git(root: str, *args: str, stdin: Optional[str] = None, ok: tuple[int, ...] = (0,)) -> Optional[str]:
@@ -354,11 +404,14 @@ def _git(root: str, *args: str, stdin: Optional[str] = None, ok: tuple[int, ...]
 def _confirm(ident: dict, cands: list[str]) -> dict[str, str]:
     """{candidate: full sha} for the candidates that are commits of this store."""
     now = time.monotonic()
-    common, out, ask = ident["common"], {}, []
+    common, out, ask = ident["store"], {}, []
     with _GIT_LOCK:
         for c in cands:
             hit = _CONFIRMED.get((common, c))
-            if hit is not None and (hit[0] is not None or now - hit[1] < MISSING_TTL_S):
+            # a full id never changes its answer; an abbreviated one can become
+            # ambiguous, and a miss can appear (a fetch): both expire
+            ttl = None if hit and hit[0] and len(c) in (40, 64) else (PREFIX_TTL_S if hit and hit[0] else MISSING_TTL_S)
+            if hit is not None and (ttl is None or now - hit[1] < ttl):
                 if hit[0]:
                     out[c] = hit[0]
             else:
@@ -386,7 +439,7 @@ def _confirm(ident: dict, cands: list[str]) -> dict[str, str]:
 def _facts(ident: dict, fulls: list[str]) -> dict[str, dict]:
     """{full sha: {sha, short, subject, at, files, omittedFiles}}: one ``git log``
     for the ones not cached."""
-    common = ident["common"]
+    common = ident["store"]
     with _GIT_LOCK:
         want = [s for s in fulls if (common, s) not in _FACTS]
     if want:
@@ -428,7 +481,7 @@ def _pushed(ident: dict, full: str) -> Optional[bool]:
     """Whether the repo's upstream contains *full*; None when there is no upstream
     or git cannot say. Cached PUSHED_TTL_S (true and false)."""
     now = time.monotonic()
-    common = ident["common"]
+    common = ident["store"]
     with _GIT_LOCK:
         hit = _PUSHED.get((common, full))
         if hit is not None and now - hit[1] < PUSHED_TTL_S:
@@ -439,6 +492,9 @@ def _pushed(ident: dict, full: str) -> Optional[bool]:
         up = (ref, now)
         with _GIT_LOCK:
             _UPSTREAM[common] = up
+            _UPSTREAM.move_to_end(common)
+            while len(_UPSTREAM) > UPSTREAM_MAX:
+                _UPSTREAM.popitem(last=False)
     if not up[0]:
         return None
     rc = _git_rc(ident["root"], "merge-base", "--is-ancestor", full, up[0])
@@ -482,20 +538,20 @@ def _commits(mentions: list[tuple[str, str]]) -> list[dict]:
         if len(hits[c]) != 1:          # in no repo, or in two: left off, never guessed
             continue
         ident, full = hits[c][0]
-        if (ident["common"], full) in seen:
+        if (ident["store"], full) in seen:
             continue
-        seen.add((ident["common"], full))
+        seen.add((ident["store"], full))
         chosen.append((ident, full, at))
     by_ident: dict[str, list[str]] = {}
     for ident, full, _ in chosen:
-        by_ident.setdefault(ident["common"], []).append(full)
+        by_ident.setdefault(ident["store"], []).append(full)
     facts: dict[tuple[str, str], dict] = {}
     for ident in idents:
-        for full, f in _facts(ident, by_ident.get(ident["common"], [])).items():
-            facts[(ident["common"], full)] = f
+        for full, f in _facts(ident, by_ident.get(ident["store"], [])).items():
+            facts[(ident["store"], full)] = f
     out = []
     for n, (ident, full, at) in enumerate(chosen):
-        f = facts.get((ident["common"], full))
+        f = facts.get((ident["store"], full))
         if f is None:
             continue
         out.append({**f, "repo": ident["name"], "root": ident["root"], "mentionedAt": at,
@@ -507,8 +563,7 @@ def read(session_id: str, db_path: str) -> dict[str, Any]:
     """The session's Changes: ``{turns, olderTurns, commits, scannedAll}`` — turns
     newest first (each one card: ``{id, at, files, omitted}``), commits by latest
     mention. Blocking: run it on the ``canvas_changes`` pool."""
-    entry = _window(session_id, db_path)
-    rows = sorted(entry.rows.values(), key=lambda r: r["key"], reverse=True)
+    rows, scanned_all = _window(session_id, db_path)
     cards = [c for r in rows for c in reversed(r["cards"])]
     mentions: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -518,7 +573,7 @@ def read(session_id: str, db_path: str) -> dict[str, Any]:
                 seen.add(c)
                 mentions.append((c, r["key"][0]))
     return {"turns": cards[:MAX_TURNS], "olderTurns": max(0, len(cards) - MAX_TURNS),
-            "commits": _commits(mentions), "scannedAll": entry.scanned_all}
+            "commits": _commits(mentions), "scannedAll": scanned_all}
 
 
 def tree_diff(root: str, start: str, end: str, path: str) -> Optional[str]:
@@ -526,6 +581,8 @@ def tree_diff(root: str, start: str, end: str, path: str) -> Optional[str]:
     (repo_changes.authorized_root: bindings only, never run.json); None when not
     available. Raises turn_changes.DiffUnavailable on a transient failure. Blocking."""
     from core.repo_changes import authorized_root
-    from core.turn_changes import diff_trees
+    from core.turn_changes import _valid_diff_args, diff_trees
+    if not _valid_diff_args(start, end, path):       # before any git work
+        return None
     real = authorized_root(root)
     return diff_trees(real, start, end, path) if real else None
