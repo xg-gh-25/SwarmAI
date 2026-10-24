@@ -203,9 +203,8 @@ async def approve_proposal(
         # Dispatch on change_type (run_b8f10185): append → apply_to_ddd (the additive
         # path); retire/rewrite → apply_retire_proposal (reversible retire_entry:
         # archive + dated .bak + identity-strip). This is the ONLY apply path for a
-        # destructive change reaching THIS router (an escalated retire the human is
-        # approving). Confident retires auto-apply upstream in _cultivate_proposals
-        # (run_ecc7a32b) and never reach here; this path is the human-gated remainder.
+        # destructive change (an escalated retire the human is approving). No retire
+        # is applied anywhere else: _cultivate_proposals always escalates them.
         #
         # OFFLOAD to a worker thread (run_06350217, Gate-2 security): both appliers do
         # a SYNCHRONOUS fcntl/md_lock acquire + read-modify-write. apply_retire_proposal

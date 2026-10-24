@@ -939,8 +939,8 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """
     # Defense-in-depth (run_b8f10185 HIGH-3): apply_to_ddd is the APPEND applier
     # only. A retire/rewrite must NEVER land here (it would append instead of
-    # deleting) — regardless of whether it auto-applies or escalates, its apply
-    # path is apply_retire_proposal, never this one. is_safe_append() already
+    # deleting) — its apply path is apply_retire_proposal (on human approve),
+    # never this one. is_safe_append() already
     # returns False for non-append, but this hard refusal makes the invariant
     # independent of that classifier — belt + suspenders.
     if proposal.change_type != "append":
@@ -1318,8 +1318,8 @@ def detect_contradiction(
     Two-stage, both conservative (run_171a17c2, Gate-1 hardened):
       1. TOPIC pre-filter — _entry_tokens
          to find the strongest same-topic curated entry: ≥2 non-generic token overlap
-         AND ≥50% coverage AND a distinguishing (doc-frequency-1) shared token. This is
-         the SAME strength gate the locate engine uses to avoid cross-topic collisions.
+         AND ≥50% coverage AND a distinguishing (doc-frequency-1) shared token, to avoid
+         cross-topic collisions.
       2. POLARITY flip — on RAW lowercased text of BOTH the new lesson and the located
          entry (title + raw_text), check for an antonym pair where the existing entry
          carries side-A and the new lesson carries side-B (or vice-versa) AND they are
@@ -1433,7 +1433,7 @@ def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> s
     if proposal.change_type not in ("retire", "rewrite"):
         return "not_retire"
     if not proposal.target_title:
-        return "no_target"  # locator found nothing — refuse to guess
+        return "no_target"  # no named entry — refuse to guess
 
     # Six-section resolver (READ, strangler-aware) — see apply_to_ddd note. The
     # resolved path is also passed as retire_entry(source_path=...) below, so the

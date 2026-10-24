@@ -1079,13 +1079,9 @@ class TestLessonQualityGate:
 
 
 class TestEvidenceDrivenRetire:
-    """run_b8f10185 — evidence-driven DELETE/REWRITE: supersession detection,
-    entry-locator, retire proposal, apply_retire_proposal, backward-compat.
-
-    All tests drive the REAL functions (no mock of the code under change) —
-    _detect_supersession/_locate_target_entry are pure; apply_retire_proposal
-    exercises the real retire_entry against a real temp doc (PIT13/GUI32: prove
-    the behavior, don't assert a mocked shape).
+    """DELETE/REWRITE: a lesson never proposes a retire; a retire proposal always
+    escalates; apply_retire_proposal (the human-approve sink) exercises the real
+    retire_entry against a real temp doc (no mock of the code under change).
     """
 
     # ── AC1+AC2+AC4: full filter path produces retire vs append ────────────────
@@ -3042,9 +3038,8 @@ class TestWriteTargetConfinement:
         )
         assert "forged second entry" not in after
 
-    # A READ sink is still a sink. The titles these two helpers parse out flow back into
-    # the proposal (and _locate_target_entry's result becomes the identity the DESTRUCTIVE
-    # applier matches on), so an unguarded traversal leaked out-of-tree governance content.
+    # A READ sink is still a sink: the titles detect_contradiction parses out flow back
+    # into the proposal, so an unguarded traversal leaked out-of-tree governance content.
     def test_read_sinks_refuse_an_out_of_tree_target(self, tmp_path):
         import core.ddd_cultivation as dc
 
@@ -3073,8 +3068,8 @@ class TestWriteTargetConfinement:
             "# Tech\n\n## Architecture\n\n"
             "- [guideline] **Old rule** — superseded by a direct measurement.\n"
         )
-        # Assert at the FENCE, not through _locate_target_entry's result: that helper
-        # also applies a token-overlap gate, so a None there is ambiguous between
+        # Assert at the FENCE, not through a reader's result: a reader also applies
+        # a token-overlap gate, so a None there is ambiguous between
         # "the fence refused the path" and "the lesson did not match an entry" —
         # measured, both produce None for this fixture.
         assert dc._confined_doc_path(project_dir, "2-understanding/TECH.md") == doc, (
