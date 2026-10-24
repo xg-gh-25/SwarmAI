@@ -31,10 +31,10 @@ export interface TSCCPopoverButtonProps {
 }
 
 // Safe-bound constants — mirror LayoutContext (LEFT_SIDEBAR_WIDTH=150,
-// CHAT_CONTENT_TOP=68). Kept as local consts to avoid a cross-module import;
-// if the layout constants change, update here.
+// CHAT_CONTENT_TOP=74, which includes the 6px sheet inset). Kept as local consts
+// to avoid a cross-module import; if the layout constants change, update here.
 const LEFT_NAV_RIGHT = 150;
-const CHAT_TOP = 68;
+const CHAT_TOP = 74;
 const MARGIN = 12; // breathing room from each chrome edge
 // Responsive-LARGE: the panel fills most of the safe region (bounded by the
 // left-nav on the left and the tab-bar on top) rather than a small fixed box —

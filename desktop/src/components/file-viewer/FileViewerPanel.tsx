@@ -61,6 +61,7 @@ export function availableCanvasMax(viewportWidth: number): number {
   const available =
     viewportWidth -
     LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH -
+    LAYOUT_CONSTANTS.SHEET_INSET -
     PANEL_CONSTANTS.CHAT_MIN_HEALTHY -
     PANEL_CONSTANTS.RIGHT_GAP;
   return Math.max(

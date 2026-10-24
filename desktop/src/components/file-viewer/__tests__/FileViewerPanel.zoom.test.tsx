@@ -128,11 +128,11 @@ describe('FileViewerPanel — width follows the layout viewport under app zoom',
     render(<FileViewerPanel {...baseProps} />);
     expect(panelWidth()).toBe(600);
     act(() => {
-      setZoomedViewport(1728, 1.5); // layout 1152 -> ceiling 510
+      setZoomedViewport(1728, 1.5); // layout 1152 -> ceiling 504
       window.dispatchEvent(new Event(APP_ZOOM_EVENT));
     });
     expect(panelWidth()).toBe(availableCanvasMax(1152));
-    expect(panelWidth()).toBe(510);
+    expect(panelWidth()).toBe(504);
     expect(localStorage.getItem(STORAGE_KEY)).toBe('600'); // the user's choice is kept
   });
 
@@ -144,12 +144,12 @@ describe('FileViewerPanel — width follows the layout viewport under app zoom',
       setZoomedViewport(1728, 1.5);
       window.dispatchEvent(new Event(APP_ZOOM_EVENT));
     });
-    expect(panelWidth()).toBe(510);
+    expect(panelWidth()).toBe(504);
     act(() => {
       setZoomedViewport(1728, 1);
       window.dispatchEvent(new Event(APP_ZOOM_EVENT));
     });
-    expect(panelWidth()).toBe(600); // not stuck at 510
+    expect(panelWidth()).toBe(600); // not stuck at 504
   });
 
   it('expanded: a zoom change re-snaps to the new ceiling, and restore is clamped', () => {

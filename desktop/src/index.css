@@ -103,6 +103,8 @@
   --nav-key-drop: rgba(30, 40, 60, 0.12);
   /* Chat sheet (.app-sheet): 1px ring + soft shadow lifting it off the chrome. */
   --shadow-sheet: 0 0 0 1px color-mix(in srgb, var(--color-border) 75%, transparent), 0 4px 18px rgba(30, 40, 60, 0.10);
+  /* The sheet's fill; also the colour of the active Nav key that joins it. */
+  --color-sheet: #f8fafc;
 
   /* Hidden / dotfile / generated file dimming */
   --color-hidden-text: #a0a7b4;
@@ -204,6 +206,12 @@
   --nav-key-border: color-mix(in srgb, #000 22%, var(--color-bg-chrome));
   --nav-key-drop: rgba(0, 0, 0, 0.25);
   --shadow-sheet: 0 0 0 1px color-mix(in srgb, var(--color-border) 90%, transparent), 0 6px 22px rgba(0, 0, 0, 0.35);
+  /* Dark: the sheet is one step LIGHTER than the chrome (#161a21) so it reads as
+     raised. Inside the sheet the surface ladder moves up with it (.app-sheet). */
+  --color-sheet: #1b1f27;
+  --color-sheet-card: #232937;
+  --color-sheet-hover: #2d3544;
+  --color-sheet-input: #20252f;
 
   /* Hidden / dotfile / generated file dimming — dark theme */
   --color-hidden-text: #555d6e;
@@ -779,6 +787,78 @@ body {
   border-radius: 12px;
   box-shadow: var(--shadow-sheet);
 }
+/* Dark: move the chat's surface ladder up one step inside the sheet only, so the
+   sheet is lighter than the chrome and its cards keep their contrast against it.
+   Everything outside the sheet (TopBar, Nav, Terminal, BottomBar) is untouched. */
+:root.dark .app-sheet {
+  --color-bg: var(--color-sheet);
+  --color-card: var(--color-sheet-card);
+  --color-hover: var(--color-sheet-hover);
+  --color-input-bg: var(--color-sheet-input);
+}
+
+/* The sidebar paints above the sheet so the active key can join it without the
+   sheet's left ring cutting through; an inset shade on its right edge stands in
+   for the sheet's shadow there. */
+[data-testid="left-sidebar"] {
+  position: relative;
+  z-index: 2;
+  box-shadow: inset -7px 0 8px -7px var(--nav-key-drop);
+}
+
+/* Active Nav key joins the sheet: it reaches the sidebar's right edge (across the
+   10px padding), takes the sheet's fill, squares its right side and grows two
+   reverse corners so key and sheet read as one surface. */
+.a10-card--active,
+.a10-histrow[aria-pressed="true"] {
+  margin-right: -10px;
+  width: calc(100% + 10px);
+  transform: none;
+  background: var(--color-sheet);
+  border-color: var(--nav-key-border);
+  border-right-color: transparent;
+  border-radius: 11px 0 0 11px;
+  box-shadow: inset 0 1px 0 var(--nav-key-light), -2px 2px 6px -2px var(--nav-key-drop);
+}
+.a10-card--active:hover,
+.a10-histrow[aria-pressed="true"]:hover,
+.a10-card--active:active,
+.a10-histrow[aria-pressed="true"]:active {
+  transform: none;
+}
+/* Inside the green panel the key also crosses the panel's 9px padding + 1px border. */
+.a10-zone .a10-card--active {
+  margin-right: -20px;
+  width: calc(100% + 20px);
+}
+.a10-card--active::before,
+.a10-card--active::after,
+.a10-histrow[aria-pressed="true"]::before,
+.a10-histrow[aria-pressed="true"]::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+}
+.a10-card--active::before,
+.a10-histrow[aria-pressed="true"]::before {
+  top: -11px;
+  border-bottom-right-radius: 10px;
+  box-shadow: 4px 4px 0 4px var(--color-sheet);
+}
+.a10-card--active::after,
+.a10-histrow[aria-pressed="true"]::after {
+  bottom: -11px;
+  border-top-right-radius: 10px;
+  box-shadow: 4px -4px 0 4px var(--color-sheet);
+}
+
+/* Nav scrollbar on the LEFT edge, so it never sits between the active key and the
+   sheet. direction:rtl moves the bar; children flip back to ltr. */
+.a10-nav { direction: rtl; }
+.a10-nav > * { direction: ltr; }
 
 /* Left Nav scroll area — its own 3px bar, invisible until the pointer is over the
    Nav. The global --scrollbar-size stays 6px: the chat gutter maths uses it. */

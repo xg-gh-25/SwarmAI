@@ -48,4 +48,23 @@ describe('left nav piano keys', () => {
     expect(CSS).toMatch(/\.app-sheet\s*\{[^}]*margin:\s*6px 6px 6px 0[^}]*box-shadow:\s*var\(--shadow-sheet\)/);
     expect((CSS.match(/--shadow-sheet:/g) ?? []).length).toBe(2);
   });
+
+  it('joins the active key to the sheet with the sheet colour', () => {
+    expect(CSS).toMatch(/\.a10-card--active,\s*\.a10-histrow\[aria-pressed="true"\]\s*\{[^}]*margin-right:\s*-10px[^}]*background:\s*var\(--color-sheet\)/);
+    expect(CSS).toMatch(/\.a10-zone \.a10-card--active\s*\{[^}]*margin-right:\s*-20px/);
+    expect(CSS).toMatch(/\.a10-nav\s*\{\s*direction:\s*rtl;\s*\}/);
+  });
+
+  it('lifts the dark surface ladder inside the sheet only', () => {
+    const block = CSS.match(/:root\.dark \.app-sheet\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(block).toMatch(/--color-bg:\s*var\(--color-sheet\)/);
+    expect(block).toMatch(/--color-card:\s*var\(--color-sheet-card\)/);
+  });
+
+  it('keeps the layout constants in step with the sheet inset', async () => {
+    const { LAYOUT_CONSTANTS } = await import('../contexts/LayoutContext');
+    expect(CSS).toMatch(new RegExp(`\\.app-sheet\\s*\\{[^}]*margin:\\s*${LAYOUT_CONSTANTS.SHEET_INSET}px`));
+    // TopBar 28 + sheet inset + tab bar 40
+    expect(LAYOUT_CONSTANTS.CHAT_CONTENT_TOP).toBe(28 + LAYOUT_CONSTANTS.SHEET_INSET + 40);
+  });
 });
