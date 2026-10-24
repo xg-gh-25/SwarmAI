@@ -3,23 +3,68 @@ title: SwarmAI 让别人装上就能用 — 安装包、pipeline 运行时、任
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: r3 — XG 2026-10-24 定：native CLI 是默认、pipeline 是可选增强，不支持的地方退回 native、不挡；不签名先发；Windows 不启用 pipeline；adversarial_commit_gate 对所有仓库保留
+status: r4 — XG 2026-10-24 定：pipeline 在任何仓库都不强制，方向是 autonomy；产品默认"相称"；只有显式开启的仓库才强制 commit 前审查，开关在 Settings；冻结"防 agent 作恶"类加固，先量成本和 gate 实效
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
 
-## 0. 原则（XG 2026-10-24，r3）
+## 0. 原则（XG 2026-10-24，r4，取代 r3 的 §0）
 
-**native CLI 是默认，pipeline 是可选增强。** 不支持的地方（Windows、识别不出测试的仓库、缺工具）一律退回 native，不挡用户用 native CLI 做任何事。设计尽量轻：能删的不做。
+### 0.1 pipeline 的立场：它是 autonomy 的工具，不是必经之路
 
-r3 相对 r2 的取舍：
-- Windows 不启用 pipeline（删掉 r2 的 S9：命名管道、Job Object）；pipeline 命令在 Windows 上明确返回"不支持"，agent 改用 native。
-- 只有 SwarmAI 源码仓库强制走 pipeline；其他仓库一律 native 默认，用户主动选择时才走 pipeline。r2 的 required/optional 设置开关先不做。
-- 不做 sandbox 子进程和首次批准（runner 跑在 agent 自己的权限里，和 agent 执行 `npm test` 一样，没有新增权限）；只保留清理凭证类环境变量。
-- 第一版 adapter 只有：仓库声明的 `.swarmai/pipeline.toml` + 按 manifest 识别的 pytest、node。其余语言 `unverified`，照样落地。
-- 验证结论三档：`verified` / `failed` / `unverified(原因)`；只有 `failed` 挡。
-- 发布不签名：macOS 下载页写明"系统设置 → 隐私与安全性 → 仍要打开"（macOS 15 起右键打开不再有效）；S1 验收要检查 arm64 可执行文件至少有 ad-hoc 签名。Windows SmartScreen 点"更多信息 → 仍要运行"。
-- **`adversarial_commit_gate` 对所有仓库保留**（XG 定）：用户仓库里每次 native commit 前，agent 要先派一个对抗审查 sub-agent。只改它的拒绝提示，去掉内部术语（"CLASS A skip-attempt #12"、`SWARM_GATE_FORCE`），用用户能看懂的话说明"先让审查 sub-agent 审这次改动，再提交"。
+- **pipeline 的方向是 autonomy**：让一个较大的改动在没人盯着的时候也能做完、做对、证据可查（隔离 worktree、独立 review、测试证据、如实的报告）。它的价值在于"无人值守地交付"，不在于拦住不走它的人。
+- **任何仓库、任何情况都不强制走 pipeline**，SwarmAI 自己的源码仓库也一样。LLM 和 native CLI 越来越强，大多数 coding task 直接在 native 里做更快。
+- **不走 pipeline 照样能写代码、能 commit**；pipeline 不支持的情况（Windows、识别不出测试的仓库、缺工具）任何时候都不挡。
+
+### 0.2 产品默认是"相称"（proportionate）
+
+agent 按改动的风险选择做法，不一刀切：
+
+| 改动 | 默认做法 |
+|---|---|
+| 小改动、单文件、文档、探索性修改 | native：直接改、跑、commit |
+| 风险较大：跨模块、改公共接口 / 数据结构 / 迁移、安全相关、多会话可能同时改同一处、用户要求无人值守做完 | agent **主动建议**走 pipeline 并说明理由；用户同意才走 |
+| 用户明确要求走 pipeline | 走 pipeline |
+
+"建议走 pipeline"来自 agent 的判断和降级为提示的 gate 文本，不来自拒绝。
+
+### 0.3 只有显式开启的仓库才强制 commit 前审查
+
+- `adversarial_commit_gate`（commit 前必须有审查 sub-agent 审过这些文件）**只对显式开启的仓库生效**：
+  - SwarmAI 源码仓库：默认开启，按仓库里提交的标记文件 `.swarmai/source-repo` 识别（fork、改名、新 clone 都能认出）；
+  - 绑定了 DDD 项目、并在 Settings 里打开"提交前审查"开关的仓库。
+- 其他仓库默认**不拦，只提示**（XG 选 B）：commit 未经审查时，gate 放行并附一句"建议先让审查 sub-agent 审一遍这些文件"。
+- **开关放在 Settings**（按项目、按仓库列出），用户看得见、点得到；状态由 daemon 存在 app 设置里。不是 daemon 环境变量：`SWARM_GATE_FORCE` 只留给运维调试，不作为产品开关。
+- 开启的仓库被拦时，提示写给用户看：这个仓库开了提交前审查；怎么满足（派审查 sub-agent 审这些文件，修掉发现的问题）；在 Settings 哪里关掉。
+
+### 0.4 gate 分三类
+
+| 类别 | gate | r4 处理 |
+|---|---|---|
+| 1. 为了把人赶进 pipeline 而拒绝 | worktree rule 4（主 checkout 写代码）、`direct_commit_gate`、`pipeline_test_gate` 的"去用 runner"、`active_run_commit_gate`（主 checkout 提交 run 改过的文件）、`pytest_command_guard`（未套时间上限的 pytest） | **全部改成只提示、不拒绝**，所有仓库都这样（含 SwarmAI），提示写明建议和原因 |
+| 2. 用户主动开了 run 后保护这个 run | 不许写别的 run 的 worktree（rule 1）、run 的写入留在它自己的 worktree（rule 2-3）、run 的落地 / 签名 / owner / token | 保留；只对选择进 pipeline 的会话生效；随时可以 abandon 回到 native |
+| 3. 与 pipeline 无关的安全类 | 危险命令和发布到远端要人批准、`session_link_gate`、`audit_marker_write_gate`、凭证文件读取限制 | 保留 |
+| 显式开启才拦，其他只提示 | `adversarial_commit_gate` | 见 0.3 |
+
+`active_run_commit_gate` 降为提示是安全的：主 checkout 先提交了 run 改过的文件，run 落地时 ff-only 失败，走已有的 rebase / 冲突流程，run 不会被弄坏。
+
+代价：SwarmAI 仓库不再强制隔离后，多会话共用主 checkout 的老问题（2026-10-19：改动被卷进别的会话的 commit、commit 带上别人暂存的文件）可能回来。缓解：提示建议走 pipeline 或自己的 worktree；AGENTS.md 的工作流说明保留为指引。
+
+### 0.5 冻结机制本身的投入
+
+- **不再做"防 agent 作恶"类加固**：B-d（人工接口鉴权）、sandbox 子进程、首次批准、agent 进程隔离都不做；E7 遗留项 7 保持"已知、不修"。
+- **下一轮先量，再决定加不加东西**：
+  1. 每个 run 的成本：调用次数、token、墙钟时间、人工介入次数，按 profile 分，从签名事件和 `run_audit.json` 读；
+  2. gate 的实际效果：每个 gate 一段时间内拦了多少次（`gate_decisions.jsonl`、`scripts/gate_audit.py`），抽样判断多少是真问题、多少是误拦。
+- 没有这两组数字之前，不新增 gate，不新增加固。
+
+### 0.6 其余取舍（沿用 r3）
+
+- Windows 不启用 pipeline，默认 native；pipeline 命令在 Windows 上明确返回"不支持"。
+- 第一版 adapter：`.swarmai/pipeline.toml` + 按 manifest 识别的 pytest、node；其他语言 `unverified`，照样落地。
+- 验证结论三档 `verified` / `failed` / `unverified(原因)`；只有 `failed` 挡，且只在 pipeline 里挡。
+- 不做 sandbox 和首次批准，只清理凭证类环境变量（runner 跑在 agent 自己的权限里）。
+- 不签名先发：macOS 下载页写明"系统设置 → 隐私与安全性 → 仍要打开"（macOS 15 起右键打开不再有效）；S1 检查 arm64 可执行文件有 ad-hoc 签名；Windows SmartScreen 点"更多信息 → 仍要运行"。
 
 ## 0.1 一句话
 
@@ -143,7 +188,7 @@ trailer = ""                          # SwarmAI 自己的仓库写 Swarm 那一�
 
 仓库 Python（仅 `pytest` adapter）：`pipeline.toml` 的 `python` → 仓库 `.venv`/`venv` → `uv run`/`poetry run`（有 lockfile 时）。
 
-### 3.4 执行仓库自己的命令：先批准，再在受限子进程里跑
+### 3.4 执行仓库自己的命令（r4：不做批准和 sandbox，只清理凭证类环境变量；下文只作记录）
 
 skeptic #4：`npm test`、conftest、Makefile 本身就是仓库控制的代码。需要说清楚风险的真实范围：runner（`pipeline-test`）跑在 agent 的 Bash 进程里，和 agent 自己执行 `npm test` 是同一个用户、同一份权限，**不是新增的权限**；新增的是"SwarmAI 主动替用户跑了仓库的代码"。所以：
 
@@ -176,7 +221,7 @@ skeptic #4：`npm test`、conftest、Makefile 本身就是仓库控制的代码�
 - **LG-5**：校验项来自 `pipeline.toml [[validation]]`（`validations.json` 兼容读一版）。
 - **risk_selection**：SwarmAI 规则只对 `swarmai` adapter；其他组件改了 manifest/lockfile/构建配置就整套跑。
 
-### 3.6 不强制：按仓库的 pipeline 策略，所有相关 gate 一起看同一个策略
+### 3.6 不强制（r4：以 §0.3、§0.4 为准，下文只作记录）
 
 skeptic #2/#3：只改 rule 4 不够，`direct_commit_gate`、`adversarial_commit_gate` 也会拦 commit；而且打包版认不出 SwarmAI 自己的仓库。
 
@@ -189,7 +234,7 @@ skeptic #2/#3：只改 rule 4 不够，`direct_commit_gate`、`adversarial_commi
 - **永远生效、不看策略的 gate**：worktree gate 的 rule 1-3（不许写别的 run 的 worktree、本 run 的写入留在自己的 worktree 等）、`active_run_commit_gate`（run 改过的文件只能由 run 落地）、`session_link_gate`、`audit_marker_write_gate`、危险命令和 HITL 类 gate。
 - `optional` 仓库：会话直接在主 checkout 里改、跑、`git commit`；pipeline 是可选工具。
 
-### 3.7 L3：Windows
+### 3.7 L3：Windows（r4：不做，Windows 不启用 pipeline）
 
 - daemon_exec / hook_token 的传输层抽象成接口：POSIX 用 owner-only Unix socket；Windows 用命名管道，ACL 只给当前用户 SID，`GetNamedPipeClientProcessId` 取对端 pid，`GetProcessTimes` 取创建时间。token 格式统一为 `<transport>.<id>.<nonce>`。
 - 进程组清理和截止时间用 Job Object。
@@ -204,7 +249,8 @@ skeptic #9：打包改动必须和证明它能用的测试同一步落地。
 | S1 | **先写安装产物验收测试（先红）**：§7 的 G1/G2 作为 CI job，在当前 release 产物上跑，必然失败 | 错误类的验收 |
 | S2 | 打包修复（3.1）+ 外置版本化 runtime + 四个目标 + 签名公证；G1/G2 转绿后才允许发布 | L0 |
 | S3 | 子命令分发 + `SWARM_BACKEND_BIN` + gate 确切路径识别 + 删 perl 外壳 + MCP 子命令（3.2） | L1 |
-| S4 | SwarmAI 标记文件 + gate 分类表（每个 gate：只管 SwarmAI 仓库 / 管所有仓库 / Windows 上是否生效）+ 按表改（3.6）；`adversarial_commit_gate` 只改提示 | L2 强制 |
+| S4 | 按 §0.4 改 gate：第 1 类全部降为提示；`adversarial_commit_gate` 改为按仓库开关生效（SwarmAI 标记文件默认开 + Settings 里按仓库的开关 + 用户看得懂的提示）；Windows 上 pipeline 命令返回"不支持" | 不强制 |
+| S4b | 度量（§0.5）：每个 run 的成本报表 + 每个 gate 的拦截次数和抽样真假 | 决策依据 |
 | S5 | test_profile 解析 + contract 字段 + `swarmai` adapter 原样包进去（行为不变） | — |
 | S6 | 按路径的验证结论 + 检查统一改写（3.5） | L2 落地 |
 | S7 | ~~首次批准 + 受限子进程~~（r3 不做；只保留清理凭证类环境变量，并入 S6） | — |
