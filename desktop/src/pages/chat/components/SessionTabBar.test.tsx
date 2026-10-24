@@ -169,16 +169,15 @@ describe('SessionTabBar', () => {
   });
 
   describe('active tab visual distinction', () => {
-    // 2026-10-22: the active tab is a raised card with a 2px accent rule on top
-    // (SessionTab.indicator.test has the full styling contract).
-    it('only the active tab carries the accent rule and the card surface', () => {
+    // 2026-10-24: the active tab is the joined piano key (.session-tab--active);
+    // SessionTab.indicator.test has the full styling contract.
+    it('only the active tab carries the active key class', () => {
       render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
       const tabs = screen.getAllByRole('tab');
-      expect(tabs[1].className).toContain('inset_0_2px_0_var(--color-primary)');
-      expect(tabs[1].className).toContain('bg-[var(--color-card)]');
+      expect(tabs[1].className).toContain('session-tab--active');
       for (const t of [tabs[0], tabs[2]]) {
-        expect(t.className).not.toContain('var(--color-primary)');
-        expect(t.className).toContain('border-transparent');
+        expect(t.className).not.toContain('session-tab--active');
+        expect(t.className).toContain('session-tab');
       }
     });
   });

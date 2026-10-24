@@ -860,6 +860,57 @@ body {
 .a10-nav { direction: rtl; }
 .a10-nav > * { direction: ltr; }
 
+/* ── Chat session tabs as piano keys (2026-10-24) ─────────────────────────────
+   Same material as the Nav keys. Inactive tabs are keys on the chrome tab strip.
+   The active tab takes the chat body's colour (--color-bg inside the sheet), keeps
+   its 2px accent rule on top and joins the chat below: a 5px foot (::before) runs
+   from the tab's bottom edge to the strip's bottom, covering the strip's bottom
+   line (ChatHeader draws it as an inset shadow so children paint over it), and
+   flares out in two reverse corners. Box size is the same for every state. */
+.session-tab-bar {
+  margin-left: -8px;  /* room for the first tab's left flare; tabs stay in place */
+  padding-left: 8px;
+}
+.session-tab {
+  position: relative;
+  border-radius: 8px;
+  background: var(--nav-key-face);
+  border-color: var(--nav-key-border);
+  box-shadow: inset 0 1px 0 var(--nav-key-light), 0 3px 0 var(--nav-key-edge), 0 4px 7px var(--nav-key-drop);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, color 0.14s ease;
+}
+.session-tab:not(.session-tab--active):hover {
+  transform: translateY(-1px);
+}
+.session-tab:not(.session-tab--active):active {
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 3px var(--nav-key-drop), 0 0 0 transparent;
+}
+.session-tab--active {
+  background: var(--color-bg);
+  border-color: var(--color-border);
+  border-bottom-color: transparent;
+  border-radius: 8px 8px 0 0;
+  box-shadow: inset 0 2px 0 var(--color-primary);
+  z-index: 1;
+}
+.session-tab--active::before {
+  content: '';
+  position: absolute;
+  top: 100%;          /* bottom of the padding box = 1px above the border box */
+  left: -7px;
+  right: -7px;
+  height: 6px;        /* 1px border + 5px gap to the strip's bottom edge */
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 0 0, transparent 6px, var(--color-bg) 6.5px) left top / 6px 6px no-repeat,
+    radial-gradient(circle at 100% 0, transparent 6px, var(--color-bg) 6.5px) right top / 6px 6px no-repeat,
+    linear-gradient(var(--color-bg), var(--color-bg)) center top / calc(100% - 12px) 6px no-repeat;
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-tab { transition: none; }
+}
+
 /* Left Nav scroll area — its own 3px bar, invisible until the pointer is over the
    Nav. The global --scrollbar-size stays 6px: the chat gutter maths uses it. */
 .a10-nav::-webkit-scrollbar {

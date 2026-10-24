@@ -88,18 +88,17 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         onKeyDown?.(e);
       }}
       className={clsx(
-        // border-b-2 on ALL tabs reserves the underline height → no layout shift
-        // between active/inactive. Inactive uses a transparent placeholder.
-        // 30px, like the icon-btn-lg "+" beside it. Active = a raised card (card
-        // surface, border, a 2px accent rule on top, full-strength text); inactive =
-        // flat and muted, a hover tint only. A border on every state keeps the size
-        // constant (no shift on select). Accent = --color-primary (follows the theme).
-        'group/tab flex items-center gap-1.5 h-[30px] px-2.5 rounded-lg cursor-pointer border',
-        'transition-colors duration-150 ease-out',
+        // Piano keys (2026-10-24, index.css .session-tab): inactive tabs are keys lit
+        // from above (top light, 3px edge, drop shadow; hover lifts 1px, press sinks
+        // 2px). The active tab takes the chat body's colour, keeps the 2px accent rule
+        // on top, and joins the chat below through a 5px foot + two reverse corners
+        // drawn by pseudo-elements. Every state keeps the same 30px box and 1px
+        // border, so selecting a tab never shifts the strip (GUI12).
+        'session-tab group/tab flex items-center gap-1.5 h-[30px] px-2.5 cursor-pointer border',
         'min-w-0 max-w-[220px] flex-shrink-0',
         isActive
-          ? 'bg-[var(--color-card)] border-[var(--color-border)] text-[var(--color-text)] font-medium shadow-[inset_0_2px_0_var(--color-primary),0_1px_2px_rgba(0,0,0,0.25)]'
-          : 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+          ? 'session-tab--active text-[var(--color-text)] font-medium'
+          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
       )}
     >
       {/* Unread dot — 6px accent pulsing dot with a soft glow. Uses the product

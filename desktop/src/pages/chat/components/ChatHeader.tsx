@@ -72,7 +72,7 @@ export function ChatHeader({
   const showOutputsPill = outputCount > lastSeenOutputCount && !canvasOpen;
 
   return (
-    <div className="h-10 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)]">
+    <div className="h-10 px-4 flex items-center justify-between flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)] shadow-[inset_0_-1px_0_var(--color-border)]">
       {/* Left Section: Session Tab Bar (the "+" new-session button lives at the
           tail of the strip, inside SessionTabBar). */}
       <SessionTabBar
