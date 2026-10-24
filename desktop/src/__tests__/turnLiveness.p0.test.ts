@@ -260,33 +260,7 @@ describe('chat-turn-liveness P0 (frontend)', () => {
     expect(tab.isStreaming).toBe(false);
   });
 
-  it('R5: a permission decision POST clears the previous message\'s reconnect (source guard)', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const src = readFileSync(join(__dirname, '..', 'pages', 'ChatPage.tsx'), 'utf8');
-    const start = src.indexOf('const handlePermissionDecision = async');
-    const body = src.slice(start, src.indexOf('\n  };\n', start));
-    const postAt = body.indexOf('chatService.streamCmdPermissionContinue(');
-    expect(postAt).toBeGreaterThan(0);
-    expect(body.slice(postAt), 'the decision POST leaves the old retryStreamFn in place').toMatch(/retryStreamFn:\s*undefined/);
-  });
-
-  it('R4: a send stopped while its attachments are read opens no POST (source guard)', async () => {
-    const { readFileSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const src = readFileSync(join(__dirname, '..', 'pages', 'ChatPage.tsx'), 'utf8');
-    const send = src.slice(src.indexOf('const handleSendMessage = useCallback'), src.indexOf('handleSendMessageRef.current = handleSendMessage'));
-    const awaitAt = send.indexOf('await buildContentArray(');
-    const checkAt = send.indexOf('if (failed || !stillThisSend() || content.length === 0) {');
-    const postAt = send.indexOf('chatService.streamChat(');
-    expect(awaitAt, 'the send reads its attachments').toBeGreaterThan(0);
-    expect(checkAt, 'the send re-checks its token after the await').toBeGreaterThan(awaitAt);
-    expect(postAt, 'and before it writes or POSTs').toBeGreaterThan(checkAt);
-    expect(send.slice(awaitAt, postAt)).not.toMatch(/activeTabIdRef\.current/);
-    const stopAt = src.indexOf('const handleStop = ');
-    const stop = src.slice(stopAt, src.indexOf('\n  };\n', stopAt));
-    expect((stop.match(/_sendToken = undefined/g) ?? []).length, 'Stop cancels the pending send').toBe(2);
-  });
+  // R4 / R5 are behaviour-tested in pages/chat/__tests__/turnControls.test.ts.
 
   it('T7d: a send the backend accepted is not marked when its stream fails later', () => {
     vi.spyOn(chatService, 'getStreamingState').mockRejectedValue(new Error('Unable to connect to backend service'));

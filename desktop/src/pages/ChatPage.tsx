@@ -26,7 +26,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession, ChatRequest, UnifiedAttachment } from '../types';
+import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession, UnifiedAttachment } from '../types';
 import { newClientId } from '../services/clientId';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
@@ -51,13 +51,11 @@ import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
-import { canContinueTurn } from '../hooks/streaming-guards';
 import { retrySend } from './chat/retrySend';
 import { draftToRestore } from './chat/draftToRestore';
 import { tf } from './chat/tf';
 import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { useContextUsageRefresh } from '../hooks/contextUsage';
-import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, TabView, AlertsPill } from './chat/components';
 import { TabNoticeBar } from './chat/components/TabNoticeBar';
@@ -65,7 +63,7 @@ import { resetTabToNewSession as resetTabById } from './chat/resetTab';
 import { tabNoticeStore, type NoticeTarget } from '../stores/tabNoticeStore';
 import { terminalLocation } from '../stores/terminalLocation';
 import { ATTACH_TERMINAL_EVENT } from '../stores/TerminalStore';
-import { terminalContextOf } from '../utils/terminalAttachment';
+import { sendMessage, answerQuestion, decidePermission, stopTurn, stopBackground, type TurnControlDeps } from './chat/turnControls';
 // HistoryOverlay retired (M3): migrated to OverlayHost registry (overlaySurfaces.tsx).
 // parseWorkPacket still used by ChatPage's dispatch (linked_context → work packet);
 // ToDoOverlay itself retired (M4): migrated to the OverlayHost registry.
@@ -2029,14 +2027,6 @@ export default function ChatPage() {
     [selectedAgentId]
   );
 
-  // Create tab-aware stream handler — permission handling is now fully inline
-  // in the hook (appends content block to messages). No ChatPage wrapper needed.
-  // Fix 6: Pass activeTabIdRef.current as tabId for tab-aware streaming.
-  const wrappedCreateStreamHandler = useCallback((assistantMessageId: string) => {
-    const tabId = activeTabIdRef.current ?? undefined;
-    return createStreamHandler(assistantMessageId, tabId);
-  }, [createStreamHandler, activeTabIdRef]);
-
   // Handle plugin commands (Req 7.2 — memoized with useCallback)
   const handlePluginCommand = useCallback(async (command: string): Promise<boolean> => {
     const parts = command.trim().split(/\s+/);
@@ -2163,359 +2153,60 @@ export default function ChatPage() {
     }
   }, [tabMapRef, activeTabIdRef, setInputValue, restoreAttachments]);
 
-  /**
-   * Send while a turn of the session is in progress: POST the message on its own
-   * (no stream handlers of this tab, no stream generation): the backend queues it
-   * (`accepted` with ``queued``, then SESSION_BUSY) or, if the session freed in
-   * between, runs it — that turn then reaches the tab on the subscription like any
-   * drained turn. The bubble shows "Queued" until the server's queue decides; an
-   * unaccepted send is "Not sent · Retry" (P2b).
-   */
-  const sendWhileBusy = useCallback(async (tabId: string, text: string, attachments: UnifiedAttachment[]) => {
-    const tab = tabMapRef.current.get(tabId);
-    const sid = tab?.sessionId;
-    if (!tab || !sid || !selectedAgentId) return;
-    const usable = (attachments || []).filter((a) => !a.error && !a.isLoading);
-    const hasAtt = usable.length > 0;
-    // The draft leaves the composer now (this tab is the active one); if the send
-    // does not happen it goes back to this tab (restoreDraft), never elsewhere.
-    setInputValue('');
-    clearAttachments();
-    const prep = Date.now() + Math.random();
-    tab._preparingSend = prep;
-    let content: ContentBlock[] = [];
-    let failed = false;
-    try {
-      content = await buildContentArray(text, usable);   // the files as they are now
-    } catch (err) {
-      console.error('[ChatPage] busy send: reading attachments failed', err);
-      failed = true;
-    }
-    // Stop or a reset took the preparation away: not sent
-    const stillMine = tab._preparingSend === prep;
-    if (stillMine) tab._preparingSend = undefined;
-    // failed, stopped, closed, reset or rebound to another session meanwhile: not sent
-    if (failed || !stillMine || tabMapRef.current.get(tabId) !== tab || tab.sessionId !== sid || content.length === 0) {
-      restoreDraft(tabId, text, attachments);
-      return;
-    }
-    rebindQueue(tabId);
-    const clientId = newClientId();
-    const trimmed = text.trim();
-    const display: ContentBlock[] = [{ type: 'text', text: trimmed || '[Attachments]' }];
-    if (hasAtt && trimmed) display.push({ type: 'text', text: `📎 ${usable.map((a) => a.name).join(', ')}` });
-    const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
-    store.append({ id: clientId, role: 'user', content: display, timestamp: new Date().toISOString(),
-      metadata: { client_id: clientId }, isQueued: true });
-    if (!tab._queuedLocal) tab._queuedLocal = new Map();
-    tab._queuedLocal.set(clientId, undefined);
-    const terminal = terminalContextOf(usable);
-    const request: ChatRequest = {
-      agentId: selectedAgentId,
-      ...(hasAtt ? { content } : { message: text }),
-      sessionId: sid,
-      enableSkills,
-      enableMCP,
-      editorContext: editorContextFor(tabId),
-      ...(terminal && { terminalContext: terminal }),
-      clientId,
-    };
-    if (!tab._unsentRequests) tab._unsentRequests = new Map();
-    tab._unsentRequests.set(clientId, request);
-    let acceptedHere = false;
-    const settle = () => {
-      const t = tabMapRef.current.get(tabId);
-      if (!t) return;
-      if (!acceptedHere) {
-        // never accepted: "Not sent · Retry" (the request stays for Retry)
-        t._queuedLocal?.delete(clientId);
-        const st = messageStoreRegistry.get(tabId);
-        if (st?.messages.some((m) => m.id === clientId)) {
-          st.updateById(clientId, (m) => ({ ...m, sendState: 'failed', isQueued: undefined }));
-        }
-      }
-      syncQueuedBadges(tabId);
-    };
-    chatService.streamChat(
-      request,
-      (ev) => {
-        if (ev.type !== 'accepted') return;   // a turn it started renders from the subscription
-        acceptedHere = true;
-        const t = tabMapRef.current.get(tabId);
-        if (!t) return;
-        t._unsentRequests?.delete(clientId);
-        if ((ev as { queued?: boolean }).queued) t._queuedLocal?.set(clientId, Date.now());
-        else t._queuedLocal?.delete(clientId);   // it runs now: not queued
-        syncQueuedBadges(tabId);
-      },
-      () => settle(),
-      () => settle(),
-      () => settle(),
-      streamLivenessFor(tabId),
-    );
-  }, [tabMapRef, selectedAgentId, enableSkills, enableMCP, setInputValue, clearAttachments, buildContentArray, editorContextFor, syncQueuedBadges, rebindQueue, restoreDraft, streamLivenessFor]);
+  // Send / stop / continue live in pages/chat/turnControls (A1, design
+  // 2026-10-24-chat-stream-structure.md): built from this render's values and
+  // read through a ref, so the handlers below keep a stable identity.
+  const turnDepsRef = useRef<TurnControlDeps | null>(null);
+  turnDepsRef.current = {
+    tabs: () => tabMapRef.current,
+    activeTabId: () => activeTabIdRef.current,
+    agentId: () => selectedAgentId,
+    options: () => ({ enableSkills, enableMCP }),
+    composer: {
+      text: () => inputValueRef.current,
+      attachments: () => attachmentsRef.current,
+      clear: () => { setInputValue(''); clearAttachments(); },
+      clearText: () => setInputValue(''),
+      restore: restoreDraft,
+    },
+    buildContent: buildContentArray,
+    stores: messageStoreRegistry,
+    chat: chatService,
+    stream: {
+      handler: createStreamHandler,
+      error: createErrorHandler,
+      complete: createCompleteHandler,
+      disconnect: createDisconnectHandler,
+      liveness: streamLivenessFor,
+    },
+    initTab: (tabId) => initTabState(tabId, messagesRef.current),
+    setLocalSending: (on, tabId) => setLocalSending(on, tabId),
+    incrementStreamGen,
+    setTabStatus: updateTabStatus,
+    titleFromFirstMessage: (tabId, text) => {
+      const tab = openTabsRef.current.find((x) => x.id === tabId);
+      if (!tab?.isNew) return;
+      updateTabTitle(tabId, text.slice(0, 25) + (text.length > 25 ? '...' : ''));
+      setTabIsNew(tabId, false);
+    },
+    updateTab: updateTabState,
+    noteSend,
+    editorContext: editorContextFor,
+    pluginCommand: handlePluginCommand,
+    rebindQueue,
+    syncQueuedBadges,
+    setMessages,
+    clearPendingQuestion: () => setPendingQuestion(null),
+    clearPendingPermission: () => setPendingPermissionRequestId(null),
+    dismissNotice: (tabId, id) => tabNoticeStore.dismiss(tabId, id),
+    permissionLoading: permissionLoadingTabs.current,
+    newClientId,
+  };
 
-  // Handle send message (Req 7.1 — memoized with useCallback, volatile deps via refs)
+  // Handle send message (Req 7.1): stable identity, the latest deps via the ref
   const handleSendMessage = useCallback(async () => {
-    const messageText = inputValueRef.current;
-    const currentAttachments = attachmentsRef.current;
-    const hasText = messageText.trim().length > 0;
-    const hasAttachments = currentAttachments.some((a) => !a.error && !a.isLoading);
-
-    if ((!hasText && !hasAttachments) || !selectedAgentId) return;
-
-    // Per-tab streaming guard: check only the active tab's state
-    const activeTabForGuard = tabMapRef.current.get(activeTabIdRef.current ?? '');
-
-    // Hard guard: session creation in-flight — the tab's first POST is open and it
-    // has no session yet; once it has one, the queue path below takes the send.
-    if (!activeTabForGuard?.sessionId && activeTabForGuard?.localSending) return;
-    // A send of this tab is still reading its attachments (its draft is still in
-    // the composer): a second Send now would send the same text twice.
-    if (activeTabForGuard?._preparingSend) return;
-
-    // ──── BUSY PATH: a turn of the session is in progress (or may be) ──────────
-    // The message is the server's to queue (docs/design/chat-turn-liveness.md S3):
-    // it is POSTed now and the backend queues it (or runs it, if the session is
-    // free by then). It never takes over this tab's stream handlers — the turn in
-    // progress keeps rendering; the queued one arrives as its own (drained) turn
-    // on the session subscription.
-    if (activeTabForGuard?.sessionId && shouldQueueSend(activeTabForGuard)) {
-      void sendWhileBusy(activeTabForGuard.id, messageText, currentAttachments);
-      return;
-    }
-
-    // ──── NORMAL SEND PATH (existing code) ──────────────────────────────
-    // The send belongs to the tab it started in, whatever is active after the
-    // await below. Register the tab first so setLocalSending has a tab to mark.
-    const sendTabId = activeTabIdRef.current;
-    if (sendTabId && !tabMapRef.current.has(sendTabId)) {
-      initTabState(sendTabId, messagesRef.current);
-    }
-
-    // Mark the tab's request open IMMEDIATELY after the guard: setLocalSending
-    // writes tabMapRef synchronously, so a second rapid click/Enter is caught by
-    // the queue guard above (shouldQueueSend reads localSending).
-    setLocalSending(true, sendTabId ?? undefined);
-    // This send's token: Stop (or a newer send) replaces it, and the send stops
-    // after its await without writing anything (docs/design/chat-turn-liveness.md P2a).
-    const sendToken = Date.now() + Math.random();
-    const sendTab = sendTabId ? tabMapRef.current.get(sendTabId) : undefined;
-    if (sendTab) sendTab._sendToken = sendToken;
-    const sendSid = sendTab?.sessionId;
-    const stillThisSend = () => {
-      const t0 = sendTabId ? tabMapRef.current.get(sendTabId) : undefined;
-      return !!t0 && t0._sendToken === sendToken && t0.sessionId === sendSid;
-    };
-
-    // Clear userStopped and reset streaming-related state from a previous
-    // stop — this is a fresh send. Without this, stale flags from the old
-    // stream can suppress errors or break indicators on the new stream.
-    if (activeTabForGuard) {
-      activeTabForGuard.userStopped = false;
-      activeTabForGuard.hasReceivedData = false;
-      activeTabForGuard.isReconnecting = false;
-      activeTabForGuard.reconnectionAttempt = 0;
-      activeTabForGuard.isResuming = false;
-      activeTabForGuard.turnPhase = undefined;
-      // A genuine new stream is starting — the post-disconnect uncertainty is
-      // resolved (this send opens a fresh SSE connection / session).
-      activeTabForGuard._postDisconnectUncertain = false;
-    }
-
-    if (messageText.trim().startsWith('/plugin')) {
-      setLocalSending(false, sendTabId ?? undefined);
-      setInputValue('');
-      await handlePluginCommand(messageText.trim());
-      return;
-    }
-
-    // The draft leaves the composer now (this tab is the active one); a send that
-    // does not happen gives it back to this tab (restoreDraft), never elsewhere.
-    setInputValue('');
-    clearAttachments();
-    let content: ContentBlock[] = [];
-    let failed = false;
-    const prep = sendToken;
-    if (sendTab) sendTab._preparingSend = prep;
-    try {
-      content = await buildContentArray(messageText, currentAttachments);
-    } catch (err) {
-      console.error('[ChatPage] send: reading attachments failed', err);
-      failed = true;
-    } finally {
-      if (sendTab && sendTab._preparingSend === prep) sendTab._preparingSend = undefined;
-    }
-    // Failed, stopped, closed or superseded while the attachments were read:
-    // nothing of this send is written and no POST opens (Stop already cleared
-    // localSending); the draft goes back to its tab.
-    if (failed || !stillThisSend() || content.length === 0) {
-      if (stillThisSend()) setLocalSending(false, sendTabId ?? undefined);
-      if (sendTabId) restoreDraft(sendTabId, messageText, currentAttachments);
-      return;
-    }
-    // Terminal chips of THIS message: the same value rides the send and any
-    // reconnect resend of it (it is part of the message, not one-shot state).
-    const sendTerminal = terminalContextOf(currentAttachments);
-
-    const displayText = hasText ? messageText : '[Attachments]';
-    const userMessageContent: ContentBlock[] = [{ type: 'text', text: displayText }];
-    if (hasAttachments && hasText) {
-      userMessageContent.push({ type: 'text', text: `📎 ${currentAttachments.map((a) => a.name).join(', ')}` });
-    }
-
-    // Generate clientId for optimistic message dedup — this ID is sent to
-    // backend and echoed in result event so MessageStore can correlate
-    // optimistic→DB messages during reconcile (eliminates R2/R4 duplication).
-    const clientId = newClientId();
-    const userMessage: Message = { id: clientId, role: 'user', content: userMessageContent, timestamp: new Date().toISOString() };
-    // NOTE: optimistic insertion is deferred — the user message is appended to
-    // the MessageStore (single source of truth) together with the assistant
-    // placeholder below, so the store→React sync effect doesn't clobber a
-    // setMessages-only write on a fresh tab (whose store starts empty).
-    incrementStreamGen(); // Fix 1: new stream generation
-
-    // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
-    // (the tab the send started in, not whatever is active now)
-    const currentActiveTabId = sendTabId;
-    if (currentActiveTabId) {
-      updateTabStatus(currentActiveTabId, 'streaming');
-    }
-
-    // Update tab title on first message (Req 2.4)
-    if (currentActiveTabId) {
-      const activeTab = openTabsRef.current.find(t => t.id === currentActiveTabId);
-      if (activeTab?.isNew && messageText.trim()) {
-        const newTitle = messageText.slice(0, 25) + (messageText.length > 25 ? '...' : '');
-        updateTabTitle(currentActiveTabId, newTitle);
-        setTabIsNew(currentActiveTabId, false);
-      }
-    }
-
-    // Assistant placeholder id shares the turn's clientId with an "-asst" suffix
-    // so MessageStore._applyMerge can correlate it to the persisted DB assistant
-    // row (whose metadata.client_id is `{clientId}-asst`). A numeric id (the old
-    // Date.now()+1) never started with "local-" → never correlated → empty bubble
-    // stayed and the stream never finalized (P4, run_af36e709). The "-asst" suffix
-    // keeps it distinct from the user placeholder (id === clientId) so each row
-    // maps to its own placeholder.
-    const assistantMessageId = `${clientId}-asst`;
-    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-
-    // Tab registration — normally already done at the top of the send path
-    // (before setLocalSending). Kept as a defensive fallback for any path that
-    // reaches here without prior registration. Idempotent: no-op if present.
-    // Also guarantees a MessageStore exists for the append below.
-    if (currentActiveTabId && !tabMapRef.current.has(currentActiveTabId)) {
-      initTabState(currentActiveTabId, messagesRef.current);
-    }
-
-    // SINGLE-WRITER: insert the optimistic user message + assistant placeholder
-    // through the MessageStore — NOT setMessages/tabState directly. initTabState
-    // eagerly creates an (empty) store per tab, and the store→React sync effect
-    // treats the store as authoritative. A setMessages-only write gets clobbered
-    // by the empty snapshot, AND the placeholder never reaches the store — so
-    // updateLast() (keyed by assistantMessageId) silently no-ops every streaming
-    // delta, leaving the WelcomeScreen up and the spinner stuck. Appending to the
-    // store fixes both: the briefing clears and streamed tokens land. The sync
-    // effect propagates store → React state + tabState.messages cache.
-    const sendStore = currentActiveTabId
-      ? messageStoreRegistry.getOrCreate(currentActiveTabId)
-      : null;
-    if (sendStore) {
-      sendStore.appendMany([userMessage, assistantPlaceholder]);
-    } else {
-      // Degenerate fallback (no active tab id) — React state only.
-      setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
-    }
-
-    // Resolve sessionId STRICTLY from this tab's own state (tabMapRef, which the
-    // session_start handler updates synchronously). NEVER fall back to the shared
-    // sessionIdRef — that holds the *active tab's* id and would misroute a NEW
-    // tab's first send into the previously-active tab's session (cross-tab leak,
-    // Principle 4). A tab with no sessionId yet must send undefined → backend
-    // creates a fresh session for it.
-    const resolvedSessionId = currentActiveTabId
-      ? tabMapRef.current.get(currentActiveTabId)?.sessionId
-      : undefined;
-
-    const editorContext = editorContextFor(currentActiveTabId); // sync-read live Canvas state (race fix)
-    const sendRequest: ChatRequest = {
-      agentId: selectedAgentId,
-      ...(hasAttachments ? { content } : { message: messageText }),
-      sessionId: resolvedSessionId,
-      enableSkills,
-      enableMCP,
-      editorContext,
-      ...(sendTerminal && { terminalContext: sendTerminal }),
-      clientId,  // Correlation ID for optimistic message dedup
-    };
-    if (currentActiveTabId) noteSend(currentActiveTabId, sendRequest);
-    const abort = chatService.streamChat(
-      sendRequest,
-      createStreamHandler(assistantMessageId, currentActiveTabId ?? undefined),
-      createErrorHandler(assistantMessageId, currentActiveTabId ?? undefined),
-      createCompleteHandler(currentActiveTabId ?? undefined),
-      createDisconnectHandler(currentActiveTabId ?? undefined),
-      streamLivenessFor(currentActiveTabId),
-    );
-    if (sendTab) sendTab._sendToken = undefined;   // the POST is open: Stop aborts it now
-
-    // Store abort function in the tab map for per-tab stop isolation.
-    // Only the .abort() method is used by handleStop — no signal needed.
-    if (currentActiveTabId) {
-      // Build a retry function for reconnection logic — re-initiates the
-      // same streamChat call with the same request and fresh handlers.
-      const streamRequest = {
-        agentId: selectedAgentId,
-        ...(hasAttachments ? { content } : { message: messageText }),
-        sessionId: resolvedSessionId,
-        enableSkills,
-        enableMCP,
-        // Carry the SAME clientId as the initial send (placeholder is
-        // `${clientId}-asst`) — a reconnect-resend re-persists the assistant row,
-        // and without clientId that row is keyless, so a later reconcile-tail cut
-        // landing on it duplicates the bubble (run_7263ff67, the 5th entrance).
-        clientId,
-        editorContext,
-        ...(sendTerminal ? { terminalContext: sendTerminal } : {}),
-      };
-      const capturedTabIdForRetry = currentActiveTabId;
-      const retryStreamFn = () => {
-        // the same message again: its request is open again (docs/design/chat-turn-liveness.md S3)
-        setLocalSending(true, capturedTabIdForRetry);
-        noteSend(capturedTabIdForRetry, streamRequest);
-        return chatService.streamChat(
-          { ...streamRequest, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? streamRequest.sessionId },
-          // run_26aa6caa (R27 half-migration close): use the CAPTURED retry tab, NOT
-          // wrappedCreateStreamHandler (which reads activeTabIdRef.current). On a
-          // background tab's reconnect/resend the active tab has changed, so the
-          // wrapped form stamped this tab's stream events (incl. the file_changed
-          // tabId) onto the ACTIVE tab → cross-tab bleed. The other 3 handlers here
-          // already use capturedTabIdForRetry; this makes all 4 symmetric.
-          createStreamHandler(assistantMessageId, capturedTabIdForRetry),
-          createErrorHandler(assistantMessageId, capturedTabIdForRetry),
-          createCompleteHandler(capturedTabIdForRetry),
-          createDisconnectHandler(capturedTabIdForRetry),
-          streamLivenessFor(capturedTabIdForRetry),
-        );
-      };
-
-      updateTabState(currentActiveTabId, {
-        abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
-        hasReceivedData: false,
-        isReconnecting: false,
-        reconnectionAttempt: 0,
-        retryStreamFn,
-        // A manual send supersedes any armed auto-resend for this tab: clear the
-        // flag (so a late 'backend-recovered' can't double-send) and reset the
-        // episode attempt counter.
-        _pendingResendOnRecovery: false,
-        _pendingResendAssistantId: undefined,
-        _pendingResendAttempts: 0,
-      });
-    }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, restoreDraft, incrementStreamGen, setLocalSending, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, noteSend, sendWhileBusy, createStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, queryClient, t, editorContextFor]);
+    await sendMessage(turnDepsRef.current!);
+  }, []);
 
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
@@ -2599,146 +2290,9 @@ export default function ChatPage() {
     syncQueuedBadges(tabId);
   }, [tabMapRef, restoreDraft, syncQueuedBadges, t]);
 
-  // Handle answering AskUserQuestion
-  /** The assistant bubble a continuation renders into: the one holding its
-   *  question / prompt, else the tab's last assistant message. */
-  const continuationHostId = (tabId: string | undefined, holds: (m: Message) => boolean): string => {
-    const msgs = (tabId ? messageStoreRegistry.get(tabId)?.messages : undefined) ?? [];
-    const host = [...msgs].reverse().find((m) => m.role === 'assistant' && holds(m))
-      ?? [...msgs].reverse().find((m) => m.role === 'assistant');
-    return host?.id ?? `local-sub-continuation-${Date.now()}`;
-  };
-
-  const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
-    const tabId = activeTabIdRef.current ?? undefined;
-    const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
-    if (!selectedAgentId || !tabSessionId) {
-      return;
-    }
-
-    // Defensive guard: prevent double-submit. The session waits for this answer
-    // (activity waiting_input, the bee stays on); only another request of this
-    // tab, or a turn that is not waiting, blocks it.
-    const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
-    if (tabState && !canContinueTurn(tabState)) {
-      return;
-    }
-
-    // Retire this tab's no-host "Swarm is asking" notice now that it's answered.
-    if (tabId) tabNoticeStore.dismiss(tabId, `ask-uq-${toolUseId}`);
-
-    // Root-1 SSOT Phase 3 (AC5 answer-in-flight guard): record the answered
-    // toolUseId so the reconcile-loop re-surface does NOT re-inject this same
-    // question during the window where the backend mirror may still report
-    // waiting_input for it before transitioning out. Cleared by the reconcile
-    // loop once the backend moves past it (useChatStreamingLifecycle.ts re-surface block).
-    // Also clear the per-tab pendingQuestion REF (not just React state): the ref
-    // is what the reconcile loop reads as currentPendingToolUseId. If only React
-    // state is nulled, a subsequent tab-switch copies the (stale) ref back and the
-    // answered question's id is lost as the idempotency key — leaving _answeredToolUseId
-    // as the sole guard. Clearing the ref makes the answered state survive switches.
-    if (tabState) {
-      tabState._answeredToolUseId = toolUseId;
-      tabState.pendingQuestion = null;
-    }
-
-    // Persist the submitted answers ONTO the ask_user_question block so the
-    // renderer shows a read-only "Answered: …" summary instead of a disabled,
-    // selection-less form. Written on the block (not component state) so it
-    // survives tab-switch + store reconcile. The store write below is the
-    // authority (single render source); the tabState.messages mirror is kept in
-    // sync only so the cold-restore seed (handleSelectTab now seeds an EMPTY
-    // store from tabState.messages on app-restart) carries the answered state.
-    // Post reconcile-gap fix, switch-back no longer clobbers a populated store,
-    // so the mirror is belt-and-suspenders for the restart path, not a guard
-    // against reverse-flow truncation (run_9db9f987).
-    if (tabId) {
-      const writeAnswersOntoBlock = (msg: Message): Message => {
-        let touched = false;
-        const content = msg.content.map((b) => {
-          const blk = b as { type?: string; toolUseId?: string };
-          if (blk.type === 'ask_user_question' && blk.toolUseId === toolUseId) {
-            touched = true;
-            return { ...b, answers } as typeof b;
-          }
-          return b;
-        });
-        return touched ? { ...msg, content } : msg;
-      };
-      const hasBlock = (msg: Message) =>
-        msg.content.some(
-          (b) => (b as { type?: string; toolUseId?: string }).type === 'ask_user_question' &&
-            (b as { toolUseId?: string }).toolUseId === toolUseId,
-        );
-      const store = messageStoreRegistry.get(tabId);
-      if (store) {
-        const matched = store.messages.some(hasBlock);
-        if (!matched && import.meta.env.DEV) {
-          // Silent answer-loss guard: if no block matches the just-submitted
-          // toolUseId, updateLast no-ops → the optimistic "Answered" summary is
-          // skipped AND (since the backend doesn't persist ask_user_question
-          // blocks) reconcile carry-forward also lacks answers → the form
-          // silently reverts. Surface it in dev so a toolUseId drift is visible.
-          console.warn(
-            '[ChatPage] answer submitted but no ask_user_question block matched toolUseId — summary will not render',
-            { toolUseId, tabId },
-          );
-        }
-        store.updateLast(writeAnswersOntoBlock, hasBlock);
-        if (tabState) tabState.messages = store.messages;
-      } else if (tabState) {
-        tabState.messages = tabState.messages.map(writeAnswersOntoBlock);
-      }
-    }
-
-    setPendingQuestion(null);
-    incrementStreamGen(); // Fix 1: new stream generation
-    setLocalSending(true, tabId);
-
-    // Fix 8: Transition tab status from waiting_input → streaming
-    if (tabId) updateTabStatus(tabId, 'streaming');
-
-    // The continuation renders into the bubble that holds the question: the turn
-    // that continues it is the same bubble on reload (one render target).
-    const assistantMessageId = continuationHostId(tabId, (m) => m.content.some(
-      (b) => (b as { type?: string; toolUseId?: string }).type === 'ask_user_question'
-        && (b as { toolUseId?: string }).toolUseId === toolUseId));
-
-    const abort = chatService.streamAnswerQuestion(
-      { agentId: selectedAgentId, sessionId: tabSessionId, toolUseId, answers, enableSkills, enableMCP },
-      wrappedCreateStreamHandler(assistantMessageId),
-      createErrorHandler(assistantMessageId, tabId),
-      createCompleteHandler(tabId),
-      createDisconnectHandler(tabId),
-      streamLivenessFor(tabId),
-    );
-
-    // Store abort function in the tab map for per-tab stop isolation.
-    // Only the .abort() method is used by handleStop — no signal needed.
-    if (tabId) {
-      const capturedTabIdForRetry = tabId;
-      const retryStreamFn = () => {
-        return chatService.streamAnswerQuestion(
-          { agentId: selectedAgentId, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? tabSessionId, toolUseId, answers, enableSkills, enableMCP },
-          // run_26aa6caa (R27 half-migration close): CAPTURED retry tab, not
-          // wrappedCreateStreamHandler (reads activeTabIdRef.current) — see the
-          // streamChat retryStreamFn for the full rationale. All 4 handlers symmetric.
-          createStreamHandler(assistantMessageId, capturedTabIdForRetry),
-          createErrorHandler(assistantMessageId, capturedTabIdForRetry),
-          createCompleteHandler(capturedTabIdForRetry),
-          createDisconnectHandler(capturedTabIdForRetry),
-          streamLivenessFor(capturedTabIdForRetry),
-        );
-      };
-      updateTabState(tabId, {
-        abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
-        hasReceivedData: false,
-        isReconnecting: false,
-        reconnectionAttempt: 0,
-        retryStreamFn,
-      });
-    }
-  };
+  // Handle answering AskUserQuestion (pages/chat/turnControls)
+  const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) =>
+    answerQuestion(turnDepsRef.current!, toolUseId, answers);
 
   // Handle QUEUE_TIMEOUT retry — re-sends the saved message when user clicks Retry.
   // Reads the retryPayload that was stashed in tabState by useChatStreamingLifecycle
@@ -2859,123 +2413,8 @@ export default function ChatPage() {
 
   // Handle inline permission decision — called from InlinePermissionRequest component
   // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
-  const handlePermissionDecision = async (requestId: string, decision: 'approve' | 'deny') => {
-    const tabId = activeTabIdRef.current ?? undefined;
-    const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
-    if (!tabSessionId || !selectedAgentId) return;
-    if (tabId && permissionLoadingTabs.current.has(tabId)) return; // per-tab double-click guard
-    // Defensive guard: prevent double-submit if already streaming.
-    // permissionLoadingTabs guards the API call, but a rapid approve click
-    // could race with a stream that just started. Read tabMapRef directly.
-    const currentTabState = tabId ? tabMapRef.current.get(tabId) : undefined;
-    if (currentTabState && !canContinueTurn(currentTabState)) return;
-
-    if (tabId) permissionLoadingTabs.current.add(tabId);
-    // Decision in flight: the 15s mirror must not re-surface this prompt while
-    // the backend still reports waiting_input on it (core/permission_prompt).
-    if (currentTabState) currentTabState._decidedPermissionId = requestId;
-    setPendingPermissionRequestId(null);
-
-    // Update the content block's decision field so it renders decided state
-    setMessages((prev) => prev.map((msg) => ({
-      ...msg,
-      content: msg.content.map((block) =>
-        block.type === 'cmd_permission_request' && block.requestId === requestId
-          ? { ...block, decision }
-          : block,
-      ),
-    })));
-
-    // Direct tabState write (synchronous — avoids rAF cross-tab race)
-    if (tabId) {
-      const tabState = tabMapRef.current.get(tabId);
-      if (tabState) {
-        tabState.messages = tabState.messages.map((msg) => ({
-          ...msg,
-          content: msg.content.map((block) =>
-            block.type === 'cmd_permission_request' && block.requestId === requestId
-              ? { ...block, decision }
-              : block,
-          ),
-        }));
-        tabState.pendingPermissionRequestId = null;
-      }
-      // Mirror the decided state into the STORE (display source for TabView).
-      const permStore = messageStoreRegistry.get(tabId);
-      if (permStore) {
-        const target = permStore.messages.find((m) =>
-          m.content.some((b) => b.type === 'cmd_permission_request' && b.requestId === requestId));
-        if (target) {
-          permStore.updateById(target.id, (msg) => ({
-            ...msg,
-            content: msg.content.map((block) =>
-              block.type === 'cmd_permission_request' && block.requestId === requestId
-                ? { ...block, decision }
-                : block,
-            ),
-          }));
-        }
-      }
-    }
-
-    // Approve AND deny both stream through /cmd-permission-continue: the backend
-    // signals the decision to the blocked dangerous_command_gate hook, which
-    // returns permissionDecision:allow|deny to the SDK. On DENY the SDK receives
-    // the refusal as the tool_result and the model CONTINUES — acknowledging the
-    // denial and (usually) proposing an alternative — instead of the turn being
-    // hard-killed (the old deny branch called the non-streaming endpoint +
-    // interrupt(), which left the tab at "Denied" with no agent response, an
-    // ambiguous dead-looking stop). The denied command is NOT re-runnable: the
-    // hook only calls approve_command() on approve, so a model retry of the same
-    // command re-triggers a fresh approval prompt (security_hooks.py:649).
-    //
-    // Convergence (not a new deny path): the two decisions share ONE streaming
-    // path — the only difference is the `decision` value threaded at :streamCmd
-    // below. All race/cross-tab guards above (permissionLoadingTabs double-click,
-    // isStreaming re-entry return, incrementStreamGen stale-stream kill,
-    // capturedTabId closure) therefore protect deny identically to approve.
-    incrementStreamGen(); // Fix 1: new stream generation
-    setLocalSending(true, tabId);
-
-    // Fix 8: Transition tab status from permission_needed → streaming
-    if (tabId) updateTabStatus(tabId, 'streaming');
-
-    // The continuation renders into the bubble that holds the prompt (as the
-    // answer does): no placeholder of its own.
-    const assistantMessageId = continuationHostId(tabId, (m) => m.content.some(
-      (b) => (b as { type?: string; requestId?: string }).type === 'cmd_permission_request'
-        && (b as { requestId?: string }).requestId === requestId));
-
-    // Capture tabId for cleanup in async callbacks (closure safety).
-    // Create the stream handler ONCE now (captures tabId at creation time)
-    // instead of calling wrappedCreateStreamHandler on every SSE event
-    // (which would re-read activeTabIdRef.current and get the wrong tab).
-    const capturedTabId = tabId;
-    const streamHandler = createStreamHandler(assistantMessageId, capturedTabId);
-    const abort = chatService.streamCmdPermissionContinue(
-      { sessionId: tabSessionId, requestId, decision, enableSkills, enableMCP },
-      // All events go to the standard stream handler — the backend never
-      // emits 'cmd_permission_acknowledged', so no special-casing needed.
-      streamHandler,
-      (error) => { createErrorHandler(assistantMessageId, capturedTabId)(error); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
-      () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
-      createDisconnectHandler(capturedTabId),
-      streamLivenessFor(capturedTabId),
-    );
-
-    // Store abort function in the tab map for per-tab stop isolation. A decision
-    // is not re-sent by a reconnect (it is not idempotent), and the previous
-    // message's retryStreamFn must not be re-sent in its place.
-    if (tabId) {
-      updateTabState(tabId, {
-        abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
-        hasReceivedData: false,
-        isReconnecting: false,
-        reconnectionAttempt: 0,
-        retryStreamFn: undefined,
-      });
-    }
-  };
+  const handlePermissionDecision = (requestId: string, decision: 'approve' | 'deny') =>
+    decidePermission(turnDepsRef.current!, requestId, decision);
 
   // ── Stable callback identities for memoized MessageBubble ──────────────
   // handleAnswerQuestion and handlePermissionDecision are intentionally NOT
@@ -3004,153 +2443,12 @@ export default function ChatPage() {
   // the same POST /chat/stop. Its receipt is persisted and reaches every tab on
   // the transcript feed (hooks/transcriptFeed), this one too.
   const handleStopBackgroundRef = useRef((_tabId: string) => {});
-  handleStopBackgroundRef.current = (tabId: string) => {
-    const tab = tabMapRef.current.get(tabId);
-    const sid = tab?.sessionId;
-    if (!tab || !sid || tab._stopInFlight) return;
-    tab._stopInFlight = true;
-    chatService.stopSession(sid).catch((err) => {
-      console.warn('[stopBackground] Backend stop failed (best effort):', err);
-    }).finally(() => { tab._stopInFlight = false; });
-  };
+  handleStopBackgroundRef.current = (tabId: string) => stopBackground(turnDepsRef.current!, tabId);
   const stableStopBackground = useCallback((tabId: string) => handleStopBackgroundRef.current(tabId), []);
 
-  // Handle stop — UI feedback is SYNCHRONOUS (no waiting for backend).
-  // Backend stop is fire-and-forget (best effort). This eliminates the
-  // race window where error events from the interrupted stream leak
-  // through before the UI has updated.
-  const handleStop = () => {
-    const currentTabId = activeTabIdRef.current;
-    const tabSessionId = currentTabId ? tabMapRef.current.get(currentTabId)?.sessionId : undefined;
-    if (!tabSessionId) {
-      // the first send is not accepted yet (no session): cancel this tab's request
-      const tab = currentTabId ? tabMapRef.current.get(currentTabId) : undefined;
-      if (tab) {
-        tab._sendToken = undefined;   // a send still reading its attachments stops
-        tab._preparingSend = undefined;
-        tab.userStopped = true;
-        try { tab.abortController?.abort(); } catch { /* already aborted */ }
-        tab.abortController = null;
-      }
-      if (currentTabId) setLocalSending(false, currentTabId);
-      return;
-    }
-
-    // 0. One Stop at a time (design D3): a second click while the first is in flight
-    // aborts nothing again, appends no second marker and sends no second request.
-    const stopTab = currentTabId ? tabMapRef.current.get(currentTabId) : undefined;
-    if (stopTab?._stopInFlight) return;
-    if (stopTab) stopTab._stopInFlight = true;
-    // everything after the test-and-set runs in try/finally: a synchronous throw
-    // before the request goes out must not leave Stop disabled for good
-    let requested = false;
-    try {
-
-      // 1. Mark stopped + abort SSE FIRST (synchronous, before any async work)
-      if (currentTabId) {
-        const tabState = tabMapRef.current.get(currentTabId);
-        if (tabState) {
-          tabState._sendToken = undefined;   // a send still reading its attachments stops
-          tabState._preparingSend = undefined;   // and a busy send still preparing
-          tabState.userStopped = true;
-        }
-        if (tabState?.abortController) {
-          try { tabState.abortController.abort(); } catch { /* already aborted */ }
-          tabState.abortController = null;
-        }
-      }
-
-      // 2. End store streaming — unblocks replace()/reconcile() for this tab.
-      // MUST NOT trigger notification here (endStreaming flushes reconcile thunk
-      // which could async-notify during tab switch → cross-tab leak).
-      // Safe: endStreaming() only notifies if reconcile thunk was pending AND
-      // async fetch completes. The actual notification is async (not immediate).
-      if (currentTabId) {
-        const stopStorePhase = messageStoreRegistry.get(currentTabId);
-        if (stopStorePhase) stopStorePhase.endStreaming();
-      }
-
-      // 3. Update streaming state immediately — don't wait for backend
-      setLocalSending(false, currentTabId ?? undefined);
-      incrementStreamGen();
-      if (currentTabId) updateTabStatus(currentTabId, 'idle');
-
-      // 4. Append "Stopped" indicator to messages (synchronous)
-      setMessages((prev) => {
-        const lastAssistantIndex = prev.reduce(
-          (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
-        );
-        if (lastAssistantIndex >= 0) {
-          const updated = [...prev];
-          const lastMsg = { ...updated[lastAssistantIndex] };
-          lastMsg.content = [
-            ...lastMsg.content,
-            { type: 'text' as const, text: '\n\n---\n*Stopped*' },
-          ];
-          updated[lastAssistantIndex] = lastMsg;
-          return updated;
-        }
-        // Edge case: no assistant message exists — fall back to appending a new one
-        return [...prev, {
-          id: Date.now().toString(),
-          role: 'assistant' as const,
-          content: [{ type: 'text' as const, text: '\n\n---\n*Stopped*' }],
-          timestamp: new Date().toISOString(),
-        }];
-      });
-
-      // 4. Append "Stopped" to tabMapRef (synchronous, no rAF race)
-      // MUST stay as direct tabState.messages write — store.updateById triggers
-      // rAF-deferred subscription notification. During that delay the user can
-      // switch tabs, causing the subscription to push this tab's messages into
-      // the new tab's React state (cross-tab leak, P0 regression 2026-06-18).
-      if (currentTabId) {
-        const tabState = tabMapRef.current.get(currentTabId);
-        if (tabState && tabState.messages && tabState.messages.length > 0) {
-          const lastIdx = tabState.messages.reduce(
-            (acc: number, m: Message, i: number) => m.role === 'assistant' ? i : acc, -1,
-          );
-          if (lastIdx >= 0) {
-            const updated = [...tabState.messages];
-            const lastMsg = { ...updated[lastIdx] };
-            lastMsg.content = [
-              ...lastMsg.content,
-              { type: 'text' as const, text: '\n\n---\n*Stopped*' },
-            ];
-            updated[lastIdx] = lastMsg;
-            tabState.messages = updated;
-          }
-        }
-      }
-
-      // 4b. Mirror the Stopped marker into the per-tab STORE — the display source
-      // for the keep-mounted TabView. Safe now (post keep-mounted): each TabView
-      // subscribes to its OWN store, and the shared-messages bridge re-subscribes
-      // per active tab, so a late rAF notify cannot push this tab's content into
-      // another tab's view (the 2026-06-18 cross-tab leak vector no longer exists).
-      if (currentTabId) {
-        const stopStore = messageStoreRegistry.get(currentTabId);
-        if (stopStore && stopStore.messages.some((m) => m.role === 'assistant')) {
-          stopStore.updateLast(
-            (m) => ({ ...m, content: [...m.content, { type: 'text' as const, text: '\n\n---\n*Stopped*' }] }),
-            (m) => m.role === 'assistant',
-          );
-        }
-      }
-
-      // 5. Backend stop — fire-and-forget (best effort, don't await). The stop
-      // receipt (what was running, how it ended, what the turn changed so far;
-      // core/turn_stop) is persisted and reaches every tab showing the session on
-      // the transcript feed (hooks/transcriptFeed) — this one too, one route.
-      chatService.stopSession(tabSessionId).catch((err) => {
-        console.warn('[handleStop] Backend stop failed (best effort):', err);
-      }).finally(() => { if (stopTab) stopTab._stopInFlight = false; });
-      requested = true;
-    } finally {
-      if (!requested && stopTab) stopTab._stopInFlight = false;
-    }
-
-  };
+  // Handle stop (pages/chat/turnControls stopTurn): synchronous UI feedback, a
+  // fire-and-forget backend stop, one Stop at a time per tab.
+  const handleStop = () => stopTurn(turnDepsRef.current!);
   // An Agents panel's "Stop all" (chat turn spec v6 §3.2) is the Stop button: it stops
   // the active tab's turn, whose message holds the panel.
   const handleStopRef = useRef(handleStop);

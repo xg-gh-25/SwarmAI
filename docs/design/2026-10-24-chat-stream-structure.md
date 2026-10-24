@@ -90,6 +90,15 @@ So v3 builds now what is certain and cheap, and gates the turn record on evidenc
 - Extract a pure content reducer from the hook (`applyContentEvent`: blocks only); the
   effect layer (request state, activity, prompts, notices, caches, reconcile scheduling)
   stays in the hook under its existing harness.
+- Built (2026-10-24): `pages/chat/turnControls.ts` (`sendMessage`, `sendWhileBusy`,
+  `answerQuestion`, `decidePermission`, `stopTurn`, `stopBackground`; deps built per
+  render in ChatPage's `turnDepsRef`); `applyContentEvent` returns `{msg, restarted}`
+  (pure: the handler logs `[stream-restart]`). Behaviour tests:
+  `pages/chat/__tests__/turnControls.test.ts`, `__tests__/applyContentEvent.test.ts`;
+  the keyed-send scan covers turnControls too. Deviation from strict parity: the
+  no-store fallback now uses the same reducer as the store path, so it honours block
+  keys (a repeated start continues its block there too). SkillsPage's Stop stays a
+  source guard (not part of A1).
 
 ### A2. No local-only content in the bubble (R2)
 Full inventory (both reviews):

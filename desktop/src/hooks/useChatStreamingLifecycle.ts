@@ -506,23 +506,7 @@ export function appendTextDelta(
   text: string,
   fresh = false,
 ): Message[] {
-  return currentMessages.map((msg) => {
-    if (msg.id !== assistantMessageId) return msg;
-    const content = [...msg.content];
-    const lastBlock = content[content.length - 1];
-    if (!fresh && lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
-      // Append to existing UNCONFIRMED text block (new reference).
-      // Never append to a confirmed block — that belongs to a prior turn.
-      content[content.length - 1] = {
-        ...lastBlock,
-        text: (lastBlock.text ?? '') + text,
-      };
-    } else {
-      // First text token or last block is confirmed/non-text — create new provisional block
-      content.push({ type: 'text', text } as ContentBlock);
-    }
-    return { ...msg, content };
-  });
+  return applyToMessage(currentMessages, assistantMessageId, (m) => applyTextDelta(m, text, fresh));
 }
 
 /**
@@ -538,23 +522,7 @@ export function appendThinkingDelta(
   thinking: string,
   fresh = false,
 ): Message[] {
-  return currentMessages.map((msg) => {
-    if (msg.id !== assistantMessageId) return msg;
-    const content = [...msg.content];
-    const lastBlock = content[content.length - 1];
-    if (!fresh && lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
-      // Append to existing UNCONFIRMED thinking block (new reference).
-      // Never append to a confirmed block — that belongs to a prior turn.
-      content[content.length - 1] = {
-        ...lastBlock,
-        thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
-      } as ContentBlock;
-    } else {
-      // First thinking token or last block is confirmed — create new provisional block
-      content.push({ type: 'thinking', thinking } as ContentBlock);
-    }
-    return { ...msg, content };
-  });
+  return applyToMessage(currentMessages, assistantMessageId, (m) => applyThinkingDelta(m, thinking, fresh));
 }
 
 // ---------------------------------------------------------------------------
@@ -653,6 +621,60 @@ export function applySubAgentProgress(msg: Message, event: StreamEvent): Message
     ...(event.summary ? { summary: event.summary } : {}),
   };
   return { ...msg, subAgentProgress: { ...msg.subAgentProgress, [parent]: next } };
+}
+
+/** Per-event inputs of ``applyContentEvent`` that live in the handler, not the event. */
+export interface ContentEventCtx {
+  /** a text_start / thinking_start came: this delta may open a new block */
+  fresh?: boolean;
+  /** index where this turn's blocks begin in a continued bubble (updateMessages) */
+  turnStart?: number;
+}
+
+/** What ``applyContentEvent`` did: the new message, and whether a fresh start
+ *  continued the block the last provisional block streams (A0 `[stream-restart]`
+ *  evidence, which the handler logs). */
+export interface ContentEventResult {
+  msg: Message;
+  restarted: boolean;
+}
+
+/**
+ * The content reducer (design 2026-10-24-chat-stream-structure.md A1): one stream
+ * event applied to the assistant message it renders into, blocks only. Request
+ * state, activity, prompts, notices, caches and reconcile scheduling stay in the
+ * handler. Events that carry no content return ``msg`` unchanged. Hot path (one
+ * call per token): no allocation beyond the updater's own.
+ */
+export function applyContentEvent(msg: Message, event: StreamEvent, ctx: ContentEventCtx = {}): ContentEventResult {
+  let restarted = false;
+  const mark = () => { restarted = true; };
+  let next = msg;
+  switch (event.type) {
+    case 'text_delta':
+      if (event.text) next = applyTextDelta(msg, event.text, !!ctx.fresh, event.block, mark);
+      break;
+    case 'thinking_delta':
+      if (event.thinking) next = applyThinkingDelta(msg, event.thinking, !!ctx.fresh, event.block, mark);
+      break;
+    case 'tool_result':
+      if (event.content) next = updateMessages([msg], msg.id, event.content, undefined, ctx.turnStart)[0];
+      break;
+    case 'assistant':
+      if (event.content) next = updateMessages([msg], msg.id, event.content, event.model, ctx.turnStart)[0];
+      break;
+    case 'subagent_progress':
+      next = applySubAgentProgress(msg, event);
+      break;
+    default:
+      break;
+  }
+  return { msg: next, restarted };
+}
+
+/** Apply ``fn`` to the message ``id`` of a plain list (no store yet). */
+function applyToMessage(list: Message[], id: string, fn: (m: Message) => Message): Message[] {
+  return list.map((m) => (m.id === id ? fn(m) : m));
 }
 
 // ---------------------------------------------------------------------------
@@ -3092,20 +3114,17 @@ export function useChatStreamingLifecycle(
           freshText = false;
           // Write to store — subscription handles React sync + tabState cache
           const textStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          const textApply = (msg: Message) => {
+            const r = applyContentEvent(msg, event, { fresh: textFresh });
+            if (r.restarted) logStreamRestart(event.block!, 'text', event);
+            return r.msg;
+          };
           if (textStore) {
-            textStore.updateLast(
-              (msg) => applyTextDelta(msg, event.text!, textFresh, event.block,
-                textFresh ? () => logStreamRestart(event.block!, 'text', event) : undefined),
-              (msg) => msg.id === assistantMessageId,
-            );
+            textStore.updateLast(textApply, (msg) => msg.id === assistantMessageId);
           } else {
             // Fallback for initial tab before store exists (capturedTabId===null)
-            if (tabState) {
-              tabState.messages = appendTextDelta(tabState.messages, assistantMessageId, event.text, textFresh);
-            }
-            if (isActiveTab) {
-              setMessages((prev) => appendTextDelta(prev, assistantMessageId, event.text!, textFresh));
-            }
+            if (tabState) tabState.messages = applyToMessage(tabState.messages, assistantMessageId, textApply);
+            if (isActiveTab) setMessages((prev) => applyToMessage(prev, assistantMessageId, textApply));
           }
         } else if (event.type === 'thinking_delta' && event.thinking) {
           // --- Streaming thinking delta: append thinking token incrementally ---
@@ -3117,19 +3136,16 @@ export function useChatStreamingLifecycle(
           const thinkFresh = freshThinking;
           freshThinking = false;
           const thinkStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          const thinkApply = (msg: Message) => {
+            const r = applyContentEvent(msg, event, { fresh: thinkFresh });
+            if (r.restarted) logStreamRestart(event.block!, 'thinking', event);
+            return r.msg;
+          };
           if (thinkStore) {
-            thinkStore.updateLast(
-              (msg) => applyThinkingDelta(msg, event.thinking!, thinkFresh, event.block,
-                thinkFresh ? () => logStreamRestart(event.block!, 'thinking', event) : undefined),
-              (msg) => msg.id === assistantMessageId,
-            );
+            thinkStore.updateLast(thinkApply, (msg) => msg.id === assistantMessageId);
           } else {
-            if (tabState) {
-              tabState.messages = appendThinkingDelta(tabState.messages, assistantMessageId, event.thinking, thinkFresh);
-            }
-            if (isActiveTab) {
-              setMessages((prev) => appendThinkingDelta(prev, assistantMessageId, event.thinking!, thinkFresh));
-            }
+            if (tabState) tabState.messages = applyToMessage(tabState.messages, assistantMessageId, thinkApply);
+            if (isActiveTab) setMessages((prev) => applyToMessage(prev, assistantMessageId, thinkApply));
           }
         } else if (event.type === 'tool_result' && event.content) {
           // Live tool results (persisted only in compact form — status + outcome).
@@ -3139,13 +3155,8 @@ export function useChatStreamingLifecycle(
           // parentToolUseId and lands on its nested step.
           const resStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (resStore) {
-            resStore.updateLast(
-              (msg) => {
-                const next = updateMessages([msg], assistantMessageId, event.content!, undefined, turnStartOf())[0];
-                return next;
-              },
-              (msg) => msg.id === assistantMessageId,
-            );
+            resStore.updateLast((msg) => applyContentEvent(msg, event, { turnStart: turnStartOf() }).msg,
+              (msg) => msg.id === assistantMessageId);
           }
         } else if (event.type === 'subagent_progress') {
           // A sub-agent's lifecycle / progress (SDK Task* messages): the main
@@ -3153,10 +3164,7 @@ export function useChatStreamingLifecycle(
           // and tells the user what runs and how far it got. Ephemeral side field.
           const saStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (saStore) {
-            saStore.updateLast(
-              (msg) => applySubAgentProgress(msg, event),
-              (msg) => msg.id === assistantMessageId,
-            );
+            saStore.updateLast((msg) => applyContentEvent(msg, event).msg, (msg) => msg.id === assistantMessageId);
           }
         } else if (event.type === 'text_start') {
           freshText = true;
@@ -3178,26 +3186,14 @@ export function useChatStreamingLifecycle(
           }
 
           const assistStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          // The confirmed blocks (updateMessages' dedup / confirm logic, via the reducer)
+          const assistApply = (msg: Message) => applyContentEvent(msg, event, { turnStart: turnStartOf() }).msg;
           if (assistStore) {
-            // Use updateMessages on the single matching message — reuses the
-            // complex dedup/confirm logic without rewriting it.
-            assistStore.updateLast(
-              (msg) => {
-                const next = updateMessages([msg], assistantMessageId, event.content!, event.model, turnStartOf())[0];
-                // The backend never sends a top-level `tool_use` event: a tool
-                // call arrives inside `assistant`, so the stall threshold is set here.
-                return next;
-              },
-              (msg) => msg.id === assistantMessageId,
-            );
+            assistStore.updateLast(assistApply, (msg) => msg.id === assistantMessageId);
           } else {
             // Fallback: initial tab before store exists
-            if (tabState) {
-              tabState.messages = updateMessages(tabState.messages, assistantMessageId, event.content, event.model, turnStartOf());
-            }
-            if (isActiveTab) {
-              setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model, turnStartOf()));
-            }
+            if (tabState) tabState.messages = applyToMessage(tabState.messages, assistantMessageId, assistApply);
+            if (isActiveTab) setMessages((prev) => applyToMessage(prev, assistantMessageId, assistApply));
           }
         } else if (event.type === 'ask_user_question' && !(event.questions && event.toolUseId)) {
           // Root 3 / 3A #4: a malformed ask_user_question (missing questions or

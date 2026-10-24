@@ -212,55 +212,15 @@ describe('the server queue is the tab queue', () => {
   });
 });
 
-describe('ChatPage busy send (source guard: ChatPage has no harness driving its sends)', () => {
+describe('ChatPage queue (send / stop behaviour: pages/chat/__tests__/turnControls.test.ts)', () => {
   const src = readFileSync(join(__dirname, '..', 'pages', 'ChatPage.tsx'), 'utf8');
   const fnBody = (name: string) => {
     const i = src.indexOf(`const ${name} = useCallback(`);
     return src.slice(i, src.indexOf('\n  }, [', i));
   };
 
-  it('a send while busy goes to the server, not to a frontend queue', () => {
+  it('no frontend queue', () => {
     expect(src).not.toMatch(/queuedMessage|drainQueuedMessage|onDrainQueue/);
-    const send = fnBody('handleSendMessage');
-    expect(send).toMatch(/shouldQueueSend\(activeTabForGuard\)\) \{\s*void sendWhileBusy\(/);
-  });
-
-  it('the busy send never takes over the tab\'s stream handlers', () => {
-    const busy = fnBody('sendWhileBusy');
-    expect(busy).toMatch(/chatService\.streamChat\(/);
-    expect(busy).not.toMatch(/incrementStreamGen|createStreamHandler|setLocalSending/);
-  });
-
-  it('a busy send that does not happen gives the draft back to its own tab', () => {
-    const busy = fnBody('sendWhileBusy');
-    const clear = busy.indexOf("setInputValue('')");
-    const build = busy.indexOf('await buildContentArray(');
-    expect(clear, 'the draft is taken while this tab is active').toBeGreaterThan(0);
-    expect(clear).toBeLessThan(build);
-    const after = busy.slice(build);
-    expect(after).toMatch(/if \(failed \|\| !stillMine \|\| tabMapRef\.current\.get\(tabId\) !== tab \|\| tab\.sessionId !== sid \|\| content\.length === 0\) \{\s*restoreDraft\(tabId, text, attachments\);/);
-    expect(after).toMatch(/const stillMine = tab\._preparingSend === prep;/);
-    expect(after).not.toMatch(/setInputValue\(|clearAttachments\(/);   // never the active composer after the await
-    expect(after.indexOf('rebindQueue(tabId)'), 'the queue is rebound before a local entry').toBeLessThan(after.indexOf('_queuedLocal.set('));
-  });
-
-  it('the normal send takes the draft before the await and gives it back when it does not send', () => {
-    const send = fnBody('handleSendMessage');
-    const build = send.indexOf('content = await buildContentArray(messageText');
-    const before = send.slice(send.indexOf('const sendTabId = activeTabIdRef.current;'), build);
-    expect(before).toMatch(/setInputValue\(''\);\s*clearAttachments\(\);/);
-    const after = send.slice(build);
-    expect(after).toMatch(/if \(failed \|\| !stillThisSend\(\) \|\| content\.length === 0\) \{[\s\S]{0,160}restoreDraft\(sendTabId, messageText, currentAttachments\);/);
-    expect(after).not.toMatch(/setInputValue\(''\)|clearAttachments\(\)/);
-  });
-
-  it('a second Send while a send reads its attachments does nothing; only the owner clears the mark', () => {
-    const send = fnBody('handleSendMessage');
-    const guard = send.indexOf('if (activeTabForGuard?._preparingSend) return;');
-    expect(guard).toBeGreaterThan(0);
-    expect(guard, 'before the busy path').toBeLessThan(send.indexOf('shouldQueueSend(activeTabForGuard)'));
-    expect(send).toMatch(/finally \{\s*if \(sendTab && sendTab\._preparingSend === prep\) sendTab\._preparingSend = undefined;/);
-    expect(fnBody('sendWhileBusy')).toMatch(/const stillMine = tab\._preparingSend === prep;\s*if \(stillMine\) tab\._preparingSend = undefined;/);
   });
 
   it('draftToRestore never overwrites what was typed or attached since', () => {
@@ -284,18 +244,5 @@ describe('ChatPage busy send (source guard: ChatPage has no harness driving its 
     expect(cancel).toMatch(/chatService\.cancelPending\(/);
     expect(cancel).toMatch(/restoreDraft\(tabId, text, \[\]\)/);
     expect(cancel).not.toMatch(/activeTabIdRef\.current|setInputValue\(/);
-  });
-
-  it('Stop ends a send still preparing, on both paths (busy and normal)', () => {
-    const i = src.indexOf('const handleStop = () => {');
-    const stop = src.slice(i, src.indexOf('\n  };', i));
-    expect(stop.match(/\._preparingSend = undefined;/g)?.length).toBe(2);
-    expect(stop.match(/\._sendToken = undefined;/g)?.length).toBe(2);
-  });
-
-  it('the normal send is also bound to the session it started in', () => {
-    const send = fnBody('handleSendMessage');
-    expect(send).toMatch(/const sendSid = sendTab\?\.sessionId;/);
-    expect(send).toMatch(/t0\._sendToken === sendToken && t0\.sessionId === sendSid/);
   });
 });

@@ -17,7 +17,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const src = readFileSync(resolve(here, '../ChatPage.tsx'), 'utf-8');
+// ChatPage and its send controllers (pages/chat/turnControls; their behaviour is
+// tested in pages/chat/__tests__/turnControls.test.ts)
+const src = readFileSync(resolve(here, '../ChatPage.tsx'), 'utf-8')
+  + readFileSync(resolve(here, '../chat/turnControls.ts'), 'utf-8');
 
 describe('ChatPage terminal output rides its own message', () => {
   it('no page-level terminal-output holder (the leaking one-shot ref)', () => {

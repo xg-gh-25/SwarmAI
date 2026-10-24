@@ -39,11 +39,13 @@ describe('one client_id per message', () => {
   });
 
   it('ChatPage sends only the message\'s own client_id', () => {
-    const s = readFileSync(join(SRC, 'pages/ChatPage.tsx'), 'utf8');
+    // ChatPage and its send controllers (pages/chat/turnControls)
+    const s = readFileSync(join(SRC, 'pages/ChatPage.tsx'), 'utf8')
+      + readFileSync(join(SRC, 'pages/chat/turnControls.ts'), 'utf8');
     const assigned = [...s.matchAll(/const clientId = ([^;]+);/g)].map((m) => m[1].trim());
     expect(assigned.sort()).toEqual([
-      'newClientId()',                          // a new message
-      'newClientId()',                          // a message sent while busy (the server queues it)
+      'd.newClientId()',                        // a new message (turnControls, deps-injected newClientId)
+      'd.newClientId()',                        // a message sent while busy (the server queues it)
       'retry.clientId ?? newClientId()',        // a handed-back send, re-sent
     ].sort());
   });

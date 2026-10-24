@@ -194,3 +194,27 @@ describe('[live-diverged] evidence log', () => {
     store.destroy();
   });
 });
+
+describe('no-store fallback (A1: the same reducer as the store path)', () => {
+  it('a repeated start of the same block continues it in the tab cache too, and is logged', () => {
+    resetTestState();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hook = renderHook(() => useChatStreamingLifecycle(createMockDeps())).result;
+    act(() => { initTestTab('nf'); });
+    messageStoreRegistry.clear();   // no store: the handler writes the tab's cache
+    const tab = testTabMap.get('nf')!;
+    tab.messages = [makeMessage({ id: 'nf-asst', role: 'assistant' })];
+    const h = hook.current.createStreamHandler('nf-asst', 'nf');
+    act(() => {
+      h({ type: 'text_start', block: 'r.1:0' } as StreamEvent);
+      h({ type: 'text_delta', block: 'r.1:0', text: 'head ' } as StreamEvent);
+      h({ type: 'text_start', block: 'r.1:0' } as StreamEvent);
+      h({ type: 'text_delta', block: 'r.1:0', text: 'tail' } as StreamEvent);
+    });
+    const blocks = tab.messages.find((m) => m.id === 'nf-asst')!.content;
+    expect(blocks).toHaveLength(1);
+    expect((blocks[0] as { text: string }).text).toBe('head tail');
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('[stream-restart]'))).toHaveLength(1);
+    warn.mockRestore();
+  });
+});

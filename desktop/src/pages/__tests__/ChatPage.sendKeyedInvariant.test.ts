@@ -28,6 +28,8 @@ import { dirname, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHATPAGE = resolve(__dirname, '../ChatPage.tsx');
+// the send, its reconnect resend and the busy send (design 2026-10-24-chat-stream-structure.md A1)
+const TURN_CONTROLS = resolve(__dirname, '../chat/turnControls.ts');
 
 /**
  * For each `chatService.streamChat(` call, capture the request-object argument
@@ -36,7 +38,7 @@ const CHATPAGE = resolve(__dirname, '../ChatPage.tsx');
  * object that itself carries it (`...streamRequest`, where streamRequest is built
  * with clientId in the same function).
  */
-function streamChatRequestsCarryClientId(src: string): { line: number; ok: boolean }[] {
+function streamChatRequestsCarryClientId(src: string, topLevel = /^ {2}(?:const|function|let)\s+\w+|^ {2}\w+(?:Ref)?\.current\s*=/): { line: number; ok: boolean }[] {
   const lines = src.split('\n');
   // The function a line is in: a line opening a function at ChatPage's top level
   // (two-space indent: `  const name = useCallback(` / `  const name = (` /
@@ -45,7 +47,7 @@ function streamChatRequestsCarryClientId(src: string): { line: number; ok: boole
   const scopeOf: number[] = [];
   let scope = 0;
   for (let i = 0; i < lines.length; i++) {
-    if (/^ {2}(?:const|function|let)\s+\w+|^ {2}\w+(?:Ref)?\.current\s*=/.test(lines[i])) scope = i;
+    if (topLevel.test(lines[i])) scope = i;
     scopeOf.push(scope);
   }
   // Names of request-objects built WITH a clientId (so a spread of them is keyed),
@@ -62,17 +64,19 @@ function streamChatRequestsCarryClientId(src: string): { line: number; ok: boole
         block += lines[j] + '\n';
         if (/^\s*\}\)?;?\s*$/.test(lines[j])) break;
       }
-      if (/\bclientId\b/.test(block)) keyedSpreadSources.add(`${scopeOf[i]}:${m[1]}`);
+      const spreadOf = /^\s*const\s+\w+(?:\s*:\s*\w+)?\s*=\s*\{\s*\.\.\.(\w+)\s*\};/.exec(lines[i]);
+      if (/\bclientId\b/.test(block) && !spreadOf) keyedSpreadSources.add(`${scopeOf[i]}:${m[1]}`);
+      else if (spreadOf && keyedSpreadSources.has(`${scopeOf[i]}:${spreadOf[1]}`)) keyedSpreadSources.add(`${scopeOf[i]}:${m[1]}`);
     }
   }
 
   const results: { line: number; ok: boolean }[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!/chatService\.streamChat\(/.test(lines[i])) continue;
+    if (!/(?:chatService|\bd\.chat)\.streamChat\(/.test(lines[i])) continue;
     let block = '';
     for (let j = i + 1; j < Math.min(i + 18, lines.length); j++) {
       block += lines[j] + '\n';
-      if (/createStreamHandler|wrappedCreateStreamHandler/.test(lines[j])) break;
+      if (/createStreamHandler|wrappedCreateStreamHandler|d\.stream\.handler|^\s*\(ev\)\s*=>/.test(lines[j])) break;
     }
     const direct = /\bclientId\b/.test(block);
     const here = `${scopeOf[i]}:`;
@@ -113,8 +117,12 @@ describe('ChatPage — every streamChat send is keyed (run_7263ff67)', () => {
   it('no chatService.streamChat request builder omits clientId', () => {
     const src = readFileSync(CHATPAGE, 'utf8');
     const calls = streamChatRequestsCarryClientId(src);
-    // sanity: we actually found the send sites (main + main-retry + drain + retry-timeout)
-    expect(calls.length).toBeGreaterThanOrEqual(4);
+    // sanity: the send sites left in ChatPage (Not-sent retry, QUEUE_TIMEOUT retry)
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    // ... and the send, its reconnect resend and the busy send in turnControls
+    const moved = streamChatRequestsCarryClientId(readFileSync(TURN_CONTROLS, 'utf8'), /^(?:export\s+)?(?:async\s+)?function\s+\w+/);
+    expect(moved.length).toBeGreaterThanOrEqual(3);
+    expect(moved.filter((c) => !c.ok).map((c) => `turnControls.ts:${c.line}`)).toEqual([]);
     const keyless = calls.filter((c) => !c.ok).map((c) => c.line);
     expect(
       keyless,
