@@ -1,6 +1,6 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v8 · Run cards</title>
-<!-- Mockup for docs/design/pipeline-run-conductor-v1.md §10 and docs/design/pipeline-human-loop-v2.md.
+<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v9 · local · Run cards</title>
+<!-- Mockup for docs/design/pipeline-run-conductor-v1.md §9 and docs/design/pipeline-human-loop-v2.md.
      Theme variables fall back to a light palette outside the dashboard. -->
 </head><body style="margin:0">
 <style>
@@ -34,13 +34,13 @@ input,textarea,select{font:12px inherit;padding:4px 8px;border-radius:6px;border
 <div class="w">
 <div class="row" style="justify-content:space-between;margin-bottom:8px">
  <div class="row"><span class="b" style="font-size:16px">Pipelines</span><span class="pill dan" id="badge"></span></div>
- <div class="row"><input placeholder="Search titles" style="width:160px"><select><option>All projects</option><option>SwarmAI</option><option>oss-lib</option><option>IVTHub</option></select><select><option>All executors</option><option>Local Worker</option><option>hive-ec2-1</option><option>gawan-cdd</option></select></div>
+ <div class="row"><input placeholder="Search titles" style="width:160px"><select><option>All projects</option><option>SwarmAI</option><option>oss-lib</option><option>IVTHub</option></select><select><option>All placements</option><option>Chat tab</option><option>Local Worker</option></select></div>
 </div>
-<div class="card" style="padding:6px 12px;margin-bottom:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;font-size:12px">
- <div><b>Chat tabs</b> <span class="mut">· 2 inline</span></div><div><b>Local Worker</b> <span class="mut">· 1/1 · 2 queued</span></div><div><b>hive-ec2-1</b> <span class="mut">· 3/3 · 1 queued</span></div><div><b>gawan-cdd</b> <span class="mut">· 1/1 · 1 parked</span></div>
+<div class="card" style="padding:6px 12px;margin-bottom:8px;display:grid;grid-template-columns:repeat(2,1fr);gap:10px;font-size:12px">
+ <div><b>Chat tabs</b> <span class="mut">· 4 inline Runs (one per tab)</span></div><div><b>Local Worker</b> <span class="mut">· 1/1 running · 6 queued · 3 parked (slot free)</span></div>
 </div>
 <div class="card">
- <div class="row" style="padding:0 6px;border-bottom:1px solid var(--border,#e2e2de)"><div class="tab on">Runs</div><div class="tab">Activity</div><div class="tab">Schedules</div><div class="tab">History</div><div class="tab">Hives</div><span class="mut sm" style="margin-left:auto;padding-right:8px">J / K: next · previous waiting Run</span></div>
+ <div class="row" style="padding:0 6px;border-bottom:1px solid var(--border,#e2e2de)"><div class="tab on">Runs</div><div class="tab">Activity</div><div class="tab">Schedules</div><div class="tab">History</div><span class="mut sm" style="margin-left:auto;padding-right:8px">J / K: next · previous waiting Run</span></div>
  <div class="wrap" id="wrap">
   <div class="board" id="board"></div>
   <div class="rv" id="rv">
@@ -62,27 +62,27 @@ input,textarea,select{font:12px inherit;padding:4px 8px;border-radius:6px;border
 const $=s=>document.querySelector(s);
 const ST=['EVAL','THINK','PLAN','DESIGN','BUILD','REVIEW','TEST','DELIVER','REFLECT'];
 let runs=[
- {id:'7c21',t:'Remove legacy /api/jobs route',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:3,col:'need',age:'waiting 2h 10m',kind:'q',ask:'Round 2/3 · Slack adapter 一起改会多 2 个文件，需要完整 review，可以吗？',opts:['A 一起 review','B 另开 Run'],why:'改 adapter 超出 direct 小改动范围，无法从证据判断你是否接受完整 review',cons:['多 2 个文件，走完整 review，约 +30m','只删路由；adapter 留给新 Run，期间 Slack 仍走旧路由'],req:'把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理',un:1,
+ {id:'7c21',t:'Remove legacy /api/jobs route',p:'SwarmAI',pf:'bugfix',x:'Local Worker',s:3,col:'need',age:'parked · waiting 2h 10m',kind:'q',ask:'Round 2/3 · Slack adapter 一起改会多 2 个文件，需要完整 review，可以吗？',opts:['A 一起 review','B 另开 Run'],why:'改 adapter 超出 direct 小改动范围，无法从证据判断你是否接受完整 review',cons:['多 2 个文件，走完整 review，约 +30m','只删路由；adapter 留给新 Run，期间 Slack 仍走旧路由'],req:'把老的 /api/jobs 路由删掉，Slack 那边还在用的话先看看怎么处理',un:1,
   th:[['01:31','<b>Run</b> · 老路由保留一个版本，还是现在就删？A 保留一个版本 · B 现在删'],['01:38','<b>You</b> (Slack) · A。但 Slack adapter 这次一起改掉。'],['01:41','<b>Run</b> · 已采纳：范围变大（+2 个文件），需要你确认'],['01:42','<b>Run</b> · 第 2 轮：需要完整 review，可以吗？']]},
- {id:'51ae',t:'Fix duplicate job submit returning 500',p:'SwarmAI',pf:'direct',x:'Local Worker',s:7,col:'need',age:'waiting 9m',kind:'ap',ask:'Ready to land 3 files (+48 −12) · review PASS · 6/6 tests',req:'重复提交同一个 job 时后端返回 500，应该是幂等的',un:0,
+ {id:'51ae',t:'Fix duplicate job submit returning 500',p:'SwarmAI',pf:'direct',x:'Local Worker',s:7,col:'need',age:'parked · waiting 9m',kind:'ap',ask:'Ready to land 3 files (+48 −12) · review PASS · 6/6 tests',req:'重复提交同一个 job 时后端返回 500，应该是幂等的',un:0,
   th:[['01:20','<b>Run</b> · started'],['01:40','<b>Run</b> · REVIEW passed · 6/6 tests'],['01:41','<b>Run</b> · 请求批准合入 3 个文件']]},
  {id:'e310',t:'Canvas: list files changed in this session',p:'SwarmAI',pf:'full',x:'Chat tab',s:1,col:'need',age:'waiting 6m',kind:'q',ask:'Round 1/3 · "最近文件"按编辑时间还是按最近打开？',opts:['A 编辑时间','B 最近打开'],why:'需求里"最近"有两种合理解释，代码里两种数据都有',cons:['用文件 mtime，包含非 agent 的改动','需要新记录"打开"事件，多一张表'],req:'Canvas 里显示最近的文件',un:0,th:[['01:58','<b>Run</b> · "最近文件"按编辑时间还是按最近打开？']]},
- {id:'b902',t:'Spec lint false positive on optional fields',p:'IVTHub',pf:'bugfix',x:'gawan-cdd',s:3,col:'need',age:'waiting 31m',kind:'q',ask:'Round 1/3 · optional 字段缺省时要不要跳过 enum 校验？',opts:['A 跳过','B 仍校验，给 warning'],why:'spec 里没有写 optional 字段缺省时的规则',cons:['误报消失，但真错的 enum 也不报','保留提示，CI 不失败'],req:'spec lint 对 optional 字段误报',un:0,th:[['01:35','<b>Run</b> · optional 字段缺省时要不要跳过 enum 校验？']]},
- {id:'c11f',t:'Slack: keep thread_ts on message edit',p:'SwarmAI',pf:'bugfix',x:'hive-ec2-1',s:7,col:'need',age:'waiting 2m',kind:'ap',ask:'Ready to land 2 files (+19 −4) · review PASS · 4/4 tests',req:'Slack 编辑消息后 thread_ts 丢了，回复跑到频道里',un:0,th:[['02:01','<b>Run</b> · 请求批准合入 2 个文件']]},
+ {id:'b902',t:'Spec lint false positive on optional fields',p:'IVTHub',pf:'bugfix',x:'Local Worker',s:3,col:'need',age:'parked · waiting 31m',kind:'q',ask:'Round 1/3 · optional 字段缺省时要不要跳过 enum 校验？',opts:['A 跳过','B 仍校验，给 warning'],why:'spec 里没有写 optional 字段缺省时的规则',cons:['误报消失，但真错的 enum 也不报','保留提示，CI 不失败'],req:'spec lint 对 optional 字段误报',un:0,th:[['01:35','<b>Run</b> · optional 字段缺省时要不要跳过 enum 校验？']]},
+ {id:'c11f',t:'Slack: keep thread_ts on message edit',p:'SwarmAI',pf:'bugfix',x:'Chat tab',s:7,col:'need',age:'waiting 2m',kind:'ap',ask:'Ready to land 2 files (+19 −4) · review PASS · 4/4 tests',req:'Slack 编辑消息后 thread_ts 丢了，回复跑到频道里',un:0,th:[['02:01','<b>Run</b> · 请求批准合入 2 个文件']]},
  {id:'93fe',t:'Conductor V1 Phase 1 skeleton',p:'SwarmAI',pf:'full',x:'Chat tab',s:4,col:'run',age:'18m',un:0},
- {id:'aa04',t:'Stabilise flaky retry test',p:'oss-lib',pf:'full',x:'hive-ec2-1',s:6,col:'run',age:'1h 02m',un:1},
- {id:'d551',t:'Nightly dependency bump · Oct 24',p:'SwarmAI',pf:'direct',x:'hive-ec2-1',s:0,col:'run',age:'1m',un:0},
- {id:'f203',t:'Workspace overlay: per-folder change count',p:'SwarmAI',pf:'direct',x:'Local Worker',s:4,col:'run',age:'12m',un:0},
+ {id:'aa04',t:'Stabilise flaky retry test',p:'oss-lib',pf:'full',x:'Local Worker',col:'wait',age:'queued #5',un:1},
+ {id:'d551',t:'Nightly dependency bump · Oct 24',p:'SwarmAI',pf:'direct',x:'Local Worker',s:0,col:'run',age:'1m',un:0},
+ {id:'f203',t:'Workspace overlay: per-folder change count',p:'SwarmAI',pf:'direct',x:'Local Worker',col:'wait',age:'queued #4',un:0},
  {id:'0aa1',t:'Brain Hub: read last landing, not git',p:'SwarmAI',pf:'bugfix',x:'Chat tab',s:5,col:'run',age:'25m',un:0},
- {id:'5e7d',t:'oss-lib: drop Python 3.8 from CI matrix',p:'oss-lib',pf:'direct',x:'hive-ec2-1',s:2,col:'run',age:'6m',un:0},
+ {id:'5e7d',t:'oss-lib: drop Python 3.8 from CI matrix',p:'oss-lib',pf:'direct',x:'Local Worker',col:'wait',age:'queued #6',un:0},
  {id:'q01',t:'Pipeline audit card: show UNKNOWN reasons',p:'SwarmAI',pf:'direct',x:'Local Worker',col:'wait',age:'queued #1',un:0},
- {id:'q02',t:'Hive: report slots from measured memory',p:'SwarmAI',pf:'bugfix',x:'Local Worker',col:'wait',age:'queued #2',un:0},
- {id:'q03',t:'oss-lib: retry jitter configurable',p:'oss-lib',pf:'full',x:'hive-ec2-1',col:'wait',age:'queued #1',un:0},
- {id:'q04',t:'IVTHub: rename spec v2 fields',p:'IVTHub',pf:'bugfix',x:'gawan-cdd',col:'wait',age:'parked · answered, resuming',un:0},
+ {id:'q02',t:'Conductor: show queue wait per request',p:'SwarmAI',pf:'bugfix',x:'Local Worker',col:'wait',age:'queued #2',un:0},
+ {id:'q03',t:'oss-lib: retry jitter configurable',p:'oss-lib',pf:'full',x:'Local Worker',col:'wait',age:'queued #3',un:0},
+ {id:'q04',t:'IVTHub: rename spec v2 fields',p:'IVTHub',pf:'bugfix',x:'Local Worker',col:'wait',age:'answered · resuming next (ahead of queue)',un:0},
  {id:'z1',t:'Fix chat tab rev skipping a turn row',p:'SwarmAI',pf:'bugfix',x:'Local Worker',col:'done',age:'landed 40m ago',aud:'Iso ✓ · Qual ✓ · Auto ✓ · 22m · 410k',un:0},
- {id:'z2',t:'Slack thread replies dedupe',p:'SwarmAI',pf:'direct',x:'hive-ec2-1',col:'done',age:'landed 2h ago',aud:'Iso ✓ · Qual ✓ · Auto ✗ 1 correction · 31m · 520k',un:0},
- {id:'z3',t:'oss-lib: typed config loader',p:'oss-lib',pf:'full',x:'hive-ec2-1',col:'done',age:'failed 3h ago',aud:'Qual ✗ tests red after 2 fix rounds',un:0,fail:1},
- {id:'z4',t:'Nightly dependency bump · Oct 23',p:'SwarmAI',pf:'direct',x:'hive-ec2-1',col:'done',age:'landed 23h ago',aud:'Iso ✓ · Qual ✓ · Auto ✓ · 9m · 120k',un:0}];
+ {id:'z2',t:'Slack thread replies dedupe',p:'SwarmAI',pf:'direct',x:'Local Worker',col:'done',age:'landed 2h ago',aud:'Iso ✓ · Qual ✓ · Auto ✗ 1 correction · 31m · 520k',un:0},
+ {id:'z3',t:'oss-lib: typed config loader',p:'oss-lib',pf:'full',x:'Local Worker',col:'done',age:'failed 3h ago',aud:'Qual ✗ tests red after 2 fix rounds',un:0,fail:1},
+ {id:'z4',t:'Nightly dependency bump · Oct 23',p:'SwarmAI',pf:'direct',x:'Local Worker',col:'done',age:'landed 23h ago',aud:'Iso ✓ · Qual ✓ · Auto ✓ · 9m · 120k',un:0}];
 const cols=[['need','Needs you'],['run','Running'],['wait','Waiting'],['done','Delivered · 24h']];
 let cur=null,view='th';
 function card(r){let h='<div class="rc'+(r.col==='need'?' need':'')+(cur===r.id?' sel':'')+'" data-id="'+r.id+'"><div class="row" style="justify-content:space-between;align-items:flex-start"><span class="tt">'+r.t+'</span>'+(r.un?'<span class="pill acc">'+r.un+' new</span>':'')+'</div>';

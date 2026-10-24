@@ -516,9 +516,9 @@ validates and records.
 
 ## 7. Host-to-Hive Run Exchange
 
-> Realised in `docs/design/pipeline-run-conductor-v1.md` §4.3 and §7.1 through a Central
-> Service that Host and Hives both call outbound; Host and Hive never connect directly, and
-> lease epoch authority for remote Runs sits with the Central Service.
+> Not in the execution-plane V1, which is local only (`pipeline-run-conductor-v1.md` §13.1).
+> An earlier draft realised it through a Central Service (git `dfc1108cf`); the current
+> direction for remote execution is federated Hives, in its own design.
 
 Host and Hive must not update the same mutable row. The protocol separates desired state
 from observed execution state.
@@ -528,7 +528,7 @@ from observed execution state.
 | **Host Command / Control Ledger** | Host Conductor | Intent, Run Graph, Host-local Run assignment and lease, Human answers, result acceptance, landing, latest Eval report reference. For remote Runs only a cursor-backed projection of the Central record. |
 | **Central Coordination Store** | Central Service | Remote Run requests, assignment, Attempt, lease epoch, worker incarnation and slot accounting, node registry, published DDD and Project Agent revisions, event mirror and Trace cursors. Decisions only as transport: answer commands signed by the Host, accepted or rejected against the current Attempt. The only owner of remote fencing. |
 | **Hive Execution Store** | Assigned Hive | Accepted dispatch, worker session, Pipeline events, pending decision, sealed result manifest. |
-| **Transfer Blob Store** | Central-verified uploads (S3) | Canonical, byte-exact DDD snapshots, result bundles and the organization's copy of every Run's record (`blobs/`, readable only by verifying and landing roles), plus redacted projections that Trace, Eval and later consumers read (`views/`) (`pipeline-run-conductor-v1.md` §4.3.2, §4.4, §4.5). Never a step in the Run; nodes keep their original data. |
+| **Transfer Blob Store** | Central-verified uploads (S3) | Canonical, byte-exact DDD snapshots, result bundles and the organization's copy of every Run's record (`blobs/`, readable only by verifying and landing roles), plus redacted projections that Trace, Eval and later consumers read (`views/`) (the earlier Conductor draft, git `dfc1108cf`; deferred by `pipeline-run-conductor-v1.md` §13). Never a step in the Run; nodes keep their original data. |
 
 Transport uses at-least-once delivery with idempotent effects:
 
@@ -553,7 +553,7 @@ applies the candidate with compare-and-swap semantics, records `result_acceptanc
 
 ## 8. Unified Trace
 
-Unified Trace is a derived, rebuildable index over canonical streams. For Pipeline Runs, those streams are stored in the Central Service and Trace and Offline Eval are computed there (`pipeline-run-conductor-v1.md` §4.5). It is not another
+Unified Trace is a derived, rebuildable index over canonical streams. For Pipeline Runs, those streams are stored in the Central Service and Trace and Offline Eval are computed there (the earlier Conductor draft, git `dfc1108cf`; deferred by `pipeline-run-conductor-v1.md` §13). It is not another
 control ledger and no producer writes an independent copy of a state-changing fact into it.
 The authorities are:
 
@@ -614,7 +614,7 @@ is sealed, and the seal waits for every required Run's terminal REFLECT outcome.
 expose an earlier **provisional** projection for live status; the immutable, Eval-eligible
 seal is created only after protocol completion. A seal whose required cursors have a gap is
 still immutable but marked `incomplete`, and every measure that needs the missing range is
-`UNKNOWN` (`pipeline-run-conductor-v1.md` §4.5.1). Optional telemetry may be incomplete
+`UNKNOWN` (the earlier Conductor draft, git `dfc1108cf`; deferred by `pipeline-run-conductor-v1.md` §13). Optional telemetry may be incomplete
 without blocking delivery; its measures are `unknown`. Data arriving after the cutoff never mutates a
 sealed revision. It creates a superseding Trace revision with its own digest. An existing Eval
 report remains bound to its original Trace revision, and a new revision may trigger a
@@ -869,7 +869,7 @@ future Flows consume the new Brain.
 | Resolved Project Agent Definition | Rebuildable Definition projection |
 | Flow and Intent identifiers | Atomic Host intake transaction in the Host Command / Control Ledger |
 | Intent content, Spec revision and Run Graph | Host Command / Control Ledger |
-| Run desired state, assignment and lease | Host Conductor for Host-local Runs; Central Service for remote Runs (`pipeline-run-conductor-v1.md` §4.3) |
+| Run desired state, assignment and lease | Host Conductor for Host-local Runs; remote Runs not in V1 (`pipeline-run-conductor-v1.md` §13.1) |
 | Attempt observed execution state | Assigned executor's Execution Store |
 | Immutable Pipeline quality verdict and result candidate | Pipeline Protocol signed event chain |
 | Delivery disposition, result acceptance and integration landing | Host per-repository integration transaction |
@@ -1064,12 +1064,11 @@ Trace facts, or bypass Pipeline evidence and safety Gates.
 
 ## 20. Implementation sequence
 
-The execution plane is built in the order of `pipeline-run-conductor-v1.md` §12, which
-uses its own phase numbers. Mapping: this HLD's Phase 1 (registration part) = V1 Phase 1;
-Phase 2 = V1 Phases 2 and 5; Phase 1b and Phase 4 = V1 Phase 6 (with Phase 7 for Cloud
-Desktops); the Central Service (org Run store) is V1 Phase 3, and Trace and Offline Eval
-over it are V1 Phase 4. Phases 1
-(Definition and Flow parts), 3, 5 and 6 below are not in V1.
+The execution plane is built in the order of `pipeline-run-conductor-v1.md` §11, which
+uses its own phase numbers and is local only. Mapping: this HLD's Phase 1 (registration
+part) = V1 Phase 1; Phase 2 = V1 Phases 2a, 2b and 3. Phase 1b, Phase 4 (Hives) and the
+org Run store with Trace and Offline Eval are not in V1 (`pipeline-run-conductor-v1.md`
+§13). Phases 1 (Definition and Flow parts), 3, 5 and 6 below are not in V1.
 
 ### Phase 1 — Definition and Flow facts
 
@@ -1080,7 +1079,7 @@ over it are V1 Phase 4. Phases 1
 
 ### Phase 1b — Pipeline protocol cutover (lands together with the Hive executor, Phase 4)
 
-Execution-plane phasing is specified in `docs/design/pipeline-run-conductor-v1.md` §12,
+Execution-plane phasing is specified in `docs/design/pipeline-run-conductor-v1.md` §11,
 which supersedes the order below where they differ.
 
 - Atomically replace the combined `land` transition with the four distinct facts
@@ -1137,7 +1136,7 @@ which supersedes the order below where they differ.
 - Every Flow and Run names an immutable Project Agent Definition revision and Context digest.
   Exception in the execution-plane V1: a Chat-inline Run reads the live DDD and only
   records its digest; it is marked unpinned and excluded from Local/remote parity in Eval
-  (`pipeline-run-conductor-v1.md` §5.2, §4.5.3).
+  (`pipeline-run-conductor-v1.md` §5.2).
 - No authored fact is duplicated into a second authoritative definition file.
 - A Brain update affects future Flows only unless a human explicitly revises active work.
 

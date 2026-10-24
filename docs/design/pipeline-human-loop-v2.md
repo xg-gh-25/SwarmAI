@@ -30,10 +30,14 @@ path sets; the person's text has one serializer; the semantic digest has a canon
 lineage; and the trust section no longer claims a per-surface capability, matching the
 B-d decision (same-user agent isolation is a recorded TODO, §4.4).
 
+Revision 4 (2026-10-24), with the Conductor rewritten to local scope: remote Runs, Central
+and lease renewal are out; a Run is owned by the Conductor and driven by one session, so a
+person's input binds to the Run and item, never to a session (conductor §4.1).
+
 ## 1. Problem
 
-With the Conductor (`pipeline-run-conductor-v1.md`), Runs execute in the background and
-on Hives, several at once. A person must be able to work with all of them from one place,
+With the Conductor (`pipeline-run-conductor-v1.md`), Runs execute inline in tabs and in
+the background, several at once. A person must be able to work with all of them from one place,
 without opening each Run's session. Today (`pipeline-v1-human-loop.md`,
 `run_protocol/decision.py`):
 
@@ -90,7 +94,7 @@ signed in the daemon (`run_protocol/daemon_exec.py`).
 `human_input` carries `input_id`, `kind`, `item_id` (none for guidance), `option_id`
 (optional), `text` (optional; a blob holding the person's words verbatim), `channel` and
 `actor` (both set by the server from the route or adapter that received it, never taken
-from the request body), `idempotency_key`, and for remote Runs the answer-command id.
+from the request body) and `idempotency_key`.
 
 `human_input` replaces v1's option-only `human_answer` in one cutover for new Runs. Per the
 project rule for Pipeline v1 changes, there is no compatibility path: Runs created before
@@ -111,7 +115,7 @@ is open, and leaves it when the last one is resolved.
 | `open` | the `decision` or `land_request` event |
 | `resolved` | one `human_input` (its id is recorded) |
 | `expired` | `item_expired`, written by the daemon at the deadline under the same lock and compare-and-swap as an answer, so expiry is a recorded fact and replay is time-independent |
-| `superseded` | the Run ended or was cancelled, or a new Attempt does not ask it again (§3.5); never by a lease renewal |
+| `superseded` | the Run ended or was cancelled, a new Attempt does not ask it again (§3.5), or (approval items) the driver changed (conductor §4.1) |
 
 Counters are split: `decision_items_started` (new questions the Run opened; `decision_cap`
 still limits this) and `human_answers` (inputs that resolved items). A follow-up round is a
@@ -147,8 +151,9 @@ Approval happens in DELIVER, after TEST. Each outcome is **one append batch** un
 Run lock: `human_input` resolving the approval item plus every event the outcome implies,
 all appended or none. Landing (`land` / `run-land`) takes the same lock and, before
 consuming an `auth`, checks that its `land_request` is the newest one, not superseded,
-and its approval item resolved by an approve. So no interleaving lets a stale request
-land. The three outcomes:
+and its approval item resolved by an approve, and that the session consuming it is the
+current driver; a driver change supersedes the open `land_request` (conductor §4.1). So
+no interleaving lets a stale request land. The three outcomes:
 
 - **Approve**: today's landing authorization (`auth` on the signed `land_request`).
 - **Request changes** (text required): the daemon writes `human_finding` (producer hook,
@@ -164,23 +169,18 @@ land. The three outcomes:
 
 ### 3.5 Items across Attempts
 
-Two different things renew a Run's lease:
-
-- **Lease renewal of a parked Run** (`parked → parked`, e.g. a Hive restart while no Worker
-  is running). Nothing executed, so it is the **same Attempt**: the epoch and incarnation
-  advance, the open items stay open and are bound to the new epoch in the same
-  conditional update. An answer to them is accepted against the new epoch.
-- **A new Attempt** (a crash while running, a running adopt, a rebase). It supersedes the
-  old Attempt's open items. If it asks a question whose **semantic digest** equals an item
-  that was already resolved, the daemon writes `input_rebound` (old input, new item) and
-  the earlier answer is reused; the person is not asked twice. Any difference is a new
-  item.
+A daemon restart while a Run is parked or `resume_pending` is **not** a new Attempt:
+nothing was executing, so its items stay as they were (conductor §5.1). A new Attempt
+comes only from a crash while running. It supersedes the old Attempt's open items. If it
+asks a question whose **semantic digest** equals an item that was already resolved, the
+daemon writes `input_rebound` (old input, new item) and the earlier answer is reused; the
+person is not asked twice. Any difference is a new item.
 
 The semantic digest is the hash of a canonical JSON of: item kind, round, question text,
 ordered options with their consequences and risk, the **semantic lineage** (the ordered
 list of ancestor items' semantic digests, computed the same way, plus the answers that
 resolved them), and the Run's changed-path content snapshot at asking time (§3.3). It
-excludes every physical identity: `item_id`, event ids, epoch, Attempt and times.
+excludes every physical identity: `item_id`, event ids, Attempt and times.
 
 ## 4. The message stream
 
@@ -208,7 +208,7 @@ transcript.
 
 ### 4.2 Views
 
-The working view is one card per Run, grouped by state (conductor §10); its Needs-you
+The working view is one card per Run, grouped by state (conductor §9); its Needs-you
 column is the Runs with an open blocking item. The aggregate feed (all streams by
 `feed_seq`) is the Activity tab, for audit. No list of open items is stored outside the
 item sets.
@@ -230,9 +230,7 @@ never on the chat send or stream path, and in one locked compare-and-swap on the
 3. for an item: appends only if the item is `open` and the option belongs to its current
    round; otherwise `already_resolved(by input, channel, at)`, `expired` or
    `superseded`;
-4. appends the outcome's batch (§3.4) or `human_input` (local Run), or records
-   `answer_received` and posts the answer command, committing only on Central's
-   `accepted` (remote Run, conductor §8.3);
+4. appends the outcome's batch (§3.4) or `human_input`;
 5. projects the message and notifies readers.
 
 ### 4.4 Surfaces and what proves the input is the owner's
@@ -241,7 +239,7 @@ never on the chat send or stream path, and in one locked compare-and-swap on the
 |---|---|---|
 | Overlay review view and board cards | The human-only dashboard route on loopback; same proof as today's decision and `run-land` routes | owner, `dashboard` |
 | Chat-tab card (inline and background Runs) | The same route, called from that tab | owner, `chat` |
-| Slack button or modal | One-time nonce bound to Slack team, channel, thread, user, Run, item, round and option (conductor §8.3), on a Slack-signed request; a modal (opened by a "Reply with note" button) carries the text | owner, `slack` |
+| Slack button or modal | One-time nonce bound to Slack team, channel, thread, user, Run, item, round and option (conductor §7.3), on a Slack-signed request; a modal (opened by a "Reply with note" button) carries the text | owner, `slack` |
 | Slack typed reply in the Run's thread | Slack-signed event; bound team, channel, thread, user and message ts verified server-side; bot-originated events rejected; deduplicated by that identity | owner, `slack`; **guidance only**, never resolves an item |
 
 Slack proofs authenticate the person. The dashboard routes do not: like the existing
@@ -251,7 +249,7 @@ route by command text. That is the whole protection for now, and it is the same 
 as B3: a same-user agent that runs arbitrary code can reach loopback by other means. Per
 the B-d decision (XG 2026-10-24) no per-surface secret is added, since such an agent could
 read it too; the fix is agent process isolation, recorded as the TODO in
-`pipeline-v1-e7-review.md` item 7. Phase 2 states this residual in E7, not as closed.
+`pipeline-v1-e7-review.md` item 7. Phase 2b states this residual in E7, not as closed.
 
 ### 4.5 Readers and cursors
 
@@ -262,7 +260,6 @@ Each reader is at-least-once and idempotent by message id.
 | Pipelines overlay | `feed_seq` via SSE `Last-Event-ID`; a persisted per-user seen cursor per Run for unread counts | Run cards, each Run's thread, Activity feed. Connected only while open and visible, on the `nav` pool |
 | Chat tab of the Run's origin | per (session, run) | One status card per Run, written once at submit as a row that only references `run_id`; its content is rendered from the stream on read |
 | Slack thread of the Run's origin | per (thread, run), with an outbox | Posts each new message once (Slack `ts` recorded per message id); edits an item's message when its state changes ("Answered in the dashboard at 01:38: A") |
-| Central mirror | per run (conductor §4.2 outbox) | Copies events to the org store; for a remote Run also the transport |
 | Left-nav badge | none | Count of open blocking items |
 
 ## 5. Delivery to the agent
@@ -273,16 +270,16 @@ For every Run, `pipeline_v1.py decision-request` and `land_request` return at on
 `awaiting_human` and the instruction to end the turn; no Run calls `AskUserQuestion` for a
 Pipeline item. The turn ends cleanly, with no open tool call.
 
-- **Worker Run** (background or remote): when its turn ends with a blocking item open,
+- **Worker Run** (background): when its turn ends with a blocking item open,
   the Conductor **parks** it at once: the process is recycled to COLD keeping
-  `_sdk_session_id`, and the slot is released (conductor §5.1). There is no warm wait:
+  `_sdk_session_id`, and the slot is released (conductor §5.1, §6.2). There is no warm wait:
   the prompt cache expires after 5 minutes anyway, so holding the process buys little and
   costs a slot.
 - **Inline Run**: its tab shows the item as the Run's status card (§4.5), answered through
   the same write path. The tab stays usable for chat meanwhile; it holds no pooled slot.
 
 This replaces v1's `AskUserQuestion` card and its 4-hour waiter for Pipeline items. Inline
-and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.4).
+and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.3).
 `ask_question_gate` keeps serving ordinary, non-Pipeline questions.
 
 ### 5.2 How an input reaches the agent
@@ -311,32 +308,17 @@ then a fixed footer. The serializer neutralizes the header and footer strings if
 occur inside `text`. A red test feeds text that contains a forged header, footer and
 system-style block and checks the envelope still parses to exactly one input.
 
-### 5.3 Remote Runs
+### 5.3 Deadlines
 
-As in conductor §8.3, with three changes: Central accepts an answer command while the
-request is `running`, `parked` or `resume_pending`; parking on a Hive releases the Hive
-slot; and a Hive restart while parked is a lease renewal of the same Attempt
-(`parked → parked`, epoch and incarnation renewed, open items rebound to the new epoch,
-no slot effect, §3.5). A Hive's own dashboard shows the stream read-only; the Host is the
-only place a person's input enters.
-
-### 5.4 Deadlines
-
-Two deadlines, never mixed:
-
-- **Item deadline**: 24 hours after the item opened (was 4 hours, which bounded a held
-  process; a waiting Run holds nothing). At it the daemon writes `item_expired` and the
-  Run ends `abandoned(decision_timeout)`. It is checked only when an input is **accepted**
-  (local CAS, Central's conditional update). Slack nonces carry it.
-- **Delivery deadline**: for a remote Run, `accepted_at + 1 hour`, signed into the answer
-  command next to the item deadline. Central checks the item deadline at acceptance; the
-  Hive checks only the delivery deadline for an accepted command. So an answer accepted at
-  23:59 is still delivered. The Host keeps the command-signing key valid for verification
-  at least until the delivery deadline.
+An open item expires 24 hours after it opened (was 4 hours, which bounded a held
+process; a waiting Run holds nothing). At the deadline the daemon writes `item_expired`,
+under the same Run lock and compare-and-swap as an answer, so only one of them wins, and
+the Run ends `abandoned(decision_timeout)`. Slack nonces carry the same deadline.
 
 ## 6. What a reviewer sees
 
-Designed for a person handling 20 to 30 Runs (conductor §10, mockup
+Designed for a person going through many Runs, including a day's delivered ones
+(conductor §9, mockup
 `pipeline-conductor-ui-mock.html`):
 
 - **Board** of Run cards: Needs you, Running, Waiting, Delivered (24 h).
@@ -365,7 +347,8 @@ Designed for a person handling 20 to 30 Runs (conductor §10, mockup
 | 8 | You want to do it yourself | Take over in a chat tab (`owner_transfer`) |
 | 9 | You do not answer for a day | Parked, holding nothing; `item_expired` at 24 h |
 | 10 | Daemon dies right after accepting your input | The input is signed; on restart the projection catches up from the source high-water mark and the Run reads it when resumed |
-| 11 | A remote Hive restarts while the Run is parked | Lease renewal of the same Attempt: the open item stays open, bound to the new epoch; your later answer is accepted against it |
+| 11 | The daemon restarts while the Run is parked | Same Attempt: the open item stays open and your later answer is accepted |
+| 14 | You take a background Run over in a tab while its approval is open | `driver_bind` to your tab supersedes the open `land_request`; the Run re-requests approval under the new driver |
 | 13 | An inline Run asks while you are away from its tab for 6 hours | Its card stays open in the tab and in the overlay; you answer on return; the tab gets the resume turn through its pending queue |
 | 12 | A new Attempt asks the same question again | Same semantic digest → `input_rebound`, no second question; any difference → a new item |
 
@@ -384,20 +367,19 @@ Pipeline v1 (one cutover, new Runs only):
 - `run_protocol/human_envelope.py`: the one delivery serializer (§5.2).
 - `pipeline-v1-human-loop.md` is superseded by this document.
 
-Conductor (`pipeline-run-conductor-v1.md`): `parked` and `resume_pending` states and their
-transitions (including lease loss in `resume_pending`), remote acceptance in `parked` /
-`resume_pending`, `parked → parked` lease renewal, item and delivery deadlines, typed
-Slack replies as guidance only, §10 surfaces.
+Conductor (`pipeline-run-conductor-v1.md`): owner / driver split (§4.1), `parked` and
+`resume_pending` states and their transitions (§5.1), typed Slack replies as guidance only
+(§7.3), surfaces (§9).
 
 Host: `submit_human_input`, the stream projection (one transaction per message) with
 `stream_seq` / `feed_seq` and startup catch-up, reader cursors and the persisted seen
 cursor, the Slack reader's outbox, the overlay SSE on the `nav` pool, the PostToolUse
 guidance hook, delivery content snapshots.
 
-**Phasing.** Ships in Conductor Phase 2 for local Runs, its Slack reader in Phase 5, its
-remote delivery in Phase 6.
+**Phasing.** Ships as Conductor Phase 2b, after the owner / driver cutover in 2a; its
+Slack reader ships in Phase 3.
 
-**Red tests before code (Phase 2):**
+**Red tests before code (Phase 2b):**
 - ask → park → answer → cold resume delivers exactly one input with no dangling tool call;
   the same for an inline Run through its tab's pending queue;
 - first write wins across two surfaces; an agent Bash call to a human-only route is denied;
@@ -407,12 +389,12 @@ remote delivery in Phase 6.
   envelope header, footer or system block parses to exactly one input;
 - land refuses an unacked or undelivered input; a further edit to an already changed file
   after a note is listed on the approval card;
-- a six-way race on one Run (answer, `item_expired`, cancel, lease renewal, request changes,
-  land) under the Run lock: exactly one outcome per item, and no `auth` on a superseded
+- a six-way race on one Run (answer, `item_expired`, cancel, driver change, request
+  changes, land) under the Run lock: exactly one outcome per item, and no `auth` on a superseded
   `land_request` is ever consumed;
-- a parked Run's lease renewal keeps its item answerable; a running adopt supersedes it;
+- a daemon restart while parked keeps the item answerable; a crash while running supersedes it;
 - a re-asked identical question in a new Attempt is rebound, a changed one is not; the
-  digest is equal across Attempts with different ids and epochs.
+  digest is equal across Attempts with different ids.
 
 ## 9. Cost on hot paths
 
