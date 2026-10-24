@@ -16,7 +16,7 @@
  * exactly the pre-bridge state a render fn must null-guard.
  */
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
-import { render, screen, act, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { OverlayProvider } from '../../contexts/OverlayContext';
 import { ExplorerProvider } from '../../contexts/ExplorerContext';
@@ -161,9 +161,9 @@ describe('OverlayHost E2E — swarm:show-<id> OPENS the mapped real surface (age
     await act(async () => {
       window.dispatchEvent(new CustomEvent('swarm:back-to-chat'));
       await Promise.resolve();
-      // advance past the exit-transition unmount backstop
-      await new Promise((r) => setTimeout(r, 350));
     });
-    expect(screen.queryByTestId('overlay-host-scrim')).toBeNull();
+    // the host unmounts after its 300 ms exit backstop: wait for that (bounded), not a
+    // fixed 350 ms, which a timer late by 50 ms under full-suite load missed (2026-10-24)
+    await waitFor(() => expect(screen.queryByTestId('overlay-host-scrim')).toBeNull(), { timeout: 3000 });
   });
 });
