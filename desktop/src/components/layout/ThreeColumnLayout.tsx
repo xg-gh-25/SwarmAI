@@ -293,7 +293,7 @@ function LeftSidebar() {
           NOTE: Y/R attention flags were removed (2026-08-03) — they were hardcoded
           literals that never cleared (alarm fatigue). Re-add a flag ONLY when it is
           driven by a real signal (a live count/query), never as a static prop. */}
-      <nav className="flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
+      <nav className="a10-nav flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
           <A10Card navId="context" onPrefetch={() => prefetch('context')} icon="layers" isActive={newActiveOverlay === 'context'} onClick={() => activateNav('context')} data-testid="nav-context" />

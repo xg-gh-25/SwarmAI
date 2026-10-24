@@ -88,6 +88,13 @@
 
   /* Chrome surfaces (TopBar, NavBar, Explorer, BottomBar) — subtle depth layer */
   --color-bg-chrome: #eef1f5;
+  /* Left Nav piano keys (.a10-key): top face, top-edge light, edge (thickness)
+     and the drop shadow under a key. Light keys are near-white on the chrome. */
+  --nav-key-face: linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, #ffffff 70%, var(--color-bg-chrome)) 60%, color-mix(in srgb, #000 3%, var(--color-bg-chrome)) 100%);
+  --nav-key-light: #ffffff;
+  --nav-key-edge: color-mix(in srgb, #000 16%, var(--color-bg-chrome));
+  --nav-key-border: color-mix(in srgb, #000 12%, var(--color-bg-chrome));
+  --nav-key-drop: rgba(30, 40, 60, 0.12);
 
   /* Hidden / dotfile / generated file dimming */
   --color-hidden-text: #a0a7b4;
@@ -180,6 +187,11 @@
 
   /* Chrome surfaces — dark theme */
   --color-bg-chrome: #161a21;
+  --nav-key-face: linear-gradient(180deg, color-mix(in srgb, #fff 8%, var(--color-bg-chrome)) 0%, var(--color-bg-chrome) 55%, color-mix(in srgb, #000 6%, var(--color-bg-chrome)) 100%);
+  --nav-key-light: color-mix(in srgb, #fff 16%, transparent);
+  --nav-key-edge: color-mix(in srgb, #000 42%, var(--color-bg-chrome));
+  --nav-key-border: color-mix(in srgb, #000 22%, var(--color-bg-chrome));
+  --nav-key-drop: rgba(0, 0, 0, 0.25);
 
   /* Hidden / dotfile / generated file dimming — dark theme */
   --color-hidden-text: #555d6e;
@@ -592,37 +604,59 @@ body {
   outline-offset: 1px;
 }
 
-/* Region accent spine on the right edge of each group (Radar-like, muted). */
-.a10-group::after {
-  content: '';
-  position: absolute;
-  top: 26px;
-  bottom: 8px;
-  right: -8px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--gc);
-  opacity: 0.22;
+/* ── Nav piano keys (2026-10-24) ──────────────────────────────────────────────
+   Every nav row (domain card, History/Artifacts row, footer button) is a key lit
+   from above: a top face (--nav-key-face), a 1px top-edge light, a 3px edge for
+   thickness and a soft drop shadow. Hover lifts a key 1px, a press sinks it 2px.
+   The active key is half pressed and takes its zone tint. The per-group right
+   accent spines were removed: they stacked with the scrollbar into one thick
+   line. Layout (order, groups, spacing) is unchanged. */
+.a10-card,
+.a10-histrow,
+.a10-fcard {
+  background: var(--nav-key-face);
+  border: 1px solid var(--nav-key-border);
+  box-shadow: inset 0 1px 0 var(--nav-key-light), 0 3px 0 var(--nav-key-edge), 0 4px 7px var(--nav-key-drop);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.14s ease, color 0.14s ease;
+}
+.a10-histrow {
+  box-shadow: inset 0 1px 0 var(--nav-key-light), 0 2px 0 var(--nav-key-edge), 0 3px 5px var(--nav-key-drop);
+}
+.a10-card:hover,
+.a10-histrow:hover,
+.a10-fcard:hover {
+  transform: translateY(-1px);
+}
+.a10-card:active,
+.a10-histrow:active,
+.a10-fcard:active {
+  transform: translateY(2px);
+  box-shadow: inset 0 2px 3px var(--nav-key-drop), 0 0 0 transparent;
+}
+@media (prefers-reduced-motion: reduce) {
+  .a10-card, .a10-histrow, .a10-fcard { transition: none; }
 }
 
 .a10-card {
   --ac: var(--color-primary);
-  background: color-mix(in srgb, var(--color-card) 55%, transparent);
-  border: 1px solid transparent;
-  transition: background-color 0.14s ease, border-color 0.14s ease;
 }
 .a10-card:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--ac) 72%, transparent);
   outline-offset: 1px;
 }
-.a10-card:hover {
-  background: var(--color-card);
-  border-color: var(--color-border-strong, var(--color-border));
+/* Active: half pressed (1px down, 1px edge), face tinted by the zone colour. */
+.a10-card--active,
+.a10-histrow[aria-pressed="true"] {
+  transform: translateY(1px);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--ac, var(--color-primary)) 18%, var(--color-card)),
+    color-mix(in srgb, var(--ac, var(--color-primary)) 10%, var(--color-card)));
+  border-color: color-mix(in srgb, var(--ac, var(--color-primary)) 40%, var(--nav-key-border));
+  box-shadow: inset 0 1px 0 var(--nav-key-light), 0 1px 0 var(--nav-key-edge), 0 2px 4px var(--nav-key-drop);
 }
-.a10-card--active {
-  background: color-mix(in srgb, var(--ac) 16%, transparent);
-  border-color: transparent;
-  box-shadow: none;
+.a10-card--active:hover,
+.a10-histrow[aria-pressed="true"]:hover {
+  transform: translateY(1px);
 }
 .a10-card .a10-chip {
   color: var(--color-sidebar-icon);
@@ -659,14 +693,9 @@ body {
 }
 @keyframes a10-flag-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
-.a10-fcard {
-  background: color-mix(in srgb, var(--color-card) 50%, transparent);
-  border: 1px solid var(--color-border);
-  transition: color 0.14s ease, border-color 0.14s ease, background-color 0.14s ease;
-}
-.a10-fcard:hover {
-  border-color: var(--color-border-strong, var(--color-border));
-  background: var(--color-card);
+/* Footer keys (GitHub / Terminal): material comes from the piano-key rule above. */
+.a10-fcard[aria-pressed="true"] {
+  color: var(--color-text);
 }
 
 /* ── Cognition zone (run_b57266d2) — the "your brain" green panel ──────────────
@@ -688,37 +717,21 @@ body {
   border: 1px solid color-mix(in srgb, var(--cz) 28%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--cz) 5%, transparent) inset;
 }
-/* Right-edge accent spine — matches .a10-group::after geometry so cognition reads
-   as part of the same nav family, tinted in the cognition green (--cz). */
-.a10-zone::after {
-  content: '';
-  position: absolute;
-  top: 26px;
-  bottom: 8px;
-  right: -8px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--cz);
-  opacity: 0.22;
-}
-/* Brain Hub — highlight resting state (brighter than Context/Memory) */
-.a10-card--hilite {
+/* Keys inside the cognition panel carry a light green tint on their face. */
+.a10-zone .a10-card:not(.a10-card--active) {
   background: linear-gradient(180deg,
-    color-mix(in srgb, var(--ac) 14%, transparent),
-    color-mix(in srgb, var(--ac) 5%, transparent));
-  border-color: color-mix(in srgb, var(--ac) 42%, transparent);
+    color-mix(in srgb, var(--cz) 14%, color-mix(in srgb, var(--color-card) 30%, var(--color-bg-chrome))),
+    color-mix(in srgb, var(--cz) 8%, var(--color-bg-chrome)));
+}
+/* Highlighted keys (Brain Hub, ToDo, Workspace, Jobs) — resting face a little
+   brighter and tinted, still a key (same edge and shadow). */
+.a10-card.a10-card--hilite:not(.a10-card--active) {
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--ac) 14%, color-mix(in srgb, var(--color-card) 40%, var(--color-bg-chrome))),
+    color-mix(in srgb, var(--ac) 6%, var(--color-bg-chrome)));
+  border-color: color-mix(in srgb, var(--ac) 32%, var(--nav-key-border));
 }
 .a10-card--hilite .a10-chip { color: var(--ac); }
-.a10-card--hilite:hover {
-  border-color: color-mix(in srgb, var(--ac) 52%, transparent);
-}
-/* When a highlighted card is ALSO active, the same single-signal active
-   treatment wins: one tinted background, no extra ring or glow. */
-.a10-card--hilite.a10-card--active {
-  background: color-mix(in srgb, var(--ac) 18%, transparent);
-  border-color: transparent;
-  box-shadow: none;
-}
 /* New Brain — secondary action row: small solid + box + green text, no outer frame */
 .a10-newbrain {
   border: 1px solid transparent;
@@ -742,6 +755,19 @@ body {
     var(--ac));
   box-shadow: 0 1px 5px color-mix(in srgb, var(--ac) 35%, transparent),
     0 1px 0 rgba(255, 255, 255, 0.25) inset;
+}
+
+/* Left Nav scroll area — its own 3px bar, invisible until the pointer is over the
+   Nav. The global --scrollbar-size stays 6px: the chat gutter maths uses it. */
+.a10-nav::-webkit-scrollbar {
+  width: 3px;
+}
+.a10-nav::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 2px;
+}
+.a10-nav:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-text) 24%, transparent);
 }
 
 /* System group — dimmed card titles/icons (low-frequency OS mechanics) */
