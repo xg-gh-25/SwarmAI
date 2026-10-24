@@ -154,7 +154,8 @@
       "needsYou": "Needs you",
       "openAll": "Open all",
       "nothing": "Nothing needs your decision right now",
-      "more": "{{n}} more in Needs You"
+      "more": "{{n}} more",
+      "less": "Show less"
     },
     "placeholder": "Type a message...",
     "streamingPlaceholder": "Waiting for response...",
