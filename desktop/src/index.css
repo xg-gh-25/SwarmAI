@@ -604,22 +604,11 @@ body {
    Chat remains the branded hero. Attention flags (Y/R) are corner badges. */
 .a10-hero {
   overflow: hidden;
-  background: linear-gradient(120deg,
-    color-mix(in srgb, var(--color-primary) 42%, transparent),
-    color-mix(in srgb, var(--color-primary) 22%, transparent) 60%,
-    color-mix(in srgb, var(--color-primary) 10%, transparent) 100%);
-  border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.14) inset,
-    0 3px 12px color-mix(in srgb, var(--color-primary) 18%, transparent);
-  transition: box-shadow 0.16s ease;
-}
-.a10-hero:hover {
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset,
-    0 4px 16px color-mix(in srgb, var(--color-primary) 24%, transparent);
+  background: transparent;
 }
 .a10-hero:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--color-primary) 80%, white);
-  outline-offset: 1px;
+  outline-offset: -2px;
 }
 
 /* ── Nav piano keys (2026-10-24) ──────────────────────────────────────────────
@@ -842,6 +831,54 @@ body {
   bottom: -11px;
   border-top-right-radius: 10px;
   box-shadow: 4px -4px 0 4px var(--color-sheet);
+}
+
+/* ── Swarm key (2026-10-24) ── the Swarm cap plus the History / Artifacts /
+   Needs You rows are ONE key: one face, one edge, one drop shadow and the primary
+   top line. Rows are flat on the key body, split by a hairline; hover tints a
+   row, the open row is tinted (no lift, no join to the sheet: the key clips). */
+.a10-swarmkey {
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--nav-key-face);
+  border: 1px solid var(--nav-key-border);
+  box-shadow: inset 0 2px 0 color-mix(in srgb, var(--color-primary) 80%, transparent),
+    inset 0 3px 0 var(--nav-key-light), 0 2px 0 var(--nav-key-edge), 0 3px 5px var(--nav-key-drop);
+}
+.a10-swarmkey .a10-hero { border-radius: 0; }
+.a10-swarmkey .a10-histrow,
+.a10-swarmkey .a10-alertrow,
+.a10-swarmkey .a10-histrow[aria-pressed="true"] {
+  margin: 0;
+  width: 100%;
+  transform: none;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-text) 7%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.a10-swarmkey .a10-histrow:hover,
+.a10-swarmkey .a10-alertrow:hover {
+  transform: none;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+}
+.a10-swarmkey .a10-histrow:active,
+.a10-swarmkey .a10-alertrow:active {
+  transform: none;
+  background: color-mix(in srgb, var(--color-text) 9%, transparent);
+}
+.a10-swarmkey .a10-histrow[aria-pressed="true"] {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+.a10-swarmkey .a10-histrow[aria-pressed="true"]::before,
+.a10-swarmkey .a10-histrow[aria-pressed="true"]::after { display: none; }
+.a10-swarmkey .a10-histrow:focus-visible,
+.a10-swarmkey .a10-alertrow:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 72%, transparent);
+  outline-offset: -2px;
 }
 
 /* Nav scrollbar on the LEFT edge, so it never sits between the active key and the

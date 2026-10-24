@@ -2,7 +2,7 @@
  * WelcomeScreen.test.tsx — the v2 Welcome screen (design welcome-screen-v2.md).
  *
  * What is tested (acceptance tests, written before the rewrite):
- *   - Brand: logo, the SwarmAI wordmark and the slogan render.
+ *   - Brand: logo, the Swarm wordmark and the slogan render.
  *   - One queue: the "Needs you" count is the attention query's blocking+review,
  *     at most 3 rows, and the card reads the shared ['overlay','needs-you'] key.
  *   - Rows: each shows the backend's plain title + summary; clicking the text
@@ -68,7 +68,7 @@ describe('WelcomeScreen v2', () => {
     fetchAttention.mockResolvedValue({ items: [], counts: { blocking: 0, review: 0 } });
     renderWelcome();
     expect(screen.getByAltText('SwarmAI')).toBeTruthy();
-    expect(screen.getByTestId('welcome-wordmark').textContent).toBe('SwarmAI');
+    expect(screen.getByTestId('welcome-wordmark').textContent).toBe('Swarm');
     expect(screen.getByTestId('welcome-slogan').textContent).toBe('Grow your Brain. Deliver Anything.');
   });
 

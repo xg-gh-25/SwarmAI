@@ -33,7 +33,7 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, sta
 import api from '../services/api';
 import { useCanvasAutoSurface, type CanvasSuppression } from './useCanvasAutoSurface';
 import { useReferencedFiles, outputRows, outputKey, storedOutputRows, type GroupedReferencedFiles, type ReferencedFile } from './useReferencedFiles';
-import { refreshCanvasSession, setActiveCanvasSession } from '../services/canvasSession';
+import { refreshCanvasArtifacts, refreshCanvasSession, setActiveCanvasSession, setCanvasStreaming } from '../services/canvasSession';
 import type { GitStatus } from '../types';
 import { MAX_SNAPSHOT_COMMANDS, MAX_SNAPSHOT_OUTPUTS, type CanvasFileViewReport, type CanvasSnapshot, type UiCommandResult } from '../utils/uiContext';
 import { UI_COMMAND_RESULT_EVENT, type UiCommandResultDetail } from '../utils/uiCommands';
@@ -247,16 +247,21 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // The rail = the active session's rows in the backend's record
   // (services/canvasSession → core/session_outputs), the one source for live,
   // reloaded and restarted sessions. The store refreshes on swarm:file-changed
-  // (artifacts only, debounced); a full refresh (with Changes) runs when the
-  // session changes and when a turn ends. The tab → session report is what lets a
-  // background tab's event refresh ITS session.
+  // (artifacts only, debounced); a full refresh runs when the session changes; when a
+  // turn ends, Artifacts are refreshed here and Changes by setCanvasStreaming (which
+  // holds every Changes request while the turn streams, then sends exactly one). The
+  // tab → session report is what lets a background tab's event refresh ITS session.
   useEffect(() => {
     setActiveCanvasSession(sessionId ?? null, activeTabId ?? null);
+    // before the refresh: a tab that opens mid-turn sends no Changes request
+    if (isStreaming) void setCanvasStreaming(sessionId ?? null, true);
     void refreshCanvasSession(sessionId ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isStreaming is read once per session switch
   }, [sessionId, activeTabId]);
   const wasStreamingRef = useRef(isStreaming);
   useEffect(() => {
-    if (wasStreamingRef.current && !isStreaming) void refreshCanvasSession(sessionId ?? null);
+    void setCanvasStreaming(sessionId ?? null, isStreaming);
+    if (wasStreamingRef.current && !isStreaming) void refreshCanvasArtifacts(sessionId ?? null);
     wasStreamingRef.current = isStreaming;
   }, [isStreaming, sessionId]);
   // artifacts only: ChatPage re-renders when the list changes, not on fetch flags
