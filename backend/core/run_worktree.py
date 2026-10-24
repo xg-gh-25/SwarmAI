@@ -1523,17 +1523,27 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
     repos = signed.get("_repos")
     if repos is not None:   # only the contract's repos can have worktrees
         landed = set(signed.get("_landed") or ())
-        rows = []
+        by_repo: dict = {}
         for e in data.get("worktrees") or []:
             if not isinstance(e, dict) or e.get("repo_name") not in repos:
                 continue
+            name = e.get("repo_name")
             # "integrated" (removed WITHOUT a snapshot) only when the signed landing
             # says this repo landed; a forged row is treated as active, so it is
             # snapshotted before removal (re-audit 84b72ec1 HIGH)
-            if e.get("state") == "integrated" and e.get("repo_name") not in landed:
+            if e.get("state") == "integrated" and name not in landed:
                 e = {**e, "state": "active"}
-            rows.append(e)
-        view["worktrees"] = rows
+            # one row per repo, an active row first: a forged duplicate cannot hide the
+            # repo's live worktree (B-e re-audit HIGH)
+            if name not in by_repo or (e.get("state") == "active"
+                                        and by_repo[name].get("state") != "active"):
+                by_repo[name] = e
+        view["worktrees"] = list(by_repo.values())
+        # whether the run stopped claiming the session's writes comes from SIGNED facts
+        # (a landed repo, or a signed status that ended), never from a row's state an
+        # agent can write (B-e re-audit HIGH: a forged "released" row ended the claim)
+        view["_settled"] = bool(landed) or signed.get("status") not in (
+            "active", "awaiting_human", "reflecting", "paused")
     return view
 
 
@@ -1644,8 +1654,9 @@ def own_isolated_run(session_id: str, workspace: "str | Path",
             main = main_of(p)
             if main is not None and is_registered(main, rid, str(e.get("repo_name"))):
                 wts.append((str(e.get("repo_name")), str(p)))
-        settled = any(isinstance(e, dict) and e.get("state") in ("integrated", "released")
-                      for e in data.get("worktrees") or [])
+        # signed facts (_signed_view); an unverifiable run claims nothing
+        settled = bool(data["_settled"]) if "_settled" in data \
+            else bool(data.get("_unreadable"))
         if wts or (with_empty and data.get("worktree_mode") == "isolated" and not settled
                    and data.get("status") in ("active", "reflecting")):
             # with_empty: a working v1 isolated run with no worktree yet still owns the

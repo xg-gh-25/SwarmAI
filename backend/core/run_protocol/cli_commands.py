@@ -36,28 +36,30 @@ def _repos(values: list[str]) -> dict[str, str]:
     out = {}
     for value in values:
         name, sep, path = value.partition("=")
-        if not sep or not name or not path:
+        if not sep or not name or not path or not Path(path).is_absolute():
+            # relative = the daemon's cwd here; the CLI makes it absolute (B-e MED)
             raise ValueError("--repo must be name=/absolute/path")
         resolved = Path(path).resolve()
-        if not resolved.is_absolute() or not (resolved / ".git").exists():
+        if not (resolved / ".git").exists():
             raise ValueError(f"--repo is not a git worktree: {path}")
         out[name] = str(resolved)
     return out
 
 
 def _json_arg(value: str | None) -> dict[str, Any]:
-    """``--artifact``: ``-`` reads stdin (r6 §2.3: no file for the agent to manage), a
-    path reads that file, anything else is the JSON itself. The command that consumes it
-    keeps it: a document stores its JSON source in the run, an event its payload."""
+    """``--artifact``: ``-`` is the request's stdin, anything else the JSON itself. A
+    file name never reaches here: the CLI (agent cwd) reads the file and sends it as
+    stdin; the daemon opening a path would resolve it in ITS cwd (B-e re-audit MED).
+    The command that consumes it keeps it: a document stores its JSON source in the
+    run, an event its payload."""
     if value is None:
         return {}
-    path = Path(value)
     try:
-        raw = (_request_stdin() if value == "-"
-               else path.read_text(encoding="utf-8") if path.is_file() else value)
+        raw = _request_stdin() if value == "-" else value
         result = json.loads(raw)
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"artifact is not JSON: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"artifact is not JSON (a file must exist where the command "
+                         f"runs): {exc}") from exc
     if not isinstance(result, dict):
         raise ValueError("artifact must be a JSON object")
     return result
@@ -88,9 +90,21 @@ def _load(args, *, note: bool = True) -> RunEngine:
     engine = RunEngine.load(data_dir=get_app_data_dir(), workspace=_workspace(),
                             project=args.project, run_id=args.run_id)
     if note:   # a write: only under the operation lock (r6 §2.2)
-        for sid in _this_transcript():     # a resumed / taken-over session adds its own
-            engine.note_transcript(sid)
+        _note_transcripts(engine)
     return engine
+
+
+def _note_transcripts(engine: RunEngine) -> None:
+    for sid in _this_transcript():     # a resumed / taken-over session adds its own
+        engine.note_transcript(sid)
+
+
+def _not_owner(engine: RunEngine, run_id: str) -> "dict | None":
+    owner = engine.owner_session()
+    if _request().session_id == owner:
+        return None
+    return {"ok": False, "code": "not_owner", "error":
+            f"run {run_id} now belongs to session {owner}; this command changed nothing"}
 
 
 def parser() -> argparse.ArgumentParser:
@@ -201,7 +215,14 @@ def execute(args) -> dict[str, Any]:
         from core.run_protocol.oplock import operation
         audit_root = get_app_data_dir() / "state" / "pipeline_agent_audit"
         with operation(audit_root, args.run_id):
-            engine = _load(args)
+            engine = _load(args, note=False)
+            # judged again under the lock, before ANY write (the transcript note
+            # included): a token issued before an owner transfer changes nothing after
+            # it (B-e re-audit HIGH)
+            refused = _not_owner(engine, args.run_id)
+            if refused:
+                return refused
+            _note_transcripts(engine)
             before = engine.projection()["stage"]
             return _with_next(engine, _execute_loaded(args, engine), previous_stage=before,
                               mutating=True)
@@ -213,8 +234,10 @@ def execute(args) -> dict[str, Any]:
         # operation, under the lock
         from core.run_protocol.oplock import operation
         with operation(get_app_data_dir() / "state" / "pipeline_agent_audit", args.run_id):
-            engine = _load(args)
-            engine.ensure_stage_worktrees()
+            engine = _load(args, note=False)
+            if not _not_owner(engine, args.run_id):     # re-judged under the lock
+                _note_transcripts(engine)
+                engine.ensure_stage_worktrees()
     return _with_next(engine, _execute_loaded(args, engine), previous_stage=None,
                       mutating=False)
 
@@ -322,7 +345,12 @@ def _infrastructure_failed(args, failure) -> dict[str, Any]:
                                "component": failure.component, "error": str(failure)[:500]}
     if getattr(args, "run_id", None) and getattr(args, "project", None):
         try:
-            payload.update(_load(args).fail_infrastructure(failure))
+            engine = _load(args, note=False)
+            if _not_owner(engine, args.run_id):
+                # only the run's signed owner can fail it (B-e review)
+                payload.update(recorded=False, record_error="not the run's owner")
+            else:
+                payload.update(engine.fail_infrastructure(failure))
         except Exception as exc:  # noqa: BLE001 — the failure itself may forbid recording
             payload.update(recorded=False, record_error=f"{type(exc).__name__}: {exc}"[:300])
     return payload

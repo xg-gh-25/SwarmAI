@@ -770,3 +770,23 @@ SWARMAI_MODE=dev DATABASE_TYPE=sqlite SWARM_DATA_DIR=$D .venv/bin/python main.py
   - lease 的绑定从只认 pid 改为认 pid 加进程启动时间（`ps -o lstart`），pid 被复用时 lease 作废。
 
 针对这些问题新增了测试。其中"作废 token"和"只认确切脚本"两条做了变异验证：去掉修复后，对应测试会变红。
+
+## 32. B-e：三方复审（主线跨进程边界、权限、故障模式）
+
+XG 2026-10-24 决定 B-d 不做，B-c 和 B-d 的残余合并登记为 E7 遗留项 7。本轮三方复审只看 `8dedf4867..740d6268a`（A 类和 B-a/b/c）。主线 E2E（`real_e2e`、`direct_e2e`、`isolation_e2e`、`run_protocol_lifecycle`）在复审前已全绿；复审找出的问题都出在"测试进程同时充当 daemon"测不到的地方。
+
+已修复（测试在 `tests/test_pipeline_v1_be_reaudit.py`，新测试在 main 上都会变红，两个守卫测试除外）：
+- **HIGH，packaged daemon 给出的命令跑不起来：** `next` 和 gate 提示里的命令用的是冻结二进制和 bundle 里打包进归档的 scripts，`_is_our_script` 也按 bundle 路径比较，于是任何命令都拿不到 token。新增 `utils/source_repo.py`：dev 取本仓库；packaged 读 `build-backend.sh` 构建时写入的 `source_repo.json`（构建所用的 checkout），路径在本机不是 SwarmAI checkout（如 CI 构建）就视为没有，命令明确失败。命令生成、token 判定和 `_source_repo_root` 都用它，同时关掉 E7 遗留项 2。
+- **HIGH，排队的命令在客户端超时后仍会执行：** CLI 命令先在 30 s 内拿到执行名额，再兑换 token；拿不到就回复 busy，token 不消耗。同时排队的 CLI 命令最多 12 个，其余连接留给 runner 的调用。
+- **HIGH，daemon 死在 `create` 中途，run id 永远卡住：** run 的审计目录（密钥、contract、签名的 `run_create`）先在审计区 `.creating/<进程生命周期>-<nonce>/` 里建好，完整后一次 `rename` 到 `runs/<id>`，run 只在这一步之后才存在。中途死掉只留下 staging 目录，启动时删除其他进程生命周期的 staging；留下的空 run 目录由下一次 create 复用。最初做的是 create intent 文件加启动清理，第四轮审查指出它会被截断的 intent、写了一半的首事件、`Projects/<p>` 下的 symlink 弄坏，因此换成这个方案，intent 代码已删除。
+- **HIGH，`worktrees[].state` 可伪造：** 在 run.json 里加一行同 repo 的 `released`，就能让 live run 变成"已结束"，worktree gate 不再管别的仓库。现在 run 是否结束对本 session 写入的占用（`settled`）只由签名事实决定：有签名落地的 repo，或签名状态已结束。每个 repo 只认一行，有 `active` 行时取它；`integrated` 只认签名落地里列出的 repo。行的 `released` 原样保留（sweeper 给 stale run 释放 worktree 不签事件，转回 `active` 会让 sweeper 和 Canvas 看错）。`security_hooks._own_run_worktree` 的 owner 也改为读签名视图。
+- **HIGH，接管后旧 owner 的 token 和 lease 仍有效：** daemon 在操作锁内、任何写入（含 transcript 记录）之前重新核对请求的 session 是否仍是签名 owner，不是就回 `not_owner`、什么都不改；`status` 补建 worktree、记录 infrastructure 失败也一样。runner 的 append、seal 写入在操作锁内核对 lease 的 session，不是就吊销 lease；`after_tests` 的 owner 核对和阶段完成放在同一把操作锁里。
+- **MED，相对路径按 daemon 的 cwd 解析：** CLI 在 agent 的 cwd 解析 argparse 实际采用的最后一个 `--artifact`：`-` 只读一次 stdin；合法的内联 JSON 原样发送（即使有同名文件）；否则展开 `~` 后若是文件就读出、作为 stdin 发送。`--repo` 展开 `~` 并转成绝对路径。daemon 不再打开 artifact 路径，拒绝相对 `--repo`。
+- **MED，REFLECT 恢复排在无总时限的 worktree 清扫之后：** 启动恢复单独跑（create 恢复、projection 修复、REFLECT 重排），清扫另起任务。
+- **LOW，每次 runner 调用都在全局 lease 锁内跑 `ps`：** 进程检查移到锁外。
+- **LOW，读不到进程启动时间也发 lease：** 现在不发。runner 的进程身份改为直接读内核（macOS `proc_pidinfo`，微秒；Linux `/proc/<pid>/stat`），不再起 `ps`，同时去掉了秒级 pid 复用窗口。
+- **LOW：** `build-backend.sh` 用 JSON 编码器写 `source_repo.json`。
+
+第四轮审查（只审本节修复）报了 8 个 HIGH、2 个 MED、4 个 LOW，上面已并入。未修、记为遗留：
+- **CI 构建的发行版跑不了 pipeline（E7 遗留项 8）：** `source_repo.json` 记的是 CI 的路径，安装后不存在，pipeline 命令明确失败。B 类之前同样跑不了（冻结二进制）。正解是把客户端脚本作为外部资源随 app 发布。
+- **`_live_summary` 和 Canvas 读的是 run.json 原始的 worktree 状态：** 只影响显示（来源分类、Changes 视图），不是权限判断。

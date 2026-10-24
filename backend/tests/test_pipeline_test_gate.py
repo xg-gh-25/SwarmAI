@@ -866,6 +866,9 @@ def test_source_repo_root_survives_the_packaged_daemon(tmp_path, monkeypatch):
     monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     monkeypatch.setattr(sh, "_SOURCE_REPO_ROOT", str(tmp_path / "bundle"))
     monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
+    # a bundle with no usable source_repo.json (e.g. CI-built): the contract fallback
+    from utils import source_repo
+    monkeypatch.setattr(source_repo, "root", lambda: None)
     assert sh._source_repo_root() == _os.path.realpath(str(repo))
     # a contract root that is not a SwarmAI source tree is not used
     (repo / "backend" / "core" / "security_hooks.py").unlink()

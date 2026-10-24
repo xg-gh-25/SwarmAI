@@ -1244,11 +1244,15 @@ def _own_run_worktree(d: str, sid: str) -> "bool | None":
     try:
         import glob
         import json as _json
+        from core.run_worktree import _signed_view
         pattern = os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts", "runs",
                                hit[0], "run.json")
         for f in glob.glob(pattern)[:4]:
             data = _json.loads(open(f, encoding="utf-8").read())
-            if data.get("session_id") == sid:
+            # the owner comes from the signed events, never run.json (B-e review HIGH)
+            view = _signed_view(Path(f), data) if isinstance(data, dict) else None
+            if view is not None and view.get("session_id") == sid \
+                    and not view.get("_unreadable"):
                 return True
     except Exception:  # noqa: BLE001 — cannot tell whose run it is: not scratch
         logger.debug("_own_run_worktree: suppressed exception on a fail-safe path", exc_info=True)
@@ -3803,6 +3807,11 @@ def _source_repo_root() -> "str | None":
     that holds this module's twin. Cached 60 s; None when neither resolves."""
     if _SOURCE_REPO_ROOT and os.path.isdir(os.path.join(_SOURCE_REPO_ROOT, ".git")):
         return _SOURCE_REPO_ROOT
+    # the packaged daemon: the checkout the bundle was built from (build-backend.sh)
+    from utils.source_repo import root as _built_from
+    built = _built_from()
+    if built is not None and os.path.exists(os.path.join(str(built), ".git")):
+        return os.path.realpath(str(built))
     import time as _time
     now = _time.time()
     if now - _SOURCE_ROOT_CACHE[0] < 60:

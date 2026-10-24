@@ -500,7 +500,10 @@ def _resolves_into_scripts(path: str, cwd: "str | None") -> bool:
     """A heredoc destination that is, or (through a link) lands in, this backend's
     scripts directory: a write there could change the script before it runs. A
     relative destination with no known cwd cannot be checked and counts as one."""
-    ours = (Path(__file__).resolve().parents[1] / "scripts").resolve()
+    from utils.source_repo import pipeline_script
+    script = pipeline_script("pipeline_v1")
+    ours = script.parent if script is not None \
+        else (Path(__file__).resolve().parents[1] / "scripts").resolve()
     try:
         target = Path(os.path.expanduser(path))
         if not target.is_absolute():
@@ -523,7 +526,10 @@ def _is_our_script(call: dict) -> bool:
     if not isinstance(script, str) or not script or tool not in ("pipeline_v1",
                                                                   "pipeline_test"):
         return False
-    expected = (Path(__file__).resolve().parents[1] / "scripts" / f"{tool}.py").resolve()
+    from utils.source_repo import pipeline_script
+    expected = pipeline_script(tool)
+    if expected is None:
+        return False        # no runnable source checkout: nothing is ours to token
     if os.path.isabs(script):
         cand = Path(script)
     elif call.get("cwd"):

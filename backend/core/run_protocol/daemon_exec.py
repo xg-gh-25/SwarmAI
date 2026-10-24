@@ -34,7 +34,11 @@ _MAX_REQUEST = 16 * 1024 * 1024        # an artifact on stdin
 _MAX_REPLY = 64 * 1024 * 1024
 _CLIENT_TIMEOUT_S = 1800.0             # a landing (git) can take minutes
 _CONCURRENCY = threading.BoundedSemaphore(4)         # CLI commands run at once
+_QUEUE_WAIT_S = 30.0                                  # longest a CLI command waits to start
 _MAX_CONNECTIONS = 32                                 # requests handled at once
+# CLI commands waiting for a slot: the rest of the connections stay free for runner
+# RPCs, so a burst of commands never starves the runners' event/seal calls
+_CLI_WAITING = threading.BoundedSemaphore(12)
 _ADMISSION = threading.BoundedSemaphore(_MAX_CONNECTIONS)
 UNAVAILABLE = "pipeline service unavailable"
 
@@ -50,6 +54,29 @@ def socket_path(port: int) -> Path:
 
 
 def _execute(req: dict) -> "tuple[dict[str, Any], int]":
+    """Take an execution slot BEFORE redeeming the token, and only for a bounded wait:
+    a command that cannot start within _QUEUE_WAIT_S answers busy with its token
+    unspent, so nothing queued can run after its client gave up (B-e re-audit HIGH)."""
+    if not _CLI_WAITING.acquire(blocking=False):
+        return _busy()
+    try:
+        if not _CONCURRENCY.acquire(timeout=_QUEUE_WAIT_S):
+            return _busy()
+    finally:
+        _CLI_WAITING.release()
+    try:
+        return _execute_admitted(req)
+    finally:
+        _CONCURRENCY.release()
+
+
+def _busy() -> "tuple[dict[str, Any], int]":
+    return {"ok": False, "code": "busy", "error":
+            "pipeline service busy (other commands are running); run the same command "
+            "again"}, 2
+
+
+def _execute_admitted(req: dict) -> "tuple[dict[str, Any], int]":
     from core.run_protocol import cli_commands, cli_scope, request_ctx
     rec = hook_token.redeem(req.get("token"))
     if rec is None:
@@ -78,7 +105,7 @@ def _execute(req: dict) -> "tuple[dict[str, Any], int]":
         session_id=session, run_id=run_id, scope=want,
         transcript_ids=(transcript,) if isinstance(transcript, str) and transcript else (),
         stdin=stdin if isinstance(stdin, str) else None)
-    with _CONCURRENCY, request_ctx.active(ctx):
+    with request_ctx.active(ctx):
         return cli_commands.run(args)
 
 

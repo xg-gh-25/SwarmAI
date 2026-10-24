@@ -264,13 +264,22 @@ implementations in `security_hooks.py`). By category:
    human-only `/api/pipelines/<id>/decision`,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting that single command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
-   in daemon memory, the CLI burns it over the owner-only socket started in `main.py`. It
+   in daemon memory. Every `pipeline_v1` / `pipeline_test` call gets a token, but only when
+   its script resolves to this backend's own source checkout (`utils/source_repo.py`; the
+   packaged daemon reads the checkout it was built from in `source_repo.json`). Pipeline
+   commands EXECUTE in the daemon (`core/run_protocol/daemon_exec.py`, B-class design
+   `docs/design/pipeline-v1-b-class-authority.md`): the CLI sends its argv + token over an
+   owner-only socket, the daemon redeems it and runs the command as the token's session,
+   rechecking that it is still the signed owner under the run's operation lock; the runner
+   opens a lease with its token and its events, seals and stage completion are signed by the
+   daemon. With the daemon down, pipeline commands fail (no local fallback). The same-OS-user
+   gap (an agent can still read the key file or call the unauthenticated localhost API) is a
+   recorded TODO (E7 item 7). It
    tokens `land` (no token: `not_landed(needs_hooked_session)`) and, shared runs
    included, `run-land` / `accept-finding` / `discard-snapshot`: after the person approves one,
    the gate itself writes the signed `auth` event from the run's `land_request` event (the
    approval card shows the trees from that event; execution reads only it). Only the daemon
-   process may sign as `hook` (`events.allow_hook_writer` in `main.py`; the CLI and runner
-   narrow themselves to `cli` / `runner`)) and `worktree_write_gate`
+   process may sign (`events.allow_hook_writer` in `main.py`; the key is loaded only there)) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
    the `pipeline_v1.py create --repo` command for a run that includes it (v1 repos are fixed at

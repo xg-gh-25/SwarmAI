@@ -64,6 +64,10 @@ cp -r "$BACKEND_DIR"/* "$BUILD_DIR/"
 cp "$PROJECT_ROOT/resources/mcp-catalog.json" "$BUILD_DIR/mcp-catalog.json"
 cp "$PROJECT_ROOT/resources/required-cli-tools.json" "$BUILD_DIR/required-cli-tools.json"
 cp "$BACKEND_DIR/../VERSION" "$BUILD_DIR/VERSION"
+# The checkout this bundle is built from: the packaged daemon names ITS scripts for the
+# pipeline commands the agent runs (backend/utils/source_repo.py). A CI-built release
+# records a path that does not exist on the user's machine, which reads as "none".
+SOURCE_ROOT="$(cd "$BACKEND_DIR/.." && pwd)" python3 -c 'import json, os, sys; json.dump({"root": os.environ["SOURCE_ROOT"]}, sys.stdout)' > "$BUILD_DIR/source_repo.json"
 
 # Create entry point script for PyInstaller
 cat > "$BUILD_DIR/desktop_main.py" << 'EOF'
@@ -333,6 +337,8 @@ datas += [('mcp-catalog.json', '.')]
 datas += [('required-cli-tools.json', '.')]
 # VERSION file — single source of truth for app version (eliminates hardcoded fallback in config.py)
 datas += [('VERSION', '.')]
+# the source checkout this bundle was built from (utils/source_repo.py)
+datas += [('source_repo.json', '.')]
 
 # Auto-discover local modules from filesystem instead of hardcoding.
 # This eliminates the class of bugs where new .py files are added to the

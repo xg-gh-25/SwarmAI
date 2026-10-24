@@ -36,8 +36,11 @@ def _projection_is_the_signed_view(monkeypatch):
     real signed runs (test_worktree_signed_authority.py); here the projection stands in
     for the signed view."""
     from core import run_worktree as _rw
+    # an "integrated" row stands in for the signed landing the real view reads
     monkeypatch.setattr(_rw, "_signed_view", lambda f, d: {
-        **d, "id": f.parent.name, "project": f.parents[3].name})
+        **d, "id": f.parent.name, "project": f.parents[3].name,
+        "_settled": any(isinstance(e, dict) and e.get("state") in ("integrated", "released")
+                        for e in d.get("worktrees") or [])})
 
 
 RUN = "run_abc123"

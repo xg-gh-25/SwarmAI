@@ -15,8 +15,10 @@ completion that follows a call's results. Nothing else can be reached with a lea
 from __future__ import annotations
 
 import base64
+import contextlib
 import os
 import secrets
+import sys
 import threading
 import time
 from pathlib import Path
@@ -35,19 +37,46 @@ def clear() -> None:
 
 
 def _start_time(pid: "int | None") -> "str | None":
-    """The process's start time as the OS reports it (``ps -o lstart``): with the pid it
-    identifies ONE process, so a reused pid is not the lease's runner. None when the
-    process is gone or cannot be read."""
+    """The process's start time from the kernel, in microseconds (macOS
+    ``proc_pidinfo(PROC_PIDTBSDINFO)``, Linux ``/proc/<pid>/stat`` start ticks): with
+    the pid it identifies ONE process, so a reused pid is not the lease's runner. No
+    subprocess, so it is cheap and needs no ``ps`` (B-e review). None when the process
+    is gone or cannot be read."""
     if not pid:
         return None
-    import subprocess
     try:
-        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))],
-                             capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError, ValueError):
+        pid = int(pid)
+    except (TypeError, ValueError):
         return None
-    text = out.stdout.strip()
-    return text if out.returncode == 0 and text else None
+    if sys.platform == "darwin":
+        return _darwin_start(pid)
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        return "proc:" + raw.rsplit(")", 1)[1].split()[19]   # field 22: starttime
+    except (OSError, IndexError):
+        return None
+
+
+_LIBPROC = None
+
+
+def _darwin_start(pid: int) -> "str | None":
+    import ctypes
+    import ctypes.util
+    import struct
+    global _LIBPROC
+    try:
+        if _LIBPROC is None:
+            _LIBPROC = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
+        buf = ctypes.create_string_buffer(136)              # struct proc_bsdinfo
+        if _LIBPROC.proc_pidinfo(pid, 3, ctypes.c_uint64(0), buf, 136) != 136:
+            return None
+        if struct.unpack_from("I", buf, 12)[0] != pid:       # pbi_pid
+            return None
+        sec, usec = struct.unpack_from("QQ", buf, 120)        # pbi_start_tvsec/usec
+        return f"bsd:{sec}.{usec:06d}"
+    except (OSError, AttributeError, struct.error):
+        return None
 
 
 def reap() -> None:
@@ -106,6 +135,31 @@ def open_for(session: Any, project: Any, run_id: Any, *, port: "int | None") -> 
             _LEASES.pop(k, None)
         _LEASES[key] = lease
     return {"ok": True, "lease": key}
+
+
+_OWNER_LOCK_TIMEOUT = 30.0
+
+
+class LeaseOwnerChanged(RuntimeError):
+    """The run's signed owner is no longer the session the lease was opened for."""
+
+
+@contextlib.contextmanager
+def _as_owner(rec: dict):
+    """Hold the run's operation lock and require the lease's session to be the run's
+    CURRENT signed owner for the write inside: a lease opened before an owner transfer
+    writes nothing after it (B-e re-audit HIGH). The lease is dropped on refusal."""
+    from core.run_protocol.oplock import operation
+    engine = _engine(rec)
+    with operation(engine.audit_root, engine.run_id, timeout=_OWNER_LOCK_TIMEOUT):
+        if engine.owner_session() != rec["session"]:
+            with _LOCK:
+                for key in [k for k, v in _LEASES.items() if v is rec]:
+                    _LEASES.pop(key, None)
+            raise LeaseOwnerChanged(
+                f"run {rec['run_id']} now belongs to session {engine.owner_session()}; "
+                "this runner's lease is revoked (it wrote nothing)")
+        yield engine
 
 
 def _refusal(spec: Any, authority):
@@ -168,11 +222,20 @@ def after_tests(session: str, project: str, run_id: str) -> dict:
 
 
 def _after_tests(rec: dict, args: dict) -> dict:
+    from core.run_protocol.next_step import next_step
+    from core.run_protocol.oplock import operation
+    engine = _engine(rec, producer="cli")
+    # the owner check and the completion under ONE operation lock: an owner transfer
+    # cannot land between them (B-e re-audit HIGH)
+    with operation(engine.audit_root, engine.run_id, timeout=_OWNER_LOCK_TIMEOUT):
+        if engine.owner_session() != rec["session"]:
+            return {"next": next_step(engine)}
+        return _complete_after_tests(engine)
+
+
+def _complete_after_tests(engine) -> dict:
     from core.run_protocol import cli_commands
     from core.run_protocol.next_step import auto_completable, next_step
-    engine = _engine(rec, producer="cli")
-    if engine.owner_session() != rec["session"]:
-        return {"next": next_step(engine)}
     state = engine.projection()
     if not auto_completable(engine, state):
         return {"next": next_step(engine)}
@@ -199,10 +262,12 @@ def _serve(rec: dict, name: str, args: dict) -> Any:
         return {"stage": stage,
                 "attempt": int((state.get("stage_attempts") or {}).get(stage) or 1)}
     if name == "append":
-        return _append(rec, args)
+        with _as_owner(rec):
+            return _append(rec, args)
     if name == "seal_write":
-        return evidence_seal.write_sealed(_own_evidence(rec, str(args.get("path"))),
-                                          str(args.get("text")))
+        with _as_owner(rec):
+            return evidence_seal.write_sealed(_own_evidence(rec, str(args.get("path"))),
+                                              str(args.get("text")))
     if name == "seal_read":
         try:
             data, ok, why = evidence_seal.read_checked(_own_evidence(rec, str(args.get("path"))))
@@ -226,18 +291,29 @@ def handle(req: dict, port: "int | None", peer_pid: "int | None" = None) -> dict
             # a lease is bound to its process; a peer that cannot be identified gets
             # none (B round 2: None would match every other unidentified peer)
             return {"ok": False, "error": "the runner's process cannot be identified"}
+        start = _start_time(peer_pid)
+        if start is None:
+            # pid + start time identify ONE process; without the start time a reused
+            # pid would pass for the runner (B-e re-audit LOW): no lease
+            return {"ok": False, "error": "the runner's process start cannot be read"}
         out = _open(req, port)
         if out.get("ok") is True:
             with _LOCK:
-                _LEASES[out["lease"]].update(pid=peer_pid, start=_start_time(peer_pid))
+                _LEASES[out["lease"]].update(pid=peer_pid, start=start)
         return out
     key = req.get("lease")
+    # the process check runs outside the lock (B-e re-audit LOW)
+    with _LOCK:
+        held = _LEASES.get(key) if isinstance(key, str) else None
+        held_pid = held.get("pid") if held is not None else None
+    live_start = _start_time(held_pid) if held_pid is not None and held_pid == peer_pid \
+        else None
     with _LOCK:
         rec = _LEASES.get(key) if isinstance(key, str) else None
         now = time.time()
-        if rec is not None and rec.get("pid") is not None and (
+        if rec is not None and rec.get("pid") is not None and rec["pid"] == peer_pid and (
                 now - rec["used"] > _IDLE_S or now - rec["opened"] > _MAX_S
-                or _start_time(rec["pid"]) != rec.get("start")):
+                or live_start != rec.get("start")):
             _LEASES.pop(key, None)               # expired, or its process is gone/reused
             rec = None
         elif rec is not None and rec.get("pid") is not None and rec["pid"] != peer_pid:

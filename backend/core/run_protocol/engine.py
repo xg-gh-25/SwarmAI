@@ -18,6 +18,7 @@ import logging
 import os
 import secrets
 import subprocess
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -243,6 +244,53 @@ def signed_terminal(data_dir: str | Path, run_id: str) -> bool:
         return False
 
 
+_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+
+
+def _safe_project(project: str) -> bool:
+    """One directory name under Projects/ (project names may hold spaces)."""
+    return (isinstance(project, str) and 0 < len(project) <= 128
+            and project not in (".", "..") and not any(c in project for c in "/\\\0"))
+
+
+_CREATING = ".creating"
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+# identifies this process's lifetime: a staging directory of another lifetime (a daemon
+# that died mid-create) is never one a create in THIS process is still building
+_PROCESS_BOOT = f"{os.getpid()}-{time.time_ns()}"
+
+
+def recover_incomplete_creates(data_dir: str | Path, workspace: str | Path) -> list[str]:
+    """Remove the staging directories of creates whose process died before the rename
+    that makes a run exist (``RunEngine._create``). They live only under the audit
+    area's ``.creating/`` and are never a run, so nothing else is touched (no path is
+    read from a file). Returns the removed directory names."""
+    import shutil
+    folder = Path(data_dir) / "state" / "pipeline_agent_audit" / _CREATING
+    removed: list[str] = []
+    for entry in sorted(folder.iterdir()) if folder.is_dir() else []:
+        if entry.name.startswith(_PROCESS_BOOT + "-") or entry.is_symlink():
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        removed.append(entry.name)
+    del workspace       # an empty run directory left behind is reused by the next create
+    return removed
+
+
 def repair_stale_projections(data_dir: str | Path, workspace: str | Path) -> list[str]:
     """Rewrite the run.json of every v1 run whose ``projection_of`` does not name the
     signed log's current tail (a crash between an event and the projection write).
@@ -417,25 +465,34 @@ class RunEngine:
             raise EngineError("invalid transcript id")
         workspace_path, data_path = Path(workspace), Path(data_dir)
         run_dir = workspace_path / "Projects" / project / ".artifacts" / "runs" / run_id
+        # The run comes into existence in ONE step (B-e review HIGH): its audit
+        # directory (key, contract, signed run_create) is built in a staging directory
+        # of this process and renamed into runs/<id> only when complete. A process that
+        # dies before the rename leaves only a staging directory, which startup removes
+        # (recover_incomplete_creates); the id is never left half-taken.
+        if not _SAFE_ID.fullmatch(run_id) or not _safe_project(project):
+            raise EngineError("invalid run id or project")
+        audit_root = data_path / "state" / "pipeline_agent_audit"
+        audit = audit_root / "runs" / run_id
+        if audit.exists():
+            raise EngineError("run already exists")
         try:
             run_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError as exc:
-            raise EngineError("run already exists") from exc
-        audit = data_path / "state" / "pipeline_agent_audit" / "runs" / run_id
-        # nothing exists for this run id until its run_create is signed: a failure
-        # before then removes what this call created, so the id is not left taken by
-        # a half-built run (K3 review r3)
-        created = [run_dir]                  # created above with exist_ok=False
+            # an EMPTY directory is what a create that died before its rename left: reuse
+            if not run_dir.is_dir() or run_dir.is_symlink() or any(run_dir.iterdir()):
+                raise EngineError("run already exists") from exc
+        stage_data = audit_root / _CREATING / f"{_PROCESS_BOOT}-{secrets.token_hex(4)}"
+        stage_audit_root = stage_data / "state" / "pipeline_agent_audit"
         try:
-            audit.mkdir(parents=True, exist_ok=False, mode=0o700)
-            created.append(audit)
+            (stage_audit_root / "runs" / run_id).mkdir(parents=True, mode=0o700)
             from core.run_protocol import keys
-            authority = keys.create(data_path, run_id)
+            authority = keys.create(stage_data, run_id)
             engine = cls.__new__(cls)
             engine.data_dir, engine.workspace = data_path, workspace_path
             engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
-            engine.audit_root, engine.authority = data_path / "state" / "pipeline_agent_audit", authority
-            engine.store = _store(engine.audit_root, run_id, authority)
+            engine.audit_root, engine.authority = stage_audit_root, authority
+            engine.store = _store(stage_audit_root, run_id, authority)
             from core.run_protocol.cache import pipeline_code_hash
             pipeline_hash = pipeline_code_hash()   # the whole protocol + both CLIs (B7)
             contract = {"run_id": run_id, "project": project,
@@ -458,14 +515,30 @@ class RunEngine:
             engine.store.append_new(
                 writer=authority.writer("cli"), kind="run_create", at=contract["created_at"],
                 payload={"run_id": run_id, "profile": profile, "decision_cap": decision_cap})
+            audit.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            _fsync_dir(stage_audit_root / "runs" / run_id)
+            try:
+                # atomic, and refused when runs/<id> exists and is not empty (a run)
+                os.rename(stage_audit_root / "runs" / run_id, audit)
+            except OSError as exc:
+                raise EngineError("run already exists") from exc
+            _fsync_dir(audit.parent)
+            engine.audit_root = audit_root
+            engine.store = _store(audit_root, run_id, authority)
         except BaseException as exc:
             import shutil
-            for path in created:             # only what this call itself created
-                shutil.rmtree(path, ignore_errors=True)
+            shutil.rmtree(stage_data, ignore_errors=True)   # only this call's staging
+            if not audit.exists():
+                try:
+                    run_dir.rmdir()                  # only when still empty
+                except OSError:
+                    pass
             if isinstance(exc, OSError) and not isinstance(exc, StoreError):
                 from core.run_protocol.store import AuditUnwritable
                 raise AuditUnwritable(f"audit area not writable: {exc}") from exc
             raise
+        import shutil
+        shutil.rmtree(stage_data, ignore_errors=True)
         evidence_seal.enable(run_id)
         engine.write_projection()
         return engine

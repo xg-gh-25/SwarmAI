@@ -1563,13 +1563,18 @@ async def lifespan(app: FastAPI):
     # After a restart nothing else would release worktrees of runs that ended while
     # the daemon was down. Deferred + off-loop; a failure is logged, never fatal.
     if backend_mode in ("daemon", "hive"):
-        async def _startup_worktree_sweep() -> None:
+        async def _startup_run_recovery() -> None:
+            # run recovery first and on its own: the worktree sweep below has no
+            # whole-job deadline and must not hold REFLECT back (B-e re-audit MED)
             await asyncio.sleep(20)
             try:
-                from jobs.handlers.worktree_sweep import run_worktree_sweep
-                await asyncio.to_thread(run_worktree_sweep)
+                # a daemon that died inside `create` left an id with no run_create
+                from config import get_app_data_dir
+                from core.project_registry import get_swarmws as _ws
+                from core.run_protocol.engine import recover_incomplete_creates
+                await asyncio.to_thread(recover_incomplete_creates, get_app_data_dir(), _ws())
             except Exception:  # noqa: BLE001
-                logger.warning("startup worktree sweep failed", exc_info=True)
+                logger.warning("startup create recovery failed", exc_info=True)
             try:
                 # a crash between a signed event and its run.json leaves a stale display
                 from config import get_app_data_dir
@@ -1585,6 +1590,15 @@ async def lifespan(app: FastAPI):
                 await asyncio.to_thread(reschedule_reflecting, get_swarmws())
             except Exception:  # noqa: BLE001
                 logger.warning("startup REFLECT requeue failed", exc_info=True)
+
+        async def _startup_worktree_sweep() -> None:
+            await asyncio.sleep(25)
+            try:
+                from jobs.handlers.worktree_sweep import run_worktree_sweep
+                await asyncio.to_thread(run_worktree_sweep)
+            except Exception:  # noqa: BLE001
+                logger.warning("startup worktree sweep failed", exc_info=True)
+        asyncio.create_task(_startup_run_recovery())
         asyncio.create_task(_startup_worktree_sweep())
 
     # Readiness sampler (run_7e8a2030): samples DB + auth health OFF the /health
