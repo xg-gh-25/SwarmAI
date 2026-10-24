@@ -354,26 +354,13 @@ def _symbolic_head(cwd) -> "str | None":
 
 # ── switch and bindings ──────────────────────────────────────────────────────
 def mode_enabled() -> bool:
-    """True unless ``config.json["pipeline"]["worktree_mode"]`` is ``"off"`` (any case or
-    whitespace) or JSON false (read-only).
-    On is the default: a missing key or an unreadable config means on. A v1 run that
-    cannot get a worktree pauses (no shared fallback; the mode is fixed at create).
-    $SWARM_WORKTREE_MODE (on/off) overrides — tests and
-    operator use."""
+    """True: every new pipeline run gets its own git worktree per repo it writes.
+    There is no product setting for this (usable-by-anyone P7: the ``worktree_mode``
+    config switch is gone; an old ``config.json`` that still has it is ignored).
+    ``$SWARM_WORKTREE_MODE=off`` remains only as the test suite's switch for the shared
+    mode, until S6 deletes the shared mode together with the runner."""
     env = (os.environ.get("SWARM_WORKTREE_MODE") or "").strip().lower()
-    if env in ("on", "off"):
-        return env == "on"
-    try:
-        from config import get_app_data_dir
-        cfg = json.loads((get_app_data_dir() / "SwarmWS" / "config.json").read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — unreadable config = the default (on)
-        logger.debug("worktree_mode: config unreadable (%s) — on", exc)
-        return True
-    pipe = cfg.get("pipeline") if isinstance(cfg, dict) else None
-    raw = pipe.get("worktree_mode") if isinstance(pipe, dict) else None
-    if raw is False:
-        return False            # a hand edit that wrote JSON false means off
-    return str(raw or "").strip().lower() != "off"
+    return env != "off"
 
 
 def code_repos(workspace: "str | Path", project: str, self_repo: "str | Path") -> "list[tuple[str, Path]]":

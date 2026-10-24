@@ -299,16 +299,6 @@ async def update_app_configuration(request: Request):
                 detail=f"Invalid type for '{k}': expected {expected.__name__}, got {type(v).__name__}",
             )
 
-    # pipeline: {"worktree_mode": "on" | "off"} and nothing else (pipeline-run-worktree §16.9)
-    if "pipeline" in updates:
-        pipe = updates["pipeline"]
-        if not (isinstance(pipe, dict) and set(pipe) == {"worktree_mode"}
-                and pipe.get("worktree_mode") in ("on", "off")):
-            raise HTTPException(
-                status_code=422,
-                detail="'pipeline' must be {\"worktree_mode\": \"on\" | \"off\"}",
-            )
-
     # anthropic_base_url empty-string → None
     if updates.get("anthropic_base_url") == "":
         updates["anthropic_base_url"] = None

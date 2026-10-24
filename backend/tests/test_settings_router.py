@@ -508,24 +508,13 @@ class TestEffectiveThinkingModeExposed:
         assert client.get("/api/settings").json()["effective_thinking_mode"] == "adaptive"
 
 
-class TestPipelineWorktreeSwitch:
-    """pipeline.worktree_mode is a first-class setting (pipeline-run-worktree §16.9)."""
+class TestNoPipelineSetting:
+    """P7 (usable-by-anyone §1): the worktree_mode switch is gone; pipeline runs always get
+    isolated worktrees. A PUT carrying "pipeline" is discarded like any unknown key."""
 
-    # "off" is the non-default value: a round trip of "on" (the default) would stay
-    # green even if the handler dropped the key.
-    def test_put_off_persists_and_is_read_back(self, client: TestClient, _isolated_config):
+    def test_pipeline_is_not_writable(self, client: TestClient, _isolated_config):
         resp = client.put("/api/settings", json={"pipeline": {"worktree_mode": "off"}})
         assert resp.status_code == 200, resp.text
-        assert client.get("/api/settings").json()["pipeline"] == {"worktree_mode": "off"}
+        assert "pipeline" not in client.get("/api/settings").json()
         disk = json.loads(_isolated_config._config_path.read_text())
-        assert disk["pipeline"] == {"worktree_mode": "off"}
-
-    def test_an_unrelated_save_keeps_the_switch(self, client: TestClient, _isolated_config):
-        client.put("/api/settings", json={"pipeline": {"worktree_mode": "off"}})
-        client.put("/api/settings", json={"aws_region": "eu-west-1"})
-        disk = json.loads(_isolated_config._config_path.read_text())
-        assert disk["pipeline"] == {"worktree_mode": "off"}
-
-    @pytest.mark.parametrize("bad", [{"worktree_mode": "yes"}, {"worktree_mode": 1}, {"other": "on"}])
-    def test_invalid_values_rejected(self, client: TestClient, bad):
-        assert client.put("/api/settings", json={"pipeline": bad}).status_code == 422
+        assert "pipeline" not in disk

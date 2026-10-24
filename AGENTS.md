@@ -251,8 +251,9 @@ implementations in `security_hooks.py`). By category:
    `state/pipeline_agent_audit`; it also denies reads of each v1 run's `authority.key` while allowing
    ordinary audit reads. Signed events, authorization, Gate-0, REVIEW and the adversarial commit gate
    trust this store; the gate cannot be forced.
-   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; on by default, turned off only by
-   `config.json["pipeline"]["worktree_mode"] = "off"`, a `PUT /api/settings` key): `run_owner_gate`
+   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; every new run gets them, there is
+   no setting to turn them off (usable-by-anyone P7); `$SWARM_WORKTREE_MODE=off` is only the
+   test suite's switch until S6): `run_owner_gate`
    (Bash, right after `commit_gate`; for a mutating `pipeline_v1.py` call it reads the owner
    from the run's signed events, never run.json, takes a crashed owner's run over only when
    the old owner is confirmed not live (signing an `owner_transfer` event first, so human
