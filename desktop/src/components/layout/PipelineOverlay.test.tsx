@@ -84,6 +84,7 @@ const DETAIL = {
   profile: 'goal', cycleTimeMin: null, reportMd: '', reportPath: null, reflectLessons: [],
   commits: [], checkpointReason: 'Gate 1 BLOCK: needs decision',
   pauseKind: 'decision', ownerSessionId: 'owner-1',
+  continuePrompt: 'Continue pipeline run run_paused1 (project SwarmAI): run `"$SWARM_BACKEND_BIN" pipeline-v1 status --project SwarmAI --run-id run_paused1` first, then carry on from its current stage.',
   decision: {
     requestId: 'q1', kind: 'design_tradeoff', question: 'Which storage?',
     whyEvidenceInsufficient: 'both fit',

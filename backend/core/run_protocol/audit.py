@@ -523,8 +523,8 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     retained = details.get("retained") or []
     if retained and outcome.get("landing") not in ("landed", "human_override"):
         where = ", ".join(str(row.get("ledger") or row.get("repo_name")) for row in retained)
-        lines += ["", f"未集成的工作保存在 {where}；用 `pipeline_v1.py restore` 恢复，"
-                  "或 `pipeline_v1.py run-land --prepare` 交给人落地。"]
+        lines += ["", f"未集成的工作保存在 {where}；用 `\"$SWARM_BACKEND_BIN\" pipeline-v1 restore` 恢复，"
+                  "或 `\"$SWARM_BACKEND_BIN\" pipeline-v1 run-land --prepare` 交给人落地。"]
     return "\n".join(lines).rstrip() + "\n"
 
 

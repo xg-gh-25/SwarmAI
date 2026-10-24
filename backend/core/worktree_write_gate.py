@@ -327,11 +327,11 @@ V1_MAIN_EDIT_REMEDY = (
 
 
 def v1_command(args: str) -> str:
-    """``<python> <this backend's scripts/pipeline_v1.py> <args>``: the run CLI, by
-    absolute path. Only this backend's own script receives a hook token
-    (``run_owner_gate._is_our_script``), so the suggestion must name it wherever the
-    agent's cwd is (a run worktree's copy of the script is not it)."""
-    return f"{_python()} {_script('pipeline_v1')} {args}"
+    """``"$SWARM_BACKEND_BIN" pipeline-v1 <args>``: the run CLI, the same packaged and in
+    dev (design 2026-10-24-swarmai-usable-by-anyone §3.2; ``pipeline_command.command_text``).
+    The variable names this backend's own program wherever the agent's cwd is."""
+    from core import pipeline_command
+    return pipeline_command.command_text(args)
 
 
 def pipeline_test_command(args: str) -> str:

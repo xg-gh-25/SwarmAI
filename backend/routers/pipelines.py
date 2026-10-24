@@ -302,6 +302,15 @@ def _iso_week_start(iso_ts: str) -> Optional[str]:
         return None
 
 
+def continue_prompt(run_id: str, project: str) -> str:
+    """The prompt the dashboard puts in the owner session to continue a run: it names the
+    real status command (core.pipeline_command via worktree_write_gate.v1_command)."""
+    from core.worktree_write_gate import v1_command
+    status = v1_command(f"status --project {project} --run-id {run_id}")
+    return (f"Continue pipeline run {run_id} (project {project}): run `{status}` first, "
+            "then carry on from its current stage.")
+
+
 def _summary(raw: dict, project: str) -> PipelineRunSummary:
     status = pm.display_status(raw)
     kind = pm.pause_kind(raw)
@@ -442,6 +451,7 @@ async def pipeline_run_detail(run_id: str):
     raw, report_md, report_path, lessons, decision, project = found
     return PipelineRunDetail(
         id=run_id, project=project, requirement=_text(raw.get("requirement")),
+        continue_prompt=continue_prompt(run_id, project),
         status=pm.display_status(raw), profile=raw.get("profile") or "",
         cycle_time_min=pm.duration_minutes(raw), report_md=report_md,
         report_path=report_path, reflect_lessons=lessons,

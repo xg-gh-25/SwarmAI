@@ -37,7 +37,7 @@ def _texts(monkeypatch=None) -> dict[str, str]:
 
 def _commands(text: str) -> list[list[str]]:
     out = []
-    for match in re.finditer(r"pipeline_v1\.py ([^`\n\"]+?)(?:`|\"\)|$|, whose|\. )", text):
+    for match in re.finditer(r"(?:pipeline_v1\.py|pipeline-v1) ([^`\n\"]+?)(?:`|\"\)|$|, whose|\. )", text):
         line = match.group(1)
         line = (line.replace("<project>", "P").replace("<run_id>", "run_x")
                 .replace("'<message>'", "m").replace("'<the request>'", "r")

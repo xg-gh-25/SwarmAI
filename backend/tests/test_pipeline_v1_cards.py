@@ -20,7 +20,7 @@ def test_v1_cards_are_complete_small_and_reference_real_checks():
         assert len(text) < 2000, name
         for check_id in re.findall(r"\b(?:RQ|DS|BX|RV|DC|FX|TS|DV|LG|QX|MD|RF)-\d+[a-z]?\b", text):
             assert check_id in CHECKS, (name, check_id)
-        assert "pipeline_v1.py" in text or name in {"build"}, name
+        assert "pipeline-v1" in text or name in {"build"}, name
 
 
 def test_cards_never_mention_deleted_reviewers_or_legacy_commands():
@@ -57,9 +57,10 @@ def test_every_pipeline_v1_command_in_the_cards_parses():
     seen = 0
     for doc in DOCS:
         for span in _code_spans(doc.read_text(encoding="utf-8")):
-            if "pipeline_v1.py " not in span:
+            word = next((w for w in ("pipeline-v1 ", "pipeline_v1.py ") if w in span), None)
+            if word is None:
                 continue
-            argv = span.split("pipeline_v1.py ", 1)[1]
+            argv = span.split(word, 1)[1]
             for old, new in _FILL:
                 argv = argv.replace(old, new)
             argv = re.sub(r"\[([^\]]*)\]", r"\1", argv)     # [--optional] shown as optional
@@ -147,7 +148,7 @@ def test_reflect_card_gives_no_completion_command():
     stages = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline" / "stages"
     text = (stages / "reflect.md").read_text(encoding="utf-8")
     assert "reflect-complete" not in text and "reflect-exhausted" not in text
-    assert "pipeline_v1.py status" in text and "degraded" in text
+    assert "pipeline-v1 status" in text and "degraded" in text
 
 
 def test_the_stop_hook_stays_passive():

@@ -78,7 +78,6 @@ def _valid_run_id(value: object) -> bool:
         return False
 _RUN_ID_ARG_RE = re.compile(r"--run-id(?:=|\s+)(['\"]?)([^\s'\";&|)]+)\1(?=[\s'\";&|)]|$)")
 _VAR_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
-_CLI_MARKERS = ("pipeline_v1.py", "pipeline_test.py")
 
 #: The documents a closed stage wrote (``RunEngine``: REQUIREMENTS at evaluate,
 #: DESIGN_SPEC at plan, REVIEW / FIXING_SPEC / REPORT by DELIVER's end).
@@ -94,15 +93,18 @@ DOC_PURPOSES = {
 
 
 def _last_cli(command: str) -> int:
-    return max(command.rfind(marker) for marker in _CLI_MARKERS)
+    from core import pipeline_command
+    return pipeline_command.last_call_offset(command)
 
 
 def parse_watched_run_id(command: object) -> Optional[str]:
     """The literal run id of a pipeline CLI invocation, else None. A pre-filter only:
     ``new_stage_blocks`` decides from the projection whether anything changed."""
-    if not isinstance(command, str) or not any(m in command for m in _CLI_MARKERS):
+    if not isinstance(command, str):
         return None
     last = _last_cli(command)
+    if last < 0:
+        return None
     matches = list(_RUN_ID_ARG_RE.finditer(command))
     ordered = [m for m in matches if m.start() > last] + [
         m for m in reversed(matches) if m.start() < last]
@@ -122,15 +124,13 @@ def parse_watched_run_id(command: object) -> Optional[str]:
 
 # ``pipeline_v1.py create`` names no run: the CLI prints the id it minted
 RUN_CREATE_WATCH = "<run-create>"
-_RUN_CREATE_RE = re.compile(r"pipeline_v1\.py[^;&|\n]*\screate(?=[\s'\";&|)]|$)")
 _PIPELINE_ID_RE = re.compile(r'"pipeline_id"\s*:\s*"([^"]*)"')
 
 
 def is_run_create(command: object) -> bool:
     """True when the last pipeline CLI invocation creates a run."""
-    if not isinstance(command, str) or "pipeline_v1.py" not in command:
-        return False
-    return bool(_RUN_CREATE_RE.search(command[_last_cli(command):]))
+    from core import pipeline_command
+    return pipeline_command.is_create(command)
 
 
 def _result_text(content: object) -> str:

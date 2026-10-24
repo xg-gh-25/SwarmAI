@@ -318,7 +318,8 @@ def create_reflect_trigger(session_context: dict):
         try:
             command = ((input_data or {}).get("tool_input") or {}).get("command") or ""
             sid = session_context.get("sdk_session_id")
-            if "pipeline_v1" in command and sid:
+            from core import pipeline_command
+            if pipeline_command.mentions(command) and sid:
                 _pool().submit(_schedule_logged, str(sid))
         except Exception:  # noqa: BLE001 — never fail the tool call
             logger.debug("v1 reflect trigger failed", exc_info=True)

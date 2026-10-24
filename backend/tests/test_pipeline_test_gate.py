@@ -636,7 +636,7 @@ class TestRunAmendGate:
         assert _is_deny(res)
         reason = _reason(res)
         assert "run_amend1" in reason
-        assert "pipeline_v1.py land --message" in reason and "run-commit" not in reason
+        assert "pipeline-v1 land --message" in reason and "run-commit" not in reason
 
     @pytest.mark.parametrize("cmd", [
         "git commit -m 'feat: x'",

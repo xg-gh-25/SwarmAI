@@ -172,6 +172,8 @@ export interface PipelineCommit {
 export interface PipelineRunDetail {
   id: string;
   project: string;
+  /** What the owner session is asked to run to continue (the backend writes the command). */
+  continuePrompt: string;
   requirement: string;
   status: string;
   profile: string;
@@ -337,6 +339,7 @@ export const pipelinesService = {
         pauseKind: (data.pause_kind as PipelinePauseKind) ?? null,
         decision: decisionToCamel(data.decision),
         ownerSessionId: (data.owner_session_id as string | null) ?? null,
+        continuePrompt: (data.continue_prompt as string) ?? '',
         createdAt: (data.created_at as string) ?? '',
         updatedAt: (data.updated_at as string) ?? '',
         auditCard: (data.audit_card as string | null) ?? null,

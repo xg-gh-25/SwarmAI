@@ -72,8 +72,12 @@ def _touches_session_file(commit_files: list[str], session_files: list[str],
 # A command that writes commits: a git write subcommand (options like -C/-c
 # allowed in between), or a pipeline landing. `git log | grep commit` is not one.
 _GIT_WRITE_RE = re.compile(
-    r"\bgit(?:\s+-[Cc]\s+\S+)*\s+(?:commit|merge|rebase|cherry-pick|revert|am|pull)\b"
-    r"|\bpipeline_v1\.py\b.*\bland\b")
+    r"\bgit(?:\s+-[Cc]\s+\S+)*\s+(?:commit|merge|rebase|cherry-pick|revert|am|pull)\b")
+
+
+def _writes_commits(command: str) -> bool:
+    from core import pipeline_command
+    return bool(_GIT_WRITE_RE.search(command)) or pipeline_command.is_land(command)
 _RUN_ID_RE = re.compile(r"\brun_[0-9a-f]{8}\b")
 _SLACK_S = 3.0  # seconds of clock slack around a tool call
 
@@ -113,7 +117,7 @@ def _bash_call_windows(messages: list[dict]) -> "list[tuple[float, float, bool]]
                 continue
             if b.get("type") == "tool_use" and (b.get("category") == "bash" or b.get("name") == "Bash"):
                 text = str(b.get("summary") or (b.get("input") or {}).get("command") or "")
-                calls[str(b.get("id"))] = [ts, ts, bool(_GIT_WRITE_RE.search(text))]
+                calls[str(b.get("id"))] = [ts, ts, _writes_commits(text)]
             elif b.get("type") == "tool_result" and str(b.get("tool_use_id")) in calls:
                 calls[str(b.get("tool_use_id"))][1] = ts
     return [tuple(v) for v in calls.values()]

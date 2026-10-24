@@ -83,10 +83,10 @@ function needsYou(r: { needsYou: boolean }): boolean {
   return r.needsYou;
 }
 
-/** The "continue" prompt put in the owner session's composer. */
-function continuePrompt(runId: string, project: string, answered?: string): string {
-  const lead = answered ? `${answered} ` : '';
-  return `${lead}Continue pipeline run ${runId} (project ${project}): run pipeline_v1.py status first, then carry on from its current stage.`;
+/** The "continue" prompt put in the owner session's composer: the backend's text
+ *  (it names the pipeline command), with the user's answer in front. */
+function continuePrompt(base: string, answered?: string): string {
+  return answered ? `${answered} ${base}` : base;
 }
 
 /** What the drawer says about a run that needs the user. */
@@ -156,7 +156,7 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
                                          answered?: string): Promise<boolean> => {
     const sessionId = owner ?? run.ownerSessionId;
     if (!sessionId || !onContinue) return false;
-    const landed = await onContinue(sessionId, continuePrompt(run.id, run.project, answered));
+    const landed = await onContinue(sessionId, continuePrompt(run.continuePrompt, answered));
     if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
     return landed;
   }, [onContinue, close]);

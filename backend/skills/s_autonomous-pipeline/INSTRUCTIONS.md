@@ -6,13 +6,13 @@ You are the orchestrator. One user intent becomes one auditable Agent Delivery U
 
 Create one run:
 
-`python backend/scripts/pipeline_v1.py create --project <P> --profile <profile> --repo <name>=<absolute-main-repo>`
+`"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile <profile> --repo <name>=<absolute-main-repo>`
 
-For `direct`, also pass the user's words: `python backend/scripts/pipeline_v1.py create --project <P> --profile direct --requirement "<the user's request>" --repo <name>=<absolute-main-repo>`.
+For `direct`, also pass the user's words: `"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile direct --requirement "<the user's request>" --repo <name>=<absolute-main-repo>`.
 
 The run's mode comes from the worktree setting (`config.json["pipeline"]["worktree_mode"]`), not a flag. Worktree creation failure pauses the run; it never falls back to shared.
 
-Read state with `pipeline_v1.py status --project <P> --run-id <R>` before anything else in a turn that continues a run. `paused` with reason `user_stop` / `session_lost` means the user stopped it: continue only when the user asks, then `resume`. Restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. Continuing another session's run is allowed once that session is not streaming: your first owner command records the takeover. A run without protected `contract.json` is unsupported; create a v1 run instead of migrating it.
+Read state with `"$SWARM_BACKEND_BIN" pipeline-v1 status --project <P> --run-id <R>` before anything else in a turn that continues a run. `paused` with reason `user_stop` / `session_lost` means the user stopped it: continue only when the user asks, then `resume`. Restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. Continuing another session's run is allowed once that session is not streaming: your first owner command records the takeover. A run without protected `contract.json` is unsupported; create a v1 run instead of migrating it.
 
 Gate-0 is executable only through `gate0-start`. Never edit `run.json` to simulate any transition.
 
@@ -22,12 +22,12 @@ A requirement/design choice goes through `decision-request` only. Its output (an
 
 ## Execute
 
-Every `pipeline_v1.py` and `pipeline_test.py` response ends with `next`: what to do now (`action`, `command`, `why`), the checks that still fail (`blocking`), and the stage card (`card_text`, included when the call entered a new stage). Follow it; there is no need to call `status` between stages. `repos` names where to edit the run's code: the call that enters a code stage creates the worktrees.
+Every `"$SWARM_BACKEND_BIN" pipeline-v1` and `pipeline_test.py` response ends with `next`: what to do now (`action`, `command`, `why`), the checks that still fail (`blocking`), and the stage card (`card_text`, included when the call entered a new stage). Follow it; there is no need to call `status` between stages. `repos` names where to edit the run's code: the call that enters a code stage creates the worktrees.
 
 For every stage:
 
 1. Read `next.card_text` and execute the card.
-2. `pipeline_v1.py stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST complete by themselves when a `pipeline_test.py` call's results pass their checks (the response carries `stage_complete`).
+2. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST complete by themselves when a `pipeline_test.py` call's results pass their checks (the response carries `stage_complete`).
 3. Continue immediately with the returned `next`. Stop only for a DC-1 human decision, user stop, or terminal state.
 
 Token usage is measured by the daemon when REFLECT ends; there is no measuring command.
@@ -46,13 +46,13 @@ direct is for a small, unambiguous change: `create --profile direct --requiremen
 
 ## REVIEW
 
-Call `pipeline_v1.py review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground.
+Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground.
 
 - Default: correctness only for >=50 source lines.
 - Add security and red-team only for clear security risk; below 50 risky lines, security only.
 - Small changes and docs-only changes dispatch nobody unless explicitly required.
 - R1 reviews the full diff. Collect the whole round, cluster by cause, fix once, then call `review-address --artifact <handoff.json>`; its returned handouts are the complete R2 roster.
-- Behavior/contract break tests run with `pipeline_test.py --project <P> --run-id <R> --mode prove --round R1 --files <nodeid> --finding CF-1234abcd=<nodeid>` and emit runner-signed old/old/new proof events. Structural/refutation evidence goes through `pipeline_v1.py review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
+- Behavior/contract break tests run with `pipeline_test.py --project <P> --run-id <R> --mode prove --round R1 --files <nodeid> --finding CF-1234abcd=<nodeid>` and emit runner-signed old/old/new proof events. Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
 - R2 only rechecks addressed R1 findings for experts that reported them. There is no third round or secondary review layer.
 - Only unresolved HIGH/CRITICAL findings affect push readiness. MEDIUM/LOW remain residual risks.
 
@@ -67,7 +67,7 @@ Repeat the same command only when `continue: true`. Risk expansion is determinis
 
 ## Landing and completion
 
-Normal delivery: `pipeline_v1.py land --project <P> --run-id <R> --message <message>`. The engine computes code_tree, push effects, land_intent, renderer-owned REPORT, delivery_tree, LG checks and commit-tree in the frozen order. It never pushes.
+Normal delivery: `"$SWARM_BACKEND_BIN" pipeline-v1 land --project <P> --run-id <R> --message <message>`. The engine computes code_tree, push effects, land_intent, renderer-owned REPORT, delivery_tree, LG checks and commit-tree in the frozen order. It never pushes.
 
 Human run-land is executable and always two-step: `run-land --prepare [--skip-tests] [--note ...]`, then `run-land --request <id> --message <message>`. The request command passes the existing HITL gate, burns a daemon-memory one-time token bound to session/run/request, rechecks every tree, and persists each repo commit. A failed action consumes the authorization; prepare and approve a new request. Snapshot deletion and finding acceptance use the same exact one-use authorization model. Abandoned/not-landed work keeps its `run/<id>` branch, bundle and diff indefinitely.
 

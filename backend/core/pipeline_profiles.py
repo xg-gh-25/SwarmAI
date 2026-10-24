@@ -43,7 +43,8 @@ REMOVED_PROFILES: dict[str, str] = {
     "docs": ("the docs profile was removed. Documents outside a code repo (SwarmWS "
              "Knowledge / DDD) need no run: edit them directly. *.md files and backend/context/ in "
              "a code repo need no run either (core/doc_paths.py); any other file: "
-             "`pipeline_v1.py create --profile direct --requirement \"<the request>\"`."),
+             "`\"$SWARM_BACKEND_BIN\" pipeline-v1 create --profile direct --requirement "
+             "\"<the request>\"`."),
 }
 _LEGACY_PROFILE_STAGES: dict[str, list[str]] = {
     "docs": ["evaluate", "think", "plan", "deliver", "reflect"],

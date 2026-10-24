@@ -42,8 +42,9 @@ def test_frozen_bundle_names_the_checkout_it_was_built_from(tmp_path, monkeypatc
     assert source_repo.root() == src.resolve()
     assert source_repo.pipeline_script("pipeline_test") == \
         (src / "backend" / "scripts" / "pipeline_test.py").resolve()
+    # the command the agent is told to run is the program form, packaged and in dev (S3)
     from core.worktree_write_gate import v1_command
-    assert str(src / "backend" / "scripts" / "pipeline_v1.py") in v1_command("status")
+    assert v1_command("status") == '"$SWARM_BACKEND_BIN" pipeline-v1 status'
 
 
 def test_frozen_bundle_from_another_machine_names_no_script(tmp_path, monkeypatch):

@@ -835,6 +835,7 @@ _SOURCE_SCAN_SUITES = (
     "backend/tests/test_job_model_ssot.py",
     "backend/tests/test_nav_routers_import.py",
     "backend/tests/test_output_degeneration.py",
+    "backend/tests/test_pipeline_command.py",
     "backend/tests/test_pipeline_v1_cards.py",
     "backend/tests/test_pipeline_v1_cutover.py",
     "backend/tests/test_r6a_ceiling_decouple.py",

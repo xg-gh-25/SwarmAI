@@ -539,6 +539,9 @@ describe('stepLabel — a Bash step is relabelled only when ALL of it only reads
   });
   it('a script behind a writing pipeline keeps its short name', () => {
     expect(label('python3 scripts/x.py --run > out.log')).toMatchObject({ verb: 'run', object: 'x.py' });
+    // the backend program: its subcommand and the next word say what ran (design §3.2)
+    expect(label('"$SWARM_BACKEND_BIN" pipeline-v1 land --project P --run-id run_1')).toMatchObject({ verb: 'run', object: 'pipeline-v1 land' });
+    expect(label('/x/runtime/2.4.0/python-backend py /a/b/tool.py --x')).toMatchObject({ verb: 'run', object: 'py tool.py' });
   });
 });
 

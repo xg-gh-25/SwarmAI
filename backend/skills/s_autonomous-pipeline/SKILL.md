@@ -42,7 +42,7 @@ DO NOT USE: for a single stage (use the specific skill directly).
 | direct | build → review → test → deliver → reflect (`create --requirement`, no PLAN) |
 | research | evaluate → think → deliver → reflect |
 
-`pipeline_v1.py create` → follow each response's `next` / `stage-complete` (REVIEW via
+`"$SWARM_BACKEND_BIN" pipeline-v1 create` → follow each response's `next` / `stage-complete` (REVIEW via
 `review-start`, tests via `pipeline_test.py`) → `land` in DELIVER → REFLECT runs in the
 daemon's background and completes itself.
 
@@ -50,9 +50,9 @@ daemon's background and completes itself.
 
 Before reporting the run, show evidence for each:
 
-- [ ] **Run ended** — `pipeline_v1.py status --project <P> --run-id <R>` shows `completed`
+- [ ] **Run ended** — `"$SWARM_BACKEND_BIN" pipeline-v1 status --project <P> --run-id <R>` shows `completed`
       with `landing` (landed, or not_landed and its reason)
 - [ ] **REPORT rendered by the engine** — `.artifacts/runs/<R>/REPORT.md` (never hand-edited)
 - [ ] **Run Audit** — the five dimensions in `run_audit.json`; every BLOCK named with its reason
-- [ ] **Push readiness** — `pipeline_v1.py push-status`: the fold of push-effect checks, not a model field
+- [ ] **Push readiness** — `"$SWARM_BACKEND_BIN" pipeline-v1 push-status`: the fold of push-effect checks, not a model field
 - [ ] **Tests from the runner** — BUILD/TEST exits passed on `pipeline_test.py` results only

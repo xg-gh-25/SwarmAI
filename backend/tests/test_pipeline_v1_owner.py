@@ -43,8 +43,22 @@ def _run(tmp_path: Path, *, owner: str = "session-a", project: str = "proj") -> 
     return run_file
 
 
+_FORM = {"cli": "script"}
+
+
+@pytest.fixture(autouse=True, params=["script", "program"])
+def _cli_form(request):
+    """Every test runs with both command forms the gate recognises until S6: the legacy
+    script and the program form the agent is told to run (core.pipeline_command)."""
+    _FORM["cli"] = request.param
+    yield request.param
+    _FORM["cli"] = "script"
+
+
 def _cmd(command: str, project: str = "proj") -> str:
-    return f"python backend/scripts/pipeline_v1.py {command} --project {project} --run-id run_one"
+    head = ('"$SWARM_BACKEND_BIN" pipeline-v1' if _FORM["cli"] == "program"
+            else "python backend/scripts/pipeline_v1.py")
+    return f"{head} {command} --project {project} --run-id run_one"
 
 
 def _passes(value) -> bool:
@@ -60,12 +74,15 @@ def _denied(value) -> bool:
     return (value or {}).get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
-def test_parser_recognizes_pipeline_v1_mutation():
+def test_parser_recognizes_pipeline_v1_mutation(_cli_form):
     calls, single = gate.parse_cli_calls(_cmd("stage-complete"))
     assert single
+    where = ({"script": "backend/scripts/pipeline_v1.py", "form": "script", "program": None}
+             if _cli_form == "script" else
+             {"script": None, "form": "program", "program": "$SWARM_BACKEND_BIN"})
     assert calls == [{
-        "tool": "pipeline_v1", "sub": "stage-complete", "run_id": "run_one",
-        "script": "backend/scripts/pipeline_v1.py", "project": "proj", "stage": None, "status": None, "session_id": None,
+        "tool": "pipeline_v1", "sub": "stage-complete", "run_id": "run_one", **where,
+        "project": "proj", "stage": None, "status": None, "session_id": None,
         "ambiguous": False, "assigns": [],
         "argv": ["stage-complete", "--project", "proj", "--run-id", "run_one"],
         "run_ids": ["run_one"], "projects": ["proj"], "session_ids": [],

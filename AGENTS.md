@@ -263,9 +263,14 @@ implementations in `security_hooks.py`). By category:
    human-only `/api/pipelines/<id>/decision`,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting that single command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
-   in daemon memory. Every `pipeline_v1` / `pipeline_test` call gets a token, but only when
-   its script resolves to this backend's own source checkout (`utils/source_repo.py`; the
-   packaged daemon reads the checkout it was built from in `source_repo.json`). Pipeline
+   in daemon memory. Pipeline commands are recognised in one place, `core/pipeline_command.py`.
+   The agent runs `"$SWARM_BACKEND_BIN" pipeline-v1 <sub>` (packaged and dev alike:
+   `SWARM_BACKEND_BIN` is the daemon's own program, in dev the `backend/bin/python-backend`
+   shim; `desktop_main.py` also has `py <script>` for Python without a system interpreter);
+   it gets a token when the program word is that unreassigned variable or this backend's
+   binary. The legacy `python …/pipeline_v1.py` / `pipeline_test.py` form still works until
+   the runner is removed (S6), when its script resolves to this backend's own source checkout
+   (`utils/source_repo.py`; the packaged daemon reads `source_repo.json`). Pipeline
    commands EXECUTE in the daemon (`core/run_protocol/daemon_exec.py`, B-class design
    `docs/design/pipeline-v1-b-class-authority.md`): the CLI sends its argv + token over an
    owner-only socket, the daemon redeems it and runs the command as the token's session,

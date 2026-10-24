@@ -62,8 +62,9 @@ _DECIDE_TIMEOUT = 4.0
 _STEERING_ENV = ("SWARM_WORKTREE_MODE", "SWARM_WORKTREE_ROOT", "SWARM_WORKTREE_LEDGER",
                  "SWARM_DATA_DIR")
 _SUBST = ("$(", "`", "<(", ">(")
-_SCRIPTS = ("pipeline_test.py", "pipeline_v1.py")
-_KEY_OPTS = ("--run-id", "--project", "--stage", "--status", "--session-id")
+from core.pipeline_command import LEGACY_SCRIPTS as _LEGACY  # noqa: E402
+_SCRIPTS = tuple(_LEGACY)
+from core.pipeline_command import _KEY_OPTS  # noqa: E402 — one definition
 
 
 def _safe_project(p: str) -> bool:
@@ -95,64 +96,10 @@ def _opt(tokens: list[str], name: str) -> "str | None":
 
 
 def parse_cli_calls(command: str) -> "tuple[list[dict], bool]":
-    """(calls, single). One dict per simple command that runs pipeline_v1.py /
-    pipeline_test.py: {tool, sub, run_id, project, stage, status, assigns, …}. *single* is
-    True iff the whole command is exactly one simple command with no substitution."""
-    from core.security_hooks import _gate_shell_segments, _skip_leading_wrappers
-    seps: list[str] = []
-    segments = _gate_shell_segments(command, seps)
-    if segments is None:
-        return [], False
-    single = len(segments) == 1 and seps == [""] and not any(m in command for m in _SUBST)
-    from core.security_hooks import _PY_INTERP_RE, _unwrap_program
-    calls = []
-    for seg in segments:
-        if not any(os.path.basename(t) in _SCRIPTS for t in seg):
-            continue
-        prog = _unwrap_program(seg)
-        # The call only counts when a python interpreter RUNS the script (`python
-        # [-flags] …/pipeline_v1.py`): a script path that is merely an argument (e.g. of
-        # `claude --print`) must never receive the token.
-        j = 1
-        while prog and j < len(prog) and prog[j].startswith("-") and prog[j] not in ("-c", "-m"):
-            j += 1
-        runs_it = (bool(prog) and _PY_INTERP_RE.match(os.path.basename(prog[0])) is not None
-                   and j < len(prog) and os.path.basename(prog[j]) in _SCRIPTS)
-        lead = seg[:len(seg) - len(_skip_leading_wrappers(seg))]
-        if not runs_it:
-            calls.append({"tool": "foreign", "sub": None, "run_id": None, "project": None,
-                          "stage": None, "status": None, "ambiguous": False, "assigns": []})
-            continue
-        tool = os.path.basename(prog[j])[:-3]
-        rest = prog[j + 1:]
-        sub = next((t for t in rest if not t.startswith("-")), None)
-        if tool == "pipeline_test":
-            sub = "run"
-        calls.append({"tool": tool, "sub": sub, "run_id": _opt(rest, "--run-id"),
-                      "script": prog[j],
-                      "project": _opt(rest, "--project"), "stage": _opt(rest, "--stage"),
-                      "status": _opt(rest, "--status"),
-                      "session_id": _opt(rest, "--session-id"),
-                      "ambiguous": _ambiguous(rest),
-                      "assigns": [t.split("=", 1)[0] for t in lead if "=" in t],
-                      "argv": list(rest), "run_ids": _opt_all(rest, "--run-id"),
-                      "projects": _opt_all(rest, "--project"),
-                      "session_ids": _opt_all(rest, "--session-id")})
-    return calls, single
-
-
-def _ambiguous(rest: list[str]) -> bool:
-    """A key option given twice, or abbreviated (argparse would take the last one / a
-    prefix, while this gate reads the first exact one)."""
-    seen: dict[str, int] = {}
-    for t in rest:
-        name = t.split("=", 1)[0]
-        if name in _KEY_OPTS:
-            seen[name] = seen.get(name, 0) + 1
-        elif name.startswith("--") and len(name) > 2 and any(
-                k.startswith(name) and k != name for k in _KEY_OPTS):
-            return True
-    return any(n > 1 for n in seen.values())
+    """(calls, single) for *command*: the shared recogniser ``core.pipeline_command``
+    (both the ``"$SWARM_BACKEND_BIN" pipeline-v1`` form and the legacy script form)."""
+    from core import pipeline_command
+    return pipeline_command.calls(command)
 
 
 def _needs_token(call: dict) -> "str | None":
@@ -250,7 +197,8 @@ def _token_binding(command: str, cwd: "str | None" = None) -> "tuple[str, str] |
         return None
     seps: list[str] = []
     segs = _gate_shell_segments(rest, seps)
-    if not segs or seps[0] != "" or not any(os.path.basename(t) in _SCRIPTS for t in segs[0]):
+    from core import pipeline_command
+    if not segs or seps[0] != "" or not pipeline_command.segment_mentions(segs[0]):
         return None
     return head, rest
 
@@ -398,7 +346,8 @@ def _decide(sid: str, command: str, tool_input: dict,
                          "unabbreviated, as ONE command.\nRun instead (the values argparse "
                          f"would have used): {_single_form(_dedup_last(c))}")
         if not c.get("sub"):
-            return _deny("unknown pipeline_v1 command; run `pipeline_v1.py --help`")
+            from core.worktree_write_gate import v1_command
+            return _deny(f"unknown pipeline command; run `{v1_command('--help')}`")
         if c["tool"] == "pipeline_test" and not c.get("run_id"):
             return _deny("pipeline_test.py tests a Pipeline v1 run: give --project and "
                          "--run-id")
@@ -517,29 +466,10 @@ def _resolves_into_scripts(path: str, cwd: "str | None") -> bool:
 
 
 def _is_our_script(call: dict) -> bool:
-    """The script a pipeline call runs is this backend's own (``backend/scripts``), not
-    another file with the same name: only those receive a token (B round 1). The path
-    is resolved against the call's working directory; a relative path that does not
-    resolve to our scripts directory is not ours."""
-    script = call.get("script")
-    tool = call.get("tool")
-    if not isinstance(script, str) or not script or tool not in ("pipeline_v1",
-                                                                  "pipeline_test"):
-        return False
-    from utils.source_repo import pipeline_script
-    expected = pipeline_script(tool)
-    if expected is None:
-        return False        # no runnable source checkout: nothing is ours to token
-    if os.path.isabs(script):
-        cand = Path(script)
-    elif call.get("cwd"):
-        cand = Path(call["cwd"]) / script
-    else:
-        return False        # a relative path with no known cwd cannot be checked
-    try:
-        return cand.resolve(strict=True) == expected
-    except OSError:
-        return False
+    """This backend's own pipeline CLI (``pipeline_command.is_ours``): only it receives
+    a token (B round 1)."""
+    from core import pipeline_command
+    return pipeline_command.is_ours(call)
 
 
 def _prewarm_prefix() -> str:
@@ -607,9 +537,9 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             return {"decision": "approve"}
         tool_input = input_data.get("tool_input") or {}
         command = tool_input.get("command") or ""
-        if not isinstance(command, str) or not any(
-                name in command for name in ("pipeline_v1", "pipeline_test",
-                                             "/api/pipelines/")):
+        from core import pipeline_command
+        if not isinstance(command, str) or not (pipeline_command.mentions(command)
+                                                or "/api/pipelines/" in command):
             return {"decision": "approve"}  # cheap path: no IO
         if phase == "approved" and not any(c in command for c in AFTER_APPROVAL):
             return {"decision": "approve"}  # nothing of this phase in the command

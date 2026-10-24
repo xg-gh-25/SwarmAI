@@ -45,7 +45,7 @@ def _v1_args(line: str):
         _sys.path.insert(0, _scripts)
     import pipeline_v1
     toks = _shlex.split(line.strip())
-    i = next(n for n, t in enumerate(toks) if t.endswith("pipeline_v1.py"))
+    i = next(n for n, t in enumerate(toks) if t.endswith("pipeline_v1.py") or t == "pipeline-v1")
     return pipeline_v1.parser().parse_args(toks[i + 1:])
 
 def _g(cwd, *a):

@@ -181,6 +181,10 @@ class PipelineRunDetail(BaseModel):
     """GET /api/pipelines/{run_id} — one run's full retrospective."""
     id: str
     project: str = ""
+    continue_prompt: str = Field(
+        "", description="what the owner session is asked to run to carry the run on "
+                        "(routers.pipelines.continue_prompt: the pipeline command form is "
+                        "the backend's, never the frontend's)")
     requirement: str = ""
     status: str = ""
     profile: str = ""

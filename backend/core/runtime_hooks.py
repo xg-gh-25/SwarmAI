@@ -747,7 +747,7 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 # the pipeline_id field rather than regex-sniffing a bare run_xxx so a run id quoted
 # elsewhere in the output (an error echoing a prior id) can't be mistaken for THIS
 # call's result.
-_RUN_CREATE_CMD_RE = re.compile(r"pipeline_v1\.py\s+create\b")
+# (the recogniser is core.pipeline_command.is_create: both CLI forms)
 
 
 def _session_run_map_path(session_id: str) -> Path:
@@ -858,7 +858,8 @@ def create_pipeline_run_mapping_hook(session_context: Optional[dict] = None):
             return {}
         tool_input = _extract_field(input_data, "tool_input", {})
         command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
-        if not command or not _RUN_CREATE_CMD_RE.search(command):
+        from core import pipeline_command
+        if not command or not pipeline_command.is_create(command):
             return {}
 
         tool_response = _extract_field(input_data, "tool_response", None)

@@ -858,10 +858,19 @@ function labelBash(cmd: string): Pick<StepLabel, 'verb' | 'object' | 'path' | 'c
     }
     // Something in it may write: never dress it up as a read. Scripts and known
     // tools keep their short name; anything else shows the command itself.
+    // The backend program and its subcommand (`"$SWARM_BACKEND_BIN" <subcommand> <verb>`,
+    // `python-backend py x.py`): the subcommand and the word after it say what ran.
+    if (head === '$SWARM_BACKEND_BIN' || head === '${SWARM_BACKEND_BIN}' || head === 'python-backend') {
+      const [sub, next] = args;
+      if (sub) {
+        const second = next && !next.startsWith('-') ? ` ${looksLikePath(next) ? basename(next) : next}` : '';
+        return { verb: 'run', object: `${sub}${second}` };
+      }
+    }
     if (['python', 'python3', 'node', 'bash', 'sh', 'perl', 'ruby', 'deno'].includes(head)) {
       const script = nonFlag.find((a) => /\.[a-z]{1,4}$/i.test(a));
       if (script) {
-        // A subcommand right after the script (`pipeline_v1.py land`) says what ran.
+        // A subcommand right after the script (`tool.py land`) says what ran.
         const sub = args[args.indexOf(script) + 1];
         const subcommand = sub && /^[a-z][\w:-]*$/i.test(sub) && !looksLikePath(sub) ? ` ${sub}` : '';
         return { verb: 'run', object: `${basename(script)}${subcommand}` };

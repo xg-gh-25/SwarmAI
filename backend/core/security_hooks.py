@@ -351,9 +351,16 @@ def v1_land_card(command: str) -> "str | None":
     return "\n".join(lines)
 
 
+def _v1_cli(args: str) -> str:
+    """The pipeline command the agent runs (one form: core.pipeline_command.command_text)."""
+    from core import pipeline_command
+    return pipeline_command.command_text(args)
+
+
 def _is_v1_land_request(command: str) -> bool:
     """True for an executed Pipeline v1 action that consumes human authorization."""
-    if "pipeline_v1" not in command or "--request" not in command or not any(
+    from core import pipeline_command
+    if not pipeline_command.mentions(command) or "--request" not in command or not any(
             name in command for name in ("run-land", "accept-finding", "discard-snapshot")):
         return False
     from core.run_owner_gate import parse_cli_calls
@@ -1326,13 +1333,9 @@ def _runner_counts(command: str, depth: int) -> "tuple[int, bool] | None":
     for seg in segments:
         if seg and seg[0] in ("for", "while", "until"):
             looped = True
-        seen_py = False
-        for tok in seg:
-            if _PY_INTERPRETER_RE.search(tok):
-                seen_py = True
-            elif seen_py and tok.endswith("pipeline_test.py"):
-                runs += 1
-                break
+        from core import pipeline_command
+        if pipeline_command.runs_runner(seg):
+            runs += 1
     return runs, looped
 
 
@@ -2028,8 +2031,9 @@ def _bg_segment_is_text(seg: list[str]) -> bool:
     if name == "git":
         return len(seg) > 1 and seg[1] in _BG_GIT_TEXT_SUBCOMMANDS
     # The pipeline CLI takes requirement / message texts that may name a keyword.
-    return bool(_BG_PYTHONS.match(name)) and len(seg) > 1 and (
-        os.path.basename(seg[1]) == "pipeline_v1.py")
+    from core import pipeline_command
+    call = pipeline_command.recognize(seg)
+    return bool(call) and call.get("tool") == "pipeline_v1"
 
 
 # Programs that run a file, a string or their stdin as code: a list that runs one
@@ -3257,8 +3261,9 @@ def active_run_commit_deny_text(offending: "list[str]", run_ids: "list[str]") ->
         + ", ".join(list(offending)[:5]) + "; run " + ", ".join(list(run_ids)[:3]) + "). "
         "A run's code and its REPORT.md land together in ONE commit made by the run's "
         "DELIVER landing; a commit by hand splits them. FIX: do not `git commit` the run's "
-        "code yourself: in DELIVER run `python backend/scripts/pipeline_v1.py land "
-        f"--project <project> --run-id {run} --message '<message>'`. A run's own "
+        "code yourself: in DELIVER run `"
+        + _v1_cli(f"land --project <project> --run-id {run} --message '<message>'")
+        + "`. A run's own "
         "REPORT.md (.aidlc/deliverables/<run_id>/) is never committed by hand either. If "
         "this is genuinely NOT a pipeline-run file (false match), tell the user: only the "
         "operator can bypass this gate, with SWARM_GATE_FORCE=active_run_commit_gate in "
@@ -4606,7 +4611,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
                     "DENY (git commit --amend): pipeline run " + own_run["id"]
                     + " is active in this session, and a run never rewrites a commit by "
                     "hand. 要改提交信息就在 DELIVER 落地时改 message: the run's landing "
-                    "(`pipeline_v1.py land --message ...`, or the two-step human "
+                    "(`" + _v1_cli("land --message ...") + "`, or the two-step human "
                     "`run-land`) builds the commit and adds the trailer itself. If the commit has "
                     "already landed, leave it as is and note the wording in the run's "
                     "report; the user decides after the run whether to reword it. Do not "
@@ -4687,8 +4692,7 @@ _SESSION_LINK_MAX_CHARS = 32 * 1024
 _SHELL_ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=")
 # Text test for a link reader, used where no command structure is available (a shell
 # reading a heredoc / pipe, a string past the depth limit).
-_SESSION_LINK_READER_RE = re.compile(r"pipeline_v1|pipeline_test|\bpython[\d.]*\b|\buv\b")
-_SESSION_LINK_READER_SCRIPTS = ("pipeline_v1.py", "pipeline_test.py")
+_SESSION_LINK_READER_RE = re.compile(r"\bpython[\d.]*\b|\buv\b")
 # Cheap pre-filter: a command naming neither the variable nor one of these words is
 # approved without parsing. Indirect forms (`unset $X`, `env -u {}`, `declare -n`,
 # `bash -c 'unset "$1"' _ VAR`) all carry one of the words.
@@ -4970,7 +4974,8 @@ def _shell_reads_stdin(args: list[str]) -> bool:
 def _reader_in_text(text: str) -> bool:
     """_SESSION_LINK_READER_RE over *text*, memoised: every stdin-shell segment of
     one command asks about the same text, and a per-segment scan would be quadratic."""
-    return bool(_SESSION_LINK_READER_RE.search(text))
+    from core import pipeline_command
+    return pipeline_command.mentions(text) or bool(_SESSION_LINK_READER_RE.search(text))
 
 
 def _is_link_reader_program(tokens: list[str]) -> bool:
@@ -4980,15 +4985,17 @@ def _is_link_reader_program(tokens: list[str]) -> bool:
     `"$(which python3)"`), or one of its words is a path ending in pipeline_v1.py /
     pipeline_test.py (`py scripts/pipeline_v1.py`). A word merely containing
     "python" (`dnf install python3.11`, `chown … ~/.swarm-ai/python`) is not one."""
+    from core import pipeline_command
     for t in (_skip_leading_wrappers(tokens), _unwrap_program(tokens)):
         if not t:
             continue
         prog = t[0]
         base = os.path.basename(prog)
         if "$" in prog or "`" in prog or _PY_INTERP_RE.match(base) \
-                or base in ("uv", "uvx") or base.startswith(("pipeline_v1", "pipeline_test")):
+                or base in ("uv", "uvx") or pipeline_command.program_word(base):
             return True
-    return any(os.path.basename(a).endswith(_SESSION_LINK_READER_SCRIPTS) for a in tokens)
+    from core import pipeline_command
+    return pipeline_command.segment_mentions(tokens)
 
 
 def _reset_wraps_reader(wrapped: list[str], text: str, depth: int) -> bool:
@@ -5018,10 +5025,10 @@ def _text_has_reader(command: str, depth: int) -> bool:
     _reset_wraps_reader). Too deep, too long or unsplittable → the text test
     _SESSION_LINK_READER_RE (fail closed)."""
     if depth > _SESSION_LINK_MAX_DEPTH or len(command) > _SESSION_LINK_MAX_CHARS:
-        return bool(_SESSION_LINK_READER_RE.search(command))
+        return _reader_in_text(command)
     segments = _gate_shell_segments(command)
     if segments is None:
-        return bool(_SESSION_LINK_READER_RE.search(command))
+        return _reader_in_text(command)
     return any(_reset_wraps_reader(seg[:_SESSION_LINK_MAX_WORDS], command, depth)
                for seg in segments)
 
@@ -5340,7 +5347,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
                     "DENY (" + hit + "): this command removes or overrides "
                     + _SESSION_LINK_VAR + ", or may (the checker could not rule it "
                     "out). The backend sets that variable for every command; it links "
-                    "a pipeline run to this session (`pipeline_v1.py create` records "
+                    "a pipeline run to this session (`" + _v1_cli("create") + "` records "
                     "it as the run's session_id). A run without this session's id is "
                     "not this session's run, so the pipeline test gate and the "
                     "direct-commit gate stop applying to it. Leave the variable as the "
