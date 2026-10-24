@@ -84,7 +84,7 @@ SwarmAI 的仓库、SwarmAI 项目、XG 的机器，用的必须是和其他所�
   - 可执行文件名：macOS/Linux `python-backend`，Windows `python-backend.exe`。
   - 现有 `~/.swarm-ai/daemon` 首次升级时迁移到 `runtime/<version>/`，迁移后删除。
 - 发布目标：macOS arm64、macOS x64、Windows x64、Linux x64。
-- 第一版不签名（XG 定）：下载页写明 macOS 上"系统设置 → 隐私与安全性 → 仍要打开"（macOS 15 起右键打开不再有效），Windows SmartScreen 上"更多信息 → 仍要运行"；验收检查 arm64 可执行文件至少有 ad-hoc 签名。
+- 第一版不签名（XG 定）：下载页写明 macOS 上"系统设置 → 隐私与安全性 → 仍要打开"（macOS 15 起右键打开不再有效），Windows SmartScreen 上"更多信息 → 仍要运行"；验收检查 arm64 可执行文件至少有 ad-hoc 签名。S1 实测（2026-10-24）：v2.3.0 的 `SwarmAI.app` 只有链接器自带的 ad-hoc 签名，没有 sealed resources，`codesign --verify --deep --strict` 报"code has no resources but signature indicates they must be present"。带 quarantine 下载后，macOS 会把这种 app 判为"已损坏"，不给"仍要打开"。所以 S2 打包后必须对整个 .app 做一次 ad-hoc 签名（`codesign --force --deep --sign -`，或 Tauri 的 `signingIdentity: "-"`），G1 的 C13 检查它。
 
 ### 3.2 产品自己需要的 Python 操作，都由后端程序的子命令执行
 
@@ -274,7 +274,7 @@ r9 把 SwarmAI 的"commit 前审查"交给它自己的 AGENTS.md，但现在没�
   - **第一版（native 和安装）**：每个发布目标（macOS arm64/x64、Windows x64、Linux x64），在一次性的干净 VM/容器里（没有源码 checkout，没有系统 Python，PATH 里没有开发工具），先模拟真实下载：给安装包打上 `com.apple.quarantine`（macOS；Windows 对应 Mark-of-the-Web 的 `Zone.Identifier`），按陌生用户的方式安装和首次打开（未签名 app 走"仍要打开"），再验证：拷进 `runtime/` 的后端能执行、launchd / 子进程拉起的 daemon 能起来、自带的 Claude CLI 能执行，以及 app 启动、外置 runtime 部署、`/health`、seed 和迁移、onboarding 可达、MCP 工具可用、`py` 子命令能跑一个有代表性的 skill 脚本、更新到下一个版本再回滚；再在一个样例仓库上跑通一次 native 修改 + commit。
   - **第二版（通用 pipeline）**：macOS 和 Linux 上，在样例仓库矩阵上跑 pipeline（见 §5.2）。Windows 只验证 `pipeline-v1` 返回"不支持"。
 - **G2 包内容清单**：构建时生成一份清单（必需文件、哈希、架构、可执行文件、原生库），G1 安装后逐项核对，缺一项就失败。
-- G1、G2 是 release workflow 发布步骤的前置 job，不过不发布。本地也能用同一个脚本 `scripts/verify_installer.sh` 跑。
+- G1、G2 是 release workflow 发布步骤的前置 job，不过不发布。本地也能用同一个脚本 `scripts/verify_installer.sh` 跑。发布结论必须在干净 VM 或 CI runner 上得出：受管的工作机（例如装了 CrowdStrike Falcon 的 XG 机器）会直接杀掉并删除带 quarantine 的未签名可执行文件，这和陌生人机器上 Gatekeeper 的行为不同；在这类机器上只能跑自检模式（`--no-quarantine`、`--launcher direct`、`--backend-dir`，退出码 2）。
 
 ### 5.2 产品原则
 
@@ -336,3 +336,4 @@ S4 删掉 `pipeline_test_gate` 时，S6 之前的 pipeline run 里 runner 仍然
 - r11：§3.6 认知文件（SOUL P5/P7、SWARMAI、AGENT R1/R2/Lifecycle、SELF、STEERING #1/#5、pipeline SKILL）和 gate 在 S4 同一个 commit 里改；§3.7 仓库第一次被碰到时注入它的 AGENTS.md / CLAUDE.md / `.swarmai/review.md`（只注入不拦截）；G1 先打 quarantine 再安装，模拟真实下载；新增 golden case；修掉 §5.2 里残留的"commit 前审查"；"删掉签名机制"列为待 XG 拍板的问题。
 - r12（XG）：删掉签名机制写进 S6（§3.3.5）：只追加日志 + 校验和，保留归属、tree 绑定、落地协议、隔离和操作锁，删 key、daemon_exec、token；pipeline 命令回到本地执行。认知文件只要求仓库模板改到位，本机副本不由产品改。
 - r13：§3.3.5 保留 prewarm session id 补传（只删 token）；§3.7 写准信任级别（按仓库规范遵守，低于用户和产品规则，无关指令不执行），首次写之前就注入；§3.6 系统文件随新安装包生效、STEERING 模板保持空、XG 本机副本在 S4 手工同步（r13 先同步了一次）；G1 去重。
+- S1（2026-10-24）：`scripts/verify_installer.sh` 落地，v2.3.0 红（C3 没有清单、C4 没有后端、C13 app 签名损坏）；S2 必须给整个 .app 做 ad-hoc 签名；发布结论只在干净 VM / CI 上得出。
