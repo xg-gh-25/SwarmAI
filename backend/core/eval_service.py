@@ -1426,7 +1426,7 @@ class EvalService:
         A subdir of EvalHistory/, deliberately NOT matched by the non-recursive
         ``glob("*.json")`` that every EvalHistory reader uses (eval_service
         ._load_history, eval_runner._load_history, ci_eval_gate._reports_by_mtime,
-        swarmai_monthly_report._gather_eval, routers/eval.py). This namespace
+        routers/eval.py). This namespace
         isolation is the whole point: a running marker here is INVISIBLE to those
         readers, so none of them can misread it as a scoreless completed run — no
         per-reader status filter is needed.

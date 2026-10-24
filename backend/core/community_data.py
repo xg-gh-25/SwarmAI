@@ -64,7 +64,7 @@ _MEMBER_CAP = 50  # bound the per-feed members payload (member_count stays the T
 _INTERNAL_REPORT_STEMS = (
     "ddd-weekly",          # JobType.DDD_WEEKLY_REPORT (s_ddd-weekly-report)
     "ddd-self-audit",      # JobType.DDD_SELF_AUDIT
-    "swarmai-monthly",     # JobType.SWARMAI_MONTHLY_REPORT (s_swarmai-monthly-report)
+    "swarmai-monthly",     # the removed SwarmAI monthly report: old files on disk stay hidden
     "pipeline-weekly",     # pipeline health report generator
     "validator-check-usage",  # validator-check-usage-audit governance report (precise stem, not a broad `validator-` prefix)
 )

@@ -30,7 +30,6 @@ class JobType(str, Enum):
     SKILL_PROPOSER = "skill_proposer"
     DDD_WEEKLY_REPORT = "ddd_weekly_report"
     DDD_SELF_AUDIT = "ddd_self_audit"
-    SWARMAI_MONTHLY_REPORT = "swarmai_monthly_report"
     SELF_TUNE = "self_tune"
     SESSION_HEALTH_PROBE = "session_health_probe"
     EVAL_SCHEDULED = "eval_scheduled"

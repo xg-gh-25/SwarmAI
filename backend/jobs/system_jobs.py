@@ -305,18 +305,8 @@ SYSTEM_JOBS: list[Job] = [
         ),
     ),
 
-    # --- SwarmAI Monthly Report (comprehensive health + progress MBR) ---
-    # Covers all 12 subsystems. Runs 1st of month after all weekly jobs have
-    # populated their data for the prior month.
-    Job(
-        id="swarmai-monthly-report",
-        name="SwarmAI Monthly Report",
-        type="swarmai_monthly_report",
-        schedule="0 5 1 * *",           # 1st of month, UTC 05:00 = ICT 13:00 (day-of-month pinned)
-        enabled=True,
-        category="system",
-        config={},  # Uses previous month by default
-    ),
+    # (The SwarmAI Monthly Report job was removed: an MBR of SwarmAI's own subsystems
+    # is not a product job. Design 2026-10-24-swarmai-usable-by-anyone P7.)
 
     # --- Skill Proposer (reads health_findings.json, proposes skills for gaps) ---
     # Decoupled from memory-health: health_findings.json is populated by
