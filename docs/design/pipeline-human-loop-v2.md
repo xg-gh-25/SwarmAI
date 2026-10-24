@@ -46,9 +46,13 @@ and like the rest of the Pipeline this is macOS and Linux only.
 Revision 6 (2026-10-24), after a fresh-context review of revision 5: this document ships
 in two parts, inline Runs first (Conductor Phase 2a), then park and resume with the
 Worker (2b), so no Worker ever runs without non-blocking items; the guidance hook does
-only an in-memory read, everything durable is prepared or recorded off the tool path, and
-it uses the accumulating top-level `additionalContext`; no new gate in front of the
-human-only routes (usable P5).
+only an in-memory read, everything durable is prepared or recorded off the tool path; no
+new gate in front of the human-only routes (usable P5).
+
+Revision 7 (2026-10-24), after a review of revision 6: the guidance hook returns
+`hookSpecificOutput.additionalContext` (the field the SDK passes to the model) and the
+chain is changed to concatenate it; the hook is registered in every session at spawn and
+does nothing unless that session drives a Run; Worker-only paragraphs are marked 2b.
 
 ## 1. Problem
 
@@ -286,15 +290,17 @@ Each reader is at-least-once and idempotent by message id.
 
 For every Run, `pipeline-v1 decision-request` and `land_request` return at once with
 `awaiting_human` and the instruction to end the turn; no Run calls `AskUserQuestion` for a
-Pipeline item. The turn ends cleanly, with no open tool call.
+Pipeline item. The turn ends cleanly, with no open tool call. Phase 2a builds this for
+inline Runs; the Worker branch below ships in Phase 2b with the Worker.
 
-- **Worker Run** (background): when its turn ends with a blocking item open,
-  the Conductor **parks** it at once: the process is recycled to COLD keeping
-  `_sdk_session_id`, and the slot is released (conductor §5.1, §6.2). There is no warm wait:
-  the prompt cache expires after 5 minutes anyway, so holding the process buys little and
-  costs a slot.
-- **Inline Run**: its tab shows the item as the Run's status card (§4.5), answered through
-  the same write path. The tab stays usable for chat meanwhile; it holds no pooled slot.
+- **Inline Run** (2a): its tab shows the item as the Run's status card (§4.5), answered
+  through the same write path. The tab stays usable for chat meanwhile; it holds no
+  pooled slot.
+- **Worker Run** (2b): when its turn ends with a blocking item open, the Conductor
+  **parks** it at once: it writes the dispatch event `parked`, then the process is
+  recycled to COLD keeping `_sdk_session_id`, and the slot is released (conductor §5.1,
+  §6.2). There is no warm wait: the prompt cache expires after 5 minutes anyway, so
+  holding the process buys little and costs a slot.
 
 This replaces v1's `AskUserQuestion` card and its 4-hour waiter for Pipeline items. Inline
 and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.3).
@@ -303,10 +309,10 @@ and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.3).
 ### 5.2 How an input reaches the agent
 
 - **Resume turn.** When an item is resolved:
-  - a Worker Run becomes `resume_pending`; when it gets a slot, the Conductor resumes the
-    session (`--resume`) and sends one new turn;
-  - an inline Run gets that turn in its own tab session, through the tab's pending-message
-    queue (never interrupting a turn already streaming there).
+  - (2a) an inline Run gets that turn in its own tab session, through the tab's
+    pending-message queue (never interrupting a turn already streaming there);
+  - (2b) a Worker Run becomes `resume_pending`; when it gets a slot, the Conductor
+    resumes the session (`--resume`) and sends one new turn.
   The turn's body is the delivery envelope below with every undelivered `human_input` and
   the instruction to `input_ack` each. The daemon writes `input_delivered` for each as the
   turn is sent.
@@ -316,22 +322,29 @@ and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.3).
   - **Prepare, off the tool path.** When guidance is accepted, the Conductor executor
     builds the envelope (§5.2 below), takes the content snapshot (§3.3) and puts the
     prepared envelope into an in-memory slot for that Run's driver session.
-  - **Hook.** It reads that slot; if it is empty it returns nothing. If it holds an
-    envelope it takes it and returns it as the **top-level** `additionalContext`, the
-    field the chain accumulates (`hook_builder._build_chain`), never
-    `hookSpecificOutput.additionalContext`, which a later hook overwrites (so the
-    repo-guide injection of usable §3.7 and this hook do not clobber each other). It then
-    hands the `input_delivered` append to the Conductor executor and returns; it does no
-    git, disk or log write itself.
+  - **Hook.** It is registered in every app session at spawn, because hooks are built
+    once when a session starts (`hook_builder.build_hooks`) and a session can become a
+    Run's driver later. On each call it reads one in-memory slot keyed by its session
+    id; the slot exists only while that session is a Run's current driver and has an
+    envelope ready, so in every other session the hook returns `{}` at once. If the slot
+    holds an envelope the hook takes it and returns it as
+    `hookSpecificOutput.additionalContext` with `hookEventName: "PostToolUse"`, the shape
+    the SDK passes to the model and that existing PostToolUse hooks use
+    (`main_dirty_scan.py`). `_build_chain` today merges `hookSpecificOutput` later-wins,
+    so a second hook's context would replace this one (for example the repo-guide
+    injection of usable §3.7); Phase 2a changes the chain to **concatenate**
+    `hookSpecificOutput.additionalContext` across hooks, as it already does for the
+    top-level field. The hook then hands the `input_delivered` append to the Conductor
+    executor and returns; it does no git, disk or log write itself.
   - **At least once.** If the daemon dies after the hook returned and before
     `input_delivered` is appended, the input counts as undelivered and is delivered again;
     the agent's `input_ack` names the `input_id`, so a duplicate is recognized. The
     snapshot was taken at prepare time, slightly before delivery, so a file changed in
     between is listed as changed after the note, which errs on the side of showing more.
-  The hook only injects; it never denies or delays a tool call, and it is registered only
-  in a session that currently drives a Run, so native work outside the Pipeline never
-  sees it (usable P3). The surface shows "pending delivery" until it is delivered. A
-  person who needs the Run to stop now uses Stop, not guidance.
+  The hook only injects; it never denies or delays a tool call, and it does nothing in a
+  session that drives no Run, so native work outside the Pipeline never sees it (usable
+  P3). The surface shows "pending delivery" until it is delivered. A person who needs the
+  Run to stop now uses Stop, not guidance.
 - **Every `pipeline-v1` command** also returns any accepted but undelivered input, in
   the same envelope, as a backstop.
 
@@ -386,7 +399,7 @@ Designed for a person going through many Runs, including a day's delivered ones
 | 12 | A new Attempt asks the same question again | Same semantic digest → `input_rebound`, no second question; any difference → a new item |
 | 13 | An inline Run asks while you are away from its tab for 6 hours | Its card stays open in the tab and in the overlay; you answer on return; the tab gets the resume turn through its pending queue |
 | 14 | You take a background Run over in a tab while its approval is open | `driver_bind` to your tab supersedes the open `land_request`; the Run re-requests approval under the new driver |
-| 15 | A background Worker's test hangs | `SessionUnit`'s tool-hang tier interrupts the tool and the agent continues; the board shows how long the Worker has been in its stage, and you can cancel or take it over. An interrupted Worker is never resumed with `--resume` (conductor §6.2) |
+| 15 | A background Worker's test hangs or its process dies | `SessionUnit` recovers it as it would a chat tab (warm interrupt, or recycle and `--resume` retry); the board shows how long the Worker has been in its stage, and you can cancel or take it over. If `SessionUnit` gives up, the Run continues as a new Attempt (conductor §6.2) |
 
 ## 8. Changes
 
@@ -430,8 +443,10 @@ guidance hook, delivery content snapshots.
   between projection insert and high-water update never yields two sequence pairs;
 - guidance during a long BUILD is delivered at the next tool boundary; text with a forged
   envelope header, footer or system block parses to exactly one input;
-- the guidance hook and the repo-guide injection fire on the same tool call and both
-  texts reach the model; with nothing pending the hook adds no measurable latency (S5);
+- the guidance hook and the repo-guide injection each return
+  `hookSpecificOutput.additionalContext` on the same tool call, the chain concatenates
+  them, and both texts reach the model on the real SDK; with nothing pending the hook
+  adds no measurable latency (S5);
   a daemon kill between the hook returning and `input_delivered` leads to one redelivery,
   recognized by `input_id`;
 - land refuses an unacked or undelivered input; a further edit to an already changed file
@@ -441,12 +456,12 @@ guidance hook, delivery content snapshots.
 - a `human_input` written by the daemon and a stage record written by the `pipeline-v1`
   process at the same moment are serialized by the run operation lock, with consecutive
   sequence numbers and valid checksums;
-- the guidance hook never denies a tool call and does nothing in a session that drives no
-  Run;
+- the guidance hook never denies a tool call and returns `{}` in a session that drives no
+  Run, including a session that stopped being the driver after a `driver_bind` elsewhere;
 - a six-way race on one Run (answer, `item_expired`, cancel, driver change, request
-  changes, land), each taking the Run operation lock and then the Conductor dispatch lock
-  (conductor §4.3): exactly one outcome per item, and no `auth` on a superseded
-  `land_request` is ever consumed;
+  changes, land), each serialized by the Run operation lock (conductor §4.3): exactly one
+  outcome per item, no `auth` on a superseded `land_request` is ever consumed, and a Run
+  with a `cancel` record never lands;
 - (2b) a daemon restart while parked keeps the item answerable; a crash while running
   supersedes it and the new Attempt runs in a fresh session;
 - (2b) a re-asked identical question in a new Attempt is rebound, a changed one is not;
