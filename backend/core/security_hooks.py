@@ -299,7 +299,7 @@ def _count_required_approval_soon(session_id: "str | None"):
 
 def v1_land_card(command: str) -> "str | None":
     """What the approval card shows for a v1 run-land / accept-finding / discard-snapshot
-    (fixing spec C1): read from the signed land_request event, never from the run's
+    (fixing spec C1): read from the logged land_request event, never from the run's
     JSON — run, action, each repo's code and delivery tree, the REPORT's first line, the
     push reasons and whether tests are skipped. None when it cannot be read."""
     from core.run_owner_gate import parse_cli_calls
@@ -1579,7 +1579,7 @@ def create_dangerous_command_gate(
             }
 
         # Check session approvals. A v1 authorization is asked every time: each one is
-        # a person's decision about one signed request.
+        # a person's decision about one logged request.
         if not _is_v1_land_request(command) \
                 and permission_mgr.is_command_approved(session_key, command):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
@@ -1595,7 +1595,7 @@ def create_dangerous_command_gate(
         actual_session_id = session_context.get("sdk_session_id") or session_key
         request_id = f"perm_{uuid4().hex[:12]}"
         tool_input_data = input_data.get("tool_input", {})
-        # a v1 authorization shows what it binds, read from the signed event (C1)
+        # a v1 authorization shows what it binds, read from the logged event (C1)
         reason_text = discard_reason or (_is_v1_land_request(command) and v1_land_card(command)) \
             or "Matches dangerous command pattern"
 
@@ -2973,8 +2973,8 @@ def _session_adversarial_coverage(session_id: str):
 # active-run commit gate — a live v1 run's files land only through its landing (Bash)
 # ---------------------------------------------------------------------------
 # A v1 run lands its change (code + its REPORT deliverable) with `pipeline_v1.py land`,
-# which checks the signed tests and review first. An agent `git commit` of a path the
-# run changed (RunEngine.owned_paths: its signed code facts) would put the change on
+# which checks the logged tests and review first. An agent `git commit` of a path the
+# run changed (RunEngine.owned_paths: its logged code facts) would put the change on
 # main without those checks, so it is denied and pointed at the landing. The landing
 # commits in its own subprocess, never through the agent's Bash tool, so it never
 # reaches this gate. A relevant run that cannot be read, or a commit retargeted at
@@ -3000,7 +3000,7 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
     nothing an agent can edit in run.json (R1 review r1). No git, no event fold."""
     from config import get_app_data_dir
     from core import run_worktree
-    from core.run_protocol.engine import signed_terminal
+    from core.run_protocol.engine import logged_terminal
     from core.run_protocol.contract import read_contract
     data_dir = get_app_data_dir()
     projects = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects")
@@ -3025,8 +3025,8 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
             except Exception as exc:  # noqa: BLE001
                 # A run whose SIGNED log says it finished cannot own anything now: skip
                 # it, so one broken old run does not block every commit (re-audit
-                # 84b72ec1 MED). Read from the signed events, never run.json (c772dd92).
-                if signed_terminal(data_dir, run_id):
+                # 84b72ec1 MED). Read from the logged events, never run.json (c772dd92).
+                if logged_terminal(data_dir, run_id):
                     logger.warning("run %s: contract unreadable, run finished — skipped",
                                    run_id)
                     continue
@@ -3048,9 +3048,9 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
 
 
 def _active_run_ownership(touching: "list[tuple[str, str]]") -> "dict[str, tuple[str, set]]":
-    """{run_id: (signed owner session, real paths it owns)} for those runs that are not
+    """{run_id: (logged owner session, real paths it owns)} for those runs that are not
     terminal. Each run's state, owner and paths come from the run itself (``RunEngine``:
-    the signed events' lifecycle and owner transfers, its contract, its code). A run
+    the logged events' lifecycle and owner transfers, its contract, its code). A run
     that cannot be read raises; the caller then allows the commit with a note."""
     from config import get_app_data_dir
     from core.run_protocol import lifecycle
@@ -3098,7 +3098,7 @@ def active_run_commit_deny_text(offending: "list[str]", run_ids: "list[str]") ->
 
 def create_active_run_commit_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate that DENYs a `git commit` by an ACTIVE v1 run's
-    own owner session (its signed owner, ``RunEngine.owner_session``) whose pending
+    own owner session (its logged owner, ``RunEngine.owner_session``) whose pending
     paths are that run's code or its reserved REPORT, routing it to the run's ``land``.
     Prevents the code/REPORT split inside a run the user started.
 
@@ -3556,7 +3556,6 @@ def _code_can_execute(text: str) -> bool:
             if name.strip().split(".")[0] not in _INERT_IMPORTS:
                 return True
     return False
-
 
 
 def _resolve_dir(base: str, sub: str) -> str:
@@ -4868,136 +4867,6 @@ def _audit_strip_wrappers(rest: list[str]) -> "tuple[int, bool]":
     return k, from_stdin
 
 
-def _authority_key_path(path: str, cwd: "str | None" = None, *, recursive: bool = False) -> bool:
-    """Whether a path expression can resolve to a Pipeline v1 authority key."""
-    if not path:
-        return False
-    raw = path.split("=", 1)[-1] if "=" in path else path
-    expanded = _audit_expand_home(raw)
-    if cwd and not os.path.isabs(expanded):
-        expanded = os.path.join(cwd, expanded)
-    normalized = os.path.normpath(expanded)
-    candidate = (os.path.realpath(normalized) if not glob.has_magic(normalized)
-                 else normalized)
-    parts = tuple(part.lower() for part in Path(candidate).parts)
-    for root in _audit_dir_parts():
-        n = min(len(parts), len(root))
-        if not all(fnmatch.fnmatchcase(root[i], parts[i]) for i in range(n)):
-            continue
-        if len(parts) < len(root):
-            if recursive:
-                return True
-            continue
-        rest = parts[len(root):]
-        # Keys have one canonical shape below the protected root. A non-recursive
-        # shell glob at the root (audit/*) cannot descend through runs/<run>/.
-        key_pattern = (len(rest) == 3
-                       and fnmatch.fnmatchcase("runs", rest[0])
-                       and bool(rest[1]) and rest[1] not in {".", ".."}
-                       and fnmatch.fnmatchcase("authority.key", rest[2]))
-        if key_pattern:
-            return True
-        if recursive and len(rest) <= 2:
-            # audit root, runs/, or one run directory can recursively contain a key.
-            return True
-        base = rest[-1] if rest else ""
-        if ("$" in base or "`" in base) and ("authority" in base or ".key" in base):
-            return True
-    return False
-
-
-def _authority_script_read(seg: list[str], cwd: "str | None") -> bool:
-    """Inspect a directly invoked interpreter script for a hard-coded key read."""
-    words = [word for word in seg if word not in _AUDIT_REDIRECT_OPS]
-    state = {"tainted": set(), "names_dir": False, "bodies": "", "depth": 0}
-    _audit_set_cwd(state, cwd)
-    rest = _audit_leading(words, state)
-    k, _ = _audit_strip_wrappers(rest)
-    if k >= len(rest):
-        return False
-    verb = re.sub(r"^(python|ruby|perl|node|php|lua)[\d.]*$", r"\1",
-                  os.path.basename(rest[k]))
-    if verb not in _AUDIT_INTERPRETERS:
-        return False
-    _codes, from_stdin, _inplace, operands = _audit_inline_code(verb, rest[k + 1:])
-    if from_stdin or not operands:
-        return False
-    script = _audit_expand_home(operands[0])
-    if not os.path.isabs(script):
-        script = os.path.join(cwd, script) if cwd else script
-    try:
-        if not os.path.isfile(script) or os.path.getsize(script) > _AUDIT_MAX_COMMAND_CHARS:
-            return False
-        source = Path(script).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    keyish = ("authority.key" in source or
-              ("authority" in source and ("*.key" in source or ".key" in source)))
-    return keyish and (_AGENT_AUDIT_DIR.name.lower() in source.lower() or
-                       bool(cwd and _audit_path_hit(cwd, set()) == "in"))
-
-
-def _authority_bash_read(segments: list[list[str]], cwd: "str | None") -> bool:
-    values: dict[str, str] = {}
-    current_cwd = cwd
-
-    def expand(word: str) -> str:
-        pattern = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
-        return pattern.sub(
-            lambda m: values.get(m.group(1) or m.group(2), m.group(0)), word)
-
-    for seg in segments:
-        expanded_seg = [expand(word) for word in seg]
-        for word in expanded_seg:
-            match = _AUDIT_ASSIGN_RE.match(word)
-            if match:
-                values[match.group(1)] = expand(word[match.end():])
-        state = {"tainted": set(), "names_dir": False, "bodies": "", "depth": 0}
-        _audit_set_cwd(state, current_cwd)
-        rest = _audit_leading(expanded_seg, state)
-        k, _ = _audit_strip_wrappers(rest)
-        if k >= len(rest):
-            continue
-        verb = os.path.basename(rest[k])
-        args = rest[k + 1:]
-        normalized_verb = re.sub(r"^(python|ruby|perl|node|php|lua)[\d.]*$", r"\1", verb)
-        recursive = (
-            verb in {"rg", "ripgrep", "ag", "ack", "find"}
-            or (verb in _AUDIT_GREP_VERBS and any(
-                arg in {"-r", "-R", "--recursive"}
-                or (arg.startswith("-") and "r" in arg[1:].lower())
-                for arg in args))
-            or (verb in {"cp", "rsync", "zip"} and any(
-                arg in {"-r", "-R", "-a", "--recursive", "--archive"}
-                or (arg.startswith("-") and any(flag in arg[1:] for flag in "rRa"))
-                for arg in args))
-            or (verb in {"tar", "bsdtar", "gtar"} and not any(
-                arg in {"-x", "--extract", "--get"}
-                or (arg.startswith("-") and "x" in arg[1:]) for arg in args))
-        )
-        if verb == "find":
-            name_filters = [args[i + 1] for i, arg in enumerate(args[:-1])
-                            if arg in {"-name", "-iname", "-path", "-ipath"}]
-            if name_filters and all(
-                    not fnmatch.fnmatchcase("authority.key", pattern.lower())
-                    for pattern in name_filters):
-                recursive = False
-        if any(_authority_key_path(arg, current_cwd, recursive=recursive) for arg in args):
-            return True
-        if _authority_script_read(expanded_seg, current_cwd):
-            return True
-        if verb in {"cd", "pushd"}:
-            target = next((arg for arg in args if not arg.startswith("-")), "")
-            if target:
-                target = _audit_expand_home(target)
-                current_cwd = (os.path.normpath(target) if os.path.isabs(target)
-                               else os.path.normpath(os.path.join(current_cwd, target))
-                               if current_cwd else None)
-        elif verb == "popd":
-            current_cwd = None
-    return False
-
-
 def _audit_bash_hit(command: str, depth: int = 0, tainted: "set[str] | None" = None,
                     cwd: "str | None" = None) -> "str | None":
     """Why *command* may write into the audit directory, or None (block comment above).
@@ -5011,9 +4880,6 @@ def _audit_bash_hit(command: str, depth: int = 0, tainted: "set[str] | None" = N
     if not command:
         return None
     names_dir = _AGENT_AUDIT_DIR.name.lower() in command.lower()
-    if "authority.key" in command and (names_dir or (
-            cwd and _audit_path_hit(cwd, set()) == "in")):
-        return "read or access to Pipeline v1 event authority key"
     if depth > _AUDIT_MAX_DEPTH or len(command) > _AUDIT_MAX_COMMAND_CHARS:
         return "nested shell code that names the audit directory" if names_dir else None
     blanked = _audit_strip_comments(_blank_heredocs(command))
@@ -5031,8 +4897,6 @@ def _audit_bash_hit(command: str, depth: int = 0, tainted: "set[str] | None" = N
         ):
             return "unparseable command that names the audit directory"
         return None
-    if _authority_bash_read(segments, cwd):
-        return "read or access to Pipeline v1 event authority key"
     state: dict[str, Any] = {
         "tainted": set(tainted or ()), "names_dir": names_dir, "bodies": bodies,
         "depth": depth,
@@ -5382,21 +5246,6 @@ _AUDIT_FILE_TOOLS = {
     "NotebookEdit": "notebook_path",
 }
 
-_AUDIT_READ_TOOLS = {"Read": "file_path", "Grep": "path"}
-
-
-def _authority_key_file(path: str, cwd: "str | None" = None, *, recursive: bool = False) -> bool:
-    if not path:
-        return False
-    if _authority_key_path(path, cwd, recursive=recursive):
-        return True
-    expanded = _audit_expand_home(path)
-    if cwd and not os.path.isabs(expanded):
-        expanded = os.path.join(cwd, expanded)
-    # A file tool may pass a directory that does not yet exist in a synthetic test.
-    # For recursive Grep, any audit/run directory scope can contain authority.key.
-    return recursive and _audit_prefix_hit(os.path.realpath(expanded)) in {"in", "ancestor"} \
-        and not os.path.splitext(os.path.basename(expanded))[1]
 
 
 def _audit_file_tool_hit(path: str, cwd: "str | None" = None) -> bool:
@@ -5418,9 +5267,10 @@ def _audit_file_tool_hit(path: str, cwd: "str | None" = None) -> bool:
 
 def create_audit_marker_write_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse gate (Bash and Write|Edit|MultiEdit|NotebookEdit) that
-    DENIES, always, a write, move or delete in _AGENT_AUDIT_DIR (forms in the section
-    comment above). Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open
-    on any internal error.
+    DENIES a write, move or delete in _AGENT_AUDIT_DIR (forms in the section comment
+    above). Reads pass. SWARM_GATE_FORCE=audit_marker_write_gate lets a call through
+    (S6-3: the run logs it protects are checksummed, not logged). Fail-open on any
+    internal error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
 
     async def audit_marker_write_gate(
@@ -5440,17 +5290,13 @@ def create_audit_marker_write_gate(session_context: dict[str, Any]):
                 subject = str(tool_input.get(_AUDIT_FILE_TOOLS[tool]) or "")
                 hit = (f"{tool} into the audit directory"
                        if _audit_file_tool_hit(subject, cwd) else None)
-            elif tool in _AUDIT_READ_TOOLS:
-                subject = str(tool_input.get(_AUDIT_READ_TOOLS[tool]) or "")
-                hit = ("read or access to Pipeline v1 event authority key"
-                       if _authority_key_file(subject, cwd, recursive=tool == "Grep") else None)
             else:
                 return {"decision": "approve"}
         except Exception:  # noqa: BLE001
             logger.warning("audit_marker_write_gate: classify failed — failing open",
                            exc_info=True)
             return {"decision": "approve"}
-        if hit is None:
+        if hit is None or force_enabled("audit_marker_write_gate", input_data):
             return {"decision": "approve"}
         session_id = session_context.get("sdk_session_id", "") or ""
         logger.warning("[BLOCKED] audit_marker_write_gate (%s) in session %s: %s",
@@ -5462,13 +5308,12 @@ def create_audit_marker_write_gate(session_context: dict[str, Any]):
                 "permissionDecisionReason": (
                     "DENY (" + hit + "): this writes, moves or deletes files in "
                     + str(_AGENT_AUDIT_DIR) + ", or may (the checker could not rule "
-                    "it out). Only the backend's SubagentStop hook writes there. Its "
-                    "directory also holds every pipeline run's signed events and keys "
-                    "(runs/<run_id>/), which the run's own checks trust, so a "
-                    "hand-written or deleted file would break those runs. To produce a marker, spawn the reviewer "
-                    "with the Agent tool. Reading markers is fine: cat, ls, grep or jq "
-                    "by an absolute path. This gate has no bypass: if it is wrong, "
-                    "tell the user."
+                    "it out). Only the backend's hooks and pipeline commands write "
+                    "there. It holds every pipeline run's event log (runs/<run_id>/); "
+                    "a hand-edited or deleted file damages that run, which then stops "
+                    "for a person. To produce a review marker, spawn the reviewer with "
+                    "the Agent tool. Reading is fine: cat, ls, grep or jq by an "
+                    "absolute path. If this is wrong, tell the user."
                 ),
             }
         }

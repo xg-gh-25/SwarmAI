@@ -30,7 +30,7 @@ def _rig(tmp_path):
     worktree = tmp_path / "wt"
     _git(main, "worktree", "add", "-qb", "run/run_one", str(worktree), base)
     (worktree / "a.py").write_text("new\n")
-    authority = ev.EventAuthority(b"l" * 32)
+    authority = ev.EventAuthority()
     store = AuditStore(tmp_path / "audit", "run_one", authority)
     code_tree = tree.build_code_trees({"repo": str(worktree)}, "run_one",
                                       git_tree.write_tree, git_tree.list_reserved)["repo"]

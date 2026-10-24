@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from tests.pipeline_v1_rig import PROJECT, PV1, Rig, documents
+from tests.pipeline_v1_rig import PROJECT, PV1, SESSION, Rig, documents
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -74,16 +74,28 @@ def test_an_artifact_can_come_on_stdin(rig):
     assert out["next"]["stage"] == "think" and "card_text" in out["next"]
 
 
-def test_a_pipeline_command_without_the_hooks_token_is_refused(rig):
-    """B-class B-b: run outside the session's hook (no token), nothing is executed."""
+def test_a_pipeline_command_runs_without_the_daemon_and_only_for_the_owner(rig):
+    """S6-3 (§3.3.5): a command runs in its own process, with no SwarmAI daemon and no
+    hook (no socket, no token); it acts only for the run's owner session."""
     r = rig()
     r.create()
-    proc = subprocess.run([sys.executable, str(PV1), "abandon", "--project", PROJECT,
-                           "--run-id", str(r.run_id), "--reason", "x"], env=r.env,
-                          capture_output=True, text=True, timeout=60)
-    out = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert proc.returncode == 2 and out.get("code") == "no_token", out
+
+    def run(session: "str | None") -> tuple[dict, int]:
+        env = {k: v for k, v in r.env.items() if k != "SWARM_APP_SESSION_ID"}
+        if session is not None:
+            env["SWARM_APP_SESSION_ID"] = session
+        proc = subprocess.run([sys.executable, str(PV1), "abandon", "--project", PROJECT,
+                               "--run-id", str(r.run_id), "--reason", "x"], env=env,
+                              capture_output=True, text=True, timeout=60)
+        return json.loads(proc.stdout.strip().splitlines()[-1]), proc.returncode
+
+    for session in (None, "another-session"):
+        out, rc = run(session)
+        assert rc == 1 and out.get("code") == "not_owner", out
     assert r.v1("status")["state"]["status"] == "active"
+    out, rc = run(SESSION)
+    assert rc == 0 and out.get("ok") is True, out
+    assert r.v1("status")["state"]["status"] == "abandoned"
 
 
 def test_a_build_report_completes_build_and_names_the_next_card(rig):

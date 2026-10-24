@@ -8,8 +8,8 @@ a comma-separated list of gate names or group names::
 
 Every use is recorded as ``force_bypass`` in ``gate_decisions.jsonl``.
 
-The safety-floor gates in ``UNFORCEABLE`` cannot be forced: they protect the evidence
-and the run<->session link that every other gate trusts. Naming one is ignored and logged.
+The gate in ``UNFORCEABLE`` cannot be forced: it protects the run<->session link
+every other run gate keys on. Naming one is ignored and logged.
 
 Key public symbols:
 
@@ -36,7 +36,7 @@ GROUPS: dict[str, frozenset[str]] = {
     "expert_gate": frozenset({"expert_type_gate", "expert_budget_gate"}),
 }
 
-UNFORCEABLE: frozenset[str] = frozenset({"audit_marker_write_gate", "session_link_gate"})
+UNFORCEABLE: frozenset[str] = frozenset({"session_link_gate"})
 
 
 def _listed() -> set[str]:

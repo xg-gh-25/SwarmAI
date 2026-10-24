@@ -10,7 +10,7 @@ import pytest
 
 from core.run_protocol import checks, events
 
-AUTH = events.EventAuthority(b"c" * 32)
+AUTH = events.EventAuthority()
 
 EXPECTED = {
     "RQ-1", "RQ-2", "RQ-3", "RQ-4", "RQ-5", "RQ-6", "RQ-8", "RQ-8b",

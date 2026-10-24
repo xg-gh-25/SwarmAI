@@ -11,7 +11,7 @@ whose writes a worktree takes, and what the sweeper may release, must not move:
 - a run.json with no protected contract is not a run at all;
 - ``worktree_write_gate`` denies a write into a run's worktree from a session that
   owns no run (it used to allow it whenever the caller had none);
-- the sweeper keeps a run whose signed state it cannot read.
+- the sweeper keeps a run whose event log it cannot read (a damaged record).
 """
 from __future__ import annotations
 
@@ -80,12 +80,14 @@ def test_a_session_with_no_run_cannot_write_into_a_runs_worktree(rig):
     assert wg.judge({"tool_name": "Read", "tool_input": {"file_path": target}}, None) is None
 
 
-def test_the_sweeper_keeps_a_run_whose_signed_state_is_unreadable(rig):
+def test_the_sweeper_keeps_a_run_whose_logged_state_is_unreadable(rig):
     from core import run_worktree
     r = _isolated(rig)
     _forge(r, status="abandoned")
-    key = r.data / "state" / "pipeline_agent_audit" / "runs" / r.run_id / "authority.key"
-    key.rename(key.with_name("authority.key.bak"))
+    log = r.data / "state" / "pipeline_agent_audit" / "runs" / r.run_id / "events.jsonl"
+    lines = log.read_bytes().splitlines(keepends=True)
+    lines[0] = lines[0].replace(b"\"at\":\"", b"\"at\":\"X", 1)   # a damaged, complete record
+    log.write_bytes(b"".join(lines))
     report = run_worktree.sweep(r.ws, owner_active=lambda sid: False,
                                 now=1e12, release_orphans=False)
     assert not any(isinstance(x, dict) and x.get("run") == r.run_id

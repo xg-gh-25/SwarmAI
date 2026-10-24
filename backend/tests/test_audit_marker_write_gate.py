@@ -12,7 +12,7 @@ Invariants:
     of the path (~, $HOME, absolute, glob, variable, differently cased);
   • reads by absolute path pass, and so do unrelated commands and paths;
   • Write/Edit/MultiEdit/NotebookEdit deny by resolved path, including via symlink;
-  • it cannot be forced (gate_force.UNFORCEABLE); an internal error fails open;
+  • SWARM_GATE_FORCE lets a call through (S6-3); an internal error fails open;
   • build_hooks registers the gate for Bash (ahead of session_link_gate and the HITL
     gate) and for the file tools.
 """
@@ -106,7 +106,7 @@ DENY_COMMANDS = [
 def test_bash_write_forms_are_denied(home, command):
     result = _run("Bash", {"command": command})
     assert _denied(result), command
-    assert "no bypass" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "damages that run" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 ALLOW_COMMANDS = [
@@ -178,9 +178,12 @@ def test_other_tools_pass(home):
     assert not _denied(_run("Read", {"file_path": f"{D}/x.marker"}))
 
 
-def test_cannot_be_forced(home, monkeypatch):
-    monkeypatch.setenv("SWARM_GATE_FORCE", "audit_marker_write_gate")
+def test_the_operator_can_force_it(home, monkeypatch):
+    """S6-3: the run logs are checksummed, not signed; this guards against mistakes
+    and the operator switch lets a call through."""
     assert _denied(_run("Bash", {"command": f"rm -rf {D}"}))
+    monkeypatch.setenv("SWARM_GATE_FORCE", "audit_marker_write_gate")
+    assert _run("Bash", {"command": f"rm -rf {D}"}) == {"decision": "approve"}
 
 
 def test_internal_error_fails_open(home, monkeypatch):
@@ -291,56 +294,3 @@ def test_classification_is_bounded_on_pathological_input(home):
         assert time.monotonic() - t < 5.0, probe[:40]
 
 
-def test_v1_authority_key_is_unreadable_to_agent_tools(home):
-    key = home / ".swarm-ai/state/pipeline_agent_audit/runs/run_x/authority.key"
-    key.parent.mkdir(parents=True, exist_ok=True)
-    key.write_bytes(b"secret")
-    assert _denied(_run("Bash", {"command": f"cat {key}"}))
-    assert _denied(_run("Read", {"file_path": str(key)}))
-    assert _denied(_run("Grep", {"path": str(key), "pattern": "x"}))
-    marker = key.parent / "events.jsonl"
-    assert not _denied(_run("Read", {"file_path": str(marker)}))
-
-
-def test_v1_authority_key_globs_and_variables_are_denied(home):
-    run_dir = home / ".swarm-ai/state/pipeline_agent_audit/runs/run_x"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "authority.key").write_bytes(b"secret")
-    commands = [
-        f"cat {run_dir}/authority.*",
-        f"cat {run_dir}/*.key",
-        f"D={run_dir}; K='authority.*'; cat $D/$K",
-        f"find {run_dir} -type f -print",
-        f"tar -cf /tmp/a.tar {run_dir}",
-        f"cp -R {run_dir} /tmp/copied-audit",
-        "cat authority.*",
-    ]
-    for command in commands[:-1]:
-        assert _denied(_run("Bash", {"command": command})), command
-    assert _denied(_run("Bash", {"command": commands[-1]}, cwd=str(run_dir)))
-    assert _denied(_run("Read", {"file_path": str(run_dir / "authority.*")}))
-    assert _denied(_run("Grep", {"path": str(run_dir), "pattern": "secret"}))
-    assert _denied(_run("Grep", {"path": str(home), "pattern": "secret"}))
-    assert not _denied(_run("Grep", {"path": str(run_dir / "events.jsonl"),
-                                      "pattern": "metric"}))
-
-
-def test_v1_authority_key_direct_interpreter_script_is_denied(home, tmp_path):
-    run_dir = home / ".swarm-ai/state/pipeline_agent_audit/runs/run_x"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "authority.key").write_bytes(b"secret")
-    script = tmp_path / "reader.py"
-    script.write_text(
-        "from pathlib import Path\n"
-        f"print((Path({str(run_dir)!r}) / 'authority.key').read_bytes())\n"
-    )
-    assert _denied(_run("Bash", {"command": f"python3 {script}"}))
-
-
-def test_v1_authority_key_script_read_from_key_cwd_is_denied(home, tmp_path):
-    run_dir = home / ".swarm-ai/state/pipeline_agent_audit/runs/run_x"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "authority.key").write_bytes(b"secret")
-    script = tmp_path / "reader.py"
-    script.write_text("from pathlib import Path\nprint(Path('authority.key').read_bytes())\n")
-    assert _denied(_run("Bash", {"command": f"python3 {script}"}, cwd=str(run_dir)))

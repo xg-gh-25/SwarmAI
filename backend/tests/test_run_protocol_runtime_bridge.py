@@ -20,7 +20,7 @@ AT = "2026-10-22T00:00:00+00:00"
 async def test_runtime_hooks_persist_v1_answer_and_finding(tmp_path, monkeypatch):
     import core.runtime_hooks as hooks
 
-    authority = ev.EventAuthority(b"r" * 32)
+    authority = ev.EventAuthority()
     store = AuditStore(tmp_path / "v1-audit", "run_one", authority)
     prompt = "EXPERT-ID: correctness\nReview the change"
     store.append_new(

@@ -108,10 +108,14 @@ def test_a_partial_land_ends_the_run_not_landed_partial_land(tmp_path, monkeypat
             raise landing.PartialLanding("repo2: integration branch moved",
                                          landed={"repo": "a" * 40}, failed="repo2")
         monkeypatch.setattr(landing, "commit_repos", raced)
-        # the land command as the session runs it: the real gate issues the hook token
-        # and the daemon (this test process) runs it, so the race above reaches it
+        # the land command, in this process so the race above reaches it (S6-3: the
+        # CLI runs it in its own process, as the caller session)
+        from core.run_protocol import request_ctx
+        from tests.pipeline_v1_rig import SESSION
         r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
-        out = r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+        with request_ctx.active(request_ctx.Request(session_id=SESSION)):
+            out = r.engine().normal_land(
+                message="fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
         assert out.get("reason") == "partial_land", out
         state = r.state()
         assert state["landing"] == "not_landed" and state["reason"] == "partial_land", state

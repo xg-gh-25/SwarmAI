@@ -1406,7 +1406,7 @@ def _iter_runs(workspace: "str | Path", ids: "set[str] | None" = None):
     """(run.json path, view) of every Pipeline v1 run; *ids*: only the run dirs named
     in it. A run.json without a protected contract is not a run and is skipped. The
     view is run.json overlaid with what an agent cannot write (``_signed_view``):
-    id / project from the run directory, owner and status from the signed events,
+    id / project from the run directory, owner and status from the logged events,
     mode from the contract (re-audit 536bb62b / 99f96949). *view* is a shallow copy."""
     from core import run_index
     for r in run_index.runs(workspace):
@@ -1418,7 +1418,7 @@ def _iter_runs(workspace: "str | Path", ids: "set[str] | None" = None):
             yield r.path, view
 
 
-# (data_dir, run_id) -> ((contract stat, events stat), signed fields)
+# (data_dir, run_id) -> ((contract stat, events stat), logged fields)
 _SIGNED: "dict[tuple[str, str], tuple[tuple, dict]]" = {}
 
 
@@ -1431,7 +1431,7 @@ def _file_identity(path: Path) -> tuple:
 
 
 def _signed_view(run_file: Path, data: dict) -> "dict | None":
-    """*data* overlaid with the run's signed facts; None when the run has no protected
+    """*data* overlaid with the run's logged facts; None when the run has no protected
     contract (not a v1 run). A contract whose events cannot be verified yields
     ``_unreadable: True`` with a live status: every reader then keeps the run and
     claims nothing from it, never treats it as finished. One stat of the contract and
@@ -1452,7 +1452,7 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
            _file_identity(cpath.parent / "events.jsonl.intent"))
     hit = _SIGNED.get((str(data_dir), rid))
     if hit is not None and hit[0] == key:
-        signed = hit[1]
+        logged = hit[1]
     else:
         try:
             contract = read_contract(data_dir, rid)
@@ -1468,26 +1468,26 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
                     commits = {repos_[0]: commits["primary"]}
                 landed = sorted(commits)
             events = engine.store.read_events()
-            signed = {"session_id": engine.owner_session(), "status": state.get("status"),
+            logged = {"session_id": engine.owner_session(), "status": state.get("status"),
                       "_last_event_at": (events[-1].get("at") if events else None),
                       "stages": dict(state.get("stages") or {}),
                       "worktree_mode": (contract or {}).get("mode"),
                       "_repos": repos_, "_landed": landed}
         except Exception:  # noqa: BLE001 — unverifiable: keep it, claim nothing
-            logger.warning("run %s: signed state unreadable; kept, claims nothing", rid,
+            logger.warning("run %s: logged state unreadable; kept, claims nothing", rid,
                            exc_info=True)
-            signed = {"session_id": None, "status": "active", "_unreadable": True}
-        _SIGNED[(str(data_dir), rid)] = (key, signed)
-    view = {**data, "id": rid, "project": project, **signed}
-    repos = signed.get("_repos")
+            logged = {"session_id": None, "status": "active", "_unreadable": True}
+        _SIGNED[(str(data_dir), rid)] = (key, logged)
+    view = {**data, "id": rid, "project": project, **logged}
+    repos = logged.get("_repos")
     if repos is not None:   # only the contract's repos can have worktrees
-        landed = set(signed.get("_landed") or ())
+        landed = set(logged.get("_landed") or ())
         by_repo: dict = {}
         for e in data.get("worktrees") or []:
             if not isinstance(e, dict) or e.get("repo_name") not in repos:
                 continue
             name = e.get("repo_name")
-            # "integrated" (removed WITHOUT a snapshot) only when the signed landing
+            # "integrated" (removed WITHOUT a snapshot) only when the logged landing
             # says this repo landed; a forged row is treated as active, so it is
             # snapshotted before removal (re-audit 84b72ec1 HIGH)
             if e.get("state") == "integrated" and name not in landed:
@@ -1499,9 +1499,9 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
                 by_repo[name] = e
         view["worktrees"] = list(by_repo.values())
         # whether the run stopped claiming the session's writes comes from SIGNED facts
-        # (a landed repo, or a signed status that ended), never from a row's state an
+        # (a landed repo, or a logged status that ended), never from a row's state an
         # agent can write (B-e re-audit HIGH: a forged "released" row ended the claim)
-        view["_settled"] = bool(landed) or signed.get("status") not in (
+        view["_settled"] = bool(landed) or logged.get("status") not in (
             "active", "awaiting_human", "reflecting", "paused")
     return view
 
@@ -1613,7 +1613,7 @@ def own_isolated_run(session_id: str, workspace: "str | Path",
             main = main_of(p)
             if main is not None and is_registered(main, rid, str(e.get("repo_name"))):
                 wts.append((str(e.get("repo_name")), str(p)))
-        # signed facts (_signed_view); an unverifiable run claims nothing
+        # logged facts (_signed_view); an unverifiable run claims nothing
         settled = bool(data["_settled"]) if "_settled" in data \
             else bool(data.get("_unreadable"))
         if wts or (with_empty and data.get("worktree_mode") == "isolated" and not settled
@@ -1838,17 +1838,12 @@ def sweep(workspace: "str | Path", owner_active: "Callable[[str | None], bool]",
 
 
 def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeout) -> None:
-    from core import hook_token
-    try:
-        hook_token.purge_expired(f.parent, now)
-    except OSError:
-        pass
     entries = active_entries(data) + [e for e in data.get("worktrees") or []
                                       if isinstance(e, dict) and e.get("state") == "integrated"]
     if not entries:
         return
     if data.get("_unreadable"):
-        report["kept"].append(f"{rid}: signed state unreadable")
+        report["kept"].append(f"{rid}: logged state unreadable")
         return
     live = data.get("status") in _LIVE
     reason = _release_reason(rid, f, data, entries, now)

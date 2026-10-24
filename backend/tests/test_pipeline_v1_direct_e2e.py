@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import subprocess
 
-from core import hook_token
 from core.run_protocol.engine import RunEngine
 
 
@@ -62,26 +61,13 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     assert engine.stage_complete(_report())["state"]["stage"] == "deliver"
     prepared = engine.prepare_land_request(action="land", note="approved test")
     request_id = prepared["prepared"]["request"]["request_id"]
-    hook_token.stop_oracle()
-    assert hook_token.start_oracle(52000 + __import__("os").getpid() % 1000) \
-        or not hook_token.oracle_supported()
-    try:
-        from core.run_protocol import landing     # the daemon, after the person
-        landing.approve_from_event(engine.store, request_id,
-                                   now=__import__("time").time(), at="2026-10-23T00:00:00Z")
-        token = hook_token.issue(
-            engine.run_dir, "s", "run_one", f"run-land:{request_id}")
-        assert token
-        # the daemon redeems the hook's token and runs the landing as that session
-        rec = hook_token.redeem(token)
-        from core.run_protocol import request_ctx
-        with request_ctx.active(request_ctx.Request(
-                session_id=rec["session_id"], run_id=rec["run_id"], scope=rec["subcommand"])):
-            landed = engine.execute_land_request(
-                request_id,
-                message="feat: value\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
-    finally:
-        hook_token.stop_oracle()
+    from core.run_protocol import landing, request_ctx
+    # the daemon's hook records the person's approval; the CLI then lands as the owner
+    landing.approve_from_event(engine.store, request_id,
+                               now=__import__("time").time(), at="2026-10-23T00:00:00Z")
+    with request_ctx.active(request_ctx.Request(session_id="s")):
+        landed = engine.execute_land_request(
+            request_id, message="feat: value\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     assert landed["state"]["status"] == "reflecting"
     assert (repo / "a.py").read_text() == "value = 2\n"
     assert (repo / ".aidlc/deliverables/run_one/REPORT.md").is_file()

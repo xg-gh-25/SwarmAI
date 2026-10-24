@@ -2,7 +2,7 @@
 response, so a run never needs a separate ``status`` between stages.
 
 - ``next_step(engine, *, previous_stage=None)`` — a dict ``{stage, status, action,
-  command, why, blocking, card, card_text?}``. It reads only the signed events (the
+  command, why, blocking, card, card_text?}``. It reads only the logged events (the
   lifecycle fold), the code facts and checks the engine computes, the run's own files
   and the stage cards: nothing the agent reported about itself.
 
@@ -29,7 +29,7 @@ _HUMAN_PAUSES = {"user_stop", "session_lost"}
 
 def _cmd(engine, tool: str, rest: str) -> str:
     """The command the agent runs next, with this backend's script by ABSOLUTE path:
-    only that script receives a hook token, wherever the agent's cwd is."""
+    the same command packaged and in dev, wherever the agent's cwd is."""
     from core.worktree_write_gate import v1_command
     del tool    # always the run CLI now (S6-1: the test runner is gone)
     args = f"{rest} --project {engine.project} --run-id {engine.run_id}".strip()
@@ -52,7 +52,7 @@ def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def _reflect_prepared(events: list[dict[str, Any]], state: dict[str, Any]) -> bool:
-    """From signed events only: a DELIVER attempt of exactly the RF checks all passed,
+    """From logged events only: a DELIVER attempt of exactly the RF checks all passed,
     or REFLECT is degraded (the lessons dropped to zero)."""
     if state.get("reflect") == "degraded":
         return True

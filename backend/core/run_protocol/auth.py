@@ -60,7 +60,7 @@ def normalize_bindings(action: str, value: Any) -> dict[str, Any]:
     if action in ("land", "land_skip_tests"):
         return {"repos": _land_bindings(value)}
     if action == "discard_snapshot":
-        # the repo is signed too: the ledger path is derived from (run, repo), never
+        # the repo is logged too: the ledger path is derived from (run, repo), never
         # read from the run's display JSON (C1 review)
         if not isinstance(value, Mapping) or set(value) != {"snapshot_id", "repo_name"} \
                 or not isinstance(value.get("snapshot_id"), str) or not value["snapshot_id"] \
@@ -102,7 +102,7 @@ def make_request(*, request_id: str, session_id: str, run_id: str, action: str,
     if note is not None and not isinstance(note, str):
         raise AuthorizationError("note must be text or null")
     if note is not None and len(note) > NOTE_MAX:
-        # the signed request lives in one event line; a longer note would be moved to a
+        # the logged request lives in one event line; a longer note would be moved to a
         # blob and the request could no longer be rebuilt from the event
         raise AuthorizationError(f"note is longer than {NOTE_MAX} characters")
     normalized = normalize_bindings(action, bindings)

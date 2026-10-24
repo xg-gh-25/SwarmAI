@@ -167,9 +167,10 @@ def test_force_names_groups_and_unforceable(tmp_path, monkeypatch):
     assert not gate_force.force_enabled("pipeline_test_gate")
     monkeypatch.setenv("SWARM_GATE_FORCE", "session_link_gate,audit_marker_write_gate")
     assert not gate_force.force_enabled("session_link_gate")
-    assert not gate_force.force_enabled("audit_marker_write_gate")
+    # S6-3: the audit-dir write gate can be forced; only the session link cannot
+    assert gate_force.force_enabled("audit_marker_write_gate")
     assert [r["gate"] for r in _lines(log) if r["decision"] == "force_bypass"] == \
-        ["run_amend_gate", "review_round_gate"]
+        ["run_amend_gate", "review_round_gate", "audit_marker_write_gate"]
 
 
 def test_no_legacy_force_variables_left():

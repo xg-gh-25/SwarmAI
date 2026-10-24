@@ -19,7 +19,7 @@ AT = "2026-10-22T00:00:00+00:00"
 class Stream:
     def __init__(self, profile="direct", run_id="run_x", decision_cap=2):
         self.run_id, self.rows, self.ordinal = run_id, [], 0
-        self.authority = ev.EventAuthority(b"l" * 32)
+        self.authority = ev.EventAuthority()
         self.oracle = auth.AuthorizationOracle()
         self.add("run_create", {"run_id": run_id, "profile": profile,
                                 "decision_cap": decision_cap}, transition=False)

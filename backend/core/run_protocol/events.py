@@ -4,14 +4,17 @@ Public symbols:
 - ``make_event`` — build an envelope and content-address large strings.
 - ``event_digest`` / ``encode_event`` — canonical hash and bounded JSONL form.
 - ``add_event`` — append, deduplicate, or record an integrity conflict.
-- ``verify_chain`` — verify event identities, uniqueness and ``prev_hash`` links.
+- ``verify_chain`` — verify event identities, checksums, uniqueness and ``prev_hash`` links.
+- ``EventAuthority`` / ``WriterCapability`` — the producer label an event is written
+  with. Since S6-3 (design usable-by-anyone §3.3.5) nothing is logged: each event
+  carries a sha256 ``checksum`` that finds a torn or damaged record, not a forged one
+  (the pipeline does not defend against its own agent, P5).
 - ``occurrence_key`` — derive the kind-specific physical-occurrence identity.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
-import hmac
 import json
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -22,36 +25,6 @@ MAX_INLINE_STRING_BYTES = 1_024
 MAX_EVENT_LINE_BYTES = 4_096
 PRODUCERS = frozenset({"hook", "cli"})
 
-# Which writers THIS process may hold (fixing spec C3). The hook writer exists only in
-# the daemon (main.py calls allow_hook_writer at import; the test process does too, as
-# it plays the daemon); the CLI narrows itself to its own writer
-# at entry. Narrowing is one-way. The signing key itself is a separate design (§9).
-_hook_writer_allowed = False
-_process_producers: frozenset[str] = frozenset({"cli"})
-
-
-def allow_hook_writer() -> None:
-    """The daemon process: it alone records hook facts (answers, approvals, owner)."""
-    global _hook_writer_allowed, _process_producers
-    if _process_producers != frozenset({"cli"}) and "hook" not in _process_producers:
-        raise EventError("a process narrowed to its own writer cannot become the daemon")
-    _hook_writer_allowed = True
-    _process_producers = _process_producers | {"hook"}
-
-
-def hook_writer_allowed() -> bool:
-    """Whether this is the daemon's process (it may record hook facts)."""
-    return _hook_writer_allowed
-
-
-def restrict_process(*producers: str) -> None:
-    """A CLI process: from now on only *producers* may be obtained."""
-    global _hook_writer_allowed, _process_producers
-    wanted = frozenset(producers)
-    if not wanted or not wanted <= PRODUCERS:
-        raise EventError("restrict_process needs known producers")
-    _process_producers = _process_producers & wanted
-    _hook_writer_allowed = _hook_writer_allowed and "hook" in _process_producers
 FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json", "hunk",
                               "report_json"})
 
@@ -183,8 +156,7 @@ EVENT_SPECS: dict[str, EventSpec] = {
                    "action": str, "binding_digest": str, "expires_at": (int, float)}),
     "auth_consumed": _spec("cli", ("payload.auth_event_id",), "payload.request_id",
                            {"auth_event_id": str, "request_id": str, "session_id": str,
-                            "run_id": str, "action": str, "binding_digest": str,
-                            "oracle_receipt": str},
+                            "run_id": str, "action": str, "binding_digest": str},
                            {"canonical_id": str, "state_hash": str}),
     "decision": _spec("cli", ("payload.request_id",), "payload.request_id",
                       {"request_id": str, "decision_kind": str, "document": str},
@@ -203,7 +175,7 @@ EVENT_SPECS: dict[str, EventSpec] = {
                   {"reason": str, "stage_attempt_event_id": str,
                    "auth_consumed_event_id": str,
                    # repo -> commit of every repo this landing moved (review r3): the
-                   # signed map; progress files are crash recovery only
+                   # logged map; progress files are crash recovery only
                    "commits": dict,
                    # shared checkouts whose branch moved but whose index / REPORT
                    # could not be finished (K5 review r2)
@@ -258,61 +230,37 @@ class EventError(ValueError):
 
 
 class EventAuthority:
-    """Trust root for one run's event log; cycle 2 stores it outside agent write scope."""
+    """The checksum of one run's event log (S6-3: no key). Every run uses the same
+    one; ``authority_id`` names the format, so a log written another way never folds."""
 
-    def __init__(self, secret: bytes):
-        if not isinstance(secret, bytes) or len(secret) < 32:
-            raise EventError("event authority secret must be at least 32 bytes")
-        self.__secret = bytes(secret)
-        self.authority_id = hashlib.sha256(self.__secret).hexdigest()
+    authority_id = "sha256-checksum-v1"
 
     def writer(self, producer: str) -> "WriterCapability":
         if producer not in PRODUCERS:
             raise EventError(f"unknown producer {producer!r}")
-        return WriterCapability(self, producer)   # the process check lives there
+        return WriterCapability(self, producer)
 
     def _sign(self, event: Mapping[str, Any]) -> str:
-        body = {key: value for key, value in event.items() if key != "signature"}
-        return hmac.new(self.__secret, _canonical(body), hashlib.sha256).hexdigest()
+        body = {key: value for key, value in event.items() if key != "checksum"}
+        return hashlib.sha256(_canonical(body)).hexdigest()
 
-
-    def _seal_consumption(self, value: Any) -> dict[str, Any]:
-        """Convert a registered oracle Consumption and bind it to this authority."""
-        from core.run_protocol.auth import Consumption
-        if not isinstance(value, Consumption):
-            raise EventError("auth_consumed payload requires oracle Consumption")
-        payload = value._event_payload()
-        receipt = hmac.new(
-            self.__secret, b"oracle-consumption\0" + _canonical(payload), hashlib.sha256
-        ).hexdigest()
-        return {**payload, "oracle_receipt": receipt}
-
-    def _verify_consumption(self, payload: Mapping[str, Any]) -> bool:
-        receipt = payload.get("oracle_receipt")
-        body = {key: value for key, value in payload.items() if key != "oracle_receipt"}
-        expected = hmac.new(
-            self.__secret, b"oracle-consumption\0" + _canonical(body), hashlib.sha256
-        ).hexdigest()
-        return isinstance(receipt, str) and hmac.compare_digest(receipt, expected)
     def verify(self, event: Mapping[str, Any]) -> bool:
-        return event.get("authority_id") == self.authority_id and isinstance(
-            event.get("signature"), str
-        ) and hmac.compare_digest(event["signature"], self._sign(event))
+        return event.get("authority_id") == self.authority_id \
+            and event.get("checksum") == self._sign(event)
 
 
 class WriterCapability:
-    """Producer authority; only EventAuthority creates a capability used by make_event."""
+    """The producer label (``cli`` for commands, ``hook`` for what the daemon's hooks
+    observed: answers, a person's decisions, owner changes)."""
 
     __slots__ = ("_authority", "producer")
 
     def __init__(self, authority: EventAuthority, producer: str):
         if not isinstance(authority, EventAuthority) or producer not in PRODUCERS:
             raise EventError("invalid writer capability")
-        if producer not in _process_producers or (producer == "hook" and not _hook_writer_allowed):
-            raise EventError(f"this process may not write as {producer!r}: hook facts are "
-                             "recorded only by the SwarmAI daemon")
         self._authority = authority
         self.producer = producer
+
 
 def _canonical(value: Any) -> bytes:
     try:
@@ -477,7 +425,7 @@ def expected_event_id(event: dict[str, Any]) -> str:
 
 
 def validate_event(event: dict[str, Any], authority: EventAuthority) -> None:
-    """Reject an unsigned, incomplete, forged or oversized event before persistence."""
+    """Reject an incomplete, damaged or oversized event before persistence."""
     if not isinstance(authority, EventAuthority):
         raise EventError("event authority is required")
     if not isinstance(event, dict):
@@ -489,13 +437,10 @@ def validate_event(event: dict[str, Any], authority: EventAuthority) -> None:
     if not isinstance(event.get("payload"), dict):
         raise EventError("payload must be an object")
     _event_contract(event, allow_missing_ckey=False)
-    if event.get("kind") == "auth_consumed" \
-            and not authority._verify_consumption(event["payload"]):
-        raise EventError("auth_consumed oracle receipt mismatch")
     if event.get("event_id") != expected_event_id(event):
         raise EventError("event_id mismatch")
     if not authority.verify(event):
-        raise EventError("event signature/authority mismatch")
+        raise EventError("event checksum mismatch (a damaged record)")
     encode_event(event)
 
 
@@ -523,7 +468,10 @@ def make_event(
     producer = writer.producer
     authority = writer._authority
     if kind == "auth_consumed":
-        payload = authority._seal_consumption(payload)
+        from core.run_protocol.auth import Consumption
+        if not isinstance(payload, Consumption):
+            raise EventError("auth_consumed payload requires an oracle Consumption")
+        payload = payload._event_payload()
     elif not isinstance(payload, dict):
         raise EventError("payload must be an object")
     if not isinstance(at, str) or not at:
@@ -543,7 +491,7 @@ def make_event(
     cooked, blobs = externalize_payload(payload)
     event = {"event_id": event_id, **raw, "payload": cooked,
              "authority_id": authority.authority_id}
-    event["signature"] = authority._sign(event)
+    event["checksum"] = authority._sign(event)
     validate_event(event, authority)
     return event, blobs
 

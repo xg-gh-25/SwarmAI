@@ -1,19 +1,19 @@
 """Infrastructure failures of a Pipeline v1 run (v13 §A1.2, conformance F11).
 
-Exactly three kinds of failure end a run ``failed`` with ``infrastructure_failed``:
-the audit area cannot be written, the hook-token service is unreachable, or git
-cannot write objects. Each is raised as a subclass of ``InfrastructureError`` by the
+Exactly two kinds of failure end a run ``failed`` with ``infrastructure_failed``:
+the audit area cannot be written, or git cannot write objects (the hook-token service
+went with S6-3). Each is raised as a subclass of ``InfrastructureError`` by the
 layer that meets it; the layer that catches it (the CLI) records the
 event. Every other exception propagates as before.
 
 Public symbols:
 - ``InfrastructureError`` — base, with ``component`` (one of ``COMPONENTS``).
-- ``COMPONENTS`` — the three kinds.
+- ``COMPONENTS`` — the two kinds.
 - ``find`` — the InfrastructureError in an exception's cause / context chain, or None.
 """
 from __future__ import annotations
 
-COMPONENTS = frozenset({"audit_store", "hook_token", "git_objects"})
+COMPONENTS = frozenset({"audit_store", "git_objects"})
 
 
 class InfrastructureError(RuntimeError):

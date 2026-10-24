@@ -18,7 +18,7 @@ AT = "2026-10-22T00:00:00+00:00"
 
 
 def _rig(tmp_path):
-    authority = ev.EventAuthority(b"v" * 32)
+    authority = ev.EventAuthority()
     store = AuditStore(tmp_path / "audit", "run_one", authority)
     return ReviewOrchestrator(store, tmp_path / "run"), ReviewHookBridge(store, "session_1")
 

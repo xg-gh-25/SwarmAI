@@ -268,15 +268,16 @@ def _request(r: Rig, prepared: dict) -> dict:
 
 
 def test_expired_approval_is_refused_and_a_fresh_one_lands(rig, monkeypatch):
-    from core import hook_token
+    from core.run_protocol import landing
     r = rig("trivial")
     _not_landed_tests_red(r)
     base = _main(r)
     prepared = _prepare(r)
-    monkeypatch.setattr(hook_token, "TOKEN_TTL_SECONDS", -1.0)
+    # the hook records the person's approval in this process: make it already expired
+    monkeypatch.setattr(landing, "AUTH_TTL_SECONDS", -1.0)
     refused = _request(r, prepared)
     assert refused.get("ok") is not True and _main(r) == base, refused
-    monkeypatch.setattr(hook_token, "TOKEN_TTL_SECONDS", 120.0)
+    monkeypatch.setattr(landing, "AUTH_TTL_SECONDS", 30 * 60)
     assert r.v1("status").get("ok") is True, "the refused attempt must be closed"
     landed = _request(r, _prepare(r))
     assert landed.get("ok") is True and _main(r) != base, landed
@@ -484,8 +485,9 @@ def test_a_tested_prepare_on_an_untested_tree_asks_for_a_test_report(rig):
 
 # ── A7 / C4: a landing must come through the hook; mode is a setting ────────
 
-def test_a_land_without_the_hook_ends_not_landed_needs_hooked_session(rig):
-    import subprocess, sys
+def test_a_land_from_a_session_that_does_not_own_the_run_changes_nothing(rig):
+    """S6-3: no token, no daemon; a command acts only for the run's owner session."""
+    import sys
     from tests.pipeline_v1_rig import PV1
     r = rig("direct")
     r.create()
@@ -493,11 +495,9 @@ def test_a_land_without_the_hook_ends_not_landed_needs_hooked_session(rig):
     base = _main(r)
     argv = [sys.executable, str(PV1), "land", *r._run_args(), "--message",
             "fix\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"]
-    out, _ = r._exec(argv)                                      # straight, no hook
-    # no token: the daemon runs nothing at all (B-class B-b), so the run is untouched
-    assert out.get("code") == "no_token", out
+    out, _ = r._exec(argv, extra_env={"SWARM_APP_SESSION_ID": "someone-else"})
+    assert out.get("code") == "not_owner", out
     assert _main(r) == base and r.state()["stage"] == "deliver"
-
 
 def test_create_has_no_mode_option(rig):
     r = rig("direct")

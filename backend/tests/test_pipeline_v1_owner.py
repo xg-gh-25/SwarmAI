@@ -28,9 +28,6 @@ def _signed_owner_from_run_json(monkeypatch):
         return True
     from core import pipeline_human
     monkeypatch.setattr(pipeline_human, "record_owner", record)
-    # every pipeline command now carries a hook token (B-class B-b): a stand-in issuer
-    from core import hook_token
-    monkeypatch.setattr(hook_token, "issue", lambda *_a, **_k: "40001." + "a" * 64)
 
 
 def _run(tmp_path: Path, *, owner: str = "session-a", project: str = "proj") -> Path:
@@ -62,7 +59,7 @@ def _cmd(command: str, project: str = "proj") -> str:
 
 
 def _passes(value) -> bool:
-    """Allowed, with the hook's token and this session's id handed to the call."""
+    """Allowed, with this session's id handed to the call."""
     if value is None:
         return True
     out = value.get("hookSpecificOutput", {})
@@ -151,33 +148,25 @@ def test_unresolvable_mutation_fails_closed(tmp_path, monkeypatch):
     assert _denied(gate._decide("session-a", _cmd("stage-complete"), {}))
 
 
-def test_run_land_request_is_human_gated_and_token_bound(tmp_path, monkeypatch):
+def test_run_land_request_is_recorded_only_once_approved(tmp_path, monkeypatch):
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     command = _cmd("run-land") + " --request land_abc --message land"
     assert security_hooks._is_v1_land_request(command)
     assert _passes(gate._decide("session-a", command, {}, phase="check"))
 
-    issued = {}
-    def issue(run_dir, session_id, run_id, subcommand):
-        issued.update(run_dir=run_dir, session_id=session_id,
-                      run_id=run_id, subcommand=subcommand)
-        return "token-1"
-    monkeypatch.setattr("core.hook_token.issue", issue)
-    approved = []   # the daemon records the person's approval before the token (C1/C3)
+    approved = []   # the daemon records the person's approval (C1/C3)
     monkeypatch.setattr(gate, "_record_approval", lambda rid, req: approved.append((rid, req)))
+    assert not approved, "the check phase records nothing"
     result = gate._decide("session-a", command, {"command": command}, phase="approved")
-    rewritten = result["hookSpecificOutput"]["updatedInput"]["command"]
-    assert rewritten.startswith("SWARM_HOOK_TOKEN=token-1 ")
-    assert issued["subcommand"] == "run-land:land_abc"
-    assert approved and approved[0][1] == "land_abc"
+    assert _passes(result)
+    assert approved == [("run_one", "land_abc")]
 
 
-def test_an_unrecorded_approval_never_issues_the_token(tmp_path, monkeypatch):
+def test_an_unrecorded_approval_denies_the_command(tmp_path, monkeypatch):
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     command = _cmd("run-land") + " --request land_abc --message land"
-    monkeypatch.setattr("core.hook_token.issue", lambda *a: "token-1")
     monkeypatch.setattr(gate, "_record_approval", lambda rid, req: "audit area not writable")
     result = gate._decide("session-a", command, {"command": command}, phase="approved")
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -212,10 +201,10 @@ def test_the_hook_hands_the_session_id_to_the_first_pipeline_call(tmp_path, monk
     for command in (_cmd("status"), _cmd("status") + " | tail -3"):
         out = gate._decide("session-a", command, {"command": command})
         new = out["hookSpecificOutput"]["updatedInput"]["command"]
-        assert new == ("SWARM_HOOK_TOKEN=40001." + "a" * 64
-                       + " SWARM_APP_SESSION_ID=session-a " + command)
+        assert new == "SWARM_APP_SESSION_ID=session-a " + command
+    # not the first command: nothing to bind to; the CLI uses its own environment
     compound = "cd /x && " + _cmd("status")
-    assert _denied(gate._decide("session-a", compound, {"command": compound}))
+    assert gate._decide("session-a", compound, {"command": compound}) is None
     assert gate._with_session(_cmd("status"), "prewarm-123") is None
 
 
@@ -239,29 +228,15 @@ def test_no_gate_module_defines_a_function_twice():
 
 
 def test_a_denied_takeover_command_transfers_nothing(tmp_path, monkeypatch):
-    """B round 1 HIGH: a takeover command the gate then denies (not first on the line)
-    must not have signed the owner transfer already."""
+    """B round 1 HIGH: a takeover command the gate then denies (it sets a variable)
+    must not have written the owner transfer already."""
     run_file = _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
     monkeypatch.setattr("core.runtime_hooks.write_session_run_map", lambda *_a, **_k: None)
-    command = "cd /x && " + _cmd("stage-complete")
+    command = "SWARM_WORKTREE_MODE=off " + _cmd("stage-complete")
     assert _denied(gate._decide("session-b", command, {"command": command}))
     assert json.loads(run_file.read_text())["session_id"] == "session-a"
-
-
-def test_only_this_backends_pipeline_scripts_get_a_token(tmp_path, monkeypatch):
-    """B round 1 HIGH: a file merely NAMED pipeline_v1.py elsewhere gets no token (it
-    could send commands)."""
-    _run(tmp_path)
-    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
-    fake = tmp_path / "evil" / "pipeline_v1.py"
-    fake.parent.mkdir()
-    fake.write_text("print('x')\n")
-    for script in (str(fake), "evil/pipeline_v1.py"):
-        command = f"python {script} status --project proj --run-id run_one"
-        out = gate._decide("session-a", command, {"command": command}, "check", str(tmp_path))
-        assert _denied(out), script
 
 
 def test_a_late_action_takes_over_only_once_approved(tmp_path, monkeypatch):
@@ -276,31 +251,3 @@ def test_a_late_action_takes_over_only_once_approved(tmp_path, monkeypatch):
     assert json.loads(run_file.read_text())["session_id"] == "session-a"
 
 
-def test_a_failed_state_change_burns_the_issued_token(tmp_path, monkeypatch):
-    """B round 2 HIGH: the token is issued before any state change; when the change
-    then fails, the command is denied AND its token is redeemed (unusable)."""
-    _run(tmp_path)
-    monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
-    from core import hook_token
-    burned = []
-    monkeypatch.setattr(hook_token, "redeem", lambda t: burned.append(t))
-    monkeypatch.setattr(gate, "_record_approval", lambda *_a: "approval not recorded")
-    command = _cmd("run-land") + " --request land_abc --message land"
-    assert _denied(gate._decide("session-a", command, {"command": command},
-                                phase="approved"))
-    assert burned == ["40001." + "a" * 64]
-
-
-def test_only_the_exact_script_counts(tmp_path):
-    """B round 2 HIGH: a script under backend/scripts counts only as the tool it is, and
-    a relative path with no cwd cannot be checked."""
-    from pathlib import Path as P
-    scripts = P(gate.__file__).resolve().parents[1] / "scripts"
-    assert gate._is_our_script({"tool": "pipeline_v1",
-                                "script": str(scripts / "pipeline_v1.py")})
-    assert not gate._is_our_script({"tool": "pipeline_v1",
-                                    "script": str(scripts / "artifact_cli.py")})
-    assert not gate._is_our_script({"tool": "pipeline_v1",
-                                    "script": "backend/scripts/pipeline_v1.py"})
-    assert gate._resolves_into_scripts(str(scripts / "x.json"), None)
-    assert not gate._resolves_into_scripts("art.json", str(tmp_path))

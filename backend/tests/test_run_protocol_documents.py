@@ -26,7 +26,7 @@ DESIGN = {"tasks": [{"id": "T1", "file": "backend/x.py", "symbol": "f",
 
 
 def _store(tmp_path):
-    authority = ev.EventAuthority(b"d" * 32)
+    authority = ev.EventAuthority()
     return AuditStore(tmp_path / "audit", "run_one", authority), authority
 
 

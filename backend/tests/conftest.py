@@ -82,9 +82,6 @@ import tempfile
 
 import pytest
 
-from core.run_protocol.events import allow_hook_writer as _allow_hook_writer
-
-_allow_hook_writer()   # the test process plays the daemon; CLI subprocesses do not (C3)
 
 
 @pytest.fixture(autouse=True)

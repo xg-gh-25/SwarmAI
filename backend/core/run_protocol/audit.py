@@ -74,7 +74,7 @@ def _verdict(value: bool, warn: bool = False) -> str:
 
 
 def _reason(projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]]) -> Any:
-    """The run's not-landed reason; a person's run-land that raced (a signed
+    """The run's not-landed reason; a person's run-land that raced (a logged
     partial_land later than every finished landing) is the outcome too, although the
     lifecycle leaves the run's state to the person (conformance K2, review r3)."""
     last_partial = last_finished = -1

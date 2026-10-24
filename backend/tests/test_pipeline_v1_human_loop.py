@@ -200,13 +200,11 @@ def test_owner_transfer_moves_projection_and_authorizations(run):
     assert pipeline_human.on_user_stop(OTHER) == ["run_human1"]
 
 
-def test_gate_takeover_signs_owner_transfer(run, monkeypatch):
+def test_gate_takeover_records_owner_transfer(run, monkeypatch):
     from core import security_hooks
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root",
                         lambda: str(run.workspace))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
-    from core import hook_token          # the token issuer (B-class B-b): a stand-in
-    monkeypatch.setattr(hook_token, "issue", lambda *_a, **_k: "40001." + "c" * 64)
     command = ("python backend/scripts/pipeline_v1.py resume --project P "
                "--run-id run_human1")
     result = gate._decide(OTHER, command, {"command": command})

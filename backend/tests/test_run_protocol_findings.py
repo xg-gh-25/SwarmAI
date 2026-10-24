@@ -17,7 +17,7 @@ AT = "2026-10-22T00:00:00+00:00"
 class Stream:
     def __init__(self):
         self.rows, self.ordinal = [], 0
-        self.authority = ev.EventAuthority(b"f" * 32)
+        self.authority = ev.EventAuthority()
         self.oracle = auth.AuthorizationOracle()
 
     def add(self, kind, payload, *, producer=None, stage=None, round=None, attempt=None):

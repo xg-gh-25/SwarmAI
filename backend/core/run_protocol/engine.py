@@ -200,7 +200,7 @@ def _store(root: Path, run_id: str, authority: EventAuthority,
     """The run's store, refusing any event after which the log would not fold.
 
     One rule for every writer (fixing spec A, K3 review r2): an event the lifecycle or the finding ledger cannot apply is never
-    written, and the transition an event triggers is appended in the same lock, signed
+    written, and the transition an event triggers is appended in the same lock, logged
     by the *producer* that wrote the trigger."""
     from core.run_protocol import findings as finding_protocol
 
@@ -226,22 +226,20 @@ def _log_tail(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "tail": ev.event_digest(dict(events[-1])) if events else None}
 
 
-def signed_terminal(data_dir: str | Path, run_id: str) -> bool:
-    """Whether the run's SIGNED event log folds to a terminal status. Needs only the
-    authority key and the log, never the contract, so it answers for a run whose
-    contract is unreadable; anything that cannot be verified answers False (not
-    finished: callers fail closed). Never reads the agent-writable run.json
-    (re-audit c772dd92)."""
+def logged_terminal(data_dir: str | Path, run_id: str) -> bool:
+    """Whether the run's event log folds to a terminal status. Needs only the log,
+    never the contract, so it answers for a run whose contract is unreadable; a log
+    that does not verify answers False (not finished: callers fail closed). Never
+    reads run.json (re-audit c772dd92)."""
     from core.run_protocol.store import AuditStore
     root = Path(data_dir) / "state" / "pipeline_agent_audit"
     try:
-        from core.run_protocol import keys
-        authority = keys.load(data_dir, run_id)
+        authority = EventAuthority()
         events = AuditStore(root, run_id, authority).read_events()
         return bool(events) and lifecycle.fold(
             events, authority, allow_pending_transition=True)["status"] in lifecycle.TERMINAL
     except Exception as exc:  # noqa: BLE001 — unverifiable: not finished
-        logger.debug("run %s: signed state unverifiable, not finished: %s", run_id, exc)
+        logger.debug("run %s: logged state unverifiable, not finished: %s", run_id, exc)
         return False
 
 
@@ -294,7 +292,7 @@ def recover_incomplete_creates(data_dir: str | Path, workspace: str | Path) -> l
 
 def repair_stale_projections(data_dir: str | Path, workspace: str | Path) -> list[str]:
     """Rewrite the run.json of every v1 run whose ``projection_of`` does not name the
-    signed log's current tail (a crash between an event and the projection write).
+    logged log's current tail (a crash between an event and the projection write).
     Returns the repaired run ids; a run that cannot be loaded is skipped (logged)."""
     base = Path(data_dir) / "state" / "pipeline_agent_audit" / "runs"
     repaired: list[str] = []
@@ -354,7 +352,7 @@ def _one_operation(method):
 
 
 class RunEngine:
-    """One v1 run, projected from signed events and immutable contract metadata."""
+    """One v1 run, projected from logged events and immutable contract metadata."""
 
     def __init__(self, *, data_dir: Path, workspace: Path, project: str,
                  run_id: str, authority: EventAuthority, producer: str = "cli"):
@@ -406,7 +404,7 @@ class RunEngine:
     def _live_shared_holder(cls, data_dir: Path, workspace: Path,
                             roots: "set[str]") -> "str | None":
         """The id of a non-terminal shared run whose contract names one of *roots*; a
-        run whose signed state cannot be read counts as live (fail closed)."""
+        run whose logged state cannot be read counts as live (fail closed)."""
         from core.run_protocol.contract import read_contract
         base = data_dir / "state" / "pipeline_agent_audit" / "runs"
         for entry in sorted(base.iterdir()) if base.is_dir() else []:
@@ -417,7 +415,7 @@ class RunEngine:
                                "holders: %s", entry.name, exc)
                 # a run its projection calls finished holds nothing; any other might
                 # hold these repos: fail closed (re-audit 84b72ec1 MED)
-                if not signed_terminal(data_dir, entry.name):
+                if not logged_terminal(data_dir, entry.name):
                     return entry.name
                 continue
             if not isinstance(contract, dict) or contract.get("mode") != "shared":
@@ -466,7 +464,7 @@ class RunEngine:
         workspace_path, data_path = Path(workspace), Path(data_dir)
         run_dir = workspace_path / "Projects" / project / ".artifacts" / "runs" / run_id
         # The run comes into existence in ONE step (B-e review HIGH): its audit
-        # directory (key, contract, signed run_create) is built in a staging directory
+        # directory (contract, run_create) is built in a staging directory
         # of this process and renamed into runs/<id> only when complete. A process that
         # dies before the rename leaves only a staging directory, which startup removes
         # (recover_incomplete_creates); the id is never left half-taken.
@@ -486,8 +484,7 @@ class RunEngine:
         stage_audit_root = stage_data / "state" / "pipeline_agent_audit"
         try:
             (stage_audit_root / "runs" / run_id).mkdir(parents=True, mode=0o700)
-            from core.run_protocol import keys
-            authority = keys.create(stage_data, run_id)
+            authority = EventAuthority()
             engine = cls.__new__(cls)
             engine.data_dir, engine.workspace = data_path, workspace_path
             engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
@@ -546,11 +543,7 @@ class RunEngine:
         actual_project = resolved_run.parents[2].name
         if project != actual_project:
             raise EngineError(f"run {run_id} belongs to project {actual_project}, not {project}")
-        from core.run_protocol import keys
-        try:
-            authority = keys.load(data_dir, run_id)
-        except keys.KeyUnavailable as exc:
-            raise EngineError(str(exc)) from exc
+        authority = EventAuthority()
         engine = cls(data_dir=Path(data_dir), workspace=workspace_path,
                      project=actual_project, run_id=run_id, authority=authority,
                      producer=producer)
@@ -560,7 +553,7 @@ class RunEngine:
         return engine
 
     def owner_session(self) -> str:
-        """The session that drives this run now: the creator, then each signed
+        """The session that drives this run now: the creator, then each logged
         ``owner_transfer`` in order (a transfer that does not start from the current
         owner is ignored). Every human authorization binds to this session."""
         owner = self.contract["session_id"]
@@ -827,7 +820,7 @@ class RunEngine:
         from core.run_protocol import findings as finding_protocol
         requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
-        # the decided decisions are facts of the signed log; the documents only
+        # the decided decisions are facts of the logged log; the documents only
         # project them, so the checks read them overlaid (K3 review r2)
         if isinstance(requirements, Mapping) and requirements:
             requirements = self._with_decisions("REQUIREMENTS", requirements)
@@ -1327,7 +1320,7 @@ class RunEngine:
                                                 fromlist=["ask_payload"]).ask_payload(value)}
 
     def _answered_decisions(self, document: str) -> list[dict[str, Any]]:
-        """Every decided decision of *document*, from the signed log alone: a person's
+        """Every decided decision of *document*, from the logged log alone: a person's
         answer (``human_answer``) or the agent's after-cap choice (a ``decision`` with
         ``decided_by``). The documents carry them as a projection (conformance F13)."""
         events = self.store.read_events()
@@ -1360,7 +1353,7 @@ class RunEngine:
         out = copy.deepcopy(dict(value))
         rows = self._answered_decisions(document)
         if not rows or (document == "DESIGN_SPEC" and self.contract["profile"] == "trivial"):
-            # the lite DESIGN_SPEC has no ``chosen``: its decision stays in the signed
+            # the lite DESIGN_SPEC has no ``chosen``: its decision stays in the logged
             # log and the REPORT (a registered deviation, conformance F13)
             return out
         if document == "REQUIREMENTS":
@@ -1385,7 +1378,7 @@ class RunEngine:
 
     def _sync_decision_document(self, document: str) -> None:
         """Project the decided decisions into *document* now; when the write fails the
-        signed event stands, the checks read it overlaid, and the next stage-complete
+        logged event stands, the checks read it overlaid, and the next stage-complete
         projects it again (K3 review r2)."""
         try:
             self._write_back_decisions(document)
@@ -1586,7 +1579,7 @@ class RunEngine:
             render_report=render, note=note, request_id=request_id,
             push_reasons=len(push.get("reasons") or []),
             integration_roots=self.contract["repo_roots"])
-        # display copy only: execution reads the signed land_request event (C1)
+        # display copy only: execution reads the logged land_request event (C1)
         path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
         _atomic_json(path, prepared)
         self.write_projection()
@@ -1594,7 +1587,7 @@ class RunEngine:
 
     @_one_operation
     def execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
-        """Consume one daemon-issued approval token and finish a prepared landing."""
+        """Finish a prepared landing the person approved (its ``auth`` event)."""
         with self._landing_lock():
             return self._execute_land_request(request_id, message=message)
 
@@ -1610,7 +1603,7 @@ class RunEngine:
         request = payload["request"]
         if request.get("session_id") != self.owner_session():
             raise EngineError("land request was prepared by another owner session")
-        ok, reason = self._consume_token(f"run-land:{request_id}")
+        ok, reason = self._caller_is_owner()
         if not ok:
 
             raise IntegrationRequired("approval_required", reason)
@@ -1626,7 +1619,7 @@ class RunEngine:
                 adopted=self._partially_landed(),
                 progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
         except landing.PartialLanding as exc:
-            # the signed partial_land is written; the person sees what moved (K2)
+            # the logged partial_land is written; the person sees what moved (K2)
             self._settle()
             value = self.build_audit(through="COMPLETED" if self.projection()["status"] ==
                                      "completed" else "DELIVER", persist=True,
@@ -1697,11 +1690,11 @@ class RunEngine:
 
     @_one_operation
     def execute_authorized_action(self, request_id: str) -> dict[str, Any]:
-        """Consume a daemon-issued token, append auth facts, then perform one action."""
+        """Consume the person's approval (its ``auth`` event), then perform one action."""
         from core.run_protocol import auth, findings, landing, retention
 
         path = self.run_dir / "artifacts" / "authorized-requests" / f"{request_id}.json"
-        try:   # everything comes from the signed event; the JSON is display only (C1)
+        try:   # everything comes from the logged event; the JSON is display only (C1)
             request = landing.request_event(self.store, request_id)["request"]
         except landing.LandingError as exc:
             raise EngineError(str(exc)) from exc
@@ -1732,8 +1725,7 @@ class RunEngine:
         else:
             raise EngineError("prepared authorization action is unsupported")
 
-        token_scope = f"{str(action).replace('_', '-')}:{request_id}"
-        ok, reason = self._consume_token(token_scope)
+        ok, reason = self._caller_is_owner()
         if not ok:
             raise IntegrationRequired("approval_required", reason)
         now = __import__("time").time()
@@ -1962,15 +1954,16 @@ class RunEngine:
             self._render_failed("FIXING_SPEC", FileNotFoundError(
                 "address hunk blob missing: " + ", ".join(orchestrator.missing_blobs)))
 
-    def _consume_token(self, scope: str) -> tuple[bool, str]:
-        """Whether this daemon request's hook token covers *scope* on this run and was
-        issued to the run's owner (B-class B-b: the daemon redeemed it before running
-        the command; nothing in the agent's process or environment counts)."""
+    def _caller_is_owner(self) -> tuple[bool, str]:
+        """Whether the command's caller (``request_ctx``) is the run's owner session.
+        S6-3: no token; what a person approved is the ``auth`` event the hook wrote."""
         from core.run_protocol import request_ctx
-        ok, reason = request_ctx.take_scope(scope, self.run_id)
-        if ok and request_ctx.current().session_id != self.owner_session():
-            return False, "hook token belongs to another session"
-        return ok, reason
+        req = request_ctx.current()
+        if req is None or not req.session_id:
+            return False, "no calling session (SWARM_APP_SESSION_ID)"
+        if req.session_id != self.owner_session():
+            return False, f"the run belongs to session {self.owner_session()}"
+        return True, ""
 
     @_one_operation
     def fail_infrastructure(self, error: "InfrastructureError") -> dict[str, Any]:
@@ -2194,7 +2187,7 @@ class RunEngine:
         made = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
         isolated = (len([n for n in self.contract["expected_repos"] if n in made])
                     if self.contract["mode"] == "isolated" else 0)
-        manual = None          # a person's landing: from the signed chain, every rebuild (D5)
+        manual = None          # a person's landing: from the logged chain, every rebuild (D5)
         rows = self.store.read_events()
         consumed = [e["payload"] for e in rows if e.get("kind") == "auth_consumed"
                     and str(e.get("payload", {}).get("action", "")).startswith("land")]
@@ -2474,21 +2467,6 @@ class RunEngine:
         resumed = self._resume_normal_landing(message=message)
         if resumed is not None:
             return resumed
-        ok, why = self._consume_token("land")
-        if not ok:
-            # a landing needs the session's hook (fixing spec A7, design §C5.1): a
-            # hookless executor's work is kept and the run ends not_landed
-            logger.info("v1 land of %s without a hook token: %s", self.run_id, why)
-            self.store.append_new(
-                writer=self.authority.writer("cli"), kind="land", at=_now(),
-                stage="deliver", attempt=self._next_attempt("deliver"),
-                ordinal=NEXT,
-                payload={"landing": "not_landed", "commit": None,
-                         "reason": "needs_hooked_session"})
-            self._settle(); self.write_projection()
-            finished = self.finish_not_landed()
-            return {**finished, "ok": False, "landing": "not_landed",
-                    "reason": "needs_hooked_session", "detail": why}
         attempt = self._next_attempt("land")
         guard_ids = ["DV-1", "LG-1", "LG-3", "LG-4"]
         opened, _ = self.store.append_new(
@@ -2586,7 +2564,7 @@ class RunEngine:
                        ) -> tuple[dict[str, str], dict[str, Any] | None]:
         """The one place a normal landing writes main (fresh and resumed): (repo ->
         commit, None), or — when the fast-forwards raced another session after every repo
-        passed phase 1 — a signed ``partial_land`` with the commits that DID land and
+        passed phase 1 — a logged ``partial_land`` with the commits that DID land and
         the not-landed path's result as the second item (§A3.7, conformance K2).
         Never a silent retry."""
         from core.run_protocol import landing
@@ -2608,7 +2586,7 @@ class RunEngine:
             finished = self.finish_not_landed()
             return dict(exc.landed), {**finished, "ok": False, "landing": "not_landed",
                                       "reason": "partial_land", "landed": exc.landed}
-        # the signed land event comes RIGHT after the refs moved, before any copy or
+        # the logged land event comes RIGHT after the refs moved, before any copy or
         # projection that could fail (K5 review r3); a failure of this append itself is
         # recovered by the resume path, which adopts the recorded commits
         self.store.append_new(
@@ -2621,7 +2599,7 @@ class RunEngine:
         return commits, None
 
     def _copy_report(self, blob_sha: str | None = None, *, text: str | None = None) -> None:
-        """The run directory's REPORT.md: a projection of the signed render blob,
+        """The run directory's REPORT.md: a projection of the logged render blob,
         written after the land event; a failure here never undoes a landing."""
         try:
             if text is None:
@@ -2665,7 +2643,7 @@ class RunEngine:
         """repo -> the commit on main, from SIGNED events (review r3): the latest
         landing that finished (``landed`` / ``human_override``) when it is later than
         any partial_land, else the latest partial_land. A finished land event without
-        ``commits`` yields its signed ``commit``."""
+        ``commits`` yields its logged ``commit``."""
         events = self.store.read_events()
         finished = [(i, e) for i, e in enumerate(events) if e.get("kind") == "land"
                     and e["payload"].get("landing") in ("landed", "human_override")]
@@ -2677,12 +2655,12 @@ class RunEngine:
         payload = finished[-1][1]["payload"]
         if isinstance(payload.get("commits"), dict) and payload["commits"]:
             return dict(payload["commits"])
-        # signed fields only: the agent-writable landing-progress files are never read
+        # logged fields only: the agent-writable landing-progress files are never read
         # here (re-audit c772dd92 HIGH; old runs without ``commits`` are not supported)
         return {"primary": payload["commit"]} if payload.get("commit") else {}
 
     def _partially_landed(self) -> dict[str, str]:
-        """repo -> commit of a signed partial_land later than every finished landing:
+        """repo -> commit of a logged partial_land later than every finished landing:
         a person's run-land keeps those and lands the rest (review K5 r1)."""
         events = self.store.read_events()
         last_finished = max((i for i, e in enumerate(events) if e.get("kind") == "land"

@@ -2794,7 +2794,7 @@ class TestV1StableCompletion:
         from core.run_protocol.hook_bridge import ReviewHookBridge, install_bridge
         from core.run_protocol.store import AuditStore
 
-        authority = ev.EventAuthority(b"u" * 32)
+        authority = ev.EventAuthority()
         store = AuditStore(tmp_path / "audit", "run_one", authority)
         prompt = "EXPERT-ID: correctness\nReview this diff adversarially"
         store.append_new(
@@ -2842,7 +2842,7 @@ class TestV1StableCompletion:
         prompt = "EXPERT-ID: correctness\nReview the exact diff"
         context = {"sdk_session_id": "session_1", "_active_pipeline_run_id": "run_wrong"}
         for run_id, has_handout in (("run_wrong", False), ("run_right", True)):
-            authority = ev.EventAuthority((run_id.encode() + b"x" * 32)[:32])
+            authority = ev.EventAuthority()
             store = AuditStore(tmp_path / run_id, run_id, authority)
             if has_handout:
                 store.append_new(

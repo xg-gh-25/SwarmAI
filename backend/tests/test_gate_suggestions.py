@@ -16,8 +16,8 @@ approval was asked for. Run state is real run.json files in a temp workspace;
 worktree mode is off.
 
 Covered: a direct test command in an active run, and
-run_owner_gate (an isolated run with its worktree, a recorded CLI and the hook-token
-service). Not yet covered: worktree_write_gate. Add a case whenever a
+run_owner_gate (an isolated run with its worktree and a recorded CLI
+). Not yet covered: worktree_write_gate. Add a case whenever a
 gate's deny text suggests a command.
 """
 import asyncio
@@ -141,7 +141,6 @@ def iso(tmp_path, monkeypatch):
     import subprocess
     import sys
     from pathlib import Path
-    from core import hook_token
     from core import run_worktree as rw
 
     def g(cwd, *a):
@@ -178,18 +177,13 @@ def iso(tmp_path, monkeypatch):
         "worktree_mode": "isolated", "worktrees": [entry], "cli": cli}))
     from core import run_owner_gate as og
     monkeypatch.setattr(og, "_signed_owner", lambda project, run_id: SID)  # no audit area
-    hook_token.stop_oracle()
-    if not hook_token.start_oracle(51000 + os.getpid() % 9000):
-        pytest.skip("hook-token service not supported here")
     yield {"rid": rid, "cli": cli, "wt": str(rw.wt_path(rid, "swarmai"))}
-    hook_token.stop_oracle()
 
 
 def test_run_owner_gate_suggestion_passes_the_chain(iso):
-    import shlex
-    compound = (f"cd {iso['wt']} && source .venv/bin/activate && "
-                f"python backend/scripts/pipeline_v1.py land "
-                f"--project P --run-id {iso['rid']} --message x")
-    hits = _chain(compound, cwd=iso["wt"])
+    # a key option given twice: the gate suggests the one argparse would act on
+    command = (f"python backend/scripts/pipeline_v1.py land --project P "
+               f"--run-id run_other --run-id {iso['rid']} --message x")
+    hits = _chain(command, cwd=iso["wt"])
     assert any("DENY (run owner gate)" in r for _, r in hits), hits
     _assert_suggestions_pass(hits, cwd=iso["wt"])

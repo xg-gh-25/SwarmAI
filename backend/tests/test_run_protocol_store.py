@@ -17,7 +17,7 @@ AT = "2026-10-22T00:00:00+00:00"
 
 
 def _store(tmp_path, run_id="run_one"):
-    authority = ev.EventAuthority(b"s" * 32)
+    authority = ev.EventAuthority()
     return AuditStore(tmp_path / "audit", run_id, authority), authority
 
 

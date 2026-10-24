@@ -4,7 +4,7 @@ A run is driven ONLY through the shipped surfaces:
 
 - ``scripts/pipeline_v1.py`` as a subprocess, every
   mutating command first passed through the real PreToolUse ``run_owner_gate`` (which
-  may rewrite it with a one-time hook token) and then executed by ``bash -c``;
+  may hand it the session id) and then executed by ``bash -c``;
 - hook-side events through the real hook functions: the v1 handout tracker
   (PreToolUse Agent), the SubagentStop capture hook, and ``pipeline_human`` (a
   person's question-card pick, Stop, closed tab).
@@ -123,7 +123,6 @@ class Rig:
 
     def __init__(self, tmp_path: Path, monkeypatch, profile: str = "direct",
                  extra: dict[str, str] | None = None, with_repo: bool = True):
-        from core import hook_token
         self.root, self.profile = tmp_path, profile
         self.data, self.ws = tmp_path / "data", tmp_path / "ws"
         (self.ws / "Projects" / PROJECT).mkdir(parents=True)
@@ -146,9 +145,9 @@ class Rig:
         for key in ("SWARM_DATA_DIR", "SWARM_WORKSPACE", "SWARM_WORKTREE_ROOT",
                     "SWARM_WORKTREE_LEDGER", "SWARM_APP_SESSION_ID"):
             monkeypatch.setenv(key, env[key])
-        # this process plays the daemon, where pipeline commands run: the env a test
-        # gives its CLI (r.env) is the daemon's too. The default is isolated (conftest
-        # turns worktrees off for every other test).
+        # this process plays the daemon (hooks, a person's answers); pipeline commands
+        # run in their own CLI process (S6-3). The default is isolated (conftest turns
+        # worktrees off for every other test).
         monkeypatch.setenv("SWARM_WORKTREE_MODE", env.get("SWARM_WORKTREE_MODE") or "on")
         monkeypatch.setenv("SWARM_TEST_CACHE_DIR", env["SWARM_TEST_CACHE_DIR"])
         from core import runtime_hooks
@@ -156,22 +155,12 @@ class Rig:
                             tmp_path / "data" / "state" / "pipeline_agent_audit")
         from core import pipeline_human
         monkeypatch.setattr(pipeline_human, "_workspace", lambda: self.ws)
-        from core.run_protocol import daemon_exec
-        hook_token.stop_oracle()
-        daemon_exec.stop()
-        port = 40000 + (os.getpid() * 7 + id(self)) % 20000
-        self.oracle = hook_token.start_oracle(port)
-        # the test process plays the daemon: pipeline commands run here (B-class B-a)
-        self.service = daemon_exec.start(port)
         self.ctx: dict[str, Any] = {"sdk_session_id": SESSION}
         self.run_id: str | None = None
         self.worktree: Path | None = None
 
     def close(self) -> None:
-        from core import hook_token
-        from core.run_protocol import daemon_exec
-        daemon_exec.stop()
-        hook_token.stop_oracle()
+        """Nothing to stop: no daemon service is involved since S6-3."""
 
     # ── commands ────────────────────────────────────────────────────────────
     def _exec(self, argv: list[str], extra_env: dict[str, str] | None = None,
@@ -209,7 +198,8 @@ class Rig:
     def bash(self, command: str, extra_env: dict[str, str] | None = None,
              session: str = SESSION) -> dict:
         """What a Bash tool call does in a SwarmAI session: the run_owner_gate check
-        phase, then its after-approval phase (the token issuer), then ``bash -c``."""
+        phase, then its after-approval phase (records a person's approval), then
+        ``bash -c``."""
         from core import run_owner_gate
         tool_input = {"command": command}
         for phase in ("check", "approved"):

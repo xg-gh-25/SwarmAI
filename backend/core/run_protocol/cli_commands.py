@@ -1,14 +1,12 @@
-"""Pipeline v1 commands, executed IN THE DAEMON (B-class design B-a/B-b).
+"""Pipeline v1 commands (design usable-by-anyone §3.3.5, S6-3).
 
-``scripts/pipeline_v1.py`` is a thin client: it sends its argv, the one-time hook
-token the session's PreToolUse hook gave it, its transcript id and (for
-``--artifact -``) its stdin to the daemon (``daemon_exec``), which redeems the token
-and runs the command here. Every response is one JSON object; no command pushes or
-deploys. There is no answer command: a human decision is recorded by the daemon
-(chat question card or dashboard), never by the agent.
+``scripts/pipeline_v1.py`` runs them in the agent's own process, daemon up or not.
+Every response is one JSON object; no command pushes or deploys. There is no answer
+command: a human decision is recorded by the daemon (chat question card or
+dashboard), never by the agent.
 
-Who sent a command comes from the redeemed token (``request_ctx``), never from the
-request or this process's environment.
+Who runs a command is the request's session (``request_ctx``: the CLI builds it from
+``SWARM_APP_SESSION_ID``).
 
 - ``parser()`` — the CLI's argparse definition.
 - ``run(args)`` — (result, exit code) of one command, as the CLI prints it.
@@ -68,7 +66,7 @@ def _json_arg(value: str | None) -> dict[str, Any]:
 def _request() -> request_ctx.Request:
     req = request_ctx.current()
     if req is None:
-        raise ValueError("pipeline commands run only as a daemon request")
+        raise ValueError("no pipeline request in this process (run scripts/pipeline_v1.py)")
     return req
 
 
@@ -195,9 +193,11 @@ def parser() -> argparse.ArgumentParser:
 
 def execute(args) -> dict[str, Any]:
     if args.command == "create":
-        # the owner is the session the hook issued this command's token to (B2): a
-        # different --session-id is refused, never trusted
+        # the owner is the calling session: a different --session-id is refused
         owner = _request().session_id
+        if not owner:
+            raise ValueError("create needs this session's id (SWARM_APP_SESSION_ID); run "
+                             "it from a SwarmAI session")
         if args.session_id and args.session_id != owner:
             raise ValueError("create --session-id must be this session")
         args.session_id = owner
@@ -218,9 +218,8 @@ def execute(args) -> dict[str, Any]:
         audit_root = get_app_data_dir() / "state" / "pipeline_agent_audit"
         with operation(audit_root, args.run_id):
             engine = _load(args, note=False)
-            # judged again under the lock, before ANY write (the transcript note
-            # included): a token issued before an owner transfer changes nothing after
-            # it (B-e re-audit HIGH)
+            # judged under the lock, before ANY write (the transcript note included):
+            # a command decided before an owner transfer changes nothing after it
             refused = _not_owner(engine, args.run_id)
             if refused:
                 return refused
@@ -351,7 +350,7 @@ def _infrastructure_failed(args, failure) -> dict[str, Any]:
         try:
             engine = _load(args, note=False)
             if _not_owner(engine, args.run_id):
-                # only the run's signed owner can fail it (B-e review)
+                # only the run's logged owner can fail it (B-e review)
                 payload.update(recorded=False, record_error="not the run's owner")
             else:
                 payload.update(engine.fail_infrastructure(failure))
@@ -370,6 +369,14 @@ def run(args) -> "tuple[dict[str, Any], int]":
         failure = infra.find(exc)
         if failure is None:
             from core.run_protocol.oplock import RunBusy
+            from core.run_protocol.store import StoreError
+            if isinstance(exc, StoreError) and ("invalid event chain" in str(exc) \
+                                                or "corrupt events line" in str(exc)):
+                # a damaged record (S6-3, §3.3.5): the run stops for a person; nothing
+                # more is written to its log
+                return {"ok": False, "code": "log_damaged", "error":
+                        f"{exc}. The run's event log is damaged, so the run stops here; "
+                        "tell the user (a person has to look at it)."}, 2
             if isinstance(exc, (ValueError, EngineError, LandingError, RunBusy)):
                 return _refused(exc), 2
             raise

@@ -1,10 +1,9 @@
-"""B-e three-way re-audit fixes (fixing log §32): the main flow across the CLI/daemon
-process boundary and the daemon's failure modes.
+"""B-e three-way re-audit fixes (fixing log §32) that still apply after S6-3 (the
+daemon execution and its tokens are gone):
 
-- the packaged daemon names the SOURCE checkout's scripts and a real python, and only
-  those receive a token (utils.source_repo);
-- a CLI command that cannot start within the queue wait answers busy with its token
-  unspent, so it cannot run later after its client gave up;
+- the packaged daemon names the SOURCE checkout's scripts (utils.source_repo, until
+  S6-5 removes the legacy script form);
+- an owner change between a command's decision and its write changes nothing;
 - a create killed before run_create leaves an intent startup proves is its own and
   removes; a created run and a create in THIS process are never touched;
 - ``--artifact <file>`` / ``--repo name=<relative>`` resolve in the agent's cwd.
@@ -15,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import threading
 from pathlib import Path
 
 import pytest
@@ -54,21 +52,6 @@ def test_frozen_bundle_from_another_machine_names_no_script(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
     assert source_repo.root() is None
-    from core.run_owner_gate import _is_our_script
-    assert _is_our_script({"tool": "pipeline_v1", "script": "/nonexistent/ci/swarmai/"
-                           "backend/scripts/pipeline_v1.py", "cwd": "/"}) is False
-
-
-def test_frozen_daemon_tokens_the_source_checkouts_script(tmp_path, monkeypatch):
-    src = _checkout(tmp_path / "src")
-    bundle = tmp_path / "bundle"
-    bundle.mkdir()
-    (bundle / "source_repo.json").write_text(json.dumps({"root": str(src)}))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
-    from core.run_owner_gate import _is_our_script
-    script = str(src / "backend" / "scripts" / "pipeline_v1.py")
-    assert _is_our_script({"tool": "pipeline_v1", "script": script, "cwd": "/"}) is True
 
 
 def test_dev_checkout_is_this_repo():
@@ -76,29 +59,6 @@ def test_dev_checkout_is_this_repo():
 
 
 # ── queued commands never run after their client gave up ──────────────────────
-def test_a_command_that_cannot_start_answers_busy_and_keeps_its_token(monkeypatch):
-    from core.run_protocol import daemon_exec
-    burned: list = []
-    monkeypatch.setattr(daemon_exec.hook_token, "redeem", lambda t: burned.append(t))
-    monkeypatch.setattr(daemon_exec, "_QUEUE_WAIT_S", 0.05)
-    held = []
-    for _ in range(4):
-        assert daemon_exec._CONCURRENCY.acquire(blocking=False)
-        held.append(1)
-    try:
-        out, rc = daemon_exec._execute({"token": "x", "argv": ["status"]})
-    finally:
-        for _ in held:
-            daemon_exec._CONCURRENCY.release()
-    assert (out.get("code"), rc) == ("busy", 2)
-    assert burned == [], "a command that never started must not spend its token"
-
-
-def test_waiting_commands_are_capped_so_the_service_keeps_connections(monkeypatch):
-    from core.run_protocol import daemon_exec
-    monkeypatch.setattr(daemon_exec, "_CLI_WAITING", threading.BoundedSemaphore(0))
-    out, rc = daemon_exec._execute({"token": "x", "argv": ["status"]})
-    assert out.get("code") == "busy"
 
 
 # ── create killed before the run exists ───────────────────────────────────────
@@ -204,7 +164,7 @@ def _engine(r):
                           run_id=r.run_id)
 
 
-def test_a_command_tokened_before_a_transfer_changes_nothing_after_it(tmp_path, monkeypatch):
+def test_a_command_decided_before_a_transfer_changes_nothing_after_it(tmp_path, monkeypatch):
     from tests.pipeline_v1_rig import SESSION
     from core.run_protocol import cli_commands, request_ctx
     r = _rig(tmp_path, monkeypatch)
@@ -213,8 +173,7 @@ def test_a_command_tokened_before_a_transfer_changes_nothing_after_it(tmp_path, 
         assert _engine(r).transfer_owner(OTHER, reason="test")
         args = cli_commands.parser().parse_args(["abandon", *r._run_args(),
                                                  "--reason", "late"])
-        with request_ctx.active(request_ctx.Request(session_id=SESSION, run_id=r.run_id,
-                                                    scope="abandon")):
+        with request_ctx.active(request_ctx.Request(session_id=SESSION)):
             out, rc = cli_commands.run(args)
         assert out.get("code") == "not_owner" and rc == 1, out
         assert len(_engine(r).store.read_events()) == before + 1   # the transfer only
@@ -266,8 +225,7 @@ def test_a_former_owner_command_does_not_even_note_its_transcript(tmp_path, monk
         before = tfile.read_text() if tfile.exists() else None
         args = cli_commands.parser().parse_args(["abandon", *r._run_args(), "--reason", "x"])
         with request_ctx.active(request_ctx.Request(
-                session_id=SESSION, run_id=r.run_id, scope="abandon",
-                transcript_ids=("cccccccc-0000-4000-8000-000000000003",))):
+                session_id=SESSION, transcript_ids=("cccccccc-0000-4000-8000-000000000003",))):
             out, _rc = cli_commands.run(args)
         assert out.get("code") == "not_owner"
         assert (tfile.read_text() if tfile.exists() else None) == before

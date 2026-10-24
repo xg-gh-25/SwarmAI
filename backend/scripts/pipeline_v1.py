@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Pipeline v1 command line client (B-class design B-a/B-b).
+"""Pipeline v1 command line (design usable-by-anyone §3.3.5, S6-3).
 
-Every command runs IN THE DAEMON (``core/run_protocol/cli_commands.py``): this
-script sends its argv, the one-time hook token the session's PreToolUse hook put in
-front of it (``SWARM_HOOK_TOKEN``), its SDK transcript id and, for ``--artifact -``,
-its stdin, and prints the one JSON object the daemon answers. It never loads a run
-or a signing key. With the daemon down it fails; there is no local fallback.
+Every command runs in this process (``core/run_protocol/cli_commands.py``), whether
+or not the SwarmAI daemon is up. The caller is the app session in
+``SWARM_APP_SESSION_ID``; ``CLAUDE_CODE_SESSION_ID`` names its transcript (usage is
+measured from it); ``--artifact -`` reads stdin. Prints one JSON object.
 
 - ``parser()`` — the CLI's argparse definition (re-exported for tests and cards).
 - ``main(argv)`` — exit code: 0 ok, 1 ``ok: false``, 2 refused / unavailable.
@@ -28,9 +27,7 @@ def parser():
 
 
 def _localize(argv: "list[str]") -> "tuple[list[str], str | None]":
-    """Resolve what names a file in THIS process, whose cwd is the agent's: the daemon
-    runs elsewhere, so a relative path would mean its directory (B-e re-audit MED).
-    The values are the ones argparse itself takes (the LAST ``--artifact``); the argv
+    """Resolve what names a file here, in the agent's cwd, once. The values are the ones argparse itself takes (the LAST ``--artifact``); the argv
     sent carries exactly one ``--artifact``:
     - ``-`` → stdin, read once;
     - valid inline JSON → sent as is (even if a file has that name);
@@ -78,18 +75,20 @@ def _is_json(text: str) -> bool:
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    from core import hook_token
-    from core.run_protocol import daemon_exec
+    from core.run_protocol import cli_commands, request_ctx
     argv = list(sys.argv[1:] if argv is None else argv)
-    parser().parse_args(argv)        # a usage error is reported here (exit 2), not sent
+    parser().parse_args(argv)        # a usage error is reported here (exit 2)
     try:
         argv, stdin = _localize(argv)
     except (OSError, UnicodeDecodeError) as exc:
         print(json.dumps({"ok": False, "error": f"artifact unreadable: {exc}"}))
         return 2
-    out, rc = daemon_exec.call(os.environ.get(hook_token.TOKEN_ENV), argv, stdin=stdin,
-                               transcript_id=(os.environ.get("CLAUDE_CODE_SESSION_ID")
-                                              or "").strip() or None)
+    transcript = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    req = request_ctx.Request(
+        session_id=(os.environ.get("SWARM_APP_SESSION_ID") or "").strip(),
+        transcript_ids=(transcript,) if transcript else (), stdin=stdin)
+    with request_ctx.active(req):
+        out, rc = cli_commands.run(cli_commands.parser().parse_args(argv))
     print(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
     return rc
 

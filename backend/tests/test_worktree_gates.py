@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from core import hook_token, run_owner_gate as og, worktree_write_gate as wg
+from core import run_owner_gate as og, worktree_write_gate as wg
 from core import run_worktree as rw
 
 
@@ -52,15 +52,6 @@ def _g(cwd, *a):
     p = subprocess.run(["git", "-C", str(cwd), *a], capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     return p.stdout.strip()
-
-
-@pytest.fixture(autouse=True)
-def _hook_token_oracle():
-    """The daemon's token service (in-process, as in the daemon)."""
-    hook_token.stop_oracle()
-    assert hook_token.start_oracle(50000 + os.getpid() % 10000) or not hook_token.oracle_supported()
-    yield
-    hook_token.stop_oracle()
 
 
 @pytest.fixture
@@ -212,66 +203,42 @@ def _no_signed_owner(monkeypatch):
     monkeypatch.setattr(pipeline_human, "record_owner", record)
 
 
-def test_token_issued_by_rewriting_single_command(env):
+def test_the_session_id_is_handed_to_a_single_command(env):
+    """S6-3: no token; the hook puts this session's id right before the CLI call."""
     c = _cmd(LAND)
     v = og._decide("s1", c, {"command": c})
-    new = v["hookSpecificOutput"]["updatedInput"]["command"]
-    assert new.startswith(hook_token.TOKEN_ENV + "=") and new.endswith(c)
-    nonce = new.split("=", 1)[1].split(" ", 1)[0]
-    assert hook_token.consume(env["runs"][RID].parent, nonce, "s1", RID, "land")[0]
+    assert v["hookSpecificOutput"]["updatedInput"]["command"] == "SWARM_APP_SESSION_ID=s1 " + c
 
 
 @pytest.mark.parametrize("c", [
     "cd /x && " + _cmd(LAND),
     "echo hi; " + _cmd(LAND),
     _cmd(LAND) + " --x $(cat f)",
-    _cmd(LAND) + "; " + _cmd(LAND),
 ])
-def test_compound_token_command_denied(env, c):
-    """Anything that runs before the CLI, a substitution, or a second token command."""
-    assert _denied(og._decide("s1", c, {"command": c}))
+def test_a_compound_command_gets_no_session_id_but_is_not_denied(env, c):
+    """Not the first simple command: the CLI uses its own environment."""
+    assert og._decide("s1", c, {"command": c}) is None
 
 
 @pytest.mark.parametrize("tail", [" && echo done", " | tail -1", " > /tmp/o.json; cat /tmp/o.json"])
-def test_output_plumbing_after_the_token_command_is_allowed(env, tail):
-    """The token goes right before the CLI call; an assignment prefix binds to that one
-    simple command, so the plumbing after it never sees the token."""
+def test_output_plumbing_after_the_command_is_allowed(env, tail):
+    """The id goes right before the CLI call; the plumbing after it never sees it."""
     c = _cmd(LAND) + tail
     v = og._decide("s1", c, {"command": c})
     new = v["hookSpecificOutput"]["updatedInput"]["command"]
-    assert new.startswith(hook_token.TOKEN_ENV + "=") and new.endswith(c)
-    assert new.count(hook_token.TOKEN_ENV + "=") == 1
+    assert new == "SWARM_APP_SESSION_ID=s1 " + c
 
 
-def test_a_quoted_heredoc_write_before_the_token_command_is_allowed(env):
+def test_a_quoted_heredoc_write_before_the_command_is_allowed(env):
     head = "cat > /tmp/m.txt <<'EOF'\n{\"t\": \"it's $(not run)\"}\nEOF\n"
     c = head + _cmd(LAND)
     v = og._decide("s1", c, {"command": c})
-    new = v["hookSpecificOutput"]["updatedInput"]["command"]
-    assert new.startswith(head + hook_token.TOKEN_ENV + "=")
-
-
-@pytest.mark.skipif(not hook_token.oracle_supported(), reason="file mode (no AF_UNIX)")
-def test_token_command_denied_when_token_service_down(env):
-    hook_token.stop_oracle()
-    c = _cmd(LAND)
-    assert _denied(og._decide("s1", c, {"command": c}))
-
-
-def test_model_supplied_token_denied(env):
-    c = f"{hook_token.TOKEN_ENV}=abc " + _cmd(LAND)
-    assert _denied(og._decide("s1", c, {"command": c}))
+    assert v["hookSpecificOutput"]["updatedInput"]["command"].startswith(
+        head + "SWARM_APP_SESSION_ID=s1 ")
 
 
 def test_steering_env_on_a_pipeline_command_is_denied(env):
     c = "SWARM_WORKTREE_MODE=off " + _cmd(LAND)
-    assert _denied(og._decide("s1", c, {"command": c}))
-
-
-def test_every_pipeline_command_must_be_first_to_get_its_token(env):
-    """B-class B-b: the daemon runs only token-carrying commands, so a pipeline call
-    the hook cannot hand a token to (not the first command of the line) is denied."""
-    c = "cd /x && " + _cmd("stage-complete")
     assert _denied(og._decide("s1", c, {"command": c}))
 
 
@@ -322,10 +289,10 @@ def test_owner_gate_denies_name_the_single_form(env):
     form = why.split("Run instead (the values argparse would have used): ", 1)[1].split("\n")[0]
     calls, single = og.parse_cli_calls(form)
     assert single and calls[0]["run_id"] == RID and not calls[0]["ambiguous"]
-    c = f"{hook_token.TOKEN_ENV}=abc " + _cmd(LAND)
+    c = "FOO=abc " + _cmd(LAND)
     why = og._decide("s1", c, {"command": c})["hookSpecificOutput"]["permissionDecisionReason"]
     form = why.split("Run instead: ", 1)[1].split("\n")[0]
-    assert og.parse_cli_calls(form)[1] and hook_token.TOKEN_ENV not in form
+    assert og.parse_cli_calls(form)[1] and "FOO=" not in form
 
 
 # ── per-repo isolation of the write gate ───────────────────────────────────────

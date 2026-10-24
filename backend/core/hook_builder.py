@@ -392,9 +392,10 @@ async def build_hooks(
     # ── PreToolUse: audit-marker write gate (Bash + file tools) ──
     # ALWAYS: DENY a write, move or delete in state/pipeline_agent_audit (redirects,
     # write/copy verbs, interpreter code naming it, rm of an ancestor, cd into it;
-    # Write/Edit/MultiEdit/NotebookEdit by resolved path). Only the SubagentStop hook
-    # writes those markers; D7, Red Team, Gate-0/1 and the workspace auto-commit
-    # trust them. Reads pass. Fail-open; no operator bypass (gate_force.UNFORCEABLE).
+    # Write/Edit/MultiEdit/NotebookEdit by resolved path). It holds the review markers
+    # and every pipeline run's event log: a hand edit damages a run (S6-3: the log is
+    # checksummed, not signed, so this is a guard against mistakes). Reads pass.
+    # Fail-open; SWARM_GATE_FORCE=audit_marker_write_gate lets it through.
     # In the Bash chain it runs right after background_command_guard and before
     # session_link_gate and every HITL gate, so a user is never asked to approve a
     # command this gate would then deny.
@@ -405,10 +406,6 @@ async def build_hooks(
     registry.register(
         "PreToolUse", audit_marker_gate, "audit_marker_write_gate",
         matcher="Write|Edit|MultiEdit|NotebookEdit",
-    )
-    registry.register(
-        "PreToolUse", audit_marker_gate, "audit_marker_write_gate",
-        matcher="Read|Grep",
     )
     # ── PreToolUse: session-link gate (Bash-scoped) ──
     # ALWAYS (not only during a run): DENY a command that removes or overrides
@@ -446,12 +443,11 @@ async def build_hooks(
     # ── PreToolUse: run-owner gate (Bash-scoped) — pipeline-run-worktree §4.2 ──
     # For pipeline_v1 commands on a run (only while worktree mode is
     # on, or the run is isolated): take a crashed owner's run over (deny while the
-    # owner is live), and issue the one-time hook token for commands that change
-    # worktree state by rewriting them via updatedInput. Fail-open; the token proves
-    # to the CLI that THIS hook ran (an env var would be inherited by a hookless
-    # child). No other Bash hook may set updatedInput (the chain merge is last-wins);
-    # its approved-phase twin after dangerous_command_gate rewrites only the commands
-    # this phase skips (run_owner_gate.AFTER_APPROVAL), so one command gets one token.
+    # owner is live), and put this session's SWARM_APP_SESSION_ID before the pipeline
+    # call via updatedInput (an adopted prewarm subprocess has none). Fail-open. No
+    # other Bash hook may set updatedInput (the chain merge is last-wins); its
+    # approved-phase twin after dangerous_command_gate records the person's approval
+    # for the commands this phase skips (run_owner_gate.AFTER_APPROVAL).
     # Only for a real app session: the fallback id may be an agent id.
     if session_context is not None:
         from core.run_owner_gate import create_run_owner_gate
@@ -533,10 +529,9 @@ async def build_hooks(
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
 
     # ── PreToolUse: run-owner gate, approved phase (Bash-scoped) ──
-    # A command the user approves first (run-claim-main) gets its one-time hook token
-    # HERE, after the approval above, not in the check phase registered earlier: the
-    # approval can wait hours and the token lives 120s (hook_token.TOKEN_TTL_SECONDS).
-    # Must stay directly after dangerous_command_gate.
+    # A command the user approves first (run-land / accept-finding / discard-snapshot
+    # --request): its approval is recorded HERE, after the approval above, not in the
+    # check phase registered earlier. Must stay directly after dangerous_command_gate.
     if session_context is not None:
         from core.run_owner_gate import create_run_owner_gate
         registry.register(

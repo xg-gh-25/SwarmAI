@@ -233,56 +233,50 @@ implementations in `security_hooks.py`). By category:
    patches — to governed context files), the `commit_gate` group (Bash, registered before
    `dangerous_command_gate`, members in order): `run_amend_gate` (in this session's active run,
    denies `git commit --amend` and points at the run's own landing (`pipeline_v1.py land --message`) instead of letting
-   `dangerous_command_gate` park the run on an approval prompt), `active_run_commit_gate` (the run's own signed
+   `dangerous_command_gate` park the run on an approval prompt), `active_run_commit_gate` (the run's own logged
    owner session (`RunEngine.owner_session`) may not hand-commit files that run changed
    (`RunEngine.owned_paths`) or its REPORT: they land only through the run's landing; any
    other session, an unreadable run, or a `git -C` / `--git-dir` retarget gets an allow with
    a note naming the run); the others fail open. Native commits are never blocked:
    `direct_commit_gate` and `adversarial_commit_gate` were removed (same design, §3.4); in
    native mode the agent decides which review experts a change needs (AGENT.md R2). Pipeline v1 review round limits and parallel waves are
-   enforced by signed `handout` / `answer` events in `core/run_protocol/`, not a
+   enforced by logged `handout` / `answer` events in `core/run_protocol/`, not a
    marker-counting PreToolUse gate. `session_link_gate` (Bash, always on, registered
    right before `commit_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
    the run↔session link both run gates key on; cannot be forced). A v1 run's owner is the
-   signed one (its contract's session, then each `owner_transfer`), never run.json; a
+   logged one (its contract's session, then each `owner_transfer`), never run.json; a
    prewarmed subprocess that has no `SWARM_APP_SESSION_ID` gets this session's id from
    `run_owner_gate`, which puts it before the one `pipeline_v1` call it binds.
-   `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit|Read|Grep, always on,
-   right after `background_command_guard`, ahead of every HITL gate): denies writes, moves or deletes in
-   `state/pipeline_agent_audit`; it also denies reads of each v1 run's `authority.key` while allowing
-   ordinary audit reads. Signed events, authorization, Gate-0, REVIEW and the adversarial commit gate
-   trust this store; the gate cannot be forced.
+   `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit, always on, right after
+   `background_command_guard`, ahead of every HITL gate): denies writes, moves or deletes in
+   `state/pipeline_agent_audit`, which holds the review markers and every run's event log. Since
+   S6-3 that log is append-only with a checksum per record, not signed (design
+   `docs/design/2026-10-24-swarmai-usable-by-anyone.md` §3.3.5): a torn last line is dropped, a
+   damaged record stops the run for a person. The gate guards against mistakes and can be forced.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; every new run gets them, there is
    no setting to turn them off (usable-by-anyone P7); `$SWARM_WORKTREE_MODE=off` is only the
    test suite's switch until S6): `run_owner_gate`
    (Bash, right after `commit_gate`; for a mutating `pipeline_v1.py` call it reads the owner
-   from the run's signed events, never run.json, takes a crashed owner's run over only when
-   the old owner is confirmed not live (signing an `owner_transfer` event first, so human
+   from the run's logged events, never run.json, takes a crashed owner's run over only when
+   the old owner is confirmed not live (writing an `owner_transfer` event first, so human
    authorizations follow the new owner) and denies while the owner is live or its liveness
-   is unknown; for a `pipeline_v1.py` call from an adopted prewarm subprocess it puts this
-   session's `SWARM_APP_SESSION_ID` before the command; it denies a Bash call to the
-   human-only `/api/pipelines/<id>/decision`,
-   and issues the one-time `SWARM_HOOK_TOKEN` by rewriting that single command via
-   `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
-   in daemon memory. Pipeline commands are recognised in one place, `core/pipeline_command.py`.
+   is unknown; it puts this session's `SWARM_APP_SESSION_ID` before a pipeline call that is
+   the first command of the line (an adopted prewarm subprocess has none) via
+   `updatedInput` — no other Bash hook may set `updatedInput`; it denies a Bash call to the
+   human-only `/api/pipelines/<id>/decision`). Pipeline commands are recognised in one
+   place, `core/pipeline_command.py`.
    The agent runs `"$SWARM_BACKEND_BIN" pipeline-v1 <sub>` (packaged and dev alike:
    `SWARM_BACKEND_BIN` is the daemon's own program, in dev the `backend/bin/python-backend`
-   shim; `desktop_main.py` also has `py <script>` for Python without a system interpreter);
-   it gets a token when the program word is that unreassigned variable or this backend's
-   binary. The legacy `python …/pipeline_v1.py` form still works until S6-5, when its
+   shim; `desktop_main.py` also has `py <script>` for Python without a system interpreter).
+   The legacy `python …/pipeline_v1.py` form still works until S6-5, when its
    script resolves to this backend's own source checkout
    (`utils/source_repo.py`; the packaged daemon reads `source_repo.json`). Pipeline
-   commands EXECUTE in the daemon (`core/run_protocol/daemon_exec.py`, B-class design
-   `docs/design/pipeline-v1-b-class-authority.md`): the CLI sends its argv + token over an
-   owner-only socket, the daemon redeems it and runs the command as the token's session,
-   rechecking that it is still the signed owner under the run's operation lock. With the daemon down, pipeline commands fail (no local fallback). The same-OS-user
-   gap (an agent can still read the key file or call the unauthenticated localhost API) is a
-   recorded TODO (E7 item 7). It
-   tokens `land` (no token: `not_landed(needs_hooked_session)`) and, shared runs
-   included, `run-land` / `accept-finding` / `discard-snapshot`: after the person approves one,
-   the gate itself writes the signed `auth` event from the run's `land_request` event (the
-   approval card shows the trees from that event; execution reads only it). Only the daemon
-   process may sign (`events.allow_hook_writer` in `main.py`; the key is loaded only there)) and `worktree_write_gate`
+   commands run in the agent's own process, daemon up or not (S6-3: the daemon execution
+   socket, the hook token and the signing key were removed); a command acts only for the
+   run's owner session. `run-land` / `accept-finding` / `discard-snapshot` with `--request`
+   need the person's approval: after it, the gate writes the `auth` event from the run's
+   `land_request` event (the approval card shows the trees from that event; execution reads
+   only it) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
    the `pipeline_v1.py create --repo` command for a run that includes it (v1 repos are fixed at
@@ -320,8 +314,8 @@ merged or removed on that evidence.
 
 One operator switch replaces the ten per-gate `SWARM_*_FORCE=1` variables (2026-10-20,
 `core/gate_force.py`): `SWARM_GATE_FORCE=<gate or group>,...` in the backend/daemon env
-(groups `commit_gate`, `expert_gate`). Each use is logged as `force_bypass`. `session_link_gate` and
-`audit_marker_write_gate` cannot be forced: every other gate trusts what they protect.
+(groups `commit_gate`, `expert_gate`). Each use is logged as `force_bypass`. `session_link_gate`
+cannot be forced: every run gate keys on the link it protects.
 
 Plus `can_use_tool` file-access control, workspace isolation, and error sanitization. These
 gates are the product-level ones SOUL P7 allows (every user benefits, normal work keeps a way

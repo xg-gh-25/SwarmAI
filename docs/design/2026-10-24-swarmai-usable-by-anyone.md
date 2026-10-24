@@ -157,6 +157,13 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - R2 的 handout 每次 address 一个新 attempt（原来固定 2），reopen 后可以再派 R2。
   - `reported_test`：fix handoff 的 proof 写 `{"evidence_type": "reported_test", "command": "<报告里的命令>"}`；engine 在该 finding 所在仓库、当前 tree 上的验证报告里找这条命令且结果是 pass（REVIEW 里可以用 `report-tests` 记一份 `review` 阶段的报告），找到才记 `proof` 事件，并把报告的 `tests_changed`、`rationale` 交给 R2。finding 先是 closed_proven；R2 判 ADEQUATE 保持关闭，TEST_INADEQUATE 变成 invalid_test。只接受 behavior/contract 类。
   - `scripts/lint_problem_values.py` 去掉已删除的 `evidence_seal` loader。
+  S6-3 实现（2026-10-25）：
+  - 事件不再签名：`EventAuthority` 不带密钥，每条事件带 `checksum`（去掉自身后的 sha256）和固定的格式标识 `authority_id`；只用来发现截断和损坏。最后一行写了一半照旧丢掉继续；中间记录校验和不对，CLI 返回 `log_damaged`、gate 拒绝写命令并说明日志损坏，run 停下等人处理，日志不再追加。
+  - 删除：`run_protocol/keys.py`（`authority.key`）、`events.allow_hook_writer` / `restrict_process` / 进程写入者限制、`auth_consumed` 的 oracle 回执、`run_protocol/daemon_exec.py`（socket、队列、代执行）、`core/hook_token.py`、`run_protocol/cli_scope.py`、`request_ctx.take_scope`、`engine._consume_token`、`not_landed(needs_hooked_session)`、infra 组件 `hook_token`、`pipeline_command.is_ours`、`run_owner_gate` 发 token 的逻辑（`_needs_token`、`_is_our_script`、`_resolves_into_scripts`）、`main.py` 里 oracle 和 daemon_exec 的启停。
+  - pipeline 命令回到本地：`scripts/pipeline_v1.py` 在自己的进程里跑 `cli_commands`，调用者是 `SWARM_APP_SESSION_ID` 里的 session；要求 owner 的操作（`land`、`run-land`、`accept-finding`、`discard-snapshot`）改为检查调用者是不是 run 的 owner。daemon 不在线时照常工作。
+  - 保留：owner 转移和存活判断、操作锁、`_with_session`（hook 把 session id 补到第一条 pipeline 命令前；不再要求 pipeline 命令必须是第一条，否则只是不补）、人工批准（批准后 hook 照旧写 `auth`，落地时 `AuthorizationOracle` 在本进程里核对一次）。
+  - `audit_marker_write_gate`：只保留写入保护，删掉 `authority.key` 的读保护（约 160 行），可以用 `SWARM_GATE_FORCE` 放行；`UNFORCEABLE` 只剩 `session_link_gate`。
+  - 新测试 `test_pipeline_v1_local_log.py`：被接管的 prewarm session 建 run 且 owner 正确；写了一半的最后一行被丢掉、run 继续；中间记录损坏时 run 停下；不再生成密钥文件。`test_pipeline_v1_handoff` 覆盖不经 hook、不靠 daemon 直接运行命令，以及非 owner 的命令什么都不改。
 - **审查和最终 tree 的关系（r8，skeptic BLOCKER 1）**：阶段顺序 build → review → test 不变。规则是：
   - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
   - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW，做一次**增量审查**，再回到 TEST。

@@ -81,13 +81,13 @@ class AuditPaths:
 
 
 class AuditStore:
-    """Append-only storage for events signed by one injected run authority.
+    """Append-only, checksummed storage for one run's events (S6-3: not signed).
 
     *validator*, when given, is called under the run lock with the chain plus the
     candidate event before anything is written. It raises to refuse an event that
     would make the log unreadable (an illegal lifecycle step), and may return the
     payload of the ``transition`` the event triggers; the store then appends that
-    transition, signed by *transition_writer*, inside the same lock — so no other
+    transition, written by *transition_writer*, inside the same lock — so no other
     writer can land between a trigger and its transition."""
 
     def __init__(self, root: str | Path, run_id: str, authority: ev.EventAuthority, *,

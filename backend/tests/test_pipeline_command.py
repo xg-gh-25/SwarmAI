@@ -31,7 +31,6 @@ def test_program_form_is_a_v1_call():
     assert single
     assert (call["tool"], call["sub"], call["run_id"], call["project"], call["form"]) == \
         ("pipeline_v1", "stage-complete", "run_ab", "P", "program")
-    assert pc.is_ours(call)
 
 
 def test_legacy_form_is_still_recognised():
@@ -50,22 +49,6 @@ def test_legacy_form_is_still_recognised():
 def test_a_mention_that_does_not_run_the_cli_is_foreign(command):
     calls, _ = pc.calls(command)
     assert all(c["tool"] == "foreign" for c in calls), calls
-
-
-def test_program_form_ownership(monkeypatch, tmp_path):
-    call, _ = _one(f"SWARM_BACKEND_BIN=/tmp/evil {PROG} status --run-id run_a")
-    assert call["assigns"] == ["SWARM_BACKEND_BIN"] and not pc.is_ours(call)
-    exe = tmp_path / "rt" / "python-backend"
-    exe.parent.mkdir()
-    exe.write_text("")
-    from utils import backend_bin as bb
-    monkeypatch.setattr(bb, "backend_bin", lambda: str(exe))
-    call, _ = _one(f"{exe} pipeline-v1 status --run-id run_a")
-    assert call["form"] == "program" and pc.is_ours(call)
-    other = tmp_path / "python-backend"
-    other.write_text("")
-    call, _ = _one(f"{other} pipeline-v1 status --run-id run_a")
-    assert not pc.is_ours(call)
 
 
 def test_watchers_see_the_program_form():

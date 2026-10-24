@@ -64,18 +64,10 @@ def _report():
 
 
 def _land_through_the_hook(engine, monkeypatch, message):
-    """A landing carries the hook's one-time token (A7), as run_owner_gate issues it."""
-    from core import hook_token
-    hook_token.stop_oracle()
-    assert hook_token.start_oracle(55000 + __import__("os").getpid() % 1000) \
-        or not hook_token.oracle_supported()
-    try:
-        monkeypatch.setenv(hook_token.TOKEN_ENV,
-                           hook_token.issue(engine.run_dir, "s", engine.run_id, "land"))
+    """A landing as the run's owner session (S6-3: the CLI's caller, no token)."""
+    from core.run_protocol import request_ctx
+    with request_ctx.active(request_ctx.Request(session_id=engine.owner_session())):
         return engine.normal_land(message=message)
-    finally:
-        hook_token.stop_oracle()
-        monkeypatch.delenv(hook_token.TOKEN_ENV, raising=False)
 
 
 def _run_code(case, profile, run_id, monkeypatch):

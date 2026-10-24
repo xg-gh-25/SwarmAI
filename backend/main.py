@@ -20,9 +20,6 @@ from pathlib import Path
 
 from config import settings, get_app_data_dir, get_log_file_path
 from core import session_registry
-from core.run_protocol.events import allow_hook_writer as _allow_hook_writer
-
-_allow_hook_writer()   # this daemon alone records Pipeline v1 hook facts (fixing spec C3)
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
@@ -1466,19 +1463,6 @@ async def lifespan(app: FastAPI):
     # Desktop CLI sessions reach the Bedrock thinking gateway on this port.
     from core.bedrock_thinking_gateway import set_listen_port as _set_gw_port
     _set_gw_port(backend_port)
-    # Pipeline-run worktree hook tokens (§4.2): issuance records live only in this
-    # process; CLI subprocesses burn them over an owner-only Unix socket.
-    try:
-        from core import hook_token as _hook_token
-        if not _hook_token.start_oracle(backend_port) and _hook_token.oracle_supported():
-            logger.warning("hook-token oracle not started: isolated pipeline runs will refuse")
-        # Pipeline commands execute HERE, never in the agent's process (B-class B-a):
-        # the CLI sends its argv + hook token over an owner-only socket.
-        from core.run_protocol import daemon_exec as _pipeline_exec
-        if not _pipeline_exec.start(backend_port):
-            logger.warning("pipeline service not started: pipeline commands will fail")
-    except Exception:  # noqa: BLE001 — never block startup
-        logger.warning("hook-token oracle failed to start", exc_info=True)
     if _bjson_written:
         logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
     else:
@@ -1635,13 +1619,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
-    try:
-        from core import hook_token as _hook_token
-        from core.run_protocol import daemon_exec as _pipeline_exec
-        _pipeline_exec.stop()
-        _hook_token.stop_oracle()
-    except Exception:  # noqa: BLE001
-        logger.debug("hook-token oracle stop failed", exc_info=True)
     if _readiness_task and not _readiness_task.done():
         _readiness_task.cancel()
         try:

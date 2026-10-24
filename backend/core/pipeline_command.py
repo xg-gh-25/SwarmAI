@@ -6,9 +6,7 @@ Two forms are recognised until S6-5 removes the second one:
 - program form (the one the agent is told to run, packaged and dev alike):
   ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub> ...`` — the program word is the
   ``$SWARM_BACKEND_BIN`` reference or a ``python-backend[.exe]`` path, the next word is
-  ``pipeline-v1``. It is OURS (gets a hook token) when the word is the variable and the
-  command does not reassign it, or a path that resolves to this backend's program
-  (``utils.backend_bin.backend_bin``).
+  ``pipeline-v1``.
 - legacy script form: ``<python> [-flags] .../pipeline_v1.py <args>``.
 
 Every other module asks here instead of matching ``pipeline_v1`` / ``pipeline-v1`` text
@@ -18,7 +16,6 @@ Public:
 - ``mentions(command)`` — cheap text pre-filter: could the command hold a pipeline call.
 - ``recognize(prog)`` — one unwrapped simple command's tokens -> its call dict or None.
 - ``calls(command)`` — (calls, single) for a whole command line.
-- ``is_ours(call)`` — this backend's own CLI (only those receive a hook token).
 - ``program_word(base)`` — a program basename that runs a pipeline CLI / the backend.
 - ``segment_mentions(tokens)`` — a simple command that names a pipeline CLI at all.
 - ``last_call_offset(command)`` / ``is_create(command)`` / ``is_land(command)``.
@@ -30,7 +27,6 @@ from __future__ import annotations
 import os
 import re
 import shlex
-from pathlib import Path
 
 SUBCOMMAND = "pipeline-v1"
 ENV_VAR = "SWARM_BACKEND_BIN"
@@ -107,7 +103,7 @@ _FOREIGN = {"tool": "foreign", "sub": None, "run_id": None, "project": None, "st
 def recognize(prog: "list[str]") -> "dict | None":
     """The call an unwrapped simple command makes: a pipeline call dict, a ``foreign``
     dict when it names a pipeline CLI without running it (a script path that is only an
-    argument must never receive a token), or None when it names none."""
+    argument is not a call), or None when it names none."""
     if not prog or not segment_mentions(prog):
         return None
     if _is_program_word(prog[0]) and len(prog) > 1 and prog[1] == SUBCOMMAND:
@@ -141,45 +137,6 @@ def calls(command: str) -> "tuple[list[dict], bool]":
         call["assigns"] = [t.split("=", 1)[0] for t in lead if "=" in t]
         out.append(call)
     return out, single
-
-
-def is_ours(call: dict) -> bool:
-    """The CLI a call runs is this backend's own, not another file of the same name:
-    only those receive a hook token (B round 1)."""
-    tool = call.get("tool")
-    if call.get("form") == "program":
-        program = call.get("program")
-        if not isinstance(program, str) or not program:
-            return False
-        if program in _ENV_REFS:
-            return ENV_VAR not in (call.get("assigns") or [])
-        from utils.backend_bin import backend_bin
-        cand = Path(os.path.expanduser(program))
-        if not cand.is_absolute():
-            if not call.get("cwd"):
-                return False
-            cand = Path(call["cwd"]) / cand
-        try:
-            return cand.resolve(strict=True) == Path(backend_bin()).resolve(strict=True)
-        except OSError:
-            return False
-    script = call.get("script")
-    if not isinstance(script, str) or not script or tool != "pipeline_v1":
-        return False
-    from utils.source_repo import pipeline_script
-    expected = pipeline_script(tool)
-    if expected is None:
-        return False        # no runnable source checkout: nothing is ours to token
-    if os.path.isabs(script):
-        cand = Path(script)
-    elif call.get("cwd"):
-        cand = Path(call["cwd"]) / script
-    else:
-        return False        # a relative path with no known cwd cannot be checked
-    try:
-        return cand.resolve(strict=True) == expected
-    except OSError:
-        return False
 
 
 def _words(command: str) -> "list[tuple[int, str]]":
@@ -225,5 +182,5 @@ def command_text(args: str) -> str:
 
 
 __all__ = ["ENV_VAR", "LEGACY_SCRIPTS", "SUBCOMMAND", "calls", "command_text", "is_create",
-           "is_land", "is_ours", "last_call_offset", "mentions", "program_word", "recognize",
+           "is_land", "last_call_offset", "mentions", "program_word", "recognize",
            "segment_mentions"]

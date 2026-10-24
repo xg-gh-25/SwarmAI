@@ -26,7 +26,7 @@ When there are no new findings, include a separate line: NO FINDINGS
 Do not emit a VERDICT line for REVIEW experts."""
 
 _SECURITY_PATH = re.compile(
-    r"(?:^|/)(?:auth|credential|permission|security_hooks|hook_builder|hook_token|"
+    r"(?:^|/)(?:auth|credential|permission|security_hooks|hook_builder|"
     r"permission_manager|context)(?:[._/-]|$)|(?:^|/)[^/]*_gate\.py$|cors|listen|port",
     re.IGNORECASE,
 )
@@ -372,7 +372,7 @@ class ReviewOrchestrator:
             self.store.append_new(
                 writer=self.store.authority.writer("cli"), kind="address", at=at,
                 stage="review", attempt=attempt, payload=payload)
-        # the pass lives only in its signed address events (K4, F21): no side file
+        # the pass lives only in its logged address events (K4, F21): no side file
         return {"pass": pass_number, "addressed": sorted(addressed),
                 "hunks": hunks, "proofs": proofs, "causes": causes,
                 "reclassifications": reclassifications}
@@ -562,7 +562,7 @@ class ReviewOrchestrator:
         return str(path)
 
     def write_documents(self) -> list[str]:
-        """Render REVIEW.md and FIXING_SPEC.md, projections of the signed events only."""
+        """Render REVIEW.md and FIXING_SPEC.md, projections of the logged events only."""
         return [p for p in (self.write_review(), self.write_fixing_spec()) if p]
 
 

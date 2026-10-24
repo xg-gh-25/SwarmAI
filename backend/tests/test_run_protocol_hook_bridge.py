@@ -14,7 +14,7 @@ FINDING = '{"severity":"HIGH","kind":"behavior","file":"a.py","line":12,"claim":
 
 
 def _bridge(tmp_path, run_id="run_one"):
-    authority = ev.EventAuthority((run_id.encode() + b"x" * 64)[:32])
+    authority = ev.EventAuthority()
     store = AuditStore(tmp_path / "audit", run_id, authority)
     return ReviewHookBridge(store, "session_1"), store, authority
 

@@ -2,7 +2,7 @@
 
 Public symbols:
 - ``prepare_request`` — land_intent → REPORT → tree guards → land_request.
-- ``request_event`` — the signed land_request payload: the only source execution reads.
+- ``request_event`` — the logged land_request payload: the only source execution reads.
 - ``approve_from_event`` — the daemon's ``auth`` fact after the person approved (C1, C3).
 - ``consume_authorization`` — one-use consume under the run lock; a second is integrity (C6).
 - ``execute_request`` — exact tree recheck against the event, consume, commit-tree, land.
@@ -57,7 +57,7 @@ def prepare_request(
     integration_roots: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Prepare a one-use manual landing request without committing anything. Every
-    fact execution and the approval card need is in the signed land_request event
+    fact execution and the approval card need is in the logged land_request event
     (C1); the JSON the CLI also writes is only for display."""
     if action not in ("land", "land_skip_tests"):
         raise LandingError("manual landing action must be land or land_skip_tests")
@@ -141,7 +141,7 @@ def prepare_request(
                      "guard_attempt_event_id": attempt_event["event_id"],
                      "guard_check_ids": guard_ids},
         )
-    except StoreError as exc:   # e.g. too many repos for one signed event line
+    except StoreError as exc:   # e.g. too many repos for one logged event line
         raise LandingError(f"land_request could not be recorded: {exc}") from exc
     return {"request": request, "event": event, "bindings": normalized,
             "bases": bases, "report_sha": report_sha, "render_event_id": render["event_id"]}
@@ -152,7 +152,7 @@ AUTH_TTL_SECONDS = 30 * 60
 
 def request_event(store: AuditStore, request_id: str) -> dict[str, Any]:
     """The land_request payload for *request_id* (C1: the only source). read_events
-    verifies every signature and the hash chain; the lifecycle validated the payload
+    verifies every checksum and the hash chain; the lifecycle validated the payload
     when it was appended."""
     found = [event for event in store.read_events() if event.get("kind") == "land_request"
              and event.get("payload", {}).get("request_id") == request_id]
@@ -164,7 +164,7 @@ def request_event(store: AuditStore, request_id: str) -> dict[str, Any]:
 def approve_from_event(store: AuditStore, request_id: str, *, now: float,
                        at: str) -> dict[str, Any]:
     """Hook-side approval, written by the DAEMON after the person approved the command:
-    the ``auth`` fact for exactly the request the signed land_request names (C1, C3)."""
+    the ``auth`` fact for exactly the request the logged land_request names (C1, C3)."""
     request = request_event(store, request_id)["request"]
     event, _ = store.append_new(
         writer=store.authority.writer("hook"), kind="auth", at=at,
@@ -222,7 +222,7 @@ def consume_authorization(store: AuditStore, request_id: str, *, session_id: str
 
 def _unpaired_consumption(store: AuditStore, request_id: str,
                           session_id: str) -> "dict[str, Any] | None":
-    """The signed ``auth_consumed`` of *request_id* that no ``land`` / ``partial_land``
+    """The logged ``auth_consumed`` of *request_id* that no ``land`` / ``partial_land``
     answers yet, when this same session consumed it; else None."""
     events = store.read_events()
     answered = {(event.get("payload") or {}).get("auth_consumed_event_id")
@@ -466,7 +466,7 @@ def _index_is(root: str, tree_ish: str) -> bool:
 
 class Landed(dict):
     """repo -> commit on its integration branch. ``unsettled``: shared checkouts whose
-    branch moved but whose index or REPORT could not be finished; the signed land
+    branch moved but whose index or REPORT could not be finished; the logged land
     event names them, so no checkout is reported finished that is not (K5 review r2)."""
 
     def __init__(self, commits: Mapping[str, str], unsettled: Sequence[str] = ()):
@@ -656,7 +656,7 @@ def commit_repos(
     adopted: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Land every repo or none (design §A3.7, conformance K2).
-    *adopted*: repo -> commit a signed partial_land already put on its branch; a later
+    *adopted*: repo -> commit a logged partial_land already put on its branch; a later
     landing of the run keeps it as landed and lands only the rest (review K5 r1).
     *in_place*: a shared run, whose code is the integration checkout's own files
     (``_land_in_place``); otherwise each repo fast-forwards.
@@ -804,7 +804,7 @@ def commit_repos(
             _atomic_progress(path, progress)
         except OSError:
             # the progress file is crash recovery only: the ref moved, the commit is
-            # returned (and signed by the caller); a failed write never stops the rest
+            # returned (and logged by the caller); a failed write never stops the rest
             # of the landing half way (review round 1 #2)
             import logging
             logging.getLogger(__name__).warning(
@@ -821,7 +821,7 @@ def execute_request(
     adopted: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Consume the hook's approval of *request_id*, then durably land every repo.
-    Everything bound — trees, REPORT, bases — is read from the signed land_request
+    Everything bound — trees, REPORT, bases — is read from the logged land_request
     event (C1); the trees are rebuilt now and must equal it exactly."""
     payload = request_event(store, request_id)
     request = payload["request"]
@@ -863,7 +863,7 @@ def execute_request(
             bases=dict(bases), bindings=current, message=message, progress_path=path,
             branches=branches, in_place=in_place, adopted=adopted)
     except PartialLanding as exc:
-        # signed evidence of what moved, before the person sees the error (K2)
+        # logged evidence of what moved, before the person sees the error (K2)
         store.append_new(
             writer=store.authority.writer("cli"), kind="partial_land", at=at,
             stage="deliver", attempt=1, ordinal=NEXT,

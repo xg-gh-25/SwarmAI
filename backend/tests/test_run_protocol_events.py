@@ -15,7 +15,7 @@ import pytest
 from core.run_protocol import auth, events as ev
 
 AT = "2026-10-21T00:00:00+00:00"
-AUTH = ev.EventAuthority(b"x" * 32)
+AUTH = ev.EventAuthority()
 
 
 def _sample(expected):
@@ -369,26 +369,16 @@ def test_occurrence_identity_field_cannot_be_externalized_into_a_different_ident
         _make("answer", payload={"tool_use_id": "x" * 1025})
 
 
-def test_producer_label_from_another_authority_is_not_trusted():
-    other = ev.EventAuthority(b"y" * 32)
-    event, _ = ev.make_event(
-        writer=other.writer("cli"), run_id="run_abc", kind="user_stop", at=AT,
-        ordinal=1, payload={"reason": "stop"},
-    )
-    with pytest.raises(ev.EventError, match="signature/authority"):
-        ev.validate_event(event, AUTH)
-
-
 def test_run_create_envelope_and_payload_run_ids_must_match():
     with pytest.raises(ev.EventError, match="must equal"):
         _make("run_create", run_id="run_envelope",
               payload={"run_id": "run_payload"})
 
 
-def test_auth_consumed_cannot_be_created_from_an_ordinary_signed_payload():
+def test_auth_consumed_cannot_be_created_from_an_ordinary_payload():
     with pytest.raises(ev.EventError, match="oracle Consumption"):
         ev.make_event(writer=AUTH.writer("cli"), run_id="run_abc",
             kind="auth_consumed", at=AT, payload={
                 "auth_event_id": "a" * 64, "request_id": "q",
                 "session_id": "s", "run_id": "run_abc", "action": "land",
-                "binding_digest": "d" * 64, "oracle_receipt": "r" * 64})
+                "binding_digest": "d" * 64})

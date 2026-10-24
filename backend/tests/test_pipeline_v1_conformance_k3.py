@@ -183,28 +183,20 @@ def test_f11_git_objects_that_cannot_be_written_fail_the_run(rig):
     assert state["status"] == "failed" and state["reason"].startswith("git_objects"), state
 
 
-def test_a_tokened_action_outside_a_daemon_request_is_refused(rig):
-    """B-class B-b: a token is redeemed by the daemon before it runs the command; an
-    engine call with no daemon request (nothing redeemed) is never authorized, and a
-    request redeemed for another scope or run does not cover it."""
+def test_an_approved_action_runs_only_for_the_runs_owner(rig):
+    """S6-3: no token. A command acts only for the session that owns the run; with
+    no calling session (no SWARM_APP_SESSION_ID) nothing is authorized."""
     from core.run_protocol import request_ctx
     r = rig("direct")
     r.create()
     engine = r.engine()
-    assert engine._consume_token("land")[0] is False
-    with request_ctx.active(request_ctx.Request(
-            session_id=engine.owner_session(), run_id=r.run_id, scope="cli:status")):
-        assert engine._consume_token("land")[0] is False
-    with request_ctx.active(request_ctx.Request(
-            session_id=engine.owner_session(), run_id="run_other", scope="land")):
-        assert engine._consume_token("land")[0] is False
-    with request_ctx.active(request_ctx.Request(
-            session_id="someone_else", run_id=r.run_id, scope="land")):
-        assert engine._consume_token("land")[0] is False
-    with request_ctx.active(request_ctx.Request(
-            session_id=engine.owner_session(), run_id=r.run_id, scope="land")):
-        assert engine._consume_token("land")[0] is True
-        assert engine._consume_token("land")[0] is False      # once per request
+    assert engine._caller_is_owner()[0] is False
+    with request_ctx.active(request_ctx.Request(session_id="someone_else")):
+        assert engine._caller_is_owner()[0] is False
+    with request_ctx.active(request_ctx.Request(session_id="")):
+        assert engine._caller_is_owner()[0] is False
+    with request_ctx.active(request_ctx.Request(session_id=engine.owner_session())):
+        assert engine._caller_is_owner()[0] is True
 
 
 def test_f11_an_unwritable_audit_area_is_named_and_nothing_else_is_caught(rig, monkeypatch):

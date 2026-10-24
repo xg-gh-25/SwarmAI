@@ -198,7 +198,7 @@ class _NoRun:
 
 def _session_runs_light(sid: str) -> "list[dict]":
     """This session's live v1 runs touched in the last 3 days, newest first. Owner,
-    status and mode are the signed ones (``run_worktree._iter_runs``), never run.json's
+    status and mode are the logged ones (``run_worktree._iter_runs``), never run.json's
     (re-audit 536bb62b: a forged ``worktree_mode: shared`` lifted rule 4)."""
     from core.run_worktree import _LIVE, _iter_runs
     from core.security_hooks import _pipeline_runs_root

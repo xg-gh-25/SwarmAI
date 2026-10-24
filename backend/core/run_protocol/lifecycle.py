@@ -22,7 +22,7 @@ TERMINAL = frozenset({"completed", "abandoned", "failed"})
 LANDINGS = frozenset({"landed", "not_landed", "human_override", "no_code"})
 NOT_LANDED_REASONS = frozenset({
     "final_stale", "report_mismatch", "checks_exhausted", "framing_rejected",
-    "already_satisfied", "needs_hooked_session", "land_conflict", "partial_land",
+    "already_satisfied", "land_conflict", "partial_land",
 })
 QUALITY_BLOCK_REASONS = frozenset({
     "final_stale", "report_mismatch",

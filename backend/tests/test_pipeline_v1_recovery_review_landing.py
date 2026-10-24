@@ -86,7 +86,7 @@ def test_gate0_is_the_executable_evaluate_gate_and_retries_once(tmp_path, monkey
 
 
 def test_review_handoff_derives_minimal_r2_from_address_events(tmp_path):
-    authority = ev.EventAuthority(b"r" * 32)
+    authority = ev.EventAuthority()
     store = AuditStore(tmp_path / "audit", "run_one", authority)
     review = ReviewOrchestrator(store, tmp_path / "run")
     bridge = ReviewHookBridge(store, "session_1")
@@ -146,7 +146,7 @@ def _event(authority, rows, kind, payload, *, stage=None, attempt=None, ordinal=
 
 
 def test_restore_completed_not_landed_reopens_deliver():
-    authority, rows = ev.EventAuthority(b"l" * 32), []
+    authority, rows = ev.EventAuthority(), []
     _event(authority, rows, "run_create",
            {"run_id": "run_one", "profile": "direct", "decision_cap": 2})
     run = lifecycle.fold(rows, authority)
@@ -248,8 +248,7 @@ def test_a_moved_main_rebases_the_worktree_and_needs_a_new_test_report(tmp_path,
     assert not ok and "test again" not in detail and "never reviewed" in detail, detail
 
 
-def test_accept_finding_requires_and_consumes_exact_token(tmp_path, monkeypatch):
-    from core import hook_token
+def test_accept_finding_requires_the_persons_approval_and_the_owner(tmp_path, monkeypatch):
     from core.run_protocol import findings
 
     engine = _engine(tmp_path, monkeypatch, profile="direct")
@@ -268,36 +267,20 @@ def test_accept_finding_requires_and_consumes_exact_token(tmp_path, monkeypatch)
     prepared = engine.prepare_authorized_action(
         action="accept_finding", target=canonical_id, request_id="auth_accept")
     assert prepared["request"]["bindings"]["canonical_id"] == canonical_id
-    with pytest.raises(IntegrationRequired, match="no hook token"):
+    with pytest.raises(IntegrationRequired, match="no calling session"):
         engine.execute_authorized_action("auth_accept")
 
-    hook_token.stop_oracle()
-    assert hook_token.start_oracle(53000 + __import__("os").getpid() % 1000) \
-        or not hook_token.oracle_supported()
-    try:
-        from core.run_protocol import landing   # the daemon, after the person approved
-        landing.approve_from_event(engine.store, "auth_accept",
-                                   now=__import__("time").time(), at="2026-10-23T00:00:00Z")
-        # the daemon redeems the token the hook issued, then runs the action as
-        # that session (B-class B-b)
-        token = hook_token.issue(
-            engine.run_dir, "session_1", engine.run_id,
-            "accept-finding:auth_accept")
-        rec = hook_token.redeem(token)
-        from core.run_protocol import request_ctx
-        with request_ctx.active(request_ctx.Request(
-                session_id=rec["session_id"], run_id=rec["run_id"],
-                scope=rec["subcommand"])):
-            engine.execute_authorized_action("auth_accept")
-    finally:
-        hook_token.stop_oracle()
+    from core.run_protocol import landing   # the daemon, after the person approved
+    landing.approve_from_event(engine.store, "auth_accept",
+                               now=__import__("time").time(), at="2026-10-23T00:00:00Z")
+    from core.run_protocol import request_ctx
+    with request_ctx.active(request_ctx.Request(session_id="session_1")):
+        engine.execute_authorized_action("auth_accept")
     row = findings.fold(engine.store.read_events(), engine.authority)[0]
     assert row["status"] == "accepted"
 
 
 def test_discard_snapshot_requires_authorized_snapshot_identity(tmp_path, monkeypatch):
-    from core import hook_token
-
     engine = _engine(tmp_path, monkeypatch, profile="direct")
     root = __import__("pathlib").Path(engine.ensure_worktrees()["repo"])
     (root / "a.py").write_text("unlanded\n")
@@ -307,26 +290,12 @@ def test_discard_snapshot_requires_authorized_snapshot_identity(tmp_path, monkey
     engine.prepare_authorized_action(
         action="discard_snapshot", target="repo", request_id="auth_discard")
 
-    hook_token.stop_oracle()
-    assert hook_token.start_oracle(54000 + __import__("os").getpid() % 1000) \
-        or not hook_token.oracle_supported()
-    try:
-        from core.run_protocol import landing   # the daemon, after the person approved
-        landing.approve_from_event(engine.store, "auth_discard",
-                                   now=__import__("time").time(), at="2026-10-23T00:00:00Z")
-        # the daemon redeems the token the hook issued, then runs the action as
-        # that session (B-class B-b)
-        token = hook_token.issue(
-            engine.run_dir, "session_1", engine.run_id,
-            "discard-snapshot:auth_discard")
-        rec = hook_token.redeem(token)
-        from core.run_protocol import request_ctx
-        with request_ctx.active(request_ctx.Request(
-                session_id=rec["session_id"], run_id=rec["run_id"],
-                scope=rec["subcommand"])):
-            result = engine.execute_authorized_action("auth_discard")
-    finally:
-        hook_token.stop_oracle()
+    from core.run_protocol import landing   # the daemon, after the person approved
+    landing.approve_from_event(engine.store, "auth_discard",
+                               now=__import__("time").time(), at="2026-10-23T00:00:00Z")
+    from core.run_protocol import request_ctx
+    with request_ctx.active(request_ctx.Request(session_id="session_1")):
+        result = engine.execute_authorized_action("auth_discard")
     assert result["action"] == "discard_snapshot"
     assert not __import__("pathlib").Path(ledger).exists()
 

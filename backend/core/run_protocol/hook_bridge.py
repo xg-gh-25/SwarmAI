@@ -238,7 +238,7 @@ def bridge_for(context: MutableMapping[str, Any], run_id: str | None) -> ReviewH
 
 
 def bridge_for_prompt(context: MutableMapping[str, Any], prompt: str) -> ReviewHookBridge | None:
-    """Resolve one installed bridge by signed full-prompt handout identity."""
+    """Resolve one installed bridge by logged full-prompt handout identity."""
     bridges = context.get(_CONTEXT_KEY)
     if not isinstance(bridges, dict):
         return None

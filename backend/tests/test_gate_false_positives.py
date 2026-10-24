@@ -11,8 +11,8 @@ What is tested:
   ``git -C`` (_discard_dirs), and a git target set through the environment or an
   unfollowed directory change gives None (cannot tell). Whose files would be lost is
   tested in test_discard_gate.py;
-- run owner token (run_owner_gate._token_binding): the CLI call may be followed by
-  output plumbing and preceded by quoted ``cat > FILE <<'EOF'`` writes;
+- run owner session hand-over (run_owner_gate._token_binding): the CLI call may be
+  followed by output plumbing and preceded by quoted ``cat > FILE <<'EOF'`` writes;
 - python code judgment (_code_can_execute): ``re.compile(`` is a method, not the builtin.
 """
 from __future__ import annotations
@@ -163,9 +163,8 @@ def test_the_cli_call_first_gets_the_token(cmd):
     "cat > /tmp/f <<'EOF'\nabc\n" + CLI,                     # unterminated heredoc
     "cat > $HOME/f <<'EOF'\nx\nEOF\n" + CLI,                 # a path that expands
     "python3 - <<'EOF'\nprint(1)\nEOF\n" + CLI,              # code runs before the CLI
-    "cat > /repo/backend/scripts/pipeline_v1.py <<'EOF'\nprint(1)\nEOF\n" + CLI,  # rewrites the CLI
 ])
-def test_anything_else_before_the_cli_is_refused(cmd):
+def test_anything_else_before_the_cli_gets_no_session_id(cmd):
     assert _token_binding(cmd) is None
 
 
