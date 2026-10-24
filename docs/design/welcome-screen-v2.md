@@ -42,8 +42,9 @@ shows what is waiting for the user, and nothing else. Mockup agreed 2026-10-24
 - Logo (`/swarm-avatar.svg`), wordmark `SwarmAI` (display 20/600), slogan
   "Grow your **Brain**. Deliver **Anything**." (heading 14; only the two key words
   carry the brand gradient).
-- **Needs you** card: count + up to 3 rows (title, source label). Clicking a row or
-  "Open all" opens the Needs You overlay (`show-needs-you`). Nothing is ever sent.
+- **Needs you** card: count + up to 3 rows. Each row (`NeedsYouRow`, shared with the
+  overlay; revised 2026-10-24, see "Needs you rows") fills the chat input or sends
+  now. "N more" expands in place; "Open all" opens the Needs You overlay.
   Empty queue → one calm line. A failed read → the section is hidden (the screen
   must still work as a chat start).
 - A faint honeycomb pattern behind the hero, radially masked; a few cells light
@@ -72,6 +73,49 @@ Tokens (per theme, in `index.css`): `--color-brand`, `--color-brand-strong`
 **Visual system.** `WelcomeScreen.tsx` joins `navVisualSystem.test.ts` `FILES`
 with `KNOWN` staying `{}`: type steps only, weights 400/600, theme tokens only, no
 emoji.
+
+## Needs you rows (2026-10-24)
+
+Gawan: the rows should work like a reply's Next steps, "N more" should expand
+with a limit, and everything shown or sent must be readable by the user, not
+only by the agent.
+
+**What the backend writes** (`core/attention_authority.py`, the one source for the
+card, the overlay and the agent's SENSE list). Every item carries:
+- `title`: what is needed of the user ("Resume or drop a pipeline run you
+  stopped", "A scheduled job keeps failing and was paused").
+- `summary` (new): which thing it is, one line (the run's requirement, the job
+  name and failure count, the note's text without its `[tag]`).
+- `dispatch.message`: the prompt in the user's voice. The ask first (it asks the
+  agent to answer in plain words), then readable facts ("What it was for: …",
+  "Proposed note: …", "Examples: …"), then ONE closing `References:` line with the
+  ids an agent needs (run id, owner session, proposal id, job id). Built by
+  `_prompt`; empty facts are dropped.
+
+Before, the injected message lost the context: a cultivation proposal sent only
+its 80-char title (no id, no text), a paused run had no requirement or owner
+session, a job pasted its raw last_error, and titles used internal terms
+(Circuit-broken, CLASS_B, L1 rule, CODE GATE, `[decision]`). Governance titles now
+name the mistake from the class (`_CLASS_HUMAN`) because the producers'
+`proposed_rule` is often a template; that text still goes into the prompt, with up
+to 3 evidence examples. The copy is English, shown as the backend wrote it (no
+frontend translation, Gawan's call).
+
+Limit: a cultivation note's own text is agent-written and is shown as written
+(rewriting it would need an LLM call on the read path); its prompt asks the agent
+to explain it in plain words first.
+
+**Row actions** (`components/layout/NeedsYouRow.tsx`): click the text = the prompt
+goes into the chat input, focused, not sent; ↑ = sent now. The Welcome card
+injects into this tab's input (`dispatchInjectChatInput`); the overlay goes through
+`dispatchPrompt(prompt, { autoSend })`, landed by `injectDispatchedPrompt`, the one
+place that decides fill vs send (only an explicit `autoSend: true` sends).
+
+**"N more"** expands the list in place, capped at `max-h-[290px]` (about 5 rows)
+and scrolling inside the card, and collapses again.
+
+**Open:** a paused run with an open owner tab could switch to that tab instead of
+starting a new chat; not done (every source behaves the same for now).
 
 ## Deleted
 
