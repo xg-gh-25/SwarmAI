@@ -1,51 +1,66 @@
 #!/bin/bash
 # verify_installer.sh — install a SwarmAI release the way a stranger would, then check it runs.
 #
-# Release gate G1/G2 (docs/design/2026-10-24-swarmai-usable-by-anyone.md §5.1). macOS only in
-# S1; S2 adds Windows and Linux. Nothing here touches the real ~/.swarm-ai or the live daemon:
-# everything runs under a throwaway HOME, on its own port, under a unique launchd label.
+# Release gate G1/G2 (docs/design/2026-10-24-swarmai-usable-by-anyone.md §5.1) for every
+# release target: macOS (.dmg), Linux (.AppImage), Windows (NSIS -setup.exe, run from Git Bash).
+# Nothing here touches the real ~/.swarm-ai or a live backend: everything runs under a throwaway
+# HOME (Windows: USERPROFILE / LOCALAPPDATA too), on its own port, under a unique launchd label.
 #
-# Steps (each prints PASS / FAIL / SKIP; any FAIL -> exit 1):
-#   C1  get the installer and mark it quarantined, like a browser download
-#   C2  mount it and copy SwarmAI.app out, quarantining the copy like Finder does
-#   C3  G2 manifest: Contents/Resources/install-manifest.json lists every required file + sha256
-#   C4  backend bundle present in the app (Contents/Resources/python-backend/python-backend)
+# Steps (each prints PASS / FAIL / SKIP / INFO; any FAIL -> exit 1):
+#   C1  get the installer and mark it as downloaded (macOS quarantine, Windows Mark-of-the-Web;
+#       Linux has no download mark)
+#   C2  install it like a user: macOS mount the dmg and copy the app out (quarantining the copy
+#       like Finder), Linux extract the AppImage, Windows run the installer silently
+#   C3  G2 manifest: install-manifest.json lists every required file + sha256, all match
+#   C4  backend bundle present (python-backend/python-backend[.exe])
 #   C5  backend binary architecture matches this host
-#   C6  backend binary carries at least an ad-hoc code signature
-#   C7  deploy the backend to <HOME>/.swarm-ai/runtime/<version>/ (+ resources/, current link)
-#   C8  launchd starts the deployed backend; /health answers "healthy"
-#   C9  the bundled Claude CLI runs (`--version`), launched by launchd
+#   C6  macOS: backend binary carries at least an ad-hoc code signature
+#   C7  deploy the backend the way the app does (src-tauri/src/runtime_deploy.rs): runtime/<version>/
+#       + resources/, pointer file `current`, macOS quarantine cleared on the runtime
+#   C8  the backend starts the way the app starts it (macOS launchd, Linux/Windows a subprocess);
+#       /health answers "healthy"
+#   C9  the bundled Claude CLI runs (`--version`), started the same way
 #   C10 first-run seed: data.db and SwarmWS/.context/SOUL.md exist
 #   C11 nothing tried to run a system python / pip (shims on PATH log any call)
-#   C12 Gatekeeper assessment of the app (INFO only: releases are unsigned for now)
-#   C13 the app's own signature is intact (a broken one makes macOS call the app "damaged")
-# Checks still to add: onboarding reachable, MCP tools, `py` subcommand (S3), update + rollback.
+#   C12 macOS: Gatekeeper assessment of the app (INFO only: releases are unsigned for now)
+#   C13 macOS: the app's own signature is intact (a broken one makes macOS call the app "damaged")
+# Checks still to add: onboarding reachable, MCP tools, `py` subcommand (S3), update + rollback;
+# C7 should call the app's own deploy code instead of mirroring it.
 #
 # Usage:
-#   scripts/verify_installer.sh --release v2.3.0        # download from GitHub releases (gh)
-#   scripts/verify_installer.sh --dmg path/to.dmg
+#   scripts/verify_installer.sh --release v2.3.0        # this platform's installer, via gh
+#   scripts/verify_installer.sh --dmg path/to.dmg        # macOS
 #   scripts/verify_installer.sh --app path/to/SwarmAI.app
+#   scripts/verify_installer.sh --appimage path/to.AppImage   # Linux
+#   scripts/verify_installer.sh --setup path/to-setup.exe     # Windows (Git Bash)
 # Options:
-#   --backend-dir DIR  use DIR as the backend bundle instead of the app's (harness self-test;
+#   --backend-dir DIR  use DIR as the backend bundle instead of the installer's (harness self-test;
 #                      the result is then NOT a release verdict and the exit code is 2)
-#   --launcher MODE    launchd (default) or direct. direct starts the backend as a child process,
-#                      for hosts where launchd jobs cannot be created (a sandboxed agent shell);
-#                      Gatekeeper is then not exercised, so the result is NOT a release verdict (exit 2)
-#   --no-quarantine    skip the quarantine marks (self-test only, exit 2). Use it on a managed Mac
+#   --launcher MODE    macOS only: launchd (default) or direct. direct starts the backend as a child
+#                      process, for hosts where launchd jobs cannot be created (a sandboxed agent
+#                      shell); Gatekeeper is then not exercised, so it is NOT a release verdict (exit 2).
+#                      Linux and Windows always start it directly: that is how the app starts it there.
+#   --no-quarantine    skip the download marks (self-test only, exit 2). Use it on a managed Mac
 #                      whose endpoint security kills and removes quarantined unsigned binaries:
 #                      that answers a different question than Gatekeeper on a stranger's Mac
 #   --port N           port for the backend under test (default 18399; must be free)
 #   --keep             keep the work dir for inspection
 # Exit: 0 all PASS, 1 any FAIL, 2 self-test mode (--backend-dir, --launcher direct, --no-quarantine)
-#       with no FAIL. Run the release verdict on a clean VM or CI runner, not a managed workstation.
-
-set -uo pipefail
+#       with no FAIL, 64 usage. Run the release verdict on a clean VM or CI runner, not a managed
+#       workstation.
 
 PORT=18399
 KEEP=0
-LAUNCHER=launchd
+LAUNCHER=""
 NO_QUARANTINE=0
-Q=", quarantined"
+Q=", marked as downloaded"
+
+case "$(uname -s)" in
+    Darwin) OS=macos ;;
+    Linux) OS=linux ;;
+    MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+    *) echo "unsupported platform: $(uname -s)" >&2; exit 64 ;;
+esac
 
 DIRECT_PIDS=()
 SRC_KIND=""
@@ -56,38 +71,52 @@ while [ $# -gt 0 ]; do
         --release) SRC_KIND=release; SRC="$2"; shift 2 ;;
         --dmg) SRC_KIND=dmg; SRC="$2"; shift 2 ;;
         --app) SRC_KIND=app; SRC="$2"; shift 2 ;;
+        --appimage) SRC_KIND=appimage; SRC="$2"; shift 2 ;;
+        --setup) SRC_KIND=setup; SRC="$2"; shift 2 ;;
         --backend-dir) BACKEND_OVERRIDE="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --launcher) LAUNCHER="$2"; shift 2 ;;
         --no-quarantine) NO_QUARANTINE=1; shift ;;
         --keep) KEEP=1; shift ;;
-        -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 64 ;;
     esac
 done
-case "$LAUNCHER" in launchd|direct) ;; *) echo "--launcher must be launchd or direct" >&2; exit 64 ;; esac
-[ "$NO_QUARANTINE" = 1 ] && Q=" (not quarantined: --no-quarantine)"
-[ -n "$SRC_KIND" ] || { echo "need --release, --dmg or --app" >&2; exit 64; }
-[ "$(uname -s)" = "Darwin" ] || { echo "S1 supports macOS only" >&2; exit 64; }
+[ -n "$SRC_KIND" ] || { echo "need --release, --dmg, --app, --appimage or --setup" >&2; exit 64; }
+case "$OS:$SRC_KIND" in
+    *:release|macos:dmg|macos:app|linux:appimage|windows:setup) ;;
+    *) echo "--$SRC_KIND is not an installer for $OS" >&2; exit 64 ;;
+esac
+if [ "$OS" = macos ]; then
+    LAUNCHER="${LAUNCHER:-launchd}"
+    case "$LAUNCHER" in launchd|direct) ;; *) echo "--launcher must be launchd or direct" >&2; exit 64 ;; esac
+else
+    case "${LAUNCHER:-direct}" in direct) LAUNCHER=direct ;; *) echo "--launcher is macOS only" >&2; exit 64 ;; esac
+fi
+[ "$NO_QUARANTINE" = 1 ] && Q=" (no download mark: --no-quarantine)"
+[ "$OS" = linux ] && Q=""
+SELF_TEST=0
+{ [ -n "$BACKEND_OVERRIDE" ] || [ "$NO_QUARANTINE" = 1 ] || { [ "$OS" = macos ] && [ "$LAUNCHER" = direct ]; }; } && SELF_TEST=1
+EXE_SUFFIX=""; [ "$OS" = windows ] && EXE_SUFFIX=".exe"
 
 # ---------------------------------------------------------------------------
 # bookkeeping
 # ---------------------------------------------------------------------------
 WORK="$(mktemp -d "${KIROCREW_SCRATCH:-${TMPDIR:-/tmp}}/verify-installer.XXXXXX")"
 TEST_HOME="$WORK/home"
+TEST_LOCALAPPDATA="$TEST_HOME/AppData/Local"
 MOUNT="$WORK/mnt"
 SHIMS="$WORK/shims"
 SHIM_LOG="$WORK/system-python-calls.log"
 LABEL="com.swarmai.verify.$$.$RANDOM"
 CLI_LABEL="$LABEL.cli"
 UID_GUI="gui/$(id -u)"
-mkdir -p "$TEST_HOME" "$MOUNT" "$SHIMS"
+INSTALL_DIR=""
+mkdir -p "$TEST_HOME" "$TEST_LOCALAPPDATA" "$MOUNT" "$SHIMS"
 : > "$SHIM_LOG"
 FAILS=0
-RESULTS=()
 
 result() {  # result <PASS|FAIL|SKIP|INFO> <id> <message>
-    RESULTS+=("$1 $2 $3")
     printf '%-4s %-4s %s\n' "$1" "$2" "$3"
     [ "$1" = FAIL ] && FAILS=$((FAILS + 1))
     return 0
@@ -96,46 +125,85 @@ result() {  # result <PASS|FAIL|SKIP|INFO> <id> <message>
 cleanup() {
     local pid
     for pid in "${DIRECT_PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null; done
-    launchctl bootout "$UID_GUI/$LABEL" >/dev/null 2>&1 || true
-    launchctl bootout "$UID_GUI/$CLI_LABEL" >/dev/null 2>&1 || true
-    if mount | grep -q " on $MOUNT "; then hdiutil detach -quiet -force "$MOUNT" >/dev/null 2>&1 || true; fi
-    if [ "$KEEP" = 1 ]; then echo "work dir kept: $WORK"; else rm -rf "$WORK"; fi
+    if [ "$OS" = macos ]; then
+        launchctl bootout "$UID_GUI/$LABEL" >/dev/null 2>&1 || true
+        launchctl bootout "$UID_GUI/$CLI_LABEL" >/dev/null 2>&1 || true
+        if mount | grep -q " on $MOUNT "; then hdiutil detach -quiet -force "$MOUNT" >/dev/null 2>&1 || true; fi
+    fi
+    if [ "$OS" = windows ] && [ -n "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/uninstall.exe" ]; then
+        "$INSTALL_DIR/uninstall.exe" /S >/dev/null 2>&1 || true
+    fi
+    # the backend may still be writing into the test HOME for a moment after its stop
+    for pid in "${DIRECT_PIDS[@]:-}"; do [ -n "$pid" ] && wait "$pid" 2>/dev/null; done
+    if [ "$KEEP" = 1 ]; then echo "work dir kept: $WORK"
+    else rm -rf "$WORK" 2>/dev/null || { sleep 2; rm -rf "$WORK"; }; fi
 }
 trap cleanup EXIT
 
-quarantine() {  # quarantine <path> [-r]: the attribute a browser / Finder copy leaves behind
+mark_downloaded() {  # mark_downloaded <path> [-r]: what a browser / Finder copy leaves behind
     local value
     [ "$NO_QUARANTINE" = 1 ] && return 0
-    value="0083;$(printf '%x' "$(date +%s)");Safari;$(uuidgen)"
-    if [ "${2:-}" = "-r" ]; then
-        find "$1" -print0 | xargs -0 xattr -w com.apple.quarantine "$value" 2>/dev/null
-    else
-        xattr -w com.apple.quarantine "$value" "$1"
-    fi
+    case "$OS" in
+        macos)
+            value="0083;$(printf '%x' "$(date +%s)");Safari;$(uuidgen)"
+            if [ "${2:-}" = "-r" ]; then
+                find "$1" -print0 | xargs -0 xattr -w com.apple.quarantine "$value" 2>/dev/null
+            else
+                xattr -w com.apple.quarantine "$value" "$1"
+            fi ;;
+        windows)  # Mark-of-the-Web: ZoneId 3 = Internet
+            powershell.exe -NoProfile -Command "Set-Content -LiteralPath '$(cygpath -w "$1")' -Stream Zone.Identifier -Value \"[ZoneTransfer]\`r\`nZoneId=3\"" ;;
+        linux) return 0 ;;
+    esac
 }
 
-# Shims: a clean user has no python / pip. Any call is logged and fails.
+sha256_check() {  # stdin "sha256  path" lines, run in the resources dir; prints mismatches
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum -c --quiet 2>&1
+    else shasum -a 256 -c --quiet 2>&1; fi
+}
+
+# Shims: a clean user has no python / pip. Any call is logged and fails. Windows looks up
+# python.exe / python.cmd, never a bare script, so it gets .cmd shims too.
 for name in python python3 pip pip3; do
     printf '#!/bin/sh\necho "%s $*" >> "%s"\nexit 127\n' "$name" "$SHIM_LOG" > "$SHIMS/$name"
     chmod +x "$SHIMS/$name"
+    if [ "$OS" = windows ]; then
+        printf '@echo %s %%* >> "%s"\r\n@exit /b 127\r\n' "$name" "$(cygpath -w "$SHIM_LOG")" > "$SHIMS/$name.cmd"
+    fi
 done
-CLEAN_PATH="$SHIMS:/usr/bin:/bin:/usr/sbin:/sbin"
+case "$OS" in
+    windows)
+        CLEAN_PATH="$SHIMS:/c/Windows/System32:/c/Windows:/c/Windows/System32/WindowsPowerShell/v1.0"
+        [ -d "/c/Program Files/Git/cmd" ] && CLEAN_PATH="$CLEAN_PATH:/c/Program Files/Git/cmd" ;;
+    *) CLEAN_PATH="$SHIMS:/usr/bin:/bin:/usr/sbin:/sbin" ;;
+esac
 
-if nc -z 127.0.0.1 "$PORT" 2>/dev/null; then
+# a free port refuses the connection (curl exit 7) on every platform; nc is not on Windows
+curl -s -m 2 "http://127.0.0.1:$PORT/" >/dev/null 2>&1
+if [ $? -ne 7 ]; then
     echo "port $PORT is already in use; pick another with --port" >&2
     exit 64
 fi
 
 xml_escape() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
 
-# launchd_start <label> <stdout-file> <program> [args...]: run under launchd, like the real daemon,
-# with the test HOME and a PATH that has no developer tools. Gatekeeper treats a launchd job like
-# any other launch, so a quarantined unsigned binary is judged here as it would be for a stranger.
-launchd_start() {
+# start_job <label> <stdout-file> <program> [args...]: run it the way the app runs the backend,
+# with the test HOME and a PATH that has no developer tools. macOS: a launchd job, like the real
+# daemon (Gatekeeper treats it like any other launch). Linux / Windows: a child process, like the
+# app's subprocess mode.
+start_job() {
     local label="$1" out="$2"; shift 2
     if [ "$LAUNCHER" = direct ]; then
-        env -i HOME="$TEST_HOME" PATH="$CLEAN_PATH" SWARMAI_MODE=daemon SWARMAI_PORT="$PORT" \
-            SWARM_DESKTOP_PREWARM=0 /bin/sh -c 'rc="$0"; "$@" & c=$!; trap "kill \$c 2>/dev/null; wait \$c; exit 0" TERM; wait $c; echo $? > "$rc"' "$WORK/$label.rc" "$@" > "$out" 2>&1 &
+        local mode=daemon; [ "$OS" = macos ] || mode=subprocess
+        local -a envs=(HOME="$TEST_HOME" PATH="$CLEAN_PATH" SWARMAI_MODE="$mode" SWARMAI_PORT="$PORT"
+                       SWARM_DESKTOP_PREWARM=0)
+        if [ "$OS" = windows ]; then
+            envs+=(USERPROFILE="$(cygpath -w "$TEST_HOME")" LOCALAPPDATA="$(cygpath -w "$TEST_LOCALAPPDATA")"
+                   APPDATA="$(cygpath -w "$TEST_HOME/AppData/Roaming")" SYSTEMROOT="${SYSTEMROOT:-C:\\Windows}"
+                   WINDIR="${WINDIR:-C:\\Windows}" COMSPEC="${COMSPEC:-C:\\Windows\\System32\\cmd.exe}"
+                   PATHEXT="${PATHEXT:-.COM;.EXE;.BAT;.CMD}" TEMP="$(cygpath -w "$WORK")" TMP="$(cygpath -w "$WORK")")
+        fi
+        env -i "${envs[@]}" /bin/sh -c 'rc="$0"; "$@" & c=$!; trap "kill \$c 2>/dev/null; wait \$c; exit 0" TERM; wait $c; echo $? > "$rc"' "$WORK/$label.rc" "$@" > "$out" 2>&1 &
         DIRECT_PIDS+=("$!")
         return 0
     fi
@@ -164,8 +232,8 @@ launchd_start() {
     launchctl bootstrap "$UID_GUI" "$plist"
 }
 
-# launchd_exit_code <label>: last exit code once the job is no longer running, else empty
-launchd_exit_code() {
+# job_exit_code <label>: last exit code once the job is no longer running, else empty
+job_exit_code() {
     local info
     if [ "$LAUNCHER" = direct ]; then
         cat "$WORK/$1.rc" 2>/dev/null
@@ -177,63 +245,121 @@ launchd_exit_code() {
 }
 
 # ---------------------------------------------------------------------------
-# C1 / C2: get the installer, quarantine it, copy the app out
+# C1: get the installer and mark it as downloaded
 # ---------------------------------------------------------------------------
-APP=""
+case "$OS:$(uname -m)" in
+    macos:arm64) REL_PATTERN='*_aarch64.dmg'; INSTALLER_KIND=dmg ;;
+    macos:*) REL_PATTERN='*_x64.dmg'; INSTALLER_KIND=dmg ;;
+    linux:*) REL_PATTERN='*_amd64.AppImage'; INSTALLER_KIND=appimage ;;
+    windows:*) REL_PATTERN='*_x64-setup.exe'; INSTALLER_KIND=setup ;;
+esac
+INSTALLER=""
 case "$SRC_KIND" in
     release)
-        if gh release download "$SRC" --pattern '*aarch64.dmg' --dir "$WORK" >/dev/null 2>&1; then
-            DMG="$(ls "$WORK"/*.dmg | head -1)"
-            quarantine "$DMG"
-            result PASS C1 "downloaded $(basename "$DMG") from release $SRC$Q"
+        if gh release download "$SRC" --pattern "$REL_PATTERN" --dir "$WORK" >/dev/null 2>&1; then
+            INSTALLER="$(find "$WORK" -maxdepth 1 -type f -name "$REL_PATTERN" | head -1)"
+            mark_downloaded "$INSTALLER"
+            result PASS C1 "downloaded $(basename "$INSTALLER") from release $SRC$Q"
         else
-            result FAIL C1 "could not download an aarch64 .dmg from release $SRC"
+            result FAIL C1 "could not download $REL_PATTERN from release $SRC"
         fi ;;
-    dmg)
-        DMG="$WORK/$(basename "$SRC")"
-        cp "$SRC" "$DMG" && quarantine "$DMG"
-        result PASS C1 "copied $(basename "$SRC")$Q" ;;
     app)
         result SKIP C1 "--app given: no installer to download" ;;
+    *)
+        INSTALLER_KIND="$SRC_KIND"
+        INSTALLER="$WORK/$(basename "$SRC")"
+        if cp "$SRC" "$INSTALLER" && mark_downloaded "$INSTALLER"; then
+            result PASS C1 "copied $(basename "$SRC")$Q"
+        else
+            result FAIL C1 "could not copy $SRC"; INSTALLER=""
+        fi ;;
 esac
 
+# ---------------------------------------------------------------------------
+# C2: install it the way a user does; RES = the directory holding the installed resources
+# ---------------------------------------------------------------------------
+APP=""
+RES=""
 if [ "$SRC_KIND" = app ]; then
     APP="$WORK/Applications/$(basename "$SRC")"
-    mkdir -p "$WORK/Applications" && ditto "$SRC" "$APP" && quarantine "$APP" -r
-    result PASS C2 "copied $(basename "$SRC") into a test Applications dir$Q"
-elif [ -n "${DMG:-}" ] && hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"; then
-    src_app="$(find "$MOUNT" -maxdepth 1 -name '*.app' | head -1)"
-    if [ -n "$src_app" ]; then
-        APP="$WORK/Applications/$(basename "$src_app")"
-        mkdir -p "$WORK/Applications" && ditto "$src_app" "$APP" && quarantine "$APP" -r
-        result PASS C2 "mounted the dmg, copied $(basename "$src_app") out$Q"
+    if [ -d "$SRC" ] && mkdir -p "$WORK/Applications" && ditto "$SRC" "$APP" && mark_downloaded "$APP" -r; then
+        result PASS C2 "copied $(basename "$SRC") into a test Applications dir$Q"
     else
-        result FAIL C2 "no .app at the top of the dmg"
+        result FAIL C2 "could not copy the app $SRC"; APP=""
     fi
-    hdiutil detach -quiet "$MOUNT" >/dev/null 2>&1 || true
-else
-    result FAIL C2 "could not mount the dmg"
+elif [ -z "$INSTALLER" ]; then
+    result SKIP C2 "no installer"
+elif [ "$INSTALLER_KIND" = dmg ]; then
+    if hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$INSTALLER"; then
+        src_app="$(find "$MOUNT" -maxdepth 1 -name '*.app' | head -1)"
+        if [ -n "$src_app" ]; then
+            APP="$WORK/Applications/$(basename "$src_app")"
+            mkdir -p "$WORK/Applications" && ditto "$src_app" "$APP" && mark_downloaded "$APP" -r
+            result PASS C2 "mounted the dmg, copied $(basename "$src_app") out$Q"
+        else
+            result FAIL C2 "no .app at the top of the dmg"
+        fi
+        hdiutil detach -quiet "$MOUNT" >/dev/null 2>&1 || true
+    else
+        result FAIL C2 "could not mount the dmg"
+    fi
+elif [ "$INSTALLER_KIND" = appimage ]; then
+    # --appimage-extract needs no FUSE (a stranger's distro may lack libfuse2); the files it
+    # yields are the ones the mounted AppImage runs
+    chmod +x "$INSTALLER"
+    if (cd "$WORK" && "$INSTALLER" --appimage-extract >/dev/null 2>&1) && [ -d "$WORK/squashfs-root" ]; then
+        m="$(find "$WORK/squashfs-root" -maxdepth 5 -name install-manifest.json -type f | head -1)"
+        RES="${m:+$(dirname "$m")}"
+        RES="${RES:-$WORK/squashfs-root}"
+        result PASS C2 "extracted the AppImage (resources at ${RES#"$WORK"/})"
+    else
+        result FAIL C2 "the AppImage would not extract (--appimage-extract)"
+    fi
+elif [ "$INSTALLER_KIND" = setup ]; then
+    # NSIS silent install into a test dir. SmartScreen only judges launches from Explorer, so
+    # the Mark-of-the-Web here is carried for what the installed files inherit, not for a prompt.
+    INSTALL_DIR="$WORK/install"
+    if "$INSTALLER" /S "/D=$(cygpath -w "$INSTALL_DIR")" && [ -d "$INSTALL_DIR" ]; then
+        RES="$INSTALL_DIR"
+        result PASS C2 "installer ran silently into a test dir$Q"
+    else
+        result FAIL C2 "the installer failed or installed nothing"
+    fi
 fi
-RES="${APP:+$APP/Contents/Resources}"
-VERSION="$( [ -n "$APP" ] && /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null )"
-VERSION="${VERSION:-unknown}"
+[ -n "$APP" ] && RES="$APP/Contents/Resources"
+
+MANIFEST="${RES:+$RES/install-manifest.json}"
+VERSION=""
+if [ -n "$APP" ]; then
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null)"
+elif [ -n "$MANIFEST" ] && [ -f "$MANIFEST" ]; then
+    VERSION="$(sed -n 's/^ *"version": *"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
+fi
+# only a plain version string names a runtime dir (PlistBuddy prints its errors on stdout)
+printf '%s' "$VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$' || VERSION=unknown
 
 # ---------------------------------------------------------------------------
-# C3: G2 manifest. Format (written by the build, S2):
-#   {"version": "...", "files": [{"path": "<relative to Resources>", "sha256": "<hex>"}, ...]}
+# C3: G2 manifest, written by desktop/scripts/write_install_manifest.py:
+#   {"version": "...", "files": [{"path": "<relative to the resources dir>", "sha256": "<hex>"}, ...]}
+# Read with awk (no python, jq or osascript needed): one object's path + sha256 -> one line.
 # ---------------------------------------------------------------------------
-MANIFEST="${RES:+$RES/install-manifest.json}"
+manifest_lines() {
+    awk '
+        /"path":/   { p = $0; sub(/^[^:]*: *"/, "", p); sub(/".*$/, "", p) }
+        /"sha256":/ { h = $0; sub(/^[^:]*: *"/, "", h); sub(/".*$/, "", h) }
+        /}/         { if (p != "" && h != "") print h "  " p; p = ""; h = "" }
+    ' "$1"
+}
 if [ -z "$RES" ]; then
-    result SKIP C3 "no app to inspect"
+    result SKIP C3 "nothing installed to inspect"
 elif [ ! -f "$MANIFEST" ]; then
-    result FAIL C3 "Contents/Resources/install-manifest.json is missing (the build must write it)"
+    result FAIL C3 "install-manifest.json is missing next to the installed resources (the build must write it)"
 else
-    # osascript JavaScript is on every Mac; it turns the manifest into "sha256  path" lines.
-    lines="$(osascript -l JavaScript -e 'function run(a){var o=JSON.parse($.NSString.stringWithContentsOfFileEncodingError(a[0],4,null).js);return o.files.map(function(f){return f.sha256+"  "+f.path}).join("\n")}' "$MANIFEST" 2>/dev/null)"
+    lines="$(manifest_lines "$MANIFEST")"
     if [ -z "$lines" ]; then
         result FAIL C3 "install-manifest.json lists no files or cannot be parsed"
     else
-        bad="$(cd "$RES" && printf '%s\n' "$lines" | shasum -a 256 -c --quiet 2>&1 | head -5)"
+        bad="$(cd "$RES" && printf '%s\n' "$lines" | sha256_check | head -5)"
         n="$(printf '%s\n' "$lines" | wc -l | tr -d ' ')"
         if [ -z "$bad" ]; then result PASS C3 "all $n manifest files present with matching sha256"
         else result FAIL C3 "manifest mismatch: $(printf '%s' "$bad" | tr '\n' ';')"; fi
@@ -241,59 +367,80 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# C4-C6: the backend bundle inside the app
+# C4-C6: the backend bundle inside the installation
 # ---------------------------------------------------------------------------
 BACKEND_SRC=""
 if [ -n "$BACKEND_OVERRIDE" ]; then
     BACKEND_SRC="$WORK/backend-override"
-    ditto "$BACKEND_OVERRIDE" "$BACKEND_SRC" && quarantine "$BACKEND_SRC" -r
-    result SKIP C4 "self-test: backend taken from --backend-dir, not from the app"
-elif [ -n "$RES" ] && [ -x "$RES/python-backend/python-backend" ]; then
+    cp -R "$BACKEND_OVERRIDE" "$BACKEND_SRC" && mark_downloaded "$BACKEND_SRC" -r
+    result SKIP C4 "self-test: backend taken from --backend-dir, not from the installer"
+elif [ -n "$RES" ] && [ -f "$RES/python-backend/python-backend$EXE_SUFFIX" ]; then
     BACKEND_SRC="$RES/python-backend"
     result PASS C4 "backend bundle present ($(du -sh "$BACKEND_SRC" | cut -f1))"
 elif [ -n "$RES" ]; then
-    result FAIL C4 "Contents/Resources/python-backend/python-backend is missing: the installer has no backend"
+    result FAIL C4 "python-backend/python-backend$EXE_SUFFIX is missing: the installer has no backend"
 else
-    result SKIP C4 "no app to inspect"
+    result SKIP C4 "nothing installed to inspect"
 fi
 
-BIN="${BACKEND_SRC:+$BACKEND_SRC/python-backend}"
-if [ -n "$BIN" ]; then
-    host_arch="$(uname -m)"
+BIN="${BACKEND_SRC:+$BACKEND_SRC/python-backend$EXE_SUFFIX}"
+host_arch="$(uname -m)"
+if [ -z "$BIN" ]; then
+    result SKIP C5 "no backend binary"
+elif [ "$OS" = macos ]; then
     if lipo -archs "$BIN" 2>/dev/null | tr ' ' '\n' | grep -qx "$host_arch"; then
         result PASS C5 "backend binary contains $host_arch"
     else
         result FAIL C5 "backend binary archs '$(lipo -archs "$BIN" 2>/dev/null)' do not include $host_arch"
     fi
+elif command -v file >/dev/null 2>&1; then
+    kind="$(file -b "$BIN")"
+    case "$host_arch" in x86_64) want='x86-64' ;; aarch64|arm64) want='aarch64|ARM64|Aarch64' ;; *) want="$host_arch" ;; esac
+    if printf '%s' "$kind" | grep -Eq "$want"; then result PASS C5 "backend binary is $want: ${kind%%,*}"
+    else result FAIL C5 "backend binary is not $want: $(printf '%s' "$kind" | cut -c1-120)"; fi
+else
+    result SKIP C5 "no 'file' tool to read the binary's architecture"
+fi
+if [ -z "$BIN" ]; then
+    result SKIP C6 "no backend binary"
+elif [ "$OS" = macos ]; then
     if codesign -v "$BIN" >/dev/null 2>&1; then
         result PASS C6 "backend binary has a valid (at least ad-hoc) signature"
     else
         result FAIL C6 "backend binary has no valid code signature (arm64 needs at least ad-hoc)"
     fi
 else
-    result SKIP C5 "no backend binary"
-    result SKIP C6 "no backend binary"
+    result SKIP C6 "no code signature requirement on $OS (first release is unsigned)"
 fi
 
 # ---------------------------------------------------------------------------
-# C7: deploy to the versioned runtime (spec §3.1 layout), keeping the quarantine
-# attributes a real copy keeps (ditto, like Rust's fs::copy, copies extended attributes)
+# C7: deploy the way the app does (src-tauri/src/runtime_deploy.rs): runtime/<version>/ with the
+# backend and resources/, the pointer file `current` (a file, not a link), and on macOS the
+# quarantine attribute cleared on the runtime (the app runs `xattr -dr com.apple.quarantine`)
 # ---------------------------------------------------------------------------
-RT="$TEST_HOME/.swarm-ai/runtime/$VERSION"
+if [ "$OS" = windows ]; then RT_ROOT="$TEST_LOCALAPPDATA/SwarmAI/runtime"
+else RT_ROOT="$TEST_HOME/.swarm-ai/runtime"; fi
+RT="$RT_ROOT/$VERSION"
 DEPLOYED=0
+copy_tree() { if [ "$OS" = macos ]; then ditto "$1" "$2"; else mkdir -p "$2" && cp -R "$1/." "$2/"; fi; }
 if [ -n "$BIN" ]; then
     mkdir -p "$RT"
-    if ditto "$BACKEND_SRC" "$RT"; then
+    if copy_tree "$BACKEND_SRC" "$RT"; then
         mkdir -p "$RT/resources"
         if [ -n "$RES" ]; then
-            for f in "$RES"/*; do
-                case "$(basename "$f")" in python-backend|daemon|*.icns) continue ;; esac
-                ditto "$f" "$RT/resources/$(basename "$f")"
+            for f in "$RES"/*; do  # the same files runtime_deploy.rs copies
+                [ -f "$f" ] || continue
+                case "$(basename "$f" | tr 'A-Z' 'a-z')" in
+                    .*|*.icns|*.exe|*.dll|install-manifest.json) continue ;;
+                esac
+                cp "$f" "$RT/resources/"
             done
         fi
-        ln -sfn "$RT" "$TEST_HOME/.swarm-ai/runtime/current"
+        printf '%s' "$VERSION" > "$RT/.version"
+        printf '%s' "$VERSION" > "$RT_ROOT/current"
+        [ "$OS" = macos ] && xattr -dr com.apple.quarantine "$RT" 2>/dev/null
         DEPLOYED=1
-        result PASS C7 "deployed to runtime/$VERSION (+ resources/, current -> $VERSION)"
+        result PASS C7 "deployed to runtime/$VERSION (+ resources/, current = $VERSION)"
     else
         result FAIL C7 "copying the backend into runtime/$VERSION failed"
     fi
@@ -302,54 +449,55 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# C8: launchd starts it; /health answers
+# C8: start it the way the app does; /health answers
 # ---------------------------------------------------------------------------
 BACKEND_LOG="$WORK/backend.log"
 HEALTHY=0
+how="launchd"; [ "$LAUNCHER" = direct ] && how="a child process"
 if [ "$DEPLOYED" = 1 ]; then
-    if launchd_start "$LABEL" "$BACKEND_LOG" "$RT/python-backend" --port "$PORT"; then
+    if start_job "$LABEL" "$BACKEND_LOG" "$RT/python-backend$EXE_SUFFIX" --host 127.0.0.1 --port "$PORT"; then
         health=""
-        for _ in $(seq 1 75); do
+        for _ in $(seq 1 90); do
             health="$(curl -s -m 2 "http://127.0.0.1:$PORT/health" 2>/dev/null)"
             printf '%s' "$health" | grep -q '"status": *"healthy"' && { HEALTHY=1; break; }
-            [ -n "$(launchd_exit_code "$LABEL")" ] && break
+            [ -n "$(job_exit_code "$LABEL")" ] && break
             sleep 2
         done
         if [ "$HEALTHY" = 1 ]; then
-            result PASS C8 "$LAUNCHER started the backend; /health is healthy"
+            result PASS C8 "$how started the backend; /health is healthy"
         else
-            code="$(launchd_exit_code "$LABEL")"
+            code="$(job_exit_code "$LABEL")"
             result FAIL C8 "backend not healthy (exit code: ${code:-still running}); last log: $(tail -3 "$BACKEND_LOG" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
         fi
     else
-        result FAIL C8 "launchctl bootstrap refused the job"
+        result FAIL C8 "could not start the backend ($how)"
     fi
 else
     result SKIP C8 "nothing deployed"
 fi
 
 # ---------------------------------------------------------------------------
-# C9: the bundled Claude CLI runs, also launched by launchd
+# C9: the bundled Claude CLI runs, started the same way
 # ---------------------------------------------------------------------------
-CLI="$RT/_internal/claude_agent_sdk/_bundled/claude"
+CLI="$RT/_internal/claude_agent_sdk/_bundled/claude$EXE_SUFFIX"
 if [ "$DEPLOYED" = 1 ] && [ -f "$CLI" ]; then
     CLI_OUT="$WORK/cli.out"
-    launchd_start "$CLI_LABEL" "$CLI_OUT" "$CLI" --version >/dev/null 2>&1
+    start_job "$CLI_LABEL" "$CLI_OUT" "$CLI" --version >/dev/null 2>&1
     code=""
-    for _ in $(seq 1 30); do code="$(launchd_exit_code "$CLI_LABEL")"; [ -n "$code" ] && break; sleep 1; done
+    for _ in $(seq 1 30); do code="$(job_exit_code "$CLI_LABEL")"; [ -n "$code" ] && break; sleep 1; done
     if [ "$code" = 0 ] && [ -s "$CLI_OUT" ]; then
         result PASS C9 "bundled Claude CLI runs: $(head -1 "$CLI_OUT" | cut -c1-80)"
     else
         result FAIL C9 "bundled Claude CLI did not run (exit ${code:-timeout}): $(head -2 "$CLI_OUT" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
     fi
 elif [ "$DEPLOYED" = 1 ]; then
-    result FAIL C9 "no bundled Claude CLI at _internal/claude_agent_sdk/_bundled/claude"
+    result FAIL C9 "no bundled Claude CLI at _internal/claude_agent_sdk/_bundled/claude$EXE_SUFFIX"
 else
     result SKIP C9 "nothing deployed"
 fi
 
 # ---------------------------------------------------------------------------
-# C10: first-run seed; C11: no system python; C12: Gatekeeper (INFO)
+# C10: first-run seed; C11: no system python; C12 / C13: macOS signature and Gatekeeper
 # ---------------------------------------------------------------------------
 if [ "$HEALTHY" = 1 ]; then
     missing=""
@@ -387,13 +535,13 @@ fi
 # summary
 # ---------------------------------------------------------------------------
 echo
-echo "installer: ${SRC}   version: $VERSION   work: $WORK"
+echo "platform: $OS   installer: ${SRC}   version: $VERSION   work: $WORK"
 if [ "$FAILS" -gt 0 ]; then
     echo "RESULT: FAIL ($FAILS check(s) failed)"
     exit 1
 fi
-if [ -n "$BACKEND_OVERRIDE" ] || [ "$LAUNCHER" = direct ] || [ "$NO_QUARANTINE" = 1 ]; then
-    echo "RESULT: self-test only (--backend-dir, --launcher direct or --no-quarantine) — not a release verdict"
+if [ "$SELF_TEST" = 1 ]; then
+    echo "RESULT: self-test only (--backend-dir, --no-quarantine or macOS --launcher direct) — not a release verdict"
     exit 2
 fi
 echo "RESULT: PASS"

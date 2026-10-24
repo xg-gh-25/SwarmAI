@@ -181,7 +181,10 @@ pub fn deploy(resource_dir: &Path, root: &Path, version: &str) -> Result<PathBuf
         let entry = entry?;
         let name = entry.file_name();
         let n = name.to_string_lossy();
-        if entry.file_type()?.is_file() && !n.starts_with('.') && !n.ends_with(".icns")
+        // on Windows the resource dir is the install dir: skip the app's own exe / dlls
+        let lower = n.to_ascii_lowercase();
+        if entry.file_type()?.is_file() && !n.starts_with('.') && !lower.ends_with(".icns")
+            && !lower.ends_with(".exe") && !lower.ends_with(".dll")
             && n != "install-manifest.json"
         {
             fs::copy(entry.path(), res.join(&name))?;

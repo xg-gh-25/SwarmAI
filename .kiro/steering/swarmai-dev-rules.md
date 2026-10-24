@@ -122,6 +122,7 @@ One `SessionUnit` per app session ID lives in `SessionRouter._units`; details in
   (the script's `TARGETS` array is authoritative).
 - CI (`.github/workflows/ci.yml`) runs 5 jobs on push and PR: backend, frontend,
   backend-windows, version-check, security.
-- Release: `commit → push → CI green → tag → release.yml` builds macOS + Windows and
-  publishes. Hive packaging is local-only.
+- Release: `commit → push → CI green → tag → release.yml` builds macOS arm64/x64, Windows x64
+  and Linux x64 (AppImage), runs `scripts/verify_installer.sh` on each installer, and publishes a
+  draft only when every target built and passed. Hive packaging is local-only.
 - Never tag with red CI.

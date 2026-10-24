@@ -5,13 +5,16 @@ The desktop app (src-tauri/src/runtime_deploy.rs) and dev tooling (scripts/daemo
 deploy the backend to ``<app data>/runtime/<version>/`` and write the version into the
 pointer file ``<app data>/runtime/current``; the launchd wrapper runs that version. The
 legacy single location ``<app data>/daemon/`` is used only when no runtime is current.
+On Windows the runtime root is ``%LOCALAPPDATA%/SwarmAI/runtime``, as in the Rust code.
 This module is the Python side of that one rule.
 
 Public: ``runtime_root``, ``current_version``, ``current_backend_dir``.
 """
 from __future__ import annotations
 
+import os
 import re
+import sys
 from pathlib import Path
 
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
@@ -26,6 +29,11 @@ def _app_data() -> Path:
 
 
 def runtime_root() -> Path:
+    """Where the app deploys the backend: ``<app data>/runtime``; on Windows
+    ``%LOCALAPPDATA%/SwarmAI/runtime``, the same root as ``runtime_deploy::runtime_root``."""
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "SwarmAI" / "runtime"
     return _app_data() / "runtime"
 
 

@@ -16,35 +16,27 @@
 #     "platforms": { "<os>-<arch>": { "signature": "<.sig contents>", "url": "<bundle url>" } } }
 #   os key:  macOS -> "darwin"  (NOT "macos"),  windows -> "windows"
 #   arch key: aarch64 -> "aarch64",  x86_64 -> "x86_64"
-#   -> our keys: "darwin-aarch64" (macOS) and "windows-x86_64" (Windows)
-# The updater downloads the BUNDLE (.app.tar.gz / -setup.nsis.zip), NOT the DMG/exe.
-# The `signature` value is the literal CONTENTS of the bundle's .sig file.
+#   -> our keys: darwin-aarch64, darwin-x86_64, windows-x86_64, linux-x86_64
+# The updater downloads the BUNDLE: macOS the .app.tar.gz, Windows the NSIS -setup.exe, Linux the
+# .AppImage (Tauri v2 updater artifacts, createUpdaterArtifacts: true). The `signature` value is
+# the literal CONTENTS of the bundle's .sig file.
 #
 # Usage:
-#   gen-latest-json.sh <VERSION> <ARTIFACTS_DIR> <OUT_FILE> [MACOS_BUILT] [WINDOWS_BUILT]
+#   gen-latest-json.sh <VERSION> <ARTIFACTS_DIR> <OUT_FILE>
 #     VERSION        e.g. 1.27.0  (no leading v)
-#     ARTIFACTS_DIR  the download-artifact root (each artifact in a subdir)
+#     ARTIFACTS_DIR  the download-artifact root: installer-<target>/ per release target
+#                    (written by collect-installer.sh)
 #     OUT_FILE       where to write latest.json  (e.g. release/latest.json)
-#     MACOS_BUILT    "true" if build-macos succeeded (default "true")
-#     WINDOWS_BUILT  "true" if build-windows succeeded (default "true")
 #
-# Contract (Gate-1 adopted):
-#   - macOS is load-bearing: if MACOS_BUILT=true and its bundle/.sig are missing
-#     -> FAIL LOUDLY (exit 1). Never ship an empty/mac-less manifest silently.
-#   - If MACOS_BUILT=false (e.g. hive-only release where build-macos failed):
-#     skip the darwin platform gracefully; do NOT fail the publish.
-#   - Windows is best-effort: omit the windows-x86_64 platform entirely if its
-#     bundle/.sig are absent — never emit an entry with an empty signature.
-#   - Bundle discovery is SCOPED to each artifact's own subdir (never a bare
-#     `find <artifacts> -name '*.tar.gz'` which collides with the hive tar.gz).
+# Contract (one release, design 2026-10-24-swarmai-usable-by-anyone §7 r14): every one of the
+# four targets must have its bundle and a non-empty .sig, else FAIL (exit 1). Bundle discovery
+# is scoped to each target's own artifact dir.
 
 set -euo pipefail
 
 VERSION="${1:?VERSION required}"
 ARTIFACTS_DIR="${2:?ARTIFACTS_DIR required}"
 OUT_FILE="${3:?OUT_FILE required}"
-MACOS_BUILT="${4:-true}"
-WINDOWS_BUILT="${5:-true}"
 
 # Fail loud on a malformed VERSION: the tauri updater compares it as semver, and a
 # bad value (e.g. leftover 'v', pre-release/build metadata, or a typo) could break
@@ -89,45 +81,30 @@ print(json.dumps(p))
 ')"
 }
 
-# ---------------- macOS (darwin-aarch64) ----------------
-if [ "$MACOS_BUILT" = "true" ]; then
-  MAC_DIR="${ARTIFACTS_DIR}/macos-aarch64-updater"
-  MAC_BUNDLE="$(_find_one "$MAC_DIR" '*.app.tar.gz')"
-  MAC_SIG="$(_find_one "$MAC_DIR" '*.app.tar.gz.sig')"
-  if [ -z "$MAC_BUNDLE" ] || [ -z "$MAC_SIG" ]; then
-    echo "ERROR: build-macos succeeded but macOS updater bundle/.sig not found in $MAC_DIR" >&2
-    echo "  bundle='$MAC_BUNDLE' sig='$MAC_SIG' (macOS is load-bearing — refusing to ship a mac-less manifest)" >&2
+# <platform key> <artifact dir> <bundle glob>
+TARGETS=(
+  "darwin-aarch64 installer-macos-arm64 *_aarch64.app.tar.gz"
+  "darwin-x86_64  installer-macos-x64   *_x64.app.tar.gz"
+  "windows-x86_64 installer-windows-x64 *-setup.exe"
+  "linux-x86_64   installer-linux-x64   *.AppImage"
+)
+for t in "${TARGETS[@]}"; do
+  read -r key dir glob <<<"$t"
+  BUNDLE="$(_find_one "${ARTIFACTS_DIR}/$dir" "$glob")"
+  SIG="$(_find_one "${ARTIFACTS_DIR}/$dir" "$glob.sig")"
+  if [ -z "$BUNDLE" ] || [ -z "$SIG" ]; then
+    echo "ERROR: $key: updater bundle or .sig missing in ${ARTIFACTS_DIR}/$dir (bundle='$BUNDLE' sig='$SIG')" >&2
     exit 1
   fi
-  # Fail-closed: an exists-but-EMPTY .sig would embed signature:"" — the updater
-  # must never be handed a blank signature (supply-chain integrity). macOS is
-  # load-bearing → a blank mac sig fails the whole publish.
-  MAC_SIG_CONTENT="$(cat "$MAC_SIG")"
-  if [ -z "$MAC_SIG_CONTENT" ]; then
-    echo "ERROR: macOS .sig ($MAC_SIG) is EMPTY — refusing to ship a manifest with a blank signature" >&2
+  # fail closed: an empty .sig would embed signature:"" and the updater must never get one
+  SIG_CONTENT="$(cat "$SIG")"
+  if [ -z "$SIG_CONTENT" ]; then
+    echo "ERROR: $key: $SIG is EMPTY — refusing to ship a manifest with a blank signature" >&2
     exit 1
   fi
-  _add_platform "darwin-aarch64" "$(basename "$MAC_BUNDLE")" "$MAC_SIG_CONTENT"
-  echo "  + darwin-aarch64: $(basename "$MAC_BUNDLE")" >&2
-else
-  echo "  ~ skipping darwin-aarch64 (build-macos did not succeed)" >&2
-fi
-
-# ---------------- Windows (windows-x86_64) — best-effort ----------------
-if [ "$WINDOWS_BUILT" = "true" ]; then
-  WIN_DIR="${ARTIFACTS_DIR}/windows-updater"
-  WIN_BUNDLE="$(_find_one "$WIN_DIR" '*.nsis.zip')"
-  WIN_SIG="$(_find_one "$WIN_DIR" '*.nsis.zip.sig')"
-  WIN_SIG_CONTENT=""
-  [ -n "$WIN_SIG" ] && WIN_SIG_CONTENT="$(cat "$WIN_SIG")"
-  # Best-effort: omit windows (never emit a blank signature) if bundle/.sig absent OR the .sig is empty.
-  if [ -n "$WIN_BUNDLE" ] && [ -n "$WIN_SIG_CONTENT" ]; then
-    _add_platform "windows-x86_64" "$(basename "$WIN_BUNDLE")" "$WIN_SIG_CONTENT"
-    echo "  + windows-x86_64: $(basename "$WIN_BUNDLE")" >&2
-  else
-    echo "  ~ omitting windows-x86_64 (updater bundle/.sig absent or empty — best-effort)" >&2
-  fi
-fi
+  _add_platform "$key" "$(basename "$BUNDLE")" "$SIG_CONTENT"
+  echo "  + $key: $(basename "$BUNDLE")" >&2
+done
 
 # ---------------- assemble + validate ----------------
 if [ "$PLATFORMS_JSON" = "{}" ]; then

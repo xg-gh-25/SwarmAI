@@ -350,7 +350,7 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 
 ## 9. 待定问题
 
-1. Linux 发布用 AppImage 还是 deb，还是两个都发。
+1. ~~Linux 发布用 AppImage 还是 deb，还是两个都发。~~ XG 定（2026-10-24）：先发 AppImage，deb 以后再说。
 
 ## 修订记录
 
@@ -369,3 +369,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r14（对抗审查 1 个 BLOCKER、8 个 MAJOR；XG 定"不发过渡版"）：S1–S6 做完才发一次版，每个 commit 自身一致，§7 改为 S1 → S4 → S2 → S3 → S4b → S5 → S6；旧命令形式和 `source_repo` 保留到 S6 与 runner 一起删（修 S3–S6 之间 TEST 跑不起来）；§3.2 新增统一的命令识别模块，替换六处文本匹配（修 `run_owner_gate` 快速路径不认 `pipeline-v1`、`_with_session` 失效）；§3.6 记下 `a84c5008f` 已先改模板，S4 提前，S4 前不重新打包本机 daemon；EVOLUTION 模板的个人纠正条目移出，结构测试覆盖全部 `CONTEXT_FILES`；§3.3.3 审查记录 tree、TEST 退回后做增量审查；§3.7 排除 SwarmWS 和 runtime、本 session 写过的不注入、按是否绑定 DDD 分信任级别；`external_approval_gate` 元数据只升不降；§3.3.5 现存 run 的 drain 和归档、保留对截断尾行的容忍、操作锁沿用现有 flock；SwarmAI 的 `pipeline.toml` 移到 S4；G1 把 git 列为前置条件并加 onboarding 检查；`background_command_guard` / `image_read_dedup_guard` 删还是改提示列为待定。
 - S1（2026-10-24）：`scripts/verify_installer.sh` 落地，v2.3.0 红（C3 没有清单、C4 没有后端、C13 app 签名损坏）；S2 必须给整个 .app 做 ad-hoc 签名；发布结论只在干净 VM / CI 上得出。
 - r15（XG）：P3 增加"保护 session 本身"一类，`background_command_guard`、`image_read_dedup_guard` 保留，S5 后复查；新增 §3.8：native 按需使用隔离 worktree，不默认、不加 gate；S4（2026-10-24）已落地：`e5db08c5a 480f6da36 185debb73 4e1f3e1ee 002f7b4ec de8603c94 77dbc23eb ddf122ec0`。
+- S2（2026-10-24）：S2a `0b917ec16` 安装包带后端（清单 + ad-hoc 签名）；S2b `b6f2bcfb2` 三平台统一的版本化 runtime（指针文件 `current` / `previous`，dev 工具和 app 同一路径）；S2c release.yml 四个目标（macOS arm64 / x64、Windows x64、Linux x64 AppImage）走同一条构建路径，每个安装包在独立 job 里跑 `verify_installer.sh`（已支持三个平台），全部构建和验收通过才发布。

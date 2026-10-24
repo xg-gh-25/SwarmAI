@@ -1,5 +1,12 @@
 name: Release
 
+# One release, four targets (design docs/design/2026-10-24-swarmai-usable-by-anyone.md §3.1,
+# §5.1): macOS arm64, macOS x64, Windows x64, Linux x64 (AppImage). Every target builds through
+# the same path a developer uses (build-backend.sh -> npm run build -> tauri-build.sh, which
+# bundles the backend via src-tauri/tauri.bundle.conf.json), then a separate job on a fresh
+# runner installs that installer the way a stranger would (scripts/verify_installer.sh, G1/G2).
+# Nothing is published unless every target built AND passed verification.
+
 on:
   push:
     tags:
@@ -29,9 +36,32 @@ jobs:
             echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
           fi
 
-  build-macos:
+  build:
     needs: prepare
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -47,11 +77,19 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev patchelf file build-essential
 
       - name: Install frontend dependencies
         working-directory: ./desktop
@@ -66,9 +104,11 @@ jobs:
         run: |
           pip install uv
           uv venv .venv
-          source .venv/bin/activate
+          if [ -d .venv/Scripts ]; then bin=.venv/Scripts; else bin=.venv/bin; fi
+          source "$bin/activate"
           uv pip install -e ".[dev]"
-          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+          p="$PWD/$bin"; command -v cygpath >/dev/null 2>&1 && p="$(cygpath -w "$p")"
+          echo "$p" >> "$GITHUB_PATH"
 
       - name: Update version
         run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
@@ -83,148 +123,96 @@ jobs:
 
       - name: Build Tauri app
         working-directory: ./desktop
-        run: bash scripts/tauri-build.sh --target aarch64-apple-darwin
+        run: bash scripts/tauri-build.sh --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
-      - name: Upload DMG
+      # Installer + updater bundle + its minisign .sig, under names unique across targets
+      # (both macOS builds would otherwise ship a SwarmAI.app.tar.gz).
+      - name: Collect installer
+        run: bash .github/scripts/collect-installer.sh "${{ matrix.name }}" "${{ needs.prepare.outputs.version }}" \
+               "desktop/src-tauri/target/${{ matrix.target }}/release/bundle" out
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
-          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          name: installer-${{ matrix.name }}
+          path: out/*
           if-no-files-found: error
 
-      # Updater bundle + minisign signature (createUpdaterArtifacts:true + the
-      # signing key produce SwarmAI.app.tar.gz AND SwarmAI.app.tar.gz.sig here).
-      # The glob '*.tar.gz*' captures BOTH; the publish job reads the .sig into latest.json.
-      - name: Upload macOS updater bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-aarch64-updater
-          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.tar.gz*
-          if-no-files-found: error
-
-  build-windows:
-    needs: prepare
-    runs-on: windows-latest
+  verify:
+    # G1/G2 on a fresh runner: no checkout of the build job, no build tools on the PATH the
+    # product sees (verify_installer.sh runs it under a test HOME with a stripped PATH).
+    needs: [prepare, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-latest
+            flag: --dmg
+            pattern: '*.dmg'
+          - name: macos-x64
+            os: macos-15-intel
+            flag: --dmg
+            pattern: '*.dmg'
+          - name: windows-x64
+            os: windows-latest
+            flag: --setup
+            pattern: '*-setup.exe'
+          - name: linux-x64
+            os: ubuntu-22.04
+            flag: --appimage
+            pattern: '*.AppImage'
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          sparse-checkout: scripts/verify_installer.sh
+          sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/download-artifact@v4
         with:
-          python-version: '3.11'
+          name: installer-${{ matrix.name }}
+          path: installer
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install dependencies
-        working-directory: ./desktop
-        run: npm ci
-
-      - name: Create backend .env
-        working-directory: ./backend
-        run: cp .env.example .env
-
-      - name: Install backend Python dependencies
-        working-directory: ./backend
-        shell: bash
+      - name: Install and run it like a new user (G1/G2)
         run: |
-          pip install uv
-          uv venv .venv
-          source .venv/Scripts/activate
-          uv pip install -e ".[dev]"
-          echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
-
-      - name: Update version
-        shell: bash
-        run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
-
-      - name: Build application
-        working-directory: ./desktop
-        shell: bash
-        run: npm run build:all
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-
-      - name: Upload NSIS installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-exe
-          path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
-          if-no-files-found: error
-
-      - name: Upload MSI installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-msi
-          path: desktop/src-tauri/target/release/bundle/msi/*.msi
-          if-no-files-found: warn
-
-      # Windows updater bundle + sig (NSIS updater artifact). Best-effort like the
-      # MSI above — if the path differs on a future tauri version, the publish job
-      # omits the windows-x86_64 platform from latest.json rather than failing.
-      - name: Upload Windows updater bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-updater
-          path: desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip*
-          if-no-files-found: warn
-
-  # NOTE: the build-hive CI job was REMOVED (run_eb45c28d). Hive packaging is now
-  # LOCAL-ONLY — hive/release.sh sources the full DDD from the daemon workspace
-  # (~/.swarm-ai/SwarmWS), which does not exist on a bare CI runner. The Hive tar
-  # is therefore no longer a published GitHub Release asset; build it locally with
-  # `bash hive/release.sh <version>` on a machine with a populated daemon workspace.
+          inst="$(find installer -maxdepth 1 -type f -name '${{ matrix.pattern }}' | head -1)"
+          [ -n "$inst" ] || { echo "no ${{ matrix.pattern }} in the installer artifact"; exit 1; }
+          bash scripts/verify_installer.sh ${{ matrix.flag }} "$inst"
 
   publish:
-    # Run even if Windows fails — the macOS artifact still ships.
-    # 'always()' runs on any outcome; the 'if' filters to skip only
-    # when the macOS build fails (prepare always succeeds).
-    if: ${{ always() && needs.build-macos.result == 'success' }}
-    needs: [prepare, build-macos, build-windows]
+    # Only when every target built and passed G1/G2: one release, nothing partial (§7 r14).
+    needs: [prepare, build, verify]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for the latest.json generator script)
         uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download all installers
         uses: actions/download-artifact@v4
         with:
+          pattern: installer-*
           path: artifacts
 
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -name "*.dmg" -exec cp {} release/ \;
-          find artifacts -name "*-setup.exe" -exec cp {} release/ \;
-          find artifacts -name "*.msi" -exec cp {} release/ \;
-          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
-          # Updater bundles + their minisign signatures (the .sig siblings the
-          # generic *.tar.gz glob above does NOT catch, plus the Windows nsis.zip).
-          find artifacts -name "*.tar.gz.sig" -exec cp {} release/ \;
-          find artifacts -name "*.nsis.zip" -exec cp {} release/ \;
-          find artifacts -name "*.nsis.zip.sig" -exec cp {} release/ \;
-          find artifacts -name "checksums.txt" -exec cp {} release/ \;
+          find artifacts -type f -exec cp {} release/ \;
           ls -la release/
 
-      # Assemble the Tauri updater manifest from the downloaded artifacts and drop
-      # it into release/ so the action-gh-release step below uploads it as an asset.
-      # Without this the in-app auto-updater 404s on latest.json (silent no-op).
-      # The generator (a) reads each platform's .sig contents into the manifest,
-      # (b) points urls at the updater BUNDLE not the installer, (c) fails loud if
-      # macOS built-but-missing, (d) omits Windows if absent. (publish now requires
-      # build-macos success — Hive is local-only, no longer a CI-published asset.)
+      # The Tauri updater manifest. Every platform must have its bundle and a non-empty
+      # signature, or the publish fails (see gen-latest-json.sh).
       - name: Generate latest.json (updater manifest)
         run: |
           bash .github/scripts/gen-latest-json.sh \
             "${{ needs.prepare.outputs.version }}" \
             artifacts \
-            release/latest.json \
-            "${{ needs.build-macos.result == 'success' }}" \
-            "${{ needs.build-windows.result == 'success' }}"
+            release/latest.json
           echo "--- release/latest.json ---"
           cat release/latest.json
 
