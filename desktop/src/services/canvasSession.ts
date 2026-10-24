@@ -147,7 +147,7 @@ export const canvasSessionService = {
       throw e;
     }
   },
-  /** The repo the session's newest pipeline run works in (the terminal's default
+  /** The bound repo the session's newest "files changed" card names (the terminal's default
    *  location, docs/design/terminal-locations.md); null when it has none. */
   async workingRepo(sessionId: string): Promise<{ path: string; name: string } | null> {
     const r = await api.get<{ workingRepo: { path: string; name: string } | null }>(

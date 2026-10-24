@@ -115,7 +115,7 @@ async def test_the_parts_are_independent(monkeypatch):
     async def no_blocks(sid, needles):
         raise AssertionError("an Artifacts refresh reads no turn records")
     monkeypatch.setattr("database.db.messages.list_session_blocks", no_blocks)
-    monkeypatch.setattr(cs, "session_runs", lambda *a: (_ for _ in ()).throw(AssertionError("no run index")))
+    monkeypatch.setattr(cs, "_changes", lambda *a: (_ for _ in ()).throw(AssertionError("no Changes read")))
     out = await cs.build("s1", "artifacts")
     assert [a["path"] for a in out["artifacts"]] == ["a.md"] and out["changes"] is None
     monkeypatch.setattr(cs, "_changes", lambda sid, db_path: {"turns": [{"id": "m:0"}]})

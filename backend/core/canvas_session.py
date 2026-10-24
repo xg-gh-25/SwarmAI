@@ -19,24 +19,17 @@ single-worker ``canvas_session`` pool (behind the session_outputs writes the rou
 submitted first); Changes run on the ``canvas_changes`` pool (their own read-only
 database connection and git), so an Artifacts refresh never waits for them.
 
-``working_repo`` names the repo the session's newest run works in (the terminal's
-default location, docs/design/terminal-locations.md): no git, the run index.
-
-Public: ``build``, ``artifact_rows``, ``in_head``, ``session_runs``, ``working_repo``,
-``deliverable_turns``, ``MAX_FILES``.
+Public: ``build``, ``artifact_rows``, ``in_head``, ``deliverable_turns``, ``MAX_FILES``.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
 MAX_FILES = 200          # per session (Artifacts)
-_SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 BACKFILL_NEEDLES = ['"type": "turn_deliverables"']
 
 
@@ -130,97 +123,6 @@ def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
                     "inHead": heads.get(r["absolutePath"]),
                     "writes": r.get("writes", 1)})
     return out
-
-
-# ── the run index ───────────────────────────────────────────────────────────
-# run.json files are many (hundreds) and change rarely: listed with scandir and
-# parsed once per mtime.
-_RUN_CACHE: dict[str, tuple[float, dict]] = {}
-
-
-def _run_jsons(workspace: str) -> list[str]:
-    out = []
-    try:
-        projects = list(os.scandir(os.path.join(workspace, "Projects")))
-    except OSError:
-        return out
-    for p in projects:
-        runs = os.path.join(p.path, ".artifacts", "runs")
-        try:
-            out.extend(os.path.join(e.path, "run.json") for e in os.scandir(runs) if e.is_dir())
-        except OSError:
-            continue
-    return out
-
-
-def _run_facts(path: str) -> Optional[dict]:
-    """The facts Changes needs from one run.json (owners, worktrees, commits), cached
-    by mtime; None when it is gone or unreadable."""
-    try:
-        mtime = os.stat(path).st_mtime
-    except OSError:
-        _RUN_CACHE.pop(path, None)
-        return None
-    hit = _RUN_CACHE.get(path)
-    if hit and hit[0] == mtime:
-        return hit[1]
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    owners = {data.get("session_id")} if isinstance(data.get("session_id"), str) else set()
-    for h in data.get("session_history") or []:
-        if isinstance(h, dict) and isinstance(h.get("session_id"), str):
-            owners.add(h["session_id"])
-    req = data.get("requirement")
-    title = (req.strip().splitlines() or [""])[0][:120] if isinstance(req, str) else ""
-    facts = {
-        "run": str(data.get("id") or os.path.basename(os.path.dirname(path))),
-        "owners": owners, "title": title, "status": str(data.get("status") or ""),
-        "project": data.get("project") if isinstance(data.get("project"), str) else None,
-        "createdAt": str(data.get("created_at") or ""),
-        "worktrees": [w for w in data.get("worktrees") or [] if isinstance(w, dict)],
-        "commits": [{"repo": str(c.get("repo") or ""), "sha": str(c.get("sha") or "")}
-                    for c in data.get("commits") or []
-                    if isinstance(c, dict) and _SHA.fullmatch(str(c.get("sha") or ""))],
-    }
-    _RUN_CACHE[path] = (mtime, facts)
-    return facts
-
-
-def session_runs(session_id: str, workspace: str) -> list[dict]:
-    """The runs *session_id* owned or took over (run.json), newest first. Blocking: a
-    stat per run.json, a parse only of the changed ones."""
-    runs = [f for f in map(_run_facts, _run_jsons(workspace)) if f and session_id in f["owners"]]
-    return sorted(runs, key=lambda f: f["createdAt"], reverse=True)
-
-
-def _main_checkout(path: str) -> Optional[str]:
-    """*path* as a real path when it is a repo's main checkout (``.git`` is a
-    directory), else None — a linked worktree's ``.git`` is a file, so a run worktree
-    never qualifies. No git call."""
-    real = os.path.realpath(path) if path else ""
-    return real if real and os.path.isdir(os.path.join(real, ".git")) else None
-
-
-def working_repo(session_id: str, workspace: Optional[str]) -> Optional[dict]:
-    """The repo this session is coding in: the newest run it owns that names a repo,
-    that run's first named repo (its first worktree ``main``, else its first commit's
-    repo) when that is a main checkout — never a later one, never an older run's.
-    {path, name} or None. Blocking: the run index's stat per run.json."""
-    if not workspace:
-        return None
-    for run in session_runs(session_id, workspace):
-        named = [str(w.get("main") or "") for w in run["worktrees"]] + [c["repo"] for c in run["commits"]]
-        named = [p for p in named if p]
-        if not named:
-            continue
-        main = _main_checkout(named[0])   # exactly the first named repo: never a later one
-        return {"path": main, "name": os.path.basename(main)} if main else None
-    return None
 
 
 # ── the request ─────────────────────────────────────────────────────────────

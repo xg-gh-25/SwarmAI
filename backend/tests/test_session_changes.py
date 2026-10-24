@@ -14,7 +14,9 @@ Invariants:
 - the read is incremental by transcript rev: a new or edited row is picked up, a
   deletion or a change older than the window re-reads it, an unchanged session reads
   no message row; the window is bounded and says when earlier rows were not scanned;
-- no run.json is read; diffs are authorized by bindings only.
+- no run.json is read; diffs are authorized by bindings only;
+- working_repo (the terminal's default) is the newest card's first gitRoot that is a
+  bound main checkout; unbound roots are skipped, none found is None.
 """
 from __future__ import annotations
 
@@ -413,6 +415,46 @@ def test_endpoint_returns_changes_through_fastapi(db, repo, monkeypatch):
     r = TestClient(app).get("/api/canvas/changes/tree-diff",
                             params={"root": "/elsewhere", "start": start, "end": end, "path": "b.py"})
     assert r.status_code == 404
+
+
+def test_working_repo_is_the_newest_cards_first_bound_main_checkout(db, repo, tmp_path, monkeypatch):
+    """The terminal's working repo comes from the transcript, not a run: newest card
+    first, its files in order; a root outside the bindings (SwarmWS, a scratch clone)
+    or one that is not a main checkout is skipped; nothing bound is None."""
+    other = Path(os.path.realpath(tmp_path)) / "other"
+    _git(tmp_path, "init", "-q", str(other))
+    wt = Path(os.path.realpath(tmp_path)) / "wt"
+    _git(repo, "worktree", "add", "-q", "-b", "side", str(wt))
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj", str(other): "other", str(wt): "proj"})
+    assert sc.working_repo("s1", db) is None                                   # no card: none
+    put(db, "m1", "t1", [card("a.py", root=str(other))])
+    assert sc.working_repo("s1", db) == {"path": str(other), "name": "other"}
+    put(db, "m2", "t2", [card("x.md", root="/not/bound"), card("a.py", root=str(repo))])
+    assert sc.working_repo("s1", db) == {"path": str(repo), "name": "proj"}    # newest card, unbound skipped
+    put(db, "m3", "t3", [card("a.py", root=str(wt))])                          # a linked worktree: never
+    assert sc.working_repo("s1", db)["path"] == str(repo)
+    put(db, "m4", "t4", [card("x.md", root="/not/bound")])
+    assert sc.working_repo("s1", db)["path"] == str(repo)
+    assert sc.working_repo("s2", db) is None
+
+
+def test_working_repo_endpoint_through_fastapi(db, repo, monkeypatch):
+    """GET /api/canvas/session/{id}/working-repo, unmocked down to the transcript."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import canvas_changes as router
+    import database
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj"})
+    put(db, "m1", "t1", [card("a.py", root=str(repo))])
+
+    class _DB:
+        db_path = db
+    monkeypatch.setattr(database, "db", _DB())
+    app = FastAPI()
+    app.include_router(router.router)
+    r = TestClient(app).get("/api/canvas/session/s1/working-repo")
+    assert r.status_code == 200 and r.json() == {"workingRepo": {"path": str(repo), "name": "proj"}}
+    assert TestClient(app).get("/api/canvas/session/nobody/working-repo").json() == {"workingRepo": None}
 
 
 def test_reads_of_one_session_are_serialized_and_other_sessions_do_not_wait(db, monkeypatch):

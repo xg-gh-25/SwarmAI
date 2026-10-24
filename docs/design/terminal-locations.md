@@ -2,7 +2,7 @@
 title: Terminal locations — SwarmWS, the chat's working repo, any folder
 date: 2026-10-23
 created: 2026-10-23
-updated: 2026-10-23
+updated: 2026-10-24
 project: SwarmAI
 status: implemented (frontend + one read endpoint)
 ---
@@ -16,7 +16,7 @@ Agreed with XG in chat on 2026-10-23. Owner files:
 `desktop/src/components/terminal/TerminalTab.tsx` (xterm: theme, keys, selection menu),
 `desktop/src/utils/terminalAttachment.ts` (terminal text as a chat attachment),
 `desktop/src-tauri/src/pty_pump.rs` (PTY output batching),
-`backend/core/canvas_session.py::working_repo` + `GET /api/canvas/session/{id}/working-repo`.
+`backend/core/session_changes.py::working_repo` + `GET /api/canvas/session/{id}/working-repo`.
 
 ## Problem
 
@@ -32,15 +32,17 @@ A **location** is where a shell opens: `swarmws` (the Rust default, no cwd passe
 "Open terminal here"). Every shell carries the key of the location it was opened at
 (`swarmws` or its absolute path); shells are grouped by that key.
 
-**Working repo** — one fact, one source: the newest pipeline run this session owns
-(`canvas_session.session_runs`, run.json `session_id` / `session_history`, the same
-source Canvas Changes reads) that names a repo; exactly its first named repo (first
-`worktrees[].main`, else first commit's repo). Accepted only when that path is a real
-directory whose `.git` is a directory — a main checkout, never a run worktree (a linked
-worktree's `.git` is a file). Otherwise none: no later repo, no older run, no guess.
-Cost (measured on the live workspace, 753 run.json): 329 ms on the first read after a
-daemon start, 4 ms after (the run index's mtime cache); no git. It runs on the
-`canvas_changes` pool, never on the chat path. Label = the directory's basename.
+**Working repo** — one fact, one source: the session's own transcript, the same
+record Canvas Changes reads (core/session_changes, design canvas-changes-from-turns.md).
+Newest "N files changed" card first, its files in order: the first `gitRoot` that is a
+bound repo (repo_changes.authorized_root, Projects/*/bindings.yaml) and a main checkout
+(`.git` a directory). A card's gitRoot is already its object store's main checkout, so
+a change made in a worktree names its main. A root outside the bindings (SwarmWS, a
+scratch clone) is skipped; nothing found is none — no guess. No run.json is read
+(changed 2026-10-24: code changes are native by default, so a session usually owns no
+pipeline run and the run-based rule left the repo segment empty). It runs on the
+`canvas_changes` pool from the same cached, rev-incremental window as Changes, never
+on the chat path; git only through the cached repo identities. Label = the directory's basename.
 
 **Selection** is per chat tab (`swarmws` | `repo` | `{custom, path}`), localStorage
 `terminalLocationByChatTab` (newest 100 tabs). Without a selection: repo when the chat

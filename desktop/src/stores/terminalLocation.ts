@@ -3,7 +3,8 @@
  * (docs/design/terminal-locations.md).
  *
  * A location is SwarmWS (no cwd: the Rust default), the active chat's working repo
- * (the newest pipeline run its session owns, read from the backend — one source, no
+ * (the bound repo its session's newest "files changed" card names, read from the
+ * backend — one source, no
  * guessing) or a custom folder. Each chat tab keeps its own choice; with none, the
  * repo when the chat has one, else SwarmWS. Recent custom folders are global.
  *

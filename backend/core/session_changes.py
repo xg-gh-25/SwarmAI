@@ -23,7 +23,10 @@ Git (commits only; nothing at read for files): one ``cat-file --batch-check`` pe
 repo for unknown candidates, one ``log --no-walk`` for unknown commits (immutable,
 cached by bytes), "pushed" for the newest PUSHED_FOR commits (cached PUSHED_TTL_S).
 
-Public: ``read``, ``code_span_shas``, ``row_facts``, ``tree_diff``, ``clear_cache``,
+``working_repo`` is the terminal's default location from the same window: the newest
+card's first bound-repo gitRoot (docs/design/terminal-locations.md).
+
+Public: ``read``, ``working_repo``, ``code_span_shas``, ``row_facts``, ``tree_diff``, ``clear_cache``,
 and the limits below.
 """
 from __future__ import annotations
@@ -574,6 +577,30 @@ def read(session_id: str, db_path: str) -> dict[str, Any]:
                 mentions.append((c, r["key"][0]))
     return {"turns": cards[:MAX_TURNS], "olderTurns": max(0, len(cards) - MAX_TURNS),
             "commits": _commits(mentions), "scannedAll": scanned_all}
+
+
+def working_repo(session_id: str, db_path: str) -> Optional[dict]:
+    """The repo this session is coding in (the terminal's default location): the
+    ``gitRoot`` of the first file, newest card first, that is a bound repo's main
+    checkout (repo_changes.authorized_root, ``.git`` a directory). A card's gitRoot is
+    already its store's main checkout (turn_changes._main_checkout), so a change made
+    in a worktree names its main. A file outside a bound repo (SwarmWS, a scratch
+    clone) is skipped; nothing found is None. ``{path, name}``. Blocking, the same
+    cached window as ``read``; git only via the cached repo identities."""
+    from core.repo_changes import authorized_root
+    rows, _ = _window(session_id, db_path)
+    seen: set[str] = set()
+    for r in rows:
+        for c in reversed(r["cards"]):
+            for f in c["files"]:
+                root = f.get("gitRoot")
+                if not isinstance(root, str) or not root or root in seen:
+                    continue
+                seen.add(root)
+                real = authorized_root(root)
+                if real and os.path.isdir(os.path.join(real, ".git")):
+                    return {"path": real, "name": os.path.basename(real)}
+    return None
 
 
 def tree_diff(root: str, start: str, end: str, path: str) -> Optional[str]:

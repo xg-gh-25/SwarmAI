@@ -1,15 +1,13 @@
 """core/canvas_session — a session's Canvas: Artifacts from its attribution record,
-the run index behind working_repo; and core/turn_changes' tree snapshots.
+and core/turn_changes' tree snapshots.
 
 Methodology: real git in tmp_path (a bare origin + a clone as the "main checkout");
 a run's worktree is made with `git worktree add` at the derived location
-(SWARM_WORKTREE_ROOT) and its run.json written by hand; the messages table is a
+(SWARM_WORKTREE_ROOT); the messages table is a
 throwaway SQLite file. No real repository, run or database is read.
 
 Invariants:
 - (Changes moved to core/session_changes: tests/test_session_changes.py)
-- working_repo is the newest owned run's main checkout; the run index is re-read
-  only for a changed run.json;
 - Artifacts are the session's attribution rows joined with the product catalog, and
   carry whether the file is in its repo's HEAD (one git call per repo; no repo or
   no file = unknown);
@@ -105,77 +103,6 @@ async def _started_turn(roots):
     t = TurnChanges.start(roots)
     await t.ready()
     return t
-
-
-# ── Changes: the session's runs ─────────────────────────────────────────────
-
-def _run(ws, rid, owner, *, worktrees=(), commits=(), history=(), status="running"):
-    d = ws / "Projects" / "P" / ".artifacts" / "runs" / rid
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "run.json").write_text(json.dumps({
-        "id": rid, "session_id": owner, "session_history": list(history), "status": status,
-        "project": "P", "requirement": f"Do {rid}\nmore", "created_at": rid,
-        "worktrees": list(worktrees), "commits": list(commits)}))
-    return d / "run.json"
-
-
-@pytest.fixture
-def runs(repo, tmp_path, monkeypatch):
-    wts = Path(os.path.realpath(tmp_path)) / "wts"
-    wts.mkdir()
-    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(wts))
-    cs._RUN_CACHE.clear()
-    ws = tmp_path / "ws"
-    ws.mkdir()
-
-    def worktree(rid):
-        wt = wts / rid / "swarmai"
-        _git(repo, "worktree", "add", "-q", "-b", f"run/{rid}", str(wt))
-        return wt
-    return ws, worktree
-
-
-def test_working_repo_is_the_newest_runs_main_checkout_never_a_worktree(repo, runs, tmp_path):
-    """The terminal's working repo: the newest owned run that names a repo, its
-    worktree's `main`; a linked worktree (`.git` a file) never qualifies; no run or a
-    gone repo is None — an older run is not used instead."""
-    ws, worktree = runs
-    assert cs.working_repo("s1", str(ws)) is None                     # no run: none
-    other = tmp_path / "other"
-    _git(tmp_path, "init", "-q", str(other))
-    _run(ws, "run_w1", "s1", worktrees=[{"repo_name": "other", "main": str(other), "state": "released"}])
-    wt = worktree("run_w2")
-    _run(ws, "run_w2", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active"}])
-    assert cs.working_repo("s1", str(ws)) == {"path": str(repo), "name": "swarmai"}   # newest wins
-    _run(ws, "run_w3", "s1")                                          # names no repo: skipped
-    assert cs.working_repo("s1", str(ws))["path"] == str(repo)
-    _run(ws, "run_w4", "s1", worktrees=[{"repo_name": "swarmai", "main": str(wt), "state": "active"},
-                                         {"repo_name": "other", "main": str(other), "state": "active"}])
-    assert cs.working_repo("s1", str(ws)) is None                     # first is a worktree: none, not the 2nd / run_w2's
-    _run(ws, "run_w5", "s1", commits=[{"repo": os.path.realpath(other), "sha": "a" * 40}])
-    assert cs.working_repo("s1", str(ws)) == {"path": os.path.realpath(other), "name": "other"}
-    assert cs.working_repo("s2", str(ws)) is None and cs.working_repo("s1", None) is None
-
-
-def test_working_repo_endpoint_reads_the_session_newest_run(repo, runs, monkeypatch, client):
-    """GET /api/canvas/session/{id}/working-repo: the same answer, null for none."""
-    import core.project_registry as pr
-    ws, _ = runs
-    monkeypatch.setattr(pr, "get_swarmws", lambda: ws)
-    _run(ws, "run_x1", "sx", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "released"}])
-    r = client.get("/api/canvas/session/sx/working-repo")
-    assert r.status_code == 200 and r.json() == {"workingRepo": {"path": str(repo), "name": "swarmai"}}
-    assert client.get("/api/canvas/session/nobody/working-repo").json() == {"workingRepo": None}
-
-
-def test_the_run_index_rereads_only_a_changed_run_json(repo, runs):
-    ws, _ = runs
-    f = _run(ws, "run_e1", "s1")
-    _run(ws, "run_e2", "s2", history=[{"session_id": "s1"}])
-    assert sorted(r["run"] for r in cs.session_runs("s1", str(ws))) == ["run_e1", "run_e2"]
-    f.write_text(json.dumps({"id": "run_e1", "session_id": "s9"}))
-    os.utime(f, (1, 1))
-    assert [r["run"] for r in cs.session_runs("s1", str(ws))] == ["run_e2"]
 
 
 def test_in_head_is_the_repo_head_one_call_per_repo(repo, tmp_path, monkeypatch):
