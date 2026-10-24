@@ -63,11 +63,15 @@ TASK_CONTINUATION_HEADER = "## Task Continuation"
 SYSTEM_NOTE = "SYSTEM NOTE"
 TASK_NOTIFICATION_OPEN = "<task-notification"
 TASK_NOTIFICATION_CLOSE = "</task-notification>"
+# The Claude Code CLI puts this paragraph in front of a background-task notification;
+# the notification block follows it, so the whole lead is cut through the closing tag.
+SYSTEM_NOTIFICATION_MARKER = "[SYSTEM NOTIFICATION - NOT USER INPUT]"
 INJECT_DELIM = "\n\n---\n\n"
 
 # Shapes for readers that see one content block at a time.
 META_PREFIXES = (
-    *UI_STATE_HEADERS, TASK_NOTIFICATION_OPEN, _RESUME_PREFIX, RECALL_HEADER,
+    *UI_STATE_HEADERS, TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER,
+    _RESUME_PREFIX, RECALL_HEADER,
     TERMINAL_HEADER, TASK_CONTINUATION_HEADER, "[Request interrupted",
 )
 # Whole delimiter-separated segments that are system text, never user text.
@@ -78,6 +82,22 @@ def _cut_after(text: str, marker: str) -> str:
     """Text after the first ``marker``; ``""`` when the block never closes."""
     i = text.find(marker)
     return text[i + len(marker):] if i != -1 else ""
+
+
+def _cut_after_line(text: str, marker: str) -> str:
+    """Text after the first ``marker`` that fills a whole line; ``""`` when none.
+
+    A notification's body can quote its own close tag (an agent reporting on this
+    parser), so only a close tag on a line of its own, where the harness puts it,
+    ends the block.
+    """
+    i = text.find("\n" + marker)
+    while i != -1:
+        after = i + 1 + len(marker)
+        if after == len(text) or text[after] == "\n":
+            return text[after:]
+        i = text.find("\n" + marker, after)
+    return ""
 
 
 def _cut_terminal_block(text: str) -> str:
@@ -117,8 +137,8 @@ def _strip_leading(prompt: str) -> str:
         elif t.startswith(UI_STATE_HEADERS):
             # Single-\n-joined internally; the first blank line is the seam.
             s = _cut_after(t, "\n\n")
-        elif t.startswith(TASK_NOTIFICATION_OPEN):
-            s = _cut_after(t, TASK_NOTIFICATION_CLOSE)
+        elif t.startswith((TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER)):
+            s = _cut_after_line(t, TASK_NOTIFICATION_CLOSE)
         else:
             return t
 
