@@ -149,6 +149,14 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - `pipeline_command` 不再认 `pipeline_test.py`；旧的 `python …/pipeline_v1.py` 形式和 `source_repo` 照计划留到 S6-5。
   - SwarmAI 的选测逻辑留成 `backend/scripts/swarm_select_tests.py`：按 import 图选 backend 测试，并列出 `validations.json` 里路径匹配的检查；`tests/test_swarm_select_tests.py` 覆盖。
   - 还没做：S6-1 里"TEST 改了代码退回 REVIEW"放进 S6-2（LG-1 绑定审查过的 tree 时一起做）。
+  S6-2 实现（2026-10-24）：
+  - 审查记录代码：每个 REVIEW handout 记下专家看到的 `code_trees`；REVIEW 的 `stage_complete` 记下 `code_trees` 和 `patch_ids`（base→tree 的 patch id）。
+  - RV-4（REVIEW 的 stage 检查）：当前 tree 和最后一次审查看到的 tree（最近的 handout 或 REVIEW 完成）之间，非文档文件没有变化。变了就由 `review-start` 派**增量审查**：只审 `diff(上次审过的 tree, 当前 tree)`，correctness 加上原 R1 专家里这段 diff 会选中的；用 R1 的答案格式，新 finding 照常走 address 和 R2；每个专家最多 3 次。
+  - TEST 改了代码：TEST 的 `stage-complete` 发现当前 patch 不是任何一次 REVIEW 完成记下的 patch，就追加新事件 `review_reopen`，run 回到 REVIEW（两个阶段的尝试次数各自重新计），最多 2 次；超过后 TEST 这次尝试记为失败（`cap_exceeded.review_reopen`）。
+  - LG-1 另外要求当前 patch id 等于某次 REVIEW 完成记下的 patch id。和 §3.3.3 写的"tree 相等"不同：用 patch id 比较，这样 DELIVER 里 main 移动后干净的 rebase 仍然算审查过，而对 run 自己改动的任何修改都不算。
+  - R2 的 handout 每次 address 一个新 attempt（原来固定 2），reopen 后可以再派 R2。
+  - `reported_test`：fix handoff 的 proof 写 `{"evidence_type": "reported_test", "command": "<报告里的命令>"}`；engine 在该 finding 所在仓库、当前 tree 上的验证报告里找这条命令且结果是 pass（REVIEW 里可以用 `report-tests` 记一份 `review` 阶段的报告），找到才记 `proof` 事件，并把报告的 `tests_changed`、`rationale` 交给 R2。finding 先是 closed_proven；R2 判 ADEQUATE 保持关闭，TEST_INADEQUATE 变成 invalid_test。只接受 behavior/contract 类。
+  - `scripts/lint_problem_values.py` 去掉已删除的 `evidence_seal` loader。
 - **审查和最终 tree 的关系（r8，skeptic BLOCKER 1）**：阶段顺序 build → review → test 不变。规则是：
   - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
   - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW，做一次**增量审查**，再回到 TEST。

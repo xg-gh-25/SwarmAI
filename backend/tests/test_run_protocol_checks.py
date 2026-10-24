@@ -16,7 +16,7 @@ EXPECTED = {
     "RQ-1", "RQ-2", "RQ-3", "RQ-4", "RQ-5", "RQ-6", "RQ-8", "RQ-8b",
     "DS-1", "DS-2a", "DS-3", "DS-4a", "DS-5", "DS-6",
     "DS-7", "DS-9a", "BX-3", "RV-1a", "RV-1b", "RV-1c",
-    "DC-1", "DC-2", "RV-2", "FX-1", "TS-1", "TS-3", "DV-1",
+    "DC-1", "DC-2", "RV-2", "RV-4", "FX-1", "TS-1", "TS-3", "DV-1",
     "LG-1", "LG-3", "LG-4",
     "MD-1", "MD-3", "RF-1", "RF-2", "RF-3", "RF-4", "RF-5",
 }
@@ -28,8 +28,8 @@ def ids(specs):
 
 def test_registry_is_the_complete_v13_table():
     assert set(checks.CHECKS) == EXPECTED
-    # v13's 46 + BX-2, minus the runner's checks, plus BX-3 (S6-1)
-    assert len(checks.CHECKS) == 37
+    # v13's 46 + BX-2, minus the runner's checks, plus BX-3 (S6-1), plus RV-4 (S6-2)
+    assert len(checks.CHECKS) == 38
     assert checks.coverage_errors() == []
 
 
@@ -91,7 +91,8 @@ def test_goal_build_checks_run_in_goal_cycle_not_build():
 
 
 def test_review_and_deliver_stage_guards_are_exact():
-    assert ids(checks.stage_checks("full", "review")) == set()
+    # S6-2: REVIEW completes only on the code a review round saw
+    assert ids(checks.stage_checks("full", "review")) == {"RV-4"}
     assert ids(checks.stage_checks("full", "deliver")) == {
         "DV-1", "RF-1", "RF-2", "RF-3", "RF-4",
     }
@@ -201,7 +202,9 @@ def _report(repo, stage, tree, n_fail=0, ordinal=1, prev=None):
 def test_report_checks_bind_every_repo_to_its_current_tree():
     """BX-3 / TS-1 / LG-1 (S6-1): one report per expected repo, on the current tree."""
     trees = {"api": "1" * 40, "web": "2" * 40}
-    run = {"code_trees": trees, "changed_paths": ["x.py"]}
+    patches = {"api": "a" * 40, "web": "b" * 40}
+    run = {"code_trees": trees, "changed_paths": ["x.py"], "patch_ids": patches,
+           "reviewed_patches": [patches]}
     first = _report("api", "test", trees["api"])
     both = [first, _report("web", "test", trees["web"], ordinal=2, prev=first)]
     ctx = _context(events=both, expected_repos={"api", "web"}, run=run)
@@ -217,6 +220,12 @@ def test_report_checks_bind_every_repo_to_its_current_tree():
                    expected_repos={"api"}, run={"code_trees": {"api": trees["api"]}})
     ok, detail = checks.evaluate("TS-1", red)
     assert not ok and "failed command" in detail
+    # S6-2: LG-1 also needs the patch REVIEW completed; another patch is unreviewed
+    unreviewed = _context(events=both, expected_repos={"api", "web"},
+                          run={**run, "reviewed_patches": [{**patches, "web": "c" * 40}]})
+    assert checks.evaluate("TS-1", unreviewed)[0]
+    ok, detail = checks.evaluate("LG-1", unreviewed)
+    assert not ok and "never reviewed" in detail
     build = _context(events=[_report("api", "build", trees["api"])], expected_repos={"api"},
                      run={"code_trees": {"api": trees["api"]}, "changed_paths": ["x.py"]})
     assert checks.evaluate("BX-3", build)[0]

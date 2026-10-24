@@ -33,8 +33,6 @@ def test_defaulting_the_value_is_refused():
 
 def test_discarding_the_problem_is_refused():
     assert _findings("d, _ = pv._load_evidence_json(p)\n")
-    assert _findings("ok, _ = evidence_seal.check(p)\n")
-    assert _findings("ok = evidence_seal.check(p)[0]\n")
 
 
 def test_reads_that_keep_or_test_the_value_are_legal():
@@ -42,7 +40,6 @@ def test_reads_that_keep_or_test_the_value_are_legal():
                 "d = pv._load_evidence_json(p)[0]\nif d is None:\n    pass\n",
                 "ok = isinstance(pv._load_evidence_json(p)[0], dict)\n",
                 "n = sum(1 for f in fs if pv._load_evidence_json(f)[0] is not None)\n",
-                "ok, why = evidence_seal.check(p)\n",
                 "x = other.check(p)[0] or {}\n",          # not a registered loader
                 "x = cache.get(k)[0] or {}\n"):
         assert _findings(src) == [], src

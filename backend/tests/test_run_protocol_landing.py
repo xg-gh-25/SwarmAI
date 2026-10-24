@@ -47,7 +47,9 @@ def _rig(tmp_path):
         profile="direct", requirement_variant="lite", design_variant="lite",
         requirements={}, design={}, events=store.read_events(), authority=authority,
         run={"mode": "isolated", "code_trees": {"repo": code_tree},
-             "run_bases": {"repo": base}},
+             "run_bases": {"repo": base},
+             # S6-2: REVIEW completed this patch (LG-1 lands only a reviewed one)
+             "patch_ids": {"repo": "p" * 40}, "reviewed_patches": [{"repo": "p" * 40}]},
         expected_repos={"repo"})
     return main, worktree, base, store, context
 

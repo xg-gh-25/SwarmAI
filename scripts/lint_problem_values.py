@@ -12,9 +12,9 @@ The rule was in the loader's docstring, and the same defect
 a CI failure now, for each registered loader:
 
 - ``<loader>(...)[0] or <default>`` — the value defaulted: unusable becomes absent;
-- ``value, _ = <loader>(...)`` — the problem unpacked into ``_``;
-- for ``evidence_seal.check`` also ``evidence_seal.check(...)[0]`` (its second value
-  is the reason a fail-open happened, which must reach a reader).
+- ``value, _ = <loader>(...)`` — the problem unpacked into ``_``.
+(``evidence_seal.check`` was registered too; it was deleted with the pipeline's test
+runner, S6-1b.)
 
 Legal: keeping the problem (``value, why = …``) and reading ``[0]`` with a test of the
 value (``is None`` / ``isinstance``), where an unusable file is "no evidence" — the
@@ -22,8 +22,7 @@ fail-closed reading. ``pipeline_validator._read_evidence_json`` is the sanctione
 value-only wrapper and is itself checked like any other caller.
 
 Known limits (the shapes the two incidents had; widen when a new one ships): only the
-literal ``evidence_seal.check`` spelling is matched (an alias or ``from … import check``
-is not), ``_``-unpacking only in assignments (not ``for`` / ``with``), and a two-step
+literal loader name is matched (an alias is not), ``_``-unpacking only in assignments (not ``for`` / ``with``), and a two-step
 ``v = loader(p)[0]`` then ``v or {}`` is not followed.
 
 Scope: every tracked and untracked-unignored ``.py`` under ``SCOPE`` (the trees CI ships
@@ -49,7 +48,6 @@ SCOPE = ("backend", "scripts")
 # (callee name, module the attribute must be read from or None for any, also bans [0])
 LOADERS: "tuple[tuple[str, str | None, bool], ...]" = (
     ("_load_evidence_json", None, False),
-    ("check", "evidence_seal", True),
 )
 
 

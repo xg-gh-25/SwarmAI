@@ -242,7 +242,10 @@ def test_a_moved_main_rebases_the_worktree_and_needs_a_new_test_report(tmp_path,
     ok, detail = checks.evaluate("LG-1", engine.check_context())
     assert not ok and "test again" in detail
     engine._record_validation_reports("test", report)
-    assert checks.evaluate("LG-1", engine.check_context())[0]
+    ok, detail = checks.evaluate("LG-1", engine.check_context())
+    # the report binds again; this hand-built run never completed REVIEW, so the only
+    # remaining LG-1 problem is S6-2's review binding (real_e2e covers a reviewed run)
+    assert not ok and "test again" not in detail and "never reviewed" in detail, detail
 
 
 def test_accept_finding_requires_and_consumes_exact_token(tmp_path, monkeypatch):

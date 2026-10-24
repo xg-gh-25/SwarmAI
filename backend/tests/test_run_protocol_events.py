@@ -128,6 +128,7 @@ CASES.update({
     "session_lost": ({"ordinal": 1}, "ordinal", 2),
     "validation_report": ({"ordinal": 1}, "ordinal", 2),
     "user_stop": ({"ordinal": 1}, "ordinal", 2),
+    "review_reopen": ({"ordinal": 1}, "ordinal", 2),
     "worktree_unavailable": ({"ordinal": 1}, "ordinal", 2),
     "reflect_complete": ({"ordinal": 1}, "ordinal", 2),
     "reflect_exhausted": ({"ordinal": 1}, "ordinal", 2),

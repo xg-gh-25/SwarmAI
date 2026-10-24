@@ -159,7 +159,8 @@ def _status(row: dict[str, Any], event: Mapping[str, Any]) -> None:
         proposal["confirmed"] = True
 
 
-def _proof(row: dict[str, Any], event: Mapping[str, Any]) -> None:
+def _proof(row: dict[str, Any], event: Mapping[str, Any],
+           reports: Mapping[str, Mapping[str, Any]]) -> None:
     payload = event["payload"]
     etype, result = payload["evidence_type"], payload["result"]
     if not isinstance(payload["code_tree"], str) or len(payload["code_tree"]) != 40 \
@@ -169,7 +170,19 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise FindingError(f"{etype} proof must come from cli")
     if row["status"] not in ("open", "invalid_test"):
         raise FindingError("proof cannot replace a terminal finding state")
-    if etype == "diff_assertion":
+    if etype == "reported_test":
+        # S6-2: a test the agent ran and reported passing on this tree; R2 judges
+        # whether it shows the fix (ADEQUATE keeps it closed, TEST_INADEQUATE reopens)
+        report = reports.get(payload.get("report_event_id"))
+        if event["producer"] != "cli" or row["kind"] not in ("behavior", "contract") \
+                or result != "proven" or report is None \
+                or report["payload"].get("code_tree") != payload["code_tree"] \
+                or report["payload"].get("repo") != payload.get("repo") \
+                or not isinstance(payload.get("command"), str) or not payload["command"]:
+            raise FindingError("reported_test proof needs a passing command of a "
+                               "validation report on the proof's tree")
+        row["status"] = "closed_proven"
+    elif etype == "diff_assertion":
         if row["kind"] not in ("docs", "design", "security_policy") \
                 or row["r2_status"] != "RESOLVED" or result != "asserted" \
                 or payload.get("touches_finding") is not True:
@@ -234,9 +247,12 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
     consumed_grants: set[str] = set()
     r2_targets: set[str] = set()
     answered: set[str] = set()
+    reports: dict[str, Mapping[str, Any]] = {}
     for event in events:
         kind = event["kind"]
-        if kind == "answer":
+        if kind == "validation_report":
+            reports[event["event_id"]] = event
+        elif kind == "answer":
             answers[event["event_id"]] = event
         elif kind == "finding_occ":
             answer = answers.get(event["payload"]["answer_event_id"])
@@ -262,7 +278,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
             _status(row, event)
             answered.add(event["ckey"])
         elif kind == "proof":
-            _proof(_row(findings, event["ckey"]), event)
+            _proof(_row(findings, event["ckey"]), event, reports)
         elif kind == "land_request":
             requests[event["payload"]["request_id"]] = event["payload"]
         elif kind == "auth":

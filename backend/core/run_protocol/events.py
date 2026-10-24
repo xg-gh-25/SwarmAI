@@ -110,8 +110,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                         {"run_id": str, "profile": str, "decision_cap": int}),
     "handout": _spec("cli", ("stage", "round", "payload.expert_id", "attempt"),
                      "payload.expert_id", {"expert_id": str},
-                     # prompt: the full text, always moved into an audit blob (F-4)
-                     {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict)}),
+                     # prompt: the full text, always moved into an audit blob (F-4);
+                     # code_trees: the trees whose diff the expert was given (S6-2);
+                     # incremental_from: an incremental review's previous reviewed trees
+                     {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
+                      "code_trees": dict, "incremental_from": dict}),
     # one answer per handout: the event id derives from the handout, so a second
     # spawn of the same handout can never add a second answer (a retry needs a new
     # handout attempt)
@@ -142,7 +145,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
                    "payload.canonical_id", {"canonical_id": str, "pass": int,
                    "evidence_type": str, "code_tree": str, "result": str},
                    {"touches_finding": bool, "touches_executable": bool,
-                    "refs": list, "repo": str}),
+                    "refs": list, "repo": str,
+                    # reported_test (S6-2): the report event and the passing command
+                    "report_event_id": str, "command": str}),
     # the agent's own test report for one repo (S6-1, design usable-by-anyone §3.3.3):
     # code_tree is computed by the engine at submission, the report itself is a blob
     "validation_report": _spec("cli", ("ordinal",), "payload.repo",
@@ -230,8 +235,14 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # every human authorization binds to the CURRENT owner, not the creator.
     "owner_transfer": _spec("hook", ("ordinal",), None,
                             {"from_session": str, "to_session": str, "reason": str}),
+    # REVIEW's completion records the code it signed off on (S6-2): LG-1 lands only a
+    # change whose patch one of these recorded
     "stage_complete": _spec("cli", ("stage", "attempt"), "stage",
-                            {"stage_attempt_event_id": str}, {"degraded": bool}),
+                            {"stage_attempt_event_id": str},
+                            {"degraded": bool, "code_trees": dict, "patch_ids": dict}),
+    # TEST changed the code: the run goes back to REVIEW for an incremental review
+    # (S6-2, design usable-by-anyone §3.3.3); the engine appends it, never the agent
+    "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str}),
     "gate0_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
     "resume": _spec("cli", ("ordinal",), None, {"worktree_ready": bool}),
     # the run's infrastructure failed (conformance F11): the CLI that met it records it
@@ -361,7 +372,7 @@ def _event_contract(event: Mapping[str, Any], *, allow_missing_ckey: bool) -> st
                 or any(not isinstance(item, str) or not item.startswith("CF-") for item in ids):
             raise EventError("R2 handout requires unique canonical finding_ids")
     if kind == "validation_report":
-        if payload["stage"] not in {"build", "goal_cycle", "test"}:
+        if payload["stage"] not in {"build", "goal_cycle", "review", "test"}:
             raise EventError("validation_report stage is invalid")
         tree = payload["code_tree"]
         if len(tree) != 40 or any(char not in "0123456789abcdef" for char in tree):

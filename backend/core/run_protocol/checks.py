@@ -143,6 +143,8 @@ _SPECS = [
     _c("DC-1", "decision", "", "evaluate think plan", "decision", DOCS),
     _c("DC-2", "decision", "push", "evaluate think plan", "decision", DOCS),
     _c("RV-2", "review", "push", "review", "review", CODE),
+    # S6-2: REVIEW completes only on code a review round saw
+    _c("RV-4", "review", "stage", "review", "review", CODE),
     _c("FX-1", "fixing_spec", "", "review", "review", CODE),
 ]
 _SPECS += [
@@ -329,8 +331,24 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
         elif stage == "test" and payload.get("n_fail"):
             problems.append(f"{repo}: the TEST report has {payload['n_fail']} failed "
                             "command(s); fix them and report again")
+    if check_id == "LG-1" and not problems:
+        problems += _unreviewed_landing(context, expected)
     return _result(not problems, f"{stage} reports bind the current code" if not problems
                    else "; ".join(problems))
+
+
+def _unreviewed_landing(context: CheckContext, expected: list[str]) -> list[str]:
+    """LG-1 (S6-2): the change that lands is one REVIEW completed. Compared by patch id,
+    so a clean rebase onto a moved main keeps the binding and any edit breaks it."""
+    current = context.run.get("patch_ids")
+    reviewed = context.run.get("reviewed_patches") or []
+    if not isinstance(current, Mapping) or any(repo not in current for repo in expected):
+        return ["the run's patch is unknown"]
+    if any(all(row.get(repo) == current[repo] for repo in expected)
+           for row in reviewed if isinstance(row, Mapping)):
+        return []
+    return ["this change was never reviewed: REVIEW completed on other code (the code "
+            "changed after REVIEW); it cannot land"]
 
 
 def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[str, Any]]:
@@ -410,6 +428,15 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         )
         return _result(ok, "Gate-0 handouts have parsed answers" if ok
                        else "Gate-0 handout lacks parsed answer")
+    if check_id == "RV-4":
+        unreviewed = context.run.get("unreviewed") or {}
+        if not isinstance(unreviewed, Mapping):
+            return False, "what the last review saw is unknown"
+        rows = [f"{repo}: {', '.join(paths[:8])}" + (" …" if len(paths) > 8 else "")
+                for repo, paths in sorted(unreviewed.items()) if paths]
+        return _result(not rows, "the code is what the last review saw" if not rows
+                       else "changed since the last review (run review-start for an "
+                            "incremental review): " + "; ".join(rows))
     if check_id == "RV-1c":
         handouts = {event["payload"]["expert_id"] for event in context.events
                     if event.get("kind") == "handout" and event.get("stage") == "review"

@@ -48,6 +48,9 @@ class IntegrationRequired(EngineError):
         self.code = code
 
 
+# files whose change never needs an expert (review_start, RV-4)
+_DOC_SUFFIXES = (".md", ".txt", ".rst")
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -840,6 +843,7 @@ class RunEngine:
         flat_changed = sorted({p for paths in changed.values() for p in paths})
         run = {**self.projection(), "mode": self.contract["mode"],
                "code_trees": code_trees, "run_bases": bases, "changed_paths": flat_changed,
+               **self._review_facts(events, repos, code_trees, bases),
                "stale_closures": sorted(facts.stale_closures(
                    finding_protocol.fold(list(events), self.authority), events, code_trees)),
                "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", []),
@@ -851,6 +855,64 @@ class RunEngine:
             existing_files=existing,
             decision_documents=facts.decision_values(events, self.store.paths.blobs),
             known_refs=self.decision_refs(events))
+
+    def _review_facts(self, events: Sequence[Mapping[str, Any]], roots: Mapping[str, str],
+                      code_trees: Mapping[str, Any],
+                      bases: Mapping[str, Any]) -> dict[str, Any]:
+        """What REVIEW saw (S6-2), for RV-4 and LG-1:
+
+        - ``patch_ids``: each repo's current change as a patch id (base -> tree);
+        - ``reviewed_patches``: the patch ids every REVIEW completion recorded;
+        - ``unreviewed``: per repo, the non-doc paths that differ between the last tree
+          a review round saw (a review handout or a REVIEW completion) and the current
+          tree; unknown -> every changed path (fails closed)."""
+        memo = self.__dict__.setdefault("_review_memo", {})
+        patch_ids: dict[str, str] = {}
+        for name, root in roots.items():
+            tree, base = code_trees.get(name), bases.get(name)
+            if not tree or not base:
+                continue
+            key = ("patch", root, base, tree)
+            if key not in memo:
+                try:
+                    memo[key] = run_worktree.change_patch_id(root, base, tree)
+                except run_worktree.WorktreeError:
+                    memo[key] = None
+            if memo[key] is not None:
+                patch_ids[name] = memo[key]
+        reviewed, last = [], None
+        for event in events:
+            payload = event.get("payload") or {}
+            if event.get("stage") != "review":
+                continue
+            if event.get("kind") == "stage_complete" and isinstance(payload.get("code_trees"), dict):
+                last = payload["code_trees"]
+                if isinstance(payload.get("patch_ids"), dict):
+                    reviewed.append(payload["patch_ids"])
+            elif event.get("kind") == "handout" and isinstance(payload.get("code_trees"), dict):
+                last = payload["code_trees"]
+        unreviewed: dict[str, list[str]] = {}
+        for name, root in roots.items():
+            before, now = (last or {}).get(name), code_trees.get(name)
+            if not before or not now or before == now:
+                continue
+            key = ("names", root, before, now)
+            if key not in memo:
+                try:
+                    out = _git(root, "diff", "--name-only", "--no-renames", before, now)
+                    memo[key] = sorted(p for p in out.splitlines()
+                                       if p and not p.endswith(_DOC_SUFFIXES))
+                except EngineError:
+                    memo[key] = ["(the last reviewed tree is unreadable)"]
+            if memo[key]:
+                unreviewed[name] = memo[key]
+        return {"patch_ids": patch_ids, "reviewed_patches": reviewed,
+                "unreviewed": unreviewed, "last_reviewed_trees": dict(last or {})}
+
+    @staticmethod
+    def _patch_reviewed(context: checks.CheckContext) -> bool:
+        """The run's current change is one a REVIEW completion recorded (S6-2)."""
+        return not checks._unreviewed_landing(context, sorted(context.expected_repos))
 
     def decision_refs(self, events: Sequence[Mapping[str, Any]]) -> dict[str, Mapping[str, Any]]:
         """What a decision may cite (DC-1): this run's events, REQUIREMENTS analysis
@@ -1070,20 +1132,93 @@ class RunEngine:
             raise EngineError("review-address requires active REVIEW")
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         prior = [event for event in self.store.read_events() if event.get("kind") == "address"]
+        artifact, tested = self._resolve_reported_tests(orchestrator, artifact)
         handoff = orchestrator.record_fix_handoff(artifact, at=_now(), attempt=len(prior) + 1)
+        for finding_id, proof in tested.items():   # after the pass: no partial pass (F-9)
+            self.store.append_new(
+                writer=self.authority.writer("cli"), kind="proof", at=_now(),
+                stage="review", attempt=len(prior) + 1,
+                payload={"canonical_id": finding_id, "pass": handoff["pass"], **proof})
         roster = orchestrator.r2_roster(set(handoff["addressed"]))
         expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
         handouts = []
+        trees = self._current_code(list(self.contract["expected_repos"]))[1]
+        events = self.store.read_events()
         for expert, ids in roster.items():
             review_input = orchestrator.r2_input(
                 expert, ids, hunks=handoff["hunks"], proofs=handoff["proofs"],
                 reclassifications=handoff["reclassifications"])
+            # an R2 per address pass: after a reopen the expert rechecks again (S6-2)
+            earlier = [e for e in events if e.get("kind") == "handout"
+                       and e.get("stage") == "review" and e.get("round") == 2
+                       and e["payload"].get("expert_id") == expert]
             handouts.append(orchestrator.handout(
-                expert_id=expert, stage="review", round=2, attempt=2, at=_now(),
+                expert_id=expert, stage="review", round=2, attempt=len(earlier) + 2,
+                at=_now(),
                 expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
-                review_input=review_input, finding_ids=ids))
+                review_input=review_input, finding_ids=ids, code_trees=trees))
         self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
+
+    def _finding_repo(self, file: str) -> tuple[str, str]:
+        """The one run repo that holds *file* (a finding's path)."""
+        candidates = []
+        for name, root in self.effective_repos().items():
+            try:
+                exists = (Path(root) / file).exists()
+                tracked = _git(root, "ls-files", "--error-unmatch", "--", file) == file
+            except EngineError:
+                tracked = False
+            if exists or tracked:
+                candidates.append((name, root))
+        if len(candidates) != 1:
+            raise EngineError(f"finding file {file} resolves to {len(candidates)} repos")
+        return candidates[0]
+
+    def _resolve_reported_tests(self, orchestrator, artifact: Mapping[str, Any]):
+        """S6-2: a ``reported_test`` proof names a command of the agent's validation
+        report; the engine finds that command passing in a report of the finding's
+        repo on its CURRENT tree (``report-tests`` records one in REVIEW) and derives
+        the proof from the report. The agent supplies only the command text. Returns
+        (artifact with the derived proof for R2, {finding_id: proof payload})."""
+        items = artifact.get("items") if isinstance(artifact, Mapping) else None
+        if not isinstance(items, list):
+            return artifact, {}
+        findings = {row["canonical_id"]: row for row in orchestrator.findings()}
+        events = self.store.read_events()
+        trees = self._current_code(list(self.contract["expected_repos"]))[1]
+        out_items, tested = [], {}
+        for item in items:
+            proof = item.get("proof") if isinstance(item, Mapping) else None
+            if not isinstance(proof, Mapping) or proof.get("evidence_type") != "reported_test":
+                out_items.append(item)
+                continue
+            finding_id = item.get("finding_id")
+            row = findings.get(finding_id)
+            if row is None:
+                raise EngineError(f"{finding_id}: unknown finding")
+            if set(proof) != {"evidence_type", "command"} \
+                    or not isinstance(proof.get("command"), str) or not proof["command"]:
+                raise EngineError(f"{finding_id}: a reported_test proof is exactly "
+                                  '{"evidence_type": "reported_test", "command": "<the '
+                                  'command as written in your report>"}')
+            name, _root = self._finding_repo(row["file"])
+            found = validation_report.find_command(
+                self.store, events, repo=name, code_tree=trees.get(name) or "",
+                command=proof["command"])
+            if found is None:
+                raise EngineError(f"{finding_id}: no validation report of {name} on the "
+                                  "current code has that command passing; run it and "
+                                  "record the report with report-tests --artifact -")
+            event, report = found
+            derived = {"evidence_type": "reported_test", "code_tree": trees[name],
+                       "result": "proven", "repo": name,
+                       "report_event_id": event["event_id"], "command": proof["command"]}
+            tested[finding_id] = derived
+            out_items.append({**item, "proof": {
+                **derived, "tests_changed": report.get("tests_changed", [])[:20],
+                "rationale": str(report.get("rationale", ""))[:1500]}})
+        return {**artifact, "items": out_items}, tested
 
     @_one_operation
     def review_proof(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -1712,14 +1847,34 @@ class RunEngine:
                     self._settle(); self.write_projection()
                     return {"ok": False, "gate0": disposition, "state": self.projection()}
         context = self.check_context()
+        forced = None
+        if stage == "test" and "review" in lifecycle.PROFILE_STAGES[profile] \
+                and not self._patch_reviewed(context):
+            # TEST changed the code (S6-2, §3.3.3): back to REVIEW for an incremental
+            # review of what changed; past the cap the attempt fails instead
+            if state.get("review_reopens", 0) < lifecycle.REVIEW_REOPEN_CAP:
+                self.store.append_new(
+                    writer=self.authority.writer("cli"), kind="review_reopen", at=_now(),
+                    ordinal=NEXT, payload={"reason": "the code changed in TEST"})
+                self._settle(); self.write_projection()
+                return {"ok": False, "reopened": "review", "state": self.projection(),
+                        "error": "the code changed after REVIEW: the run is back in "
+                                 "REVIEW; run review-start for an incremental review"}
+            self.record_cap_exceeded("review_reopen", stage="test",
+                                     attempt=self._next_attempt(stage))
+            forced = {"TS-1": "the code changed after REVIEW and the run already went "
+                              f"back to REVIEW {lifecycle.REVIEW_REOPEN_CAP} times"}
         result = complete_stage(self.store, profile=profile, stage=stage,
                                 variant=variant, context=context, at=_now(),
-                                attempt=self._next_attempt(stage))
+                                attempt=self._next_attempt(stage), forced=forced)
         self._settle()
         if not result["passed"]:
             self.write_projection()
             return {"ok": False, **result, "state": self.projection()}
         payload = {"stage_attempt_event_id": result["stage_attempt_event_id"]}
+        if stage == "review":       # the code REVIEW signed off on (S6-2: LG-1, RV-4)
+            payload.update(code_trees={k: v for k, v in context.run["code_trees"].items() if v},
+                           patch_ids=dict(context.run["patch_ids"]))
         self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
         self._settle()
@@ -1734,9 +1889,11 @@ class RunEngine:
         the worktree was synced, the tests are run again on the new tree and reported
         here; LG-1 reads the latest TEST report."""
         state = self.projection()
-        if state["status"] != "active" or state["stage"] not in ("test", "deliver"):
-            raise EngineError("report-tests is for TEST or DELIVER of an active run")
-        self._record_validation_reports("test", artifact)
+        if state["status"] != "active" or state["stage"] not in ("review", "test", "deliver"):
+            raise EngineError("report-tests is for REVIEW, TEST or DELIVER of an active run")
+        # in REVIEW: the tests of a fix, for a reported_test proof (S6-2)
+        self._record_validation_reports(
+            "review" if state["stage"] == "review" else "test", artifact)
         self.write_projection()
         return {"ok": True, "state": self.projection()}
 
@@ -1912,7 +2069,10 @@ class RunEngine:
             return {"ok": False, "reviewers": [], "handouts": [], "failed": failed,
                     "error": "deterministic REVIEW checks fail; no expert is spawned until "
                              f"they pass: {failed}"}
+        if context.run.get("unreviewed"):
+            return self._incremental_review(context)
         repos = self.effective_repos()
+        trees = {name: tree for name, tree in context.run["code_trees"].items() if tree}
         changed = []
         diffs = []
         for name, root in repos.items():
@@ -1928,7 +2088,7 @@ class RunEngine:
             diffs.append(f"## {name}\n" + _git(root, "diff", "--no-ext-diff", "--no-renames",
                                                 base, tree_sha))
         source_paths = [row["path"] for row in changed if not row["is_test"]
-                        and not row["path"].endswith((".md", ".txt", ".rst"))]
+                        and not row["path"].endswith(_DOC_SUFFIXES)]
         patterns = (review.review_patterns(source_paths, "\n".join(diffs)) if source_paths
                     else {"compact": "", "triggered": [], "error": None})
         roster = review.reviewers(profile=state["profile"], changed=changed,
@@ -1967,10 +2127,65 @@ class RunEngine:
             handouts.append(orchestrator.handout(
                 expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
                 at=_now(), expert_instructions=instructions,
-                review_input=review_input))
+                review_input=review_input, code_trees=trees))
         if not handouts:
             self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
+
+    # an expert's incremental reviews per run; past it RV-4 keeps failing (S6-2)
+    _INCREMENTAL_CAP = 3
+
+    def _incremental_review(self, context: checks.CheckContext) -> dict[str, Any]:
+        """S6-2 (§3.3.3): the code changed since the last tree a review saw (TEST went
+        back to REVIEW, or an edit after R2). Review exactly diff(last reviewed tree,
+        current tree): correctness, plus each earlier R1 expert the roster would pick
+        for this diff. R1-format handouts (new findings go through address / R2)."""
+        last = context.run["last_reviewed_trees"]
+        trees = {name: tree for name, tree in context.run["code_trees"].items() if tree}
+        repos = self.effective_repos()
+        changed, diffs = [], []
+        for name in sorted(context.run["unreviewed"]):
+            root = repos[name]
+            for line in _git(root, "diff", "--numstat", "--no-renames", last[name],
+                             trees[name]).splitlines():
+                ins, delete, path = line.split("\t", 2)
+                changed.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
+                                "deletions": int(delete) if delete.isdigit() else 0,
+                                "is_test": "/tests/" in path or path.startswith("tests/")})
+            diffs.append(f"## {name} (changed since the last review)\n" + _git(
+                root, "diff", "--no-ext-diff", "--no-renames", last[name], trees[name]))
+        events = self.store.read_events()
+        r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
+              and e.get("round") == 1]
+        earlier = {e["payload"]["expert_id"] for e in r1}
+        picked = {row["id"] for row in review.reviewers(
+            profile=self.contract["profile"], changed=changed, patterns=[])}
+        roster = ["correctness"] + sorted((picked & earlier) - {"correctness"})
+        orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
+        expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
+        answered = {e["payload"]["handout_event_id"] for e in events
+                    if e.get("kind") == "answer"}
+        handouts = []
+        for expert in roster:
+            mine = [e for e in r1 if e["payload"]["expert_id"] == expert]
+            pending = [e for e in mine if e["event_id"] not in answered
+                       and e["payload"].get("code_trees") == trees]
+            if pending:
+                continue                            # this diff is already handed out
+            if sum(1 for e in mine if e["payload"].get("incremental_from")) \
+                    >= self._INCREMENTAL_CAP:
+                self.record_cap_exceeded("dispatch", stage="review",
+                                         attempt=int(mine[-1]["attempt"]))
+                continue
+            attempt = max((int(e["attempt"]) for e in mine), default=0) + 1
+            handouts.append(orchestrator.handout(
+                expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
+                expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
+                review_input="INCREMENTAL REVIEW: only the change since the last review.\n\n"
+                             + "\n\n".join(diffs),
+                code_trees=trees, incremental_from={k: last[k] for k in trees if k in last}))
+        return {"reviewers": [{"id": e, "reason": "incremental review"} for e in roster],
+                "handouts": handouts, "incremental": True}
 
     def _audit_facts(self) -> dict[str, Any]:
         """Measured inputs the audit cannot read from events (§E9.3, D5): how many repos

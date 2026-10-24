@@ -205,7 +205,7 @@ def test_k4r2_review_shows_verdicts_and_fixing_spec_carries_solution_and_plan(ri
     out = r.v1("review-address", "--artifact", r.artifact("address", {
         "pass": 1, "items": [{"finding_id": finding, "hunk": "@@ -1 +1 @@\n-x\n+y\n",
                                "cause": "operands swapped", "solution": "restore a + b",
-                               "evidence_plan": {"type": "test", "ref": "tests/test_x.py::t"}}]}))
+                               "evidence_plan": {"type": "reported_test", "ref": "pytest tests/test_x.py"}}]}))
     assert out.get("ok") is True, out
     engine = r.engine()
     text = (engine.run_dir / "FIXING_SPEC.md").read_text()

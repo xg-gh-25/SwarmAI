@@ -23,7 +23,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
-STAGES = frozenset({"build", "goal_cycle", "test"})
+# review: a fix's tests, reported for a ``reported_test`` proof (S6-2)
+STAGES = frozenset({"build", "goal_cycle", "review", "test"})
 RESULTS = ("pass", "fail", "not_run")
 MAX_COMMANDS = 50
 MAX_TESTS = 200
@@ -130,6 +131,22 @@ def latest(events: Sequence[Mapping[str, Any]], stage: str | None = None) -> dic
         if stage is None or payload.get("stage") == stage:
             out[payload.get("repo")] = dict(event)
     return out
+
+
+def find_command(store: Any, events: Sequence[Mapping[str, Any]], *, repo: str,
+                 code_tree: str, command: str) -> "tuple[dict, dict] | None":
+    """The newest report of *repo* on *code_tree* (any stage) with a ``pass`` command
+    whose text is exactly *command*: ``(event, report)``, else None (S6-2)."""
+    for event in reversed(list(events)):
+        payload = event.get("payload") or {}
+        if event.get("kind") != "validation_report" or payload.get("repo") != repo \
+                or payload.get("code_tree") != code_tree:
+            continue
+        report = read(store, event)
+        if any(row.get("command") == command and row.get("result") == "pass"
+               for row in report.get("commands", [])):
+            return dict(event), report
+    return None
 
 
 def report_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:

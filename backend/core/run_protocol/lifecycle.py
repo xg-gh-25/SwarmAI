@@ -30,7 +30,10 @@ QUALITY_BLOCK_REASONS = frozenset({
     "partial_land",
 })
 # count caps a run can hit (conformance F18); DISPATCH_CAPS bound model sessions
-CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch"})
+CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch",
+                  "review_reopen"})
+# how often TEST may send the run back to REVIEW (S6-2)
+REVIEW_REOPEN_CAP = 2
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
 # the not-landed reasons that ARE a count cap being hit
 REASON_CAPS = {"checks_exhausted": "stage_attempt", "land_conflict": "land_attempt",
@@ -121,7 +124,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
         "stage_attempts": {}, "attempt_base": {}, "open_attempt": None,
         "last_land_intent": None, "last_report_render": None,
         "land_requests": {}, "auth_grants": {},
-        "auth_consumed": {}, "expected_transition": None,
+        "auth_consumed": {}, "expected_transition": None, "review_reopens": 0,
     }
 
 
@@ -279,6 +282,24 @@ def _complete(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         _schedule(run, event, "reflecting")
         return
     _open_next(run)
+    _schedule(run, event, "active")
+
+
+def _review_reopen(run: dict[str, Any], event: Mapping[str, Any]) -> None:
+    """TEST changed the code (S6-2): back to REVIEW, which then reviews the change
+    since its last reviewed tree. Each visit gets its own stage attempts."""
+    if run["status"] != "active" or run["stage"] != "test" \
+            or "review" not in PROFILE_STAGES[run["profile"]] \
+            or run.get("open_attempt") is not None:
+        raise LifecycleError("review_reopen is only for an active TEST between attempts")
+    if run.get("review_reopens", 0) >= REVIEW_REOPEN_CAP:
+        raise LifecycleError("review_reopen cap reached")
+    run["review_reopens"] = run.get("review_reopens", 0) + 1
+    run["stages"]["test"] = "pending"
+    run["stages"]["review"] = "open"
+    run["stage"] = "review"
+    for stage in ("review", "test"):
+        run["attempt_base"][stage] = run["stage_attempts"].get(stage, 0)
     _schedule(run, event, "active")
 
 
@@ -563,6 +584,8 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         _pause(run, event)
     elif kind == "resume":
         _resume(run, event)
+    elif kind == "review_reopen":
+        _review_reopen(run, event)
     elif kind == "gate0_exhausted":
         if run["status"] != "active" or run["stage"] != "evaluate" \
                 or run["profile"] not in ("full", "bugfix", "goal") \

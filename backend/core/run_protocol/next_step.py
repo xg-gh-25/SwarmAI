@@ -81,6 +81,12 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
         return "dispatch" if dispatched else "wait", "", (
             f"spawn the {dispatched} handout(s) in this response in one parallel message"
             if dispatched else f"{len(waiting)} dispatched expert(s) have not answered yet")
+    if any(row.get("check") == "RV-4" for row in blocking):
+        # S6-2: the code changed since a review saw it (TEST sent the run back, or an
+        # edit after R2): only the change since then is reviewed
+        return "run", _cmd(engine, "pipeline_v1.py", "review-start"), \
+            "the code changed since the last review: review-start hands out an " \
+            "incremental review of that change only"
     if not blocking and (latest or dispatched == 0):
         # every answer is in (or this change needs no expert) and the checks pass
         return "run", _cmd(engine, "pipeline_v1.py", "stage-complete"), \

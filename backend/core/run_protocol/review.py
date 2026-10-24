@@ -223,7 +223,9 @@ class ReviewOrchestrator:
 
     def handout(self, *, expert_id: str, stage: str, round: int, attempt: int,
                 at: str, expert_instructions: str, review_input: str,
-                finding_ids: Sequence[str] = ()) -> dict[str, Any]:
+                finding_ids: Sequence[str] = (),
+                code_trees: Mapping[str, Any] | None = None,
+                incremental_from: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if round not in (1, 2) or not expert_id:
             raise ReviewError("invalid review handout identity")
         prompt = build_prompt(expert_id, expert_instructions, review_input)
@@ -239,6 +241,10 @@ class ReviewOrchestrator:
             if not finding_ids:
                 raise ReviewError("R2 needs a finding roster")
             payload["finding_ids"] = list(finding_ids)
+        if code_trees:          # what the expert sees: RV-4 / LG-1 bind to it (S6-2)
+            payload["code_trees"] = dict(code_trees)
+        if incremental_from:
+            payload["incremental_from"] = dict(incremental_from)
         event, _ = self.store.append_new(
             writer=self.store.authority.writer("cli"), kind="handout", at=at,
             stage=stage, round=round, attempt=attempt, payload=payload,
@@ -320,10 +326,10 @@ class ReviewOrchestrator:
                 if not isinstance(proof, Mapping):
                     raise ReviewError(f"handoff item {index} proof is malformed")
                 evidence_type = proof.get("evidence_type")
-                if evidence_type not in {None, "diff_assertion", "refuted"}:
+                if evidence_type not in {None, "diff_assertion", "refuted", "reported_test"}:
                     raise ReviewError(
-                        f"{finding_id}: a {evidence_type!r} proof cannot be recorded; name "
-                        "the test that shows the fix in your validation report")
+                        f"{finding_id}: a {evidence_type!r} proof cannot be recorded; use "
+                        "reported_test with a command of your validation report")
                 proofs[finding_id] = json.dumps(dict(proof), ensure_ascii=False, sort_keys=True)
             addressed.append(finding_id)
             hunks[finding_id] = hunk
@@ -566,7 +572,7 @@ def plain(value: Any) -> str:
     return _text(value, 800)
 
 
-EVIDENCE_TYPES = frozenset({"test", "diff_assertion", "refuted"})
+EVIDENCE_TYPES = frozenset({"reported_test", "diff_assertion", "refuted"})
 
 
 def _json_or_none(value: Any) -> Any:
