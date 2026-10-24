@@ -101,3 +101,36 @@ def test_escalation_lists_options_and_pick(monkeypatch):
 def test_prompt_drops_empty_facts_and_refs():
     msg = aa._prompt("Do it.", [("A", ""), ("B", "b")], ["", "run r"])
     assert msg == "Do it.\n\nB: b\n\nReferences: run r"
+
+
+def test_retire_proposal_says_it_removes_a_note(monkeypatch):
+    """Approving a retire removes an existing note; the card must not call it an add."""
+    import core.ddd_cultivation as dc
+    _projects(monkeypatch, ["SwarmAI"])
+    monkeypatch.setattr(dc, "read_pending_proposals", lambda ws, p: [SimpleNamespace(
+        proposal_id="proposal_r1", target_doc="TECH.md", change_type="retire",
+        target_title="asyncio.run() closes the shared loop",
+        content="[pitfall] Use asyncio.to_thread for blocking calls")])
+    it = aa._collect_cultivation(Path("/ws"))[0]
+    body, refs = _plain(it)
+    assert it.title == "Approve removing a note from SwarmAI's memory"
+    assert "add" not in it.title
+    assert it.summary == "asyncio.run() closes the shared loop"
+    assert "remove a note from the SwarmAI brain (TECH.md)" in body
+    assert "Note to remove: asyncio.run() closes the shared loop" in body
+    assert "Use asyncio.to_thread" in body
+    assert refs == "proposal proposal_r1"
+
+
+def test_rewrite_proposal_says_it_rewrites_and_shows_the_new_text(monkeypatch):
+    import core.ddd_cultivation as dc
+    _projects(monkeypatch, ["SwarmAI"])
+    monkeypatch.setattr(dc, "read_pending_proposals", lambda ws, p: [SimpleNamespace(
+        proposal_id="proposal_w1", target_doc="TECH.md", change_type="rewrite",
+        target_title="Old wording of the rule", content="[guideline] reason",
+        replacement_content="[guideline] New wording of the rule")])
+    it = aa._collect_cultivation(Path("/ws"))[0]
+    body, _ = _plain(it)
+    assert it.title == "Approve rewriting a note in SwarmAI's memory"
+    assert "Note to rewrite: Old wording of the rule" in body
+    assert "New text: New wording of the rule" in body
