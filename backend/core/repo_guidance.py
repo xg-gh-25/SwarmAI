@@ -10,7 +10,8 @@ works in. This hook injects them — product-level, inject-only, never a deny:
   ``CLAUDE.md`` and ``.swarmai/review.md`` go into ``additionalContext``;
 - once per session per repo; again only when a file's content changed — except a file
   this session wrote itself (its own text must not come back as "the repo's rules");
-- excluded: SwarmWS, and everything under the app data dir except run worktrees;
+- excluded: SwarmWS, and everything under the app data dir except run and session
+  worktrees;
 - trust: a repo bound to a DDD project (Projects/*/bindings.yaml) is labelled as that
   repo's norms (follow like CONTRIBUTING); any other repo is labelled unconfirmed: use
   its build / test / style conventions, ask the user before anything that changes how
@@ -114,7 +115,8 @@ def _compute_excluded(root: str) -> bool:
     if root == ws or root.startswith(ws + os.sep):
         return True
     if root == data or root.startswith(data + os.sep):
-        return not root.startswith(os.path.join(data, "worktrees") + os.sep)
+        return not (root.startswith(os.path.join(data, "worktrees") + os.sep)
+                    or root.startswith(os.path.join(data, "session-worktrees") + os.sep))
     return False
 
 

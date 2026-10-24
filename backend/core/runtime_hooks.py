@@ -467,7 +467,9 @@ def create_file_tracker(
 ):
     """Factory: creates a PostToolUse hook that tracks files touched during the session.
 
-    Populates ``session_context["_files_touched"]`` (a set) with file paths from
+    Populates ``session_context["_files_written"]`` (absolute real paths this session
+    wrote: the write tools and Bash write targets; read by core.shared_checkout) and
+    ``session_context["_files_touched"]`` (a set) with file paths from
     Read/Edit/Write/MultiEdit (``file_path``), NotebookEdit (``notebook_path``),
     and Bash write targets (``>``/``>>``/``tee``/``cp``/``mv`` via
     ``parse_bash_write_targets``).  Used by PreCompact injection, session
@@ -483,6 +485,16 @@ def create_file_tracker(
         if "_files_touched" not in ctx:
             ctx["_files_touched"] = set()
         ctx["_files_touched"].add(path)
+
+    def _add_written(path: str, cwd: str) -> None:
+        if not path or not isinstance(path, str):
+            return
+        try:
+            full = path if os.path.isabs(path) else os.path.join(cwd or "/", path)
+            real = os.path.realpath(os.path.expanduser(full))
+        except (OSError, ValueError):
+            return
+        ctx.setdefault("_files_written", set()).add(real)
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         tool = _extract_field(input_data, "tool_name", "")
@@ -502,6 +514,7 @@ def create_file_tracker(
                     from core.file_change_classifier import parse_bash_write_targets
                     for tgt in parse_bash_write_targets(command):
                         _add_touched(tgt)
+                        _add_written(tgt, _extract_field(input_data, "cwd", "") or "")
                 except Exception as e:  # never break the hook path
                     logger.debug("file_tracker: bash write-target parse failed: %s", e)
             return {}
@@ -514,6 +527,10 @@ def create_file_tracker(
             # Edit/Write/MultiEdit → file_path; NotebookEdit → notebook_path.
             _add_touched(tool_input.get("file_path", ""))
             _add_touched(tool_input.get("notebook_path", ""))
+            if tool != "Read":
+                cwd = _extract_field(input_data, "cwd", "") or ""
+                _add_written(tool_input.get("file_path", ""), cwd)
+                _add_written(tool_input.get("notebook_path", ""), cwd)
 
         return {}
 

@@ -214,7 +214,9 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
 - **Images:** read an image once; re-reading an unchanged one only burns tokens
   (`image_read_dedup_guard`; a Read with offset/limit still goes through).
 - **Shared checkout:** if another live session has uncommitted changes in the repo I am
-  about to change, work in my own git worktree instead and say so; otherwise edit in place.
+  about to change (a `[Shared checkout]` note names them), work in my own worktree instead
+  and say so: `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <repo>`, commit
+  there, then `land` and `remove` it. Otherwise, or when the user says to stay, edit in place.
 - **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;
   exec @ARGV' … --timeout=60`, or `gtimeout` if present): a run still going at the timeout is
   moved to the background and returns nothing. A per-test `--timeout` doesn't count. Never

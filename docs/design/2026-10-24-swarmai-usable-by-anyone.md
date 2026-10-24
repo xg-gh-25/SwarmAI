@@ -237,6 +237,14 @@ native 默认在用户的 checkout 里原地改（P1：和普通 CLI 写代码�
 - 用户随时可以说"用 worktree"。
 - 实现复用 pipeline 的 `run_worktree`（建立、依赖软链按 `.swarmai/pipeline.toml` 的 `[worktree] link`、清理），并在 AGENT.md 写明判断规则；"另一个 session 有未提交改动"的检测放在 S4b，和 P7 清理一起做。
 - SwarmAI 仓库"总是在自己的 worktree 里改"的规矩照旧写在它自己的 AGENTS.md 里。
+
+S4b 实现（2026-10-24）：
+- 谁改了什么：file tracker（PostToolUse）为每个 session 记 `_files_written`，只记写（Write / Edit / MultiEdit / NotebookEdit、Bash 的写目标），不记读。
+- 检测：`core/shared_checkout.py`，挂在和 §3.7 仓库指引一样的位置（读、Bash 之后的 PostToolUse，写之前的 PreToolUse），只注入、不拦截。本 session 第一次在某仓库工作时，取其他活跃 session 写过、位于这个仓库里的文件，用 `git status`（`GIT_OPTIONAL_LOCKS=0`，只查这些文件）确认还没提交，有就注入一段说明：哪个 session、哪些文件、怎么改用自己的 worktree。每个 session 每个仓库只提示一次；SwarmWS 和 app 数据目录不查。
+- 成本（实测）：没有别的 session 在这个仓库写过文件时，每次调用 0.17 ms，不启动 git；有的话 `git status` 结果按（仓库、文件集合）缓存 30 秒，2000 文件的仓库首查约 30 ms，之后 0.5 ms。都在 gate 线程池里跑，不占事件循环。代价是 30 秒内的状态变化可能晚一点才看到。
+- worktree：`scripts/session_worktree.py`（`"$SWARM_BACKEND_BIN" py -m scripts.session_worktree`）。`create` 在 `<app data>/session-worktrees/<name>/<repo>` 建 `session/<name>` 分支，依赖目录按 `.swarmai/pipeline.toml` 软链（复用 `run_worktree`）；`land` 要求已全部提交，rebase 到主 checkout 当前分支再 `merge --ff-only`，失败原样报告、不强制；`remove` 只在分支已合并时删 worktree 和分支，不会删未合并的工作。不放在 `<app data>/worktrees`：那里归 pipeline，清理任务会把别的东西挪走。
+- AGENT.md 的 Shared checkout 规则指向这个命令；用户说留在原地就留在原地。
+- 已知局限：只看得到同一个 daemon 里的 session（另一个终端里的 Claude Code 等看不到）；Bash 写入只认 `parse_bash_write_targets` 能解析的形式（重定向、tee、cp、mv）；提示到的时候本 session 这次的写可能已经落在主 checkout，说明里让 agent 告诉用户。
 ### 3.9 P7 清单：产品代码里认 SwarmAI 的地方（S4b，2026-10-24 盘点）
 
 盘点方法：在 `backend/` 的产品代码（522 个 `.py`，排除 tests、skills、templates）里搜 `"SwarmAI"`、`Projects/SwarmAI`、`SWARMAI_ROOT`、`_swarmai_root`、`_source_repo_root`、`source_repo`、`worktree_mode` 和写死的 checkout 路径，逐处读代码归类。

@@ -700,6 +700,21 @@ async def build_hooks(
             "repo_guidance_pre", matcher="Write|Edit|MultiEdit|NotebookEdit",
         )
 
+    # ── shared checkout (design 2026-10-24-swarmai-usable-by-anyone §3.8) ──
+    # Inject-only, never a deny: the first time this session works in a repo where
+    # ANOTHER live session has uncommitted files it wrote, a note names them and the
+    # session-worktree command (core/shared_checkout.py). Same matchers as above.
+    if session_context is not None:
+        from core.shared_checkout import create_shared_checkout_hook
+        registry.register(
+            "PostToolUse", create_shared_checkout_hook(session_context, "PostToolUse"),
+            "shared_checkout", matcher="Read|Grep|Glob|Bash",
+        )
+        registry.register(
+            "PreToolUse", create_shared_checkout_hook(session_context, "PreToolUse"),
+            "shared_checkout_pre", matcher="Write|Edit|MultiEdit|NotebookEdit",
+        )
+
     # ── PostCompact: capture the compaction summary ──────────
     # The SDK's HookEvent Literal lacks PostCompact, but the bundled CLI calls a
     # registered callback with {"trigger", "compact_summary", ...} BEFORE it emits

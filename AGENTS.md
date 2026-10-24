@@ -309,6 +309,11 @@ implementations in `security_hooks.py`). By category:
    context (`core/repo_guidance.py`); bound repos as norms, others as unconfirmed; never a
    deny. Two hooks' `hookSpecificOutput.additionalContext` on one matcher are joined, not
    overwritten (`hook_builder._merge_specific`).
+   `shared_checkout` / `shared_checkout_pre` (same matchers): the first time a session works
+   in a repo where another live session has files it wrote that git still reports as
+   uncommitted, a note names them and the session-worktree command
+   (`scripts/session_worktree.py` create / land / remove, under `<app data>/session-worktrees`);
+   inject-only, once per session per repo (`core/shared_checkout.py`, design §3.8).
 
 Every PreToolUse deny / ask is recorded by `HookRegistry.register` (not by the gate) in
 `~/.swarm-ai/logs/gate_decisions.jsonl`, with the full tool input; `python
