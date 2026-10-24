@@ -58,7 +58,6 @@ EXEMPT = [
     ("s_memory-distill/SKILL.md", "never use `python3 locked_write.py`"),  # prose
     ("s_self-evolution/SKILL.md", "Never `python3 locked_write.py`"),     # prose
     ("s_health-check/INSTRUCTIONS.md", "backend/.venv/bin/activate && python3"),
-    ("s_system-health/INSTRUCTIONS.md", "backend/.venv/bin/activate && python3"),
     ("s_swarm-release/INSTRUCTIONS.md", "cd backend && python scripts/ci_eval_gate.py"),
 ]
 

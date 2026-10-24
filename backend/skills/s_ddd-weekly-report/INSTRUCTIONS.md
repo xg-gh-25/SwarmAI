@@ -8,8 +8,7 @@ The report tells a story: what knowledge grew, what needs your decision, what's 
 ## How to Run
 
 ```bash
-cd $SWARMAI_ROOT/backend
-.venv/bin/python -c "
+"$SWARM_BACKEND_BIN" py -c "
 from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
 result = run_ddd_weekly_report(config={'window_days': 7})
 print(f'Output: {result[\"output_path\"]}')

@@ -16,8 +16,6 @@ a garbage collector that fixes what it can and only escalates genuine judgment c
 Execute the health check script:
 
 ```bash
-cd $SWARMAI_ROOT
-source backend/.venv/bin/activate
 "$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/loops_health_check.py --auto-fix --json
 ```
 

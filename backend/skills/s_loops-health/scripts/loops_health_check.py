@@ -43,9 +43,6 @@ WORKSPACE = Path(os.environ.get("SWARM_WORKSPACE", _get_app_data_dir() / "SwarmW
 CONTEXT_DIR = WORKSPACE / ".context"
 KNOWLEDGE_DIR = WORKSPACE / "Knowledge"
 PROJECTS_DIR = WORKSPACE / "Projects"
-SWARMAI_DIR = Path(os.environ.get(
-    "SWARMAI_SOURCE", Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
-))
 HISTORY_FILE = WORKSPACE / ".loops-health-history.json"
 
 # Subprocess timeout per check (PE-11)
@@ -425,18 +422,12 @@ class SelfLoopsHealthEngine:
         # K4: Codebase nav valid
         nav_section = self._extract_section(knowledge, "## Codebase Navigation", "")
         entry_points = re.findall(r"`(\w+\.(?:py|tsx?))`", nav_section)
-        if entry_points and SWARMAI_DIR.exists():
-            found = 0
-            for ep in entry_points[:10]:  # Check first 10 only (performance)
-                if list(SWARMAI_DIR.rglob(ep)):
-                    found += 1
-            pct = int(found / min(10, len(entry_points)) * 100)
-        else:
-            pct = 100
+        # (It used to rglob these names in the SwarmAI source checkout, which only XG
+        # has -- usable-by-anyone P7. Repos are per project now; this check has none.)
         self.report.findings.append(Finding(
-            id="K4", name="Codebase nav valid", dimension="knowledge",
-            status="pass" if pct > 90 else ("warn" if pct > 70 else "fail"),
-            detail=f"{pct}% of entry points verified",
+            id="K4", name="Codebase nav valid", dimension="knowledge", status="n/a",
+            detail=(f"{len(entry_points)} entry points listed; not checked against a repo"
+                    if entry_points else "No codebase navigation entries"),
         ))
 
     # ─── Dimension 4: Self-Evolution ─────────────────────────────────────────
@@ -790,7 +781,7 @@ class SelfLoopsHealthEngine:
     def _fix_cap_enforcement(self):
         """Trigger cap enforcement via distillation hook."""
         try:
-            sys.path.insert(0, str(SWARMAI_DIR / "backend"))
+            # run by "$SWARM_BACKEND_BIN" py, the backend's packages are importable
             from hooks.distillation_hook import DistillationTriggerHook
             DistillationTriggerHook._enforce_section_caps(
                 CONTEXT_DIR / "MEMORY.md", WORKSPACE
@@ -930,11 +921,13 @@ class SelfLoopsHealthEngine:
                 grep_args = []
                 for w in words:
                     grep_args.extend(["--grep", w])
-                git_result = self._git_cmd(
-                    ["git", "log", "--oneline", "--since", updated, *grep_args, "-1"],
-                    SWARMAI_DIR,
-                )
-                if git_result.strip():
+                # the project's own repos (its bindings.yaml), not a SwarmAI checkout (P7)
+                from core.ddd_bindings import governed_repo_roots
+                shipped = any(
+                    self._git_cmd(["git", "log", "--oneline", "--since", updated,
+                                   *grep_args, "-1"], repo).strip()
+                    for repo in governed_repo_roots(project_dir))
+                if shipped:
                     stale.append({"id": run_data.get("id", run_dir.name), "requirement": req[:80]})
         return stale
 

@@ -43,6 +43,11 @@ def _load_effective_1m_budget() -> int:
     """Resolve EFFECTIVE_1M_BUDGET from the canonical loader, reusing the same
     repo-discovery as the estimator. Returns the fallback if unreachable."""
     import os
+    try:  # under "$SWARM_BACKEND_BIN" py the backend is importable as is
+        from core.context_directory_loader import EFFECTIVE_1M_BUDGET  # type: ignore
+        return int(EFFECTIVE_1M_BUDGET)
+    except Exception:
+        pass
 
     marker = Path("backend") / "core" / "context_directory_loader.py"
     candidates = []
@@ -52,11 +57,6 @@ def _load_effective_1m_budget() -> int:
     candidates.extend(Path(__file__).resolve().parents)
     candidates.extend(Path.cwd().resolve().parents)
     candidates.append(Path.cwd().resolve())
-    home = Path.home()
-    candidates.extend(
-        home / rel
-        for rel in ("Desktop/SwarmAI-Workspace/swarmai", "SwarmAI-Workspace/swarmai", "swarmai")
-    )
     seen = set()
     for base in candidates:
         if base in seen:
@@ -83,6 +83,11 @@ def _load_canonical_estimator():
     Returns the estimate_tokens callable, or raises RuntimeError (fail loud).
     """
     import os
+    try:  # under "$SWARM_BACKEND_BIN" py the backend is importable as is
+        from core.context_directory_loader import ContextDirectoryLoader  # type: ignore
+        return ContextDirectoryLoader.estimate_tokens
+    except ImportError:
+        pass
 
     marker = Path("backend") / "core" / "context_directory_loader.py"
     candidates = []
@@ -98,17 +103,6 @@ def _load_canonical_estimator():
     candidates.extend(here.parents)
     candidates.extend(Path.cwd().resolve().parents)
     candidates.append(Path.cwd().resolve())
-    # 3. Last resort — a source checkout under the user's home. Needed because the
-    #    projected copy lives outside the repo (nothing above it holds backend/) and
-    #    the daemon bundle is frozen with no .py source, so a subprocess estimator
-    #    still has to reach a checkout. Derived from the home directory rather than
-    #    written out, so it holds for any account; set SWARM_REPO_ROOT to point at a
-    #    checkout kept somewhere else.
-    home = Path.home()
-    candidates.extend(
-        home / rel
-        for rel in ("Desktop/SwarmAI-Workspace/swarmai", "SwarmAI-Workspace/swarmai", "swarmai")
-    )
 
     seen = set()
     for base in candidates:

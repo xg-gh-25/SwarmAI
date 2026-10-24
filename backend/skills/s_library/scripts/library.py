@@ -22,7 +22,11 @@ from pathlib import Path
 
 
 def _bootstrap_backend() -> None:
-    """Put backend/ on sys.path by locating backend/core/library_mounts.py."""
+    """Make core.library_mounts importable: already so under "$SWARM_BACKEND_BIN" py,
+    else put a checkout's backend/ on sys.path (SWARM_REPO_ROOT, or above this file/cwd)."""
+    import importlib.util
+    if importlib.util.find_spec("core") and importlib.util.find_spec("core.library_mounts"):
+        return
     marker = Path("backend") / "core" / "library_mounts.py"
     candidates = []
     env_root = os.environ.get("SWARM_REPO_ROOT")
@@ -32,15 +36,6 @@ def _bootstrap_backend() -> None:
     candidates.extend(here.parents)
     candidates.extend(Path.cwd().resolve().parents)
     candidates.append(Path.cwd().resolve())
-    # Last resort — a checkout under the user's home. The projected copy of this
-    # skill lives outside the repo, so nothing above it holds the marker. Derived
-    # from the home directory rather than written out, so it holds for any account;
-    # set SWARM_REPO_ROOT to point at a checkout kept elsewhere.
-    home = Path.home()
-    candidates.extend(
-        home / rel
-        for rel in ("Desktop/SwarmAI-Workspace/swarmai", "SwarmAI-Workspace/swarmai", "swarmai")
-    )
     seen = set()
     for base in candidates:
         if base in seen:
@@ -51,8 +46,8 @@ def _bootstrap_backend() -> None:
             if backend not in sys.path:
                 sys.path.insert(0, backend)
             return
-    print("ERROR: could not locate backend/core/library_mounts.py — run inside the "
-          "SwarmAI repo/workspace (or set SWARM_REPO_ROOT).", file=sys.stderr)
+    print("ERROR: core.library_mounts is not importable — run this script with "
+          "\"$SWARM_BACKEND_BIN\" py (or set SWARM_REPO_ROOT).", file=sys.stderr)
     sys.exit(2)
 
 

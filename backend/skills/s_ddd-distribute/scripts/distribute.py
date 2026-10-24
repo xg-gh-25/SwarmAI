@@ -24,27 +24,23 @@ from pathlib import Path
 # exist and the agent-executed copy dies with ImportError (meta-review finding). So: walk
 # first, then fall back to explicit, discoverable roots.
 def _add_backend_to_path() -> None:
+    import importlib.util
+    # Run by "$SWARM_BACKEND_BIN" py, the backend's packages are already importable.
+    if importlib.util.find_spec("core") and importlib.util.find_spec("core.ddd_packager"):
+        return
     here = Path(__file__).resolve()
     candidates = [p for p in here.parents if (p / "core" / "ddd_packager.py").is_file()]
     # Explicit override wins for non-standard layouts / containers.
     env_root = os.environ.get("SWARMAI_BACKEND")
     if env_root:
         candidates.append(Path(env_root))
-    # Projected-copy fallbacks: the workspace sits at <ws>/.claude/skills/<skill>/scripts/,
-    # so the repo is not an ancestor. Try the known checkout locations, cheapest first.
-    for guess in (
-        Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai" / "backend",
-        Path.home() / "swarmai" / "backend",
-        Path("/opt/swarmai/backend"),
-    ):
-        candidates.append(guess)
     for cand in candidates:
         if (cand / "core" / "ddd_packager.py").is_file():
             sys.path.insert(0, str(cand))
             return
     raise SystemExit(
-        "ERROR: cannot locate the swarmai backend/ root (needed for core.ddd_packager). "
-        "Set SWARMAI_BACKEND=/path/to/swarmai/backend and re-run."
+        "ERROR: core.ddd_packager is not importable. Run this script with "
+        "\"$SWARM_BACKEND_BIN\" py, or set SWARMAI_BACKEND=/path/to/backend."
     )
 
 
