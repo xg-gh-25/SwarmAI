@@ -1784,8 +1784,29 @@ body {
   color: transparent;
 }
 .welcome-card-bar { background: linear-gradient(var(--color-brand-hi), var(--color-brand)); }
+/* The Welcome bee (WelcomeScreen useWelcomeBee + welcomeBee.ts): positioned in
+   the logo's coordinates; the flight is a WAAPI transform animation, the landed
+   spot is the CSS transform below (= the flight's last keyframe). Wings flap and
+   the body bobs only while flying; once landed nothing animates. */
+.welcome-bee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  width: 26px;
+  height: 23px;
+  pointer-events: none;
+  will-change: transform;
+}
+.welcome-bee--landed { transform: translate(40px, -16px); }
+.welcome-bee-bob { display: block; }
+.welcome-bee--flying .welcome-bee-bob { animation: streaming-bee-bob 1s ease-in-out infinite; }
+.welcome-bee .streaming-bee-wing { transform-box: fill-box; transform-origin: 50% 100%; }
+.welcome-bee--flying .streaming-bee-wing { animation: streaming-bee-flap 0.12s ease-in-out infinite alternate; }
+.welcome-bee--flying .streaming-bee-wing--back { animation-delay: 0.05s; }
+.welcome-bee--landed .streaming-bee-wing { transform: scaleY(0.55); opacity: 0.7; }
 @keyframes welcome-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes welcome-lit { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: 0.55; } }
 @media (prefers-reduced-motion: reduce) {
-  .welcome-rise, .welcome-comb .lit { animation: none; }
+  .welcome-rise, .welcome-comb .lit, .welcome-bee * { animation: none; }
 }

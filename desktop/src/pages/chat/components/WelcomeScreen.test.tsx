@@ -14,7 +14,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 const fetchAttention = vi.fn();
@@ -33,6 +33,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }
 
 import { WelcomeScreen as WelcomeScreenImpl } from './WelcomeScreen';
 import { useAttentionQueue } from '../../../hooks/useAttentionQueue';
+import { landedTransform } from './welcomeBee';
 
 // Extra props (onFocusClick / onItemClick) are passed on purpose: the old screen
 // took them and sent on click; the new one must ignore them.
@@ -130,5 +131,101 @@ describe('WelcomeScreen v2', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId('welcome-needs')).toBeNull();
     expect(screen.getByTestId('welcome-wordmark')).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The bee: flies in once (3.6s), lands on the logo; hovering the landed logo
+// sends it on one 2.6s lap. Reduced motion / no WAAPI / a hidden tab: it just
+// sits on the landing spot and nothing animates.
+// ---------------------------------------------------------------------------
+
+describe('WelcomeScreen bee', () => {
+  type FakeAnim = { cancel: ReturnType<typeof vi.fn>; onfinish: (() => void) | null };
+  let anims: Array<{ frames: Keyframe[]; opts: KeyframeAnimationOptions; a: FakeAnim }>;
+  const origAnimate = (HTMLElement.prototype as { animate?: unknown }).animate;
+  const origRect = HTMLElement.prototype.getBoundingClientRect;
+  const origMatch = window.matchMedia;
+
+  function useAnimate(width = 800) {
+    anims = [];
+    (HTMLElement.prototype as { animate?: unknown }).animate = function (frames: Keyframe[], opts: KeyframeAnimationOptions) {
+      const a: FakeAnim = { cancel: vi.fn(), onfinish: null };
+      anims.push({ frames, opts, a });
+      return a;
+    };
+    HTMLElement.prototype.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width, height: 600, right: width, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  }
+  function reducedMotion(on: boolean) {
+    window.matchMedia = ((q: string) => ({
+      matches: on && q.includes('reduce'), media: q,
+      addEventListener: () => {}, removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    fetchAttention.mockResolvedValue({ items: [], counts: { blocking: 0, review: 0 } });
+    reducedMotion(false);
+  });
+  afterEach(() => {
+    (HTMLElement.prototype as { animate?: unknown }).animate = origAnimate;
+    HTMLElement.prototype.getBoundingClientRect = origRect;
+    window.matchMedia = origMatch;
+  });
+
+  const bee = () => screen.getByTestId('welcome-bee');
+
+  it('flies in once on mount (3.6s) and ends exactly on the landing spot', async () => {
+    useAnimate();
+    renderWelcome();
+    expect(anims).toHaveLength(1);
+    expect(anims[0].opts.duration).toBe(3600);
+    expect(anims[0].frames[anims[0].frames.length - 1].transform).toBe(landedTransform);
+    expect(bee().className).toContain('welcome-bee--flying');
+    act(() => anims[0].a.onfinish?.());
+    expect(bee().className).toContain('welcome-bee--landed');
+    expect(bee().className).not.toContain('welcome-bee--flying');
+  });
+
+  it('hovering the landed logo sends it on one 2.6s lap; hovering mid-flight does not', () => {
+    useAnimate();
+    renderWelcome();
+    fireEvent.mouseEnter(screen.getByTestId('welcome-logo'));
+    expect(anims).toHaveLength(1);                     // still flying in: ignored
+    act(() => anims[0].a.onfinish?.());
+    fireEvent.mouseEnter(screen.getByTestId('welcome-logo'));
+    expect(anims).toHaveLength(2);
+    expect(anims[1].opts.duration).toBe(2600);
+    expect(anims[1].frames[0].transform).toBe(landedTransform);
+  });
+
+  it('reduced motion: no flight, no lap, the bee sits on the logo', () => {
+    useAnimate();
+    reducedMotion(true);
+    renderWelcome();
+    fireEvent.mouseEnter(screen.getByTestId('welcome-logo'));
+    expect(anims).toHaveLength(0);
+    expect(bee().className).toContain('welcome-bee--landed');
+  });
+
+  it('a hidden tab (zero width) does not fly; it is already landed when shown', () => {
+    useAnimate(0);
+    renderWelcome();
+    expect(anims).toHaveLength(0);
+    expect(bee().className).toContain('welcome-bee--landed');
+  });
+
+  it('without Web Animations (jsdom) the bee renders landed and nothing throws', () => {
+    (HTMLElement.prototype as { animate?: unknown }).animate = undefined;
+    renderWelcome();
+    expect(bee().className).toContain('welcome-bee--landed');
+  });
+
+  it('unmounting mid-flight cancels the animation', () => {
+    useAnimate();
+    const { unmount } = renderWelcome();
+    unmount();
+    expect(anims[0].a.cancel).toHaveBeenCalled();
   });
 });

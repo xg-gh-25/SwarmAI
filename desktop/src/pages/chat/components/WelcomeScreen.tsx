@@ -10,16 +10,21 @@
  * - No send: a row or "Open all" opens the Needs You overlay; nothing is sent.
  * - Durable: an empty queue is one calm line; a failed read hides the card.
  * - Top-aligned (no vertical centring), so a late read never moves the hero.
+ * - The streaming bee (same drawing) flies in once (3.6s) and lands on the logo;
+ *   hovering the landed logo sends it on one lap. Geometry in welcomeBee.ts.
  *
  * @exports WelcomeScreen
  */
-import React from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { overlayQuery } from '../../../components/layout/overlayQueries';
 import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../../services/attention';
 import { dispatchUiCommand } from '../../../utils/uiCommands';
+import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
 import { tf } from '../tf';
+import { BeeGlyph } from './StreamingBee';
+import { FLIGHT_MS, LAP_MS, flightKeyframes } from './welcomeBee';
 
 const MAX_ROWS = 3;
 
@@ -174,19 +179,69 @@ function NeedsYouCard() {
 }
 
 // ---------------------------------------------------------------------------
+// Bee — the same drawing as the streaming bee, but it LANDS: the streaming bee
+// never lands (a running turn), this one flies in once and settles on the logo
+// (ready). Hovering the landed logo sends it on one lap. Reduced motion, a hidden
+// tab or no Web Animations: it just sits on the logo. Nothing runs once landed.
+// ---------------------------------------------------------------------------
+
+function useWelcomeBee(rootRef: React.RefObject<HTMLDivElement | null>) {
+  const reduced = usePrefersReducedMotion();
+  const beeRef = useRef<HTMLSpanElement>(null);
+  const logoRef = useRef<HTMLDivElement>(null);
+  const anim = useRef<Animation | null>(null);
+  const [flying, setFlying] = useState(false);
+
+  const fly = useCallback((kind: 'in' | 'lap') => {
+    const bee = beeRef.current;
+    const root = rootRef.current?.getBoundingClientRect();
+    const logo = logoRef.current?.getBoundingClientRect();
+    if (reduced || !bee || typeof bee.animate !== 'function' || !root || !logo || root.width === 0) return;
+    // Enter from just past the screen's left edge, 40px below its top.
+    const start = { x: root.left - logo.left - 40, y: root.top + 40 - logo.top };
+    anim.current?.cancel();
+    const a = bee.animate(flightKeyframes(kind, start), {
+      duration: kind === 'in' ? FLIGHT_MS : LAP_MS, easing: 'linear', fill: 'forwards',
+    });
+    anim.current = a;
+    setFlying(true);
+    a.onfinish = () => setFlying(false);
+  }, [reduced, rootRef]);
+
+  // Layout effect: the first keyframe applies before paint, so the bee never
+  // flashes on the landing spot before taking off.
+  useLayoutEffect(() => {
+    fly('in');
+    return () => { anim.current?.cancel(); anim.current = null; };
+    // once per mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (reduced && anim.current) { anim.current.cancel(); anim.current = null; setFlying(false); }
+  }, [reduced]);
+
+  const onLogoEnter = reduced ? undefined : () => { if (!flying) fly('lap'); };
+  return { beeRef, logoRef, flying, onLogoEnter };
+}
+
+// ---------------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------------
 
-export const WelcomeScreen: React.FC = () => (
+export const WelcomeScreen: React.FC = () => {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { beeRef, logoRef, flying, onLogoEnter } = useWelcomeBee(rootRef);
+  return (
   // `chat-scroll-gutter` (index.css): the same overflow + side gutters as the
   // transcript scroller, so this column lines up with the composer below it.
-  <div className="relative flex flex-col items-center h-full chat-scroll-gutter">
+  <div ref={rootRef} className="relative flex flex-col items-center h-full chat-scroll-gutter">
     <Honeycomb />
     {/* The app-wide `chat-column`: the same width as the transcript and composer,
         so nothing changes width when the first message replaces this screen. */}
     <div className="relative chat-column flex flex-col pt-9 pb-4">
       <div className="welcome-rise flex flex-col items-center text-center mb-[26px] select-none">
-        <div className="relative w-[60px] h-[60px] mb-3.5">
+        <div ref={logoRef} data-testid="welcome-logo" onMouseEnter={onLogoEnter} className="relative w-[60px] h-[60px] mb-3.5">
           <span className="welcome-glow" aria-hidden="true" />
           <img
             src="/swarm-avatar.svg"
@@ -194,6 +249,14 @@ export const WelcomeScreen: React.FC = () => (
             draggable={false}
             className="welcome-logo relative w-[60px] h-[60px] rounded-2xl"
           />
+          <span
+            ref={beeRef}
+            data-testid="welcome-bee"
+            aria-hidden="true"
+            className={`welcome-bee ${flying ? 'welcome-bee--flying' : 'welcome-bee--landed'}`}
+          >
+            <span className="welcome-bee-bob"><BeeGlyph /></span>
+          </span>
         </div>
         <h1 data-testid="welcome-wordmark" className="text-display font-semibold tracking-[-0.01em] text-[var(--color-text)]">
           SwarmAI
@@ -206,6 +269,7 @@ export const WelcomeScreen: React.FC = () => (
       <NeedsYouCard />
     </div>
   </div>
-);
+  );
+};
 
 export default WelcomeScreen;

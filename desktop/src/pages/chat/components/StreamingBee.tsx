@@ -16,7 +16,7 @@
  * mounted role=status, polite region that the text enters). All motion is CSS
  * keyframes on transform/opacity in index.css (`.streaming-bee*`).
  *
- * @exports StreamingBee, StreamingBeeProps
+ * @exports StreamingBee, StreamingBeeProps, BeeGlyph
  */
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
@@ -75,8 +75,9 @@ export function StreamingBee({ content, sessionId }: StreamingBeeProps) {
   );
 }
 
-/** The bee, facing right; `.streaming-bee-fly` mirrors it on the way back. */
-function BeeGlyph() {
+/** The bee, facing right; `.streaming-bee-fly` mirrors it on the way back. Shared
+ *  with the Welcome screen bee (its wings animate under `.welcome-bee--flying`). */
+export function BeeGlyph() {
   return (
     <svg width="26" height="23" viewBox="0 0 22 20" aria-hidden="true" focusable="false">
       <g className="streaming-bee-wing">

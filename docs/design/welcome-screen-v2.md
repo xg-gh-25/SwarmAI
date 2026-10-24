@@ -48,6 +48,15 @@ shows what is waiting for the user, and nothing else. Mockup agreed 2026-10-24
   must still work as a chat start).
 - A faint honeycomb pattern behind the hero, radially masked; a few cells light
   once on mount (~1.1 s, then still; off under `prefers-reduced-motion`).
+- **The bee** (added 2026-10-24, mockup approved at 3.6 s with hover): the same
+  drawing as the streaming bee (`BeeGlyph`), but it LANDS — the streaming bee never
+  lands (a running turn); this one flies in once (3.6 s: soft start, slow approach,
+  a short hover, touchdown) and settles on the logo's top-right corner (ready).
+  Hovering the landed logo sends it on one 2.6 s lap; hovering mid-flight does
+  nothing. Reduced motion, a hidden tab (zero width) or no Web Animations: it just
+  sits on the logo. Once landed nothing animates. Geometry is pure
+  (`welcomeBee.ts`: Catmull-Rom waypoints in logo coordinates, re-sampled by arc
+  length); the flight is a WAAPI `transform` animation — no CSS offset-path.
 
 **One source for the queue.** The Welcome card reads `overlayQuery.needsYou()`
 (react-query key `['overlay','needs-you']`). `useAttentionQueue` (the pill's 30 s
