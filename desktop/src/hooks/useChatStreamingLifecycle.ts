@@ -3425,40 +3425,6 @@ export function useChatStreamingLifecycle(
             return;
           }
 
-          // CONTEXT_TOO_LARGE: Backend circuit breaker triggered — session context
-          // too large for reliable inference within timeout. Stop streaming, show
-          // persistent warning with "New Tab" guidance. Not a transient error.
-          if (event.code === 'CONTEXT_TOO_LARGE') {
-            console.log('[StreamHandler] CONTEXT_TOO_LARGE — circuit breaker activated', { capturedTabId });
-            const ctlStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-            if (ctlStore) ctlStore.endStreaming();
-            setLocalSending(false, capturedTabId ?? undefined);
-            incrementStreamGen();
-            if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
-            // Terminal idle path with no following `result` event — the 15s
-            // reconcile loop is gated to streaming tabs, so an idle circuit-breaker
-            // tab is skipped. Schedule a turn-end reconcile so any assistant content
-            // the backend persisted before tripping the breaker is repaired from DB
-            // (reconcile-gap; phase-gated + debounced, harmless if nothing to fix).
-            {
-              const ctlSid = event.sessionId || (event as unknown as Record<string, unknown>).session_id as string;
-              scheduleTurnEndReconcile(ctlSid, capturedTabId);
-            }
-            // Surface as a persistent context warning (reuses existing banner infra)
-            const warningForTooLarge: ContextWarning = {
-              level: 'critical',
-              pct: 100,
-              tokensEst: 0,
-              message: event.message ?? 'Session context too large. Start a new tab for fresh context.',
-            };
-            const tabState = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
-            if (tabState) tabState.contextWarning = warningForTooLarge;
-            if (!capturedTabId || capturedTabId === activeTabIdRef.current) {
-              setContextWarning(warningForTooLarge);
-            }
-            return;
-          }
-
           // SESSION_BUSY: the session is running another turn. The server KEPT
           // the message (its row is pending, `pendingId`; the send's `accepted`
           // receipt came first) and delivers it when the session is idle: the

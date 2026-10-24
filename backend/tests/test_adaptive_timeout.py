@@ -1,9 +1,7 @@
-"""Tests for adaptive streaming timeout and circuit breaker.
+"""Tests for the adaptive streaming timeout.
 
 Verifies:
 - AC1: Timeout scales with context size (2M → ≥600s)
-- AC2: Circuit breaker stops retry after 2 consecutive timeouts on high context
-- AC3: CONTEXT_TOO_LARGE event yielded
 - AC5: Normal sessions (<500K) keep 300s timeout
 """
 
@@ -101,51 +99,3 @@ class TestInitTimeoutResumeFloor:
         init = unit._compute_init_timeout()
         assert init >= 180.0
         assert init == unit._compute_message_timeout()  # proves not the fixed floor
-
-
-class TestCircuitBreaker:
-    """AC2 + AC3: Circuit breaker stops retry and emits event."""
-
-    def test_high_context_2x_timeout_breaks(self):
-        """AC2: >1M + 2 consecutive timeouts → should break retry."""
-        from core.session_unit import should_circuit_break_timeout
-
-        # 2 consecutive timeouts, high context
-        result = should_circuit_break_timeout(
-            consecutive_timeouts=2,
-            context_tokens=1_500_000,
-        )
-        assert result is True
-
-    def test_low_context_2x_timeout_continues(self):
-        """AC5: <1M + 2 timeouts → should NOT break (normal retry behavior)."""
-        from core.session_unit import should_circuit_break_timeout
-
-        result = should_circuit_break_timeout(
-            consecutive_timeouts=2,
-            context_tokens=800_000,
-        )
-        assert result is False
-
-    def test_high_context_1x_timeout_continues(self):
-        """Single timeout even on high context → let it retry once."""
-        from core.session_unit import should_circuit_break_timeout
-
-        result = should_circuit_break_timeout(
-            consecutive_timeouts=1,
-            context_tokens=1_000_000,
-        )
-        assert result is False
-
-    def test_context_too_large_event_structure(self):
-        """AC3: The error event has required fields."""
-        from core.session_unit import build_context_too_large_event
-
-        event = build_context_too_large_event(
-            context_tokens=1_500_000,
-            consecutive_timeouts=2,
-        )
-        assert event["type"] == "error"
-        assert event["code"] == "CONTEXT_TOO_LARGE"
-        assert "1500K" in event["message"] or "1,500K" in event["message"]
-        assert event["recoverable"] is True

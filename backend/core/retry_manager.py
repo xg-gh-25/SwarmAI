@@ -462,26 +462,6 @@ class RetryManager:
             else:
                 _consecutive_timeouts = 0
 
-            # ── Circuit breaker: stop retrying if structurally doomed ──
-            # High context + repeated timeouts = model inference time exceeds
-            # our timeout cap. Retrying produces the same result every time.
-            # NOTE: This check is intentionally BEFORE the abandon-continuation
-            # injection below. For >1M context sessions, injecting 30K more
-            # tokens is counterproductive — the session is structurally doomed
-            # regardless of context preservation. The circuit breaker emits
-            # CONTEXT_TOO_LARGE and stops; no injection occurs.
-            context_tokens = getattr(self, "_last_known_context_tokens", 0) or 0
-            if session_unit_mod.should_circuit_break_timeout(_consecutive_timeouts, context_tokens):
-                logger.warning(
-                    "session_unit.circuit_breaker session_id=%s "
-                    "context=%d tokens, consecutive_timeouts=%d — "
-                    "stopping retry (structurally doomed)",
-                    self._parent.session_id, context_tokens, _consecutive_timeouts,
-                )
-                yield session_unit_mod.build_context_too_large_event(context_tokens, _consecutive_timeouts)
-                # Exit retry loop — let session go IDLE, user sees the error
-                break
-
             # After 2 consecutive timeouts with --resume, the resume target
             # is likely broken.  Abandon resume and start fresh.
             # Before abandoning, attempt to inject an enriched conversation

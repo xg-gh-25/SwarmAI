@@ -292,46 +292,6 @@ def _get_streaming_count() -> int:
 DUMB_SPAWN_TIMEOUT_SECONDS: float = 120.0
 
 
-# ── Streaming timeout resilience (2026-05-19) ────────────────────
-# Circuit breaker for high-context timeout dead loops.
-# See: Knowledge/Designs/2026-05-19-streaming-timeout-resilience-design.md
-
-CIRCUIT_BREAKER_CONTEXT_THRESHOLD: int = 1_000_000  # tokens (must be above adaptive timeout kick-in at 900K)
-
-
-def should_circuit_break_timeout(
-    consecutive_timeouts: int,
-    context_tokens: int,
-) -> bool:
-    """Return True if retry is structurally doomed (should stop retrying).
-
-    High context (>800K tokens) + 2 consecutive timeouts = model inference
-    time exceeds timeout cap. Retrying will produce the same result.
-    """
-    return (
-        consecutive_timeouts >= 2
-        and context_tokens > CIRCUIT_BREAKER_CONTEXT_THRESHOLD
-    )
-
-
-def build_context_too_large_event(
-    context_tokens: int,
-    consecutive_timeouts: int,
-) -> dict:
-    """Build SSE error event for CONTEXT_TOO_LARGE condition."""
-    return {
-        "type": "error",
-        "code": "CONTEXT_TOO_LARGE",
-        "message": (
-            f"Session context is very large ({context_tokens // 1000}K tokens). "
-            f"Model inference timed out {consecutive_timeouts}x. "
-            f"Recommendation: start a new tab for fresh context, "
-            f"or send a shorter follow-up message."
-        ),
-        "recoverable": True,
-    }
-
-
 def _get_children(pid: int) -> list[int]:
     """Get direct child PIDs via ``pgrep -P``. Best-effort."""
     try:
@@ -2017,7 +1977,7 @@ class SessionUnit:
     # force-killed REGARDLESS of CPU (a busy-loop that pegs CPU forever would
     # never be flagged 'wedged'). Per-STREAMING-entry (reset each attempt);
     # total across retries is separately bounded by retry_manager
-    # MAX_RETRY_ATTEMPTS + should_circuit_break_timeout. Generous (> longest
+    # MAX_RETRY_ATTEMPTS. Generous (> longest
     # legit tool-free inference) so genuine long thinking is not killed.
     TOOL_FREE_HARD_CEILING_S: float = 1800.0  # 30 min
 
