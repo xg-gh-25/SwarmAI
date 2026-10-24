@@ -228,11 +228,11 @@ implementations in `security_hooks.py`). By category:
    patches — to governed context files), the `commit_gate` group (Bash, registered before
    `dangerous_command_gate`, members in order): `run_amend_gate` (in this session's active run,
    denies `git commit --amend` and points at the run's own landing (`pipeline_v1.py land --message`) instead of letting
-   `dangerous_command_gate` park the run on an approval prompt), `active_run_commit_gate` (files a live v1 run
-   changed, read from its signed code facts (`RunEngine.owned_paths`) for every run whose
-   contract repo roots or worktrees hold a committed path, land only through the run's
-   landing; it denies when such a run cannot be read, or when `git -C` / `--git-dir`
-   retargets another repo); the others fail open. Native commits are never blocked:
+   `dangerous_command_gate` park the run on an approval prompt), `active_run_commit_gate` (the run's own signed
+   owner session (`RunEngine.owner_session`) may not hand-commit files that run changed
+   (`RunEngine.owned_paths`) or its REPORT: they land only through the run's landing; any
+   other session, an unreadable run, or a `git -C` / `--git-dir` retarget gets an allow with
+   a note naming the run); the others fail open. Native commits are never blocked:
    `direct_commit_gate` and `adversarial_commit_gate` were removed (same design, §3.4); in
    native mode the agent decides which review experts a change needs (AGENT.md R2). Pipeline v1 review round limits and parallel waves are
    enforced by signed `handout` / `answer` events in `core/run_protocol/`, not a

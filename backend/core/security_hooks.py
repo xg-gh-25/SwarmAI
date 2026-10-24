@@ -3217,25 +3217,23 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
     return out
 
 
-def _active_run_ownership(touching: "list[tuple[str, str]]") -> "tuple[set, set]":
-    """(real paths owned by those runs that are not terminal, their run ids). Each
-    run's state and paths come from the run itself (``RunEngine``: the signed events'
-    lifecycle, its contract, its code). A run that cannot be read raises: the caller
-    then refuses the commit rather than treat an unreadable run as owning nothing."""
+def _active_run_ownership(touching: "list[tuple[str, str]]") -> "dict[str, tuple[str, set]]":
+    """{run_id: (signed owner session, real paths it owns)} for those runs that are not
+    terminal. Each run's state, owner and paths come from the run itself (``RunEngine``:
+    the signed events' lifecycle and owner transfers, its contract, its code). A run
+    that cannot be read raises; the caller then allows the commit with a note."""
     from config import get_app_data_dir
     from core.run_protocol import lifecycle
     from core.run_protocol.engine import RunEngine
-    owned: set = set()
-    ids: set = set()
+    out: dict = {}
     data_dir = get_app_data_dir()
     for project, run_id in touching:
         engine = RunEngine.load(data_dir=data_dir, workspace=_ACTIVE_RUN_GLOB_ROOT,
                                 project=project, run_id=run_id)
         if engine.projection()["status"] in lifecycle.TERMINAL:
             continue
-        ids.add(run_id)
-        owned |= engine.owned_paths()
-    return owned, ids
+        out[run_id] = (engine.owner_session(), engine.owned_paths())
+    return out
 
 
 # A run's review deliverable (B) lives at <repo>/.aidlc/deliverables/<run_id>/ in
@@ -3268,11 +3266,21 @@ def active_run_commit_deny_text(offending: "list[str]", run_ids: "list[str]") ->
 
 
 def create_active_run_commit_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate that DENYs an agent `git commit` whose pending
-    paths are an ACTIVE v1 run's code (``_active_run_ownership``) or its reserved
-    REPORT, routing it to the run's ``land``. Prevents the code/REPORT split.
-    session_context is accepted for registration symmetry (unused — ownership is
-    global across runs, not session-scoped)."""
+    """Factory: PreToolUse (Bash) gate that DENYs a `git commit` by an ACTIVE v1 run's
+    own owner session (its signed owner, ``RunEngine.owner_session``) whose pending
+    paths are that run's code or its reserved REPORT, routing it to the run's ``land``.
+    Prevents the code/REPORT split inside a run the user started.
+
+    Native work is never blocked (design 2026-10-24-swarmai-usable-by-anyone §3.4):
+    another session committing a run's files, a session with no id, a run that cannot
+    be read, and a commit that retargets another repo are all ALLOWED, with an
+    ``additionalContext`` note naming the run. session_context carries the live app
+    session id in ``sdk_session_id`` (read at call time)."""
+
+    def _allow(note: str) -> dict:
+        return {"decision": "approve", "hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "allow",
+            "additionalContext": note}}
 
     async def _gate(
         input_data: dict[str, Any],
@@ -3306,13 +3314,11 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
         # nothing to bind → fail-open approve. A retarget to another repo that cannot be
         # bound is refused (R1 review r1): it may be a run's repo.
         if pending is _PENDING_CROSS_REPO:
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "git commit → DENY: this commit points git at another repository "
-                    "(-C / --git-dir / --work-tree) than the one it runs in, so its files "
-                    "cannot be checked against active pipeline runs. Run the commit from "
-                    "inside that repository instead (`cd <repo> && git commit …`).")}}
+            return _allow(
+                "Note: this commit points git at another repository (-C / --git-dir / "
+                "--work-tree) than the one it runs in, so it was not checked against active "
+                "pipeline runs. If that repository belongs to a run you are driving, land "
+                "the run's code with the run's own `land` instead of committing it by hand.")
         if pending is None or not pending:
             return {"decision": "approve"}
         if not isinstance(pending, set):
@@ -3323,42 +3329,54 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
                 executors.run_in("gate", _runs_touching, pending),
                 timeout=_GATE_COVERAGE_TIMEOUT,
             )
-        except _UnreadableContract as exc:   # its repos are unknown: refuse, never skip
-            logger.warning("active_run_commit_gate: contract of %s unreadable — refusing",
+        except _UnreadableContract as exc:   # its repos are unknown: allow, say so
+            logger.warning("active_run_commit_gate: contract of %s unreadable — allowing",
                            exc.run_id)
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"git commit → DENY: pipeline run {exc.run_id} has a protected contract "
-                    "that cannot be read, so which repositories it owns is unknown. Check "
-                    f"the run (`python backend/scripts/pipeline_v1.py status --project "
-                    f"<project> --run-id {exc.run_id}`) and abandon it if it is broken.")}}
+            return _allow(
+                f"Note: pipeline run {exc.run_id} has a protected contract that cannot be "
+                "read, so this commit was not checked against it. If you are driving that "
+                "run, check it (`status`) and abandon it if it is broken.")
         except Exception:
             logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
             return {"decision": "approve"}
         if not touching:
             return {"decision": "approve"}
         try:
-            owned, run_ids = await asyncio.wait_for(
+            runs = await asyncio.wait_for(
                 executors.run_in("gate", _active_run_ownership, touching),
                 timeout=_GATE_COVERAGE_TIMEOUT * 2,
             )
         except Exception as exc:  # a run this commit touches could not be read in time
             names = ", ".join(rid for _p, rid in touching[:3])
-            logger.warning("active_run_commit_gate: runs %s unreadable (%r) — refusing",
+            logger.warning("active_run_commit_gate: runs %s unreadable (%r) — allowing",
                            names, exc)
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse", "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"git commit → DENY: this commit touches the code of pipeline run(s) "
-                    f"{names}, whose state could not be read just now ({type(exc).__name__}). "
-                    "Retry the commit; if it keeps failing, check the run with "
-                    "`python backend/scripts/pipeline_v1.py status --project <project> "
-                    "--run-id <run_id>`.")}}
-        reports = _active_run_deliverables(pending, run_ids)
-        offending = sorted({*(p for p in pending if p in owned), *reports})
+            return _allow(
+                f"Note: this commit touches the code of pipeline run(s) {names}, whose "
+                f"state could not be read just now ({type(exc).__name__}). If you are "
+                "driving that run, land its code with the run's own `land` instead.")
+        sid = session_context.get("sdk_session_id", "") or ""
+        mine: dict = {rid: paths for rid, (owner, paths) in runs.items() if sid and owner == sid}
+        theirs: dict = {rid: paths for rid, (owner, paths) in runs.items() if rid not in mine}
+
+        def _hits(group: dict) -> "tuple[list, list]":
+            owned = set().union(*group.values()) if group else set()
+            reports = _active_run_deliverables(pending, set(group))
+            return sorted({*(p for p in pending if p in owned), *reports}), sorted(group)
+
+        other_hits, other_ids = _hits(theirs)
+        offending, own_ids = _hits(mine)
         if not offending:
+            if other_hits:
+                hit_ids = [rid for rid in other_ids
+                           if any(p in theirs[rid] for p in other_hits)
+                           or _active_run_deliverables(other_hits, {rid})]
+                return _allow(
+                    "Note: this commit includes file(s) that pipeline run(s) "
+                    + ", ".join(hit_ids[:3]) + " (driven by another session) also changed: "
+                    + ", ".join(other_hits[:5]) + ". The commit is allowed; that run will "
+                    "see the change when it lands.")
             return {"decision": "approve"}
+        run_ids = own_ids
 
         logger.warning(
             "[BLOCKED] git commit of active-run path(s) %s — lands only through the "

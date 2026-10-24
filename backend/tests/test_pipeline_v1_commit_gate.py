@@ -12,6 +12,10 @@ gate. Invariants:
 - a commit of a path the run did not change is approved;
 - once the run is terminal, nothing is owned;
 - a run.json without a protected contract owns nothing (old runs are not supported).
+- design 2026-10-24-swarmai-usable-by-anyone §3.4: only the run's own (signed) owner
+  session is denied; another session gets an allow with a note naming the run; a run
+  that cannot be read, or a commit that retargets another repo, never denies (allow +
+  note): native commits are never blocked.
 """
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ import subprocess
 import pytest
 
 from core import security_hooks
-from tests.pipeline_v1_rig import Rig
+from tests.pipeline_v1_rig import SESSION, Rig
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -41,12 +45,23 @@ def rig(tmp_path, monkeypatch):
         r.close()
 
 
-def _commit(path, cwd):
-    gate = security_hooks.create_active_run_commit_gate({})
-    out = asyncio.run(gate({"tool_name": "Bash", "cwd": str(cwd),
-                            "tool_input": {"command": f"git commit -m x -- {path}"}},
-                           None, None))
+OTHER = "bbbbbbbb-0000-4000-8000-000000000002"
+
+
+def _decide(path, cwd, sid=SESSION, command=None):
+    gate = security_hooks.create_active_run_commit_gate({"sdk_session_id": sid})
+    return asyncio.run(gate({"tool_name": "Bash", "cwd": str(cwd),
+                             "tool_input": {"command": command or f"git commit -m x -- {path}"}},
+                            None, None))
+
+
+def _commit(path, cwd, sid=SESSION):
+    out = _decide(path, cwd, sid)
     return out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+def _note(out) -> str:
+    return out.get("hookSpecificOutput", {}).get("additionalContext", "") or ""
 
 
 def test_a_hand_commit_of_a_file_the_v1_run_changed_is_denied(rig):
@@ -94,7 +109,7 @@ def test_a_run_without_a_protected_contract_owns_nothing(rig, tmp_path):
 
 
 def _gate_result(command, tool="Bash", cwd="/repo"):
-    gate = security_hooks.create_active_run_commit_gate({})
+    gate = security_hooks.create_active_run_commit_gate({"sdk_session_id": SESSION})
     return asyncio.run(gate({"tool_name": tool, "tool_input": {"command": command},
                              "cwd": cwd}, None, None))
 
@@ -129,7 +144,7 @@ def test_a_git_C_commit_from_outside_the_repo_is_judged(rig, tmp_path):
     subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
     elsewhere = tmp_path / "not-a-repo"
     elsewhere.mkdir()
-    gate = security_hooks.create_active_run_commit_gate({})
+    gate = security_hooks.create_active_run_commit_gate({"sdk_session_id": SESSION})
     for cmd in (f"git -C {r.repo} commit -m x", f"git -C {r.repo.name} commit -m x"):
         cwd = elsewhere if r.repo.name not in cmd.split()[2] or "/" in cmd.split()[2] \
             else r.repo.parent
@@ -159,17 +174,20 @@ def test_an_unreadable_run_refuses_rather_than_approves(rig, monkeypatch):
     subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
     monkeypatch.setattr(eng.RunEngine, "owned_paths",
                         lambda self: (_ for _ in ()).throw(RuntimeError("broken")))
-    assert _commit("backend/core/mod.py", r.repo)
+    out = _decide("backend/core/mod.py", r.repo)
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
+    assert "could not be read" in _note(out)
 
 
-def test_a_retarget_to_another_repo_is_refused(rig, tmp_path):
+def test_a_retarget_to_another_repo_is_allowed_with_a_note(rig, tmp_path):
     r = rig()
     r.create()
     other = tmp_path / "other"
     other.mkdir()
     subprocess.run(["git", "init", "-q", str(other)], check=True)
     out = _gate_result(f"git --git-dir={other}/.git commit -m x", cwd=str(r.repo))
-    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
+    assert "another repository" in _note(out)
 
 
 def test_cd_then_commit_is_judged_in_the_repo_cd_names(rig, tmp_path):
@@ -236,7 +254,9 @@ def test_a_corrupt_contract_refuses_rather_than_skips_the_run(rig):
     contract_path(get_app_data_dir(), str(r.run_id)).write_text("{not json")
     (r.repo / "backend" / "core" / "mod.py").write_text("def add(a, b):\n    return 0\n")
     subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
-    assert _commit("backend/core/mod.py", r.repo)
+    out = _decide("backend/core/mod.py", r.repo)
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
+    assert r.run_id in _note(out)
 
 
 def test_a_corrupt_contract_of_a_finished_run_does_not_block_commits(rig):
@@ -265,4 +285,27 @@ def test_a_forged_terminal_projection_does_not_unguard_a_corrupt_contract_run(ri
     contract_path(get_app_data_dir(), str(r.run_id)).write_text("{not json")
     (r.repo / "backend" / "core" / "mod.py").write_text("def add(a, b):\n    return 0\n")
     subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
-    assert _commit("backend/core/mod.py", r.repo)
+    out = _decide("backend/core/mod.py", r.repo)      # not skipped as finished: noted
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
+    assert str(r.run_id) in _note(out)
+
+
+def test_another_session_committing_a_runs_file_is_allowed_with_a_note(rig):
+    r = rig()
+    r.create()
+    r.edit(Rig.CHANGE)
+    (r.repo / "backend" / "core" / "mod.py").write_text("def add(a, b):\n    return 0\n")
+    subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
+    out = _decide("backend/core/mod.py", r.repo, sid=OTHER)
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
+    assert str(r.run_id) in _note(out)
+    assert _commit("backend/core/mod.py", r.repo, sid=SESSION)     # the owner is denied
+
+
+def test_a_session_without_an_id_is_never_denied(rig):
+    r = rig()
+    r.create()
+    r.edit(Rig.CHANGE)
+    (r.repo / "backend" / "core" / "mod.py").write_text("def add(a, b):\n    return 0\n")
+    subprocess.run(["git", "-C", str(r.repo), "add", "backend/core/mod.py"], check=True)
+    assert not _commit("backend/core/mod.py", r.repo, sid="")
