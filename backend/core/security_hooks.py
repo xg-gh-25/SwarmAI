@@ -13,7 +13,7 @@ Public symbols
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
 - ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link)
-- ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (forged review markers)
+- ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (run events, keys, markers)
 - ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
 - ``create_run_amend_gate``                  — in an active run, deny git commit --amend (no HITL prompt)
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
@@ -1807,7 +1807,7 @@ def create_external_approval_gate(
     keyed on the tool's risk CLASS (tool_risk.classify) rather than a Bash pattern.
     Bash is left entirely to dangerous_command_gate (no double-gate).
     """
-    from core.tool_risk import RiskClass, classify
+    from core.tool_risk import RiskClass, classify, user_overrides
 
     async def external_approval_gate(
         input_data: dict[str, Any],
@@ -1822,7 +1822,7 @@ def create_external_approval_gate(
             return {"decision": "approve"}
 
         # Only EXTERNAL (off-machine) tools are gated. READ / WRITE_LOCAL pass freely.
-        if classify(tool_name) is not RiskClass.EXTERNAL:
+        if classify(tool_name, overrides=user_overrides) is not RiskClass.EXTERNAL:
             return {"decision": "approve"}
 
         # Gate-1 B4: without a tool_use_id we cannot correlate a durable approval
@@ -6280,10 +6280,9 @@ def create_audit_marker_write_gate(session_context: dict[str, Any]):
                     "DENY (" + hit + "): this writes, moves or deletes files in "
                     + str(_AGENT_AUDIT_DIR) + ", or may (the checker could not rule "
                     "it out). Only the backend's SubagentStop hook writes there. Its "
-                    "markers are the proof that review sub-agents really ran: the D7 "
-                    "experts, the Red Team, the Gate-0/1 skeptics and the adversarial "
-                    "commit gate all read them, so a hand-written or deleted marker "
-                    "would defeat those checks. To produce a marker, spawn the reviewer "
+                    "directory also holds every pipeline run's signed events and keys "
+                    "(runs/<run_id>/), which the run's own checks trust, so a "
+                    "hand-written or deleted file would break those runs. To produce a marker, spawn the reviewer "
                     "with the Agent tool. Reading markers is fine: cat, ls, grep or jq "
                     "by an absolute path. This gate has no bypass: if it is wrong, "
                     "tell the user."

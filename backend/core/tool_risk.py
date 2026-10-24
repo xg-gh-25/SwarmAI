@@ -27,8 +27,14 @@ only for verbs that genuinely leave the machine.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class RiskClass(str, Enum):
@@ -108,20 +114,87 @@ def classify(
     """Effective risk class of a tool call.
 
     Resolution order:
-      1. user-local override (Phase 2; always None today)
+      1. user-local override (``user_overrides``: the user's own decision, may lower
+         or raise; never for Bash, which dangerous_command_gate owns)
       2. built-in by-name tables (WRITE_LOCAL / EXEC / READ)
       3. MCP verb taxonomy (external verb → EXTERNAL, read/local verb → READ/WRITE_LOCAL)
       4. fail-OPEN default → READ
-
-    `metadata` is accepted for forward-compat (openworker keys off a
-    `requires_approval` flag) but SwarmAI MCP tools carry no such metadata today, so
-    classification is name-based. If a metadata object ever exposes a truthy
-    `requires_approval`, it is honored as EXTERNAL.
+    then the tool's own *metadata* may RAISE the result to EXTERNAL, never lower it
+    (``_metadata_says_external``): a third-party MCP server calling itself read-only
+    does not count (design 2026-10-24-swarmai-usable-by-anyone §3.4). SwarmAI hooks see
+    no MCP annotations today, so the gate passes none; the rule is here for when they do.
     """
-    if overrides is not None:
+    if overrides is not None and tool_name not in _EXEC_TOOLS:
         ov = overrides(tool_name) if callable(overrides) else None
         if ov is not None:
             return ov
+    base = _classify_by_name(tool_name)
+    if base is not RiskClass.EXTERNAL and _metadata_says_external(metadata):
+        return RiskClass.EXTERNAL
+    return base
+
+
+def _meta_get(metadata: Any, key: str) -> Any:
+    if isinstance(metadata, dict):
+        return metadata.get(key)
+    return getattr(metadata, key, None)
+
+
+def _metadata_says_external(metadata: Any) -> bool:
+    """True when the tool's own metadata declares an off-machine or destructive effect:
+    ``requires_approval``, MCP ``destructiveHint``, or ``openWorldHint`` without
+    ``readOnlyHint``. Only ever used to RAISE a class."""
+    if metadata is None:
+        return False
+    if _meta_get(metadata, "requires_approval") is True:
+        return True
+    if _meta_get(metadata, "destructiveHint") is True:
+        return True
+    return _meta_get(metadata, "openWorldHint") is True \
+        and _meta_get(metadata, "readOnlyHint") is not True
+
+
+def _overrides_path() -> Path:
+    try:
+        from config import get_app_data_dir
+        return Path(get_app_data_dir()) / "tool_risk_overrides.json"
+    except Exception:  # noqa: BLE001 — very early import
+        return Path.home() / ".swarm-ai" / "tool_risk_overrides.json"
+
+
+_OVERRIDE_CACHE: dict = {}
+
+
+def user_overrides(tool_name: str) -> Optional[RiskClass]:
+    """The user's local override for *tool_name* from ``<app data>/tool_risk_overrides.json``
+    (``{"mcp__server__tool": "read" | "write_local" | "exec" | "external"}``), or None.
+    Re-read when the file's mtime changes; a missing or malformed file, or an unknown
+    value, means no override."""
+    path = _overrides_path()
+    try:
+        mtime = os.stat(path).st_mtime
+    except OSError:
+        return None
+    hit = _OVERRIDE_CACHE.get(str(path))
+    if hit is None or hit[0] != mtime:
+        table: dict = {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                for name, value in raw.items():
+                    try:
+                        table[str(name)] = RiskClass(str(value).lower())
+                    except ValueError:
+                        logger.warning("tool_risk override %s=%r ignored: unknown class",
+                                       name, value)
+        except (OSError, ValueError):
+            logger.warning("tool_risk overrides file %s unreadable — ignored", path)
+        _OVERRIDE_CACHE[str(path)] = hit = (mtime, table)
+    return hit[1].get(tool_name)
+
+
+def _classify_by_name(tool_name: str) -> RiskClass:
+    """Steps 2-4 of ``classify``: the class from the tool's name alone."""
 
     if not tool_name:
         return RiskClass.READ
@@ -155,10 +228,6 @@ def classify(
         # unknown MCP verb → fail-OPEN (READ). A missed gate is recoverable; a
         # false-positive prompt-storm is not (Gate-1 B3).
         return RiskClass.READ
-
-    # forward-compat: honor an explicit metadata approval flag if present
-    if metadata is not None and bool(getattr(metadata, "requires_approval", False)):
-        return RiskClass.EXTERNAL
 
     # 4. fail-OPEN default
     return RiskClass.READ
