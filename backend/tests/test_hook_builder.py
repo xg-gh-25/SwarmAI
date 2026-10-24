@@ -76,10 +76,11 @@ class TestHookRegistry:
         result = await chained({}, None, MagicMock())
 
         assert call_order == ["a", "b"]
-        # Last hookSpecificOutput.additionalContext wins
+        # Both hooks' hookSpecificOutput.additionalContext reach the model, in order
+        # (the CLI reads only this field on PostToolUse; a later hook used to overwrite it)
         hso = result.get("hookSpecificOutput", {})
-        assert "additionalContext" in hso
-        assert hso["additionalContext"] == "from_b"
+        assert hso["additionalContext"] == "from_a\nfrom_b"
+        assert hso["hookEventName"] == "PostToolUse"
 
     @pytest.mark.asyncio
     async def test_toplevel_additional_context_merged(self):
@@ -713,3 +714,69 @@ class TestLayer4RealSeam:
 
         assert "GOVERNANCE reminder" in sdk_dict["additionalContext"]
         assert "INCLUSIVE-TERM reminder" in sdk_dict["additionalContext"]
+
+
+@pytest.mark.asyncio
+async def test_pretooluse_allow_contexts_accumulate_and_other_fields_later_win():
+    from core.hook_builder import HookRegistry
+
+    async def a(i, t, c):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "allow", "additionalContext": "A"}}
+
+    async def b(i, t, c):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "updatedInput": {"command": "x"}, "additionalContext": "B"}}
+
+    registry = HookRegistry()
+    registry.register("PreToolUse", a, "a", matcher="Bash")
+    registry.register("PreToolUse", b, "b", matcher="Bash")
+    chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+    hso = (await chained({}, None, MagicMock()))["hookSpecificOutput"]
+    assert hso["additionalContext"] == "A\nB"
+    assert hso["updatedInput"] == {"command": "x"} and hso["permissionDecision"] == "allow"
+
+
+@pytest.mark.asyncio
+async def test_compose_gates_keeps_a_members_allow_note():
+    """A compose_gates member that allows with a note (active_run_commit_gate) must not
+    lose it; the first deny still wins."""
+    from core.hook_builder import compose_gates
+
+    async def note(i, t, c):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "allow", "additionalContext": "N"}}
+
+    async def deny(i, t, c):
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "deny",
+                                       "permissionDecisionReason": "no"}}
+
+    async def ok(i, t, c):
+        return {"decision": "approve"}
+
+    out = await compose_gates([("n", note), ("o", ok)])({}, None, None)
+    assert out["hookSpecificOutput"]["additionalContext"] == "N"
+    out = await compose_gates([("n", note), ("d", deny)])({}, None, None)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.asyncio
+async def test_the_sdk_hands_both_contexts_to_the_cli_unchanged():
+    """The SDK's own conversion of a hook result to the CLI payload keeps the joined
+    additionalContext (claude_agent_sdk._internal.query._convert_hook_output_for_cli)."""
+    from claude_agent_sdk._internal.query import _convert_hook_output_for_cli
+    from core.hook_builder import HookRegistry
+
+    async def a(i, t, c):
+        return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "A"}}
+
+    async def b(i, t, c):
+        return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "B"}}
+
+    registry = HookRegistry()
+    registry.register("PostToolUse", a, "a", matcher="Read")
+    registry.register("PostToolUse", b, "b", matcher="Read")
+    chained = registry.build_sdk_hooks()["PostToolUse"][0].hooks[0]
+    cli = _convert_hook_output_for_cli(await chained({}, None, MagicMock()))
+    assert cli["hookSpecificOutput"]["additionalContext"] == "A\nB"

@@ -163,8 +163,9 @@ class HookRegistry:
         Execution: sequential, first TERMINAL verdict (deny/hitl) wins, 5s timeout
         per hook — EXCEPT hooks registered with ``no_timeout=True`` (long-blocking
         HITL gates), which are awaited directly (their own internal bound applies).
-        Non-terminal (allow/warn) results merge: hookSpecificOutput later-overrides,
-        additionalContext accumulates.
+        Non-terminal (allow/warn) results merge: ``hookSpecificOutput.additionalContext``
+        and top-level ``additionalContext`` accumulate (newline-joined, in order); every
+        other ``hookSpecificOutput`` field later-overrides (``_merge_specific``).
 
         Phase 1 refactor (verdict.py): the "what is terminal / which decision wins"
         judgement is now expressed on the ordered ``Disposition`` scale via
@@ -217,10 +218,10 @@ class HookRegistry:
                     if verdict.disposition >= Disposition.HITL:
                         return to_sdk(verdict)
 
-                    # Merge hookSpecificOutput — later hooks override earlier
-                    if "hookSpecificOutput" in result:
-                        combined.setdefault("hookSpecificOutput", {})
-                        combined["hookSpecificOutput"].update(result["hookSpecificOutput"])
+                    # Merge hookSpecificOutput: additionalContext accumulates (the CLI
+                    # passes only this field to the model, so a later hook must not
+                    # overwrite an earlier one's); every other field — later overrides
+                    _merge_specific(combined, result)
                     # Merge other valid top-level keys
                     for key in ("decision", "reason", "systemMessage"):
                         if key in result and result[key] is not None:
@@ -251,6 +252,22 @@ class HookRegistry:
         return chained
 
 
+def _merge_specific(combined: dict, result: dict) -> None:
+    """Fold *result*'s ``hookSpecificOutput`` into *combined*'s: ``additionalContext``
+    is joined with a newline after what earlier hooks gave; other keys later-win."""
+    spec = result.get("hookSpecificOutput")
+    if not isinstance(spec, dict):
+        return
+    target = combined.setdefault("hookSpecificOutput", {})
+    prior = target.get("additionalContext")
+    target.update(spec)
+    new = spec.get("additionalContext")
+    if prior and new:
+        target["additionalContext"] = f"{prior}\n{new}"
+    elif prior:
+        target["additionalContext"] = prior
+
+
 def compose_gates(members: list[tuple[str, HookCallback]]) -> HookCallback:
     """One PreToolUse hook that runs ``members`` in order; the first deny/ask wins.
 
@@ -258,12 +275,14 @@ def compose_gates(members: list[tuple[str, HookCallback]]) -> HookCallback:
     member that times out or raises is skipped, as in ``_build_chain``) and is logged
     under its own name in gate_decisions.jsonl. Register the group with
     ``no_timeout=True``: the members are bounded here, so the group's total can exceed
-    one 5s slot without a member being unbounded. Members must be pure allow/deny
-    gates (no updatedInput / additionalContext): non-terminal results are dropped.
+    one 5s slot without a member being unbounded. Members are allow/deny gates (no
+    updatedInput): of a non-terminal result only ``hookSpecificOutput.additionalContext``
+    is kept (a note such as active_run_commit_gate's), accumulated in member order.
     """
     logged = [(n, with_decision_log(n, fn)) for n, fn in members]
 
     async def composite(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        notes: list[str] = []
         for name, fn in logged:
             try:
                 result = await asyncio.wait_for(
@@ -277,7 +296,13 @@ def compose_gates(members: list[tuple[str, HookCallback]]) -> HookCallback:
                 continue
             if result and from_sdk(result).disposition >= Disposition.HITL:
                 return result
-        return {}
+            note = ((result or {}).get("hookSpecificOutput") or {}).get("additionalContext")
+            if note:
+                notes.append(note)
+        if not notes:
+            return {}
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "additionalContext": "\n".join(notes)}}
 
     composite._decision_logged = True  # type: ignore[attr-defined]
     composite.members = tuple(n for n, _ in members)  # type: ignore[attr-defined]
