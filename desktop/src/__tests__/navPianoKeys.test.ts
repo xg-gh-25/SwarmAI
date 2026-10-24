@@ -92,4 +92,16 @@ describe('left nav piano keys', () => {
     // TopBar 28 + sheet inset + tab bar 40
     expect(LAYOUT_CONSTANTS.CHAT_CONTENT_TOP).toBe(28 + LAYOUT_CONSTANTS.SHEET_INSET + 40);
   });
+
+  it('makes Swarm, History, Artifacts and Needs You one key', () => {
+    const TSX = readFileSync(join(__dirname, '..', 'components', 'layout', 'ThreeColumnLayout.tsx'), 'utf8');
+    const key = TSX.slice(TSX.indexOf('className="a10-swarmkey"'), TSX.indexOf('id="sidebar-alerts-slot"'));
+    for (const id of ['chat-hero', 'history-row', 'artifacts-row']) expect(key).toContain(`data-testid="${id}"`);
+    expect(CSS).toMatch(/\.a10-swarmkey\s*\{[^}]*var\(--nav-key-face\)/);
+    // Rows on the key are flat: no own face, edge or shadow.
+    expect(CSS).toMatch(/\.a10-swarmkey \.a10-histrow,\s*\.a10-swarmkey \.a10-alertrow,[^{]*\{[^}]*background:\s*transparent[^}]*\}/);
+    // Needs You has no red frame or fill, only a red bell and badge.
+    const PILL = readFileSync(join(__dirname, '..', 'pages', 'chat', 'components', 'AlertsPill.tsx'), 'utf8');
+    expect(PILL).not.toMatch(/(?:bg|border)-\[color-mix\(in_srgb,var\(--color-status-error\)/);
+  });
 });

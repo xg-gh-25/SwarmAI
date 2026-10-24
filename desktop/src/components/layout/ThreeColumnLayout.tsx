@@ -236,6 +236,9 @@ function LeftSidebar() {
       {/* Swarm key — the brand S-hexagon logo (same mark as the welcome screen)
           plus the "Swarm" label. Click returns to chat (closes any open overlay). */}
       <div className="p-2.5 pb-1.5">
+        {/* One key: Swarm is the cap, History / Artifacts / Needs You are rows
+            on its body (hairline-separated). Their purposes stay separate. */}
+        <div className="a10-swarmkey" data-testid="swarm-key">
         <button
           type="button"
           className="a10-hero relative w-full flex items-center gap-3 rounded-xl px-3 py-2"
@@ -251,7 +254,7 @@ function LeftSidebar() {
 
         {/* History row — a Chat sub-entry (past conversations), muted vs domain cards. */}
         <button
-          className={`a10-histrow mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'history' ? ' bg-[var(--color-hover)] text-[var(--color-text)]' : ''}`}
+          className={`a10-histrow w-full flex items-center gap-2 px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'history' ? ' bg-[var(--color-hover)] text-[var(--color-text)]' : ''}`}
           // Publish THIS row as the spit-out source (like A10Card.handleClick) so the
           // History overlay opens via the OverlayHost (M3). The host re-derives this
           // row's rect from its data-nav-id for the spout.
@@ -272,7 +275,7 @@ function LeftSidebar() {
             Opens the artifacts overlay via OverlayHost; the host re-derives this row's
             rect from its data-nav-id for the spout. */}
         <button
-          className={`a10-histrow relative mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'artifacts' ? ' bg-[var(--color-hover)]' : ''}`}
+          className={`a10-histrow relative w-full flex items-center gap-2 px-2.5 py-1.5 text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors${newActiveOverlay === 'artifacts' ? ' bg-[var(--color-hover)]' : ''}`}
           onClick={() => activateNav('artifacts')}
           onMouseEnter={() => prefetch('artifacts')}
           onFocus={() => prefetch('artifacts')}
@@ -303,8 +306,9 @@ function LeftSidebar() {
           id="sidebar-alerts-slot"
           data-testid="sidebar-alerts-slot"
           data-nav-id="needs-you"
-          className="relative mt-0.5"
+          className="relative"
         />
+        </div>
       </div>
 
       {/* A10 domain cards. Cognitive = a distinct "green panel" zone (核心差异化 —
