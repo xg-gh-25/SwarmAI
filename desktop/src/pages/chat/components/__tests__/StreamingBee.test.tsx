@@ -94,7 +94,7 @@ describe('StreamingBee', () => {
     expect(hint()).toBeNull();
   });
 
-  it('no call running, background agents still running: says so', () => {
+  it('no call running, background agents still running: says they run and where the result goes', () => {
     vi.useFakeTimers();
     stubReducedMotion(false);
     act(() => { backgroundAgentsStore.apply('s1', [
@@ -103,7 +103,7 @@ describe('StreamingBee', () => {
     ]); });
     render(<StreamingBee content={[tx('two reviews started')]} sessionId="s1" />);
     act(() => { vi.advanceTimersByTime(WAIT_HINT_MS); });
-    expect(hint()).toBe('Waiting for 2 background agents · 45s');
+    expect(hint()).toBe('2 background agents running, results come back here · 45s');
   });
 
   it('thinking_progress arriving: Thinking, timed from when the think began', () => {

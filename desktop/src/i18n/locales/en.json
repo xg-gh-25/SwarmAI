@@ -456,8 +456,8 @@
       "continueAria": "Continue response",
       "continueTitle": "Continue — ask {{name}} to continue its response",
       "interrupted": "Connection interrupted",
-      "waitAgent": "Waiting for 1 background agent · {{time}}",
-      "waitAgents": "Waiting for {{count}} background agents · {{time}}",
+      "waitAgent": "1 background agent running, its result comes back here · {{time}}",
+      "waitAgents": "{{count}} background agents running, results come back here · {{time}}",
       "waitThinking": "Thinking · {{time}}",
       "waitModel": "Waiting for the model · {{time}}"
     },

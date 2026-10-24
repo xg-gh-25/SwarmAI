@@ -13,11 +13,13 @@
  *   open and an earlier one folds FOLD_DELAY_MS after the next note (never on the spot,
  *   never while the user reads); a finished group opened later shows every note folded
  * - AC3 every group but RESULT toggles from its header; headers count steps and
- *   commands, never files; a turn with no calls has no RESULT label
+ *   commands, never files; a turn with no calls has no RESULT region; the RESULT
+ *   region carries no visible heading (only its aria-label)
  * - AC4 one light strip per call: the tool's own name (MCP prefix dropped), the
  *   backend display object as the hover; a failed call looks like the others (no red)
  * - AC5 sub-agents that ran at the same time are ONE Agents panel even with a call
- *   between their spawns; a running agent's ✕ stops only it (chatService.stopTask)
+ *   between their spawns; a running agent's ✕ stops only it (chatService.stopTask);
+ *   a group holding a background agent the daemon still runs never folds it away
  * - AC6 a question / permission is a first-level card, outside every group
  * - AC7 a pipeline turn: the pre-run work above `Pipeline started · <profile>`, only
  *   started stages, a re-run stage is one group with `round 2`, a gate is a verdict
@@ -105,7 +107,10 @@ describe('AC2 — notes stay in their group', () => {
   it('THOUGHTS → restatement → WORKED → RESULT; the note is inside WORKED', () => {
     const { container } = render(view(turn, false));
     expect(firstLevel(container)).toEqual(['zone-thinking', 'turn-restatement', 'zone-phase', 'turn-result']);
-    expect(screen.getByTestId('turn-result').textContent).toContain('Result');
+    // the answer carries no visible "Result" heading: the fold above and the gap set it
+    // apart, and a heading would claim "final" while background agents still run
+    expect(screen.getByTestId('turn-result').textContent).not.toMatch(/Result/);
+    expect(screen.getByTestId('turn-result').getAttribute('aria-label')).toBe('Result');
     const phase = screen.getByTestId('zone-phase');
     fireEvent.click(within(phase).getByTestId('group-toggle'));
     const note = within(screen.getByTestId('zone-phase')).getByTestId('phase-text');
@@ -230,6 +235,30 @@ describe('AC2b — a note carries the work after it; earlier ones fold', () => {
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
     r.rerender(view(live, true));
     expect(panels()).toBe(0);
+    act(() => { backgroundAgentsStore.apply('s1', []); });
+  });
+
+  it('the turn ended with a background agent still running: WORKED stays open and shows it, it folds after the agent ends', () => {
+    vi.useFakeTimers();
+    act(() => {
+      backgroundAgentsStore.apply('s1', [{ toolUseId: 'g1', description: 'blind review A', status: 'running' }]);
+    });
+    const launched = { type: 'tool_result', toolUseId: 'g1', content: 'Async agent launched', isError: false, truncated: false,
+      subagent: { status: 'background' } } as ContentBlock;
+    const turn = [tx('go'), bash('a', 'cat lead.ts'), tr('a'), agent('g1', 'blind review A'), launched,
+      tx('The review runs; I fix what it finds when it is back.')];
+    const shown = () => screen.queryAllByText(/blind review A/).length > 0;
+    const r = render(view(turn, true));
+    r.rerender(view(turn, false));
+    act(() => { vi.advanceTimersByTime(5 * FOLD_DELAY_MS); });
+    r.rerender(view(turn, false));
+    expect(shown()).toBe(true); // the turn's fold did not hide the running agent
+    act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'g1', description: 'blind review A', status: 'completed' }]); });
+    r.rerender(view(turn, false));
+    expect(shown()).toBe(true); // never on the spot
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(view(turn, false));
+    expect(shown()).toBe(false);
     act(() => { backgroundAgentsStore.apply('s1', []); });
   });
 
@@ -382,7 +411,8 @@ describe('AC5 — the Agents panel', () => {
       subagent: { status: 'background' } } as ContentBlock;
     const turn = [tx('go'), agent('g1', 'measure reflect'), launched, tx('Waiting for it.')];
     const rowOf = () => {
-      fireEvent.click(screen.getByTestId('group-toggle'));
+      // a running background agent keeps its group open; anything else is opened here
+      if (!screen.queryByTestId('agent-row')) fireEvent.click(screen.getByTestId('group-toggle'));
       return screen.getByTestId('agent-row');
     };
     afterEach(() => { backgroundAgentsStore.reset(); });

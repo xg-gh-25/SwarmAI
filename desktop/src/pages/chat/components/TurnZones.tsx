@@ -174,6 +174,26 @@ function useSettled(items: Array<{ id: string; done: boolean }>, active: boolean
   return (id) => (map.get(id) ?? Infinity) + FOLD_DELAY_MS <= now;
 }
 
+/** The call ids of a phase's members, or of every phase in a stage's body. */
+function callIds(items: Array<PhaseMember | Zone>): string[] {
+  return items.flatMap((m) => {
+    if (m.kind === 'process') return m.steps.map((s) => s.block.id);
+    if (m.kind === 'phase') return callIds(m.members);
+    return [];
+  });
+}
+
+/**
+ * True while one of these calls is a background Agent the daemon still runs, and
+ * FOLD_DELAY_MS after it ends (never on the spot). The group holding it stays open at
+ * every fold level (WORKED, a stage, a segment): its launch ack returns at once, so the
+ * stream alone would call it finished and fold it out of sight while it works.
+ */
+function useHoldsRunningAgent(ids: string[], sessionId?: string): boolean {
+  const { agents } = useBackgroundAgents(sessionId);
+  return useLinger(agents.some((a) => a.status === 'running' && ids.includes(a.toolUseId)));
+}
+
 // ── Group header ────────────────────────────────────────────────────────────────
 
 const TAG = 'text-[11px] font-semibold uppercase tracking-[0.08em]';
@@ -776,7 +796,8 @@ export function PhaseGroup({ zone, ctx }: { zone: Extract<Zone, { kind: 'phase' 
   // the message's settle window and folds in the same frame the RESULT lands. Its own
   // linger only counts while the turn is still open (a phase that ended mid-stream).
   const turnOpen = ctx.isStreaming || ctx.settling;
-  const open = choice ?? (zone.live || !!zone.held || (turnOpen && lingering));
+  const holdsAgent = useHoldsRunningAgent(callIds(zone.members), ctx.sessionId);
+  const open = choice ?? (zone.live || !!zone.held || (turnOpen && lingering) || holdsAgent);
   const stats = zoneStats(zone.members);
   const meta = stats.steps === 0 && stats.thoughts > 0
     ? [tf(t, 'chat.turn.zone.thoughtCount', stats.thoughts === 1 ? '{{count}} thought' : '{{count}} thoughts', { count: stats.thoughts })]
@@ -821,7 +842,8 @@ export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: Zone
   const lingering = useLinger(zone.live);
   const choice = ctx.choice(zone.id);
   const turnOpen = ctx.isStreaming || ctx.settling; // same single ending clock as PhaseGroup
-  const open = mustOpen || (choice ?? (zone.live || !!zone.held || (turnOpen && lingering) || zone.stoppedHere));
+  const holdsAgent = useHoldsRunningAgent(callIds(zone.body), ctx.sessionId);
+  const open = mustOpen || (choice ?? (zone.live || !!zone.held || (turnOpen && lingering) || zone.stoppedHere || holdsAgent));
   const seconds = zone.status !== 'running' ? sinceIso(zone.startedAt, zone.endedAt) : undefined;
   const meta = [
     ...statsMeta(t, zoneStats(zone.body), seconds),
@@ -914,12 +936,6 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
                 {...(z.result ? { role: 'region', 'aria-label': tf(t, 'chat.turn.result', 'Result') } : {})}
                 {...ANCHOR_PROPS}
               >
-                {z.result && (
-                  <div className="flex items-center gap-2.5 mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-                    {tf(t, 'chat.turn.result', 'Result')}
-                    <span className="flex-1 border-t border-[var(--color-border)]" />
-                  </div>
-                )}
                 {ctx.renderText(z.text, `${z.id}-b`)}
               </div>
             );

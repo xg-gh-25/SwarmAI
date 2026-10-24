@@ -456,8 +456,8 @@
       "continueAria": "继续回复",
       "continueTitle": "继续：让 {{name}} 接着回答",
       "interrupted": "连接中断",
-      "waitAgent": "等待 1 个后台 Agent · {{time}}",
-      "waitAgents": "等待 {{count}} 个后台 Agent · {{time}}",
+      "waitAgent": "1 个后台 Agent 运行中，完成后结果自动回到这里 · {{time}}",
+      "waitAgents": "{{count}} 个后台 Agent 运行中，完成后结果自动回到这里 · {{time}}",
       "waitThinking": "思考中 · {{time}}",
       "waitModel": "等待模型回应 · {{time}}"
     },

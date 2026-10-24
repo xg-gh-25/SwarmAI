@@ -7,7 +7,8 @@
  *
  * After 45s with no new content a muted line beside it states what the turn is
  * waiting on and for how long (useStreamingWait): the running call
- * ("Bash · make test · 1m 12s"), background agents, the model thinking, or the
+ * ("Bash · make test · 1m 12s"), background agents (they run, the tab is free, their
+ * result comes back on its own: never "waiting for"), the model thinking, or the
  * model's reply. Facts only, never a cause; real problems are reported elsewhere
  * (still_working stall notice, reconnect banner, health monitor).
  *
@@ -38,8 +39,8 @@ function waitText(w: StreamingWait, t: ReturnType<typeof useTranslation>['t'], z
   const out = (() => { switch (w.kind) {
     case 'tool': return [w.tool, w.object, time].filter(Boolean).join(' · ');
     case 'agents': return w.count === 1
-      ? tf(t, 'chat.message.waitAgent', 'Waiting for 1 background agent · {{time}}', { time })
-      : tf(t, 'chat.message.waitAgents', 'Waiting for {{count}} background agents · {{time}}', { count: w.count, time });
+      ? tf(t, 'chat.message.waitAgent', '1 background agent running, its result comes back here · {{time}}', { time })
+      : tf(t, 'chat.message.waitAgents', '{{count}} background agents running, results come back here · {{time}}', { count: w.count, time });
     case 'thinking': return tf(t, 'chat.message.waitThinking', 'Thinking · {{time}}', { time });
     default: return tf(t, 'chat.message.waitModel', 'Waiting for the model · {{time}}', { time });
   } })();
