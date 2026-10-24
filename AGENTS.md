@@ -219,7 +219,12 @@ implementations in `security_hooks.py`). By category:
    `external_approval_gate` (non-Bash off-machine side effects) route risky calls through
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
    per session by command hash, pending requests persisted to
-   `~/.swarm-ai/pending_approvals.json`, 4h answer timeout. `ask_question_gate` blocks for
+   `~/.swarm-ai/pending_approvals.json`, 4h answer timeout. Besides its pattern list,
+   `dangerous_command_gate` asks before a git command that discards uncommitted changes
+   (`reset --hard`, `checkout --`, `restore`, `clean -f`, `worktree remove --force`) only when
+   another live session wrote files there that are still uncommitted
+   (`shared_checkout.sibling_uncommitted`); ref moves (rebase, amend, `branch -f`) are never
+   asked — the reflog keeps the commits (design §3.8 r17). `ask_question_gate` blocks for
    AskUserQuestion answers; a person's pick (not the channel gateway's unattended one) on a
    Pipeline v1 decision card is recorded there as the run's `human_answer` — the agent's CLI
    has no answer command (`docs/design/pipeline-v1-human-loop.md`).

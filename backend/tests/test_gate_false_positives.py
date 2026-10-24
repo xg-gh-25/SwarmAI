@@ -5,11 +5,12 @@ while doing nothing dangerous. Each allow case is paired with the true positives
 that must stay caught, so a fix that only loosens a gate turns a test red.
 
 What is tested:
-- history rewrite (dangerous_command_gate): a heredoc body is judged by what reads it
-  (a file being written is data, a shell or code that can run something is not), and
-  a branch-local rewrite inside this session's own run worktree or a temp repo is not
-  gated (_rewrites_only_scratch); another session's worktree, a ref-moving rewrite, a
-  git target set through the environment, or an unfollowed directory change still is;
+- working-tree discard (dangerous_command_gate): a heredoc body is judged by what
+  reads it (a file being written is data, a shell or code that can run something is
+  not); the directory each discard runs in is followed through ``cd X &&`` and
+  ``git -C`` (_discard_dirs), and a git target set through the environment or an
+  unfollowed directory change gives None (cannot tell). Whose files would be lost is
+  tested in test_discard_gate.py;
 - run owner token (run_owner_gate._token_binding): the CLI call may be followed by
   output plumbing and preceded by quoted ``cat > FILE <<'EOF'`` writes;
 - python code judgment (_code_can_execute): ``re.compile(`` is a method, not the builtin.
@@ -22,8 +23,8 @@ from core.run_owner_gate import _token_binding
 from core.security_hooks import (
     _code_can_execute,
     _is_commit_amend,
-    _is_history_rewrite,
-    _rewrites_only_scratch,
+    _discard_dirs,
+    _discards_work,
 )
 
 CLI = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_v1.py land "
@@ -36,27 +37,27 @@ EDIT_BODY = ('import sys\ns = open(sys.argv[1]).read()\n'
              "it's one rev-parse.\"\"\")\nopen(sys.argv[1], 'w').write(s)\n")
 
 
-# ── history rewrite ──────────────────────────────────────────────────────────
+# ── working-tree discard ─────────────────────────────────────────────────────
 @pytest.mark.parametrize("cmd", [
     "cat > /tmp/e1.py <<'PYEOF'\n" + EDIT_BODY + "PYEOF\npython3 -I /tmp/e1.py /x",
-    "cat >> notes.md <<'EOF'\nwe rebase, then reset --hard, then commit --amend\nEOF",
-    "python3 -I - <<'EOF'\nfrom pathlib import Path\n# after a rebase; don't\n"
+    "cat >> notes.md <<'EOF'\nwe git reset --hard, then git checkout -- .\nEOF",
+    "python3 -I - <<'EOF'\nfrom pathlib import Path\n# after git checkout; don't\n"
     "Path('a').write_text('x')\nEOF",
-    "git commit -F - <<'EOF'\nUndo the rebase and the --amend\nEOF",
+    "git commit -F - <<'EOF'\nUndo the git reset --hard and the --amend\nEOF",
 ])
-def test_a_heredoc_body_that_is_data_is_not_a_rewrite(cmd):
-    assert not _is_history_rewrite(cmd)
+def test_a_heredoc_body_that_is_data_is_not_a_discard(cmd):
+    assert not _discards_work(cmd)
     assert not _is_commit_amend(cmd)
 
 
 @pytest.mark.parametrize("cmd", [
-    "git rebase -i HEAD~3",
+    "git reset --hard HEAD~1",
     "echo hi && git reset --hard HEAD~1",
-    "git -C /repo rebase main",
-    "bash <<'EOF'\ncd /x\ngit rebase main\nEOF",
-    "sh -s <<'EOF'\ngit reset --hard\nEOF",
-    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'rebase', 'main'])\nEOF",
-    "perl - <<'EOF'\nsystem('git rebase main');\nEOF",
+    "git -C /repo checkout -- a.py",
+    "bash <<'EOF'\ncd /x\ngit reset --hard\nEOF",
+    "sh -s <<'EOF'\ngit clean -fd\nEOF",
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'reset', '--hard'])\nEOF",
+    "perl - <<'EOF'\nsystem('git checkout .');\nEOF",
     # option values are not a script operand; -s and stdin paths read stdin
     "bash -euo pipefail <<'EOF'\ngit reset --hard\nEOF",
     "bash -o pipefail <<'EOF'\ngit reset --hard\nEOF",
@@ -64,13 +65,38 @@ def test_a_heredoc_body_that_is_data_is_not_a_rewrite(cmd):
     "bash -s x y <<'EOF'\ngit reset --hard\nEOF",
     "bash --rcfile /dev/null <<'EOF'\ngit reset --hard\nEOF",
     "bash /dev/stdin <<'EOF'\ngit reset --hard\nEOF",
-    "sh /dev/fd/0 <<'EOF'\ngit rebase main\nEOF",
+    "sh /dev/fd/0 <<'EOF'\ngit restore a.py\nEOF",
     "source /dev/stdin <<'EOF'\ngit reset --hard\nEOF",
     ". /dev/stdin <<'EOF'\ngit reset --hard\nEOF",
-    "python3 /dev/stdin <<'EOF'\nimport os\nos.system('git rebase main')\nEOF",
+    "python3 /dev/stdin <<'EOF'\nimport os\nos.system('git reset --hard')\nEOF",
+    'git reset --hard "unbalanced',
 ])
-def test_a_real_rewrite_is_still_caught(cmd):
-    assert _is_history_rewrite(cmd)
+def test_a_real_discard_is_still_caught(cmd):
+    assert _discards_work(cmd)
+
+
+@pytest.mark.parametrize("cmd", [
+    "git rebase -i HEAD~3",
+    "git rebase -q main",
+    "git commit --amend --no-edit",
+    "git reset --soft HEAD~1",
+    "git reset --keep HEAD~1",          # git refuses to drop local changes
+    "git reset -q -- a.py",             # unstage-only
+    "git branch -f main HEAD~3",
+    "git branch -D feature",
+    "git update-ref refs/heads/main HEAD~3",
+    "git filter-branch -- --all",
+    "git checkout -b feature",
+    "git checkout -B main HEAD~3",
+    "git restore --staged a.py",
+    "git clean -n",
+    "git clean -fdn",
+    "git worktree remove /x",           # git refuses a dirty worktree without --force
+    "git stash drop",
+    "echo git reset --hard",
+])
+def test_a_ref_move_or_safe_op_is_not_a_discard(cmd):
+    assert not _discards_work(cmd)
 
 
 def test_amend_is_still_caught():
@@ -78,94 +104,38 @@ def test_amend_is_still_caught():
     assert _is_commit_amend("bash <<'EOF'\ngit commit --amend -m x\nEOF")
 
 
-SID = "sid-own"
-
-
-@pytest.fixture()
-def wt_root(tmp_path, monkeypatch):
-    """Two run worktrees: run_x belongs to SID, run_y to another session."""
-    root = tmp_path / "worktrees"
-    ws = tmp_path / "ws"
-    for rid, sid in (("run_x", SID), ("run_y", "sid-other")):
-        (root / rid / "swarmai").mkdir(parents=True)
-        rd = ws / "Projects" / "SwarmAI" / ".artifacts" / "runs" / rid
-        rd.mkdir(parents=True)
-        (rd / "run.json").write_text('{"session_id": "%s"}' % sid)
-    monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(root))
-    monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
-    return root
-
-
-def test_a_rewrite_in_a_run_worktree_or_temp_repo_is_not_gated(wt_root):
-    wt = wt_root / "run_x" / "swarmai"
-    assert _rewrites_only_scratch(f"cd {wt} && git rebase main", "", SID)
-    assert _rewrites_only_scratch("git rebase main", str(wt), SID)
-    assert _rewrites_only_scratch("git -C /tmp/scratch rebase main", "/somewhere", SID)
-    assert _rewrites_only_scratch(f"git -C {wt} reset --hard HEAD~1", "", SID)
-    assert _rewrites_only_scratch("git commit --amend --no-edit", str(wt), SID)
-    assert _rewrites_only_scratch("git rebase --onto main HEAD~2", str(wt), SID)
-
-
-def test_a_rewrite_anywhere_else_or_unknown_stays_gated(wt_root):
-    ws = "/Users/u/.swarm-ai/SwarmWS"   # not under a temp dir (tmp_path would be)
-    wt = wt_root / "run_x" / "swarmai"
-    assert not _rewrites_only_scratch("git rebase main", ws, SID)                # shared workspace
-    assert not _rewrites_only_scratch("cd $X && git rebase main", "/tmp", SID)   # unknown dir
-    assert not _rewrites_only_scratch("git rebase main", "", SID)                # no cwd
-    assert not _rewrites_only_scratch(f"git -C {ws} rebase main", str(wt_root / "run_x"), SID)
-    assert not _rewrites_only_scratch("git --git-dir=/elsewhere/.git rebase main", "/tmp", SID)
-    assert not _rewrites_only_scratch("cd /tmp && git rebase main; cd -; git rebase x", ws, SID)
-    # a rewrite a shell runs from a heredoc: its directory is not followed
-    assert not _rewrites_only_scratch("bash <<'EOF'\ngit rebase main\nEOF", "/tmp", SID)
-    # no session id: even the own worktree is not known to be own
-    assert not _rewrites_only_scratch("git rebase main", str(wt), "")
-
-
-@pytest.mark.parametrize("cmd,cwd", [
-    # git retargeted through the environment
-    ("GIT_DIR=/Users/u/.swarm-ai/SwarmWS/.git git reset --hard HEAD~3", "/tmp"),
-    ("env GIT_DIR=/Users/u/.swarm-ai/SwarmWS/.git git reset --hard", "/tmp"),
-    ("export GIT_DIR=/Users/u/.swarm-ai/SwarmWS/.git; git rebase main", "/tmp"),
-    ("GIT_WORK_TREE=/x GIT_COMMON_DIR=/y git reset --hard", "/tmp"),
-    # a directory change that is not followed
-    ("echo `cd /tmp`; git reset --hard", "/Users/u/.swarm-ai/SwarmWS"),
-    ('eval "cd $WS" && git reset --hard', "/tmp"),
-    ("source ./go.sh && git reset --hard", "/tmp"),
-    # after `;` a failed cd leaves the old directory
-    ("cd /tmp/x; git reset --hard", "/Users/u/.swarm-ai/SwarmWS"),
-])
-def test_an_unfollowed_directory_or_git_target_stays_gated(wt_root, cmd, cwd):
-    assert not _rewrites_only_scratch(cmd, cwd, SID)
+def test_the_directory_of_each_discard_is_followed(tmp_path):
+    (tmp_path / "a.py").write_text("x")
+    t = str(tmp_path)
+    assert _discard_dirs("git rebase main && git status", t) == []
+    assert _discard_dirs("git reset --hard", t) == [t]
+    assert _discard_dirs("cd /r && git reset --hard", t) == ["/r"]
+    assert _discard_dirs("git -C /r checkout -- a.py", t) == ["/r"]
+    assert _discard_dirs("cd /r; git reset --hard", t) == [""]       # a failed cd stays put
+    assert _discard_dirs("(cd /r && git reset --hard) && git clean -f", t) == ["/r", t]
+    assert _discard_dirs("git worktree remove --force /w", t) == ["/w"]
+    assert _discard_dirs("git worktree remove -f w", t) == [t + "/w"]
+    assert _discard_dirs("git checkout a.py", t) == [t]              # names a file here
+    assert _discard_dirs("git checkout main", t) == []               # a branch switch
+    assert _discard_dirs("git --git-dir=/e/.git reset --hard", t) == [""]
 
 
 @pytest.mark.parametrize("cmd", [
-    "git filter-branch -- --all",
-    "git update-ref refs/heads/main HEAD~3",
-    "git rebase main feature",                 # names a branch to check out and move
-    "git rebase --update-refs main",
-    "git branch -f main HEAD~3",
-    "git checkout -B main HEAD~3",
+    # git retargeted through the environment
+    "GIT_DIR=/Users/u/.swarm-ai/SwarmWS/.git git reset --hard HEAD~3",
+    "env GIT_DIR=/Users/u/.swarm-ai/SwarmWS/.git git reset --hard",
+    "export GIT_DIR=/Users/u/.swarm-ai/SwarmWS/.git; git reset --hard",
+    "GIT_WORK_TREE=/x GIT_COMMON_DIR=/y git reset --hard",
+    # a directory change that is not followed
+    "echo `cd /tmp`; git reset --hard",
+    'eval "cd $WS" && git reset --hard',
+    "source ./go.sh && git reset --hard",
+    # a discard a shell runs from a heredoc
+    "bash <<'EOF'\ngit reset --hard\nEOF",
+    'git reset --hard "unbalanced',
 ])
-def test_a_rewrite_that_moves_shared_refs_stays_gated_in_the_own_worktree(wt_root, cmd):
-    """A run worktree shares refs with the main checkout and every other run."""
-    wt = wt_root / "run_x" / "swarmai"
-    assert not _rewrites_only_scratch(cmd, str(wt), SID)
-
-
-def test_another_sessions_run_worktree_stays_gated(wt_root):
-    other = wt_root / "run_y" / "swarmai"
-    assert not _rewrites_only_scratch("git reset --hard HEAD~1", str(other), SID)
-    assert not _rewrites_only_scratch(f"git -C {other} rebase main", "", SID)
-
-
-def test_a_temp_worktree_of_a_shared_repo_stays_gated(tmp_path):
-    wt = tmp_path / "wt"
-    wt.mkdir()
-    (wt / ".git").write_text("gitdir: /Users/u/.swarm-ai/SwarmWS/.git/worktrees/wt\n")
-    assert not _rewrites_only_scratch("git reset --hard HEAD~3", str(wt), SID)
-    own = tmp_path / "repo"
-    (own / ".git").mkdir(parents=True)
-    assert _rewrites_only_scratch("git reset --hard HEAD~3", str(own), SID)
+def test_an_unfollowed_directory_or_git_target_cannot_be_told(cmd):
+    assert _discard_dirs(cmd, "/tmp") is None
 
 
 # ── run owner token binding ──────────────────────────────────────────────────

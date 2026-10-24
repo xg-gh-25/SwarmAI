@@ -946,34 +946,24 @@ def _is_tag_ref(ref: str) -> bool:
     return True
 
 
-def _is_history_rewrite(command: str) -> bool:
-    """Fail-closed predicate: is this a LOCAL git history-rewrite op?
+def _discards_work(command: str) -> bool:
+    """Fail-closed predicate: does *command* discard uncommitted working-tree changes?
 
-    DoD1 (2026-08-11): a sibling session's ``git rebase`` once dropped a whole
-    commit (gate-enforcing code) from HEAD while another session was live on the
-    SAME shared working tree (single ``main``, shared index). Unlike
-    ``_is_irreversible_external_op`` (which guards REMOTE ops: force-push, gh
-    delete/visibility), this guards the LOCAL ops that rewrite committed history
-    reachable from HEAD, so they can be blocked WHEN another live session may
-    lose work. Gate wiring decides whether to block; this only classifies.
+    What git can lose (design 2026-10-24-swarmai-usable-by-anyone §3.8): a ref move
+    (rebase, ``commit --amend``, a ``reset`` to another commit, ``branch -f``,
+    ``update-ref``) keeps the old commits in the reflog, so it is recoverable and is not
+    flagged. These destroy uncommitted changes and are flagged (_segment_discards):
+    ``reset --hard`` / ``--merge``; ``checkout -f`` / ``-p`` / ``-- <path>`` / ``.``;
+    ``restore`` of the working tree; ``switch -f`` / ``--discard-changes``;
+    ``clean -f``; ``worktree remove --force``. ``git stash drop|clear`` is not: a
+    stash is not a file another session wrote, so the gate's fact cannot speak for it.
 
-    Flags True for:
-    - ``git rebase`` (any form, incl. ``-i`` / ``--onto``)
-    - ``git reset --hard`` / ``--merge`` / ``--keep`` (working-tree/HEAD-moving
-      resets that can discard commits). A BARE ``git reset`` / ``reset -q -- <p>``
-      is unstage-only (the auto_commit hook itself uses it) → NOT flagged.
-    - ``git commit --amend`` (rewrites the tip commit)
-    - ``git filter-branch`` / ``git filter-repo`` (history rewriters)
-
-    Token-aware, segment-split on shell separators so a rewrite op chained after a
-    benign command is still caught. A heredoc / here-string body is judged by what
-    reads it (_executed_bodies): a shell runs it as commands, an interpreter as code,
-    any other program (``cat > f``, ``git commit -F -``) only receives data, so the
-    word "rebase" in a file being written is not a rewrite. Unparseable input → the
-    rewrite signature searched in the text with its terminated heredoc bodies removed
-    (fail closed). Non-git → False.
+    Without a directory this cannot see ``git checkout <path>`` (one operand that
+    names a file); _discard_dirs does. A heredoc / here-string body is judged by what
+    reads it (_executed_bodies). Unparseable input → the discard signature searched in
+    the text with its terminated heredoc bodies removed (fail closed). Non-git → False.
     """
-    return _judge_with_bodies(command, _segment_is_history_rewrite, _REWRITE_SIG_RE, 0)
+    return _judge_with_bodies(command, _segment_discards, _DISCARD_SIG_RE, 0)
 
 
 def _segment_is_commit_amend(seg: list[str]) -> bool:
@@ -984,12 +974,18 @@ def _segment_is_commit_amend(seg: list[str]) -> bool:
 
 def _is_commit_amend(command: str) -> bool:
     """Is any segment of *command* a ``git commit --amend``? Same tokenizing and
-    heredoc rule as ``_is_history_rewrite``; unparseable input naming ``commit`` and
+    heredoc rule as ``_discards_work``; unparseable input naming ``commit`` and
     ``--amend`` → True."""
     return _judge_with_bodies(command, _segment_is_commit_amend, _AMEND_SIG_RE, 0)
 
 
-_REWRITE_SIG_RE = re.compile(r"\b(rebase|reset\s+--hard|--amend|filter-branch|filter-repo)\b")
+# Fail-closed text signature for a discard (unparseable input, interpreter bodies):
+# `\W+` so a python argv list (``'reset', '--hard'``) matches as well as shell text.
+_DISCARD_SIG_RE = re.compile(
+    r"\bgit\b[\s\S]*?\b(?:reset\W+--(?:hard|merge)|checkout|restore|switch|clean\W+-"
+    r"|worktree\W+remove)\b")
+# The discard check runs `git status` per repo (2.5 s cap each, shared_checkout).
+_DISCARD_CHECK_TIMEOUT = 6.0
 _AMEND_SIG_RE = re.compile(r"\bcommit\b.*--amend\b", re.S)
 _STDIN_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 # Script operands that are stdin itself.
@@ -1095,43 +1091,15 @@ def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int) -> bool:
 _GIT_RETARGET_RE = re.compile(r"\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE)\b")
 
 
-def _rewrite_is_branch_local(seg: list[str]) -> bool:
-    """True when the rewrite in *seg* only moves the CURRENT branch: ``reset``,
-    ``commit --amend``, or a ``rebase`` with at most one positional (the upstream) and
-    no ``--update-refs``. ``filter-branch`` / ``filter-repo`` / ``update-ref`` /
-    ``branch -f|-D|-M`` / ``checkout -B`` and a rebase naming a branch can move refs a
-    worktree shares with its main checkout and the other runs: never local."""
-    sub_rest = _segment_git_subcommand(seg)
-    if sub_rest is None:
-        return False
-    sub, rest = sub_rest
-    if sub in ("reset", "commit"):
-        return True
-    if sub != "rebase":
-        return False
-    positional = 0
-    i = 0
-    while i < len(rest):
-        a = rest[i]
-        if a.startswith("--update-refs"):
-            return False
-        if a in ("--onto", "-s", "--strategy", "-X", "--strategy-option", "-x", "--exec"):
-            i += 2
-            continue
-        if not a.startswith("-"):
-            positional += 1
-        i += 1
-    return positional <= 1
-
-
-def _rewrite_dirs(command: str, cwd: str) -> "list[str] | None":
-    """The directory each git history rewrite of *command* runs in ("" = unknown or not
-    exemptible), following ``cd X &&`` chains and ``git -C``. A rewrite that is not
-    branch-local (_rewrite_is_branch_local) gets "". None (cannot tell) when the
-    command does not parse; when a heredoc body a shell / interpreter runs holds a
-    rewrite; when it names GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR / GIT_INDEX_FILE
-    (an assignment, ``env`` or ``export`` retargets git); or when it has a backtick or
-    an ``eval`` / ``source`` / ``.`` (a directory change not followed)."""
+def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
+    """The directory each working-tree discard of *command* (_segment_discard_target)
+    runs in, following ``cd X &&`` chains and ``git -C``; ``worktree remove`` gives the
+    worktree it removes. "" = that discard's directory is unknown; [] = no discard.
+    None (cannot tell) when the command does not parse; when a heredoc body a shell /
+    interpreter runs may hold a discard; when it names GIT_DIR / GIT_WORK_TREE /
+    GIT_COMMON_DIR / GIT_INDEX_FILE (git retargeted through the environment); or when
+    it has a backtick or an ``eval`` / ``source`` / ``.`` (a directory change not
+    followed)."""
     seps: list[str] = []
     segments = _gate_shell_segments(command, seps)
     if segments is None:
@@ -1140,9 +1108,9 @@ def _rewrite_dirs(command: str, cwd: str) -> "list[str] | None":
         return None
     if any((_unwrap_program(seg) or [""])[0] in ("eval", "source", ".") for seg in segments):
         return None
-    if _executed_bodies(command, segments) and _judge_with_bodies(
-            command, lambda seg: False, _REWRITE_SIG_RE, 0):
-        return None
+    for kind, body in _executed_bodies(command, segments):
+        if _DISCARD_SIG_RE.search(body) and (kind != "python" or _code_can_execute(body)):
+            return None
     out: list[str] = []
     cur = cwd or ""
     stack: list[str] = []
@@ -1161,10 +1129,27 @@ def _rewrite_dirs(command: str, cwd: str) -> "list[str] | None":
                 # the old directory
                 cur = pending if op == "&&" else ""
             pending = None
-        if _segment_is_history_rewrite(seg):
-            out.append(_git_dir_of(seg, cur) if _rewrite_is_branch_local(seg) else "")
+        target = _segment_discard_target(seg, cur)
+        if target is not None:
+            out.append(target)
         pending = _cd_segment_target(seg, cur)
     return out
+
+
+def _segment_discard_target(seg: list[str], cur: str) -> "str | None":
+    """None when *seg* discards nothing; else the directory whose uncommitted changes it
+    discards ("" = unknown): where git runs, or the worktree ``worktree remove`` removes."""
+    sub_rest = _segment_git_subcommand(seg)
+    if sub_rest is None:
+        return None
+    sub, rest = sub_rest
+    d = _git_dir_of(seg, cur)
+    if sub == "worktree":
+        if not _segment_discards(seg):
+            return None
+        ops = [a for a in rest[1:] if not a.startswith("-")]
+        return _resolve_dir(d, ops[0]) if ops else ""
+    return d if _segment_discards(seg, d or None) else None
 
 
 def _git_dir_of(seg: list[str], cur: str) -> str:
@@ -1192,101 +1177,6 @@ def _git_dir_of(seg: list[str], cur: str) -> str:
             return ""
         i += 1
     return d
-
-
-def _under_any(path: str, roots: "list[str]") -> bool:
-    real = os.path.realpath(path)
-    for r in roots:
-        rr = os.path.realpath(r)
-        if real == rr or real.startswith(rr.rstrip("/") + "/"):
-            return True
-    return False
-
-
-def _temp_roots() -> "list[str]":
-    import tempfile
-    return [tempfile.gettempdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
-
-
-def _repo_store_of(d: str) -> "str | None":
-    """Where the repo containing *d* keeps its objects: the ``.git`` dir, or for a
-    linked worktree the ``gitdir:`` its ``.git`` file names. None: no repo found or
-    the pointer cannot be read."""
-    cur = os.path.realpath(d)
-    while True:
-        g = os.path.join(cur, ".git")
-        if os.path.isdir(g):
-            return g
-        if os.path.isfile(g):
-            try:
-                line = open(g, encoding="utf-8").read().strip()
-            except OSError:
-                return None
-            if not line.startswith("gitdir:"):
-                return None
-            p = line[len("gitdir:"):].strip()
-            return os.path.realpath(p if os.path.isabs(p) else os.path.join(cur, p))
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return ""
-        cur = parent
-
-
-def _own_run_worktree(d: str, sid: str) -> "bool | None":
-    """None when *d* is not inside a run worktree; else whether the run's run.json
-    names *sid* as its session (unreadable or no sid → False)."""
-    try:
-        from core.run_worktree import run_for_path
-        hit = run_for_path(d)
-    except Exception:  # noqa: BLE001 — no worktree root: not a run worktree
-        logger.debug("_own_run_worktree: suppressed exception on a fail-safe path", exc_info=True)
-        return None
-    if hit is None:
-        return None
-    if not sid:
-        return False
-    try:
-        import glob
-        import json as _json
-        from core.run_worktree import _signed_view
-        pattern = os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts", "runs",
-                               hit[0], "run.json")
-        for f in glob.glob(pattern)[:4]:
-            data = _json.loads(open(f, encoding="utf-8").read())
-            # the owner comes from the signed events, never run.json (B-e review HIGH)
-            view = _signed_view(Path(f), data) if isinstance(data, dict) else None
-            if view is not None and view.get("session_id") == sid \
-                    and not view.get("_unreadable"):
-                return True
-    except Exception:  # noqa: BLE001 — cannot tell whose run it is: not scratch
-        logger.debug("_own_run_worktree: suppressed exception on a fail-safe path", exc_info=True)
-        return False
-    return False
-
-
-def _scratch_dir(d: str, sid: str = "") -> bool:
-    """A directory whose history no other session shares: inside THIS session's own
-    run worktree (another run's worktree stays gated), or a temp directory whose repo
-    store is in a temp directory too (a temp worktree of a shared repo is not scratch)."""
-    if not d:
-        return False
-    own = _own_run_worktree(d, sid)
-    if own is not None:
-        return own               # another session's run worktree is never scratch
-    roots = _temp_roots()
-    if not _under_any(d, roots):
-        return False
-    store = _repo_store_of(d)
-    return store == "" or (store is not None and _under_any(store, roots))
-
-
-def _rewrites_only_scratch(command: str, cwd: str, sid: str = "") -> bool:
-    """True when every history rewrite in *command* is branch-local and runs in a
-    scratch directory (_scratch_dir): this session's own run worktree or a temp repo,
-    where no sibling session's work can be lost. Unknown, not branch-local, or
-    unparseable → False (the gate applies)."""
-    dirs = _rewrite_dirs(command, cwd)
-    return bool(dirs) and all(_scratch_dir(d, sid) for d in dirs)
 
 
 _PY_INTERPRETER_RE = re.compile(r"(?:^|/)python[\d.]*$")
@@ -1325,68 +1215,106 @@ def _segment_git_subcommand(tokens: list[str]) -> "tuple[str, list[str]] | None"
     return tokens[k], tokens[k + 1:]
 
 
-def _segment_is_history_rewrite(tokens: list[str]) -> bool:
-    """Judge ONE command segment (already split on shell separators)."""
+def _short_flags(args: "list[str]") -> "set[str]":
+    """The letters of every single-dash option cluster (``-fdx`` → f, d, x)."""
+    out: set[str] = set()
+    for a in args:
+        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            out.update(a[1:])
+    return out
+
+
+def _checkout_discards(rest: "list[str]", d: "str | None") -> bool:
+    """Does ``git checkout <rest>`` overwrite working-tree files? ``-f`` / ``-p`` /
+    paths after ``--`` / ``.`` / a tree-ish followed by paths do. One operand is a branch
+    switch (git carries local changes or refuses) unless it names an existing path in
+    *d*; with *d* unknown (None) it cannot be told apart, so it counts."""
+    i = rest.index("--") if "--" in rest else len(rest)
+    if rest[i + 1:]:
+        return True
+    pos: list[str] = []
+    creates = False
+    k = 0
+    while k < i:
+        a = rest[k]
+        if a in ("-f", "--force", "-p", "--patch") or a.startswith("--pathspec-from-file"):
+            return True
+        if a in ("-b", "-B", "--orphan"):
+            creates = True
+            k += 2
+            continue
+        if a.startswith("-"):
+            if not a.startswith("--") and ("f" in a[1:] or "p" in a[1:]):
+                return True
+            k += 1
+            continue
+        pos.append(a)
+        k += 1
+    if creates:
+        return False
+    if "." in pos or len(pos) >= 2:
+        return True
+    if len(pos) == 1:
+        return d is None or os.path.lexists(os.path.join(d, pos[0]))
+    return False
+
+
+def _segment_discards(tokens: list[str], d: "str | None" = None) -> bool:
+    """Does ONE command segment discard uncommitted working-tree changes? *d* is the
+    directory git runs in (None = unknown), needed only for ``git checkout <one operand>``.
+    A ref move (rebase, amend, a reset without --hard/--merge, branch -f, update-ref)
+    and ``reset --keep`` (git refuses to drop local changes) are not discards."""
     sub_rest = _segment_git_subcommand(tokens)
     if sub_rest is None:
         return False
     sub, rest = sub_rest
-    if sub in ("rebase", "filter-branch", "filter-repo", "update-ref"):
-        # update-ref rewrites a ref pointer directly (can orphan commits).
-        return True
-    if sub == "commit":
-        return any(a == "--amend" or a.startswith("--amend") for a in rest)
     if sub == "reset":
-        # --hard / --merge / --keep move HEAD/working-tree destructively.
-        # A bare `git reset` or `git reset -- <path>` is unstage-only → safe.
-        return any(a in ("--hard", "--merge", "--keep") for a in rest)
-    if sub == "branch":
-        # `git branch -f/-D/-M <name> [<start>]` force-moves/deletes a branch
-        # pointer → can orphan commits on the shared tree (the incident's class).
-        # `-m`/`-c` (rename/copy) and a bare `git branch` (list) are safe.
-        return any(a in ("-f", "--force", "-D", "-M") or a.startswith("--force") for a in rest)
+        return any(a in ("--hard", "--merge") for a in rest)
     if sub == "checkout":
-        # `git checkout -B <name>` force-resets an existing branch to a start point
-        # → orphans commits. Plain `-b` (create-new, fails if exists) is safe.
-        return any(a == "-B" for a in rest)
+        return _checkout_discards(rest, d)
+    if sub == "restore":
+        flags = _short_flags(rest)
+        staged = "--staged" in rest or "S" in flags
+        worktree = "--worktree" in rest or "W" in flags
+        return worktree or not staged
+    if sub == "switch":
+        return any(a in ("-f", "--force", "--discard-changes") for a in rest)
+    if sub == "clean":
+        flags = _short_flags(rest)
+        if "--dry-run" in rest or "n" in flags:
+            return False
+        return "--force" in rest or "f" in flags
+    if sub == "worktree":
+        return bool(rest) and rest[0] == "remove" and any(
+            a in ("-f", "--force") or a.startswith("--force") for a in rest[1:])
     return False
 
 
-def _other_live_sessions_present(current_app_session_id: str) -> "bool | None":
-    """True iff another LIVE session (besides *current_app_session_id*) exists.
-
-    Reads the session registry via ``list_units()`` (same source as
-    ``auto_commit_hook._other_live_sessions_touched``). Compares each unit's own
-    ``session_id`` (the app-level key ``_units`` is indexed by, and the value
-    stored in ``session_context['sdk_session_id']``) — NOT the SDK/agent
-    ``session_key``, which lives in a different namespace (Gate-2 BUG A).
-
-    Only ``is_alive`` units count: ``_units`` retains DEAD/COLD units up to ~1h
-    (lifecycle_manager._purge_stale_cold), so an unfiltered scan would gate every
-    rewrite for an hour after a sibling died (Gate-2 BUG B).
-
-    Returns:
-    - ``True``  → at least one OTHER live session exists
-    - ``False`` → this is the only live session
-    - ``None``  → registry unavailable / error (caller decides fail-safe)
-    """
-    try:
-        from core import session_registry
-        router = session_registry.session_router
-        if router is None:
-            return None
-        list_units = getattr(router, "list_units", None)
-        if list_units is None:
-            return None
-        for unit in list_units():
-            if not getattr(unit, "is_alive", False):
-                continue
-            if getattr(unit, "session_id", None) != current_app_session_id:
-                return True
-        return False
-    except Exception as e:  # pragma: no cover - registry edge
-        logger.debug("history-rewrite gate: could not read session registry: %s", e)
-        return None
+def _foreign_uncommitted(dirs: "list[str] | None", mine: "dict | None") -> str:
+    """What a discard in *dirs* (_discard_dirs; None or "" = unknown directory) would
+    destroy of other sessions' work: "" when nothing, else a short description for the
+    approval card. The facts are shared_checkout's: files another session wrote
+    (its file tracker) that git still reports as uncommitted, read fresh. An unknown
+    directory is judged against every repo another session wrote in. Raises
+    shared_checkout.GitUnknown when git cannot tell. Runs git: call off the event loop."""
+    from core import shared_checkout
+    from core.repo_guidance import _repo_root
+    roots: set[str] = set()
+    if dirs is None or "" in dirs:
+        roots |= shared_checkout.sibling_repos(mine)
+    for d in dirs or ():
+        if d:
+            r = _repo_root(d)
+            if r:
+                roots.add(r)
+    parts = []
+    for root in sorted(roots):
+        for _sid, rels in shared_checkout.sibling_uncommitted(root, mine, strict=True):
+            shown = ", ".join(rels[:5]) + (f" (+{len(rels) - 5} more)" if len(rels) > 5 else "")
+            parts.append(f"{root}: {shown}")
+    if not parts:
+        return ""
+    return ("Discards uncommitted changes another session made — " + "; ".join(parts))
 
 
 def load_dangerous_patterns() -> list[str]:
@@ -1612,28 +1540,30 @@ def create_dangerous_command_gate(
             or _targets_irreplaceable_store(command)  # rm/mv of DDD/Library/.context (run_a456640f)
             or _is_v1_land_request(command)  # consumes one explicit manual-land approval
         )
-        # DoD1: local history-rewrite (rebase / reset --hard / commit --amend /
-        # filter-*) is dangerous ONLY when a SIBLING live session could lose work
-        # on the shared tree. Solo session → a local rewrite affects only its own
-        # history, not gated. Registry unavailable → fail-safe stringent (these
-        # ops are irreversible; s_workspace-git already requires asking first).
-        if not is_dangerous and _is_history_rewrite(command) and not _rewrites_only_scratch(
-                command, str(input_data.get("cwd") or ""),
-                str(session_context.get("sdk_session_id") or "")):   # run.json's namespace
-            # A rewrite inside a run's own worktree or a temp repo touches no history
-            # another session shares (each run has its own branch): not gated.
-            # Use the app-level session_id (the _units key), NOT session_key —
-            # session_key is resume_session_id/agent_id, a different namespace, so
-            # a solo session would never self-match → falsely gated (Gate-2 BUG A).
-            app_sid = session_context.get("sdk_session_id") or session_key
-            others = _other_live_sessions_present(app_sid)
-            if others is not False:  # True (sibling exists) OR None (unknown)
-                is_dangerous = True
-                logger.warning(
-                    "[HISTORY-REWRITE] gated (%s): %s",
-                    "sibling live" if others else "registry unavailable — fail-safe",
-                    command[:80],
-                )
+        # A command that discards uncommitted working-tree changes (reset --hard,
+        # checkout -- <path>, restore, clean -f, worktree remove --force, …) is asked
+        # only when it would destroy files ANOTHER session wrote that are still
+        # uncommitted (shared_checkout's facts). Ref moves (rebase, amend, branch -f,
+        # update-ref) are never asked here: the reflog keeps the old commits. Git
+        # failing or timing out → asked (the one case the facts cannot clear).
+        discard_reason = ""
+        if not is_dangerous:
+            dirs = _discard_dirs(command, str(input_data.get("cwd") or ""))
+            if dirs is None and not _discards_work(command):
+                dirs = []
+            if dirs != []:
+                from core import executors
+                try:
+                    discard_reason = await asyncio.wait_for(
+                        executors.run_in("gate", _foreign_uncommitted, dirs, session_context),
+                        timeout=_DISCARD_CHECK_TIMEOUT)
+                except Exception:  # noqa: BLE001 — cannot tell: a person decides
+                    logger.debug("discard check could not read git", exc_info=True)
+                    discard_reason = ("Discards uncommitted changes; could not check whether "
+                                      "another session has uncommitted work there")
+                if discard_reason:
+                    is_dangerous = True
+                    logger.warning("[DISCARD] gated: %s", command[:80])
         if not is_dangerous:
             return {"decision": "approve"}
 
@@ -1666,7 +1596,7 @@ def create_dangerous_command_gate(
         request_id = f"perm_{uuid4().hex[:12]}"
         tool_input_data = input_data.get("tool_input", {})
         # a v1 authorization shows what it binds, read from the signed event (C1)
-        reason_text = (_is_v1_land_request(command) and v1_land_card(command)) \
+        reason_text = discard_reason or (_is_v1_land_request(command) and v1_land_card(command)) \
             or "Matches dangerous command pattern"
 
         permission_request = {
@@ -1723,7 +1653,7 @@ def create_dangerous_command_gate(
                 "Re-run if you still need it."
             )
         else:
-            reason = "User denied: Matches dangerous command pattern"
+            reason = f"User denied: {discard_reason or 'Matches dangerous command pattern'}"
 
         return {
             "hookSpecificOutput": {
@@ -3301,7 +3231,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # The run gates key on "this session's active run" (contract C6): a run.json under
 # <workspace>/Projects/*/.artifacts/runs/*/run.json with status active / reflecting and
 # session_id == the hook's APP session id. The app session id arrives as
-# session_context["sdk_session_id"] (historical name; see _other_live_sessions_present).
+# session_context["sdk_session_id"] (historical name).
 # (pipeline_test_gate, which routed a run's tests through the pipeline's own runner,
 # and direct_commit_gate were removed: design 2026-10-24-swarmai-usable-by-anyone
 # §3.3.3, §3.4.)

@@ -24,7 +24,12 @@ Inject-only, never a deny, no setting (P3/P4): the agent decides, the user can s
 State (the repos already noted) lives in the session's own hook context
 (``_shared_checkout_noted``), so it ends with the session. Errors fail open (no note).
 
-Public: ``create_shared_checkout_hook``, ``sibling_uncommitted``.
+The same facts decide dangerous_command_gate's discard rule (a command that would
+destroy uncommitted work another session wrote): ``sibling_uncommitted(strict=True)``
+reads git fresh and raises GitUnknown instead of reporting "nothing".
+
+Public: ``create_shared_checkout_hook``, ``sibling_uncommitted``, ``sibling_repos``,
+``GitUnknown``.
 """
 from __future__ import annotations
 
@@ -61,29 +66,36 @@ def _live_contexts():
     return out
 
 
-def _git_dirty(root: str, rels: "list[str]") -> "set[str]":
-    """The subset of *rels* (repo-relative) git reports as modified, added or untracked."""
+def _git_dirty(root: str, rels: "list[str]", fresh: bool = False) -> "set[str] | None":
+    """The subset of *rels* (repo-relative) git reports as modified, added or untracked;
+    None when git could not tell (not cached). *fresh* skips the cache."""
     import time
     key = (root, frozenset(rels))
     hit = _dirty_cache.get(key)
     now = time.monotonic()
-    if hit is not None and now - hit[0] < _DIRTY_TTL:
+    if not fresh and hit is not None and now - hit[0] < _DIRTY_TTL:
         return hit[1]
     dirty = _git_status(root, rels)
+    if dirty is None:
+        return None
     if len(_dirty_cache) > 256:
         _dirty_cache.clear()
     _dirty_cache[key] = (now, dirty)
     return dirty
 
 
-def _git_status(root: str, rels: "list[str]") -> "set[str]":
+def _git_status(root: str, rels: "list[str]") -> "set[str] | None":
+    """None: git failed or timed out."""
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
-    p = subprocess.run(
-        ["git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-         "--", *rels],
-        capture_output=True, text=True, timeout=_GIT_TIMEOUT, env=env)
+    try:
+        p = subprocess.run(
+            ["git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+             "--", *rels],
+            capture_output=True, text=True, timeout=_GIT_TIMEOUT, env=env)
+    except (OSError, subprocess.SubprocessError):
+        return None
     if p.returncode != 0:
-        return set()
+        return None
     dirty = set()
     for entry in p.stdout.split("\0"):
         if len(entry) > 3:
@@ -91,8 +103,17 @@ def _git_status(root: str, rels: "list[str]") -> "set[str]":
     return dirty
 
 
-def sibling_uncommitted(root: str, mine: "dict | None") -> "list[tuple[str, list[str]]]":
-    """[(other session id, its uncommitted files under *root*, repo-relative)], sorted."""
+class GitUnknown(Exception):
+    """git could not say which files are uncommitted (sibling_uncommitted strict=True)."""
+
+
+def sibling_uncommitted(root: str, mine: "dict | None",
+                        strict: bool = False) -> "list[tuple[str, list[str]]]":
+    """[(other session id, its uncommitted files under *root*, repo-relative)], sorted.
+
+    When git cannot tell: [] by default (the note fails open); with *strict* (the
+    dangerous_command_gate's discard rule) GitUnknown is raised, and the cache is not
+    used, so a sibling's edit since the last check is seen."""
     root = os.path.realpath(root)
     prefix = root + os.sep
     per_session: dict[str, list[str]] = {}
@@ -104,13 +125,33 @@ def sibling_uncommitted(root: str, mine: "dict | None") -> "list[tuple[str, list
                 per_session.setdefault(sid, []).append(os.path.relpath(p, root))
     if not per_session:
         return []
-    dirty = _git_dirty(root, sorted({r for rels in per_session.values() for r in rels}))
+    dirty = _git_dirty(root, sorted({r for rels in per_session.values() for r in rels}),
+                       fresh=strict)
+    if dirty is None:
+        if strict:
+            raise GitUnknown(root)
+        return []
     out = []
     for sid, rels in sorted(per_session.items()):
         hit = sorted(r for r in set(rels) if r in dirty)
         if hit:
             out.append((sid, hit))
     return out
+
+
+def sibling_repos(mine: "dict | None") -> "set[str]":
+    """Every git repo another session has written a file in (repo roots, realpath'd)."""
+    from core.repo_guidance import _repo_root
+    roots = set()
+    for _sid, ctx in _live_contexts():
+        if ctx is mine:
+            continue
+        for p in list(ctx.get("_files_written") or ()):
+            if isinstance(p, str):
+                r = _repo_root(p)
+                if r:
+                    roots.add(r)
+    return roots
 
 
 def _render(root: str, found: "list[tuple[str, list[str]]]") -> str:

@@ -251,23 +251,6 @@ def test_a_forged_row_neither_settles_a_live_run_nor_hides_its_worktree(tmp_path
         r.close()
 
 
-def test_a_forged_run_json_owner_does_not_make_a_worktree_this_sessions(tmp_path,
-                                                                       monkeypatch):
-    from core import run_worktree, security_hooks
-    r = _rig(tmp_path, monkeypatch)
-    try:
-        run_file = r.ws / "Projects" / r._run_args()[1] / ".artifacts" / "runs" / r.run_id \
-            / "run.json"
-        data = json.loads(run_file.read_text())
-        data["session_id"] = OTHER
-        run_file.write_text(json.dumps(data))
-        monkeypatch.setattr(run_worktree, "run_for_path", lambda _d: (r.run_id, "repo"))
-        monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(r.ws))
-        assert security_hooks._own_run_worktree("/any", OTHER) is False
-    finally:
-        r.close()
-
-
 def test_a_project_name_with_a_space_still_creates(tmp_path):
     assert _create(tmp_path, project="Agent DLC").store.read_events()
 

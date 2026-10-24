@@ -224,8 +224,9 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   tool: `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <repo>`, commit there,
   `land` (rebases, refuses a branch that would put back someone else's change, then
   fast-forwards), `remove`. Never hand-roll `worktree add` / `rebase` / `merge --ff-only`: that
-  skips the revert check, and with other sessions live every history rewrite asks the user for
-  an approval the tool never needs.
+  skips the revert check. Never discard uncommitted changes (`reset --hard`, `checkout --`,
+  `restore`, `clean -f`, `worktree remove --force`) where another session's are: the user is
+  asked first.
 - **Tests (any language, any runner):** wrap every test command in a wall-clock cap shorter
   than the Bash timeout (macOS/Linux: `perl -e 'alarm 100; exec @ARGV' <command>`, or
   `timeout` / `gtimeout`): a run still going at the Bash timeout is moved to the background
