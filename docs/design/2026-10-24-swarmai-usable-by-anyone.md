@@ -3,7 +3,7 @@ title: SwarmAI 让别人装上就能用 — 产品原则、安装包、通用 pi
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: final r8 — XG 2026-10-24 定稿；skeptic fc5328aa 的发现已并入；r1–r8 的演进见末尾"修订记录"
+status: final r9 — XG 2026-10-24 定稿；r1–r9 的演进见末尾"修订记录"
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -28,11 +28,17 @@ status: final r8 — XG 2026-10-24 定稿；skeptic fc5328aa 的发现已并入�
 - 每个 gate 都必须对所有用户可用、有价值，不能为某个仓库、某个人的习惯或某台机器加。
 - gate 只用来保护：危险或不可逆的操作、对外的副作用、需要人回答的问题、用户主动开启的 pipeline run 本身的完整性。
 - gate 不能用来挡 native 写代码、跑测试或 commit，也不能用来把人赶进 pipeline。
-- 想对某个仓库更严格（比如 commit 前必须审查），只能通过所有用户都能用的开关来做：Settings 或仓库的 `.swarmai/pipeline.toml`。
+- 不设"按仓库强制"的 gate（r9）：commit 前要不要审查、要不要走 pipeline，由 agent 按改动判断、或由用户在 session 里选择（P4），不靠 gate。仓库想要更严格的做法，写进它自己的 AGENTS.md 作为指引。
 - 新增 gate 前必须回答两个问题：所有用户都用得上吗？有价值吗？并且先看度量（§6）。
 
-**P4 产品默认是"相称"。**
-小改动、文档、探索性修改直接用 native。风险较大的改动（跨模块、改公共接口或数据结构、迁移、安全相关、多会话可能同时改同一处、用户要求无人值守做完），由 agent 主动建议走 pipeline 并说明理由，用户同意才走。
+**P4 产品默认是"相称"，选择发生在 session 里（r9）。**
+- 小改动、文档、探索性修改：agent 直接用 native 方式做，不问。
+- 风险较大的改动（跨模块、改公共接口或数据结构、迁移、安全相关、多会话可能同时改同一处）：agent 说明理由，用 AskUserQuestion 让用户选"直接改（native）"或"走 pipeline"。同一个 session 里只问一次，后面同类任务沿用；没回答时默认 native（包括无人值守的渠道）。
+- 用户随时可以主动说"用 pipeline 做"。
+- 没有 Settings 开关。
+
+**P6 native 模式下，审查由 agent 自主决定（r9）。**
+agent 用 native 方式写完、测完后，自己判断要不要请专家审查、请哪几位（§3.5 的专家名录），拿到 finding 后自己修、决定是否复审，并在交付里写清楚请了谁、发现了什么、修了什么、还剩什么风险。没有任何 gate 参与。走 pipeline 时，审查用 pipeline 自己的机制（Gate-0 + Gate-2）。两种模式用同一套专家。
 
 **P5 不再做"防 agent 作恶"类加固，先量再加。**
 B-d（人工接口鉴权）、sandbox 子进程、首次批准、agent 进程隔离都不做；E7 遗留项 7 保持"已知、不修"。新增任何 gate 或加固之前，先拿到两组数字：每个 run 的成本，和每个 gate 实际拦下了多少真问题。
@@ -88,14 +94,15 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 
 ### 3.3 通用 pipeline：流程控制和质量收敛
 
-#### 3.3.1 触发
+#### 3.3.1 触发（r9）
 
 | 方式 | 行为 |
 |---|---|
 | 用户在对话里要求（"用 pipeline 做"、"无人值守做完"） | 走 pipeline |
-| 仓库 `.swarmai/pipeline.toml` 的 `[pipeline] trigger` | `manual`（默认）：只有用户要求才走；`suggest`：风险较大的改动 agent 主动建议；`auto`：该仓库的改动都走 |
-| Settings 里按项目 / 仓库的同名开关 | 同上；与仓库声明不一致时以 Settings 为准 |
-| 都没有 | `manual`，默认 native |
+| 风险较大的改动 | agent 在 session 里询问一次（P4），用户选了 pipeline 才走 |
+| 其他 | native |
+
+没有 Settings 开关，`pipeline.toml` 里也没有触发字段。
 
 #### 3.3.2 保留的流程（全部保留，只改不通用的地方）
 
@@ -148,12 +155,6 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 #### 3.3.5 `.swarmai/pipeline.toml`（全部字段可选）
 
 ```toml
-[pipeline]
-trigger = "manual"            # manual | suggest | auto
-
-[commit]
-require_review = false        # true: 这个仓库的 commit 前必须有审查 sub-agent 审过（§3.4）
-
 [landing]
 author = "repo"               # repo（默认）| swarm
 trailer = ""                  # 例如 SwarmAI 仓库写 "Co-Authored-By: Swarm <swarm@swarmai.dev>"
@@ -162,7 +163,7 @@ trailer = ""                  # 例如 SwarmAI 仓库写 "Co-Authored-By: Swarm 
 link = []                     # 例如 ["desktop/node_modules"]
 ```
 
-没有测试命令字段：pipeline 不执行测试。仓库想告诉 agent 怎么测，写在 README、AGENTS.md 或 `.swarmai/review.md` 里，agent 自己读。
+只有这两项，都只影响 pipeline 的落地和 worktree。没有测试命令字段（pipeline 不执行测试），也没有触发和审查字段（r9：由 session 里的选择和 agent 的判断决定）。仓库想告诉 agent 怎么测、要不要多审，写在 README、AGENTS.md 或 `.swarmai/review.md` 里，agent 自己读。
 
 ### 3.4 gate：只保留产品级的
 
@@ -172,12 +173,33 @@ link = []                     # 例如 ["desktop/node_modules"]
 | SwarmAI 产品的记忆和 DDD 系统（只提示、不拦截） | `governance_file_gate`、`memory_edit_guard`、DailyActivity / DDD 相关 hook | 保留 |
 | 用户开启的 pipeline run 的完整性（只在 run 里生效） | `run_owner_gate`、`run_amend_gate`、`session_link_gate`（收窄为只管 pipeline 命令）、`expert_type_gate`、`expert_budget_gate`、worktree rule 1–3、`main_dirty_reporter`、`v1_reflect_trigger` | 保留 |
 | `active_run_commit_gate` | r8：今天它扫描所有 session 的 run，别的 run 读不出来时也会拒绝（`security_hooks.py:3628-3732`） | 改为按 owner 判断：只在提交者就是该 run 的签名 owner session、且提交的是 run 改过的文件时拒绝；其他 session 只提示；读不出来的 run 不再导致拒绝 |
-| `audit_marker_write_gate` | r8：今天一直生效，保护整个共享审计目录，包括 commit 前审查用的通用 marker（`security_hooks.py:6586-6644`） | 拆成两部分：签名事件和 `authority.key` 的保护保留，始终生效（它们只在 pipeline 内部目录里，普通用户碰不到）；审查 marker 的保护只在仓库开启了 `require_review` 时生效 |
+| `audit_marker_write_gate` | r8：今天一直生效，保护整个共享审计目录，包括 commit 前审查用的通用 marker（`security_hooks.py:6586-6644`） | 只保留签名事件和 `authority.key` 的保护，始终生效（只在 pipeline 内部目录里，普通用户碰不到）；commit 前审查 marker 的保护随 `adversarial_commit_gate` 一起删除（r9） |
 | `external_approval_gate` | r8：靠工具名里的词（create / add / set / save）推断风险，会把远端的写操作误判成本地写（`tool_risk.py:65-75,137-154`） | 保留这个产品级 gate，但改为按每个工具的元数据判断（工具声明自己是否有对外副作用），不再靠名字猜 |
-| 产品功能：按仓库开启的 commit 前审查 | `adversarial_commit_gate` | 默认关闭、只提示；仓库在 `pipeline.toml` 的 `[commit] require_review = true` 或 Settings 里开启后才拦截。SwarmAI 仓库用同一个声明开启。拦截提示写给用户看（为什么拦、怎么满足、在哪里关） |
-| 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`pytest_command_guard`、`background_command_guard`、`image_read_dedup_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
+| 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`adversarial_commit_gate`（r9：连同 SubagentStop 写审查 marker 的逻辑一起删）、`pytest_command_guard`、`background_command_guard`、`image_read_dedup_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
 | 只对 SwarmAI 仓库有意义 | `design_lint_guard`、`inclusive_term_guard`、`change_triggered_eval`、`session_checkpoint` 里写死的 pytest 提醒 | 移出产品：改由 SwarmAI 仓库自己的配置或脚本提供 |
 | 运维开关 | `SWARM_GATE_FORCE` | 不作为产品开关，只留给运维调试；顺手修掉三个声称支持却从不检查它的 gate |
+
+### 3.5 专家：native 和 pipeline 共用（r9）
+
+- 专家在 `backend/experts/code/` 下（correctness、security、red-team、concurrency、state-machine、api-contract、integration、performance、operational、code-quality、spec-compliance、ux-test），由 `expert_manager.py` 加载；每个文件的 frontmatter 写了显示名和 `scope`。
+- 新增 skill "专家审查"：把专家名录（每位管什么、什么改动该请）从 frontmatter 自动生成，注入给 agent。新增专家不改代码。名录给出的默认规则：
+
+  | 改动 | 建议请 |
+  |---|---|
+  | 一般逻辑改动、有一定规模 | correctness |
+  | 认证、权限、输入校验、凭证、网络、文件路径 | security，风险高时加 red-team |
+  | 并发、锁、异步、重试 | concurrency |
+  | 状态机、生命周期 | state-machine |
+  | 对外接口、schema、数据格式 | api-contract |
+  | 跨模块、改了调用方 | integration |
+  | 热路径、大数据量 | performance |
+  | 部署、配置、日志、故障恢复 | operational |
+  | UI 交互 | ux-test |
+  | 小改动、文档 | 通常不用请 |
+
+- native 模式：agent 用 sub-agent 加载对应专家的 prompt 审查，自己处理 finding。不写签名事件，不经过任何 gate。
+- pipeline 模式：照旧由 `review-start` 派发、finding 账本收敛。
+- 专家 prompt 改为通用：去掉对 SwarmAI `REVIEW_PATTERNS.md`（RP 编号）的引用，换成和语言、仓库无关的检查要点；仓库可以在 `.swarmai/review.md` 里补充自己的要点，专家审查时一并读取。
 
 ## 4. 用户场景
 
@@ -186,11 +208,12 @@ link = []                     # 例如 ["desktop/node_modules"]
 | 新用户第一次装（macOS / Linux / Windows） | 下载安装包，按下载页说明放行未签名 app；首次启动部署外置 runtime 并启动后端，onboarding 配置模型凭证，开始聊天 |
 | 在自己的仓库里修一个 bug（最常见） | 全程 native：读代码、改、跑测试、`git commit`。没有任何 gate 挡 |
 | 仓库绑定成 DDD 项目 | 和上面一样走 native；DDD 的知识、记忆、REFLECT 照常可用 |
-| 风险较大的改动 | agent 说明理由并建议走 pipeline；用户同意后走完整流程：文档、Gate-0、实现和测试（native）、Gate-2 专家审查和收敛、隔离 worktree 落地、REFLECT |
+| 风险较大的改动 | agent 说明理由，在 session 里问一次：直接改，还是走 pipeline |
+| 小改动 | agent 直接改，不问 |
+| native 改完之后 | agent 自己判断要不要请专家、请谁（§3.5），修掉发现的问题，在交付里写清楚 |
 | 用户明确要求无人值守做完 | 走 pipeline，agent 自主推进到落地或到需要人决定的地方 |
-| 想对某个仓库更严格 | 在 Settings 或 `pipeline.toml` 里打开 `require_review`、把 `trigger` 设成 `suggest` / `auto` |
 | Windows 用户 | 只用 native；pipeline 命令明确返回不支持 |
-| 给 SwarmAI 本身贡献代码 | SwarmAI 仓库和别的仓库一样：默认 native；它的 `pipeline.toml` 声明 `require_review = true`、Swarm 落地身份和 worktree 软链；精细选测用它自己的 `swarm_select_tests.py` |
+| 给 SwarmAI 本身贡献代码 | SwarmAI 仓库和别的仓库一样：默认 native，agent 按改动请专家；"commit 前一定审查"写在 SwarmAI 的 AGENTS.md 里作为指引；它的 `pipeline.toml` 只声明 Swarm 落地身份和 worktree 软链；精细选测用它自己的 `swarm_select_tests.py` |
 
 ## 5. 验收
 
@@ -205,7 +228,7 @@ link = []                     # 例如 ["desktop/node_modules"]
 ### 5.2 产品原则
 
 - 语言无关用**行为测试**证明，不用"核心源码里搜不到某些词"这种字面检查（r8）：样例仓库矩阵（Python、Node、Go、Rust、无测试、monorepo、unborn）上各跑一个 direct 和一个 full 的 pipeline run，都能走到落地，REPORT 里写着 agent 报告的测试和审查结论。核心里如果确有必须出现语言名的地方（例如 SwarmAI 仓库自己的工具），列入一份经过审查的例外清单。
-- 结构测试：默认配置下（没有 `pipeline.toml`、没有 Settings 开关），在任意仓库里 native 写文件、跑任意测试命令、后台起进程、`git commit`，都不被任何 gate 拒绝。
+- 结构测试：在任意仓库里（有没有 `pipeline.toml` 都一样），没有开 pipeline run 时，native 写文件、跑任意测试命令、后台起进程、`git commit`，都不被任何 gate 拒绝。
 - 结构测试：hook_builder 里注册的每个会拒绝的 gate，都在 §3.4 的表里有归类；新增 gate 不进表就失败。
 - 结构测试：TEST 验证报告的 `code_tree` 不等于落地 tree、或这个 tree 没经过 Gate-2 时，落地被拒绝（§3.3.3）。
 - SwarmAI 仓库：声明 `pipeline.toml` 后，它的 pipeline run 照常落地，Swarm trailer、commit 前审查、worktree 软链都按声明生效。
@@ -223,7 +246,7 @@ link = []                     # 例如 ["desktop/node_modules"]
 | S1 | 第一版 G1/G2 安装验收脚本，先在 v2.3.0 上跑红 | 第一版 |
 | S2 | 打包修复 + 三平台统一的版本化 runtime 部署和启动 + 四个发布目标（§3.1） | 第一版 |
 | S3 | `python-backend` 子命令（`pipeline-v1`、`py`）+ 打包版里所有起 Python 子进程的地方改用子命令 + `SWARM_BACKEND_BIN` + gate 确切路径识别 + Windows 返回不支持（§3.2）。S2、S3 完成后第一版 G1/G2 转绿，才允许发布 | 第一版 |
-| S4 | gate 按 §3.4 删改：删挡 native 的 gate；`adversarial_commit_gate` 改为按仓库开关；`active_run_commit_gate` 按 owner；`audit_marker_write_gate` 拆分；`external_approval_gate` 按工具元数据；`pipeline.toml` 的 `[commit]`、`[landing]`、`[worktree]`、`[pipeline]` 读取；Settings 开关 | 第一版 |
+| S4 | gate 按 §3.4 删改：删挡 native 的 gate（含 `adversarial_commit_gate`）；`active_run_commit_gate` 按 owner；`audit_marker_write_gate` 收窄；`external_approval_gate` 按工具元数据；`pipeline.toml` 的 `[landing]`、`[worktree]` 读取；P4 的 session 内询问写进 agent 指引；专家名录 skill（§3.5）；SwarmAI 的 AGENTS.md 写入"commit 前审查"指引 | 第一版 |
 | S5 | 度量（§6） | 第一版 |
 | S6 | pipeline 通用化（§3.3.3、§3.3.4）：验证报告事件和显式完成；删测试执行器、runner 证据相关的机器判定和状态；TEST 不改代码、改了退回 REVIEW；LG-1 绑定审查过的 tree；`reported_test` 证据；DESIGN_SPEC 测试引用通用化；Gate-0、Gate-2 检查清单补上对应要求；review 去掉语言启发式；REFLECT 的未知项目回退；通用 review 清单；skill 卡片重写；SwarmAI 仓库的 `pipeline.toml`、`.swarmai/review.md`、`swarm_select_tests.py`；重写受影响的 E2E 测试；第二版 G1 | 第二版 |
 
@@ -243,8 +266,7 @@ S4 删掉 `pipeline_test_gate` 时，S6 之前的 pipeline run 里 runner 仍然
 
 ## 9. 待定问题
 
-1. Settings 里"按仓库开关"放在哪个页面、长什么样（S4 实施前出 mockup 给 XG 看）。
-2. Linux 发布用 AppImage 还是 deb，还是两个都发。
+1. Linux 发布用 AppImage 还是 deb，还是两个都发。
 
 ## 修订记录
 
@@ -255,3 +277,4 @@ S4 删掉 `pipeline_test_gate` 时，S6 之前的 pipeline run 里 runner 仍然
 - r5/r6（XG + skeptic edec2210）：pipeline 与语言无关，不逐个适配。
 - r7（XG，定稿）：pipeline 只做流程控制和质量收敛，不观察、不执行测试，用 agent 自己的结果，质量由 Gate-0 和 Gate-2 审查收敛；文档规范、六个 profile、REFLECT 全部保留；只允许产品级 gate（P3）；r6 里的测试 profile、argv 模板、base 试跑、按路径的验证结论全部取消。
 - r8（skeptic fc5328aa：5 个 BLOCKER、4 个 MAJOR）：定义签名的验证报告和 BUILD/TEST 显式完成；TEST 不改代码、改了退回 REVIEW，LG-1 绑定审查过的 tree；补全依赖 runner 的检查、状态、next_step、engine、审计清单；`reported_test` 关闭证据；DESIGN_SPEC 测试引用、review 的 security 启发式通用化；REFLECT 未知项目回退；三平台统一的 runtime 部署；`py` 子命令覆盖所有打包版的 Python 子进程；`active_run_commit_gate` 按 owner、`audit_marker_write_gate` 拆分、`external_approval_gate` 按工具元数据；验收拆成第一版（native + 安装）和第二版（pipeline），语言无关用行为测试证明。
+- r9（XG）：pipeline 的选择发生在 session 里（风险较大的改动问一次，小改动不问，默认 native），没有 Settings 开关和触发字段；native 模式下由 agent 自主请专家（P6），专家名录 skill，native 和 pipeline 共用一套通用化的专家；删除 `adversarial_commit_gate` 和 `require_review`，SwarmAI 的"commit 前审查"改为 AGENTS.md 里的指引；`pipeline.toml` 只剩 `[landing]`、`[worktree]`。
