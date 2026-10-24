@@ -36,12 +36,19 @@ and lease renewal are out; a Run is owned by the Conductor and driven by one ses
 person's input binds to the Run and item, never to a session (conductor §4.1).
 
 Revision 5 (2026-10-24), aligned with `2026-10-24-swarmai-usable-by-anyone.md` (final
-r13, "usable" below): built after usable S6, so every record here is a plain record in
+r14, "usable" below): built after usable S6, so every record here is a plain record in
 the Run's append-only log, not a signed event, and nothing is executed in the daemon on
 the CLI's behalf (usable §3.3.5); the evidence a request-changes cycle invalidates is the
 validation reports and review closure, since the Pipeline runs no tests (usable §3.3.3);
 the guidance hook only injects and never denies; commands are `pipeline-v1` subcommands;
 and like the rest of the Pipeline this is macOS and Linux only.
+
+Revision 6 (2026-10-24), after a fresh-context review of revision 5: this document ships
+in two parts, inline Runs first (Conductor Phase 2a), then park and resume with the
+Worker (2b), so no Worker ever runs without non-blocking items; the guidance hook does
+only an in-memory read, everything durable is prepared or recorded off the tool path, and
+it uses the accumulating top-level `additionalContext`; no new gate in front of the
+human-only routes (usable P5).
 
 ## 1. Problem
 
@@ -77,7 +84,7 @@ without opening each Run's session. Today (`pipeline-v1-human-loop.md`,
 - **The person's words are the owner's instruction, delivered as data.** They reach the
   model through one serializer (§5.2), never spliced into a prompt.
 - **Trust as in usable P5.** A record's producer field says which path wrote it; it is not
-  proof. The log's checksum detects truncation, not forgery. A same-user process that runs
+  proof. The log's checksum detects corruption, not forgery. A same-user process that runs
   arbitrary code could write a record or call a loopback route; that stays known and not
   fixed (`pipeline-v1-e7-review.md` item 7), and this design adds no protection against
   it.
@@ -257,11 +264,10 @@ never on the chat send or stream path, and in one locked compare-and-swap on the
 
 Slack proofs authenticate the person against other people in the channel. The dashboard
 routes do not: like the existing decision and `run-land` routes, they trust that a call
-on loopback came from the dashboard. `run_owner_gate` denies an agent's Bash call to
-every human-only Conductor route by command text, as a guard against mistakes, not
-against a determined agent. No per-surface secret is added, since a same-user agent could
-read it too; per usable P5 this stays known and not fixed (`pipeline-v1-e7-review.md`
-item 7).
+on loopback came from the dashboard. The new routes get no gate in front of them and no
+per-surface secret; the agent has no command that calls them, and a same-user agent that
+reaches loopback by other means is not excluded. Per usable P5 this stays known and not
+fixed (`pipeline-v1-e7-review.md` item 7).
 
 ### 4.5 Readers and cursors
 
@@ -305,12 +311,27 @@ and Worker Runs then have one item lifecycle and one 24-hour deadline (§5.3).
   the instruction to `input_ack` each. The daemon writes `input_delivered` for each as the
   turn is sent.
 - **Guidance during a long turn.** While the Run is streaming, pending guidance is
-  attached at the next tool boundary by a PostToolUse hook as `additionalContext` (the
-  hook chain already merges it, `hook_builder.py`), in the same envelope, and
-  `input_delivered` is written then. The hook only injects; it never denies or delays a
-  tool call, and it is active only inside a Run's driver session, so native work outside
-  the Pipeline never sees it (usable P3). The surface shows "pending delivery" until it
-  is. A person who needs the Run to stop now uses Stop, not guidance.
+  attached at the next tool boundary by a PostToolUse hook. The work is split so the tool
+  path stays an in-memory read:
+  - **Prepare, off the tool path.** When guidance is accepted, the Conductor executor
+    builds the envelope (§5.2 below), takes the content snapshot (§3.3) and puts the
+    prepared envelope into an in-memory slot for that Run's driver session.
+  - **Hook.** It reads that slot; if it is empty it returns nothing. If it holds an
+    envelope it takes it and returns it as the **top-level** `additionalContext`, the
+    field the chain accumulates (`hook_builder._build_chain`), never
+    `hookSpecificOutput.additionalContext`, which a later hook overwrites (so the
+    repo-guide injection of usable §3.7 and this hook do not clobber each other). It then
+    hands the `input_delivered` append to the Conductor executor and returns; it does no
+    git, disk or log write itself.
+  - **At least once.** If the daemon dies after the hook returned and before
+    `input_delivered` is appended, the input counts as undelivered and is delivered again;
+    the agent's `input_ack` names the `input_id`, so a duplicate is recognized. The
+    snapshot was taken at prepare time, slightly before delivery, so a file changed in
+    between is listed as changed after the note, which errs on the side of showing more.
+  The hook only injects; it never denies or delays a tool call, and it is registered only
+  in a session that currently drives a Run, so native work outside the Pipeline never
+  sees it (usable P3). The surface shows "pending delivery" until it is delivered. A
+  person who needs the Run to stop now uses Stop, not guidance.
 - **Every `pipeline-v1` command** also returns any accepted but undelivered input, in
   the same envelope, as a backstop.
 
@@ -365,7 +386,7 @@ Designed for a person going through many Runs, including a day's delivered ones
 | 12 | A new Attempt asks the same question again | Same semantic digest → `input_rebound`, no second question; any difference → a new item |
 | 13 | An inline Run asks while you are away from its tab for 6 hours | Its card stays open in the tab and in the overlay; you answer on return; the tab gets the resume turn through its pending queue |
 | 14 | You take a background Run over in a tab while its approval is open | `driver_bind` to your tab supersedes the open `land_request`; the Run re-requests approval under the new driver |
-| 15 | A background Worker's test hangs | The Conductor's progress limit interrupts it and parks the Run with an item (conductor §6.2); you continue, take over or cancel |
+| 15 | A background Worker's test hangs | `SessionUnit`'s tool-hang tier interrupts the tool and the agent continues; the board shows how long the Worker has been in its stage, and you can cancel or take it over. An interrupted Worker is never resumed with `--resume` (conductor §6.2) |
 
 ## 8. Changes
 
@@ -391,17 +412,28 @@ Host: `submit_human_input`, the stream projection (one transaction per message) 
 cursor, the Slack reader's outbox, the overlay SSE on the `nav` pool, the PostToolUse
 guidance hook, delivery content snapshots.
 
-**Phasing.** Ships as Conductor Phase 2b, after the owner / driver cutover in 2a; its
-Slack reader ships in Phase 3.
+**Phasing.** Two parts, so a Worker never runs without non-blocking items:
+- **Conductor Phase 2a, inline Runs:** everything above except park and resume: items,
+  `human_input`, no `AskUserQuestion`, tab item cards and the resume turn through the
+  tab's pending queue, guidance delivery, the stream and SSE, approval outcomes, content
+  snapshots, the review view. The owner / driver cutover lands in the same phase.
+- **Conductor Phase 2b, with the Worker:** park, `resume_pending`, cold resume.
+- Its Slack reader ships in Phase 3.
 
-**Red tests before code (Phase 2b):**
-- ask → park → answer → cold resume delivers exactly one input with no dangling tool call;
-  the same for an inline Run through its tab's pending queue;
-- first write wins across two surfaces; an agent Bash call to a human-only route is denied;
+**Red tests before code** (2a unless marked 2b):
+- inline: ask → item card → answer in the overlay → the tab's resume turn delivers
+  exactly one input and the tab stayed usable meanwhile;
+- (2b) ask → park → answer → cold resume delivers exactly one input with no dangling tool
+  call;
+- first write wins across two surfaces;
 - input accepted then daemon killed before projection appears after restart; a crash
   between projection insert and high-water update never yields two sequence pairs;
 - guidance during a long BUILD is delivered at the next tool boundary; text with a forged
   envelope header, footer or system block parses to exactly one input;
+- the guidance hook and the repo-guide injection fire on the same tool call and both
+  texts reach the model; with nothing pending the hook adds no measurable latency (S5);
+  a daemon kill between the hook returning and `input_delivered` leads to one redelivery,
+  recognized by `input_id`;
 - land refuses an unacked or undelivered input; a further edit to an already changed file
   after a note is listed on the approval card;
 - request changes invalidates the superseded candidate's validation reports and review
@@ -412,20 +444,23 @@ Slack reader ships in Phase 3.
 - the guidance hook never denies a tool call and does nothing in a session that drives no
   Run;
 - a six-way race on one Run (answer, `item_expired`, cancel, driver change, request
-  changes, land) under the Run lock: exactly one outcome per item, and no `auth` on a superseded
+  changes, land), each taking the Run operation lock and then the Conductor dispatch lock
+  (conductor §4.3): exactly one outcome per item, and no `auth` on a superseded
   `land_request` is ever consumed;
-- a daemon restart while parked keeps the item answerable; a crash while running supersedes it;
-- a re-asked identical question in a new Attempt is rebound, a changed one is not; the
-  digest is equal across Attempts with different ids.
+- (2b) a daemon restart while parked keeps the item answerable; a crash while running
+  supersedes it and the new Attempt runs in a fresh session;
+- (2b) a re-asked identical question in a new Attempt is rebound, a changed one is not;
+  the digest is equal across Attempts with different ids.
 
 ## 9. Cost on hot paths
 
 - Chat send and stream: none. All writes run on the Conductor executor; the chat-tab card
   is one row written at submit and rendered from the stream on read.
-- Run streaming: the PostToolUse guidance hook reads one in-memory flag per tool call
-  and does work only when guidance is pending.
+- Run streaming: the PostToolUse guidance hook reads one in-memory slot per tool call;
+  when it holds an envelope the hook returns it and hands one append to the Conductor
+  executor. No git, disk or log work on the tool path (§5.2).
 - Delivery snapshot: one `git diff --name-only` plus blob hashes of the changed paths per
-  delivered input, on the Conductor executor.
+  accepted input, taken when the envelope is prepared, on the Conductor executor.
 - Daemon idle: no work without open overlays or new events.
 
 ## 10. Open questions

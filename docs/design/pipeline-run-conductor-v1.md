@@ -23,13 +23,24 @@ and a session only drives it (§4.1). That removes the stand-in owner session a 
 Worker needed.
 
 **Revision 2026-10-24b: built on the general Pipeline.** Aligned with
-`2026-10-24-swarmai-usable-by-anyone.md` (final r13, "usable" below). The Conductor is
+`2026-10-24-swarmai-usable-by-anyone.md` (final r14, "usable" below). The Conductor is
 built after usable S6, on its append-only run log: there is no signing, no hook token and
 no daemon-executed pipeline command (usable §3.3.5); the Pipeline runs no tests, the agent
 tests natively and submits validation reports (usable §3.3.3); a Run exists only when a
 person chose the Pipeline (usable P1, P4); Windows has no Pipeline and so no Conductor
 Runs (usable §3.2); nothing in it recognizes the SwarmAI repo or project (usable P7); and
 it adds no protection against a same-user agent (usable P5).
+
+**Revision 2026-10-24c, after a fresh-context review of 2026-10-24b.** The human loop's
+item lifecycle now ships before the Worker (Phase 2a), because a Worker without it would
+block in `AskUserQuestion` and hold the only slot. The Conductor's own progress
+watchdog is removed: it observed how the agent tests (usable P2) and needed an item kind
+the human loop does not have; a hung tool is handled by `SessionUnit`'s existing
+CPU-liveness tool-hang tier, and an interrupted Worker is never resumed with `--resume`.
+The draft command is a `pipeline-v1` subcommand, not a fourth backend command. The new
+Conductor routes get no `run_owner_gate` denial (usable P5). Dispatch has one
+authoritative log and a fixed lock order. A torn last line of a run log is dropped, as
+usable §3.3.5 says.
 
 ## 1. Summary
 
@@ -74,20 +85,23 @@ decides **how**, and whether it passed.
 - **P4. DDD.** An inline Run reads the live Host DDD, as today. A background Run reads an
   immutable snapshot taken at submit (§5.2).
 - **P5. Trust as in usable P5.** Run log records carry a producer field and a checksum
-  that detects truncation, not forgery (usable §3.3.5). The human-only routes on loopback
-  are guarded by `run_owner_gate` against an agent's Bash call; a same-user agent that
-  runs arbitrary code is not excluded, and that stays known and not fixed
-  (`pipeline-v1-e7-review.md` item 7). Single-use drafts, idempotency keys and Slack
-  nonces stay: they stop double clicks, replays and other people in a channel, not the
-  agent. V1 adds no gate and no hardening.
+  that detects corruption, not forgery (usable §3.3.5). The Conductor's human-only routes
+  (§9) are plain loopback routes with no gate in front of them: the agent has no command
+  that calls them, and a same-user agent that calls loopback by other means is not
+  excluded, which stays known and not fixed (`pipeline-v1-e7-review.md` item 7). Whatever
+  usable leaves of `run_owner_gate` for existing Pipeline routes is unchanged.
+  Single-use drafts, idempotency keys and Slack nonces stay: they stop double clicks,
+  replays and other people in a channel, not the agent. V1 adds no gate and no
+  hardening.
 - **P6. Only Runs a person chose.** Every Conductor request comes from a person choosing
   the Pipeline: in a session (usable P4), by asking for it outright, by a Slack submit or
   by a schedule they created. The chat agent never suggests the background as a way to
   push work into the Pipeline; native stays the default.
 - **P7. Any repo, any project.** The Conductor reads repos and projects through the same
   generic paths as every user (usable P7): no SwarmAI path, project name or repo check.
-  Commands are `"$SWARM_BACKEND_BIN" pipeline-v1 …` and `"$SWARM_BACKEND_BIN" conductor …`
-  in both packaged and dev builds (usable §3.2).
+  The only command is `"$SWARM_BACKEND_BIN" pipeline-v1 …`, in both packaged and dev
+  builds (usable §3.2); the draft is its `draft` subcommand (§6.3), recognized by
+  usable's one command-recognizer module like every other subcommand.
 - **P8. macOS and Linux.** On Windows the Pipeline is not enabled (usable §3.2), so the
   Conductor accepts no request there and its surfaces say so.
 - **P9. After usable S6.** The Conductor changes the files S6 rewrites (`engine.py`,
@@ -173,8 +187,9 @@ What follows from it:
   by another.
 - **Takeover.** A person asks in a tab to take a Run over. The Conductor checks that the
   current driver is not live (for a Worker it knows, because it runs it; for a tab it uses
-  `owner_live`, as today), stops the Worker if it is one, and writes `driver_bind` to the
-  tab's session. Handing a Run back to the background is a `driver_bind` to a new Worker.
+  `owner_live`, as today), stops the Worker if it is one (its SDK session is discarded,
+  never resumed, §6.2), and writes `driver_bind` to the tab's session. Handing a Run back
+  to the background is a `driver_bind` to a new Worker in a fresh session.
 - **Stop and lost session** pause the Runs that session drives. A Worker's process is
   managed by the Conductor (§8).
 
@@ -208,11 +223,24 @@ Under `~/.swarm-ai/state/conductor/`, never in `data.db`, so chat history storag
 untouched:
 
 - `requests/<request_id>.json`: the immutable submitted request;
-- `runs/<run_id>.json`: the mutable dispatch record, written with `utils.file_lock`;
-- `events.jsonl`: an append-only log of dispatch transitions;
+- `events.jsonl`: the append-only log of dispatch transitions. **It is the only
+  authority** for dispatch state and slot ownership;
+- `runs/<run_id>.json`: a cache of the dispatch record, derived from `events.jsonl`. It
+  is rewritten after each append and rebuilt from the log on daemon start; nothing reads
+  it to decide a transition;
 - `stream.db`: the message-stream projection (SQLite, `pipeline-human-loop-v2.md` §4.1);
 - `ddd/<digest>/`: read-only DDD snapshots for background Runs (§5.2);
 - `occurrences.jsonl`: the schedule occurrence ledger (§7.2).
+
+**Locks.** There are two: the Run operation lock (usable §3.3.5, `run_protocol/oplock.py`)
+and the Conductor dispatch lock (`utils.file_lock` on `events.jsonl`). The order is
+always **Run operation lock, then dispatch lock**, never the reverse. A transition that
+also changes the Run (cancel, park, `driver_bind`, closing a request from a Pipeline
+terminal event) takes both in that order, appends its Run record, then its dispatch
+event, and only then releases; a dispatch-only transition (queue, slot acquire for a Run
+not yet created) takes only the dispatch lock. A crash between the two appends is
+repaired on start: the Conductor reads each Run's log and appends the missing dispatch
+event, since the Run record is the one that took effect.
 
 ## 5. Data model
 
@@ -265,7 +293,7 @@ the one Worker slot; a release is conditional on `slot_held = true`, so it happe
 | `dispatching` | `queued` | the Worker refused before start; keeps its `created_at` | release |
 | `dispatching`, `running` | `cancelling` | owner cancel | keep |
 | `running` | `running` (new Attempt) | crash recovery on daemon start (§8) | keep |
-| `running` | `parked` | the Worker's turn ended with a blocking item open, or the Conductor interrupted it on a progress limit and opened an item (§6.2); the Worker is recycled to COLD keeping its SDK session id | release |
+| `running` | `parked` | the Worker's turn ended cleanly with a blocking item open; the Worker is recycled to COLD keeping its SDK session id | release |
 | `parked` | `resume_pending` | the last blocking item was resolved | — |
 | `resume_pending` | `dispatching` | the Worker slot is free; goes ahead of `queued` | acquire |
 | `parked`, `resume_pending` | `cancelled` | owner cancel (no Worker runs, no ack needed) | — |
@@ -290,8 +318,8 @@ replaying an applied key is a no-op.
 may reuse verified source changes and completed documents as starting material, never the
 closed Attempt's validation reports, review closure, authorization or verdict as proof:
 the new Attempt submits its own TEST validation report, and landing requires its
-`code_tree` to equal the landing tree and that tree to have passed Gate-2 (usable
-§3.3.3, LG-1).
+`code_tree` to equal the landing tree and that tree to equal the `code_tree` recorded by
+some review event (R1, R2 or incremental review; usable §3.3.3 r14, LG-1).
 
 **What a person sees**, computed on read:
 
@@ -394,26 +422,27 @@ Worker:
 4. when the Run reaches a terminal Pipeline state, releases its session through
    `LifecycleManager`, so post-session hooks run normally.
 
-**A Worker that stops making progress is noticed.** usable S4 removes the gates that used
-to bound test and background commands (`pytest_command_guard`,
-`background_command_guard`), and nobody watches a headless Worker. The Conductor, not a
-gate, bounds it with two limits read from the Worker's own events:
+**A Worker is never resumed after an interrupt.** `--resume` is used in one place only:
+after a park, which happens only when the Worker's turn ended cleanly with no open tool
+call (S4). A Worker that was interrupted in the middle of a tool call (cancel, takeover,
+daemon crash, `SessionUnit`'s own tool-hang interrupt escalating to a recycle) is not
+resumed: its SDK session is discarded, and the Run continues, if at all, as a new Attempt
+in a fresh session from the Pipeline checkpoint (§8), or in the tab that took it over.
+This keeps a dangling `tool_use` out of every resumed conversation without having to
+prove that interrupting a real Bash or Edit call leaves a resumable transcript.
 
-- **no progress:** no completed tool call for 15 minutes;
-- **stage budget:** one stage running longer than 2 hours of wall clock.
-
-Either one interrupts the Worker (the generation-safe `interrupt()`), parks the Run and
-opens a notice-plus-question item for the person ("stalled in BUILD for 2 h: continue,
-take over, or cancel"). Both values are V1 defaults, stored in the request so a Run is
-judged by the values it started with; S2 measures real stage durations, and the defaults
-are replaced by those measurements before Phase 2a lands. The Conductor never kills a
-process tree it did not start, and a Run is never failed by these limits without the
-person's answer.
+**Hangs.** The Conductor does not watch how the Worker works (usable P2). A tool that
+hangs is handled by `SessionUnit`'s existing CPU-liveness tool-hang tier
+(`session_unit.py`, `TOOL_HANG_OPEN_S` and the PID watchdog), which interrupts a tool
+whose process tree burns no CPU and works headless; the agent then sees the failed tool
+and carries on. The board shows each Worker's stage and how long it has been in it, so a
+person can see a Run that is slow and cancel or take it over. Whether a stage-level
+notice is worth adding is decided later from usable §6's measures, not now.
 
 **Interactive capacity is reserved.** The daemon caps concurrent streams at
 `SessionUnit.MAX_CONCURRENT_STREAMS` (default 3). Today's admission
 (`_await_streaming_slot`) is a soft poll that lets a stream through after 120 s anyway, so
-it cannot reserve anything. Phase 2a replaces it with one atomic admission counter with
+it cannot reserve anything. Phase 2b replaces it with one atomic admission counter with
 two classes:
 
 - **interactive** (chat, Slack): admitted while total streams < cap, as today, including
@@ -429,8 +458,8 @@ the Pipeline is the person's choice (P6); when a risky change makes the agent as
 "native or Pipeline" (usable P4), it may name the background as where a Pipeline Run
 would go, never as a reason to pick the Pipeline.
 
-1. The chat agent builds a draft with `"$SWARM_BACKEND_BIN" conductor draft`, a
-   `python-backend` subcommand (usable §3.2) that calls the daemon's loopback API:
+1. The chat agent builds a draft with `"$SWARM_BACKEND_BIN" pipeline-v1 draft`, which
+   calls the daemon's loopback API:
    project, requirement (verbatim), proposed title, profile. The draft
    applies §5.3 and the DDD snapshot (§5.2), is stored in the Conductor Store, binds the
    origin session, project, profile, DDD digest, base commits, title and the requirement's
@@ -438,9 +467,8 @@ would go, never as a reason to pick the Pipeline.
 2. The tab shows a confirmation card: title (editable; an edit makes a new draft),
    requirement, project, profile, queue position or free slot, DDD digest, base commits.
    Only the person's click submits; the agent has no submit command. The submit route is a
-   human-only dashboard route guarded like the decision and `run-land` routes:
-   `run_owner_gate` denies an agent's Bash call to it. There is no per-draft secret: a
-   same-user agent could read it too, and per usable P5 that gap stays known and not fixed
+   plain dashboard route with no gate in front of it and no per-draft secret: a same-user
+   agent could reach loopback anyway, and per usable P5 that gap stays known and not fixed
    (`pipeline-v1-e7-review.md` item 7). Submit consumes the draft atomically and re-checks
    §5.3 and the bound revisions; if any changed, nothing is submitted and the card shows a
    new draft.
@@ -463,7 +491,7 @@ stored verbatim as data and is never an instruction to the Conductor.
 
 1. The owner asks in Slack, for example "run a bugfix pipeline on my-service: …" or "every
    weekday 09:00, run …".
-2. The Slack session agent builds a draft with `"$SWARM_BACKEND_BIN" conductor draft`
+2. The Slack session agent builds a draft with `"$SWARM_BACKEND_BIN" pipeline-v1 draft`
    (§6.3). An invalid request is rejected here, with its reason.
 3. The bot replies with a confirmation card: title, requirement, project, profile, DDD
    digest, base commits and, for a schedule, the cron expression and timezone.
@@ -527,18 +555,21 @@ other people in the channel and against replays; it is not a defence against the
 
 | Failure | Detection | Action |
 |---|---|---|
-| Daemon restarts while the Worker runs | Conductor recovery on startup: `running`, `executor: host:worker`, no live Worker | New Attempt on the same Run from the Pipeline checkpoint, `driver_bind` to the new Worker. A second crash on the same stage fails the request with `worker_crash_loop` |
+| Daemon restarts while the Worker runs | Conductor recovery on startup: `running`, `executor: host:worker`, no live Worker | New Attempt on the same Run from the Pipeline checkpoint, in a fresh Worker session (the old SDK session is never resumed), `driver_bind` to the new Worker. A second crash on the same stage fails the request with `worker_crash_loop` |
 | Daemon restarts while a Run is `parked` / `resume_pending` | Startup | Nothing to recover; same Attempt (§5.1). The stream projection catches up first (`pipeline-human-loop-v2.md` §4.1) |
 | An inline tab's session dies | `owner_live` false | The Run pauses as today; a person can take it over in another tab (§4.1) or hand it to the background |
 | The person presses Stop on an inline Run | `on_user_stop` | Pauses the Runs that session drives |
 | Worker cannot get a stream | Admission (§6.2) | Waits, shown as "Waiting for capacity"; no timeout |
-| Worker stalls (no completed tool call) or a stage runs past its budget | Conductor, from the Worker's events (§6.2) | Interrupt, park, open an item; the person continues, takes over or cancels |
-| Run log truncated or a checksum mismatch | Reading the run log (usable §3.3.5) | The Run stops and needs a person; the Conductor shows it in Needs you and never resumes it on its own |
+| A Worker's tool hangs | `SessionUnit` tool-hang tier (CPU liveness) | The tool is interrupted and the agent continues, as in any session; if the interrupt escalates to a recycle, the Worker is not resumed and the Run continues as a new Attempt (§6.2) |
+| Torn last line of a run log (crash mid-append) | Reading the run log (usable §3.3.5, `store.py`) | The line is dropped and the Run continues, as today |
+| A middle record missing (sequence gap) or a checksum mismatch | Reading the run log | The Run stops and needs a person; the Conductor shows it in Needs you and never resumes it on its own |
 | Base or target branch moved before landing | `landing.py` CAS | As today: rebase rules, or `not_landed(<reason>)` |
 | Placement invalid at dispatch | Re-check | `failed(<rule>)`, never re-placed |
 
-Cancel is available to the owner until landing starts; a cancel and a Pipeline terminal
-event are ordered by the Conductor's lock on the dispatch record, first one wins.
+Cancel is available to the owner until landing starts. It takes the Run operation lock
+and then the dispatch lock (§4.3), the same order an answer, a park and landing use, so a
+cancel, an answer, a driver change and a land on one Run are serialized and the first
+one wins.
 
 ## 9. Surfaces
 
@@ -588,7 +619,7 @@ names a Run by its title (§5.4). Mockup: `docs/design/pipeline-conductor-ui-moc
 |---|---|---|
 | Run Isolation | Unchanged: each Run keeps its own worktree; a background Run also has its own DDD snapshot | `driver_bind` makes exactly one session able to act for a Run |
 | Quality | Unchanged: the same general Pipeline in both placements; tests are the agent's own validation reports, checked by Gate-2 (usable §3.3.3) | Landing never runs on a superseded approval (`pipeline-human-loop-v2.md` §3.4); a new Attempt submits a new TEST report on its landing tree |
-| Autonomy | Background and scheduled Runs need no open tab; questions reach the person wherever they are | Only the owner submits; only a person's input resolves an item; a stalled Worker becomes a question, not a silent hang |
+| Autonomy | Background and scheduled Runs need no open tab; questions reach the person wherever they are | Only the owner submits; only a person's input resolves an item; the board shows each Worker's time in its stage |
 | Speed | One extra Run in parallel | One stream always kept for chat and Slack; the Conductor is off the send and stream paths |
 | Token Cost | At most one more concurrent Run; a resume turn after a long wait re-reads the context | Overlapping schedule fires are skipped; missed fires are not replayed |
 
@@ -601,24 +632,27 @@ tests.
 
 | Phase | Scope | Acceptance | Size |
 |---|---|---|---|
-| 1 | Conductor Store, `register_inline`, status join, read-only API, overlay board for inline Runs, `create --title` and the title rule, the `conductor` subcommand, Windows "not supported" | An inline Run appears on the board with origin `chat`; chat send-to-first-token and stream timings are unchanged (measured before and after on the same machine); a failing registration never fails `create`; the title rule is tested for an empty title, a multilingual requirement, a duplicate title and a scheduled fire; on Windows every Conductor route and the overlay report "not supported"; a structural test finds no SwarmAI repo or project check in `core/conductor/` | ~2k |
-| 2a | Owner / driver cutover on the S6 run log (§4.1); Local Worker; one slot; two-class stream admission; `create --ddd-root` with snapshots and `kind: none`; progress limits (§6.2); crash recovery; background placement from a Chat tab (§6.3) | A background `direct` Run on a non-SwarmAI sample repo reaches `land` with no tab open, its TEST validation report's `code_tree` equal to the landed tree; editing the Host DDD mid-run does not change what it reads; a project with no DDD runs and its lessons land in REPORT; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes as attempt 2 with a new `driver_bind` and a new TEST report; a mutating command from a session that is not the current driver is refused; a takeover in a tab supersedes an open `land_request`; a Worker whose test hangs is interrupted, parked and asks the person, and is never failed without an answer; only the person's click on the confirmation card submits, and a used, expired or stale draft submits nothing; an agent Bash call to the submit route is denied | ~4k |
-| 2b | Human loop v2, all of it (`pipeline-human-loop-v2.md` §8): items, `human_input`, park and resume, delivery envelope and PostToolUse delivery, stream projection and SSE, approval outcomes, content snapshots; overlay review view and chat item cards | The red tests in `pipeline-human-loop-v2.md` §8 pass; a Worker's question parks the Run at once, freeing the slot for the next request, and answering it resumes the Run ahead of the queue with no dangling tool call (S4); an inline Run's question is an item card and its tab stays usable meanwhile; an answer with a note given in the overlay reaches the Run, which acks it, and the tab card shows it answered | ~7k |
+| 1 | Conductor Store (one authoritative `events.jsonl`, derived cache, lock order), `register_inline`, status join, read-only API, overlay board for inline Runs, `create --title` and the title rule, the `pipeline-v1 draft` subcommand registered in usable's command recognizer, Windows "not supported" | An inline Run appears on the board with origin `chat`; chat send-to-first-token and stream timings are unchanged (measured before and after on the same machine); a failing registration never fails `create`; deleting `runs/<id>.json` and restarting rebuilds it from the log; the title rule is tested for an empty title, a multilingual requirement, a duplicate title and a scheduled fire; on Windows every Conductor route and the overlay report "not supported"; a structural test finds no SwarmAI repo or project check in `core/conductor/` | ~2k |
+| 2a | Owner / driver cutover on the S6 run log (§4.1), and human loop v2 for **inline Runs** (`pipeline-human-loop-v2.md` §8, everything except park and resume): items, `human_input`, no `AskUserQuestion` for Pipeline items, item cards in the tab, delivery envelope (resume turn through the tab's pending queue, PostToolUse guidance, CLI backstop), stream projection and SSE, approval outcomes, content snapshots, overlay review view | The red tests in `pipeline-human-loop-v2.md` §8 for inline Runs pass; an inline Run's question is an item card and its tab stays usable meanwhile; an answer with a note given in the overlay reaches the Run, which acks it, and the tab card shows it answered; a mutating command from a session that is not the current driver is refused; a takeover in another tab supersedes an open `land_request` | ~7.5k |
+| 2b | Local Worker; one slot; two-class stream admission; park and resume; `create --ddd-root` with snapshots and `kind: none`; crash recovery as a new Attempt; background placement from a Chat tab (§6.3) | A background `direct` Run on a non-SwarmAI sample repo reaches `land` with no tab open, its TEST validation report's `code_tree` equal to the landed tree and to a reviewed tree; a Worker's question parks the Run at once, freeing the slot for the next request, and answering it resumes the Run ahead of the queue with no dangling tool call (S4); editing the Host DDD mid-run does not change what it reads; a project with no DDD runs and its lessons land in REPORT; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD continues as attempt 2 in a fresh session with a new `driver_bind` and a new TEST report, never through `--resume`; a cancelled or taken-over Worker is never resumed; only the person's click on the confirmation card submits, and a used, expired or stale draft submits nothing | ~4.5k |
 | 3 | Slack: owner submit, confirmation card, `pipeline_submit` job and occurrence ledger, thread reader, item buttons and "Reply with note" modal, typed replies as guidance | A non-owner cannot submit; a scheduled Run fires and reports in its thread; a missed fire is `missed(host_offline)` and never submitted late; an overlapping fire is `skipped_overlap`; a replayed occurrence key is a no-op; an owner click consumes its nonce once and records `human_input`, a second click, another user or a passed deadline is rejected; a typed reply never resolves an item | ~3.5k |
 
-Total about 16.5k lines including tests, roughly 3 to 4 weeks at the current review
-cadence, counted from the end of usable S6.
+Total about 17.5k lines including tests, roughly 3 to 4 weeks at the current review
+cadence, counted from the end of usable S6. The Worker comes last on purpose: it needs
+the non-blocking item lifecycle, or its first question would hold the only slot in
+`AskUserQuestion`.
 
 ### 11.1 Spikes before code
 
 | ID | Question | Blocks |
 |---|---|---|
-| S1 | Can a headless `SessionUnit` `pipeline:<run_id>`, bound by `driver_bind`, run `"$SWARM_BACKEND_BIN" pipeline-v1` as the current driver (the prewarm session-id supply included) and land a `direct` Run, the way Slack channel sessions run without a tab? | 2a |
-| S2 | Memory, stream use and per-stage wall clock of one Pipeline Run on the Host, with native tests; confirms one Worker fits next to chat and replaces the §6.2 progress-limit defaults | 2a |
+| S1 | Can a headless `SessionUnit` `pipeline:<run_id>`, bound by `driver_bind`, run `"$SWARM_BACKEND_BIN" pipeline-v1` as the current driver (the prewarm session-id supply included) and land a `direct` Run, the way Slack channel sessions run without a tab? | 2b |
+| S2 | Memory, stream use and per-stage wall clock of one Pipeline Run on the Host, with native tests; confirms one Worker fits next to chat | 2b |
 | S3 | How an owner's Slack button press reaches `submit_human_input` without the gateway's unattended-pick path | 3 |
-| S4 | A Worker's decision request ends the turn → park (COLD) → answer → `--resume` with a new turn carrying the input; the resumed SDK conversation has no unmatched `tool_use`; guidance delivered by PostToolUse `additionalContext` during a long BUILD | 2b |
+| S4 | A Worker's decision request ends the turn cleanly → park (COLD) → answer → `--resume` with a new turn carrying the input; the resumed SDK conversation has no unmatched `tool_use`. Interrupted Workers are out of scope: they are never resumed (§6.2) | 2b |
+| S5 | PostToolUse guidance on the real hook chain: the top-level `additionalContext` of the guidance hook and of the repo-guide injection (usable §3.7) both reach the model in one tool result, and the hook adds no measurable latency to a tool call when nothing is pending | 2a |
 
-If S1 fails, Phase 2a stops and the design is revised; the jobs `--bare` path is not a
+If S1 fails, Phase 2b stops and the design is revised; the jobs `--bare` path is not a
 fallback. If S4 fails, Phase 2b stops: a Worker must not wait for a person inside a tool
 call.
 
