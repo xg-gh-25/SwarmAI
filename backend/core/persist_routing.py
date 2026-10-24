@@ -262,7 +262,7 @@ def classify_content(
         {
             "doc": "IMPROVEMENT.md",
             "section": "What Failed",
-            "project": "SwarmAI" or None,
+            "project": "<project name>" or None,
             "safe_auto": True,
             "confidence": 0.7,
             "is_governance": False,

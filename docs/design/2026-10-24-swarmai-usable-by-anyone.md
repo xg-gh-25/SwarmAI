@@ -253,6 +253,18 @@ native 默认在用户的 checkout 里原地改（P1：和普通 CLI 写代码�
 
 S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 
+已做（2026-10-24）：
+- D：`inclusive_term_guard`、`design_lint_guard`、`change_triggered_eval`、"改了多个源文件没跑 pytest"的提示从产品删除；规则原样搬进 SwarmAI 仓库的 `scripts/lint_terms.py`（只查新增行），CI 每次 push / PR 跑，AGENTS.md 写明提交前跑（`5e1e53621`）。
+- C1：删除 SwarmAI 月报 job 和对应 skill（XG 定，`d8dbde535`）。
+- C2：新增 `ddd_bindings.governed_repo_roots(project_dir)`，只读 bindings.yaml 声明的仓库（`bindings[].worktree`、`governed_assets` 的 `source_workspace`），不猜。`engine_metrics`、`ddd_refresh`、`ddd_self_audit`、`ddd_orchestrator`、`code_change_feed`、`context_injector` 全部改用它或改为通用规则；`ddd_orchestrator` 的 knowledge_staleness 通道删除。顺带修了一个 bug：每个项目的 DDD 过期判断原来都在数 SwarmAI checkout 的 commit（`918ac0320`）。
+- B：`DEFAULT_PROJECT_NAME` 只在 `project_registry` 定义一次，十几处字面量改为引用它；置顶项目原来是写死的 `("AIDLC", "CMHK_SalesIntel")`，改为读各项目 `.project.json` 的 `"pinned": true`；删除没人用的个人项目别名（`BMS_BIZ`、`AIDLC`、`GITHUB_COMMUNITY`、`PHYSICAL_AI`、`QUICK_FOR_BIZ`）。
+
+做的过程中新发现、还没处理的 P7 项（不在原清单里）：
+- `routers/community_api.py` 写死 `Projects/GitHub_Community`，`attention_authority.py:603` 写死 `brain="GitHub_Community"`：这是 XG 自己的项目。
+- `jobs/system_jobs._get_swarmai_root` 写死 `~/Desktop/SwarmAI-Workspace/swarmai`、`/opt/swarmai`，`jobs/executor.py:1077` 用它；skill `s_loops-health` 同样写死。
+- 随产品发给所有用户的 SwarmAI 开发 skill：`s_swarm-release`、`s_swarm-daemon`、`s_swarm-build`、`s_swarm-ci`、`s_chat-brain-check`、`s_health-check`、`s_system-health` 等，用 `$SWARMAI_ROOT` 指向 SwarmAI 源码。按 P7.2 应移到 SwarmAI 仓库自己（例如仓库内 `.claude/skills/`），不随产品发布。
+- `run_worktree.code_repos` 有自己的 bindings 读取和"自托管仓库按名字匹配 daemon 自己的 checkout"，S6 再收进 `governed_repo_roots`。
+
 
 ### 3.4 gate：只保留产品级的
 

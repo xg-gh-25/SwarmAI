@@ -30,6 +30,7 @@ except ImportError:
     yaml = None  # type: ignore
 
 from utils.file_lock import flock_exclusive, flock_unlock
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -1727,7 +1728,7 @@ class EvalService:
                         # stale dir the gate-checker never reads (Gate-2 CRITICAL,
                         # run_cfb0f28f: gate silently never executes = governance void).
                         gates_dir = ddd_write_path(
-                            self._workspace_root / "Projects" / "SwarmAI", "gates")
+                            self._workspace_root / "Projects" / DEFAULT_PROJECT_NAME, "gates")
                         scaffolded = scaffold_gate_stub(gates_dir, cls, f"GATE_{cls}")
                         if scaffolded is not None:
                             action_taken = "registered_gate+scaffolded"

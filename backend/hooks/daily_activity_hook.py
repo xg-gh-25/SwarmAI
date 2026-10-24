@@ -26,6 +26,7 @@ from core.compliance import ComplianceTracker
 from core.ddd_paths import ddd_path
 from database import db
 from jobs.paths import STATE_DIR, SWARMWS
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -413,7 +414,7 @@ class DailyActivityExtractionHook:
                 ws = initialization_manager.get_cached_workspace_path()
                 if ws:
                     from pathlib import Path
-                    artifacts = Path(ws) / "Projects" / "SwarmAI" / ".artifacts"
+                    artifacts = Path(ws) / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts"
                     if artifacts.is_dir():
                         GateManager(artifacts).record_trigger("noise_filter")
             except Exception:

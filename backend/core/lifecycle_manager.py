@@ -36,6 +36,7 @@ from .session_unit import (
     subprocess_executor as _subprocess_executor,
     rss_executor as _rss_executor,
 )
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 if TYPE_CHECKING:
     from .session_router import SessionRouter
@@ -1365,7 +1366,7 @@ class LifecycleManager:
                         run_id = metadata.get("pipeline_run_id") or metadata.get("run_id")
                         if not run_id:
                             continue
-                        project = metadata.get("project", "SwarmAI")
+                        project = metadata.get("project", DEFAULT_PROJECT_NAME)
                         run_path = (
                             get_app_data_dir() / "SwarmWS" / "Projects" / project
                             / ".artifacts" / "runs" / run_id / "run.json"

@@ -17,6 +17,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ def bridge_signals_to_ddd(workspace_path: str) -> int:
         return 0
 
     # Find SwarmAI project dir (primary target)
-    project_dir = root / "Projects" / "SwarmAI"
+    project_dir = root / "Projects" / DEFAULT_PROJECT_NAME
     if not project_dir.exists():
         return 0
 
@@ -118,7 +119,7 @@ def bridge_learned_content_to_ddd(
     summary: str,
     source_url: str,
     workspace_path: str,
-    project: str = "SwarmAI",
+    project: str = DEFAULT_PROJECT_NAME,
 ) -> bool:
     """Bridge a learned knowledge card to DDD proposal (Channel 2).
 

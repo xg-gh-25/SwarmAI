@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from core.context_brain import build_context_token_block
 from core.ddd_paths import ddd_path
 from core.eval_service import get_eval_service
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +314,7 @@ async def get_context_health_lite():
     try:
         from core.ddd_cultivation import read_pending_proposals
         result["pending_proposals"] = _format_proposals_for_health(
-            read_pending_proposals(root, "SwarmAI")
+            read_pending_proposals(root, DEFAULT_PROJECT_NAME)
         )
     except Exception as exc:
         logger.debug("context-health/lite: proposals read failed: %s", exc)
@@ -376,7 +377,7 @@ async def get_context_health():
     # 3. Pending proposals (Layer 3 escalations)
     try:
         from core.ddd_cultivation import read_pending_proposals
-        proposals = read_pending_proposals(root, "SwarmAI")
+        proposals = read_pending_proposals(root, DEFAULT_PROJECT_NAME)
         result["pending_proposals"] = _format_proposals_for_health(proposals)
     except Exception as exc:
         logger.debug("context-health: proposals read failed: %s", exc)

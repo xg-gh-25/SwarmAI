@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.ddd_paths import ddd_path
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def _get_channel_threshold(channel: str, default: float) -> float:
         import json as _json
 
         from config import get_app_data_dir
-        stats_file = get_app_data_dir() / "SwarmWS" / "Projects" / "SwarmAI" / ".artifacts" / "channel_stats.json"
+        stats_file = get_app_data_dir() / "SwarmWS" / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts" / "channel_stats.json"
         if not stats_file.exists():
             return max(default, THRESHOLD_FLOOR)
 
@@ -56,7 +57,7 @@ def _get_channel_threshold(channel: str, default: float) -> float:
         return default
 
 
-def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
+def detect_tech_drift(workspace_path: str, project: str = DEFAULT_PROJECT_NAME) -> int:
     """Compare code graph against TECH.md to detect architectural drift.
 
     Drift is a machine OBSERVATION, not a human-reviewable judgment — so (Knowledge
@@ -190,7 +191,7 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
 
 
 def get_code_coverage_for_health(
-    workspace_path: str, project: str = "SwarmAI"
+    workspace_path: str, project: str = DEFAULT_PROJECT_NAME
 ) -> Optional[float]:
     """Calculate TECH.md documentation coverage based on code graph.
 
@@ -238,7 +239,7 @@ def get_code_coverage_for_health(
 
 
 def get_test_coverage_for_maturity(
-    workspace_path: str, project: str = "SwarmAI"
+    workspace_path: str, project: str = DEFAULT_PROJECT_NAME
 ) -> dict[str, bool]:
     """Check which modules have test files for maturity evidence.
 

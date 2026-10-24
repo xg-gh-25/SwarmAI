@@ -1,42 +1,48 @@
 """Tests for project_registry.get_pinned_projects — the backend-owned pinned order
-for the DDD gallery / Welcome Top-3 (run_9ada46ae).
+for the DDD gallery / Welcome Top-3.
 
-Contract: SwarmAI is ALWAYS first (protected primary brain); the rest come from a
-mutable const, existence-guarded so a deleted/local-only project (e.g. CMHK on a
-public checkout) silently drops rather than producing a broken pin.
+Contract: the default project is ALWAYS first (protected primary brain); the rest are
+the projects whose own ``.project.json`` says ``"pinned": true``, in name order.
+No project name is written in code (usable-by-anyone P7: the list used to be a const
+naming XG's own projects).
 """
-import pytest
+import json
+
+
+def _project(projects, name, meta=None):
+    d = projects / name
+    d.mkdir(parents=True)
+    if meta is not None:
+        (d / ".project.json").write_text(json.dumps(meta) if isinstance(meta, dict) else meta)
+    return d
 
 
 class TestGetPinnedProjects:
-    def test_swarmai_always_first(self, monkeypatch, tmp_path):
-        from core import project_registry as pr
-        # a projects dir where SwarmAI + AIDLC exist, CMHK does NOT
-        projects = tmp_path / "Projects"
-        (projects / "SwarmAI").mkdir(parents=True)
-        (projects / "AIDLC").mkdir(parents=True)
-        monkeypatch.setattr(pr, "get_projects_dir", lambda: projects)
-        pinned = pr.get_pinned_projects()
-        assert pinned[0] == "SwarmAI", "SwarmAI must always be first"
-
-    def test_missing_pin_is_filtered_not_crashing(self, monkeypatch, tmp_path):
-        """A pinned name whose dir doesn't exist (deleted / local-only on public
-        checkout) is DROPPED, never emitted as a broken pin."""
+    def test_default_first_then_flagged_projects(self, monkeypatch, tmp_path):
         from core import project_registry as pr
         projects = tmp_path / "Projects"
-        (projects / "SwarmAI").mkdir(parents=True)
-        (projects / "AIDLC").mkdir(parents=True)
-        # CMHK_SalesIntel intentionally absent
+        _project(projects, "SwarmAI")
+        _project(projects, "Zeta", {"pinned": True})
+        _project(projects, "Alpha", {"pinned": True, "name": "Alpha"})
+        _project(projects, "Plain", {"name": "Plain"})
+        _project(projects, "NoMeta")
         monkeypatch.setattr(pr, "get_projects_dir", lambda: projects)
-        pinned = pr.get_pinned_projects()
-        assert "CMHK_SalesIntel" not in pinned, "non-existent pin must be filtered"
-        assert "AIDLC" in pinned and "SwarmAI" in pinned
+        assert pr.get_pinned_projects() == ["SwarmAI", "Alpha", "Zeta"]
 
-    def test_all_pins_present_when_all_exist(self, monkeypatch, tmp_path):
+    def test_no_name_is_pinned_by_code(self, monkeypatch, tmp_path):
+        """A project called AIDLC or CMHK_SalesIntel is not pinned unless it says so."""
         from core import project_registry as pr
         projects = tmp_path / "Projects"
         for n in ("SwarmAI", "AIDLC", "CMHK_SalesIntel"):
-            (projects / n).mkdir(parents=True)
+            _project(projects, n)
         monkeypatch.setattr(pr, "get_projects_dir", lambda: projects)
-        pinned = pr.get_pinned_projects()
-        assert pinned == ["SwarmAI", "AIDLC", "CMHK_SalesIntel"], "order: SwarmAI first, then the configured rest"
+        assert pr.get_pinned_projects() == ["SwarmAI"]
+
+    def test_bad_metadata_and_missing_default(self, monkeypatch, tmp_path):
+        from core import project_registry as pr
+        projects = tmp_path / "Projects"
+        _project(projects, "Broken", "{not json")
+        _project(projects, "Truthy", {"pinned": "yes"})      # only JSON true counts
+        _project(projects, "Real", {"pinned": True})
+        monkeypatch.setattr(pr, "get_projects_dir", lambda: projects)
+        assert pr.get_pinned_projects() == ["Real"]          # no default dir -> not listed

@@ -32,6 +32,7 @@ from core.initialization_manager import initialization_manager
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from core.ddd_paths import ddd_path  # six-section layout resolver (SSOT)
 from core.session_hooks import HookContext
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -1047,7 +1048,7 @@ class ContextHealthHook:
         # agent itself are the most common signal). Future: infer from session
         # topics or files_modified.
         projects_dir = root / "Projects"
-        default_project = "SwarmAI"
+        default_project = DEFAULT_PROJECT_NAME
         default_project_dir = projects_dir / default_project
         if not default_project_dir.is_dir():
             return False
@@ -2287,7 +2288,7 @@ class ContextHealthHook:
         # 3h. Adversarial meta-monitoring — surface degradation in session briefing
         try:
             from core.adversarial_meta import check_adversarial_health
-            artifacts_dir = root / "Projects" / "SwarmAI" / ".artifacts"
+            artifacts_dir = root / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts"
             if artifacts_dir.is_dir():
                 health = check_adversarial_health(artifacts_dir)
                 if health.get("degradation_warning"):

@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..paths import SWARMWS, PROJECTS_DIR
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger("swarm.jobs.skill_proposer")
 
@@ -390,7 +391,7 @@ def _write_skill_proposal(
 ) -> None:
     """Write skill proposal to .artifacts/skill-proposals/."""
     # Write to SwarmAI project artifacts
-    proposals_dir = PROJECTS_DIR / "SwarmAI" / ".artifacts" / "skill-proposals" / skill_name
+    proposals_dir = PROJECTS_DIR / DEFAULT_PROJECT_NAME / ".artifacts" / "skill-proposals" / skill_name
     proposals_dir.mkdir(parents=True, exist_ok=True)
 
     # Write SKILL.md

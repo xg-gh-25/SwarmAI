@@ -121,6 +121,7 @@ from core.persist_routing import (
 # the precision reader consume these, so an auto-apply here cannot invent a
 # fourth spelling of "this landed".
 from core.proposal_feedback import STATUS_APPROVED
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -686,7 +687,7 @@ def is_memory_worthy_correction(prompt: str) -> bool:
     return True
 
 
-def _classify_lesson(lesson: str, project: str = "SwarmAI") -> Optional[tuple]:
+def _classify_lesson(lesson: str, project: str = DEFAULT_PROJECT_NAME) -> Optional[tuple]:
     """Classify a lesson into target_doc and target_section.
 
     Delegates to the unified classify_content() from persist_routing.py.

@@ -36,6 +36,7 @@ from core.ddd_cultivation import (
 )
 from core.persist_routing import ROUTING_TABLE
 from utils.file_lock import flock_exclusive_nb, flock_unlock
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cultivation", tags=["cultivation"])
@@ -88,7 +89,7 @@ def _resolve_project_dir(project: str) -> Path:
     # Normalise the sentinel first (see _query_str): a direct caller can pass the raw
     # Query object, and the separator test below raises TypeError on a non-string —
     # which would turn a validation guard into a 500 rather than a 400.
-    project = _query_str(project, "SwarmAI")
+    project = _query_str(project, DEFAULT_PROJECT_NAME)
     if "/" in project or "\\" in project or ".." in Path(project).parts:
         raise HTTPException(status_code=400, detail="Invalid project name")
 
@@ -105,12 +106,12 @@ def _resolve_project_dir(project: str) -> Path:
 
 
 @router.get("/proposals")
-async def list_proposals(project: str = Query(default="SwarmAI")):
+async def list_proposals(project: str = Query(default=DEFAULT_PROJECT_NAME)):
     """List all pending (non-expired) DDD cultivation proposals for a project."""
     # Normalise at the ENTRY, not just inside the resolver: `project` is used again
     # below (read_pending_proposals), so a resolver-local normalisation would protect
     # the guard and still let the raw Query sentinel reach a path join. See _query_str.
-    project = _query_str(project, "SwarmAI")
+    project = _query_str(project, DEFAULT_PROJECT_NAME)
     # Validate + resolve (fail-closed traversal guard); root is its parent's parent.
     project_dir = _resolve_project_dir(project)
     root = project_dir.parent.parent
@@ -129,7 +130,7 @@ async def list_proposals(project: str = Query(default="SwarmAI")):
 @router.post("/proposals/{proposal_id}/approve")
 async def approve_proposal(
     proposal_id: str,
-    project: str = Query(default="SwarmAI"),
+    project: str = Query(default=DEFAULT_PROJECT_NAME),
     target_doc: Optional[str] = Query(default=None),
     target_section: Optional[str] = Query(default=None),
 ):
@@ -292,7 +293,7 @@ async def approve_proposal(
 @router.post("/proposals/{proposal_id}/reject")
 async def reject_proposal(
     proposal_id: str,
-    project: str = Query(default="SwarmAI"),
+    project: str = Query(default=DEFAULT_PROJECT_NAME),
     reason: Optional[str] = Query(default=None),
 ):
     """Reject a proposal: mark as rejected, archive for learning."""

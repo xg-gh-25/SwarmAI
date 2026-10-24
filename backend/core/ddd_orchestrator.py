@@ -32,6 +32,7 @@ from typing import Callable
 
 from core.cultivation_dispatcher import ChannelTask, EventType
 from core.ddd_paths import ddd_path
+from core.project_registry import DEFAULT_PROJECT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +325,7 @@ class DddCultivationOrchestrator:
                 return proposals
         return None
 
-    def _find_artifacts_dir(self, root: Path, project: str = "SwarmAI") -> Path | None:
+    def _find_artifacts_dir(self, root: Path, project: str = DEFAULT_PROJECT_NAME) -> Path | None:
         """Locate the .artifacts directory for the specified project.
 
         Args:

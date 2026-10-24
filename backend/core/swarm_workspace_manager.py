@@ -174,8 +174,8 @@ PROJECT_SYSTEM_FILES = {".project.json"}
 PROJECT_SYSTEM_FOLDERS: set[str] = set()
 
 # The SwarmAI project ships with every workspace. Users can edit its DDD
-# docs but cannot delete or rename the project itself.
-DEFAULT_PROJECT_NAME = "SwarmAI"
+# docs but cannot delete or rename the project itself. Defined once, in project_registry.
+from core.project_registry import DEFAULT_PROJECT_NAME  # noqa: E402
 
 # Version of the canonical six-section DDD structure (DDD-agent-brain spec §3.6)
 # that this provisioner scaffolds. Stamped into every new project's .project.json
