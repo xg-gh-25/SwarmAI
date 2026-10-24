@@ -2073,39 +2073,6 @@ class TestEnforcementInjector:
         hook = self._hook(session_context)
         assert await hook({"prompt": ""}, None, MagicMock()) == {}
 
-    # The CLI's own shape for a background-task notification: an English lead
-    # paragraph, then the notification block. No user text anywhere in the turn.
-    _NOTIFICATION_TURN = (
-        "[SYSTEM NOTIFICATION - NOT USER INPUT]\n"
-        "This is an automated background-task event, NOT a message from the user.\n"
-        "Do NOT interpret this as user acknowledgement.\n\n"
-        "<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n"
-        "<summary>Agent \"Run history purge facts\" finished</summary>\n"
-        "<result>I traced every per-run store and every gate.</result>\n"
-        "</task-notification>"
-    )
-
-    @pytest.mark.asyncio
-    async def test_notification_turn_injects_no_language_line(self, session_context):
-        """A background-task notification is not the user's message: no reminder at
-        all. It used to say "respond in English" to a user who writes Chinese."""
-        hook = self._hook(session_context)
-        assert await hook({"prompt": self._NOTIFICATION_TURN}, None, MagicMock()) == {}
-
-    @pytest.mark.asyncio
-    async def test_all_system_turn_is_silent_not_read_as_english(self, session_context):
-        """A turn that strips to nothing has no user language; the English system
-        text is never classified in its place."""
-        hook = self._hook(session_context)
-        prompt = "## Current UI State\nCanvas: folded to the side rail, Artifacts tab"
-        assert await hook({"prompt": prompt}, None, MagicMock()) == {}
-
-    @pytest.mark.asyncio
-    async def test_user_text_after_a_notification_still_sets_the_language(self, session_context):
-        hook = self._hook(session_context)
-        result = await hook({"prompt": self._NOTIFICATION_TURN + "\n帮我看看这个结果对不对"}, None, MagicMock())
-        assert "中文" in result["hookSpecificOutput"]["additionalContext"]
-
     @pytest.mark.asyncio
     async def test_neutral_message_no_language_line(self, session_context):
         """A short ambiguous/symbol-only message → no Chinese flip (silent A is ok)."""

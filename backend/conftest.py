@@ -9,7 +9,7 @@ DB setup) lives in tests/conftest.py — the single authority.
 Usage:
     pytest -m "not pbt"        # fast: skip PBT (~1400 unit tests)
     pytest -m "not slow"       # skip stress + heavy PBT
-    pytest                     # all tests, serial (addopts has -n 0; -n 4 opts in)
+    pytest                     # all ~2000 tests (xdist auto-injects -n 4)
     HYPOTHESIS_PROFILE=ci pytest  # CI: 100 examples per property
 """
 

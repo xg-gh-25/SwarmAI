@@ -1,9 +1,7 @@
 # TEST
 
-Run one final regression after the last code change. Repeat the identical command only when it returns `continue: true`.
+Run the final verification on the reviewed tree yourself: the change's tests and the wider checks the repo expects before a commit (its README, AGENTS.md or CI tell you which). Do not change code in TEST: if something needs fixing, say so; the change goes back through review.
 
-Then run every required validation using `pipeline_test.py --project <P> --run-id <R> --mode validation --name <id>`.
+End TEST with the validation report on stdin, in the same shape as BUILD: `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -`.
 
-TS-1 completes TEST for green, red, or incomplete final. TS-2 affects push. Never call red/incomplete green and never shrink risk expansion.
-
-The stage completes by itself once a `pipeline_test.py` call's results pass its checks; otherwise its `next.blocking` names what fails. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R>` still works by hand.
+TS-1: every repo has a TEST report on its current code tree with no failed command. A failed command keeps the run in TEST; never report a failure as passing. If main moves in DELIVER, test again on the synced tree and send the report with `"$SWARM_BACKEND_BIN" pipeline-v1 report-tests --project <P> --run-id <R> --artifact -`.

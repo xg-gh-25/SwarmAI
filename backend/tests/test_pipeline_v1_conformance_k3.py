@@ -59,59 +59,13 @@ def test_f14_resume_after_worktree_unavailable_records_the_branch(rig, monkeypat
     assert r.engine().resume()["ok"] is True
     assert _branches(r) == {"repo": "refs/heads/main"}
     assert set(r.engine().effective_repos()) == {"repo"}
-    # the base is nameable, so a test call on the resumed worktree yields a bound final
-    r.worktree = Path(r.engine().effective_repos()["repo"])
-    r.edit(Rig.CHANGE)
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert r.engine().final()["repos"]["repo"]["base"]
+    # the base is nameable on the resumed worktree (a report there can be recorded)
+    engine = r.engine()
+    root = engine.effective_repos()["repo"]
+    assert engine._fork_base("repo", root)
 
 
 # ── F17 ──────────────────────────────────────────────────────────────────────
-
-def test_f17_full_scope_rounds_stop_at_the_contracts_cap(rig):
-    r = rig("trivial")
-    r.create()
-    r.drive(until="test")
-    cap = r.engine().contract["regression_round_cap"]
-    outs = []
-    for i in range(cap + 1):
-        # red each round: a green final with no required validation finishes TEST
-        r.edit({"backend/core/other.py": f"def other():\n    return 2  # round {i}\n"})
-        outs.append(r.pt("regression"))
-    assert all(o.get("full_scope", {}).get("refused") is not True for o in outs[:cap]), outs
-    assert outs[cap]["full_scope"]["refused"] is True, outs[cap]
-    assert outs[cap]["full_scope"]["rounds"] == cap
-
-
-def test_f17_the_runner_has_no_cap_of_its_own():
-    import importlib
-    pt = importlib.import_module("scripts.pipeline_test")
-    assert not hasattr(pt, "FULL_SCOPE_MAX_ROUNDS")
-    assert not hasattr(pt, "RECHECK_MAX_FIXES")
-
-def test_f17_past_the_round_cap_a_fix_recheck_clears_red_until_the_recheck_cap(rig):
-    """The cap and the landing never lock each other: past the contract's round cap
-    a fix is judged by a recheck (counted against ``recheck_cap``); a recheck on
-    unchanged code is not a fix; past the recheck cap a fix is refused."""
-    r = rig("trivial")
-    r.create()
-    r.drive(until="test")
-    contract = r.engine().contract
-    r.edit({"backend/core/other.py": "def other():\n    return 2\n"})            # red
-    for i in range(contract["regression_round_cap"]):
-        r.edit({"backend/core/other.py": f"def other():\n    return 2  # r{i}\n"})
-        r.pt("regression")
-    refused = r.pt("regression")
-    assert refused["full_scope"]["refused"] and "--mode recheck" in refused["error"]
-    for i in range(contract["recheck_cap"]):
-        r.edit({"backend/core/other.py": f"def other():\n    return 1  # fix {i}\n"})
-        out = r.pt("recheck")
-        assert not (out.get("full_scope") or {}).get("refused"), out
-    assert not (r.pt("recheck").get("full_scope") or {}).get("refused")   # unchanged code
-    r.edit({"backend/core/other.py": "def other():\n    return 1  # one more\n"})
-    out = r.pt("recheck")
-    assert out["full_scope"]["fix_rechecks"] == contract["recheck_cap"], out
-
 
 # ── F18 ──────────────────────────────────────────────────────────────────────
 
@@ -136,20 +90,6 @@ def test_f18_a_hit_stage_attempt_cap_is_a_speed_block(rig):
     assert summary["token_cost"]["verdict"] != "BLOCK" or summary["token_cost"]["accounted_calls"] == 0
 
 
-def test_f18_a_refused_full_scope_round_is_recorded_by_the_runner(rig):
-    r = rig("trivial")
-    r.create()
-    r.drive(until="test")
-    for i in range(r.engine().contract["regression_round_cap"] + 1):
-        # red each round: a green final with no required validation finishes TEST
-        r.edit({"backend/core/other.py": f"def other():\n    return 2  # round {i}\n"})
-        r.pt("regression")
-    assert "regression_round" in _caps(r)
-    rows = [e for e in r.events() if e["kind"] == "metric"
-            and e["payload"]["name"] == "cap_exceeded.regression_round"]
-    assert rows and rows[0]["producer"] == "runner" and rows[0]["stage"] == "test"
-
-
 def test_f18_a_dispatch_cap_blocks_token_too():
     from core.run_protocol import audit
     events = [{"kind": "run_create", "at": "2026-10-23T00:00:00+00:00", "payload": {}},
@@ -166,19 +106,6 @@ def test_f18_a_dispatch_cap_blocks_token_too():
 
 
 # ── F16 ──────────────────────────────────────────────────────────────────────
-
-def test_f16_no_expert_is_spawned_while_a_deterministic_review_check_fails(rig):
-    r = rig("trivial")
-    r.create()
-    r.drive(until="review")
-    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})    # exit test red
-    out = r.v1("review-start")
-    assert out.get("ok") is False and "DS-9b" in out["failed"], out
-    assert not any(e["kind"] == "handout" for e in r.events())
-    r.edit(Rig.CHANGE)
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert r.v1("review-start").get("ok") is True
-
 
 # ── F12 / F13 ────────────────────────────────────────────────────────────────
 
@@ -295,30 +222,6 @@ def test_f11_an_unwritable_audit_area_is_named_and_nothing_else_is_caught(rig, m
 
 
 # ── F15 ──────────────────────────────────────────────────────────────────────
-
-def test_f15_main_moving_into_scope_reruns_only_the_affected_tests(rig):
-    from tests.pipeline_v1_rig import SWARM, _git
-    r = rig("direct")
-    r.create()
-    r.drive(until="deliver")
-    r.commit_on_main({"backend/tests/test_x.py": (
-        "from core.mod import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\n"
-        "def test_add_zero():\n    assert add(0, 0) == 0\n")})
-    refused = r.v1("land", "--message", "fix: swap" + SWARM)
-    assert refused.get("ok") is not True and "--mode recheck" in refused["failed"]["LG-4"], refused
-    plan = json.loads((r.data / "state" / "pipeline_agent_audit" / "runs" / str(r.run_id)
-                       / "carry_plan.json").read_text())
-    affected = plan["repo"]["affected_tests"]
-    assert affected and all(t.startswith("backend/tests/test_x.py") for t in affected), plan
-    out = r.pt("recheck")
-    assert out.get("ok") is not False, out
-    ran = set(out.get("selected_nodeids") or [])
-    assert out["selected_files"] == ["backend/tests/test_x.py"], out
-    assert ran == {"backend/tests/test_x.py::test_add", "backend/tests/test_x.py::test_add_zero"}
-    state = r.drive()
-    assert state["landing"] == "landed", state
-    assert _git(r.repo, "show", "main:backend/core/mod.py").endswith("return b + a")
-
 
 # ── F19 ──────────────────────────────────────────────────────────────────────
 
@@ -446,20 +349,6 @@ def test_r1_an_exhausted_landing_of_any_kind_is_a_cap(rig):
         == "land_attempt"
 
 
-def test_r1_an_empty_carry_plan_refuses_a_recheck(rig):
-    r = rig("direct")
-    r.create()
-    r.drive(until="deliver")
-    engine = r.engine()
-    from core.run_protocol import git_tree
-    tree = git_tree.write_tree(engine.effective_repos()["repo"],
-                               (f".aidlc/deliverables/{r.run_id}/",), {})
-    engine._write_carry_plan("repo", old_base="a" * 40, new_base="b" * 40,
-                             code_tree=tree, affected=[])
-    out = r.pt("recheck")
-    assert out.get("ok") is not True and "--mode regression" in out.get("error", ""), out
-
-
 def test_r1_a_lesson_is_one_line_and_never_written_through_a_symlink(tmp_path):
     from core.run_protocol import reflect, reflect_job
     lesson = {**_lesson("refines"),
@@ -485,24 +374,6 @@ def test_r1_a_lesson_is_one_line_and_never_written_through_a_symlink(tmp_path):
 
 
 # ── review round 2 ───────────────────────────────────────────────────────────
-
-def test_r2_the_runner_signs_its_own_transition_so_no_event_can_slip_in(rig):
-    from core.run_protocol import infra, runner
-    r = rig("direct")
-    r.create()
-    engine = r.engine()
-    failure = infra.InfrastructureError("disk full", component="audit_store")
-    runner.record_infrastructure_failed(r.run_id, engine.contract, failure)
-    kinds = [e["kind"] for e in r.events()]
-    assert kinds[-2:] == ["infrastructure_failed", "transition"], kinds
-    assert r.events()[-1]["producer"] == "runner"
-    store, writer = runner.event_channel(r.run_id, engine.contract)
-    from core.run_protocol.store import StoreError
-    with pytest.raises(StoreError):            # a failed run takes no further test call
-        store.append_new(writer=writer, kind="test_call", at="2026-10-23T00:00:00Z",
-                         payload={"seq": 99})
-    assert r.state()["status"] == "failed"
-
 
 def test_r2_a_failed_write_back_is_projected_again_and_checks_read_the_event(rig, monkeypatch):
     from core.run_protocol import documents
@@ -543,22 +414,6 @@ def test_r2_a_proposal_is_never_written_through_a_symlink(tmp_path):
     assert not any((tmp_path / "elsewhere").iterdir())
 
 
-def test_r2_two_full_scope_calls_of_one_run_never_overlap(tmp_path):
-    import importlib
-    from utils.file_lock import flock_exclusive_nb
-    pt = importlib.import_module("scripts.pipeline_test")
-    (tmp_path / "tests").mkdir()
-    holder = open(tmp_path / "tests" / ".full-scope.lock", "a+")
-    flock_exclusive_nb(holder)
-    try:
-        with pt._full_scope_slot(tmp_path, "regression", object()) as busy:
-            assert busy and busy["full_scope"]["busy"] is True
-        with pt._full_scope_slot(tmp_path, "tdd", object()) as busy:
-            assert busy is None
-    finally:
-        holder.close()
-
-
 # ── review round 3 ───────────────────────────────────────────────────────────
 
 def test_r3_a_relation_outside_this_projects_ddd_is_queued_not_applied(tmp_path):
@@ -587,16 +442,6 @@ def test_r3_an_existing_different_proposal_is_rejected_not_reported_queued(tmp_p
     again = reflect_job.route(_lesson("contradicts"), "domain:P:TECH:Conventions",
                               workspace=tmp_path, project="P", run_id="run_x")
     assert first == again == "queued:reflect-run_x-L1.json"
-
-
-def test_r3_a_full_scope_row_that_cannot_be_written_fails_the_call(tmp_path, monkeypatch):
-    import importlib
-    pt = importlib.import_module("scripts.pipeline_test")
-    def broken(*_a, **_k):
-        raise OSError("index not writable")
-    monkeypatch.setattr(pt, "_append_run_index", broken)
-    src = __import__("inspect").getsource(pt._write_evidence)
-    assert "if mode in FULL_SCOPE_MODES:\n            raise" in src
 
 
 def test_r3_gate0_ending_at_its_cap_is_recognised(rig):

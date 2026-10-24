@@ -44,10 +44,12 @@ def test_create_enters_build_with_its_worktree_card_and_next(rig):
     assert out["state"]["stage"] == "build"
     assert r.worktree is not None and r.worktree.is_dir() and r.worktree != r.repo
     step = out["next"]
-    assert step["stage"] == "build" and "card_text" in step and step["action"] == "fix"
-    assert "pipeline_test.py" in step["command"] and step["blocking"]
+    assert step["stage"] == "build" and "card_text" in step
+    # S6-1: the agent tests natively and ends BUILD with its validation report
+    assert step["action"] == "write_artifact" and "stage-complete --artifact -" in step["command"]
+    assert '"reports"' in step["why"] and "pipeline_test" not in step["command"]
     status = r.v1("status")
-    assert status["next"]["action"] == "fix" and "card_text" not in status["next"]
+    assert status["next"]["action"] == "write_artifact" and "card_text" not in status["next"]
 
 
 def test_the_retired_commands_are_gone(rig):
@@ -84,27 +86,22 @@ def test_a_pipeline_command_without_the_hooks_token_is_refused(rig):
     assert r.v1("status")["state"]["status"] == "active"
 
 
-def test_passing_build_results_complete_build_by_themselves(rig):
+def test_a_build_report_completes_build_and_names_the_next_card(rig):
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert out.get("stage_complete", {}).get("ok") is True, out
+    out = r.report_and_complete()
+    assert out.get("ok") is True, out
     assert out["next"]["stage"] == "review" and "card_text" in out["next"]
-    assert r.state()["stage"] == "review"
 
 
-def test_failing_build_results_record_no_attempt_and_name_the_checks(rig):
+def test_a_build_without_a_report_does_not_complete_and_names_bx3(rig):
     r = rig()
     r.create()
-    r.edit({**Rig.CHANGE, "backend/tests/test_x.py":
-            "from core.mod import add\n\n\ndef test_add():\n    assert add(1, 2) == 4\n"})
-    before = [e for e in r.events() if e["kind"] == "stage_attempt"]
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert "stage_complete" not in out, out
-    assert out["next"]["action"] == "fix" and out["next"]["blocking"]
-    assert [e for e in r.events() if e["kind"] == "stage_attempt"] == before
-    assert r.state()["stage"] == "build"
+    r.edit(Rig.CHANGE)
+    out = r.v1("stage-complete")
+    assert out.get("ok") is False and r.state()["stage"] == "build", out
+    assert "BX-3" in json.dumps(out)
 
 
 def test_reflect_without_a_transcript_records_usage_not_available(rig):
@@ -127,31 +124,19 @@ def test_a_completion_decided_on_an_older_stage_is_refused(rig):
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)
-    r.pt("tdd", "--files", "backend/tests/test_x.py")           # BUILD → REVIEW
+    r.report_and_complete()                                     # BUILD → REVIEW
     out = r.v1("stage-complete", "--expect-stage", "build")
     assert out.get("ok") is False and "stale" in out.get("error", ""), out
     assert r.state()["stage"] == "review"
 
 
-def test_another_sessions_test_call_writes_nothing(rig):
-    r = rig()
-    r.create()
-    r.edit(Rig.CHANGE)
-    before = r.events()
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py", session="someone-else")
-    assert "belongs to session" in out.get("error", ""), out
-    assert r.events() == before and r.engine().final() == {}
-    assert r.state()["stage"] == "build"
-
-
-def test_a_red_regression_does_not_finish_test(rig):
+def test_a_failed_test_report_does_not_finish_test(rig):
     r = rig()
     r.create()
     r.drive(until="test")
-    r.edit({"backend/core/other.py": "def other():\n    return 2\n"})
-    out = r.pt("regression")
-    assert "stage_complete" not in out and r.state()["stage"] == "test", out
-    assert any(row["check"] == "final" for row in out["next"]["blocking"])
+    out = r.report_and_complete("fail")
+    assert out.get("ok") is False and r.state()["stage"] == "test", out
+    assert "failed command" in json.dumps(out)
 
 
 def test_a_user_stop_waits_for_the_person(rig):
@@ -166,7 +151,7 @@ def test_review_dispatches_then_waits_then_completes(rig):
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
+    r.report_and_complete()
     started = r.v1("review-start")
     assert started.get("ok") is True and started["handouts"], started
     assert started["next"]["action"] == "dispatch", started["next"]

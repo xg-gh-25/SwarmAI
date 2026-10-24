@@ -49,7 +49,7 @@ _RUN_ID_RE = re.compile(r"^run_[A-Za-z0-9_]{1,64}$")
 _TAKEOVER = frozenset({
     "stage-complete", "review-start", "land", "reflect-prepare", "gate0-start",
     "review-address", "review-proof", "resume", "restore", "abandon",
-    "decision-request", "run-land", "accept-finding", "discard-snapshot",
+    "decision-request", "run-land", "accept-finding", "discard-snapshot", "report-tests",
 })
 _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 # The daemon's human-only pipeline endpoint (docs/design/pipeline-v1-human-loop.md).

@@ -19,8 +19,6 @@ vi.mock('../../services/api', () => ({
 // stubbed so it never consumes the api.get mocks queued for /resolve.
 vi.mock('../../services/canvasSession', () => ({
   refreshCanvasSession: async () => {},
-  refreshCanvasArtifacts: async () => {},
-  setCanvasStreaming: async () => {},
   setActiveCanvasSession: () => {},
   useCanvasSessionArtifacts: () => undefined,
   cachedArtifacts: () => undefined,

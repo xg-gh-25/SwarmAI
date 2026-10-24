@@ -9,20 +9,32 @@ Never shows another session's work, and is the same live, after a reload or a re
   HEAD (``inHead``: the rail's NEW / UPD badge; one ``git ls-tree`` per repo). A
   session recorded before that store existed is imported once from its
   ``turn_deliverables`` blocks.
-- **Changes** ← core/session_changes: what the session's own transcript says it
-  changed — each persisted ``turn_changes`` card, and the commits its assistant text
-  names (confirmed by git in a bound repo). How a change was made is not asked; no
-  run.json is read (docs/design/canvas-changes-from-turns.md).
+- **Changes** ← the pipeline runs the session OWNS (run.json ``session_id`` /
+  ``session_history``, the owner gate's record — core/run_owner_gate). A run's code
+  lives in trees only that run writes (docs/design/pipeline-run-worktree.md), so
+  nothing has to be attributed:
+
+    live   — each ``active`` worktree of the run: its change set against its HEAD
+             (the run's base; run_worktree.change_tree plus its untracked new files,
+             the run's deliverables dir left out). Located from run_id + repo name
+             only (run_worktree.wt_path) and used only when git lists it on the
+             run's branch — a path in run.json is never trusted.
+    landed — the commits run.json records, each with its own files; ``pushed`` when
+             the repo's upstream contains it.
+    released — a worktree released without landing (nothing left to diff): said, not
+             guessed.
+
+  An edit made straight in a shared checkout is not a run's and is not listed.
 
 The two parts are independent requests (``parts``): Artifacts are a file read on the
 single-worker ``canvas_session`` pool (behind the session_outputs writes the router
-submitted first); Changes run on the ``canvas_changes`` pool (their own read-only
-database connection and git), so an Artifacts refresh never waits for them.
+submitted first); Changes run their git on the ``canvas_changes`` pool, so an
+Artifacts refresh never waits for git. Commit facts are immutable and cached by sha.
 
 ``working_repo`` names the repo the session's newest run works in (the terminal's
-default location, docs/design/terminal-locations.md): no git, the run index.
+default location, docs/design/terminal-locations.md): no git, the same run index.
 
-Public: ``build``, ``artifact_rows``, ``in_head``, ``session_runs``, ``working_repo``,
+Public: ``build``, ``artifact_rows``, ``in_head``, ``session_runs``, ``working_repo``, ``run_changes``,
 ``deliverable_turns``, ``MAX_FILES``.
 """
 from __future__ import annotations
@@ -31,11 +43,14 @@ import json
 import logging
 import os
 import re
+import threading
+from pathlib import Path
 from typing import Any, Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-MAX_FILES = 200          # per session (Artifacts)
+MAX_FILES = 200          # per session (Artifacts), per tree (Changes)
+MAX_COMMITS = 50         # per run
 _SHA = re.compile(r"[0-9a-fA-F]{7,40}")
 BACKFILL_NEEDLES = ['"type": "turn_deliverables"']
 
@@ -198,6 +213,167 @@ def session_runs(session_id: str, workspace: str) -> list[dict]:
     return sorted(runs, key=lambda f: f["createdAt"], reverse=True)
 
 
+# ── one run's changes (blocking, read-only git) ─────────────────────────────
+
+def _git(cwd: str, *args: str) -> str:
+    from core.run_worktree import _out
+    return _out(cwd, *args)
+
+
+def _known_repo(main: str) -> Optional[str]:
+    """*main* as a real path when it is a code repo Canvas may read, else None."""
+    from core.turn_changes import allowed_repo
+    real = os.path.realpath(main) if main else ""
+    return real if real and os.path.isdir(real) and allowed_repo(real) else None
+
+
+def _live_worktree(run_id: str, entry: dict, main: str) -> Optional[str]:
+    """The run's worktree for *entry* — derived from run_id + repo name, used only when
+    git lists it on the run's branch — or None."""
+    from core import run_worktree as rw
+    name = str(entry.get("repo_name") or "")
+    if entry.get("state") != "active" or not rw.REPO_NAME_RE.fullmatch(name):
+        return None
+    try:
+        path = rw.wt_path(run_id, name)
+    except Exception:  # noqa: BLE001 — a malformed id is no worktree
+        logger.debug("worktree path failed run=%s repo=%s", run_id, name, exc_info=True)
+        return None
+    if os.path.realpath(str(path)) != str(path) or not rw._no_symlinks(path) or not path.is_dir():
+        return None
+    return str(path) if rw.is_registered(main, run_id, name) else None
+
+
+def _tree_changes(run_id: str, wt: str) -> list[dict]:
+    """The worktree's change set against its HEAD: one row per file."""
+    from core import run_worktree as rw
+    from core.turn_changes import _parse_name_status, _parse_numstat
+    base = _git(wt, "rev-parse", "HEAD^{tree}").strip()
+    tree = rw.change_tree(wt, run_id, add=rw.untracked_new_files(wt, run_id))
+    if tree == base:
+        return []
+    numstat = _parse_numstat(_git(wt, "diff-tree", "-r", "--no-renames", "--numstat", "-z", base, tree))
+    status = _parse_name_status(_git(wt, "diff-tree", "-r", "--no-renames", "--name-status", "-z", base, tree))
+    rows = []
+    for path in sorted(numstat)[:MAX_FILES]:
+        added, deleted = numstat[path]
+        rows.append({"path": path, "absolutePath": os.path.join(wt, path),
+                     "status": status.get(path, "modified"), "added": added, "deleted": deleted,
+                     "start": base, "end": tree})
+    return rows
+
+
+# Commits never change: (repo, sha as recorded) -> facts. Bounded.
+_COMMITS: dict[tuple[str, str], dict] = {}
+_PUSHED: set[tuple[str, str]] = set()
+_COMMITS_MAX = 4000
+_commit_lock = threading.Lock()
+
+
+def _commit_facts(root: str, shas: list[str]) -> dict[str, dict]:
+    """{recorded sha: {sha, short, subject, at, files}} for the commits of *root* —
+    one ``git log`` for the ones not cached; a sha the repo no longer has is absent."""
+    with _commit_lock:
+        want = [s for s in shas if (root, s) not in _COMMITS]
+    if want:
+        out = _git(root, "log", "--no-walk=unsorted", "--ignore-missing", "--no-renames",
+                   "--format=%x1e%H%x1f%s%x1f%cI", "--numstat", "-z", *want)
+        got: dict[str, dict] = {}
+        for chunk in out.split("\x1e"):
+            head, _, rest = chunk.partition("\0")
+            parts = head.split("\x1f")
+            if len(parts) != 3:
+                continue
+            files = []
+            for rec in rest.lstrip("\n").split("\0"):
+                f = rec.split("\t", 2)
+                if len(f) == 3:
+                    files.append({"path": f[2], "added": None if f[0] == "-" else int(f[0]),
+                                  "deleted": None if f[1] == "-" else int(f[1])})
+            got[parts[0]] = {"sha": parts[0], "short": parts[0][:8], "subject": parts[1],
+                             "at": parts[2], "files": files[:MAX_FILES]}
+        with _commit_lock:
+            for s in want:
+                hit = next((c for full, c in got.items() if full.startswith(s.lower())), None)
+                if hit:
+                    if len(_COMMITS) >= _COMMITS_MAX:
+                        _COMMITS.clear()
+                    _COMMITS[(root, s)] = hit
+    with _commit_lock:
+        return {s: _COMMITS[(root, s)] for s in shas if (root, s) in _COMMITS}
+
+
+def _pushed(root: str, shas: list[str]) -> set[str]:
+    """The full shas of *shas* the repo's upstream contains (once true, cached)."""
+    upstream = _git_ok(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if not upstream:
+        return set()
+    from core.run_worktree import git
+    out = set()
+    for sha in shas:
+        if (root, sha) in _PUSHED:
+            out.add(sha)
+            continue
+        if git(root, "merge-base", "--is-ancestor", sha, upstream).returncode == 0:
+            _PUSHED.add((root, sha))
+            out.add(sha)
+    return out
+
+
+def _git_ok(cwd: str, *args: str) -> str:
+    from core.run_worktree import git
+    p = git(cwd, *args)
+    return p.stdout.strip() if p.returncode == 0 else ""
+
+
+def run_changes(run: dict) -> Optional[dict]:
+    """One owned run's Changes: {run, title, status, project, repos[]}; None when the
+    run has nothing to show. Blocking."""
+    repos: dict[str, dict] = {}
+
+    def repo_row(main: str) -> dict:
+        return repos.setdefault(main, {"root": main, "repo": os.path.basename(main), "worktree": None,
+                                       "branch": None, "files": [], "commits": [], "released": False})
+
+    for entry in run["worktrees"]:
+        main = _known_repo(str(entry.get("main") or ""))
+        if not main:
+            continue
+        wt = _live_worktree(run["run"], entry, main)
+        if wt:
+            row = repo_row(main)
+            row["worktree"], row["branch"] = wt, f"run/{run['run']}"
+            try:
+                row["files"] = _tree_changes(run["run"], wt)
+            except Exception as exc:  # noqa: BLE001 — one tree failing does not hide the rest
+                logger.info("canvas_session: %s changes unreadable: %s", wt, exc)
+                row["error"] = str(exc)[:200]
+        elif entry.get("state") == "released" and not entry.get("integrated") and not run["commits"]:
+            repo_row(main)["released"] = True
+
+    by_repo: dict[str, list[str]] = {}
+    for c in run["commits"]:
+        main = _known_repo(c["repo"])
+        if main:
+            by_repo.setdefault(main, []).append(c["sha"])
+    for main, shas in by_repo.items():
+        try:
+            facts = _commit_facts(main, shas[:MAX_COMMITS])
+            pushed = _pushed(main, [f["sha"] for f in facts.values()])
+        except Exception as exc:  # noqa: BLE001
+            logger.info("canvas_session: commits of %s unreadable: %s", main, exc)
+            repo_row(main)["error"] = str(exc)[:200]
+            continue
+        repo_row(main)["commits"] = [{**f, "pushed": f["sha"] in pushed}
+                                     for f in sorted(facts.values(), key=lambda f: f["at"], reverse=True)]
+
+    rows = [r for r in repos.values() if r["files"] or r["commits"] or r["released"] or r.get("error")]
+    if not rows:
+        return None
+    return {"run": run["run"], "title": run["title"], "status": run["status"],
+            "project": run["project"], "createdAt": run["createdAt"], "repos": rows}
+
+
 def _main_checkout(path: str) -> Optional[str]:
     """*path* as a real path when it is a repo's main checkout (``.git`` is a
     directory), else None — a linked worktree's ``.git`` is a file, so a run worktree
@@ -221,6 +397,13 @@ def working_repo(session_id: str, workspace: Optional[str]) -> Optional[dict]:
         main = _main_checkout(named[0])   # exactly the first named repo: never a later one
         return {"path": main, "name": os.path.basename(main)} if main else None
     return None
+
+
+def changes_of(session_id: str, workspace: Optional[str]) -> list[dict]:
+    """Changes of every run the session owns, newest first. Blocking."""
+    if not workspace:
+        return []
+    return [c for c in map(run_changes, session_runs(session_id, workspace)) if c]
 
 
 # ── the request ─────────────────────────────────────────────────────────────
@@ -252,18 +435,12 @@ async def build(session_id: str, parts: str = "all") -> dict[str, Any]:
             backfill_turns = deliverable_turns(await db.messages.list_session_blocks(session_id, BACKFILL_NEEDLES))
         return await executors.run_in("canvas_session", _artifacts, session_id, workspace, backfill_turns)
 
-    async def changes() -> dict:
-        return await executors.run_in("canvas_changes", _changes, session_id, str(db.db_path))
+    async def changes() -> list[dict]:
+        return await executors.run_in("canvas_changes", changes_of, session_id, workspace)
 
     want_a, want_c = parts in ("all", "artifacts"), parts in ("all", "changes")
     a, c = await asyncio.gather(artifacts() if want_a else _none(), changes() if want_c else _none())
     return {"artifacts": a, "changes": c}
-
-
-def _changes(session_id: str, db_path: str) -> dict:
-    """Blocking, on the canvas_changes pool: core/session_changes.read."""
-    from core import session_changes
-    return session_changes.read(session_id, db_path)
 
 
 async def _none() -> None:

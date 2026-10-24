@@ -139,6 +139,10 @@ def parser() -> argparse.ArgumentParser:
     review_proof.add_argument("--project", required=True)
     review_proof.add_argument("--run-id", required=True)
     review_proof.add_argument("--artifact", required=True)
+    report_tests = sub.add_parser("report-tests")      # a TEST report in DELIVER (S6-1)
+    report_tests.add_argument("--project", required=True)
+    report_tests.add_argument("--run-id", required=True)
+    report_tests.add_argument("--artifact", required=True)
     abandon = sub.add_parser("abandon")
     abandon.add_argument("--project", required=True)
     abandon.add_argument("--run-id", required=True)
@@ -288,6 +292,8 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         return {"ok": True, **engine.review_start()}
     if args.command == "review-address":
         return {"ok": True, **engine.review_address(_json_arg(args.artifact))}
+    if args.command == "report-tests":
+        return engine.report_tests(_json_arg(args.artifact))
     if args.command == "review-proof":
         return {"ok": True, **engine.review_proof(_json_arg(args.artifact))}
     if args.command == "push-status":

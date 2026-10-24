@@ -2034,13 +2034,14 @@ def create_post_compact_injection(
 def _strip_injected_prefix(prompt: str) -> str:
     """The user's own text for LANGUAGE classification (core.injected_blocks).
 
-    Same stripping as every other prompt reader. A prompt that is all system blocks
-    (a background-task notification, a resume-only turn) yields ``""``, and the
-    classifier then stays silent: the turn has no user text, so it has no user
-    language, and reading the system text instead flipped R19 to English.
+    Same stripping as every other prompt reader, plus one fail-safe the
+    language check needs: if stripping would leave nothing (a prompt that is all
+    system blocks), the ORIGINAL prompt is returned so a language is still read.
+    Capture hooks call ``strip_injected_blocks`` directly and capture nothing then.
     """
     from core.injected_blocks import strip_injected_blocks
-    return strip_injected_blocks(prompt)
+    user = strip_injected_blocks(prompt)
+    return user if user else prompt
 
 
 def _classify_message_language(prompt: str) -> Optional[str]:

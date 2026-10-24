@@ -1,6 +1,7 @@
 """Pre-cutover rehearsal: direct twice and every other profile once.
 
-Each code profile uses a real isolated worktree, validated documents, sealed test final,
+Each code profile uses a real isolated worktree, validated documents, the agent's
+validation reports for BUILD and TEST,
 delivery-tree commit and completed five-dimension audit with no BLOCK.
 """
 from __future__ import annotations
@@ -11,10 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from core.run_protocol import git_tree
 from core.run_protocol.engine import RunEngine
 from core.run_protocol.hook_bridge import ReviewHookBridge
-from core.run_protocol.runner import V1Runner
 
 
 def _git(repo, *args):
@@ -56,36 +55,12 @@ def _design(profile):
     return value
 
 
-def _runner(engine, wt, target, profile):
-    runner = V1Runner(
-        run_dir=engine.run_dir, repo_root=wt, repo_name="repo",
-        run_id=engine.run_id, base=_git(wt, "rev-parse", "HEAD"),
-        code_tree=git_tree.write_tree(
-            str(wt), (f".aidlc/deliverables/{engine.run_id}/",), {}),
-        contract=engine.contract, python="python3")
-    call = runner.record_call(
-        call_type="test", argv=["python3", "-c", "pass"],
-        tool_version="python3", target="tests/test_x.py::test_value")
-    covers = ["R1.1"] + (["U1"] if profile == "bugfix" else [])
-    selection = {
-        "files": ["tests/test_x.py"],
-        "nodeids": ["tests/test_x.py::test_value"],
-        "summary": {"selected": 1, "mode": target},
-        "dependency_scope": {"tests/test_x.py::test_value": ["a.py"]},
-        "test_dependencies": {"tests/test_x.py::test_value": ["a.py"]},
-        "risk_rules": [], "mode": target, "risk_status": "within_cap",
-    }
-    runner.finalize(
-        changed_paths=["a.py"], runner_code_hash="f" * 64,
-        pipeline_code_hash=engine.contract["pipeline_code_hash"],
-        runner_argv=["pipeline_test.py", "--mode", target],
-        selection=selection, cache_keys=[],
-        main_red={"sha": "e" * 64, "generated_at": "now"},
-        trace=[{"exit": "X1", "kind": "test", "covers": covers,
-                "ref": "tests/test_x.py::test_value", "result": "pass",
-                "seq": call["seq"]}],
-        node_results={"tests/test_x.py::test_value": {"result": "pass", "seq": call["seq"]}},
-        tdd_required=["tests/test_x.py"], whole_files=["tests/test_x.py"])
+def _report():
+    """The agent's own validation report (S6-1): BUILD and TEST end with it."""
+    return {"reports": [{"repo": "repo", "rationale": "test_value covers the change",
+                         "tests_changed": ["tests/test_x.py"], "commands": [
+                             {"command": "python3 -m pytest tests/test_x.py", "cwd": ".",
+                              "result": "pass"}]}]}
 
 
 def _land_through_the_hook(engine, monkeypatch, message):
@@ -126,10 +101,10 @@ def _run_code(case, profile, run_id, monkeypatch):
         if profile in {"full","bugfix","goal"}: assert engine.stage_complete()["ok"]  # THINK
         wt=Path(engine.ensure_stage_worktrees()["repo"]); (wt/"a.py").write_text("value=2\n")
         assert engine.stage_complete(_design(profile))["ok"]
-    _runner(engine,wt,"tdd",profile); assert engine.stage_complete()["ok"]
+    assert engine.stage_complete(_report())["ok"]
     if profile=="goal": pass
     assert engine.review_start()["reviewers"]==[]; assert engine.stage_complete()["ok"]
-    _runner(engine,wt,"regression",profile); assert engine.stage_complete()["ok"]
+    assert engine.stage_complete(_report())["ok"]
     _land_through_the_hook(engine, monkeypatch, f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); _measured(engine); engine.reflect_complete()
     audit=json.loads((engine.run_dir/"run_audit.json").read_text())
     assert all(row["verdict"]!="BLOCK" for row in audit["summary"].values()),audit["summary"]

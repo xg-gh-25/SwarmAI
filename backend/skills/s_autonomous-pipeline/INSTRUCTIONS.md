@@ -22,12 +22,12 @@ A requirement/design choice goes through `decision-request` only. Its output (an
 
 ## Execute
 
-Every `"$SWARM_BACKEND_BIN" pipeline-v1` and `pipeline_test.py` response ends with `next`: what to do now (`action`, `command`, `why`), the checks that still fail (`blocking`), and the stage card (`card_text`, included when the call entered a new stage). Follow it; there is no need to call `status` between stages. `repos` names where to edit the run's code: the call that enters a code stage creates the worktrees.
+Every `"$SWARM_BACKEND_BIN" pipeline-v1` response ends with `next`: what to do now (`action`, `command`, `why`), the checks that still fail (`blocking`), and the stage card (`card_text`, included when the call entered a new stage). Follow it; there is no need to call `status` between stages. `repos` names where to edit the run's code: the call that enters a code stage creates the worktrees.
 
 For every stage:
 
 1. Read `next.card_text` and execute the card.
-2. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST complete by themselves when a `pipeline_test.py` call's results pass their checks (the response carries `stage_complete`).
+2. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST end with your validation report as the artifact (see Tests).
 3. Continue immediately with the returned `next`. Stop only for a DC-1 human decision, user stop, or terminal state.
 
 Token usage is measured by the daemon when REFLECT ends; there is no measuring command.
@@ -52,18 +52,17 @@ Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`.
 - Add security and red-team only for clear security risk; below 50 risky lines, security only.
 - Small changes and docs-only changes dispatch nobody unless explicitly required.
 - R1 reviews the full diff. Collect the whole round, cluster by cause, fix once, then call `review-address --artifact <handoff.json>`; its returned handouts are the complete R2 roster.
-- Behavior/contract break tests run with `pipeline_test.py --project <P> --run-id <R> --mode prove --round R1 --files <nodeid> --finding CF-1234abcd=<nodeid>` and emit runner-signed old/old/new proof events. Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
+- A behavior/contract finding's fix is shown by a test you ran: name it in the fix and in your next validation report; refuted findings and structural fixes go through `review-proof` . Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
 - R2 only rechecks addressed R1 findings for experts that reported them. There is no third round or secondary review layer.
 - Only unresolved HIGH/CRITICAL findings affect push readiness. MEDIUM/LOW remain residual risks.
 
 ## Tests
 
-Use only `pipeline_test.py` evidence modes. TDD/prove are local fix loops. After the last edit, run one regression and every required base-manifest validation returned by status:
+The pipeline does not run or watch tests (design usable-by-anyone §3.3.3). Test the way you would without it, with the repo's own commands, in the run's worktree. BUILD and TEST each end with a validation report as the `stage-complete --artifact -` JSON:
 
-- `pipeline_test.py --project <P> --run-id <R> --mode regression`
-- `pipeline_test.py --project <P> --run-id <R> --mode validation --name <id>`
+`{"reports": [{"repo": "<name>", "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run", "reason": "..."}], "tests_changed": ["..."], "rationale": "why these tests show the change is right"}]}`
 
-Repeat the same command only when `continue: true`. Risk expansion is deterministic and contract-capped; overflow means incomplete, never partial green. Eval and production build/deploy remain outside the run.
+One report per repo; `fail` and `not_run` need a reason. The engine records each on the tree it computes for that worktree, never a tree you give. A failed command in TEST keeps the run in TEST. Review judges whether the tests are enough. After main moves in DELIVER, test the synced tree again and send `report-tests --artifact -`. Eval and production build/deploy remain outside the run.
 
 ## Landing and completion
 

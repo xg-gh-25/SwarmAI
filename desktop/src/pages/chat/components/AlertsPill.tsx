@@ -14,8 +14,7 @@
  *
  * States:
  *   - count === 0  → CALM: neutral grey, no badge.
- *   - count  >  0  → ALERT: red bell + pulsing red count badge (no red frame:
- *                    the row sits inside the Swarm key like History/Artifacts).
+ *   - count  >  0  → ALERT: red-tinted + pulsing count badge.
  */
 import { dispatchUiCommand } from '../../../utils/uiCommands';
 import { useTranslation } from 'react-i18next';
@@ -47,11 +46,13 @@ export function AlertsPill({ count, onPrefetch }: AlertsPillProps) {
           : tf(t, 'chat.alerts.title', '{{n}} item(s) need you — open Need You', { n: count })}
         data-testid="sidebar-alerts-slot"
         className={[
-          'a10-alertrow w-full flex items-center gap-2 px-2.5 py-1.5 transition-colors',
-          calm ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text)]',
+          'mt-0.5 w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 border transition-colors',
+          calm
+            ? 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+            : 'bg-[color-mix(in_srgb,var(--color-status-error)_8%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_35%,transparent)] text-[var(--color-status-error)] hover:bg-[color-mix(in_srgb,var(--color-status-error)_14%,transparent)]',
         ].join(' ')}
       >
-        <span className={`w-4 flex items-center justify-center${calm ? '' : ' text-[var(--color-status-error)]'}`}>
+        <span className="w-4 flex items-center justify-center">
           <span className="material-symbols-outlined icon-md leading-none">notifications</span>
         </span>
         <span className="flex-1 text-left text-meta whitespace-nowrap">{tf(t, 'chat.alerts.label', 'Needs You')}</span>

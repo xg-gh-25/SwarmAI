@@ -85,18 +85,16 @@ class Stream:
                                "detail": "deterministic result"}, transition=True)
         return opened
 
-    def complete_stage(self, *, final_verdict=None, checks=None):
+    def complete_stage(self, *, checks=None):
         stage = self.projection()["stage"]
         opened = self.attempt(stage, checks)
         payload = {"stage_attempt_event_id": opened["event_id"]}
-        if final_verdict is not None:
-            payload["final_verdict"] = final_verdict
         self.add("stage_complete", payload, stage=stage, attempt=opened["attempt"])
 
     def to_stage(self, wanted):
         while self.projection()["stage"] != wanted:
             stage = self.projection()["stage"]
-            self.complete_stage(final_verdict="green" if stage == "test" else None)
+            self.complete_stage()
 
 
 @pytest.mark.parametrize("profile,sequence", sorted(lc.PROFILE_STAGES.items()))
@@ -152,24 +150,13 @@ def test_attacker_check_id_or_incomplete_roster_cannot_advance_plan():
             stream.projection()
 
 
-@pytest.mark.parametrize("verdict", ["green", "red", "incomplete"])
-def test_test_completes_for_every_terminal_final(verdict):
+def test_test_completes_without_a_final_verdict():
+    """S6-1: TEST's outcome is its validation report (checked by TS-1 before the
+    stage_complete), so stage_complete carries no final verdict."""
     stream = Stream("direct")
     stream.to_stage("test")
-    stream.complete_stage(final_verdict=verdict)
+    stream.complete_stage()
     assert stream.projection()["stage"] == "deliver"
-
-
-@pytest.mark.parametrize("verdict", [None, "running", "unknown"])
-def test_test_rejects_nonterminal_final(verdict):
-    stream = Stream("direct")
-    stream.to_stage("test")
-    opened = stream.attempt("test")
-    payload = {"stage_attempt_event_id": opened["event_id"]}
-    if verdict is not None:
-        payload["final_verdict"] = verdict
-    with pytest.raises(lc.LifecycleError, match="terminal"):
-        stream.add("stage_complete", payload, stage="test", attempt=opened["attempt"])
 
 
 def test_worktree_failure_pauses_and_resume_requires_ready_true():
@@ -257,7 +244,7 @@ def _land_checks(stream):
     number = run["stage_attempts"].get("land", 0) + 1
     opened = stream.add("stage_attempt", {"check_ids": sorted(lc.LAND_CHECKS)},
                         stage="land", attempt=number, transition=False)
-    for check_id in ("LG-1", "LG-2", "LG-5"):
+    for check_id in ("LG-1",):
         stream.add("check", {"stage_attempt_event_id": opened["event_id"],
                              "check_id": check_id, "passed": True, "detail": "pass"},
                    transition=False)
@@ -298,11 +285,11 @@ def test_not_landed_is_recorded_then_deliver_renders_and_reflects():
     stream = Stream("direct")
     stream.to_stage("deliver")
     stream.add("land", {"landing": "not_landed", "commit": None,
-                        "reason": "tests_red"}, transition=False)
+                        "reason": "checks_exhausted"}, transition=False)
     stream.complete_stage()
     run = stream.projection()
     assert run["status"] == "reflecting" and run["landing"] == "not_landed"
-    assert run["reason"] == "tests_red"
+    assert run["reason"] == "checks_exhausted"
 
 
 def test_research_deliver_derives_no_code_without_a_land_event():
@@ -425,7 +412,7 @@ def _completed(landing):
                             "stage_attempt_event_id": opened["event_id"]})
     else:
         stream.add("land", {"landing": "not_landed", "commit": None,
-                            "reason": "tests_red"}, transition=False)
+                            "reason": "checks_exhausted"}, transition=False)
         stream.complete_stage()
     stream.add("reflect_complete", {})
     return stream
@@ -500,13 +487,13 @@ def test_land_requires_all_five_checks_and_land_intent_in_the_frozen_order():
     opened = stream.add("stage_attempt", {"check_ids": sorted(lc.LAND_CHECKS)},
                         stage="land", attempt=1, transition=False)
     # LG-3 before land_intent violates §A3.7 ordering.
-    for check_id in ("LG-1", "LG-2", "LG-3", "LG-5"):
+    for check_id in ("LG-1", "LG-3"):
         stream.add("check", {"stage_attempt_event_id": opened["event_id"],
                              "check_id": check_id, "passed": True, "detail": "pass"},
                    transition=False)
     stream.add("land_intent", {"stage_attempt_event_id": opened["event_id"]},
                transition=False)
-    with pytest.raises(lc.LifecycleError, match="LG-1/LG-2/LG-5"):
+    with pytest.raises(lc.LifecycleError, match="passing LG-1"):
         stream.projection()
 
 
@@ -528,7 +515,7 @@ def test_stale_land_intent_from_failed_attempt_cannot_authorize_next_attempt():
     # outcome; LG-3 would end the run as report_mismatch).
     opened1 = stream.add("stage_attempt", {"check_ids": sorted(lc.LAND_CHECKS)},
                          stage="land", attempt=1, transition=False)
-    for cid in ("LG-1", "LG-2", "LG-5"):
+    for cid in ("LG-1",):
         stream.add("check", {"stage_attempt_event_id": opened1["event_id"],
                              "check_id": cid, "passed": True, "detail": "pass"},
                    transition=False)

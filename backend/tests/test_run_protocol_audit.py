@@ -21,12 +21,15 @@ def _facts(events=None, landing="landed", push=True):
                   "reason": None, "human_decisions": 0}
     contract = {"run_id": "run_x", "mode": "isolated", "expected_repos": ["repo"],
                 "budget_seconds": 100, "budget_tokens": 1000}
-    final = {"repos": {"repo": {"tests": {"verdict": "green"},
-                                  "validations": [{"id": "lint", "verdict": "pass"}]}}}
     events = events or []
+    # the agent's TEST report (S6-1): Quality counts a repo verified when its report
+    # passes commands and fails none
+    report = {"kind": "validation_report", "at": "2026-10-22T00:00:20+00:00",
+              "payload": {"stage": "test", "repo": "repo", "code_tree": "1" * 40,
+                          "n_pass": 2, "n_fail": 0, "n_not_run": 0}}
     events = [{"kind": "run_create", "at": "2026-10-22T00:00:00+00:00", "payload": {}},
-              *events, {"kind": "land", "at": "2026-10-22T00:00:30+00:00", "payload": {}}]
-    return build(run_id="run_x", projection=projection, events=events, final=final,
+              *events, report, {"kind": "land", "at": "2026-10-22T00:00:30+00:00", "payload": {}}]
+    return build(run_id="run_x", projection=projection, events=events, final={},
                  repos_isolated=1,
                  findings=[], contract=contract,
                  push={"push_ready": push, "reasons": {} if push else {"RV-2": "open"}},
@@ -153,3 +156,12 @@ def test_a_high_security_policy_finding_is_listed_first():
     report = render(audit, fmt="report")
     section = report.split("## Push 前需要你看的")[1]
     assert section.strip().startswith("- CF-aaaaaaaa"), section
+
+
+def test_quality_counts_the_agents_test_reports_and_reports_them():
+    audit = _facts()
+    q = audit["summary"]["quality"]
+    assert (q["verification_passed"], q["verification_required"]) == (1, 1)
+    report = render(audit, fmt="report")
+    assert "agent 自己报告的结果" in report and "2 通过，0 失败" in report
+

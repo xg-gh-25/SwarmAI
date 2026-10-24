@@ -75,15 +75,15 @@ def test_research_completes_without_code(rig):
 
 # ── BUILD fails three times: the not-landed path, nothing reaches main ──────
 
+
 def test_checks_exhausted_ends_not_landed_and_never_commits(rig):
     r = rig("direct")
     r.create()
     base = _main(r)
     r.drive(until="build")
-    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})  # red
+    r.edit(Rig.CHANGE)
     for _ in range(3):
-        r.pt("tdd", "--files", "backend/tests/test_x.py")
-        r.v1("stage-complete")
+        r.v1("stage-complete")          # no report: BX-3 fails each attempt
     state = r.drive()
     assert state["status"] == "completed", state
     assert state["landing"] == "not_landed" and _reason(state) == "checks_exhausted", state
@@ -93,32 +93,14 @@ def test_checks_exhausted_ends_not_landed_and_never_commits(rig):
 
 # ── TEST red, a rerun green, main moving, merge conflict ────────────────────
 
-BREAK_OTHER = {"backend/core/other.py": "def other():\n    return 2\n"}
-FIX_OTHER = {"backend/core/other.py": "def other():\n    return 1\n"}
 
 
-def test_tests_red_ends_not_landed_tests_red(rig):
-    r = rig("trivial")   # direct's BX-2 runs every importer in BUILD, so no TEST-only red
-    r.create()
-    base = _main(r)
-    r.drive(until="build")
-    r.edit(BREAK_OTHER)            # outside the BUILD exit test, inside regression scope
-    state = r.drive()
-    assert state["status"] == "completed", state
-    assert state["landing"] == "not_landed" and _reason(state) == "tests_red", state
-    assert _main(r) == base
-
-
-def test_red_then_green_rerun_lands(rig):
+def test_a_failed_test_report_ends_not_landed(rig):
     r = rig("trivial")
-    r.create()
-    r.drive(until="build")
-    r.edit(BREAK_OTHER)
-    r.drive(until="test")
-    r.pt("regression")             # red (full-scope round 1 of the contract's 2)
-    r.edit(FIX_OTHER)
-    r.pt("recheck")                # the fix is judged by a recheck, not a new round
-    _landed_clean(r.drive())       # TEST's own regression is round 2
+    base = _main(r)
+    _not_landed_tests_red(r)
+    assert r.state()["status"] == "completed"
+    assert _main(r) == base
 
 
 def test_main_moves_disjoint_lands_on_new_main(rig):
@@ -131,19 +113,19 @@ def test_main_moves_disjoint_lands_on_new_main(rig):
     assert _git(r.repo, "merge-base", "--is-ancestor", moved, "main") == ""
 
 
-def test_main_moves_into_dependency_scope_reruns_then_lands(rig):
+
+def test_main_moves_and_the_synced_tree_is_tested_again_before_it_lands(rig):
+    """S6-1: the landing rebases the worktree onto the moved main; the TEST report is
+    for the old tree, so LG-1 fails and next asks for report-tests on the new tree."""
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
-    base = _main(r)
-    r.commit_on_main({"backend/tests/test_x.py": (
-        "from core.mod import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n\n\n"
-        "def test_add_zero():\n    assert add(0, 0) == 0\n")})
-    moved = _main(r)
-    r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
-    assert _main(r) == moved != base, "a final whose dependency scope moved must not land"
-    assert r.state()["status"] == "active", "the attempt is retryable, not terminal"
-    r.pt("regression")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    moved = r.commit_on_main({"docs/notes.md": "unrelated\n"})
+    out = r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
+    assert _main(r) == moved and r.state()["status"] == "active", out
+    assert "report-tests" in out["next"]["command"], out["next"]
+    r.v1("report-tests", "--artifact", r.artifact("report", r.report()))
     _landed_clean(r.drive())
 
 
@@ -262,12 +244,15 @@ def test_user_stop_pauses_and_resume_continues(rig):
 # ── a person's run-land ─────────────────────────────────────────────────────
 
 def _not_landed_tests_red(r: Rig) -> None:
+    """The agent reports a failing test in TEST three times (S6-1): the stage's checks
+    are exhausted and the run ends not_landed, nothing committed."""
     assert r.profile == "trivial"
     r.create()
-    r.drive(until="build")
-    r.edit(BREAK_OTHER)
+    r.drive(until="test")
+    for _ in range(3):
+        r.report_and_complete("fail")
     state = r.drive()
-    assert state["landing"] == "not_landed" and _reason(state) == "tests_red", state
+    assert state["landing"] == "not_landed" and _reason(state) == "checks_exhausted", state
 
 
 def _prepare(r: Rig) -> dict:
@@ -326,7 +311,7 @@ def test_code_changed_after_prepare_cannot_land_even_with_edited_json(rig):
 
 # ── invariant: whatever the command order, the log folds ────────────────────
 
-_STEPS = ("push-status", "complete-current", "stage-complete-empty", "tdd", "regression",
+_STEPS = ("push-status", "complete-current", "stage-complete-empty", "report", "report-fail",
           "review-start", "land", "decision", "answer", "stop", "resume", "status")
 
 
@@ -336,9 +321,9 @@ def _step(r: Rig, step: str) -> None:
             r.complete_stage()
     elif step == "stage-complete-empty":
         r.v1("stage-complete")
-    elif step in {"tdd", "regression"}:
+    elif step in {"report", "report-fail"}:
         if r.worktree is not None:
-            r.pt(step, *(["--files", "backend/tests/test_x.py"] if step == "tdd" else []))
+            r.report_and_complete("fail" if step == "report-fail" else "pass")
     elif step == "land":
         r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     elif step == "decision":
@@ -372,51 +357,6 @@ def test_any_command_sequence_leaves_a_foldable_log(tmp_path, monkeypatch):
     assert not failures, failures
 
 
-# ── B4: probe exits run through the §A2.5 executor ─────────────────────────
-
-def _probe_design(r: Rig, expect: dict) -> dict:
-    design = dict(documents("trivial")["plan"])
-    design["exit_criteria"] = [*design["exit_criteria"], {
-        "id": "X2", "kind": "probe", "covers": ["R1.1"], "expect": expect,
-        "argv": ["git", "grep", "-n", "-e", "return b + a", "--", "backend/core/"]}]
-    return design
-
-
-def test_a_probe_exit_runs_and_counts_by_its_row_id(rig):
-    r = rig("trivial")
-    r.create()
-    r.drive(until="plan")
-    r.edit(Rig.CHANGE)
-    out = r.v1("stage-complete", "--artifact",
-               r.artifact("design", _probe_design(r, {"rc": 0, "stdout": "nonempty"})))
-    assert out.get("ok") is True, out
-    probed = r.pt("probe")
-    assert probed.get("ok") is True and probed["probes"][0]["exit"] == "X2", probed
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert r.v1("stage-complete").get("ok") is True     # DS-9b sees X2 pass
-    assert "test_call" in r.kinds()
-
-
-def test_a_probe_whose_expectation_fails_blocks_build(rig):
-    r = rig("trivial")
-    r.create()
-    r.drive(until="plan")
-    r.edit(Rig.CHANGE)
-    r.v1("stage-complete", "--artifact",
-         r.artifact("design", _probe_design(r, {"rc": 1, "stdout": "empty"})))
-    assert r.pt("probe").get("ok") is False
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    out = r.v1("stage-complete")
-    assert out.get("ok") is False and "X2" in str(out.get("checks")), out
-
-
-def test_the_old_free_argv_probe_mode_is_gone(rig):
-    r = rig("direct")
-    r.create()
-    out = r.pt("probe", "--name", "x", "--", "sh", "-c", "exit 0")
-    assert out.get("ok") is not True and out.get("_rc") == 2, out
-
-
 # ── N1: direct has no PLAN, no documents, no exit criteria ──────────────────
 
 def test_direct_starts_at_build_and_needs_the_users_words(rig):
@@ -428,13 +368,16 @@ def test_direct_starts_at_build_and_needs_the_users_words(rig):
     assert "plan" not in out["state"]["stages"] and out["state"]["stage"] == "build"
 
 
+
 def test_a_doc_only_direct_run_lands_without_any_document(rig):
     from tests.pipeline_v1_rig import _git
     r = rig("direct")
     r.create(requirement="Fix the README typo.")
     base = _main(r)
     r.edit({"README.md": "# readme\n\nfixed\n"})
-    assert r.v1("stage-complete").get("ok") is True          # BX-2: pure doc, no tdd
+    nothing = {"reports": [{"repo": "repo", "commands": [], "tests_changed": [],
+                            "rationale": "a README typo: nothing to test"}]}
+    assert r.v1("stage-complete", "--artifact", r.artifact("doc", nothing)).get("ok") is True
     _landed_clean(r.drive())
     assert _main(r) != base and "fixed" in (r.repo / "README.md").read_text()
     report = (r.repo / f".aidlc/deliverables/{r.run_id}/REPORT.md").read_text()
@@ -443,29 +386,13 @@ def test_a_doc_only_direct_run_lands_without_any_document(rig):
         "Co-Authored-By: Swarm <swarm@swarmai.dev>")
 
 
-def test_a_direct_code_change_needs_passing_tdd_to_leave_build(rig):
-    r = rig("direct")
-    r.create()
-    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})   # red
-    out = r.v1("stage-complete")
-    assert out.get("ok") is False and "tdd" in str(out.get("checks")), out   # nothing run
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    out = r.v1("stage-complete")
-    assert out.get("ok") is False and "failed" in str(out.get("checks")), out
-    r.edit(Rig.CHANGE)                                                       # green
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")       # completes BUILD itself
-    assert out["stage_complete"]["ok"] is True and r.state()["stage"] == "review", out
-
-
-def test_one_passing_node_does_not_stand_for_its_file(rig):
+def test_a_direct_code_change_needs_a_build_report_on_the_current_tree(rig):
     r = rig("direct")
     r.create()
     r.edit(Rig.CHANGE)
-    r.pt("tdd", "--files", "backend/tests/test_x.py::test_add")       # a single node
     out = r.v1("stage-complete")
-    assert out.get("ok") is False and "not run whole" in str(out.get("checks")), out
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert r.v1("stage-complete").get("ok") is True
+    assert out.get("ok") is False and "BX-3" in str(out.get("checks")), out   # no report
+    assert r.report_and_complete().get("ok") is True and r.state()["stage"] == "review"
 
 
 def test_a_direct_run_cannot_ask_and_its_log_still_folds(rig):
@@ -545,13 +472,14 @@ def test_a_guard_failure_on_prepare_is_json_not_a_traceback(rig):
     assert out.get("ok") is False and "LG-4" in out.get("error", ""), out
 
 
-def test_a_tested_prepare_on_an_untested_tree_names_the_runner(rig):
+
+def test_a_tested_prepare_on_an_untested_tree_asks_for_a_test_report(rig):
     r = rig("direct")
     r.create()
     r.edit(Rig.CHANGE)
     assert r.v1("abandon", "--reason", "stop").get("ok") is True
     out = r.v1("run-land", "--prepare", "--note", "n")
-    assert out.get("ok") is False and "--mode regression" in out.get("error", ""), out
+    assert out.get("ok") is False and "report-tests" in out.get("error", ""), out
 
 
 # ── A7 / C4: a landing must come through the hook; mode is a setting ────────
@@ -618,49 +546,21 @@ def test_the_cli_has_no_way_to_answer_a_decision(rig):
 
 # ── B6: the run's base, not the worktree HEAD ───────────────────────────────
 
+
 def test_a_commit_in_the_worktree_does_not_move_the_base_or_hide_the_change(rig):
-    import json
     from tests.pipeline_v1_rig import _git
     r = rig("direct")
     r.create()
     r.edit(Rig.CHANGE)
-    # the agent commits its change and drops the validation rule in the same commit
-    (r.worktree / "validations.json").write_text(json.dumps({"schema": 1, "entries": []}))
     _git(r.worktree, "add", "-A"); _git(r.worktree, "commit", "-qm", "wip")
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
-    final = json.loads(Path(out["v1"]["final"]).read_text())
-    base = _git(r.repo, "rev-parse", "main")
-    assert final.get("base") == base, (final.get("base"), base)
-    # the committed change is still the run's change: QX-2 sees the rule edit
-    changed = r.engine().check_context().run["changed_paths"]
-    assert {"validations.json", "backend/core/mod.py"} <= set(changed), changed
-    from core.run_protocol import checks
-    assert checks.evaluate("QX-2", r.engine().check_context())[0] is False
-    assert r.v1("stage-complete").get("ok") is True   # BX-2 sees the committed change
+    engine = r.engine()
+    assert engine._fork_base("repo", str(r.worktree)) == _git(r.repo, "rev-parse", "main")
+    # the committed change is still the run's change
+    assert "backend/core/mod.py" in engine.check_context().run["changed_paths"]
+    assert r.report_and_complete().get("ok") is True     # BX-3 sees the committed change
 
 
 # ── B8: DS-2b asks pytest what it collects ──────────────────────────────────
-
-@pytest.mark.parametrize("ref,passes", [
-    ("backend/tests/test_other.py::test_other", True),     # exists, never run in tdd
-    ("backend/tests/test_x.py::test_missing", False),      # named, does not exist
-])
-def test_build_collects_the_designs_failure_mode_tests(rig, ref, passes):
-    r = rig("full")
-    r.create()
-    r.drive(until="plan")
-    r.edit(Rig.CHANGE)                  # entering PLAN made the worktree
-    design = documents("full")["plan"]
-    design = {**design, "failure_modes": [{**design["failure_modes"][0], "test": ref}]}
-    out = r.v1("stage-complete", "--artifact", r.artifact("design", design))
-    assert out.get("ok") is True, out                    # DS-2b is a BUILD check
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    out = r.v1("stage-complete")
-    checks_out = {c["id"]: c for c in out.get("checks") or []}
-    assert (out.get("ok") is True) is passes, out
-    if not passes:
-        assert checks_out["DS-2b"]["passed"] is False, checks_out.get("DS-2b")
-
 
 # ── F-6: an expert with no usable output is dispatched once more, never twice ──
 
@@ -685,7 +585,6 @@ def test_a_committed_or_new_file_is_in_the_review_diff(rig):
     r.drive(until="review")
     (r.worktree / "backend" / "core" / "new_mod.py").write_text("def n():\n    return 2\n")
     _git(r.worktree, "add", "backend/core/mod.py"); _git(r.worktree, "commit", "-qm", "wip")
-    r.pt("tdd", "--files", "backend/tests/test_x.py")   # DS-9b on this tree first (F16)
     started = r.v1("review-start")
     prompt = "\n".join(h["prompt"] for h in started.get("handouts") or [])
     roster = [row["id"] for row in started.get("reviewers") or []]
@@ -694,20 +593,7 @@ def test_a_committed_or_new_file_is_in_the_review_diff(rig):
     assert "new_mod.py" in prompt and "return b + a" in prompt, prompt[-800:]
 
 
-def test_the_final_records_the_rule_versions_it_selected_with(rig):
-    import json
-    from core.run_protocol.risk_selection import RISK_RULES_VERSION
-    r = rig("direct")
-    r.create()
-    r.edit(Rig.CHANGE)
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
-    final = json.loads(Path(out["v1"]["final"]).read_text())
-    assert final["provenance"]["rules_version"].endswith("/" + RISK_RULES_VERSION), \
-        final["provenance"].get("rules_version")
-
-
 def test_the_base_follows_the_recorded_branch_not_the_main_checkout(rig):
-    import json
     from tests.pipeline_v1_rig import _git
     r = rig("direct")
     r.create()
@@ -716,10 +602,9 @@ def test_the_base_follows_the_recorded_branch_not_the_main_checkout(rig):
     _git(r.repo, "checkout", "-q", "-b", "elsewhere")          # the person switches branch
     (r.repo / "elsewhere.txt").write_text("x\n")
     _git(r.repo, "add", "."); _git(r.repo, "commit", "-qm", "unrelated")
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert json.loads(Path(out["v1"]["final"]).read_text())["base"] == base
-    changed = r.engine().check_context().run["changed_paths"]
-    assert "elsewhere.txt" not in changed, changed
+    engine = r.engine()
+    assert engine._fork_base("repo", str(r.worktree)) == base
+    assert "elsewhere.txt" not in engine.check_context().run["changed_paths"]
     _git(r.repo, "checkout", "-q", "main")
 
 

@@ -64,7 +64,7 @@ def prepare_request(
     if note is not None and (not isinstance(note, str) or len(note) > auth.NOTE_MAX):
         raise LandingError(f"--note is limited to {auth.NOTE_MAX} characters")
     guard_ids = (["LG-3", "LG-4"] if action == "land_skip_tests"
-                 else ["LG-1", "LG-2", "LG-3", "LG-4", "LG-5"])
+                 else ["LG-1", "LG-3", "LG-4"])
     prior_attempts = [event for event in store.read_events()
                       if event.get("kind") == "stage_attempt" and event.get("stage") == "land"]
     attempt_number = len(prior_attempts) + 1
@@ -76,17 +76,12 @@ def prepare_request(
     if set(roots) != set(repos):
         raise LandingError("manual landing needs every repo's integration root")
     heads = {name: _rev(roots[name], "HEAD") for name in repos}
-    if action == "land_skip_tests":
-        # no final is needed (C5): the run's own fork point is its base, and LG-4 holds
-        # when main has not moved past it
-        run_bases = dict(context.run.get("run_bases") or {})
-    else:
-        run_bases = {name: context.final["repos"][name]["base"]
-                     for name in repos if name in (context.final.get("repos") or {})}
+    # the run's own fork point is its base; LG-4 holds when main has not moved past it
+    run_bases = dict(context.run.get("run_bases") or {})
     run_facts = {**dict(context.run), "code_trees": code_trees, "landing_bases": heads,
                  "run_bases": run_bases, "skip_tests": action == "land_skip_tests"}
     current = dataclasses.replace(context, events=tuple(store.read_events()), run=run_facts)
-    pre_ids = [] if action == "land_skip_tests" else ["LG-1", "LG-2", "LG-5"]
+    pre_ids = [] if action == "land_skip_tests" else ["LG-1"]
     pre = _evaluate(pre_ids, current)
     for check_id, (passed, detail) in pre.items():
         store.append_new(

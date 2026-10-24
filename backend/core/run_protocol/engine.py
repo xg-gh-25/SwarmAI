@@ -856,28 +856,6 @@ class RunEngine:
         events = self.store.read_events()
         expected = list(self.contract["expected_repos"])
         repos, code_trees, bases, existing, changed = self._current_code(expected)
-        recorded = self.final()
-        final, unbound = facts.bind_final(recorded, expected=expected,
-                                          code_trees=code_trees, bases=bases) \
-            if recorded else ({}, ["no final"])
-        try:
-            required = facts.required_validations(
-                {name: repos[name] for name in expected if name in repos}, bases, changed)
-        except facts.FactError as exc:
-            required = {}
-            logging.getLogger(__name__).warning("run %s: %s", self.run_id, exc)
-        results: dict[str, str] = {}
-        covers: set[str] = set()
-        collected: set[str] = set()
-        for row in final.get("repos", {}).values():
-            # what pytest collected (B8) and every node that actually ran on this tree
-            tests_row = row.get("tests") or {}
-            collected |= set(tests_row.get("collected") or [])
-            collected |= {n for n in (tests_row.get("nodes") or {}) if "::" in n
-                          and not n.endswith("::*")}
-            for trace in row.get("trace", []):
-                results[str(trace.get("ref") or trace.get("exit"))] = trace.get("result")
-                covers |= set(trace.get("covers") or [])
         profile = self.contract["profile"]
         req_variant = "lite" if profile == "direct" else "full"
         design_variant = None if profile in {"research", "direct"} else (
@@ -885,19 +863,15 @@ class RunEngine:
         flat_changed = sorted({p for paths in changed.values() for p in paths})
         run = {**self.projection(), "mode": self.contract["mode"],
                "code_trees": code_trees, "run_bases": bases, "changed_paths": flat_changed,
-               "final_unbound": unbound,
                "stale_closures": sorted(facts.stale_closures(
                    finding_protocol.fold(list(events), self.authority), events, code_trees)),
-               "rule_violations": facts.rule_violations(
-                   flat_changed, recorded, str(self.contract.get("pipeline_code_hash") or "")),
                "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", []),
                "agent_after_cap": _agent_after_cap(requirements, design)}
         return checks.make_context(
             profile=profile, requirement_variant=req_variant, design_variant=design_variant,
             requirements=requirements, design=design, events=events, authority=self.authority,
-            final=final, run=run, test_results=results, trace_covers=covers,
-            expected_repos=set(expected), validation_manifest=required,
-            existing_files=existing, collected_tests=collected,
+            final={}, run=run, expected_repos=set(expected),
+            existing_files=existing,
             decision_documents=facts.decision_values(events, self.store.paths.blobs),
             known_refs=self.decision_refs(events))
 
@@ -1181,10 +1155,7 @@ class RunEngine:
                 # tree that lands, an event of this run, or a test result on that tree
                 from core.run_protocol import facts
                 if bound_nodes is None:
-                    bound = self.check_context().final
-                    bound_nodes = {repo: {node: (value or {}).get("result") for node, value in
-                                          ((row.get("tests") or {}).get("nodes") or {}).items()}
-                                   for repo, row in (bound.get("repos") or {}).items()}
+                    bound_nodes = {}
                 try:
                     resolved = facts.resolve_refs(
                         supplied.get("refs"), root=root, code_tree=code_tree,
@@ -1471,18 +1442,17 @@ class RunEngine:
                 self.ensure_worktrees()
         request_id = request_id or "land_" + secrets.token_hex(8)
         if action == "land":
-            # design §A4.3: a tested landing needs a final on the CURRENT tree. The run's
-            # tests go through the runner's own bounded calls, not a hidden subprocess
+            # a tested landing needs the TEST report on the CURRENT tree (S6-1)
             current = tree.build_code_trees(self.effective_repos(), self.run_id,
                                             git_tree.write_tree, git_tree.list_reserved)
-            final = self.final().get("repos") or {}
+            reports = validation_report.latest(self.store.read_events(), "test")
             stale = sorted(name for name, code in current.items()
-                           if (final.get(name) or {}).get("code_tree") != code)
+                           if (reports.get(name) or {}).get("payload", {}).get("code_tree")
+                           != code)
             if stale:
                 raise EngineError(
-                    "the tests have not run on the current tree of " + ", ".join(stale)
-                    + ": run `pipeline_test.py --project " + self.project + " --run-id "
-                    + self.run_id + " --mode regression` (again while it says continue), "
+                    "no TEST report on the current tree of " + ", ".join(stale)
+                    + ": run the tests and submit them with `report-tests --artifact -`, "
                     "then --prepare again; or --skip-tests to land untested")
         context = self.check_context()
         push = self.push_status(manual_landing=True)
@@ -1496,10 +1466,10 @@ class RunEngine:
                 **self._audit_facts(),
                 run_id=self.run_id,
                 projection=lifecycle.fold(prior, self.authority), events=prior,
-                final=self.final(), findings=finding_protocol.fold(prior, self.authority),
+                final={}, findings=finding_protocol.fold(prior, self.authority),
                 contract=self.contract, push=push, audit_through="DELIVER")
             guards = ("LG-3", "LG-4") if action == "land_skip_tests" else (
-                "LG-1", "LG-2", "LG-3", "LG-4", "LG-5")
+                "LG-1", "LG-3", "LG-4")
             return self._commit_report(audit_value, guards=guards,
                                        request_id=request_id, note=note)
         prepared = landing.prepare_request(
@@ -1777,11 +1747,6 @@ class RunEngine:
             self.write_projection()
             return {"ok": False, **result, "state": self.projection()}
         payload = {"stage_attempt_event_id": result["stage_attempt_event_id"]}
-        if stage == "test":
-            final = self.final()
-            verdicts = [row["tests"]["verdict"] for row in final.get("repos", {}).values()]
-            payload["final_verdict"] = ("incomplete" if not verdicts or "incomplete" in verdicts
-                                        else "red" if "red" in verdicts else "green")
         self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
         self._settle()
@@ -1789,6 +1754,18 @@ class RunEngine:
             self._write_review_documents()          # its checks and evidence moved on (F20)
         self.write_projection()
         return {"ok": True, **result, "state": self.projection()}
+
+    @_one_operation
+    def report_tests(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
+        """A TEST validation report outside TEST (S6-1): in DELIVER, after main moved and
+        the worktree was synced, the tests are run again on the new tree and reported
+        here; LG-1 reads the latest TEST report."""
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] not in ("test", "deliver"):
+            raise EngineError("report-tests is for TEST or DELIVER of an active run")
+        self._record_validation_reports("test", artifact)
+        self.write_projection()
+        return {"ok": True, "state": self.projection()}
 
     def _record_validation_reports(self, stage: str, artifact: Mapping[str, Any]) -> None:
         """One ``validation_report`` event per expected repo (S6-1): the agent's report,
@@ -1799,11 +1776,12 @@ class RunEngine:
             reports = validation_report.parse(artifact, expected)
         except validation_report.ReportError as exc:
             raise EngineError(f"validation report: {exc}") from exc
-        _roots, code_trees, _bases, _existing, _changed = self._current_code(expected)
-        unknown = sorted(name for name in expected if not code_trees.get(name))
+        _roots, code_trees, bases, _existing, _changed = self._current_code(expected)
+        unknown = sorted(name for name in expected
+                         if not code_trees.get(name) or not bases.get(name))
         if unknown:
-            raise EngineError(f"validation report: the code of {unknown} is unknown "
-                              "(no worktree); nothing recorded")
+            raise EngineError(f"validation report: the code or base of {unknown} is unknown "
+                              "(no worktree, or its base cannot be named); nothing recorded")
         for report in reports:
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="validation_report", at=_now(),
@@ -2083,7 +2061,7 @@ class RunEngine:
         value = audit_protocol.build(
             **self._audit_facts(),
             run_id=self.run_id, projection=lifecycle.fold(rows, self.authority),
-            events=rows, final=self.final(), findings=projected_findings,
+            events=rows, final={}, findings=projected_findings,
             contract={**self.contract, "requirement": self._delivered_summary()},
             push=dict(push or self.push_status()), audit_through=through,
             commits=commits)
@@ -2227,68 +2205,38 @@ class RunEngine:
         return {"commits": commits, "push": self.push_status(), "state": self.projection(),
                 "resumed": True}
 
-    def _carry_moved_finals(self) -> None:
-        from core.run_protocol.carry import CarryError, carry_decision, test_dependency_map
-        finals = self.final().get("repos", {})
-        repos = self.effective_repos()
-        for name in self.contract["expected_repos"]:
-            row = finals.get(name)
-            if not isinstance(row, Mapping):
-                raise IntegrationRequired("final_missing", f"{name}: no test final; run "
-                                          "pipeline_test.py --mode regression first")
-            main, root = self.contract["repo_roots"][name], repos[name]
-            old_base, new_base = row["base"], _git(main, "rev-parse", "HEAD")
-            if old_base == new_base:
+    def _sync_moved_bases(self) -> None:
+        """Main moved past a repo's run base: rebase that worktree onto it (S6-1). The
+        code tree then changes, so LG-1 asks for a TEST report on the new tree
+        (``report-tests``). A sync that changed the run's own patch (a conflict
+        resolution) is new code no review saw: LG-4 fails with ``patch_changed``."""
+        if self.contract["mode"] == "shared":
+            return                  # a shared run's code is the main checkout itself
+        for entry in self._active_entries():
+            name = entry["repo_name"]
+            main = self.contract["repo_roots"][name]
+            root = self.effective_repos().get(name)
+            if root is None:
                 continue
-            selection = ((row.get("provenance") or {}).get("selection") or {})
-            try:
-                dependencies = test_dependency_map(selection.get("test_dependencies"))
-            except CarryError as exc:
-                raise IntegrationRequired(
-                    "final_recheck_required",
-                    f"{name}: integration base moved and the final has no usable "
-                    f"test_dependencies ({exc}); rerun the regression") from exc
-            main_changed = [path for path in _git(
-                main, "diff", "--name-only", "--no-renames", old_base, new_base).splitlines() if path]
-            run_changed = [path for path in _git(
-                root, "diff-tree", "-r", "--name-only", "--no-renames",
-                old_base, row["code_tree"]).splitlines() if path]
-            selected = selection.get("files") or []
-            entry = next(item for item in self._active_entries() if item["repo_name"] == name)
-            entry["base"] = old_base
+            if run_worktree._rebase_onto(Path(root)):
+                # a sync stopped on a conflict earlier: resolve it in the worktree, then
+                # land again (sync continues the rebase); the code is mid-rebase till then
+                entry = {**entry, "base": self._fork_base(name, root)}
+            else:
+                base, head = self._fork_base(name, root), _git(main, "rev-parse", "HEAD")
+                if base == head:
+                    continue
+                entry = {**entry, "base": base}
             try:
                 sync = run_worktree.sync(self.run_id, entry, main)
             except run_worktree.WorktreeError as exc:
-                code = "merge_conflict" if exc.code == "conflict" else "final_recheck_required"
+                code = "merge_conflict" if exc.code == "conflict" else "sync_failed"
                 raise IntegrationRequired(code, f"{name}: base sync failed: {exc.message}") from exc
-            new_tree = git_tree.write_tree(
-                root, (f".aidlc/deliverables/{self.run_id}/",), {})
-            try:
-                decision = carry_decision(
-                    old_base=old_base, new_base=new_base,
-                    old_tree=row["code_tree"], new_tree=new_tree,
-                    main_changed=main_changed, run_changed=run_changed,
-                    selected_tests=selected, test_dependencies=dependencies)
-            except CarryError as exc:
-                raise IntegrationRequired("final_recheck_required", f"{name}: {exc}") from exc
-            if sync.get("patch_changed") or not decision.reusable:
-                # the runner's recheck consumes exactly these (§C5.3, conformance F15);
-                # no affected test named means the whole regression scope runs again
-                affected = [] if sync.get("patch_changed") else list(decision.affected_tests)
-                self._write_carry_plan(name, old_base=old_base, new_base=new_base,
-                                       code_tree=new_tree, affected=affected)
+            self._code_facts, self._bases = None, (None,)   # the tree and base moved
+            if sync.get("patch_changed"):
                 raise IntegrationRequired(
-                    "final_recheck_required",
-                    f"{name}: integration changes intersect final dependencies; run "
-                    + ("`pipeline_test.py --mode recheck`: it re-runs the affected tests "
-                       f"({', '.join(affected)})" if affected else
-                       "`pipeline_test.py --mode regression` (no affected test could be "
-                       "named)"))
-            carried = carry_repo_final(row, new_base=new_base, new_code_tree=new_tree)
-            path = self.run_dir / "evidence" / "tests" / f"final-{name}.json"
-            warning = evidence_seal.write_sealed(path, json.dumps(carried, sort_keys=True))
-            if warning:
-                raise EngineError(warning)
+                    "patch_changed", f"{name}: rebasing onto the moved main changed the run's "
+                    "own patch; that code was not reviewed")
 
     def _write_carry_plan(self, name: str, *, old_base: str, new_base: str, code_tree: str,
                           affected: Sequence[str]) -> None:
@@ -2363,7 +2311,7 @@ class RunEngine:
             return {**finished, "ok": False, "landing": "not_landed",
                     "reason": "needs_hooked_session", "detail": why}
         attempt = self._next_attempt("land")
-        guard_ids = ["DV-1", "LG-1", "LG-2", "LG-3", "LG-4", "LG-5"]
+        guard_ids = ["DV-1", "LG-1", "LG-3", "LG-4"]
         opened, _ = self.store.append_new(
             writer=self.authority.writer("cli"), kind="stage_attempt", at=_now(),
             stage="land", attempt=attempt, payload={"check_ids": guard_ids})
@@ -2385,7 +2333,7 @@ class RunEngine:
         try:
             carry_error: IntegrationRequired | None = None
             try:
-                self._carry_moved_finals()
+                self._sync_moved_bases()
             except IntegrationRequired as exc:
                 carry_error = exc
             repos = self.effective_repos()
@@ -2397,8 +2345,7 @@ class RunEngine:
                                            for name, root in self.contract["repo_roots"].items()}}
             context = dataclasses.replace(context, run=run_facts,
                                           events=tuple(self.store.read_events()))
-            for check_id in ("LG-1", "LG-2", "LG-5"):
-                record(check_id, *checks.evaluate(check_id, context))
+            record("LG-1", *checks.evaluate("LG-1", context))
             if carry_error is not None:
                 prefix = "merge_conflict: " if carry_error.code == "merge_conflict" else ""
                 record("LG-4", False, prefix + str(carry_error))
@@ -2414,7 +2361,7 @@ class RunEngine:
             audit_value = self.build_audit(
                 through="DELIVER", persist=True, event_rows=report_events, push=push)
             report = self._commit_report(
-                audit_value, guards=("LG-1", "LG-2", "LG-3", "LG-4", "LG-5", "DV-1"))
+                audit_value, guards=("LG-1", "LG-3", "LG-4", "DV-1"))
             report_sha = self.store.put_blob(report)
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="render", at=_now(),
@@ -2432,7 +2379,7 @@ class RunEngine:
                 record(check_id, *checks.evaluate(check_id, context))
             if not all(passed for passed, _ in results.values()):
                 return self._land_failed(results)
-            bases = {name: self.final()["repos"][name]["base"]
+            bases = {name: context.run["run_bases"][name]
                      for name in self.contract["expected_repos"]}
             try:
                 commits, partial = self._commit_normal(bases=bases, bindings=bindings,

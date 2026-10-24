@@ -184,15 +184,6 @@ def test_f23_a_failed_markdown_render_is_recorded_and_the_write_still_succeeds(r
             rig_documents("full")["evaluate"], variant="full", profile="full")
 
 
-def test_l5_the_final_records_when_it_was_generated(rig):
-    r = rig("direct")
-    r.create()
-    r.drive(until="review")
-    finals = list((r.engine().run_dir / "evidence" / "tests").glob("final-*.json"))
-    assert finals, "the direct BUILD wrote no final"
-    assert json.loads(finals[0].read_text())["generated_at"].endswith("+00:00")
-
-
 def test_k4r1_a_lost_hunk_blob_is_recorded_once_and_marked_in_the_spec(rig):
     from tests.test_pipeline_v1_conformance_k1 import _at_review_with_finding
     r = rig()

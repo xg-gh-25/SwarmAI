@@ -105,39 +105,22 @@ def _options(parser) -> set[str]:
     return out
 
 
-def test_every_option_and_runner_command_in_the_cards_exists():
-    """E (review): a standalone `--flag` span names an option of pipeline_v1.py or
-    pipeline_test.py, and every `pipeline_test.py ...` command parses with its parser;
-    a direct create always carries --requirement."""
-    import shlex
+def test_every_option_in_the_cards_exists_and_no_card_names_the_runner():
+    """E (review): a standalone `--flag` span names an option of the pipeline CLI; a
+    direct create always carries --requirement. S6-1: the pipeline no longer runs tests,
+    so no card or skill doc names the old runner or its modes."""
     import sys
     sys.path.insert(0, str(ROOT.parents[2] / "scripts"))
-    import pipeline_test
     import pipeline_v1
-    known = _options(pipeline_v1.parser()) | _options(pipeline_test._parser())
-    runner = pipeline_test._parser()
-    seen = 0
+    known = _options(pipeline_v1.parser())
     for doc in DOCS:
-        for span in _code_spans(doc.read_text(encoding="utf-8")):
+        text = doc.read_text(encoding="utf-8")
+        assert "pipeline_test" not in text and "--mode" not in text, doc.name
+        for span in _code_spans(text):
             for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", span):
                 assert flag in known, (doc.name, span, flag)
-            for value in re.findall(r"--mode\s+([a-z_-]+)", span):
-                # only the runner has --mode (create has none): its value is a runner mode
-                assert value in pipeline_test.ALL_MODES, (doc.name, span)
             if "pipeline_v1.py create" in span and "--profile direct" in span:
                 assert "--requirement" in span, (doc.name, span)
-            if "pipeline_test.py " in span and "--mode" in span:
-                argv = span.split("pipeline_test.py ", 1)[1]
-                for old, new in _FILL:
-                    argv = argv.replace(old, new)
-                argv = re.sub(r"\[([^\]]*)\]", r"\1", argv)
-                words = [w for w in shlex.split(argv) if "|" not in w]
-                try:
-                    runner.parse_args(words)
-                except (SystemExit, pipeline_test._ArgError) as exc:
-                    raise AssertionError(f"{doc.name}: `{span}` does not parse: {exc}")
-                seen += 1
-    assert seen >= 1
 
 
 # ── moved from the retired test_advance_continuation.py (R6) ─────────────────

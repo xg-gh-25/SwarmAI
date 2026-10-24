@@ -347,6 +347,26 @@ class Rig:
             assert bound, "the handout tracker did not bind the Gate-0 spawn"
         return out
 
+    def report(self, result: str = "pass") -> dict:
+        """The agent's validation report for this run's repo (S6-1)."""
+        cmd = {"command": "python -m pytest backend/tests/test_x.py", "cwd": ".",
+               "result": result}
+        if result != "pass":
+            cmd["reason"] = "the test failed"
+        return {"reports": [{"repo": "repo", "commands": [cmd],
+                             "tests_changed": ["backend/tests/test_x.py"],
+                             "rationale": "test_x fails before the change"}]}
+
+    def tested_tree(self, stage: str = "test") -> str | None:
+        """The code tree of this run's latest *stage* validation report (S6-1)."""
+        from core.run_protocol.validation_report import latest
+        row = latest(self.events(), stage).get("repo")
+        return row["payload"]["code_tree"] if row else None
+
+    def report_and_complete(self, result: str = "pass") -> dict:
+        return self.v1("stage-complete", "--artifact",
+                       self.artifact("report", self.report(result)))
+
     def complete_stage(self) -> dict:
         """Do the normal work of the current stage and complete it."""
         stage = self.state()["stage"]
@@ -368,7 +388,7 @@ class Rig:
                     and not self._edited:
                 self.edit(self.CHANGE)          # no PLAN: BUILD is the first code stage
                 self._edited = True
-            return self._tested(self.pt("tdd", "--files", "backend/tests/test_x.py"))
+            return self.report_and_complete()
         if stage == "review":
             started = self.v1("review-start")
             assert started.get("ok") is True, started
@@ -376,12 +396,16 @@ class Rig:
                 self.spawn_reviewer(handout["prompt"], "NO FINDINGS", f"review-{i}")
             return self.v1("stage-complete")
         if stage == "test":
-            return self._tested(self.pt("regression"))
+            return self.report_and_complete()
         if stage == "deliver":
             self.v1("reflect-prepare", "--artifact", self.artifact("reflect", {"lessons": []}))
             if self.repo is None:
                 return self.v1("stage-complete")
-            return self.v1("land", "--message", "fix: swap the operands" + SWARM)
+            out = self.v1("land", "--message", "fix: swap the operands" + SWARM)
+            step = out.get("next") or {}
+            if "report-tests" in str(step.get("command")):   # main moved: test again (S6-1)
+                self.v1("report-tests", "--artifact", self.artifact("report", self.report()))
+            return out
         if stage == "reflect":
             # the daemon's background REFLECT (D1), as the hook schedules it
             from core.run_protocol import reflect_job

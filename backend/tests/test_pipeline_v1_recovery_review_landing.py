@@ -11,7 +11,6 @@ from core.run_protocol import events as ev, git_tree, landing, lifecycle
 from core.run_protocol.engine import EngineError, IntegrationRequired, RunEngine
 from core.run_protocol.hook_bridge import ReviewHookBridge
 from core.run_protocol.review import ReviewOrchestrator
-from core.run_protocol.runner import V1Runner
 from core.run_protocol.store import AuditStore
 
 AT = "2026-10-22T00:00:00+00:00"
@@ -173,7 +172,7 @@ def test_restore_completed_not_landed_reopens_deliver():
            {"stage_attempt_event_id": opened["event_id"], "final_verdict": "red"},
            stage="test", attempt=1)
     _event(authority, rows, "land", {"landing": "not_landed", "commit": None,
-                                     "reason": "tests_red"}, ordinal=1)
+                                     "reason": "checks_exhausted"}, ordinal=1)
     roster = ["DV-1"]          # the not-landed path's only DELIVER check (§A1.2)
     opened = _event(authority, rows, "stage_attempt", {"check_ids": roster},
                     stage="deliver", attempt=1)
@@ -220,44 +219,30 @@ def test_multi_repo_landing_persists_partial_progress_and_retries(tmp_path, monk
     assert all(_git(roots[name], "rev-parse", "HEAD") == sha for name, sha in commits.items())
 
 
-def test_engine_carries_final_only_for_dependency_disjoint_main_change(tmp_path, monkeypatch):
+def test_a_moved_main_rebases_the_worktree_and_needs_a_new_test_report(tmp_path, monkeypatch):
+    """S6-1: no carried final. Main moved: the landing rebases the run's worktree onto it
+    (``_sync_moved_bases``); the code tree changes, so the TEST report on the old tree no
+    longer binds (LG-1) until the agent tests again and reports (``report_tests``)."""
+    from core.run_protocol import checks
     engine = _engine(tmp_path, monkeypatch, profile="direct")
-    wt = engine.ensure_worktrees()["repo"]
-    root = __import__("pathlib").Path(wt)
+    root = __import__("pathlib").Path(engine.ensure_worktrees()["repo"])
     (root / "a.py").write_text("run change\n")
-    old_base = _git(root, "rev-parse", "HEAD")
-    old_tree = git_tree.write_tree(root, (f".aidlc/deliverables/{engine.run_id}/",), {})
-    runner = V1Runner(
-        run_dir=engine.run_dir, repo_root=root, repo_name="repo",
-        run_id=engine.run_id, base=old_base, code_tree=old_tree,
-        contract=engine.contract, python="python3")
-    call = runner.record_call(
-        call_type="test", argv=["python3", "-c", "pass"],
-        tool_version="python3", target="tests/test_a.py::test_a")
-    runner.finalize(
-        changed_paths=["a.py"], runner_code_hash="f" * 64,
-        pipeline_code_hash=engine.contract["pipeline_code_hash"],
-        runner_argv=["pipeline_test.py", "--mode", "regression"],
-        selection={
-            "files": ["tests/test_a.py"],
-            "nodeids": ["tests/test_a.py::test_a"],
-            "summary": {"selected": 1},
-            "dependency_scope": {"tests/test_a.py": ["a.py"]},
-            "test_dependencies": {"tests/test_a.py": ["a.py"]},
-            "risk_rules": [], "mode": "regression"},
-        cache_keys=[], main_red={},
-        trace=[{"exit": "X1", "kind": "test", "covers": ["R1.1"],
-                "ref": "tests/test_a.py::test_a", "result": "pass",
-                "seq": call["seq"]}])
+    report = {"reports": [{"repo": "repo", "rationale": "covers a.py", "tests_changed": [],
+                           "commands": [{"command": "make test", "cwd": ".", "result": "pass"}]}]}
+    engine._record_validation_reports("test", report)
     main = __import__("pathlib").Path(engine.contract["repo_roots"]["repo"])
     (main / "docs.md").write_text("unrelated\n")
     _git(main, "add", "docs.md")
     _git(main, "commit", "-qm", "docs")
     new_base = _git(main, "rev-parse", "HEAD")
-    engine._carry_moved_finals()
-    carried = engine.final()["repos"]["repo"]
-    assert carried["base"] == new_base and carried["carried_from"] == old_base
-    assert carried["code_tree"] != old_tree
+    engine._sync_moved_bases()
+    assert engine._fork_base("repo", str(root)) == new_base
+    assert (root / "docs.md").read_text() == "unrelated\n"
+    assert (root / "a.py").read_text() == "run change\n"
+    ok, detail = checks.evaluate("LG-1", engine.check_context())
+    assert not ok and "test again" in detail
+    engine._record_validation_reports("test", report)
+    assert checks.evaluate("LG-1", engine.check_context())[0]
 
 
 def test_accept_finding_requires_and_consumes_exact_token(tmp_path, monkeypatch):

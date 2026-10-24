@@ -4,9 +4,8 @@
  *
  * The backend is the only source: Artifacts = the session's attribution record
  * (core/session_outputs, written as its turns run) joined with the product catalog;
- * Changes = what the session's own transcript says it changed (core/session_changes):
- * each turn's "files changed" card and the commits its messages name. The two are
- * separate requests and separate slots
+ * Changes = the pipeline runs the session owns: each live run worktree's change set
+ * and the commits each run landed. The two are separate requests and separate slots
  * of the cache (a part never waits for the other); the store keeps them per session
  * and fresh:
  *
@@ -21,7 +20,7 @@
  * Tabs map to sessions as useCanvasHost reports them (`setActiveCanvasSession`), so a
  * background tab's event refreshes ITS session and its count stays right.
  *
- * @exports canvasSessionService, refreshCanvasSession, refreshCanvasArtifacts, refreshCanvasChanges, setCanvasStreaming,
+ * @exports canvasSessionService, refreshCanvasSession, refreshCanvasArtifacts, refreshCanvasChanges,
  *   setActiveCanvasSession, sessionForTab, cachedArtifacts, useCanvasSession,
  *   useCanvasSessionArtifacts, resetCanvasSession, LIVE_REFRESH_MS, and the types
  */
@@ -51,75 +50,69 @@ export interface SessionArtifact {
   baseRef?: string;
 }
 
-/** One file of a turn's card (core/turn_changes), as recorded. `start` → `end` are
- *  trees of `gitRoot`'s object store; the diff is GET /canvas/changes/tree-diff. */
-export interface ChangedFile {
+/** One file of a run's live worktree: its change against the worktree's HEAD.
+ *  `start` → `end` are trees; the diff is GET /chat/turn-diff. */
+export interface RunFileChange {
   path: string;
   absolutePath: string;
-  repo: string;
   status: 'added' | 'modified' | 'deleted';
   added: number | null;
   deleted: number | null;
-  binary?: boolean;
-  diffable?: boolean;
-  gitRoot: string;
   start: string;
   end: string;
 }
 
-/** One turn's "files changed" card (core/session_changes). */
-export interface TurnChangeCard {
-  /** `<message row id>:<block index>` */
-  id: string;
-  at: string;
-  files: ChangedFile[];
-  /** files the card did not list */
-  omitted: number;
-}
-
-export interface CommitFile {
+export interface RunCommitFile {
   path: string;
   added: number | null;
   deleted: number | null;
 }
 
-/** A commit the session's messages name, confirmed by git in one bound repo. */
-export interface MentionedCommit {
+/** A commit the run landed (run.json), with its own files. */
+export interface RunCommit {
   sha: string;
   short: string;
   subject: string;
   at: string;
-  repo: string;
-  /** the repo's main checkout */
-  root: string;
-  /** when the session last named it */
-  mentionedAt: string;
-  /** the upstream contains it; null: no upstream, or not checked (older commits) */
-  pushed: boolean | null;
-  files: CommitFile[];
-  omittedFiles: number;
+  /** the repo's upstream contains it */
+  pushed: boolean;
+  files: RunCommitFile[];
 }
 
-/** The session's Changes (core/session_changes.read). */
-export interface SessionChanges {
-  turns: TurnChangeCard[];
-  /** turns beyond the cap */
-  olderTurns: number;
-  commits: MentionedCommit[];
-  /** false: earlier messages of the session were not scanned */
-  scannedAll: boolean;
+/** One repo of a run. */
+export interface RunRepoChange {
+  /** the main checkout (the repo's object store) */
+  root: string;
+  repo: string;
+  /** the run's live worktree, null once released */
+  worktree: string | null;
+  branch: string | null;
+  /** uncommitted in the live worktree */
+  files: RunFileChange[];
+  commits: RunCommit[];
+  /** the worktree was released without landing: nothing left to diff */
+  released: boolean;
+  error?: string;
+}
+
+/** One pipeline run the session owns (core/canvas_session). */
+export interface SessionRunChange {
+  run: string;
+  title: string;
+  status: string;
+  project: string | null;
+  createdAt: string;
+  repos: RunRepoChange[];
 }
 
 export interface SessionOutputs {
   /** null: not loaded yet */
   artifacts: SessionArtifact[] | null;
   /** null: not loaded yet */
-  changes: SessionChanges | null;
+  changes: SessionRunChange[] | null;
 }
 
 type Part = 'artifacts' | 'changes';
-
-const NO_CHANGES: SessionChanges = { turns: [], olderTurns: 0, commits: [], scannedAll: true };
 
 export const canvasSessionService = {
   async artifacts(sessionId: string): Promise<SessionArtifact[]> {
@@ -127,25 +120,14 @@ export const canvasSessionService = {
       `/canvas/session/${encodeURIComponent(sessionId)}`, { params: { parts: 'artifacts' } });
     return r.data?.artifacts ?? [];
   },
-  async changes(sessionId: string): Promise<SessionChanges> {
-    const r = await api.get<{ changes: Partial<SessionChanges> | null }>(
+  async changes(sessionId: string): Promise<SessionRunChange[]> {
+    const r = await api.get<{ changes: SessionRunChange[] | null }>(
       `/canvas/session/${encodeURIComponent(sessionId)}`, { params: { parts: 'changes' } });
-    const c = r.data?.changes;
-    return c ? { ...NO_CHANGES, ...c } : NO_CHANGES;
+    return r.data?.changes ?? [];
   },
   async commitDiff(root: string, sha: string, path: string): Promise<{ diff: string; truncated: boolean }> {
     const r = await api.get<{ diff: string; truncated: boolean }>('/canvas/changes/diff', { params: { root, sha, path } });
     return r.data ?? { diff: '', truncated: false };
-  },
-  /** One file of a turn card; null when the diff is not available (404). */
-  async treeDiff(root: string, start: string, end: string, path: string): Promise<string | null> {
-    try {
-      const r = await api.get<{ diff: string }>('/canvas/changes/tree-diff', { params: { root, start, end, path } });
-      return r.data?.diff ?? null;
-    } catch (e) {
-      if ((e as { response?: { status?: number } })?.response?.status === 404) return null;
-      throw e;
-    }
   },
   /** The repo the session's newest pipeline run works in (the terminal's default
    *  location, docs/design/terminal-locations.md); null when it has none. */
@@ -163,8 +145,6 @@ export interface CanvasSessionState {
   error: string | null;
   /** a request for that part is running */
   loading: { artifacts: boolean; changes: boolean };
-  /** the session's turn is streaming: Changes is not requested until it ends */
-  streaming: boolean;
 }
 interface Entry { data: SessionOutputs | null; error: string | null; loading: { artifacts: boolean; changes: boolean } }
 
@@ -178,17 +158,13 @@ const listeners = new Set<() => void>();
 // after it, so its answer is read after the event that asked for it
 const inflight = new Map<string, { p: Promise<void>; again: boolean }>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
-// sessions whose turn is streaming (useCanvasHost reports it): no Changes request
-// for them until the turn ends, then exactly one
-const streaming = new Set<string>();
 let gen = 0;
 let unsubscribe: (() => void) | null = null;
-let activeSnap: CanvasSessionState = { sessionId: null, ...EMPTY, streaming: false };
+let activeSnap: CanvasSessionState = { sessionId: null, ...EMPTY };
 
 function emit() {
   const e = (active && entries.get(active)) || EMPTY;
-  activeSnap = { sessionId: active, data: e.data, error: e.error, loading: e.loading,
-    streaming: !!active && streaming.has(active) };
+  activeSnap = { sessionId: active, data: e.data, error: e.error, loading: e.loading };
   listeners.forEach((l) => l());
 }
 /** The new value of a part, or the cached one when the answer is the same: an
@@ -247,7 +223,6 @@ export function setActiveCanvasSession(sessionId: string | null, tabId?: string 
 }
 
 function load(sid: string, part: Part): Promise<void> {
-  if (part === 'changes' && streaming.has(sid)) return Promise.resolve();   // after the turn
   const key = `${sid}\u0000${part}`;
   const cur = inflight.get(key);
   if (cur) { cur.again = true; return cur.p; }
@@ -291,18 +266,6 @@ export function refreshCanvasChanges(sessionId?: string | null): Promise<void> {
   return sid ? load(sid, 'changes') : Promise.resolve();
 }
 
-/** Whether *sessionId*'s turn is streaming (useCanvasHost). While it is, Changes is
- *  not requested; when it ends, Changes is requested once. */
-export function setCanvasStreaming(sessionId: string | null, on: boolean): Promise<void> {
-  if (!sessionId) return Promise.resolve();
-  const was = streaming.has(sessionId);
-  if (on === was) return Promise.resolve();
-  if (on) streaming.add(sessionId);
-  else streaming.delete(sessionId);
-  emit();
-  return on ? Promise.resolve() : load(sessionId, 'changes');
-}
-
 /** Test seam. */
 export function resetCanvasSession() {
   gen++;
@@ -312,8 +275,7 @@ export function resetCanvasSession() {
   inflight.clear();
   timers.forEach((t) => clearTimeout(t));
   timers.clear();
-  streaming.clear();
-  activeSnap = { sessionId: null, ...EMPTY, streaming: false };
+  activeSnap = { sessionId: null, ...EMPTY };
 }
 
 const snapshot = () => activeSnap;

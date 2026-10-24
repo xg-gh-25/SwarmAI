@@ -229,53 +229,6 @@ def _collect_escalations(workspace_root: Path) -> list[AttentionItem]:
     return items
 
 
-def _cultivation_wording(p: Any, project: str) -> tuple[str, str, str, list]:
-    """(title, summary, ask, facts) for one cultivation proposal, by what approving does.
-
-    Approving an append adds the note; approving a retire REMOVES an existing note and
-    a rewrite replaces one. The card has to say which, because the user approves
-    from the card.
-    """
-    change = getattr(p, "change_type", "append") or "append"
-    section, note = _split_note(p.content or "")
-    where = f"{p.target_doc}, {section}" if section else p.target_doc
-    target = getattr(p, "target_title", "") or ""
-    new_text = getattr(p, "replacement_content", "") or ""
-    if change == "rewrite" and not new_text.strip():
-        # With no new text the applier only removes the old note.
-        change = "retire"
-    if change == "retire":
-        return (
-            "Approve removing a note from SwarmAI's memory",
-            _one_line(target or note),
-            (f"SwarmAI wants to remove a note from the {project} brain ({p.target_doc}), "
-             "because a newer lesson seems to replace it. First explain in plain words "
-             "whether the newer lesson really replaces it, then let me approve the "
-             "removal or reject it."),
-            [("Note to remove", _one_line(target, _FACT_MAX)),
-             ("Newer lesson", _one_line(
-                 _split_note(getattr(p, "evidence", "") or "")[1] or note, _FACT_MAX))],
-        )
-    if change == "rewrite":
-        return (
-            "Approve rewriting a note in SwarmAI's memory",
-            _one_line(target or note),
-            (f"SwarmAI wants to rewrite a note in the {project} brain ({p.target_doc}). "
-             "First explain in plain words what changes and whether the new text is "
-             "right, then let me approve, edit, or reject it."),
-            [("Note to rewrite", _one_line(target, _FACT_MAX)),
-             ("New text", _one_line(_split_note(new_text)[1] or note, _FACT_MAX))],
-        )
-    return (
-        "Approve a note SwarmAI wants to add to its memory",
-        _one_line(note),
-        (f"SwarmAI wants to add this note to the {project} brain ({where}). "
-         "First explain in plain words what it means and whether it is right, "
-         "then let me approve, edit, or reject it."),
-        [("Proposed note", _one_line(note, _FACT_MAX))],
-    )
-
-
 def _collect_cultivation(workspace_root: Path) -> list[AttentionItem]:
     """Pending DDD cultivation proposals (append/retire/rewrite awaiting human) → REVIEW."""
     items: list[AttentionItem] = []
@@ -288,17 +241,24 @@ def _collect_cultivation(workspace_root: Path) -> list[AttentionItem]:
             try:
                 for p in read_pending_proposals(workspace_root, project):
                     pid = getattr(p, "proposal_id", None) or getattr(p, "id", "")
-                    title, summary, ask, facts = _cultivation_wording(p, project)
+                    section, note = _split_note(p.content or "")
+                    where = f"{p.target_doc}, {section}" if section else p.target_doc
                     items.append(AttentionItem(
                         id=f"cultivation:{project}:{pid}",
                         source="cultivation",
                         tier=TIER_REVIEW,
                         brain=project,
-                        title=title,
-                        summary=summary,
+                        title="Approve a note SwarmAI wants to add to its memory",
+                        summary=_one_line(note),
                         detail=(p.content or "")[:400],
                         dispatch={
-                            "message": _prompt(ask, facts, [f"proposal {pid}"]),
+                            "message": _prompt(
+                                (f"SwarmAI wants to add this note to the {project} brain ({where}). "
+                                 "First explain in plain words what it means and whether it is right, "
+                                 "then let me approve, edit, or reject it."),
+                                [("Proposed note", _one_line(note, _FACT_MAX))],
+                                [f"proposal {pid}"],
+                            ),
                             "context": {"kind": "cultivation", "project": project,
                                         "proposal_id": pid, "target_doc": p.target_doc},
                         },

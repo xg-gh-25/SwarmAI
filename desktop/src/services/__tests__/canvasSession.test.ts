@@ -31,7 +31,7 @@ beforeEach(() => {
   resetCanvasSession();
   get.mockReset();
   get.mockImplementation(async (url: string, o?: { params?: { parts?: string } }) => ({
-    data: { artifacts: [art(`${url.split('/').pop()}.md`)], changes: o?.params?.parts === 'changes' ? { turns: [], commits: [] } : null },
+    data: { artifacts: [art(`${url.split('/').pop()}.md`)], changes: o?.params?.parts === 'changes' ? [] : null },
   }));
 });
 
@@ -51,7 +51,7 @@ describe('canvasSession store', () => {
     setActiveCanvasSession('s1', 'A');
     let releaseChanges!: () => void;
     get.mockImplementation((url: string, o?: { params?: { parts?: string } }) => o?.params?.parts === 'changes'
-      ? new Promise((r) => { releaseChanges = () => r({ data: { artifacts: null, changes: { turns: [{ id: 'm1:0', at: 't', files: [], omitted: 0 }], commits: [] } } }); })
+      ? new Promise((r) => { releaseChanges = () => r({ data: { artifacts: null, changes: [{ run: 'run_1', repos: [] }] } }); })
       : Promise.resolve({ data: { artifacts: [art('a.md')], changes: null } }));
     const { result } = renderHook(() => useCanvasSession());
     let full!: Promise<void>;
@@ -60,9 +60,9 @@ describe('canvasSession store', () => {
     expect(result.current.data?.changes).toBeNull();
     expect(result.current.loading).toEqual({ artifacts: false, changes: true });
     await act(async () => { releaseChanges(); await full; });
-    expect(result.current.data?.changes?.turns[0]?.id).toBe('m1:0');
+    expect(result.current.data?.changes?.[0]?.run).toBe('run_1');
     await act(async () => { await refreshCanvasArtifacts(); });   // an Artifacts answer keeps Changes
-    expect(result.current.data?.changes?.turns[0]?.id).toBe('m1:0');
+    expect(result.current.data?.changes?.[0]?.run).toBe('run_1');
   });
 
   it('a refresh asked while one runs runs once more after it (its answer is read after the ask)', async () => {

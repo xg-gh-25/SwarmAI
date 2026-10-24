@@ -79,43 +79,6 @@ def test_refutation_ref_must_resolve(rig):
     assert r.v1("review-proof", "--artifact", r.artifact("proof-ok", good)).get("ok") is True
 
 
-def test_lg5_requires_the_base_manifest_not_the_finals_own_list(rig, monkeypatch):
-    smoke = {"id": "smoke", "paths": ["backend/**/*.py"], "cwd": ".",
-             "argv": ["python3", "-c", "pass"], "call_type": "build"}
-    r = rig(extra={"validations.json": json.dumps({"schema": 1, "entries": [smoke]})})
-    r.create()
-    r.drive(until="deliver")
-    engine = r.engine()
-    final = engine.final()
-    assert any(v["id"] == "smoke" for row in final["repos"].values()
-               for v in row.get("validations", [])), final
-    for row in final["repos"].values():
-        row["validations"] = []            # the final no longer shows the required run
-    monkeypatch.setattr(type(engine), "final", lambda self: final)
-    from core.run_protocol import checks
-    ok, detail = checks.evaluate("LG-5", engine.check_context())
-    assert ok is False, detail
-
-
-def test_changing_the_test_selector_is_a_qx2_push_reason(rig):
-    r = rig()
-    r.create()
-    r.drive(until="review")
-    r.edit({"backend/scripts/pipeline_test.py": "SELECT_NOTHING = True\n"})
-    ok, detail = _check(r, "QX-2")
-    assert ok is False and "pipeline_test.py" in detail, detail
-
-
-def test_a_final_from_another_code_tree_does_not_complete_build(rig):
-    r = rig("trivial")
-    r.create()
-    r.drive(until="review")              # BUILD completed on its tdd final (r6 §2.3)
-    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})   # after the run
-    out = r.v1("stage-complete")         # REVIEW re-checks DS-9b on the current tree
-    assert out.get("ok") is False and r.state()["stage"] == "review", out
-    assert any(c["id"] == "DS-9b" and not c["passed"] for c in out["checks"]), out
-
-
 def test_an_isolated_repo_with_no_recorded_branch_yields_no_final(rig):
     r = rig()
     r.create()
@@ -124,9 +87,9 @@ def test_an_isolated_repo_with_no_recorded_branch_yields_no_final(rig):
                 / "integration_branches.json")
     assert branches.is_file()
     branches.unlink()                       # the base can no longer be named
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py")
+    out = r.report_and_complete()
     assert out.get("ok") is not True, out
-    assert r.engine().final() == {}, "a final was written on a guessed base"
+    assert r.tested_tree("build") is None, "a report was recorded on a guessed base"
 
 
 def test_the_answered_decision_is_the_one_its_event_validated(rig):
@@ -152,22 +115,18 @@ def test_the_answered_decision_is_the_one_its_event_validated(rig):
 
 # ── review round 1: the binding must not fail a legitimate run, nor leak ────
 
-def test_an_unchanged_run_is_qx2_clean(rig):
-    """A run that changed no pipeline code and whose final ran on the contract's
-    pipeline code passes QX-2 (the hash is read from the final's provenance)."""
-    r = rig()
-    r.create()
-    r.drive(until="review")
-    ok, detail = _check(r, "QX-2")
-    assert ok is True, detail
-
-
 def test_an_isolated_run_without_its_worktree_never_tests_main(rig):
     r = rig()
     r.create()
-    out = r.pt("tdd", "--files", "backend/tests/test_x.py", repo=r.repo)   # main, not its own
-    assert out.get("ok") is not True, out
-    assert r.engine().final() == {}, "a final was made on the shared main checkout"
+    # an edit in the shared main checkout never enters the run's reported tree
+    (r.repo / "backend/core/mod.py").write_text("def add(a, b):\n    return 0  # main\n")
+    r.edit(Rig.CHANGE)
+    assert r.report_and_complete().get("ok") is True
+    import subprocess
+    reported = subprocess.run(["git", "-C", str(r.repo), "cat-file", "-p",
+                               f"{r.tested_tree('build')}:backend/core/mod.py"],
+                              check=True, capture_output=True, text=True).stdout
+    assert "# main" not in reported
 
 
 def test_a_refutation_does_not_survive_the_tree_it_was_judged_on(rig):

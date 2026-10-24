@@ -141,17 +141,14 @@ _SPECS = [
 
     _c("DS-1", "design_spec", "push", "plan", "full lite", DESIGN),
     _c("DS-2a", "design_spec", "stage", "plan", "full lite", DESIGN),
-    _c("DS-2b", "design_spec", "stage", "build goal_cycle", "full lite", DESIGN),
     _c("DS-3", "design_spec", "", "plan", "full lite", DESIGN),
     _c("DS-4a", "design_spec", "stage", "plan", "full", "bugfix"),
-    _c("DS-4b", "design_spec", "stage", "build", "full", "bugfix"),
     _c("DS-5", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-6", "design_spec", "stage", "plan", "full", "full bugfix goal"),
     _c("DS-7", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-9a", "design_spec", "stage", "plan", "full lite", DESIGN),
-    _c("DS-9b", "design_spec", "stage", "build goal_cycle review", "full lite", DESIGN),
-    _c("BX-1", "design_spec", "stage", "build goal_cycle", "full lite", DESIGN),
-    _c("BX-2", "final", "stage", "build", "run", "direct"),
+    # S6-1: BUILD ends with the agent's validation report on the current code tree
+    _c("BX-3", "validation_report", "stage", "build goal_cycle", "run", CODE),
 
     _c("RV-1a", "review", "push", "review", "review", CODE),
     _c("RV-1b", "review", "", "evaluate", "review", "full bugfix goal"),
@@ -162,19 +159,13 @@ _SPECS = [
     _c("FX-1", "fixing_spec", "", "review", "review", CODE),
 ]
 _SPECS += [
-    _c("TS-1", "test_report", "stage", "test", "test", CODE),
-    _c("TS-2", "test_report", "push", "test", "test", DESIGN),
+    _c("TS-1", "validation_report", "stage push", "test", "test", CODE),
     _c("TS-3", "test_report", "", "test", "test", DESIGN),
     _c("DV-1", "report", "stage", "deliver", "report", ALL),
     _c("LG-1", "final", "land", "land run_land", "final", CODE),
-    _c("LG-2", "final", "land push", "land run_land", "final", CODE),
     _c("LG-3", "report", "land", "land run_land", "report", CODE),
     _c("LG-4", "final", "land", "land run_land", "final", CODE),
-    _c("LG-5", "final", "land push", "land run_land", "final", CODE),
-    _c("QX-1", "test_report", "push", "test", "test", CODE),
-    _c("QX-2", "test_report", "push", "test", "test", CODE),
     _c("MD-1", "run", "push", "deliver", "run", CODE),
-    _c("MD-2", "final", "push", "deliver", "final", CODE),
     _c("MD-3", "authorization", "push", "run_land", "authorization", CODE),
     _c("RF-1", "reflect", "stage", "deliver", "reflect", ALL),
     _c("RF-2", "reflect", "stage", "deliver", "reflect", ALL),
@@ -191,15 +182,13 @@ if len(CHECKS) != len(_SPECS):
 # outside each spec's ``profiles``; optional DS-2 checks are still registered for every
 # code profile and their evaluator returns pass when the optional collection is absent.
 def _exemption_reason(profile: str, check_id: str) -> str:
-    if check_id in ("RQ-4", "DS-4a", "DS-4b"):
+    if check_id in ("RQ-4", "DS-4a"):
         return "profile is not bugfix and has no current/expected/unchanged triad"
     if profile == "direct" and (check_id.startswith(("RQ-", "DS-", "DC-"))
-                                or check_id in ("BX-1", "TS-2", "TS-3")):
+                                or check_id == "TS-3"):
         return ("direct writes no REQUIREMENTS / DESIGN_SPEC and has no exit criteria; its "
                 "requirement is the user's words in contract.json, an ambiguous one is "
                 "abandoned and re-run as trivial (execution plan v2 N1)")
-    if check_id == "BX-2":
-        return "BX-2 is direct's change/tdd check; other profiles prove BUILD by BX-1"
     if profile == "research":
         return "research produces no code, design spec, review, tests or landing"
     if check_id in ("DS-6",) and profile in ("direct", "trivial"):
@@ -237,11 +226,8 @@ def stage_checks(profile: str, stage: str, variant: str | None = None) -> tuple[
 def _stages_for(spec: CheckSpec, profile: str) -> tuple[str, ...]:
     if spec.check_id.startswith("RQ-"):
         return ("evaluate",)
-    if spec.check_id in ("DS-2b", "BX-1"):
+    if spec.check_id == "BX-3":
         return ("goal_cycle",) if profile == "goal" else ("build",)
-    if spec.check_id == "DS-9b":
-        first = "goal_cycle" if profile == "goal" else "build"
-        return (first, "review")
     return tuple(stage for stage in spec.stages
                  if stage in PROFILE_STAGES[profile] or stage in ("land", "run_land"))
 
@@ -326,17 +312,38 @@ def _document_check(check_id: str, context: CheckContext) -> Result:
     ))
 
 
-def _test_refs(context: CheckContext, kinds=("test", "mutation")) -> list[str]:
-    return [row.get("ref") for row in (context.design or {}).get("exit_criteria", [])
-            if isinstance(row, Mapping) and row.get("kind") in kinds
-            and isinstance(row.get("ref"), str)]
-
-
-def _collected(ref: Any, context: CheckContext) -> bool:
-    """A design ref is collected when pytest found it, or found it parametrized
-    (``ref[...]``): the same rule the runner uses for refs elsewhere."""
-    return isinstance(ref, str) and (ref in context.collected_tests or any(
-        node.startswith(ref + "[") for node in context.collected_tests))
+def _report_check(check_id: str, context: CheckContext) -> Result:
+    """BX-3 / TS-1 / LG-1 (S6-1): for every expected repo, the latest validation report
+    of BUILD (BX-3) or TEST (TS-1, LG-1) is on the repo's current code tree; TS-1 and
+    LG-1 also refuse a TEST report with a failed command (the agent reported a failure,
+    so the change is not delivered)."""
+    from core.run_protocol.validation_report import latest
+    stage = "test" if check_id in ("TS-1", "LG-1") else (
+        "goal_cycle" if context.profile == "goal" else "build")
+    current = context.run.get("code_trees")
+    expected = sorted(context.expected_repos)
+    if not expected or not isinstance(current, Mapping):
+        return False, "the run's code trees are unknown"
+    if check_id == "BX-3" and not context.run.get("changed_paths"):
+        return False, "no change in the run's worktree"
+    reports = latest(context.events, stage)
+    problems = []
+    for repo in expected:
+        event = reports.get(repo)
+        if event is None:
+            problems.append(f"{repo}: no {stage} validation report; run your tests and pass "
+                            'the report as {"reports": [...]} with --artifact -')
+            continue
+        payload = event["payload"]
+        if not current.get(repo) or payload.get("code_tree") != current.get(repo):
+            problems.append(f"{repo}: the {stage} report is for tree "
+                            f"{str(payload.get('code_tree'))[:12]}, the code is now "
+                            f"{str(current.get(repo))[:12]}; test again and report")
+        elif stage == "test" and payload.get("n_fail"):
+            problems.append(f"{repo}: the TEST report has {payload['n_fail']} failed "
+                            "command(s); fix them and report again")
+    return _result(not problems, f"{stage} reports bind the current code" if not problems
+                   else "; ".join(problems))
 
 
 def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[str, Any]]:
@@ -360,59 +367,6 @@ def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[s
     return [event for event in context.events if event.get("kind") == "answer"
             and (expert is None or event["payload"].get("expert_id") == expert)
             and complete(event)]
-
-
-def _bx2(context: CheckContext) -> Result:
-    """direct's BUILD check (execution plan v2 N1). The run changed something; and
-    unless every changed path is a pure-doc path, each repo has a final on its CURRENT
-    code tree whose ``tdd_required`` files (the runner's frozen selection for the
-    change: changed tests + direct importers of changed modules) all have results on
-    that tree and none of them failed or is incomplete. Facts only from the sealed
-    final and the run's own changed paths; no model field."""
-    from core.doc_paths import is_doc_only_path
-    changed = [p for p in context.run.get("changed_paths") or [] if isinstance(p, str)]
-    if not changed:
-        return False, "no change in the run's worktree"
-    if all(is_doc_only_path(p) for p in changed):
-        return True, "pure-doc change: no test to run"
-    repos = context.final.get("repos") if isinstance(context.final, Mapping) else None
-    trees = context.run.get("code_trees") or {}
-    if not isinstance(repos, Mapping) or not context.expected_repos \
-            or set(repos) != set(context.expected_repos):
-        return False, "no tdd result yet: run pipeline_test.py --mode tdd"
-    problems = []
-    for name, row in repos.items():
-        if not isinstance(row, Mapping) or row.get("code_tree") != trees.get(name):
-            problems.append(f"{name}: tdd results are for an older tree; rerun --mode tdd")
-            continue
-        required = row.get("tdd_required")
-        tests = row.get("tests") or {}
-        nodes, whole = tests.get("nodes"), tests.get("whole_files")
-        if not isinstance(required, list) or not isinstance(nodes, Mapping) \
-                or not isinstance(whole, list):
-            problems.append(f"{name}: test selection failed or no tdd result; rerun --mode tdd")
-            continue
-        if any(k.startswith("call:") and (v or {}).get("result") != "pass"
-               for k, v in nodes.items() if isinstance(k, str)):
-            problems.append(f"{name}: a tdd call did not finish")
-        # nothing selected (no importer, non-Python code): a test the agent names must
-        # still have run whole and passed, so a code change never leaves BUILD untested
-        targets = required or [f for f in whole if any(
-            isinstance(k, str) and k.split("::")[0] == f for k in nodes)]
-        if not targets:
-            problems.append(f"{name}: no test selected for this change; write one and run "
-                            "it with --mode tdd --files <test file>")
-        for test_file in targets:
-            mine = {node: value for node, value in nodes.items()
-                    if isinstance(node, str) and node.split("::")[0] == test_file}
-            if test_file not in whole:
-                problems.append(f"{test_file}: not run whole (run the file, not single nodes)")
-            elif not mine:
-                problems.append(f"{test_file}: not run")
-            elif any((value or {}).get("result") != "pass" for value in mine.values()):
-                problems.append(f"{test_file}: failed or incomplete")
-    return _result(not problems, "selected tests pass on the current tree" if not problems
-                   else "; ".join(problems[:5]))
 
 
 # RQ-8b's keyword table, copied verbatim from the design (v13 §B1, used by §A2.3 RQ-8b;
@@ -442,35 +396,11 @@ def _negative_or_universal(text: str) -> bool:
 
 
 def _evaluate_check(check_id: str, context: CheckContext) -> Result:
-    schema_ids = {cid for cid in CHECKS if cid.startswith(("RQ-", "DS-"))} | {"BX-1"}
-    if check_id in schema_ids - {"RQ-3", "RQ-8b"} \
-            and check_id not in ("DS-2b", "DS-4b", "DS-9b", "BX-1"):
+    schema_ids = {cid for cid in CHECKS if cid.startswith(("RQ-", "DS-"))}
+    if check_id in schema_ids - {"RQ-3", "RQ-8b"}:
         return _document_check(check_id, context)
-    if check_id == "DS-2b":
-        wanted = [row.get("test") for key in ("properties", "failure_modes")
-                  for row in (context.design or {}).get(key, []) if isinstance(row, Mapping)]
-        missing = sorted({ref for ref in wanted if not _collected(ref, context)})
-        return _result(not missing, "all property/failure tests collect" if not missing
-                       else f"uncollected tests: {missing}")
-    if check_id == "DS-4b":
-        unchanged = {row.get("id") for row in ((context.requirements.get("bugfix") or {})
-                     .get("unchanged", [])) if isinstance(row, Mapping)}
-        refs = [row.get("ref") for row in (context.design or {}).get("exit_criteria", [])
-                if isinstance(row, Mapping) and row.get("kind") == "test"
-                and unchanged & set(row.get("covers") or [])]
-        missing = [ref for ref in refs if not _collected(ref, context)]
-        return _result(bool(refs) and not missing,
-                       "unchanged regression tests collect" if refs and not missing
-                       else f"unchanged tests missing/uncollected: {missing}")
-    if check_id in ("DS-9b", "BX-1"):
-        exits = [row for row in (context.design or {}).get("exit_criteria", [])
-                 if isinstance(row, Mapping) and row.get("kind") in
-                 (("test", "probe") if check_id == "DS-9b" else ("test",))]
-        wanted = [(row.get("ref") if row.get("kind") == "test" else row.get("id"))
-                  for row in exits]
-        failed = sorted(ref for ref in wanted if context.test_results.get(ref) != "pass")
-        return _result(not failed, "all exit tests pass" if not failed
-                       else f"exit tests not passed: {failed}")
+    if check_id in ("BX-3", "TS-1", "LG-1"):
+        return _report_check(check_id, context)
     if check_id == "RV-1a":
         handouts = [event for event in context.events if event.get("kind") == "handout"
                     and event["payload"].get("expert_id") == "correctness"
@@ -528,18 +458,6 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
                      for cid in cluster["findings"]}
         expected = {row["canonical_id"] for row in projected if row["status"] != "refuted"}
         return _result(clustered == expected, "every finding clustered or refuted")
-    if check_id == "TS-1":
-        repos = context.final.get("repos")
-        ok = isinstance(repos, Mapping) and bool(context.expected_repos) \
-            and set(repos) == set(context.expected_repos) and all(
-            isinstance(row, Mapping) and (row.get("tests") or {}).get("verdict")
-            in ("green", "red", "incomplete") for row in repos.values()
-        )
-        return _result(ok, "every repo has terminal final" if ok else "final is incomplete")
-    if check_id == "TS-2":
-        failed = [ref for ref in _test_refs(context, ("test",))
-                  if context.test_results.get(ref) != "pass"]
-        return _result(not failed, "all test exits pass" if not failed else f"not passed: {failed}")
     if check_id == "TS-3":
         required = {row.get("id") for req in context.requirements.get("requirements", [])
                     if isinstance(req, Mapping) for row in req.get("acceptance", [])
@@ -548,30 +466,17 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         for key in ("properties", "failure_modes"):
             required |= {row.get("id") for row in (context.design or {}).get(key, [])
                          if isinstance(row, Mapping) and isinstance(row.get("id"), str)}
-        missing = sorted(i for i in required - context.trace_covers if isinstance(i, str))
+        # the agent's declared trace: which exit criteria cover what (S6-1: no runner
+        # result behind it; Gate-2 reviews it)
+        covers = {c for row in (context.design or {}).get("exit_criteria", [])
+                  if isinstance(row, Mapping) for c in (row.get("covers") or [])}
+        missing = sorted(i for i in required - covers if isinstance(i, str))
         return _result(not missing, "trace covers requirements" if not missing
                        else f"trace missing: {missing}")
-    if check_id == "BX-2":
-        return _bx2(context)
     if check_id == "DV-1":
         ok = any(event.get("kind") == "render" and event["payload"].get("document") == "REPORT"
                  for event in context.events)
         return _result(ok, "REPORT render event exists" if ok else "REPORT not rendered")
-    repos = context.final.get("repos") if isinstance(context.final, Mapping) else None
-    if check_id == "LG-1":
-        current = context.run.get("code_trees")
-        ok = isinstance(repos, Mapping) and bool(context.expected_repos) \
-            and set(repos) == set(context.expected_repos) \
-            and isinstance(current, Mapping) and set(current) == set(context.expected_repos) and all(
-            isinstance(row, Mapping) and row.get("code_tree") == current.get(name)
-            for name, row in repos.items())
-        return _result(ok, "final binds current code trees" if ok else "; ".join(
-            context.run.get("final_unbound") or ["final code tree is stale"]))
-    if check_id == "LG-2":
-        verdicts = [(row.get("tests") or {}).get("verdict") for row in repos.values()] \
-            if isinstance(repos, Mapping) else []
-        ok = bool(verdicts) and all(value == "green" for value in verdicts)
-        return _result(ok, "final tests green" if ok else f"test verdicts: {verdicts}")
     if check_id == "LG-3":
         from core.run_protocol import tree
         args = context.run.get("lg3_args")
@@ -585,68 +490,19 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
     if check_id == "LG-4":
         landing_bases = context.run.get("landing_bases")
         run_bases = context.run.get("run_bases")
-        if context.run.get("skip_tests") is True:
-            # a skip-tests landing needs no final (C5): main must still be at the
-            # run's fork point, so the commit is a fast-forward of what was reviewed
-            ok = bool(context.expected_repos) and isinstance(landing_bases, Mapping) \
-                and isinstance(run_bases, Mapping) \
-                and set(landing_bases) == set(run_bases) == set(context.expected_repos) \
-                and all(isinstance(run_bases[n], str) and run_bases[n]
-                        and landing_bases[n] == run_bases[n] for n in run_bases)
-            return _result(ok, "main is still at the run's base" if ok else
-                           "main moved since the run started; restore and rebase first")
-        ok = isinstance(repos, Mapping) and bool(context.expected_repos) \
-            and set(repos) == set(context.expected_repos) \
-            and isinstance(landing_bases, Mapping) \
+        # the commit is a fast-forward of the reviewed and tested code: main is still at
+        # the base the run's worktree is on (a moved main is synced first, S6-1)
+        ok = bool(context.expected_repos) and isinstance(landing_bases, Mapping) \
+            and isinstance(run_bases, Mapping) \
             and set(landing_bases) == set(context.expected_repos) \
-            and all(isinstance(row, Mapping)
-                    and isinstance(row.get("base"), str) and bool(row.get("base"))
-                    and row["base"] == landing_bases.get(name)
-                    for name, row in repos.items())
-        return _result(ok, "landing bases match final" if ok else "landing base changed")
-    if check_id == "LG-5":
-        ok = isinstance(repos, Mapping) and bool(context.expected_repos) \
-            and set(repos) == set(context.expected_repos) \
-            and set(context.validation_manifest) == set(context.expected_repos)
-        if ok:
-            for repo, required_ids in context.validation_manifest.items():
-                rows = repos[repo].get("validations", []) if isinstance(repos[repo], Mapping) else []
-                got = {item.get("id"): item.get("verdict") for item in rows
-                       if isinstance(item, Mapping) and isinstance(item.get("id"), str)}
-                if set(got) != set(required_ids) or any(got[item] != "pass" for item in required_ids):
-                    ok = False
-                    break
-        return _result(ok, "required validations pass exactly" if ok
-                       else "required validation set missing/failing")
-    if check_id == "QX-1":
-        rows = context.final.get("repos") if isinstance(context.final, Mapping) else None
-        statuses = [((row.get("provenance") or {}).get("selection") or {}).get("risk_status")
-                    for row in rows.values()] if isinstance(rows, Mapping) else []
-        ok = bool(statuses) and all(status == "within_cap" for status in statuses)
-        return _result(ok, "risk expansion within cap"
-                       if ok else "risk expansion missing/incomplete")
-    if check_id == "QX-2":
-        violations = context.run.get("rule_violations")
-        ok = isinstance(violations, list) and not violations
-        return _result(ok, "validation rules and pipeline code unchanged" if ok
-                       else "; ".join(violations[:5]) if isinstance(violations, list)
-                       else "rule provenance unknown")
+            and all(isinstance(run_bases.get(n), str) and run_bases[n]
+                    and landing_bases[n] == run_bases[n] for n in context.expected_repos)
+        return _result(ok, "main is still at the run's base" if ok else
+                       "main moved since the run's base; sync and test again first")
     if check_id == "MD-1":
         mode = context.run.get("mode")
         return _result(mode == "isolated", "isolated" if mode == "isolated"
                        else "mode missing or shared")
-    if check_id == "MD-2":
-        rows = context.final.get("repos") if isinstance(context.final, Mapping) else None
-        kinds = []
-        if isinstance(rows, Mapping):
-            for row in rows.values():
-                tests = [call.get("target") for call in row.get("calls", [])
-                         if isinstance(call, Mapping) and call.get("call_type") == "test"
-                         and call.get("code_tree") == row.get("code_tree")]
-                kinds.append("regression" if "regression" in tests else
-                             "recheck" if "recheck" in tests else None)
-        ok = bool(kinds) and all(kind == "regression" for kind in kinds)
-        return _result(ok, "full final" if ok else "final kind missing or repair-only")
     if check_id == "MD-3":
         landing = context.run.get("landing")
         return _result(landing is not None and landing != "human_override",

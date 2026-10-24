@@ -34,13 +34,21 @@ def _rig(tmp_path):
     store = AuditStore(tmp_path / "audit", "run_one", authority)
     code_tree = tree.build_code_trees({"repo": str(worktree)}, "run_one",
                                       git_tree.write_tree, git_tree.list_reserved)["repo"]
-    final = {"repos": {"repo": {"code_tree": code_tree, "base": base,
-                                  "tests": {"verdict": "green"}, "validations": []}}}
+    # the agent's TEST report on this tree (S6-1): LG-1 reads it from the events
+    from core.run_protocol import validation_report as vr
+    from core.run_protocol.store import NEXT
+    row = vr.parse({"reports": [{"repo": "repo", "rationale": "covers a.py",
+                                 "tests_changed": [], "commands": [
+                                     {"command": "make test", "cwd": ".", "result": "pass"}]}]},
+                   ["repo"])[0]
+    store.append_new(writer=authority.writer("cli"), kind="validation_report", at=AT,
+                     ordinal=NEXT, payload=vr.event_payload("test", row, code_tree))
     context = checks.make_context(
         profile="direct", requirement_variant="lite", design_variant="lite",
-        requirements={}, design={}, events=[], authority=authority, final=final,
-        run={"mode": "isolated", "code_trees": {"repo": code_tree}},
-        expected_repos={"repo"}, validation_manifest={"repo": set()})
+        requirements={}, design={}, events=store.read_events(), authority=authority,
+        run={"mode": "isolated", "code_trees": {"repo": code_tree},
+             "run_bases": {"repo": base}},
+        expected_repos={"repo"})
     return main, worktree, base, store, context
 
 
@@ -53,8 +61,8 @@ def test_prepare_approve_execute_binds_report_and_lands(tmp_path):
         render_report=lambda request, results: f"# Report\nrequest: {request}\n".encode())
     assert prepared["request"]["binding_digest"]
     kinds = [row["kind"] for row in store.read_events()]
-    assert kinds[0] == "stage_attempt"
-    assert kinds.count("check") == 5
+    assert kinds[0] == "validation_report" and kinds[1] == "stage_attempt"
+    assert kinds.count("check") == 3                 # LG-1, LG-3, LG-4 (S6-1)
     assert kinds.index("land_intent") < kinds.index("render") < len(kinds) - 1
     assert kinds[-1] == "land_request"
     approve_from_event(store, "q1", now=0, at=AT)     # the daemon, after the person

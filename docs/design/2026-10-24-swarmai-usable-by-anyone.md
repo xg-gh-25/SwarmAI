@@ -134,6 +134,14 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - `rationale`：为什么认为这些测试能证明改动正确。
   日志只记录"这份报告是在这个 tree 上提交的"，不证明报告内容为真；内容是否可信由审查判断。
   S6-1a 实现（2026-10-24，`core/run_protocol/validation_report.py`）：artifact 是 `{"reports": [每个仓库一份]}`，每份 `{"repo", "commands": [{"command", "cwd", "result": "pass|fail|not_run", "reason"}], "tests_changed", "rationale"}`；`fail` 和 `not_run` 必须写 `reason`；多出的键（包括 agent 自己填的 `code_tree`）直接拒绝。每个仓库写一条 `validation_report` 事件：`stage`、`repo`、`code_tree`（engine 当场算的 worktree tree）、三个计数内联，完整报告存成 blob（事件行有 4 KB 上限）。任何一份不合法、或某个仓库的 tree 算不出来，一条都不写。REPORT 里新增"测试（agent 自己报告的结果，pipeline 没有重跑）"一节，只用事件里的计数生成。S6-1a 期间 runner 路径照旧可用，报告是可选的；S6-1b 起报告是 BUILD、TEST 完成的必要条件。
+  S6-1b-i 实现（2026-10-24）：所有判定改读报告，runner 代码本身留到 S6-1b-ii 删。
+  - 检查：新增 BX-3（BUILD / GOAL_CYCLE：有改动，且每个仓库最新的 BUILD 报告在当前 tree 上）；TS-1（stage + push）和 LG-1 读 TEST 报告：每个仓库的最新 TEST 报告在当前 tree 上、没有失败的命令。删除 DS-2b、DS-4b、DS-9b、BX-1、BX-2、TS-2、LG-2、LG-5、QX-1、QX-2、MD-2；LG-4 只看 main 是否还在 run 的 base 上。TS-3 读 DESIGN_SPEC 里 exit_criteria 声明的覆盖。
+  - 报告要求 tree 和 base 都已知：base 说不出来的 worktree 上不记报告（原来 runner 在这种情况下不出 final）。
+  - lifecycle：删掉 `tests_red`、`tests_incomplete`、`validation_failed` 和 TEST 的 `final_verdict`；TEST 报告里有失败就停在 TEST，三次后照常 `checks_exhausted`。
+  - main 移动：落地时 `_sync_moved_bases` 把 worktree rebase 到新 main（取代 carry / recheck）；tree 变了，旧报告不再满足 LG-1，`next` 让 agent 在新 tree 上重测并用新命令 `report-tests --artifact -` 提交；rebase 冲突留在 worktree 里让 agent 解决（和原来一样），LG-4 每次都记 `merge_conflict`，三次后 `land_conflict`。
+  - `next_step`：BUILD / TEST 提示 native 测试并给出报告格式，不再给 runner 命令；没有自动完成。
+  - 五维审计的 Quality：每个仓库的 TEST 报告有通过、没有失败算 verified。
+  - stage 卡片（build、goal_cycle、test、deliver、review）和 INSTRUCTIONS、SKILL.md 去掉 runner 命令；review 里"用 prove 关闭 finding"暂时改为"在报告里写明证明修复的测试"，`reported_test` 证据在 S6-2 加。
 - **审查和最终 tree 的关系（r8，skeptic BLOCKER 1）**：阶段顺序 build → review → test 不变。规则是：
   - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
   - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW，做一次**增量审查**，再回到 TEST。

@@ -21,12 +21,11 @@ STATUSES = frozenset({"active", "awaiting_human", "paused", "reflecting",
 TERMINAL = frozenset({"completed", "abandoned", "failed"})
 LANDINGS = frozenset({"landed", "not_landed", "human_override", "no_code"})
 NOT_LANDED_REASONS = frozenset({
-    "tests_red", "tests_incomplete", "validation_failed", "final_stale",
-    "report_mismatch", "checks_exhausted", "framing_rejected",
+    "final_stale", "report_mismatch", "checks_exhausted", "framing_rejected",
     "already_satisfied", "needs_hooked_session", "land_conflict", "partial_land",
 })
 QUALITY_BLOCK_REASONS = frozenset({
-    "tests_red", "tests_incomplete", "validation_failed", "final_stale", "report_mismatch",
+    "final_stale", "report_mismatch",
     # half a multi-repo change is on main: what landed no longer is the reviewed change
     "partial_land",
 })
@@ -69,7 +68,7 @@ def infrastructure_refusal(chain: Sequence[Mapping[str, Any]], authority) -> str
 
 
 RF_CHECKS = frozenset({"RF-1", "RF-2", "RF-3", "RF-4"})
-LG_CHECKS = frozenset({"LG-1", "LG-2", "LG-3", "LG-4", "LG-5"})
+LG_CHECKS = frozenset({"LG-1", "LG-3", "LG-4"})
 NORMAL_LAND_CHECKS = LG_CHECKS | {"DV-1"}   # RF-1~4 are DELIVER stage checks, not guards
 REPORT_ONLY = frozenset({"DV-1"})            # the not-landed path's DELIVER attempt
 SKIP_LAND_CHECKS = frozenset({"LG-3", "LG-4"})
@@ -233,11 +232,6 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
             if number >= 3:
                 conflict = str(details.get("LG-4", "")).startswith("merge_conflict")
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
-        elif "LG-2" in failed:
-            incomplete = "incomplete" in str(details.get("LG-2", ""))
-            _set_pending(run, "tests_incomplete" if incomplete else "tests_red")
-        elif "LG-5" in failed:
-            _set_pending(run, "validation_failed")
         return
     if number - run["attempt_base"].get(stage, 0) >= 3:
         run["stages"][run["stage"]] = "degraded"
@@ -273,10 +267,6 @@ def _complete(run: dict[str, Any], event: Mapping[str, Any]) -> None:
     ):
         raise LifecycleError("stage_complete requires all declared checks to pass")
     stage = run["stage"]
-    if stage == "test" and event["payload"].get("final_verdict") not in (
-        "green", "red", "incomplete"
-    ):
-        raise LifecycleError("TEST requires a terminal final verdict")
     run["open_attempt"] = None
     if stage == "deliver":
         if frozenset(attempt["check_ids"]) != REPORT_ONLY:
@@ -596,14 +586,14 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         normal_ready = (not human and run["status"] == "active" and run["stage"] == "deliver"
                         and attempt is not None and attempt["stage"] == "land"
                         and run.get("pending_landing") is None
-                        and set(attempt["results"]) == {"LG-1", "LG-2", "LG-5"}
+                        and set(attempt["results"]) == {"LG-1"}
                         and all(value is True for value in attempt["results"].values())
                         and event["payload"].get("stage_attempt_event_id") == attempt["event_id"])
         human_ready = (human and eligible and attempt is not None and attempt["stage"] == "land"
                        and (not attempt["results"] or all(
                            value is True for value in attempt["results"].values())))
         if not (normal_ready or human_ready):
-            raise LifecycleError("land_intent is not bound to current land attempt or passing LG-1/LG-2/LG-5")
+            raise LifecycleError("land_intent is not bound to current land attempt or passing LG-1")
         run["last_land_intent"] = {"event_id": event["event_id"],
                                    "stage_attempt_event_id": attempt["event_id"],
                                    "request_id": event["payload"].get("request_id")}

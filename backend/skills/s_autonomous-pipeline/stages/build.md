@@ -1,11 +1,9 @@
 # BUILD
 
-Implement DESIGN_SPEC tasks in dependency order (direct: the requirement given at create; it has no DESIGN_SPEC). Use TDD only for the files changed now:
+Implement DESIGN_SPEC tasks in dependency order (direct: the requirement given at create; it has no DESIGN_SPEC).
 
-`pipeline_test.py --project <P> --run-id <R> --mode tdd --files <up to 5 test files>`
+Test the way you would without the pipeline, in the run's worktree: write or change the test that shows the change, see it fail before the fix, run the change's tests with the repo's own commands. Fix a whole failure cluster in one pass.
 
-Probe exits run with `pipeline_test.py --project <P> --run-id <R> --mode probe` (the DESIGN_SPEC argv only, §A2.5).
+End BUILD with your validation report on stdin: `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with `{"reports": [{"repo", "commands": [{"command", "cwd", "result": "pass|fail|not_run", "reason"}], "tests_changed", "rationale"}]}`, one report per repo. `fail` and `not_run` need a reason. The pipeline does not rerun anything: review judges whether the report is enough.
 
-Required checks: DS-2b, DS-4b (bugfix), DS-9b, BX-1; direct only BX-2 (a change exists; unless it is pure-doc, every test the runner selects for it passed tdd on the current tree). Do not run full regression here. Fix a whole failure cluster in one pass, then re-run only affected tests.
-
-The stage completes by itself once a `pipeline_test.py` call's results pass its checks; otherwise its `next.blocking` names what fails. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R>` still works by hand.
+Required check: BX-3 (a change exists, and every repo has a BUILD report on its current code tree).

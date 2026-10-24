@@ -1,7 +1,8 @@
 """Direct-profile vertical test for Pipeline v1 RunEngine.
 
-Methodology: temporary repo/workspace/data roots, real linked worktree, sealed runner
-calls/final, event lifecycle, commit-tree landing, and reflection completion.
+Methodology: temporary repo/workspace/data roots, real linked worktree, the agent's
+validation reports for BUILD / TEST (S6-1), event lifecycle, commit-tree landing, and
+reflection completion.
 """
 from __future__ import annotations
 
@@ -9,9 +10,7 @@ import json
 import subprocess
 
 from core import hook_token
-from core.run_protocol import git_tree
 from core.run_protocol.engine import RunEngine
-from core.run_protocol.runner import V1Runner
 
 
 def _git(repo, *args):
@@ -31,36 +30,12 @@ def _repo(tmp_path):
     return repo
 
 
-def _runner(engine, wt):
-    return V1Runner(run_dir=engine.run_dir, repo_root=wt, repo_name="repo",
-                    run_id=engine.run_id, base=_git(wt, "rev-parse", "HEAD"),
-                    code_tree=git_tree.write_tree(str(wt),
-                        (f".aidlc/deliverables/{engine.run_id}/",), {}),
-                    contract=engine.contract, python="python3")
-
-
-def _finalize(runner, target):
-    call = runner.record_call(
-        call_type="test", argv=["python3", "-c", "pass"],
-        tool_version="python3", target="tests/test_x.py::test_value")
-    selection = {
-        "files": ["tests/test_x.py"],
-        "nodeids": ["tests/test_x.py::test_value"],
-        "summary": {"selected": 1, "mode": target},
-        "dependency_scope": {"tests/test_x.py::test_value": ["a.py"]},
-        "test_dependencies": {"tests/test_x.py::test_value": ["a.py"]},
-        "risk_rules": [], "rules_version": "1", "mode": target,
-        "risk_status": "within_cap",
-    }
-    return runner.finalize(
-        changed_paths=["a.py"], runner_code_hash="f" * 64,
-        pipeline_code_hash=runner.contract["pipeline_code_hash"],
-        runner_argv=["pipeline_test.py", "--mode", target],
-        selection=selection, cache_keys=[],
-        main_red={"sha": "e" * 64, "generated_at": "now"},
-        trace=[],     # direct has no exit criteria (execution plan v2 N1)
-        node_results={"tests/test_x.py::test_value": {"result": "pass", "seq": call["seq"]}},
-        tdd_required=["tests/test_x.py"], whole_files=["tests/test_x.py"])
+def _report(result="pass"):
+    cmd = {"command": "python3 -m pytest tests/test_x.py", "cwd": ".", "result": result}
+    if result != "pass":
+        cmd["reason"] = "assertion failed"
+    return {"reports": [{"repo": "repo", "commands": [cmd], "tests_changed": ["tests/test_x.py"],
+                         "rationale": "test_value covers the change"}]}
 
 
 def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
@@ -77,13 +52,14 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     wt = engine.ensure_stage_worktrees()["repo"]
     ( __import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
 
-    runner = _runner(engine, wt); _finalize(runner, "tdd")
-    assert engine.stage_complete()["state"]["stage"] == "review"
+    assert engine.stage_complete()["state"]["stage"] == "build"   # no report: BX-3
+    assert engine.stage_complete(_report())["state"]["stage"] == "review"
     assert engine.review_start()["reviewers"] == []
     assert engine.stage_complete()["state"]["stage"] == "test"
 
-    runner = _runner(engine, wt); _finalize(runner, "regression")
-    assert engine.stage_complete()["state"]["stage"] == "deliver"
+    failed = engine.stage_complete(_report("fail"))       # a failed command blocks TEST
+    assert failed["ok"] is False and failed["state"]["stage"] == "test"
+    assert engine.stage_complete(_report())["state"]["stage"] == "deliver"
     prepared = engine.prepare_land_request(action="land", note="approved test")
     request_id = prepared["prepared"]["request"]["request_id"]
     hook_token.stop_oracle()
@@ -159,8 +135,7 @@ def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path,
     wt = engine.ensure_stage_worktrees()["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text(
         "import subprocess\nvalue = subprocess.Popen(['true'])\n")
-    _finalize(_runner(engine, wt), "tdd")
-    assert engine.stage_complete()["state"]["stage"] == "review"
+    assert engine.stage_complete(_report())["state"]["stage"] == "review"
     started = engine.review_start()
     assert [r["id"] for r in started["reviewers"]] == ["correctness"]
     assert "RP1" in started["reviewers"][0]["reason"]
@@ -184,8 +159,7 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
                               run_id="run_rp2", risk_test_file_cap=20)
     wt = engine.ensure_stage_worktrees()["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
-    _finalize(_runner(engine, wt), "tdd")
-    engine.stage_complete()
+    engine.stage_complete(_report())
     started = engine.review_start()
     assert [r["id"] for r in started["reviewers"]] == ["correctness"]
     assert "could not select rows" in started["handouts"][0]["prompt"]

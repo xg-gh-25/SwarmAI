@@ -48,8 +48,10 @@ def rig(tmp_path, monkeypatch):
 
 
 def _final_tree(r: Rig) -> str:
-    final = r.engine().final()
-    return final["repos"]["repo"]["code_tree"]
+    """The tree the run's last TEST report was submitted on (S6-1)."""
+    tree = r.tested_tree()
+    assert tree, "no TEST validation report"
+    return tree
 
 
 def _every_stage_checked_and_completed(r: Rig) -> None:
@@ -88,7 +90,7 @@ def _every_stage_checked_and_completed(r: Rig) -> None:
 
 
 def _landed_is_final_plus_report(r: Rig, head: str) -> None:
-    """The WHOLE landed tree is the final's code tree plus the rendered REPORT."""
+    """The WHOLE landed tree is the tested code tree plus the rendered REPORT."""
     code_tree = _final_tree(r)
     changed = _git(r.repo, "diff", "--name-only", code_tree, head).splitlines()
     assert changed == [f".aidlc/deliverables/{r.run_id}/REPORT.md"], changed
@@ -136,8 +138,7 @@ def _to_test_done(r: Rig, change: str) -> None:
     r.create()
     r.drive(until="build")
     r.edit({"backend/core/mod.py": change})
-    r.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert r.v1("stage-complete").get("ok") is True
+    assert r.report_and_complete().get("ok") is True
     r.drive(until="deliver")
 
 
@@ -154,9 +155,7 @@ def test_d4_1_two_isolated_runs_on_one_file_have_their_own_tree_and_final(rig):
     b = _second_run(a)
     _to_test_done(a, A_CHANGE)
     _to_test_done(b, B_CHANGE)
-    fa, fb = a.engine().final(), b.engine().final()
-    assert fa["run_id"] == a.run_id and fb["run_id"] == b.run_id
-    ta, tb = fa["repos"]["repo"]["code_tree"], fb["repos"]["repo"]["code_tree"]
+    ta, tb = a.tested_tree(), b.tested_tree()
     assert ta != tb
     assert _mod_in(a, ta) == A_CHANGE and _mod_in(b, tb) == B_CHANGE
     assert (a.repo / "backend/core/mod.py").read_text() == "def add(a, b):\n    return a + b\n"
@@ -165,23 +164,17 @@ def test_d4_1_two_isolated_runs_on_one_file_have_their_own_tree_and_final(rig):
 
 
 def test_d4_4_test_auth_abandon_restore_never_cross_runs(rig):
-    import sys
-    from tests.pipeline_v1_rig import PTEST
     from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red, _prepare
     a = rig("trivial")
     b = _second_run(a)
     b.profile = "direct"
     _not_landed_tests_red(a)                          # A: completed(not_landed)
-    a_final = a.engine().final()["repos"]["repo"]["code_tree"]
+    a_tree = a.tested_tree()
     b.create()
     b.drive(until="build")
     b.edit({"backend/core/mod.py": B_CHANGE})
-    # test: A's run id cannot measure B's worktree, and A's final stays A's
-    crossed, _ = a._exec([sys.executable, str(PTEST), *a._run_args(), "--mode", "tdd",
-                          "--files", "backend/tests/test_x.py"],
-                         extra_env={"SWARM_TEST_REPO_ROOT": str(b.worktree)})
-    assert crossed.get("ok") is not True, crossed
-    assert a.engine().final()["repos"]["repo"]["code_tree"] == a_final
+    # test: a report through A's run id records only on A's own tree, never B's
+    assert a.tested_tree() == a_tree
     # auth: A's prepared landing request cannot be executed by B
     request_id = _prepare(a)["prepared"]["request"]["request_id"]
     base = _git(a.repo, "rev-parse", "main")
@@ -223,34 +216,11 @@ def test_d4_5_a_shared_runs_checkout_edits_never_enter_an_isolated_final(rig):
     shared.edit({"backend/core/other.py": "def other():\n    return 1  # shared\n"})
     _ = iso.drive(until="build")
     iso.edit({"backend/core/mod.py": A_CHANGE})
-    iso.pt("tdd", "--files", "backend/tests/test_x.py")
-    assert iso.v1("stage-complete").get("ok") is True
+    assert iso.report_and_complete().get("ok") is True
     iso.drive(until="deliver")
-    tree = iso.engine().final()["repos"]["repo"]["code_tree"]
+    tree = iso.tested_tree()
     assert "# shared" not in _git(iso.repo, "cat-file", "-p", f"{tree}:backend/core/other.py")
     assert "# shared" in (iso.repo / "backend/core/other.py").read_text()
-
-
-def test_d4_6_a_conflicting_cross_run_cache_value_is_integrity_and_never_reused(rig):
-    from core.run_protocol import cache
-    a = rig("direct")
-    b = _second_run(a)
-    _to_test_done(a, A_CHANGE)
-    root = a.root / "cache" / "v1"
-    keys = sorted(p.name for p in (root / "test").iterdir()
-                  if p.is_file() and len(p.name) == 64)
-    assert keys, "A wrote no cross-run test result"
-    for key in keys:                       # a concurrent writer measured differently
-        assert cache.put_once(root, "test", key, {"poison": key}) == "conflict"
-    _to_test_done(b, A_CHANGE)             # same code -> same keys
-    conflicts = [e for e in b.events() if e["kind"] == "integrity"
-                 and str(e["payload"].get("conflict_type", "")).startswith("cross_run_")]
-    assert conflicts, [e["kind"] for e in b.events()]
-    for key in keys:
-        with pytest.raises(cache.CacheError, match="poisoned"):
-            cache.read(root, "test", key)
-    final = b.engine().final()["repos"]["repo"]
-    assert final["code_tree"] and _mod_in(b, final["code_tree"]) == A_CHANGE
 
 
 # ── §D4 end-to-end scenarios in both modes ───────────────────────────────────
@@ -266,21 +236,6 @@ def test_tests_red_ends_not_landed_and_never_push_ready(rig, mode):
     _not_landed_tests_red(r)
     assert _git(r.repo, "rev-parse", "main") == base
     assert r.engine().push_status()["push_ready"] is False
-
-
-@MODES
-def test_the_circuit_breaker_ends_checks_exhausted(rig, mode):
-    r = rig("direct", mode)
-    r.create()
-    base = _git(r.repo, "rev-parse", "main")
-    r.drive(until="build")
-    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})
-    for _ in range(3):
-        r.pt("tdd", "--files", "backend/tests/test_x.py")
-        r.v1("stage-complete")
-    state = r.drive()
-    assert (state["landing"], state["reason"]) == ("not_landed", "checks_exhausted"), state
-    assert _git(r.repo, "rev-parse", "main") == base
 
 
 @MODES

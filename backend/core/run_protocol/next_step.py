@@ -48,25 +48,13 @@ def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:
         passed, detail = checks.evaluate(spec.check_id, context)
         if not passed:
             out.append({"check": spec.check_id, "detail": str(detail)[:300]})
-    if stage == "test":
-        # TEST's own check (TS-1) passes on any terminal final, so a TEST is finished
-        # only when the final is green AND every required base validation has run
-        # (LG-5, the check landing applies): otherwise the agent still has work here
-        verdicts = [row["tests"]["verdict"] for row in (context.final or {})
-                    .get("repos", {}).values()] if isinstance(context.final, Mapping) else []
-        if not verdicts or any(v != "green" for v in verdicts):
-            out.append({"check": "final", "detail": f"final verdicts {verdicts or 'none'}: "
-                        "fix and re-run the regression, or complete TEST by hand"})
-        passed, detail = checks.evaluate("LG-5", context)
-        if not passed:
-            out.append({"check": "LG-5", "detail": str(detail)[:300]})
     return out
 
 
 def auto_completable(engine, state: dict[str, Any]) -> bool:
-    """BUILD / TEST is finished: the runner may complete it (r6 §2.3)."""
-    return (state["status"] == "active" and state["stage"] in ("build", "test")
-            and not blocking_checks(engine, state))
+    """Nothing completes BUILD / TEST by itself any more (S6-1): the agent ends them
+    with its validation report. Kept until the runner is deleted (S6-1b-ii)."""
+    return False
 
 
 def _reflect_prepared(events: list[dict[str, Any]], state: dict[str, Any]) -> bool:
@@ -173,9 +161,19 @@ def next_step(engine, *, previous_stage: str | None = None,
                        command=_cmd(engine, "pipeline_v1.py", "reflect-prepare --artifact -"),
                        why="record the run's lessons (zero is allowed) before landing")
         else:
-            out.update(action="run", command=_cmd(engine, "pipeline_v1.py",
-                                                  'land --message "<commit message>"'),
-                       why="land the run")
+            # LG-1 (S6-1): after main moved and the worktree was synced, the TEST report
+            # is for the old tree; test the new one before landing again
+            passed, detail = checks.evaluate("LG-1", engine.check_context())
+            if not passed:
+                out.update(action="write_artifact",
+                           command=_cmd(engine, "pipeline_v1.py", "report-tests --artifact -"),
+                           why="the code changed since the TEST report (" + str(detail)[:200]
+                           + "): run the tests on the current tree and send the report, "
+                           "then land")
+            else:
+                out.update(action="run", command=_cmd(engine, "pipeline_v1.py",
+                                                      'land --message "<commit message>"'),
+                           why="land the run")
         return out
     blocking = blocking_checks(engine, state)
     out["blocking"] = blocking
@@ -184,16 +182,21 @@ def next_step(engine, *, previous_stage: str | None = None,
                                               blocking, dispatched)
         out.update(action=action, command=command, why=why)
         return out
+    if stage in _TDD_STAGES or stage == "test":
+        # S6-1: the agent tests natively and ends the stage with its validation report
+        out.update(action="write_artifact",
+                   command=_cmd(engine, "pipeline_v1.py", "stage-complete --artifact -"),
+                   why=("run the change's tests yourself (write the failing test first), "
+                        "then pass your report on stdin: "
+                        '{"reports": [{"repo", "commands": [{"command", "cwd", "result": '
+                        '"pass|fail|not_run", "reason"}], "tests_changed", "rationale"}]}'
+                        if stage in _TDD_STAGES else
+                        "run the final verification on this tree yourself (do not change "
+                        "code in TEST), then pass the report on stdin in the same shape"))
+        return out
     if not blocking:
         out.update(action="run", command=_cmd(engine, "pipeline_v1.py", "stage-complete"),
                    why=f"every {stage} check passes")
-        return out
-    if stage in _TDD_STAGES or stage == "test":
-        mode = "tdd --files <test files>" if stage in _TDD_STAGES else "regression"
-        tail = ("; the stage completes by itself once the runner's results pass them"
-                if stage in ("build", "test") else "; then complete it")
-        out.update(action="fix", command=_cmd(engine, "pipeline_test.py", f"--mode {mode}"),
-                   why=f"{len(blocking)} {stage} check(s) do not pass yet{tail}")
         return out
     out.update(action="fix", command=_cmd(engine, "pipeline_v1.py", "stage-complete"),
                why=f"{len(blocking)} {stage} check(s) do not pass yet")

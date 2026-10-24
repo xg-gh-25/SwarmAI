@@ -219,9 +219,8 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   there, then `land` and `remove` it. Otherwise, or when the user says to stay, edit in place.
 - **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;
   exec @ARGV' … --timeout=60`, or `gtimeout` if present): a run still going at the timeout is
-  moved to the background and returns nothing. A per-test `--timeout` doesn't count. Run
-  serial: `-n N` is opt-in, and its workers outlive the alarm and keep the command running.
-  Never background, smallest scope (a few files per run), max 2 runs/task; full suite needs user approval. (A habit, not
+  moved to the background and returns nothing. A per-test `--timeout` doesn't count. Never
+  background, smallest scope, max 2 runs/task; full suite needs user approval. (A habit, not
   a gate: nothing denies an uncapped run, so keep it.)
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
   system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
@@ -442,7 +441,7 @@ failing 3+×, a rule contradicting observed behavior/a directive, or stale conte
 - Backend health `GET /health` :18321 (daemon) / :8000 (dev). `nc -z` for ports.
 - pyproject.toml = dep SSOT; `uv lock` after changes. PyInstaller: `sys.executable` ≠ Python,
   use direct imports. macOS GUI PATH → `zsh -lic`. Sandbox: `pgrep`/`ps`/`top` blocked.
-- Time: user local (ICT/UTC+8), never UTC. pytest: serial by default (`-n 0` in pyproject), `--timeout=60`, wall-clock wrap.
+- Time: user local (ICT/UTC+8), never UTC. pytest: xdist `-n 4`, `--timeout=60`, wall-clock wrap.
 
 ## Safety (behavioral invariant)
 - Never exfiltrate private data; never destructive commands (`rm -rf`, drop table) without

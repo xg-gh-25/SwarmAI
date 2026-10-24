@@ -110,7 +110,7 @@ cache_dir = ".pytest_cache"
 # same ITIMER_REAL slot overwrites the `perl -e 'alarm N; exec @ARGV'` wall-clock
 # cap (2026-10-17: two pytest processes ran 21h at 40% CPU). The thread method
 # dumps all stacks and os._exit()s the process, which nothing can swallow.
-# For coding loops: `make test-file F=tests/test_x.py` (serial, one file).
+# For coding loops: `make test-changed` (serial, only changed files).
 timeout = 600
 timeout_method = "thread"
 addopts = "-n 0 --maxfail=3 --tb=short -q"

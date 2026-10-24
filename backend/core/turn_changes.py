@@ -43,7 +43,7 @@ turn — ``finish`` is bounded by ``FINISH_BUDGET_S`` (a hang guard for a git ca
 stuck on a dead network mount; on expiry the result goes out with the trees diffed
 so far).
 
-Key public symbols: ``TurnChanges``, ``diff_text``, ``diff_trees``, ``allowed_repo``, ``code_roots``,
+Key public symbols: ``TurnChanges``, ``diff_text``, ``allowed_repo``, ``code_roots``,
 ``MAX_FILES``, ``MAX_DIFF_LINES``.
 """
 from __future__ import annotations
@@ -450,23 +450,20 @@ def _is_file_in(root: str, tree: str, path: str) -> bool:
                for e in out.split("\0") if "\t" in e)
 
 
-def _valid_diff_args(start: str, end: str, path: str) -> bool:
-    """Two full tree ids and a safe repo-relative file path."""
-    if not (_SHA_RE.fullmatch(start or "") and _SHA_RE.fullmatch(end or "")):
-        return False
-    parts = Path(path or "").parts
-    return not (not path or os.path.isabs(path) or "\0" in path or path.endswith(("/", "\\"))
-                or not parts or any(p in (".", "..") for p in parts))
-
-
-def diff_trees(root: str, start: str, end: str, path: str) -> Optional[str]:
-    """One file's unified diff between two trees of *root*, a repo the CALLER has
-    authorized (``diff_text`` for the chat card, core/session_changes for the Canvas);
-    None if not available (a malformed id, an unsafe path, a path that is not a file
-    in either tree, a pruned tree, a diff larger than MAX_DIFF_CHARS). Raises
+def diff_text(git_root: str, start: str, end: str, path: str) -> Optional[str]:
+    """One file's unified diff between two change trees; None if not available
+    (an unknown repo, a malformed id, an unsafe path, a path that is not a file in
+    either tree, a pruned tree, or a diff larger than MAX_DIFF_CHARS). Raises
     DiffUnavailable on a transient failure."""
-    if not _valid_diff_args(start, end, path):
+    if not (_SHA_RE.fullmatch(start or "") and _SHA_RE.fullmatch(end or "")):
         return None
+    parts = Path(path or "").parts
+    if (not path or os.path.isabs(path) or "\0" in path or path.endswith(("/", "\\"))
+            or not parts or any(p in (".", "..") for p in parts)):
+        return None
+    if not allowed_repo(git_root):
+        return None
+    root = os.path.realpath(git_root)
     try:
         # A file in one of the trees only — a directory path would diff a whole
         # subtree, other sessions' edits included.
@@ -479,15 +476,3 @@ def diff_trees(root: str, start: str, end: str, path: str) -> Optional[str]:
     except (OSError, subprocess.SubprocessError) as exc:
         raise DiffUnavailable(str(exc)) from exc
     return text if len(text) <= MAX_DIFF_CHARS else None
-
-
-def diff_text(git_root: str, start: str, end: str, path: str) -> Optional[str]:
-    """One file's unified diff between two change trees for the chat card; None if
-    not available (an unknown repo — only a known code tree's object store is read —
-    or any case ``diff_trees`` refuses). Raises DiffUnavailable on a transient
-    failure."""
-    if not _valid_diff_args(start, end, path):
-        return None
-    if not allowed_repo(git_root):
-        return None
-    return diff_trees(os.path.realpath(git_root), start, end, path)

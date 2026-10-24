@@ -1,12 +1,11 @@
 """Canvas tabs of one chat session: GET /session/{id} = its Artifacts and Changes
-(core/canvas_session → core/session_changes); /changes/tree-diff is one file of a
-turn card, /changes/diff one file's patch in a commit (core/repo_changes).
+(core/canvas_session); /changes/diff is one file's patch in a commit
+(core/repo_changes). A live run worktree's file diff is GET /api/chat/turn-diff
+(its rows carry the two trees).
 
-Read-only. Everything runs on the "canvas_changes" pool (core/executors): never on
-'subprocess', whose fail-open safety gates must not wait on it, and never on
-"turn_changes", which a streaming turn's finish waits on. Roots are bound repos only
-(repo_changes.authorized_root). 400 for bad input (unknown repo, malformed sha or
-path), 503 when git itself fails.
+Read-only. Every git call runs on the "turn_changes" pool (core/executors), never on
+'subprocess', whose fail-open safety gates must not wait on it. 400 for bad input
+(unknown repo, malformed sha or path), 503 when git itself fails.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ async def _run(fn, *args):
     from core import executors
     from core.repo_changes import RepoChangesError
     try:
-        return await executors.run_in("canvas_changes", fn, *args)
+        return await executors.run_in("turn_changes", fn, *args)
     except RepoChangesError as exc:
         msg = str(exc)
         bad_input = msg in ("unknown repo", "bad sha", "bad path")
@@ -65,21 +64,3 @@ async def get_diff(root: str = Query(..., max_length=4096), sha: str = Query(...
                    path: str = Query(..., max_length=4096)):
     from core.repo_changes import commit_diff
     return await _run(commit_diff, root, sha, path)
-
-
-@router.get("/changes/tree-diff")
-async def get_tree_diff(root: str = Query(..., max_length=4096), start: str = Query(..., max_length=64),
-                        end: str = Query(..., max_length=64), path: str = Query(..., max_length=4096)):
-    """One file of a turn card in the Changes tab (core/session_changes.tree_diff).
-    404 when it is not available (an unbound repo, bad input, a pruned tree), 503 on a
-    transient failure."""
-    from core import executors
-    from core.session_changes import tree_diff
-    from core.turn_changes import DiffUnavailable
-    try:
-        text = await executors.run_in("canvas_changes", tree_diff, root, start, end, path)
-    except DiffUnavailable:
-        raise HTTPException(status_code=503, detail="Diff temporarily unavailable")
-    if text is None:
-        raise HTTPException(status_code=404, detail="Diff not available")
-    return {"diff": text}

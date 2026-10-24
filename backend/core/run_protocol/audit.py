@@ -267,16 +267,14 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                  "mode": contract.get("mode"), "repos_isolated": isolated_count,
                  "repos_total": len(expected), "contamination_count": contamination}
 
-    required, passed = 0, 0
-    if isinstance(repos, Mapping):
-        for row in repos.values():
-            required += 1
-            if (row.get("tests") or {}).get("verdict") == "green":
-                passed += 1
-            for validation in row.get("validations", []):
-                required += 1
-                if validation.get("verdict") == "pass":
-                    passed += 1
+    # S6-1: one TEST report per repo, counted as verified when it reports passing
+    # commands and no failed one (the agent's own report; review judges its content)
+    from core.run_protocol.validation_report import latest as _latest_reports
+    test_reports = _latest_reports(event_rows, "test")
+    required = len(expected)
+    passed = sum(1 for name in expected
+                 if (test_reports.get(name) or {}).get("payload", {}).get("n_pass", 0) > 0
+                 and not test_reports[name]["payload"].get("n_fail"))
     closed_states = {"closed_proven", "closed_asserted", "refuted", "accepted"}
     closed = sum(row.get("status") in closed_states for row in findings)
     landing = projection.get("landing")

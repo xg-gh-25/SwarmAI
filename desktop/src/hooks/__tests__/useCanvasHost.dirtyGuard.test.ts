@@ -21,8 +21,6 @@ vi.mock('../../services/api', () => ({
 }));
 vi.mock('../../services/canvasSession', () => ({
   refreshCanvasSession: async () => {},
-  refreshCanvasArtifacts: async () => {},
-  setCanvasStreaming: async () => {},
   setActiveCanvasSession: () => {},
   useCanvasSessionArtifacts: () => undefined,
   cachedArtifacts: () => undefined,
