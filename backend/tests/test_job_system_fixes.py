@@ -531,7 +531,8 @@ class TestLastErrorPersistence:
         auth_items = [i for i in items if i.id == "job_auth:stuck"]
         assert len(auth_items) == 1
         assert auth_items[0].tier == TIER_BLOCKING
-        assert "Auth broken" in auth_items[0].title
+        assert auth_items[0].title == "A scheduled job can't sign in"
+        assert "sign-in failed 3 times in a row" in auth_items[0].summary
 
     def test_recovery_clears_auth_streak(self):
         """A real success wipes the auth streak (so a recovered job stops nagging)."""

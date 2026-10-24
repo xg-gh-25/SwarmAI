@@ -198,6 +198,7 @@ def test_a_run_the_user_cancelled_does_not_need_them(tmp_path, monkeypatch):
     ])
     by_id = {i.id: i for i in items}
     assert set(by_id) == {"paused_run:run_c2", "paused_run:run_c3"}
-    assert by_id["paused_run:run_c3"].title.startswith("Decision needed")
+    assert by_id["paused_run:run_c3"].title == "Answer a question a pipeline run is waiting on"
+    assert by_id["paused_run:run_c3"].summary == "c"
     assert by_id["paused_run:run_c3"].dispatch["context"]["owner_session_id"] == "s-own"
     assert "checks_exhausted" in by_id["paused_run:run_c2"].dispatch["message"]

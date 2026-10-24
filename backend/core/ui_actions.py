@@ -322,6 +322,8 @@ def format_attention_for_agent(brain: Optional[str] = None) -> str:
             lines.append(f"  [{b or 'OS-level'}]")
             for it in (x for x in tier_items if x.brain == b):
                 lines.append(f"    • ({it.source}) {it.title}")
+                if it.summary:
+                    lines.append(f"        {it.summary}")
                 msg = (it.dispatch or {}).get("message")
                 if msg:
                     lines.append(f"        → to handle: {msg}")

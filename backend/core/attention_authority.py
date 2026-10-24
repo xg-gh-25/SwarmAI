@@ -80,6 +80,61 @@ def _class_phrase(source_class: str) -> str:
     return _CLASS_PHRASE.get(source_class, f"recurring pattern ({source_class})")
 
 
+# ── Plain-language writing (design welcome-screen-v2.md "Needs you rows") ──────
+# Everything an item carries is read by the USER first: `title` says what is
+# needed of them, `summary` says which thing it is, `dispatch.message` is written
+# in the user's voice (they may send it as-is) with the facts a person can read,
+# and the ids an agent needs go on one closing "References" line.
+
+#: A governance class as a person would name the mistake (title wording).
+_CLASS_HUMAN = {
+    "CLASS_A": ("steps skipped out of over-confidence",
+                "skipping a step out of over-confidence"),
+    "CLASS_B": ("claims made without checking",
+                "making a claim or a change without checking it first"),
+    "CLASS_C": ("fixes made in the wrong place",
+                "fixing a problem in the wrong place"),
+    "SESSION_LOW_QUALITY": ("sessions missing what was asked",
+                            "a session working on something other than what was asked"),
+}
+
+#: The `[tag]` a cultivation proposal starts with → the section it would join.
+_NOTE_KIND = {"decision": "decisions", "pitfall": "pitfalls",
+              "guideline": "guidelines", "risk": "risks"}
+
+_SUMMARY_MAX = 160
+_FACT_MAX = 2000
+
+
+def _one_line(text: str, limit: int = _SUMMARY_MAX) -> str:
+    """Collapse whitespace; cut at `limit` with an ellipsis."""
+    s = " ".join(str(text or "").split())
+    return s if len(s) <= limit else s[: limit - 1].rstrip() + "…"
+
+
+def _prompt(ask: str, facts: list[tuple[str, str]] = (), refs: list[str] = ()) -> str:
+    """The user-voice dispatch message: the ask, the readable facts, then one
+    References line for the ids. Empty facts are dropped, never shown blank."""
+    parts = [ask.strip()]
+    lines = [f"{label}:{value}" if value.startswith("\n") else f"{label}: {value}"
+             for label, value in facts if value]
+    if lines:
+        parts.append("\n".join(lines))
+    refs = [r for r in refs if r]
+    if refs:
+        parts.append("References: " + " · ".join(refs))
+    return "\n\n".join(parts)
+
+
+def _split_note(content: str) -> tuple[str, str]:
+    """`[decision] text` → ("decisions", "text"); no tag → ("", text)."""
+    s = (content or "").strip()
+    if s.startswith("[") and "]" in s[:20]:
+        tag, rest = s[1:].split("]", 1)
+        return _NOTE_KIND.get(tag.strip().lower(), tag.strip().lower()), rest.strip()
+    return "", s
+
+
 @dataclass
 class AttentionItem:
     """One normalized "needs you" item, source-agnostic.
@@ -94,9 +149,10 @@ class AttentionItem:
     source: str          # escalation | paused_run | cultivation | governance | job
     tier: str            # blocking | review
     brain: Optional[str]  # project name, or None for OS-level (governance)
-    title: str
+    title: str           # plain: what is needed of the user
     detail: str = ""
     dispatch: dict[str, Any] = field(default_factory=dict)
+    summary: str = ""    # plain, one line: which thing this is
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -139,15 +195,31 @@ def _collect_escalations(workspace_root: Path) -> list[AttentionItem]:
                         tier = TIER_REVIEW
                     else:
                         continue  # INFORM (0) — not actionable, skip
+                    options = "; ".join(
+                        o.label + (" (recommended)" if getattr(o, "is_recommendation", False) else "")
+                        for o in (getattr(esc, "options", None) or []) if getattr(o, "label", "")
+                    )
+                    blocked = tier == TIER_BLOCKING
                     items.append(AttentionItem(
                         id=f"escalation:{esc.id}",
                         source="escalation",
                         tier=tier,
                         brain=project,
-                        title=esc.title,
+                        title=("Answer a question SwarmAI is stuck on" if blocked
+                               else "SwarmAI would like your opinion"),
+                        summary=_one_line(esc.title),
                         detail=esc.situation or "",
                         dispatch={
-                            "message": f"Resolve escalation {esc.id} for {project}: {esc.title}",
+                            "message": _prompt(
+                                (f"SwarmAI {'is stuck and needs my answer' if blocked else 'asks for my opinion'} "
+                                 f"on a question in the {project} brain. Explain in plain words what it is "
+                                 "asking, what the options mean and what you recommend, then wait for my decision."),
+                                [("Question", esc.title),
+                                 ("What happened", _one_line(esc.situation or "", _FACT_MAX)),
+                                 ("Options", options),
+                                 ("SwarmAI's pick", getattr(esc, "recommendation", None) or "")],
+                                [f"escalation {esc.id}"],
+                            ),
                             "context": {"kind": "escalation", "project": project,
                                         "escalation_id": esc.id, "level": lvl},
                         },
@@ -171,16 +243,24 @@ def _collect_cultivation(workspace_root: Path) -> list[AttentionItem]:
             try:
                 for p in read_pending_proposals(workspace_root, project):
                     pid = getattr(p, "proposal_id", None) or getattr(p, "id", "")
-                    title = f"{p.target_doc}: {(p.content or '')[:80]}"
+                    section, note = _split_note(p.content or "")
+                    where = f"{p.target_doc}, {section}" if section else p.target_doc
                     items.append(AttentionItem(
                         id=f"cultivation:{project}:{pid}",
                         source="cultivation",
                         tier=TIER_REVIEW,
                         brain=project,
-                        title=title,
+                        title="Approve a note SwarmAI wants to add to its memory",
+                        summary=_one_line(note),
                         detail=(p.content or "")[:400],
                         dispatch={
-                            "message": f"Review cultivation proposal for {project}: {title}",
+                            "message": _prompt(
+                                (f"SwarmAI wants to add this note to the {project} brain ({where}). "
+                                 "First explain in plain words what it means and whether it is right, "
+                                 "then let me approve, edit, or reject it."),
+                                [("Proposed note", _one_line(note, _FACT_MAX))],
+                                [f"proposal {pid}"],
+                            ),
                             "context": {"kind": "cultivation", "project": project,
                                         "proposal_id": pid, "target_doc": p.target_doc},
                         },
@@ -208,27 +288,36 @@ def _collect_governance() -> list[AttentionItem]:
             gid = gp.get("id") or gp.get("proposal_id") or ""
             kind = gp.get("proposal_kind") or gp.get("kind") or "rule"
 
-            # Title: prefer an explicit title/summary, else BUILD one from the actual
-            # proposed rule text — never fall back to the bare "governance rule" type,
-            # which tells the user nothing (the card looked empty before this).
-            # Only STRING proposed_rule is usable — a list/dict would str() to a
-            # Python repr ("['a', 'b']") and leak brackets into user-facing text.
+            # Title: an explicit title/summary wins; otherwise name the MISTAKE in
+            # plain words from the class (the producers' proposed_rule is often a
+            # template such as "Recurring CLASS_B pattern (112x) … propose an L1
+            # rule", which tells a person nothing). proposed_rule still goes into
+            # the prompt as the proposal's own text. Only a STRING proposed_rule is
+            # usable — a list/dict would str() to a Python repr.
             raw_rule = gp.get("proposed_rule")
             rule_text = raw_rule.strip() if isinstance(raw_rule, str) else ""
             explicit = gp.get("title") or gp.get("summary")
+            cls = str(gp.get("source_class") or "")
+            short, long_ = _CLASS_HUMAN.get(cls, (
+                f"a recurring mistake ({cls})" if cls else "a recurring mistake",
+                f"a recurring mistake ({cls})" if cls else "a recurring mistake"))
             if explicit:
                 title = str(explicit)
-            elif rule_text:
-                title = f"New {kind}: {rule_text}"
+            elif kind == "gate":
+                title = f"A rule isn't working: {short} still happen"
+            elif cls in _CLASS_HUMAN:
+                title = f"The same mistake keeps happening: {short}"
             else:
-                title = f"New governance {kind} (no rule text)"
+                title = f"SwarmAI suggests a new {kind} for {short}"
 
             # Detail: the human failure-pattern this rule prevents + how often it
             # recurred + confidence — the "why you're seeing this" the card lacked.
             occ = gp.get("occurrence_count")
             conf = gp.get("confidence")
-            phrase = _class_phrase(str(gp.get("source_class") or ""))
+            phrase = _class_phrase(cls)
             bits = [phrase]
+            occ_n: Optional[int] = None
+            conf_pct: Optional[int] = None
             # `not isinstance(bool)`: bool is an int subclass — `True` would render
             # "recurred True×". Accept int OR float (a producer may write 3.0); the
             # confidence field below already accepts float, so keep them symmetric.
@@ -236,26 +325,48 @@ def _collect_governance() -> list[AttentionItem]:
             # abort the whole proposals loop (one try/except) and silently drop
             # every remaining governance card.
             if isinstance(occ, (int, float)) and not isinstance(occ, bool) and math.isfinite(occ):
-                bits.append(f"recurred {int(occ)}×")
+                occ_n = int(occ)
+                bits.append(f"recurred {occ_n}×")
             if isinstance(conf, (int, float)) and not isinstance(conf, bool):
                 # Clamp to [0,1] — an unvalidated producer field of 1.5 or -0.2
                 # would otherwise print "150% confidence" / "-20% confidence".
                 # (max/min also collapses nan→1.0 safely; no int() on conf.)
                 conf = max(0.0, min(1.0, float(conf)))
-                bits.append(f"{round(conf * 100)}% confidence")
+                conf_pct = round(conf * 100)
+                bits.append(f"{conf_pct}% confidence")
             why = " · ".join(bits)
             rationale = str(gp.get("rationale") or gp.get("description") or "").strip()
             detail = f"{why} — {rationale}" if rationale else why
 
+            fix = "an automatic check" if kind == "gate" else "a new rule"
+            seen = (f"Still seen {occ_n} times after its rule" if kind == "gate" and occ_n is not None
+                    else f"Seen {occ_n} times" if occ_n is not None else "Seen repeatedly")
+            examples = [_one_line(e) for e in (gp.get("evidence") or [])
+                        if isinstance(e, str) and e.strip()][:3]
+            if kind == "gate":
+                ask = (f"A rule against {long_} is already in place, but it keeps happening"
+                       f"{f' ({occ_n} times since)' if occ_n is not None else ''}. SwarmAI suggests "
+                       "turning it into an automatic check. Explain the problem simply, say what the "
+                       "check would block, and let me decide.")
+            else:
+                ask = (f"SwarmAI noticed the same mistake {f'{occ_n} times' if occ_n is not None else 'again and again'}: "
+                       f"{long_}. It suggests adding a rule against it. Explain the problem simply, "
+                       "draft the rule in one or two sentences, and let me decide.")
             items.append(AttentionItem(
                 id=f"governance:{gid}",
                 source="governance",
                 tier=TIER_REVIEW,
                 brain=None,  # OS-level — no owning brain
                 title=title[:120],
+                summary=f"{seen} · SwarmAI suggests {fix}",
                 detail=detail[:400],
                 dispatch={
-                    "message": f"Review governance {kind} proposal {gid}: {title}",
+                    "message": _prompt(
+                        ask,
+                        [("Proposal text", rule_text),
+                         ("Examples", "".join(f"\n- {e}" for e in examples))],
+                        [f"proposal {gid}" + (f" ({conf_pct}% confidence)" if conf_pct is not None else "")],
+                    ),
                     "context": {"kind": "governance", "proposal_id": gid, "proposal_kind": kind},
                 },
             ))
@@ -264,23 +375,25 @@ def _collect_governance() -> list[AttentionItem]:
     return items
 
 
-#: what each v1 state needs, as the Need You item's title and the agent's instruction
+#: what each v1 state needs: (title, the ask in the user's voice). The run's own
+#: requirement, reason and ids are added as facts / references by _prompt.
 _NEEDS_YOU_TEXT = {
-    "decision": ("Decision needed",
-                 "Pipeline {run} ({project}) waits for a person's decision: show its question "
-                 "card in the run's own chat (owner_session_id) and wait for the answer."),
-    "stopped": ("Stopped",
-                "Pipeline {run} ({project}) was stopped ({reason}). If the user wants it to "
-                "go on, resume it from the Pipeline overlay and continue in its own chat."),
-    "worktree": ("Worktree unavailable",
-                 "Pipeline {run} ({project}) could not create its worktree ({reason}). Fix "
-                 "the cause, then resume it from the Pipeline overlay."),
-    "idle": ("Not driven",
-             "Pipeline {run} ({project}) is active but no session drives it: open its own "
-             "chat (owner_session_id) and continue it, or cancel it."),
-    "abandoned": ("Abandoned",
-                  "Pipeline {run} ({project}) was abandoned ({reason}) without landing. "
-                  "Tell the user; a new run is the way to redo the change."),
+    "decision": ("Answer a question a pipeline run is waiting on",
+                 "A pipeline run is waiting for my decision. Find the question it is waiting on, "
+                 "explain it and the options in plain words, and wait for my answer. The question "
+                 "card belongs to the run's own chat session."),
+    "stopped": ("Resume or drop a stopped pipeline run",
+                "This pipeline run was stopped before it finished. In plain words, tell me what it "
+                "already did, what is left, and whether I should resume it or drop it."),
+    "worktree": ("A pipeline run could not start its working copy",
+                 "This pipeline run could not create its working copy, so it cannot go on. Explain "
+                 "simply why, what I need to fix, and how to resume it after."),
+    "idle": ("A pipeline run is active but nobody is driving it",
+             "This pipeline run is still open but no chat session is driving it. Tell me where "
+             "it is, and whether I should continue it in its own chat or cancel it."),
+    "abandoned": ("A pipeline run was dropped before it landed",
+                  "This pipeline run was dropped without landing its change. Tell me in plain words "
+                  "what it was doing and why it stopped; a new run is the way to redo it."),
 }
 
 
@@ -304,18 +417,26 @@ def _collect_paused_runs(pipeline_runs: Optional[list[dict]] = None) -> list[Att
                 run_id = resp.id
                 requirement = resp.requirement or ""
                 owner = raw.get("session_id") if isinstance(raw.get("session_id"), str) else None
-                title, message = _NEEDS_YOU_TEXT.get(
-                    resp.pause_kind or resp.status.value, _NEEDS_YOU_TEXT["abandoned"])
+                state = resp.pause_kind or resp.status.value
+                title, ask = _NEEDS_YOU_TEXT.get(state, _NEEDS_YOU_TEXT["abandoned"])
+                if state == "stopped" and reason == "user_stop":
+                    title = "Resume or drop a pipeline run you stopped"
                 items.append(AttentionItem(
                     id=f"paused_run:{run_id}",
                     source="paused_run",
                     tier=TIER_BLOCKING,
                     brain=project,
-                    title=f"{title}: {requirement[:80]}",
+                    title=title,
+                    summary=_one_line(requirement) or run_id,
                     detail=reason or "",
                     dispatch={
-                        "message": message.format(run=run_id, project=project,
-                                                  reason=reason or "no reason recorded"),
+                        "message": _prompt(
+                            ask,
+                            [("What it was for", _one_line(requirement, _FACT_MAX)),
+                             ("Brain", project),
+                             ("Reason recorded", reason or "")],
+                            [f"run {run_id}", f"its chat session {owner}" if owner else ""],
+                        ),
                         "context": {"kind": "paused_run", "project": project, "run_id": run_id,
                                     "owner_session_id": owner},
                     },
@@ -358,10 +479,17 @@ def _collect_jobs() -> list[AttentionItem]:
                     source="job",
                     tier=TIER_BLOCKING,
                     brain=None,  # OS-level infra
-                    title=f"Circuit-broken job: {name} (×{fails})",
+                    title="A scheduled job keeps failing and was paused",
+                    summary=f"{name} · failed {fails} runs in a row",
                     detail=(js.last_error or "")[:400],
                     dispatch={
-                        "message": f"Triage circuit-broken job {job_id} ({fails} consecutive failures): {js.last_error or ''}",
+                        "message": _prompt(
+                            (f"The scheduled job \u201c{name}\u201d failed {fails} runs in a row, so "
+                             "SwarmAI stopped running it. Find out why, explain it to me simply, and "
+                             "suggest a fix. Don't restart it until I agree."),
+                            [("Last recorded error (raw)", _one_line(js.last_error or "", 400))],
+                            [f"job {job_id}"],
+                        ),
                         "context": {"kind": "job", "job_id": job_id,
                                     "consecutive_failures": fails},
                     },
@@ -375,10 +503,18 @@ def _collect_jobs() -> list[AttentionItem]:
                     source="job",
                     tier=TIER_BLOCKING,
                     brain=None,  # OS-level infra
-                    title=f"Auth broken for job: {name} (×{auth_fails} — not self-healing)",
+                    title="A scheduled job can't sign in",
+                    summary=f"{name} · sign-in failed {auth_fails} times in a row",
                     detail=(js.last_error or "")[:400],
                     dispatch={
-                        "message": f"Job {job_id} has failed auth pre-check {auth_fails} times in a row — auth is not self-healing. Restore CLI auth (claude auth login / refresh SSO IdC), then it retries automatically. Last: {js.last_error or ''}",
+                        "message": _prompt(
+                            (f"The scheduled job \u201c{name}\u201d failed to sign in {auth_fails} "
+                             "times in a row, so it can't run. Tell me simply what I need to do to fix "
+                             "the sign-in (for example log in again or refresh SSO). It retries by "
+                             "itself once sign-in works."),
+                            [("Last recorded error (raw)", _one_line(js.last_error or "", 400))],
+                            [f"job {job_id}"],
+                        ),
                         "context": {"kind": "job_auth", "job_id": job_id,
                                     "consecutive_auth_failures": auth_fails},
                     },
@@ -459,6 +595,7 @@ def _collect_db_recovery() -> list[AttentionItem]:
                     tier=TIER_BLOCKING,
                     brain=None,
                     title=f"{store_name} is unreadable and could not be preserved — fix or move it",
+                    summary=f"The file is still at {isolated}",
                     detail=reason,
                     dispatch={
                         "message": (
@@ -484,6 +621,7 @@ def _collect_db_recovery() -> list[AttentionItem]:
                     tier=TIER_BLOCKING,
                     brain=None,
                     title=f"{store_name} was unreadable and has been preserved — recover or discard?",
+                    summary=f"Your previous file is kept at {isolated}",
                     detail=reason,
                     dispatch={
                         "message": (
@@ -509,6 +647,7 @@ def _collect_db_recovery() -> list[AttentionItem]:
                 tier=TIER_BLOCKING,
                 brain=None,
                 title="Database recovery pending — recover or discard your prior data?",
+                summary=f"Your previous data is kept at {isolated}",
                 detail=reason,
                 dispatch={
                     "message": (
@@ -601,15 +740,17 @@ def _collect_community_digests(workspace_root: Path) -> list[AttentionItem]:
                 source="community_digest",
                 tier=TIER_REVIEW,  # a fresh digest is review-worthy, never blocking
                 brain="GitHub_Community",
-                title=f"Community digest ready: {job_name}",
-                detail=f"A fresh community digest from {job_name} — dispatch to chat to learn + sediment.",
+                title="A new community digest is ready to learn from",
+                summary=job_name,
+                detail=f"A fresh community digest from {job_name}.",
                 dispatch={
-                    "message": (
-                        f"Read the community digest at {path} — then LEARN from it: "
-                        f"for each engagement/reply/topic worth keeping, run s_persist to "
-                        f"sediment it into the GitHub_Community DDD / Knowledge Library "
-                        f"(what worked, new topic signal, a maintainer relationship). "
-                        f"Skip the routine; sediment only what changes future judgment."
+                    "message": _prompt(
+                        (f"A new community digest from \u201c{job_name}\u201d is ready. Read it, tell me "
+                         "in a few plain bullets what is worth keeping (what worked, a new topic, a "
+                         "maintainer relationship), and save those to the GitHub_Community brain with "
+                         "s_persist. Skip the routine items."),
+                        [],
+                        [f"digest file {path}"],
                     ),
                     "context": {"kind": "community_digest", "job_id": job_id,
                                 "path": str(path)},

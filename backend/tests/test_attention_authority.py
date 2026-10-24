@@ -209,7 +209,7 @@ def test_item_to_dict_shape(patched_sources):
     d = res.to_dict()
     assert "items" in d and "counts" in d
     it = d["items"][0]
-    assert set(it.keys()) == {"id", "source", "tier", "brain", "title", "detail", "dispatch"}
+    assert set(it.keys()) == {"id", "source", "tier", "brain", "title", "summary", "detail", "dispatch"}
 
 
 def test_circuit_breaker_threshold_is_three():
@@ -407,23 +407,40 @@ def _patch_governance(monkeypatch, proposals):
     monkeypatch.setattr(es, "get_eval_service", lambda: _FakeEval())
 
 
-def test_governance_title_built_from_proposed_rule(monkeypatch):
-    """No explicit title → the card title is built from the actual rule text,
-    NOT the useless bare type 'governance rule'."""
+def test_governance_title_names_the_mistake_in_plain_words(monkeypatch):
+    """No explicit title → the title names the MISTAKE a person would recognise
+    (from the class), not the producer's rule text or a bare type; the rule text
+    and the examples go into the prompt; the summary says how often."""
     _patch_governance(monkeypatch, [{
         "id": "g1", "proposal_kind": "rule",
         "proposed_rule": "always verify a file exists before editing",
         "source_class": "CLASS_B", "occurrence_count": 3, "confidence": 0.82,
+        "evidence": ["Edited a file without reading it first", "Guessed a path"],
     }])
     items = aa._collect_governance()
     assert len(items) == 1
     it = items[0]
-    assert it.title == "New rule: always verify a file exists before editing"
-    assert it.title != "governance rule"          # the old empty-card bug
+    assert it.title == "The same mistake keeps happening: claims made without checking"
+    assert it.summary == "Seen 3 times · SwarmAI suggests a new rule"
+    msg = it.dispatch["message"]
+    assert "always verify a file exists before editing" in msg
+    assert "- Edited a file without reading it first" in msg
+    assert "CLASS_B" not in it.title and "CLASS_B" not in msg.split("References:")[0]
+    assert msg.rstrip().endswith("References: proposal g1 (82% confidence)")
     # detail explains WHY: human failure-pattern + recurrence + confidence
     assert "inferred without verifying" in it.detail
     assert "recurred 3×" in it.detail
     assert "82% confidence" in it.detail
+
+
+def test_governance_gate_title_says_the_rule_is_not_working(monkeypatch):
+    _patch_governance(monkeypatch, [{
+        "id": "CLASS_C:gate", "proposal_kind": "gate", "source_class": "CLASS_C",
+        "occurrence_count": 18, "proposed_rule": "CLASS_C: rule RULE_CLASS_C failed — escalate to a CODE GATE.",
+    }])
+    it = aa._collect_governance()[0]
+    assert it.title == "A rule isn't working: fixes made in the wrong place still happen"
+    assert it.summary == "Still seen 18 times after its rule · SwarmAI suggests an automatic check"
 
 
 def test_governance_explicit_title_wins(monkeypatch):
@@ -438,10 +455,10 @@ def test_governance_explicit_title_wins(monkeypatch):
 
 
 def test_governance_no_rule_text_is_still_labeled(monkeypatch):
-    """Even with no rule text, never fall back to a bare type — say so explicitly."""
+    """Even with no rule text or class, never fall back to a bare type."""
     _patch_governance(monkeypatch, [{"id": "g3", "proposal_kind": "rule"}])
     it = aa._collect_governance()[0]
-    assert it.title == "New governance rule (no rule text)"
+    assert it.title == "SwarmAI suggests a new rule for a recurring mistake"
     assert it.detail  # still carries the class phrase ("recurring pattern")
 
 
@@ -478,7 +495,8 @@ def test_governance_malformed_fields_do_not_leak(monkeypatch):
     }])
     t = aa._collect_governance()[0].title
     assert "[" not in t and "'" not in t
-    assert t == "New governance rule (no rule text)"
+    assert t == "SwarmAI suggests a new rule for a recurring mistake"
+    assert "['a'" not in aa._collect_governance()[0].dispatch["message"]
 
 
 def test_governance_nonfinite_occurrence_does_not_abort_loop(monkeypatch):
