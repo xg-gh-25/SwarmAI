@@ -15,7 +15,8 @@ When another session has uncommitted edits in the same checkout
 - land: the worktree must have no uncommitted changes; its branch is rebased onto the
   main checkout's current branch, then ``merge --ff-only`` there. A refusal (conflict,
   or the main checkout has uncommitted edits to the same files) is printed as is and
-  nothing is forced.
+  nothing is forced. Before the merge, a branch that puts a file back to where the
+  branch began while the base changed it since is refused (scripts/check_no_revert).
 - remove: removes the worktree and deletes its branch, only once the branch is merged
   into the main checkout's branch (land first). Never deletes unmerged work.
 
@@ -36,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core import run_worktree as rw  # noqa: E402
+from scripts import check_no_revert  # noqa: E402
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 BRANCH_PREFIX = "session/"
@@ -128,6 +130,14 @@ def land(path: str) -> dict:
         _git(wt, "rebase", "--abort")
         raise Refused(f"rebase onto {base} stopped (conflict); resolve it in {wt} by hand: "
                       + (p.stderr or p.stdout).strip()[:400])
+    # ff-only checks that the branch continues the base, not what it does to files:
+    # a squash from an old tree passes it and undoes what others landed meanwhile.
+    reverted = check_no_revert.reverted_paths(str(main), branch, base)
+    if reverted:
+        raise Refused(f"{branch} puts {len(reverted)} file(s) back to where it began, "
+                      f"undoing what {base} changed since: {', '.join(reverted[:10])}"
+                      + (" ..." if len(reverted) > 10 else "")
+                      + f". Squash with `git reset --soft $(git merge-base HEAD {base})`.")
     p = _git(main, "merge", "--ff-only", "-q", branch)
     if p.returncode != 0:
         raise Refused(f"merge --ff-only into {base} refused: "

@@ -515,9 +515,17 @@ git worktree add -b <agent>/<topic> <scratch>/wt-<topic> main   # NOT under ~/.s
 #   frontend: symlink desktop/node_modules from the main checkout
 git commit -- <paths>                 # explicit pathspec, never a bare `git commit -a`
 git rebase main                       # main moves every few minutes
+python3 backend/scripts/check_no_revert.py <agent>/<topic>      # exit 1 = it undoes main
 git -C <main checkout> merge --ff-only <agent>/<topic>
 git worktree remove <scratch>/wt-<topic> && git branch -d <agent>/<topic>
 ```
+
+- **Squash only from the merge base**: `git reset --soft $(git merge-base HEAD main)`, never
+  `git reset --soft main`. The second keeps your worktree's old tree and commits it on top of
+  the current main, so every file another session landed since you branched goes back to the
+  old version; `rebase` and `merge --ff-only` both pass it (2026-10-24, `a23fc2a00` undid 8
+  commits in 30 files). `check_no_revert.py` refuses that branch: a file it changes back to
+  the version it branched from while main changed it since (`session_worktree land` runs it).
 
 - `~/.swarm-ai/worktrees/` belongs to the pipeline: its hourly sweeper moves anything there
   that is not a run's worktree into `.quarantine/`. Put yours in your agent's scratch dir.

@@ -178,6 +178,23 @@ def test_remove_refuses_unmerged_work(tmp_path):
     assert rc == 1 and "not merged" in out["error"] and os.path.exists(wt)
 
 
+def test_land_refuses_a_squash_that_undoes_the_base(tmp_path):
+    """The 2026-10-24 incident: `reset --soft main` from an old tree, then land."""
+    repo = _repo(tmp_path / "proj")
+    rc, out = _cli("create", str(repo), "--name", "t3")
+    wt = out["path"]
+    (repo / "b.py").write_text("b = 2  # landed by another session\n")
+    _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "other session")
+    with open(os.path.join(wt, "a.py"), "w") as f:
+        f.write("a = 9\n")
+    _g(wt, "add", "-A")
+    _g(wt, "reset", "-q", "--soft", "main")
+    _g(wt, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "squashed")
+    rc, out = _cli("land", wt)
+    assert rc == 1 and "b.py" in out["error"] and "merge-base" in out["error"]
+    assert (repo / "b.py").read_text() == "b = 2  # landed by another session\n"
+
+
 def test_land_and_remove_only_touch_session_worktrees(tmp_path):
     repo = _repo(tmp_path / "proj")
     rc, out = _cli("remove", str(repo))
