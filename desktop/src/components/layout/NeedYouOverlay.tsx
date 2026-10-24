@@ -9,10 +9,10 @@
  *   - MAIN axis = tier: BLOCKING first (pulse) → REVIEW below
  *   - SUB axis  = brain: within each tier, grouped by brain; brain=null → OS-level
  *
- * Action = dispatch the item's message into a chat tab via the overlay ctx's
- * `dispatchPrompt` (the EXISTING inject-to-chat mechanism — no /act, no new
- * channel; design principle 3). Clicking an item closes the overlay and hands
- * the work to the agent in chat.
+ * Action = each row (NeedsYouRow, shared with the Welcome card) fills the chat
+ * input with the item's prompt, or ↑ sends it now — both through the overlay
+ * ctx's `dispatchPrompt` (the EXISTING inject-to-chat mechanism — no /act, no new
+ * channel; design principle 3). The overlay closes once the prompt landed.
  *
  * No "see more/less" fold — the overlay has room; the full queue is shown.
  *
@@ -22,20 +22,21 @@
  */
 import { useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../services/attention';
+import type { AttentionEntry } from '../../services/attention';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
+import { NeedsYouRow } from './NeedsYouRow';
+import type { DispatchPrompt } from './overlayRegistry';
 
 interface NeedYouContentProps {
-  /** Inject the item's message into a chat tab (overlay ctx dispatchPrompt). */
-  onDispatch: (prompt: string) => boolean;
+  /** Land the item's prompt in a chat tab (overlay ctx dispatchPrompt); `autoSend`
+   *  for the ↑ button. Returns whether it landed. */
+  onDispatch: DispatchPrompt;
   /** Close the overlay (after dispatching). */
   close: () => void;
 }
 
 const OS_LEVEL = 'OS-level';
-
-const SOURCE_LABEL = ATTENTION_SOURCE_LABEL;
 
 /** Group items by brain (null → OS-level), preserving insertion order. */
 function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]> {
@@ -54,13 +55,10 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
   const loading = q.isPending;
   const error = q.isError && !q.data;
 
-  const handleClick = useCallback(
-    (it: AttentionEntry) => {
-      const landed = onDispatch(it.dispatch?.message || it.title);
-      if (landed) close();
-    },
-    [onDispatch, close],
-  );
+  // Same two actions as the Welcome card and a reply's Next steps: fill the input
+  // (the user edits, then sends) or send now. The overlay closes once it landed.
+  const onFill = useCallback((prompt: string) => { if (onDispatch(prompt, { autoSend: false })) close(); }, [onDispatch, close]);
+  const onSend = useCallback((prompt: string) => { if (onDispatch(prompt, { autoSend: true })) close(); }, [onDispatch, close]);
 
   const blocking = items.filter((i) => i.tier === 'blocking');
   const review = items.filter((i) => i.tier === 'review');
@@ -70,8 +68,8 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
       <div className="mb-4">
         <h2 className="text-heading font-semibold text-[var(--color-text)]">Need You</h2>
         <p className="mt-0.5 text-meta text-[var(--color-text-dim)]">
-          Everything the OS can't finish without you — decisions, reviews, broken jobs.
-          Click an item to hand it to chat.
+          Everything SwarmAI can't finish without you. Click an item to put it in the chat
+          input, or ↑ to send it now.
         </p>
       </div>
 
@@ -96,7 +94,8 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
           hint="Stopped — nothing moves without you"
           pulse
           items={blocking}
-          onClick={handleClick}
+          onFill={onFill}
+          onSend={onSend}
         />
       )}
       {review.length > 0 && (
@@ -104,7 +103,8 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
           label="Review"
           hint="Self-advancing — your input confirms or overrides"
           items={review}
-          onClick={handleClick}
+          onFill={onFill}
+          onSend={onSend}
         />
       )}
     </div>
@@ -115,13 +115,15 @@ function TierSection({
   label,
   hint,
   items,
-  onClick,
+  onFill,
+  onSend,
   pulse = false,
 }: {
   label: string;
   hint: string;
   items: AttentionEntry[];
-  onClick: (it: AttentionEntry) => void;
+  onFill: (prompt: string) => void;
+  onSend: (prompt: string) => void;
   pulse?: boolean;
 }) {
   const groups = groupByBrain(items);
@@ -143,29 +145,9 @@ function TierSection({
           <div className="px-1 py-1 text-meta uppercase tracking-wide text-[var(--color-text-muted)]">
             {brain}
           </div>
-          <div className="flex flex-col gap-1">
-            {brainItems.map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                onClick={() => onClick(it)}
-                className="w-full text-left rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2 hover:bg-[var(--color-hover)] transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-meta uppercase text-[var(--color-text-muted)] bg-[var(--color-hover)] rounded px-1.5 py-0.5">
-                    {SOURCE_LABEL[it.source]}
-                  </span>
-                  <span className="flex-1 text-small text-[var(--color-text)] truncate">{it.title}</span>
-                  <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">
-                    arrow_forward
-                  </span>
-                </div>
-                {it.detail && (
-                  <div className="mt-0.5 text-meta leading-snug text-[var(--color-text-dim)] line-clamp-2">
-                    {it.detail}
-                  </div>
-                )}
-              </button>
+          <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
+            {brainItems.map((it, i) => (
+              <NeedsYouRow key={it.id} item={it} divider={i > 0} onFill={onFill} onSend={onSend} />
             ))}
           </div>
         </div>

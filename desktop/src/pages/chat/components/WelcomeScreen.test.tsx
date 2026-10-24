@@ -5,8 +5,10 @@
  *   - Brand: logo, the SwarmAI wordmark and the slogan render.
  *   - One queue: the "Needs you" count is the attention query's blocking+review,
  *     at most 3 rows, and the card reads the shared ['overlay','needs-you'] key.
- *   - No send: clicking a row or "Open all" opens the Needs You overlay
- *     (dispatchUiCommand('show-needs-you')) and never calls a send callback.
+ *   - Rows: each shows the backend's plain title + summary; clicking the text
+ *     fills the chat input with the item's prompt (not sent), ↑ sends it now;
+ *     "N more" expands the list in place (bounded height, scrolls inside the
+ *     card) and collapses again; "Open all" opens the Needs You overlay.
  *   - No dead reads: rendering issues no /system/briefing or /ddd/brains request.
  *   - Empty queue shows one calm line; a failed read hides the section.
  * Methodology: render the real component in a real QueryClientProvider with the
@@ -34,6 +36,7 @@ vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }
 import { WelcomeScreen as WelcomeScreenImpl } from './WelcomeScreen';
 import { useAttentionQueue } from '../../../hooks/useAttentionQueue';
 import { landedTransform } from './welcomeBee';
+import { INJECT_CHAT_INPUT, type InjectChatInputDetail } from '../injectChatInput';
 
 // Extra props (onFocusClick / onItemClick) are passed on purpose: the old screen
 // took them and sent on click; the new one must ignore them.
@@ -41,8 +44,11 @@ const WelcomeScreen = WelcomeScreenImpl as React.ComponentType<Record<string, un
 
 const item = (i: number, brain: string | null = 'SwarmAI') => ({
   id: `a${i}`, source: 'paused_run' as const, tier: 'blocking' as const, brain,
-  title: `Item ${i}`, detail: '', dispatch: { message: `Item ${i}` },
+  title: `Item ${i}`, summary: `Summary ${i}`, detail: '', dispatch: { message: `Prompt for item ${i}` },
 });
+
+let injected: InjectChatInputDetail[] = [];
+const onInject = (e: Event) => injected.push((e as CustomEvent<InjectChatInputDetail>).detail);
 
 function renderWelcome(props: Record<string, unknown> = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -51,8 +57,11 @@ function renderWelcome(props: Record<string, unknown> = {}) {
   ) };
 }
 
-beforeEach(() => { fetchAttention.mockReset(); apiGet.mockClear(); dispatchUiCommand.mockClear(); });
-afterEach(cleanup);
+beforeEach(() => {
+  fetchAttention.mockReset(); apiGet.mockClear(); dispatchUiCommand.mockClear();
+  injected = []; window.addEventListener(INJECT_CHAT_INPUT, onInject);
+});
+afterEach(() => { window.removeEventListener(INJECT_CHAT_INPUT, onInject); cleanup(); });
 
 describe('WelcomeScreen v2', () => {
   it('shows the logo, the wordmark and the slogan', () => {
@@ -96,17 +105,59 @@ describe('WelcomeScreen v2', () => {
     expect(fetchAttention).toHaveBeenCalledTimes(1);
   });
 
-  it('clicking a row or Open all opens Needs You and never sends', async () => {
+  it('a row shows the backend title and summary as-is, with a plain source label', async () => {
+    fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 1, review: 0 } });
+    renderWelcome();
+    const row = await screen.findByTestId('welcome-needs-row');
+    expect(row.textContent).toContain('Item 1');
+    expect(row.textContent).toContain('Summary 1');
+    expect(row.textContent).toContain('Pipeline');
+  });
+
+  it('clicking a row fills the input with its prompt and does not send', async () => {
     fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 1, review: 0 } });
     const onFocusClick = vi.fn();
     const onItemClick = vi.fn();
     renderWelcome({ onFocusClick, onItemClick });
-    fireEvent.click(await screen.findByTestId('welcome-needs-row'));
-    fireEvent.click(screen.getByTestId('welcome-needs-open'));
-    expect(dispatchUiCommand).toHaveBeenCalledTimes(2);
-    expect(dispatchUiCommand).toHaveBeenCalledWith('show-needs-you');
+    fireEvent.click(await screen.findByTestId('welcome-needs-row-fill'));
+    expect(injected).toEqual([{ text: 'Prompt for item 1', focus: true, autoSend: false }]);
+    expect(dispatchUiCommand).not.toHaveBeenCalled();
     expect(onFocusClick).not.toHaveBeenCalled();
     expect(onItemClick).not.toHaveBeenCalled();
+  });
+
+  it('the ↑ button sends the prompt now', async () => {
+    fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 1, review: 0 } });
+    renderWelcome();
+    fireEvent.click(await screen.findByTestId('welcome-needs-row-send'));
+    expect(injected).toEqual([{ text: 'Prompt for item 1', focus: true, autoSend: true }]);
+  });
+
+  it('"N more" expands in place inside a bounded list, and collapses again', async () => {
+    fetchAttention.mockResolvedValue({
+      items: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => item(i)),
+      counts: { blocking: 8, review: 0 },
+    });
+    renderWelcome();
+    await waitFor(() => expect(screen.getAllByTestId('welcome-needs-row')).toHaveLength(3));
+    const more = screen.getByTestId('welcome-needs-more');
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(more);
+    expect(screen.getAllByTestId('welcome-needs-row')).toHaveLength(8);
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    // the expanded list scrolls inside the card instead of growing the page
+    expect(screen.getByTestId('welcome-needs-list').className).toMatch(/max-h-\[[^\]]+\].*overflow-y-auto|overflow-y-auto.*max-h-\[[^\]]+\]/);
+    fireEvent.click(more);
+    expect(screen.getAllByTestId('welcome-needs-row')).toHaveLength(3);
+    expect(dispatchUiCommand).not.toHaveBeenCalled();
+  });
+
+  it('Open all opens the Needs You overlay', async () => {
+    fetchAttention.mockResolvedValue({ items: [item(1)], counts: { blocking: 1, review: 0 } });
+    renderWelcome();
+    fireEvent.click(await screen.findByTestId('welcome-needs-open'));
+    expect(dispatchUiCommand).toHaveBeenCalledWith('show-needs-you');
+    expect(injected).toEqual([]);
   });
 
   it('issues no /system/briefing or /ddd/brains request', async () => {

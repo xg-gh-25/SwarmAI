@@ -76,7 +76,7 @@ import { prefetchNav } from '../components/layout/overlayQueries';
 // them via the ctx bridge (setOverlayCtxBridge below).
 import { type ResumeTabInfo } from './chat/resumeTarget';
 import { classifyLanding, type LandingVerdict } from './chat/landPromptInTab';
-import { dispatchInjectChatInput } from './chat/injectChatInput';
+import { dispatchInjectChatInput, injectDispatchedPrompt } from './chat/injectChatInput';
 import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { planDispatchBackfill } from './chat/dispatchBackfill';
 import { todosService } from '../services/todos';
@@ -1378,7 +1378,7 @@ export default function ChatPage() {
   // swarm:inject-chat-input no-ops with no active chat tab — the ChatInput
   // listener only sets the ACTIVE tab's input, it doesn't create/switch tabs.
   // So we resolve+activate a tab FIRST, THEN inject. Returns true if it landed.
-  const handleDispatchJobPrompt = useCallback((prompt: string): boolean => {
+  const handleDispatchJobPrompt = useCallback((prompt: string, opts?: { autoSend?: boolean }): boolean => {
     // Same fresh-work landing as todo (sentinel key, opt into the draft guard).
     const verdict = classifyLanding(
       `__jobprompt__${prompt.slice(0, 24)}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
@@ -1387,8 +1387,9 @@ export default function ChatPage() {
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
 
     if (setupDispatchTarget(verdict) == null) return false;
-    // Tab is now active — inject the prompt (not auto-sent; user reviews + sends).
-    dispatchInjectChatInput({ text: prompt, focus: true, autoSend: false });
+    // Tab is now active — inject the prompt. Filled and left for the user, unless the
+    // caller passes autoSend (a person's explicit "send now" click, e.g. Need You ↑).
+    injectDispatchedPrompt(prompt, opts);
     return true;
   }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, landingToast, setupDispatchTarget]);
 

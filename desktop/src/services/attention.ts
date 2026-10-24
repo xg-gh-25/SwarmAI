@@ -14,26 +14,31 @@
  */
 import api from './api';
 
-/** One normalized attention item (mirrors backend AttentionItem, snake→camel). */
+/** One normalized attention item (mirrors backend AttentionItem, snake→camel).
+ *  Every text field is written by the backend FOR THE USER and shown as-is:
+ *  `title` = what is needed of them, `summary` = which thing it is,
+ *  `dispatch.message` = the prompt in their voice (fill or send). */
 export interface AttentionEntry {
   id: string;
-  source: 'escalation' | 'paused_run' | 'cultivation' | 'governance' | 'job' | 'community_digest';
+  source: 'escalation' | 'paused_run' | 'cultivation' | 'governance' | 'job' | 'community_digest' | 'db_recovery';
   tier: 'blocking' | 'review';
   /** Owning brain/project, or null for OS-level (governance/job infra). */
   brain: string | null;
   title: string;
+  summary: string;
   detail: string;
   dispatch: { message: string; context?: Record<string, unknown> };
 }
 
-/** Short label per source, shared by the Need You overlay and the Welcome card. */
+/** Plain label per source, shared by the Need You overlay and the Welcome card. */
 export const ATTENTION_SOURCE_LABEL: Record<AttentionEntry['source'], string> = {
-  escalation: 'escalation',
-  paused_run: 'paused pipeline',
-  cultivation: 'proposal',
-  governance: 'governance',
-  job: 'job',
-  community_digest: 'digest',
+  escalation: 'Question',
+  paused_run: 'Pipeline',
+  cultivation: 'Brain note',
+  governance: 'Rule proposal',
+  job: 'Scheduled job',
+  community_digest: 'Digest',
+  db_recovery: 'Data recovery',
 };
 
 export interface AttentionResult {
@@ -49,6 +54,7 @@ interface RawAttention {
     tier: AttentionEntry['tier'];
     brain: string | null;
     title: string;
+    summary?: string;
     detail?: string;
     dispatch?: { message: string; context?: Record<string, unknown> };
   }>;
@@ -62,6 +68,7 @@ function normalize(raw: RawAttention): AttentionResult {
     tier: it.tier,
     brain: it.brain ?? null,
     title: it.title,
+    summary: it.summary ?? '',
     detail: it.detail ?? '',
     dispatch: it.dispatch ?? { message: it.title },
   }));

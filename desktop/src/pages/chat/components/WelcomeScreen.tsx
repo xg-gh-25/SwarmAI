@@ -7,7 +7,10 @@
  * - One queue: the card reads `overlayQuery.needsYou()` — the same react-query key
  *   as the Needs You overlay and the left-nav pill (useAttentionQueue), so all
  *   three show the same number (counts.blocking + counts.review).
- * - No send: a row or "Open all" opens the Needs You overlay; nothing is sent.
+ * - Rows (NeedsYouRow, shared with the overlay): the backend's plain title and
+ *   summary; click the text = the item's prompt goes into the input (not sent),
+ *   ↑ = send it now and start the session. "N more" expands the list in place,
+ *   capped in height so it scrolls inside the card; "Open all" opens the overlay.
  * - Durable: an empty queue is one calm line; a failed read hides the card.
  * - Top-aligned (no vertical centring), so a late read never moves the hero.
  * - The streaming bee (same drawing) flies in once (3.6s) and lands on the logo;
@@ -19,7 +22,8 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { overlayQuery } from '../../../components/layout/overlayQueries';
-import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../../services/attention';
+import { NeedsYouRow } from '../../../components/layout/NeedsYouRow';
+import { dispatchInjectChatInput } from '../injectChatInput';
 import { dispatchUiCommand } from '../../../utils/uiCommands';
 import { usePrefersReducedMotion } from '../../../hooks/usePrefersReducedMotion';
 import { tf } from '../tf';
@@ -104,14 +108,15 @@ function HexDot({ tone }: { tone: 'brand' | 'calm' }) {
 // ---------------------------------------------------------------------------
 
 const openNeedsYou = () => { dispatchUiCommand('show-needs-you'); };
-
-function rowLabel(it: AttentionEntry): string {
-  return it.brain ?? ATTENTION_SOURCE_LABEL[it.source];
-}
+// Fill / send land in THIS tab's input: the Welcome screen only shows in the
+// active, empty tab, so the shared ChatInput is this tab's input.
+const fillInput = (text: string) => { dispatchInjectChatInput({ text, focus: true, autoSend: false }); };
+const sendNow = (text: string) => { dispatchInjectChatInput({ text, focus: true, autoSend: true }); };
 
 function NeedsYouCard() {
   const { t } = useTranslation();
   const { data, isError } = useQuery(overlayQuery.needsYou());
+  const [open, setOpen] = useState(false);
   if (isError && !data) return null;          // a failed read hides the card
   const label = tf(t, 'chat.welcome.needsYou', 'Needs you');
 
@@ -121,9 +126,9 @@ function NeedsYouCard() {
   }
 
   const count = data.counts.blocking + data.counts.review;
-  const rows = data.items.slice(0, MAX_ROWS);
+  const rows = open ? data.items : data.items.slice(0, MAX_ROWS);
   // "N more" agrees with the badge: everything counted that is not shown.
-  const more = Math.max(0, Math.max(count, data.items.length) - rows.length);
+  const more = Math.max(0, Math.max(count, data.items.length) - Math.min(MAX_ROWS, data.items.length));
 
   return (
     <section data-testid="welcome-needs" className="welcome-rise [animation-delay:0.12s]">
@@ -163,29 +168,35 @@ function NeedsYouCard() {
           </div>
         ) : (
           <>
-            {rows.map((it, i) => (
-              <button
-                key={it.id}
-                type="button"
-                data-testid="welcome-needs-row"
-                onClick={openNeedsYou}
-                title={it.title}
-                className={`group w-full text-left flex items-center gap-2.5 pl-4 pr-3.5 py-2.5 text-body text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors cursor-pointer ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}
-              >
-                <HexDot tone="brand" />
-                <span className="flex-1 min-w-0 truncate">{it.title}</span>
-                <span className="shrink-0 text-meta text-[var(--color-text-muted)] px-[7px] py-px rounded-md bg-[var(--color-hover)]">
-                  {rowLabel(it)}
-                </span>
-                <span className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-brand)]">
-                  chevron_right
-                </span>
-              </button>
-            ))}
+            {/* Expanded: every item, in a list capped at ~5 rows that scrolls
+                inside the card, so the page never grows past the composer. */}
+            <div
+              data-testid="welcome-needs-list"
+              className={open ? 'max-h-[290px] overflow-y-auto' : undefined}
+            >
+              {rows.map((it, i) => (
+                <NeedsYouRow
+                  key={it.id}
+                  item={it}
+                  testid="welcome-needs-row"
+                  divider={i > 0}
+                  lead={<HexDot tone="brand" />}
+                  onFill={fillInput}
+                  onSend={sendNow}
+                />
+              ))}
+            </div>
             {more > 0 && (
-              <div data-testid="welcome-needs-more" className="pl-4 pr-3.5 py-2 text-small text-[var(--color-text-muted)] border-t border-[var(--color-border)]">
-                {tf(t, 'chat.welcome.more', '{{n}} more in Needs You', { n: more })}
-              </div>
+              <button
+                type="button"
+                data-testid="welcome-needs-more"
+                aria-expanded={open}
+                onClick={() => setOpen((v) => !v)}
+                className="w-full text-left flex items-center justify-between pl-4 pr-3.5 py-2 text-small text-[var(--color-text-muted)] hover:text-[var(--color-text)] border-t border-[var(--color-border)] cursor-pointer"
+              >
+                <span>{open ? tf(t, 'chat.welcome.less', 'Show less') : tf(t, 'chat.welcome.more', '{{n}} more', { n: more })}</span>
+                <span className="material-symbols-outlined icon-sm">{open ? 'expand_less' : 'expand_more'}</span>
+              </button>
             )}
           </>
         )}

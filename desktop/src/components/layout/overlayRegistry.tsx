@@ -18,6 +18,10 @@
 import type { ReactNode } from 'react';
 import type { OverlayId } from './overlayIds';
 
+/** Land a prompt in a chat tab. `autoSend` sends it at once (a person's explicit
+ *  "send now" click); the default fills the input and waits for the user. */
+export type DispatchPrompt = (prompt: string, opts?: { autoSend?: boolean }) => boolean;
+
 /** Handlers the host injects into a surface's `render`. `close` is host-owned and
  *  always present. `dispatch*` are ChatPage-owned tab operations (dispatch is a
  *  ChatPage responsibility — it owns the tab store; the host reaches them via a
@@ -29,7 +33,7 @@ export interface OverlayRenderCtx {
   close: () => void;
   /** Land a prompt in a chat tab (ChatPage.handleDispatchJobPrompt). Returns true if
    *  it landed, false if all tabs busy / draft blocks it. undefined pre-bridge. */
-  dispatchPrompt?: (prompt: string) => boolean;
+  dispatchPrompt?: DispatchPrompt;
   /** Land a ToDo work-packet in a chat tab (ChatPage.handleDispatchTodo). */
   dispatchTodo?: (todo: unknown) => boolean;
   /** Open a workspace file in the Canvas (ChatPage useCanvasHost / swarm:open-file). */
@@ -54,7 +58,7 @@ export interface OverlayRenderCtx {
  * A ref (not context) so ChatPage's high-frequency re-renders never re-render the host.
  */
 export interface OverlayCtxBridge {
-  dispatchPrompt?: (prompt: string) => boolean;
+  dispatchPrompt?: DispatchPrompt;
   dispatchTodo?: (todo: unknown) => boolean;
   openFile?: (file: unknown, autoDiff?: boolean) => void;
   resumeSession?: (session: unknown) => boolean;

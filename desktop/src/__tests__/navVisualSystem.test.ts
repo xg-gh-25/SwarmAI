@@ -32,6 +32,7 @@ export const FILES = [
   'components/layout/HistoryOverlay.tsx',
   'components/layout/ArtifactsOverlay.tsx',
   'components/layout/NeedYouOverlay.tsx',
+  'components/layout/NeedsYouRow.tsx',
   'components/layout/CMBrainOverlay.tsx',
   'components/layout/LibraryOverlay.tsx',
   'components/layout/LibraryHealth.tsx',

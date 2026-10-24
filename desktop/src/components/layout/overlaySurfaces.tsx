@@ -161,7 +161,7 @@ registerOverlay({
   id: 'needs-you',
   render: ({ close, dispatchPrompt }) => (
     <NeedYouContent
-      onDispatch={(msg: string) => (dispatchPrompt ? dispatchPrompt(msg) : false)}
+      onDispatch={(msg, opts) => (dispatchPrompt ? dispatchPrompt(msg, opts) : false)}
       close={close}
     />
   ),

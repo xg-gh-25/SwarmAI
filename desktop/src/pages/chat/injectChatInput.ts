@@ -13,7 +13,7 @@
  * The const value MUST stay byte-identical (`swarm:inject-chat-input`) — external
  * listeners key on the literal string.
  *
- * @exports INJECT_CHAT_INPUT, InjectChatInputDetail, dispatchInjectChatInput
+ * @exports INJECT_CHAT_INPUT, InjectChatInputDetail, dispatchInjectChatInput, injectDispatchedPrompt
  */
 
 /** The window event name. Byte-identical to the historical literal — do not rename. */
@@ -38,4 +38,11 @@ export interface InjectChatInputDetail {
  *  never hand-build the CustomEvent, so the name + shape can't drift. */
 export function dispatchInjectChatInput(detail: InjectChatInputDetail): void {
   window.dispatchEvent(new CustomEvent<InjectChatInputDetail>(INJECT_CHAT_INPUT, { detail }));
+}
+
+/** Land a dispatched prompt (an overlay's "hand this to chat") in the active tab's
+ *  input, focused. Filled and left for the user unless `opts.autoSend` is true —
+ *  a person's explicit "send now" click (Need You ↑). */
+export function injectDispatchedPrompt(prompt: string, opts?: { autoSend?: boolean }): void {
+  dispatchInjectChatInput({ text: prompt, focus: true, autoSend: opts?.autoSend === true });
 }
