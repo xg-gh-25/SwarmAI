@@ -172,13 +172,13 @@ async def test_read_run_map_non_numeric_ts_floors_to_zero(audit):
         "non-numeric ts → 0.0 (not a crash), run_id still returned"
 
 
-# ── AC2 (Gate-2 spec gap): END-TO-END attribution — re-hydrated ctx → the adv
+# ── AC2 (Gate-2 spec gap): END-TO-END attribution — re-hydrated ctx → the
 #    marker the SAME session writes carries run_id == the .map's run_id. This is
 #    the whole point of F2; the prior suite tested only the read half. ──────────
 async def test_ac2_end_to_end_marker_attributed_to_rehydrated_run(audit, monkeypatch, tmp_path):
     """Drive the real seam: write a .map (as run-create would), re-hydrate a fresh
-    (empty) resumed-session ctx from it, then run the REAL adv-marker writer against
-    that ctx and assert the emitted _adv_ marker's run_id == the .map's run_id.
+    (empty) resumed-session ctx from it, then assert the run_id the SubagentStop
+    marker writer would stamp == the .map's run_id.
 
     This connects the write-side (session_router re-hydration) to the read-side
     (runtime_hooks marker payload) that the spec-compliance auditor flagged as

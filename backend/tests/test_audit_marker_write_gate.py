@@ -1,8 +1,7 @@
 """Tests for audit_marker_write_gate (core.security_hooks).
 
 The gate denies writes, moves and deletes in state/pipeline_agent_audit, the store
-whose markers prove review sub-agents ran (D7, Red Team, Gate-0/1, the adversarial
-commit gate). Methodology: HOME and security_hooks._AGENT_AUDIT_DIR point at a temp
+whose markers prove review sub-agents ran (D7, Red Team, Gate-0/1). Methodology: HOME and security_hooks._AGENT_AUDIT_DIR point at a temp
 tree, the real async hook is driven with asyncio.run, and every forgery form named in
 the gate's section comment is a parametrized deny case next to a read that must pass.
 

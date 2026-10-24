@@ -1,21 +1,9 @@
-"""Drift-detection test (run_f4b9ae6f, Plan A STEP 0).
+"""Drift-detection tests for the review prompt templates.
 
-Gate-1 found the load-bearing gap: the pipeline's OWN deliver.md specialist
-prompt template matched NOTHING in `_is_adversarial_intent`, so the canonical
-adversarial-review path never wrote the `_adv_` marker the commit gate requires —
-the gate was satisfied only by the orchestrator incidentally using adversarial
-keywords. If the template wording drifts (or was never adversarial), the pipeline
-silently blocks its own commits.
-
-This test pins the classifier<->template contract: the shipped specialist prompt
-template MUST contain a phrase `_is_adversarial_intent` recognizes. Wording drift
-that drops the adversarial signal turns this RED instead of silently breaking
-self-commit at runtime.
-
-NOTE (Gate-1 round-2 CONCERN #4): this asserts the TEMPLATE FILE carries the
-phrase. The live spawn prompt is LLM-authored from this template, so the phrase is
-placed as a VERBATIM BLOCKING literal the orchestrator must copy — the test guards
-the source of truth; the BLOCKING directive guards the copy.
+Pins the scope-budget contract (one authority, read by the orchestrator at spawn
+time) so template wording drift turns this RED instead of leaving a sub-agent with
+an unbounded task. (The adversarial-classifier contract this file first pinned went
+away with the adversarial commit gate, design 2026-10-24-swarmai-usable-by-anyone.)
 """
 import re
 from pathlib import Path

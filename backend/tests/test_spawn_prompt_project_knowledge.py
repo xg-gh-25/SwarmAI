@@ -22,8 +22,7 @@ Key properties
 --------------
 * the recalled entry TEXT (not a section name) appears in the prompt, with its doc
   and section as provenance;
-* the prompt head contract survives: line 1 is the ``EXPERT-ID:`` anchor and the
-  head still classifies as adversarial (``runtime_hooks._is_adversarial_intent``);
+* the prompt head contract survives: line 1 is the ``EXPERT-ID:`` anchor;
 * an empty DDD and an unknown project are complete states (exit 0, explicit line);
 * a slot-bearing prompt without ``--project`` is refused (exit 3, empty stdout);
 * a recall failure is LOUD (marked in the prompt and on stderr), never an empty block;

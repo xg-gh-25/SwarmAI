@@ -752,8 +752,8 @@ _PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
 def _session_run_map_path(session_id: str) -> Path:
     """Disk rendezvous file: session_id -> owning pipeline run_id.
 
-    Lives in _PIPELINE_AUDIT_DIR (the same dir the adversarial commit gate scans by
-    session_id), so a future cross-process reader resolves it the identical way it
+    Lives in _PIPELINE_AUDIT_DIR (the same dir the session markers live in), so a
+    future cross-process reader resolves it the identical way it
     already finds markers. One file per session; last create in a session wins
     (a session runs one pipeline at a time — sibling sessions get distinct ids).
     """
@@ -897,13 +897,12 @@ def create_pipeline_run_mapping_hook(session_context: Optional[dict] = None):
 # NOT round-trip through the SDK agent-registry (that is the rejected X/Y coupling:
 # .claude/agents or ClaudeAgentOptions.agents=). Instead the spawn prompt carries a
 # structured anchor line `EXPERT-ID: <id>` (injected by the review prompt producer),
-# and we extract it from the sub-agent's own transcript head — the same head already
-# read for adversarial-intent classification, so no new transcript read.
+# and we extract it from the sub-agent's own transcript head.
 #
 # Anchored + bare-id-only ON PURPOSE: the line must START a line (`^EXPERT-ID:`),
 # the id must be a lowercase registry id (`[a-z][a-z0-9-]*`), and nothing but
-# whitespace may follow it (`\s*$`). This rejects the drift classes the natural-
-# language `_is_adversarial_intent` classifier suffers from — a Title-case value, an
+# whitespace may follow it (`\s*$`). This rejects the drift classes a natural-
+# language classifier suffers from — a Title-case value, an
 # embedded-in-prose mention, a trailing-words line — by returning None (fail-safe: a
 # wrong-shaped line yields "unattributed", never a wrong expert). This REPLACES the
 # former `_expert_id_from_agent_type`, which derived the id from the SDK `agent_type`
@@ -942,112 +941,6 @@ def _extract_expert_id(prompt_head: str) -> Optional[str]:
         return None
     m = _EXPERT_ID_LINE.match(prefix.group(0))
     return m.group(1) if m else None
-
-
-# Adversarial-intent classification (Plan B v4). The commit gate
-# (security_hooks.create_adversarial_commit_gate) must pass ONLY when an
-# ADVERSARIAL-review sub-agent completed this session — not any sub-agent (an
-# Explore/investigation agent must NOT satisfy it). The spike (run_df2668b4)
-# established: the SDK gives SubagentStop `agent_type` + `agent_transcript_path`
-# (the sub-agent's OWN transcript, whose HEAD is the spawn prompt), and there is
-# NO tool_use_id on SubagentStop to correlate back to the Agent PreToolUse call —
-# so classification happens HERE, at completion, per-agent-correct by construction.
-#
-# subagent_type is the PRIMARY signal (a dedicated adversarial/reviewer type is
-# unambiguous); the spawn prompt is a LIBERAL keyword fallback. Bias LIBERAL on the
-# adversarial side (the threat model is the honest 手滑 "test passed → commit"
-# reflex, NOT a malicious bypass — a false-block just trains users toward the FORCE
-# escape hatch), but require ADVERSARIAL-review vocabulary (refute/attack/find bugs/
-# red-team/poke holes/stress-test/skeptic/对抗/挑刺), NOT bare "review"/"find code",
-# so a locate/investigate Explore agent is cleanly excluded.
-# agent_type must be ADVERSARIALLY-qualified — bare "reviewer" is NOT enough (a
-# generic code-reviewer doing a style pass is not an adversarial review; REVIEW
-# HIGH-2). Require an adversarial/red-team/skeptic qualifier.
-_ADVERSARIAL_TYPE_RE = re.compile(
-    r"adversar|red.?team|skeptic|adversarial.?review", re.IGNORECASE
-)
-# Intent verbs that signal ADVERSARIAL review. Two tiers, either matches:
-#  (1) strong standalone terms — refute/attack/red-team/hunt/audit/vulnerab/…
-#      (liberal per the threat model: a false-block just pushes users to FORCE).
-#  (2) "find/look-for <defect>" — but ONLY when bound to the DIFF/CHANGE subject,
-#      so an Explore prompt ("find the config file", "find bugs get logged") is
-#      NOT swept in (REVIEW MED-2). The bare "find bugs" with no diff-anchor is
-#      deliberately excluded.
-_DEFECT = r"(?:bugs?|regressions?|issues?|flaws?|holes?|weakness(?:es)?|vulnerab\w*|edge\s+cases?)"
-_SUBJECT = r"(?:this|the)\s+(?:diff|change|changeset|code|design|implementation|fix|pr|patch)"
-# Optional adjectives an adversarial prompt puts between the verb and the defect:
-# "find ANY bugs", "find SECURITY issues", "find POTENTIAL regressions".
-_QUAL = r"(?:(?:any|all|potential|possible|security|hidden|subtle|real)\s+){0,3}"
-_ADVERSARIAL_INTENT_RE = re.compile(
-    r"adversar|refute|red.?team|poke\s+holes?|stress.?test|"
-    r"try\s+to\s+break|break\s+(?:this|it)\b|review\s+as\s+a\s+skeptic|"
-    r"challenge\s+(?:the|this|your)|critically\s+review|"
-    r"hunt\s+for\s+" + _QUAL + _DEFECT + r"|audit\s+" + _SUBJECT + r"|"
-    # "find/look for <qual> <defect> in the code/diff" — the SUBJECT includes 'code',
-    # so "find security issues in the code" matches; still excludes Explore prompts
-    # like "find the config file" (no defect token) and "find bugs get logged" (no
-    # 'in <subject>').
-    r"(?:find|look\s+for)\s+" + _QUAL + _DEFECT + r"[^.\n]{0,40}?\bin\s+" + _SUBJECT + r"|"
-    # "review this diff ... find <defect>" — adversarial review phrased subject-first
-    r"review\s+" + _SUBJECT + r"[^.\n]{0,40}?\b(?:find|for)\s+" + _QUAL + _DEFECT + r"|"
-    r"attack\s+" + _SUBJECT + r"|"
-    r"对抗|挑刺|找\s*bug|找出\s*bug|攻击(?:这|该)",
-    re.IGNORECASE,
-)
-
-
-_ADV_EXPERTS_CACHE: "list" = [None]  # [(signature, ids)] — one slot, one assignment
-
-
-def _registered_adversarial_experts() -> frozenset:
-    """Ids of registered experts whose frontmatter says ``spawn_as: adversarial``.
-
-    Cached on the expert files' names + mtimes, so a SubagentStop does not re-parse
-    the whole tree each time. A registry that fails to load is logged at WARNING (it
-    makes every expert fall back to keyword classification, and D7 then refuses)
-    and yields an empty set; classification falls back to the keywords."""
-    try:
-        from core.expert_manager import _EXPERTS_ROOT, scan_experts
-        # rglob: the same file set scan_experts reads, so any expert edit re-keys it
-        sig = tuple(sorted((str(p), p.stat().st_mtime_ns)
-                           for p in _EXPERTS_ROOT.rglob("*.md")))
-        cached = _ADV_EXPERTS_CACHE[0]
-        if cached is not None and cached[0] == sig:
-            return cached[1]
-        ids = frozenset(eid for eid, info in scan_experts().items()
-                        if str(getattr(info, "spawn_as", "")).strip().lower() == "adversarial")
-        if not ids:
-            # An absent or empty library (e.g. a packaged build without experts/) reads
-            # the same as "no expert is adversarial": say so instead of falling back silently.
-            logger.warning("expert registry at %s has no spawn_as: adversarial expert; "
-                           "EXPERT-ID spawns fall back to keyword classification", _EXPERTS_ROOT)
-        _ADV_EXPERTS_CACHE[0] = (sig, ids)
-        return ids
-    except Exception:  # noqa: BLE001 — a broken registry must not break the hook
-        logger.warning("expert registry unreadable: EXPERT-ID spawns fall back to keyword "
-                       "adversarial classification", exc_info=True)
-        return frozenset()
-
-
-def _is_adversarial_intent(subagent_type: str, description: str, prompt: str) -> bool:
-    """True if a sub-agent was spawned for ADVERSARIAL review (vs Explore/investigate).
-
-    Three signals, any one suffices: (1) subagent_type names an adversarial role;
-    (2) the prompt's first EXPERT-ID line names a registered expert whose
-    ``spawn_as`` is ``adversarial`` — the registry is the authority, so the wording of
-    the rest of the prompt does not matter (run_a87bfe3f: two experts spawned with a
-    plain "read your instructions" second line were not counted and D7 refused);
-    (3) a liberal keyword match on description + prompt. Empty everything → False
-    (no evidence = not adversarial; fail-safe: the gate should DENY, not silently
-    pass, when intent is unknowable)."""
-    st = str(subagent_type or "")
-    if _ADVERSARIAL_TYPE_RE.search(st):
-        return True
-    eid = _extract_expert_id(prompt or "")
-    if eid and eid in _registered_adversarial_experts():
-        return True
-    blob = f"{description or ''}\n{prompt or ''}"
-    return bool(_ADVERSARIAL_INTENT_RE.search(blob))
 
 
 def create_v1_review_handout_tracker(session_context: Optional[dict] = None):
@@ -1123,24 +1016,15 @@ def create_agent_tool_audit_hook(
     When the Agent tool completes (SubagentStop event), writes a marker file
     at ``STATE_DIR/pipeline_agent_audit/<run_id>.marker``. The pipeline
     validator reads this file to confirm the Agent tool was actually invoked
-    during adversarial review — structural proof, not honor-system.
+    during review — structural proof, not honor-system.
 
-    Three markers (the first two are the original pipeline-validator evidence,
-    unchanged; the third gates the commit hook):
+    Two markers:
     1. If ``_active_pipeline_run_id`` is set in session_context: writes
        ``<run_id>.marker`` (precise match — pipeline orchestrator sets this).
     2. Always: writes ``session_<session_id>_<ts>.marker`` as session-level
-       evidence. The validator (Check 9b) accepts either form. It carries the
-       ``expert_id`` of the prompt's EXPERT-ID line. A Gate-0 verdict is never
-       written here: it exists only in the run's signed v1 answer event.
-    3. CONDITIONAL: if THIS sub-agent's intent is adversarial-review (classified
-       via _is_adversarial_intent on agent_type + the transcript-head spawn
-       prompt), ALSO writes ``session_<session_id>_adv_<ts>.marker`` carrying a
-       ``reviewed_paths`` key. This is the evidence security_hooks.
-       create_adversarial_commit_gate requires — via _session_adversarial_coverage,
-       which DIFF-BINDS the commit: the committed path-set must be covered by the
-       union of these markers' reviewed_paths. An investigation/Explore sub-agent
-       writes markers 1–2 but NOT this one, so it cannot satisfy the commit gate.
+       evidence. It carries the ``expert_id`` of the prompt's EXPERT-ID line.
+       A Gate-0 verdict is never written here: it exists only in the run's
+       signed v1 answer event.
     """
     ctx = session_context if session_context is not None else {}
 
@@ -1152,16 +1036,13 @@ def create_agent_tool_audit_hook(
         if not session_id and not run_id:
             return {}
 
-        # agent_type is read cheaply on-loop (it's already in input_data). The
-        # transcript READ + intent classification + marker writes ALL run in ONE
+        # The transcript READ + marker writes run in ONE
         # off-loop thread hop below — the sub-agent transcript is on the same disk
         # the daemon is actively writing, so reading it inline would block the event
         # loop on a busy disk (RP53; the sibling create_subagent_capture_hook already
         # offloads its transcript read via to_thread).
-        agent_type = _extract_field(input_data, "agent_type", "")
         transcript_path = _extract_field(input_data, "agent_transcript_path", "")
         last_message = _extract_field(input_data, "last_assistant_message", "")
-        hook_cwd = _extract_field(input_data, "cwd", "")
 
         try:
             _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1182,19 +1063,11 @@ def create_agent_tool_audit_hook(
                     known = float(ctx_ts) if isinstance(ctx_ts, (int, float)) else float("-inf")
                     if not owner or linked[1] > known:
                         owner = linked[0]
-                # Read the sub-agent's spawn-prompt head ONCE, UNCONDITIONALLY (R1.5b-i):
-                # it feeds BOTH adversarial-intent classification AND expert_id
-                # extraction. It MUST be read outside the `if not adversarial` branch —
-                # if agent_type already classifies adversarial, the head was never read
-                # before, so the EXPERT-ID line (and thus expert_id) would never be
-                # extracted → completed-expert set empty → the D7 gate self-locks. One
-                # read here (still inside this off-loop thread hop) serves both uses.
+                # Read the sub-agent's spawn-prompt head once: it feeds expert_id
+                # extraction and the v1 answer bridge below.
                 prompt_head = (
                     _read_subagent_prompt_head(transcript_path) if transcript_path else ""
                 )
-                # Classify THIS sub-agent's intent: agent_type primary; the HEAD of
-                # its OWN transcript (spawn prompt) as fallback. Per-agent-correct by
-                # construction — this SubagentStop fires for exactly one sub-agent.
                 # Which run and which expert: a prompt FILE that the v1 review handout
                 # (`pipeline_v1.py review-start`) wrote under runs/<run_id>/evidence/prompts/
                 # and the sub-agent read in full names both, so a session working on two
@@ -1204,12 +1077,6 @@ def create_agent_tool_audit_hook(
                 owner, expert_id, attributed_by = _resolve_attribution(
                     _extract_expert_id(prompt_head) if prompt_head else None,
                     _handout_attribution(reads, session_id, prompt_head), owner)
-                adversarial = _is_adversarial_intent(agent_type, "", "")
-                if not adversarial and (prompt_head or expert_id):
-                    # the resolved id goes first so the registry check sees a file-derived one
-                    adversarial = _is_adversarial_intent(
-                        agent_type, "", (f"EXPERT-ID: {expert_id}\n" if expert_id else "") + prompt_head)
-
                 # Write run-specific marker if run_id available (primary path)
                 if owner:
                     marker_file = _PIPELINE_AUDIT_DIR / f"{owner}.marker"
@@ -1228,8 +1095,7 @@ def create_agent_tool_audit_hook(
                 session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts * 1_000_000)}.marker"
                 # ``expert_id`` is ADDITIVE (existing readers ignore unknown keys): it lets
                 # stage-complete count review rounds per expert from the one marker every
-                # completed sub-agent writes — the _adv_ marker below exists only for
-                # sub-agents classified adversarial, so counting from it undercounts.
+                # completed sub-agent writes.
                 base = {
                     "ts": ts,
                     "event": "SubagentStop",
@@ -1283,51 +1149,8 @@ def create_agent_tool_audit_hook(
                                 )
                         except Exception:
                             # Usage is optional accounting. A malformed transcript or
-                            # metric persistence failure must not suppress legacy
-                            # completion/adversarial markers below.
+                            # metric persistence failure must not fail the hook.
                             logger.warning("v1 subagent usage recording failed", exc_info=True)
-
-                # DISTINCT adversarial marker — consumed by the live commit gate
-                # `_session_adversarial_coverage` (security_hooks.py), which matches the
-                # `_adv_` infix AND reads `reviewed_paths` below to diff-bind coverage.
-                # Written ONLY on adversarial completion + only when we have a session to
-                # scope it to. The `_adv_` infix is what the gate matches; a base marker
-                # (ts is numeric) can never contain it, so the two are unambiguous.
-                if adversarial and session_id:
-                    payload = {
-                        "ts": ts,
-                        "event": "SubagentStop",
-                        "session_id": session_id,
-                        "adversarial": True,
-                        "agent_type": agent_type or "unknown",
-                        # R1.5b-ii: carry the owning run_id so the D7 commit-gate can
-                        # attribute this completed expert to the CORRECT run — a sibling
-                        # run in the SAME session must not satisfy a requirement it did
-                        # not review (Gate-1 cross-run finding). None/"unknown" when no
-                        # pipeline run owns this session (manual adversarial spawn).
-                        "run_id": owner or None,
-                        # R1.5b-i: carry WHICH expert ran (structured), not just THAT an
-                        # adversarial sub-agent ran — the D7 gate (R1.5b-ii) matches a
-                        # run's declared required_experts against the expert_ids that
-                        # actually completed. The id comes from the `EXPERT-ID:` anchor
-                        # line WE injected into the spawn prompt (方案 Z, zero Claude
-                        # coupling) and read back from this sub-agent's transcript head —
-                        # NOT from the SDK agent_type (which is `general-purpose` for real
-                        # spawns). Nullable: None = unattributed (no well-formed line).
-                        # The same resolution as the base marker (prompt file first).
-                        "expert_id": expert_id,
-                    }
-                    # Plan A diff-relevance: bind the review to the paths it covered.
-                    # KEY PRESENCE is load-bearing — reviewed_paths present (incl. [])
-                    # bounds coverage; ABSENT = unbounded (git unavailable, back-compat).
-                    # The gate reads this by key presence, never Python truthiness.
-                    reviewed = _reviewed_paths_at_head(hook_cwd) if hook_cwd else None
-                    if reviewed is not None:
-                        payload["reviewed_paths"] = reviewed
-                    # Microseconds, like the base marker: same-second siblings must not
-                    # overwrite each other (D7 would miss an expert that did run).
-                    adv_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_adv_{int(ts * 1_000_000)}.marker"
-                    adv_marker.write_text(json.dumps(payload))
 
             await asyncio.to_thread(_classify_and_write)
         except Exception:
@@ -1340,9 +1163,9 @@ def create_agent_tool_audit_hook(
 
 def _read_subagent_prompt_head(transcript_path: str) -> str:
     """Return the sub-agent's spawn prompt from the HEAD of its transcript (the
-    first sidechain user message), or "" on any error. The spawn prompt reveals
-    adversarial-review intent; unlike the error-capture hook (which reads the
-    TAIL for errors), intent lives at the head. Bounded read, fail-soft."""
+    first sidechain user message), or "" on any error. The spawn prompt carries
+    the EXPERT-ID line; unlike the error-capture hook (which reads the TAIL for
+    errors), it lives at the head. Bounded read, fail-soft."""
     try:
         p = Path(transcript_path)
         if not p.exists():
@@ -1719,147 +1542,6 @@ def _expert_answer(final_text: str) -> dict:
         state = "unparsed"
     return {"reported": uniq[:_REPORTED_MAX], "reported_state": state,
             "recheck_answers": answers}
-
-
-# Git timeout for the diff-relevance capture (Plan A). Bounded so a hung/locked git
-# never wedges the SubagentStop thread (mirrors the gate's fail-open discipline).
-_GIT_CAPTURE_TIMEOUT = 10
-
-
-def _repo_root_for(dir_path: str) -> Optional[str]:
-    """Canonical repo-root resolver — MUST be identical to the gate's, so the
-    writer's and the gate's absolute paths compare byte-for-byte (macOS /var vs
-    /private/var etc.). Returns realpath of `git -C <dir> rev-parse --show-toplevel`,
-    or None if not a git repo / git unavailable / timeout."""
-    if not dir_path:
-        return None
-    try:
-        r = subprocess.run(
-            ["git", "-C", dir_path, "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, timeout=_GIT_CAPTURE_TIMEOUT,
-        )
-        if r.returncode != 0:
-            return None
-        top = r.stdout.strip()
-        return __import__("os").path.realpath(top) if top else None
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _candidate_review_repos(dir_path: str) -> list[str]:
-    """The git repos whose working-tree changes count as 'what this run touched':
-    the sub-agent's cwd repo AND the SwarmWS workspace repo. Returned as de-duped
-    realpath roots (a repo present under both keys is scanned once).
-
-    Why a UNION (run_a5999658): a pipeline is launched from the swarmai SOURCE repo,
-    but a workspace-resident project's code lives in the SEPARATE SwarmWS repo. The
-    adversarial sub-agent inherits the launch cwd, so a cwd-only diff misses the
-    SwarmWS files BUILD changed — the marker then can't cover them and the commit
-    gate DENYs forever. Scanning both captures the changes wherever they landed.
-    The workspace root is derived via get_app_data_dir() (honors SWARM_DATA_DIR) —
-    never a hardcoded home path — so tests/sandboxes pin a scratch repo.
-    """
-    roots: list[str] = []
-    seen: set[str] = set()
-
-    def _add(candidate: Optional[str]) -> None:
-        root = _repo_root_for(candidate) if candidate else None
-        if root is not None and root not in seen:
-            seen.add(root)
-            roots.append(root)
-
-    _add(dir_path)
-    try:
-        from config import get_app_data_dir  # local import: avoids a load-time cycle
-        _add(str(get_app_data_dir() / "SwarmWS"))
-    except Exception:
-        logger.debug("_candidate_review_repos: suppressed exception on a fail-safe path", exc_info=True)
-        pass  # workspace unresolvable → just scan the cwd repo (no fail-open change)
-    return roots
-
-
-def _reviewed_paths_at_head(dir_path: str) -> Optional[list[str]]:
-    """The set of file paths the review touched vs HEAD, as ABSOLUTE realpaths,
-    UNIONED across the candidate repos (cwd repo + SwarmWS workspace). TRI-STATE —
-    the caller stores the result by KEY PRESENCE, never truthiness:
-      - None  → EVERY candidate repo is git-unavailable / not a repo / error →
-                caller OMITS reviewed_paths (path-less marker = unbounded, back-compat).
-      - []    → at least one repo was reachable AND all reachable repos are clean →
-                reviewed NOTHING → bounds coverage to the empty set (NOT unbounded).
-      - [abs] → the union of changed paths across the reachable candidate repos.
-
-    Fail-open red-line (RP50 / the C2 hole): None is returned ONLY when NO candidate
-    repo could be queried at all — never to paper over one ambiguous/clean repo. A
-    reachable-but-clean repo yields [] (bounded), keeping the gate's diff-bind honest.
-    """
-    import os
-    roots = _candidate_review_repos(dir_path)
-    if not roots:
-        return None  # nothing resolvable → unbounded (back-compat)
-
-    union: list[str] = []
-    seen: set[str] = set()
-    any_reachable = False
-    for root in roots:
-        try:
-            # `git status --porcelain=v1 -z` — NOT `git diff HEAD` — so BUILD's NEW
-            # files (untracked) are captured too. A brand-new handler.py is untracked
-            # until something `git add`s it; `git diff HEAD` shows only tracked changes
-            # and would silently miss exactly the files a fresh BUILD creates.
-            #
-            # -z is LOAD-BEARING (Gate-2 HIGH): without it, git C-quotes paths with
-            # spaces/non-ASCII (`"my file.py"`) while the gate's PENDING side uses
-            # `git diff --name-only` which does NOT quote — the two absolute paths then
-            # differ by the quote chars, `covered` never contains the pending path, and
-            # a genuinely-reviewed commit is falsely DENIED. -z emits RAW unquoted paths
-            # NUL-separated, byte-for-byte matching the diff side.
-            r = subprocess.run(
-                ["git", "-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"],
-                capture_output=True, text=True, timeout=_GIT_CAPTURE_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            # LOUD, never silent (SOUL P4): a timed-out candidate repo is skipped, which
-            # drops its changed files from coverage → a legitimately-reviewed commit in
-            # THAT repo would be DENIED (the original cross-repo bug, resurrected). On a
-            # huge workspace `git status --untracked-files=all` can exceed the cap; if
-            # this WARNs in production, raise _GIT_CAPTURE_TIMEOUT or narrow untracked
-            # scope — do NOT let the skip stay invisible.
-            logger.warning(
-                "[reviewed-paths] `git status` timed out (>%ss) for candidate repo %s — "
-                "its changed paths are EXCLUDED from adversarial coverage this marker; a "
-                "reviewed commit there may be falsely DENIED. Raise _GIT_CAPTURE_TIMEOUT "
-                "if this recurs.", _GIT_CAPTURE_TIMEOUT, root,
-            )
-            continue  # other candidates may still answer
-        except (OSError, subprocess.SubprocessError):
-            continue  # this repo unavailable → skip it, but others may answer
-        if r.returncode != 0:
-            continue  # git couldn't answer for this repo → skip (not a global None)
-        any_reachable = True
-        # -z format: each entry is `XY <path>\0`; a rename/copy (R/C) is
-        # `XY <new>\0<old>\0` — the NEW path comes FIRST, then a separate NUL-terminated
-        # old path. We iterate NUL fields, take each status-bearing field's path, and
-        # skip the bare old-path field that trails a rename/copy.
-        fields = [f for f in r.stdout.split("\0") if f]
-        i = 0
-        while i < len(fields):
-            entry = fields[i]
-            status = entry[:2]
-            rel = entry[3:]  # 2 status chars + 1 space, then the RAW (unquoted) path
-            if rel:
-                abs_path = os.path.realpath(os.path.join(root, rel))
-                if abs_path not in seen:
-                    seen.add(abs_path)
-                    union.append(abs_path)
-            # a rename/copy consumes the following NUL field (the old path) — skip it
-            if status and (status[0] in ("R", "C") or status[1] in ("R", "C")):
-                i += 2
-            else:
-                i += 1
-
-    if not any_reachable:
-        return None  # EVERY candidate repo failed git → unbounded (back-compat)
-    return union  # possibly [] (all reachable repos clean) — bounded, never None
 
 
 def create_subagent_capture_hook(

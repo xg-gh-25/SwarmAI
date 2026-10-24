@@ -2023,9 +2023,10 @@ async def background_command_guard(
 # ---------------------------------------------------------------------------
 # The adversarial_commit_gate that denied a `git commit` without a review sub-agent
 # was removed (design 2026-10-24-swarmai-usable-by-anyone §3.4, P6: in native mode the
-# agent decides which experts to call). SubagentStop still writes review markers to
-# _AGENT_AUDIT_DIR; the workspace auto-commit and the audit-marker gate read them, and
-# the commit-path helpers below serve active_run_commit_gate.
+# agent decides which experts to call), together with the adversarial markers it read
+# and the auto-commit withhold that mirrored it. SubagentStop still writes one session
+# marker per sub-agent to _AGENT_AUDIT_DIR; the commit-path helpers below serve
+# active_run_commit_gate.
 
 _AGENT_AUDIT_DIR = get_app_data_dir() / "state" / "pipeline_agent_audit"
 
@@ -2357,37 +2358,6 @@ def _command_has_git_commit(command: str) -> bool:
     return any(_segment_is_git_commit(seg) for seg in segments)
 
 
-# NOTE (run_df2668b4 → run_f4b9ae6f): the old _session_has_subagent_evidence
-# (accepted ANY session_<sid>_ marker) was REMOVED — it let an Explore agent satisfy
-# the gate; do NOT reintroduce it. run_df2668b4 tightened the gate to require an
-# ADVERSARIAL marker (existence). run_f4b9ae6f (Plan A) tightened further: the LIVE
-# GATE now calls _session_adversarial_coverage (below) to bind the review to the
-# committed PATH-SET. `_session_has_adversarial_evidence` is the earlier
-# existence-only predicate — retained ONLY because its unit tests pin the `_adv_`
-# infix + fail-open contract; it is NOT the gate's decision path anymore.
-
-
-def _session_has_adversarial_evidence(session_id: str) -> bool:
-    """Existence-only predicate: True iff an ADVERSARIAL-review marker exists for
-    *session_id*. NOTE: NOT the live gate check anymore — the gate uses
-    _session_adversarial_coverage (path-set binding, run_f4b9ae6f). Retained for
-    its unit tests, which pin the `_adv_` infix match (a base marker
-    session_<sid>_<numeric ts> can never contain `_adv_`) + the fail-OPEN contract
-    (missing session_id / FS error → True)."""
-    if not session_id:
-        return True  # cannot scope → fail open (never block on missing identity)
-    try:
-        if not _AGENT_AUDIT_DIR.is_dir():
-            return False
-        # Exact shape: session_<sid>_adv_<digits>.marker. A `startswith` needle
-        # would let a DIFFERENT session whose id begins with "<sid>_adv_run…" match
-        # this sid's evidence (prefix ambiguity, REVIEW LOW-3). Bind the boundary.
-        pat = re.compile(rf"^session_{re.escape(session_id)}_adv_\d+\.marker$")
-        return any(pat.match(p.name) for p in _AGENT_AUDIT_DIR.iterdir())
-    except OSError:
-        return True  # fail open on FS error
-
-
 _GATE_GIT_TIMEOUT = 3  # per git subprocess — a gate that shells git must never hang the commit
 # Outer wall-clock cap on the whole coverage helper. _pending_commit_paths can run up
 # to 4 sequential git subprocesses, each bounded by _GATE_GIT_TIMEOUT: root rev-parse +
@@ -2401,9 +2371,8 @@ _GATE_COVERAGE_TIMEOUT = _GATE_GIT_TIMEOUT * 4 + 3
 
 
 def _gate_repo_root_for(dir_path: str) -> str | None:
-    """Canonical repo-root resolver — MUST match runtime_hooks._repo_root_for so
-    the gate's absolute paths compare byte-for-byte with the marker's. realpath of
-    `git -C <dir> rev-parse --show-toplevel`, or None if not a repo / git error."""
+    """realpath of `git -C <dir> rev-parse --show-toplevel`, or None if not a repo
+    / git error."""
     if not dir_path:
         return None
     try:
@@ -2924,49 +2893,6 @@ def _pending_commit_paths(dir_path: str, command: str):
     for p in cwd_paths:    # positional pathspec / -o → relative to committer CWD
         out.add(_commit_identity(p if os.path.isabs(p) else os.path.join(dir_path or root, p)))
     return out
-
-
-def _session_adversarial_coverage(session_id: str):
-    """Return (has_marker, covered_abs_paths, has_unbounded) for this session's
-    adversarial markers. `has_unbounded` is True iff SOME marker lacks the
-    reviewed_paths KEY (git-unavailable at review time = unbounded, back-compat).
-    A marker with reviewed_paths == [] contributes the EMPTY set to `covered` and
-    does NOT set has_unbounded — the []-vs-key-absent distinction is by KEY
-    PRESENCE, never truthiness (Gate-1 round-2 #3).
-
-    C2: `has_unbounded` is NO LONGER a blanket approve signal. The gate now binds
-    the diff FIRST (covered ⊇ pending → approve); an unbounded marker only serves
-    as a LOUD (WARN) fail-open fallback when covered does not cover pending AND git
-    genuinely couldn't compute coverage at review time. So a single path-less marker
-    can no longer unlock every commit in the session — a real, coverable-but-uncovered
-    path is still DENIED. Fail-open on THIS helper's own failure is still signalled by
-    returning (True, set(), True) on OSError (the caller then hits the unbounded
-    fallback + WARN)."""
-    covered: set[str] = set()
-    has_marker = False
-    has_unbounded = False
-    if not session_id:
-        return (True, covered, True)  # cannot scope → treat as unbounded (fail-open)
-    try:
-        if not _AGENT_AUDIT_DIR.is_dir():
-            return (False, covered, False)
-        pat = re.compile(rf"^session_{re.escape(session_id)}_adv_\d+\.marker$")
-        for p in _AGENT_AUDIT_DIR.iterdir():
-            if not pat.match(p.name):
-                continue
-            has_marker = True
-            try:
-                data = json.loads(p.read_text())
-            except (OSError, json.JSONDecodeError):
-                has_unbounded = True  # unreadable marker → don't false-block
-                continue
-            if "reviewed_paths" not in data:      # KEY ABSENT → unbounded
-                has_unbounded = True
-            else:
-                covered.update(data.get("reviewed_paths") or [])  # [] contributes nothing
-        return (has_marker, covered, has_unbounded)
-    except OSError:
-        return (True, covered, True)  # FS error → fail open
 
 
 # ---------------------------------------------------------------------------
@@ -4540,8 +4466,8 @@ def create_session_link_gate(session_context: dict[str, Any]):
 # ---------------------------------------------------------------------------
 # The backend's SubagentStop hook (runtime_hooks.create_agent_tool_audit_hook) is the
 # only legitimate writer of _AGENT_AUDIT_DIR. Its markers are the evidence behind the
-# D7 expert check, the Red Team marker check, the Gate-0/1 spawn binding,
-# the workspace auto-commit and pipeline_validator Check 9b. A marker the agent writes
+# D7 expert check, the Red Team marker check, the Gate-0/1 spawn binding and
+# pipeline_validator Check 9b. A marker the agent writes
 # by hand forges all of them, and deleting the directory sends the readers down their
 # "unreadable" fail-open path. This gate DENIES:
 #   • Write/Edit/MultiEdit/NotebookEdit whose path (~ expanded, realpath) is the

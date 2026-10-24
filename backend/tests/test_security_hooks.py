@@ -10,6 +10,7 @@ and ``DEFAULT_DANGEROUS_PATTERNS``.
 
 import fnmatch
 import json
+import re
 
 import pytest
 from hypothesis import given, strategies as st
@@ -823,10 +824,32 @@ class TestTagDeleteCarveOut:
 
 
 # ---------------------------------------------------------------------------
-# Adversarial commit gate — TIGHTENED evidence (Plan B v4, run_df2668b4)
-# The gate must pass only when an ADVERSARIAL sub-agent completed this session,
-# not any sub-agent (an Explore/investigation marker must NOT satisfy it).
+# Commit path-set parser (_pending_commit_paths) — used by active_run_commit_gate.
+# The cases below plant small "reviewed paths" marker files and check the parser
+# against them; the reader for those files lives here, not in production code.
 # ---------------------------------------------------------------------------
+
+
+def _test_coverage(session_id):
+    """(has_marker, covered, has_unbounded) from the test's planted
+    session_<sid>_adv_<n>.marker files in sh._AGENT_AUDIT_DIR."""
+    import core.security_hooks as sh
+    covered, has_marker, has_unbounded = set(), False, False
+    if not session_id:
+        return (True, covered, True)
+    if not sh._AGENT_AUDIT_DIR.is_dir():
+        return (False, covered, False)
+    pat = re.compile(rf"^session_{re.escape(session_id)}_adv_\d+\.marker$")
+    for p in sh._AGENT_AUDIT_DIR.iterdir():
+        if not pat.match(p.name):
+            continue
+        has_marker = True
+        data = json.loads(p.read_text())
+        if "reviewed_paths" not in data:
+            has_unbounded = True
+        else:
+            covered.update(data.get("reviewed_paths") or [])
+    return (has_marker, covered, has_unbounded)
 
 
 def _coverage_gate(session_context):
@@ -836,13 +859,13 @@ def _coverage_gate(session_context):
     adversarial_commit_gate was removed (design 2026-10-24-swarmai-usable-by-anyone §3.4),
     but the commit path-set parser it used (_pending_commit_paths) still serves
     active_run_commit_gate, and these cases pin its behaviour. Approve when the pending
-    set is uncomputable, empty or covered by the session's review markers; deny when it
+    set is uncomputable, empty or covered by the planted markers; deny when it
     is not covered or retargets another repo."""
     async def _gate(input_data, tool_use_id, context):
         command = (input_data.get("tool_input") or {}).get("command", "") or ""
         if not command or not sh._command_has_git_commit(command):
             return {"decision": "approve"}
-        has_marker, covered, has_unbounded = sh._session_adversarial_coverage(
+        has_marker, covered, has_unbounded = _test_coverage(
             session_context.get("sdk_session_id", "") or "")
         pending = sh._pending_commit_paths(input_data.get("cwd", "") or "", command) \
             if has_marker else set(["<no marker>"])

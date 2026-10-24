@@ -2138,116 +2138,13 @@ class TestEnforcementInjector:
         assert isinstance(enf_out["hookSpecificOutput"]["additionalContext"], str)
 
 
-# ---------------------------------------------------------------------------
-# Adversarial-intent detection at SubagentStop (Plan B v4 — commit-gate evidence)
-# ---------------------------------------------------------------------------
-
-class TestAdversarialIntentClassifier:
-    """AC6: classify a sub-agent as adversarial-review from agent_type (primary)
-    + transcript-head prompt (fallback). Must separate adversarial-review intent
-    from Explore/investigation intent, incl. CJK + synonyms; and NOT false-accept
-    a plain 'find code' Explore."""
-
-    def test_adversarial_prompts_match(self):
-        from core.runtime_hooks import _is_adversarial_intent
-        adversarial = [
-            ("general-purpose", "adversarial review", "You are an adversarial reviewer. Refute this diff."),
-            ("general-purpose", "", "Try to REFUTE the claim and find bugs in this changeset."),
-            ("general-purpose", "", "Red-team this design; poke holes and stress-test it."),
-            ("general-purpose", "", "Attack this diff — find any regression or security hole."),
-            ("general-purpose", "", "对抗性审查这个改动,找出 bug 和回归。"),
-            ("code-reviewer", "", "review as a skeptic; break it"),
-        ]
-        for st, desc, prompt in adversarial:
-            assert _is_adversarial_intent(st, desc, prompt) is True, f"should match: {prompt!r}"
-
-    def test_explore_prompts_do_not_match(self):
-        from core.runtime_hooks import _is_adversarial_intent
-        non_adversarial = [
-            ("Explore", "", "Find where the system prompt is built. Locate the file and report."),
-            ("general-purpose", "", "Investigate how recall works and summarize the call path."),
-            ("Explore", "", "Search the codebase for the marker writer and cite file:line."),
-            ("general-purpose", "", "定位生成 governance 卡的代码,报告文件和行号。"),
-        ]
-        for st, desc, prompt in non_adversarial:
-            assert _is_adversarial_intent(st, desc, prompt) is False, f"should NOT match: {prompt!r}"
-
-    def test_agent_type_primary_signal(self):
-        from core.runtime_hooks import _is_adversarial_intent
-        # A dedicated adversarial subagent_type is sufficient even with empty prompt
-        assert _is_adversarial_intent("adversarial-reviewer", "", "") is True
-        # Empty everything → not adversarial (fail-safe: no evidence = not adversarial)
-        assert _is_adversarial_intent("", "", "") is False
-
-    def test_bare_reviewer_type_is_not_adversarial(self):
-        """REVIEW HIGH-2: a generic 'code-reviewer' type (style/quality pass) must
-        NOT count as adversarial on type alone — else it re-opens the false-accept
-        hole. It only counts if its PROMPT shows adversarial intent."""
-        from core.runtime_hooks import _is_adversarial_intent
-        assert _is_adversarial_intent("code-reviewer", "", "Check style and naming.") is False
-        assert _is_adversarial_intent("peer-reviewer", "", "") is False
-
-    def test_realistic_adversarial_prompts_without_literal_adversarial(self):
-        """REVIEW MED-1: real adversarial-review spawns rarely say the word
-        'adversarial'. These MUST match, or a genuine review false-blocks the
-        commit and trains the user toward the FORCE escape hatch."""
-        from core.runtime_hooks import _is_adversarial_intent as f
-        for prompt in [
-            "Hunt for regressions in this diff.",
-            "Look for security vulnerabilities in this code.",
-            "Find edge cases that break this change.",
-            "Audit this diff for governance violations.",
-            "Challenge the assumptions and try to break it.",
-            "Critically review this changeset.",
-            # Gate-2 findings: real defect-hunting phrasings that MUST match
-            "find security issues in the code",
-            "Review this diff and find any bugs or regressions.",
-            "find any bugs in this change",
-            "find hidden vulnerabilities in the implementation",
-        ]:
-            assert f("general-purpose", "", prompt) is True, f"should match: {prompt!r}"
-
-    def test_explore_find_bugs_not_diff_anchored_excluded(self):
-        """REVIEW MED-2: an Explore prompt that mentions 'find bugs/issues' but is
-        NOT bound to the diff/change must NOT be accepted."""
-        from core.runtime_hooks import _is_adversarial_intent as f
-        for prompt in [
-            "Find where bugs get logged and report the file.",
-            "Find the issues tracker config and summarize it.",
-            "Locate the code that reports bugs to Sentry.",
-        ]:
-            assert f("Explore", "", prompt) is False, f"should NOT match: {prompt!r}"
-
-
-class TestAdversarialCompletionMarker:
-    """AC2/AC7/AC8: the SubagentStop audit hook writes a DISTINCT adversarial
-    marker (session_<sid>_adv_<ts>.marker) ONLY when the completing sub-agent's
-    transcript/agent_type shows adversarial intent. Completion-proof (written at
-    SubagentStop, not spawn) + per-agent-correct (reads its OWN transcript)."""
+class TestCompletionMarker:
+    """The SubagentStop audit hook writes one session marker per completed
+    sub-agent and no separate adversarial marker (the commit gate that read it
+    was removed, design 2026-10-24-swarmai-usable-by-anyone §3.4)."""
 
     @pytest.mark.asyncio
-    async def test_adversarial_agent_writes_adv_marker(self, tmp_path, monkeypatch):
-        import core.runtime_hooks as rh
-        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
-        transcript = tmp_path / "sub.jsonl"
-        transcript.write_text(
-            '{"isSidechain": true, "type": "user", "message": {"content": '
-            '"You are an adversarial reviewer. Refute this diff and find bugs."}}\n'
-        )
-        ctx = {"sdk_session_id": "sess-adv"}
-        hook = rh.create_agent_tool_audit_hook(ctx)
-        await hook(
-            {"agent_id": "a-1", "agent_transcript_path": str(transcript), "agent_type": "general-purpose"},
-            None, MagicMock(),
-        )
-        adv = list(tmp_path.glob("session_sess-adv_adv_*.marker"))
-        base = [p for p in tmp_path.glob("session_sess-adv_*.marker") if "_adv_" not in p.name]
-        assert len(adv) == 1, "adversarial completion must write an _adv_ marker"
-        assert json.loads(adv[0].read_text())["adversarial"] is True
-        assert len(base) == 1, "base marker must still be written (validator Check 9b)"
-
-    @pytest.mark.asyncio
-    async def test_explore_agent_writes_no_adv_marker(self, tmp_path, monkeypatch):
+    async def test_completion_writes_no_adv_marker(self, tmp_path, monkeypatch):
         import core.runtime_hooks as rh
         monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
         transcript = tmp_path / "sub.jsonl"
@@ -2263,7 +2160,7 @@ class TestAdversarialCompletionMarker:
         )
         adv = list(tmp_path.glob("session_sess-exp_adv_*.marker"))
         base = [p for p in tmp_path.glob("session_sess-exp_*.marker") if "_adv_" not in p.name]
-        assert len(adv) == 0, "Explore completion must NOT write an _adv_ marker"
+        assert len(adv) == 0, "no completion writes an _adv_ marker"
         assert len(base) == 1, "base marker still written"
 
     @pytest.mark.asyncio
@@ -2293,103 +2190,9 @@ class TestAdversarialCompletionMarker:
         assert "thread" in seen, "transcript read never happened"
         assert seen["thread"] != loop_thread, "transcript read ran ON the event loop (RP53)"
 
-    @pytest.mark.asyncio
-    async def test_agent_type_adversarial_without_transcript(self, tmp_path, monkeypatch):
-        """agent_type alone (dedicated reviewer type) suffices even if transcript unreadable."""
-        import core.runtime_hooks as rh
-        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path)
-        ctx = {"sdk_session_id": "sess-t"}
-        hook = rh.create_agent_tool_audit_hook(ctx)
-        await hook(
-            {"agent_id": "a-3", "agent_transcript_path": "/nonexistent.jsonl", "agent_type": "adversarial-reviewer"},
-            None, MagicMock(),
-        )
-        assert len(list(tmp_path.glob("session_sess-t_adv_*.marker"))) == 1
-
-
-class TestReviewedPathsCapture:
-    """Plan A AC1/AC4/AC8: on adversarial completion the adv marker records the
-    REVIEWED path-set (absolute, repo-root-resolved). Tri-state:
-      - git ok + changes  -> reviewed_paths = [abs paths]
-      - git ok + clean     -> reviewed_paths = []            (covers nothing)
-      - not a git repo/err -> reviewed_paths key ABSENT      (unbounded, back-compat)
-    """
-
-    @staticmethod
-    def _init_repo(d):
-        import subprocess
-        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(d), "PATH": __import__("os").environ.get("PATH", "")}
-        subprocess.run(["git", "init", "-q"], cwd=str(d), env=env, check=True)
-        # HOME is pointed at the repo dir (test isolation), so git-defender / tooling
-        # writes its cache + logs INTO the working tree. A real repo gitignores such
-        # tooling noise; mirror that so `git status --porcelain` (the marker's scan,
-        # run_a5999658) sees only real code changes, not .git-defender/*.log artifacts.
-        (d / ".gitignore").write_text(".git-defender/\n*.log\n.cache/\n")
-        (d / "a.py").write_text("x = 1\n")
-        (d / "b.py").write_text("y = 2\n")
-        subprocess.run(["git", "add", "-A"], cwd=str(d), env=env, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(d), env=env, check=True)
-        return env
-
-    @pytest.mark.asyncio
-    async def test_reviewed_paths_captured_when_changes(self, tmp_path, monkeypatch):
-        import core.runtime_hooks as rh, json, os
-        # Isolate the SwarmWS workspace candidate repo (run_a5999658 multi-repo scan):
-        # point get_app_data_dir() at a scratch dir with no SwarmWS repo, so this test
-        # exercises ONLY the cwd repo (its single-repo intent) — otherwise the real
-        # ~/.swarm-ai/SwarmWS working tree would union in and break the exact-match.
-        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_workspace"))
-        repo = tmp_path / "repo"; repo.mkdir()
-        self._init_repo(repo)
-        (repo / "a.py").write_text("x = 999\n")  # modify one tracked file
-        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
-        transcript = tmp_path / "sub.jsonl"
-        transcript.write_text('{"isSidechain":true,"type":"user","message":{"content":"Adversarially review this diff, refute it, find bugs."}}\n')
-        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "s"})
-        await hook({"agent_id": "a", "agent_transcript_path": str(transcript),
-                    "agent_type": "general-purpose", "cwd": str(repo)}, None, MagicMock())
-        adv = list((tmp_path / "audit").glob("session_s_adv_*.marker"))
-        assert len(adv) == 1
-        data = json.loads(adv[0].read_text())
-        assert "reviewed_paths" in data
-        assert data["reviewed_paths"] == [os.path.realpath(str(repo / "a.py"))]
-
-    @pytest.mark.asyncio
-    async def test_reviewed_paths_empty_on_clean_tree(self, tmp_path, monkeypatch):
-        """git ok but no changes → reviewed_paths == [] (covers nothing, NOT unbounded)."""
-        import core.runtime_hooks as rh, json
-        # Isolate the workspace candidate repo (see the sibling test) so a clean cwd
-        # repo yields [] rather than unioning the real ~/.swarm-ai/SwarmWS working tree.
-        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "no_workspace"))
-        repo = tmp_path / "repo"; repo.mkdir()
-        self._init_repo(repo)  # clean tree after commit
-        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
-        transcript = tmp_path / "sub.jsonl"
-        transcript.write_text('{"isSidechain":true,"type":"user","message":{"content":"adversarial: refute this diff"}}\n')
-        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "s"})
-        await hook({"agent_id": "a", "agent_transcript_path": str(transcript),
-                    "agent_type": "general-purpose", "cwd": str(repo)}, None, MagicMock())
-        data = json.loads(list((tmp_path / "audit").glob("session_s_adv_*.marker"))[0].read_text())
-        assert data["reviewed_paths"] == []  # present + empty, distinct from absent
-
-    @pytest.mark.asyncio
-    async def test_reviewed_paths_absent_when_not_git(self, tmp_path, monkeypatch):
-        """Not a git repo → reviewed_paths key ABSENT → path-less → unbounded (back-compat)."""
-        import core.runtime_hooks as rh, json
-        nongit = tmp_path / "plain"; nongit.mkdir()
-        monkeypatch.setattr(rh, "_PIPELINE_AUDIT_DIR", tmp_path / "audit")
-        transcript = tmp_path / "sub.jsonl"
-        transcript.write_text('{"isSidechain":true,"type":"user","message":{"content":"adversarial: attack this diff"}}\n')
-        hook = rh.create_agent_tool_audit_hook({"sdk_session_id": "s"})
-        await hook({"agent_id": "a", "agent_transcript_path": str(transcript),
-                    "agent_type": "general-purpose", "cwd": str(nongit)}, None, MagicMock())
-        data = json.loads(list((tmp_path / "audit").glob("session_s_adv_*.marker"))[0].read_text())
-        assert "reviewed_paths" not in data  # unbounded (back-compat)
-
-
 @pytest.mark.asyncio
 async def test_base_marker_records_expert_id_for_every_completed_subagent(tmp_path, monkeypatch):
-    """The per-sub-agent marker carries the EXPERT-ID too, not only the _adv_ marker:
+    """The per-sub-agent marker carries the EXPERT-ID:
     a gate that is not classified adversarial (e.g. a Gate-0 skeptic) must still be
     counted per id by stage-complete (pipeline-run-budget H1)."""
     import core.runtime_hooks as rh
@@ -2534,14 +2337,9 @@ async def _finish(rh, tmp_path, ctx, first_prompt, reads):
     hook = rh.create_agent_tool_audit_hook(ctx)
     await hook({"agent_id": "a", "agent_transcript_path": str(t), "agent_type": "general-purpose"},
                None, MagicMock())
-    base = sorted((p for p in rh._PIPELINE_AUDIT_DIR.glob(f"session_{ctx['sdk_session_id']}_*.marker")
-                   if "_adv_" not in p.name), key=lambda p: p.stat().st_mtime_ns)
-    adv = sorted(rh._PIPELINE_AUDIT_DIR.glob(f"session_{ctx['sdk_session_id']}_adv_*.marker"),
-                 key=lambda p: p.stat().st_mtime_ns)
-    last = json.loads(base[-1].read_text())
-    this_adv = [json.loads(p.read_text()) for p in adv]
-    this_adv = [d for d in this_adv if d["ts"] == last["ts"]]  # this call's twin only
-    return last, (this_adv[0] if this_adv else None)
+    base = sorted(rh._PIPELINE_AUDIT_DIR.glob(f"session_{ctx['sdk_session_id']}_*.marker"),
+                  key=lambda p: p.stat().st_mtime_ns)
+    return json.loads(base[-1].read_text())
 
 
 @pytest.mark.asyncio
@@ -2554,10 +2352,9 @@ async def test_a_pointer_prompt_is_attributed_from_the_file_it_read(tmp_path, mo
     p = _handout(tmp_path, "run_aaa1", "security.md", "EXPERT-ID: security")
     ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_newer",
            "_active_pipeline_run_id_ts": time.time()}
-    base, adv = await _finish(rh, tmp_path, ctx,
+    base = await _finish(rh, tmp_path, ctx,
                               f"Adversarially review the change: read {p} and follow it exactly.", [p])
     assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_aaa1", "security", "prompt_file")
-    assert adv is not None and (adv["run_id"], adv["expert_id"]) == ("run_aaa1", "security")
     assert (audit / "run_aaa1.marker").is_file() and not (audit / "run_newer.marker").exists()
 
 
@@ -2571,12 +2368,12 @@ async def test_a_session_with_two_runs_credits_the_run_whose_prompt_was_read(tmp
     other = _handout(tmp_path, "run_old", "correctness.md", "EXPERT-ID: correctness")
     ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_new",
            "_active_pipeline_run_id_ts": time.time()}
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\nread {g1} first", [g1])
+    base = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\nread {g1} first", [g1])
     assert (base["run_id"], base["expert_id"]) == ("run_old", "plan-skeptic")
     assert g1.as_posix() in base["prompt_reads"]
     # its own line names plan-skeptic but it read only another expert's file: no run from
     # that file (a meta-review reading the experts' prompts must not move them)
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\njudge {other}", [other])
+    base = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\njudge {other}", [other])
     assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_new", "plan-skeptic", "session")
 
 
@@ -2590,24 +2387,24 @@ async def test_file_attribution_never_takes_a_foreign_or_ambiguous_run(tmp_path,
     know = _handout(tmp_path, "run_x1", "review-knowledge.md", "## Project knowledge")
     ctx = {"sdk_session_id": "sess-a", "_active_pipeline_run_id": "run_mine",
            "_active_pipeline_run_id_ts": time.time()}
-    base, _ = await _finish(rh, tmp_path, ctx, f"Read {foreign}", [foreign])  # another session's run
+    base = await _finish(rh, tmp_path, ctx, f"Read {foreign}", [foreign])  # another session's run
     assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: correctness\nread {a} and {b}", [a, b])  # two runs
+    base = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: correctness\nread {a} and {b}", [a, b])  # two runs
     assert (base["run_id"], base["expert_id"], base["attributed_by"]) == ("run_mine", "correctness", "session")
-    base, _ = await _finish(rh, tmp_path, ctx, f"Read {know}", [know])  # a file with no EXPERT-ID line
+    base = await _finish(rh, tmp_path, ctx, f"Read {know}", [know])  # a file with no EXPERT-ID line
     assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: correctness\nread {know} then {a}", [know, a])
+    base = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: correctness\nread {know} then {a}", [know, a])
     assert (base["run_id"], base["attributed_by"]) == ("run_x1", "prompt_file")
     # security review 2026-10-18: a sub-agent spawned for something else that READS an
     # expert's prompt is not that expert; a copy outside Projects/ or an unstamped run
     # names nothing (fail closed)
-    base, adv = await _finish(rh, tmp_path, ctx, "Explore: what do the reviewer prompts say?", [a])
-    assert (base["run_id"], base["expert_id"], adv) == ("run_mine", None, None)
+    base = await _finish(rh, tmp_path, ctx, "Explore: what do the reviewer prompts say?", [a])
+    assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
     fake = _handout(tmp_path, "run_x1", "security.md", "EXPERT-ID: security", root=tmp_path / "tmp")
-    base, _ = await _finish(rh, tmp_path, ctx, f"Read {fake}", [fake])
+    base = await _finish(rh, tmp_path, ctx, f"Read {fake}", [fake])
     assert (base["run_id"], base["expert_id"]) == ("run_mine", None)
     legacy = _handout(tmp_path, "run_legacy", "plan-skeptic.md", "EXPERT-ID: plan-skeptic", session_id=None)
-    base, _ = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\nread {legacy}", [legacy])
+    base = await _finish(rh, tmp_path, ctx, f"EXPERT-ID: plan-skeptic\nread {legacy}", [legacy])
     assert (base["run_id"], base["expert_id"]) == ("run_mine", "plan-skeptic")
 
 
@@ -2828,7 +2625,7 @@ class TestV1StableCompletion:
                         "cwd": str(tmp_path)}, None, None)
 
         assert any(row["kind"] == "answer" for row in store.read_events())
-        assert list((tmp_path / "markers").glob("session_session_1_adv_*.marker"))
+        assert list((tmp_path / "markers").glob("session_session_1_*.marker"))
 
     @pytest.mark.asyncio
     async def test_tracker_ignores_mutable_active_run_hint(self, tmp_path):
