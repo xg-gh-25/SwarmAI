@@ -3,7 +3,7 @@ title: SwarmAI 让别人装上就能用 — 安装包、pipeline 运行时、任
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: r4 — XG 2026-10-24 定：pipeline 在任何仓库都不强制，方向是 autonomy；产品默认"相称"；只有显式开启的仓库才强制 commit 前审查，开关在 Settings；冻结"防 agent 作恶"类加固，先量成本和 gate 实效
+status: r5 — pipeline 与语言无关（不逐个适配）；profile 来源：仓库声明 → agent 提议并在 base 上试跑 → 未验证。r4：XG 2026-10-24 定：pipeline 在任何仓库都不强制，方向是 autonomy；产品默认"相称"；只有显式开启的仓库才强制 commit 前审查，开关在 Settings；冻结"防 agent 作恶"类加固，先量成本和 gate 实效
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -61,7 +61,7 @@ agent 按改动的风险选择做法，不一刀切：
 ### 0.6 其余取舍（沿用 r3）
 
 - Windows 不启用 pipeline，默认 native；pipeline 命令在 Windows 上明确返回"不支持"。
-- 第一版 adapter：`.swarmai/pipeline.toml` + 按 manifest 识别的 pytest、node；其他语言 `unverified`，照样落地。
+- 第一版 adapter（r5 取代）：pipeline 与语言无关，不逐个语言适配，见 §3.3.2。
 - 验证结论三档 `verified` / `failed` / `unverified(原因)`；只有 `failed` 挡，且只在 pipeline 里挡。
 - 不做 sandbox 和首次批准，只清理凭证类环境变量（runner 跑在 agent 自己的权限里）。
 - 不签名先发：macOS 下载页写明"系统设置 → 隐私与安全性 → 仍要打开"（macOS 15 起右键打开不再有效）；S1 检查 arm64 可执行文件有 ad-hoc 签名；Windows SmartScreen 点"更多信息 → 仍要运行"。
@@ -112,7 +112,7 @@ agent 按改动的风险选择做法，不一刀切：
 4. 让"安装包缺东西"这一类错误再也发生不了：发布前必须在真实安装产物上跑通冒烟测试。
 
 **非目标**
-- 不追求对每种语言都做 SwarmAI 那样细的按依赖选测；通用语言默认"跑整套或按包跑"，精细选测是 adapter 的可选增强。
+- 不在 pipeline 里做任何语言相关的选测；通用选测只到"改动的测试文件 + 同目录测试 → 组件整套"。更细的选测由仓库自己的测试命令负责（SwarmAI 仓库就是这样）。
 - 不改 Pipeline v1 的签名、隔离、owner、落地协议（B 类已定）；同用户残余仍是 E7 遗留项 7。
 - 不在本设计里做 agent 进程隔离（单独立项）。
 
@@ -137,56 +137,63 @@ skeptic 证伪了 r1 的"换成可搬移 CPython"：现有的 PyInstaller onedir
 - gate 识别：在现有"python + 确切脚本路径"之外，加一个**确切可执行文件路径 + 子命令**的形式：`argv[0]` 解析后必须等于 daemon 自己的 `sys.executable`（外置 runtime 里那份），`argv[1]` 必须是 `pipeline-v1`/`pipeline-test`。不放宽 `_PY_INTERP_RE`。
 - `perl -e 'alarm 110'` 外壳删除：`pipeline-test` 在进程内实现截止时间（POSIX 进程组 + 定时器；Windows 用 Job Object），`pytest_command_guard` 认它的自我截止。
 - MCP 脚本改用 `python-backend mcp <name>`，不再依赖系统 Python（陌生机器上同样坏的那一类）。
-- 用户仓库的测试**永远不用后端程序本身跑**：用 3.3 解析出的仓库自己的工具链。只有 `swarmai` adapter（SwarmAI 自己的仓库）用它自己的 `backend/.venv`。
+- 用户仓库的测试**永远不用后端程序本身跑**：用 3.3 解析出的仓库自己的工具链。SwarmAI 自己的仓库在它的 `.swarmai/pipeline.toml` 里声明用 `backend/.venv`。
 - 打包版里如果子命令方案在某平台走不通（例如 pytest 插件或原生依赖），再评估可搬移 CPython，那时要带实测的体积、冷启动、签名对比。
 
-### 3.3 L2：仓库的验证方式由 daemon 从确切的 base commit 解析
+### 3.3 L2（r5）：pipeline 核心与语言无关
 
-建 run 时，daemon 对每个仓库、按**确切的 base commit SHA**解析出 `test_profile`，连同 SHA 一起写进受保护的 contract，run 中途不变。解析顺序：
+**定位（XG 2026-10-24）**：pipeline 是 SwarmAI 的高级自主编码能力，不是默认路径。它支持的仓库不按语言划界：核心不认识任何语言，只认三样东西。
 
-1. 该 commit 里的 `.swarmai/pipeline.toml`（分支改不掉自己的验证）；
-2. 内置 adapter 按 manifest 识别，**每个命中的组件都保留**（monorepo 会有多个组件，各自有自己的根目录）；
-3. 都没有：该仓库没有组件。
+#### 3.3.1 触发：用户选择或声明
 
-unborn 仓库（还没有任何 commit）：daemon 生成"空 base"profile，所有改动都是 `unverified(no_base)`，在第一个可信 commit 之前不执行仓库提供的任何命令。
+| 方式 | 行为 |
+|---|---|
+| 用户在对话里要求（"用 pipeline 做"、"无人值守做完"） | 走 pipeline |
+| 仓库声明 `.swarmai/pipeline.toml` 的 `[pipeline] trigger` | `manual`（默认）：只有用户要求才走；`suggest`：风险较大的改动 agent 主动建议；`auto`：该仓库的改动都走 |
+| Settings 里按项目 / 仓库的同名开关 | 同上；与仓库声明不一致时取 Settings |
+| 都没有 | `manual`，即默认 native |
 
-`.swarmai/pipeline.toml` 形状：
+#### 3.3.2 硬约束：pipeline 与语言无关，不逐个语言适配（XG 2026-10-24）
 
-```toml
-[[component]]
-name = "web"
-root = "web"                          # 相对仓库根
-sources = ["src/**/*.ts"]             # 改了这些算这个组件的代码改动
-tests = ["src/**/*.test.ts"]
-run = ["npm", "test", "--"]           # argv，不经 shell；选中的测试文件追加在后面
-select = "files"                      # files | all
-timeout = 300
+- pipeline 的代码里**不出现任何语言、框架、包管理器的名字**：没有 pytest / npm / go 分支，没有"manifest → 命令"的表，没有按后缀的白名单。
+- "这个仓库怎么测"只有两个来源：**仓库自己声明**，或 **agent 读仓库后提议**。认识语言是 LLM 的事，不是 pipeline 的事。
+- 验收里有一条结构测试：pipeline 核心模块（`core/run_protocol/`、`scripts/pipeline_v1.py`、`scripts/pipeline_test.py` 的通用部分）的源码里搜不到语言/工具名（白名单只有 `git`）。SwarmAI 自己仓库的专用逻辑搬出核心，见 3.3.5。
 
-[[validation]]
-name = "build"
-run = ["npm", "run", "build"]
+#### 3.3.3 核心只认三样东西
 
-[worktree]
-link = ["node_modules"]
+1. **组件**：一个根目录，加上"哪些文件是源码、哪些是测试"的 glob。
+2. **命令**：一个 argv 列表（不经 shell），在组件根目录下跑。可选声明 `accepts_files = true`：选中的测试文件追加在末尾；否则每次跑整套。
+3. **证据**：退出码，加可选的 JUnit XML 输出路径（`junit = "<路径>"`）。几乎所有测试框架都能输出 JUnit XML；有就按测试 id 记录每个测试的结果，没有就只看退出码。
 
-[landing]
-author = "repo"                       # repo（默认）= 仓库自己的 git user；swarm = Swarm 身份
-trailer = ""                          # SwarmAI 自己的仓库写 Swarm 那一行
-```
+#### 3.3.4 profile 从哪里来：仓库声明 → agent 提议 → 未验证
 
-内置 adapter（第一版；每个都要在 §6 的样例仓库上跑出 `verified`）：
+建 run 时按顺序取第一个能用的，写进受保护的 contract，run 中途不变：
 
-| adapter | 识别 | 默认命令 | 选测 | 证据 |
-|---|---|---|---|---|
-| `swarmai` | 仓库在 base commit 里有 SwarmAI 标记文件（见 3.5） | 现有 pytest + vitest | 现有按依赖选测 | 现有 node 级结果 |
-| `pytest` | `pyproject.toml`/`setup.cfg`/`pytest.ini`/`tox.ini` + 存在 `test_*.py`/`*_test.py` | `<仓库 python> -m pytest` | 改了的测试文件 + 同包测试；不确定就整套 | JUnit XML |
-| `node` | `package.json` 有 `scripts.test` | 按 lockfile 选 npm/pnpm/yarn | jest/vitest 用 related；否则整套 | 退出码，可得时 JUnit |
-| `go` | `go.mod` | `go test ./<改动的包>/...` | 按包 | `go test -json` |
-| `cargo` | `Cargo.toml` | `cargo test -p <改动的 crate>` | 按 crate | 退出码 + 计数 |
-| `maven`/`gradle` | `pom.xml` / `build.gradle(.kts)` | `mvn -q test` / `./gradlew test` | 整套 | surefire XML |
-| `make` | `Makefile` 有 `test` 目标、且无上述 manifest | `make test` | 整套 | 退出码 |
+1. **仓库声明**：base commit 里的 `.swarmai/pipeline.toml`（分支改不掉自己的验证方式）。
+2. **agent 提议（XG 选 B）**：没有声明时，agent 在 `create` 时提交一份 profile 提议：组件、命令、依据（例如"README 写了 `make check`"、"CI 配置里跑的是 `./scripts/test.sh`"、"package.json 的 test 脚本"）。规则：
+   - 只能在 run 的第一次代码改动之前提交，之后不可改；
+   - 命令必须在 **base commit** 上就能跑：daemon 在 base 的 worktree 里试跑一次并记录（退出码、耗时、是否产出 JUnit）。试跑通过的才被采纳；试跑失败（包括本机缺工具）的不采纳，原因写进 contract；
+   - 提议内容和试跑结果展示在 run 卡片和 REPORT 里；
+   - 由它得到的结论标为 `verified(agent_profile)`，和仓库声明来源的 `verified` 区分开。
+   - agent 可以把采纳的提议写成 `.swarmai/pipeline.toml` 一并提交，下次就是仓库声明。
+3. **兜底（A）**：agent 也找不到能在 base 上跑通的命令时，该组件为 `unverified(no_signal)`（或 `unverified(tool_missing)`，当试跑失败是因为命令不存在），照样落地，REPORT 首行写明"未经测试验证"和原因。
 
-仓库 Python（仅 `pytest` adapter）：`pipeline.toml` 的 `python` → 仓库 `.venv`/`venv` → `uv run`/`poetry run`（有 lockfile 时）。
+unborn 仓库（没有任何 commit）：没有 base，直接 `unverified(no_base)`。
+
+#### 3.3.5 核心里要改成通用的地方
+
+| 现在（写死 SwarmAI / Python） | 改成 |
+|---|---|
+| 测试只在 `backend/tests`、`desktop/src` 下发现 | 组件的 `tests` glob |
+| 选测靠 Python AST 依赖图 | 通用三级：改动的测试文件本身 + 与改动源码同目录的测试文件 → 组件整套；命令不接收文件参数时直接整套 |
+| L4"只改了注释 / 格式"只支持 Python AST | 删除这类判断：组件 `sources` 里任何非空白的改动都算代码改动（只会多测，不会少测）。纯文档仍按 `doc_paths` |
+| DS-2a 等测试引用按后缀白名单 | 引用在组件 `tests` glob 内，或是 JUnit 里出现过的测试 id |
+| BX-2 先红后绿只支持 pytest | 通用：同一个测试（文件或 JUnit id）在 base tree 上失败、改动后通过，用组件命令分别在两个 tree 上跑；命令不接收文件参数时，退化为"改动后整套通过" |
+| risk_selection 写死 SwarmAI 路径 | 通用：改动落在组件根目录、但不在 `sources` / `tests` 里的文件（构建配置、依赖清单等），一律跑该组件整套 |
+| worktree 只软链 `desktop/node_modules` | 由组件 `link` 声明（agent 提议时一并提议） |
+| 落地作者固定 Swarm + Swarm trailer | 默认用仓库自己的 git 身份、不加 trailer；由仓库声明覆盖 |
+
+**SwarmAI 自己的仓库**：它现在的精细选测（AST 依赖图、BVT、风险扩展、vitest related）从 pipeline 核心搬出去，变成 SwarmAI 仓库自己的测试命令（`backend/scripts/swarm_select_tests.py`，在它的 `.swarmai/pipeline.toml` 里声明为组件命令，`accepts_files = true`）。对核心来说它和任何仓库的命令一样。冻结规则（`pipeline-test-speed.md` §11）随之约束这个脚本。
 
 ### 3.4 执行仓库自己的命令（r4：不做批准和 sandbox，只清理凭证类环境变量；下文只作记录）
 
@@ -201,11 +208,11 @@ skeptic #4：`npm test`、conftest、Makefile 本身就是仓库控制的代码�
 
 | 结论 | 含义 |
 |---|---|
-| `verified` | 组件的测试由 runner 跑过且全绿，覆盖这个路径 |
+| `verified` | 组件的测试由 runner 跑过且全绿，覆盖这个路径；profile 来自仓库声明 |
+| `verified(agent_profile)` | 同上，但 profile 是 agent 在动代码前提议、并在 base 上试跑通过的（§3.3.3） |
 | `failed` | 跑了，有失败 |
 | `unverified(tool_missing)` | 组件识别出来了，但本机缺工具（比如没有 Go） |
-| `unverified(not_approved)` | 还没批准执行仓库命令 |
-| `unverified(no_signal)` | 仓库里识别不出任何测试方式 |
+| `unverified(no_signal)` | 没有仓库声明，agent 也提不出能在 base 上跑通的命令 |
 | `unverified(unmapped)` | 改动路径不属于任何组件 |
 | `unverified(no_base)` | unborn 仓库 |
 
@@ -216,10 +223,10 @@ skeptic #4：`npm test`、conftest、Makefile 本身就是仓库控制的代码�
 检查改写（统一按上表判，不再各写一套）：
 - **LG-2**：有 `failed` 挡；其余放行，`unverified` 记 Quality = WARN。
 - **BX-2（direct）**：有可执行组件的改动路径要求 runner 跑过相关测试；`unverified` 的路径不要求。
-- **DS-2a/9a**：测试引用改为"在所属组件 `tests` 范围内或 adapter 能识别的测试 id"，不再按后缀白名单。
-- **DS-2b/4b/9b、BX-1**：收集与执行交给 adapter；不支持按 id 收集的，按"所在测试文件跑过且通过"算。
+- **DS-2a/9a**：测试引用改为"在所属组件 `tests` glob 内，或 JUnit 里出现过的测试 id"，不再按后缀白名单。
+- **DS-2b/4b/9b、BX-1**：用组件命令执行；有 JUnit 就按测试 id 判，没有就按"所在测试文件跑过且通过"判。
 - **LG-5**：校验项来自 `pipeline.toml [[validation]]`（`validations.json` 兼容读一版）。
-- **risk_selection**：SwarmAI 规则只对 `swarmai` adapter；其他组件改了 manifest/lockfile/构建配置就整套跑。
+- **risk_selection**：删除核心里的规则；改动落在组件根目录但不在 `sources`/`tests` 里，就跑组件整套。SwarmAI 的规则搬进它自己的测试命令。
 
 ### 3.6 不强制（r4：以 §0.3、§0.4 为准，下文只作记录）
 
@@ -251,13 +258,13 @@ skeptic #9：打包改动必须和证明它能用的测试同一步落地。
 | S3 | 子命令分发 + `SWARM_BACKEND_BIN` + gate 确切路径识别 + 删 perl 外壳 + MCP 子命令（3.2） | L1 |
 | S4 | 按 §0.4 改 gate：第 1 类全部降为提示；`adversarial_commit_gate` 改为按仓库开关生效（SwarmAI 标记文件默认开 + Settings 里按仓库的开关 + 用户看得懂的提示）；Windows 上 pipeline 命令返回"不支持" | 不强制 |
 | S4b | 度量（§0.5）：每个 run 的成本报表 + 每个 gate 的拦截次数和抽样真假 | 决策依据 |
-| S5 | test_profile 解析 + contract 字段 + `swarmai` adapter 原样包进去（行为不变） | — |
-| S6 | 按路径的验证结论 + 检查统一改写（3.5） | L2 落地 |
-| S7 | ~~首次批准 + 受限子进程~~（r3 不做；只保留清理凭证类环境变量，并入 S6） | — |
-| S8 | adapter：`pipeline.toml`、pytest、node；worktree link；landing 身份（r3 缩小） | L2 语言 |
+| S5 | profile 解析（仓库声明 → agent 提议 + base 试跑 → 未验证）+ contract 字段 + 触发方式（§3.3.1）| — |
+| S6 | 按路径的验证结论 + 核心检查通用化（§3.3.4、§3.5）+ 清理凭证类环境变量 | L2 落地 |
+| S7 | ~~首次批准 + 受限子进程~~（r3 不做） | — |
+| S8 | SwarmAI 现有选测搬出核心，成为 `swarm_select_tests.py` + SwarmAI 仓库的 `pipeline.toml`（行为不变，冻结规则随之）+ 核心"无语言名"结构测试 + worktree 软链 + 落地身份 | 语言无关 |
 | S9 | ~~Windows 传输层~~（r3 不做：Windows 不启用 pipeline，默认 native） | — |
 
-**发布节奏**：S1–S4 一起构成第一个"别人装上能用"的版本（app 能起、能聊天、能用原生方式改代码、SwarmAI 仓库照旧受保护）；S5–S8 构成"pipeline 能用在别人的仓库上"的版本（Python、Node 可验证，其他语言标"未验证"照样落地）。S4 不单独发版：单独发的安装包里仍然没有后端。
+**发布节奏**：S1–S4 一起构成第一个"别人装上能用"的版本（app 能起、能聊天、能用原生方式改代码、SwarmAI 仓库照旧受保护）；S5–S8 构成"pipeline 能用在任意语言的仓库上"的版本（能识别或 agent 能提议测试方式的仓库可验证，其余标"未验证"照样落地）。S4 不单独发版：单独发的安装包里仍然没有后端。
 
 ## 5. 五维评估
 
@@ -266,7 +273,7 @@ skeptic #9：打包改动必须和证明它能用的测试同一步落地。
 | Run Isolation | 签名、owner、worktree、落地协议不动；rule 1-3 和 active-run commit gate 不看策略 | `optional` 仓库的直接改动不在 run 里 | 这类改动本来就不属于 run；SwarmAI 仓库按内容识别，永远 `required` | PASS |
 | Quality | 新增 `unverified` 会让未测试的改动落地 | 被当成"跳过测试"用 | 结论只来自 contract + runner 签名 + 环境探测；按路径算，monorepo 不会被一个组件的绿掩盖；`failed` 照样挡；首行标注 | PASS（有 WARN 档） |
 | Autonomy | 非 SwarmAI 仓库从必然卡死变成能自主完成；首次批准多一次人工 | 批准卡片每个仓库一次 | 只在 digest 变化时重新批准 | 需样例矩阵 + NE-0 实测 |
-| Speed | 通用 adapter 多为整套或按包跑 | 大仓库超时 | 现有续跑；`select`/`timeout` 可配 | 需实测 |
+| Speed | 通用选测多为整套 | 大仓库超时 | 现有续跑；仓库可声明更细的测试命令和 `timeout` | 需实测 |
 | Token Cost | 基本不变 | 测试输出变长 | runner 只回摘要和失败项 | PASS |
 
 ## 6. 验收
@@ -288,6 +295,6 @@ skeptic #10：GitHub 的 runner 本身装着 Python 和 Node，"干净"是假的
 ## 8. 待定问题（给 XG）
 
 1. Apple Developer ID 证书、公证账号、Windows Authenticode 证书：有没有？没有的话第一版只能发"未签名，需要右键打开"的 macOS 包，Windows 会有 SmartScreen 警告。
-2. 第一版 adapter 范围是否就是 3.3 的表？.NET、Swift、Ruby 放第二版？
+2. ~~adapter 范围~~（r5：不做 adapter，pipeline 与语言无关）
 3. `unverified` 落地时只标注不挡（本设计按你的要求）；`unverified(not_approved)` 是否也只标注？还是首次批准前不允许落地？
 4. Windows 的测试子进程第一版只做环境清理、不做文件系统限制，可以接受吗？
