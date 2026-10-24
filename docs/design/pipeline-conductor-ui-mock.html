@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v7 · Run cards</title>
+<html lang="en"><head><meta charset="utf-8"><title>Pipelines overlay (Conductor) · mockup v8 · Run cards</title>
 <!-- Mockup for docs/design/pipeline-run-conductor-v1.md §10 and docs/design/pipeline-human-loop-v2.md.
      Theme variables fall back to a light palette outside the dashboard. -->
 </head><body style="margin:0">
@@ -97,7 +97,13 @@ function card(r){let h='<div class="rc'+(r.col==='need'?' need':'')+(cur===r.id?
 function render(){const b=$('#board');b.innerHTML=cols.map(([k,n])=>{const rs=runs.filter(r=>r.col===k);return '<div class="col"><div class="ch"><span>'+n+'</span><span class="pill '+(k==='need'&&rs.length?'dan':'')+'">'+rs.length+'</span></div>'+rs.map(card).join('')+'</div>'}).join('');
  const n=runs.filter(r=>r.col==='need').length;$('#badge').textContent=n?n+' need you':'all clear';$('#badge').className='pill '+(n?'dan':'ok');
  b.querySelectorAll('.rc').forEach(c=>c.onclick=e=>{const a=e.target.dataset.a;if(a){answer(c.dataset.id,a,'card');e.stopPropagation();return}open(c.dataset.id)})}
-function answer(id,a,where){const r=runs.find(x=>x.id===id);if(!r||r.col!=='need')return;r.col='wait';r.age=r.kind==='ap'?(a+' · landing'):'answered "'+a+'" · resuming first';(r.th=r.th||[]).push(['now','<b>You</b> ('+(where==='card'?'board':'review view')+') · '+a]);render();if(cur===id)show()}
+function answer(id,a,where,note){const r=runs.find(x=>x.id===id);if(!r||r.col!=='need')return false;
+ if(r.kind==='ap'&&a!=='Approved'&&!(note||'').trim()){const t=document.querySelector('#rv-ft textarea');if(t){t.style.borderColor='var(--danger,#c0392b)';t.placeholder='Text is required for '+a}return false}
+ if(r.kind==='ap'&&a==='Approved'){r.col='wait';r.age='approved · landing'}
+ else if(a==='Changes requested'){r.col='wait';r.s=4;r.age='changes requested · back to BUILD, must pass REVIEW + TEST again'}
+ else if(a==='Rejected'){r.col='done';r.fail=1;r.age='rejected by you · abandoned';r.aud='Rejected: '+note}
+ else{r.col='wait';r.age='answered "'+a+'" · resuming first'}
+ a=a+(note?' · "'+note+'"':'');(r.th=r.th||[]).push(['now','<b>You</b> ('+(where==='card'?'board':'review view')+') · '+a]);render();if(cur===id)show();return true}
 let qmode='need';
 function needs(){if(qmode==='need')return runs.filter(r=>r.col==='need');return runs.filter(r=>r.col==='done').sort((a,b)=>(b.fail||0)-(a.fail||0))}
 function open(id){cur=id;const r=runs.find(x=>x.id===id);qmode=r.col==='done'?'done':'need';if(r.kind==='ap'&&r.col==='need'){view='ch';r.seenEv=1}setTabs();$('#rv').style.display='flex';$('#wrap').classList.add('narrow');render();show()}
@@ -115,7 +121,7 @@ function show(){const r=runs.find(x=>x.id===cur);$('#rv-t').textContent=r.t;$('#
   ft+='<textarea rows="2" style="width:100%;margin-top:6px" placeholder="Your note or judgement (text required for Request changes / Reject)"></textarea>'}
  else if(r.col==='done'){ft='<div class="row"><button class="btn pri" id="seen">Mark reviewed · next</button><button class="btn">Flag for Eval…</button></div>'}
  else{ft='<div class="row"><input style="flex:1" placeholder="Send guidance to this Run (delivered at its next tool boundary)"><button class="btn pri">Send</button><button class="btn">Take over in chat</button><button class="btn" style="color:var(--danger,#c0392b)">Cancel</button></div>'}
- $('#rv-ft').innerHTML=ft;$('#rv-ft').querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{answer(cur,b.dataset.a,'rv');const nd=needs();if(nd.length){open(nd[0].id)}});
+ $('#rv-ft').innerHTML=ft;$('#rv-ft').querySelectorAll('[data-a]').forEach(b=>b.onclick=()=>{const t=$('#rv-ft textarea');if(!answer(cur,b.dataset.a,'rv',t?t.value:''))return;const nd=needs();if(nd.length){open(nd[0].id)}});
  const sn=$('#seen');if(sn)sn.onclick=()=>step(1)}
 function step(d){const nd=needs();if(!nd.length)return;let i=nd.findIndex(x=>x.id===cur);i=i<0?0:(i+d+nd.length)%nd.length;open(nd[i].id)}
 $('#prev').onclick=()=>step(-1);$('#next').onclick=()=>step(1);
