@@ -23,6 +23,11 @@ function controllableStream() {
   };
 }
 
+/** Wait (bounded) until the client made ``n`` connects: its real timers (reconnect,
+ *  silence, join debounce) fire late under full-suite load, so a fixed wall-clock
+ *  wait reads too early (the 2026-10-24 silent-stream flake). */
+const waitCalls = (fn: { mock: { calls: unknown[] } }, n: number) =>
+  vi.waitFor(() => expect(fn.mock.calls.length).toBeGreaterThanOrEqual(n), { timeout: 2000, interval: 5 });
 const flush = async (n = 5) => { for (let i = 0; i < n; i++) await Promise.resolve(); await new Promise((r) => setTimeout(r, 0)); };
 
 describe('sessionEvents client', () => {
@@ -68,7 +73,7 @@ describe('sessionEvents client', () => {
     streams[0].end();
     await flush();
     expect(c.isConnected()).toBe(false);
-    await new Promise((r) => setTimeout(r, 20));
+    await waitCalls(fetchImpl, 2);
     await flush();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const u = new URL(urls[1]);
@@ -106,10 +111,10 @@ describe('sessionEvents client', () => {
     streams[0].push({ type: 'events_hello', epoch: 'E1', seqs: {} });
     await flush();
     expect(c.isConnected()).toBe(true);
-    await new Promise((r) => setTimeout(r, 80));
+    // the 30 ms silence cancels the stream and a reconnect follows (5 ms)
+    await waitCalls(fetchImpl, 2);
     await flush();
     // the replacement stream is silent too, so it may already have cycled again
-    expect(fetchImpl.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(c.isConnected()).toBe(false);
     c.stop();
   });
@@ -119,7 +124,7 @@ describe('sessionEvents client', () => {
     const fetchImpl = vi.fn(async () => { calls++; throw new Error('down'); });
     const c = createSessionEventsClient({ baseUrl: () => 'http://h', fetchImpl, reconnectDelaysMs: [5] });
     c.start();
-    await new Promise((r) => setTimeout(r, 40));
+    await waitCalls(fetchImpl, 2);
     expect(calls).toBeGreaterThan(1);
     c.stop();
     const at = calls;
@@ -156,7 +161,7 @@ describe('sessionEvents client', () => {
     await flush();
     c.watch(['R']);
     c.watch(['R']);
-    await new Promise((r) => setTimeout(r, 40));
+    await waitCalls(fetchImpl, 2);
     await flush();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(JSON.parse(new URL(urls[1]).searchParams.get('cursors')!)).toEqual({ R: -1 });
@@ -192,7 +197,7 @@ describe('sessionEvents client', () => {
     // start was never shown), even though the window saw seq 901
     c.watch(['CH']);
     expect(c.cursorFor('T1')).toBeUndefined();
-    await new Promise((r) => setTimeout(r, 30));
+    await waitCalls(fetchImpl, 2);
     await flush();
     expect(JSON.parse(new URL(urls[1]).searchParams.get('cursors')!)).toEqual({ CH: -1 });
     c.stop();
@@ -213,7 +218,7 @@ describe('sessionEvents client', () => {
     await flush();
     c.watch(['LATE']); // the first URL is already built without it
     streams[0].push({ type: 'events_hello', epoch: 'E1', seqs: { LATE: 77 } });
-    await new Promise((r) => setTimeout(r, 30));
+    await waitCalls(fetchImpl, 2);
     await flush();
     expect(c.cursorFor('LATE')).toBeUndefined();
     expect(JSON.parse(new URL(urls[1]).searchParams.get('cursors')!)).toEqual({ LATE: -1 });
