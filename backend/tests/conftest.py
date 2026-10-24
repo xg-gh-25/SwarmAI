@@ -4,8 +4,8 @@ Single authority for all test infrastructure:
 
 0. **Venv guard** — Refuses to run if the wrong Python interpreter is used.
 
-1. **xdist enforcement** — pyproject.toml addopts has ``-n 4``. Conftest
-   clamps to memory-safe worker count, respects explicit ``-n 0`` for serial.
+1. **xdist enforcement** — pyproject.toml addopts has ``-n 0`` (serial); an
+   explicit ``-n N`` opts in, and conftest clamps it to a memory-safe worker count.
 
 2. **Tiered test selection** — Three markers for selective running:
    - ``pbt`` — auto-applied to all Hypothesis property-based tests
@@ -317,10 +317,11 @@ def pytest_configure(config):
         return
 
     # --- xdist enforcement ---
-    # pyproject.toml addopts has -n 4. This block handles two cases:
+    # pyproject.toml addopts has -n 0 (serial); a caller opts in with -n N.
+    # This block handles two cases:
     # 1. Memory pressure → downgrade to fewer workers or serial
-    # 2. Explicit -n 0 → RESPECT it (agent coding runs small test sets where
-    #    serial is faster due to ~8s worker startup overhead)
+    # 2. Explicit -n 0 → RESPECT it (the default; small agent test sets are also
+    #    faster serial, ~8s worker startup overhead)
     # Never force xdist back on when explicitly disabled.
     try:
         import xdist  # noqa: F401
