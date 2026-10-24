@@ -42,6 +42,7 @@ status: current
 7. **TODO（XG 2026-10-24 决定先不做）：agent 和 daemon 是同一个系统用户。** 这是一个架构偏离，包含两处缺口，根因相同：
    - **签名证据可伪造：** B-a/b/c 之后只有 daemon 加载 `authority.key`，但同用户进程自己读那个 0600 文件仍读得到，拿到就能签任意事件（如"测试全绿""人已批准落地"）。Keychain 拦不住同一用户。
    - **人工决策可代答：** 后端 HTTP 没有鉴权，`PATCH /api/pipelines/{id}/cancel`、`/resume`、`POST /{id}/decision`、`POST /chat/answer_question` 本机任何进程都能调。这就是没做的 B-d。
+     Conductor 和 human loop v2 新增的人工接口也在这一项里，同样不加 per-request secret：Run 草稿提交（`pipeline-run-conductor-v1.md` §6.4，原设计的 confirm secret 已去掉）、`submit_human_input` 的 dashboard 与 chat 入口（`pipeline-human-loop-v2.md` §4.4）。Slack 入口靠 Slack 签名和 owner 校验认证人本身，不在此列。
    - **现状：** `audit_marker_write_gate` 拒绝读密钥，`run_owner_gate` 拒绝 Bash 调 `/decision`，只拦普通写法；agent 在 Python 里拼路径或 URL 就能绕过。后端只绑 127.0.0.1、CORS 是允许列表，对外不暴露。伪造的落地只进本地 main，push / build 都是 XG 手动。代价是：被故意绕过时，伪造事件和真事件分不出来，审计结论只能当"大概率成立"。
    - **修法：** 另立"agent 进程隔离"设计：agent 跑在单独的系统用户下，或放进 macOS sandbox profile，让它读不到密钥文件、连不上 daemon 的私有 socket、不能 ptrace daemon。两处缺口一起关。B-d 原方案（Tauri 经 Unix socket 取启动 secret）不单独做：同用户 agent 也能连那个 socket，只抬门槛，还要改 Rust 和 rebuild。
 8. **CI 构建的发行版跑不了 pipeline：** packaged daemon 按构建时记录的源码 checkout（`source_repo.json`）生成 pipeline 命令；本机 `./prod.sh build` 构建的没问题，CI 构建的路径在安装后不存在，pipeline 命令明确失败。B 类之前也跑不了。正解是把客户端脚本作为外部资源随 app 发布。

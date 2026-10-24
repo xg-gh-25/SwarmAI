@@ -1003,16 +1003,16 @@ bugfix pipeline in the background", or "on hive-ec2-1", or "on my Cloud Desktop"
 2. The tab shows a confirmation card: title (editable), the requirement, project,
    profile, placement, queue position or free slot, DDD revision and base commits. Editing
    the title makes a new draft. Only the person's click on that card submits;
-   the agent has no submit command. The route needs a per-draft **confirm secret** that
-   the daemon generates and sends only inside the card payload to the frontend (over the
-   tab's SSE stream); it is never in the CLI's output, a file or the transcript the agent
-   reads, so the agent never learns it. The route also checks that the secret's draft is
-   bound to this owner and origin. As defence in depth, `run_owner_gate` is extended to
-   deny a Bash call to this route, as it does for `/api/pipelines/<id>/decision` today (a
-   Phase 2 change; today it recognises only that route). Residual risk, the same as the
-   decision route's (`pipeline-v1-human-loop.md`): the API is unauthenticated on loopback,
-   so a process that reads the frontend's memory could replay a secret before the person
-   clicks. Submit consumes the draft
+   the agent has no submit command. The submit route is a human-only dashboard route,
+   protected the same way as the decision and `run-land` routes: `run_owner_gate` is
+   extended to deny an agent's Bash call to it, as it does for
+   `/api/pipelines/<id>/decision` today (a Phase 2 change; today it recognises only that
+   route). There is no per-draft confirm secret: a same-user agent could read it from the
+   frontend's payload or the daemon's memory, so it would only raise the bar (the B-d
+   decision, XG 2026-10-24). That an agent can still reach the loopback route by other
+   means is the open item recorded in `pipeline-v1-e7-review.md` item 7 (agent process
+   isolation). The route checks that the draft is bound to this owner and origin. Submit
+   consumes the draft
    atomically (unused → used) and re-checks placement rules and the bound revisions; if
    any changed, nothing is submitted and the card shows a new draft for a new click. An
    invalid or expired draft shows the rule that failed.
@@ -1179,9 +1179,10 @@ text is stored verbatim as data and is never used as an instruction to the Condu
 3. The bot replies with a confirmation card listing title, requirement, project, profile,
    placement, DDD ref, base commits and, for a schedule, the cron expression and timezone.
 4. The owner confirms on the card. The draft is the same signed, single-use, bound draft
-   as §6.4, and the button consumes it with the same atomic re-check; the confirm secret
-   travels only in the Slack button's value, and the Slack adapter
-   accepts the click only from the bound owner in that channel and thread. Only then:
+   as §6.4, and the button consumes it with the same atomic re-check; the button carries
+   only the draft id, and the Slack adapter accepts the Slack-signed click only from the
+   bound owner in that channel and thread (Slack authenticates the person, so this path
+   does not depend on the loopback residual). Only then:
    - immediate: `Conductor.submit()` queues the request;
    - scheduled: the Conductor writes a `pipeline_submit` job into the Host Job Scheduler.
      The job stores a request template, not a pinned request.
@@ -1396,7 +1397,7 @@ Measure first, then build. Each phase starts with its acceptance tests written a
 | Phase | Scope | Acceptance |
 |---|---|---|
 | 1 | Conductor Store, `submit` / `register_inline`, status join, API, Pipelines page columns | An inline Run appears in the Conductor view with origin `chat`; chat send and stream timings are unchanged (measured before and after); a failing registration never fails `create`; `create --title` is recorded and shown, and the fallback title is tested for an empty title, a multilingual requirement, a duplicate title and a scheduled fire |
-| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab; an answer with a note given in the overlay reaches the Worker in its resume turn, which acks it, and the tab's card and the overlay both show it answered; a Worker's question ends its turn and parks the Run at once, freeing the slot for the next queued request, and answering it resumes the Run ahead of the queue with no dangling tool call (S9); the red tests listed in `pipeline-human-loop-v2.md` §8 pass; a Bash call to the submit route is denied, a direct HTTP call without the card's confirm secret is refused, a second click on a used draft, an expired draft, or a draft whose DDD revision or base commit moved submits nothing |
+| 2 | Local Worker (headless `SessionUnit`, `pipeline:<run_id>`), one slot, atomic two-class stream admission, `pipeline_v1.py create --ddd-root` with a materialized immutable DDD, crash recovery; Chat tab placement choice for `background_local` (§6.4) | A background `direct` Run reaches `land` with no tab open; its contract records the DDD digest and editing the Host DDD mid-run does not change what it reads; a second request queues; with 2 interactive streams active the Worker waits and chat still gets a stream; killing the daemon mid-BUILD resumes on restart as attempt 2; from a Chat tab, asking for a background Run shows a confirmation card, only the click submits, the tab stays usable while the Run works, and the Run's questions come back to that tab; an answer with a note given in the overlay reaches the Worker in its resume turn, which acks it, and the tab's card and the overlay both show it answered; a Worker's question ends its turn and parks the Run at once, freeing the slot for the next queued request, and answering it resumes the Run ahead of the queue with no dangling tool call (S9); the red tests listed in `pipeline-human-loop-v2.md` §8 pass; a Bash call to the submit route is denied, a second click on a used draft, an expired draft, or a draft whose DDD revision or base commit moved submits nothing |
 | 3-0 | Contracts before code: wire and key specification (§4.3.6) with test vectors; DynamoDB, event, Run-record, trace-cursor and audit schemas; `ddd_origin` in `ddd_bindings.py`; the four-fact event schema; contract fields the Run record needs (`ddd_ref`, `code_ref`, placement, evidence contract id); per-stage, per-model usage instrumentation in `run_protocol/usage.py`; the answer-command envelope (§8.3) | Reviewed documents and red conformance tests for: crash after claim, out-of-order and duplicate events, duplicate-with-different-payload, cancel racing a result, Hive restart and adopt, lease across a simulated outage, key loss and rotation, a poisoned blob upload, a malformed or badly signed Run record that stays in quarantine, a text secret that is registered only through a redacted projection while the canonical record still verifies, a secret in a result bundle that rejects the upload, a sealed Trace with a mirror gap, a mirror write racing the seal, two claims racing for a Hive's last slot, every row of the §5.1 table releasing a slot exactly once, an answer racing cancel, timeout and adopt |
 | 3 | Central Service in the Bedrock account (CDK: HTTP API, Lambdas, DynamoDB, S3, KMS key, sweeper); Host enrolment and signed requests; DDD and Project Agent registry; Run-record upload from the Host outbox for inline and Local Runs; intake with redaction; audit; Control Center reads Central | Every finished local Run with upload on hands its record to Central, which passes intake; with `central_upload: "off"`, or `--no-upload`, a local Run sends nothing to Central and behaves the same locally; a remote request ignores the setting and always uploads; a planted fake secret appears masked in the projection and recorded in audit, while the canonical record still verifies; a Central outage leaves local Runs unaffected and their records upload afterwards; a replayed upload is a no-op; a node with a wrong signature, stale timestamp or reused nonce is refused |
 | 4 | First consumers: Trace (live view, sealed Trace, `run_index`) and Offline Eval (`eval_jobs`, `eval_reports`, intervention classification, the five dimensions) | An uploaded local Run shows per-stage times, tokens and every human answer in the Control Center from Central data only; a dropped event marks its Trace `incomplete`; an Eval report gives all five dimensions or `UNKNOWN`, never a guessed PASS; rebuilding `run_index` from Run records gives the same statistics; `local only` Runs are absent from org stats, which are labelled "of Runs received by Central", and are counted only on the Host's own dashboard; with Central down, local Runs, chat, hooks and MEMORY behave exactly as before |
