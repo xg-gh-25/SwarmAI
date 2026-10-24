@@ -66,7 +66,7 @@ fi
 
 if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
     echo "  [tauri-build] TAURI_SIGNING_PRIVATE_KEY not set — local build, skipping updater-artifact signing (createUpdaterArtifacts=false overlay)."
-    npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}' "$@"
+    npm run tauri build -- --config src-tauri/tauri.bundle.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}' "$@"
 else
-    npm run tauri build -- "$@"
+    npm run tauri build -- --config src-tauri/tauri.bundle.conf.json "$@"
 fi

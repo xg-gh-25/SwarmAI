@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "resources": {
+      "../resources/*": "./",
+      "../resources/daemon/*": "daemon/",
+      "bundle-backend/python-backend": "python-backend/",
+      "bundle-backend/install-manifest.json": "install-manifest.json"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

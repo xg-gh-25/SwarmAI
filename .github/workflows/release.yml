@@ -83,7 +83,7 @@ jobs:
 
       - name: Build Tauri app
         working-directory: ./desktop
-        run: npm run tauri build -- --target aarch64-apple-darwin
+        run: bash scripts/tauri-build.sh --target aarch64-apple-darwin
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 

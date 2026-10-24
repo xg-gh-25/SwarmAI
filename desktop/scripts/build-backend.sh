@@ -461,7 +461,18 @@ rm -rf "$OUTPUT_BINARY_DIR"
 cp -r "$SOURCE_DIR" "$OUTPUT_BINARY_DIR"
 chmod +x "$OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"
 
+# Stage the bundle where tauri.bundle.conf.json picks it up as resource python-backend/
+# (design 2026-10-24-swarmai-usable-by-anyone §3.1: the installer carries the backend;
+# no post-build injection). Target-agnostic path, rebuilt every time.
+STAGE_DIR="$PROJECT_ROOT/src-tauri/bundle-backend"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+cp -R "$SOURCE_DIR" "$STAGE_DIR/python-backend"
+APP_VERSION="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["version"])' "$PROJECT_ROOT/src-tauri/tauri.conf.json")"
+python3 "$SCRIPT_DIR/write_install_manifest.py" "$STAGE_DIR" "$PROJECT_ROOT/resources" "$APP_VERSION" "$TARGET"
+
 echo "Backend built successfully (onedir): $OUTPUT_BINARY_DIR"
+echo "Staged for the installer: $STAGE_DIR/python-backend (+ install-manifest.json)"
 echo ""
 echo "Directory size: $(du -sh "$OUTPUT_BINARY_DIR" | cut -f1)"
 echo "Executable: $OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"

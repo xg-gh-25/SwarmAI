@@ -295,23 +295,15 @@ cmd_release() {
     # skips updater-artifact signing when absent (local dev). See tauri-build.sh.
     bash "$DESKTOP_DIR/scripts/tauri-build.sh"
 
-    # 2e. Inject backend bundle into .app (onedir — no PyInstaller extraction at runtime)
+    # 2e. The .app carries the backend itself: tauri-build.sh bundles the staged
+    # desktop/src-tauri/bundle-backend/python-backend (tauri.bundle.conf.json), the same
+    # path CI uses (design 2026-10-24-swarmai-usable-by-anyone §3.1 — no post-build
+    # injection). Check it is there instead of putting it there.
     local app_bundle="$DESKTOP_DIR/src-tauri/target/release/bundle/macos/SwarmAI.app"
-    local backend_src="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-    local backend_dst="${app_bundle}/Contents/Resources/python-backend"
-    if [ -d "$app_bundle" ] && [ -d "$backend_src" ]; then
-        _log "Injecting backend bundle into .app..."
-        mkdir -p "$backend_dst"
-        # --delete: the .app's copy must equal the verified bundle. Without it,
-        # _internal files dropped from the build survive in the shipped .app and
-        # are then deployed to users' daemons by the Rust auto-install/upgrade.
-        rsync -a --delete "$backend_src/" "$backend_dst/" || {
-            _err "Injecting the backend bundle into the .app FAILED — aborting release"; return 1; }
-        chmod +x "$backend_dst/python-backend" || {
-            _err "chmod on the injected backend failed — aborting release"; return 1; }
-        _ok "Backend bundle injected ($(du -sh "$backend_dst" | cut -f1))"
+    if [ -x "${app_bundle}/Contents/Resources/python-backend/python-backend" ]; then
+        _ok "Backend bundled in the .app ($(du -sh "${app_bundle}/Contents/Resources/python-backend" | cut -f1))"
     else
-        _warn "Skipping .app backend injection (app_bundle or backend_src missing)"
+        _err "The built .app has no Contents/Resources/python-backend — aborting release"; return 1
     fi
 
     echo ""
