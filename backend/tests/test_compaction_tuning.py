@@ -95,6 +95,9 @@ class TestBuildOptionsAutocompact:
         settings = json.loads(opts.settings)
         assert settings["autoCompactWindow"] == 783_000  # → CLI threshold 750K
         assert "skillOverrides" in settings  # existing key preserved
+        # the skill-listing description cap rides the same --settings (core/skill_listing)
+        from core.skill_listing import SKILL_DESC_CAP
+        assert settings["skillListingMaxDescChars"] == SKILL_DESC_CAP
 
     @pytest.mark.asyncio
     async def test_summary_instructions_hook_reaches_the_settings(self):

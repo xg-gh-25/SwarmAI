@@ -1,6 +1,6 @@
 ---
 name: library
-description: "Manage the SwarmAI Library — mount external directories (code or docs) so the agent can recall them, and search the library. Mounting indexes in place at mount time (code → symbol graph, docs → text chunked into the shared Knowledge FTS5); mounts are POINTERS, never copied. TRIGGER: \"mount <path>\", \"mount this folder\", \"add <folder> to my library\", \"search my library for X\", \"挂载\", \"把这个目录加进来\". NOT FOR: single-file drops (that's the Inbox), URLs (use s_learn-content), or creating a DDD project (use s_project-manager)."
+description: "Mount external folders (code or docs) into the Library so they can be recalled, and search it. TRIGGER: \"mount <path>\", \"add this folder to my library\", \"search my library\", \"挂载\". NOT FOR: single files (Inbox), URLs (s_learn-content), new DDDs."
 input_type: text
 output_type: text
 tier: lazy

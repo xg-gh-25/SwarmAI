@@ -1,7 +1,6 @@
 ---
 name: system-health
-description: "Full system health report: desktop overview, worst offenders, SwarmAI resource details, and actionable suggestions. Outputs a structured report in the chat window.\n  TRIGGER: \"system health\"\
-  , \"mac health\", \"linux health\", \"battery check\".\n  NOT FOR: cloudwatch-log-analysis, health-check, bsc-security-scanner use cases."
+description: "System health report: machine overview, worst offenders, SwarmAI resource use and suggestions. TRIGGER: \"system health\", \"mac health\", \"linux health\", \"battery check\". NOT FOR: cloud service logs."
 tier: lazy
 platform: macos
 ---

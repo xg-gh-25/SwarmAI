@@ -1,7 +1,6 @@
 ---
 name: browser-agent
-description: "DOM-based browser automation: navigate websites, read compressed page content, click elements, fill forms, extract data, and take screenshots using Playwright.\n  TRIGGER: \"browse\", \"open\
-  \ website\", \"browser agent\", \"web automation\".\n  NOT FOR: peekaboo use cases."
+description: "Browser automation with Playwright: navigate, read pages, click, fill forms, extract data, screenshot. TRIGGER: \"browse\", \"open website\", \"web automation\", \"打开网页\". NOT FOR: native macOS apps (use peekaboo)."
 tier: lazy
 ---
 # Browser Agent

@@ -1,7 +1,6 @@
 ---
 name: project-manager
-description: "Create, list, edit, rename, and delete DDD projects (Domain-Driven Design) — provisions the canonical six-section DDD structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) and an\
-  \ .artifacts/ directory for pipeline outputs.\n  TRIGGER: \"add project\", \"new project\", \"create project\", \"rename project\", \"create DDD\".\n  NOT FOR: radar-todo use cases."
+description: "Create, list, edit, rename and delete DDD projects with the canonical six-section structure. TRIGGER: \"add project\", \"new project\", \"create project\", \"rename project\", \"create DDD\". NOT FOR: todos (radar-todo)."
 tier: always
 python-deps: [yaml]
 ---

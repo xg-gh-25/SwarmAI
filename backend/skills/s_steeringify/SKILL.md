@@ -1,11 +1,6 @@
 ---
 name: steeringify
-description: >
-  DEPRECATED — absorbed into s_self-evolution PROMOTE operation (2026-05-19).
-  Use self-evolution instead. This skill redirects to the PROMOTE operation
-  of the governance lifecycle manager.
-  TRIGGER: "steeringify", "extract steering rules", "propose rules from corrections".
-  REDIRECT: Use s_self-evolution PROMOTE operation instead.
+description: "Deprecated: absorbed into s_self-evolution PROMOTE; use that instead. TRIGGER: \"extract steering rules\", \"propose rules from corrections\"."
 tier: lazy
 platform: all
 ---

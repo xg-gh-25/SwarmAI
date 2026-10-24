@@ -1,7 +1,6 @@
 ---
 name: workspace-git
-description: "Git operations scoped to SwarmWS: status, diff, commit, log, search, stash, and branch management. Provides structured output for the agent to reason about workspace changes.\n  TRIGGER: \"\
-  git status\", \"commit changes\", \"what changed\", \"git log\".\n  NOT FOR: github-research use cases."
+description: "Git operations scoped to SwarmWS: status, diff, commit, log, search, stash, branches, with structured output. TRIGGER: \"git status\", \"commit changes\", \"what changed\", \"git log\". NOT FOR: other repos."
 tier: always
 ---
 # Workspace Git

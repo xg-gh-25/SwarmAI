@@ -1,9 +1,6 @@
 ---
 name: github-research
-description: >
-  Multi-round deep research on GitHub repositories, orgs, and open-source projects.
-  TRIGGER: "research this repo", "evaluate this project", "github deep dive", "repo analysis", "what's the state of [project]".
-  DO NOT USE: for quick README lookups (just use WebFetch) or general web research (use deep-research).
+description: "Multi-round deep research on GitHub repos, orgs and open-source projects. TRIGGER: \"research this repo\", \"evaluate this project\", \"github deep dive\", \"repo analysis\". NOT FOR: a quick README lookup (use WebFetch)."
 version: "1.0.0"
 tier: lazy
 ---

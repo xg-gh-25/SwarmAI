@@ -1,6 +1,6 @@
 ---
 name: ddd-manager
-description: "Provision and manage DDD projects that conform to the canonical six-section structure — the self-propagation seed. Full lifecycle: CREATE (with context-extraction from a codebase, NOT blank templates), BIND a repo (⑤ delivery contract), LIST / EDIT / RENAME. Pure filesystem, no SwarmAI backend — a DDD carries this so it can create MORE spec-compliant DDDs on Kiro / Claude Code.\n  TRIGGER: \"create ddd\", \"new ddd project\", \"add a domain\", \"bind repo to ddd\", \"provision ddd\".\n  NOT FOR: SwarmAI's own project CRUD (native s_project-manager)."
+description: "Create and manage DDD projects with the six-section structure, without the SwarmAI backend: create from a codebase, bind a repo, list, edit, rename. TRIGGER: \"create ddd\", \"new ddd project\", \"bind repo to ddd\". NOT FOR: SwarmAI's own projects."
 tier: lazy
 ---
 # DDD Manager (s_ddd-manager) — the self-propagation seed

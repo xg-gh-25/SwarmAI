@@ -1,8 +1,6 @@
 ---
 name: job-manager
-description: "Create, list, edit, pause, resume, and delete scheduled jobs in the Swarm Job System. Jobs run in the background via launchd — independently of chat sessions. Supports agent tasks (headless\
-  \ Claude CLI with MCP tools), signal pipeline jobs, and script execution. User jobs live in user-jobs.yaml; system jobs are read-only.\n  TRIGGER: \"schedule\", \"every day\", \"every week\", \"recurring\"\
-  .\n  NOT FOR: apple-reminders, outlook-assistant use cases."
+description: "Create, list, edit, pause, resume and delete scheduled background jobs (agent tasks, scripts, signal feeds). TRIGGER: \"schedule\", \"every day\", \"every week\", \"recurring\", \"定时\". NOT FOR: one-off reminders."
 input_type: text
 output_type: text
 tier: lazy

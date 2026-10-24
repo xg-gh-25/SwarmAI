@@ -1,7 +1,6 @@
 ---
 name: summarize
-description: "Quickly summarize articles, documents, URLs, long text, or multi-source content into concise key points.\n  TRIGGER: \"summarize\", \"summary\", \"tl;dr\", \"key points\".\n  NOT FOR: deep-research,\
-  \ consulting-report, narrative-writing use cases."
+description: "Summarize articles, documents, URLs or long text into concise key points. TRIGGER: \"summarize\", \"summary\", \"tl;dr\", \"key points\", \"总结一下\". NOT FOR: multi-source research (deep-research)."
 tier: always
 ---
 # Summarize

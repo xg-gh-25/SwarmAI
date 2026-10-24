@@ -1,6 +1,6 @@
 ---
 name: golden-case
-description: "Add, validate, and promote SwarmAI eval golden cases through a 4-gate quality check (schema/duplicate/non-vacuous/privacy). The ONLY sanctioned path to modify the golden set — keeps cases from being 太随便. ADD lands private by default; PROMOTE runs the privacy gate before a case ships public.\n  TRIGGER: \"add golden case\", \"new eval case\", \"promote case to public\", \"validate golden set\".\n  NOT FOR: running eval (use eval_runner), s_self-evolution governance rules."
+description: "Add, validate and promote SwarmAI eval golden cases through a 4-gate check (schema, duplicate, non-vacuous, privacy). TRIGGER: \"add golden case\", \"new eval case\", \"promote case to public\". NOT FOR: running eval."
 tier: lazy
 platform: desktop
 project_scope: SwarmAI

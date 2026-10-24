@@ -1,7 +1,6 @@
 ---
 name: tavily-search
-description: "AI-powered web search and content extraction via Tavily API. Search the web, get AI answers, extract content from URLs.\n  TRIGGER: \"search the web\", \"web search\", \"tavily\", \"find online\"\
-  .\n  NOT FOR: github-research, deep-research use cases."
+description: "Web search and content extraction through the Tavily API: search, AI answers, extract URLs. TRIGGER: \"search the web\", \"web search\", \"tavily\", \"find online\", \"搜一下\". NOT FOR: multi-round research (deep-research)."
 tier: always
 ---
 # Tavily Search

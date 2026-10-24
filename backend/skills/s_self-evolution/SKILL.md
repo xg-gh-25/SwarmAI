@@ -1,8 +1,6 @@
 ---
 name: self-evolution
-description: "Governance lifecycle manager for the Three-Layer Governance OS. Six operations: CLASSIFY, CAPTURE, PROMOTE, REFINE, RETIRE, COMPRESS. Manages principles (SOUL), rules (AGENT/STEERING), and\
-  \ gates (hooks/code). Detects capability gaps, captures corrections with bias tags, auto-promotes recurring patterns (3x threshold), and prevents governance bloat.\n  TRIGGER: \"add rule\", \"steeringify\"\
-  .\n  NOT FOR: for one-off file edits (just edit directly)."
+description: "Manage governance (SOUL principles, AGENT/STEERING rules, gates): classify, capture, promote, refine, retire, compress. TRIGGER: \"add rule\", \"promote this correction\", \"steeringify\", \"加条规则\". NOT FOR: one-off file edits."
 tier: always
 platform: all
 ---

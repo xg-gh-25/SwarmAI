@@ -1,8 +1,6 @@
 ---
 name: radar-todo
-description: "Manage SwarmAI ToDos — add, list, edit, complete, and delete items that appear in the left-nav ToDo card/overlay. Each todo is a self-contained work packet: when dragged into a chat tab, the agent\
-  \ has all context to start executing immediately. Also proactively creates todos from detected action items and blockers.\n  TRIGGER: \"add todo\", \"create todo\", \"new todo\", \"my todos\".\n  NOT\
-  \ FOR: apple-reminders, outlook-assistant use cases."
+description: "Manage SwarmAI ToDos: add, list, edit, complete, delete; each todo is a self-contained work packet. Also creates todos from action items. TRIGGER: \"add todo\", \"create todo\", \"my todos\", \"加个待办\". NOT FOR: calendar events."
 input_type: text
 output_type: text
 tier: always

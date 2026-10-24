@@ -1,7 +1,6 @@
 ---
 name: frontend-design
-description: "Create production-grade frontend interfaces with design intelligence database (67 styles, 161 palettes, 57 fonts, 161 industry rules).\n  TRIGGER: \"build a landing page\", \"create a website\"\
-  , \"design a UI\", \"frontend prototype\".\n  NOT FOR: web-design-review use cases."
+description: "Build production-grade frontend UIs with a design database (styles, palettes, fonts, industry rules). TRIGGER: \"build a landing page\", \"create a website\", \"design a UI\", \"frontend prototype\". NOT FOR: reviewing an existing design."
 version: 2.0.0
 tier: lazy
 ---

@@ -1,7 +1,7 @@
 ---
 name: loops-health
 disable-model-invocation: true
-description: "Self-maintenance engine: scan 7 dimensions (31 checks), auto-fix mechanical issues, report Found/Fixed/Pending, escalate only judgment calls."
+description: "Self-maintenance scan of 7 dimensions: auto-fix mechanical issues, report Found/Fixed/Pending, escalate only judgment calls. TRIGGER: \"loops health\", \"self-maintenance scan\", \"system self-check\", \"自检\"."
 trigger:
   - loops health
   - self-loops health

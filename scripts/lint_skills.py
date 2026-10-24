@@ -65,6 +65,12 @@ sys.path.insert(0, str(_BACKEND_DIR))
 from core.ingestion_gate import _SHAPE_BODY_RUNID_RE  # noqa: E402
 from core.skill_manager import SkillParseError, parse_frontmatter  # noqa: E402
 
+# Longest allowed SKILL.md description, whitespace-collapsed, with `when_to_use` joined
+# the way the CLI joins it. Equal to the cap SwarmAI passes to the CLI as
+# skillListingMaxDescChars (backend/core/skill_listing.SKILL_DESC_CAP), so a product skill
+# is never cut mid-sentence; a test keeps the two equal.
+DESCRIPTION_MAX = 250
+
 # Every tree of skills this repo PUBLISHES. The gate is only as wide as the trees
 # it reads, and that width is invisible from a green run — so a tree that ships must
 # be listed here, not assumed covered.
@@ -428,8 +434,25 @@ def lint_skill(skill_md: Path) -> list[str]:
         )
 
     # Check description exists
-    if not meta.get("description"):
+    desc = " ".join(str(meta.get("description") or "").split())
+    when = " ".join(str(meta.get("when_to_use") or "").split())
+    listed = f"{desc} - {when}" if desc and when else desc
+    if not desc:
         errors.append(f"{skill_md}: missing 'description:' field in frontmatter")
+        return errors
+
+    # The description is what the model sees in the CLI's skill listing, every
+    # session, for every skill. The listing has a fixed budget; past it, the CLI keeps
+    # descriptions only for the most-used skills, so a long description costs every
+    # session and a new skill silently loses its own. Keep it short and lead with what
+    # the skill does, then TRIGGER, so nothing is cut at the CLI's per-skill cap.
+    if len(listed) > DESCRIPTION_MAX:
+        errors.append(
+            f"{skill_md}: description is {len(listed)} chars, over {DESCRIPTION_MAX} "
+            "(say what it does, then TRIGGER:, then NOT FOR:)"
+        )
+    if "TRIGGER:" not in desc:
+        errors.append(f"{skill_md}: description has no 'TRIGGER:' (when to use it)")
 
     return errors
 

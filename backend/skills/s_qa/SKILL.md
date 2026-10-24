@@ -1,7 +1,6 @@
 ---
 name: qa
-description: "Diff-aware structured QA: scope from git changes, run unit tests, visual test UI changes, fix bugs with atomic commits, halt when fixes get risky.\n  TRIGGER: \"run QA\", \"test my changes\"\
-  , \"QA this\", \"check for regressions\".\n  NOT FOR: code-review use cases."
+description: "Diff-aware QA: scope from git changes, run tests, check UI changes, fix bugs in atomic commits, stop when fixes get risky. TRIGGER: \"run QA\", \"test my changes\", \"QA this\", \"check for regressions\". NOT FOR: code review."
 consumes_artifacts:
 - changeset
 - design_doc

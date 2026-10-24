@@ -1,6 +1,6 @@
 ---
 name: repo-to-ddd
-description: "The ⑥ Code-Intel Refresher for a DDD — regenerate code-intel.json from the ⑤-bound repo's source via the BUNDLED engine (scripts/refresh_code_intel.py + ai_ready_helpers.py, pure-stdlib + git, no SwarmAI backend). Narrow refresh mode: NEVER touch the 4 DDD docs. Ships the refresher (capability), never the projection (derived data).\n  TRIGGER: \"refresh code intel\", \"regenerate code graph\", \"ddd refresher\".\n  NOT FOR: generating the 4 DDD docs (that's a full ai-ready-repo run / s_ddd-manager)."
+description: "Refresh this DDD's code-intel.json from its bound repo with the bundled engine (stdlib + git, no SwarmAI backend); never touches the DDD docs. TRIGGER: \"refresh code intel\", \"regenerate code graph\", \"ddd refresher\"."
 tier: lazy
 ---
 # AI-Ready-Repo — the DDD's ⑥ Code-Intel Refresher

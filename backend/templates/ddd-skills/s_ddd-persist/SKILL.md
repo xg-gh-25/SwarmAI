@@ -1,6 +1,6 @@
 ---
 name: ddd-persist
-description: "Sediment knowledge into THIS DDD's docs — with the FULL routing discipline of SwarmAI's s_persist: a Step-0 admission gate (most facts should NOT be persisted), a governance boundary, content-type routing, and a sanctioned RETIRE/MOVE reverse side. Additive, honors human-authored content, never overwrites judgment. Uses the bundled locked-write engine (scripts/locked_write.py, no SwarmAI backend).\n  TRIGGER: \"persist to ddd\", \"remember in this ddd\", \"sediment this lesson\", \"update the ddd docs\".\n  NOT FOR: SwarmAI's own MEMORY/EVOLUTION routing (that's native s_persist); behavioral RULES (→ governance, not knowledge)."
+description: "Save knowledge into this DDD's docs with an admission gate, content-type routing and retire/move; additive, never overwrites. TRIGGER: \"persist to ddd\", \"remember in this ddd\", \"sediment this lesson\". NOT FOR: behavioral rules."
 tier: lazy
 ---
 # DDD Persist (s_ddd-persist) — sediment cognition into the DDD, with discipline

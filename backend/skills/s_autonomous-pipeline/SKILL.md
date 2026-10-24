@@ -1,7 +1,7 @@
 ---
 name: autonomous-pipeline
 pipeline_version: "1.0"  # v13 event-sourced protocol; one pipeline, no legacy fallback.
-description: "Optional advanced mode: turn one intent into an auditable, expert-reviewed, isolated Agent Delivery Unit with the Pipeline v1 protocol. Use ONLY when the user chose the pipeline (asked for it, or picked it when asked about a risky change). Normal coding is native and never needs this skill.\n  TRIGGER: \"run pipeline\", \"autonomous pipeline\", \"pipeline for\", \"full pipeline\", \"用 pipeline 做\", \"无人值守做完\".\n  NOT FOR: ordinary code changes (do them natively), single stages (use the specific skill directly)."
+description: "Run one intent through Pipeline v1: documented, expert-reviewed, isolated, landed. Only when the user chose the pipeline. TRIGGER: \"run pipeline\", \"full pipeline\", \"用 pipeline 做\", \"无人值守做完\". NOT FOR: ordinary code changes (do them natively)."
 consumes_artifacts:
 - evaluation
 - research

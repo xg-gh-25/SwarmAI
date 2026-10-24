@@ -1,7 +1,6 @@
 ---
 name: github-trending
-description: "Fetch and analyze GitHub Trending repositories. Shows today's hottest repos with stars, language, and relevance to your interests. Also runs daily as a signal feed → Welcome Screen briefing.\n\
-  \  TRIGGER: \"github trending\", \"trending repos\", \"what's hot on github\", \"trending on github\".\n  NOT FOR: github-research use cases."
+description: "Today's GitHub Trending repos with stars, language and relevance to your interests; also a daily signal feed. TRIGGER: \"github trending\", \"trending repos\", \"what's hot on github\". NOT FOR: researching one repo (github-research)."
 tier: lazy
 ---
 # GitHub Trending

@@ -29,6 +29,7 @@ Key public symbols:
 No subprocess lifecycle, routing, or hook logic lives here.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -2538,10 +2539,19 @@ class PromptBuilder:
             CHANNEL_AUTOCOMPACT_TRIGGER if channel_context
             else _compute_desktop_autocompact_trigger(_ctx_window)
         )
+        from .skill_listing import listing_settings, schedule_log_listing
         cli_settings = {
             "skillOverrides": CLI_SKILL_OVERRIDES,
             "autoCompactWindow": _compute_autocompact_window_setting(_ac_trigger, _ctx_window),
+            # Caps each skill description in the CLI's skill listing (core/skill_listing).
+            **listing_settings(),
         }
+        # How big that listing is for this session, against its budget. Log only, so
+        # it runs in the background and never delays the spawn.
+        _listing_cwd = _channel_sender_dir or working_directory
+        if _listing_cwd:
+            schedule_log_listing(Path(_listing_cwd), context_window=_ctx_window,
+                                 overrides=CLI_SKILL_OVERRIDES)
         # Compaction summary rules: a PreCompact COMMAND hook whose stdout the CLI
         # appends to its summary prompt (core/compact_summary.py).
         from .compact_summary import precompact_settings_hooks
@@ -2600,8 +2610,9 @@ class PromptBuilder:
             cwd=_channel_sender_dir or working_directory,
             setting_sources=setting_sources,
             # Flag-level CLI settings (`--settings`; the SDK merges `sandbox` in).
-            # Hides CLI-bundled skills SwarmAI must not load (CLI_SKILL_OVERRIDES)
-            # and sets the autocompact trigger (autoCompactWindow, see above).
+            # Hides CLI-bundled skills SwarmAI must not load (CLI_SKILL_OVERRIDES),
+            # caps skill descriptions in the listing (skillListingMaxDescChars) and
+            # sets the autocompact trigger (autoCompactWindow, see above).
             settings=json.dumps(cli_settings),
             hooks=hooks if hooks else None,
             resume=resume_session_id,

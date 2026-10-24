@@ -1,6 +1,6 @@
 ---
 name: persist
-description: "Persist knowledge to the correct destination — routes to DDD docs (PRODUCT/TECH/IMPROVEMENT/PROJECT), MEMORY.md, Knowledge/Library/ (searchable store), or EVOLUTION.md based on content type. Unified routing for both manual saves and auto hooks.\n  TRIGGER: \"remember\", \"save\", \"persist\", \"沉淀\", \"record this\", \"save to DDD\", \"save lessons\".\n  NOT FOR: save-context, save-activity, self-evolution (governance rules) use cases."
+description: "Save knowledge to the right store (DDD docs, MEMORY.md, Knowledge/Library, EVOLUTION.md) by content type. TRIGGER: \"remember\", \"save\", \"persist\", \"沉淀\", \"record this\", \"save lessons\". NOT FOR: governance rules (s_self-evolution)."
 tier: always
 ---
 # Persist — Unified Knowledge Routing

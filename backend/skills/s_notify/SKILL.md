@@ -1,9 +1,6 @@
 ---
 name: notify
-description: >
-  Send messages to 9 notification channels: Feishu, DingTalk, WeCom, Telegram,
-  Email, ntfy, Bark, Slack, and generic webhooks. Config-driven via
-  ~/.swarm-ai/notify-channels.yaml. Also callable by other skills and jobs.
+description: "Send a one-way message to Feishu, DingTalk, WeCom, Telegram, Email, ntfy, Bark, Slack or a webhook (config in notify-channels.yaml). TRIGGER: \"notify me\", \"send a notification\", \"push to my phone\", \"通知我\". NOT FOR: conversations."
 tier: lazy
 python-deps: [httpx, yaml]
 ---
