@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -145,8 +146,8 @@ def _check_staleness(project_dir: Path) -> dict:
     if age_days <= 7:
         return {"stale": False, "age_days": age_days, "commit_count": 0}
 
-    # Check for recent code commits (in swarmai codebase)
-    commit_count = _count_recent_commits(7)
+    # Check for recent code commits in the repos this project governs
+    commit_count = _count_recent_commits(project_dir, 7)
 
     # Stale = doc is old AND there have been code changes
     return {
@@ -156,20 +157,22 @@ def _check_staleness(project_dir: Path) -> dict:
     }
 
 
-def _count_recent_commits(days: int) -> int:
-    """Count recent commits in the swarmai codebase."""
-    swarmai_root = _find_swarmai_root()
-    if not swarmai_root:
-        return 0
-    try:
-        result = subprocess.run(
-            ["git", "log", f"--since={days} days ago", "--oneline"],
-            cwd=str(swarmai_root), capture_output=True, text=True,
-            timeout=_GIT_TIMEOUT,
-        )
-        return len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
-    except (subprocess.TimeoutExpired, OSError):
-        return 0
+def _count_recent_commits(project_dir: Path, days: int) -> int:
+    """Recent commits across the repos *project_dir* governs (its bindings.yaml). Before
+    2026-10-24 every project counted the SwarmAI source checkout's commits; usable-by-
+    anyone P7: each project counts its own repos, and a project with none counts 0."""
+    total = 0
+    for repo in _repos(project_dir):
+        try:
+            result = subprocess.run(
+                ["git", "log", f"--since={days} days ago", "--oneline"],
+                cwd=str(repo), capture_output=True, text=True,
+                timeout=_GIT_TIMEOUT, env=_GIT_ENV,
+            )
+            total += len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+    return total
 
 
 # -- Context Gathering --
@@ -192,29 +195,31 @@ def _gather_project_context(project_dir: Path, stale_info: dict) -> dict:
     if improvement_path.exists():
         context["current_improvement_md"] = improvement_path.read_text(encoding="utf-8")[:5000]
 
-    # Recent git log from swarmai codebase
-    swarmai_root = _find_swarmai_root()
-    if swarmai_root:
+    # Recent git history of the repos this project governs (each labelled, shared caps)
+    logs: list[str] = []
+    stats: list[str] = []
+    for repo in _repos(project_dir):
+        label = f"## {repo.name}\n"
         try:
             result = subprocess.run(
                 ["git", "log", "--since=7 days ago", "--oneline", "--stat", "-30"],
-                cwd=str(swarmai_root), capture_output=True, text=True,
-                timeout=_GIT_TIMEOUT,
+                cwd=str(repo), capture_output=True, text=True,
+                timeout=_GIT_TIMEOUT, env=_GIT_ENV,
             )
-            context["git_log"] = result.stdout.strip()[:5000] if result.stdout else ""
-        except (subprocess.TimeoutExpired, OSError):
-            context["git_log"] = ""
-
-        # File changes summary (what was added/modified/deleted)
-        try:
+            if result.stdout.strip():
+                logs.append(label + result.stdout.strip())
+            # File changes summary over the same window
             result = subprocess.run(
-                ["git", "diff", "--stat", f"HEAD~{min(stale_info['commit_count'], 30)}"],
-                cwd=str(swarmai_root), capture_output=True, text=True,
-                timeout=_GIT_TIMEOUT,
+                ["git", "log", "--since=7 days ago", "--format=", "--shortstat"],
+                cwd=str(repo), capture_output=True, text=True,
+                timeout=_GIT_TIMEOUT, env=_GIT_ENV,
             )
-            context["diff_stat"] = result.stdout.strip()[:3000] if result.stdout else ""
+            if result.stdout.strip():
+                stats.append(label + result.stdout.strip())
         except (subprocess.TimeoutExpired, OSError):
-            context["diff_stat"] = ""
+            continue
+    context["git_log"] = "\n\n".join(logs)[:5000]
+    context["diff_stat"] = "\n\n".join(stats)[:3000]
 
     # DDD suggestions from engine_metrics
     try:
@@ -380,29 +385,10 @@ def _write_proposal(project_dir: Path, proposal: dict) -> None:
 # -- Helpers --
 
 
-def _find_swarmai_root() -> Path | None:
-    """Find the SwarmAI codebase root.
+_GIT_ENV = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
 
-    Resolution order:
-    1. SWARMAI_ROOT env var (explicit override)
-    2. Relative to this file (works in dev and PyInstaller)
-    3. Sibling of workspace parent (legacy layout)
-    """
-    import os
 
-    env_root = os.environ.get("SWARMAI_ROOT")
-    if env_root:
-        p = Path(env_root)
-        if (p / "backend").is_dir():
-            return p
-
-    # Relative to this source file: ddd_refresh.py → handlers/ → jobs/ → backend/ → swarmai/
-    source_root = Path(__file__).resolve().parents[3]
-    if (source_root / "backend").is_dir():
-        return source_root
-
-    sibling = SWARMWS.parent / "swarmai"
-    if (sibling / "backend").is_dir():
-        return sibling
-
-    return None
+def _repos(project_dir: Path) -> list[Path]:
+    """The repos *project_dir*'s bindings.yaml declares (ddd_bindings.governed_repo_roots)."""
+    from core.ddd_bindings import governed_repo_roots
+    return governed_repo_roots(project_dir)

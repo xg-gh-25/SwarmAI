@@ -97,13 +97,8 @@ class TestDddDocLockConvergence:
         assert result is False, "promote_section must skip (share the doc md_lock) when held"
 
 
-class TestWatchPathsDerivation:
-    """M1 (run_91bc0651, DDD-alive): _SOURCE_WATCH_PATHS hardcoded → auto-derived.
-
-    A NEW project following the `s_<x>-*` skill-prefix convention gets a
-    staleness watch leg with ZERO manual registration (default-enable).
-    verify-before-attach: a non-existent prefix attaches nothing (no phantom).
-    """
+class TestSkillPrefixDerivation:
+    """_derive_skill_prefix (used by recall_multi): business projects only, fail-closed."""
 
     def test_derive_skill_prefix_allowlisted_suffixes(self):
         from core.ddd_orchestrator import _derive_skill_prefix
@@ -122,63 +117,6 @@ class TestWatchPathsDerivation:
         assert _derive_skill_prefix("ai_ready_repo") is None
         assert _derive_skill_prefix("SwarmAI") is None       # single token
         assert _derive_skill_prefix("PhysicalAI") is None
-
-    def test_no_unrelated_skill_attached(self):
-        """Gate-2 H4 regression guard: GitHub_Community must NOT pull in the
-        unrelated s_github-research / s_github-trending standalone skills."""
-        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
-        root = _find_swarmai_root()
-        paths = _watch_paths_for("GitHub_Community", root)
-        assert not any("s_github-research" in p or "s_github-trending" in p
-                       for p in paths), f"attached unrelated skills: {paths}"
-
-    def test_convention_project_auto_derives_real_skills(self, tmp_path):
-        """E2 anchor: a business-suffix project auto-derives its s_<domain>-*
-        skills with NO entry in _MANUAL_WATCH_PATHS.
-
-        Uses a SYNTHETIC skills dir (tmp_path) — NOT the real private s_cmhk-*
-        skills. Those are .gitignored (local-only), so an external clone has zero
-        s_cmhk-*; a test asserting they exist would pass ONLY on the author's
-        machine (env-coupled test-theater). This validates the derive LOGIC
-        environment-independently. (external-isolation verify, run_ccd1b6c5.)"""
-        from core.ddd_orchestrator import _watch_paths_for, _MANUAL_WATCH_PATHS
-        # synthetic repo root with two matching skill dirs + one unrelated
-        skills = tmp_path / "backend" / "skills"
-        (skills / "s_foo-alpha").mkdir(parents=True)
-        (skills / "s_foo-beta").mkdir(parents=True)
-        (skills / "s_other-thing").mkdir(parents=True)
-        assert "Foo_BIZ" not in _MANUAL_WATCH_PATHS  # zero manual reg
-        paths = _watch_paths_for("Foo_BIZ", tmp_path)
-        assert sorted(paths) == [
-            "backend/skills/s_foo-alpha/", "backend/skills/s_foo-beta/",
-        ], f"should derive exactly the s_foo-* skills, got {paths}"
-
-    def test_manual_and_derived_union(self):
-        """SwarmAI keeps its manual core paths AND gets any derived ones."""
-        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
-        root = _find_swarmai_root()
-        paths = _watch_paths_for("SwarmAI", root)
-        # manual core files preserved
-        assert "backend/core/session_unit.py" in paths
-        assert "backend/main.py" in paths
-
-    def test_no_inrepo_source_attaches_nothing(self):
-        """verify-before-attach: a project with no matching skill dir gets an
-        empty watch list (falls back to Strategy-1), never a phantom path."""
-        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
-        root = _find_swarmai_root()
-        # PhysicalAI/Rocky_ISV have no s_physicalai-*/s_rocky-* skills
-        assert _watch_paths_for("PhysicalAI", root) == []
-        assert _watch_paths_for("Rocky_ISV", root) == []
-
-    def test_nonexistent_prefix_no_phantom_path(self):
-        """A derived prefix that matches no real dir attaches nothing —
-        the watch leg never contains a path that doesn't exist on disk."""
-        from core.ddd_orchestrator import _watch_paths_for, _find_swarmai_root
-        root = _find_swarmai_root()
-        paths = _watch_paths_for("Nonexistent_Xyzzy", root)
-        assert paths == [], f"phantom paths derived: {paths}"
-
 
 class TestOrchestratorExists:
     """AC1: DddCultivationOrchestrator class exists with run() method."""
@@ -333,69 +271,67 @@ class TestDeepCheckDelegation:
             dispatcher.loop = original_loop
 
 
-class TestSourceWatchPaths:
-    """DDD staleness detects changes via watched source paths, not just commit message grep."""
+class TestStalenessStrategies:
+    """DDD staleness: commit-message grep, then commits in the project's bound repos."""
 
-    def test_source_watch_paths_config_exists(self):
-        # M1 (run_91bc0651): renamed _SOURCE_WATCH_PATHS → _MANUAL_WATCH_PATHS
-        # (manual overrides) + auto-derive via _watch_paths_for.
-        from core.ddd_orchestrator import _MANUAL_WATCH_PATHS
-
-        assert "AIDLC" in _MANUAL_WATCH_PATHS
-        assert "SwarmAI" in _MANUAL_WATCH_PATHS
-        assert any("autonomous-pipeline" in p for p in _MANUAL_WATCH_PATHS["AIDLC"])
-
-    def test_staleness_detected_via_watch_path(self, tmp_path):
-        """When commit grep finds nothing but watched path has commits, still flags stale."""
+    def test_staleness_detected_via_the_projects_bound_repo(self, tmp_path):
+        """Commit grep finds nothing, but the repo the project's bindings.yaml declares
+        has recent commits -> stale (usable-by-anyone P7: any project, any layout)."""
+        import subprocess
         import time
         from core.ddd_orchestrator import DddCultivationOrchestrator
 
-        # Setup: project with old TECH.md (>14 days)
-        project_dir = tmp_path / "Projects" / "AIDLC"
+        repo = tmp_path / "anyrepo"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                      capture_output=True)
+        g("init", "-q")
+        g("config", "user.email", "t@t")
+        g("config", "user.name", "t")
+        (repo / "x.txt").write_text("x")
+        g("add", "-A")
+        g("commit", "-qm", "change")
+
+        project_dir = tmp_path / "Projects" / "Other"
         project_dir.mkdir(parents=True)
         tech_file = project_dir / "TECH.md"
-        tech_file.write_text("# AIDLC Tech")
-        # Set mtime to 20 days ago
+        tech_file.write_text("# Tech")
         old_time = time.time() - (20 * 86400)
         os.utime(tech_file, (old_time, old_time))
+        (project_dir / "bindings.yaml").write_text(
+            f"governed_assets:\n  - kind: code-repo\n    name: anyrepo\n"
+            f"    source_workspace: {repo}\n")
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        subprocess.run(["git", "init", "-q", str(ws)], check=True)
 
-        orch = DddCultivationOrchestrator()
+        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(ws))
+        assert findings == ["DDD-STALE: Other/TECH.md (20d old, 1 recent commits)"]
 
-        # Track cwd passed to subprocess calls
-        cwd_values = []
+    def test_no_bound_repo_no_strategy2_call(self, tmp_path):
+        """A project with no declared repo runs no Strategy-2 git call: nothing stands in
+        for a declaration (not the SwarmAI checkout, not a watch list)."""
+        import time
+        from core.ddd_orchestrator import DddCultivationOrchestrator
+
+        project_dir = tmp_path / "Projects" / "SwarmAI"
+        project_dir.mkdir(parents=True)
+        tech_file = project_dir / "TECH.md"
+        tech_file.write_text("# Tech")
+        old_time = time.time() - (20 * 86400)
+        os.utime(tech_file, (old_time, old_time))
+        calls = []
 
         def mock_run(cmd, **kwargs):
-            cwd_values.append(kwargs.get("cwd"))
-            if "--grep" in cmd:
-                # Strategy 1: no commits mention "AIDLC"
-                result = MagicMock()
-                result.stdout = ""
-                return result
-            elif "backend/skills/s_autonomous-pipeline/" in cmd:
-                # Strategy 2: watched path has commits
-                result = MagicMock()
-                result.stdout = "abc123 feat(pipeline): add new specialist\n"
-                return result
-            else:
-                result = MagicMock()
-                result.stdout = ""
-                return result
+            calls.append(cmd)
+            r = MagicMock()
+            r.stdout = ""
+            return r
 
-        # Mock _find_swarmai_root to return a known path
-        fake_swarmai = tmp_path / "swarmai"
-        (fake_swarmai / "backend").mkdir(parents=True)
-
-        with patch("core.ddd_orchestrator.subprocess.run", side_effect=mock_run), \
-             patch("core.ddd_orchestrator._find_swarmai_root", return_value=fake_swarmai):
-            findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
-
-        assert len(findings) == 1
-        assert "AIDLC/TECH.md" in findings[0]
-        assert "DDD-STALE" in findings[0]
-
-        # Verify cwd: Strategy 1 uses ws_path, Strategy 2 uses swarmai_root
-        assert cwd_values[0] == str(tmp_path)  # Strategy 1: SwarmWS
-        assert cwd_values[1] == str(fake_swarmai)  # Strategy 2: swarmai repo
+        with patch("core.ddd_orchestrator.subprocess.run", side_effect=mock_run):
+            findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
+        assert findings == []
+        assert all("--grep" in c for c in calls), calls
 
     def test_no_false_positive_when_fresh(self, tmp_path):
         """Fresh DDD docs (<14 days) are NOT flagged even with watched path commits."""
@@ -413,52 +349,6 @@ class TestSourceWatchPaths:
 
         assert findings == []
         mock_run.assert_not_called()  # Should short-circuit on mtime check
-
-    def test_strategy2_batches_all_watch_paths_in_one_call(self, tmp_path):
-        """Strategy 2 must query ALL watched paths in a SINGLE git call.
-
-        Regression guard for the cultivation 2s-budget fix: previously this
-        spawned one `git log` subprocess PER watched path (N spawns → blew the
-        budget, CHANNEL_TIMEOUT ×17/day). Now it must be a single multi-pathspec
-        call.
-        """
-        import time
-        from core.ddd_orchestrator import DddCultivationOrchestrator, _MANUAL_WATCH_PATHS
-
-        project_dir = tmp_path / "Projects" / "AIDLC"
-        project_dir.mkdir(parents=True)
-        tech_file = project_dir / "TECH.md"
-        tech_file.write_text("# AIDLC Tech")
-        old_time = time.time() - (20 * 86400)
-        os.utime(tech_file, (old_time, old_time))
-
-        orch = DddCultivationOrchestrator()
-        strategy2_calls = []
-
-        def mock_run(cmd, **kwargs):
-            result = MagicMock()
-            if "--grep" in cmd:
-                result.stdout = ""  # Strategy 1: no message match → fall to Strategy 2
-            else:
-                strategy2_calls.append(cmd)  # path-scoped Strategy 2 call
-                result.stdout = "abc123 commit\n"
-            return result
-
-        fake_swarmai = tmp_path / "swarmai"
-        (fake_swarmai / "backend").mkdir(parents=True)
-        with patch("core.ddd_orchestrator.subprocess.run", side_effect=mock_run), \
-             patch("core.ddd_orchestrator._find_swarmai_root", return_value=fake_swarmai):
-            findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
-
-        assert len(findings) == 1
-        # Exactly ONE Strategy-2 git call (batched), not one per watched path.
-        assert len(strategy2_calls) == 1
-        # That single call includes EVERY watched path for AIDLC.
-        cmd = strategy2_calls[0]
-        # fake_swarmai has backend/ but no backend/skills/ → derived attaches
-        # nothing; watch paths = manual AIDLC entries only.
-        for wp in _MANUAL_WATCH_PATHS["AIDLC"]:
-            assert wp in cmd, f"watch path {wp} missing from batched git call: {cmd}"
 
     def test_both_docs_share_single_strategy1_call(self, tmp_path):
         """Both TECH.md + PRODUCT.md stale → Strategy 1 git runs ONCE per project.

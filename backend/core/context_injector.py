@@ -322,8 +322,18 @@ def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
     # SwarmWS root for making paths relative
     from jobs.paths import SWARMWS as _swarmws_path
     _ws_root = str(_swarmws_path) + "/"
-    # Resolve swarmai root from this file: context_injector.py → core/ → backend/ → swarmai/
-    _swarmai_root = str(Path(__file__).resolve().parents[2]) + "/"
+
+    def _repo_rel(path: str) -> "str | None":
+        # Relative to the git repo the path is in (a .git dir or file above it), for
+        # ANY repo -- not just the one this backend's source happens to sit in (P7).
+        p = Path(path).parent
+        for _ in range(12):
+            if (p / ".git").exists():
+                return path[len(str(p)) + 1:]
+            if p.parent == p:
+                break
+            p = p.parent
+        return None
 
     try:
         files: set[str] = set()
@@ -337,10 +347,10 @@ def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
                     if "/" in cleaned and "." in cleaned.rsplit("/", 1)[-1]:
                         # Make relative by stripping known roots
                         rel = cleaned
-                        if rel.startswith(_swarmai_root):
-                            rel = rel[len(_swarmai_root):]
-                        elif rel.startswith(_ws_root):
+                        if rel.startswith(_ws_root):
                             rel = rel[len(_ws_root):]
+                        elif rel.startswith("/") and _repo_rel(rel):
+                            rel = _repo_rel(rel)
                         elif rel.startswith("/"):
                             # Unknown absolute path — use last 3 segments
                             parts = rel.rsplit("/", 3)

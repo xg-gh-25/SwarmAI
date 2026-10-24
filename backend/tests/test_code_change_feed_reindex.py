@@ -19,7 +19,7 @@ class TestReindexChangedFiles:
         changed_files = [("A", "backend/core/new_module.py")]
         # load_project_graph returns None → no db
         with patch("hooks.code_change_feed.load_project_graph", return_value=None):
-            result = _reindex_changed_files(changed_files, str(tmp_path))
+            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
         assert result == 0
 
     def test_reindexes_python_files(self, tmp_path):
@@ -38,7 +38,7 @@ class TestReindexChangedFiles:
 
         with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph), \
              patch("hooks.code_change_feed.parse_file", return_value=mock_parse_result) as mock_parse:
-            result = _reindex_changed_files(changed_files, str(tmp_path))
+            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
 
         # Should have attempted to parse foo.py (exists) but not bar.py (doesn't exist)
         assert mock_parse.call_count == 1
@@ -55,7 +55,7 @@ class TestReindexChangedFiles:
 
         mock_graph = MagicMock()
         with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
-            result = _reindex_changed_files(changed_files, str(tmp_path))
+            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
 
         # No code files → no parse calls
         assert result == 0
@@ -71,7 +71,7 @@ class TestReindexChangedFiles:
 
         mock_graph = MagicMock()
         with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
-            result = _reindex_changed_files(changed_files, str(tmp_path))
+            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
 
         assert result == 0
 
@@ -85,7 +85,7 @@ class TestReindexChangedFiles:
 
         with patch("hooks.code_change_feed.load_project_graph", side_effect=Exception("boom")):
             # Should NOT raise
-            result = _reindex_changed_files(changed_files, str(tmp_path))
+            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
         assert result == 0
 
     def test_handles_deleted_files(self, tmp_path):
@@ -94,12 +94,12 @@ class TestReindexChangedFiles:
 
         mock_graph = MagicMock()
         with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
-            result = _reindex_changed_files(changed_files, str(tmp_path))
+            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
 
         assert result == 0
 
     def test_skips_when_code_intel_unavailable(self, tmp_path):
         """Early return when code_intel module is not importable."""
         with patch("hooks.code_change_feed._CODE_INTEL_AVAILABLE", False):
-            result = _reindex_changed_files([("A", "foo.py")], str(tmp_path))
+            result = _reindex_changed_files([("A", "foo.py")], str(tmp_path), "SwarmAI")
         assert result == 0

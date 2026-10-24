@@ -287,7 +287,6 @@ class TestOrchestratorSubscriptions:
             if EventType.GIT_COMMIT in events
         ]
         assert "ddd_staleness" in git_channels
-        assert "knowledge_staleness" in git_channels
 
     def test_get_tasks_for_event_filters_correctly(self):
         from core.ddd_orchestrator import DddCultivationOrchestrator

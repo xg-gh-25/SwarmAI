@@ -22,7 +22,6 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import anyio
 
@@ -39,11 +38,10 @@ except ImportError:
     _CODE_INTEL_AVAILABLE = False
 
 # Paths that never produce proposals (content, not architecture)
-# PE-6 fix: include common test paths for both SwarmWS and swarmai codebases
+# PE-6 fix: test paths anywhere in a repo are skipped too (see _skipped)
 _SKIP_PREFIXES = (
     "tests/",
     "test_",
-    "backend/tests/",  # swarmai codebase test path
     ".context/",
     "Knowledge/",
     ".artifacts/",
@@ -52,14 +50,10 @@ _SKIP_PREFIXES = (
     "Services/",
 )
 
-# Candidate locations for the swarmai product codebase (checked in order).
-# Used by _find_codebase_repo() to locate the git repo that contains
-# actual Python/TypeScript code (vs SwarmWS which is agent workspace).
-_CODEBASE_CANDIDATES = (
-    "Desktop/SwarmAI-Workspace/swarmai",
-    "SwarmAI-Workspace/swarmai",
-    "swarmai",
-)
+
+def _skipped(path: str) -> bool:
+    """A content (not architecture) path: one of _SKIP_PREFIXES, or under any tests/ dir."""
+    return any(path.startswith(p) for p in _SKIP_PREFIXES) or "/tests/" in f"/{path}"
 
 # Only these extensions indicate potential architecture changes
 _CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".rs", ".go", ".js", ".jsx"}
@@ -91,7 +85,7 @@ class CodeChangeFeed:
         self._git_lock = git_lock
 
     async def execute(self, context) -> None:
-        """Analyze last commit in both SwarmWS and swarmai codebase repos."""
+        """Analyze the last commit of SwarmWS and of every project's bound repos."""
         ws_path = initialization_manager.get_cached_workspace_path()
         if not ws_path:
             return
@@ -103,7 +97,7 @@ class CodeChangeFeed:
             await anyio.to_thread.run_sync(self._analyze_repos, ws_path)
 
     def _analyze_repos(self, ws_path: str) -> None:
-        """Analyze both SwarmWS (workspace) and swarmai (codebase) repos.
+        """Analyze SwarmWS (workspace) and each project's bound code repos.
 
         Each repo is isolated — failure in one does not block the other.
         """
@@ -113,13 +107,14 @@ class CodeChangeFeed:
         except Exception as exc:
             logger.debug("code_change_feed: workspace analysis failed: %s", exc)
 
-        # 2. New: analyze swarmai product codebase repo (the real code)
-        try:
-            codebase_path = self._find_codebase_repo(ws_path)
-            if codebase_path:
-                self._analyze_and_propose_codebase(codebase_path, ws_path)
-        except Exception as exc:
-            logger.debug("code_change_feed: codebase analysis failed: %s", exc)
+        # 2. Every project's bound code repos (bindings.yaml; usable-by-anyone P7:
+        #    no project is special, so the SwarmAI checkout is not looked for).
+        for project, repo in self._governed_repos(ws_path):
+            try:
+                self._analyze_and_propose_codebase(str(repo), ws_path, project)
+            except Exception as exc:
+                logger.debug("code_change_feed: %s/%s analysis failed: %s",
+                             project, repo.name, exc)
 
     def _analyze_and_propose(self, ws_path: str) -> None:
         """Run git log analysis and generate proposals (sync, in thread)."""
@@ -189,7 +184,7 @@ class CodeChangeFeed:
         code_changes = [
             (status, path)
             for status, path in file_changes
-            if not any(path.startswith(p) for p in _SKIP_PREFIXES)
+            if not _skipped(path)
             and Path(path).suffix in _CODE_EXTENSIONS
         ]
 
@@ -238,29 +233,31 @@ class CodeChangeFeed:
 
         return changes
 
-    def _find_codebase_repo(self, ws_path: str) -> Optional[str]:
-        """Discover the swarmai product codebase git repo.
+    @staticmethod
+    def _governed_repos(ws_path: str) -> "list[tuple[str, Path]]":
+        """(project, repo root) for every repo a project's bindings.yaml declares."""
+        from core.ddd_bindings import governed_repo_roots
+        projects = Path(ws_path) / "Projects"
+        if not projects.is_dir():
+            return []
+        out: list[tuple[str, Path]] = []
+        for d in sorted(projects.iterdir()):
+            if d.is_dir() and not d.name.startswith("."):
+                out.extend((d.name, r) for r in governed_repo_roots(d))
+        return out
 
-        Checks candidate paths relative to HOME. Returns the first path that
-        has both .git/ and backend/ (confirming it's the swarmai repo).
-        Returns None if not found (e.g., on Hive where codebase isn't local).
-        """
-        home = Path.home()
-        for candidate in _CODEBASE_CANDIDATES:
-            repo_path = home / candidate
-            if (repo_path / ".git").is_dir() and (repo_path / "backend").is_dir():
-                return str(repo_path)
-        return None
-
-    def _analyze_and_propose_codebase(self, codebase_path: str, ws_path: str) -> None:
-        """Analyze last commit in the swarmai codebase and generate proposals.
+    def _analyze_and_propose_codebase(
+        self, codebase_path: str, ws_path: str, project: str,
+    ) -> None:
+        """Analyze the last commit of one bound repo of *project*.
 
         Same logic as _analyze_and_propose but:
         - Runs git in the codebase_path directory
-        - Proposals write to SwarmWS Projects/SwarmAI/ (DDD lives in workspace, not codebase)
-        - Tracks last-analyzed commit to avoid re-processing same commit across sessions
+        - Re-indexes into *project*'s code_intel graph
+        - Tracks the last-analyzed commit per (project, repo) across sessions
         """
-        state_file = Path(ws_path) / ".context" / ".code_change_feed_last_commit.txt"
+        state_file = (Path(ws_path) / ".context" / ".code_change_feed"
+                      / f"{project}__{Path(codebase_path).name}.txt")
 
         try:
             result = subprocess.run(
@@ -302,7 +299,7 @@ class CodeChangeFeed:
                 self._persist_last_commit(state_file, commit_hash)
                 return
 
-            # Generate proposals targeting SwarmAI project in SwarmWS
+            # Observe (telemetry only, see _generate_proposals)
             self._generate_proposals(arch_changes, commit_hash, commit_subject, ws_path)
 
             # Persist AFTER successful proposal generation — if _generate_proposals
@@ -311,7 +308,7 @@ class CodeChangeFeed:
 
             # P3: Re-index changed code files into code_intel graph (best-effort).
             # Runs AFTER persist — reindex is non-critical, must not block state tracking.
-            _reindex_changed_files(file_changes, codebase_path)
+            _reindex_changed_files(file_changes, codebase_path, project)
 
             logger.info(
                 "code_change_feed: codebase commit %s analyzed — %d arch changes detected",
@@ -378,6 +375,7 @@ _REINDEX_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 def _reindex_changed_files(
     file_changes: list[tuple[str, str]],
     repo_root: str,
+    project: str,
 ) -> int:
     """Re-index changed code files into the project's code_intel graph.
 
@@ -387,6 +385,7 @@ def _reindex_changed_files(
     Args:
         file_changes: List of (status, path) from git name-status.
         repo_root: Absolute path to the repo root directory.
+        project: The project whose code_intel graph the repo feeds.
 
     Returns:
         Number of files successfully re-indexed.
@@ -395,7 +394,7 @@ def _reindex_changed_files(
         if not _CODE_INTEL_AVAILABLE:
             return 0
 
-        graph = load_project_graph("SwarmAI")
+        graph = load_project_graph(project)
         if graph is None:
             return 0
 
@@ -414,7 +413,7 @@ def _reindex_changed_files(
                 continue
 
             # Skip test files (not part of the architecture graph)
-            if any(rel_path.startswith(p) for p in _SKIP_PREFIXES):
+            if _skipped(rel_path):
                 continue
 
             # File must exist on disk to parse

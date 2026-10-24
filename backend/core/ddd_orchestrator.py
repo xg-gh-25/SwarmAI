@@ -143,38 +143,6 @@ def _upstream_source_head(project_dir: Path) -> "tuple[str, str] | None":
 # Sections that are never auto-applied (require human judgment)
 _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
 
-# Source paths that should trigger DDD staleness for specific projects.
-# Key: project name (case-sensitive, matches Projects/<name>/)
-# Value: list of paths (relative to swarmai repo root) to watch via git log.
-# When these paths have recent commits AND the DDD doc is old, flag as stale.
-# This catches cases where commit messages don't mention the project name
-# (e.g., pipeline commits say "pipeline:" not "AIDLC").
-# NOTE: paths are checked against the SWARMAI repo (not SwarmWS).
-#
-# MANUAL overrides — for projects whose in-repo source does NOT follow the
-# `s_<x>-*` skill-prefix convention (core files, multi-skill AIDLC). Projects
-# that DO follow the convention are auto-derived (see _watch_paths_for); the
-# two are UNIONed, never either/or. (run_91bc0651: DDD-alive M1 — replaces the
-# old hardcoded-only dict so a NEW project that follows the convention gets a
-# watch leg with ZERO manual registration.)
-_MANUAL_WATCH_PATHS: dict[str, list[str]] = {
-    "AIDLC": [
-        "backend/skills/s_autonomous-pipeline/",
-        "backend/core/ddd/",
-        "backend/skills/s_deliver/",
-        "backend/skills/s_pollinate/",
-    ],
-    "SwarmAI": [
-        "backend/core/session_unit.py",
-        "backend/core/session_router.py",
-        "backend/core/context_directory_loader.py",
-        "backend/channels/gateway.py",
-        "backend/channels/adapters/",
-        "backend/main.py",
-    ],
-}
-
-
 # Business-domain project suffixes that follow the "domain owns s_<domain>-*"
 # convention (a project `<DOMAIN>_<SUFFIX>` owns the whole s_<domain>-* skill
 # family). This is an ALLOWLIST, not a denylist (allowlist fails closed —
@@ -196,12 +164,10 @@ def _derive_skill_prefix(project_name: str) -> "str | None":
     CMHK_SalesIntel → `s_cmhk-`, Foo_BIZ → `s_foo-`). These projects follow the
     "domain owns the whole s_<domain>-* skill family" convention. Any other name
     (GitHub_Community, ai_ready_repo, SwarmAI, PhysicalAI, single-token names)
-    returns None → NO auto-derive → falls back to manual ∪ Strategy-1.
+    returns None. Used by recall_multi to scope a business project's skills.
 
     Fail-closed by construction: an allowlisted-suffix match is the ONLY path to
-    a derived prefix. A wrong domain still can't produce a phantom path because
-    _watch_paths_for verifies the prefix exists under backend/skills/ before
-    attaching (verify-before-attach).
+    a derived prefix.
     """
     if not project_name or "_" not in project_name:
         return None
@@ -210,61 +176,6 @@ def _derive_skill_prefix(project_name: str) -> "str | None":
     if not head or suffix.strip().lower() not in _BUSINESS_PROJECT_SUFFIXES:
         return None
     return f"s_{head}-"
-
-
-def _watch_paths_for(
-    project_name: str, swarmai_root: "Path | None" = None,
-) -> list[str]:
-    """Return the git-log watch paths for a project: MANUAL ∪ AUTO-DERIVED.
-
-    - MANUAL: explicit entries in _MANUAL_WATCH_PATHS (core / non-convention).
-    - AUTO-DERIVED: if `_<x>` convention yields a prefix `s_<x>-` AND at least
-      one skill dir with that prefix EXISTS under backend/skills/, attach that
-      glob dir(s). Verify-before-attach — a non-existent prefix attaches nothing
-      (no noise), so a project without in-repo skills simply has no derived leg
-      and falls back to the project-agnostic Strategy-1 commit-grep.
-
-    Replaces the old `project in _SOURCE_WATCH_PATHS` / `_SOURCE_WATCH_PATHS[p]`
-    lookups. Empty list = not watched via Strategy-2 (Strategy-1 still covers it).
-    """
-    paths: list[str] = list(_MANUAL_WATCH_PATHS.get(project_name, []))
-
-    prefix = _derive_skill_prefix(project_name)
-    if prefix:
-        if swarmai_root is None:
-            swarmai_root = _find_swarmai_root() or None
-        if swarmai_root:
-            skills_dir = Path(swarmai_root) / "backend" / "skills"
-            if skills_dir.is_dir():
-                for d in sorted(skills_dir.iterdir()):
-                    # verify-before-attach: only real skill dirs matching prefix
-                    if d.is_dir() and d.name.startswith(prefix):
-                        rel = f"backend/skills/{d.name}/"
-                        if rel not in paths:
-                            paths.append(rel)
-    return paths
-
-
-def _find_swarmai_root() -> "Path | None":
-    """Find the swarmai source repo root (NOT SwarmWS).
-
-    Resolution order:
-    1. SWARMAI_ROOT env var
-    2. Relative to this file (core/ → backend/ → swarmai/)
-    3. Sibling of workspace path (legacy layout)
-    """
-    env_root = os.environ.get("SWARMAI_ROOT")
-    if env_root:
-        p = Path(env_root)
-        if (p / "backend").is_dir():
-            return p
-
-    # This file: core/ddd_orchestrator.py → core/ → backend/ → swarmai/
-    source_root = Path(__file__).resolve().parents[2]
-    if (source_root / "backend").is_dir():
-        return source_root
-
-    return None
 
 
 class DddCultivationOrchestrator:
@@ -305,9 +216,6 @@ class DddCultivationOrchestrator:
             }),
             ("auto_apply_proposals", self._ch_auto_apply, {
                 EventType.PROPOSAL_DECIDED, EventType.SESSION_CLOSE,
-            }),
-            ("knowledge_staleness", self._ch_knowledge_staleness, {
-                EventType.GIT_COMMIT, EventType.TIMER_30MIN,
             }),
             ("signal_ddd_bridge", self._ch_signal_bridge, {
                 EventType.SIGNAL_DIGEST,
@@ -452,7 +360,7 @@ class DddCultivationOrchestrator:
         6+ git processes, blowing the 2.0s channel budget (CHANNEL_TIMEOUT
         ×17/day). Now: ≤2 git calls per project with stale docs, and Strategy-2
         passes ALL watch paths to a single `git log -- p1 p2 …` (git accepts
-        multiple pathspecs). swarmai_root is resolved at most once.
+        multiple pathspecs).
         """
         findings = []
         projects_dir = root / "Projects"
@@ -461,7 +369,6 @@ class DddCultivationOrchestrator:
 
         cutoff = datetime.now() - timedelta(days=14)
         gate_mgr = self._get_gate_manager(root)  # Create once, reuse per-finding
-        swarmai_root: "Path | bool | None" = None  # resolve lazily, at most once
 
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
@@ -515,25 +422,19 @@ class DddCultivationOrchestrator:
                 )
                 commit_count = len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
 
-                # Strategy 2: watched source paths — ONE git call over ALL paths
-                # (was one subprocess per path). Catches commits that don't
-                # mention the project name. NOTE: runs against SWARMAI repo.
+                # Strategy 2: commits in the repos this project's bindings.yaml
+                # declares (usable-by-anyone P7: no project or repo layout is special;
+                # it replaced SwarmAI-checkout watch lists). One git call per repo.
                 if commit_count == 0:
-                    if swarmai_root is None:
-                        swarmai_root = _find_swarmai_root() or False
-                    watch_paths = (
-                        _watch_paths_for(project_dir.name, swarmai_root or None)
-                        if swarmai_root else []
-                    )
-                    if swarmai_root and watch_paths:
+                    from core.ddd_bindings import governed_repo_roots
+                    for repo in governed_repo_roots(project_dir):
                         path_result = subprocess.run(
-                            ["git", "log", "--oneline", "--since=14 days ago",
-                             "--", *watch_paths],
-                            cwd=str(swarmai_root),
-                            capture_output=True, text=True,
+                            ["git", "log", "--oneline", "--since=14 days ago"],
+                            cwd=str(repo), capture_output=True, text=True,
                             timeout=_GIT_TIMEOUT,
+                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
                         )
-                        commit_count = (
+                        commit_count += (
                             len(path_result.stdout.strip().splitlines())
                             if path_result.stdout.strip() else 0
                         )
@@ -742,48 +643,6 @@ class DddCultivationOrchestrator:
                 logger.info("ddd_orchestrator: auto-committed %d DDD changes", len(applied_changes))
             except (subprocess.TimeoutExpired, OSError) as exc:
                 logger.debug("ddd_orchestrator: auto-commit skipped: %s", exc)
-
-    # ── Channel 3: DDD→KNOWLEDGE Injection ─────────────────────────────────
-    def _ch_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
-        """Detect when backend code changed but KNOWLEDGE.md hasn't been updated."""
-        findings = []
-        swarmai_dir = Path(os.environ.get(
-            "SWARMAI_SOURCE",
-            str(Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"),
-        ))
-        if not (swarmai_dir / ".git").exists():
-            return findings
-
-        key_dirs = ["backend/core", "backend/hooks", "backend/routers", "backend/channels"]
-        try:
-            result = subprocess.run(
-                ["git", "log", "-1", "--format=%ct", "--"] + key_dirs,
-                cwd=str(swarmai_dir), capture_output=True, text=True, timeout=5,
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return findings
-            backend_ts = int(result.stdout.strip())
-        except (subprocess.TimeoutExpired, ValueError, OSError):
-            return findings
-
-        knowledge_path = root / ".context" / "KNOWLEDGE.md"
-        if not knowledge_path.exists():
-            return findings
-        knowledge_mtime = int(knowledge_path.stat().st_mtime)
-
-        drift_days = (backend_ts - knowledge_mtime) // 86400
-        if drift_days > 7:
-            findings.append(
-                f"STALE: KNOWLEDGE.md architecture may be outdated — "
-                f"backend code changed {drift_days}d after last KNOWLEDGE edit. "
-                f"Run `loops health` or manually review Architecture section."
-            )
-            logger.info(
-                "ddd_orchestrator: KNOWLEDGE.md is %dd behind backend changes",
-                drift_days,
-            )
-
-        return findings
 
     # ── Channel 5: Entity Index Validation ─────────────────────────────────
     def _ch_signal_bridge(self, root: Path, ws_path: str) -> list[str]:

@@ -119,14 +119,34 @@ class TestAnalyzeSection:
 
 
 class TestDDDChangeSuggestions:
-    def test_no_swarmai_root_returns_empty(self, ws_dir, monkeypatch):
-        # Patch _find_swarmai_root to not find the real codebase
-        monkeypatch.setattr(
-            "core.engine_metrics._find_swarmai_root",
-            lambda ws: None,
-        )
-        result = collect_ddd_change_suggestions(ws_dir)
-        assert result == []
+    """Per project, over the repos its bindings.yaml declares (P7); no repo -> nothing."""
+
+    def test_project_without_bound_repo_has_no_suggestions(self, ws_dir):
+        (ws_dir / "Projects" / "SwarmAI").mkdir(parents=True, exist_ok=True)
+        assert collect_ddd_change_suggestions(ws_dir) == []
+
+    def test_bound_repo_changes_are_suggested_for_that_project(self, ws_dir, tmp_path):
+        import subprocess
+        repo = tmp_path / "anyrepo"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                      capture_output=True)
+        g("init", "-q")
+        g("config", "user.email", "t@t")
+        g("config", "user.name", "t")
+        for n in ("a.go", "b.go", "c.go"):
+            (repo / "pkg").mkdir(exist_ok=True)
+            (repo / "pkg" / n).write_text("x")
+        g("add", "-A")
+        g("commit", "-qm", "add")
+        proj = ws_dir / "Projects" / "Other"
+        proj.mkdir(parents=True)
+        (proj / "bindings.yaml").write_text(
+            f"governed_assets:\n  - kind: code-repo\n    name: anyrepo\n"
+            f"    source_workspace: {repo}\n")
+        out = collect_ddd_change_suggestions(ws_dir)
+        assert [(s["project"], s["doc"]) for s in out] == [("Other", "TECH.md")]
+        assert "3 files added in anyrepo (pkg)" in out[0]["reason"]
 
 
 class TestDDDHealth:

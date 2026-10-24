@@ -46,15 +46,36 @@ class TestCheckStaleness:
         os.utime(tech, (old_time, old_time))
 
         monkeypatch.setattr(
-            "jobs.handlers.ddd_refresh._count_recent_commits", lambda days: 0
+            "jobs.handlers.ddd_refresh._count_recent_commits", lambda project_dir, days: 0
         )
         result = _check_staleness(project_dir)
         assert result["stale"] is False
 
+    def test_commits_counted_only_in_the_projects_own_repos(self, project_dir, tmp_path):
+        """P7: a project with no bound repo has 0 commits, whatever repo the daemon runs
+        from; a bound repo's commits are counted."""
+        import subprocess
+        from jobs.handlers.ddd_refresh import _count_recent_commits
+        assert _count_recent_commits(project_dir, 7) == 0
+        repo = tmp_path / "bound"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True,
+                                      capture_output=True)
+        g("init", "-q")
+        g("config", "user.email", "t@t")
+        g("config", "user.name", "t")
+        for i in range(2):
+            (repo / f"f{i}").write_text(str(i))
+            g("add", "-A")
+            g("commit", "-qm", f"c{i}")
+        (project_dir / "bindings.yaml").write_text(
+            f"governed_assets:\n  - kind: code-repo\n    name: bound\n"
+            f"    source_workspace: {repo}\n")
+        assert _count_recent_commits(project_dir, 7) == 2
+
 
 class TestGatherProjectContext:
     def test_reads_tech_md(self, project_dir, monkeypatch):
-        monkeypatch.setattr("jobs.handlers.ddd_refresh._find_swarmai_root", lambda: None)
         # Patch the import inside _gather_project_context
         monkeypatch.setattr(
             "core.engine_metrics.collect_ddd_change_suggestions",

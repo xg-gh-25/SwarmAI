@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
 from datetime import date, datetime, timedelta
@@ -152,157 +153,69 @@ def _analyze_section(
 # ---------------------------------------------------------------------------
 
 def collect_ddd_change_suggestions(ws_path: Path) -> list[dict[str, str]]:
-    """Detect code changes that should trigger DDD doc updates.
+    """Code changes in the last 7 days that may need a DDD doc update.
 
-    Checks recent commits (7 days) for structural patterns:
-    - New Python modules/packages created
-    - New frontend components
-    - Dependency changes (pyproject.toml, package.json)
-    - New API routes
-    - Architecture-level file moves/deletes
+    For every project under ``Projects/``, reads the repos its ``bindings.yaml`` declares
+    (``ddd_bindings.governed_repo_roots``; usable-by-anyone P7: no project and no repo
+    layout is special) and applies three layout-free rules per repo:
+    - 3+ files added  -> TECH.md, Architecture
+    - any file renamed -> TECH.md, Architecture
+    - 3+ files removed -> IMPROVEMENT.md, What Worked / What Failed
 
-    Returns list of {project, doc, reason, files} suggestions.
+    Returns list of {project, doc, reason, files, section} suggestions.
     """
+    from core.ddd_bindings import governed_repo_roots
+
     suggestions: list[dict[str, str]] = []
-    swarmai_root = _find_swarmai_root(ws_path)
-    if not swarmai_root:
+    projects = ws_path / "Projects"
+    if not projects.is_dir():
         return suggestions
-
-    # Get files changed in last 7 days
-    try:
-        result = subprocess.run(
-            ["git", "log", "--name-status", "--since=7 days ago",
-             "--pretty=format:", "--diff-filter=ADRM"],
-            cwd=str(swarmai_root), capture_output=True, text=True,
-            timeout=_GIT_TIMEOUT,
-        )
-        if result.returncode != 0:
-            return suggestions
-    except (subprocess.TimeoutExpired, OSError):
-        return suggestions
-
-    changes: dict[str, list[str]] = {"A": [], "D": [], "R": [], "M": []}
-    for line in result.stdout.strip().splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 2:
-            status = parts[0][0]  # A, D, R, M
-            filepath = parts[-1]
-            if status in changes:
-                changes[status].append(filepath)
-
-    # Pattern 1: New backend modules → TECH.md
-    new_backend = [f for f in changes["A"] if f.startswith("backend/") and f.endswith(".py")]
-    new_packages = [f for f in new_backend if f.endswith("__init__.py")]
-    if new_packages:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "TECH.md",
-            "reason": f"New package(s): {', '.join(p.rsplit('/', 2)[-2] for p in new_packages[:3])}",
-            "files": ", ".join(new_packages[:5]),
-            "section": "Architecture",
-        })
-    elif len(new_backend) >= 3:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "TECH.md",
-            "reason": f"{len(new_backend)} new backend files added",
-            "files": ", ".join(new_backend[:5]),
-            "section": "Architecture",
-        })
-
-    # Pattern 2: New frontend components → TECH.md
-    new_frontend = [f for f in changes["A"]
-                    if f.startswith("desktop/src/") and f.endswith((".tsx", ".ts"))]
-    new_components = [f for f in new_frontend if "/components/" in f]
-    if len(new_components) >= 2:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "TECH.md",
-            "reason": f"{len(new_components)} new UI components",
-            "files": ", ".join(new_components[:5]),
-            "section": "Frontend Architecture",
-        })
-
-    # Pattern 3: Dependency changes → TECH.md
-    dep_files = [f for f in changes["M"]
-                 if f in ("pyproject.toml", "desktop/package.json", "Cargo.toml")]
-    if dep_files:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "TECH.md",
-            "reason": f"Dependency changes: {', '.join(dep_files)}",
-            "files": ", ".join(dep_files),
-            "section": "Tech Stack",
-        })
-
-    # Pattern 4: New API routes → TECH.md
-    new_routers = [f for f in changes["A"]
-                   if f.startswith("backend/routers/") and f.endswith(".py")]
-    if new_routers:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "TECH.md",
-            "reason": f"New API route(s): {', '.join(f.split('/')[-1] for f in new_routers)}",
-            "files": ", ".join(new_routers),
-            "section": "API Surface",
-        })
-
-    # Pattern 5: Deleted modules (significant) → TECH.md + IMPROVEMENT.md
-    deleted_backend = [f for f in changes["D"]
-                       if f.startswith("backend/") and f.endswith(".py")
-                       and "__pycache__" not in f]
-    if len(deleted_backend) >= 3:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "IMPROVEMENT.md",
-            "reason": f"{len(deleted_backend)} backend files removed (migration?)",
-            "files": ", ".join(deleted_backend[:5]),
-            "section": "What Worked / What Failed",
-        })
-
-    # Pattern 6: New hooks → TECH.md
-    new_hooks = [f for f in changes["A"]
-                 if f.startswith("backend/hooks/") and f.endswith(".py")]
-    if new_hooks:
-        suggestions.append({
-            "project": "SwarmAI",
-            "doc": "TECH.md",
-            "reason": f"New hook(s): {', '.join(f.split('/')[-1].replace('.py','') for f in new_hooks)}",
-            "files": ", ".join(new_hooks),
-            "section": "Hook Pipeline",
-        })
-
+    for project_dir in sorted(projects.iterdir()):
+        if not project_dir.is_dir() or project_dir.name.startswith("."):
+            continue
+        for repo in governed_repo_roots(project_dir):
+            suggestions.extend(_repo_change_suggestions(project_dir.name, repo))
     return suggestions
 
 
-def _find_swarmai_root(ws_path: Path) -> Optional[Path]:
-    """Find the SwarmAI codebase root.
+def _repo_change_suggestions(project: str, repo: Path) -> list[dict[str, str]]:
+    try:
+        result = subprocess.run(
+            ["git", "log", "--name-status", "--since=7 days ago",
+             "--pretty=format:", "--diff-filter=ADR"],
+            cwd=str(repo), capture_output=True, text=True, timeout=_GIT_TIMEOUT,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        )
+        if result.returncode != 0:
+            return []
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    changes: dict[str, list[str]] = {"A": [], "D": [], "R": []}
+    for line in result.stdout.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0][:1] in changes:
+            changes[parts[0][0]].append(parts[-1])
+    out: list[dict[str, str]] = []
+    where = f" in {repo.name}"
 
-    Resolution order:
-    1. SWARMAI_ROOT env var (explicit override)
-    2. Relative to this file (works in dev and PyInstaller)
-    3. Sibling of workspace parent (legacy layout)
-    """
-    import os
+    def _dirs(files: list[str]) -> str:
+        tops = sorted({f.split("/", 1)[0] if "/" in f else "." for f in files})
+        return ", ".join(tops[:3])
 
-    # Env var — explicit override for any deployment
-    env_root = os.environ.get("SWARMAI_ROOT")
-    if env_root:
-        p = Path(env_root)
-        if (p / "backend").is_dir():
-            return p
-
-    # Relative to this source file: engine_metrics.py → core/ → backend/ → swarmai/
-    source_root = Path(__file__).resolve().parents[2]
-    if (source_root / "backend").is_dir():
-        return source_root
-
-    # Sibling of workspace parent
-    sibling = ws_path.parent / "swarmai"
-    if (sibling / "backend").is_dir():
-        return sibling
-
-    return None
+    if len(changes["A"]) >= 3:
+        out.append({"project": project, "doc": "TECH.md", "section": "Architecture",
+                    "reason": f"{len(changes['A'])} files added{where} ({_dirs(changes['A'])})",
+                    "files": ", ".join(changes["A"][:5])})
+    if changes["R"]:
+        out.append({"project": project, "doc": "TECH.md", "section": "Architecture",
+                    "reason": f"{len(changes['R'])} files renamed or moved{where}",
+                    "files": ", ".join(changes["R"][:5])})
+    if len(changes["D"]) >= 3:
+        out.append({"project": project, "doc": "IMPROVEMENT.md",
+                    "section": "What Worked / What Failed",
+                    "reason": f"{len(changes['D'])} files removed{where} (migration?)",
+                    "files": ", ".join(changes["D"][:5])})
+    return out
 
 
 # ---------------------------------------------------------------------------

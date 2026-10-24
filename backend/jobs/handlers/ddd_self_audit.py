@@ -133,16 +133,12 @@ def _is_code_backed(project_dir: Path) -> bool:
 
 
 def _source_repo_for(project_name: str) -> Path | None:
-    """The live SOURCE repo a code-backed project's DDD describes. Only SwarmAI today;
-    returns None otherwise so we never hand the agent a --add-dir it can't use."""
-    if project_name == "SwarmAI":
-        try:
-            from ..system_jobs import _get_swarmai_root
-            root = Path(_get_swarmai_root())
-            return root if root.is_dir() else None
-        except Exception:
-            return None
-    return None
+    """The first local repo a code-backed project's bindings.yaml declares
+    (ddd_bindings.governed_repo_roots), or None. Any project, declared not guessed
+    (usable-by-anyone P7); returning None means no --add-dir the agent cannot use."""
+    from core.ddd_bindings import governed_repo_roots
+    repos = governed_repo_roots(PROJECTS_DIR / project_name)
+    return repos[0] if repos else None
 
 
 def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool) -> str:

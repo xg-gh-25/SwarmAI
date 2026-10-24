@@ -21,7 +21,7 @@ Brazil headless auth and is deferred to the pre-Run-2 spike (design §7.2.2) —
 raises ``NotImplementedError`` for it rather than pretend.
 
 Key public symbols: ``DeliveryContract``, ``Binding``, ``BindingsDoc``, ``BindResult``,
-``load_bindings``, ``bind_repo``.
+``load_bindings``, ``governed_repo_roots``, ``bind_repo``.
 """
 from __future__ import annotations
 
@@ -186,6 +186,54 @@ def load_bindings(path: str | Path) -> BindingsDoc:
         raise ValueError(
             f"invalid bindings.yaml ({p}): {_format_validation_error(exc)}"
         ) from exc
+
+
+def _git_toplevel(path: Path) -> Optional[Path]:
+    import os
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=5,
+                           env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"})
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def governed_repo_roots(project_dir: str | Path) -> list[Path]:
+    """The local git repos project *project_dir* governs, as its ``bindings.yaml`` declares.
+
+    Both shapes count: ``bindings[].worktree`` and ``governed_assets[]`` entries of
+    ``kind: code-repo`` with a ``source_workspace``. A declared path is kept only when it
+    is the toplevel of a git repo on disk. Nothing is guessed (usable-by-anyone P7): an
+    asset without a path, the project's name, or where the daemon runs from never stand
+    in for a declaration. Missing or unreadable bindings -> ``[]``. Order: declared order,
+    duplicates dropped.
+    """
+    import os
+    import yaml
+
+    f = Path(project_dir) / "bindings.yaml"
+    try:
+        raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+    except Exception as exc:  # noqa: BLE001 — no / bad bindings = no repo
+        logger.debug("governed_repo_roots: %s unreadable: %s", f, exc)
+        return []
+    if not isinstance(raw, dict):
+        return []
+    declared: list[str] = []
+    for a in raw.get("governed_assets") or []:
+        if isinstance(a, dict) and a.get("kind") == "code-repo" and a.get("source_workspace"):
+            declared.append(str(a["source_workspace"]))
+    for b in raw.get("bindings") or []:
+        if isinstance(b, dict) and b.get("worktree"):
+            declared.append(str(b["worktree"]))
+    out: list[Path] = []
+    for d in declared:
+        p = Path(os.path.realpath(os.path.expanduser(d)))
+        if p.is_dir() and _git_toplevel(p) == p and p not in out:
+            out.append(p)
+    return out
 
 
 def classify_project(project_dir: str | Path) -> str:
