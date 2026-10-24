@@ -16,7 +16,8 @@ works in. This hook injects them — product-level, inject-only, never a deny:
   its build / test / style conventions, ask the user before anything that changes how
   work is done (review process, running a script, off-machine actions). Both are below
   the user's instructions and the product rules; unrelated instructions are not followed.
-- size: each file is capped at ``MAX_FILE_CHARS`` and the block at ``MAX_BLOCK_CHARS``;
+- size: each file is capped at ``MAX_FILE_CHARS`` and the block at ``MAX_BLOCK_CHARS``
+  (under the CLI's 8000-character limit per hook result);
   what is cut names the path to read in full.
 
 State is per session (``_STATE``), bounded (``MAX_REPOS_PER_SESSION``), and dropped by
@@ -37,8 +38,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 GUIDANCE_FILES = ("AGENTS.md", "CLAUDE.md", ".swarmai/review.md")
-MAX_FILE_CHARS = 8_000
-MAX_BLOCK_CHARS = 16_000
+# The CLI truncates each hook result's additionalContext at 8000 characters (read from the
+# bundled CLI 2.1.301: a JD table with additionalContext:8000). The whole block — every
+# repo touched by one call — stays under it, so nothing is cut by the CLI unannounced.
+MAX_FILE_CHARS = 3_500
+MAX_BLOCK_CHARS = 7_500
 MAX_REPOS_PER_SESSION = 64
 _BOUND_TTL = 60.0
 _HOOK_TIMEOUT = 2.0
@@ -239,7 +243,11 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
             out.append(_render(root, fresh, root in _bound_roots()))
     if written is not None:
         state["written"].add(written)     # after judging: a first write still gets guidance
-    return "\n\n".join(out) or None
+    text = "\n\n".join(out)
+    if len(text) > MAX_BLOCK_CHARS:       # several repos in one call
+        text = text[:MAX_BLOCK_CHARS - 120] + ("\n[... repository guidance cut at the size "
+                                              "limit; read the AGENTS.md files named above]")
+    return text or None
 
 
 def create_repo_guidance_hook(session_context: "dict[str, Any]", event: str):

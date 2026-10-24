@@ -114,7 +114,7 @@ def test_oversize_file_is_cut_with_its_path(tmp_path):
     repo = _repo(tmp_path / "proj", agents="y" * (rg.MAX_FILE_CHARS + 500))
     text = _call("PostToolUse", "Read", file_path=str(repo / "src.py"))
     assert "cut at" in text and str(repo.resolve() / "AGENTS.md") in text
-    assert len(text) < rg.MAX_BLOCK_CHARS + 1000
+    assert len(text) <= rg.MAX_BLOCK_CHARS < 8000   # the CLI cuts at 8000 per hook result
 
 
 def test_repo_without_guidance_injects_nothing_and_forget_drops_state(tmp_path):
@@ -142,3 +142,10 @@ def test_registered_in_build_hooks(monkeypatch):
         permission_manager=permission_manager))
     assert ("PostToolUse", "repo_guidance", "Read|Grep|Glob|Bash") in seen
     assert ("PreToolUse", "repo_guidance_pre", "Write|Edit|MultiEdit|NotebookEdit") in seen
+
+
+def test_several_repos_in_one_call_stay_under_the_cli_limit(tmp_path):
+    a = _repo(tmp_path / "a", agents="a" * 5000)
+    b = _repo(tmp_path / "b", agents="b" * 5000)
+    text = _call("PostToolUse", "Bash", command=f"cd {a} && cd {b}", cwd=str(a))
+    assert str(a.resolve()) in text and len(text) <= rg.MAX_BLOCK_CHARS
