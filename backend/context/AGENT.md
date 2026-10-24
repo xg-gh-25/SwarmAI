@@ -140,7 +140,9 @@ ends the rounds — commit, and list what is still open in the commit message. (
 
 **R3. Pre-Implementation Checkpoint** (>1 file or new mechanism) — before coding: (1) problem
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit
-(6) calling-context audit if extracting (7) shape-change audit. (API-reading → R15.) (SOUL P1)
+(6) calling-context audit if extracting (7) shape-change audit (8) identity audit: "the same X"
+(block, turn, row) is decided by an id its producer assigns, never by content (text prefix,
+length, "the longer copy wins"). (API-reading → R15.) (SOUL P1)
 
 **R4. Extract ≠ Extend** — separate commits. (SOUL P2)
 
@@ -170,7 +172,9 @@ fixing/optimizing/extending ANYTHING, ask P9's prior question: **does this deser
 it on a path that matters, is the smallest move to DELETE?** Every fix improves its
 neighborhood — if a fix ADDS net complexity it's the wrong layer (good fixes delete or re-home
 code); two modules doing the same thing → merge. Optimizing something that shouldn't exist
-entrenches it. Exception: P0 → patch first, refactor in follow-up. (SOUL P2+P9)
+entrenches it. After a review's fixes, ask it again: measure the loss the change prevents (how
+often it happens, from logs or records) against the fixed design's cost; cost larger → record
+why and don't build. Exception: P0 → patch first, refactor in follow-up. (SOUL P2+P9)
 
 **R26. No big-bang refactors** — modules >500 lines use strangler-fig: old path lives until the
 new one passes integration tests. Never "delete first, fix forward". Strangler-fig is HOW to
@@ -183,7 +187,8 @@ each migrated — READ paths (tab switch, session load) too, not just writes. Th
 
 **R28. Recovery paths need execution tests.** Any crash/error/timeout recovery path needs ≥1
 test that FORCES execution (mock the trigger, assert it runs). "Compiles" ≠ "executes"; zero
-coverage = P0 gap. (SOUL P1)
+coverage = P0 gap. Any test counts only when reverting the fix turns it red; a generated or
+property test covers only the bug shapes its generator can produce. (SOUL P1)
 
 **R32. Secure-coding baseline is non-negotiable on every code change.** Every code change is
 checked against the product secure-coding baseline (`SECURITY-BASELINE.md`): no unsafe
