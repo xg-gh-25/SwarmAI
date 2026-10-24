@@ -22,7 +22,7 @@ cd $SWARMAI_ROOT
 
 # Recent runs (paginated — GitHub API requires pagination for full count)
 gh run list --limit 10 --json databaseId,status,conclusion,name,headBranch,createdAt,updatedAt \
-  | python3 -c "
+  | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 runs = json.load(sys.stdin)
 print(f'Recent CI Runs ({len(runs)}):')
@@ -35,7 +35,7 @@ for r in runs:
 
 # Summary counts
 gh run list --limit 20 --json conclusion \
-  | python3 -c "
+  | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 from collections import Counter
 runs = json.load(sys.stdin)
@@ -68,7 +68,7 @@ RUN_ID="<from stage 1>"
 
 # Fetch failed job logs (not full log — just the failed step)
 gh run view $RUN_ID --json jobs \
-  | python3 -c "
+  | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 data = json.load(sys.stdin)
 for job in data.get('jobs', []):

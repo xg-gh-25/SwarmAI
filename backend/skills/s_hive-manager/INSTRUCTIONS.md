@@ -14,7 +14,7 @@ go through `curl` to the local backend — no direct AWS SDK calls needed.
 
 ```bash
 # Port is in ~/.swarm-ai/backend.json (always available, sandbox-safe)
-PORT=$(python3 -c "import json; print(json.load(open('$HOME/.swarm-ai/backend.json'))['port'])")
+PORT=$("$SWARM_BACKEND_BIN" py -c "import json; print(json.load(open('$HOME/.swarm-ai/backend.json'))['port'])")
 BASE="http://127.0.0.1:$PORT/api/hive"
 ```
 
@@ -25,7 +25,7 @@ BASE="http://127.0.0.1:$PORT/api/hive"
 ### 1. List Hive Instances
 
 ```bash
-curl -s "$BASE/instances" | python3 -m json.tool
+curl -s "$BASE/instances" | "$SWARM_BACKEND_BIN" py -m json.tool
 ```
 
 Returns all Hives with status, URL, region, version. Credentials excluded from list.
@@ -42,7 +42,7 @@ Key fields: `id` (UUID — use this for all API calls), `name`, `status`, `cloud
 
 ```bash
 # 1. List accounts to get the account ref (use the 'id' field, NOT 'account_id')
-curl -s "$BASE/accounts" | python3 -c "
+curl -s "$BASE/accounts" | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 for a in json.load(sys.stdin):
     print(f\"  id={a['id']}  aws={a['account_id']}  label={a['label']}  region={a['default_region']}\")
@@ -89,7 +89,7 @@ curl -s -X POST "$BASE/instances" \
 Poll every 10s until `running`:
 
 ```bash
-curl -s "$BASE/instances/<id>" | python3 -c "
+curl -s "$BASE/instances/<id>" | "$SWARM_BACKEND_BIN" py -c "
 import sys, json; d = json.load(sys.stdin)
 print(f\"Status: {d['status']}  URL: https://{d.get('cloudfront_domain', 'pending...')}\")"
 ```
@@ -100,7 +100,7 @@ Provisioning: 5-10 min. CloudFront HTTPS: additional 5-15 min.
 
 ```bash
 # Check current versions
-curl -s "$BASE/instances" | python3 -c "
+curl -s "$BASE/instances" | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 for h in json.load(sys.stdin):
     print(f\"{h['name']:20s} v{h.get('version','?'):10s} {h['status']}\")
@@ -121,7 +121,7 @@ Update uses SSM Run Command (no SSH). Instance must be `running`. Takes 2-5 min.
 AUTH_HEADER=""
 if [ -n "$GITHUB_TOKEN" ]; then AUTH_HEADER="-H \"Authorization: token $GITHUB_TOKEN\""; fi
 LATEST=$(eval curl -s $AUTH_HEADER https://api.github.com/repos/xg-gh-25/SwarmAI/releases/latest \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name','').lstrip('v') or 'UNKNOWN')")
+  | "$SWARM_BACKEND_BIN" py -c "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name','').lstrip('v') or 'UNKNOWN')")
 if [ "$LATEST" = "UNKNOWN" ]; then
   echo "⚠️  Could not fetch latest version from GitHub (rate limit or private repo)."
   echo "   Set GITHUB_TOKEN env var, or specify version manually."
@@ -130,8 +130,8 @@ fi
 echo "Latest version: $LATEST"
 
 # Step 2: Update each running instance
-PORT=$(python3 -c "import json; print(json.load(open('$HOME/.swarm-ai/backend.json'))['port'])")
-curl -s "http://127.0.0.1:$PORT/api/hive/instances" | python3 -c "
+PORT=$("$SWARM_BACKEND_BIN" py -c "import json; print(json.load(open('$HOME/.swarm-ai/backend.json'))['port'])")
+curl -s "http://127.0.0.1:$PORT/api/hive/instances" | "$SWARM_BACKEND_BIN" py -c "
 import sys, json, subprocess
 for h in json.load(sys.stdin):
     if h['status'] == 'running':

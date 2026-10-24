@@ -17,7 +17,7 @@ DO NOT USE: for backend APIs (just code directly) or for reviewing existing UI (
 Before writing ANY frontend code, run the design system generator to get industry-specific style, color, typography, and anti-pattern recommendations:
 
 ```bash
-python3 scripts/search.py "<product description>" --design-system -p "ProjectName" -f markdown
+"$SWARM_BACKEND_BIN" py scripts/search.py "<product description>" --design-system -p "ProjectName" -f markdown
 ```
 
 This is NOT optional. The database has 161 industry-specific reasoning rules that prevent generic AI aesthetics. Skip this step only if the user explicitly provides a complete design system (colors, fonts, style).

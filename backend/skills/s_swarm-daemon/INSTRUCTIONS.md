@@ -130,10 +130,10 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plis
 START_HEALTHY=0
 for i in $(seq 1 15); do
   HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
-  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+  if echo "$HEALTH" | "$SWARM_BACKEND_BIN" py -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
     START_HEALTHY=1
     echo "Daemon healthy"
-    echo "$HEALTH" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2))"
+    echo "$HEALTH" | "$SWARM_BACKEND_BIN" py -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2))"
     break
   fi
   sleep 2
@@ -187,9 +187,9 @@ fi
 RESTART_HEALTHY=0
 for i in $(seq 1 45); do
   HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
-  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+  if echo "$HEALTH" | "$SWARM_BACKEND_BIN" py -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
     RESTART_HEALTHY=1
-    echo "$HEALTH" | python3 -m json.tool
+    echo "$HEALTH" | "$SWARM_BACKEND_BIN" py -m json.tool
     break
   fi
   sleep 2
@@ -284,7 +284,7 @@ for i in $(seq 1 20); do
   HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
     DEPLOY_HEALTHY=1
     echo "=== Daemon HEALTHY after $((i*2))s ==="
-    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Status: {d[\"status\"]}\n  Version: {d.get(\"version\",\"?\")}')"
+    echo "$HEALTH" | "$SWARM_BACKEND_BIN" py -c "import sys,json; d=json.load(sys.stdin); print(f'  Status: {d[\"status\"]}\n  Version: {d.get(\"version\",\"?\")}')"
     break
   }
   sleep 2
@@ -341,7 +341,7 @@ echo "Health response: $HEALTH"
 
 # 2. Version match (deployed vs running)
 DEPLOYED=$(cat ~/.swarm-ai/daemon/.version 2>/dev/null | awk '{print $1}')
-RUNNING=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null)
+RUNNING=$(echo "$HEALTH" | "$SWARM_BACKEND_BIN" py -c "import sys,json; print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null)
 echo "Deployed version: $DEPLOYED"
 echo "Running version: $RUNNING"
 

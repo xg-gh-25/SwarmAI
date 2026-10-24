@@ -26,27 +26,27 @@ All scripts are in the `scripts/` directory relative to this skill. Run from the
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `search.py` | BM25 search across all design databases | `python3 scripts/search.py "<query>" [--domain <d>]` |
-| `search.py --design-system` | Generate complete design system recommendation | `python3 scripts/search.py "<query>" --design-system -p "ProjectName"` |
+| `search.py` | BM25 search across all design databases | `"$SWARM_BACKEND_BIN" py scripts/search.py "<query>" [--domain <d>]` |
+| `search.py --design-system` | Generate complete design system recommendation | `"$SWARM_BACKEND_BIN" py scripts/search.py "<query>" --design-system -p "ProjectName"` |
 
 **Search domains:** `style`, `color`, `chart`, `landing`, `product`, `ux`, `typography`
 
 **Examples:**
 ```bash
 # Generate a full design system for a product type
-python3 scripts/search.py "beauty spa wellness" --design-system -p "Serenity Spa" -f markdown
+"$SWARM_BACKEND_BIN" py scripts/search.py "beauty spa wellness" --design-system -p "Serenity Spa" -f markdown
 
 # Search for a specific style
-python3 scripts/search.py "glassmorphism" --domain style
+"$SWARM_BACKEND_BIN" py scripts/search.py "glassmorphism" --domain style
 
 # Find typography pairings
-python3 scripts/search.py "elegant serif" --domain typography
+"$SWARM_BACKEND_BIN" py scripts/search.py "elegant serif" --domain typography
 
 # Get industry-specific color palette
-python3 scripts/search.py "fintech banking" --domain color
+"$SWARM_BACKEND_BIN" py scripts/search.py "fintech banking" --domain color
 
 # Check UX guidelines
-python3 scripts/search.py "touch target accessibility" --domain ux
+"$SWARM_BACKEND_BIN" py scripts/search.py "touch target accessibility" --domain ux
 ```
 
 ### Data Files
@@ -95,7 +95,7 @@ render. A recommended discovery set is 1 safe preset + ≥1 bold template + 1 wi
 
 The biggest risk with AI-generated UI is looking like every other AI-generated UI. Before writing code:
 
-1. **Run the Design System Generator** -- `python3 scripts/search.py "<product description>" --design-system -p "Name"` to get industry-specific recommendations
+1. **Run the Design System Generator** -- `"$SWARM_BACKEND_BIN" py scripts/search.py "<product description>" --design-system -p "Name"` to get industry-specific recommendations
 2. **Commit to the recommended style fully** -- half-measures look worse than generic
 3. **Follow anti-patterns** -- the database tells you what NOT to do for each industry
 4. **Read `data/anti_slop.md`** -- the anti-AI-slop checklist: banned fonts (Inter/Roboto/Arial as display, over-converged Space Grotesk), banned colors (generic indigo `#6366f1`, purple-on-white gradients), banned layouts (all-centered, identical card grids, cookie-cutter dashboards), banned decoration (realistic illustrations, gratuitous glassmorphism) — plus the positive counter-rules (distinctive type, cohesive palette with dominant+accent, atmospheric layered backgrounds).
@@ -120,7 +120,7 @@ The full style database has 67 entries. Here are the most common starting points
 
 For the full 67 styles with CSS variables, implementation checklists, and AI prompt keywords, search the database:
 ```bash
-python3 scripts/search.py "<your style>" --domain style
+"$SWARM_BACKEND_BIN" py scripts/search.py "<your style>" --domain style
 ```
 
 ## Workflow
@@ -144,14 +144,14 @@ Extract from the user's request:
 **Before writing any code**, run the design system generator:
 
 ```bash
-python3 scripts/search.py "<product description keywords>" --design-system -p "ProjectName" -f markdown
+"$SWARM_BACKEND_BIN" py scripts/search.py "<product description keywords>" --design-system -p "ProjectName" -f markdown
 ```
 
 This outputs: **pattern** (page structure + CTA placement), **style** (with effects and CSS keywords), **colors** (full semantic palette with CSS variables), **typography** (heading + body fonts with Google Fonts URL), **key effects**, **anti-patterns to avoid**, and a **pre-delivery checklist**.
 
 Use the output to populate Step 2 decisions. If the user specifies a style preference, search that style directly:
 ```bash
-python3 scripts/search.py "glassmorphism" --domain style
+"$SWARM_BACKEND_BIN" py scripts/search.py "glassmorphism" --domain style
 ```
 
 **If the design system generator is unavailable** (e.g., Python not accessible), fall back to the manual definitions below.
@@ -237,7 +237,7 @@ Keep JavaScript minimal. CSS-first for all animations and transitions.
 ### Step 6: Polish & Deliver
 
 Before delivering:
-- [ ] Test in browser (open file or `python -m http.server`)
+- [ ] Test in browser (open file or `"$SWARM_BACKEND_BIN" py -m http.server`)
 - [ ] Check mobile responsive (browser dev tools)
 - [ ] Verify all links and interactions work
 - [ ] Optimize any large images

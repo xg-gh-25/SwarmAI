@@ -32,8 +32,8 @@ routing is the `CONTEXT_FILES` list in `backend/core/context_directory_loader.py
 (the `user_customized` field drives it). Re-verify against source every time (R30#1):
 
 ```bash
-python <skill>/scripts/scan.py --routing            # prints the live table
-python <skill>/scripts/scan.py --routing --file MEMORY.md
+"$SWARM_BACKEND_BIN" py <skill>/scripts/scan.py --routing            # prints the live table
+"$SWARM_BACKEND_BIN" py <skill>/scripts/scan.py --routing --file MEMORY.md
 ```
 
 The three classes (read out of `user_customized` + the auto-gen set):
@@ -96,7 +96,7 @@ read for the subtler forms in Rule 1 by hand. (Under-catching is safe here — y
 (sedimented MEMORY principle). The scanner is a *candidate surfacer*, not a decider:
 
 ```
-1. SCAN   python <skill>/scripts/scan.py --root .context [--file F] [--json]
+1. SCAN   "$SWARM_BACKEND_BIN" py <skill>/scripts/scan.py --root .context [--file F] [--json]
           → a candidate list (echoed-title / drift-number / dated-pointer + line #s)
 2. READ   open the file, read each flagged region IN CONTEXT
 3. JUDGE  for each candidate ask: is this genuinely noise/drift, or load-bearing?

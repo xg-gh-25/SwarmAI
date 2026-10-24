@@ -63,14 +63,14 @@ If you just need to read the text contents of a presentation, you should convert
 
 ```bash
 # Convert document to markdown
-python -m markitdown path-to-file.pptx
+"$SWARM_BACKEND_BIN" py -m markitdown path-to-file.pptx
 ```
 
 ### Raw XML access
 You need raw XML access for: comments, speaker notes, slide layouts, animations, design elements, and complex formatting. For any of these features, you'll need to unpack a presentation and read its raw XML contents.
 
 #### Unpacking a file
-`python ooxml/scripts/unpack.py <office_file> <output_dir>`
+`"$SWARM_BACKEND_BIN" py ooxml/scripts/unpack.py <office_file> <output_dir>`
 
 **Note**: The unpack.py script is located at `skills/ai-pptx/ooxml/scripts/unpack.py` relative to the project root. If the script doesn't exist at this path, use `find . -name "unpack.py"` to locate it.
 
@@ -225,7 +225,7 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
    **Step A — Convert to images for inspection:**
    ```bash
    # Primary method (always available):
-   python scripts/thumbnail.py output.pptx workspace/thumbnails --cols 4
+   "$SWARM_BACKEND_BIN" py scripts/thumbnail.py output.pptx workspace/thumbnails --cols 4
 
    # For detailed per-slide inspection (requires LibreOffice + Poppler):
    # Skip if soffice/pdftoppm not installed — thumbnail.py is sufficient
@@ -365,7 +365,7 @@ slide.addChart(pres.charts.BAR, chartData, {
 Before editing or restyling slides, extract the presentation's style conventions using the style extraction tool:
 
 ```bash
-python scripts/style-extract.py presentation.pptx style-summary.json
+"$SWARM_BACKEND_BIN" py scripts/style-extract.py presentation.pptx style-summary.json
 ```
 
 This outputs a JSON summary containing:
@@ -378,7 +378,7 @@ This outputs a JSON summary containing:
 
 To analyze a single slide:
 ```bash
-python scripts/style-extract.py presentation.pptx --slide 3
+"$SWARM_BACKEND_BIN" py scripts/style-extract.py presentation.pptx --slide 3
 ```
 
 Use this output to understand the deck's visual language before making any edits. The style summary tells you exactly which colors, fonts, and layout patterns to match.
@@ -388,10 +388,10 @@ Use this output to understand the deck's visual language before making any edits
 When a user has added a new slide (e.g., via PowerPoint) and wants it restyled to match the rest of the deck, follow this workflow:
 
 ### Workflow
-1. **Extract style summary**: Run `python scripts/style-extract.py <pptx_file>` to get the deck's color palette, fonts, layout patterns, and background images
-2. **Extract text content**: Run `python -m markitdown <pptx_file>` to identify the new slide's content and position
+1. **Extract style summary**: Run `"$SWARM_BACKEND_BIN" py scripts/style-extract.py <pptx_file>` to get the deck's color palette, fonts, layout patterns, and background images
+2. **Extract text content**: Run `"$SWARM_BACKEND_BIN" py -m markitdown <pptx_file>` to identify the new slide's content and position
 3. **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) completely from start to finish before editing XML
-4. **Unpack**: `python ooxml/scripts/unpack.py <pptx_file> <output_dir>`
+4. **Unpack**: `"$SWARM_BACKEND_BIN" py ooxml/scripts/unpack.py <pptx_file> <output_dir>`
 5. **Analyze sibling slides**: Read 1-2 existing content slide XMLs (e.g., slide3.xml, slide4.xml) and their `.rels` files to understand:
    - Background image reference (which rId and media file)
    - Header bar shape (position, size, fill color with alpha)
@@ -406,8 +406,8 @@ When a user has added a new slide (e.g., via PowerPoint) and wants it restyled t
    - Body content using the deck's font stack and color palette
    - Footer text at the bottom
    - All fonts set to the deck's primary typeface (from style summary)
-8. **Validate**: `python ooxml/scripts/validate.py <output_dir> --original <pptx_file>`
-9. **Pack**: `python ooxml/scripts/pack.py <output_dir> <pptx_file>`
+8. **Validate**: `"$SWARM_BACKEND_BIN" py ooxml/scripts/validate.py <output_dir> --original <pptx_file>`
+9. **Pack**: `"$SWARM_BACKEND_BIN" py ooxml/scripts/pack.py <output_dir> <pptx_file>`
 
 ### Key Principles for Restyling
 - **Match the slide layout reference** — use the same `slideLayout` as sibling content slides
@@ -421,10 +421,10 @@ When editing slides in an existing PowerPoint presentation, you need to work wit
 
 ### Workflow
 1. **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) (~500 lines) completely from start to finish.  **NEVER set any range limits when reading this file.**  Read the full file content for detailed guidance on OOXML structure and editing workflows before any presentation editing.
-2. Unpack the presentation: `python ooxml/scripts/unpack.py <office_file> <output_dir>`
+2. Unpack the presentation: `"$SWARM_BACKEND_BIN" py ooxml/scripts/unpack.py <office_file> <output_dir>`
 3. Edit the XML files (primarily `ppt/slides/slide{N}.xml` and related files)
-4. **CRITICAL**: Validate immediately after each edit and fix any validation errors before proceeding: `python ooxml/scripts/validate.py <dir> --original <file>`
-5. Pack the final presentation: `python ooxml/scripts/pack.py <input_directory> <office_file>`
+4. **CRITICAL**: Validate immediately after each edit and fix any validation errors before proceeding: `"$SWARM_BACKEND_BIN" py ooxml/scripts/validate.py <dir> --original <file>`
+5. Pack the final presentation: `"$SWARM_BACKEND_BIN" py ooxml/scripts/pack.py <input_directory> <office_file>`
 
 ## Creating a new PowerPoint presentation **using a template**
 
@@ -432,9 +432,9 @@ When you need to create a presentation that follows an existing template's desig
 
 ### Workflow
 1. **Extract template text AND create visual thumbnail grid**:
-   * Extract text: `python -m markitdown template.pptx > template-content.md`
+   * Extract text: `"$SWARM_BACKEND_BIN" py -m markitdown template.pptx > template-content.md`
    * Read `template-content.md`: Read the entire file to understand the contents of the template presentation. **NEVER set any range limits when reading this file.**
-   * Create thumbnail grids: `python scripts/thumbnail.py template.pptx`
+   * Create thumbnail grids: `"$SWARM_BACKEND_BIN" py scripts/thumbnail.py template.pptx`
    * See [Creating Thumbnail Grids](#creating-thumbnail-grids) section for more details
 
 2. **Analyze template and save inventory to a file**:
@@ -492,7 +492,7 @@ When you need to create a presentation that follows an existing template's desig
 4. **Duplicate, reorder, and delete slides using `rearrange.py`**:
    * Use the `scripts/rearrange.py` script to create a new presentation with slides in the desired order:
      ```bash
-     python scripts/rearrange.py template.pptx working.pptx 0,34,34,50,52
+     "$SWARM_BACKEND_BIN" py scripts/rearrange.py template.pptx working.pptx 0,34,34,50,52
      ```
    * The script handles duplicating repeated slides, deleting unused slides, and reordering automatically
    * Slide indices are 0-based (first slide is 0, second is 1, etc.)
@@ -501,7 +501,7 @@ When you need to create a presentation that follows an existing template's desig
 5. **Extract ALL text using the `inventory.py` script**:
    * **Run inventory extraction**:
      ```bash
-     python scripts/inventory.py working.pptx text-inventory.json
+     "$SWARM_BACKEND_BIN" py scripts/inventory.py working.pptx text-inventory.json
      ```
    * **Read text-inventory.json**: Read the entire text-inventory.json file to understand all shapes and their properties. **NEVER set any range limits when reading this file.**
 
@@ -628,7 +628,7 @@ When you need to create a presentation that follows an existing template's desig
 
 7. **Apply replacements using the `replace.py` script**
    ```bash
-   python scripts/replace.py working.pptx replacement-text.json output.pptx
+   "$SWARM_BACKEND_BIN" py scripts/replace.py working.pptx replacement-text.json output.pptx
    ```
 
    The script will:
@@ -659,13 +659,13 @@ When you need to create a presentation that follows an existing template's desig
 To create visual thumbnail grids of PowerPoint slides for quick analysis and reference:
 
 ```bash
-python scripts/thumbnail.py template.pptx [output_prefix]
+"$SWARM_BACKEND_BIN" py scripts/thumbnail.py template.pptx [output_prefix]
 ```
 
 **Features**:
 - Creates: `thumbnails.jpg` (or `thumbnails-1.jpg`, `thumbnails-2.jpg`, etc. for large decks)
 - Default: 5 columns, max 30 slides per grid (5×6)
-- Custom prefix: `python scripts/thumbnail.py template.pptx my-grid`
+- Custom prefix: `"$SWARM_BACKEND_BIN" py scripts/thumbnail.py template.pptx my-grid`
   - Note: The output prefix should include the path if you want output in a specific directory (e.g., `workspace/my-grid`)
 - Adjust columns: `--cols 4` (range: 3-6, affects slides per grid)
 - Grid limits: 3 cols = 12 slides/grid, 4 cols = 20, 5 cols = 30, 6 cols = 42
@@ -680,10 +680,10 @@ python scripts/thumbnail.py template.pptx [output_prefix]
 **Examples**:
 ```bash
 # Basic usage
-python scripts/thumbnail.py presentation.pptx
+"$SWARM_BACKEND_BIN" py scripts/thumbnail.py presentation.pptx
 
 # Combine options: custom name, columns
-python scripts/thumbnail.py template.pptx analysis --cols 4
+"$SWARM_BACKEND_BIN" py scripts/thumbnail.py template.pptx analysis --cols 4
 ```
 
 ## Converting Slides to Images

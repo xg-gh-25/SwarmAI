@@ -182,7 +182,7 @@ ws['D2'] = 0.45               # Should be =B2/C2
 Use `brand_chart.py` to apply direction tokens to charts:
 
 ```bash
-python3 "$SKILL_DIR/scripts/brand_chart.py" \
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/brand_chart.py" \
   "content/{name}/tracks/data-report/{topic}.xlsx" \
   --direction "$DIRECTION_YAML" \
   --json
@@ -220,7 +220,7 @@ ws.add_chart(chart, "A12")
 
 ```bash
 XLSX_SCRIPT="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_xlsx/recalc.py"
-python3 "$XLSX_SCRIPT" "content/{name}/tracks/data-report/{topic}.xlsx" --json
+"$SWARM_BACKEND_BIN" py "$XLSX_SCRIPT" "content/{name}/tracks/data-report/{topic}.xlsx" --json
 ```
 
 If errors found (e.g., `#REF!`, `#VALUE!`), fix formulas and re-run.

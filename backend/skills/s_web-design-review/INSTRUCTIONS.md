@@ -30,11 +30,11 @@ This skill includes a searchable UX guidelines database with 99 Do/Don't rules, 
 
 ```bash
 # Search for guidelines relevant to the UI being reviewed
-python3 scripts/search.py "touch target accessibility" --domain ux
-python3 scripts/search.py "form validation error" --domain ux
-python3 scripts/search.py "animation motion" --domain ux
-python3 scripts/search.py "color contrast" --domain ux
-python3 scripts/search.py "keyboard navigation focus" --domain ux
+"$SWARM_BACKEND_BIN" py scripts/search.py "touch target accessibility" --domain ux
+"$SWARM_BACKEND_BIN" py scripts/search.py "form validation error" --domain ux
+"$SWARM_BACKEND_BIN" py scripts/search.py "animation motion" --domain ux
+"$SWARM_BACKEND_BIN" py scripts/search.py "color contrast" --domain ux
+"$SWARM_BACKEND_BIN" py scripts/search.py "keyboard navigation focus" --domain ux
 ```
 
 Each result includes: **Category**, **Issue**, **Platform**, **Description**, **Do**, **Don't**, **Code Example Good**, **Code Example Bad**, **Severity**.

@@ -216,12 +216,12 @@ Before marking QA complete, show evidence for each:
 
 **Discover upstream artifacts (before scoping):**
 ```bash
-python backend/scripts/artifact_cli.py discover --project <PROJECT> --types changeset,design_doc,review --full
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli discover --project <PROJECT> --types changeset,design_doc,review --full
 ```
 
 **Publish test report (after completing QA):**
 ```bash
-python backend/scripts/artifact_cli.py publish \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
   --project <PROJECT> --type test_report --producer s_qa \
   --summary "<X passed, Y failed, Z fixed>" \
   --data '<JSON of test report>'

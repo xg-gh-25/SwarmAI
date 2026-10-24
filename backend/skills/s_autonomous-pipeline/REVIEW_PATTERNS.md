@@ -3,7 +3,7 @@
 This file contains the canonical list of recurring production bug patterns that code review and unit tests consistently miss. The REVIEW stage references this file as a BLOCKING check -- every applicable pattern must be explicitly verified or marked N/A.
 
 **Selecting rows instead of reading this whole file:** every row's Trigger cell ends in a
-machine-readable `` `match: …` `` token. `python backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --patterns-for <changed files…> [--diff-file <diff>]`
+machine-readable `` `match: …` `` token. `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/spawn_prompt.py --patterns-for <changed files…> [--diff-file <diff>]`
 prints only the rows that apply, one compact line each (id, pattern, trigger). Give every
 listed row a verdict (pass / N/A / fail); before judging a row whose trigger is present in
 the change, print its full row (what to verify, example bug) with

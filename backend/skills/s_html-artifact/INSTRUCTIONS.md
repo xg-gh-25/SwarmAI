@@ -175,7 +175,7 @@ function buildExport() {
 **Use ONLY the bundled script. Never shell out to a browser CLI.**
 
 ```bash
-python .claude/skills/s_html-artifact/scripts/html2pdf.py <src.html> [out.pdf]
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/html2pdf.py <src.html> [out.pdf]
 # out.pdf defaults to the source path with a .pdf suffix
 ```
 
@@ -209,8 +209,10 @@ one shot. Same-engine, different code path — the reliable one.
    missing/empty output instead of returning a fake success. If you ever verify a
    PDF another way, check the file size — an exit code proves nothing here.
 2. **Stop after 2 failures — do NOT keep retrying.** If `html2pdf.py` fails twice,
-   STOP (Debugging Rule). Read its error message: the usual real cause is a missing
-   browser binary, and the fix it names is `python -m playwright install chromium`.
+   STOP (Debugging Rule). Read its error message: the usual real cause is that Playwright
+   or its Chromium browser is missing. SwarmAI's bundled Python does not include
+   Playwright (`python-optional-deps`), so tell the user what is missing and how to
+   install it instead of retrying.
    Never fall back to the banned Chrome CLI, and never retry the same command a
    third time hoping for a different result.
 

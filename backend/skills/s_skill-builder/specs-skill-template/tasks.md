@@ -129,7 +129,7 @@ This plan creates an Agent skill for {brief description of what the skill does}.
 
 - [ ] 5. Register and test the skill
   - [ ] 5.1 Run skill index updater
-    - Execute: `SKILL_HOME=$([ -d "$HOME/.swarm-ai/skills" ] && echo "$HOME/.swarm-ai/skills" || echo "$HOME/.swarm-ai/skills") && python3 "$SKILL_HOME/skills-index-updater/scripts/update_skill_index.py"`
+    - Execute: `SKILL_HOME=$([ -d "$HOME/.swarm-ai/skills" ] && echo "$HOME/.swarm-ai/skills" || echo "$HOME/.swarm-ai/skills") && "$SWARM_BACKEND_BIN" py "$SKILL_HOME/skills-index-updater/scripts/update_skill_index.py"`
     - Verify skill appears in AGENTS.md
     - _Requirements: All_
   - [ ] 5.2 Test skill activation

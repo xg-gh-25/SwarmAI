@@ -122,7 +122,7 @@ Wait 5s for daemon to stabilize, then check:
 ```bash
 sleep 5 && \
 nc -z 127.0.0.1 18321 2>/dev/null && \
-curl -sf http://127.0.0.1:18321/health | python3 -c "
+curl -sf http://127.0.0.1:18321/health | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 d = json.load(sys.stdin)
 print(f'Status: {d[\"status\"]}')

@@ -27,7 +27,7 @@ structure and content_principles.md for tone.
 **After writing narrative content, run the GEO scorer:**
 
 ```bash
-python "$SKILL_DIR/scripts/geo_score.py" "content/{name}/tracks/narrative/{file}.md" --json
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/geo_score.py" "content/{name}/tracks/narrative/{file}.md" --json
 ```
 
 **Output:** JSON with `total_score` (0-100), per-pillar breakdown, warnings.

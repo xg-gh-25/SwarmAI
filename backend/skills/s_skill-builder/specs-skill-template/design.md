@@ -226,10 +226,10 @@ Before finalizing any generated output, verify:
 {For skills with scripts:}
 ```bash
 # {Description of what this validates}
-python scripts/{script_name}.py --help
+"$SWARM_BACKEND_BIN" py scripts/{script_name}.py --help
 
 # {Description of what this validates}
-python scripts/{script_name}.py --input test_data.json
+"$SWARM_BACKEND_BIN" py scripts/{script_name}.py --input test_data.json
 ```
 
 {For workflow skills:}

@@ -174,8 +174,8 @@ if __name__ == "__main__":
 Entity Processor - Extract entities from JSON files.
 
 Usage:
-    python process_entities.py input.json
-    python process_entities.py --help
+    "$SWARM_BACKEND_BIN" py process_entities.py input.json
+    "$SWARM_BACKEND_BIN" py process_entities.py --help
 
 Returns entities array from input JSON file.
 """

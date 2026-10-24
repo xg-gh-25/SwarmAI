@@ -29,7 +29,7 @@ realign the corresponding check before believing its result (mirrors the Q0 gate
 s_chat-brain-check, and the loops-health P0 check).
 
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 from pathlib import Path
 root = Path.home() / "Desktop/SwarmAI-Workspace/swarmai"
 ctx = Path.home() / ".swarm-ai/SwarmWS/.context"
@@ -102,7 +102,7 @@ PYEOF
 
 ### 2. Context Files
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 from pathlib import Path
 ctx = Path.home() / ".swarm-ai/SwarmWS/.context"
 expected = ["SWARMAI.md","IDENTITY.md","SOUL.md","AGENT.md","USER.md",
@@ -125,7 +125,7 @@ PYEOF
 
 ### 3. MCP Servers Configured
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 import json
 from pathlib import Path
 mcp_file = Path.home() / ".swarm-ai/user-mcp-servers.json"
@@ -193,7 +193,7 @@ PYEOF
 
 ### 5. DailyActivity Pipeline
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 from pathlib import Path
 da_dir = Path.home() / ".swarm-ai/SwarmWS/Knowledge/DailyActivity"
 from datetime import date
@@ -222,7 +222,7 @@ fi
 
 ### 7. Sandbox & Config
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 import json
 from pathlib import Path
 # Check both possible locations
@@ -242,7 +242,7 @@ PYEOF
 
 ### 8. Skills
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 from pathlib import Path
 skills_dir = Path.home() / ".swarm-ai/SwarmWS/.claude/skills"
 if not skills_dir.exists():
@@ -259,7 +259,7 @@ PYEOF
 
 ### 9. MEMORY.md & EVOLUTION.md Health
 ```bash
-python3 << 'PYEOF'
+"$SWARM_BACKEND_BIN" py - << 'PYEOF'
 from pathlib import Path
 import re
 

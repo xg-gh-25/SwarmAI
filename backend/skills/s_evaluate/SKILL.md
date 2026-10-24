@@ -342,7 +342,7 @@ When escalating with a project (L1/L2), also publish a partial evaluation
 artifact so context is preserved for async resolution:
 
 ```bash
-python backend/scripts/artifact_cli.py publish \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
   --project <PROJECT> --type evaluation --producer s_evaluate \
   --summary "ESCALATE: <reason>" \
   --data '{"recommendation": "ESCALATE", "escalation_questions": ["..."], "partial_scores": {...}}'
@@ -360,12 +360,12 @@ python backend/scripts/artifact_cli.py publish \
 
 **Discover prior research (before scoring):**
 ```bash
-python backend/scripts/artifact_cli.py discover --project <PROJECT> --types research --full
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli discover --project <PROJECT> --types research --full
 ```
 
 **Publish evaluation (after presenting to user):**
 ```bash
-python backend/scripts/artifact_cli.py publish \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
   --project <PROJECT> --type evaluation --producer s_evaluate \
   --summary "<GO/DEFER/REJECT/ESCALATE>: <one-line rationale>" \
   --data '<JSON of evaluation output>'

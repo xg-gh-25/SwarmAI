@@ -193,7 +193,7 @@ Reason about which files, configs, and system state are relevant to the specific
 
 If a skill injects config into a JSON file and the MCP server fails to load, gather:
 - The actual JSON file contents (secrets redacted)
-- Whether the file is valid JSON (`python3 -c "import json; json.load(open('path'))"`)
+- Whether the file is valid JSON (`"$SWARM_BACKEND_BIN" py -c "import json; json.load(open('path'))"`)
 - File size (a 0-byte file means something different than a 500-byte file with bad JSON)
 - Whether the expected keys/entries exist in the parsed structure
 

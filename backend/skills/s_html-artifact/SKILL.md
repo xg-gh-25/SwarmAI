@@ -5,6 +5,7 @@ description: "Generate HTML artifact files for human-consumed outputs (reports, 
   \ frontend-design use cases."
 version: 1.0.0
 tier: lazy
+python-optional-deps: [playwright]
 platform: all
 ---
 # HTML Artifact Generator

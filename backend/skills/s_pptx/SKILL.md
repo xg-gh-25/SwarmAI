@@ -6,6 +6,7 @@ description: >
   DO NOT USE: for simple text outlines (just use markdown).
 tags: [skill, PPT, PPTX, PPT-create, PPT-edit, PPT-read, PPT-update]
 tier: lazy
+python-deps: [PIL, defusedxml, lxml, markitdown, pptx, six]
 ---
 # PPTX Editor
 

@@ -3,6 +3,7 @@ name: project-manager
 description: "Create, list, edit, rename, and delete DDD projects (Domain-Driven Design) — provisions the canonical six-section DDD structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) and an\
   \ .artifacts/ directory for pipeline outputs.\n  TRIGGER: \"add project\", \"new project\", \"create project\", \"rename project\", \"create DDD\".\n  NOT FOR: radar-todo use cases."
 tier: always
+python-deps: [yaml]
 ---
 # Project Manager
 
@@ -133,14 +134,14 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets.** Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
 | **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_repo-to-ddd` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
-| **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `python backend/skills/s_project-manager/scripts/verify_ddd_complete.py --project <NAME>` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
+| **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME>` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
 
 **P6 gate — the exit门禁 for the whole flow:**
 
 ```bash
-python backend/skills/s_project-manager/scripts/verify_ddd_complete.py --project <NAME>
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME>
 # or, on a foreign host / arbitrary path:
-python .../scripts/verify_ddd_complete.py --project-dir /abs/path/to/DDD  [--json]
+"$SWARM_BACKEND_BIN" py .../scripts/verify_ddd_complete.py --project-dir /abs/path/to/DDD  [--json]
 ```
 
 It checks the six sections and classifies each `PASS` / `FAIL` / `PENDING` / `N/A`.
@@ -493,12 +494,12 @@ repo declares its own delivery contract here (decision 7).
 
 Run the `bind` subcommand — it loads the project's `bindings.yaml`, loops EVERY
 binding, clones each git-clonable repo OUTSIDE the git-tracked workspace, and builds
-its codeIntel graph. Do NOT hand-assemble a `python -c` loop — this is the invokable
+its codeIntel graph. Do NOT hand-assemble a `"$SWARM_BACKEND_BIN" py -c` loop — this is the invokable
 entrypoint(`bind_repo` used to be reachable only via a prose recipe):
 
 ```bash
 cd "$SWARM_REPO_ROOT" && source backend/.venv/bin/activate   # or cd to your checkout
-python backend/scripts/artifact_cli.py bind --project AIDLC
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli bind --project AIDLC
 ```
 
 Output is one JSON outcome per binding + a `counts` rollup, e.g.:
@@ -567,7 +568,7 @@ no-op. Call the helper — never diff by hand:
 
 ```bash
 cd "$SWARM_REPO_ROOT" && source backend/.venv/bin/activate   # or cd to your checkout
-python3 -c "
+"$SWARM_BACKEND_BIN" py -c "
 from pathlib import Path
 from core.ddd_bindings import load_bindings, sync_back
 from jobs.paths import PROJECTS_DIR
@@ -608,7 +609,7 @@ ls -d Projects/*/  2>/dev/null | while read dir; do
   name=$(basename "$dir")
   if [ -f "$dir/PRODUCT.md" ]; then ddd="DDD"; else ddd="no DDD"; fi
   if [ -f "$dir/.artifacts/manifest.json" ]; then
-    state=$(python3 -c "import json; print(json.load(open('$dir/.artifacts/manifest.json'))['pipeline_state'])" 2>/dev/null || echo "unknown")
+    state=$("$SWARM_BACKEND_BIN" py -c "import json; print(json.load(open('$dir/.artifacts/manifest.json'))['pipeline_state'])" 2>/dev/null || echo "unknown")
   else
     state="-"
   fi

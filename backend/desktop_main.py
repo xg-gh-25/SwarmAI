@@ -38,15 +38,34 @@ if not getattr(sys, "frozen", False) and str(_HERE) not in sys.path:
 # ── py ────────────────────────────────────────────────────────────────────────
 
 def run_py(argv: "list[str]") -> int:
-    """``py <script> [args]`` | ``py -m <module> [args]`` | ``py -c <code> [args]``.
-    Behaves like ``python`` for these three forms: ``sys.argv`` is set the same way,
-    the script's directory goes first on ``sys.path``, ``SystemExit`` keeps its code."""
+    """``py <script> [args]`` | ``py -m <module> [args]`` | ``py -c <code> [args]`` |
+    ``py - [args]`` (program on stdin). Behaves like ``python`` for these forms: ``sys.argv``
+    is set the same way, the script's directory goes first on ``sys.path``, ``SystemExit``
+    keeps its code. A module this program does not carry is named on stderr (exit 1)."""
+    try:
+        return _run_py(argv)
+    except ModuleNotFoundError as exc:
+        if exc.name is None:
+            raise
+        print(f"py: module '{exc.name}' was not found: it is not in this SwarmAI build and not "
+              "next to the script. A skill that needs a module SwarmAI does not bundle lists it "
+              "under python-optional-deps in its SKILL.md; tell the user it is missing rather "
+              "than retrying.", file=sys.stderr)
+        return 1
+
+
+def _run_py(argv: "list[str]") -> int:
     import runpy
     if not argv:
-        print("usage: python-backend py <script.py> [args] | -m <module> [args] | -c <code> [args]",
-              file=sys.stderr)
+        print("usage: python-backend py <script.py> [args] | -m <module> [args] | -c <code> [args]"
+              " | - [args]", file=sys.stderr)
         return 64
     head, rest = argv[0], argv[1:]
+    if head == "-":
+        sys.argv = ["-", *rest]
+        sys.path.insert(0, os.getcwd())
+        exec(compile(sys.stdin.read(), "<stdin>", "exec"), {"__name__": "__main__"})  # noqa: S102 — `python -`
+        return 0
     if head == "-m":
         if not rest:
             print("py -m: a module name is required", file=sys.stderr)

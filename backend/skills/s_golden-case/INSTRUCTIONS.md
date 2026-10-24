@@ -11,7 +11,7 @@ The sanctioned path to add/validate/promote SwarmAI eval golden cases. Mechanism
 2. Validate (ADD does NOT run the privacy gate — instance cases are allowed in private):
    ```bash
    echo '<case-json>' > /tmp/case.json
-   python backend/scripts/golden_case_validator.py --case-file /tmp/case.json
+   "$SWARM_BACKEND_BIN" py -m scripts.golden_case_validator --case-file /tmp/case.json
    ```
 3. PASS → append to `Eval/golden_set.private.yaml` (default, fail-closed —
    never auto-publish). FAIL → fix the reported gate and re-validate.
@@ -20,7 +20,7 @@ The sanctioned path to add/validate/promote SwarmAI eval golden cases. Mechanism
 1. The case must be code-only (no DDD/instance refs) and deterministic to ship.
 2. Validate with the privacy gate:
    ```bash
-   python backend/scripts/golden_case_validator.py --case-file /tmp/case.json --for-public
+   "$SWARM_BACKEND_BIN" py -m scripts.golden_case_validator --case-file /tmp/case.json --for-public
    ```
 3. PASS → move the case from `golden_set.private.yaml` to `golden_set.yaml`.
    FAIL (privacy) → it references instance structure; it stays private. This is the

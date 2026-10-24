@@ -17,7 +17,7 @@ authoritatively `confirmed_tracks`.)
 #### Step 5.1: Prerequisites Check
 
 ```bash
-python "$SKILL_DIR/scripts/check_prereqs.py"
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/check_prereqs.py"
 ```
 
 This verifies: Node.js, npm, ffmpeg, ffprobe, Python dependencies.
@@ -57,7 +57,7 @@ Three-pass LLM analysis of podcast.txt:
 #### Step 5.4: TTS Audio Generation
 
 ```bash
-python "$SKILL_DIR/scripts/generate_tts.py" \
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/generate_tts.py" \
   --input "content/{name}/tracks/video/podcast.txt" \
   --output-dir "content/{name}/tracks/video/" \
   --backend polly \

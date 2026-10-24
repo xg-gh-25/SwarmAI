@@ -341,7 +341,7 @@ Available scripts:
 - scripts/helpers.py: Shared utility functions
 ```
 
-The agent runs scripts directly: `python .claude/skills/s_skill-name/scripts/generate.py --scope gcr`
+The agent runs scripts directly: `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/generate.py --scope gcr`
 
 ### Step 5: Save and Notify User
 

@@ -41,7 +41,7 @@ point — all other stages can auto-proceed with taste decisions batched at deli
 Before asking any questions, scan the user's trigger message for explicit format mentions:
 
 ```bash
-python "$SKILL_DIR/scripts/format_recommend.py" --message "{user_message}" --json
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/format_recommend.py" --message "{user_message}" --json
 ```
 
 If `mode: "fast_path"` → formats detected in message. Confirm and skip questions:
@@ -102,7 +102,7 @@ and extract answers from natural language. The goal is clarity, not interrogatio
 After collecting answers, run the recommendation engine:
 
 ```bash
-python "$SKILL_DIR/scripts/format_recommend.py" \
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/format_recommend.py" \
   --audiences {audience1} {audience2} \
   --outcomes {outcome1} {outcome2} \
   --contexts {context1} {context2} \
@@ -772,7 +772,7 @@ Direction: {D# name} applied consistently
 Before outputting the deliverable block, run the structural validator:
 
 ```bash
-python backend/skills/s_pollinate/scripts/pollinate_validator.py <content_dir> --json
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/pollinate_validator.py <content_dir> --json
 ```
 
 **If `valid: false`:** Fix all errors before presenting to user. Re-run until valid.
@@ -925,7 +925,7 @@ asset readiness than a full 5-track run.
 
 3. **Run evaluation script:**
    ```bash
-   python "$SKILL_DIR/scripts/evaluate_topic.py" "{topic}" \
+   "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/evaluate_topic.py" "{topic}" \
      --domain "{domain}" \
      --diff N --audience N --readiness N --timeliness N --complexity N \
      --json
@@ -966,7 +966,7 @@ asset readiness than a full 5-track run.
 
 9. **I1: Show topic backlog suggestions** (if backlog exists):
    ```bash
-   python "$SKILL_DIR/scripts/topic_backlog.py" list --json
+   "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/topic_backlog.py" list --json
    ```
    Display the top 3 pending topics by ROI score as "alternatively, consider:"
    alongside the current evaluation result. This helps the user decide whether
@@ -1351,7 +1351,7 @@ For each section, select Remotion components:
 #### Step 4d: Duration Dry-Run (if "video" in production_tracks)
 
 ```bash
-python "$SKILL_DIR/scripts/generate_tts.py" \
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/generate_tts.py" \
   --input "content/{name}/tracks/video/podcast.txt" \
   --output-dir "content/{name}/tracks/video/" \
   --dry-run
@@ -1699,7 +1699,7 @@ Before advancing to TEST, ALL must be true:
 Run the cross-format consistency checker:
 
 ```bash
-python "$SKILL_DIR/scripts/cross_format_check.py" "content/{name}/" --json
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/cross_format_check.py" "content/{name}/" --json
 ```
 
 This verifies 5 RP-X patterns:
@@ -1774,7 +1774,7 @@ If ffprobe fails any check -> fix and re-render.
 #### Step 7.3: BGM Mix
 
 ```bash
-BGM_VOL=$(python "$SKILL_DIR/scripts/get_pref.py" global.bgm.volume 2>/dev/null || echo "0.05")
+BGM_VOL=$("$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/get_pref.py" global.bgm.volume 2>/dev/null || echo "0.05")
 ffmpeg -y \
   -i "content/{name}/tracks/video/output.mp4" \
   -i "$SKILL_DIR/brand/assets/bgm/calm-piano.mp3" \
@@ -1807,7 +1807,7 @@ cp "content/{name}/tracks/video/video_with_bgm.mp4" "content/{name}/tracks/video
 #### Step 7.6: Platform Spec Validation
 
 ```bash
-python "$SKILL_DIR/scripts/check_specs.py" \
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/check_specs.py" \
   "content/{name}/tracks/video/final_video.mp4" \
   --platforms bilibili,youtube,xiaohongshu,douyin,weixin_video
 ```
@@ -1898,7 +1898,7 @@ may change BUILD). Re-run the minimum set of affected downstream stages.
 #### Step 8.2: Generate Platform Metadata
 
 ```bash
-python "$SKILL_DIR/scripts/publish_meta.py" \
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/publish_meta.py" \
   "content/{name}/" \
   --platforms bilibili,youtube,xiaohongshu,douyin,weixin_video
 ```
@@ -2133,7 +2133,7 @@ After DELIVER verification gate passes, auto-publish to the content gallery:
 
 ```bash
 SKILL_DIR="$(dirname "$(dirname "$0")")"
-python "$SKILL_DIR/scripts/publish_to_pages.py" "content/{name}"
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/publish_to_pages.py" "content/{name}"
 ```
 
 This pushes poster HTMLs, PNGs, and narratives to https://xg-gh-25.github.io/swarm-content/
@@ -2345,7 +2345,7 @@ control in the pipeline. It has NO enforcement mechanism beyond agent honesty.
 
 ### G2: RP-V Checklist Automation
 
-Run `python scripts/check_rpv.py <content_dir>` at REVIEW stage. The script
+Run `"$SWARM_BACKEND_BIN" py scripts/check_rpv.py <content_dir>` at REVIEW stage. The script
 auto-checks 6 patterns from data files (timing.json, SRT, composition):
 
 - RP-V1: Audio-video sync (timing.json vs SRT alignment)

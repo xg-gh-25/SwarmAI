@@ -21,21 +21,21 @@ for file search (use workspace-finder), or for project CRUD (use ddd-manager).
 
 ### Check Status
 ```bash
-curl -s "http://localhost:$(cat ~/.swarm-ai/backend.json | python3 -c 'import sys,json;print(json.load(sys.stdin)["port"])')/api/system/backup/status" | python3 -m json.tool
+curl -s "http://localhost:$(cat ~/.swarm-ai/backend.json | "$SWARM_BACKEND_BIN" py -c 'import sys,json;print(json.load(sys.stdin)["port"])')/api/system/backup/status" | "$SWARM_BACKEND_BIN" py -m json.tool
 ```
 Shows: last_backup timestamp, repo_url, schedule, enabled.
 
 ### Run Backup Now
 ```bash
-curl -s -X POST "http://localhost:$(cat ~/.swarm-ai/backend.json | python3 -c 'import sys,json;print(json.load(sys.stdin)["port"])')/api/system/backup" | python3 -m json.tool
+curl -s -X POST "http://localhost:$(cat ~/.swarm-ai/backend.json | "$SWARM_BACKEND_BIN" py -c 'import sys,json;print(json.load(sys.stdin)["port"])')/api/system/backup" | "$SWARM_BACKEND_BIN" py -m json.tool
 ```
 Exports DB tables, copies config, commits and pushes to GitHub.
 
 ### Configure Backup
 ```bash
-curl -s -X PUT "http://localhost:$(cat ~/.swarm-ai/backend.json | python3 -c 'import sys,json;print(json.load(sys.stdin)["port"])')/api/system/backup/config" \
+curl -s -X PUT "http://localhost:$(cat ~/.swarm-ai/backend.json | "$SWARM_BACKEND_BIN" py -c 'import sys,json;print(json.load(sys.stdin)["port"])')/api/system/backup/config" \
   -H "Content-Type: application/json" \
-  -d '{"repo_url": "https://github.com/USER/REPO.git", "token": "ghp_..."}' | python3 -m json.tool
+  -d '{"repo_url": "https://github.com/USER/REPO.git", "token": "ghp_..."}' | "$SWARM_BACKEND_BIN" py -m json.tool
 ```
 
 ### Alternative: Direct Python

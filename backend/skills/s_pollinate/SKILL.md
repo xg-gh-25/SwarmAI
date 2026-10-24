@@ -4,6 +4,8 @@ description: "Swarm's media value delivery engine. Transforms messages into opti
   \ format follows audience. Your message, their attention, the right format.\n  TRIGGER: \"pollinate\", \"make content about\", \"GTM for\", \"promote\".\n  NOT FOR: autonomous-pipeline, deep-research\
   \ use cases."
 tier: lazy
+python-deps: [boto3, defusedxml, openpyxl, pptx, yaml]
+python-optional-deps: [edge_tts, playwright]
 ---
 
 # Pollinate -- Swarm Media Value Delivery Engine

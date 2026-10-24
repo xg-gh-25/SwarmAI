@@ -237,7 +237,7 @@ gotchas = parse_git_gotchas(Path(repo_path))
 
 Or via Bash:
 ```bash
-python -c "
+"$SWARM_BACKEND_BIN" py -c "
 import sys, json
 sys.path.insert(0, 'backend/skills/s_repo-to-ddd/scripts')
 from pathlib import Path

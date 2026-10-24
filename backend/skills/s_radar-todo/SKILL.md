@@ -23,7 +23,7 @@ to start executing immediately — no re-discovery, no context hunting.
 ## Tool
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py <command> [options]
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py <command> [options]
 ```
 
 ## Work Packet Schema (linked_context)
@@ -61,7 +61,7 @@ Every todo's `linked_context` field stores a JSON object with structured context
 ### Add a todo (with full context)
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py add \
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py add \
   --title "Implement append-message queue (Phase 1)" \
   --priority high \
   --source-type ai_detected \
@@ -97,10 +97,10 @@ python3 {SKILL_DIR}/scripts/todo_db.py add \
 ### List todos
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py list           # compact: active only (pending + overdue)
-python3 {SKILL_DIR}/scripts/todo_db.py list --all      # all statuses
-python3 {SKILL_DIR}/scripts/todo_db.py list -s handled  # specific status
-python3 {SKILL_DIR}/scripts/todo_db.py list -v          # full work packets for all items
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py list           # compact: active only (pending + overdue)
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py list --all      # all statuses
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py list -s handled  # specific status
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py list -v          # full work packets for all items
 ```
 
 Compact output includes the `next_step` hint:
@@ -112,7 +112,7 @@ Compact output includes the `next_step` hint:
 ### Get a specific todo (full work packet)
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py get <todo_id_or_prefix>
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py get <todo_id_or_prefix>
 ```
 
 Output is a **full work packet** — human-readable header + JSON payload:
@@ -145,7 +145,7 @@ Short ID prefixes work (first 8 chars is usually enough).
 ### Update a todo (context merges)
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py update <todo_id> \
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py update <todo_id> \
   --files backend/routers/chat.py \
   --next-step "Wire queue drain into SSE disconnect handler" \
   --blockers "Need to verify CancelledError path"
@@ -157,9 +157,9 @@ without duplicates; scalar fields (next_step, acceptance) overwrite.
 ### Change status
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py status <todo_id> handled
-python3 {SKILL_DIR}/scripts/todo_db.py status <todo_id> in_discussion
-python3 {SKILL_DIR}/scripts/todo_db.py status <todo_id> cancelled
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py status <todo_id> handled
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py status <todo_id> in_discussion
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py status <todo_id> cancelled
 ```
 
 Valid statuses: `pending`, `overdue`, `in_discussion`, `handled`, `cancelled`, `deleted`
@@ -167,8 +167,8 @@ Valid statuses: `pending`, `overdue`, `in_discussion`, `handled`, `cancelled`, `
 ### Delete a todo
 
 ```bash
-python3 {SKILL_DIR}/scripts/todo_db.py delete <todo_id>          # soft delete (status → deleted)
-python3 {SKILL_DIR}/scripts/todo_db.py delete <todo_id> --hard    # hard delete (remove from DB)
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py delete <todo_id>          # soft delete (status → deleted)
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/todo_db.py delete <todo_id> --hard    # hard delete (remove from DB)
 ```
 
 ## CRITICAL: Context Requirements by Source

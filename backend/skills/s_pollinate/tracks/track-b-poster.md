@@ -59,7 +59,7 @@ For EACH selected direction, create `content/{name}/tracks/poster/{topic}-{direc
 #### Step B.4: Render to PNG (per direction)
 
 ```bash
-python3 -c "
+"$SWARM_BACKEND_BIN" py -c "
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -114,7 +114,7 @@ The user receives only publish-ready output.
 **Automated enforcement script (run BEFORE manual checks):**
 
 ```bash
-python "$SKILL_DIR/scripts/convergence_gate.py" "content/{name}/tracks/poster/{topic}-{direction}.html" --json
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/convergence_gate.py" "content/{name}/tracks/poster/{topic}-{direction}.html" --json
 ```
 
 Returns JSON: `{"valid": true/false, "checks_passed": N, "checks_total": 8, "errors": [...], "layers": {...}}`
@@ -226,7 +226,7 @@ Read `brand/content_principles.md` and run anti-pattern scan on poster text:
 **P2 Hero Framing Gate (BLOCKING — L2 mechanical enforcement):**
 ```bash
 # Scan poster HTML for hero framing (script auto-strips HTML tags/style/script)
-python3 scripts/p2_scan.py {html_file}
+"$SWARM_BACKEND_BIN" py scripts/p2_scan.py {html_file}
 ```
 Exit 0 = clean. Exit 1 = FAIL — fix offending text before proceeding.
 Targets: "我造了/我做了/我们是最.../我们的X远超" hero claims.
@@ -270,7 +270,7 @@ SOURCE_SECTIONS=$(grep -Ec '<section|<div class="s|<div class="card' {source_htm
 # Count sections in output HTML
 OUTPUT_SECTIONS=$(grep -Ec '<section|<div class="s|<div class="card' {output_html})
 # Calculate ratio
-RATIO=$(python3 -c "print(f'{$OUTPUT_SECTIONS / max($SOURCE_SECTIONS, 1) * 100:.0f}%')")
+RATIO=$("$SWARM_BACKEND_BIN" py -c "print(f'{$OUTPUT_SECTIONS / max($SOURCE_SECTIONS, 1) * 100:.0f}%')")
 echo "Delegation fidelity: $OUTPUT_SECTIONS / $SOURCE_SECTIONS sections = $RATIO"
 ```
 

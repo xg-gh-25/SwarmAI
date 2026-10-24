@@ -137,7 +137,7 @@ cd $SWARMAI_ROOT
 
 echo "=== 3.1: Null bytes in context files [BLOCK] ==="
 find ~/.swarm-ai/SwarmWS/.context/ ~/.swarm-ai/SwarmWS/Knowledge/DailyActivity/ \
-  ~/.swarm-ai/SwarmWS/Projects/ -name '*.md' -exec python3 -c "
+  ~/.swarm-ai/SwarmWS/Projects/ -name '*.md' -exec "$SWARM_BACKEND_BIN" py -c "
 import sys
 with open(sys.argv[1], 'rb') as f:
     if b'\x00' in f.read(): print(f'NULL BYTE: {sys.argv[1]}')

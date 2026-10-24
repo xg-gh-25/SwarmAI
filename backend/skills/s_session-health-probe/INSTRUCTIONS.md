@@ -27,7 +27,7 @@ and are its live sessions progressing (not wedged) right now?*
 
 ## How to run
 ```bash
-python -c "from jobs.handlers.session_health_probe import run_session_health_probe as r; import json; print(json.dumps(r(dry_run=True), indent=2))"
+"$SWARM_BACKEND_BIN" py -c "from jobs.handlers.session_health_probe import run_session_health_probe as r; import json; print(json.dumps(r(dry_run=True), indent=2))"
 ```
 `dry_run=True` never sends a Slack notification. Drop it (or run the job) to let a
 RED result notify Slack via s_notify.

@@ -279,7 +279,7 @@ This ensures the PDF shows correct metadata in file browsers, preview apps, and 
 
 ```bash
 PDF_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pdf/scripts"
-python3 "$PDF_SCRIPTS/convert_pdf_to_images.py" \
+"$SWARM_BACKEND_BIN" py "$PDF_SCRIPTS/convert_pdf_to_images.py" \
   "content/{name}/tracks/pdf/{topic}.pdf" \
   --output-dir "content/{name}/tracks/pdf/" \
   --dpi 150

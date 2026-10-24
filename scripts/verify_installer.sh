@@ -24,7 +24,9 @@
 #   C11 nothing tried to run a system python / pip (shims on PATH log any call)
 #   C12 macOS: Gatekeeper assessment of the app (INFO only: releases are unsigned for now)
 #   C13 macOS: the app's own signature is intact (a broken one makes macOS call the app "damaged")
-# Checks still to add: onboarding reachable, MCP tools, `py` subcommand (S3), update + rollback;
+#   C14 the bundled Python runs skills: `py -c` imports the standard library and every skill's
+#       python-deps, and `py <skill script>` runs a real skill script (S3c)
+# Checks still to add: onboarding reachable, MCP tools, update + rollback;
 # C7 should call the app's own deploy code instead of mirroring it.
 #
 # Usage:
@@ -109,6 +111,7 @@ MOUNT="$WORK/mnt"
 SHIMS="$WORK/shims"
 SHIM_LOG="$WORK/system-python-calls.log"
 LABEL="com.swarmai.verify.$$.$RANDOM"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI_LABEL="$LABEL.cli"
 UID_GUI="gui/$(id -u)"
 INSTALL_DIR=""
@@ -494,6 +497,33 @@ elif [ "$DEPLOYED" = 1 ]; then
     result FAIL C9 "no bundled Claude CLI at _internal/claude_agent_sdk/_bundled/claude$EXE_SUFFIX"
 else
     result SKIP C9 "nothing deployed"
+fi
+
+# ---------------------------------------------------------------------------
+# C14: the bundled Python runs skills ("$SWARM_BACKEND_BIN" py, S3c): the standard library and
+# every skill's declared python-deps import, and a real skill script runs from the deployed skills
+# ---------------------------------------------------------------------------
+PY_LABEL="$LABEL.py"; PYS_LABEL="$LABEL.pys"
+SKILL_SCRIPT="$RT/_internal/skills/s_frontend-design/scripts/search.py"
+if [ "$DEPLOYED" = 1 ]; then
+    PY_OUT="$WORK/py.out"; PYS_OUT="$WORK/pys.out"
+    # the declared list is read from the DEPLOYED skills with the same helper the build uses
+    start_job "$PY_LABEL" "$PY_OUT" "$RT/python-backend$EXE_SUFFIX" py -c \
+        "import sys, importlib; sys.path.insert(0, sys.argv[1]); from skill_python_deps import bundled_imports; mods = ['json.tool', 'http.server', 'csv', 'sqlite3', 'xml.dom.minidom', 'email.mime.text'] + bundled_imports(sys.argv[2]); [importlib.import_module(m) for m in mods]; print('py-imports-ok', len(mods))" \
+        "$REPO_ROOT/backend/scripts" "$RT/_internal/skills" >/dev/null 2>&1
+    start_job "$PYS_LABEL" "$PYS_OUT" "$RT/python-backend$EXE_SUFFIX" py "$SKILL_SCRIPT" "fintech banking" --domain color >/dev/null 2>&1
+    c1=""; c2=""
+    for _ in $(seq 1 60); do
+        c1="$(job_exit_code "$PY_LABEL")"; c2="$(job_exit_code "$PYS_LABEL")"
+        [ -n "$c1" ] && [ -n "$c2" ] && break; sleep 1
+    done
+    if [ "$c1" = 0 ] && grep -q py-imports-ok "$PY_OUT" && [ "$c2" = 0 ] && [ -s "$PYS_OUT" ]; then
+        result PASS C14 "bundled py imports the stdlib + skill python-deps and runs a skill script"
+    else
+        result FAIL C14 "bundled py: imports exit ${c1:-timeout} ($(tail -1 "$PY_OUT" 2>/dev/null | cut -c1-120)); skill script exit ${c2:-timeout} ($(tail -1 "$PYS_OUT" 2>/dev/null | cut -c1-120))"
+    fi
+else
+    result SKIP C14 "nothing deployed"
 fi
 
 # ---------------------------------------------------------------------------

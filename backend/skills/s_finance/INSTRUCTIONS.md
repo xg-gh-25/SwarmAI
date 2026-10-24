@@ -328,7 +328,7 @@ No cloud sync, no external services, no API keys.
 - For currency conversion, use free API:
   ```bash
   # Free, no key required
-  curl -s "https://open.er-api.com/v6/latest/USD" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['rates']['EUR'])"
+  curl -s "https://open.er-api.com/v6/latest/USD" | "$SWARM_BACKEND_BIN" py -c "import sys,json; d=json.load(sys.stdin); print(d['rates']['EUR'])"
   ```
 - Always display currency symbol with amounts
 - Never mix currencies in calculations without explicit conversion

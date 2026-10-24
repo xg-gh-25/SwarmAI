@@ -44,6 +44,10 @@ dependencies = [
     # Skill dependencies — used by s_pptx, s_docx, s_xlsx scripts
     "python-pptx>=1.0.0",
     "openpyxl>=3.1.0",
+    # Skill dependencies declared in SKILL.md python-deps (scripts/skill_python_deps.py);
+    # already present transitively, listed so the bundle never loses them silently.
+    "lxml>=5.0.0",
+    "httpx>=0.27.0",
     # Canvas docx preview (docs/design/canvas-file-types.md P1): pure Python, BSD-2
     "mammoth==1.13.0",
     "defusedxml>=0.7.0",

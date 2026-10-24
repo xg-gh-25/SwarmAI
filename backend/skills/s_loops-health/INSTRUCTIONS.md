@@ -18,7 +18,7 @@ Execute the health check script:
 ```bash
 cd $SWARMAI_ROOT
 source backend/.venv/bin/activate
-python backend/skills/s_loops-health/scripts/loops_health_check.py --auto-fix --json
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/loops_health_check.py --auto-fix --json
 ```
 
 ## Output Interpretation

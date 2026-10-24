@@ -45,7 +45,7 @@ Source: `zarazhangrui/frontend-slides` (MIT) — attribution in `s_frontend-desi
 
 If the user gave a `.pptx` (upload or path) to "turn into a web deck":
 ```bash
-python "$SKILL_DIR/scripts/pptx_to_deck.py" "<path/to.pptx>" --out "<content_dir>/import"
+"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/pptx_to_deck.py" "<path/to.pptx>" --out "<content_dir>/import"
 ```
 This extracts per-slide {title, bullets, images KEPT, notes} → `deck_content.json`
 (+ `images/`). We do NOT reproduce the original styling — the value is the
@@ -60,7 +60,7 @@ thumbnails, let the user pick — all as ordinary chat markdown (no new UI).
 
 1. **Recommend top-3** from the DISCOVER answers (audience/outcome/context/tone):
    ```bash
-   python "$SKILL_DIR/scripts/recommend_systems.py" \
+   "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/recommend_systems.py" \
      --audience {audience} --outcome {outcome} --context {context} --tone {tone} \
      --top 3 --offset 0 --json
    ```
@@ -104,7 +104,7 @@ thumbnails, let the user pick — all as ordinary chat markdown (no new UI).
    Only then load that ONE system's `systems/<id>/design.md`.
 
 Thumbnails are pre-generated (idempotent) by:
-`python "$SKILL_DIR/scripts/render_style_thumbnails.py"` — one comparable sample slide
+`"$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/render_style_thumbnails.py"` — one comparable sample slide
 per system. Re-run only if a system's palette/fonts change (`--force` to rebuild all).
 
 ## Step 2 — Assemble a single self-contained HTML file

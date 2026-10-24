@@ -204,13 +204,13 @@ OOXML_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pptx/ooxml/scripts"
 INJECT_SCRIPT="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pollinate/scripts/deck_notes_injector.py"
 
 # Unpack
-python3 "$OOXML_SCRIPTS/unpack.py" output.pptx _unpacked/
+"$SWARM_BACKEND_BIN" py "$OOXML_SCRIPTS/unpack.py" output.pptx _unpacked/
 
 # Inject notes (from notes.json — slide number → notes text)
-python3 "$INJECT_SCRIPT" _unpacked/ --notes notes.json --validate --json
+"$SWARM_BACKEND_BIN" py "$INJECT_SCRIPT" _unpacked/ --notes notes.json --validate --json
 
 # Repack
-python3 "$OOXML_SCRIPTS/pack.py" _unpacked/ output.pptx
+"$SWARM_BACKEND_BIN" py "$OOXML_SCRIPTS/pack.py" _unpacked/ output.pptx
 
 # Clean up
 rm -rf _unpacked/
@@ -383,7 +383,7 @@ await pptx.writeFile(outputPath);
 ```bash
 OOXML_SCRIPTS="$HOME/.swarm-ai/SwarmWS/.claude/skills/s_pptx/ooxml/scripts"
 
-python3 "$OOXML_SCRIPTS/unpack.py" \
+"$SWARM_BACKEND_BIN" py "$OOXML_SCRIPTS/unpack.py" \
   "content/{name}/tracks/deck/base.pptx" \
   "content/{name}/tracks/deck/_unpacked"
 ```
@@ -523,12 +523,12 @@ on click. Add to `ppt/slides/slide{N}.xml` inside the `<p:sld>` element:
 
 ```bash
 # Repack
-python3 "$OOXML_SCRIPTS/pack.py" \
+"$SWARM_BACKEND_BIN" py "$OOXML_SCRIPTS/pack.py" \
   "content/{name}/tracks/deck/_unpacked" \
   "content/{name}/tracks/deck/{topic}.pptx"
 
 # Validate
-python3 "$PPTX_SCRIPTS/inventory.py" \
+"$SWARM_BACKEND_BIN" py "$PPTX_SCRIPTS/inventory.py" \
   "content/{name}/tracks/deck/{topic}.pptx" \
   --json > "content/{name}/tracks/deck/inventory.json"
 

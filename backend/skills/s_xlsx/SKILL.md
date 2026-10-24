@@ -5,6 +5,7 @@ description: >
   TRIGGER: any request involving spreadsheets, Excel files, CSV data, formulas, or data visualization.
   DO NOT USE: for plain text tables (just use markdown).
 tier: lazy
+python-deps: [openpyxl]
 ---
 # XLSX Editor
 

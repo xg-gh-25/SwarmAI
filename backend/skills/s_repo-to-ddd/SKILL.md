@@ -7,6 +7,7 @@ description: >
   TRIGGER: "make AI-ready", "ai-ready repo", "generate DDD for repo", "analyze codebase".
   NOT FOR: code-review, deep-research use cases.
 tier: lazy
+python-deps: [yaml]
 platform: all
 ---
 # Repo to DDD

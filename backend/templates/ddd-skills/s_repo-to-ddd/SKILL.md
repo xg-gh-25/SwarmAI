@@ -19,7 +19,7 @@ refresher (the capability), never the projection (derived, gitignored data).
 ## Run it (the ⑥ refresh)
 
 ```bash
-python scripts/refresh_code_intel.py <bound-repo-path>
+"$SWARM_BACKEND_BIN" py scripts/refresh_code_intel.py <bound-repo-path>
 # → writes code-intel.json (v2) under $SWARM_WORKSPACE/.artifacts/ai-ready/… (or repo-adjacent)
 # exit 0 = written · exit 1 = not a git repo · exit 2 = 0 edges (language-detection miss, loud)
 ```

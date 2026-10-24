@@ -282,9 +282,10 @@ find /mnt/skills -name "document.py" -path "*/docx/scripts/*" 2>/dev/null | head
 # Skill root is: /mnt/skills/ai-docx
 ```
 
-**Run your script with PYTHONPATH** set to the docx skill root:
+**Save your script in the docx skill root** (`{SKILL_DIR}`) and run it with the backend's own
+Python, which puts the script's directory first on `sys.path` (it does not read `PYTHONPATH`):
 ```bash
-PYTHONPATH=/mnt/skills/ai-docx python your_script.py
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/your_script.py
 ```
 
 **In your script**, import from the skill root:

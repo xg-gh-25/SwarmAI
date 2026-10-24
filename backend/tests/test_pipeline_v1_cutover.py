@@ -18,7 +18,7 @@ def test_active_skill_has_one_v1_cli_and_no_legacy_review_path():
         SKILL / "stages" / f"{name}.md" for name in
         ("evaluate", "think", "plan", "build", "goal_cycle", "review", "test", "deliver", "reflect")]
     text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
-    assert "pipeline_v1.py" in text
+    assert '"$SWARM_BACKEND_BIN" pipeline-v1' in text   # S3b: the one v1 command form
     for old in ("artifact_cli.py stage-", "gate1-skeptic", "meta-review",
                 "fixspec-skeptic", "root-cause", "gate2-next", "gate2-recheck",
                 "--convergence", "run-update --stage-json", "advance --run-id"):

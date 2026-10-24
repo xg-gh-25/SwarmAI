@@ -5,6 +5,7 @@ description: >
   Email, ntfy, Bark, Slack, and generic webhooks. Config-driven via
   ~/.swarm-ai/notify-channels.yaml. Also callable by other skills and jobs.
 tier: lazy
+python-deps: [httpx, yaml]
 ---
 
 # Multi-Channel Notification

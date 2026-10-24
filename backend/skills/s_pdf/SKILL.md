@@ -5,6 +5,8 @@ description: >
   TRIGGER: any request involving PDF files, PDF forms, or PDF generation.
   DO NOT USE: for reading plain text or markdown documents.
 tier: lazy
+python-deps: [PIL]
+python-optional-deps: [pypdf, pdf2image]
 ---
 # PDF Toolkit
 

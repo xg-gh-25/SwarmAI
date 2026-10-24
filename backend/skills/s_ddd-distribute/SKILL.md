@@ -55,10 +55,10 @@ A DDD declares its own reach in its `aim.json`:
 
 ```bash
 # Read-only staleness check — run this FIRST when a package already exists:
-python3 scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> --check-stale
+"$SWARM_BACKEND_BIN" py scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> --check-stale
 
 # Emit:
-python3 scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> \
+"$SWARM_BACKEND_BIN" py scripts/distribute.py --ddd <path/to/Projects/NAME> --out <out_dir> \
   [--targets aim-capabilities,open-plugin] [--publish]
 ```
 

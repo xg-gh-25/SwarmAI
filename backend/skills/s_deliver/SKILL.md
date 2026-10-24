@@ -212,13 +212,13 @@ When upstream stages have unresolved escalations or critical findings:
 
 **Discover all upstream artifacts (first step):**
 ```bash
-python backend/scripts/artifact_cli.py discover --project <PROJECT> \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli discover --project <PROJECT> \
   --types evaluation,research,alternatives,design_doc,changeset,review,test_report --full
 ```
 
 **Publish delivery artifact:**
 ```bash
-python backend/scripts/artifact_cli.py publish \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli publish \
   --project <PROJECT> --type delivery --producer s_deliver \
   --summary "Feature complete: <title>" \
   --data '<JSON of delivery output>'

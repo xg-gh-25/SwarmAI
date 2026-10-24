@@ -115,7 +115,7 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 > reads new-first, so recall only ever reads `2-understanding/`). Writing to the root
 > `Projects/<X>/TECH.md` creates an ORPHAN: git-tracked but never recalled — a real bug that stranded a principle. If a `2-understanding/` subdir is
 > absent for an un-migrated project, fall back to root; when in doubt, resolve with
-> `python -c "from core.ddd_paths import ddd_path; print(ddd_path('Projects/<X>','TECH.md'))"`.
+> `"$SWARM_BACKEND_BIN" py -c "from core.ddd_paths import ddd_path; print(ddd_path('Projects/<X>','TECH.md'))"`.
 
 | Content type | Project-scoped? | Target |
 |---|---|---|
@@ -160,10 +160,10 @@ duplicate → error, nothing removed).
 ```bash
 # from the swarmai repo root, backend venv active
 # 1) PREVIEW (default dry-run — always look first):
-python backend/scripts/artifact_cli.py ddd-retire \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli ddd-retire \
   --file .context/MEMORY.md --title "Exact entry title" --section "Open Threads"
 # 2) APPLY:
-python backend/scripts/artifact_cli.py ddd-retire \
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli ddd-retire \
   --file Projects/SwarmAI/2-understanding/IMPROVEMENT.md --title "..." --section "What Failed" --apply
 # keep-class (decision/model/principle/correction/COE) is REFUSED unless you add --force
 ```

@@ -108,7 +108,7 @@ gh run list --branch main --limit 3 --json status,conclusion,name
 - **On main branch (BLOCK if not — releases MUST ship from main)**
 - **R6 quality gate satisfied — the ONLY scope gate: local Build + affected Tests green, changes verified in the running system. Commit count is NOT a gate (R11).**
 - CI green (formal post-push confirmation of an already-qualified HEAD, not the verification venue — R6)
-- **Eval gate (`gate_rc`): rc=0 fresh+green → PASS; rc=1 stale/red → BLOCK (re-run `python backend/scripts/eval_runner.py run`); rc=2 no report → WARN (interactive: ask; non-TTY/CI: fail-closed → re-run eval or set `SWARMAI_SKIP_EVAL_GATE=1`). The shared `_eval_gate` in `prod.sh` enforces this on `release`/`release-all`/`release-hive` (1e); the raw `gate_rc` you print here is advisory — if it's `1`, BLOCK now rather than handing off.**
+- **Eval gate (`gate_rc`): rc=0 fresh+green → PASS; rc=1 stale/red → BLOCK (re-run `"$SWARM_BACKEND_BIN" py -m scripts.eval_runner run`); rc=2 no report → WARN (interactive: ask; non-TTY/CI: fail-closed → re-run eval or set `SWARMAI_SKIP_EVAL_GATE=1`). The shared `_eval_gate` in `prod.sh` enforces this on `release`/`release-all`/`release-hive` (1e); the raw `gate_rc` you print here is advisory — if it's `1`, BLOCK now rather than handing off.**
 
 **Report:**
 ```
@@ -134,7 +134,7 @@ If `gate_rc=1`: **BLOCK** — re-run eval before releasing.
 
 ```bash
 cd $SWARMAI_ROOT
-python backend/scripts/update_convergence.py
+"$SWARM_BACKEND_BIN" py -m scripts.update_convergence
 ```
 
 If data changed → commit. If script fails → skip (non-blocking).
@@ -213,7 +213,7 @@ sleep 5
 nc -z 127.0.0.1 18321 || { echo "FAIL: daemon port not open"; exit 1; }
 
 # Health + version verification
-curl -sf http://127.0.0.1:18321/health | python3 -c "
+curl -sf http://127.0.0.1:18321/health | "$SWARM_BACKEND_BIN" py -c "
 import sys, json
 d = json.load(sys.stdin)
 v = d.get('version', '?')
@@ -403,7 +403,7 @@ silently killed by the foreground timeout). The AGENT drives the loop:
 verifies the **commit the tag points at** (not the moving `main` tip) and records the tag
 in the marker for the publish hook to cross-check:
 ```bash
-cd $SWARMAI_ROOT && VERSION=$(cat VERSION) && python backend/scripts/artifact_cli.py release-gate --poll --ref "v${VERSION}" --project SwarmAI
+cd $SWARMAI_ROOT && VERSION=$(cat VERSION) && "$SWARM_BACKEND_BIN" py -m scripts.artifact_cli release-gate --poll --ref "v${VERSION}" --project SwarmAI
 ```
 
 **Read the JSON `state` + exit code:**
@@ -438,7 +438,7 @@ VERSION=$(cat VERSION)
 # CI not green on the published commit → STOP, do NOT flip. (Legit manual re-publish of an
 # already-green tag: SWARM_RELEASE_GATE_FORCE is gone with the hook — instead re-poll, or
 # only proceed when --verify is PASS.)
-python backend/scripts/artifact_cli.py release-gate --verify --ref "v${VERSION}" --project SwarmAI || {
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli release-gate --verify --ref "v${VERSION}" --project SwarmAI || {
   echo "release-gate --verify BLOCKED the publish — CI is not green on v${VERSION}'s commit. STOP."
   exit 1
 }
@@ -456,7 +456,7 @@ gh release view "v${VERSION}" --json isDraft,isLatest,url \
 
 # Consume the CI-green marker (one publish = one marker; prevents a stale marker
 # from authorizing a future accidental flip on the same HEAD)
-python backend/scripts/artifact_cli.py release-gate --clear --project SwarmAI
+"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli release-gate --clear --project SwarmAI
 ```
 
 Release notes: summarize commits since last tag, grouped by type (feat/fix/improve/content).

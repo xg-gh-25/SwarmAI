@@ -185,6 +185,24 @@ hiddenimports += ['sqlite_vec']  # Vector search extension (try/except import in
 hiddenimports += collect_submodules('amazon_transcribe')  # Voice transcription (Transcribe Streaming)
 hiddenimports += collect_submodules('awscrt')  # AWS Common Runtime (native C extensions)
 hiddenimports += ['tree_sitter', 'tree_sitter._binding']  # Code Intelligence AST parsing (native C extension)
+
+# "\$SWARM_BACKEND_BIN" py runs skill scripts and agent one-liners with THIS interpreter (design
+# 2026-10-24-swarmai-usable-by-anyone §3.2, S3c), so it carries (1) the whole standard library,
+# not just what the backend happens to import (json.tool, http.server, csv ...), and (2) every
+# module a skill declares under python-deps in its SKILL.md (scripts/skill_python_deps.py).
+import importlib.util as _ilu, sys as _sys
+_STDLIB_SKIP = {'test', 'idlelib', 'tkinter', 'turtle', 'turtledemo', 'lib2to3', 'ensurepip',
+                'venv', 'pydoc_data', 'antigravity', 'this', '__phello__'}
+for _m in sorted(_sys.stdlib_module_names - _STDLIB_SKIP):
+    if _m.startswith('_') or _ilu.find_spec(_m) is None:
+        continue
+    _spec = _ilu.find_spec(_m)
+    hiddenimports += collect_submodules(_m, filter=lambda n: '.test' not in n) if _spec.submodule_search_locations else [_m]
+_sys.path.insert(0, os.path.abspath('scripts'))
+from skill_python_deps import bundled_imports as _skill_deps
+SKILL_PY_DEPS = _skill_deps('skills')
+for _m in SKILL_PY_DEPS:
+    hiddenimports += collect_submodules(_m)
 hiddenimports += collect_submodules('tree_sitter_language_pack')  # Language grammars for tree-sitter
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
@@ -194,6 +212,8 @@ datas += collect_data_files('certifi')
 datas += collect_data_files('sqlite_vec')  # vec0.dylib native extension for vector search
 datas += collect_data_files('awscrt')  # AWS CRT native libraries (.dylib/.so)
 datas += collect_data_files('limits')  # Lua scripts for redis rate limiting (loaded at import time)
+for _m in SKILL_PY_DEPS:  # e.g. python-pptx's default template, markitdown's resources
+    datas += collect_data_files(_m)
 # botocore: include ALL data files (JSON service models loaded at runtime via botocore.loaders).
 # We only list botocore Python modules above (not collect_submodules) to save ~3GB build RAM,
 # but the data/ directory with service JSON is needed at runtime for any boto3.client() call.

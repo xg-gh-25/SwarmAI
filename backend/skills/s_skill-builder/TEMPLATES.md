@@ -345,8 +345,8 @@ timeout: 120
 This script [what it does in detail].
 
 Usage:
-    python main_script.py --input file.txt
-    python main_script.py --help
+    "$SWARM_BACKEND_BIN" py main_script.py --input file.txt
+    "$SWARM_BACKEND_BIN" py main_script.py --help
 
 Requirements:
     - Python 3.8+
@@ -395,8 +395,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    python main_script.py --input data.json
-    python main_script.py --input data.json --verbose
+    "$SWARM_BACKEND_BIN" py main_script.py --input data.json
+    "$SWARM_BACKEND_BIN" py main_script.py --input data.json --verbose
         """
     )
     parser.add_argument("--input", "-i", required=True, help="Path to input file")
@@ -477,10 +477,10 @@ Testing documentation for [skill name].
 
 ```bash
 # [Description of what this validates]
-python scripts/main_script.py --help
+"$SWARM_BACKEND_BIN" py scripts/main_script.py --help
 
 # [Description of what this validates]
-python scripts/main_script.py --input test_data.json
+"$SWARM_BACKEND_BIN" py scripts/main_script.py --input test_data.json
 ```
 
 ## Known Edge Cases

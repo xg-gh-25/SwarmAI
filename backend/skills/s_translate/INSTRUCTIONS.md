@@ -34,17 +34,17 @@ all fenced code blocks; you translate only prose; then you verify nothing drifte
 SC=scripts/md_freeze.py   # relative to this skill dir
 
 # 1. FREEZE — pull fenced blocks out behind ⟦FROZEN_N⟧ sentinels
-python "$SC" freeze input.md --skeleton input.skeleton.md --blocks input.blocks.json
+"$SWARM_BACKEND_BIN" py "$SC" freeze input.md --skeleton input.skeleton.md --blocks input.blocks.json
 
 # 2. TRANSLATE — translate ONLY input.skeleton.md (the prose).
 #    NEVER touch ⟦FROZEN_N⟧ lines. Write the result to input.skeleton.zh.md.
 #    (This is the only LLM step. Use Sonnet — see model routing above.)
 
 # 3. STITCH — reinsert byte-identical original blocks
-python "$SC" stitch input.skeleton.zh.md input.blocks.json -o output.zh.md
+"$SWARM_BACKEND_BIN" py "$SC" stitch input.skeleton.zh.md input.blocks.json -o output.zh.md
 
 # 4. VERIFY — prove structural equivalence (exit 0 = safe). THIS IS THE BACKSTOP.
-python "$SC" verify input.md output.zh.md
+"$SWARM_BACKEND_BIN" py "$SC" verify input.md output.zh.md
 
 # 5. CLEANUP — remove intermediates once verify passes
 rm input.skeleton.md input.skeleton.zh.md input.blocks.json

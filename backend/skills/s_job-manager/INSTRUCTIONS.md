@@ -9,14 +9,14 @@ a single launchd plist (`com.swarmai.scheduler`).
 
 ```bash
 # List all jobs with status
-curl -s http://localhost:PORT/api/jobs/ | python3 -m json.tool
+curl -s http://localhost:PORT/api/jobs/ | "$SWARM_BACKEND_BIN" py -m json.tool
 
 # Force-run a specific job
 curl -s -X POST http://localhost:PORT/api/jobs/run \
   -H "Content-Type: application/json" -d '{"job_id":"signal-fetch"}'
 
 # Scheduler status overview
-curl -s http://localhost:PORT/api/jobs/status | python3 -m json.tool
+curl -s http://localhost:PORT/api/jobs/status | "$SWARM_BACKEND_BIN" py -m json.tool
 ```
 
 ## Tool — CLI (when backend unavailable)
@@ -32,13 +32,13 @@ Where `~/.swarm-ai/SwarmWS` = `~/.swarm-ai/SwarmWS`
 
 ### List all jobs
 ```bash
-python -m jobs.job_manager list
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager list
 ```
 Returns array of all jobs (system + user) with status, last run, failure count.
 
 ### Create a user job
 ```bash
-python -m jobs.job_manager create --json '{
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager create --json '{
   "name": "Morning Inbox Summary",
   "type": "agent_task",
   "schedule": "0 1 * * 1-5",
@@ -54,7 +54,7 @@ python -m jobs.job_manager create --json '{
 
 ### Edit a user job
 ```bash
-python -m jobs.job_manager edit uj-morning-inbox --json '{
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager edit uj-morning-inbox --json '{
   "schedule": "0 0 * * 1-5",
   "prompt": "Updated prompt here"
 }'
@@ -62,24 +62,24 @@ python -m jobs.job_manager edit uj-morning-inbox --json '{
 
 ### Pause / Resume / Delete
 ```bash
-python -m jobs.job_manager pause uj-morning-inbox
-python -m jobs.job_manager resume uj-morning-inbox
-python -m jobs.job_manager delete uj-morning-inbox
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager pause uj-morning-inbox
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager resume uj-morning-inbox
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager delete uj-morning-inbox
 ```
 
 ### Show full details
 ```bash
-python -m jobs.job_manager show signal-fetch
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager show signal-fetch
 ```
 
 ### Validate a cron expression
 ```bash
-python -m jobs.job_manager validate-cron "0 9 * * 1-5"
+"$SWARM_BACKEND_BIN" py -m jobs.job_manager validate-cron "0 9 * * 1-5"
 ```
 
 ### Force-run a job immediately
 ```bash
-python -m jobs.scheduler --run-now JOB_ID
+"$SWARM_BACKEND_BIN" py -m jobs.scheduler --run-now JOB_ID
 ```
 
 ## Job Types

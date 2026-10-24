@@ -21,7 +21,7 @@ goes to the Inbox (not this skill); a **URL** goes to s_learn-content.
 ## Tool
 
 ```bash
-python3 {SKILL_DIR}/scripts/library.py <command> [options]
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/library.py <command> [options]
 ```
 
 All commands operate on the real `library_mounts` registry + the same
@@ -33,7 +33,7 @@ All commands operate on the real `library_mounts` registry + the same
 Judge the kind from the directory (code if it holds parseable source, else docs),
 register it, and index:
 ```bash
-python3 {SKILL_DIR}/scripts/library.py mount --path ~/Desktop/AI-Native/some-repo --scope SwarmAI
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/library.py mount --path ~/Desktop/AI-Native/some-repo --scope SwarmAI
 ```
 - **code dir** → builds a per-mount symbol graph (index in place). Done — symbols
   are now recallable.
@@ -43,14 +43,14 @@ python3 {SKILL_DIR}/scripts/library.py mount --path ~/Desktop/AI-Native/some-rep
 
 ### search — see what recall would retrieve
 ```bash
-python3 {SKILL_DIR}/scripts/library.py search --query "widget scoring" --scope SwarmAI
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/library.py search --query "widget scoring" --scope SwarmAI
 ```
 Runs the real recall path (library + codeintel domains) — the same thing the
 Browse-tab search box shows.
 
 ### list — show registered mounts + health
 ```bash
-python3 {SKILL_DIR}/scripts/library.py list --scope SwarmAI
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/library.py list --scope SwarmAI
 ```
 
 ## Workflow — "mount <path>"

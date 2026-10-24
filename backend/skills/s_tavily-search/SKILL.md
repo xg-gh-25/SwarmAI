@@ -31,7 +31,7 @@ Always resolve the key env-first, settings-file-fallback — this one line works
 session, old or new. Put it at the top of any Tavily call:
 
 ```bash
-TAVILY_API_KEY="${TAVILY_API_KEY:-$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.swarm-ai/SwarmWS/.claude/settings.local.json')))['env']['TAVILY_API_KEY'])" 2>/dev/null)}"
+TAVILY_API_KEY="${TAVILY_API_KEY:-$("$SWARM_BACKEND_BIN" py -c "import json,os;print(json.load(open(os.path.expanduser('~/.swarm-ai/SwarmWS/.claude/settings.local.json')))['env']['TAVILY_API_KEY'])" 2>/dev/null)}"
 ```
 
 (settings.local.json is gitignored → the key never leaves the machine.)

@@ -77,7 +77,7 @@ via the 养成 ladder, not dropped into a knowledge section. Only NON-rule knowl
 ## How to write (use the bundled locked engine — never a raw Edit for appends)
 
 ```bash
-python scripts/locked_write.py --file <ddd>/IMPROVEMENT.md --section "What Failed" \
+"$SWARM_BACKEND_BIN" py scripts/locked_write.py --file <ddd>/IMPROVEMENT.md --section "What Failed" \
   --prepend '- [pitfall] **Title** — concise description (YYYY-MM-DD)
   <!-- ref:0 | last:none | decay:active | source:manual -->'
 ```
