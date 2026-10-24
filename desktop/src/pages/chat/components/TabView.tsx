@@ -235,8 +235,6 @@ export interface TabViewProps {
   onContinue: () => void;
   /** Stop this tab's background agents while no turn runs (POST /chat/stop). */
   onStopBackground?: (tabId: string) => void;
-  onFocusClick: (title: string) => void;
-  onItemClick: (message: string, context?: string) => void;
   onRetryQueueTimeout: () => void;
 }
 
@@ -288,8 +286,6 @@ function TabViewImpl({
   onRetrySend,
   onContinue,
   onStopBackground,
-  onFocusClick,
-  onItemClick,
   onRetryQueueTimeout,
 }: TabViewProps) {
   const { t } = useTranslation();
@@ -711,7 +707,7 @@ function TabViewImpl({
           <Spinner size="lg" />
         </div>
       ) : messages.length === 0 ? (
-        <WelcomeScreen onFocusClick={onFocusClick} onItemClick={onItemClick} />
+        <WelcomeScreen />
       ) : (
         (() => {
         // Root 3 / 3A: derive the answerable question id from React state

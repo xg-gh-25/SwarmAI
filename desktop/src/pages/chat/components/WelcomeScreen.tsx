@@ -1,249 +1,211 @@
 /**
- * WelcomeScreen — briefing hub landing view.
+ * WelcomeScreen — the new-chat landing (design docs/design/welcome-screen-v2.md).
  *
- * Displays a branded welcome with live session briefing data as full-width
- * cards. Each section auto-hides when data is empty (D3).
+ * Shows the SwarmAI brand (logo, wordmark, slogan over a faint honeycomb) and one
+ * "Needs you" card, then gets out of the way of the composer.
  *
- * Section order follows action priority gradient (D8):
- * Focus (full width) → Working → Learning insight
- * (Signals / Swarm Output / Stocks sections removed 2026-08-05 per XG.)
+ * - One queue: the card reads `overlayQuery.needsYou()` — the same react-query key
+ *   as the Needs You overlay and the left-nav pill (useAttentionQueue), so all
+ *   three show the same number (counts.blocking + counts.review).
+ * - No send: a row or "Open all" opens the Needs You overlay; nothing is sent.
+ * - Durable: an empty queue is one calm line; a failed read hides the card.
+ * - Top-aligned (no vertical centring), so a late read never moves the hero.
  *
- * Click behavior (D12): chat-bound clicks populate ChatInput with
- * rich blockquote context — no auto-send.
- *
- * @exports WelcomeScreen, WelcomeScreenProps
+ * @exports WelcomeScreen
  */
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import { overlayQuery } from '../../../components/layout/overlayQueries';
+import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../../services/attention';
+import { dispatchUiCommand } from '../../../utils/uiCommands';
+import { tf } from '../tf';
 
-import React, { useEffect, useState, useCallback } from 'react';
-import {
-  systemService,
-  type SessionBriefing,
-  type BriefingFocusItem,
-} from '../../../services/system';
-import type { ItemClickHandler } from './RightSidebar/types';
-import { WorkingSection } from './briefing';
-import { BrainHomeView } from './BrainHomeView';
+const MAX_ROWS = 3;
 
 // ---------------------------------------------------------------------------
-// Focus Item (kept inline — only used here)
+// Honeycomb — built once per app session (pure geometry, no theme colour: the
+// stroke is currentColor and .welcome-comb sets it from --color-brand).
 // ---------------------------------------------------------------------------
 
-const PRIORITY_BADGES: Record<string, { label: string; cls: string }> = {
-  P0: { label: 'P0', cls: 'bg-red-500/20 text-red-400 border-red-500/30' },
-  P1: { label: 'P1', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' },
-  P2: { label: 'P2', cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
-};
+const LIT = new Map([['3,8', 0.15], ['4,10', 0.3], ['2,11', 0.45], ['5,7', 0.25], ['3,13', 0.55], ['6,9', 0.4]]);
 
-function FocusItem({
-  item,
-  onClick,
-  onDismiss,
-}: {
-  item: BriefingFocusItem;
-  onClick?: (title: string) => void;
-  onDismiss?: (title: string) => void;
-}) {
-  const badge = PRIORITY_BADGES[item.priority] ?? PRIORITY_BADGES.P2;
+function hexPoints(cx: number, cy: number, r: number): string {
+  const pts: string[] = [];
+  for (let k = 0; k < 6; k++) {
+    const a = (Math.PI / 180) * (60 * k - 30);
+    pts.push(`${(cx + r * Math.cos(a)).toFixed(1)},${(cy + r * Math.sin(a)).toFixed(1)}`);
+  }
+  return pts.join(' ');
+}
+
+const COMB = (() => {
+  const r = 15;
+  const w = Math.sqrt(3) * r;
+  const h = 1.5 * r;
+  const cells: string[] = [];
+  const lit: Array<{ points: string; delay: number }> = [];
+  for (let y = 0; y < 14; y++) {
+    for (let x = 0; x < 22; x++) {
+      const points = hexPoints(x * w + (y % 2 ? w / 2 : 0), y * h, r);
+      cells.push(points);
+      const delay = LIT.get(`${y},${x}`);
+      if (delay !== undefined) lit.push({ points, delay });
+    }
+  }
+  return { cells, lit };
+})();
+
+function Honeycomb() {
   return (
-    <div className="group flex items-center gap-2 px-2 py-1 rounded hover:bg-[var(--color-bg-hover)] transition-colors">
-      <button
-        type="button"
-        onClick={() => onClick?.(item.title)}
-        className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer text-left"
-      >
-        <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
-          {badge.label}
-        </span>
-        <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
-        {item.momentum && (
-          <span className="text-[11px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded font-mono shrink-0">
-            ⚡ active
-          </span>
-        )}
-      </button>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); onDismiss?.(item.title); }}
-        className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
-        title="Dismiss"
-      >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
-    </div>
+    <svg className="welcome-comb" width="100%" viewBox="0 0 640 300" preserveAspectRatio="xMidYMin slice" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth={1}>
+        {COMB.cells.map((p) => <polygon key={p} points={p} />)}
+      </g>
+      {COMB.lit.map((c) => <polygon key={c.points} className="lit" points={c.points} style={{ animationDelay: `${c.delay}s` }} />)}
+    </svg>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Section Card wrapper
-// ---------------------------------------------------------------------------
-
-function SectionCard({
-  icon,
-  title,
-  count,
-  accent,
-  children,
-  className = '',
-}: {
-  icon: string;
-  title: string;
-  count?: number;
-  accent?: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
+function HexDot({ tone }: { tone: 'brand' | 'calm' }) {
   return (
-    <div
-      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] ${className}`}
-      style={accent ? { borderLeft: `3px solid ${accent}` } : undefined}
-    >
-      <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
-        <span className="text-[12px]">{icon}</span>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)]">
-          {title}
-        </span>
-        {count != null && count > 0 && (
-          <span className="ml-auto inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[11px] font-medium rounded-full bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]">
-            {count}
-          </span>
-        )}
-      </div>
-      <div className="px-3 pb-2.5">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main Component
-// ---------------------------------------------------------------------------
-
-export interface WelcomeScreenProps {
-  /** Legacy: sends title as chat message (auto-send). Used by focus items. */
-  onFocusClick?: (title: string) => void;
-  /** New: populates ChatInput with message + context (no auto-send). */
-  onItemClick?: ItemClickHandler;
-}
-
-export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onItemClick }) => {
-  const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    // Welcome is an input->output briefing (what the world did + what Swarm
-    // produced). ToDos live in the Radar sidebar (the act-now queue) — not
-    // duplicated here (run_b579f702 repositioning).
-    systemService.getBriefing()
-      .then((data) => { if (!cancelled) setBriefing(data); })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setLoaded(true); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const handleDismissFocus = useCallback((title: string) => {
-    if (briefing) {
-      setBriefing({ ...briefing, focus: briefing.focus.filter((f) => f.title !== title) });
-    }
-    systemService.dismissFocus(title).catch(() => {});
-  }, [briefing]);
-
-  // Use onItemClick if available, fall back to onFocusClick (legacy compat)
-  const handleItemClick: ItemClickHandler = useCallback((message, context) => {
-    if (onItemClick) {
-      onItemClick(message, context);
-    } else if (onFocusClick) {
-      onFocusClick(message);
-    }
-  }, [onItemClick, onFocusClick]);
-
-  const hasFocus = briefing && briefing.focus.length > 0;
-  const hasWorking = briefing && briefing.working.length > 0;
-  const hasAnyBriefing = hasFocus || hasWorking || briefing?.learning;
-
-  return (
-    // `chat-scroll-gutter` (index.css): the same overflow + side gutters as the
-    // transcript scroller, so this column lines up with the composer below it.
-    <div className="flex flex-col items-center h-full chat-scroll-gutter">
-      {/* Top spacer */}
-      <div className="flex-1 min-h-6" />
-
-      {/* Icon + heading */}
-      <div className="relative mb-3 select-none">
-        <div
-          className="absolute top-1/2 left-1/2 w-[120px] h-[120px] -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
-          style={{ background: 'radial-gradient(circle, rgba(0, 212, 255, 0.2) 0%, transparent 70%)' }}
-        />
-        <img
-          src="/swarm-avatar.svg" alt="SwarmAI" className="relative w-12 h-12 rounded-full" draggable={false}
-        />
-      </div>
-      <h1
-        className="text-xl font-bold mb-3 select-none"
-        style={{
-          background: 'linear-gradient(135deg, #00d4ff 0%, #a855f7 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-        }}
-      >
-        SwarmAI — Grow your Brain. Deliver Anything.
-      </h1>
-
-      {/* Shared-width column: BrainHome + the briefing below it live in ONE container
-          so their left/right edges align vertically. It is the app-wide `chat-column`
-          (index.css), the same column as the transcript and the composer, so the
-          width does not change when the first message replaces this screen. */}
-      <div className="chat-column flex flex-col">
-      {/* Durable Brain Home layer (design 2026-08-04) — an INDEPENDENT read from the
-          session-briefing below: an empty/failed briefing must not blank the brains,
-          and an empty/failed brain read must not blank the briefing. Renders nothing
-          on zero brains / read failure (AC5). */}
-      <BrainHomeView
-        onOpenHub={() => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'))}
-        onOpenBrain={(name) => window.dispatchEvent(new CustomEvent('swarm:show-brain-hub', { detail: { brain: name } }))}
+    <svg className="w-3 h-3 shrink-0" viewBox="0 0 12 12" aria-hidden="true">
+      <polygon
+        points="6,0.8 10.6,3.4 10.6,8.6 6,11.2 1.4,8.6 1.4,3.4"
+        fill={tone === 'brand' ? 'var(--color-brand)' : 'var(--color-status-success)'}
       />
+    </svg>
+  );
+}
 
-      {/* Briefing content — renders only when there is something to show.
-          Empty/unloaded briefing shows nothing (no marketing fallback): the
-          honest empty state is a quiet screen, not a slogan (run: welcome-declutter). */}
-      {loaded && hasAnyBriefing && (
-        <div className="w-full space-y-3 mt-2">
-          {/* Focus bar (full width) */}
-          {hasFocus && (
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] px-2 py-1.5">
-              {briefing!.focus.map((item) => (
-                <FocusItem key={item.title} item={item} onClick={onFocusClick} onDismiss={handleDismissFocus} />
-              ))}
-            </div>
-          )}
+// ---------------------------------------------------------------------------
+// Needs you card
+// ---------------------------------------------------------------------------
 
-          {/* Working (full width) */}
-          {hasWorking && (
-            <SectionCard icon="📋" title="Working" count={briefing!.working.length} accent="rgba(251,191,36,0.6)">
-              <WorkingSection items={briefing!.working} onItemClick={handleItemClick} />
-            </SectionCard>
-          )}
+const openNeedsYou = () => { dispatchUiCommand('show-needs-you'); };
 
-          {/* Learning insight */}
-          {briefing?.learning && (
-            <div className="flex items-start gap-2 bg-[var(--color-bg-hover)] rounded-md px-3 py-2">
-              <span className="text-purple-400 shrink-0 mt-0.5">💡</span>
-              <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
-                {briefing.learning}
-              </p>
-            </div>
+function rowLabel(it: AttentionEntry): string {
+  return it.brain ?? ATTENTION_SOURCE_LABEL[it.source];
+}
+
+function NeedsYouCard() {
+  const { t } = useTranslation();
+  const { data, isError } = useQuery(overlayQuery.needsYou());
+  if (isError && !data) return null;          // a failed read hides the card
+  const label = tf(t, 'chat.welcome.needsYou', 'Needs you');
+
+  if (!data) {
+    // Loading: hold the card's height so nothing below shifts when it lands.
+    return <div data-testid="welcome-needs" className="h-[120px]" aria-hidden="true" />;
+  }
+
+  const count = data.counts.blocking + data.counts.review;
+  const rows = data.items.slice(0, MAX_ROWS);
+  // "N more" agrees with the badge: everything counted that is not shown.
+  const more = Math.max(0, Math.max(count, data.items.length) - rows.length);
+
+  return (
+    <section data-testid="welcome-needs" className="welcome-rise [animation-delay:0.12s]">
+      <div className="flex items-center justify-between mb-[7px] px-0.5 text-meta font-semibold uppercase tracking-[0.05em] text-[var(--color-text-muted)]">
+        <span className="flex items-center gap-1.5">
+          {label}
+          {count > 0 && (
+            <span
+              data-testid="welcome-needs-count"
+              className="min-w-[18px] h-4 px-[5px] rounded-lg grid place-items-center tracking-normal tabular-nums bg-[color-mix(in_srgb,var(--color-brand)_18%,transparent)] text-[var(--color-brand-strong)]"
+            >
+              {count}
+            </span>
           )}
-        </div>
-      )}
+        </span>
+        {count > 0 && (
+          <button
+            type="button"
+            data-testid="welcome-needs-open"
+            onClick={openNeedsYou}
+            className="normal-case tracking-normal text-[var(--color-brand-strong)] hover:underline cursor-pointer"
+          >
+            {tf(t, 'chat.welcome.openAll', 'Open all')} ›
+          </button>
+        )}
       </div>
 
-      {/* Bottom spacer */}
-      <div className="flex-1 min-h-6" />
-    </div>
+      <div className="relative overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] shadow-[0_1px_2px_var(--color-scrim),0_8px_24px_-12px_var(--color-scrim-medium)]">
+        <span
+          aria-hidden="true"
+          className={`absolute left-0 inset-y-0 w-[3px] ${count > 0 ? 'welcome-card-bar' : 'bg-[var(--color-status-success)]'}`}
+        />
+        {count === 0 ? (
+          <div data-testid="welcome-needs-empty" className="flex items-center gap-2.5 pl-4 pr-3.5 py-3 text-body text-[var(--color-text-secondary)]">
+            <HexDot tone="calm" />
+            {tf(t, 'chat.welcome.nothing', 'Nothing needs your decision right now')}
+          </div>
+        ) : (
+          <>
+            {rows.map((it, i) => (
+              <button
+                key={it.id}
+                type="button"
+                data-testid="welcome-needs-row"
+                onClick={openNeedsYou}
+                title={it.title}
+                className={`group w-full text-left flex items-center gap-2.5 pl-4 pr-3.5 py-2.5 text-body text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors cursor-pointer ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`}
+              >
+                <HexDot tone="brand" />
+                <span className="flex-1 min-w-0 truncate">{it.title}</span>
+                <span className="shrink-0 text-meta text-[var(--color-text-muted)] px-[7px] py-px rounded-md bg-[var(--color-hover)]">
+                  {rowLabel(it)}
+                </span>
+                <span className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)] transition-transform group-hover:translate-x-0.5 group-hover:text-[var(--color-brand)]">
+                  chevron_right
+                </span>
+              </button>
+            ))}
+            {more > 0 && (
+              <div data-testid="welcome-needs-more" className="pl-4 pr-3.5 py-2 text-small text-[var(--color-text-muted)] border-t border-[var(--color-border)]">
+                {tf(t, 'chat.welcome.more', '{{n}} more in Needs You', { n: more })}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </section>
   );
-};
+}
+
+// ---------------------------------------------------------------------------
+// Screen
+// ---------------------------------------------------------------------------
+
+export const WelcomeScreen: React.FC = () => (
+  // `chat-scroll-gutter` (index.css): the same overflow + side gutters as the
+  // transcript scroller, so this column lines up with the composer below it.
+  <div className="relative flex flex-col items-center h-full chat-scroll-gutter">
+    <Honeycomb />
+    {/* The app-wide `chat-column`: the same width as the transcript and composer,
+        so nothing changes width when the first message replaces this screen. */}
+    <div className="relative chat-column flex flex-col pt-9 pb-4">
+      <div className="welcome-rise flex flex-col items-center text-center mb-[26px] select-none">
+        <div className="relative w-[60px] h-[60px] mb-3.5">
+          <span className="welcome-glow" aria-hidden="true" />
+          <img
+            src="/swarm-avatar.svg"
+            alt="SwarmAI"
+            draggable={false}
+            className="welcome-logo relative w-[60px] h-[60px] rounded-2xl"
+          />
+        </div>
+        <h1 data-testid="welcome-wordmark" className="text-display font-semibold tracking-[-0.01em] text-[var(--color-text)]">
+          SwarmAI
+        </h1>
+        <p data-testid="welcome-slogan" className="mt-1 text-heading text-[var(--color-text-secondary)]">
+          Grow your <span className="welcome-brand-text font-semibold">Brain</span>. Deliver{' '}
+          <span className="welcome-brand-text font-semibold">Anything</span>.
+        </p>
+      </div>
+      <NeedsYouCard />
+    </div>
+  </div>
+);
 
 export default WelcomeScreen;

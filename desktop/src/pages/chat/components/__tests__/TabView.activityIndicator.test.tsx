@@ -35,8 +35,7 @@ function props(tabId: string, isStreaming: boolean, extra: Record<string, unknow
     contextWarning: null, isWaitingForBusy: false, onCancelBusyWait: noop,
     hasMoreMessages: false, isLoadingOlderMessages: false, onLoadOlder: noop,
     onAnswerQuestion: noop, onPermissionDecision: noop, onEscalationSelect: noop,
-    onCancelQueued: noop, onContinue: noop, onFocusClick: noop, onItemClick: noop,
-    onRetryQueueTimeout: noop, ...extra,
+    onCancelQueued: noop, onContinue: noop, onRetryQueueTimeout: noop, ...extra,
   };
 }
 const toolTurn: Message = {

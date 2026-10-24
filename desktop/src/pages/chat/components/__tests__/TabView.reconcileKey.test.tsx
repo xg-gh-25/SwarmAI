@@ -28,8 +28,7 @@ const props = {
   contextWarning: null, isWaitingForBusy: false, onCancelBusyWait: noop,
   hasMoreMessages: false, isLoadingOlderMessages: false, onLoadOlder: noop,
   onAnswerQuestion: noop, onPermissionDecision: noop, onEscalationSelect: noop,
-  onCancelQueued: noop, onContinue: noop, onFocusClick: noop, onItemClick: noop,
-  onRetryQueueTimeout: noop,
+  onCancelQueued: noop, onContinue: noop, onRetryQueueTimeout: noop,
 };
 const asst = (id: string, metadata?: Message['metadata']): Message =>
   ({ id, role: 'assistant', timestamp: '2026-10-19T10:00:00+08:00', content: [{ type: 'text', text: 'hi' }], ...(metadata ? { metadata } : {}) }) as Message;

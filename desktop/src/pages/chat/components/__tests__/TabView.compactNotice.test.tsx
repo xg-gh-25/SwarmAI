@@ -63,8 +63,6 @@ function props(tabId: string, messagesProp: Message[]) {
     onEscalationSelect: noop,
     onCancelQueued: noop,
     onContinue: noop,
-    onFocusClick: noop,
-    onItemClick: noop,
     onRetryQueueTimeout: noop,
   };
 }

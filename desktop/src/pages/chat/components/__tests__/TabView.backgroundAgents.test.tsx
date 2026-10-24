@@ -38,8 +38,7 @@ const props = {
   contextWarning: null, isWaitingForBusy: false, onCancelBusyWait: noop,
   hasMoreMessages: false, isLoadingOlderMessages: false, onLoadOlder: noop,
   onAnswerQuestion: noop, onPermissionDecision: noop, onEscalationSelect: noop,
-  onCancelQueued: noop, onContinue: noop, onFocusClick: noop, onItemClick: noop,
-  onRetryQueueTimeout: noop,
+  onCancelQueued: noop, onContinue: noop, onRetryQueueTimeout: noop,
 };
 
 describe('TabView — background agents line', () => {

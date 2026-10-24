@@ -110,39 +110,6 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
 
 // ============== Service ==============
 
-// ============== Briefing Types ==============
-
-export interface BriefingFocusItem {
-  title: string;
-  priority: string;  // P0, P1, P2
-  score: number;
-  source: string;    // "thread" or "hint"
-  momentum: boolean;
-}
-
-// ============== Briefing Hub v2 Types ==============
-
-export interface WorkingItem {
-  title: string;
-  priority: "high" | "medium" | "low";
-  source: "email" | "slack-dm" | "slack-channel" | "calendar" | "reflect";
-  sourceDetail: string;
-  summary: string;
-  action: "reply" | "review" | "attend" | "follow-up" | "read";
-  resultFile?: string;
-  timestamp: string;
-}
-
-// The Welcome Screen consumes only focus + working + learning. Other briefing
-// fields (hotNews / stocks / signals / output / jobs / jobsSummary / todos)
-// were removed 2026-08-05: no UI reads them (Jobs&Runs uses useJobsRuns; ToDos
-// use the /todos endpoint).
-export interface SessionBriefing {
-  focus: BriefingFocusItem[];
-  working: WorkingItem[];
-  learning: string | null;
-}
-
 const STATUS_TIMEOUT_MS = 5000;
 
 /** Idle (between-events) stall timeout for the restore SSE stream. Matches the
@@ -237,48 +204,6 @@ export const systemService = {
         ? data.memory_pressure
         : 'ok') as MaxTabsInfo['memoryPressure'],
     };
-  },
-
-  /**
-   * Get session briefing data for the Welcome Screen.
-   *
-   * Returns focus suggestions, working items, and a learning insight from the
-   * proactive intelligence engine. The backend payload may carry more fields
-   * (hotNews/jobs/todos/etc.) but the Welcome Screen consumes only these three.
-   */
-  async getBriefing(): Promise<SessionBriefing> {
-    try {
-      const response = await api.get<Record<string, unknown>>('/system/briefing');
-      const d = response.data;
-
-      // Parse working items
-      const working: WorkingItem[] = ((d.working as Record<string, unknown>[]) ?? []).map((w) => ({
-        title: w.title as string,
-        priority: (w.priority as WorkingItem['priority']) ?? 'low',
-        source: (w.source as WorkingItem['source']) ?? 'reflect',
-        sourceDetail: (w.sourceDetail ?? w.source_detail ?? '') as string,
-        summary: (w.summary as string) ?? '',
-        action: (w.action as WorkingItem['action']) ?? 'read',
-        resultFile: (w.resultFile ?? w.result_file) as string | undefined,
-        timestamp: (w.timestamp as string) ?? '',
-      }));
-
-      return {
-        focus: (d.focus as BriefingFocusItem[]) ?? [],
-        working,
-        learning: (d.learning as string) ?? null,
-      };
-    } catch {
-      return { focus: [], working: [], learning: null };
-    }
-  },
-
-  /**
-   * Dismiss a focus item so it won't appear in future briefings.
-   * Stored server-side with a 7-day TTL.
-   */
-  async dismissFocus(title: string): Promise<void> {
-    await api.post('/system/briefing/dismiss', { title });
   },
 
   /**

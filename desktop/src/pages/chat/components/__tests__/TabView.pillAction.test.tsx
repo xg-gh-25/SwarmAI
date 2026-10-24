@@ -32,8 +32,7 @@ const props = (isStreaming: boolean) => ({
   contextWarning: null, isWaitingForBusy: false, onCancelBusyWait: noop,
   hasMoreMessages: false, isLoadingOlderMessages: false, onLoadOlder: noop,
   onAnswerQuestion: noop, onPermissionDecision: noop, onEscalationSelect: noop,
-  onCancelQueued: noop, onContinue: noop, onFocusClick: noop, onItemClick: noop,
-  onRetryQueueTimeout: noop,
+  onCancelQueued: noop, onContinue: noop, onRetryQueueTimeout: noop,
 });
 const turn = (content: Message['content']): Message =>
   ({ id: 'a1', role: 'assistant', timestamp: new Date().toISOString(), content });

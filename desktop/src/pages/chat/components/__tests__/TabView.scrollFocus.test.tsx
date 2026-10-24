@@ -65,8 +65,7 @@ function props(tabId: string, isActive: boolean, isStreaming = false) {
     pendingQuestion: null, activeTabPendingQuestion: null, pendingPermissionRequestId: null,
     contextWarning: null, isWaitingForBusy: false, onCancelBusyWait: noop, hasMoreMessages: false,
     isLoadingOlderMessages: false, onLoadOlder: noop, onAnswerQuestion: noop, onPermissionDecision: noop,
-    onEscalationSelect: noop, onCancelQueued: noop, onContinue: noop, onFocusClick: noop,
-    onItemClick: noop, onRetryQueueTimeout: noop,
+    onEscalationSelect: noop, onCancelQueued: noop, onContinue: noop, onRetryQueueTimeout: noop,
   };
 }
 const scrollerOf = (c: HTMLElement) => c.querySelector('.chat-scroll-gutter') as HTMLElement;

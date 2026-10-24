@@ -22,7 +22,7 @@
  */
 import { useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { AttentionEntry } from '../../services/attention';
+import { ATTENTION_SOURCE_LABEL, type AttentionEntry } from '../../services/attention';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 
@@ -35,14 +35,7 @@ interface NeedYouContentProps {
 
 const OS_LEVEL = 'OS-level';
 
-const SOURCE_LABEL: Record<AttentionEntry['source'], string> = {
-  escalation: 'escalation',
-  paused_run: 'paused pipeline',
-  cultivation: 'proposal',
-  governance: 'governance',
-  job: 'job',
-  community_digest: 'digest',
-};
+const SOURCE_LABEL = ATTENTION_SOURCE_LABEL;
 
 /** Group items by brain (null → OS-level), preserving insertion order. */
 function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]> {

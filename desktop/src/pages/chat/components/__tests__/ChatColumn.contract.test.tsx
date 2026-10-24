@@ -31,10 +31,9 @@ vi.mock('../../../../components/chat', async (importOriginal) => ({
   ChatErrorMessage: () => <div />,
 }));
 vi.mock('../../../../components/common', () => ({ Spinner: () => <div /> }));
-vi.mock('../BrainHomeView', () => ({ BrainHomeView: () => <div data-testid="brain-home" /> }));
-vi.mock('../briefing', () => ({ WorkingSection: () => <div /> }));
-vi.mock('../../../../services/system', () => ({
-  systemService: { getBriefing: vi.fn(() => new Promise(() => {})) },
+vi.mock('../../../../services/attention', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  attentionService: { fetchAttention: vi.fn(() => new Promise(() => {})) },
 }));
 
 import { TabView } from '../TabView';
@@ -69,8 +68,6 @@ function tabProps(tabId: string) {
     onEscalationSelect: noop,
     onCancelQueued: noop,
     onContinue: noop,
-    onFocusClick: noop,
-    onItemClick: noop,
     onRetryQueueTimeout: noop,
   };
 }
@@ -142,12 +139,15 @@ describe('chat column contract', () => {
   });
 
   it('Welcome screen uses the scroll gutter and the same column (not its own 768px)', () => {
-    const { container, getByTestId } = render(<WelcomeScreen onFocusClick={noop} onItemClick={noop} />);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const { container, getByTestId } = render(
+      <QueryClientProvider client={client}><WelcomeScreen /></QueryClientProvider>,
+    );
     const root = container.firstChild as HTMLElement;
     expect(root.classList.contains('chat-scroll-gutter')).toBe(true);
     expectNoRetired(root);
 
-    const column = getByTestId('brain-home').closest('.chat-column');
+    const column = getByTestId('welcome-wordmark').closest('.chat-column');
     expect(column).not.toBeNull();
     expectNoRetired(column as Element);
     expect(container.querySelector('.max-w-3xl')).toBeNull();

@@ -26,6 +26,16 @@ export interface AttentionEntry {
   dispatch: { message: string; context?: Record<string, unknown> };
 }
 
+/** Short label per source, shared by the Need You overlay and the Welcome card. */
+export const ATTENTION_SOURCE_LABEL: Record<AttentionEntry['source'], string> = {
+  escalation: 'escalation',
+  paused_run: 'paused pipeline',
+  cultivation: 'proposal',
+  governance: 'governance',
+  job: 'job',
+  community_digest: 'digest',
+};
+
 export interface AttentionResult {
   items: AttentionEntry[];
   counts: { blocking: number; review: number };

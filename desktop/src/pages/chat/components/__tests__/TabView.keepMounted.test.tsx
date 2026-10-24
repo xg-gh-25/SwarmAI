@@ -60,8 +60,6 @@ function props(tabId: string, isActive: boolean) {
     onEscalationSelect: noop,
     onCancelQueued: noop,
     onContinue: noop,
-    onFocusClick: noop,
-    onItemClick: noop,
     onRetryQueueTimeout: noop,
   };
 }

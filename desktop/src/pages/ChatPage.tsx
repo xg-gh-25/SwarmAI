@@ -429,7 +429,8 @@ export default function ChatPage() {
   const voiceConversation = useVoiceConversation({
     sessionId: sessionId ?? null,
     onSendMessage: useCallback((text: string) => {
-      // Direct ref mutation + synchronous call — same pattern as handleFocusClick.
+      // Direct ref mutation + synchronous call (handleSendMessage reads
+      // inputValueRef.current synchronously).
       // Avoids the setTimeout race condition where React state updates
       // could interleave before the send reads inputValueRef.
       inputValueRef.current = text;
@@ -2519,30 +2520,6 @@ export default function ChatPage() {
   // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
   handleSendMessageRef.current = handleSendMessage;
 
-  // Handle WelcomeScreen focus item click — injects title as input and sends immediately
-  const handleFocusClick = useCallback((title: string) => {
-    if (!title.trim()) return;
-    // Direct ref mutation bypasses React batching — handleSendMessage reads inputValueRef.current synchronously
-    inputValueRef.current = title;
-    handleSendMessage();
-  }, [handleSendMessage]);
-
-  // Handle Briefing Hub v2 item click — populate ChatInput with message + context (no auto-send)
-  const handleItemClick = useCallback((message: string, context?: string) => {
-    const lines = [message];
-    if (context) {
-      lines.push('');
-      lines.push(...context.split('\n').map((l: string) => `> ${l}`));
-    }
-    const text = lines.join('\n');
-    // Sync ref AND state — handleSendMessage reads inputValueRef.current synchronously
-    inputValueRef.current = text;
-    setInputValue(text);
-    // Focus the ChatInput textarea
-    const textarea = document.querySelector<HTMLTextAreaElement>('[data-chat-input]');
-    textarea?.focus();
-  }, [setInputValue]);
-
   // Bridge the recovery_exhausted "Start fresh session" action. It resets the
   // tab the notice belongs to BY ID — the old select-then-clear-active order
   // could clear the wrong tab when the active tab changed in between.
@@ -2866,7 +2843,7 @@ export default function ChatPage() {
           : block,
       ),
     })));
-    // Send the choice as a user message (same path as handleFocusClick)
+    // Send the choice as a user message (direct ref mutation, synchronous send)
     inputValueRef.current = optionLabel;
     handleSendMessage();
   }, [handleSendMessage, setMessages, activeTabIdRef]);
@@ -3252,7 +3229,7 @@ export default function ChatPage() {
   // the attention signal is GLOBAL (cross-tab / paused runs / failing jobs), so
   // it belongs on the fixed-width left chrome, unaffected by Canvas open/close.
   // But useRadarAttention (+ its openTabs/currentSessionId dependency) and the
-  // action callbacks (handleItemClick / selectTab) are OWNED here by ChatPage;
+  // the hook (and selectTab) are OWNED here by ChatPage;
   // the sidebar (ThreeColumnLayout's LeftSidebar) is a SIBLING tree with no
   // access to them. So we keep the hook + callbacks here and createPortal the
   // pill INTO the sidebar's #sidebar-alerts-slot node. This keeps a SINGLE poll,
@@ -3433,8 +3410,6 @@ export default function ChatPage() {
                     onRetrySend={handleRetrySend}
                     onContinue={handleContinue}
                     onStopBackground={stableStopBackground}
-                    onFocusClick={handleFocusClick}
-                    onItemClick={handleItemClick}
                     onRetryQueueTimeout={handleRetryQueueTimeout}
                   />
                 );

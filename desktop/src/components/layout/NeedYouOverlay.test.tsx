@@ -14,7 +14,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 const fetchAttention = vi.fn();
-vi.mock('../../services/attention', () => ({
+vi.mock('../../services/attention', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   attentionService: { fetchAttention: (...a: unknown[]) => fetchAttention(...a) },
 }));
 

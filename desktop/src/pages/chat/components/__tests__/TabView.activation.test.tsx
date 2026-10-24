@@ -73,7 +73,7 @@ function baseProps(tabId: string, isActive: boolean) {
     onCancelBusyWait: noop, hasMoreMessages: false, isLoadingOlderMessages: false,
     onLoadOlder: noop, onAnswerQuestion: noop, onPermissionDecision: noop,
     onEscalationSelect: noop, onCancelQueued: noop, onContinue: noop,
-    onFocusClick: noop, onItemClick: noop, onRetryQueueTimeout: noop,
+    onRetryQueueTimeout: noop,
   };
 }
 

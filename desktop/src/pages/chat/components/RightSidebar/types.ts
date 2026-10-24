@@ -6,7 +6,7 @@
  * Key exports:
  * - ``DropPayload``       — Union type for drag-to-chat data transfer payloads
  * - ``RadarArtifact``     — Git-derived recently modified file entry
- * - ``AttentionItem`` / ``ItemClickHandler`` — the 🔔 attention queue (AlertsPill)
+ * - ``AttentionItem``     — the 🔔 attention queue (AlertsPill)
  * - ``RunningPipeline``   — in-flight pipeline entry (attention queue)
  * - ``HistoryViewProps``  — Props for the History mode session browser
  */
@@ -98,13 +98,6 @@ export interface RunningPipeline {
 // ---------------------------------------------------------------------------
 // Component prop interfaces
 // ---------------------------------------------------------------------------
-
-/**
- * Unified callback for item clicks across WelcomeScreen and RadarSidebar.
- * Populates ChatInput with a message and optional blockquote context.
- * Does NOT auto-send — user reviews and hits ⌘Enter.
- */
-export type ItemClickHandler = (message: string, context?: string) => void;
 
 /** Props for the History mode session browser. */
 export interface HistoryViewProps {

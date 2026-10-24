@@ -22,6 +22,12 @@
   --color-zone-cognitive: #1f9d6b;
   --color-zone-work: #2f7596;
   --color-zone-system: #5f6577;
+  /* Brand amber from the honeycomb logo (design welcome-screen-v2.md): brand
+     touchpoints only (Welcome screen) — buttons and selection stay primary blue.
+     -strong is the text-safe step; -hi is the bright end of a gradient. */
+  --color-brand: #d97706;
+  --color-brand-strong: #b45309;
+  --color-brand-hi: #f59e0b;
   --color-input-bg: #ffffff;
   --color-input-border: #cbd5e1;
   /* Resting sidebar icon: bumped #94a3b8 → #5b6573 for >=3:1 contrast vs
@@ -121,6 +127,9 @@
   --color-zone-cognitive: #5fc99a;
   --color-zone-work: #4a8fb0;
   --color-zone-system: #7c8194;
+  --color-brand: #f59e0b;
+  --color-brand-strong: #fbbf24;
+  --color-brand-hi: #fde047;
   --color-input-bg: #191e28;
   --color-input-border: #2a3040;
   /* Resting sidebar icon: bumped #545d68 → #8b95a3 for >=3:1 contrast vs
@@ -1592,4 +1601,46 @@ body {
 
 .assistant-message .markdown-content > :last-child {
   margin-bottom: 0;
+}
+
+/* Welcome screen v2 (design welcome-screen-v2.md): the honeycomb behind the hero,
+   faded out radially, and a one-time entrance (~1.1s, then still). */
+.welcome-comb {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 300px;
+  pointer-events: none;
+  color: color-mix(in srgb, var(--color-brand) 15%, transparent);
+  -webkit-mask-image: radial-gradient(ellipse 60% 75% at 50% 30%, #000 25%, transparent 75%);
+  mask-image: radial-gradient(ellipse 60% 75% at 50% 30%, #000 25%, transparent 75%);
+}
+.welcome-comb .lit {
+  fill: color-mix(in srgb, var(--color-brand) 12%, transparent);
+  opacity: 0.55;
+  animation: welcome-lit 1.1s ease-out both;
+}
+.welcome-rise { animation: welcome-rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.welcome-glow {
+  position: absolute;
+  inset: -26px;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: radial-gradient(circle, color-mix(in srgb, var(--color-brand-hi) 22%, transparent) 0%, transparent 68%);
+}
+.welcome-logo {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-brand) 35%, transparent),
+    0 10px 24px -10px color-mix(in srgb, var(--color-brand) 70%, transparent);
+}
+.welcome-brand-text {
+  background: linear-gradient(120deg, var(--color-brand-strong), var(--color-brand-hi));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.welcome-card-bar { background: linear-gradient(var(--color-brand-hi), var(--color-brand)); }
+@keyframes welcome-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes welcome-lit { 0% { opacity: 0; } 40% { opacity: 1; } 100% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) {
+  .welcome-rise, .welcome-comb .lit { animation: none; }
 }
