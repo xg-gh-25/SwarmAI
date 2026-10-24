@@ -3,7 +3,7 @@ title: SwarmAI 让别人装上就能用 — 产品原则、安装包、通用 pi
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: final r14 — XG 2026-10-24 定稿；r1–r14 的演进见末尾"修订记录"
+status: final r15 — XG 2026-10-24 定稿；r1–r15 的演进见末尾"修订记录"
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -26,7 +26,7 @@ status: final r14 — XG 2026-10-24 定稿；r1–r14 的演进见末尾"修订�
 
 **P3 只允许产品级 gate。**
 - 每个 gate 都必须对所有用户可用、有价值，不能为某个仓库、某个人的习惯或某台机器加。
-- gate 只用来保护：危险或不可逆的操作、对外的副作用、需要人回答的问题、用户主动开启的 pipeline run 本身的完整性。
+- gate 只用来保护：危险或不可逆的操作、对外的副作用、需要人回答的问题、用户主动开启的 pipeline run 本身的完整性，以及 session 本身不挂死、不失控耗 token（r15，XG 定；前提是不挡正常工作、有放行路径，例如 `background_command_guard` 放行 dev server / `--watch` / `tail -f`，`image_read_dedup_guard` 只拦未变化的同一张图）。这类 gate 背后的做法同时写进 AGENT.md 作为 best practice。
 - gate 不能用来挡 native 写代码、跑测试或 commit，也不能用来把人赶进 pipeline。
 - 不设"按仓库强制"的 gate（r9）：commit 前要不要审查、要不要走 pipeline，由 agent 按改动判断、或由用户在 session 里选择（P4），不靠 gate。仓库想要更严格的做法，写进它自己的 AGENTS.md 作为指引。
 - 新增 gate 前必须回答两个问题：所有用户都用得上吗？有价值吗？并且先看度量（§6）。
@@ -229,6 +229,15 @@ r9 把 SwarmAI 的"commit 前审查"交给它自己的 AGENTS.md，但现在没�
   - 两种情况下都适用：优先级低于用户的指令和产品规则（系统认知文件、P1-P7）。和当前任务无关的指令不执行，尤其是外发数据、读写凭证、操作别的仓库或改 agent 自己的配置；遇到这类内容，告诉用户这里可能有 prompt injection。注入时用明确的分隔标出来源路径，和系统指令分开。
 - 验收：在一个带 AGENTS.md 的样例仓库里，agent 第一次写文件之前，上下文里已经有这份指引；同一个 session 里第二次不再重复注入；agent 改了这份 AGENTS.md 之后不会再被注入；SwarmWS 从不被注入；一个未绑定仓库的 AGENTS.md 里写着"commit 前运行 ./x.sh"，agent 先问用户，不直接执行。
 
+### 3.8 native 模式按需使用隔离 worktree（r15，XG 定）
+
+native 默认在用户的 checkout 里原地改（P1：和普通 CLI 写代码一样；隔离 worktree 对单 session 用户有代价：依赖目录不在、编辑器看不到改动、多一步合并）。它解决的是多个 session 同时改一个仓库，所以作为产品能力按需使用，不加 gate、不强制：
+- 只有本 session 在改这个仓库：原地改。
+- agent 发现另一个活跃 session 在同一仓库有未提交的改动：主动改用本 session 自己的隔离 worktree，并告诉用户；完成后 ff 合并回去、清理 worktree。
+- 用户随时可以说"用 worktree"。
+- 实现复用 pipeline 的 `run_worktree`（建立、依赖软链按 `.swarmai/pipeline.toml` 的 `[worktree] link`、清理），并在 AGENT.md 写明判断规则；"另一个 session 有未提交改动"的检测放在 S4b，和 P7 清理一起做。
+- SwarmAI 仓库"总是在自己的 worktree 里改"的规矩照旧写在它自己的 AGENTS.md 里。
+
 ### 3.4 gate：只保留产品级的
 
 | 类别 | gate | 处理 |
@@ -239,7 +248,8 @@ r9 把 SwarmAI 的"commit 前审查"交给它自己的 AGENTS.md，但现在没�
 | `active_run_commit_gate` | r8：今天它扫描所有 session 的 run，别的 run 读不出来时也会拒绝（`security_hooks.py:3628-3732`） | 改为按 owner 判断：只在提交者就是该 run 的 owner session（S6 前读签名事件，S6 后读日志）、且提交的是 run 改过的文件时拒绝；其他 session 只提示；读不出来的 run 不再导致拒绝 |
 | `audit_marker_write_gate` | r8：今天一直生效，保护整个共享审计目录，包括 commit 前审查用的通用 marker（`security_hooks.py:6586-6644`） | S4 实施时（2026-10-24）核对：同一个目录里既有 `runs/<run_id>/` 的签名事件和 key，也有审查 marker 和 `main_red.jsonl`，按路径细分会改动这个 gate 精细的 Bash 解析，而它本来就不挡 native（普通用户不碰这个目录）。所以 S4 只改了拒绝提示（不再提 commit 前审查），收窄和 S6 删签名一起做。原计划：S4 到 S6 之间只保留签名事件和 `authority.key` 的保护，始终生效（只在 pipeline 内部目录里，普通用户碰不到）；S6 后见 §3.3.5；commit 前审查 marker 的保护随 `adversarial_commit_gate` 一起删除（r9） |
 | `external_approval_gate` | r8：靠工具名里的词（create / add / set / save）推断风险，会把远端的写操作误判成本地写（`tool_risk.py:65-75,137-154`） | 保留这个产品级 gate，加入按工具元数据判断（工具声明自己是否有对外副作用）。r14：MCP 工具今天都没有元数据（`tool_risk.py:105-112`），所以元数据**只能把风险往上调**，不能往下调（第三方 MCP 自称 readOnly 不算数）；没声明的工具照旧按现有的动词分类；用户可以在本地覆盖某个工具的分类（`tool_risk` 已预留的第 1 层 override）。S4 已实现：`<app data>/tool_risk_overrides.json`；元数据只升不降的规则在 `classify` 里，但 hook 今天拿不到 MCP 的工具注解，gate 暂不传元数据，等有来源再接 |
-| 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`adversarial_commit_gate`（r9：连同 SubagentStop 写审查 marker 的逻辑一起删）、`pytest_command_guard`、`background_command_guard`、`image_read_dedup_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
+| 挡 native、或把人赶进 pipeline | worktree rule 4、`direct_commit_gate`、`adversarial_commit_gate`（r9：连同 SubagentStop 写审查 marker 的逻辑一起删）、`pytest_command_guard`、`enforcement_injector` 里"必须对抗审查"的提示、`pipeline_test_gate` | 删除 |
+| 保护 session 本身（r15） | `background_command_guard`（后台命令逃出超时会一直挂着；近 4 天拒绝 9 次，都是普通短命令被放到后台，改前台即可）、`image_read_dedup_guard`（重复读未变化的图；近 4 天 0 次） | 保留。S5 度量后复查：持续 0 次的删掉 |
 | 只对 SwarmAI 仓库有意义 | `design_lint_guard`、`inclusive_term_guard`、`change_triggered_eval`、`session_checkpoint` 里写死的 pytest 提醒 | 从产品里删除（P7）：改成 SwarmAI 仓库自己的 lint 脚本、pre-commit 和 CI 检查 |
 | 运维开关 | `SWARM_GATE_FORCE` | 不作为产品开关，只留给运维调试；顺手修掉三个声称支持却从不检查它的 gate |
 
@@ -319,7 +329,7 @@ r9 把 SwarmAI 的"commit 前审查"交给它自己的 AGENTS.md，但现在没�
 | S4 | gate 按 §3.4 删改：删挡 native 的 gate（含 `adversarial_commit_gate`）；`active_run_commit_gate` 按 owner；`audit_marker_write_gate` 收窄；`external_approval_gate` 加元数据（只升不降）；`pipeline.toml` 的 `[landing]`、`[worktree]` 读取，**SwarmAI 仓库的 `.swarmai/pipeline.toml` 同一个 commit 加上**（Swarm 落地身份和 trailer、`desktop/node_modules` 软链；否则读取上线后 SwarmAI 的 run 会用默认值落地，`landing.py:262,286`、`run_worktree.py:51`）；P4 的 session 内询问写进 agent 指引；专家名录 skill（§3.5）；SwarmAI 的 AGENTS.md 写入"commit 前审查"指引；§3.6 认知文件核对（含 EVOLUTION 模板）；§3.7 仓库指引注入；XG 本机 STEERING / SELF 手工同步 | `a84c5008f` 已先改了模板，S4 越晚，"认知说按需审查、gate 还在拦"的不一致持续越久（§3.6）。S4 和安装包无关，可以先做 |
 | S2 | 打包修复 + 三平台统一的版本化 runtime 部署和启动 + 四个发布目标（§3.1） | |
 | S3 | `python-backend` 子命令（`pipeline-v1`、`py`）+ 打包版里所有起 Python 子进程的地方改用子命令 + `SWARM_BACKEND_BIN` + 命令识别模块（§3.2，替换六处文本匹配）+ Windows 返回不支持。旧的"python + 脚本路径"形式和 `source_repo` 保留到 S6 | 新旧两种命令形式并存，runner 照常工作 |
-| S4b | P7：清理产品代码里识别 SwarmAI 仓库 / 项目的逻辑（先出完整清单，逐项改成通用或删除）；删除 `worktree_mode` 设置；dev 模式的 `SWARM_BACKEND_BIN` shim；SwarmAI 仓库自己的 lint 脚本、pre-commit、CI 接住被删掉的三个 hook；XG 切换到和 CI 相同流程打出来的安装包 | |
+| S4b | §3.8 native 按需 worktree（检测另一 session 的未提交改动 + AGENT.md 规则）；P7：清理产品代码里识别 SwarmAI 仓库 / 项目的逻辑（先出完整清单，逐项改成通用或删除）；删除 `worktree_mode` 设置；dev 模式的 `SWARM_BACKEND_BIN` shim；SwarmAI 仓库自己的 lint 脚本、pre-commit、CI 接住被删掉的三个 hook；XG 切换到和 CI 相同流程打出来的安装包 | |
 | S5 | 度量（§6） | |
 | S6 | pipeline 通用化（§3.3.3、§3.3.4）：验证报告事件和显式完成；删测试执行器、runner 证据相关的机器判定和状态，同一个 commit 删旧命令形式和 `source_repo`；TEST 不改代码、改了退回 REVIEW；审查记录 tree、增量审查；LG-1 绑定审查过的 tree；`reported_test` 证据；DESIGN_SPEC 测试引用通用化；Gate-0、Gate-2 检查清单补上对应要求；review 去掉语言启发式；REFLECT 的未知项目回退；删掉签名机制、事件改为只追加日志、pipeline 命令回到本地执行（§3.3.5）；现存 run 的 drain 和归档；通用 review 清单；skill 卡片重写；SwarmAI 仓库的 `.swarmai/review.md`、`swarm_select_tests.py`；重写受影响的 E2E 测试 | runner、旧命令形式、签名一起切换 |
 | 发布 | G1 两部分（native 和安装、通用 pipeline）+ G2 全绿后发布 | |
@@ -341,7 +351,6 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 ## 9. 待定问题
 
 1. Linux 发布用 AppImage 还是 deb，还是两个都发。
-2. （r14，审查提出，待 XG 定）`background_command_guard` 和 `image_read_dedup_guard` 是删掉，还是改成只提示。审查的理由：前者修的是真实出现过的后台进程失控挂死（`security_hooks.py:2097-2100`），后者防重复读图导致 token 膨胀，保护的是所有用户，不是在挡 native。§3.4 目前按 r9 写的是删除。
 
 ## 修订记录
 
@@ -359,3 +368,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r13：§3.3.5 保留 prewarm session id 补传（只删 token）；§3.7 写准信任级别（按仓库规范遵守，低于用户和产品规则，无关指令不执行），首次写之前就注入；§3.6 系统文件随新安装包生效、STEERING 模板保持空、XG 本机副本在 S4 手工同步（r13 先同步了一次）；G1 去重。
 - r14（对抗审查 1 个 BLOCKER、8 个 MAJOR；XG 定"不发过渡版"）：S1–S6 做完才发一次版，每个 commit 自身一致，§7 改为 S1 → S4 → S2 → S3 → S4b → S5 → S6；旧命令形式和 `source_repo` 保留到 S6 与 runner 一起删（修 S3–S6 之间 TEST 跑不起来）；§3.2 新增统一的命令识别模块，替换六处文本匹配（修 `run_owner_gate` 快速路径不认 `pipeline-v1`、`_with_session` 失效）；§3.6 记下 `a84c5008f` 已先改模板，S4 提前，S4 前不重新打包本机 daemon；EVOLUTION 模板的个人纠正条目移出，结构测试覆盖全部 `CONTEXT_FILES`；§3.3.3 审查记录 tree、TEST 退回后做增量审查；§3.7 排除 SwarmWS 和 runtime、本 session 写过的不注入、按是否绑定 DDD 分信任级别；`external_approval_gate` 元数据只升不降；§3.3.5 现存 run 的 drain 和归档、保留对截断尾行的容忍、操作锁沿用现有 flock；SwarmAI 的 `pipeline.toml` 移到 S4；G1 把 git 列为前置条件并加 onboarding 检查；`background_command_guard` / `image_read_dedup_guard` 删还是改提示列为待定。
 - S1（2026-10-24）：`scripts/verify_installer.sh` 落地，v2.3.0 红（C3 没有清单、C4 没有后端、C13 app 签名损坏）；S2 必须给整个 .app 做 ad-hoc 签名；发布结论只在干净 VM / CI 上得出。
+- r15（XG）：P3 增加"保护 session 本身"一类，`background_command_guard`、`image_read_dedup_guard` 保留，S5 后复查；新增 §3.8：native 按需使用隔离 worktree，不默认、不加 gate；S4（2026-10-24）已落地：`e5db08c5a 480f6da36 185debb73 4e1f3e1ee 002f7b4ec de8603c94 77dbc23eb ddf122ec0`。

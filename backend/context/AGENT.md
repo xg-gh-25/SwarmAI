@@ -203,6 +203,12 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
 - **Long-running / background:** a hang IS a failure. Backgrounding needs expected-duration +
   poll + give-up→kill+reroute; `background_command_guard` default-denies backgrounding.
   Never raise a timeout ceiling to PERMIT a longer hang — fix the leak.
+- **Background:** run commands in the FOREGROUND; background only genuine long-lived
+  services (dev server, `--watch`, `tail -f`). A backgrounded command escapes the timeout and
+  can hang forever (`background_command_guard` refuses the rest). Images: read an image once;
+  re-reading an unchanged one only burns tokens (`image_read_dedup_guard`).
+- **Shared checkout:** if another live session has uncommitted changes in the repo I am
+  about to change, work in my own git worktree instead and say so; otherwise edit in place.
 - **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;
   exec @ARGV' … --timeout=60`, or `gtimeout` if present): a run still going at the timeout is
   moved to the background and returns nothing. A per-test `--timeout` doesn't count. Never
