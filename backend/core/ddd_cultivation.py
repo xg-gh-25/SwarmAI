@@ -3,11 +3,11 @@ DDD Cultivation Engine — Tiered Autonomy Model.
 
 Connects Pipeline REFLECT output to DDD documents with graduated autonomy:
 - ADDITIVE changes (new lessons, patterns): auto-applied, logged to changelog
-- RETIRE (evidence-driven delete/rewrite, run_ecc7a32b): a HIGH-CONFIDENCE
-  supersession (unambiguous non-keep-class locate) AUTO-APPLIES reversibly
-  (retire_entry: archive+strip; recovery = archive + git, no .bak), capped at
-  MAX_AUTO_RETIRES_PER_RUN; a
-  borderline / close-runner-up / keep-class one is escalated via the proposal queue
+- RETIRE (delete/rewrite): never automatic. A lesson never proposes a retire (the
+  keyword "supersession" detector that did was removed: none of its proposals was a
+  real supersession). The only producer left is the polarity-flip path in
+  apply_to_ddd for keep-class / ambiguous entries; it escalates, and a human approve
+  applies it via apply_retire_proposal.
 - RISKY appends (protected zones, conversation-derived): escalated via proposal queue
 
 Zero LLM calls — pure keyword heuristic filtering.
@@ -44,44 +44,6 @@ from core.ingestion_gate import self_adversarial_judge
 
 # Maximum proposals generated per pipeline run (prevents noise)
 MAX_PROPOSALS_PER_RUN = 5
-
-# Maximum AUTONOMOUS retires (delete/rewrite) applied per cultivate call
-# (run_ecc7a32b). Bounds the blast radius of confident auto-retire within one
-# _cultivate_proposals invocation. Retire is reversible (archive + git), so a wrong
-# auto-delete is recoverable — but a low cap keeps volume sane + auditable.
-MAX_AUTO_RETIRES_PER_RUN = 2
-
-# SESSION/DAY-wide cap across ALL entrypoints (Gate-2 #3, run_ecc7a32b): the
-# per-call cap above is insufficient — cultivate_from_corrections +
-# cultivate_from_decisions each call _cultivate_proposals separately, so one session could
-# auto-delete 2×3=6 entries. This module-level counter, keyed by (project, UTC
-# date), bounds the TOTAL autonomous retires per project per day across every
-# entrypoint, and self-resets daily. The per-call cap still applies (whichever
-# is hit first). A wrong auto-delete is reversible, but the user is not notified
-# on success — so the true blast-radius ceiling must be honest, not per-call.
-MAX_AUTO_RETIRES_PER_DAY = 3
-_auto_retire_ledger: dict[tuple[str, str], int] = {}
-
-
-def _auto_retire_budget_remaining(project_dir: Path) -> int:
-    """Remaining session/day-wide auto-retire budget for this project (Gate-2 #3).
-
-    Keyed by (project name, UTC date) in a module-level ledger — shared across
-    cultivate_from_corrections/_decisions within one process/day, and
-    self-resetting when the date rolls. Returns how many more autonomous retires
-    are permitted today; 0 → all further confident retires escalate instead.
-    """
-    project = Path(project_dir).name
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    used = _auto_retire_ledger.get((project, today), 0)
-    return max(0, MAX_AUTO_RETIRES_PER_DAY - used)
-
-
-def _record_auto_retire(project_dir: Path) -> None:
-    """Increment the session/day-wide auto-retire ledger (Gate-2 #3)."""
-    project = Path(project_dir).name
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    _auto_retire_ledger[(project, today)] = _auto_retire_ledger.get((project, today), 0) + 1
 
 # Minimum lesson length to be considered for DDD promotion
 MIN_LESSON_LENGTH = 30
@@ -151,23 +113,16 @@ class CultivationProposal:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     ttl_days: int = 14
     status: str = "pending"  # pending | applied | rejected | expired | escalated
-    # ── Evidence-driven DELETE/REWRITE (run_b8f10185; auto-apply run_ecc7a32b) ──
-    # change_type discriminates the "out" side of the knowledge layer from the
-    # default append. A "retire"/"rewrite" is REVERSIBLE (retire_entry: archive →
-    # strip; recovery = archive + git), so a HIGH-CONFIDENCE one (auto_apply_ok, set by a
-    # unambiguous non-keep-class locate) AUTO-APPLIES up to MAX_AUTO_RETIRES_PER_RUN;
-    # a borderline / close-runner-up / keep-class one ESCALATES to the human queue.
-    # Either way it NEVER goes through the append applier (apply_to_ddd hard-refuses
-    # non-append). Defaults to "append" everywhere for backward-compat.
+    # ── DELETE/REWRITE ("out" side of the knowledge layer) ─────────────────────
+    # change_type discriminates a retire/rewrite from the default append. A retire
+    # is REVERSIBLE (retire_entry: archive → strip; recovery = archive + git) and
+    # is never automatic: it escalates to the human queue, and only the approve
+    # router applies it. It NEVER goes through the append applier (apply_to_ddd
+    # hard-refuses non-append).
     change_type: str = "append"  # "append" | "retire" | "rewrite"
     target_title: str = ""  # exact EntryMetadata.title of the entry to retire/rewrite
     evidence: str = ""  # verbatim quote proving the target is falsified/superseded
     replacement_content: str = ""  # rewrite only — new entry text (unused for retire)
-    # run_ecc7a32b: a retire proposal from a HIGH-CONFIDENCE locate (unambiguous +
-    # non-keep-class) may AUTO-APPLY (retire is reversible: archive+bak+strip).
-    # False → the retire ESCALATES to the human queue (borderline / close runner-up
-    # / keep-class). Only meaningful when change_type != "append".
-    auto_apply_ok: bool = False
     # run_171a17c2: ADVISORY contradiction signal for APPEND proposals. When
     # detect_contradiction found this append polarity-flips a same-topic curated
     # entry, this holds ContradictionFlag.to_dict() ({conflicting_title, section,
@@ -210,7 +165,6 @@ class CultivationProposal:
             "target_title": self.target_title,
             "evidence": self.evidence,
             "replacement_content": self.replacement_content,
-            "auto_apply_ok": self.auto_apply_ok,
             "contradiction_flag": self.contradiction_flag,
             "passed_adversarial_gate": self.passed_adversarial_gate,
             "trust_source": self.trust_source,
@@ -239,7 +193,6 @@ class CultivationProposal:
             target_title=data.get("target_title", ""),
             evidence=data.get("evidence", ""),
             replacement_content=data.get("replacement_content", ""),
-            auto_apply_ok=data.get("auto_apply_ok", False),
             contradiction_flag=data.get("contradiction_flag", None),
             passed_adversarial_gate=data.get("passed_adversarial_gate", "n/a"),
             trust_source=data.get("trust_source", "none"),
@@ -728,16 +681,13 @@ def filter_lessons_for_ddd(
 ) -> List[CultivationProposal]:
     """Filter pipeline REFLECT lessons into DDD cultivation proposals.
 
-    Returns at most MAX_PROPOSALS_PER_RUN proposals. Classification is pure; the
-    ONLY I/O is the optional supersession locator (reads the target doc to find
-    the entry a superseding lesson refutes). Pass project_dir to enable evidence-
-    driven retire proposals; omit it (or None) for the pure append-only behavior
-    (backward-compatible with all existing callers).
-
-    run_b8f10185: a lesson carrying explicit supersession language (_detect_
-    supersession) whose target entry can be located (_locate_target_entry) becomes
-    a change_type='retire' proposal — it will ESCALATE (never auto-apply) and
-    retire the located entry only on human approve. Everything else → append.
+    Returns at most MAX_PROPOSALS_PER_RUN proposals, all change_type='append'. A
+    lesson only ever adds knowledge: it never proposes retiring an entry. The keyword
+    supersession detector that used to (it guessed "this lesson replaces that entry"
+    from words like "replace" / "no longer" plus title-word overlap) produced no real
+    supersession in its whole history; it retired lessons' own entries and unrelated
+    ones. With project_dir, the only I/O is the read-only polarity check
+    (detect_contradiction) that sets contradiction_flag; omit it for pure classify.
     """
     proposals = []
 
@@ -751,32 +701,11 @@ def filter_lessons_for_ddd(
 
         target_doc, target_section, confidence = classification
 
-        # Evidence-driven retire: explicit supersession language AND a locatable
-        # target entry. Fail-safe — no project_dir, no supersession marker, or no
-        # located target → plain append. run_ecc7a32b: a HIGH-CONFIDENCE locate
-        # (unambiguous + non-keep-class) sets auto_apply_ok → the retire AUTO-
-        # APPLIES (reversible); a borderline/keep-class locate → auto_apply_ok
-        # False → the retire ESCALATES to the human queue.
-        change_type = "append"
-        target_title = ""
-        evidence = ""
-        auto_apply_ok = False
+        # Polarity check (run_171a17c2): a lesson that flips a same-topic curated
+        # entry gets contradiction_flag. Read-only here; apply_to_ddd acts on the
+        # flag. Only when project_dir is given (pure callers keep zero I/O).
         contradiction_flag = None
-        if project_dir is not None and _detect_supersession(lesson):
-            located = _locate_target_entry(lesson, target_doc, project_dir)
-            if located is not None:
-                target_title, target_section, confident = located
-                change_type = "retire"
-                evidence = lesson.strip()
-                auto_apply_ok = confident
-
-        # run_171a17c2: ADVISORY contradiction detection on the APPEND path only.
-        # A retire already handles a self-declared supersession; here we catch the
-        # OTHER case — a non-superseding append that silently polarity-flips a
-        # same-topic curated entry. Read-only, non-blocking: sets an advisory flag,
-        # never changes change_type, never retires. Only when project_dir is given
-        # (pure append-only callers with project_dir=None keep zero-I/O behavior).
-        if change_type == "append" and project_dir is not None:
+        if project_dir is not None:
             _flag = detect_contradiction(lesson, target_doc, project_dir)
             if _flag is not None:
                 contradiction_flag = _flag.to_dict()
@@ -795,10 +724,6 @@ def filter_lessons_for_ddd(
             source_run_id=run_id,
             confidence=confidence,
             trust_source=("inherited_gate2" if _creation_trust == "passed" else "none"),
-            change_type=change_type,
-            target_title=target_title,
-            evidence=evidence,
-            auto_apply_ok=auto_apply_ok,
             contradiction_flag=contradiction_flag,
             # Component B: stamp trust from the source run's Gate-2 outcome at creation.
             # Fail-closed to "n/a" when project_dir is None (pure-classify callers) or the
@@ -1159,7 +1084,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
                     source_run_id=proposal.source_run_id,
                     confidence=proposal.confidence, change_type="retire",
                     target_title=_old_title, evidence=proposal.content.strip(),
-                    auto_apply_ok=False, status="escalated",
+                    status="escalated",
                 )
                 write_proposal(_retire, project_dir)
                 # new entry still appends below; the OLD stays until human approves.
@@ -1276,67 +1201,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     # (run_24d9f714 inode-race fix, preserved by construction).
 
 
-# ── Evidence-driven supersession detection + retire (run_b8f10185; ────────────
-# ── auto-apply run_ecc7a32b) ──────────────────────────────────────────────────
-# The "out" side of cultivation: when a lesson explicitly says a PRIOR entry is
-# now false/superseded, retire that entry instead of only appending a
-# contradicting bullet. Conservative by construction: fires ONLY on explicit
-# supersession LANGUAGE (never similarity/embeddings — "do-not-delete-on-guesses"),
-# locates the target by EXACT parsed (title, section). A HIGH-CONFIDENCE locate
-# (unambiguous + non-keep-class) AUTO-APPLIES the retire (reversible: archive+bak+
-# strip), capped at MAX_AUTO_RETIRES_PER_RUN; a borderline / close-runner-up /
-# keep-class locate ESCALATES to the human queue.
-#
-# Scope (run_b8f10185 BLOCKER-2, verified): supersession detection is wired ONLY
-# into the filter_lessons_for_ddd (reflect/correction/decision-lesson) path. The
-# other 5 CultivationProposal producers (signal_ddd_bridge, code_intel_feed,
-# code_change_feed, ddd_orchestrator, conversation) stay append-only — they never
-# get retire detection. This is deliberate: the reflect path is where a human-
-# authored "X was wrong, now Y" lesson arrives; the feed producers emit additive
-# drift signals, not supersession claims.
-#
-# Target format (run_b8f10185 BLOCKER-1, verified): retire_entry matches entries
-# with a **bold title** (_ENTRY_RE / _ENTRY_RE_PROSE). It therefore can retire
-# human/distill-authored **Title** entries and curated prose bullets — NOT the
-# plain-bullet entries apply_to_ddd itself writes (those have no bold title and are
-# invisible to parse_entries). _locate_target_entry uses parse_entries(include_
-# prose=True) so it returns the SAME exact (title, section) retire_entry will match.
-
-# Explicit supersession/contradiction language. Anchored to whole words; requires
-# an explicit "this replaces/invalidates prior knowledge" signal, NOT mere novelty.
-_SUPERSESSION_RE = re.compile(
-    r"(?i)("
-    r"\bno longer\b|\bused to\b|"
-    r"\breplaces?\b|\bsupersed(?:e|es|ed)\b|\bobsoletes?\b|\bwas wrong\b|"
-    r"\bpreviously .*\bnow\b|"
-    r"\bdeprecat(?:e|es|ed)\b|\bcontradicts?\b|"
-    r"不再|已废弃|取代|已过时|已失效|之前.*现在"
-    r")"
-    # Gate-2 MED (run_b8f10185): the bare "now (does|is|uses|instead)" branch was
-    # REMOVED — it false-positived on benign additive prose ("the parser now does
-    # full validation", "the API now is stricter"). Supersession requires an
-    # EXPLICIT prior-referent (no longer / replaces / was wrong / superseded),
-    # not mere present-tense novelty. "previously … now …" is kept (explicit
-    # prior-vs-now contrast).
-)
-
-
-def _detect_supersession(lesson: str) -> bool:
-    """True iff the lesson carries EXPLICIT supersession/contradiction language.
-
-    Conservative: this is the ONLY trigger for a retire proposal. Additive lessons
-    (no supersession marker) → False → normal append path (AC4). Zero LLM, zero
-    similarity — a lesson must SAY it invalidates prior knowledge, not merely look
-    similar to an existing entry.
-    """
-    if not lesson or not isinstance(lesson, str):
-        return False
-    return _SUPERSESSION_RE.search(lesson) is not None
-
-
-# ── Topic tokenizer (module-level; extracted from _locate_target_entry's nested
-# ── _tokens/_GENERIC in run_171a17c2 so detect_contradiction can reuse it
-# ── READ-ONLY). Byte-behavior-identical to the former nested version.
+# ── Topic tokenizer used by detect_contradiction (module-level since run_171a17c2).
 # Generic DDD/engineering vocabulary that co-occurs across unrelated entries and
 # carries no TOPIC identity. Gate-2 HIGH (run_b8f10185): without this filter a
 # lesson about topic A matched topic B on shared structural words ("recovery"+
@@ -1360,8 +1225,7 @@ _ENTRY_GENERIC = frozenset({
 def _entry_tokens(text: str) -> set[str]:
     """Lowercase topic tokens (Latin ≥4 chars / CJK ≥2 chars) minus _ENTRY_GENERIC.
     Used for TOPIC identity only — NOT for polarity (polarity words are in the
-    denylist by design). Module-level so both _locate_target_entry and
-    detect_contradiction share one tokenizer (run_171a17c2 extract)."""
+    denylist by design)."""
     return {
         w for w in re.findall(r"[a-zA-Z_]{4,}|[一-鿿]{2,}", text.lower())
         if w not in _ENTRY_GENERIC
@@ -1452,7 +1316,7 @@ def detect_contradiction(
     NEVER calls an LLM/embedding. Fail-safe: any missing doc / parse error → None.
 
     Two-stage, both conservative (run_171a17c2, Gate-1 hardened):
-      1. TOPIC pre-filter — reuse _entry_tokens (same denylist as _locate_target_entry)
+      1. TOPIC pre-filter — _entry_tokens
          to find the strongest same-topic curated entry: ≥2 non-generic token overlap
          AND ≥50% coverage AND a distinguishing (doc-frequency-1) shared token. This is
          the SAME strength gate the locate engine uses to avoid cross-topic collisions.
@@ -1497,7 +1361,7 @@ def detect_contradiction(
         for w in tt:
             doc_freq[w] = doc_freq.get(w, 0) + 1
 
-    # Stage 1: strongest same-topic entry (same floor as _locate_target_entry).
+    # Stage 1: strongest same-topic entry (≥2 overlap, ≥50% coverage).
     best = None
     best_shared: set[str] = set()
     best_score = 0
@@ -1543,151 +1407,18 @@ def detect_contradiction(
     return None
 
 
-def _locate_target_entry(
-    lesson: str, target_doc: str, project_dir: Path
-) -> "tuple[str, str, bool] | None":
-    """Locate the existing entry a superseding lesson refutes.
-
-    Returns (title, section, confident) — the EXACT (title, section) parsed from
-    the target doc (the identity retire_entry matches on) plus a CONFIDENCE flag —
-    or None if no candidate clears the locate floor.
-
-    Two thresholds on ONE overlap score (run_ecc7a32b, deliberately NOT a 3-way
-    taxonomy — the engine already hard-refuses ambiguous-identity and keep-class,
-    so this layer only decides auto-vs-escalate for a located entry):
-
-      • locate floor (return non-None): ≥2 non-generic overlap AND ≥50% coverage.
-      • confident=True (caller may AUTO-retire, reversible): ≥3 overlap AND ≥60%
-        coverage AND a clear MARGIN over the 2nd-best candidate (≥2) AND the target
-        is NOT keep-class. The margin is the ONE check that buys real safety — the
-        token scorer (unlike retire_entry's exact-identity match) CAN confuse two
-        distinct-titled entries, so "clearly THIS one, not the runner-up" is what
-        separates auto from escalate.
-      • confident=False → caller ESCALATES to the human queue (borderline, close
-        runner-up, or keep-class). Keep-class routing here is UX (avoid a loud
-        retire_failed) — SAFETY is already guaranteed by retire_entry's force=False
-        refusal, verified Gate-0 (ddd_entry_lifecycle.py:1128).
-
-    Scoring: keyword overlap between the lesson and each parsed entry's title.
-    Uses parse_entries(include_prose=True) so both **bold** entries and curated
-    prose bullets are candidates. Fail-safe: no doc/entries/overlap → None → append.
-    """
-    # PATH CONFINEMENT + six-section resolver (READ, strangler-aware) — see
-    # _confined_doc_path. The (title, section) this returns becomes the identity
-    # retire_entry then matches on, so an out-of-tree read here would hand the
-    # destructive sink a target parsed from a file outside the project.
-    doc_path = _confined_doc_path(project_dir, target_doc)
-    if doc_path is None:
-        return None
-    try:
-        from core.ddd_entry_lifecycle import (
-            parse_entries, is_keep_class, MEMORY_EVERGREEN_SECTIONS,
-        )
-        content = doc_path.read_text(encoding="utf-8")
-    except (OSError, ImportError, UnicodeDecodeError):
-        return None
-
-    entries = parse_entries(content, include_prose=True)
-    if not entries:
-        return None
-
-    # Tokenize into topic tokens via the module-level _entry_tokens (extracted
-    # run_171a17c2 so detect_contradiction can reuse the SAME topic-identity
-    # denylist read-only, without duplicating it). Byte-behavior-identical to the
-    # former nested _tokens/_GENERIC. See _ENTRY_GENERIC / _entry_tokens above.
-    _tokens = _entry_tokens
-
-    lesson_tokens = _tokens(lesson)
-    if not lesson_tokens:
-        return None
-
-    # Document-frequency of each title token across ALL entries in the doc.
-    # Gate-2 #1 (run_ecc7a32b): the hand-maintained _GENERIC denylist is provably
-    # incomplete — a title of non-denylisted-but-structural words ("stage layer
-    # module logic") auto-deleted on a coincidental phrase. A token that appears
-    # in MANY entry titles carries no identifying power REGARDLESS of the denylist.
-    # So confidence additionally requires a DISTINGUISHING token: one the lesson
-    # shares with the target whose doc-frequency is 1 (unique to this entry's
-    # title). This is denylist-independent and derived from the real corpus.
-    _title_tok_lists = [_tokens(e.title) for e in entries]
-    _doc_freq: dict[str, int] = {}
-    for _tt in _title_tok_lists:
-        for _w in _tt:
-            _doc_freq[_w] = _doc_freq.get(_w, 0) + 1
-
-    best_entry: "EntryMetadata | None" = None
-    best_title_tokens: set[str] = set()
-    best_score = 0
-    best_ratio = 0.0
-    second_score = 0  # 2nd-best overlap — margin gates auto-retire (Gate-0)
-    for e, title_tokens in zip(entries, _title_tok_lists):
-        if not title_tokens:
-            continue
-        overlap = len(lesson_tokens & title_tokens)
-        # Ratio guards against a long lesson coincidentally overlapping a short
-        # title on a couple of topic words: at least HALF the entry's topic
-        # tokens must be present in the lesson.
-        ratio = overlap / len(title_tokens)
-        if overlap > best_score or (overlap == best_score and ratio > best_ratio):
-            second_score = best_score  # demote former best to runner-up
-            best_score = overlap
-            best_ratio = ratio
-            best_entry = e
-            best_title_tokens = title_tokens
-        elif overlap > second_score:
-            second_score = overlap
-
-    # Locate floor: ≥2 non-generic overlap AND ≥50% coverage. Below → None → append
-    # (conservative: never target an entry on a weak guess).
-    if best_entry is None or best_score < 2 or best_ratio < 0.5:
-        return None
-
-    # Confident (auto-retire eligible): strong overlap + strong coverage + clear
-    # margin over the runner-up + NOT keep-class. Any miss → escalate (confident
-    # =False). Keep-class → escalate (UX: retire_entry would refuse force=False).
-    #
-    # Gate-2 #1 (run_ecc7a32b): a DISTINGUISHING token — one the lesson shares
-    # with the target whose doc-frequency is 1 (unique to this entry's title
-    # across the whole doc). Without it, a title made of structural words shared
-    # doc-wide ("stage layer module logic") auto-deletes on a coincidental phrase.
-    # A unique shared token proves the lesson is about THIS entry, not a generic
-    # collision — denylist-independent, derived from the corpus. Prose/curated
-    # entries (which parse_entries yields with include_prose) participate too.
-    has_distinguishing = any(
-        _doc_freq.get(w, 0) == 1 for w in (lesson_tokens & best_title_tokens)
-    )
-
-    # Gate-2 (run_ecc7a32b): is_keep_class MUST receive MEMORY_EVERGREEN_SECTIONS
-    # — the SAME strict default retire_entry uses (ddd_entry_lifecycle.py:1127).
-    # Without it, is_keep_class's rule-1 (evergreen SECTION) is silently dead
-    # here, so a guideline-TYPE entry in an evergreen section (Open Threads /
-    # Standing Preferences) would be marked confident → auto-apply → retire_entry
-    # then REFUSES it (retire_failed) → needless escalation + a scary log line
-    # every run. Passing the evergreen set makes the confidence gate agree with
-    # the engine: such an entry is keep-class → confident=False → escalate cleanly.
-    confident = (
-        best_score >= 3
-        and best_ratio >= 0.6
-        and (best_score - second_score) >= 2
-        and has_distinguishing
-        and not is_keep_class(best_entry, evergreen_sections=MEMORY_EVERGREEN_SECTIONS)
-    )
-    return (best_entry.title, best_entry.section, confident)
-
-
 def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply a retire/rewrite proposal via the reversible retire_entry
     machinery (archive → identity-strip; recovery = archive + git). The sibling of apply_to_ddd
-    for the "out" side. Two callers (run_ecc7a32b): (1) _cultivate_proposals for a
-    HIGH-CONFIDENCE (auto_apply_ok) retire — autonomous, reversible; (2) the approve
-    router for a human-approved escalated retire. retire_entry is fail-loud (no
-    match / ambiguous / keep-class → RetireError, NO strip) so both callers are safe.
+    for the "out" side. One caller: the approve router, for a human-approved
+    escalated retire (nothing applies a retire automatically). retire_entry is
+    fail-loud (no match / ambiguous / keep-class → RetireError, NO strip).
 
     Returns a status string (parallel to apply_to_ddd):
       - "retired"      — the named (title, section) entry was archived + stripped
       - "rewritten"    — retired, then replacement_content appended (rewrite)
       - "not_retire"   — proposal.change_type is not retire/rewrite (guard)
-      - "no_target"    — target_title empty (locator found nothing — never retire)
+      - "no_target"    — target_title empty (never retire)
       - "doc_missing"  — target document file does not exist
       - "retire_failed:<reason>" — retire_entry raised RetireError (fail-loud:
                          no match / ambiguous duplicate / keep-class refused)
@@ -2446,7 +2177,6 @@ def record_cultivation_outcome(project_dir: Path, result: dict) -> None:
             "rejected": int(result.get("rejected", 0)),
             "write_failed": int(result.get("write_failed", 0)),
             "escalated": int(result.get("escalated", 0)),
-            "retired": int(result.get("retired", 0)),
             # The outcome this sink used to be blind to. An entry the admission band
             # DECLINED (below the confidence floor, judged suspect, noise, oversized)
             # was archived to a recoverable file and the loop moved on without
@@ -2617,7 +2347,7 @@ def _cultivate_proposals(
 
     Returns:
         {"applied": N, "escalated": M, "rejected": K, "write_failed": W,
-         "retired": R, "skipped_protected": S, "drift_errors": [...]}
+         "skipped_protected": S, "drift_errors": [...]}
 
     skipped_protected (run_97519f7c): proposals dropped because their target is a
     protected zone (human-distill-only) — NOT escalated (that would be a
@@ -2634,15 +2364,13 @@ def _cultivate_proposals(
     silently counting it as a benign "rejected". See apply_to_ddd docstring /
     run_45ab67c7 root cause.
 
-    run_ecc7a32b: a HIGH-CONFIDENCE retire proposal (auto_apply_ok) AUTO-APPLIES
-    via apply_retire_proposal (reversible: archive+bak+strip), up to
-    MAX_AUTO_RETIRES_PER_RUN; beyond the cap, or if not confident, it ESCALATES.
+    A retire/rewrite proposal is never applied here; it always escalates to the
+    human queue (the approve router applies it).
     """
     applied = 0
     escalated = 0
     rejected = 0
     write_failed = 0
-    retired = 0
     skipped_protected = 0
     # A DECLINED entry is an outcome, not an absence of one. Every discard site below
     # archives the entry to a recoverable sink and continues; before these counters
@@ -2687,59 +2415,13 @@ def _cultivate_proposals(
             write_proposal(proposal, project_dir)
             escalated += 1
             continue
-        # Evidence-driven RETIRE (run_ecc7a32b): confident + under the per-run cap
-        # → auto-apply (reversible). Not confident, or cap reached → escalate. The
-        # cap bounds blast radius. retire NEVER goes through the append branch
-        # below — apply_to_ddd hard-refuses it (defense-in-depth).
+        # A retire/rewrite deletes knowledge: never automatic, always a human
+        # decision. It never goes through the append branch below (apply_to_ddd
+        # hard-refuses it anyway).
         if proposal.change_type in ("retire", "rewrite"):
-            # Auto-apply eligibility (all must hold):
-            #  - confident locate (auto_apply_ok)
-            #  - change_type == "retire" ONLY. rewrite ALWAYS escalates (Gate-2 #5):
-            #    filter_lessons_for_ddd never emits rewrite today, and the rewrite
-            #    branch has a delete-then-failed-append partial-state trap — so
-            #    autonomous rewrite is disallowed; a human approves it.
-            #  - under BOTH the per-call cap AND the session/day-wide cap (#3).
-            _day_budget = _auto_retire_budget_remaining(project_dir)
-            _eligible = (
-                proposal.auto_apply_ok
-                and proposal.change_type == "retire"
-                and retired < MAX_AUTO_RETIRES_PER_RUN
-                and _day_budget > 0
-            )
-            if _eligible:
-                status = apply_retire_proposal(proposal, project_dir)
-                if status == "retired":
-                    # Loud, user-auditable record of an AUTONOMOUS delete (Gate-2:
-                    # a wrong auto-delete is reversible only if someone can NOTICE
-                    # it — so every auto-retire is logged at WARNING with the exact
-                    # (doc, title) + the evidence that triggered it).
-                    logger.warning(
-                        "[AUTO-RETIRE] autonomously retired DDD entry (reversible: "
-                        "archived + git): %s § %s | evidence=%s | run=%s",
-                        proposal.target_doc, proposal.target_title,
-                        proposal.evidence[:120].replace("\n", "\\n"),
-                        proposal.source_run_id,
-                    )
-                    proposal.status = STATUS_APPROVED
-                    log_application(proposal, project_dir)
-                    _record_auto_retire(project_dir)
-                    retired += 1
-                else:
-                    # Fail-loud outcome (retire_failed / no_target / doc_missing):
-                    # do NOT silently drop — escalate so a human sees the miss.
-                    logger.warning(
-                        "Auto-retire did not apply (status=%s) → escalating: %s § %s",
-                        status, proposal.target_doc, proposal.target_title,
-                    )
-                    proposal.status = "escalated"
-                    write_proposal(proposal, project_dir)
-                    escalated += 1
-            else:
-                # Not confident, rewrite, or a cap (per-call OR day-wide) reached →
-                # human queue.
-                proposal.status = "escalated"
-                write_proposal(proposal, project_dir)
-                escalated += 1
+            proposal.status = "escalated"
+            write_proposal(proposal, project_dir)
+            escalated += 1
             continue
         # ── Admission decision band (Component C, run_8d5fe9d1) ──────────────────
         # TRUST replaces the old doc-whitelist (is_safe_append/_PROTECTED_ZONES): a
@@ -2816,7 +2498,6 @@ def _cultivate_proposals(
         "escalated": escalated,
         "rejected": rejected,
         "write_failed": write_failed,
-        "retired": retired,
         "skipped_protected": skipped_protected,
         # NOT merged into "rejected". A reject is the brain reading the entry and
         # declining it on content; a discard is the ADMISSION BAND refusing to judge
@@ -2837,7 +2518,7 @@ def _cultivate_proposals(
     # batch is the single most important one to record, and it was precisely the one
     # this guard threw away — every other outcome was zero, so the batch looked empty
     # while the recoverable archive filled up unobserved.
-    if (applied or escalated or rejected or write_failed or retired
+    if (applied or escalated or rejected or write_failed
             or skipped_protected or discarded):
         record_cultivation_outcome(project_dir, result)
     return result
@@ -2862,8 +2543,7 @@ def cultivate_from_corrections(
     source_stage="correction" for changelog attribution.
 
     Returns:
-        {"applied": N, "escalated": M, "rejected": K, "retired": R, "drift_errors": [...]}
-        (retired = confident auto-retires applied this run — run_ecc7a32b)
+        {"applied": N, "escalated": M, "rejected": K, "drift_errors": [...]}
     """
     proposals = filter_lessons_for_ddd(corrections, session_id, project, project_dir)
 
@@ -2917,8 +2597,7 @@ def cultivate_from_decisions(
     source_stage="decision" for changelog attribution.
 
     Returns:
-        {"applied": N, "escalated": M, "rejected": K, "retired": R, "drift_errors": [...]}
-        (retired = confident auto-retires applied this run — run_ecc7a32b)
+        {"applied": N, "escalated": M, "rejected": K, "drift_errors": [...]}
     """
     proposals = filter_lessons_for_ddd(decisions, session_id, project, project_dir)
     for p in proposals:

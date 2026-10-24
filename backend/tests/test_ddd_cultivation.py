@@ -813,7 +813,7 @@ class TestCultivateFromCorrections:
             # break here rather than reach the sink unnoticed.
             assert result == {
                 "applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0,
-                "retired": 0, "skipped_protected": 0,
+                "skipped_protected": 0,
                 "discarded": 0, "discard_reasons": {},
                 "drift_errors": [],
             }
@@ -875,7 +875,7 @@ class TestCultivateFromDecisions:
             # break here rather than reach the sink unnoticed.
             assert result == {
                 "applied": 0, "escalated": 0, "rejected": 0, "write_failed": 0,
-                "retired": 0, "skipped_protected": 0,
+                "skipped_protected": 0,
                 "discarded": 0, "discard_reasons": {},
                 "drift_errors": [],
             }
@@ -1088,89 +1088,25 @@ class TestEvidenceDrivenRetire:
     the behavior, don't assert a mocked shape).
     """
 
-    # ── AC1: supersession language → change_type='retire', not append ──────────
-    def test_detect_supersession_positive(self):
-        from core.ddd_cultivation import _detect_supersession
-        assert _detect_supersession("The vector recall leg is no longer used — torn out")
-        assert _detect_supersession("This replaces the old hybrid scorer entirely")
-        assert _detect_supersession("The 0.7 threshold claim was wrong; it's actually 0.15")
-        assert _detect_supersession("recall 现在不再使用 vector leg,已废弃")
-        assert _detect_supersession("This supersedes the prior COE06 diagnosis")
-
-    def test_detect_supersession_negative(self):
-        from core.ddd_cultivation import _detect_supersession
-        # Additive lessons — no supersession marker → False (AC4)
-        assert not _detect_supersession("Adversarial sub-agent caught a race condition")
-        assert not _detect_supersession("Gate-1 plan-attack found 2 blockers before code")
-        assert not _detect_supersession("")
-        assert not _detect_supersession(None)
-
-    # ── AC2: locator returns the EXACT parsed (title, section) ─────────────────
-    def test_locate_target_entry_finds_real_entry(self, tmp_path):
-        from core.ddd_cultivation import _locate_target_entry
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text(
-            "## What Worked\n\n"
-            "- [guideline] **Vector recall hybrid scorer works well** — the 0.6v+0.4k blend\n\n"
-            "- [guideline] **Session resume race condition fixed** — DEAD idempotent recovery\n\n"
-            "## What Failed\n\n"
-            "- [pitfall] **Unrelated topic here** — something about frontend rendering\n",
-            encoding="utf-8",
-        )
-        # Lesson refutes the vector recall entry — strong unambiguous overlap.
-        located = _locate_target_entry(
-            "The vector recall hybrid scorer is no longer used — torn out",
-            "IMPROVEMENT.md", tmp_path,
-        )
-        assert located is not None
-        title, section, confident = located
-        assert "Vector recall hybrid scorer" in title
-        assert section == "What Worked"
-        # ≥3 overlap (vector/recall/hybrid/scorer), ≥60% coverage, clear margin
-        # over the unrelated runner-up, non-keep-class → confident (auto-eligible).
-        assert confident is True
-
-    def test_locate_target_entry_weak_overlap_returns_none(self, tmp_path):
-        """<2 token overlap → None → append (never retire on a weak guess)."""
-        from core.ddd_cultivation import _locate_target_entry
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text(
-            "## What Worked\n\n- [guideline] **Frontend reconcile race fix** — store authority\n",
-            encoding="utf-8",
-        )
-        located = _locate_target_entry(
-            "Something totally unrelated about database indexing performance now replaces old",
-            "IMPROVEMENT.md", tmp_path,
-        )
-        assert located is None
-
-    def test_locate_target_entry_no_doc_returns_none(self, tmp_path):
-        from core.ddd_cultivation import _locate_target_entry
-        assert _locate_target_entry("x replaces y no longer", "NOPE.md", tmp_path) is None
-
     # ── AC1+AC2+AC4: full filter path produces retire vs append ────────────────
-    def test_filter_produces_retire_proposal(self, tmp_path):
+    def test_a_lesson_never_proposes_a_retire(self, tmp_path):
+        """Lessons only add. Wording that used to trigger a retire of a matching
+        entry (each of these once targeted a real or unrelated entry) now appends."""
         from core.ddd_cultivation import filter_lessons_for_ddd, _classify_lesson
         doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text(
-            "## What Worked\n\n"
-            "- [guideline] **Adversarial gate scorer approach worked** — caught race conditions\n",
-            encoding="utf-8",
-        )
-        # Lesson must (a) classify to a doc/section (routing keyword 'adversarial'
-        # → IMPROVEMENT) AND (b) carry supersession language AND (c) share ≥2 topic
-        # tokens with the seeded entry title. Precondition-assert (a) so the test
-        # can't silently go vacuous if routing changes.
-        lesson = ("The adversarial gate scorer approach is no longer used — "
-                  "the old approach was wrong, superseded by mutation testing")
-        assert _classify_lesson(lesson, project="SwarmAI") is not None
-        proposals = filter_lessons_for_ddd([lesson], "run_test", "SwarmAI", tmp_path)
-        assert len(proposals) == 1
-        p = proposals[0]
-        assert p.change_type == "retire"
-        assert p.target_title  # non-empty located title
-        assert "Adversarial gate scorer approach" in p.target_title
-        assert p.evidence  # verbatim lesson captured
+        body = ("## What Worked\n\n"
+                "- [guideline] **Adversarial gate scorer approach worked** — caught race conditions\n")
+        doc.write_text(body, encoding="utf-8")
+        for lesson in (
+            "The adversarial gate scorer approach is no longer used — "
+            "the old approach was wrong, superseded by mutation testing",
+            "Adversarial gate scorer approach: use os.replace for the write",
+        ):
+            assert _classify_lesson(lesson, project="SwarmAI") is not None
+            got = filter_lessons_for_ddd([lesson], "run_test", "SwarmAI", tmp_path)
+            assert [p.change_type for p in got] == ["append"], lesson
+            assert got[0].target_title == "" and got[0].evidence == ""
+        assert doc.read_text(encoding="utf-8") == body
 
     def test_filter_additive_lesson_stays_append(self, tmp_path):
         """AC4: no supersession marker → append even with project_dir passed."""
@@ -1386,263 +1322,27 @@ class TestEvidenceDrivenRetire:
         assert p2.replacement_content == "new text"
 
 
-class TestConfidentAutoRetire:
-    """run_ecc7a32b — HIGH-CONFIDENCE retire AUTO-APPLIES (reversible); borderline
-    / keep-class / over-cap ESCALATES. Drives the REAL _cultivate_proposals +
-    apply_retire_proposal + retire_entry against real temp docs (no mocks)."""
+class TestRetireNeverAutomatic:
+    """A retire proposal deletes knowledge, so it is never applied automatically,
+    however strong its match: it escalates and the doc is untouched."""
 
-    def _doc(self, tmp_path, body):
-        d = tmp_path / "IMPROVEMENT.md"
-        d.write_text(body, encoding="utf-8")
-        return d
-
-    # ── confident locate → auto_apply_ok True + actually deletes ───────────────
-    def test_confident_retire_auto_applies(self, tmp_path):
+    def test_a_strong_retire_escalates_and_deletes_nothing(self, tmp_path):
         from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-        doc = self._doc(
-            tmp_path,
+        doc = tmp_path / "IMPROVEMENT.md"
+        doc.write_text(
             "## What Worked\n\n"
-            "- [guideline] **Vector recall hybrid scorer blend leg** — 0.6v 0.4k\n\n"
-            "- [guideline] **Frontend reconcile store authority render** — layer six\n",
-        )
-        original = doc.read_text(encoding="utf-8")
+            "- [guideline] **Vector recall hybrid scorer blend leg** — 0.6v 0.4k\n",
+            encoding="utf-8")
+        before = doc.read_text(encoding="utf-8")
         p = CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="retire",
-            target_title="Vector recall hybrid scorer blend leg",
-            evidence="torn out", auto_apply_ok=True,
-        )
+            content="c", source_run_id="r", confidence=0.99, change_type="retire",
+            target_title="Vector recall hybrid scorer blend leg", evidence="torn out")
         result = _cultivate_proposals([p], tmp_path)
-        assert result["retired"] == 1, result
-        assert result["escalated"] == 0
-        after = doc.read_text(encoding="utf-8")
-        assert "Vector recall hybrid scorer blend leg" not in after  # deleted
-        assert "Frontend reconcile store authority render" in after  # sibling kept
-        # Reversible via the ARCHIVE (recovery path 1) — NOT a .bak (run_a6482355:
-        # the dated .bak was a graveyard-silting third copy, removed; Principle 1).
-        assert (tmp_path / "IMPROVEMENT-archive.md").exists()
-        assert list(tmp_path.glob("IMPROVEMENT.md.*.bak")) == []
-        assert original != after
-
-    # ── borderline (auto_apply_ok False) → escalate, doc untouched ─────────────
-    def test_unconfident_retire_escalates(self, tmp_path):
-        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-        doc = self._doc(
-            tmp_path,
-            "## What Worked\n\n- [guideline] **Some entry title here** — body\n",
-        )
-        original = doc.read_text(encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="retire", target_title="Some entry title here",
-            evidence="ev", auto_apply_ok=False,  # borderline
-        )
-        result = _cultivate_proposals([p], tmp_path)
-        assert result["escalated"] == 1
-        assert result["retired"] == 0
-        assert doc.read_text(encoding="utf-8") == original  # untouched
-        assert list((tmp_path / ".artifacts" / "proposals").glob("*.json"))
-
-    # ── per-run cap: >MAX_AUTO_RETIRES_PER_RUN confident retires → rest escalate ─
-    def test_auto_retire_capped_per_run(self, tmp_path):
-        from core.ddd_cultivation import (
-            _cultivate_proposals, CultivationProposal, MAX_AUTO_RETIRES_PER_RUN,
-        )
-        # Seed N+1 distinct entries, all confident retires.
-        n = MAX_AUTO_RETIRES_PER_RUN + 1
-        body = "## What Worked\n\n" + "".join(
-            f"- [guideline] **Alpha bravo charlie topic number {i}** — body {i}\n\n"
-            for i in range(n)
-        )
-        self._doc(tmp_path, body)
-        props = [
-            CultivationProposal(
-                target_doc="IMPROVEMENT.md", target_section="What Worked",
-                content=f"c{i}", source_run_id="r", confidence=0.9,
-                change_type="retire",
-                target_title=f"Alpha bravo charlie topic number {i}",
-                evidence="ev", auto_apply_ok=True,
-            )
-            for i in range(n)
-        ]
-        result = _cultivate_proposals(props, tmp_path)
-        assert result["retired"] == MAX_AUTO_RETIRES_PER_RUN
-        assert result["escalated"] == n - MAX_AUTO_RETIRES_PER_RUN  # overflow queued
-
-    # ── auto-retire that fails-loud (no match) → escalate, NOT silent drop ──────
-    def test_auto_retire_failed_match_escalates(self, tmp_path):
-        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-        doc = self._doc(
-            tmp_path, "## What Worked\n\n- [guideline] **Real entry present** — body\n",
-        )
-        original = doc.read_text(encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="retire",
-            target_title="Title that does not exist anywhere",  # will fail-loud
-            evidence="ev", auto_apply_ok=True,
-        )
-        result = _cultivate_proposals([p], tmp_path)
-        # Fail-loud retire_entry → not retired, escalated (never silently dropped)
-        assert result["retired"] == 0
-        assert result["escalated"] == 1
-        assert doc.read_text(encoding="utf-8") == original  # nothing stripped
-
-    # ── keep-class target is never auto-confident (locator sets confident False) ─
-    def test_keep_class_target_not_confident(self, tmp_path):
-        from core.ddd_cultivation import _locate_target_entry
-        # A decision-type entry (keep-class) with strong overlap must NOT be
-        # confident → escalate, not auto-delete.
-        d = tmp_path / "MEMORY.md"
-        d.write_text(
-            "## Decisions\n\n"
-            "- [decision] **Adopt vector recall hybrid scorer blend leg** — chosen 0.6v\n",
-            encoding="utf-8",
-        )
-        located = _locate_target_entry(
-            "The vector recall hybrid scorer blend leg decision is no longer valid — superseded",
-            "MEMORY.md", d.parent if False else tmp_path,
-        )
-        assert located is not None
-        _, _, confident = located
-        assert confident is False  # keep-class → never auto (engine would refuse too)
-
-    # ── full filter path: confident supersession lesson sets auto_apply_ok ──────
-    def test_filter_sets_auto_apply_ok_on_confident(self, tmp_path):
-        from core.ddd_cultivation import filter_lessons_for_ddd, _classify_lesson
-        self._doc(
-            tmp_path,
-            "## What Worked\n\n"
-            "- [guideline] **Adversarial gate scorer mutation approach** — caught races\n\n"
-            "- [guideline] **Totally different frontend render topic** — unrelated\n",
-        )
-        lesson = ("The adversarial gate scorer mutation approach is no longer used — "
-                  "was wrong, superseded")
-        assert _classify_lesson(lesson, project="SwarmAI") is not None
-        props = filter_lessons_for_ddd([lesson], "run_t", "SwarmAI", tmp_path)
-        assert len(props) == 1
-        assert props[0].change_type == "retire"
-        assert props[0].auto_apply_ok is True
-
-    # ── Gate-2 #1: distinguishing-token requirement (denylist-independent) ──────
-    def test_shared_structural_tokens_not_confident(self, tmp_path):
-        """A title made only of tokens SHARED across many entries (structural
-        vocabulary) must NOT be auto-confident on a coincidental phrase — even if
-        none are in the _GENERIC denylist. Requires a doc-frequency-1 token."""
-        from core.ddd_cultivation import _locate_target_entry
-        self._doc(
-            tmp_path,
-            "## What Worked\n\n"
-            "- [guideline] **Stage layer module logic** — a\n\n"
-            "- [guideline] **Stage layer module design** — b\n\n"
-            "- [guideline] **Stage layer module render** — c\n",
-        )
-        # Lesson overlaps only the SHARED tokens (stage/layer/module) + a word not
-        # in any title → no distinguishing (doc_freq==1) token → NOT confident.
-        located = _locate_target_entry(
-            "The stage layer module thing is no longer used — superseded",
-            "IMPROVEMENT.md", tmp_path,
-        )
-        if located is not None:
-            assert located[2] is False  # confident must be False (no unique token)
-
-    def test_distinguishing_token_enables_confident(self, tmp_path):
-        """The SAME structural doc, but the lesson names the UNIQUE token
-        ('logic', doc_freq==1) → distinguishing → confident=True (margin also
-        holds: 'logic' pushes best above the shared-only runners-up)."""
-        from core.ddd_cultivation import _locate_target_entry
-        self._doc(
-            tmp_path,
-            "## What Worked\n\n"
-            "- [guideline] **Alpha bravo charlie logic** — a\n\n"
-            "- [guideline] **Delta echo foxtrot render** — b\n",
-        )
-        located = _locate_target_entry(
-            "The alpha bravo charlie logic is no longer used — was wrong, superseded",
-            "IMPROVEMENT.md", tmp_path,
-        )
-        assert located is not None
-        assert located[2] is True  # unique tokens present + clear margin
-
-    # ── Gate-2 #2: keep-class via EVERGREEN SECTION (non-keep type) ─────────────
-    def test_evergreen_section_guideline_not_confident(self, tmp_path):
-        """A guideline-TYPE entry (not a keep-type) sitting in an EVERGREEN
-        SECTION must be confident=False — is_keep_class now receives
-        MEMORY_EVERGREEN_SECTIONS so section-rule-1 fires (matches retire_entry)."""
-        from core.ddd_cultivation import _locate_target_entry
-        d = tmp_path / "MEMORY.md"
-        d.write_text(
-            "## Open Threads\n\n"
-            "- [guideline] **Alpha bravo charlie delta unique topic** — body\n",
-            encoding="utf-8",
-        )
-        located = _locate_target_entry(
-            "The alpha bravo charlie delta unique topic is no longer used — was wrong, superseded",
-            "MEMORY.md", tmp_path,
-        )
-        assert located is not None
-        assert located[2] is False  # evergreen-section → keep-class → escalate
-
-    # ── Gate-2 #3: session/day-wide cap across entrypoints ──────────────────────
-    def test_auto_retire_day_cap_across_calls(self, tmp_path):
-        """MAX_AUTO_RETIRES_PER_DAY bounds the TOTAL autonomous retires per
-        project/day across separate _cultivate_proposals calls (reflect +
-        corrections + decisions). Without it, 3 calls × per-call-cap would delete
-        more than the advertised ceiling."""
-        import core.ddd_cultivation as m
-        from core.ddd_cultivation import (
-            _cultivate_proposals, CultivationProposal, MAX_AUTO_RETIRES_PER_DAY,
-        )
-        m._auto_retire_ledger.clear()
-        body = "## What Worked\n\n" + "".join(
-            f"- [guideline] **Unique alpha bravo topic number{i}** — b{i}\n\n"
-            for i in range(9)
-        )
-        self._doc(tmp_path, body)
-
-        def mk(i):
-            return CultivationProposal(
-                target_doc="IMPROVEMENT.md", target_section="What Worked",
-                content=f"c{i}", source_run_id="r", confidence=0.9,
-                change_type="retire",
-                target_title=f"Unique alpha bravo topic number{i}",
-                evidence="ev", auto_apply_ok=True,
-            )
-
-        total = 0
-        for call in range(3):  # 3 separate entrypoint calls in one "session"
-            r = _cultivate_proposals([mk(call * 3), mk(call * 3 + 1), mk(call * 3 + 2)], tmp_path)
-            total += r["retired"]
-        assert total == MAX_AUTO_RETIRES_PER_DAY  # day cap, NOT 3×per-call-cap
-        m._auto_retire_ledger.clear()  # don't leak ledger into other tests
-
-    # ── Gate-2 #5: rewrite NEVER auto-applies (only retire does) ────────────────
-    def test_rewrite_never_auto_applies(self, tmp_path):
-        """A confident rewrite proposal must ESCALATE, never auto-apply — the
-        rewrite branch has a delete-then-failed-append partial-state trap, so
-        autonomous rewrite is disallowed (a human approves it)."""
-        import core.ddd_cultivation as m
-        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-        m._auto_retire_ledger.clear()
-        doc = self._doc(
-            tmp_path,
-            "## What Worked\n\n- [guideline] **Alpha bravo charlie unique topic** — body\n",
-        )
-        original = doc.read_text(encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="rewrite", target_title="Alpha bravo charlie unique topic",
-            evidence="ev", replacement_content="new text", auto_apply_ok=True,
-        )
-        result = _cultivate_proposals([p], tmp_path)
-        assert result["retired"] == 0
-        assert result["escalated"] == 1
-        assert doc.read_text(encoding="utf-8") == original  # nothing deleted
-        m._auto_retire_ledger.clear()
+        assert result["escalated"] == 1 and result["applied"] == 0
+        assert "retired" not in result
+        assert doc.read_text(encoding="utf-8") == before
+        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
 
 
 class TestNormalizeCultivatedBullet:
@@ -3354,12 +3054,6 @@ class TestWriteTargetConfinement:
         # below means the fence refused — not that there was nothing to find.
         assert "a real rule" in victim.read_text()
 
-        located = dc._locate_target_entry(
-            "the real rule is obsolete and must be replaced now", traversal, project_dir
-        )
-        assert located is None, (
-            f"_locate_target_entry read an out-of-tree document, got {located!r}"
-        )
         flag = dc.detect_contradiction(
             "a real rule is never correct any more", traversal, project_dir
         )

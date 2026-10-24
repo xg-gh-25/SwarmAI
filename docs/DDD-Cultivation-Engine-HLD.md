@@ -922,6 +922,10 @@ in 30 seconds. Next time anyone touches AcmeCorp's API Gateway, this knowledge i
 >   `.bak` → strip, reversible, `auto_apply_ok` for unambiguous non-keep-class, capped
 >   `MAX_AUTO_RETIRES_PER_RUN=2`/`_PER_DAY=3` else escalate. `supersedes`/`lifecycle` already exist as
 >   `VALID_PREDICATES` in `knowledge_graph.py`. There is no "WRITE/supersede" work to build.
+  *(2026-10-24: the lesson-driven retire and its auto-apply were removed. In their history no
+  proposal was a real supersession; they retired lessons' own entries and unrelated ones. A
+  retire now only comes from the polarity-flip path for keep-class / ambiguous entries, and only
+  a human approve applies it.)*
 > - **Defect ④ (archive dead to recall) — REAL, but the number is wrong.** `Knowledge/Archives/MEMORY-archive-*.md`
 >   (~330 KB) ARE in library FTS5. The dead corpus is `Projects/*/IMPROVEMENT-archive.md` (~65 MB, SwarmAI ~48 MB)
 >   which `knowledge_store` does not scan — the fix is scoped to a down-weighted cold FTS5 leg over `Projects/` archives.
