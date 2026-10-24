@@ -138,6 +138,34 @@ The full-equality guard above is therefore not built; the A4 cases that ship wit
 the ones guarding the D4 fix (block keys, a repeated start, a retry into the same bubble)
 plus the two new notice reasons.
 
+**A2 not built (2026-10-24, after its design review).** The design (persist in-turn
+errors and turn-limit as `turn_notice` at one point, `TurnWriter.write`) was reviewed
+fresh-context and its fixes would make it much heavier than the need:
+- `_published_turn` calls `writer.begin()` after the first inner event, and the
+  injected / answer / permission paths write before yielding, so their first error
+  would escape; fixing it moves turn start for every continuation turn (a
+  regression-prone path).
+- "one notice per turn" swallows a real error after a mid-turn `restarted`; the right
+  rule needs a terminal-notice state machine (`gave_up` owns its following error only).
+- the hook's error card (`isError`, `ChatErrorMessage`, code, suggested action) would
+  still render beside the notice; a bubble can hold several turns, so "the bubble holds
+  the notice" is not the current turn's.
+- `turn_limit` is a normal ending with a RESULT; the zones treat every notice as
+  stopped, so it would need reason-specific notice semantics.
+- not every `error` passes `TurnWriter` (`SERIALIZATION_ERROR` is made in
+  `SessionEventHub.publish`, and the turn continues after it): an explicit
+  `ends_turn` marker on errors would be needed.
+Evidence of the need, daemon logs 2026-10-13..10-24: in-turn terminal errors 6
+(`SDK_ERROR` 5, `CONVERSATION_ERROR` 1), `turn_limit_reached` 0. The loss is the
+error text on reload of about one turn every two days. Not worth that surface;
+recorded here so a later attempt starts from these five findings.
+Found on the way, a real defect independent of A2: `retry_manager` emits
+`CONTEXT_TOO_LARGE` then `break`s into the exhausted-retries footer (`gave_up` +
+`ALL_RETRIES_EXHAUSTED`), so the user gets two contradictory failures (0 occurrences
+in the logs; fixable on its own).
+A4 keeps the cases guarding the D4 fix (block keys, a repeated start, a retry into
+the same bubble), which do not depend on A2.
+
 ### A3. One render tree (R4), within a bubble — CONDITIONAL
 Gate: after A0-A2 ship, a remaining end-of-turn jump or remount is observed. The visible
 symptom (the answer moving left) was fixed by `d9c0e0d96`; the move is now vertical
@@ -209,8 +237,9 @@ handler stays) and S3 (reconcile by segment from the record, delete the length r
 1. Split: A0, A1, A2, A4 now. A3 only if an end-of-turn jump remains after A2. Track B
    (durable turn record, one delivery path, record-wins reconcile) only if A0's logs or
    a report show live-only divergence.
-2. A2 (narrowed after A1, see A2's scope table): backend turn errors and turn-limit
-   become persisted `turn_notice`s; `*Stopped*`, transport-error text, the resumed /
+2. A2: not built (see "A2 not built": the reviewed design costs far more than the
+   loss, about one error text per two days on reload). Before that it was narrowed to
+   backend turn errors and turn-limit as persisted `turn_notice`s; `*Stopped*`, transport-error text, the resumed /
    refreshed separators and the compacting record stay as they are (no user loss).
    A4 ships only the block-key / repeated-start / same-bubble-retry cases and the two
    notice reasons; the WebKit script waits for the next visual change.
