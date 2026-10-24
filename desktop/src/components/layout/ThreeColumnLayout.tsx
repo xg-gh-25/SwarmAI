@@ -206,6 +206,25 @@ function LeftSidebar() {
   // affordance (clickable card, all actions 403). Gate the card, not just the poll
   // (meta-review HIGH, run_b450108e).
   const hiveEnabled = isDesktop();
+  // Nav edge fades (index.css .a10-nav[data-fade-*]): written straight on the element
+  // from the scroll position, never through React state, so scrolling the Nav
+  // re-renders nothing.
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const update = () => {
+      const top = el.scrollTop > 1;
+      const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      if (top) el.dataset.fadeTop = ''; else delete el.dataset.fadeTop;
+      if (bottom) el.dataset.fadeBottom = ''; else delete el.dataset.fadeBottom;
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    return () => { el.removeEventListener('scroll', update); ro?.disconnect(); };
+  }, []);
 
   // Open the LATEST signal digest. The digest is written by a scheduled job, so
   return (
@@ -293,7 +312,7 @@ function LeftSidebar() {
           NOTE: Y/R attention flags were removed (2026-08-03) — they were hardcoded
           literals that never cleared (alarm fatigue). Re-add a flag ONLY when it is
           driven by a real signal (a live count/query), never as a static prop. */}
-      <nav className="a10-nav flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
+      <nav ref={navRef} className="a10-nav flex-1 px-2.5 pb-1 overflow-y-auto" data-testid="nav-icons">
         {/* 认知区 — 绿面板容器：无区头、无 scope 文字，靠视觉 + highlight 分层 */}
         <div className="a10-zone" data-testid="cognition-zone">
           <A10Card navId="context" onPrefetch={() => prefetch('context')} icon="layers" isActive={newActiveOverlay === 'context'} onClick={() => activateNav('context')} data-testid="nav-context" />

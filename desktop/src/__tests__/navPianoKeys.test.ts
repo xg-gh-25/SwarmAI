@@ -9,8 +9,11 @@
  *   while the global --scrollbar-size stays 6px (the chat gutter maths uses it);
  * - every nav row kind (card, History/Artifacts row, footer button) shares the
  *   one key material, with the theme tokens defined in both light and dark;
- * - the chat column is a raised sheet (.app-sheet on <main>, --shadow-sheet in
- *   both themes) and the sidebar no longer carries a right border.
+ * - the chat column sits on the chrome as a sheet (.app-sheet on <main>,
+ *   --shadow-sheet in both themes) and the sidebar no longer carries a right
+ *   border; in dark the chat keeps its original near-black (no colour override);
+ * - keys are 2px thick, the Nav fades at a scrolled edge, and the overlay draws
+ *   no nub next to the active key that already joins the sheet.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -55,10 +58,32 @@ describe('left nav piano keys', () => {
     expect(CSS).toMatch(/\.a10-nav\s*\{\s*direction:\s*rtl;\s*\}/);
   });
 
-  it('lifts the dark surface ladder inside the sheet only', () => {
-    const block = CSS.match(/:root\.dark \.app-sheet\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(block).toMatch(/--color-bg:\s*var\(--color-sheet\)/);
-    expect(block).toMatch(/--color-card:\s*var\(--color-sheet-card\)/);
+  it('keeps the original dark chat colours: no surface override inside the sheet', () => {
+    expect(CSS).not.toMatch(/:root\.dark \.app-sheet/);
+    expect(CSS).not.toMatch(/--color-sheet-card/);
+    const dark = CSS.match(/:root\.dark\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(dark).toMatch(/--color-bg:\s*#111318/);
+    // the active key and the sheet are the same near-black, set into the frame
+    expect(CSS).toMatch(/--color-sheet:\s*#111318/);
+  });
+
+  it('keeps the keys light: a 2px edge on cards and tabs', () => {
+    expect(CSS).not.toMatch(/0 3px 0 var\(--nav-key-edge\)/);
+    expect(CSS).toMatch(/\.session-tab\s*\{[^}]*0 2px 0 var\(--nav-key-edge\)/);
+  });
+
+  it('fades both Nav edges from scroll state written on the element', () => {
+    expect(CSS).toMatch(/\.a10-nav\[data-fade-top\]\s*\{\s*--fade-t:\s*22px/);
+    expect(CSS).toMatch(/\.a10-nav\[data-fade-bottom\]\s*\{\s*--fade-b:\s*22px/);
+    const tsx = readFileSync(join(__dirname, '..', 'components', 'layout', 'ThreeColumnLayout.tsx'), 'utf8');
+    expect(tsx).toMatch(/<nav ref=\{navRef\} className="a10-nav/);
+    expect(tsx).toMatch(/el\.dataset\.fadeTop = ''/);
+  });
+
+  it('draws no overlay nub next to the joined key', () => {
+    const host = readFileSync(join(__dirname, '..', 'components', 'layout', 'OverlayHost.tsx'), 'utf8');
+    expect(host).not.toMatch(/rotate-45/);
+    expect(CSS).not.toMatch(/--shadow-spout/);
   });
 
   it('keeps the layout constants in step with the sheet inset', async () => {

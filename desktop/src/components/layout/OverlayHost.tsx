@@ -226,12 +226,14 @@ export function OverlayHost() {
         onMouseDown={(e) => e.stopPropagation()}
       >
         {spoutY != null && (
+          // Anchor only, no visible nub: the Nav item that opened the overlay is the
+          // active key, which already joins the sheet, so a nub pointing at it said the
+          // same thing twice. The anchor keeps the zoom-corrected Y that the panel's
+          // transform-origin (the open/close motion) grows from.
           <div
             data-testid="overlay-host-spout"
             aria-hidden
-            className="absolute w-[20px] h-[20px] rotate-45 rounded-bl-[5px] bg-[var(--color-card)] z-[1]
- border-l-[1.5px] border-b-[1.5px] border-[var(--panel-accent)]
-              shadow-[var(--shadow-spout)]"
+            className="absolute w-0 h-0 pointer-events-none"
             style={{ left: -11, top: spoutY }}
           />
         )}
