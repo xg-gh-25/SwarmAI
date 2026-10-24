@@ -549,6 +549,24 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
 // Above this a re-highlight could cost a visible frame; such a block recolours at idle.
 const SYNC_HIGHLIGHT_MAX_CHARS = 20_000;
 
+// Blocks already coloured in this app session, by a hash of language + text. A block
+// mounted AGAIN with the same text (the answer moving from WORKING into RESULT at the
+// end of a turn, a tab coming back) is coloured before paint, so it never shows one
+// plain frame; a block seen for the first time still colours at idle. Bounded LRU of
+// short keys; a hash collision only picks sync over idle colouring, never wrong colour.
+const COLOURED_MAX = 500;
+const colouredBlocks = new Set<string>();
+function blockKey(language: string, text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return `${language}|${text.length}|${(h >>> 0).toString(36)}`;
+}
+function rememberColoured(key: string): void {
+  colouredBlocks.delete(key);
+  colouredBlocks.add(key);
+  if (colouredBlocks.size > COLOURED_MAX) colouredBlocks.delete(colouredBlocks.values().next().value as string);
+}
+
 const CodeBlock = memo(function CodeBlock({
   language,
   children,
@@ -586,11 +604,13 @@ const CodeBlock = memo(function CodeBlock({
       try {
         hljs.highlightElement(el);
         highlightedRef.current = true;
+        rememberColoured(blockKey(language, children));
       } catch (err) {
         console.error('Highlight error:', err);
       }
     };
-    if (highlightedRef.current && children.length <= SYNC_HIGHLIGHT_MAX_CHARS) {
+    const seenBefore = highlightedRef.current || colouredBlocks.has(blockKey(language, children));
+    if (seenBefore && children.length <= SYNC_HIGHLIGHT_MAX_CHARS) {
       run();
       return;
     }

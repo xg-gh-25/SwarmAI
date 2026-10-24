@@ -52,6 +52,13 @@ export const ZONE_GAP = 'mt-5';
 export const RESULT_GAP = 'mt-7';
 /** Inside a zone: header → body, and between a body's thought / strips / panel. */
 const INNER_GAP = 'mt-2';
+/** The one column the agent's prose sits on, everywhere in a turn: where a group's
+ *  label starts (mark column w-4 + gap-1.5). Marks (▸ ✓ ●) hang in the gutter left of
+ *  it. A text keeps this column when it turns from a note in WORKING into the RESULT,
+ *  so the end of a turn never moves it sideways. */
+const TEXT_COL = 'pl-[22px]';
+/** A row inside a group body (already at the column): its mark hangs in the gutter. */
+const HANG = '-ml-[22px]';
 /** Between two stage groups. */
 const STAGE_GAP = 'mt-2';
 
@@ -645,7 +652,7 @@ function PhaseNote({ text, renderKey, hasWork, open, onToggle, ctx }: {
   };
   return (
     <div data-testid="phase-text" data-open={hasWork ? String(open) : undefined} onClick={toggle}
-      className={`flex items-start gap-1.5 text-[14px] ${hasWork ? 'cursor-pointer' : ''}`} {...ANCHOR_PROPS}>
+      className={`${HANG} flex items-start gap-1.5 text-[14px] ${hasWork ? 'cursor-pointer' : ''}`} {...ANCHOR_PROPS}>
       {hasWork
         ? (
           <button type="button" data-testid="segment-toggle" aria-expanded={open}
@@ -887,7 +894,7 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
             el = (
               <div
                 data-testid={z.result ? 'turn-result' : z.role === 'restatement' ? 'turn-restatement' : z.role === 'note' ? 'turn-note' : 'turn-answer'}
-                className={z.result ? 'turn-result' : undefined}
+                className={z.result ? `turn-result ${TEXT_COL}` : TEXT_COL}
                 {...(z.result ? { role: 'region', 'aria-label': tf(t, 'chat.turn.result', 'Result') } : {})}
                 {...ANCHOR_PROPS}
               >
