@@ -610,6 +610,8 @@ rebuild+restart. "Tests green" alone is not "qualified."
 4. **Filesystem-first** for skills and context — no DB, git-tracked, human-readable.
 5. **Prevention over recovery** — if a system *can* hang, make it structurally impossible;
    don't bolt on a watchdog. A timeout is a hang-guard, never a way to bury a slow root cause.
-6. **One-shot qualified delivery** — code changes go through the autonomous pipeline as a
-   black box: one requirement → push-ready code, quality guaranteed by adversarial gates, not
-   by iterating cheap drafts.
+6. **Proportionate delivery** — code changes are native by default, with review experts the
+   agent picks for the change; the autonomous pipeline is the optional advanced mode (one
+   requirement → documented, expert-reviewed, isolated, landed code) that runs when the user
+   chooses it. Design: `docs/design/2026-10-24-swarmai-usable-by-anyone.md`. Until its S4 step
+   lands, the gates described under "Security Architecture" still fire as written.

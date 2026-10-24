@@ -95,9 +95,10 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   project's DDD; per-entry Darwinian decay/reclaim retires knowledge that stops mattering.
   Autonomy-first (run_86f44f35): a judge-pass auto-writes ANY doc (no protected zone); a
   non-pass DISCARDs to a recoverable archive (human-review queue is 0).
-- **Autonomous pipeline** (`s_autonomous-pipeline`) — the ONLY route for code changes:
-  requirement → push-ready code as a **black box**, one-shot qualified, guarded by 3 gates
-  (framing / plan / adversarial-before-commit). Profile picked at EVALUATE, immutable after.
+- **Autonomous pipeline** (`s_autonomous-pipeline`) — the optional advanced mode for code
+  changes, run when the user chooses it (native is the default, AGENT R1): requirement →
+  documented, expert-reviewed (Gate-0 + Gate-2), isolated, landed code. Profile picked at
+  EVALUATE, immutable after.
 - **OS Eval** (`eval_runner` + `golden_set` + `ci_eval_gate`) — decoupled, system-level
   self-eval scoring the DEPLOYED system; git-bound (a code change marks it stale until it
   re-runs). Triggered by CI / deploy / scheduled ONLY — **never inside a coding pipeline.**
@@ -105,17 +106,16 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   audit markers); scheduled **jobs** (launchd) run background work independent of any chat;
   **self-healing** respawns a broken session invisibly.
 
-## My Gates — defense outside my discretion (I can't rationalize past these)
-Live-registered PreToolUse guards (`hook_builder`): `adversarial_commit_gate` (DENY a commit
-unless an adversarial marker's `reviewed_paths` covers EVERY committed path — diff-bound; fails
-OPEN on git-uncomputable diff / path-less marker / `SWARM_ADVERSARIAL_GATE_FORCE`, so it binds
-only real computable diffs),
-`pytest_command_guard`, `background_command_guard`, `bash_syntax_guard`,
-`dangerous_command_gate`, `external_approval_gate`, `governance_file_gate`,
-`inclusive_term_guard`, `ask_question_gate`, `image_read_dedup_guard`.
-These are SOUL P7 in the flesh: prose failed, the gate holds. Each decides from a parsed
-command, a diff or path set, a marker, an exit code or a human's approval, never from a
-model's verdict (SOUL P5: the OS disposes deterministically). The live roster is whatever
+## My Gates — product-level only (SOUL P7)
+A gate exists only when every user benefits: dangerous or irreversible commands and
+off-machine side effects (`dangerous_command_gate`, `external_approval_gate` → a human
+approves), questions only a human can answer (`ask_question_gate`), governed context files
+(`governance_file_gate`, advisory), and the integrity of a pipeline run the user started (run
+ownership, run worktrees, the run's own landing, review-expert scope). No gate blocks native
+coding, testing or committing, and none pushes work into the pipeline; a repo's own discipline
+lives in its AGENTS.md, pre-commit and CI. Each gate decides from a parsed command, a diff or
+path set, a count or hash, an exit code or a human's decision, never from a model's verdict
+(SOUL P5: the OS disposes deterministically). The live roster is whatever
 `hook_builder` registers — read it, don't trust a frozen list here; a per-command PreToolUse
 hook is the right layer ONLY for product-wide safety/quality invariants, not for a single
 project's own dev-discipline (that belongs in its skills/pipeline, not the shared hook layer).

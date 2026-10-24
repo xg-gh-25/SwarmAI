@@ -3,7 +3,7 @@ title: SwarmAI 让别人装上就能用 — 产品原则、安装包、通用 pi
 created: 2026-10-24
 updated: 2026-10-24
 project: SwarmAI
-status: final r12 — XG 2026-10-24 定稿；r1–r12 的演进见末尾"修订记录"
+status: final r13 — XG 2026-10-24 定稿；r1–r13 的演进见末尾"修订记录"
 ---
 
 # SwarmAI 让别人装上就能用（Sev-1）
@@ -166,11 +166,11 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 P5 已定不防 agent 作恶，S6 之后测试证据又是 agent 自己写的报告。签名剩下的作用只是证明"这条记录是本 run 写的"，这本身就是防作恶，却要长期维护密钥、daemon 代执行和一次性 token，还让 pipeline 离不开在线的 daemon。
 
 - **改**：签名事件改为普通的只追加日志。每条记录带 run_id、序号、owner session、相关的 tree hash，以及一个校验和；校验和只用来发现崩溃导致的截断或损坏，不用来防伪造。读日志时序号断开或校验和不对，run 进入需要人处理的状态，不会静默继续。
-- **保留**（它们管正确性，和防作恶无关）：run 归属和 owner 转移（owner 存活判断照旧）、不可变 contract 和 tree 绑定、落地协议（`land_intent`、base 复核、部分落地记录、交付 tree）、worktree 隔离、run 的操作锁（改为本地文件锁，`utils/file_lock.py`）、人工决定卡片和落地确认（作为普通记录写进日志）。
+- **保留**（它们管正确性，和防作恶无关）：run 归属和 owner 转移（owner 存活判断照旧）、不可变 contract 和 tree 绑定、落地协议（`land_intent`、base 复核、部分落地记录、交付 tree）、worktree 隔离、run 的操作锁（改为本地文件锁，`utils/file_lock.py`）、人工决定卡片和落地确认（作为普通记录写进日志）、**prewarm 子进程的 session id 补传**（`run_owner_gate._with_session`：被 session 接管的 prewarm 子进程环境里没有 `SWARM_APP_SESSION_ID`，由 hook 用 `updatedInput` 在 pipeline 命令前补上；删掉它，被接管的 session 建 run 时 `RunEngine.create` 拿不到有效 session id）。删的只是 token，不是这条补传；`session_link_gate` 继续拒绝 agent 自己赋值这个变量。
 - **删**：`authority.key` 及其读保护、`events.allow_hook_writer`、`daemon_exec`（daemon 代执行、socket、队列）、`hook_token` 和 `run_owner_gate` 用 `updatedInput` 发 token 的逻辑、`auth_consumed` 的签名校验。pipeline 命令回到本地进程执行，不再依赖 daemon 在线。
 - **随之简化**：`audit_marker_write_gate` 只剩"不让 agent 直接改 run 日志文件"的提醒级保护，是否保留由 §6 的度量决定；gate 不再需要为发 token 识别 pipeline 命令；Windows 少一个结构障碍（Unix socket），pipeline 在 Windows 上仍然不启用，剩下的障碍单独评估。
 - **代价**：推翻今天合入的 B-class 和 B-e（`2810e727b 740d6268a dfa761ac7 01fa52bee`）。第一版发布时这套机制仍在（S3 照常做 token 和确切路径识别），S6 一起删。
-- **测试**：重写依赖签名的测试；新增：日志截断或校验和不对时 run 停下等人处理；daemon 不在线时 pipeline 命令照常工作；两个 session 同时操作同一个 run 时由操作锁串行化。
+- **测试**：重写依赖签名的测试；新增：被接管的 prewarm session 能建 run 且 owner 正确；日志截断或校验和不对时 run 停下等人处理；daemon 不在线时 pipeline 命令照常工作；两个 session 同时操作同一个 run 时由操作锁串行化。
 
 #### 3.3.6 `.swarmai/pipeline.toml`（全部字段可选）
 
@@ -196,24 +196,25 @@ gate 删了，认知文件里还写着"所有代码必须走 pipeline、每次 c
 | `backend/context/SWARMAI.md` 第 141-143 行 | "Coding → Autonomous Pipeline … The ONLY route for code changes" | 默认 native；风险较大时在 session 里问一次；用户要求时走 pipeline |
 | `backend/context/AGENT.md` Lifecycle 行（第 117 行）、R1"Pipeline is mandatory for ALL code changes"、R2"Adversarial review before EVERY commit" | 强制 pipeline、强制 commit 前审查 | R1 改为 P4 的选择规则；R2 改为 P6：native 下 agent 自己决定请哪些专家；Lifecycle 改为 change → native 测试 →（按需）专家审查 → commit |
 | `backend/context/SELF.md` 的 gate 清单 | 列着要删的 gate | 按 §3.4 改后的结果重写 |
-| `backend/context/STEERING.md` 的 Standing Rules | XG 指出本机副本的 #1、#5 把人往 pipeline 赶（S4 时逐条核对原文） | 模板里只保留对所有用户成立的规则 |
+| XG 本机 STEERING 的 #1、#5（模板里没有，Standing Rules 为空） | #1 开头是"NO CODE CHANGE WITHOUT PIPELINE FIRST" | 手工改本机副本；模板保持为空 |
 | `backend/skills/s_autonomous-pipeline/SKILL.md` 的 description / TRIGGER | 把 pipeline 写成写代码的通用入口 | 只在用户选择 pipeline 时触发；写明它是可选的高级方式 |
 
 送达方式：
-- SWARMAI、SOUL、IDENTITY、AGENT 是系统文件，每次 session 启动会用模板覆盖，改模板就生效。
-- SELF、STEERING 是 copy-only-if-missing。要求是仓库里的模板（`backend/context/` 下）必须改到位，S4 的结构测试只检查仓库模板。STEERING 模板里没有的条目（XG 本机 STEERING 的 #1、#5），在模板里补写成新的默认内容；本机已有的副本不由产品改动（XG 2026-10-24）。
+- SWARMAI、SOUL、IDENTITY、AGENT 是系统文件，每次 session 启动用安装包里带的模板覆盖本机副本，所以改仓库模板之后，随新的安装包生效（要重新打包）。产品默认行为（native 优先、相称、按需请专家）只写进这几个系统文件，主要是 AGENT.md。
+- SELF、STEERING 是 copy-only-if-missing，已有安装拿不到模板的改动。STEERING 是用户自己的覆盖层，模板里的 Standing Rules 保持为空，不往里写产品默认值。SELF 模板的 gate 一节按 §3.4 的结果改。
+- XG 本机是唯一的老安装，STEERING 优先级又高于 AGENT，不改的话 XG 用到的就不是产品本身（违反 P7），golden case 在他机器上也过不了。所以 S4 加一步非产品代码的手工同步：改 XG 本机 `~/.swarm-ai/SwarmWS/.context/` 下 STEERING 的 #1、#5 和 SELF 的 gate 一节，和 S4 的 gate 改动同时落地。r13 时已先按 XG 要求同步过一次（见修订记录），S4 时再按最终的 gate 表核对一次。
 
 ### 3.7 仓库指引要有确定的送达路径（r11）
 
 r9 把 SwarmAI 的"commit 前审查"交给它自己的 AGENTS.md，但现在没有机制保证 agent 读得到：session 的 cwd 是 SwarmWS，cd 进别的仓库不会自动加载那里的 AGENTS.md（Claude CLI 只在启动时按 cwd 加载 CLAUDE.md；S4 前实测确认）。
 
 补法：产品级、只注入、不拦截。
-- 一个 session 第一次碰某个 git 仓库时（Bash 的 cwd 或 `git -C`、Read/Write/Edit 的路径落在这个仓库里），用 PostToolUse 的 additionalContext 把这个仓库根目录下的 `AGENTS.md`、`CLAUDE.md` 和 `.swarmai/review.md` 注入上下文。
+- 一个 session 第一次碰某个 git 仓库时（Bash 的 cwd 或 `git -C`、Read/Write/Edit 的路径落在这个仓库里），注入这个仓库根目录下的 `AGENTS.md`、`CLAUDE.md` 和 `.swarmai/review.md`：Read、Grep、Glob 或 Bash（含 cd、`git -C`）碰到时，用 PostToolUse 的 additionalContext；如果第一次碰就是 Write/Edit，用 PreToolUse 的 additionalContext 在写之前注入（只注入，不拒绝）。
 - 每个 session 每个仓库只注入一次；文件改了（mtime 或哈希变化）再注入一次。
 - 有大小上限，超过时注入开头部分并写明文件路径，让 agent 自己去读全文。
 - 只注入，不拒绝任何操作。对所有用户、所有仓库都一样，不违反 P3 和 P7。
-- 注入的内容是仓库作者写的，当作参考资料，不当作系统指令。
-- 验收：在一个带 AGENTS.md 的样例仓库里，agent 第一次改文件之后，上下文里能看到这份指引；同一个 session 里第二次不再重复注入。
+- 信任级别：在这个仓库里干活时，agent 按仓库规范遵守它，地位相当于 CONTRIBUTING 文档（例如 SwarmAI 仓库的"commit 前请专家审查"）。优先级低于用户的指令和产品规则（系统认知文件、P1-P7）。和当前任务无关的指令不执行，尤其是外发数据、读写凭证、操作别的仓库或改 agent 自己的配置；遇到这类内容，告诉用户这里可能有 prompt injection。注入时用明确的分隔标出来源路径，和系统指令分开。
+- 验收：在一个带 AGENTS.md 的样例仓库里，agent 第一次写文件之前，上下文里已经有这份指引；同一个 session 里第二次不再重复注入。
 
 ### 3.4 gate：只保留产品级的
 
@@ -270,7 +271,7 @@ r9 把 SwarmAI 的"commit 前审查"交给它自己的 AGENTS.md，但现在没�
 ### 5.1 让"安装包缺东西"这类错误再也发生不了
 
 - **G1 真实安装验收**，分两版（r8：第一版还没有通用 pipeline，Windows 也不启用 pipeline）：
-  - **第一版（native 和安装）**：每个发布目标（macOS arm64/x64、Windows x64、Linux x64），在一次性的干净 VM/容器里（没有源码 checkout，没有系统 Python，PATH 里没有开发工具），先模拟真实下载：给安装包打上 `com.apple.quarantine`（macOS；Windows 对应 Mark-of-the-Web 的 `Zone.Identifier`），按陌生用户的方式安装和首次打开（未签名 app 走"仍要打开"），再验证：拷进 `runtime/` 的后端能执行、launchd / 子进程拉起的 daemon 能起来、自带的 Claude CLI 能执行，以及app 启动、外置 runtime 部署、`/health`、自带 Claude CLI 可执行、seed 和迁移、onboarding 可达、MCP 工具可用、`py` 子命令能跑一个有代表性的 skill 脚本、更新到下一个版本再回滚；再在一个样例仓库上跑通一次 native 修改 + commit。
+  - **第一版（native 和安装）**：每个发布目标（macOS arm64/x64、Windows x64、Linux x64），在一次性的干净 VM/容器里（没有源码 checkout，没有系统 Python，PATH 里没有开发工具），先模拟真实下载：给安装包打上 `com.apple.quarantine`（macOS；Windows 对应 Mark-of-the-Web 的 `Zone.Identifier`），按陌生用户的方式安装和首次打开（未签名 app 走"仍要打开"），再验证：拷进 `runtime/` 的后端能执行、launchd / 子进程拉起的 daemon 能起来、自带的 Claude CLI 能执行，以及 app 启动、外置 runtime 部署、`/health`、seed 和迁移、onboarding 可达、MCP 工具可用、`py` 子命令能跑一个有代表性的 skill 脚本、更新到下一个版本再回滚；再在一个样例仓库上跑通一次 native 修改 + commit。
   - **第二版（通用 pipeline）**：macOS 和 Linux 上，在样例仓库矩阵上跑 pipeline（见 §5.2）。Windows 只验证 `pipeline-v1` 返回"不支持"。
 - **G2 包内容清单**：构建时生成一份清单（必需文件、哈希、架构、可执行文件、原生库），G1 安装后逐项核对，缺一项就失败。
 - G1、G2 是 release workflow 发布步骤的前置 job，不过不发布。本地也能用同一个脚本 `scripts/verify_installer.sh` 跑。
@@ -334,3 +335,4 @@ S4 删掉 `pipeline_test_gate` 时，S6 之前的 pipeline run 里 runner 仍然
 - r10（XG）：新增 P7"SwarmAI 自己不特殊"：产品代码不识别 SwarmAI 仓库或项目；SwarmAI 的特殊要求只用通用方式表达（`pipeline.toml`、`.swarmai/review.md`、AGENTS.md、它自己的脚本和 CI）；三个 SwarmAI 专用 hook 从产品删除；XG 用和 CI 相同流程打的包；dev 和打包版的命令形式相同；删除 `worktree_mode` 设置；SwarmAI 仓库作为样例仓库参加验收。新增 S4b。
 - r11：§3.6 认知文件（SOUL P5/P7、SWARMAI、AGENT R1/R2/Lifecycle、SELF、STEERING #1/#5、pipeline SKILL）和 gate 在 S4 同一个 commit 里改；§3.7 仓库第一次被碰到时注入它的 AGENTS.md / CLAUDE.md / `.swarmai/review.md`（只注入不拦截）；G1 先打 quarantine 再安装，模拟真实下载；新增 golden case；修掉 §5.2 里残留的"commit 前审查"；"删掉签名机制"列为待 XG 拍板的问题。
 - r12（XG）：删掉签名机制写进 S6（§3.3.5）：只追加日志 + 校验和，保留归属、tree 绑定、落地协议、隔离和操作锁，删 key、daemon_exec、token；pipeline 命令回到本地执行。认知文件只要求仓库模板改到位，本机副本不由产品改。
+- r13：§3.3.5 保留 prewarm session id 补传（只删 token）；§3.7 写准信任级别（按仓库规范遵守，低于用户和产品规则，无关指令不执行），首次写之前就注入；§3.6 系统文件随新安装包生效、STEERING 模板保持空、XG 本机副本在 S4 手工同步（r13 先同步了一次）；G1 去重。

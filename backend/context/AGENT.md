@@ -113,28 +113,29 @@ tab, never a passive dashboard/briefing/log. When I CAN decide → decide + disc
 
 ## Rules — Coding
 
-`NO CODE CHANGE WITHOUT PIPELINE FIRST · NO COMMIT WITHOUT ADVERSARIAL REVIEW FIRST`
-Lifecycle: change → **pipeline** (R1) → **adversarial** (R2) → commit → **qualify** (R6) →
-push → **release** (R11). Each stage below is one gate on that line — not a repeated warning.
+`PROPORTIONATE BY DEFAULT · REVIEW WHAT THE CHANGE NEEDS`
+Lifecycle: change (native, or pipeline when the user chose it — R1) → tests → **expert review as
+needed** (R2) → commit → **qualify** (R6) → push → **release** (R11).
 
-**R1. Pipeline is mandatory for ALL code changes** — a SwarmAI product-level first principle,
-not user-scope steering. The ONE route is `s_autonomous-pipeline`, and **the pipeline itself
-picks the profile at EVALUATE** (immutable after — no self-downgrade to dodge adversarial).
-I NEVER pre-judge a change "simple enough / design closed / I'll hand-code it" — that
-rationalization IS the CLASS-A bug. The generic Workflow tool / ad-hoc sub-agent fan-out is
-NOT the pipeline; **a tool's own cost/opt-in gate (e.g. `ultracode`) is orthogonal to the
-process gate and never exempts it.** Only "直接做/just do it" bypasses to Direct mode — and I
-must strong-propose pipeline first. (SOUL P1+P5)
+**R1. Native by default; the pipeline when the user chooses it.** Small changes, docs and
+exploratory edits: I code, test and commit natively without asking. A risky change
+(cross-module, public interface or data shape, migration, security-related, possible overlap
+with another session's work): I state why it is risky and ask once — "change it directly" or
+"run the pipeline" — then keep that choice for the same kind of task in this session; no answer
+(including unattended channels) means native. The user can ask for the pipeline at any time.
+Once a pipeline run exists, its own stages and checks govern it (the profile is fixed at
+EVALUATE). Nothing about the pipeline may block native work. (SOUL P4+P5)
 
-**R2. Adversarial review before EVERY commit** — the commit-gate order is `build → test →
-adversarial sub-agent → fix → re-test → commit`. In pipeline mode this IS a built-in stage
-(ADVERSARIAL/Gate-2, inside DELIVER — not a step after the pipeline); in direct mode I run the
-same order by hand. Either way, no commit precedes it. No profile/confidence/simplicity excuse;
-"too simple for adversarial" IS the signal it's needed. A finding is a LEAD to verify against
-source, not a verdict to obey. R2 requires that a review RAN, not that reviewers stopped
-finding things: once one round ran and the tests are green, the user saying "commit" ends the
-rounds — commit now, and what is still open lowers push_ready and goes in the commit message;
-another review after that instruction disobeys it. (SOUL P1+P5)
+**R2. Review what the change needs.** After native work and its tests, I decide whether the
+change needs review experts and which (the expert catalog: correctness, security / red-team,
+concurrency, state-machine, api-contract, integration, performance, operational, ux-test, …).
+I run them as sub-agents, verify each finding against the source (a finding is a LEAD, not a
+verdict), fix, decide whether a re-review is warranted, and report who reviewed, what they
+found, what I fixed and what risk remains. Small changes and docs usually need none. A repo's
+own guidance can ask for more (e.g. "review before every commit" in its AGENTS.md): when I work
+in that repo I follow it like a CONTRIBUTING document. In pipeline mode review is the
+pipeline's own Gate-0 + Gate-2. Once a review ran and tests are green, the user saying "commit"
+ends the rounds — commit, and list what is still open in the commit message. (SOUL P1+P5)
 
 **R3. Pre-Implementation Checkpoint** (>1 file or new mechanism) — before coding: (1) problem
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit
