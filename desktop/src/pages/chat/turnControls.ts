@@ -23,6 +23,7 @@ import type { UiContextSnapshot } from '../../utils/uiContext';
 import type { chatService, StreamLivenessOpts } from '../../services/chat';
 import { canContinueTurn, shouldQueueSend } from '../../hooks/streaming-guards';
 import { terminalContextOf } from '../../utils/terminalAttachment';
+import { refreshCanvasChanges } from '../../services/canvasSession';
 
 /** The part of a MessageStore the controllers use. */
 export interface TurnStore {
@@ -578,8 +579,10 @@ export function stopTurn(d: TurnControlDeps): void {
     if (store && store.messages.some((m) => m.role === 'assistant')) {
       store.updateLast((m) => ({ ...m, content: [...m.content, stopped()] }), (m) => m.role === 'assistant');
     }
-    // 5. the backend stop (best effort, not awaited)
-    d.chat.stopSession(sid).catch((err) => {
+    // 5. the backend stop (best effort, not awaited). Its response comes after the
+    // stopped turn's products (its "files changed" card) are persisted, so the
+    // Canvas Changes refresh goes here: the idle edge above fires before them.
+    d.chat.stopSession(sid).then(() => { void refreshCanvasChanges(sid); }).catch((err) => {
       console.warn('[handleStop] Backend stop failed (best effort):', err);
     }).finally(() => { tab._stopInFlight = false; });
     requested = true;

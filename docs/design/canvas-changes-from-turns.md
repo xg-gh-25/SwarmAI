@@ -216,3 +216,36 @@ Consumers to update: `test_canvas_session.py`, `test_session_outputs.py` (stubs
 - Real endpoint through FastAPI, unmocked, for one constructed session.
 - Frontend: two sections, refresh on result / stream end / stopSession, none while
   streaming.
+
+## As built (2026-10-24)
+
+Code: `backend/core/session_changes.py` (read, extraction, commits, tree diff),
+`core/repo_changes.py` (`repo_identities`, `authorized_root`; `_checked_root` no longer
+falls back to `turn_changes.allowed_repo`), `core/turn_changes.py` (`diff_trees`
+factored out of `diff_text`), `routers/canvas_changes.py` (all on `canvas_changes`;
+new `/changes/tree-diff`), `desktop/src/components/file-viewer/CanvasChanges.tsx`,
+`services/canvasSession.ts`, `pages/chat/turnControls.ts` (refresh after Stop).
+
+Deviations from v4, each on purpose:
+
+- The commit fact helpers moved from `canvas_session` into `session_changes` (one
+  owner for the Changes path) instead of being kept in place.
+- "Pushed" is computed on every Changes read for the newest 20 commits, cached 60 s,
+  instead of only on tab open / refresh: turn-end refreshes are once per turn, so the
+  cost stays at most 20 `merge-base` calls a minute, and the frontend needs no second
+  kind of refresh.
+- Tests were written alongside the module rather than strictly before it; every
+  behaviour test was mutation-checked instead (8 backend, 7 frontend mutations, each
+  turning only its own test red; one weak assertion found and fixed this way).
+
+Measured (constructed session, 5,000 assistant rows, 23 MB of content, every row
+with a backtick, a card every 10th row; never the user's data.db):
+
+| read | p50 | p95 |
+|---|---|---|
+| window read, cold cache (worker thread) | 108 ms | 119 ms |
+| unchanged re-read | 0.57 ms | 0.92 ms |
+| one new row | 0.73 ms | 0.93 ms |
+
+In that worst case the 400-row window holds about 40 turns and the list says
+"earlier messages of this session were not scanned".

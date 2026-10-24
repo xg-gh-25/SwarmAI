@@ -1,5 +1,5 @@
 """core/canvas_session — a session's Canvas: Artifacts from its attribution record,
-Changes from the pipeline runs it owns; and core/turn_changes' tree snapshots.
+the run index behind working_repo; and core/turn_changes' tree snapshots.
 
 Methodology: real git in tmp_path (a bare origin + a clone as the "main checkout");
 a run's worktree is made with `git worktree add` at the derived location
@@ -7,14 +7,9 @@ a run's worktree is made with `git worktree add` at the derived location
 throwaway SQLite file. No real repository, run or database is read.
 
 Invariants:
-- Changes are the runs the session owns (run.json session_id / session_history) and
-  nothing else: an edit in the shared checkout, another session's run, a worktree git
-  does not list on the run's branch, and a path written into run.json are not read;
-- a live worktree shows its change set against its HEAD, untracked new files
-  included and the run's deliverables dir left out, with trees the on-demand diff
-  reads; a landed commit shows its own files, and "pushed" once the upstream has it;
-- a worktree released without landing is said, not guessed;
-- the run index is re-read only for a changed run.json;
+- (Changes moved to core/session_changes: tests/test_session_changes.py)
+- working_repo is the newest owned run's main checkout; the run index is re-read
+  only for a changed run.json;
 - Artifacts are the session's attribution rows joined with the product catalog, and
   carry whether the file is in its repo's HEAD (one git call per repo; no repo or
   no file = unknown);
@@ -129,7 +124,7 @@ def runs(repo, tmp_path, monkeypatch):
     wts = Path(os.path.realpath(tmp_path)) / "wts"
     wts.mkdir()
     monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(wts))
-    cs._RUN_CACHE.clear(); cs._COMMITS.clear(); cs._PUSHED.clear()
+    cs._RUN_CACHE.clear()
     ws = tmp_path / "ws"
     ws.mkdir()
 
@@ -138,73 +133,6 @@ def runs(repo, tmp_path, monkeypatch):
         _git(repo, "worktree", "add", "-q", "-b", f"run/{rid}", str(wt))
         return wt
     return ws, worktree
-
-
-def test_a_live_run_worktree_is_its_change_set_and_nothing_else(repo, runs):
-    ws, worktree = runs
-    wt = worktree("run_a1")
-    _run(ws, "run_a1", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active"}])
-    (wt / "a.py").write_text("one\nTWO\nthree\n")
-    (wt / "new.py").write_text("x\n")
-    (wt / ".aidlc" / "deliverables" / "run_a1").mkdir(parents=True)
-    (wt / ".aidlc" / "deliverables" / "run_a1" / "REPORT.md").write_text("report\n")
-    (repo / "b.py").write_text("another session, in the shared checkout\n")
-    [run] = cs.changes_of("s1", str(ws))
-    assert (run["run"], run["title"], run["project"]) == ("run_a1", "Do run_a1", "P")
-    [row] = run["repos"]
-    assert row["root"] == str(repo) and row["worktree"] == str(wt) and row["branch"] == "run/run_a1"
-    files = {f["path"]: f for f in row["files"]}
-    assert set(files) == {"a.py", "new.py"}
-    assert (files["a.py"]["status"], files["a.py"]["added"], files["a.py"]["deleted"]) == ("modified", 2, 1)
-    assert files["new.py"]["status"] == "added" and row["commits"] == []
-    diff = tc.diff_text(str(repo), files["a.py"]["start"], files["a.py"]["end"], "a.py")
-    assert "+TWO" in diff and "-two" in diff
-    assert cs.changes_of("s2", str(ws)) == []
-
-
-def test_a_worktree_git_does_not_list_or_a_path_in_run_json_is_not_read(repo, runs, tmp_path):
-    ws, worktree = runs
-    elsewhere = tmp_path / "elsewhere"
-    _git(repo, "worktree", "add", "-q", "-b", "kiro/x", str(elsewhere))
-    (elsewhere / "a.py").write_text("not a run's\n")
-    _run(ws, "run_b1", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active",
-                                          "path": str(elsewhere)}])
-    assert cs.changes_of("s1", str(ws)) == []           # nothing at the derived location
-    wt = worktree("run_b2")
-    _git(wt, "checkout", "-q", "-b", "other")            # no longer on run/run_b2
-    (wt / "a.py").write_text("x\n")
-    _run(ws, "run_b2", "s1", worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "active"}])
-    assert cs.changes_of("s1", str(ws)) == []
-    _run(ws, "run_b3", "s1", worktrees=[{"repo_name": "swarmai", "main": "/etc", "state": "active"}])
-    assert cs.changes_of("s1", str(ws)) == []           # not a code repo Canvas may read
-
-
-def test_landed_commits_show_their_files_and_turn_pushed(repo, runs):
-    ws, _ = runs
-    (repo / "a.py").write_text("landed\n"); (repo / "c.py").write_text("c\n")
-    _git(repo, "add", "-A"); _git(repo, "commit", "-qm", "feat: landed")
-    sha = _git(repo, "rev-parse", "HEAD")
-    _run(ws, "run_c1", "s0", history=[{"session_id": "s1"}], status="completed",
-         worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "released",
-                     "integrated": {"sha": sha}}],
-         commits=[{"repo": str(repo), "sha": sha[:12]}, {"repo": str(repo), "sha": "f" * 40}])
-    [run] = cs.changes_of("s1", str(ws))                # a run it took over is its own
-    [row] = run["repos"]
-    [c] = row["commits"]
-    assert (c["sha"], c["short"], c["subject"], c["pushed"]) == (sha, sha[:8], "feat: landed", False)
-    assert c["files"] == [{"path": "a.py", "added": 1, "deleted": 2}, {"path": "c.py", "added": 1, "deleted": 0}]
-    assert row["released"] is False and row["files"] == []
-    _git(repo, "push", "-q", "origin", "main")
-    [run] = cs.changes_of("s1", str(ws))
-    assert run["repos"][0]["commits"][0]["pushed"] is True
-
-
-def test_a_worktree_released_without_landing_is_said(repo, runs):
-    ws, _ = runs
-    _run(ws, "run_d1", "s1", status="failed",
-         worktrees=[{"repo_name": "swarmai", "main": str(repo), "state": "released"}])
-    [run] = cs.changes_of("s1", str(ws))
-    assert run["repos"][0]["released"] is True and run["repos"][0]["files"] == []
 
 
 def test_working_repo_is_the_newest_runs_main_checkout_never_a_worktree(repo, runs, tmp_path):

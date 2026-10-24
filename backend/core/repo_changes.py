@@ -1,16 +1,16 @@
 """repo_changes — one commit's patches, for the Canvas Changes tab.
 
-The tab lists what a SESSION's runs changed, with each commit's files
-(core/canvas_session); a file of a commit opens here: ``commit_diff(root, sha, path)``
-(its patch, size-capped).
+The Canvas Changes tab (core/session_changes) lists the commits a session's messages
+name; a file of a commit opens here: ``commit_diff(root, sha, path)`` (its patch,
+size-capped).
 
 Read-only (``GIT_OPTIONAL_LOCKS=0``), bounded by GIT_TIMEOUT_S, and only for a root
-that is a bound repo (``allowed_roots()``, Projects/*/bindings.yaml) or a code tree
-turn_changes.allowed_repo accepts (a bound repo's main checkout, a run worktree), a
-hex sha and a repo-relative path after ``--``. Blocking: run it in an executor pool.
+that is a bound repo or the main checkout of a bound repo's object store
+(``authorized_root``: Projects/*/bindings.yaml only, never run.json), a hex sha and a
+repo-relative path after ``--``. Blocking: run it in an executor pool.
 
-Public: ``commit_diff``, ``allowed_roots``, ``RepoChangesError``,
-``MAX_DIFF_CHARS``.
+Public: ``commit_diff``, ``allowed_roots``, ``repo_identities``, ``authorized_root``,
+``RepoChangesError``, ``MAX_DIFF_CHARS``.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -79,14 +80,60 @@ def _bindings() -> dict[str, tuple[str, str]]:
     return out
 
 
-def _checked_root(root: str) -> str:
+# Repo identity (design canvas-changes-from-turns.md D3): one object store = one
+# repo. Two bindings that are worktrees of one store are one repo; a turn card's
+# gitRoot (the store's main checkout, turn_changes._main_checkout) is authorized
+# when its store is bound. git runs only in bound paths, never in a path a request
+# names. Cached for the same set of bound paths.
+_IDENT_CACHE: tuple[tuple, list[dict]] = ((), [])
+_IDENT_LOCK = threading.Lock()
+
+
+def repo_identities() -> list[dict]:
+    """One entry per object store among the bound repos: ``{common, root, name,
+    roots}`` — ``root`` the store's main checkout (else its first bound path),
+    ``roots`` every bound path of it plus that main checkout. Blocking."""
+    global _IDENT_CACHE
+    bound = allowed_roots()
+    key = tuple(sorted(bound.items()))
+    with _IDENT_LOCK:
+        if _IDENT_CACHE[0] == key and key:
+            return _IDENT_CACHE[1]
+    by_common: dict[str, dict] = {}
+    for root, name in sorted(bound.items()):
+        try:
+            common = os.path.realpath(_git(root, "rev-parse", "--path-format=absolute",
+                                           "--git-common-dir").strip())
+        except RepoChangesError as exc:
+            logger.info("repo_changes: %s has no git store: %s", root, exc)
+            continue
+        main = os.path.dirname(common) if os.path.basename(common) == ".git" else root
+        ident = by_common.setdefault(common, {"common": common, "root": main if os.path.isdir(main) else root,
+                                              "name": name, "roots": set()})
+        ident["roots"].update({root, ident["root"]})
+    out = list(by_common.values())
+    with _IDENT_LOCK:
+        _IDENT_CACHE = (key, out)
+    return out
+
+
+def authorized_root(root: str) -> str | None:
+    """*root* as a real path when it is a bound repo or the main checkout of a bound
+    repo's object store, else None. No git call on *root*; no run.json."""
     real = os.path.realpath(root or "")
-    if real in allowed_roots():
-        return real
-    from core.turn_changes import allowed_repo
-    if os.path.isdir(real) and allowed_repo(real):
-        return real
-    raise RepoChangesError("unknown repo")
+    if not real:
+        return None
+    for ident in repo_identities():
+        if real in ident["roots"]:
+            return real
+    return None
+
+
+def _checked_root(root: str) -> str:
+    real = authorized_root(root)
+    if real is None:
+        raise RepoChangesError("unknown repo")
+    return real
 
 
 def commit_diff(root: str, sha: str, path: str) -> dict[str, Any]:

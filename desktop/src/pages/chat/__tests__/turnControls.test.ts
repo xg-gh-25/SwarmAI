@@ -12,7 +12,12 @@
  * Attachments are read through a deferred promise so a test can act while a send
  * waits on them.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const refreshCanvasChanges = vi.fn((_sid?: string | null) => Promise.resolve());
+vi.mock('../../../services/canvasSession', () => ({ refreshCanvasChanges: (s?: string | null) => refreshCanvasChanges(s) }));
+beforeEach(() => refreshCanvasChanges.mockClear());
+
 import {
   sendMessage, sendWhileBusy, answerQuestion, decidePermission, stopTurn, stopBackground,
   type TurnControlDeps, type TurnStore,
@@ -384,6 +389,19 @@ describe('stopTurn / stopBackground (one Stop at a time)', () => {
     h.stopSession.mockImplementationOnce(() => Promise.reject(new Error('down')));
     stopTurn(h.d); await flush();
     expect(h.tabs.get('A')!._stopInFlight).toBe(false);
+    expect(refreshCanvasChanges).not.toHaveBeenCalled();
+  });
+
+  it('the Canvas Changes refresh waits for the backend stop (its card is persisted by then)', async () => {
+    const h = running();
+    let settle!: () => void;
+    h.stopSession.mockImplementationOnce(() => new Promise((res) => { settle = () => res({ status: 'ok', message: '', receipt: [] }); }));
+    stopTurn(h.d);
+    await flush();
+    expect(refreshCanvasChanges).not.toHaveBeenCalled();
+    settle(); await flush();
+    expect(refreshCanvasChanges).toHaveBeenCalledTimes(1);
+    expect(refreshCanvasChanges).toHaveBeenCalledWith(h.tabs.get('A')!.sessionId);
   });
 
   it('a synchronous throw before the request goes out does not leave Stop disabled', () => {

@@ -98,10 +98,11 @@ async def test_build_joins_the_catalog_and_backfills_an_old_session(tmp_path, mo
     async def fake_blocks(sid, needles):
         return blocks.get(sid, []) if cs.BACKFILL_NEEDLES == needles else []
     monkeypatch.setattr("database.db.messages.list_session_blocks", fake_blocks)
+    monkeypatch.setattr(cs, "_changes", lambda sid, db_path: {"turns": [], "commits": []})
     out = await cs.build("old")
     [a] = out["artifacts"]
     assert (a["role"], a["product"], a["firstAt"], a["exists"]) == ("Knowledge", True, "2026-10-01T10:00", True)
-    assert out["changes"] == []
+    assert out["changes"] == {"turns": [], "commits": []}
     assert json.loads((so.store_dir() / "old.json").read_text())["backfilled"] is True
 
 
@@ -117,10 +118,10 @@ async def test_the_parts_are_independent(monkeypatch):
     monkeypatch.setattr(cs, "session_runs", lambda *a: (_ for _ in ()).throw(AssertionError("no run index")))
     out = await cs.build("s1", "artifacts")
     assert [a["path"] for a in out["artifacts"]] == ["a.md"] and out["changes"] is None
-    monkeypatch.setattr(cs, "changes_of", lambda sid, ws: [{"run": "run_x"}])
+    monkeypatch.setattr(cs, "_changes", lambda sid, db_path: {"turns": [{"id": "m:0"}]})
     monkeypatch.setattr(cs, "_artifacts", lambda *a: (_ for _ in ()).throw(AssertionError("no Artifacts read")))
     out = await cs.build("s1", "changes")
-    assert out == {"artifacts": None, "changes": [{"run": "run_x"}]}
+    assert out == {"artifacts": None, "changes": {"turns": [{"id": "m:0"}]}}
 
 
 def test_external_paths_are_only_the_external_rows(tmp_path):
