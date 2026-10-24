@@ -882,7 +882,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply an additive proposal directly to the target DDD document.
 
     Appends a bullet point under the target section (newest first).
-    Only works for safe_append sections (IMPROVEMENT.md and TECH.md).
+    Only works for (doc, section) pairs in SAFE_APPEND_SECTIONS.
     Uses fcntl advisory lock to prevent concurrent write corruption.
 
     Returns a status string (NOT a bool — callers must compare explicitly):
@@ -999,6 +999,9 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         # STRIPPED string. include_prose=True is MANDATORY (the flag's key came from
         # parse_entries(include_prose=True)). NO archive (XG: git is the only
         # recovery). .get()-guarded.
+        # The strip is logged only after the new content is written (below): a
+        # "duplicate" return leaves the doc untouched, so nothing was removed.
+        _stripped = None
         cf = proposal.contradiction_flag
         if cf and cf.get("conflicting_title") and cf.get("section"):
             from core.ddd_entry_lifecycle import _strip_entries, parse_entries
@@ -1010,21 +1013,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             if _matches:
                 content = _strip_entries(content, {(_old_title, _old_section)},
                                          include_prose=True)
-                logger.warning(
-                    "[AUTO-SUPERSEDE] new lesson polarity-flips %d curated entr%s "
-                    "— STRIPPED (git-recoverable, no archive): %s § %s | flip=%s | "
-                    "conflicting_title=%r | run=%s",
-                    len(_matches), "y" if len(_matches) == 1 else "ies",
-                    proposal.target_doc, _old_section, cf.get("flip"),
-                    _old_title, proposal.source_run_id,
-                )
-                # Durable record in the changelog (the DDD weekly report lists
-                # removals); body recovery stays git-only (XG).
-                _log_supersede_delete(
-                    proposal, project_dir,
-                    stripped_title=_old_title, stripped_section=_old_section,
-                    stripped_body="\n".join(e.raw_text for e in _matches),
-                )
+                _stripped = (_old_title, _old_section, _matches, cf.get("flip"))
 
         # Emit the canonical `- [type] **Title** — body (date, run, label)` shape.
         # Normalize (INSERT-ONLY) so the lifecycle engine's _ENTRY_RE can parse/decay/
@@ -1083,7 +1072,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             #     distinct lesson does NOT collide (guards the old adversarial HIGH:
             #     no dropping short lessons that are substrings of a longer one).
             # This is the ONE chokepoint every write path crosses (writeback /
-            # reflect / retire-rewrite / HTTP), so doc-wide dedup here covers them
+            # reflect / HTTP), so doc-wide dedup here covers them
             # all — no per-path patching.
             existing_sigs = {
                 content_signature(ln)
@@ -1113,6 +1102,23 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
         tmp_path = doc_path.with_suffix(".tmp")
         tmp_path.write_text(new_content, encoding="utf-8")
         os.replace(str(tmp_path), str(doc_path))
+        if _stripped is not None:
+            _old_title, _old_section, _matches, _flip = _stripped
+            logger.warning(
+                "[AUTO-SUPERSEDE] new lesson polarity-flips %d curated entr%s "
+                "— STRIPPED (git-recoverable, no archive): %s § %s | flip=%s | "
+                "conflicting_title=%r | run=%s",
+                len(_matches), "y" if len(_matches) == 1 else "ies",
+                proposal.target_doc, _old_section, _flip,
+                _old_title, proposal.source_run_id,
+            )
+            # Durable record in the changelog (the DDD weekly report lists
+            # removals); body recovery stays git-only (XG).
+            _log_supersede_delete(
+                proposal, project_dir,
+                stripped_title=_old_title, stripped_section=_old_section,
+                stripped_body="\n".join(e.raw_text for e in _matches),
+            )
         return result_status
     # md_lock releases + closes the fd on exit and NEVER unlinks the sidecar
     # (run_24d9f714 inode-race fix, preserved by construction).
@@ -1151,7 +1157,7 @@ def _entry_tokens(text: str) -> set[str]:
 
 @dataclass
 class ContradictionFlag:
-    """Advisory signal: a newly-admitted APPEND lesson polarity-flips a same-topic
+    """A newly-admitted APPEND lesson polarity-flips a same-topic
     curated entry. Names the conflicting entry; apply_to_ddd strips that entry when it
     writes the lesson (the flag itself changes nothing).
 
@@ -1381,18 +1387,14 @@ def log_application(
         "source_stage": proposal.source_stage,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    # Gate-2 MED (run_171a17c2): surface the advisory contradiction_flag on the
-    # AUTO-APPLY path. Without this the flag was computed then discarded exactly
-    # when a contradicting lesson silently lands in the doc (the case it exists to
-    # make visible) — the escalate path serialized it via to_dict, but auto-apply
-    # dropped it. Recording it in the changelog lets the DDD weekly report / audit
-    # see "entry applied but contradicts curated entry X" without blocking the
-    # append (advisory, non-destructive — do-not-delete-on-guesses).
+    # Record the contradiction_flag with the applied lesson, so the changelog shows
+    # which curated entry this lesson replaced (apply_to_ddd has already stripped it;
+    # the strip itself is logged by _log_supersede_delete).
     if proposal.contradiction_flag is not None:
         entry["contradiction_flag"] = proposal.contradiction_flag
         logger.warning(
-            "DDD cultivation: applied append to %s/%s CONTRADICTS curated entry %r "
-            "(polarity flip %s) — advisory, review recommended",
+            "DDD cultivation: applied append to %s/%s REPLACES curated entry %r "
+            "(polarity flip %s)",
             proposal.target_doc, proposal.target_section,
             proposal.contradiction_flag.get("conflicting_title"),
             proposal.contradiction_flag.get("flip"),
@@ -1851,6 +1853,18 @@ def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
     return filepath
 
 
+def is_addition_proposal(data: dict) -> bool:
+    """True when a stored proposal dict asks for an addition (the only kind left).
+
+    A proposal file written before the retire/rewrite path was removed can still
+    carry ``change_type`` "retire"/"rewrite"; its ``content`` is placeholder text
+    ("Superseded by ...; human decide whether to retire"), so approving it as an
+    addition would write that text in as a lesson. Every reader that turns a file
+    into an actionable proposal calls this and skips the file when it is False.
+    """
+    return data.get("change_type", "append") == "append"
+
+
 def read_pending_proposals(
     workspace_dir: Path, project: str
 ) -> List[CultivationProposal]:
@@ -1875,6 +1889,8 @@ def read_pending_proposals(
     for filepath in proposals_dir.glob("*.json"):
         try:
             data = json.loads(filepath.read_text())
+            if not is_addition_proposal(data):
+                continue
             proposal = CultivationProposal.from_dict(data)
 
             if proposal.status not in AWAITING_HUMAN_STATUSES:

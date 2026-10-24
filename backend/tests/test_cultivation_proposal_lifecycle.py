@@ -368,3 +368,60 @@ class TestApplyToDddLeavesLock:
         assert lock_file.exists(), "apply_to_ddd must lock via md_lock (<doc>.md.lock) and NOT unlink it"
         # And the content actually landed.
         assert "str-division TypeError" in doc.read_text(encoding="utf-8")
+
+
+class TestRemovedRetireShapeIsNotActionable:
+    """A proposal file written before the retire/rewrite path was removed still
+    carries change_type "retire" and placeholder content. It must not surface or be
+    approvable: approving it as an addition would write the placeholder as a lesson."""
+
+    def _plant_retire(self, project_dir: Path, pid: str) -> None:
+        fp = _write_proposal(project_dir, pid, status="escalated")
+        data = json.loads(fp.read_text(encoding="utf-8"))
+        data["change_type"] = "retire"
+        data["content"] = ("Superseded by a newer polarity-flipped lesson; "
+                           "human decide whether to retire.")
+        fp.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_find_proposal_skips_a_retire_file(self, tmp_path):
+        self._plant_retire(tmp_path, "r1")
+        assert m._find_proposal(tmp_path, "r1") is None
+
+    def test_pending_list_skips_a_retire_file(self, tmp_path):
+        from core.ddd_cultivation import read_pending_proposals
+        self._plant_retire(tmp_path / "Projects" / "P", "r2")
+        _write_proposal(tmp_path / "Projects" / "P", "a2", status="pending")
+        ids = {p.id for p in read_pending_proposals(tmp_path, "P")}
+        assert ids == {"a2"}
+
+
+@pytest.mark.asyncio
+async def test_redirected_approve_does_not_strip_in_the_new_doc(tmp_path, monkeypatch):
+    """The contradiction flag names an entry in the doc the lesson was proposed for.
+    Approving into a different doc must not strip a same-titled entry there, which
+    was never polarity-checked against this lesson."""
+    project = "P"
+    pdir = tmp_path / "Projects" / project
+    fp = _write_proposal(pdir, "rd1", status="pending")
+    data = json.loads(fp.read_text(encoding="utf-8"))
+    data.update({
+        "target_doc": "TECH.md",
+        "content": "Always validate untrusted input at the boundary now",
+        "contradiction_flag": {"conflicting_title": "Never trust the cache blindly here",
+                               "section": "What Worked", "flip": ["never", "always"],
+                               "shared_topic": "input"},
+    })
+    fp.write_text(json.dumps(data), encoding="utf-8")
+    (pdir / "IMPROVEMENT.md").write_text(
+        "## What Worked\n\n"
+        "- [decision] **Never trust the cache blindly here** — unrelated decision.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        m.initialization_manager, "get_cached_workspace_path", lambda: str(tmp_path)
+    )
+    await m.approve_proposal(proposal_id="rd1", project=project,
+                             target_doc="IMPROVEMENT.md", target_section="What Worked")
+    doc = (pdir / "IMPROVEMENT.md").read_text(encoding="utf-8")
+    assert "unrelated decision" in doc
+    assert "Always validate untrusted input at the boundary" in doc

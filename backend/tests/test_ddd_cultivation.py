@@ -466,7 +466,7 @@ class TestApplyToDDD:
 
     def test_low_value_fragment_rejected_at_chokepoint(self):
         """run_e9cb7e2a: apply_to_ddd is the ONE chokepoint every write path crosses
-        (writeback / reflect / retire-rewrite / HTTP). The writeback path bypasses
+        (writeback / reflect / HTTP). The writeback path bypasses
         _classify_lesson (where is_quality_lesson lived), so a bare fragment could
         enter the brain ungated. The value FLOOR (is_quality_lesson: empty /
         instance-log / narration / <5-word fragment — errs toward ACCEPT when
@@ -1774,6 +1774,26 @@ class TestSupersedeTiering:
         recs = [_json.loads(l) for l in changelog.read_text().splitlines() if l.strip()]
         dels = [r for r in recs if r.get("action") == "auto-supersede-delete"]
         assert dels and dels[-1]["stripped_title"] == "Never trust the cache blindly here"
+
+    def test_duplicate_lesson_strips_and_logs_nothing(self, tmp_path):
+        """A lesson already in the doc returns "duplicate" and leaves the doc as it
+        was, so the changelog must not record a removal that did not happen."""
+        import json as _json
+        from core.ddd_cultivation import apply_to_ddd
+        self._doc(
+            tmp_path,
+            "## What Worked\n\n- [guideline] **Never trust the cache blindly here** — stale.\n",
+        )
+        first = self._flag_proposal("No such entry", "What Worked")
+        assert apply_to_ddd(first, tmp_path) in ("applied", "created_section")
+        again = self._flag_proposal("Never trust the cache blindly here", "What Worked")
+        assert apply_to_ddd(again, tmp_path) == "duplicate"
+        doc = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert "Never trust the cache blindly here" in doc
+        changelog = tmp_path / ".artifacts" / "ddd-changelog.jsonl"
+        recs = ([_json.loads(l) for l in changelog.read_text().splitlines() if l.strip()]
+                if changelog.exists() else [])
+        assert not [r for r in recs if r.get("action") == "auto-supersede-delete"]
 
 
 class TestCultivateWriteFailedDistinction:

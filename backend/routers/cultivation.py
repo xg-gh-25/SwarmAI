@@ -29,6 +29,7 @@ from core.ddd_cultivation import (
     AWAITING_HUMAN_STATUSES,
     CultivationProposal,
     read_pending_proposals,
+    is_addition_proposal,
     apply_to_ddd,
     log_application,
     _is_safe_section_name,
@@ -184,6 +185,11 @@ async def approve_proposal(
                     status_code=400,
                     detail=f"target_doc must be a routable DDD document, got '{target_doc}'",
                 )
+            if target_doc != proposal.target_doc:
+                # The contradiction flag names an entry in the ORIGINAL doc. Kept
+                # across a redirect, apply_to_ddd would strip a same-titled entry
+                # in the new doc that was never polarity-checked.
+                proposal.contradiction_flag = None
             proposal.target_doc = target_doc
         if target_section:
             # A section name is interpolated into a `## {name}` heading downstream, so a
@@ -317,6 +323,8 @@ def _find_proposal(project_dir: Path, proposal_id: str) -> Optional[CultivationP
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             if data.get("id") == proposal_id:
+                if not is_addition_proposal(data):
+                    return None  # a pre-removal retire/rewrite file — not actionable
                 proposal = CultivationProposal.from_dict(data)
                 if proposal.status not in AWAITING_HUMAN_STATUSES:
                     return None  # terminal (applied/rejected) — not actionable
