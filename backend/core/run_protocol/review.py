@@ -320,10 +320,10 @@ class ReviewOrchestrator:
                 if not isinstance(proof, Mapping):
                     raise ReviewError(f"handoff item {index} proof is malformed")
                 evidence_type = proof.get("evidence_type")
-                if evidence_type in {"test", "probe"} and not proof.get("event_id"):
+                if evidence_type not in {None, "diff_assertion", "refuted"}:
                     raise ReviewError(
-                        f"{finding_id}: {evidence_type} proof requires a runner proof event; "
-                        "the CLI will not forge runner evidence")
+                        f"{finding_id}: a {evidence_type!r} proof cannot be recorded; name "
+                        "the test that shows the fix in your validation report")
                 proofs[finding_id] = json.dumps(dict(proof), ensure_ascii=False, sort_keys=True)
             addressed.append(finding_id)
             hunks[finding_id] = hunk
@@ -398,10 +398,6 @@ class ReviewOrchestrator:
             finding_id, evidence_type = proof.get("finding_id"), proof.get("evidence_type")
             if finding_id not in findings:
                 raise ReviewError(f"proof {index} references an unknown finding")
-            if evidence_type in {"test", "probe"}:
-                raise ReviewError(
-                    f"{finding_id}: {evidence_type} proof requires runner wiring; "
-                    "the CLI will not forge runner evidence")
             if evidence_type not in {"diff_assertion", "refuted"}:
                 raise ReviewError(f"proof {index} has unsupported evidence_type")
             payload = {key: item for key, item in proof.items() if key != "finding_id"}
@@ -570,7 +566,7 @@ def plain(value: Any) -> str:
     return _text(value, 800)
 
 
-EVIDENCE_TYPES = frozenset({"test", "probe", "diff_assertion", "refuted"})
+EVIDENCE_TYPES = frozenset({"test", "diff_assertion", "refuted"})
 
 
 def _json_or_none(value: Any) -> Any:

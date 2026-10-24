@@ -1,10 +1,10 @@
 """Tests for create_session_link_gate (security_hooks.py) and its registration.
 
 What is tested: the PreToolUse Bash gate that keeps the run↔session link intact.
-pipeline_test_gate only applies to runs whose run.json
-session_id is this session's id, which pipeline_v1.py create reads from
-SWARM_APP_SESSION_ID. A command that removes or overrides that variable would
-create an unowned run and switch both gates off, so the gate denies it ALWAYS.
+The run gates only apply to runs whose run.json session_id is this session's id,
+which pipeline_v1.py create reads from SWARM_APP_SESSION_ID. A command that removes
+or overrides that variable would create an unowned run and switch those gates off,
+so the gate denies it ALWAYS.
 
 Methodology: the gate is driven through its real async callable with no pipeline
 run seeded (it must not depend on one), plus one end-to-end call through the real
@@ -18,13 +18,13 @@ Invariants:
     shell strings, a shell reading a heredoc, and behind unknown wrappers;
   • a wholesale env reset (env -i / env - / --ignore-environment, exec -c, sudo
     without -E) is denied only when the wrapped command mentions python,
-    pipeline_v1 or pipeline_test (directly or in its shell string);
+    or pipeline_v1 (directly or in its shell string);
   • reads pass (echo, env | grep, printenv, declare -p, grep VAR=, quoted text),
     and so do `env -u OTHER`, `export VAR` and clean-env runs of other tools;
   • the deny text explains the unlink and names the operator-only force env;
     it cannot be forced (gate_force.UNFORCEABLE); an internal error fails open;
   • build_hooks registers session_link_gate once, Bash-scoped, right before
-    pipeline_test_gate, with every existing gate still registered.
+    the commit gates, with every existing gate still registered.
 """
 import asyncio
 
@@ -120,7 +120,7 @@ NESTED = [
 ]
 RESETS_DENIED = [
     "env -i python backend/scripts/pipeline_v1.py create --project SwarmAI",
-    "env -i PATH=/usr/bin .venv/bin/python backend/scripts/pipeline_test.py --mode verify",
+    "env -i PATH=/usr/bin .venv/bin/python backend/scripts/pipeline_v1.py status",
     "env - python3 a.py",
     "env --ignore-environment python a.py",
     "env -i -- python a.py",
@@ -242,7 +242,7 @@ def _build():
     ))
 
 
-def test_build_hooks_registers_the_gate_once_right_before_pipeline_test_gate(monkeypatch):
+def test_build_hooks_registers_the_gate_once_right_before_the_commit_gates(monkeypatch):
     from core import hook_builder
 
     recorded = []
@@ -256,7 +256,7 @@ def test_build_hooks_registers_the_gate_once_right_before_pipeline_test_gate(mon
     monkeypatch.setattr(hook_builder.HookRegistry, "register", _spy)
     _build()
     names = [n for _e, n, _m in recorded]
-    for existing in ("pre_tool_logger", "background_command_guard", "pipeline_test_gate",
+    for existing in ("pre_tool_logger", "background_command_guard", "run_amend_gate",
                      "bash_syntax_guard",
                      "image_read_dedup_guard",
                      "dangerous_command_gate",
@@ -264,12 +264,11 @@ def test_build_hooks_registers_the_gate_once_right_before_pipeline_test_gate(mon
                      "external_approval_gate", "governance_file_gate"):
         assert names.count(existing) == 1, existing
     assert names.count("session_link_gate") == 1
-    assert names.index("session_link_gate") == names.index("pipeline_test_gate") - 1
+    assert names.index("session_link_gate") == names.index("run_amend_gate") - 1
     assert names.index("session_link_gate") < names.index("dangerous_command_gate")
     assert {n: (e, m) for e, n, m in recorded}["session_link_gate"] == ("PreToolUse", "Bash")
     without = [n for n in names if n != "session_link_gate"]
-    assert without.index("background_command_guard") < without.index("pipeline_test_gate") \
-        < without.index("bash_syntax_guard")
+    assert without.index("background_command_guard") < without.index("run_amend_gate")
 
 
 def test_real_bash_chain_denies_before_any_approval_prompt():

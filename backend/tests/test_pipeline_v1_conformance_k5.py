@@ -1,6 +1,6 @@
 """Conformance K5: v13 §D4 acceptance, end to end (conformance spec §3 K5).
 
-Methodology: runs are driven only through ``pipeline_v1.py`` / ``pipeline_test.py``
+Methodology: runs are driven only through ``pipeline_v1.py``
 and the real hooks (``tests/pipeline_v1_rig.py``); assertions read the run's signed
 event log, its sealed finals and git. Covered:
 
@@ -463,30 +463,3 @@ def test_a_stale_file_where_the_report_goes_is_not_called_finished(tmp_path):
     assert (repo / report).read_text() == "someone else's text\n"
 
 
-def test_two_writers_of_one_cache_key_at_the_same_moment(tmp_path):
-    """§D4 item 6 under a real race: one value wins; different values are integrity
-    and neither is reused."""
-    import threading
-    from core.run_protocol import cache
-    key = cache.cache_key({"kind": "test", "repo": "r", "tree": "1" * 40,
-                           "pipeline_code_hash": "2" * 64, "protocol_version": 1,
-                           "rules_version": "v1"})
-    for values, conflict in (((1, 1), False), ((1, 2), True)):
-        root = tmp_path / f"c{values[1]}"
-        barrier = threading.Barrier(2)
-        out = []
-
-        def write(value):
-            barrier.wait()
-            out.append(cache.put_once(root, "test", key, {"v": value}))
-        threads = [threading.Thread(target=write, args=(v,)) for v in values]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        if conflict:
-            assert sorted(out).count("conflict") == 1, out
-            with pytest.raises(cache.CacheError, match="poisoned"):
-                cache.read(root, "test", key)
-        else:
-            assert "conflict" not in out and cache.read(root, "test", key) == {"v": 1}

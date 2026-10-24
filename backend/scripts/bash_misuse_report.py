@@ -36,8 +36,6 @@ from pathlib import Path
 
 # A gate's deny text → its name. First match wins; order: specific before generic.
 GATE_PATTERNS: list[tuple[str, re.Pattern]] = [(n, re.compile(p)) for n, p in [
-    # the second alternative is the pre-G1 deny text, kept for older transcripts
-    ("pipeline_test_gate", r"DENY \(runner |is active in this session, so tests and builds go through"),
     ("run_owner_gate", r"DENY \(run owner gate\)"),
     ("worktree_write_gate", r"DENY \(worktree gate\)"),
     ("audit_marker_write_gate", r"this writes, moves or deletes files in"),

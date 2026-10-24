@@ -142,6 +142,13 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - `next_step`：BUILD / TEST 提示 native 测试并给出报告格式，不再给 runner 命令；没有自动完成。
   - 五维审计的 Quality：每个仓库的 TEST 报告有通过、没有失败算 verified。
   - stage 卡片（build、goal_cycle、test、deliver、review）和 INSTRUCTIONS、SKILL.md 去掉 runner 命令；review 里"用 prove 关闭 finding"暂时改为"在报告里写明证明修复的测试"，`reported_test` 证据在 S6-2 加。
+  S6-1b-ii 实现（2026-10-24）：删 runner。
+  - 删除：`scripts/pipeline_test.py`；`core/run_protocol/` 的 `runner`、`runner_service`、`runner_client`、`final`、`probe`、`cache`、`carry`、`risk_selection`、`validations`；`core/evidence_seal.py`、`core/main_red.py`；`facts` 里的 `bind_final`、`required_validations`、`rule_violations`；`pipeline_test_gate` 和它独用的测试命令分类器（`security_hooks` 约 740 行，`test_command_gate` 组随之删掉）；`test_call` 事件、`runner` 签名者（usage metric 改由 daemon 记）、`daemon_exec` 的 runner lease；lifecycle 的 runner 上限（`regression_round`、`recheck`、`breaker_*`、`goal_tdd_calls`）；contract 的 `pipeline_code_hash`、`regression_round_cap`、`recheck_cap`、`risk_test_file_cap`（和 `create --risk-test-file-cap`）；`run_worktree` 的 `carries_over`、测试调用锁、源码图缓存清理；`next_step.auto_completable`；`CheckContext` 的 runner 字段。
+  - `contract`、`read_contract`、`is_v1_run`、`integration_branches_path` 搬到新的 `core/run_protocol/contract.py`。
+  - DESIGN_SPEC 的 exit kind 只剩 `test`、`manual`：没有执行器，`probe`、`mutation` 是未知 kind。refutation 的 `test:<nodeid>` 引用删除；finding 的 `test`、`probe` 证明删除，行为类 finding 在 S6-2 加 `reported_test` 之前只能靠 R2 和推送检查。
+  - `pipeline_command` 不再认 `pipeline_test.py`；旧的 `python …/pipeline_v1.py` 形式和 `source_repo` 照计划留到 S6-5。
+  - SwarmAI 的选测逻辑留成 `backend/scripts/swarm_select_tests.py`：按 import 图选 backend 测试，并列出 `validations.json` 里路径匹配的检查；`tests/test_swarm_select_tests.py` 覆盖。
+  - 还没做：S6-1 里"TEST 改了代码退回 REVIEW"放进 S6-2（LG-1 绑定审查过的 tree 时一起做）。
 - **审查和最终 tree 的关系（r8，skeptic BLOCKER 1）**：阶段顺序 build → review → test 不变。规则是：
   - Gate-2 审查的对象是 REVIEW 时的代码 tree，以及 BUILD 的验证报告。测试是否充分、报告是否可信，由 Gate-2 专家判断；专家 sub-agent 有 Bash，可疑时自己用 native 方式跑测试核实；不足、不实就记成 finding，走 fixing-spec → 修复 → R2 复查。"至少有一个测试在改动前会失败"是专家检查清单里的一项。
   - TEST 阶段是在审查后的最终 tree 上做最后一次验证，并提交 TEST 的验证报告。**TEST 阶段不改代码**：如果最终验证发现问题、需要改代码，run 退回 REVIEW，做一次**增量审查**，再回到 TEST。

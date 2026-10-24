@@ -63,38 +63,6 @@ def test_the_service_answers_busy_past_its_admission_limit(rig, monkeypatch):
         slow.close()
 
 
-def test_a_runner_lease_is_bound_to_the_process_that_opened_it(rig):
-    from core import hook_token
-    from core.run_protocol import daemon_exec, runner_service
-    rig.create()
-    token = hook_token.issue(rig.ws, SESSION, rig.run_id, "test")
-    opened = daemon_exec.request({"op": "runner_open", "token": token, "project": "P",
-                                  "run_id": rig.run_id}, token=token)
-    assert opened.get("ok") is True, opened
-    lease = opened["lease"]
-    # this process opened it: a request from another process is refused
-    code = ("import json, sys; sys.path.insert(0, %r)\n"
-            "from core.run_protocol import daemon_exec\n"
-            "print(json.dumps(daemon_exec.request({'op': 'runner', 'lease': %r, "
-            "'call': 'events', 'args': {}}, token=%r)))\n"
-            % (str(daemon_exec.__file__.rsplit('/core/', 1)[0]), lease, lease))
-    proc = subprocess.run([sys.executable, "-c", code], env=rig.env, capture_output=True,
-                          text=True, timeout=60)
-    other = json.loads(proc.stdout.strip().splitlines()[-1])
-    assert other.get("ok") is False, other
-    mine = daemon_exec.request({"op": "runner", "lease": lease, "call": "events",
-                                "args": {}}, token=lease)
-    assert mine.get("ok") is True, mine
-    bad = daemon_exec.request({"op": "runner", "lease": lease, "call": "append",
-                               "args": {"kind": "land", "at": "2026-10-24T00:00:00Z",
-                                        "payload": {}}}, token=lease)
-    assert bad.get("ok") is False and "cannot record" in bad.get("error", ""), bad
-    with runner_service._LOCK:
-        runner_service._LEASES[lease]["start"] = "another process"   # pid reused
-    runner_service.reap()
-    assert lease not in runner_service._LEASES
-
-
 def test_a_failed_worker_start_frees_its_admission_slot(rig, monkeypatch):
     """B round 2 MED: an exception between taking the slot and starting the worker
     leaked the slot, so repeated failures left the service answering busy for ever."""
@@ -117,11 +85,3 @@ def test_a_failed_worker_start_frees_its_admission_slot(rig, monkeypatch):
     b.close()
 
 
-def test_an_unidentifiable_runner_gets_no_lease(rig):
-    from core import hook_token
-    from core.run_protocol import runner_service
-    rig.create()
-    token = hook_token.issue(rig.ws, SESSION, rig.run_id, "test")
-    out = runner_service.handle({"op": "runner_open", "token": token, "project": "P",
-                                 "run_id": rig.run_id}, port=None, peer_pid=None)
-    assert out.get("ok") is False, out

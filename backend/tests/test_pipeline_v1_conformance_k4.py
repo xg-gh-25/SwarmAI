@@ -55,7 +55,6 @@ def test_f22_details_carry_critical_path_experts_waits_and_trace_matrix():
     events = [
         {"kind": "run_create", "event_id": "e0", "at": "2026-10-23T00:00:00+00:00"},
         {"kind": "stage_attempt", "event_id": "e1", "stage": "build", "at": "2026-10-23T00:01:00+00:00"},
-        {"kind": "test_call", "event_id": "e2", "stage": "build", "at": "2026-10-23T00:02:00+00:00"},
         {"kind": "stage_complete", "event_id": "e3", "stage": "build", "at": "2026-10-23T00:03:00+00:00"},
         {"kind": "handout", "event_id": "h1", "stage": "review", "round": 1,
          "at": "2026-10-23T00:04:00+00:00", "payload": {"expert_id": "correctness"}},
@@ -76,9 +75,7 @@ def test_f22_details_carry_critical_path_experts_waits_and_trace_matrix():
               "properties": [{"id": "P1", "validates": ["R1"], "test": "tests/test_a.py::test_a"}]}
     details = _audit(events, final=final, design=design)["details"]
     build, review = details["critical_path"]
-    assert (build["stage"], build["seconds"], build["attempts"], build["test_calls"]) == \
-        ("build", 180.0, 1, 1)
-    assert build["unmeasured"] == ["test_calls"]          # a test call's start is not known
+    assert (build["stage"], build["seconds"], build["attempts"]) == ("build", 180.0, 1)
     # REVIEW: 7 min wall, of which 2 min waited on a person; the expert took 2 min
     assert (review["stage"], review["seconds"], review["active_seconds"],
             review["dispatch_seconds"], review["dispatches"]) == ("review", 420.0, 300.0, 120.0, 1)

@@ -149,13 +149,13 @@ def test_check_evaluator_runs_schema_not_a_passed_boolean_claim():
         checks.evaluate("NOPE", _context())
 
 
-def test_ds9a_uses_the_shared_probe_validator():
+def test_ds9a_refuses_a_probe_exit_now_that_the_pipeline_runs_nothing():
+    """S6-1: no probe / mutation executor exists, so those exit kinds are unknown."""
     design = _context().design.copy()
-    design["exit_criteria"] = [{"id": "X1", "kind": "probe",
-        "argv": ["sh", "-c", "true"], "expect": {"rc": 0, "stdout": "empty"},
-        "covers": ["R1.1"]}]
-    ok, detail = checks.evaluate("DS-9a", _context(design=design))
-    assert not ok and "only git grep" in detail
+    for kind in ("probe", "mutation"):
+        design["exit_criteria"] = [{"id": "X1", "kind": kind, "covers": ["R1.1"]}]
+        ok, detail = checks.evaluate("DS-9a", _context(design=design))
+        assert not ok and "unknown exit kind" in detail, kind
 
 
 def test_unknown_profile_stage_and_effect_are_rejected():

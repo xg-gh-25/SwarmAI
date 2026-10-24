@@ -30,7 +30,7 @@ NEEDS_YOU_PAUSE_KINDS = frozenset({"decision", "stopped", "worktree", "idle"})
 def is_v1(run_id: str) -> bool:
     """A v1 run: its protected contract exists (never inferred from run.json)."""
     from config import get_app_data_dir
-    from core.run_protocol.runner import is_v1_run
+    from core.run_protocol.contract import is_v1_run
     try:
         return is_v1_run(get_app_data_dir(), run_id)
     except Exception as exc:  # noqa: BLE001 — an unreadable contract is not a v1 run

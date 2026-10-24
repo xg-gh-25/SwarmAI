@@ -95,7 +95,7 @@ def render_design(document: Mapping[str, Any]) -> str:
             for row in rows:
                 identity = row.get("id", "?")
                 body = row.get("statement") or row.get("scenario") or row.get("change") \
-                    or row.get("ref") or row.get("argv")
+                    or row.get("ref")
                 lines.append(f"- **{identity}** — {body}")
             lines.append("")
     consumers = document.get("consumers")

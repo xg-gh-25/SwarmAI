@@ -1,7 +1,7 @@
 """Backend-observed Pipeline v1 stage rows for the chat stream.
 
-The streaming orchestrator watches the Bash calls that name a v1 run (``pipeline_v1.py``
-or ``pipeline_test.py`` with ``--run-id``; ``pipeline_v1.py create`` by its printed id)
+The streaming orchestrator watches the Bash calls that name a v1 run (a pipeline CLI
+call with ``--run-id``; ``create`` by its printed id)
 and, when one returns, asks this module what changed in the run's projection
 (``run.json``, written by ``RunEngine.write_projection`` from the signed events). Only
 a run with a protected v1 contract is read (retirement R3: no old-pipeline shapes).
@@ -168,7 +168,7 @@ def read_stage_state(run_id: object) -> Optional[dict]:
         return None
     try:
         from config import get_app_data_dir
-        from .run_protocol.runner import read_contract
+        from .run_protocol.contract import read_contract
         contract = read_contract(get_app_data_dir(), run_id)
         if not isinstance(contract, dict):
             return None

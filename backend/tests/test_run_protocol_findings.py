@@ -82,29 +82,7 @@ class Stream:
         payload = {"canonical_id": canonical_id, "pass": 1,
                    "evidence_type": evidence_type, "code_tree": "1" * 40,
                    "result": result, **extra}
-        if evidence_type == "test":
-            old_tree, target = "0" * 40, "tests/test_break.py::test_finding"
-            calls = [self.add("test_call", {"seq": self.ordinal + 1,
-                "call_type": "test", "target": target, "snapshot": snapshot,
-                "code_tree": old_tree if snapshot == "old" else "1" * 40,
-                "result": result_value}) for snapshot, result_value in (
-                    ("old", "assert_fail"), ("old", "assert_fail"), ("new", "pass"))]
-            payload.update({"test_call_event_ids": [call["event_id"] for call in calls],
-                            "test_node": target, "old_code_tree": old_tree})
-            payload.setdefault("old_runs", ["assert_fail", "assert_fail"])
-            payload.setdefault("new_run", "pass")
-        elif evidence_type == "probe":
-            old_tree, target = "0" * 40, "git grep -e old -- backend"
-            calls = [self.add("test_call", {"seq": self.ordinal + 1,
-                "call_type": "probe", "target": target, "snapshot": snapshot,
-                "code_tree": old_tree if snapshot == "old" else "1" * 40,
-                "result": result_value}) for snapshot, result_value in (
-                    ("old", "not_satisfied"), ("new", "satisfied"))]
-            payload.update({"test_call_event_ids": [call["event_id"] for call in calls],
-                            "probe_target": target, "old_code_tree": old_tree})
-            payload.setdefault("probe_old", "not_satisfied")
-            payload.setdefault("probe_new", "satisfied")
-        return self.add("proof", payload, producer="runner", attempt=1)
+        return self.add("proof", payload, producer="cli", attempt=1)
 
 
 def one(**kwargs):
@@ -178,17 +156,6 @@ def test_missing_r2_line_is_open_for_unclosed_finding():
     assert row["status"] == "open" and row["r2_status"] == "OPEN"
 
 
-def test_proven_finding_with_missing_r2_status_is_open_not_assumed_adequate():
-    stream, _, finding = one()
-    stream.proof(finding["canonical_id"], "test", "proven")
-    stream.add("handout", {"expert_id": "correctness",
-                           "finding_ids": [finding["canonical_id"]]},
-               stage="review", round=2, attempt=1)
-    row = stream.projected()[0]
-    assert row["status"] == "open" and row["r2_status"] == "OPEN"
-    assert fd.push_effect(row)
-
-
 def test_finding_occ_requires_existing_matching_expert_answer():
     stream = Stream()
     answer = stream.answer("security", 1, tool_use_id="t")
@@ -211,15 +178,6 @@ def test_finding_status_requires_this_experts_real_r2_answer():
         stream.projected()
 
 
-def test_r2_test_adequate_keeps_closed_proven_inadequate_invalidates():
-    for status, expected in (("ADEQUATE", "closed_proven"),
-                             ("TEST_INADEQUATE", "invalid_test")):
-        stream, _, finding = one()
-        stream.proof(finding["canonical_id"], "test", "proven")
-        _status(stream, finding, status)
-        assert stream.projected()[0]["status"] == expected
-
-
 def test_reclassification_changes_kind_only_after_matching_r2_confirmation():
     stream, _, finding = one()
     stream.add("reclassify", {"canonical_id": finding["canonical_id"],
@@ -240,20 +198,14 @@ def test_unknown_status_finding_is_rejected():
         stream.projected()
 
 
-def test_runner_test_and_probe_proofs_close_only_supported_kinds():
-    for kind, evidence in (("behavior", "test"), ("contract", "test"),
-                           ("absence", "probe"), ("contract", "probe")):
-        stream, _, finding = one(kind=kind)
-        stream.proof(finding["canonical_id"], evidence, "proven")
-        assert stream.projected()[0]["status"] == "closed_proven"
-
-
-def test_fake_or_wrong_producer_proof_cannot_close_high_finding():
+def test_a_test_proof_cannot_close_a_finding_until_reported_tests_exist():
+    """S6-1: the runner's old/old/new test proofs are gone; a ``test`` proof is an
+    unknown evidence type (its replacement, ``reported_test``, comes in S6-2)."""
     stream, _, finding = one()
     stream.add("proof", {"canonical_id": finding["canonical_id"], "pass": 1,
                "evidence_type": "test", "code_tree": "1" * 40, "result": "proven"},
                producer="cli", attempt=1)
-    with pytest.raises(fd.FindingError, match="runner"):
+    with pytest.raises(fd.FindingError, match="unknown proof evidence type"):
         stream.projected()
 
 
@@ -267,19 +219,8 @@ def test_diff_assertion_flags_are_exact_booleans_and_docs_cannot_touch_code():
                    "touches_executable": False}, producer="cli", attempt=1)
     stream.proof(finding["canonical_id"], "diff_assertion", "asserted",
                  touches_finding=True, touches_executable=True)
-    # Stream.proof defaults runner; diff assertions must come from cli first.
+    # a diff assertion that touches executable lines cannot close a docs finding
     with pytest.raises(fd.FindingError):
-        stream.projected()
-
-
-def test_runner_label_without_matching_test_call_cannot_prove_a_finding():
-    stream, _, finding = one()
-    stream.add("proof", {"canonical_id": finding["canonical_id"], "pass": 1,
-               "evidence_type": "test", "code_tree": "1" * 40, "result": "proven",
-               "test_call_event_id": "a" * 64,
-               "old_runs": ["assert_fail", "assert_fail"], "new_run": "pass"},
-               producer="runner", attempt=1)
-    with pytest.raises(fd.FindingError, match="correlated old-old-new"):
         stream.projected()
 
 
@@ -403,33 +344,3 @@ def test_accept_finding_digest_cannot_be_rebound_to_another_finding():
         stream.add("auth_consumed", rebound)
 
 
-def test_lint_call_cannot_prove_a_behavioral_break_test():
-    stream, _, finding = one()
-    lint = stream.add("test_call", {"seq": stream.ordinal + 1,
-        "call_type": "lint", "target": "tests/test_break.py::test_finding",
-        "snapshot": "new", "code_tree": "1" * 40, "result": "pass"})
-    stream.add("proof", {"canonical_id": finding["canonical_id"], "pass": 1,
-        "evidence_type": "test", "code_tree": "1" * 40, "old_code_tree": "0" * 40,
-        "result": "proven", "test_node": "tests/test_break.py::test_finding",
-        "test_call_event_ids": [lint["event_id"]] * 3,
-        "old_runs": ["assert_fail", "assert_fail"], "new_run": "pass"},
-        producer="runner", attempt=1)
-    with pytest.raises(fd.FindingError, match="correlated old-old-new"):
-        stream.projected()
-
-
-def test_new_r2_finding_can_close_by_proof_without_missing_status_reopening_it():
-    stream = Stream()
-    old = stream.finding(expert="correctness")
-    stream.add("handout", {"expert_id": "correctness",
-                           "finding_ids": [old["ckey"]]},
-               stage="review", round=2, attempt=1)
-    answer = _r2_answer(stream)
-    new = stream.add("finding_occ", {
-        "answer_event_id": answer["event_id"], "expert": "correctness",
-        "severity": "HIGH", "finding_kind": "behavior", "file": "backend/new.py",
-        "line": 7, "claim": "new R2 issue"}, round=2)
-    stream.proof(new["ckey"], "test", "proven")
-    rows = {row["canonical_id"]: row for row in stream.projected()}
-    assert rows[old["ckey"]]["status"] == "open"
-    assert rows[new["ckey"]]["status"] == "closed_proven"

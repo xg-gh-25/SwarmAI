@@ -219,7 +219,7 @@ class ReviewHookBridge:
                               and event.get("payload", {}).get("name") == name
                               for event in existing)
             self.store.append_new(
-                writer=self.store.authority.writer("runner"), kind="metric",
+                writer=self.store.authority.writer("hook"), kind="metric",
                 at=completed_at, stage="review", attempt=attempt,
                 payload={"name": name, "value": value})
             existing = self.store.read_events()

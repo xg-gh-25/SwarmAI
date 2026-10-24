@@ -247,7 +247,7 @@ def test_a_corrupt_contract_refuses_rather_than_skips_the_run(rig):
     """A run whose protected contract exists but cannot be read is not 'no run':
     which repos it owns is unknown, so the commit is refused (three-way re-audit MED)."""
     from config import get_app_data_dir
-    from core.run_protocol.runner import contract_path
+    from core.run_protocol.contract import contract_path
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)
@@ -262,7 +262,7 @@ def test_a_corrupt_contract_refuses_rather_than_skips_the_run(rig):
 def test_a_corrupt_contract_of_a_finished_run_does_not_block_commits(rig):
     """Re-audit 84b72ec1 MED: one broken OLD run must not deny every commit."""
     from config import get_app_data_dir
-    from core.run_protocol.runner import contract_path
+    from core.run_protocol.contract import contract_path
     r = rig()
     r.create()
     assert r.v1("abandon", "--reason", "done").get("ok") is True
@@ -276,7 +276,7 @@ def test_a_forged_terminal_projection_does_not_unguard_a_corrupt_contract_run(ri
     """Re-audit c772dd92 MED: "finished" for a corrupt-contract run is read from the
     signed log, never run.json."""
     from config import get_app_data_dir
-    from core.run_protocol.runner import contract_path
+    from core.run_protocol.contract import contract_path
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)

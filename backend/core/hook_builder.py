@@ -29,7 +29,6 @@ from .security_hooks import (
     create_active_run_commit_gate,
     create_session_link_gate,
     create_audit_marker_write_gate,
-    create_pipeline_test_gate,
     create_run_amend_gate,
     bash_syntax_guard,
     create_image_read_dedup_guard,
@@ -415,34 +414,16 @@ async def build_hooks(
     # ALWAYS (not only during a run): DENY a command that removes or overrides
     # SWARM_APP_SESSION_ID (unset, env -u/-i in front of python, VAR=… prefixes,
     # export/declare, also inside bash -c / eval / pnpm dlx -c). That variable links a
-    # pipeline run to this session; without it pipeline_test_gate
-    # silently stops applying. Reads pass. Fail-open; operator bypass
-    # none (gate_force.UNFORCEABLE). Registered right before
-    # test_command_gate so both see the command before any HITL prompt. (A v1 run's
+    # pipeline run to this session; without it the run gates silently stop
+    # applying. Reads pass. Fail-open; operator bypass none
+    # (gate_force.UNFORCEABLE). Registered before commit_gate so it sees the command
+    # before any HITL prompt. (A v1 run's
     # owner is in its protected contract from create; nothing stamps it afterwards.)
     registry.register(
         "PreToolUse", create_session_link_gate(hook_session_context),
         "session_link_gate", matcher="Bash",
     )
 
-
-    # ── PreToolUse: pipeline-test gate (Bash-scoped) ──
-    # Design §4-B3. Only while THIS session has an active pipeline run (run.json
-    # session_id == app session id, status running, recent activity): DENY direct
-    # pytest/vitest/tsc/eslint/vite build/npm build|test|lint|typecheck/make test*,
-    # repo-copy baselines and manual pytest hang triage, and hand back a filled-in
-    # pipeline_test.py command. No run → no effect. (pytest_command_guard, which denied an
-    # uncapped pytest in every session, was removed: design 2026-10-24-swarmai-usable-by-anyone
-    # §3.4.) Fail-open. pipeline_test_gate denies only runner loops/repeats; a direct test
-    # command in an active run is approved with a note. Registered
-    # BEFORE dangerous_command_gate: a user must never be asked to approve a command
-    # this gate would then deny.
-    registry.register(
-        "PreToolUse", compose_gates([
-            ("pipeline_test_gate", create_pipeline_test_gate(hook_session_context)),
-        ]),
-        "test_command_gate", matcher="Bash", no_timeout=True,
-    )
 
     # ── PreToolUse: commit gate (Bash-scoped), two checks on `git commit` ──
     # 1. run_amend_gate: in THIS session's active run, `git commit --amend` is denied and
@@ -463,7 +444,7 @@ async def build_hooks(
     )
 
     # ── PreToolUse: run-owner gate (Bash-scoped) — pipeline-run-worktree §4.2 ──
-    # For artifact_cli / pipeline_test commands on a run (only while worktree mode is
+    # For pipeline_v1 commands on a run (only while worktree mode is
     # on, or the run is isolated): take a crashed owner's run over (deny while the
     # owner is live), and issue the one-time hook token for commands that change
     # worktree state by rewriting them via updatedInput. Fail-open; the token proves

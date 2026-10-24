@@ -3,7 +3,7 @@
 Exactly three kinds of failure end a run ``failed`` with ``infrastructure_failed``:
 the audit area cannot be written, the hook-token service is unreachable, or git
 cannot write objects. Each is raised as a subclass of ``InfrastructureError`` by the
-layer that meets it; the layer that catches it (the CLI, the runner) records the
+layer that meets it; the layer that catches it (the CLI) records the
 event. Every other exception propagates as before.
 
 Public symbols:

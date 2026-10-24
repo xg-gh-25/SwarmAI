@@ -47,7 +47,7 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
-                              run_id="run_one", risk_test_file_cap=20)
+                              run_id="run_one")
     assert engine.projection()["stage"] == "build"      # direct has no PLAN
     wt = engine.ensure_stage_worktrees()["repo"]
     ( __import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
@@ -131,7 +131,7 @@ def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path,
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
-                              run_id="run_rp", risk_test_file_cap=20)
+                              run_id="run_rp")
     wt = engine.ensure_stage_worktrees()["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text(
         "import subprocess\nvalue = subprocess.Popen(['true'])\n")
@@ -156,7 +156,7 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
-                              run_id="run_rp2", risk_test_file_cap=20)
+                              run_id="run_rp2")
     wt = engine.ensure_stage_worktrees()["repo"]
     (__import__("pathlib").Path(wt) / "a.py").write_text("value = 2\n")
     engine.stage_complete(_report())

@@ -78,10 +78,9 @@ def test_f18_a_hit_stage_attempt_cap_is_a_speed_block(rig):
     r = rig("direct")
     r.create()
     r.drive(until="build")
-    r.edit({"backend/core/mod.py": "def add(a, b):\n    return a - b\n"})      # red
+    r.edit(Rig.CHANGE)
     for _ in range(3):
-        r.pt("tdd", "--files", "backend/tests/test_x.py")
-        r.v1("stage-complete")
+        r.v1("stage-complete")          # no validation report: BX-3 fails each attempt
     r.drive()
     assert "stage_attempt" in _caps(r)
     summary = r.engine().build_audit(through="COMPLETED")["summary"]
@@ -175,7 +174,7 @@ def test_f11_git_objects_that_cannot_be_written_fail_the_run(rig):
     for path in modes:
         os.chmod(path, stat.S_IRUSR | stat.S_IXUSR)        # no new object can be written
     try:
-        out = r.pt("tdd", "--files", "backend/tests/test_x.py")
+        out = r.report_and_complete()      # the report's tree cannot be written
     finally:
         for path, mode in modes.items():
             os.chmod(path, mode)
@@ -307,14 +306,13 @@ def test_r1_a_git_object_failure_while_collecting_facts_fails_the_run(rig, monke
 
 
 def test_r1_two_reporters_record_one_infrastructure_failure(rig):
-    from core.run_protocol import infra, runner
+    from core.run_protocol import infra
     r = rig("direct")
     r.create()
     engine = r.engine()
     failure = infra.InfrastructureError("disk full", component="audit_store")
-    assert runner.record_infrastructure_failed(r.run_id, engine.contract, failure) is not None
-    assert runner.record_infrastructure_failed(r.run_id, engine.contract, failure) is None
-    assert engine.fail_infrastructure(failure)["recorded"] is False
+    assert engine.fail_infrastructure(failure)["recorded"] is True
+    assert r.engine().fail_infrastructure(failure)["recorded"] is False
     assert [e["kind"] for e in r.events()].count("infrastructure_failed") == 1
     assert r.state()["status"] == "failed"
 
@@ -330,15 +328,13 @@ def test_r1_a_failing_flock_is_an_unwritable_audit_area(rig, monkeypatch):
 
 
 def test_r1_a_repeated_cap_hit_is_recorded_once(rig):
-    r = rig("trivial")
+    r = rig("direct")
     r.create()
     r.drive(until="test")
-    for i in range(r.engine().contract["regression_round_cap"] + 3):
-        # red each round: a green final with no required validation finishes TEST
-        r.edit({"backend/core/other.py": f"def other():\n    return 2  # round {i}\n"})
-        r.pt("regression")
+    for _ in range(5):            # a failed TEST report each time; the cap is 3 attempts
+        r.report_and_complete("fail")
     caps = [e for e in r.events() if e["kind"] == "metric"
-            and e["payload"]["name"] == "cap_exceeded.regression_round"]
+            and e["payload"]["name"] == "cap_exceeded.stage_attempt"]
     assert len(caps) == 1
     assert not any(e["kind"] == "integrity" for e in r.events())
 

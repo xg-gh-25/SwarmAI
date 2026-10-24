@@ -116,7 +116,6 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--session-id", default=None)
     create.add_argument("--repo", action="append", default=[])
     create.add_argument("--run-id")
-    create.add_argument("--risk-test-file-cap", type=int, default=200)
     create.add_argument("--transcript-id", action="append", default=[])
     create.add_argument("--requirement",
                         help="the user's request, verbatim (required for --profile direct)")
@@ -207,7 +206,6 @@ def execute(args) -> dict[str, Any]:
             profile=args.profile, session_id=args.session_id, repos=_repos(args.repo),
             # the mode is a setting, never the agent's choice (C4, design §C5.1)
             mode="isolated" if mode_enabled() else "shared",
-            risk_test_file_cap=args.risk_test_file_cap,
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement)
         return _with_next(engine, {"ok": True, "pipeline_id": engine.run_id,

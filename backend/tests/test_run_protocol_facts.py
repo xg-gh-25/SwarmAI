@@ -60,19 +60,18 @@ def _repo(tmp_path):
 
 
 @pytest.mark.parametrize("ref", ["x", "a.py:9", "b.py:1", "/etc/passwd:1", "../a.py:1",
-                                 "event:nope", "test:t.py::t"])
+                                 "event:nope", "test:t.py::t"])   # no test: refs (S6-1)
 def test_unresolvable_refs_are_refused(tmp_path, ref):
     root, tree = _repo(tmp_path)
     with pytest.raises(facts.FactError):
-        facts.resolve_refs([ref], root=root, code_tree=tree, event_ids={"e1"},
-                           final_nodes={})
+        facts.resolve_refs([ref], root=root, code_tree=tree, event_ids={"e1"})
 
 
 def test_resolvable_refs_record_what_they_point_at(tmp_path):
     root, tree = _repo(tmp_path)
-    out = facts.resolve_refs(["a.py:1-2", "event:e1", "test:t.py::t"], root=root,
-                             code_tree=tree, event_ids={"e1"}, final_nodes={"t.py::t": "pass"})
-    assert [row["kind"] for row in out] == ["path", "event", "test"]
+    out = facts.resolve_refs(["a.py:1-2", "event:e1"], root=root,
+                             code_tree=tree, event_ids={"e1"})
+    assert [row["kind"] for row in out] == ["path", "event"]
     assert out[0]["lines"] == [1, 2] and len(out[0]["blob"]) == 40
 
 

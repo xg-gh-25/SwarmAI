@@ -7,15 +7,8 @@ question is answered in exactly one place:
 - ``resolve_base`` — a run repo's base: HEAD for a shared repo (its root IS the main
   checkout); otherwise the fork point from the RECORDED integration branch. It never
   guesses: an isolated repo whose base git cannot name raises ``FactError``.
-- ``bind_final`` — the final only when every expected repo row binds the current
-  code tree and the current base; otherwise ``{}`` plus the reasons.
-- ``required_validations`` — the BASE ``validations.json`` selected by the changed
-  paths; the final's own list only says what ran, never what was required.
-- ``RULE_PATHS`` / ``rule_violations`` — the files that decide what a run must
-  verify, and whether a run touched them or ran on pipeline code other than its
-  contract's (QX-2).
-- ``resolve_refs`` — a refutation's refs, each resolved against the code tree, the
-  run's verified events or the bound final; a ref that does not resolve is refused.
+- ``resolve_refs`` — a refutation's refs, each resolved against the code tree or the
+  run's verified events; a ref that does not resolve is refused.
 - ``decision_values`` — each decision exactly as its validated event recorded it.
 - ``stale_closures`` — findings closed by a refutation or diff assertion that was
   judged on a code tree the run no longer has: the closure does not hold now.
@@ -29,12 +22,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from core.run_protocol import cache
-
 SHA40 = re.compile(r"[0-9a-f]{40}")
-# repo-relative: the v1 pipeline code lives under backend/ of the SwarmAI repo
-RULE_PATHS: tuple[str, ...] = ("validations.json",) + tuple(
-    f"backend/{path}" for path in cache.PIPELINE_CODE)
 _PATH_REF = re.compile(r"(?P<path>[^:\s][^:]*):(?P<start>\d+)(?:-(?P<end>\d+))?")
 
 
@@ -69,61 +57,9 @@ def resolve_base(root: str | Path, main: str | Path | None, branch: str | None) 
     return base
 
 
-def bind_final(final: Mapping[str, Any], *, expected: Sequence[str],
-               code_trees: Mapping[str, str | None],
-               bases: Mapping[str, str | None]) -> tuple[dict[str, Any], list[str]]:
-    repos = final.get("repos") if isinstance(final, Mapping) else None
-    reasons: list[str] = []
-    if not isinstance(repos, Mapping) or not expected or set(repos) != set(expected):
-        return {}, ["no final for every expected repo"]
-    for name in expected:
-        row = repos[name]
-        if not isinstance(row, Mapping):
-            reasons.append(f"{name}: final row malformed")
-            continue
-        if not code_trees.get(name) or row.get("code_tree") != code_trees.get(name):
-            reasons.append(f"{name}: final was made on another code tree")
-        if not bases.get(name) or row.get("base") != bases.get(name):
-            reasons.append(f"{name}: final was made on another base")
-    return ({} if reasons else dict(final)), reasons
-
-
-def required_validations(roots: Mapping[str, str], bases: Mapping[str, str | None],
-                         changed: Mapping[str, Sequence[str]]) -> dict[str, frozenset[str]]:
-    from core.run_protocol import validations
-    out: dict[str, frozenset[str]] = {}
-    for name, root in roots.items():
-        base = bases.get(name)
-        if not base:
-            raise FactError(f"{name}: base unknown, required validations unknown")
-        try:
-            manifest = validations.load_manifest(root, base)
-            out[name] = frozenset(entry["id"] for entry in
-                                  validations.required_for(manifest, list(changed.get(name, ()))))
-        except validations.ValidationError as exc:
-            raise FactError(f"{name}: {exc}") from exc
-    return out
-
-
-def rule_violations(changed: Sequence[str], final: Mapping[str, Any],
-                    contract_pipeline_hash: str) -> list[str]:
-    out = [f"run changed {path}" for path in changed
-           if path in RULE_PATHS or any(path.startswith(rule) for rule in RULE_PATHS
-                                        if rule.endswith("/"))]
-    repos = final.get("repos") if isinstance(final, Mapping) else None
-    for name, row in (repos or {}).items():
-        recorded = (row.get("provenance") or {}).get("pipeline_code_hash") \
-            if isinstance(row, Mapping) else None
-        if recorded != contract_pipeline_hash:
-            out.append(f"{name}: tests ran on pipeline code other than the contract's")
-    return out
-
-
 def resolve_refs(refs: Any, *, root: str | Path, code_tree: str,
-                 event_ids: set[str] | frozenset[str],
-                 final_nodes: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """``path:L[-M]`` in the code tree, ``event:<id>`` of this run, or
-    ``test:<nodeid>`` with a result in the bound final."""
+                 event_ids: set[str] | frozenset[str]) -> list[dict[str, Any]]:
+    """``path:L[-M]`` in the code tree or ``event:<id>`` of this run."""
     if not isinstance(refs, list) or not refs:
         raise FactError("a refutation needs at least one ref")
     out: list[dict[str, Any]] = []
@@ -136,16 +72,9 @@ def resolve_refs(refs: Any, *, root: str | Path, code_tree: str,
                 raise FactError(f"{ref}: no such event in this run")
             out.append({"kind": "event", "event_id": event_id})
             continue
-        if ref.startswith("test:"):
-            node = ref[len("test:"):]
-            result = final_nodes.get(node)
-            if not isinstance(result, str):
-                raise FactError(f"{ref}: no result for this test on the current code tree")
-            out.append({"kind": "test", "node": node, "result": result})
-            continue
         match = _PATH_REF.fullmatch(ref)
         if not match or match["path"].startswith("/") or ".." in Path(match["path"]).parts:
-            raise FactError(f"{ref}: not path:line, event:<id> or test:<nodeid>")
+            raise FactError(f"{ref}: not path:line or event:<id>")
         start, end = int(match["start"]), int(match["end"] or match["start"])
         blob = _git(root, "rev-parse", "--verify", f"{code_tree}:{match['path']}")
         text = _git(root, "cat-file", "blob", blob) if blob else None

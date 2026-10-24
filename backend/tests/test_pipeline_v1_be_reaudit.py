@@ -25,7 +25,7 @@ from utils import source_repo
 
 # ── packaged daemon: the source checkout's scripts ─────────────────────────────
 def _checkout(root: Path) -> Path:
-    for tool in ("pipeline_v1", "pipeline_test"):
+    for tool in ("pipeline_v1",):
         f = root / "backend" / "scripts" / f"{tool}.py"
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text("# script\n")
@@ -40,8 +40,8 @@ def test_frozen_bundle_names_the_checkout_it_was_built_from(tmp_path, monkeypatc
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
     assert source_repo.root() == src.resolve()
-    assert source_repo.pipeline_script("pipeline_test") == \
-        (src / "backend" / "scripts" / "pipeline_test.py").resolve()
+    assert source_repo.pipeline_script("pipeline_v1") == \
+        (src / "backend" / "scripts" / "pipeline_v1.py").resolve()
     # the command the agent is told to run is the program form, packaged and in dev (S3)
     from core.worktree_write_gate import v1_command
     assert v1_command("status") == '"$SWARM_BACKEND_BIN" pipeline-v1 status'
@@ -94,7 +94,7 @@ def test_a_command_that_cannot_start_answers_busy_and_keeps_its_token(monkeypatc
     assert burned == [], "a command that never started must not spend its token"
 
 
-def test_waiting_commands_are_capped_so_runner_calls_keep_connections(monkeypatch):
+def test_waiting_commands_are_capped_so_the_service_keeps_connections(monkeypatch):
     from core.run_protocol import daemon_exec
     monkeypatch.setattr(daemon_exec, "_CLI_WAITING", threading.BoundedSemaphore(0))
     out, rc = daemon_exec._execute({"token": "x", "argv": ["status"]})
@@ -222,38 +222,6 @@ def test_a_command_tokened_before_a_transfer_changes_nothing_after_it(tmp_path, 
         r.close()
 
 
-def test_a_lease_opened_before_a_transfer_writes_nothing_after_it(tmp_path, monkeypatch):
-    from tests.pipeline_v1_rig import SESSION
-    from core.run_protocol import runner_service
-    r = _rig(tmp_path, monkeypatch)
-    try:
-        project = r._run_args()[1]
-        lease = runner_service.open_for(SESSION, project, r.run_id, port=None)
-        assert lease.get("ok") is True, lease
-        rec = runner_service._LEASES[lease["lease"]]
-        assert _engine(r).transfer_owner(OTHER, reason="test")
-        before = len(_engine(r).store.read_events())
-        with pytest.raises(runner_service.LeaseOwnerChanged):
-            runner_service._serve(rec, "append", {
-                "kind": "infrastructure_failed", "payload": {"why": "late"},
-                "ordinal": "next"})
-        assert len(_engine(r).store.read_events()) == before
-        assert lease["lease"] not in runner_service._LEASES, "the lease is revoked"
-        assert runner_service._after_tests(rec, {}).get("stage_complete") is None
-    finally:
-        runner_service.clear()
-        r.close()
-
-
-def test_a_runner_whose_start_time_cannot_be_read_gets_no_lease(monkeypatch):
-    from core.run_protocol import runner_service
-    monkeypatch.setattr(runner_service, "_start_time", lambda _pid: None)
-    called = []
-    monkeypatch.setattr(runner_service, "_open", lambda *a: called.append(a) or {"ok": True})
-    out = runner_service.handle({"op": "runner_open"}, port=1, peer_pid=12345)
-    assert out.get("ok") is False and not called
-
-
 # ── a forged worktree row cannot settle a live run ────────────────────────────
 def test_a_forged_row_neither_settles_a_live_run_nor_hides_its_worktree(tmp_path,
                                                                         monkeypatch):
@@ -298,17 +266,6 @@ def test_a_forged_run_json_owner_does_not_make_a_worktree_this_sessions(tmp_path
         assert security_hooks._own_run_worktree("/any", OTHER) is False
     finally:
         r.close()
-
-
-def test_packaged_daemon_source_root_comes_from_the_build_record(tmp_path, monkeypatch):
-    from core import security_hooks as sh
-    from utils import source_repo
-    repo = _checkout(tmp_path / "swarmai")
-    (repo / ".git").mkdir()
-    monkeypatch.setattr(sh, "_SOURCE_REPO_ROOT", str(tmp_path / "bundle"))
-    monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
-    monkeypatch.setattr(source_repo, "root", lambda: repo)
-    assert sh._source_repo_root() == os.path.realpath(str(repo))
 
 
 def test_a_project_name_with_a_space_still_creates(tmp_path):
@@ -369,11 +326,3 @@ def test_inline_json_wins_over_a_same_named_file_and_tilde_expands(tmp_path, mon
     assert f"app={tmp_path}/r" in argv
 
 
-def test_runner_identity_comes_from_the_kernel_not_ps(monkeypatch):
-    import subprocess
-    from core.run_protocol import runner_service
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(
-        AssertionError("no subprocess for a process identity")))
-    me = runner_service._start_time(os.getpid())
-    assert me and me == runner_service._start_time(os.getpid())
-    assert runner_service._start_time(2 ** 22 - 1) is None

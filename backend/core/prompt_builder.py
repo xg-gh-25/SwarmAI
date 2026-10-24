@@ -511,7 +511,7 @@ def with_app_session_id(session_env: "dict | None", session_context: "dict | Non
     prewarmed unit's temporary id: its subprocess env is fixed at spawn and survives
     adoption, so the prewarm id would own every run the adopting session creates.
     Left unset, run_owner_gate (bound to the unit's hook context, which adoption
-    rewrites) puts the real id before each pipeline_v1 / pipeline_test call."""
+    rewrites) puts the real id before each pipeline_v1 call."""
     sid = (session_context or {}).get("sdk_session_id")
     from .session_router import PREWARM_SESSION_PREFIX
     if not sid or str(sid).startswith(PREWARM_SESSION_PREFIX):

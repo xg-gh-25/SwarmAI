@@ -1,8 +1,8 @@
 """Where a run's event-signing key lives: the one place that creates and loads it.
 
-The key signs every event of one run (``EventAuthority``) and MACs the runner's
-evidence seals. Only the daemon process uses it (B-class design): the CLI and the
-test runner send their requests to the daemon (``daemon_exec``) and never load it.
+The key signs every event of one run (``EventAuthority``). Only the daemon process
+uses it (B-class design): the CLI sends its requests to the daemon (``daemon_exec``)
+and never loads it.
 
 Storage: a 0600 file ``state/pipeline_agent_audit/runs/<run_id>/authority.key``.
 B-class B-c (a store the agent's processes cannot read) is NOT reachable while the

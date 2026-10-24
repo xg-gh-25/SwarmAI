@@ -37,7 +37,7 @@ def load_engine(run_id: str, workspace: Optional[Path] = None):
     *workspace* defaults to SwarmWS (the dashboard router passes its own)."""
     from config import get_app_data_dir
     from core.run_protocol.engine import RunEngine, find_run_dir
-    from core.run_protocol.runner import is_v1_run
+    from core.run_protocol.contract import is_v1_run
 
     data_dir = get_app_data_dir()
     if not is_v1_run(data_dir, run_id):

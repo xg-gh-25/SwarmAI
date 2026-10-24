@@ -12,9 +12,8 @@ For a ``pipeline_v1.py`` command:
   map, and a signed ``owner_transfer`` event, so every human authorization follows
   the new owner); if it is, DENY. The transfer is signed only after every other
   check of the command passed (a denied command changes nothing).
-- **token**: EVERY ``pipeline_v1.py`` command, and ``pipeline_test.py`` (scope
-  ``test``: the runner's daemon lease), gets a one-time token (B-class B-b: the daemon
-  runs nothing without one). The call must be the FIRST simple command of the line
+- **token**: EVERY ``pipeline_v1.py`` command gets a one-time token (B-class B-b: the
+  daemon runs nothing without one). The call must be the FIRST simple command of the line
   (``_token_binding``) and must run THIS backend's own script (``_is_our_script``: a
   file with the same name elsewhere gets nothing); the gate issues the token (recorded
   only in the daemon, ``core.hook_token``) and puts ``SWARM_HOOK_TOKEN=<token>`` right
@@ -106,8 +105,6 @@ def _needs_token(call: dict) -> "str | None":
     """The token scope of a pipeline_v1 call (every one has a token: the daemon runs
     only token-carrying commands, B-class B-b), or None for any other call. The scope
     function is the daemon's own (``cli_scope.scope``)."""
-    if call.get("tool") == "pipeline_test":
-        return "test" if call.get("run_id") else None   # the runner's lease (B-b)
     if call.get("tool") != "pipeline_v1" or not call.get("sub"):
         return None
     from core.run_protocol.cli_scope import scope
@@ -118,11 +115,8 @@ def _needs_token(call: dict) -> "str | None":
 
 def _single_form(call: dict) -> str:
     """The same call as ONE simple command, for a deny message."""
-    from core.worktree_write_gate import pipeline_test_command, v1_command
-    args = shlex.join(call.get("argv") or [])
-    if call.get("tool") == "pipeline_test":
-        return pipeline_test_command(args)
-    return v1_command(args)
+    from core.worktree_write_gate import v1_command
+    return v1_command(shlex.join(call.get("argv") or []))
 
 
 def _dedup_last(call: dict) -> dict:
@@ -339,7 +333,7 @@ def _decide(sid: str, command: str, tool_input: dict,
     rewrite = None
     tokened = [c for c in calls if _needs_token(c)]
     for c in calls:
-        if c["tool"] not in ("pipeline_v1", "pipeline_test"):
+        if c["tool"] != "pipeline_v1":
             continue
         if c.get("ambiguous"):
             return _deny("give --run-id / --project / --session-id exactly once and "
@@ -348,9 +342,6 @@ def _decide(sid: str, command: str, tool_input: dict,
         if not c.get("sub"):
             from core.worktree_write_gate import v1_command
             return _deny(f"unknown pipeline command; run `{v1_command('--help')}`")
-        if c["tool"] == "pipeline_test" and not c.get("run_id"):
-            return _deny("pipeline_test.py tests a Pipeline v1 run: give --project and "
-                         "--run-id")
         extra = [a for a in c["assigns"] if a not in (_SESSION_ENV, hook_token.TOKEN_ENV)]
         if extra:
             return _deny("do not set " + ", ".join(sorted(set(extra))) + " on a pipeline "

@@ -260,13 +260,11 @@ def test_full_design_requires_alternatives_chosen_flow_and_state_lifecycle():
         <= paths(issues)
 
 
-def test_probe_exit_requires_argv_expect_and_resolvable_covers():
+def test_a_probe_exit_is_unknown_and_covers_must_resolve():
     doc = lite_design()
-    doc["exit_criteria"][0] = {"id": "X1", "kind": "probe", "argv": [],
-                               "covers": ["R9.9"]}
+    doc["exit_criteria"][0] = {"id": "X1", "kind": "probe", "covers": ["R9.9"]}
     issues = sc.validate_design_spec(doc, variant="lite", requirement_ids={"R1.1"})
-    assert {"exit_criteria[0].argv", "exit_criteria[0].expect",
-            "exit_criteria[0].covers[0]"} <= paths(issues)
+    assert {"exit_criteria[0].kind", "exit_criteria[0].covers[0]"} <= paths(issues)
 
 
 def test_optional_lite_properties_are_validated_when_present():

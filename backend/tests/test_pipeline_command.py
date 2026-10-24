@@ -37,8 +37,9 @@ def test_program_form_is_a_v1_call():
 def test_legacy_form_is_still_recognised():
     call, _ = _one("python3 -u /x/backend/scripts/pipeline_v1.py status --run-id run_q")
     assert (call["tool"], call["sub"], call["form"]) == ("pipeline_v1", "status", "script")
-    call, _ = _one("perl -e 'alarm 110; exec @ARGV' python /x/scripts/pipeline_test.py --run-id run_q")
-    assert call["tool"] == "pipeline_test"
+    # the test runner is gone (S6-1): its script is not a pipeline call any more
+    assert pc.calls("perl -e 'alarm 110; exec @ARGV' python /x/scripts/pipeline_test.py "
+                    "--run-id run_q")[0] == []
 
 
 @pytest.mark.parametrize("command", [
@@ -98,7 +99,7 @@ def test_the_session_link_reader_includes_the_program():
 _PRODUCT = Path(__file__).resolve().parents[1]
 _MATCH_CONTEXT = re.compile(r"re\.compile|\bin\s+(?:command|cmd|text)\b|startswith|endswith"
                             r"|\.search\(|\.match\(|\.fullmatch\(|\.findall\(")
-_CLI_WORD = re.compile(r"pipeline_v1|pipeline-v1|pipeline_test")
+_CLI_WORD = re.compile(r"pipeline_v1|pipeline-v1")
 
 
 def test_no_other_module_matches_pipeline_command_text():

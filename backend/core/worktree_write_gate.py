@@ -142,7 +142,7 @@ def _v1_reserved(p: str, worktree: str, run_id: str) -> "str | None":
         return None
     try:
         from config import get_app_data_dir
-        from core.run_protocol.runner import is_v1_run
+        from core.run_protocol.contract import is_v1_run
         if not is_v1_run(get_app_data_dir(), run_id):
             return None
     except Exception:   # unknown: the reserved path is still reserved
@@ -332,25 +332,6 @@ def v1_command(args: str) -> str:
     The variable names this backend's own program wherever the agent's cwd is."""
     from core import pipeline_command
     return pipeline_command.command_text(args)
-
-
-def pipeline_test_command(args: str) -> str:
-    """The runner, by absolute path, under the 110 s wall-clock cap."""
-    return f"perl -e 'alarm 110; exec @ARGV' {_python()} {_script('pipeline_test')} {args}"
-
-
-def _script(tool: str) -> str:
-    """The source checkout's script (``utils.source_repo``: in the packaged daemon the
-    bundle's own scripts are archived and cannot run; B-e re-audit HIGH)."""
-    from utils.source_repo import pipeline_script
-    path = pipeline_script(tool)
-    return shlex.quote(str(path) if path else f"<SwarmAI source checkout>/backend/scripts/{tool}.py")
-
-
-def _python() -> str:
-    """The source checkout's venv python when it exists, else a real interpreter."""
-    from utils.source_repo import pipeline_python
-    return shlex.quote(pipeline_python())
 
 
 # direct has no REQUIREMENTS document: create takes the user's request verbatim

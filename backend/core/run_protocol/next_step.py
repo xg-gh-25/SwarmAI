@@ -30,10 +30,10 @@ _HUMAN_PAUSES = {"user_stop", "session_lost"}
 def _cmd(engine, tool: str, rest: str) -> str:
     """The command the agent runs next, with this backend's script by ABSOLUTE path:
     only that script receives a hook token, wherever the agent's cwd is."""
-    from core.worktree_write_gate import pipeline_test_command, v1_command
+    from core.worktree_write_gate import v1_command
+    del tool    # always the run CLI now (S6-1: the test runner is gone)
     args = f"{rest} --project {engine.project} --run-id {engine.run_id}".strip()
-    build = pipeline_test_command if tool == "pipeline_test.py" else v1_command
-    return build(args).replace("  ", " ")
+    return v1_command(args).replace("  ", " ")
 
 
 def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:
@@ -49,12 +49,6 @@ def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:
         if not passed:
             out.append({"check": spec.check_id, "detail": str(detail)[:300]})
     return out
-
-
-def auto_completable(engine, state: dict[str, Any]) -> bool:
-    """Nothing completes BUILD / TEST by itself any more (S6-1): the agent ends them
-    with its validation report. Kept until the runner is deleted (S6-1b-ii)."""
-    return False
 
 
 def _reflect_prepared(events: list[dict[str, Any]], state: dict[str, Any]) -> bool:
@@ -114,7 +108,8 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
             "an expert gave no usable answer twice: the review checks decide the stage"
     return "fix", _cmd(engine, "pipeline_v1.py", "review-address --artifact -"), \
         ("address the open findings once (cluster by file ±10 lines), prove each "
-         "(review-proof / pipeline_test --mode prove), then review-start for R2")
+         "(review-proof, or the test that shows the fix in your next report), then "
+         "review-start for R2")
 
 
 def next_step(engine, *, previous_stage: str | None = None,
@@ -203,4 +198,4 @@ def next_step(engine, *, previous_stage: str | None = None,
     return out
 
 
-__all__ = ["auto_completable", "blocking_checks", "next_step"]
+__all__ = ["blocking_checks", "next_step"]

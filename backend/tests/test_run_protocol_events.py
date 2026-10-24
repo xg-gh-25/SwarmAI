@@ -45,9 +45,8 @@ def _make(kind: str, *, previous=None, **overrides):
     payload = {key: _sample(value) for key, value in spec.required.items()}
     custom_payload = overrides.pop("payload", {})
 
-    if kind == "test_call":
-        payload.update({"seq": 1, "call_type": "test", "code_tree": "1" * 40,
-                        "result": "pass"})
+    if kind == "proof":
+        payload.update({"code_tree": "1" * 40})
     if kind == "validation_report":
         payload.update({"stage": "build", "repo": "repo", "code_tree": "1" * 40})
     if kind == "run_create":
@@ -95,10 +94,8 @@ CASES = {
                    "attempt", 2),
     "address": ({"attempt": 1, "payload": {"canonical_id": "CF-1", "pass": 1, "hunk": "h"}},
                 "payload.pass", 2),
-    "proof": ({"attempt": 1, "payload": {"canonical_id": "CF-1", "pass": 1},
-               "producer": "runner"}, "attempt", 2),
-    "test_call": ({"payload": {"seq": 1}, "producer": "runner"},
-                  "payload.seq", 2),
+    "proof": ({"attempt": 1, "payload": {"canonical_id": "CF-1", "pass": 1}},
+              "attempt", 2),
     "stage_attempt": ({"stage": "plan", "attempt": 1}, "attempt", 2),
     "check": ({"payload": {"stage_attempt_event_id": "s1", "check_id": "RQ-1"}},
               "payload.check_id", "RQ-2"),
@@ -214,18 +211,18 @@ def test_large_and_forced_strings_become_content_addressed_blobs():
 
 
 def test_payload_is_copied_and_only_json_values_are_accepted():
-    payload = {"details": [1, True, None]}
-    event, _ = _make("test_call", payload=payload)
-    payload["details"].append("later")
-    assert event["payload"]["details"] == [1, True, None]
+    payload = {"refs": [1, True, None]}
+    event, _ = _make("proof", payload=payload)
+    payload["refs"].append("later")
+    assert event["payload"]["refs"] == [1, True, None]
     with pytest.raises(ev.EventError, match="unsupported"):
-        _make("test_call", payload={"details": [object()]})
+        _make("proof", payload={"refs": [object()]})
 
 
 def test_many_small_values_can_still_exceed_the_line_limit():
-    payload = {"details": ["x" * 900 for _ in range(6)]}
+    payload = {"refs": ["x" * 900 for _ in range(6)]}
     with pytest.raises(ev.EventError, match="maximum"):
-        _make("test_call", payload=payload)
+        _make("proof", payload=payload)
 
 
 def test_jsonl_is_canonical_and_one_line():
@@ -374,9 +371,8 @@ def test_occurrence_identity_field_cannot_be_externalized_into_a_different_ident
 def test_producer_label_from_another_authority_is_not_trusted():
     other = ev.EventAuthority(b"y" * 32)
     event, _ = ev.make_event(
-        writer=other.writer("runner"), run_id="run_abc", kind="test_call", at=AT,
-        payload={"seq": 1, "call_type": "test", "code_tree": "1" * 40,
-                 "result": "pass"},
+        writer=other.writer("cli"), run_id="run_abc", kind="user_stop", at=AT,
+        ordinal=1, payload={"reason": "stop"},
     )
     with pytest.raises(ev.EventError, match="signature/authority"):
         ev.validate_event(event, AUTH)

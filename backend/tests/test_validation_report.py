@@ -76,8 +76,7 @@ def build_run(tmp_path, monkeypatch):
     _git(repo, "add", "."); _git(repo, "commit", "-qm", "base")
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="change", session_id="s",
-                              repos={"repo": str(repo)}, run_id="run_vr",
-                              risk_test_file_cap=20)
+                              repos={"repo": str(repo)}, run_id="run_vr")
     wt = engine.ensure_stage_worktrees()["repo"]
     (Path(wt) / "a.js").write_text("module.exports = 2\n")
     return engine, wt

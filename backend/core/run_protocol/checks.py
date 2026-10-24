@@ -31,15 +31,10 @@ class CheckContext:
     design: Mapping[str, Any] | None
     events: tuple[Mapping[str, Any], ...]
     authority: Any
-    final: Mapping[str, Any]
     run: Mapping[str, Any]
-    collected_tests: frozenset[str]
-    test_results: Mapping[str, str]
-    trace_covers: frozenset[str]
     decision_documents: Mapping[str, Mapping[str, Any]]
     known_refs: Mapping[str, Mapping[str, Any]]
     expected_repos: frozenset[str]
-    validation_manifest: Mapping[str, frozenset[str]]
     existing_files: frozenset[str]
 
 
@@ -78,15 +73,10 @@ def make_context(*, profile: str, requirement_variant: str,
                  design: Mapping[str, Any] | None = None,
                  events: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] = (),
                  authority: Any = None,
-                 final: Mapping[str, Any] | None = None,
                  run: Mapping[str, Any] | None = None,
-                 collected_tests: set[str] | frozenset[str] = frozenset(),
-                 test_results: Mapping[str, str] | None = None,
-                 trace_covers: set[str] | frozenset[str] = frozenset(),
                  decision_documents: Mapping[str, Mapping[str, Any]] | None = None,
                  known_refs: Mapping[str, Mapping[str, Any]] | None = None,
                  expected_repos: set[str] | frozenset[str] = frozenset(),
-                 validation_manifest: Mapping[str, set[str] | frozenset[str]] | None = None,
                  existing_files: set[str] | frozenset[str] = frozenset()) -> CheckContext:
     """Build a CheckContext only after its event chain and profile are valid."""
     from core.run_protocol import events as event_protocol
@@ -103,11 +93,8 @@ def make_context(*, profile: str, requirement_variant: str,
         raise CheckError("unknown document variant")
     return CheckContext(
         profile, requirement_variant, design_variant, requirements, design,
-        tuple(events), authority, final or {}, run or {}, frozenset(collected_tests),
-        test_results or {}, frozenset(trace_covers), decision_documents or {}, known_refs or {},
-        frozenset(expected_repos),
-        {repo: frozenset(ids) for repo, ids in (validation_manifest or {}).items()},
-        frozenset(existing_files),
+        tuple(events), authority, run or {}, decision_documents or {}, known_refs or {},
+        frozenset(expected_repos), frozenset(existing_files),
     )
 
 

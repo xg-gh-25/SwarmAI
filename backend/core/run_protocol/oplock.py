@@ -10,8 +10,7 @@ on the new state.
   exclusive flock on ``<audit>/runs/<run_id>/operation.lock``. Re-entrant within one
   thread. Raises ``RunBusy`` when another holder keeps it past *timeout*.
 
-Not under this lock: the test runner while pytest runs (minutes) — it takes the store
-lock per append only — and read-only calls (``status``).
+Not under this lock: read-only calls (``status``).
 """
 from __future__ import annotations
 

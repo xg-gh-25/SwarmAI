@@ -2,7 +2,7 @@
 
 A run is driven ONLY through the shipped surfaces:
 
-- ``scripts/pipeline_v1.py`` and ``scripts/pipeline_test.py`` as subprocesses, every
+- ``scripts/pipeline_v1.py`` as a subprocess, every
   mutating command first passed through the real PreToolUse ``run_owner_gate`` (which
   may rewrite it with a one-time hook token) and then executed by ``bash -c``;
 - hook-side events through the real hook functions: the v1 handout tracker
@@ -27,7 +27,6 @@ from typing import Any
 
 BACKEND = Path(__file__).resolve().parents[1]
 PV1 = BACKEND / "scripts" / "pipeline_v1.py"
-PTEST = BACKEND / "scripts" / "pipeline_test.py"
 PROJECT = "P"
 SESSION = "aaaaaaaa-0000-4000-8000-000000000001"
 SWARM = "\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"
@@ -206,28 +205,6 @@ class Rig:
         if command != "status" and isinstance(out.get("repos"), dict) and out["repos"]:
             self.worktree = Path(next(iter(out["repos"].values())))
         return out
-
-    def pt(self, mode: str, *args: str, repo: Path | None = None,
-           session: str | None = None) -> dict:
-        """One pipeline_test.py call against the run's worktree (or *repo*), from this
-        run's session (or *session*: then it never completes a stage)."""
-        repo = repo or self.worktree or self.repo
-        extra = {"SWARM_TEST_REPO_ROOT": str(repo)}
-        if session is not None:
-            extra["SWARM_APP_SESSION_ID"] = session
-        # through the session's hook, like a real Bash call: it issues the token the
-        # runner opens its daemon lease with (B-class B-b)
-        argv = [sys.executable, str(PTEST), *self._run_args(), "--mode", mode, *args]
-        return self.bash(" ".join(map(shlex.quote, argv)), extra_env=extra,
-                         session=session or SESSION)
-
-    def _tested(self, out: dict) -> dict:
-        """BUILD / TEST complete by themselves once the runner's results pass their
-        checks (r6 §2.3); otherwise the stage is completed by hand, as before."""
-        done = out.get("stage_complete")
-        if isinstance(done, dict) and done.get("ok") is True:
-            return {"ok": True, **done, "auto": True}
-        return self.v1("stage-complete")
 
     def bash(self, command: str, extra_env: dict[str, str] | None = None,
              session: str = SESSION) -> dict:

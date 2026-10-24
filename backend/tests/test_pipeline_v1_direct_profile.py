@@ -48,13 +48,5 @@ def test_trivial_keeps_its_stages_and_document_checks():
         assert {"document": spec.document, "effects": sorted(spec.effects),
                 "stages": list(checks._stages_for(spec, "trivial")),
                 "variants": sorted(spec.variants)} == row, cid
-def _bx2(final_row, changed=("backend/core/mod.py",)):
-    from core.run_protocol import events
-    ctx = checks.make_context(profile="direct", requirement_variant="lite", requirements={},
-                              authority=events.EventAuthority(b"k" * 32),
-                              final={"repos": {"repo": final_row}},
-                              run={"code_trees": {"repo": "t"}, "changed_paths": list(changed)},
-                              expected_repos={"repo"})
-    return checks._bx2(ctx)
 
 

@@ -159,60 +159,17 @@ def _status(row: dict[str, Any], event: Mapping[str, Any]) -> None:
         proposal["confirmed"] = True
 
 
-def _proof(row: dict[str, Any], event: Mapping[str, Any],
-           test_calls: Mapping[str, Mapping[str, Any]]) -> None:
+def _proof(row: dict[str, Any], event: Mapping[str, Any]) -> None:
     payload = event["payload"]
     etype, result = payload["evidence_type"], payload["result"]
     if not isinstance(payload["code_tree"], str) or len(payload["code_tree"]) != 40 \
             or any(c not in "0123456789abcdef" for c in payload["code_tree"]):
         raise FindingError("proof code_tree must be a git tree id")
-    if etype in ("test", "probe") and event["producer"] != "runner":
-        raise FindingError(f"{etype} proof must come from runner")
     if etype in ("diff_assertion", "refuted") and event["producer"] != "cli":
         raise FindingError(f"{etype} proof must come from cli")
     if row["status"] not in ("open", "invalid_test"):
         raise FindingError("proof cannot replace a terminal finding state")
-    if etype == "test":
-        ids = payload.get("test_call_event_ids")
-        calls = [test_calls.get(call_id) for call_id in ids] \
-            if isinstance(ids, list) and len(ids) == 3 else []
-        node, old_tree = payload.get("test_node"), payload.get("old_code_tree")
-        call_rows = [call["payload"] for call in calls if call is not None]
-        correlated = len(call_rows) == 3 and isinstance(node, str) and bool(node) \
-            and isinstance(old_tree, str) and len(old_tree) == 40 \
-            and old_tree != payload["code_tree"] \
-            and all(row.get("call_type") == "test" and row.get("target") == node
-                    for row in call_rows) \
-            and [row.get("snapshot") for row in call_rows] == ["old", "old", "new"] \
-            and [row.get("code_tree") for row in call_rows] == [
-                old_tree, old_tree, payload["code_tree"]] \
-            and [row.get("result") for row in call_rows] == [
-                "assert_fail", "assert_fail", "pass"]
-        if row["kind"] not in ("behavior", "contract") or result != "proven" \
-                or payload.get("old_runs") != ["assert_fail", "assert_fail"] \
-                or payload.get("new_run") != "pass" or not correlated:
-            raise FindingError("test proof needs correlated old-old-new test calls")
-        row["status"] = "closed_proven"
-    elif etype == "probe":
-        ids = payload.get("test_call_event_ids")
-        calls = [test_calls.get(call_id) for call_id in ids] \
-            if isinstance(ids, list) and len(ids) == 2 else []
-        target, old_tree = payload.get("probe_target"), payload.get("old_code_tree")
-        call_rows = [call["payload"] for call in calls if call is not None]
-        correlated = len(call_rows) == 2 and isinstance(target, str) and bool(target) \
-            and isinstance(old_tree, str) and len(old_tree) == 40 \
-            and old_tree != payload["code_tree"] \
-            and all(item.get("call_type") == "probe" and item.get("target") == target
-                    for item in call_rows) \
-            and [item.get("snapshot") for item in call_rows] == ["old", "new"] \
-            and [item.get("code_tree") for item in call_rows] == [old_tree, payload["code_tree"]] \
-            and [item.get("result") for item in call_rows] == ["not_satisfied", "satisfied"]
-        if row["kind"] not in ("absence", "contract") or result != "proven" \
-                or payload.get("probe_old") != "not_satisfied" \
-                or payload.get("probe_new") != "satisfied" or not correlated:
-            raise FindingError("probe proof needs correlated old-new probe calls")
-        row["status"] = "closed_proven"
-    elif etype == "diff_assertion":
+    if etype == "diff_assertion":
         if row["kind"] not in ("docs", "design", "security_policy") \
                 or row["r2_status"] != "RESOLVED" or result != "asserted" \
                 or payload.get("touches_finding") is not True:
@@ -262,8 +219,6 @@ def _resolved_ref(ref: Any) -> bool:
             and all(isinstance(n, int) and n >= 1 for n in lines) and lines[0] <= lines[1]
     if kind == "event":
         return isinstance(ref.get("event_id"), str) and bool(ref["event_id"])
-    if kind == "test":
-        return isinstance(ref.get("node"), str) and isinstance(ref.get("result"), str)
     return False
 
 
@@ -274,7 +229,6 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
         raise FindingError(f"invalid event chain: {errors[0]}")
     findings: dict[str, dict[str, Any]] = {}
     answers: dict[str, Mapping[str, Any]] = {}
-    test_calls: dict[str, Mapping[str, Any]] = {}
     requests: dict[str, Mapping[str, Any]] = {}
     grants: dict[str, Mapping[str, Any]] = {}
     consumed_grants: set[str] = set()
@@ -284,8 +238,6 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
         kind = event["kind"]
         if kind == "answer":
             answers[event["event_id"]] = event
-        elif kind == "test_call":
-            test_calls[event["event_id"]] = event
         elif kind == "finding_occ":
             answer = answers.get(event["payload"]["answer_event_id"])
             if answer is None or answer["payload"]["expert_id"] != event["payload"]["expert"] \
@@ -310,7 +262,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
             _status(row, event)
             answered.add(event["ckey"])
         elif kind == "proof":
-            _proof(_row(findings, event["ckey"]), event, test_calls)
+            _proof(_row(findings, event["ckey"]), event)
         elif kind == "land_request":
             requests[event["payload"]["request_id"]] = event["payload"]
         elif kind == "auth":

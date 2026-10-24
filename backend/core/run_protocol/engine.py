@@ -24,12 +24,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from core import evidence_seal, run_worktree
+from core import run_worktree
 from core.run_protocol import checks, git_tree, lifecycle, review, validation_report
 from core.run_protocol.infra import InfrastructureError
 from core.run_protocol.documents import DocumentStore, complete_stage
 from core.run_protocol.events import EventAuthority
-from core.run_protocol.final import carry_repo_final, merge_final
 from core.run_protocol.store import NEXT, AuditStore, StoreError
 
 logger = logging.getLogger(__name__)
@@ -197,8 +196,7 @@ def _store(root: Path, run_id: str, authority: EventAuthority,
            producer: str = "cli") -> AuditStore:
     """The run's store, refusing any event after which the log would not fold.
 
-    One rule for every writer (fixing spec A), the CLI's and the runner's alike (K3
-    review r2): an event the lifecycle or the finding ledger cannot apply is never
+    One rule for every writer (fixing spec A, K3 review r2): an event the lifecycle or the finding ledger cannot apply is never
     written, and the transition an event triggers is appended in the same lock, signed
     by the *producer* that wrote the trigger."""
     from core.run_protocol import findings as finding_protocol
@@ -361,8 +359,7 @@ class RunEngine:
         self.project, self.run_id = project, run_id
         self.run_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
         self.audit_root = data_dir / "state" / "pipeline_agent_audit"
-        # *producer*: who this process signs as. The test runner loads a run to read
-        # what comes next and signs nothing but its own facts (C3)
+        # *producer*: who this process signs as (C3)
         self.store = _store(self.audit_root, run_id, authority, producer=producer)
         self.authority = authority
         try:
@@ -407,7 +404,7 @@ class RunEngine:
                             roots: "set[str]") -> "str | None":
         """The id of a non-terminal shared run whose contract names one of *roots*; a
         run whose signed state cannot be read counts as live (fail closed)."""
-        from core.run_protocol.runner import read_contract
+        from core.run_protocol.contract import read_contract
         base = data_dir / "state" / "pipeline_agent_audit" / "runs"
         for entry in sorted(base.iterdir()) if base.is_dir() else []:
             try:
@@ -440,7 +437,7 @@ class RunEngine:
     def _create(cls, *, data_dir: str | Path, workspace: str | Path, project: str,
                profile: str, session_id: str, repos: Mapping[str, str],
                mode: str = "isolated", decision_cap: int = 2,
-               risk_test_file_cap: int = 200, run_id: str | None = None,
+               run_id: str | None = None,
                transcript_ids: Sequence[str] = (),
                requirement: str | None = None) -> "RunEngine":
         if profile not in lifecycle.PROFILE_STAGES or mode not in {"isolated", "shared"}:
@@ -493,19 +490,15 @@ class RunEngine:
             engine.project, engine.run_id, engine.run_dir = project, run_id, run_dir
             engine.audit_root, engine.authority = stage_audit_root, authority
             engine.store = _store(stage_audit_root, run_id, authority)
-            from core.run_protocol.cache import pipeline_code_hash
-            pipeline_hash = pipeline_code_hash()   # the whole protocol + both CLIs (B7)
             contract = {"run_id": run_id, "project": project,
                         "protocol_version": 1, "profile": profile,
                         "session_id": session_id, "mode": mode,
                         "expected_repos": sorted(repos),
                         "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
-                        "decision_cap": decision_cap, "risk_test_file_cap": risk_test_file_cap,
+                        "decision_cap": decision_cap,
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
-                        "pipeline_code_hash": pipeline_hash,
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
-                        "regression_round_cap": 2, "recheck_cap": 3,
                         # reference lines, never limits: the profile's p95 (D2); null = none
                         **_budgets(profile)}
             if requirement:
@@ -539,7 +532,6 @@ class RunEngine:
             raise
         import shutil
         shutil.rmtree(stage_data, ignore_errors=True)
-        evidence_seal.enable(run_id)
         engine.write_projection()
         return engine
 
@@ -697,27 +689,12 @@ class RunEngine:
         except json.JSONDecodeError as exc:
             raise EngineError(f"malformed {path.name}: {exc}") from exc
 
-    def final(self) -> dict[str, Any]:
-        if self.contract["profile"] == "research":
-            return {}
-        rows = {}
-        for name in self.contract["expected_repos"]:
-            path = self.run_dir / "evidence" / "tests" / f"final-{name}.json"
-            raw, ok, why = evidence_seal.read_checked(path) if path.exists() else (None, False, "missing")
-            if not ok or raw is None:
-                return {}
-            try:
-                rows[name] = json.loads(raw)
-            except json.JSONDecodeError as exc:
-                raise EngineError(f"malformed final for {name}: {exc}") from exc
-        return merge_final(self.run_id, self.contract["expected_repos"], rows)
-
     def _record_integration_branch(self, name: str, branch: Any) -> None:
         """The branch the worktree forked from, kept in the audit area (B6 review): the
         base must not follow whatever the main checkout has checked out later."""
         if not isinstance(branch, str) or not branch.startswith("refs/heads/"):
             return
-        from core.run_protocol.runner import integration_branches_path
+        from core.run_protocol.contract import integration_branches_path
         path = self.store.paths.run / integration_branches_path(".", self.run_id).name
         current = self._read_json(path, {}) or {}
         if current.get(name) != branch:
@@ -870,7 +847,7 @@ class RunEngine:
         return checks.make_context(
             profile=profile, requirement_variant=req_variant, design_variant=design_variant,
             requirements=requirements, design=design, events=events, authority=self.authority,
-            final={}, run=run, expected_repos=set(expected),
+            run=run, expected_repos=set(expected),
             existing_files=existing,
             decision_documents=facts.decision_values(events, self.store.paths.blobs),
             known_refs=self.decision_refs(events))
@@ -1122,7 +1099,6 @@ class RunEngine:
         import re
         hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
         derived = []
-        bound_nodes: dict[str, Any] | None = None
         for index, supplied in enumerate(artifact["proofs"], 1):
             if not isinstance(supplied, Mapping):
                 raise EngineError(f"review proof {index} must be an object")
@@ -1152,15 +1128,12 @@ class RunEngine:
                 root, (f".aidlc/deliverables/{self.run_id}/",), {})
             if evidence_type == "refuted":
                 # §A3.5: a refutation cites evidence that exists — a file:line of the
-                # tree that lands, an event of this run, or a test result on that tree
+                # tree that lands or an event of this run
                 from core.run_protocol import facts
-                if bound_nodes is None:
-                    bound_nodes = {}
                 try:
                     resolved = facts.resolve_refs(
                         supplied.get("refs"), root=root, code_tree=code_tree,
-                        event_ids={e["event_id"] for e in self.store.read_events()},
-                        final_nodes=bound_nodes.get(_name, {}))
+                        event_ids={e["event_id"] for e in self.store.read_events()})
                 except facts.FactError as exc:
                     raise EngineError(f"{finding_id}: {exc}") from exc
                 derived.append({"finding_id": finding_id, "evidence_type": "refuted",
@@ -1845,7 +1818,7 @@ class RunEngine:
     @_one_operation
     def fail_infrastructure(self, error: "InfrastructureError") -> dict[str, Any]:
         """Record the run's infrastructure failure (v13 §A1.2): it ends ``failed``. The
-        CLI and the runner call this for the three ``infra`` kinds only."""
+        CLI calls this for the three ``infra`` kinds only."""
         from core.run_protocol.store import StoreError
         try:
             self.store.append_new(
@@ -2237,15 +2210,6 @@ class RunEngine:
                 raise IntegrationRequired(
                     "patch_changed", f"{name}: rebasing onto the moved main changed the run's "
                     "own patch; that code was not reviewed")
-
-    def _write_carry_plan(self, name: str, *, old_base: str, new_base: str, code_tree: str,
-                          affected: Sequence[str]) -> None:
-        from core.run_protocol.runner import carry_plan_path
-        path = carry_plan_path(self.data_dir, self.run_id)
-        current = self._read_json(path, {}) or {}
-        _atomic_json(path, {**current, name: {"old_base": old_base, "new_base": new_base,
-                                              "code_tree": code_tree,
-                                              "affected_tests": sorted(affected)}})
 
     def _landing_lock(self):
         """One landing of this run at a time (fixing spec C4): land / run-land hold it

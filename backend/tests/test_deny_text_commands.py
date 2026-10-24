@@ -23,7 +23,6 @@ RETIRED = re.compile(r"artifact_cli(?:\.py)?\s+(run-create|run-update|run-commit
 
 def _texts(monkeypatch=None) -> dict[str, str]:
     from core import security_hooks, worktree_write_gate
-    import pipeline_test
     texts = {
         "active_run_commit": security_hooks.active_run_commit_deny_text(
             ["backend/core/x.py"], ["run_abc"]),

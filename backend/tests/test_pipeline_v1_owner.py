@@ -209,9 +209,7 @@ def test_the_hook_hands_the_session_id_to_the_first_pipeline_call(tmp_path, monk
     review r2): the hook assigns this session's id to the one call it binds to."""
     _run(tmp_path, owner="session-a")
     monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
-    for command in (_cmd("status"),
-                    "perl -e 'alarm 110; exec @ARGV' python backend/scripts/pipeline_test.py "
-                    "--project proj --run-id run_one --mode regression | tail -3"):
+    for command in (_cmd("status"), _cmd("status") + " | tail -3"):
         out = gate._decide("session-a", command, {"command": command})
         new = out["hookSpecificOutput"]["updatedInput"]["command"]
         assert new == ("SWARM_HOOK_TOKEN=40001." + "a" * 64
@@ -253,15 +251,15 @@ def test_a_denied_takeover_command_transfers_nothing(tmp_path, monkeypatch):
 
 
 def test_only_this_backends_pipeline_scripts_get_a_token(tmp_path, monkeypatch):
-    """B round 1 HIGH: a file merely NAMED pipeline_test.py / pipeline_v1.py elsewhere
-    gets no token (it could open a runner lease or send commands)."""
+    """B round 1 HIGH: a file merely NAMED pipeline_v1.py elsewhere gets no token (it
+    could send commands)."""
     _run(tmp_path)
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
-    fake = tmp_path / "evil" / "pipeline_test.py"
+    fake = tmp_path / "evil" / "pipeline_v1.py"
     fake.parent.mkdir()
     fake.write_text("print('x')\n")
-    for script in (str(fake), "evil/pipeline_test.py"):
-        command = f"python {script} --project proj --run-id run_one --mode tdd"
+    for script in (str(fake), "evil/pipeline_v1.py"):
+        command = f"python {script} status --project proj --run-id run_one"
         out = gate._decide("session-a", command, {"command": command}, "check", str(tmp_path))
         assert _denied(out), script
 
@@ -294,14 +292,14 @@ def test_a_failed_state_change_burns_the_issued_token(tmp_path, monkeypatch):
 
 
 def test_only_the_exact_script_counts(tmp_path):
-    """B round 2 HIGH: a sibling under backend/scripts is not pipeline_test.py, and a
-    relative path with no cwd cannot be checked."""
+    """B round 2 HIGH: a script under backend/scripts counts only as the tool it is, and
+    a relative path with no cwd cannot be checked."""
     from pathlib import Path as P
     scripts = P(gate.__file__).resolve().parents[1] / "scripts"
     assert gate._is_our_script({"tool": "pipeline_v1",
                                 "script": str(scripts / "pipeline_v1.py")})
-    assert not gate._is_our_script({"tool": "pipeline_test",
-                                    "script": str(scripts / "pipeline_v1.py")})
+    assert not gate._is_our_script({"tool": "pipeline_v1",
+                                    "script": str(scripts / "artifact_cli.py")})
     assert not gate._is_our_script({"tool": "pipeline_v1",
                                     "script": "backend/scripts/pipeline_v1.py"})
     assert gate._resolves_into_scripts(str(scripts / "x.json"), None)

@@ -113,12 +113,12 @@ def test_tampered_spawn_identity_is_rejected_without_consuming_it(tmp_path):
     assert bridge.record_answer(bound, "NO FINDINGS", completed_at=AT) is not None
 
 
-def test_usage_metrics_use_legal_runner_producer(tmp_path):
+def test_usage_metrics_are_recorded_by_the_daemon(tmp_path):
     bridge, store, _ = _bridge(tmp_path)
     bridge.record_usage({"input_tokens": 3, "cache_read_tokens": 4,
                          "output_tokens": 2, "responses": 1}, completed_at=AT)
     metrics = store.read_events()
-    assert [row["producer"] for row in metrics] == ["runner", "runner", "runner"]
+    assert [row["producer"] for row in metrics] == ["hook", "hook", "hook"]
     assert [row["payload"]["value"] for row in metrics] == [7, 2, 1]
 
 

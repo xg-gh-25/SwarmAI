@@ -1,7 +1,7 @@
 """Where this backend's SOURCE checkout is, for the pipeline scripts the agent runs.
 
-The pipeline CLI (``scripts/pipeline_v1.py``) and runner (``scripts/pipeline_test.py``)
-run in the agent's process with a real Python. In a dev checkout they sit next to this
+The legacy form of the pipeline CLI (``python …/scripts/pipeline_v1.py``, removed in
+S6-5) runs in the agent's process with a real Python. In a dev checkout they sit next to this
 module. The packaged daemon is a PyInstaller bundle: its ``scripts`` are archived
 modules and ``sys.executable`` is the frozen binary, so neither can be run. There the
 source checkout is the one the bundle was BUILT from, recorded at build time in
@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-_TOOLS = ("pipeline_v1", "pipeline_test")
+_TOOLS = ("pipeline_v1",)
 
 
 def _is_checkout(path: Path) -> bool:

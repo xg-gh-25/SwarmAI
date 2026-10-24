@@ -120,9 +120,7 @@ def _critical_path(events: Sequence[Mapping[str, Any]],
     - ``seconds``: the wall span; ``active_seconds``: the span minus the human waits
       (decision, auth) inside it;
     - ``dispatch_seconds``: the union of its handout→answer intervals (parallel
-      experts count once);
-    - test calls are counted but not timed: a ``test_call`` event records when it
-      ended, not when it started, so their time is ``unmeasured``, never guessed.
+      experts count once).
     An end that is not timed makes the span null, not zero."""
     answers = {(row.get("payload") or {}).get("handout_event_id"): _time(row.get("at"))
                for row in events if row.get("kind") == "answer"}
@@ -130,7 +128,7 @@ def _critical_path(events: Sequence[Mapping[str, Any]],
     closed = [(a, b) for a, b in closed if a is not None and b is not None]
     spans: list[dict[str, Any]] = []
     start = next((row.get("at") for row in events if row.get("kind") == "run_create"), None)
-    current: dict[str, Any] = {"attempts": 0, "dispatches": 0, "test_calls": 0}
+    current: dict[str, Any] = {"attempts": 0, "dispatches": 0}
     dispatch: list[tuple[float, float]] = []
 
     def close(stage: Any, ended_at: Any) -> None:
@@ -144,7 +142,6 @@ def _critical_path(events: Sequence[Mapping[str, Any]],
                       "active_seconds": (round(max(0.0, seconds - waited), 3)
                                          if seconds is not None else None),
                       "dispatch_seconds": round(_union_seconds(dispatch), 3),
-                      "unmeasured": ["test_calls"] if current["test_calls"] else [],
                       **current})
 
     for event in events:
@@ -156,18 +153,15 @@ def _critical_path(events: Sequence[Mapping[str, Any]],
             begin, end = _time(event.get("at")), answers.get(event.get("event_id"))
             if begin is not None and end is not None:
                 dispatch.append((begin, end))
-        elif kind == "test_call":
-            current["test_calls"] += 1
         if kind in {"stage_complete", "land"}:
             close(event.get("stage") or "deliver", event.get("at"))
             start = event.get("at")
-            current = {"attempts": 0, "dispatches": 0, "test_calls": 0}
+            current = {"attempts": 0, "dispatches": 0}
             dispatch = []
     if any(current.values()):
         spans.append({"stage": "open", "started_at": start, "ended_at": None,
                       "seconds": None, "active_seconds": None,
                       "dispatch_seconds": round(_union_seconds(dispatch), 3),
-                      "unmeasured": ["test_calls"] if current["test_calls"] else [],
                       **current})
     return spans
 

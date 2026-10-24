@@ -1,16 +1,15 @@
 """Hardening tests for session_link_gate and the shared package-manager shell modes.
 
 What is tested: the adversarial-review findings against create_session_link_gate
-(security_hooks.py) and _js_pm_shell_c_command, which pipeline_test_gate shares.
+(security_hooks.py) and its package-manager shell-mode parser _js_pm_shell_c_command.
 Every repro command from the review is in a matrix here.
 
 Methodology: commands are written with ``@@`` for SWARM_APP_SESSION_ID and ``\\n``
-for a newline, then driven through the real async gate (deny / approve) or through
-_classify_pipeline_test_command (hits). A timing test feeds 200 KB adversarial
+for a newline, then driven through the real async gate (deny / approve). A timing test feeds 200 KB adversarial
 commands and asserts each classifies in < 0.5 s.
 
 Invariants:
-  • package-manager shell modes are classified in BOTH gates: pnpm options before
+  • package-manager shell modes are parsed: pnpm options before
     the subcommand (`pnpm -c exec`, `-rc`, `--shell-mode dlx`), pnpx / pnx -c,
     npx -c, npm exec -c / --call;
   • a variable NAME built at run time is denied as the operand of unset /
@@ -19,7 +18,7 @@ Invariants:
   • `function NAME { … }` bodies, ksh / csh / tcsh / dash / fish -c strings, csh
     unsetenv / setenv, fish set, and `su [user] -c STRING` are classified;
   • sudo / env -i / exec -c deny only when the wrapped PROGRAM is a link reader
-    (python* / uv / pipeline_v1 / pipeline_test, or a path to those scripts), so
+    (python* / uv / pipeline_v1, or a path to that script), so
     `sudo dnf install python3.11` and `env -i make run` pass; the sudo deny text
     advises -E / --preserve-env, not env -u;
   • a stdin shell's script (heredoc body, echo words) is classified, not matched;
@@ -82,28 +81,6 @@ PM_SHELL_ALLOWED = [
     "npx -c 'echo hi'",
     "pnpm -Fclient exec unset @@",  # glued -F value: no shell mode, `unset` is a binary
 ]
-PIPELINE_SHELL_HITS = [
-    ("pnpm -c exec 'vitest run'", "vitest"),
-    ("pnpm -rc exec 'vitest run'", "vitest"),
-    ("pnpm -r --shell-mode exec 'tsc --noEmit'", "tsc"),
-    ("pnpm --shell-mode dlx 'vitest run'", "vitest"),
-    ("pnpm --package vitest -c dlx 'vitest run'", "vitest"),
-    ("pnpx -c 'vitest run'", "vitest"),
-    ("pnx -c 'vitest run'", "vitest"),
-    ("npm exec -c 'vitest run'", "vitest"),
-    ("npm exec --call 'pytest -q'", "pytest"),
-    ("npx -c 'vitest run'", "vitest"),
-    ("pnpm exec -c -- 'vitest run'", "vitest"),
-    ("pnpm dlx --shell-mode 'eslint .'", "eslint"),
-    ("fish -c 'pytest -q'", "pytest"),
-    ("ksh -c 'npx vitest run'", "vitest"),
-]
-PIPELINE_SHELL_CLEAN = [
-    "pnpm exec -c 'echo hi'", "pnpm exec --shell-mode 'ls'", "pnpm dlx -c",
-    "pnpm exec -c 'git commit -m \"vitest run fix\"'", "pnpm dlx -c 'grep pytest file'",
-    "npx -c 'ls'", "npm exec --call 'node a.js'",
-]
-
 # ── item 2: names built at run time ──────────────────────────────────────────
 INDIRECT_DENIED = [
     "X=@@; unset $X", "X=@@; unset ${X}", "X=@@; unset \"$X\"",
@@ -267,16 +244,7 @@ class TestGateMatrix:
         assert "built at run time" in reason and "literally" in reason
 
 
-class TestPipelineGateShellModes:
-    @pytest.mark.parametrize("command,hit", PIPELINE_SHELL_HITS)
-    def test_shell_mode_string_is_classified(self, command, hit):
-        hits, _files = sh._classify_pipeline_test_command(command, "/tmp")
-        assert hit in hits, (command, hits)
-
-    @pytest.mark.parametrize("command", PIPELINE_SHELL_CLEAN)
-    def test_harmless_shell_mode_strings_pass(self, command):
-        assert sh._classify_pipeline_test_command(command, "/tmp") == ([], [])
-
+class TestShellModeExtraction:
     def test_shell_mode_extraction(self):
         f = sh._js_pm_shell_c_command
         assert f(["pnpm", "-rc", "exec", "a", "b"]) == "a b"

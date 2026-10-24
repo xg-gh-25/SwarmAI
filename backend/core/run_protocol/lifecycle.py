@@ -30,11 +30,7 @@ QUALITY_BLOCK_REASONS = frozenset({
     "partial_land",
 })
 # count caps a run can hit (conformance F18); DISPATCH_CAPS bound model sessions
-CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch",
-                  "regression_round", "recheck",
-                  # the runner's circuit breaker (pipeline_test): each its own counter
-                  "breaker_rounds", "breaker_stall", "breaker_same_failure",
-                  "goal_tdd_calls"})
+CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch"})
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
 # the not-landed reasons that ARE a count cap being hit
 REASON_CAPS = {"checks_exhausted": "stage_attempt", "land_conflict": "land_attempt",
@@ -83,7 +79,7 @@ PROFILE_STAGES = {
 }
 IGNORED = frozenset({
     "handout", "answer", "finding_occ", "finding_status",
-    "reclassify", "address", "proof", "test_call", "validation_report", "metric", "turn",
+    "reclassify", "address", "proof", "validation_report", "metric", "turn",
     "integrity",
     "owner_transfer", "render_failed",
 })
@@ -313,7 +309,7 @@ def _human_answer(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         raise LifecycleError("human_answer is not for the current decision")
     run["pending_decision"] = None
     run["human_decisions"] += 1
-    # attempt numbers only grow (they are part of event identity); the breaker
+    # attempt numbers only grow (they are part of event identity); the stage cap
     # counts the attempts made since the person answered
     run["attempt_base"][run["stage"]] = run["stage_attempts"].get(run["stage"], 0)
     _schedule(run, event, "active")

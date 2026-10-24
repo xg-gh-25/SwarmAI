@@ -123,7 +123,6 @@ def test_every_gate_pattern_matches_a_real_deny_text():
     core = Path(__file__).resolve().parent.parent / "core"
     source = "".join(f.read_text(encoding="utf-8") for f in core.glob("*.py"))
     samples = {
-        "pipeline_test_gate": "DENY (runner ",
         "run_owner_gate": "DENY (run owner gate)",
         "worktree_write_gate": "DENY (worktree gate)",
         "audit_marker_write_gate": "this writes, moves or deletes files in",

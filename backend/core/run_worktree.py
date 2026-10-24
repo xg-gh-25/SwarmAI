@@ -1,8 +1,8 @@
 """run_worktree — one git worktree per pipeline run: create, validate, sync, land,
 release, sweep (docs/design/pipeline-run-worktree.md, r4).
 
-All deterministic git work for an isolated run lives here; artifact_cli,
-pipeline_test, the write gate and the daemon sweep call it. Invariants:
+All deterministic git work for an isolated run lives here; the engine, the write
+gate and the daemon sweep call it. Invariants:
 
 - Paths and branches are DERIVED from run_id, never read from run.json:
   ``WT_ROOT/<run_id>/<repo_name>`` and ``refs/heads/run/<run_id>`` (§5.2).
@@ -22,7 +22,6 @@ Key public symbols: ``WorktreeError``, ``wt_root``, ``wt_path``, ``branch_ref``,
 from __future__ import annotations
 
 import hashlib
-import contextlib
 import json
 import os
 import re
@@ -749,37 +748,6 @@ def _patch_id(wt, a: str, b: str, run_id: str) -> str:
     return _out(wt, "patch-id", "--stable", input_text=diff).split(" ")[0].strip()
 
 
-def carries_over(wt: "str | Path", run_id: str, old_base: str, old_tree: str,
-                 new_base: str, new_tree: str, *,
-                 dependency_scope: "set[str] | None" = None) -> bool:
-    """Whether old-tree evidence remains valid after the integration base moves.
-
-    Pipeline v1 callers MUST pass ``dependency_scope`` containing the run's changed
-    files, selected tests, and their direct imports. Legacy callers omit it until the
-    one-shot cutover and retain the old non-overlap rule. All comparisons use git blob
-    identities; any missing or malformed evidence fails closed.
-    """
-    if not all((old_base, old_tree, new_base, new_tree)):
-        return False
-    if (old_base, old_tree) == (new_base, new_tree):
-        return True
-    try:
-        moved = {p for p in _out(wt, "diff", "--name-only", "--no-renames", "-z",
-                                 old_base, new_base).split("\0") if p}
-        differs = set(changed_paths(wt, old_tree, new_tree))
-        mine = set(changed_paths(wt, old_base, old_tree)) | set(changed_paths(wt, new_base, new_tree))
-    except WorktreeError:
-        return False
-    if dependency_scope is not None:
-        if not isinstance(dependency_scope, set) or any(
-            not isinstance(path, str) or not path or path.startswith("/")
-            or path == ".." or path.startswith("../") for path in dependency_scope
-        ):
-            return False
-        return differs <= moved and not (moved & dependency_scope)
-    return differs <= moved and not (moved & mine)
-
-
 # ── sync (before the landing, §7.2) ───────────────────────────────────────────────
 def _unmerged(wt) -> "list[str]":
     out = _out(wt, "diff", "--name-only", "--diff-filter=U", "-z")
@@ -1355,7 +1323,6 @@ def _remove(run_id: str, entry: dict, main: Path, merged: bool,
         shutil.rmtree(admin, ignore_errors=True)
     if not keep_branch:
         git(main, "branch", "-q", "-d" if merged else "-D", branch_name(run_id))
-    drop_srcgraph_cache(path)
     refs = git(main, "for-each-ref", "--format=%(refname)", f"refs/run/{run_id}/").stdout
     for r in refs.split():
         git(main, "update-ref", "-d", r)
@@ -1470,7 +1437,7 @@ def _signed_view(run_file: Path, data: dict) -> "dict | None":
     claims nothing from it, never treats it as finished. One stat of the contract and
     of the event log per call; the events are folded again only when they changed."""
     from config import get_app_data_dir
-    from core.run_protocol.runner import contract_path, read_contract
+    from core.run_protocol.contract import contract_path, read_contract
     rid, project = run_file.parent.name, run_file.parents[3].name
     data_dir = Path(get_app_data_dir())
     try:
@@ -1582,7 +1549,7 @@ def _contract_repos(rid: str) -> "frozenset[str]":
     """The repo names of *rid*'s protected contract; empty when it has none."""
     try:
         from config import get_app_data_dir
-        from core.run_protocol.runner import read_contract
+        from core.run_protocol.contract import read_contract
         contract = read_contract(get_app_data_dir(), rid)
     except Exception as exc:  # noqa: BLE001 — not a v1 run id / unreadable
         logger.debug("run %s: contract unreadable, no repos: %s", rid, exc)
@@ -1890,17 +1857,13 @@ def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeo
     if owner_active(data.get("session_id")):
         report["kept"].append(f"{rid}: owner session still active")
         return
-    # Judged again under the run's operation lock, from a fresh read, and never while a
-    # test call of the run is running: a run that came back to life after the scan
-    # keeps its worktree (re-audit ca91762f)
+    # Judged again under the run's operation lock, from a fresh read: a run that came
+    # back to life after the scan keeps its worktree (re-audit ca91762f)
     from config import get_app_data_dir
     from core.run_protocol.oplock import RunBusy, operation
     try:
         with operation(Path(get_app_data_dir()) / "state" / "pipeline_agent_audit", rid,
-                       timeout=5.0), _test_call_idle(f.parent) as idle:
-            if not idle:
-                report["kept"].append(f"{rid}: a test call is running")
-                return
+                       timeout=5.0):
             try:
                 fresh = _signed_view(f, json.loads(f.read_text(encoding="utf-8")))
             except (OSError, ValueError):
@@ -1914,27 +1877,6 @@ def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeo
                            landed=set(fresh.get("_landed") or ()))
     except RunBusy:
         report["kept"].append(f"{rid}: busy with another operation")
-
-
-@contextlib.contextmanager
-def _test_call_idle(run_dir: Path):
-    """Holds the run's test-call lock (pipeline_test ``_run_call_slot``) while the
-    release runs; yields False when a test call holds it."""
-    from utils.file_lock import flock_exclusive_nb, flock_unlock
-    path = run_dir / "evidence" / "tests" / ".call.lock"
-    if not path.exists():
-        yield True
-        return
-    with open(path, "a+", encoding="utf-8") as handle:
-        try:
-            flock_exclusive_nb(handle)
-        except OSError:
-            yield False
-            return
-        try:
-            yield True
-        finally:
-            flock_unlock(handle)
 
 
 def _release_reason(rid, f, data, entries, now) -> "str | None":
@@ -2023,19 +1965,6 @@ def _purge_ledgers(now: float, report: dict) -> None:
 
 
 # ── after release (§6.4, §8.1, §8.3) ─────────────────────────────────────────
-def drop_srcgraph_cache(path: "str | Path") -> None:
-    """Delete the test runner's source-graph cache of a removed worktree. Same file
-    name as ``pipeline_test.build_source_graph`` (sha256 of the repo path)."""
-    import hashlib
-    env = os.environ.get("SWARM_TEST_CACHE_DIR")
-    d = Path(env) if env else Path.home() / ".swarm-ai" / "cache" / "pipeline_test"
-    for p in {str(path), os.path.realpath(str(path))}:
-        try:
-            (d / f"srcgraph-{hashlib.sha256(p.encode()).hexdigest()[:16]}.json").unlink()
-        except OSError:
-            pass
-
-
 def landed_path(path: "str | Path", workspace: "str | Path") -> "Path | None":
     """A file path inside a run worktree that no longer exists → the same file in the
     main checkout, once that run's change landed there. Canvas rows recorded during

@@ -17,8 +17,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-REMOVED = ("direct_commit_gate", "adversarial_commit_gate", "pytest_command_guard")
-KEPT = ("pre_tool_logger", "run_amend_gate", "active_run_commit_gate", "pipeline_test_gate",
+REMOVED = ("direct_commit_gate", "adversarial_commit_gate", "pytest_command_guard",
+           "pipeline_test_gate")
+KEPT = ("pre_tool_logger", "run_amend_gate", "active_run_commit_gate",
         "session_link_gate", "audit_marker_write_gate", "dangerous_command_gate",
         "external_approval_gate", "ask_question_gate", "governance_file_gate")
 

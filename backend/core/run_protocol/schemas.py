@@ -398,23 +398,16 @@ def _design_rows(document: Mapping[str, Any], requirement_ids: set[str],
     known = requirement_ids | prop_ids | fail_ids
     exits = _id_rows(
         document.get("exit_criteria"), out, check="DS-9a", path="exit_criteria",
-        pattern=EXIT_ID, allowed={"id", "kind", "ref", "argv", "expect", "covers"},
+        pattern=EXIT_ID, allowed={"id", "kind", "ref", "covers"},
         required={"id", "kind", "covers"},
     )
     for i, row in enumerate(exits):
         path = f"exit_criteria[{i}]"
         kind = row.get("kind")
-        if kind not in ("test", "probe", "mutation", "manual"):
+        # S6-1: no probe / mutation exits; the pipeline runs nothing (§3.3.3)
+        if kind not in ("test", "manual"):
             _issue(out, "DS-9a", f"{path}.kind", "unknown exit kind")
-        if kind == "probe":
-            from core.run_protocol import probe as safe_probe
-            if "expect" not in row:
-                _issue(out, "DS-9a", f"{path}.expect", "is required for a probe")
-            try:
-                safe_probe.validate(row.get("argv"), row.get("expect"))
-            except safe_probe.ProbeError as exc:
-                _issue(out, "DS-9a", f"{path}.argv", str(exc))
-        elif kind in ("test", "mutation"):
+        if kind == "test":
             _nodeid(row.get("ref"), out, "DS-9a", f"{path}.ref")
             test_exists(row.get("ref"), f"{path}.ref")
         else:
@@ -534,10 +527,10 @@ def validate_contract(requirements: Mapping[str, Any], design: Mapping[str, Any]
     executable = {req_id for req_id, row in req_meta.items()
                   if row.get("negative") is True or row.get("universal") is True}
     for req_id in sorted(executable):
-        if not any(req_id in (row.get("covers") or []) and row.get("kind") in ("test", "probe")
+        if not any(req_id in (row.get("covers") or []) and row.get("kind") == "test"
                    for row in exits):
             _issue(issues, "DS-9a", "exit_criteria",
-                   f"executable acceptance {req_id} needs a test or probe exit")
+                   f"executable acceptance {req_id} needs a test exit")
     for unchanged_id in sorted(unchanged):
         if not any(unchanged_id in (row.get("covers") or []) and row.get("kind") == "test"
                    for row in exits):

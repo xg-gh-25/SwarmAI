@@ -1,6 +1,6 @@
 """Pipeline v1 real end-to-end tests (fixing spec §2, group G).
 
-Every run here is driven only through ``pipeline_v1.py`` / ``pipeline_test.py`` and the
+Every run here is driven only through ``pipeline_v1.py`` and the
 real hook functions (``tests/pipeline_v1_rig.py``); no test appends an event. Each
 negative path asserts the outcome the v13 design requires; every fixing-spec item
 has landed, so no case is marked as expected to fail.

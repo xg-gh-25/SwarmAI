@@ -31,12 +31,6 @@ def rig(tmp_path, monkeypatch):
         r.close()
 
 
-
-
-
-
-
-
 def test_code_facts_are_computed_once_per_place_of_the_code(rig, monkeypatch):
     r = rig()
     r.create()
@@ -75,21 +69,3 @@ def test_one_diff_against_the_code_tree_sees_every_kind_of_change(rig):
     assert "backend/core/mod.py" in changed                            # the run's own change
 
 
-def test_a_base_manifest_is_read_from_git_once_per_commit(tmp_path, monkeypatch):
-    from core.run_protocol import validations
-    repo = tmp_path / "r"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / "validations.json").write_text('{"schema": 1, "entries": []}')
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run(["git", "-C", str(repo), "-c", "user.email=a@b", "-c", "user.name=a",
-                    "commit", "-qm", "m"], check=True)
-    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-                         stdout=subprocess.PIPE, text=True).stdout.strip()
-    runs = []
-    real = subprocess.run
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: runs.append(a[0]) or real(*a, **k))
-    first = validations.load_manifest(str(repo), sha)
-    first["entries"].append("mutated by a caller")
-    assert validations.load_manifest(str(repo), sha) == {"schema": 1, "entries": []}
-    assert len(runs) == 2                                             # ls-tree + show, once

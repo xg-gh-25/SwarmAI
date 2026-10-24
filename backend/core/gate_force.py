@@ -4,7 +4,7 @@ Replaces ten per-gate ``SWARM_*_FORCE=1`` variables. Set it in the backend / dae
 environment (a session's own shell cannot reach the hooks, which run in the daemon) to
 a comma-separated list of gate names or group names::
 
-    SWARM_GATE_FORCE=pipeline_test_gate,commit_gate
+    SWARM_GATE_FORCE=run_amend_gate,expert_gate
 
 Every use is recorded as ``force_bypass`` in ``gate_decisions.jsonl``.
 
@@ -33,7 +33,6 @@ FORCE_ENV = "SWARM_GATE_FORCE"
 
 GROUPS: dict[str, frozenset[str]] = {
     "commit_gate": frozenset({"run_amend_gate", "active_run_commit_gate"}),
-    "test_command_gate": frozenset({"pipeline_test_gate"}),
     "expert_gate": frozenset({"expert_type_gate", "expert_budget_gate"}),
 }
 

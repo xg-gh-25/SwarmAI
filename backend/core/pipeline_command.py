@@ -1,7 +1,7 @@
 """pipeline_command — the one place that recognises a pipeline command in a Bash
 command line (design docs/design/2026-10-24-swarmai-usable-by-anyone.md §3.2, r14).
 
-Two forms are recognised until S6 removes the first one together with the runner:
+Two forms are recognised until S6-5 removes the second one:
 
 - program form (the one the agent is told to run, packaged and dev alike):
   ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub> ...`` — the program word is the
@@ -9,7 +9,7 @@ Two forms are recognised until S6 removes the first one together with the runner
   ``pipeline-v1``. It is OURS (gets a hook token) when the word is the variable and the
   command does not reassign it, or a path that resolves to this backend's program
   (``utils.backend_bin.backend_bin``).
-- legacy script form: ``<python> [-flags] .../pipeline_v1.py|pipeline_test.py <args>``.
+- legacy script form: ``<python> [-flags] .../pipeline_v1.py <args>``.
 
 Every other module asks here instead of matching ``pipeline_v1`` / ``pipeline-v1`` text
 (structural test ``tests/test_pipeline_command.py``).
@@ -20,7 +20,6 @@ Public:
 - ``calls(command)`` — (calls, single) for a whole command line.
 - ``is_ours(call)`` — this backend's own CLI (only those receive a hook token).
 - ``program_word(base)`` — a program basename that runs a pipeline CLI / the backend.
-- ``runs_runner(tokens)`` — a simple command that runs the legacy runner script.
 - ``segment_mentions(tokens)`` — a simple command that names a pipeline CLI at all.
 - ``last_call_offset(command)`` / ``is_create(command)`` / ``is_land(command)``.
 - ``command_text(args)`` — the canonical command the agent is told to run.
@@ -37,12 +36,12 @@ SUBCOMMAND = "pipeline-v1"
 ENV_VAR = "SWARM_BACKEND_BIN"
 _ENV_REFS = frozenset({f"${ENV_VAR}", f"${{{ENV_VAR}}}"})
 _PROGRAM_NAMES = frozenset({"python-backend", "python-backend.exe"})
-LEGACY_SCRIPTS = {"pipeline_v1.py": "pipeline_v1", "pipeline_test.py": "pipeline_test"}
-_TEXT_MARKERS = ("pipeline_v1", "pipeline_test", SUBCOMMAND)
+LEGACY_SCRIPTS = {"pipeline_v1.py": "pipeline_v1"}
+_TEXT_MARKERS = ("pipeline_v1", SUBCOMMAND)
 _KEY_OPTS = ("--run-id", "--project", "--stage", "--status", "--session-id")
 _SUBST = ("$(", "`", "<(", ">(")
-# a call word, in plain text: `pipeline-v1` or `pipeline_v1.py` / `pipeline_test.py`
-_CALL_WORD_RE = re.compile(r"(?<![\w.-])(?:pipeline-v1|[^\s'\";&|()]*pipeline_(?:v1|test)\.py)(?![\w.-])")
+# a call word, in plain text: `pipeline-v1` or `pipeline_v1.py`
+_CALL_WORD_RE = re.compile(r"(?<![\w.-])(?:pipeline-v1|[^\s'\";&|()]*pipeline_v1\.py)(?![\w.-])")
 
 
 def mentions(command: object) -> bool:
@@ -55,20 +54,7 @@ def _is_program_word(word: str) -> bool:
 
 def program_word(base: str) -> bool:
     """A program word (basename) that runs a pipeline CLI or the backend program."""
-    return base.startswith(("pipeline_v1", "pipeline_test")) or base in _PROGRAM_NAMES
-
-
-def runs_runner(tokens: "list[str]") -> bool:
-    """A simple command where a python word is followed by the legacy runner script
-    (``pipeline_test.py``; removed with the runner in S6)."""
-    from core.security_hooks import _PY_INTERPRETER_RE
-    seen_py = False
-    for tok in tokens:
-        if _PY_INTERPRETER_RE.search(tok):
-            seen_py = True
-        elif seen_py and tok.endswith("pipeline_test.py"):
-            return True
-    return False
+    return base.startswith("pipeline_v1") or base in _PROGRAM_NAMES
 
 
 def segment_mentions(tokens: "list[str]") -> bool:
@@ -106,8 +92,6 @@ def _ambiguous(rest: "list[str]") -> bool:
 
 def _call(tool: str, rest: "list[str]", **extra) -> dict:
     sub = next((t for t in rest if not t.startswith("-")), None)
-    if tool == "pipeline_test":
-        sub = "run"
     return {"tool": tool, "sub": sub, "run_id": _opt(rest, "--run-id"),
             "project": _opt(rest, "--project"), "stage": _opt(rest, "--stage"),
             "status": _opt(rest, "--status"), "session_id": _opt(rest, "--session-id"),
@@ -180,7 +164,7 @@ def is_ours(call: dict) -> bool:
         except OSError:
             return False
     script = call.get("script")
-    if not isinstance(script, str) or not script or tool not in ("pipeline_v1", "pipeline_test"):
+    if not isinstance(script, str) or not script or tool != "pipeline_v1":
         return False
     from utils.source_repo import pipeline_script
     expected = pipeline_script(tool)
@@ -223,9 +207,8 @@ def is_create(command: object) -> bool:
     """True when the LAST pipeline CLI call in *command* is ``create``."""
     if not mentions(command):
         return False
-    words = [w for w in _words(command) if os.path.basename(w[1]) != "pipeline_test.py"]
-    return bool(words) and words[-1][0] == last_call_offset(command) \
-        and _sub_after(command, words[-1][0]) == "create"
+    words = _words(command)
+    return bool(words) and _sub_after(command, words[-1][0]) == "create"
 
 
 def is_land(command: object) -> bool:
@@ -233,8 +216,7 @@ def is_land(command: object) -> bool:
     if not mentions(command):
         return False
     return any(_sub_after(command, start) in ("land", "run-land")
-               for start, word in _words(command)
-               if os.path.basename(word) != "pipeline_test.py")
+               for start, _word in _words(command))
 
 
 def command_text(args: str) -> str:
@@ -244,5 +226,4 @@ def command_text(args: str) -> str:
 
 __all__ = ["ENV_VAR", "LEGACY_SCRIPTS", "SUBCOMMAND", "calls", "command_text", "is_create",
            "is_land", "is_ours", "last_call_offset", "mentions", "program_word", "recognize",
-           "runs_runner",
            "segment_mentions"]

@@ -10,8 +10,6 @@ What is tested:
   a branch-local rewrite inside this session's own run worktree or a temp repo is not
   gated (_rewrites_only_scratch); another session's worktree, a ref-moving rewrite, a
   git target set through the environment, or an unfollowed directory change still is;
-- runner loop (pipeline_test_gate): a ``for`` in a heredoc body is not a shell loop
-  unless a shell runs it;
 - run owner token (run_owner_gate._token_binding): the CLI call may be followed by
   output plumbing and preceded by quoted ``cat > FILE <<'EOF'`` writes;
 - python code judgment (_code_can_execute): ``re.compile(`` is a method, not the builtin.
@@ -26,11 +24,8 @@ from core.security_hooks import (
     _is_commit_amend,
     _is_history_rewrite,
     _rewrites_only_scratch,
-    _runner_loop_kind,
 )
 
-RUNNER = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_test.py "
-          "--project SwarmAI --run-id run_x --mode tdd --files backend/tests/test_a.py")
 CLI = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_v1.py land "
        "--project SwarmAI --run-id run_x --stage deliver")
 
@@ -171,29 +166,6 @@ def test_a_temp_worktree_of_a_shared_repo_stays_gated(tmp_path):
     own = tmp_path / "repo"
     (own / ".git").mkdir(parents=True)
     assert _rewrites_only_scratch("git reset --hard HEAD~3", str(own), SID)
-
-
-# ── runner loop ──────────────────────────────────────────────────────────────
-@pytest.mark.parametrize("cmd", [
-    "cat >> backend/tests/t.py <<'EOF'\nfor ar in (1, 2):\n    print(ar)  # pipeline_test.py\n"
-    "EOF\nperl -e 'alarm 115; exec @ARGV' " + RUNNER,
-    "python3 - <<'EOF'\nfor p in ['x']:\n    s = open(p).read()  # don't\nEOF\n"
-    "perl -e 'alarm 115; exec @ARGV' " + RUNNER,
-    "python3 -I - <<'EOF'\nfrom pathlib import Path\nfor x in []:\n    pass\nEOF\n" + RUNNER,
-])
-def test_a_for_in_a_heredoc_body_is_not_a_runner_loop(cmd):
-    assert _runner_loop_kind(cmd) is None
-
-
-@pytest.mark.parametrize("cmd,kind", [
-    ("for i in 1 2; do perl -e 'alarm 115; exec @ARGV' " + RUNNER + "; done", "loop"),
-    ("bash <<'EOF'\nfor i in 1 2; do " + RUNNER + "; done\nEOF", "loop"),
-    (RUNNER + "; " + RUNNER, "repeat"),
-    # one run outside a shell body and one inside add up
-    (RUNNER + "\nbash <<'EOF'\n" + RUNNER + "\nEOF", "repeat"),
-])
-def test_a_real_runner_loop_is_still_caught(cmd, kind):
-    assert _runner_loop_kind(cmd) == kind
 
 
 # ── run owner token binding ──────────────────────────────────────────────────

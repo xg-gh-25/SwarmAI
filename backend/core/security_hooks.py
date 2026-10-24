@@ -14,7 +14,6 @@ Public symbols
 - ``create_skill_access_checker``            — skill allow-list enforcement
 - ``create_session_link_gate``               — deny removing/overriding SWARM_APP_SESSION_ID (run↔session link)
 - ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (run events, keys, markers)
-- ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
 - ``create_run_amend_gate``                  — in an active run, deny git commit --amend (no HITL prompt)
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
 - ``GOVERNANCE_TIER1_PATTERNS``              — Tier 1 (Constitutional) file patterns
@@ -1293,52 +1292,6 @@ def _rewrites_only_scratch(command: str, cwd: str, sid: str = "") -> bool:
 _PY_INTERPRETER_RE = re.compile(r"(?:^|/)python[\d.]*$")
 
 
-def _runner_loop_kind(command: str) -> "str | None":
-    """Does *command* run ``pipeline_test.py`` more than once in ONE Bash call?
-    ``"loop"`` when a ``for``/``while``/``until`` segment sits beside a runner call,
-    ``"repeat"`` when two segments run it, else None. One call is capped at
-    ``alarm 110`` to stay under the Bash tool's 120 s default; a loop of continuations
-    in one call is the retired long-call design again (run_bd60daff 2026-10-19: a
-    ``for i in 1 2 3 4 5`` loop with a 600 s Bash timeout). Quote-aware (a ``for`` in
-    ``python3 -c "..."`` is not a loop); a script name that is only read (grep, sed)
-    is not a run. A heredoc body is not shell text (a ``for`` in a file being written,
-    or in python an edit script runs, is not a shell loop) unless a shell runs it.
-    Unparseable → None (fail-open)."""
-    counted = _runner_counts(command, 0)
-    if counted is None:
-        return None
-    runs, looped = counted
-    if runs and looped:
-        return "loop"
-    if runs >= 2:
-        return "repeat"
-    return None
-
-
-def _runner_counts(command: str, depth: int) -> "tuple[int, bool] | None":
-    """(runner calls, any shell loop) of *command*, the heredoc bodies a shell runs
-    included; None when it does not parse."""
-    segments = _gate_shell_segments(command)
-    if not segments:
-        return None
-    runs = 0
-    looped = False
-    if depth < _BODY_DEPTH:
-        for kind, body in _executed_bodies(command, segments):
-            if kind == "shell":
-                inner = _runner_counts(body, depth + 1)
-                if inner:
-                    runs += inner[0]
-                    looped = looped or inner[1]
-    for seg in segments:
-        if seg and seg[0] in ("for", "while", "until"):
-            looped = True
-        from core import pipeline_command
-        if pipeline_command.runs_runner(seg):
-            runs += 1
-    return runs, looped
-
-
 def _segment_git_subcommand(tokens: list[str]) -> "tuple[str, list[str]] | None":
     """``(subcommand, rest)`` when ONE segment is a git command (env assignments,
     wrappers and git global options skipped), else None."""
@@ -2133,63 +2086,6 @@ async def background_command_guard(
 # The R9 pytest_command_guard that denied a pytest run without a wall-clock cap was
 # removed (design 2026-10-24-swarmai-usable-by-anyone §3.4: a gate must not block
 # native testing). These recognisers stay for the gates that still use them.
-
-# pytest as an INVOCATION (not the literal string in a filename like pytest.log):
-# at a command-word position — line start, or after a shell separator/pipe,
-# `python -m` (any minor version), a runner wrapper, an env-assignment prefix,
-# OR a wall-clock wrapper (gtimeout/timeout N). The wall-clock-wrapper arm is
-# essential: the wrapped form is the shape we MANDATE, so the gate must still
-# SEE it as pytest (its cap is then checked against the Bash timeout). This is
-# what stops the `cat pytest.log | tail` false positive while catching
-# `gtimeout 900 pytest`.
-# `python[\d.]*` matches python / python3 / python3.12 (Gate-2 C5).
-_PYTEST_INVOCATION_RE = re.compile(
-    r"(?:^|[;&|]|\bpython[\d.]*\s+-m"      # line start / separator / `python -m`
-    r"|\b(?:poetry|uv|pdm)\s+run\s+"       # or a poetry/uv/pdm run wrapper
-    r"|\bg?timeout\s+\d+\s+"               # or a gtimeout/timeout N wrapper
-    r"|\bexec\s+(?:@ARGV['\"]?\s+)?"       # or perl-alarm `exec @ARGV['] <cmd>`
-    r"|(?:^|[;&|]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)"  # or env-assignment prefix
-    r"\s*(?:python[\d.]*\s+-m\s+)?(?:py\.test|pytest)\b",  # opt. `python -m` after wrapper
-    re.IGNORECASE,
-)
-
-
-# A bare pytest TOKEN at a word boundary (just "is the word pytest present").
-_PYTEST_TOKEN_RE = re.compile(r"\b(?:py\.test|pytest)\b", re.IGNORECASE)
-
-
-def _pytest_token_is_command_word(command: str) -> bool:
-    """True iff a pytest TOKEN appears as a real command WORD — i.e. NOT only
-    inside a quoted string. Used with _PYTEST_INVOCATION_RE to require BOTH an
-    anchor match AND that the pytest token is real command text, killing the
-    in-quote false-positive (a token mentioned in a grep -E pattern / -k expr /
-    commit message — run_5511508d) without fail-opening on real invocations.
-
-    Uses `shlex.split(posix=False)` — a REAL shell lexer that respects quoting —
-    NOT a regex quote-strip. A regex strip (`'[^']*'`) is fooled by an apostrophe
-    in an unquoted word pairing with a later quoted arg: `echo it's; pytest -k 'x'`
-    strips to `echo itx'`, deleting the REAL pytest token → a genuine uncapped run
-    fail-opens to APPROVE (Gate-2 HIGH, run_5511508d). shlex tokenizes by true
-    shell rules, so that trap cannot occur.
-
-    `posix=False` keeps quote chars in tokens, so a fully-quoted word like
-    `'pytest'` stays distinguishable (starts+ends with the same quote char) and is
-    skipped — only a bare/word token containing pytest counts. An unbalanced quote
-    raises ValueError → fail-CLOSED (treat as a real invocation; a malformed
-    command must not slip past the cap)."""
-    try:
-        tokens = shlex.split(command, posix=False)
-    except (ValueError, AttributeError, TypeError):
-        # ValueError = unbalanced quoting; AttributeError/TypeError = a non-string
-        # command slipped past the caller's coercion. Any tokenizer failure →
-        # cannot prove the token is in-quote → fail CLOSED (treat as a real run).
-        return True
-    for tok in tokens:
-        if len(tok) >= 2 and tok[0] in "'\"" and tok[-1] == tok[0]:
-            continue  # fully-quoted word — a mention, not a command token
-        if _PYTEST_TOKEN_RE.search(tok):
-            return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -3175,7 +3071,7 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
     from config import get_app_data_dir
     from core import run_worktree
     from core.run_protocol.engine import signed_terminal
-    from core.run_protocol.runner import read_contract
+    from core.run_protocol.contract import read_contract
     data_dir = get_app_data_dir()
     projects = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects")
     out: list = []
@@ -3400,23 +3296,15 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 
 
 # ---------------------------------------------------------------------------
-# pipeline-test gate + direct-commit gate (PreToolUse, Bash)
-# design: docs/design/pipeline-speed-systematic-fix.md §4-B3 and §4-G1
+# "this session's active run" (PreToolUse, Bash)
 # ---------------------------------------------------------------------------
-# Both gates key on "this session's active run" (contract C6): a run.json under
+# The run gates key on "this session's active run" (contract C6): a run.json under
 # <workspace>/Projects/*/.artifacts/runs/*/run.json with status active / reflecting and
 # session_id == the hook's APP session id. The app session id arrives as
 # session_context["sdk_session_id"] (historical name; see _other_live_sessions_present).
-#
-#   • pipeline_test_gate (B3): while the session HAS an active run, every test/build
-#     command goes through backend/scripts/pipeline_test.py (one entry point, scoped
-#     by mode, cached, hang-safe). Direct pytest / vitest / tsc / eslint / vite build /
-#     npm|pnpm|yarn|bun build|test, make test*, `git worktree add`, inline / stdin python
-#     that names a test runner AND can run code, and manual hang triage (ps / pgrep / kill / pkill aimed
-#     at pytest, python -X faulthandler) are DENIED with a copyable runner command.
-#     A session with no active run is never affected.
-#   (direct_commit_gate, which sent large commits outside a run to the pipeline, was removed:
-#   design 2026-10-24-swarmai-usable-by-anyone §3.4.)
+# (pipeline_test_gate, which routed a run's tests through the pipeline's own runner,
+# and direct_commit_gate were removed: design 2026-10-24-swarmai-usable-by-anyone
+# §3.3.3, §3.4.)
 #
 # FAIL-OPEN on every infra error or timeout.
 # Each session is judged ONLY by runs whose session_id equals its own id: a run with
@@ -3456,63 +3344,6 @@ try:
 except Exception as _exc:  # pragma: no cover - import-time path edge
     logger.warning("security_hooks: cannot resolve source repo root: %s", _exc)
     _SOURCE_REPO_ROOT = None
-_SOURCE_ROOT_CACHE: "list" = [0.0, None]
-
-
-def _source_repo_root() -> "str | None":
-    """The SwarmAI source repo (a git toplevel). From this module's own path when it is
-    one (dev, tests) — in the packaged daemon ``__file__`` lies inside the bundle, so
-    that path is never the repo and every gate scoped to it silently failed open. Then
-    from the newest v1 runs' protected contracts (their ``repo_roots``): the first root
-    that holds this module's twin. Cached 60 s; None when neither resolves."""
-    if _SOURCE_REPO_ROOT and os.path.isdir(os.path.join(_SOURCE_REPO_ROOT, ".git")):
-        return _SOURCE_REPO_ROOT
-    # the packaged daemon: the checkout the bundle was built from (build-backend.sh)
-    from utils.source_repo import root as _built_from
-    built = _built_from()
-    if built is not None and os.path.exists(os.path.join(str(built), ".git")):
-        return os.path.realpath(str(built))
-    import time as _time
-    now = _time.time()
-    if now - _SOURCE_ROOT_CACHE[0] < 60:
-        return _SOURCE_ROOT_CACHE[1]
-    import glob as _glob
-    files = []
-    for f in _glob.glob(os.path.join(_pipeline_runs_root(), "Projects", "*", ".artifacts",
-                                     "runs", "*", "run.json")):
-        try:
-            files.append((os.path.getmtime(f), f))
-        except OSError:
-            continue
-    found = None
-    try:
-        from config import get_app_data_dir
-        from core.run_protocol.runner import read_contract
-        data_dir = get_app_data_dir()
-    except Exception as exc:  # noqa: BLE001 — no config: nothing to read
-        logger.debug("source root: app data dir unavailable: %s", exc)
-        data_dir = None
-    for _t, f in sorted(files, reverse=True)[:50]:   # newest first, stop at the first fit
-        try:
-            contract = read_contract(data_dir, os.path.basename(os.path.dirname(f))) \
-                if data_dir is not None else None
-        except Exception as exc:  # noqa: BLE001 — an unreadable contract names no root
-            logger.debug("source root: contract of %s unreadable: %s", f, exc)
-            contract = None
-        roots = (contract or {}).get("repo_roots") if isinstance(contract, dict) else None
-        for root in (roots or {}).values() if isinstance(roots, dict) else ():
-            if not isinstance(root, str) or not os.path.isabs(root):
-                continue
-            root = os.path.realpath(root)
-            # a main checkout (.git a directory), never a linked worktree
-            if os.path.isdir(os.path.join(root, ".git")) and os.path.isfile(
-                    os.path.join(root, "backend", "core", "security_hooks.py")):
-                found = root
-                break
-        if found:
-            break
-    _SOURCE_ROOT_CACHE[:] = [now, found]
-    return found
 
 
 def _pipeline_runs_root() -> str:
@@ -3616,7 +3447,6 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
 _GATE_PUNCT_CHARS = ";&|()<>"
 _GATE_SEPARATOR_CHARS = frozenset(";|()")
 _PY_INTERP_RE = re.compile(r"^python[\d.]*$")
-_JS_TEST_FILE_RE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
 _SHELL_KEYWORDS = frozenset({"!", "{", "}", "then", "do", "else", "elif", "if",
                              "while", "until", "exec"})
 # Shells whose `-c STRING` is classified like the outer command (csh / tcsh / fish
@@ -3624,19 +3454,8 @@ _SHELL_KEYWORDS = frozenset({"!", "{", "}", "then", "do", "else", "elif", "if",
 # session_link_gate).
 _SHELL_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "mksh",
                                  "csh", "tcsh", "fish"})
-_TRIAGE_PROGRAMS = frozenset({"ps", "pgrep", "pkill", "kill", "killall"})
-# The ones that ACT on a test process. A read-only listing (ps / pgrep) changes nothing
-# and is how a stall is seen from outside, so it is not a test run; killing a test
-# process by hand is (the runner owns hang triage and reports stacks).
-_TRIAGE_ACTING_PROGRAMS = frozenset({"pkill", "kill", "killall"})
 _XARGS_VALUE_OPTS = frozenset({"-n", "-I", "-P", "-L", "-d", "-E", "-s", "-a"})
-_PYTEST_VALUE_OPTS = frozenset({"-c", "-p", "-k", "-m", "-o", "-W", "--ignore",
-                                "--deselect", "--rootdir", "--confcutdir", "--basetemp"})
 _NPM_VALUE_OPTS = frozenset({"--prefix", "-C", "--workspace", "-w"})
-# npm run <script>: script names (or `name:variant`) that run tests / lint / typecheck /
-# build. Matched by prefix of the part before ':' (test, test:run, lint:contract, ...).
-_NPM_GATED_SCRIPT_PREFIXES = ("build", "test", "lint", "typecheck", "type-check",
-                              "check", "tsc", "eslint", "vitest")
 # pnpm / yarn / bun: global options that take a separate value (skipped before the
 # subcommand), and the subcommands that run a package binary like npx.
 _JS_PM_VALUE_OPTS = {
@@ -3655,24 +3474,6 @@ _JS_PM_EXEC_SUBCOMMANDS = {
     "bun": frozenset({"x"}),
 }
 _JS_EXEC_VALUE_OPTS = frozenset({"-p", "--package", "--filter", "-F", "-C", "--dir", "--cwd"})
-# yarn workspaces foreach options that take a value.
-_YARN_FOREACH_VALUE_OPTS = frozenset({"--include", "--exclude", "--from", "-j", "--jobs"})
-# make targets that run tests / checks (backend/Makefile: test, test-all, test-file, ...).
-_MAKE_GATED_TARGET_PREFIXES = ("test", "check", "lint", "typecheck")
-_MAKE_VALUE_OPTS = frozenset({"-C", "-f", "-I", "-o", "-W", "-l", "--directory",
-                              "--file", "--makefile", "--include-dir", "--old-file",
-                              "--what-if", "--new-file", "--assume-new", "--assume-old"})
-_MAKE_RULE_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.\-/]*)\s*::?(?!=)")
-_COVERAGE_VALUE_OPTS = frozenset({"--rcfile", "--source", "--omit", "--include",
-                                  "--concurrency", "--context", "--data-file"})
-_NODE_VALUE_OPTS = frozenset({"-r", "--require", "--import", "--loader",
-                              "--experimental-loader", "--env-file", "-C", "--conditions"})
-_NODE_TOOL_SCRIPTS = (("vitest", "vitest"), ("eslint", "eslint"), ("tsc", "tsc"))
-_PYTEST_INFO_ONLY_OPTS = frozenset({"--version", "-V", "--help", "-h"})
-# Programs whose arguments name what a manual hang-triage command is looking for
-# (`ps aux | grep pytest`, `pkill -f pytest`); a pytest word elsewhere (echo text,
-# a commit message) is not triage.
-_TRIAGE_FILTER_PROGRAMS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "awk"})
 
 
 def _gate_shell_segments(
@@ -3689,7 +3490,7 @@ def _gate_shell_segments(
 
     When *seps* is a list it receives, per returned segment, the concatenated
     separator tokens that PRECEDE it ("" for the first; e.g. ");" or "&&(") — the
-    cd/pushd chain tracking in _classify_pipeline_test_command reads them."""
+    cd/pushd chain tracking reads them."""
     normalized = _normalize_newlines_quote_aware(command).replace("`", " ; ")
     try:
         lex = shlex.shlex(normalized, posix=True, punctuation_chars=_GATE_PUNCT_CHARS)
@@ -3800,41 +3601,6 @@ def _unwrap_program(tokens: list[str]) -> list[str]:
     return tokens
 
 
-def _pytest_file_args(args: list[str]) -> list[str]:
-    """Explicit test FILE arguments of a pytest invocation (`::node` suffix dropped)."""
-    out: list[str] = []
-    skip = False
-    for a in args:
-        if skip:
-            skip = False
-            continue
-        if a in _PYTEST_VALUE_OPTS:
-            skip = True
-            continue
-        if a.startswith("-"):
-            continue
-        path = a.split("::", 1)[0]
-        if path.endswith(".py"):
-            out.append(path)
-    return out
-
-
-def _add_pytest_run(args: list[str], hits: set, files: list) -> None:
-    """Record a pytest invocation with arguments *args*. `--version` / `--help` (and
-    -V / -h) only print and exit, so they add the internal "_pytest_info" marker
-    instead of a hit."""
-    if any(a in _PYTEST_INFO_ONLY_OPTS for a in args):
-        hits.add("_pytest_info")
-        return
-    hits.add("pytest")
-    files.extend(_pytest_file_args(args))
-
-
-def _mentions_test_runner(text: str) -> bool:
-    """True iff *text* (inline / stdin code) names pytest, py.test or vitest."""
-    return bool(_PYTEST_TOKEN_RE.search(text) or re.search(r"\bvitest\b", text))
-
-
 # Modules inline / stdin code may import and still be unable to start a process or load
 # other code: text, files, data. Anything else (subprocess, os, pty, runpy, importlib,
 # pytest, a project module whose import runs code, ...) counts as able to run tests.
@@ -3862,151 +3628,6 @@ def _code_can_execute(text: str) -> bool:
     return False
 
 
-def _classify_coverage(args: list[str], hits: set, files: list) -> None:
-    """`coverage run [opts] (-m pytest | pytest-script) ...` → the pytest it wraps."""
-    if not args or args[0] != "run":
-        return
-    i = 1
-    while i < len(args) and args[i].startswith("-") and not args[i].startswith("-m"):
-        if args[i] == "--":
-            i += 1
-            break
-        i += 2 if (args[i] in _COVERAGE_VALUE_OPTS and i + 1 < len(args)) else 1
-    rest = args[i:]
-    if not rest:
-        return
-    if rest[0].startswith("-m"):
-        _classify_python(rest, hits, files)
-    elif os.path.basename(rest[0]) in ("pytest", "py.test"):
-        _add_pytest_run(rest[1:], hits, files)
-
-
-def _classify_python(args: list[str], hits: set, files: list) -> None:
-    """Classify a python[3.x] invocation: `-m pytest`, `-m coverage run ...`, a pytest
-    or coverage script, `-X faulthandler`, or inline code. `-c CODE` is a hit when
-    CODE names pytest / vitest (`import pytest; pytest.main([...])`). Code read from
-    stdin (`-` or no script at all) is not classified: in practice it is an edit script
-    whose text happens to name pytest (docs/design/pipeline-gate-expert-simplification.md
-    G1). Any other
-    script, including backend/scripts/pipeline_test.py, is not a direct test run."""
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a.startswith("-X"):
-            opt = a[2:] if len(a) > 2 else (args[i + 1] if i + 1 < len(args) else "")
-            if opt.startswith("faulthandler"):
-                hits.add("python -X faulthandler")
-            i += 1 if len(a) > 2 else 2
-            continue
-        if a.startswith("-m") and not a.startswith("--"):
-            mod = a[2:] if len(a) > 2 else (args[i + 1] if i + 1 < len(args) else "")
-            rest = args[i + (1 if len(a) > 2 else 2):]
-            if mod in ("pytest", "py.test"):
-                _add_pytest_run(rest, hits, files)
-            elif mod == "coverage":
-                _classify_coverage(rest, hits, files)
-            return
-        if a == "-W":
-            i += 2
-            continue
-        if a == "-":
-            return  # code from stdin: an edit script far more often than a test run
-        if a.startswith("-") and not a.startswith("--") and a.endswith("c"):
-            if i + 1 < len(args) and _mentions_test_runner(args[i + 1]) \
-                    and _code_can_execute(args[i + 1]):
-                hits.add("python -c pytest")
-            return  # inline code
-        if a in ("--version", "-V", "-VV", "--help", "-h"):
-            return  # prints and exits: reads no code
-        if a.startswith("-"):
-            i += 1
-            continue
-        base = os.path.basename(a)
-        if base in ("pytest", "py.test"):
-            _add_pytest_run(args[i + 1:], hits, files)
-        elif base == "coverage":
-            _classify_coverage(args[i + 1:], hits, files)
-        return
-    # no script, module or -c: python reads code from stdin, not classified
-
-
-def _classify_npm(args: list[str], hits: set) -> None:
-    """`npm [opts] test|t|tst` and `npm [opts] run|run-script <script>` where the
-    script name (part before ':') starts with build / test / lint / typecheck / check
-    / tsc / eslint / vitest (_NPM_GATED_SCRIPT_PREFIXES). `npm install`, `npm run dev`
-    and other scripts pass."""
-    i = _skip_dash_opts(args, 0, _NPM_VALUE_OPTS)
-    if i >= len(args):
-        return
-    sub = args[i]
-    if sub in ("test", "t", "tst"):
-        hits.add("npm test")
-    elif sub in ("run", "run-script", "rum", "urn"):
-        j = _skip_dash_opts(args, i + 1, _NPM_VALUE_OPTS)
-        if j < len(args):
-            script = args[j]
-            if script.split(":", 1)[0].startswith(_NPM_GATED_SCRIPT_PREFIXES):
-                hits.add("npm run " + script)
-
-
-def _classify_js_pm(
-    pm: str, args: list[str], cwd: str, depth: int, hits: set, files: list,
-    chain_dir: "str | None" = None,
-) -> None:
-    """`pnpm` / `yarn` / `bun` (same rules as npm / npx). `<pm> test` (pnpm also
-    `t` / `tst`) and `bun build` are hits; `<pm> run|run-script <script>` is a hit when
-    the script matches _NPM_GATED_SCRIPT_PREFIXES. Any other subcommand is the
-    implicit script-or-binary form (`pnpm lint`, `yarn vitest`, `pnpm vite build`):
-    a gated name is a hit, otherwise `[name, *rest]` is classified as its own command
-    (`pnpm install` / `yarn` / `pnpm dev` pass). exec / dlx / `bun x` are unwrapped
-    earlier (_unwrap_program). `pnpm recursive|multi|m ...`, `yarn workspace NAME ...`
-    and `yarn workspaces [foreach [opts]] ...` re-classify the rest."""
-    i = _skip_dash_opts(args, 0, _JS_PM_VALUE_OPTS[pm])
-    if i >= len(args):
-        return  # bare `yarn` = install
-    sub, rest = args[i], args[i + 1:]
-
-    def _again(more: list[str]) -> None:
-        _classify_test_segment([pm, *more], cwd, depth, hits, files, chain_dir)
-
-    if pm == "pnpm" and sub in ("recursive", "multi", "m"):
-        _again(rest)
-    elif pm == "yarn" and sub == "workspace":
-        _again(rest[1:])
-    elif pm == "yarn" and sub == "workspaces":
-        j = 1 if rest[:1] == ["foreach"] else 0
-        _again(rest[_skip_dash_opts(rest, j, _YARN_FOREACH_VALUE_OPTS):])
-    elif sub == "test" or (pm == "pnpm" and sub in ("t", "tst")):
-        hits.add(pm + " test")
-    elif pm == "bun" and sub == "build":
-        hits.add("bun build")
-    elif sub in ("run", "run-script"):
-        j = _skip_dash_opts(rest, 0, _JS_PM_VALUE_OPTS[pm])
-        if j < len(rest) and rest[j].split(":", 1)[0].startswith(_NPM_GATED_SCRIPT_PREFIXES):
-            hits.add(pm + " run " + rest[j])
-    elif sub.split(":", 1)[0].startswith(_NPM_GATED_SCRIPT_PREFIXES):
-        hits.add(pm + " " + sub)
-    elif sub not in _JS_PM_VALUE_OPTS:  # `pnpm yarn ...` nesting is not followed
-        _classify_test_segment([sub, *rest], cwd, depth, hits, files, chain_dir)
-
-
-def _makefile_default_goal(make_dir: str, makefile: "str | None") -> str:
-    """First ordinary rule target of the Makefile make would read ("" if unknown).
-    Targets starting with '.' (.PHONY, .DEFAULT_GOAL handling aside) are skipped."""
-    names = [makefile] if makefile else ["GNUmakefile", "makefile", "Makefile"]
-    for name in names:
-        path = name if os.path.isabs(name) else os.path.join(make_dir, name)
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                for _n, line in zip(range(2000), fh):
-                    m = _MAKE_RULE_RE.match(line)
-                    if m and not m.group(1).startswith("."):
-                        return m.group(1)
-        except OSError:
-            continue
-        return ""
-    return ""
-
 
 def _resolve_dir(base: str, sub: str) -> str:
     """Directory *sub* (`~` expanded) resolved against *base*; "" = unknown (a
@@ -4020,68 +3641,6 @@ def _resolve_dir(base: str, sub: str) -> str:
     if os.path.isabs(p):
         return os.path.normpath(p)
     return os.path.normpath(os.path.join(base, p)) if base else ""
-
-
-def _classify_make(args: list[str], cwd: str, hits: set) -> None:
-    """`make [opts] [VAR=val] targets...`: a target starting with test / check / lint /
-    typecheck is a hit. With no target, the Makefile's default goal decides (in
-    backend/Makefile the first target is `test`). *cwd* is the directory make runs
-    in ("" = unknown, e.g. after `cd $X`); with an unknown directory a bare make is
-    not a hit, explicit targets still are."""
-    make_dir, makefile = cwd, None
-    targets: list[str] = []
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a in _MAKE_VALUE_OPTS and i + 1 < len(args):
-            if a in ("-C", "--directory"):
-                make_dir = _resolve_dir(make_dir, args[i + 1])
-            elif a in ("-f", "--file", "--makefile"):
-                makefile = args[i + 1]
-            i += 2
-            continue
-        if a.startswith("-"):
-            if a.startswith("--directory="):
-                make_dir = _resolve_dir(make_dir, a.split("=", 1)[1])
-            elif a.startswith("-C") and len(a) > 2:
-                make_dir = _resolve_dir(make_dir, a[2:])
-            elif a == "-j" and i + 1 < len(args) and args[i + 1].isdigit():
-                i += 1
-            i += 1
-            continue
-        if "=" not in a:
-            targets.append(a)
-        i += 1
-    if makefile:
-        makefile = os.path.expanduser(makefile)
-    known = bool(make_dir) and os.path.isabs(make_dir)
-    if not targets and (known or (makefile and os.path.isabs(makefile))):
-        goal = _makefile_default_goal(make_dir if known else "", makefile)
-        targets = [goal] if goal else []
-    for t in targets:
-        if t.startswith(_MAKE_GATED_TARGET_PREFIXES):
-            hits.add("make " + t)
-
-
-def _classify_node(args: list[str], hits: set, files: list) -> None:
-    """`node [opts] <script>` where the script is a vitest / eslint / tsc entry point
-    (node_modules/.bin/<tool>, node_modules/<pkg>/bin/<tool>...)."""
-    i = 0
-    while i < len(args) and args[i].startswith("-"):
-        if args[i] in ("-e", "--eval", "-p", "--print"):
-            return  # inline code
-        i += 2 if (args[i] in _NODE_VALUE_OPTS and i + 1 < len(args)) else 1
-    if i >= len(args):
-        return
-    script = args[i].replace("\\", "/")
-    base = os.path.basename(script).split(".", 1)[0]
-    for tool, label in _NODE_TOOL_SCRIPTS:
-        if base == tool or ("node_modules/" + tool + "/") in script \
-                or (tool == "tsc" and "node_modules/typescript/" in script):
-            hits.add(label)
-            if tool == "vitest":
-                files.extend(a for a in args[i + 1:] if _JS_TEST_FILE_RE.search(a))
-            return
 
 
 def _shell_c_command(args: list[str]) -> "str | None":
@@ -4226,85 +3785,6 @@ def _js_pm_shell_c_command(tokens: list[str]) -> "str | None":
     return tokens[i] if pm == "yarn" else " ".join(tokens[i:])
 
 
-def _git_subcommand_args(tokens: list[str]) -> list[str]:
-    """Tokens from the git SUBCOMMAND on, skipping git global options."""
-    k = 1
-    while k < len(tokens):
-        t = tokens[k]
-        if t in ("-C", "-c", "--namespace", "--git-dir", "--work-tree"):
-            k += 2
-        elif t.startswith("-"):
-            k += 1
-        else:
-            break
-    return tokens[k:]
-
-
-def _classify_test_segment(
-    tokens: list[str], cwd: str, depth: int, hits: set, files: list,
-    chain_dir: "str | None" = None,
-) -> str:
-    """Add the test-gate families ONE simple command hits to *hits* (and explicit test
-    files to *files*). Returns the unwrapped program basename ("" if none).
-
-    *cwd* is the hook's cwd (copy-source checks); *chain_dir* is the directory this
-    segment runs in after any leading cd/pushd of its chain ("" = unknown, None =
-    *cwd*). make and a nested `bash -c` resolve against *chain_dir*."""
-    if chain_dir is None:
-        chain_dir = cwd
-    t = _unwrap_program(tokens)
-    if not t:
-        return ""
-    w = os.path.basename(t[0])
-    args = t[1:]
-    pm_shell_cmd = _js_pm_shell_c_command(t) if w in _JS_PM_SHELL_PROGRAMS else None
-    if pm_shell_cmd is not None:
-        if depth < 1:  # `pnpm dlx -c STRING`: classified like `bash -c STRING`
-            sub_hits, sub_files = _classify_pipeline_test_command(
-                pm_shell_cmd, cwd, depth + 1, start_dir=chain_dir)
-            hits.update(sub_hits)
-            files.extend(sub_files)
-    elif w in ("pytest", "py.test"):
-        _add_pytest_run(args, hits, files)
-    elif _PY_INTERP_RE.match(w):
-        _classify_python(args, hits, files)
-    elif w == "coverage":
-        _classify_coverage(args, hits, files)
-    elif w in _SHELL_INTERPRETERS and depth < 1:
-        sub_cmd = _shell_c_command(args)
-        if sub_cmd is not None:
-            sub_hits, sub_files = _classify_pipeline_test_command(
-                sub_cmd, cwd, depth + 1, start_dir=chain_dir)
-            hits.update(sub_hits)
-            files.extend(sub_files)
-    elif w in ("make", "gmake"):
-        _classify_make(args, chain_dir, hits)
-    elif w in ("node", "nodejs"):
-        _classify_node(args, hits, files)
-    elif w == "vitest":
-        hits.add("vitest")
-        files.extend(a for a in args if _JS_TEST_FILE_RE.search(a))
-    elif w in ("tsc", "eslint"):
-        hits.add(w)
-    elif w == "vite":
-        first = next((a for a in args if not a.startswith("-")), "")
-        if first == "build":
-            hits.add("vite build")
-    elif w == "npm":
-        _classify_npm(args, hits)
-    elif w in _JS_PM_VALUE_OPTS:
-        _classify_js_pm(w, args, cwd, depth, hits, files, chain_dir)
-    elif w == "git":
-        # `git archive` and cp / rsync copies are not hits: a copy runs no test, and any
-        # test run on it is itself denied here. `git worktree add` registers a worktree.
-        sub = _git_subcommand_args(t)
-        if sub and sub[0] == "worktree":
-            rest = [a for a in sub[1:] if not a.startswith("-")]
-            if rest and rest[0] == "add":
-                hits.add("git worktree add")
-    return w
-
-
 def _cd_segment_target(tokens: list[str], cur: str) -> "str | None":
     """None if *tokens* is not cd / pushd / popd; else the directory it switches to
     ("" = unknown: `cd -`, `popd`, `pushd +N`, `$VAR`, globs, a relative path from an
@@ -4335,240 +3815,9 @@ def _cd_segment_target(tokens: list[str], cur: str) -> "str | None":
     return _resolve_dir(cur, arg)
 
 
-def _classify_pipeline_test_command(
-    command: str, cwd: str = "", depth: int = 0, start_dir: "str | None" = None,
-) -> "tuple[list[str], list[str]]":
-    """Classify a Bash command for pipeline_test_gate → ``(hits, test_files)``.
-
-    ``hits`` names every denied family the command contains (sorted, empty = allow).
-    ``test_files`` lists explicit pytest / vitest test files, in order, deduplicated.
-
-    pytest is detected two ways and either one is a hit: the
-    command-word shape (anchored _PYTEST_INVOCATION_RE plus the shlex
-    command-word check, applied to the heredoc-stripped text) and the segment parse
-    below. A pytest word that only appears inside quotes, a grep pattern or a commit
-    message is never a command word, so it is not a hit. backend/scripts/
-    pipeline_test.py is an ordinary python script here, so the runner never matches.
-    Hang triage = a ps / pgrep / pkill / kill / killall segment in a command where a
-    triage or filter program (grep / rg / awk / the triage program itself) names
-    pytest (e.g. `ps aux | grep pytest`, `pkill -f pytest`); `echo "pytest finished"`
-    after a kill is not triage. `pytest --version` / `--help` only print, so they are
-    not a hit. Python reading code from stdin (`python - <<EOF`, `... | python`) is a
-    hit when the command text names pytest or vitest (the heredoc body is in it).
-
-    A cd / pushd / popd segment moves the directory later segments run in (make's
-    Makefile lookup and a nested `bash -c`), starting from *start_dir* (None = *cwd*).
-    The move applies only across `&&` / `;`; after `||`, `|` or `&` the directory is
-    unknown (""), and `( ... )` restores the outer one. Unknown → a bare make is not a
-    hit; explicit make targets and every other family are unaffected."""
-    hits: set = set()
-    files: list = []
-    normalized = _normalize_newlines_quote_aware(command)
-    regex_pytest = 0
-    if _PYTEST_INVOCATION_RE.search(normalized) and _pytest_token_is_command_word(normalized):
-        regex_pytest = len(_PYTEST_INVOCATION_RE.findall(normalized))
-    seps: list[str] = []
-    segments = _gate_shell_segments(command, seps)
-    info_runs = 0
-    if segments is not None:
-        progs: list[str] = []
-        cur = cwd if start_dir is None else start_dir
-        stack: list[str] = []
-        pending: "str | None" = None  # target of the previous segment if it was a cd
-        for seg, sep in zip(segments, seps):
-            k = 0
-            while k < len(sep):
-                op = sep[k:k + 2] if sep[k:k + 2] in ("&&", "||") else sep[k]
-                k += len(op)
-                if op == "(":
-                    stack.append(cur)
-                elif op == ")":
-                    cur = stack.pop() if stack else ""
-                elif pending is not None:
-                    cur = pending if op in ("&&", ";") else ""
-                pending = None
-            progs.append(_classify_test_segment(seg, cwd, depth, hits, files, cur))
-            pending = _cd_segment_target(seg, cur)
-            if "_pytest_info" in hits:  # marker is per segment: count it, then drop it
-                info_runs += 1
-                hits.discard("_pytest_info")
-        triage_mention = any(
-            p in _TRIAGE_PROGRAMS or p in _TRIAGE_FILTER_PROGRAMS
-            for p, seg in zip(progs, segments)
-            if any(_PYTEST_TOKEN_RE.search(tok) for tok in seg[1:])
-        )
-        if triage_mention:
-            for p in progs:
-                if p in _TRIAGE_ACTING_PROGRAMS:
-                    hits.add(p + " on pytest")
-    # The anchored-regex detector is independent of the segment parse; it is only
-    # discounted for `pytest --version|--help` it matched one-for-one.
-    if regex_pytest and regex_pytest > info_runs:
-        hits.add("pytest")
-    seen: set = set()
-    uniq = [f for f in files if not (f in seen or seen.add(f))]
-    return sorted(hits), uniq
-
-
-def _worktree_root_of(rp: str, src: "str | None") -> "str | None":
-    """The root of the git worktree *rp* lies in, when that worktree belongs to the source
-    repo *src* (its ``.git`` file points into ``<src>/.git/worktrees/``). Stat-only."""
-    if not src:
-        return None
-    gitdir = os.path.join(os.path.realpath(src), ".git") + os.sep
-    d = os.path.dirname(rp)
-    while True:
-        g = os.path.join(d, ".git")
-        if os.path.isfile(g):
-            try:
-                with open(g, encoding="utf-8") as fh:
-                    target = fh.read(4096).strip()
-            except OSError:
-                return None
-            if target.startswith("gitdir:"):
-                t = os.path.realpath(target[len("gitdir:"):].strip())
-                return d if (t + os.sep).startswith(gitdir) else None
-            return None
-        if os.path.isdir(g):
-            return None   # a separate repo (or the source repo itself)
-        parent = os.path.dirname(d)
-        if parent == d:
-            return None
-        d = parent
-
-
-def _repo_relative(path: str, cwd: str) -> str:
-    """*path* relative to its repo root when it lives inside the source repo or a run's
-    worktree of it (the runner is run from the repo root and resolves --files against
-    the run's worktree); otherwise the path as resolved."""
-    p = path if os.path.isabs(path) or not cwd else os.path.join(cwd, path)
-    if not os.path.isabs(p):
-        return path
-    rp = os.path.realpath(p)
-    src = _source_repo_root()
-    roots = [src]
-    wt = _worktree_root_of(rp, src)   # an agent working in a worktree of the source repo
-    if wt:
-        roots.append(wt)
-    # This module's own checkout: when it runs from a worktree (dev, tests) its .git is a
-    # file, so _source_repo_root() skips it; in the packaged daemon it is the bundle, which
-    # no agent path lies in.
-    if _SOURCE_REPO_ROOT and _SOURCE_REPO_ROOT not in roots:
-        roots.append(_SOURCE_REPO_ROOT)
-    for repo in roots:
-        if repo and (rp == repo or rp.startswith(repo + os.sep)):
-            return os.path.relpath(rp, repo)
-    return rp
-
-
-def _pipeline_runner_command(project: str, run_id: str, mode: str, files: list[str]) -> str:
-    """The copyable pipeline_test.py command (contract: run from the repo root)."""
-    parts = [
-        "perl", "-e", "'alarm 110; exec @ARGV'", "backend/.venv/bin/python",
-        "backend/scripts/pipeline_test.py", "--project", shlex.quote(project),
-        "--run-id", shlex.quote(run_id), "--mode", mode,
-    ]
-    if files:
-        parts += ["--files", *(shlex.quote(f) for f in files)]
-    return " ".join(parts)
-
-
-def create_pipeline_test_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate (design §4-B3, narrowed by
-    docs/design/pipeline-gate-expert-simplification.md G1).
-
-    - Always (run-independent): DENY backend/scripts/pipeline_test.py in a
-      for/while/until loop or twice in one Bash call (_runner_loop_kind).
-    - While THIS session has an active run (C6: own session_id, status running,
-      activity within _RUN_ACTIVE_WINDOW_SECONDS): a direct test/lint/typecheck/build
-      command (_classify_pipeline_test_command) is APPROVED with an additionalContext
-      note naming the runner command. Landing and push_ready read only the runner's
-      evidence, so a direct run cannot qualify a run; denying it only cost turns.
-
-    Fail-open on any error. session_context is the mutable dict SessionUnit updates
-    (read at call time)."""
-
-    async def _gate(
-        input_data: dict[str, Any],
-        tool_use_id: str | None,
-        context: Any,
-    ) -> dict[str, Any]:
-        if input_data.get("tool_name") != "Bash":
-            return {"decision": "approve"}
-        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
-        if not command:
-            return {"decision": "approve"}
-        cwd = input_data.get("cwd", "") or ""
-        try:
-            loop_kind = _runner_loop_kind(command)
-        except Exception:
-            logger.debug("pipeline_test_gate: loop check failed — failing open", exc_info=True)
-            loop_kind = None
-        if loop_kind:
-            # Run-independent and IO-free: one runner call per Bash call, always.
-            logger.warning("[BLOCKED] pipeline_test_gate (runner %s): %s", loop_kind, command[:120])
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        "DENY (runner " + loop_kind + "): run backend/scripts/pipeline_test.py "
-                        "ONCE per Bash call, never in a for/while/until loop or chained "
-                        "twice. Each call is capped (perl alarm 110, under the Bash tool's "
-                        "120 s default); a loop of calls in one Bash call is a multi-minute "
-                        "call you cannot see into or stop. When the output says continue: "
-                        "true, make a new Bash call with the SAME command: it runs only the "
-                        "unfinished tests. Read each call's failures before the next one. "
-                        "Do not raise the Bash timeout to fit a loop."
-                    ),
-                }
-            }
-        try:
-            hits, files = _classify_pipeline_test_command(command, cwd)
-        except Exception:
-            logger.debug("pipeline_test_gate: classify failed — failing open", exc_info=True)
-            return {"decision": "approve"}
-        if not hits:
-            return {"decision": "approve"}  # cheap path: no IO for ordinary commands
-
-        session_id = session_context.get("sdk_session_id", "") or ""
-        if not session_id:
-            return {"decision": "approve"}
-        try:
-            own_run = await asyncio.wait_for(
-                executors.run_in("gate", _session_run_state, session_id),
-                timeout=_RUN_SCAN_TIMEOUT,
-            )
-        except Exception:  # incl. asyncio.TimeoutError
-            logger.warning("pipeline_test_gate: run scan failed — failing open", exc_info=True)
-            return {"decision": "approve"}
-        if own_run is None:
-            return {"decision": "approve"}  # not in a pipeline run → no effect
-
-        suggest = [_repo_relative(f, cwd) for f in files[:5]]
-        mode = "tdd" if suggest else "verify"
-        runner = _pipeline_runner_command(own_run["project"], own_run["id"], mode, suggest)
-        logger.info("pipeline_test_gate: direct %s in run %s (allowed, not evidence)",
-                    ", ".join(hits), own_run["id"])
-        return {
-            "decision": "approve",
-            "additionalContext": (
-                "Note (" + ", ".join(hits) + "): pipeline run " + own_run["id"]
-                + " is active in this session. This direct run is allowed, but landing "
-                "and push_ready read only the pipeline test runner's results, so it does "
-                "not count as evidence. To record evidence, run from the repo root:\n"
-                + runner + "\n"
-                "Modes: tdd = up to 5 explicit test files, verify = end of BUILD, "
-                "regression = TEST stage, recheck = after a fix."
-            ),
-        }
-
-    return _gate
-
-
 def create_run_amend_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate. While THIS session has an active pipeline run
-    (same ``_session_run_state`` test as pipeline_test_gate), DENY ``git commit
+    (``_session_run_state``), DENY ``git commit
     --amend`` outright instead of letting dangerous_command_gate park the run on a
     human approval prompt (run_c5eb0858 waited 2 h on one). A run's commit message is
     built by its landing (``pipeline_v1.py land --message``); the deny says so. No run → no
@@ -4626,12 +3875,11 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # ---------------------------------------------------------------------------
 # session-link gate (PreToolUse, Bash) — keeps the run↔session link of §4-B3/§4-G1
 # ---------------------------------------------------------------------------
-# pipeline_test_gate judges a session only by runs whose
-# run.json session_id equals its app session id. `pipeline_v1.py create` reads
-# that id from SWARM_APP_SESSION_ID (prompt_builder injects it into the CLI
-# subprocess env) into the run's protected contract, and pipeline_test.py compares
-# it with the run's owner before it completes a stage. A Bash command that removes or overrides the variable creates an
-# unowned (or foreign) run, and then neither gate applies. session_link_gate DENIES
+# The run gates judge a session only by runs whose run.json session_id equals its app
+# session id. `pipeline_v1.py create` reads that id from SWARM_APP_SESSION_ID
+# (prompt_builder injects it into the CLI subprocess env) into the run's protected
+# contract. A Bash command that removes or overrides the variable creates an unowned
+# (or foreign) run, and then the run gates do not apply. session_link_gate DENIES
 # such commands ALWAYS, not only during a run:
 #   • removal: `unset VAR` / `unset VAR[0]`, `env -u VAR` / `-uVAR` / `--unset[=]VAR`
 #     (also inside `env -S STRING`), `export -n VAR`, `declare|typeset|local VAR`
@@ -4649,8 +3897,8 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 #   • a wholesale env reset (`env -i` / `env -` / `--ignore-environment`, `exec -c`,
 #     `sudo` without -E / --preserve-env, `su -|-l -c`) whose wrapped command is a
 #     link reader (_is_link_reader_program: the PROGRAM is python* / uv /
-#     pipeline_v1* / pipeline_test* or computed at run time, or a word is a path to
-#     pipeline_v1.py / pipeline_test.py). The link is consumed by Python CLIs only,
+#     pipeline_v1* or computed at run time, or a word is a path to pipeline_v1.py).
+#     The link is consumed by Python CLIs only,
 #     so `sudo dnf install python3.11`, `env -i make run` or `env -i node a.js` pass;
 #     a reset in front of a shell is judged by the commands of that shell string;
 #   • a shell reading its script from stdin: the script — the echo / printf words
@@ -4675,8 +3923,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # `subprocess.run(…, env={})`), a script file, `source FILE`, an escaped name a
 # program decodes (`echo -e '\x53…' | sh`) and a command shlex cannot split
 # (bash_syntax_guard denies those) all pass this gate. A v1 run created that way has
-# no owner and is refused (`create` requires a session id), and pipeline_test.py
-# called without the owner's id completes no stage. Fail-open on
+# no owner and is refused (`create` requires a session id). Fail-open on
 # internal errors. No operator bypass (gate_force.UNFORCEABLE).
 _SESSION_LINK_VAR = "SWARM_APP_SESSION_ID"
 _SESSION_LINK_MAX_DEPTH = 3
@@ -4981,9 +4228,9 @@ def _reader_in_text(text: str) -> bool:
 def _is_link_reader_program(tokens: list[str]) -> bool:
     """True iff the simple command *tokens* runs a link reader: its PROGRAM word
     (before and after unwrapping, _skip_leading_wrappers / _unwrap_program) is
-    python* / uv / pipeline_v1* / pipeline_test* or is computed at run time (`$P`,
-    `"$(which python3)"`), or one of its words is a path ending in pipeline_v1.py /
-    pipeline_test.py (`py scripts/pipeline_v1.py`). A word merely containing
+    python* / uv / pipeline_v1* or is computed at run time (`$P`,
+    `"$(which python3)"`), or one of its words is a path ending in pipeline_v1.py
+    (`py scripts/pipeline_v1.py`). A word merely containing
     "python" (`dnf install python3.11`, `chown … ~/.swarm-ai/python`) is not one."""
     from core import pipeline_command
     for t in (_skip_leading_wrappers(tokens), _unwrap_program(tokens)):
@@ -5314,8 +4561,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate that DENIES, always (with or without an active
     run), any command removing or overriding SWARM_APP_SESSION_ID
     (_command_session_link; forms in the section comment above). Without the link a
-    run is not this session's run, so pipeline_test_gate stops
-    applying. Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open on
+    run is not this session's run, so the run gates stop applying. Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open on
     any internal error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
 

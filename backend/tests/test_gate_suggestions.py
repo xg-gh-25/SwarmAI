@@ -15,7 +15,7 @@ reason suggests (``Run it as: `…` ``, the line after ``instead:`` / ``Run:`` /
 approval was asked for. Run state is real run.json files in a temp workspace;
 worktree mode is off.
 
-Covered: pytest_command_guard (no run), pipeline_test_gate (active run) and
+Covered: a direct test command in an active run, and
 run_owner_gate (an isolated run with its worktree, a recorded CLI and the hook-token
 service). Not yet covered: worktree_write_gate. Add a case whenever a
 gate's deny text suggests a command.

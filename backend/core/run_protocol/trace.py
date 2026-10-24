@@ -3,9 +3,10 @@ exit criterion → result (design §E9.2, conformance F22; NE §9.2 reuses it).
 
 One definition, two readers: ``run_audit.json`` details and, later, the human-readable
 spec renderer. The structure comes from the validated DESIGN_SPEC (tasks and exit
-criteria, with the run's decisions overlaid); the results come only from the runner's
-final (its trace rows, per repo). Nothing is inferred: an exit with no trace row has
-result ``None``; a run without a DESIGN_SPEC has no matrix and says why.
+criteria, with the run's decisions overlaid); the results come only from *final*'s
+trace rows, per repo. Since S6-1 there is no runner final (callers pass ``{}``), so
+every result is ``None`` until the audit reads validation reports (S6-4). Nothing is
+inferred; a run without a DESIGN_SPEC has no matrix and says why.
 
 - ``matrix(design, final)`` — ``{"rows": {id: row}, "unavailable": reason | None}``.
 """

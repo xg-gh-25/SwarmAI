@@ -340,8 +340,6 @@ def test_release_mid_rebase_keeps_conflict_work(env):
     assert "half resolved" in diff
 
 
-
-
 def test_ledger_snapshots_never_expire_without_authorized_discard(env):
     ledger = rw.ledger_root() / RUN / "swarmai"
     ledger.mkdir(parents=True)
@@ -731,25 +729,6 @@ def _multi(env):
     _commit_main(env["main"], "m.py", _LINES, msg="multi-line file")
 
 
-def test_carries_over_only_for_same_patch_on_untouched_files(env):
-    _multi(env)
-    e, wt, t = _ready(env, edit=("m.py", _LINES.replace("l2 = 2", "l2 = 'run'")))
-    b0 = e["base"]
-    _commit_main(env["main"], "b.py", "b = 9\n")             # main moves elsewhere
-    assert rw.sync(RUN, e, env["main"])["status"] == "rebased"
-    t1 = rw.change_tree(wt, RUN)
-    assert t1 != t and rw.carries_over(wt, RUN, b0, t, e["base"], t1)
-    b1 = e["base"]
-    # main touches the run's file (another hunk: the rebase is clean, the patch the same)
-    _commit_main(env["main"], "m.py", _LINES.replace("l8 = 8", "l8 = 'main'"))
-    assert rw.sync(RUN, e, env["main"])["status"] == "rebased"
-    t2 = rw.change_tree(wt, RUN)
-    assert not rw.carries_over(wt, RUN, b1, t1, e["base"], t2)
-    (wt / "a.py").write_text("a = 5\n")                      # and a changed patch
-    assert not rw.carries_over(wt, RUN, b0, t, e["base"], rw.change_tree(wt, RUN))
-    assert not rw.carries_over(wt, RUN, None, t, e["base"], t1)
-
-
 def test_land_carries_another_sessions_uncommitted_edit_in_the_same_file(env):
     """Another session edits a different hunk of a file the run changed: the landing
     merges it in place instead of blocking — HEAD gets the run's change only, the
@@ -801,17 +780,6 @@ def test_land_puts_their_bytes_back_when_the_merge_fails(env, monkeypatch):
     with pytest.raises(rw.WorktreeError):
         rw.land(RUN, e, env["main"], "m", t)
     assert (env["main"] / "m.py").read_text() == theirs
-
-
-def test_carries_over_refuses_a_whitespace_only_change(env):
-    """`git patch-id --stable` ignores whitespace: a re-indent after review must not
-    count as the same change (Gate-2 HIGH)."""
-    src = "def f(x):\n    if x:\n        return 1\n    return 2\n"
-    _commit_main(env["main"], "w.py", src, msg="w")
-    e, wt, t = _ready(env, edit=("w.py", src.replace("return 2", "return 3")))
-    (wt / "w.py").write_text(src.replace("return 2", "return 3").replace("        return 1", "    return 1"))
-    t2 = rw.change_tree(wt, RUN)
-    assert not rw.carries_over(wt, RUN, e["base"], t, e["base"], t2)
 
 
 def test_land_restores_their_bytes_when_git_fails_after_checkout(env, monkeypatch):

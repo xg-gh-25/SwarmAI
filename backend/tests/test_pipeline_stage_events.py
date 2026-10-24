@@ -127,7 +127,7 @@ def _write_run(ws: Path, run_id: str, data: dict, project: str = "SwarmAI",
     """A v1 run's projection beside its protected contract (read_stage_state reads
     only a run that has one; the test's data dir is the conftest one)."""
     from config import get_app_data_dir
-    from core.run_protocol.runner import contract_path
+    from core.run_protocol.contract import contract_path
     cp = contract_path(get_app_data_dir(), run_id)
     cp.parent.mkdir(parents=True, exist_ok=True)
     cp.write_text(json.dumps({"run_id": run_id, "protocol_version": 1, "project": project,
@@ -170,7 +170,7 @@ class TestReadStageState:
     def test_isolation_and_landing_come_from_contract_and_projection(self, tmp_path,
                                                                      monkeypatch):
         from config import get_app_data_dir
-        from core.run_protocol.runner import contract_path
+        from core.run_protocol.contract import contract_path
         monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
         _write_run(tmp_path, "run_iso", {"stages": {}, "landing": "landed",
                                          "commits": [{"repo": "r", "sha": "a" * 40,

@@ -36,8 +36,7 @@ _CLIENT_TIMEOUT_S = 1800.0             # a landing (git) can take minutes
 _CONCURRENCY = threading.BoundedSemaphore(4)         # CLI commands run at once
 _QUEUE_WAIT_S = 30.0                                  # longest a CLI command waits to start
 _MAX_CONNECTIONS = 32                                 # requests handled at once
-# CLI commands waiting for a slot: the rest of the connections stay free for runner
-# RPCs, so a burst of commands never starves the runners' event/seal calls
+# CLI commands waiting for a slot (the rest of the connections are refused fast)
 _CLI_WAITING = threading.BoundedSemaphore(12)
 _ADMISSION = threading.BoundedSemaphore(_MAX_CONNECTIONS)
 UNAVAILABLE = "pipeline service unavailable"
@@ -109,21 +108,6 @@ def _execute_admitted(req: dict) -> "tuple[dict[str, Any], int]":
         return cli_commands.run(args)
 
 
-def _peer_pid(sock) -> "int | None":
-    """The pid of the process on the other end of a Unix socket (macOS LOCAL_PEERPID,
-    Linux SO_PEERCRED); None when the platform cannot say."""
-    import struct
-    try:
-        if hasattr(socket, "SO_PEERCRED"):
-            raw = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-            return struct.unpack("3i", raw)[0]
-        local_peerpid = getattr(socket, "LOCAL_PEERPID", 0x002)
-        raw = sock.getsockopt(0, local_peerpid, struct.calcsize("i"))   # SOL_LOCAL = 0
-        return struct.unpack("i", raw)[0]
-    except (OSError, struct.error):
-        return None
-
-
 class _Handler(socketserver.StreamRequestHandler):
     timeout = 30.0                     # reading the request; the work itself may be long
 
@@ -133,16 +117,10 @@ class _Handler(socketserver.StreamRequestHandler):
             if len(line) > _MAX_REQUEST:
                 raise ValueError("request too large")
             req = json.loads(line.decode("utf-8"))
-            if not isinstance(req, dict) or req.get("op") not in ("cli", "runner_open",
-                                                                  "runner"):
+            if not isinstance(req, dict) or req.get("op") != "cli":
                 raise ValueError("bad request")
-            if req["op"] == "cli":
-                out, rc = _execute(req)
-                reply = {"rc": rc, "out": out}
-            else:
-                from core.run_protocol import runner_service
-                reply = runner_service.handle(req, port=_server_port,
-                                              peer_pid=_peer_pid(self.request))
+            out, rc = _execute(req)
+            reply = {"rc": rc, "out": out}
         except (OSError, ValueError, UnicodeDecodeError):
             reply = {"ok": False, "rc": 2,
                      "out": {"ok": False, "error": "malformed pipeline request"},
@@ -232,8 +210,6 @@ def stop() -> None:
     global _server, _server_path, _server_port
     srv, path = _server, _server_path
     _server = _server_path = _server_port = None
-    from core.run_protocol import runner_service
-    runner_service.clear()
     if srv is None:
         return
     srv.shutdown()
@@ -246,8 +222,8 @@ def stop() -> None:
 
 
 def request(obj: dict, *, token: Optional[str]) -> dict:
-    """THE CLIENT SIDE: send one request to the daemon named by *token* (a hook token
-    or a runner lease, both ``<port>.<64 hex>``); returns the reply object."""
+    """THE CLIENT SIDE: send one request to the daemon named by *token* (a hook token,
+    ``<port>.<64 hex>``); returns the reply object."""
     import re
     m = re.fullmatch(r"(\d{1,5})\.[0-9a-f]{64}", token or "")
     if not m:

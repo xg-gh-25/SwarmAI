@@ -1,6 +1,6 @@
 """Concurrent isolation acceptance for Pipeline v1 (v13 §D4).
 
-Methodology: two real engines/worktrees on one repo plus concurrent event/cache writes.
+Methodology: two real engines/worktrees on one repo plus concurrent event writes.
 """
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
-from core.run_protocol import auth, cache, git_tree
+from core.run_protocol import auth, git_tree
 from core.run_protocol.engine import RunEngine
 
 
@@ -76,13 +76,3 @@ def test_authorization_cannot_cross_run_or_tree():
                               action="land", bindings=changed, now=1).ok
 
 
-def test_concurrent_conflicting_cache_values_poison_reuse(tmp_path):
-    inputs = {"kind":"test","repo":"r","tree":"1"*40,"pipeline_code_hash":"2"*64,
-              "protocol_version":1,"rules_version":"v1"}
-    key = cache.cache_key(inputs)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda value: cache.put_once(tmp_path,"test",key,{"v":value}), [1,2]))
-    assert "conflict" in results
-    import pytest
-    with pytest.raises(cache.CacheError, match="poisoned"):
-        cache.read(tmp_path, "test", key)

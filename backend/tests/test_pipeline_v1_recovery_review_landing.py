@@ -169,7 +169,7 @@ def test_restore_completed_not_landed_reopens_deliver():
         _event(authority, rows, "check", {"stage_attempt_event_id": opened["event_id"],
                "check_id": check_id, "passed": True, "detail": "pass"})
     _event(authority, rows, "stage_complete",
-           {"stage_attempt_event_id": opened["event_id"], "final_verdict": "red"},
+           {"stage_attempt_event_id": opened["event_id"]},
            stage="test", attempt=1)
     _event(authority, rows, "land", {"landing": "not_landed", "commit": None,
                                      "reason": "checks_exhausted"}, ordinal=1)

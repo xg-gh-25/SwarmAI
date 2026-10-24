@@ -20,20 +20,20 @@ from core.run_protocol.identifiers import IdentifierError, validate_run_id
 
 MAX_INLINE_STRING_BYTES = 1_024
 MAX_EVENT_LINE_BYTES = 4_096
-PRODUCERS = frozenset({"hook", "cli", "runner"})
+PRODUCERS = frozenset({"hook", "cli"})
 
 # Which writers THIS process may hold (fixing spec C3). The hook writer exists only in
 # the daemon (main.py calls allow_hook_writer at import; the test process does too, as
-# it plays the daemon); the CLI and the runner narrow themselves to their own writer
+# it plays the daemon); the CLI narrows itself to its own writer
 # at entry. Narrowing is one-way. The signing key itself is a separate design (§9).
 _hook_writer_allowed = False
-_process_producers: frozenset[str] = frozenset({"cli", "runner"})
+_process_producers: frozenset[str] = frozenset({"cli"})
 
 
 def allow_hook_writer() -> None:
     """The daemon process: it alone records hook facts (answers, approvals, owner)."""
     global _hook_writer_allowed, _process_producers
-    if _process_producers != frozenset({"cli", "runner"}) and "hook" not in _process_producers:
+    if _process_producers != frozenset({"cli"}) and "hook" not in _process_producers:
         raise EventError("a process narrowed to its own writer cannot become the daemon")
     _hook_writer_allowed = True
     _process_producers = _process_producers | {"hook"}
@@ -45,7 +45,7 @@ def hook_writer_allowed() -> bool:
 
 
 def restrict_process(*producers: str) -> None:
-    """A CLI / runner process: from now on only *producers* may be obtained."""
+    """A CLI process: from now on only *producers* may be obtained."""
     global _hook_writer_allowed, _process_producers
     wanted = frozenset(producers)
     if not wanted or not wanted <= PRODUCERS:
@@ -64,7 +64,6 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "reclassify": ("payload.canonical_id", "payload.pass", "attempt"),
     "address": ("payload.canonical_id", "payload.pass", "attempt"),
     "proof": ("payload.canonical_id", "payload.pass", "attempt"),
-    "test_call": ("payload.seq",),
     "validation_report": ("ordinal",),
     "stage_attempt": ("stage", "attempt"),
     "check": ("payload.stage_attempt_event_id", "payload.check_id"),
@@ -139,18 +138,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "address": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
                      "payload.canonical_id", {"canonical_id": str, "pass": int, "hunk": str},
                      {"cause": str, "proof": str, "solution": str, "evidence_plan": str}),
-    "proof": _spec(("runner", "cli"), ("payload.canonical_id", "payload.pass", "attempt"),
+    "proof": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
                    "payload.canonical_id", {"canonical_id": str, "pass": int,
                    "evidence_type": str, "code_tree": str, "result": str},
-                   {"old_runs": list, "new_run": str, "test_call_event_id": str,
-                    "test_call_event_ids": list, "old_code_tree": str,
-                    "test_node": str, "probe_target": str,
-                    "probe_old": str, "probe_new": str,
-                    "touches_finding": bool, "touches_executable": bool,
+                   {"touches_finding": bool, "touches_executable": bool,
                     "refs": list, "repo": str}),
-    "test_call": _spec("runner", ("payload.seq",), "payload.call_type",
-                       {"seq": int, "call_type": str, "code_tree": str, "result": str},
-                       {"details": list, "target": str, "snapshot": str}),
     # the agent's own test report for one repo (S6-1, design usable-by-anyone §3.3.3):
     # code_tree is computed by the engine at submission, the report itself is a blob
     "validation_report": _spec("cli", ("ordinal",), "payload.repo",
@@ -164,7 +156,7 @@ EVENT_SPECS: dict[str, EventSpec] = {
                    "passed": bool, "detail": str}),
     # the producer of the triggering event signs its transition (the lifecycle decides
     # what it must say; a transition that differs from the expected one never folds)
-    "transition": _spec(("cli", "runner"), ("payload.from", "payload.to", "payload.trigger_event_id"),
+    "transition": _spec("cli", ("payload.from", "payload.to", "payload.trigger_event_id"),
                         None, {"from": (str, type(None)), "to": str,
                         "trigger_event_id": str}),
     "render": _spec("cli", ("stage", "attempt", "payload.document"),
@@ -223,13 +215,13 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "abandon": _spec("cli", ("ordinal",), None, {"reason": str}),
     "restore": _spec("cli", ("ordinal",), None, {"snapshot_exists": bool}),
     # hook: the daemon's required_approval count (D4)
-    "metric": _spec(("cli", "runner", "hook"), ("stage", "payload.name", "attempt"), "payload.name",
+    "metric": _spec(("cli", "hook"), ("stage", "payload.name", "attempt"), "payload.name",
                     {"name": str, "value": (int, float)},
                     # metric(cap_exceeded.<cap>): a count cap of the run was hit (F18);
                     # metric(usage_not_available): why the run's usage was not measured
                     {"cap": str, "reason": str}),
     "turn": _spec("cli", ("payload.message_id",), None, {"message_id": str}),
-    "integrity": _spec(("cli", "hook", "runner"), ("payload.conflict_id", "ordinal"),
+    "integrity": _spec(("cli", "hook"), ("payload.conflict_id", "ordinal"),
                        "payload.conflict_id", {"conflict_id": str,
                        "conflict_type": str, "first_hash": str, "new_hash": str}),
     "session_lost": _spec("cli", ("ordinal",), None, {"reason": str}),
@@ -239,13 +231,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "owner_transfer": _spec("hook", ("ordinal",), None,
                             {"from_session": str, "to_session": str, "reason": str}),
     "stage_complete": _spec("cli", ("stage", "attempt"), "stage",
-                            {"stage_attempt_event_id": str},
-                            {"final_verdict": str, "degraded": bool}),
+                            {"stage_attempt_event_id": str}, {"degraded": bool}),
     "gate0_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
     "resume": _spec("cli", ("ordinal",), None, {"worktree_ready": bool}),
-    # the run's infrastructure failed (conformance F11): the CLI or the runner that met
-    # the failure records it
-    "infrastructure_failed": _spec(("cli", "runner"), ("ordinal",), None, {"reason": str}),
+    # the run's infrastructure failed (conformance F11): the CLI that met it records it
+    "infrastructure_failed": _spec("cli", ("ordinal",), None, {"reason": str}),
     "worktree_unavailable": _spec("cli", ("ordinal",), None, {"reason": str}),
     # the daemon's background REFLECT ends REFLECT, never the agent's CLI (D1)
     "reflect_complete": _spec("hook", ("ordinal",), None, {}),
@@ -378,19 +368,6 @@ def _event_contract(event: Mapping[str, Any], *, allow_missing_ckey: bool) -> st
             raise EventError("validation_report code_tree must be a git tree id")
         if min(payload["n_pass"], payload["n_fail"], payload["n_not_run"]) < 0:
             raise EventError("validation_report counts must not be negative")
-    if kind == "test_call":
-        if payload["call_type"] not in {"test", "probe", "lint", "typecheck", "build",
-                                             "security_scan", "mutation"}:
-            raise EventError("test_call call_type is invalid")
-        if payload["result"] not in {"pass", "fail", "error", "not_run", "assert_fail",
-                                     "satisfied", "not_satisfied"}:
-            raise EventError("test_call result is invalid")
-        tree = payload["code_tree"]
-        if not isinstance(tree, str) or len(tree) != 40 \
-                or any(char not in "0123456789abcdef" for char in tree):
-            raise EventError("test_call code_tree must be a git tree id")
-        if "snapshot" in payload and payload["snapshot"] not in {"old", "new", "current"}:
-            raise EventError("test_call snapshot is invalid")
     if spec.ckey_path == "event_id:canonical":
         expected_ckey = ("CF-" + event["event_id"][:8]) if event.get("event_id") else None
     else:

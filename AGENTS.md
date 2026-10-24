@@ -210,15 +210,11 @@ implementations in `security_hooks.py`). By category:
 
 1. **Observability** — `pre_tool_logger`: logs every tool invocation; never blocks.
 2. **Hang prevention (Bash)** — `background_command_guard` (default-deny backgrounding),
-   `bash_syntax_guard` (`bash -n` parse check), and the `test_command_gate` group
-   (`compose_gates`, registered before `dangerous_command_gate`), whose members run in order:
-   `pipeline_test_gate` (in every session it denies running `pipeline_test.py` inside a
-   for/while/until loop or twice in one Bash call, since each call is capped at `alarm 110`
-   and a continuation is a new call; while this session's own run is active, a direct test,
-   lint, typecheck or build command is allowed with a note naming the runner command,
-   because landing and push_ready read only the runner's results). (`pytest_command_guard`,
-   which denied an uncapped pytest in every session, was removed: design
-   `docs/design/2026-10-24-swarmai-usable-by-anyone.md` §3.4.)
+   `bash_syntax_guard` (`bash -n` parse check). No gate touches test commands:
+   `pytest_command_guard` and the `test_command_gate` group (`pipeline_test_gate`) were
+   removed with the pipeline's own test runner (design
+   `docs/design/2026-10-24-swarmai-usable-by-anyone.md` §3.3.3, §3.4). A pipeline run's
+   tests are the agent's own, run natively and reported in a validation report.
 3. **Command safety + human-in-the-loop** — `dangerous_command_gate` (Bash) and
    `external_approval_gate` (non-Bash off-machine side effects) route risky calls through
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
@@ -241,11 +237,11 @@ implementations in `security_hooks.py`). By category:
    native mode the agent decides which review experts a change needs (AGENT.md R2). Pipeline v1 review round limits and parallel waves are
    enforced by signed `handout` / `answer` events in `core/run_protocol/`, not a
    marker-counting PreToolUse gate. `session_link_gate` (Bash, always on, registered
-   right before `test_command_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
+   right before `commit_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
    the run↔session link both run gates key on; cannot be forced). A v1 run's owner is the
    signed one (its contract's session, then each `owner_transfer`), never run.json; a
    prewarmed subprocess that has no `SWARM_APP_SESSION_ID` gets this session's id from
-   `run_owner_gate`, which puts it before the one `pipeline_v1` / `pipeline_test` call it binds.
+   `run_owner_gate`, which puts it before the one `pipeline_v1` call it binds.
    `audit_marker_write_gate` (Bash and Write|Edit|MultiEdit|NotebookEdit|Read|Grep, always on,
    right after `background_command_guard`, ahead of every HITL gate): denies writes, moves or deletes in
    `state/pipeline_agent_audit`; it also denies reads of each v1 run's `authority.key` while allowing
@@ -258,9 +254,8 @@ implementations in `security_hooks.py`). By category:
    from the run's signed events, never run.json, takes a crashed owner's run over only when
    the old owner is confirmed not live (signing an `owner_transfer` event first, so human
    authorizations follow the new owner) and denies while the owner is live or its liveness
-   is unknown; for a `pipeline_v1.py` or `pipeline_test.py` call from an adopted prewarm
-   subprocess it puts this session's `SWARM_APP_SESSION_ID` before the command
-   (`pipeline_test.py` then checks the signed owner itself); it denies a Bash call to the
+   is unknown; for a `pipeline_v1.py` call from an adopted prewarm subprocess it puts this
+   session's `SWARM_APP_SESSION_ID` before the command; it denies a Bash call to the
    human-only `/api/pipelines/<id>/decision`,
    and issues the one-time `SWARM_HOOK_TOKEN` by rewriting that single command via
    `updatedInput` — no other Bash hook may set `updatedInput`; the issuance record lives only
@@ -269,15 +264,13 @@ implementations in `security_hooks.py`). By category:
    `SWARM_BACKEND_BIN` is the daemon's own program, in dev the `backend/bin/python-backend`
    shim; `desktop_main.py` also has `py <script>` for Python without a system interpreter);
    it gets a token when the program word is that unreassigned variable or this backend's
-   binary. The legacy `python …/pipeline_v1.py` / `pipeline_test.py` form still works until
-   the runner is removed (S6), when its script resolves to this backend's own source checkout
+   binary. The legacy `python …/pipeline_v1.py` form still works until S6-5, when its
+   script resolves to this backend's own source checkout
    (`utils/source_repo.py`; the packaged daemon reads `source_repo.json`). Pipeline
    commands EXECUTE in the daemon (`core/run_protocol/daemon_exec.py`, B-class design
    `docs/design/pipeline-v1-b-class-authority.md`): the CLI sends its argv + token over an
    owner-only socket, the daemon redeems it and runs the command as the token's session,
-   rechecking that it is still the signed owner under the run's operation lock; the runner
-   opens a lease with its token and its events, seals and stage completion are signed by the
-   daemon. With the daemon down, pipeline commands fail (no local fallback). The same-OS-user
+   rechecking that it is still the signed owner under the run's operation lock. With the daemon down, pipeline commands fail (no local fallback). The same-OS-user
    gap (an agent can still read the key file or call the unauthenticated localhost API) is a
    recorded TODO (E7 item 7). It
    tokens `land` (no token: `not_landed(needs_hooked_session)`) and, shared runs
@@ -322,8 +315,7 @@ merged or removed on that evidence.
 
 One operator switch replaces the ten per-gate `SWARM_*_FORCE=1` variables (2026-10-20,
 `core/gate_force.py`): `SWARM_GATE_FORCE=<gate or group>,...` in the backend/daemon env
-(groups `commit_gate`, `test_command_gate`, `expert_gate`; the runner's own `full_scope` and
-`circuit_breaker`). Each use is logged as `force_bypass`. `session_link_gate` and
+(groups `commit_gate`, `expert_gate`). Each use is logged as `force_bypass`. `session_link_gate` and
 `audit_marker_write_gate` cannot be forced: every other gate trusts what they protect.
 
 Plus `can_use_tool` file-access control, workspace isolation, and error sanitization. These
@@ -508,10 +500,11 @@ there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19
   what they find; that is this repo's convention, not a product gate. A direct pipeline
   run (`create --profile direct --requirement "<the user's words>"`) goes build -> review ->
   test -> deliver -> reflect: no PLAN, no requirements/design documents, no exit criteria;
-  BUILD passes when every test the runner selects for the change passed tdd (BX-2), an
-  ambiguous request is abandoned and re-run as trivial. A small change (at most 20 non-test
-  source lines, no new code file, no sensitive path) dispatches no review expert; its
-  deterministic test/landing checks still run.
+  BUILD and TEST end with the agent's own validation report on the current tree (BX-3,
+  TS-1); for this repo, `backend/scripts/swarm_select_tests.py` prints which backend tests
+  and `validations.json` checks a change needs. An ambiguous request is abandoned and
+  re-run as trivial. A small change (at most 20 non-test source lines, no new code file, no
+  sensitive path) dispatches no review expert; its report and landing checks still run.
 - Every agent (SwarmAI app sessions, Claude Code, Kiro, Kiro Crew, Cursor, Codex) does it
   the same way:
 

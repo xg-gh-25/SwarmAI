@@ -84,7 +84,6 @@ def test_every_field_name_in_the_cards_exists_in_the_protocol():
     source = "\n".join(p.read_text(encoding="utf-8") for p in
                        [*(ROOT.parents[2] / "core" / "run_protocol").glob("*.py"),
                         ROOT.parents[2] / "scripts" / "pipeline_v1.py",
-                        ROOT.parents[2] / "scripts" / "pipeline_test.py",
                         ROOT.parents[2] / "core" / "pipeline_profiles.py"])
     missing = []
     for doc in DOCS:
