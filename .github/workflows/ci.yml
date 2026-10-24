@@ -46,6 +46,18 @@ jobs:
       - name: Lint skill corpus (metadata + no machine-local references)
         run: python scripts/lint_skills.py
 
+      # SwarmAI's own wording + frontend-style rules (moved out of the product, P7):
+      # only the lines this push / PR adds are scanned.
+      - name: Lint added wording and frontend style (scripts/lint_terms.py)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base commit to diff against; skipped"; exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE" || { echo "base commit not fetchable; skipped"; exit 0; }
+          python scripts/lint_terms.py --diff "$BASE"
+
       - name: Lint expert corpus (D3 admission — spawn_as/domain/scope, no memory)
         run: python scripts/lint_experts.py
 

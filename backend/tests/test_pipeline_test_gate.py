@@ -598,7 +598,7 @@ def test_build_hooks_registers_both_gates_before_the_hitl_gate(monkeypatch):
     ))
     names = [n for _e, n, _m in recorded]
     for existing in ("pre_tool_logger", "background_command_guard",
-                     "bash_syntax_guard", "inclusive_term_guard", "design_lint_guard",
+                     "bash_syntax_guard",
                      "image_read_dedup_guard", "dangerous_command_gate",
                      "active_run_commit_gate",
                      "ask_question_gate", "external_approval_gate", "governance_file_gate"):

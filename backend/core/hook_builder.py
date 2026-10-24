@@ -32,13 +32,11 @@ from .security_hooks import (
     create_pipeline_test_gate,
     create_run_amend_gate,
     bash_syntax_guard,
-    inclusive_term_guard,
     create_image_read_dedup_guard,
     create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
 )
-from .design_hooks import design_lint_guard
 from .gate_decision_log import with_decision_log
 from . import hook_timing
 from .verdict import Disposition, from_sdk, to_sdk
@@ -514,33 +512,9 @@ async def build_hooks(
         "bash_syntax_guard", matcher="Bash",
     )
 
-    # ── PreToolUse: inclusive-term guard (Write|Edit|MultiEdit) ──
-    # WARN (never deny) on non-inclusive terminology in written content — an
-    # in-session nudge before a term reaches a commit, complementing Amazon's
-    # post-commit InclusiveTechScanner (which caught 8 findings on CR-291472994
-    # that none of our own review layers would have — run_74567b08). Advisory
-    # only (STEERING #2: wording is not security); the hook is self-guarded so a
-    # scan error can never block a write. Distinct matcher from governance_file_gate
-    # so it also covers MultiEdit (edits[].new_string), which that gate omits.
-    registry.register(
-        "PreToolUse", inclusive_term_guard,
-        "inclusive_term_guard", matcher="Write|Edit|MultiEdit",
-    )
-
-    # ── PreToolUse: design-lint guard (Write|Edit|MultiEdit) ──
-    # WARN (never deny) on dated CSS design anti-patterns in FRONTEND STYLE writes
-    # (.tsx/.jsx/.css/.scss under desktop/src|hive) — an in-session nudge before a
-    # data-dump/dated pattern lands, enforcing the design-judgment canon that a prose
-    # rule (R15) did not hold (SOUL P7: when prose fails, build a gate; UI data-dump is
-    # SELF.md's #1 known blind spot). Advisory only (STEERING #2: style is not security;
-    # O030: never truncate real work); self-guarded fail-open so a scan error can never
-    # block a write. Scope-gated to frontend style files so backend/.py/markdown writes
-    # are never scanned (zero false-positive surface). A-class CSS rules only; the three
-    # shipped rules measured 0 false positives on the live desktop/src tree.
-    registry.register(
-        "PreToolUse", design_lint_guard,
-        "design_lint_guard", matcher="Write|Edit|MultiEdit",
-    )
+    # (inclusive_term_guard and design_lint_guard were SwarmAI-repo rules, not product
+    # rules: they moved to scripts/lint_terms.py, run by that repo's CI. Design
+    # 2026-10-24-swarmai-usable-by-anyone P7.)
 
     # ── PreToolUse: image-read dedup guard (Read-scoped) ─────
     # Deny a redundant re-read of an UNCHANGED image (same path+mtime) within a

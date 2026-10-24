@@ -299,8 +299,10 @@ implementations in `security_hooks.py`). By category:
    `EXPERT-ID:` spawn of any other type; `expert_budget_gate` (Read|Grep|Glob|Bash,
    inside a pipeline-expert) denies every call past 24 and tells the expert to report
    now with what it did not reach marked UNCHECKED. Both fail open.
-6. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
-   `image_read_dedup_guard`.
+6. **Session protection** — `image_read_dedup_guard` (a re-read of an unchanged image).
+   This repo's own wording and frontend-style rules are not product hooks: run
+   `python scripts/lint_terms.py --staged` before committing here (CI runs it on each push's
+   added lines).
 7. **Repository guidance (inject-only)** — `repo_guidance` (PostToolUse, Read|Grep|Glob|Bash)
    and `repo_guidance_pre` (PreToolUse, Write|Edit|MultiEdit|NotebookEdit): the first time a
    session touches a git repo, its `AGENTS.md`, `CLAUDE.md` and `.swarmai/review.md` go into

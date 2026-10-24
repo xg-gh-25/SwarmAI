@@ -2,7 +2,7 @@
 
 ## Why this exists
 
-PreToolUse gates (`security_hooks.py`, `design_hooks.py`) express the SAME small
+PreToolUse gates (`security_hooks.py`) express the SAME small
 set of decisions — allow / warn / hand-to-human / deny — through SIX inconsistent
 dict carriers:
 

@@ -667,27 +667,9 @@ def create_session_checkpoint(
         except Exception:
             logger.debug("Failed to write mid-session checkpoint to DailyActivity", exc_info=True)
 
-        # ── Self-Monitoring gate: multi-file change without test evidence ──
-        # If agent has edited >1 source file but never ran pytest/test,
-        # inject a reminder via additionalContext (soft gate — warns, doesn't block).
-        edited_source_files = [
-            f for f in files
-            if any(f.endswith(ext) for ext in (".py", ".ts", ".tsx", ".rs"))
-            and "/tests/" not in f
-            and "/test_" not in f
-        ]
-        has_test_evidence = ctx.get("_ran_tests", False)
-
-        if len(edited_source_files) > 1 and not has_test_evidence:
-            return {
-                "additionalContext": (
-                    "[Self-Monitoring] You have edited "
-                    f"{len(edited_source_files)} source files without running "
-                    "tests or post-task scan. Before declaring done, run "
-                    "targeted tests: `pytest tests/test_<module>.py --timeout=60`"
-                )
-            }
-
+        # (A "you edited >1 source file but never ran pytest" nudge used to sit here: it
+        # named one language's test tool and is gone -- design
+        # 2026-10-24-swarmai-usable-by-anyone P7. AGENT.md asks for proportionate tests.)
         return {}
 
     return _hook
@@ -2537,17 +2519,9 @@ def register_runtime_hooks(
         "memory_edit_guard",
     )
 
-    # Phase 4: PostToolUse change-triggered eval (STEERING/AGENT edits → scoped eval)
-    try:
-        from core.eval_hooks import create_change_triggered_eval
-        registry.register(
-            "PostToolUse",
-            create_change_triggered_eval(session_context),
-            "change_triggered_eval",
-        )
-    except Exception:
-        logger.debug("register_runtime_hooks: suppressed exception on a fail-safe path", exc_info=True)
-        pass  # Non-blocking — eval hooks are optional
+    # (change_triggered_eval -- a scoped self-eval run on every governance-file edit --
+    # was removed: it graded SwarmAI's own golden set, not a product behaviour.
+    # Design 2026-10-24-swarmai-usable-by-anyone P7. Eval runs on demand / on schedule.)
 
     # Phase 2: SubagentStop transcript capture
     registry.register(
