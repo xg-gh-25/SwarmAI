@@ -15,7 +15,7 @@
  *
  * @exports WelcomeScreen
  */
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { overlayQuery } from '../../../components/layout/overlayQueries';
@@ -29,9 +29,20 @@ import { FLIGHT_MS, LAP_MS, flightKeyframes } from './welcomeBee';
 const MAX_ROWS = 3;
 
 // ---------------------------------------------------------------------------
-// Honeycomb — built once per app session (pure geometry, no theme colour: the
-// stroke is currentColor and .welcome-comb sets it from --color-brand).
+// Honeycomb — pure geometry, no theme colour: the stroke is currentColor and
+// .welcome-comb sets it from --color-brand. The grid is one SVG <pattern> in
+// pixel units (cells stay the same size at any column width), drawn on a
+// 2400px-wide canvas centred on the column, so the comb is centred on the logo.
 // ---------------------------------------------------------------------------
+
+// About the size the old viewBox-scaled cells had in a typical chat column.
+const R = 24;
+const W = Math.sqrt(3) * R;
+const H = 1.5 * R;
+const CANVAS_W = 2400;
+const CANVAS_H = 560;
+/** Column offset that puts the old 640-wide grid's centre on the canvas centre. */
+const COL_SHIFT = 17;
 
 const LIT = new Map([['3,8', 0.15], ['4,10', 0.3], ['2,11', 0.45], ['5,7', 0.25], ['3,13', 0.55], ['6,9', 0.4]]);
 
@@ -45,30 +56,35 @@ function hexPoints(cx: number, cy: number, r: number): string {
 }
 
 const COMB = (() => {
-  const r = 15;
-  const w = Math.sqrt(3) * r;
-  const h = 1.5 * r;
-  const cells: string[] = [];
-  const lit: Array<{ points: string; delay: number }> = [];
-  for (let y = 0; y < 14; y++) {
-    for (let x = 0; x < 22; x++) {
-      const points = hexPoints(x * w + (y % 2 ? w / 2 : 0), y * h, r);
-      cells.push(points);
-      const delay = LIT.get(`${y},${x}`);
-      if (delay !== undefined) lit.push({ points, delay });
-    }
-  }
-  return { cells, lit };
+  // One pattern tile = two rows: the cells whose centres sit on its corners
+  // and the offset cell in its middle (the tile clips each to its share).
+  const tile = [[0, 0], [W, 0], [W / 2, H], [0, 2 * H], [W, 2 * H]].map(([x, y]) => hexPoints(x, y, R));
+  const lit = [...LIT].map(([key, delay]) => {
+    const [y, x] = key.split(',').map(Number);
+    const col = x + COL_SHIFT;
+    return { points: hexPoints(col * W + (y % 2 ? W / 2 : 0), y * H, R), delay };
+  });
+  return { tile, lit };
 })();
 
 function Honeycomb() {
+  // One id per mounted screen: every open tab renders its own Welcome, and a
+  // url(#id) that resolves to a hidden tab's <pattern> would paint nothing.
+  const patternId = `welcome-comb-${useId().replace(/:/g, '')}`;
   return (
-    <svg className="welcome-comb" width="100%" viewBox="0 0 640 300" preserveAspectRatio="xMidYMin slice" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth={1}>
-        {COMB.cells.map((p) => <polygon key={p} points={p} />)}
-      </g>
-      {COMB.lit.map((c) => <polygon key={c.points} className="lit" points={c.points} style={{ animationDelay: `${c.delay}s` }} />)}
-    </svg>
+    <div className="welcome-comb" aria-hidden="true">
+      <svg width={CANVAS_W} height={CANVAS_H}>
+        <defs>
+          <pattern id={patternId} patternUnits="userSpaceOnUse" width={W} height={2 * H}>
+            <g fill="none" stroke="currentColor" strokeWidth={1}>
+              {COMB.tile.map((p) => <polygon key={p} points={p} />)}
+            </g>
+          </pattern>
+        </defs>
+        <rect width={CANVAS_W} height={CANVAS_H} fill={`url(#${patternId})`} />
+        {COMB.lit.map((c) => <polygon key={c.points} className="lit" points={c.points} style={{ animationDelay: `${c.delay}s` }} />)}
+      </svg>
+    </div>
   );
 }
 

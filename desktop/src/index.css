@@ -1749,15 +1749,25 @@ body {
 }
 
 /* Welcome screen v2 (design welcome-screen-v2.md): the honeycomb behind the hero,
-   faded out radially, and a one-time entrance (~1.1s, then still). */
+   and a one-time entrance (~1.1s, then still). The cells are a fixed pixel size
+   (an SVG pattern, centred on the column) and the mask fades them out over the
+   full 560px, centred on the top edge, so the comb thins out gradually past the
+   Needs you card instead of ending at a hard edge. */
 .welcome-comb {
   position: absolute;
   inset: 0 0 auto 0;
-  height: 300px;
+  height: 560px;
+  overflow: hidden;
   pointer-events: none;
   color: color-mix(in srgb, var(--color-brand) 15%, transparent);
-  -webkit-mask-image: radial-gradient(ellipse 60% 75% at 50% 30%, #000 25%, transparent 75%);
-  mask-image: radial-gradient(ellipse 60% 75% at 50% 30%, #000 25%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 60% 100% at 50% 0%, #000 20%, transparent 100%);
+  mask-image: radial-gradient(ellipse 60% 100% at 50% 0%, #000 20%, transparent 100%);
+}
+.welcome-comb > svg {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  margin-left: -1200px;
 }
 .welcome-comb .lit {
   fill: color-mix(in srgb, var(--color-brand) 12%, transparent);
