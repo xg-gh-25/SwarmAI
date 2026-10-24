@@ -240,6 +240,10 @@ def _cultivation_wording(p: Any, project: str) -> tuple[str, str, str, list]:
     section, note = _split_note(p.content or "")
     where = f"{p.target_doc}, {section}" if section else p.target_doc
     target = getattr(p, "target_title", "") or ""
+    new_text = getattr(p, "replacement_content", "") or ""
+    if change == "rewrite" and not new_text.strip():
+        # With no new text the applier only removes the old note.
+        change = "retire"
     if change == "retire":
         return (
             "Approve removing a note from SwarmAI's memory",
@@ -249,10 +253,10 @@ def _cultivation_wording(p: Any, project: str) -> tuple[str, str, str, list]:
              "whether the newer lesson really replaces it, then let me approve the "
              "removal or reject it."),
             [("Note to remove", _one_line(target, _FACT_MAX)),
-             ("Newer lesson", _one_line(note, _FACT_MAX))],
+             ("Newer lesson", _one_line(
+                 _split_note(getattr(p, "evidence", "") or "")[1] or note, _FACT_MAX))],
         )
     if change == "rewrite":
-        new_text = getattr(p, "replacement_content", "") or ""
         return (
             "Approve rewriting a note in SwarmAI's memory",
             _one_line(target or note),

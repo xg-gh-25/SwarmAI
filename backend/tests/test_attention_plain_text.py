@@ -134,3 +134,30 @@ def test_rewrite_proposal_says_it_rewrites_and_shows_the_new_text(monkeypatch):
     assert it.title == "Approve rewriting a note in SwarmAI's memory"
     assert "Note to rewrite: Old wording of the rule" in body
     assert "New text: New wording of the rule" in body
+
+
+def test_retire_from_a_polarity_flip_shows_the_lesson_not_the_template(monkeypatch):
+    """That writer puts a template in content and the real lesson in evidence."""
+    import core.ddd_cultivation as dc
+    _projects(monkeypatch, ["SwarmAI"])
+    monkeypatch.setattr(dc, "read_pending_proposals", lambda ws, p: [SimpleNamespace(
+        proposal_id="proposal_f1", target_doc="TECH.md", change_type="retire",
+        target_title="Old rule",
+        content="Superseded by a newer polarity-flipped lesson (flip=x); human decide whether to retire.",
+        evidence="[pitfall] The new rule says the opposite")])
+    body, _ = _plain(aa._collect_cultivation(Path("/ws"))[0])
+    assert "Newer lesson: The new rule says the opposite" in body
+    assert "Superseded by a newer" not in body
+
+
+def test_rewrite_without_new_text_reads_as_a_removal(monkeypatch):
+    """With no replacement the applier only retires the old note."""
+    import core.ddd_cultivation as dc
+    _projects(monkeypatch, ["SwarmAI"])
+    monkeypatch.setattr(dc, "read_pending_proposals", lambda ws, p: [SimpleNamespace(
+        proposal_id="proposal_w2", target_doc="TECH.md", change_type="rewrite",
+        target_title="Old wording", content="[guideline] reason", replacement_content="  ")])
+    it = aa._collect_cultivation(Path("/ws"))[0]
+    body, _ = _plain(it)
+    assert it.title == "Approve removing a note from SwarmAI's memory"
+    assert "New text" not in body

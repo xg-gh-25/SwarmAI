@@ -81,3 +81,11 @@ def test_terminal_block_is_removed_with_what_follows_it():
 def test_keyword_miss_recall_block_is_removed():
     from core.injected_blocks import RECALL_MISS
     assert strip_injected_blocks(f"{RECALL_MISS}\n\n{UI}\n\n继续做") == "继续做"
+
+
+def test_close_tag_quoted_inside_a_notification_does_not_end_it():
+    """The harness puts the close tag on its own line; a quoted one mid-line is body."""
+    p = ("<task-notification>\n<task-id>x</task-id>\n"
+         "<result>fixed the </task-notification> parser and verified it</result>\n"
+         "</task-notification>\n这个结果对吗")
+    assert strip_injected_blocks(p).strip() == "这个结果对吗"

@@ -84,6 +84,22 @@ def _cut_after(text: str, marker: str) -> str:
     return text[i + len(marker):] if i != -1 else ""
 
 
+def _cut_after_line(text: str, marker: str) -> str:
+    """Text after the first ``marker`` that fills a whole line; ``""`` when none.
+
+    A notification's body can quote its own close tag (an agent reporting on this
+    parser), so only a close tag on a line of its own, where the harness puts it,
+    ends the block.
+    """
+    i = text.find("\n" + marker)
+    while i != -1:
+        after = i + 1 + len(marker)
+        if after == len(text) or text[after] == "\n":
+            return text[after:]
+        i = text.find("\n" + marker, after)
+    return ""
+
+
 def _cut_terminal_block(text: str) -> str:
     """Text after the terminal block's closing fence; ``""`` when it never closes."""
     seam = text.find("\n\n")
@@ -122,7 +138,7 @@ def _strip_leading(prompt: str) -> str:
             # Single-\n-joined internally; the first blank line is the seam.
             s = _cut_after(t, "\n\n")
         elif t.startswith((TASK_NOTIFICATION_OPEN, SYSTEM_NOTIFICATION_MARKER)):
-            s = _cut_after(t, TASK_NOTIFICATION_CLOSE)
+            s = _cut_after_line(t, TASK_NOTIFICATION_CLOSE)
         else:
             return t
 
