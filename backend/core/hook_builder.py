@@ -710,6 +710,22 @@ async def build_hooks(
             "main_dirty_reporter", matcher="Bash",
         )
 
+    # ── repository guidance (design 2026-10-24-swarmai-usable-by-anyone §3.7) ──
+    # Inject-only, never a deny: the first time this session touches a git repo, that
+    # repo's AGENTS.md / CLAUDE.md / .swarmai/review.md go into additionalContext
+    # (core/repo_guidance.py). PostToolUse after a read or Bash; PreToolUse before a
+    # first write, so the guidance is in context before the agent edits anything.
+    if session_context is not None:
+        from core.repo_guidance import create_repo_guidance_hook
+        registry.register(
+            "PostToolUse", create_repo_guidance_hook(session_context, "PostToolUse"),
+            "repo_guidance", matcher="Read|Grep|Glob|Bash",
+        )
+        registry.register(
+            "PreToolUse", create_repo_guidance_hook(session_context, "PreToolUse"),
+            "repo_guidance_pre", matcher="Write|Edit|MultiEdit|NotebookEdit",
+        )
+
     # ── PostCompact: capture the compaction summary ──────────
     # The SDK's HookEvent Literal lacks PostCompact, but the bundled CLI calls a
     # registered callback with {"trigger", "compact_summary", ...} BEFORE it emits

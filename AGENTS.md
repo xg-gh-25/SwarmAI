@@ -291,6 +291,12 @@ implementations in `security_hooks.py`). By category:
    now with what it did not reach marked UNCHECKED. Both fail open.
 6. **Advisory / hygiene** — `inclusive_term_guard`, `design_lint_guard` (warn only),
    `image_read_dedup_guard`.
+7. **Repository guidance (inject-only)** — `repo_guidance` (PostToolUse, Read|Grep|Glob|Bash)
+   and `repo_guidance_pre` (PreToolUse, Write|Edit|MultiEdit|NotebookEdit): the first time a
+   session touches a git repo, its `AGENTS.md`, `CLAUDE.md` and `.swarmai/review.md` go into
+   context (`core/repo_guidance.py`); bound repos as norms, others as unconfirmed; never a
+   deny. Two hooks' `hookSpecificOutput.additionalContext` on one matcher are joined, not
+   overwritten (`hook_builder._merge_specific`).
 
 Every PreToolUse deny / ask is recorded by `HookRegistry.register` (not by the gate) in
 `~/.swarm-ai/logs/gate_decisions.jsonl`, with the full tool input; `python

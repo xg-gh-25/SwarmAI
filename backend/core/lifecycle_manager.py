@@ -1140,6 +1140,7 @@ class LifecycleManager:
         - permission_manager._approved_commands    (command hashes)
         - permission_manager prompt board          (open prompts + reader futures)
         - session_events hub replay buffer          (up to 4000 envelopes)
+        - repo_guidance._STATE                      (repos already injected)
         """
         try:
             from core import session_state as _ss
@@ -1159,6 +1160,11 @@ class LifecycleManager:
             permission_manager.clear_session(session_id)
         except Exception as exc:
             logger.debug("_release_session_state permission cleanup failed: %s", exc)
+        try:
+            from . import repo_guidance
+            repo_guidance.forget(session_id)
+        except Exception as exc:
+            logger.debug("_release_session_state repo-guidance cleanup failed: %s", exc)
         try:
             from . import session_events
             session_events.hub().drop_session(session_id)
