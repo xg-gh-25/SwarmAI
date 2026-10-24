@@ -101,6 +101,8 @@
   --nav-key-edge: color-mix(in srgb, #000 16%, var(--color-bg-chrome));
   --nav-key-border: color-mix(in srgb, #000 12%, var(--color-bg-chrome));
   --nav-key-drop: rgba(30, 40, 60, 0.12);
+  /* Chat sheet (.app-sheet): 1px ring + soft shadow lifting it off the chrome. */
+  --shadow-sheet: 0 0 0 1px color-mix(in srgb, var(--color-border) 75%, transparent), 0 4px 18px rgba(30, 40, 60, 0.10);
 
   /* Hidden / dotfile / generated file dimming */
   --color-hidden-text: #a0a7b4;
@@ -201,6 +203,7 @@
   --nav-key-edge: color-mix(in srgb, #000 42%, var(--color-bg-chrome));
   --nav-key-border: color-mix(in srgb, #000 22%, var(--color-bg-chrome));
   --nav-key-drop: rgba(0, 0, 0, 0.25);
+  --shadow-sheet: 0 0 0 1px color-mix(in srgb, var(--color-border) 90%, transparent), 0 6px 22px rgba(0, 0, 0, 0.35);
 
   /* Hidden / dotfile / generated file dimming — dark theme */
   --color-hidden-text: #555d6e;
@@ -764,6 +767,17 @@ body {
     var(--ac));
   box-shadow: 0 1px 5px color-mix(in srgb, var(--ac) 35%, transparent),
     0 1px 0 rgba(255, 255, 255, 0.25) inset;
+}
+
+/* Chat sheet — the chat column (MainChatPanel <main>) sits on the chrome base layer
+   as a raised sheet: 6px in from the top, right and bottom, flush to the Nav on the
+   left, rounded, with a 1px ring and a soft shadow (--shadow-sheet). Replaces the
+   sidebar's border-r-2. Its fill stays --color-bg, so the chat's own cards and
+   composer keep today's contrast. */
+.app-sheet {
+  margin: 6px 6px 6px 0;
+  border-radius: 12px;
+  box-shadow: var(--shadow-sheet);
 }
 
 /* Left Nav scroll area — its own 3px bar, invisible until the pointer is over the

@@ -210,7 +210,7 @@ function LeftSidebar() {
   // Open the LATEST signal digest. The digest is written by a scheduled job, so
   return (
     <aside
-      className="bg-[var(--color-bg-chrome)] border-r-2 border-[var(--color-border-strong,var(--color-border))] flex flex-col flex-shrink-0"
+      className="bg-[var(--color-bg-chrome)] flex flex-col flex-shrink-0"
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
@@ -770,8 +770,12 @@ function MainChatPanel({ children }: MainChatPanelProps) {
     // visible + clickable under an open overlay. `relative` was only the host's
     // positioning parent, so it moves with the host (the new parent is ChatPage's
     // content row) — this panel no longer needs it.
+    // `app-sheet` (index.css): the chat column is a raised sheet on the chrome base
+    // layer — inset from the top, right and bottom, rounded, ring + soft shadow —
+    // instead of being split from the Nav by a border. Its own colour is unchanged,
+    // so nothing inside the chat shifts.
     <main
-      className="flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
+      className="app-sheet flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
       {children}
@@ -902,7 +906,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         {/* Main layout below top bar — min-h-0 overrides flex auto-min-height
             (which uses intrinsic content size and prevents shrinking). Without this,
             AutoSizer can't get a resolved height from the flex algorithm. */}
-        <div className="flex flex-1 overflow-hidden min-h-0">
+        <div className="flex flex-1 overflow-hidden min-h-0 bg-[var(--color-bg-chrome)]">
           <LeftSidebar />
           {/* A10 redesign: the workspace explorer is no longer an always-on
               column — it opens on demand as SwarmWSOverlay (below). */}
