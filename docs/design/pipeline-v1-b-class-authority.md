@@ -61,7 +61,7 @@ gate 只能从命令文本上判断，agent 在 Python 里临时拼出字符串�
 | B-a | daemon 侧执行入口：socket 请求 → token 校验 → 在专用池里跑 `RunEngine` | — |
 | B-b | CLI 改成薄客户端；runner 的结果交给 daemon 签名 | B2，B1 的签名路径 |
 | B-c | 新 run 的密钥进 Keychain / keyring；没有时退回文件并在 E7 标出 | B1 |
-| B-d | 人工接口要求启动 secret，Tauri IPC 交付 | B3 |
+| B-d | ~~人工接口要求启动 secret，Tauri IPC 交付~~ **不做（XG 2026-10-24）：** 同用户 agent 也能连 secret 所在的 socket，只抬门槛；和 B-c 残余一起记为 TODO，归入"agent 进程隔离"设计，见 `pipeline-v1-e7-review.md` 遗留项 7 | B3（未关） |
 | B-e | 审查两轮、三方复审、E7 更新 | — |
 
 ## 代价
