@@ -4,7 +4,7 @@ date: 2026-10-24
 created: 2026-10-24
 updated: 2026-10-25
 project: SwarmAI
-status: draft v1.2（§9 已拍板；P0 实验 E1–E7 与 skeptic 审查已完成，结论已并入 D1–D8；T1–T17 失败测试未写）
+status: draft v1.3（§9 已拍板；P0 实验 E1–E7 与 skeptic 审查已完成，结论已并入 D1–D8；T1–T17 失败测试未写）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -97,7 +97,7 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 
 判断时记下当前 open turn 的身份（`target_turn`），写进 claim（D3 只往它里面并入，F6）。
 
-任一不满足 → 走现在的 `_queue_admitted_send`，行为不变。判断和写入之间 turn 恰好结束，
+任一不满足 → 走现在的 `_queue_admitted_send`，回执多带 `queued_reason`（`question` / `permission` / `busy`，D7 标签用），其余行为不变。判断和写入之间 turn 恰好结束，
 CLI 会把消息当下一轮（X7），由 D6 接住，不需要再判断一次。
 
 ### D2 写入：`write_steer_message`
@@ -121,7 +121,7 @@ CLI 会把消息当下一轮（X7），由 D6 接住，不需要再判断一次�
 | 状态 | 列 | 进入 | 离开 |
 |---|---|---|---|
 | steer 在途 | `sent = 0`，`claimed_at = 写入时间`，`pending_seq = NULL`，`metadata.steer = "inflight"` | D2 写入前 `mark_steer_inflight(id)` | `confirm_steer` / `release_steer_to_pending` |
-| 已并入 / 已开 turn | `sent = 1`，`created_at` 见 D4/D6，`claimed_at = NULL`，去掉 `metadata.steer` | `confirm_steer(id, created_at)`：一条 UPDATE | — |
+| 已并入 / 已开 turn | `sent = 1`，`created_at` 见 D4/D6，`claimed_at = NULL`，去掉 `metadata.steer`；并入时另记 `metadata.steered = true`（D7 标签） | `confirm_steer(id, created_at, folded)`：一条 UPDATE | — |
 | 转回排队 | `sent = 0`，`claimed_at = NULL`，新的 `pending_seq`，去掉 `metadata.steer` | `release_steer_to_pending(id)` | 和排队消息一样由 drain 发出 |
 
 `claimed_at` 非空让 `claim_pending_batch` 和 `cancel_unclaimed`（返回 `claimed`，和 D7"不可
@@ -158,7 +158,7 @@ open），走现有分支，`cur.uuid == uuid`，就是这条消息自己的 tur
 
 **子 agent（E2）。** 子 agent 跑着时写入，CLI 不在子 agent 内部的 tool result 并入，等父级的
 Agent tool result 返回后才并入，回显 `parent_tool_use_id = None`。D3 不需要排除子 agent 帧；
-代价是 steer 要等子 agent 跑完，D7 的"Steering…"状态可能持续较久。
+代价是 steer 要等子 agent 跑完，D7 的 Waiting 状态可能持续较久（等待的就是气泡正上方的 Agents 面板）。
 
 **claim 的结束原因要能区分（F10）。** 现在 claim 以 `folded` 结束和以 end-of-stream
 `_fail_all(None)` 结束看起来一样。claim 结束时带显式 `outcome`：`folded`（并入）、`opened`
@@ -194,7 +194,7 @@ turn 正常结束处理。由 T12 覆盖。
 
 1. 把手上暂存的 tool result 先写进本 turn 最新的 assistant 行（`append_to_turn_row`），
    否则它们会被挂到 steer 之后的那一行，和 tool_use 分开；
-2. `confirm_steer(id, created_at=现在)`：user 行 `sent = 1` + 回显时间，一条 UPDATE（D2 表）。
+2. `confirm_steer(id, created_at=现在, folded=True)`：user 行 `sent = 1` + 回显时间 + `metadata.steered`，一条 UPDATE（D2 表）。
    这一步**不经过** `TurnWriter.write`：writer 里的写入不推 live transcript feed（F8，
    `turn_writer.py` / `sqlite.py` 的 feed 抑制），也会吞掉写入错误；
 3. 之后的 assistant 行改用 row_key `"{steer_client_id}-asst"`，也就是"这条 steer 消息的回复"。
@@ -276,14 +276,37 @@ turn 的那个间隙里，turn 结束后的 RSS 检查（`streaming_orchestrator
 
 ### D7 前端
 
-气泡状态（`UserMessageView.tsx`）：
+mock：`docs/design/2026-10-25-chat-steer-ui-mock.html`。用户不知道什么是 tool result 间隙，
+他只关心：我的话它看到没有、什么时候看到的、有没有改变它正在做的事。每个状态回答其中一个问题。
 
-| 状态 | 何时 | 显示 |
-|---|---|---|
-| steering | 回执 `steer: true`，或快照 `steering` 里有它 | "Steering into the running turn…"，不可取消（已经写给 CLI） |
-| steered | 收到 `user_steered` | "Steered into the running turn"；气泡移到当前 assistant 段之后，之后的内容进新占位 `local-{client_id}-asst` |
-| 普通消息 | 回退成新 turn | 和 drain 出来的 turn 一样，订阅流按独立 turn 渲染 |
-| queued / not sent | 后端选择排队，或未受理 | 现状不变 |
+**气泡不移动。** steer 气泡从发出起就待在正在跑的 turn 的最下方（和现在的排队气泡一样在 store
+末尾），live 内容在它上面的 assistant 条目里继续长。被读到时：并入，就在原地固定，新段占位
+`local-{steer_client_id}-asst` 接在它下面；回退，上一轮在它上面结束，新的一轮接在它下面。两种
+结果下已显示的东西都不移动、不重挂（design-judgment Surface 6 不变量 10）。
+
+| 状态 | 何时 | 气泡下的一行灰字 | 回答的问题 |
+|---|---|---|---|
+| Waiting | 回执 `steer: true`，或快照 `steering` 里有它 | "Read after the current step · **Stop & send now**"；没有 ✕ | 看到了吗？要等多久？ |
+| Read during the turn | 收到 `user_steered` | "Read during the turn"，重载后保留 | 它照我说的改了吗？ |
+| Read after the turn | D6 接手、这条成为新 turn 的开头 | "Read after the turn"，只在直播时显示，重载后是普通消息 | 为什么上一轮没理我？ |
+| Queued | 后端选择排队，或 steer 转回排队 | "Queued — sends after you answer the question above" / "…when this turn ends"，有 ✕ | 为什么这条没插进去？ |
+
+- **等待时长不另起计时。** "当前步骤"就是气泡正上方那条 running strip（或 Agents 面板），工具名和
+  计时它已经有了，不在气泡上重复（一件事一个表示）。也不加 spinner：聊天界面只有 header 脉冲和
+  尾部的 bee 两个流式信号。
+- **不可取消要看得出来。** Waiting 没有 ✕，不用虚线和半透明（那是可取消的排队样式）。
+  **Stop & send now** 就是 Stop：进程回收，未读的 steer 按 D8 转回排队，回收完马上发出。很急或者
+  发错时用户有出路，不用新增后端能力。以后做 `priority: now`，这个入口直接换成"立即打断"。
+- **确认靠模型自己说。** 并入后模型通常会先说一句（"Got it, skipping…"），界面不再另加 ✓。
+- **一个 turn 一个结尾。** 并入后的后半段不另起回复头，用量、耗时、输出卡片只在整个 turn 的
+  末尾出现一次。
+- **排队要说原因。** 回执和快照的 pending 项带 `queued_reason`：`question`（挂着
+  AskUserQuestion）、`permission`、`busy`（开关关、channel、中断 / 重试 / 回收中、别的 claim 在等，
+  统一显示 "sends when this turn ends"）。原因由 D1 的判断给出。问题卡片挂着时，用户最容易把
+  输入框当成回答，标签直接指向上面的问题。
+- **持久化的标签。** "Read during the turn" 重载后要能显示：`confirm_steer` 在并入时给 user 行记
+  `metadata.steered = true`（D2 表"已并入"一行）。回退的行不记，重载后它本来就是一条普通的新
+  turn 开头。
 
 分段的实现读 `2026-10-24-chat-stream-structure.md` 的 A1 controllers 后再定，原则是：
 新段的占位 id 用后端给的 row_key，不在前端另造。
@@ -363,7 +386,7 @@ SDK 0.2.168，CLI 2.1.301，Bedrock，开 replay。脚本 `/tmp/steer_script/exp
 | T7 | 回退：上一活动未结束时 CLI 已开始 steer 的 turn | 等上一活动结束再认领；帧不丢；任意时刻只有一条活动 |
 | T8 | 写失败 | `drop_claim` + 转 pending，回执 `queued: true` |
 | T9 | `unit._turn_stream` | steer 写入前后不变 |
-| T10 | 前端：steering → steered，及重连后按快照恢复 | 气泡位置与标签正确；无重复气泡；新段内容不写进旧段 |
+| T10 | 前端：Waiting → Read during / Read after / Queued，及重连后按快照恢复 | 气泡从发出到读取不移动、不重挂；标签按 D7 表（Waiting 无 ✕，Queued 有 ✕ 和原因）；重载后只有并入的保留标签；无重复气泡；新段内容不写进旧段 |
 | T11 | 端到端（真实 CLI，可选，冒烟） | 两条 Bash 中间发"跳过第二条"，界面显示 steered，第二条没跑 |
 | T12 | leak / api_retry continuation 时有未结束的 steer claim（F1，E6 帧序） | 不写 continuation；原 turn 正常结束；steer 的 turn 由 D6 接手；没有 `_merged`，没有重复行 |
 | T13 | tool-hang 看门狗中断、进程留着，steer 未回显（F2） | 下一个 idle 以 `not_consumed` 结束 claim；之后的发送不报 `SessionBusyError` |
@@ -418,6 +441,9 @@ T1–T4、T7、T12、T13 用 fake 帧序列驱动 reader（按 X5–X8、E1–E7
 ## 修订记录
 
 - 2026-10-24 v1：初稿。依据 X1–X8 实测和现有代码阅读。
+- 2026-10-25 v1.3：D7 按用户视角重写成四个状态（Waiting / Read during / Read after / Queued），附
+  mock `2026-10-25-chat-steer-ui-mock.html`；气泡从发出到读取不移动；排队带 `queued_reason`；并入的行记
+  `metadata.steered`；T10 改写。
 - 2026-10-25 v1.2：P0 完成。E1–E7 实测（§5）；skeptic 审查 F1–F10 全部在源码里核对后并入：
   D1 补闸门和 `target_turn`；D2 新增"steer 在途"行状态和 `confirm_steer` /
   `release_steer_to_pending`；D3 补 `outcome`、steer 专用丢弃规则、continuation 硬规则；D4 row_key

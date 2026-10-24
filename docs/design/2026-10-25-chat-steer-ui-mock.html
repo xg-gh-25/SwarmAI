@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Steer · message states · mockup v1</title>
+<!-- Mockup for docs/design/2026-10-24-chat-steer.md D7. Static; no data.
+     Theme variables fall back to a light palette outside the app. -->
+<style>
+body{margin:0;font:13px/1.5 -apple-system,system-ui,sans-serif;color:var(--text,#1d1d1f);background:var(--bg,#f6f6f4)}
+.page{max-width:1180px;margin:0 auto;padding:28px 24px 48px}
+h1{font-size:18px;margin:0 0 4px}
+.lead{color:var(--muted,#6e6e73);margin:0 0 28px;max-width:860px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:28px}
+.frame{background:var(--card,#fff);border-radius:10px;padding:18px 20px 16px}
+.ft{font-weight:600;margin-bottom:2px}
+.fq{color:var(--muted,#6e6e73);font-size:12px;margin-bottom:16px}
+.chat{display:flex;flex-direction:column;gap:10px}
+/* user bubble */
+.u{align-self:flex-end;max-width:78%}
+.ub{background:var(--user-bubble,#e9eef6);border-radius:12px 12px 4px 12px;padding:7px 11px}
+.u.queued .ub{opacity:.6;border-left:2px dashed var(--muted,#9a9aa0)}
+.st{display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-top:3px;font-size:11.5px;color:var(--muted,#6e6e73)}
+.st a{color:var(--text,#1d1d1f);text-decoration:underline;cursor:pointer}
+.st .x{cursor:pointer;font-size:13px;line-height:1}
+/* assistant turn */
+.a{max-width:92%}
+.note{margin:0}
+.grp{font-size:11.5px;color:var(--muted,#6e6e73);margin:2px 0}
+.strip{display:grid;grid-template-columns:54px 1fr 44px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text,#1d1d1f);padding:1px 0}
+.strip .t{color:var(--muted,#6e6e73);text-align:right}
+.strip.run .t{color:var(--text,#1d1d1f)}
+.strip .d{color:var(--muted,#9a9aa0)}
+.end{font-size:11px;color:var(--muted,#9a9aa0);margin-top:4px}
+.bee{font-size:12px;color:var(--muted,#9a9aa0)}
+.new{padding-top:6px}
+/* annotations */
+.ann{margin-top:16px;padding-top:12px;border-top:1px solid var(--border,#ececea);font-size:12px;color:var(--muted,#55555a)}
+.ann b{color:var(--text,#1d1d1f);font-weight:600}
+.ann ul{margin:4px 0 0;padding-left:18px}
+.flow{background:var(--card,#fff);border-radius:10px;padding:14px 20px;margin-bottom:28px;font-size:12.5px}
+.flow code{font:12px ui-monospace,Menlo,monospace;background:var(--bg,#f6f6f4);padding:0 4px;border-radius:4px}
+</style></head><body><div class="page">
+
+<h1>Steer — what a message sent during a running turn looks like</h1>
+<p class="lead">每一帧回答用户此刻的一个问题。共同规则：steer 气泡从发出到读取一直待在正在跑的 turn 的最下方，live 内容在它上面继续长；
+被读到的那一刻它就固定在原地，后面的内容接在它下面。所以两种结果下气泡都不会移动（Surface 6 不变量 10）。
+状态只用一行灰字说明，不加颜色、不加 spinner：正在跑的那一步，上面的 strip 已经显示了工具和耗时，不再重复。</p>
+
+<div class="flow"><b>状态流</b>（后端 D2 / D3 / D6 决定，前端只投影）：
+<code>POST</code> → <code>Waiting</code>（steer 在途）→ 三选一：
+<code>Read during the turn</code>（folded） · <code>Read after the turn</code>（opened） ·
+<code>Queued</code>（not_consumed / Stop 前未读，release 回排队，又可取消）。
+不能 steer 的消息直接 <code>Queued</code>，并写明原因。</div>
+
+<div class="grid">
+
+<!-- A: waiting -->
+<div class="frame">
+  <div class="ft">A · Waiting</div>
+  <div class="fq">用户的问题：它看到我的话了吗？要等多久？</div>
+  <div class="chat">
+    <div class="u"><div class="ub">Fix the failing import in session_router and run the build</div></div>
+    <div class="a">
+      <p class="note">I'll fix the import, then build to confirm.</p>
+      <div class="grp">WORKING</div>
+      <div class="strip"><span>Edit</span><span><span class="d">backend/core/</span>session_router.py</span><span class="t">0:02</span></div>
+      <div class="strip run"><span>Bash</span><span>npm run build:all</span><span class="t">2:10</span></div>
+      <div class="bee">🐝</div>
+    </div>
+    <div class="u"><div class="ub">Skip the frontend build, backend only is enough</div>
+      <div class="st">Read after the current step · <a>Stop &amp; send now</a></div></div>
+  </div>
+  <div class="ann"><b>设计</b><ul>
+    <li>不能取消，所以没有 ✕。和排队（虚线、半透明、可取消）在视觉上明确区分。</li>
+    <li>"当前步骤"就是正上方那条 running strip，等待时长看它的计时就行，不另起计时器。</li>
+    <li><b>Stop &amp; send now</b> 等于按 Stop：进程被回收，这条消息转回排队，回收完马上发出（D8 / E7）。很急或者发错时，用户有出路。</li>
+  </ul></div>
+</div>
+
+<!-- B: read during the turn -->
+<div class="frame">
+  <div class="ft">B · Read during the turn</div>
+  <div class="fq">用户的问题：它照我说的改了吗？</div>
+  <div class="chat">
+    <div class="u"><div class="ub">Fix the failing import in session_router and run the build</div></div>
+    <div class="a">
+      <p class="note">I'll fix the import, then build to confirm.</p>
+      <div class="grp">WORKED · 2 steps · 2:12</div>
+    </div>
+    <div class="u"><div class="ub">Skip the frontend build, backend only is enough</div>
+      <div class="st">Read during the turn</div></div>
+    <div class="a">
+      <p class="note">Got it — stopping after the backend build.</p>
+      <div class="grp">WORKED · 1 command · 0:48</div>
+      <p class="note"><b>Result</b> — import fixed; <code>./prod.sh build</code> passes.</p>
+      <div class="end">1 turn · 3:04 · 41k tokens</div>
+    </div>
+  </div>
+  <div class="ann"><b>设计</b><ul>
+    <li>气泡夹在同一个 turn 的两段之间。后半段不另起回复头，用量和耗时只在整个 turn 的末尾出现一次。</li>
+    <li>"Read during the turn" 重载后也保留（行上记 <code>metadata.steered</code>），否则历史里一条夹在回复中间的消息会让人看不懂。</li>
+    <li>模型自己的那句 "Got it…" 就是确认，界面不再另加 ✓。</li>
+  </ul></div>
+</div>
+
+<!-- C: read after the turn -->
+<div class="frame">
+  <div class="ft">C · Read after the turn</div>
+  <div class="fq">用户的问题：为什么它没改，最后还是跑完了？</div>
+  <div class="chat">
+    <div class="u"><div class="ub">Summarize the three design options</div></div>
+    <div class="a">
+      <p class="note">Here are the three options: … (final reply, no tools)</p>
+      <div class="end">1 turn · 0:41</div>
+    </div>
+    <div class="u"><div class="ub">Also add a cost column</div>
+      <div class="st">Read after the turn</div></div>
+    <div class="a new">
+      <p class="note">Adding a cost column to the comparison: …</p>
+      <div class="bee">🐝</div>
+    </div>
+  </div>
+  <div class="ann"><b>设计</b><ul>
+    <li>上一轮已经在写最终回复，消息并不进去，CLI 把它当成下一轮（X7 / X8）。气泡本来就在最下方，所以不移动，新的一轮接在它下面。</li>
+    <li>标签只在直播时显示，解释"为什么上一轮没理我"；重载后它就是一条普通消息，不再带标签。</li>
+  </ul></div>
+</div>
+
+<!-- D: queued with a reason -->
+<div class="frame">
+  <div class="ft">D · Queued (not steered)</div>
+  <div class="fq">用户的问题：这条为什么没像上一条那样插进去？</div>
+  <div class="chat">
+    <div class="a">
+      <p class="note">Two ways to migrate — which one?</p>
+      <div class="grp" style="color:var(--text,#1d1d1f)">▸ Question · choose A or B</div>
+    </div>
+    <div class="u queued"><div class="ub">use the second approach</div>
+      <div class="st">Queued — sends after you answer the question above <span class="x">✕</span></div></div>
+  </div>
+  <div class="ann"><b>设计</b><ul>
+    <li>排队的标签写明原因，原因由后端回执给出：<code>queued_reason</code> = <code>question</code> / <code>permission</code> / <code>busy</code>（开关关、channel、中断中等，统一显示 "sends when this turn ends"）。</li>
+    <li>问题卡片挂着时，用户最容易把输入框当成回答。标签直接指向上面的问题。</li>
+    <li>A 状态下没被读到的 steer 回到这里（not_consumed / Stop），从此又可以取消。</li>
+  </ul></div>
+</div>
+
+</div></div></body></html>
