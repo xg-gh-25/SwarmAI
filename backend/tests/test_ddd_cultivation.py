@@ -1078,267 +1078,35 @@ class TestLessonQualityGate:
             assert admission_band(p, None)[0] == "discard"
 
 
-class TestEvidenceDrivenRetire:
-    """DELETE/REWRITE: a lesson never proposes a retire; a retire proposal always
-    escalates; apply_retire_proposal (the human-approve sink) exercises the real
-    retire_entry against a real temp doc (no mock of the code under change).
-    """
+class TestNoRetirePath:
+    """There is no retire/rewrite proposal: a lesson only proposes an addition, and
+    the only delete is the polarity-flip strip inside apply_to_ddd."""
 
-    # ── AC1+AC2+AC4: full filter path produces retire vs append ────────────────
-    def test_a_lesson_never_proposes_a_retire(self, tmp_path):
-        """Lessons only add. Wording that used to trigger a retire of a matching
-        entry (each of these once targeted a real or unrelated entry) now appends."""
+    def test_a_lesson_only_proposes_an_addition(self, tmp_path):
         from core.ddd_cultivation import filter_lessons_for_ddd, _classify_lesson
         doc = tmp_path / "IMPROVEMENT.md"
         body = ("## What Worked\n\n"
                 "- [guideline] **Adversarial gate scorer approach worked** — caught race conditions\n")
         doc.write_text(body, encoding="utf-8")
-        for lesson in (
-            "The adversarial gate scorer approach is no longer used — "
-            "the old approach was wrong, superseded by mutation testing",
-            "Adversarial gate scorer approach: use os.replace for the write",
-        ):
-            assert _classify_lesson(lesson, project="SwarmAI") is not None
-            got = filter_lessons_for_ddd([lesson], "run_test", "SwarmAI", tmp_path)
-            assert [p.change_type for p in got] == ["append"], lesson
-            assert got[0].target_title == "" and got[0].evidence == ""
+        lesson = ("The adversarial gate scorer approach is no longer used — "
+                  "the old approach was wrong, superseded by mutation testing")
+        assert _classify_lesson(lesson, project="SwarmAI") is not None
+        got = filter_lessons_for_ddd([lesson], "run_test", "SwarmAI", tmp_path)
+        assert len(got) == 1 and got[0].content == lesson
+        assert not hasattr(got[0], "change_type")
         assert doc.read_text(encoding="utf-8") == body
 
-    def test_filter_additive_lesson_stays_append(self, tmp_path):
-        """AC4: no supersession marker → append even with project_dir passed."""
-        from core.ddd_cultivation import filter_lessons_for_ddd
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("## What Worked\n\n- [guideline] **Some entry** — text\n", encoding="utf-8")
-        lessons = ["Adversarial Gate-2 caught a CRITICAL data-loss bug that unit tests missed"]
-        proposals = filter_lessons_for_ddd(lessons, "run_test", "SwarmAI", tmp_path)
-        assert len(proposals) == 1
-        assert proposals[0].change_type == "append"
-        assert proposals[0].target_title == ""
-
-    def test_filter_no_project_dir_never_retires(self, tmp_path):
-        """Backward-compat: omitting project_dir → pure append behavior even on
-        supersession language (no locator without a doc to read)."""
-        from core.ddd_cultivation import filter_lessons_for_ddd
-        lessons = ["The old approach is no longer valid and was wrong, superseded entirely"]
-        proposals = filter_lessons_for_ddd(lessons, "run_test", "SwarmAI")
-        assert all(p.change_type == "append" for p in proposals)
-
-    # ── AC5: retire proposal is NEVER auto-applied by the band + apply_to_ddd refuses it ─
-    def test_retire_proposal_never_auto_via_band(self):
-        # Even a trust=passed retire is never "auto" via admission_band (non-append → not
-        # this band's job; its real path is apply_retire_proposal). AUTONOMY-FIRST
-        # (run_86f44f35): the non-append verdict is now "discard" (no human review queue).
-        from core.ddd_cultivation import admission_band, CultivationProposal
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="A genuinely superseded lesson that should be retired from the brain",
-            source_run_id="r", confidence=0.9, passed_adversarial_gate="passed",
-            change_type="retire", target_title="Some Entry",
-        )
-        assert admission_band(p, None)[0] == "discard"
-
-    def test_apply_to_ddd_hard_refuses_retire_by_change_type(self):
-        """HIGH-3 defense-in-depth (run_8d5fe9d1: is_safe_append removed): apply_to_ddd's
-        change_type guard is now the SOLE refusal of a non-append — a retire must NEVER
-        land in the append writer (it would append instead of deleting). Mutation-proven:
-        removing the change_type guard line makes this go RED."""
-        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="x" * 40, source_run_id="r", confidence=0.9,
-            change_type="retire", target_title="X",
-        )
-        assert apply_to_ddd(p, Path("/nonexistent")) == "not_safe"
-
-    def test_retire_refused_by_change_type_with_real_doc(self, tmp_path):
-        """The change_type guard refuses retire even with a real target doc present."""
-        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("## What Worked\n\n- **X** — y\n", encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="x" * 40, source_run_id="r", confidence=0.9,
-            change_type="retire", target_title="X",
-        )
-        assert apply_to_ddd(p, tmp_path) == "not_safe"
-
-    def test_cultivate_retire_always_escalates_never_applies(self, tmp_path):
-        """AC5 end-to-end: a retire proposal returned from the cultivate path is
-        ESCALATED (written to queue), never auto-applied to the doc."""
-        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-        doc = tmp_path / "IMPROVEMENT.md"
-        original = "## What Worked\n\n- [guideline] **Target entry title here** — body text\n"
-        doc.write_text(original, encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="Target entry title here is no longer true — was wrong",
-            source_run_id="r", confidence=0.9,
-            change_type="retire", target_title="Target entry title here",
-            evidence="ev",
-        )
-        result = _cultivate_proposals([p], tmp_path)
-        assert result["escalated"] == 1
-        assert result["applied"] == 0
-        # Doc unchanged — retire did NOT auto-apply.
-        assert doc.read_text(encoding="utf-8") == original
-        # Proposal written to the escalation queue.
-        proposals_dir = tmp_path / ".artifacts" / "proposals"
-        assert proposals_dir.exists()
-        assert list(proposals_dir.glob("*.json"))
-
-    # ── AC3: apply_retire_proposal archives + strips + .bak (REAL retire_entry) ─
-    def test_apply_retire_proposal_archives_and_strips(self, tmp_path):
-        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text(
-            "## What Failed\n\n"
-            "- [pitfall] **Stale caliber residue in query templates** — the fbr_flag drift\n\n"
-            "- [pitfall] **Keep this one** — unrelated surviving entry\n",
-            encoding="utf-8",
-        )
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Failed",
-            content="superseded", source_run_id="r", confidence=0.9,
-            change_type="retire",
-            target_title="Stale caliber residue in query templates",
-            evidence="proven false",
-        )
-        status = apply_retire_proposal(p, tmp_path)
-        assert status == "retired", f"got {status}"
-        after = doc.read_text(encoding="utf-8")
-        # Entry stripped from source
-        assert "Stale caliber residue" not in after
-        # Sibling preserved (identity strip, not title-only)
-        assert "Keep this one" in after
-        # Archived to doc-matched archive (BLOCKER-1: not IMPROVEMENT default when TECH).
-        # The archive IS the recovery path — the stripped entry is preserved here.
-        archive = tmp_path / "IMPROVEMENT-archive.md"
-        assert archive.exists()
-        assert "Stale caliber residue" in archive.read_text(encoding="utf-8")
-        # CONTRACT CHANGE (run_a6482355): NO dated .bak — recovery is archive + git,
-        # not a third silting copy (Principle 1). No .bak should exist.
-        assert list(tmp_path.glob("IMPROVEMENT.md.*.bak")) == []
-
-    def test_apply_retire_no_target_refuses(self, tmp_path):
-        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("## What Failed\n\n- **X** — y\n", encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Failed",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="retire", target_title="",  # locator found nothing
-        )
-        assert apply_retire_proposal(p, tmp_path) == "no_target"
-
-    def test_rewrite_with_subfloor_replacement_refuses_before_retire(self, tmp_path):
-        """Gate-2 MED (run_e9cb7e2a): the value floor added to apply_to_ddd made a
-        rewrite's replacement-append floor-rejectable — which, done AFTER the retire,
-        would leave a half-state (old entry gone, replacement dropped). Fixed by
-        PREVENTION: validate the replacement against the floor BEFORE retiring, so a
-        sub-floor replacement refuses up-front (fail-loud) and the old entry is
-        UNTOUCHED. Mutation: remove the pre-check → old entry gets stripped and this
-        assertion (entry still present) goes RED."""
-        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
-        doc = tmp_path / "IMPROVEMENT.md"
-        original = (
-            "## What Failed\n\n"
-            "- [pitfall] **A real superseded lesson worth rewriting** — the old body\n"
-        )
-        doc.write_text(original, encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Failed",
-            content="superseded", source_run_id="r", confidence=0.9,
-            change_type="rewrite",
-            target_title="A real superseded lesson worth rewriting",
-            evidence="proven wrong",
-            replacement_content="tests pass",  # <5 words, <30 chars — sub-floor
-        )
-        status = apply_retire_proposal(p, tmp_path)
-        assert status.startswith("retire_failed:"), f"got {status}"
-        # All-or-nothing: the old entry is STILL present (retire never ran).
-        assert "A real superseded lesson worth rewriting" in doc.read_text(encoding="utf-8")
-        # No archive / .bak created (nothing was retired).
-        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
-        assert not list(tmp_path.glob("IMPROVEMENT.md.*.bak"))
-
-    def test_apply_retire_no_match_fails_loud(self, tmp_path):
-        """retire_entry is fail-loud: a title with no match → retire_failed, never
-        a silent zero-strip (data-loss guard)."""
-        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
-        doc = tmp_path / "IMPROVEMENT.md"
-        original = "## What Failed\n\n- [pitfall] **Real entry** — body\n"
-        doc.write_text(original, encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Failed",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="retire", target_title="Nonexistent title never present",
-        )
-        status = apply_retire_proposal(p, tmp_path)
-        assert status.startswith("retire_failed:")
-        # Doc untouched — nothing stripped on a failed match.
-        assert doc.read_text(encoding="utf-8") == original
-
-    def test_apply_retire_refuses_append_type(self, tmp_path):
-        from core.ddd_cultivation import apply_retire_proposal, CultivationProposal
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="c", source_run_id="r", confidence=0.9,
-            change_type="append",
-        )
-        assert apply_retire_proposal(p, tmp_path) == "not_retire"
-
-    # ── AC6: backward-compatible serialization ─────────────────────────────────
-    def test_from_dict_old_json_defaults_to_append(self):
-        """OLD proposal JSON (no change_type key) → change_type='append'."""
+    def test_old_retire_json_has_no_retire_fields_after_load(self):
         from core.ddd_cultivation import CultivationProposal
-        old = {
-            "id": "proposal_abc123", "target_doc": "IMPROVEMENT.md",
-            "target_section": "What Worked", "content": "x" * 40,
-            "source_run_id": "run_old", "confidence": 0.8,
-            "created_at": "2026-01-01T00:00:00+00:00",
-        }
-        p = CultivationProposal.from_dict(old)
-        assert p.change_type == "append"
-        assert p.target_title == ""
-        assert p.evidence == ""
-        assert p.replacement_content == ""
-
-    def test_new_fields_roundtrip(self):
-        from core.ddd_cultivation import CultivationProposal
-        p = CultivationProposal(
-            target_doc="TECH.md", target_section="Runtime Traps",
-            content="x" * 40, source_run_id="r", confidence=0.7,
-            change_type="retire", target_title="Some Title",
-            evidence="verbatim quote", replacement_content="new text",
-        )
-        p2 = CultivationProposal.from_dict(p.to_dict())
-        assert p2.change_type == "retire"
-        assert p2.target_title == "Some Title"
-        assert p2.evidence == "verbatim quote"
-        assert p2.replacement_content == "new text"
-
-
-class TestRetireNeverAutomatic:
-    """A retire proposal deletes knowledge, so it is never applied automatically,
-    however strong its match: it escalates and the doc is untouched."""
-
-    def test_a_strong_retire_escalates_and_deletes_nothing(self, tmp_path):
-        from core.ddd_cultivation import _cultivate_proposals, CultivationProposal
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text(
-            "## What Worked\n\n"
-            "- [guideline] **Vector recall hybrid scorer blend leg** — 0.6v 0.4k\n",
-            encoding="utf-8")
-        before = doc.read_text(encoding="utf-8")
-        p = CultivationProposal(
-            target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="c", source_run_id="r", confidence=0.99, change_type="retire",
-            target_title="Vector recall hybrid scorer blend leg", evidence="torn out")
-        result = _cultivate_proposals([p], tmp_path)
-        assert result["escalated"] == 1 and result["applied"] == 0
-        assert "retired" not in result
-        assert doc.read_text(encoding="utf-8") == before
-        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
+        p = CultivationProposal.from_dict({
+            "id": "proposal_x", "target_doc": "TECH.md", "target_section": "S",
+            "content": "c", "source_run_id": "r", "confidence": 0.5,
+            "created_at": "2026-01-01T00:00:00+00:00", "change_type": "retire",
+            "target_title": "T", "evidence": "e", "replacement_content": "",
+        })
+        d = p.to_dict()
+        for key in ("change_type", "target_title", "evidence", "replacement_content"):
+            assert key not in d
 
 
 class TestNormalizeCultivatedBullet:
@@ -1719,9 +1487,7 @@ class TestContradictionDetection:
         )
         props = filter_lessons_for_ddd([lesson], "run_t", "SwarmAI", tmp_path)
         assert len(props) >= 1
-        # It's an append (no supersession language) carrying the advisory flag.
-        appended = [p for p in props if p.change_type == "append"]
-        assert appended, "no-supersession lesson must be an append"
+        appended = props
         assert appended[0].contradiction_flag is not None
         assert "subprocess" in appended[0].contradiction_flag["conflicting_title"].lower()
 
@@ -1783,7 +1549,6 @@ class TestContradictionSupersede:
         return CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section=target_section,
             content=content, source_run_id="run_sup", confidence=0.6,
-            change_type="append",
             contradiction_flag={"conflicting_title": old_title, "section": old_section,
                                 "flip": ["never", "always"], "shared_topic": "pytest"},
         )
@@ -1880,7 +1645,7 @@ class TestContradictionSupersede:
         p = CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
             content="Some new lesson worth keeping around here", source_run_id="run_x",
-            confidence=0.6, change_type="append",
+            confidence=0.6,
             contradiction_flag={"conflicting_title": "Existing"},  # missing 'section'
         )
         status = apply_to_ddd(p, tmp_path)  # must not raise KeyError
@@ -1912,7 +1677,7 @@ class TestContradictionSupersede:
         p = CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
             content="A brand new unrelated lesson to append here", source_run_id="run_y",
-            confidence=0.6, change_type="append",
+            confidence=0.6,
         )
         apply_to_ddd(p, tmp_path)
         doc = (tmp_path / "IMPROVEMENT.md").read_text()
@@ -1920,9 +1685,8 @@ class TestContradictionSupersede:
 
 
 class TestSupersedeTiering:
-    """run_6ac7a760 Plan-B (Gate-2): ordinary knowledge auto-strips on a polarity
-    flip; PERMANENT knowledge (keep-class) and AMBIGUOUS (same-title collision)
-    ESCALATE a retire proposal instead of auto-deleting."""
+    """A polarity flip strips the contradicted entry whatever its type, and every
+    same-title entry in that section; nothing is escalated (2026-10-24, XG)."""
 
     def _doc(self, tmp_path, body):
         (tmp_path / "IMPROVEMENT.md").write_text(body, encoding="utf-8")
@@ -1932,7 +1696,7 @@ class TestSupersedeTiering:
         return CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section=target_section,
             content="Always validate untrusted input at the boundary now",
-            source_run_id="run_tier", confidence=0.6, change_type="append",
+            source_run_id="run_tier", confidence=0.6,
             contradiction_flag={"conflicting_title": old_title, "section": old_section,
                                  "flip": ["never", "always"], "shared_topic": "input"},
         )
@@ -1940,9 +1704,7 @@ class TestSupersedeTiering:
     def _proposals_dir(self, tmp_path):
         return tmp_path / ".artifacts" / "proposals"
 
-    # PERMANENT: a [principle]-typed entry (keep-class rule 2, type-based, ANY
-    # section) must NOT be auto-stripped even in a safe-append section.
-    def test_keepclass_principle_escalates_not_strips(self, tmp_path):
+    def test_permanent_principle_is_stripped(self, tmp_path):
         from core.ddd_cultivation import apply_to_ddd
         self._doc(
             tmp_path,
@@ -1955,12 +1717,12 @@ class TestSupersedeTiering:
             tmp_path,
         )
         doc = (tmp_path / "IMPROVEMENT.md").read_text()
-        assert "bedrock." in doc, "keep-class principle must NOT be auto-stripped"
+        assert "bedrock." not in doc
+        assert "Always validate untrusted input" in doc
         pd = self._proposals_dir(tmp_path)
-        assert pd.exists() and list(pd.glob("*.json")), "must escalate a retire proposal"
+        assert not (pd.exists() and list(pd.glob("*.json")))
 
-    # AMBIGUOUS: two same-title entries in one section -> escalate, strip neither
-    def test_collision_escalates_not_strips(self, tmp_path):
+    def test_every_same_title_entry_is_stripped(self, tmp_path):
         from core.ddd_cultivation import apply_to_ddd
         self._doc(
             tmp_path,
@@ -1973,9 +1735,9 @@ class TestSupersedeTiering:
             tmp_path,
         )
         doc = (tmp_path / "IMPROVEMENT.md").read_text()
-        assert "one." in doc and "two." in doc, "ambiguous collision must strip NEITHER"
+        assert "one." not in doc and "two." not in doc
         pd = self._proposals_dir(tmp_path)
-        assert pd.exists() and list(pd.glob("*.json")), "must escalate instead"
+        assert not (pd.exists() and list(pd.glob("*.json")))
 
     # ORDINARY: a plain guideline in a safe (non-evergreen) section still auto-strips
     def test_ordinary_guideline_still_auto_strips(self, tmp_path):
@@ -2219,7 +1981,7 @@ class TestDiscardObservability:
             proposals = [
                 CultivationProposal(
                     target_doc="TECH.md", target_section="Conventions",
-                    content=c, change_type="append",
+                    content=c,
                     source_run_id="r", confidence=0.9,
                 )
                 for c in ("ok", "yes", "done")
@@ -2270,7 +2032,7 @@ class TestDiscardObservability:
             # flake on network or model availability.
             proposal = CultivationProposal(
                 target_doc="TECH.md", target_section="Conventions",
-                content="ok", change_type="append",
+                content="ok",
                 source_run_id="r", confidence=0.9,
             )
             result = _cultivate_proposals([proposal], project_dir)
@@ -2453,37 +2215,6 @@ class TestWriteTargetConfinement:
                 "a sibling file was created next to the victim"
             )
 
-    def test_retire_applier_refuses_traversal_out_of_project(self):
-        """apply_retire_proposal must not touch anything outside project_dir.
-
-        This sink is DESTRUCTIVE (archive + entry-strip) and its out-of-tree
-        effects are sibling CREATIONS — an ``-archive.md`` beside the victim and a
-        ``.md.lock`` — so the no-new-files assertion is what actually catches it.
-        """
-        from core.ddd_cultivation import apply_retire_proposal
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir, victim = self._tree(tmpdir)
-            before_bytes = victim.read_bytes()
-            before_siblings = sorted(p.name for p in victim.parent.iterdir())
-
-            status = apply_retire_proposal(
-                self._prop(
-                    "../.context/STEERING.md",
-                    change_type="retire",
-                    target_title="a real rule",
-                ),
-                project_dir,
-            )
-
-            assert status not in ("retired", "rewritten"), (
-                f"traversal target must never report success, got {status!r}"
-            )
-            assert victim.read_bytes() == before_bytes, "victim file was MUTATED"
-            assert sorted(p.name for p in victim.parent.iterdir()) == before_siblings, (
-                "a sibling file (-archive.md / .md.lock) was created next to the victim"
-            )
-
     def test_directory_target_returns_a_status_not_a_crash(self):
         """A DIRECTORY-valued target_doc must not crash the applier.
 
@@ -2554,42 +2285,6 @@ class TestWriteTargetConfinement:
                 assert apply_to_ddd(self._prop(doc), project_dir) == "doc_missing", (
                     f"{doc} must route to doc_missing, not crash or report success"
                 )
-
-    def test_hardlinked_target_cannot_mutate_an_out_of_tree_file(self):
-        """An in-tree HARDLINK to an out-of-tree file must be refused.
-
-        ``resolve()`` cannot see through a hardlink — it is a second NAME for one inode,
-        so containment reads it as legitimately in-tree. The append applier survives it
-        (``os.replace`` writes a fresh inode), but the retire applier writes back IN
-        PLACE and so mutates the shared inode: measured, this DELETED a rule from an
-        out-of-tree governance file. The class's usual net — no new sibling files next to
-        the victim — structurally cannot catch it, because the archive and lock land
-        in-tree beside the link, so this asserts the victim's BYTES.
-        """
-        import os
-
-        from core.ddd_cultivation import apply_retire_proposal
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir, victim = self._tree(tmpdir)
-            before = victim.read_text()
-            link = project_dir / "hard.md"
-            os.link(victim, link)
-            assert link.stat().st_nlink == 2, "fixture did not create a hardlink"
-
-            status = apply_retire_proposal(
-                self._prop(
-                    "hard.md",
-                    change_type="retire",
-                    target_title="a real rule",
-                    evidence="superseded",
-                ),
-                project_dir,
-            )
-            assert status != "retired", f"a hardlinked target must be refused, got {status!r}"
-            assert victim.read_text() == before, (
-                "the out-of-tree file was mutated through an in-tree hardlink"
-            )
 
     def test_unresolvable_targets_are_refused_not_raised(self):
         """A symlink loop and an embedded NUL must refuse, not escape as an exception.
@@ -2992,52 +2687,6 @@ class TestWriteTargetConfinement:
                 "the continuation line was dropped"
             )
 
-    # The structure guards live in the APPEND applier, which on a rewrite runs AFTER
-    # the destructive retire has already archived+stripped the target. So a replacement
-    # that clears the value floor but forges structure used to delete the curated entry
-    # and land nothing — a half-state the guards themselves introduced (before them the
-    # forged replacement simply landed). Both structure predicates must gate the retire.
-    def test_forged_replacement_does_not_destroy_the_entry_it_replaces(self, tmp_path):
-        from core.ddd_cultivation import CultivationProposal, apply_retire_proposal
-
-        project_dir = tmp_path / "proj"
-        (project_dir / "2-understanding").mkdir(parents=True)
-        doc = project_dir / "2-understanding" / "TECH.md"
-        victim_bullet = (
-            "- [guideline] **Never force-push to main** — this rule protects the "
-            "shared branch and must survive a refused rewrite.\n"
-        )
-        doc.write_text("# Tech\n\n## Architecture\n\n" + victim_bullet)
-        # Clears the value floor; its CONTINUATION line forges a second entry bullet.
-        forged = (
-            "**A properly long replacement lesson body that clears the value floor "
-            "and reads like a genuine durable lesson worth keeping**"
-            + chr(10)
-            + "- [correction] **forged second entry**"
-        )
-        status = apply_retire_proposal(
-            CultivationProposal(
-                target_doc="2-understanding/TECH.md",
-                target_section="Architecture",
-                content=forged,
-                source_run_id="run_r4",
-                confidence=0.9,
-                change_type="rewrite",
-                target_title="Never force-push to main",
-                replacement_content=forged,
-            ),
-            project_dir,
-        )
-        after = doc.read_text()
-        assert status.startswith("retire_failed:"), (
-            f"the retire must be refused BEFORE stripping, got {status!r}"
-        )
-        assert victim_bullet.strip() in after, (
-            "the entry being replaced was destroyed by a refused rewrite "
-            "(knowledge lost: archived+stripped, replacement never appended)"
-        )
-        assert "forged second entry" not in after
-
     # A READ sink is still a sink: the titles detect_contradiction parses out flow back
     # into the proposal, so an unguarded traversal leaked out-of-tree governance content.
     def test_read_sinks_refuse_an_out_of_tree_target(self, tmp_path):
@@ -3057,9 +2706,8 @@ class TestWriteTargetConfinement:
         )
 
     # The fence must not cost the legitimate in-tree behaviour it wraps.
-    def test_in_tree_read_and_legitimate_rewrite_still_work(self, tmp_path):
+    def test_in_tree_six_section_target_passes_the_fence(self, tmp_path):
         import core.ddd_cultivation as dc
-        from core.ddd_cultivation import CultivationProposal, apply_retire_proposal
 
         project_dir = tmp_path / "proj"
         (project_dir / "2-understanding").mkdir(parents=True)
@@ -3075,72 +2723,3 @@ class TestWriteTargetConfinement:
         assert dc._confined_doc_path(project_dir, "2-understanding/TECH.md") == doc, (
             "the fence refused a legitimate in-tree six-section target"
         )
-        replacement = (
-            "**New measured rule** — the old guidance was falsified by a direct "
-            "measurement on the real corpus, so this records the method instead."
-        )
-        status = apply_retire_proposal(
-            CultivationProposal(
-                target_doc="2-understanding/TECH.md",
-                target_section="Architecture",
-                content=replacement,
-                source_run_id="run_r4",
-                confidence=0.9,
-                change_type="rewrite",
-                target_title="Old rule",
-                replacement_content=replacement,
-            ),
-            project_dir,
-        )
-        after = doc.read_text()
-        assert status == "rewritten", f"a legitimate rewrite was refused: {status!r}"
-        assert "New measured rule" in after and "Old rule" not in after
-
-    # Pre-gating the append's refusal REASONS was the wrong shape — the value floor and
-    # the two structure predicates are three of them, and any OTHER reason still left the
-    # half-state. `duplicate` is the reason that proves it: no forged content, no path
-    # escape, just a replacement already present elsewhere in the doc — yet the named
-    # target was archived+stripped and nothing landed. Rollback covers every reason.
-    def test_a_refused_rewrite_restores_the_entry_it_retired(self, tmp_path):
-        from core.ddd_cultivation import CultivationProposal, apply_retire_proposal
-
-        project_dir = tmp_path / "proj"
-        (project_dir / "2-understanding").mkdir(parents=True)
-        doc = project_dir / "2-understanding" / "TECH.md"
-        existing = (
-            "- [guideline] **Route cache invalidation via the broker** - a direct "
-            "write bypasses the audit trail and loses the ordering guarantee.\n"
-        )
-        victim = (
-            "- [guideline] **Never force-push to main** - this rule protects the "
-            "shared branch and must survive a refused rewrite.\n"
-        )
-        doc.write_text("# Tech\n\n## Architecture\n\n" + existing + victim)
-        # A replacement duplicating a bullet ALREADY in the doc: clears the value floor,
-        # forges nothing, escapes nothing — apply_to_ddd refuses it as `duplicate`.
-        replacement = (
-            "**Route cache invalidation via the broker** - a direct write bypasses "
-            "the audit trail and loses the ordering guarantee."
-        )
-        status = apply_retire_proposal(
-            CultivationProposal(
-                target_doc="2-understanding/TECH.md",
-                target_section="Architecture",
-                content=replacement,
-                source_run_id="run_r5",
-                confidence=0.9,
-                change_type="rewrite",
-                target_title="Never force-push to main",
-                replacement_content=replacement,
-            ),
-            project_dir,
-        )
-        after = doc.read_text()
-        assert status == "rewrite_refused:duplicate", (
-            f"expected a rolled-back refusal, got {status!r}"
-        )
-        assert victim.strip() in after, (
-            "the retired entry was NOT restored after the append was refused — "
-            "a targeted deletion primitive carrying no forged content"
-        )
-        assert existing.strip() in after, "rollback clobbered an unrelated entry"

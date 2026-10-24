@@ -3,11 +3,10 @@ DDD Cultivation Engine — Tiered Autonomy Model.
 
 Connects Pipeline REFLECT output to DDD documents with graduated autonomy:
 - ADDITIVE changes (new lessons, patterns): auto-applied, logged to changelog
-- RETIRE (delete/rewrite): never automatic. A lesson never proposes a retire (the
-  keyword "supersession" detector that did was removed: none of its proposals was a
-  real supersession). The only producer left is the polarity-flip path in
-  apply_to_ddd for keep-class / ambiguous entries; it escalates, and a human approve
-  applies it via apply_retire_proposal.
+- DELETE: only one, and it is automatic: when a new lesson polarity-flips a
+  same-topic entry (detect_contradiction), apply_to_ddd strips the old entry before
+  appending the new one. No retire proposals, no human approval of deletes
+  (宁缺毋滥: a contradicted entry is removed, not flagged).
 - RISKY appends (protected zones, conversation-derived): escalated via proposal queue
 
 Zero LLM calls — pure keyword heuristic filtering.
@@ -16,7 +15,6 @@ Public API:
     CultivationProposal  — data model for a single proposal
     filter_lessons_for_ddd(lessons, run_id, project[, project_dir]) → List[CultivationProposal]
     apply_to_ddd(proposal, project_dir) → str (applied|duplicate|section_not_found|not_safe|doc_missing|locked)
-    apply_retire_proposal(proposal, project_dir) → str (retired|rewritten|no_target|doc_missing|retire_failed:…|rewrite_refused:…|rewrite_partial:…)
     log_application(proposal, project_dir) → None
     write_proposal(proposal, project_dir) → Path  (escalation path only)
     read_pending_proposals(workspace_dir, project) → List[CultivationProposal]
@@ -113,23 +111,10 @@ class CultivationProposal:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     ttl_days: int = 14
     status: str = "pending"  # pending | applied | rejected | expired | escalated
-    # ── DELETE/REWRITE ("out" side of the knowledge layer) ─────────────────────
-    # change_type discriminates a retire/rewrite from the default append. A retire
-    # is REVERSIBLE (retire_entry: archive → strip; recovery = archive + git) and
-    # is never automatic: it escalates to the human queue, and only the approve
-    # router applies it. It NEVER goes through the append applier (apply_to_ddd
-    # hard-refuses non-append).
-    change_type: str = "append"  # "append" | "retire" | "rewrite"
-    target_title: str = ""  # exact EntryMetadata.title of the entry to retire/rewrite
-    evidence: str = ""  # verbatim quote proving the target is falsified/superseded
-    replacement_content: str = ""  # rewrite only — new entry text (unused for retire)
-    # run_171a17c2: ADVISORY contradiction signal for APPEND proposals. When
-    # detect_contradiction found this append polarity-flips a same-topic curated
-    # entry, this holds ContradictionFlag.to_dict() ({conflicting_title, section,
-    # flip, shared_topic}); None otherwise. NON-BLOCKING, NON-DESTRUCTIVE — it does
-    # NOT change change_type (stays "append") and does NOT trigger any retire; it is
-    # surfaced to the human/agent review layer to judge. Additive + defaults None →
-    # old proposal JSON round-trips unchanged (AC6).
+    # When detect_contradiction found that this lesson polarity-flips a same-topic
+    # entry, ContradictionFlag.to_dict() ({conflicting_title, section, flip,
+    # shared_topic}); None otherwise. apply_to_ddd strips that entry when it writes
+    # this lesson.
     contradiction_flag: "Optional[dict]" = None
     # Knowledge Admission Component B (run_8d5fe9d1): the trust stamp. The SOLE
     # authority that (in Component C) lets a proposal auto-apply into ANY doc. Stamped
@@ -161,10 +146,6 @@ class CultivationProposal:
             "created_at": self.created_at,
             "ttl_days": self.ttl_days,
             "status": self.status,
-            "change_type": self.change_type,
-            "target_title": self.target_title,
-            "evidence": self.evidence,
-            "replacement_content": self.replacement_content,
             "contradiction_flag": self.contradiction_flag,
             "passed_adversarial_gate": self.passed_adversarial_gate,
             "trust_source": self.trust_source,
@@ -172,12 +153,7 @@ class CultivationProposal:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CultivationProposal":
-        """Deserialize from dict.
-
-        change_type/target_title/evidence/replacement_content default to the
-        append-shape on OLD proposal JSON (pre-run_b8f10185) that lacks the keys —
-        so any existing on-disk proposal round-trips as a plain append (AC6).
-        """
+        """Deserialize from dict."""
         return cls(
             id=data["id"],
             target_doc=data["target_doc"],
@@ -189,10 +165,6 @@ class CultivationProposal:
             created_at=data["created_at"],
             ttl_days=data.get("ttl_days", 14),
             status=data.get("status", "pending"),
-            change_type=data.get("change_type", "append"),
-            target_title=data.get("target_title", ""),
-            evidence=data.get("evidence", ""),
-            replacement_content=data.get("replacement_content", ""),
             contradiction_flag=data.get("contradiction_flag", None),
             passed_adversarial_gate=data.get("passed_adversarial_gate", "n/a"),
             trust_source=data.get("trust_source", "none"),
@@ -382,8 +354,8 @@ def _confined_doc_path(project_dir: "Path | str", target_doc: str) -> "Path | No
     resolution cannot see out of the tree and containment alone reads it as legitimate.
     That is not symmetric between the two sinks: the append applier commits through
     ``os.replace`` onto a fresh temp file, which breaks the link and leaves the other
-    name untouched, but the retire applier writes back IN PLACE
-    (``ddd_entry_lifecycle`` ``write_text``), which mutates the shared inode. Measured:
+    name untouched, but an in-place writer (the retire applier did, through
+    ``ddd_entry_lifecycle`` ``write_text``) mutates the shared inode. Measured:
     an in-tree hardlink to an out-of-tree governance file let a retire proposal DELETE a
     rule from it, and the intended safety net — asserting no new sibling files appear
     next to the victim — could not see it, because the archive and lock files land
@@ -681,8 +653,8 @@ def filter_lessons_for_ddd(
 ) -> List[CultivationProposal]:
     """Filter pipeline REFLECT lessons into DDD cultivation proposals.
 
-    Returns at most MAX_PROPOSALS_PER_RUN proposals, all change_type='append'. A
-    lesson only ever adds knowledge: it never proposes retiring an entry. The keyword
+    Returns at most MAX_PROPOSALS_PER_RUN proposals; a lesson only ever proposes an
+    addition. The keyword
     supersession detector that used to (it guessed "this lesson replaces that entry"
     from words like "replace" / "no longer" plus title-word overlap) produced no real
     supersession in its whole history; it retired lessons' own entries and unrelated
@@ -937,22 +909,13 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     section is auto-created rather than treated as a drop. The drift is still
     observable via the "created_section" status (logged by callers).
     """
-    # Defense-in-depth (run_b8f10185 HIGH-3): apply_to_ddd is the APPEND applier
-    # only. A retire/rewrite must NEVER land here (it would append instead of
-    # deleting) — its apply path is apply_retire_proposal (on human approve),
-    # never this one. is_safe_append() already
-    # returns False for non-append, but this hard refusal makes the invariant
-    # independent of that classifier — belt + suspenders.
-    if proposal.change_type != "append":
-        return "not_safe"
     # NOTE (run_8d5fe9d1, Component C): apply_to_ddd is the WRITER, not the decision.
     # It does NOT re-check trust — the auto/review/discard authority lives in
     # admission_band (auto path) and in the human-approve endpoint (routers/cultivation:
     # a human approving a REVIEW proposal IS the authority, and those proposals are
     # trust=n/a by construction — re-gating trust here would make human approval
-    # impossible). The old is_safe_append() doc-whitelist gate is removed; the only
-    # invariant enforced here is the non-append refusal above (retire/rewrite have
-    # their own applier). Noise/quality already filtered upstream at _classify_lesson.
+    # impossible). The old is_safe_append() doc-whitelist gate is removed. Noise/quality
+    # already filtered upstream at _classify_lesson.
 
     # VALUE FLOOR at the chokepoint (run_e9cb7e2a). apply_to_ddd is the ONE gate
     # every write path crosses — but the writeback hook reaches it DIRECTLY,
@@ -1024,89 +987,43 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             return "locked"
         content = doc_path.read_text(encoding="utf-8")
 
-        # ── DESTRUCTIVE SUPERSEDE (run_6ac7a760, XG-directed; Gate-2-tiered) ────
-        # When this append polarity-flips a same-topic curated entry
-        # (detect_contradiction set proposal.contradiction_flag), the NEW entry
-        # REPLACES the old — new-supersedes-old = clean forgetting = evolution. NOT
-        # advisory-flag-and-keep-both (run_171a17c2 = the hoarding/graveyard anti-
-        # pattern in EVOLUTION). But NOT a blind delete either (Gate-2, XG=Plan-B):
+        # ── SUPERSEDE (run_6ac7a760, XG-directed) ───────────────────────────────
+        # When this lesson polarity-flips a same-topic curated entry
+        # (detect_contradiction set proposal.contradiction_flag), the new entry
+        # REPLACES the old: every entry with that (title, section) is stripped, of
+        # any type, permanent ones included. 宁缺毋滥 — a contradicted entry is
+        # removed, never flagged or queued for a human (2026-10-24, XG).
         #
-        #   ORDINARY knowledge (guideline/pitfall/process, non-evergreen section,
-        #     exactly ONE match) → STRIP the old in-place = auto clean-forgetting.
-        #   PERMANENT knowledge (is_keep_class: principle/correction/decision/model
-        #     or an evergreen section or COE) → do NOT auto-delete. It is my judgment
-        #     BEDROCK; a single wrong polarity match must not silently erase it. →
-        #     ESCALATE a retire-proposal to the human queue instead.
-        #   AMBIGUOUS: >1 entry shares (title,section) → a strip would delete ALL of
-        #     them while detection identified ONE (Gate-2 MED: connected-delete /
-        #     data-loss, exactly what retire_entry refuses). → ESCALATE, never strip.
-        #
-        # This is NOT the keep-class "carve-out from forgetting" XG rejected — it is
-        # ROUTING a high-blast-radius delete to a one-word human confirm (the same
-        # bar retire_entry sets with force=True). Ordinary knowledge still auto-
-        # forgets with zero prompt.
-        #
-        # MUST run HERE — after read (:786), BEFORE section_re/body_start: _strip_
-        # entries mutates `content` in-memory so downstream offsets are computed on
-        # the STRIPPED string (Gate-1 FATAL-2). include_prose=True is MANDATORY
-        # (Gate-1 FATAL-1: the flag's key came from parse_entries(include_prose=True)).
-        # NO archive (XG: git is the only recovery). .get()-guarded (Gate-1 CRASH).
+        # MUST run HERE — after read, BEFORE section_re/body_start: _strip_entries
+        # mutates `content` in-memory so downstream offsets are computed on the
+        # STRIPPED string. include_prose=True is MANDATORY (the flag's key came from
+        # parse_entries(include_prose=True)). NO archive (XG: git is the only
+        # recovery). .get()-guarded.
         cf = proposal.contradiction_flag
         if cf and cf.get("conflicting_title") and cf.get("section"):
-            from core.ddd_entry_lifecycle import (
-                _strip_entries, parse_entries, is_keep_class,
-                MEMORY_EVERGREEN_SECTIONS,
-            )
+            from core.ddd_entry_lifecycle import _strip_entries, parse_entries
             _old_title, _old_section = cf["conflicting_title"], cf["section"]
             _matches = [
                 e for e in parse_entries(content, include_prose=True)
                 if e.title == _old_title and e.section == _old_section
             ]
-            _keep = any(
-                is_keep_class(e, evergreen_sections=MEMORY_EVERGREEN_SECTIONS)
-                for e in _matches
-            )
-            if _matches and (_keep or len(_matches) > 1):
-                # PERMANENT or AMBIGUOUS → escalate a retire proposal, do NOT strip.
-                _why = "keep-class (permanent knowledge)" if _keep else \
-                       f"{len(_matches)} same-title entries (ambiguous — strip would delete all)"
-                logger.warning(
-                    "[SUPERSEDE-ESCALATE] polarity flip targets %s — routing a retire "
-                    "proposal to the human queue instead of auto-deleting: %s § %s | "
-                    "flip=%s | run=%s",
-                    _why, proposal.target_doc, _old_section, cf.get("flip"),
-                    proposal.source_run_id,
-                )
-                _retire = CultivationProposal(
-                    target_doc=proposal.target_doc, target_section=_old_section,
-                    content=(f"Superseded by a newer polarity-flipped lesson "
-                             f"(flip={cf.get('flip')}); human decide whether to retire."),
-                    source_run_id=proposal.source_run_id,
-                    confidence=proposal.confidence, change_type="retire",
-                    target_title=_old_title, evidence=proposal.content.strip(),
-                    status="escalated",
-                )
-                write_proposal(_retire, project_dir)
-                # new entry still appends below; the OLD stays until human approves.
-            elif _matches:
-                # ORDINARY knowledge → auto strip (clean forgetting).
+            if _matches:
                 content = _strip_entries(content, {(_old_title, _old_section)},
                                          include_prose=True)
                 logger.warning(
-                    "[AUTO-SUPERSEDE] new lesson polarity-flips ordinary curated entry "
-                    "— STRIPPED old (git-recoverable, no archive): %s § %s | flip=%s | "
+                    "[AUTO-SUPERSEDE] new lesson polarity-flips %d curated entr%s "
+                    "— STRIPPED (git-recoverable, no archive): %s § %s | flip=%s | "
                     "conflicting_title=%r | run=%s",
+                    len(_matches), "y" if len(_matches) == 1 else "ies",
                     proposal.target_doc, _old_section, cf.get("flip"),
                     _old_title, proposal.source_run_id,
                 )
-                # Gate-2 MED (audit trail): a hard strip leaves only a transient
-                # WARNING — record the deletion DURABLY in the changelog so the DDD
-                # weekly report surfaces removals (and makes cross-run oscillation
-                # visible) without git archaeology. Body recovery stays git-only (XG).
+                # Durable record in the changelog (the DDD weekly report lists
+                # removals); body recovery stays git-only (XG).
                 _log_supersede_delete(
                     proposal, project_dir,
                     stripped_title=_old_title, stripped_section=_old_section,
-                    stripped_body=next((e.raw_text for e in _matches), ""),
+                    stripped_body="\n".join(e.raw_text for e in _matches),
                 )
 
         # Emit the canonical `- [type] **Title** — body (date, run, label)` shape.
@@ -1235,8 +1152,8 @@ def _entry_tokens(text: str) -> set[str]:
 @dataclass
 class ContradictionFlag:
     """Advisory signal: a newly-admitted APPEND lesson polarity-flips a same-topic
-    curated entry. NON-BLOCKING, NON-DESTRUCTIVE — names the conflicting entry for
-    a human/agent to judge; NEVER retires or resolves (do-not-delete-on-guesses).
+    curated entry. Names the conflicting entry; apply_to_ddd strips that entry when it
+    writes the lesson (the flag itself changes nothing).
 
     Recall boundary (honest): this catches EXPLICIT polarity flips only
     (never↔always, do↔don't, use↔avoid, enable↔disable, add↔remove, block↔allow,
@@ -1405,153 +1322,6 @@ def detect_contradiction(
                 flip=(b, a), shared_topic=sorted(distinguishing)[0],
             )
     return None
-
-
-def apply_retire_proposal(proposal: CultivationProposal, project_dir: Path) -> str:
-    """Apply a retire/rewrite proposal via the reversible retire_entry
-    machinery (archive → identity-strip; recovery = archive + git). The sibling of apply_to_ddd
-    for the "out" side. One caller: the approve router, for a human-approved
-    escalated retire (nothing applies a retire automatically). retire_entry is
-    fail-loud (no match / ambiguous / keep-class → RetireError, NO strip).
-
-    Returns a status string (parallel to apply_to_ddd):
-      - "retired"      — the named (title, section) entry was archived + stripped
-      - "rewritten"    — retired, then replacement_content appended (rewrite)
-      - "not_retire"   — proposal.change_type is not retire/rewrite (guard)
-      - "no_target"    — target_title empty (never retire)
-      - "doc_missing"  — target document file does not exist
-      - "retire_failed:<reason>" — retire_entry raised RetireError (fail-loud:
-                         no match / ambiguous duplicate / keep-class refused)
-      - "rewrite_partial:<status>" — retire succeeded but replacement append didn't
-                         (original recoverable from archive + git)
-
-    For rewrite the replacement is a NEW append (not a cross-file move): we retire
-    the stale entry, then append the replacement via apply_to_ddd. If the append
-    fails the retire already archived the original (recoverable), so no
-    unrecoverable loss — but we surface the partial status.
-    """
-    if proposal.change_type not in ("retire", "rewrite"):
-        return "not_retire"
-    if not proposal.target_title:
-        return "no_target"  # no named entry — refuse to guess
-
-    # Six-section resolver (READ, strangler-aware) — see apply_to_ddd note. The
-    # resolved path is also passed as retire_entry(source_path=...) below, so the
-    # STRIP (the write-back that removes the entry) lands on the SAME doc we read —
-    # AND the archive (<stem>-archive.md) is now co-located with that resolved doc
-    # (source_path.parent), not the raw project root (run_f71e5920: the old root
-    # placement created a read/write split-brain that regenerated a 17MB orphan
-    # every decay tick under the pre-migration path).
-    # PATH CONFINEMENT before ANY read, lock, archive, or strip — see the identical
-    # guard in apply_to_ddd and _confined_doc_path's docstring. This sink is the
-    # DESTRUCTIVE one (archive + entry-strip), and its out-of-tree effects are sibling
-    # CREATIONS — an `<stem>-archive.md` co-located with the resolved doc, plus the
-    # `<doc>.md.lock` advisory lock — so an unguarded traversal here littered files
-    # beside a governance file even when the strip itself found no match.
-    doc_path = _confined_doc_path(project_dir, proposal.target_doc)
-    if doc_path is None:
-        logger.warning(
-            "apply_retire_proposal: refused target outside the project tree or not a "
-            "file (%r)",
-            proposal.target_doc,
-        )
-        return "doc_missing"
-
-    # PREVENTION over recovery (run_e9cb7e2a, Gate-2 MED): for a REWRITE, validate the
-    # replacement against the SAME value floor apply_to_ddd enforces — BEFORE we retire
-    # the old entry. Otherwise a floor-rejected replacement would leave a half-state
-    # (old entry archived + stripped, no replacement appended). Make rewrite
-    # all-or-nothing: refuse up-front, fail-loud (client-correctable), retire nothing.
-    if proposal.change_type == "rewrite":
-        _repl = proposal.replacement_content.strip()
-        if _repl and (len(_repl) < MIN_LESSON_LENGTH or not is_quality_lesson(_repl)):
-            return "retire_failed:replacement below value floor (too short / not a lesson)"
-        # The STRUCTURE floor belongs here for the same reason the value floor does.
-        # apply_to_ddd refuses a replacement that would forge document structure, but
-        # it runs AFTER retire_entry has archived+stripped the old entry — so a
-        # refusal there produces exactly the half-state this block exists to prevent
-        # (curated entry gone, nothing appended, status rewrite_partial:not_safe).
-        # Reproduced before this guard existed: a replacement clearing the value floor
-        # but carrying a forged entry bullet deleted the target and landed nothing.
-        # Both predicates must gate the retire, not just the append.
-        if not _is_safe_entry_content(_repl):
-            return "retire_failed:replacement would forge document structure"
-        if not _is_safe_section_name(proposal.target_section):
-            return "retire_failed:target section name is not a plain single-line heading"
-
-    from core.ddd_entry_lifecycle import retire_entry, RetireError
-
-    # Archive to the doc-matched archive (BLOCKER-1: retire_entry defaults to
-    # IMPROVEMENT-archive.md; a TECH.md retire must archive to TECH-archive.md).
-    stem = Path(proposal.target_doc).stem  # "IMPROVEMENT" | "TECH" | ...
-    archive_name = f"{stem}-archive.md"
-
-    # SHARED doc-write lock (run_06350217): retire_entry does a read-modify-STRIP of
-    # doc_path (source_path=), a WRITE — it must hold the SAME <doc>.md.lock every
-    # other writer (apply_to_ddd append, orchestrator decay/auto-apply/llm) uses, or
-    # the strip races a concurrent append → lost update. Before this run, retire was
-    # the one unlocked doc writer (Gate-1 run_06350217). Blocking. Scope is the
-    # read→retire span ONLY — the rewrite-append below calls apply_to_ddd, which
-    # RE-ACQUIRES this same lock, so it MUST run AFTER this `with` exits (else
-    # self-deadlock on the same lock name).
-    from utils.file_lock import md_lock
-    try:
-        with md_lock(doc_path, blocking=True):
-            content = doc_path.read_text(encoding="utf-8")
-            retire_entry(
-                content,
-                proposal.target_title,
-                proposal.target_section,
-                project_dir,
-                archive_name=archive_name,
-                source_path=doc_path,
-                dry_run=False,
-            )
-    except (OSError, UnicodeDecodeError) as e:
-        return f"retire_failed:read_error {type(e).__name__}"
-    except RetireError as e:
-        # Fail-loud: no match / ambiguous / keep-class refused. Surface, don't strip.
-        return f"retire_failed:{str(e)[:120]}"
-
-    if proposal.change_type == "rewrite" and proposal.replacement_content.strip():
-        # Append the corrected entry via the normal safe-append applier. Build an
-        # append-shaped proposal so is_safe_append + the change_type guard pass.
-        replacement = CultivationProposal(
-            target_doc=proposal.target_doc,
-            target_section=proposal.target_section,
-            content=proposal.replacement_content.strip(),
-            source_run_id=proposal.source_run_id,
-            confidence=proposal.confidence,
-            source_stage=proposal.source_stage,
-            change_type="append",
-        )
-        append_status = apply_to_ddd(replacement, project_dir)
-        if append_status in ("applied", "created_section"):
-            return "rewritten"
-        # ROLLBACK, not a status string. Pre-gating the append's refusal REASONS was
-        # the wrong shape: the value floor and the two structure predicates are only
-        # three of them, and a rewrite refused for any OTHER reason still left the
-        # half-state (measured: a replacement duplicating an existing bullet returned
-        # rewrite_partial:duplicate with the target entry archived+stripped and nothing
-        # appended — a targeted deletion primitive carrying no forged content). Every
-        # future refusal reason is covered by restoring the pre-retire bytes instead of
-        # by enumerating reasons. The snapshot is `content`, read under the same lock
-        # the strip held, so it is the exact text retire_entry mutated.
-        try:
-            with md_lock(doc_path, blocking=True):
-                doc_path.write_text(content, encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as e:
-            # Restoration itself failed — the original is still recoverable from the
-            # archive + git, which is what rewrite_partial has always meant.
-            logger.error(
-                "apply_retire_proposal: rewrite append failed (%s) AND rollback failed "
-                "(%s) for %s — original recoverable from %s + git",
-                append_status, type(e).__name__, proposal.target_doc, archive_name,
-            )
-            return f"rewrite_partial:{append_status}"
-        return f"rewrite_refused:{append_status}"
-
-    return "retired"
 
 
 def _log_supersede_delete(
@@ -1799,7 +1569,7 @@ def admission_band(
       • DISCARD — is_noise (machine broadcast / instance-log / fragment).
       • AUTO    — trust=passed AND reused quality checks clean (magnitude + circuit
                   breaker; the doc-whitelist check is DROPPED) AND confidence ≥ the
-                  auto threshold. Retire/rewrite are never auto here (change_type gate).
+                  auto threshold.
       • REVIEW  — everything else: trust∈{failed,n/a}, a hard quality block, a gate
                   error (FAIL-CLOSED — DEC19), or confidence below the auto floor.
     """
@@ -1819,10 +1589,6 @@ def admission_band(
     #            NON-pass (suspect OR noise) → DISCARD (never review — human queue is 0;
     #                      the caller archives the discard so it is recoverable).
     if proposal.passed_adversarial_gate != "passed":
-        # A non-append (retire/rewrite) is destructive+reversible-only-via-archive; it is
-        # never judged for auto here → discard (was review; autonomy-first: no human queue).
-        if proposal.change_type != "append":
-            return ("discard", "non_append")
         # trust=n/a / failed → the self-adversarial refute judge decides (any doc, no zone).
         # FAIL-CLOSED lives inside self_adversarial_judge (error/timeout → "suspect" → discard).
         _verdict, _jr = self_adversarial_judge(
@@ -1834,11 +1600,6 @@ def admission_band(
         # (no protected zone). Fall through to the SAME quality/confidence floor.
         proposal.passed_adversarial_gate = "passed"
         proposal.trust_source = "self_adversarial"
-
-    # destructive changes (retire/rewrite) with trust are still not auto-applied here →
-    # discard (autonomy-first: no human review queue; recoverable via archive).
-    if proposal.change_type != "append":
-        return ("discard", "non_append")
 
     # 3. reused quality checks — but WITHOUT the doc-whitelist (that is what trust
     #    replaces). Fail-closed: any gate error → review, never auto.
@@ -2056,15 +1817,7 @@ def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
     # Skip the write if an AWAITING-human proposal with the same content_signature already
     # exists. Only vs live (pending/escalated) proposals — a terminal (rejected/applied)
     # one is not a live dup, so a genuinely-recurring lesson can re-surface after triage.
-    # Scope the content-dedup to APPEND proposals ONLY (Gate-2 correctness MED,
-    # run_97519f7c): retire/rewrite proposals carry a TEMPLATE content string
-    # (e.g. "Superseded by a newer polarity-flipped lesson (flip=[...])") whose
-    # distinguishing target lives in target_title/section, NOT the content — so two
-    # DISTINCT retire targets flipped by the same polarity pair would collide on a
-    # content-only signature and silently drop the second human-review item. The churn
-    # this dedup targets is append-lesson re-emission; retire/rewrite are exempt.
-    _ct = getattr(proposal, "change_type", "append") or "append"
-    new_sig = content_signature("- " + (proposal.content or "").strip()) if _ct == "append" else ""
+    new_sig = content_signature("- " + (proposal.content or "").strip())
     if new_sig:
         for existing in proposals_dir.glob("*.json"):
             try:
@@ -2363,9 +2116,6 @@ def _cultivate_proposals(
     allowlisted routing section has no matching heading in the doc) instead of
     silently counting it as a benign "rejected". See apply_to_ddd docstring /
     run_45ab67c7 root cause.
-
-    A retire/rewrite proposal is never applied here; it always escalates to the
-    human queue (the approve router applies it).
     """
     applied = 0
     escalated = 0
@@ -2411,14 +2161,6 @@ def _cultivate_proposals(
         # auto-apply and silently defeat the human-gate. DEC19: False > Stale >
         # Imperfect — a wrong DDD entry is worse than a missing one.
         if proposal.source_stage == "conversation":
-            proposal.status = "escalated"
-            write_proposal(proposal, project_dir)
-            escalated += 1
-            continue
-        # A retire/rewrite deletes knowledge: never automatic, always a human
-        # decision. It never goes through the append branch below (apply_to_ddd
-        # hard-refuses it anyway).
-        if proposal.change_type in ("retire", "rewrite"):
             proposal.status = "escalated"
             write_proposal(proposal, project_dir)
             escalated += 1

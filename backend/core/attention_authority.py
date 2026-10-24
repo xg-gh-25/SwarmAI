@@ -230,7 +230,7 @@ def _collect_escalations(workspace_root: Path) -> list[AttentionItem]:
 
 
 def _collect_cultivation(workspace_root: Path) -> list[AttentionItem]:
-    """Pending DDD cultivation proposals (append/retire/rewrite awaiting human) → REVIEW."""
+    """Pending DDD cultivation proposals (notes awaiting a human) → REVIEW."""
     items: list[AttentionItem] = []
     try:
         from core.ddd_cultivation import read_pending_proposals

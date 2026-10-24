@@ -30,7 +30,6 @@ from core.ddd_cultivation import (
     CultivationProposal,
     read_pending_proposals,
     apply_to_ddd,
-    apply_retire_proposal,
     log_application,
     _is_safe_section_name,
 )
@@ -200,28 +199,15 @@ async def approve_proposal(
                 )
             proposal.target_section = target_section
 
-        # Dispatch on change_type (run_b8f10185): append → apply_to_ddd (the additive
-        # path); retire/rewrite → apply_retire_proposal (reversible retire_entry:
-        # archive + dated .bak + identity-strip). This is the ONLY apply path for a
-        # destructive change (an escalated retire the human is approving). No retire
-        # is applied anywhere else: _cultivate_proposals always escalates them.
-        #
-        # OFFLOAD to a worker thread (run_06350217, Gate-2 security): both appliers do
-        # a SYNCHRONOUS fcntl/md_lock acquire + read-modify-write. apply_retire_proposal
-        # now takes a BLOCKING md_lock — running it inline in this async handler would
-        # block the single uvicorn event loop for ALL clients while a background DDD
-        # channel holds the same <doc>.md.lock. Mirror improvement_writeback_hook:318
-        # (asyncio.to_thread) so a blocking flock never runs on the event loop.
+        # OFFLOAD to a worker thread (run_06350217, Gate-2 security): the applier does
+        # a SYNCHRONOUS fcntl/md_lock acquire + read-modify-write; running it inline
+        # would block the single uvicorn event loop for ALL clients while a background
+        # DDD channel holds the same <doc>.md.lock (mirror improvement_writeback_hook).
         import asyncio
-        if proposal.change_type in ("retire", "rewrite"):
-            status = await asyncio.to_thread(apply_retire_proposal, proposal, project_dir)
-            success_states = ("retired", "rewritten")
-        else:
-            # Apply to DDD document (returns a status string, not a bool).
-            # "applied" and "created_section" both mean the lesson landed successfully
-            # (created_section = the whitelisted heading was absent and auto-created).
-            status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
-            success_states = ("applied", "created_section")
+        # "applied" and "created_section" both mean the lesson landed successfully
+        # (created_section = the whitelisted heading was absent and auto-created).
+        status = await asyncio.to_thread(apply_to_ddd, proposal, project_dir)
+        success_states = ("applied", "created_section")
         # Admission root-fix backstop (run_97519f7c): a "duplicate" means the content
         # is ALREADY curated in the doc — the proposal is not a server error, it is a
         # settled no-op that must LEAVE the pending queue (the primary fix is
@@ -248,21 +234,12 @@ async def approve_proposal(
             # internal DDD filesystem structure / section taxonomy to callers — the
             # cultivation router has no auth dependency (adversarial security MED).
             logger.warning(
-                "Cultivation approve failed: proposal %s → %s#%s (change_type: %s, status: %s)",
-                proposal_id, proposal.target_doc, proposal.target_section,
-                proposal.change_type, status,
+                "Cultivation approve failed: proposal %s → %s#%s (status: %s)",
+                proposal_id, proposal.target_doc, proposal.target_section, status,
             )
-            client_detail = {
-                "duplicate": "Proposal content is already present (duplicate).",
-                "no_target": "Retire proposal has no located target entry.",
-            }.get(status, f"Could not apply proposal (status: {status}).")
-            # Gate-2 LOW (run_b8f10185): client-correctable retire outcomes (fail-loud
-            # no-match / ambiguous / keep-class refused / missing target) are 422, not
-            # 500 — they reflect a bad proposal the caller can fix, not a server fault.
-            client_correctable = status == "no_target" or status.startswith("retire_failed:")
             raise HTTPException(
-                status_code=422 if client_correctable else 500,
-                detail=client_detail,
+                status_code=500,
+                detail=f"Could not apply proposal (status: {status}).",
             )
         if status == "created_section":
             logger.warning(

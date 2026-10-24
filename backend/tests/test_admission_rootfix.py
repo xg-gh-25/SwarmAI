@@ -65,30 +65,6 @@ class TestWriteProposalDedup:
             files = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
             assert len(files) == 2
 
-    def test_retire_proposals_are_not_content_deduped(self):
-        """Gate-2 MED: two DISTINCT retire targets with identical template content
-        must BOTH persist (dedup is append-only; retire distinguishing info is in
-        target_title/section, not content)."""
-        from core.ddd_cultivation import CultivationProposal, write_proposal
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            tmpl = "Superseded by a newer polarity-flipped lesson (flip=['never','always']); human decide."
-            p1 = CultivationProposal(
-                target_doc="IMPROVEMENT.md", target_section="What Worked",
-                content=tmpl, source_run_id="run_a", confidence=0.7,
-                change_type="retire", target_title="Entry ONE",
-            )
-            p2 = CultivationProposal(
-                target_doc="IMPROVEMENT.md", target_section="What Worked",
-                content=tmpl, source_run_id="run_b", confidence=0.7,
-                change_type="retire", target_title="Entry TWO",
-            )
-            write_proposal(p1, project_dir)
-            write_proposal(p2, project_dir)
-            files = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert len(files) == 2, "distinct retire targets must not collide on content"
-
     def test_write_proposal_dedup_ignores_terminal_status(self):
         """A REJECTED proposal with same content does NOT block a new write.
 

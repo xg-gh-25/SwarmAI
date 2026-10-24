@@ -365,7 +365,6 @@ class ImprovementWritebackHook:
                     source_run_id=source_run_id,
                     confidence=0.5,
                     source_stage="writeback",
-                    change_type="append",
                 )
                 # UNIFIED GATE (run_0d60e04e C4a): writeback was the ONE DDD ingestion
                 # path that bypassed admission_band — it blind-called apply_to_ddd, so a
