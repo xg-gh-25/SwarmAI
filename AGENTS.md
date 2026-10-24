@@ -578,6 +578,12 @@ to investigate, not a budget to plan around.)
 cd desktop && npm run build:all # Frontend production build (embedded in the .app)
 ```
 
+The step-by-step ops skills for this repo (`s_swarm-build`, `s_swarm-daemon`,
+`s_swarm-release`, `s_swarm-ci`, `s_health-check`, `s_chat-brain-check`) are not built-in
+product skills: they belong to the SwarmAI DDD (`Projects/SwarmAI/4-capabilities/`) and find
+this checkout from the `worktree:` in its `bindings.yaml`. A contributor gets them by importing
+that DDD package.
+
 ## Before You Push — the local quality gate
 
 `main` is the only branch. Push is normal flow (no per-push sign-off), but ONLY when the
@@ -590,7 +596,7 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
    call with an explicit `timeout: 600000`; the 120s default is too short for it. Never
    background it. `./prod.sh build`, `npm run build:all` (it runs `build-backend.sh`
    PyInstaller, `npm install` and `tauri build`) and `build-backend.sh` stay the user's
-   manual step (see `backend/skills/s_swarm-build/INSTRUCTIONS.md`): autonomous work never
+   manual step (see the SwarmAI DDD's `s_swarm-build` skill): autonomous work never
    packages, deploys or restarts the daemon.
 2. **Tests** — at least the affected suites, wrapped with a wall-clock cap:
    `cd backend && perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`

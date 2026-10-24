@@ -3,8 +3,8 @@
 A ZERO-LLM, deterministic snapshot of "is the daemon + its live sessions
 healthy RIGHT NOW". This is the RUNTIME / dynamic-liveness axis — distinct from:
   - s_loops-health      → static self-cognition / memory / governance
-  - s_health-check      → post-build assertion of critical assumptions
-  - s_chat-brain-check  → frontend chat-experience contract
+  - the SwarmAI DDD's s_health-check / s_chat-brain-check → SwarmAI's own build
+    and chat-contract checks (developer tooling, not shipped)
 This probe answers only: daemon up? sessions progressing (not wedged)? RAM under
 budget? deployed binary == expected? any unrecovered failure events in the window?
 

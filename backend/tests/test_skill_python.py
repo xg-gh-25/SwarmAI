@@ -53,12 +53,9 @@ INVOCATION = re.compile(
 EXEMPT = [
     ("s_mcp-builder/INSTRUCTIONS.md", "python -m py_compile"),            # the user's own server
     ("s_mcp-builder/reference/python_mcp_server.md", "python your_server.py"),
-    ("s_chat-brain-check/INSTRUCTIONS.md", "python -m pytest"),           # SwarmAI checkout venv
     ("s_code-review/INSTRUCTIONS.md", "python3 -m ruff"),                 # the reviewed repo's tool
     ("s_memory-distill/SKILL.md", "never use `python3 locked_write.py`"),  # prose
     ("s_self-evolution/SKILL.md", "Never `python3 locked_write.py`"),     # prose
-    ("s_health-check/INSTRUCTIONS.md", "backend/.venv/bin/activate && python3"),
-    ("s_swarm-release/INSTRUCTIONS.md", "cd backend && python scripts/ci_eval_gate.py"),
 ]
 
 

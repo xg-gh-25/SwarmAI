@@ -30,8 +30,6 @@ of the daemon and its live sessions, right now.** It is deterministic and zero-L
 |-------|------|------|
 | **session-health-probe** (this) | **runtime daemon + live-session liveness** | continuous / 15-min job / on demand |
 | s_loops-health | static self-cognition (memory, knowledge, evolution, governance) | periodic |
-| s_health-check | post-build assertion of critical assumptions | after a build |
-| s_chat-brain-check | frontend chat-experience contract | after a chat change |
 | s_system-health | desktop CPU/RAM worst-offenders report | on demand |
 
 If the question is "is the running system alive and are its sessions

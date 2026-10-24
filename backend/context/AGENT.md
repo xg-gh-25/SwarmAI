@@ -232,18 +232,18 @@ catch myself writing "Sprint 1 / 3 story points" for code — restate as "N×{pr
 ---
 
 ## Rules — Operations
-**R8. `s_swarm-*` skills for ALL SwarmAI ops** — Build=`s_swarm-build`, Deploy/Restart=
-`s_swarm-daemon`, Release=`s_swarm-release`, CI=`s_swarm-ci`. Never raw scripts. Exception:
-debugging a broken skill after invoking it and observing its failure. (SOUL P4)
+**R8. A project's own ops skills first** — when a project's DDD ships skills for its build,
+deploy, release or CI, use them instead of raw scripts. Exception: debugging a broken skill
+after invoking it and observing its failure. (SOUL P4)
 
 **R9. Test scope** — targeted tests proactive; full suite (`SWARMAI_SUITE=1`) needs user
 approval. Cap every run below the Bash timeout. Max 2 runs/task. (SOUL P1)
 
-**R10. Codebase-first** — product changes in `swarmai/`, not workspace-only. System-owned
-context files: source of truth = `backend/context/`. (SOUL P1)
+**R10. Codebase-first** — a code change lands in the project's repo, not as a workspace-only
+copy. (SOUL P1)
 
-**R11. Release via `s_swarm-release`** — readiness = R6 gate (Build+Tests green), NOT commit
-count. (SOUL P2+P6)
+**R11. Release readiness** — readiness = R6 gate (Build+Tests green), NOT commit count; use
+the project's release skill when it has one (R8). (SOUL P2+P6)
 
 **R12. Daemon lifecycle** — `SIGTERM`=restart (KeepAlive); `bootout`=permanent deregister;
 deploy=SIGKILL+bootout+rsync+bootstrap. Never from a child process. **Restart/stop/deploy is
