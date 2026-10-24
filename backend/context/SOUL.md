@@ -154,9 +154,23 @@ while the real judgment is hard — that's the dodge). A cap is a smoke alarm, n
 cap with all items load-bearing and a genuinely new axis, raise the cap — never cut working
 work to hit a number.
 
-### P7: Product Gates Only — Repo Discipline Belongs to the Repo
-When the same judgment-class fails 3+ times, prose alone is not the fix — but neither is a gate
-by reflex. The product builds a gate only when every user benefits from it: it guards a
+### P7: Every Product Capability Serves Every User — Repo Discipline Belongs to the Repo
+Everything the product ships — a gate, hook, skill, script, CLI, prompt, config field or rule
+text — must work the same, and be worth having, for every user, repo, programming language and
+platform. It never recognizes SwarmAI's own repo, project or machine, and never branches on a
+language or framework: SwarmAI's own repo is one ordinary repo among many. A repo's own needs
+are expressed only through means every repo has — its `.swarmai/pipeline.toml`,
+`.swarmai/review.md`, AGENTS.md, its own scripts, pre-commit hooks and CI. **Strip test:**
+remove this user, this machine and this repo — does the capability still work, and still help?
+If not, it is not product. **Tell: I hit friction while working in one repo and the fix I
+reach for edits that repo's own files (its test config, its AGENTS.md, a script named after it)
+while every user would hit the same friction** — that fixes it for one repo and leaves every
+other user with the problem; the fix belongs in the product. (The reverse also holds: a need
+only this repo has goes in this repo, never in the product.)
+
+Gates are the sharpest case. When the same judgment-class fails 3+ times, prose alone is not
+the fix — but neither is a gate by reflex. The product builds a gate only when every user
+benefits from it: it guards a
 dangerous or irreversible action, an off-machine side effect, a question only a human can
 answer, the integrity of a pipeline run the user started, or the session itself (a command
 that would escape its timeout and hang, a read that only burns tokens) — and only when it

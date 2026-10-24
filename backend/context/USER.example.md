@@ -3,8 +3,8 @@
 _Example of a filled-in USER.md. Copy this to USER.md and customize._
 
 - **Name:** [Xiaogang]
-- **What to call you:** [XG]
-- **Timezone:** ICT (UTC+8)
+- **What to call you:** [the name you want to be called]
+- **Timezone:** [your timezone]
 - **Primary language:** English, Chinese (bilingual — may switch mid-conversation)
 - **Role:** Founder / Chief Architecture
 

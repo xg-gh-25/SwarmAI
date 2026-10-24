@@ -584,6 +584,10 @@ to investigate, not a budget to plan around.)
 cd desktop && npm run build:all # Frontend production build (embedded in the .app)
 ```
 
+- `backend/pyproject.toml` is the dependency source of truth: run `uv lock` after changing it.
+- In the PyInstaller build `sys.executable` is the app, not Python: import modules directly,
+  never spawn `sys.executable -m …`.
+
 The step-by-step ops skills for this repo (`s_swarm-build`, `s_swarm-daemon`,
 `s_swarm-release`, `s_swarm-ci`, `s_health-check`, `s_chat-brain-check`) are not built-in
 product skills: they belong to the SwarmAI DDD (`Projects/SwarmAI/4-capabilities/`) and find

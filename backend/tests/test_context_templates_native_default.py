@@ -4,7 +4,8 @@
 Every template in CONTEXT_FILES (system files and copy-only-if-missing seeds alike):
 - no wording that makes the pipeline mandatory or review-before-every-commit a rule;
 - no removed gate named as if it still runs;
-- the EVOLUTION seed carries no correction / optimization / competence entries.
+- the EVOLUTION seed carries no correction / optimization / competence entries;
+- no fact that holds for one repo or one user only (SOUL P7 strip test).
 """
 import re
 from pathlib import Path
@@ -42,3 +43,26 @@ def test_no_template_makes_the_pipeline_or_commit_review_mandatory():
 def test_evolution_seed_has_no_personal_entries():
     text = (CTX / "EVOLUTION.md").read_text(encoding="utf-8")
     assert not re.search(r"^### [COK]\d{3}\b", text, re.MULTILINE)
+
+
+# Facts of the SwarmAI repo (its suite switch, its dependency tool, its pytest config) or of
+# one user (a timezone, a home path). They belong in that repo's AGENTS.md or that user's
+# USER.md; in a product template they tell every other user something false. A reviewed list:
+# it catches these known tokens, not every possible one.
+ONE_REPO_OR_USER = [
+    r"SWARMAI_SUITE",
+    r"\buv lock\b",
+    r"pyproject\.toml",
+    r"SwarmAI-Workspace",
+    r"/Users/\w+",
+    r"\bICT\b",
+    r"UTC\+8",
+]
+
+
+def test_no_template_carries_one_repo_or_one_user_facts():
+    texts = list(_templates()) + [("USER.example.md",
+                                   (CTX / "USER.example.md").read_text(encoding="utf-8"))]
+    hits = [(name, pat) for name, text in texts for pat in ONE_REPO_OR_USER
+            if re.search(pat, text)]
+    assert not hits, hits

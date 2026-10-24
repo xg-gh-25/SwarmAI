@@ -130,7 +130,10 @@ EVALUATE). Nothing about the pipeline may block native work. (SOUL P4+P5)
 **R2. Review what the change needs.** After native work and its tests, I decide whether the
 change needs review experts and which (the expert catalog: correctness, security / red-team,
 concurrency, state-machine, api-contract, integration, performance, operational, ux-test, …).
-I run them as sub-agents, verify each finding against the source (a finding is a LEAD, not a
+I run them with the `s_expert-review` skill (its catalog, the `pipeline-expert` agent and
+the product's expert prompts; never an ad-hoc reviewer prompt), at most two rounds: a HIGH
+still open after the second goes to the user with the question whether the mechanism should
+exist at all (P9). I verify each finding against the source (a finding is a LEAD, not a
 verdict), fix, decide whether a re-review is warranted, and report who reviewed, what they
 found, what I fixed and what risk remains. Small changes and docs usually need none. A repo's
 own guidance can ask for more (e.g. "review before every commit" in its AGENTS.md): when I work
@@ -142,7 +145,9 @@ ends the rounds — commit, and list what is still open in the commit message. (
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit
 (6) calling-context audit if extracting (7) shape-change audit (8) identity audit: "the same X"
 (block, turn, row) is decided by an id its producer assigns, never by content (text prefix,
-length, "the longer copy wins"). (API-reading → R15.) (SOUL P1)
+length, "the longer copy wins") (9) generality audit (SOUL P7 strip test): a product capability
+works for any user, repo, language and platform, and friction every user would hit is fixed in
+the product, never in the repo where I noticed it. (API-reading → R15.) (SOUL P1+P7)
 
 **R4. Extract ≠ Extend** — separate commits. (SOUL P2)
 
@@ -213,16 +218,23 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   ceiling to PERMIT a longer hang — fix the leak.
 - **Images:** read an image once; re-reading an unchanged one only burns tokens
   (`image_read_dedup_guard`; a Read with offset/limit still goes through).
-- **Shared checkout:** if another live session has uncommitted changes in the repo I am
-  about to change (a `[Shared checkout]` note names them), work in my own worktree instead
-  and say so: `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <repo>`, commit
-  there, then `land` and `remove` it. Otherwise, or when the user says to stay, edit in place.
-- **Pytest:** MUST wrap in a wall-clock cap shorter than the Bash timeout (`perl -e 'alarm 100;
-  exec @ARGV' … --timeout=60`, or `gtimeout` if present): a run still going at the timeout is
-  moved to the background and returns nothing. A per-test `--timeout` doesn't count. Run
-  serial: `-n N` is opt-in, and its workers outlive the alarm and keep the command running.
-  Never background, smallest scope (a few files per run), max 2 runs/task; full suite needs user approval. (A habit, not
-  a gate: nothing denies an uncapped run, so keep it.)
+- **Worktree:** edit in place by default. Use my own worktree, and say so, when another live
+  session has uncommitted changes in the repo (a `[Shared checkout]` note names them), when
+  the repo's own guidance asks for one, or when the user says so — and then always through the
+  tool: `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create <repo>`, commit there,
+  `land` (rebases, refuses a branch that would put back someone else's change, then
+  fast-forwards), `remove`. Never hand-roll `worktree add` / `rebase` / `merge --ff-only`: that
+  skips the revert check, and with other sessions live every history rewrite asks the user for
+  an approval the tool never needs.
+- **Tests (any language, any runner):** wrap every test command in a wall-clock cap shorter
+  than the Bash timeout (macOS/Linux: `perl -e 'alarm 100; exec @ARGV' <command>`, or
+  `timeout` / `gtimeout`): a run still going at the Bash timeout is moved to the background
+  and returns nothing, and a runner's own per-test timeout doesn't count. Run serially unless
+  the user asks otherwise: parallel workers can outlive the cap and keep the command running.
+  Never background, smallest scope (a few files per run), max 2 runs/task; the full suite needs
+  user approval. **The exit code and the runner's own failure list decide the result, never
+  whether a summary line appeared:** a repo's config or one extra quiet flag can hide the
+  summary, so empty output is not a pass. (A habit, not a gate: nothing denies an uncapped run.)
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
   system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
   deploy / scheduled only. Prose-enforced (no per-command eval hook — running eval is a
@@ -244,8 +256,8 @@ catch myself writing "Sprint 1 / 3 story points" for code — restate as "N×{pr
 deploy, release or CI, use them instead of raw scripts. Exception: debugging a broken skill
 after invoking it and observing its failure. (SOUL P4)
 
-**R9. Test scope** — targeted tests proactive; full suite (`SWARMAI_SUITE=1`) needs user
-approval. Cap every run below the Bash timeout. Max 2 runs/task. (SOUL P1)
+**R9. Test scope** — targeted tests proactive; the full suite (however the repo's own AGENTS.md
+says to run it) needs user approval. Cap every run below the Bash timeout. Max 2 runs/task. (SOUL P1)
 
 **R10. Codebase-first** — a code change lands in the project's repo, not as a workspace-only
 copy. (SOUL P1)
@@ -440,9 +452,8 @@ failing 3+×, a rule contradicting observed behavior/a directive, or stale conte
 
 ## Environment Defaults (operational facts)
 - Backend health `GET /health` :18321 (daemon) / :8000 (dev). `nc -z` for ports.
-- pyproject.toml = dep SSOT; `uv lock` after changes. PyInstaller: `sys.executable` ≠ Python,
-  use direct imports. macOS GUI PATH → `zsh -lic`. Sandbox: `pgrep`/`ps`/`top` blocked.
-- Time: user local (ICT/UTC+8), never UTC. pytest: serial by default (`-n 0` in pyproject), `--timeout=60`, wall-clock wrap.
+- macOS GUI PATH → `zsh -lic`. Sandbox: `pgrep`/`ps`/`top` blocked.
+- Time: the user's local timezone (USER.md), never UTC.
 
 ## Safety (behavioral invariant)
 - Never exfiltrate private data; never destructive commands (`rm -rf`, drop table) without
