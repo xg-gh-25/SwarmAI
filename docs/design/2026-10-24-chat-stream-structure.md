@@ -120,6 +120,24 @@ Full inventory (both reviews):
 - Why this is Track A: it removes a second source without any new schema, and it is the
   precondition for ever letting the record win (Track B).
 
+**Scope narrowed (Gawan, 2026-10-24, after A1).** Track B is conditional, so A2 is no
+longer justified as its precondition: each row must stand on what the user loses today.
+Built: only the rows where a reload loses something the user needs.
+
+| Row | Decision | Why |
+|---|---|---|
+| backend turn errors | **build**: a persisted `turn_notice` (reason `error`, a stable `code`, one line) yielded inside the turn before `turn_end`; errors raised outside a turn stay request-level | a reload loses why the turn stopped (the same class as `gave_up`, already persisted) |
+| `turn_limit_reached` | **build**: a persisted `turn_notice` (reason `turn_limit`) | a reload loses "send a message to continue"; rare (0 in the current log), the mechanism exists |
+| `*Stopped*` text | not built | not rendered as text: `turnView` reads it only as the stopped flag, which the receipt also sets (`turnView.ts` STOP_MARKER_RE); nothing visible to gain |
+| transport error text | not built | the "Not sent · Retry" and reconnecting surfaces already carry it; a network error is not conversation content, so losing it on reload is correct |
+| `Session resumed` / `Context refreshed` | not built | separators only; no loss on reload |
+| `context_compacting` record | not built | transient by nature |
+| escalation | exempt (decision 5) | |
+
+The full-equality guard above is therefore not built; the A4 cases that ship with A2 are
+the ones guarding the D4 fix (block keys, a repeated start, a retry into the same bubble)
+plus the two new notice reasons.
+
 ### A3. One render tree (R4), within a bubble — CONDITIONAL
 Gate: after A0-A2 ship, a remaining end-of-turn jump or remount is observed. The visible
 symptom (the answer moving left) was fixed by `d9c0e0d96`; the move is now vertical
@@ -191,8 +209,12 @@ handler stays) and S3 (reconcile by segment from the record, delete the length r
 1. Split: A0, A1, A2, A4 now. A3 only if an end-of-turn jump remains after A2. Track B
    (durable turn record, one delivery path, record-wins reconcile) only if A0's logs or
    a report show live-only divergence.
-2. A2: Stop shows the receipt, no `*Stopped*` text; transport errors become a notice on
-   the user's message; turn-limit and backend turn errors become persisted notices.
+2. A2 (narrowed after A1, see A2's scope table): backend turn errors and turn-limit
+   become persisted `turn_notice`s; `*Stopped*`, transport-error text, the resumed /
+   refreshed separators and the compacting record stay as they are (no user loss).
+   A4 ships only the block-key / repeated-start / same-bubble-retry cases and the two
+   notice reasons; the WebKit script waits for the next visual change.
+   First step for Gawan: rebuild, so A0's logs collect the evidence for A3 / Track B.
 3. A3: folded rows stay unmounted; their UI state moves to the choice map / controllers.
 4. A4: the WebKit geometry check is manual, not a merge gate.
 5. Escalation stays local-only (exempt) until it has its own design.
