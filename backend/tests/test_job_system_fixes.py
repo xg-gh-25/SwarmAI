@@ -335,43 +335,6 @@ class TestNotifyJobPreFlight:
         assert "not enabled" in result.summary
 
 
-# ── AC7: JSONL tail-read ────────────────────────────────────────────
-
-class TestBriefingTailRead:
-    """Briefing should only read the tail of JSONL, not the full file."""
-
-    def test_briefing_reads_last_jobs_only(self, tmp_path):
-        """build_session_briefing_data should work with large JSONL
-        but only return recent (24h) entries."""
-        from core.proactive_intelligence import build_session_briefing_data
-
-        # Set up workspace structure
-        ws = tmp_path / "workspace"
-        (ws / ".context").mkdir(parents=True)
-        (ws / "Knowledge" / "DailyActivity").mkdir(parents=True)
-        (ws / "Knowledge" / "JobResults").mkdir(parents=True)
-        (ws / ".context" / "MEMORY.md").write_text("## Open Threads\n### P0\n_(None)_\n")
-
-        # Write 200 JSONL lines — only last 5 within 24h
-        jsonl_path = ws / "Knowledge" / "JobResults" / ".job-results.jsonl"
-        lines = []
-        for i in range(200):
-            ts = datetime.now(timezone.utc) - timedelta(hours=200 - i)
-            lines.append(json.dumps({
-                "job_id": f"job-{i}", "job_name": f"Job {i}",
-                "run_at": ts.isoformat(), "status": "success",
-                "summary": f"Result {i}", "duration_seconds": 1,
-            }))
-        jsonl_path.write_text("\n".join(lines) + "\n")
-
-        result = build_session_briefing_data(ws)
-        # Should return <= 5 jobs (24h window)
-        assert len(result["jobs"]) <= 5
-        # All returned jobs should be within 24h
-        for job in result["jobs"]:
-            assert job["status"] == "success"
-
-
 # ── Auth-failure fallback mechanism ───────────────────────────────────
 
 class TestAuthFailureFallback:

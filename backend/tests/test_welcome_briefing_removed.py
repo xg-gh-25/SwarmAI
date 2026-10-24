@@ -21,3 +21,24 @@ def test_no_briefing_executor_pool():
     from core import executors
 
     assert "briefing" not in executors._POOL_SPECS
+
+
+def test_welcome_briefing_data_builder_is_gone():
+    """The structured Welcome briefing (and everything only it used) is deleted;
+    the session-start prompt briefing stays."""
+    import core.proactive_intelligence as pi
+
+    for name in (
+        "build_session_briefing_data", "get_focus_keywords", "_extract_working_items",
+        "_extract_jobs_summary", "_tail_read_lines", "_extract_report_field",
+        "_extract_report_confidence", "_extract_first_heading", "_detect_content_media_type",
+    ):
+        assert not hasattr(pi, name), name
+    assert callable(pi.build_session_briefing)
+
+
+def test_no_briefing_slack_formatter():
+    """No job uses notify source 'briefing'; its formatter read the deleted builder."""
+    import jobs.executor as ex
+
+    assert not hasattr(ex, "_format_briefing_slack_message")

@@ -77,9 +77,12 @@ emoji.
 
 - `core.proactive_intelligence.build_session_briefing` (the session-start prompt
   briefing) is a different function and is untouched.
-- `build_session_briefing_data` loses its only caller. Deleting it and its helpers
-  is a separate step (it has its own tests and shares helpers with the prompt
-  briefing); listed as a follow-up, not done here.
+- **Follow-up done (2026-10-24):** `build_session_briefing_data` and everything
+  only it used are deleted too — `_extract_working_items`, `_extract_jobs_summary`,
+  `_tail_read_lines`, the report/heading/media helpers, `get_focus_keywords` (only
+  test mocks referenced it), and the notify-job `source: briefing` Slack formatter
+  (`jobs/executor._format_briefing_slack_message`; no system or user job used that
+  source). The Signal Digest Slack path and `select_signals` stay.
 
 ## Acceptance tests
 

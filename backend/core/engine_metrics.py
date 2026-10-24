@@ -422,9 +422,9 @@ def _compute_engine_level(ws_path: Path) -> dict[str, Any]:
         "growth_metrics_dashboard": False,
     }
 
-    # Check proactive gap detection — look for the capability_gaps function
+    # Check proactive gap detection — the session-start briefing builder
     try:
-        from core.proactive_intelligence import build_session_briefing_data
+        from core.proactive_intelligence import build_session_briefing  # noqa: F401
         l3_features["proactive_gap_detection"] = True
     except ImportError:
         pass

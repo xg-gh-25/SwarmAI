@@ -5,8 +5,8 @@ ONLY content that helps the agent make THIS turn's judgment. Per the SwarmAI DDD
 "System-prompt purity" invariant (XG directive, 2026-08-01):
 
   (1) filesystem-ONLY as data source — NO DB/sqlite/eval_service on the assembly path
-  (2) NO dashboard/feed/status-board signals — those belong to the Welcome Screen
-  (3) the briefing is DECOUPLED from build_session_briefing_data
+  (2) NO dashboard/feed/status-board signals — those belong to their own surfaces
+  (3) the briefing is DECOUPLED from any dashboard/feed builder
   (4) don't accrete arbitrary signals into the system prompt over time
 
 An earlier cut (run_a16d61ad) removed the feed sections' OUTPUT (tokens) but LEFT their
@@ -15,8 +15,8 @@ per-message assembly path — build_session_briefing ran 99s under concurrent-se
 contention. This run removes the I/O: the briefing keeps ONLY the Suggested-focus section
 (sourced purely from MEMORY.md + DailyActivity) and the feed/DB/eval helpers are deleted.
 
-The STRUCTURED twin ``build_session_briefing_data`` (frontend Welcome Screen) is the correct
-home for feed data and is UNCHANGED — these tests assert that split holds.
+(The structured Welcome twin ``build_session_briefing_data`` was deleted with the
+Welcome briefing — docs/design/welcome-screen-v2.md.)
 
 Methodology: TDD RED→GREEN. Source-level assertions (the removed sections must not be
 appended, the DB/eval calls must not be reachable) + a live-render regression guard.
@@ -217,18 +217,3 @@ class TestBriefingStillRendersEndToEnd:
         assert "len(signal_lines)" not in src, "trailing log references deleted local signal_lines"
         assert "learning_insight else" not in src, "trailing log references deleted local learning_insight"
         assert "len(briefing) // 4" not in src, "stale len//4 estimator still in briefing (use estimate_tokens)"
-
-
-class TestStructuredTwinUnchanged:
-    """build_session_briefing_data (Welcome Screen) keeps feed data — dashboard is its right home."""
-
-    def test_data_twin_still_builds_feed_sections(self):
-        src = inspect.getsource(pi.build_session_briefing_data)
-        assert "signal" in src.lower() or "job" in src.lower(), (
-            "build_session_briefing_data must remain the feed-data consumer (frontend dashboard)."
-        )
-
-    def test_data_twin_import_still_resolves(self):
-        # The twin must still be importable + callable after helper deletions
-        # (it must not depend on any deleted helper).
-        assert callable(pi.build_session_briefing_data)

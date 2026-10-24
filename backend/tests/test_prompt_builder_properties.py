@@ -370,22 +370,17 @@ class TestEvolutionUnconditionalLoad:
         and its `_detect_active_coding_project` gate were REMOVED (PUSH→PULL). The
         `coding` param is retained for caller compatibility but no longer changes the
         briefing — code context is now PULL-only via recall's codeintel leg, never
-        injected at session start. `get_focus_keywords` is still mocked empty to keep
-        the build hermetic to `workspace`."""
+        injected at session start."""
         import asyncio
         import unittest.mock as mock
 
         builder = _make_builder()
         agent_config: dict = {}
-        with mock.patch(
-            "core.proactive_intelligence.get_focus_keywords",
-            return_value="",
-        ):
-            asyncio.run(builder.build_system_prompt(
-                agent_config=agent_config,
-                working_directory=str(workspace),
-                channel_context=channel_context,
-            ))
+        asyncio.run(builder.build_system_prompt(
+            agent_config=agent_config,
+            working_directory=str(workspace),
+            channel_context=channel_context,
+        ))
         return agent_config
 
     def test_evolution_loaded_on_noncoding_desktop(self, tmp_path):
@@ -463,13 +458,10 @@ class TestEphemeralBudgetCeiling:
 
         builder = _make_builder()
         agent_config: dict = {}
-        with mock.patch(
-            "core.proactive_intelligence.get_focus_keywords", return_value="",
-        ):
-            asyncio.run(builder.build_system_prompt(
-                agent_config=agent_config,
-                working_directory=str(workspace),
-            ))
+        asyncio.run(builder.build_system_prompt(
+            agent_config=agent_config,
+            working_directory=str(workspace),
+        ))
         return agent_config
 
     def test_oversized_ephemeral_warns_and_does_not_truncate(self, tmp_path, caplog):
@@ -535,14 +527,11 @@ class TestSystemPromptFaultIsolation:
         import unittest.mock as mock
         builder = _make_builder()
         agent_config: dict = {}
-        with mock.patch(
-            "core.proactive_intelligence.get_focus_keywords", return_value="",
-        ):
-            asyncio.run(builder.build_system_prompt(
-                agent_config=agent_config,
-                working_directory=str(workspace),
-                **kwargs,
-            ))
+        asyncio.run(builder.build_system_prompt(
+            agent_config=agent_config,
+            working_directory=str(workspace),
+            **kwargs,
+        ))
         return agent_config
 
     def _full(self, cfg):
@@ -605,10 +594,9 @@ class TestSystemPromptFaultIsolation:
         ):
             import asyncio
             agent_config: dict = {}
-            with mock.patch("core.proactive_intelligence.get_focus_keywords", return_value=""):
-                asyncio.run(cfg_builder.build_system_prompt(
-                    agent_config=agent_config, working_directory=str(tmp_path),
-                ))
+            asyncio.run(cfg_builder.build_system_prompt(
+                agent_config=agent_config, working_directory=str(tmp_path),
+            ))
         full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "") or \
                (agent_config.get("system_prompt") or "")
         for hdr in self._CORE_HEADERS:
@@ -722,10 +710,9 @@ class TestSystemPromptFaultIsolation:
         import unittest.mock as mock
         builder = _make_builder()
         agent_config: dict = {"_context_degraded": "core_context_failed: stale from prior build"}
-        with mock.patch("core.proactive_intelligence.get_focus_keywords", return_value=""):
-            asyncio.run(builder.build_system_prompt(
-                agent_config=agent_config, working_directory=str(tmp_path),
-            ))
+        asyncio.run(builder.build_system_prompt(
+            agent_config=agent_config, working_directory=str(tmp_path),
+        ))
         # call #2 succeeded (real template workspace) → stale flag must be gone
         assert agent_config.get("_context_degraded") is None, \
             "stale degraded flag survived a successful rebuild (resume-fallback false-positive)"
@@ -778,14 +765,11 @@ class TestTerminalDataBoundary:
         import unittest.mock as mock
         builder = _make_builder()
         agent_config: dict = {}
-        with mock.patch(
-            "core.proactive_intelligence.get_focus_keywords", return_value="",
-        ):
-            asyncio.run(builder.build_system_prompt(
-                agent_config=agent_config,
-                working_directory=str(workspace),
-                **kwargs,
-            ))
+        asyncio.run(builder.build_system_prompt(
+            agent_config=agent_config,
+            working_directory=str(workspace),
+            **kwargs,
+        ))
         return agent_config
 
     def _full(self, cfg):
@@ -921,11 +905,7 @@ class TestContextLoadOffEventLoop:
             # build_system_prompt imports ContextDirectoryLoader locally from
             # core.context_directory_loader, so patching it on that module is the
             # binding the function resolves at call time.
-            with mock.patch.object(cdl_mod, "ContextDirectoryLoader", _SpyLoader), \
-                 mock.patch(
-                     "core.proactive_intelligence.get_focus_keywords",
-                     return_value="",
-                 ):
+            with mock.patch.object(cdl_mod, "ContextDirectoryLoader", _SpyLoader):
                 await builder.build_system_prompt(
                     agent_config=agent_config,
                     working_directory=str(tmp_path),
@@ -985,14 +965,11 @@ class TestDefaultBuilderSplit:
 
         builder = _make_builder()
         agent_config: dict = {}
-        with mock.patch(
-            "core.proactive_intelligence.get_focus_keywords", return_value="",
-        ):
-            out = asyncio.run(builder.build_default_system_prompt(
-                agent_config=agent_config,
-                working_directory=str(workspace),
-                editor_context=editor_context,
-            ))
+        out = asyncio.run(builder.build_default_system_prompt(
+            agent_config=agent_config,
+            working_directory=str(workspace),
+            editor_context=editor_context,
+        ))
         return out
 
     def test_default_builder_returns_str_with_core_sections(self, tmp_path):
@@ -1033,8 +1010,6 @@ class TestDefaultBuilderSplit:
         builder = _make_builder()
         agent_config: dict = {}
         with mock.patch(
-            "core.proactive_intelligence.get_focus_keywords", return_value="",
-        ), mock.patch(
             "core.proactive_intelligence.build_session_briefing",
             return_value="## EPHEMERAL_BRIEFING_MARKER\nlive briefing content",
         ):

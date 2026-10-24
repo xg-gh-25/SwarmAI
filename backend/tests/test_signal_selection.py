@@ -1,6 +1,6 @@
 """Tests for the shared signal denoising+ranking function (run_44342b40).
 
-The Slack "Signal Digest" and the Welcome Page signals card must apply the SAME
+The Slack "Signal Digest" must apply the shared
 denoising (feed exclusion / trending split / per-feed cap / 48h freshness /
 final_score sort). This module tests the single source of truth,
 ``backend/jobs/signal_selection.py::select_signals``, plus the two callers'
@@ -12,8 +12,7 @@ with no filters) and pass after convergence.
 
 Covers:
   AC1  single source — the 4 denoising constants live ONLY in signal_selection.py
-  AC2  both callers migrated — Welcome + Slack import & call select_signals
-  AC3  Welcome byte-identical — build_session_briefing_data signals unchanged
+  AC2  the Slack caller imports & calls select_signals (the Welcome caller is gone)
   AC4  Slack denoise — 0 eastmoney, <=3 reference-commits, final_score order
   AC5  Slack render — flat (no per-feed headers), zh items grouped, no dropped items
 """
@@ -251,47 +250,6 @@ class TestSelectSignalsCore:
         assert len(out["signals"]) == 3
         # good (1.5) ranks above the two coerced-to-0 items
         assert out["signals"][0]["title"] == "good"
-
-
-# ─────────────────────────── AC3: Welcome byte-identical ───────────────────────────
-
-class TestWelcomePreserved:
-    """build_session_briefing_data signals must be unchanged by the refactor.
-
-    The prior contract (test_welcome_signal_cleanup.py) is re-verified here
-    against the shared function to prove convergence didn't regress Welcome.
-    """
-
-    def _write_digest(self, tmp_path, items):
-        ctx = tmp_path / ".context"
-        ctx.mkdir(exist_ok=True)
-        (ctx / "MEMORY.md").write_text("## Open Threads\n_(None)_\n", encoding="utf-8")
-        sig_dir = tmp_path / "Services" / "signals"
-        sig_dir.mkdir(parents=True, exist_ok=True)
-        now = _fresh()
-        for it in items:
-            it.setdefault("fetched_at", now)
-        digest = {"generated_at": now, "signals_count": len(items), "items": items}
-        (sig_dir / "signal_digest.json").write_text(json.dumps(digest), encoding="utf-8")
-
-    def test_welcome_excludes_eastmoney_and_caps_commits(self, tmp_path):
-        from core.proactive_intelligence import build_session_briefing_data
-        self._write_digest(tmp_path, _mixed_items())
-        result = build_session_briefing_data(str(tmp_path))
-        signals = result.get("signals", [])
-        feeds = [s.get("feedId") for s in signals]
-        assert "eastmoney-market" not in feeds
-        assert sum(1 for f in feeds if f == "reference-commits") <= 3
-        assert "china-trending" not in feeds
-        # zh AI signal (non-trending) still surfaces
-        assert "国产大模型发布" in [s.get("title") for s in signals]
-
-    def test_welcome_hot_news_gets_trending(self, tmp_path):
-        from core.proactive_intelligence import build_session_briefing_data
-        self._write_digest(tmp_path, _mixed_items())
-        result = build_session_briefing_data(str(tmp_path))
-        hot_titles = [h.get("title") for h in result.get("hotNews", [])]
-        assert "微博热搜第一" in hot_titles
 
 
 # ─────────────────────────── AC4/AC5: Slack denoise + render ───────────────────────────

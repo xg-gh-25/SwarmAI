@@ -1,16 +1,17 @@
 """Shared signal denoising + ranking — the SINGLE source of truth.
 
-Both the Welcome Page signals card (``core.proactive_intelligence.
-build_session_briefing_data``) and the Slack "Signal Digest" notification
-(``jobs.executor._format_signal_digest_message``) read the same
-``Services/signals/signal_digest.json`` and MUST apply identical denoising so
-they never drift apart again (they did: the Slack path used to re-sort by the
+The Slack "Signal Digest" notification
+(``jobs.executor._format_signal_digest_message``) reads
+``Services/signals/signal_digest.json`` and applies this denoising. (The Welcome
+Page signals card was the second consumer; it was removed with the Welcome
+briefing, design docs/design/welcome-screen-v2.md.) Before this module the Slack
+path re-sorted by the
 capped ``relevance_score`` with no feed exclusion / no per-feed cap / no 48h
-cutoff / no china-trending split — producing junk and an unfriendly structure).
+cutoff / no china-trending split — producing junk and an unfriendly structure.
 
 This module owns the ONLY copy of the denoising constants and the pure
-``select_signals`` function. Callers keep their own DISPLAY shaping (Welcome
-card fields vs Slack mrkdwn) — shared denoising, separate presentation.
+``select_signals`` function. Callers keep their own DISPLAY shaping (Slack
+mrkdwn) — shared denoising, separate presentation.
 
 Design notes:
   * PURE — no I/O. Each caller reads the JSON and passes ``items`` in.

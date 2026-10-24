@@ -494,14 +494,13 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
 def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     """Write Services/signals/signal_digest.json in the schema L4 expects.
 
-    L4 consumer (proactive_intelligence.build_session_briefing_data) expects:
+    Consumers (the Slack Signal Digest, the session briefing's signal
+    highlights, the signal→DDD bridge) expect:
       { "items": [{ "fetched_at", "relevance_score", "title", "summary",
                      "source", "urgency", "feed_id", "lang", "platform",
                      "region" }] }
 
-    The briefing builder routes items by feed_id: china-trending → hotNews
-    section, everything else → signals section. Items missing feed_id are
-    invisible to both sections.
+    Items are routed by feed_id: china-trending is split from the rest.
 
     Merge strategy: new scored_items replace old items by title, stale items
     are evicted by age, and the result is capped at 50.
