@@ -150,6 +150,12 @@
   },
   "chat": {
     "title": "对话",
+    "welcome": {
+      "needsYou": "需要你",
+      "openAll": "全部打开",
+      "nothing": "现在没有需要你决定的事",
+      "more": "需要你那边还有 {{n}} 项"
+    },
     "placeholder": "输入消息...",
     "streamingPlaceholder": "等待回复中...",
     "selectAgent": "选择 Agent",

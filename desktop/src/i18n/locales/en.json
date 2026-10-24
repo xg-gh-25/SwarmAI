@@ -150,6 +150,12 @@
   },
   "chat": {
     "title": "Chat",
+    "welcome": {
+      "needsYou": "Needs you",
+      "openAll": "Open all",
+      "nothing": "Nothing needs your decision right now",
+      "more": "{{n}} more in Needs You"
+    },
     "placeholder": "Type a message...",
     "streamingPlaceholder": "Waiting for response...",
     "selectAgent": "Select Agent",
