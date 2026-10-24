@@ -237,6 +237,22 @@ native 默认在用户的 checkout 里原地改（P1：和普通 CLI 写代码�
 - 用户随时可以说"用 worktree"。
 - 实现复用 pipeline 的 `run_worktree`（建立、依赖软链按 `.swarmai/pipeline.toml` 的 `[worktree] link`、清理），并在 AGENT.md 写明判断规则；"另一个 session 有未提交改动"的检测放在 S4b，和 P7 清理一起做。
 - SwarmAI 仓库"总是在自己的 worktree 里改"的规矩照旧写在它自己的 AGENTS.md 里。
+### 3.9 P7 清单：产品代码里认 SwarmAI 的地方（S4b，2026-10-24 盘点）
+
+盘点方法：在 `backend/` 的产品代码（522 个 `.py`，排除 tests、skills、templates）里搜 `"SwarmAI"`、`Projects/SwarmAI`、`SWARMAI_ROOT`、`_swarmai_root`、`_source_repo_root`、`source_repo`、`worktree_mode` 和写死的 checkout 路径，逐处读代码归类。
+
+| 类 | 位置 | 处理 |
+|---|---|---|
+| A. 产品名本身（允许的例外） | `config_settings.app_name`、数据目录名（`runtime_paths`、`desktop_main` 的日志目录）、`SWARMAI.md` 这个系统认知文件的节名、`ddd_packager` 的隐私脱敏正则、docstring 里的示例路径 | 不改，列入结构测试的例外清单 |
+| A'. seed 默认项目（允许的例外） | `swarm_workspace_manager.DEFAULT_PROJECT_NAME`、`project_registry.SWARMAI`、`.gitignore` 里的 `!Projects/SwarmAI/` | 不改：每个用户的工作区都有这个默认项目，行为对所有人一样 |
+| B. 通用功能把"默认项目"写成字面量 | `lifecycle_manager:1368`（run 元数据缺 project 时）、`context_health_hook:1050,2290`、`daily_activity_hook:416`、`ddd_cultivation._classify_lesson`、`code_intel_feed` 三个默认参数、`signal_ddd_bridge`、`skill_proposer:393`、`persist_routing:265`、`routers/cultivation.py` 四个默认 query、`routers/eval.py:316,379`、`eval_service:1730` | 改成通用：能知道真实项目的地方用真实项目（run 元数据、请求参数、改动所在仓库绑定的项目）；不知道的地方统一引用 `DEFAULT_PROJECT_NAME`，不再到处写字面量 |
+| C. 只在开发 SwarmAI 本身时才有意义（假设 SwarmAI 源码仓库在本机） | `engine_metrics._find_swarmai_root` + "新 backend 模块 -> SwarmAI TECH.md"（7 处）、`hooks/code_change_feed`（写死 `SwarmAI-Workspace/swarmai` 路径、`load_project_graph("SwarmAI")`）、`ddd_orchestrator._MANUAL_WATCH_PATHS`（AIDLC、SwarmAI 两份写死的文件列表）+ `_find_swarmai_root` + `~/Desktop/SwarmAI-Workspace/swarmai`、`ddd_self_audit._source_repo_for`（只认 SwarmAI）、`context_injector._swarmai_root`（按后端源码位置剥路径）、`security_hooks._source_repo_root`（`_repo_relative`）、`jobs/handlers/swarmai_monthly_report`（系统 job） | 改成通用：项目对应的代码仓库一律从该项目 `bindings.yaml` 的 code-repo 绑定读取（已有的通用机制），不再找"SwarmAI 根目录"；写死的 watch 列表删掉，改为看绑定仓库的全部改动；路径剥离改为剥"该路径所在的 git 仓库根"。`swarmai_monthly_report` 改为按项目的通用月报，或删除（待 XG 定） |
+| D. 只服务 SwarmAI 仓库的 hook（r10 已定删除） | `inclusive_term_guard`、`design_lint_guard`、`change_triggered_eval`、`session_checkpoint` 里写死的 pytest 提醒 | 从 `hook_builder` 删除；SwarmAI 仓库用自己的 `scripts/lint_*.py` + pre-commit + CI 接住 |
+| E. S6 随 runner 一起删 | `utils/source_repo.py`、`pipeline_command` / `run_owner_gate` / `worktree_write_gate` 里的旧脚本形式、`SWARM_WORKTREE_MODE` | 按 r14 留到 S6 |
+| F. SwarmAI 仓库自己的开发脚本 | `backend/scripts/` 下的 `refresh_ai_docs`、`update_convergence`、`ci_eval_gate`、`artifact_cli release-gate`、`eval_runner` 等的 `--project SwarmAI` 默认值 | 不是运行时产品代码，属于 P7.2 允许的"仓库自己的脚本"，不改 |
+
+S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
+
 
 ### 3.4 gate：只保留产品级的
 
