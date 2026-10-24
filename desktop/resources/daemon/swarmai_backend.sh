@@ -1,8 +1,10 @@
 #!/bin/bash
 # SwarmAI Backend Daemon — wrapper script for launchd
 #
-# Runs the PyInstaller-built backend binary from ~/.swarm-ai/daemon/.
-# This binary is deployed automatically by the Tauri desktop app on first launch.
+# Runs the backend version ~/.swarm-ai/runtime/current names
+# (~/.swarm-ai/runtime/<version>/python-backend; design 2026-10-24-swarmai-usable-by-anyone
+# §3.1). The Tauri app deploys it there from the installer; ~/.swarm-ai/daemon/ is the
+# legacy location, used only when no runtime is current.
 #
 # Port conflict: if 18321 is already bound, exits 0 (launchd won't retry).
 
@@ -13,7 +15,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 DAEMON_PORT=18321
-DAEMON_BINARY="${HOME}/.swarm-ai/daemon/python-backend"
+RUNTIME_ROOT="${HOME}/.swarm-ai/runtime"
+DAEMON_HOME="${HOME}/.swarm-ai/daemon"
+if [ -f "${RUNTIME_ROOT}/current" ]; then
+    _current="$(head -n 1 "${RUNTIME_ROOT}/current" | tr -d '[:space:]')"
+    case "${_current}" in
+        ""|.*|*/*) ;;
+        *) [ -x "${RUNTIME_ROOT}/${_current}/python-backend" ] && DAEMON_HOME="${RUNTIME_ROOT}/${_current}" ;;
+    esac
+fi
+DAEMON_BINARY="${DAEMON_HOME}/python-backend"
 LOG_DIR="${HOME}/.swarm-ai/logs"
 
 # ---------------------------------------------------------------------------
@@ -131,7 +142,7 @@ unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy NO_PROXY
 if [ -x "${DAEMON_BINARY}" ]; then
     echo "[swarmai-backend] Starting on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
     echo "[swarmai-backend] Binary: ${DAEMON_BINARY}"
-    VERSION_FILE="${HOME}/.swarm-ai/daemon/.version"
+    VERSION_FILE="${DAEMON_HOME}/.version"
     if [ -f "${VERSION_FILE}" ]; then
         echo "[swarmai-backend] Version: $(cat "${VERSION_FILE}")"
     fi

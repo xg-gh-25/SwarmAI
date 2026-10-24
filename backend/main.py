@@ -2285,6 +2285,8 @@ async def upgrade_daemon():
     safe_result_file = repr(result_file)
     safe_binary_path = repr(str(binary_path.parent))  # onedir bundle directory
     safe_project_root = repr(str(project_root))
+    from utils.runtime_paths import current_backend_dir
+    safe_daemon_dir = repr(str(current_backend_dir()))   # the dir the daemon runs from
 
     upgrader_script = f"""
 import subprocess, json, time, pathlib, os
@@ -2292,7 +2294,7 @@ import subprocess, json, time, pathlib, os
 result_file = {safe_result_file}
 bundle_src = {safe_binary_path}
 project_root = {safe_project_root}
-daemon_dir = os.path.expanduser("~/.swarm-ai/daemon")
+daemon_dir = {safe_daemon_dir}
 version_file = os.path.join(daemon_dir, ".version")
 env = {{**os.environ, "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"}}
 TS_FMT = "%Y-%m-%d %H:%M:%S"

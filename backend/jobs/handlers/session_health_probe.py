@@ -161,7 +161,8 @@ def _read_log() -> str:
 
 def _deployed_commit() -> Optional[str]:
     try:
-        vp = Path.home() / ".swarm-ai" / "daemon" / ".version"
+        from utils.runtime_paths import current_backend_dir
+        vp = current_backend_dir() / ".version"
         if vp.exists():
             return vp.read_text(encoding="utf-8").strip()
     except Exception:

@@ -212,7 +212,10 @@ class TestShellDeployFailures:
         (bundle / "_internal").mkdir(parents=True)
         (bundle / "python-backend").write_text("NEW")
         (bundle / "_internal" / "lib.so").write_text("NEW")
-        live = tmp_path / ".swarm-ai" / "daemon"
+        # S2b: dev tooling deploys into the versioned runtime (no tauri.conf.json in this
+        # fake project -> version 0.0.0) and points runtime/current at it
+        runtime = tmp_path / ".swarm-ai" / "runtime"
+        live = runtime / "0.0.0"
         (live / "_internal").mkdir(parents=True)
         (live / "resources").mkdir()
         (live / "python-backend").write_text("OLD")
@@ -228,9 +231,10 @@ class TestShellDeployFailures:
         assert not (live / "_internal" / "stale.so").exists()
         assert (live / "resources" / "default-agent.json").exists()
         assert (live / ".version").exists()
-        prev = tmp_path / ".swarm-ai" / "daemon.prev"
+        prev = runtime / "0.0.0.prev"
         assert (prev / "python-backend").read_text() == "OLD"  # rollback copy
-        assert not (tmp_path / ".swarm-ai" / "daemon.next").exists()
+        assert not (runtime / "0.0.0.next").exists()
+        assert (runtime / "current").read_text() == "0.0.0"
 
     def test_invalid_rendered_plist_never_replaces_the_live_one(self, tmp_path):
         bundle = tmp_path / "desktop" / "src-tauri" / "binaries" / "python-backend-aarch64-apple-darwin"
@@ -246,10 +250,15 @@ class TestShellDeployFailures:
         assert "DEPLOY_FAILED" in r.stdout and "invalid" in r.stdout
         assert live.read_text() == "LIVE"
 
-    def test_release_injects_backend_with_delete_and_checks(self):
+    def test_release_checks_the_app_carries_the_backend(self):
+        """S2a: the installer bundles the backend (tauri.bundle.conf.json); prod.sh no
+        longer injects it after the build, it refuses an .app without it."""
         src = (REPO / "prod.sh").read_text()
-        line = next(l for l in src.splitlines() if '"$backend_src/" "$backend_dst/"' in l)
-        assert "--delete" in line and "|| {" in line
+        assert '"$backend_src/" "$backend_dst/"' not in src
+        line = next(l for l in src.splitlines()
+                    if "Contents/Resources/python-backend/python-backend" in l)
+        assert line.strip().startswith("if [ -x")
+        assert "aborting release\"; return 1" in src
 
     def test_prod_and_dev_stop_on_sync_and_deploy_failure(self):
         for script in ("prod.sh", "dev.sh"):

@@ -552,8 +552,10 @@ def main():
     if len(sys.argv) > 1:
         binary = sys.argv[1]
     else:
-        # Default: daemon binary
-        binary = str(Path.home() / ".swarm-ai" / "daemon" / "python-backend")
+        # Default: the deployed backend the daemon runs (runtime/current, else legacy daemon/)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from utils.runtime_paths import current_backend_dir
+        binary = str(current_backend_dir() / "python-backend")
 
     if not Path(binary).exists():
         print(f"❌ Binary not found: {binary}")

@@ -177,7 +177,9 @@ def _deploy_daemon_binary(
     import platform as _platform
     import shutil
 
-    daemon_dir = daemon_dir or DAEMON_DIR
+    if daemon_dir is None:
+        from utils.runtime_paths import current_backend_dir
+        daemon_dir = current_backend_dir()   # the dir the launchd wrapper runs
     daemon_binary = daemon_dir / "python-backend"
 
     if sources is not None:

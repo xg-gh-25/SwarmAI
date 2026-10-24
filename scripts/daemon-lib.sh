@@ -19,7 +19,11 @@ GUI_TARGET="gui/$(id -u)/${DAEMON_LABEL}"
 # Build output: onedir bundle (directory containing executable + libs)
 BACKEND_BUNDLE_DIR="${DESKTOP_DIR}/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 BACKEND_BINARY="${BACKEND_BUNDLE_DIR}/python-backend"
-DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+# The versioned runtime the launchd wrapper runs (design 2026-10-24-swarmai-usable-by-anyone
+# §3.1): the same place the app's own deploy writes, so dev and release share one path.
+RUNTIME_ROOT="${HOME}/.swarm-ai/runtime"
+_APP_VERSION="$(grep -m1 '"version"' "${PROJECT_ROOT:-.}/desktop/src-tauri/tauri.conf.json" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 0.0.0)"
+DAEMON_DIR="${RUNTIME_ROOT}/${_APP_VERSION}"
 DAEMON_BINARY="${DAEMON_DIR}/python-backend"
 DAEMON_VERSION_FILE="${DAEMON_DIR}/.version"
 
@@ -171,6 +175,15 @@ _deploy_daemon_binary() {
         return 1
     fi
     _ok "Daemon bundle deployed: $(du -sh "$DAEMON_DIR" | cut -f1)"
+    # point the runtime's `current` at this version (tmp + rename), keeping the old one
+    # as `previous` — the same pointer files the app's deploy writes
+    local _old_current=""
+    [ -f "$RUNTIME_ROOT/current" ] && _old_current="$(head -n 1 "$RUNTIME_ROOT/current" | tr -d '[:space:]')"
+    if [ -n "$_old_current" ] && [ "$_old_current" != "$_APP_VERSION" ]; then
+        printf '%s' "$_old_current" > "$RUNTIME_ROOT/previous.tmp" && mv "$RUNTIME_ROOT/previous.tmp" "$RUNTIME_ROOT/previous"
+    fi
+    printf '%s' "$_APP_VERSION" > "$RUNTIME_ROOT/current.tmp" && mv "$RUNTIME_ROOT/current.tmp" "$RUNTIME_ROOT/current" || \
+        { _err "Writing $RUNTIME_ROOT/current failed"; return 1; }
 
     # Write version file — format: "{semver} {git_hash} {timestamp}"
     # All writers (daemon-lib, Rust auto_install, Rust sync_daemon_version) use this format.

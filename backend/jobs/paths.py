@@ -38,7 +38,8 @@ MCPS_DIR = SWARMWS / ".claude" / "mcps"
 # Estimation learner (EMA-based job duration prediction)
 ESTIMATION_LEARNER_FILE = APP_DATA_DIR / "estimation_learner.json"
 
-# Daemon binary location
+# Legacy daemon binary location (the runtime's current version is utils/runtime_paths:
+# runtime/<version>/; this dir is used only when no runtime is current)
 DAEMON_DIR = APP_DATA_DIR / "daemon"
 
 # Port discovery file

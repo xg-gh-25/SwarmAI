@@ -78,13 +78,8 @@ def _get_deployed_daemon_resources() -> Path:
     ``~/.swarm-ai``) rather than re-deriving ``Path.home()`` here. Imported
     lazily to keep this low-level util import-cycle-free.
     """
-    try:
-        from config import get_app_data_dir
-        app_data = get_app_data_dir()
-    except Exception:
-        # Last-ditch fallback if config is unavailable (e.g. very early import).
-        app_data = Path.home() / ".swarm-ai"
-    return app_data / "daemon" / "resources"
+    from utils.runtime_paths import current_backend_dir
+    return current_backend_dir() / "resources"
 
 
 def _get_tauri_bundle_resource_candidates(exe_dir: Path) -> list[Path]:

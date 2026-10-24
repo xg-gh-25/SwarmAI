@@ -9,6 +9,7 @@ use terminal::TerminalState;
 
 /// One-tap screen capture command (app-level, not a plugin). See screen_capture.rs.
 mod screen_capture;
+mod runtime_deploy;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
@@ -794,7 +795,7 @@ fn health_event_payload(hb: &HeartbeatView, process_alive: Option<bool>,
 /// double-launches the .app) don't collide on a shared tmp path mid-copy.
 ///
 /// NOT cfg-gated: uses only cross-platform stdlib (the PermissionsExt block is
-/// `#[cfg(unix)]`). Mirrors the un-gated `copy_dir_recursive` — gating this but
+/// `#[cfg(unix)]`). Mirrors the un-gated runtime copy (src/runtime_deploy.rs) — gating this but
 /// not its un-gated caller `install_guardian` would break the Windows/Linux
 /// build (caller references a non-existent fn). Dead code on non-macOS (the
 /// only caller is reached solely from the macOS auto_install_daemon path).
@@ -812,46 +813,6 @@ fn atomic_install(src: &std::path::Path, dst: &std::path::Path, mode: u32) -> st
         let _ = std::fs::remove_file(&tmp); // don't leak tmp on rename failure
     }
     r
-}
-
-/// Recursively copy a directory's contents to a destination, deleting
-/// files in dst that don't exist in src (mirrors rsync --delete behavior).
-/// Critical for onedir upgrades: stale .so/.dylib from old versions must be removed.
-fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-
-    // Phase 1: Collect source entries for existence check
-    let src_entries: std::collections::HashSet<std::ffi::OsString> = std::fs::read_dir(src)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name())
-        .collect();
-
-    // Phase 2: Delete entries in dst that don't exist in src
-    if let Ok(dst_iter) = std::fs::read_dir(dst) {
-        for entry in dst_iter.filter_map(|e| e.ok()) {
-            if !src_entries.contains(&entry.file_name()) {
-                let path = entry.path();
-                if path.is_dir() {
-                    let _ = std::fs::remove_dir_all(&path);
-                } else {
-                    let _ = std::fs::remove_file(&path);
-                }
-            }
-        }
-    }
-
-    // Phase 3: Copy/update from src to dst
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else {
-            std::fs::copy(&src_path, &dst_path)?;
-        }
-    }
-    Ok(())
 }
 
 /// Probe daemon health endpoint with retries.
@@ -1458,74 +1419,14 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
     }
 
-    // Step 4: Deploy onedir bundle from app resources
-    let daemon_dir = format!("{}/.swarm-ai/daemon", home);
-    let daemon_dir_path = std::path::Path::new(&daemon_dir);
-
-    // Find bundled onedir — same path as auto_install_daemon uses
+    // Step 4: Deploy the new version into the versioned runtime and switch `current`
+    // (the old version stays as `previous` for rollback; nothing is overwritten in place).
     let bundle_base = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-    let resources_dir = bundle_base.join("python-backend");
-
-    if !resources_dir.exists() || !resources_dir.join("python-backend").exists() {
-        return Err(format!(
-            "Bundled daemon bundle not found at: {}",
-            resources_dir.display()
-        ));
-    }
-
-    let target_binary = format!("{}/python-backend", daemon_dir);
-
-    // Ensure daemon dir exists
-    std::fs::create_dir_all(&daemon_dir)
-        .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
-
-    // Backup entire daemon directory before deploy — allows full rollback if
-    // bootstrap fails. Binary-only backup is insufficient because onedir layout
-    // means old binary + new _internal/ = zlib corruption.
-    let backup_dir = format!("{}/.swarm-ai/daemon.backup", home);
-    let backup_dir_path = std::path::Path::new(&backup_dir);
-    if std::path::Path::new(&target_binary).exists() {
-        // Remove stale backup if exists
-        if backup_dir_path.exists() {
-            let _ = std::fs::remove_dir_all(backup_dir_path);
-        }
-        // Rename current daemon/ → daemon.backup/ (atomic on same filesystem)
-        std::fs::rename(daemon_dir_path, backup_dir_path)
-            .map_err(|e| format!("Failed to backup daemon dir: {}", e))?;
-        // Re-create daemon dir for the new deploy
-        std::fs::create_dir_all(&daemon_dir)
-            .map_err(|e| format!("Failed to re-create daemon dir: {}", e))?;
-        println!("[Tauri] Backed up entire daemon directory for rollback");
-    }
-
-    // Deploy entire onedir bundle via recursive copy
-    copy_dir_recursive(&resources_dir, daemon_dir_path)
-        .map_err(|e| format!("Failed to deploy daemon bundle: {}", e))?;
-
-    // Set executable permissions
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            &target_binary,
-            std::fs::Permissions::from_mode(0o755),
-        );
-    }
-
-    // Write version file — format: "{semver} {git_hash} {timestamp}"
-    // Consistent with daemon-lib.sh and auto_install_daemon.
-    // git_hash: not available at runtime in production (no .git in app bundle),
-    // so we write "release" as placeholder. Dev deploys via daemon-lib.sh get real hash.
-    let timestamp = std::process::Command::new("date")
-        .arg("+%Y-%m-%d %H:%M:%S")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    let version_content = format!("{} release {}", app_version, timestamp);
-    let _ = std::fs::write(format!("{}/.version", daemon_dir), version_content);
-
-    println!("[Tauri] Daemon binary deployed: {}", target_binary);
+    let runtime_root = runtime_deploy::runtime_root().map_err(|e| e.to_string())?;
+    let previous_current = runtime_deploy::current_version(&runtime_root);
+    let target_binary = deploy_bundled_runtime(app)?;
+    println!("[Tauri] Daemon binary deployed: {:?}", target_binary);
 
     // Step 4b: Re-render the plist from the NEW bundle's template. We booted the
     // job out above, so this bootstrap is the one moment launchd re-reads it — a
@@ -1550,10 +1451,7 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
             println!("[Tauri] Daemon upgraded successfully: {}", app_version);
-            // Clean up backup directory — upgrade confirmed good
-            if backup_dir_path.exists() {
-                let _ = std::fs::remove_dir_all(backup_dir_path);
-            }
+            // the previous runtime version stays as the one rollback copy
             // NOTE: the `backend-upgraded` event is emitted by
             // `sync_daemon_version_background` — the single source of
             // truth for upgrade lifecycle events.
@@ -1565,18 +1463,64 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         );
     }
 
-    // Rollback: restore entire daemon directory so old binary + _internal/ are consistent
-    if backup_dir_path.exists() {
-        println!("[Tauri] Rolling back to previous daemon directory");
-        let _ = std::fs::remove_dir_all(daemon_dir_path);
-        let _ = std::fs::rename(backup_dir_path, daemon_dir_path);
-        // Attempt to bootstrap the old binary so daemon is at least running
-        let _ = std::process::Command::new("launchctl")
-            .args(["bootstrap", &gui_target, &plist_path])
-            .output();
-    }
+    // Rollback: point `current` back at the previous runtime (or, when the old daemon
+    // ran from the legacy ~/.swarm-ai/daemon deploy, drop `current` so the wrapper uses
+    // it again), then bootstrap so a daemon is at least running.
+    let rolled = match previous_current {
+        Some(_) => runtime_deploy::rollback(&runtime_root).map(|v| v.to_string())
+            .map_err(|e| e.to_string()),
+        None => std::fs::remove_file(runtime_root.join("current"))
+            .map(|_| "legacy".to_string()).map_err(|e| e.to_string()),
+    };
+    println!("[Tauri] Rolling back the backend runtime: {:?}", rolled);
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootstrap", &gui_target, &plist_path])
+        .output();
 
     Err("Daemon upgrade failed — daemon not responding after restart. Rolled back to previous version.".to_string())
+}
+
+
+/// Deploy the installer's bundled backend into the versioned runtime and make it
+/// `current` (design 2026-10-24-swarmai-usable-by-anyone §3.1; src/runtime_deploy.rs).
+/// Returns the executable the daemon / subprocess starts. Err when the app carries no
+/// backend (a dev build: the caller then looks for one deployed by dev tooling).
+fn deploy_bundled_runtime(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let version = app.config().version.clone().unwrap_or_default();
+    let resource_dir = app.path().resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let root = runtime_deploy::runtime_root().map_err(|e| e.to_string())?;
+    let dir = runtime_deploy::deploy(&resource_dir, &root, &version).map_err(|e| e.to_string())?;
+    runtime_deploy::switch_current(&root, &version).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        // a copy keeps the installer's quarantine attribute; launchd-started binaries
+        // carrying it are refused by Gatekeeper
+        let _ = std::process::Command::new("xattr")
+            .args(["-dr", "com.apple.quarantine"]).arg(&dir).output();
+    }
+    println!("[Tauri] Backend runtime {} deployed at {:?}", version, dir);
+    Ok(dir.join(runtime_deploy::exe_name()))
+}
+
+/// The executable the backend runs from: the runtime's `current`, else the legacy
+/// `~/.swarm-ai/daemon` deploy (dev tooling before it moved to the runtime).
+fn deployed_backend_exe() -> Option<std::path::PathBuf> {
+    if let Ok(root) = runtime_deploy::runtime_root() {
+        if let Some(exe) = runtime_deploy::current_exe(&root) {
+            return Some(exe);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    let home = std::env::var("USERPROFILE").unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return None;
+    }
+    let legacy = std::path::PathBuf::from(home).join(".swarm-ai").join("daemon")
+        .join(runtime_deploy::exe_name());
+    legacy.is_file().then_some(legacy)
 }
 
 /// Background wrapper around `sync_daemon_version`.
@@ -1723,77 +1667,30 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     }
     let home_path = std::path::Path::new(&home);
 
-    let daemon_dir = home_path.join(".swarm-ai").join("daemon");
     let log_dir = home_path.join(".swarm-ai").join("logs");
     let launch_agents = home_path.join("Library").join("LaunchAgents");
 
     // Create directories
-    std::fs::create_dir_all(&daemon_dir)
-        .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
     std::fs::create_dir_all(&log_dir)
         .map_err(|e| format!("Failed to create log dir: {}", e))?;
     std::fs::create_dir_all(&launch_agents)
         .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
 
-    // Step 1: Deploy python-backend bundle (onedir) from app resources → ~/.swarm-ai/daemon/
-    let daemon_binary = daemon_dir.join("python-backend");
-    // Tauri resources: .app/Contents/Resources/python-backend/
+    // Step 1: Deploy the bundled backend into the versioned runtime
+    // (~/.swarm-ai/runtime/<version>/, `current` → it). A dev app without a bundled
+    // backend uses what dev tooling deployed.
     let bundle_base = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-    let app_bundle_dir = bundle_base.join("python-backend");
-
-    if app_bundle_dir.exists() && app_bundle_dir.join("python-backend").exists() {
-        // Only deploy if source is newer (or dest doesn't exist)
-        let src_binary = app_bundle_dir.join("python-backend");
-        let should_deploy = if daemon_binary.exists() {
-            let src_mtime = std::fs::metadata(&src_binary)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            let dst_mtime = std::fs::metadata(&daemon_binary)
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-            src_mtime > dst_mtime
-        } else {
-            true
-        };
-
-        if should_deploy {
-            // Deploy entire onedir bundle via recursive copy
-            copy_dir_recursive(&app_bundle_dir, &daemon_dir)
-                .map_err(|e| format!("Failed to deploy daemon bundle: {}", e))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&daemon_binary, std::fs::Permissions::from_mode(0o755))
-                    .map_err(|e| format!("Failed to chmod binary: {}", e))?;
-            }
-            println!("[Tauri] Deployed daemon bundle from {:?}", app_bundle_dir);
-        }
+    if bundle_base.join("python-backend").join(runtime_deploy::exe_name()).exists() {
+        deploy_bundled_runtime(app)?;
+    } else if let Some(exe) = deployed_backend_exe() {
+        println!("[Tauri] No bundled backend — using the deployed one at {:?}", exe);
     } else {
-        // Dev mode: bundle not in app resources. Check if previously deployed.
-        if !daemon_binary.exists() {
-            return Err(format!(
-                "Backend bundle not found in app resources ({:?}) or daemon dir ({:?}). \
-                 Run `./prod.sh build` to create it.",
-                app_bundle_dir, daemon_binary
-            ));
-        }
-        println!("[Tauri] Using previously deployed daemon bundle");
-    }
-
-    // Write version file alongside binary — format: "{semver} {git_hash} {timestamp}"
-    let version = app.config().version.clone().unwrap_or_default();
-    if !version.is_empty() {
-        let timestamp = std::process::Command::new("date")
-            .arg("+%Y-%m-%d %H:%M:%S")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
-        let _ = std::fs::write(
-            daemon_dir.join(".version"),
-            format!("{} release {}", version, timestamp),
-        );
+        return Err(format!(
+            "The app carries no backend ({:?}) and none is deployed. Install a release \
+             build, or build and deploy one with ./prod.sh build.",
+            bundle_base.join("python-backend")
+        ));
     }
 
     // Step 2: Deploy wrapper script from bundled resources → ~/.swarm-ai/swarmai_backend.sh
@@ -1823,10 +1720,12 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
         .args(["-dr", "com.apple.quarantine"])
         .arg(&wrapper_dest)
         .output();
-    let _ = std::process::Command::new("xattr")
-        .args(["-dr", "com.apple.quarantine"])
-        .arg(&daemon_dir)
-        .output();
+    if let Ok(root) = runtime_deploy::runtime_root() {
+        let _ = std::process::Command::new("xattr")
+            .args(["-dr", "com.apple.quarantine"])
+            .arg(&root)
+            .output();
+    }
 
     // Step 3+4: Generate plist from template and write
     let plist_dest = launch_agents.join("com.swarmai.backend.plist");
@@ -2568,58 +2467,27 @@ async fn start_backend(
 /// Works cross-platform: macOS bundle (Contents/MacOS/), Windows (same dir as exe).
 #[allow(dead_code)] // Used on Windows/Linux only; macOS uses auto_install_daemon path.
 fn find_backend_binary(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    // Same layout as macOS (design §3.1): deploy the installer's bundled backend into the
+    // versioned runtime and run it from there, never from the app's own files.
+    match deploy_bundled_runtime(app) {
+        Ok(exe) => return Ok(exe),
+        Err(e) => println!("[Tauri] Bundled backend not deployed ({}) — looking for a deployed one", e),
+    }
+    if let Some(exe) = deployed_backend_exe() {
+        return Ok(exe);
+    }
+    // a dev layout: the binary next to the app executable
     let exe_path = std::env::current_exe()
         .map_err(|e| format!("Cannot determine exe path: {}", e))?;
-    let exe_dir = exe_path.parent().ok_or("Cannot determine exe directory")?;
-
-    // Check adjacent to the executable (Tauri bundles externalBin here)
-    #[cfg(target_os = "windows")]
-    let binary_name = "python-backend.exe";
-    #[cfg(not(target_os = "windows"))]
-    let binary_name = "python-backend";
-
-    let adjacent = exe_dir.join(binary_name);
+    let adjacent = exe_path.parent().ok_or("Cannot determine exe directory")?
+        .join(runtime_deploy::exe_name());
     if adjacent.exists() {
         return Ok(adjacent);
     }
-
-    // macOS: check Contents/MacOS/ inside .app bundle
-    #[cfg(target_os = "macos")]
-    {
-        let bundle_dir = app.path().resource_dir()
-            .map_err(|e| format!("Resource dir error: {}", e))?;
-        let macos_binary = bundle_dir.parent()
-            .ok_or("No parent of resource dir")?
-            .join("MacOS")
-            .join(binary_name);
-        if macos_binary.exists() {
-            return Ok(macos_binary);
-        }
-    }
-
-    // Check data directory (~/.swarm-ai/daemon/)
-    #[cfg(target_os = "windows")]
-    let home_str = std::env::var("USERPROFILE").unwrap_or_default();
-    #[cfg(not(target_os = "windows"))]
-    let home_str = std::env::var("HOME").unwrap_or_default();
-    if home_str.is_empty() {
-        return Err(format!(
-            "Backend binary '{}' not found adjacent to exe ({:?}) and HOME not set.",
-            binary_name, adjacent
-        ));
-    }
-    let home = std::path::PathBuf::from(&home_str);
-    let data_binary = home.join(".swarm-ai").join("daemon").join(binary_name);
-    if data_binary.exists() {
-        return Ok(data_binary);
-    }
-
-    // Suppress unused variable warning on non-macOS
-    let _ = app;
-
     Err(format!(
-        "Backend binary '{}' not found. Checked:\n  - {:?}\n  - ~/.swarm-ai/daemon/{}",
-        binary_name, adjacent, binary_name
+        "Backend '{}' not found: the app carries none, nothing is deployed under the \
+         runtime ({:?}), and none is next to the app ({:?}).",
+        runtime_deploy::exe_name(), runtime_deploy::runtime_root().ok(), adjacent
     ))
 }
 
