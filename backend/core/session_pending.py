@@ -483,10 +483,15 @@ async def claim_pending_batch(session_id: str) -> list[PendingMessage]:
                 rows = await cursor.fetchall()
                 if not rows:
                     return []
+                # created_at becomes the claim time: the record (history, the
+                # turn-end reconcile, cold resume) orders by created_at, and a
+                # message queued during a turn enters the conversation when it is
+                # delivered, after every row that turn writes, not when it was
+                # typed (equal times keep insertion order: rowid).
                 await conn.execute(
-                    "UPDATE messages SET claimed_at = ? "
+                    "UPDATE messages SET claimed_at = ?, created_at = ? "
                     "WHERE session_id = ? AND sent = 0 AND claimed_at IS NULL",
-                    (now, session_id),
+                    (now, now, session_id),
                 )
                 await conn.commit()
                 return rows

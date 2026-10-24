@@ -424,6 +424,31 @@ describe('MessageStore reconcile', () => {
     expect(ids).toContain('2');
   });
 
+  it('a queued bubble stays where the user saw it: after the running turn, whatever its time', () => {
+    // the record's times are local without a zone; a bubble's are UTC "Z" (8 h
+    // apart in UTC+8) — and the queued message was typed mid-turn (2026-10-24)
+    store.append(makeMsg('u1', 'user', 'ask', '2026-10-24T14:40:00.000Z'));
+    store.append(makeMsg('a1', 'assistant', 'answer so far', '2026-10-24T14:40:16.000Z'));
+    store.append(makeMsg('local-q', 'user', 'queued', '2026-10-24T14:42:20.000Z'));
+    const row = (id: string, role: 'user' | 'assistant', at: string): ChatMessage =>
+      ({ ...makeChatMsg(id, role, id), createdAt: at });
+    store.reconcile([
+      row('u0', 'user', '2026-10-24T21:27:23.000'),
+      row('u1', 'user', '2026-10-24T22:40:00.000'),
+      row('a1', 'assistant', '2026-10-24T22:40:16.000'),
+      row('a1b', 'assistant', '2026-10-24T22:55:45.000'),   // the turn wrote on
+    ]);
+    expect(store.messages.map((m) => m.id)).toEqual(['u0', 'u1', 'a1', 'a1b', 'local-q']);
+  });
+
+  it('a local-only bubble stays before the message that followed it', () => {
+    store.append(makeMsg('u1', 'user', 'one'));
+    store.append(makeMsg('local-failed', 'user', 'not sent', '2030-01-01T00:00:00.000Z'));
+    store.append(makeMsg('u2', 'user', 'two'));
+    store.reconcile([makeChatMsg('u1'), makeChatMsg('a1', 'assistant'), makeChatMsg('u2'), makeChatMsg('a2', 'assistant')]);
+    expect(store.messages.map((m) => m.id)).toEqual(['u1', 'a1', 'local-failed', 'u2', 'a2']);
+  });
+
   it('streaming message is never overwritten by reconcile', () => {
     store.append(makeMsg('stream-1', 'assistant', 'partial stream content'));
     store.startStreaming('stream-1');

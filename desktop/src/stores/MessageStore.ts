@@ -1012,6 +1012,10 @@ export class MessageStore {
     const matchedLocalIdx = new Set<number>();
 
     const merged: Message[] = [];
+    // local index -> the merged row it became (a local-only message is placed
+    // before the row its successor became: where the user saw it)
+    const localIndex = new Map(this._messages.map((m, i) => [m.id, i]));
+    const mergedOfLocal = new Map<number, Message>();
 
     // Pass 1: Walk DB messages in order
     // Note: _applyMerge only runs when phase=idle (streamingMessageId=null),
@@ -1031,11 +1035,13 @@ export class MessageStore {
         // Streaming message always wins (defensive — normally null here)
         if (this._streamingMessageId && localMatch.id === this._streamingMessageId) {
           merged.push(localMatch);
+          mergedOfLocal.set(localIndex.get(localMatch.id)!, localMatch);
         } else {
           // DB is source of truth for completed messages (server-side edits propagate),
           // but carry forward local-only interactive blocks the DB never persisted
           // (ask_user_question / cmd_permission_request / escalation).
           merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, localMatch, 'reconcile-id')));
+          mergedOfLocal.set(localIndex.get(localMatch.id)!, merged[merged.length - 1]);
         }
       } else {
         // No direct ID match — try clientId correlation (AC4). The DB row's
@@ -1049,6 +1055,7 @@ export class MessageStore {
           const localIdx = clientIdToLocalIdx.get(dbClientId)!;
           matchedLocalIdx.add(localIdx);
           merged.push(carryCid(MessageStore._mergePreservingInteractive(dbMsg, this._messages[localIdx], 'reconcile-cid')));
+          mergedOfLocal.set(localIdx, merged[merged.length - 1]);
         } else {
           // New from DB — but skip if it belongs to pre-boundary content
           // (prevents old messages from "leaking" into current view after resume)
@@ -1139,9 +1146,16 @@ export class MessageStore {
           }
           continue;
         }
-        // Local-only: insert at chronological position in merged
-        const insertIdx = this._findChronologicalPosition(merged, local.timestamp);
-        merged.splice(insertIdx, 0, local);
+        // Local-only (a queued or unsent message, a bubble not persisted yet): it
+        // stays before the message that followed it here, else last — where the
+        // user saw it. Not by its own time: a queued message enters the record
+        // when it is delivered, after the turn that was running, and a bubble's
+        // time (UTC, "Z") does not compare as a string with the record's local
+        // times (2026-10-24: a queued bubble moved to the top of the window).
+        let next: Message | undefined;
+        for (let j = localArrIdx + 1; j < this._messages.length && !next; j++) next = mergedOfLocal.get(j);
+        const at = next ? merged.indexOf(next) : -1;
+        merged.splice(at >= 0 ? at : merged.length, 0, local);
       }
     }
 
@@ -1150,17 +1164,6 @@ export class MessageStore {
     this._initialLoadComplete = true;
     this._probeClobber(_prevMergeClobber, 'reconcile/_applyMerge');
     this._notify();
-  }
-
-  /** Find insertion point for a message by timestamp (binary-search friendly). */
-  private _findChronologicalPosition(messages: Message[], timestamp: string): number {
-    // Simple linear scan — fine for <1000 messages
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].timestamp <= timestamp) {
-        return i + 1;
-      }
-    }
-    return 0;
   }
 
   /** Default conversion for ChatMessage → Message (minimal, for testing). */

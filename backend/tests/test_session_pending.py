@@ -261,6 +261,35 @@ async def test_peek_returns_fifo_order(pending):
 
 
 @pytest.mark.asyncio
+async def test_a_queued_message_is_ordered_where_it_was_delivered(pending, db_path: Path):
+    """A message queued while a turn runs enters the record when it is claimed:
+    after every row that turn writes later, before its own answer; a set keeps
+    its queue order (2026-10-24: a queued bubble jumped above the running turn)."""
+    a = await pending.persist_pending("sess-o", user_message="first", content=None, agent_id="a")
+    b = await pending.persist_pending("sess-o", user_message="second", content=None, agent_id="a")
+    from datetime import datetime
+    await asyncio.sleep(0.01)
+    later = datetime.now().isoformat()
+    async with aiosqlite.connect(str(db_path)) as conn:      # the running turn writes on
+        await conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, sent, created_at, updated_at) "
+            "VALUES ('later', 'sess-o', 'assistant', '[]', 1, ?, ?)", (later, later))
+        await conn.commit()
+    await asyncio.sleep(0.01)
+    claimed = await pending.claim_pending_batch("sess-o")
+    assert [c.user_message for c in claimed] == ["first", "second"]
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute(
+            "SELECT id FROM messages WHERE session_id = 'sess-o' ORDER BY created_at ASC")
+        order = [r[0] for r in await cur.fetchall()]
+        cur = await conn.execute(
+            "SELECT created_at FROM messages WHERE id = ?", (a.id,))
+        a_at = (await cur.fetchone())[0]
+    assert order == ["later", a.id, b.id]
+    assert a_at >= later
+
+
+@pytest.mark.asyncio
 async def test_claim_then_mark_sent(pending, db_path: Path):
     await pending.persist_pending("sess-m", user_message="x", content=None, agent_id="a")
     claimed = await pending.claim_pending_batch("sess-m")
