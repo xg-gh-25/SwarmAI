@@ -12,31 +12,15 @@ from unittest.mock import patch
 
 
 
-class TestSwarmaRootResolution:
-    """_SWARMAI_ROOT must resolve to swarmai source tree in all contexts."""
+class TestNoSourceCheckoutLookup:
+    """P7: the job system never looks for a SwarmAI source checkout."""
 
-    def test_swarmai_root_from_env_var(self, tmp_path):
-        """SWARMAI_SOURCE env var overrides __file__-based resolution."""
-        from jobs.system_jobs import _get_swarmai_root
-        # Use tmp_path (real directory) so is_dir() check passes
-        with patch.dict(os.environ, {"SWARMAI_SOURCE": str(tmp_path)}):
-            assert _get_swarmai_root() == str(tmp_path)
-
-    def test_swarmai_root_fallback_is_valid_dir(self):
-        """Without env var, falls back to a path that actually exists."""
-        from jobs.system_jobs import _get_swarmai_root
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("SWARMAI_SOURCE", None)
-            root = _get_swarmai_root()
-            # Should be a real directory (the swarmai source tree)
-            assert Path(root).is_dir(), f"_get_swarmai_root() returned non-existent: {root}"
-
-    def test_swarmai_root_never_resolves_to_daemon_internal(self):
-        """Must never resolve to daemon/_internal/ even if __file__ is there."""
-        from jobs.system_jobs import _get_swarmai_root
-        root = _get_swarmai_root()
-        assert "daemon/_internal" not in root
-        assert "_internal" not in root
+    def test_no_source_root_helper(self):
+        import jobs.system_jobs as sj
+        assert not hasattr(sj, "_get_swarmai_root")
+        assert not hasattr(sj, "_SWARMAI_ROOT")
+        src = Path(sj.__file__).read_text() + Path(sj.__file__).with_name("executor.py").read_text()
+        assert "SwarmAI-Workspace" not in src and "SWARMAI_SOURCE" not in src
 
 
 class TestFallbackCwdHandling:

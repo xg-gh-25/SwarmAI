@@ -1067,16 +1067,12 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
 
     timeout = job.safety.timeout_seconds or 120
 
-    # Script jobs run from the swarm-jobs directory (where venv and scripts live),
-    # not from SwarmWS root. Use config.cwd to override if needed.
-    # In daemon binary, Path(__file__).parent resolves inside _internal/ which
-    # doesn't have the expected directory structure. Use swarmai source tree instead.
-    raw_cwd = job.config.get("cwd")
-    if not raw_cwd:
-        # Prefer swarmai source tree (works in daemon); fallback to __file__ parent
-        from .system_jobs import _get_swarmai_root
-        _candidate = _get_swarmai_root()
-        raw_cwd = _candidate if Path(_candidate).is_dir() else str(Path(__file__).parent)
+    # A script job runs in config.cwd; without one, in the app data dir -- the same
+    # directory every product script job uses (system_jobs._JOB_CWD). It used to fall
+    # back to the SwarmAI source checkout, which only XG has (usable-by-anyone P7).
+    if not (raw_cwd := job.config.get("cwd")):
+        from config import get_app_data_dir
+        raw_cwd = str(get_app_data_dir())
     if "HOME" not in os.environ:
         script_cwd = raw_cwd.replace("${HOME}", home).replace("$HOME", home)
     else:
