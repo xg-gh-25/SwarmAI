@@ -30,6 +30,9 @@ export interface BackgroundAgent {
   durationMs?: number;
   toolUses?: number;
   summary?: string;
+  /** while it runs: its newest tool and when it last did anything (ms) */
+  lastTool?: string;
+  lastActivityAt?: number;
 }
 
 interface State { bySession: Map<string, BackgroundAgent[]>; loaded: boolean }
@@ -49,6 +52,8 @@ function toAgent(raw: unknown): BackgroundAgent | null {
     status: (['running', 'completed', 'failed', 'stopped', 'lost'].includes(status) ? status : 'running') as BackgroundAgentStatus,
     startedAt: num(r.startedAt), endedAt: num(r.endedAt), durationMs: num(r.durationMs), toolUses: num(r.toolUses),
     summary: typeof r.summary === 'string' ? r.summary : undefined,
+    lastTool: typeof r.lastTool === 'string' ? r.lastTool : undefined,
+    lastActivityAt: num(r.lastActivityAt),
   };
 }
 

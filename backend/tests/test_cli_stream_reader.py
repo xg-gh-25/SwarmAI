@@ -640,6 +640,36 @@ async def test_background_subagent_frames_open_no_turn():
     r.close()
 
 
+async def test_background_subagent_frames_are_offered_to_on_bg_frame_with_or_without_a_turn():
+    """Its progress must reach the session either way (2026-10-24: 100 frames of a
+    running background agent were dropped and its row never moved, so the user took
+    it as finished). Delivery is unchanged: no turn opens, an open turn still gets
+    the frames it got before."""
+    c = FakeClient()
+    injected: list = []
+    seen: list = []
+    r = CliStreamReader(c, "sess-1", on_injected=injected.append,
+                        on_bg_frame=lambda parent, msg: seen.append((parent, type(msg).__name__)))
+    r.start()
+    c.feed(_until_result(_split(_frames("compact"))[0]))
+    await _settle(c)
+    injected.clear()
+    c.feed(_subagent_frames())
+    await _settle(c)
+    assert injected == [] and r._open is None
+    assert [p for p, _ in seen] == ["toolu_bg_agent"] * 3
+    seen.clear()
+    # a turn open (here a CLI-initiated one): the frames are offered too
+    first, _rest = _split(_frames("compact"))
+    c.feed([f for f in _until_result(first) if f.get("type") != "result"])
+    await _settle(c)
+    assert r._open is not None
+    c.feed(_subagent_frames("toolu_other"))
+    await _settle(c)
+    assert [p for p, _ in seen] == ["toolu_other"] * 3
+    r.close()
+
+
 async def test_background_subagent_frames_do_not_become_a_waiting_claims_turn():
     """A user message waiting for its turn is not handed a sub-agent frame as its
     first frame: the claim opens on the CLI's init and ends on its own result."""

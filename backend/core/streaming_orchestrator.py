@@ -1357,6 +1357,13 @@ class StreamingOrchestrator:
         # onset was seen (later deltas for that block are not forwarded — the
         # authoritative `assistant` event replaces the provisional text).
         _delta_text_buf: dict[int, str] = {}
+        # the main agent's model messages streamed so far: with a block's index it
+        # names one streamed block (`block`), as an index alone is reused by every
+        # message (design 2026-10-24-bg-agent-stop-livereload D4). `_stream_run` makes
+        # it unique across invocations: a retry / continuation renders into the same
+        # bubble and restarts the count at 1.
+        _stream_msg = 0
+        _stream_run = uuid.uuid4().hex[:8]
         _delta_leak_hidden: set[int] = set()
         # True while the most recent text/tool output of this response is a
         # leaked tool call (cleared by any real tool_use or later real prose).
@@ -1810,7 +1817,7 @@ class StreamingOrchestrator:
                                 _dtext = _dtext[: max(0, _onset - len(_prev))]
                                 if not _dtext:
                                     continue
-                        yield {"type": "text_delta", "text": _dtext, "index": _idx}
+                        yield {"type": "text_delta", "text": _dtext, "index": _idx, "block": f"{_stream_run}.{_stream_msg}:{_idx}"}
                     elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
                         # A tool input streaming in is visible progress, and it
                         # can loop like text (e.g. a Write whose content repeats).
@@ -1828,7 +1835,11 @@ class StreamingOrchestrator:
                         self._parent._last_progress_time = awake_time()  # real thinking
                         _progress.on_visible(self._parent._last_progress_time)  # shown to the user
                         if _dkey[0] is None:  # a sub-agent's thinking is not the main turn's
-                            yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
+                            yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0),
+                                   "block": f"{_stream_run}.{_stream_msg}:{event_data.get('index', 0)}"}
+                elif event_type == "message_start":
+                    if _dkey[0] is None:
+                        _stream_msg += 1
                 elif event_type == "content_block_start":
                     block = event_data.get("content_block", {})
                     # Fresh detector for EVERY block start (an index is reused by
@@ -1839,12 +1850,14 @@ class StreamingOrchestrator:
                     if _dkey[0] is not None:
                         continue  # sub-agent block boundaries: nothing to show
                     if block.get("type") == "thinking":
-                        yield {"type": "thinking_start", "index": event_data.get("index", 0)}
+                        yield {"type": "thinking_start", "index": event_data.get("index", 0),
+                               "block": f"{_stream_run}.{_stream_msg}:{event_data.get('index', 0)}"}
                     elif block.get("type") == "text":
                         # New text block at this index — fresh leak-hiding state.
                         _delta_text_buf.pop(event_data.get("index", 0), None)
                         _delta_leak_hidden.discard(event_data.get("index", 0))
-                        yield {"type": "text_start", "index": event_data.get("index", 0)}
+                        yield {"type": "text_start", "index": event_data.get("index", 0),
+                               "block": f"{_stream_run}.{_stream_msg}:{event_data.get('index', 0)}"}
                 elif event_type == "content_block_stop":
                     _degen.pop(_dkey, None)  # block done — release its text
                     if _dkey[0] is None:

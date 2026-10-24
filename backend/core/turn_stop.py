@@ -28,7 +28,7 @@ Agent, foreground or background, keeps its own transcript with every call it mad
 but no conclusion (``transcript``: path and call count).
 
 - ``build(...)``                — the ``turn_stop`` block.
-- ``agent_transcript(sid, task_id)`` / ``existing_write_targets(paths, cwd)`` — the
+- ``agent_transcript(sid, task_id, cwd)`` / ``existing_write_targets(paths, cwd)`` — the
   leftovers above.
 - ``continuation_note(block)``  — the one-time note for the next send.
 """
@@ -45,24 +45,37 @@ MAX_ROWS = 20
 _DESC_MAX = 120
 #: write targets kept per stopped call
 MAX_WRITES = 10
-#: a sub-agent transcript larger than this is not read to count its calls
-_TRANSCRIPT_READ_MAX = 32 * 1024 * 1024
+#: a sub-agent transcript larger than this is not read to count its calls (the read
+#: runs on the event loop inside a Stop)
+_TRANSCRIPT_READ_MAX = 2 * 1024 * 1024
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def agent_transcript(sdk_session_id: Optional[str], task_id: Optional[str]) -> Optional[dict]:
+def project_dir_name(cwd: str) -> str:
+    """The CLI's directory name for a working directory under ``<projects>``: every
+    character outside ``[A-Za-z0-9]`` becomes ``-`` (``/Users/x/.swarm-ai/SwarmWS`` ->
+    ``-Users-x--swarm-ai-SwarmWS``)."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def agent_transcript(sdk_session_id: Optional[str], task_id: Optional[str],
+                     cwd: Optional[str] = None) -> Optional[dict]:
     """Where a sub-agent's work survives a stop: the CLI keeps each Agent's own
     transcript at ``<projects>/<cwd>/<sdk-session>/subagents/agent-<task id>.jsonl``
     (measured 2026-10-22: a background agent ended mid-way kept all its calls,
     without a conclusion). ``{"path", "toolCalls"}``, or None when it is not there.
-    Ids are checked before they become path parts."""
-    if not task_id or not _TASK_ID_RE.match(task_id):
+
+    Runs on the event loop inside a user Stop, so it never scans: the path is built
+    from the session's ``cwd`` (one ``is_file``), and ``toolCalls`` is read only from a
+    file up to ``_TRANSCRIPT_READ_MAX``. No ``cwd`` -> None. Ids are checked before they
+    become path parts."""
+    if not task_id or not _TASK_ID_RE.match(task_id) or not cwd:
         return None
-    from .leak_transcript import find_transcript
-    main = find_transcript(sdk_session_id)
-    if main is None:
+    from .leak_transcript import _SID_RE, _projects_dir
+    if not sdk_session_id or not _SID_RE.match(sdk_session_id):
         return None
-    path = main.parent / main.stem / "subagents" / f"agent-{task_id}.jsonl"
+    path = (_projects_dir() / project_dir_name(cwd) / sdk_session_id
+            / "subagents" / f"agent-{task_id}.jsonl")
     try:
         if not path.is_file():
             return None

@@ -273,3 +273,39 @@ def test_compact_result_keeps_only_the_subagent_outcome_fields():
                                         "summary": "s" * 400, "junk": "x"}}])
     assert c["subagent"] == {"status": "failed", "toolUses": 4, "durationMs": 5, "summary": "s" * 300}
     assert "content" not in c
+
+
+@pytest.mark.asyncio
+async def test_streamed_blocks_carry_a_key_that_names_message_and_index():
+    """docs/design/2026-10-24-bg-agent-stop-livereload.md D4: the index alone is
+    reused by every model message, so text_start / text_delta / thinking_* carry
+    `block` = "<message>:<index>"; a repeated start of one block keeps its key, the
+    next message's index 0 gets a new one, and a sub-agent's frames do not count."""
+    def ev(event, parent=None):
+        return StreamEvent(uuid="e", session_id="s", parent_tool_use_id=parent, event=event)
+    events = await _run([
+        SystemMessage(subtype="init", data={"session_id": "s"}),
+        ev({"type": "message_start", "message": {}}),
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "one "}}),
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "more"}}),
+        ev({"type": "message_start", "message": {}}, parent=AGENT_ID),
+        ev({"type": "message_start", "message": {}}),
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking"}}),
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "hm"}}),
+    ])
+    keyed = [(e["type"], e.get("block")) for e in events
+             if e["type"] in ("text_start", "text_delta", "thinking_start", "thinking_delta")]
+    run = keyed[0][1].split(".")[0]
+    assert keyed == [("text_start", f"{run}.1:0"), ("text_delta", f"{run}.1:0"), ("text_start", f"{run}.1:0"),
+                     ("text_delta", f"{run}.1:0"), ("thinking_start", f"{run}.2:0"), ("thinking_delta", f"{run}.2:0")]
+    # a retry / continuation is a new invocation rendering into the same bubble: its
+    # keys never equal the earlier one's (its count restarts at 1)
+    again = await _run([
+        SystemMessage(subtype="init", data={"session_id": "s"}),
+        ev({"type": "message_start", "message": {}}),
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+    ])
+    second = [e.get("block") for e in again if e["type"] == "text_start"]
+    assert len(second) == 1 and second[0].endswith(".1:0") and second[0] != f"{run}.1:0"

@@ -5314,6 +5314,20 @@ class SessionRouter:
         unit = self.get_unit(session_id)
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
+        # One Stop per session at a time (2026-10-24: one slow Stop plus the user's
+        # repeated clicks wrote 5 identical receipts). Taken before the first await.
+        in_flight = self.__dict__.setdefault("_stops_in_flight", set())
+        if session_id in in_flight:
+            return {"success": True, "message": "Stop already in progress",
+                    "subprocess_alive": unit.is_alive, "receipt": []}
+        in_flight.add(session_id)
+        try:
+            return await self._interrupt_session(session_id, unit)
+        finally:
+            in_flight.discard(session_id)
+
+    async def _interrupt_session(self, session_id: str, unit: SessionUnit) -> dict:
+        """``interrupt_session`` once its Stop holds the session."""
         # a retry between attempts leaves the unit COLD while its turn still runs
         retrying = getattr(unit, "_retrying", False) is True
         turn_running = retrying or unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)

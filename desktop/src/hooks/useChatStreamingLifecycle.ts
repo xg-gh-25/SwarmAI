@@ -566,34 +566,48 @@ export function appendThinkingDelta(
  * Append text token to a message's last unconfirmed text block.
  * If no unconfirmed text block exists, creates a new one.
  */
-export function applyTextDelta(msg: Message, text: string, fresh = false): Message {
+export function applyTextDelta(msg: Message, text: string, fresh = false, block?: string): Message {
   const content = [...msg.content];
   const lastBlock = content[content.length - 1];
-  if (!fresh && lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
+  if (lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed
+      && (!fresh || sameStreamBlock(lastBlock, block))) {
     content[content.length - 1] = {
       ...lastBlock,
       text: (lastBlock.text ?? '') + text,
     };
   } else {
-    content.push({ type: 'text', text } as ContentBlock);
+    content.push({ type: 'text', text, ...(block ? { _streamBlock: block } : {}) } as ContentBlock);
   }
   return { ...msg, content };
+}
+
+/**
+ * A fresh start (text_start / thinking_start) for the block the last provisional
+ * block already streams (the backend's `block` key: model message + block index).
+ * A repeated start of the SAME block continues it: split in two, its confirmation
+ * replaced one half and left the other, so the tail of the answer showed twice
+ * live only (2026-10-24, docs/design/2026-10-24-bg-agent-stop-livereload.md D4).
+ * No key, or another key, is a new block as before.
+ */
+function sameStreamBlock(b: ContentBlock, block: string | undefined): boolean {
+  return !!block && (b as TextContent | ThinkingContent)._streamBlock === block;
 }
 
 /**
  * Append thinking token to a message's last unconfirmed thinking block.
  * If no unconfirmed thinking block exists, creates a new one.
  */
-export function applyThinkingDelta(msg: Message, thinking: string, fresh = false): Message {
+export function applyThinkingDelta(msg: Message, thinking: string, fresh = false, block?: string): Message {
   const content = [...msg.content];
   const lastBlock = content[content.length - 1];
-  if (!fresh && lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
+  if (lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed
+      && (!fresh || sameStreamBlock(lastBlock, block))) {
     content[content.length - 1] = {
       ...lastBlock,
       thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
     } as ContentBlock;
   } else {
-    content.push({ type: 'thinking', thinking } as ContentBlock);
+    content.push({ type: 'thinking', thinking, ...(block ? { _streamBlock: block } : {}) } as ContentBlock);
   }
   return { ...msg, content };
 }
@@ -3043,7 +3057,7 @@ export function useChatStreamingLifecycle(
           const textStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (textStore) {
             textStore.updateLast(
-              (msg) => applyTextDelta(msg, event.text!, textFresh),
+              (msg) => applyTextDelta(msg, event.text!, textFresh, event.block),
               (msg) => msg.id === assistantMessageId,
             );
           } else {
@@ -3067,7 +3081,7 @@ export function useChatStreamingLifecycle(
           const thinkStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (thinkStore) {
             thinkStore.updateLast(
-              (msg) => applyThinkingDelta(msg, event.thinking!, thinkFresh),
+              (msg) => applyThinkingDelta(msg, event.thinking!, thinkFresh, event.block),
               (msg) => msg.id === assistantMessageId,
             );
           } else {

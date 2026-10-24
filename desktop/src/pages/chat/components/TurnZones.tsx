@@ -450,11 +450,17 @@ function AgentRow({ step, sessionId, readOnly, focused }: { step: ToolStep; sess
   const background = !running && inBackground(bg);
   // the background agent ended (the daemon saw it end, or lost it)
   const bgEnd = bg && bg.status !== 'running' ? bg.status : null;
-  const elapsed = usePendingToolElapsed(step.block.id, running);
+  // the daemon's live view of a background agent that runs (its progress, D1)
+  const live = background && bg && 'startedAt' in bg ? (bg as BackgroundAgent) : undefined;
+  // ticks once a second while it runs (a foreground agent: since it started here)
+  const elapsed = usePendingToolElapsed(step.block.id, running || background);
   const desc = stripView(step.block).object || stripView(step.block).full;
-  const tools = Math.max(step.children?.length ?? 0, p?.toolUses ?? 0);
+  const tools = Math.max(step.children?.length ?? 0, p?.toolUses ?? 0, live?.toolUses ?? 0);
   const doneMs = bgEnd ? bg?.durationMs : p?.durationMs;
-  const seconds = running ? elapsed ?? undefined : doneMs !== undefined ? Math.round(doneMs / 1000) : undefined;
+  const seconds = running ? elapsed ?? undefined
+    : live?.startedAt !== undefined ? Math.max(0, Math.round((Date.now() - live.startedAt) / 1000))
+      : doneMs !== undefined ? Math.round(doneMs / 1000) : undefined;
+  const nowTool = running ? p?.lastToolName : live?.lastTool;
   const meta = [
     seconds !== undefined && seconds >= MIN_SECONDS && fmt(seconds),
     tools > 0 && tf(t, 'chat.turn.zone.tools', tools === 1 ? '{{count}} tool' : '{{count}} tools', { count: tools }),
@@ -508,8 +514,8 @@ function AgentRow({ step, sessionId, readOnly, focused }: { step: ToolStep; sess
           </button>
         )}
       </div>
-      {running && p?.lastToolName && (
-        <div data-testid="agent-now" className="ml-6 font-mono text-[11.5px] text-purple-400">→ {p.lastToolName}</div>
+      {nowTool && (
+        <div data-testid="agent-now" className="ml-6 font-mono text-[11.5px] text-purple-400">→ {nowTool}</div>
       )}
       {expanded && (
         <div data-testid="agent-detail" className="ml-6 mt-1 mb-1 space-y-1">

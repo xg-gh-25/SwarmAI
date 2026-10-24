@@ -111,6 +111,9 @@ _INTENTIONAL_KILL_WINDOW_S = 10.0
 #: Hang guard for ClaudeSDKClient.stop_task (one sub-agent): the control request
 #: normally answers at once; past this it is reported as not stopped.
 STOP_TASK_TIMEOUT_S = 5.0
+#: a background agent's progress is published at most once per this many seconds per
+#: session, the last one trailing (docs/design/2026-10-24-bg-agent-stop-livereload.md D1)
+BG_PROGRESS_PUBLISH_S = 2.0
 _recent_intentional_kills: "_deque[float]" = _deque(maxlen=32)
 
 
@@ -934,8 +937,13 @@ class SessionUnit:
         # (core/background_agents.py). A change is handed to the router through
         # on_cli_event("background_agent"); the entry waits in _bg_agent_changes.
         from .background_agents import BackgroundAgents
-        self.background_agents = BackgroundAgents(on_change=self._on_bg_agent_change)
+        self.background_agents = BackgroundAgents(on_change=self._on_bg_agent_change,
+                                                  on_progress=self._on_bg_agent_progress)
         self._bg_agent_changes: "_deque[dict]" = _deque(maxlen=200)
+        # progress publishes, coalesced per session (BG_PROGRESS_PUBLISH_S): the
+        # time of the last one and the trailing one scheduled after it
+        self._bg_progress_at: float = 0.0
+        self._bg_progress_timer: Optional[asyncio.TimerHandle] = None
 
         # ── Tool-hang tracking (run_fb6e94a9) ─────────────────────
         # tool_use_id → monotonic-ish start time (time.time()) for EVERY tool
@@ -1243,6 +1251,7 @@ class SessionUnit:
             on_idle=self._on_reader_idle,
             on_error=self._on_reader_error,
             on_task=self._on_reader_task,
+            on_bg_frame=self._on_reader_bg_frame,
         )
         self._stream_reader.start()
 
@@ -1270,7 +1279,47 @@ class SessionUnit:
             usage=getattr(msg, "usage", None) or data.get("usage"))
 
     def _on_bg_agent_change(self, entry: dict) -> None:
+        # a launch or an end goes out at once (an end also persists the Agent's final
+        # result); a progress publish still waiting is superseded by this one
+        if self._bg_progress_timer is not None:
+            self._bg_progress_timer.cancel()
+            self._bg_progress_timer = None
         self._bg_agent_changes.append(entry)
+        self._emit_cli_event("background_agent")
+
+    def _on_reader_bg_frame(self, parent_tool_use_id: str, msg: Any) -> None:
+        """Reader callback: a sub-agent's own frame (with or without a turn open).
+        Only a running background agent is touched: a dict lookup otherwise."""
+        if not self.background_agents.is_running(parent_tool_use_id):
+            return
+        names: list[str] = []
+        content = getattr(msg, "content", None)
+        if isinstance(content, list):
+            from claude_agent_sdk import ToolUseBlock
+            names = [b.name for b in content if isinstance(b, ToolUseBlock)]
+        self.background_agents.progress(parent_tool_use_id, names)
+
+    def _on_bg_agent_progress(self, _entry: dict) -> None:
+        """A background agent made progress: publish the session's agents now if the
+        last publish is older than BG_PROGRESS_PUBLISH_S, else once when it is (one
+        trailing publish per window, whatever the frame rate)."""
+        if self._bg_progress_timer is not None:
+            return
+        now = time.monotonic()
+        wait = self._bg_progress_at + BG_PROGRESS_PUBLISH_S - now
+        if wait <= 0:
+            self._bg_progress_at = now
+            self._emit_cli_event("background_agent")
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # no loop (sync test): the next frame or the end publishes
+        self._bg_progress_timer = loop.call_later(wait, self._bg_progress_fire)
+
+    def _bg_progress_fire(self) -> None:
+        self._bg_progress_timer = None
+        self._bg_progress_at = time.monotonic()
         self._emit_cli_event("background_agent")
 
     def _on_reader_idle(self) -> None:
@@ -4392,12 +4441,12 @@ class SessionUnit:
                     if w:
                         writes[tid] = w
                 elif name in ("Agent", "Task"):
-                    tr = turn_stop.agent_transcript(self._sdk_session_id, self.background_agents.task_id_of(tid))
+                    tr = turn_stop.agent_transcript(self._sdk_session_id, self.background_agents.task_id_of(tid), self._cwd)
                     if tr:
                         transcripts[tid] = tr
             for e in background:
                 tid = e.get("toolUseId")
-                tr = turn_stop.agent_transcript(self._sdk_session_id, self.background_agents.task_id_of(tid)) if tid else None
+                tr = turn_stop.agent_transcript(self._sdk_session_id, self.background_agents.task_id_of(tid), self._cwd) if tid else None
                 if tr:
                     transcripts[tid] = tr
         except Exception:  # noqa: BLE001 — never blocks the stop

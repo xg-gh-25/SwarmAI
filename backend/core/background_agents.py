@@ -51,8 +51,10 @@ def _now_ms() -> int:
 
 
 class BackgroundAgents:
-    def __init__(self, on_change: Optional[Callable[[dict], None]] = None) -> None:
+    def __init__(self, on_change: Optional[Callable[[dict], None]] = None,
+                 on_progress: Optional[Callable[[dict], None]] = None) -> None:
         self._on_change = on_change
+        self._on_progress = on_progress
         self._agents: "OrderedDict[str, dict]" = OrderedDict()  # tool_use_id -> entry
         self._task_tool: dict[str, str] = {}  # task_id -> tool_use_id
         self._early: dict[str, dict] = {}  # tool_use_id -> a finish seen before launch
@@ -101,6 +103,31 @@ class BackgroundAgents:
             return
         if entry["status"] == "running":
             self._finish(entry, **info)
+
+    def is_running(self, tool_use_id: Optional[str]) -> bool:
+        """A registered background agent that still runs (a dict lookup)."""
+        entry = self._agents.get(tool_use_id) if tool_use_id else None
+        return entry is not None and entry["status"] == "running"
+
+    def progress(self, tool_use_id: str, tool_names: "list[str]") -> bool:
+        """A frame of a RUNNING background agent's own work (any frame is activity;
+        ``tool_names``: the calls it carries). Updates ``toolUses`` / ``lastTool`` /
+        ``lastActivityAt`` and calls ``on_progress`` (the session coalesces those).
+        False, untouched, for an id that is not a running background agent."""
+        entry = self._agents.get(tool_use_id) if tool_use_id else None
+        if entry is None or entry["status"] != "running":
+            return False
+        if tool_names:
+            entry["toolUses"] = int(entry.get("toolUses") or 0) + len(tool_names)
+            entry["lastTool"] = str(tool_names[-1])[:80]
+        entry["lastActivityAt"] = _now_ms()
+        if self._on_progress is not None:
+            try:
+                self._on_progress(dict(entry))
+            except Exception:  # noqa: BLE001 — a display aid never breaks the reader
+                import logging
+                logging.getLogger(__name__).exception("background_agents.on_progress_failed")
+        return True
 
     def lose_all(self) -> None:
         # a user Stop is ending the process: what it ends is "stopped", not "lost"

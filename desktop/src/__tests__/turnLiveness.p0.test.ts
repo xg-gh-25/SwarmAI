@@ -283,7 +283,8 @@ describe('chat-turn-liveness P0 (frontend)', () => {
     expect(checkAt, 'the send re-checks its token after the await').toBeGreaterThan(awaitAt);
     expect(postAt, 'and before it writes or POSTs').toBeGreaterThan(checkAt);
     expect(send.slice(awaitAt, postAt)).not.toMatch(/activeTabIdRef\.current/);
-    const stop = src.slice(src.indexOf('const handleStop = '), src.indexOf('const handleStop = ') + 1500);
+    const stopAt = src.indexOf('const handleStop = ');
+    const stop = src.slice(stopAt, src.indexOf('\n  };\n', stopAt));
     expect((stop.match(/_sendToken = undefined/g) ?? []).length, 'Stop cancels the pending send').toBe(2);
   });
 

@@ -177,9 +177,11 @@ class CliStreamReader:
         on_idle: Optional[Callable[[], None]] = None,
         on_error: Optional[Callable[[], None]] = None,
         on_task: Optional[Callable[[str, Any], None]] = None,
+        on_bg_frame: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         self._client = client
         self._on_task = on_task
+        self._on_bg_frame = on_bg_frame
         self._session_id = session_id
         self._on_injected = on_injected
         self._on_idle = on_idle
@@ -384,6 +386,15 @@ class CliStreamReader:
                        self._session_id, uuid, cur.kind)
 
     def _route(self, msg: Any) -> None:
+        parent = getattr(msg, "parent_tool_use_id", None)
+        if parent and self._on_bg_frame is not None and not isinstance(msg, SystemMessage):
+            # a sub-agent's own frame: the session learns a background agent is
+            # working (its progress), with or without a turn open; routing below is
+            # unchanged (docs/design/2026-10-24-bg-agent-stop-livereload.md D1)
+            try:
+                self._on_bg_frame(parent, msg)
+            except Exception:  # noqa: BLE001 — a display aid never stops reading
+                logger.exception("cli_stream_reader.on_bg_frame_failed session_id=%s", self._session_id)
         if isinstance(msg, SystemMessage):
             sub = msg.subtype
             data = msg.data if isinstance(getattr(msg, "data", None), dict) else {}

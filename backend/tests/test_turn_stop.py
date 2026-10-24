@@ -76,9 +76,10 @@ def test_build_caps_rows_and_counts_the_rest():
 
 # ── leftovers: what stopped work leaves (measured: no output; transcripts kept) ──
 
-def _sub_transcript(tmp_path, monkeypatch, sid="11111111-2222-3333-4444-555555555555", task="a56b2f871d7a776d7", calls=3):
+def _sub_transcript(tmp_path, monkeypatch, sid="11111111-2222-3333-4444-555555555555", task="a56b2f871d7a776d7", calls=3,
+                    cwd="/Users/x/SwarmWS"):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    proj = tmp_path / "projects" / "-Users-x-SwarmWS"
+    proj = tmp_path / "projects" / turn_stop.project_dir_name(cwd)
     (proj / sid / "subagents").mkdir(parents=True)
     (proj / f"{sid}.jsonl").write_text("{}\n")
     p = proj / sid / "subagents" / f"agent-{task}.jsonl"
@@ -88,10 +89,32 @@ def _sub_transcript(tmp_path, monkeypatch, sid="11111111-2222-3333-4444-55555555
 
 def test_agent_transcript_found_and_counted(tmp_path, monkeypatch):
     sid, task, p = _sub_transcript(tmp_path, monkeypatch)
-    assert turn_stop.agent_transcript(sid, task) == {"path": str(p), "toolCalls": 3}
-    assert turn_stop.agent_transcript(sid, "../../etc") is None, "an id never becomes a path"
-    assert turn_stop.agent_transcript(sid, "missing0") is None
-    assert turn_stop.agent_transcript(None, task) is None
+    cwd = "/Users/x/SwarmWS"
+    assert turn_stop.agent_transcript(sid, task, cwd) == {"path": str(p), "toolCalls": 3}
+    assert turn_stop.agent_transcript(sid, "../../etc", cwd) is None, "an id never becomes a path"
+    assert turn_stop.agent_transcript(sid, "missing0", cwd) is None
+    assert turn_stop.agent_transcript(None, task, cwd) is None
+    assert turn_stop.agent_transcript(sid, task, None) is None, "no cwd: never a scan"
+
+
+def test_agent_transcript_never_scans(tmp_path, monkeypatch):
+    """It runs on the event loop inside a Stop (2026-10-24: a glob over every project
+    dir starved the loop 3.2 s): the path is built, never searched."""
+    sid, task, p = _sub_transcript(tmp_path, monkeypatch)
+    from pathlib import Path
+
+    def no_glob(*_a, **_k):
+        raise AssertionError("agent_transcript must not glob")
+    monkeypatch.setattr(Path, "glob", no_glob)
+    monkeypatch.setattr(Path, "rglob", no_glob)
+    assert turn_stop.agent_transcript(sid, task, "/Users/x/SwarmWS") == {"path": str(p), "toolCalls": 3}
+    assert turn_stop.project_dir_name("/Users/gawan/.swarm-ai/SwarmWS") == "-Users-gawan--swarm-ai-SwarmWS"
+
+
+def test_agent_transcript_big_file_is_not_read(tmp_path, monkeypatch):
+    sid, task, p = _sub_transcript(tmp_path, monkeypatch)
+    monkeypatch.setattr(turn_stop, "_TRANSCRIPT_READ_MAX", 10)
+    assert turn_stop.agent_transcript(sid, task, "/Users/x/SwarmWS") == {"path": str(p)}
 
 
 def test_existing_write_targets(tmp_path):
@@ -164,7 +187,7 @@ def test_receipt_marks_the_call_behind_an_open_permission_not_run():
 
 
 def test_receipt_reads_the_leftovers_from_the_turn(tmp_path, monkeypatch):
-    sid, task, p = _sub_transcript(tmp_path, monkeypatch, calls=2)
+    sid, task, p = _sub_transcript(tmp_path, monkeypatch, calls=2, cwd=str(tmp_path))
     (tmp_path / "half.txt").write_text("x")
     unit = _streaming_unit()
     unit._sdk_session_id = sid
@@ -315,3 +338,39 @@ async def test_a_failing_receipt_never_fails_the_stop():
 def test_turn_stop_kept_out_of_resume_history():
     from core.context_injector import _TOOL_ONLY_TYPES
     assert "turn_stop" in _TOOL_ONLY_TYPES
+
+
+@pytest.mark.asyncio
+async def test_a_second_stop_while_one_runs_writes_no_second_receipt():
+    """2026-10-24: one slow Stop and the user's repeated clicks wrote 5 identical
+    receipts. Only one Stop per session runs at a time; a later one works again."""
+    import asyncio
+    unit = _fake_unit(SessionState.IDLE)
+    unit.begin_stop_receipt = MagicMock(return_value={"type": "turn_stop", "calls": [], "agents": [{"toolUseId": "g"}]})
+    gate = asyncio.Event()
+    async def _stop_background():
+        await gate.wait()
+        return True
+    unit.stop_background = _stop_background
+    router = _router_with(unit)
+    persisted = []
+    async def _persist(sid, blocks, model, **kw):
+        persisted.append(blocks[-1]["type"])
+        return blocks
+    with patch.object(type(router), "_persist_assistant_blocks", AsyncMock(side_effect=_persist)):
+        first = asyncio.ensure_future(router.interrupt_session("s1"))
+        await asyncio.sleep(0)
+        try:
+            second = await asyncio.wait_for(router.interrupt_session("s1"), 2)
+        except asyncio.TimeoutError:
+            gate.set()
+            await first
+            raise AssertionError("the second Stop ran a stop of its own instead of returning")
+        assert second["receipt"] == [] and "already" in second["message"]
+        gate.set()
+        out = await first
+        assert out["message"] == "Stopped background agents"
+        assert persisted == ["turn_stop"], "one Stop, one receipt"
+        third = await router.interrupt_session("s1")
+        assert third["message"] == "Stopped background agents", "a later Stop works"
+    assert persisted == ["turn_stop", "turn_stop"]

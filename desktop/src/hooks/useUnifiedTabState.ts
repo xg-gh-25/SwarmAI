@@ -227,6 +227,9 @@ export interface UnifiedTab {
   /** a send of this tab is reading its attachments: another Send waits for it
    *  (the draft is still in the composer, a second click would send it twice) */
   _preparingSend?: number;
+  /** a Stop of this tab's session is in flight: another click does nothing (one
+   *  request, one marker; docs/design/2026-10-24-bg-agent-stop-livereload.md D3) */
+  _stopInFlight?: boolean;
   /** Messages this tab sent while busy, shown queued until a list read after
    *  their `accepted` (value: its time; undefined until then) decides. */
   _queuedLocal?: Map<string, number | undefined>;

@@ -3028,11 +3028,13 @@ export default function ChatPage() {
   // the transcript feed (hooks/transcriptFeed), this one too.
   const handleStopBackgroundRef = useRef((_tabId: string) => {});
   handleStopBackgroundRef.current = (tabId: string) => {
-    const sid = tabMapRef.current.get(tabId)?.sessionId;
-    if (!sid) return;
+    const tab = tabMapRef.current.get(tabId);
+    const sid = tab?.sessionId;
+    if (!tab || !sid || tab._stopInFlight) return;
+    tab._stopInFlight = true;
     chatService.stopSession(sid).catch((err) => {
       console.warn('[stopBackground] Backend stop failed (best effort):', err);
-    });
+    }).finally(() => { tab._stopInFlight = false; });
   };
   const stableStopBackground = useCallback((tabId: string) => handleStopBackgroundRef.current(tabId), []);
 
@@ -3057,105 +3059,119 @@ export default function ChatPage() {
       return;
     }
 
-    // 1. Mark stopped + abort SSE FIRST (synchronous, before any async work)
-    if (currentTabId) {
-      const tabState = tabMapRef.current.get(currentTabId);
-      if (tabState) {
-        tabState._sendToken = undefined;   // a send still reading its attachments stops
-        tabState._preparingSend = undefined;   // and a busy send still preparing
-        tabState.userStopped = true;
+    // 0. One Stop at a time (design D3): a second click while the first is in flight
+    // aborts nothing again, appends no second marker and sends no second request.
+    const stopTab = currentTabId ? tabMapRef.current.get(currentTabId) : undefined;
+    if (stopTab?._stopInFlight) return;
+    if (stopTab) stopTab._stopInFlight = true;
+    // everything after the test-and-set runs in try/finally: a synchronous throw
+    // before the request goes out must not leave Stop disabled for good
+    let requested = false;
+    try {
+
+      // 1. Mark stopped + abort SSE FIRST (synchronous, before any async work)
+      if (currentTabId) {
+        const tabState = tabMapRef.current.get(currentTabId);
+        if (tabState) {
+          tabState._sendToken = undefined;   // a send still reading its attachments stops
+          tabState._preparingSend = undefined;   // and a busy send still preparing
+          tabState.userStopped = true;
+        }
+        if (tabState?.abortController) {
+          try { tabState.abortController.abort(); } catch { /* already aborted */ }
+          tabState.abortController = null;
+        }
       }
-      if (tabState?.abortController) {
-        try { tabState.abortController.abort(); } catch { /* already aborted */ }
-        tabState.abortController = null;
+
+      // 2. End store streaming — unblocks replace()/reconcile() for this tab.
+      // MUST NOT trigger notification here (endStreaming flushes reconcile thunk
+      // which could async-notify during tab switch → cross-tab leak).
+      // Safe: endStreaming() only notifies if reconcile thunk was pending AND
+      // async fetch completes. The actual notification is async (not immediate).
+      if (currentTabId) {
+        const stopStorePhase = messageStoreRegistry.get(currentTabId);
+        if (stopStorePhase) stopStorePhase.endStreaming();
       }
-    }
 
-    // 2. End store streaming — unblocks replace()/reconcile() for this tab.
-    // MUST NOT trigger notification here (endStreaming flushes reconcile thunk
-    // which could async-notify during tab switch → cross-tab leak).
-    // Safe: endStreaming() only notifies if reconcile thunk was pending AND
-    // async fetch completes. The actual notification is async (not immediate).
-    if (currentTabId) {
-      const stopStorePhase = messageStoreRegistry.get(currentTabId);
-      if (stopStorePhase) stopStorePhase.endStreaming();
-    }
+      // 3. Update streaming state immediately — don't wait for backend
+      setLocalSending(false, currentTabId ?? undefined);
+      incrementStreamGen();
+      if (currentTabId) updateTabStatus(currentTabId, 'idle');
 
-    // 3. Update streaming state immediately — don't wait for backend
-    setLocalSending(false, currentTabId ?? undefined);
-    incrementStreamGen();
-    if (currentTabId) updateTabStatus(currentTabId, 'idle');
-
-    // 4. Append "Stopped" indicator to messages (synchronous)
-    setMessages((prev) => {
-      const lastAssistantIndex = prev.reduce(
-        (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
-      );
-      if (lastAssistantIndex >= 0) {
-        const updated = [...prev];
-        const lastMsg = { ...updated[lastAssistantIndex] };
-        lastMsg.content = [
-          ...lastMsg.content,
-          { type: 'text' as const, text: '\n\n---\n*Stopped*' },
-        ];
-        updated[lastAssistantIndex] = lastMsg;
-        return updated;
-      }
-      // Edge case: no assistant message exists — fall back to appending a new one
-      return [...prev, {
-        id: Date.now().toString(),
-        role: 'assistant' as const,
-        content: [{ type: 'text' as const, text: '\n\n---\n*Stopped*' }],
-        timestamp: new Date().toISOString(),
-      }];
-    });
-
-    // 4. Append "Stopped" to tabMapRef (synchronous, no rAF race)
-    // MUST stay as direct tabState.messages write — store.updateById triggers
-    // rAF-deferred subscription notification. During that delay the user can
-    // switch tabs, causing the subscription to push this tab's messages into
-    // the new tab's React state (cross-tab leak, P0 regression 2026-06-18).
-    if (currentTabId) {
-      const tabState = tabMapRef.current.get(currentTabId);
-      if (tabState && tabState.messages && tabState.messages.length > 0) {
-        const lastIdx = tabState.messages.reduce(
-          (acc: number, m: Message, i: number) => m.role === 'assistant' ? i : acc, -1,
+      // 4. Append "Stopped" indicator to messages (synchronous)
+      setMessages((prev) => {
+        const lastAssistantIndex = prev.reduce(
+          (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
         );
-        if (lastIdx >= 0) {
-          const updated = [...tabState.messages];
-          const lastMsg = { ...updated[lastIdx] };
+        if (lastAssistantIndex >= 0) {
+          const updated = [...prev];
+          const lastMsg = { ...updated[lastAssistantIndex] };
           lastMsg.content = [
             ...lastMsg.content,
             { type: 'text' as const, text: '\n\n---\n*Stopped*' },
           ];
-          updated[lastIdx] = lastMsg;
-          tabState.messages = updated;
+          updated[lastAssistantIndex] = lastMsg;
+          return updated;
+        }
+        // Edge case: no assistant message exists — fall back to appending a new one
+        return [...prev, {
+          id: Date.now().toString(),
+          role: 'assistant' as const,
+          content: [{ type: 'text' as const, text: '\n\n---\n*Stopped*' }],
+          timestamp: new Date().toISOString(),
+        }];
+      });
+
+      // 4. Append "Stopped" to tabMapRef (synchronous, no rAF race)
+      // MUST stay as direct tabState.messages write — store.updateById triggers
+      // rAF-deferred subscription notification. During that delay the user can
+      // switch tabs, causing the subscription to push this tab's messages into
+      // the new tab's React state (cross-tab leak, P0 regression 2026-06-18).
+      if (currentTabId) {
+        const tabState = tabMapRef.current.get(currentTabId);
+        if (tabState && tabState.messages && tabState.messages.length > 0) {
+          const lastIdx = tabState.messages.reduce(
+            (acc: number, m: Message, i: number) => m.role === 'assistant' ? i : acc, -1,
+          );
+          if (lastIdx >= 0) {
+            const updated = [...tabState.messages];
+            const lastMsg = { ...updated[lastIdx] };
+            lastMsg.content = [
+              ...lastMsg.content,
+              { type: 'text' as const, text: '\n\n---\n*Stopped*' },
+            ];
+            updated[lastIdx] = lastMsg;
+            tabState.messages = updated;
+          }
         }
       }
-    }
 
-    // 4b. Mirror the Stopped marker into the per-tab STORE — the display source
-    // for the keep-mounted TabView. Safe now (post keep-mounted): each TabView
-    // subscribes to its OWN store, and the shared-messages bridge re-subscribes
-    // per active tab, so a late rAF notify cannot push this tab's content into
-    // another tab's view (the 2026-06-18 cross-tab leak vector no longer exists).
-    if (currentTabId) {
-      const stopStore = messageStoreRegistry.get(currentTabId);
-      if (stopStore && stopStore.messages.some((m) => m.role === 'assistant')) {
-        stopStore.updateLast(
-          (m) => ({ ...m, content: [...m.content, { type: 'text' as const, text: '\n\n---\n*Stopped*' }] }),
-          (m) => m.role === 'assistant',
-        );
+      // 4b. Mirror the Stopped marker into the per-tab STORE — the display source
+      // for the keep-mounted TabView. Safe now (post keep-mounted): each TabView
+      // subscribes to its OWN store, and the shared-messages bridge re-subscribes
+      // per active tab, so a late rAF notify cannot push this tab's content into
+      // another tab's view (the 2026-06-18 cross-tab leak vector no longer exists).
+      if (currentTabId) {
+        const stopStore = messageStoreRegistry.get(currentTabId);
+        if (stopStore && stopStore.messages.some((m) => m.role === 'assistant')) {
+          stopStore.updateLast(
+            (m) => ({ ...m, content: [...m.content, { type: 'text' as const, text: '\n\n---\n*Stopped*' }] }),
+            (m) => m.role === 'assistant',
+          );
+        }
       }
-    }
 
-    // 5. Backend stop — fire-and-forget (best effort, don't await). The stop
-    // receipt (what was running, how it ended, what the turn changed so far;
-    // core/turn_stop) is persisted and reaches every tab showing the session on
-    // the transcript feed (hooks/transcriptFeed) — this one too, one route.
-    chatService.stopSession(tabSessionId).catch((err) => {
-      console.warn('[handleStop] Backend stop failed (best effort):', err);
-    });
+      // 5. Backend stop — fire-and-forget (best effort, don't await). The stop
+      // receipt (what was running, how it ended, what the turn changed so far;
+      // core/turn_stop) is persisted and reaches every tab showing the session on
+      // the transcript feed (hooks/transcriptFeed) — this one too, one route.
+      chatService.stopSession(tabSessionId).catch((err) => {
+        console.warn('[handleStop] Backend stop failed (best effort):', err);
+      }).finally(() => { if (stopTab) stopTab._stopInFlight = false; });
+      requested = true;
+    } finally {
+      if (!requested && stopTab) stopTab._stopInFlight = false;
+    }
 
   };
   // An Agents panel's "Stop all" (chat turn spec v6 §3.2) is the Stop button: it stops

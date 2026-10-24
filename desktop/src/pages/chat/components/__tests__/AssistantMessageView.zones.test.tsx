@@ -393,6 +393,23 @@ describe('AC5 — the Agents panel', () => {
       expect(within(rowOf()).getByTestId('agent-background').textContent).toBe('in background');
     });
 
+    it('while it runs, its progress moves the row: elapsed, tools, the tool now (D1)', () => {
+      vi.useFakeTimers();
+      const t0 = Date.now() - 125_000;
+      backgroundAgentsStore.applySnapshot({ s1: [{ toolUseId: 'g1', status: 'running', startedAt: t0, toolUses: 43, lastTool: 'Bash' }] });
+      render(view(turn, false));
+      const row = rowOf();
+      expect(row.textContent).toContain('2m 05s');
+      expect(row.textContent).toContain('43 tools');
+      expect(within(row).getByTestId('agent-now').textContent).toBe('→ Bash');
+      act(() => { backgroundAgentsStore.apply('s1', [{ toolUseId: 'g1', status: 'running', startedAt: t0, toolUses: 44, lastTool: 'Read' }]); });
+      act(() => { vi.advanceTimersByTime(3000); });
+      expect(row.textContent).toContain('44 tools');
+      expect(row.textContent).toContain('2m 08s');
+      expect(within(row).getByTestId('agent-now').textContent).toBe('→ Read');
+      vi.useRealTimers();
+    });
+
     it('done in background, with its time, once the daemon saw it end — no reload', () => {
       backgroundAgentsStore.applySnapshot({ s1: [{ toolUseId: 'g1', status: 'running' }] });
       render(view(turn, false));

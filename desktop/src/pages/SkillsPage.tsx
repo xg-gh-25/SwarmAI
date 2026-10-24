@@ -653,9 +653,12 @@ function GenerateSkillForm({
     }
   };
 
-  // Handle stop button
+  // Handle stop button (one at a time: a second click while one is in flight is a
+  // no-op, so it appends no second "stopped" message)
+  const stopInFlightRef = useRef(false);
   const handleStop = async () => {
-    if (!sessionId) return;
+    if (!sessionId || stopInFlightRef.current) return;
+    stopInFlightRef.current = true;
 
     try {
       // Abort the current stream if there's an abort function
@@ -680,6 +683,7 @@ function GenerateSkillForm({
     } catch (error) {
       console.error('Failed to stop session:', error);
     } finally {
+      stopInFlightRef.current = false;
       setIsStreaming(false);
     }
   };

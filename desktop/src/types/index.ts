@@ -218,6 +218,8 @@ export interface TextContent {
   text: string;
   /** Marks this block as authoritative (from an assistant event), not provisional (from streaming delta). */
   _confirmed?: boolean;
+  /** A provisional block's streamed block key (StreamEvent.block). */
+  _streamBlock?: string;
 }
 
 export interface ToolUseContent {
@@ -305,6 +307,8 @@ export interface ThinkingContent {
   thinking: string;
   /** Marks this block as authoritative (from an assistant event), not provisional (from streaming delta). */
   _confirmed?: boolean;
+  /** A provisional block's streamed block key (StreamEvent.block). */
+  _streamBlock?: string;
 }
 
 export interface CmdPermissionContent {
@@ -915,6 +919,8 @@ export interface StreamEvent {
   text?: string;         // text_delta: incremental text chunk
   thinking?: string;     // thinking_delta: incremental thinking chunk
   index?: number;        // content block index for deltas
+  /** the streamed block a start/delta belongs to ("<message>:<index>", backend) */
+  block?: string;
 }
 
 // Human-in-the-Loop Permission Types
