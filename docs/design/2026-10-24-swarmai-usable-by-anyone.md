@@ -259,11 +259,16 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 - C2：新增 `ddd_bindings.governed_repo_roots(project_dir)`，只读 bindings.yaml 声明的仓库（`bindings[].worktree`、`governed_assets` 的 `source_workspace`），不猜。`engine_metrics`、`ddd_refresh`、`ddd_self_audit`、`ddd_orchestrator`、`code_change_feed`、`context_injector` 全部改用它或改为通用规则；`ddd_orchestrator` 的 knowledge_staleness 通道删除。顺带修了一个 bug：每个项目的 DDD 过期判断原来都在数 SwarmAI checkout 的 commit（`918ac0320`）。
 - B：`DEFAULT_PROJECT_NAME` 只在 `project_registry` 定义一次，十几处字面量改为引用它；置顶项目原来是写死的 `("AIDLC", "CMHK_SalesIntel")`，改为读各项目 `.project.json` 的 `"pinned": true`；删除没人用的个人项目别名（`BMS_BIZ`、`AIDLC`、`GITHUB_COMMUNITY`、`PHYSICAL_AI`、`QUICK_FOR_BIZ`）。
 
-做的过程中新发现、还没处理的 P7 项（不在原清单里）：
-- `routers/community_api.py` 写死 `Projects/GitHub_Community`，`attention_authority.py:603` 写死 `brain="GitHub_Community"`：这是 XG 自己的项目。
-- `jobs/system_jobs._get_swarmai_root` 写死 `~/Desktop/SwarmAI-Workspace/swarmai`、`/opt/swarmai`，`jobs/executor.py:1077` 用它；skill `s_loops-health` 同样写死。
-- 随产品发给所有用户的 SwarmAI 开发 skill：`s_swarm-release`、`s_swarm-daemon`、`s_swarm-build`、`s_swarm-ci`、`s_chat-brain-check`、`s_health-check`、`s_system-health` 等，用 `$SWARMAI_ROOT` 指向 SwarmAI 源码。按 P7.2 应移到 SwarmAI 仓库自己（例如仓库内 `.claude/skills/`），不随产品发布。
+做的过程中新发现的 P7 项（不在原清单里），2026-10-24 已处理：
+- job 系统：删除 `system_jobs._get_swarmai_root`（找 `SWARMAI_SOURCE`、`~/Desktop/SwarmAI-Workspace/swarmai`、`~/swarmai`、`/opt/swarmai`）；没写 cwd 的 script job 原来退回 SwarmAI 源码目录运行，现在在 app 数据目录运行，和其他产品 job 一样（`75d823be7`）。
+- 产品 skill 不再假设本机有 SwarmAI 源码：`s_ddd-weekly-report`、`s_system-health`、`s_loops-health` 改用 `"$SWARM_BACKEND_BIN" py`；`s_ddd-distribute`、`s_estimate-tokens`、`s_library` 的脚本先从当前解释器 import `core.*`，删掉到 home 下猜 checkout 位置的逻辑；`loops_health` 的 K4 改为 n/a，stale-pipeline 检查改查项目自己绑定的仓库。新增结构测试 `test_skills_no_source_checkout`：产品 skill 里出现 `$SWARMAI_ROOT`、`SWARMAI_SOURCE`、`SwarmAI-Workspace` 即失败（`9e67c9445`）。
+- SwarmAI 开发 skill 离开产品（XG 定：放进 DDD，不放仓库 `.claude/skills/`，这样贡献者导入 SwarmAI DDD 包就能拿到，产品不用给 SwarmAI 开特例）：`s_swarm-build`、`s_swarm-release`、`s_swarm-ci`、`s_swarm-daemon`、`s_chat-brain-check`、`s_health-check` 移到 `Projects/SwarmAI/4-capabilities/`，在其 `bindings.yaml` 声明为 `skill-set`，仓库路径从 swarmai 绑定的 `worktree:` 读成 `$SWARMAI_ROOT`。产品 AGENT.md 的 R8/R10/R11 不再点名 `s_swarm-*` 和 `swarmai/`（`2e13a5fdb`）。`s_system-health` 只看本机资源，留在产品里。
+- Community：原计划整页删除，实施时发现一半是通用功能，所以只删读 GitHub_Community 数据的部分。删掉 Hot Topics、Outbound tab、`/api/community/hot-topics` 和 `/engagement`，以及写死的 GitHub 账号；保留 Inbound（`Knowledge/Signals`、`Reports`）和 Watching（信号源配置编辑）。Need You 的 digest 原来只认 job 名带 `github-community`、写死 `brain="GitHub_Community"`，改为：某个 DDD 在 bindings 里声明的 job（DDD job 注册表），它的新结果作为该 DDD 的 digest 出现（source 由 `community_digest` 改为 `job_digest`）（`0cb3a94a5`）。
+- XG 的 SwarmWS 数据同步改了（经 XG 同意，有备份）：`Projects/SwarmAI/bindings.yaml` 加 skill-set；`Projects/GitHub_Community/bindings.yaml` 补声明一直在跑的 `uj-github-community-weekly-sediment--report`，否则新规则下它的周报 digest 不再出现。
+
+仍未处理：
 - `run_worktree.code_repos` 有自己的 bindings 读取和"自托管仓库按名字匹配 daemon 自己的 checkout"，S6 再收进 `governed_repo_roots`。
+- `community_data` 判断 HTML 报告是否属于社区报告的文件名白名单里有 `github-community-weekly-`。只影响分类，对其他用户没有效果，暂不改。
 
 
 ### 3.4 gate：只保留产品级的
