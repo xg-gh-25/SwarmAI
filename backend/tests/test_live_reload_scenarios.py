@@ -151,6 +151,32 @@ def _scenario(rng: random.Random) -> list[dict]:
     return turns
 
 
+def _keyed(rng: random.Random, turns: list[dict], sid: str) -> None:
+    """Stream text / thinking as the orchestrator does since D4 (design
+    2026-10-24-bg-agent-stop-livereload): a ``*_start`` carrying the block key
+    ``<run>.<message>:<index>`` before the deltas, the deltas keyed too. Each turn is
+    one parser run (its own ``run``), so a continuation streamed into the same
+    bubble reuses index 0 under another run. Sometimes a block's start comes again
+    mid-block (the transport repeat behind the 2026-10-24 duplicated RESULT tail).
+    Its own ``rng``, so the scenarios' main random stream stays as it was."""
+    for t_no, turn in enumerate(turns):
+        run = f"{sid[-2:]}r{t_no}"
+        for m_no, step in enumerate(turn.get("steps") or [], start=1):
+            kind = next((e["type"] for e in step if e["type"] in ("text_delta", "thinking_delta")), None)
+            if kind is None:
+                continue
+            block = f"{run}.{m_no}:0"
+            start = {"type": "text_start" if kind == "text_delta" else "thinking_start", "index": 0, "block": block}
+            deltas = [dict(e, block=block) for e in step if e["type"] == kind]
+            rest = [e for e in step if e["type"] != kind]
+            out = [dict(start)]
+            for d_no, d in enumerate(deltas):
+                if d_no > 0 and rng.random() < 0.3:
+                    out.append(dict(start))      # the repeated start of the same block
+                out.append(d)
+            step[:] = out + rest
+
+
 def _crash(rng: random.Random, turns: list[dict]) -> int:
     """One turn ends in a hard crash, right after a tool result when it has one."""
     able = [i for i, t in enumerate(turns)
@@ -549,6 +575,7 @@ async def _generate() -> dict:
         buffer = (_crash(rng, turns) if i >= N_SCENARIOS + N_NET_SCENARIOS
                   else _net(rng, turns) if i >= N_SCENARIOS else 10_000)
         sid = f"sess-lr-{i:02d}"
+        _keyed(random.Random(f"{SEED}-keys-{i}"), turns, sid)
         ids, clock = _Ids(i), _Clock()
         hub = session_events.SessionEventHub(buffer_size=buffer, queue_size=10_000)
         stamp = SimpleNamespace(now=clock.now, fromisoformat=datetime.fromisoformat)
@@ -612,5 +639,16 @@ async def test_fixture_is_current():
                 cases.add("restart mid-turn" if mid else "restart idle")
                 if mid and prev[-1]["env"]["type"] == "tool_result":
                     cases.add("restart after a tool result")
+    # D4: keyed streamed blocks, a repeated start of the same block, and a block key
+    # reused (index 0) by another run in one bubble (a continuation)
+    for s in data["scenarios"]:
+        envs = [st["env"] for st in s["steps"] if st["kind"] == "event"]
+        starts = [e.get("block") for e in envs if e["type"] in ("text_start", "thinking_start")]
+        if len(starts) != len(set(starts)):
+            cases.add("repeated start")
+        if len({b.split(".")[0] for b in starts if b}) > 1:
+            cases.add("several runs")
+    assert all(e.get("block") for s in data["scenarios"] for st in s["steps"] if st["kind"] == "event"
+               for e in [st["env"]] if e["type"] in ("text_delta", "thinking_delta", "text_start", "thinking_start"))
     assert cases >= {"replay", "resync", "resync+replay", "restart mid-turn", "restart idle",
-                     "restart after a tool result"}, cases
+                     "restart after a tool result", "repeated start", "several runs"}, cases

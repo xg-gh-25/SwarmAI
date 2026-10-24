@@ -159,10 +159,9 @@ Evidence of the need, daemon logs 2026-10-13..10-24: in-turn terminal errors 6
 (`SDK_ERROR` 5, `CONVERSATION_ERROR` 1), `turn_limit_reached` 0. The loss is the
 error text on reload of about one turn every two days. Not worth that surface;
 recorded here so a later attempt starts from these five findings.
-Found on the way, a real defect independent of A2: `retry_manager` emits
-`CONTEXT_TOO_LARGE` then `break`s into the exhausted-retries footer (`gave_up` +
-`ALL_RETRIES_EXHAUSTED`), so the user gets two contradictory failures (0 occurrences
-in the logs; fixable on its own).
+Found on the way: the `CONTEXT_TOO_LARGE` circuit breaker had been unreachable since
+2026-06-18 (`RetryManager` read the context size off itself, always 0) and fell through
+into the exhausted-retries footer; removed (d539a3ae3).
 A4 keeps the cases guarding the D4 fix (block keys, a repeated start, a retry into
 the same bubble), which do not depend on A2.
 
@@ -193,6 +192,13 @@ only, and A3's surface (fold-state migration, a render-cost baseline) is large.
   without a receipt, a turn_notice, a turn-limit notice. Properties: each block key
   renders once; after the record is applied the bubble equals the record (A2); a row's
   key and parent list are equal live and settled (A3).
+- Built (2026-10-24): the generator (`backend/tests/test_live_reload_scenarios.py`
+  `_keyed`, its own RNG so the scenarios' random stream is unchanged) streams text /
+  thinking as the orchestrator does since D4: a keyed `*_start` before keyed deltas,
+  one run per turn (a continuation reuses index 0 in the same bubble under another
+  run), and a repeated start of the same block mid-block in some blocks. The fixture
+  check requires both cases. With D4's same-block rule reverted, 62 of the 80
+  scenario tests fail. The other cases listed above went with A2 (not built).
 - WebKit geometry: manual macOS verification script (Playwright WebKit + app CSS), run
   before a visual change merges; not a merge gate; nothing about Windows.
 
