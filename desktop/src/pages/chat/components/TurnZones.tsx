@@ -43,7 +43,7 @@ import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, z
 import type { PhaseMember, StageZone, StopReceiptView, StripItem, Zone } from '../turnZones';
 import { ReadingContext } from '../readingContext';
 import { StageResult } from './StageDocs';
-import { agentStatus, useBackgroundAgents } from '../../../stores/backgroundAgentsStore';
+import { agentStatus, useBackgroundAgents, useHasRunningAgent } from '../../../stores/backgroundAgentsStore';
 import type { BackgroundAgent } from '../../../stores/backgroundAgentsStore';
 
 /** Between two zones (spec §9.3): clearly more than anything inside a zone. */
@@ -190,8 +190,7 @@ function callIds(items: Array<PhaseMember | Zone>): string[] {
  * stream alone would call it finished and fold it out of sight while it works.
  */
 function useHoldsRunningAgent(ids: string[], sessionId?: string): boolean {
-  const { agents } = useBackgroundAgents(sessionId);
-  return useLinger(agents.some((a) => a.status === 'running' && ids.includes(a.toolUseId)));
+  return useLinger(useHasRunningAgent(sessionId, ids));
 }
 
 // ── Group header ────────────────────────────────────────────────────────────────

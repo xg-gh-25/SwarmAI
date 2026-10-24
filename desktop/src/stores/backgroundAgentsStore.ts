@@ -15,6 +15,7 @@
  * - `BackgroundAgent`, `BackgroundAgentStatus`
  * - `backgroundAgentsStore` — `apply(sessionId, agents)`, `applySnapshot(map)`, `get`, `subscribe`
  * - `useBackgroundAgents(sessionId)` — React subscription for one session
+ * - `useHasRunningAgent(sessionId, ids)` — boolean subscription: re-renders only when it flips
  * - `agentStatus(sessionId, toolUseId, kept)` — the status an Agent row shows
  */
 import { useSyncExternalStore } from 'react';
@@ -103,6 +104,22 @@ export const backgroundAgentsStore = createBackgroundAgentsStore();
 export function useBackgroundAgents(sessionId: string | undefined): { agents: BackgroundAgent[]; loaded: boolean } {
   const st = useSyncExternalStore(backgroundAgentsStore.subscribe, backgroundAgentsStore.snapshot);
   return { agents: (sessionId && st.bySession.get(sessionId)) || EMPTY, loaded: st.loaded };
+}
+
+/**
+ * Whether one of these call ids is a background agent the daemon still runs. The
+ * snapshot is a boolean, so a progress update (tool count, elapsed) re-renders nobody:
+ * only the moment an agent starts or ends running does. Every WORKED / stage header of
+ * every turn in a tab subscribes, so a whole-store subscription would re-render them all
+ * on each tick.
+ */
+export function useHasRunningAgent(sessionId: string | undefined, ids: readonly string[]): boolean {
+  const key = ids.join('\n');
+  return useSyncExternalStore(backgroundAgentsStore.subscribe, () => {
+    if (!key) return false;
+    const want = new Set(key.split('\n'));
+    return backgroundAgentsStore.get(sessionId).some((a) => a.status === 'running' && want.has(a.toolUseId));
+  });
 }
 
 /**
