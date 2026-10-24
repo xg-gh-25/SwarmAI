@@ -18,20 +18,12 @@ while worktree mode is off and no run worktree exists. Judgments:
    ``push .``.
 
 4. worktree mode on, the session is bound to a real app session, and it has no run
-   isolating the repo (no run, or one not isolated yet / already landed; an explicitly
-   shared-mode run is exempt) → DENY file writes to the main checkout of a project's
-   code repo (run_worktree.repo_for_write, and the repo is a workspace project's or the
-   SwarmAI source; never SwarmWS; gitignored and ``.git/`` paths pass) and writes into
-   any run's worktree. Pure-doc files (``core.doc_paths.is_doc_only_path``: ``*.md``
-   and ``backend/context/``) are the exception: they may be written in the main checkout.
-   A direct code change goes through a run too, so it lands from its
-   own worktree instead of sharing the checkout with every other session; the deny
-   prints the commands (resume the session's own run when it has one). Git commands
-   that write that checkout (``_GIT_WRITES_MAIN``) are denied the same way; a write the
-   Bash parsers cannot see (an interpreter, a formatter) is stopped at commit time by
-   direct_commit_gate, which refuses any source commit there from a session with no run.
+   isolating its writes → DENY writes into any run's worktree (file tools, Bash writes,
+   git commands that write a work tree). Writes to a main checkout are NOT judged: native
+   coding there is the default (design 2026-10-24-swarmai-usable-by-anyone §3.4; the
+   rule that sent main-checkout code writes to the pipeline was removed).
 
-A file-write deny of rule 1 or 4 whose target is already an uncommitted change in the
+A file-write deny of rule 1 whose target is already an uncommitted change in the
 main checkout (an untracked leftover, a stray edit) adds a note: the worktree is made
 from HEAD and does not have that file (``_main_edit_note``).
 
@@ -52,7 +44,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from core.doc_paths import is_doc_only_path
 from core.gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
@@ -245,45 +236,6 @@ def _budget_left(cap: float) -> float:
     return cap if deadline is None else min(cap, deadline - time.monotonic() - _NOTE_MARGIN)
 
 
-_IGNORED_TTL = 5.0
-_ignored_memo: "dict[tuple[str, str], tuple[float, bool]]" = {}
-
-
-def _ignored(main: str, p: str) -> bool:
-    """Whether *p* is gitignored in *main*. Memoized for ``_IGNORED_TTL``: a deny is
-    judged twice (cached state, then afresh) and each ``git check-ignore`` is a process
-    spawn, which under host memory pressure took seconds and timed the gate out
-    (2026-10-22, three fail-opens)."""
-    import subprocess
-    rel = os.path.relpath(p, main)
-    if rel == ".git" or rel.startswith(".git" + os.sep):
-        return True          # git's own dir: never part of a change
-    key, now = (main, rel), time.monotonic()
-    hit = _ignored_memo.get(key)
-    if hit is not None and now - hit[0] < _IGNORED_TTL:
-        return hit[1]
-    try:
-        r = subprocess.run(["git", "-C", main, "check-ignore", "-q", "--", rel],
-                           capture_output=True, timeout=2)
-    except (OSError, subprocess.SubprocessError):
-        return False         # not memoized: a failed spawn is retried next call
-    if len(_ignored_memo) > 512:
-        _ignored_memo.clear()
-    _ignored_memo[key] = (now, r.returncode == 0)
-    return r.returncode == 0
-
-
-def _project_repo(main: str) -> "str | None":
-    """The workspace project a code repo belongs to (Projects/<P> named like the repo, or
-    the SwarmAI source itself) — rule 4 stays off for scratch and third-party repos."""
-    from core.security_hooks import _project_for_repo, _source_repo_root
-    name = _project_for_repo(main)
-    if name != "<project>":
-        return name
-    src = _source_repo_root()
-    return _project_for_repo(src) if src and os.path.realpath(src) == main else None
-
-
 _GIT_READ_FLAGS = frozenset({"--check", "--stat", "--numstat", "--summary",
                              "--show-current-patch"})
 
@@ -324,54 +276,15 @@ def _no_run_git_verdict(g: dict, nr: "_NoRun", command: str = "") -> "dict | Non
 
 
 def _no_run_verdict(p: str, nr: "_NoRun", what: "str | None" = None) -> "dict | None":
-    """Rule 4 (module docstring) for one write target (*what* names a git command)."""
-    from core.run_worktree import repo_for_write, run_for_path
-    from core.security_hooks import _pipeline_runs_root
+    """Rule 4 (module docstring) for one write target (*what* names a git command): a
+    session without an isolating run may not write into a run's worktree. Its own main
+    checkouts are its own business (design 2026-10-24-swarmai-usable-by-anyone §3.4)."""
+    from core.run_worktree import run_for_path
     hit = run_for_path(p)
     if hit is not None:
         return _deny(f"{what or p} is inside run {hit[0]}'s worktree; this session does not "
                      "own that run. Write only in a worktree of a run of your own.")
-    m = repo_for_write(p, _pipeline_runs_root())
-    if m is None:
-        return None
-    main = os.path.realpath(str(m))
-    project = _project_repo(main)
-    if project is None or (what is None and _ignored(main, p)):
-        return None
-    if what is None and is_doc_only_path(os.path.relpath(p, main)):
-        return None   # a pure-doc file may be edited in the main checkout (core/doc_paths)
-    head = (f"{what or p} is in the main checkout of {main}, which every session shares. With "
-            "worktree mode on, a code change — through the pipeline or direct — is made in a "
-            "run's own worktree and lands from there by itself. ")
-    if what is not None:
-        head += ("In a shared checkout this git command can move or discard other sessions' "
-                 "work (read-only forms, --abort and --ff-only syncs are allowed). If it is "
-                 "part of a code change, make the change in a run: ")
-    r = nr.run
-    pq = shlex.quote(project)
-    if r is not None:
-        note = "" if what is not None else _main_edit_note(main, p)
-        rid = shlex.quote(r["id"])
-        rp = shlex.quote(r["project"] or project)
-        nxt = ("resume it: " + v1_command(f"resume --project {rp} --run-id {rid}")
-               if r.get("status") == "paused" else
-               "the run makes its worktrees when it enters a code stage; if this "
-               "repo's is missing, " + v1_command(
-                   f"status --project {rp} --run-id {rid}") + " makes it and its `repos` "
-               "names it, and its `next` says what comes before a code stage" +
-               "\nIf this repo is not one of the run's repos, it needs a new run: "
-               + v1_command(f"create --project {pq} --profile direct {_REQ} --repo "
-                            f"{shlex.quote(main)}"))
-        return _deny(head + f"This session's run {r['id']} ({r.get('status')}) has no worktree "
-                     f"for this repo yet: {nxt}\nThen make this change at the same relative "
-                     "path under the worktree its `repos` names." + note)
-    create = v1_command(f"create --project {pq} --profile direct {_REQ} --repo {shlex.quote(main)}")
-    note = "" if what is not None else _main_edit_note(main, p)
-    return _deny(head + "Start a run (ONE simple command; `--profile direct` for a "
-                 "small, fully specified change, otherwise pick the matching profile):\n"
-                 f"Run: {create}\nthen follow its `next`, and make this change at the same "
-                 "relative path under the worktree its `repos` names (a direct run has it "
-                 "at once)." + note)
+    return None
 
 
 def _main_edit_note(main: str, p: str) -> str:

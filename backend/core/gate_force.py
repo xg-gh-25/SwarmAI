@@ -32,9 +32,8 @@ logger = logging.getLogger(__name__)
 FORCE_ENV = "SWARM_GATE_FORCE"
 
 GROUPS: dict[str, frozenset[str]] = {
-    "commit_gate": frozenset({"run_amend_gate", "direct_commit_gate",
-                              "active_run_commit_gate", "adversarial_commit_gate"}),
-    "test_command_gate": frozenset({"pipeline_test_gate", "pytest_command_guard"}),
+    "commit_gate": frozenset({"run_amend_gate", "active_run_commit_gate"}),
+    "test_command_gate": frozenset({"pipeline_test_gate"}),
     "expert_gate": frozenset({"expert_type_gate", "expert_budget_gate"}),
 }
 

@@ -118,15 +118,6 @@ def _assert_suggestions_pass(denied_by: list, cwd: str = REPO):
         assert _chain(cmd, cwd) == [], f"suggested command is itself refused: {cmd}"
 
 
-def test_pytest_guard_suggestion_passes_the_chain(ws):
-    hits = _chain("python -m pytest tests/test_a.py | tail -5")
-    assert [m for m, _ in hits] == ["Bash"]
-    _assert_suggestions_pass(hits)
-    s = _fill(_suggested(hits[0][1])[0])
-    assert _chain(s + " > /tmp/t.txt 2>&1") == []
-    assert _chain(s + " | tail -5") == []
-
-
 def test_direct_pytest_in_a_run_passes_the_chain(ws):
     # G1 (pipeline-gate-expert-simplification): a capped direct pytest in an active run
     # is approved (with a note); no hook of the chain refuses it.

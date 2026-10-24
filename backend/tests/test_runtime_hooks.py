@@ -1994,15 +1994,6 @@ class TestEnforcementInjector:
         assert "English" in ac
         assert "中文" not in ac
 
-    @pytest.mark.asyncio
-    async def test_A_direct_mode_survives_ui_prefix(self, session_context):
-        """Signal B also judges user text: a direct-mode trigger AFTER the UI block
-        still fires the adversarial reminder."""
-        hook = self._hook(session_context)
-        prompt = f"{self._UI_BLOCK}\n\n直接做 别走 pipeline 帮我改一下"
-        ac = (await hook({"prompt": prompt}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
-        assert "adversarial" in ac.lower()
-        assert "中文" in ac  # and the CJK user text is still Chinese
 
     @pytest.mark.asyncio
     async def test_A_ui_block_from_real_renderer_stays_chinese(self, session_context):
@@ -2075,22 +2066,6 @@ class TestEnforcementInjector:
             ac = (await hook({"prompt": msg}, None, MagicMock())).get("hookSpecificOutput", {}).get("additionalContext", "")
             assert "English" not in ac  # not classified as English
 
-    @pytest.mark.asyncio
-    async def test_B_direct_mode_trigger_injects_adversarial_reminder(self, session_context):
-        """B: 'just do it' / '直接做' → reminder that adversarial review stays mandatory."""
-        hook = self._hook(session_context)
-        for msg in ("just do it, skip the ceremony", "直接做 别走 pipeline 了"):
-            ac = (await hook({"prompt": msg}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
-            assert "adversarial" in ac.lower()
-
-    @pytest.mark.asyncio
-    async def test_AB_compose_chinese_direct_mode(self, session_context):
-        """A + B compose: a Chinese direct-mode message injects BOTH the language
-        line AND the adversarial line in one additionalContext."""
-        hook = self._hook(session_context)
-        ac = (await hook({"prompt": "直接做 别用 pipeline 了 帮我改一下"}, None, MagicMock()))["hookSpecificOutput"]["additionalContext"]
-        assert ("中文" in ac or "Chinese" in ac)
-        assert "adversarial" in ac.lower()
 
     @pytest.mark.asyncio
     async def test_empty_prompt_returns_empty(self, session_context):
@@ -2438,7 +2413,6 @@ async def test_a_non_gate_marker_carries_no_verdict_key(tmp_path, monkeypatch):
                None, MagicMock())
     base = [p for p in tmp_path.glob("session_sess-n_*.marker") if "_adv_" not in p.name]
     assert "verdict" not in json.loads(base[0].read_text())
-
 
 
 @pytest.mark.asyncio

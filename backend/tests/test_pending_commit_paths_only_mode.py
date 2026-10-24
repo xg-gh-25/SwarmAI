@@ -206,7 +206,6 @@ def test_directory_to_file_type_change_is_not_narrowed(tmp_path):
     assert _abs(root, "p/x.py") <= pending, sorted(pending)
 
 
-
 # ---------------------------------------------------------------------------
 # Differential: what real git commits is always inside pending.
 # ---------------------------------------------------------------------------
@@ -315,25 +314,3 @@ def test_differential_pending_contains_what_git_commits(repo, cmd, exact):
 # would take those files.
 # ---------------------------------------------------------------------------
 
-def test_adversarial_gate_approves_reviewed_pathspec_commit(repo, tmp_path, monkeypatch):
-    import asyncio
-    import json
-
-    from core import security_hooks
-
-    audit = tmp_path / "audit"
-    audit.mkdir()
-    monkeypatch.setattr(security_hooks, "_AGENT_AUDIT_DIR", audit)
-    monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
-    (audit / "session_sess-A_adv_1.marker").write_text(
-        json.dumps({"adversarial": True, "reviewed_paths": sorted(_abs(repo, "mine.py"))}))
-    gate = security_hooks.create_adversarial_commit_gate({"sdk_session_id": "sess-A"})
-
-    def decide(cmd):
-        out = asyncio.run(gate({"tool_name": "Bash", "cwd": str(repo),
-                                "tool_input": {"command": cmd}}, None, None))
-        return out.get("hookSpecificOutput", {}).get("permissionDecision", "approve")
-
-    assert decide(_GC + " -m fix -- mine.py") != "deny"
-    assert decide(_GC + " -m fix") == "deny"
-    assert decide("cd sub && " + _GC + " -m fix -- x.py") == "deny"

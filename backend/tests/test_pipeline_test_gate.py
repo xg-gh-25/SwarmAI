@@ -1,11 +1,10 @@
-"""Tests for create_pipeline_test_gate and create_direct_commit_gate (design
-docs/design/pipeline-speed-systematic-fix.md §4-B3 and §4-G1).
+"""Tests for create_pipeline_test_gate (design docs/design/pipeline-speed-systematic-fix.md
+§4-B3) and the run-amend gate. (direct_commit_gate and its tests were removed by design
+2026-10-24-swarmai-usable-by-anyone §3.4.)
 
 Methodology: each gate is driven through its real async PreToolUse callable. The
 active-run state (contract C6) is real run.json files written under a temp
-workspace (SWARM_WORKSPACE via monkeypatch; conftest strips SWARM_* vars). The
-direct-commit gate runs against real temp git repos (HOME pointed at the temp dir,
-so no global git config or hooks apply). Fail-open paths are forced by pointing at a
+workspace (SWARM_WORKSPACE via monkeypatch; conftest strips SWARM_* vars). Fail-open paths are forced by pointing at a
 non-repo or by monkeypatching a helper to fail.
 
 Invariants:
@@ -28,11 +27,6 @@ Invariants:
     targets. The deny text
     carries the runner command and the run-update --status abandoned escape, filled
     with the real project and run id, and calls the force env operator-only.
-  • direct_commit_gate: only for the SwarmAI source repo; no own run + >20 changed
-    source lines (pure-doc paths excluded, core/doc_paths.py) → deny with run-create --profile
-    direct for the repo's project; unowned / other-session runs do not exempt;
-    docs-only, ≤20 lines, other repos, session in a run, git errors
-    and force envs → approve.
 """
 import asyncio
 import json
@@ -187,7 +181,7 @@ class TestSessionRunState:
 
     def test_a_forged_run_json_is_not_this_sessions_run(self, ws):
         """B-class re-check: status / owner of a run.json with no contract do not
-        make it a run (a forged one lifted direct_commit_gate and the test gate)."""
+        make it a run (a forged one lifted the run gates)."""
         d = ws / "Projects" / "Proj" / ".artifacts" / "runs" / "run_forged"
         d.mkdir(parents=True)
         (d / "run.json").write_text(json.dumps({"status": "active", "session_id": SID}))
@@ -545,7 +539,7 @@ class TestPipelineTestGateNoteText:
         assert "--project 'Agent DLC' --run-id run_9f --mode verify" in _note(res)
 
 
-# ── direct_commit_gate ───────────────────────────────────────────────────────
+# ── git helpers (run_amend_gate tests) ─────────────────────────────────────
 def _git(d, *args):
     # HOME is a sibling dir, NOT the repo: machine-level git tooling may write cache /
     # log files under $HOME, and `git add -A` would then stage them as source.
@@ -579,165 +573,11 @@ def repo(tmp_path, monkeypatch):
     return d
 
 
-def _direct(command, cwd, sid=SID):
-    return _call(sh.create_direct_commit_gate({"sdk_session_id": sid}), command, cwd=str(cwd))
-
-
-class TestDirectCommitGateDenies:
-    def test_staged_source_change_over_20_lines_is_denied(self, ws, repo):
-        (ws / "Projects" / "Repo").mkdir(parents=True)  # project matching the repo name
-        (repo / "a.py").write_text("base = 0\n" + _lines(21))
-        _git(repo, "add", "a.py")
-        res = _direct("git commit -m fix", repo)
-        assert _is_deny(res)
-        reason = _reason(res)
-        assert "21 source lines" in reason
-        assert ("pipeline_v1.py create --project Repo --profile direct") in reason
-        from core.worktree_write_gate import v1_command
-        assert v1_command("") .split()[1] in reason       # the absolute script path
-        assert "artifact_cli" not in reason
-        assert "--project SwarmAI" not in reason
-
-    def test_unmapped_repo_gets_a_project_placeholder(self, ws, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(21))
-        _git(repo, "add", "a.py")
-        reason = _reason(_direct("git commit -m fix", repo))
-        assert "pipeline_v1.py create --project '<project>' --profile direct" in reason
-
-    def test_force_env_is_described_as_operator_only(self, ws, repo):
-        # L1
-        (repo / "a.py").write_text("base = 0\n" + _lines(21))
-        _git(repo, "add", "a.py")
-        reason = _reason(_direct("git commit -m fix", repo))
-        assert "SWARM_GATE_FORCE=direct_commit_gate for that one command" not in reason
-        assert "operator" in reason and "backend/daemon environment" in reason
-
-    def test_unowned_running_run_does_not_exempt(self, ws, repo):
-        # H1: a run without session_id must not switch the gate off for anyone.
-        _seed(ws, run_id="run_legacy", session_id=_NO_SID)
-        (repo / "a.py").write_text("base = 0\n" + _lines(40))
-        _git(repo, "add", "a.py")
-        assert _is_deny(_direct("git commit -m fix", repo))
-
-    def test_docs_do_not_count_but_source_still_does(self, ws, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(21))
-        (repo / "README.md").write_text(_lines(200, "k"))
-        _git(repo, "add", "-A")
-        reason = _reason(_direct("git commit -m fix", repo))
-        assert "21 source lines" in reason
-
-    def test_a_lockfile_is_not_a_doc(self, ws, repo):
-        # one definition of "doc" (core/doc_paths.py, execution plan v2 §2): a lockfile,
-        # or a non-.md file under docs/ / .kiro/, counts like any other source file
-        for rel in ("package-lock.json", "docs/x.txt", ".kiro/steering/s.txt"):
-            p = repo / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(_lines(30, "k"))
-        _git(repo, "add", "-A")
-        assert _is_deny(_direct("git commit -m 'chore: deps'", repo))
-
-    def test_dash_a_form_counts_unstaged_changes(self, ws, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(30))
-        assert _is_deny(_direct("git commit -am fix", repo))
-
-    def test_pathspec_form_counts_unstaged_changes(self, ws, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(30))
-        assert _is_deny(_direct("git commit -m fix -- a.py", repo))
-
-    def test_lines_sum_across_files(self, ws, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(11))
-        (repo / "b.py").write_text(_lines(10, "y"))
-        _git(repo, "add", "a.py", "b.py")
-        assert _is_deny(_direct("git commit -m fix", repo))  # 11 + 10 = 21
-
-    def test_paused_run_of_this_session_does_not_count_as_active(self, ws, repo):
-        _seed(ws, status="paused")
-        (repo / "a.py").write_text("base = 0\n" + _lines(25))
-        _git(repo, "add", "a.py")
-        assert _is_deny(_direct("git commit -m fix", repo))
-
-
-class TestDirectCommitGateApproves:
-    def _big_staged_change(self, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(40))
-        _git(repo, "add", "a.py")
-
-    def test_docs_only_change_is_approved(self, ws, repo):
-        (repo / "README.md").write_text(_lines(50))
-        for rel in ("docs/x.md", ".kiro/steering/s.md", "backend/context/AGENT.md",
-                    "backend/context/EVOLUTION_CHANGELOG.jsonl"):
-            p = repo / rel
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(_lines(30))
-        _git(repo, "add", "-A")
-        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
-
-    def test_exactly_20_source_lines_is_approved(self, ws, repo):
-        (repo / "a.py").write_text("base = 0\n" + _lines(20))
-        _git(repo, "add", "a.py")
-        assert _direct("git commit -m small", repo) == {"decision": "approve"}
-
-    def test_unstaged_changes_outside_the_commit_are_not_counted(self, ws, repo):
-        (repo / "b.py").write_text(_lines(3, "y"))
-        _git(repo, "add", "b.py")
-        (repo / "a.py").write_text("base = 0\n" + _lines(40))  # unstaged, not -a
-        assert _direct("git commit -m small", repo) == {"decision": "approve"}
-
-    def test_session_in_a_running_run_is_approved(self, ws, repo):
-        _seed(ws)
-        self._big_staged_change(repo)
-        assert _direct("git commit -m fix", repo) == {"decision": "approve"}
-
-    def test_commit_in_an_unrelated_repo_is_approved(self, ws, repo, tmp_path):
-        # M2: the gate is scoped to the SwarmAI source repo.
-        other = _make_repo(tmp_path / "other")
-        (other / "a.py").write_text("base = 0\n" + _lines(40))
-        _git(other, "add", "a.py")
-        assert _direct("git commit -m fix", other) == {"decision": "approve"}
-
-    def test_other_sessions_run_does_not_exempt(self, ws, repo):
-        _seed(ws, session_id="someone-else")
-        self._big_staged_change(repo)
-        assert _is_deny(_direct("git commit -m fix", repo))
-
-    def test_not_a_repo_fails_open(self, ws, tmp_path):
-        d = tmp_path / "plain"
-        d.mkdir()
-        assert _direct("git commit -m fix", d) == {"decision": "approve"}
-
-    def test_git_numstat_error_fails_open(self, ws, repo, monkeypatch):
-        self._big_staged_change(repo)
-        monkeypatch.setattr(sh, "_numstat_lines", lambda root, *extra: None)
-        assert _direct("git commit -m fix", repo) == {"decision": "approve"}
-
-    def test_helper_exception_fails_open(self, ws, repo, monkeypatch):
-        self._big_staged_change(repo)
-
-        def _boom(cwd, command):
-            raise RuntimeError("git exploded")
-        monkeypatch.setattr(sh, "_pending_source_line_count", _boom)
-        assert _direct("git commit -m fix", repo) == {"decision": "approve"}
-
-    @pytest.mark.parametrize("env", ["direct_commit_gate", "commit_gate"])
-    def test_force_envs_approve(self, ws, repo, monkeypatch, env):
-        self._big_staged_change(repo)
-        monkeypatch.setenv("SWARM_GATE_FORCE", env)
-        assert _direct("git commit -m fix", repo) == {"decision": "approve"}
-
-    def test_non_commit_commands_are_approved(self, ws, repo):
-        self._big_staged_change(repo)
-        for command in ("git status", "git diff --cached", 'echo "git commit"'):
-            assert _direct(command, repo) == {"decision": "approve"}, command
-
-    def test_missing_session_id_fails_open(self, ws, repo):
-        self._big_staged_change(repo)
-        assert _direct("git commit -m fix", repo, sid="") == {"decision": "approve"}
-
 
 # ── registration ─────────────────────────────────────────────────────────────
 def test_build_hooks_registers_both_gates_before_the_hitl_gate(monkeypatch):
-    """L3: pipeline_test_gate precedes pytest_command_guard, and both new gates
-    precede dangerous_command_gate (no approve-then-deny). No existing gate is lost."""
+    """L3: pipeline_test_gate and run_amend_gate precede dangerous_command_gate (no
+    approve-then-deny). No existing gate is lost."""
     from core import hook_builder
     from core.permission_manager import permission_manager
 
@@ -757,24 +597,21 @@ def test_build_hooks_registers_both_gates_before_the_hitl_gate(monkeypatch):
         permission_manager=permission_manager,
     ))
     names = [n for _e, n, _m in recorded]
-    for existing in ("pre_tool_logger", "background_command_guard", "pytest_command_guard",
+    for existing in ("pre_tool_logger", "background_command_guard",
                      "bash_syntax_guard", "inclusive_term_guard", "design_lint_guard",
                      "image_read_dedup_guard", "dangerous_command_gate",
-                     "adversarial_commit_gate", "active_run_commit_gate",
+                     "active_run_commit_gate",
                      "ask_question_gate", "external_approval_gate", "governance_file_gate"):
         assert existing in names, existing
-    assert names.index("pipeline_test_gate") < names.index("pytest_command_guard")
     assert names.index("pipeline_test_gate") < names.index("dangerous_command_gate")
-    assert names.index("direct_commit_gate") < names.index("dangerous_command_gate")
     # run_amend_gate denies an amend before dangerous_command_gate could prompt for it
     assert names.index("run_amend_gate") < names.index("dangerous_command_gate")
     assert names.count("run_amend_gate") == 1
-    assert names.count("pipeline_test_gate") == names.count("direct_commit_gate") == 1
+    assert names.count("pipeline_test_gate") == 1
     # session_link_gate sits right before pipeline_test_gate (test_session_link_gate.py)
     assert names.index("session_link_gate") == names.index("pipeline_test_gate") - 1
     by_name = {n: (e, m) for e, n, m in recorded}
     assert by_name["pipeline_test_gate"] == ("PreToolUse", "Bash")
-    assert by_name["direct_commit_gate"] == ("PreToolUse", "Bash")
 
 
 # ── run_amend_gate ───────────────────────────────────────────────────────────
@@ -874,125 +711,6 @@ def test_source_repo_root_survives_the_packaged_daemon(tmp_path, monkeypatch):
     (repo / "backend" / "core" / "security_hooks.py").unlink()
     monkeypatch.setattr(sh, "_SOURCE_ROOT_CACHE", [0.0, None])
     assert sh._source_repo_root() is None
-
-
-class TestDirectCommitGateWorktreeMode:
-    """Worktree mode on: a code change lands from a run's worktree, so ANY source commit
-    in a project code repo's main checkout by a session with no run is refused — the
-    backstop for writes the worktree gate cannot see (interpreters, formatters)."""
-
-    def test_one_source_line_is_denied(self, ws, repo, monkeypatch):
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        (repo / "a.py").write_text("base = 1\n")
-        _git(repo, "add", "a.py")
-        reason = _reason(_direct("git commit -m tiny", repo))
-        assert "limit 0" in reason and "worktree mode on" in reason
-
-    def test_docs_still_pass_and_mode_off_keeps_the_20_line_limit(self, ws, repo, monkeypatch):
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        (repo / "README.md").write_text(_lines(5))
-        _git(repo, "add", "README.md")
-        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
-        (repo / "a.py").write_text("base = 1\n")
-        _git(repo, "add", "a.py")
-        assert _direct("git commit -m tiny", repo) == {"decision": "approve"}
-
-    def test_pure_doc_commit_passes_any_other_path_is_refused(self, ws, repo, monkeypatch):
-        """Execution plan v2 §2: a commit of only *.md / backend/context/ needs no run;
-        one non-doc path among them — even a binary or 0-line one — refuses it."""
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        ctx = repo / "backend" / "context"
-        ctx.mkdir(parents=True)
-        (ctx / "AGENT.md").write_text(_lines(40))
-        (repo / "README.md").write_text(_lines(40))
-        _git(repo, "add", "-A")
-        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
-        (repo / "a.py").write_text("base = 1\n")
-        _git(repo, "add", "a.py")
-        assert _is_deny(_direct("git commit -m 'docs and code'", repo))
-        _git(repo, "reset", "-q", "a.py")
-        (repo / "a.py").write_text("base = 0\n")
-        (repo / "blob.bin").write_bytes(b"\x00\x01\x02")
-        _git(repo, "add", "blob.bin")
-        assert _is_deny(_direct("git commit -m 'docs and a binary'", repo))
-
-    def test_a_binary_counts_only_with_worktree_mode_on(self, ws, repo, monkeypatch):
-        """Mode off keeps the 20-LINE rule (a binary is 0 lines); mode on (limit 0)
-        any non-doc path refuses the commit."""
-        (repo / "a.py").write_text("base = 0\n" + _lines(20))
-        (repo / "blob.bin").write_bytes(b"\x00\x01\x02")
-        _git(repo, "add", "a.py", "blob.bin")
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
-        assert _direct("git commit -m small", repo) == {"decision": "approve"}
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        assert _is_deny(_direct("git commit -m small", repo))
-
-    def test_a_pure_doc_commit_still_needs_an_adversarial_review(self, ws, repo, tmp_path,
-                                                                  monkeypatch):
-        """direct_commit_gate lets it through; adversarial_commit_gate is unchanged and
-        refuses it until a review marker covers every committed path."""
-        import asyncio
-        import json as _json
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        audit = tmp_path / "audit"
-        audit.mkdir()
-        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
-        (repo / "README.md").write_text(_lines(5))
-        _git(repo, "add", "README.md")
-        assert _direct("git commit -m docs", repo) == {"decision": "approve"}
-        gate = sh.create_adversarial_commit_gate({"sdk_session_id": SID})
-
-        def adversarial():
-            return asyncio.run(gate({"tool_name": "Bash", "cwd": str(repo),
-                                     "tool_input": {"command": "git commit -m docs"}},
-                                    None, None))
-        assert _is_deny(adversarial())
-        (audit / f"session_{SID}_adv_1.marker").write_text(_json.dumps({
-            "adversarial": True,
-            "reviewed_paths": [os.path.realpath(str(repo / "README.md"))]}))
-        assert not _is_deny(adversarial())
-
-    def test_a_project_code_repo_counts_a_scratch_repo_does_not(self, ws, repo, tmp_path, monkeypatch):
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        other = _make_repo(tmp_path / "widget")
-        (other / "a.py").write_text("base = 1\n")
-        _git(other, "add", "a.py")
-        assert _direct("git commit -m x", other) == {"decision": "approve"}    # no project
-        (ws / "Projects" / "Widget").mkdir(parents=True)
-        assert _is_deny(_direct("git commit -m x", other))                    # project repo
-
-
-class TestDirectCommitGateWorktreeModeScope:
-    def test_only_a_live_v1_run_of_its_own_exempts(self, ws, repo, tmp_path, monkeypatch):
-        """A session's own live v1 run (any mode) exempts it here: the run's gates own
-        the commit then (active_run_commit_gate, worktree_write_gate). A run.json with
-        no protected contract is not a run and exempts nothing (A-class)."""
-        from core.run_protocol.engine import RunEngine
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
-        (repo / "a.py").write_text("base = 1\n")
-        _git(repo, "add", "a.py")
-        (ws / "Projects" / "Repo").mkdir(parents=True, exist_ok=True)   # a project repo
-        assert _is_deny(_direct("git commit -m x", repo))                # no run at all
-        f = ws / "Projects" / "Repo" / ".artifacts" / "runs" / "run_nocontract" / "run.json"
-        f.parent.mkdir(parents=True)
-        f.write_text(json.dumps({"id": "run_nocontract", "project": "Repo", "status": "active",
-                                 "session_id": SID, "worktree_mode": "shared"}))
-        assert _is_deny(_direct("git commit -m x", repo))                # forged: not a run
-        RunEngine.create(data_dir=tmp_path / "data", workspace=ws, project="Repo",
-                         profile="direct", requirement="x", session_id=SID,
-                         repos={"repo": str(repo)}, mode="shared", run_id="run_shr1")
-        assert _direct("git commit -m x", repo) == {"decision": "approve"}
-
-    def test_a_repo_no_run_can_isolate_keeps_the_20_line_rule(self, ws, repo, monkeypatch):
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-        (repo / ".gitmodules").write_text("")      # submodules: repo_for_write refuses it
-        _git(repo, "add", ".gitmodules")
-        _git(repo, "commit", "-q", "-m", "mods")
-        (repo / "a.py").write_text("base = 1\n")
-        _git(repo, "add", "a.py")
-        assert _direct("git commit -m x", repo) == {"decision": "approve"}
 
 
 # ── One runner call per Bash call (run_bd60daff 2026-10-19) ───────────────────

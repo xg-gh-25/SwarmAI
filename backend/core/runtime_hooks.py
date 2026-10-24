@@ -40,15 +40,6 @@ _DEFAULT_CORRECTIONS_PATH = str(
 _FAILURE_HINT_THRESHOLD = 2
 
 # ── Enforcement injector (run_e57b7554) — per-turn UserPromptSubmit reminders ──
-# Direct-mode triggers (CN + EN). A match means the user explicitly asked to skip
-# the pipeline / "just do it" — the ONE sanctioned bypass (STEERING #13 / R1) —
-# which is exactly the moment the adversarial-review-still-mandatory reminder must
-# fire. Case-insensitive; word-anchored on the EN side so "adjust it" etc. don't hit.
-_DIRECT_MODE_RE = re.compile(
-    r"直接做|直接干|直接改|跳过\s*pipeline|不走\s*pipeline|别走\s*pipeline|别用\s*pipeline|不用\s*pipeline"
-    r"|\bjust do it\b|\bskip (?:the )?pipeline\b|\bskip the ceremony\b",
-    re.IGNORECASE,
-)
 # CJK share of SEMANTIC UNITS (cjk_chars / (cjk_chars + latin_words)) at/above which
 # a message that contains CJK is treated as Chinese. Weighing CJK-chars against
 # Latin-WORDS (not a raw char ratio) is deliberate: it keeps XG's normal
@@ -2102,7 +2093,7 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
     """Factory: a UserPromptSubmit hook that injects per-turn enforcement
     reminders into ``additionalContext`` — moving machine-decidable, per-turn
     rules OFF decaying static prose and INTO the reading path just before I
-    generate (O003 + P7). Two signals, composed into one additionalContext:
+    generate (O003 + P7). One signal:
 
     - **A — symmetric language (R19).** Detect THIS message's language and remind
       me to reply in the SAME language. SYMMETRIC + input-derived — a CJK message
@@ -2110,11 +2101,9 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
       English". NEVER hardcoded to one language (hardcoding rebuilds the exact bug
       that motivated the hook: R19 is *match the input language*, not "reply in
       Chinese").
-    - **B — direct-mode guard (R1 / STEERING #13).** If the message carries a
-      direct-mode trigger (直接做 / just do it / skip pipeline), remind me that
-      adversarial review stays MANDATORY even in direct mode
-      (code → test → adversarial → commit) — the one moment I'm most tempted to
-      skip it.
+    (Signal B, "adversarial review is still mandatory in direct mode", was removed:
+    native coding is the default and the agent decides which reviews a change needs,
+    design 2026-10-24-swarmai-usable-by-anyone §3.4 / P6.)
 
     Observe-only + fail-safe: any internal error returns ``{}`` so the hook chain
     is never broken. Mirrors the additionalContext shape of
@@ -2128,7 +2117,7 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
             if not prompt:
                 return {}
 
-            # Both signals judge the USER's message, not the system-injected UI-state
+            # The signal judges the USER's message, not the system-injected UI-state
             # prefix the session router prepends — strip it once, use for both.
             user_text = _strip_injected_prefix(prompt)
 
@@ -2145,15 +2134,6 @@ def create_enforcement_injector(session_context: Optional[dict] = None):
                 parts.append(
                     "⚠️ The user's message is in English → respond in English this "
                     "turn (R19: match the user's input language)."
-                )
-
-            # Signal B — direct-mode adversarial guard
-            if _DIRECT_MODE_RE.search(user_text):
-                parts.append(
-                    "⚠️ Direct-mode request detected: adversarial review is STILL "
-                    "mandatory before commit (sequence: code → test → adversarial → "
-                    "commit). 'Too simple for adversarial' is the signal it's needed "
-                    "(R1 / STEERING #13). Cut ceremony, never cut the adversarial gate."
                 )
 
             if not parts:

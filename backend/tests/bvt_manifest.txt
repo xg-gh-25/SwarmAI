@@ -60,7 +60,6 @@ test_persist_routing_declared_type.py
 test_phase_wiring.py
 test_pipeline_profiles.py
 test_pipeline_validator_repro_gate.py
-test_pytest_command_guard.py
 test_redline_gate.py
 test_router_async_blocking.py
 test_silent_except_baseline.py

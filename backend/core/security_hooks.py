@@ -16,7 +16,6 @@ Public symbols
 - ``create_audit_marker_write_gate``         — deny writes/deletes in state/pipeline_agent_audit (forged review markers)
 - ``create_pipeline_test_gate``              — in an active run, tests/builds only via pipeline_test.py
 - ``create_run_amend_gate``                  — in an active run, deny git commit --amend (no HITL prompt)
-- ``create_direct_commit_gate``              — >20 source lines committed outside a run → pipeline_v1.py create --profile direct
 - ``create_governance_file_gate``            — Three-Layer Governance file write interception
 - ``GOVERNANCE_TIER1_PATTERNS``              — Tier 1 (Constitutional) file patterns
 - ``GOVERNANCE_TIER2_PATTERNS``              — Tier 2 (Statutory) file patterns
@@ -50,7 +49,6 @@ if TYPE_CHECKING:
     from .permission_manager import PermissionManager
     from .ask_question_manager import AskQuestionManager
 
-from .doc_paths import is_doc_only_path
 from .gate_force import force_enabled
 
 logger = logging.getLogger(__name__)
@@ -411,7 +409,7 @@ def _is_irreversible_external_op(command: str) -> bool:
     benign command (``git status && git push -f``) including newline-separated.
 
     ACCEPTED RESIDUALS (Gate-2 2nd pass, LOW — documented not hidden, same posture
-    as ``pytest_command_guard``'s indirect-invocation leak): a wrapper that takes
+    as the pytest recogniser's indirect-invocation leak): a wrapper that takes
     its own argument (``nice -n 10 gh repo delete``, ``timeout 5 gh …``) and
     subshell/command-substitution grouping (``(git push -f)``, ``$(git push -f)``)
     are NOT recognized — they need a real shell parser. The fail-closed
@@ -1997,7 +1995,7 @@ def _is_backgrounded(command: str, tool_input: dict[str, Any]) -> bool:
     (Gate-1 finding, run_3bde4b8b). A real backgrounding ``&`` always lives OUTSIDE
     the body (intro line or after the terminator), so this can never hide one.
 
-    ACCEPTED RESIDUAL (documented, not fixed — pytest_command_guard precedent):
+    ACCEPTED RESIDUAL (documented, not fixed):
     ``&`` inside other DATA contexts that are NOT heredocs — command substitution
     ``$(...)``, backticks, process substitution ``<(...)`` — is still counted. These
     are far rarer than heredocs and each added strip is a new fail-open surface on a
@@ -2126,12 +2124,11 @@ async def background_command_guard(
 
 
 # ---------------------------------------------------------------------------
-# pytest command guard — a pytest run must end before the Bash timeout (R9)
+# pytest command recognition (shared by the pipeline test gate and the hang checks)
 # ---------------------------------------------------------------------------
-# In run_241014d4 a slow pytest ran past the Bash timeout, the CLI moved it to the
-# background, the call returned empty, and the agent re-ran it ~6×. This guard
-# denies a pytest run that can outlive the call (see pytest_command_guard) and
-# approves everything else (fail-safe). It is a pure deny — no HITL.
+# The R9 pytest_command_guard that denied a pytest run without a wall-clock cap was
+# removed (design 2026-10-24-swarmai-usable-by-anyone §3.4: a gate must not block
+# native testing). These recognisers stay for the gates that still use them.
 
 # pytest as an INVOCATION (not the literal string in a filename like pytest.log):
 # at a command-word position — line start, or after a shell separator/pipe,
@@ -2151,97 +2148,6 @@ _PYTEST_INVOCATION_RE = re.compile(
     r"\s*(?:python[\d.]*\s+-m\s+)?(?:py\.test|pytest)\b",  # opt. `python -m` after wrapper
     re.IGNORECASE,
 )
-# A wall-clock wrapper that BINDS the pytest token — the wrapper must IMMEDIATELY
-# precede pytest (optionally via `python -m`), not merely appear somewhere in the
-# string. Gate-2 (run BLOCK) proved an unbound "wrapper anywhere" check fails open:
-#   `gtimeout 90 echo && pytest`  → wrapper wraps echo, pytest runs raw (C1)
-#   `timeout 0 pytest`            → 0 means infinite, not a cap            (C2)
-#   `perl -e 'print "alarm"'; pytest` → decoy alarm mention, pytest raw    (C3)
-# Fixes: (a) wrapper adjacency to pytest; (b) duration `[1-9]\d*` rejects 0;
-# (c) perl arm requires `alarm N` AND `exec @ARGV <pytest>` in ONE command (no
-# `|`/newline crossing — `;` allowed since it's perl-script syntax). A per-test
-# `--timeout=60` NEVER counts (it bounds each test, not the command → C040).
-# On THIS machine gtimeout/timeout are NOT installed — only `/usr/bin/perl` is
-# guaranteed — so the perl-alarm form is the real, always-available cap.
-# Optional runner/interpreter prefix that may sit between the wall-clock wrapper
-# and the pytest token: `python[3.x] -m `, `uv run `, `poetry run `, `pdm run `.
-# the interpreter may be given by path (`backend/.venv/bin/python`, `/abs/.venv/bin/python3`):
-# conftest requires the venv interpreter, so a bare-`python`-only cap denied the one
-# command that can actually run the tests.
-_RUNNER_PREFIX = r"(?:(?:[\w.~/-]*/)?python[\d.]*\s+-m\s+|(?:uv|poetry|pdm)\s+run\s+)?"
-_WALLCLOCK_BOUND_PYTEST_RE = re.compile(
-    # gtimeout/timeout N (N>=1) wrapping pytest (optionally via a runner prefix):
-    r"\bg?timeout\s+(?P<timeout>[1-9]\d*)\s+" + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b"
-    # OR perl-alarm: alarm N (N>=1) ... exec @ARGV <runner?> <pytest>, one command:
-    r"|\bperl\b[^|\n]*?\balarm\s+(?P<alarm>[1-9]\d*)\b[^|\n]*?\bexec\s+@ARGV['\"]?\s+"
-    + _RUNNER_PREFIX + r"(?:py\.test|pytest)\b",
-    re.IGNORECASE,
-)
-# The CLI's own Bash timeout (BASH_DEFAULT_TIMEOUT_MS, 120s here; a call may ask for
-# more with its `timeout` input). A command still running when it fires is moved to
-# the background and the call returns no output, so a pytest cap must end the run
-# this many seconds before it (pytest's report and the shell need the margin).
-_BASH_TIMEOUT_DEFAULT_MS = 120_000
-_CAP_MARGIN_S = 10
-
-
-_BASH_TIMEOUT_MAX_MS = 600_000  # the CLI clamps a call's timeout to this
-
-
-def _bash_call_timeout_s(tool_input: dict) -> int:
-    """The timeout of this Bash call, seconds: its `timeout` input, else
-    BASH_DEFAULT_TIMEOUT_MS, else 120s; clamped to the CLI's 600s maximum. A value
-    that is not a positive whole number (a bool, a float string, garbage) is not
-    trusted and the default applies, so a malformed input can only shorten the limit."""
-    for raw in (tool_input.get("timeout"), os.environ.get("BASH_DEFAULT_TIMEOUT_MS")):
-        if isinstance(raw, bool):
-            continue
-        if isinstance(raw, int):
-            ms = raw
-        elif isinstance(raw, str) and raw.strip().isdigit():
-            ms = int(raw.strip())
-        else:
-            continue
-        if ms > 0:
-            return min(ms, _BASH_TIMEOUT_MAX_MS) // 1000
-    return _BASH_TIMEOUT_DEFAULT_MS // 1000
-
-
-def _pytest_run_time_s(command: str) -> "int | None":
-    """How long the pytest runs in *command* can take: the SUM of their caps (runs
-    in one call follow each other), or None when any run has no cap of its own.
-
-    Every pytest invocation (`_PYTEST_INVOCATION_RE`) must have a cap bound to it
-    (`_WALLCLOCK_BOUND_PYTEST_RE`): one capped run does not cover a second uncapped
-    one (`gtimeout 1 pytest a; pytest b`). Both are counted on the raw text, so a
-    quoted decoy (`echo 'gtimeout 1 pytest x'; pytest b`) adds one invocation AND
-    one cap and the real run is still uncovered."""
-    command = _drop_quoted_data(command)
-    caps = [int(m.group("timeout") or m.group("alarm"))
-            for m in _WALLCLOCK_BOUND_PYTEST_RE.finditer(command)]
-    runs = sum(1 for _ in _PYTEST_INVOCATION_RE.finditer(command))
-    if not caps or len(caps) < runs:
-        return None
-    return sum(caps)
-
-
-# A quoted span that names pytest or tail is data (an echo, a -k expression, a commit
-# message), never a run, a cap or a pager: it is dropped before counting. Every other
-# quoted span stays, because the perl cap is one (`perl -e 'alarm 90; exec @ARGV'`).
-# One rule for all three counts, so a decoy cannot add a cap the real run lacks
-# (`echo 'gtimeout 1 pytest x'; pytest b`) and cannot add a run (`echo '; pytest x'`).
-_QUOTED_SPAN_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
-_DATA_WORD_RE = re.compile(r"\b(?:py\.test|pytest|tail)\b", re.IGNORECASE)
-
-
-def _drop_quoted_data(command: str) -> str:
-    return _QUOTED_SPAN_RE.sub(lambda m: "" if _DATA_WORD_RE.search(m.group(0)) else m.group(0),
-                               command)
-
-
-# `tail -f` / `-F` / `--follow` never exits, so a capped run piped into it still
-# outlives the call.
-_FOLLOW_RE = re.compile(r"\btail\b[^|;&\n]*\s(?:-[a-zA-Z]*[fF][a-zA-Z]*|--follow\b)")
 
 
 # A bare pytest TOKEN at a word boundary (just "is the word pytest present").
@@ -2282,149 +2188,14 @@ def _pytest_token_is_command_word(command: str) -> bool:
     return False
 
 
-async def pytest_command_guard(
-    input_data: dict[str, Any],
-    tool_use_id: str | None,
-    context: Any,
-) -> dict[str, Any]:
-    """PreToolUse (Bash): DENY a pytest run whose wall-clock cap does not end it
-    before this Bash call's timeout.
-
-    Why: the CLI moves a command still running at its Bash timeout (120s default,
-    or the call's `timeout` input) to the background and returns no output; the
-    agent reads that as a hang and re-runs it (run_241014d4, C040). Transcripts of
-    2026-10-14..21 show `perl -e 'alarm 120' … pytest` moved to the background
-    exactly this way, so a cap only counts when it is shorter than the timeout
-    (by _CAP_MARGIN_S). A per-test `--timeout` does not cap the run.
-
-    One rule, one message. A pipe into tail/head used to be denied as a second
-    rule; it only hid output because the run had no cap, and its suggested fix
-    (`pytest … > file`) was itself denied by the cap rule, so agents were refused
-    twice in a row (25 sessions in a week hit it 3+ times). A capped run piped into
-    tail returns its tail.
-
-    Fail-safe for the INVOCATION gate: any non-Bash, non-pytest command is
-    approved untouched.
-
-    ACCEPTED RESIDUAL (Gate-2 C4/C6, NOT silently capped): pytest reached
-    INDIRECTLY — `bash -c "pytest ..."`, `make test`, `xargs pytest`, backticks,
-    a Makefile/script target — is NOT recognized, so it is approved uncapped.
-    This is a deliberate trade vs the false-positive of denying
-    `git commit -m "fix pytest"`: detecting pytest inside an arbitrary quoted
-    string would block legitimate non-runs. The gate's threat model is the
-    DIRECT shapes the agent actually types in this workspace (`python -m pytest`,
-    `gtimeout/perl ... pytest`, env-prefixed, separator-led) — those are bound
-    and capped. Indirect invocation is a known leak, documented not hidden; if it
-    recurs as a real hang, the fix is to add the specific wrapper, not to widen
-    the recognizer into the quoted-string false-positive zone (PIT10 weighed both
-    directions: fail-closed on the cap, fail-OPEN on indirection by choice).
-    """
-    if input_data.get("tool_name") != "Bash":
-        return {"decision": "approve"}
-    command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
-    if not command:
-        return {"decision": "approve"}
-    # INVOCATION GATE: a command is a real pytest invocation only if BOTH hold:
-    #   (1) the anchored _PYTEST_INVOCATION_RE matches the RAW command — proves a
-    #       separator / `python -m` / wrapper / env-prefix anchor sits before pytest
-    #       (the anchor may legitimately live inside quotes, e.g. the sanctioned
-    #       perl `-e 'alarm N; exec @ARGV'` form), AND
-    #   (2) a pytest TOKEN appears as a real command WORD (shlex-tokenized, NOT
-    #       only inside a quoted string) — see _pytest_token_is_command_word.
-    # Requiring BOTH kills the false-positive (a pytest token that exists ONLY
-    # inside a grep -E pattern / -k expr / commit message — run_5511508d blocked
-    # such greps/commits twice) WITHOUT fail-opening on real invocations. The
-    # token check uses a real shell lexer (shlex), not a regex quote-strip, because
-    # a strip is fooled by an apostrophe-in-a-word pairing with a later quoted arg
-    # (`echo it's; pytest -k 'x'`) — that deleted the real token and fail-opened a
-    # genuine uncapped run (Gate-2 HIGH, run_5511508d).
-    if not (
-        _PYTEST_INVOCATION_RE.search(command)
-        and _pytest_token_is_command_word(command)
-    ):
-        return {"decision": "approve"}
-
-    # One rule: every run carries a wall-clock cap, and together they end before the
-    # Bash call's own timeout. Checked on the RAW command (NOT quote-stripped): the
-    # perl cap carries `alarm N` / `exec @ARGV` INSIDE its single-quoted -e arg.
-    # A pipe into tail/head is fine once the runs end in time (it was denied before
-    # because an uncapped run got moved to the background); `tail -f` is not, it
-    # never ends. Accepted residual: `pytest … | tail` reports tail's exit status;
-    # pytest's own summary line is still in the output.
-    timeout = _bash_call_timeout_s(input_data.get("tool_input", {}) or {})
-    limit = timeout - _CAP_MARGIN_S
-    total = _pytest_run_time_s(command)
-    follow = bool(_FOLLOW_RE.search(_drop_quoted_data(command)))
-    if total is None or total > limit or follow:
-        logger.warning("[BLOCKED] pytest runs %s > %ss (follow=%s): %s", total, limit,
-                       follow, command[:80])
-        if follow:
-            why = "pipes into `tail -f`, which never exits"
-        elif total is None:
-            why = ("has a pytest run with no wall-clock cap of its own"
-                   if _WALLCLOCK_BOUND_PYTEST_RE.search(command) else "has no wall-clock cap")
-        else:
-            why = (f"is capped at {total}s in total, which outlives this call's "
-                   f"{timeout}s Bash timeout")
-        if limit < 1:
-            how = (f"This call's Bash timeout is {timeout}s, too short to leave the "
-                   f"{_CAP_MARGIN_S}s margin a run needs: omit the call's `timeout` "
-                   "(120s default) or raise it.")
-        else:
-            n = min(limit, 100)
-            how = ("Run it as: "
-                   f"`perl -e 'alarm {n}; exec @ARGV' python -m pytest <tests> "
-                   f"--timeout=60 -q` (one cap per pytest run, at most {limit}s for all "
-                   f"runs in the call together; redirecting to a file is fine). If it "
-                   f"cannot finish in {limit}s, run fewer tests.")
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"This pytest command {why}. A command still running when the Bash "
-                    "timeout fires is moved to the background and the call returns no "
-                    "output. A per-test --timeout does not cap the run. " + how
-                ),
-            }
-        }
-
-    return {"decision": "approve"}
-
-
 # ---------------------------------------------------------------------------
-# adversarial-commit gate — R1 structural backstop (PreToolUse, Bash)
+# review-marker store + commit-command parsing
 # ---------------------------------------------------------------------------
-# R1 (AGENT.md): "NO COMMIT WITHOUT ADVERSARIAL REVIEW FIRST" — every code change,
-# pipeline OR direct, MUST spawn an adversarial sub-agent BEFORE commit (sequence
-# code→test→adversarial→fix→commit). This was prose-only and got skipped: CLASS A
-# skip-attempt #12 (2026-08-10, this workspace) — the agent did code→test then asked
-# "commit?" with no adversarial pass; the pass, once forced, found a real HIGH
-# governance bug. EVOLUTION.md's own verdict on prose gates: "Mechanical gates catch
-# specific KNOWN bypass routes." This is that backstop for the ONE known, stable,
-# binary-detectable route: a `git commit` with zero SubagentStop evidence this session.
-#
-# EXPLICIT SCOPE (this is a guardrail, NOT the P1 fix — do not mistake it for one):
-#   • It proves an ADVERSARIAL sub-agent COMPLETED this session (a session_<sid>_adv_
-#     marker exists, written at SubagentStop by runtime_hooks when the completing
-#     sub-agent's agent_type/spawn-prompt showed adversarial-review intent). It does
-#     NOT prove that review covered THIS diff — an adversarial review of an EARLIER
-#     diff in the same session still satisfies it (session-scoped, not diff-scoped;
-#     diff-relevance is the deliberately-out-of-scope "Plan A"). Threat model = the
-#     手滑 "test passed → commit" reflex that #12 was, NOT a malicious bypass.
-#   • run_df2668b4 TIGHTENED this: it used to accept ANY sub-agent marker, so an
-#     Explore/investigation agent (spawned to locate code) satisfied it — the exact
-#     hole that let this session commit two un-reviewed diffs. Now only an _adv_
-#     marker counts.
-#   • Marker producer already exists: runtime_hooks.create_agent_tool_audit_hook
-#     writes STATE_DIR/pipeline_agent_audit/session_<sid>_<ts>.marker on EVERY
-#     SubagentStop. This gate only READS it. No new producer, no coupling added.
-#   • FAIL-OPEN on its own errors (missing session id, unreadable dir, any exception)
-#     — a guard that false-blocks a legit commit is worse than the skip it prevents.
-#     SWARM_GATE_FORCE=adversarial_commit_gate (daemon env) is the operator bypass (logged).
-#   • Scope is `git commit` only (reusing the segment-split + wrapper-strip discipline
-#     of _is_irreversible_external_op). Non-commit git (add/status/push), non-git,
-#     and the amuse-case `git commit --amend` all count as commits (still need review).
+# The adversarial_commit_gate that denied a `git commit` without a review sub-agent
+# was removed (design 2026-10-24-swarmai-usable-by-anyone §3.4, P6: in native mode the
+# agent decides which experts to call). SubagentStop still writes review markers to
+# _AGENT_AUDIT_DIR; the workspace auto-commit and the audit-marker gate read them, and
+# the commit-path helpers below serve active_run_commit_gate.
 
 _AGENT_AUDIT_DIR = get_app_data_dir() / "state" / "pipeline_agent_audit"
 
@@ -3368,134 +3139,6 @@ def _session_adversarial_coverage(session_id: str):
         return (True, covered, True)  # FS error → fail open
 
 
-def create_adversarial_commit_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate that DENYs `git commit` unless an
-    ADVERSARIAL-review sub-agent COMPLETED this session AND its review covered the
-    paths being committed (Plan A diff-binding). Coverage = the pending-commit
-    path-set (staged + -a + pathspec + -o) must be a subset of the union of the
-    session's adversarial markers' reviewed_paths — UNLESS some marker is path-less
-    (git-unavailable at review time → unbounded, back-compat) or the pending set is
-    uncomputable (not a repo / git error → fail-open). A base SubagentStop marker
-    (any sub-agent ran) never suffices. session_context is the mutable dict
-    SessionUnit updates with the live sdk_session_id (read at call time)."""
-
-    async def _gate(
-        input_data: dict[str, Any],
-        tool_use_id: str | None,
-        context: Any,
-    ) -> dict[str, Any]:
-        if input_data.get("tool_name") != "Bash":
-            return {"decision": "approve"}
-        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
-        if not command or not _command_has_git_commit(command):
-            return {"decision": "approve"}
-
-        if force_enabled("adversarial_commit_gate", input_data):
-            return {"decision": "approve"}
-
-        session_id = session_context.get("sdk_session_id", "") or ""
-        cwd = input_data.get("cwd", "") or ""
-
-        # Coverage decision (all git subprocesses run off-loop + are per-call
-        # timeout-bounded so this gate can never hang the commit — bash_syntax_guard
-        # discipline). Order of the fail-OPEN branches is load-bearing.
-        try:
-            has_marker, covered, has_unbounded = await asyncio.wait_for(
-                executors.run_in("gate", _session_adversarial_coverage, session_id),
-                timeout=_GATE_COVERAGE_TIMEOUT,
-            )
-        except Exception:  # incl. asyncio.TimeoutError; ANY gate-infra failure (even
-            logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
-            return {"decision": "approve"}  # a bug in the helper) fails OPEN by design
-
-        if not has_marker:
-            pass  # → DENY below (Plan B parity: no adversarial review at all)
-        else:
-            # C2: an unbounded (path-less) marker no longer SHORT-CIRCUITS to approve.
-            # A missing reviewed_paths key means "git was unavailable at review time"
-            # (legit back-compat degrade) — but it must NOT be a blanket pass that
-            # lets a path NO review covered ride through. So: always try to bind the
-            # diff first (covered ⊇ pending → approve). ONLY if binding is impossible
-            # OR pending is not covered do we fall back to the unbounded fail-open —
-            # and then loudly (WARN), never silently. This preserves the legit-degrade
-            # path (a real review whose marker lost its paths still approves when its
-            # covered set — from OTHER bounded markers — suffices, or when nothing can
-            # be computed) while closing the "one path-less marker unlocks every commit"
-            # hole (a real, uncovered path is now DENIED even with an unbounded marker
-            # present, unless git genuinely can't compute the pending set).
-            #
-            # Bind to the diff: every pending path must be covered. Pending set
-            # uncomputable (not a repo / git error / timeout) → fail OPEN.
-            try:
-                pending = await asyncio.wait_for(
-                    executors.run_in("gate", _pending_commit_paths, cwd, command),
-                    timeout=_GATE_COVERAGE_TIMEOUT,
-                )
-            except Exception:  # incl. asyncio.TimeoutError → fail open (never hang)
-                logger.warning("_gate: gate infrastructure error — failing open", exc_info=True)
-                return {"decision": "approve"}  # fail open on gate-infra failure
-            if pending is _PENDING_CROSS_REPO:
-                # A `git -C <other>` global option retargets a repo we can't bind →
-                # DENY (never fail-open a cross-repo commit) — Gate-2 HIGH bypass.
-                pass  # → DENY below
-            elif pending is None:
-                return {"decision": "approve"}  # uncomputable → fail open
-            elif not pending:
-                # Nothing to bind (empty pending, e.g. a no-op/amend with no diff) →
-                # existence-only (Plan B parity), NOT a vacuous all([]) coverage-pass.
-                return {"decision": "approve"}
-            elif pending <= covered:  # subset → fully reviewed
-                return {"decision": "approve"}
-            elif has_unbounded:
-                # Covered set (from bounded markers) does NOT cover pending, but an
-                # unbounded marker exists → fall back to the back-compat fail-open,
-                # but LOUDLY: git was unavailable at review time, so we cannot prove
-                # coverage. This is observable (unlike the old silent short-circuit)
-                # so a persistent unbounded-marker pattern surfaces instead of hiding.
-                logger.warning(
-                    "[adversarial-gate] UNBOUNDED fail-open — a path-less adversarial "
-                    "marker (git unavailable at review time) does not cover pending "
-                    "path(s) %s; approving on back-compat degrade (session=%s)",
-                    sorted(p for p in pending if p not in covered)[:5], session_id,
-                )
-                return {"decision": "approve"}
-            # else: some pending path was never adversarially reviewed → DENY below
-
-        uncovered = ""
-        try:
-            if has_marker and not has_unbounded and isinstance(pending, set):
-                extra = sorted(p for p in pending if p not in covered)
-                if extra:
-                    uncovered = " Uncovered path(s): " + ", ".join(extra[:5])
-            elif pending is _PENDING_CROSS_REPO:
-                uncovered = " (commit retargets another repo via -C/--git-dir — cannot bind coverage)"
-        except Exception:
-            logger.debug("_gate: suppressed exception on a fail-safe path", exc_info=True)
-            uncovered = ""
-
-        logger.warning("[BLOCKED] git commit not covered by an adversarial review this "
-                       "session (session=%s): %s", session_id, command[:80])
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "git commit → DENY: R1 requires an adversarial review of THIS diff before "
-                    "commit. Either NO adversarial sub-agent completed this session, or one did "
-                    "but it did not review the file(s) being committed." + uncovered + " "
-                    "'This change is too simple for adversarial' IS the signal it's needed "
-                    "(CLASS A skip-attempt #12, 2026-08-10). FIX: spawn an adversarial sub-agent "
-                    "(Agent/Task tool) to REFUTE this diff — have it read the changed files and "
-                    "hunt bugs/regressions/governance violations — fix what it finds, THEN commit. "
-                    "(Deliberate exception, e.g. a docs-only or revert commit: set "
-                    "only the operator can make one, with SWARM_GATE_FORCE=adversarial_commit_gate in the backend/daemon environment; a variable set in a Bash command has no effect.)"
-                ),
-            }
-        }
-
-    return _gate
-
-
 # ---------------------------------------------------------------------------
 # active-run commit gate — a live v1 run's files land only through its landing (Bash)
 # ---------------------------------------------------------------------------
@@ -3510,7 +3153,6 @@ def create_adversarial_commit_gate(session_context: dict[str, Any]):
 # Scan root for active pipeline runs. Overridable in tests. The daemon's live
 # workspace is ~/.swarm-ai/SwarmWS; runs live at Projects/*/.artifacts/runs/*/run.json.
 _ACTIVE_RUN_GLOB_ROOT = os.path.expanduser("~/.swarm-ai/SwarmWS")
-
 
 
 class _UnreadableContract(Exception):
@@ -3648,8 +3290,8 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 
         cwd = input_data.get("cwd", "") or ""
 
-        # Compute the pending commit path-set off-loop + timeout-bounded (same discipline
-        # as adversarial_commit_gate — the gate can never hang the commit). ANY failure
+        # Compute the pending commit path-set off-loop + timeout-bounded (a gate must
+        # never hang the commit). ANY failure
         # fails OPEN.
         try:
             pending = await asyncio.wait_for(
@@ -3750,12 +3392,10 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 #     that names a test runner AND can run code, and manual hang triage (ps / pgrep / kill / pkill aimed
 #     at pytest, python -X faulthandler) are DENIED with a copyable runner command.
 #     A session with no active run is never affected.
-#   • direct_commit_gate (G1): a session with NO active run of its own that commits
-#     more than 20 changed SOURCE lines (pure-doc paths, core/doc_paths.py, excluded) in the SwarmAI
-#     source repo is DENIED and pointed at `pipeline_v1.py create --profile direct`, so a direct
-#     fix also gets an exit contract. Commits in other repos are never gated.
+#   (direct_commit_gate, which sent large commits outside a run to the pipeline, was removed:
+#   design 2026-10-24-swarmai-usable-by-anyone §3.4.)
 #
-# FAIL-OPEN on every infra error or timeout (adversarial_commit_gate discipline).
+# FAIL-OPEN on every infra error or timeout.
 # Each session is judged ONLY by runs whose session_id equals its own id: a run with
 # no session_id (pre-C1) is nobody's run, so it neither gates its creator nor exempts
 # anyone else. Creating a run with SWARM_APP_SESSION_ID removed or overridden from a
@@ -3765,7 +3405,7 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # every pipeline_v1.py call, so an idle "active" one is a run nobody drives and must
 # not pin a gate.
 #
-# ACCEPTED RESIDUAL (same trade as pytest_command_guard): eval, project scripts and
+# ACCEPTED RESIDUAL: eval, project scripts and
 # `sudo -u X` are not recognised; a cd to an unresolvable directory (`cd $X`, `cd -`,
 # popd, or any cd joined by `||` / `|` / `&`) leaves the directory unknown, so a bare
 # make after it is not a hit (explicit test*/check* targets still are); `yarn check`
@@ -3786,15 +3426,12 @@ def create_active_run_commit_gate(session_context: dict[str, Any]):
 # updated_at, whichever is newer): a run nobody drives must not gate tests for days.
 _RUN_ACTIVE_WINDOW_SECONDS = 3 * 3600
 _RUN_SCAN_TIMEOUT = _GATE_GIT_TIMEOUT
-# _pending_commit_paths (≤4 git calls) + rev-parse + 2 numstat calls, each ≤ _GATE_GIT_TIMEOUT.
-_DIRECT_GATE_TIMEOUT = _GATE_GIT_TIMEOUT * 7 + 3
-_DIRECT_COMMIT_MAX_SOURCE_LINES = 20
 
 try:
     # backend/core/security_hooks.py → repo root = parents[2] (NOT cwd: daemon cwd is backend/).
     _SOURCE_REPO_ROOT: str | None = os.path.realpath(str(Path(__file__).resolve().parents[2]))
 except Exception as _exc:  # pragma: no cover - import-time path edge
-    logger.warning("direct_commit_gate: cannot resolve source repo root: %s", _exc)
+    logger.warning("security_hooks: cannot resolve source repo root: %s", _exc)
     _SOURCE_REPO_ROOT = None
 _SOURCE_ROOT_CACHE: "list" = [0.0, None]
 
@@ -3884,11 +3521,6 @@ def _run_activity_time(path: str, data: dict) -> float:
     return t
 
 
-def _v1_cmd(args: str) -> str:
-    from core.worktree_write_gate import v1_command
-    return v1_command(args)
-
-
 def _signed_activity_time(view: dict) -> float:
     """Last activity of a run: its newest SIGNED event's time (never run.json's mtime
     or ``updated_at``, which the agent can write). Unknown -> 0 (not active)."""
@@ -3927,7 +3559,7 @@ def _session_run_state(app_session_id: str) -> "dict[str, str] | None":
     best_t = -1.0
     # status, owner, id and project from the SIGNED view (events + contract + run dir),
     # never run.json's own fields (B-class re-check: a forged status/session_id lifted
-    # direct_commit_gate and the test gate)
+    # the run gates)
     for _path, data in _iter_runs(_pipeline_runs_root()):
         f = str(_path)
         try:
@@ -4688,8 +4320,8 @@ def _classify_pipeline_test_command(
     ``hits`` names every denied family the command contains (sorted, empty = allow).
     ``test_files`` lists explicit pytest / vitest test files, in order, deduplicated.
 
-    pytest is detected two ways and either one is a hit: the existing
-    pytest_command_guard shape (anchored _PYTEST_INVOCATION_RE plus the shlex
+    pytest is detected two ways and either one is a hit: the
+    command-word shape (anchored _PYTEST_INVOCATION_RE plus the shlex
     command-word check, applied to the heredoc-stripped text) and the segment parse
     below. A pytest word that only appears inside quotes, a grep pattern or a commit
     message is never a command word, so it is not a hit. backend/scripts/
@@ -4971,7 +4603,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 # ---------------------------------------------------------------------------
 # session-link gate (PreToolUse, Bash) — keeps the run↔session link of §4-B3/§4-G1
 # ---------------------------------------------------------------------------
-# pipeline_test_gate and direct_commit_gate judge a session only by runs whose
+# pipeline_test_gate judges a session only by runs whose
 # run.json session_id equals its app session id. `pipeline_v1.py create` reads
 # that id from SWARM_APP_SESSION_ID (prompt_builder injects it into the CLI
 # subprocess env) into the run's protected contract, and pipeline_test.py compares
@@ -5657,7 +5289,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
     """Factory: PreToolUse (Bash) gate that DENIES, always (with or without an active
     run), any command removing or overriding SWARM_APP_SESSION_ID
     (_command_session_link; forms in the section comment above). Without the link a
-    run is not this session's run, so pipeline_test_gate and direct_commit_gate stop
+    run is not this session's run, so pipeline_test_gate stops
     applying. Reads pass. No operator bypass (gate_force.UNFORCEABLE). Fail-open on
     any internal error.
     session_context is the mutable dict SessionUnit updates (read at call time)."""
@@ -5709,7 +5341,7 @@ def create_session_link_gate(session_context: dict[str, Any]):
 # The backend's SubagentStop hook (runtime_hooks.create_agent_tool_audit_hook) is the
 # only legitimate writer of _AGENT_AUDIT_DIR. Its markers are the evidence behind the
 # D7 expert check, the Red Team marker check, the Gate-0/1 spawn binding,
-# adversarial_commit_gate and pipeline_validator Check 9b. A marker the agent writes
+# the workspace auto-commit and pipeline_validator Check 9b. A marker the agent writes
 # by hand forges all of them, and deleting the directory sends the readers down their
 # "unreadable" fail-open path. This gate DENIES:
 #   • Write/Edit/MultiEdit/NotebookEdit whose path (~ expanded, realpath) is the
@@ -6656,208 +6288,6 @@ def _project_for_repo(root: str) -> str:
     except OSError:
         pass
     return "<project>"
-
-
-def _numstat_lines(root: str, *extra: str) -> "dict[str, int] | None":
-    """repo-root-relative path → added+removed lines from `git diff --numstat`
-    (renames off, NUL-separated so odd paths parse). Binary files count 0.
-    None on git error / timeout."""
-    try:
-        r = subprocess.run(
-            ["git", "-C", root, "diff", "--numstat", "--no-renames", "--no-ext-diff",
-             "-z", *extra],
-            capture_output=True, text=True, errors="replace", timeout=_GATE_GIT_TIMEOUT,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if r.returncode != 0:
-        return None
-    out: dict[str, int] = {}
-    for rec in r.stdout.split("\0"):
-        parts = rec.strip("\n").split("\t", 2)
-        if len(parts) != 3 or not parts[2]:
-            continue
-        added, removed, rel = parts
-        n = (int(added) if added.isdigit() else 0) + (int(removed) if removed.isdigit() else 0)
-        out[rel] = out.get(rel, 0) + n
-    return out
-
-
-def _pending_source_line_count(cwd: str, command: str,
-                               project_repos: bool = False) -> "int | None":
-    """Changed SOURCE lines (added+removed; pure-doc paths excluded; with
-    *project_repos* — worktree mode — any other path counts at least 1, so a binary or
-    mode-only change is never free) the `git commit` in
-    *command* is about to record; None if uncomputable (→ caller fails open).
-
-    The path set is _pending_commit_paths (staged + -a + pathspec + -o). Lines come
-    from `git diff --cached --numstat` for the pending paths it covers. Pending
-    paths the index does not cover (pathspec / -a forms on unstaged files) take
-    their working-tree count from `git diff --numstat`. A pending DIRECTORY
-    (`git commit -- backend/`) covers every numstat path under it.
-
-    Scope: only a commit whose repo root (resolved from *cwd*) is the SwarmAI source
-    repo (_source_repo_root()) is counted — or, with *project_repos* (worktree mode on),
-    any workspace project's code repo (worktree_write_gate._project_repo); any other
-    repo returns 0, so the gate never fires on a user's unrelated project."""
-    root = _gate_repo_root_for(cwd)
-    if root is None:
-        return None
-    src = _source_repo_root()
-    if not src or root != src:
-        from core.worktree_write_gate import _project_repo
-        if not (project_repos and _project_repo(os.path.realpath(root))):
-            return 0
-    pending = _pending_commit_paths(cwd, command)
-    if pending is None or pending is _PENDING_CROSS_REPO:
-        return None
-    if not pending:
-        return 0
-    pending_dirs = tuple(p + os.sep for p in pending if os.path.isdir(p))
-
-    def _in_pending(ap: str) -> bool:
-        return ap in pending or (bool(pending_dirs) and ap.startswith(pending_dirs))
-
-    cached = _numstat_lines(root, "--cached")
-    if cached is None:
-        return None
-    total = 0
-    seen: set[str] = set()
-    for rel, n in cached.items():
-        ap = os.path.realpath(os.path.join(root, rel))
-        if _in_pending(ap):
-            seen.add(ap)
-            if not is_doc_only_path(rel):
-                # worktree mode (limit 0): a binary / mode-only change is still a
-                # source path; the mode-off 20-line rule counts lines only
-                total += max(n, 1) if project_repos else n
-    if pending_dirs or any(p not in seen for p in pending):
-        worktree = _numstat_lines(root)
-        if worktree is None:
-            return None
-        for rel, n in worktree.items():
-            ap = os.path.realpath(os.path.join(root, rel))
-            if ap in seen or not _in_pending(ap):
-                continue
-            if not is_doc_only_path(rel):
-                # worktree mode (limit 0): a binary / mode-only change is still a
-                # source path; the mode-off 20-line rule counts lines only
-                total += max(n, 1) if project_repos else n
-    return total
-
-
-def _direct_gate_mode(cwd: str, session_id: str) -> "tuple[bool | None, str | None]":
-    """(mode, repo root) for direct_commit_gate. mode None: exempt (worktree mode on and
-    the session has a live shared-mode run of its own — exactly worktree_write_gate rule
-    4's exemption; a paused or stale isolated run exempts nothing). True: worktree mode on and the repo is one
-    a run can isolate (run_worktree.repo_for_write) → limit 0. False: the 20-line rule
-    (mode off, or a repo no run could isolate — a Brazil package, submodules — whose
-    commits a run could not take over anyway)."""
-    from core.run_worktree import mode_enabled, repo_for_write
-    root = _gate_repo_root_for(cwd)
-    if not mode_enabled():
-        return False, root
-    from core.worktree_write_gate import _session_runs_light
-    if any(r.get("worktree_mode") == "shared" for r in _session_runs_light(session_id)):
-        return None, root
-    return (root is not None and repo_for_write(root, _pipeline_runs_root()) is not None), root
-
-
-def create_direct_commit_gate(session_context: dict[str, Any]):
-    """Factory: PreToolUse (Bash) gate on `git commit` (design §4-G1). When this
-    session has NO active run of its own (C6), a commit in the SwarmAI source repo
-    recording more than 20 changed SOURCE lines (pure-doc paths excluded:
-    ``core.doc_paths.is_doc_only_path``, the same definition rule 4 uses) is
-    DENIED with a copyable `pipeline_v1.py create --profile direct` command for the repo's
-    project. With worktree mode on the limit is 0 and every project code repo counts:
-    a code change lands from a run's worktree, so a source commit in a main checkout
-    by a session with no run is exactly the write the worktree gate could not see
-    (an interpreter or formatter writing files). Runs of other sessions and unowned runs (no session_id) do not exempt
-    a session. Commits in other repos and docs pass, and so (worktree mode off, or a
-    repo no run can isolate) do changes of at most 20 lines. Fail-open on
-    any error/timeout. Bypass (operator only, backend/daemon env):
-    SWARM_GATE_FORCE=direct_commit_gate (or commit_gate), logged."""
-
-    async def _gate(
-        input_data: dict[str, Any],
-        tool_use_id: str | None,
-        context: Any,
-    ) -> dict[str, Any]:
-        if input_data.get("tool_name") != "Bash":
-            return {"decision": "approve"}
-        command = (input_data.get("tool_input", {}) or {}).get("command", "") or ""
-        if not command or not _command_has_git_commit(command):
-            return {"decision": "approve"}
-
-        if force_enabled("direct_commit_gate", input_data):
-            return {"decision": "approve"}
-
-        session_id = session_context.get("sdk_session_id", "") or ""
-        if not session_id:
-            return {"decision": "approve"}  # cannot scope → fail open
-        cwd = input_data.get("cwd", "") or ""
-        try:
-            own_run = await asyncio.wait_for(
-                executors.run_in("gate", _session_run_state, session_id),
-                timeout=_RUN_SCAN_TIMEOUT,
-            )
-        except Exception:  # incl. asyncio.TimeoutError
-            logger.warning("direct_commit_gate: run scan failed — failing open", exc_info=True)
-            return {"decision": "approve"}
-        if own_run is not None:
-            return {"decision": "approve"}  # in its own run: other gates own the commit
-
-        try:
-            mode_on, _root = await asyncio.wait_for(
-                executors.run_in("gate", _direct_gate_mode, cwd, session_id),
-                timeout=_DIRECT_GATE_TIMEOUT,
-            )
-        except Exception:  # incl. asyncio.TimeoutError
-            logger.warning("direct_commit_gate: mode check failed — failing open", exc_info=True)
-            return {"decision": "approve"}
-        if mode_on is None:
-            return {"decision": "approve"}  # a live run of its own (any mode): exempt
-        limit = 0 if mode_on else _DIRECT_COMMIT_MAX_SOURCE_LINES
-        try:
-            lines = await asyncio.wait_for(
-                executors.run_in("gate", _pending_source_line_count, cwd, command,
-                                 mode_on),
-                timeout=_DIRECT_GATE_TIMEOUT,
-            )
-        except Exception:  # incl. asyncio.TimeoutError
-            logger.warning("direct_commit_gate: line count failed — failing open", exc_info=True)
-            return {"decision": "approve"}
-        if lines is None or lines <= limit:
-            return {"decision": "approve"}
-
-        project = shlex.quote(_project_for_repo(_root or _source_repo_root() or ""))
-        logger.warning("[BLOCKED] direct_commit_gate: %d source lines outside a run "
-                       "(session=%s): %s", lines, session_id, command[:120])
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    "git commit → DENY: this commit changes " + str(lines) + " source lines "
-                    "(limit " + str(limit) + (", worktree mode on: a code change lands from "
-                    "a run's worktree" if mode_on else "") + ") and this session "
-                    "has no pipeline run. A direct fix needs an exit contract written before "
-                    "verification starts (design §4-G1), so verification has an end point and "
-                    "the change goes through the same runner, gates and landing. FIX: "
-                    "create a direct run and let its DELIVER landing commit:\n"
-                    + _v1_cmd("create --project " + project
-                              + " --profile direct --requirement '<the user request>'") + "\n"
-                    "Pure-doc files (*.md, and anything under backend/context/) are "
-                    "exempt" + (" here" if mode_on else ", and so are changes of at most "
-                                + str(limit) + " source lines") + ". Only the operator can make a deliberate "
-                    "exception, by setting SWARM_GATE_FORCE=direct_commit_gate in the backend/daemon "
-                    "environment (a variable set in a Bash command has no effect); ask "
-                    "the user if you believe one is warranted."
-                ),
-            }
-        }
-
-    return _gate
 
 
 # ---------------------------------------------------------------------------

@@ -212,10 +212,9 @@ implementations in `security_hooks.py`). By category:
    for/while/until loop or twice in one Bash call, since each call is capped at `alarm 110`
    and a continuation is a new call; while this session's own run is active, a direct test,
    lint, typecheck or build command is allowed with a note naming the runner command,
-   because landing and push_ready read only the runner's results), then
-   `pytest_command_guard` (every session: denies a pytest run whose wall-clock cap does
-   not end it at least 10s before the call's Bash timeout, 120s by default: a command still
-   running then is moved to the background and returns nothing).
+   because landing and push_ready read only the runner's results). (`pytest_command_guard`,
+   which denied an uncapped pytest in every session, was removed: design
+   `docs/design/2026-10-24-swarmai-usable-by-anyone.md` §3.4.)
 3. **Command safety + human-in-the-loop** — `dangerous_command_gate` (Bash) and
    `external_approval_gate` (non-Bash off-machine side effects) route risky calls through
    `PermissionManager` (`permission_manager.py`): an SSE approval dialog, approvals tracked
@@ -229,17 +228,13 @@ implementations in `security_hooks.py`). By category:
    patches — to governed context files), the `commit_gate` group (Bash, registered before
    `dangerous_command_gate`, members in order): `run_amend_gate` (in this session's active run,
    denies `git commit --amend` and points at the run's own landing (`pipeline_v1.py land --message`) instead of letting
-   `dangerous_command_gate` park the run on an approval prompt), `direct_commit_gate` (a session
-   with no run of its own that commits more than 20 changed source lines in the SwarmAI source
-   repo — any source line with worktree mode on — is sent to `pipeline_v1.py create --profile
-   direct`; pure-doc paths are not source (`*.md` and `backend/context/`, defined once in
-   `backend/core/doc_paths.py::is_doc_only_path`);
-   other sessions' and unowned runs never exempt it), `active_run_commit_gate` (files a live v1 run
+   `dangerous_command_gate` park the run on an approval prompt), `active_run_commit_gate` (files a live v1 run
    changed, read from its signed code facts (`RunEngine.owned_paths`) for every run whose
    contract repo roots or worktrees hold a committed path, land only through the run's
    landing; it denies when such a run cannot be read, or when `git -C` / `--git-dir`
-   retargets another repo), `adversarial_commit_gate` (no `git commit` without a sub-agent
-   review this session); the others fail open. Pipeline v1 review round limits and parallel waves are
+   retargets another repo); the others fail open. Native commits are never blocked:
+   `direct_commit_gate` and `adversarial_commit_gate` were removed (same design, §3.4); in
+   native mode the agent decides which review experts a change needs (AGENT.md R2). Pipeline v1 review round limits and parallel waves are
    enforced by signed `handout` / `answer` events in `core/run_protocol/`, not a
    marker-counting PreToolUse gate. `session_link_gate` (Bash, always on, registered
    right before `test_command_gate`: denies removing or overriding `SWARM_APP_SESSION_ID`,
@@ -481,19 +476,20 @@ share that checkout and its git index: an edit there gets swept into another ses
 commit, a commit made there picks up another session's staged files, and an uncommitted edit
 there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19.
 
-- **SwarmAI app sessions** are enforced: with worktree mode on, `worktree_write_gate` denies a
-  write to the main checkout and prints the `pipeline_v1.py create --profile direct` command;
-  pure-doc files (`*.md` and `backend/context/`, as defined by
-  `backend/core/doc_paths.py::is_doc_only_path`) are the exception and may be edited and
-  committed there without a run (the adversarial review is still required). A direct
+- **Nothing enforces this for any agent** (the worktree gate's rule that sent SwarmAI app
+  sessions' main-checkout writes to a run was removed: design
+  `docs/design/2026-10-24-swarmai-usable-by-anyone.md` §3.4). It is this repo's own rule,
+  so follow the steps below yourself. Before committing here, have review experts check the
+  change (correctness, plus security / concurrency / integration as it touches them) and fix
+  what they find; that is this repo's convention, not a product gate. A direct pipeline
   run (`create --profile direct --requirement "<the user's words>"`) goes build -> review ->
   test -> deliver -> reflect: no PLAN, no requirements/design documents, no exit criteria;
   BUILD passes when every test the runner selects for the change passed tdd (BX-2), an
   ambiguous request is abandoned and re-run as trivial. A small change (at most 20 non-test
   source lines, no new code file, no sensitive path) dispatches no review expert; its
   deterministic test/landing checks still run.
-- **Every other agent** (Claude Code, Kiro, Kiro Crew, Cursor, Codex) is not seen by that
-  hook. Nothing enforces this for you; do it yourself:
+- Every agent (SwarmAI app sessions, Claude Code, Kiro, Kiro Crew, Cursor, Codex) does it
+  the same way:
 
 ```bash
 git worktree add -b <agent>/<topic> <scratch>/wt-<topic> main   # NOT under ~/.swarm-ai/worktrees
@@ -580,8 +576,8 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
 2. **Tests** — at least the affected suites, wrapped with a wall-clock cap:
    `cd backend && perl -e 'alarm 90; exec @ARGV' python -m pytest tests/test_<module>.py -v --timeout=60`
    (the `exec @ARGV` is required — without it perl exits 0 and pytest never runs; `gtimeout`
-   is not installed here; a per-test `--timeout` alone is not a cap and `pytest_command_guard`
-   denies it; so does a cap of 110s or more). Frontend: `cd desktop && npm test -- --run`.
+   is not installed here; a per-test `--timeout` alone is not a cap, and a pytest still running
+   at the Bash timeout is moved to the background and returns nothing). Frontend: `cd desktop && npm test -- --run`.
    Last-failed: add `--lf`.
    **A red run is truncated:** `backend/pyproject.toml` `addopts` carries `--maxfail=3`,
    so after the 3rd failure pytest stops and every later test never runs — the

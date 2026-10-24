@@ -36,7 +36,6 @@ from pathlib import Path
 
 # A gate's deny text → its name. First match wins; order: specific before generic.
 GATE_PATTERNS: list[tuple[str, re.Pattern]] = [(n, re.compile(p)) for n, p in [
-    ("pytest_command_guard", r"This pytest (?:command|run)|pytest piped into tail/head|pytest 调用 → 必须"),
     # the second alternative is the pre-G1 deny text, kept for older transcripts
     ("pipeline_test_gate", r"DENY \(runner |is active in this session, so tests and builds go through"),
     ("run_owner_gate", r"DENY \(run owner gate\)"),
@@ -44,9 +43,7 @@ GATE_PATTERNS: list[tuple[str, re.Pattern]] = [(n, re.compile(p)) for n, p in [
     ("audit_marker_write_gate", r"this writes, moves or deletes files in"),
     ("session_link_gate", r"this command removes or overrides"),
     ("run_amend_gate", r"DENY \(git commit --amend\)"),
-    ("direct_commit_gate", r"git commit → DENY: this commit changes"),
     ("active_run_commit_gate", r"git commit → DENY: this commit touches file\(s\) owned"),
-    ("adversarial_commit_gate", r"requires an adversarial review"),
     ("bash_syntax_guard", r"has a SYNTAX ERROR"),
     ("background_command_guard", r"Background execution is disabled for this command"),
     ("dangerous_command_gate", r"Matches dangerous command pattern|Dangerous command blocked"

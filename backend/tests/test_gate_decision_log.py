@@ -160,16 +160,16 @@ def test_force_names_groups_and_unforceable(tmp_path, monkeypatch):
     log = tmp_path / "g.jsonl"
     monkeypatch.setenv("SWARM_GATE_LOG", str(log))
     monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
-    assert not gate_force.force_enabled("direct_commit_gate")
+    assert not gate_force.force_enabled("run_amend_gate")
     monkeypatch.setenv("SWARM_GATE_FORCE", "commit_gate, review_round_gate")
-    assert gate_force.force_enabled("direct_commit_gate")
+    assert gate_force.force_enabled("run_amend_gate")
     assert gate_force.force_enabled("review_round_gate")
     assert not gate_force.force_enabled("pipeline_test_gate")
     monkeypatch.setenv("SWARM_GATE_FORCE", "session_link_gate,audit_marker_write_gate")
     assert not gate_force.force_enabled("session_link_gate")
     assert not gate_force.force_enabled("audit_marker_write_gate")
     assert [r["gate"] for r in _lines(log) if r["decision"] == "force_bypass"] == \
-        ["direct_commit_gate", "review_round_gate"]
+        ["run_amend_gate", "review_round_gate"]
 
 
 def test_no_legacy_force_variables_left():

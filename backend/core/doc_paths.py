@@ -1,9 +1,8 @@
 """The one definition of a pure-documentation path.
 
-Used by every gate that lets a documentation change skip a pipeline run — the
-worktree write gate's rule 4 (a write to a main checkout) and direct_commit_gate (a
-commit from a session with no run). Both call ``is_doc_only_path``; neither keeps a
-rule of its own (execution plan v2 §2, XG 2026-10-22).
+Used by the pipeline's checks (``run_protocol/checks.py``: a docs-only change). The two
+gates that also used it (worktree rule 4 and direct_commit_gate) were removed by design
+2026-10-24-swarmai-usable-by-anyone §3.4.
 
 Public symbols:
 - ``is_doc_only_path(rel)`` — True for a ``*.md`` file or any file under ``backend/context/``.

@@ -49,10 +49,7 @@ def _scan(tmp_path, **kw):
 
 
 def test_classify_gate():
-    assert bmr.classify_gate("PreToolUse:Bash hook error: This pytest command has no wall-clock cap") == "pytest_command_guard"
-    assert bmr.classify_gate("pytest piped into tail/head is denied (R9)") == "pytest_command_guard"
     assert bmr.classify_gate("PreToolUse:Bash hook error: DENY (run owner gate): x") == "run_owner_gate"
-    assert bmr.classify_gate("git commit → DENY: R1 requires an adversarial review of THIS") == "adversarial_commit_gate"
     assert bmr.classify_gate("PreToolUse:Bash hook error: something new") == "other_hook"
     assert bmr.classify_gate("Exit code 1\nTraceback ...") is None
 
@@ -126,16 +123,13 @@ def test_every_gate_pattern_matches_a_real_deny_text():
     core = Path(__file__).resolve().parent.parent / "core"
     source = "".join(f.read_text(encoding="utf-8") for f in core.glob("*.py"))
     samples = {
-        "pytest_command_guard": "This pytest command",
         "pipeline_test_gate": "DENY (runner ",
         "run_owner_gate": "DENY (run owner gate)",
         "worktree_write_gate": "DENY (worktree gate)",
         "audit_marker_write_gate": "this writes, moves or deletes files in",
         "session_link_gate": "this command removes or overrides",
         "run_amend_gate": "DENY (git commit --amend)",
-        "direct_commit_gate": "git commit → DENY: this commit changes",
         "active_run_commit_gate": "git commit → DENY: this commit touches file(s) owned",
-        "adversarial_commit_gate": "requires an adversarial review",
         "bash_syntax_guard": "has a SYNTAX ERROR",
         "background_command_guard": "Background execution is disabled for this command",
         "dangerous_command_gate": "Matches dangerous command pattern",

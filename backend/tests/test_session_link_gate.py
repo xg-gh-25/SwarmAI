@@ -1,7 +1,7 @@
 """Tests for create_session_link_gate (security_hooks.py) and its registration.
 
 What is tested: the PreToolUse Bash gate that keeps the run↔session link intact.
-pipeline_test_gate and direct_commit_gate only apply to runs whose run.json
+pipeline_test_gate only applies to runs whose run.json
 session_id is this session's id, which pipeline_v1.py create reads from
 SWARM_APP_SESSION_ID. A command that removes or overrides that variable would
 create an unowned run and switch both gates off, so the gate denies it ALWAYS.
@@ -257,9 +257,9 @@ def test_build_hooks_registers_the_gate_once_right_before_pipeline_test_gate(mon
     _build()
     names = [n for _e, n, _m in recorded]
     for existing in ("pre_tool_logger", "background_command_guard", "pipeline_test_gate",
-                     "pytest_command_guard", "bash_syntax_guard", "inclusive_term_guard",
-                     "design_lint_guard", "image_read_dedup_guard", "direct_commit_gate",
-                     "dangerous_command_gate", "adversarial_commit_gate",
+                     "bash_syntax_guard", "inclusive_term_guard",
+                     "design_lint_guard", "image_read_dedup_guard",
+                     "dangerous_command_gate",
                      "active_run_commit_gate", "ask_question_gate",
                      "external_approval_gate", "governance_file_gate"):
         assert names.count(existing) == 1, existing
@@ -269,7 +269,7 @@ def test_build_hooks_registers_the_gate_once_right_before_pipeline_test_gate(mon
     assert {n: (e, m) for e, n, m in recorded}["session_link_gate"] == ("PreToolUse", "Bash")
     without = [n for n in names if n != "session_link_gate"]
     assert without.index("background_command_guard") < without.index("pipeline_test_gate") \
-        < without.index("pytest_command_guard") < without.index("bash_syntax_guard")
+        < without.index("bash_syntax_guard")
 
 
 def test_real_bash_chain_denies_before_any_approval_prompt():

@@ -26,14 +26,11 @@ from .security_hooks import (
     create_dangerous_command_gate,
     create_external_approval_gate,
     background_command_guard,
-    pytest_command_guard,
-    create_adversarial_commit_gate,
     create_active_run_commit_gate,
     create_session_link_gate,
     create_audit_marker_write_gate,
     create_pipeline_test_gate,
     create_run_amend_gate,
-    create_direct_commit_gate,
     bash_syntax_guard,
     inclusive_term_guard,
     create_image_read_dedup_guard,
@@ -374,8 +371,8 @@ async def build_hooks(
     # ALWAYS: DENY a write, move or delete in state/pipeline_agent_audit (redirects,
     # write/copy verbs, interpreter code naming it, rm of an ancestor, cd into it;
     # Write/Edit/MultiEdit/NotebookEdit by resolved path). Only the SubagentStop hook
-    # writes those markers; D7, Red Team, Gate-0/1 and adversarial_commit_gate trust
-    # them. Reads pass. Fail-open; no operator bypass (gate_force.UNFORCEABLE).
+    # writes those markers; D7, Red Team, Gate-0/1 and the workspace auto-commit
+    # trust them. Reads pass. Fail-open; no operator bypass (gate_force.UNFORCEABLE).
     # In the Bash chain it runs right after background_command_guard and before
     # session_link_gate and every HITL gate, so a user is never asked to approve a
     # command this gate would then deny.
@@ -395,8 +392,8 @@ async def build_hooks(
     # ALWAYS (not only during a run): DENY a command that removes or overrides
     # SWARM_APP_SESSION_ID (unset, env -u/-i in front of python, VAR=… prefixes,
     # export/declare, also inside bash -c / eval / pnpm dlx -c). That variable links a
-    # pipeline run to this session; without it pipeline_test_gate and
-    # direct_commit_gate silently stop applying. Reads pass. Fail-open; operator bypass
+    # pipeline run to this session; without it pipeline_test_gate
+    # silently stops applying. Reads pass. Fail-open; operator bypass
     # none (gate_force.UNFORCEABLE). Registered right before
     # test_command_gate so both see the command before any HITL prompt. (A v1 run's
     # owner is in its protected contract from create; nothing stamps it afterwards.)
@@ -411,39 +408,33 @@ async def build_hooks(
     # session_id == app session id, status running, recent activity): DENY direct
     # pytest/vitest/tsc/eslint/vite build/npm build|test|lint|typecheck/make test*,
     # repo-copy baselines and manual pytest hang triage, and hand back a filled-in
-    # pipeline_test.py command. No run → no effect. Then pytest_command_guard, in every
-    # session: a pytest run whose wall-clock cap does not end it before the call's Bash
-    # timeout is denied (R9, run_6af22b0d). One group so the test-command rules are judged in one place.
-    # Fail-open. pipeline_test_gate denies only runner loops/repeats; a direct test
+    # pipeline_test.py command. No run → no effect. (pytest_command_guard, which denied an
+    # uncapped pytest in every session, was removed: design 2026-10-24-swarmai-usable-by-anyone
+    # §3.4.) Fail-open. pipeline_test_gate denies only runner loops/repeats; a direct test
     # command in an active run is approved with a note. Registered
     # BEFORE dangerous_command_gate: a user must never be asked to approve a command
     # this gate would then deny.
     registry.register(
         "PreToolUse", compose_gates([
             ("pipeline_test_gate", create_pipeline_test_gate(hook_session_context)),
-            ("pytest_command_guard", pytest_command_guard),
         ]),
         "test_command_gate", matcher="Bash", no_timeout=True,
     )
 
-    # ── PreToolUse: commit gate (Bash-scoped), four checks on `git commit` ──
+    # ── PreToolUse: commit gate (Bash-scoped), two checks on `git commit` ──
     # 1. run_amend_gate: in THIS session's active run, `git commit --amend` is denied and
     #    pointed at the run's landing, `pipeline_v1.py land --message` (run_c5eb0858:
     #    an approval prompt parked an unattended run 2 h).
-    # 2. direct_commit_gate (design §4-G1): >20 changed SOURCE lines in the SwarmAI repo
-    #    from a session with no run of its own → `pipeline_v1.py create --profile direct`.
-    # 3. active_run_commit_gate: a file a live v1 run changed (its signed code facts)
+    # 2. active_run_commit_gate: a file a live v1 run changed (its signed code facts)
     #    lands only through the run's landing; denies when such a run is unreadable.
-    # 4. adversarial_commit_gate (R1): no commit without a review sub-agent this session.
-    # The others fail open. Operator bypass SWARM_GATE_FORCE=commit_gate (or one member name).
+    # (direct_commit_gate and adversarial_commit_gate were removed: design
+    # 2026-10-24-swarmai-usable-by-anyone §3.4 — native commits are never blocked.) Operator bypass SWARM_GATE_FORCE=commit_gate (or one member name).
     # Registered BEFORE dangerous_command_gate: never ask a user to approve a commit
     # this gate would then deny.
     registry.register(
         "PreToolUse", compose_gates([
             ("run_amend_gate", create_run_amend_gate(hook_session_context)),
-            ("direct_commit_gate", create_direct_commit_gate(hook_session_context)),
             ("active_run_commit_gate", create_active_run_commit_gate(hook_session_context)),
-            ("adversarial_commit_gate", create_adversarial_commit_gate(hook_session_context)),
         ]),
         "commit_gate", matcher="Bash", no_timeout=True,
     )

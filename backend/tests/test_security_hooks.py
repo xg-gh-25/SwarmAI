@@ -21,10 +21,6 @@ from core.security_hooks import (
 from tests.helpers import PROPERTY_SETTINGS
 
 
-
-
-
-
 class TestDangerousCommandGlobMatching:
     """Verify glob-based dangerous command detection.
 
@@ -988,263 +984,30 @@ class TestTagDeleteCarveOut:
 # not any sub-agent (an Explore/investigation marker must NOT satisfy it).
 # ---------------------------------------------------------------------------
 
-class TestAdversarialCommitGateEvidence:
-    def _mk_gate(self, tmp_path, monkeypatch, session_id="sess-1"):
-        import core.security_hooks as sh
-        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
-        return sh.create_adversarial_commit_gate({"sdk_session_id": session_id})
 
-    def _write(self, tmp_path, name):
-        (tmp_path / name).write_text('{"event":"SubagentStop"}')
+def _coverage_gate(session_context):
+    import core.security_hooks as sh
+    """Commit path-set binding as a verdict, for the parser tests below.
 
-    @staticmethod
-    def _bash(cmd):
-        return {"tool_name": "Bash", "tool_input": {"command": cmd}}
-
-    @pytest.mark.asyncio
-    async def test_deny_when_only_investigation_marker(self, tmp_path, monkeypatch):
-        """AC1: only a base (non-adversarial) marker present → DENY git commit."""
-        gate = self._mk_gate(tmp_path, monkeypatch)
-        self._write(tmp_path, "session_sess-1_1234.marker")  # base marker (Explore ran)
-        out = await gate(self._bash("git commit -m x"), None, None)
-        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    @pytest.mark.asyncio
-    async def test_approve_when_adversarial_marker(self, tmp_path, monkeypatch):
-        """AC2: an _adv_ marker present → APPROVE."""
-        gate = self._mk_gate(tmp_path, monkeypatch)
-        self._write(tmp_path, "session_sess-1_1234.marker")       # base
-        self._write(tmp_path, "session_sess-1_adv_1235.marker")   # adversarial
-        out = await gate(self._bash("git commit -m x"), None, None)
-        assert out.get("decision") == "approve"
-
-    @pytest.mark.asyncio
-    async def test_base_marker_never_satisfies_adv_check(self, tmp_path, monkeypatch):
-        """AC9: a base marker (numeric ts, no _adv_ infix) can never be mistaken
-        for adversarial evidence."""
-        import core.security_hooks as sh
-        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
-        self._write(tmp_path, "session_s_1234.marker")
-        assert sh._session_has_adversarial_evidence("s") is False
-        self._write(tmp_path, "session_s_adv_1236.marker")
-        assert sh._session_has_adversarial_evidence("s") is True
-
-    @pytest.mark.asyncio
-    async def test_fail_open_missing_session_id(self, tmp_path, monkeypatch):
-        """AC3: no session_id → approve (fail-open, never false-block)."""
-        import core.security_hooks as sh
-        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
-        gate = sh.create_adversarial_commit_gate({"sdk_session_id": ""})
-        out = await gate(self._bash("git commit -m x"), None, None)
-        assert out.get("decision") == "approve"
-
-    @pytest.mark.asyncio
-    async def test_fail_open_on_fs_error(self, tmp_path, monkeypatch):
-        """AC3: an OSError scanning the dir → approve (fail-open)."""
-        import core.security_hooks as sh
-        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", tmp_path)
-        def boom(*a, **k):
-            raise OSError("boom")
-        monkeypatch.setattr(type(tmp_path), "iterdir", boom, raising=False)
-        assert sh._session_has_adversarial_evidence("sess-1") is True  # fail-open
-
-    @pytest.mark.asyncio
-    async def test_force_env_bypasses(self, tmp_path, monkeypatch):
-        """AC4: SWARM_GATE_FORCE=adversarial_commit_gate → approve even with no markers."""
-        monkeypatch.setenv("SWARM_GATE_FORCE", "adversarial_commit_gate")
-        gate = self._mk_gate(tmp_path, monkeypatch)
-        out = await gate(self._bash("git commit -m x"), None, None)
-        assert out.get("decision") == "approve"
-
-    @pytest.mark.asyncio
-    async def test_non_commit_bash_approved(self, tmp_path, monkeypatch):
-        """A non-commit Bash command is not this gate's concern → approve."""
-        gate = self._mk_gate(tmp_path, monkeypatch)
-        out = await gate(self._bash("git status"), None, None)
-        assert out.get("decision") == "approve"
-
-
-class TestAdversarialGateDiffBinding:
-    """Plan A: the gate binds adversarial evidence to the reviewed PATH-SET.
-    Covers subset-approve, uncovered-deny, -a/pathspec/-o pending folding, the
-    []-vs-key-absent union semantics, and timeout fail-open."""
-
-    @staticmethod
-    def _git(d, *args, env=None):
-        import subprocess, os
-        e = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-             "GIT_COMMITTER_EMAIL": "t@t", "HOME": str(d), "PATH": os.environ.get("PATH", "")}
-        subprocess.run(["git", "-C", str(d), *args], env=e, capture_output=True, check=True)
-
-    def _repo(self, tmp_path):
-        import subprocess, os
-        d = tmp_path / "repo"; d.mkdir()
-        self._git(d, "init", "-q")
-        (d / "a.py").write_text("1\n"); (d / "b.py").write_text("2\n")
-        self._git(d, "add", "-A"); self._git(d, "commit", "-q", "-m", "init")
-        return d
-
-    def _adv_marker(self, audit, sid, reviewed_paths=None):
-        import json
-        audit.mkdir(parents=True, exist_ok=True)
-        payload = {"adversarial": True, "session_id": sid}
-        if reviewed_paths is not None:
-            payload["reviewed_paths"] = reviewed_paths
-        (audit / f"session_{sid}_adv_1.marker").write_text(json.dumps(payload))
-
-    def _gate(self, audit, monkeypatch, sid="s"):
-        import core.security_hooks as sh
-        monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
-        return sh.create_adversarial_commit_gate({"sdk_session_id": sid})
-
-    async def _run(self, gate, repo, cmd):
-        return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(repo)}, None, None)
-
-    @staticmethod
-    def _approved(r):
-        return r.get("decision") == "approve"
-
-    @pytest.mark.asyncio
-    async def test_covered_paths_approve(self, tmp_path, monkeypatch):
-        import os
-        repo = self._repo(tmp_path)
-        (repo / "a.py").write_text("999\n")
-        self._git(repo, "add", "a.py")
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])
-        gate = self._gate(audit, monkeypatch)
-        assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
-
-    @pytest.mark.asyncio
-    async def test_uncovered_new_file_denies(self, tmp_path, monkeypatch):
-        import os
-        repo = self._repo(tmp_path)
-        (repo / "c.py").write_text("new\n")     # NEW file the review never saw
-        self._git(repo, "add", "c.py")
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])  # only reviewed a.py
-        gate = self._gate(audit, monkeypatch)
-        r = await self._run(gate, repo, "git commit -m x")
-        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-    @pytest.mark.asyncio
-    async def test_commit_dash_a_folds_working_tree(self, tmp_path, monkeypatch):
-        """git commit -am sweeps tracked mods that were never staged → must be in pending."""
-        import os
-        repo = self._repo(tmp_path)
-        (repo / "b.py").write_text("changed\n")  # modified, NOT staged
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])  # reviewed a.py only
-        gate = self._gate(audit, monkeypatch)
-        r = await self._run(gate, repo, "git commit -am wip")
-        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"  # b.py uncovered
-
-    @pytest.mark.asyncio
-    async def test_commit_positional_pathspec_folds(self, tmp_path, monkeypatch):
-        """git commit <path> commits that path bypassing the index → must be in pending."""
-        import os
-        repo = self._repo(tmp_path)
-        (repo / "b.py").write_text("changed\n")
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", [os.path.realpath(str(repo / "a.py"))])
-        gate = self._gate(audit, monkeypatch)
-        r = await self._run(gate, repo, "git commit -m x b.py")
-        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-    @pytest.mark.asyncio
-    async def test_empty_reviewed_marker_alone_denies(self, tmp_path, monkeypatch):
-        """A []-marker (reviewed nothing) must NOT be a blank check — covers nothing."""
-        import os
-        repo = self._repo(tmp_path)
-        (repo / "a.py").write_text("999\n"); self._git(repo, "add", "a.py")
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", [])  # reviewed nothing
-        gate = self._gate(audit, monkeypatch)
-        r = await self._run(gate, repo, "git commit -m x")
-        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-    @pytest.mark.asyncio
-    async def test_union_empty_plus_pathful_not_poisoned(self, tmp_path, monkeypatch):
-        """union([], [a.py]) == {a.py} — an empty marker must not poison coverage."""
-        import os, json
-        repo = self._repo(tmp_path)
-        (repo / "a.py").write_text("999\n"); self._git(repo, "add", "a.py")
-        audit = tmp_path / "audit"; audit.mkdir(parents=True)
-        (audit / "session_s_adv_1.marker").write_text(json.dumps({"adversarial": True, "session_id": "s", "reviewed_paths": []}))
-        (audit / "session_s_adv_2.marker").write_text(json.dumps({"adversarial": True, "session_id": "s", "reviewed_paths": [os.path.realpath(str(repo / "a.py"))]}))
-        gate = self._gate(audit, monkeypatch)
-        assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
-
-    @pytest.mark.asyncio
-    async def test_pathless_marker_failopen_is_now_observable(self, tmp_path, monkeypatch, caplog):
-        """C2: a key-absent (path-less/unbounded) marker no longer SHORT-CIRCUITS to
-        approve BEFORE binding the diff. It still fail-opens (a path-less marker means
-        an adversarial review ran but git was unavailable at review time — a legit
-        degrade from an empty hook_cwd; DENYing it would false-block real reviews on
-        CI/multi-cwd — Gate-1). The C2 fix: coverage is bound FIRST (so a bounded
-        review approves on MERIT, not on the unbounded free pass), and the residual
-        unbounded fail-open is now OBSERVABLE (WARN) instead of silent. Fully closing
-        it needs write-side path recording (out of scope — REFLECT note)."""
-        import logging
-        repo = self._repo(tmp_path)
-        (repo / "c.py").write_text("new\n"); self._git(repo, "add", "c.py")
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", None)  # no reviewed_paths key = unbounded
-        gate = self._gate(audit, monkeypatch)
-        with caplog.at_level(logging.WARNING, logger="core.security_hooks"):
-            r = await self._run(gate, repo, "git commit -m x")
-        assert self._approved(r) is True  # legit degrade → fail-open (not false-block)
-        # ...but now LOUD: the unbounded fallback must emit an observable WARN.
-        assert any("UNBOUNDED fail-open" in rec.message for rec in caplog.records), \
-            "unbounded fail-open must be observable (WARN), not silent"
-
-    @pytest.mark.asyncio
-    async def test_pathless_marker_approves_when_other_marker_covers(self, tmp_path, monkeypatch):
-        """C2 no-false-block: an unbounded marker coexisting with a BOUNDED marker
-        that covers the pending path → still approves (covered ⊇ pending wins; the
-        unbounded marker is harmless noise, not a blocker). Proves the fix does not
-        over-DENY a legitimately-reviewed commit."""
-        import os, json
-        repo = self._repo(tmp_path)
-        (repo / "a.py").write_text("999\n"); self._git(repo, "add", "a.py")
-        audit = tmp_path / "audit"; audit.mkdir(parents=True)
-        # marker 1: unbounded (no key). marker 2: bounded, covers a.py.
-        (audit / "session_s_adv_1.marker").write_text(json.dumps({"adversarial": True, "session_id": "s"}))
-        (audit / "session_s_adv_2.marker").write_text(json.dumps(
-            {"adversarial": True, "session_id": "s", "reviewed_paths": [os.path.realpath(str(repo / "a.py"))]}))
-        gate = self._gate(audit, monkeypatch)
-        assert self._approved(await self._run(gate, repo, "git commit -m x")) is True
-
-    @pytest.mark.asyncio
-    async def test_pathless_marker_failopen_when_pending_uncomputable(self, tmp_path, monkeypatch):
-        """C2 preserves the legit degrade: when git genuinely cannot compute pending
-        (non-git cwd) AND a marker exists, still fail-open approve. The unbounded
-        fallback is only removed for COMPUTABLE-but-uncovered paths, not for the
-        can't-compute case."""
-        nongit = tmp_path / "plain"; nongit.mkdir()
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", None)  # unbounded marker
-        gate = self._gate(audit, monkeypatch)
-        assert self._approved(await self._run(gate, nongit, "git commit -m x")) is True
-
-    @pytest.mark.asyncio
-    async def test_non_git_cwd_fail_open(self, tmp_path, monkeypatch):
-        """Pending uncomputable (not a git repo) → fail-open approve (marker exists)."""
-        nongit = tmp_path / "plain"; nongit.mkdir()
-        audit = tmp_path / "audit"
-        self._adv_marker(audit, "s", ["/some/reviewed/path.py"])
-        gate = self._gate(audit, monkeypatch)
-        assert self._approved(await self._run(gate, nongit, "git commit -m x")) is True
-
-    @pytest.mark.asyncio
-    async def test_no_marker_still_denies(self, tmp_path, monkeypatch):
-        """Plan B parity: no adversarial marker at all → deny."""
-        repo = self._repo(tmp_path)
-        (repo / "a.py").write_text("9\n"); self._git(repo, "add", "a.py")
-        audit = tmp_path / "audit"; audit.mkdir(parents=True)
-        gate = self._gate(audit, monkeypatch)
-        r = await self._run(gate, repo, "git commit -m x")
-        assert r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    adversarial_commit_gate was removed (design 2026-10-24-swarmai-usable-by-anyone §3.4),
+    but the commit path-set parser it used (_pending_commit_paths) still serves
+    active_run_commit_gate, and these cases pin its behaviour. Approve when the pending
+    set is uncomputable, empty or covered by the session's review markers; deny when it
+    is not covered or retargets another repo."""
+    async def _gate(input_data, tool_use_id, context):
+        command = (input_data.get("tool_input") or {}).get("command", "") or ""
+        if not command or not sh._command_has_git_commit(command):
+            return {"decision": "approve"}
+        has_marker, covered, has_unbounded = sh._session_adversarial_coverage(
+            session_context.get("sdk_session_id", "") or "")
+        pending = sh._pending_commit_paths(input_data.get("cwd", "") or "", command) \
+            if has_marker else set(["<no marker>"])
+        if pending is sh._PENDING_CROSS_REPO:
+            return {"hookSpecificOutput": {"permissionDecision": "deny"}}
+        if pending is None or not pending or pending <= covered or has_unbounded:
+            return {"decision": "approve"}
+        return {"hookSpecificOutput": {"permissionDecision": "deny"}}
+    return _gate
 
 
 class TestGateFlagParsing:
@@ -1271,7 +1034,7 @@ class TestGateFlagParsing:
             {"adversarial": True, "session_id": "s",
              "reviewed_paths": [os.path.realpath(str(repo / "a.py"))]}))
         monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
-        return sh.create_adversarial_commit_gate({"sdk_session_id": "s"}), repo
+        return _coverage_gate({"sdk_session_id": "s"}), repo
 
     async def _run(self, gate, repo, cmd):
         return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(repo)}, None, None)
@@ -1322,7 +1085,7 @@ class TestGateFlagParsingGate2:
     def _gate(self, audit, monkeypatch, sid="s"):
         import core.security_hooks as sh
         monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
-        return sh.create_adversarial_commit_gate({"sdk_session_id": sid})
+        return _coverage_gate({"sdk_session_id": sid})
 
     async def _run(self, gate, cwd, cmd):
         return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)}, None, None)
@@ -1393,7 +1156,7 @@ class TestGateQuoteAwareHeredocAndWrappers:
     def _gate(self, audit, monkeypatch, sid="s"):
         import core.security_hooks as sh
         monkeypatch.setattr(sh, "_AGENT_AUDIT_DIR", audit)
-        return sh.create_adversarial_commit_gate({"sdk_session_id": sid})
+        return _coverage_gate({"sdk_session_id": sid})
 
     async def _run(self, gate, cwd, cmd):
         return await gate({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)}, None, None)
