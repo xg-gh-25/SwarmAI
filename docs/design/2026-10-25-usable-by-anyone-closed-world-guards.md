@@ -3,7 +3,7 @@ title: usable-by-anyone 收口 — 用闭集检查代替一次性盘点
 created: 2026-10-25
 updated: 2026-10-25
 project: SwarmAI
-status: draft r1 — 待 XG 定 §6 的四个问题
+status: r2 — D2 已定（另起 ToDo），D4 已由 f43275e41 解决；D1、D3 待定
 parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 ---
 
@@ -76,6 +76,8 @@ parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 
 **K3 发布内容不写给某一个人**：扩展 `scripts/lint_skills.py`。
 
+> r2：K3 推迟。skill 里写给个人的内容（C2）由另一个 session 在 skill listing 设计的 S2 里清理（`f43275e41`、`9809d979d` 已开始）。K3 在 C2 清完后落地，否则落地就把 CI 弄红。L7（元数据范围和打包对齐）不依赖 C2，已先做。
+
 - 新规则 `OWNER_IDENTITY`：名字列表放在 SwarmAI 仓库自己的 `scripts/owner_identity.txt`（XG、Xiaogang、gawan，以及出现过的同事名）。这是仓库自己的 lint 配置，产品代码不读它。
 - 检查范围从 skill 扩到 `backend/experts/`、`backend/context/`（`USER.example.md` 作为模板例外）。
 - 元数据检查的范围改成和打包一样，调用 `scripts/shipped_skills.py`，修 L7。
@@ -91,6 +93,8 @@ parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 - **L4**：见 D2。
 
 **C2 写给某个人的发布内容（L5）**
+
+> r2：由另一个 session 做（见 K3 的说明），本设计不再重复。
 
 - "XG" 一律改成"the user"或"the owner"。示例里的真人名换成占位名。`s_pollinate` 的默认作者改为从 `USER.md` 读用户名，读不到就留空。`Projects/SwarmAI/...` 示例改为 `Projects/<project>/...`。
 - `s_docx/xg-doc-style-standard.md` 见 D4。
@@ -115,12 +119,9 @@ parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 ## 6. 待 XG 定
 
 - **D1 `POST /api/system/upgrade`**：前端没有调用方，它依赖 `prod.sh` 和源码 checkout，和 P7 第 3 条、S2b 的版本化 runtime 冲突。建议整个删除，连同 `_resolve_project_root`、`_resolve_sidecar_binary`、`/upgrade/status`，以及 `daemon_guard` 里只为它服务的结果文件逻辑。删之前要先 grep 它的所有调用方（skill、job、文档）。另一个选项是保留，但改成走 S2b 的 runtime 部署；这要重新设计，建议不做。
-- **D2 OS Eval**：它到底是给所有用户的产品功能，还是 SwarmAI 自己的开发工具？
-  - 是产品功能：`eval_runner` 不能以 SwarmAI checkout 为根，command 类 case 要在用户的工作区或绑定仓库里跑，代码指纹改为"已部署 runtime 的版本"。改动不小，要单独开设计。
-  - 是开发工具：OS Eval 卡片从产品里拿掉，`eval_runner` 搬成 SwarmAI 仓库自己的 CI 脚本。
-  - 我倾向后者：今天的 golden set 测的是 SwarmAI 自己的认知和代码，别的用户拿到也没法用（P9）。
+- **D2 OS Eval**（XG 已定，2026-10-25）：OS Eval 是产品功能，评的是用户正在用的 SwarmAI。开发 SwarmAI 本身才需要的部分（以源码 checkout 为根的代码指纹、在源码仓库里跑的 canary、测 SwarmAI 自身代码的 case）移出产品，只留所有用户都用得上的。工作量大，单独一个 ToDo，不在本设计里做。在那之前，`eval_runner`、`eval_spine_probe`、`eval_service` 作为 K1 的临时例外。
 - **D3 文档 frontmatter**：删掉自动改写以后，是把 `lint_doc_frontmatter.py` 接进 SwarmAI 的 CI（只查改动过的文档），还是干脆不管 `updated:` 字段？我倾向接进 CI，只查改动过的文件。
-- **D4 `xg-doc-style-standard.md`**：改成通用的默认文档风格（去掉"for XG"，内容保留），还是搬进你自己的私有 skill 或 DDD？我倾向前者：这套风格本身对别人也是合理的默认值。
+- **D4**：已解决。`f43275e41` 把它换成了中性的 `default-doc-style.md`（另一个 session 做的）。
 
 ## 7. 实施顺序
 
@@ -133,3 +134,4 @@ parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 ## 修订记录
 
 - r1（2026-10-25）：初稿。§1 对着 HEAD `67cd437ea` 核对；S6-4b 已解决的三项从问题清单里移出。
+- r2（2026-10-25）：D2 由 XG 定，另起 ToDo；D4 已由 `f43275e41` 解决；C2 和 K3 交给 / 等待做 skill 清理的那个 session。已落地：C1（L1 ToDo hook 用 `working_repo`，L2 删 frontmatter 自动改写；K1 首次扫描另外发现的三处一起删：`proactive_intelligence._RADAR_ZONES` 是已删 Recurrence Radar 的残留，`scripts/replay_test_selection.py` 回放已删的 runner，`scripts/memory_judge_audit.py` 写死了用户路径，都没有调用方）、K1（AST 扫描 + `p7_exceptions.txt`，加入 BVT manifest）、K2（`GATE_CLASS` 闭集）、C3、L7。L3（D1）和 L4（D2）在 K1 里作为带理由的临时例外。
