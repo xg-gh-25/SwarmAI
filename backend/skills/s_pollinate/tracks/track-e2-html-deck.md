@@ -12,7 +12,7 @@ Read this file at BUILD time — you do NOT need the full INSTRUCTIONS.md.
 
 **Distinct from Track E (PPTX).** Track E produces a `.pptx` via PptxGenJS. Track L
 produces a single `.html` file (+ optional `.pdf`). Pick Track L when the audience will
-view in a browser / on the web (swarm-content), or when you want the frontend-slides
+view in a browser / on the web (the user's GitHub Pages), or when you want the frontend-slides
 bold aesthetic. Both can co-exist in one run.
 
 ## Fonts: CDN, by design

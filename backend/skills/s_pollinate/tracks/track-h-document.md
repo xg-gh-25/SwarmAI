@@ -109,7 +109,8 @@ section.right_margin = Cm(2.5)
 # Header: logo + title + date
 header = section.header
 header_para = header.paragraphs[0]
-header_para.text = f"🐝 SwarmAI | {document_title} | {date}"
+# brand_name = signature["footer"]["name"] (scripts/brand_config.py); omit when unset
+header_para.text = " | ".join(x for x in (brand_name, document_title, date) if x)
 header_para.style.font.size = Pt(8)
 header_para.style.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
 

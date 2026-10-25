@@ -1,19 +1,35 @@
-# Swarm Brand Identity
-# Source of truth for all Pollinate visual + audio outputs
+# Pollinate Brand Defaults
+# The neutral default for every Pollinate output. A user's own brand lives in
+# ~/.swarm-ai/pollinate-brand.yaml (same keys, any subset) and is deep-merged on top;
+# scripts/brand_config.py prints the effective brand. Never edit this file to brand
+# one user's outputs.
 
 brand:
-  name: "Swarm"
-  tagline: "探索 AI 的边界"
-  tagline_en: "Human directs. AI delivers."
-  tagline_legacy: "AI 实践者，不是布道者"  # deprecated, kept for reference
-  emoji: "🐝"
+  name: ""            # brand / author name shown on outputs; empty = none
+  tagline: ""
+  tagline_en: ""
+  emoji: ""
   logo:
-    primary: "🐝 Swarm"
-    compact: "🐝"
-    full: "🐝 Swarm | AI 实践者"
+    primary: ""
+    compact: ""
+    full: ""
+
+# What every output carries and the delivery gates check (see scripts/brand_config.py).
+# Unset = not drawn and not required.
+signature:
+  watermark: null
+  link: null
+  link_text: null
+  qr:
+    dark_on_light: null
+    light_on_dark: null
+  footer:
+    mark: null
+    name: null
+    tagline: null
 
 colors:
-  primary: "#FF6B35"        # Swarm Orange — energy, action
+  primary: "#FF6B35"        # Orange — energy, action
   secondary: "#1B2838"      # Deep Navy — depth, professional
   accent: "#4ECDC4"         # Teal — innovation, fresh
   background_light: "#FAFAFA"  # Off-white
@@ -37,13 +53,13 @@ typography:
     code: 28          # Code font size
 
 voice:
-  default_backend: "polly"   # Amazon Polly — same voice as Swarm voice conversation
+  default_backend: "polly"   # Amazon Polly
   default_voice_zh: "Zhiyu"  # neural, cmn-CN (generative not available for Chinese)
-  default_voice_en: "Ruth"   # generative, en-US — Swarm's brand voice
+  default_voice_en: "Ruth"   # generative, en-US
   fallback_backend: "edge"   # Free fallback when AWS credentials unavailable
   default_rate: "+0%"
   style: "professional-casual, direct, opinionated"
-  note: "Voice must be consistent across voice conversation and video content"
+  note: "Keep one voice across all audio and video content"
 
 audio:
   bgm_volume: 0.05          # relative gain applied to BGM track during mix
@@ -53,12 +69,12 @@ audio:
 
 # Domain-specific visual overrides
 # C6: Domain themes apply to poster backgrounds and video accent colors.
-# Base brand (Swarm Orange #FF6B35) is ALWAYS present in hero text and CTA.
+# The primary color (#FF6B35 by default) is ALWAYS present in hero text and CTA.
 # When a domain theme is active, primary_override replaces the accent color only.
 domain_themes:
   aidlc:
     theme: "light"
-    primary_override: "#FF6B35"  # Standard Swarm Orange
+    primary_override: "#FF6B35"  # the default primary
     visual_note: "Flow diagrams, clear structure, methodology feel"
 
   ai_architecture:
@@ -79,18 +95,18 @@ domain_themes:
 # Content series naming
 series:
   deep_dive:
-    name: "Swarm Deep Dive"
+    name: "Deep Dive"
     format: "long video"
     platforms: ["bilibili", "youtube"]
   quick_bite:
-    name: "Swarm Quick Bite"
+    name: "Quick Bite"
     format: "short video"
     platforms: ["xiaohongshu", "douyin", "weixin_video"]
   build_log:
-    name: "Swarm Build Log"
+    name: "Build Log"
     format: "mixed"
     platforms: ["bilibili", "xiaohongshu"]
   signal:
-    name: "Swarm Signal"
+    name: "Signal"
     format: "mixed"
     platforms: ["all"]

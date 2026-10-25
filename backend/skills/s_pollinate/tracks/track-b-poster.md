@@ -48,13 +48,14 @@ For EACH selected direction, create `content/{name}/tracks/poster/{topic}-{direc
 - Card variety: NEVER same style consecutively (per direction's `card_styles`)
 - Chinese body line-height: 2.0 minimum
 - Max text width: 700px
-- Include Default Branding (see `poster_design_system.md`):
-  - Footer section with 🐝 + SwarmAI + tagline + QR + github link
-  - Watermark: `🐝 Made with SwarmAI Pollinate` at bottom-right
+- Include the user's signature (`scripts/brand_config.py --signature`; see
+  `poster_design_system.md` § Default Branding):
+  - Footer section with the configured mark / name / tagline / QR / link text
+  - Watermark (if configured) at bottom-right
 
-**QR code:** Use pre-rendered asset from `brand/assets/logo/`:
-- Light bg directions (D2/D3/D5): `qr-github-dark-on-light.png`
-- Dark bg directions (D1/D4): `qr-github-light-on-dark.png`
+**QR code (if configured):** copy the image next to the HTML and reference it by file name:
+- Light bg directions (D2/D3/D5): `signature.qr.dark_on_light`
+- Dark bg directions (D1/D4): `signature.qr.light_on_dark`
 
 #### Step B.4: Render to PNG (per direction)
 
@@ -87,7 +88,7 @@ with sync_playwright() as p:
 | L4 | Alignment Unity | ALL text elements use text-align: center | RP-P4 | ✅ Force center |
 | L5 | Anti-Slop Clean | Zero violations against Visual + Structural Ban Lists | RP-P5 | ⚠️ Regenerate section |
 | L6 | Platform Fit | Output width = 1080px, file < 2MB | RP-P6 | ✅ Re-render viewport |
-| L7 | Brand Present (MANDATORY) | Watermark `🐝 Made with SwarmAI Pollinate` + QR code linking to `github.com/xg-gh-25/SwarmAI` + GitHub URL text — ALL must exist in DOM. **No exceptions.** | RP-P7 | ✅ Append template |
+| L7 | Brand Present (MANDATORY) | The configured watermark, QR image and link text exist in the DOM (the footer block is checked by review, not L7); unset elements are not required. **No exceptions.** | RP-P7 | ✅ Append template |
 | L8 | 2-Variant Output | ≥ 2 direction PNGs rendered | — | ✅ Render second |
 
 **Convergence Loop:**
@@ -133,7 +134,7 @@ L4: **TWO checks required:**
     WHY BOTH: A class without text-align declaration inherits browser default (left). Grepping only for declared values misses this. The fix is to require explicit declaration on every container.
 L5: Scan against `poster_design_system.md` ban lists (32 visual + 13 structural)
 L6: Rendered PNG width = 1080px AND file size < 2MB
-L7: `grep "Made with SwarmAI Pollinate" {html}` + `grep "qr-github" {html}`
+L7: `scripts/convergence_gate.py` L7 — each configured signature element (watermark text, QR file name, link text) is in the HTML
 L8: Count `*-d*.png` files in output directory ≥ 2
 
 #### Step B.5b: Adversarial Brand Review (BLOCKING — sub-agent)

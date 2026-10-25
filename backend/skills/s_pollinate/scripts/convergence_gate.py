@@ -11,7 +11,8 @@ Layers:
     L4: Alignment Unity — all text blocks use text-align: center
     L5: Anti-Slop Clean — zero violations against ban lists
     L6: Platform Fit — render width = 1080px (structural check)
-    L7: Brand Present — watermark + QR code + GitHub link
+    L7: Brand Present — the user's configured signature (watermark / link / QR,
+        scripts/brand_config.py); nothing configured = nothing required
     L8: 2-Variant Output — ≥2 direction PNGs in output directory
 
 Usage:
@@ -23,10 +24,14 @@ Exit codes:
     1 = one or more layers fail
 """
 import argparse
+import html as html_lib
 import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from brand_config import BrandConfigError, qr_basenames, signature  # noqa: E402
 
 # Maximum allowed vertical padding between sections (px)
 MAX_SECTION_GAP_PX = 72
@@ -173,15 +178,29 @@ def check_l6_platform_fit(html: str) -> list[str]:
     return errors
 
 
-def check_l7_brand(html: str) -> list[str]:
-    """L7: Watermark + QR + GitHub link must all be present."""
+def check_l7_brand(html: str, sig: dict | None = None) -> list[str]:
+    """L7: every element of the configured signature is in the poster.
+
+    The signature comes from the user's brand file (brand_config.signature). L7 checks
+    the watermark, the QR image and the link text; an unset element is not required, so
+    with no brand configured L7 passes. The footer block is not checked here: it only
+    appears on posters with four or more sections. A broken brand file is an L7 failure.
+    """
+    if sig is None:
+        try:
+            sig = signature()
+        except BrandConfigError as exc:
+            return [f"L7 FAIL: brand config: {exc}"]
+    text = html_lib.unescape(html)
     errors = []
-    if "Made with SwarmAI Pollinate" not in html:
-        errors.append("L7 FAIL: Missing watermark text '🐝 Made with SwarmAI Pollinate'")
-    if not re.search(r"qr-github", html):
-        errors.append("L7 FAIL: Missing QR code image (qr-github-*.png)")
-    if "github.com" not in html.lower() and "xg-gh-25" not in html.lower():
-        errors.append("L7 FAIL: Missing GitHub link")
+    if sig["watermark"] and sig["watermark"] not in text:
+        errors.append(f"L7 FAIL: Missing watermark text {sig['watermark']!r}")
+    names = qr_basenames(sig)
+    if names and not any(re.search(r"""(^|[/"'=\s])""" + re.escape(n) + r"""($|[?#"'\s])""", text)
+                         for n in names):
+        errors.append(f"L7 FAIL: Missing QR code image (one of {', '.join(names)})")
+    if sig["link_text"] and sig["link_text"].lower() not in text.lower():
+        errors.append(f"L7 FAIL: Missing link text {sig['link_text']!r}")
     return errors
 
 

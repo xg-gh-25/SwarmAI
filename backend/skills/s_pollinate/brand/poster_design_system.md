@@ -207,8 +207,7 @@ Total divider height including surrounding space: **120px** (5× base).
 1. Author: HTML + CSS (inline styles or `<style>` block)
 2. Render: Playwright headless Chrome → full_page screenshot
 3. Output: PNG, verify < 2MB for platform upload
-4. QR: Generate via `qrcode` library, match brand colors
-5. Branding: Apply default watermark + QR (see Default Branding below)
+4. Branding: apply the user's signature — watermark / link / QR (see Default Branding below)
 
 **Retina rule:** If final poster > 4000px tall, render at 1x (1080px wide). If < 4000px, can render at 2x for sharpness.
 
@@ -216,9 +215,15 @@ Total divider height including surrounding space: **120px** (5× base).
 
 ## Default Branding (Every Pollinate Output)
 
-> All Pollinate outputs carry SwarmAI branding by default. This is free organic distribution — every poster shared is a brand touchpoint.
+> Every output carries the **user's own signature** — whatever their brand file sets.
+> Read it first: `"$SWARM_BACKEND_BIN" py scripts/brand_config.py --signature`
+> (shipped neutral defaults in `brand/identity.yaml`, the user's
+> `~/.swarm-ai/pollinate-brand.yaml` on top). Every element is optional: draw the ones
+> that are set, leave out the ones that are `null`. Never invent a brand, a link or a QR
+> code the user did not configure. The L7 gate (`scripts/convergence_gate.py`) checks
+> the configured watermark, QR image and link text.
 
-### Watermark (Mandatory)
+### Watermark (when `signature.watermark` is set)
 
 ```html
 <!-- Always at the bottom-right of the last section -->
@@ -230,7 +235,7 @@ Total divider height including surrounding space: **120px** (5× base).
     font-family: 'Manrope', 'Inter', sans-serif;
     letter-spacing: 0.5px;
     opacity: 0.6;
-  ">🐝 Made with SwarmAI Pollinate</span>
+  ">{signature.watermark}</span>
 </div>
 ```
 
@@ -239,67 +244,47 @@ Total divider height including surrounding space: **120px** (5× base).
 | Position | Bottom-right, below last section | Never overlay content |
 | Font | Manrope / Inter, 13px, weight 500 | Matches en-display |
 | Color | `var(--text-muted)` at 60% opacity | Visible but unobtrusive |
-| Text | `🐝 Made with SwarmAI Pollinate` | Fixed — never change |
+| Text | `signature.watermark`, verbatim | Never reword |
 | Exceptions | `branding: none` in user request | Only if user explicitly opts out |
 
-### QR Code + GitHub Link (MANDATORY — Every Poster, No Exceptions)
-
-**BLOCKING RULE:** Every Pollinate poster output MUST include the SwarmAI GitHub QR code and link. This is non-negotiable regardless of poster length, direction, or format. The L7 quality gate enforces this mechanically — posters without QR fail the 8-Layer Gate and cannot reach the user.
+### Link + QR Code (when `signature.link` / `signature.qr` are set)
 
 | Property | Value | Rule |
 |----------|-------|------|
+| Link text | `signature.link_text`, monospace, `--text-muted` | Under the QR, or alone if no QR |
+| QR image | `signature.qr.dark_on_light` (D2, D3, D5) / `signature.qr.light_on_dark` (D1, D4) | Copy the file next to the HTML and reference it by its file name |
 | Size | 120px × 120px | Never larger (ban: QR > 120px) |
-| URL | `https://github.com/xg-gh-25/SwarmAI` | Default link |
-| Style | Rounded modules (`RoundedModuleDrawer`) | Brand-consistent |
-| Colors | Direction-aware (see below) | Match the active palette |
-| Position | Centered in footer, above GitHub URL text | Part of CTA section |
-| Text below | `github.com/xg-gh-25/SwarmAI` in monospace, `--text-muted` | Always paired |
+| Position | Centered in footer, above the link text | Part of CTA section |
 | Border-radius | 16px container | Soft corners |
 
-**Direction-aware QR colors:**
+Only one QR variant configured → use it on every direction. No QR configured → link text
+only. The user makes their QR images (any QR tool); Pollinate does not generate them.
 
-| Direction | Module Color | Background |
-|-----------|-------------|------------|
-| D1 Obsidian | `#FFFFFF` | `#0A0A0B` |
-| D2 Paper | `#3D3530` | `#FFFFFF` |
-| D3 Ink | `#1A1410` | `#FFFDF7` |
-| D4 Neon | `#E2E8F0` | `#0D1117` |
-| D5 Morandi | `#3D3530` | `#F2EDE8` |
+### Footer Section Template (when `signature.footer` or the link is set)
 
-**Pre-rendered QR assets (use when Playwright renders):**
-- `brand/assets/logo/qr-github-dark-on-light.png` — for D2, D3, D5
-- `brand/assets/logo/qr-github-light-on-dark.png` — for D1, D4
-
-### Footer Section Template (Default)
-
-Every poster with ≥ 4 sections includes a footer section:
+Every poster with ≥ 4 sections includes a footer section. Omit each line whose value is unset:
 
 ```html
 <section class="footer-section" style="padding: 120px 80px; text-align: center;">
-  <!-- Brand mark -->
-  <div style="font-size: 48px; margin-bottom: 24px;">🐝</div>
-  <div style="font-size: 40px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">SwarmAI</div>
+  <!-- Brand mark: signature.footer.mark -->
+  <div style="font-size: 48px; margin-bottom: 24px;">{footer.mark}</div>
+  <!-- signature.footer.name -->
+  <div style="font-size: 40px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">{footer.name}</div>
+  <!-- signature.footer.tagline -->
   <div style="font-size: 22px; font-weight: 500; color: var(--accent); margin-bottom: 48px; font-family: 'Manrope', 'Inter', sans-serif;">
-    Human directs. AI delivers.
+    {footer.tagline}
   </div>
 
-  <!-- QR Code -->
-  <img src="brand/assets/logo/qr-github-{variant}.png"
+  <!-- QR code: file name of signature.qr.<variant> -->
+  <img src="{qr file name}"
        width="120" height="120"
        style="border-radius: 16px; margin: 24px auto; display: block;" />
 
-  <!-- GitHub link -->
+  <!-- signature.link_text -->
   <p style="font-size: 16px; color: var(--text-muted); font-family: 'SF Mono', monospace; letter-spacing: 0.5px;">
-    github.com/xg-gh-25/SwarmAI
+    {signature.link_text}
   </p>
 </section>
-
-<!-- Watermark (always last) -->
-<div style="padding: 24px 36px; text-align: right;">
-  <span style="font-size: 13px; font-weight: 500; color: var(--text-muted); font-family: 'Manrope', 'Inter', sans-serif; letter-spacing: 0.5px; opacity: 0.6;">
-    🐝 Made with SwarmAI Pollinate
-  </span>
-</div>
 ```
 
 ### Opt-Out Rules

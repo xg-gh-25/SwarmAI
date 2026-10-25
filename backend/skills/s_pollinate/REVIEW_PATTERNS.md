@@ -15,7 +15,7 @@ Write explicit ✅ / ⚠️ / ❌ for each. Silence = unchecked.
 | RP-V6 | **Polyphone coverage** | zh-CN runs | All domain-specific terms in phonemes.json |
 | RP-V7 | **Resolution & codec** | Every run | ffprobe: 3840x2160 (or 2160x3840), H.264, >= 8Mbps video, AAC >= 192kbps |
 | RP-V8 | **Duration target** | Every run | B站: 3-12min, shorts: 30-120s per section |
-| RP-V9 | **Brand consistency** | Every run | Swarm color palette (identity.yaml), font family, intro/outro present |
+| RP-V9 | **Brand consistency** | Every run | Brand color palette (effective brand, scripts/brand_config.py), font family, intro/outro present |
 | RP-V10 | **Component variety** | Every run | No same component type in consecutive sections |
 | RP-V11 | **Text readability** | Every run | All text >= 24px, hero >= 84px, section title >= 72px |
 | RP-V12 | **Content width** | Every run | >= 85% of screen width utilized |
@@ -66,7 +66,7 @@ L3 Spacing:     ✅ Max section gap: 48px (A), 48px (B) — within ≤72px limit
 L4 Alignment:   ✅ 100% center-aligned (both variants, 0 mixed elements)
 L5 Anti-Slop:   ✅ 0/45 violations — A: clean, B: clean
 L6 Platform:    ✅ A: 1080×3200 (XHS long), B: 1080×2800 (XHS long)
-L7 Branding:    ✅ Watermark ✓ QR (github.com/xg-gh-25/SwarmAI) ✓ GitHub URL text ✓ (MANDATORY — both variants)
+L7 Branding:    ✅ Every configured signature element (watermark / QR / link text) ✓ (MANDATORY — both variants)
 L8 Variants:    ✅ 2 directions rendered (A + B)
 
 Convergence: passed in {N} iteration(s)

@@ -5,6 +5,17 @@ Verifies:
 """
 from pathlib import Path
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _brand(tmp_path_factory, monkeypatch):
+    """These tests check QR/link against a configured signature; never the machine's own brand."""
+    d = tmp_path_factory.mktemp("brand")
+    (d / "pollinate-brand.yaml").write_text(
+        'signature:\n  link: "https://github.com/xg-gh-25/SwarmAI"\n'
+        '  qr:\n    dark_on_light: "qr-swarmai.png"\n')
+    monkeypatch.setenv("POLLINATE_BRAND_FILE", str(d / "pollinate-brand.yaml"))
 
 
 def _make_valid_content_dir(tmp_path: Path) -> Path:

@@ -1538,7 +1538,7 @@ Single-file HTML slide deck (fixed 1920×1080 stage, auto-scaled, CSS-only anima
 drawing from 34 bundled bold design systems (upstream verbatim). **Distinct from
 Track E (PPTX):** Track L is a browser-viewable HTML deck; fonts load from Google
 Fonts / the upstream CDN at render time (real italic serifs + CJK faces). Ideal for
-web publishing (swarm-content), live browser presenting, and PDF export via Playwright.
+web publishing (the user's GitHub Pages, if configured), live browser presenting, and PDF export via Playwright.
 
 ---
 
@@ -1589,7 +1589,7 @@ density, PAWC positioning, authority signals, AI crawlability. Score advisory, n
    | RP-V6 | **Polyphone coverage** | All domain-specific terms in phonemes.json (zh-CN only) |
    | RP-V7 | **Resolution & codec** | ffprobe: 3840x2160 (or 2160x3840), H.264, >= 8Mbps video, AAC >= 192kbps |
    | RP-V8 | **Duration target** | B站: 3-12min, shorts: 30-120s per section |
-   | RP-V9 | **Brand consistency** | Swarm color palette (identity.yaml), font family, intro/outro present |
+   | RP-V9 | **Brand consistency** | Brand color palette (effective brand, scripts/brand_config.py), font family, intro/outro present |
    | RP-V10 | **Component variety** | No same component type in consecutive sections |
    | RP-V11 | **Text readability** | All text >= 24px, hero >= 84px, section title >= 72px |
    | RP-V12 | **Content width** | >= 85% of screen width utilized |
@@ -2127,19 +2127,22 @@ Before advancing to REFLECT, ALL must be true:
 - `content/{name}/REPORT.md` -- full production report
 - `content/{name}/deliver/publish_info.md` -- per-platform titles, descriptions, tags, CTAs
 
-### Step 8.5: Auto-Publish to GitHub Pages
+### Step 8.5: Publish to the User's GitHub Pages (only if configured)
 
-After DELIVER verification gate passes, auto-publish to the content gallery:
+Runs only when the user has a `github_pages` entry (`repo: owner/name`) in their private
+`~/.swarm-ai/pollinate-accounts.yaml`; without one the script prints "not configured —
+skipped" and pushes nothing. Never publish anywhere else. After the DELIVER verification
+gate passes:
 
 ```bash
 SKILL_DIR="$(dirname "$(dirname "$0")")"
 "$SWARM_BACKEND_BIN" py "$SKILL_DIR/scripts/publish_to_pages.py" "content/{name}"
 ```
 
-This pushes poster HTMLs, PNGs, and narratives to https://xg-gh-25.github.io/swarm-content/
-and regenerates the gallery index. Requires Code Defender approval on the repo.
+This pushes poster HTMLs, PNGs, and narratives to the configured Pages repo and
+regenerates its gallery index (titled with the brand name, if set).
 
-**If push fails** (Code Defender not yet approved, network issue): log a WARNING
+**If push fails** (repo permission, network issue): log a WARNING
 and continue to REFLECT. Publishing is non-blocking — content is still in
 Knowledge/Pollinate/ locally. Re-run `--all` later to catch up.
 
@@ -2306,9 +2309,11 @@ The confidence formula adapts: video-specific items score +1 each as N/A (neutra
 8. **Always generate REPORT.md.** Every pipeline run produces a markdown
    report at `content/{name}/REPORT.md`. This is the permanent record.
 
-9. **Brand consistency is non-negotiable.** Apply `brand/identity.yaml`
-   colors, fonts, and voice configuration in every output. Swarm Orange is
-   #FF6B35, not #FF6C36, not "close enough." PingFang SC, not a substitute.
+9. **Brand consistency is non-negotiable.** Apply the effective brand
+   (`scripts/brand_config.py`: `brand/identity.yaml` defaults with the user's
+   `~/.swarm-ai/pollinate-brand.yaml` on top) — colors, fonts, voice and signature —
+   in every output. The primary is the exact configured hex, not "close enough";
+   the configured font, not a substitute.
 
 10. **External content principles are non-negotiable.** For any externally-facing
     content (social media, posters, demos, pitches), apply `brand/content_principles.md`

@@ -6,8 +6,8 @@ Inspired by pipeline_validator.py — same JSON output format for consistency.
 
 Checks:
     1. Platform matrix present (platform_matrix.md or section in delivery)
-    2. QR code image file present (qr-*.png)
-    3. GitHub link in delivery text (github.com)
+    2. QR code image present, when the user's brand configures one (brand_config.py)
+    3. The brand link in delivery text, when the user's brand configures one
     4. 2+ variant files per track format
     5. Output files have valid extensions (.html, .png, .mp4, .md)
     6. Content directory structure is valid (tracks/ subdir exists)
@@ -35,6 +35,9 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from brand_config import BrandConfigError, qr_basenames, signature  # noqa: E402
 
 # Valid output extensions for Pollinate deliverables
 VALID_EXTENSIONS = {".html", ".png", ".jpg", ".mp4", ".md", ".svg", ".pdf"}
@@ -179,6 +182,19 @@ def check_track_set_drift(root: Path) -> dict:
                       f"production={sorted(set(production))}"}
 
 
+def _any_text_contains(root: Path, needles: list[str]) -> bool:
+    """True if any delivery .md (top level) or .html (anywhere) contains a needle."""
+    lowered = [n.lower() for n in needles]
+    for f in list(root.glob("*.md")) + list(root.rglob("*.html")):
+        try:
+            text = f.read_text(encoding="utf-8").lower()
+        except OSError:
+            continue
+        if any(n in text for n in lowered):
+            return True
+    return False
+
+
 def validate_delivery(content_dir: str) -> dict:
     """Validate a Pollinate content delivery directory.
 
@@ -212,43 +228,32 @@ def validate_delivery(content_dir: str) -> dict:
     else:
         errors.append("MISSING: Platform matrix — no platform_matrix.md or platform section in delivery.md")
 
-    # ── Check 2: QR code image present ────────────────────────────────────
-    qr_files = list(root.glob("qr-*.png")) + list(root.glob("qr_*.png"))
-    if not qr_files:
-        # Also check in tracks subdirs
-        qr_files = list(root.rglob("qr-*.png")) + list(root.rglob("qr_*.png"))
-
-    if qr_files:
+    # ── Checks 2-3: the configured brand signature ───────────────────────
+    # Both SKIP (count as passed) when the user's brand sets no QR / no link; a broken
+    # brand file fails both instead of crashing the validator.
+    try:
+        sig = signature()
+    except BrandConfigError as exc:
+        sig = None
+        errors.append(f"BRAND CONFIG: {exc}")
+    names = qr_basenames(sig) if sig else []
+    if sig is None:
+        pass
+    elif not names:
+        checks_passed += 1
+    elif any(p.is_file() and p.name in names for p in root.rglob("*")):
         checks_passed += 1
     else:
-        errors.append("MISSING: QR code image — no qr-*.png found in content directory")
+        errors.append(f"MISSING: QR code image — none of {', '.join(names)} in the delivery")
 
-    # ── Check 3: GitHub link in delivery text ─────────────────────────────
-    github_link_found = False
-    for md_file in root.glob("*.md"):
-        try:
-            text = md_file.read_text(encoding="utf-8")
-            if "github.com" in text.lower():
-                github_link_found = True
-                break
-        except OSError:
-            pass
-
-    if not github_link_found:
-        # Check in HTML files too
-        for html_file in root.rglob("*.html"):
-            try:
-                text = html_file.read_text(encoding="utf-8")
-                if "github.com" in text.lower():
-                    github_link_found = True
-                    break
-            except OSError:
-                pass
-
-    if github_link_found:
+    if sig is None:
+        pass
+    elif not sig["link_text"]:
+        checks_passed += 1
+    elif _any_text_contains(root, [sig["link_text"]]):
         checks_passed += 1
     else:
-        errors.append("MISSING: GitHub link — no github.com URL found in delivery text")
+        errors.append(f"MISSING: brand link — {sig['link_text']!r} not found in delivery text")
 
     # ── Check 4: 2+ variant files per track ───────────────────────────────
     tracks_dir = root / "tracks"

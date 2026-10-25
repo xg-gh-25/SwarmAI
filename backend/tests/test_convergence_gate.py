@@ -11,6 +11,20 @@ from textwrap import dedent
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _brand(tmp_path_factory, monkeypatch):
+    """These tests check L7 against a configured signature; never the machine's own brand."""
+    d = tmp_path_factory.mktemp("brand")
+    (d / "pollinate-brand.yaml").write_text(dedent("""\
+        signature:
+          watermark: "🐝 Made with SwarmAI Pollinate"
+          link: "https://github.com/xg-gh-25/SwarmAI"
+          qr:
+            light_on_dark: "qr-github-light-on-dark.png"
+        """))
+    monkeypatch.setenv("POLLINATE_BRAND_FILE", str(d / "pollinate-brand.yaml"))
+
 SCRIPT_PATH = Path(__file__).parent.parent / "skills" / "s_pollinate" / "scripts" / "convergence_gate.py"
 
 # ── Fixtures ────────────────────────────────────────────────────────────────

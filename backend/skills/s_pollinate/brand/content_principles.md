@@ -110,15 +110,16 @@ Ability:  DDD / Pipeline / Memory / Evolution / Quality (能力锚)
 | PRODUCE | Apply P6 (each piece self-sufficient) + P4 (效果 > 机制) |
 | QUALITY | Gate check: scan for anti-patterns below |
 
-## Mandatory Branding (Non-Negotiable)
+## Branding
 
-**Every visual output (poster, card, thumbnail) MUST include:**
+**Every visual output (poster, card, thumbnail) carries the user's configured signature**
+(`scripts/brand_config.py --signature`): its link as visible text, its QR image
+(120×120px, the variant matching the direction's background), its watermark at the
+bottom. Unset elements are left out. See `poster_design_system.md` § Default Branding.
 
-1. **SwarmAI GitHub link:** `github.com/xg-gh-25/SwarmAI` — visible as text
-2. **QR code:** links to `https://github.com/xg-gh-25/SwarmAI` — 120×120px, direction-aware colors
-3. **Watermark:** `🐝 Made with SwarmAI Pollinate` — bottom of poster
-
-This is enforced by L7 in the 8-Layer Gate. Missing any of these = gate FAIL = poster never reaches the user. No exceptions, no "poster is too short", no "QR doesn't fit the design."
+L7 in the 8-Layer Gate checks every configured element. A configured element missing =
+gate FAIL = poster never reaches the user. No "poster is too short", no "QR doesn't fit
+the design."
 
 ## Anti-Pattern Checklist (Quality Gate)
 

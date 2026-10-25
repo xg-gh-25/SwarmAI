@@ -122,7 +122,7 @@ Load the active direction YAML and inject tokens:
 </head>
 <body>
   <div class="header">
-    <span style="font-size: 14pt;">🐝 SwarmAI</span>
+    <span style="font-size: 14pt;">{signature.footer.mark} {signature.footer.name}</span>  <!-- omit if unset -->
     <span style="margin-left: auto; font-size: 10pt; color: var(--text-muted);">{date}</span>
   </div>
   <div class="hero">
@@ -149,8 +149,8 @@ Load the active direction YAML and inject tokens:
   </div>
   <div class="footer">
     <span class="cta">{Call to action — specific next step}</span>
-    <span>github.com/xg-gh-25/SwarmAI</span>
-    <!-- QR code image -->
+    <span>{signature.link_text}</span>  <!-- omit if unset -->
+    <!-- QR code image: signature.qr, if configured -->
   </div>
 </body>
 </html>
@@ -185,7 +185,7 @@ For full PDF, use flowing HTML (no fixed height constraint):
 </style>
 </head>
 <body>
-  <div class="page-header">🐝 SwarmAI | {title} | {date}</div>
+  <div class="page-header">{signature.footer.name} | {title} | {date}</div>  <!-- drop the name part if unset -->
 
   <!-- TOC (if >3 pages estimated) -->
   <div class="toc">
@@ -213,8 +213,8 @@ For full PDF, use flowing HTML (no fixed height constraint):
 
   <!-- Footer on last page -->
   <div style="margin-top: 48px; text-align: center;">
-    <p>github.com/xg-gh-25/SwarmAI</p>
-    <!-- QR code -->
+    <p>{signature.link_text}</p>  <!-- omit if unset -->
+    <!-- QR code: signature.qr, if configured -->
   </div>
 </body>
 </html>

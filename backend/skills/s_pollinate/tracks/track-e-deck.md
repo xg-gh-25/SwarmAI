@@ -226,11 +226,12 @@ rm -rf _unpacked/
 
 ### Brand Compliance (Final Slide)
 
-Every deck MUST include on the final/CTA slide:
-- SwarmAI logo or text mark (`🐝 SwarmAI`)
-- `github.com/xg-gh-25/SwarmAI` (visible text)
-- QR code (from `brand/assets/logo/qr-github-light-on-dark.png`)
-- Watermark: `🐝 Made with SwarmAI Pollinate` (small, bottom)
+Every deck carries the user's configured signature (`scripts/brand_config.py
+--signature`) on the final/CTA slide; leave out what is unset:
+- Mark and name (`signature.footer.mark` / `.name`)
+- Link text (`signature.link_text`)
+- QR code (`signature.qr.light_on_dark` for dark slides, `dark_on_light` for light)
+- Watermark (`signature.watermark`, small, bottom)
 
 ### Why This Combined Approach
 

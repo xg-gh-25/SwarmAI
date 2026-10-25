@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Publish Pollinate outputs to GitHub Pages (xg-gh-25/swarm-content).
+Publish Pollinate outputs to the user's own GitHub Pages repo.
 
 Usage:
     python publish_to_pages.py [--all]           # publish all unpublished outputs
@@ -8,29 +8,75 @@ Usage:
     python publish_to_pages.py --rebuild-index   # only regenerate index.html
 
 Requires: git, gh CLI authenticated.
-Repo: https://github.com/xg-gh-25/swarm-content
-Pages URL: https://xg-gh-25.github.io/swarm-content/
+
+The target is the ``github_pages`` entry of the user's private channel config
+~/.swarm-ai/pollinate-accounts.yaml (the same file publish_meta.py reads):
+
+    github_pages:
+      enabled: true
+      repo: owner/name                      # the Pages repo to publish into
+      url: https://owner.github.io/name     # optional; derived from repo if absent
+      clone_dir: ~/.swarm-ai/pollinate-pages/name   # optional local clone
+
+No entry, or enabled: false -> nothing is cloned or pushed; the script says so and
+exits 0.
 
 Architecture:
-    Knowledge/Pollinate/{date-slug}/ → swarm-content/content/{date-slug}/
+    Knowledge/Pollinate/{date-slug}/ → <pages repo>/content/{date-slug}/
     Auto-generates index.html (gallery page) on every publish.
 """
 
 import argparse
+import html
 import json
+import re
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-# --- Constants ---
-REPO_NAME = "xg-gh-25/swarm-content"
-REPO_URL = "https://github.com/xg-gh-25/swarm-content.git"
-PAGES_URL = "https://xg-gh-25.github.io/swarm-content"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from brand_config import load_brand, signature  # noqa: E402
+from publish_meta import load_accounts  # noqa: E402
+
 POLLINATE_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "Pollinate"
-CLONE_DIR = Path.home() / ".swarm-ai" / "swarm-content-repo"
-PUBLISHED_MANIFEST = CLONE_DIR / ".published.json"
+_REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_][A-Za-z0-9._-]*$")
+
+# Set by configure() from the user's github_pages entry before anything runs.
+REPO_NAME: str = ""
+REPO_URL: str = ""
+PAGES_URL: str = ""
+CLONE_DIR: Path = Path()
+PUBLISHED_MANIFEST: Path = Path()
+
+
+def pages_target(accounts: dict | None = None) -> dict | None:
+    """The configured GitHub Pages target, or None when publishing is not set up."""
+    entry = (load_accounts() if accounts is None else accounts).get("github_pages") or {}
+    if not isinstance(entry, dict):
+        return None
+    enabled = entry.get("enabled", True)
+    if enabled is not True and str(enabled).strip().lower() not in ("true", "yes", "on", "1"):
+        return None  # only a clearly-on value publishes; anything else is off
+    repo = str(entry.get("repo") or "").strip()
+    if not repo:
+        return None
+    if not _REPO_RE.match(repo) or repo.split("/", 1)[1] in (".", ".."):
+        raise ValueError(f"github_pages.repo must be owner/name, got {repo!r}")
+    owner, name = repo.split("/", 1)
+    url = str(entry.get("url") or f"https://{owner}.github.io/{name}").rstrip("/")
+    clone = Path(str(entry.get("clone_dir") or f"~/.swarm-ai/pollinate-pages/{name}")).expanduser()
+    return {"repo": repo, "repo_url": f"https://github.com/{repo}.git", "pages_url": url,
+            "clone_dir": clone}
+
+
+def configure(target: dict) -> None:
+    global REPO_NAME, REPO_URL, PAGES_URL, CLONE_DIR, PUBLISHED_MANIFEST
+    REPO_NAME, REPO_URL, PAGES_URL = target["repo"], target["repo_url"], target["pages_url"]
+    CLONE_DIR = target["clone_dir"]
+    PUBLISHED_MANIFEST = CLONE_DIR / ".published.json"
 
 
 def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -38,9 +84,25 @@ def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subproce
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
 
 
+def _check_clone(clone: Path) -> None:
+    """Refuse a clone_dir that is not its own git root with origin == the Pages repo.
+
+    clone_dir is user-configurable, and everything under it is committed and uploaded:
+    an existing folder that is some other repo (or sits inside one) must never be used.
+    """
+    top = run(["git", "rev-parse", "--show-toplevel"], cwd=clone, check=False)
+    origin = run(["git", "remote", "get-url", "origin"], cwd=clone, check=False)
+    ok_origin = origin.stdout.strip() in (REPO_URL, REPO_URL[: -len(".git")],
+                                          f"git@github.com:{REPO_NAME}.git")
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != clone.resolve() or not ok_origin:
+        raise SystemExit(f"Refusing to publish: {clone} is not a clone of {REPO_NAME} "
+                         "(set github_pages.clone_dir to an empty or dedicated folder)")
+
+
 def ensure_repo() -> Path:
     """Ensure local clone exists and is up to date."""
     if CLONE_DIR.exists():
+        _check_clone(CLONE_DIR)
         run(["git", "pull", "--rebase"], cwd=CLONE_DIR, check=False)
     else:
         CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
@@ -141,13 +203,21 @@ def generate_index(repo_dir: Path):
     </article>
 """
 
+    name = str((load_brand().get("brand") or {}).get("name") or "").strip()
+    gallery_title = html.escape(f"{name} Content Gallery" if name else "Content Gallery")
+    link = signature()["link"]
+    gallery_credit = "Generated by Pollinate"
+    if name and link and urlparse(link).scheme in ("http", "https"):
+        gallery_credit = (f'Generated by <a href="{html.escape(link, quote=True)}">'
+                          f"{html.escape(name)}</a> with Pollinate")
+
     index_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SwarmAI Content Gallery</title>
-    <meta name="description" content="Auto-published content from SwarmAI's Pollinate engine. Posters, articles, and media packages.">
+    <title>{gallery_title}</title>
+    <meta name="description" content="Auto-published content: posters, articles, and media packages.">
     <style>
         :root {{
             --bg: #0a0a0f;
@@ -251,14 +321,14 @@ def generate_index(repo_dir: Path):
 </head>
 <body>
     <header>
-        <h1>SwarmAI Content Gallery</h1>
+        <h1>{gallery_title}</h1>
         <p>Auto-published by Pollinate — Message First, Format Follows</p>
         <p style="margin-top: 0.25rem; font-size: 0.8rem;">{len(dirs)} collections • Updated {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </header>
     <div class="gallery">
 {cards_html}    </div>
     <footer>
-        <p>Generated by <a href="https://github.com/xg-gh-25/SwarmAI">SwarmAI</a> Pollinate Engine</p>
+        <p>{gallery_credit}</p>
     </footer>
 </body>
 </html>"""
@@ -435,6 +505,12 @@ def main():
     parser.add_argument("--rebuild-index", action="store_true", help="Only regenerate index.html")
     args = parser.parse_args()
 
+    target = pages_target()
+    if target is None:
+        print("GitHub Pages publishing is not configured (no github_pages entry in "
+              "~/.swarm-ai/pollinate-accounts.yaml) — skipped, nothing pushed.")
+        return
+    configure(target)
     repo_dir = ensure_repo()
 
     if args.rebuild_index:
