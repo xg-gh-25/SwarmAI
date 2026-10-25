@@ -1,7 +1,7 @@
-/** Generated built-in App bindings. DO NOT EDIT.
+/** Generated App bindings. DO NOT EDIT.
  * Regenerate with `python backend/scripts/generate_app_registry.py`.
  */
-export const BUILTIN_APP_BINDING_DIGEST = "00a5415e8e957354cbb993fba47c24556fadc941f5706a90679cedc2eb06cab3" as const;
+export const BUILTIN_APP_BINDING_DIGEST = "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81" as const;
 
 export const BUILTIN_APP_SURFACE_IMPORTS = {
   "pollinate/surface:gallery": () => import("../components/layout/PollinateOverlay"),

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "research",
+  "version": "1.0.0",
+  "displayName": "Research",
+  "description": "Investigate a question against high-trust primary sources and capture findings as a Markdown file. Delegates reading legwork to a background agent.",
+  "instanceMode": "singleton",
+  "brainInterface": null,
+  "resources": [
+    {
+      "id": "skill:s_research",
+      "type": "skill",
+      "source": "backend/apps/research/package",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "external:skill:s_research",
+          "profiles": {
+            "desktop-daemon": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files", "subagents", "web-research"]
+            },
+            "desktop-subprocess": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files", "subagents", "web-research"]
+            },
+            "hive": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files", "subagents", "web-research"]
+            }
+          }
+        }
+      },
+      "fixtures": []
+    }
+  ],
+  "dependencies": [],
+  "permissionTemplates": {
+    "default": {
+      "files": {
+        "read": ["**/*.md"],
+        "write": ["**/*.md"]
+      },
+      "network": ["https://*"],
+      "secrets": [],
+      "externalActions": []
+    }
+  },
+  "distribution": {
+    "targets": [],
+    "visibility": "internal"
+  }
+}

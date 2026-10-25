@@ -559,6 +559,12 @@ class ProjectionLayer:
             self._skill_manager.user_skills_path,
             self._skill_manager.plugin_skills_path,
         ]
+        # App Skills are admitted only from exact paths in the immutable generated
+        # binding map. This does not scan App manifests or trust the wider apps tree.
+        generated_paths = getattr(
+            self._skill_manager, "generated_app_skill_paths", lambda: ()
+        )
+        tier_roots.extend(generated_paths())
         # DDD-tier skills live under <workspace>/Projects/*/skills/ — accept that
         # root too (else a ddd-owned domain skill fails source validation and is
         # silently dropped from projection). None workspace_root → no ddd root.

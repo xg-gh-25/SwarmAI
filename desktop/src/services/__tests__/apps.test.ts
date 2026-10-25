@@ -44,4 +44,27 @@ describe('appsService', () => {
     const result = await appsService.list();
     expect(result.currentProfile).toBeNull();
   });
+
+  it('maps verified upstream source metadata for external Apps', async () => {
+    get.mockResolvedValue({ data: {
+      schema_version: 1,
+      host_contract_version: '1',
+      current_profile: 'desktop-daemon',
+      apps: [{
+        app_id: 'research', display_name: 'Research', description: 'Research',
+        version: '1.0.0', instance_mode: 'singleton', source_tier: 'external',
+        evidence_state: 'catalog-only', lifecycle_controls: [],
+        package_release_digest: 'a'.repeat(64), execution_release_digest: null,
+        binding_map_digest: 'b'.repeat(64), proof_blockers: ['proof-not-run'],
+        profile_accounting: [], resources: [], dependencies: [],
+        upstream_source: { sources: [{
+          id: 'mattpocock-skills', repository: 'https://github.com/mattpocock/skills',
+          commit: 'c'.repeat(40), license: 'MIT',
+        }] },
+      }],
+    }});
+    const result = await appsService.list();
+    expect(result.apps[0].sourceTier).toBe('external');
+    expect(result.apps[0].upstreamSource?.sources[0].license).toBe('MIT');
+  });
 });

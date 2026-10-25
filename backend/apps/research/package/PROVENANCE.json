@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "mattpocock-skills",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "license": "MIT"
+    }
+  ],
+  "files": [
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "skills/engineering/research/SKILL.md",
+      "localPath": "upstream/SKILL.md",
+      "sha256": "985569f15739c713d6784887c3d186d4ef9ac85bec5ad9c068d25bf0739928e4"
+    },
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "skills/engineering/research/agents/openai.yaml",
+      "localPath": "upstream/openai.yaml",
+      "sha256": "9b4c470d63221c1f68f22df70b83e2f12401b317babe0d1b7b5f24a974474d0d"
+    },
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "LICENSE",
+      "localPath": "LICENSE.upstream",
+      "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+    }
+  ],
+  "modifications": [
+    {
+      "localPath": "SKILL.md",
+      "description": "SwarmAI metadata wrapper; upstream source is retained verbatim."
+    },
+    {
+      "localPath": "INSTRUCTIONS.md",
+      "description": "SwarmAI host adaptation; upstream behavior and attribution are retained."
+    }
+  ]
+}

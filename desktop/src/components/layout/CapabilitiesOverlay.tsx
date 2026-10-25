@@ -443,6 +443,29 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                         {app.resourceCount} resources · v{app.version}
                       </span>
                     </div>
+                    {/* Upstream source display for external apps */}
+                    {app.sourceTier === 'external' && app.upstreamSource && app.upstreamSource.sources.length > 0 && (
+                      <div
+                        data-testid={`cap-app-upstream-${app.appId}`}
+                        className="mt-3 pt-3 border-t border-[var(--color-border)] text-meta text-[var(--color-text-faint)]"
+                      >
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="material-symbols-outlined icon-sm">code</span>
+                          <span className="font-semibold">Upstream source</span>
+                        </div>
+                        {app.upstreamSource.sources.map((source) => (
+                          <div
+                            key={source.id}
+                            className="ml-4 truncate"
+                            title={`${source.repository} @ ${source.commit}`}
+                          >
+                            <span>{source.repository.replace(/^https?:\/\/(www\.)?/, '')}</span>
+                            <span className="ml-1 opacity-60">@ {source.commit.slice(0, 7)}</span>
+                            <span className="ml-1 opacity-60">({source.license})</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}

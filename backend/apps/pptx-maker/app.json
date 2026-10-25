@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 1,
+  "id": "pptx-maker",
+  "version": "0.3.0",
+  "displayName": "PPTX Maker",
+  "description": "Create editable presentations through a staged Agent, MCP, backend, and preview workflow.",
+  "instanceMode": "singleton",
+  "brainInterface": null,
+  "resources": [
+    {
+      "id": "skill:pptx-maker",
+      "type": "skill",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/builtin_skills/pptx-maker",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "SwarmAI Skill adapter is not implemented"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "agent:pptx-maker",
+      "type": "agent",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/agents",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "Four SwarmAI Agent adapters are not implemented"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "backend:pptx-maker",
+      "type": "backend",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "KiroCrew backend dependencies have no SwarmAI adapter"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "mcp:sdpm",
+      "type": "mcp",
+      "source": "backend/apps/pptx-maker/package/engine",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The private SDPM MCP launcher and sandbox are not implemented"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "surface:pptx-maker",
+      "type": "surface",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/website/src/apps/pptx-maker",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The KiroCrew React surface has not been adapted to SwarmAI"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "knowledge:pptx-prompt",
+      "type": "knowledge",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/prompts",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The App-owned prompt is not connected to a SwarmAI Agent"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:pptx-assets",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/website/public/app-assets/pptx-maker",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "Catalog assets are retained only as source evidence"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:pptx-provenance",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/PROVENANCE.json",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "Provenance is evidence and has no runtime binding"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:pptx-attribution",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/upstream/ATTRIBUTION.md",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "Attribution is package evidence and has no runtime binding"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:kirocrew-license",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/LICENSE",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The upstream license is immutable package evidence"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:kirocrew-app-json",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/app.json",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The upstream host declaration is retained only as source evidence"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:kirocrew-app-attribution",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/ATTRIBUTION.md",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The upstream attribution is immutable package evidence"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:kirocrew-package-marker",
+      "type": "fixture",
+      "source": "backend/apps/pptx-maker/package/upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/__init__.py",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "omission": "The upstream Python package marker is source evidence only"
+        }
+      },
+      "fixtures": []
+    }
+  ],
+  "dependencies": [
+    {
+      "resource": "core:service:app-storage",
+      "version": "1",
+      "required": true
+    },
+    {
+      "resource": "core:service:isolated-process",
+      "version": "1",
+      "required": true
+    },
+    {
+      "resource": "core:service:verified-download",
+      "version": "1",
+      "required": true
+    }
+  ],
+  "permissionTemplates": {
+    "default": {
+      "files": {
+        "read": ["Knowledge/PPTX/**"],
+        "write": ["Knowledge/PPTX/**"]
+      },
+      "network": [
+        "https://github.com/**",
+        "https://codeload.github.com/**",
+        "https://pypi.org/**",
+        "https://files.pythonhosted.org/**"
+      ],
+      "secrets": [],
+      "externalActions": []
+    }
+  },
+  "distribution": {
+    "targets": [],
+    "visibility": "internal"
+  }
+}

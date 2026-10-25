@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "mattpocock-skills",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "license": "MIT"
+    }
+  ],
+  "files": [
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "skills/engineering/domain-modeling/SKILL.md",
+      "localPath": "upstream/SKILL.md",
+      "sha256": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3"
+    },
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md",
+      "localPath": "upstream/GLOSSARY-FORMAT.md",
+      "sha256": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801"
+    },
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "skills/engineering/domain-modeling/ADR-FORMAT.md",
+      "localPath": "upstream/ADR-FORMAT.md",
+      "sha256": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0"
+    },
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "skills/engineering/domain-modeling/agents/openai.yaml",
+      "localPath": "upstream/openai.yaml",
+      "sha256": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b"
+    },
+    {
+      "source": "mattpocock-skills",
+      "upstreamPath": "LICENSE",
+      "localPath": "LICENSE.upstream",
+      "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+    }
+  ],
+  "modifications": [
+    {
+      "localPath": "SKILL.md",
+      "description": "SwarmAI metadata wrapper; upstream source is retained verbatim."
+    },
+    {
+      "localPath": "INSTRUCTIONS.md",
+      "description": "SwarmAI host adaptation; upstream behavior and attribution are retained."
+    }
+  ]
+}

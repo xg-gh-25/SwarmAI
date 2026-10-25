@@ -2,6 +2,7 @@
 
 Key public symbols:
 - ``AppRegistry`` — load-once read API with no manifest discovery or filesystem walk.
+- ``UpstreamSource`` — verified immutable source summary exposed by the catalog.
 - ``app_registry`` — process-wide registry used by the read-only Apps router.
 """
 from __future__ import annotations
@@ -10,14 +11,16 @@ import json
 import threading
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.app_profiles import ProfileAccounting, ProfileName, current_profile
 from utils.backend_bin import bundled_path
 
 
 EvidenceState = Literal["catalog-only", "development", "product-proven"]
+SourceTier = Literal["built-in", "external"]
 
 
 class _StrictModel(BaseModel):
@@ -36,6 +39,34 @@ class RegistryDependency(_StrictModel):
     required: bool
 
 
+class UpstreamSourceEntry(_StrictModel):
+    """One upstream source authority from verified provenance."""
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9-]{1,62}$")
+    repository: str
+    commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    license: str = Field(pattern=r"^[A-Za-z0-9-.+]+$")
+
+    @field_validator("repository")
+    @classmethod
+    def safe_repository(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("upstream repository must be HTTPS without credentials")
+        return value
+
+
+class UpstreamSource(_StrictModel):
+    """Compact upstream source summary for external Apps."""
+
+    sources: tuple[UpstreamSourceEntry, ...] = Field(min_length=1)
+
+
 class AppCatalogEntry(_StrictModel):
     """One non-operational Phase A catalog projection."""
 
@@ -44,7 +75,7 @@ class AppCatalogEntry(_StrictModel):
     description: str
     version: str
     instance_mode: str
-    source_tier: Literal["built-in", "external"]
+    source_tier: SourceTier
     evidence_state: EvidenceState
     lifecycle_controls: tuple[str, ...]
     package_release_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -54,6 +85,7 @@ class AppCatalogEntry(_StrictModel):
     profile_accounting: tuple[ProfileAccounting, ...]
     resources: tuple[RegistryResource, ...]
     dependencies: tuple[RegistryDependency, ...]
+    upstream_source: UpstreamSource | None = None
 
 
 class AppIndex(_StrictModel):

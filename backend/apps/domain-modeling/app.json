@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "domain-modeling",
+  "version": "1.0.0",
+  "displayName": "Domain Modeling",
+  "description": "Build shared understanding through glossaries, ubiquitous language, and architectural decision records.",
+  "instanceMode": "singleton",
+  "brainInterface": null,
+  "resources": [
+    {
+      "id": "skill:s_domain-modeling",
+      "type": "skill",
+      "source": "backend/apps/domain-modeling/package",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "external:skill:s_domain-modeling",
+          "profiles": {
+            "desktop-daemon": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files"]
+            },
+            "desktop-subprocess": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files"]
+            },
+            "hive": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files"]
+            }
+          }
+        }
+      },
+      "fixtures": []
+    }
+  ],
+  "dependencies": [],
+  "permissionTemplates": {
+    "default": {
+      "files": {
+        "read": ["**/*.md"],
+        "write": [
+          "GLOSSARY.md",
+          "GLOSSARY-MAP.md",
+          "docs/adr/**",
+          "src/**/GLOSSARY.md",
+          "src/**/docs/adr/**"
+        ]
+      },
+      "network": [],
+      "secrets": [],
+      "externalActions": []
+    }
+  },
+  "distribution": {
+    "targets": [],
+    "visibility": "internal"
+  }
+}

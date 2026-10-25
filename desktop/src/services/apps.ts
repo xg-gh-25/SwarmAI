@@ -7,6 +7,7 @@ import api from './api';
 
 export type AppEvidenceState = 'catalog-only' | 'development' | 'product-proven';
 export type AppHostProfile = 'desktop-daemon' | 'desktop-subprocess' | 'hive';
+export type AppSourceTier = 'built-in' | 'external';
 
 export interface AppProfileAccounting {
   profile: AppHostProfile;
@@ -16,13 +17,24 @@ export interface AppProfileAccounting {
   blockedResources: string[];
 }
 
+export interface UpstreamSourceEntry {
+  id: string;
+  repository: string;
+  commit: string;
+  license: string;
+}
+
+export interface UpstreamSource {
+  sources: UpstreamSourceEntry[];
+}
+
 export interface AppCatalogEntry {
   appId: string;
   displayName: string;
   description: string;
   version: string;
   instanceMode: string;
-  sourceTier: 'built-in' | 'external';
+  sourceTier: AppSourceTier;
   evidenceState: AppEvidenceState;
   lifecycleControls: string[];
   packageReleaseDigest: string;
@@ -31,6 +43,7 @@ export interface AppCatalogEntry {
   proofBlockers: string[];
   profileAccounting: AppProfileAccounting[];
   resourceCount: number;
+  upstreamSource: UpstreamSource | null;
 }
 
 export interface AppsCatalog {
@@ -49,6 +62,17 @@ interface RawProfile {
   blocked_resources?: string[];
 }
 
+interface RawUpstreamSourceEntry {
+  id: string;
+  repository: string;
+  commit: string;
+  license: string;
+}
+
+interface RawUpstreamSource {
+  sources?: RawUpstreamSourceEntry[];
+}
+
 const APP_HOST_PROFILES = new Set<AppHostProfile>([
   'desktop-daemon',
   'desktop-subprocess',
@@ -61,9 +85,26 @@ function mapCurrentProfile(value: unknown): AppHostProfile | null {
     : null;
 }
 
+function mapSourceTier(value: unknown): AppSourceTier {
+  return value === 'built-in' ? 'built-in' : 'external';
+}
+
+function mapUpstreamSource(raw: RawUpstreamSource | undefined | null): UpstreamSource | null {
+  if (!raw || !raw.sources || raw.sources.length === 0) return null;
+  return {
+    sources: raw.sources.map((s) => ({
+      id: s.id,
+      repository: s.repository,
+      commit: s.commit,
+      license: s.license,
+    })),
+  };
+}
+
 interface RawApp extends Record<string, unknown> {
   profile_accounting?: RawProfile[];
   resources?: unknown[];
+  upstream_source?: RawUpstreamSource;
 }
 
 function mapApp(raw: RawApp): AppCatalogEntry {
@@ -73,7 +114,7 @@ function mapApp(raw: RawApp): AppCatalogEntry {
     description: (raw.description as string) ?? '',
     version: raw.version as string,
     instanceMode: raw.instance_mode as string,
-    sourceTier: raw.source_tier as AppCatalogEntry['sourceTier'],
+    sourceTier: mapSourceTier(raw.source_tier),
     evidenceState: raw.evidence_state as AppEvidenceState,
     lifecycleControls: (raw.lifecycle_controls as string[]) ?? [],
     packageReleaseDigest: raw.package_release_digest as string,
@@ -88,6 +129,7 @@ function mapApp(raw: RawApp): AppCatalogEntry {
       blockedResources: profile.blocked_resources ?? [],
     })),
     resourceCount: raw.resources?.length ?? 0,
+    upstreamSource: mapUpstreamSource(raw.upstream_source),
   };
 }
 

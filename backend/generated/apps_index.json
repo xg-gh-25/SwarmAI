@@ -1,8 +1,195 @@
 {
   "apps": [
     {
+      "app_id": "domain-modeling",
+      "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
+      "dependencies": [],
+      "description": "Build shared understanding through glossaries, ubiquitous language, and architectural decision records.",
+      "display_name": "Domain Modeling",
+      "evidence_state": "catalog-only",
+      "execution_release_digest": null,
+      "instance_mode": "singleton",
+      "lifecycle_controls": [],
+      "package_release_digest": "6d11f031e85cc06f7538470115ed87757dbfc86f6530923d038af764f9af72eb",
+      "profile_accounting": [
+        {
+          "blocked_resources": [],
+          "capability_digest": "c41b1d0cb06a358fa7679773359a0c66d3443cefae350860b94215d4932c3886",
+          "contract_version": "1",
+          "profile": "desktop-daemon",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_domain-modeling",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "c41b1d0cb06a358fa7679773359a0c66d3443cefae350860b94215d4932c3886",
+          "contract_version": "1",
+          "profile": "desktop-subprocess",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_domain-modeling",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "c41b1d0cb06a358fa7679773359a0c66d3443cefae350860b94215d4932c3886",
+          "contract_version": "1",
+          "profile": "hive",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_domain-modeling",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        }
+      ],
+      "proof_blockers": [
+        "host-build-attestation-missing",
+        "proof-not-run"
+      ],
+      "resources": [
+        {
+          "required": true,
+          "resource_id": "skill:s_domain-modeling",
+          "resource_type": "skill"
+        }
+      ],
+      "source_tier": "external",
+      "upstream_source": {
+        "sources": [
+          {
+            "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+            "id": "mattpocock-skills",
+            "license": "MIT",
+            "repository": "https://github.com/mattpocock/skills"
+          }
+        ]
+      },
+      "version": "1.0.0"
+    },
+    {
+      "app_id": "frontend-design",
+      "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
+      "dependencies": [],
+      "description": "Build production-grade interfaces using SwarmAI design intelligence and pinned Anthropic design guidance.",
+      "display_name": "Frontend Design",
+      "evidence_state": "catalog-only",
+      "execution_release_digest": null,
+      "instance_mode": "singleton",
+      "lifecycle_controls": [],
+      "package_release_digest": "eb34f31e0366f152316640c75ea5ace8306de00b0b6b1cd8a406bce41de4a1ed",
+      "profile_accounting": [
+        {
+          "blocked_resources": [],
+          "capability_digest": "c41b1d0cb06a358fa7679773359a0c66d3443cefae350860b94215d4932c3886",
+          "contract_version": "1",
+          "profile": "desktop-daemon",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_frontend-design",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "Pinned source evidence has no runtime contribution",
+              "resource_id": "fixture:anthropic-source",
+              "status": "omitted-optional"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "c41b1d0cb06a358fa7679773359a0c66d3443cefae350860b94215d4932c3886",
+          "contract_version": "1",
+          "profile": "desktop-subprocess",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_frontend-design",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "Pinned source evidence has no runtime contribution",
+              "resource_id": "fixture:anthropic-source",
+              "status": "omitted-optional"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "c41b1d0cb06a358fa7679773359a0c66d3443cefae350860b94215d4932c3886",
+          "contract_version": "1",
+          "profile": "hive",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_frontend-design",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "Pinned source evidence has no runtime contribution",
+              "resource_id": "fixture:anthropic-source",
+              "status": "omitted-optional"
+            }
+          ],
+          "supported": true
+        }
+      ],
+      "proof_blockers": [
+        "host-build-attestation-missing",
+        "proof-not-run"
+      ],
+      "resources": [
+        {
+          "required": true,
+          "resource_id": "skill:s_frontend-design",
+          "resource_type": "skill"
+        },
+        {
+          "required": false,
+          "resource_id": "fixture:anthropic-source",
+          "resource_type": "fixture"
+        }
+      ],
+      "source_tier": "external",
+      "upstream_source": {
+        "sources": [
+          {
+            "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+            "id": "anthropic-skills",
+            "license": "Apache-2.0",
+            "repository": "https://github.com/anthropics/skills"
+          }
+        ]
+      },
+      "version": "2.1.0"
+    },
+    {
       "app_id": "pollinate",
-      "binding_map_digest": "00a5415e8e957354cbb993fba47c24556fadc941f5706a90679cedc2eb06cab3",
+      "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
       "dependencies": [
         {
           "required": true,
@@ -156,9 +343,516 @@
       ],
       "source_tier": "built-in",
       "version": "1.0.0"
+    },
+    {
+      "app_id": "pptx-maker",
+      "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
+      "dependencies": [
+        {
+          "required": true,
+          "resource": "core:service:app-storage",
+          "version": "1"
+        },
+        {
+          "required": true,
+          "resource": "core:service:isolated-process",
+          "version": "1"
+        },
+        {
+          "required": true,
+          "resource": "core:service:verified-download",
+          "version": "1"
+        }
+      ],
+      "description": "Create editable presentations through a staged Agent, MCP, backend, and preview workflow.",
+      "display_name": "PPTX Maker",
+      "evidence_state": "catalog-only",
+      "execution_release_digest": null,
+      "instance_mode": "singleton",
+      "lifecycle_controls": [],
+      "package_release_digest": "5c0878610a12e35d26fd0b1479992669c0fd57f14408f55a9829c4c0d9fc2bd3",
+      "profile_accounting": [
+        {
+          "blocked_resources": [
+            "skill:pptx-maker",
+            "agent:pptx-maker",
+            "backend:pptx-maker",
+            "mcp:sdpm",
+            "surface:pptx-maker",
+            "knowledge:pptx-prompt",
+            "fixture:pptx-assets",
+            "fixture:pptx-provenance",
+            "fixture:pptx-attribution",
+            "fixture:kirocrew-license",
+            "fixture:kirocrew-app-json",
+            "fixture:kirocrew-app-attribution",
+            "fixture:kirocrew-package-marker"
+          ],
+          "capability_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "contract_version": "1",
+          "profile": "desktop-daemon",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "skill:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "agent:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "backend:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "mcp:sdpm",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "surface:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "knowledge:pptx-prompt",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-assets",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-provenance",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-attribution",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-license",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-app-json",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-app-attribution",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-package-marker",
+              "status": "blocked"
+            }
+          ],
+          "supported": false
+        },
+        {
+          "blocked_resources": [
+            "skill:pptx-maker",
+            "agent:pptx-maker",
+            "backend:pptx-maker",
+            "mcp:sdpm",
+            "surface:pptx-maker",
+            "knowledge:pptx-prompt",
+            "fixture:pptx-assets",
+            "fixture:pptx-provenance",
+            "fixture:pptx-attribution",
+            "fixture:kirocrew-license",
+            "fixture:kirocrew-app-json",
+            "fixture:kirocrew-app-attribution",
+            "fixture:kirocrew-package-marker"
+          ],
+          "capability_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "contract_version": "1",
+          "profile": "desktop-subprocess",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "skill:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "agent:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "backend:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "mcp:sdpm",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "surface:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "knowledge:pptx-prompt",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-assets",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-provenance",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-attribution",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-license",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-app-json",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-app-attribution",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-package-marker",
+              "status": "blocked"
+            }
+          ],
+          "supported": false
+        },
+        {
+          "blocked_resources": [
+            "skill:pptx-maker",
+            "agent:pptx-maker",
+            "backend:pptx-maker",
+            "mcp:sdpm",
+            "surface:pptx-maker",
+            "knowledge:pptx-prompt",
+            "fixture:pptx-assets",
+            "fixture:pptx-provenance",
+            "fixture:pptx-attribution",
+            "fixture:kirocrew-license",
+            "fixture:kirocrew-app-json",
+            "fixture:kirocrew-app-attribution",
+            "fixture:kirocrew-package-marker"
+          ],
+          "capability_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "contract_version": "1",
+          "profile": "hive",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "skill:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "agent:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "backend:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "mcp:sdpm",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "surface:pptx-maker",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "knowledge:pptx-prompt",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-assets",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-provenance",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:pptx-attribution",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-license",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-app-json",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-app-attribution",
+              "status": "blocked"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": "profile binding is absent or unsupported",
+              "resource_id": "fixture:kirocrew-package-marker",
+              "status": "blocked"
+            }
+          ],
+          "supported": false
+        }
+      ],
+      "proof_blockers": [
+        "host-build-attestation-missing",
+        "profile-blocked:desktop-daemon",
+        "profile-blocked:desktop-subprocess",
+        "profile-blocked:hive",
+        "proof-not-run"
+      ],
+      "resources": [
+        {
+          "required": true,
+          "resource_id": "skill:pptx-maker",
+          "resource_type": "skill"
+        },
+        {
+          "required": true,
+          "resource_id": "agent:pptx-maker",
+          "resource_type": "agent"
+        },
+        {
+          "required": true,
+          "resource_id": "backend:pptx-maker",
+          "resource_type": "backend"
+        },
+        {
+          "required": true,
+          "resource_id": "mcp:sdpm",
+          "resource_type": "mcp"
+        },
+        {
+          "required": true,
+          "resource_id": "surface:pptx-maker",
+          "resource_type": "surface"
+        },
+        {
+          "required": true,
+          "resource_id": "knowledge:pptx-prompt",
+          "resource_type": "knowledge"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:pptx-assets",
+          "resource_type": "fixture"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:pptx-provenance",
+          "resource_type": "fixture"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:pptx-attribution",
+          "resource_type": "fixture"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:kirocrew-license",
+          "resource_type": "fixture"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:kirocrew-app-json",
+          "resource_type": "fixture"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:kirocrew-app-attribution",
+          "resource_type": "fixture"
+        },
+        {
+          "required": true,
+          "resource_id": "fixture:kirocrew-package-marker",
+          "resource_type": "fixture"
+        }
+      ],
+      "source_tier": "external",
+      "upstream_source": {
+        "sources": [
+          {
+            "commit": "27cb0849eddd693663b3c42c865fb76d7ba5c5d7",
+            "id": "kirocrew",
+            "license": "Apache-2.0",
+            "repository": "https://github.com/kirodotdev/KiroCrew"
+          },
+          {
+            "commit": "b7c7fcf0972b33a480f1b717a3de5bc288d53742",
+            "id": "pptx-engine",
+            "license": "MIT-0",
+            "repository": "https://github.com/aws-samples/sample-spec-driven-presentation-maker"
+          }
+        ]
+      },
+      "version": "0.3.0"
+    },
+    {
+      "app_id": "research",
+      "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
+      "dependencies": [],
+      "description": "Investigate a question against high-trust primary sources and capture findings as a Markdown file. Delegates reading legwork to a background agent.",
+      "display_name": "Research",
+      "evidence_state": "catalog-only",
+      "execution_release_digest": null,
+      "instance_mode": "singleton",
+      "lifecycle_controls": [],
+      "package_release_digest": "1ac77967497a3e4388fd1b601626428a029420828a3b82b6c9dde4762b9d8dd2",
+      "profile_accounting": [
+        {
+          "blocked_resources": [],
+          "capability_digest": "24e925d29257cf3079c1aaec79f75ed3e9a6c81d18ad4764f4bb99f7ef6574a2",
+          "contract_version": "1",
+          "profile": "desktop-daemon",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_research",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "24e925d29257cf3079c1aaec79f75ed3e9a6c81d18ad4764f4bb99f7ef6574a2",
+          "contract_version": "1",
+          "profile": "desktop-subprocess",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_research",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "24e925d29257cf3079c1aaec79f75ed3e9a6c81d18ad4764f4bb99f7ef6574a2",
+          "contract_version": "1",
+          "profile": "hive",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_research",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        }
+      ],
+      "proof_blockers": [
+        "host-build-attestation-missing",
+        "proof-not-run"
+      ],
+      "resources": [
+        {
+          "required": true,
+          "resource_id": "skill:s_research",
+          "resource_type": "skill"
+        }
+      ],
+      "source_tier": "external",
+      "upstream_source": {
+        "sources": [
+          {
+            "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+            "id": "mattpocock-skills",
+            "license": "MIT",
+            "repository": "https://github.com/mattpocock/skills"
+          }
+        ]
+      },
+      "version": "1.0.0"
     }
   ],
-  "binding_map_digest": "00a5415e8e957354cbb993fba47c24556fadc941f5706a90679cedc2eb06cab3",
+  "binding_map_digest": "f3c03b8815d2f626aa5ca1ff59cb9a0d46ac22ffa737a303e7475fd3089e2d81",
   "host_contract_version": "1",
   "schema_version": 1
 }

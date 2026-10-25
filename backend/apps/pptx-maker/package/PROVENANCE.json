@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "kirocrew",
+      "repository": "https://github.com/kirodotdev/KiroCrew",
+      "commit": "27cb0849eddd693663b3c42c865fb76d7ba5c5d7",
+      "license": "Apache-2.0",
+      "archiveSha256": "0c8fa870f9adc618d1c9655018b2ac96f2d8e0d0dec194a2e43b07666cf173a5"
+    },
+    {
+      "id": "pptx-engine",
+      "repository": "https://github.com/aws-samples/sample-spec-driven-presentation-maker",
+      "commit": "b7c7fcf0972b33a480f1b717a3de5bc288d53742",
+      "license": "MIT-0",
+      "archiveSha256": "ffe8e10b973cada1f6e99629ac780bde25461b432ad07943b4f15ca11c07dfe0"
+    }
+  ],
+  "files": [
+    {
+      "source": "kirocrew",
+      "upstreamPath": "LICENSE",
+      "localPath": "upstream/kirocrew/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/ATTRIBUTION.md",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/ATTRIBUTION.md",
+      "sha256": "870e36264a22f3ed453debb16089500a58b16af373de2f36ebc034569d2ff54e"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/__init__.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/__init__.py",
+      "sha256": "a8edee52a10c0ed6bc7fa3f4d1d9731f2e98d45853a88020fd762753fbb8531d"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-composer.json",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-composer.json",
+      "sha256": "13d7852a8a4d1fde3ef0377d4a5b15fa664c648158cbd46351deb4ee2eb69904"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-spec.json",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-spec.json",
+      "sha256": "c752dd7b65f7de17be57aea7a4bb20233b41aa7ac04116e5703e5665b039bc32"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-style.json",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-style.json",
+      "sha256": "6ac39026cc78a8a43cbd6cf43becd4da374cf53b5bbd78968fba390c1d979aee"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-vibe.json",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/agents/pptx-maker-vibe.json",
+      "sha256": "04e26422bc9c1f374494cad11a15e655ad81edde3386fc474669dd831ae9cf84"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/app.json",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/app.json",
+      "sha256": "673e4187f97e548433fb6d0bd4fe567b69622eff42d14f40d115e793061a9f7c"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/__init__.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/decks.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/decks.py",
+      "sha256": "14e33c3c73b250d29dea3173d0b132744060b957b51104df36b2f99c3daa468f"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/engine.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/engine.py",
+      "sha256": "f5797076e9b3a985d5841aaaadf6441889adab46aa3e386c824c02e229314566"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/engine_source.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/engine_source.py",
+      "sha256": "6114794e2dfaab4b693c834a07a1c24d700e006d2a9687b971d72d0fd6d0b295"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/library.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/library.py",
+      "sha256": "f3cb57c09bff01c61049db966e7beeeb8a70fb1cefae1b090d98153776c282d2"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/paths.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/paths.py",
+      "sha256": "b91143007e8823bffdf560ad2aaccf955667e1840bf2e04faebb95b6fe4779c5"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/pdftoppm_shim.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/pdftoppm_shim.py",
+      "sha256": "af131e8d40f182cde3c745410ba1cb86dfcb73d0615437fbfcd66d99929be705"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/preview_tools.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/preview_tools.py",
+      "sha256": "d1a317d4cf4b06adb88656877b99d7585a6825b49a8c13d5195646311927e57e"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/provision.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/provision.py",
+      "sha256": "982e59fbf18709ea21a5503f9f050d057f6338c5b30dd8856c9b12f7cf21854a"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/backend/routes.py",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/backend/routes.py",
+      "sha256": "41310b09b888a84a282f8254ad3ac71f5868e92014cdc8686758df3d1a126f60"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/apps/builtins/pptx_maker/prompts/spec-studio.md",
+      "localPath": "upstream/kirocrew/src/kiro_crew/apps/builtins/pptx_maker/prompts/spec-studio.md",
+      "sha256": "aa80df2c559a4ce62b6bcd3da760b6e5dbe4ba0a4f6af50a887dc70b66d997c3"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "src/kiro_crew/builtin_skills/pptx-maker/SKILL.md",
+      "localPath": "upstream/kirocrew/src/kiro_crew/builtin_skills/pptx-maker/SKILL.md",
+      "sha256": "5cd97c2ee5c14b2f831d4c663e599e0bd287598fc9003f6190d7be1b052555db"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/public/app-assets/pptx-maker/hero-dark.svg",
+      "localPath": "upstream/kirocrew/website/public/app-assets/pptx-maker/hero-dark.svg",
+      "sha256": "82a2982754b33abd6c68b2d99f6821f708fc466f8b5b791c108df5990eacf72d"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/public/app-assets/pptx-maker/hero-detail-dark.svg",
+      "localPath": "upstream/kirocrew/website/public/app-assets/pptx-maker/hero-detail-dark.svg",
+      "sha256": "95ed14d0c09c819d4d2f0b158472552a0d03b8d20c7da7f3563206013eb6e066"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/public/app-assets/pptx-maker/hero-detail-light.svg",
+      "localPath": "upstream/kirocrew/website/public/app-assets/pptx-maker/hero-detail-light.svg",
+      "sha256": "6354fb540c8beb378057bc78bec10f91ea1f1c5b8e13c9e95e363b6b94987505"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/public/app-assets/pptx-maker/hero-light.svg",
+      "localPath": "upstream/kirocrew/website/public/app-assets/pptx-maker/hero-light.svg",
+      "sha256": "5f0c78aebfb6bc7eb39417621c7867cbdb415eacff308ca79d20438fd2cce6ae"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/public/app-assets/pptx-maker/icon.svg",
+      "localPath": "upstream/kirocrew/website/public/app-assets/pptx-maker/icon.svg",
+      "sha256": "c30f8513c7d9973ecabc3b41d1ea26dc09e362f9d16189f2f1c1ab321b6ff0bc"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/public/app-assets/pptx-maker/screenshot-main.png",
+      "localPath": "upstream/kirocrew/website/public/app-assets/pptx-maker/screenshot-main.png",
+      "sha256": "db9306e3ce26e4d86cf840fbad1911bdb7971609d1f4adf39516e843f509cd8a"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/BoardFrame.tsx",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/BoardFrame.tsx",
+      "sha256": "306a3a8854a04dd6e994b8687c990e2125656056d07f8159187fea9e92f713a1"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/DeckViewer.tsx",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/DeckViewer.tsx",
+      "sha256": "d2c04fb168dd9a928e36a904984a600b128a3f3f96e2b0f90d3595d2e405fb05"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/LibraryPanel.tsx",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/LibraryPanel.tsx",
+      "sha256": "6f986e08bc18a9f66a318bc38df0244f652c91f8e547fdcff732bfc4f6d67cf6"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/PptxMakerPage.tsx",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/PptxMakerPage.tsx",
+      "sha256": "7b793b5d66c036535b4259bb79acbf939258f42ed30b58ddc8cdf80a8150c508"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/SlidePreview.tsx",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/SlidePreview.tsx",
+      "sha256": "18743d4d3e7ca1a28e3afa9d94fa03254a060694b17d7f92e2e2508caff97375"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/api.ts",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/api.ts",
+      "sha256": "a5c6e90af1a14ee997e72eb45b318c5efba0be9e6ef34bbb0ee59aca209a979c"
+    },
+    {
+      "source": "kirocrew",
+      "upstreamPath": "website/src/apps/pptx-maker/lib.ts",
+      "localPath": "upstream/kirocrew/website/src/apps/pptx-maker/lib.ts",
+      "sha256": "101a5c966362a7d2718c30ebcea5fb9e3dd8fdaf160b0fff5ab5dd60f007f55a"
+    },
+    {
+      "source": "pptx-engine",
+      "upstreamPath": "LICENSE",
+      "localPath": "engine/LICENSE.upstream",
+      "sha256": "6e7fcf9caecaad23031cfdcf3af8792c84e435ac2dc1c479570a2271379cf34b"
+    }
+  ],
+  "modifications": [
+    {
+      "localPath": "upstream/ATTRIBUTION.md",
+      "description": "SwarmAI package attribution joining the two upstream license authorities."
+    },
+    {
+      "localPath": "engine/descriptor.json",
+      "description": "Non-executable engine acquisition descriptor; the runtime tarball is not vendored."
+    }
+  ]
+}

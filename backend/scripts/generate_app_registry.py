@@ -1,4 +1,4 @@
-"""Generate the Phase A immutable App index and typed built-in binding maps.
+"""Generate the immutable App index, provenance schemas, and typed binding maps.
 
 Key public symbols:
 - ``render_outputs`` — pure deterministic generation used by tests and builds.
@@ -19,10 +19,16 @@ if str(_BACKEND) not in sys.path:
 
 from core.app_manifest import AppManifest, build_package_release, canonical_json
 from core.app_profiles import account_profiles
+from core.app_provenance import (
+    AppProvenance,
+    AppProvenanceError,
+    load_verified_provenance,
+)
 
 
 OUTPUT_INDEX = Path("backend/generated/apps_index.json")
 OUTPUT_SCHEMA = Path("backend/generated/app_manifest.schema.json")
+OUTPUT_PROVENANCE_SCHEMA = Path("backend/generated/app_provenance.schema.json")
 OUTPUT_PY = Path("backend/generated/app_bindings.py")
 OUTPUT_TS = Path("desktop/src/generated/appBindings.ts")
 
@@ -44,10 +50,49 @@ def _load_manifests(root: Path) -> list[tuple[Path, AppManifest]]:
     return manifests
 
 
-def _binding_rows(manifests: list[tuple[Path, AppManifest]]) -> list[dict]:
+def _load_provenance(app_dir: Path) -> AppProvenance | None:
+    """Load the App's single verified provenance sidecar when present."""
+
+    expected = app_dir / "package" / "PROVENANCE.json"
+    matches = sorted(app_dir.rglob("PROVENANCE.json"))
+    if not matches:
+        return None
+    if matches != [expected]:
+        raise AppProvenanceError(
+            "external App provenance must exist only at package/PROVENANCE.json"
+        )
+    return load_verified_provenance(expected.parent)
+
+
+def _provenance_summary(provenance: AppProvenance) -> dict | None:
+    """Build a compact upstream source summary from verified provenance."""
+    if not provenance.sources:
+        return None
+    sources = []
+    for src in provenance.sources:
+        sources.append({
+            "id": src.id,
+            "repository": src.repository,
+            "commit": src.commit,
+            "license": src.license,
+        })
+    return {"sources": sources}
+
+
+def _derive_source_tier(provenance: AppProvenance | None) -> str:
+    """Derive source tier from verified host provenance, never app.json."""
+
+    return "external" if provenance is not None else "built-in"
+
+
+def _binding_rows(
+    manifests: list[tuple[Path, AppManifest]],
+    provenance_map: dict[str, AppProvenance | None],
+) -> list[dict]:
     rows: list[dict] = []
     seen: dict[str, str] = {}
     for _, manifest in manifests:
+        provenance = provenance_map.get(manifest.id)
         for resource in manifest.resources:
             target = resource.targets.get("swarmai")
             if not target or not target.binding:
@@ -62,15 +107,20 @@ def _binding_rows(manifests: list[tuple[Path, AppManifest]]) -> list[dict]:
                 "resource_type": resource.type,
                 "binding": target.binding,
                 "source": resource.source,
+                "has_provenance": provenance is not None,
             })
     return sorted(rows, key=lambda row: (row["app_id"], row["resource_id"]))
 
 
-_BINDING_PREFIXES = {
+_BUILTIN_BINDING_PREFIXES = {
     "skill": "builtin:skill:",
     "backend": "builtin:router:",
     "surface": "builtin:surface:",
     "host-binding": "builtin:client:",
+}
+
+_EXTERNAL_BINDING_PREFIXES = {
+    "skill": "external:skill:",
 }
 
 
@@ -87,21 +137,39 @@ def _python_defines_name(path: Path, name: str) -> bool:
 def _validate_binding_sources(root: Path, rows: list[dict]) -> None:
     for row in rows:
         resource_type = row["resource_type"]
-        expected_prefix = _BINDING_PREFIXES.get(resource_type)
-        if expected_prefix is None or not row["binding"].startswith(expected_prefix):
+        binding = row["binding"]
+        if row.get("has_provenance", False) and resource_type != "skill":
             raise RuntimeError(
-                f"unsupported or mismatched built-in binding: {row['binding']} "
-                f"for {resource_type}"
+                "external Apps may bind instruction-only Skill resources"
             )
+        app_id = row["app_id"]
         source_text = row["source"]
         source = root / source_text
+        external_root = f"backend/apps/{app_id}/"
+        external_skill = (
+            resource_type == "skill"
+            and row.get("has_provenance", False)
+            and source_text.startswith(external_root)
+        )
+        if external_skill:
+            expected_prefix = _EXTERNAL_BINDING_PREFIXES["skill"]
+        else:
+            expected_prefix = _BUILTIN_BINDING_PREFIXES.get(resource_type)
+        if expected_prefix is None or not binding.startswith(expected_prefix):
+            raise RuntimeError(
+                f"unsupported or mismatched binding: {binding} for {resource_type}"
+            )
+
         if resource_type == "skill":
-            if not source_text.startswith("backend/skills/"):
+            if not external_skill and not source_text.startswith("backend/skills/"):
                 raise RuntimeError(f"Skill binding is outside backend/skills: {source_text}")
             if not source.is_dir() or not (source / "SKILL.md").is_file() or not (
                 source / "INSTRUCTIONS.md"
             ).is_file():
-                raise RuntimeError(f"unresolved Skill binding source: {source_text}")
+                raise RuntimeError(
+                    f"unresolved Skill binding; SKILL.md and INSTRUCTIONS.md are required: "
+                    f"{source_text}"
+                )
         elif resource_type == "backend":
             if not source_text.startswith("backend/"):
                 raise RuntimeError(f"backend binding is outside backend: {source_text}")
@@ -128,7 +196,7 @@ def _python_bindings(rows: list[dict]) -> str:
         elif row["resource_type"] == "skill":
             skill_rows[key] = source
     return (
-        '"""Generated built-in App bindings. DO NOT EDIT.\n\n'
+        '"""Generated App bindings. DO NOT EDIT.\n\n'
         "Regenerate with ``python backend/scripts/generate_app_registry.py``.\n"
         '"""\nfrom __future__ import annotations\n\n'
         "from typing import Final\n\n"
@@ -156,7 +224,7 @@ def _typescript_bindings(rows: list[dict], binding_digest: str) -> str:
         else:
             clients.append(rendered)
     return (
-        "/** Generated built-in App bindings. DO NOT EDIT.\n"
+        "/** Generated App bindings. DO NOT EDIT.\n"
         " * Regenerate with `python backend/scripts/generate_app_registry.py`.\n"
         " */\n"
         f"export const BUILTIN_APP_BINDING_DIGEST = {json.dumps(binding_digest)} as const;\n\n"
@@ -171,24 +239,56 @@ def _typescript_bindings(rows: list[dict], binding_digest: str) -> str:
     )
 
 
-def _app_record(root: Path, manifest: AppManifest, binding_digest: str) -> dict:
+def _compute_proof_blockers(
+    profile_accounting: list[dict],
+) -> list[str]:
+    """Compute proof blockers including profile-blocked entries."""
+    blockers: list[str] = ["host-build-attestation-missing", "proof-not-run"]
+
+    # Add profile-blocked entries for any profile that is not supported
+    for report in profile_accounting:
+        if not report["supported"]:
+            blocker = f"profile-blocked:{report['profile']}"
+            if blocker not in blockers:
+                blockers.append(blocker)
+
+    return sorted(blockers)
+
+
+def _app_record(
+    root: Path,
+    manifest: AppManifest,
+    binding_digest: str,
+    provenance: AppProvenance | None,
+) -> dict:
     release = build_package_release(manifest, root)
-    return {
+    source_tier = _derive_source_tier(provenance)
+
+    # Build profile accounting
+    profile_reports = [
+        report.model_dump(mode="json") for report in account_profiles(manifest)
+    ]
+
+    # Compute proof blockers from profile accounting
+    proof_blockers = _compute_proof_blockers(profile_reports)
+
+    # Build upstream source summary if provenance exists
+    upstream_source = _provenance_summary(provenance) if provenance else None
+
+    record = {
         "app_id": manifest.id,
         "display_name": manifest.display_name,
         "description": manifest.description,
         "version": manifest.version,
         "instance_mode": manifest.instance_mode,
-        "source_tier": "built-in",
+        "source_tier": source_tier,
         "evidence_state": "catalog-only",
         "lifecycle_controls": [],
         "package_release_digest": release.package_release_digest,
         "execution_release_digest": None,
         "binding_map_digest": binding_digest,
-        "proof_blockers": ["host-build-attestation-missing", "proof-not-run"],
-        "profile_accounting": [
-            report.model_dump(mode="json") for report in account_profiles(manifest)
-        ],
+        "proof_blockers": proof_blockers,
+        "profile_accounting": profile_reports,
         "resources": [
             {
                 "resource_id": resource.id,
@@ -200,13 +300,31 @@ def _app_record(root: Path, manifest: AppManifest, binding_digest: str) -> dict:
         "dependencies": [dependency.model_dump(mode="json") for dependency in manifest.dependencies],
     }
 
+    if upstream_source:
+        record["upstream_source"] = upstream_source
+
+    return record
+
 
 def render_outputs(root: Path) -> dict[Path, str]:
     """Return every generated file exactly as it must appear in the tree."""
 
     root = root.resolve()
     manifests = _load_manifests(root)
-    rows = _binding_rows(manifests)
+
+    # Load and verify provenance for each app
+    provenance_map: dict[str, AppProvenance | None] = {}
+    for path, manifest in manifests:
+        app_dir = path.parent
+        try:
+            provenance = _load_provenance(app_dir)
+        except AppProvenanceError as exc:
+            raise RuntimeError(
+                f"invalid provenance for {manifest.id}: {exc}"
+            ) from exc
+        provenance_map[manifest.id] = provenance
+
+    rows = _binding_rows(manifests, provenance_map)
     _validate_binding_sources(root, rows)
     binding_digest = hashlib.sha256(canonical_json(rows).encode("utf-8")).hexdigest()
     index = {
@@ -214,12 +332,14 @@ def render_outputs(root: Path) -> dict[Path, str]:
         "host_contract_version": "1",
         "binding_map_digest": binding_digest,
         "apps": [
-            _app_record(root, manifest, binding_digest) for _, manifest in manifests
+            _app_record(root, manifest, binding_digest, provenance_map[manifest.id])
+            for _, manifest in manifests
         ],
     }
     return {
         OUTPUT_INDEX: _json_text(index),
         OUTPUT_SCHEMA: _json_text(AppManifest.model_json_schema(by_alias=True)),
+        OUTPUT_PROVENANCE_SCHEMA: _json_text(AppProvenance.model_json_schema(by_alias=True)),
         OUTPUT_PY: _python_bindings(rows),
         OUTPUT_TS: _typescript_bindings(rows, binding_digest),
     }

@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "ProvenanceFile": {
+      "additionalProperties": false,
+      "description": "One verbatim upstream file retained in the tracked package.",
+      "properties": {
+        "localPath": {
+          "title": "Localpath",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "source": {
+          "pattern": "^[a-z][a-z0-9-]{1,62}$",
+          "title": "Source",
+          "type": "string"
+        },
+        "upstreamPath": {
+          "title": "Upstreampath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "upstreamPath",
+        "localPath",
+        "sha256"
+      ],
+      "title": "ProvenanceFile",
+      "type": "object"
+    },
+    "ProvenanceModification": {
+      "additionalProperties": false,
+      "description": "A local adapter file derived from or interpreting upstream material.",
+      "properties": {
+        "description": {
+          "maxLength": 500,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "localPath": {
+          "title": "Localpath",
+          "type": "string"
+        }
+      },
+      "required": [
+        "localPath",
+        "description"
+      ],
+      "title": "ProvenanceModification",
+      "type": "object"
+    },
+    "ProvenanceSource": {
+      "additionalProperties": false,
+      "description": "One immutable upstream repository authority.",
+      "properties": {
+        "archiveSha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Archivesha256"
+        },
+        "commit": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Commit",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]{1,62}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "license": {
+          "pattern": "^[A-Za-z0-9-.+]+$",
+          "title": "License",
+          "type": "string"
+        },
+        "repository": {
+          "title": "Repository",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "repository",
+        "commit",
+        "license"
+      ],
+      "title": "ProvenanceSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Deterministic provenance sidecar with no trust or lifecycle authority.",
+  "properties": {
+    "files": {
+      "items": {
+        "$ref": "#/$defs/ProvenanceFile"
+      },
+      "title": "Files",
+      "type": "array"
+    },
+    "modifications": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProvenanceModification"
+      },
+      "title": "Modifications",
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/ProvenanceSource"
+      },
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "sources",
+    "files"
+  ],
+  "title": "AppProvenance",
+  "type": "object"
+}

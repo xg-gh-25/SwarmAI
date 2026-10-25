@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "sources": [
+    {
+      "id": "anthropic-skills",
+      "repository": "https://github.com/anthropics/skills",
+      "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+      "license": "Apache-2.0"
+    }
+  ],
+  "files": [
+    {
+      "source": "anthropic-skills",
+      "upstreamPath": "skills/frontend-design/SKILL.md",
+      "localPath": "upstream/SKILL.md",
+      "sha256": "d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3"
+    },
+    {
+      "source": "anthropic-skills",
+      "upstreamPath": "skills/frontend-design/LICENSE.txt",
+      "localPath": "LICENSE.upstream",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    }
+  ],
+  "modifications": [
+    {
+      "localPath": "ADAPTATION.md",
+      "description": "Documents the marked SwarmAI host adaptation and duplicate-name resolution."
+    }
+  ]
+}

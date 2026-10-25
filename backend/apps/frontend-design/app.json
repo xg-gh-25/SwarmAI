@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "id": "frontend-design",
+  "version": "2.1.0",
+  "displayName": "Frontend Design",
+  "description": "Build production-grade interfaces using SwarmAI design intelligence and pinned Anthropic design guidance.",
+  "instanceMode": "singleton",
+  "brainInterface": null,
+  "resources": [
+    {
+      "id": "skill:s_frontend-design",
+      "type": "skill",
+      "source": "backend/skills/s_frontend-design",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "builtin:skill:s_frontend-design",
+          "profiles": {
+            "desktop-daemon": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files"]
+            },
+            "desktop-subprocess": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files"]
+            },
+            "hive": {
+              "supported": true,
+              "requires": ["agent-skills", "workspace-files"]
+            }
+          }
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "fixture:anthropic-source",
+      "type": "fixture",
+      "source": "backend/apps/frontend-design/package",
+      "required": false,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "mode": "unsupported",
+          "required": false,
+          "omission": "Pinned source evidence has no runtime contribution"
+        }
+      },
+      "fixtures": []
+    }
+  ],
+  "dependencies": [],
+  "permissionTemplates": {
+    "default": {
+      "files": {
+        "read": ["**/*"],
+        "write": ["**/*"]
+      },
+      "network": [],
+      "secrets": [],
+      "externalActions": []
+    }
+  },
+  "distribution": {
+    "targets": [],
+    "visibility": "internal"
+  }
+}

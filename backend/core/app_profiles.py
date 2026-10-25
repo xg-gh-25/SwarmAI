@@ -29,6 +29,7 @@ class HostProfile(BaseModel):
 _COMMON = {
     "agent-skills", "api-client", "canvas", "chat-launcher",
     "in-process-backend", "product-registry", "workspace-files",
+    "subagents", "web-research",
 }
 HOST_PROFILES: tuple[HostProfile, ...] = (
     HostProfile(

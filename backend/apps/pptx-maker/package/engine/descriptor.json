@@ -1,0 +1,12 @@
+{
+  "name": "spec-driven-presentation-maker",
+  "repository": "https://github.com/aws-samples/sample-spec-driven-presentation-maker",
+  "commit": "b7c7fcf0972b33a480f1b717a3de5bc288d53742",
+  "archive": {
+    "url": "https://github.com/aws-samples/sample-spec-driven-presentation-maker/archive/b7c7fcf0972b33a480f1b717a3de5bc288d53742.tar.gz",
+    "sha256": "ffe8e10b973cada1f6e99629ac780bde25461b432ad07943b4f15ca11c07dfe0"
+  },
+  "license": "MIT-0",
+  "vendored": false,
+  "note": "Engine tar and venv are NOT vendored here; they are fetched at runtime by the KiroCrew pptx-maker backend provision.py. This descriptor records the pinned version for audit."
+}

@@ -22,7 +22,7 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import yaml
@@ -478,10 +478,11 @@ class SkillManager:
     async def scan_all(self) -> dict[str, SkillInfo]:
         """Scan all tiers, apply precedence, return unified dict.
 
-        Scans built-in, ddd (DDD skill registry), user, and plugin in that
-        order.  First-seen folder name wins (built-in > ddd > user > plugin).
-        Logs warnings for shadowed skills, missing SKILL.md, and parse errors.
-        Creates user and plugin directories if they don't exist.
+        Scans built-in, external-app, ddd (DDD skill registry), user, and plugin
+        in that order.  First-seen folder name wins (built-in > external-app >
+        ddd > user > plugin). Logs warnings for shadowed skills, missing
+        SKILL.md, and parse errors. Creates user and plugin directories if
+        they don't exist.
 
         Returns:
             Dict keyed by folder_name, sorted alphabetically.
@@ -497,17 +498,214 @@ class SkillManager:
                     "Cannot create directory %s: %s", dir_path, exc
                 )
 
-        # Precedence order: built-in > ddd > user > plugin (first-seen wins).
+        # Precedence order: built-in > external-app > ddd > user > plugin (first-seen wins).
         # Built-in is scanned FIRST so an enablement skill's official version
         # shadows any DDD-carried copy (a domain skill still living in built-in
         # pre-Run-3 is served by built-in; its ddd entry is a harmless shadow).
         self._scan_tier(self.builtin_path, "built-in", result)
-        self._scan_ddd_tier(result)  # index 1 — reads the registry manifest
+        self._scan_external_app_tier(result)  # from generated APP_SKILL_PATHS
+        self._scan_ddd_tier(result)  # index 2 — reads the registry manifest
         self._scan_tier(self.user_skills_path, "user", result)
         self._scan_tier(self.plugin_skills_path, "plugin", result)
 
         # Return sorted by folder_name for deterministic ordering
         return dict(sorted(result.items()))
+
+    def _scan_external_app_tier(self, result: dict[str, SkillInfo]) -> None:
+        """Merge external App skills from the generated APP_SKILL_PATHS (source_tier="built-in").
+
+        Reads the immutable generated APP_SKILL_PATHS dict; never scans app manifests or
+        app directories. Resolves paths correctly for dev (repo root) and PyInstaller
+        (sys._MEIPASS with leading backend/ stripped).
+
+        First-seen wins: a folder_name already claimed by the normal backend/skills/ tier
+        is skipped (preserves built-in precedence, prevents Pollinate duplication).
+
+        Fail-soft per-record: one bad generated record must fail closed for that record
+        without taking down Core. Log clearly on every rejection.
+        """
+        try:
+            from generated.app_bindings import APP_SKILL_PATHS
+        except ImportError as exc:
+            logger.debug("external-app tier: generated bindings not available: %s", exc)
+            return
+
+        if not APP_SKILL_PATHS:
+            return
+
+        # Containment roots: the source paths must resolve within these.
+        # In dev: backend/skills/ and backend/apps/<app>/ are allowed.
+        # Frozen: equivalent paths under sys._MEIPASS (leading backend/ stripped).
+        try:
+            allowed_roots = self._external_app_allowed_roots()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("external-app tier: failed to compute allowed roots: %s", exc)
+            return
+
+        for resource_key, source_path_str in APP_SKILL_PATHS.items():
+            try:
+                self._register_one_external_app_skill(
+                    resource_key, source_path_str, allowed_roots, result
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad record can't break discovery
+                logger.warning(
+                    "external-app tier: failed to register %s: %s",
+                    resource_key, exc,
+                )
+
+    def _external_app_allowed_roots(self) -> list[Path]:
+        """Return resolved containment roots for external app skill paths.
+
+        In dev (not frozen): backend/skills/ and backend/apps/ under repo root.
+        In PyInstaller: skills/ and apps/ under sys._MEIPASS (backend/ prefix stripped).
+        """
+        roots: list[Path] = []
+        if getattr(sys, "frozen", False):
+            base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+            for sub in ("skills", "apps"):
+                candidate = base / sub
+                try:
+                    roots.append(candidate.resolve())
+                except (OSError, ValueError):
+                    pass
+        else:
+            # Dev: backend/ is parent of core/ (this file's parent)
+            backend_dir = Path(__file__).resolve().parent.parent
+            for sub in ("skills", "apps"):
+                candidate = backend_dir / sub
+                try:
+                    roots.append(candidate.resolve())
+                except (OSError, ValueError):
+                    pass
+        return roots
+
+    def _resolve_external_app_skill_path(self, source_path_str: str) -> Path:
+        """Resolve a generated source path to an absolute directory.
+
+        In dev: path is relative to repo root (e.g. 'backend/skills/s_pollinate').
+        In PyInstaller: strip leading 'backend/' and resolve under sys._MEIPASS.
+        """
+        relative = PurePosixPath(source_path_str)
+        if (
+            not source_path_str
+            or "\\" in source_path_str
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or "." in relative.parts
+        ):
+            raise ValueError(f"invalid generated App Skill path: {source_path_str}")
+        if getattr(sys, "frozen", False):
+            parts = relative.parts[1:] if relative.parts[:1] == ("backend",) else relative.parts
+            base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+            return base.joinpath(*parts).absolute()
+        # Dev: backend/ is parent of core/ (this file's parent)
+        backend_dir = Path(__file__).resolve().parent.parent
+        repo_root = backend_dir.parent
+        return repo_root.joinpath(*relative.parts).absolute()
+
+    def generated_app_skill_paths(self) -> tuple[Path, ...]:
+        """Return exact safe Skill roots from the immutable generated binding map."""
+
+        try:
+            from generated.app_bindings import APP_SKILL_PATHS
+        except ImportError:
+            return ()
+        allowed_roots = self._external_app_allowed_roots()
+        resolved: list[Path] = []
+        for source_path in APP_SKILL_PATHS.values():
+            try:
+                candidate = self._resolve_external_app_skill_path(source_path)
+                if candidate.is_symlink() or not candidate.is_dir():
+                    continue
+                if not any(self._is_path_under_root(candidate, root) for root in allowed_roots):
+                    continue
+                exact = candidate.resolve()
+                if exact not in resolved:
+                    resolved.append(exact)
+            except (OSError, ValueError):
+                continue
+        return tuple(resolved)
+
+    def _register_one_external_app_skill(
+        self,
+        resource_key: str,
+        source_path_str: str,
+        allowed_roots: list[Path],
+        result: dict[str, SkillInfo],
+    ) -> None:
+        """Register a single external app skill, with full validation.
+
+        Raises on any validation failure so the caller can catch and log per-record.
+        """
+        # Parse resource_id from the key: "app_id/skill:folder_name" or "skill:folder_name"
+        # Generated keys look like "pollinate/skill:s_pollinate"
+        resource_id = resource_key.rsplit("/", 1)[-1] if "/" in resource_key else resource_key
+
+        # Validate resource_id format: must be "skill:s_<name>"
+        if not resource_id.startswith("skill:"):
+            raise ValueError(f"invalid resource_id format: {resource_id}")
+
+        folder_name = resource_id[len("skill:"):]
+
+        # Validate folder_name
+        try:
+            validate_folder_name(folder_name)
+        except ValueError as exc:
+            raise ValueError(f"invalid folder_name '{folder_name}': {exc}") from exc
+
+        # Check for duplicate folder_name (built-in already claimed)
+        if folder_name in result:
+            existing = result[folder_name]
+            logger.debug(
+                "external-app tier: %s shadowed by %s tier — skipped",
+                folder_name, existing.source_tier,
+            )
+            return
+
+        # Resolve the source path
+        skill_dir = self._resolve_external_app_skill_path(source_path_str)
+
+        # Reject symlinks
+        if skill_dir.is_symlink():
+            raise ValueError(f"skill directory is a symlink: {skill_dir}")
+
+        # Reject non-existent directories
+        if not skill_dir.is_dir():
+            raise ValueError(f"skill directory does not exist: {skill_dir}")
+
+        # Containment check: must be under an allowed root
+        if not any(
+            self._is_path_under_root(skill_dir, root) for root in allowed_roots
+        ):
+            raise ValueError(
+                f"skill path {skill_dir} is outside allowed roots: {allowed_roots}"
+            )
+
+        # Check SKILL.md exists and is not a symlink
+        skill_md = skill_dir / "SKILL.md"
+        if skill_md.is_symlink():
+            raise ValueError(f"SKILL.md is a symlink: {skill_md}")
+        if not skill_md.is_file():
+            raise ValueError(f"SKILL.md missing at {skill_dir}")
+
+        # Parse and register
+        try:
+            info = parse_skill_md(
+                skill_md, folder_name, "built-in", load_content=False,
+            )
+            result[folder_name] = info
+            logger.debug("external-app tier: registered %s from %s", folder_name, skill_dir)
+        except SkillParseError as exc:
+            raise ValueError(f"failed to parse SKILL.md: {exc}") from exc
+
+    @staticmethod
+    def _is_path_under_root(path: Path, root: Path) -> bool:
+        """Check if path is under root directory (both must be resolved)."""
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except (OSError, ValueError):
+            return False
 
     def _scan_ddd_tier(self, result: dict[str, SkillInfo]) -> None:
         """Merge DOMAIN skills from the DDD skill-registry manifest (source_tier="ddd").

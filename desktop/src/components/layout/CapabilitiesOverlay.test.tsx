@@ -188,7 +188,7 @@ describe('CapabilitiesContent — Apps catalog-only default (Phase A)', () => {
         bindingMapDigest: 'b'.repeat(64), proofBlockers: ['proof-not-run'],
         profileAccounting: [{ profile: 'desktop-daemon', contractVersion: '1',
           capabilityDigest: 'c'.repeat(64), supported: true, blockedResources: [] }],
-        resourceCount: 4,
+        resourceCount: 4, upstreamSource: null,
       }],
     });
     renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
@@ -207,13 +207,34 @@ describe('CapabilitiesContent — Apps catalog-only default (Phase A)', () => {
         appId: 'pollinate', displayName: 'Pollinate', description: 'Media', version: '1.0.0',
         instanceMode: 'singleton', sourceTier: 'built-in', evidenceState: 'catalog-only',
         lifecycleControls: [], packageReleaseDigest: 'a'.repeat(64), executionReleaseDigest: null,
-        bindingMapDigest: 'x'.repeat(64), proofBlockers: ['proof-not-run'], resourceCount: 4,
+        bindingMapDigest: 'x'.repeat(64), proofBlockers: ['proof-not-run'],
+        resourceCount: 4, upstreamSource: null,
         profileAccounting: [{ profile: 'desktop-daemon', contractVersion: '1',
           capabilityDigest: 'c'.repeat(64), supported: true, blockedResources: [] }],
       }],
     });
     renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
     expect(await screen.findByTestId('cap-app-profile-pollinate')).toHaveTextContent('compiled bindings mismatch');
+  });
+  it('renders verified upstream attribution for an external App', async () => {
+    listApps.mockResolvedValue({
+      schemaVersion: 1, hostContractVersion: '1', currentProfile: 'desktop-daemon',
+      apps: [{
+        appId: 'research', displayName: 'Research', description: 'Research', version: '1.0.0',
+        instanceMode: 'singleton', sourceTier: 'external', evidenceState: 'catalog-only',
+        lifecycleControls: [], packageReleaseDigest: 'a'.repeat(64), executionReleaseDigest: null,
+        bindingMapDigest: 'b'.repeat(64), proofBlockers: ['proof-not-run'], resourceCount: 1,
+        upstreamSource: { sources: [{ id: 'mattpocock-skills',
+          repository: 'https://github.com/mattpocock/skills', commit: 'c'.repeat(40), license: 'MIT' }] },
+        profileAccounting: [{ profile: 'desktop-daemon', contractVersion: '1',
+          capabilityDigest: 'c'.repeat(64), supported: true, blockedResources: [] }],
+      }],
+    });
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    const source = await screen.findByTestId('cap-app-upstream-research');
+    expect(source).toHaveTextContent('github.com/mattpocock/skills');
+    expect(source).toHaveTextContent('(MIT)');
+    expect(screen.getByTestId('cap-app-research').querySelector('button')).toBeNull();
   });
 });
 

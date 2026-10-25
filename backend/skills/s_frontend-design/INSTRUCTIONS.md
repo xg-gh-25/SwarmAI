@@ -2,6 +2,19 @@
 
 Create high-quality, production-ready frontend interfaces that are visually striking and functionally complete. Every output should be a self-contained HTML file that works in a browser.
 
+## Pinned upstream guidance
+
+This file was modified to incorporate the design discipline from Anthropic's
+`frontend-design` Skill at commit `dbd4588f9e1033efb41dad4bef2f7947c8993d44`
+(Apache-2.0). The verbatim source, license and modification record ship under
+`backend/apps/frontend-design/package/`.
+
+Before implementation, ground the visual direction in the subject, audience and
+primary job. Make deliberate choices about typography, color, motion and spatial
+composition instead of reusing a generic aesthetic. When a repository already has
+a design system, its tokens, components, accessibility rules and visual guards are
+authoritative over this general guidance.
+
 ## Output Location
 
 Save generated files to:
