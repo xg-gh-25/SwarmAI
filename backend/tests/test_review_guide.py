@@ -142,3 +142,49 @@ def test_swarmai_review_md_still_dispatches_security_for_its_gates():
     assert guide.security is not None and guide.rows
     assert review_md.applies(guide.security, ["backend/core/security_hooks.py"], "")
     assert not review_md.applies(guide.security, ["backend/core/turn_view.py"], "")
+
+
+# --- review of 67cd437ea: a broken guide never loses security review -----------------
+
+def _patterns(text: str, paths=("src/auth.py",), diff: str = "") -> dict:
+    from core.run_protocol import review
+    return review.review_patterns({"r": {"text": text, "paths": list(paths),
+                                         "diff": diff, "base": "abc123"}})
+
+
+SEC = "security: `match: glob:*auth*`\n"
+BROKEN_ROW = "| A1 | x | t `match: glob:*.py` `match: kw:y` | v | e |\n"
+
+
+def test_a_broken_pattern_row_does_not_drop_a_valid_security_line():
+    out = _patterns(SEC + BROKEN_ROW)
+    assert out["security"] and "security line matches" in out["security"][0], out
+    assert out["error"] and "r:" in out["error"]          # the broken table is still named
+
+
+def test_a_malformed_security_line_is_an_error_and_dispatches_security():
+    from core.run_protocol import review_md
+    for line in ("security: match: glob:*auth*", "security: `match: glob:*auth*",
+                 "security: `match: nope:x`", "security:"):
+        with pytest.raises(review_md.GuideError):
+            review_md.parse(line + "\n")
+        out = _patterns(line + "\n", paths=["src/unrelated.py"])
+        assert out["security"] and "cannot be parsed" in out["security"][0], (line, out)
+
+
+def test_prose_that_mentions_security_mid_line_is_not_a_declaration():
+    from core.run_protocol import review_md
+    guide = review_md.parse("Our security: posture is described in SECURITY.md.\n")
+    assert guide.security is None
+
+
+@pytest.mark.parametrize("added", [
+    "port = 8080", "port  =8080", "host = '0.0.0.0'", "data = yaml.load (f)",
+    "run(x, shell = True)", "eval (code)", "exec  (code)", "listen_port = 1",
+])
+def test_swarmai_security_keywords_ignore_spacing_like_the_old_rule(added):
+    """The old built-in _SECURITY_CODE allowed whitespace (`port\\s*=`, `eval\\s*\\(`);
+    SwarmAI's declaration of the same rule must match the same code."""
+    from core.run_protocol import review_md
+    guide = review_md.parse((REPO_ROOT / ".swarmai" / "review.md").read_text(encoding="utf-8"))
+    assert review_md.applies(guide.security, ["backend/core/x.py"], "+" + added + "\n"), added

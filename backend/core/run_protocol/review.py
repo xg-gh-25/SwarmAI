@@ -69,6 +69,16 @@ def review_patterns(repos: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
         text, paths, diff = item.get("text"), list(item.get("paths") or ()), str(item.get("diff") or "")
         if text is None or not paths:
             continue
+        # The security line is read on its own first: a broken pattern table must not
+        # hide it, and a security line that cannot be read dispatches security.
+        try:
+            security = review_md.security_line(text)
+        except review_md.GuideError as exc:
+            security = None
+            out["security"].append(f"{name}: {review_md.PATH} security line cannot be "
+                                   f"parsed ({exc}); security reviews to be safe")
+        if security is not None and review_md.applies(security, paths, diff):
+            out["security"].append(f"{name}: {review_md.PATH} security line matches")
         try:
             guide = review_md.parse(text)
         except review_md.GuideError as exc:
@@ -77,8 +87,6 @@ def review_patterns(repos: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
                                    f"{review_md.PATH} ({exc}); read it yourself and apply the "
                                    "rows whose trigger is present in the diff.")
             continue
-        if guide.security is not None and review_md.applies(guide.security, paths, diff):
-            out["security"].append(f"{name}: {review_md.PATH} security line matches")
         hits = review_md.select(guide, paths, diff)
         out["triggered"] += [r.id for r in hits if review_md.specific_hit(r, paths, diff)]
         if hits:

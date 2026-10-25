@@ -12,12 +12,16 @@ in ``.swarmai/review.md``:
 
 ``match:`` grammar: space-separated terms; ``glob:<pattern>`` is an fnmatch glob
 against each changed path and its basename (``*`` crosses ``/``); ``kw:<text>`` is a
-case-insensitive substring of the paths and the diff; ``*`` alone always applies.
+case-insensitive substring of the paths and the diff, with spacing next to
+punctuation ignored on both sides (``kw:port=`` matches ``port = 1``); ``*`` alone
+always applies. Every line starting with ``security:`` must be the declaration
+(``security_line``); a malformed one is an error, and the pipeline then dispatches
+security.
 
 The pipeline reads the file at the run's BASE commit (``read_at``), so a run cannot
 weaken the review it is subject to by editing the file in its own worktree.
 
-Public: ``parse``, ``read_at``, ``applies``, ``select``, ``specific_hit``,
+Public: ``parse``, ``security_line``, ``read_at``, ``applies``, ``select``, ``specific_hit``,
 ``compact``, ``Guide``, ``Row``, ``GuideError``, ``PATH``.
 """
 from __future__ import annotations
@@ -75,20 +79,35 @@ def _spec(rid: str, line: str, spec: str) -> Row:
     return Row(rid, line, False, tuple(globs), tuple(kws))
 
 
+def security_line(text: str) -> Row | None:
+    """The ``security:`` declaration of *text*, parsed on its own so that a broken
+    pattern table cannot hide it. Every line that starts with ``security:`` must be
+    the declaration; one that does not parse raises GuideError (the caller then
+    dispatches security, never skips it)."""
+    security = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("security:"):
+            continue
+        sec = _SECURITY.match(stripped)
+        if not sec:
+            raise GuideError(f"malformed `security:` line: {stripped[:80]}")
+        if security is not None:
+            raise GuideError("more than one `security:` line")
+        security = _spec("security", stripped, sec.group(1).strip())
+    return security
+
+
 def parse(text: str) -> Guide:
     """The guide in *text*. Raises GuideError on a malformed row or security line, so
     a typo cannot silently turn a row into one that never applies."""
+    security = security_line(text)
     lines = text.splitlines()
     header: tuple[str, ...] = ()
     rows: list[Row] = []
-    security = None
     for i, line in enumerate(lines):
         stripped = line.strip()
-        sec = _SECURITY.match(stripped)
-        if sec:
-            if security is not None:
-                raise GuideError("more than one `security:` line")
-            security = _spec("security", stripped, sec.group(1).strip())
+        if stripped.startswith("security:"):
             continue
         if not stripped.startswith("|"):
             continue
@@ -138,6 +157,21 @@ def _norm(paths: Sequence[str]) -> list[str]:
     return [str(p).replace("\\", "/").lower() for p in paths]
 
 
+# Spacing next to punctuation is not part of a keyword: `kw:port=` matches `port = 1`
+# and `kw:eval(` matches `eval (x)`, as the old built-in `port\s*=` rule did. It can
+# only widen a match (`report = x` holds `port=`), which errs toward more review.
+_PUNCT_SPACE = re.compile(r"[ \t]*([^\w\s])[ \t]*")
+
+
+def _squeeze(text: str) -> str:
+    return _PUNCT_SPACE.sub(r"\1", text)
+
+
+def _kw_hit(row: Row, norm: Sequence[str], diff_text: str) -> bool:
+    hay = _squeeze("\n".join(norm) + "\n" + diff_text.lower())
+    return any(_squeeze(k) in hay for k in row.keywords)
+
+
 def applies(row: Row, paths: Sequence[str], diff_text: str = "") -> bool:
     """The row is always-on, a glob hits a path (or its basename), or a keyword occurs
     in a path or the diff."""
@@ -148,8 +182,7 @@ def applies(row: Row, paths: Sequence[str], diff_text: str = "") -> bool:
         base = p.rsplit("/", 1)[-1]
         if any(fnmatch.fnmatchcase(p, g) or fnmatch.fnmatchcase(base, g) for g in row.globs):
             return True
-    hay = "\n".join(norm) + "\n" + diff_text.lower()
-    return any(k in hay for k in row.keywords)
+    return _kw_hit(row, norm, diff_text)
 
 
 def specific_hit(row: Row, paths: Sequence[str], diff_text: str = "") -> bool:
@@ -164,8 +197,7 @@ def specific_hit(row: Row, paths: Sequence[str], diff_text: str = "") -> bool:
         if any(fnmatch.fnmatchcase(p, g) or fnmatch.fnmatchcase(p.rsplit("/", 1)[-1], g)
                for p in norm):
             return True
-    hay = "\n".join(norm) + "\n" + diff_text.lower()
-    return any(k in hay for k in row.keywords)
+    return _kw_hit(row, norm, diff_text)
 
 
 def select(guide: Guide, paths: Sequence[str], diff_text: str = "") -> list[Row]:

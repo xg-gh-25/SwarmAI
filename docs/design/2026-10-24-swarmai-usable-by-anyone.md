@@ -475,6 +475,11 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 - SwarmAI 原来按 RP 表格做的测试（`test_spawn_prompt_patterns.py`）改名为 `test_swarmai_review_patterns.py`，测的是 SwarmAI 自己的 `.swarmai/review.md`；只测已删 CLI 的用例删掉。pipeline 测试用的样例仓库加了一份最小的 `.swarmai/review.md`，让改 `backend/core/` 的小改动照旧派 correctness。
 - `OPERATIONAL_PATTERNS.md` 里对 RP 编号的引用也去掉了（这个文件没有被任何代码读取，留待 S6-5 判断要不要删）。
 
+**审查后修复（S6-4b 之后，2026-10-25）**：fresh-context 的 correctness 和 security 审查找出三处会让 security 审查悄悄消失：
+- 表格里一行写错（例如两个 `match:`）会让整份文件解析失败，连带丢掉写对了的 `security:` 行。现在 `security:` 行单独解析（`review_md.security_line`），表格出错不影响它。
+- 以 `security:` 开头但格式不对的行原来被当成普通文字。现在是错误，这时 pipeline 照样派 security，理由写明\"security 行解析不了\"。
+- SwarmAI 的声明比原来内置的规则窄：旧正则 `port\s*=`、`eval\s*\(` 允许空格，`kw:port=` 只按字面匹配，`port = 8080` 这种标准写法就不派了。现在 `kw:` 匹配时忽略标点两边的空白（关键词和 diff 都这样处理）。代价是匹配只会变宽（`report = x` 里也有 `port=`），偏向多审。
+
 ## 4. 用户场景
 
 | 场景 | 体验 |
