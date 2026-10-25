@@ -29,6 +29,14 @@ Examples:
 _(Permanent rules that apply every session. Remove when no longer needed.)_
 
 <!--
+Channel bots (Slack and other channels): a group channel or a teammate's DM sees
+ONLY the text you wrap between two HTML comments, "channel" before and "/channel"
+after:  < !-- channel -- >  ...rules...  < !-- /channel -- >  (typed without the
+spaces inside the angle brackets). Everything outside the pairs never reaches a
+channel prompt. A marker without its partner, or one inside another pair, shares
+NOTHING from this file, other pairs included, so never type the markers literally
+in an example. Your own sessions always see the whole file.
+
 Examples of standing rules:
 - Always write tests before implementing features
 - When working on the API, use OpenAPI spec format first

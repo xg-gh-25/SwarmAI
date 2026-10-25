@@ -603,7 +603,9 @@ class TestE2EGroupChannel:
         assert "## SwarmAI" in prompt
         assert "## Soul" in prompt
         assert "## Agent Directives" in prompt
-        assert "## Steering" in prompt
+        # STEERING is section-filtered for non-owners: this fixture wraps no text
+        # in a channel ... /channel pair, so no Steering section is injected.
+        assert "## Steering" not in prompt
         assert "## Knowledge" in prompt
         # PROJECTS.md was deleted 2026-08-14 — must NOT appear in ANY prompt.
         assert "## Projects" not in prompt

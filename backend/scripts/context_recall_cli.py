@@ -32,6 +32,7 @@ if str(_BACKEND) not in sys.path:
 
 from core.context_directory_loader import (  # noqa: E402
     CHANNEL_LIGHT_EXCLUDE,
+    CHANNEL_SECTION_FILTERED,
     GROUP_CHANNEL_EXCLUDE,
 )
 from core.context_recall import recall_context  # noqa: E402
@@ -41,8 +42,10 @@ from core.context_recall import recall_context  # noqa: E402
 _POLICY_EXCLUSIONS = {
     "desktop": frozenset(),
     "owner_channel": frozenset(),
-    "nonowner_channel": CHANNEL_LIGHT_EXCLUDE,
-    "group_channel": GROUP_CHANNEL_EXCLUDE | CHANNEL_LIGHT_EXCLUDE,
+    # a section-filtered file (STEERING) reaches a non-owner prompt only through its
+    # marked sections, already in that prompt; recall would hand back the rest
+    "nonowner_channel": CHANNEL_LIGHT_EXCLUDE | CHANNEL_SECTION_FILTERED,
+    "group_channel": GROUP_CHANNEL_EXCLUDE | CHANNEL_LIGHT_EXCLUDE | CHANNEL_SECTION_FILTERED,
 }
 
 # Default context directory (workspace .context/).

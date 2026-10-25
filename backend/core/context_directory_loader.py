@@ -161,12 +161,12 @@ WHOLE_FILE_PRIVATE: frozenset[str] = frozenset({
 # Adding a file here to dodge exclusion is loud: the gitignore-sync test prints this
 # allowlist on failure, and a carve-out with no real consumer fails its pin test.
 CHANNEL_INJECTION_CARVE_OUTS: dict[str, str] = {
-    # The channel bot NEEDS its Slack-bot governance rules (STEERING #6: refuse
-    # source-code changes, no cross-user leakage) in its own prompt to behave
-    # safely. Whole-file excluding STEERING would strip those rules = a behavior
-    # regression. STEERING's genuinely-sensitive infra sections are a section-level
-    # follow-up, NOT a reason to drop the whole file from channel prompts.
-    "STEERING.md": "channel bot needs its Slack-bot governance rules (STEERING #6)",
+    # The channel bot NEEDS the owner's bot-governance rules (e.g. refuse source-code
+    # changes, no cross-user leakage) in its own prompt to behave safely, so STEERING
+    # is not excluded whole. It is section-filtered instead (CHANNEL_SECTION_FILTERED):
+    # a non-owner prompt carries only the text the owner wrapped between
+    # CHANNEL_SECTION_MARKER and CHANNEL_SECTION_END; everything else stays out.
+    "STEERING.md": "channel bot needs the owner's bot-governance rules; only the wrapped text is injected",
     # KNOWLEDGE.md is low-sensitivity for channel exposure (a domain index; its only
     # local-specific content is the source-repo path, not credentials). Whole-file
     # excluding it would starve a teammate of genuine domain knowledge for marginal
@@ -198,6 +198,56 @@ with a docstring claiming "MEMORY.md and USER.md ARE included — channel DMs ar
 personal." That rationale is true for the OWNER (whose DMs take the full-context
 else-path), but this set applies to the `not is_owner` branch — so it was
 leaking USER.md + MEMORY.md to non-owner teammates. Owner DMs are unaffected."""
+
+
+# ── Channel section filter ──────────────────────────────────────────────
+
+CHANNEL_SECTION_MARKER = "<!-- channel -->"
+CHANNEL_SECTION_END = "<!-- /channel -->"
+"""Wrap the text a channel bot may see in a CHANNEL_SECTION_FILTERED file between
+these two markers. Both are HTML comments, so ``_clean_content`` removes them from
+every assembled prompt (owner prompts included)."""
+
+CHANNEL_SECTION_FILTERED: frozenset[str] = frozenset({"STEERING.md"})
+"""Carve-out files that a non-owner prompt gets FILTERED, not whole: only the text
+between a CHANNEL_SECTION_MARKER and the next CHANNEL_SECTION_END. Everything else is
+dropped; a file with no complete pair (or a malformed one) contributes nothing."""
+
+# No markdown is interpreted: what is shared is exactly what the owner wrapped. Every
+# heading-boundary parser tried first leaked the next rule on some input
+# (run_bb7b1850 review, three rounds), so the boundary is explicit instead.
+_CHANNEL_ANY_RE = re.compile(r"<!--\s*(/?)\s*channel\s*-->", re.IGNORECASE)
+
+
+def channel_sections(raw: str) -> "tuple[str, str | None]":
+    """``(shared text, problem)`` for *raw*: the text between each
+    ``<!-- channel -->`` and the next ``<!-- /channel -->``, in file order, joined by
+    a blank line; *problem* is None, ``"nested"`` (an opening marker inside an open
+    pair), ``"stray_close"`` (a closing marker with nothing open) or ``"unclosed"``.
+    Any problem makes the shared text ``""`` for the WHOLE file, other pairs
+    included: the owner's markup is ambiguous, so nothing is shared."""
+    kept: list[str] = []
+    start: int | None = None
+    for m in _CHANNEL_ANY_RE.finditer(raw):
+        if not m.group(1):
+            if start is not None:
+                return "", "nested"
+            start = m.end()
+        else:
+            if start is None:
+                return "", "stray_close"
+            kept.append(raw[start:m.start()].strip("\r\n").rstrip())
+            start = None
+    if start is not None:
+        return "", "unclosed"
+    return "\n\n".join(part for part in kept if part.strip()), None
+
+
+def filter_channel_sections(raw: str) -> str:
+    """The shared text of *raw* (``channel_sections``), ``""`` on any markup problem.
+    Runs on the RAW text: the markers are HTML comments that ``_clean_content``
+    strips."""
+    return channel_sections(raw)[0]
 
 
 # ── Lifecycle Filtering ─────────────────────────────────────────────────
@@ -426,6 +476,17 @@ assert set(CHANNEL_INJECTION_CARVE_OUTS) <= {s.filename for s in CONTEXT_FILES},
     "CHANNEL_INJECTION_CARVE_OUTS names a file with no matching CONTEXT_FILES spec: "
     f"{set(CHANNEL_INJECTION_CARVE_OUTS) - {s.filename for s in CONTEXT_FILES}}"
 )
+# A section-filtered file is a carve-out (it IS injected, filtered); anything else
+# would be either excluded already or injected whole with no filter.
+assert CHANNEL_SECTION_FILTERED <= set(CHANNEL_INJECTION_CARVE_OUTS), (
+    "CHANNEL_SECTION_FILTERED names a file that is not a channel carve-out: "
+    f"{CHANNEL_SECTION_FILTERED - set(CHANNEL_INJECTION_CARVE_OUTS)}"
+)
+# The section filter runs when exclude_filenames is non-empty: an empty non-owner
+# exclusion set would inject a section-filtered file whole.
+assert GROUP_CHANNEL_EXCLUDE and CHANNEL_LIGHT_EXCLUDE, (
+    "a non-owner exclusion set is empty: CHANNEL_SECTION_FILTERED files would be "
+    "injected whole")
 # A file cannot be BOTH channel-excluded and a channel carve-out (contradiction).
 assert not (WHOLE_FILE_PRIVATE & set(CHANNEL_INJECTION_CARVE_OUTS)), (
     "A file is both in WHOLE_FILE_PRIVATE and CHANNEL_INJECTION_CARVE_OUTS — "
@@ -972,6 +1033,22 @@ class ContextDirectoryLoader:
                     "Cannot read source file %s: %s", filepath, exc
                 )
                 continue
+
+            # Non-owner session (exclusions given): a section-filtered carve-out
+            # keeps only the text its owner wrapped in channel markers. Must run on
+            # the RAW text — the markers are HTML comments _clean_content strips.
+            if exclude_filenames and spec.filename in CHANNEL_SECTION_FILTERED:
+                content, problem = channel_sections(content)
+                if problem:
+                    # the owner meant to share something and nothing is: say why
+                    logger.warning("%s: channel markers are malformed (%s) — nothing "
+                                   "of this file reaches non-owner prompts; wrap each "
+                                   "shared part in %s ... %s", spec.filename, problem,
+                                   CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
+                elif not content.strip():
+                    logger.info("%s: no %s ... %s pair — nothing of it reaches this "
+                                "non-owner prompt", spec.filename,
+                                CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
 
             content = self._clean_content(content, spec.section_name)
             if not content:
