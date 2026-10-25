@@ -2,7 +2,7 @@
 
 What is tested:
 - Both backend plist copies (the desktop bundle template and backend/channels,
-  used by /api/system/upgrade + install_backend_daemon.py) run the daemon at
+  used by install_backend_daemon.py) run the daemon at
   ``ProcessType=Standard``; the guardian stays ``Background``.
 - ``_deploy_daemon_binary`` (scripts/daemon-lib.sh) reports whether the rendered
   plist changed via ``_DAEMON_PLIST_CHANGED``.

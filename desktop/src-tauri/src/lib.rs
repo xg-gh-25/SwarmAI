@@ -1602,7 +1602,7 @@ async fn sync_daemon_version_background(
 
 /// Substitute the launchd plist template placeholders. Pure — unit-tested.
 /// Must stay in step with the bash renderer (`scripts/daemon-lib.sh`
-/// `_deploy_daemon_binary`) and the Python one (`/api/system/upgrade`).
+/// `_deploy_daemon_binary`) and the Python one (`backend/channels/install_backend_daemon.py`).
 #[allow(dead_code)]
 fn render_daemon_plist(template: &str, wrapper_path: &str, log_dir: &str, home: &str) -> String {
     template

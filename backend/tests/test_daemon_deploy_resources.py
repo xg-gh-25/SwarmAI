@@ -143,30 +143,6 @@ def test_ac5_execution_resources_survive_real_rsync(tmp_path):
         "stale file in nested resources NOT pruned — exclude is non-anchored"
 
 
-def test_ac6_upgrade_endpoint_also_protects_resources():
-    """AC6: /api/system/upgrade in main.py runs the SAME destructive rsync into
-    the daemon dir but NEVER re-copies resources — so it must ALSO exclude
-    /resources and /.version, or it permanently wipes them. (Same bug class —
-    STEERING #10: grep ALL consumers of the pattern, not just the one reported.)
-    """
-    main_py = PROJECT_ROOT / "backend" / "main.py"
-    text = main_py.read_text(encoding="utf-8")
-    # The rsync call is a Python list literal that may span multiple physical
-    # lines. Match the whole subprocess.run([...]) list that contains "rsync"
-    # and --delete and daemon_dir, then assert the excludes are inside it.
-    spans = re.findall(
-        r'\[\s*"rsync".*?daemon_dir\s*\+\s*"/"\s*\]',
-        text, flags=re.DOTALL,
-    )
-    delete_spans = [re.sub(r"\s+", " ", s) for s in spans if "--delete" in s]
-    assert delete_spans, "Could not find the upgrade-endpoint rsync --delete list in main.py"
-    for span in delete_spans:
-        assert '"/resources"' in span and '"/.version"' in span, (
-            f"upgrade-endpoint rsync must exclude '/resources' and '/.version' "
-            f"(it never re-copies resources → permanent wipe). Got: {span}"
-        )
-
-
 @pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync not available")
 def test_ac5_negative_bare_delete_wipes_resources(tmp_path):
     """Control: the OLD command (bare --delete, no excludes) WIPES resources.

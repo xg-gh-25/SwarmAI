@@ -17,8 +17,3 @@ backend/scripts/eval_runner.py | Desktop | 1 | temporary: OS Eval generalization
 backend/scripts/eval_runner.py | Path.home() / 'Desktop' | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
 backend/scripts/eval_runner.py | _find_swarmai_repo | 6 | temporary: OS Eval generalization ToDo (closing guards D2)
 backend/scripts/eval_spine_probe.py | _find_swarmai_repo | 2 | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/main.py | SWARMAI_PROJECT_ROOT | 2 | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | SwarmAI-Workspace | 1 | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | Desktop | 1 | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | Path.home() / 'Desktop' | 1 | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | prod.sh | 3 | temporary: /api/system/upgrade, closing guards D1

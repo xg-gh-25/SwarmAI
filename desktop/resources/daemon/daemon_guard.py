@@ -5,7 +5,7 @@ system. Shell scripts (``scripts/daemon-lib.sh``) and the guardian launchd
 agent (``swarmai_guardian.sh``) orchestrate launchctl; the judgment logic
 that decides *whether* an action is safe lives here so it can be unit-tested.
 
-Three responsibilities (see design run_b5592983):
+Two responsibilities:
 
 1. **Prevention** — ``is_daemon_descendant()`` detects when a lifecycle
    operation is being invoked from inside a process tree rooted at the
@@ -15,20 +15,15 @@ Three responsibilities (see design run_b5592983):
    (``start_new_session=True``) so it survives the daemon's death. It is
    fire-and-forget: a daemon-killing op reaps its own caller, so no result can
    be relayed back — the outcome is observed out-of-band (health check,
-   guardian, ``scan_deployed_no_restart`` at startup). The ``/api/system/upgrade``
-   endpoint keeps its own result file because that op does NOT kill its caller.
+   guardian).
 
 2. **Recovery** — ``guardian_decision()`` is the pure function the guardian
    agent calls every poll. It re-bootstraps the daemon ONLY when it is
    deregistered AND no intent-sentinel is present AND the port has been dead
-   for N consecutive probes. The sentinel (written by ``stop`` and the
-   upgrade endpoint before bootout) is what prevents the guardian from
+   for N consecutive probes. The sentinel (written by ``stop`` and by a plist
+   reload before bootout) is what prevents the guardian from
    racing an intentional shutdown or corrupting an in-flight rsync
    (COE 2026-05-01 PYZ/zlib corruption).
-
-3. **Observability** — ``scan_deployed_no_restart()`` reads the upgrade
-   result files the upgrader writes; a ``deployed_no_restart`` status means a
-   binary was deployed but the daemon never came back up. Surfaced at startup.
 
 Public CLI (``python -m core.daemon_guard <cmd>``) lets the shell layer reuse
 this logic without reimplementing it in bash:
@@ -36,7 +31,6 @@ this logic without reimplementing it in bash:
     ancestry-check        exit 0 if current process is a daemon descendant
     write-sentinel        write the intent sentinel before a bootout
     clear-sentinel        remove the intent sentinel after a healthy start
-    scan-deploy           print JSON of any deployed_no_restart result files
     guardian-decision     print SHOULD_BOOTSTRAP / SKIP for the guardian loop
 
 Mechanism declarations (Step 1.7):
@@ -44,7 +38,7 @@ Mechanism declarations (Step 1.7):
   subprocesses use ``start_new_session=True`` (new pgid, preserved ppid).
   Verified live: chain 54489→54487→50035→49520(daemon)→1.
 - detached re-exec: ``Popen(start_new_session=True)`` survives daemon death;
-  same pattern as the production upgrade endpoint.
+  verified live.
 - sentinel staleness: JSON ``written_at`` vs ``time.time()`` — plain stdlib.
 """
 
@@ -63,29 +57,23 @@ DAEMON_LABEL = "com.swarmai.backend"
 DAEMON_PORT = 18321
 
 #: Intent sentinel — its presence tells the guardian "this down-state is
-#: intentional (stop/upgrade), do not resurrect the daemon".
+#: intentional (stop / plist reload), do not resurrect the daemon".
 SENTINEL_PATH = Path.home() / ".swarm-ai" / ".daemon-intentional-down"
 
 #: backend.json records the running daemon's pid (written by the daemon itself).
 BACKEND_JSON_PATH = Path.home() / ".swarm-ai" / "backend.json"
 
 #: Sentinel older than this (and port still dead) is treated as stale — a
-#: crash *during* an upgrade must not suppress recovery forever. Bounds the
-#: worst-case outage when an upgrader crashes mid-rsync. A legitimate upgrade
-#: completes in well under a minute on local disk, so 5 minutes is a generous
-#: ceiling — far better than a longer window that would let a crashed-upgrade
+#: crash *during* a plist reload must not suppress recovery forever. Bounds the
+#: worst-case outage when the reloading script dies mid-flight. A legitimate
+#: reload completes in well under a minute, so 5 minutes is a generous
+#: ceiling — far better than a longer window that would let a crashed-reload
 #: sentinel suppress recovery and regress past the C034 7-minute outage.
 #: Note: ``permanent`` sentinels (from ``stop``) are never stale (see below).
 SENTINEL_STALE_SECONDS = 5 * 60  # 5 minutes
 
 #: Cap the ppid walk so a (pathological) pid cycle can't loop forever.
 MAX_ANCESTRY_HOPS = 12
-
-#: Upgrade result files written by the /api/system/upgrade detached upgrader.
-UPGRADE_RESULT_GLOB = "swarm-upgrade-*.json"
-
-#: A deployed_no_restart result older than this is no longer actionable noise.
-DEPLOY_RESULT_FRESH_SECONDS = 24 * 60 * 60  # 24 hours
 
 # ── Daemon pid discovery ─────────────────────────────────────────────────────
 
@@ -222,13 +210,9 @@ def reexec_detached(argv: list[str], op: str) -> None:
     ops is observed out-of-band instead:
       - ``stop``    → next health check / guardian sees the daemon down
       - ``restart`` → the next request lands on the fresh daemon (new version)
-      - partial deploy → ``scan_deployed_no_restart`` surfaces it at startup
 
     The detached child gets ``_SWARM_LIFECYCLE_DETACHED=1`` so its own guard
-    short-circuits (no recursion). The ``/api/system/upgrade`` endpoint keeps
-    its own result file — but that op does NOT kill its caller, so the relay
-    there has a live reader. The two relay stories differ because the lifetimes
-    differ.
+    short-circuits (no recursion).
     """
     env = {
         **os.environ,
@@ -251,7 +235,7 @@ def reexec_detached(argv: list[str], op: str) -> None:
 def write_sentinel(reason: str, written_by: str,
                    sentinel_path: Path = SENTINEL_PATH,
                    permanent: bool = False) -> None:
-    """Write the intent sentinel BEFORE a bootout (stop/upgrade).
+    """Write the intent sentinel BEFORE a bootout (stop / plist reload).
 
     Its presence suppresses the guardian.
 
@@ -260,9 +244,9 @@ def write_sentinel(reason: str, written_by: str,
     user who runs ``stop`` would see the daemon mysteriously restart 5 minutes
     later (the guardian treating the stop-sentinel as stale).
 
-    ``permanent=False`` (used by ``upgrade``): carries a timestamp so the
-    guardian's stale-guard can recover if the upgrader crashed mid-flight and
-    left the sentinel behind (bounded outage).
+    ``permanent=False`` (used by the plist reload in ``scripts/daemon-lib.sh``):
+    carries a timestamp so the guardian's stale-guard can recover if the reload
+    crashed mid-flight and left the sentinel behind (bounded outage).
     """
     sentinel_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -335,7 +319,7 @@ def guardian_decision(*, registered: bool, port_alive: bool,
     Decision table (the daemon is healthy if registered AND port_alive):
     - registered OR port_alive            → SKIP (daemon is fine / restarting)
     - not enough consecutive dead probes  → SKIP (avoid racing a normal restart)
-    - fresh sentinel present              → SKIP (intentional stop/upgrade)
+    - fresh sentinel present              → SKIP (intentional stop / reload)
     - stale sentinel present              → SHOULD_BOOTSTRAP + clear_sentinel
     - no sentinel                         → SHOULD_BOOTSTRAP
     """
@@ -363,57 +347,13 @@ def guardian_decision(*, registered: bool, port_alive: bool,
             "clear_sentinel": False}
 
 
-# ── Observability: deployed_no_restart scan ──────────────────────────────────
-
-
-def scan_deployed_no_restart(result_dir: Path = Path("/tmp"),
-                             now: Optional[float] = None,
-                             fresh_seconds: int = DEPLOY_RESULT_FRESH_SECONDS) -> list[dict]:
-    """Return recent upgrade result files whose status is deployed_no_restart.
-
-    A ``deployed_no_restart`` means the upgrader rsynced a new binary but the
-    daemon never came back (bootstrap failed). The guardian usually self-heals
-    this, so this is observability-only — surfaced at startup as a WARNING.
-    Stale results (older than ``fresh_seconds``) are ignored.
-    """
-    if now is None:
-        now = time.time()
-    findings: list[dict] = []
-    try:
-        candidates = sorted(result_dir.glob(UPGRADE_RESULT_GLOB))
-    except OSError:
-        return findings
-    for path in candidates:
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        if data.get("status") != "deployed_no_restart":
-            continue
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            continue
-        if (now - mtime) > fresh_seconds:
-            # Stale litter — the upgrader never deletes its result files, so
-            # without this they accumulate forever in /tmp. Best-effort unlink
-            # of anything past the freshness window (it's no longer actionable).
-            try:
-                path.unlink()
-            except OSError:
-                pass
-            continue
-        findings.append({"file": str(path), **data})
-    return findings
-
-
 # ── CLI dispatch ─────────────────────────────────────────────────────────────
 
 
 def _main(argv: list[str]) -> int:
     if not argv:
         print("usage: python -m core.daemon_guard "
-              "<ancestry-check|write-sentinel|clear-sentinel|scan-deploy|guardian-decision>")
+              "<ancestry-check|write-sentinel|clear-sentinel|guardian-decision>")
         return 2
 
     cmd = argv[0]
@@ -448,10 +388,6 @@ def _main(argv: list[str]) -> int:
 
     if cmd == "clear-sentinel":
         clear_sentinel()
-        return 0
-
-    if cmd == "scan-deploy":
-        print(json.dumps(scan_deployed_no_restart(), indent=2))
         return 0
 
     if cmd == "guardian-decision":

@@ -408,7 +408,7 @@ _daemon_kill_and_bootstrap() {
     # SIGKILL (instant death) → bootout (disable KeepAlive) → bootstrap (start new).
     #
     # Use when: you are an INDEPENDENT process that will rsync AFTER this function.
-    #   Examples: /api/system/upgrade endpoint, s_swarm-release manual fallback.
+    #   Example: the s_swarm-release manual fallback.
     #   Why: KeepAlive would restart the OLD binary during rsync → race condition.
     #
     # Do NOT use for:

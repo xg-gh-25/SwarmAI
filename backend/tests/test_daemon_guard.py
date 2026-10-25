@@ -5,7 +5,6 @@ Covers the testable judgment logic that keeps the daemon lifecycle robust:
   AC2: guardian re-bootstraps when deregistered + no sentinel + port dead N
   AC3: guardian SKIPS when a fresh sentinel is present (COE-2026-05-01 guard)
   AC4: sentinel write/read/clear roundtrip + ordering invariants in callers
-  AC5: deployed_no_restart scan (fresh returned, stale ignored)
   AC6: guardian plist validates; restart path still SIGKILL (no regression)
   AC7: stale sentinel + port dead → recover (and clear sentinel)
 
@@ -14,7 +13,6 @@ All launchctl/ps/socket interactions are mocked — no real launchd interaction.
 
 from __future__ import annotations
 
-import json
 import plistlib
 import time
 from pathlib import Path
@@ -217,36 +215,6 @@ class TestSentinel:
         sentinel_idx = src.index("write-sentinel", stop_idx)
         assert sentinel_idx < bootout_idx, "sentinel must be written BEFORE bootout in stop path"
 
-    def test_upgrade_writes_sentinel_before_bootout(self):
-        """AC4: /api/system/upgrade must write the sentinel before bootout."""
-        src = (Path(__file__).parent.parent / "main.py").read_text()
-        assert "daemon-intentional-down" in src or "write_sentinel" in src, \
-            "upgrade path must write sentinel"
-        # SIGKILL+bootout block must be preceded by sentinel write.
-        sentinel_idx = src.find("intentional-down")
-        if sentinel_idx == -1:
-            sentinel_idx = src.find("write_sentinel")
-        bootout_idx = src.index('"bootout"')
-        assert sentinel_idx != -1 and sentinel_idx < bootout_idx, \
-            "sentinel must be written before bootout in upgrade path"
-
-    def test_main_sentinel_path_matches_daemon_guard(self):
-        """CQ-MED: main.py hardcodes the sentinel path in an f-string (it can't
-        import the constant — injected into a detached interpreter). If the
-        literal drifts from daemon_guard.SENTINEL_PATH, the upgrader writes a
-        sentinel the guardian never reads → guardian races the rsync →
-        COE-2026-05-01 corruption. Guard the equality."""
-        src = (Path(__file__).parent.parent / "main.py").read_text()
-        expected_tail = ".swarm-ai/.daemon-intentional-down"
-        # conftest's app-data isolation re-roots dg.SENTINEL_PATH onto a temp
-        # dir for every test, so compare the DEFINITION, not the live value
-        # (asserting on the re-rooted path made this test fail unconditionally).
-        guard_src = Path(dg.__file__).read_text()
-        assert 'SENTINEL_PATH = Path.home() / ".swarm-ai" / ".daemon-intentional-down"' in guard_src
-        assert dg.SENTINEL_PATH.name == ".daemon-intentional-down"
-        assert expected_tail in src, \
-            "main.py sentinel literal drifted from daemon_guard.SENTINEL_PATH"
-
     def test_stop_writes_permanent_sentinel(self):
         """Stop must write a PERMANENT sentinel so the stale-guard never
         resurrects a deliberately-stopped daemon."""
@@ -257,42 +225,6 @@ class TestSentinel:
         line_end = src.index("\n", sentinel_line_idx)
         assert "permanent" in src[sentinel_line_idx:line_end], \
             "stop's write-sentinel must pass 'permanent'"
-
-
-# ---------------------------------------------------------------------------
-# AC5: deployed_no_restart observability scan
-# ---------------------------------------------------------------------------
-
-class TestDeployedNoRestartScan:
-    def test_fresh_deployed_no_restart_returned(self, tmp_path):
-        f = tmp_path / "swarm-upgrade-abc123.json"
-        f.write_text(json.dumps({"status": "deployed_no_restart", "version": "1.2.3"}))
-        findings = dg.scan_deployed_no_restart(result_dir=tmp_path)
-        assert len(findings) == 1
-        assert findings[0]["version"] == "1.2.3"
-        assert findings[0]["file"].endswith("swarm-upgrade-abc123.json")
-
-    def test_success_status_ignored(self, tmp_path):
-        f = tmp_path / "swarm-upgrade-ok.json"
-        f.write_text(json.dumps({"status": "success", "version": "1.2.3"}))
-        assert dg.scan_deployed_no_restart(result_dir=tmp_path) == []
-
-    def test_stale_result_ignored_and_cleaned_up(self, tmp_path):
-        import os as _os
-        f = tmp_path / "swarm-upgrade-old.json"
-        f.write_text(json.dumps({"status": "deployed_no_restart"}))
-        old = time.time() - (48 * 60 * 60)  # 48h ago
-        _os.utime(f, (old, old))
-        assert dg.scan_deployed_no_restart(result_dir=tmp_path) == []
-        # Stale result files must be unlinked, not left to accumulate forever.
-        assert not f.exists(), "stale upgrade result file should be cleaned up"
-
-    def test_corrupt_result_skipped(self, tmp_path):
-        (tmp_path / "swarm-upgrade-bad.json").write_text("{broken")
-        assert dg.scan_deployed_no_restart(result_dir=tmp_path) == []
-
-    def test_no_results_dir_returns_empty(self, tmp_path):
-        assert dg.scan_deployed_no_restart(result_dir=tmp_path / "missing") == []
 
 
 # ---------------------------------------------------------------------------
