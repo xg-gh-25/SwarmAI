@@ -62,10 +62,11 @@ function hexPoints(x: number, y: number, r: number): string {
 /** The Brain preview: the six-petal flower of the Brain map. A solid petal is a
  *  section this material fills at creation; a dashed one grows later in use. */
 function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSection, boolean> }) {
-  const R = 30, D = Math.sqrt(3) * R + 4, cx = 130, cy = 112;
-  const label = name.trim() ? (name.trim().length > 11 ? name.trim().slice(0, 10) + '…' : name.trim()) : 'Brain';
+  const R = 44, D = Math.sqrt(3) * R + 4, cx = 150, cy = 130;
+  const t = name.trim();
+  const label = t ? (t.length > 9 ? t.slice(0, 8) + '…' : t) : 'Brain';
   return (
-    <svg viewBox="0 0 260 226" width="100%" role="img" aria-label="Brain preview" data-testid="new-brain-preview">
+    <svg viewBox="0 0 300 260" width="100%" role="img" aria-label="Brain preview" data-testid="new-brain-preview">
       {PREVIEW.map(({ key, label: l, deg }) => {
         const a = (deg * Math.PI) / 180, x = cx + D * Math.cos(a), y = cy + D * Math.sin(a), on = filled[key];
         return (
