@@ -21,6 +21,7 @@ type Rule<K extends ZoneKind> = Attention | ((z: Extract<Zone, { kind: K }>) => 
 
 const ATTENTION: { [K in ZoneKind]: Rule<K> } = {
   needs: (z) => (isUnanswered(z.block) ? 'act' : 'process'),
+  products: 'know',
   failure: 'know',
   text: (z) => (z.role === 'answer' ? 'know' : 'process'),
   thinking: 'process',

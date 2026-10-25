@@ -6,20 +6,23 @@
  *                   immediately after the machine run status.
  * - AssumptionsDisclosure — self-answered decisions and still-open assumptions,
  *                           folded after Output and directly before Next steps.
- * - OutputCard — the turn's code changes and deliverables.
+ * - OutputCard — the turn's code changes and deliverables (files and remote actions).
+ * - ProductList — a products zone's rows in the turn (session-products design §3.1).
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
  * @exports AttentionCard, AssumptionsDisclosure, isVerificationAttentionItem,
- *          OutputCard, middleEllipsis
+ *          OutputCard, ProductList, productsShownInTurn, middleEllipsis
  */
 import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable, TurnChangesContent,
+  TurnProductContent,
 } from '../../../types';
 import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/MarkdownRenderer';
 import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { openExternal } from '../../../utils/openExternal';
 import { tf } from '../tf';
 import { docMeta } from '../runDocMeta';
 import { ReadOnlyContext } from '../readOnlyContext';
@@ -143,7 +146,7 @@ export function middleEllipsis(name: string, max = 28): string {
   return `${stem.slice(0, head)}…${stem.slice(stem.length - (room - head))}${ext}`;
 }
 
-function DeliverableTile({ file }: { file: TurnDeliverable }) {
+function DeliverableTile({ file, shownAbove = false }: { file: TurnDeliverable; shownAbove?: boolean }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
@@ -170,6 +173,11 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
           <FileTypeIcon name={name} size="md" muted />
         )}
         <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
+        {shownAbove && (
+          <span data-testid="shown-above" className="shrink-0 text-[11.5px] text-[var(--color-text-dim)]">
+            {tf(t, 'chat.turn.deliverables.shownAbove', 'shown above')}
+          </span>
+        )}
       </Head>
       {!readOnly && (
         <div className="ml-auto shrink-0 flex items-center gap-3">
@@ -181,6 +189,58 @@ function DeliverableTile({ file }: { file: TurnDeliverable }) {
       )}
     </li>
   );
+}
+
+type RemoteProduct = Extract<TurnProductContent, { product: 'remote' }>;
+type FileProduct = Extract<TurnProductContent, { product: 'file' }>;
+
+/** A remote action the turn did (a Slack post, an email, a ticket, a push): what and
+ *  on what; a link only when the backend found one in the tool's own output. */
+function RemoteProductTile({ product, shownAbove = false }: { product: RemoteProduct; shownAbove?: boolean }) {
+  const { t } = useTranslation();
+  const readOnly = useContext(ReadOnlyContext);
+  const open = () => { if (product.url) void openExternal(product.url); };
+  return (
+    <li data-testid="remote-product" data-tool={product.tool} className="flex items-center gap-2 min-w-0 py-1.5">
+      <span aria-hidden="true" className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">send</span>
+      <span className="shrink-0 text-[12.5px] text-[var(--color-text)]">{product.action}</span>
+      {product.target && <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate" title={product.target}>{product.target}</span>}
+      {shownAbove && <span data-testid="shown-above" className="shrink-0 text-[11.5px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.deliverables.shownAbove', 'shown above')}</span>}
+      {product.url && !readOnly && (
+        <button type="button" onClick={open} className="ml-auto shrink-0 btn-sm btn-ghost" title={product.url}>{tf(t, 'chat.turn.deliverables.openLink', 'Open link')}</button>
+      )}
+    </li>
+  );
+}
+
+/** A products zone (design 2026-10-26-session-products.md §3.1): one row per file
+ *  written (the deliverable look) and per remote action, in the order they happened. */
+export function ProductList({ blocks }: { blocks: TurnProductContent[] }) {
+  const seen = new Set<string>();
+  const rows: ReactNode[] = [];
+  for (const b of blocks) {
+    if (b.product === 'file') {
+      if (seen.has(b.absolutePath)) continue;
+      seen.add(b.absolutePath);
+      const file: TurnDeliverable = { path: b.path, absolutePath: b.absolutePath, kind: b.fileKind, operation: 'written' };
+      rows.push(<DeliverableTile key={`f-${b.absolutePath}`} file={file} />);
+    } else {
+      rows.push(<RemoteProductTile key={`r-${b.toolUseId}`} product={b} />);
+    }
+  }
+  return <ul data-testid="product-list" className="divide-y divide-[var(--color-border)]">{rows}</ul>;
+}
+
+/** The files and remote actions shown in the turn (top-level calls' product rows): the
+ *  card lists them too, marked as shown above. Sub-agent products are on the card only. */
+export function productsShownInTurn(products: TurnProductContent[]): { files: Set<string>; remote: RemoteProduct[] } {
+  const files = new Set<string>();
+  const remote: RemoteProduct[] = [];
+  for (const p of products) {
+    if (p.product === 'file') { if (!p.parentToolUseId) files.add((p as FileProduct).absolutePath); }
+    else remote.push(p);
+  }
+  return { files, remote };
 }
 
 function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
@@ -298,27 +358,33 @@ export function RunResult({ summary, showReasons = false, collapseDetails = fals
  * neither → no card. A file is in one section only (the caller drops deliverables
  * from the changes rows).
  */
-export function OutputCard({ changes, deliverables, summary }: {
+export function OutputCard({ changes, deliverables, summary, remote = [], shownAbove }: {
   changes?: TurnChangesContent; deliverables: TurnDeliverable[]; summary?: PipelineSummaryContent;
+  /** The turn's remote products (turn_product blocks), in order. */
+  remote?: RemoteProduct[];
+  /** Products the turn already showed in place (files by path; remote ones are the
+   *  top-level ones): listed here too, marked "shown above". */
+  shownAbove?: Set<string>;
 }) {
   const { t } = useTranslation();
   const docs = summary?.docs ?? [];
-  const nDeliv = deliverables.length + docs.filter((d) => !!d.absolutePath).length;
-  if (!changes && !deliverables.length && !docs.length) return null;
+  const nDeliv = deliverables.length + remote.length + docs.filter((d) => !!d.absolutePath).length;
+  if (!changes && !deliverables.length && !remote.length && !docs.length) return null;
   return (
     <section data-testid="output-card" className="space-y-3">
       {changes && <ChangesCard block={changes} />}
-      {(deliverables.length > 0 || docs.length > 0) && (
+      {(deliverables.length > 0 || remote.length > 0 || docs.length > 0) && (
         <div data-testid="output-deliverables">
           <div className="mb-1 flex items-baseline gap-2 text-[12px] font-medium text-[var(--color-text-muted)]">
             {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
           </div>
-          {deliverables.length > 0 && (
+          {(deliverables.length > 0 || remote.length > 0) && (
             <ul className="divide-y divide-[var(--color-border)]">
-              {deliverables.map((f) => <DeliverableTile key={f.absolutePath} file={f} />)}
+              {deliverables.map((f) => <DeliverableTile key={f.absolutePath} file={f} shownAbove={!!shownAbove?.has(f.absolutePath)} />)}
+              {remote.map((r) => <RemoteProductTile key={`r-${r.toolUseId}`} product={r} shownAbove={!r.parentToolUseId} />)}
             </ul>
           )}
-          {docs.length > 0 && <ul className={deliverables.length ? 'mt-1' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
+          {docs.length > 0 && <ul className={deliverables.length || remote.length ? 'mt-1' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
         </div>
       )}
     </section>

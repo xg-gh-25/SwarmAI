@@ -80,6 +80,7 @@ import type {
   TurnDeliverable,
   TurnChangesContent,
   TurnStopContent,
+  TurnProductContent,
   SubAgentProgress,
 } from '../../types';
 
@@ -153,7 +154,11 @@ export type TurnUnit =
    *  key); `live` = it is still streaming. */
   | ThoughtUnit
   | { kind: 'outcome'; text: string; index: number; textOrdinal: number }
-  | { kind: 'interrupt'; block: InterruptBlock; index: number };
+  | { kind: 'interrupt'; block: InterruptBlock; index: number }
+  /** What consecutive calls produced (`turn_product` blocks of top-level calls, in
+   *  order; design 2026-10-26-session-products.md §3.1): a first-level element that
+   *  ends the open work, like a question. A sub-agent's products are on the card only. */
+  | { kind: 'products'; blocks: TurnProductContent[]; index: number };
 
 export interface ThoughtUnit {
   kind: 'thought';
@@ -179,6 +184,8 @@ export interface TurnView {
   summary?: PipelineSummaryContent;
   /** The turn's products (`turn_deliverables`), by absolute path, first-seen order. */
   deliverables: TurnDeliverable[];
+  /** Every `turn_product` block of the turn, in order (top-level and sub-agent). */
+  products: TurnProductContent[];
   /** The turn's code changes (the latest `turn_changes`), if the backend sent them. */
   changes?: TurnChangesContent;
   /** Action lines lifted from a trailing ```next-steps block of the final outcome. */
@@ -405,6 +412,7 @@ export function deriveTurnView(
   let attention: PipelineAttentionContent | undefined;
   let summary: PipelineSummaryContent | undefined;
   const deliverables: TurnDeliverable[] = [];
+  const products: TurnProductContent[] = [];
   let changes: TurnChangesContent | undefined;
   // One tool step (and its sub-agent children) into the open process segment. `stand`:
   // a stand-in Agent step for sub-agent calls whose Agent was called in an earlier turn
@@ -535,6 +543,15 @@ export function deriveTurnView(
       }
       return;
     }
+    if (block.type === 'turn_product') {
+      products.push(block);
+      if (block.parentToolUseId) return; // a sub-agent's product: on the card only
+      seg = null;
+      const prev = units[units.length - 1];
+      if (prev?.kind === 'products') prev.blocks.push(block);
+      else units.push({ kind: 'products', blocks: [block], index });
+      return;
+    }
     if (block.type === 'pipeline_stage') {
       seg = null;
       units.push({ kind: 'stage', block, index });
@@ -657,7 +674,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, summary, deliverables, changes, liveStage, midWork, pipelineStart,
+  return { units, nextSteps, copyText, run, attention, summary, deliverables, products, changes, liveStage, midWork, pipelineStart,
     // a receipt for background agents only (no turn ran) does not stop this turn
     stoppedMarker: stoppedMarker || (!!stopReceipt && stopReceipt.turn !== false),
     ...(stopReceipt ? { stopReceipt } : {}), notice, backgroundFinished };

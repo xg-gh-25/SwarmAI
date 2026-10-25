@@ -47,7 +47,7 @@
  */
 import type { InterruptBlock, ProcessUnit, ThoughtUnit, ToolStep, TurnUnit, TurnView } from './turnView';
 import { displayCommand, isGateStage, isUnanswered, toolCall } from './turnView';
-import type { PipelineDocRef, PipelineStageContent, ToolUseContent, TurnStopContent } from '../../types';
+import type { PipelineDocRef, PipelineStageContent, ToolUseContent, TurnProductContent, TurnStopContent } from '../../types';
 
 /** What the agent wrote between calls, in the phase, where it was written. */
 export interface PhaseText { kind: 'text'; text: string; textOrdinal: number }
@@ -83,6 +83,8 @@ export type Zone =
   | { kind: 'text'; id: string; text: string; role: 'restatement' | 'note' | 'answer'; result: boolean }
   | { kind: 'phase'; id: string; members: PhaseMember[]; live: boolean; held?: boolean }
   | { kind: 'needs'; id: string; block: InterruptBlock }
+  /** Files written and remote actions done by the calls just before it (§3.1). */
+  | { kind: 'products'; id: string; blocks: TurnProductContent[] }
   | { kind: 'failure'; id: string; step: ToolStep }
   | { kind: 'pipelineStart'; id: string; profile: string | null }
   | { kind: 'stageResult'; id: string; block: PipelineStageContent }
@@ -156,6 +158,14 @@ function layOut(units: TurnUnit[], hasCalls: boolean, resultOrdinal: number | nu
     if (u.kind === 'interrupt') {
       close();
       out.push({ kind: 'needs', id: `i-${u.index}`, block: u.block });
+      continue;
+    }
+    if (u.kind === 'products') {
+      // What the work just made: first level, ending the open work like a question
+      // (design 2026-10-26-session-products.md §3.1). Keyed by its first call, which
+      // never changes while more products of the same run of calls join it.
+      close();
+      out.push({ kind: 'products', id: `pr-${u.blocks[0].toolUseId}`, blocks: u.blocks });
       continue;
     }
     if (u.kind === 'stage') continue; // the caller splits on stage rows

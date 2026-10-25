@@ -92,7 +92,7 @@ function checkStream(blocks: ContentBlock[], settleEvery = 3): string[] {
   return bad;
 }
 
-type Step = 'th' | 'tx' | 'call' | 'q';
+type Step = 'th' | 'tx' | 'call' | 'q' | 'mk';
 function turnOf(steps: Step[], lastCallOpen: boolean): ContentBlock[] {
   const out: ContentBlock[] = [];
   steps.forEach((s, i) => {
@@ -102,7 +102,16 @@ function turnOf(steps: Step[], lastCallOpen: boolean): ContentBlock[] {
     else if (s === 'q') out.push({ type: 'ask_user_question', toolUseId: `q${i}`,
       questions: [{ question: `${m} which way?`, header: 'Q', options: [{ label: 'a' }], multiSelect: false }],
       answers: { [`${m} which way?`]: 'a' } } as unknown as ContentBlock);
-    else {
+    else if (s === 'mk') {
+      // a call that writes a product: its result, then the backend's turn_product
+      // block (session-products design §3.1) — a first-level row after the work
+      out.push(tu(`c${i}`, `write ${m}`));
+      if (!(lastCallOpen && i === steps.length - 1)) {
+        out.push(tr(`c${i}`));
+        out.push({ type: 'turn_product', toolUseId: `c${i}`, product: 'file', path: `tokP${i}.md`,
+          absolutePath: `/u/Desktop/tokP${i}.md`, fileKind: 'content' } as unknown as ContentBlock);
+      }
+    } else {
       out.push(tu(`c${i}`, `make ${m}`));
       if (!(lastCallOpen && i === steps.length - 1)) out.push(tr(`c${i}`));
     }
@@ -121,7 +130,7 @@ describe('stream order', () => {
 
   it('a random turn reads in stream order at every frame, settled, reconciled and in history', () => {
     fc.assert(fc.property(
-      fc.array(fc.constantFrom<Step>('th', 'tx', 'call', 'call', 'q'), { minLength: 2, maxLength: 12 }),
+      fc.array(fc.constantFrom<Step>('th', 'tx', 'call', 'call', 'q', 'mk'), { minLength: 2, maxLength: 12 }),
       fc.boolean(),
       fc.integer({ min: 1, max: 4 }),
       (steps, open, every) => {

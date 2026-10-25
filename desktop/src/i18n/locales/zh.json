@@ -303,7 +303,9 @@
       "deliverables": {
         "open": "在 Canvas 打开",
         "copyPath": "复制路径",
-        "copied": "已复制"
+        "copied": "已复制",
+        "shownAbove": "见上方",
+        "openLink": "打开链接"
       },
       "summary": {
         "ready": "已完成 · 可以 push",
