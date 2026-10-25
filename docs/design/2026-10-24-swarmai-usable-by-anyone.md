@@ -332,7 +332,7 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 - XG 的 SwarmWS 数据同步改了（经 XG 同意，有备份）：`Projects/SwarmAI/bindings.yaml` 加 skill-set；`Projects/GitHub_Community/bindings.yaml` 补声明一直在跑的 `uj-github-community-weekly-sediment--report`，否则新规则下它的周报 digest 不再出现。
 
 仍未处理：
-- `run_worktree.code_repos` 有自己的 bindings 读取和"自托管仓库按名字匹配 daemon 自己的 checkout"，S6 再收进 `governed_repo_roots`。
+- `run_worktree.code_repos` 有自己的 bindings 读取和"自托管仓库按名字匹配 daemon 自己的 checkout"，S6 再收进 `governed_repo_roots`。（S6-5c：它已没有调用方，直接删除；`governed_repo_roots` 是唯一读取方。）
 - `community_data` 判断 HTML 报告是否属于社区报告的文件名白名单里有 `github-community-weekly-`。只影响分类，对其他用户没有效果，暂不改。
 
 
@@ -565,6 +565,7 @@ S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时
 | S6-5 | 收尾：删旧命令形式（`python …/pipeline_v1.py`）和 `utils/source_repo.py`；删 shared 模式和 `SWARM_WORKTREE_MODE`，测试改用隔离 worktree；`run_worktree.code_repos` 改用 `governed_repo_roots`；skill 卡片重写；重写受影响的 E2E 测试 | S6-1 至 S6-4 |
 | S6-5a（已做） | 删 `backend/scripts/pipeline_v1.py`（CLI 搬到 `core/run_protocol/cli_main.py`，只经 `pipeline-v1` 子命令进入）和 `utils/source_repo.py`、构建里的 `source_repo.json`；`pipeline_command` 只认 `"$SWARM_BACKEND_BIN" pipeline-v1` / `python-backend` 一种形式；`next_step` 的 `_cmd` 不再带工具名；测试 rig 用指向当前解释器的 `python-backend` 启动器跑程序形式 | S6-4 |
 | S6-5b（已做） | 删 shared 模式：`run_worktree.mode_enabled` 和 `$SWARM_WORKTREE_MODE`、`RunEngine.create` 的 `mode` 参数和 shared run 的仓库预留（`_live_shared_holder`）、engine 里的 shared 分支、`landing` 的 `in_place` 落地（`_land_in_place`、`_IndexLock` 等）、`worktree_write_gate` 和 `prompt_builder` 里只在开关关闭时走的路径；contract 的 `mode` 恒为 `isolated`（MD-1 等读者保留，旧 shared run 仍过不了）；代码 profile 必须带 repo；测试套件不再整体钉 shared，全部按隔离 worktree 跑 | S6-5a |
+| S6-5c（已做） | `run_worktree.code_repos` 删除：没有调用方了（run 的仓库来自 `create --repo`），它自带的 bindings 读取和按名字猜自托管仓库随之消失；项目仓库只由 `ddd_bindings.governed_repo_roots` 读。skill 卡片复查：无 S6 已删概念残留；REFLECT 仍由 SwarmAI 会话的 PostToolUse hook / daemon 启动处理（卡片如实写明）。pipeline E2E 已在 S6-5b 全部按隔离 worktree 跑通 | S6-5b |
 | 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
 
 
@@ -615,3 +616,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r22（2026-10-25）：S6-4d 实施：REFLECT 的未知项目回退（`kept_in_run`，REPORT 列出）；五维审计改读验证报告，trace 矩阵去掉结果列，Quality 只把 R2 确认过的 reported_test 关闭算作关闭。S6-4 全部完成。
 - r23（2026-10-25）：S6-5a 实施：pipeline CLI 只剩 `"$SWARM_BACKEND_BIN" pipeline-v1` 一种形式；脚本和 `source_repo` 删除。
 - r24（2026-10-25）：S6-5b 实施：shared 模式和 `$SWARM_WORKTREE_MODE` 删除，每个 run 都在自己的 worktree 里。
+- r25（2026-10-25）：S6-5c 实施：`run_worktree.code_repos` 删除，`governed_repo_roots` 是项目仓库的唯一读取方。

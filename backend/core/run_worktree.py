@@ -14,7 +14,7 @@ gate and the daemon sweep call it. Invariants:
 - An unintegrated worktree is deleted only after a verified ledger snapshot (§8.1).
 
 Key public symbols: ``WorktreeError``, ``wt_root``, ``wt_path``, ``branch_ref``,
-``code_repos``, ``create``, ``validate``, ``change_tree``,
+``create``, ``validate``, ``change_tree``,
 ``untracked_new_files``, ``changed_paths``, ``sync``, ``land``, ``release``,
 ``snapshot_to_ledger``, ``sweep``, ``mark``, ``diff_since``, ``own_isolated_run``,
 ``run_for_path``, ``active_worktree_roots``, ``last_activity``.
@@ -351,39 +351,7 @@ def _symbolic_head(cwd) -> "str | None":
     return _memo_get(key, compute)
 
 
-# ── switch and bindings ──────────────────────────────────────────────────────
-def code_repos(workspace: "str | Path", project: str, self_repo: "str | Path") -> "list[tuple[str, Path]]":
-    """(repo_name, main checkout) for each ``kind: code-repo`` asset of the project's
-    bindings.yaml. A ``source_workspace`` path is used as is; an asset without one is the
-    self-hosted repo when its name matches *self_repo*'s directory name. Each path must be
-    the toplevel of a git repo. Unreadable bindings → []."""
-    import yaml
-    f = Path(workspace) / "Projects" / project / "bindings.yaml"
-    try:
-        doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-    except Exception as exc:  # noqa: BLE001 — no / bad bindings = no code repo (today's behaviour)
-        logger.debug("bindings unreadable for %s (%s): no code repo", project, exc)
-        return []
-    out: list[tuple[str, Path]] = []
-    seen: set[str] = set()
-    for a in (doc.get("governed_assets") or []) if isinstance(doc, dict) else []:
-        if not isinstance(a, dict) or a.get("kind") != "code-repo":
-            continue
-        src = a.get("source_workspace")
-        if src:
-            path = Path(os.path.realpath(os.path.expanduser(str(src))))
-        elif str(a.get("name") or "").lower() == Path(self_repo).name.lower():
-            path = Path(os.path.realpath(str(self_repo)))
-        else:
-            continue
-        name = path.name
-        if not REPO_NAME_RE.fullmatch(name) or name in seen or _toplevel(path) != str(path):
-            continue
-        seen.add(name)
-        out.append((name, path))
-    return sorted(out)
-
-
+# ── worktree list ────────────────────────────────────────────────────────────
 def _worktree_list_key(main) -> "tuple | None":
     """Identity of every file `git worktree list` reads a path or branch from: the
     common dir's HEAD and config, and each admin dir's HEAD and gitdir. None when the

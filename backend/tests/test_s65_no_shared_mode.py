@@ -6,6 +6,8 @@ What is tested:
   module reads the variable, so setting it changes nothing;
 - ``RunEngine.create`` takes no mode; every contract says ``isolated``; a code
   profile without a repo is refused (a shared run used to allow that);
+- ``run_worktree.code_repos`` (its own bindings reader, which guessed the self-hosted
+  repo by name) is gone: ``ddd_bindings.governed_repo_roots`` is the one reader (S6-5c);
 - the landing has no in-place path (``in_place``, ``_land_in_place``) and the engine
   no shared-run reservation (``_live_shared_holder``).
 """
@@ -47,3 +49,9 @@ def test_no_in_place_landing_or_shared_reservation():
         assert "in_place" not in inspect.signature(fn).parameters, fn.__name__
     assert not hasattr(landing, "_land_in_place")
     assert not hasattr(RunEngine, "_live_shared_holder")
+
+
+def test_one_reader_of_a_projects_repos():
+    assert not hasattr(run_worktree, "code_repos")
+    from core.ddd_bindings import governed_repo_roots
+    assert callable(governed_repo_roots)
