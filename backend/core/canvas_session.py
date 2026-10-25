@@ -98,10 +98,15 @@ def in_head(paths: list[str]) -> dict[str, Optional[bool]]:
     return out
 
 
-def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
+def artifact_rows(rows: list[dict], workspace: Optional[str],
+                  session_id: Optional[str] = None) -> list[dict]:
     """Attribution rows (session_outputs.read) joined with the product catalog, with
-    existence and whether the file is in its repo's HEAD. Blocking."""
+    existence and whether the file is in its repo's HEAD. A row recorded inside a
+    session worktree that was landed and removed is judged on the landed file
+    (session_landings.landed_path, design 2026-10-25-landings-consumers.md D1); it
+    keeps its recorded path and opens through the read routes, which map it. Blocking."""
     rows = rows[:MAX_FILES]
+    real = {r["absolutePath"]: _landed(r["absolutePath"], session_id) for r in rows}
     facts: dict[str, dict] = {}
     if workspace and rows:
         try:
@@ -110,7 +115,7 @@ def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
         except Exception:  # noqa: BLE001 — the catalog is a label aid; rows still list
             logger.warning("canvas_session: product lookup failed", exc_info=True)
     try:
-        heads = in_head([r["absolutePath"] for r in rows if not r.get("deleted")])
+        heads = in_head([real[r["absolutePath"]] for r in rows if not r.get("deleted")])
     except Exception:  # noqa: BLE001 — the badge is an aid; rows still list
         logger.warning("canvas_session: in-HEAD lookup failed", exc_info=True)
         heads = {}
@@ -120,10 +125,21 @@ def artifact_rows(rows: list[dict], workspace: Optional[str]) -> list[dict]:
         out.append({**r, "role": f.get("role", "Other"), "product": bool(f.get("product")),
                     "starred": bool(f.get("starred")),
                     "displayLabel": f.get("displayLabel") or os.path.basename(r["path"]),
-                    "exists": os.path.exists(r["absolutePath"]),
-                    "inHead": heads.get(r["absolutePath"]),
+                    "exists": os.path.exists(real[r["absolutePath"]]),
+                    "inHead": heads.get(real[r["absolutePath"]]),
                     "writes": r.get("writes", 1)})
     return out
+
+
+def _landed(path: str, session_id: Optional[str]) -> str:
+    if os.path.lexists(path):
+        return path
+    try:
+        from core import session_landings
+        return session_landings.landed_path(path, session_id) or path
+    except Exception:  # noqa: BLE001 — the badge is an aid: the recorded path stays
+        logger.debug("canvas_session: landed_path failed for %s", path, exc_info=True)
+        return path
 
 
 # ── the request ─────────────────────────────────────────────────────────────
@@ -133,7 +149,7 @@ def _artifacts(session_id: str, workspace: Optional[str], backfill_turns: Option
     from core import session_outputs
     if backfill_turns is not None:
         session_outputs.backfill(session_id, backfill_turns)
-    return artifact_rows(session_outputs.read(session_id)["rows"], workspace)
+    return artifact_rows(session_outputs.read(session_id)["rows"], workspace, session_id)
 
 
 async def build(session_id: str, parts: str = "all") -> dict[str, Any]:

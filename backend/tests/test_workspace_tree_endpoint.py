@@ -617,7 +617,7 @@ def test_committed_binary_file_fails_open(tmp_path: Path, monkeypatch) -> None:
     run("git", "commit", "-q", "-m", "add binary")
 
     blob = (tmp_path / "blob.bin").resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (blob, True))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (blob, True))
 
     result = _call_committed(str(blob), tmp_path)
     # fail-open on binary decode, NOT a 400 — but the file IS in HEAD (tracked),
@@ -635,7 +635,7 @@ def test_committed_outside_home_fails_open(tmp_path: Path, monkeypatch) -> None:
     real_file.write_text('{"k": 1}\n')
 
     # Force _resolve_file_path to reject as the real outside-home guard would.
-    def _reject(path, workspace_root):
+    def _reject(path, workspace_root, **_kw):
         raise HTTPException(status_code=400, detail="Absolute path must be under user home directory")
     monkeypatch.setattr(wa, "_resolve_file_path", _reject)
 
@@ -667,7 +667,7 @@ def test_committed_tracked_utf8_returns_head_content(tmp_path: Path, monkeypatch
     (tmp_path / "hello.txt").write_text("dirty-v2\n")  # working copy differs
 
     hello = (tmp_path / "hello.txt").resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (hello, True))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (hello, True))
 
     result = _call_committed(str(hello), tmp_path)
     # HEAD version, not working copy; tracked text file → in_head=True.
@@ -698,7 +698,7 @@ def test_committed_untracked_file_is_in_head_false(tmp_path: Path, monkeypatch) 
     (tmp_path / "brand_new.txt").write_text("not committed\n")  # untracked
 
     newf = (tmp_path / "brand_new.txt").resolve()
-    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r: (newf, True))
+    monkeypatch.setattr(wa, "_resolve_file_path", lambda p, r, **_kw: (newf, True))
 
     result = _call_committed(str(newf), tmp_path)
     # git show HEAD:brand_new.txt fails (rc!=0) → definitively not in HEAD.

@@ -470,3 +470,45 @@ def test_reads_of_one_session_are_serialized_and_other_sessions_do_not_wait(db, 
         t.join()
     assert peak["A"] == 1            # the two reads of A never ran at once
     assert overlap                   # B ran while A did: no global lock
+
+# ── landing-only cards (design 2026-10-25-landings-consumers.md D2) ─────────────
+
+def landed_card(root, *paths):
+    """A card whose turn only landed (no in-place rows): its landings name the repo."""
+    b = card(*paths, root=root) if paths else {"type": "turn_changes", "files": []}
+    b["landed"] = [{"repo": "r", "gitRoot": root, "dest": "main", "branch": "session/k-x",
+                    "files": []}]
+    return b
+
+
+def test_a_landing_only_card_names_the_working_repo_but_is_no_canvas_turn(db, repo, tmp_path, monkeypatch):
+    other = Path(os.path.realpath(tmp_path)) / "other"
+    _git(tmp_path, "init", "-q", str(other))
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj", str(other): "other"})
+    monkeypatch.setattr(sc, "_landed", lambda sid: {"landed": [], "landedTruncated": False,
+                                                    "unverified": 0, "unknown": []})
+    put(db, "m1", "t1", [card("a.py", root=str(other))])
+    put(db, "m2", "t2", [landed_card(str(repo))])
+    assert sc.working_repo("s1", db) == {"path": str(repo), "name": "proj"}
+    out = sc.read("s1", db)
+    assert [t["id"] for t in out["turns"]] == ["m1:0"] and out["olderTurns"] == 0
+
+
+def test_in_a_mixed_card_its_landing_comes_first(db, repo, tmp_path, monkeypatch):
+    other = Path(os.path.realpath(tmp_path)) / "other"
+    _git(tmp_path, "init", "-q", str(other))
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj", str(other): "other"})
+    put(db, "m1", "t1", [landed_card(str(repo), "a.py") | {"files": card("a.py", root=str(other))["files"]}])
+    assert sc.working_repo("s1", db)["path"] == str(repo)
+
+
+def test_older_turns_counts_display_cards_only(db, monkeypatch):
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    monkeypatch.setattr(sc, "_landed", lambda sid: {"landed": [], "landedTruncated": False,
+                                                    "unverified": 0, "unknown": []})
+    monkeypatch.setattr(sc, "MAX_TURNS", 1)
+    put(db, "m1", "t1", [card("a.py")])
+    put(db, "m2", "t2", [landed_card("/r")])
+    put(db, "m3", "t3", [card("b.py")])
+    out = sc.read("s1", db)
+    assert [t["id"] for t in out["turns"]] == ["m3:0"] and out["olderTurns"] == 1

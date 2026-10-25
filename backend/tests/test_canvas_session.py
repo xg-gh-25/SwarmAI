@@ -154,3 +154,21 @@ async def test_list_session_blocks_reads_only_this_sessions_sent_rows(tmp_path):
         await conn.commit()
     got = await SQLiteMessagesTable("messages", db).list_session_blocks("s1", cs.BACKFILL_NEEDLES)
     assert [at for at, _ in got] == ["1", "2"]
+
+
+def test_a_removed_session_worktree_row_reads_its_landed_file(tmp_path, monkeypatch):
+    """design 2026-10-25-landings-consumers.md D1: exists / inHead on the mapped file;
+    the row keeps its recorded path (its identity in session_outputs)."""
+    from core import session_landings
+    landed = tmp_path / "proj" / "b.py"
+    landed.parent.mkdir()
+    landed.write_text("b\n")
+    gone = str(tmp_path / "swt" / "x" / "proj" / "b.py")
+    seen = []
+    monkeypatch.setattr(session_landings, "landed_path",
+                        lambda p, sid=None: seen.append((p, sid)) or (str(landed) if p == gone else None))
+    monkeypatch.setattr(cs, "in_head", lambda paths: {p: (True if p == str(landed) else None) for p in paths})
+    [row] = cs.artifact_rows([{"path": "b.py", "absolutePath": gone, "kind": "source-final"}],
+                             None, "sess-1")
+    assert row["absolutePath"] == gone and row["exists"] is True and row["inHead"] is True
+    assert seen == [(gone, "sess-1")]

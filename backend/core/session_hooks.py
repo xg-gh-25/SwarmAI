@@ -58,6 +58,9 @@ class HookContext:
     message_count: int
     session_start_time: str  # ISO 8601
     session_title: str
+    #: set by DELETE /sessions/{id}: the session's records are being deleted while
+    #: the hooks run (a hook that reads them would see a half-deleted session)
+    deleting: bool = False
 
 
 @runtime_checkable

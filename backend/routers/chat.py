@@ -1395,6 +1395,7 @@ async def delete_session(session_id: str):
                 message_count=message_count,
                 session_start_time=session.created_at,
                 session_title=session.title,
+                deleting=True,
             )
             _get_router()  # Ensure initialized
             if _lifecycle_manager:

@@ -1,16 +1,34 @@
 """Post-session ToDo lifecycle hook.
 
-Automatically transitions Radar ToDo items based on session activity:
+Moves Radar ToDo items from what the session's OWN records say it did (design
+docs/design/2026-10-25-landings-consumers.md D3), never from a git time window
+(another session's commit in the same hour is not this session's work):
 
-1. **Explicit binding** — If a session has a todo_id in its metadata
-   (set when user drags a todo into chat), checks for git commits
-   during the session and marks the todo as ``handled`` if work was done.
+1. **Explicit binding** — the session's metadata holds a ``todo_id`` (a ToDo dragged
+   into the chat). With a recorded outcome the ToDo goes to review
+   (``review_state='completed'``, status unchanged, as the dispatch sweeper does):
+   only a person's Confirm sets ``handled`` (the ToDo model's locked invariant,
+   routers/todos.py). Without one it becomes ``in_discussion``. Only an active ToDo
+   (pending / overdue / in_discussion, not yet in review) is changed, by ONE
+   conditional write (``db.todos.update_if``), so a Confirm / Reject meanwhile wins.
+2. **Implicit file matching** — no binding: the session's changed files are matched
+   against pending ToDos' ``linked_context.files`` (``_files_overlap``, unchanged);
+   a match moves the ToDo to ``in_discussion``. The pool is SwarmWS outputs plus the
+   session's one working repo, as before, so the basename rule is not widened.
 
-2. **Implicit file matching** — If no explicit binding exists, compares
-   files changed during the session (from git diff) against pending
-   todos' ``linked_context.files``.  Matching todos transition to
-   ``in_discussion`` (not directly to ``handled`` — the user gets to
-   confirm via frontend buttons or next session).
+The outcome is three records, each on the pool that owns it:
+
+- the turn cards' file rows (core/session_changes window, ``canvas_changes``);
+- the session's outputs (core/session_outputs, ``canvas_session``: after the writes
+  queued before it);
+- the session's landings (core/session_landings, ``canvas_changes``).
+
+A file is one entry per ``(gitRoot, path)`` for card rows and landing files (both
+name the main checkout) and per real path for an output; the count is said as "N
+recorded files", "at least N" when any part is capped, truncated or unreadable.
+
+A session being deleted (``HookContext.deleting``) changes no ToDo: its records are
+deleted while the hooks run.
 
 Key public symbols:
 
@@ -19,89 +37,27 @@ Key public symbols:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import subprocess
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from core.session_hooks import HookContext
 from core.todo_manager import todo_manager
 from database import db
-from jobs.paths import DB_PATH
 
 logger = logging.getLogger(__name__)
 
 # Must match swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG["id"]
 _WORKSPACE_ID = "swarmws"
 
-
-def _get_session_changed_files(
-    repo_path: Path,
-    since: datetime,
-    max_commits: int = 50,
-) -> list[str]:
-    """Get files changed in commits since a given time.
-
-    Returns a list of relative file paths that were modified in commits
-    after ``since``.  ``max_commits`` caps the number of commits scanned
-    (not the number of files returned).  Gracefully returns empty list on errors.
-    """
-    if not repo_path.is_dir() or not (repo_path / ".git").exists():
-        return []
-
-    since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-    try:
-        result = subprocess.run(
-            [
-                "git", "log",
-                f"--since={since_str}",
-                "--name-only",
-                "--pretty=format:",
-                f"--max-count={max_commits}",
-            ],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return []
-        files = [
-            line.strip()
-            for line in result.stdout.strip().splitlines()
-            if line.strip()
-        ]
-        return list(set(files))  # deduplicate
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        logger.debug("Git changed-files failed for %s: %s", repo_path, exc)
-        return []
-
-
-def _get_session_commit_count(
-    repo_path: Path,
-    since: datetime,
-) -> int:
-    """Count git commits since a given time."""
-    if not repo_path.is_dir() or not (repo_path / ".git").exists():
-        return 0
-
-    since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", f"--since={since_str}", "HEAD"],
-            cwd=str(repo_path),
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return 0
-        return int(result.stdout.strip())
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, ValueError):
-        return 0
+#: the statuses an automatic write may change (handled / cancelled / deleted are final)
+_ACTIVE = ("pending", "overdue", "in_discussion")
+_LANDINGS_MAX = 20
+_NOTE_LINES = 10
+#: a write that lost to a concurrent edit is retried on a fresh read this many times
+_CAS_TRIES = 2
 
 
 def _files_overlap(todo_files: list[str], changed_files: list[str]) -> bool:
@@ -124,41 +80,84 @@ def _files_overlap(todo_files: list[str], changed_files: list[str]) -> bool:
     return False
 
 
-def _session_code_repo(session_id: str, db_path: str) -> Optional[Path]:
-    """The bound code repo this session changed files in, or None.
+# ── the three records (blocking; each on its own pool) ─────────────────────────
 
-    Reads ``core.session_changes.working_repo``: the same record Canvas Changes and
-    the terminal use (the newest "files changed" card whose ``gitRoot`` is a bound
-    repo's main checkout). It works for any repo a project binds, found from what the
-    session did, never from a guessed checkout location. Only the newest such repo is
-    returned, so a session that worked in two bound repos is judged by one (as before:
-    the hook has always looked at one code repo). Blocking (sqlite + cached git
-    identities): call it on the ``canvas_changes`` pool, like the router does. A
-    session with no recorded change in a bound repo, or a record that cannot be read
-    for any reason, gives None, and the hook then counts only the workspace's own
-    commits: one unreadable record never skips the session's ToDo transitions.
-    """
-    from core.session_changes import working_repo
+def _card_part(session_id: str, db_path: str) -> dict:
+    """The turn cards' file rows and the working repo (canvas_changes pool)."""
+    from core import session_changes
+    rows, scanned_all = session_changes._window(session_id, db_path)
+    files, partial = [], not scanned_all
+    for r in rows:
+        for c in r["cards"]:
+            files += c["files"]
+            partial = partial or bool(c.get("omitted"))
+    working = session_changes.working_repo(session_id, db_path)
+    return {"rows": files, "working": working["path"] if working else None, "partial": partial}
 
-    try:
-        repo = working_repo(session_id, db_path)
-    except Exception as exc:  # best effort: fall back to the workspace, never skip the hook
-        logger.debug("TodoLifecycleHook: working repo of %s unavailable: %s", session_id, exc)
-        return None
-    return Path(repo["path"]) if repo else None
+
+def _output_part(session_id: str) -> dict:
+    """The session's outputs, not deleted (canvas_session pool). The store drops its
+    oldest rows past MAX_ROWS without a marker: a full store may hold more."""
+    from core import session_outputs
+    rows = session_outputs.read(session_id)["rows"]
+    return {"rows": [r for r in rows if not r.get("deleted")],
+            "partial": len(rows) >= session_outputs.MAX_ROWS}
+
+
+def _landing_part(session_id: str) -> dict:
+    """The session's landings (canvas_changes pool)."""
+    from core import session_landings as sl
+    res = sl.read_session(session_id, deadline=sl.Deadline(10), cap=sl.CANVAS_CAP,
+                          limit=_LANDINGS_MAX)
+    return {"landings": res["landed"],
+            "partial": bool(res["truncated"] or res["unknown"] or res["unverified"])}
+
+
+def _real(p) -> str:
+    return os.path.realpath(p) if isinstance(p, str) and p else ""
+
+
+async def _outcome(session_id: str) -> dict:
+    """``{entries, landings, partial, match}``: what the session's records say it did."""
+    from core import executors
+    parts: dict = {}
+    for name, pool, fn, args in (
+            ("cards", "canvas_changes", _card_part, (session_id, str(db.db_path))),
+            ("outputs", "canvas_session", _output_part, (session_id,)),
+            ("landings", "canvas_changes", _landing_part, (session_id,))):
+        try:
+            parts[name] = await executors.run_in(pool, fn, *args)
+        except Exception as exc:  # noqa: BLE001 — one unreadable record: said, not fatal
+            logger.warning("TodoLifecycleHook: %s of %s unreadable: %s", name, session_id, exc)
+            parts[name] = None
+    cards = parts["cards"] or {"rows": [], "working": None}
+    outputs = parts["outputs"] or {"rows": []}
+    landings = (parts["landings"] or {"landings": []})["landings"]
+    partial = any(p is None or p.get("partial") for p in parts.values())
+    repo_rows = [*cards["rows"], *(f for land in landings for f in land.get("files") or [])]
+    entries = {("repo", _real(f.get("gitRoot")), f.get("path")) for f in repo_rows}
+    entries |= {("file", _real(o.get("absolutePath") or o.get("path"))) for o in outputs["rows"]}
+    working = _real(cards["working"])
+    match = [o["path"] for o in outputs["rows"] if o.get("path")]
+    match += [f["path"] for f in repo_rows
+              if working and f.get("path") and _real(f.get("gitRoot")) == working]
+    return {"entries": entries, "landings": landings, "partial": partial, "match": match}
+
+
+def _note(out: dict) -> str:
+    n = len(out["entries"])
+    count = f"{'at least ' if out['partial'] else ''}{n} recorded file{'' if n == 1 else 's'}"
+    lines = [f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] Session outcome: {count}"]
+    for land in out["landings"]:
+        subjects = "; ".join(s.get("subject", "") for s in (land.get("subjects") or [])[:3])
+        lines.append(f"  - {land.get('branch')} → {land.get('dest')}: {subjects}")
+    return "\n".join(lines[:_NOTE_LINES + 1])
 
 
 class TodoLifecycleHook:
-    """Transitions Radar ToDo items based on session outcomes.
+    """Transitions Radar ToDo items from the session's own records (module docstring).
 
-    Fires after session close.  Two modes:
-
-    1. **Explicit binding** — session.metadata contains ``todo_id``
-       (set by drag-to-chat).  If commits exist, mark ``handled``.
-
-    2. **Implicit file matching** — no binding, but session changed
-       files matching a pending todo's ``linked_context.files``.
-       Transition to ``in_discussion`` only (not auto-complete).
+    Fires after session close.
     """
 
     @property
@@ -166,205 +165,74 @@ class TodoLifecycleHook:
         return "todo_lifecycle"
 
     async def execute(self, context: HookContext) -> None:
-        """Run todo lifecycle checks for the closing session."""
+        """Run the hook. Errors are logged and never propagate."""
         try:
             await self._process(context)
         except Exception as exc:
             # Error-isolated: log and continue
-            logger.error(
-                "TodoLifecycleHook failed for session %s: %s",
-                context.session_id, exc, exc_info=True,
-            )
+            logger.warning("TodoLifecycleHook failed for session %s: %s", context.session_id, exc)
 
     async def _process(self, context: HookContext) -> None:
+        if getattr(context, "deleting", False):
+            return          # its records are being deleted under us: change nothing
         session_id = context.session_id
-
-        # Get the session record
         session = await db.sessions.get(session_id)
         if not session:
             logger.debug("TodoLifecycleHook: session %s not found", session_id)
             return
 
-        # Parse session start time for git queries
-        start_str = context.session_start_time or session.get("created_at", "")
-        try:
-            since = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-        except (ValueError, TypeError):
-            since = datetime.now() - timedelta(hours=2)
-
-        # Determine git repo paths for commit queries
-        from config import get_app_data_dir
-        workspace_path = get_app_data_dir() / "SwarmWS"
-        # The bound repo this session worked in (any project's repo, from the
-        # session's own change record).
-        from core import executors
-        codebase_path = await executors.run_in(
-            "canvas_changes", _session_code_repo, session_id, str(db.db_path),
-        )
-
-        # --- Mode 1: Explicit binding ---
         metadata = session.get("metadata") or "{}"
         if isinstance(metadata, str):
             try:
                 metadata = json.loads(metadata)
             except (json.JSONDecodeError, TypeError):
                 metadata = {}
-
         bound_todo_id = metadata.get("todo_id") if isinstance(metadata, dict) else None
 
         if bound_todo_id:
-            await self._handle_explicit_binding(
-                bound_todo_id, since, workspace_path, codebase_path,
-            )
+            await self._handle_explicit_binding(bound_todo_id, await _outcome(session_id))
             return  # Explicit binding handled — skip implicit matching
 
-        # --- Mode 2: Implicit file matching ---
         if context.message_count < 2:
-            # Skip trivial sessions (no real work done)
+            return  # Skip trivial sessions (no real work done)
+        await self._handle_implicit_matching((await _outcome(session_id))["match"])
+
+    async def _handle_explicit_binding(self, todo_id: str, out: dict) -> None:
+        """A session bound to a ToDo: to review with an outcome, else in_discussion."""
+        if not (out["entries"] or out["landings"]):
+            if await db.todos.update_if(todo_id, {"status": "in_discussion"},
+                                        status_in=_ACTIVE, review_state_null=True):
+                logger.info("ToDo %s: -> in_discussion (source=hook_explicit)", todo_id[:8])
             return
-
-        await self._handle_implicit_matching(
-            since, workspace_path, codebase_path,
-        )
-
-    async def _handle_explicit_binding(
-        self,
-        todo_id: str,
-        since: datetime,
-        workspace_path: Path,
-        codebase_path: Optional[Path],
-    ) -> None:
-        """Handle a session explicitly bound to a todo via drag-to-chat."""
-        # Git subprocess calls are blocking (10s timeout each).
-        # Run in thread pool to keep event loop responsive.
-        loop = asyncio.get_running_loop()
-        commit_count = await loop.run_in_executor(
-            None, _get_session_commit_count, workspace_path, since
-        )
-        if codebase_path:
-            commit_count += await loop.run_in_executor(
-                None, _get_session_commit_count, codebase_path, since
-            )
-
-        if commit_count > 0:
-            # Work was done — write outcome back, then mark as handled
-            await self._write_outcome_notes(
-                todo_id, since, workspace_path, codebase_path,
-            )
-            await todo_manager.transition_status(
-                todo_id, "handled", source="hook_explicit",
-            )
-        else:
-            # Session interacted but no commits — mark as in_discussion
-            await todo_manager.transition_status(
-                todo_id, "in_discussion", source="hook_explicit",
-            )
-
-    async def _write_outcome_notes(
-        self,
-        todo_id: str,
-        since: datetime,
-        workspace_path: Path,
-        codebase_path: Optional[Path],
-    ) -> None:
-        """Write session outcome (commits + files) back to todo's linked_context.notes.
-
-        This closes the feedback loop: when a todo is marked 'handled',
-        the outcome is recorded so anyone reviewing the todo later knows
-        what was done.  Non-fatal — failure doesn't block status transition.
-        """
-        try:
-            import sqlite3
-            db_path = DB_PATH
-            if not db_path.exists():
+        note = _note(out)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        for _ in range(_CAS_TRIES):
+            row = await db.todos.get(todo_id)
+            if not row:
                 return
-
-            # Gather commits from both repos
-            loop = asyncio.get_running_loop()
-            commits: list[str] = []
-            for repo in [workspace_path, codebase_path]:
-                if repo and repo.is_dir():
-                    repo_commits = await loop.run_in_executor(
-                        None, self._get_oneline_commits, repo, since,
-                    )
-                    commits.extend(repo_commits)
-
-            if not commits:
-                return
-
-            # Format outcome note
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            note = f"[{timestamp}] Session outcome: {len(commits)} commit(s)\n"
-            for c in commits[:10]:  # Cap to avoid bloat
-                note += f"  - {c}\n"
-
-            # Atomic update: read linked_context → append to notes → write back
-            conn = sqlite3.connect(str(db_path), timeout=5)
             try:
-                row = conn.execute(
-                    "SELECT linked_context FROM todos WHERE id = ?", (todo_id,)
-                ).fetchone()
-                if not row:
-                    return
-
+                ctx = json.loads(row.get("linked_context") or "{}")
+            except (json.JSONDecodeError, TypeError):
                 ctx = {}
-                if row[0]:
-                    try:
-                        ctx = json.loads(row[0])
-                    except (json.JSONDecodeError, TypeError):
-                        ctx = {}
+            if not isinstance(ctx, dict):
+                ctx = {}
+            existing = ctx.get("notes") or ""
+            ctx["notes"] = f"{existing}\n{note}".strip() if existing else note
+            # the review state and the notes in ONE write, only while the row is as read
+            if await db.todos.update_if(
+                    todo_id, {"review_state": "completed", "completed_at": now,
+                              "linked_context": json.dumps(ctx, ensure_ascii=False)},
+                    status_in=_ACTIVE, review_state_null=True,
+                    where_eq={"updated_at": row.get("updated_at")}):
+                logger.info("ToDo %s: to review (source=hook_explicit)", todo_id[:8])
+                return
+        logger.info("ToDo %s: changed meanwhile or not active; left as it is", todo_id[:8])
 
-                existing_notes = ctx.get("notes", "")
-                ctx["notes"] = (existing_notes + "\n" + note).strip() if existing_notes else note.strip()
-
-                conn.execute(
-                    "UPDATE todos SET linked_context = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(ctx, ensure_ascii=False), datetime.now().isoformat(), todo_id),
-                )
-                conn.commit()
-                logger.info("Wrote outcome notes to todo %s: %d commits", todo_id[:8], len(commits))
-            finally:
-                conn.close()
-        except Exception as exc:
-            logger.warning("Failed to write outcome notes for todo %s: %s", todo_id[:8], exc)
-
-    @staticmethod
-    def _get_oneline_commits(repo_path: Path, since: datetime, max_commits: int = 10) -> list[str]:
-        """Get oneline git commits since a timestamp."""
-        if not repo_path.is_dir() or not (repo_path / ".git").exists():
-            return []
-        since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
-        try:
-            result = subprocess.run(
-                ["git", "log", f"--since={since_str}", f"--max-count={max_commits}", "--oneline", "--no-decorate"],
-                cwd=str(repo_path), capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode != 0:
-                return []
-            return [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return []
-
-    async def _handle_implicit_matching(
-        self,
-        since: datetime,
-        workspace_path: Path,
-        codebase_path: Optional[Path],
-    ) -> None:
-        """Match session file changes against pending todos' linked files."""
-        loop = asyncio.get_running_loop()
-        changed_files = await loop.run_in_executor(
-            None, _get_session_changed_files, workspace_path, since
-        )
-        if codebase_path:
-            changed_files += await loop.run_in_executor(
-                None, _get_session_changed_files, codebase_path, since
-            )
-
+    async def _handle_implicit_matching(self, changed_files: list[str]) -> None:
+        """Match the session's changed files against pending todos' linked files."""
         if not changed_files:
             return
 
-        # Fetch pending todos with linked_context.files
         pending_todos = await db.todos.list_by_workspace(_WORKSPACE_ID, "pending")
 
         matched = 0

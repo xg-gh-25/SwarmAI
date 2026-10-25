@@ -1605,6 +1605,33 @@ class SQLiteToDosTable(WorkspaceScopedTable[T], Generic[T]):
     filter_field: ClassVar[str] = "status"
     order_by: ClassVar[str] = "created_at DESC"
 
+    async def update_if(self, item_id: str, updates: dict, *, status_in: "tuple[str, ...]",
+                        review_state_null: bool = False,
+                        where_eq: "Optional[dict]" = None) -> bool:
+        """ONE conditional UPDATE: applied only while the ToDo's status is in
+        *status_in* (and, with *review_state_null*, it has no review_state; with
+        *where_eq*, those columns still hold the values the caller read), so a
+        person's Confirm / Reject or edit wins over an automatic write. Column names
+        come from the caller's code only. True when the row was changed."""
+        if not updates or not status_in:
+            return False
+        updates = {**updates, "updated_at": datetime.now().isoformat()}
+        columns = list(updates.keys())
+        set_clause = ", ".join(f"{col} = ?" for col in columns)
+        values = [self._serialize_value(updates[col]) for col in columns]
+        where = f"id = ? AND status IN ({', '.join('?' for _ in status_in)})"
+        if review_state_null:
+            where += " AND review_state IS NULL"
+        eq = list((where_eq or {}).items())
+        for col, _v in eq:
+            where += f" AND {col} = ?"
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"UPDATE {self.table_name} SET {set_clause} WHERE {where}",
+                [*values, item_id, *status_in, *(self._serialize_value(v) for _c, v in eq)])
+            await conn.commit()
+            return cursor.rowcount > 0
+
     def _row_to_dict(self, row: aiosqlite.Row) -> dict:
         """Same as the base, but keep ``linked_context`` a STRING.
 

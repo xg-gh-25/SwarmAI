@@ -18,7 +18,8 @@ All git calls share one ``Deadline``: each call's timeout is the time left, and 
 call starts once it has run out (a cancelled executor future does not stop git, so
 the per-call timeout is what bounds it). Read-only, ``GIT_OPTIONAL_LOCKS=0``.
 
-Public: ``Deadline``, ``read_repo``, ``read_session``, ``TURN_CAP``, ``CANVAS_CAP``.
+Public: ``Deadline``, ``read_repo``, ``read_session``, ``landed_path``, ``TURN_CAP``,
+``CANVAS_CAP``.
 """
 from __future__ import annotations
 
@@ -210,6 +211,91 @@ def read_session(session_id: str, *, deadline: Deadline, turn_id: "Optional[str]
     scans = [_scan(root, key, deadline, turn_id, cap, since_days)
              for root in _bound_checkouts()]
     return _expand(scans, deadline, limit, expect)
+
+
+#: landed_path's reflog reads: (checkout, name) -> (branch tip, {stamp keys}); bounded
+_LANDED_PATHS: "dict[tuple[str, str], tuple[tuple, frozenset]]" = {}
+_LANDED_PATHS_MAX = 64
+_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")   # session_worktree.NAME_RE
+
+
+def landed_path(path: str, session_id: "Optional[str]" = None) -> "Optional[str]":
+    """A file path inside a REMOVED session worktree -> the same file in the main
+    checkout it was landed into, or None (design 2026-10-25-landings-consumers.md D1).
+    Fail closed: the path is ``<root>/<name>/<repo dir>/<rel>`` and not a pipeline
+    run's; exactly one bound checkout has that basename (NFC + casefold); its branch's
+    reflog holds a stamp of ``session/<key>-<name>`` with this session's key (given a
+    session id) or with exactly one key (without); the checkout is under $HOME and
+    ``<rel>`` is a file under it. Grants
+    no access: the caller's own guard applies to the result. Blocking."""
+    import unicodedata
+    from pathlib import Path
+    from core import run_worktree
+    from core.app_session_id import session_key, valid_app_session_id
+    from scripts.session_worktree import root as sw_root
+    try:
+        p = os.path.abspath(str(path))
+        if os.path.lexists(p) or run_worktree.run_for_path(p) is not None:
+            return None
+        parts = Path(os.path.realpath(p)).relative_to(os.path.realpath(str(sw_root()))).parts
+    except (ValueError, OSError):
+        return None
+    if len(parts) < 3 or any(x in (".", "..") for x in parts) or not _NAME.match(parts[0]):
+        return None
+    name, repo_dir, rest = parts[0], parts[1], parts[2:]
+    fold = lambda x: unicodedata.normalize("NFC", x).casefold()  # noqa: E731
+    cands = [r for r in _bound_checkouts() if fold(os.path.basename(r)) == fold(repo_dir)]
+    if len(cands) != 1:
+        return None
+    main = cands[0]
+    if not main.startswith(os.path.realpath(str(Path.home())) + os.sep):
+        return None                      # a checkout outside $HOME is never mapped
+    keys = _stamp_keys(main, name)
+    if keys is None:
+        return None
+    if session_id is not None:
+        if not valid_app_session_id(session_id) or session_key(session_id) not in keys:
+            return None
+    elif len(keys) != 1:
+        return None
+    target = os.path.realpath(os.path.join(main, *rest))
+    if not target.startswith(main + os.sep) or not os.path.isfile(target):
+        return None
+    return target
+
+
+def _stamp_keys(main: str, name: str) -> "Optional[frozenset]":
+    """The session keys whose stamp in *main*'s branch reflog lands
+    ``session/<key>-<name>``; None when unreadable. Cached by the branch tip."""
+    from core.session_changes import _tips
+    # the branch AND its tip: two branches at one commit have different reflogs
+    tip = next(((ref, t) for r, ref, t in _tips() if r == main and t), None)
+    hit = _LANDED_PATHS.get((main, name))
+    if hit and tip and hit[0] == tip:
+        return hit[1]
+    deadline = Deadline(2.0)
+    try:
+        rc, ref = _git(main, deadline, "symbolic-ref", "-q", "HEAD", ok=(0, 1))
+        if rc != 0 or not ref.strip().startswith("refs/heads/"):
+            return None
+        raw = _git(main, deadline, "reflog", "show", "--format=%gs", f"-n{CANVAS_CAP}",
+                   ref.strip(), "--")[1]
+    except _OutOfTime:
+        return None
+    except Exception as exc:  # noqa: BLE001 — a lookup aid: None, never raised
+        logger.warning("session_landings: %s unreadable: %s", main, exc)
+        return None
+    keys = set()
+    for msg in raw.splitlines():
+        m = _STAMP.match(msg)
+        if m and m.group(1) == f"session/{m.group(2)}-{name}":
+            keys.add(m.group(2))
+    out = frozenset(keys)
+    if tip:
+        if len(_LANDED_PATHS) >= _LANDED_PATHS_MAX:
+            _LANDED_PATHS.pop(next(iter(_LANDED_PATHS)))
+        _LANDED_PATHS[(main, name)] = (tip, out)
+    return out
 
 
 def _bound_checkouts() -> list[str]:

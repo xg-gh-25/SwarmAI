@@ -1012,6 +1012,29 @@ def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
     return False
 
 
+async def _landed_session_path(path: str, session_id: "str | None") -> str:
+    """READ routes only: *path* inside a REMOVED session worktree -> the same file in
+    the main checkout it was landed into (session_landings.landed_path, design
+    2026-10-25-landings-consumers.md D1); else *path* unchanged. The result goes
+    through ``_resolve_file_path`` like any path, so its guard (home, the session's
+    allowlist) is checked on the mapped file: the mapping grants no access. The git
+    read runs off the event loop; a path not under the session-worktree root costs a
+    realpath only."""
+    p = os.path.expanduser(os.path.normpath(path))
+    if not os.path.isabs(p) or os.path.lexists(p):
+        return path
+    try:
+        from scripts.session_worktree import root as _sw_root
+        if not os.path.realpath(p).startswith(os.path.realpath(str(_sw_root())) + os.sep):
+            return path
+        from core import session_landings
+        moved = await asyncio.to_thread(session_landings.landed_path, p, session_id)
+    except Exception as exc:  # noqa: BLE001 — a failed lookup is a plain 404
+        logger.debug("session landed_path lookup failed for %s: %s", path, exc)
+        return path
+    return moved or path
+
+
 async def _allowed_external_for(session_id: str | None) -> "set[str] | None":
     """The external absolute paths a session surfaced to its Canvas rail (read-only
     render gate). Shared by GET /workspace/file and GET /workspace/file/preview."""
@@ -1090,6 +1113,7 @@ async def get_workspace_file(
     else:
         workspace_root = loc_root
         _allowed_external = await _allowed_external_for(session_id)
+        path = await _landed_session_path(path, session_id)
         target, is_external = _resolve_file_path(path, workspace_root,
                                                  allowed_external=_allowed_external,
                                                  map_landed=True)
@@ -1385,6 +1409,7 @@ async def get_workspace_file_preview(
     from core import office_preview as op
 
     expanded_path = await _get_workspace_path()
+    path = await _landed_session_path(path, session_id)
     target, _ = _resolve_file_path(path, Path(expanded_path),
                                    allowed_external=await _allowed_external_for(session_id),
                                    map_landed=True)
@@ -1436,7 +1461,8 @@ async def get_workspace_file_meta(
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target, _is_external = _resolve_file_path(path, workspace_root)
+    path = await _landed_session_path(path, None)
+    target, _is_external = _resolve_file_path(path, workspace_root, map_landed=True)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -1475,7 +1501,8 @@ async def get_workspace_file_raw(
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target, _is_ext = _resolve_file_path(path, workspace_root)
+    path = await _landed_session_path(path, None)
+    target, _is_ext = _resolve_file_path(path, workspace_root, map_landed=True)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -1620,8 +1647,9 @@ async def get_workspace_file_committed(
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
+    path = await _landed_session_path(path, None)
     try:
-        target, _is_ext = _resolve_file_path(path, workspace_root)
+        target, _is_ext = _resolve_file_path(path, workspace_root, map_landed=True)
     except HTTPException:
         # Path rejected by the shared guard (outside home / traversal). This
         # endpoint has no baseline to offer for such a path — fail open, don't

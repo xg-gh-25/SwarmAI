@@ -23,7 +23,8 @@ cached per session by the bound checkouts' branch tips (a landing moves a tip), 
 most LANDED_TTL_S.
 
 ``working_repo`` is the terminal's default location from the same window: the newest
-card's first bound-repo gitRoot (docs/design/terminal-locations.md).
+card's first bound-repo gitRoot, its landings before its rows
+(docs/design/terminal-locations.md, docs/design/2026-10-25-landings-consumers.md D2).
 
 Public: ``read``, ``working_repo``, ``row_facts``, ``tree_diff``, ``clear_cache``,
 and the limits below.
@@ -82,10 +83,18 @@ def row_facts(row_id: str, created_at: str, content: str) -> Optional[dict]:
         if blk.get("type") == "turn_changes" and len(cards) < ROW_MAX_CARDS:
             rows = [f for f in blk.get("files") or [] if isinstance(f, dict) and f.get("path")]
             files = [{k: f.get(k) for k in _FILE_FIELDS} for f in rows[:CARD_MAX_FILES]]
-            if files:
+            # the repos the card names: its landings first (the card shows them first),
+            # then its rows (design 2026-10-25-landings-consumers.md D2)
+            roots: list[str] = []
+            for g in [*(blk.get("landed") or []), *files]:
+                r = g.get("gitRoot") if isinstance(g, dict) else None
+                if isinstance(r, str) and r and r not in roots:
+                    roots.append(r)
+            if files or roots:
                 omitted = blk.get("omitted")
                 omitted = (omitted if isinstance(omitted, int) and omitted > 0 else 0) + max(0, len(rows) - CARD_MAX_FILES)
-                cards.append({"id": f"{row_id}:{i}", "at": created_at, "files": files, "omitted": omitted})
+                cards.append({"id": f"{row_id}:{i}", "at": created_at, "files": files,
+                              "omitted": omitted, "roots": roots})
     if not cards:
         return None
     return {"cards": cards}
@@ -345,14 +354,21 @@ def read(session_id: str, db_path: str) -> dict[str, Any]:
     ``{id, at, files, omitted}``), landings newest first. Blocking: run it on the
     ``canvas_changes`` pool."""
     rows, scanned_all = _window(session_id, db_path)
-    cards = [c for r in rows for c in reversed(r["cards"])]
+    # display cards only: a card that only landed is listed under "Landed", never as
+    # a "0 files" turn (its roots still name the working repo)
+    cards = [_display(c) for r in rows for c in reversed(r["cards"]) if c["files"]]
     return {"turns": cards[:MAX_TURNS], "olderTurns": max(0, len(cards) - MAX_TURNS),
             "scannedAll": scanned_all, **_landed(session_id)}
 
 
+def _display(c: dict) -> dict:
+    return {k: v for k, v in c.items() if k != "roots"}
+
+
 def working_repo(session_id: str, db_path: str) -> Optional[dict]:
     """The repo this session is coding in (the terminal's default location): the
-    ``gitRoot`` of the first file, newest card first, that is a bound repo's main
+    first ``gitRoot`` a card names (its landings, then its rows; newest card first)
+    that is a bound repo's main
     checkout (repo_changes.authorized_root, ``.git`` a directory). A card's gitRoot is
     already its store's main checkout (turn_changes._main_checkout), so a change made
     in a worktree names its main. A file outside a bound repo (SwarmWS, a scratch
@@ -363,8 +379,7 @@ def working_repo(session_id: str, db_path: str) -> Optional[dict]:
     seen: set[str] = set()
     for r in rows:
         for c in reversed(r["cards"]):
-            for f in c["files"]:
-                root = f.get("gitRoot")
+            for root in c.get("roots") or [f.get("gitRoot") for f in c["files"]]:
                 if not isinstance(root, str) or not root or root in seen:
                     continue
                 seen.add(root)

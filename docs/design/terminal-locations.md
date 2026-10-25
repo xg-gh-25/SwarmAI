@@ -2,7 +2,7 @@
 title: Terminal locations — SwarmWS, the chat's working repo, any folder
 date: 2026-10-23
 created: 2026-10-23
-updated: 2026-10-24
+updated: 2026-10-25
 project: SwarmAI
 status: implemented (frontend + one read endpoint)
 ---
@@ -34,8 +34,9 @@ A **location** is where a shell opens: `swarmws` (the Rust default, no cwd passe
 
 **Working repo** — one fact, one source: the session's own transcript, the same
 record Canvas Changes reads (core/session_changes, design canvas-changes-from-turns.md).
-Newest "N files changed" card first, its files in order: the first `gitRoot` that is a
-bound repo (repo_changes.authorized_root, Projects/*/bindings.yaml) and a main checkout
+Newest "N files changed" card first, its landings then its files in order (a card that
+only landed names its landing's repo, design 2026-10-25-landings-consumers.md D2): the
+first `gitRoot` that is a bound repo (repo_changes.authorized_root, Projects/*/bindings.yaml) and a main checkout
 (`.git` a directory). A card's gitRoot is already its object store's main checkout, so
 a change made in a worktree names its main. A root outside the bindings (SwarmWS, a
 scratch clone) is skipped; nothing found is none — no guess. No run.json is read
