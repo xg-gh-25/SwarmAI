@@ -3,7 +3,7 @@ title: Turn attention tiers (what in a chat turn gets the user's attention, deci
 date: 2026-10-25
 created: 2026-10-25
 updated: 2026-10-25
-status: draft v2, after one fresh-context review (v1 verdict "needs redesign"); for Gawan's review
+status: draft v3, after two fresh-context reviews (v1 and v2 verdict "needs redesign"); for Gawan's review
 ---
 
 # Turn attention tiers
@@ -52,7 +52,19 @@ allowed pairs, enforced by the type:
 | know | neutral, success, error, diffAdd, diffDelete |
 | process | neutral, running, agent |
 
-So `process` + `success` (a green test line guessed from output) cannot be written.
+Shape (so the pairs are a type, not a convention):
+
+```ts
+type ToneByAttention = { act: 'action' | 'error'; know: 'neutral' | 'success' | 'error' | 'diffAdd' | 'diffDelete'; process: 'neutral' | 'running' | 'agent' };
+type Decision<A extends Attention = Attention> = { [K in A]: { attention: K; tone: ToneByAttention[K] } }[A];
+```
+
+Every policy function returns a `Decision`, so `process` + `success` (a green test line
+guessed from output) does not type-check.
+
+`act` needs a control: a part is `act` only when it renders something the user can do (an
+answer, an approve / deny, a decision button, a Retry). A failure the user can only read is
+`know` + `error`.
 `running` (amber on the call running now) and `agent` (the Agents panel tint) are v6 §3.1 /
 §3.2 textures and stay as they are, now named.
 
@@ -69,17 +81,18 @@ renderers it imports included. Rows `TabView` draws between messages (compaction
 reconnect, turn-phase line, busy-wait, back-to-latest) are outside the turn; they are listed
 in §3.3 so they are not forgotten, and are out of scope.
 
-### 3.1 Zones (`Zone['kind']` in `turnZones.ts`, ten kinds)
+### 3.1 Zones (`Zone['kind']` in `turnZones.ts`: ten kinds today, `landing` makes eleven)
 
 | Part | attention | tone | Change |
 |---|---|---|---|
 | `needs`: question / permission / escalation, **pending** | act | action | colours from tokens |
-| `needs`, **answered / decided / resolved** | process | neutral | one-line receipt, secondary text (v6 §4 already folds it to one line) |
-| `failure`: a call that failed and ended the turn | act | error | `orange-500` → tokens |
+| `needs`, **answered / decided / resolved** | process | neutral | secondary text only; its content stays as today (every recorded answer, multi-select chips included) |
+| `failure`: a call that failed and ended the turn | know | error | it has no control, so not act; `orange-500` "Needs you" label → `know`/`error` tokens |
 | `text` answer | know | neutral | none (no RESULT label exists, and none is added: a test asserts it, and colour by position would guess success) |
 | `text` restatement | process | neutral | secondary text |
 | `text` note (between groups) | process | neutral | **body colour → secondary** |
-| `thinking` / thought rows | process | neutral | **the thought being written shows its first line; open it for all** |
+| `thinking` (THINKING / THOUGHTS, before the first text or call) | process | neutral | unchanged: shown in full while written (it is the receipt, v6 §0.3 / §2.1) |
+| thought rows inside a phase | process | neutral | **the one being written shows its first line; open it for all** |
 | `phase` (WORKING / WORKED) | process | neutral | — |
 | tool strip | process | running while running, else neutral | ▸ when it has detail; the detail stays the persisted outcome |
 | Agents panel (inside a phase or stage) | process | agent | — |
@@ -100,35 +113,46 @@ in §3.3 so they are not forgotten, and are out of scope.
 | `AttentionCard` (pipeline needs-you) | act | action |
 | Output card: files, deliverables, landings | know | diffAdd / diffDelete on counts; success / error on a landing's recorded state |
 | Assumptions disclosure | process | neutral |
-| Terminal error (`ChatErrorMessage`), with Retry | act | error |
-| Compaction failure that offers a retry | act | error; one that offers nothing: know, error |
+| Terminal error (`ChatErrorMessage`) that renders Retry (today `QUEUE_TIMEOUT`) | act | error |
+| Terminal error without a control | know | error |
+| Message action note (Compact / Save result) | know | success / error from its recorded `severity`, else neutral |
+| Answered-card controls, stage document cards, wait hint | as their part | from their part |
 | Next-step chips | know | neutral |
-| Assistant header, avatar, action buttons, bee | process | neutral; the bee and avatar are brand artwork, exempt from the guard by name |
+| Assistant header, avatar, action buttons, bee, streaming dot | process | neutral, the streaming dot `running`; avatar and bee SVG are brand artwork, exempt by name |
+
+Exempt from tone everywhere (content, not attention): the user's own text and markdown, syntax highlighting, file-type badges (`FileTypeIcon`), avatar, bee.
 
 ### 3.3 Outside the turn (out of scope, listed)
 
-`TabView`: compaction divider, reconnect / resume, turn-phase line, busy-wait, background-agent
+`TabView`: compaction divider and compaction notice (`CompactNotice`), reconnect / resume, turn-phase line, busy-wait, background-agent
 row, back-to-latest. Tab notice bar, toasts, Canvas.
 
 ### 3.4 How completeness is checked
 
 - Zones: `type ZoneKind = Zone['kind']`; the policy is `Record<ZoneKind, …>`, so adding a zone
   kind without a policy entry is a type error.
-- Parts of §3.2: each first-level part of a turn renders inside `<TurnPart part="…">`, which
-  reads the policy and sets `data-attn` / `data-tone`. Test: render a fixture that holds every
-  part of §3.1 and §3.2 (one turn of each shape) and assert every first-level child of the turn
-  carries `data-attn`. A new part that bypasses `TurnPart` fails it.
+- No new elements. Zones already render on one stable keyed host,
+  `<div key={z.id} data-zone={z.kind}>` (`TurnZones.tsx` ~991); the §3.2 parts already have
+  their own keyed wrappers (`AssistantMessageView.tsx` ~470-530). `attnProps(part, state)`
+  returns `{ 'data-attn', 'data-tone', className }` and is spread onto those existing nodes,
+  so no node is added, moved or re-keyed.
+- Test: a fixture holding every part of §3.1 and §3.2 asserts every first-level child of the
+  turn carries `data-attn`, and (in the replay and column-grid suites) that node identity and
+  every measured x offset are unchanged by this step.
+- Nested colour is covered by the §6 guard, not by `data-attn`.
 
 ## 4. Mid-turn landings (the only backend change)
 
 ### 4.1 Trigger and read
 
-- Trigger: `_turn_lands`, the per-turn counter `run_owner_gate` already increments when it
-  allows a `session_worktree land` that was handed the turn's id (`run_owner_gate.py` ~548;
-  reset at turn start, `session_unit.py` ~1442). No command parsing, no output parsing: the
-  gate already recognised the land, a land through a variable included.
-- When a ToolResult arrives and `_turn_lands` is higher than the count this turn has already
-  read, the orchestrator calls `session_landings.read_session(session_id, turn_id=…,
+- Trigger: the gate that already recognises a `session_worktree land` handed the turn's id
+  (`run_owner_gate.py` ~544, where it increments `_turn_lands`) also records that call's
+  `tool_use_id` in the turn's `_land_calls` set (reset with `_turn_lands`,
+  `session_unit.py` ~1442). The gate runs BEFORE the command, so the set says "this call may
+  land", never "it landed". `_turn_lands` stays only the end card's `expect` hint.
+- The observer runs only on the ToolResult whose id is in `_land_calls` (so a parallel,
+  unrelated result can never consume the read before the merge wrote its stamp), removes the
+  id whatever the outcome, and then calls `session_landings.read_session(session_id, turn_id=…,
   deadline=Deadline(…))` in the **`turn_changes` pool** (it runs several git commands; the
   end card uses the same pool), with a short deadline and an outer wait bound. Both
   ToolResult delivery paths are handled, the way `_pipeline_stage_events` is
@@ -138,14 +162,17 @@ row, back-to-latest. Tab notice bar, toasts, Canvas.
   count, subjects, state`) plus `at`. Dedupe key: `(gitRoot, dest, new)`, held on the
   `SessionUnit` and reset with the turn's state, so retries and question / permission
   continuations of the same turn share it.
-- Nothing stamped → nothing shown (same rule as the end card). A refused or up-to-date land
-  is not counted by the gate's land outcome or has no stamp, so it shows nothing. Two sessions
+- Nothing stamped → nothing shown (same rule as the end card). A land that refused, failed
+  or was already up to date wrote no stamp, so its read finds nothing new and nothing shows. Two sessions
   landing in one repo: git's ref lock serialises them; each read filters by its own
   session/turn stamp.
 - The block is persisted before it is forwarded, like `pipeline_stage`
   (`session_router.py` ~2524), so live == reload. It is added to `ContentBlock`,
   `DISPLAY_TYPES` and `deriveTurnView` (frontend) and to `context_injector`'s
   non-conversational list (backend).
+
+- The end card's read is separate and unchanged: it still reads at turn end with
+  `expect = _turn_lands`; the mid-turn read never writes anything it uses.
 
 Cost: nothing on send or per token. The same git reads the end card makes, once per land, in
 the pool the end card already uses.
@@ -170,8 +197,11 @@ row, not the subjects again. Which landings were shown is read from the turn's o
 
 ## 6. Guard
 
-`turnAttention.test.ts` (the `navVisualSystem.test.ts` pattern) scans every file of the turn
-render closure (§3.1 and §3.2 files, listed in the test) for: Tailwind palette colour
+`turnAttention.test.ts` (the `navVisualSystem.test.ts` pattern) scans the turn render
+closure: the files reachable by import from `AssistantMessageView.tsx` within
+`desktop/src/pages/chat/` and `desktop/src/components/{chat,common}/`, computed by the test
+from the import graph (so a new imported file is scanned without editing the test), minus
+the content exemptions of §3.2. It looks for: Tailwind palette colour
 classes, raw hex / rgb / hsl, inline `color` / `background` / `border` styles, and
 `--color-status-*` / `--color-primary` used outside the tier tokens. Per-file counts must equal
 `KNOWN`; step 1 records today's real counts, each migration step lowers its entry, the end
@@ -181,12 +211,15 @@ state is `{}` apart from the named brand-artwork exemptions.
 
 - §0.6 adds: "colour carries a tone read from a record or a live state the app owns; only
   `act` uses the primary colour."
-- §0.8 / §2.3: the thought being written shows its first line (it only grows, so the stream
-  stays monotonic); open it for the full text. Tests that assert a full live thought
-  (`AssistantMessageView.zones.test.tsx` AC1 / AC2) change, listed in that commit.
+- §0.8 / §2.3: a thought being written INSIDE a phase shows its first line (it only grows,
+  so the stream stays monotonic); open it for the full text. §2.1 (the first THINKING passage,
+  in full) is unchanged. Test that changes: `AssistantMessageView.zones.test.tsx` AC2 (~127-149,
+  the in-phase live thought); AC1 (~78-83, the first THINKING) stays.
 - §2.4: a note between groups is secondary colour.
 - §3.1: a strip with detail shows ▸.
-- §4: an answered card is a process receipt.
+- §4: an answered card is a process receipt (secondary text; content unchanged, so
+  `ContentBlockRenderer.askUserQuestion.test.tsx` keeps passing). A failure with no control is
+  `know`, not "Needs you".
 - §1 table: new row "landing, at the call that landed"; §8: the end card does not repeat a
   landing's subjects shown above.
 
@@ -201,7 +234,10 @@ state is `{}` apart from the named brand-artwork exemptions.
      end card does not repeat a shown landing's subjects; the live thought shows its first
      line and opens to full; a note's colour differs from the answer's; the §6 guard.
 2. Existing suites green. A test changes only where §7 changes the rule it asserts, each
-   listed in the commit message: today `src/pages/chat` (74 files, 868 tests),
+   listed in the commit message. Known today: zones AC2 live thought (step 2);
+   `AssistantMessageView.turnCards.test.tsx` ~99 and ~151 exact colour classes (step 4); the
+   failure card's "Needs you" label (step 4). New red tests before code: note tone, strip ▸,
+   in-phase live thought first line, `failure` not labelled "Needs you". Suites: today `src/pages/chat` (74 files, 868 tests),
    `test_pipeline_stage_events.py`, `test_session_landings.py`, `test_turn_changes.py`,
    `test_context_injector*.py`.
 3. Light, dark and both locales: the pilot (step 2) is checked by Gawan in light and dark;
@@ -211,8 +247,8 @@ state is `{}` apart from the named brand-artwork exemptions.
 
 ## 9. Steps (one ff-merged commit each, own worktree, no push, no build)
 
-1. `attention.ts` policy + tokens + `TurnPart` + guard at today's counts. No visual change.
-2. Pilot: note → secondary, live thought → first line, strip ▸, answered card → receipt.
+1. `attention.ts` policy + tokens + `attnProps` on the existing host nodes + guard at today's counts. No visual change.
+2. Pilot: note → secondary, in-phase live thought → first line, strip ▸, answered card → receipt, `failure` → know.
    Stop for Gawan's light/dark check.
 3. `turn_landing`: backend observer, block, frontend `landing` zone, end-card "shown above".
 4. Migrate every colour in the closure to tokens, file by file, `KNOWN` → `{}`.
@@ -220,6 +256,14 @@ state is `{}` apart from the named brand-artwork exemptions.
 
 ## 10. Review history
 
+- v2 → second fresh-context review: needs redesign. Taken: land trigger by the call's own
+  `tool_use_id` (v2's counter, incremented before the command runs, could be consumed by a
+  parallel result before the stamp existed and miss the land); `act` only with a control
+  (`failure` and Retry-less errors are `know`/`error`); compaction is outside the turn;
+  closure computed from the import graph, action note / streaming dot / content exemptions
+  added; `TurnPart` element replaced by attributes on the existing host nodes (no reparent);
+  first THINKING stays full, only the in-phase live thought shows one line; answered cards
+  keep their content; typed `Decision`; affected tests listed.
 - v1 (2026-10-25) → fresh-context review: needs redesign. Taken: two axes instead of one;
   boundary and completeness check over every rendered part, not a hand list; stateful tiers
   (answered card, compaction failure by action); guard over the whole render closure and all
