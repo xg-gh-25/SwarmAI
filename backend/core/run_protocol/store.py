@@ -4,6 +4,7 @@ Public symbols:
 - ``AuditStore`` — locked append/read access to one run's audit directory.
 - ``AuditPaths`` — canonical paths for the run and session audit layouts.
 - ``StoreError`` — fail-closed persistence or integrity failure.
+- ``LogDamaged`` — a damaged record (not a torn final line) in a run's event log.
 """
 from __future__ import annotations
 
@@ -26,6 +27,13 @@ _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 class StoreError(RuntimeError):
     """Audit data is unsafe, malformed, conflicting, or unavailable."""
+
+
+class LogDamaged(StoreError):
+    """A run's event log has a damaged record that is not a torn final line: it does
+    not parse, or the checksums / hash chain do not verify (S6-3, §3.3.5). The run
+    stops for a person and nothing more is appended. An OS error reading the file is
+    a plain ``StoreError``, not damage."""
 
 
 NEXT = object()   # ``append_new(ordinal=NEXT)``: the next ordinal, counted under the lock
@@ -180,13 +188,13 @@ class AuditStore:
             try:
                 item = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise StoreError(f"corrupt events line {number}: {exc}") from exc
+                raise LogDamaged(f"corrupt events line {number}: {exc}") from exc
             if not isinstance(item, dict):
-                raise StoreError(f"corrupt events line {number}: not an object")
+                raise LogDamaged(f"corrupt events line {number}: not an object")
             result.append(item)
         errors = ev.verify_chain(result, self.authority)
         if errors:
-            raise StoreError(f"invalid event chain: {errors[0]}")
+            raise LogDamaged(f"invalid event chain: {errors[0]}")
         return result
 
     def _discard_torn_tail(self) -> None:

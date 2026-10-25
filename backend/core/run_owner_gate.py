@@ -260,14 +260,36 @@ def _v1_run(command: dict) -> "tuple[Path, dict] | tuple[None, None]":
 
 def _unresolved(call: dict) -> str:
     """Why a command's --run-id names no readable run: none (or several) by that id,
-    or one whose event log cannot be read (S6-3: a damaged record stops the run)."""
+    one whose event log has a damaged record (S6-3: the run stops for a person), or
+    one whose log cannot be read for another reason."""
     from core.security_hooks import _pipeline_runs_root
     rid = call.get("run_id")
-    if isinstance(rid, str) and _RUN_ID_RE.fullmatch(rid) and len(list(Path(
-            _pipeline_runs_root()).glob(f"Projects/*/.artifacts/runs/{rid}/run.json"))) == 1:
-        return (f"run {rid}'s event log cannot be read (a damaged record), so the run "
-                "stops here; tell the user (a person has to look at it)")
-    return "Pipeline v1 command cannot resolve exactly one canonical --run-id"
+    if not isinstance(rid, str) or not _RUN_ID_RE.fullmatch(rid):
+        return "Pipeline v1 command cannot resolve exactly one canonical --run-id"
+    matches = list(Path(_pipeline_runs_root()).glob(
+        f"Projects/*/.artifacts/runs/{rid}/run.json"))
+    if len(matches) != 1:
+        return "Pipeline v1 command cannot resolve exactly one canonical --run-id"
+    if _log_damaged(matches[0].parents[3].name, rid):
+        return (f"run {rid}'s event log has a damaged record, so the run stops here; "
+                "tell the user (a person has to look at it)")
+    return f"run {rid} has no readable logged owner (its event log cannot be read)"
+
+
+def _log_damaged(project: str, run_id: str) -> bool:
+    """True only when reading the run's log raises ``LogDamaged``."""
+    from core.security_hooks import _pipeline_runs_root
+    from core.run_protocol.store import LogDamaged
+    try:
+        from config import get_app_data_dir
+        from core.run_protocol.engine import RunEngine
+        RunEngine.load(data_dir=get_app_data_dir(), workspace=_pipeline_runs_root(),
+                       project=project, run_id=run_id).owner_session()
+    except LogDamaged:
+        return True
+    except Exception as exc:  # noqa: BLE001 — any other unreadable state is not damage
+        logger.debug("run_owner_gate: run %s unreadable, not damaged: %s", run_id, exc)
+    return False
 
 
 def _signed_owner(project: str, run_id: str) -> "str | None":

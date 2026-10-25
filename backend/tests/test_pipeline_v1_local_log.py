@@ -95,6 +95,43 @@ def test_a_damaged_record_stops_the_run_for_a_person(rig):
     assert _log(r).stat().st_size == size, "nothing is appended to a damaged log"
 
 
+def test_damage_is_its_own_error_type_and_an_os_error_is_not_damage(rig, monkeypatch):
+    """The CLI and the gate tell damage apart by type, not by message text: a damaged
+    record raises LogDamaged; a file that cannot be read is a plain StoreError, and the
+    gate does not call it a damaged record."""
+    from pathlib import Path
+
+    from core import run_owner_gate
+    from core.run_protocol.store import LogDamaged, StoreError
+    r = rig()
+    r.create()
+    r.edit(Rig.CHANGE)
+    r.report_and_complete()
+    good = _log(r).read_bytes()
+    lines = good.splitlines(keepends=True)
+    lines[1] = lines[1].replace(b'"at":"', b'"at":"X', 1)
+    _log(r).write_bytes(b"".join(lines))
+    with pytest.raises(LogDamaged):
+        r.engine().owner_session()
+    _log(r).write_bytes(lines[0] + b"{not json\n" + b"".join(lines[2:]))
+    with pytest.raises(LogDamaged):
+        r.engine().owner_session()
+    _log(r).write_bytes(good)
+
+    real = Path.read_bytes
+
+    def unreadable(self):
+        if self.name == "events.jsonl":
+            raise PermissionError("denied")
+        return real(self)
+    monkeypatch.setattr(Path, "read_bytes", unreadable)
+    with pytest.raises(StoreError) as caught:
+        r.engine().owner_session()
+    assert not isinstance(caught.value, LogDamaged)
+    reason = run_owner_gate._unresolved({"run_id": r.run_id})
+    assert "damaged" not in reason and r.run_id in reason, reason
+
+
 def test_nothing_is_signed(rig):
     r = rig()
     r.create()

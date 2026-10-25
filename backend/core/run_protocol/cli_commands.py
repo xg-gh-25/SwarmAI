@@ -369,9 +369,8 @@ def run(args) -> "tuple[dict[str, Any], int]":
         failure = infra.find(exc)
         if failure is None:
             from core.run_protocol.oplock import RunBusy
-            from core.run_protocol.store import StoreError
-            if isinstance(exc, StoreError) and ("invalid event chain" in str(exc) \
-                                                or "corrupt events line" in str(exc)):
+            from core.run_protocol.store import LogDamaged
+            if isinstance(exc, LogDamaged):
                 # a damaged record (S6-3, §3.3.5): the run stops for a person; nothing
                 # more is written to its log
                 return {"ok": False, "code": "log_damaged", "error":
