@@ -4,7 +4,7 @@ date: 2026-10-24
 created: 2026-10-24
 updated: 2026-10-25
 project: SwarmAI
-status: draft v1.5（§9 已拍板；P0 实验 E1–E9 与两轮 skeptic 审查已完成，结论已并入 D1–D8；E10/E11 与 v1.5 改动的复审待做；失败测试未写）
+status: draft v1.6（§9 已拍板；E1–E11 与三轮 skeptic 审查已完成，结论已并入 D1–D8；D6 改为接管成普通发送，这一版待复审；失败测试未写）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -67,11 +67,11 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 
 | 不变量 | 来源 | steer 之后 |
 |---|---|---|
-| 一个会话同时只有一条进行中的活动 | chat-turn-liveness S1 | **不变**。并入的 steer 属于当前活动；回退成新 turn 时，要等上一条活动结束才认领（§4 D6） |
+| 一个会话同时只有一条进行中的活动 | chat-turn-liveness S1 | **不变**。并入的 steer 属于当前活动；回退成新 turn 时，上一条活动结束的那一刻把它接管成一次普通发送（§4 D6） |
 | 排队只在后端，前端不排 | chat-turn-liveness S3 | **不变**。忙时照常 POST，后端决定 steer 还是排队 |
 | 只在 CLI quiescent 时写 user 消息（I3） | `write_user_message` docstring、`quiescent` | **变**：新增一个例外，steer 在 turn 进行中写。I3 仍约束"开新 turn"的写入 |
 | 每条 user 消息拥有自己的 turn | `_open_turn` / `_on_echo` | **变**：并入的 steer 没有自己的 turn，只在当前 turn 里留一个落点 |
-| 写入后 claim 成为 `unit._turn_stream` | `write_user_message` | steer 写入**不得**替换 `_turn_stream`（它属于正在跑的 turn）；只有 D6 接手 steer 的 turn 时，才由 `begin_injected_turn` 把它设成 steer 的 claim，和任何新 turn 一样 |
+| 写入后 claim 成为 `unit._turn_stream` | `write_user_message` | steer 写入**不得**替换 `_turn_stream`（它属于正在跑的 turn）；只有 D6 把 steer 接管成普通发送时，才由发送路径把它设成 steer 的 claim，和任何新 turn 一样 |
 
 上一轮聊天里我说"steer 会改变 S3 的'同时只有一个进行中 turn'"，不准确：S1/S3 都不变，
 变的是 I3 和"消息拥有 turn"这两条。
@@ -84,8 +84,10 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 
 - 桌面 direct session（channel 照旧排队）；
 - unit 活着、有 stream reader、reader 没坏；
-- reader 有 open turn，且它属于用户正在看的那条活动：human turn、已被 sink 接手的 injected turn
-  （`started`），或 D6 已接手的 steer turn；
+- reader 有 open turn，且它是用户发起的 turn：human turn（含它的 leak / api_retry 续写），或 D6 已
+  接管成普通发送的 steer turn。**injected turn 一律不 steer，排队**（v1.6 收窄，C）：后台任务触发的
+  turn 和 steer 的交互（F6、H-a、M-e）是前三轮问题最多的地方，这一版整块拿掉。代价是 E4 那种场景
+  （后台任务回来后 CLI 自己开的 turn）不能 steer，只能排队；
 - reader 见过 CLI 的 session_state 帧（`_state_seen`）。不发这类帧的 CLI 由 `_close_turn` 直接
   `_mark_idle`，D3 的丢弃规则看不到 idle 与 running 的先后（H3）；
 - reader 里**没有别的等待中的 claim**（已写入但还没开 turn 的 continuation / 别的消息）。
@@ -98,7 +100,7 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 - 配置开关 `chat.steer_busy_send` 为真（P1 期间默认关，P2 前端上线后打开，§8）。
 
 判断时记下当前 open turn（`target_turn`），写进 claim。它只用来判断"写入时那条活动是否已经结束"
-（D3 丢弃规则、D6 接手时机），不决定消息并进哪个 turn（D3）。
+（D3 丢弃规则、D6 接管时机），不决定消息并进哪个 turn（D3）。
 
 **判断和登记之间不能有 await（H4）。** 顺序：`mark_steer_inflight`（异步 DB 写）→ 同一段同步代码里
 重新判断 D1、记 `target_turn`、`reader.claim` → 写 stdin。重判不通过 → `release_steer_to_pending`，
@@ -115,9 +117,9 @@ CLI 会把消息当下一轮（X7），由 D6 接住，不需要再判断一次�
 
 - 持有 `_client_io` 写（短暂，和 `send` 一样获取后释放）；
 - 按 D1 的顺序：先把 user 行转成 **steer 在途**状态（见下），再同步重判、
-  `reader.claim(uuid, "steer", target_turn=…, notif_mark=reader._notif_at_idle)`，claim 上记下这条
-  消息的 `client_id`。`notif_mark` 取上一次 idle 时的通知计数，而不是默认的当前计数（M5）：原 turn
-  里已经有后台任务结束时，CLI 下一个开的 turn 可能是那条通知的，不能先认成 steer 的（D3）；
+  `reader.claim(uuid, "steer", target_turn=…)`，claim 上记下这条消息的 `client_id` 和组装好的
+  content（D6 接管后重试要用）。`notif_mark` 用默认值（claim 时的通知计数）。v1.5 改成上一次 idle
+  时的计数，E11 证明是错的（D3）；
 - 消息带 `"priority": "next"`；content 和普通消息一样是 content list，图片照常（E5）；
   写入前先按下面"消息组装"拼好前缀；
 - **不设** `unit._turn_stream`；
@@ -133,34 +135,42 @@ CLI 会把消息当下一轮（X7），由 D6 接住，不需要再判断一次�
 | 状态 | 列 | 进入 | 离开 |
 |---|---|---|---|
 | steer 在途 | `sent = 0`，`claimed_at = 写入时间`，`pending_seq = NULL`，`metadata.steer = "inflight"` | D2 写入前 `mark_steer_inflight(id)` | `confirm_steer` / `release_steer_to_pending` |
-| 已并入 / 已开 turn | `sent = 1`，`created_at` 见 D4/D6，`claimed_at = NULL`，去掉 `metadata.steer`；并入时另记 `metadata.steered = true`（D7 标签） | 回显到达时，由 D6 的 steer 驱动方调 `confirm_steer(id, created_at, folded)`：一条 UPDATE，并推 live feed（M2，见下） | — |
+| 已回显、待接管 | 同"steer 在途"，另记 `metadata.steer = "echoed"`、`metadata.steer_echo_at` | 回显在一个新 turn 的开头（outcome `opened`），D6 还没接管：`mark_steer_echoed(id)` | D6 接管时 `confirm_steer` |
+| 已并入 / 已开 turn | `sent = 1`，`created_at` 见下，`claimed_at = NULL`，去掉 `metadata.steer`；并入时另记 `metadata.steered = true`（D7 标签） | `confirm_steer(id, created_at, folded)`：一条 UPDATE，并推 live feed（M2，见下） | — |
 | 转回排队 | `sent = 0`，`claimed_at = NULL`，新的 `pending_seq`，去掉 `metadata.steer` | `release_steer_to_pending(id)`：提交后自己调 `queued_while_busy` / drain kick（L2），并把 `unit._last_ui_block` 置空（L4） | 和排队消息一样由 drain 发出 |
 
-**每个有回显的出口都在回显那一刻确认（H5）。** v1.4 让 D4 的 writer 在处理标记项时 `confirm_steer`，
+**回显那一刻就留下持久的记号（H5）。** v1.4 让 D4 的 writer 在处理标记项时 `confirm_steer`，
 而 `reader_closed` 且已回显的分支根本不确认：这两条路上，行会一直停在 `sent = 0` + `claimed_at` +
 `steer = "inflight"`——历史里看不见（`sent = 0` 被过滤），`cleanup_expired` 不删它（`sqlite.py`
 只删 `sent IS NULL OR sent = 1` 的过期行），下次启动 `reopen_dangling_claims` 把它放回排队，消息
-就再发一次，可它已经在 CLI 的 transcript 里了。v1.5：reader 在 `_on_echo` 里同步回调 D6 的 steer
-驱动方（`on_steer_echo(uuid, folded)`），驱动方马上 `confirm_steer`，不等 writer、不等 turn 结束。
-`folded` 用回显时间，`opened` 用 D6 接手的时间（F7）。之后不管 turn 怎样结束，这条行都已经是
-`sent = 1`。
+就再发一次，可它已经在 CLI 的 transcript 里了。所以 reader 在 `_on_echo` 里同步回调
+`on_steer_echo(uuid, outcome)`，回调安排一次 DB 写，不等 writer、不等 turn 结束：
+
+- `folded`：`confirm_steer`，时间用回显时间。
+- `opened`：只写 `mark_steer_echoed`，行仍不显示。这时原 turn 还没写完它最后几行（E10：回显通常
+  比原活动结束早，中间隔着 metadata、RSS 检查、`writer.close`），用回显时间会排进原 turn 中间（F7）。
+  D6 接管时再 `confirm_steer`，时间用接管时间。
+
+回调在 reader 任务里同步运行，安排出去的写继承的是 reader 任务的 contextvars；
+`TRANSCRIPT_FEED_SUPPRESSED` 只在 `TurnWriter.write` 里设，reader 任务里不会有，所以 feed 不会被挡。
 
 **`confirm_steer` 要推 live feed（M2）。** live feed 只由 `db.messages.put/update` → `_report` 推出
 （`sqlite.py`）；`session_pending` 里的裸 SQL UPDATE 只经触发器改 rev，不推 `transcript_row`，别的
 tab 要到下一次 resync 才看见。所以 `confirm_steer` 写完调一次 `_report`（或走 `db.messages.update`）。
-驱动方不在 `TurnWriter.write` 里，`TRANSCRIPT_FEED_SUPPRESSED` 不会挡住它。
+确认由 `on_steer_echo` 安排的写或 D6 接管时执行，都不在 `TurnWriter.write` 里，`TRANSCRIPT_FEED_SUPPRESSED` 不会挡住它。
 
 `claimed_at` 非空让 `claim_pending_batch` 和 `cancel_unclaimed`（返回 `claimed`，和 D7"不可
 取消"一致）自然跳过它；`list_pending` / `count_pending` 加 `metadata.steer IS NULL` 过滤，steer
 在途的行只出现在 D5 的 `steering` 列表里。
 
-启动恢复：`reopen_dangling_claims` 先在同一个事务里把 `metadata.steer = "inflight"` 的行转回排队
-（分配 `pending_seq`），再清其余行的 `claimed_at`；后一条 UPDATE 排除 `metadata.steer IS NOT NULL`
+启动恢复：`reopen_dangling_claims` 先在同一个事务里处理 steer 行：`"echoed"` 的按已发处理
+（`sent = 1`，`created_at = steer_echo_at`：它已在 CLI 的 transcript 里），`"inflight"` 的转回排队
+（分配 `pending_seq`）；再清其余行的 `claimed_at`；后一条 UPDATE 排除 `metadata.steer IS NOT NULL`
 的行（L1）。现在它是一条 UPDATE 清掉所有 claimed 行（`session_pending.py`），先跑它会留下一条
 `pending_seq = NULL` 的排队行：`claim_pending_batch` 会取走它，`mark_sent_batch`（`pending_seq IN`）
 却永远翻不了它。依据 E7：进程在回显前死掉，`--resume` 时 CLI 不执行它、历史里也没有它，所以转回
-排队不会重复。剩余风险：回显已到、`confirm_steer` 那一次 DB 写还没完成时 daemon 崩溃，这条行会在
-重启后再发一次。窗口就是一次 UPDATE；`confirm_steer` 失败时记 ERROR 并重试一次，不转 pending。
+排队不会重复。剩余风险：回显已到、回显时的那一次 DB 写还没完成时 daemon 崩溃，这条行会在重启后再发一次。
+窗口就是一次 UPDATE；写失败时记 ERROR 并重试一次，不转 pending。
 
 **消息组装。** D1 的判断点在 `_run_conversation_impl` 里 `opener.open` 失败处，这时 content 还是
 用户原话加附件：正常发送要拼的前缀都在后面（`session_router.py` 发送路径），排队的消息则存下
@@ -178,9 +188,12 @@ tab 要到下一次 resync 才看见。所以 `confirm_steer` 写完调一次 `_
 
 `unit._delivered_query_prefix` 不只给 TSCC 用：每次回复结束时它被拼进 `system_prompt_metadata` 的
 `full_text`，System Prompt 弹窗和安全扫描面板都读它（`session_unit.py`）。steer 的 terminal 块是
-UNTRUSTED-DATA，不出现在扫描面板里就是之前 Gate-1 拦过的那类缺口（M7）。所以不覆盖
-`_delivered_query_prefix`，另加一个本 turn 的列表 `_steer_query_prefixes`，拼 `full_text` 时按顺序
-接在后面；turn 开始时随 `_reset_turn_state` 清空。为了不让两条路径各拼各的、日后走样，把发送路径里
+UNTRUSTED-DATA，不出现在扫描面板里就是之前 Gate-1 拦过的那类缺口（M7）。处理分两种：
+
+- 并入的 steer：不覆盖 `_delivered_query_prefix`，加进本 turn 的列表 `_steer_query_prefixes`，拼
+  `full_text` 时按顺序接在后面；turn 开始时随 `_reset_turn_state` 清空。
+- 接管成新 turn 的 steer（D6）：它的前缀就是这个新 turn 的前缀，接管时写进 `_delivered_query_prefix`
+  （在 `_reset_turn_state` 之后），和普通发送一样。v1.5 里它会被 reset 清掉，哪儿都看不到。为了不让两条路径各拼各的、日后走样，把发送路径里
 "附件转换 + terminal + UI-SENSE"这三步抽成一个函数，发送和 steer 都调它，T18 覆盖。
 
 **hook（E8）。** CLI 在并入的那一刻对 steer 触发 UserPromptSubmit（紧挨在回显之前），hook 返回的
@@ -202,7 +215,11 @@ steer（E7）一般不触发 hook，转回排队后由 drain 正常触发一次�
 回执：`accepted` 带 `steer: true`。同一 client_id 重复 POST 时（`send_requests` 幂等回执），在途的
 行也要回 `steer: true`、`queued: false`；现在的回执按 `queued: sent == 0` 算，会让前端显示成可取消的
 Queued，取消又返回 `claimed`（L3）。POST 到这里结束，后续都走订阅流（和排队一样，HTTP 断开
-不影响投递）。claim 的结果由一个服务端任务等待（D6），不挂在 HTTP 请求上。
+不影响投递）。之后由 reader 的回调和 D6 收尾，不挂在 HTTP 请求上。
+
+**谁负责没读到的 steer。** reader 在 steer claim 结束时同步回调 `on_steer_end(uuid, outcome,
+echo_seen)`。已被 D6 接管的 claim 由接管它的那次发送收尾（D6），回调不管；没被接管、也没回显的
+（`not_consumed`，或接管前进程就没了，比如原 turn 里按了 Stop）→ `release_steer_to_pending`。
 
 ### D3 reader：回显的新分支
 
@@ -214,19 +231,27 @@ Queued，取消又返回 `claimed`（L3）。POST 到这里结束，后续都走
 |---|---|---|
 | 就是这条 steer 自己的 turn（`cur.uuid == uuid`：上一轮已关，`init` 时 `_open_turn` 已把 claim 设成 open；X7/X8、E1、E6） | 现有分支 | `opened` |
 | 未被接手的 injected turn（F6：写入后有后台任务结束，CLI 先开了它） | 现有分支：转给 claim，steer 成为这个 turn 的主人 | `opened` |
-| 其他任何 open turn：human turn、已接手的 injected turn、D6 已接手的另一条 steer 的 turn | 从 `_claims` 移除，`echo_seen = True`，往 `_open` 放标记项 `SteerFolded(uuid, client_id)`（位置就是回显的位置），**不**设 `_merged` | `folded` |
+| 其他任何 open turn：human turn、已被 sink 接手的 injected turn、D6 已接管的另一条 steer 的 turn | 从 `_claims` 移除，`echo_seen = True`，往 `_open` 放标记项 `SteerFolded(uuid, client_id)`（位置就是回显的位置），**不**设 `_merged` | `folded` |
 
 第三行不再要求 open turn 等于 `target_turn`。v1.4 只对 `target_turn` 并入，其余情况掉进 `_merged`：
 在最终回复阶段连发两条 steer 时，CLI 把 S1 当下一轮，再在 S1 的 tool result 处并入 S2；S2 的
 `target_turn` 是原 turn，S1 的 turn 又不是 injected，S2 就被 merged 了。现在 S2 并进 S1 的 turn，
-由读 S1 这个 turn 的那一方（D6）写标记项。每次回显都同步回调 `on_steer_echo`（D2 确认）。
+由读 S1 这个 turn 的那一方（D6 接管后的普通发送）写标记项。每次回显都同步回调 `on_steer_echo`（D2）。
+
+D1 不再在 injected turn 里 steer，但 injected turn 仍可能在回显时是 open turn：steer 写在 human turn
+里，之后后台任务结束，CLI 先开了通知的 turn。所以表里第二、三行的 injected 情况保留。
 
 `_open_turn` 取"第一个 claim"时，steer claim 和普通 claim 一样按写入顺序排；这正是 CLI 读
-的顺序（X6、E6）。steer claim 的 `notif_mark` 是写入前最后一次 idle 时的通知计数（D2）：原 turn
-里有后台任务结束过，下一个 `init` 就先当作那条通知的 injected turn；如果 CLI 其实先跑了 steer，
-回显会落在这个还没被接手的 injected turn 里，按表里第二行转给 claim，结果一样正确。反过来用默认
-的当前计数时，通知的 turn 会被认成 steer 的，那段不相干的回复被存成 steer 的回答（M5）。
-CLI 实际先跑哪个，用 E11 确认。
+的顺序（X6、E6）。
+
+**`notif_mark` 用默认值（E11 撤回 v1.5 的改法）。** E11：原 turn 里后台任务结束，CLI 不单独开通知
+turn，而是在下一次 tool result 处把 `<task-notification>` 并进原 turn；前台 Bash 也发
+`task_started` / `task_notification`。所以一个普通 turn 里通知计数就会上涨，和"有没有通知 turn 排在
+前面"无关。v1.5 取上一次 idle 时的计数，会让 steer 自己的 `init` 永远被认成 injected turn（H-a）。
+默认值是 claim 时的计数：claim 之前的通知已经并进原 turn（E11）；claim 之后才结束的后台任务，CLI
+如果先开它的 turn，`init` 按 injected 处理，steer 的回显若落在里面就按表里第二行转过来。剩下没覆盖的
+情况：后台任务恰好在原 turn 写最终回复时结束（没有 tool result 可并入），CLI 先跑哪个没测，T22
+用两种顺序各测一遍。
 
 **子 agent（E2）。** 子 agent 跑着时写入，CLI 不在子 agent 内部的 tool result 并入，等父级的
 Agent tool result 返回后才并入，回显 `parent_tool_use_id = None`。D3 不需要排除子 agent 帧；
@@ -234,8 +259,8 @@ Agent tool result 返回后才并入，回显 `parent_tool_use_id = None`。D3 �
 
 **claim 的结束原因要能区分（F10）。** 现在 claim 以 `folded` 结束和以 end-of-stream
 `_fail_all(None)` 结束看起来一样。claim 结束时带显式 `outcome`：`folded`（并入）、`opened`
-（成了自己的 turn，D6 接手）、`not_consumed`（CLI 空闲没读）、`reader_closed`（reader 关闭 /
-进程没了，带 `echo_seen`）。D6 只按 `outcome` 分支。
+（成了自己的 turn，D6 接管）、`not_consumed`（CLI 空闲没读）、`reader_closed`（reader 关闭 /
+进程没了，带 `echo_seen`）。`on_steer_echo` / `on_steer_end` 和 D6 只按 `outcome` 分支。
 
 **steer claim 的丢弃规则（F2、H3）。** 现有规则只丢弃"登记后看到过 `running`"的 claim
 （`_abandon_unconsumed_claims`），因为写入时可能已经有一个 idle 在路上：那个 idle 在 CLI 读这条
@@ -243,14 +268,20 @@ Agent tool result 返回后才并入，回显 `parent_tool_use_id = None`。D3 �
 原 turn 结束时写入，帧可能是 Result → idle → running → init → 回显。v1.4 的规则"`target_turn`
 结束后第一个 idle 就丢"会在这里误丢，转回排队后 drain 再发一次，模型收到两遍。
 
-v1.5 的规则和现有规则同一个语义：`target_turn` 结束（`_close_turn`）时，还没回显的 steer claim
-记 `target_closed = True`，并清掉 `_running_seen`；之后**先看到 `running`、再到 `idle`**，也就是 CLI
-跑了别的东西又空闲了、始终没读它，才以 `not_consumed` 结束。只来 idle、没有 running 时继续等。
+规则和现有规则同一个语义：`target_turn` 结束时，还没回显的 steer claim 记 `target_closed = True`，
+并清掉 `_running_seen`；之后**先看到 `running`、再到 `idle`**，也就是 CLI 跑了别的东西又空闲了、
+始终没读它，才以 `not_consumed` 结束。只来 idle、没有 running 时继续等。E10 的实测帧序（Result →
+idle → running → init → 回显）在这条规则下不会误丢。
 
-"CLI 空闲、始终不读"这个状态本身靠 D6 兜住：那时 D6 已经接手了 steer 的 turn，读第一帧受现有的
-INIT_TIMEOUT 约束，到时走现有的超时路径（杀进程），claim 以 `reader_closed`、`echo_seen = False`
-结束，转回排队（E7：`--resume` 不会自己执行它）。不新加超时数字（STEERING #2）。D1 要求
-`_state_seen`，所以不发 session_state 帧的 CLI 不会走到这里。Result 边界上的帧序用 E10 确认。
+"`target_turn` 结束"指它的任何结束路径，不只 `_close_turn`（M-d）：CLI 在 turn 还开着时报 idle，
+reader 以 `TurnAbandoned` 结束它，不经过 `_close_turn`，并且先调 `_abandon_unconsumed_claims`
+（`cli_stream_reader.py`）。所以每条结束路径都先设 `target_closed`、清 `_running_seen`，再做丢弃
+检查；否则 turn 中途的 running（requires_action → running）会让 steer 被误丢，或者 `target_closed`
+永远不设、D6 永远不接管。
+
+"CLI 空闲、始终不读"靠 D6 兜住：那时 steer 已被接管成普通发送，读第一帧受现有的 INIT_TIMEOUT
+约束，超时后走普通发送的重试（D6）。不新加超时数字（STEERING #2）。D1 要求 `_state_seen`，所以
+不发 session_state 帧的 CLI 不会走到这里。
 
 **continuation 不和 steer 抢（F1，E6）。** leak continuation（`streaming_orchestrator.py`，
 `kind="leak"`）和 API 错误重试（`kind="api_retry"`）在 turn 结束时直接写一条消息，不检查别的
@@ -267,7 +298,10 @@ claim。如果这时有 steer claim 在等，E6 显示 CLI 按写入顺序先跑
 - api_retry：现在跳过 continuation 会往下掉进错误处理，`error_text` 取 `_api_error_text`，
   `_is_retriable_error` 为真，接着 raise、杀进程、`--resume` 重试（`streaming_orchestrator.py`
   api_error_continue 之后）。这时 steer 可能已经回显，就会撞上 H5 那类重复。所以跳过时显示这个 API
-  错误、按不可重试处理，unit 回到 IDLE，不 raise；steer 的 turn 本身就是这次重试。
+  错误、按不可重试处理，unit 回到 IDLE，不 raise；steer 的 turn 本身就是这次重试。检查要放在
+  `_api_error_wait`（5–15 秒）和 `_api_error_continuations += 1` 之前，不白等、不白占一次计数。
+  CLI 在一个 `is_error` 的 Result 之后会不会照常执行排着的 `next` 消息，E1–E11 都没测，补 E12。
+  如果不执行，steer 就会卡在 INIT_TIMEOUT，走 D6 的普通发送重试（重发一次 steer），不会丢。
 
 由 T12a / T12b 覆盖。
 
@@ -280,7 +314,7 @@ claim。如果这时有 steer claim 在等，E6 显示 CLI 按写入顺序先跑
 
 1. 把手上暂存的 tool result 先写进本 turn 最新的 assistant 行（`append_to_turn_row`），
    否则它们会被挂到 steer 之后的那一行，和 tool_use 分开；
-2. user 行的确认不在这里：回显那一刻驱动方已经 `confirm_steer`（D2）。writer 只处理 assistant 行；
+2. user 行的确认不在这里：回显那一刻 `on_steer_echo` 已经 `confirm_steer`（D2）。writer 只处理 assistant 行；
 3. 之后的 assistant 行改用 row_key `"{steer_client_id}-asst"`，也就是"这条 steer 消息的回复"。
    row_key 现在固定在 writer 上（`TurnWriter._row_key`），所以 writer 加 `switch_row_key(new)`；
    同时把 `unit._turn_row_key` 改成 `steer_client_id`（新字段，见下），让这一 turn 里之后的
@@ -292,12 +326,25 @@ claim。如果这时有 steer claim 在等，E6 显示 CLI 按写入顺序先跑
 **段的 key 单独放一个字段（H1）。** v1.4 直接改 `unit._turn_client_id`，下一帧就被改回去：router
 主循环每收到一个事件都执行 `if client_id and unit._turn_client_id != client_id:
 unit._turn_client_id = client_id`（`session_router.py`，`async for event in unit.send(...)` 循环里）。
-所以 `_turn_client_id` 保持 turn 的身份，不动；新加 `unit._turn_row_key`，turn 开始时等于
-`_turn_client_id`（`_reset_turn_state` 和 `begin_injected_turn` 里设），并入时改成 steer 的
-client_id。续写（`_continuation_client_id` 拼行 key 的那几处）和 Stop 回执写行时读
-`_turn_row_key`；发布信封里的 `turn_client_id` 仍由 `_turn_client_id` 得出，前端靠它认 turn（L5：
-续写现在发布 `{_turn_client_id}-asst`，并入后要保持这个值，不能跟着变成 `{steer}-asst`）。P1 逐个
-列出读 `_turn_client_id` 的地方，按"身份"还是"行"分到两个字段（AGENT R27，测试也算）。
+所以 `_turn_client_id` 保持 turn 的身份，不动；新加 `unit._turn_row_key`，并入时改成 steer 的
+client_id。
+
+它的取值（M-c）：`_reset_turn_state` 把 `_turn_client_id` 置成 None，human turn 的 id 要到 router
+主循环才写上，所以"turn 开始时等于 `_turn_client_id`"拿到的是 None。改成：`_reset_turn_state` 把
+`_turn_row_key` 也置 None；主循环写 `_turn_client_id` 的同一处，`_turn_row_key` 为 None 时也写成
+同一个值，已有值时不动（并入后的值不会被下一帧改回）；injected turn 由 `begin_injected_turn` 直接设。
+
+读 `_turn_client_id` 的地方逐个分（复审核对过源码）：
+
+| 位置（`session_router.py`） | 用途 | 改读 |
+|---|---|---|
+| 主循环的重写 | 写 turn 身份 | 身份；`_turn_row_key` 为 None 时一并写 |
+| Stop 的 `turn_stop-products` | 写行 | 行 key |
+| Stop 回执 `_persist_stop_receipt` | 写行 | 行 key |
+| `_continuation_client_id` | 同时给 TurnWriter 和 `_published_turn` | 拆开：writer 用行 key，发布用身份（L5：发布 `{_turn_client_id}-asst` 保持不变） |
+
+要跟着改的测试：`test_assistant_client_id_correlation`、`test_turn_stop`、`test_session_events_publish`、
+`test_pipeline_attention`（AGENT R27，测试也算消费方）。
 
 **跨段的 tool result（F5，已由实验排除）。** skeptic 担心 steer 之前发出的 tool_use，result 会在回显
 之后才到、落进新段。实测不会：子 agent（E2）和同一条消息里的并行调用（E9）都是整批 result 回来
@@ -321,7 +368,7 @@ ResultMessage 的用量、耗时、turn 结束事件仍属于原 turn，显示�
 POST 时间），排队时再由 `mark_pending_by_id` 转成 `sent = 0`。steer 写入后、回显之前，这条行
 如果是 `sent = 1`，任何一次非 streaming 的 reconcile（另一个 tab 开着同一会话、重载）都会按
 `created_at` 把它排进正在跑的 turn 中间，正是 `6a75af694` 修掉的排队错位。所以 steer 先把行转成
-D2 表里的"steer 在途"（`sent = 0`，不显示），回显时由驱动方 `confirm_steer` 一次改成
+D2 表里的"steer 在途"（`sent = 0`，不显示），回显时（并入）或接管时（回退，D6）由 `confirm_steer` 一次改成
 `sent = 1` + 时间。这条 UPDATE 改了 `sent`，也就触发
 `transcript_revs`（见 §5）。
 
@@ -337,53 +384,73 @@ turn 的 writer 可能还没写完它最后几行，按回显时间会把 steer 
   前端重连后据此恢复气泡状态（和现在的 `pending` 列表同一机制）。
 - 快照里当前 turn 带 `segments`（D4），前端重放按它清行。
 - 别的 tab 靠 transcript feed 看到 steer 行：`confirm_steer` 的 UPDATE 改了 `sent`，触发
-  `transcript_revs`（§5 已确认），并显式 `_report` 推出这一行（D2，M2）；它由驱动方执行，不在
+  `transcript_revs`（§5 已确认），并显式 `_report` 推出这一行（D2，M2）；它由 `on_steer_echo` 或 D6 接管执行，不在
   `TurnWriter.write` 里，不受 writer 内的 feed 抑制（F8）。
 
-### D6 回退成新 turn，以及兜底
+### D6 回退成新 turn：接管成一次普通发送
 
-**一个会话一个 steer 驱动方**，不是每条 steer 一个任务。它按写入顺序处理这个会话里还没结束的
-steer claim，做三件事：回显时确认 user 行（D2），在原活动结束时接手 steer 的 turn，按 D3 的
-`outcome` 收尾。
+v1.5 的 D6 另造了一个 turn 的主人（"steer 驱动方"，复用 `run_injected_turn`），第三轮审查在它身上
+又找出 3 个 HIGH、5 个 MEDIUM：接手条件和回显的先后对不上（H-a、H-b）、没回显的 steer 进了
+`read_with_recovery` 的 `--resume` 重试（H-c）、hub claim 记错任务（M-a）、显示成 injected turn
+（M-e）。根因相同：hub claim、重试、来源、行 key、Stop、续写这些，普通发送都已经有，新主人要一样样
+重接。v1.6 删掉这个新主人：**回退成新 turn 的 steer，就是一条"已经写进 stdin"的普通发送。**
+做法和 drain 一样：drain 用后台任务调 `run_conversation(..., _drained_pending=True)` 发一条排队消息，
+D6 用后台任务调 `run_conversation(..., _adopted_steer=adoption)` 发这条 steer，只是不再写 stdin。
 
-**接手的时机（H2、M4、M6）。** v1.4 等回显到了才去拿 turn，原 turn 结束到回显之间留出一个空档：
-unit 是 IDLE，没有 turn 看门狗，Stop 判为"没有在跑"，新消息走完整发送路径后掉进 pending。为补这个
-空档，v1.4 放宽了 `is_busy` / `has_background_work`，结果把 injected turn 的 sink 也挡住了：
-`_run_injected_turns` 一见 `is_busy` 就返回（`session_router.py`），而 injected turn 在等 sink 时
-本来就是 reader 的 open turn，于是每个后台任务触发的 turn 都只能缓冲到结束，里面要是提问，就永远
-结束不了。
+**什么时候接管（H-a、H-b）。** 在 `_published_turn` 的 `finally` 里，`turn_end` 发布之后、
+`take_waiters` 之前（hub 释放这个 turn 的同一段同步代码，中间没有 await）检查 reader。满足以下全部
+条件就接管：
 
-v1.5 不放宽任何判断，而是不留空档：`target_turn` 已结束、最早那条 steer 还没回显时，原活动一结束
-（hub 释放 turn 的那段同步代码里，中间不 await），驱动方就 `try_claim_turn`，再
-`begin_injected_turn(claim_ts, steer_client_id)`（IDLE → STREAMING），然后像 injected turn 一样读它：
-`run_injected_turn` 加一个 `opener` 参数和 steer 的 client_id，row_key `"{steer_client_id}-asst"`，
-帧在 claim 的 TurnStream 里缓冲，等待期间不丢。从这一刻起会话就是 STREAMING：
+- 有一条没结束的 steer claim（还没回显的，或者回显已到、outcome 是 `opened`、还没被接管的），
+  取写入顺序最早的那条；不看回显到没到（E10：回显通常比原活动结束早）；
+- unit 是 IDLE，没有 `_stopping`（Stop 回收中不接管，见 D8）；
+- reader 没有排着的、未被接手的 injected turn。有的话不接管，injected sink 照常先跑；它结束时
+  `_published_turn` 的 `finally` 再检查一次。这个条件在 sink 跑完那个 turn 之后一定变假（H-a 说的
+  "永远为真"出在用通知计数做条件，这里不用）。
 
-- `is_busy`、RSS 检查、TTL、eviction、release 都按"有 turn 在跑"对待，它们不用改；
-- Stop 判为 turn 在跑（`_interrupt_session` 看 STREAMING），"Stop & send now"有效；
-- 等第一帧受这个读取现有的 INIT_TIMEOUT 约束（`_compute_init_timeout`），CLI 卡住也有界；
-- 这时再来的消息：reader 的 open turn（`init` 之后就是这条 steer 的 claim）是 D6 已接手的
-  steer turn，按 D1 可以 steer 进去；`init` 之前 reader 没有 open turn，D1 判为排队。
+接管在同一段同步代码里完成：先用 `asyncio.ensure_future` 建好接管任务，再
+`try_claim_turn(session_id, turn_id, task=接管任务)`（新参数：claim 记的是接管任务，不是正在结束的
+那个 turn 的任务；M-a），再把 claim 标成 `adopted`。接管任务拿着这个已经 open 的 opener 进
+`run_conversation`。所以从原 turn 释放到 steer 的 turn 开始，hub 一直有主人：这期间 POST 来的消息
+`opener.open` 失败，按 D1 判断（open turn 是已接管的 steer turn，可以 steer；还没 `init` 时排队）。
 
-例外：reader 前面还排着别的 turn（未被接手的 injected turn，或 claim 的 `notif_mark` 之后又有
-通知），这时不接手，让 injected sink 先跑；那个 turn 结束的"活动结束"再试（M5）。万一 `try_claim_turn`
-失败（同步段之外有人先拿了 hub），那条消息过不了 `send()` 的 quiescence 闸、会转 pending，驱动方在
-下一次"活动结束"再试。
+**普通发送路径的"接管"模式（`_adopted_steer`）。** 和普通发送只差这几处，其余全部照旧：
 
-**按 outcome 收尾：**
+| 步骤 | 普通发送 | 接管模式 |
+|---|---|---|
+| user 行 | 写一条新行 | 不写，行已存在（在途 / 已回显） |
+| D1 判断、消息组装 | 做 | 不做：消息已经组装好、写出去了；它的前缀写进这个 turn 的 `_delivered_query_prefix`（D2） |
+| `opener.open` | 自己抢 hub | 用接管时已 open 的 opener |
+| `unit.send` 的 quiescence 闸 | 检查 | 跳过：reader 不 quiescent 正是因为这条 steer claim，它就是我们的 |
+| `unit.send` 里改写 query 的几步（self-heal 收尾、channel 收尾、hard floor、续接前缀、stop note） | 做 | 首次不做（消息已写出）；重试时照做 |
+| `_stream_response` 的 `write_user_message` | 写 | 首次不写，`unit._turn_stream = steer claim`；只用一次，重试时照常写 |
+| 发布 | `source="human"`，`turn_client_id` = 这条消息的 client_id | 一样，用 steer 的 client_id；row_key `"{steer_client_id}-asst"` |
+| user 行确认 | — | 接管时 `confirm_steer`（时间 = 接管时间，F7）：回显已到就立刻做，没到就等 `on_steer_echo` |
 
-| outcome | 处理 |
-|---|---|
-| `opened` | 帧进入 D6 已经在跑的读取，像普通 turn 一样写完。回显时驱动方已 `confirm_steer`，时间用接手时间（F7） |
-| `folded` | 并进了别人的 turn（human、已接手的 injected、另一条 steer 的 turn）。D4 由读那个 turn 的写入方处理；驱动方只在回显时确认 |
-| `not_consumed` | D6 已接手的话，安静结束这个 turn：不写行、不重试、回到 IDLE；`release_steer_to_pending`（它自己 kick drain） |
-| `reader_closed`，`echo_seen = False` | 进程在回显前没了（Stop 回收、崩溃、self-heal、INIT_TIMEOUT 杀进程）→ `release_steer_to_pending`，respawn 后由 drain 带 `--resume` 发出。E7：这时 CLI 的 transcript 里只有一条 `queue-operation` 入队记录，`--resume` 不执行它，模型历史里也没有它，所以不会重复 |
-| `reader_closed`，`echo_seen = True` | 回显时已确认，不转 pending。turn 由 D6 在读，`read_with_recovery` 的 `--resume` 续跑照常生效（H5：v1.4 里这时没人在读这个 turn，"由 `read_with_recovery` 处理"不成立） |
+**重试与收尾（H-c）。** 接管后这个 turn 的一切失败都走普通发送的 `_retry_with_resume`，它重发的是
+query 本身，不是 `read_with_recovery` 那句通用的"继续"提示：
 
-`not_consumed` 和 `reader_closed` 未回显这两种，驱动方的读取不能进 `read_with_recovery` 的重试：
-claim 结束时带的 outcome 让读取直接结束，不当成"流断了"去 `--resume`。
+- 没回显时进程没了或 INIT_TIMEOUT：`--resume` 后重发这条 steer。E7：没回显的消息不在 CLI 历史里，
+  所以只会被执行一次。v1.5 的"转回排队"同时存在就会重复，所以接管后的 claim 不再由 `on_steer_end`
+  转回排队（D2）。
+- 回显后进程没了：和普通消息在 turn 中途崩溃一样（重试重发原消息）。这不是 steer 特有的行为。
 
-drain 不会和回退抢：claim 还在 `_claims` 里时 `cli_quiescent` 为假，`drain_pending` 直接返回。
+接管任务结束时像 drain 一样收尾（`_finalize_pending_delivery` 的同一套判断）：见到过回答（有内容的
+assistant 事件）就确认 user 行，如果还没确认；没见到回答就结束了（Stop、不可重试的错误、
+`not_consumed`），而行还没确认 → `release_steer_to_pending`。不会出现"已确认却没回答"的悬空行：
+确认只在回显之后，而回显之后的失败由重试接着跑。
+
+**空档里的 RSS 检查（M-b）。** turn 结束后的 RSS 主动重启在原 turn 的 generator 里、IDLE 之后、接管
+之前运行（`streaming_orchestrator.py`），只看 `has_background_work`，看不到 steer claim；
+`compact()` 因 reader 不 quiescent 拒绝，但杀进程照样进行。改成：`not cli_quiescent` 时直接返回。
+这只是让 RSS 检查跳过，不放宽 `is_busy`。
+
+**v1.5 的空档问题怎样解决。** 接管之后 unit 是 STREAMING，hub 有 turn：`is_busy`、Stop、TTL、
+eviction、release、injected sink 都按"有 turn 在跑"对待，不用改。`is_busy` / `has_background_work`
+一行都不改（H2 不复发）。
+
+drain 不会和接管抢：claim 还在 `_claims` 里时 `cli_quiescent` 为假，`drain_pending` 直接返回；
+接管后 hub 有主人，drain 本来就不发。
 
 ### D7 前端
 
@@ -433,7 +500,7 @@ COLD（`session_unit.py` 的 PIT01 处理，`_crash_to_cold_async`），所以 E
 |---|---|---|
 | 已并入（`folded`） | 已结束 | 它是被停掉的那个 turn 的一部分，和那个 turn 一起停 |
 | 已写入、未回显 | `reader_closed`，`echo_seen = False` | 转 pending，回收完后由 drain 发出（E7：`--resume` 不会自己执行它） |
-| D6 已接手、还没回显 | `reader_closed`，`echo_seen = False` | 和上一行一样转 pending，回收完后发出 |
+| 已接管成普通发送、还没回显 | 接管任务以 Stop 结束、没见到回答 | 接管任务收尾时 `release_steer_to_pending`，回收完后发出（Stop 不重试，所以不会和重试重复） |
 | 回退成新 turn、已开始 | `reader_closed`，`echo_seen = True` | Stop 停的就是这个 turn，不再发 |
 
 第二行和现在排队消息的行为一致：Stop 不清排队（`interrupt_session` 不碰 pending），排队的消息在
@@ -456,7 +523,9 @@ SDK 0.2.168，CLI 2.1.301，Bedrock，开 replay。脚本 `/tmp/steer_script/exp
 | E6 | steer 在最终回复阶段写入（回退），再在 ResultMessage 时写 continuation | 两条按写入顺序各成一个 turn（`init 2` steer，`init 3` continuation），没有合并 | D3：continuation 和 steer 互相等的死锁成立，合并重复这次没出现；两者都由"有 steer claim 时不写 continuation"覆盖 |
 | E8 | 注册一个 UserPromptSubmit hook，第一个 tool_use 时写入 steer；hook 对含 steer 文字的 prompt 返回 additionalContext | hook 对初始消息和 steer 各触发一次；steer 那次在 tool result 之后、回显之前；模型同时照 steer 和 additionalContext 做了（回复 `DONE BANANA MANGO`） | D2 hook 一节：纠正检测等 hook 对 steer 照常生效 |
 | E9 | 同一条消息里并行两个 Bash（3 秒、12 秒），第一个 tool_use 时写入 | 两个 result 都回来之后才回显 | D4：没有跨段 tool result，删掉按 `tool_use_id` 回填 |
-| E7 | 写入 0.5 秒后（回显前）关闭客户端杀进程，再 `--resume` | transcript 只有一条 `queue-operation` 入队记录；`--resume` 后 20 秒无自发活动，模型列出的历史里没有这条消息 | D6/D8：回显前进程没了 → 转 pending 不会重复。只测了一个时间点 |
+| E7 | 写入 0.5 秒后（回显前）关闭客户端杀进程，再 `--resume` | transcript 只有一条 `queue-operation` 入队记录；`--resume` 后 20 秒无自发活动，模型列出的历史里没有这条消息 | D6/D8：回显前进程没了 → 转 pending（或接管后的重试重发）不会重复。只测了一个时间点 |
+| E10 | 在 ResultMessage 到达时写入（a），以及在随后的 idle 帧时写入（b）（`exp8.py e10a/e10b`） | 两次帧序相同：Result → idle → running → init → 回显 → 回复 → Result → idle。CLI 读了它；写入之后、读取之前可以先来一个 idle | D3 丢弃规则必须"running 之后的 idle"（H3）；D6 接管不能等"还没回显"（H-b） |
+| E11 | 原 turn 里起一个后台 Bash（3 秒），再跑一个前台 Bash（10 秒），然后写长回复；最终回复阶段写 steer（`exp8.py e11`） | 后台任务的 `<task-notification>` 在前台 Bash 的 tool result 处并进原 turn，没有单独的通知 turn；前台 Bash 也发了 `task_started` / `task_notification`；Result 之后直接 `init` → 回显 → steer 的 turn | 通知计数在普通 turn 里也会上涨 → 撤回 v1.5 的 `notif_mark` 改法（D3） |
 
 ### skeptic 审查
 
@@ -471,9 +540,9 @@ SDK 0.2.168，CLI 2.1.301，Bedrock，开 replay。脚本 `/tmp/steer_script/exp
 | F3 | HIGH | `sent = 0`、`pending_seq = NULL` 的行不被排队代码支持：会被 drain、显示成排队、能被取消删除、转 pending 静默失败 | D2 "steer 在途"状态 + T14 |
 | F4 | HIGH | 进程死掉时可能重复投递；`is_busy` / `has_background_work` 看不见 reader 里的 steer，间隙里的回收会杀掉 steer 的 turn | D6 按 `echo_seen` 分支；忙判断的扩展在 v1.5 撤掉，改成 D6 接手（G2）+ T15 |
 | F5 | HIGH | row_key 拆分漏了 `TurnWriter._row_key`、`_turn_client_id`（提问 / 权限续写、Stop 回执）、前端重放、跨段 tool result | D4 + T16/T17 |
-| F6 | MEDIUM | steer 可能并进一个 sink 还没接手的 injected turn | D1 记 `target_turn`，D3 只并入它 |
+| F6 | MEDIUM | steer 可能并进一个 sink 还没接手的 injected turn | D3：未接手的 injected turn 转给 claim（v1.5 起不再要求只并入 `target_turn`） |
 | F7 | MEDIUM | 回退成新 turn 时用回显时间，会排进原 turn 最后几行之前 | D4 时间规则 |
-| F8 | MEDIUM | `TurnWriter` 内的写入不推 live feed | 移出 writer；v1.5 改由 D6 驱动方在回显时确认（D2） |
+| F8 | MEDIUM | `TurnWriter` 内的写入不推 live feed | 移出 writer；改为回显时由 `on_steer_echo` 确认（D2） |
 | F9 | MEDIUM | D1 漏了中断中、重试中、别的 claim 等待中、self-heal 收尾；D6 唤醒方式未定义 | D1、D6 |
 | F10 | LOW | `folded` 与 end-of-stream 结束无法区分；用户 Stop 回收进程，E1 不适用 | D3 `outcome`、D8 |
 
@@ -493,15 +562,32 @@ H1–H6 和 M1–M4、M7 我在源码里复核过；其余是 reviewer 对照源
 | G6 | 跳过 continuation 后的收尾没区分 | M1（api_retry 跳过后会 raise、杀进程） | D3 continuation 规则 |
 | G7 | 前端重放把占位加在末尾 | M3（重放的第一段跑到 steer 气泡下面） | D4 前端重放 |
 
-G2 的改法是结构变化：D6 从"等回显再拿 turn"变成"原活动结束就接手"，`is_busy` /
-`has_background_work` 都不改了。这一块还没人审过，P0b 复审的重点就是它。
+G2 的 v1.5 改法（"原活动结束就接手"）在第三轮审查里又出了问题，见下一节。
 
-还要补的实验（P0b）：
+### skeptic 第三轮（v1.5，2026-10-25）与方向调整
+
+第三轮只审 v1.5，报 3 个 HIGH、5 个 MEDIUM、6 个 LOW。3 个 HIGH 我都在源码里复核过。三轮下来的规律：
+并入当前 turn 那条路比较干净，问题集中在"回退成新 turn"（D6）——它另造了一个 turn 主人，hub
+claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏一处。XG 拍板走 B+C（§9 第 5 条）：D6 改成
+接管成普通发送（B），injected turn 不 steer（C）。
+
+| # | 级别 | 问题 | v1.6 |
+|---|---|---|---|
+| H-a | HIGH | `notif_mark` 取上次 idle 的计数后，"有通知排在前面"永远为真；steer 的 turn 被转给 claim 后既没有 D6 读，也没有 sink 读，回复丢失 | `notif_mark` 回到默认值（E11）；接管条件改成"有未接手的 injected turn 排着"，sink 跑完就变假（D6） |
+| H-b | HIGH | 回显通常比原活动结束早（E10），"还没回显才接手"多数情况不触发 | 接管不看回显到没到（D6）；`opened` 的确认时间用接管时间，回显时先记 `echoed`（D2） |
+| H-c | HIGH | 没回显的 steer 进了 `read_with_recovery` 的 `--resume` 重试，发通用"继续"提示，再加上转回排队，重复 | 接管后走普通发送的重试，重发的是 steer 本身；接管后不再转回排队，收尾像 drain（D6） |
+| M-a | MEDIUM | `try_claim_turn` 记的是正在结束的那个任务，任务结束后 claim 被当过期丢掉 | 先建接管任务，`try_claim_turn(task=)`（D6） |
+| M-b | MEDIUM | turn 结束后的 RSS 检查仍在空档里杀进程 | `not cli_quiescent` 时跳过（D6） |
+| M-c | MEDIUM | human turn 的 `_turn_row_key` 在 `_reset_turn_state` 里拿到 None | 主循环在它为 None 时一并写（D4） |
+| M-d | MEDIUM | `target_closed` 只在 `_close_turn` 设，`TurnAbandoned` 路径漏了 | 每条结束路径都设，且在丢弃检查之前（D3） |
+| M-e | MEDIUM | 复用 `run_injected_turn` 让 steer 的 turn 显示成 injected，并带上后台任务那一行 | 不再复用，走普通发送，`source="human"`（D6） |
+| L | LOW | 接管的 steer 前缀被 reset 清掉；Stop 回收中不应接手；api_retry 检查要在等待和计数之前；`confirm_steer` 的 contextvars 说明写错了任务；§5 F6 行和 D3 矛盾 | D2、D6、D3、本节 F6 行 |
+
+还要补的实验：
 
 | # | 场景 | 要确认 |
 |---|---|---|
-| E10 | 在 ResultMessage 之后、idle 之前，以及 idle 之后各写一次 steer | 帧序是不是 Result → idle → running → init → 回显；CLI 会不会读它。决定 T21 的帧序 |
-| E11 | 原 turn 里有后台任务结束，之后在最终回复阶段写 steer | CLI 先跑通知的 turn 还是 steer 的 turn。决定 T22 的帧序；两种顺序 D3 都处理得了 |
+| E12 | API 错误的 Result（`is_error`）之后，排着的 `next` 消息会不会被执行 | 决定 T12b 的帧序；不执行时 steer 走 INIT_TIMEOUT 后的普通重试，不会丢 |
 
 代码确认：
 
@@ -523,26 +609,29 @@ G2 的改法是结构变化：D6 从"等回显再拿 turn"变成"原活动结束
 | T4 | reader：`target_turn` 结束后 CLI 跑了别的（running）又报 idle，steer 始终没回显 | claim 以 `not_consumed` 结束 → `release_steer_to_pending` → drain 发出，只发一次；reader 回到 quiescent。只有 idle、没有 running 时 claim 不结束 |
 | T5 | D1 判断表，每个条件单独为假 | 走排队，回执 `queued: true` |
 | T6 | 持久化：并入后 | user 行在回显时就是 `sent=1`、`created_at` = 回显时间（writer 还没处理标记项时也是）；之前暂存的 tool result 在前一行；之后的行 row_key = `{steer_cid}-asst`；重载顺序 = 直播顺序 |
-| T7 | 回退：上一活动未结束时 CLI 已开始 steer 的 turn | 上一活动结束的同步段里接手，unit 进 STREAMING；帧不丢；任意时刻只有一条活动 |
+| T7 | 回退：上一活动未结束时 CLI 已开始 steer 的 turn（回显已到，E10 顺序） | `_published_turn` 的 `finally` 里同步接管；hub claim 记的是接管任务，原 turn 的任务结束后 claim 仍在；帧不丢；任意时刻只有一条活动；发布的 `source` 是 human |
 | T8 | 写失败 | `drop_claim` + 转 pending，回执 `queued: true` |
 | T9 | `unit._turn_stream` | steer 写入前后不变 |
 | T10 | 前端：Waiting → Read during / Read after / Queued，及重连后按快照恢复 | 气泡从发出到读取不移动、不重挂；标签按 D7 表（Waiting 无 ✕，Queued 有 ✕ 和原因）；重载后只有并入的保留标签；无重复气泡；新段内容不写进旧段 |
 | T11 | 端到端（真实 CLI，可选，冒烟） | 两条 Bash 中间发"跳过第二条"，界面显示 steered，第二条没跑 |
-| T12a | leak continuation 时有未结束的 steer claim（F1，E6 帧序） | 不写 continuation；原 turn 正常结束；steer 的 turn 由 D6 接手；没有 `_merged`，没有重复行 |
-| T12b | api_retry continuation 时有未结束的 steer claim（M1） | 不写 continuation；显示 API 错误，不 raise、不杀进程、不 `--resume`；unit 回到 IDLE 后 D6 接手 steer 的 turn |
+| T12a | leak continuation 时有未结束的 steer claim（F1，E6 帧序） | 不写 continuation；原 turn 正常结束；steer 由 D6 接管；没有 `_merged`，没有重复行 |
+| T12b | api_retry continuation 时有未结束的 steer claim（M1） | 检查在 `_api_error_wait` 和计数之前；不写 continuation；显示 API 错误，不 raise、不杀进程、不 `--resume`；unit 回到 IDLE 后 D6 接管（帧序按 E12） |
 | T13 | tool-hang 看门狗中断、进程留着，steer 未回显（F2、H3） | 按 E1：steer 作为新 turn 执行，outcome `opened`；之后的发送不报 `SessionBusyError` |
 | T14 | user 行状态机（F3、G4 + XG 要求）：POST → steer 在途 → 并入 / 开 turn / 转 pending / 启动恢复 | 每一步的 `sent`、`claimed_at`、`pending_seq`、`metadata.steer`、`created_at` 按 D2 表；在途行不被 `claim_pending_batch` 取走、不出现在 `list_pending` / `count_pending`、`cancel_unclaimed` 返回 `claimed`；`reopen_dangling_claims` 先把在途行转成排队并分配 seq，再清其余行，不留 `pending_seq = NULL` 的排队行；转 pending 后 `mark_sent_batch` 能翻它；`release_steer_to_pending` 自己 kick drain 并清 `_last_ui_block`；`confirm_steer` 推一条 `transcript_row`；每个有回显的 outcome 结束后行都是 `sent = 1` |
-| T15 | 原 turn 结束到回显之间（F4、G2） | unit 是 STREAMING（D6 已接手），`is_busy` 为真，Stop 判为 turn 在跑；`is_busy` / `has_background_work` 的代码没改；`reader_closed` + `echo_seen` 时不转 pending |
+| T15 | 原 turn 结束到 steer 的 turn 开始（F4、G2、M-b） | 接管后 unit 是 STREAMING，`is_busy` 为真，Stop 判为 turn 在跑；`is_busy` / `has_background_work` 的代码没改；原 turn 结束后的 RSS 检查在 `not cli_quiescent` 时跳过、不杀进程 |
 | T16 | 并入后同一 turn 里出现 AskUserQuestion / 权限 / Stop 回执（F5、H1） | 续写的行用 `{steer_cid}-asst`，即使之后每帧主循环都在刷 `_turn_client_id`；发布的 `turn_client_id` 仍是原 turn 的 |
 | T18 | steer 的消息组装（G5） | 非原生附件（docx / 音频 / 视频）转成路径提示并存进 Attachments/；有终端上下文时带 UNTRUSTED-DATA 包装的 terminal 块；带 UI-SENSE 块（与上次相同时为 `UI_STATE_UNCHANGED`）；没有 recall 块；`_delivered_query_prefix` 不变，steer 的前缀进 `_steer_query_prefixes`、出现在 `full_text` 里；发送路径和 steer 调同一个组装函数 |
 | T17 | 前端：并入后中途重新订阅、重放（F5、M3） | 按 `segments` 清行，steer 之后那段只显示一次；重放的第一段在 steer 气泡之上 |
 | T19 | reader：最终回复阶段连写两条 steer，CLI 把 S1 当下一轮、在 S1 的 tool result 处并入 S2（H4） | S1 `opened`，S2 `folded` 进 S1 的 turn；无 `_merged`；每一帧只写一次 |
-| T20 | 没有 steer 时后台任务触发的 injected turn（H2 回归） | 照常实时渲染；turn 里提问能被回答，turn 能结束 |
+| T20 | injected turn（H2 回归、C） | 没有 steer 时照常实时渲染，turn 里提问能被回答、turn 能结束；injected turn 跑着时发的消息排队，`queued_reason = busy` |
 | T21 | reader：Result 边界写入，帧序按 E10（H3） | claim 不被 idle 丢弃，outcome `opened`，只投递一次 |
-| T22 | reader：原 turn 里有后台任务结束，之后写 steer，帧序按 E11（M5） | 通知的 turn 不被认成 steer 的；两种先后顺序下 steer 都只得到自己的回复 |
+| T22 | reader：原 turn 里有后台任务结束（E11 帧序：通知并进原 turn），之后写 steer；另测后台任务在最终回复阶段结束、CLI 先跑通知 turn 的顺序（H-a） | E11 顺序：Result 之后的 `init` 归 steer；另一顺序：通知 turn 按 injected 由 sink 先跑，跑完后接管 steer；两种顺序下 steer 都只得到自己的回复，没有无人读取的 turn |
+| T24 | 接管后没回显就 INIT_TIMEOUT / 进程没了（H-c） | 普通发送的重试重发 steer 一次，不发通用"继续"提示；不转回排队；回答只出现一次 |
+| T25 | 接管后、回显前按 Stop（D8） | 接管任务收尾时转回排队，回收完后发出一次 |
+| T26 | 接管任务的收尾（D6，drain 同一套判断） | 见到回答 → 行已确认；没见到回答就结束 → 未确认的行转回排队；已回显的不转 |
 | T23 | 在途行重复 POST（L3） | 回执 `steer: true`、`queued: false` |
 
-T1–T4、T7、T12a/b、T13、T19、T21、T22 用 fake 帧序列驱动 reader（按 X5–X8、E1–E11 的实测顺序），不依赖真实 CLI。
+T1–T4、T7、T12a/b、T13、T19、T21、T22、T24 用 fake 帧序列驱动 reader（按 X5–X8、E1–E12 的实测顺序），不依赖真实 CLI。
 每条测试回退对应改动后必须变红（AGENT R28）。
 
 ## 7. 不做什么
@@ -550,6 +639,8 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22 用 fake 帧序列驱动 reader（
 - **`priority: "now"`（停下改方向）。** X3 证明能在不杀进程的情况下中断并执行新消息，比现在的
   Stop（`interrupt` 后回收）轻。但它是另一个交互（按钮还是快捷键、和 Stop 的关系），单独设计。
 - **channel。** 多人同时往一个 turn 里 steer 会互相打断，channel 照旧排队。
+- **在 injected turn 里 steer（v1.6 收窄，C）。** 后台任务回来后 CLI 自己开的 turn 跑着时，新消息
+  排队。E4 证明 CLI 能接，以后要放开，先单独设计它和 injected sink 的交互。
 - **等待 AskUserQuestion / 权限时 steer。** 这时用户该回答问题。E3 证明 CLI 不会把这时写入的
   消息当成回答，以后想放开不需要改 reader；拒绝权限的路径要先补测。
 - **合并多条。** steer 每条单独写，不再像 drain 那样合并。
@@ -560,8 +651,8 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22 用 fake 帧序列驱动 reader（
 | 阶段 | 内容 | 上线条件 |
 |---|---|---|
 | P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7–E9），结论在 §5，已改 D1–D8 | — |
-| P0b | E10、E11；无上下文 reviewer 只审 v1.5 改动（重点 D6 接手时机）；然后把 T1–T9、T12a–T16、T18–T23 写成失败的测试 | 复审没有新的 HIGH |
-| P1 | 后端 D1–D6、D8，开关默认关 | T1–T9、T12a–T16、T18–T23 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
+| P0b | ~~E10、E11；复审 v1.5~~ 已完成，转成 v1.6。剩下：E12；无上下文 reviewer 只审 v1.6 改动（重点：普通发送的接管模式、`_published_turn` 里的接管时机、接管任务的收尾）；然后把 T1–T9、T12a–T16、T18–T26 写成失败的测试 | 复审没有新的 HIGH |
+| P1 | 后端 D1–D6、D8，开关默认关；P1a（D2 行状态，含 `echoed`）不依赖 D6，可以先做 | T1–T9、T12a–T16、T18–T26 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
 | P2 | 前端 D7；打开开关 | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
 | P3 | 观察一周后删开关 | 日志里 `steer_folded` / `steer_fell_back` / `steer_not_consumed` 计数无异常 |
 
@@ -573,6 +664,8 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22 用 fake 帧序列驱动 reader（
    变红）；改动跨 reader、router、writer，实现完后的 skeptic 审查不能省（§8 P1）。
 4. 另加：上线前把 steer 的 user 行状态机写成测试（T14）。排队消息排错位置的 bug（§10）根源就是
    user 行何时、以什么状态进入记录没有测试覆盖。
+5. （2026-10-25）第三轮审查后定 B+C：回退成新 turn 的 steer 接管成一次普通发送，不再另造 turn 主人；
+   injected turn 里不 steer（§5 第三轮、D6、§7）。
 
 ## 10. 已知问题（本设计之外）
 
@@ -588,6 +681,11 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22 用 fake 帧序列驱动 reader（
 
 ## 修订记录
 
+- 2026-10-25 v1.6：E10、E11 实测；第三轮 skeptic（审 v1.5）3 HIGH / 5 MEDIUM / 6 LOW。按 XG 定的 B+C：D6 改成
+  在 `_published_turn` 的 `finally` 里把 steer 接管成一次普通发送（`run_conversation(_adopted_steer=)`，像 drain
+  一样），删掉 v1.5 的 steer 驱动方；D1 不在 injected turn 里 steer；`notif_mark` 回到默认值；D2 加"已回显、待
+  接管"状态；D3 `target_closed` 覆盖所有结束路径；D4 `_turn_row_key` 的取值和读者表；RSS 检查在不 quiescent
+  时跳过。加 E12（待做）和 T24–T26，改 T7、T12b、T15、T20、T22。
 - 2026-10-25 v1.5：第二轮 skeptic（审 v1.2–v1.4）19 条，按成因分 G1–G7 并入（§5）。主要变化：D4 新字段
   `_turn_row_key`，不再改 `_turn_client_id`；D6 改成原活动结束就接手 steer 的 turn，`is_busy` /
   `has_background_work` 不再放宽；D3 steer 永不 `_merged`，丢弃规则要求 running 之后的 idle；D2 回显时
