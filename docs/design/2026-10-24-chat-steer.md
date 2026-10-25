@@ -747,10 +747,12 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱�
   `reset_turn_carry()` 之后才 `continue`，续写那一轮里若出现权限 / AskUserQuestion，续写流从新的空
   carry 绑定，和 D6 一节说的是同一个问题。现有行为，不在本设计里改；D6 自己不 reset，所以 steer 不受影响。
 
-- **`error_max_turns` 分支的"CLI 已退出"前提不成立（E13c）。** 分支注释说 CLI 在这个 Result 后以
-  exit code 1 退出，所以把 `_client`、`_wrapper` 置空、下次发送重新 spawn。现在的 CLI 不退出：报 idle，
-  流一直开着。置空之后那个进程和它的 stream reader 怎么收场没核对（可能留下一个还活着的 CLI，下次发送
-  再起一个）。现有行为，单独查；本设计只保证有 steer 时不走这个分支。
+- **`error_max_turns` 分支的"CLI 已退出"前提不成立（E13c），已修。** 分支以前把 `_client`、`_wrapper`
+  置空。E14（`/tmp/steer_script/exp10.py`）实测：置空引用、关 reader、gc 之后，CLI 进程 30 秒后仍活着，
+  SDK 的 `Query._read_messages` 任务一直持有 transport。生产里没人能收它：`unit.pid` 变成 None，RSS
+  检查和 kill 碰不到；孤儿回收只杀 ppid==1 的进程；它要留到 daemon 重启。修法是删掉那两行：这个分支
+  不把 `_last_turn_clean` 设为 True，下次发送走 poison guard，经 `_force_kill` 回收后带 `--resume`
+  重起，用户看到的行为不变。测试在 `test_turn_limit_reached.py`。
 
 ## 修订记录
 
