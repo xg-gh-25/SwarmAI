@@ -13,7 +13,9 @@ import { describe, it, expect } from 'vitest';
 import { steerChain } from './steerChain';
 import type { Message } from '../../types';
 
-const a = (id: string): Message => ({ id, role: 'assistant', content: [], timestamp: '' });
+const a = (id: string): Message => ({ id, role: 'assistant', content: [{ type: 'text', text: id }], timestamp: '' });
+/** a bubble the turn has not written into */
+const empty = (id: string): Message => ({ id, role: 'assistant', content: [], timestamp: '' });
 const u = (id: string, over: Partial<Message> = {}): Message =>
   ({ id, role: 'user', content: [], timestamp: '', metadata: { client_id: id }, ...over });
 const steer = (id: string, how: 'during' | 'after' = 'during') => u(id, { metadata: { client_id: id, steered: how } });
@@ -54,5 +56,17 @@ describe('steerChain', () => {
 
   it('a plain turn: nothing flagged', () => {
     expect(flags([u('q'), a('A'), u('q2'), a('B')], 'B')).toEqual({});
+  });
+
+  it('the turn\'s first bubble, empty when the steer was read: not the chain\'s head; live == reload', () => {
+    const live = flags([u('q0'), a('A0'), u('q'), empty('A'), steer('S1'), a('B')]);
+    const reload = flags([u('q0'), a('A0'), u('q'), steer('S1'), a('B')]);
+    expect(live.A).toEqual({ continued: true, afterSteer: false, headerLive: false });
+    expect(live.B).toEqual(reload.B);
+    expect(reload.B).toBeUndefined();          // B draws the turn's header
+  });
+
+  it('a new turn starts a new chain: an earlier turn\'s bubble is not its head', () => {
+    expect(flags([u('q0'), a('A0'), u('q'), steer('S1'), a('B')]).B).toBeUndefined();
   });
 });

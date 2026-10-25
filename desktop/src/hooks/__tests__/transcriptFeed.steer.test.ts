@@ -44,4 +44,17 @@ describe('the feed brings a read steer to every tab', () => {
   it('a user row without the label changes nothing in a tab that shows it', () => {
     expect(planTranscriptChange([bubble()], row({}), new Map())).toEqual([]);
   });
+
+  it('a read steer is not left Queued in a tab that still marked it queued', () => {
+    const [m] = apply([bubble({ isQueued: true, queuedReason: 'busy' })], row({ steered: 'during' }));
+    expect(m.isQueued).toBeFalsy();
+    expect(m.queuedReason).toBeUndefined();
+  });
+
+  it('a provisional bubble whose steer was never read still gets the full content', () => {
+    const [m] = apply([bubble({ metadata: { client_id: 'local-s', provisional: true } })], row({}));
+    expect(m.content).toMatchObject([{ type: 'text', text: 'the full steer text' }]);
+    expect(m.metadata?.provisional).toBeFalsy();
+    expect(m.metadata?.steered).toBeUndefined();
+  });
 });

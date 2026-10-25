@@ -277,6 +277,15 @@ describe('sendMessage while busy (the server queues it)', () => {
     expect(h.d.syncQueuedBadges).toHaveBeenCalledWith('A');
   });
 
+  it('a receipt that arrives after the session went idle makes nothing Waiting (the turn is over)', async () => {
+    const h = busy();
+    const p = sendMessage(h.d); h.attachmentsRead(); await p; await flush();
+    h.tabs.get('A')!._steerTurnEndAt = Date.now() + 1;     // idle came after this send
+    const [onEvent] = h.posts[0].handlers as [(e: unknown) => void];
+    onEvent({ type: 'accepted', queued: false, steer: true });
+    expect(h.tabs.get('A')!._steerLocal?.has('local-1') ?? false).toBe(false);
+  });
+
   it('T10l: a receipt after the read (the event came first) does not make it Waiting again', async () => {
     const h = busy();
     const p = sendMessage(h.d); h.attachmentsRead(); await p; await flush();

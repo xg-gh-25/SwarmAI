@@ -161,6 +161,7 @@ export async function sendWhileBusy(d: TurnControlDeps, tabId: string, text: str
   if (!tab._unsentRequests) tab._unsentRequests = new Map();
   tab._unsentRequests.set(clientId, request);
   let acceptedHere = false;
+  const sentAt = Date.now();
   const settle = () => {
     const t = d.tabs().get(tabId);
     if (!t) return;
@@ -192,7 +193,10 @@ export async function sendWhileBusy(d: TurnControlDeps, tabId: string, text: str
         // written into the running turn: Waiting until the server decides -- unless
         // its read already arrived (the CLI read it before this receipt came back)
         const read = st?.messages.some((m) => m.id === clientId && !!m.metadata?.steered);
-        if (rc.steer && !read) (t._steerLocal ??= new Map()).set(clientId, Date.now());
+        // nor once the session went idle after this send: the turn it was written
+        // into is over, the queue or the history has it
+        const ended = (t._steerTurnEndAt ?? 0) >= sentAt;
+        if (rc.steer && !read && !ended) (t._steerLocal ??= new Map()).set(clientId, Date.now());
       }
       d.syncQueuedBadges(tabId);
     },

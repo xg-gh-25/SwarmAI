@@ -29,7 +29,7 @@ export function resetTabToNewSession(
     _unsentRequests: undefined, _openSendCid: undefined,
     _serverQueue: undefined, _serverQueueAt: undefined, _serverQueueSeq: undefined,
     _serverQueueComplete: undefined, _serverQueueSid: undefined, _queuedLocal: undefined,
-    _steerLocal: undefined, _serverSteering: undefined, _serverQueuedReason: undefined, _turnSegments: undefined,
+    _steerLocal: undefined, _serverSteering: undefined, _serverQueuedReason: undefined,
     _preparingSend: undefined, _sendToken: undefined });
   tabNoticeStore.syncSession(tabId, undefined);
   return { reset: true, isActive: activeTabId === tabId };

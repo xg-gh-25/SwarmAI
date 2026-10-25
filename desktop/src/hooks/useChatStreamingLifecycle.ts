@@ -59,7 +59,7 @@ import type {
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
-import { shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, firstSteerOfTurn, computeDrainRetirement, healGraceExpiryVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
+import { shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, firstSteerOfTurn, segmentKeyOf, computeDrainRetirement, healGraceExpiryVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
@@ -1809,7 +1809,6 @@ export function useChatStreamingLifecycle(
       tab._steerLocal = undefined;
       tab._serverSteering = undefined;
       tab._serverQueuedReason = undefined;
-      tab._turnSegments = undefined;
     }
     tab._serverQueueSid = tab.sessionId;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
@@ -1890,9 +1889,9 @@ export function useChatStreamingLifecycle(
     tab._serverQueueAt = at;
     tab._serverQueueComplete = complete;
     // the steer fields come with the same snapshot (absent = none)
-    tab._serverSteering = steer?.steering ?? [];
+    // a list read before the session last went idle speaks for a turn that ended
+    tab._serverSteering = at < (tab._steerTurnEndAt ?? 0) ? [] : (steer?.steering ?? []);
     tab._serverQueuedReason = steer?.queuedReason;
-    tab._turnSegments = steer?.segments ?? [];
     const onList = new Set(list.filter((p) => !p.claimed && p.clientId).map((p) => p.clientId!));
     const listed = new Set(list.map((p) => p.clientId).filter(Boolean) as string[]);
     for (const [cid, acceptedAt] of [...(tab._queuedLocal ?? new Map()).entries()]) {
@@ -2053,10 +2052,15 @@ export function useChatStreamingLifecycle(
     scheduleTurnEndReconcile(tabState.sessionId, tabId);
     // post-disconnect mode ends with the turn (queued messages are the server's)
     tabState._postDisconnectUncertain = false;
-    // a steer still Waiting when its turn ends was not read in it: the queue or
-    // the history has it now (design 2026-10-25-chat-steer-frontend.md §4)
+    // a steer still Waiting when the session goes idle was not read in its turn:
+    // the queue or the history has it now (design 2026-10-25-chat-steer-frontend.md
+    // §4). A receipt or a list read from before this moment that arrives later
+    // must not make it Waiting again (_steerTurnEndAt), and the turn's segment
+    // target ends with it.
     tabState._steerLocal = undefined;
     tabState._serverSteering = undefined;
+    tabState._steerTurnEndAt = Date.now();
+    if (tabState._turnHandlers) tabState._turnHandlers.segmentTarget = undefined;
     const store = messageStoreRegistry.get(tabId);
     for (const m of store?.messages ?? []) {
       if (m.steerWaiting) store!.updateById(m.id, (x) => ({ ...x, steerWaiting: undefined }));
@@ -2548,9 +2552,6 @@ export function useChatStreamingLifecycle(
     tab._queuedLocal?.delete(cid);
     tab._steerLocal?.delete(cid);
     if (tab._serverSteering) tab._serverSteering = tab._serverSteering.filter((s) => s.clientId !== cid);
-    // the turn's segment keys as the backend has them: a replay clears them (§8)
-    const segs = (ev as { segments?: unknown }).segments;
-    if (Array.isArray(segs)) tab._turnSegments = segs.filter((k): k is string => typeof k === 'string');
     if (store.phase !== 'streaming') return;   // a Stop / the turn ended: the label only
     const handlers = turnHandlersOf(tab);
     const turnId = (ev as { turnId?: string }).turnId;
@@ -2561,7 +2562,16 @@ export function useChatStreamingLifecycle(
       if (seg && seg.role === 'assistant' && (seg.content?.length ?? 0) === 0) store.remove((m) => m.id === current);
     }
     const rowKey = ev.rowKey || `${cid}-asst`;
-    if (!store.messages.some((m) => m.id === rowKey)) {
+    // The segment as the tab may already show it: under its key, or -- once a
+    // reconcile or the feed brought its rows -- under a DB id with the key as its
+    // client_id. Only a replay reaches an existing one (a read opens it fresh); the
+    // backend re-sends the segment from here, so what it shows is dropped.
+    const shown = store.messages.find((m) => m.role === 'assistant' && segmentKeyOf(m) === rowKey);
+    let target = rowKey;
+    if (shown) {
+      target = shown.id;
+      if ((shown.content?.length ?? 0) > 0) store.updateById(shown.id, (m) => ({ ...m, content: [] }));
+    } else {
       const msgs = store.messages;
       const i = msgs.findIndex((m) => m.id === bubble.id);
       const placeholder: Message = { id: rowKey, role: 'assistant', content: [], timestamp: new Date().toISOString(),
@@ -2569,7 +2579,7 @@ export function useChatStreamingLifecycle(
       if (i < 0 || i === msgs.length - 1) store.append(placeholder);
       else store.insertBefore(msgs[i + 1].id, placeholder);
     }
-    handlers.segmentTarget = { turnId, byHost: { ...prev, [host]: rowKey } };
+    handlers.segmentTarget = { turnId, byHost: { ...prev, [host]: target } };
     if (tabId === activeTabIdRef.current) setMessages(store.getSnapshot());
   };
 
@@ -4663,11 +4673,10 @@ export function useChatStreamingLifecycle(
     // continuation's POST that same bubble). An empty bubble of this turn from an
     // earlier start (a replay) goes first.
     const hosts = source === 'injected' || continuation;
-    // The turn's segments (§8), as the snapshot or its user_steered events last
-    // gave them: only this turn's (the backend clears them at the next turn's
-    // start, so a list from an earlier turn starts with another key).
-    const known = tab._turnSegments ?? [];
-    const segments = cid && known[0] === cid ? known : [];
+    // A steer segment the tab shows is not removed here: the replay re-sends its
+    // user_steered, which reuses it, emptied (applySteerRead, §8). Removing by a
+    // list of segment keys removed the host itself once a reconcile had given it a
+    // DB id (review 2026-10-26), and needed the list to be this turn's.
     if (hosts) {
       store.remove((m) => m.role === 'assistant' && (m.content?.length ?? 0) === 0
         && (m.id === postBubble || m.id === `local-sub-${ev.turnId}`));
@@ -4685,13 +4694,6 @@ export function useChatStreamingLifecycle(
           (b.type === 'text' || b.type === 'thinking') ? { ...b, _confirmed: true } as typeof b : b),
       }));
       handlers.hostedTurn = { turnId: ev.turnId!, hostId: host.id, baseLen };
-      // the host keeps what it had (baseLen); the segments after it are rebuilt.
-      // A continuation's host can itself be a segment (the one the question
-      // was in): only the keys after it go.
-      const at = segments.indexOf(host.id);
-      const after = new Set(at >= 0 ? segments.slice(at + 1) : segments.filter((k) => k !== host.id));
-      if (after.size) store.remove((m) => m.role === 'assistant' && (after.has(m.id)
-        || (typeof m.metadata?.client_id === 'string' && after.has(m.metadata.client_id))));
     } else {
       handlers.hostedTurn = undefined;
     }
@@ -4701,12 +4703,9 @@ export function useChatStreamingLifecycle(
       // The replay rebuilds this turn from its start: drop what was shown of it —
       // its placeholder, the POST bubble when it is this tab's own send, and (for a
       // turn that is not a continuation) its persisted rows.
-      const segSet = new Set(continuation ? [] : segments);
       store.remove((m) => m.role === 'assistant' && (
         m.id === id || (!!postBubble && m.id === postBubble)
-        || (!continuation && !!cid && m.metadata?.client_id === cid)
-        || segSet.has(m.id)
-        || (typeof m.metadata?.client_id === 'string' && segSet.has(m.metadata.client_id))));
+        || (!continuation && !!cid && m.metadata?.client_id === cid)));
       const placeholder = {
         id, role: 'assistant', content: [], timestamp: new Date().toISOString(),
         metadata: {

@@ -54,4 +54,12 @@ describe('TabView — a steered turn', () => {
     expect(getByTestId('bubble-A2').getAttribute('data-flags')).toBe('false/true/false');
     expect(getByTestId('bubble-A2').getAttribute('data-streaming')).toBe('true');
   });
+
+  it('the turn\'s first bubble, still empty when the steer was read, is not painted (the history has no row)', () => {
+    messageStoreRegistry.getOrCreate('A').replace([msg('q', 'user'), { ...msg('A1', 'assistant'), content: [] },
+      msg('S', 'user', { steered: 'during' }), msg('A2', 'assistant')]);
+    const { queryByTestId, getByTestId } = render(<TabView {...props(true)} />);
+    expect(queryByTestId('bubble-A1')).toBeNull();
+    expect(getByTestId('bubble-A2').getAttribute('data-flags')).toBe('false/false/false');   // it has the header
+  });
 });

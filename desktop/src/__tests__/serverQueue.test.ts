@@ -321,6 +321,23 @@ describe('steer: Waiting comes from the receipt and the server, read from the ro
     expect(tab._serverSteering ?? []).toEqual([]);
   });
 
+  it('a list read before the session went idle makes nothing Waiting again; idle ends the segment target', async () => {
+    vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+    vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockImplementation(async () => [] as never);
+    const { hook, tab, store } = setup();
+    act(() => { store.appendMany([user('local-s')] as never); });
+    tab._turnHandlers = { ...(tab._turnHandlers ?? {}), segmentTarget: { turnId: 'T1', byHost: { h: 'local-s-asst' } } } as never;
+    act(() => { fake.emit(steerPush(2, [], [])); });                    // the turn runs
+    const before = Date.now() - 50;                                    // a poll sent before idle
+    const idle = steerPush(3, [], []);
+    Object.assign(idle.state, { streaming: false, state: 'idle', activity: 'idle', activity_seq: 9 });
+    await act(async () => { fake.emit(idle); await Promise.resolve(); });
+    expect(tab._turnHandlers?.segmentTarget).toBeUndefined();
+    act(() => { hook.current.applyServerQueue('Q', [], before, true,
+      { steering: [{ clientId: 'local-s', preview: 'x' }] } as never); });
+    expect(waiting(store)).toEqual([]);
+  });
+
   it('T10e: the queue reason follows the snapshot; none keeps the old label', () => {
     const { store } = setup();
     act(() => { store.appendMany([user('local-q')] as never); });

@@ -323,26 +323,36 @@ export function hostForInjectedTurn<M extends { id: string; role: string }>(
   return last && last.role === 'assistant' ? last : null;
 }
 
-/** The id of the first user bubble after a turn's own prompt that is a steer
- *  (read: ``metadata.steered``) or not sent yet (Waiting / queued): where a
- *  replay of that turn puts its first bubble (chat-steer frontend §8). The
- *  prompt is the user bubble ``turnClientId`` names (``{cid}-asst``), else the
- *  last user bubble that is neither. */
+/** A bubble's segment key (``{cid}-asst``): its client_id, which a reconcile keeps
+ *  when it gives the bubble the DB row's id; else its id. */
+export function segmentKeyOf(m: { id: string }): string {
+  const cid = (m as { metadata?: { client_id?: unknown } | null }).metadata?.client_id;
+  return typeof cid === 'string' && cid ? cid : m.id;
+}
+
+/** Where a subscription turn puts its first bubble (chat-steer frontend §8): the
+ *  first user bubble after the turn's own prompt (the one ``turnClientId``,
+ *  ``{cid}-asst``, names) that is a read steer or not sent yet (Waiting / queued);
+ *  for a turn whose prompt is not shown, the first of the unsent bubbles at the
+ *  bottom. Null: append. */
 export function firstSteerOfTurn(
   messages: readonly { id: string; role: string }[], turnClientId: string | undefined,
 ): string | null {
   const isSteer = (m: { id: string; role: string }) => m.role === 'user'
     && (isUnsentUser(m) || !!(m as { metadata?: { steered?: unknown } | null }).metadata?.steered);
   const own = turnClientId?.endsWith('-asst') ? turnClientId.slice(0, -5) : undefined;
-  let start = own ? messages.findIndex((m) => m.role === 'user'
+  const start = own ? messages.findIndex((m) => m.role === 'user'
     && (m.id === own || (m as { metadata?: { client_id?: unknown } | null }).metadata?.client_id === own)) : -1;
-  if (start < 0) {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'user' && !isSteer(messages[i])) { start = i; break; }
-    }
+  if (start >= 0) {
+    for (let i = start + 1; i < messages.length; i += 1) if (isSteer(messages[i])) return messages[i].id;
+    return null;
   }
-  for (let i = start + 1; i < messages.length; i += 1) if (isSteer(messages[i])) return messages[i].id;
-  return null;
+  // a turn without its own prompt here (injected, channel, a host not found):
+  // only the bubbles not sent yet at the bottom go below it -- a read steer above
+  // belongs to an earlier turn, whose rows come before this one's
+  let first: string | null = null;
+  for (let i = messages.length - 1; i >= 0 && isUnsentUser(messages[i]); i -= 1) first = messages[i].id;
+  return first;
 }
 
 /** A user bubble the CLI has not read yet: a Waiting steer or a queued message

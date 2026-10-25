@@ -5,7 +5,7 @@
  * into the bubble above it, not into a new one under it.
  */
 import { describe, expect, it } from 'vitest';
-import { hostForInjectedTurn } from '../streaming-guards';
+import { firstSteerOfTurn, hostForInjectedTurn } from '../streaming-guards';
 import type { Message } from '../../types';
 
 const a = (id: string): Message => ({ id, role: 'assistant', content: [], timestamp: '' });
@@ -20,5 +20,17 @@ describe('hostForInjectedTurn skips bubbles not sent yet', () => {
   it('a sent user message still starts a new bubble; a read steer is a sent one', () => {
     expect(hostForInjectedTurn([u('q'), a('A'), u('q2')], 'T', undefined)).toBeNull();
     expect(hostForInjectedTurn([u('q'), a('A'), u('S', { steerWaiting: true, metadata: { steered: 'during' } })], 'T', undefined)).toBeNull();
+  });
+});
+
+describe('firstSteerOfTurn: where a subscription turn puts its first bubble', () => {
+  it('after the turn\'s own prompt: its first read or unsent steer', () => {
+    expect(firstSteerOfTurn([u('p'), a('A'), u('S', { metadata: { steered: 'during' } }), a('B')], 'p-asst')).toBe('S');
+  });
+
+  it('a turn whose prompt is not shown never goes above a read steer of an earlier turn', () => {
+    expect(firstSteerOfTurn([u('p'), a('A'), u('S', { metadata: { steered: 'during' } })], 'injected-1-asst')).toBeNull();
+    expect(firstSteerOfTurn([u('p'), a('A'), u('S', { metadata: { steered: 'during' } }), u('Q', { isQueued: true })],
+      'injected-1-asst')).toBe('Q');
   });
 });

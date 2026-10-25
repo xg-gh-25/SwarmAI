@@ -183,7 +183,9 @@ describe('steer splits the turn into segments', () => {
     act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'T1' }); });
     seq = 0;
     h.emit({ type: 'turn_start', turnClientId: HOST });
-    expect(h.ids()).toEqual(['local-u', HOST, 'local-s']);           // the replay goes above the steer
+    // the replay goes above the steer; the steer's segment stays until its read
+    // comes again, which reuses it emptied
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'local-s-asst']);
     h.emit(text('first part'));
     h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
     h.emit(text('second part'));
@@ -209,6 +211,7 @@ describe('steer splits the turn into segments', () => {
     h.emit(text('first part'));
     h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
     h.emit(text('second part'));
+    h.emit({ type: 'turn_end' });               // the turn ended on its question
     // the answer to a question continues the turn: same client id, a new turn id
     const cont = { type: 'turn_start', turnId: 'T2', source: 'answer', turnClientId: HOST };
     h.emit(cont);
@@ -236,5 +239,50 @@ describe('steer splits the turn into segments', () => {
     h.emit({ type: 'turn_start', turnId: 'T3', turnClientId: 'local-n-asst' });
     expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'local-s-asst', 'local-n', 'local-n-asst']);
     expect(h.body('local-s-asst')).toContain('second part');
+  });
+
+  it('a continuation after the turn-end reconcile keeps its host and the segments before it', () => {
+    const h = setup([user('local-s', { steerWaiting: true })]);
+    h.emit(text('first part'));
+    h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
+    h.emit(text('second part'));
+    // the turn ends on a question; the turn-end reconcile gives the bubbles their DB ids
+    h.emit({ type: 'turn_end' });
+    act(() => { h.store().endStreaming(); h.store().replace(h.store().messages.map((m) => (m.role === 'assistant'
+      ? { ...m, id: `db-${m.id}`, metadata: { ...(m.metadata ?? {}), client_id: m.id } } : m))); });
+    h.emit({ type: 'turn_start', turnId: 'T2', source: 'answer', turnClientId: HOST });
+    expect(h.ids()).toEqual(['local-u', `db-${HOST}`, 'local-s', 'db-local-s-asst']);
+    h.emit({ ...text('third part'), turnId: 'T2' });
+    expect(h.body('db-local-s-asst')).toContain('second part');
+    expect(h.body('db-local-s-asst')).toContain('third part');
+    expect(h.body(`db-${HOST}`)).toContain('first part');
+  });
+
+  it('a replay after a missed read shows the segment once (it came under a DB id)', () => {
+    const h = setup([user('local-s', { steerWaiting: true })]);
+    h.emit(text('first part'));
+    // the read never reached this tab; the feed brought the steer's label and its segment's row
+    act(() => {
+      h.store().updateById('local-s', (m) => ({ ...m, steerWaiting: undefined, metadata: { ...m.metadata, steered: 'during' } }));
+      h.store().append({ id: 'db-seg', role: 'assistant', timestamp: '', content: [{ type: 'text', text: 'second part' }],
+        metadata: { client_id: 'local-s-asst' } } as Message);
+    });
+    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'T1' }); });
+    seq = 0;
+    h.emit({ type: 'turn_start', turnClientId: HOST });
+    h.emit(text('first part'));
+    h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
+    h.emit(text('second part'));
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'db-seg']);
+    expect(h.body('db-seg').match(/second part/g)?.length).toBe(1);
+  });
+
+  it('switch off: a replay goes above a queued message at the bottom (the history has no row for it yet)', () => {
+    const h = setup([user('local-q', { isQueued: true })]);
+    h.emit(text('first part'));
+    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'T1' }); });
+    seq = 0;
+    h.emit({ type: 'turn_start', turnClientId: HOST });
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-q']);
   });
 });

@@ -760,6 +760,10 @@ function TabViewImpl({
           if (msg.role === 'assistant'
             && msg.content.length === 0
             && msg.metadata?.turn_source === 'injected') return null;
+          // the turn's first bubble, empty when the CLI read a steer before it wrote
+          // anything: the history has no row for it (steerChain)
+          if (msg.role === 'assistant' && msg.content.length === 0
+            && steerFlags.get(msg.id)?.continued) return null;
           // Only pass isStreaming to the last assistant message.
           // Use lastAssistantIdx (not messages.length-1) so queued
           // user messages appended after the streaming assistant

@@ -187,15 +187,12 @@ turn 的用量、耗时、输出卡片只在最后一段：`result` 落在当时
   feed 推来的 user 行（`transcriptFeed.ts:99-104`）现在对已有气泡什么都不做；改成：行带
   `metadata.steered` 时，把它写到对应气泡上（任何 tab，漏了 `user_steered` 也能补上标签）；气泡是
   `metadata.provisional` 的，同时换成行的内容（preview 只有 200 字）。
-- **中途重新订阅（T17）。** `segments` 来自快照，存在 tab 上；快照没有这个字段就当 `[]`；只有
-  `segments[0] === ev.turnClientId`（都是 `{cid}-asst`）时才用它，否则它是上一个 turn 的（后端在 turn 结束后
-  不清它，到下一个 turn 才清）。`beginSubscriptionTurn` 两处改：
-  - 清行：非 host 路径清掉 `segments` 里所有 key 的 assistant 行；host 路径（续写、injected）只清 host 之后的
-    段（host 本身保留，照现有的 baseLen 规则；续写的 host 可能就是问题所在的那一段，所以按 host 在 `segments` 里的
-    位置往后清，不是从第二个开始清）。这样 §5 复用的占位一定是空的。
-  - 定位：占位插在这个 turn 第一个"还没发出或已读的 steer"user 气泡之前（Waiting、排队、`steered`），没有才
-    加在末尾。只看已读的 steer 不够：重连时 steer 可能还在 Waiting，占位会被放到它下面。
-  重放出来的 `user_steered` 再照 §5 切段。
+- **中途重新订阅（T17）。** 重放从 turn_start 重发整个 turn，其中包括每个 `user_steered`。`beginSubscriptionTurn` 不按
+  segments 列表删段：读到 steer 时（§5），已经显示的那一段（id 或 `client_id` 等于 `{cid}-asst`，reconcile 之后是 DB
+  id）被清空后复用，重放的内容写进去，所以每段只出现一次，漏收了读取事件的 tab 也一样。占位插在这个 turn 第一个
+  "还没发出或已读的 steer"user 气泡之前（Waiting、排队、`steered`）；这个 turn 的提问不在 tab 里时（injected 等），
+  只放到底部那些还没发出的气泡之上，否则加在末尾。
+  （2026-10-26 审查后改：原来按 `segments` 列表删段，reconcile 给 host 换成 DB id 之后，续写会把 host 自己删掉。）
 - **续写和 injected turn。** `hostForInjectedTurn` 现在只看最后一条消息是不是 assistant
   （`streaming-guards.ts:318-319`）。最后一条是 Waiting 或排队的 user 气泡时（问题出现前写的 steer 还在等），
   它会新建气泡加在 steer 气泡下面。改成跳过末尾处于 Waiting / Queued 的 user 气泡，再找 assistant

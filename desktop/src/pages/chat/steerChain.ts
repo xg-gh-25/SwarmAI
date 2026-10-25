@@ -36,8 +36,16 @@ export function steerChain(messages: readonly Message[], streamingId?: string): 
   let chainHead: string | null = null;
   for (let i = 0; i < ms.length; i += 1) {
     const m = ms[i];
+    // a user message that is not a read steer starts another turn: its chain too
+    if (m.role === 'user' && !isReadSteer(m)) chainHead = null;
     if (m.role !== 'assistant') continue;
     const continued = isReadSteer(ms[i + 1]);
+    // a bubble the turn never wrote into before the steer was read: the history has
+    // no row for it, so it is not shown (TabView) and not the chain's head
+    if (continued && (m.content?.length ?? 0) === 0) {
+      out.set(m.id, { continued: true, afterSteer: false, headerLive: false });
+      continue;
+    }
     // a segment with no earlier one shown (the history page starts at the steer)
     // keeps its header
     const afterSteer = isReadSteer(ms[i - 1]) && chainHead !== null;

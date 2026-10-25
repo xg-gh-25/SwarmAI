@@ -105,13 +105,15 @@ export function planTranscriptChange(
     // missed `user_steered`; a provisional bubble (built from the snapshot's
     // 200-char preview) takes the row's full content (chat-steer frontend §8).
     const steered = field(row.metadata, 'steered');
-    if (!steered) return [];
+    if (!steered && !held.metadata?.provisional) return [];
     return [{ kind: 'update', id: held.id, update: (m) => {
       const provisional = !!m.metadata?.provisional;
       const { provisional: _drop, ...meta } = (m.metadata ?? {}) as Record<string, unknown>;
-      return { ...m, steerWaiting: false,
+      // a read steer is neither Waiting nor queued in any tab
+      const read = steered ? { steerWaiting: false, isQueued: undefined, queuedReason: undefined } : {};
+      return { ...m, ...read,
         content: provisional ? msg.content : m.content,
-        metadata: { ...meta, steered } as Message['metadata'] };
+        metadata: { ...meta, ...(steered ? { steered } : {}) } as Message['metadata'] };
     } }];
   }
 
