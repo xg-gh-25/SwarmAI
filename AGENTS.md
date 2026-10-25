@@ -533,9 +533,9 @@ git worktree remove <scratch>/wt-<topic> && git branch -d <agent>/<topic>
   one by this very rule's author). A locked worktree is never pruned, so `--lock` at `add`
   protects yours from everyone else; `prunable` on someone else's worktree is not yours to
   fix. Only remove your own worktree, by its path, after `git worktree unlock`.
-- If it happens to you: copy your changed files out, `git branch -f <agent>/<topic>
-  <last commit>`, move the directory aside, `git worktree add --lock … <same path>
-  <agent>/<topic>`, copy the files back, commit at once.
+- If it happens to you, re-attach it in place, files untouched (the index is rebuilt from
+  HEAD, so staged edits come back unstaged): `python3 backend/scripts/worktree_reattach.py
+  <scratch>/wt-<topic> --branch <agent>/<topic>`. It comes back locked.
 
 - **Squash only from the merge base**: `git reset --soft $(git merge-base HEAD main)`, never
   `git reset --soft main`. The second keeps your worktree's old tree and commits it on top of
