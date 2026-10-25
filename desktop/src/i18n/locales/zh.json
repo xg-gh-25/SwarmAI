@@ -360,6 +360,11 @@
       "zone": {
         "agents": "Agents",
         "commands_one": "{{count}} command",
+        "calls_one": "{{count}} call",
+        "calls_other": "{{count}} calls",
+        "edits_one": "{{count}} edit",
+        "edits_other": "{{count}} edits",
+        "verb": { "explore": "Explored", "edit": "Edited", "run": "Ran" },
         "commands_other": "{{count}} commands",
         "done": "{{count}} done",
         "failedCall": "This call failed and the turn ended there:",

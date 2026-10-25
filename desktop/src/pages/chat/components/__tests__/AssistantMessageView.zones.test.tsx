@@ -48,6 +48,8 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 const th = (thinking: string): ContentBlock => ({ type: 'thinking', thinking }) as ContentBlock;
 const tx = (text: string): ContentBlock => ({ type: 'text', text }) as ContentBlock;
+const edit = (id: string, path: string): ContentBlock =>
+  ({ type: 'tool_use', id, name: 'Edit', summary: `Editing ${path}`, category: 'edit', display: { tool: 'Edit', object: path, key: `e-${path}` } }) as ContentBlock;
 const bash = (id: string, cmd: string): ContentBlock =>
   ({ type: 'tool_use', id, name: 'Bash', summary: `Running: ${cmd}`, category: 'bash' }) as ContentBlock;
 const tr = (id: string, isError = false): ContentBlock =>
@@ -117,11 +119,13 @@ describe('AC2 — notes stay in their group', () => {
     expect(note.textContent).toContain('Build is green, now the review.');
   });
 
-  it('a thought between calls stays inside its group', () => {
+  it('a thought between calls stays inside its group (carried into the merged strip, spec §3.1 2026-10-25)', () => {
     render(view(turn, false));
     const first = screen.getAllByTestId('zone-phase')[0];
     fireEvent.click(within(first).getByTestId('group-toggle'));
-    expect(within(screen.getAllByTestId('zone-phase')[0]).getByText(/so the store writes/)).toBeTruthy();
+    const phase = screen.getAllByTestId('zone-phase')[0];
+    fireEvent.click(within(within(phase).getByTestId('tool-strip')).getAllByRole('button')[0]);
+    expect(within(phase).getByText(/so the store writes/)).toBeTruthy();
   });
 
   it('a thought is one ✻ Thought row in the strips’ column; the one being written shows its first line, not all of it', () => {
@@ -374,7 +378,8 @@ describe('AC4 — one light strip per call', () => {
       category: 'mcp', display: { tool: 'email_search', object: 'q=launch', key: 'k1' } } as ContentBlock;
     const disp = { type: 'tool_use', id: 'd', name: 'Bash', summary: 'Running: python3 x.py --run-id ru',
       category: 'bash', display: { tool: 'Bash', object: 'python3 x.py --run-id run_d91fc178 --mode verify', key: 'k2' } } as ContentBlock;
-    render(view([tx('I read it as X.'), mcp, tr('m'), bash('e', 'make broken'), tr('e', true), disp, tr('d')], true));
+    // a note between the two commands keeps them apart (commands of one kind merge, §3.1)
+    render(view([tx('I read it as X.'), mcp, tr('m'), bash('e', 'make broken'), tr('e', true), tx('Retrying.'), disp, tr('d')], true));
     const strips = screen.getAllByTestId('tool-strip');
     expect(strips.map((s) => s.getAttribute('data-tool'))).toEqual(['email_search', 'Bash', 'Bash']);
     expect(within(strips[2]).getByRole('button').getAttribute('title')).toBe('python3 x.py --run-id run_d91fc178 --mode verify');
@@ -383,11 +388,12 @@ describe('AC4 — one light strip per call', () => {
     expect(strips[1].textContent).not.toContain('✕');
   });
 
-  it('identical commands merge as ×N; different commands do not', () => {
-    render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), tr('b'), bash('c', 'make lint'), tr('c'), tx('ok')], false));
+  it('identical commands merge as ×N; commands of one kind merge as Ran; an Edit stays its own row', () => {
+    render(view([tx('go'), bash('a', 'make'), tr('a'), bash('b', 'make'), tr('b'), edit('e', '/p/a.ts'), tr('e'),
+      bash('c', 'make lint'), tr('c'), bash('d', 'npm test'), tr('d'), tx('ok')], false));
     fireEvent.click(screen.getByTestId('group-toggle'));
     const tools = screen.getAllByTestId('strip-tool').map((s) => s.textContent);
-    expect(tools).toEqual(['Bash ×2', 'Bash']);
+    expect(tools).toEqual(['Bash ×2', 'Edit', 'Ran']);
   });
 
   it('Result is a structured reading region without a private width or font class', () => {

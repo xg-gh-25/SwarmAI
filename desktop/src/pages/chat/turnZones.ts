@@ -524,39 +524,127 @@ export interface StripItem {
   /** `tu-<first call id>`: the strip keeps its element while later calls join it. */
   key: string;
   steps: ToolStep[];
-  /** A merged Read / Grep / Glob: its distinct objects (file names for paths). */
+  /** A merged row: its distinct objects (file names for paths). */
   objects: string[];
+  /** Set only when finished thoughts were carried in: the calls and those thoughts in
+   *  stream order, which the opened row lists. */
+  seq?: Array<ToolStep | ThoughtUnit>;
 }
 
+/** What a call does, for merging: reading (Read / Grep / Glob, a read-only Bash),
+ *  editing (Edit / Write), running (any other Bash). Other tools have no kind and merge
+ *  only with identical input. */
+export type StripKind = 'explore' | 'edit' | 'run';
+
+const EXPLORE_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS']);
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const LISTS = new Set(['Read', 'Grep', 'Glob']);
+/** Programs that only read. A program not here, or one of these used to write, makes
+ *  the command a run. */
+const READ_PROGRAMS = new Set([
+  'cat', 'head', 'tail', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'ls', 'nl', 'tree', 'file', 'stat',
+  'du', 'pwd', 'echo', 'printf', 'true', 'sort', 'uniq', 'cut', 'tr', 'jq', 'diff', 'comm',
+  'basename', 'dirname', 'realpath', 'which', 'column', 'cd', 'sed', 'find', 'git',
+]);
+const READ_GIT = new Set(['status', 'log', 'diff', 'show', 'grep', 'blame', 'ls-files', 'rev-parse', 'merge-base', 'branch']);
+
+/** A Bash command that only reads: every segment (split on `&&` `||` `;` `|` newline)
+ *  runs a READ_PROGRAMS program, with no redirect into a file, no heredoc, no command
+ *  substitution, `sed` only with `-n` and never `-i`, `find` without an action, `git`
+ *  only with a reading subcommand (`branch` without a flag that changes it). */
+export function isReadOnlyCommand(cmd: string): boolean {
+  const c = cmd.replace(/\d?>&\d/g, '').replace(/&?\d?>\s*\/dev\/null/g, '');
+  if (!c.trim() || /[>`]|<<|\$\(/.test(c)) return false;
+  const parts = c.split(/&&|\|\||[;|\n]/).map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return false;
+  return parts.every((part) => {
+    const words = part.split(/\s+/);
+    const prog = (words[0] ?? '').split('/').pop() ?? '';
+    if (!READ_PROGRAMS.has(prog)) return false;
+    if (prog === 'sed') return words.includes('-n') && !words.some((w) => /^-[a-zA-Z]*i/.test(w) || w.startsWith('--in-place'));
+    if (prog === 'find') return !words.some((w) => /^-(exec|execdir|delete|ok|okdir|fprint\w*|fls)$/.test(w));
+    if (prog === 'git') {
+      const sub = words.slice(1).find((w) => !w.startsWith('-'));
+      if (!sub || !READ_GIT.has(sub)) return false;
+      return sub !== 'branch' || !words.some((w) => /^-(d|D|m|M|c|C|f)$|^--(delete|move|copy|force|set-upstream)/.test(w));
+    }
+    return true;
+  });
+}
+
+export function stripKind(s: ToolStep): StripKind | null {
+  const name = s.block.name;
+  if (EXPLORE_TOOLS.has(name)) return 'explore';
+  if (EDIT_TOOLS.has(name)) return 'edit';
+  if (name === 'Bash') return isReadOnlyCommand(stripView(s.block).object) ? 'explore' : 'run';
+  return null;
+}
+
+const objectOf = (s: ToolStep) => { const v = stripView(s.block); return v.file ?? v.object; };
+
+/** The old rule: one tool, identical input, or adjacent Read / Grep / Glob of one tool. */
+function sameTool(a: ToolStep, b: ToolStep): boolean {
+  const x = stripView(a.block);
+  const y = stripView(b.block);
+  return x.tool === y.tool && (x.mergeKey === y.mergeKey || LISTS.has(b.block.name));
+}
 
 /**
- * Adjacent calls as strips: one tool with identical input merges (`Bash ×3`); adjacent
- * Read / Grep / Glob of one tool merge with their distinct objects. A failed, running,
- * waiting or unfinished call, an Agent, and a call that has not settled yet
- * (`settled(id)` false — it just finished) stay alone.
+ * A column of a phase (calls and the thoughts between them, stream order) as rows.
+ * Adjacent calls merge when both have settled (`settled(id)`: finished and past the
+ * fold delay) and they have one kind, or one tool with identical input. A failed call
+ * joins like any other (strips carry no failure mark). A running, waiting or cut call,
+ * an Agent, and a call that has not settled stay alone. A thought between two calls
+ * that merge is carried into the merged row (`seq`); a thought with no settled call
+ * after it, the one being written included, stays its own row.
  */
-export function mergeStrips(steps: ToolStep[], settled: (id: string) => boolean): StripItem[] {
-  const out: StripItem[] = [];
-  const mergeable = (s: ToolStep) => s.status === 'done' && s.block.name !== 'Agent' && s.block.name !== 'Task' && settled(s.block.id);
-  const objectOf = (s: ToolStep) => { const v = stripView(s.block); return v.file ?? v.object; };
-  for (const s of steps) {
-    const prev = out[out.length - 1];
-    if (prev && mergeable(s) && prev.steps.every(mergeable)) {
-      const a = stripView(prev.steps[0].block);
-      const b = stripView(s.block);
-      const same = a.tool === b.tool && a.mergeKey === b.mergeKey;
-      const list = a.tool === b.tool && LISTS.has(s.block.name);
-      if (same || list) {
-        prev.steps.push(s);
-        const o = objectOf(s);
-        if (!prev.objects.includes(o)) prev.objects.push(o);
-        continue;
-      }
+export function mergeColumn(entries: Array<ToolStep | ThoughtUnit>, settled: (id: string) => boolean): Array<StripItem | ThoughtUnit> {
+  const out: Array<StripItem | ThoughtUnit> = [];
+  const mergeable = (s: ToolStep) => (s.status === 'done' || s.status === 'error')
+    && s.block.name !== 'Agent' && s.block.name !== 'Task' && settled(s.block.id);
+  let last: StripItem | null = null; // the strip the next call may join
+  let held: ThoughtUnit[] = [];      // thoughts after `last`, waiting for the next call
+  const release = () => { out.push(...held); held = []; };
+  for (const e of entries) {
+    if (e.kind === 'thought') {
+      if (last) held.push(e); else out.push(e);
+      continue;
     }
-    out.push({ key: `tu-${s.block.id}`, steps: [s], objects: [objectOf(s)] });
+    const prev = last?.steps[0];
+    const join = last && prev && mergeable(e) && last.steps.every(mergeable)
+      && ((stripKind(prev) !== null && stripKind(prev) === stripKind(e)) || sameTool(prev, e));
+    if (join && last) {
+      if (held.length) { last.seq = [...(last.seq ?? last.steps), ...held]; held = []; }
+      last.steps.push(e);
+      if (last.seq) last.seq.push(e);
+      const o = objectOf(e);
+      if (!last.objects.includes(o)) last.objects.push(o);
+      continue;
+    }
+    release();
+    last = { key: `tu-${e.block.id}`, steps: [e], objects: [objectOf(e)] };
+    out.push(last);
   }
+  release();
   return out;
+}
+
+/** Calls only (a sub-agent's own calls): `mergeColumn` without thoughts. */
+export function mergeStrips(steps: ToolStep[], settled: (id: string) => boolean): StripItem[] {
+  return mergeColumn(steps, settled) as StripItem[];
+}
+
+const VERBS: Record<StripKind, string> = { explore: 'Explored', edit: 'Edited', run: 'Ran' };
+
+/** How a merged row is named: one tool with no thought carried keeps `Tool ×N`;
+ *  otherwise the kind's verb with the counts. `verb` is undefined for a lone call. */
+export function stripLabel(item: StripItem): { verb?: string; kind?: StripKind; calls: number; thoughts: number } {
+  const calls = item.steps.length;
+  const thoughts = item.seq ? item.seq.length - calls : 0;
+  const kind = stripKind(item.steps[0]) ?? undefined;
+  const oneTool = item.steps.every((s) => sameTool(item.steps[0], s));
+  if (calls < 2 || (oneTool && thoughts === 0) || !kind) return { calls, thoughts, kind };
+  return { verb: VERBS[kind], kind, calls, thoughts };
 }
 
 /** An interrupt the user has not answered yet sits in this zone list (the stage holding

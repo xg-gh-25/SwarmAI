@@ -72,8 +72,9 @@ function grid(c: HTMLElement) {
       ...all('[data-testid="zone-stage-result"]').map((r) => columnOffset(r.children[0].children[1], root)),
     ],
     work: [
-      ...all('[data-testid="tool-strip"] > button').map((b) => columnOffset(b, root)),
-      ...all('[data-testid="thought-toggle"]').map((b) => columnOffset(b, root)),
+      // a merged strip's opened rows (its calls and the thoughts carried in) are its detail
+      ...all('[data-testid="tool-strip"] > button').filter((b) => !b.closest('[data-testid="strip-detail"]')).map((b) => columnOffset(b, root)),
+      ...all('[data-testid="thought-toggle"]').filter((b) => !b.closest('[data-testid="strip-detail"]')).map((b) => columnOffset(b, root)),
       ...all('[data-testid="agents-panel"]').map((p) => columnOffset(p, root)),
     ],
     // a row's own opened body, whichever kind of row it belongs to

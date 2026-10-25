@@ -33,7 +33,8 @@ describe('streaming render cost', () => {
     };
 
     const calls: ContentBlock[] = [];
-    for (let i = 0; i < 80; i++) calls.push(bash(`b${i}`, `grep -n thing${i} src`), tr(`b${i}`));
+    // reads and commands alternate, so no two adjacent calls merge: 80 rows (spec §3.1)
+    for (let i = 0; i < 80; i++) calls.push(bash(`b${i}`, i % 2 ? `make thing${i}` : `grep -n thing${i} src`), tr(`b${i}`));
     const base = [tx('Looking.'), ...calls];
     let text = 'Now the answer is';
     const r = render(view([...base, tx(text)]));

@@ -345,10 +345,10 @@ describe('stripView', () => {
 
 describe('mergeStrips', () => {
   const settled = () => true;
-  it('identical input merges; different input does not', () => {
+  it('commands merge (identical or not, one kind); a command and a read do not', () => {
     const same = { tool: 'Bash', object: 'make test', key: 'k1' };
-    const items = mergeStrips([step(tu('a', 'make test', 'Bash', same)), step(tu('b', 'make test', 'Bash', same)), step(tu('c', 'make lint'))], settled);
-    expect(items.map((i) => i.steps.length)).toEqual([2, 1]);
+    const items = mergeStrips([step(tu('a', 'make test', 'Bash', same)), step(tu('b', 'make test', 'Bash', same)), step(tu('c', 'make lint')), step(rd('d', '/p/d.ts'))], settled);
+    expect(items.map((i) => i.steps.length)).toEqual([3, 1]);
   });
 
   it('adjacent reads merge with unique objects', () => {
@@ -357,8 +357,8 @@ describe('mergeStrips', () => {
     expect(items[0].objects).toEqual(['a.ts', 'b.ts']);
   });
 
-  it('errors, running calls and agents never merge; an unsettled call stays alone', () => {
-    expect(mergeStrips([step(rd('a', '/p/a.ts'), 'error'), step(rd('b', '/p/b.ts'))], settled)).toHaveLength(2);
+  it('a failed call merges (no failure mark, §3.1); running calls and agents never merge; an unsettled call stays alone', () => {
+    expect(mergeStrips([step(rd('a', '/p/a.ts'), 'error'), step(rd('b', '/p/b.ts'))], settled)).toHaveLength(1);
     expect(mergeStrips([step(rd('a', '/p/a.ts')), step(rd('b', '/p/b.ts'), 'pending')], settled)).toHaveLength(2);
     expect(mergeStrips([step(agent('a', 'x')), step(agent('b', 'x'))], settled)).toHaveLength(2);
     expect(mergeStrips([step(rd('a', '/p/a.ts')), step(rd('b', '/p/b.ts'))], (id) => id !== 'b')).toHaveLength(2);

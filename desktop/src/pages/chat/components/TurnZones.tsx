@@ -39,7 +39,7 @@ import { ANCHOR_PROPS } from '../scrollFocus';
 import { tf } from '../tf';
 import { ASSISTANT_NAME } from '../assistantName';
 import type { ThoughtUnit, ToolStep } from '../turnView';
-import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, zoneStats } from '../turnZones';
+import { STOP_TURN_EVENT, agentBatches, mergeColumn, mergeStrips, phaseSegments, stripLabel, stripView, zoneStats } from '../turnZones';
 import type { PhaseMember, StageZone, StopReceiptView, StripItem, Zone } from '../turnZones';
 import { ReadingContext } from '../readingContext';
 import { attnProps, zoneAttention, PROCESS_PROSE } from '../attention';
@@ -333,14 +333,22 @@ function PathObject({ dir, file }: { dir: string; file: string }) {
 function sameStrip(a: { item: StripItem }, b: { item: StripItem }): boolean {
   const x = a.item;
   const y = b.item;
-  if (x.key !== y.key || x.steps.length !== y.steps.length || x.objects.join('\u0000') !== y.objects.join('\u0000')) return false;
+  if (x.key !== y.key || x.steps.length !== y.steps.length || (x.seq?.length ?? 0) !== (y.seq?.length ?? 0)
+    || x.objects.join('\u0000') !== y.objects.join('\u0000')) return false;
   return x.steps.every((s, i) => {
     const t = y.steps[i];
     return s.block === t.block && s.status === t.status && s.result === t.result && s.progress === t.progress;
   });
 }
 
-export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem }) {
+/** A finished thought carried into a merged strip, listed when the strip is opened. Its
+ *  own open state is local: the strip's detail is opened by hand and closes as a whole. */
+function CarriedThought({ unit, scope }: { unit: ThoughtUnit; scope: string }) {
+  const [open, setOpen] = useState(false);
+  return <PhaseThought unit={unit} scope={scope} open={open} onToggle={setOpen} />;
+}
+
+export const ToolStripV6 = memo(function ToolStripV6({ item, scope = '' }: { item: StripItem; scope?: string }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const step = item.steps[0];
@@ -358,7 +366,17 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
     ? (elapsed !== null && elapsed >= MIN_SECONDS ? fmt(elapsed) : '')
     : stopped ? tf(t, 'chat.turn.zone.stoppedCall', 'stopped')
       : total !== undefined && total >= MIN_SECONDS ? fmt(total) : '';
-  const object = n > 1 && item.objects.length > 1
+  const label = stripLabel(item);
+  const counts = label.verb ? [
+    label.kind === 'run' ? tf(t, 'chat.turn.zone.commands', n === 1 ? '{{count}} command' : '{{count}} commands', { count: n })
+      : label.kind === 'edit' ? tf(t, 'chat.turn.zone.edits', n === 1 ? '{{count}} edit' : '{{count}} edits', { count: n })
+        : tf(t, 'chat.turn.zone.calls', n === 1 ? '{{count}} call' : '{{count}} calls', { count: n }),
+    label.thoughts > 0 && tf(t, 'chat.turn.zone.thoughtCount', label.thoughts === 1 ? '{{count}} thought' : '{{count}} thoughts', { count: label.thoughts }),
+    item.objects.join(', '),
+  ].filter(Boolean).join(' · ') : '';
+  const object = label.verb
+    ? <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{counts}</span>
+    : n > 1 && item.objects.length > 1
     ? <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{item.objects.join(', ')}</span>
     : v.dir !== undefined && v.file
       ? <PathObject dir={v.dir} file={v.file} />
@@ -375,7 +393,7 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
           : 'bg-[var(--color-hover)]/60 hover:bg-[var(--color-hover)]'} focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50`}
       >
         <span data-testid="strip-tool" className={`w-[10ch] shrink-0 truncate ${running ? 'text-amber-500' : 'text-[var(--color-text-dim)]'}`}>
-          {v.tool}{n > 1 ? ` ×${n}` : ''}
+          {label.verb ? tf(t, `chat.turn.zone.verb.${label.kind}`, label.verb) : `${v.tool}${n > 1 ? ` ×${n}` : ''}`}
         </span>
         {object}
         <span data-testid="strip-time" className={`ml-auto w-[7ch] shrink-0 text-right tabular-nums ${stopped ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text-muted)]'}`}>{time}</span>
@@ -387,7 +405,9 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
       {open && (
         <div data-testid="strip-detail" className={`${DETAIL_INSET} space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)]`}>
           {n > 1
-            ? item.steps.map((s) => <ToolStripV6 key={`tu-${s.block.id}`} item={{ key: `tu-${s.block.id}`, steps: [s], objects: [] }} />)
+            ? (item.seq ?? item.steps).map((s) => (s.kind === 'thought'
+              ? <CarriedThought key={`th-${s.ordinal}`} unit={s} scope={scope} />
+              : <ToolStripV6 key={`tu-${s.block.id}`} item={{ key: `tu-${s.block.id}`, steps: [s], objects: [] }} />))
             : <div className="whitespace-pre-wrap break-words">{step.result?.outcome}</div>}
         </div>
       )}
@@ -667,21 +687,30 @@ type BodyItem =
   | { key: string; agents: ToolStep[] };
 
 /** Members as body items in stream order: thoughts, runs of strips, panels. `batchOf`
- *  is the whole phase's agent batching (a panel is not split by a note). */
+ *  is the whole phase's agent batching (a panel is not split by a note). Calls and
+ *  thoughts between two panels form one column, merged by `mergeColumn` (a finished
+ *  thought between two calls that merge goes into the merged strip). */
 function bodyItems(members: PhaseMember[], settled: (id: string) => boolean, batchOf: Map<string, string>): BodyItem[] {
   const out: BodyItem[] = [];
   const panels = new Map<string, Extract<BodyItem, { agents: ToolStep[] }>>();
+  let col: Array<ToolStep | ThoughtUnit> = [];
+  const flush = () => {
+    let run: StripItem[] = [];
+    const flushRun = () => { if (run.length) out.push({ key: `strips-${run[0].steps[0].block.id}`, strips: run }); run = []; };
+    for (const x of mergeColumn(col, settled)) {
+      if ('steps' in x) { run.push(x); continue; }
+      flushRun();
+      out.push({ key: `th-${x.ordinal}`, thought: x });
+    }
+    flushRun();
+    col = [];
+  };
   for (const m of members) {
-    if (m.kind === 'thought') { out.push({ key: `th-${m.ordinal}`, thought: m }); continue; }
+    if (m.kind === 'thought') { col.push(m); continue; }
     if (m.kind === 'text') continue; // the segments carry the text
-    let run: ToolStep[] = [];
-    const flush = () => {
-      if (run.length) out.push({ key: `strips-${run[0].block.id}`, strips: mergeStrips(run, settled) });
-      run = [];
-    };
     for (const s of m.steps) {
       const panelId = batchOf.get(s.block.id);
-      if (panelId === undefined) { run.push(s); continue; }
+      if (panelId === undefined) { col.push(s); continue; }
       flush();
       const panel = panels.get(panelId);
       if (panel) panel.agents.push(s);
@@ -691,8 +720,8 @@ function bodyItems(members: PhaseMember[], settled: (id: string) => boolean, bat
         out.push(item);
       }
     }
-    flush();
   }
+  flush();
   return out;
 }
 
@@ -779,11 +808,12 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
         const k = `th-${it.thought.ordinal}`;
         return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) ?? false} onToggle={(o) => ctx.choose(k, o)} />;
       }
-      if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />);
+      if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} scope={ctx.scope} />);
       return null;
     };
     return blocks.map((b) => {
-      if (b.column) return <div key={b.key} className="space-y-[2px]">{b.column.map(columnRow)}</div>;
+      // one flat keyed list: a thought carried into a strip must not shift the rows after it
+      if (b.column) return <div key={b.key} className="space-y-[2px]">{b.column.flatMap((it) => columnRow(it) ?? [])}</div>;
       const it = b.item!;
       if ('agents' in it) return <AgentsPanel key={b.key} agents={it.agents} sessionId={ctx.sessionId} readOnly={ctx.readOnly} focusedAgentId={ctx.focusedAgentId} />;
       return null;
