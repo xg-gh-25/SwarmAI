@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import os
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,15 @@ def _repos(values: list[str]) -> dict[str, str]:
         resolved = Path(path).resolve()
         if not (resolved / ".git").exists():
             raise ValueError(f"--repo is not a git worktree: {path}")
+        # a run needs a base commit (its worktree, landing checks, ff-only landing):
+        # an unborn repo is not supported (spec usable-by-anyone §5.2, r29)
+        head = subprocess.run(["git", "-C", str(resolved), "rev-parse", "--verify", "-q",
+                               "HEAD^{commit}"], capture_output=True, text=True, timeout=30)
+        if head.returncode != 0:
+            raise ValueError(
+                f"--repo {name} has no commit yet, and a pipeline run needs one to start "
+                f"from. Make an initial commit first (for example `git -C {resolved} commit "
+                "--allow-empty -m init`), then run create again.")
         out[name] = str(resolved)
     return out
 
