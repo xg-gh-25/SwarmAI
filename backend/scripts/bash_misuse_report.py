@@ -44,7 +44,7 @@ GATE_PATTERNS: list[tuple[str, re.Pattern]] = [(n, re.compile(p)) for n, p in [
     ("active_run_commit_gate", r"git commit → DENY: this commit touches file\(s\) owned"),
     ("bash_syntax_guard", r"has a SYNTAX ERROR"),
     ("background_command_guard", r"Background execution is disabled for this command"),
-    ("dangerous_command_gate", r"Matches dangerous command pattern|Dangerous command blocked"
+    ("dangerous_command_gate", r"Matches dangerous command pattern|Dangerous command blocked|\[rule: "
                                r"|Approval timed out after"),
     ("expert_budget_gate", r"Tool budget used \(\d+ calls\)"),
 ]]

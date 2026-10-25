@@ -131,7 +131,7 @@ def test_every_gate_pattern_matches_a_real_deny_text():
         "active_run_commit_gate": "git commit → DENY: this commit touches file(s) owned",
         "bash_syntax_guard": "has a SYNTAX ERROR",
         "background_command_guard": "Background execution is disabled for this command",
-        "dangerous_command_gate": "Matches dangerous command pattern",
+        "dangerous_command_gate": "[rule: ",
         "expert_budget_gate": "Tool budget used (",
     }
     assert set(samples) == {n for n, _ in bmr.GATE_PATTERNS}

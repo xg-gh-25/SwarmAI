@@ -157,8 +157,72 @@ _SAFE_RM_PREFIXES: tuple[str, ...] = (
 _SAFE_RM_EXACT: frozenset[str] = frozenset({"/tmp", "/private/tmp"})
 
 
-def _is_dangerous_rm(command: str, _depth: int = 0) -> bool:
-    """Fail-closed predicate: is this a *dangerous* recursive ``rm``?
+def _is_dangerous_rm(command: str, _depth: int = 0, cwd: str = "") -> bool:
+    """``_dangerous_rm_segment`` as a predicate."""
+    return _dangerous_rm_segment(command, _depth, cwd) is not None
+
+
+# `N=$(mktemp -d)` written as one word (quoted: `N="$(mktemp -d)"`), with an optional
+# `-t <template>` that names no directory.
+_MKTEMP_WORD_RE = re.compile(r"^([A-Za-z_]\w*)=\$\(mktemp -d(?: -t [^\s/)~$]+)?\)$")
+# `$N`, `${N}`, optionally followed by `/sub/path`.
+_VAR_OPERAND_RE = re.compile(r"^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))(/.*)?$")
+_VAR_BINDERS = frozenset({"export", "read", "unset", "declare", "local", "typeset",
+                          "readonly", "for", "select", "getopts", "mapfile", "readarray"})
+
+
+def _plain_abs_dir(path: str) -> str:
+    """*path* normalized when it is an absolute directory written out in full (no
+    ``$``, backtick, glob, ``~`` or ``..``), else "" (unknown)."""
+    if not path or not path.startswith("/") or any(c in path for c in "$`*?[{~"):
+        return ""
+    if ".." in path.split("/"):
+        return ""
+    return os.path.normpath(path)
+
+
+def _rm_cd_target(seg: list[str]) -> "str | None":
+    """None when *seg* is not cd / pushd / popd; else the directory a recursive rm
+    after it may assume: only ``cd <absolute path written out>``; any other directory
+    change → "" (unknown)."""
+    t = _unwrap_program(seg)
+    if not t or t[0] not in ("cd", "pushd", "popd"):
+        return None
+    if t[0] != "cd":
+        return ""
+    args = [a for a in t[1:] if a != "--"]
+    if len(args) != 1:
+        return ""
+    return _plain_abs_dir(args[0])
+
+
+def _mktemp_assignment(segments: "list[list[str]]", seps: "list[str]", i: int) -> "str | None":
+    """The variable segment *i* assigns from ``$(mktemp -d)`` as a shell variable, else
+    None. Two shapes: one word ``N=$(mktemp -d)``, or the tokens the segmenter makes of
+    the unquoted form (``N=$`` / ``( mktemp -d )``), which must then be followed by
+    ``;`` / ``&&`` / ``||`` / a newline or the end (an env prefix ``N=$(…) cmd`` is not
+    a shell variable)."""
+    seg = segments[i]
+    if len(seg) == 1:
+        m = _MKTEMP_WORD_RE.match(seg[0])
+        if m:
+            return m.group(1)
+        m = re.match(r"^([A-Za-z_]\w*)=\$$", seg[0])
+        if m and i + 1 < len(segments) and seps[i + 1] == "(":
+            inner = segments[i + 1]
+            ok = inner == ["mktemp", "-d"] or (
+                len(inner) == 4 and inner[:3] == ["mktemp", "-d", "-t"]
+                and not any(c in inner[3] for c in "/~$"))
+            after = seps[i + 2] if i + 2 < len(seps) else ")"
+            if ok and after.startswith(")") and (
+                    i + 2 >= len(segments) or after[1:].startswith((";", "&&", "||"))):
+                return m.group(1)
+    return None
+
+
+def _dangerous_rm_segment(command: str, _depth: int = 0, cwd: str = "") -> "str | None":
+    """The recursive ``rm`` of *command* that is dangerous (its words joined), or None.
+    Fail-closed.
 
     Replaces the blanket ``rm -rf *`` glob (fix #3), which forced an approval
     prompt on every recursive rm — including harmless temp cleanups like
@@ -177,21 +241,74 @@ def _is_dangerous_rm(command: str, _depth: int = 0) -> bool:
     Judged per simple command (``_gate_shell_segments``): an rm chained with
     other commands (``rm -rf <tmp dir> && mkdir ...``) is judged on its own
     operands, not on the words of the commands after it.
+
+    What the command itself says is used to resolve a target (design
+    2026-10-26-approval-prompt-false-positives §3.1): a relative operand is
+    joined to the last ``cd <absolute path>`` followed by ``&&`` (a cd inside a
+    subshell does not leak out of it), else to *cwd* (the hook input's) when that is
+    absolute; any other directory change makes it unknown. ``$N`` / ``${N}`` (plus a
+    sub path) counts as a temp directory only when the only assignment of ``N`` before
+    it, at the top level, is ``N=$(mktemp -d)`` and nothing else binds ``N``
+    (``export`` / ``read`` / ``for`` / a second assignment …).
     """
-    segments = _gate_shell_segments(command)
+    seps: list[str] = []
+    segments = _gate_shell_segments(command, seps)
     if segments is None:
         # Unparseable (unbalanced quotes) → cannot prove safe → fail closed,
         # but only if an rm command is visible in it.
-        return bool(re.search(r"(?:^|[;&|(\n]\s*)(?:sudo\s+)?rm\s", command))
-    if any(_rm_segment_is_dangerous(_skip_leading_wrappers(seg)) for seg in segments):
-        return True
+        m = re.search(r"(?:^|[;&|(\n]\s*)((?:sudo\s+)?rm\s[^\n;&|]*)", command)
+        return m.group(1).strip() if m else None
+    cur = _plain_abs_dir(cwd)
+    stack: list[str] = []
+    pending: "str | None" = None
+    depth = 0
+    temp_vars: dict[str, bool] = {}    # name → still only the one mktemp assignment
+    for i, (seg, sep) in enumerate(zip(segments, seps)):
+        k = 0
+        while k < len(sep):
+            op = sep[k:k + 2] if sep[k:k + 2] in ("&&", "||") else sep[k]
+            k += len(op)
+            if op == "(":
+                stack.append(cur)
+                depth += 1
+            elif op == ")":
+                cur = stack.pop() if stack else ""
+                depth = max(0, depth - 1)
+            elif pending is not None:
+                cur = pending if op == "&&" else ""
+            pending = None
+        made = _mktemp_assignment(segments, seps, i)
+        prog = _unwrap_program(seg)
+        for tok in seg:
+            m = re.match(r"^([A-Za-z_]\w*)=", tok)
+            if m and not (made == m.group(1) and depth == 0 and m.group(1) not in temp_vars):
+                temp_vars[m.group(1)] = False
+        if prog and prog[0] in _VAR_BINDERS:
+            for tok in prog[1:]:
+                name = tok.split("=", 1)[0]
+                if re.match(r"^[A-Za-z_]\w*$", name):
+                    temp_vars[name] = False
+        if made and depth == 0 and made not in temp_vars:
+            temp_vars[made] = True
+        tokens = _skip_leading_wrappers(seg)
+        if _rm_segment_is_dangerous(tokens, cur,
+                                    frozenset(n for n, ok in temp_vars.items() if ok)):
+            return " ".join(seg)
+        pending = _rm_cd_target(seg)
     # A script handed to another shell (`sh -c '...'`, `bash <<EOF`) is judged too.
-    return _depth < 2 and any(
-        _is_dangerous_rm(s, _depth + 1) for s in _inner_shell_scripts(command, segments))
+    if _depth < 2:
+        for s in _inner_shell_scripts(command, segments):
+            hit = _dangerous_rm_segment(s, _depth + 1)
+            if hit is not None:
+                return hit
+    return None
 
 
-def _rm_segment_is_dangerous(tokens: list[str]) -> bool:
-    """``_is_dangerous_rm`` for ONE simple command (already segmented)."""
+def _rm_segment_is_dangerous(tokens: list[str], cur: str = "",
+                             temp_vars: "frozenset[str]" = frozenset()) -> bool:
+    """``_is_dangerous_rm`` for ONE simple command (already segmented). *cur* is the
+    directory it runs in ("" = unknown); *temp_vars* the variables known to hold a
+    fresh ``mktemp -d`` directory."""
     if not tokens or tokens[0] != "rm":
         return False
 
@@ -219,11 +336,20 @@ def _rm_segment_is_dangerous(tokens: list[str]) -> bool:
         return True
 
     for op in operands:
+        var = _VAR_OPERAND_RE.match(op)
+        if var and (var.group(1) or var.group(2)) in temp_vars:
+            rest = var.group(3) or ""
+            if ".." not in rest.split("/") and not any(c in rest for c in "$~`"):
+                continue
         # Fail closed on any path-traversal or env/glob token — a ".." segment
         # can escape a safe prefix (rm -rf /tmp/../etc), and $VARS/globs are
         # unexpanded here so their real target is unknown.
         if ".." in op.split("/") or "$" in op or "~" in op:
             return True
+        if not op.startswith("/"):
+            if not cur:
+                return True        # relative to a directory the command does not say
+            op = os.path.join(cur, op)
         norm = os.path.normpath(op)
         if norm in _SAFE_RM_EXACT:
             continue
@@ -926,11 +1052,25 @@ def _is_commit_amend(command: str) -> bool:
     return _judge_with_bodies(command, _segment_is_commit_amend, _AMEND_SIG_RE, 0)
 
 
-# Fail-closed text signature for a discard (unparseable input, interpreter bodies):
-# `\W+` so a python argv list (``'reset', '--hard'``) matches as well as shell text.
+# Fail-closed text signature for a discard (unparseable input, interpreter bodies).
+# Only the shape of a git CALL matches (design 2026-10-26 §3.2 B1), so prose naming
+# "git … checkout" does not: shell text, where the subcommand is the first non-option
+# word after `git` on the same line (`-C dir` / `-c k=v` take a value), or a python argv
+# list, where it is the next string element after 'git' and its option elements.
+_SH_GIT_OPTS = r"(?:[ \t]+(?:-[Cc][ \t]+\S+|-\S+))*"
+_PY_Q = r"""['"]"""
+_PY_GIT_OPTS = (r"(?:\s*,\s*" + _PY_Q + r"-[Cc]" + _PY_Q + r"\s*,\s*[^,\]\)]+"
+                r"|\s*,\s*" + _PY_Q + r"-[^'\"]*" + _PY_Q + r")*")
 _DISCARD_SIG_RE = re.compile(
-    r"\bgit\b[\s\S]*?\b(?:reset\W+--(?:hard|merge)|checkout|restore|switch|clean\W+-"
-    r"|worktree\W+remove)\b")
+    r"\bgit" + _SH_GIT_OPTS + r"[ \t]+(?:reset(?:[ \t]+-\S+)*?[ \t]+--(?:hard|merge)"
+    r"|checkout|restore|switch|clean[ \t]+-|worktree[ \t]+remove)\b"
+    r"|" + _PY_Q + r"git" + _PY_Q + _PY_GIT_OPTS + r"\s*,\s*" + _PY_Q
+    + r"(?:reset" + _PY_Q + r"(?:\s*,\s*" + _PY_Q + r"-[^'\"]*" + _PY_Q + r")*?\s*,\s*"
+    + _PY_Q + r"--(?:hard|merge)|checkout|restore|switch|clean" + _PY_Q + r"\s*,\s*"
+    + _PY_Q + r"-|worktree" + _PY_Q + r"\s*,\s*" + _PY_Q + r"remove)\b")
+# A script that changes where git runs: cwd=, chdir, or a git -C.
+_SCRIPT_RETARGET_RE = re.compile(r"\bcwd\s*=|\bchdir\b|" + _PY_Q + r"-C" + _PY_Q
+                                 + r"|\bgit[ \t]+-C\b|\bGIT_(?:DIR|WORK_TREE)\b")
 # The discard check runs `git status` per repo (2.5 s cap each, shared_checkout).
 _DISCARD_CHECK_TIMEOUT = 6.0
 _AMEND_SIG_RE = re.compile(r"\bcommit\b.*--amend\b", re.S)
@@ -1059,8 +1199,10 @@ def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
     """The directory each working-tree discard of *command* (_segment_discard_target)
     runs in, following ``cd X &&`` chains and ``git -C``; ``worktree remove`` gives the
     worktree it removes. "" = that discard's directory is unknown; [] = no discard.
-    None (cannot tell) when the command does not parse; when a heredoc body a shell /
-    interpreter runs may hold a discard; when it names GIT_DIR / GIT_WORK_TREE /
+    None (cannot tell) when the command does not parse; when a heredoc body a shell runs
+    may hold a discard, or a script body that may hold one names where git runs (cwd=,
+    chdir, -C; a script that does not is judged in the directory of the interpreter
+    reading it); when it names GIT_DIR / GIT_WORK_TREE /
     GIT_COMMON_DIR / GIT_INDEX_FILE (git retargeted through the environment); or when
     it has a backtick or an ``eval`` / ``source`` / ``.`` (a directory change not
     followed)."""
@@ -1072,9 +1214,13 @@ def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
         return None
     if any((_unwrap_program(seg) or [""])[0] in ("eval", "source", ".") for seg in segments):
         return None
+    script_discard = False
     for kind, body in _executed_bodies(command, segments):
         if _DISCARD_SIG_RE.search(body) and (kind != "python" or _code_can_execute(body)):
-            return None
+            # a shell body may cd; a script that names where git runs is not followed
+            if kind == "shell" or _SCRIPT_RETARGET_RE.search(body):
+                return None
+            script_discard = True   # runs where the interpreter reading it runs (§3.2 B2)
     # a discard inside `sh -c '…'`: where it runs is not followed into the string
     if any(_discards_work(s) for s in _nested_command_lines(command, segments)):
         return None
@@ -1099,6 +1245,9 @@ def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
         target = _segment_discard_target(seg, cur)
         if target is not None:
             out.append(target)
+        if script_discard and _reads_script_from_stdin(_unwrap_program(seg)) in (
+                "python", "code"):
+            out.append(cur)
         pending = _cd_segment_target(seg, cur)
     return out
 
@@ -1471,6 +1620,72 @@ def create_ask_question_gate(
     return ask_question_gate
 
 
+def _excerpt(command: str, limit: int = 160) -> str:
+    """The first non-empty line of *command*, cut to *limit* characters."""
+    line = next((ln.strip() for ln in command.splitlines() if ln.strip()), "")
+    return line if len(line) <= limit else line[:limit - 1] + "…"
+
+
+_PATTERN_WHY = {
+    "sudo *": "runs as administrator",
+    "kill -9 *": "force-kills a process",
+    "curl *|bash*": "pipes a download into a shell",
+    "curl *|sh*": "pipes a download into a shell",
+    "wget *|bash*": "pipes a download into a shell",
+    "wget *|sh*": "pipes a download into a shell",
+    "dd if=*": "writes raw blocks to a device or file",
+}
+
+
+def _danger_match(command: str, patterns: "list[str]", cwd: str = "") -> "dict | None":
+    """Which rule of dangerous_command_gate *command* trips (design 2026-10-26 §3.3 C1):
+    ``{"rule", "match", "why"}`` (rule id, the part of the command it matched, one
+    readable sentence), or None. The discard rule is judged separately (it runs git)."""
+    for p in patterns:
+        if fnmatch.fnmatch(command, p):
+            return {"rule": f"pattern:{p}", "match": _excerpt(command),
+                    "why": _PATTERN_WHY.get(p, f"matches the dangerous pattern {p!r}")}
+    seg = _dangerous_rm_segment(command, cwd=cwd)
+    if seg is not None:
+        return {"rule": "rm_unresolved_target", "match": seg[:160],
+                "why": "recursive delete of a target the gate cannot resolve to a "
+                       "temp directory"}
+    if _is_irreversible_external_op(command):
+        return {"rule": "irreversible_external", "match": _excerpt(command),
+                "why": "irreversible external operation (force push, delete, "
+                       "visibility change)"}
+    if _targets_irreplaceable_store(command):
+        return {"rule": "irreplaceable_store", "match": _excerpt(command),
+                "why": "deletes or moves an irreplaceable store (DDD, Library, .context)"}
+    if _is_v1_land_request(command):
+        return {"rule": "v1_authorization", "match": _excerpt(command),
+                "why": "consumes one Pipeline v1 human authorization"}
+    return None
+
+
+def _reason_text(hit: dict) -> str:
+    return f"`{hit['match']}`: {hit['why']} [rule: {hit['rule']}]"
+
+
+def _log_prompt(hit: dict, decision: str, input_data: Any, session_id: Any,
+                reason: str) -> None:
+    """One gate_decisions.jsonl row for a prompt (§3.3 C2), written on the
+    ``pipeline_signal`` pool after the decision: never on the event loop, and a
+    failure never touches the command."""
+    from . import gate_decision_log
+    gate_decision_log.mark_self_logged(input_data)
+    data = dict(input_data) if isinstance(input_data, dict) else {}
+    data.setdefault("session_id", session_id)
+    extra = {"rule": hit["rule"], "match": hit["match"], "prompted": True}
+    try:
+        from core import executors
+        executors.get_pool("pipeline_signal").submit(
+            gate_decision_log.record_decision, "dangerous_command_gate", decision, data,
+            reason, extra)
+    except Exception:  # noqa: BLE001 — logging never blocks a decided command
+        logger.debug("prompt log not written", exc_info=True)
+
+
 def create_dangerous_command_gate(
     session_context: dict[str, Any],
     session_key: str,
@@ -1499,17 +1714,13 @@ def create_dangerous_command_gate(
         if not command:
             return {"decision": "approve"}
 
-        # Check if command matches any dangerous pattern (glob) OR is a
-        # dangerous recursive rm (predicate — fix #3, allows /tmp & /var/folders)
-        # OR is an irreversible destructive external op (C041 — gh repo
-        # edit/delete, git push --force/delete; predicate, not glob).
-        is_dangerous = (
-            any(fnmatch.fnmatch(command, p) for p in patterns)
-            or _is_dangerous_rm(command)
-            or _is_irreversible_external_op(command)
-            or _targets_irreplaceable_store(command)  # rm/mv of DDD/Library/.context (run_a456640f)
-            or _is_v1_land_request(command)  # consumes one explicit manual-land approval
-        )
+        cwd = str(input_data.get("cwd") or "")
+        # Which rule the command trips (glob list, dangerous recursive rm — fix #3,
+        # allows /tmp & /var/folders and resolves relative / mktemp targets —,
+        # irreversible external op (C041), rm/mv of DDD/Library/.context
+        # (run_a456640f), a v1 authorization).
+        hit = _danger_match(command, patterns, cwd)
+        is_dangerous = hit is not None
         # A command that discards uncommitted working-tree changes (reset --hard,
         # checkout -- <path>, restore, clean -f, worktree remove --force, …) is asked
         # only when it would destroy files ANOTHER session wrote that are still
@@ -1518,12 +1729,13 @@ def create_dangerous_command_gate(
         # failing or timing out → asked (the one case the facts cannot clear).
         discard_reason = ""
         if not is_dangerous:
-            dirs = _discard_dirs(command, str(input_data.get("cwd") or ""))
+            dirs = _discard_dirs(command, cwd)
             if dirs is None and not _discards_work(command):
                 dirs = []
             if dirs != []:
                 from core import executors
                 deadline = time.monotonic() + _DISCARD_CHECK_TIMEOUT
+                rule = "discard_foreign_uncommitted"
                 try:
                     discard_reason = await asyncio.wait_for(
                         executors.run_in("discard", _foreign_uncommitted, dirs,
@@ -1531,22 +1743,27 @@ def create_dangerous_command_gate(
                         timeout=_DISCARD_CHECK_TIMEOUT)
                 except Exception:  # noqa: BLE001 — cannot tell: a person decides
                     logger.debug("discard check could not read git", exc_info=True)
+                    rule = "discard_unchecked"
                     discard_reason = ("Discards uncommitted changes; could not check whether "
                                       "another session has uncommitted work there")
                 if discard_reason:
                     is_dangerous = True
+                    hit = {"rule": rule, "match": _excerpt(command), "why": discard_reason}
                     logger.warning("[DISCARD] gated: %s", command[:80])
-        if not is_dangerous:
+        if not is_dangerous or hit is None:
             return {"decision": "approve"}
 
         # Auto-deny when human approval is disabled
         if not enable_human_approval:
-            logger.warning("[BLOCKED] Dangerous command (no human approval): %s", command[:80])
+            logger.warning("[BLOCKED] Dangerous command (no human approval, rule %s): %s",
+                           hit["rule"], command[:80])
+            reason = f"Dangerous command blocked (human approval disabled): {_reason_text(hit)}"
+            _log_prompt(hit, "deny", input_data, session_key, reason)
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": "Dangerous command blocked (human approval disabled)",
+                    "permissionDecisionReason": reason,
                 }
             }
 
@@ -1569,8 +1786,8 @@ def create_dangerous_command_gate(
         request_id = f"perm_{uuid4().hex[:12]}"
         tool_input_data = input_data.get("tool_input", {})
         # a v1 authorization shows what it binds, read from the logged event (C1)
-        reason_text = discard_reason or (_is_v1_land_request(command) and v1_land_card(command)) \
-            or "Matches dangerous command pattern"
+        reason_text = (discard_reason and _reason_text(hit)) or (
+            _is_v1_land_request(command) and v1_land_card(command)) or _reason_text(hit)
 
         permission_request = {
             "id": request_id,
@@ -1585,14 +1802,15 @@ def create_dangerous_command_gate(
             # gate. This field is for durability + audit, not a second idempotency path.
             "tool_call_id": tool_use_id,
             "reason": reason_text,
+            "rule": hit["rule"],
             "status": "pending",
             "created_at": datetime.now().isoformat(),
         }
         permission_mgr.store_pending_request(permission_request)
 
         logger.warning(
-            "[PERMISSION_REQUEST] Dangerous command requires approval: %s (request_id: %s)",
-            command[:50], request_id,
+            "[PERMISSION_REQUEST] Dangerous command requires approval (rule %s): %s "
+            "(request_id: %s)", hit["rule"], command[:50], request_id,
         )
 
         decision = await permission_mgr.request_decision(actual_session_id, {
@@ -1606,6 +1824,8 @@ def create_dangerous_command_gate(
         })
         logger.info("User decision for %s: %s", request_id, decision)
         permission_mgr.remove_pending_request(request_id)
+        _log_prompt(hit, decision if decision in ("approve", "timeout") else "deny",
+                    input_data, actual_session_id, reason_text)
 
         if decision == "approve":
             if not discard_reason:
@@ -1627,7 +1847,7 @@ def create_dangerous_command_gate(
                 "Re-run if you still need it."
             )
         else:
-            reason = f"User denied: {discard_reason or 'Matches dangerous command pattern'}"
+            reason = f"User denied: {_reason_text(hit)}"
 
         return {
             "hookSpecificOutput": {

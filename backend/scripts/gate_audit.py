@@ -4,7 +4,9 @@
 Reads ``~/.swarm-ai/logs/gate_decisions.jsonl`` (written by
 ``core.gate_decision_log``) and prints one row per gate: total decisions,
 force bypasses, and the per-day counts, so a gate whose denials do not fall,
-or that never fires, is visible at a glance.
+or that never fires, is visible at a glance. A gate that prompts a person
+(dangerous_command_gate) writes a ``rule`` per row; those are counted per rule
+and per answer (approve / deny / timeout) under the gate's row.
 
 Usage: python scripts/gate_audit.py [--since YYYY-MM-DD] [--gate NAME] [--samples N]
 """
@@ -45,6 +47,7 @@ def main(argv=None) -> int:
     per_day: dict[str, Counter] = defaultdict(Counter)
     forced: Counter = Counter()
     samples: dict[str, list] = defaultdict(list)
+    rules: dict[str, Counter] = defaultdict(Counter)
     for rec in load(log_path(), ns.since):
         gate = rec.get("gate", "?")
         if ns.gate and gate != ns.gate:
@@ -53,6 +56,8 @@ def main(argv=None) -> int:
             forced[gate] += 1
             continue
         per_day[gate][str(rec.get("ts", ""))[:10]] += 1
+        if rec.get("rule"):
+            rules[gate][(rec["rule"], str(rec.get("decision", "?")))] += 1
         if len(samples[gate]) < ns.samples:
             samples[gate].append(rec.get("input", "")[:300])
     if not per_day and not forced:
@@ -61,6 +66,12 @@ def main(argv=None) -> int:
     for gate in sorted(set(per_day) | set(forced), key=lambda g: -sum(per_day[g].values())):
         days = " ".join(f"{d[5:]}:{n}" for d, n in sorted(per_day[gate].items()))
         print(f"{gate:32} total={sum(per_day[gate].values()):5} force={forced[gate]:3}  {days}")
+        by_rule: dict[str, Counter] = defaultdict(Counter)
+        for (rule, decision), n in rules[gate].items():
+            by_rule[rule][decision] += n
+        for rule, answers in sorted(by_rule.items(), key=lambda kv: -sum(kv[1].values())):
+            split = " ".join(f"{d}:{n}" for d, n in sorted(answers.items()))
+            print(f"    rule {rule:40} {sum(answers.values()):5}  {split}")
         for s in samples[gate]:
             print(f"    | {s!r}")
     return 0

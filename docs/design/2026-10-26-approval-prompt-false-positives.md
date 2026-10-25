@@ -3,7 +3,7 @@ title: 审批弹窗误报 — dangerous_command_gate 为什么让人批准不危
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r1 — 设计，待 XG 确认
+status: r2 — 已实现（本地 main，未打包）
 ---
 
 # 审批弹窗误报
@@ -58,6 +58,43 @@ permission approve request，我感觉那些都不是 dangerous command 啊，�
 | 10-25 12:19 | 同上（截断），日志有 `[DISCARD] gated` | **弹** | B（按日志判断） |
 | 10-25 12:34 | 同上，reason 是"could not check whether another session has uncommitted work there" | **弹** | B |
 | 10-26 00:41 | `T=$(mktemp -d); …; rm -rf $T` | **弹** | A：`rm -rf` 一个变量，看不到它来自 `mktemp -d` |
+
+## 2. 原因
+
+### A. `rm -rf` 的目标是相对路径或变量时，一律算危险
+
+`_rm_segment_is_dangerous` 对每个操作数的判断（`core/security_hooks.py`）：
+
+- 操作数里有 `$`、`~` 或 `..`，直接算危险；
+- 相对路径一律算危险；
+- 只有绝对路径落在 `/tmp/`、`/var/folders/`、`/private/tmp/`、`/private/var/folders/` 下才放行。
+
+这条规则只看 `rm` 这一段，不知道同一条命令里前面做过什么：
+
+- `mkdir -p /tmp/xgrev && cd /tmp/xgrev && rm -rf x`：`x` 实际在 `/tmp/xgrev` 下，但 `cd` 被忽略了，hook 输入里的 `cwd` 也没用；
+- `T=$(mktemp -d); …; rm -rf $T`：`$T` 就是刚建的临时目录，但赋值被忽略了。
+
+"不认识就问"本身没错。问题是这两种情况，命令里已经写着答案。
+
+### B. 判断"会不会丢掉未提交的改动"时，规则拿错了范围
+
+两个问题叠在一起：
+
+1. **签名匹配到了一段英文。** `_DISCARD_SIG_RE` 是
+   `\bgit\b[\s\S]*?\b(?:reset\W+--(?:hard|merge)|checkout|restore|switch|clean\W+-|worktree\W+remove)\b`，
+   它会用在 heredoc 或解释器脚本的内容上（`_judge_with_bodies`）。中间的 `[\s\S]*?` 能跨任意长度。10-25 12:34 那条命令是一段
+   Python，在改一个 docstring，正文里有 "git identities … a guessed checkout location"，于是被当成了 `git checkout`。
+2. **目录不知道时就去查所有仓库。** 脚本内容里看不出目录，`_discard_dirs` 返回 None。这时 `_foreign_uncommitted` 会去查
+   "所有别的会话写过的仓库"，在 6 秒的期限里一个个跑 `git status`。仓库一多就超时，抛 `GitUnknown`，结果是
+   "could not check whether another session has uncommitted work there"，于是问人。
+
+### C. 弹窗说不清原因，事后也查不到
+
+- 除了丢弃类（discard）有具体说明，其他弹窗的 reason 都是同一句 "Matches dangerous command pattern"。不说是哪条规则，
+  也不说是命令里的哪一段。一条命令几十行时，人无法判断该不该批。
+- `HookRegistry` 只记 hook 返回的 deny 或 ask。dangerous_command_gate 是自己弹窗、自己等结果，人批准后返回 approve，
+  所以被批准的弹窗不进 `gate_decisions.jsonl`。`gate_audit.py` 里这个 gate 只有 1 条。
+  AGENTS.md 规定"一个 gate 是留是删，看这份记录"，但这份记录看不见它最常见的情况。
 
 ## 3. 设计
 
@@ -139,43 +176,25 @@ permission approve request，我感觉那些都不是 dangerous command 啊，�
   不在关键路径上。
 - 生效要重新打包、重启 daemon（XG 手动）。
 
+## 6. 实现记录（r2）
+
+- 一个提交，改动在 `backend/core/security_hooks.py`、`backend/core/gate_decision_log.py`、`backend/scripts/gate_audit.py`；
+  测试 `backend/tests/test_approval_prompt_false_positives.py`（§4 的全部条目，main 上全红）。
+- A：`_dangerous_rm_segment` 返回命中的那段 rm（`_is_dangerous_rm` 是它的布尔版），按分隔符追踪 `cd <绝对路径> &&`
+  和子 shell，变量只认顶层唯一一次 `N=$(mktemp -d)`（可带 `-t` 模板，不能带路径）；`export`、`read`、`for`、
+  第二次赋值、env 前缀写法都让它失效。
+- B：`_DISCARD_SIG_RE` 只认 git 调用形状（shell 同一行、Python argv 相邻元素）。脚本里有丢弃但没有 `cwd=`、`chdir`、
+  `-C`、`GIT_DIR` 时，目录取读这段脚本的解释器所在目录；shell heredoc 仍返回 None。
+- C：`_danger_match` 返回 `rule` / `match` / `why`；reason 形如 ``` `rm -rf $T`: … [rule: rm_unresolved_target] ```，
+  存档请求带 `rule`，daemon 日志 `[PERMISSION_REQUEST]` 带规则 id。每次弹窗（以及关闭人工审批时的自动拒绝）由
+  gate 自己写一行（`rule`、`match`、`prompted`），在 `pipeline_signal` 池里写；`gate_decision_log.mark_self_logged`
+  让 `with_decision_log` 不再重复写 deny 行。`gate_audit.py` 在 gate 那一行下面按规则、按结果计数。
+  `bash_misuse_report` 的 deny 文本识别加了 `[rule: `。
+- 偏离：规则的说明是英文（和其他 gate 的 reason 一致），卡片前端没改，命中的那段在 reason 里显示。
+- 验收：§1.2 里有完整命令的 10 条重放结果和 §4 预期一致（22:07、12:34、00:41 不再弹；21:01、00:20 走丢弃检查；
+  其余 5 条不弹）。变异检查：去掉 cd 追踪、接受第二次赋值、签名换回 `[\s\S]*?`、去掉 B2 的目录，各自让测试变红。
+
 ## 修订
 
+- r2（2026-10-26）：A、B、C 已实现，见 §6。§2 挪回 §1 之后。
 - r1（2026-10-26）：初稿。依据 `run_872ffe42` 的调研：daemon 日志里的 15 次弹窗加上存档里的完整命令，用当时 main 的 gate 重判。
-
-## 2. 原因
-
-### A. `rm -rf` 的目标是相对路径或变量时，一律算危险
-
-`_rm_segment_is_dangerous` 对每个操作数的判断（`core/security_hooks.py`）：
-
-- 操作数里有 `$`、`~` 或 `..`，直接算危险；
-- 相对路径一律算危险；
-- 只有绝对路径落在 `/tmp/`、`/var/folders/`、`/private/tmp/`、`/private/var/folders/` 下才放行。
-
-这条规则只看 `rm` 这一段，不知道同一条命令里前面做过什么：
-
-- `mkdir -p /tmp/xgrev && cd /tmp/xgrev && rm -rf x`：`x` 实际在 `/tmp/xgrev` 下，但 `cd` 被忽略了，hook 输入里的 `cwd` 也没用；
-- `T=$(mktemp -d); …; rm -rf $T`：`$T` 就是刚建的临时目录，但赋值被忽略了。
-
-"不认识就问"本身没错。问题是这两种情况，命令里已经写着答案。
-
-### B. 判断"会不会丢掉未提交的改动"时，规则拿错了范围
-
-两个问题叠在一起：
-
-1. **签名匹配到了一段英文。** `_DISCARD_SIG_RE` 是
-   `\bgit\b[\s\S]*?\b(?:reset\W+--(?:hard|merge)|checkout|restore|switch|clean\W+-|worktree\W+remove)\b`，
-   它会用在 heredoc 或解释器脚本的内容上（`_judge_with_bodies`）。中间的 `[\s\S]*?` 能跨任意长度。10-25 12:34 那条命令是一段
-   Python，在改一个 docstring，正文里有 "git identities … a guessed checkout location"，于是被当成了 `git checkout`。
-2. **目录不知道时就去查所有仓库。** 脚本内容里看不出目录，`_discard_dirs` 返回 None。这时 `_foreign_uncommitted` 会去查
-   "所有别的会话写过的仓库"，在 6 秒的期限里一个个跑 `git status`。仓库一多就超时，抛 `GitUnknown`，结果是
-   "could not check whether another session has uncommitted work there"，于是问人。
-
-### C. 弹窗说不清原因，事后也查不到
-
-- 除了丢弃类（discard）有具体说明，其他弹窗的 reason 都是同一句 "Matches dangerous command pattern"。不说是哪条规则，
-  也不说是命令里的哪一段。一条命令几十行时，人无法判断该不该批。
-- `HookRegistry` 只记 hook 返回的 deny 或 ask。dangerous_command_gate 是自己弹窗、自己等结果，人批准后返回 approve，
-  所以被批准的弹窗不进 `gate_decisions.jsonl`。`gate_audit.py` 里这个 gate 只有 1 条。
-  AGENTS.md 规定"一个 gate 是留是删，看这份记录"，但这份记录看不见它最常见的情况。

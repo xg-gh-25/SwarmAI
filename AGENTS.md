@@ -309,7 +309,9 @@ implementations in `security_hooks.py`). By category:
    inject-only, once per session per repo (`core/shared_checkout.py`, design §3.8).
 
 Every PreToolUse deny / ask is recorded by `HookRegistry.register` (not by the gate) in
-`~/.swarm-ai/logs/gate_decisions.jsonl`, with the full tool input; `python
+`~/.swarm-ai/logs/gate_decisions.jsonl`, with the full tool input; `dangerous_command_gate`, which
+waits for the person itself, writes its own row per prompt with the person's answer and the
+rule it matched (`rule`, `match`); `python
 backend/scripts/gate_audit.py --samples 3` counts them per gate per day. A gate is kept,
 merged or removed on that evidence.
 

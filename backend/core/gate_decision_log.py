@@ -12,6 +12,7 @@ Key public symbols:
 
 - ``with_decision_log(name, hook)`` -- wrap a hook; the result is unchanged.
 - ``record_decision(...)``          -- append one line (never raises).
+- ``mark_self_logged(input_data)`` -- a gate wrote its own row; the wrapper skips it.
 - ``record_force_bypass(...)``      -- append one line for an operator FORCE use.
 - ``log_path()``                    -- the jsonl path (``SWARM_GATE_LOG`` overrides).
 """
@@ -34,6 +35,7 @@ _MAX_INPUT_CHARS = 4000
 _MAX_REASON_CHARS = 600
 _MAX_BYTES = 20 * 1024 * 1024  # rotate to .1 past 20 MB
 _lock = threading.Lock()
+_ids_lock = threading.Lock()   # never held across file I/O (the wrapper runs on the loop)
 
 
 def log_path() -> Path:
@@ -88,11 +90,13 @@ def record_decision(
     disposition: str,
     input_data: Any,
     reason: str = "",
+    extra: "dict | None" = None,
 ) -> None:
-    """Append one decision line. ``input_data`` is the SDK hook input dict."""
+    """Append one decision line. ``input_data`` is the SDK hook input dict; *extra*
+    adds fields (a prompting gate's ``rule`` / ``match`` / ``prompted``)."""
     data = input_data if isinstance(input_data, dict) else {}
     tool_name = str(data.get("tool_name", ""))
-    _append({
+    record = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "gate": gate,
         "decision": disposition,
@@ -101,7 +105,23 @@ def record_decision(
         "app_session_id": os.environ.get("SWARM_APP_SESSION_ID"),
         "input": _tool_input_text(tool_name, data.get("tool_input")),
         "reason": str(reason)[:_MAX_REASON_CHARS],
-    })
+    }
+    record.update(extra or {})
+    _append(record)
+
+
+# Hook inputs whose gate wrote its own row (a gate that prompts records the person's
+# answer, which the wrapper cannot see): the wrapper then writes none. Keyed by the
+# input dict's id, taken out by the wrapper right after the hook returns.
+_self_logged: set[int] = set()
+
+
+def mark_self_logged(input_data: Any) -> None:
+    """A gate recorded this call itself; ``with_decision_log`` skips it."""
+    with _ids_lock:
+        if len(_self_logged) > 1000:   # only unwrapped callers (tests) leave ids behind
+            _self_logged.clear()
+        _self_logged.add(id(input_data))
 
 
 def record_force_bypass(gate: str, input_data: Any = None, detail: str = "") -> None:
@@ -121,7 +141,10 @@ def with_decision_log(name: str, hook: HookFn) -> HookFn:
 
     async def logged(input_data: Any, tool_use_id: Any, context: Any) -> Any:
         result = await hook(input_data, tool_use_id, context)
-        if isinstance(result, dict) and result:
+        with _ids_lock:
+            self_logged = id(input_data) in _self_logged
+            _self_logged.discard(id(input_data))
+        if isinstance(result, dict) and result and not self_logged:
             try:
                 disposition = from_sdk(result).disposition
                 if disposition >= Disposition.HITL:
