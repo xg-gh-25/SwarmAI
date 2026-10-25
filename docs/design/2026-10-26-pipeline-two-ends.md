@@ -3,23 +3,42 @@ title: Pipeline 只管两头 — 合并 native-execution 草稿、现行 spec �
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r1 — 设计，待 XG 确认 §7 的决定
+status: r2 — 设计，待 XG 确认 §7 的决定
 ---
 
 # Pipeline 只管两头
 
-## 0. 主旨（XG）
+## 0. 主旨（XG 2026-10-22，原文，必须遵守）
 
-**写代码全部交给 native。** Pipeline 只管两头：
+> Pipeline 的核心是 **DDD 驱动的自主交付：从 intent 到高质量的 PR / CR / commit**。价值在两头：
+>
+> - **前端：** 理解需求，产出 spec 和 design（REQUIREMENTS + DESIGN_SPEC）。
+> - **后端：** 守质量，出报告，做 reflect（REVIEW、TEST、DELIVER、REFLECT）。
+>
+> 中段（拿到 spec 之后怎么写代码）**不自己造**：agent 根据 spec 自己决定怎么实现、怎么测试。其余部分也是能用原生就用原生，我们加的东西越轻越好。
+>
+> 一句话：**怎么写由 agent 定，写没写完、修没修好、能不能交由 pipeline 的确定性检查定**（SOUL P5）。
 
-- **前端**：把意图变成能核对的需求和方案（REQUIREMENTS、DESIGN_SPEC），需要时问人。
-- **后端**：审查、汇总验证报告、落地、写 REPORT、沉淀经验（REVIEW、TEST、DELIVER、REFLECT）。
+### 0.1 本文每一条都要过的四个问题
 
-中间那一段（怎么写、怎么测、要不要并行）由 agent 用它平时的方式自己做，pipeline 只看出口：一份绑定代码树的验证报告。
-pipeline 不跑测试、不规定写法、不选"构建模式"。这是 usable-by-anyone spec 的 r7 定稿（"pipeline 只做流程控制和质量收敛"），
-也是 native-execution 草稿的 §0。
+1. 它是在前端（需求、方案）或后端（质量、报告、reflect）吗？在中段的，一律不做。
+2. 它是不是在规定 agent 怎么写、怎么测？是的，就不做。
+3. 能用原生的，有没有用原生？我们加的东西是不是最轻的那个？
+4. "写没写完、修没修好、能不能交"是不是由确定性检查判定，而不是由 agent 自己说了算？
 
-由此推出一条判断：**profile 只决定前端写多深、最后产出什么**，不决定代码怎么写。不同 profile 的中段完全一样。
+由此推出：**profile 只决定前端写多深、最后产出什么**，不决定代码怎么写。不同 profile 的中段完全一样。
+
+### 0.2 一个要说清楚的地方："确定性检查"判定什么
+
+r7 定稿（"pipeline 不观察、不执行测试，用 agent 自己的结果"）之后，确定性检查判定的不是"测试是否真的通过"，而是**证据是否成立**：
+
+- 有改动；
+- 每个仓库在**当前代码树**上都有一份验证报告，代码一改，旧报告就失效（BX-3、LG-1）；
+- 审过的代码就是要落地的那份（RV-4、patch id 绑定）；
+- 审查没有遗留的 HIGH；
+- 测试引用在代码里找得到（TS-4）。
+
+测试结果的真假由 agent 报告，审查专家核实，REPORT 照实写明来源。这是对"确定性检查定"的现行实现，本文不改；如果 XG 认为"写没写完"必须由 pipeline 自己重跑测试来判定，那就是推翻 r7，需要另外决定。
 
 ## 1. 这份文档合并了什么
 
@@ -34,7 +53,7 @@ pipeline 不跑测试、不规定写法、不选"构建模式"。这是 usable-b
 
 | NE 项 | 内容 | 现在 | 结论 |
 |---|---|---|---|
-| NE-1 | BUILD 卡片去掉写法要求 | S6 已改：`build.md` 写的是"照你没有 pipeline 时的方式测试"，出口是 BX-3（有改动，每个仓库在当前代码树上有 BUILD 报告） | 已完成。`goal_cycle.md` 随 goal 一起删（§6） |
+| NE-1 | BUILD 卡片去掉写法要求 | **没做完**：S6 改掉了 runner 命令，但卡片和 `next` 还在规定写法（§3.3） | 补完（§8 第 2 步）。`goal_cycle.md` 随 goal 一起删（§6） |
 | NE-2 | `status.next` | 已有（`next_step.py`，commit 4 handoff） | 有，但有三条路径会指错（§3）。用 §5 修，不另起 |
 | NE-3 | TS-4：exit 测试在 base 上要按声明失败或通过 | 依赖 runner 在 base 上重跑测试，r7 以后 pipeline 不跑测试，runner 已删；现在的 TS-4 是另一件事（每条测试引用在代码里找得到，`18ca64436`） | **作废**。它要保证的"测试真的在测这次改动"，现在由 BUILD 卡片（先看到失败再修）、报告和 correctness 审查共同负责，不另设机制 |
 | NE-4 | spec 要人能读（渲染补全、schema 加叙述字段） | 没做：`render_design` 里 `consumers` 还是逐行 JSON | 保留，排在后面（§8 第 6 步），等 §7 决定 spec profile 之后一起做 |
@@ -65,6 +84,17 @@ pipeline 不跑测试、不规定写法、不选"构建模式"。这是 usable-b
 - **两份 spec 对 goal 说法不同。** 现行 spec 说保留六个 profile，NE 草稿 D6 说删 goal。
 
 这和聊天那次（多条写路径各有一套合并规则）是同一类问题：一个事实定义在多于一处。
+
+### 3.3 还在规定 agent 怎么写、怎么测（违反主旨"中段不自己造"）
+
+| 位置 | 原文 | 问题 |
+|---|---|---|
+| `stages/build.md` 第 3 行 | "Implement DESIGN_SPEC tasks in dependency order" | 规定了实现顺序 |
+| `stages/build.md` 第 5 行 | "write or change the test that shows the change, see it fail before the fix … Fix a whole failure cluster in one pass" | 规定了先写测试、先看失败、整簇一次修完 |
+| `next_step.py` 第 226 行 | "run the change's tests yourself (write the failing test first)" | `next` 每次都在重复"先写失败的测试" |
+| `stages/review.md` 第 5 行 | "cluster findings by file and ±10 lines, fix once" | 规定了修复轮怎么改 |
+
+改法：卡片和 `next` 只说**输入**（DESIGN_SPEC 的 tasks 和 exit criteria；direct 是 `--requirement` 原话；修复轮是 FIXING_SPEC）和**出口**（当前代码树上的验证报告；修复轮是每条 finding 的关闭证据），怎么写、怎么测、按什么顺序、怎么修，一个字都不写。`review.md` 里按位置聚类是 pipeline 自己生成 FIXING_SPEC 时做的，不是让 agent 去做的，保留在 engine 里，从卡片上删掉。
 
 ## 4. profile：一张表，只有 lifecycle 一个来源
 
@@ -126,18 +156,31 @@ engine、lifecycle、next_step、checks、schemas、cli_commands 里按名字比
 
 | 步 | 内容 | 验收 |
 |---|---|---|
-| 1 | 合入跟随测试（每个 profile + Gate-0 必需 + BUILD 失败 3 次 + DELIVER 时 main 移动）和结构测试（产品代码里按 profile 名字比较的行数），各带一个只许缩小的 `KNOWN` | 两个测试在 main 上通过，`KNOWN` 记的是现状 |
-| 2 | 删 goal（§6） | 跟随测试少一个 profile；结构测试的计数减少；grep 不到 `goal_cycle` |
-| 3 | 能力表加上替换名字比较；`pipeline_profiles.py` 收缩 | 结构测试的 `KNOWN` 为空（豁免表除外） |
-| 4 | `deliver_route`，命令和 `next` 都用它 | 跟随测试里 not-landed 那一项通过 |
-| 5 | `gate0_status`，命令和 `next` 都用它 | bugfix 和"两种理解"两项通过；跟随测试的 `KNOWN` 为空 |
-| 6 | 同步文档：现行 spec 改为五个 profile；NE 草稿和 `2026-10-26-profile-capabilities.md` 标为被本文取代；AGENTS.md、skill 卡片 | 文档里没有残留的 goal 和 goal_cycle |
-| 7（另开一轮，看 §7 决定 3） | 自动续跑 | NE-6 的 V1–V3 |
-| 8（看 §7 决定 2） | spec profile + NE-4 渲染 | — |
+| 1 | 合入跟随测试（每个 profile + Gate-0 必需 + BUILD 失败 3 次 + DELIVER 时 main 移动）、结构测试（产品代码里按 profile 名字比较的行数），以及卡片和 `next` 的"不规定写法"测试（§3.3 的那几句不能再出现），各带一个只许缩小的 `KNOWN` | 三个测试在 main 上通过，`KNOWN` 记的是现状 |
+| 2 | 卡片和 `next` 去掉写法要求（§3.3） | "不规定写法"测试的 `KNOWN` 为空 |
+| 3 | 删 goal（§6） | 跟随测试少一个 profile；结构测试的计数减少；grep 不到 `goal_cycle` |
+| 4 | 能力表加上替换名字比较；`pipeline_profiles.py` 收缩 | 结构测试的 `KNOWN` 为空（豁免表除外） |
+| 5 | `deliver_route`，命令和 `next` 都用它 | 跟随测试里 not-landed 那一项通过 |
+| 6 | `gate0_status`，命令和 `next` 都用它 | bugfix 和"两种理解"两项通过；跟随测试的 `KNOWN` 为空 |
+| 7 | 同步文档：现行 spec 改为五个 profile；NE 草稿和 `2026-10-26-profile-capabilities.md` 标为被本文取代；AGENTS.md、skill 卡片 | 文档里没有残留的 goal 和 goal_cycle |
+| 8（另开一轮，看 §7 决定 3） | 自动续跑 | NE-6 的 V1–V3 |
+| 9（看 §7 决定 2） | spec profile + NE-4 渲染 | — |
 
-第 2 步放在第 3 步前面，是因为删掉 goal 之后，能力表少一行，要替换的名字比较也会少几处。
+删 goal 放在能力表前面，是因为删掉之后能力表少一行，要替换的名字比较也会少几处。
 
-## 9. 五维
+## 9. 对照主旨（§0.1 的四个问题）
+
+| 改动 | 前端 / 后端？ | 规定写法？ | 最轻？原生？ | 由确定性检查判定？ |
+|---|---|---|---|---|
+| 卡片和 `next` 去掉写法要求 | 两头都不碰中段 | 删掉的正是写法规定 | 只删文字 | 出口不变：当前代码树上的报告 |
+| 删 goal | — | `goal_cycle` 卡片规定"一个有界的 cycle"，删掉 | 少一个 profile、一个阶段 | 检查不变（BX-3） |
+| 能力表、`deliver_route`、`gate0_status` | 前端（Gate-0）、后端（落地） | 否 | 同一个事实只剩一处，代码变少 | `next` 和命令都由同一个确定性函数判定 |
+| 跟随测试、结构测试 | 测试 | 否 | 只加测试，产品代码不变重 | 是验收本身 |
+| 不做 spec profile | — | — | 不加 profile | — |
+| 自动续跑（另开一轮） | 后端（把 run 推到能交） | 否 | 先查宿主有没有原生的续跑机制（KiroCrew 的 auto-nudge、CLI 的 `/loop`），有就用，NE 草稿 D2 不用原生 `/goal` 的理由要按"能用原生就用原生"重新核一次 | nudge 本身不做判断，下一步由 `next` 给出 |
+| NE-3 作废 | — | — | 不加 | 按 §0.2：pipeline 判定证据，不重跑测试 |
+
+## 10. 五维
 
 | 维度 | 影响 |
 |---|---|
@@ -148,3 +191,8 @@ engine、lifecycle、next_step、checks、schemas、cli_commands 里按名字比
 | Token | 卡住的 run 不再反复调用同一个命令 |
 
 改动只在 CLI 和 pipeline 模块里，不碰聊天的发送路径。需要重新打包才会生效。
+
+## 修订
+
+- r2（2026-10-26，XG：主旨"绝对要 follow"）：§0 换成 XG 10-22 的原文；加 §0.1 四个问题、§0.2 说明"确定性检查"在 r7 之后判定的是证据；按主旨重新核对，发现 NE-1 没做完（BUILD、REVIEW 卡片和 `next` 还在规定写法，§3.3），加入实施第 2 步；加 §9 逐项对照主旨；自动续跑先查有没有原生机制。
+- r1（2026-10-26）：初稿。
