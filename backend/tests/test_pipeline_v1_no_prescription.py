@@ -24,14 +24,7 @@ PHRASES = {
 }
 
 KNOWN: set[tuple[str, str]] = {
-    ("build.md", "dependency order"),
-    ("build.md", "fail first"),
-    ("build.md", "fix in one pass"),
     ("goal_cycle.md", "bounded cycle"),
-    ("review.md", "fix in one pass"),
-    ("review.md", "cluster yourself"),
-    ("next_step.py", "fail first"),
-    ("next_step.py", "tdd"),
 }
 
 

@@ -22,7 +22,7 @@ from core.run_protocol import checks, lifecycle
 
 _CARDS = Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline" / "stages"
 _ARTIFACT_STAGES = {"evaluate", "plan"}
-_TDD_STAGES = {"build", "goal_cycle"}      # the card: TDD on the files changed now
+_CODE_STAGES = {"build", "goal_cycle"}     # the agent writes and tests the change its own way
 # a person stopped the run, or its session went away: only a person resumes it
 _HUMAN_PAUSES = {"user_stop", "session_lost"}
 
@@ -219,15 +219,15 @@ def next_step(engine, *, previous_stage: str | None = None,
         if action == "wait":
             out["handouts"] = waiting_handouts(events, "review")
         return out
-    if stage in _TDD_STAGES or stage == "test":
+    if stage in _CODE_STAGES or stage == "test":
         # S6-1: the agent tests natively and ends the stage with its validation report
         out.update(action="write_artifact",
                    command=_cmd(engine, "stage-complete --artifact -"),
-                   why=("run the change's tests yourself (write the failing test first), "
+                   why=("write and test the change your own way, "
                         "then pass your report on stdin: "
                         '{"reports": [{"repo", "commands": [{"command", "cwd", "result": '
                         '"pass|fail|not_run", "reason"}], "tests_changed", "rationale"}]}'
-                        if stage in _TDD_STAGES else
+                        if stage in _CODE_STAGES else
                         "run the final verification on this tree yourself (do not change "
                         "code in TEST), then pass the report on stdin in the same shape"))
         return out
