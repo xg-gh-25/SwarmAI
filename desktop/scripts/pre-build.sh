@@ -6,9 +6,12 @@
 # platform's default shell (cmd.exe on Windows, bash on macOS/Linux).
 # A semicolon-separated compound command in tauri.conf.json breaks on
 # Windows since `;` is not a cmd.exe command separator.
-set -e
+set -eu   # -u: an undefined variable stops the build instead of turning a path into "/..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Tauri runs this script on its own (beforeBuildCommand), so nothing from build.sh is
+# inherited: define the desktop dir here, the same way build.sh does.
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Guardian asset sync (macOS only, non-fatal)
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -16,7 +19,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # Build frontend (Vite)
-cd "$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
 npm run build
 
 
