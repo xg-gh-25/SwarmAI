@@ -630,6 +630,14 @@ change is fully green on THREE checks — any one unrun or red blocks the push:
    is not installed here; a per-test `--timeout` alone is not a cap, and a pytest still running
    at the Bash timeout is moved to the background and returns nothing). Frontend: `cd desktop && npm test -- --run`.
    Last-failed: add `--lf`.
+   **Time budget per call:** one heavy step (tsc, a group of vitest files, a group of pytest
+   files) per shell call, each with its own wall-clock cap. If you chain steps in one call,
+   their caps added together must stay under the call's own timeout; otherwise the call is
+   moved to the background and returns nothing. Frontend test cap:
+   `cd desktop && perl -e 'alarm 300; exec @ARGV' npx vitest run <files> --maxWorkers=2`.
+   Never raise a per-test timeout (`--testTimeout`, `--timeout`) to get a run through: a test
+   slow because the host is loaded means fewer files or wait; a test slow on its own is a bug.
+   Write logs inside your worktree or your own scratch directory, not a shared `/tmp`.
    **A red run is truncated:** `backend/pyproject.toml` `addopts` carries `--maxfail=3`,
    so after the 3rd failure pytest stops and every later test never runs — the
    "N passed, 3 failed" summary is not the scope's real count, and the 3 failures may be
