@@ -197,3 +197,26 @@ def test_gallery_links_only_http_urls(tmp_path, monkeypatch):
     (tmp_path / "repo" / "content").mkdir(parents=True)
     publish_to_pages.generate_index(tmp_path / "repo")
     assert "javascript:" not in (tmp_path / "repo" / "index.html").read_text()
+
+
+def test_publish_pushes_with_plain_git_only(monkeypatch, tmp_path, capsys):
+    """No GitHub API path (it bypassed push controls and force-updated the ref)."""
+    import subprocess
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=True):
+        calls.append(list(cmd))
+        out = " M index.html\n" if cmd[:2] == ["git", "status"] else ""
+        rc = 1 if cmd[:2] == ["git", "push"] else 0
+        return subprocess.CompletedProcess(cmd, rc, out, "! [rejected] main -> main (non-fast-forward)")
+
+    def no_raw_subprocess(*a, **k):
+        calls.append(["subprocess.run", *map(str, a[0] if a else [])])
+        return subprocess.CompletedProcess(a[0] if a else [], 0, "{}", "")
+
+    monkeypatch.setattr(publish_to_pages, "run", fake_run)
+    monkeypatch.setattr(publish_to_pages.subprocess, "run", no_raw_subprocess)
+    publish_to_pages.git_commit_and_push(tmp_path, "publish: x")
+    assert [c[:2] for c in calls] == [["git", "add"], ["git", "status"], ["git", "commit"], ["git", "push"]]
+    assert "--force" not in calls[-1] and "-f" not in calls[-1]
+    assert "non-fast-forward" in capsys.readouterr().out

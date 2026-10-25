@@ -1,4 +1,9 @@
-# Swarm Brand Voice Guide
+# Default Brand Voice Guide
+
+> The default voice for Pollinate scripts and posts. A user with their own voice guide sets
+> `voice.guide: <path>` in their brand file (`~/.swarm-ai/pollinate-brand.yaml`; path
+> relative to that file); read that guide instead of this one. The examples below are
+> illustrations of each trait, not topics to reuse.
 
 ## Core Voice Characteristics
 

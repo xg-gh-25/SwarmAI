@@ -1,13 +1,14 @@
 # External Content Design Principles
 
-> Source of truth: `Projects/SwarmAI/PRODUCT.md` "Brand & External Communication" section.
-> This file is the Pollinate-local copy for stage reference. Sync on conflict.
+> The writing principles below are the default for everyone. The user's own positioning
+> (tagline, belief, thesis anchors, ability anchors) comes from the `positioning` block of
+> their brand file (`scripts/brand_config.py`; `~/.swarm-ai/pollinate-brand.yaml`).
 
 ## When These Apply
 
 These principles govern ALL content produced by Pollinate that is **externally facing** — social media posts, posters, video scripts, README "why" sections, demo pitches, brand materials.
 
-**Does NOT apply to:** internal docs (DDD, TECH.md, DailyActivity), agent self-use artifacts, technical reports for XG only.
+**Does NOT apply to:** internal docs, agent self-use artifacts, technical reports meant only for the user.
 
 ## The 8 Principles
 
@@ -42,13 +43,13 @@ These principles govern ALL content produced by Pollinate that is **externally f
 - ❌ "Quality Convergence Loop"
 - ✅ "犯过的错永远不再犯"
 
-Exception: 概念足够短且自解释时可保留（`DDD`, `Coding as Black Box`）
+Exception: 概念足够短且自解释时可保留（例如一个读者已熟悉的缩写或产品名）
 
 ### P5: 英文只在比中文更有力时用
 
 - Test: 翻成中文会失去什么？Nothing → 用中文。
-- 保留: `Human directs. AI delivers.` / `DDD` / `Coding as Black Box`
-- 不保留: `Compound interest on engineering knowledge`（中文"越用越懂"更好）
+- 保留: 品牌 tagline、业内通用缩写（`API`、`ROI`）、没有好译法的专有名词
+- 不保留: 只是听起来高级的英文短语，例如 `Compound interest on engineering knowledge`（中文"越用越懂"更好）
 
 ### P6: 每条独立能打
 
@@ -63,41 +64,23 @@ Exception: 概念足够短且自解释时可保留（`DDD`, `Coding as Black Box
 - ❌ "· Domain Expertise as Infrastructure (DDD)"
 - ✅ "领域知识从工作中自己生长，不靠人维护"
 
-### P8: 严格遵循定位层次
+### P8: 在用户的定位框架里工作（配置了才适用）
 
-所有内容必须在这个层次里工作：
+用户的品牌文件里有 `positioning` 时，所有内容都在它定义的层次里：
 
+```yaml
+positioning:
+  tagline: "..."         # 一句话
+  belief: "..."          # 信念
+  proof: "..."           # 证明点
+  theses:                # 价值锚：每条内容至少锚定一条
+    - {id: T1, thesis: "...", expression: "..."}
+  abilities:             # 能力锚：产品/作者的能力，原样引用
+    - "..."
 ```
-Tagline:  Human directs. AI delivers.
-Belief:   探索 AI 的边界
-Proof:    一个人 + AI 能顶一个团队
-Theses:   T1-T6 (价值锚)
-Ability:  DDD / Pipeline / Memory / Evolution / Quality (能力锚)
-```
 
-内容 = Thesis × Ability，经过 P1-P7 filter 输出。不在框架里 = 跑偏。
-
----
-
-## Thesis Anchors (每条内容至少锚定一个)
-
-| ID | Thesis | 核心表达 |
-|----|--------|---------|
-| T1 | Memory is the moat | 记忆是连续性，不是存储量 |
-| T2 | Paradigm shift is structural | 认知底座在变，不是渠道 |
-| T3 | Understanding > Execution | 判断力不可外包，用进废退 |
-| T4 | AI-Native org design | 协作成本 = 信息不对称的代价 |
-| T5 | Culture as code | 工程文化编码进系统 = 品味 |
-| T6 | Tooling commoditizes | 知识是资产，工具是手段 |
-
-## Ability Anchors (产品能力，英文原样)
-
-- DDD — Domain expertise as infrastructure
-- Coding as Black Box — One sentence → push-ready
-- Memory Compounds — 越用越懂，不是每次从零
-- Self-Evolution — 犯过的错在结构上不可能再犯
-- Quality Convergence — 每轮输出比上轮更接近正确
-- 5 Black Boxes — Coding · Content · Knowledge · Quality · Evolution
+内容 = Thesis × Ability，经过 P1-P7 filter 输出；不在框架里 = 跑偏。没有配置
+`positioning` 时，从选题本身提炼一条核心论点（Thesis），用它代替价值锚。
 
 ---
 
@@ -105,7 +88,7 @@ Ability:  DDD / Pipeline / Memory / Evolution / Quality (能力锚)
 
 | Pollinate Stage | How to use this file |
 |-----------------|---------------------|
-| EVALUATE | Check: is the topic anchored to a thesis? If not → reframe or reject |
+| EVALUATE | Check: is the topic anchored to a thesis (one of `positioning.theses`, or the topic's own core claim)? If not → reframe or reject |
 | MESSAGE | Apply P1-P5 to distill the core message |
 | PRODUCE | Apply P6 (each piece self-sufficient) + P4 (效果 > 机制) |
 | QUALITY | Gate check: scan for anti-patterns below |
@@ -132,6 +115,6 @@ Before delivering any external content, verify NONE of these appear:
 - [ ] Feature pitch without thesis backing (P3)
 - [ ] Piece requires reading other pieces to make sense (P6)
 - [ ] Briefing/intro lists internal module names instead of user value (P7)
-- [ ] **Missing GitHub QR code or link in visual output (BLOCKING)**
+- [ ] **A configured signature element (watermark / QR / link) missing from a visual output (BLOCKING)**
 
 Any checkbox triggered → fix before delivery.
