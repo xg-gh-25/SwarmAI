@@ -110,9 +110,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # the registry, never passed raw to converse().
     "eval_judge_model": DEFAULT_JUDGE_MODEL,
     # Chat steer (design 2026-10-24-chat-steer): a message sent while a turn
-    # streams is written into the running turn instead of queued. A setting like
-    # any other: PUT /api/settings turns it on or off without a restart.
-    "steer_busy_send": False,
+    # streams is written into the running turn instead of queued. On by default
+    # (XG 2026-10-26: no way back, problems are fixed forward).
+    "steer_busy_send": True,
     "evolution": {
         "enabled": True,
         "max_retries": 3,

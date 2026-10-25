@@ -4200,14 +4200,14 @@ class SessionRouter:
 
     # ── Steer: a message written into the running turn (design chat-steer) ──
 
-    STEER_SETTING = "steer_busy_send"   # app config switch, off until the frontend (P2)
+    STEER_SETTING = "steer_busy_send"   # app config, on by default (app_config_manager)
 
     @classmethod
     def _steer_enabled(cls) -> bool:
         try:
             from .app_config_manager import AppConfigManager
-            return AppConfigManager.instance().get(cls.STEER_SETTING, False) is True
-        except Exception as e:  # noqa: BLE001 — no config: off
+            return AppConfigManager.instance().get(cls.STEER_SETTING, True) is True
+        except Exception as e:  # noqa: BLE001 — config unreadable: off
             # debug, not warning: this runs on every busy send and state publish
             logger.debug("steer setting unreadable, steer off: %s", e)
             return False

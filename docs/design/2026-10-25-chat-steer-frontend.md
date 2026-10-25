@@ -274,7 +274,7 @@ turn 的用量、耗时、输出卡片只在最后一段：`result` 落在当时
 
 1. 前端改动合入，开关仍关：T-off 保证用户看不到变化。按 AGENT R16 单独部署前端，冒烟（发一条消息、
    流式、切 tab 重载）。
-2. 打开 `steer_busy_send`（app config）。冒烟：两条 Bash 中间发"跳过第二条"（T11），看 Waiting → Read
+2. `steer_busy_send` 默认打开（2026-10-26，XG：不留回退，问题往前修）。冒烟：两条 Bash 中间发"跳过第二条"（T11），看 Waiting → Read
    during；切 tab 再切回、重载，确认顺序和标签。
 3. 观察一周后删开关（后端 §8 P3）。
 
