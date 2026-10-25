@@ -162,8 +162,9 @@ host, not the Hive Fleet App and not a separate authored App format.
 | Host Runtime Profile | The concrete capability set and constraints of one host deployment, such as SwarmAI Desktop or SwarmAI Hive | App identity, product lifecycle or user grants |
 | Host Capability | A versioned contract an App can require, such as `web-ui`, `session-outcome`, `daemon-scheduler` or `aws-instance-role` | A claim that the capability is available or enforced on every profile |
 | DDD Brain | Domain definitions: identity, understanding, gates, authored capabilities, delivery contract, refresher | Host UI/lifecycle state |
-| App Release | Immutable package closure, canonical manifest, adapter provenance and package release digest | User data, concrete Brain renderings or granted permissions |
-| App Installation | Installed package-release set, verified source/trust provenance, active and staged package-release pointers | Instance activation state |
+| App Release | Immutable canonical package closure and package release digest | User data, concrete Brain renderings, host-compiled bytes or granted permissions |
+| Host Execution Release | One target/profile rendering, adapter/contract provenance, resolved dependency lock, executable or embedded binding attestation and execution release digest | Canonical App authorship, Instance data or grants |
+| App Installation | Installed package-release set, verified source/trust provenance, active and staged execution-release pointers available on this host | Instance activation state |
 | App Instance | Concrete Brain rendering, activation digest, data namespace, configuration, grants, desired state and activation generation | Global Core settings or external infrastructure lifecycle by implication |
 | Managed Resource | An App-domain object governed by explicit desired/observed state, such as a remote Hive node | App installation identity or authority to mutate itself on disable |
 | Reconciliation Residue | Durable record of an owned effect not yet cleaned, including exact generation and retry state | A reason to forget or hide partially cleaned external resources |
@@ -242,7 +243,11 @@ or `external` trust.
             "hive": {"supported": true, "requires": ["web-ui", "same-origin-api"]}
           }
         },
-        "kirocrew": {"mode": "unsupported"}
+        "kirocrew": {
+          "mode": "unsupported",
+          "required": false,
+          "omission": "P1 capability package has no Pollinate gallery"
+        }
       }
     }
   ],
@@ -291,10 +296,11 @@ not implicitly compatible.
 | Fact | Authority |
 |---|---|
 | Product/resource declaration | source `app.json` |
-| Immutable package behavior being installed | App Release closure and package release digest |
-| Installed, active and staged package releases | installation record pointers |
+| Immutable canonical App behavior being rendered | App Release closure and package release digest |
+| Actual host-rendered or embedded behavior | Host Execution Release and execution release digest |
+| Installed, active and staged execution releases | installation record pointers constrained to releases available on that host |
 | Concrete Brain/config/data binding | App Instance activation |
-| Effective behavior of one Instance | activation digest over package release + Brain rendering |
+| Effective behavior of one Instance | activation digest over Host Execution Release + Brain rendering |
 | Requested versus approved grants and revocation dominance | per-Instance grants keyed by authority-scope digest and monotonic grant generation |
 | Definition provenance | capability release metadata |
 | Runtime lifecycle ownership | enabled App Instance ownership index |
@@ -310,11 +316,32 @@ schema-declared set sorting, preserved order for semantic arrays, and SHA-256 ov
 canonical manifest plus sorted `(path, content_digest)` entries. Cross-platform golden
 vectors must produce the same **package release digest**.
 
+A Host Adapter then creates a Host Execution Release. Its digest binds the exact executable
+meaning available on one target/profile:
+
+```text
+execution_release_digest = SHA-256(
+  package_release_digest
+  + target_output_digest-or-embedded_binding_digest
+  + adapter_version
+  + host_contract_version
+  + resolved_required_host_capability_digest
+  + resolved_dependency_lock_digest
+  + host_build_digest-when-embedded
+)
+```
+
+For KiroCrew or a detached process, `target_output_digest` covers the generated archive.
+For a SwarmAI built-in, the host build emits an attestation from package release to generated
+binding-map digest and compiled host build digest. Runtime activation fails if that exact
+attested execution release is not present; source files or a fresh manifest alone cannot
+claim that the executing binary matches them.
+
 Each Instance separately computes:
 
 ```text
 activation_digest
-  = SHA-256(package_release_digest + brain_rendering_digest-or-none)
+  = SHA-256(execution_release_digest + brain_rendering_digest-or-none)
 
 authority_scope_digest
   = SHA-256(activation_digest + canonical-resolved-authority-config)
@@ -327,9 +354,11 @@ be explicitly excluded. Resolution occurs before approval, so aliases or indirec
 change the concrete scope afterward without changing `authority_scope_digest`.
 
 Approved grants and dispatch authorization bind to `authority_scope_digest`; desired-state
-authorization also requires the current activation generation. A change to package bytes or
-the concrete Brain rendering creates a new activation. A change to authority-affecting
-configuration creates a new authority scope. Neither can silently retain old grants.
+authorization also requires the current activation generation. A change to canonical App
+bytes, adapter output, resolved dependencies, host contract or resolved required Host
+Capability digest, or embedded host binding/build creates a new execution release and activation. A change to the
+concrete Brain rendering creates a new activation. A change to authority-affecting
+configuration creates a new authority scope. None can silently retain old grants.
 
 Each Instance also has a monotonic `grant_generation`. Grant approval or revocation
 advances it, and effective authority requires all of:
@@ -346,22 +375,30 @@ AND permission is currently approved and host-enforced
 Any activation or authority-scope transition, including rollback to a previously used
 digest, advances grant generation and starts without effective grants unless the user
 explicitly approves them for that transition. A stored grant from an older grant generation
-is historical evidence, never authority that can be revived by digest reuse.
+is historical evidence, never authority that can be revived by digest reuse. `grants_ref`
+points to one immutable complete approved-set snapshot for the current grant generation;
+approving or revoking one permission creates the next complete snapshot rather than leaving
+independent rows at conflicting generations.
 
 ### 5.2 Installation and Instance records
 
-Immutable package release records are keyed by package release digest. An installation
-stores `{app_id, source, verified_trust, active_package_release_digest,
-staged_package_release_digest}` so one package update can wait for validation while the
-prior package remains the installation default.
+Immutable canonical package releases remain keyed by package release digest. A Host
+Execution Release is keyed by execution release digest and names its package, target,
+profile, adapter/contract versions, resolved dependencies and execution attestation. An
+installation stores `{app_id, source, verified_trust, installed_package_release_digests,
+available_execution_release_digests, active_execution_release_digest,
+staged_execution_release_digest}`. Staging therefore never claims that canonical source
+bytes are executable until adapter output or embedded-host attestation exists.
 
-Each Instance stores `{instance_id, package_release_digest, project_id,
-brain_rendering_digest, activation_digest, data_namespace, config_ref,
+Each Instance stores `{instance_id, package_release_digest, execution_release_digest,
+project_id, brain_rendering_digest, activation_digest, data_namespace, config_ref,
 config_generation, authority_scope_digest, desired_state, generation, grant_generation,
-grants_ref}`. Instances may intentionally remain on different installed
-package releases and Brain renderings. Updating or rolling back the installation default
-does not silently move existing Instances; each Instance transition is explicit and
-gets a new activation digest/generation.
+grants_ref}`. Instances may intentionally use different execution releases only while the
+host still advertises each exact digest as available. Updating the installation default does
+not silently move existing Instances; each transition is explicit and gets a new activation
+digest/generation. A rollback target whose detached archive was removed or whose embedded
+binding is absent from the running host is unavailable, never reconstructed from source or
+silently mapped to another build.
 
 The package manifest declares a Brain interface, configuration schema and permission
 templates. The Instance binds the user's concrete Project, immutable Brain rendering,
@@ -417,8 +454,39 @@ Already-running work follows the resource's declared drain/cancel policy.
 
 Built-in implementation bindings are generated from manifest target bindings. The build
 generates typed Python and TypeScript import maps and fails on an unresolved binding,
-unowned implementation or duplicate owner. Generated maps are derived artifacts checked
-for freshness, never independently authored registries.
+unowned implementation or duplicate owner. It also emits a signed or host-verified
+attestation binding package release digest, binding-map digest, host build digest, adapter
+version, host contract and resolved-required-capability digest into the Host Execution
+Release. Runtime accepts only an attested embedded binding present in the running build.
+Generated maps and attestations are derived artifacts checked for freshness, never
+independently authored registries.
+
+### 5.6 Disable, uninstall and data retention
+
+Disable and uninstall are separate desired-state transitions:
+
+1. disable advances activation generation and removes every owned contribution from new
+   resolution while preserving configuration, data, provenance and residue;
+2. uninstall requires every Instance of that Installation to be disabled and reconciled to
+   no runnable contribution, then removes the Installation's active/staged execution-release
+   pointers and marks its retained Instances tombstoned;
+3. user data is retained by default under a tombstoned App/Instance identity so Library,
+   audit and historical relations do not lose provenance;
+4. data purge is a separate explicit, confirmed operation with a preview of affected
+   namespaces, products, relations and dependents;
+5. purge is refused while an enabled dependent, Managed Resource, in-flight operation or
+   reconciliation residue still references the Instance.
+
+Removing an Installation never implies purging data or deleting external resources. For a
+host-embedded Built-in App, uninstall removes activation and registry visibility but cannot
+remove bytes from the already installed host build; those bytes remain inert and cannot be
+resolved without a matching Installation/Instance. A later host update may omit them.
+Detached package bytes may be garbage-collected only when no Installation, Instance,
+rollback target or audit-retention rule references their execution release.
+
+Pollinate products, Community Signals/Reports and ToDo records/attachments follow this
+retained-by-default rule. Hive Fleet adds the stricter §10.4 refusal while any managed node,
+operation intent or residue exists.
 
 ## 6. Runtime architecture
 
@@ -635,11 +703,16 @@ from the resource graph, target bindings and runtime proofs.
 | P3 Product-conformant | Host-native UI, lifecycle, state and behavior meet declared parity tests |
 
 Every source resource appears exactly once in the target report as `mapped`,
-`omitted-optional` or `blocked`. Required is the default. An unsupported required Job,
-Surface or backend blocks P1 even when its Skill works. Optional omission requires an
-explicit target-scoped `required:false` declaration and names the exact resource handle.
-P1 proves functional conformance only, not sandboxing, permission enforcement,
-automation, UI parity or full App parity.
+`omitted-optional` or `blocked`. Required is the default. A blocked required resource
+prevents target archive emission at every level, including C0; C0 proves only that an
+otherwise fully accounted package envelope installs, not that requiredness can be ignored.
+Optional omission requires an explicit target-scoped `required:false` declaration and an
+`omission` reason naming the exact resource handle. P1 may therefore contain only Skill,
+Agent, SOP and knowledge behavior when every P2/P3-only resource omitted from that target
+is explicitly optional there. If a Surface, Job or backend remains required for the target,
+its unsupported mapping blocks P1 even when one Skill works. P1 proves functional
+conformance only, not sandboxing, permission enforcement, automation, UI parity or full
+App parity.
 
 ### 8.3 SwarmAI host profiles
 
@@ -767,7 +840,9 @@ capability such as `s_repo-to-ddd` and prove P1 only:
 
 Only after this passes should Pollinate receive a KiroCrew adapter. Pollinate reaches P3
 only when its KiroCrew-native UI, outputs and lifecycle are separately tested. A working
-Skill alone is P1 and carries no security or parity claim.
+Skill supports a P1 claim only after every omitted Surface, Job, backend and automation
+resource is explicitly target-optional and reported; otherwise the required blocker prevents
+archive emission. P1 carries no security or parity claim.
 
 ## 9. Legacy Plugin compatibility
 
@@ -890,9 +965,11 @@ approved.
 
 A locked `todo-workbench` surface over a Core-owned ToDo manager, tables, hook and sweep is
 not accepted as App migration. It would prove registration only while preserving every
-lifecycle bypass. KiroCrew remains C0 until target-native storage, relation, outcome, review
-and Task adapters preserve the declared semantics; mapping only to a host task list is not
-P3 parity.
+lifecycle bypass. ToDo is not KiroCrew-exportable until the adapter can account for every
+required target resource; C0 begins only when that schema-valid, blocker-free envelope can
+be emitted. P1/P3 additionally require target-native storage, relation, outcome, review and
+Task adapters that preserve declared semantics; mapping only to a host task list is not P3
+parity.
 
 ### 10.4 Hive — Fleet App, Host Profile and future Executor
 
@@ -960,18 +1037,22 @@ and entry criteria for later delivery; they do not expand the V1 definition of d
 - Add canonical resource-graph schema, closure/digest algorithm and invariant tests.
 - Define versioned SwarmAI `desktop-daemon`, `desktop-subprocess` and `hive` capability
   profiles; every built-in resource receives explicit profile accounting.
-- Generate typed built-in binding maps and deterministic built-in index at build time.
+- Generate typed built-in binding maps, deterministic built-in index and Host Execution
+  Release attestations binding package source to the compiled host build.
 - Add read-only App Registry and `/api/apps` projection.
 - Add Apps as the default view inside Apps & Capabilities.
 - Show Pollinate as `catalog-only`; expose no lifecycle control or ownership claim.
 
 ### Phase B — Pollinate ownership and activation pilot
 
-- Create the singleton Pollinate Instance and desired-state generation record.
+- Create the singleton Pollinate Instance bound to an attested Host Execution Release and
+  desired-state generation record.
 - Route Pollinate UI and Skill activation through current-generation ownership checks.
 - Add resource-origin, selected-profile and honest enforcement status.
 - Add the Legacy Plugin read-only adapter.
 - Delete superseded Pollinate hand registration in the same cutover.
+- Prove disable and uninstall remove executable resolution while retaining products and
+  preferences; data purge remains a separately confirmed, dependency-checked action.
 - Run Desktop and Hive profile fixtures; a missing required Hive capability blocks Hive
   activation without weakening Desktop behavior.
 
@@ -1046,6 +1127,8 @@ and entry criteria for later delivery; they do not expand the V1 definition of d
 | Failure | Required behavior |
 |---|---|
 | malformed built-in manifest or unresolved binding | build fails; broken product is not shipped |
+| package source digest lacks a matching host execution attestation | activation fails; source metadata cannot stand in for compiled or rendered bytes |
+| rollback execution release is absent from the current host | rollback is unavailable and surfaced explicitly; runtime never substitutes another host build |
 | malformed installed manifest | App disabled and surfaced as invalid; Core continues |
 | duplicate lifecycle owner | activation fails before desired-state commit |
 | selected runtime profile lacks a required capability | that profile activation fails with the exact missing capability; other profiles are unchanged |
@@ -1060,10 +1143,11 @@ and entry criteria for later delivery; they do not expand the V1 definition of d
 | Hive-profile request reaches a Fleet route | server rejects before route logic even for an authenticated user; UI omission is not the control |
 | Hive AWS cleanup partly fails | managed-node record and exact resource residue remain until reconciliation or explicit operator disposition |
 | Hive Fleet uninstall sees nodes or residue | uninstall is refused; no implicit infrastructure cleanup or forgetting occurs |
-| update requests more permission | staged package remains inactive as default; existing Instance activations are unchanged |
+| update requests more permission | staged Host Execution Release remains inactive; existing Instance activations are unchanged |
 | Instance package/Brain update changes activation digest | old grants do not apply; Instance waits for grants while prior activation remains explicit rollback target |
-| target adapter cannot map required resource | export fails with exact resource handle |
-| optional target resource cannot map | export succeeds only with explicit omission accounting |
+| target adapter cannot map required resource | no target archive is emitted, including C0; failure names the exact resource handle |
+| optional target resource cannot map | export succeeds only with explicit target optionality and omission accounting |
+| uninstall requested with retained data | data remains tombstoned by default; purge requires a separate confirmed operation and dependency/residue checks |
 | included Brain lacks final-destination permission | whole export fails; intermediate format cannot substitute |
 | host lacks one mandatory isolation control | executable third-party App is refused |
 | App process crashes repeatedly | circuit opens for that App; backend health stays independent |
@@ -1096,7 +1180,13 @@ Tests are written before each implementation phase.
   and does not restore any grant without an explicit new approval.
 - Legacy Hive credential values cannot appear in activation, Managed Resource, residue,
   audit, log or generated-package schemas and have no new direct readers.
-- Active and staged package releases coexist under separate immutable digest pointers.
+- Active and staged Host Execution Releases coexist under separate immutable digest
+  pointers and each resolves to one canonical package release.
+- A built-in execution release attests package, generated binding map, host build, adapter,
+  host contract, profile capabilities and resolved dependency locks; changing any member
+  changes execution and activation digests.
+- An Instance can select or roll back only to an execution release currently available on
+  the host; removing embedded bytes cannot be hidden by retaining source metadata.
 - Generated built-in binding maps have no missing or unowned implementation.
 - SwarmAI Desktop and Hive profile reports account for every required Host Capability;
   one profile's support never implies another's.
@@ -1106,6 +1196,10 @@ Tests are written before each implementation phase.
   an implicit external-resource desired-state transition.
 - A target adapter never outputs a permission, capability or final destination absent
   from source intent.
+- Any blocked required target resource prevents archive emission at C0/P1/P2/P3; only an
+  explicit target-scoped optional resource can be omitted.
+- Disable, uninstall and purge are distinct transitions; uninstall keeps tombstoned data
+  provenance, and purge is rejected while dependencies, managed resources or residue exist.
 - Every emitted KiroCrew capability, required or optional, has enforced high-risk
   permissions; mutation to emit an optional capability with advisory network/secret
   authority fails or converts it to an explicitly permitted omission.
@@ -1114,6 +1208,11 @@ Tests are written before each implementation phase.
 ### Integration proofs
 
 - Pollinate works before and after the ownership cutover with the same public behavior.
+- A stale or mismatched Pollinate built-in attestation cannot activate against a different
+  compiled host build, and an unavailable embedded rollback release is reported rather
+  than approximated.
+- Pollinate uninstall removes resolution while preserving tombstoned products/preferences;
+  a separately confirmed purge accounts for products, relations and dependents.
 - Killing or corrupting Pollinate reconciliation leaves Chat usable.
 - Disable during an old open session blocks its next App-owned dispatch; grant revocation
   and policy tightening also take effect at the next operation.
@@ -1183,6 +1282,12 @@ paths. Report measured timings, but do not freeze machine-specific numbers into 
 15. DDD distribution remains an independent, more-restrictive final-destination ceiling;
     a separately approved policy extension is required before Brain-bearing KiroCrew export.
 16. Catalog publication always remains a human-approved external action.
+17. Canonical App Package Release identity is distinct from Host Execution Release identity;
+    embedded built-ins activate only with a matching host-build/binding attestation.
+18. A blocked required target resource prevents archive emission at every conformance level;
+    P1 subsets require explicit target-scoped optionality for every omission.
+19. Disable, uninstall and purge are separate transitions; uninstall retains tombstoned data
+    and provenance by default, while purge is separately confirmed and dependency-checked.
 
 ## 15. Deferred decisions
 
@@ -1208,7 +1313,8 @@ prove Manifest-first, Ownership-first and Built-in-first.
 
 V1 is complete only when:
 
-- Pollinate has one manifest and one App ownership record;
+- Pollinate has one manifest, one App ownership record and an attested Host Execution
+  Release matching the compiled host build;
 - every Pollinate resource is explicitly accounted for on SwarmAI Desktop and Hive
   profiles, with missing required Hive capabilities blocking only Hive activation;
 - App Center, Work-nav visibility and Skill resolution consume that record;
@@ -1216,11 +1322,14 @@ V1 is complete only when:
 - Core remains usable when the App is invalid or disabled;
 - no App work is added to chat hot paths;
 - the old Pollinate registration paths made redundant by ownership are deleted;
+- Pollinate uninstall removes activation/resolution but retains tombstoned products and
+  preferences; purge remains a separate confirmed operation;
 - Legacy Plugins are visible without rewriting their historical data;
 - the KiroCrew adapter reproducibly emits a Brain-free package-compatible archive against
   a pinned schema and supported host version;
 - a test proves `open-plugin` authority alone cannot authorize KiroCrew;
-- the target report accounts for every capability as mapped, explicitly optional or blocked;
+- the target report accounts for every capability as mapped, explicitly optional or blocked,
+  and any blocked required resource prevents archive emission even at C0;
 - Community, ToDo and Hive Fleet are not shown as operational Apps before their own
   ownership cutovers, while their finalized boundaries and phase entry criteria remain
   part of this design;
@@ -1297,10 +1406,10 @@ claims until these structural changes were made:
 - missing platform isolation or advisory high-risk permissions fail closed;
 - P1 uses component-load evidence, negative fixtures and ablation, and remains a
   functional conformance claim only;
-- a final review separated reusable package releases from per-Instance Brain state:
-  Installations hold package-release defaults, while each Instance owns an
-  `activation_digest(package_release, brain_rendering)` with independent grants,
-  generation and rollback.
+- a final review separated canonical package releases from per-Instance Brain state; the
+  later primary-author review added the missing Host Execution Release between them, so
+  Instances bind `activation_digest(execution_release, brain_rendering)` rather than
+  treating source bytes as proof of compiled behavior.
 
 The finalized Pollinate, Community, ToDo and Hive scope then received two additional
 fresh-context reviews. The architecture review reported no BLOCKER/HIGH findings and
@@ -1344,6 +1453,25 @@ consistency gaps. They were resolved as follows:
 
 Final fresh-context architecture and security delta reviews returned CLEAN with no
 BLOCKER, HIGH or MEDIUM findings.
+
+A subsequent primary-author adversarial pass found three cross-section gaps the delegated
+reviews had not combined:
+
+- canonical source identity did not prove which adapter output or compiled built-in bytes
+  actually executed, and the claim that Instances could retain old built-in releases ignored
+  whether the running host still contained them; Host Execution Release, executable
+  availability and host-build/binding attestation now close that gap;
+- required-resource failure, C0 installation and Skill-only P1 wording conflicted; blocked
+  required resources now prevent archive emission at every level, and capability-only P1
+  requires explicit target-scoped optionality for every omitted product resource;
+- uninstall was named as an aggregate lifecycle but lacked general data semantics; disable,
+  uninstall and purge are now separate transitions with retained tombstoned provenance and
+  explicit dependency/residue-checked purge.
+
+The same pass made `grants_ref` an immutable complete grant-set snapshot per grant generation,
+so changing one permission cannot leave sibling grant rows with ambiguous authority. Targeted
+architecture and security reviews of these corrections returned CLEAN with no BLOCKER, HIGH
+or MEDIUM findings.
 
 No reviewer finding was dismissed as an accepted deviation. The remaining deliberate
 boundary is that V1 proves a trusted built-in product boundary, not third-party
