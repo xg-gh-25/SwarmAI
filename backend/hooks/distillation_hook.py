@@ -1781,15 +1781,27 @@ class DistillationTriggerHook:
 
         The next id is computed from the content read UNDER the file lock (callable
         text), so a writer that landed an id while we waited for the lock cannot cause
-        a duplicate id (design 2026-10-25-memory-write-entry-dedup §3.5). Blocks are
+        a duplicate id (design 2026-10-25-memory-write-entry-dedup §3.5). The ids in the
+        archive shards beside the file count too: the size-valve moves whole entries
+        there (under the same lock), and an id read from the live file alone was handed
+        out again (2026-10-25: C053 reused after C053–C063 were archived). Blocks are
         written whole — no write-time dedup.
         """
         if not entries:
             return
         id_re = re.compile(rf"^### {prefix}(\d+)\b", re.MULTILINE)
 
+        def archived_ids() -> list[int]:
+            out: list[int] = []
+            for shard in evolution_path.parent.glob(f"{evolution_path.stem}-archive*.md"):
+                try:
+                    out += [int(x) for x in id_re.findall(shard.read_text(encoding="utf-8"))]
+                except (OSError, UnicodeDecodeError):
+                    continue
+            return out
+
         def build(content: str) -> str:
-            next_id = max((int(x) for x in id_re.findall(content)), default=0) + 1
+            next_id = max([int(x) for x in id_re.findall(content)] + archived_ids(), default=0) + 1
             blocks = []
             for offset, (file_date, body) in enumerate(entries):
                 blocks.append(

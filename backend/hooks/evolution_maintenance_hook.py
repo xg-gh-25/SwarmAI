@@ -574,6 +574,19 @@ class EvolutionMaintenanceHook:
         return False
 
     @staticmethod
+    def _block_date_ordinal(entry_block: str) -> int:
+        """The block's first ``YYYY-MM-DD`` as an ordinal (its header date for a
+        ``### Cxxx | date`` entry); 0 when it has none, so a dateless block sorts as
+        the oldest."""
+        m = EvolutionMaintenanceHook._BLOCK_DATE_RE.search(entry_block)
+        if not m:
+            return 0
+        try:
+            return datetime.strptime(m.group(1), "%Y-%m-%d").toordinal()
+        except ValueError:
+            return 0
+
+    @staticmethod
     def _evict_priority(entry_block: str, now: "datetime | None" = None) -> int:
         """Eviction PRIORITY (value tier) — lower is evicted FIRST. XG directive
         2026-08-14: no block is exempt; the valve MUST reach ~15K every run. This
@@ -830,8 +843,12 @@ class EvolutionMaintenanceHook:
         #   0 = non-evergreen (old, marker-less)      — least valuable, evict first
         #   1 = recent (≤_EVERGREEN_RECENCY_DAYS), no marker — active-defense window
         #   2 = marker-bearing skeleton (Pattern/tell/CAPSTONE/…) — most valuable, evict last
-        # Ties broken by section rank (_EVICT_SECTION_ORDER: least-valuable section first)
-        # then document position — so what SURVIVES is the highest-value ~15K.
+        # Ties broken by section rank (_EVICT_SECTION_ORDER: least-valuable section first),
+        # then by the block's date, OLDEST first (a dateless block counts as oldest), then
+        # document position — so what SURVIVES is the highest-value ~15K. Position alone
+        # was the old tie-break, and new corrections are written at the TOP of their
+        # section: the valve moved the newest ones out first (2026-10-25: ten corrections,
+        # one written fifteen minutes earlier).
         candidates: list[tuple[int, int, int, int, str, str]] = []
         # (priority, section_rank, abs_start, abs_end, text, section)
         for section_rank, section in enumerate(self._EVICT_SECTION_ORDER):
@@ -865,7 +882,7 @@ class EvolutionMaintenanceHook:
         # SELECT least-valuable-first until projected <= target. No exemption: if tiers
         # 0+1 don't free enough, tier-2 skeletons are evicted too (recall-backed) — the
         # target is non-negotiable (XG: "降不到就是 bug").
-        candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+        candidates.sort(key=lambda c: (c[0], c[1], self._block_date_ordinal(c[4]), c[2]))
         to_evict: list[tuple[int, int, str, str]] = []
         projected = cur_tokens
         for _prio, _rank, b_start, b_end, text, section in candidates:
