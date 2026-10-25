@@ -162,7 +162,7 @@ export function MaterialPicker({
           <div className="flex-1 min-h-[180px] rounded-xl border border-dashed border-[var(--color-border)] grid place-items-center text-center px-6"
             data-testid={`${p}-empty`}>
             <div>
-              <span className="material-symbols-outlined text-[var(--color-text-muted)]" aria-hidden>move_to_inbox</span>
+              <span className="material-symbols-outlined icon-xl text-[var(--color-text-muted)]" aria-hidden>move_to_inbox</span>
               <div className="text-body text-[var(--color-text)] mt-1">Drop files or folders here</div>
               <div className="text-small text-[var(--color-text-muted)] mt-1 max-w-[420px]">{emptyText}</div>
             </div>

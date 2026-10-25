@@ -125,7 +125,7 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
         <span className="text-small text-[var(--color-text-muted)]">What each project knows, how it delivers, what it learned</span>
         <div className="ml-auto flex items-center gap-2 relative">
           <button className="btn-sm btn-secondary" onClick={() => setPicking((v) => !v)} aria-expanded={picking} data-testid="hub-add-knowledge">
-            <span className="material-symbols-outlined icon-sm">add</span>Add knowledge
+            <span className="material-symbols-outlined icon-xs">add</span>Add knowledge
           </button>
           <button className="btn-sm btn-primary" onClick={openNewBrain} data-testid="hub-new-brain">New Brain</button>
           {picking && <div className="fixed inset-0 z-[9]" onClick={() => setPicking(false)} aria-hidden="true" />}
