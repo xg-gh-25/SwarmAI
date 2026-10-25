@@ -387,6 +387,8 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 
 **已实施（S6-4a，2026-10-25）**：按上面的清单做完。计划里没写到的一处：原来 `reviewers()` 给出的理由不会进专家的 prompt，security 没法知道这次是高风险改动。所以 `reviewers()` 给 ≥50 行且有安全风险的 security 那一行加 `high_risk: true`，engine 在 R1 和增量审查的 handout 开头写一行 `HIGH-RISK CHANGE (<理由>)`，security.md 的"高风险改动"一节以这一行为触发条件。另外：`ux` 不再审测试覆盖；`integration` 加了"替换 / 搬移的对等性"一节（来自 code-quality）；`operational` 的 §1 换成和语言、部署方式无关的表；`correctness` 的 API contract 一条不再点名 Pydantic 和 `toCamelCase`；`lint_experts.py` 不再要求 `spawn_as`；前端专家列表不再显示它。
 
+**后续修复（`dede1ae2f`）**：S6-4a 删了 4 个专家文件，但 engine 在 R1、R2 和增量审查三处仍然自己按 id 打开 `experts/code/<id>.md`。合并前开始的 run，事件和 finding 里记的是 `red-team`，`r2_roster()` 原样返回这个 id，`review-address` 写完 address 和 proof 事件之后才去读已删的文件，抛 `FileNotFoundError`。现在 `review.expert_prompt(id)` 是 id 到 prompt 文件的唯一入口，经 `_RETIRED` 映射，旧 id 读接手专家的 prompt。
+
 ## 4. 用户场景
 
 | 场景 | 体验 |
@@ -500,3 +502,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r16（XG，2026-10-24）：不兼容旧 run，XG 本机历史 run 全部清掉（§3.3.5）；S6 拆成 S6-0 至 S6-5（§7）。
 - r17（XG，2026-10-25）：§3.8 `dangerous_command_gate` 的 history-rewrite 规则换成"丢弃别人未提交的工作"：ref 移动不再询问，销毁未提交改动的操作只在另一个 session 写过、仍未提交的文件会丢时询问，事实复用 `shared_checkout`；旧的按路径判断 scratch 的机制整套删除。
 - r18（XG，2026-10-25）：新增 §3.5.1 专家合并，S6-4 实施，12 个减到 9 个；§3.4 记下 `1dfdedba0`：补删 S4 漏下的 `_adv_` marker 链路，以及 `audit_marker_write_gate` 15 次拒绝的核对结果。
+- r19（2026-10-25）：§3.5.1 记下 S6-4a（`82de614d7`）的实施和后续修复 `dede1ae2f`（合并前开始的 run 在 R2 读已删的专家文件）。
