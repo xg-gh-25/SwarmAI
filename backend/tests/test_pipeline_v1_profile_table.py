@@ -1,30 +1,26 @@
 """Per-profile behaviour reads one table (design
-docs/design/2026-10-26-profile-capabilities.md §3.3).
+docs/design/2026-10-26-pipeline-two-ends.md §4).
 
 What is tested: outside core/run_protocol/lifecycle.py, product code under backend/core
-holds no line that compares or switches on a profile NAME (a quoted profile name on a
-line that names ``profile``). KNOWN is today's count per file: it may only shrink; a
+holds no comparison on a profile NAME (``profile == "x"``, ``profile in {"x", ...}``):
+behaviour reads lifecycle.PROFILE_CAPS. KNOWN (per-file counts) may only shrink; a
 fix that removes a comparison removes it from KNOWN in the same commit, and a new one
-fails. checks.py keeps its per-profile exemption reasons by design (each names why a
-check does not apply), so its entry is the exemption table's.
+fails.
 """
 import re
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[1]
 NAMES = "research|direct|trivial|full|bugfix|goal"
-PAT = re.compile(rf"profile.*[\"']({NAMES})[\"']|[\"']({NAMES})[\"'].*profile")
+# a comparison on a profile name: profile == "x" / "x" != profile / profile in {"x", ...}
+PAT = re.compile(
+    rf"profile[\w\"'\]\[.()]*\s*(==|!=)\s*[\"']({NAMES})[\"']"
+    rf"|[\"']({NAMES})[\"']\s*(==|!=)\s*[\w.\[\]\"'()]*profile"
+    rf"|profile[\w\"'\]\[.()]*\s+(not\s+)?in\s+[\(\{{\[][^\n]*[\"']({NAMES})[\"']")
 OWNER = BACKEND / "core" / "run_protocol" / "lifecycle.py"
 
 # file (relative to backend/) -> lines that still compare on a profile name
-KNOWN: dict[str, int] = {
-    "core/pipeline_profiles.py": 6,
-    "core/run_protocol/checks.py": 4,
-    "core/run_protocol/cli_commands.py": 2,
-    "core/run_protocol/engine.py": 22,
-    "core/run_protocol/next_step.py": 2,
-    "core/run_protocol/schemas.py": 3,
-}
+KNOWN: dict[str, int] = {}   # emptied in two-ends step 4 (lifecycle.PROFILE_CAPS)
 
 
 def _counts() -> dict[str, int]:

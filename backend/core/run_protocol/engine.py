@@ -400,10 +400,10 @@ class RunEngine:
                                         or len(requirement) > REQUIREMENT_MAX):
             raise EngineError(f"requirement must be text of at most {REQUIREMENT_MAX} chars")
         requirement = requirement.strip() if requirement else ""
-        if profile == "direct" and not requirement:
+        if lifecycle.caps(profile).requirements == "words" and not requirement:
             # direct has no REQUIREMENTS document: the user's own words ARE the requirement
             raise EngineError("direct needs --requirement: the user's request, verbatim")
-        if profile != "research" and not repos:
+        if lifecycle.caps(profile).lands_code and not repos:
             raise EngineError("code profile requires at least one repo")
         run_id = run_id or "run_" + secrets.token_hex(4)
         from core.app_session_id import valid_app_session_id
@@ -602,7 +602,7 @@ class RunEngine:
 
     @_one_operation
     def ensure_worktrees(self) -> dict[str, str]:
-        if self.contract["profile"] == "research":
+        if not lifecycle.caps(self.contract["profile"]).lands_code:
             return self.effective_repos()
         current = self.effective_repos()
         if set(current) == set(self.contract["expected_repos"]):
@@ -781,9 +781,8 @@ class RunEngine:
         expected = list(self.contract["expected_repos"])
         repos, code_trees, bases, existing, changed = self._current_code(expected)
         profile = self.contract["profile"]
-        req_variant = "lite" if profile == "direct" else "full"
-        design_variant = None if profile in {"research", "direct"} else (
-            "lite" if profile == "trivial" else "full")
+        req_variant = "lite" if lifecycle.caps(profile).requirements == "words" else "full"
+        design_variant = lifecycle.caps(profile).design
         flat_changed = sorted({p for paths in changed.values() for p in paths})
         run = {**self.projection(), "mode": self.contract["mode"],
                "code_trees": code_trees, "run_bases": bases, "changed_paths": flat_changed,
@@ -1023,15 +1022,15 @@ class RunEngine:
     def gate0_start(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "evaluate" \
-                or state["profile"] not in {"full", "bugfix"}:
-            raise EngineError("Gate-0 requires active EVALUATE on full or bugfix")
+                or lifecycle.caps(state["profile"]).gate0 == "never":
+            raise EngineError("Gate-0 requires active EVALUATE on a profile that runs Gate-0")
         docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         if requirements is not None:
             docs.write_requirements(requirements, variant="full", profile=state["profile"])
         value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         readings = ((value.get("understanding") or {}).get("readings")
                     if isinstance(value, Mapping) else None)
-        required = state["profile"] == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
+        required = lifecycle.gate0_required(state["profile"], readings)
         if not required:
             return {"required": False, "handout": None}
         prior = [event for event in self._since_last_answer()
@@ -1278,7 +1277,7 @@ class RunEngine:
     @_one_operation
     def request_decision(self, value: Mapping[str, Any], *, document: str) -> dict[str, Any]:
         from core.run_protocol.documents import record_decision
-        if self.contract.get("profile") == "direct":
+        if not lifecycle.caps(self.contract["profile"]).decisions:
             raise EngineError("a direct run makes no decisions: abandon it and re-create the "
                               "request as --profile trivial, then ask there")
         refs = self.decision_refs(self.store.read_events())
@@ -1332,7 +1331,8 @@ class RunEngine:
         import copy
         out = copy.deepcopy(dict(value))
         rows = self._answered_decisions(document)
-        if not rows or (document == "DESIGN_SPEC" and self.contract["profile"] == "trivial"):
+        if not rows or (document == "DESIGN_SPEC"
+                         and lifecycle.caps(self.contract["profile"]).design == "lite"):
             # the lite DESIGN_SPEC has no ``chosen``: its decision stays in the logged
             # log and the REPORT (a registered deviation, conformance F13)
             return out
@@ -1383,7 +1383,7 @@ class RunEngine:
             if path.is_file():
                 docs.write_design(
                     self._with_decisions(document, self._read_json(path, {})),
-                    variant="lite" if self.contract["profile"] == "trivial" else "full",
+                    variant=lifecycle.caps(self.contract["profile"]).design,
                     profile=self.contract["profile"],
                     requirements=self._read_json(self.run_dir / "artifacts" / "requirements.json", {}),
                     requirement_variant="full", existing_files=self.check_context().existing_files,
@@ -1510,7 +1510,7 @@ class RunEngine:
     def _prepare_land_request(self, *, action: str, note: str | None = None,
                               request_id: str | None = None) -> dict[str, Any]:
         from core.run_protocol import audit as audit_protocol, findings as finding_protocol, landing, tree
-        if self.contract["profile"] == "research":
+        if not lifecycle.caps(self.contract["profile"]).lands_code:
             raise EngineError(RESEARCH_LANDS_NOTHING)
         state = self.projection()
         if self.contract["mode"] == "isolated" and set(self.effective_repos()) != set(self.contract["expected_repos"]):
@@ -1771,14 +1771,13 @@ class RunEngine:
         if stage in validation_report.STAGES and artifact and "reports" in artifact:
             self._record_validation_reports(stage, artifact)
         if stage == "deliver":
-            if state.get("pending_landing") is None and profile != "research":
+            if state.get("pending_landing") is None and lifecycle.caps(profile).lands_code:
                 raise EngineError("DELIVER finishes with `land`; stage-complete is only for "
                                   "the not-landed path")
             return self.finish_not_landed()
         docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         artifact = dict(artifact or {})
-        variant = ("lite" if stage == "plan" and profile == "trivial"
-                   else "full" if stage in {"evaluate", "plan"} else None)
+        variant = lifecycle.document_variant(profile, stage)
         roster = {spec.check_id for spec in checks.stage_checks(profile, stage, variant)}
         try:
             if stage == "evaluate":
@@ -1789,7 +1788,7 @@ class RunEngine:
                 requirements = self._read_json(
                     self.run_dir / "artifacts" / "requirements.json", {})
                 artifact = self._with_decisions("DESIGN_SPEC", artifact)
-                docs.write_design(artifact, variant="lite" if profile == "trivial" else "full",
+                docs.write_design(artifact, variant=lifecycle.caps(profile).design,
                                   profile=profile, requirements=requirements,
                                   requirement_variant="full",
                                   existing_files=self.check_context().existing_files,
@@ -1801,10 +1800,10 @@ class RunEngine:
                                     attempt=self._next_attempt(stage), forced=forced)
             self._settle(); self.write_projection()
             return {"ok": False, "error": str(exc), **result, "state": self.projection()}
-        if stage == "evaluate" and profile in {"full", "bugfix"}:
+        if stage == "evaluate" and lifecycle.caps(profile).gate0 != "never":
             readings = ((artifact.get("understanding") or {}).get("readings")
                         if isinstance(artifact, Mapping) else None)
-            gate_required = profile == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
+            gate_required = lifecycle.gate0_required(profile, readings)
             if gate_required:
                 disposition = self._gate0_disposition()
                 if disposition == "continue" and self._gate0_ended_at_cap():
@@ -2003,7 +2002,7 @@ class RunEngine:
         from core.run_protocol import audit as audit_protocol
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "deliver" or (
-                state.get("pending_landing") is None and state["profile"] != "research"):
+                state.get("pending_landing") is None and lifecycle.caps(state["profile"]).lands_code):
             raise EngineError("the not-landed path needs active DELIVER with a not-landed reason")
         cap = lifecycle.REASON_CAPS.get((state.get("pending_landing") or {}).get("reason"))
         if cap is not None:
@@ -2514,7 +2513,7 @@ class RunEngine:
         import dataclasses
         from core.run_protocol import landing, tree
         state = self.projection()
-        if self.contract["profile"] == "research":
+        if not lifecycle.caps(self.contract["profile"]).lands_code:
             raise EngineError(RESEARCH_LANDS_NOTHING)     # before any event is written
         if state["status"] != "active" or state["stage"] != "deliver":
             raise EngineError("normal land requires active DELIVER")

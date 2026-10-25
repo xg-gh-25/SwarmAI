@@ -16,6 +16,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+
+def _caps(profile):
+    """lifecycle's capability row (imported late: lifecycle imports events, which
+    imports this module)."""
+    from core.run_protocol.lifecycle import caps
+    return caps(profile)
+
 REQ_ID = re.compile(r"^R[1-9][0-9]*$")
 AC_ID = re.compile(r"^R[1-9][0-9]*\.[1-9][0-9]*$")
 BUG_AC_ID = re.compile(r"^[CEU][1-9][0-9]*$")
@@ -303,7 +310,7 @@ def validate_requirements(document: Any, *, variant: str, profile: str) -> list[
     _requirements(obj.get("requirements"), out, variant)
     if variant == "lite":
         return out
-    if profile == "bugfix":
+    if _caps(profile).triad:
         _bugfix(obj.get("bugfix"), out)
     elif "bugfix" in obj:
         _issue(out, "RQ-4", "bugfix", "is allowed only for the bugfix profile")
@@ -553,7 +560,7 @@ def validate_contract(requirements: Mapping[str, Any], design: Mapping[str, Any]
                     req_meta[row["id"]] = row
                     primary_acceptance.add(row["id"])
     unchanged: set[str] = set()
-    if profile == "bugfix" and isinstance(requirements.get("bugfix"), Mapping):
+    if _caps(profile).triad and isinstance(requirements.get("bugfix"), Mapping):
         for group in ("current", "expected", "unchanged"):
             for row in requirements["bugfix"].get(group, []):
                 if isinstance(row, Mapping) and isinstance(row.get("id"), str):

@@ -1,187 +1,51 @@
-"""Tests for pipeline profile definitions.
+"""Pipeline profile tables (design docs/design/2026-10-26-pipeline-two-ends.md §4).
 
-Ensures all profiles return correct stage sequences, fallback behavior works,
-and the goal profile is properly defined. Achieves 100% coverage of
-core/pipeline_profiles.py.
+What is tested:
+- core.pipeline_profiles.PIPELINE_PROFILES is only a view of lifecycle.PROFILE_STAGES;
+- lifecycle.PROFILE_CAPS names exactly the profiles of PROFILE_STAGES, and each row
+  matches the stage list (lands_code <-> DELIVER lands; a design <-> PLAN; Gate-0 only
+  with EVALUATE);
+- removed profiles (goal, docs) are refused with what to do instead;
+- the helpers that once lived in pipeline_profiles (gates, rigor, aliases) are gone.
 """
 import pytest
 
-from core.pipeline_profiles import (
-    PIPELINE_PROFILES,
-    get_profile_stages,
-    normalize_profile,
-    is_relaxed_profile,
-)
+import core.pipeline_profiles as pp
+from core.run_protocol import lifecycle
+
+STAGES = {
+    "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
+    "bugfix": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
+    "trivial": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
+    "direct": ["build", "review", "test", "deliver", "reflect"],
+    "research": ["evaluate", "think", "deliver", "reflect"],
+}
 
 
-class TestPipelineProfiles:
-    """Verify the PIPELINE_PROFILES dictionary structure."""
-
-    def test_all_profiles_present(self):
-        """All 7 profiles exist (direct = the lightweight contract→build→deliver path)."""
-        expected = {"full", "trivial", "research", "bugfix", "direct"}
-        assert set(PIPELINE_PROFILES.keys()) == expected
-
-    def test_no_empty_stage_lists(self):
-        """Every profile has at least 1 stage."""
-        for name, stages in PIPELINE_PROFILES.items():
-            assert len(stages) > 0, f"Profile '{name}' has empty stage list"
-
-    def test_all_stages_are_strings(self):
-        """Every stage in every profile is a non-empty string."""
-        for name, stages in PIPELINE_PROFILES.items():
-            for stage in stages:
-                assert isinstance(stage, str) and len(stage) > 0, (
-                    f"Profile '{name}' has invalid stage: {stage!r}"
-                )
-
-    @pytest.mark.parametrize("profile,expected", [
-        ("full", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("trivial", ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("research", ["evaluate", "think", "deliver", "reflect"]),
-        ("bugfix", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
-    ])
-    def test_profile_stages_correct(self, profile, expected):
-        """Each profile returns its documented stage sequence."""
-        assert PIPELINE_PROFILES[profile] == expected
-
-    def test_evaluate_in_all_profiles(self):
-        """Every profile starts with evaluate — except direct, which has no PLAN and
-        starts at BUILD (execution plan v2 N1)."""
-        for name, stages in PIPELINE_PROFILES.items():
-            expected_first = "build" if name == "direct" else "evaluate"
-            assert stages[0] == expected_first, f"Profile '{name}' starts with {stages[0]}"
+def test_profiles_and_their_stage_lists():
+    assert pp.PIPELINE_PROFILES == STAGES
+    assert {k: list(v) for k, v in lifecycle.PROFILE_STAGES.items()} == STAGES
 
 
-class TestGetProfileStages:
-    """Verify get_profile_stages() function behavior."""
-
-    def test_known_profile(self):
-        """Known profile name returns its stages."""
-        assert get_profile_stages("full") == PIPELINE_PROFILES["full"]
-        assert get_profile_stages("bugfix") == PIPELINE_PROFILES["bugfix"]
-
-    def test_none_defaults_to_full(self):
-        """None input defaults to full profile."""
-        assert get_profile_stages(None) == PIPELINE_PROFILES["full"]
-
-    def test_unknown_falls_back_to_full(self):
-        """Unknown profile name falls back to full."""
-        assert get_profile_stages("nonexistent") == PIPELINE_PROFILES["full"]
-        assert get_profile_stages("") == PIPELINE_PROFILES["full"]
-
-    def test_return_is_list_not_reference(self):
-        """Returned list is the actual profile list (not a copy — by design)."""
-        result = get_profile_stages("bugfix")
-        assert result is PIPELINE_PROFILES["bugfix"]
+@pytest.mark.parametrize("profile", sorted(STAGES))
+def test_capabilities_agree_with_the_stage_list(profile):
+    caps = lifecycle.caps(profile)
+    stages = lifecycle.PROFILE_STAGES[profile]
+    assert caps.lands_code is ("build" in stages)
+    assert (caps.design is not None) is ("plan" in stages)
+    assert caps.gate0 == "never" or "evaluate" in stages
+    assert (caps.requirements == "words") is ("evaluate" not in stages)
+    assert caps.triad is (profile == "bugfix")
 
 
-class TestNormalizeProfile:
-    """C3 SSOT: profile normalization is the single source of truth for
-    canonicalizing a profile value before ANY strict/relaxed gate decision.
-    Root cause of C3: a profile variant like 'Full' got full's stage list
-    (get_profile_stages fallback) but slipped past deliver's hardcoded
-    `profile in ('full','bugfix','')` adversarial-enforcement literals."""
-
-    @pytest.mark.parametrize("raw,expected", [
-        ("full", "full"),
-        ("Full", "full"),          # case variant — the C3 bypass
-        ("FULL", "full"),
-        ("  full  ", "full"),      # whitespace
-        ("bugfix", "bugfix"),
-        ("BugFix", "bugfix"),
-        ("standard", "full"),      # legacy alias (rank-4 == full)
-        ("Standard", "full"),
-        ("trivial", "trivial"),
-        ("docs", "docs"),
-        ("research", "research"),
-        (None, "full"),            # None → full (matches get_profile_stages)
-        ("", "full"),              # empty → full (matches strict-set '' semantics)
-        ("   ", "full"),
-    ])
-    def test_normalize_known_and_variants(self, raw, expected):
-        assert normalize_profile(raw) == expected
-
-    def test_normalize_unknown_lowercased_not_full(self):
-        """An unknown profile normalizes to its lowercased form (NOT silently
-        remapped to full) — so is_relaxed_profile can fail-closed to strict on it.
-        (get_profile_stages still falls back to full's STAGE LIST separately.)"""
-        assert normalize_profile("xyz") == "xyz"
-        assert normalize_profile("Ful") == "ful"   # typo → not relaxed → strict
-
-    def test_get_profile_stages_normalizes(self):
-        """C3: get_profile_stages must honor normalization — 'Full'/'FULL'/'standard'
-        all resolve to full's stage list (previously only exact 'full' did)."""
-        full = PIPELINE_PROFILES["full"]
-        assert get_profile_stages("Full") == full
-        assert get_profile_stages("FULL") == full
-        assert get_profile_stages("standard") == full
-        assert get_profile_stages("  bugfix  ") == PIPELINE_PROFILES["bugfix"]
+@pytest.mark.parametrize("name,hint", [("goal", "sequence of runs"), ("docs", "edit them directly")])
+def test_a_removed_profile_is_refused_with_what_to_do(name, hint):
+    with pytest.raises(lifecycle.LifecycleError, match=hint):
+        lifecycle.caps(name)
 
 
-class TestIsRelaxedProfile:
-    """C3 SSOT: the single relaxed/strict predicate. relaxed = {trivial,docs,research};
-    EVERYTHING ELSE (incl. unknown/variant) is strict — fail-closed. This replaces
-    the 6+ scattered `profile in ('full','bugfix','')` (fail-OPEN) literals whose
-    inconsistency let 'Full' skip adversarial enforcement."""
-
-    @pytest.mark.parametrize("profile", ["trivial", "research", "Trivial", "  research  "])
-    def test_relaxed_profiles(self, profile):
-        assert is_relaxed_profile(profile) is True
-
-    def test_an_old_docs_run_keeps_its_own_stage_list(self):
-        from core.pipeline_profiles import get_profile_stages
-        assert "docs" not in PIPELINE_PROFILES            # cannot be chosen
-        assert get_profile_stages("docs") == ["evaluate", "think", "plan", "deliver", "reflect"]
-
-    @pytest.mark.parametrize("profile", ["docs", "DOCS"])
-    def test_removed_docs_profile_is_strict_and_refused(self, profile):
-        from core.pipeline_profiles import removed_profile_error
-        assert is_relaxed_profile(profile) is False   # an old docs run is judged strictly
-        assert "direct" in removed_profile_error(profile)
-        assert removed_profile_error("full") is None and removed_profile_error(None) is None
-
-    @pytest.mark.parametrize("profile", ["full", "bugfix", "standard",
-                                          "Full", "FULL", "BugFix", ""])
-    def test_strict_profiles(self, profile):
-        assert is_relaxed_profile(profile) is False
-
-    def test_unknown_is_strict_fail_closed(self):
-        """The C3 core fix: an unknown/variant profile is STRICT (fail-closed),
-        never relaxed — so a typo can never silently skip adversarial enforcement."""
-        assert is_relaxed_profile("xyz") is False
-        assert is_relaxed_profile("Ful") is False
-        assert is_relaxed_profile(None) is False
-
-
-class TestScopeDepthAxisRemoved:
-    """Anti-resurrection guard for the deleted scope-depth axis.
-
-    The scope-depth axis (light/standard run-rigor) was end-to-end dead code:
-    artifact_cli wrote a `depth` field to run.json but the PipelineRunDetail
-    response model never emitted it, so the frontend ScopeDepthMatrix always
-    fell back to 'standard'. It was deleted (not completed) per P9 — a feature
-    with zero live consumer should not be resurrected. These tests fail if the
-    4 symbols reappear in pipeline_profiles, and confirm the surviving profile
-    contract is untouched by the deletion.
-    """
-
-    def test_depth_symbols_are_gone(self):
-        """The 4 scope-depth symbols must not exist on the module."""
-        import core.pipeline_profiles as pp
-        assert not hasattr(pp, "DEPTH_TIERS")
-        assert not hasattr(pp, "DEPTH_DEFAULTS")
-        assert not hasattr(pp, "normalize_depth")
-        assert not hasattr(pp, "resolve_depth")
-
-    def test_surviving_profile_contract_intact(self):
-        """Deleting the depth axis must leave the profile contract whole."""
-        import core.pipeline_profiles as pp
-        assert hasattr(pp, "normalize_profile")
-        assert hasattr(pp, "get_profile_stages")
-        assert hasattr(pp, "is_relaxed_profile")
-        assert hasattr(pp, "PIPELINE_PROFILES")
-        # The surviving symbols still behave correctly.
-        assert is_relaxed_profile("trivial") is True
-        assert is_relaxed_profile("full") is False
-        assert len(get_profile_stages("full")) > 0
+def test_the_old_helpers_are_gone():
+    for name in ("PROFILE_GATES", "profile_gates", "is_relaxed_profile", "normalize_profile",
+                 "get_profile_stages", "REMOVED_PROFILES", "FINISHED_STATUSES",
+                 "DEPTH_TIERS", "normalize_depth"):
+        assert not hasattr(pp, name), name

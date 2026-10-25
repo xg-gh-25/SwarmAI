@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from core.run_protocol.lifecycle import PROFILE_STAGES
+from core.run_protocol.lifecycle import PROFILE_STAGES, caps as lifecycle_caps, profiles_where
 
 EFFECTS = frozenset({"stage", "land", "push"})
 PROFILES = frozenset(PROFILE_STAGES)
@@ -107,19 +107,19 @@ def _c(check_id: str, document: str, effects: str, stages: str,
     )
 
 
-CODE = "full bugfix trivial direct"
-FULL_REQ = "full bugfix trivial research"
-ALL = "full bugfix trivial direct research"
+CODE = profiles_where(lambda c: c.lands_code)
+FULL_REQ = profiles_where(lambda c: c.requirements == "full")
+ALL = profiles_where(lambda c: True)
 # Profiles that write REQUIREMENTS / DESIGN_SPEC. direct writes neither (execution plan
 # v2 N1): its requirement is the user's words in contract.json, it has no exit criteria.
 DOCS = FULL_REQ
-DESIGN = "full bugfix trivial"
+DESIGN = profiles_where(lambda c: c.design is not None)
 
 
 _SPECS = [
     _c("RQ-1", "requirements", "stage", "evaluate plan", "full lite", DOCS),
     _c("RQ-2", "requirements", "stage", "evaluate plan", "full lite", DOCS),
-    _c("RQ-4", "requirements", "stage", "evaluate", "full", "bugfix"),
+    _c("RQ-4", "requirements", "stage", "evaluate", "full", profiles_where(lambda c: c.triad)),
     _c("RQ-5", "requirements", "stage", "evaluate", "full", FULL_REQ),
     _c("RQ-6", "requirements", "stage", "evaluate", "full", FULL_REQ),
     _c("RQ-8", "requirements", "stage", "evaluate plan", "full lite", DOCS),
@@ -127,16 +127,16 @@ _SPECS = [
     _c("DS-1", "design_spec", "push", "plan", "full lite", DESIGN),
     _c("DS-2a", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-3", "design_spec", "", "plan", "full lite", DESIGN),
-    _c("DS-4a", "design_spec", "stage", "plan", "full", "bugfix"),
+    _c("DS-4a", "design_spec", "stage", "plan", "full", profiles_where(lambda c: c.triad)),
     _c("DS-5", "design_spec", "stage", "plan", "full lite", DESIGN),
-    _c("DS-6", "design_spec", "stage", "plan", "full", "full bugfix"),
+    _c("DS-6", "design_spec", "stage", "plan", "full", profiles_where(lambda c: c.design == "full")),
     _c("DS-7", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-9a", "design_spec", "stage", "plan", "full lite", DESIGN),
     # S6-1: BUILD ends with the agent's validation report on the current code tree
     _c("BX-3", "validation_report", "stage", "build", "run", CODE),
 
     _c("RV-1a", "review", "push", "review", "review", CODE),
-    _c("RV-1b", "review", "", "evaluate", "review", "full bugfix"),
+    _c("RV-1b", "review", "", "evaluate", "review", profiles_where(lambda c: c.gate0 != "never")),
     _c("RV-1c", "review", "", "review", "review", CODE),
     _c("DC-1", "decision", "", "evaluate think plan", "decision", DOCS),
     _c("DC-2", "decision", "push", "evaluate think plan", "decision", DOCS),
@@ -174,16 +174,17 @@ if len(CHECKS) != len(_SPECS):
 def _exemption_reason(profile: str, check_id: str) -> str:
     if check_id in ("RQ-4", "DS-4a"):
         return "profile is not bugfix and has no current/expected/unchanged triad"
-    if profile == "direct" and (check_id.startswith(("RQ-", "DS-", "DC-"))
+    caps = lifecycle_caps(profile)
+    if caps.requirements == "words" and (check_id.startswith(("RQ-", "DS-", "DC-"))
                                 or check_id in ("TS-3", "TS-4")):
         return ("direct writes no REQUIREMENTS / DESIGN_SPEC and has no exit criteria; its "
                 "requirement is the user's words in contract.json, an ambiguous one is "
                 "abandoned and re-run as trivial (execution plan v2 N1)")
-    if profile == "research":
+    if not caps.lands_code:
         return "research produces no code, design spec, review, tests or landing"
-    if check_id in ("DS-6",) and profile in ("direct", "trivial"):
+    if check_id in ("DS-6",) and caps.design != "full":
         return "lite DESIGN_SPEC has no design or states section"
-    if check_id == "RV-1b" and profile in ("direct", "trivial"):
+    if check_id == "RV-1b" and caps.gate0 == "never":
         return "profile does not run Gate-0"
     return "check does not apply to this profile's documents or stage sequence"
 

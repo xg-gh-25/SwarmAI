@@ -1,5 +1,5 @@
-"""The run's checklist in the chat (core.pipeline_profiles.PROFILE_GATES +
-core.pipeline_stage_events.checklist / run_block / new_stage_blocks).
+"""The run's checklist in the chat (core.pipeline_stage_events.checklist / run_block /
+new_stage_blocks; the stage lists come from lifecycle.PROFILE_STAGES).
 
 Why this exists: a pipeline turn shows ONE block whose header is the run's plan as a
 checklist (done / running / pending). Pending gate lines need to know which gates a
@@ -10,16 +10,12 @@ block of a turn has no plan: when the profile is first set (or changes) the back
 emits a refreshed block.
 
 Covered:
-  - PROFILE_GATES per profile, and three pins that stop it drifting from the rules
-    enforced elsewhere: every profile ``artifact_cli.GATE1_PROFILES`` requires to
-    run Gate 1 lists gate1; gate0 exactly where a strict profile runs EVALUATE;
-    gate2 exactly where a profile has DELIVER.
-  - checklist order for full / goal / trivial / direct / research, and none without
+  - checklist order for full / trivial / direct / research (goal is removed), and none without
     a profile (negative).
   - run_block carries the checklist.
   - new_stage_blocks emits a refreshed run block when the profile is set or changes,
     and none when it is unchanged or the run has no requirement (negatives).
-  - plan's ``next`` names Gate 1 exactly when the profile lists gate1.
+  - plan's ``next`` names the profile's next stage.
 """
 from __future__ import annotations
 
@@ -38,35 +34,6 @@ def _state(profile, requirement="Do the thing", **stages):
 
 def _items(cl):
     return [(c["stage"], c["gate"]) for c in cl]
-
-
-class TestProfileGates:
-    def test_each_profile_lists_its_gates(self):
-        assert pp.PROFILE_GATES["full"] == ("gate0", "review")
-        assert pp.PROFILE_GATES["bugfix"] == ("gate0", "review")
-        assert "goal" not in pp.PROFILE_GATES   # removed (two-ends §6)
-        assert pp.PROFILE_GATES["direct"] == ("review",)
-        assert pp.PROFILE_GATES["trivial"] == ("review",)
-        assert "docs" not in pp.PROFILE_GATES   # removed profile
-        assert pp.PROFILE_GATES["research"] == ()
-
-    def test_every_profile_has_an_entry(self):
-        assert set(pp.PROFILE_GATES) == set(pp.PIPELINE_PROFILES)
-
-    @pytest.mark.parametrize("profile", sorted(pp.PIPELINE_PROFILES))
-    def test_gate0_where_a_strict_profile_runs_evaluate(self, profile):
-        expect = not pp.is_relaxed_profile(profile) and "evaluate" in pp.get_profile_stages(profile)
-        assert ("gate0" in pp.PROFILE_GATES[profile]) is expect
-
-    @pytest.mark.parametrize("profile", sorted(pp.PIPELINE_PROFILES))
-    def test_review_where_the_profile_reviews(self, profile):
-        assert ("review" in pp.PROFILE_GATES[profile]) is ("review" in pp.get_profile_stages(profile))
-
-    def test_profile_gates_reads_normalized_profiles(self):
-        assert pp.profile_gates("Full") == pp.PROFILE_GATES["full"]
-        assert pp.profile_gates("standard") == pp.PROFILE_GATES["full"]
-        # unknown -> strict, full's gates (fail-closed, like is_relaxed_profile)
-        assert pp.profile_gates("mystery") == pp.PROFILE_GATES["full"]
 
 
 class TestChecklist:
@@ -102,7 +69,7 @@ class TestRunBlock:
     def test_run_block_carries_the_checklist(self):
         rb = pse.run_block("run_c1", _state("bugfix"), AT)
         assert rb["checklist"] == pse.checklist("bugfix")
-        assert rb["stages"] == pp.get_profile_stages("bugfix")
+        assert rb["stages"] == pp.PIPELINE_PROFILES["bugfix"]
 
     def test_run_block_before_evaluate_has_an_empty_checklist(self):
         rb = pse.run_block("run_c1", _state(None), AT)

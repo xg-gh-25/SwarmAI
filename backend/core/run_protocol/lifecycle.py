@@ -4,6 +4,9 @@ Public symbols:
 - ``fold`` — derive the run projection only from a complete validated event chain.
 - ``quality_result`` — deterministic not-landed reason to Quality result.
 - ``PROFILE_STAGES`` — exact profile sequences (there is no skipped stage).
+- ``PROFILE_CAPS`` / ``caps`` / ``profiles_where`` / ``document_variant`` /
+  ``gate0_required`` — what each profile does; the only place profile names are
+  compared (design 2026-10-26-pipeline-two-ends §4). ``REMOVED_PROFILES``.
 - ``LifecycleError`` — the stream violates the transition table.
 
 A state-changing trigger MUST be followed by its matching ``transition`` event. Callers
@@ -12,6 +15,7 @@ cannot pass ``authorized``, ``stage_checks_passed``, attempt counts or RF exempt
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from core.run_protocol import events as ev
@@ -84,7 +88,66 @@ PROFILE_STAGES = {
 REMOVED_PROFILES = {
     "goal": ("the goal profile was removed (2026-10-26): its goal_cycle was BUILD under "
              "another name; split a large task into a sequence of runs"),
+    "docs": ("the docs profile was removed (2026-10-20). Documents outside a code repo "
+             "(SwarmWS Knowledge / DDD) need no run: edit them directly. *.md files and "
+             "backend/context/ in a code repo need no run either (core/doc_paths.py); any "
+             "other file: `\"$SWARM_BACKEND_BIN\" pipeline-v1 create --profile direct "
+             "--requirement \"<the request>\"`."),
 }
+
+
+@dataclass(frozen=True)
+class ProfileCaps:
+    """What a profile does, the one place it is defined (design
+    docs/design/2026-10-26-pipeline-two-ends.md §4.2). A profile decides how deep the
+    front-end documents go and what the run produces; never how code is written."""
+    lands_code: bool        # False: a report, no worktree, no landing (research)
+    requirements: str       # "full": a REQUIREMENTS document; "words": the user's words only
+    design: "str | None"    # DESIGN_SPEC variant: "full" / "lite" / None (no DESIGN_SPEC)
+    gate0: str              # "always" / "readings" (two or more readings) / "never"
+    triad: bool             # REQUIREMENTS carries current / expected / unchanged (bugfix)
+    decisions: bool         # may ask a person (DC-1); direct re-runs as trivial instead
+
+
+PROFILE_CAPS: dict[str, ProfileCaps] = {
+    "full": ProfileCaps(True, "full", "full", "readings", False, True),
+    "bugfix": ProfileCaps(True, "full", "full", "always", True, True),
+    "trivial": ProfileCaps(True, "full", "lite", "never", False, True),
+    "direct": ProfileCaps(True, "words", None, "never", False, False),
+    "research": ProfileCaps(False, "full", None, "never", False, True),
+}
+if set(PROFILE_CAPS) != set(PROFILE_STAGES):
+    raise RuntimeError("PROFILE_CAPS and PROFILE_STAGES must name the same profiles")
+
+
+def caps(profile: str) -> ProfileCaps:
+    """The capabilities of *profile*; LifecycleError for a removed or unknown one."""
+    try:
+        return PROFILE_CAPS[profile]
+    except KeyError:
+        raise LifecycleError(REMOVED_PROFILES.get(profile, f"unknown profile {profile!r}")) from None
+
+
+def profiles_where(predicate) -> str:
+    """The names of the profiles whose caps satisfy *predicate*, space-separated (the
+    checks registry's ``profiles`` column)."""
+    return " ".join(name for name, value in PROFILE_CAPS.items() if predicate(value))
+
+
+def document_variant(profile: str, stage: str) -> "str | None":
+    """The schema variant a stage's artifact is validated with: EVALUATE / PLAN only."""
+    if stage == "plan":
+        return caps(profile).design
+    if stage == "evaluate":
+        return "full"
+    return None
+
+
+def gate0_required(profile: str, readings: Any) -> bool:
+    """Gate-0 is dispatched for this EVALUATE artifact's ``understanding.readings``."""
+    rule = caps(profile).gate0
+    return rule == "always" or (rule == "readings" and isinstance(readings, list)
+                                and len(readings) >= 2)
 IGNORED = frozenset({
     "handout", "spawn", "spawn_rejected", "answer", "answer_rejected",
     "finding_occ", "finding_status",
@@ -114,8 +177,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
     if payload["run_id"] != event["run_id"]:
         raise LifecycleError("run_create payload/envelope run_id mismatch")
     profile = payload["profile"]
-    if profile not in PROFILE_STAGES:
-        raise LifecycleError(REMOVED_PROFILES.get(profile, f"unknown profile {profile!r}"))
+    caps(profile)                       # a removed or unknown profile is refused
     cap = payload["decision_cap"]
     if isinstance(cap, bool) or cap < 0:
         raise LifecycleError("decision_cap must be non-negative")
@@ -189,7 +251,7 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             raise LifecycleError("land attempt check_ids are not a valid action guard set")
     elif stage == "deliver":
         ids = frozenset(check_ids)
-        report_only = run.get("pending_landing") is not None or run["profile"] == "research"
+        report_only = run.get("pending_landing") is not None or not caps(run["profile"]).lands_code
         if ids != RF_CHECKS and not (ids == REPORT_ONLY and report_only):
             raise LifecycleError("DELIVER attempts are RF-1~4, or DV-1 on the not-landed path")
     else:
@@ -277,7 +339,7 @@ def _complete(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         if frozenset(attempt["check_ids"]) != REPORT_ONLY:
             raise LifecycleError("DELIVER stage_complete is the not-landed path's DV-1 attempt")
         outcome = run.get("pending_landing")
-        if run["profile"] == "research" and outcome is None:
+        if not caps(run["profile"]).lands_code and outcome is None:
             outcome = {"landing": "no_code", "reason": None}
         if not outcome or outcome["landing"] not in ("not_landed", "no_code"):
             raise LifecycleError("DELIVER stage_complete is only for not_landed/no_code")
@@ -594,7 +656,7 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         _review_reopen(run, event)
     elif kind == "gate0_exhausted":
         if run["status"] != "active" or run["stage"] != "evaluate" \
-                or run["profile"] not in ("full", "bugfix") \
+                or caps(run["profile"]).gate0 == "never" \
                 or event["payload"]["reason"] not in ("framing_rejected", "already_satisfied"):
             raise LifecycleError("gate0_exhausted is illegal here")
         run["stages"]["evaluate"] = "degraded"
@@ -645,7 +707,7 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
                          and all(value is True for value in attempt["results"].values()))
             terminal_report = (run["status"] == "active" and run["stage"] == "deliver"
                                and (run.get("pending_landing") is not None
-                                    or run["profile"] == "research")
+                                    or not caps(run["profile"]).lands_code)
                                and (attempt is None or passed_rf) and intent is None)
             human = bool(intent and intent.get("request_id"))
             eligible = run["status"] in ("active", "paused", "awaiting_human", "abandoned") \

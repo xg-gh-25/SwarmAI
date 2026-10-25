@@ -39,8 +39,7 @@ def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:
     """The checks of the current stage that would fail now, evaluated without
     recording anything (``checks.evaluate`` is pure)."""
     stage, profile = state["stage"], state["profile"]
-    variant = ("lite" if stage == "plan" and profile == "trivial"
-               else "full" if stage in {"evaluate", "plan"} else None)
+    variant = lifecycle.document_variant(profile, stage)
     context = engine.check_context()
     out = []
     for spec in checks.stage_checks(profile, stage, variant):
@@ -191,7 +190,7 @@ def next_step(engine, *, previous_stage: str | None = None,
             out.update(action="write_artifact",
                        command=_cmd(engine, "reflect-prepare --artifact -"),
                        why="record the run's lessons (zero is allowed) before landing")
-        elif state.get("profile") == "research":
+        elif not lifecycle.caps(state["profile"]).lands_code:
             # a research run has no code and no TEST: it never lands (research-deliver #1)
             out.update(action="run", command=_cmd(engine, "stage-complete"),
                        why="a research run lands nothing: finish DELIVER (it ends no_code)")

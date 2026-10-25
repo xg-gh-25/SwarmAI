@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from config import get_app_data_dir
-from core.run_protocol import request_ctx
+from core.run_protocol import lifecycle, request_ctx
 from core.run_protocol.engine import EngineError, RunEngine
 from core.run_protocol.landing import LandingError
 
@@ -269,7 +269,7 @@ _READ_ONLY = frozenset({"status", "push-status", "events"})
 def _missing_worktrees(engine: RunEngine) -> bool:
     state = engine.projection()
     return (engine.contract.get("mode") == "isolated" and state["status"] == "active"
-            and engine.contract.get("profile") != "research"
+            and lifecycle.caps(engine.contract["profile"]).lands_code
             and state["stage"] in engine.WORKTREE_STAGES
             and set(engine.effective_repos()) != set(engine.contract["expected_repos"]))
 
