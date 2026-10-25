@@ -1,7 +1,7 @@
 /**
  * NewBrainOverlay interaction tests — lock the launcher's contract:
  *   1. Opens on swarm:show-new-brain.
- *   2. Collects name + governs + starter items (auto-classified by type, pill correctable).
+ *   2. Collects name + starter items (auto-classified by type, pill correctable).
  *   3. Create builds ONE manifest, calls onDispatch(prompt), and closes ON SUCCESS.
  *   4. F4: when onDispatch returns FALSE (all tabs busy / draft guard), the
  *      launcher stays OPEN (no close) so the toast is visible.
@@ -86,10 +86,13 @@ describe('NewBrainOverlay', () => {
     await screen.findByTestId('new-brain-overlay');
 
     fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme Payments' } });
-    fireEvent.click(screen.getByTestId('new-brain-governs-codebase'));
+    expect(screen.getByTestId('new-brain-preview-gates').getAttribute('data-on')).toBe('no');
     const input = screen.getByTestId('new-brain-material-input');
     fireEvent.change(input, { target: { value: 'github.com/acme/payments' } });
     fireEvent.keyDown(input, { key: 'Enter' });
+    // a repo is a governed asset: the preview fills Gates and the asset count says so
+    expect(screen.getByTestId('new-brain-preview-gates').getAttribute('data-on')).toBe('yes');
+    expect(screen.getByTestId('new-brain-assets').textContent).toContain('1');
 
     fireEvent.click(screen.getByTestId('new-brain-create'));
 
@@ -98,9 +101,10 @@ describe('NewBrainOverlay', () => {
     await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     const prompt = onDispatch.mock.calls[0][0] as string;
     expect(prompt).toContain('"Acme Payments"');
-    expect(prompt).toContain('governs a codebase');
+    expect(prompt).toContain('it governs 1 asset');
     expect(prompt).toContain('github.com/acme/payments');
     expect(prompt).toContain('s_project-manager');
+    expect(prompt).toContain('project-agent.yaml');
   });
 
   it('F4: does NOT close when onDispatch returns false (no tab landed)', async () => {

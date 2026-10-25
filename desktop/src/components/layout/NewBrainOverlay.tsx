@@ -18,13 +18,14 @@
  *
  * @exports NewBrainOverlay, NewBrainOverlayProps
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useOverlayDraft } from '../../hooks/useOverlayDraft';
 import {
   classifyStarterItem,
   buildBrainManifest,
   detectKind,
-  type GovernsKind,
+  previewSections,
+  type PreviewSection,
   type StarterItem,
   type StarterKind,
   type StarterRole,
@@ -39,18 +40,54 @@ export interface NewBrainContentProps {
   close: () => void;
 }
 
-interface GovernsOption {
-  kind: GovernsKind;
-  icon: string;
-  label: string;
+/** The six sections in Brain-map order, with the hex angle used by the preview. */
+const PREVIEW: { key: PreviewSection; label: string; deg: number }[] = [
+  { key: 'identity', label: 'Identity', deg: -120 },
+  { key: 'knowledge', label: 'Knowledge', deg: -60 },
+  { key: 'gates', label: 'Gates', deg: 0 },
+  { key: 'capabilities', label: 'Capabilities', deg: 60 },
+  { key: 'refresher', label: 'Refresher', deg: 120 },
+  { key: 'delivery', label: 'Delivery', deg: 180 },
+];
+
+function hexPoints(x: number, y: number, r: number): string {
+  const p: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 180) * (60 * i - 90);
+    p.push(`${(x + r * Math.cos(a)).toFixed(1)},${(y + r * Math.sin(a)).toFixed(1)}`);
+  }
+  return p.join(' ');
 }
 
-const GOVERNS_OPTIONS: GovernsOption[] = [
-  { kind: 'codebase', icon: 'code', label: 'A codebase' },
-  { kind: 'data', icon: 'database', label: 'A data source' },
-  { kind: 'documents', icon: 'library_books', label: 'Documents' },
-  { kind: 'service', icon: 'settings_input_component', label: 'A service / process' },
-  { kind: 'idea', icon: 'lightbulb', label: 'Just an idea — nothing yet' },
+/** The Brain preview: the six-petal flower of the Brain map. A solid petal is a
+ *  section this material fills at creation; a dashed one grows later in use. */
+function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSection, boolean> }) {
+  const R = 30, D = Math.sqrt(3) * R + 4, cx = 130, cy = 112;
+  const label = name.trim() ? (name.trim().length > 11 ? name.trim().slice(0, 10) + '…' : name.trim()) : 'Brain';
+  return (
+    <svg viewBox="0 0 260 226" width="100%" role="img" aria-label="Brain preview" data-testid="new-brain-preview">
+      {PREVIEW.map(({ key, label: l, deg }) => {
+        const a = (deg * Math.PI) / 180, x = cx + D * Math.cos(a), y = cy + D * Math.sin(a), on = filled[key];
+        return (
+          <g key={key} data-testid={`new-brain-preview-${key}`} data-on={on ? 'yes' : 'no'}>
+            <polygon points={hexPoints(x, y, R)} strokeWidth={1.3} strokeDasharray={on ? undefined : '3 3'}
+              className={on ? 'fill-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] stroke-[var(--color-primary)]'
+                : 'fill-transparent stroke-[var(--color-text-muted)]'} />
+            <text x={x} y={y + 4} textAnchor="middle"
+              className={`text-meta ${on ? 'font-semibold fill-[var(--color-text)]' : 'fill-[var(--color-text-muted)]'}`}>{l}</text>
+          </g>
+        );
+      })}
+      <polygon points={hexPoints(cx, cy, R)} className="fill-[var(--color-primary)] stroke-[var(--color-primary)]" />
+      <text x={cx} y={cy + 4} textAnchor="middle" className="text-small font-semibold fill-[var(--color-on-accent)]">{label}</text>
+    </svg>
+  );
+}
+
+const NEXT_STEPS: { n: number; title: string; body: string }[] = [
+  { n: 1, title: 'Set it up together in chat', body: 'Confirm assets → write the knowledge → bind → the agent proposes the Project Agent from it, you confirm → verify. Unreachable links and conflicts are asked there.' },
+  { n: 2, title: 'Watch it grow in Brain Hub', body: 'It appears on the Brain map as soon as the skeleton exists, and its petals fill as each section is written.' },
+  { n: 3, title: 'Ready', body: 'When the check passes, open its Brain map or describe a first change for a Run.' },
 ];
 
 const ROLE_STYLE: Record<StarterRole, { label: string; cls: string }> = {
@@ -75,11 +112,10 @@ interface RowItem extends StarterItem {
 /** The persisted draft shape for the New Brain form (useOverlayDraft). */
 interface BrainForm {
   name: string;
-  governs: GovernsKind;
   items: RowItem[];
   draft: string;
 }
-const EMPTY_FORM: BrainForm = { name: '', governs: 'codebase', items: [], draft: '' };
+const EMPTY_FORM: BrainForm = { name: '', items: [], draft: '' };
 
 /**
  * NewBrainContent — the "grow a new brain" launcher content (M3: migrated to the
@@ -96,9 +132,8 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
   // module-level in-memory store (NOT localStorage — items are local abs paths),
   // restored on reopen, cleared ONLY on a successful dispatch (Esc/backdrop keep).
   const [form, setForm, clearForm] = useOverlayDraft<BrainForm>('new-brain', EMPTY_FORM);
-  const { name, governs, items, draft } = form;
+  const { name, items, draft } = form;
   const setName = useCallback((v: string) => setForm((f) => ({ ...f, name: v })), [setForm]);
-  const setGoverns = useCallback((v: GovernsKind) => setForm((f) => ({ ...f, governs: v })), [setForm]);
   const setItems = useCallback(
     (up: RowItem[] | ((prev: RowItem[]) => RowItem[])) =>
       setForm((f) => ({ ...f, items: typeof up === 'function' ? up(f.items) : up })),
@@ -185,7 +220,6 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
   const handleCreate = useCallback(() => {
     const manifest = buildBrainManifest(
       name,
-      governs,
       items.map(({ value, kind, role }) => ({ value, kind, role })),
     );
     // Gate-2 #13: a THROWING onDispatch (addTab/CustomEvent could raise) must be
@@ -209,7 +243,10 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
       // any reopen without the visible form ever rendering empty during the fade.
       requestAnimationFrame(() => requestAnimationFrame(() => { close(); clearForm(); }));
     }
-  }, [name, governs, items, onDispatch, close, clearForm]);
+  }, [name, items, onDispatch, close, clearForm]);
+
+  const filled = useMemo(() => previewSections(items), [items]);
+  const assetCount = items.filter((it) => it.role === 'GOVERN').length;
 
   const onDropZoneDrop = useCallback(
     (e: React.DragEvent) => {
@@ -260,23 +297,16 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
 
   return (
       <div className="flex-1 min-h-0 flex flex-col" data-testid="new-brain-overlay">
-        {/* Declaration + lifecycle ribbon */}
+        {/* Declaration */}
         <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
-          <p className="text-body text-[var(--color-text-muted)] max-w-[640px]">
-            A brain is a <span className="text-[var(--color-text)] font-semibold">domain that gets smarter every time you work in it</span> — its knowledge, skills &amp; memory compound. Not a folder. Name it, give me what you already have; I set it up with you in chat.
+          <p className="text-body text-[var(--color-text-muted)] max-w-[680px]">
+            A brain is <span className="text-[var(--color-text)] font-semibold">one project&apos;s domain that gets smarter every time you work in it</span>: what it knows, how it delivers, and what it learns. Name it and give me what you already have. I set it up with you in chat.
           </p>
-          <div className="mt-2.5 inline-flex items-center gap-2 text-meta text-[var(--color-text-muted)] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-full px-3 py-1">
-            <span><span className="text-[var(--color-primary)] tabular-nums">1</span> tell me</span>
-            <span className="text-[var(--color-text-faint)]">→</span>
-            <span><span className="text-[var(--color-primary)] tabular-nums">2</span> Create — I take it to chat</span>
-            <span className="text-[var(--color-text-faint)]">→</span>
-            <span><span className="text-[var(--color-primary)] tabular-nums">3</span> it lives in Brain Hub</span>
-          </div>
         </div>
 
-        {/* Body: left (name + governs) · right (starter material) */}
+        {/* Body: left (name + live Brain preview) · right (starter material) */}
         <div className="flex-1 min-h-0 grid grid-cols-[300px_1fr]">
-          <div className="p-5 border-r border-[var(--color-border)] flex flex-col gap-5 overflow-y-auto">
+          <div className="p-5 border-r border-[var(--color-border)] flex flex-col gap-4 overflow-y-auto">
             <div>
               <label htmlFor="new-brain-name-input" className="block text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">NAME</label>
               <input
@@ -285,30 +315,19 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Acme Payments"
-                className="w-full bg-[var(--color-bg)] border border-[var(--color-border-strong)] rounded-lg px-3 py-2 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+                className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
               />
             </div>
-            <fieldset className="border-0 p-0 m-0">
-              <legend className="block text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5 p-0">WHAT IT GOVERNS</legend>
-              <div className="flex flex-col gap-1.5">
-                {GOVERNS_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.kind}
-                    type="button"
-                    data-testid={`new-brain-governs-${opt.kind}`}
-                    aria-pressed={governs === opt.kind}
-                    onClick={() => setGoverns(opt.kind)}
-                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-small transition-colors text-left ${
-                      governs === opt.kind
-                        ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-text)]'
-                        : 'border-[var(--color-border)] bg-[var(--color-card)] text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]'
-                    } ${opt.kind === 'idea' ? 'border-dashed' : ''}`}
-                  >
-                    <span className="w-5 text-center material-symbols-outlined icon-sm">{opt.icon}</span> {opt.label}
-                  </button>
-                ))}
+            <div>
+              <div className="text-meta font-semibold tracking-wide text-[var(--color-text-muted)]">BRAIN PREVIEW</div>
+              <BrainPreview name={name} filled={filled} />
+              <div className="text-small" data-testid="new-brain-assets">
+                {assetCount > 0
+                  ? <>It governs <span className="font-semibold">{assetCount}</span> asset{assetCount === 1 ? '' : 's'}. A repo gets code-intel, and the agent proposes the Project Agent from its CI.</>
+                  : <><span className="font-semibold">A pure-knowledge brain.</span> No asset to bind, and that is complete.</>}
               </div>
-            </fieldset>
+              <div className="text-meta text-[var(--color-text-muted)] mt-1">Solid: filled by this material. Dashed: grows later as you work in it.</div>
+            </div>
           </div>
 
           <div className="p-5 flex flex-col min-w-0">
@@ -372,16 +391,12 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
               data-testid="new-brain-dropzone"
               onDragOver={(e) => e.preventDefault()}
               onDrop={onDropZoneDrop}
-              className="flex-1 border border-dashed border-[var(--color-border-strong)] rounded-xl bg-[var(--color-bg)] p-3 flex flex-col min-h-[220px]"
+              className="flex-1 min-h-[160px] flex flex-col"
             >
               <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto">
                 {items.length === 0 && (
-                  <div className="flex-1 grid place-items-center text-center text-[var(--color-text-faint)]">
-                    <div>
-                      <div className="text-display opacity-60 mb-1.5">⤵</div>
-                      <div className="text-small text-[var(--color-text-muted)] ">Add files, a folder, or a link above</div>
-                      <div className="text-meta mt-1">…or drag files &amp; folders here · sorted by type, click a pill to change the role</div>
-                    </div>
+                  <div className="text-small text-[var(--color-text-muted)] py-2">
+                    No material yet. That is fine: it becomes a pure-knowledge brain you grow in chat.
                   </div>
                 )}
                 {items.map((it) => (
@@ -407,23 +422,42 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
                   </div>
                 ))}
               </div>
+              <div className="mt-2 border border-dashed border-[var(--color-border)] rounded-lg py-2 text-center text-meta text-[var(--color-text-muted)]">
+                Drag files or folders here. Each is sorted by type; click its role to change it.
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-meta text-[var(--color-text-muted)]">
+                <span><span className={`px-1.5 rounded ${ROLE_STYLE.GOVERN.cls}`}>GOVERN</span> an asset it manages, bound</span>
+                <span><span className={`px-1.5 rounded ${ROLE_STYLE.DISTILL.cls}`}>DISTILL</span> read once, distilled into knowledge</span>
+                <span><span className={`px-1.5 rounded ${ROLE_STYLE.SHELF.cls}`}>SHELF</span> kept for reference</span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Footer: dispatch */}
-        <div className="px-6 py-3.5 border-t border-[var(--color-border)] flex items-center justify-between gap-4 bg-[var(--color-bg-chrome)]">
-          <span className="text-meta text-[var(--color-text-muted)]">
-            On Create, I open a chat tab and set it up live — this window closes. Reading, unreachable links &amp; conflicts surface there.
-          </span>
-          <button
-            data-testid="new-brain-create"
-            onClick={handleCreate}
-            disabled={!name.trim()}
-            className="btn-lg btn-primary disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition"
-          >
-            Create Brain →
-          </button>
+        {/* Footer: what happens next + dispatch */}
+        <div className="px-6 py-3.5 border-t border-[var(--color-border)] bg-[var(--color-bg-chrome)]">
+          <div className="text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">WHAT HAPPENS ON CREATE</div>
+          <div className="grid grid-cols-3 gap-2" data-testid="new-brain-next-steps">
+            {NEXT_STEPS.map((s) => (
+              <div key={s.n} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex w-[18px] h-[18px] items-center justify-center rounded-full text-meta font-semibold bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] text-[var(--color-primary)]">{s.n}</span>
+                  <span className="text-small font-semibold">{s.title}</span>
+                </div>
+                <div className="text-meta text-[var(--color-text-muted)] mt-1">{s.body}</div>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end mt-3">
+            <button
+              data-testid="new-brain-create"
+              onClick={handleCreate}
+              disabled={!name.trim()}
+              className="btn-lg btn-primary disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition"
+            >
+              Create in chat →
+            </button>
+          </div>
         </div>
       </div>
   );

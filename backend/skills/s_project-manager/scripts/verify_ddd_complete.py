@@ -333,6 +333,48 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
             "governs a code-repo but code-intel.json not built yet — bind+refresh to generate (not a failure)")
 
 
+# The pipeline profiles a Project Agent may name. Guarded single-source import, the
+# same pattern as CANONICAL_DOCS: the literal fallback only fires when this gate runs
+# portable, off a SwarmAI host.
+try:
+    from core.project_agent import PLACEMENTS as _PLACEMENTS, PROFILES as _PROFILES
+except ImportError:
+    _PROFILES = frozenset({"full", "bugfix", "goal", "trivial", "direct", "research"})  # profile-fallback
+    _PLACEMENTS = frozenset({"chat-tab", "local-worker", "hive"})
+
+
+def _check_project_agent(d: Path) -> tuple[str, str, str]:
+    """⑤ PROJECT AGENT: project-agent.yaml, generated at P3 from the Brain's knowledge.
+
+    Missing → PENDING (a Brain made before the Project Agent existed is not broken;
+    generate one). Present but naming a profile or placement the pipeline does not
+    support → FAIL. Present and valid → PASS (draft or reviewed).
+    """
+    name = "⑤ Project Agent"
+    p = d / "project-agent.yaml"
+    if not p.is_file():
+        return (name, STATUS_PENDING, "no project-agent.yaml yet — generate it from the DDD (s_project-manager P3)")
+    try:
+        import yaml  # noqa: PLC0415 — optional dep, same as _read_bindings_raw
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    except Exception as exc:  # noqa: BLE001 — a completeness gate never crashes
+        return (name, STATUS_FAIL, f"project-agent.yaml could not be parsed: {type(exc).__name__}")
+    if not isinstance(doc, dict):
+        return (name, STATUS_FAIL, "project-agent.yaml is not a mapping")
+    bad: list[str] = []
+    if doc.get("default_profile") not in _PROFILES:
+        bad.append(f"default_profile {doc.get('default_profile')!r}")
+    for r in doc.get("profile_rules") or []:
+        if isinstance(r, dict) and r.get("profile") not in _PROFILES:
+            bad.append(f"rule profile {r.get('profile')!r}")
+    places = doc.get("placements") or []
+    if not places or any(x not in _PLACEMENTS for x in places):
+        bad.append(f"placements {places!r}")
+    if bad:
+        return (name, STATUS_FAIL, "not a supported value: " + ", ".join(bad))
+    return (name, STATUS_PASS, f"{doc.get('status', 'draft')} · default profile {doc['default_profile']}")
+
+
 # ── orchestration ────────────────────────────────────────────────────────────
 
 def verify_project(project_dir: str | Path) -> dict[str, Any]:
@@ -360,6 +402,7 @@ def verify_project(project_dir: str | Path) -> dict[str, Any]:
         _check_gates(d),
         _check_capabilities(d, aim),
         _check_delivery(d, assets),
+        _check_project_agent(d),
         _check_refresher_code_intel(d, assets),
     ]
     check_dicts = [{"name": n, "status": s, "detail": t} for (n, s, t) in checks]

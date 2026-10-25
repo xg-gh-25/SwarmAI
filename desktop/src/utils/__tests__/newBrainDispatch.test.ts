@@ -8,6 +8,7 @@ import {
   classifyStarterItem,
   buildBrainManifest,
   detectKind,
+  previewSections,
   type StarterItem,
 } from '../newBrainDispatch';
 
@@ -69,14 +70,14 @@ describe('buildBrainManifest', () => {
     { value: '~/work/acme/notes/', role: 'SHELF' },
   ];
 
-  it('names the brain and states what it governs', () => {
-    const p = buildBrainManifest('Acme Payments', 'codebase', items);
+  it('names the brain and counts its assets from the GOVERN items', () => {
+    const p = buildBrainManifest('Acme Payments', items);
     expect(p).toContain('"Acme Payments"');
-    expect(p).toContain('governs a codebase');
+    expect(p).toContain('it governs 1 asset');
   });
 
   it('groups items GOVERN → DISTILL → SHELF, in that order', () => {
-    const p = buildBrainManifest('Acme', 'codebase', items);
+    const p = buildBrainManifest('Acme', items);
     const gi = p.indexOf('GOVERN');
     const di = p.indexOf('DISTILL');
     const si = p.indexOf('SHELF');
@@ -89,7 +90,7 @@ describe('buildBrainManifest', () => {
   });
 
   it('omits empty role groups', () => {
-    const p = buildBrainManifest('Idea', 'idea', [
+    const p = buildBrainManifest('Idea', [
       { value: 'a research question', role: 'DISTILL' },
     ]);
     expect(p).toContain('DISTILL');
@@ -97,23 +98,39 @@ describe('buildBrainManifest', () => {
     expect(p).not.toContain('SHELF');
   });
 
-  it('a 0-material brain still produces a valid prompt (name + governs only)', () => {
-    const p = buildBrainManifest('My Book', 'idea', []);
+  it('a 0-material brain is a pure-knowledge brain and still a valid prompt', () => {
+    const p = buildBrainManifest('My Book', []);
     expect(p).toContain('"My Book"');
-    expect(p).toContain('just an idea');
+    expect(p).toContain('pure-knowledge brain');
     expect(p).not.toContain('Starter material:');
     expect(p).toContain('s_project-manager');
   });
 
   it('falls back to a placeholder name when blank', () => {
-    const p = buildBrainManifest('   ', 'documents', []);
+    const p = buildBrainManifest('   ', []);
     expect(p).toContain('"Untitled Brain"');
   });
 
-  it('always instructs the 6-phase setup + surfacing unreachable/conflicts', () => {
-    const p = buildBrainManifest('X', 'codebase', items);
+  it('asks for the generated Project Agent, unreachable/conflicts, and the ready hand-off', () => {
+    const p = buildBrainManifest('X', items);
     expect(p).toContain('s_project-manager');
+    expect(p).toContain('P3b');
+    expect(p).toContain('project-agent.yaml');
+    expect(p).toContain('pipeline profiles');
     expect(p.toLowerCase()).toContain('cannot reach');
     expect(p.toLowerCase()).toContain('conflict');
+    expect(p).toContain('Brain Hub');
+  });
+});
+
+describe('previewSections', () => {
+  it('always creates Identity, Capabilities and Delivery; Knowledge needs something to read', () => {
+    expect(previewSections([])).toEqual({ identity: true, knowledge: false, gates: false, capabilities: true, delivery: true, refresher: false });
+    expect(previewSections([{ role: 'DISTILL' }]).knowledge).toBe(true);
+    expect(previewSections([{ role: 'SHELF' }]).knowledge).toBe(false);
+  });
+  it('a governed asset also fills Gates and the Refresher', () => {
+    const p = previewSections([{ role: 'GOVERN' }]);
+    expect(p.gates && p.refresher && p.knowledge).toBe(true);
   });
 });

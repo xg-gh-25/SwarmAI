@@ -156,6 +156,25 @@ export interface BrainDetail {
    *  design (daemon skew): a pre-deploy daemon omits it — consumers MUST guard
    *  (`detail.health` undefined → render nothing), same as specs/hasCodeIntel. */
   health?: DetailHealth;
+  /** ⑤ Project Agent definition (project-agent.yaml), generated at Brain creation
+   *  from the DDD and reviewed by the person. null = none yet; undefined = an old
+   *  daemon that does not send it. `problems` lists unsupported values. */
+  projectAgent?: ProjectAgent | null;
+}
+
+export interface ProjectAgent {
+  path: string;
+  status?: 'draft' | 'reviewed';
+  reviewedAt?: string | null;
+  summary?: string;
+  defaultProfile?: string;
+  profileRules?: { when: string; profile: string }[];
+  reviewFocus?: { area: string; why: string; source: string }[];
+  validations?: { id: string; command: string; source: string }[];
+  placements?: string[];
+  landing?: Record<string, string>;
+  sources?: string[];
+  problems: string[];
 }
 
 // ── Review tab (Run 2) ────────────────────────────────────────────────────────

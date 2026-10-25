@@ -70,6 +70,7 @@ from core.ddd_entry_lifecycle import (
     parse_entries,
 )
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
+from core.project_agent import PROJECT_AGENT_FILE, load_project_agent
 from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR, get_pinned_projects
 
 logger = logging.getLogger(__name__)
@@ -343,8 +344,15 @@ def _section_members(project_dir: Path, key: str) -> list[str]:
         return [IDENTITY_FILE] if (project_dir / IDENTITY_FILE).exists() else []
 
     if key == "delivery":
+        # ⑤ = bindings.yaml (what it governs + the repo delivery contract) and the
+        # Project Agent definition next to it (how it delivers).
+        out = []
         p = ddd_path(project_dir, "bindings.yaml")
-        return [_rel(project_dir, p)] if p.exists() else []
+        if p.exists():
+            out.append(_rel(project_dir, p))
+        if (project_dir / PROJECT_AGENT_FILE).is_file():
+            out.append(PROJECT_AGENT_FILE)
+        return out
 
     if key == "refresher":
         p = ddd_path(project_dir, "REFRESHER.md")
@@ -913,6 +921,9 @@ def _brain_detail(project_dir: Path) -> dict:
     # hasCodeIntel = a live PRESENCE check of the on-disk code_intel.db, NOT gated
     # on `kind` (all DDDs resolve to kind='knowledge'). One stat, per-brain-on-open.
     state["hasCodeIntel"] = (project_dir / "code_intel.db").exists()
+    # projectAgent = the ⑤ Project Agent definition (project-agent.yaml), parsed and
+    # validated; None when the Brain has none yet. One small file read, on open only.
+    state["projectAgent"] = load_project_agent(project_dir)
     return state
 
 

@@ -110,7 +110,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 
 ---
 
-## The DDD Setup Flow — 6 phases, each with an exit-gate
+## The DDD Setup Flow — 6 phases (+ P3b), each with an exit-gate
 
 > **Why this exists (a real failure):** a DDD was once hand-built by reading a
 > source spec straight into the four docs + skills — and shipped with an EMPTY ⑤
@@ -131,9 +131,46 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P1 — CREATE** | `create_project` scaffolds the six-section skeleton + copies the 3 native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
 | **P2 — KNOWLEDGE (the moat)** | Fill PRODUCT / TECH / IMPROVEMENT / PROJECT.md from the source (spec, code, conversation). This is where domain judgment is born. | All 4 docs substantive — **no placeholders** (P6 ② check FAILs on a stub). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets.** Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
+| **P3b — PROJECT AGENT** ⭐ | **Every brain.** Generate `project-agent.yaml` (next to `bindings.yaml`, section ⑤) from what this brain now knows — see "Generating the Project Agent" below. Show it to the person as a short table and ask them to confirm or change it. They review and revise; they never fill it in. Set `status: reviewed` and `reviewed_at` only after they confirm. | P6 ⑤ Project Agent check: present with only supported profiles and placements → PASS; missing → PENDING. |
 | **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_repo-to-ddd` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
 | **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME>` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
+
+### Generating the Project Agent (P3b)
+
+The Project Agent is the delivery agent that works with the person on this brain. Its
+definition is derived, not asked for. Read PRODUCT / TECH / IMPROVEMENT / PROJECT.md,
+`bindings.yaml` and, for a bound repo, its `validations.json` or CI config, then write:
+
+```yaml
+schema: 1
+status: draft                 # reviewed once the person confirms
+reviewed_at: null
+summary: <one line: what changes here usually look like>
+default_profile: bugfix       # one of: full, bugfix, goal, trivial, direct, research
+profile_rules:                # when to use another profile; each `when` names a kind of change
+  - when: config-only or docs-only change
+    profile: direct
+review_focus:                 # what a reviewer must look at here, each with WHY and WHERE it came from
+  - area: concurrency
+    why: <the fact from the DDD that makes it matter>
+    source: TECH.md
+validations:                  # commands a Run must pass; copy them, never invent them
+  - id: unit
+    command: pytest -q
+    source: validations.json  # or the CI file the command came from
+placements: [chat-tab]        # chat-tab today; local-worker / hive when they exist
+landing: {approval: human, via: <delivery_contract.remote_kind, or "none">}
+sources: [TECH.md, bindings.yaml]
+```
+
+Rules: only the six pipeline profiles above (anything else FAILs P6). Every
+`review_focus` and `validations` row names its `source`; if no source supports a row,
+leave it out. A 0-asset brain gets `default_profile: research` and no validations.
+Landing approval is always `human`.
+
+**After P6 passes**, end with: the brain is ready, its map is in **Brain Hub**, and the
+next step is either to open the map or to describe a first change for a Run.
 
 **P6 gate — the exit门禁 for the whole flow:**
 

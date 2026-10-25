@@ -8,15 +8,16 @@
  * Brain Hub). These two helpers are the whole non-UI logic, kept pure so they
  * are unit-testable without React.
  *
- * @exports classifyStarterItem, buildBrainManifest, StarterRole, StarterItem,
- *          GovernsKind, detectKind
+ * What the brain governs is not asked: it is the GOVERN items (none = a
+ * pure-knowledge brain). The Project Agent is not asked either: the agent
+ * generates it from the DDD at P3b and the person reviews it.
+ *
+ * @exports classifyStarterItem, buildBrainManifest, previewSections, StarterRole,
+ *          StarterItem, StarterKind, detectKind, PreviewSection
  */
 
 /** The three roles a starter item can play — sorted BY TYPE (a rule, no LLM). */
 export type StarterRole = 'GOVERN' | 'DISTILL' | 'SHELF';
-
-/** What the whole brain governs (the load-bearing P0 decision, single-select). */
-export type GovernsKind = 'codebase' | 'data' | 'documents' | 'service' | 'idea';
 
 /** A raw item the user dropped/pasted, before or after role assignment. */
 export interface StarterItem {
@@ -92,33 +93,37 @@ export function classifyStarterItem(input: { value: string; kind?: StarterKind }
   }
 }
 
-const GOVERNS_LABEL: Record<GovernsKind, string> = {
-  codebase: 'a codebase',
-  data: 'a data source',
-  documents: 'documents',
-  service: 'a service / process',
-  idea: 'just an idea (nothing yet)',
-};
+export type PreviewSection =
+  | 'identity' | 'knowledge' | 'gates' | 'capabilities' | 'delivery' | 'refresher';
+
+/**
+ * Which of the six sections this material fills at creation (true), versus grows
+ * later in use (false). Identity, Capabilities and Delivery (the Project Agent) are
+ * always created; Knowledge needs something to read; Gates and the Refresher come
+ * from a governed asset (a repo's CI, its code-intel).
+ */
+export function previewSections(items: Pick<StarterItem, 'role'>[]): Record<PreviewSection, boolean> {
+  const gov = items.some((i) => i.role === 'GOVERN');
+  const read = items.some((i) => i.role === 'DISTILL');
+  return { identity: true, knowledge: gov || read, gates: gov, capabilities: true, delivery: true, refresher: gov };
+}
 
 /**
  * Build the ONE categorized-manifest prompt dispatched into the chat tab.
  *
- * This is what "Create Brain" hands to the agent — a self-contained instruction
- * to run the s_project-manager 6-phase setup, with the collected material grouped
- * by role. It reads as a normal user prompt (autoSend:false — the user reviews +
- * sends it), so it must be legible, not a JSON blob.
- *
- * Items are grouped GOVERN → DISTILL → SHELF; an empty group is omitted. A brain
- * with no starter material still produces a valid prompt (name + governs only).
+ * A self-contained instruction to run the s_project-manager setup (P0..P6 with
+ * P3b, the Project Agent), with the material grouped by role. It reads as a normal
+ * user prompt, so it must be legible, not a JSON blob. Items are grouped
+ * GOVERN → DISTILL → SHELF; an empty group is omitted. No material is valid: a
+ * pure-knowledge brain.
  */
-export function buildBrainManifest(
-  name: string,
-  governs: GovernsKind,
-  items: StarterItem[],
-): string {
+export function buildBrainManifest(name: string, items: StarterItem[]): string {
   const trimmedName = name.trim() || 'Untitled Brain';
+  const assets = items.filter((it) => it.role === 'GOVERN').length;
   const lines: string[] = [];
-  lines.push(`Create a new Brain "${trimmedName}" — it governs ${GOVERNS_LABEL[governs]}.`);
+  lines.push(`Create a new Brain "${trimmedName}" — ${assets === 0
+    ? 'a pure-knowledge brain (it governs no asset yet)'
+    : `it governs ${assets} asset${assets === 1 ? '' : 's'} (listed below)`}.`);
   lines.push('');
 
   const order: StarterRole[] = ['GOVERN', 'DISTILL', 'SHELF'];
@@ -141,11 +146,13 @@ export function buildBrainManifest(
   }
 
   lines.push(
-    'Set it up with me: run the s_project-manager 6-phase setup (P0 define assets → ' +
-      'P2 read & distill the material into PRODUCT/TECH/IMPROVEMENT/PROJECT → bind/CodeGraph ' +
-      'if there is a repo → shelve references → P6 verify). Confirm the governed assets first, ' +
-      'and surface anything you cannot reach (login-walled links, missing paths) or any ' +
-      'conflicts between sources for me to resolve.',
+    'Set it up with me: run the s_project-manager setup (P0 confirm the governed assets → ' +
+      'P1 create → P2 read & distill the material into PRODUCT/TECH/IMPROVEMENT/PROJECT → ' +
+      'P3 bind any repo → P3b generate the Project Agent (project-agent.yaml) from this knowledge, ' +
+      'using only the pipeline profiles, and show it to me to confirm or change → P4 code-intel ' +
+      'for a repo → P5 skills → P6 verify). Surface anything you cannot reach (login-walled links, ' +
+      'missing paths) or any conflicts between sources for me to resolve. When P6 passes, tell me ' +
+      'the brain is ready and that its map is in Brain Hub.',
   );
   return lines.join('\n');
 }

@@ -99,6 +99,53 @@ describe('BrainMapView', () => {
   });
 });
 
+describe('BrainMapView · Project Agent definition', () => {
+  const AGENT = {
+    path: 'project-agent.yaml', status: 'draft', summary: 'Small fixes behind the service layer.',
+    defaultProfile: 'bugfix', profileRules: [{ when: 'config-only change', profile: 'direct' }],
+    reviewFocus: [{ area: 'concurrency', why: 'refunds settle asynchronously', source: 'TECH.md' }],
+    validations: [{ id: 'unit', command: 'pytest -q', source: 'validations.json' }],
+    placements: ['chat-tab'], landing: { approval: 'human', via: 'github-pr' }, sources: ['TECH.md'], problems: [],
+  };
+  const openAgent = (onDispatch = vi.fn(() => true)) => {
+    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={onDispatch} />);
+    fireEvent.click(screen.getByTestId('bm-agent'));
+    return onDispatch;
+  };
+
+  it('shows the generated definition with its sources, and confirm goes to chat', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = AGENT;
+    const onDispatch = openAgent();
+    const def = screen.getByTestId('bm-agent-def');
+    for (const s of ['bugfix', 'direct', 'concurrency', 'TECH.md', 'pytest -q', 'you approve every landing']) {
+      expect(def.textContent).toContain(s);
+    }
+    expect(screen.getByTestId('bm-agent-status').textContent).toContain('draft');
+    fireEvent.click(screen.getByTestId('bm-agent-confirm'));
+    const calls = onDispatch.mock.calls as unknown as string[][];
+    expect(calls[0][0]).toContain('status: reviewed');
+  });
+
+  it('a revise note goes to chat; a reviewed definition has no confirm button', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = { ...AGENT, status: 'reviewed' };
+    const onDispatch = openAgent();
+    expect(screen.queryByTestId('bm-agent-confirm')).toBeNull();
+    fireEvent.change(screen.getByTestId('bm-agent-note'), { target: { value: 'use full for API changes' } });
+    fireEvent.click(screen.getByTestId('bm-agent-revise'));
+    const calls = onDispatch.mock.calls as unknown as string[][];
+    expect(calls[0][0]).toContain('use full for API changes');
+  });
+
+  it('no definition yet offers to generate it from the DDD', () => {
+    (DETAIL as Record<string, unknown>).projectAgent = null;
+    const onDispatch = openAgent();
+    fireEvent.click(screen.getByTestId('bm-agent-generate'));
+    const calls = onDispatch.mock.calls as unknown as string[][];
+    expect(calls[0][0]).toContain('P3b');
+    delete (DETAIL as Record<string, unknown>).projectAgent;
+  });
+});
+
 describe('BrainHubMap', () => {
   it('draws every brain and opens one on click', () => {
     const onOpen = vi.fn();
@@ -112,5 +159,14 @@ describe('BrainHubMap', () => {
     fireEvent.click(screen.getByTestId('brainhub-map-B'));
     expect(onOpen).toHaveBeenCalledWith('B');
     expect(screen.getByTestId('brainhub-map-A').textContent).toContain('2');
+    expect(screen.queryByTestId('brainhub-map-born-A')).toBeNull();
+  });
+
+  it('a Brain still at CREATE is marked as being born', () => {
+    const born = { name: 'New', kind: 'knowledge', lifecycleStage: 'CREATE',
+      sectionsPresent: { identity: true, knowledge: false, gates: false, capabilities: true, delivery: false, refresher: false },
+      health: { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '--' } };
+    render(<BrainHubMap brains={[born] as never} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('brainhub-map-born-New')).toBeTruthy();
   });
 });

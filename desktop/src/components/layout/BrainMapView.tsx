@@ -6,8 +6,10 @@
  * Reads only records that already exist: the brain detail + review queue (cached
  * ddd hooks) and the 30-day pipeline analytics (one cached query, the same payload
  * the Pipelines overlay reads). Nothing here recomputes on the backend.
- * What is not built yet (Project Agent definition, Local Worker, Hive, Slack and
- * schedule intake, Conductor / Project Agent eval) is shown and labelled `mock`.
+ * What is not built yet (Local Worker, Hive, Slack and schedule intake, Conductor /
+ * Project Agent eval) is shown and labelled `mock`. The Project Agent definition is
+ * real: project-agent.yaml, generated from the DDD at creation; this view only shows
+ * it and sends revise / confirm requests to chat (the agent edits the file).
  * Submitting a request is real: it goes to chat as a pipeline Run request, the one
  * placement that exists today (P6: the person chose the pipeline).
  *
@@ -15,7 +17,7 @@
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useBrainDetail, useReview, type SectionKey } from '../../services/ddd';
+import { useBrainDetail, useReview, type ProjectAgent, type SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } from '../../services/pipelines';
 import { Stat, SectionLabel, Tabs, StatusBadge, Hint, type Tone } from '../overlay';
 import { BrainMap, type BrainMapTarget } from './BrainMap';
@@ -96,7 +98,7 @@ export function BrainMapView({ name, onGoTo, onDispatch }: {
         />
         <div className="pt-3" data-testid={`bm-panel-${panel}`}>
           {panel === 'need' && <NeedPanel items={needs} onReview={() => onGoTo('review')} />}
-          {panel === 'agent' && <AgentPanel name={name} runs={runs} delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []} onDispatch={onDispatch} />}
+          {panel === 'agent' && <AgentPanel name={name} runs={runs} delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []} agent={detail ? detail.projectAgent : undefined} onDispatch={onDispatch} />}
           {panel === 'runs' && <RunsPanel runs={runs} />}
           {panel === 'reflect' && <ReflectPanel review={review} onReview={() => onGoTo('review')} />}
           {panel === 'eval' && <EvalPanel ev={ev} />}
@@ -137,14 +139,111 @@ function NeedPanel({ items, onReview }: { items: ReturnType<typeof needsYouItems
   );
 }
 
+const PLACE_LABEL: Record<string, string> = { 'chat-tab': 'Chat tab', 'local-worker': 'Local Worker', hive: 'Hive' };
+
+/** The generated Project Agent definition, for review. Every change goes back
+ *  through chat (the agent edits project-agent.yaml); this view never writes. */
+function AgentDefinition({ name, agent, onGenerate, onConfirm, onRevise }: {
+  name: string; agent: ProjectAgent | null;
+  onGenerate: () => void; onConfirm: () => void; onRevise: (note: string) => void;
+}) {
+  const [note, setNote] = useState('');
+  const openFile = () => document.dispatchEvent(new CustomEvent('swarm:open-file', {
+    detail: { path: `Projects/${name}/project-agent.yaml` },
+  }));
+  if (agent === null) {
+    return (
+      <div data-testid="bm-agent-none">
+        <SectionLabel>Project Agent</SectionLabel>
+        <div className="text-small mt-1">This Brain has no Project Agent yet.</div>
+        <div className="text-meta text-[var(--color-text-muted)]">It is generated from the DDD: the knowledge docs, bindings.yaml and the repo&apos;s CI, with the pipeline&apos;s profiles.</div>
+        <button className="btn-sm btn-primary mt-2" onClick={onGenerate} data-testid="bm-agent-generate">Generate from the DDD</button>
+      </div>
+    );
+  }
+  const reviewed = agent.status === 'reviewed';
+  return (
+    <div data-testid="bm-agent-def">
+      <SectionLabel right={<button className="btn-sm btn-ghost" onClick={openFile}>Open file</button>}>
+        Project Agent
+      </SectionLabel>
+      <div className="flex items-center gap-2 mt-1">
+        <StatusBadge tone={reviewed ? 'success' : 'warning'} testid="bm-agent-status">
+          {reviewed ? `reviewed${agent.reviewedAt ? ' · ' + agent.reviewedAt : ''}` : 'draft · needs your review'}
+        </StatusBadge>
+        {agent.sources && agent.sources.length > 0 && (
+          <span className="text-meta text-[var(--color-text-muted)] truncate">built from {agent.sources.join(', ')}</span>
+        )}
+      </div>
+      {agent.problems.length > 0 && (
+        <div className="mt-1 text-meta text-[var(--color-status-error)]" data-testid="bm-agent-problems">
+          {agent.problems.join(' · ')}
+        </div>
+      )}
+      {agent.summary && <div className="text-small mt-1">{agent.summary}</div>}
+
+      <table className="w-full mt-2 text-small">
+        <tbody>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="py-1.5 pr-3 align-top text-[var(--color-text-muted)] w-[110px]">Profile</td>
+            <td className="py-1.5">
+              <span className="font-semibold">{agent.defaultProfile ?? '--'}</span> by default
+              {(agent.profileRules ?? []).map((r, i) => (
+                <div key={i} className="text-meta text-[var(--color-text-muted)]"><span className="font-semibold text-[var(--color-text)]">{r.profile}</span> when {r.when}</div>
+              ))}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="py-1.5 pr-3 align-top text-[var(--color-text-muted)]">Review focus</td>
+            <td className="py-1.5">
+              {(agent.reviewFocus ?? []).length === 0 && <span className="text-[var(--color-text-muted)]">none</span>}
+              {(agent.reviewFocus ?? []).map((r, i) => (
+                <div key={i}><span className="font-semibold">{r.area}</span>
+                  <span className="text-meta text-[var(--color-text-muted)]"> · {r.why}{r.source ? ` (${r.source})` : ''}</span></div>
+              ))}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="py-1.5 pr-3 align-top text-[var(--color-text-muted)]">Validations</td>
+            <td className="py-1.5">
+              {(agent.validations ?? []).length === 0 && <span className="text-[var(--color-text-muted)]">none</span>}
+              {(agent.validations ?? []).map((v, i) => (
+                <div key={i}><code className="text-meta">{v.command}</code>
+                  <span className="text-meta text-[var(--color-text-muted)]">{v.source ? ` · ${v.source}` : ''}</span></div>
+              ))}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="py-1.5 pr-3 align-top text-[var(--color-text-muted)]">Runs on</td>
+            <td className="py-1.5">{(agent.placements ?? []).map((p) => PLACE_LABEL[p] ?? p).join(', ') || '--'}</td>
+          </tr>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="py-1.5 pr-3 align-top text-[var(--color-text-muted)]">Landing</td>
+            <td className="py-1.5">{agent.landing?.approval === 'human' ? 'you approve every landing' : (agent.landing?.approval ?? '--')}
+              {agent.landing?.via ? <span className="text-meta text-[var(--color-text-muted)]"> · via {agent.landing.via}</span> : null}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div className="flex items-center gap-2 mt-2">
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What to change, e.g. use full for API changes"
+          className="flex-1 min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-input-bg)] px-2 py-1 text-small" data-testid="bm-agent-note" />
+        <button className="btn-sm btn-secondary" disabled={!note.trim()} onClick={() => { onRevise(note.trim()); setNote(''); }} data-testid="bm-agent-revise">Revise in chat</button>
+        {!reviewed && <button className="btn-sm btn-primary" onClick={onConfirm} data-testid="bm-agent-confirm">Confirm</button>}
+      </div>
+    </div>
+  );
+}
+
 const PLACES = [
   { key: 'chat', label: 'Chat tab (inline)', built: true },
   { key: 'worker', label: 'Local Worker', built: false },
   { key: 'hive', label: 'Hive', built: false },
 ] as const;
 
-function AgentPanel({ name, runs, delivery, onDispatch }: {
-  name: string; runs: PipelineRunSummary[]; delivery: string[]; onDispatch?: (msg: string) => boolean;
+function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
+  name: string; runs: PipelineRunSummary[]; delivery: string[];
+  agent?: ProjectAgent | null; onDispatch?: (msg: string) => boolean;
 }) {
   const [req, setReq] = useState('');
   const [title, setTitle] = useState('');
@@ -152,32 +251,40 @@ function AgentPanel({ name, runs, delivery, onDispatch }: {
   const profiles = runs.reduce<Record<string, number>>((m, r) => { if (r.profile) m[r.profile] = (m[r.profile] ?? 0) + 1; return m; }, {});
   const usual = Object.entries(profiles).sort((a, b) => b[1] - a[1])[0]?.[0];
 
+  const send = (msg: string, label: string) => {
+    const ok = onDispatch ? onDispatch(msg) : false;
+    if (!ok) void navigator.clipboard?.writeText(msg);
+    setSent(ok ? `Sent to chat: ${label}` : `Copied to the clipboard: ${label}. Paste it into a chat tab.`);
+  };
   const submit = () => {
     const text = req.trim();
     if (!text) return;
     const t = title.trim() || (text.length > 60 ? text.slice(0, 57).replace(/\s+\S*$/, '') + '…' : text);
-    const msg = `Use the pipeline on ${name} for this change.\nTitle: ${t}\nRequirement: ${text}`;
-    const ok = onDispatch ? onDispatch(msg) : false;
-    if (!ok) void navigator.clipboard?.writeText(msg);
-    setSent(ok ? `Sent to chat: ${t}` : `Copied to the clipboard: ${t}. Paste it into a chat tab.`);
+    send(`Use the pipeline on ${name} for this change. Pick the profile from its Project Agent (project-agent.yaml).\nTitle: ${t}\nRequirement: ${text}`, t);
     setReq(''); setTitle('');
   };
 
   return (
     <div className="flex flex-col gap-3">
-      <div>
-        <SectionLabel>Delivery definition</SectionLabel>
-        <div className="text-small mt-1">
-          Usual profile: <b>{usual ?? '--'}</b>
-          <span className="text-[var(--color-text-muted)]"> (from {runs.length} Runs in 30 days)</span>
+      {agent === undefined ? (
+        <div>
+          <SectionLabel>Delivery definition</SectionLabel>
+          <div className="text-small mt-1">
+            Usual profile: <b>{usual ?? '--'}</b>
+            <span className="text-[var(--color-text-muted)]"> (from {runs.length} Runs in 30 days)</span>
+          </div>
+          <div className="text-meta text-[var(--color-text-muted)] mt-1 truncate">
+            Delivery files: {delivery.length ? delivery.join(', ') : 'none'}
+          </div>
         </div>
-        <div className="text-small">Review experts: correctness, security as needed<Mock /></div>
-        <div className="text-small">Validations: selected tests + lint<Mock /></div>
-        <div className="text-meta text-[var(--color-text-muted)] mt-1 truncate">
-          Delivery files: {delivery.length ? delivery.join(', ') : 'none'}
-        </div>
-        <Hint>The Project Agent drafts Runs from this Brain. It never submits one itself, and it does not define its own Eval.</Hint>
-      </div>
+      ) : (
+        <AgentDefinition name={name} agent={agent}
+          onGenerate={() => send(`Generate the Project Agent of the ${name} Brain from its DDD (s_project-manager P3b), using only the pipeline profiles, and show it to me to confirm.`, 'generate the Project Agent')}
+          onConfirm={() => send(`I reviewed the Project Agent of the ${name} Brain and confirm it as is. Set status: reviewed and reviewed_at in project-agent.yaml.`, 'confirm the Project Agent')}
+          onRevise={(note) => send(`Revise the Project Agent of the ${name} Brain (project-agent.yaml): ${note}\nKeep only the pipeline profiles, give each change its source, then show me the result.`, 'revise the Project Agent')}
+        />
+      )}
+      <Hint>The Project Agent is built from this Brain&apos;s knowledge with the pipeline&apos;s profiles. You review and revise it. It drafts Runs; it never submits one, and it does not define its own Eval.</Hint>
 
       <div>
         <SectionLabel>Ask for a change</SectionLabel>
