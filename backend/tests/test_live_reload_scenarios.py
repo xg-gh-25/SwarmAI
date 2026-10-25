@@ -584,6 +584,7 @@ async def _generate() -> dict:
                 patch("uuid.uuid4", ids.uuid4), \
                 patch("core.session_router.datetime", stamp), \
                 patch("core.compact_summary.datetime", stamp), \
+                patch("core.session_pending.datetime", stamp), \
                 patch("core.turn_stop.datetime", SimpleNamespace(now=lambda tz=None: clock.now())), \
                 patch("core.background_agents._now_ms", lambda: int(clock.t.timestamp() * 1000)), \
                 patch("core.session_events.time.time_ns",       # activity_seq (chat-turn-liveness S1)

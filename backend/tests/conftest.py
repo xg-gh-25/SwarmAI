@@ -607,8 +607,8 @@ def _reset_recall_health_counters():
         getattr(mod, "_ddd_inject_count", {}).clear()
     yield
 
-@pytest.fixture(autouse=True)
-def _restore_thread_event_loop():
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
     """Put back the thread's event loop when a test cleared it.
 
     asyncio.run() (Runner.close) and helpers that call set_event_loop(None) leave
@@ -618,6 +618,12 @@ def _restore_thread_event_loop():
     loop in thread 'MainThread'" (test_chat_scenarios_e2e under xdist). Only that
     case is repaired: a loop that was not current before is never installed, since
     an unclosed stray loop keeps aiosqlite's worker thread alive at exit.
+
+    A call-phase hook, not an autouse fixture: "before" must be read after every
+    fixture is set up. A sync autouse fixture runs before the async session-loop
+    fixture, so on a worker's FIRST test it saw no loop yet; when that test called
+    asyncio.run, the session loop was lost for the whole worker (which worker got
+    such a first test decided which run went red).
     """
     import asyncio as _asyncio
 
