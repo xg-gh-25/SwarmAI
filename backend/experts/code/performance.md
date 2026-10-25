@@ -10,13 +10,13 @@ visibility: public
 > **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # Performance Specialist Review
-<!-- version: 2026-09-13 | synced with: REVIEW_PATTERNS.md RP1-RP88 -->
+<!-- version: 2026-09-13 -->
 
 Scope: When changeset touches backend endpoints, database queries, loops over
 collections, or frontend rendering paths.
 
-**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
-RP30 (hook no-op path scaling — O(n) in steady state), RP35 (shared executor/pool contention — blocking >5s on shared pool starves latency-sensitive consumers), RP36 (fix-removes-failure-mode regression — newly-successful path consumes shared resources). These are proven perf patterns.
+**Also check, in your domain:**
+hook no-op path scaling — O(n) in steady state, shared executor/pool contention — blocking >5s on shared pool starves latency-sensitive consumers, fix-removes-failure-mode regression — newly-successful path consumes shared resources. These are proven perf patterns.
 
 Output: JSON objects, one finding per line.
 

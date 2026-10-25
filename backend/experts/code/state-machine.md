@@ -10,10 +10,10 @@ visibility: public
 > **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # State Machine Specialist Review
-<!-- version: 2026-10-18 | origin: Pipeline Meta-Intelligence (GAP 8); orphan-adoption + RP89 live/reload parity added from the compaction-summary review -->
+<!-- version: 2026-10-18 | origin: Pipeline Meta-Intelligence (GAP 8); orphan-adoption + live/reload parity added from the compaction-summary review -->
 
-**Cross-reference:** RP13 (state machine completeness), RP89 (live vs reload parity),
-RP86 (stateful helper never re-baselined).
+**Also check:** state machine completeness, live vs reload parity,
+stateful helper never re-baselined.
 
 Scope: Dispatched when changeset touches state enums, status fields, lifecycle
 methods, state transition logic, or any code with explicit states/phases.
@@ -22,7 +22,7 @@ methods, state transition logic, or any code with explicit states/phases.
 states is caught by the correctness specialist; this specialist catches incomplete
 or impossible transitions, unreachable states, and stuck states.
 
-Proven pattern: RP13 violations (unreachable states, untriggered transitions),
+Proven pattern: state-machine completeness violations (unreachable states, untriggered transitions),
 a stale subprocess, streaming loss on tab switch, spinner-hang
 (3 occurrences of same stuck-state bug).
 
@@ -42,7 +42,7 @@ If no findings: output `NO FINDINGS` and nothing else.
 
 Every finding MUST include confidence (1-10):
 - 9-10: Identified specific state with no exit path, or transition with no trigger
-- 7-8: Pattern matches known state machine failure class (from RP13, COEs)
+- 7-8: Pattern matches known state machine failure class (from past incidents)
 - 5-6: Plausible transition issue, needs runtime verification
 - 3-4: Theoretical concern about state coverage
 - 1-2: Speculation
@@ -76,7 +76,7 @@ Every finding MUST include confidence (1-10):
 - Event-based transition where the event source can die (who transitions out if the trigger never comes?)
 - Multiple triggers for the same transition (race condition — which wins?)
 
-### 3. Non-Terminal State Recovery (RP13 extension)
+### 3. Non-Terminal State Recovery
 
 **Every non-terminal state that depends on EXTERNAL input must have a force-recovery path.**
 
@@ -128,7 +128,7 @@ not its live one, once a newer cycle runs.
 - State stored in-memory only (lost on crash/restart)
 - State stored in localStorage without TTL (stale state from days ago applied on next visit)
 - State stored in DB but not validated against current system state on read
-- **Live vs reload disagree (REVIEW_PATTERNS RP89).** The same item reaches the view
+- **Live vs reload disagree.** The same item reaches the view
   live (stream / optimistic insert) and on reload (DB / API). Compare the two routes:
   same id (or the merge keeps both), same order key in the same FORMAT (UTC `…Z` vs a
   naive-local DB string sorts hours apart), same position, same fields. Then ask where a

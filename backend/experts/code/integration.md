@@ -10,7 +10,7 @@ visibility: public
 > **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # Integration Specialist Review
-<!-- version: 2026-10-18 | origin: PE Finding #1 (governance gate dead code); §6 consumer trace added from the compaction-summary review (RP89-RP91) -->
+<!-- version: 2026-10-18 | origin: PE Finding #1 (governance gate dead code); §6 consumer trace added from the compaction-summary review -->
 
 Scope: Dispatched when changeset creates new public functions or modules.
 
@@ -108,9 +108,9 @@ consumer that stores, merges, sorts, pages, caches or renders it, open it, and c
 the value survives it:
 - **merge / dedup** — matched by id, or kept twice? (a live copy and a stored copy
   with different ids both survive a merge that keeps local-only items)
-- **sort / position** — compared with what, in which format? (REVIEW_PATTERNS RP89)
-- **paging / batching** — does every item land in exactly one slice? (RP90)
-- **caching** — does the cache key / ETag change when this value changes? (RP91)
+- **sort / position** — compared with what, in which format?
+- **paging / batching** — does every item land in exactly one slice?
+- **caching** — does the cache key / ETag change when this value changes?
 - **anchors** — can the new item become "the oldest", "the last", a cursor or a
   lookup target that the old code assumed is always a real row?
 - **retention** — a new persistent store: who deletes it, and on the same schedule

@@ -1,17 +1,30 @@
-# Runtime Pattern Checklist (RP1-RP91)
+# SwarmAI review guidance
 
-This file contains the canonical list of recurring production bug patterns that code review and unit tests consistently miss. The REVIEW stage references this file as a BLOCKING check -- every applicable pattern must be explicitly verified or marked N/A.
+SwarmAI's own review notes (design docs/design/2026-10-24-swarmai-usable-by-anyone.md
+§3.5.2). This file is SwarmAI's, not the product's: any repository can keep the same
+file. The pipeline reads it at a run's base commit; a native review reads it from the
+checkout. The head of this file is what an agent sees first when it starts working here.
 
-**Selecting rows instead of reading this whole file:** every row's Trigger cell ends in a
-machine-readable `` `match: …` `` token. `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/spawn_prompt.py --patterns-for <changed files…> [--diff-file <diff>]`
-prints only the rows that apply, one compact line each (id, pattern, trigger). Give every
-listed row a verdict (pass / N/A / fail); before judging a row whose trigger is present in
-the change, print its full row (what to verify, example bug) with
-`spawn_prompt.py --patterns-rows RP<n> [RP<m> ...]`. Grammar: space-separated terms; `glob:<pattern>` is an
-fnmatch glob against each changed path and its basename (`*` crosses `/`); `kw:<text>` is a
-case-insensitive substring searched in the paths and the diff; `*` alone means the row
-always applies. A row applies when ANY term hits. When in doubt, a row gets `*` — a
-missed applicable pattern costs far more than reading one extra row.
+- Commits on main only, each reviewed by the experts the change needs (AGENTS.md).
+- A change on the send / stream / file-write hot path comes with measured timings.
+- A fix's test must go red when the fix is reverted (mutation check).
+- One source per fact: find the existing store / endpoint / hook before adding one.
+- Never touch the user's live `~/.swarm-ai/data.db` to verify behaviour.
+
+The pattern table below is SwarmAI's runtime checklist: recurring bugs that review and
+unit tests missed in this codebase. Each row ends its Trigger cell with a
+`` `match: …` `` token. The pipeline puts the rows a change triggers into the
+correctness handout; a native reviewer reads the rows whose trigger is present.
+Grammar: space-separated terms; `glob:<pattern>` is an fnmatch glob against each changed
+path and its basename (`*` crosses `/`); `kw:<text>` is a case-insensitive substring of
+the paths and the diff; `*` alone means the row always applies.
+
+The security line dispatches the security expert. It is the rule the product used to
+carry built in (security-sensitive file names, and Python APIs that run commands,
+fetch URLs or deserialize), now written as this repository's own declaration:
+
+security: `match: glob:*auth* glob:*credential* glob:*permission* glob:*security_hooks* glob:*hook_builder* glob:*context* glob:*_gate.py glob:*cors* glob:*listen* glob:*port* kw:subprocess. kw:shell=true kw:requests. kw:httpx. kw:urllib. kw:pickle. kw:yaml.load( kw:eval( kw:exec( kw:host= kw:port=`
+
 ## Patterns
 
 | # | Pattern | Trigger (when to check) | What to verify | Example bug |
@@ -128,21 +141,12 @@ missed applicable pattern costs far more than reading one extra row.
 | RP89 | **live vs reload parity — state that reaches the user by TWO routes (the live stream / an optimistic insert, and a reload from the DB / API) disagrees on identity, order or format, so the view changes or duplicates after a refresh or reconcile** | the changeset adds or changes something that is shown live AND later loaded back: a stream event that also becomes a stored row, an optimistic message, a synthetic history row, a client-side id or timestamp for something the server also stores `match: glob:*Store*.ts glob:*store*.ts glob:*stream* glob:*Streaming* glob:*/routers/* glob:*reconcile* glob:*history* kw:reconcile kw:_applyMerge kw:seedFromLoad kw:toISOString kw:isoformat kw:created_at kw:optimistic` | walk BOTH routes for the same item and compare: (1) **identity** — does the live copy carry the id the stored copy will have, so the merge matches them instead of keeping both; (2) **order key and its FORMAT** — what decides its position on each route, and are the two keys comparable (a UTC `…Z` string vs a naive-local DB string compared lexicographically sorts hours off); (3) **position** — does the live insert sit where the DB order will put it (before or after an empty placeholder, inside or after a merged bubble); (4) **fields** — does the reload carry every field the live copy renders; (5) **local-only leftovers** — where does a live item with NO stored row end up after reconcile, and can it become a cursor, a "last" anchor, or a lookup target. Test: drive the live route, then reload/reconcile, and assert the SAME ids in the SAME order. **Tell:** a client-generated id or `new Date().toISOString()` on an item the server also stores. | A live compaction divider was stamped `toISOString()` (UTC) while DB rows used naive local time; reconcile kept it as local-only and placed it by string compare, ~8h early — at index 0 — where it became the "load older" cursor, the backend found no such row and returned an empty page, and paging stopped for good. In the same change a turn-start divider was appended AFTER the empty assistant placeholder while the DB order put it before the answer, so it jumped at turn end. Both review rounds that read only the hunks missed it; an external reviewer walked the store's merge. (2026-10-18) |
 | RP90 | **slice partition — items assigned to pages / batches / windows by a bound fall into NO slice (or two) because the bound uses a different key than the slicer** | the changeset filters a secondary set (annotations, dividers, events, attachments) into each page/batch of a primary paginated or windowed list `match: glob:*/routers/* glob:*paginat* glob:*/database/* kw:before_id kw:paginat kw:next_cursor kw:loadOlder kw:hasMore` | each item must land in EXACTLY one slice. (1) Name the key the slicer cuts on (raw row `created_at`, rowid) and the key the filter compares against — after merging/grouping rows, the displayed entry often carries the FIRST row's key, not the last; (2) check the gap between two slices: an item after the older slice's last row and before the newer slice's first row; (3) bound each slice by the NEXT slice's first key (the cursor row), exclusive, so slices tile the line. Test: put one item inside the last merged group of an older page and one exactly in the gap, page through, assert each appears once. **Tell:** a per-page filter `first <= x <= last` computed from the page's own (merged) entries. | Stored compactions were spliced into each history page when `first <= created_at <= last`; `last` was a merged assistant bubble's FIRST row time, so a compaction inside an older page's final turn, or in the gap at a page cut, appeared on no page. Fixed by bounding older pages with the `before_id` row's `created_at` (exclusive). (2026-10-18) |
 | RP91 | **cache key / ETag misses an input — an in-place update (or a degraded response) is served from cache as if nothing changed** | the changeset adds a cache, memo, validator (ETag, If-None-Match, LRU, a `(count, …)` key) or adds a new INPUT to the output of an existing cached path `match: glob:*/routers/* glob:*cache* kw:ETag kw:etag kw:If-None-Match kw:cache_key kw:_cache kw:lru_cache kw:304` | list every input the cached output depends on and check each is in the key: (1) a key built from COUNTS misses an in-place UPDATE (a row whose summary arrives later, an edited field) — add a content marker (updated_at, summed lengths, a version); (2) a new data source spliced into a cached response must enter the key; (3) a degraded response (one input failed to load) must NOT be cached under the full key — drop the validator for that response; (4) every cache for the same data (HTTP ETag, an in-process LRU, a frontend cache) needs the same marker. Test: update in place, fetch with the old validator, expect a fresh body, not 304. **Tell:** `f"{id}:{count}"` style keys next to an UPDATE statement. | The history ETag was `session:msg_count:compaction_count` and the cold-resume cache key `(msg_count, compaction id)`; a summary attached later by UPDATE changed neither, so clients got 304 and resume served the block without it. A failed compaction lookup also returned a body without the dividers under an ETag that already counted them. (2026-10-18) |
-## Output Format
-
-For each applicable pattern, one line:
-```
-RP1: pass -- proc.kill() in timeout handler + finally (voice_transcribe.py:92,112)
-RP3: pass -- useEffect cleanup releases stream + recorder (useVoiceRecorder.ts:58-68)
-RP5: N/A -- no FormData in this changeset
-```
 
 ## Maintenance
 
-The REFLECT stage is responsible for maintaining this file. When post-pipeline review (E2E, external, or user feedback) finds bugs the pipeline missed:
+When a bug that review missed is found (a later run, an E2E test, the user):
 
-1. If the bug fits an existing RP pattern -- investigate why the checklist missed it and tighten the verification criteria above.
-2. If the bug is a new pattern -- **append a new row** (RP30, RP31, etc.) to the table above. Include: trigger condition ending in a `` `match: …` `` token (grammar above; use `*` if the trigger is not bounded by file type or a literal), what to verify, and the real bug as the example.
-3. Update the pattern count in `backend/skills/s_autonomous-pipeline/stages/review.md` check #6 if the total changes.
-
-This ensures the pipeline learns from every review cycle. Without this step, lessons live in IMPROVEMENT.md but never reach the checklist that would prevent recurrence.
+1. If it fits an existing row, tighten that row's "What to verify".
+2. If it is a new pattern, append a row with the next id. Its Trigger cell ends in a
+   `` `match: …` `` token (use `*` if the trigger is not bounded by file type or a
+   literal); give what to verify and the real bug as the example.

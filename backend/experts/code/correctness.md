@@ -8,17 +8,18 @@ visibility: public
 ---
 
 # Correctness Specialist Review
-<!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 -->
+<!-- version: 2026-10-18 -->
 
 Scope: Always dispatched when the source changeset is >= 50 lines.
 
-**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` that fall
-in your domain: RP13 (state machine), RP15 (setTimeout), RP16 (concurrent async),
-RP27 (non-deterministic ordering), RP33 (multi-shape returns), RP34 (shell variable
-scope across Bash calls), RP47 (test-theater — test patches the symbol-under-change
-or re-derives a prod formula; mutation-prove RED-on-revert), RP48 (stale/false
-comment — changed behavior, unchanged docstring/comment), RP89 (live vs reload
-parity), RP90 (slice partition), RP91 (cache key misses an input). These are proven
+**Also check, in your domain:** state machine, setTimeout, concurrent async,
+non-deterministic ordering, multi-shape returns, shell variable
+scope across Bash calls, test-theater — test patches the symbol-under-change
+or re-derives a prod formula; mutation-prove RED-on-revert, stale/false
+comment — changed behavior, unchanged docstring/comment, live vs reload
+parity, slice partition, cache key misses an input. When the handout lists rows of
+the repository's own review patterns (its `.swarmai/review.md`), check each of them too.
+These are proven
 bug patterns with concrete examples.
 
 Output: JSON objects, one finding per line.
@@ -174,12 +175,12 @@ When reviewing tests alongside production code:
 - Would the test pass even if the feature is broken? (tautological test)
 - Are leaked resources (tasks, files) cleaned up between tests?
 
-**Mechanical form → RP47 (test-theater):** the two grep-able tells that make
+**Mechanical form of test-theater:** the two grep-able tells that make
 "would the test pass even if broken?" assertable — (1) the test `patch(`es the
 EXACT symbol the changeset modifies (tests the mock, not the code); (2) the test
 re-derives a prod formula/constant in a local helper (asserts the formula against
 its own copy). Verdict test: revert the guarded prod line → the test MUST go RED.
-Green-on-revert = theater. Apply RP47 to every test the changeset adds/modifies.
+Green-on-revert = theater. Apply this to every test the changeset adds/modifies.
 
 **The opposite trap — a test that PINS a questionable behavior.** A test written in
 the same change asserts what the author INTENDED, not that it is right. When a test

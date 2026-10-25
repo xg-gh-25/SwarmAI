@@ -8,7 +8,8 @@ The pipeline does not run or observe tests. BUILD and TEST end with
      "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run",
                    "reason": "..."}],          # reason required for fail / not_run
      "tests_changed": ["path", ...],            # tests added or changed
-     "rationale": "why these tests show the change is right"}
+     "rationale": "why these tests show the change is right",
+     "risk": ["security"]}                      # optional (§3.5.2): dispatches security
 
 The engine writes one ``validation_report`` event per repo; the event's ``code_tree``
 is the tree the engine computes for that repo's worktree at that moment, never a value
@@ -16,7 +17,7 @@ the agent supplied. The log records only that this report was submitted on this 
 whether its content is true is for review to judge.
 
 Public: ``parse``, ``event_payload``, ``read``, ``latest``, ``report_lines``,
-``STAGES``, ``RESULTS``, ``ReportError``.
+``STAGES``, ``RESULTS``, ``RISKS``, ``ReportError``.
 """
 from __future__ import annotations
 
@@ -31,7 +32,9 @@ MAX_TESTS = 200
 MAX_COMMAND_CHARS = 2_000
 MAX_REASON_CHARS = 1_000
 MAX_RATIONALE_CHARS = 6_000
-_KEYS = {"repo", "commands", "tests_changed", "rationale"}
+_KEYS = {"repo", "commands", "tests_changed", "rationale", "risk"}
+# what a report may declare about its change (§3.5.2); each name dispatches a reviewer
+RISKS = ("security",)
 _COMMAND_KEYS = {"command", "cwd", "result", "reason"}
 
 
@@ -83,9 +86,16 @@ def _one(row: Any, i: int, expected: Sequence[str]) -> dict[str, Any]:
         raise ReportError(f"{where}.tests_changed must be a list of at most {MAX_TESTS}")
     tests = [_text(t, f"{where}.tests_changed[{k}]", MAX_COMMAND_CHARS)
              for k, t in enumerate(tests)]
-    return {"repo": repo, "commands": out_commands, "tests_changed": tests,
-            "rationale": _text(row.get("rationale"), f"{where}.rationale",
-                               MAX_RATIONALE_CHARS)}
+    out = {"repo": repo, "commands": out_commands, "tests_changed": tests,
+           "rationale": _text(row.get("rationale"), f"{where}.rationale",
+                              MAX_RATIONALE_CHARS)}
+    if "risk" in row:
+        risk = row["risk"]
+        if not isinstance(risk, list) or any(r not in RISKS for r in risk):
+            raise ReportError(f"{where}.risk must be a list of {list(RISKS)}")
+        if risk:
+            out["risk"] = sorted(set(risk))
+    return out
 
 
 def parse(artifact: Any, expected_repos: Sequence[str]) -> list[dict[str, Any]]:

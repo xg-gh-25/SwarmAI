@@ -2067,24 +2067,28 @@ class RunEngine:
         trees = {name: tree for name, tree in context.run["code_trees"].items() if tree}
         changed = []
         diffs = []
+        per_repo: dict[str, dict[str, Any]] = {}
         for name, root in repos.items():
             # the run's whole change: fork point -> the code tree that would land (B6),
             # so a commit in the worktree or a new untracked file is reviewed too
             base, tree_sha = self._fork_base(name, root), git_tree.write_tree(
                 root, (f".aidlc/deliverables/{self.run_id}/",), {})
+            mine = []
             for line in _git(root, "diff", "--numstat", "--no-renames", base, tree_sha).splitlines():
                 ins, delete, path = line.split("\t", 2)
-                changed.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
-                                "deletions": int(delete) if delete.isdigit() else 0,
-                                "is_test": "/tests/" in path or path.startswith("tests/")})
-            diffs.append(f"## {name}\n" + _git(root, "diff", "--no-ext-diff", "--no-renames",
-                                                base, tree_sha))
-        source_paths = [row["path"] for row in changed if not row["is_test"]
-                        and not row["path"].endswith(_DOC_SUFFIXES)]
-        patterns = (review.review_patterns(source_paths, "\n".join(diffs)) if source_paths
-                    else {"compact": "", "triggered": [], "error": None})
+                mine.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
+                             "deletions": int(delete) if delete.isdigit() else 0,
+                             "is_test": "/tests/" in path or path.startswith("tests/")})
+            changed += mine
+            diff = _git(root, "diff", "--no-ext-diff", "--no-renames", base, tree_sha)
+            diffs.append(f"## {name}\n" + diff)
+            per_repo[name] = {"root": root, "base": base, "diff": diff, "paths": [
+                row["path"] for row in mine if not row["is_test"]
+                and not row["path"].endswith(_DOC_SUFFIXES)]}
+        patterns = review.review_patterns(self._repo_guidance(per_repo))
         roster = review.reviewers(profile=state["profile"], changed=changed,
-                                  patterns=patterns["triggered"])
+                                  patterns=patterns["triggered"],
+                                  security=patterns["security"] + self._declared_security())
         if patterns["error"] and not any(item["id"] == "correctness" for item in roster):
             # the selection failed: review the source anyway, never fewer checks
             roster.insert(0, {"id": "correctness",
@@ -2125,6 +2129,29 @@ class RunEngine:
             self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
 
+    def _repo_guidance(self, per_repo: Mapping[str, Mapping[str, Any]]) -> dict[str, dict]:
+        """Each repo's ``.swarmai/review.md`` at the run's base (§3.5.2: a run cannot
+        weaken its own review by editing the file in its worktree)."""
+        from core.run_protocol import review_md
+        out: dict[str, dict] = {}
+        for name, item in per_repo.items():
+            out[name] = {**item, "text": review_md.read_at(item["root"], item["base"])}
+        return out
+
+    def _declared_security(self) -> list[str]:
+        """Security review declared for this run (§3.5.2): the BUILD / goal_cycle
+        report's ``risk``, or a full DESIGN_SPEC with security boundaries."""
+        reasons: list[str] = []
+        events = self.store.read_events()
+        for stage in ("build", "goal_cycle"):
+            for repo, event in sorted(validation_report.latest(events, stage).items()):
+                if "security" in (validation_report.read(self.store, event).get("risk") or ()):
+                    reasons.append(f"{repo}: the {stage} report declares risk security")
+        design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
+        if isinstance(design, Mapping) and design.get("security_boundaries"):
+            reasons.append("the design names security boundaries")
+        return reasons
+
     # an expert's incremental reviews per run; past it RV-4 keeps failing (S6-2)
     _INCREMENTAL_CAP = 3
 
@@ -2137,22 +2164,31 @@ class RunEngine:
         trees = {name: tree for name, tree in context.run["code_trees"].items() if tree}
         repos = self.effective_repos()
         changed, diffs = [], []
+        per_repo: dict[str, dict[str, Any]] = {}
         for name in sorted(context.run["unreviewed"]):
             root = repos[name]
+            mine = []
             for line in _git(root, "diff", "--numstat", "--no-renames", last[name],
                              trees[name]).splitlines():
                 ins, delete, path = line.split("\t", 2)
-                changed.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
-                                "deletions": int(delete) if delete.isdigit() else 0,
-                                "is_test": "/tests/" in path or path.startswith("tests/")})
-            diffs.append(f"## {name} (changed since the last review)\n" + _git(
-                root, "diff", "--no-ext-diff", "--no-renames", last[name], trees[name]))
+                mine.append({"path": path, "insertions": int(ins) if ins.isdigit() else 0,
+                             "deletions": int(delete) if delete.isdigit() else 0,
+                             "is_test": "/tests/" in path or path.startswith("tests/")})
+            changed += mine
+            diff = _git(root, "diff", "--no-ext-diff", "--no-renames", last[name], trees[name])
+            diffs.append(f"## {name} (changed since the last review)\n" + diff)
+            # the guidance is the run's base version, as for R1 (§3.5.2)
+            per_repo[name] = {"root": root, "base": self._fork_base(name, root), "diff": diff,
+                              "paths": [row["path"] for row in mine if not row["is_test"]
+                                        and not row["path"].endswith(_DOC_SUFFIXES)]}
         events = self.store.read_events()
         r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
               and e.get("round") == 1]
         earlier = {e["payload"]["expert_id"] for e in r1}
+        guided = review.review_patterns(self._repo_guidance(per_repo))
         picked_rows = {row["id"]: row for row in review.reviewers(
-            profile=self.contract["profile"], changed=changed, patterns=[])}
+            profile=self.contract["profile"], changed=changed, patterns=[],
+            security=guided["security"] + self._declared_security())}
         picked = set(picked_rows)
         roster = ["correctness"] + sorted((picked & earlier) - {"correctness"})
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)

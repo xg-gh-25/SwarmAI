@@ -106,15 +106,21 @@ def test_worktree_creation_failure_pauses_without_shared_fallback(tmp_path, monk
 
 
 def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path, monkeypatch):
-    """v13 E1: the RP lens is part of correctness. A 2-line change whose diff hits a
-    review pattern (here subprocess.Popen, RP1) still gets a correctness review, and
-    its handout carries the engine-selected RP rows; a plain one still gets none."""
+    """v13 E1 / S6-4b: a 2-line change whose diff hits a row of the repo's own
+    .swarmai/review.md (here subprocess.Popen) still gets a correctness review, and
+    its handout carries the engine-selected rows."""
     data, workspace = tmp_path / "data", tmp_path / "workspace"
     (workspace / "Projects/P").mkdir(parents=True)
     monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
     repo = _repo(tmp_path)
+    (repo / ".swarmai").mkdir()
+    (repo / ".swarmai/review.md").write_text(
+        "| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
+        "| RP1 | **subprocess timeout orphan** | Popen `match: glob:*.py kw:popen` | killed | "
+        "ffmpeg runs forever |\n")
+    _git(repo, "add", "."); _git(repo, "commit", "-qm", "review guidance")
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
                               run_id="run_rp")
@@ -126,8 +132,8 @@ def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path,
     assert [r["id"] for r in started["reviewers"]] == ["correctness"]
     assert "RP1" in started["reviewers"][0]["reason"]
     prompt = started["handouts"][0]["prompt"]
-    assert "REVIEW PATTERNS (RP) for this change" in prompt
-    assert "| RP1 |" in prompt and "--patterns-rows" in prompt
+    assert "REPOSITORY REVIEW PATTERNS" in prompt
+    assert "| RP1 |" in prompt and ".swarmai/review.md" in prompt
 
 
 def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monkeypatch):
@@ -137,8 +143,9 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
     monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp_path / "worktrees"))
     monkeypatch.setenv("SWARM_WORKTREE_LEDGER", str(tmp_path / "ledger"))
-    monkeypatch.setattr(review, "review_patterns",
-                        lambda paths, diff="": {"compact": "", "triggered": [], "error": "OSError: gone"})
+    monkeypatch.setattr(review, "review_patterns", lambda repos: {
+        "blocks": {"repo": "repo: the engine could not read the pattern table"},
+        "triggered": [], "security": [], "error": "repo: OSError: gone"})
     repo = _repo(tmp_path)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
                               profile="direct", requirement="test change", session_id="s", repos={"repo": str(repo)},
@@ -148,4 +155,4 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
     engine.stage_complete(_report())
     started = engine.review_start()
     assert [r["id"] for r in started["reviewers"]] == ["correctness"]
-    assert "could not select rows" in started["handouts"][0]["prompt"]
+    assert "could not read the pattern table" in started["handouts"][0]["prompt"]

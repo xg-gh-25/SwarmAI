@@ -36,7 +36,8 @@ def test_the_expert_set_is_the_nine_merged_experts():
 
 def test_reviewers_never_dispatch_red_team():
     risky = [{"path": "backend/core/security_hooks.py", "insertions": 80, "deletions": 0}]
-    assert _ids(reviewers(profile="full", changed=risky)) == ["correctness", "security"]
+    assert _ids(reviewers(profile="full", changed=risky, security=["declared"])) == [
+        "correctness", "security"]
     for retired in sorted(RETIRED):
         got = _ids(reviewers(profile="full", changed=[], required=[retired]))
         assert "red-team" not in got and retired not in got, (retired, got)
@@ -72,22 +73,27 @@ def test_no_spawn_as_anywhere():
 def test_only_a_large_risky_change_is_marked_high_risk():
     risky = [{"path": "backend/core/security_hooks.py", "insertions": 80, "deletions": 0}]
     small = [{"path": "backend/auth.py", "insertions": 15, "deletions": 0}]
-    rows = {row["id"]: row for row in reviewers(profile="full", changed=risky)}
+    rows = {row["id"]: row for row in reviewers(profile="full", changed=risky,
+                                                 security=["declared"])}
     assert rows["security"].get("high_risk") is True and "high_risk" not in rows["correctness"]
-    rows = {row["id"]: row for row in reviewers(profile="direct", changed=small)}
+    rows = {row["id"]: row for row in reviewers(profile="direct", changed=small,
+                                                 security=["declared"])}
     assert "high_risk" not in rows["security"]
 
 
 def test_review_start_tells_security_a_change_is_high_risk(tmp_path, monkeypatch):
-    """End to end: a 60-line change to an auth module hands out correctness and security
-    only, and only the security handout starts with the high-risk notice."""
+    """End to end: a 60-line change declared security-relevant hands out correctness and
+    security only, and only the security handout starts with the high-risk notice."""
     from tests.pipeline_v1_rig import Rig
     body = "".join(f"def check_{i}(user):\n    return user is not None\n\n" for i in range(20))
     r = Rig(tmp_path / "case", monkeypatch, profile="direct")
     try:
-        r.CHANGE = {"backend/core/auth.py": body}
         r.create()
-        r.drive(until="review")
+        r.drive(until="build")
+        r.edit({"backend/core/auth.py": body})
+        report = r.report()
+        report["reports"][0]["risk"] = ["security"]
+        assert r.v1("stage-complete", "--artifact", r.artifact("report", report)).get("ok")
         started = r.v1("review-start")
         assert started.get("ok") is True, started
         prompts = {h["event"]["payload"]["expert_id"]: h["prompt"] for h in started["handouts"]}

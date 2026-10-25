@@ -27,10 +27,13 @@ def test_roster_is_lightweight_and_security_is_risk_triggered():
     plain = [{"path": "backend/core/a.py", "insertions": 80, "deletions": 0}]
     assert [row["id"] for row in reviewers(profile="full", changed=plain)] == ["correctness"]
     risky = [{"path": "backend/core/security_hooks.py", "insertions": 60, "deletions": 0}]
-    assert [row["id"] for row in reviewers(profile="full", changed=risky)] == [
-        "correctness", "security"]
+    # no built-in path rule (§3.5.2): undeclared, a security-named file is plain code
+    assert [row["id"] for row in reviewers(profile="full", changed=risky)] == ["correctness"]
+    assert [row["id"] for row in reviewers(profile="full", changed=risky,
+                                           security=["declared"])] == ["correctness", "security"]
     small_risk = [{"path": "backend/auth.py", "insertions": 15, "deletions": 0}]
-    assert [row["id"] for row in reviewers(profile="direct", changed=small_risk)] == ["security"]
+    assert [row["id"] for row in reviewers(profile="direct", changed=small_risk,
+                                           security=["declared"])] == ["security"]
     assert reviewers(profile="full", changed=plain, small_change=True) == []
     assert [row["id"] for row in reviewers(profile="full", changed=[], required=["integration"])] == ["correctness"]
 
@@ -105,22 +108,36 @@ def test_triggered_review_patterns_dispatch_correctness_even_for_a_small_change(
     assert reviewers(profile="direct", changed=small, small_change=True, patterns=[]) == []
 
 
+_TABLE = ("| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
+          "| P1 | **orphan process** | a subprocess `match: glob:*.py kw:popen` | killed | hang |\n"
+          "| P2 | **any python** | python `match: glob:*.py` | x | y |\n")
+
+
+def _repo_input(text, paths, diff):
+    return {"r": {"text": text, "base": "abc123", "paths": paths, "diff": diff}}
+
+
 def test_only_specific_evidence_triggers_a_pattern():
-    from core.run_protocol.review import review_patterns
+    from core.run_protocol.review import patterns_block, review_patterns
     # a bare *.py glob fires on every Python file: not evidence about this change
-    assert review_patterns(["a.py"], "-value = 1\n+value = 2")["triggered"] == []
-    hit = review_patterns(["backend/core/a.py"], "+    subprocess.Popen(['git'])")
-    assert "RP1" in hit["triggered"] and hit["error"] is None
+    plain = review_patterns(_repo_input(_TABLE, ["a.py"], "-value = 1\n+value = 2"))
+    assert plain["triggered"] == []
+    hit = review_patterns(_repo_input(_TABLE, ["backend/core/a.py"],
+                                      "+    subprocess.Popen(['git'])"))
+    assert hit["triggered"] == ["P1"] and hit["error"] is None
     # every applying row is still listed for the reviewer, incl. the *.py ones
-    assert "| RP1 |" in hit["compact"]
+    block = patterns_block(hit)
+    assert "| P1 |" in block and "| P2 |" in block and "abc123" in block
+    # a repo without the file contributes nothing
+    assert review_patterns(_repo_input(None, ["a.py"], "+x"))["blocks"] == {}
 
 
-def test_a_broken_pattern_table_still_reviews(monkeypatch):
+def test_a_broken_pattern_table_still_reviews():
     from core.run_protocol import review
-    monkeypatch.setattr(review, "_spawn_prompt", lambda: (_ for _ in ()).throw(OSError("gone")))
-    got = review.review_patterns(["backend/core/a.py"], "+x")
-    assert got["triggered"] == [] and "gone" in got["error"]
-    assert "could not select rows" in review.patterns_block(got)
+    got = review.review_patterns(_repo_input(
+        "| X1 | **bad** | t `match: regex:x` | v | e |\n", ["backend/core/a.py"], "+x"))
+    assert got["triggered"] == [] and "regex:x" in got["error"]
+    assert "could not read" in review.patterns_block(got)
 
 
 # ── F-8: a comment-only change to source is not executable ──────────────────

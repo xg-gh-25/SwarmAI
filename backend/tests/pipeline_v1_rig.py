@@ -42,6 +42,11 @@ BASE_FILES = {
         "from core.mod import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"),
     "backend/tests/test_other.py": (
         "from core.other import other\n\n\ndef test_other():\n    assert other() == 1\n"),
+    # the repo's own review guidance (S6-4b): a change under backend/core gets correctness
+    ".swarmai/review.md": (
+        "# rig review notes\n\n| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
+        "| RIG1 | **core logic** | any core module `match: glob:backend/core/*` | the "
+        "behaviour is tested | a swapped operand |\n"),
     "validations.json": json.dumps({"schema": 1, "entries": [{
         "id": "docs", "paths": ["docs/**"], "cwd": ".",
         "argv": ["python3", "-c", "pass"], "call_type": "lint"}]}),

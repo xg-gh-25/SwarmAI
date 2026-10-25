@@ -49,7 +49,8 @@ direct is for a small, unambiguous change: `create --profile direct --requiremen
 Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground.
 
 - Default: correctness only for >=50 source lines.
-- Add security only for clear security risk; at >=50 risky lines its handout starts with a HIGH-RISK CHANGE line, which makes it do its "High-risk change" section (there is no second security reviewer).
+- Security is added only when the change is declared security-relevant: the repo's `.swarmai/review.md` has a `security:` line that matches, your BUILD report says `"risk": ["security"]`, or the design names security boundaries. There is no built-in path or API rule, so declare `risk` whenever the change touches authentication, permissions, input validation, credentials, network, file paths or shell commands. At >=50 lines its handout starts with a HIGH-RISK CHANGE line, which makes it do its "High-risk change" section (there is no second security reviewer).
+- Correctness also gets the rows of each repo's `.swarmai/review.md` pattern table that the change triggers (read at the run's base; a run cannot change its own review).
 - Small changes and docs-only changes dispatch nobody unless explicitly required.
 - R1 reviews the full diff. Collect the whole round, cluster by cause, fix once, then call `review-address --artifact <handoff.json>`; its returned handouts are the complete R2 roster.
 - A behavior/contract finding's fix is proven by a test you ran: record its report with `"$SWARM_BACKEND_BIN" pipeline-v1 report-tests --project <P> --run-id <R> --artifact -`, then give the item `"proof": {"evidence_type": "reported_test", "command": "<the command as in that report>"}`. The command must pass on the current code; R2 judges whether it shows the fix (ADEQUATE / TEST_INADEQUATE). Refuted findings and structural fixes go through `review-proof`. Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
@@ -60,9 +61,9 @@ Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`.
 
 The pipeline does not run or watch tests (design usable-by-anyone §3.3.3). Test the way you would without it, with the repo's own commands, in the run's worktree. BUILD and TEST each end with a validation report as the `stage-complete --artifact -` JSON:
 
-`{"reports": [{"repo": "<name>", "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run", "reason": "..."}], "tests_changed": ["..."], "rationale": "why these tests show the change is right"}]}`
+`{"reports": [{"repo": "<name>", "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run", "reason": "..."}], "tests_changed": ["..."], "rationale": "why these tests show the change is right", "risk": ["security"]}]}`
 
-One report per repo; `fail` and `not_run` need a reason. The engine records each on the tree it computes for that worktree, never a tree you give. A failed command in TEST keeps the run in TEST. Review judges whether the tests are enough. After main moves in DELIVER, test the synced tree again and send `report-tests --artifact -`. Eval and production build/deploy remain outside the run.
+One report per repo; `fail` and `not_run` need a reason; `risk` is optional (only `security`) and dispatches the security review. The engine records each on the tree it computes for that worktree, never a tree you give. A failed command in TEST keeps the run in TEST. Review judges whether the tests are enough. After main moves in DELIVER, test the synced tree again and send `report-tests --artifact -`. Eval and production build/deploy remain outside the run.
 
 ## Landing and completion
 

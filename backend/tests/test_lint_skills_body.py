@@ -403,7 +403,7 @@ def test_the_pattern_library_still_carries_a_lesson_in_every_row():
     is where a silent gutting would hide. Every ``| RP`` row must still end in a
     non-empty cell.
     """
-    lib = lint_skills._REPO_ROOT / "backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md"
+    lib = lint_skills._REPO_ROOT / ".swarmai/review.md"   # moved out of the product (S6-4b)
     rows = [l for l in lib.read_text(encoding="utf-8").splitlines() if l.startswith("| RP")]
     assert len(rows) >= 80, f"pattern rows dropped to {len(rows)}"
     hollow = [r[:60] for r in rows if not r.rstrip().rstrip("|").rsplit("|", 1)[-1].strip()]

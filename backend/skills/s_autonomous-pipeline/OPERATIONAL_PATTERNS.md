@@ -1,10 +1,10 @@
 # Operational Pattern Checklist (OP1-OP8)
 
-Architectural invariants that every subsystem must satisfy. Unlike RP1-RP91
-(code-level bug patterns), these are **system-level patterns** — they apply
+Architectural invariants that every subsystem must satisfy. Unlike code-level bug
+patterns (a repository's own `.swarmai/review.md`), these are **system-level patterns** — they apply
 regardless of what code you're writing.
 
-REVIEW stage checks these alongside RP1-RP91 for any changeset that adds or
+REVIEW checks these alongside the repository's own patterns for any changeset that adds or
 modifies a subsystem's lifecycle operations (CRUD, deploy, update, etc.).
 
 ## Patterns
@@ -44,6 +44,6 @@ CloudFront, systemd, Caddy, cron) or credentials?"
 
 ## Maintenance
 
-Same protocol as REVIEW_PATTERNS.md: when a post-pipeline audit finds an
+When a post-pipeline audit finds an
 operational gap the checklist missed, add a new OP pattern here. Each OP must
 have: trigger, verification, and a real-world example.

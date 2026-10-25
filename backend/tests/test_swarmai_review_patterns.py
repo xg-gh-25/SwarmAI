@@ -1,51 +1,63 @@
-"""Tests for ``spawn_prompt.py --patterns-for`` (REVIEW_PATTERNS on-demand rows).
+"""SwarmAI's own review pattern table (``.swarmai/review.md``, moved out of the product
+in S6-4b, design usable-by-anyone §3.5.2), read with the product's generic parser
+``core.run_protocol.review_md``.
 
-What is tested: every REVIEW_PATTERNS.md row carries exactly one parseable
-``match:`` token; the selector picks a strict, file-type-specific subset; ``*``
-rows always print; keywords read the diff; usage errors exit 1.
+What is tested: every row of the table carries exactly one parseable ``match:``
+token; the selector picks a strict, file-type-specific subset; ``*`` rows always
+apply; keywords read the diff; the ``*`` row count is pinned (<= 12) so always-on
+rows cannot creep back; a hook change with a subprocess diff pulls in the
+command-injection and the hook-relevant agent-safety rows; a README change pulls in
+only ``*`` rows plus doc rows; every agent-safety row is reachable from the agent code
+paths it targets, by path alone.
 
-Methodology: the REAL REVIEW_PATTERNS.md is parsed (no fixture copy), so a row
-appended without a token, or a malformed token, fails here. The CLI is driven
-as a subprocess for the exit-code contract; the parser is imported by path
-(the skill directory name has a hyphen, so a dotted import is impossible).
-
-Key invariants: selection never hides a row it cannot judge (a missing token
-reads as always-on); a backend .py path and a desktop .tsx path select
-different strict subsets; ``N of M patterns apply`` reports the real totals.
-The ``*`` row count is pinned (<= 12) so always-on rows cannot creep back; a
-hook change with a subprocess diff pulls in the command-injection and the
-hook-relevant agent-safety rows; a README change pulls in only ``*`` rows plus
-doc rows; every agent-safety row (RP65-RP80) is reachable from the agent code
-paths it targets, by path alone (the diff is optional on the REVIEW card).
+Methodology: the REAL file is parsed (no fixture copy), so a row appended without a
+token, or a malformed token, fails here.
 """
 from __future__ import annotations
 
 import fnmatch
-import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+from core.run_protocol import review_md
+
 _BACKEND = Path(__file__).resolve().parents[1]
-_SKILL_ROOT = _BACKEND / "skills" / "s_autonomous-pipeline"
-_SCRIPT = _SKILL_ROOT / "scripts" / "spawn_prompt.py"
-_PATTERNS = _SKILL_ROOT / "REVIEW_PATTERNS.md"
+_PATTERNS = _BACKEND.parent / ".swarmai" / "review.md"
+
+
+def _d(row):
+    return {"id": row.id, "line": row.line, "always": row.always,
+            "globs": list(row.globs), "keywords": list(row.keywords)}
+
+
+class sp:
+    """The old spawn_prompt selector names, over review_md (keeps the assertions)."""
+    PatternsError = review_md.GuideError
+    _MATCH_TOKEN_RE = review_md._TOKEN
+
+    @staticmethod
+    def parse_review_patterns(text):
+        guide = review_md.parse(text)
+        return list(guide.header), [_d(r) for r in guide.rows]
+
+    @staticmethod
+    def row_applies(row, paths, diff=""):
+        return review_md.applies(review_md.Row(row["id"], row["line"], row["always"],
+                                               tuple(row["globs"]), tuple(row["keywords"])),
+                                 paths, diff)
+
+    @staticmethod
+    def parse_match_spec(spec):
+        return review_md._spec("x", "", spec)
+
 
 _PY = "backend/core/session_unit.py"
 _TSX = "desktop/src/pages/ChatPage.tsx"
 
 
-def _load():
-    spec = importlib.util.spec_from_file_location("spawn_prompt_under_test", _SCRIPT)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
-sp = _load()
 
 
 def _rows():
@@ -56,11 +68,6 @@ def _selected(paths, diff=""):
     return {r["id"] for r in _rows() if sp.row_applies(r, paths, diff)}
 
 
-def _cli(*args, stdin=None):
-    return subprocess.run(
-        [sys.executable, str(_SCRIPT), *args], input=stdin,
-        capture_output=True, text=True, timeout=60,
-    )
 
 
 def test_real_review_patterns_parses_with_header_and_every_row():
@@ -73,7 +80,11 @@ def test_real_review_patterns_parses_with_header_and_every_row():
 
 def test_every_row_has_exactly_one_match_token():
     rows = _rows()
-    missing = [r["id"] for r in rows if r["missing"]]
+    # a table row without a token is not a pattern row to the parser, so it would be
+    # silently skipped: every "| RP" line must have been parsed
+    raw = [l.split("|", 2)[1].strip() for l in _PATTERNS.read_text(encoding="utf-8").splitlines()
+           if l.startswith("| RP")]
+    missing = sorted(set(raw) - {r["id"] for r in rows})
     assert missing == [], f"rows without a `match:` token: {missing}"
     for r in rows:
         assert len(sp._MATCH_TOKEN_RE.findall(r["line"])) == 1, r["id"]
@@ -125,53 +136,14 @@ def test_malformed_match_term_raises(spec):
         sp.parse_match_spec(spec)
 
 
-def test_missing_token_reads_as_always_on_and_is_warned(tmp_path):
-    src = tmp_path / "rp.md"
-    src.write_text(
-        "| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
-        "| RP1 | a | t `match: glob:*.py` | v | e |\n"
-        "| RP2 | b | no token here | v | e |\n", encoding="utf-8")
-    res = _cli("--patterns-for", "a.tsx", "--patterns-source", str(src))
-    assert res.returncode == 0, res.stderr
-    assert "| RP2 |" in res.stdout and "| RP1 |" not in res.stdout
-    assert "1 of 2 patterns apply" in res.stdout and "WARNING" in res.stdout
 
 
-def test_cli_prints_header_rows_and_count_line():
-    res = _cli("--patterns-for", _PY)
-    assert res.returncode == 0, res.stderr
-    lines = res.stdout.splitlines()
-    assert lines[0].startswith("| # |")
-    printed = [l for l in lines if l.startswith("| RP")]
-    assert f"{len(printed)} of {len(_rows())} patterns apply" in res.stdout
-    assert {l.split("|")[1].strip() for l in printed} == _selected([_PY])
 
 
-def test_cli_stdin_matches_args_form():
-    a = _cli("--patterns-for", _PY, _TSX)
-    b = _cli("--patterns-for-stdin", stdin=f"{_PY}\n{_TSX}\n\n")
-    assert a.returncode == b.returncode == 0
-    assert a.stdout == b.stdout
 
 
-def test_cli_diff_file_feeds_keywords(tmp_path):
-    diff = tmp_path / "c.diff"
-    diff.write_text("+ body = new FormData()\n", encoding="utf-8")
-    res = _cli("--patterns-for", "docs/notes.txt", "--diff-file", str(diff))
-    assert res.returncode == 0 and "| RP5 |" in res.stdout
 
 
-@pytest.mark.parametrize("args,stdin", [
-    (["--patterns-for", _PY, "--bogus"], None),        # unknown flag
-    (["--patterns-for"], None),                         # no path
-    (["--patterns-for-stdin"], "\n  \n"),               # empty stdin
-    (["--gate", "gate0-skeptic", "--diff-file", "x"], None),  # flag misuse
-    (["--patterns-for", _PY, "--patterns-source", "/nonexistent/rp.md"], None),
-])
-def test_cli_usage_errors_exit_1_with_empty_stdout(args, stdin):
-    res = _cli(*args, stdin=stdin)
-    assert res.returncode == 1, (res.returncode, res.stderr)
-    assert res.stdout == ""
 
 
 # ── always-on budget + targeted selection of the narrowed rows ───────────────
@@ -309,85 +281,19 @@ _SETS = {  # the three change sets measured at EVALUATE
 }
 
 
-def test_compact_listing_keeps_selection_and_drops_long_columns():
-    res = _cli("--patterns-for", _PY)
-    assert res.returncode == 0, res.stderr
-    lines = res.stdout.splitlines()
-    assert lines[0].replace(" ", "") == "|#|Pattern|Trigger|"
-    printed = [l for l in lines if l.startswith("| RP")]
-    assert {l.split("|")[1].strip() for l in printed} == _selected([_PY])
-    assert all(l.count("|") == 4 for l in printed), "compact rows have exactly 3 cells"
-    assert "What to verify" not in res.stdout and "Example bug" not in res.stdout
-    assert "`match:" not in res.stdout
-    assert "--patterns-rows" in res.stdout
 
 
-@pytest.mark.parametrize("name", sorted(_SETS))
-def test_compact_listing_is_at_most_40_percent_of_full_rows(name):
-    text = _PATTERNS.read_text(encoding="utf-8")
-    full = sp.render_patterns_for(text, _SETS[name])
-    compact = sp.render_patterns_compact(text, _SETS[name])
-    assert len(compact) <= 0.4 * len(full), (name, len(compact), len(full))
 
 
-def test_patterns_rows_prints_full_rows_in_order_case_insensitive():
-    res = _cli("--patterns-rows", "rp7", "RP2")
-    assert res.returncode == 0, res.stderr
-    lines = res.stdout.splitlines()
-    assert lines[0].startswith("| # |") and "What to verify" in lines[0]
-    ids = [l.split("|")[1].strip() for l in lines if l.startswith("| RP")]
-    assert ids == ["RP7", "RP2"]
-    full = {r["id"]: r["line"] for r in _rows()}
-    assert full["RP7"] in res.stdout and full["RP2"] in res.stdout
 
 
-@pytest.mark.parametrize("bad", ["RP999", "RPx", "7"])
-def test_patterns_rows_unknown_or_malformed_id_exits_1(bad):
-    res = _cli("--patterns-rows", "RP2", bad)
-    assert res.returncode == 1 and res.stdout == ""
-    assert bad in res.stderr
 
 
-def test_patterns_rows_reads_patterns_source(tmp_path):
-    src = tmp_path / "rp.md"
-    src.write_text(
-        "| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
-        "| RP1 | a | t `match: *` | v1 | e |\n", encoding="utf-8")
-    res = _cli("--patterns-rows", "RP1", "--patterns-source", str(src))
-    assert res.returncode == 0 and "| v1 |" in res.stdout
 
 
-def test_compact_cells_split_from_the_left_with_pipes_in_later_columns(tmp_path):
-    src = tmp_path / "rp.md"
-    src.write_text(
-        "| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"
-        "| RP1 | name | trig `match: *` | a \\| b | c | d |\n", encoding="utf-8")
-    res = _cli("--patterns-for", "x.py", "--patterns-source", str(src))
-    assert res.returncode == 0, res.stderr
-    assert "| RP1 | name | trig |" in res.stdout
 
 
 # v13 §C3: the REVIEW card names checks and commands only; the RP rows reach the
 # reviewer through the correctness handout (test_correctness_handout_* below).
-@pytest.mark.parametrize("doc", ["REVIEW_PATTERNS.md"])
-def test_review_docs_say_how_to_fetch_full_rows(doc):
-    """The rule, not just the flag: verdict every listed row, and fetch the full row
-    before judging one whose trigger is present."""
-    text = " ".join((_SKILL_ROOT / doc).read_text(encoding="utf-8").split())
-    assert "--patterns-rows" in text, doc
-    assert "trigger is present" in text, doc
-    assert "pass / N/A / fail" in text, doc
 
 
-
-def test_correctness_handout_command_path_exists_from_repo_root():
-    """The --patterns-rows command the engine puts in the correctness handout runs
-    from the repo root (a shortened path sends the reviewer to the whole file)."""
-    import re as _re
-    from core.run_protocol import review
-    block = review.patterns_block(review.review_patterns(
-        ["backend/core/x.py"], "+ subprocess.Popen(['git'])"))
-    paths = _re.findall(r"python (\S+spawn_prompt\.py) --patterns-rows", block)
-    assert paths, block[:300]
-    assert all((_BACKEND.parent / p).is_file() for p in paths), paths
-    assert "| RP1 |" in block and "pass / N/A / fail" not in block

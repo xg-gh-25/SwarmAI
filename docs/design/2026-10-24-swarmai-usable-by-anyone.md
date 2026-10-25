@@ -331,6 +331,45 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 | 只对 SwarmAI 仓库有意义 | `design_lint_guard`、`inclusive_term_guard`、`change_triggered_eval`、`session_checkpoint` 里写死的 pytest 提醒 | 从产品里删除（P7）：改成 SwarmAI 仓库自己的 lint 脚本、pre-commit 和 CI 检查 |
 | 运维开关 | `SWARM_GATE_FORCE` | 不作为产品开关，只留给运维调试；顺手修掉三个声称支持却从不检查它的 gate |
 
+#### 3.4.1 前后对比（2026-10-25 核对）
+
+"前"是本设计开始前的 `f97d1c6e7`（10-24），"后"是 S6-4a（`82de614d7`）之后的 main。gate 按 `hook_builder.build_hooks` 实际注册的数，专家按 `backend/experts/code/` 的文件数。
+
+| gate | 前 | 后 | 说明 |
+|---|---|---|---|
+| `direct_commit_gate` | 有 | 删 | native 改代码直接 commit 会被拦 |
+| `adversarial_commit_gate` | 有 | 删 | commit 前必须有对抗审查 marker；SubagentStop 写 marker 的链路一起删 |
+| `pytest_command_guard` | 有 | 删 | 限制 pytest 的写法 |
+| `pipeline_test_gate`（`test_command_gate` 组） | 有 | 删 | 随 pipeline 自己的测试执行器一起删 |
+| `design_lint_guard`、`inclusive_term_guard` | 有 | 删 | 只对 SwarmAI 仓库有意义，改成仓库自己的 lint 和 CI |
+| `worktree_write_gate` | 有 | 收窄 | 去掉 rule 4（不许在主 checkout 写代码），只保护 run 的 worktree |
+| `active_run_commit_gate` | 有 | 收窄 | 只拦 run 的 owner 手动 commit 它的文件；别的 session、读不出来的 run 只提示 |
+| `run_owner_gate` | 有 | 简化 | 不再发 token；保留 owner 判断、接管、人工批准、补传 session id |
+| `audit_marker_write_gate` | 有 | 收窄 | 读 `authority.key` 的保护随 key 删掉；可以 force |
+| `external_approval_gate` | 有 | 加强 | 用户本地覆盖；工具元数据只升不降 |
+| `dangerous_command_gate`、`ask_question_gate`、`bash_syntax_guard`、`skill_access_checker`、`governance_file_gate`、`background_command_guard`、`image_read_dedup_guard` | 有 | 不变 | 所有用户的安全和 session 保护 |
+| `session_link_gate`、`run_amend_gate`、`expert_type_gate`、`expert_budget_gate`、`main_dirty_reporter` | 有 | 不变 | 只在 pipeline run 里生效 |
+| `repo_guidance`、`shared_checkout` | 无 | 新增 | 只注入提示，不拦截（§3.7、§3.8） |
+
+拦截类 gate 从 22 个减到 16 个；现在没有 gate 挡 native 的写代码、跑测试和 commit。
+
+| 专家 | 前 | 后 |
+|---|---|---|
+| correctness | pipeline 默认派 | 不变；加"验证报告是否覆盖这次改动"，API contract 一条改成通用写法 |
+| security | 有安全风险时派 | 加"高风险改动"一节，逐项确认防护成立 |
+| red-team | ≥50 行且有风险时和 security 一起派 | 删，并入 security |
+| spec-compliance、code-quality | 有文件，不派 | 删；code-quality 的集成检查并入 integration |
+| ux-test | 有文件，不派 | 改名 ux，只看前端体验 |
+| integration | 有文件，不派 | 加"替换 / 搬移的对等性" |
+| operational | 有文件，不派；scope 是 SwarmAI 的 daemon/hook | scope 和表格改成通用 |
+| concurrency、state-machine、api-contract、performance | 有文件，不派 | 不变 |
+
+| 派发 | 前 | 后 |
+|---|---|---|
+| pipeline | correctness；有风险加 security；≥50 行有风险再加 red-team（最多 3 个） | correctness；有风险加 security，≥50 行时 handout 带高风险标记（最多 2 个） |
+| native | 没有专家机制，`adversarial_commit_gate` 逼着走对抗审查 | `s_expert-review`：agent 按改动从 9 个里挑，不经过 gate |
+| 名录 | 12 个，带 `spawn_as` | 9 个，由 frontmatter 生成，无 `spawn_as` |
+
 ### 3.5 专家：native 和 pipeline 共用（r9）
 
 - 专家在 `backend/experts/code/` 下（S6-4 前 12 个；按 §3.5.1 合并后是 correctness、security、concurrency、state-machine、api-contract、integration、performance、operational、ux），由 `expert_manager.py` 加载；每个文件的 frontmatter 写了显示名和 `scope`。
@@ -388,6 +427,47 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 **已实施（S6-4a，2026-10-25）**：按上面的清单做完。计划里没写到的一处：原来 `reviewers()` 给出的理由不会进专家的 prompt，security 没法知道这次是高风险改动。所以 `reviewers()` 给 ≥50 行且有安全风险的 security 那一行加 `high_risk: true`，engine 在 R1 和增量审查的 handout 开头写一行 `HIGH-RISK CHANGE (<理由>)`，security.md 的"高风险改动"一节以这一行为触发条件。另外：`ux` 不再审测试覆盖；`integration` 加了"替换 / 搬移的对等性"一节（来自 code-quality）；`operational` 的 §1 换成和语言、部署方式无关的表；`correctness` 的 API contract 一条不再点名 Pydantic 和 `toCamelCase`；`lint_experts.py` 不再要求 `spawn_as`；前端专家列表不再显示它。
 
 **后续修复（`dede1ae2f`）**：S6-4a 删了 4 个专家文件，但 engine 在 R1、R2 和增量审查三处仍然自己按 id 打开 `experts/code/<id>.md`。合并前开始的 run，事件和 finding 里记的是 `red-team`，`r2_roster()` 原样返回这个 id，`review-address` 写完 address 和 proof 事件之后才去读已删的文件，抛 `FileNotFoundError`。现在 `review.expert_prompt(id)` 是 id 到 prompt 文件的唯一入口，经 `_RETIRED` 映射，旧 id 读接手专家的 prompt。
+
+#### 3.5.2 review 清单和 security 派发去掉 SwarmAI 和 Python 假设（S6-4b）
+
+今天三处不通用：`review.py` 的 `_SECURITY_PATH` 按 SwarmAI 的文件名（`security_hooks`、`hook_builder`、`*_gate.py`……）判断风险，`_SECURITY_CODE` 按 Python API（`subprocess.`、`pickle.`……）判断；correctness 的 handout 带的是产品 skill 里的 `REVIEW_PATTERNS.md`（133 KB，91 条，全是 SwarmAI 的经验，很多行按 `*.py`、`*.tsx` 匹配）；专家 prompt 和 `SECURITY-BASELINE.md` 到处引用 RP 编号（两边的编号早已对不上：同一个 SSRF，前者叫 RP74，后者叫 RP61）。
+
+**通用清单就是专家 prompt 本身**：每个专家的检查类目已经和语言无关，不另写一份清单（另写一份就是第二个来源）。去掉所有 RP 编号和对 `REVIEW_PATTERNS.md` 的引用，编号后面的描述原样保留。
+
+**仓库自己的清单放在它的 `.swarmai/review.md`**：
+- 内容自由：给 agent 和专家看的审查要点（§3.7 第一次碰仓库时注入，截在前 3500 字符）。
+- 可以带一张检查表，格式沿用今天的（`| id | pattern | trigger … `match: …` | 要验证什么 | 例子 |`，`match:` 的 `glob:` / `kw:` / `*` 语法不变）。pipeline 用同一个选择器从表里挑出这次改动命中的行，放进 correctness 的 handout；命中具体证据的行（关键词，或比 `*.<ext>` 更窄的 glob）照旧让小改动也派 correctness。
+- 可以声明 security 的触发条件：一行 `security: match: <terms>`，语法和表格行的 `match:` 相同，命中就派 security。
+- engine 读的是 run 的 base 提交里的版本（`git show <base>:.swarmai/review.md`），不是 worktree 里的：run 改不了自己要受的审查。读不到（没有这个文件）就当没有声明；文件存在但表格解析失败，照旧告诉 correctness"选择失败"，不会少审。
+- 多仓库的 run 按仓库分别读、分别选，handout 里按仓库分节。
+
+**security 什么时候派**（任一成立；产品里不再有任何内置的路径或 API 判断）：
+1. 某个仓库的 `.swarmai/review.md` 里 `security:` 命中这次改动；
+2. BUILD（或 goal_cycle）的验证报告里，agent 声明 `"risk": ["security"]`（新增的可选字段，只接受 `security`）；
+3. full profile 的 DESIGN_SPEC 里 `security_boundaries` 非空。
+
+≥50 行时照旧带高风险标记（§3.5.1）。理由写明是哪一条触发的。
+
+**SwarmAI 仓库**：`REVIEW_PATTERNS.md` 原样搬到 `.swarmai/review.md` 的检查表；文件开头写 SwarmAI 的审查要点，再写一行 `security:`，把今天 `_SECURITY_PATH` 和 `_SECURITY_CODE` 的条件改写成 `glob:` / `kw:`。这样 SwarmAI 的 run 派 security 的条件基本不变，只是从产品代码搬到了仓库里（P7）。原来的正则是按路径段匹配的，改写成 glob 后会略宽一点，这是 SwarmAI 仓库自己的选择。
+
+**handout 里的命令**：今天叫 reviewer 跑 `python backend/skills/.../spawn_prompt.py --patterns-rows`，这个路径只在 SwarmAI checkout 里存在。改为告诉 reviewer 完整的行在哪：`git -C <repo> show <base>:.swarmai/review.md`，按 id 找对应行。
+
+**不做的**：spec 原文还写了"correctness 可以在 R1 里要求加派 security"。上面三条已经覆盖"agent 知道有风险"和"仓库声明了风险"两种情况，再加这一条要给 finding 加新字段和新的派发路径，先不做；S5 有数据后，如果确实有 correctness 发现了安全问题、security 却没被派的情况，再加。
+
+**验收**（测试先行）：
+- 产品代码里没有 `_SECURITY_PATH`、`_SECURITY_CODE`；改 `backend/core/security_hooks.py` 而仓库没有 review.md、报告没声明时，不派 security。
+- review.md 的 `security:` 命中、报告声明 `risk`、DESIGN_SPEC 有 `security_boundaries`，三种情况各自都会派 security，理由写明来源。
+- run 在 worktree 里改掉 review.md 的 `security:` 行，仍按 base 的版本派。
+- 一个非 Python 仓库的 review.md 检查表命中时，行出现在 correctness 的 handout 里。
+- 专家 prompt 和 `SECURITY-BASELINE.md` 里没有 `RP<数字>` 和 `REVIEW_PATTERNS`；产品 skill 里没有 `REVIEW_PATTERNS.md`。
+- SwarmAI 仓库：改 `backend/core/security_hooks.py` 派 security，和今天一样。
+
+**已实施（S6-4b，2026-10-25）**：按上面做完。实现上的几点：
+- 解析和选择放在产品模块 `core/run_protocol/review_md.py`，不再在 skill 脚本里；`spawn_prompt.py` 的 `--patterns-for`、`--patterns-rows` 删掉（只剩 gate prompt）。表格行的定义改为"带一个 `match:` 的表格行"，id 不再必须以 RP 开头。
+- engine 每个仓库多跑两个 git（`cat-file -e` 和 `show`），只在 `review-start` 和增量审查时，不在热路径上。
+- `risk` 存在报告的 blob 里，没有改 `validation_report` 事件的字段。
+- SwarmAI 原来按 RP 表格做的测试（`test_spawn_prompt_patterns.py`）改名为 `test_swarmai_review_patterns.py`，测的是 SwarmAI 自己的 `.swarmai/review.md`；只测已删 CLI 的用例删掉。pipeline 测试用的样例仓库加了一份最小的 `.swarmai/review.md`，让改 `backend/core/` 的小改动照旧派 correctness。
+- `OPERATIONAL_PATTERNS.md` 里对 RP 编号的引用也去掉了（这个文件没有被任何代码读取，留待 S6-5 判断要不要删）。
 
 ## 4. 用户场景
 
@@ -503,3 +583,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r17（XG，2026-10-25）：§3.8 `dangerous_command_gate` 的 history-rewrite 规则换成"丢弃别人未提交的工作"：ref 移动不再询问，销毁未提交改动的操作只在另一个 session 写过、仍未提交的文件会丢时询问，事实复用 `shared_checkout`；旧的按路径判断 scratch 的机制整套删除。
 - r18（XG，2026-10-25）：新增 §3.5.1 专家合并，S6-4 实施，12 个减到 9 个；§3.4 记下 `1dfdedba0`：补删 S4 漏下的 `_adv_` marker 链路，以及 `audit_marker_write_gate` 15 次拒绝的核对结果。
 - r19（2026-10-25）：§3.5.1 记下 S6-4a（`82de614d7`）的实施和后续修复 `dede1ae2f`（合并前开始的 run 在 R2 读已删的专家文件）。
+- r20（2026-10-25）：§3.4.1 记下 gate 和专家的前后对比；新增 §3.5.2：通用清单就是专家 prompt，仓库自己的清单和 security 触发条件放在它的 `.swarmai/review.md`（在 run 的 base 读取），security 只按声明派，产品里没有内置的路径或 API 判断；SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`。S6-4b 实施。

@@ -10,7 +10,7 @@ visibility: public
 > **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # API Contract Specialist Review
-<!-- version: 2026-10-18 | synced with: REVIEW_PATTERNS.md RP1-RP91 -->
+<!-- version: 2026-10-18 -->
 
 Scope: When changeset touches router files, endpoint handlers, request/response
 models, response schemas, or API-facing interfaces.
@@ -22,10 +22,10 @@ models, response schemas, or API-facing interfaces.
 > messages (payload shape), or a plain library's public function signatures. "Endpoint"
 > = whatever the project exposes; "Pydantic model" = whatever it (de)serializes with.
 
-**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
-RP14 (cross-service parameter mismatch), RP24 (cross-language serialization format),
-RP33 (multi-shape function returns — different consumers assume different shapes),
-RP89 (live vs reload parity), RP90 (slice partition), RP91 (cache key / ETag misses an input).
+**Also check, in your domain:**
+cross-service parameter mismatch, cross-language serialization format,
+multi-shape function returns — different consumers assume different shapes,
+live vs reload parity, slice partition, cache key / ETag misses an input.
 
 Output: JSON objects, one finding per line.
 
@@ -91,13 +91,13 @@ Modifiers: +3 if found actual consumer that will break, +2 if public API
 - Encoding assumptions (UTF-8 not enforced at boundary)
 - Numeric precision loss across serialization boundaries
 - Array ordering assumptions (set/dict iteration order)
-- **Two delivery routes for one item (RP89):** a value sent live (SSE event, optimistic
+- **Two delivery routes for one item:** a value sent live (SSE event, optimistic
   insert) and returned again on reload (history API) must agree on id, order key,
   timestamp FORMAT and fields. "Both sides use ISO strings" is not enough: check that the
   strings are COMPARED (sorted, merged) against each other and are the same flavour
   (UTC `…Z` vs naive local sort hours apart).
 
-### Caching & Validators (RP91)
+### Caching & Validators
 - ETag / If-None-Match / cache keys built from counts miss an in-place update
 - A new data source spliced into a cached response that is not part of the key
 - A degraded response (one input failed) cached under the full key
@@ -107,7 +107,7 @@ Modifiers: +3 if found actual consumer that will break, +2 if public API
 - Changed page sizes or default limits without documentation
 - Missing total count or next-page indicators
 - Cursor-based pagination without stable sort order
-- **Slice partition (RP90):** a secondary set filtered into each page must land on exactly
+- **Slice partition:** a secondary set filtered into each page must land on exactly
   one page — bound a page by the NEXT page's first key (the cursor row), not by the page's
   own last (possibly merged) entry; check the gap at the cut
 - A synthetic / local-only item that can become the oldest entry and be sent back as the

@@ -15,9 +15,9 @@
 >
 > **Relationship to review patterns:** this file states the RULES (what to always do); a
 > review-pattern library (e.g. SecDLC's security-review-patterns) states the PATTERNS
-> (specific failures caught in review + gate). The `Enforced by: RPnn` references below
-> point at that pattern library as a review reference — they are pointers, not a hard
-> dependency; a rule stands on its own even where no gate has teeth yet.
+> (specific failures caught in review + gate). The `Enforced by:` lines below name what
+> catches a violation (the security review expert, a gate, or review only); a rule stands
+> on its own even where no gate has teeth yet.
 
 ---
 
@@ -28,7 +28,7 @@
 - **Rule:** the always-do, imperative.
 - **Why:** the threat it closes.
 - **Anti-example:** the wrong pattern (concrete).
-- **Enforced by:** RPnn (review/gate reference) — or "review-only" if no gate teeth yet.
+- **Enforced by:** what catches a violation (a gate, the security review) — or "review-only" if no gate teeth yet.
 ```
 
 ---
@@ -55,7 +55,7 @@
   into a disallowed host). Log every outbound request (URL + origin) so exfil is visible.
 - **Why:** SSRF → internal-network pivot / metadata-endpoint credential theft / exfil.
 - **Anti-example:** `requests.get(url_from_fetched_content)` with no scheme/IP check.
-- **Enforced by:** RP61 (LLM-callable tool fetches an attacker-influenced URL).
+- **Enforced by:** the security review (LLM-callable tool fetches an attacker-influenced URL).
 
 ### A3 — No `shell=True` on a non-constant command
 - **Rule:** `subprocess(..., shell=True)` is legal ONLY when the command is a hardcoded
@@ -64,7 +64,7 @@
 - **Why:** command injection. A shell string built from any external/config value is RCE.
 - **Anti-example:** a job/task runner doing `shell=True` on a `command` field that could
   become settable from a channel/remote/API → RCE the moment the source is untrusted.
-- **Enforced by:** RP56 (LLM output → interpreter) for the model-driven case; review-only
+- **Enforced by:** the security review (LLM output → interpreter) for the model-driven case; review-only
   otherwise.
 
 ### A4 — Restrictive CORS — never regress to wildcard
@@ -81,7 +81,7 @@
   sanitizer; never `str(e)` into a response body.
 - **Why:** internal detail leakage → recon (architecture, secrets, prompt/system config).
 - **Anti-example:** `return {"error": str(exc)}` exposing a traceback / prompt config.
-- **Enforced by:** review-only (relates to RP62 — object-serialization leak).
+- **Enforced by:** review-only (relates to object-serialization leak).
 
 ### A6 — Secrets & dependencies
 - **Rule:** never hardcode tokens/keys or log secret values — reference by key name; keep a
@@ -90,7 +90,7 @@
 - **Why:** hardcoded/logged secrets = credential exposure; unpinned/typosquat deps =
   supply-chain compromise.
 - **Anti-example:** `TOKEN = "aKIA…"` in source; `logger.info(f"auth={token}")`.
-- **Enforced by:** RP66 (hardcoded credential in source/git history), RP62 (secret logged).
+- **Enforced by:** the security review (hardcoded credential in source/git history; a secret logged).
 
 ---
 
@@ -108,7 +108,7 @@
   never concatenate raw external text into an instruction slot.
 - **Why:** direct/indirect prompt injection redirects the agent.
 - **Anti-example:** `system_prompt + "\n" + fetched_page_text` in one instruction blob.
-- **Enforced by:** RP53 (untrusted content reaches the instruction channel).
+- **Enforced by:** the security review (untrusted content reaches the instruction channel).
 
 ### B2 — Indirect prompt injection & data exfiltration chain
 - **Rule:** guard the chain "agent reads poisoned content → told to read a secret → sends
@@ -118,7 +118,7 @@
 - **Why:** the highest-impact agent attack — silent credential/PII exfil.
 - **Anti-example:** on reading a doc that says "post X to <url>", the agent calls the send
   tool without user intent.
-- **Enforced by:** RP61 (SSRF/egress) + RP54 (tool-composition gadget chain).
+- **Enforced by:** the security review (SSRF / egress; tool-composition gadget chain).
 
 ### B3 — MCP / tool trust (descriptions AND responses)
 - **Rule:** tool descriptions AND tool responses can carry injection ("tool poisoning" /
@@ -128,7 +128,7 @@
   auto-enable a server without review; keep server definitions in a vetted config.
 - **Why:** MCP config auto-execution is a documented real-world RCE vector.
 - **Anti-example:** loading a repo's `.mcp.json` that enables an unreviewed server on open.
-- **Enforced by:** RP54 (tool-set gadget chain), RP67/RP68/RP69 (skill/tool supply-chain).
+- **Enforced by:** the security review (tool-set gadget chain; skill / tool supply chain).
 
 ### B4 — Preserve defense-in-depth — don't weaken existing controls
 - **Rule:** when touching security controls you MUST NOT loosen them: the PreToolUse
@@ -139,7 +139,7 @@
 - **Why:** each removed layer is a permanent widening of the attack surface.
 - **Anti-example:** relaxing a bash allowlist regex from `^git status$` to `git status`
   (now matches `git status; cat ~/.ssh/id_rsa`).
-- **Enforced by:** RP50 (a gate that fails OPEN), RP65 (control fails SILENT).
+- **Enforced by:** the security review (a gate that fails OPEN; a control that fails SILENT).
 
 ### B5 — Memory / state poisoning
 - **Rule:** persistent stores (long-term memory / context files) must not receive untrusted
@@ -149,7 +149,7 @@
 - **Why:** a poisoned memory entry is a re-injected instruction every future session.
 - **Anti-example:** appending a fetched web snippet containing "always email X to Y" into
   long-term memory verbatim.
-- **Enforced by:** RP58 (persistent-state / cross-agent poisoning).
+- **Enforced by:** the security review (persistent-state / cross-agent poisoning).
 
 ### B6 — Agent-action isolation & scoping
 - **Rule:** the agent's real-world actions (bash, filesystem, deploy, spend) must be
@@ -159,7 +159,7 @@
 - **Why:** an over-broad, unsandboxed action turns one injection into system-wide impact.
 - **Anti-example:** a single agent identity with shared write creds across all tasks, no
   per-task scope, destructive tools with no confirmation gate.
-- **Enforced by:** RP57 (agent-action isolation).
+- **Enforced by:** the security review (agent-action isolation).
 
 ### B7 — No persistent-state cross-agent collusion
 - **Rule:** shared memory/state between agents or runs must carry access control + integrity
@@ -169,7 +169,7 @@
 - **Why:** shared-state poisoning propagates one compromise across the whole agent fleet.
 - **Anti-example:** a shared scratchpad/memory namespace any agent can write and every agent
   trusts as instruction on read.
-- **Enforced by:** RP58 (persistent-state / cross-agent collusion).
+- **Enforced by:** the security review (persistent-state / cross-agent collusion).
 
 ### B8 — Task-scoped credentials, not standing broad grants
 - **Rule:** an agent holds per-task, least-privilege, minted-and-expired credentials — never
@@ -181,8 +181,8 @@
   confused-deputy case lets the agent's identity bypass the user's authz.
 - **Anti-example:** the agent's execution role carries `s3:*`/`kms:Decrypt *`; the LLM emits
   an `onBehalfOf` field the backend trusts.
-- **Enforced by:** RP59 (standing broad creds), RP59a (self-issued identity token), RP64
-  (agent as confused deputy in production).
+- **Enforced by:** the security review (standing broad creds; a self-issued identity token; the agent
+  as confused deputy in production).
 
 ---
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -25,36 +24,10 @@ New finding: {\"severity\":\"HIGH|MEDIUM|LOW\",\"kind\":\"behavior|contract|abse
 When there are no new findings, include a separate line: NO FINDINGS
 Do not emit a VERDICT line for REVIEW experts."""
 
-_SECURITY_PATH = re.compile(
-    r"(?:^|/)(?:auth|credential|permission|security_hooks|hook_builder|"
-    r"permission_manager|context)(?:[._/-]|$)|(?:^|/)[^/]*_gate\.py$|cors|listen|port",
-    re.IGNORECASE,
-)
-_SECURITY_CODE = re.compile(
-    r"\b(?:subprocess\.|shell\s*=\s*True|requests\.|httpx\.|urllib\.|pickle\.|"
-    r"yaml\.load\s*\(|eval\s*\(|exec\s*\(|host\s*=|port\s*=|listen_port\s*=|daemon_port\s*=)",
-    re.IGNORECASE,
-)
 
 
 class ReviewError(ValueError):
     """REVIEW input, event stream, fixing spec, or handout is inconsistent."""
-
-
-def security_risk(changed: Sequence[Mapping[str, Any]]) -> str | None:
-    for row in changed:
-        if row.get("is_test") is True:
-            continue
-        path = str(row.get("path") or row.get("rel") or "")
-        if _SECURITY_PATH.search(path):
-            return f"security-sensitive path: {path}"
-        added = row.get("added_lines")
-        if isinstance(added, list):
-            hit = next((_SECURITY_CODE.search(line) for line in added
-                        if isinstance(line, str) and _SECURITY_CODE.search(line)), None)
-            if hit:
-                return f"adds {hit.group(0)!r} in {path}"
-    return None
 
 
 def lint_prompt(prompt: str, *, expert_id: str, round: int) -> list[str]:
@@ -73,95 +46,57 @@ def lint_prompt(prompt: str, *, expert_id: str, round: int) -> list[str]:
     return errors
 
 
-_SPAWN_PROMPT = (Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline"
-                 / "scripts" / "spawn_prompt.py")
-_SPAWN_PROMPT_MOD: list[Any] = []
-
-
 def build_prompt(expert_id: str, instructions: str, review_input: str) -> str:
     """The exact text a handout gives an expert (one definition: handout and reuse)."""
     return (f"EXPERT-ID: {expert_id}\n\n{instructions.strip()}\n\n{review_input.strip()}"
             f"\n\n{OUTPUT_CONTRACT}\n")
 
 
-def _spawn_prompt():
-    """spawn_prompt.py by path (a skill script, not a package): the one REVIEW_PATTERNS
-    parser and selector, shared with the ``--patterns-for`` CLI."""
-    if not _SPAWN_PROMPT_MOD:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("_v1_spawn_prompt", _SPAWN_PROMPT)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
-        _SPAWN_PROMPT_MOD.append(mod)
-    return _SPAWN_PROMPT_MOD[0]
+def review_patterns(repos: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """Each repo's own review guidance applied to its part of the change (§3.5.2).
 
-
-_EXT_GLOB = re.compile(r"\*\.[a-z0-9]+")
-
-
-def _specific_hit(row: Mapping[str, Any], paths: Sequence[str], diff_text: str) -> bool:
-    """The row matched on evidence about THIS change: a keyword in a path or the diff,
-    or a glob narrower than a bare extension (``*.py`` fires on every Python file, so
-    on its own it says nothing about the change)."""
-    if row.get("always"):
-        return False
-    import fnmatch
-    norm = [str(p).replace("\\", "/").lower() for p in paths]
-    for g in row.get("globs") or ():
-        if _EXT_GLOB.fullmatch(g):
-            continue
-        if any(fnmatch.fnmatchcase(p, g) or fnmatch.fnmatchcase(p.rsplit("/", 1)[-1], g)
-               for p in norm):
-            return True
-    hay = "\n".join(norm) + "\n" + diff_text.lower()
-    return any(k in hay for k in row.get("keywords") or ())
-
-
-def review_patterns(paths: Sequence[str], diff_text: str = "") -> dict[str, Any]:
-    """The REVIEW_PATTERNS rows this change triggers (v13 E1: the RP lens is part of
-    correctness's checklist, so the ENGINE selects the rows; the model never does).
-
-    Returns ``{"compact": str, "triggered": [ids], "error": str | None}``. compact is
-    the --patterns-for listing (every applying row, one line each) for the
-    correctness handout; triggered are the rows matched on specific evidence
-    (_specific_hit: a keyword, or a glob narrower than ``*.<ext>``), which make even
-    a small change get a correctness review.
-    On any failure: no listing, error set (the caller still dispatches correctness).
+    *repos*: name -> ``{"text": review.md at the base or None, "base": rev,
+    "paths": changed source paths, "diff": diff text}``. Returns ``{"blocks":
+    {name: str}, "triggered": [ids], "security": [reasons], "error": str | None}``:
+    blocks are the selected rows for the correctness handout; triggered are rows
+    matched on specific evidence (they make even a small change get correctness);
+    security are the repos whose ``security:`` line matched. A file that cannot be
+    parsed sets error and is named in the block, never silently skipped.
     """
-    try:
-        sp = _spawn_prompt()
-        text = sp.REVIEW_PATTERNS_PATH.read_text(encoding="utf-8")
-        _, _, hits = sp._select(text, list(paths), diff_text)
-        compact = sp.render_patterns_compact(text, list(paths), diff_text)
-        return {"compact": compact,
-                "triggered": [r["id"] for r in hits if _specific_hit(r, paths, diff_text)],
-                "error": None}
-    except Exception as exc:  # noqa: BLE001 — a broken table must not stop REVIEW
-        return {"compact": "", "triggered": [], "error": f"{type(exc).__name__}: {exc}"}
-
-
-def _table_only(compact: str) -> str:
-    """The listing's table rows and warnings, without its closing instruction (that
-    one asks for per-row pass / N/A / fail; a v1 reviewer answers in findings)."""
-    keep = [ln for ln in compact.splitlines() if ln.startswith("|") or ln.startswith("WARNING")]
-    return "\n".join(keep)
+    from core.run_protocol import review_md
+    out: dict[str, Any] = {"blocks": {}, "triggered": [], "security": [], "error": None}
+    for name, item in sorted(repos.items()):
+        text, paths, diff = item.get("text"), list(item.get("paths") or ()), str(item.get("diff") or "")
+        if text is None or not paths:
+            continue
+        try:
+            guide = review_md.parse(text)
+        except review_md.GuideError as exc:
+            out["error"] = f"{name}: {review_md.PATH} cannot be parsed ({exc})"
+            out["blocks"][name] = (f"{name}: the engine could not read the pattern table of "
+                                   f"{review_md.PATH} ({exc}); read it yourself and apply the "
+                                   "rows whose trigger is present in the diff.")
+            continue
+        if guide.security is not None and review_md.applies(guide.security, paths, diff):
+            out["security"].append(f"{name}: {review_md.PATH} security line matches")
+        hits = review_md.select(guide, paths, diff)
+        out["triggered"] += [r.id for r in hits if review_md.specific_hit(r, paths, diff)]
+        if hits:
+            out["blocks"][name] = (
+                f"{name}: rows of the repository's {review_md.PATH} (as of the run's base "
+                f"{str(item.get('base'))[:12]}) that apply to this change. Check each against "
+                "the diff; report a violated row as a finding naming its id. The full row "
+                f"(what to verify, example): git -C <{name} worktree> show "
+                f"{item.get('base')}:{review_md.PATH}\n\n" + review_md.compact(hits))
+    return out
 
 
 def patterns_block(patterns: Mapping[str, Any]) -> str:
-    """The REVIEW_PATTERNS section of the correctness handout: the selected rows and
-    how to read one in full. A failed selection says so and points at the file."""
-    if patterns.get("compact"):
-        return ("REVIEW PATTERNS (RP) for this change, selected by the engine. Check each "
-                "listed row against the diff; report a violated row as a finding naming its "
-                "RP id. Before judging a row whose trigger is present in the change, print "
-                "its full row (what to verify + example bug): python "
-                "backend/skills/s_autonomous-pipeline/scripts/spawn_prompt.py --patterns-rows "
-                "RP<n> [RP<m> ...]\n\n" + _table_only(str(patterns["compact"])))
-    if patterns.get("error"):
-        return ("REVIEW PATTERNS: the engine could not select rows "
-                f"({patterns['error']}); apply backend/skills/s_autonomous-pipeline/"
-                "REVIEW_PATTERNS.md rows whose trigger is present in the diff.")
-    return "REVIEW PATTERNS: no source file changed; no rows apply."
+    """The repository-guidance section of the correctness handout."""
+    blocks = patterns.get("blocks") or {}
+    if not blocks:
+        return "REPOSITORY REVIEW PATTERNS: none apply to this change."
+    return "REPOSITORY REVIEW PATTERNS\n\n" + "\n\n".join(blocks[n] for n in sorted(blocks))
 
 
 # Experts removed by the §3.5.1 merge -> the roster expert that took their job.
@@ -181,14 +116,17 @@ def expert_prompt(expert_id: str) -> str:
 
 def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
               required: Sequence[str] = (), small_change: bool = False,
-              patterns: Sequence[str] = ()) -> list[dict[str, str]]:
+              patterns: Sequence[str] = (),
+              security: Sequence[str] = ()) -> list[dict[str, str]]:
     """P3a E1 roster: default correctness; security only on clear risk. A >=50-line
     risky change gets security's "High-risk change" section (§3.5.1: red-team merged
     into security), not a second reviewer.
 
-    *patterns*: REVIEW_PATTERNS rows the change triggers by path or diff
-    (review_patterns). Any of them dispatches correctness, also for a small change:
-    the RP lens has no other reviewer (code-quality was deleted, §3.5.1).
+    *patterns*: rows of the repo's own review.md the change triggers by path or diff
+    (review_patterns). Any of them dispatches correctness, also for a small change.
+    *security*: why security review was declared for this change (review.md's
+    ``security:`` line, the BUILD report's ``risk``, the design's security
+    boundaries; §3.5.2). The product has no built-in path or API rule.
 
     *required*: an id from the roster is kept; a retired id maps to the expert that
     took its job (``_RETIRED``); anything else falls back to correctness."""
@@ -196,14 +134,14 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
     high_risk = False
     if patterns:
         shown = ", ".join(patterns[:6]) + (f" +{len(patterns) - 6}" if len(patterns) > 6 else "")
-        picked["correctness"] = f"review patterns triggered: {shown}"
+        picked["correctness"] = f"repository review patterns triggered: {shown}"
     if small_change:
         return [{"id": expert, "reason": reason} for expert, reason in picked.items()]
     source = [row for row in changed if row.get("is_test") is not True
               and not str(row.get("path") or "").endswith((".md", ".txt", ".rst"))]
     total = sum(int(row.get("insertions") or 0) + int(row.get("deletions") or 0)
                 for row in source)
-    risk = security_risk(source)
+    risk = "; ".join(security) if security else None
     if source and total >= 50:
         picked["correctness"] = "changeset >= 50 source lines"
         if risk:

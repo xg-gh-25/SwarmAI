@@ -19,7 +19,7 @@ a loop that could run concurrently.
 **Purpose:** Find bugs that only manifest under CONCURRENT execution — code review
 verifies sequential correctness; this specialist verifies concurrent safety.
 
-Proven pattern: Three-pool isolation fix (RP35, 2026-05-20), OOM cascade (4 tabs,
+Proven pattern: Three-pool isolation fix (2026-05-20), OOM cascade (4 tabs,
 2026-04-12), health endpoint hang (pool exhaustion), cross-turn bleed (pipe flush
 race), job scheduler blocking default pool.
 
@@ -39,7 +39,7 @@ If no findings: output `NO FINDINGS` and nothing else.
 
 Every finding MUST include confidence (1-10):
 - 9-10: Identified specific shared resource with measured contention path
-- 7-8: Pattern matches known concurrent failure class (RP35, RP36, RP37)
+- 7-8: Pattern matches known concurrent failure class
 - 5-6: Plausible race condition, needs load testing to confirm
 - 3-4: Theoretical contention, unlikely in production load
 - 1-2: Speculation
@@ -63,7 +63,7 @@ Every finding MUST include confidence (1-10):
 2. What's the longest any consumer can hold it?
 3. What happens when the resource is exhausted?
 
-### 2. Pool Sizing vs Consumer Count (RP35)
+### 2. Pool Sizing vs Consumer Count
 
 **If the changeset adds a new `asyncio.to_thread()` or `run_in_executor(None, ...)`:**
 - What pool does it use? (None = default asyncio pool, SHARED)
@@ -79,7 +79,7 @@ consumers (<1s requirement) MUST use a dedicated ThreadPoolExecutor.
 - `run_in_executor(None, blocking_io)` where blocking_io can hang indefinitely
 - New consumer added to pool that already has N-1 max_workers consumers
 
-### 3. Fix-Removes-Failure-Mode Regression (RP36)
+### 3. Fix-Removes-Failure-Mode Regression
 
 **If the changeset FIXES a bug that previously caused early failure:**
 - What code path is now REACHABLE that was previously unreachable?
@@ -91,7 +91,7 @@ with long-running operations → health endpoint starves.
 
 **Ask:** "Now that this fix lets the operation SUCCEED, what does success cost?"
 
-### 4. Process Tree Lifetime Mismatch (RP37)
+### 4. Process Tree Lifetime Mismatch
 
 **If the changeset spawns a subprocess:**
 - What's the subprocess's expected runtime?
@@ -104,7 +104,7 @@ with long-running operations → health endpoint starves.
 - Job subprocess with no process group isolation
 - Child process without explicit cleanup on parent death
 
-### 5. Ordering Guarantees (RP16)
+### 5. Ordering Guarantees
 
 **If the changeset fires N async operations that produce ordered output:**
 - Are responses consumed in ORDER or just as-they-arrive?
