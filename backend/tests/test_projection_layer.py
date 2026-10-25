@@ -371,3 +371,9 @@ class TestExpertPromptsProjected:
         os.utime(f, (time.time() + 5, time.time() + 5))
         assert project_experts(ws, source=src)
         assert dst.read_text() == "v2"
+
+
+def test_projected_experts_are_gitignored_in_the_workspace():
+    """A regenerated copy must not show up as user changes in the workspace's git."""
+    from core.swarm_workspace_manager import GITIGNORE_CONTENT
+    assert ".claude/experts/" in GITIGNORE_CONTENT.splitlines()

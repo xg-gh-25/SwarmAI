@@ -831,6 +831,9 @@ node_modules/
 *.tmp
 .DS_Store
 .claude/mcps/mcp-dev.json
+# Expert prompts projected next to the skills (projection_layer.project_experts);
+# regenerated from the app on every projection.
+.claude/experts/
 proactive_state.json
 hook_stats.json
 .swarm_privacy_migrated
@@ -2321,7 +2324,8 @@ class SwarmWorkspaceManager:
                 for entry in (
                     ["proactive_state.json", "hook_stats.json", "*.tmp",
                      ".swarm_ai_instr_untracked", "CLAUDE.md", "AGENTS.md",
-                     "secrets.json", "*.corrupt-*", ".context/.eval-canary-daily.json"]
+                     "secrets.json", "*.corrupt-*", ".context/.eval-canary-daily.json",
+                     ".claude/experts/"]
                     + _PRIVACY_GITIGNORE_RULES
                 ):
                     if entry not in existing_rules:
