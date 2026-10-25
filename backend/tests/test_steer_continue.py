@@ -247,3 +247,42 @@ async def test_t24_a_steer_never_read_recycles_and_finishes_the_held_result():
     assert res["duration_ms"] == 1000                       # not counted twice
     assert p.state == SessionState.COLD                     # not turned back to IDLE
     assert env.ends == [(S1, "reader_closed", False)]       # → queued again (D2)
+
+
+# ── T12a: a leak-shaped end with a steer waiting reads the steer ─────────────
+
+async def test_t12a_a_leaked_tool_call_round_with_a_steer_waiting_reads_the_steer(_no_db):
+    from tests._tool_markup import tc
+    env = _Env()
+    env.reader.claim(S1, "steer", client_id="c-s1")
+    leak = tc('let me run it\n\n‹invoke name="Bash">\n‹parameter name="command">ls‹/parameter>')
+    r1 = _res()
+    r1["stop_reason"] = "end_turn"
+    events, raised = await env.run([
+        _state("running"), _init(), _echo(U1), _text(leak), r1,
+        _state("idle"), _state("running"), _init(), _echo(S1), _text("B"), _res(), _state("idle")])
+    assert raised is None
+    assert _no_db["write"].await_count == 0                 # no leak continuation written
+    assert _texts(events)[-1] == "B" and _types(events, "result") == ["result"]
+    assert env.reader._merged is None
+
+
+# ── T15: between the rounds the turn is still running ────────────────────────
+
+async def test_t15_the_unit_streams_from_the_first_result_to_the_steers_round():
+    env = _Env()
+    p = env.orch._parent
+    p.state = SessionState.STREAMING
+    seen = []
+    real = p._transition
+
+    def _spy(new_state):
+        seen.append(new_state)
+        real(new_state)
+    p._transition = _spy
+    env.reader.claim(S1, "steer", client_id="c-s1")
+    events, raised = await env.run([
+        _state("running"), _init(), _echo(U1), _text("A"), _res(),
+        _state("idle"), _state("running"), _init(), _echo(S1), _text("B"), _res(), _state("idle")])
+    assert raised is None and _texts(events) == ["A", "B"]   # the steer's round was read
+    assert seen == [SessionState.IDLE]                      # once, at the turn's end
