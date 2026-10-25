@@ -125,6 +125,14 @@ def documents(profile: str) -> dict[str, Any]:
 
 REQUIREMENT = "Swap the operands of core.mod.add."
 
+NO_NETWORK = (
+    "# acceptance: a pipeline command must work with no daemon and no network\n"
+    "import socket\n\n\n"
+    "def _refuse(self, address, *args, **kwargs):\n"
+    "    raise OSError(f'acceptance: no network ({address!r})')\n\n\n"
+    "socket.socket.connect = _refuse\n"
+    "socket.socket.connect_ex = _refuse\n")
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -323,6 +331,21 @@ class Rig:
 
     def documents(self) -> dict[str, Any]:
         return documents(self.profile)
+
+    def go_offline(self) -> None:
+        """Every later CLI process fails each socket connect: a command that needed the
+        daemon (or any network service) fails (acceptance, design usable-by-anyone §7)."""
+        offline = self.root / "offline"
+        offline.mkdir(exist_ok=True)
+        (offline / "sitecustomize.py").write_text(NO_NETWORK, encoding="utf-8")
+        self.env["PYTHONPATH"] = str(offline)
+
+    def assert_offline(self) -> None:
+        probe = subprocess.run(
+            [str(self.program), "py", "-c",
+             "import socket; socket.create_connection(('127.0.0.1', 18321), timeout=1)"],
+            env=self.env, capture_output=True, text=True, timeout=60)
+        assert "acceptance: no network" in probe.stderr, probe.stderr
 
     def create(self, *args: str, requirement: "str | None" = ...) -> dict:  # type: ignore[assignment]
         if requirement is ...:

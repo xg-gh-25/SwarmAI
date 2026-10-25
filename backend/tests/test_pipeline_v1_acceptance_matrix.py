@@ -1,5 +1,6 @@
-"""Acceptance (design 2026-10-24-swarmai-usable-by-anyone §5.2, §7 "验收"): a pipeline
-run on a Node repo goes from create to land while the CLI cannot reach any daemon.
+"""Acceptance matrix (design 2026-10-24-swarmai-usable-by-anyone §5.2, §7 "验收"): a
+pipeline run on each sample repo goes from create to land while the CLI cannot reach any
+daemon. Sample repos here: Node (``node --test``) and a repo with no tests at all.
 
 Methodology: the real ``"$SWARM_BACKEND_BIN" pipeline-v1`` program and the real hooks
 (``tests/pipeline_v1_rig.py``), on a repo with no Python in it (``package.json``,
@@ -8,12 +9,16 @@ Methodology: the real ``"$SWARM_BACKEND_BIN" pipeline-v1`` program and the real 
 daemon (or any network service) would fail. The validation reports are real: the rig
 runs ``node --test`` in the run's worktree and reports what it returned.
 
-Covered, for ``direct`` and ``full``:
+Covered for the Node repo, ``direct`` and ``full``:
 - the run lands: one commit on main whose parent is the base, with the change, the
   test and the run's REPORT, and the main checkout ends clean;
 - the BUILD test went red before the change and green after (reported, not rerun);
 - the REPORT names the reported command, and push is ready (isolated, tests bound);
 - the repo has no ``.py`` file and declares no ``pipeline.toml``.
+
+Covered for the repo with no tests (docs only), ``direct`` and ``full``: the reports say
+``not_run`` with a reason, the full DESIGN_SPEC has a ``manual`` exit and no test
+references, and the run still lands with the REPORT naming the unrun command.
 """
 from __future__ import annotations
 
@@ -26,8 +31,9 @@ import pytest
 
 from tests.pipeline_v1_rig import Rig, _git
 
-pytestmark = [pytest.mark.timeout(300),
-              pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")]
+
+pytestmark = pytest.mark.timeout(300)
+needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 
 PRICE = "src/price.js"
 TEST = "test/price.test.js"
@@ -56,15 +62,6 @@ NEW_PRICE = ("export function total(items, discountPercent = 0) {\n"
              "  const sum = items.reduce((acc, item) => acc + item.price, 0);\n"
              "  return sum * (1 - discountPercent / 100);\n}\n")
 
-NO_NETWORK = (
-    "# acceptance: a pipeline command must work with no daemon and no network\n"
-    "import socket\n\n\n"
-    "def _refuse(self, address, *args, **kwargs):\n"
-    "    raise OSError(f'acceptance: no network ({address!r})')\n\n\n"
-    "socket.socket.connect = _refuse\n"
-    "socket.socket.connect_ex = _refuse\n")
-
-
 class NodeRig(Rig):
     """The rig on a Node repo: its files, documents and real ``node --test`` reports."""
 
@@ -74,10 +71,7 @@ class NodeRig(Rig):
 
     def __init__(self, tmp_path: Path, monkeypatch, profile: str):
         super().__init__(tmp_path, monkeypatch, profile=profile)
-        offline = tmp_path / "offline"
-        offline.mkdir()
-        (offline / "sitecustomize.py").write_text(NO_NETWORK, encoding="utf-8")
-        self.env["PYTHONPATH"] = str(offline)
+        self.go_offline()
         self.red_green: tuple[int, int] | None = None
 
     def node_test(self) -> int:
@@ -112,16 +106,13 @@ class NodeRig(Rig):
         return super().complete_stage()
 
 
+@needs_node
 @pytest.mark.parametrize("profile", ["direct", "full"])
 def test_a_node_run_lands_with_no_daemon(tmp_path, monkeypatch, profile):
     r = NodeRig(tmp_path, monkeypatch, profile)
     try:
         assert not list(r.repo.rglob("*.py")) and not (r.repo / "pipeline.toml").exists()
-        probe = subprocess.run(
-            [str(r.program), "py", "-c",
-             "import socket; socket.create_connection(('127.0.0.1', 18321), timeout=1)"],
-            env=r.env, capture_output=True, text=True, timeout=60)
-        assert "acceptance: no network" in probe.stderr, probe.stderr  # really offline
+        r.assert_offline()
         base = _git(r.repo, "rev-parse", "main")
         r.create()
         state = r.drive()
@@ -141,5 +132,74 @@ def test_a_node_run_lands_with_no_daemon(tmp_path, monkeypatch, profile):
             assert {"stage_complete", "handout", "answer"} <= set(kinds), sorted(set(kinds))
         push = r.engine().push_status()
         assert push["push_ready"] is True, push
+    finally:
+        r.close()
+
+
+# ── a repo with no tests ──────────────────────────────────────────────────────
+GUIDE = "docs/guide.md"
+NEW_GUIDE = "Install with make.\nUninstall with make uninstall.\n"
+UNRUN = "(no test command)"
+
+
+class NoTestRig(Rig):
+    """A docs-only repo: nothing to run, so every report is ``not_run`` with a reason."""
+
+    BASE_FILES = {"README.md": "# notes\n", GUIDE: "Install with make.\n"}
+    REQUIREMENT = "Document the uninstall step in docs/guide.md."
+    CHANGE = {GUIDE: NEW_GUIDE}
+
+    def __init__(self, tmp_path: Path, monkeypatch, profile: str):
+        super().__init__(tmp_path, monkeypatch, profile=profile)
+        self.go_offline()
+
+    def documents(self) -> dict[str, Any]:
+        import json
+        docs = super().documents()
+        if not docs:
+            return docs
+        text = json.dumps(docs)
+        for old in ("backend/tests/test_x.py::test_add", "backend/tests/test_x.py",
+                    "backend/core/mod.py"):
+            text = text.replace(old, GUIDE)
+        docs = json.loads(text)
+        plan = docs["plan"]
+        # nothing can be run: the exit is checked by reading, and no property or failure
+        # mode is claimed (each would need a test reference)
+        plan["exit_criteria"] = [{"id": "X1", "kind": "manual", "covers": ["R1.1"],
+                                  "ref": "read docs/guide.md: it names make uninstall"}]
+        plan["properties"], plan["failure_modes"] = [], []
+        plan["consumers"][0]["readers"] = ["README.md"]
+        return docs
+
+    def report(self, result: str = "pass") -> dict:
+        return {"reports": [{"repo": "repo", "commands": [{
+            "command": UNRUN, "cwd": ".", "result": "not_run",
+            "reason": "the repo has no tests; the change is documentation"}],
+            "tests_changed": [], "rationale": "docs only: read the changed section"}]}
+
+
+@pytest.mark.parametrize("profile", ["direct", "full"])
+def test_a_repo_with_no_tests_lands_with_no_daemon(tmp_path, monkeypatch, profile):
+    r = NoTestRig(tmp_path, monkeypatch, profile)
+    try:
+        r.assert_offline()
+        base = _git(r.repo, "rev-parse", "main")
+        r.create()
+        state = r.drive()
+        assert state["landing"] == "landed", state
+        head = _git(r.repo, "rev-parse", "main")
+        assert _git(r.repo, "rev-parse", "main^") == base
+        report = f".aidlc/deliverables/{r.run_id}/REPORT.md"
+        changed = set(_git(r.repo, "diff", "--name-only", base, head).splitlines())
+        assert changed == {GUIDE, report}, changed
+        assert _git(r.repo, "show", f"{head}:{GUIDE}") + "\n" == NEW_GUIDE
+        assert _git(r.repo, "status", "--porcelain") == ""
+        text = _git(r.repo, "show", f"{head}:{report}")
+        # the REPORT says what was not run and why (Markdown escapes the underscore),
+        # and Quality does not call an unverified change verified
+        assert f"{UNRUN} → not\\_run（the repo has no tests" in text, text
+        assert "0 通过，0 失败，1 未运行" in text, text
+        assert "| Quality | WARN | 0/1 verification" in text, text
     finally:
         r.close()

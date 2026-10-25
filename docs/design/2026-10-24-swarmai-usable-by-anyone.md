@@ -567,7 +567,7 @@ S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时
 | S6-5b（已做） | 删 shared 模式：`run_worktree.mode_enabled` 和 `$SWARM_WORKTREE_MODE`、`RunEngine.create` 的 `mode` 参数和 shared run 的仓库预留（`_live_shared_holder`）、engine 里的 shared 分支、`landing` 的 `in_place` 落地（`_land_in_place`、`_IndexLock` 等）、`worktree_write_gate` 和 `prompt_builder` 里只在开关关闭时走的路径；contract 的 `mode` 恒为 `isolated`（MD-1 等读者保留，旧 shared run 仍过不了）；代码 profile 必须带 repo；测试套件不再整体钉 shared，全部按隔离 worktree 跑 | S6-5a |
 | S6-5c（已做） | `run_worktree.code_repos` 删除：没有调用方了（run 的仓库来自 `create --repo`），它自带的 bindings 读取和按名字猜自托管仓库随之消失；项目仓库只由 `ddd_bindings.governed_repo_roots` 读。skill 卡片复查：无 S6 已删概念残留；REFLECT 仍由 SwarmAI 会话的 PostToolUse hook / daemon 启动处理（卡片如实写明）。pipeline E2E 已在 S6-5b 全部按隔离 worktree 跑通 | S6-5b |
 | 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
-| 验收（部分已做） | `tests/test_pipeline_v1_node_acceptance.py`：Node 样例仓库（无 Python、无 `pipeline.toml`），CLI 进程的每个 socket 连接都失败，direct 和 full 都从 create 走到 land；BUILD 的 `node --test` 先红后绿，报告是真实运行结果；REPORT 写着报告的命令，push_ready。变异：命令先连 daemon 时两个都红。仍缺：§5.2 矩阵的其他仓库（Go、Rust、无测试、monorepo、unborn）；SwarmAI 会话之外 owner 从哪来（今天调用方要自己设 `SWARM_APP_SESSION_ID`）；daemon 离线时 REFLECT 不收尾、worktree 留到 daemon 启动 | S6-5 |
+| 验收（部分已做） | `tests/test_pipeline_v1_acceptance_matrix.py`，CLI 进程的每个 socket 连接都失败（`Rig.go_offline`），direct 和 full 各一个 run：**Node**（无 Python、无 `pipeline.toml`）：BUILD 的 `node --test` 先红后绿，报告是真实运行结果，落地，REPORT 写着报告的命令，push_ready；**无测试**（只有文档）：报告是 `not_run` 加理由，full 的 DESIGN_SPEC 只有 `manual` 出口，落地，REPORT 写着没跑的命令和理由，Quality 是 WARN（0/1 verification）。变异：命令先连 daemon 时 Node 两个都红；不接受 `not_run` 时无测试两个都红。仍缺：**unborn**（没有任何 commit 的仓库）今天 create 后停在 `paused / worktree_unavailable`（worktree 需要 base commit），要支持得先定 base 为空时 worktree、LG 检查和落地怎么做；**Go / Rust** 本机没有工具链，测试没写；monorepo；SwarmAI 会话之外 owner 从哪来（今天调用方要自己设 `SWARM_APP_SESSION_ID`）；daemon 离线时 REFLECT 不收尾、worktree 留到 daemon 启动 | S6-5 |
 
 
 S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"挡 native 测试命令"的部分，runner 自己的调用约束随 S6 和 runner 一起删除。
@@ -619,3 +619,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r24（2026-10-25）：S6-5b 实施：shared 模式和 `$SWARM_WORKTREE_MODE` 删除，每个 run 都在自己的 worktree 里。
 - r25（2026-10-25）：S6-5c 实施：`run_worktree.code_repos` 删除，`governed_repo_roots` 是项目仓库的唯一读取方。
 - r26（2026-10-25）：验收的第一格：Node 样例仓库在无 daemon、无网络时 direct 和 full 落地（自动测试）；记下三个未解决项。
+- r27（2026-10-25）：验收矩阵加"无测试"仓库（direct、full 都落地）；unborn 仓库今天不能落地（停在 worktree_unavailable），记为待设计。
