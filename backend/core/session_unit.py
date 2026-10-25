@@ -1482,6 +1482,8 @@ class SessionUnit:
         self._turn_segments = []
         self._steer_query_prefixes = []
         self._stop_receipt_at = None
+        self._steer_accepting = False      # this turn's read loop sets it once it reads
+        self._turn_steer_rounds = {"duration_ms": 0, "usage": {}}
         # Same lifecycle: the products of a turn paused for a question / permission
         # ride the unit until that turn's `result` (router continuation loops).
         self._turn_files = {}
@@ -5354,6 +5356,7 @@ class SessionUnit:
         # recycle mid-send must not carry a stale prefix into the next turn's
         # full_text).
         self._delivered_query_prefix = None
+        self._steer_query_prefixes = []   # same lifecycle (design chat-steer M7)
         # Clear the TSCC recall snapshot, on the unit AND in the registry. The
         # subprocess is gone, so no prompt is in force and there is no recall to
         # report; leaving the registry entry behind paired a pre-restart snapshot

@@ -788,7 +788,23 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T29 用 fake 帧序列驱�
   不把 `_last_turn_clean` 设为 True，下次发送走 poison guard，经 `_force_kill` 回收后带 `--resume`
   重起，用户看到的行为不变。测试在 `test_turn_limit_reached.py`。
 
+- **P1 审查后仍开着的（2026-10-25）。** (1) 回显已到、`confirm_steer` 还没写完时 daemon 崩溃：重启后这条
+  行转回排队，再发一次（窗口是一次 UPDATE，已退避重试，设计接受）。(2) 兜底回收进程后，扣下的 Result 若是
+  错误或空回复，照现有错误路径重试（重发第一条消息加续接提示，和 turn 中途崩溃一样）；兜底至今没有已知触发
+  场景。(3) 回显确认后的重复 POST，回执不再带 `steer`，排队时的重复回执也不带 `queuedReason`：D7 设计时定。
+  (4) "提问先于 steer 那一轮第一帧"时计入扣下那一轮，没有专门的测试。
+
 ## 修订记录
+
+- 2026-10-25 v1.13（P1 diff 审查后）：四位专家（correctness、concurrency、state-machine、integration）审了
+  P1 的六个 commit。修了 9 组：`_steer_accepting` 只在一处被清（一个 turn 以别的方式结束后标志一直为真，
+  下个 turn 自己的消息写入前到达的消息会被当成 steer 写在它前面）→ 读取循环外包 finally、`_reset_turn_state`
+  也清；steer 流在第一帧前结束（写失败撤回、读空）时扣下的 Result 丢失 → 按没有 steer 收尾；兜底在没有扣下的
+  Result 时走了可重试的 raise → 改成 TurnAbandoned；兜底回收前先撤回 steer 并转回排队（杀进程期间晚到的
+  回显不能再把它标成已读）；轮次合计存在 unit 上（续写的 result 不丢），提问先于 steer 那一轮第一帧时也
+  先计入，`sdk_error` 的 result 也带合计；steer 的 `terminal_context` 存进在途行，转回排队后照常带上；确认
+  失败改为退避重试 5 次；Stop 已点击（回执写入中、还没设 `_stopping`）时不再写新 steer；teardown 清
+  `_steer_query_prefixes`；没有回显就到 Result 的 steer 那一轮按已读处理。仍未关闭的见 §10。
 
 - 2026-10-25 v1.12（P1 实现中）：D1 改看 unit（STREAMING、`_steer_accepting`、`_turn_stream` 的种类），
   不看 reader 的 open turn；开关名 `steer_busy_send`，关时回执和快照不变；T18 改成共用同一组 builder。

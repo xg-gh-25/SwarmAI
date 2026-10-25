@@ -233,10 +233,14 @@ async def test_t24_a_steer_never_read_recycles_and_finishes_the_held_result():
 
     async def _crash_to_cold_async(clear_identity=False):
         recycled.append(clear_identity)
+        # the CLI reads the steer at last, while it is being killed: too late
+        env.client.feed([_state("running"), _init(), _echo(S1)])
+        await _settle(env.client)
         env.reader.close()
         p._client = None
         p.state = SessionState.COLD
     p._crash_to_cold_async = _crash_to_cold_async
+    p._steer_event = lambda kind, u, o, seen: env.ends.append((u, o, seen))
     env.reader.claim(S1, "steer", client_id="c-s1")
     events, raised = await env.run([
         _state("running"), _init(), _echo(U1), _text("A"), _res(ms=1000, out=5), _state("idle")])
@@ -246,7 +250,8 @@ async def test_t24_a_steer_never_read_recycles_and_finishes_the_held_result():
     (res,) = [e for e in events if e["type"] == "result"]
     assert res["duration_ms"] == 1000                       # not counted twice
     assert p.state == SessionState.COLD                     # not turned back to IDLE
-    assert env.ends == [(S1, "reader_closed", False)]       # → queued again (D2)
+    assert env.ends == [(S1, "reader_closed", False)]       # withdrawn, queued again, before the kill
+    assert env.reader._claims == {}
 
 
 # ── T12a: a leak-shaped end with a steer waiting reads the steer ─────────────
@@ -286,3 +291,100 @@ async def test_t15_the_unit_streams_from_the_first_result_to_the_steers_round():
         _state("idle"), _state("running"), _init(), _echo(S1), _text("B"), _res(), _state("idle")])
     assert raised is None and _texts(events) == ["A", "B"]   # the steer's round was read
     assert seen == [SessionState.IDLE]                      # once, at the turn's end
+
+
+
+# ── review fixes ─────────────────────────────────────────────────────────────
+
+async def test_the_accepting_flag_is_cleared_however_the_read_ends():
+    from core.cli_stream_reader import TurnAbandoned
+    env = _Env()
+    events, raised = await env.run([_state("running"), _init(), _echo(U1), _text("A"), _state("idle")])
+    assert isinstance(raised, TurnAbandoned)
+    assert env.orch._parent._steer_accepting is False
+
+
+async def test_a_steer_withdrawn_after_it_was_handed_out_finishes_the_held_result():
+    """The write failed after the turn took the steer's stream (drop_claim ends it):
+    the held round's Result still ends the turn, once, with no raise."""
+    env = _Env()
+    env.reader.claim(S1, "steer", client_id="c-s1")
+    env.client.feed([_state("running"), _init(), _echo(U1), _text("A"), _res(ms=1000, out=5)])
+    events: list = []
+
+    async def drive():
+        async for ev in env.orch._read_formatted_response():
+            events.append(ev)
+    task = asyncio.ensure_future(drive())
+    for _ in range(200):
+        await asyncio.sleep(0.005)
+        if getattr(env.orch._parent._turn_stream, "uuid", None) == S1:
+            break
+    assert env.orch._parent._turn_stream.uuid == S1
+    env.reader.drop_claim(S1)
+    await asyncio.wait_for(task, 2)
+    assert _texts(events) == ["A"] and _types(events, "result") == ["result"]
+    (res,) = [e for e in events if e["type"] == "result"]
+    assert res["duration_ms"] == 1000
+
+
+async def test_an_abandoned_round_whose_steer_is_never_read_ends_as_abandoned_not_retried():
+    from core.cli_stream_reader import TurnAbandoned
+    env = _Env()
+    p = env.orch._parent
+    p._compute_init_timeout = lambda: 0.3
+    p.TOOL_FREE_HARD_CEILING_S, p.TOOL_FREE_MAX_EXTENSIONS, p._tool_free_extensions = 600, 3, 0
+    p.pid = None
+    recycled = []
+
+    async def _crash_to_cold_async(clear_identity=False):
+        recycled.append(clear_identity)
+        env.reader.close()
+        p._client = None
+        p.state = SessionState.COLD
+    p._crash_to_cold_async = _crash_to_cold_async
+    p._steer_event = lambda kind, u, o, seen: env.ends.append((u, o, seen))
+    env.reader.claim(S1, "steer", client_id="c-s1")
+    events, raised = await env.run([_state("running"), _init(), _echo(U1), _text("A"), _state("idle")])
+    assert isinstance(raised, TurnAbandoned)               # not the retriable timeout
+    assert recycled == [False] and env.ends == [(S1, "reader_closed", False)]
+
+
+async def test_a_continuation_result_carries_the_rounds_absorbed_before_it():
+    """The rounds live on the unit: a later read of the same turn (an answer to a
+    question) ends with one result carrying every round."""
+    env = _Env()
+    env.reader.claim(S1, "steer", client_id="c-s1")
+    await env.run([_state("running"), _init(), _echo(U1), _text("A"), _res(ms=1000, out=5),
+                   _state("idle"), _state("running"), _init(), _echo(S1), _text("B"), _res(ms=300, out=2),
+                   _state("idle")])
+    # the same turn reads on (a continuation): its round's result includes the earlier ones
+    env.orch._parent._turn_steer_rounds = {"duration_ms": 1000, "usage": {"output_tokens": 5}}
+    u2 = "00000000-0000-4000-8000-0000000000c9"
+    env.orch._parent._turn_stream = env.reader.claim(u2, "human")
+    events, raised = await env.run([_state("running"), _init(), _echo(u2), _text("C"),
+                                    _res(ms=200, out=1), _state("idle")])
+    (res,) = [e for e in events if e["type"] == "result"]
+    assert res["duration_ms"] == 1200 and res["usage"]["output_tokens"] == 6
+
+
+async def test_a_steer_stream_that_ends_empty_finishes_the_held_result():
+    """Folded elsewhere after it was handed out: the stream ends with no frame."""
+    env = _Env()
+    env.reader.claim(S1, "steer", client_id="c-s1")
+    env.client.feed([_state("running"), _init(), _echo(U1), _text("A"), _res(ms=1000, out=5)])
+    events: list = []
+
+    async def drive():
+        async for ev in env.orch._read_formatted_response():
+            events.append(ev)
+    task = asyncio.ensure_future(drive())
+    for _ in range(200):
+        await asyncio.sleep(0.005)
+        if getattr(env.orch._parent._turn_stream, "uuid", None) == S1:
+            break
+    ts = env.orch._parent._turn_stream
+    assert ts.uuid == S1
+    ts._end()
+    await asyncio.wait_for(task, 2)
+    assert _texts(events) == ["A"] and _types(events, "result") == ["result"]

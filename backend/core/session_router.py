@@ -4189,8 +4189,7 @@ class SessionRouter:
         except Exception:  # noqa: BLE001 — no config: off
             return False
 
-    @staticmethod
-    def _steer_blocker(unit: Any) -> Optional[str]:
+    def _steer_blocker(self, unit: Any) -> Optional[str]:
         """Why a message to this unit cannot be steered into its running turn now,
         or None (design chat-steer D1). Synchronous: the write path checks it again
         right before the claim, with no await in between (H4). The reason is also
@@ -4214,6 +4213,11 @@ class SessionRouter:
         if unit.has_outstanding_tool_use:
             q = getattr(unit, "_pending_question", None) or {}
             return "permission" if q.get("request_id") else "question"
+        # a Stop clicked: its receipt is being written before interrupt() marks
+        # the unit stopping -- a steer now would go to a process about to be recycled
+        stops = self.__dict__.get("_stops_in_flight") or ()
+        if getattr(unit, "session_id", None) in stops or getattr(unit, "_stop_receipt_at", None) is not None:
+            return "busy"
         if (getattr(unit, "_stopping", False) or getattr(unit, "_interrupted", False)
                 or getattr(unit, "_tool_hang_interrupt_at", None) is not None
                 or getattr(unit, "_retrying", False) or getattr(unit, "_graceful_wrap_pending", False)):
@@ -4243,7 +4247,8 @@ class SessionRouter:
                                           _build_dynamic_prefix_block(editor_context, None,
                                                                       ui_block=ui_block)) if p)
         try:
-            inflight = await session_pending.mark_steer_inflight(session_id, row_id)
+            inflight = await session_pending.mark_steer_inflight(
+                session_id, row_id, terminal_context=terminal_context)
         except Exception as exc:  # noqa: BLE001 — queue it as before
             logger.warning("session_router.steer_mark_failed session_id=%s: %s", session_id, exc)
             inflight = False
@@ -4264,7 +4269,7 @@ class SessionRouter:
             unit._steer_hook = self._on_steer_event
             reader.claim(msg_uuid, "steer", client_id=client_id)
             # the SDK user-message shape write_user_message sends, plus priority
-            message = {"type": "user", "message": {"content": query, "role": "user"},
+            message = {"type": "user", "message": dict(role="user", content=query),
                        "parent_tool_use_id": None, "uuid": msg_uuid, "priority": "next"}
 
             async def _one():
@@ -4324,7 +4329,13 @@ class SessionRouter:
 
     async def _confirm_steer(self, session_id: str, row_id: str, echo_at: str, outcome: str) -> None:
         from . import session_pending
-        for attempt in (1, 2):   # the row must not stay in flight (H5): one retry, never re-queued
+        # The row must not stay in flight once read (H5): startup would queue it again
+        # and it would be sent twice. Retried with backoff (the DB layer already
+        # retries "database is locked"); a daemon dying inside this window is the
+        # accepted residual risk (design D2).
+        for attempt, delay in enumerate((0.0, 0.2, 0.5, 1.0, 2.0), 1):
+            if delay:
+                await asyncio.sleep(delay)
             try:
                 if not await session_pending.confirm_steer(session_id, row_id, echo_at, outcome):
                     logger.error("session_router.steer_confirm_no_row session_id=%s row=%s",

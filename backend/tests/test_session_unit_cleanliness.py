@@ -211,7 +211,7 @@ class TestAC3SuccessSetsClean:
         import inspect
         from core import streaming_orchestrator as so_mod
 
-        src = inspect.getsource(so_mod.StreamingOrchestrator._read_formatted_response)
+        src = inspect.getsource(so_mod.StreamingOrchestrator._read_formatted_response_body)
         assert "_last_turn_clean = True" in src, (
             "success-result path must set _parent._last_turn_clean = True"
         )

@@ -818,25 +818,35 @@ async def _report_row(row_id: str) -> None:
         logger.warning("session_pending: transcript feed push failed row=%s", row_id, exc_info=True)
 
 
-async def mark_steer_inflight(session_id: str, message_id: str) -> bool:
+async def mark_steer_inflight(session_id: str, message_id: str, *,
+                              terminal_context: dict | None = None) -> bool:
     """Move the send's just-written user row (sent=1, persist-before-slot) into the
     steer-in-flight phase, BEFORE the steer is written to stdin. False when the row
     is not a delivered user row of this session (missing, queued, already a steer):
-    the caller then does not steer."""
+    the caller then does not steer.
+
+    ``terminal_context`` (the send's attached terminal output) is kept in the row's
+    metadata like a queued message's (``mark_pending_by_id``): a steer that goes
+    back to the queue is delivered with it. ``confirm_steer`` removes it."""
     db_path = _get_db_path()
     now = datetime.now().isoformat()
+    from database.sqlite import dumps_json
+    tc = _valid_terminal(terminal_context)
 
     async def _do() -> bool:
         async with _get_seq_lock(session_id):
             async with _pooled(db_path) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
+                meta_sql = ("json_set(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, "
+                            "'$.steer', ?" + (", '$.terminal_context', json(?))" if tc else ")"))
+                args = (now, STEER_INFLIGHT, *((dumps_json(tc),) if tc else ()), now,
+                        message_id, session_id)
                 cursor = await conn.execute(
-                    "UPDATE messages SET sent = 0, claimed_at = ?, pending_seq = NULL, "
-                    "metadata = json_set(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, "
-                    "'$.steer', ?), updated_at = ? "
+                    f"UPDATE messages SET sent = 0, claimed_at = ?, pending_seq = NULL, "
+                    f"metadata = {meta_sql}, updated_at = ? "
                     f"WHERE id = ? AND session_id = ? AND role = 'user' "
                     f"AND (sent IS NULL OR sent = 1) AND {_NOT_STEER_SQL}",
-                    (now, STEER_INFLIGHT, now, message_id, session_id))
+                    args)
                 await conn.commit()
                 return cursor.rowcount == 1
 
@@ -860,7 +870,8 @@ async def confirm_steer(session_id: str, message_id: str, echo_at: str, outcome:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 cursor = await conn.execute(
                     "UPDATE messages SET sent = 1, claimed_at = NULL, created_at = ?, "
-                    "metadata = json_set(json_remove(metadata, '$.steer'), '$.steered', ?), "
+                    "metadata = json_set(json_remove(metadata, '$.steer', '$.terminal_context'), "
+                    "'$.steered', ?), "
                     f"updated_at = ? WHERE id = ? AND session_id = ? AND sent = 0 AND {_IS_STEER_SQL}",
                     (echo_at, label, now, message_id, session_id))
                 await conn.commit()

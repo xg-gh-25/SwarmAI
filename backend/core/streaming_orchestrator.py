@@ -564,6 +564,21 @@ class StreamingOrchestrator:
         take = getattr(reader, "take_steer", None)
         return take() if callable(take) else None
 
+    def _withdraw_awaited_steer(self) -> None:
+        """The D6 fallback, before it recycles the process: withdraw the steer the
+        turn waits on and report it unread, so its row goes back to the queue now
+        and a late echo during the kill can no longer mark it read."""
+        parent = self._parent
+        ts = getattr(parent, "_turn_stream", None)
+        reader = getattr(parent, "_stream_reader", None)
+        if ts is None or reader is None or getattr(ts, "kind", None) != "steer" or ts.echo_seen:
+            return
+        if ts.uuid in getattr(reader, "_claims", {}):
+            reader.drop_claim(ts.uuid)
+            event = getattr(parent, "_steer_event", None)
+            if callable(event):
+                event("end", ts.uuid, "reader_closed", False)
+
     @staticmethod
     def _absorb_steer_round(acc: dict, result: Any) -> None:
         """Add a round's time and tokens to the turn's (its Result is not sent)."""
@@ -1245,6 +1260,10 @@ class StreamingOrchestrator:
                 break
             if isinstance(msg, ResultMessage):
                 self._record_token_usage_bg(msg, getattr(msg, "usage", None) or {})
+            elif isinstance(msg, SteerRead):
+                # its row is confirmed by the echo itself; no segment starts here
+                logger.info("session_unit.steer_read_while_aborting session_id=%s client_id=%s",
+                            self._parent.session_id, msg.client_id)
         try:
             await itask
         except Exception as exc:  # noqa: BLE001 — the turn must still be closed for the user
@@ -1330,6 +1349,20 @@ class StreamingOrchestrator:
     # ═══════════════════════════════════════════════════════════════
 
     async def _read_formatted_response(self) -> AsyncIterator[dict]:
+        """Read the turn's stream (``_read_formatted_response_body``). However this
+        read ends (a result, a question, an error, the consumer closing it),
+        ``unit._steer_accepting`` is False afterwards: a steer written from then on
+        has no reader, so the write path queues it (design chat-steer D1/D6). A
+        continuation (answer / permission) reads again and sets it again."""
+        from contextlib import aclosing
+        try:
+            async with aclosing(self._read_formatted_response_body()) as body:
+                async for event in body:
+                    yield event
+        finally:
+            self._parent._steer_accepting = False
+
+    async def _read_formatted_response_body(self) -> AsyncIterator[dict]:
         """Read SDK response stream and yield formatted SSE events.
 
         Shared by ``_stream_response`` (after query) and
@@ -1425,8 +1458,15 @@ class StreamingOrchestrator:
         # after that point is queued instead (D1).
         _awaiting_steer = False          # reading a steer's stream, no frame yet
         _held_result: Any = None         # the round's Result kept back meanwhile
-        _steer_given_up = False          # the fallback recycled the process
-        _steer_rounds: dict = {"duration_ms": 0, "usage": {}}  # rounds absorbed
+        _steer_given_up = False          # the fallback recycled the process (unit COLD)
+        _steer_off = False               # no more steers in this read (a held Result finished)
+        _held_state: tuple = (False, None, False)   # the held round's leak / API-error state
+        # rounds absorbed this TURN (on the unit: a continuation after a question
+        # reads on in a new call and its result carries them too)
+        _steer_rounds = getattr(self._parent, "_turn_steer_rounds", None)
+        if not isinstance(_steer_rounds, dict):
+            _steer_rounds = {"duration_ms": 0, "usage": {}}
+            self._parent._turn_steer_rounds = _steer_rounds
         self._parent._steer_accepting = True
         # True once a main-thread text block carried the glitch-prefix shape
         # ("core 跑测试…"). The word is stripped from what is shown/persisted,
@@ -1590,6 +1630,12 @@ class StreamingOrchestrator:
             # (Before an SDK message that may have arrived too: while a gate
             # blocks, that message stays in the persistent read and is
             # delivered first by whichever stream reads on.)
+            if perm_request is not None and _held_result is not None:
+                # the steer's round asks before this loop read its first frame (the
+                # reader runs ahead): the held round is part of the turn now
+                self._record_token_usage_bg(_held_result, getattr(_held_result, "usage", None) or {})
+                self._absorb_steer_round(_steer_rounds, _held_result)
+                _held_result, _awaiting_steer = None, False
             if perm_request is not None:
 
                 # ── AskUserQuestion item (kind-discriminated) ─────────
@@ -1671,18 +1717,32 @@ class StreamingOrchestrator:
                     message = self._take_sdk_read(sdk_read)
                 except TurnAbandoned:
                     # the reader ended this round without its Result (the CLI went
-                    # idle first): a steer still to read is read next (D6)
-                    _steer_ts = self._take_steer_stream()
+                    # idle first; or the steer we were waiting on was withdrawn): a
+                    # steer still to read is read next (D6) ...
+                    _steer_ts = None if _steer_off else self._take_steer_stream()
                     if _steer_ts is None:
-                        raise
-                    logger.warning(
-                        "session_unit.steer_continue session_id=%s uuid=%s after=abandoned_round",
-                        self._parent.session_id, _steer_ts.uuid)
-                    self._parent._turn_stream = _steer_ts
-                    response_iter = self._turn_iter()
-                    is_first_message = True
-                    _awaiting_steer = True
-                    continue
+                        if _held_result is None:
+                            raise
+                        # ... else the round whose Result we held is finished as if
+                        # there had been no steer (the steer was never read)
+                        message, _held_result = _held_result, None
+                        _leak_tail, _api_error_text, _api_error_after_content = _held_state
+                        _awaiting_steer, _steer_off = False, True
+                    else:
+                        logger.warning(
+                            "session_unit.steer_continue session_id=%s uuid=%s after=abandoned_round",
+                            self._parent.session_id, _steer_ts.uuid)
+                        self._parent._turn_stream = _steer_ts
+                        response_iter = self._turn_iter()
+                        is_first_message = True
+                        _awaiting_steer = True
+                        continue
+                if message is _STREAM_EXHAUSTED and _awaiting_steer and _held_result is not None:
+                    # the steer's stream ended with no frame (folded elsewhere after it
+                    # was handed out): finish the held round
+                    message, _held_result = _held_result, None
+                    _leak_tail, _api_error_text, _api_error_after_content = _held_state
+                    _awaiting_steer, _steer_off = False, True
                 if message is _STREAM_EXHAUSTED:
                     break
                 is_first_message = False
@@ -1759,21 +1819,27 @@ class StreamingOrchestrator:
                         # doesn't immediately kill on the same stale silence.
                         _parent._last_event_time = awake_time()
                         continue  # same pending read, new deadline
-                if _awaiting_steer and _held_result is not None:
-                    # D6 fallback: the CLI never read the steer. Not a raise (a
-                    # retry would resend the turn's first message): recycle the
-                    # process -- the unread steer goes with it (E7) and its claim
-                    # ends reader_closed, so it is queued again -- then finish the
-                    # round's Result as if there had been no steer.
+                if _awaiting_steer:
+                    # D6 fallback: the CLI never read the steer. Not a retriable
+                    # raise (a retry would resend the turn's first message). The
+                    # steer is withdrawn and queued again FIRST (so an echo arriving
+                    # while the process is killed cannot mark it read: it would never
+                    # be answered), then the process is recycled (E7: the unread
+                    # message goes with it), then the held round is finished as if
+                    # there had been no steer -- or, with none held (an abandoned
+                    # round), the turn ends as abandoned, as it did before D6.
                     logger.error(
                         "session_unit.steer_never_read session_id=%s — no frame for "
-                        "%.0fs after the round's result; recycling the process",
+                        "%.0fs after the round's end; recycling the process",
                         self._parent.session_id, current_timeout)
                     self._discard_sdk_read()
+                    self._withdraw_awaited_steer()
                     await self._parent._crash_to_cold_async(clear_identity=False)
+                    _awaiting_steer, _steer_given_up, _steer_off = False, True, True
+                    if _held_result is None:
+                        raise TurnAbandoned("the CLI never read the steer")
                     message, _held_result = _held_result, None
-                    _awaiting_steer = False
-                    _steer_given_up = True
+                    _leak_tail, _api_error_text, _api_error_after_content = _held_state
                 else:
                     logger.error(
                         "session_unit.%s_timeout session_id=%s — "
@@ -2522,12 +2588,13 @@ class StreamingOrchestrator:
                 # limit, API-error continuation, empty-response retry, leak
                 # continuation): for the user the steer IS the next step, and the
                 # CLI runs it after any Result subtype (E1, E12, E13).
-                _steer_ts = None if _steer_given_up else self._take_steer_stream()
+                _steer_ts = None if _steer_off else self._take_steer_stream()
                 if _steer_ts is not None:
                     logger.info(
                         "session_unit.steer_continue session_id=%s uuid=%s subtype=%s",
                         self._parent.session_id, _steer_ts.uuid, getattr(message, "subtype", None))
                     _held_result = message
+                    _held_state = (_leak_tail, _api_error_text, _api_error_after_content)
                     self._parent._turn_stream = _steer_ts
                     response_iter = self._turn_iter()
                     is_first_message = True
@@ -2831,7 +2898,7 @@ class StreamingOrchestrator:
                         self._parent._lifecycle_response_count,
                     )
                     # Yield result event so frontend knows the turn ended
-                    yield {
+                    yield self._with_steer_rounds(_steer_rounds, {
                         "type": "result",
                         "subtype": "sdk_error",
                         "stop_reason": "error",
@@ -2845,7 +2912,7 @@ class StreamingOrchestrator:
                             "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
                             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
                         } if usage else None,
-                    }
+                    })
                     # Persist token usage (fire-and-forget)
                     if usage:
                         try:

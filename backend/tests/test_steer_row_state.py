@@ -244,3 +244,18 @@ async def test_a_duplicate_post_of_an_inflight_steer_is_not_queued(pending, db_p
     await pending.release_steer(SID, "steer-1")
     out = await send_requests.receipt(rec)
     assert "steer" not in out and out["queued"] is True
+
+
+
+@pytest.mark.asyncio
+async def test_a_steer_keeps_its_terminal_output_back_in_the_queue_and_drops_it_once_read(pending, db_path: Path):
+    tc = {"buffer_tail": "Traceback: boom", "cwd": "/tmp"}
+    await _live_user_row(db_path, "steer-1", "c-steer")
+    await pending.mark_steer_inflight(SID, "steer-1", terminal_context=tc)
+    await pending.release_steer(SID, "steer-1")
+    (queued,) = await pending.peek_pending_batch(SID)
+    assert queued.terminal_context == tc
+    await _live_user_row(db_path, "steer-2", "c-steer2")
+    await pending.mark_steer_inflight(SID, "steer-2", terminal_context=tc)
+    await pending.confirm_steer(SID, "steer-2", "2026-10-25T10:03:07", "folded")
+    assert "terminal_context" not in (await _row(db_path, "steer-2"))["metadata"]

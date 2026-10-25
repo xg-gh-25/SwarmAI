@@ -386,3 +386,19 @@ async def test_take_steer_skips_a_steer_that_ended_unread_and_any_after_a_dead_s
     c.q.put_nowait(None)
     await _settle(c)
     assert r.take_steer() is None
+
+
+
+async def test_a_steer_round_that_reaches_its_result_without_an_echo_counts_as_read():
+    c, calls = FakeClient(), _Calls()
+    r = _reader(c, calls)
+    first = r.claim(U1, "human")
+    c.feed([_state("running"), _init(), _echo(U1), _text("A"), _result()])
+    await _settle(c)
+    r.claim(S1, "steer", client_id="c-s1")
+    c.feed([_state("idle"), _state("running"), _init(), _text("B"), _result(), _state("idle")])
+    await _settle(c)
+    await asyncio.wait_for(_drain(first), 1)
+    assert calls.echo == [(S1, "opened")]
+    assert calls.end == [(S1, "opened", True)]
+    r.close()

@@ -37,7 +37,7 @@ def test_prompt_state_is_set_before_the_event_leaves():
     """Source-level invariant of the two surface branches."""
     import inspect
     from core import streaming_orchestrator as so
-    src = inspect.getsource(so.StreamingOrchestrator._read_formatted_response)
+    src = inspect.getsource(so.StreamingOrchestrator._read_formatted_response_body)
     for event in ('"type": "ask_user_question"', '"type": "cmd_permission_request"'):
         at = src.index(event)
         before = src[:at][-900:]

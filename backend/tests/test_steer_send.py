@@ -274,3 +274,57 @@ async def test_t18_a_steer_carries_the_terminal_and_ui_prefixes_and_no_recall():
     assert "Traceback: boom" in prefix
     assert "Traceback: boom" in (b.unit.all_query_prefixes() or "")
     b.close()
+
+
+
+@pytest.mark.asyncio
+async def test_a_stop_clicked_queues_a_new_steer_before_the_unit_is_marked_stopping():
+    b = _Busy("s-steer-stopclick")
+    await b.open_turn()
+    b.router.__dict__.setdefault("_stops_in_flight", set()).add(b.sid)
+    events = await b.send()
+    assert events[0]["queued"] is True and events[0]["queuedReason"] == "busy"
+    b.router._stops_in_flight.discard(b.sid)
+    b.unit._stop_receipt_at = __import__("datetime").datetime.now()
+    events = await b.send(cid=f"{b.cid}-2")
+    assert events[0]["queued"] is True and b.sdk.written == []
+    b.close()
+
+
+@pytest.mark.asyncio
+async def test_a_new_turn_does_not_inherit_the_last_turns_accepting_flag():
+    b = _Busy("s-steer-stale")
+    await b.open_turn()
+    b.unit._reset_turn_state()                     # the next send's admission
+    b.unit._transition(SessionState.IDLE)
+    b.unit._transition(SessionState.STREAMING)     # ... before its read loop runs
+    events = await b.send()
+    assert events[0]["queued"] is True and b.sdk.written == []
+    b.close()
+
+
+@pytest.mark.asyncio
+async def test_teardown_drops_the_steer_prefixes_with_the_first_messages():
+    b = _Busy("s-steer-teardown")
+    b.unit._steer_query_prefixes = ["terminal block"]
+    b.unit._delivered_query_prefix = "first"
+    b.unit._cleanup_internal()
+    assert b.unit.all_query_prefixes() is None
+
+
+@pytest.mark.asyncio
+async def test_a_steer_queued_after_the_recheck_keeps_its_terminal_output():
+    b = _Busy("s-steer-recheck-tc")
+    await b.open_turn()
+    real = session_pending.mark_steer_inflight
+
+    async def mark(sid, mid, **kw):
+        out = await real(sid, mid, **kw)
+        b.unit._steer_accepting = False
+        return out
+    with patch.object(session_pending, "mark_steer_inflight", mark):
+        events = await b.send(terminal_context={"buffer_tail": "Traceback: boom", "cwd": "/tmp"})
+    assert events[0]["queued"] is True
+    (queued,) = await session_pending.peek_pending_batch(b.sid)
+    assert queued.terminal_context and "boom" in queued.terminal_context["buffer_tail"]
+    b.close()

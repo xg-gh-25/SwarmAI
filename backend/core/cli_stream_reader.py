@@ -602,6 +602,18 @@ class CliStreamReader:
                 logger.error(
                     "cli_stream_reader.turn_owner_mismatch session_id=%s kind=%s uuid=%s origin=%s",
                     self._session_id, ts.kind, ts.uuid, ts.origin)
+            if ts.kind == "steer" and not ts.echo_seen and not ts.closed:
+                # the CLI ran the steer's round to its Result without echoing it (not
+                # seen with replay on): it did read it -- report the read, so its row
+                # is confirmed and never queued a second time
+                ts.echo_seen = True
+                ts._steer_outcome = "opened"
+                if self._on_steer_echo is not None:
+                    try:
+                        self._on_steer_echo(ts.uuid, "opened")
+                    except Exception:  # noqa: BLE001
+                        logger.exception("cli_stream_reader.on_steer_echo_failed session_id=%s",
+                                         self._session_id)
             self._steer_ended(ts, "opened")
             ts._end()
         self._open = None
