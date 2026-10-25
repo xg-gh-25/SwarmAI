@@ -40,7 +40,7 @@ export const FILES = [
   'components/layout/BrainHub.tsx',
   'components/layout/BrainMap.tsx',
   'components/layout/BrainMapView.tsx',
-  'components/layout/BrainHubMap.tsx',
+  'components/layout/BrainHubHome.tsx',
   'components/layout/StarterMaterial.tsx',
   'components/layout/DddCard.tsx',
   'components/layout/NewBrainOverlay.tsx',

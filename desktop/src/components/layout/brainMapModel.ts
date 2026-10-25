@@ -12,7 +12,9 @@
  *   runTone              Run status -> map dot tone
  *   needsYouItems        one queue: Runs waiting on you + proposals waiting on you
  *   brainEval            the Eval numbers for one brain (null = not measured)
- *   hubSummary           Hub map totals across all brains
+ *   hubSummary           Brain Hub home totals across all brains
+ *   hubNeeds             Brain Hub home: everything waiting on you, all brains
+ *   brainSignal          the one signal a Hub card shows, and its sort rank
  */
 import type { BrainDetail, BrainSummary, ReviewData, SectionKey } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
@@ -115,12 +117,85 @@ export function brainEval(
   };
 }
 
-export interface HubSummary { brains: number; needsYou: number; live: number }
+export interface HubSummary {
+  brains: number;
+  /** items waiting on a person: Runs that need you + staged rule proposals */
+  needsYou: number;
+  /** brains with a Run in progress */
+  running: number;
+  /** brains whose setup is recorded as setting-up */
+  born: number;
+  /** ddd-changelog entries stamped in the last 30 days, summed; null = no brain reported it */
+  learned: number | null;
+  learnedBrains: number;
+  /** dormant or archived knowledge entries, summed */
+  sinking: number;
+  /** last 30 days: Runs that landed, and Runs that finished (landed or not) */
+  landed: number;
+  finished: number;
+  /** Runs running now (all lanes are the chat tab today) */
+  liveRuns: number;
+}
 
-export function hubSummary(brains: BrainSummary[]): HubSummary {
+export interface HubNeed {
+  brain: string;
+  kind: 'run' | 'proposals';
+  id: string;
+  text: string;
+  /** ISO time it started waiting (Runs only) */
+  since: string | null;
+}
+
+/** Every item across all brains that waits for a person, oldest Run first, then proposals. */
+export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined): HubNeed[] {
+  const known = new Set(brains.map((b) => b.name));
+  const runs: HubNeed[] = [];
+  for (const g of a?.byProject ?? []) {
+    if (!known.has(g.project)) continue;
+    for (const r of g.runs) {
+      if (!r.needsYou) continue;
+      const why = r.pauseKind === 'decision' ? 'question' : r.pauseKind === 'stopped' ? 'stopped' : 'waiting';
+      runs.push({ brain: g.project, kind: 'run', id: r.id, text: `Run ${why}: ${r.requirement || r.id}`, since: r.updatedAt || null });
+    }
+  }
+  runs.sort((x, y) => (x.since || '').localeCompare(y.since || ''));
+  const props: HubNeed[] = brains.filter((b) => (b.health.pending ?? 0) > 0).map((b) => ({
+    brain: b.name, kind: 'proposals', id: `${b.name}-proposals`,
+    text: `${b.health.pending} rule proposal${b.health.pending === 1 ? '' : 's'} to review`, since: null,
+  }));
+  return [...runs, ...props];
+}
+
+export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null): HubSummary {
+  const known = new Set(brains.map((b) => b.name));
+  const runs = (a?.byProject ?? []).filter((g) => known.has(g.project)).flatMap((g) => g.runs);
+  const reported = brains.filter((b) => typeof b.recentActivity === 'number');
   return {
     brains: brains.length,
-    needsYou: brains.reduce((s, b) => s + (b.health.pending ?? 0), 0),
-    live: brains.filter((b) => b.health.liveRun).length,
+    needsYou: runs.filter((r) => r.needsYou).length + brains.reduce((s, b) => s + (b.health.pending ?? 0), 0),
+    running: brains.filter((b) => b.health.liveRun).length,
+    born: brains.filter((b) => b.setupState === 'setting-up').length,
+    learned: reported.length ? reported.reduce((s, b) => s + (b.recentActivity ?? 0), 0) : null,
+    learnedBrains: reported.filter((b) => (b.recentActivity ?? 0) > 0).length,
+    sinking: brains.reduce((s, b) => s + (b.health.sinking ?? 0), 0),
+    landed: runs.filter((r) => r.status === 'completed' && r.verified !== false).length,
+    finished: runs.filter((r) => r.status !== 'running').length,
+    liveRuns: runs.filter((r) => r.status === 'running').length,
   };
+}
+
+export type BrainSignalTone = 'error' | 'primary' | 'warning' | 'muted';
+export interface BrainSignal { tone: BrainSignalTone; text: string; rank: number }
+
+/** The ONE most urgent thing to say about a brain on its Hub card, and its sort rank. */
+export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): BrainSignal {
+  const runs = a?.byProject.find((g) => g.project === b.name)?.runs ?? [];
+  const runNeeds = runs.filter((r) => r.needsYou).length;
+  const pending = b.health.pending ?? 0;
+  if (runNeeds) return { tone: 'error', rank: 0, text: runNeeds === 1 ? 'A Run needs you' : `${runNeeds} Runs need you` };
+  if (pending) return { tone: 'error', rank: 0, text: `${pending} proposal${pending === 1 ? '' : 's'} to review` };
+  if (b.health.liveRun) return { tone: 'primary', rank: 1, text: 'Run in progress' };
+  if (b.setupState === 'setting-up') return { tone: 'warning', rank: 2, text: 'Being born' };
+  const last = b.health.lastChangeRelative;
+  return { tone: 'muted', rank: 3, text: last && last !== '--' ? `Last landed ${last}` : 'No landed change in 30 days' };
 }

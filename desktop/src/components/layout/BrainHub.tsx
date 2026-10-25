@@ -18,8 +18,9 @@
  *
  * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
  *
- * Brain map (2026-10-25): the Gallery opens with a Hub map (BrainHubMap: every
- * brain feeding the one Run Conductor), and a brain opens on its Map view
+ * Brain map (2026-10-25): the Gallery is the Hub home (BrainHubHome: a summary row
+ * whose counts filter the cards, one Needs-you queue, one card per brain, and a
+ * Conductor / Eval footer), and a brain opens on its Map view
  * (BrainMapView: the DDD flower, Project Agent, Conductor, Reflect, Eval, plus a
  * Needs-you / Project Agent / Runs / Reflect / Eval panel). `defaultView` picks the
  * first detail view (default 'map').
@@ -40,8 +41,8 @@ import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
-import { BrainMapView } from './BrainMapView';
-import { BrainHubMap } from './BrainHubMap';
+import { BrainMapView, type MapPanel } from './BrainMapView';
+import { BrainHubHome } from './BrainHubHome';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -116,6 +117,8 @@ export function BrainHub(
   const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
   const [detailView, setDetailView] = useState<DetailView>(defaultView);
+  // the Brain map panel to open on (Hub home: Add knowledge / a Run that needs you)
+  const [mapPanel, setMapPanel] = useState<MapPanel | undefined>(undefined);
 
   // Cached gallery list (run_cfb460ac): re-opening the overlay within the 30s window
   // is instant instead of paying the ~4s aggregate scan again. `refetch` powers Retry.
@@ -129,9 +132,10 @@ export function BrainHub(
   // (useBrainsWithPinned above); a brain's detail is fetched lazily only when opened.
 
   // Enter the detail shell on a specific brain, at a specific view (default Overview).
-  const openBrain = useCallback((name: string, view: DetailView = defaultView) => {
+  const openBrain = useCallback((name: string, view: DetailView = defaultView, panel?: MapPanel) => {
     setSelected(name);
     setDetailView(view);
+    setMapPanel(panel);
     setMode('detail');
   }, [defaultView]);
   const backToGallery = useCallback(() => { setMode('gallery'); }, []);
@@ -167,7 +171,8 @@ export function BrainHub(
     return (
       <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
         <div className="flex-1 overflow-auto">
-          <Gallery brains={brains} pinned={pinned} onOpen={openBrain} />
+          <Gallery brains={brains} pinned={pinned}
+            onOpen={(n, t) => openBrain(n, t?.view ?? defaultView, t?.panel)} />
         </div>
       </div>
     );
@@ -187,6 +192,7 @@ export function BrainHub(
       onBack={backToGallery}
       onRequestClose={onRequestClose}
       onDispatch={onDispatch}
+      mapPanel={mapPanel}
       liveRun={brains?.find((b) => b.name === selected)?.health.liveRun ?? false}
     />
   );
@@ -197,12 +203,13 @@ export function BrainHub(
  *  Replaces the old top-level TabBtn row + the inner [Overview|Browse] toggle — one
  *  consistent 4-peer bar for every brain (item 5). */
 function BrainDetailShell(
-  { name, brains, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, liveRun }:
+  { name, brains, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, liveRun, mapPanel }:
   {
     name: string; brains: BrainSummary[] | null;
     detailView: DetailView; onSelectView: (v: DetailView) => void;
     onSwitchBrain: (n: string) => void; onBack: () => void;
     onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; liveRun?: boolean;
+    mapPanel?: MapPanel;
   },
 ) {
   // Review sub-tab badge: the pending count from the cheap gallery summary (zero
@@ -266,7 +273,8 @@ function BrainDetailShell(
 
       <div className="flex-1 overflow-auto">
         {detailView === 'map' && (
-          <BrainMapView name={name} onGoTo={onSelectView} onDispatch={onDispatch} onRequestClose={onRequestClose} />
+          <BrainMapView name={name} onGoTo={onSelectView} onDispatch={onDispatch} onRequestClose={onRequestClose}
+            initialPanel={mapPanel} />
         )}
         {detailView === 'overview' && (
           <BrainView
@@ -394,58 +402,20 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
 
 // ── Gallery ──────────────────────────────────────────────────────────────────
 
-/** A compact card straight from a BrainSummary (cheap — no detail fetch).
- *  `isSelf` (run_d0cd4414) threads THROUGH this wrapper into DddCard — the Gallery
- *  renders CompactBrain (not DddCard directly), so the self-marker prop must be
- *  forwarded here or it silently drops. */
-function CompactBrain({ b, isSelf, onOpen }: { b: BrainSummary; isSelf?: boolean; onOpen: (n: string) => void }) {
-  return (
-    <DddCard density="compact" name={b.name} kind={b.kind}
-      lifecycleStage={b.lifecycleStage}
-      health={b.health} typeCounts={b.typeCounts} description={b.description}
-      isSelf={isSelf} onOpen={onOpen} />
-  );
-}
-
 /**
- * Flat card wall (run_d0cd4414): ONE 3-per-row grid, every brain an equal compact
- * card — no hero, no needs/calm zones, no second getBrainDetail fetch (the gallery
- * makes exactly one call: useBrainsWithPinned). SwarmAI is pinned FIRST via
- * `pinned[0]` (backend get_pinned_projects, always SwarmAI, existence-guarded) and
- * is the ONLY differentiated card (violet top-border + SELF·OS tag via isSelf).
- * A needs card (pending>0) still self-signals with its amber left-border inside the
- * wall. Degrades: pinned empty (old daemon) → SwarmAI simply isn't hoisted/marked,
- * the wall renders in the brains' natural order.
+ * Brain Hub home (2026-10-25 redesign): summary row + one queue + one card per Brain,
+ * in BrainHubHome. SwarmAI is marked as the self Brain via `pinned[0]` (backend
+ * get_pinned_projects, existence-guarded); pinned empty (old daemon) → no marker.
  */
 function Gallery(
   { brains, pinned, onOpen }:
-  { brains: BrainSummary[] | null; pinned: string[]; onOpen: (n: string) => void },
+  { brains: BrainSummary[] | null; pinned: string[];
+    onOpen: (n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => void },
 ) {
-  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains…</div>;
+  if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains</div>;
   if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
-
-  // SwarmAI-first ordering, data-driven (pinned[0]), NOT a hardcoded name. The self
-  // card is hoisted to the front; the rest keep their incoming order. If pinned is
-  // empty or its brain isn't in the list (old daemon), selfName is undefined → no
-  // hoist, no marker (graceful degrade).
   const selfName = pinned[0] && brains.some((b) => b.name === pinned[0]) ? pinned[0] : undefined;
-  const ordered = selfName
-    ? [brains.find((b) => b.name === selfName)!, ...brains.filter((b) => b.name !== selfName)]
-    : brains;
-
-  return (
-    <div className="p-4" data-testid="brainhub-gallery">
-      <div className="mb-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2">
-        <div className="px-1 text-small font-semibold">Your Brains</div>
-        <BrainHubMap brains={ordered} selfName={selfName} onOpen={onOpen} />
-      </div>
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }} data-testid="brainhub-card-wall">
-        {ordered.map((b) => (
-          <CompactBrain key={b.name} b={b} isSelf={b.name === selfName} onOpen={onOpen} />
-        ))}
-      </div>
-    </div>
-  );
+  return <BrainHubHome brains={brains} selfName={selfName} onOpen={onOpen} />;
 }
 
 

@@ -96,6 +96,9 @@ export interface BrainSummary {
    *  scan). OPTIONAL for daemon-skew: an old daemon / a brain without a description in
    *  aim.json omits it → the card simply renders no briefing line. */
   description?: string;
+  /** ddd-changelog entries stamped in the last 30 days (the Hub's LEARNED total).
+   *  OPTIONAL for daemon skew: an old daemon omits it and the Hub shows UNKNOWN. */
+  recentActivity?: number;
 }
 
 export interface SectionMember {

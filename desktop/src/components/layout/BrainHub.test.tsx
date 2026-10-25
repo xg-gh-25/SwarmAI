@@ -24,6 +24,8 @@ import type { BrainSummary, BrainDetail } from '../../services/ddd';
 const mockInvalidate = vi.fn();
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: mockInvalidate }),
+  // the Hub home's 30-day pipeline analytics: none in these tests
+  useQuery: () => ({ data: undefined }),
 }));
 
 const mockGetBrains = vi.fn();
@@ -248,25 +250,21 @@ describe('BrainHub — Gallery (AC3)', () => {
     expect(wall.querySelector('[data-testid="dddcard-AIDLC"]')).toBeTruthy();
   });
 
-  it('SwarmAI is FIRST + carries the SELF·OS marker; a normal brain does not (AC2)', async () => {
+  it('SwarmAI carries the SELF marker; a normal brain does not (AC2)', async () => {
     mockGetPinned.mockReturnValue(['SwarmAI']);
     render(<BrainHub defaultView="overview" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
-    const cards = screen.getAllByTestId(/^dddcard-/);
-    expect(cards[0].getAttribute('data-testid')).toBe('dddcard-SwarmAI');  // hoisted first
-    // self-marker lives on the SwarmAI card only
-    const swarm = screen.getByTestId('dddcard-SwarmAI');
-    expect(swarm.querySelector('[data-testid="dddcard-self-tag"]')).toBeTruthy();
-    const aidlc = screen.getByTestId('dddcard-AIDLC');
-    expect(aidlc.querySelector('[data-testid="dddcard-self-tag"]')).toBeNull();
+    expect(screen.getByTestId('hub-card-SwarmAI').querySelector('[data-testid="dddcard-self-tag"]')).toBeTruthy();
+    expect(screen.getByTestId('hub-card-AIDLC').querySelector('[data-testid="dddcard-self-tag"]')).toBeNull();
   });
 
-  it('a needs card (pending>0) keeps its amber left-border inside the wall — no zone (AC3)', async () => {
+  it('a brain with proposals says so on its card and comes first (Hub home)', async () => {
     render(<BrainHub defaultView="overview" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
-    // AIDLC pending=2 → amber left accent on the card itself, still a wall child
-    expect(screen.getByTestId('dddcard-AIDLC').className).toContain('border-l-[var(--color-status-warning)]');
-    expect(screen.queryByTestId('brainhub-needs-zone')).toBeNull();
+    // AIDLC pending=2 -> its one signal is the proposals, and it leads the wall
+    expect(screen.getByTestId('hub-signal-AIDLC').textContent).toBe('2 proposals to review');
+    const wall = screen.getByTestId('brainhub-card-wall');
+    expect(wall.firstElementChild?.getAttribute('data-testid')).toBe('hub-card-AIDLC');
   });
 
   it('a CALM gallery card no longer shows the redundant-ink widgets (presence / 2×2 cheap grid)', async () => {
@@ -275,8 +273,8 @@ describe('BrainHub — Gallery (AC3)', () => {
     // SwarmAI is pending==0 → calm card → presence bar + boxed cheap grid are GONE
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
     expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
-    // calm card keeps its muted meta line (lifecycle · last-change) and stays clickable
-    expect(screen.getByTestId('dddcard-SwarmAI').textContent).toContain('2h ago');
+    // the card keeps its one signal line (SwarmAI: a Run in progress) and stays clickable
+    expect(screen.getByTestId('dddcard-SwarmAI').textContent).toContain('Run in progress');
   });
 
   it('renders NO recall-heat / crown / ref_count number anywhere (R30#4)', async () => {

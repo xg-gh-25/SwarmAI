@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import type { BrainDetail, ReviewData } from '../../services/ddd';
 import type { PipelineAnalytics, PipelineRunSummary } from '../../services/pipelines';
-import { sectionCounts, projectRuns, runTone, needsYouItems, brainEval, hubSummary } from './brainMapModel';
+import { sectionCounts, projectRuns, runTone, needsYouItems, brainEval, hubSummary, hubNeeds, brainSignal } from './brainMapModel';
 
 const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   id: 'run_a', requirement: 'Fix it', status: 'completed', profile: 'bugfix', progress: '8/8',
@@ -83,8 +83,51 @@ describe('brainMapModel', () => {
     expect(empty.brain.sinking).toBeNull();
   });
 
-  it('hubSummary totals pending and live brains', () => {
-    const b = (pending: number, liveRun: boolean) => ({ health: { pending, liveRun, sinking: 0, lastChangeRelative: '' } });
-    expect(hubSummary([b(2, true), b(0, false), b(1, true)] as never)).toEqual({ brains: 3, needsYou: 3, live: 2 });
+  const brain = (name: string, o: Record<string, unknown> = {}, h: Record<string, unknown> = {}) => ({
+    name, kind: 'knowledge', lifecycleStage: 'GROW', sectionsPresent: {},
+    health: { pending: 0, liveRun: false, sinking: 0, lastChangeRelative: '--', ...h }, ...o,
+  }) as never;
+  const an = (groups: Record<string, PipelineRunSummary[]>) => ({
+    window: '30d', trend: [], overall: {} as never,
+    byProject: Object.entries(groups).map(([project, runs]) => ({ project, runs } as never)),
+  }) as PipelineAnalytics;
+
+  it('hubSummary: Need you counts Runs waiting plus proposals; Learned sums what brains report', () => {
+    const brains = [
+      brain('A', { recentActivity: 5, setupState: 'setting-up' }, { pending: 2, liveRun: true, sinking: 3 }),
+      brain('B', { recentActivity: 0 }, { sinking: 4 }),
+      brain('C'),
+    ];
+    const a = an({
+      A: [run({ needsYou: true, status: 'running' }), run({ id: 'r2' }), run({ id: 'r3', verified: false })],
+      Gone: [run({ id: 'x', needsYou: true })],  // not a known brain: not counted
+    });
+    expect(hubSummary(brains, a)).toEqual({
+      brains: 3, needsYou: 3, running: 1, born: 1, learned: 5, learnedBrains: 1, sinking: 7,
+      landed: 1, finished: 2, liveRuns: 1,
+    });
+    // no brain reports recentActivity (old daemon) -> UNKNOWN, never 0
+    expect(hubSummary([brain('C')], null).learned).toBeNull();
+  });
+
+  it('hubNeeds: Runs waiting on you oldest first, then each brain with proposals', () => {
+    const a = an({ A: [
+      run({ id: 'new', needsYou: true, pauseKind: 'decision', requirement: 'Pick a column', updatedAt: '2026-10-25T00:00:00Z' }),
+      run({ id: 'old', needsYou: true, pauseKind: 'stopped', requirement: 'Resume me', updatedAt: '2026-10-20T00:00:00Z' }),
+    ] });
+    const items = hubNeeds([brain('A'), brain('B', {}, { pending: 1 })], a);
+    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'B-proposals']);
+    expect(items[1].text).toBe('Run question: Pick a column');
+    expect(items[2]).toMatchObject({ brain: 'B', kind: 'proposals', text: '1 rule proposal to review' });
+  });
+
+  it('brainSignal picks the one most urgent thing: needs you > running > being born > last change', () => {
+    const a = an({ A: [run({ needsYou: true })] });
+    expect(brainSignal(brain('A', {}, { liveRun: true }), a)).toMatchObject({ tone: 'error', rank: 0, text: 'A Run needs you' });
+    expect(brainSignal(brain('B', {}, { pending: 2 }), a).text).toBe('2 proposals to review');
+    expect(brainSignal(brain('C', { setupState: 'setting-up' }, { liveRun: true }), a)).toMatchObject({ tone: 'primary', rank: 1 });
+    expect(brainSignal(brain('D', { setupState: 'setting-up' }), a)).toMatchObject({ tone: 'warning', text: 'Being born' });
+    expect(brainSignal(brain('E', {}, { lastChangeRelative: '2h ago' }), a).text).toBe('Last landed 2h ago');
+    expect(brainSignal(brain('F'), a)).toMatchObject({ tone: 'muted', rank: 3, text: 'No landed change in 30 days' });
   });
 });

@@ -700,13 +700,49 @@ class TestUnifiedBrainStateBuilder:
         assert h["recentActivity"] == 0
 
     def test_gallery_omits_recent_activity(self, monkeypatch, tmp_path):
-        """recentActivity is a DETAIL metric — gallery (with_noise=False) stays the
-        cheap 4-key base, never gains it (Principle-1 / perf: gallery is minimal)."""
+        """recentActivity is not a health key on the gallery (with_noise=False): the
+        cheap 4-key health base stays exact (Principle-1 / perf: gallery is minimal)."""
         from routers import ddd_brain as m
         pd = tmp_path / "P"
         (pd / ".artifacts").mkdir(parents=True)
         h = m.build_brain_state(pd, with_noise=False)["health"]
         assert "recentActivity" not in h
+
+    def test_recent_activity_is_a_sibling_on_both_densities(self, monkeypatch, tmp_path):
+        """The Hub's LEARNED total reads recentActivity from the gallery: a top-level
+        sibling of health (like typeCounts), the same number detail health carries."""
+        from routers import ddd_brain as m
+        import json as _json
+        from datetime import datetime, timedelta, timezone
+
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        now = datetime.now(timezone.utc)
+        rows = [now.isoformat(), now.isoformat(), (now - timedelta(days=40)).isoformat(), ""]
+        (pd / ".artifacts" / "ddd-changelog.jsonl").write_text(
+            "\n".join(_json.dumps({"timestamp": t}) for t in rows) + "\n[1]\n", encoding="utf-8")
+        gallery = m.build_brain_state(pd, with_noise=False)
+        detail = m.build_brain_state(pd, with_noise=True)
+        assert gallery["recentActivity"] == 2
+        assert detail["recentActivity"] == 2 == detail["health"]["recentActivity"]
+
+    def test_placeholder_description_reads_as_none(self, tmp_path):
+        """The create-time aim.json description describes the format, not the Brain:
+        the card shows 'no description yet' instead of repeating it on every card."""
+        from routers import ddd_brain as m
+        from core.swarm_workspace_manager import DEFAULT_AIM_DESCRIPTION
+        import json as _json
+
+        pd = tmp_path / "Payments"
+        pd.mkdir()
+        aim = pd / "aim.json"
+        aim.write_text(_json.dumps({"description": DEFAULT_AIM_DESCRIPTION.replace("{project_name}", "Payments")}))
+        assert m._read_description(pd) is None
+        aim.write_text(_json.dumps({"description": "Card payments and refunds"}))
+        assert m._read_description(pd) == "Card payments and refunds"
+        # another Brain's placeholder text is not this Brain's placeholder: kept as written
+        aim.write_text(_json.dumps({"description": DEFAULT_AIM_DESCRIPTION.replace("{project_name}", "Other")}))
+        assert m._read_description(pd) is not None
 
     def _mk_typed_doc(self, pd):
         """A ② canonical doc with typed entries spanning all 3 layers. Canonical

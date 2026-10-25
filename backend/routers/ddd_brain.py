@@ -584,11 +584,13 @@ def build_brain_state(
     stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
     health = _brain_health_base(project_dir, present, pending, sinking=stats["sinking"],
                                 run_facts=run_facts)
+    recent = _recent_activity(project_dir)
     if with_noise:
         # Thread the already-computed `pending` into the detail metrics so
         # escalationPending reuses it instead of a SECOND _pending_count() scan
         # (the per-open double-scan; _pending_count → collect() is the expensive leg).
-        health.update(_brain_detail_metrics(project_dir, parsed=parsed, pending=pending))
+        health.update(_brain_detail_metrics(project_dir, parsed=parsed, pending=pending,
+                                            recent_activity=recent))
     # On the detail path `parsed` is in hand — reuse its entry count instead of
     # a third re-parse inside _lifecycle_stage (_entry_count re-reads the same ②
     # docs). sum-over-parsed == _entry_count(project_dir): both iterate _KNOWLEDGE_DOCS
@@ -605,12 +607,55 @@ def build_brain_state(
         "setupState": read_setup_state(project_dir),
         "health": health,
         "typeCounts": stats["typeCounts"],
+        # ddd-changelog entries stamped in the last 30 days. A sibling of health (like
+        # typeCounts) so the gallery's 4-key health contract holds; detail health
+        # carries the same number as health.recentActivity (one computation).
+        "recentActivity": recent,
     }
+
+
+def _recent_activity(project_dir: Path) -> int:
+    """recentActivity — Q3 "is it growing?" (value≠size). Count of ddd-changelog
+    entries STAMPED within the last 30d. This is a SEDIMENTATION signal (is the
+    brain being actively written to?), NOT a size/entry_count (Principle-1: a
+    bigger brain is not a better one; an ACTIVELY-CULTIVATED one is). NOTE: this
+    is DOMINANTLY auto-applied cultivation, not human edits (E2E audit run_d1e933aa:
+    ~820/851 on SwarmAI carry action:"applied") — so the UI labels it "sediments",
+    never "edits", to avoid overstating human authorship. Absent changelog →
+    honest 0, never fabricated, never None.
+
+    Deliberately NOT via _build_changelog_index: that helper counts UNDATED
+    entries as in-window (ts is None → counted), which would let timestamp-less
+    legacy rows inflate a "last 30d" number. A "30d activity" figure must count ONLY
+    entries whose real timestamp is within 30d; undated rows are excluded.
+
+    One read of one jsonl per Brain, so the gallery can carry it too (Hub LEARNED).
+    """
+    count = 0
+    try:
+        cl = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+        if cl.is_file():
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            for line in cl.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(json.loads(line).get("timestamp", ""))
+                except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
+                    continue  # undated / malformed → NOT counted as recent
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                if ts >= cutoff:
+                    count += 1
+    except (OSError, ValueError):  # never 500 a brain view
+        return 0
+    return count
 
 
 def _brain_detail_metrics(
     project_dir: Path, parsed: Optional[dict[str, list[EntryMetadata]]] = None,
-    pending: Optional[int] = None,
+    pending: Optional[int] = None, recent_activity: Optional[int] = None,
 ) -> dict:
     """The DETAIL-only, admission-passing DDD health metrics (per-open).
 
@@ -696,40 +741,7 @@ def _brain_detail_metrics(
     except (OSError, ValueError, ImportError):  # never 500 a brain view on health read
         cultivation = None
 
-    # recentActivity — Q3 "is it growing?" (value≠size). Count of ddd-changelog
-    # entries STAMPED within the last 30d. This is a SEDIMENTATION signal (is the
-    # brain being actively written to?), NOT a size/entry_count (Principle-1: a
-    # bigger brain is not a better one; an ACTIVELY-CULTIVATED one is). NOTE: this
-    # is DOMINANTLY auto-applied cultivation, not human edits (E2E audit run_d1e933aa:
-    # ~820/851 on SwarmAI carry action:"applied") — so the UI labels it "sediments",
-    # never "edits", to avoid overstating human authorship. Absent changelog →
-    # honest 0, never fabricated, never None.
-    #
-    # Deliberately NOT via _build_changelog_index: that helper counts UNDATED
-    # entries as in-window (ts is None → counted), which would let timestamp-less
-    # legacy rows inflate a "last 30d" number — a mild fabrication the adversarial
-    # review flagged. A "30d activity" figure must count ONLY entries whose real
-    # timestamp is within 30d; undated rows are excluded (honest under-count beats
-    # dishonest inflation).
-    recent_activity = 0
-    try:
-        cl = project_dir / ".artifacts" / "ddd-changelog.jsonl"
-        if cl.is_file():
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-            for line in cl.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ts = datetime.fromisoformat(json.loads(line).get("timestamp", ""))
-                except (ValueError, TypeError, json.JSONDecodeError):
-                    continue  # undated / malformed → NOT counted as recent
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                if ts >= cutoff:
-                    recent_activity += 1
-    except (OSError, ValueError):  # never 500 a brain view
-        recent_activity = 0
+    recent_activity = recent_activity if recent_activity is not None else _recent_activity(project_dir)
 
     return {
         "noise": noise,
@@ -830,7 +842,10 @@ def _read_description(project_dir: Path) -> Optional[str]:
     (same aim.json file _read_kind reads — one small extra read_text per project, not
     a tree scan). Returns None when aim.json is absent/unreadable/malformed or the
     field is missing/non-string, so the gallery card cleanly omits the briefing line
-    (daemon-skew safe)."""
+    (daemon-skew safe). The create-time placeholder (DEFAULT_AIM_DESCRIPTION, exact
+    match) also reads as None: it describes the format, not the Brain."""
+    from core.swarm_workspace_manager import DEFAULT_AIM_DESCRIPTION
+
     aim = project_dir / "aim.json"
     if aim.exists():
         try:
@@ -839,7 +854,10 @@ def _read_description(project_dir: Path) -> Optional[str]:
             data = json.loads(aim.read_text(encoding="utf-8"))
             desc = data.get("description") if isinstance(data, dict) else None
             if isinstance(desc, str) and desc.strip():
-                return desc.strip()
+                desc = desc.strip()
+                if desc == DEFAULT_AIM_DESCRIPTION.replace("{project_name}", project_dir.name):
+                    return None
+                return desc
         except (OSError, ValueError):
             pass
     return None

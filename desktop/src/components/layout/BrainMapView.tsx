@@ -41,14 +41,16 @@ function Mock() {
 }
 function openPipelines() { window.dispatchEvent(new CustomEvent('swarm:show-pipeline')); }
 
-export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
+export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose, initialPanel = 'need' }: {
   name: string;
   onGoTo: (view: 'browse' | 'review') => void;
   onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
   /** Close the Brain Hub so the chat tab that received a dispatch is visible. */
   onRequestClose?: () => void;
+  /** The panel to open on (the Hub home's Add knowledge opens on 'add'). */
+  initialPanel?: MapPanel;
 }) {
-  const [panel, setPanel] = useState<MapPanel>('need');
+  const [panel, setPanel] = useState<MapPanel>(initialPanel);
   const { data: detail = null } = useBrainDetail(name);
   const { data: review = null } = useReview(name);
   const { data: analytics = null } = useQuery<PipelineAnalytics>({

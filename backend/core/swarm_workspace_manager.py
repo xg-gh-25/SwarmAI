@@ -494,6 +494,10 @@ _Nothing currently blocking._
 #
 # ② KNOWLEDGE (4 DDD_TEMPLATES docs + Knowledge/) is handled by the workspace;
 # ⑤ DELIVERY CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE.
+# The aim.json description a new Brain starts with. It says nothing about the Brain,
+# so readers that show a briefing (the Brain Hub card) treat it as "no description".
+DEFAULT_AIM_DESCRIPTION = "DDD package for {project_name} (six-section canonical structure)."
+
 SECTION_SCAFFOLD: dict[str, str] = {
     # ── ① IDENTITY & MANIFEST ────────────────────────────────────────────────
     # aim.json.plugins declares the 3 default DDD-native skills (D3) — the SAME
@@ -505,7 +509,7 @@ SECTION_SCAFFOLD: dict[str, str] = {
     "aim.json": """{
   "name": "{project_name}",
   "ddd_spec_version": "1.0",
-  "description": "DDD package for {project_name} (six-section canonical structure).",
+  "description": \"""" + DEFAULT_AIM_DESCRIPTION + """\",
   "plugins": {
     "native_skills": [
       "s_ddd-manager",
