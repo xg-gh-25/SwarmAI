@@ -3,7 +3,7 @@ title: What a session produced reaches the user (any task, any location, any kin
 date: 2026-10-26
 created: 2026-10-26
 updated: 2026-10-26
-status: v4 draft (rebuilt after the v3 skeptic review, verdict needs redesign); no code yet
+status: v4 accepted; steps 1-4 implemented (0d3ad8802, 5c41892d6, 433710789 + 7b877d1c7, 6f62c3a55), awaiting Gawan's light/dark check; step 5 (spec v6) pending
 ---
 
 # What a session produced reaches the user
@@ -97,23 +97,25 @@ WORKING group ends there, and calls after it start a new group below. Consequenc
 - Phase and segment levels are unchanged; this adds one zone kind, not a level.
 - A products zone shows one row per product: a file as the existing `DocCard` look (type
   badge, name, path, Open in Canvas); a remote product as `action · target`, the URL as a
-  link when present. Several files from one call: one row `N files · a.md, b.md`,
-  expanding to one row each (v6 bans `… N more`, not a counted merge).
+  link when present. Several files from one call are one row each.
 - Attention tier `know`, tone neutral (no success colour).
-- A sub-agent's product appears inside the Agents panel, under that agent's line, not as a
-  first-level row (the panel is where the sub-agent's work is).
+- A sub-agent's product is not drawn in the turn; it is on the output card. (Built that
+  way, 2026-10-26: the design first drew it under the agent's line in the Agents panel,
+  which needs the panel to own product rows; deferred until a turn shows the need.)
 
 Spec v6 §2.3 gains "a product" in its list of first-level elements that end a group.
 
 ### 3.2 The output card
 
-For a turn with `turn_product` blocks, the card's product list is derived from them: each
-file once (by `absolutePath`), each remote product once. A product shown in the turn is
-on the card by name only (no excerpt), so the card stays the one complete list for the
-turn and the in-turn row is where it happened. `turn_changes` (code files) and the landing
-section are unchanged. A turn whose only products are remote now has a card.
-`turn_deliverables` keeps being written for old readers and is read only for turns
-without `turn_product` blocks.
+The card's files are the turn's `turn_deliverables` (unchanged, so a file written and
+then deleted in the turn is still left off); a file that also has an in-turn product row
+is marked `shown above`. Remote products come from the turn's `turn_product` blocks; the
+top-level ones are marked `shown above`, a sub-agent's are the card only. Both sources
+are the same `file_changed` events through one kind set (`turn_products.
+PRODUCT_FILE_KINDS`, also the router's `_DELIVERABLE_KINDS`). `turn_changes` (code files)
+and the landing section are unchanged. A turn whose only products are remote now has a
+card. (Built that way, 2026-10-26: the design derived the card's files from
+`turn_product` blocks, which carry no later deletion; `turn_deliverables` does.)
 
 ### 3.3 Canvas rail: session worktrees
 
