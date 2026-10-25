@@ -154,7 +154,27 @@ async def session_state_entry(unit) -> dict:
         # Background agents (core/background_agents.py) of this daemon run: the
         # live status is also pushed as `background_agents` envelopes on /events.
         "background_agents": bg_snapshot(unit),
+        # steers written into the running turn and not yet read, and the turn's
+        # segment keys (design chat-steer D5): only when there are any, so a turn
+        # without a steer keeps the snapshot it always had
+        **_steer_snapshot(unit),
     }
+
+
+def _steer_snapshot(unit) -> dict:
+    out: dict = {}
+    reader = getattr(unit, "_stream_reader", None)
+    rows = getattr(unit, "_steer_rows", None) or {}
+    waiting = {ts.uuid for ts in (reader._claims.values() if reader is not None else ())
+               if getattr(ts, "kind", None) == "steer"}
+    steering = [{"client_id": cid, "preview": preview}
+                for uuid, (_row, cid, preview) in rows.items() if uuid in waiting]
+    if steering:
+        out["steering"] = steering
+    segments = getattr(unit, "_turn_segments", None)
+    if isinstance(segments, list) and segments:
+        out["segments"] = list(segments)
+    return out
 
 
 

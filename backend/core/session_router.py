@@ -26,7 +26,7 @@ import time
 from core.awake_clock import awake_time  # liveness durations exclude sleep
 from collections import deque
 from contextlib import aclosing
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import re
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
@@ -1968,6 +1968,18 @@ _CLAUDE_NATIVE_MIMES = {
     # Documents (PDF only)
     "application/pdf",
 }
+
+
+async def _convert_attachment_blocks(query_content: Any, session_id: Optional[str]) -> Any:
+    """The attachments of a message as the CLI can take them: with no SDK multimodal
+    support every image / document block becomes a path hint, otherwise only the
+    non-native ones (office docs, audio, video). Files go to Attachments/. A send
+    and a steer (design chat-steer D2, H6) both deliver through here."""
+    if not isinstance(query_content, list):
+        return query_content
+    if not _SDK_SUPPORTS_MULTIMODAL:
+        return await _convert_unsupported_blocks_to_path_hints(query_content, session_id)
+    return await _convert_non_native_blocks_to_path_hints(query_content, session_id)
 
 
 async def _convert_non_native_blocks_to_path_hints(
@@ -4165,6 +4177,171 @@ class SessionRouter:
         self.enqueue_drain(session_id)
         self.enqueue_injected(session_id)
 
+    # ── Steer: a message written into the running turn (design chat-steer) ──
+
+    STEER_SETTING = "steer_busy_send"   # app config switch, off until the frontend (P2)
+
+    @classmethod
+    def _steer_enabled(cls) -> bool:
+        try:
+            from .app_config_manager import AppConfigManager
+            return AppConfigManager.instance().get(cls.STEER_SETTING, False) is True
+        except Exception:  # noqa: BLE001 — no config: off
+            return False
+
+    @staticmethod
+    def _steer_blocker(unit: Any) -> Optional[str]:
+        """Why a message to this unit cannot be steered into its running turn now,
+        or None (design chat-steer D1). Synchronous: the write path checks it again
+        right before the claim, with no await in between (H4). The reason is also
+        the queued message's ``queuedReason`` (D7): ``question`` / ``permission``
+        (answer that first) or ``busy``."""
+        from .session_unit import SessionState
+        if unit is None or getattr(unit, "state", None) != SessionState.STREAMING:
+            return "busy"
+        reader = getattr(unit, "_stream_reader", None)
+        if reader is None or reader.error is not None or getattr(unit, "_client", None) is None:
+            return "busy"
+        # the turn's read loop will still read a steer (D6); and it is a user turn,
+        # not one the CLI started (no steer in an injected turn, C)
+        if getattr(unit, "_steer_accepting", False) is not True:
+            return "busy"
+        ts = getattr(unit, "_turn_stream", None)
+        if ts is None or getattr(ts, "kind", None) == "injected":
+            return "busy"
+        if any(getattr(c, "kind", None) != "steer" for c in reader._claims.values()):
+            return "busy"   # another message written and not yet read (a continuation)
+        if unit.has_outstanding_tool_use:
+            q = getattr(unit, "_pending_question", None) or {}
+            return "permission" if q.get("request_id") else "question"
+        if (getattr(unit, "_stopping", False) or getattr(unit, "_interrupted", False)
+                or getattr(unit, "_tool_hang_interrupt_at", None) is not None
+                or getattr(unit, "_retrying", False) or getattr(unit, "_graceful_wrap_pending", False)):
+            return "busy"
+        return None
+
+    async def _try_steer(self, unit: Any, session_id: str, row_id: Optional[str],
+                         client_id: Optional[str], content: Any,
+                         editor_context: Optional[dict],
+                         terminal_context: Optional[dict]) -> bool:
+        """Write the message into the running turn (design chat-steer D2). True: it
+        is on the CLI's stdin as a ``priority: next`` message and its row is a steer
+        in flight; False: nothing written, the caller queues it as before."""
+        from . import session_pending
+        if not (row_id and client_id and content) or not self._steer_enabled():
+            return False
+        if self._steer_blocker(unit) is not None:
+            return False
+        # the message as the CLI takes it, with the prefixes a send carries on a live
+        # process (D2 table): attachments, UI state, terminal outermost; no recall
+        query = await _convert_attachment_blocks(content, session_id)
+        ui_block = _decide_ui_block(unit, editor_context, True)
+        query = _prepend_dynamic_context_to_query(query, editor_context, recall_block=None,
+                                                  should_prefix=True, ui_block=ui_block)
+        query = _prepend_terminal_to_query(query, terminal_context)
+        prefix = "\n\n".join(p for p in (_build_terminal_prefix_block(terminal_context),
+                                          _build_dynamic_prefix_block(editor_context, None,
+                                                                      ui_block=ui_block)) if p)
+        try:
+            inflight = await session_pending.mark_steer_inflight(session_id, row_id)
+        except Exception as exc:  # noqa: BLE001 — queue it as before
+            logger.warning("session_router.steer_mark_failed session_id=%s: %s", session_id, exc)
+            inflight = False
+        if not inflight:
+            unit._last_ui_block = None   # the CLI did not get that block (L4)
+            return False
+        async with unit._client_io:
+            why = self._steer_blocker(unit)        # again, now: no await from here to the claim
+            if why is not None:
+                logger.info("session_router.steer_recheck_queued session_id=%s why=%s", session_id, why)
+                await self._release_steer_row(unit, session_id, row_id, kick=False)
+                return False
+            reader = unit._stream_reader
+            msg_uuid = str(uuid4())
+            preview = (content if isinstance(content, str) else " ".join(
+                b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"))[:200]
+            unit._steer_rows[msg_uuid] = (row_id, client_id, preview)
+            unit._steer_hook = self._on_steer_event
+            reader.claim(msg_uuid, "steer", client_id=client_id)
+            # the SDK user-message shape write_user_message sends, plus priority
+            message = {"type": "user", "message": {"content": query, "role": "user"},
+                       "parent_tool_use_id": None, "uuid": msg_uuid, "priority": "next"}
+
+            async def _one():
+                yield message
+            try:
+                await unit._client.query(_one())
+            except Exception as exc:  # noqa: BLE001 — not written: queue it (T8)
+                logger.warning("session_router.steer_write_failed session_id=%s: %s", session_id, exc)
+                reader.drop_claim(msg_uuid)
+                unit._steer_rows.pop(msg_uuid, None)
+                await self._release_steer_row(unit, session_id, row_id, kick=False)
+                return False
+        if prefix:
+            unit._steer_query_prefixes.append(prefix)
+        logger.info("session_router.steer_written session_id=%s uuid=%s client_id=%s",
+                    session_id, msg_uuid, client_id)
+        self.publish_queue(session_id)   # the snapshot's `steering` list changed
+        return True
+
+    async def _release_steer_row(self, unit: Any, session_id: str, row_id: str, *,
+                                 kick: bool = True) -> Optional[int]:
+        """A steer that was never read goes back to the queue (D2): its row gets a
+        seq, the UI block it carried is forgotten (L4), and the drain is kicked."""
+        from . import session_pending
+        unit._last_ui_block = None
+        seq = await session_pending.release_steer(session_id, row_id)
+        if seq is not None and kick:
+            self.queued_while_busy(session_id)
+        return seq
+
+    def _on_steer_event(self, unit: Any, kind: str, uuid: str, outcome: str,
+                        echo_seen: bool) -> None:
+        """The reader saw a steer's echo, or its end (its task: schedule, never block).
+        Echo: the row is history at the echo time -- before the Stop receipt when the
+        CLI read it while this turn was being stopped (T29). End without an echo: the
+        row goes back to the queue (D2, D8)."""
+        entry = unit._steer_rows.get(uuid)
+        if entry is None:
+            return
+        row_id, client_id, _preview = entry
+        session_id = unit.session_id
+        if kind == "echo":
+            echo_at = datetime.now()
+            stop_at = getattr(unit, "_stop_receipt_at", None)
+            if stop_at is not None and echo_at >= stop_at:
+                echo_at = stop_at - timedelta(microseconds=1)
+            logger.info("session_router.steer_read session_id=%s client_id=%s outcome=%s",
+                        session_id, client_id, outcome)
+            self._spawn_steer_task(self._confirm_steer(session_id, row_id, echo_at.isoformat(), outcome))
+            return
+        unit._steer_rows.pop(uuid, None)
+        if not echo_seen:
+            logger.info("session_router.steer_never_read session_id=%s client_id=%s outcome=%s",
+                        session_id, client_id, outcome)
+            self._spawn_steer_task(self._release_steer_row(unit, session_id, row_id))
+        self.publish_queue(session_id)
+
+    async def _confirm_steer(self, session_id: str, row_id: str, echo_at: str, outcome: str) -> None:
+        from . import session_pending
+        for attempt in (1, 2):   # the row must not stay in flight (H5): one retry, never re-queued
+            try:
+                if not await session_pending.confirm_steer(session_id, row_id, echo_at, outcome):
+                    logger.error("session_router.steer_confirm_no_row session_id=%s row=%s",
+                                 session_id, row_id)
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.error("session_router.steer_confirm_failed session_id=%s row=%s attempt=%d: %s",
+                             session_id, row_id, attempt, exc)
+
+    _STEER_TASKS: "set[asyncio.Task]" = set()
+
+    @classmethod
+    def _spawn_steer_task(cls, coro: Any) -> None:
+        task = asyncio.ensure_future(coro)
+        cls._STEER_TASKS.add(task)
+        task.add_done_callback(cls._STEER_TASKS.discard)
+
     async def _queue_admitted_send(self, receipt: dict, session_id: str,
                                    persisted_msg_id: Optional[str],
                                    terminal_context: Optional[dict]) -> list[dict]:
@@ -4397,8 +4574,19 @@ class SessionRouter:
                 # session's turn now, before the slot, so the wait from here to the
                 # first token is a visible turn. A session that cannot take one (a
                 # turn of it is open, or a Stop is still recycling it) queues the
-                # message instead; that turn's end, or the Stop's, drains it.
+                # message instead; that turn's end, or the Stop's, drains it --
+                # unless it can go into the running turn now (a steer, design
+                # docs/design/2026-10-24-chat-steer.md D1/D2).
                 if opener is not None and not opener.open(session_id, unit):
+                    if not channel_context and await self._try_steer(
+                            unit, session_id, persisted_msg_id, client_id,
+                            content if content else user_message,
+                            editor_context, terminal_context):
+                        receipt["steer"] = True
+                        yield receipt
+                        return
+                    if self._steer_enabled():   # off: the receipt keeps its shape
+                        receipt["queuedReason"] = self._steer_blocker(unit) or "busy"
                     queued_events = await self._queue_admitted_send(
                         receipt, session_id, persisted_msg_id, terminal_context)
                     for _qev in queued_events:
@@ -4727,17 +4915,7 @@ class SessionRouter:
         # When _SDK_SUPPORTS_MULTIMODAL is True, we STILL convert non-native
         # blocks (office docs, audio, video) — Claude API only accepts
         # native images (jpeg/png/gif/webp) and PDF documents natively.
-        if isinstance(query_content, list):
-            if not _SDK_SUPPORTS_MULTIMODAL:
-                # Convert ALL image/document blocks to path hints
-                query_content = await _convert_unsupported_blocks_to_path_hints(
-                    query_content, session_id,
-                )
-            else:
-                # SDK supports multimodal — only convert non-native blocks
-                query_content = await _convert_non_native_blocks_to_path_hints(
-                    query_content, session_id,
-                )
+        query_content = await _convert_attachment_blocks(query_content, session_id)
 
         # ── Resolve user text once (used by recall injection + shadow) ──
         _user_text = user_message or (
@@ -5394,6 +5572,9 @@ class SessionRouter:
         running = TurnWriter.running(session_id)
         if running is not None:
             await running.flush()
+        # a steer the CLI reads from here on belongs to the stopped turn: its row is
+        # placed before this receipt, not between it and the products (T29)
+        unit._stop_receipt_at = datetime.now()
         return await self._persist_assistant_blocks(
             session_id, [block], None, label="turn_stop",
             client_id=self._turn_row_key_of(unit),

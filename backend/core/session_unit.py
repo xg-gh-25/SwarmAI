@@ -992,6 +992,16 @@ class SessionUnit:
         self._turn_row_key: Optional[str] = None
         # every segment key of the running turn, in order (D4, D5)
         self._turn_segments: list[str] = []
+        # Steers written into the running turn (design chat-steer D2): claim uuid →
+        # (user row id, client_id, preview) until the reader reports its end; the
+        # query prefixes they carried (full_text, M7); the router's handler of
+        # their echo / end; when this turn's Stop receipt was written (T29); and
+        # whether the turn's read loop still reads a steer (set by the orchestrator).
+        self._steer_rows: dict[str, tuple] = {}
+        self._steer_query_prefixes: list[str] = []
+        self._steer_hook: Optional[Callable[..., None]] = None
+        self._stop_receipt_at: Optional[Any] = None   # a datetime
+        self._steer_accepting: bool = False
         # The turn's products (content / knowledge files written), by path — read and
         # filled by the router's three loops (main / answer / permission) and emitted
         # as ONE turn_deliverables block at the turn's single `result`. Same lifecycle
@@ -1219,8 +1229,29 @@ class SessionUnit:
             on_error=self._on_reader_error,
             on_task=self._on_reader_task,
             on_bg_frame=self._on_reader_bg_frame,
+            on_steer_echo=lambda uuid, outcome: self._steer_event("echo", uuid, outcome, True),
+            on_steer_end=lambda uuid, outcome, seen: self._steer_event("end", uuid, outcome, seen),
         )
         self._stream_reader.start()
+
+    def _steer_event(self, kind: str, uuid: str, outcome: str, echo_seen: bool) -> None:
+        """Reader callback (its task): a steer's echo or end, handed to the router,
+        which confirms or re-queues its row (design chat-steer D2)."""
+        hook = getattr(self, "_steer_hook", None)
+        if hook is None:
+            return
+        try:
+            hook(self, kind, uuid, outcome, echo_seen)
+        except Exception:  # noqa: BLE001 — a callback must never break the reader
+            logger.exception("session_unit.steer_hook_failed session_id=%s", self.session_id)
+
+    def all_query_prefixes(self) -> Optional[str]:
+        """What this turn delivered on the query channel: its first message's prefix
+        and every steer's (design chat-steer D2, M7: the security panel sees a
+        steer's terminal block too)."""
+        parts = [p for p in (getattr(self, "_delivered_query_prefix", None),
+                             *(getattr(self, "_steer_query_prefixes", None) or [])) if p]
+        return "\n\n".join(parts) if parts else None
 
     def _on_reader_injected(self, ts: Any) -> None:
         """Reader callback: the CLI started a turn nobody claimed."""
@@ -1449,6 +1480,8 @@ class SessionUnit:
         self._turn_client_id = None
         self._turn_row_key = None
         self._turn_segments = []
+        self._steer_query_prefixes = []
+        self._stop_receipt_at = None
         # Same lifecycle: the products of a turn paused for a question / permission
         # ride the unit until that turn's `result` (router continuation loops).
         self._turn_files = {}
@@ -3724,7 +3757,7 @@ class SessionUnit:
                     _base = spm.get("full_text", "") or ""
                     spm["base_full_text"] = _base
                 spm["full_text"] = _compose_full_text(
-                    _base, self._delivered_query_prefix
+                    _base, self.all_query_prefixes()
                 )
                 session_registry.system_prompt_metadata[self.session_id] = spm
                 events.append({"type": "system_prompt_metadata", **spm})
@@ -4068,7 +4101,7 @@ class SessionUnit:
                 _base = options.system_prompt or ""
                 _pending["base_full_text"] = _base
                 _pending["full_text"] = _compose_full_text(
-                    _base, self._delivered_query_prefix
+                    _base, self.all_query_prefixes()
                 )
                 session_registry.system_prompt_metadata[self.session_id] = _pending
                 # One-shot: a later respawn must publish ITS own turn's metadata,

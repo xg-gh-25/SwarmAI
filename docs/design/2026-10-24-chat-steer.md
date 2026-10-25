@@ -85,8 +85,10 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 
 - 桌面 direct session（channel 照旧排队）；
 - unit 活着、有 stream reader、reader 没坏；
-- reader 有 open turn，且它是用户发起的 turn：human turn（含它的 leak / api_retry 续写，以及 D6
-  接着读的 steer 那一轮）。**injected turn 一律不 steer，排队**（v1.6 收窄，C）：后台任务触发的
+- unit 是 STREAMING，`unit._steer_accepting` 为真（原 turn 的读取循环还会接着读 steer，D6），且 unit
+  正在读的流（`_turn_stream`）是用户发起的 turn：human turn（含它的 leak / api_retry 续写，以及 D6
+  接着读的 steer 那一轮）。**不看 reader 的 open turn**（P1 实现时改）：E10 那种在 Result 和下一轮之间
+  写入的 steer，那一刻 reader 没有 open turn，turn 却还在跑、D6 会读它（T21），看 reader 就会误判成排队。**injected turn 一律不 steer，排队**（v1.6 收窄，C）：后台任务触发的
   turn 和 steer 的交互（F6、H-a、M-e）是前三轮问题最多的地方，这一版整块拿掉。代价是 E4 那种场景
   （后台任务回来后 CLI 自己开的 turn）不能 steer，只能排队；
 - reader 里**没有别的等待中的 claim**（已写入但还没开 turn 的 continuation / 别的消息）。
@@ -96,7 +98,8 @@ SDK 0.2.168，CLI 2.1.301，Bedrock。脚本在 `/tmp/steer_script/`（`exp2.py`
 - 不在 Stop 回收中（`unit._stopping`），不在中断中（`_interrupted`、tool-hang 看门狗的
   `_tool_hang_interrupt_at`），不在 API 错误重试中（`_retrying`），没有待执行的 self-heal 收尾
   （`_graceful_wrap_pending`）。`_client_io` 由 D2 写入时持有，不单独判断；
-- 配置开关 `chat.steer_busy_send` 为真（P1 期间默认关，P2 前端上线后打开，§8）。
+- 配置开关 `steer_busy_send`（app config）为真（P1 期间默认关，P2 前端上线后打开，§8）。开关关时回执、
+  快照逐字节不变：`queuedReason`、`steer`、`steering`、`segments` 只在开关开或确有 steer 时出现。
 
 **判断和登记之间不能有 await（H4）。** 顺序：`mark_steer_inflight`（异步 DB 写）→ 同一段同步代码里
 重新判断 D1、`reader.claim` → 写 stdin。重判不通过 → `release_steer_to_pending`，
@@ -183,8 +186,11 @@ UNTRUSTED-DATA，不出现在扫描面板里就是之前 Gate-1 拦过的那类�
 
 不覆盖 `_delivered_query_prefix`（它属于这个 turn 的第一条消息），加进本 turn 的列表
 `_steer_query_prefixes`，拼 `full_text` 时按顺序接在后面；turn 开始时随 `_reset_turn_state` 清空。
-`folded` 和 `opened` 一样：两者都在同一个 turn 里（D6）。为了不让两条路径各拼各的、日后走样，把发送路径里
-"附件转换 + terminal + UI-SENSE"这三步抽成一个函数，发送和 steer 都调它，T18 覆盖。
+`folded` 和 `opened` 一样：两者都在同一个 turn 里（D6）。为了不让两条路径各拼各的、日后走样，两边共用
+同一组函数：附件转换抽成 `_convert_attachment_blocks`（发送路径原样改调它），UI-SENSE、terminal 用已有的
+单一来源 `_decide_ui_block` / `_build_dynamic_prefix_block` / `_build_terminal_prefix_block`，顺序和发送路径
+一样（terminal 在最外）。没有把整段组装抽成一个函数（P1 实现时改）：发送路径的这三步和 recall、resume
+交错，整段抽出要改热路径上的顺序，风险大于收益。T18 覆盖。
 
 **hook（E8）。** CLI 在并入的那一刻对 steer 触发 UserPromptSubmit（紧挨在回显之前），hook 返回的
 `additionalContext` 模型收得到。SwarmAI 注册的五个 UserPromptSubmit hook（`runtime_hooks.py`
@@ -783,6 +789,9 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T29 用 fake 帧序列驱�
   重起，用户看到的行为不变。测试在 `test_turn_limit_reached.py`。
 
 ## 修订记录
+
+- 2026-10-25 v1.12（P1 实现中）：D1 改看 unit（STREAMING、`_steer_accepting`、`_turn_stream` 的种类），
+  不看 reader 的 open turn；开关名 `steer_busy_send`，关时回执和快照不变；T18 改成共用同一组 builder。
 
 - 2026-10-25 v1.11（P1 实现中）：D6 改成 `reader.take_steer()` 取"还没人读的 steer 流"，不只看等着的
   claim（reader 跑在原 turn 前面时 steer 那一轮已经开了）；加 `unit._steer_accepting`，D2 的同步重判读它；
