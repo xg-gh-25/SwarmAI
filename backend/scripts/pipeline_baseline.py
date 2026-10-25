@@ -22,7 +22,7 @@ from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parents[1]
 MIN_RUNS = 5
-PROFILES = ("full", "bugfix", "goal", "trivial", "direct", "research")
+PROFILES = ("full", "bugfix", "trivial", "direct", "research")
 
 
 def _epoch(value) -> "float | None":

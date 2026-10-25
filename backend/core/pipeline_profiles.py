@@ -100,7 +100,7 @@ def is_relaxed_profile(profile: str | None) -> bool:
 # (pipeline_stage_events.checklist), and what decides plan's next row (Gate 1).
 #   gate0 — EVALUATE's skeptic: strict profiles that run EVALUATE (the M3 rigor tier).
 #   gate1 — the plan skeptic before BUILD / the goal's first cycle: strict profiles
-#           with PLAN and BUILD / goal_cycle. artifact_cli.GATE1_PROFILES (the profiles
+#           with PLAN and BUILD. artifact_cli.GATE1_PROFILES (the profiles
 #           whose BUILD refuses a missing verdict) is a subset of these.
 #   gate2 — the adversarial review inside DELIVER: every profile with DELIVER.
 # test_pipeline_run_checklist pins all three rules against the stage lists,
@@ -108,7 +108,6 @@ def is_relaxed_profile(profile: str | None) -> bool:
 PROFILE_GATES: dict[str, tuple[str, ...]] = {
     "full": ("gate0", "review"),
     "bugfix": ("gate0", "review"),
-    "goal": ("gate0", "review"),
     "direct": ("review",),
     "trivial": ("review",),
     "research": (),

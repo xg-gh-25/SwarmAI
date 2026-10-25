@@ -19,7 +19,7 @@ OWNER = BACKEND / "core" / "run_protocol" / "lifecycle.py"
 # file (relative to backend/) -> lines that still compare on a profile name
 KNOWN: dict[str, int] = {
     "core/pipeline_profiles.py": 6,
-    "core/run_protocol/checks.py": 6,
+    "core/run_protocol/checks.py": 4,
     "core/run_protocol/cli_commands.py": 2,
     "core/run_protocol/engine.py": 22,
     "core/run_protocol/next_step.py": 2,

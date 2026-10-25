@@ -86,7 +86,7 @@ def ids(issues):
     return {issue.check_id for issue in issues}
 
 
-@pytest.mark.parametrize("profile", ["full", "goal", "trivial", "research"])
+@pytest.mark.parametrize("profile", ["full", "trivial", "research"])
 def test_valid_full_requirements(profile):
     assert sc.validate_requirements(full_requirements(profile), variant="full",
                                     profile=profile) == []

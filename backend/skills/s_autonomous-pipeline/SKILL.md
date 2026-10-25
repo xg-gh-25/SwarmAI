@@ -37,7 +37,6 @@ DO NOT USE: for a single stage (use the specific skill directly).
 | profile | stages |
 |---|---|
 | full, bugfix | evaluate → think → plan → build → review → test → deliver → reflect |
-| goal | evaluate → think → plan → goal_cycle → review → test → deliver → reflect |
 | trivial | evaluate → plan → build → review → test → deliver → reflect |
 | direct | build → review → test → deliver → reflect (`create --requirement`, no PLAN) |
 | research | evaluate → think → deliver → reflect |

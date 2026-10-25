@@ -25,7 +25,7 @@ import json
 from typing import Any, Mapping, Sequence
 
 # review: a fix's tests, reported for a ``reported_test`` proof (S6-2)
-STAGES = frozenset({"build", "goal_cycle", "review", "test"})
+STAGES = frozenset({"build", "review", "test"})
 RESULTS = ("pass", "fail", "not_run")
 MAX_COMMANDS = 50
 MAX_TESTS = 200
@@ -164,7 +164,7 @@ def report_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
     per stage and repo, the latest report's tree and counts. The commands themselves
     are in the report blob (``read``)."""
     lines: list[str] = []
-    for stage in ("build", "goal_cycle", "test"):
+    for stage in ("build", "test"):
         for repo, event in sorted(latest(events, stage).items()):
             p = event["payload"]
             lines.append(f"- {stage} · {repo} @ {str(p['code_tree'])[:12]}："

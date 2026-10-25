@@ -339,7 +339,7 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
 try:
     from core.project_agent import PLACEMENTS as _PLACEMENTS, PROFILES as _PROFILES
 except ImportError:
-    _PROFILES = frozenset({"full", "bugfix", "goal", "trivial", "direct", "research"})  # profile-fallback
+    _PROFILES = frozenset({"full", "bugfix", "trivial", "direct", "research"})  # profile-fallback
     _PLACEMENTS = frozenset({"chat-tab", "local-worker", "hive"})
 
 

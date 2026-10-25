@@ -249,10 +249,6 @@ class TestNewStageBlocks:
         after = _state("full", evaluate="completed", think="completed", plan="completed")
         (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
         assert (b["next"], b["nextOrdinal"]) == ("build", 5)
-        gb = _state("goal", evaluate="completed", think="completed")
-        ga = _state("goal", evaluate="completed", think="completed", plan="completed")
-        (g,) = pse.new_stage_blocks("run_t1", gb, ga, self.AT)
-        assert g["next"] == "goal_cycle"
 
 
     def test_last_stage_has_no_next(self):
@@ -262,10 +258,10 @@ class TestNewStageBlocks:
         assert (b["ordinal"], b["position"], b["total"], b["next"], b["nextOrdinal"]) == (
             10, 4, 4, None, None)
 
-    def test_goal_cycle_maps_to_build_slot(self):
-        before = _state("goal", evaluate="completed", think="completed", plan="completed")
-        after = _state("goal", evaluate="completed", think="completed", plan="completed",
-                       goal_cycle="completed")
+    def test_build_maps_to_build_slot(self):
+        before = _state("full", evaluate="completed", think="completed", plan="completed")
+        after = _state("full", evaluate="completed", think="completed", plan="completed",
+                       build="completed")
         (b,) = pse.new_stage_blocks("run_t1", before, after, self.AT)
         assert (b["ordinal"], b["next"], b["nextOrdinal"]) == (5, "review", 6)
 

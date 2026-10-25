@@ -16,7 +16,7 @@ SKILL = ROOT / "backend/skills/s_autonomous-pipeline"
 def test_active_skill_has_one_v1_cli_and_no_legacy_review_path():
     paths = [SKILL / "INSTRUCTIONS.md"] + [
         SKILL / "stages" / f"{name}.md" for name in
-        ("evaluate", "think", "plan", "build", "goal_cycle", "review", "test", "deliver", "reflect")]
+        ("evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect")]
     text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
     assert '"$SWARM_BACKEND_BIN" pipeline-v1' in text   # S3b: the one v1 command form
     for old in ("artifact_cli.py stage-", "gate1-skeptic", "meta-review",

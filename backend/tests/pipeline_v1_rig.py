@@ -432,7 +432,7 @@ class Rig:
             if self.repo is not None:
                 self.edit(self.CHANGE)
             return self.v1("stage-complete", "--artifact", self.artifact("design", docs["plan"]))
-        if stage in {"build", "goal_cycle"}:
+        if stage == "build":
             from core.run_protocol.lifecycle import PROFILE_STAGES
             if self.repo is not None and "plan" not in PROFILE_STAGES[self.profile] \
                     and not self._edited:

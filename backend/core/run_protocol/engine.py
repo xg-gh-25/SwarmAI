@@ -395,7 +395,7 @@ class RunEngine:
         shared mode, where a run edited the main checkout, is gone)."""
         repos = repos or {}
         if profile not in lifecycle.PROFILE_STAGES:
-            raise EngineError("unknown profile")
+            raise EngineError(lifecycle.REMOVED_PROFILES.get(profile, "unknown profile"))
         if requirement is not None and (not isinstance(requirement, str)
                                         or len(requirement) > REQUIREMENT_MAX):
             raise EngineError(f"requirement must be text of at most {REQUIREMENT_MAX} chars")
@@ -1023,8 +1023,8 @@ class RunEngine:
     def gate0_start(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "evaluate" \
-                or state["profile"] not in {"full", "bugfix", "goal"}:
-            raise EngineError("Gate-0 requires active EVALUATE on full, bugfix, or goal")
+                or state["profile"] not in {"full", "bugfix"}:
+            raise EngineError("Gate-0 requires active EVALUATE on full or bugfix")
         docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         if requirements is not None:
             docs.write_requirements(requirements, variant="full", profile=state["profile"])
@@ -1733,7 +1733,7 @@ class RunEngine:
                 "consumed_event_id": consumed["event_id"],
                 "action": action, "state": self.projection()}
 
-    WORKTREE_STAGES = frozenset({"plan", "build", "goal_cycle", "review", "test", "deliver"})
+    WORKTREE_STAGES = frozenset({"plan", "build", "review", "test", "deliver"})
 
     @_one_operation
     def ensure_stage_worktrees(self) -> dict[str, str]:
@@ -1801,7 +1801,7 @@ class RunEngine:
                                     attempt=self._next_attempt(stage), forced=forced)
             self._settle(); self.write_projection()
             return {"ok": False, "error": str(exc), **result, "state": self.projection()}
-        if stage == "evaluate" and profile in {"full", "bugfix", "goal"}:
+        if stage == "evaluate" and profile in {"full", "bugfix"}:
             readings = ((artifact.get("understanding") or {}).get("readings")
                         if isinstance(artifact, Mapping) else None)
             gate_required = profile == "bugfix" or (isinstance(readings, list) and len(readings) >= 2)
@@ -2132,11 +2132,11 @@ class RunEngine:
         return out
 
     def _declared_security(self) -> list[str]:
-        """Security review declared for this run (§3.5.2): the BUILD / goal_cycle
+        """Security review declared for this run (§3.5.2): the BUILD
         report's ``risk``, or a full DESIGN_SPEC with security boundaries."""
         reasons: list[str] = []
         events = self.store.read_events()
-        for stage in ("build", "goal_cycle"):
+        for stage in ("build",):
             for repo, event in sorted(validation_report.latest(events, stage).items()):
                 if "security" in (validation_report.read(self.store, event).get("risk") or ()):
                     reasons.append(f"{repo}: the {stage} report declares risk security")

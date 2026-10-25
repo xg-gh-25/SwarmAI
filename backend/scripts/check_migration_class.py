@@ -223,7 +223,7 @@ def check_migration_class(migration_class: "dict | None", cwd: Path) -> Complete
     # EMPTY members[] is not a real declaration — with zero declared rows the reconcile
     # loop can never produce a MISSED, so it silently PASSes exactly the run_0d60e04e miss.
     # (EVALUATE's validator requires non-empty members, but check_migration_class is called
-    # DIRECTLY by goal_cycle step 2.5, so it must self-guard — defence in depth.) BLOCK.
+    # DIRECTLY by a BUILD step, so it must self-guard — defence in depth.) BLOCK.
     if not members:
         blocked.append({"kind": "EMPTY_MEMBERS", "member": "(migration_class)",
                         "detail": "enumeration_cmd is declared but members[] is empty — with zero "

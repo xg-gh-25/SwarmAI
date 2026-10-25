@@ -75,10 +75,15 @@ LAND_CHECKS = NORMAL_LAND_CHECKS  # public compatibility name for cycle-1 tests
 PROFILE_STAGES = {
     "full": ("evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"),
     "bugfix": ("evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"),
-    "goal": ("evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"),
     "trivial": ("evaluate", "plan", "build", "review", "test", "deliver", "reflect"),
     "direct": ("build", "review", "test", "deliver", "reflect"),   # no PLAN (exec plan v2 N1)
     "research": ("evaluate", "think", "deliver", "reflect"),
+}
+# profiles that can no longer be chosen, with what to do instead (an old run of one
+# reads as this message instead of a crash: its log stays as it is)
+REMOVED_PROFILES = {
+    "goal": ("the goal profile was removed (2026-10-26): its goal_cycle was BUILD under "
+             "another name; split a large task into a sequence of runs"),
 }
 IGNORED = frozenset({
     "handout", "spawn", "spawn_rejected", "answer", "answer_rejected",
@@ -110,7 +115,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
         raise LifecycleError("run_create payload/envelope run_id mismatch")
     profile = payload["profile"]
     if profile not in PROFILE_STAGES:
-        raise LifecycleError(f"unknown profile {profile!r}")
+        raise LifecycleError(REMOVED_PROFILES.get(profile, f"unknown profile {profile!r}"))
     cap = payload["decision_cap"]
     if isinstance(cap, bool) or cap < 0:
         raise LifecycleError("decision_cap must be non-negative")
@@ -589,7 +594,7 @@ def _apply(run: dict[str, Any], event: Mapping[str, Any]) -> None:
         _review_reopen(run, event)
     elif kind == "gate0_exhausted":
         if run["status"] != "active" or run["stage"] != "evaluate" \
-                or run["profile"] not in ("full", "bugfix", "goal") \
+                or run["profile"] not in ("full", "bugfix") \
                 or event["payload"]["reason"] not in ("framing_rejected", "already_satisfied"):
             raise LifecycleError("gate0_exhausted is illegal here")
         run["stages"]["evaluate"] = "degraded"

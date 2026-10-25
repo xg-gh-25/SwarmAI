@@ -18,7 +18,7 @@ from tests.pipeline_v1_rig import Rig, documents
 
 pytestmark = pytest.mark.timeout(300)
 
-CODE_PROFILES = ("direct", "trivial", "full", "bugfix", "goal")
+CODE_PROFILES = ("direct", "trivial", "full", "bugfix")
 
 
 @pytest.fixture

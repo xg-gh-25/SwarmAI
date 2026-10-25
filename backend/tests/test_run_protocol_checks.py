@@ -2,7 +2,7 @@
 
 Methodology: exhaustively enumerate the frozen registry. Invariants: every profile/check
 pair applies xor has an explicit exemption; effects are independent; no land effect is
-ever a stage-complete guard; direct/full/goal route shared checks at the right stage.
+ever a stage-complete guard; direct/full route shared checks at the right stage.
 """
 from __future__ import annotations
 
@@ -86,8 +86,8 @@ def test_trivial_uses_full_requirements_direct_is_the_only_rq5_rq6_exemption():
     assert ("trivial", "RQ-5") not in checks.EXEMPTIONS
 
 
-def test_goal_build_checks_run_in_goal_cycle_not_build():
-    assert ids(checks.stage_checks("goal", "goal_cycle")) == {"BX-3"}
+def test_build_checks_and_goal_is_no_profile():
+    assert "goal" not in checks.PROFILES     # removed (two-ends §6)
     assert ids(checks.stage_checks("full", "build")) == {"BX-3"}
     assert ids(checks.stage_checks("direct", "build")) == {"BX-3"}
 

@@ -55,7 +55,7 @@ SUMMARY_BLOCK_TYPE = "pipeline_summary"
 
 #: The stage's slot in the pipeline order (the frontend still reads it).
 STAGE_ORDINALS: dict[str, int] = {
-    "evaluate": 1, "think": 2, "plan": 3, "build": 5, "goal_cycle": 5, "review": 6,
+    "evaluate": 1, "think": 2, "plan": 3, "build": 5, "review": 6,
     "test": 7, "deliver": 9, "reflect": 10,
 }
 #: v1 stage statuses: a closed stage is completed or degraded (exhausted checks)

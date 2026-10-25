@@ -68,10 +68,8 @@ def _derive_pipeline_states() -> tuple[str, ...]:
     """Every stage of every profile, in first-seen order (full's order first).
 
     Derived from ``core.pipeline_profiles.PIPELINE_PROFILES`` — the single source
-    of truth for stage names — so a profile-only stage (``goal_cycle``) is an
-    advanceable state. A hand-kept list here omitted it: stage-complete on a goal
-    PLAN silently left the manifest at ``plan`` and ``advance --state goal_cycle``
-    raised ValueError."""
+    of truth for stage names — so every profile's stages are advanceable states
+    (a hand-kept list here once omitted a profile-only stage)."""
     from core.pipeline_profiles import PIPELINE_PROFILES
     seen: dict[str, None] = {}
     for name in ("full", *PIPELINE_PROFILES):

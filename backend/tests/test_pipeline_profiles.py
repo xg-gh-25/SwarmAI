@@ -19,7 +19,7 @@ class TestPipelineProfiles:
 
     def test_all_profiles_present(self):
         """All 7 profiles exist (direct = the lightweight contract→build→deliver path)."""
-        expected = {"full", "trivial", "research", "bugfix", "goal", "direct"}
+        expected = {"full", "trivial", "research", "bugfix", "direct"}
         assert set(PIPELINE_PROFILES.keys()) == expected
 
     def test_no_empty_stage_lists(self):
@@ -40,7 +40,6 @@ class TestPipelineProfiles:
         ("trivial", ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"]),
         ("research", ["evaluate", "think", "deliver", "reflect"]),
         ("bugfix", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("goal", ["evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"]),
     ])
     def test_profile_stages_correct(self, profile, expected):
         """Each profile returns its documented stage sequence."""
@@ -60,7 +59,7 @@ class TestGetProfileStages:
     def test_known_profile(self):
         """Known profile name returns its stages."""
         assert get_profile_stages("full") == PIPELINE_PROFILES["full"]
-        assert get_profile_stages("goal") == ["evaluate", "think", "plan", "goal_cycle", "review", "test", "deliver", "reflect"]
+        assert get_profile_stages("bugfix") == PIPELINE_PROFILES["bugfix"]
 
     def test_none_defaults_to_full(self):
         """None input defaults to full profile."""
@@ -73,8 +72,8 @@ class TestGetProfileStages:
 
     def test_return_is_list_not_reference(self):
         """Returned list is the actual profile list (not a copy — by design)."""
-        result = get_profile_stages("goal")
-        assert result is PIPELINE_PROFILES["goal"]
+        result = get_profile_stages("bugfix")
+        assert result is PIPELINE_PROFILES["bugfix"]
 
 
 class TestNormalizeProfile:
@@ -96,7 +95,6 @@ class TestNormalizeProfile:
         ("trivial", "trivial"),
         ("docs", "docs"),
         ("research", "research"),
-        ("goal", "goal"),
         (None, "full"),            # None → full (matches get_profile_stages)
         ("", "full"),              # empty → full (matches strict-set '' semantics)
         ("   ", "full"),
@@ -143,7 +141,7 @@ class TestIsRelaxedProfile:
         assert "direct" in removed_profile_error(profile)
         assert removed_profile_error("full") is None and removed_profile_error(None) is None
 
-    @pytest.mark.parametrize("profile", ["full", "bugfix", "goal", "standard",
+    @pytest.mark.parametrize("profile", ["full", "bugfix", "standard",
                                           "Full", "FULL", "BugFix", ""])
     def test_strict_profiles(self, profile):
         assert is_relaxed_profile(profile) is False

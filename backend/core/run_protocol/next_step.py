@@ -22,7 +22,7 @@ from core.run_protocol import checks, lifecycle
 
 _CARDS = Path(__file__).resolve().parents[2] / "skills" / "s_autonomous-pipeline" / "stages"
 _ARTIFACT_STAGES = {"evaluate", "plan"}
-_CODE_STAGES = {"build", "goal_cycle"}     # the agent writes and tests the change its own way
+_CODE_STAGES = {"build"}     # the agent writes and tests the change its own way
 # a person stopped the run, or its session went away: only a person resumes it
 _HUMAN_PAUSES = {"user_stop", "session_lost"}
 

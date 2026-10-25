@@ -7,7 +7,6 @@ import type { ContentBlock, PipelineRunContent, PipelineStageContent } from '../
 
 export const RUN = 'run_fixture';
 export const FULL = ['evaluate', 'gate0', 'think', 'plan', 'gate1', 'build', 'review', 'test', 'gate2', 'deliver', 'reflect'];
-export const GOAL = ['evaluate', 'gate0', 'think', 'plan', 'gate1', 'goal_cycle', 'gate2', 'deliver', 'reflect'];
 const isGate = (s: string) => /^gate\d$/.test(s);
 
 export const checklistOf = (names: string[]) => names.map((s) => ({ stage: s, gate: isGate(s) }));

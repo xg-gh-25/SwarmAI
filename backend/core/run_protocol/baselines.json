@@ -19,12 +19,6 @@
       "runs_seconds": 168,
       "runs_tokens": 0
     },
-    "goal": {
-      "budget_seconds": 66502,
-      "budget_tokens": null,
-      "runs_seconds": 49,
-      "runs_tokens": 0
-    },
     "research": {
       "budget_seconds": 1048,
       "budget_tokens": null,

@@ -32,7 +32,7 @@ For every stage:
 
 Token usage is measured from the run's transcripts before the DELIVER REPORT and again when REFLECT ends; there is no measuring command.
 
-Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, goal, trivial, direct, research. There is no skipped stage.
+Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, trivial, direct, research (goal was removed: split a large task into a sequence of runs). There is no skipped stage.
 
 direct is for a small, unambiguous change: `create --profile direct --requirement "<the user's words>"` (required), stages build → review → test → deliver → reflect, no REQUIREMENTS / DESIGN_SPEC, no exit criteria, no decision. If the request has more than one reasonable reading, abandon the direct run and re-create it as trivial, and ask there.
 

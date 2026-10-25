@@ -44,7 +44,7 @@ class TestProfileGates:
     def test_each_profile_lists_its_gates(self):
         assert pp.PROFILE_GATES["full"] == ("gate0", "review")
         assert pp.PROFILE_GATES["bugfix"] == ("gate0", "review")
-        assert pp.PROFILE_GATES["goal"] == ("gate0", "review")
+        assert "goal" not in pp.PROFILE_GATES   # removed (two-ends §6)
         assert pp.PROFILE_GATES["direct"] == ("review",)
         assert pp.PROFILE_GATES["trivial"] == ("review",)
         assert "docs" not in pp.PROFILE_GATES   # removed profile
@@ -76,11 +76,8 @@ class TestChecklist:
             ("build", False), ("review", False), ("test", False),
             ("deliver", False), ("reflect", False)]
 
-    def test_goal(self):
-        assert _items(pse.checklist("goal")) == [
-            ("evaluate", False), ("think", False), ("plan", False),
-            ("goal_cycle", False), ("review", False), ("test", False),
-            ("deliver", False), ("reflect", False)]
+    def test_removed_goal_has_no_checklist(self):
+        assert pse.checklist("goal") == []
 
     def test_trivial_has_only_gate2(self):
         assert _items(pse.checklist("trivial")) == [
@@ -103,9 +100,9 @@ class TestChecklist:
 
 class TestRunBlock:
     def test_run_block_carries_the_checklist(self):
-        rb = pse.run_block("run_c1", _state("goal"), AT)
-        assert rb["checklist"] == pse.checklist("goal")
-        assert rb["stages"] == pp.get_profile_stages("goal")
+        rb = pse.run_block("run_c1", _state("bugfix"), AT)
+        assert rb["checklist"] == pse.checklist("bugfix")
+        assert rb["stages"] == pp.get_profile_stages("bugfix")
 
     def test_run_block_before_evaluate_has_an_empty_checklist(self):
         rb = pse.run_block("run_c1", _state(None), AT)
@@ -116,17 +113,17 @@ class TestRefreshedRunBlock:
 
 
     def test_unchanged_profile_emits_no_run_block(self):
-        blocks = pse.new_stage_blocks("run_c1", _state("goal"), _state("goal"), AT)
+        blocks = pse.new_stage_blocks("run_c1", _state("bugfix"), _state("bugfix"), AT)
         assert not [b for b in blocks if b["type"] == pse.RUN_BLOCK_TYPE]
 
     def test_no_requirement_no_refresh(self):
         blocks = pse.new_stage_blocks("run_c1", _state(None, requirement=None),
-                                      _state("goal", requirement=None), AT)
+                                      _state("bugfix", requirement=None), AT)
         assert not [b for b in blocks if b["type"] == pse.RUN_BLOCK_TYPE]
 
 
 class TestPlanNextGate1:
-    @pytest.mark.parametrize("profile,nxt", [("full", "build"), ("goal", "goal_cycle"), ("trivial", "build")])
+    @pytest.mark.parametrize("profile,nxt", [("full", "build"), ("trivial", "build")])
     def test_plan_next_names_gate1_when_the_profile_lists_it(self, profile, nxt):
         before = _state(profile, plan={"stage": "plan", "status": "in_progress"})
         after = _state(profile, plan={"stage": "plan", "status": "completed"})

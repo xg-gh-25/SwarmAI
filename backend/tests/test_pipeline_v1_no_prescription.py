@@ -23,9 +23,7 @@ PHRASES = {
     "bounded cycle": r"bounded goal cycle",
 }
 
-KNOWN: set[tuple[str, str]] = {
-    ("goal_cycle.md", "bounded cycle"),
-}
+KNOWN: set[tuple[str, str]] = set()   # emptied in step 2 and step 3 (goal_cycle.md removed)
 
 
 def _texts() -> dict[str, str]:

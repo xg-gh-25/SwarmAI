@@ -90,11 +90,10 @@ def _run_code(case, profile, run_id, monkeypatch):
                 {"input_tokens": 100, "output_tokens": 20, "responses": 1},
                 completed_at="2026-10-22T00:00:01+00:00")
         assert engine.stage_complete(requirements)["ok"]
-        if profile in {"full","bugfix","goal"}: assert engine.stage_complete()["ok"]  # THINK
+        if profile in {"full","bugfix"}: assert engine.stage_complete()["ok"]  # THINK
         wt=Path(engine.ensure_stage_worktrees()["repo"]); (wt/"a.py").write_text("value=2\n")
         assert engine.stage_complete(_design(profile))["ok"]
     assert engine.stage_complete(_report())["ok"]
-    if profile=="goal": pass
     assert engine.review_start()["reviewers"]==[]; assert engine.stage_complete()["ok"]
     assert engine.stage_complete(_report())["ok"]
     _land_through_the_hook(engine, monkeypatch, f"feat: {profile}\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"); _measured(engine); engine.reflect_complete()
@@ -113,7 +112,7 @@ def _measured(engine):
                                 payload={"name": name, "value": value})
 
 
-@pytest.mark.parametrize("case_name,profile",[("direct-a","direct"),("direct-b","direct"),("full","full"),("bugfix","bugfix"),("trivial","trivial"),("goal","goal")])
+@pytest.mark.parametrize("case_name,profile",[("direct-a","direct"),("direct-b","direct"),("full","full"),("bugfix","bugfix"),("trivial","trivial")])
 def test_code_profile_rehearsal(case_name,profile,tmp_path,monkeypatch):
     case=tmp_path/case_name; case.mkdir(); _run_code(case,profile,"run_"+case_name.replace("-","_"),monkeypatch)
 

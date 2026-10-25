@@ -138,6 +138,6 @@ def test_ts4_a_planned_test_file_must_exist_when_test_completes():
 def test_ts4_is_a_blocking_test_check_for_the_design_profiles():
     spec = checks.CHECKS["TS-4"]
     assert "stage" in spec.effects and spec.stages == ("test",)
-    for profile in ("full", "bugfix", "goal", "trivial"):
+    for profile in ("full", "bugfix", "trivial"):
         assert "TS-4" in {s.check_id for s in checks.stage_checks(profile, "test")}
     assert "TS-4" not in {s.check_id for s in checks.stage_checks("direct", "test")}

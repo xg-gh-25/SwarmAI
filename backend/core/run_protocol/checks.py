@@ -107,13 +107,13 @@ def _c(check_id: str, document: str, effects: str, stages: str,
     )
 
 
-CODE = "full bugfix goal trivial direct"
-FULL_REQ = "full bugfix goal trivial research"
-ALL = "full bugfix goal trivial direct research"
+CODE = "full bugfix trivial direct"
+FULL_REQ = "full bugfix trivial research"
+ALL = "full bugfix trivial direct research"
 # Profiles that write REQUIREMENTS / DESIGN_SPEC. direct writes neither (execution plan
 # v2 N1): its requirement is the user's words in contract.json, it has no exit criteria.
 DOCS = FULL_REQ
-DESIGN = "full bugfix goal trivial"
+DESIGN = "full bugfix trivial"
 
 
 _SPECS = [
@@ -129,14 +129,14 @@ _SPECS = [
     _c("DS-3", "design_spec", "", "plan", "full lite", DESIGN),
     _c("DS-4a", "design_spec", "stage", "plan", "full", "bugfix"),
     _c("DS-5", "design_spec", "stage", "plan", "full lite", DESIGN),
-    _c("DS-6", "design_spec", "stage", "plan", "full", "full bugfix goal"),
+    _c("DS-6", "design_spec", "stage", "plan", "full", "full bugfix"),
     _c("DS-7", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-9a", "design_spec", "stage", "plan", "full lite", DESIGN),
     # S6-1: BUILD ends with the agent's validation report on the current code tree
-    _c("BX-3", "validation_report", "stage", "build goal_cycle", "run", CODE),
+    _c("BX-3", "validation_report", "stage", "build", "run", CODE),
 
     _c("RV-1a", "review", "push", "review", "review", CODE),
-    _c("RV-1b", "review", "", "evaluate", "review", "full bugfix goal"),
+    _c("RV-1b", "review", "", "evaluate", "review", "full bugfix"),
     _c("RV-1c", "review", "", "review", "review", CODE),
     _c("DC-1", "decision", "", "evaluate think plan", "decision", DOCS),
     _c("DC-2", "decision", "push", "evaluate think plan", "decision", DOCS),
@@ -217,7 +217,7 @@ def _stages_for(spec: CheckSpec, profile: str) -> tuple[str, ...]:
     if spec.check_id.startswith("RQ-"):
         return ("evaluate",)
     if spec.check_id == "BX-3":
-        return ("goal_cycle",) if profile == "goal" else ("build",)
+        return ("build",)
     return tuple(stage for stage in spec.stages
                  if stage in PROFILE_STAGES[profile] or stage in ("land", "run_land"))
 
@@ -309,7 +309,7 @@ def _report_check(check_id: str, context: CheckContext) -> Result:
     so the change is not delivered)."""
     from core.run_protocol.validation_report import latest
     stage = "test" if check_id in ("TS-1", "LG-1") else (
-        "goal_cycle" if context.profile == "goal" else "build")
+        "build")
     current = context.run.get("code_trees")
     expected = sorted(context.expected_repos)
     if not expected or not isinstance(current, Mapping):

@@ -343,7 +343,7 @@ def _event_contract(event: Mapping[str, Any], *, allow_missing_ckey: bool) -> st
                 or any(not isinstance(item, str) or not item.startswith("CF-") for item in ids):
             raise EventError("R2 handout requires unique canonical finding_ids")
     if kind == "validation_report":
-        if payload["stage"] not in {"build", "goal_cycle", "review", "test"}:
+        if payload["stage"] not in {"build", "review", "test"}:
             raise EventError("validation_report stage is invalid")
         tree = payload["code_tree"]
         if len(tree) != 40 or any(char not in "0123456789abcdef" for char in tree):
