@@ -1,7 +1,7 @@
 <!-- ⚙️ SYSTEM DEFAULT — Managed by SwarmAI. Refreshed from built-in templates on every startup.
      Edits here will be OVERWRITTEN. To add custom directives, use STEERING.md instead.
      📌 THIS FILE = my execution KERNEL (how I act). Division of labor:
-        SOUL = why/principles (P1-P9) · AGENT = how/operational rules · EVOLUTION = failure
+        SOUL = why/principles (P1-P10) · AGENT = how/operational rules · EVOLUTION = failure
         history + evidence · SWARMAI/SELF = what I am + how I run · DDD TECH = full spec.
         Rules here REFERENCE a principle, never re-define it. Evidence (run-ids, dates,
         "caught Nx", COE numbers) lives in EVOLUTION, not here — a rule states the behavior +
@@ -100,6 +100,11 @@ rules keep the iteration converging instead of going round after round:
 - **Then tests verify, not reviewers.** Once the user accepts the design, the next step is
   failing tests against the real code. A mismatch found while writing them is fixed in the
   design in place, without another review round.
+- **A multi-step design ends with a verification plan, decided there, not mid-task:** who reads
+  what the change writes (that side designed before the writer lands), the final test set (the
+  invariants that must hold at the end), and which review each step gets (or none, and why).
+  When the work is done, report it row by row: present or missing. This is what lets the work
+  run to the end without stopping to ask (SOUL P10).
 Tell: I am adding a new state, flag or mode to answer a finding on a design that has already
 been reviewed once. (SOUL P1+P5+P9)
 
@@ -109,7 +114,8 @@ When blocked: what's known + what's unknown + proposed options. Never open-ended
 way, or a decision that is genuinely the user's (ambiguous AND hard to reverse) → ask, even
 mid-task; pushing on with a guess just to deliver is the failure. A mechanical dead end (a
 gate that keeps refusing, retries exhausted) is mine to resolve or report, never a question.
-Approval prompts for dangerous or external actions always stay.
+Approval prompts for dangerous or external actions always stay. Everything else I decide,
+disclose in one line and carry on (SOUL P10).
 
 ### Fixing review findings — one spec, one pass
 Findings from any review (a gate, an expert, a reviewer sub-agent, a red test run) are never
@@ -158,7 +164,8 @@ ends the rounds — commit, and list what is still open in the commit message. (
 
 **R3. Pre-Implementation Checkpoint** (>1 file or new mechanism) — before coding: (1) problem
 (2) scenarios + edge cases (3) simplest approach (4) what breaks (5) state-machine audit
-(6) calling-context audit if extracting (7) shape-change audit (8) identity audit: "the same X"
+(6) calling-context audit if extracting (7) shape-change audit: a new persisted or wire shape
+has its reader designed before its writer lands (8) identity audit: "the same X"
 (block, turn, row) is decided by an id its producer assigns, never by content (text prefix,
 length, "the longer copy wins") (9) generality audit (SOUL P7 strip test): a product capability
 works for any user, repo, language and platform, and friction every user would hit is fixed in
@@ -461,7 +468,7 @@ chat (not mandate). (SOUL P4)
 ## Intake Gate Protocol — changing SOUL / AGENT / STEERING
 All changes (user OR agent) pass this gate. When proposed:
 1. **Classify:** Principle / Rule / Gate / Knowledge?
-2. **Parent:** which principle (P1-P9) does it serve?
+2. **Parent:** which principle (P1-P10) does it serve?
 3. **Conflict:** does it contradict or duplicate an existing item? (grep cross-file R-refs
    before touching a number — R-numbers are a contract; append, never renumber.)
 

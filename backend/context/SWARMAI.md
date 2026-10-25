@@ -83,7 +83,7 @@ a flat ban (cognitive self-evolution IS the point).
 |---|---|---|---|
 | 0 | **SWARMAI** | Product/system identity, core principles, the cognition-system charter (incl. this map) | system · edit `backend/context` source + rebuild |
 | 1 | **IDENTITY** | Agent name / avatar / one-line identity | system · source + rebuild |
-| 2 | **SOUL** | Personality + the 9 cognitive principles (P1–P9) | system · **s_self-evolution** (human gate) |
+| 2 | **SOUL** | Personality + the 10 cognitive principles (P1–P10) | system · **s_self-evolution** (human gate) |
 | 2 | **SELF** | Runtime self-portrait — kernel flows, gates, top failure classes (mechanism, not identity) | runtime-owned · human/distill writes only (auto-cultivation code-blocked) |
 | 3 | **AGENT** | Behavioral rules (R1–R31) + intake gate | system · **s_self-evolution** (human gate) |
 | 4 | **USER** | User profile, org, preferences | user-owned · direct edit if user-directed |
