@@ -510,7 +510,8 @@ there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19
   the same way:
 
 ```bash
-git worktree add -b <agent>/<topic> <scratch>/wt-<topic> main   # NOT under ~/.swarm-ai/worktrees
+git worktree add --lock --reason "<agent> session scratch" -b <agent>/<topic> <scratch>/wt-<topic> main
+#   NOT under ~/.swarm-ai/worktrees; --lock: see "Never prune" below
 # edit + test inside the worktree; run tests with the main checkout's venv python
 #   (backend/.venv/bin/python by absolute path — a .venv symlink trips conftest's WRONG PYTHON);
 #   frontend: symlink desktop/node_modules from the main checkout
@@ -518,8 +519,23 @@ git commit -- <paths>                 # explicit pathspec, never a bare `git com
 git rebase main                       # main moves every few minutes
 python3 backend/scripts/check_no_revert.py <agent>/<topic>      # exit 1 = it undoes main
 git -C <main checkout> merge --ff-only <agent>/<topic>
+git worktree unlock <scratch>/wt-<topic>
 git worktree remove <scratch>/wt-<topic> && git branch -d <agent>/<topic>
 ```
+
+- **Never run `git worktree prune` in this repo, and lock your worktree.** Agents run in
+  sandboxes that cannot see each other's scratch directories (a Kiro Crew session's
+  `~/.kiro/crew/scratch/runtime-<id>/` is `Operation not permitted` from any other session).
+  From your sandbox another session's live worktree therefore looks deleted:
+  `git worktree list` marks it `prunable`, and `git worktree prune` deletes its
+  `.git/worktrees/<name>` entry. Its files survive, but every git command there then fails
+  with "not a git repository" (2026-10-25: three sessions' worktrees lost this way, mid-work;
+  one by this very rule's author). A locked worktree is never pruned, so `--lock` at `add`
+  protects yours from everyone else; `prunable` on someone else's worktree is not yours to
+  fix. Only remove your own worktree, by its path, after `git worktree unlock`.
+- If it happens to you: copy your changed files out, `git branch -f <agent>/<topic>
+  <last commit>`, move the directory aside, `git worktree add --lock … <same path>
+  <agent>/<topic>`, copy the files back, commit at once.
 
 - **Squash only from the merge base**: `git reset --soft $(git merge-base HEAD main)`, never
   `git reset --soft main`. The second keeps your worktree's old tree and commits it on top of
