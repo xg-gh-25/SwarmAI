@@ -480,4 +480,4 @@ def test_q3_cross_run_answer_reuse_is_removed():
     from core.run_protocol import events, hook_bridge, review
     assert "answer_reuse" not in events.EVENT_SPECS
     assert not hasattr(review, "review_cache_key")
-    assert not hasattr(hook_bridge.ReviewHookBridge, "record_reuse")
+    assert not hasattr(hook_bridge, "record_reuse")

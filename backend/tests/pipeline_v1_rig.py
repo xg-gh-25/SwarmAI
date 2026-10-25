@@ -243,33 +243,50 @@ class Rig:
         return result
 
     # ── hook-side producers (real hook functions) ───────────────────────────
-    def spawn_reviewer(self, prompt: str, answer: str, tool_use_id: str) -> str | None:
-        """An Agent spawn of *prompt* that ends with *answer*: the v1 handout tracker
-        (PreToolUse) binds it, the SubagentStop audit hook records the answer.
-        Returns the bound prompt, or None when the tracker did not bind it."""
+    def spawn_reviewer(self, prompt: str, answer: str, tool_use_id: str,
+                       via: str = "session") -> str | None:
+        """An Agent spawn of *prompt* that ends with *answer*: the PreToolUse records the
+        spawn, the SubagentStop records the answer. *via*: ``"session"`` = a SwarmAI
+        session's in-process hooks; ``"claude"`` = ``python-backend hook --host claude``
+        in its own process, as Claude Code runs it (standalone T2). Returns the prompt
+        the expert got, or None when no spawn was bound."""
         from core import runtime_hooks
-        tracker = runtime_hooks.create_v1_review_handout_tracker(self.ctx)
-        decided = asyncio.run(tracker(
-            {"tool_name": "Agent", "tool_input": {"prompt": prompt}}, tool_use_id, None))
-        bound = ((decided or {}).get("hookSpecificOutput") or {}).get(
-            "updatedInput", {}).get("prompt")
-        if not bound:
+        before = sum(e["kind"] == "spawn" for e in self.events())
+        pre = {"tool_name": "Agent", "tool_input": {"prompt": prompt},
+               "tool_use_id": tool_use_id, "hook_event_name": "PreToolUse"}
+        if via == "session":
+            tracker = runtime_hooks.create_v1_review_handout_tracker(self.ctx)
+            asyncio.run(tracker(pre, tool_use_id, None))
+        else:
+            self._hook("pre-tool-use", via, pre)
+        if sum(e["kind"] == "spawn" for e in self.events()) == before:
             return None
         transcript = self.root / "transcripts" / f"{tool_use_id}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
         transcript.write_text("\n".join(json.dumps(r) for r in (
             {"type": "user", "isSidechain": True,
-             "message": {"role": "user", "content": bound}},
+             "message": {"role": "user", "content": prompt}},
             {"type": "assistant", "isSidechain": True,
              "message": {"role": "assistant", "content": [{"type": "text", "text": answer}],
                          "usage": {"input_tokens": 10, "output_tokens": 5}}},
         )) + "\n", encoding="utf-8")
-        stop = runtime_hooks.create_agent_tool_audit_hook(self.ctx)
-        asyncio.run(stop({"agent_type": "pipeline-expert",
-                          "agent_transcript_path": str(transcript),
-                          "last_assistant_message": answer,
-                          "cwd": str(self.root)}, tool_use_id, None))
-        return bound
+        stop = {"agent_type": "pipeline-expert", "agent_transcript_path": str(transcript),
+                "last_assistant_message": answer, "cwd": str(self.root),
+                "hook_event_name": "SubagentStop"}
+        if via == "session":
+            hook = runtime_hooks.create_agent_tool_audit_hook(self.ctx)
+            asyncio.run(hook(stop, tool_use_id, None))
+        else:
+            self._hook("subagent-stop", via, stop)
+        return prompt
+
+    def _hook(self, event: str, host: str, payload: dict) -> None:
+        """``python-backend hook <event> --host <host>`` with *payload* on stdin."""
+        proc = subprocess.run([str(self.program), "hook", event, "--host", host],
+                              input=json.dumps(payload), env=self.env, capture_output=True,
+                              text=True, timeout=120, cwd=str(self.root))
+        assert proc.returncode == 0 and proc.stdout.strip() == "{}", proc.stdout + proc.stderr
+        assert not proc.stderr.strip(), proc.stderr
 
     def answer_card(self, label: str) -> list[dict]:
         """A person picks *label* on the run's pending AskUserQuestion card."""

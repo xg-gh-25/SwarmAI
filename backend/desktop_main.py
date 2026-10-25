@@ -10,12 +10,16 @@ system Python:
   argument is a flag or absent, which is how launchd and Tauri start it).
 - ``pipeline-v1 <args>`` — the pipeline CLI (``core/run_protocol/cli_main.py``). Not supported on
   Windows: it says so and exits 2.
+- ``hook <event> --host <host>`` — a coding agent host's hook (Claude Code, ...) hands
+  its event JSON on stdin (``core/host_hooks.py``). Always exits 0: it never blocks
+  the host.
 - ``py <script.py> [args]`` / ``py -m <module> [args]`` / ``py -c <code> [args]`` — run
   Python with the interpreter and modules this program carries (``runpy``). Product code
   that used to spawn a system ``python`` (MCP scripts, the self-upgrader, scheduled jobs,
   skill scripts) uses this instead.
 
-Public: ``main(argv)``, ``run_py(argv)``, ``run_pipeline_v1(argv)``, ``WINDOWS_PIPELINE_MESSAGE``.
+Public: ``main(argv)``, ``run_py(argv)``, ``run_pipeline_v1(argv)``, ``run_hook(argv)``,
+``WINDOWS_PIPELINE_MESSAGE``.
 """
 import json
 import os
@@ -103,6 +107,13 @@ def run_pipeline_v1(argv: "list[str]") -> int:
     return pipeline_main(argv)
 
 
+# ── hook ──────────────────────────────────────────────────────────────────────
+
+def run_hook(argv: "list[str]") -> int:
+    from core.host_hooks import main as hook_main
+    return hook_main(argv)
+
+
 # ── daemon ────────────────────────────────────────────────────────────────────
 
 def get_log_dir() -> Path:
@@ -185,6 +196,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return run_py(argv[1:])
     if argv and argv[0] == "pipeline-v1":
         return run_pipeline_v1(argv[1:])
+    if argv and argv[0] == "hook":
+        return run_hook(argv[1:])
     if argv and argv[0] == "daemon":
         argv = argv[1:]
     return run_daemon(argv)

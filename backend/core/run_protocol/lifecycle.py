@@ -81,7 +81,7 @@ PROFILE_STAGES = {
     "research": ("evaluate", "think", "deliver", "reflect"),
 }
 IGNORED = frozenset({
-    "handout", "answer", "finding_occ", "finding_status",
+    "handout", "spawn", "answer", "finding_occ", "finding_status",
     "reclassify", "address", "proof", "validation_report", "metric", "turn",
     "integrity",
     "owner_transfer", "render_failed",

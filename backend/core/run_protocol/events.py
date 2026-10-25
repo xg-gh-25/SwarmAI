@@ -32,6 +32,7 @@ FORCED_BLOB_KEYS = frozenset({"raw", "prompt", "test_details", "decision_json", 
 OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "handout": ("stage", "round", "payload.expert_id", "attempt"),
     "answer": ("payload.tool_use_id",),
+    "spawn": ("payload.tool_use_id",),
     "finding_occ": ("payload.answer_event_id", "ordinal"),
     "finding_status": ("payload.answer_event_id", "ordinal"),
     "reclassify": ("payload.canonical_id", "payload.pass", "attempt"),
@@ -86,8 +87,12 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      # prompt: the full text, always moved into an audit blob (F-4);
                      # code_trees: the trees whose diff the expert was given (S6-2);
                      # incremental_from: an incremental review's previous reviewed trees
+                     # nonce: the spawn identity in the prompt's PIPELINE-HANDOUT line
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
-                      "code_trees": dict, "incremental_from": dict}),
+                      "code_trees": dict, "incremental_from": dict, "nonce": str}),
+    # a host hook saw an expert spawned with exactly a handout's prompt (standalone §4.3)
+    "spawn": _spec("hook", ("payload.tool_use_id",), None,
+                   {"handout_event_id": str, "tool_use_id": str}),
     # one answer per handout: the event id derives from the handout, so a second
     # spawn of the same handout can never add a second answer (a retry needs a new
     # handout attempt)
@@ -96,7 +101,9 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "answer": _spec("hook", ("payload.tool_use_id",), "payload.expert_id",
                     {"handout_event_id": str, "prompt_sha": str, "tool_use_id": str,
                      "expert_id": str, "stage": str, "round": int, "state": str}, {"raw": str, "verdict": (str, type(None)),
-                     "n_findings": int, "n_status": int}),
+                     "n_findings": int, "n_status": int,
+                     # host: a host hook read it from the expert; relayed: the agent gave it
+                     "source": str}),
     "finding_occ": _spec("hook", ("payload.answer_event_id", "ordinal"),
                          "event_id:canonical", {"answer_event_id": str,
                          "expert": str, "severity": str,

@@ -944,47 +944,10 @@ def _extract_expert_id(prompt_head: str) -> Optional[str]:
 
 
 def create_v1_review_handout_tracker(session_context: Optional[dict] = None):
-    """PreToolUse Agent|Task: bind a spawn to one signed v1 handout and run."""
-    ctx = session_context if session_context is not None else {}
-
-    def _resolve(prompt: str):
-        from core.run_protocol.hook_bridge import (
-            ReviewHookBridge, bridge_for_prompt, install_bridge,
-        )
-        bridge = bridge_for_prompt(ctx, prompt)
-        if bridge is not None:
-            return bridge
-        session_id = str(ctx.get("sdk_session_id") or "")
-        if not session_id:
-            return None
-        from config import get_app_data_dir
-        from core.run_protocol.engine import RunEngine
-        data = get_app_data_dir()
-        workspace = Path(os.environ.get("SWARM_WORKSPACE") or data / "SwarmWS")
-        matches = []
-        for run_file in workspace.glob("Projects/*/.artifacts/runs/*/run.json"):
-            try:
-                projection = json.loads(run_file.read_text(encoding="utf-8"))
-                if projection.get("session_id") != session_id:
-                    continue
-                run_id = run_file.parent.name
-                project = run_file.parents[3].name
-                candidate = ReviewHookBridge(
-                    RunEngine.load(data_dir=data, workspace=workspace,
-                                   project=project, run_id=run_id).store,
-                    session_id,
-                )
-                if candidate.matching_handouts(prompt):
-                    matches.append((run_id, candidate))
-            except Exception as exc:  # one unreadable run must not hide the others
-                logger.debug("v1 bridge: run %s skipped: %s", run_file.parent.name, exc)
-                continue
-        if len(matches) != 1:
-            return None
-        run_id, bridge = matches[0]
-        install_bridge(ctx, run_id, bridge)
-        return bridge
-
+    """PreToolUse Agent|Task: an expert spawned with exactly a handout's prompt is a
+    ``spawn`` event in that run (``hook_bridge.bind_spawn``). The prompt is never
+    rewritten: its ``PIPELINE-HANDOUT`` line is already there, written by the CLI, so
+    a host that cannot rewrite tool input binds the same way (standalone §4.3)."""
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         try:
             tool = _extract_field(input_data, "tool_name", "")
@@ -992,18 +955,12 @@ def create_v1_review_handout_tracker(session_context: Optional[dict] = None):
                 return {}
             tool_input = _extract_field(input_data, "tool_input", {})
             prompt = tool_input.get("prompt", "") if isinstance(tool_input, dict) else ""
-            bridge = await asyncio.to_thread(_resolve, prompt)
-            bound = bridge.track_tool_use(str(tool_use_id or ""), prompt) if bridge else None
-            if bound is None:
-                return {}
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": {**tool_input, "prompt": bound},
-            }}
+            if "PIPELINE-HANDOUT: " in prompt:
+                from core.run_protocol import hook_bridge
+                await asyncio.to_thread(hook_bridge.on_spawn, prompt, str(tool_use_id or ""))
         except Exception:
             logger.warning("v1 review handout tracking failed", exc_info=True)
-            return {}
+        return {}
 
     return _hook
 
@@ -1124,91 +1081,32 @@ def create_agent_tool_audit_hook(
                     base.update(_expert_answer(final))
                 session_marker.write_text(json.dumps(base))
 
-                # Pipeline v1 path: resolve the exact run from the nonce-bound prompt
-                # injected at Agent PreToolUse. Legacy mutable session ownership and
-                # expert/FIFO guesses are not inputs to this authority path.
-                from core.run_protocol.hook_bridge import bridge_for_completion
-                bridge = bridge_for_completion(ctx, prompt_head)
-                if bridge is not None:
-                    recorded = bridge.record_answer(
-                        prompt_head, final,
-                        completed_at=datetime.datetime.fromtimestamp(
-                            ts, datetime.timezone.utc
-                        ).isoformat(),
-                    )
-                    if recorded is not None and transcript_path:
-                        try:
-                            from core import transcript_usage
-                            measured = transcript_usage.usage_for_subagent(transcript_path)
-                            if measured is not None:
-                                bridge.record_usage(
-                                    measured,
-                                    completed_at=datetime.datetime.fromtimestamp(
-                                        ts, datetime.timezone.utc
-                                    ).isoformat(),
-                                )
-                        except Exception:
-                            # Usage is optional accounting. A malformed transcript or
-                            # metric persistence failure must not fail the hook.
-                            logger.warning("v1 subagent usage recording failed", exc_info=True)
+                # Pipeline v1 path: the run named by the prompt's PIPELINE-HANDOUT line,
+                # bound to a spawn a PreToolUse saw (hook_bridge, the same function every
+                # host's hook calls). Legacy session ownership and expert/FIFO guesses are
+                # not inputs here.
+                from core.run_protocol import hook_bridge
+                hook_bridge.on_subagent_stop(
+                    prompt_head, final, transcript_path=transcript_path or None,
+                    completed_at=datetime.datetime.fromtimestamp(
+                        ts, datetime.timezone.utc).isoformat())
 
             await asyncio.to_thread(_classify_and_write)
         except Exception:
-            logger.warning("Failed to write agent audit marker (session=%s)", session_id)
+            logger.warning("Failed to write agent audit marker (session=%s)", session_id, exc_info=True)
 
         return {}
 
     return _hook
 
 
-def _read_subagent_prompt_head(transcript_path: str) -> str:
-    """Return the sub-agent's spawn prompt from the HEAD of its transcript (the
-    first sidechain user message), or "" on any error. The spawn prompt carries
-    the EXPERT-ID line; unlike the error-capture hook (which reads the TAIL for
-    errors), it lives at the head. Bounded read, fail-soft."""
-    try:
-        p = Path(transcript_path)
-        if not p.exists():
-            return ""
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            for _ in range(12):  # scan only the first few records
-                line = f.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("type") != "user":
-                    continue
-                msg = rec.get("message", rec)
-                content = msg.get("content", "") if isinstance(msg, dict) else msg
-                if isinstance(content, list):  # content-block array
-                    # Join with "\n", NOT " ": the SDK can split the first user
-                    # message into multiple text blocks (observed: a resume-history
-                    # block + the prompt block). A SPACE join collapses the newline
-                    # after the `EXPERT-ID: <id>` anchor line into trailing text on
-                    # that line, so the `^EXPERT-ID: <id>\s*$` extractor (which
-                    # requires the id to END the line) fails → expert_id=None → the
-                    # D7 commit-gate false-blocks a completed review. "\n" preserves
-                    # the real line boundary so the anchor stays its own line, while
-                    # genuinely authored trailing junk on one line stays junk (the
-                    # extractor regex is UNCHANGED — the fail-safe tests still hold).
-                    content = "\n".join(
-                        b.get("text", "") for b in content if isinstance(b, dict)
-                    )
-                if isinstance(content, str) and content.strip():
-                    return content[:2000]
-        return ""
-    except Exception:
-        logger.debug("_read_subagent_prompt_head: suppressed exception on a fail-safe path", exc_info=True)
-        return ""
-
-
-_GATE_ANSWER_TAIL_BYTES = 256 * 1024  # fallback transcript read; the SDK input carries the text
+# the expert transcript readers live in core/subagent_transcript.py, where the
+# `python-backend hook` command reads them too (no runtime_hooks import there); tests
+# patch them on this module, so the hook below calls them through these names
+from core.subagent_transcript import (  # noqa: E402
+    read_final_text as _read_subagent_final_text,
+    read_prompt_head as _read_subagent_prompt_head,
+)
 
 
 def _subagent_started_at(transcript_path: str) -> Optional[float]:
@@ -1231,36 +1129,6 @@ def _subagent_started_at(transcript_path: str) -> Optional[float]:
     except (OSError, ValueError):
         return None
     return None
-
-
-def _read_subagent_final_text(transcript_path: str) -> str:
-    """The text of the sub-agent's LAST assistant message (bounded tail read), or ""."""
-    try:
-        p = Path(transcript_path)
-        size = p.stat().st_size
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            if size > _GATE_ANSWER_TAIL_BYTES:
-                f.seek(size - _GATE_ANSWER_TAIL_BYTES)
-                f.readline()  # skip the partial first line
-            lines = f.read().splitlines()
-        for line in reversed(lines):
-            try:
-                rec = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(rec, dict) or rec.get("type") != "assistant":
-                continue
-            msg = rec.get("message", rec)
-            content = msg.get("content", "") if isinstance(msg, dict) else ""
-            if isinstance(content, list):
-                content = "\n".join(b.get("text", "") for b in content
-                                    if isinstance(b, dict) and b.get("type") == "text")
-            if isinstance(content, str) and content.strip():
-                return content
-        return ""
-    except Exception:
-        logger.debug("_read_subagent_final_text: suppressed exception on a fail-safe path", exc_info=True)
-        return ""
 
 
 # A Bash READ of a prompt file: `cat <path>` (optionally with flags). Merely naming the

@@ -7,6 +7,7 @@ Public symbols:
 from __future__ import annotations
 
 import hashlib
+import secrets
 import json
 import os
 import uuid
@@ -46,9 +47,13 @@ def lint_prompt(prompt: str, *, expert_id: str, round: int) -> list[str]:
     return errors
 
 
-def build_prompt(expert_id: str, instructions: str, review_input: str) -> str:
-    """The exact text a handout gives an expert (one definition: handout and reuse)."""
-    return (f"EXPERT-ID: {expert_id}\n\n{instructions.strip()}\n\n{review_input.strip()}"
+def build_prompt(expert_id: str, instructions: str, review_input: str,
+                 binding: str = "") -> str:
+    """The exact text a handout gives an expert (one definition: handout and reuse).
+    *binding*: the ``PIPELINE-HANDOUT`` line (hook_bridge.handout_line), second, so a
+    transcript's head always carries it."""
+    head = f"EXPERT-ID: {expert_id}\n" + (f"{binding}\n" if binding else "")
+    return (f"{head}\n{instructions.strip()}\n\n{review_input.strip()}"
             f"\n\n{OUTPUT_CONTRACT}\n")
 
 
@@ -204,7 +209,12 @@ class ReviewOrchestrator:
                 incremental_from: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if round not in (1, 2) or not expert_id:
             raise ReviewError("invalid review handout identity")
-        prompt = build_prompt(expert_id, expert_instructions, review_input)
+        from core.run_protocol import hook_bridge
+        # the spawn's identity is fixed here, in the log (standalone §4.3): any process's
+        # hook can bind the expert's answer to this handout, no session memory needed
+        nonce = secrets.token_hex(16)
+        prompt = build_prompt(expert_id, expert_instructions, review_input,
+                              binding=hook_bridge.handout_line(self.store.paths.run_id, nonce))
         prompt_errors = lint_prompt(prompt, expert_id=expert_id, round=round)
         if prompt_errors:
             raise ReviewError(f"review prompt contract drift: {prompt_errors}")
@@ -212,7 +222,7 @@ class ReviewOrchestrator:
         # the full prompt goes into the audit area as a blob (F-4): the evidence prompts
         # file in the run dir is agent-writable, the blob is not
         payload: dict[str, Any] = {"expert_id": expert_id, "prompt_sha": digest,
-                                   "prompt": prompt}
+                                   "prompt": prompt, "nonce": nonce}
         if round == 2:
             if not finding_ids:
                 raise ReviewError("R2 needs a finding roster")

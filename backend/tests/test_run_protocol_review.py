@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from core.run_protocol import events as ev
-from core.run_protocol.hook_bridge import ReviewHookBridge
+from tests.review_bridge_helper import ReviewHookBridge
 from core.run_protocol.review import (OUTPUT_CONTRACT, ReviewError, ReviewOrchestrator,
                                       lint_prompt, reviewers)
 from core.run_protocol.store import AuditStore

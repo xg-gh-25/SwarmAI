@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from core.run_protocol.engine import RunEngine
-from core.run_protocol.hook_bridge import ReviewHookBridge
+from tests.review_bridge_helper import ReviewHookBridge
 
 
 def _git(repo, *args):

@@ -1,6 +1,6 @@
 # REVIEW
 
-Run deterministic checks first. If they pass, dispatch exactly the `handouts` returned by `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>` in one parallel message.
+Run deterministic checks first. If they pass, dispatch exactly the `handouts` returned by `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>` in one parallel message. Give each expert its `prompt` unchanged: its `PIPELINE-HANDOUT` line is how the expert's answer reaches the run, and a changed prompt is not counted.
 
 R1 reviews the complete diff. After all answers, cluster findings by file and ±10 lines, fix once, then record the exact addressed findings with `"$SWARM_BACKEND_BIN" pipeline-v1 review-address --project <P> --run-id <R> --artifact <handoff.json>`. The command returns only the required R2 handouts; dispatch them together.
 

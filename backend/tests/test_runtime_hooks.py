@@ -2584,30 +2584,38 @@ class TestHooksSeeOnlyUserText:
 
 
 class TestV1StableCompletion:
+    """The SwarmAI session's v1 hooks over hook_bridge (standalone T2): the run comes from
+    the prompt's PIPELINE-HANDOUT line, never from session state."""
+
+    @staticmethod
+    def _store(tmp_path, run_id, nonce, monkeypatch, stores):
+        from core.run_protocol import events as ev
+        from core.run_protocol import hook_bridge as hb
+        from core.run_protocol.store import AuditStore
+        store = AuditStore(tmp_path / run_id, run_id, ev.EventAuthority())
+        prompt = f"EXPERT-ID: correctness\n{hb.handout_line(run_id, nonce)}\nReview this diff"
+        store.append_new(
+            writer=store.authority.writer("cli"), kind="handout",
+            at="2026-10-22T00:00:00+00:00", stage="review", round=1, attempt=1,
+            payload={"expert_id": "correctness", "prompt_sha": hb.prompt_sha(prompt),
+                     "nonce": nonce})
+        stores[run_id] = store
+        monkeypatch.setattr(hb, "store_for", lambda text: (
+            (stores[hb.parse_binding(text)[0]], "session_1")
+            if hb.parse_binding(text) and hb.parse_binding(text)[0] in stores else None))
+        return store, prompt
+
     @pytest.mark.asyncio
     async def test_usage_failure_does_not_block_later_subagent_logic(self, tmp_path, monkeypatch):
         import core.runtime_hooks as hooks
-        from core.run_protocol import events as ev
-        from core.run_protocol.hook_bridge import ReviewHookBridge, install_bridge
-        from core.run_protocol.store import AuditStore
-
-        authority = ev.EventAuthority()
-        store = AuditStore(tmp_path / "audit", "run_one", authority)
-        prompt = "EXPERT-ID: correctness\nReview this diff adversarially"
-        store.append_new(
-            writer=authority.writer("cli"), kind="handout",
-            at="2026-10-22T00:00:00+00:00", stage="review", round=1, attempt=1,
-            payload={"expert_id": "correctness",
-                     "prompt_sha": ReviewHookBridge.prompt_sha(prompt)},
-        )
+        from core.run_protocol import hook_bridge as hb
+        store, prompt = self._store(tmp_path, "run_one", "d" * 32, monkeypatch, {})
         context = {"sdk_session_id": "session_1"}
-        bridge = ReviewHookBridge(store, "session_1")
-        install_bridge(context, "run_one", bridge)
-        bound = bridge.track_tool_use("tool-1", prompt)
-        assert bound
+        await hooks.create_v1_review_handout_tracker(context)(
+            {"tool_name": "Agent", "tool_input": {"prompt": prompt}}, "tool-1", None)
         transcript = tmp_path / "subagent.jsonl"
         transcript.write_text("\n".join([
-            json.dumps({"type": "user", "message": {"content": bound}}),
+            json.dumps({"type": "user", "message": {"content": prompt}}),
             json.dumps({"type": "assistant", "message": {"content": "NO FINDINGS"}}),
         ]) + "\n")
         monkeypatch.setattr(hooks, "_PIPELINE_AUDIT_DIR", tmp_path / "markers")
@@ -2615,7 +2623,7 @@ class TestV1StableCompletion:
                             lambda _path: {"input_tokens": 1, "output_tokens": 1,
                                            "cache_read_tokens": 0,
                                            "cache_creation_tokens": 0, "responses": 1})
-        monkeypatch.setattr(bridge, "record_usage",
+        monkeypatch.setattr(hb, "record_usage",
                             lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("usage failed")))
 
         callback = hooks.create_agent_tool_audit_hook(context)
@@ -2628,30 +2636,14 @@ class TestV1StableCompletion:
         assert list((tmp_path / "markers").glob("session_session_1_*.marker"))
 
     @pytest.mark.asyncio
-    async def test_tracker_ignores_mutable_active_run_hint(self, tmp_path):
+    async def test_tracker_ignores_mutable_active_run_hint(self, tmp_path, monkeypatch):
         import core.runtime_hooks as hooks
-        from core.run_protocol import events as ev
-        from core.run_protocol.hook_bridge import (
-            ReviewHookBridge, install_bridge, bridge_for_completion,
-        )
-        from core.run_protocol.store import AuditStore
-
-        prompt = "EXPERT-ID: correctness\nReview the exact diff"
+        stores: dict = {}
+        wrong, _ = self._store(tmp_path, "run_wrong", "e" * 32, monkeypatch, stores)
+        right, prompt = self._store(tmp_path, "run_right", "f" * 32, monkeypatch, stores)
         context = {"sdk_session_id": "session_1", "_active_pipeline_run_id": "run_wrong"}
-        for run_id, has_handout in (("run_wrong", False), ("run_right", True)):
-            authority = ev.EventAuthority()
-            store = AuditStore(tmp_path / run_id, run_id, authority)
-            if has_handout:
-                store.append_new(
-                    writer=authority.writer("cli"), kind="handout",
-                    at="2026-10-22T00:00:00+00:00", stage="review", round=1, attempt=1,
-                    payload={"expert_id": "correctness",
-                             "prompt_sha": ReviewHookBridge.prompt_sha(prompt)},
-                )
-            install_bridge(context, run_id, ReviewHookBridge(store, "session_1"))
-
         result = await hooks.create_v1_review_handout_tracker(context)(
             {"tool_name": "Agent", "tool_input": {"prompt": prompt}}, "tool-right", None)
-        bound = result["hookSpecificOutput"]["updatedInput"]["prompt"]
-        selected = bridge_for_completion(context, bound)
-        assert selected is not None and selected.store.paths.run_id == "run_right"
+        assert result == {}
+        assert [e["kind"] for e in right.read_events()] == ["handout", "spawn"]
+        assert [e["kind"] for e in wrong.read_events()] == ["handout"]

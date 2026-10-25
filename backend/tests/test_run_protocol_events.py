@@ -86,6 +86,8 @@ CASES = {
                  "payload": {"expert_id": "correctness"}}, "attempt", 2),
     "answer": ({"payload": {"tool_use_id": "tool-1"}, "producer": "hook"},
                "payload.tool_use_id", "tool-2"),
+    "spawn": ({"payload": {"tool_use_id": "tool-1"}, "producer": "hook"},
+              "payload.tool_use_id", "tool-2"),
     "finding_occ": ({"ordinal": 1, "payload": {"answer_event_id": "a1"},
                      "producer": "hook"}, "ordinal", 2),
     "finding_status": ({"ordinal": 1, "payload": {"answer_event_id": "a1"},

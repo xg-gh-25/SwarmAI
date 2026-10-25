@@ -9,7 +9,7 @@ import pytest
 
 from core.run_protocol import events as ev, git_tree, landing, lifecycle
 from core.run_protocol.engine import EngineError, IntegrationRequired, RunEngine
-from core.run_protocol.hook_bridge import ReviewHookBridge
+from tests.review_bridge_helper import ReviewHookBridge
 from core.run_protocol.review import ReviewOrchestrator
 from core.run_protocol.store import AuditStore
 
