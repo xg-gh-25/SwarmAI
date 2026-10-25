@@ -84,9 +84,8 @@ async def _row(db_path: Path, row_id: str) -> dict:
 @pytest.mark.asyncio
 async def test_an_inflight_steer_is_neither_history_nor_queue(pending, db_path: Path):
     await _live_user_row(db_path, "steer-1", "c-steer")
-    queued = await pending.persist_pending(SID, user_message="queued", content=None, agent_id="a")
-
     assert await pending.mark_steer_inflight(SID, "steer-1") is True
+    queued = await pending.persist_pending(SID, user_message="queued", content=None, agent_id="a")
     r = await _row(db_path, "steer-1")
     assert r["sent"] == 0 and r["claimed_at"] is not None and r["pending_seq"] is None
     assert r["metadata"] == {"client_id": "c-steer", "steer": "inflight"}
@@ -114,6 +113,27 @@ async def test_only_a_delivered_user_row_goes_in_flight(pending, db_path: Path):
     assert await pending.mark_steer_inflight(SID, q.id) is False       # a queued row
     assert (await _row(db_path, q.id))["metadata"].get("steer") is None
     assert await pending.mark_steer_inflight(SID, "no-such-row") is False
+
+
+@pytest.mark.asyncio
+async def test_b3_no_steer_while_a_message_is_queued(pending, db_path: Path):
+    """A message sent after a queued one must not overtake it (frontend design
+    2026-10-25 §5, B3): the claim refuses while the session has a queued row, in the
+    same statement (under the seq lock the queue writers hold), so there is no
+    check-then-claim window. A steer in flight does not count as queued."""
+    q = await pending.persist_pending(SID, user_message="queued", content=None, agent_id="a")
+    await _live_user_row(db_path, "steer-1", "c-steer")
+    assert await pending.mark_steer_inflight(SID, "steer-1") is False
+    r = await _row(db_path, "steer-1")
+    assert r["sent"] == 1 and "steer" not in r["metadata"]
+
+    # taken by a drain (the running turn's input now): no longer blocks; nor does a
+    # steer in flight block the next
+    claimed = await pending.claim_pending_batch(SID)
+    assert q.id in [p.id for p in claimed]
+    assert await pending.mark_steer_inflight(SID, "steer-1") is True
+    await _live_user_row(db_path, "steer-2", "c-steer-2")
+    assert await pending.mark_steer_inflight(SID, "steer-2") is True
 
 
 # ── read (the echo) ──────────────────────────────────────────────────────────
@@ -155,13 +175,44 @@ async def test_confirm_only_moves_an_inflight_steer(pending, db_path: Path):
         await pending.confirm_steer(SID, "steer-1", "2026-10-25T11:00:00", "merged")
 
 
+@pytest.mark.asyncio
+async def test_b1_the_writer_places_the_steer_row_and_time_only_moves_forward(pending, db_path: Path):
+    """B1: the row's time is the latest of the echo and the writer's mark, whichever
+    lands first (the reader runs ahead of the writer, or the confirm task runs late)."""
+    await _live_user_row(db_path, "steer-1", "c-steer")
+    await pending.mark_steer_inflight(SID, "steer-1")
+
+    # the writer first (row still in flight), then the confirm with an older echo time
+    assert await pending.restamp_steer(SID, "c-steer", "2026-10-25T10:05:00.000002") is True
+    assert await pending.confirm_steer(SID, "steer-1", "2026-10-25T10:05:00.000001", "opened") is True
+    assert (await _row(db_path, "steer-1"))["created_at"] == "2026-10-25T10:05:00.000002"
+
+    # the confirm first, then the writer: the writer's later time wins, an earlier never
+    await _live_user_row(db_path, "steer-2", "c-steer-2")
+    await pending.mark_steer_inflight(SID, "steer-2")
+    await pending.confirm_steer(SID, "steer-2", "2026-10-25T10:06:00", "folded")
+    assert await pending.restamp_steer(SID, "c-steer-2", "2026-10-25T10:06:00.5") is True
+    assert (await _row(db_path, "steer-2"))["created_at"] == "2026-10-25T10:06:00.5"
+    await pending.restamp_steer(SID, "c-steer-2", "2026-10-25T10:01:00")
+    assert (await _row(db_path, "steer-2"))["created_at"] == "2026-10-25T10:06:00.5"
+    assert (await _row(db_path, "steer-2"))["metadata"]["steered"] == "during"
+
+
+@pytest.mark.asyncio
+async def test_b1_restamp_touches_only_a_steer_row(pending, db_path: Path):
+    await _live_user_row(db_path, "plain", "c-plain")
+    assert await pending.restamp_steer(SID, "c-plain", "2026-10-25T12:00:00") is False
+    assert (await _row(db_path, "plain"))["created_at"] == "2026-10-25T10:00:00"
+    assert await pending.restamp_steer(SID, "no-such", "2026-10-25T12:00:00") is False
+
+
 # ── back in the queue ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_a_released_steer_is_queued_last_and_drains_once(pending, db_path: Path):
-    first = await pending.persist_pending(SID, user_message="queued", content=None, agent_id="a")
     await _live_user_row(db_path, "steer-1", "c-steer")
     await pending.mark_steer_inflight(SID, "steer-1")
+    first = await pending.persist_pending(SID, user_message="queued", content=None, agent_id="a")
 
     seq = await pending.release_steer(SID, "steer-1")
     assert seq == first.pending_seq + 1

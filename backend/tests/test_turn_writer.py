@@ -264,7 +264,69 @@ async def test_t16_after_a_steer_continuations_and_the_stop_receipt_key_on_its_s
     assert receipt
     rows = await db.messages.list_by_session(sid, include_pending=True)
     (stop_row,) = [r for r in rows if any(b["type"] == "turn_stop" for b in r["content"])]
-    assert (stop_row.get("metadata") or {}).get("client_id") == "c-steer"
+    # B2: the receipt keys on the segment's assistant key, never the steer bubble's
+    assert (stop_row.get("metadata") or {}).get("client_id") == "c-steer-asst"
+    # and the steer row keeps its time: a Stop started, the writer does not move it
+    # past the receipt (T29) -- here the steer row is placed by the confirm only
+
+
+@pytest.mark.asyncio
+async def test_b2_a_stop_before_any_assistant_row_does_not_share_the_user_key():
+    """Stopped before the turn wrote any assistant row: the receipt is the turn's
+    first assistant row and must not carry the user bubble's client_id (the
+    frontend's reconcile maps client_ids regardless of role)."""
+    from database import db
+    sid, hold, release = "s-tw-stop-early", asyncio.Event(), asyncio.Event()
+
+    async def send(**kwargs: Any):
+        yield {"type": "session_start", "sessionId": kwargs.get("app_session_id")}
+        hold.set()
+        await release.wait()
+    router = _router()
+    task = asyncio.ensure_future(_turn(router, sid, send))
+    await asyncio.wait_for(hold.wait(), 5)
+    unit = router.get_unit(sid)
+    unit._transition(SessionState.STREAMING)
+    receipt = await router._persist_stop_receipt(sid, unit)
+    release.set()
+    await task
+    assert receipt
+    rows = await db.messages.list_by_session(sid, include_pending=True)
+    (stop_row,) = [r for r in rows if any(b["type"] == "turn_stop" for b in r["content"])]
+    assert (stop_row.get("metadata") or {}).get("client_id") == f"local-{sid}-asst"
+
+
+def _reader_ahead_turn(sid_box: dict):
+    """B-T1: the reader is far ahead of the writer (opened: the final message, the
+    Result, init and the echo arrive together). The confirm task has already
+    written the steer row at the echo time, which is EARLIER than segment 1's last
+    row, inserted only when the writer got to it."""
+    async def send(**kwargs: Any):
+        from datetime import datetime
+        from database import db
+        sid = kwargs.get("app_session_id")
+        echo_at = datetime.now().isoformat()
+        await db.messages.put({"id": f"row-steer-{sid}", "session_id": sid, "role": "user",
+                               "content": [{"type": "text", "text": "and the tests"}],
+                               "metadata": {"client_id": "c-steer", "steered": "after"},
+                               "created_at": echo_at})
+        await asyncio.sleep(0.002)
+        yield {"type": "session_start", "sessionId": sid}
+        yield {"type": "assistant", "model": "test", "content": [{"type": "text", "text": "A"}]}
+        yield {"type": "user_steered", "clientId": "c-steer", "outcome": "opened", "sessionId": sid}
+        yield {"type": "assistant", "model": "test", "content": [{"type": "text", "text": "B"}]}
+    return send
+
+
+@pytest.mark.asyncio
+async def test_b_t1_reload_order_is_the_live_order_when_the_reader_runs_ahead():
+    from database import db
+    sid = "s-tw-reader-ahead"
+    await _turn(_router(), sid, _reader_ahead_turn({}))
+    rows = await db.messages.list_by_session(sid, include_pending=True)
+    shape = [(r["role"], (r.get("metadata") or {}).get("client_id")) for r in rows]
+    assert shape[-3:] == [("assistant", f"local-{sid}-asst"), ("user", "c-steer"),
+                          ("assistant", "c-steer-asst")], shape
 
 
 @pytest.mark.asyncio

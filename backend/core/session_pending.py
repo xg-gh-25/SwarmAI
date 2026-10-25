@@ -822,8 +822,12 @@ async def mark_steer_inflight(session_id: str, message_id: str, *,
                               terminal_context: dict | None = None) -> bool:
     """Move the send's just-written user row (sent=1, persist-before-slot) into the
     steer-in-flight phase, BEFORE the steer is written to stdin. False when the row
-    is not a delivered user row of this session (missing, queued, already a steer):
-    the caller then does not steer.
+    is not a delivered user row of this session (missing, queued, already a steer),
+    or while the session has a queued message not yet taken by a drain: a later
+    message never overtakes an earlier one (frontend design 2026-10-25 B3). A
+    claimed one is already the running turn's input and placed before it. Checked in the same statement,
+    under the seq lock every queue writer holds, so no queue write falls between
+    the check and the claim. The caller then queues it.
 
     ``terminal_context`` (the send's attached terminal output) is kept in the row's
     metadata like a queued message's (``mark_pending_by_id``): a steer that goes
@@ -845,8 +849,11 @@ async def mark_steer_inflight(session_id: str, message_id: str, *,
                     f"UPDATE messages SET sent = 0, claimed_at = ?, pending_seq = NULL, "
                     f"metadata = {meta_sql}, updated_at = ? "
                     f"WHERE id = ? AND session_id = ? AND role = 'user' "
-                    f"AND (sent IS NULL OR sent = 1) AND {_NOT_STEER_SQL}",
-                    args)
+                    f"AND (sent IS NULL OR sent = 1) AND {_NOT_STEER_SQL} "
+                    f"AND NOT EXISTS (SELECT 1 FROM messages q WHERE q.session_id = ? "
+                    f"AND q.sent = 0 AND q.claimed_at IS NULL "
+                    f"AND {_NOT_STEER_SQL.replace('metadata', 'q.metadata')})",
+                    (*args, session_id))
                 await conn.commit()
                 return cursor.rowcount == 1
 
@@ -854,8 +861,9 @@ async def mark_steer_inflight(session_id: str, message_id: str, *,
 
 
 async def confirm_steer(session_id: str, message_id: str, echo_at: str, outcome: str) -> bool:
-    """The CLI read the steer (its echo): the row becomes history at ``echo_at``
-    (``sent = 1``), labelled ``metadata.steered`` = ``during`` (``folded``) or
+    """The CLI read the steer (its echo): the row becomes history (``sent = 1``) at
+    ``echo_at`` or the time the turn's writer already gave it, whichever is later
+    (``restamp_steer``), labelled ``metadata.steered`` = ``during`` (``folded``) or
     ``after`` (``opened``), and is pushed to the live feed. False, and nothing
     written or pushed, when the row is not a steer in flight."""
     label = _STEERED_LABEL.get(outcome)
@@ -869,7 +877,7 @@ async def confirm_steer(session_id: str, message_id: str, echo_at: str, outcome:
             async with _pooled(db_path) as conn:
                 await conn.execute("PRAGMA busy_timeout=5000")
                 cursor = await conn.execute(
-                    "UPDATE messages SET sent = 1, claimed_at = NULL, created_at = ?, "
+                    "UPDATE messages SET sent = 1, claimed_at = NULL, created_at = MAX(created_at, ?), "
                     "metadata = json_set(json_remove(metadata, '$.steer', '$.terminal_context'), "
                     "'$.steered', ?), "
                     f"updated_at = ? WHERE id = ? AND session_id = ? AND sent = 0 AND {_IS_STEER_SQL}",
@@ -881,6 +889,35 @@ async def confirm_steer(session_id: str, message_id: str, echo_at: str, outcome:
     if done:
         await _report_row(message_id)
     return done
+
+
+async def restamp_steer(session_id: str, client_id: str, at: str) -> bool:
+    """The turn's writer reached the steer (its ``user_steered`` event): the row's
+    time becomes ``at`` unless it is already later (frontend design 2026-10-25 B1).
+    The echo time comes from the reader, which can run ahead of the writer: rows of
+    the segment before the steer are inserted after it, and a reload would put
+    them after the steer. The writer inserts in order, so its time is after every
+    row before the steer and before every row after it. Either this or
+    ``confirm_steer`` may land first; both keep the later time. Only a steer row
+    (in flight or read). False when none matched."""
+    db_path = _get_db_path()
+
+    async def _do() -> bool:
+        async with _get_seq_lock(session_id):
+            async with _pooled(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    "UPDATE messages SET created_at = MAX(created_at, ?) "
+                    "WHERE session_id = ? AND role = 'user' "
+                    "AND json_extract(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, "
+                    "'$.client_id') = ? "
+                    f"AND ({_IS_STEER_SQL} OR json_extract(CASE WHEN json_valid(metadata) "
+                    "THEN metadata ELSE '{}' END, '$.steered') IS NOT NULL)",
+                    (at, session_id, client_id))
+                await conn.commit()
+                return cursor.rowcount >= 1
+
+    return await _with_retry(_do)
 
 
 async def release_steer(session_id: str, message_id: str) -> int | None:

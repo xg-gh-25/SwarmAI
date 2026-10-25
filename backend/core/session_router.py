@@ -5555,7 +5555,7 @@ class SessionRouter:
         if extra:
             extra = await self._persist_assistant_blocks(
                 session_id, extra, None, label="turn_stop-products",
-                client_id=self._turn_row_key_of(unit),
+                client_id=self._segment_asst_key(unit),
             )
         # PIT01 recycle: a user Stop recycles the subprocess to COLD, so a stopped
         # turn does not imply a live process. Re-read is_alive for liveness.
@@ -5588,7 +5588,7 @@ class SessionRouter:
         unit._stop_receipt_at = datetime.now()
         return await self._persist_assistant_blocks(
             session_id, [block], None, label="turn_stop",
-            client_id=self._turn_row_key_of(unit),
+            client_id=self._segment_asst_key(unit),
         )
 
     async def _turn_products_at_stop(self, unit: SessionUnit, stop_rows: list[dict] | None = None) -> list[dict]:
@@ -5737,17 +5737,27 @@ class SessionRouter:
 
     @staticmethod
     def _turn_row_key_of(unit: Any) -> Optional[str]:
-        """The key of the running turn's current segment: rows written into the
-        turn from outside its writer (Stop receipt, Stop products) and a
-        continuation's rows go there, after a steer too (design chat-steer D4)."""
+        """The key of the running turn's current segment: the client_id of the user
+        bubble that opened it (the sender's, or the steer's after a steer, design
+        chat-steer D4). Rows written into the turn from outside its writer (Stop
+        receipt, Stop products) and a continuation's rows use ``{key}-asst``
+        (``_segment_asst_key``)."""
         if unit is None:
             return None
         key = getattr(unit, "_turn_row_key", None)
         return key if isinstance(key, str) and key else getattr(unit, "_turn_client_id", None)
 
-    def _continuation_row_key(self, session_id: str) -> Optional[str]:
-        key = self._turn_row_key_of(self.get_unit(session_id))
+    @classmethod
+    def _segment_asst_key(cls, unit: Any) -> Optional[str]:
+        """The ``client_id`` of an assistant row in the turn's current segment, the
+        key its writer uses. Never the bare segment key: that is the user bubble's
+        (the turn's sender or the steer), and the frontend's reconcile matches a
+        client_id regardless of role (frontend design 2026-10-25 B2)."""
+        key = cls._turn_row_key_of(unit)
         return f"{key}-asst" if key else None
+
+    def _continuation_row_key(self, session_id: str) -> Optional[str]:
+        return self._segment_asst_key(self.get_unit(session_id))
 
     async def continue_with_answer(
         self, session_id: str, answer: str,

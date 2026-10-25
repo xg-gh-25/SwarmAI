@@ -30,7 +30,10 @@ continue_with_cmd_permission, run_injected_turn) gets ONE ``TurnWriter``:
   ``{steer_client_id}-asst`` (the steer's answer), the unit's ``_turn_row_key``
   follows (continuations and the Stop receipt write there too), and the event
   goes out with ``rowKey`` and the turn's ``segments`` (every segment key, in
-  order).
+  order). The steer's own row gets the writer's time here
+  (``session_pending.restamp_steer``): the echo time comes from the reader, which
+  can be ahead of this writer, and a reload orders rows by time. Not once a Stop
+  started: the row stays before the receipt (chat-steer T29).
 
 ``write`` / ``flush`` / ``close`` are serialised by one lock: the Stop request
 runs concurrently with the turn, and a flush between a write's row insert and
@@ -128,6 +131,8 @@ class TurnWriter:
         cid = event.get("clientId")
         unit = self._router.get_unit(self._session_id) if hasattr(self._router, "get_unit") else None
         segments = list(getattr(unit, "_turn_segments", None) or ([self._row_key] if self._row_key else []))
+        if cid and getattr(unit, "_stop_receipt_at", None) is None:
+            await self._restamp_steer_row(cid)
         if cid:
             self._row_key = f"{cid}-asst"
             self._fresh_segment = True
@@ -138,6 +143,18 @@ class TurnWriter:
                 unit._turn_segments = segments
         event["rowKey"] = self._row_key
         event["segments"] = segments
+
+    async def _restamp_steer_row(self, client_id: str) -> None:
+        from datetime import datetime
+        from . import session_pending
+        try:
+            if not await session_pending.restamp_steer(self._session_id, client_id,
+                                                       datetime.now().isoformat()):
+                logger.warning("turn_writer.steer_row_missing session_id=%s client_id=%s",
+                               self._session_id, client_id)
+        except Exception as exc:  # noqa: BLE001 — the segment still starts
+            logger.error("turn_writer.steer_restamp_failed session_id=%s client_id=%s: %s",
+                         self._session_id, client_id, exc)
 
     async def _write_results_now(self) -> None:
         """The held step results onto the turn's newest row (the one holding their

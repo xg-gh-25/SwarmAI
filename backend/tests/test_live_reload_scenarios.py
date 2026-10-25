@@ -274,6 +274,8 @@ def _scripted(unit: SessionUnit, frames: list[dict], *, pause: dict | None, afte
     ``at[i]`` runs before frame ``i`` is yielded (``at[len(frames)]`` after the last):
     the frames before it are published by then."""
     async def gen(*_a, **_k):
+        if unit.state in (SessionState.COLD, SessionState.IDLE):
+            unit._reset_turn_state()   # what the real send() does at admission
         if unit.state != SessionState.STREAMING:
             unit._transition(SessionState.STREAMING)
         for i, ev in enumerate(frames):
@@ -297,18 +299,36 @@ async def _resubscribe(hub, cursors: dict, epoch: str | None) -> list[dict]:
     """What the real ``SessionEventHub.subscribe`` sends a reconnecting client before
     its live envelopes: the buffered replay after its cursor, or a ``resync`` and the
     active turn's replay. ``events_hello`` stays in the client (it carries a random
-    epoch), as ``sessionEvents`` keeps it from its listeners."""
+    epoch), as ``sessionEvents`` keeps it from its listeners.
+
+    Read until the hub's state snapshot is done, then until it is quiet: the
+    snapshot awaits a DB read, and a fixed short wait missed it on a loaded machine,
+    so the fixture depended on the machine's load."""
+    from core import session_events as se
     out: list[dict] = []
+    provided = asyncio.Event()
+    real = se._state_provider
+
+    async def provider(sid):
+        try:
+            return await real(sid)
+        finally:
+            provided.set()
+    if real is None:
+        provided.set()
+    else:
+        se._state_provider = provider
     agen = hub.subscribe(cursors, epoch)
     try:
         while True:
             try:
-                env = await asyncio.wait_for(agen.__anext__(), 0.01)
+                env = await asyncio.wait_for(agen.__anext__(), 0.01 if provided.is_set() else 30)
             except (asyncio.TimeoutError, TimeoutError, StopAsyncIteration):
                 break
             if env.get("type") != "events_hello":
                 out.append(json.loads(json.dumps(env)))
     finally:
+        se._state_provider = real
         await agen.aclose()
     return out
 

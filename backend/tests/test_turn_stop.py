@@ -290,7 +290,9 @@ async def test_interrupt_session_persists_the_receipt_before_the_stop_and_return
         out = await router.interrupt_session("s1")
     assert order[0] == "turn_stop" and order.index("interrupt") > 0
     assert [b["type"] for b in out["receipt"]] == ["turn_changes", "turn_deliverables", "turn_stop"]
-    assert persist.await_args.kwargs["client_id"] == "c1"
+    # The turn's assistant rows are keyed "{row_key}-asst": a bare "c1" would be the
+    # user bubble's key, and the history merge ignores role (steer D7 B2).
+    assert persist.await_args.kwargs["client_id"] == "c1-asst"
     assert unit._turn_files == {}, "deliverables are written once"
     assert [c.args for c in unit.background_agents.user_stop.call_args_list] == [(True,), (False,)]
 
