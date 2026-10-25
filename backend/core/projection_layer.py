@@ -202,6 +202,37 @@ def _skill_fingerprint(root: Path) -> tuple[frozenset[str], float]:
     return frozenset(paths), max_mtime
 
 
+def project_experts(workspace_path: Path, source: Path | None = None) -> bool:
+    """Copy the review-expert prompts into ``<workspace>/.claude/experts/``.
+
+    The native expert-review skill (``s_expert-review``) is projected to
+    ``<workspace>/.claude/skills/s_expert-review/`` and its CATALOG.md names each
+    prompt as ``../../experts/<domain>/<id>.md``. That path holds in the source tree
+    and in the packaged bundle, but the agent reads the PROJECTED skill, inside the
+    session's working directory, so the prompts have to be there too. The source is
+    the one experts tree the pipeline engine also reads (``expert_manager``); the copy
+    is refreshed only when it is stale. Returns True when the copy is current.
+    """
+    from core.expert_manager import _EXPERTS_ROOT
+    src = (source or _EXPERTS_ROOT).resolve()
+    dst = Path(workspace_path) / ".claude" / "experts"
+    if not src.is_dir():
+        logger.warning("expert prompts not projected: %s is not a directory", src)
+        return False
+    if dst.exists() and not dst.is_symlink() and _is_skill_fresh(src, dst):
+        return True
+    try:
+        if dst.is_symlink():
+            dst.unlink()
+        elif dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(str(src), str(dst), ignore=COPY_IGNORE)
+    except OSError as exc:
+        logger.warning("expert prompts not projected to %s: %s", dst, exc)
+        return False
+    return True
+
+
 def _is_skill_fresh(src: Path, dst: Path) -> bool:
     """True iff ``dst`` is a current copy of ``src`` (skip re-projection).
 
@@ -447,6 +478,10 @@ class ProjectionLayer:
                 )
             except OSError as exc:
                 logger.warning("Failed to project _shared/: %s", exc)
+
+        # Expert prompts next to the skills (s_expert-review's catalog names them
+        # relative to its own directory: ../../experts/<domain>/<id>.md).
+        project_experts(workspace_path)
 
         # Clean up stale entries (both legacy symlinks and real directories)
         self._cleanup_stale_entries(

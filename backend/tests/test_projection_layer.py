@@ -334,3 +334,40 @@ class TestUntrustedCopyIgnore:
         assert not (dst / "a" / "b" / "c" / "leak_deep").exists(), (
             "nested escaping symlink was projected (exfil)"
         )
+
+
+class TestExpertPromptsProjected:
+    """s_expert-review's CATALOG.md names each expert prompt relative to the skill dir
+    (../../experts/<domain>/<id>.md). The agent reads the PROJECTED skill in the
+    workspace, so the prompts must be projected next to it, or every native review
+    points at files that do not exist on an installed machine."""
+
+    @pytest.mark.asyncio
+    async def test_every_catalog_prompt_resolves_from_the_projected_skill(self, tmp_path):
+        backend = Path(__file__).resolve().parents[1]
+        skills = backend / "skills"
+        cache = {"s_expert-review": _FakeSkillInfo("s_expert-review", skills / "s_expert-review")}
+        ws = tmp_path / "ws"
+        await ProjectionLayer(_FakeSkillManager(skills, cache)).project_skills(ws)
+        projected = ws / ".claude" / "skills" / "s_expert-review"
+        rels = [line.rsplit("`", 2)[-2]
+                for line in (projected / "CATALOG.md").read_text(encoding="utf-8").splitlines()
+                if line.startswith("| `") and "../../experts/" in line]
+        assert rels
+        missing = [r for r in rels if not (projected / r).resolve().is_file()]
+        assert not missing, missing
+
+    def test_stale_copy_is_refreshed(self, tmp_path):
+        from core.projection_layer import project_experts
+        src = tmp_path / "experts"
+        (src / "code").mkdir(parents=True)
+        f = src / "code" / "x.md"
+        f.write_text("v1")
+        ws = tmp_path / "ws"
+        assert project_experts(ws, source=src)
+        dst = ws / ".claude" / "experts" / "code" / "x.md"
+        assert dst.read_text() == "v1"
+        f.write_text("v2")
+        os.utime(f, (time.time() + 5, time.time() + 5))
+        assert project_experts(ws, source=src)
+        assert dst.read_text() == "v2"
