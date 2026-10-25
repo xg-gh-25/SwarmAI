@@ -1400,6 +1400,7 @@ class SessionUnit:
         if isinstance(ctx, dict):
             import uuid
             ctx["_turn_id"] = uuid.uuid4().hex
+            ctx["_turn_lands"] = 0      # lands handed this turn's id (run_owner_gate)
         # Clear last turn's spawn timing at the new-turn admission point
         # (same lifecycle as the per-turn fields around it). A warm turn never
         # reaches _spawn, so this reset is what guarantees it relays None — not a
@@ -1446,7 +1447,7 @@ class SessionUnit:
             _ctx = getattr(self, "_hook_session_context", None) or {}
             self._turn_changes = TurnChanges.start(
                 session_id=_ctx.get("sdk_session_id") or self.session_id,
-                turn_id=_ctx.get("_turn_id"))
+                turn_id=_ctx.get("_turn_id"), context=_ctx)
         except Exception as exc:  # noqa: BLE001 — a display aid never blocks a send
             logger.debug("turn_changes start skipped: %s", exc)
             self._turn_changes = None

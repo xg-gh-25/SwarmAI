@@ -104,10 +104,13 @@ def _landing(root: str, dest: str, deadline: Deadline, branch: str, turn: str, o
 
 def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str]" = None,
               cap: int = TURN_CAP, since_days: "Optional[int]" = None,
-              limit: "Optional[int]" = None) -> dict:
+              limit: "Optional[int]" = None, expect: "Optional[int]" = None) -> dict:
     """This session's landings into the checkout *root*'s current branch, newest first:
     ``{landed, unverified, truncated, unknown}``. ``turn_id``: only that turn's.
-    ``since_days`` / ``limit``: Canvas's window (by the reflog's own date)."""
+    ``since_days`` / ``limit``: Canvas's window (by the reflog's own date).
+    ``expect``: how many lands were handed this turn's id (run_owner_gate counts
+    them); finding that many stamps is complete even when the read hit its cap — a
+    busy branch's reflog is longer than any cap (this repo's main: ~1700 entries)."""
     out: dict = {"landed": [], "unverified": 0, "truncated": False, "unknown": None}
     try:
         rc, ref = _git(root, deadline, "symbolic-ref", "-q", "HEAD", ok=(0, 1))
@@ -145,6 +148,9 @@ def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str
                 out["unverified"] += 1
             else:
                 out["landed"].append(land)
+            if expect is not None and len(out["landed"]) + out["unverified"] >= expect:
+                out["truncated"] = False     # every stamp this turn handed out is found
+                break
     except _OutOfTime:
         out["unknown"] = "timeout"
     except Exception as exc:  # noqa: BLE001 — a display aid: said, never raised
@@ -155,7 +161,7 @@ def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str
 
 def read_session(session_id: str, *, deadline: Deadline, turn_id: "Optional[str]" = None,
                  cap: int = TURN_CAP, since_days: "Optional[int]" = None,
-                 limit: "Optional[int]" = None) -> dict:
+                 limit: "Optional[int]" = None, expect: "Optional[int]" = None) -> dict:
     """``read_repo`` over every bound main checkout: ``{landed, unverified,
     truncated, unknown: [{repo, reason}]}``. Blocking: run it on a dedicated pool."""
     from core.app_session_id import session_key, valid_app_session_id
@@ -163,11 +169,16 @@ def read_session(session_id: str, *, deadline: Deadline, turn_id: "Optional[str]
     if not valid_app_session_id(session_id):
         return res
     key = session_key(session_id)
+    found = 0
     for root in _bound_checkouts():
+        if expect is not None and found >= expect:
+            break                        # every stamp handed out is found
         one = read_repo(root, key, deadline=deadline, turn_id=turn_id, cap=cap,
-                        since_days=since_days, limit=limit)
+                        since_days=since_days, limit=limit,
+                        expect=None if expect is None else max(expect - found, 0) or None)
         res["landed"] += one["landed"]
         res["unverified"] += one["unverified"]
+        found += len(one["landed"]) + one["unverified"]
         res["truncated"] = res["truncated"] or one["truncated"]
         if one["unknown"]:
             res["unknown"].append({"repo": os.path.basename(root), "reason": one["unknown"]})

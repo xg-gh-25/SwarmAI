@@ -335,11 +335,41 @@ async def test_this_turns_landings_join_the_card(repo, monkeypatch):
 @pytest.mark.asyncio
 async def test_no_turn_id_reads_no_landings_and_nothing_is_no_card(repo, monkeypatch):
     from core import session_landings
-    monkeypatch.setattr(session_landings, "read_session",
-                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("read")))
+    calls = []
+    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: calls.append(k) or {
+        "landed": [], "unverified": 0, "truncated": False, "unknown": []})
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id=None)
     await t.ready()
     assert await t.finish() is None
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_handed_no_land_its_id_reads_no_landings(repo, monkeypatch):
+    """No land of this turn means no stamp of this turn: no git call at turn end."""
+    from core import session_landings
+    calls = []
+    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: calls.append(k) or {
+        "landed": [], "unverified": 0, "truncated": False, "unknown": []})
+    ctx = {"_turn_id": "t" * 32, "_turn_lands": 0}
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32, context=ctx)
+    await t.ready()
+    assert await t.finish() is None
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_landings_read_expects_the_turns_land_calls(repo, monkeypatch):
+    from core import session_landings
+    seen = {}
+    monkeypatch.setattr(session_landings, "read_session", lambda sid, **k: seen.update(k) or {
+        "landed": [], "unverified": 0, "truncated": False, "unknown": []})
+    ctx = {"_turn_id": "t" * 32, "_turn_lands": 0}
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32, context=ctx)
+    await t.ready()
+    ctx["_turn_lands"] = 2           # counted by run_owner_gate while the turn ran
+    await t.finish()
+    assert seen["expect"] == 2 and seen["turn_id"] == "t" * 32
 
 
 @pytest.mark.asyncio

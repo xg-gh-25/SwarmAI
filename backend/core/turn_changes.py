@@ -243,12 +243,15 @@ class TurnChanges:
     """One turn's code changes: a start snapshot per tree + the files the turn wrote."""
 
     def __init__(self, roots: Optional[Iterable[str]] = None, *,
-                 session_id: Optional[str] = None, turn_id: Optional[str] = None):
+                 session_id: Optional[str] = None, turn_id: Optional[str] = None,
+                 context: Optional[dict] = None):
         # None: discover the trees in the pool (code_roots reads run.json files).
         self._given = None if roots is None else [os.path.realpath(r) for r in roots]
         # This turn's landings are read by (session, turn id) from the stamp
         # session_worktree land writes (core/session_landings); no turn id, none.
-        self._session_id, self._turn_id = session_id, turn_id
+        # *context* is the session's hook context: run_owner_gate counts there the
+        # lands it handed this turn's id (``_turn_lands``); none counted, no read.
+        self._session_id, self._turn_id, self._context = session_id, turn_id, context
         # The card, computed once per turn: result and Stop may both finish it.
         self._result: Optional[asyncio.Future] = None
         self._jobs: dict[str, asyncio.Future] = {}      # root -> (toplevel, start tree)
@@ -262,9 +265,9 @@ class TurnChanges:
 
     @classmethod
     def start(cls, roots: Optional[Iterable[str]] = None, *, session_id: Optional[str] = None,
-              turn_id: Optional[str] = None) -> "TurnChanges":
+              turn_id: Optional[str] = None, context: Optional[dict] = None) -> "TurnChanges":
         """Begin a turn: discover the trees, then snapshot each in its own pool job."""
-        tc = cls(roots, session_id=session_id, turn_id=turn_id)
+        tc = cls(roots, session_id=session_id, turn_id=turn_id, context=context)
         loop = asyncio.get_running_loop()
         pool = _pool("turn_snapshot")
 
@@ -336,22 +339,27 @@ class TurnChanges:
             except asyncio.TimeoutError:
                 logger.warning("turn_changes: finish exceeded %.0fs — showing %d rows", FINISH_BUDGET_S, len(self._partial))
         if self._session_id and self._turn_id:
-            landings = await self._landings()
+            expect = None
+            if self._context is not None:
+                expect = int(self._context.get("_turn_lands") or 0)
+            if expect != 0:              # no land handed this turn's id: no stamp to read
+                landings = await self._landings(expect)
         block = _block(self._partial, landings)
         if block is not None and self._turn_id:
             block["turn_id"] = self._turn_id
         return block
 
-    async def _landings(self) -> Optional[dict]:
+    async def _landings(self, expect: Optional[int] = None) -> Optional[dict]:
         """This turn's landings (core/session_landings), on the turn_changes pool,
-        under the same budget as the rows."""
+        under the same budget as the rows. *expect*: how many lands were handed this
+        turn's id; the read ends once it found that many."""
         from core import session_landings
         loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(
                 _pool(), lambda: session_landings.read_session(
                     self._session_id, deadline=session_landings.Deadline(FINISH_BUDGET_S),
-                    turn_id=self._turn_id, limit=MAX_LANDINGS))
+                    turn_id=self._turn_id, limit=MAX_LANDINGS, expect=expect))
         except Exception as exc:  # noqa: BLE001 — a display aid
             logger.debug("turn_changes: landings unreadable: %s", exc)
             return None

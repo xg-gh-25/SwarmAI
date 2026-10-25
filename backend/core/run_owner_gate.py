@@ -444,24 +444,28 @@ _SW_BACKEND = frozenset({"$SWARM_BACKEND_BIN", "${SWARM_BACKEND_BIN}"})
 _SW_PYTHON = frozenset({"python", "python3"})
 
 
-def _is_session_worktree_call(tokens: "list[str]") -> bool:
+def _session_worktree_verb(tokens: "list[str]") -> "str | None":
+    """create / land / remove when *tokens* are exactly a session_worktree call."""
     if tokens[:1] and tokens[0] in _SW_BACKEND:
         rest = tokens[1:]
         if rest[:1] != ["py"]:
-            return False
+            return None
         rest = rest[1:]
     elif tokens[:1] and tokens[0] in _SW_PYTHON:
         rest = tokens[1:]
     else:
-        return False
-    return rest[:2] == ["-m", _SW_MODULE] and len(rest) > 2 and rest[2] in _SW_VERBS
+        return None
+    if rest[:2] == ["-m", _SW_MODULE] and len(rest) > 2 and rest[2] in _SW_VERBS:
+        return rest[2]
+    return None
 
 
 def _session_worktree_rewrite(command: str, sid: str, turn_id: "str | None",
-                              sub_agent: bool) -> "str | None":
-    """*command* with ``SWARM_APP_SESSION_ID`` (and, for the main agent,
-    ``SWARM_TURN_ID``) put before its session_worktree call, or None. A sub-agent
-    can outlive the turn that started it, so its call never carries a turn id."""
+                              sub_agent: bool) -> "tuple[str, str, bool] | None":
+    """(command with ``SWARM_APP_SESSION_ID`` and, for the main agent,
+    ``SWARM_TURN_ID`` put before its session_worktree call, its verb, whether the
+    turn id was handed over), or None. A sub-agent can outlive the turn that started
+    it, so its call never carries a turn id."""
     from core.app_session_id import valid_turn_id
     from core.security_hooks import _gate_shell_segments
     from core.session_router import PREWARM_SESSION_PREFIX
@@ -471,13 +475,15 @@ def _session_worktree_rewrite(command: str, sid: str, turn_id: "str | None",
         return None              # already handed over, or set by the command itself
     seps: list[str] = []
     segs = _gate_shell_segments(command, seps)
-    if not segs or seps[0] != "" or not _is_session_worktree_call(segs[0]):
+    verb = _session_worktree_verb(segs[0]) if segs and seps[0] == "" else None
+    if verb is None:
         return None
     body = command.lstrip()
     prefix = f"{_SESSION_ENV}={shlex.quote(sid)} "
-    if not sub_agent and valid_turn_id(turn_id):
+    with_turn = not sub_agent and valid_turn_id(turn_id)
+    if with_turn:
         prefix += f"{_TURN_ENV}={turn_id} "
-    return command[:len(command) - len(body)] + prefix + body
+    return command[:len(command) - len(body)] + prefix + body, verb, bool(with_turn)
 
 
 _TURN_ENV = "SWARM_TURN_ID"
@@ -525,14 +531,20 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
                 and not pipeline_command.mentions(command):
             # pure string work, no IO: decided inline
             try:
-                rewrite = _session_worktree_rewrite(
+                got = _session_worktree_rewrite(
                     command, str(session_context.get("sdk_session_id") or ""),
                     session_context.get("_turn_id"), bool(input_data.get("agent_id")))
             except Exception:  # noqa: BLE001 — fail-open, never blocks a command
                 logger.warning("run_owner_gate: session_worktree rewrite failed", exc_info=True)
-                rewrite = None
-            if rewrite is None:
+                got = None
+            if got is None:
                 return {"decision": "approve"}
+            rewrite, verb, with_turn = got
+            if verb == "land" and with_turn:
+                # TurnChanges reads this turn's landings only when one was handed the
+                # turn's id, and knows how many to look for (a busy reflog is longer
+                # than any cap, so "found them all" is what makes the read complete)
+                session_context["_turn_lands"] = int(session_context.get("_turn_lands") or 0) + 1
             return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                            "permissionDecision": "allow",
                                            "updatedInput": {**tool_input, "command": rewrite}}}

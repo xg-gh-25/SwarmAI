@@ -88,6 +88,18 @@ def test_approved_phase_does_not_rewrite():
     assert _rewritten(_run(LAND, phase="approved")) is None
 
 
+def test_land_calls_handed_the_turn_id_are_counted():
+    """TurnChanges reads landings only when this turn handed a land its id, and stops at
+    that many (design 2026-10-25-turn-result-card.md §4)."""
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN}
+    _run(LAND, ctx=ctx)
+    _run(LAND, ctx=ctx)
+    _run('"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create /r', ctx=ctx)
+    _run(LAND, ctx=ctx, agent_id="a1")                  # a sub-agent: no turn id, not counted
+    _run("cd /x && " + LAND, ctx=ctx)                    # not rewritten, not counted
+    assert ctx["_turn_lands"] == 2
+
+
 def test_pipeline_rewrite_is_unchanged():
     cmd = '"$SWARM_BACKEND_BIN" pipeline-v1 status --project P --run-id run_abcd1234'
     assert _with_session(cmd, SID) == f"SWARM_APP_SESSION_ID={shlex.quote(SID)} {cmd}"
@@ -103,6 +115,9 @@ def test_each_admitted_turn_gets_a_fresh_turn_id():
     second = unit._hook_session_context["_turn_id"]
     from core.app_session_id import valid_turn_id
     assert valid_turn_id(first) and valid_turn_id(second) and first != second
+    unit._hook_session_context["_turn_lands"] = 3
+    unit._reset_turn_state()
+    assert unit._hook_session_context["_turn_lands"] == 0, "a new turn counts its own lands"
 
 
 def test_continuations_do_not_reset_the_turn():

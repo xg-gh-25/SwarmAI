@@ -171,6 +171,22 @@ def test_exactly_the_cap_is_truncated(tmp_path, monkeypatch):
     assert not res["truncated"] and len(res["landed"]) == 1
 
 
+def test_expect_ends_the_read_at_that_many_landings(tmp_path, monkeypatch):
+    """A busy reflog (this repo's main has ~1700 entries) is always longer than the cap;
+    the turn knows how many lands it handed its id, so finding them all is complete."""
+    repo = _repo(tmp_path / "proj")
+    _land(monkeypatch, repo, "t1", {"b.py": "b\n"})
+    for _ in range(6):
+        _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "x")
+    key = asi.session_key(SID)
+    res = sl.read_repo(str(repo), key, deadline=sl.Deadline(10), cap=8, turn_id=T1, expect=1)
+    assert len(res["landed"]) == 1 and not res["truncated"]
+    res = sl.read_repo(str(repo), key, deadline=sl.Deadline(10), cap=8, turn_id=T1, expect=2)
+    assert len(res["landed"]) == 1 and res["truncated"], "fewer found and the cap reached"
+    res = sl.read_repo(str(repo), key, deadline=sl.Deadline(10), cap=50, turn_id=T1, expect=2)
+    assert len(res["landed"]) == 1 and not res["truncated"], "the reflog ended: complete"
+
+
 def test_an_exhausted_deadline_starts_no_git(tmp_path, monkeypatch):
     repo = _repo(tmp_path / "proj")
     called = []
