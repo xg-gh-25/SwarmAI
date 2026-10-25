@@ -357,12 +357,6 @@ class ContextHealthHook:
             )
 
 
-        # Auto-update `updated:` date in design doc frontmatter when modified
-        try:
-            self._auto_update_doc_frontmatter(root)
-        except Exception as exc:
-            logger.debug("context_health: doc frontmatter auto-update skipped: %s", exc)
-
         # OS Eval canary — session tier every session, daily tier resumed within
         # the remaining budget (see _run_eval_canary). Zero LLM cost.
         # Must respect cultivation deadline — canary runs LAST in _light_refresh.
@@ -690,91 +684,6 @@ class ContextHealthHook:
         except OSError as exc:
             logger.warning("context_health: daily canary state write failed: %s", exc)
         return state
-
-    def _auto_update_doc_frontmatter(self, root: Path) -> None:
-        """Auto-update `updated:` field in docs/*.md that were modified this session.
-
-        Checks git for uncommitted or recently-committed changes to docs/*.md,
-        and updates the `updated:` frontmatter field to today's date if stale.
-        Only touches files with existing YAML frontmatter (created:/updated:).
-
-        FIX #1: Uses swarmai repo path (not SwarmWS workspace) since docs/ lives there.
-        FIX #2: Only searches within YAML frontmatter block (between --- delimiters).
-        FIX #4: Validates existing value is a YYYY-MM-DD date before replacing.
-        """
-        # docs/ lives in the swarmai repo, not SwarmWS. Resolution order:
-        # 1. SWARMAI_DIR env var (explicit, works on all platforms)
-        # 2. git rev-parse from CWD (works if CWD is inside swarmai repo)
-        # 3. Standard macOS dev location (fallback)
-        swarmai_dir = Path(os.environ.get("SWARMAI_DIR", "")).resolve()
-        if not swarmai_dir.is_dir():
-            # Try git-based discovery (works regardless of hardcoded paths)
-            try:
-                result = subprocess.run(
-                    ["git", "rev-parse", "--show-toplevel"],
-                    capture_output=True, text=True, timeout=2,
-                    cwd=str(Path(__file__).parent.parent),  # backend/ dir is inside swarmai repo
-                )
-                if result.returncode == 0:
-                    swarmai_dir = Path(result.stdout.strip())
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-        if not swarmai_dir.is_dir():
-            swarmai_dir = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
-        docs_dir = swarmai_dir / "docs"
-        if not docs_dir.is_dir():
-            return
-
-        today_str = date.today().isoformat()
-        date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-        # Find docs modified in working tree (staged + unstaged)
-        try:
-            result = subprocess.run(
-                ["git", "diff", "--name-only", "HEAD", "--", "docs/"],
-                capture_output=True, text=True, timeout=3,
-                cwd=str(swarmai_dir),
-            )
-            modified = [
-                swarmai_dir / line.strip()
-                for line in result.stdout.strip().split("\n")
-                if line.strip().endswith(".md")
-            ]
-        except (subprocess.TimeoutExpired, OSError):
-            return
-
-        for filepath in modified:
-            if not filepath.exists():
-                continue
-            content = filepath.read_text(encoding="utf-8")
-            if not content.startswith("---"):
-                continue
-
-            # FIX #2: Only search within frontmatter block (between first two ---)
-            fm_end = content.find("---", 3)
-            if fm_end == -1:
-                continue
-            frontmatter = content[:fm_end]
-
-            # Find updated: field within frontmatter only
-            match = re.search(r"^updated:\s*(.+)$", frontmatter, re.MULTILINE)
-            if not match:
-                continue
-
-            existing_value = match.group(1).strip().strip('"').strip("'")
-
-            # FIX #4: Only replace if existing value is a valid date format
-            if not date_re.match(existing_value):
-                continue
-
-            if existing_value == today_str:
-                continue
-
-            # Replace within the full content using the match position (safe because
-            # match is within frontmatter which is a prefix of content)
-            new_content = content[:match.start()] + f"updated: {today_str}" + content[match.end():]
-            filepath.write_text(new_content, encoding="utf-8")
-            logger.debug("context_health: auto-updated frontmatter date in %s", filepath.name)
 
     def _refresh_code_intel(self, root: Path) -> None:
         """Refresh code_intel.db if the indexed commit is behind HEAD."""

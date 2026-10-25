@@ -724,20 +724,6 @@ def _build_suggestions(
     return _build_suggestions_raw(threads, continue_hints, signals, _DATE_REF_RE)
 
 
-# M3b: Recurrence Radar — known hot-zone keywords mapped to a display label.
-# A "zone" is a recurring failure cluster; the radar fires only when the
-# CURRENT session touches one AND it has recurred >= threshold DISTINCT times.
-# Keywords are COMPOUND/specific (not bare English) so generic mentions of
-# "resume"/"streaming" in prose don't false-fire (adversarial run_123a6530).
-_RADAR_ZONES: dict[str, tuple[str, ...]] = {
-    "reconcile": ("reconcile", "truncated render", "tab-switch render"),
-    "session lifecycle": ("session_unit", "session_router", "self-heal session"),
-    "streaming render": ("streaming content loss", "stream state machine", "isstreaming"),
-    "deploy": ("prod.sh build", "daemon restart", "deploy scope"),
-}
-_RADAR_THRESHOLD = 3  # a zone must have recurred this many DISTINCT times to warn
-
-
 def build_session_briefing(
     workspace_dir: str | Path,
 ) -> Optional[str]:

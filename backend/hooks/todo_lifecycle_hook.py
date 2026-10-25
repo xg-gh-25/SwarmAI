@@ -124,35 +124,27 @@ def _files_overlap(todo_files: list[str], changed_files: list[str]) -> bool:
     return False
 
 
-def _find_codebase_path() -> Optional[Path]:
-    """Discover the SwarmAI codebase path.
+def _session_code_repo(session_id: str, db_path: str) -> Optional[Path]:
+    """The bound code repo this session changed files in, or None.
 
-    Priority:
-    1. ``SWARMAI_CODEBASE_DIR`` env var (explicit override)
-    2. Common filesystem locations (dev machines)
-
-    Returns None if no codebase is found (e.g., on end-user machines
-    running the packaged app — expected, not an error).
+    Reads ``core.session_changes.working_repo``: the same record Canvas Changes and
+    the terminal use (the newest "files changed" card whose ``gitRoot`` is a bound
+    repo's main checkout). It works for any repo a project binds, found from what the
+    session did, never from a guessed checkout location. Blocking (sqlite + cached
+    git identities): call it off the event loop. A session with no recorded change in
+    a bound repo, or a store that cannot be read, gives None, and the hook then counts
+    only the workspace's own commits.
     """
-    import os
+    import sqlite3
 
-    # 1. Explicit env var — always wins
-    env_path = os.environ.get("SWARMAI_CODEBASE_DIR")
-    if env_path:
-        p = Path(env_path)
-        if p.is_dir() and (p / ".git").exists():
-            return p
+    from core.session_changes import working_repo
 
-    # 2. Common dev machine layouts
-    candidates = [
-        Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai",
-        Path.home() / "swarmai",
-        Path.home() / "Projects" / "swarmai",
-    ]
-    for candidate in candidates:
-        if candidate.is_dir() and (candidate / ".git").exists():
-            return candidate
-    return None
+    try:
+        repo = working_repo(session_id, db_path)
+    except (sqlite3.Error, OSError) as exc:
+        logger.debug("TodoLifecycleHook: working repo of %s unavailable: %s", session_id, exc)
+        return None
+    return Path(repo["path"]) if repo else None
 
 
 class TodoLifecycleHook:
@@ -202,8 +194,11 @@ class TodoLifecycleHook:
         # Determine git repo paths for commit queries
         from config import get_app_data_dir
         workspace_path = get_app_data_dir() / "SwarmWS"
-        # Discover codebase path from STEERING.md or common locations
-        codebase_path = _find_codebase_path()
+        # The bound repo this session worked in (any project's repo, from the
+        # session's own change record).
+        codebase_path = await asyncio.get_running_loop().run_in_executor(
+            None, _session_code_repo, session_id, str(db.db_path),
+        )
 
         # --- Mode 1: Explicit binding ---
         metadata = session.get("metadata") or "{}"

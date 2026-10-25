@@ -219,3 +219,69 @@ async def test_hook_error_isolation():
 
         # Should NOT raise
         await hook.execute(ctx)
+
+
+# ---------------------------------------------------------------------------
+# The code repo comes from the session's own change record (usable-by-anyone P7)
+# ---------------------------------------------------------------------------
+
+def _git_repo_with_a_commit(path):
+    import subprocess
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
+    path.mkdir()
+    subprocess.run(["git", "init", "-q", str(path)], check=True, env=env)
+    (path / "a.txt").write_text("x")
+    subprocess.run(["git", "-C", str(path), "add", "a.txt"], check=True, env=env)
+    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "c"], check=True, env=env)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_commits_are_counted_in_the_repo_the_session_changed(tmp_path):
+    """Any user's bound repo: the hook counts commits in the repo the session's
+    "files changed" record names, and in no guessed checkout location."""
+    import hooks.todo_lifecycle_hook as mod
+    repo = _git_repo_with_a_commit(tmp_path / "their-repo")
+    hook = TodoLifecycleHook()
+    ctx = _make_context(start_time=(datetime.now() - timedelta(hours=1)).isoformat())
+    session = {"id": "test-session-1", "metadata": json.dumps({"todo_id": "todo-abc"}),
+               "created_at": ctx.session_start_time}
+
+    with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
+         patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
+         patch("config.get_app_data_dir", return_value=tmp_path / "appdata"), \
+         patch("core.session_changes.working_repo",
+               return_value={"path": str(repo), "name": repo.name}) as wr, \
+         patch("hooks.todo_lifecycle_hook._get_session_commit_count",
+               wraps=mod._get_session_commit_count) as count, \
+         patch.object(TodoLifecycleHook, "_write_outcome_notes", AsyncMock()):
+        mock_db.sessions.get = AsyncMock(return_value=session)
+        mock_tm.transition_status = AsyncMock(return_value=True)
+        await hook.execute(ctx)
+
+    assert wr.call_args.args[0] == "test-session-1"
+    counted = {str(c.args[0]) for c in count.call_args_list}
+    assert counted == {str(tmp_path / "appdata" / "SwarmWS"), str(repo)}
+    mock_tm.transition_status.assert_called_once_with("todo-abc", "handled", source="hook_explicit")
+
+
+@pytest.mark.asyncio
+async def test_unreadable_change_record_counts_only_the_workspace(tmp_path):
+    import sqlite3
+    hook = TodoLifecycleHook()
+    ctx = _make_context()
+    session = {"id": "test-session-1", "metadata": json.dumps({"todo_id": "todo-abc"}),
+               "created_at": ctx.session_start_time}
+
+    with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
+         patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
+         patch("config.get_app_data_dir", return_value=tmp_path / "appdata"), \
+         patch("core.session_changes.working_repo", side_effect=sqlite3.OperationalError("locked")), \
+         patch("hooks.todo_lifecycle_hook._get_session_commit_count", return_value=0) as count:
+        mock_db.sessions.get = AsyncMock(return_value=session)
+        mock_tm.transition_status = AsyncMock(return_value=True)
+        await hook.execute(ctx)
+
+    assert [str(c.args[0]) for c in count.call_args_list] == [str(tmp_path / "appdata" / "SwarmWS")]
+    mock_tm.transition_status.assert_called_once_with("todo-abc", "in_discussion", source="hook_explicit")
