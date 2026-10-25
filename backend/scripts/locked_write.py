@@ -96,7 +96,8 @@ def _find_section_range(content: str, section: str):
     return (header_end, next_header_pos)
 
 
-def _modify_content(content: str, section: str, text: str, mode: str) -> str:
+def _modify_content(content: str, section: str, text: str, mode: str,
+                    create_section: bool = False) -> str:
     """Apply the section modification to the file content.
 
     Args:
@@ -109,6 +110,12 @@ def _modify_content(content: str, section: str, text: str, mode: str) -> str:
         Modified content string.
     """
     section_range = _find_section_range(content, section)
+
+    if section_range is None and create_section:
+        # Trusted caller (a keyed record such as COE Registry): create the section it
+        # asked for at the end, instead of the generic fallback a later write cannot find.
+        header = "## " + re.sub(r"^#+\s*", "", section).strip()
+        return (content.rstrip() + "\n\n" if content.strip() else "") + f"{header}\n{text}\n"
 
     if section_range is None:
         # Section not found — append under fallback section
@@ -459,7 +466,7 @@ def _guard_sanitize(file_path: Path, text: str) -> str:
 
 def locked_read_modify_write(
     file_path: Path, section: str, text: "str | Callable[[str], str]", mode: str = "append",
-    *, dedup: bool = False, reindex_memory: bool = False,
+    *, dedup: bool = False, reindex_memory: bool = False, create_section: bool = False,
 ):
     """Acquire flock, read file, modify section, write back, release.
 
@@ -478,6 +485,9 @@ def locked_read_modify_write(
             exactly ``text``; exact duplicates are removed by the lifecycle sweep
             (reclaim_duplicate_entries). Kept only so existing callers and
             already-provisioned copies keep working.
+        create_section: when the section is missing, create it (at the end) rather
+            than writing under the generic ``## Distilled`` fallback. For callers that
+            own a keyed section and must find their record again on the next write.
         reindex_memory: INERT — accepted and ignored. The in-prompt MEMORY index
             was deleted (live MEMORY.md is full-injected; recall scans the body
             with FTS5+BM25), so there is no index to rebuild after a write and
@@ -573,7 +583,7 @@ def locked_read_modify_write(
 
 
         # Modify the content
-        new_content = _modify_content(content, section, text, mode)
+        new_content = _modify_content(content, section, text, mode, create_section)
 
         # NEW ARCHITECTURE (2026-08-14): the in-prompt MEMORY index was DELETED
         # (live MEMORY is full-injected; recall scans body-BM25). There is no index

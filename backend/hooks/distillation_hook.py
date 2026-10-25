@@ -1911,7 +1911,8 @@ class DistillationTriggerHook:
             return merge_coe_section(body, entries).rstrip("\n") + "\n"
 
         try:
-            locked_read_modify_write(memory_path, "COE Registry", build, mode="replace")
+            locked_read_modify_write(memory_path, "COE Registry", build, mode="replace",
+                                     create_section=True)
         except LockedWriteError as e:
             logger.warning("locked_write failed for section COE Registry: %s", e)
             return

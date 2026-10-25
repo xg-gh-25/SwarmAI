@@ -233,4 +233,24 @@ Each fix is mutation-checked: revert that fix, its named test goes red.
   steps reading the same entries.
 - The archive still stores `raw_text` (lead + continuation). A swept duplicate's
   `Detail:` / `valid_from` tail (provenance only) is not copied to the archive.
+- Code review (fresh-context, 2026-10-25) found that `parse_entries` and
+  `inject_entry_metadata` still had their own boundary loops. All four readers
+  (`parse_entries`, `inject_entry_metadata`, `_strip_entries`, `_strip_entries_by_line`)
+  now call one scanner, `_scan_entry`, which returns the entry text end, the metadata
+  line and the span end. A blank run belongs to the entry only when the metadata line
+  follows it. Headings follow CommonMark (`^ {0,3}#{1,6}( |\t|$)`).
+- §3.2's signature is the entry TEXT before its metadata (lead + continuation), not
+  the lead line alone: two entries with the same lead but different continuation text
+  are different entries, and deleting one on a lead match would be a guess. The tail
+  and metadata never enter it.
+- The duplicate-sweep exclusion is `section == "COE Registry"` (a title containing
+  "COE" elsewhere is an ordinary entry).
+- `memory_health._remove_memory_entry` matches the needle only on the lead line of a
+  parsed entry (then removes its span) or on a line outside every span; a match
+  inside an entry's continuation or tail removes nothing.
+- `locked_read_modify_write(..., create_section=True)` creates a missing section
+  instead of writing under `## Distilled`; COE Registry uses it so the next event
+  finds its record.
+- `canonical_entry_from_text` reads a leading `**title** — body` before the generic
+  first-dash split.
 

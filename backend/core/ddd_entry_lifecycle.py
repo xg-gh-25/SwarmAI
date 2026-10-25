@@ -373,6 +373,7 @@ def format_memory_entry(
     return entry_line, meta_line
 
 
+_BOLD_LEAD_RE = re.compile(r"^\*\*(.+?)\*\*\s*(?:—\s*)?(.*)$")
 _LEAD_SCAFFOLD_RE = re.compile(r"^\s*(?:-\s+)?(?:\d{4}-\d{2}-\d{2}:?\s+)?(?:\[\w+\]\s+)?")
 
 
@@ -396,7 +397,10 @@ def canonical_entry_from_text(
     """
     clean = " ".join(text.split())
     clean = _LEAD_SCAFFOLD_RE.sub("", clean, count=1).strip()
-    if "—" in clean:
+    bold = _BOLD_LEAD_RE.match(clean)
+    if bold:
+        title, body = bold.group(1).strip(), bold.group(2).strip() or bold.group(1).strip()
+    elif "—" in clean:
         title, body = (part.strip(" —-") for part in clean.split("—", 1))
         if not title:
             title = body[:60].strip()
@@ -557,41 +561,56 @@ def classify_entry_type(text: str) -> str:
     return DEFAULT_TYPE
 
 
-_HEADING_RE = re.compile(r"^#{1,6} ")
+# CommonMark ATX heading: up to 3 leading spaces, 1-6 '#', then space/tab or EOL.
+_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 
 
-def entry_span_end(lines: "list[str]", start: int) -> int:
-    """Exclusive end index of the entry whose lead bullet is ``lines[start]``.
+def _scan_entry(lines: "list[str]", start: int) -> "tuple[int, int | None, int]":
+    """THE one reading of an entry whose lead bullet is ``lines[start]``.
 
-    THE one definition of an entry's extent, used by ``parse_entries`` (``end_line``)
-    and both strip helpers, so what is read as one entry is removed as one entry
-    (design 2026-10-25-memory-write-entry-dedup §3.1). An entry is the lead bullet,
-    its continuation lines, its ``<!-- ref ... -->`` metadata line (directly or after
-    one blank line), and the indented lines right after the metadata (the
-    ``Detail:`` / ``valid_from`` tail distillation writes). It ends before a blank
-    line, a column-0 ``- ``, or any markdown heading.
+    Returns ``(text_end, meta_idx, end)`` — all exclusive line indices except
+    ``meta_idx``: ``lines[start:text_end]`` is the entry text (lead + continuation),
+    ``meta_idx`` the ``<!-- ref ... -->`` line or None, ``lines[start:end]`` the whole
+    span to remove. Used by parse_entries, inject_entry_metadata and both strip
+    helpers, so what is read as one entry is rewritten and removed as one entry
+    (design 2026-10-25-memory-write-entry-dedup §3.1).
+
+    Rules: the entry text runs over continuation lines and stops at a column-0
+    ``- ``, a heading, the metadata line, or a blank line. A blank run followed by
+    the metadata line belongs to the entry; any other blank ends it. After the
+    metadata line, indented non-blank lines (the ``Detail:`` / ``valid_from`` tail)
+    belong to the entry, up to a heading or another metadata line.
     """
     n = len(lines)
     j = start + 1
     while j < n:
         nxt = lines[j]
         if nxt.startswith("- ") or _HEADING_RE.match(nxt):
-            return j
+            return j, None, j
         if _META_RE.match(nxt):
-            j += 1
+            text_end, meta = j, j
             break
         if nxt.strip() == "":
-            if j + 1 < n and _META_RE.match(lines[j + 1]):
-                j += 2
+            k = j
+            while k < n and lines[k].strip() == "":
+                k += 1
+            if k < n and _META_RE.match(lines[k]):
+                text_end, meta = j, k
                 break
-            return j
+            return j, None, j
         j += 1
     else:
-        return j
-    # Indented tail after the metadata line.
-    while j < n and lines[j].strip() and lines[j][0] in " \t" and not _META_RE.match(lines[j]):
-        j += 1
-    return j
+        return n, None, n
+    end = meta + 1
+    while (end < n and lines[end].strip() and lines[end][0] in " \t"
+           and not _META_RE.match(lines[end]) and not _HEADING_RE.match(lines[end])):
+        end += 1
+    return text_end, meta, end
+
+
+def entry_span_end(lines: "list[str]", start: int) -> int:
+    """Exclusive end of the entry whose lead bullet is ``lines[start]`` (see _scan_entry)."""
+    return _scan_entry(lines, start)[2]
 
 
 def _h3_span_lines(lines: "list[str]") -> "set[int]":
@@ -659,28 +678,8 @@ def parse_entries(content: str, *, include_prose: bool = False,
             # Extract created_date from entry text
             created_date = _extract_date(line)
 
-            # Collect full entry text (may span multiple lines until next - or <!-- or ##)
-            raw_lines = [line]
-            j = i + 1
-            while j < len(lines):
-                next_line = lines[j]
-                if next_line.startswith("- ") or _HEADING_RE.match(next_line):
-                    break
-                if _META_RE.match(next_line):
-                    break
-                if next_line.strip() == "":
-                    # Blank line might separate entries
-                    # Look ahead: if next non-blank is a new entry or section, stop
-                    k = j + 1
-                    while k < len(lines) and lines[k].strip() == "":
-                        k += 1
-                    if (k >= len(lines) or lines[k].startswith("- ")
-                            or _HEADING_RE.match(lines[k])):
-                        break
-                raw_lines.append(next_line)
-                j += 1
-
-            raw_text = "\n".join(raw_lines)
+            text_end, meta_idx, span_end = _scan_entry(lines, i)
+            raw_text = "\n".join(lines[i:text_end])
 
             # Check for metadata comment on next line
             ref_count = 0
@@ -689,10 +688,9 @@ def parse_entries(content: str, *, include_prose: bool = False,
             valid_until = None
             superseded_by = None
 
-            meta_line_idx = j
             source = ""
-            if meta_line_idx < len(lines):
-                meta_match = _META_RE.match(lines[meta_line_idx])
+            if meta_idx is not None:
+                meta_match = _META_RE.match(lines[meta_idx])
                 if meta_match:
                     ref_count = int(meta_match.group(1))
                     last_str = meta_match.group(2)
@@ -714,7 +712,6 @@ def parse_entries(content: str, *, include_prose: bool = False,
                     # `null` sentinel (memory_index idiom) means not-superseded
                     if superseded_by == "null":
                         superseded_by = None
-                    j = meta_line_idx + 1  # Skip the metadata line
 
             # Classify type if not explicitly tagged
             if not entry_type:
@@ -733,9 +730,9 @@ def parse_entries(content: str, *, include_prose: bool = False,
                 source=source,
                 valid_until=valid_until,
                 superseded_by=superseded_by,
-                end_line=entry_span_end(lines, i) - 1,
+                end_line=span_end - 1,
             ))
-            i = j
+            i = span_end
         else:
             i += 1
 
@@ -811,34 +808,18 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
             else:
                 entry = entry_map.get((title, current_section)) or title_map.get(title)
             if entry:
-                # Collect continuation lines (indented, non-metadata, non-entry)
-                i += 1
-                while i < len(lines):
-                    next_line = lines[i]
-                    if next_line.startswith("- ") or next_line.startswith("## "):
-                        break
-                    if _META_RE.match(next_line):
-                        # Skip old metadata — we'll inject new one
-                        i += 1
-                        break
-                    if next_line.strip() == "":
-                        # Keep blank line but check if metadata follows
-                        peek = i + 1
-                        if peek < len(lines) and _META_RE.match(lines[peek]):
-                            result_lines.append(next_line)
-                            i = peek + 1  # Skip old metadata
-                            break
-                        # Check if next content is a new entry or section
-                        peek2 = i + 1
-                        while peek2 < len(lines) and lines[peek2].strip() == "":
-                            peek2 += 1
-                        if peek2 >= len(lines) or lines[peek2].startswith("- ") or lines[peek2].startswith("## "):
-                            break
-                    result_lines.append(next_line)
-                    i += 1
-
-                # Inject new metadata comment
+                # Same reading as parse_entries (_scan_entry): keep the entry text,
+                # replace its metadata line in place, keep its Detail tail after it.
+                text_end, meta_idx, span_end = _scan_entry(lines, i)
+                result_lines.extend(lines[i + 1:text_end])
+                if meta_idx is not None:
+                    result_lines.extend(lines[text_end:meta_idx])  # blank run before meta
                 result_lines.append(entry.to_comment())
+                if meta_idx is not None:
+                    result_lines.extend(lines[meta_idx + 1:span_end])
+                    i = span_end
+                else:
+                    i = text_end
                 continue
             else:
                 i += 1
@@ -1803,14 +1784,15 @@ def reclaim_duplicate_entries(
     # deliberate cross-section repeat. Only the COE Registry is excluded — it is a
     # keyed record updated in place (distillation _write_coe_registry), not a list.
     def _dedup_excluded(e: EntryMetadata) -> bool:
-        return "COE" in e.section or "COE" in e.title
+        return e.section == "COE Registry"
 
     def _sig(e: EntryMetadata) -> str:
         # raw_text already includes the leading "- " bullet marker; do NOT prepend
         # another (a double "- - " leaves a residual "- " that content_signature's
         # single-marker strip can't remove, poisoning the signature). Fall back to
-        # a synthesized bullet only when raw_text is empty. raw_text ends before the
-        # metadata line, so the Detail/valid_from tail never enters the signature.
+        # a synthesized bullet only when raw_text is empty. raw_text is the entry
+        # text (lead + continuation) and ends before the metadata line, so the
+        # Detail/valid_from tail and lifecycle metadata never enter the signature.
         raw = e.raw_text if (e.raw_text and e.raw_text.lstrip().startswith("- ")) else "- " + (e.raw_text or e.title)
         return content_signature(raw)
 

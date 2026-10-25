@@ -423,3 +423,82 @@ def test_pin_dedup_keyword_still_accepted_and_writes_text(tmp_path):
     e = _entry("pitfall", "Kept", "written in full", "2026-10-25")
     locked_read_modify_write(mem, "Pitfalls", e, mode="prepend", dedup=True)
     assert e in mem.read_text(encoding="utf-8")
+
+
+# ── Code-review findings (2026-10-25): one reading of an entry everywhere ───
+
+def test_inject_metadata_does_not_cross_a_heading():
+    """A metadata-free entry followed by ### gets its metadata right after it."""
+    from core.ddd_entry_lifecycle import inject_entry_metadata
+    doc = "## S\n- [guideline] **A** — body (2026-01-01)\n### Next\nparagraph\n- **Field**: value\n"
+    entries = parse_entries(doc)
+    out = inject_entry_metadata(doc, entries).splitlines()
+    assert out[1].startswith("- [guideline] **A**")
+    assert out[2].lstrip().startswith("<!-- ref:")
+    assert out[3:6] == ["### Next", "paragraph", "- **Field**: value"]
+
+
+def test_blank_run_before_metadata_is_one_span(tmp_path):
+    """Read span == removed span when blank lines precede the metadata."""
+    a = ("- [guideline] **Twice** — same body (2026-01-01)\n\n\n"
+         "  <!-- ref:3 | last:2026-01-02 | decay:active -->\n  Detail: x")
+    mem = _memory(tmp_path, {"Guidelines": f"{a}\n{a}\n- [guideline] **B** — keep (2026-01-01)"})
+    e = [x for x in parse_entries(mem.read_text(encoding="utf-8")) if x.title == "Twice"][0]
+    assert e.ref_count == 3
+    text = _sweep(mem)
+    assert text.count("Twice") == 1 and text.count("Detail: x") == 1
+    assert text.count("ref:3") == 1 and "**B**" in text
+
+
+def test_indented_heading_after_metadata_is_not_tail(tmp_path):
+    """An indented `   ### H` is a heading, not part of the entry's tail."""
+    from core.ddd_entry_lifecycle import _strip_entries_by_line
+    doc = ("## S\n- [guideline] **A** — x (2026-01-01)\n"
+           "  <!-- ref:0 | last:2026-01-01 | decay:active -->\n   ### H\n- [guideline] **B** — keep (2026-01-01)\n")
+    a = [x for x in parse_entries(doc) if x.title == "A"][0]
+    out = _strip_entries_by_line(doc, {a.line_number})
+    assert "   ### H" in out and "**B**" in out and "**A**" not in out
+
+
+def test_coe_word_in_a_normal_title_is_still_deduped(tmp_path):
+    """Only the COE Registry section is excluded from the duplicate sweep."""
+    e = _entry("guideline", "Write a COE for every Sev-2", "same body text", "2026-10-24")
+    mem = _memory(tmp_path, {"Guidelines": f"{e}\n{e}"})
+    assert _sweep(mem).count("Write a COE") == 1
+
+
+def test_removal_never_takes_part_of_an_entry(tmp_path, monkeypatch):
+    """A needle that only matches a continuation line removes nothing (no half entry)."""
+    import jobs.handlers.memory_health as mh
+    e = ("- [guideline] **Keep lead** — body (2026-01-01)\n"
+         "  unique continuation needle 12345\n"
+         "  <!-- ref:2 | last:2026-01-01 | decay:active -->\n  Detail: source")
+    mem = _memory(tmp_path, {"Guidelines": e})
+    monkeypatch.setattr(mh, "CONTEXT_DIR", mem.parent)
+    before = mem.read_text(encoding="utf-8")
+    mh._remove_memory_entry("unique continuation needle 12345")
+    assert mem.read_text(encoding="utf-8").count("Keep lead") == before.count("Keep lead")
+    assert "unique continuation needle 12345" in mem.read_text(encoding="utf-8")
+
+
+def test_missing_coe_section_is_created_and_then_updated(tmp_path):
+    """A keyed record lands in its own section, so the next event finds it."""
+    mem = _memory(tmp_path, {"Other": "- x"})
+    hook = _distill_hook()
+    hook._write_coe_registry(mem, [("2026-10-03", "candidate", "Missing Topic")])
+    hook._write_coe_registry(mem, [("2026-10-04", "resolution", "Missing Topic")])
+    text = mem.read_text(encoding="utf-8")
+    assert "## Distilled" not in text and text.count("## COE Registry") == 1
+    coe = _coe_entries(text)
+    assert len(coe) == 1 and "Resolved" in _coe_line(text, "Missing Topic")
+
+
+@pytest.mark.parametrize("raw,title,body", [
+    ("**A — B** — body — more", "A — B", "body — more"),
+    ("- 2026-10-25: Lock order — acquire A before B", "Lock order", "acquire A before B"),
+    ("no dash at all here", "no dash at all here", "no dash at all here"),
+])
+def test_canonical_entry_split(raw, title, body):
+    from core.ddd_entry_lifecycle import canonical_entry_from_text
+    lead = canonical_entry_from_text(raw, "guideline", "2026-10-25").splitlines()[0]
+    assert lead == f"- [guideline] **{title}** — {body} (2026-10-25)"
