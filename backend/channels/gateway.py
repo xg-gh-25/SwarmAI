@@ -1714,6 +1714,8 @@ class ChannelGateway:
             "reply_to_message_id": msg.external_message_id,
             "is_group": is_group,
             "is_owner": is_owner,
+            # read by the router's channel recall rule (only the owner's "im" recalls)
+            "chat_type": chat_type,
             **({"sender_identity": sender_identity.to_dict()} if sender_identity else {}),
             **({"prior_session_id": prior_session_id} if prior_session_id else {}),
         }

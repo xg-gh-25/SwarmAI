@@ -3,7 +3,7 @@ title: 知识送达的缺口 — REFLECT 没有 DDD 时写到哪，以及 Recall
 created: 2026-10-25
 updated: 2026-10-25
 project: SwarmAI
-status: r4 — B（G1）、A 的 G2 已实施；G4 实施中
+status: r5 — 已实施（B：G1；A：G2、G4）
 ---
 
 # 知识送达的缺口
@@ -123,6 +123,12 @@ DELIVER、REFLECT 卡片写明。和下面原方案的两处差别：
   - 发送者的 tier 和 `chat_type` 是怎么从 `gateway` 传到 `session_router` 的；没有传的话，用 `channel_context` 传，不另立来源；
   - channel 会话的发送路径对延迟是否另有约束。
 
+- 实施（r5）：核对时发现之前的前提有误。`is_channel_session` 只对非 owner 的消息置位（`_run_conversation_impl`），
+  所以改之前 owner 在**任何** channel 里都会召回，包括群聊和频道线程；别人的消息不召回。现在改为每条消息按
+  `_channel_recall_allowed(channel_context)` 判断：没有 channel_context（桌面 tab）照旧；channel 消息只有
+  `is_owner` 且 `chat_type == "im"` 才召回，不满足时直接返回，不锁住首次召回。`chat_type` 由 gateway 写进
+  `channel_context`（原来只有 `is_group`）。channel 的发送路径对延迟没有另外的约束：召回走的是同一条带超时的路径。
+
 ## 4. 测试（测试先行，变异验证）
 
 - G1：
@@ -155,6 +161,7 @@ DELIVER、REFLECT 卡片写明。和下面原方案的两处差别：
 ## 修订记录
 
 - r1（2026-10-25）：初稿。XG 定了 G1 写进 Library、按仓库归档、create 时点名。
+- r5（2026-10-25）：G4 实施；纠正"channel 从不召回"的前提（owner 的消息一直在召回，包括群聊）。
 - r4（2026-10-25）：A 的 G2 实施（§3.2 末尾写明实施细节）。
 - r3（2026-10-25）：B（G1）实施，写明和原方案的两处差别；开头标出 A、B 两部分。
 - r2（2026-10-25，XG）：G2 不只做 pipeline：改为在 `repo_guidance`（会话第一次碰到仓库）里统一送经验文件和 DDD 路径，native 和 pipeline 共用，create 不再另外点名；G4 给 owner 的私聊开召回。

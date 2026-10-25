@@ -392,6 +392,8 @@ class TestGenericChannelContext:
 
         assert captured_context.get("channel_type") == "slack"
         assert captured_context.get("bot_token") == "xoxb-test"
+        # G4 (knowledge-delivery-gaps §3.3): the router's channel recall rule reads it
+        assert captured_context.get("chat_type") == "im"
 
     @pytest.mark.asyncio
     async def test_a_redelivered_message_is_one_send_and_gets_no_second_reply(self, gateway, mock_db):

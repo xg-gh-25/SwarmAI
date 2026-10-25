@@ -1214,6 +1214,18 @@ def _is_new_topic(prev: "frozenset | None", terms: "frozenset") -> bool:
     return len(terms & prev) / len(terms | prev) < _RECALL_TOPIC_OVERLAP
 
 
+def _channel_recall_allowed(channel_context: Optional[dict]) -> bool:
+    """Whether this message may get recall (design
+    docs/design/2026-10-25-knowledge-delivery-gaps.md §3.3, G4). A desktop tab (no
+    channel_context): yes. A channel message: only the OWNER's private chat
+    (``is_owner`` from the gateway's single owner check, ``chat_type == "im"``) — a
+    reply anywhere else can be read by other people, so the user's own memory must not
+    reach it. Judged per message, never latched."""
+    if not channel_context:
+        return True
+    return bool(channel_context.get("is_owner")) and channel_context.get("chat_type") == "im"
+
+
 async def _maybe_followup_recall(
     user_message: str, options: Any, unit: Any, should_mutate_system_prompt: bool,
 ) -> Optional[float]:
@@ -1291,8 +1303,12 @@ async def _maybe_inject_recall(
     unit: SessionUnit,
     editor_context: Optional[dict] = None,
     should_mutate_system_prompt: bool = True,
+    channel_context: Optional[dict] = None,
 ) -> Optional[float]:
     """Top-level FAULT-ISOLATION wrapper (A): recall can NEVER crash the builder.
+
+    ``channel_context``: a channel message recalls only per ``_channel_recall_allowed``
+    (G4); anything else returns None without touching the once-per-session guard.
 
     ``should_mutate_system_prompt`` (阶段二 prompt-builder 两分, default True =
     today's behavior): the recall DESTINATION. True (COLD-spawn turn) → append the
@@ -1320,6 +1336,7 @@ async def _maybe_inject_recall(
             user_message=user_message, options=options, unit=unit,
             editor_context=editor_context,
             should_mutate_system_prompt=should_mutate_system_prompt,
+            channel_context=channel_context,
         )
     except Exception as exc:  # noqa: BLE001 — recall must never reach the send path
         _record_recall_degraded(f"toplevel_exception:{type(exc).__name__}")
@@ -1344,6 +1361,7 @@ async def _maybe_inject_recall_inner(
     unit: SessionUnit,
     editor_context: Optional[dict] = None,
     should_mutate_system_prompt: bool = True,
+    channel_context: Optional[dict] = None,
 ) -> Optional[float]:
     """Augment the system prompt with recalled knowledge from the user's query.
 
@@ -1381,6 +1399,8 @@ async def _maybe_inject_recall_inner(
     # (_recall_injected guard) and never for channels, so turns 2+ get None. The
     # TTFT probe uses this to label recall as n/a rather than fake a stale/0 value
     # (Gate-1: attributing turn-1 recall to a later turn corrupts the residual math).
+    if not _channel_recall_allowed(channel_context):
+        return None              # G4: not the owner's private chat; nothing latched
     if unit._recall_injected:
         # The first recall already ran; a later message on a NEW topic gets a
         # bounded follow-up recall (see _maybe_followup_recall).
@@ -4962,6 +4982,7 @@ class SessionRouter:
                 unit=unit,
                 editor_context=editor_context,
                 should_mutate_system_prompt=not _will_reuse_live,
+                channel_context=channel_context,
             )
             # Copy the recall snapshot to the registry for the read-only TSCC panel.
             # Guarded + best-effort: a panel-observability copy must never perturb
