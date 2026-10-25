@@ -49,6 +49,7 @@ Key public symbols: ``TurnChanges``, ``diff_text``, ``diff_trees``, ``allowed_re
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 import re
@@ -238,9 +239,15 @@ def _retrieve(fut: "asyncio.Future") -> None:
 class TurnChanges:
     """One turn's code changes: a start snapshot per tree + the files the turn wrote."""
 
-    def __init__(self, roots: Optional[Iterable[str]] = None):
+    def __init__(self, roots: Optional[Iterable[str]] = None, *,
+                 session_id: Optional[str] = None, turn_id: Optional[str] = None):
         # None: discover the trees in the pool (code_roots reads run.json files).
         self._given = None if roots is None else [os.path.realpath(r) for r in roots]
+        # This turn's landings are read by (session, turn id) from the stamp
+        # session_worktree land writes (core/session_landings); no turn id, none.
+        self._session_id, self._turn_id = session_id, turn_id
+        # The card, computed once per turn: result and Stop may both finish it.
+        self._result: Optional[asyncio.Future] = None
         self._jobs: dict[str, asyncio.Future] = {}      # root -> (toplevel, start tree)
         self._discovery: Optional[asyncio.Future] = None
         self._raw: dict[str, str] = {}                  # path as noted -> last operation
@@ -251,9 +258,10 @@ class TurnChanges:
         self._first_tool_at: Optional[float] = None
 
     @classmethod
-    def start(cls, roots: Optional[Iterable[str]] = None) -> "TurnChanges":
+    def start(cls, roots: Optional[Iterable[str]] = None, *, session_id: Optional[str] = None,
+              turn_id: Optional[str] = None) -> "TurnChanges":
         """Begin a turn: discover the trees, then snapshot each in its own pool job."""
-        tc = cls(roots)
+        tc = cls(roots, session_id=session_id, turn_id=turn_id)
         loop = asyncio.get_running_loop()
         pool = _pool("turn_snapshot")
 
@@ -303,18 +311,47 @@ class TurnChanges:
             self._raw.setdefault(path, "written")
 
     async def finish(self) -> Optional[dict]:
-        """The ``turn_changes`` block for this turn, or None when nothing changed. The
-        result never waits longer than FINISH_BUDGET_S: on expiry the trees already
-        diffed are shown, the rest are left off."""
-        if not self._raw:
-            return None
-        raw, self._raw = self._raw, {}     # one card per turn
+        """The ``turn_changes`` block for this turn, or None when nothing changed.
+        Computed once: every call of the turn (``result`` and Stop may both come)
+        awaits the same task and gets its own copy, so a second call never sees a
+        card without the in-place rows the first one consumed. The task is shielded:
+        a cancelled caller does not cancel it. Bounded by FINISH_BUDGET_S: on expiry
+        the trees already diffed are shown, the rest are left off."""
+        if self._result is None:
+            self._result = asyncio.ensure_future(self._compute())
+            self._result.add_done_callback(_retrieve)
+        block = await asyncio.shield(self._result)
+        return copy.deepcopy(block) if block is not None else None
+
+    async def _compute(self) -> Optional[dict]:
+        raw, self._raw = self._raw, {}
         self._partial = []
+        landings: Optional[dict] = None
+        if raw:
+            try:
+                await asyncio.wait_for(self._finish(raw), FINISH_BUDGET_S)
+            except asyncio.TimeoutError:
+                logger.warning("turn_changes: finish exceeded %.0fs — showing %d rows", FINISH_BUDGET_S, len(self._partial))
+        if self._session_id and self._turn_id:
+            landings = await self._landings()
+        block = _block(self._partial, landings)
+        if block is not None and self._turn_id:
+            block["turn_id"] = self._turn_id
+        return block
+
+    async def _landings(self) -> Optional[dict]:
+        """This turn's landings (core/session_landings), on the turn_changes pool,
+        under the same budget as the rows."""
+        from core import session_landings
+        loop = asyncio.get_running_loop()
         try:
-            await asyncio.wait_for(self._finish(raw), FINISH_BUDGET_S)
-        except asyncio.TimeoutError:
-            logger.warning("turn_changes: finish exceeded %.0fs — showing %d rows", FINISH_BUDGET_S, len(self._partial))
-        return _block(self._partial) if self._partial else None
+            return await loop.run_in_executor(
+                _pool(), lambda: session_landings.read_session(
+                    self._session_id, deadline=session_landings.Deadline(FINISH_BUDGET_S),
+                    turn_id=self._turn_id))
+        except Exception as exc:  # noqa: BLE001 — a display aid
+            logger.debug("turn_changes: landings unreadable: %s", exc)
+            return None
 
     async def _finish(self, raw: dict[str, str]) -> None:
         loop = asyncio.get_running_loop()
@@ -410,12 +447,32 @@ def _diff_top(top: str, rels: list[str], start: Optional[str]) -> list[dict]:
     return out
 
 
-def _block(files: list[dict]) -> dict:
-    """Rows sorted by size, capped."""
+def _block(files: list[dict], landings: Optional[dict] = None) -> Optional[dict]:
+    """The card: in-place rows sorted by size, then this turn's landings
+    (core/session_landings). One row budget, MAX_FILES, spans all of them; each
+    group says how many it left out. None when there is nothing to show."""
     files = sorted(files, key=lambda f: -((f["added"] or 0) + (f["deleted"] or 0)))
-    block = {"type": "turn_changes", "files": files[:MAX_FILES]}
-    if len(files) > MAX_FILES:
-        block["omitted"] = len(files) - MAX_FILES
+    landings = landings or {}
+    landed = [dict(x) for x in landings.get("landed") or []]
+    unknown = list(landings.get("unknown") or [])
+    unverified = int(landings.get("unverified") or 0)
+    truncated = bool(landings.get("truncated"))
+    if not files and not landed and not unknown and not unverified and not truncated:
+        return None
+    budget = MAX_FILES
+    block: dict = {"type": "turn_changes", "files": files[:budget]}
+    if len(files) > budget:
+        block["omitted"] = len(files) - budget
+    budget -= len(block["files"])
+    for land in landed:
+        rows = land.get("files") or []
+        land["files"] = rows[:max(budget, 0)]
+        if len(rows) > len(land["files"]):
+            land["omitted"] = len(rows) - len(land["files"])
+        budget -= len(land["files"])
+    if landings:
+        block.update({"landed": landed, "landed_truncated": truncated,
+                      "unverified": unverified, "unknown": unknown})
     return block
 
 

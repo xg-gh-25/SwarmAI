@@ -273,12 +273,19 @@ async def test_unchanged_and_untouched(repo):
 
 
 @pytest.mark.asyncio
-async def test_one_card_per_turn_and_the_budget_holds(repo, monkeypatch):
+async def test_finish_is_computed_once_per_turn_and_the_budget_holds(repo, monkeypatch):
+    """result and Stop can both finish a turn (design 2026-10-25-turn-result-card.md
+    §5.1): every call gets the same block, in-place rows included, never a second
+    card without them."""
+    import asyncio as _a
     t = await _started([str(repo)])
     (repo / "a.py").write_text("z\n")
     t.note(_fc(repo / "a.py"))
-    assert await t.finish() is not None
-    assert await t.finish() is None
+    first, second = await _a.gather(t.finish(), t.finish())
+    third = await t.finish()
+    assert first is not None and first == second == third
+    assert first is not second, "each caller gets its own copy"
+    assert set(_rows(third)) == {"a.py"}
 
     t = await _started([str(repo)])
     (repo / "a.py").write_text("y\n")
@@ -288,6 +295,68 @@ async def test_one_card_per_turn_and_the_budget_holds(repo, monkeypatch):
     t0 = time.monotonic()
     assert await t.finish() is None
     assert time.monotonic() - t0 < 0.9
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_first_caller_does_not_take_the_card_away(repo):
+    import asyncio as _a
+    t = await _started([str(repo)])
+    (repo / "a.py").write_text("q\n")
+    t.note(_fc(repo / "a.py"))
+    first = _a.ensure_future(t.finish())
+    await _a.sleep(0)
+    first.cancel()
+    block = await t.finish()
+    assert block is not None and set(_rows(block)) == {"a.py"}
+
+
+@pytest.mark.asyncio
+async def test_this_turns_landings_join_the_card(repo, monkeypatch):
+    """The card's landings are read for this session's turn id (core/session_landings);
+    a turn that wrote nothing in place but landed still gets a card."""
+    seen = {}
+    def _read(session_id, *, deadline, turn_id=None, **kw):
+        seen.update(session_id=session_id, turn_id=turn_id)
+        return {"landed": [{"repo": "r", "branch": "session/x", "dest": "main", "count": 1,
+                            "files": [{"path": "f.py", "added": 1, "deleted": 0}]}],
+                "unverified": 1, "truncated": True, "unknown": [{"repo": "q", "reason": "no-reflog"}]}
+    from core import session_landings
+    monkeypatch.setattr(session_landings, "read_session", _read)
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32)
+    await t.ready()
+    block = await t.finish()
+    assert seen == {"session_id": "s1", "turn_id": "t" * 32}
+    assert block["type"] == "turn_changes" and block["files"] == []
+    assert block["turn_id"] == "t" * 32 and block["landed"][0]["branch"] == "session/x"
+    assert block["landed_truncated"] is True and block["unverified"] == 1
+    assert block["unknown"] == [{"repo": "q", "reason": "no-reflog"}]
+
+
+@pytest.mark.asyncio
+async def test_no_turn_id_reads_no_landings_and_nothing_is_no_card(repo, monkeypatch):
+    from core import session_landings
+    monkeypatch.setattr(session_landings, "read_session",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("read")))
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id=None)
+    await t.ready()
+    assert await t.finish() is None
+
+
+@pytest.mark.asyncio
+async def test_the_row_budget_spans_landings_and_in_place_rows(repo, monkeypatch):
+    many = [{"path": f"f{i}.py", "added": 1, "deleted": 0} for i in range(tc.MAX_FILES + 5)]
+    from core import session_landings
+    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: {
+        "landed": [{"repo": "r", "branch": "session/x", "files": many}],
+        "unverified": 0, "truncated": False, "unknown": []})
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32)
+    await t.ready()
+    (repo / "a.py").write_text("w\n")
+    t.note(_fc(repo / "a.py"))
+    block = await t.finish()
+    shown = len(block["files"]) + sum(len(x["files"]) for x in block["landed"])
+    assert shown == tc.MAX_FILES
+    assert block["files"] and block["landed"][0]["omitted"] == 6
 
 
 @pytest.mark.asyncio

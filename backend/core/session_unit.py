@@ -1443,7 +1443,10 @@ class SessionUnit:
         self._turn_files = {}
         try:
             from core.turn_changes import TurnChanges
-            self._turn_changes = TurnChanges.start()
+            _ctx = getattr(self, "_hook_session_context", None) or {}
+            self._turn_changes = TurnChanges.start(
+                session_id=_ctx.get("sdk_session_id") or self.session_id,
+                turn_id=_ctx.get("_turn_id"))
         except Exception as exc:  # noqa: BLE001 — a display aid never blocks a send
             logger.debug("turn_changes start skipped: %s", exc)
             self._turn_changes = None
