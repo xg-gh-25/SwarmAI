@@ -4,7 +4,7 @@ date: 2026-10-24
 created: 2026-10-24
 updated: 2026-10-25
 project: SwarmAI
-status: draft v1.8（§9 已拍板；E1–E11 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 改为原 turn 接着读，删掉接管，v1.8 补 max_turns 与 turn carry；E12、E13 未做；失败测试未写）
+status: draft v1.9（§9 已拍板；E1–E13 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 改为原 turn 接着读，删掉接管，不清 turn carry，任何 subtype 的 Result 后都接着读 steer；失败测试未写）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -236,6 +236,13 @@ D1 不再在 injected turn 里 steer，但 injected turn 仍可能在回显时�
 里，之后通知计数涨了（E11），steer 自己那一轮被认成 injected；或者后台任务在最终回复阶段结束，CLI
 先开了通知的那一轮。所以表里第二、三行的 injected 情况保留。
 
+第二行不是罕见情况。E12、E13a 里 steer 写在一个前台 Bash 跑着时，那个 Bash 结束时发的
+`task_notification` 在 claim 之后，通知计数涨了，steer 自己那一轮的 `init` 就被认成 injected；而且
+回显不一定紧跟 `init`，中间可以先来一串 `thinking_tokens` 帧（E13a）。这些帧进 injected 流的缓冲，
+回显时整批转给 claim。能转，是因为 sink 只在 unit IDLE 时取 injected turn（`take_injected_turn`），
+D6 接着读期间 unit 一直是 STREAMING，sink 不会先 `start_sink`；P1 不能改掉这一点，T22 要覆盖
+"回显前有 system 帧"的帧序。
+
 `_open_turn` 取"第一个 claim"时，steer claim 和普通 claim 一样按写入顺序排；这正是 CLI 读
 的顺序（X6、E6）。
 
@@ -272,8 +279,10 @@ claim。如果这时有 steer claim 在等，E6 显示 CLI 按写入顺序先跑
 两边互相等。v1.7 里这件事由 D6 的优先级解决：CLI 的一轮结束时，只要还有没回显的 steer，就接着读
 steer，**leak continuation、api_retry continuation 和空回复的 raise 重试都不做**（对用户来说，steer
 本身就是下一步的指令）。所以不需要在 `write_user_message` 里加判断，M1（api_retry 跳过后 raise、
-杀进程）也不会出现：错误的 Result 后面接着读 steer，不进错误处理。CLI 在一个 `is_error` 的 Result
-之后会不会照常执行排着的 `next` 消息，E1–E11 都没测，补 E12；不执行时走 D6 的兜底。
+杀进程）也不会出现：错误的 Result 后面接着读 steer，不进错误处理。E12 证实 CLI 在 API 错误的
+Result（`is_error`，前面是 `<synthetic>` 的 "API Error: 503 …" 那一行）之后照常执行排着的 `next`
+消息：Result 后直接 `init` → 回显 → steer 那一轮，中间没有 idle；CLI 自己的 api_retry 重试期间写入的
+steer 不会混进重试的请求。
 
 由 T12a / T12b 覆盖。
 
@@ -378,8 +387,10 @@ steer 的 claim。
 `TurnAbandoned` 结束这一轮的那条路径），如果同时满足：
 
 - reader 里有 `kind == "steer"`、还没回显的 claim（取写入顺序最早的那条）；
-- 没有用户 Stop（`_user_stopped_current_turn`、`_stopping`），`_client` 还在；
-- 这个 Result 之后 CLI 不会退出：`subtype != "error_max_turns"`（见下）。
+- 没有用户 Stop（`_user_stopped_current_turn`、`_stopping`），`_client` 还在。
+
+不看 Result 的 subtype：成功、API 错误（E12）、`error_max_turns`（E13）、`error_during_execution`（E1）
+之后，CLI 都直接执行排着的 steer。
 
 就：`_record_token_usage_bg` 记下这一轮的用量（leak 那里同样这么做），把它的用量和 `duration_ms`
 累加到本 turn 的计数里；不发 `result`；`unit._turn_stream = 那条 steer claim`；
@@ -407,19 +418,17 @@ their (now detached) dicts"）。但 `self._turn_carry` 还有两个读者，它
 
 carry 是 turn 级的，D6 接着读的两轮是同一个 turn，所以 D6 不清它：判断放在 `reset_turn_carry()` 之前，
 接着读时直接 `continue`，不调 reset。第一轮的 tool_use 在 Result 时都已有 result，留在 carry 里不会被
-误配；后台 Agent（`background_agents`）本来就该跨这两轮保留。D6 不接着读（没有 steer、或 max_turns）
-时照旧 reset。
+误配；后台 Agent（`background_agents`）本来就该跨这两轮保留。D6 不接着读（没有 steer）时照旧 reset。
 
-**`error_max_turns` 不接着读（T27）。** 这个 Result 之后 CLI 退出（`error_max_turns` 分支里把
-`_client`、`_wrapper` 置空），但判断时 `_client` 还没清，前两条条件都满足。如果 D6 接着读，等来的是
-EOF：扣下的 Result 没发，原本正常的 `turn_limit_reached` 收尾变成 end-of-stream 处理（僵尸检测 →
-`--resume` 重试）。所以 max_turns 照现有分支收尾（发 `turn_limit_reached` 和 `result`，转 IDLE），
-steer 不在这里处理：CLI 退出时 reader EOF，steer claim 以 `reader_closed` 结束，
-`echo_seen = False` → `release_steer_to_pending`，drain 发出它、`--resume` 后接着做。对用户来说就是
-"Turn limit reached — send a message to continue"里的那条消息，他已经发了。CLI 在 max_turns 退出前
-会不会先读排着的 `next` 消息没测，补 E13。如果会读（`echo_seen = True`），steer 已在 CLI 的历史里、
-user 行已确认，但没有回复；这时不能转回排队（会发两次），要由 drain 发一条续接消息让 `--resume` 后的
-CLI 回答它。P1 按 E13 的结果定这一支。
+**`error_max_turns` 也接着读（T27，E13）。** v1.8 以为 CLI 在这个 Result 之后退出（`error_max_turns`
+分支的注释和它把 `_client`、`_wrapper` 置空的做法都基于这一点），所以让 D6 跳过它。E13 推翻了这个前提：
+CLI 不退出，`max_turns` 只限制一次 query 的轮数。最后一个 tool 跑着时写入（E13a）、在 `error_max_turns`
+的 Result 到达时写入（E13b），CLI 都在 Result 之后开新的一轮执行 steer，模型照 steer 回答，流不断；
+不写 steer 的对照（E13c）里 CLI 报 idle，流在 16 秒内也没有断。所以 `error_max_turns` 和别的 Result
+一样：有未回显的 steer 就接着读，outcome `opened`；不发 `turn_limit_reached`（"send a message to
+continue"里的那条消息用户已经发了），用量照常累加。判断在 `error_max_turns` 分支之前，所以那个分支
+置空 `_client` 的做法不会在有 steer 时执行。没有 steer 时那个分支照旧；它的退出前提已经不成立，记在
+§10，不在本设计里改。
 
 **不用改的。** 从头到尾只有一个 SwarmAI turn：unit 一直是 STREAMING，hub claim 一直在原 turn 手里，
 `is_busy`、Stop、TTL、eviction、lifecycle 的 RSS 检查（只看 IDLE 的 unit）、injected sink、drain 都按
@@ -451,8 +460,8 @@ CLI 回答它。P1 按 E13 的结果定这一支。
 
 P1 要核对：现有的 RSS 主动重启是先转 IDLE 再回收，这里是先回收再收尾，收尾那一步在 unit 已经
 COLD 时不能再转回 IDLE。不加新的超时数字（STEERING #2）；INIT_TIMEOUT 在 resume 的会话上至少
-600 秒（第四轮 M4），这期间气泡显示 Waiting，可以按 Stop。E12（错误 Result 之后会不会读）是已知
-唯一可能走到这里的情况。
+600 秒（第四轮 M4），这期间气泡显示 Waiting，可以按 Stop。E12、E13 之后，没有已知的情况会走到这里；
+已知唯一会卡住的是 D6"先到的 injected turn"里通知 turn 要提问的那种。
 
 **连续多条。** 每次 CLI 的一轮结束都重新判断。S1 被当成下一轮、S2 并进 S1 那一轮，是 D3 第三行；
 S1、S2 都没赶上，就一轮一轮接着读。
@@ -614,19 +623,25 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | M1 | MEDIUM | 接管后 unit 实际是 IDLE，Stop 回"Nothing running"，lifecycle 的 RSS 检查会杀进程 | unit 一直 STREAMING（D6） |
 | M2 | MEDIUM | S2 在 S1 接管前并入，确认时间早于 S1；`mark_steer_echoed` 和 `confirm_steer` 没有比较再写 | 两种 outcome 都在回显时确认，按回显顺序；`echoed` 状态删掉（D2、D4）。UPDATE 带 `WHERE metadata.steer = 'inflight'`，P1 照做 |
 | M3 | MEDIUM | 重试用了新的 uuid，回显对不上 steer 行，重复投递 | 不再有"重发 steer"的重试；回显前崩溃转 pending，回显后按普通 turn 中途崩溃处理（D6） |
-| M4 | MEDIUM | CLI 一直不读时，兜底是至少 10 分钟的 INIT_TIMEOUT | 仍是 INIT_TIMEOUT，但只在实验从没出现过的情况下触发，兜底不 raise、先回收进程再转回排队（D6）；E12 |
+| M4 | MEDIUM | CLI 一直不读时，兜底是至少 10 分钟的 INIT_TIMEOUT | 仍是 INIT_TIMEOUT，但只在实验从没出现过的情况下触发，兜底不 raise、先回收进程再转回排队（D6）；E12 证实 API 错误后 CLI 照常读，不会走到兜底 |
 | M5 | MEDIUM | 接管跳过 quiescence 闸，越过排着的 injected turn，行顺序错 | 换成"先到的 injected turn"那一段：不丢、不死锁，顺序问题接受并记在 §10（D6） |
 | L1 | LOW | `source="human"` 不是合法值 | 不再发布新 turn，删掉 |
 | L2 | LOW | §5 E4 行还写着 D1 允许 injected turn | 已改 |
 | L3 | LOW | 接管检查在每个 finally 里都跑；接管任务先建后 claim | 接管删掉 |
 | L4 | LOW | 重试不重做 query 改写；跳过的一次性标记会漏到下一次发送 | 不再跳过发送路径的任何一步 |
 
-还要补的实验：
+### E12、E13（2026-10-25）
 
-| # | 场景 | 要确认 |
-|---|---|---|
-| E12 | API 错误的 Result（`is_error`）之后，排着的 `next` 消息会不会被执行 | 决定 T12b 的帧序；不执行时走 D6 的兜底，不会丢、不会重复 |
-| E13 | `max_turns` 设小（如 2），最后一次 tool 时写 steer，到 `error_max_turns` | CLI 退出前会不会回显 steer。不回显：按 D6 走 `reader_closed` → 转回排队；回显：D6 那一支要改成续接（T27） |
+脚本 `/tmp/steer_script/exp9.py <e12|e13a|e13b|e13c>`，不进仓库。E12 在 CLI 和 daemon 的 Bedrock gateway
+之间放一个进程内代理：第一个 tool_use 出现后，所有模型请求都回 Bedrock 503，直到错误的 Result 到达；
+`CLAUDE_CODE_MAX_RETRIES=2`。每项跑一次。
+
+| # | 场景 | 结果 | 影响 |
+|---|---|---|---|
+| E12 | tool result 之后的请求一直 503，CLI 自己重试两次；重试期间写 steer | CLI 发 `<synthetic>` 的 "API Error: 503 Bedrock is unable to process your request…" → Result（`is_error`，subtype `success`）→ `init` → 回显 → steer 那一轮成功回答；没有 idle；steer 没混进重试的请求 | D3、D6：错误 Result 后照常读 steer，T12b 帧序确定，兜底不会因为它触发 |
+| E13a | `max_turns=1`，最后一个 tool 跑着时写 steer | tool result → Result `error_max_turns` → `init` → 一串 `thinking_tokens` → 回显 → steer 那一轮回答；流不断 | D6：`error_max_turns` 也接着读（撤回 v1.8 的排除）；D3：回显前可以有 system 帧，steer 那一轮被认成 injected（前台 Bash 的通知在 claim 之后） |
+| E13b | `max_turns=1`，`error_max_turns` 的 Result 到达时写 steer | Result → idle → running → `init` → 回显 → 回答；写入没有碰到死管道 | 同上，帧序同 E10 |
+| E13c | 对照：`max_turns=1`，不写 steer | Result `error_max_turns` → idle，之后 16 秒流没断 | CLI 在 `error_max_turns` 后不退出；`error_max_turns` 分支"CLI 已退出"的前提不成立（§10） |
 
 代码确认：
 
@@ -654,7 +669,7 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | T10 | 前端：Waiting → Read during / Read after / Queued，及重连后按快照恢复 | 气泡从发出到读取不移动、不重挂；标签按 D7 表（Waiting 无 ✕，Queued 有 ✕ 和原因）；重载后只有并入的保留标签；无重复气泡；新段内容不写进旧段 |
 | T11 | 端到端（真实 CLI，可选，冒烟） | 两条 Bash 中间发"跳过第二条"，界面显示 steered，第二条没跑 |
 | T12a | leak 形状的 Result 时有未回显的 steer claim（F1，E6 帧序） | 不写 leak continuation，D6 接着读 steer；没有 `_merged`，没有重复行 |
-| T12b | API 错误的 Result（有内容之后）时有未回显的 steer claim | 不等 backoff、不写 api_retry continuation、不 raise、不杀进程，D6 接着读 steer（帧序按 E12）；E12 显示不读时走兜底 |
+| T12b | API 错误的 Result（有内容之后）时有未回显的 steer claim | 不等 backoff、不写 api_retry continuation、不 raise、不杀进程，D6 接着读 steer（帧序按 E12：错误 Result → `init` → 回显，无 idle） |
 | T13 | tool-hang 看门狗中断、进程留着，steer 未回显（E1） | `error_during_execution` 的 Result 后 D6 接着读，steer 那一轮的回复出现在同一个 turn 里，outcome `opened` |
 | T14 | user 行状态机（F3、G4 + XG 要求）：POST → steer 在途 → 并入 / 开 turn / 转 pending / 启动恢复 | 每一步的 `sent`、`claimed_at`、`pending_seq`、`metadata.steer`、`created_at` 按 D2 表；在途行不被 `claim_pending_batch` 取走、不出现在 `list_pending` / `count_pending`、`cancel_unclaimed` 返回 `claimed`；`reopen_dangling_claims` 先把在途行转成排队并分配 seq，再清其余行，不留 `pending_seq = NULL` 的排队行；转 pending 后 `mark_sent_batch` 能翻它；`release_steer_to_pending` 自己 kick drain 并清 `_last_ui_block`；`confirm_steer` 推一条 `transcript_row`；每个有回显的 outcome 结束后行都是 `sent = 1` |
 | T15 | 两轮之间（第一个 Result 到 steer 回显，F4、G2、第四轮 M1） | unit 是 STREAMING，`is_busy` 为真，Stop 判为 turn 在跑并转回排队（D8）；drain 不发；lifecycle 的 RSS 检查不碰它；`is_busy` / `has_background_work` 的代码没改 |
@@ -669,7 +684,7 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | T25 | D6 等 steer 时（回显前）按 Stop（D8） | 转回排队，回收完后发出一次 |
 | T26 | D6 等 steer 时进程崩溃 | steer 转回排队；原 turn 走现有的中途崩溃重试，重发的是第一条消息加续接提示，不是 steer；重试结束后 drain 发出 steer 一次 |
 | T23 | 在途行重复 POST（L3） | 回执 `steer: true`、`queued: false` |
-| T27 | `error_max_turns` 的 Result 时有未回显的 steer claim，随后 EOF（D6） | 不接着读；照常发 `turn_limit_reached` 和 `result`、转 IDLE，不进 end-of-stream 重试；steer 以 `reader_closed` 结束、转回排队，drain 发出一次。回显一支按 E13 补 |
+| T27 | `error_max_turns` 的 Result 时有未回显的 steer claim（帧序按 E13a、E13b） | D6 接着读，outcome `opened`；不发 `turn_limit_reached`，`_client` / `_wrapper` 不被置空；两轮用量累加，只有一次 `turn_end`。没有 steer 时 `error_max_turns` 分支行为不变 |
 | T28 | D6 接着读后，steer 那一轮里出现权限请求，放行后在续写的流里收到 tool result；以及在 steer 那一轮里按 Stop（D6 carry） | 续写流里该 tool_use 的 result 正常配对（工具名、父级都在），turn 不显示 Stopped；Stop 回执里有 steer 那一轮 Bash 写的文件；第一个 Result 处没有调用 `reset_turn_carry` |
 
 T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱动 reader 和 orchestrator（按 X5–X8、E1–E13 的实测顺序），不依赖真实 CLI。
@@ -692,7 +707,7 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱�
 | 阶段 | 内容 | 上线条件 |
 |---|---|---|
 | P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7–E9），结论在 §5，已改 D1–D8 | — |
-| P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。剩下：E12、E13；无上下文 reviewer 只审 v1.7 的 D6（重点：ResultMessage 分支里判断的位置、兜底先回收再收尾、TurnAbandoned 那条路径）；然后把 T1–T9、T12a–T16、T18–T28 写成失败的测试 | 复审没有新的 HIGH |
+| P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。E12、E13 已完成（§5）。剩下：无上下文 reviewer 只审 v1.7 的 D6（重点：ResultMessage 分支里判断的位置、兜底先回收再收尾、TurnAbandoned 那条路径）；然后把 T1–T9、T12a–T16、T18–T28 写成失败的测试 | 复审没有新的 HIGH |
 | P1 | 后端 D1–D6、D8，开关默认关；P1a（D2 行状态）不依赖 D6，可以先做 | T1–T9、T12a–T16、T18–T26 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
 | P2 | 前端 D7；打开开关 | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
 | P3 | 观察一周后删开关 | 日志里 `steer_folded` / `steer_opened` / `steer_never_read` 计数无异常（最后一个应为 0） |
@@ -732,7 +747,17 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱�
   `reset_turn_carry()` 之后才 `continue`，续写那一轮里若出现权限 / AskUserQuestion，续写流从新的空
   carry 绑定，和 D6 一节说的是同一个问题。现有行为，不在本设计里改；D6 自己不 reset，所以 steer 不受影响。
 
+- **`error_max_turns` 分支的"CLI 已退出"前提不成立（E13c）。** 分支注释说 CLI 在这个 Result 后以
+  exit code 1 退出，所以把 `_client`、`_wrapper` 置空、下次发送重新 spawn。现在的 CLI 不退出：报 idle，
+  流一直开着。置空之后那个进程和它的 stream reader 怎么收场没核对（可能留下一个还活着的 CLI，下次发送
+  再起一个）。现有行为，单独查；本设计只保证有 steer 时不走这个分支。
+
 ## 修订记录
+
+- 2026-10-25 v1.9：E12、E13 实测（§5）。E12：API 错误的 Result 后 CLI 直接执行排着的 steer。E13：CLI 在
+  `error_max_turns` 后不退出，同样直接执行 steer，撤回 v1.8 的 max_turns 排除，T27 改写。D3 记 E13a 的帧序
+  （回显前有 system 帧，steer 那一轮被认成 injected，转移依赖 sink 只在 IDLE 时取）。D6 兜底不再有已知触发
+  场景。§10 记 `error_max_turns` 分支的退出前提。mock 删掉"turn 上限"这个转回排队的原因。
 
 - 2026-10-25 v1.8：D6 补两条。判断移到 `reset_turn_carry()` 之前、接着读时不清 carry（T28）；
   `error_max_turns` 不接着读，steer 随 CLI 退出转回排队（T27），加 E13。§10 记 leak / api_retry
