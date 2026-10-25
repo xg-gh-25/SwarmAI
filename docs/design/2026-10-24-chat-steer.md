@@ -4,7 +4,7 @@ date: 2026-10-24
 created: 2026-10-24
 updated: 2026-10-25
 project: SwarmAI
-status: draft v1.9（§9 已拍板；E1–E13 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 改为原 turn 接着读，删掉接管，不清 turn carry，任何 subtype 的 Result 后都接着读 steer；失败测试未写）
+status: draft v1.10（§9 已拍板；E1–E14 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 复审取消，下一步写失败测试（P1a 先行）；D7 未设计）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -437,6 +437,11 @@ continue"里的那条消息用户已经发了），用量照常累加。判断�
 都在最后一个 result 之后跑，不会落进两轮之间。发送路径（预留、行写入、recall、UI-SENSE、
 `_claim_cold_spawn_pending` 合并、poison guard）不再为 steer 跑第二次。
 
+`_reset_turn_state` 也不为 steer 跑：它给 `_hook_session_context['_turn_id']` 发新值（`979d7ac22`），
+turn 结果卡按这个 id 从 git 的 landing 记录里找本 turn 的 landing（`2026-10-25-turn-result-card.md`）。
+steer 那一轮里的 `session_worktree land` 带的是原 turn 的 id，所以它的 landing 出现在同一张卡上，
+和"一个 turn 一个结尾"（D7）一致。P1 不能在 D6 接着读时调 `_reset_turn_state`，T7 覆盖。
+
 **崩溃和重试。** 和并入完全一样：
 
 - 回显前进程没了：claim `reader_closed`、`echo_seen = False` → `release_steer_to_pending`（D2）。E7：
@@ -511,7 +516,9 @@ mock：`docs/design/2026-10-25-chat-steer-ui-mock.html`。用户不知道什么�
   （`"during"` / `"after"`，D2 表"已读取"一行）。v1.6 回退的行是新 turn 的开头、重载后不带标签；v1.7
   它在 turn 中间，不带标签就看不出为什么插在这里。
 
-分段的实现读 `2026-10-24-chat-stream-structure.md` 的 A1 controllers 后再定，原则是：
+A1 已落地（`76ddabbac`：send / stop / continue 移出 ChatPage，`turnControls.ts`；一个 content
+reducer 在 hook 里），turn 结果卡（`2026-10-25-turn-result-card.md`）也已落地，D7 现在可以单独设计。
+分段的实现读 A1 的 controllers 和 reducer 后定，原则是：
 新段的占位 id 用后端给的 row_key，不在前端另造。
 
 ### D8 Stop
@@ -528,7 +535,17 @@ COLD（`session_unit.py` 的 PIT01 处理，`_crash_to_cold_async`），所以 E
 | 回退、已回显（D6 正在读它那一轮） | `reader_closed`，`echo_seen = True` | Stop 停的就是这个 turn，不再发 |
 
 第二行和现在排队消息的行为一致：Stop 不清排队（`interrupt_session` 不碰 pending），排队的消息在
-Stop 后照常发出。不在 Stop 时撤回已写入 stdin 的消息。
+Stop 后照常发出。不在 Stop 时撤回已写入 stdin 的消息。转回排队的行由 drain 的 `claim_pending_batch`
+把 `created_at` 改成取走时间（`6a75af694`），所以它排在 Stop 写的所有行（回执、turn_changes、
+deliverables）之后，不用另取 `transcript_order` 的锁。
+
+**Stop 进行中才到的回显（T29）。** Stop 先写回执，再 `interrupt()`（最多 5 秒），最后写 turn 的
+产物；整段持有 `transcript_order.stop_writes`（`562b28830`）。`interrupt()` 期间 CLI 仍可能在 tool
+result 处并入 steer，或者按 E1 在 `error_during_execution` 之后开 steer 那一轮，回显照样到 reader。
+这时 `confirm_steer` 如果用回显时间，user 行会落在回执和产物之间，重载后正是 `562b28830` 修掉的
+那种错位（停掉的 turn 的卡跑到下一条消息下面）。所以：回显晚于本 turn 的 Stop 回执时，行的时间取
+回执之前（排在 Stop flush 的行之后、回执之前），标签照常记 `during` / `after`；它属于被停掉的 turn，
+不再发（上表第一、三行）。`confirm_steer` 不取 `user_row` 的锁：那会把它排到产物之后，还要等 30 秒。
 
 ## 5. P0 结论（2026-10-25）
 
@@ -663,7 +680,7 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | T4 | reader：steer claim 登记后经历 running → idle（原 turn 里的 requires_action → running、Result 边界的 idle，E10） | `_abandon_unconsumed_claims` 不丢 steer claim；普通 claim 照旧被丢 |
 | T5 | D1 判断表，每个条件单独为假 | 走排队，回执 `queued: true` |
 | T6 | 持久化：并入后 | user 行在回显时就是 `sent=1`、`created_at` = 回显时间（writer 还没处理标记项时也是）；之前暂存的 tool result 在前一行；之后的行 row_key = `{steer_cid}-asst`；重载顺序 = 直播顺序 |
-| T7 | 回退：CLI 写完最终回复后才读 steer（E10 帧序） | 第一个 Result 不发 `result`，两轮的用量和 `duration_ms` 加进最后一个 result；只有一次 `turn_start` / `turn_end`；unit 全程 STREAMING；turn 结束后的 RSS 检查、self-heal、turn_changes 只在最后跑一次；行顺序 = [前一段] [steer] [后一段] |
+| T7 | 回退：CLI 写完最终回复后才读 steer（E10 帧序） | 第一个 Result 不发 `result`，两轮的用量和 `duration_ms` 加进最后一个 result；只有一次 `turn_start` / `turn_end`；`_turn_id` 两轮相同（不调 `_reset_turn_state`）；unit 全程 STREAMING；turn 结束后的 RSS 检查、self-heal、turn_changes 只在最后跑一次；行顺序 = [前一段] [steer] [后一段] |
 | T8 | 写失败 | `drop_claim` + 转 pending，回执 `queued: true` |
 | T9 | `unit._turn_stream` | steer 写入前后不变 |
 | T10 | 前端：Waiting → Read during / Read after / Queued，及重连后按快照恢复 | 气泡从发出到读取不移动、不重挂；标签按 D7 表（Waiting 无 ✕，Queued 有 ✕ 和原因）；重载后只有并入的保留标签；无重复气泡；新段内容不写进旧段 |
@@ -685,9 +702,10 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | T26 | D6 等 steer 时进程崩溃 | steer 转回排队；原 turn 走现有的中途崩溃重试，重发的是第一条消息加续接提示，不是 steer；重试结束后 drain 发出 steer 一次 |
 | T23 | 在途行重复 POST（L3） | 回执 `steer: true`、`queued: false` |
 | T27 | `error_max_turns` 的 Result 时有未回显的 steer claim（帧序按 E13a、E13b） | D6 接着读，outcome `opened`；不发 `turn_limit_reached`，`_client` / `_wrapper` 不被置空；两轮用量累加，只有一次 `turn_end`。没有 steer 时 `error_max_turns` 分支行为不变 |
+| T29 | Stop 的 `interrupt()` 期间 steer 回显（folded，以及 E1 帧序的 opened）（D8） | user 行在 Stop flush 的行之后、回执之前，重载后顺序不变；行 `sent = 1`，不转回排队、不再发 |
 | T28 | D6 接着读后，steer 那一轮里出现权限请求，放行后在续写的流里收到 tool result；以及在 steer 那一轮里按 Stop（D6 carry） | 续写流里该 tool_use 的 result 正常配对（工具名、父级都在），turn 不显示 Stopped；Stop 回执里有 steer 那一轮 Bash 写的文件；第一个 Result 处没有调用 `reset_turn_carry` |
 
-T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱动 reader 和 orchestrator（按 X5–X8、E1–E13 的实测顺序），不依赖真实 CLI。
+T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T29 用 fake 帧序列驱动 reader 和 orchestrator（按 X5–X8、E1–E13 的实测顺序），不依赖真实 CLI。
 每条测试回退对应改动后必须变红（AGENT R28）。
 
 ## 7. 不做什么
@@ -707,8 +725,8 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱�
 | 阶段 | 内容 | 上线条件 |
 |---|---|---|
 | P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7–E9），结论在 §5，已改 D1–D8 | — |
-| P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。E12、E13 已完成（§5）。剩下：无上下文 reviewer 只审 v1.7 的 D6（重点：ResultMessage 分支里判断的位置、兜底先回收再收尾、TurnAbandoned 那条路径）；然后把 T1–T9、T12a–T16、T18–T28 写成失败的测试 | 复审没有新的 HIGH |
-| P1 | 后端 D1–D6、D8，开关默认关；P1a（D2 行状态）不依赖 D6，可以先做 | T1–T9、T12a–T16、T18–T26 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
+| P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。E12、E13 已完成（§5）。~~D6 复审~~ 取消（XG，2026-10-25）：设计已审四轮，按 AGENT § Iterative Refinement 接下来由测试验证；D6 的三个重点（判断位置、兜底先回收再收尾、TurnAbandoned 路径）由 T7、T24–T28 覆盖。写测试时发现设计和代码对不上，直接改设计，不再起审查轮次 | — |
+| P1 | 先写失败测试，再实现。后端 D1–D6、D8，开关默认关；P1a（D2 行状态，T14）不依赖 D6，先做 | T1–T9、T12a–T16、T18–T29 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
 | P2 | 前端 D7；打开开关 | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
 | P3 | 观察一周后删开关 | 日志里 `steer_folded` / `steer_opened` / `steer_never_read` 计数无异常（最后一个应为 0） |
 
@@ -755,6 +773,11 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱�
   重起，用户看到的行为不变。测试在 `test_turn_limit_reached.py`。
 
 ## 修订记录
+
+- 2026-10-25 v1.10：取消 P0b 的 D6 复审（XG）。对照今天落地的改动补三处：D6 不为 steer 调
+  `_reset_turn_state`，turn id 不变，landing 留在同一张 turn 结果卡上（T7）；D8 转回排队的行靠
+  `claim_pending_batch` 的取走时间排在 Stop 的行之后，Stop 进行中才到的回显排在回执之前（T29，
+  `562b28830` 的错位）；D7 的前置（A1、turn 结果卡）已落地。
 
 - 2026-10-25 v1.9：E12、E13 实测（§5）。E12：API 错误的 Result 后 CLI 直接执行排着的 steer。E13：CLI 在
   `error_max_turns` 后不退出，同样直接执行 steer，撤回 v1.8 的 max_turns 排除，T27 改写。D3 记 E13a 的帧序
