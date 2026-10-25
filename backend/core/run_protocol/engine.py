@@ -2285,9 +2285,18 @@ class RunEngine:
         return stories[0] if stories and isinstance(stories[0], str) else None
 
     def _test_reports(self, events: Sequence[Mapping[str, Any]]) -> dict[str, dict]:
-        """repo -> the latest TEST validation report among *events* (its blob)."""
-        return {repo: validation_report.read(self.store, event)
-                for repo, event in validation_report.latest(events, "test").items()}
+        """repo -> the latest TEST validation report among *events* (its blob). A
+        report that cannot be read is ``{"unreadable": <why>}``: this also runs after
+        reflect_complete is logged, where raising would leave run.json, REPORT.md and
+        the card stale behind a completed log."""
+        out: dict[str, dict] = {}
+        for repo, event in validation_report.latest(events, "test").items():
+            try:
+                out[repo] = validation_report.read(self.store, event)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                logger.warning("run %s: TEST report of %s unreadable: %s", self.run_id, repo, exc)
+                out[repo] = {"unreadable": f"{type(exc).__name__}: {exc}"[:200]}
+        return out
 
     def _reflected_lessons(self) -> list[dict]:
         """REFLECT's processed lessons (artifacts/reflect.json): the audit lists the

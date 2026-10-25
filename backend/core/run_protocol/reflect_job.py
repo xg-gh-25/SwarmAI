@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -61,18 +62,35 @@ def _project_dir(workspace: Path, project: str) -> Path:
     return Path(workspace) / "Projects" / project
 
 
+def _plain_name(project: str) -> bool:
+    """One plain path component, checked before anything touches the file system."""
+    return bool(project) and project not in (".", "..") and "/" not in project \
+        and "\\" not in project and "\x00" not in project
+
+
+def _project_exists(workspace: Path, project: str) -> bool:
+    """A directory entry of Projects/ with exactly this name. A case-insensitive file
+    system would also open `Foo` for `foo`; the name must match as written."""
+    try:
+        return project in os.listdir(Path(workspace) / "Projects") \
+            and _project_dir(workspace, project).is_dir()
+    except OSError:
+        return False
+
+
 def _queue(workspace: Path, project: str, run_id: str, lesson: Mapping[str, Any],
            destination: str, **extra: Any) -> str:
     """Queue *lesson* for the human-reviewed flow. The file is created under the
     project's ``.artifacts/proposals`` through a directory-fd walk that follows no
     symlink, into a new O_EXCL file (K3 review r2); an existing file is a replay only when it
     is the same proposal as a regular file, and is otherwise rejected (K3 review r3)."""
-    import os
+    if not _plain_name(project):
+        return "rejected_unknown_project"
     root = (Path(workspace) / "Projects").resolve()
     project_dir = _project_dir(workspace, project)
     if project_dir.resolve().parent != root or project_dir.is_symlink():
         return "rejected_unknown_project"
-    if not project_dir.is_dir():
+    if not _project_exists(workspace, project):
         return KEPT_IN_RUN          # no such project: the lesson stays in the run (§3.3.2)
     # run id and lesson id are both validated shapes (run_*, L<n>)
     name = f"reflect-{run_id}-{lesson['id']}.json"
@@ -110,8 +128,19 @@ def _queue(workspace: Path, project: str, run_id: str, lesson: Mapping[str, Any]
             while view:
                 view = view[os.write(out, view):]
             os.fsync(out)
-        finally:
+        except BaseException:
+            # a prefix left behind would read as a different proposal on retry
+            # (rejected_integrity); this O_EXCL file is ours, remove it
             os.close(out)
+            out = -1
+            try:
+                os.unlink(name, dir_fd=fd)
+            except OSError:
+                pass
+            raise
+        finally:
+            if out >= 0:
+                os.close(out)
     finally:
         os.close(fd)
     return f"queued:{name}"
@@ -203,13 +232,16 @@ def route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
                       review="contradiction", conflicts_with=entry)
     if destination.startswith("domain:"):
         _, target_project, doc_section = destination.split(":", 2)
+        if not _plain_name(target_project):
+            return "rejected_unknown_project"
         root = (Path(workspace) / "Projects").resolve()
         target = _project_dir(workspace, target_project).resolve()
         if target.parent != root:                   # never outside Projects/
             return "rejected_unknown_project"
         doc, _, section = doc_section.partition(":")
         from core.ddd_paths import ddd_path
-        if not target.is_dir() or not (ddd_path(target, f"{doc}.md").exists()
+        if not _project_exists(workspace, target_project) \
+                or not (ddd_path(target, f"{doc}.md").exists()
                                        or ddd_path(target, f"{doc}.md").is_symlink()):
             # the project, or its DDD doc, does not exist: keep the lesson in the run's
             # own REFLECT record and REPORT, never drop it (§3.3.2, r8)
@@ -217,8 +249,10 @@ def route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
         proposal = ddd_cultivation.CultivationProposal(
             target_doc=f"{doc}.md", target_section=section,
             content=str(lesson["statement"]), source_run_id=run_id, confidence=0.8)
-        return str(ddd_cultivation.apply_to_ddd(
+        result = str(ddd_cultivation.apply_to_ddd(
             proposal, _project_dir(workspace, target_project)))
+        # the doc went away between the check above and the write: same as absent
+        return KEPT_IN_RUN if result == "doc_missing" else result
     return _queue(workspace, project, run_id, lesson, destination)
 
 

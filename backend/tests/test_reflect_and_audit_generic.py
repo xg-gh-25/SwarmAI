@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from core.run_protocol import reflect, reflect_job, trace
 from core.run_protocol.audit import build, render
 
@@ -130,3 +132,74 @@ def test_a_run_in_a_project_without_ddd_keeps_its_lesson_and_reports_it(tmp_path
         assert "## 没有写进项目 DDD 的经验" in report and "worker pool" in report
     finally:
         r.close()
+
+
+# --- review of f84035312 ------------------------------------------------------------
+
+def test_an_unreadable_test_report_blob_does_not_break_the_completed_audit(tmp_path):
+    """The audit refresh runs after reflect_complete is logged: a TEST report whose
+    blob cannot be read must show as unreadable, not raise (that left run.json,
+    REPORT.md and the card stale behind a completed log)."""
+    from core.run_protocol import engine as eng
+    from core.run_protocol.store import BlobUnreadable
+
+    class Store:
+        def read_blob(self, digest):
+            raise BlobUnreadable("blob gone")
+
+    fake = type("E", (), {"store": Store(), "run_id": "run_x"})()
+    event = {"kind": "validation_report",
+             "payload": {"stage": "test", "repo": "repo",
+                         "report_json": {"blob": "a" * 64}}}
+    reports = eng.RunEngine._test_reports(fake, [event])
+    assert reports["repo"].get("unreadable"), reports
+    audit = _audit(findings=[], test_reports=reports)
+    report = render(audit, fmt="report")
+    assert "repo" in report and "读不出" in report
+
+
+def test_a_doc_removed_between_the_check_and_the_write_is_kept_not_rejected(tmp_path, monkeypatch):
+    from core import ddd_cultivation
+    doc = tmp_path / "Projects" / "R" / "2-understanding" / "TECH.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("# TECH\n\n## Conventions\n")
+    monkeypatch.setattr(ddd_cultivation, "apply_to_ddd", lambda *a, **k: "doc_missing")
+    assert _route(tmp_path, "domain:R:TECH:Conventions", project="R") == "kept_in_run"
+
+
+def test_a_project_name_must_match_the_directory_exactly(tmp_path):
+    """On a case-insensitive file system `foo` would open `Foo`; on a case-sensitive
+    one it would not. Only the exact directory name is that project."""
+    doc = tmp_path / "Projects" / "Foo" / "2-understanding" / "TECH.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("# TECH\n\n## Conventions\n")
+    assert _route(tmp_path, "domain:foo:TECH:Conventions", project="Foo") == "kept_in_run"
+    assert "worker pool" not in doc.read_text()
+    assert _route(tmp_path, "MEMORY", project="foo") == "kept_in_run"
+
+
+@pytest.mark.parametrize("name", ["..", ".", "a/b", "", "a\\b"])
+def test_a_project_name_that_is_not_one_plain_component_is_rejected(tmp_path, name):
+    (tmp_path / "Projects").mkdir()
+    assert _route(tmp_path, f"domain:{name}:TECH:Conventions") == "rejected_unknown_project"
+
+
+def test_a_partial_proposal_write_leaves_no_file_behind(tmp_path, monkeypatch):
+    """A write that fails part-way must not leave a prefix that the retry then
+    reads as a different proposal (rejected_integrity)."""
+    import os as _os
+    (tmp_path / "Projects" / "P").mkdir(parents=True)
+    real = _os.write
+    calls = {"n": 0}
+
+    def flaky(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real(fd, bytes(data)[:5])
+        raise OSError("disk full")
+    import os
+    monkeypatch.setattr(os, "write", flaky)
+    with pytest.raises(OSError):
+        _route(tmp_path, "MEMORY")
+    monkeypatch.setattr(os, "write", real)
+    assert _route(tmp_path, "MEMORY").startswith("queued:")

@@ -190,6 +190,10 @@ def _commands(test_reports: Mapping[str, Mapping[str, Any]] | None) -> dict[str,
     """repo -> the commands of its TEST report: command, result, reason when given."""
     out: dict[str, list] = {}
     for repo, report in sorted((test_reports or {}).items()):
+        if (report or {}).get("unreadable"):
+            out[repo] = [{"command": None, "result": "unreadable",
+                          "reason": str(report["unreadable"])}]
+            continue
         rows = []
         for cmd in (report or {}).get("commands") or []:
             if isinstance(cmd, Mapping):
@@ -524,7 +528,10 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     if details.get("validation"):
         lines += [""] + [str(line) for line in details["validation"]]
     for repo, commands in (details.get("test_reports") or {}).items():
-        if commands:
+        if commands and commands[0].get("result") == "unreadable":
+            lines += ["", f"TEST · {_text(repo, 80)}：报告读不出（"
+                      f"{_text(commands[0].get('reason'), 200)}），本次不列命令"]
+        elif commands:
             lines += ["", f"TEST · {_text(repo, 80)}："]
             lines += [f"- {_text(cmd.get('command'), 200)} → {_text(cmd.get('result'), 20)}"
                       + (f"（{_text(cmd['reason'], 200)}）" if cmd.get("reason") else "")
