@@ -3,6 +3,8 @@
 Public symbols:
 - ``reviewers`` — lightweight P3a roster from deterministic scope facts.
 - ``ReviewOrchestrator`` — handouts, projections, R2 routing and document rendering.
+- ``build_spawn_prompt`` / ``handout_status`` — the four lines an expert is spawned
+  with, and what a handout is still waiting for (handout-by-file design).
 """
 from __future__ import annotations
 
@@ -55,6 +57,46 @@ def build_prompt(expert_id: str, instructions: str, review_input: str,
     head = f"EXPERT-ID: {expert_id}\n" + (f"{binding}\n" if binding else "")
     return (f"{head}\n{instructions.strip()}\n\n{review_input.strip()}"
             f"\n\n{OUTPUT_CONTRACT}\n")
+
+
+SPAWN_INSTRUCTION = ("Read PROMPT-FILE from the top and follow it exactly. If the Read "
+                     "output is cut short, keep reading with offset until the end. Your "
+                     "report is your final message.")
+
+
+def build_spawn_prompt(expert_id: str, binding: str, prompt_file: str) -> str:
+    """The four lines an expert is spawned with (handout-by-file design §3.1): who it
+    is, which handout it answers, and where its full prompt is. The full prompt is the
+    run's audit blob, named by its own sha and write-protected in a SwarmAI session."""
+    return (f"EXPERT-ID: {expert_id}\n{binding}\nPROMPT-FILE: {prompt_file}\n"
+            f"{SPAWN_INSTRUCTION}\n")
+
+
+def handout_status(events: Sequence[Mapping[str, Any]],
+                   handout: Mapping[str, Any]) -> dict[str, Any]:
+    """What *handout* is waiting for, from the log (handout-by-file design §3.5):
+    ``state`` is one of not_spawned, spawn_rejected, spawned_no_answer,
+    answer_rejected, answered; ``reason`` names the latest rejection; ``spawn_prompt``
+    is the text to dispatch again (None for a handout written before the file form)."""
+    hid = handout.get("event_id")
+    mine = [e for e in events if (e.get("payload") or {}).get("handout_event_id") == hid]
+    kinds = [e.get("kind") for e in mine]
+    reason = None
+    if "answer" in kinds:
+        state = "answered"
+    elif "answer_rejected" in kinds:
+        state = "answer_rejected"
+    elif "spawn" in kinds:
+        state = "spawned_no_answer"
+    elif "spawn_rejected" in kinds:
+        state = "spawn_rejected"
+    else:
+        state = "not_spawned"
+    if state in ("answer_rejected", "spawn_rejected"):
+        reason = [e for e in mine if e.get("kind") == state][-1]["payload"].get("reason")
+    payload = handout.get("payload") or {}
+    return {"handout_event_id": hid, "expert_id": payload.get("expert_id"),
+            "state": state, "reason": reason, "spawn_prompt": payload.get("spawn_prompt")}
 
 
 def review_patterns(repos: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
@@ -220,9 +262,15 @@ class ReviewOrchestrator:
             raise ReviewError(f"review prompt contract drift: {prompt_errors}")
         digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         # the full prompt goes into the audit area as a blob (F-4): the evidence prompts
-        # file in the run dir is agent-writable, the blob is not
+        # file in the run dir is agent-writable, the blob is not. The expert reads the
+        # blob itself (PROMPT-FILE); the agent dispatches only the four spawn lines.
+        prompt_file = os.path.realpath(self.store.paths.blobs / digest)
+        spawn = build_spawn_prompt(expert_id, hook_bridge.handout_line(
+            self.store.paths.run_id, nonce), prompt_file)
         payload: dict[str, Any] = {"expert_id": expert_id, "prompt_sha": digest,
-                                   "prompt": prompt, "nonce": nonce}
+                                   "prompt": prompt, "nonce": nonce,
+                                   "spawn_prompt": spawn,
+                                   "spawn_sha": hashlib.sha256(spawn.encode("utf-8")).hexdigest()}
         if round == 2:
             if not finding_ids:
                 raise ReviewError("R2 needs a finding roster")
@@ -235,10 +283,10 @@ class ReviewOrchestrator:
             writer=self.store.authority.writer("cli"), kind="handout", at=at,
             stage=stage, round=round, attempt=attempt, payload=payload,
         )
+        # a copy for people reading the run; the expert reads PROMPT-FILE, not this
         name = f"{expert_id}-r{round}-a{attempt}.md"
-        path = self.run_dir / "evidence" / "prompts" / name
-        self._atomic(path, prompt)
-        return {"event": event, "prompt": prompt, "path": str(path), "sha": digest}
+        self._atomic(self.run_dir / "evidence" / "prompts" / name, prompt)
+        return {"event": event, "prompt": spawn, "path": prompt_file, "sha": digest}
 
     def findings(self, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         return fold_findings(self.store.read_events() if events is None else events,

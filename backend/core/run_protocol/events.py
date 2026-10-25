@@ -33,6 +33,8 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "handout": ("stage", "round", "payload.expert_id", "attempt"),
     "answer": ("payload.tool_use_id",),
     "spawn": ("payload.tool_use_id",),
+    "spawn_rejected": ("payload.handout_event_id", "payload.tool_use_id", "payload.reason"),
+    "answer_rejected": ("payload.handout_event_id", "payload.tool_use_id", "payload.reason"),
     "finding_occ": ("payload.answer_event_id", "ordinal"),
     "finding_status": ("payload.answer_event_id", "ordinal"),
     "reclassify": ("payload.canonical_id", "payload.pass", "attempt"),
@@ -88,11 +90,24 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      # code_trees: the trees whose diff the expert was given (S6-2);
                      # incremental_from: an incremental review's previous reviewed trees
                      # nonce: the spawn identity in the prompt's PIPELINE-HANDOUT line
+                     # spawn_prompt / spawn_sha: the four lines the expert is spawned
+                     # with (PROMPT-FILE = the prompt blob); absent on older handouts
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
-                      "code_trees": dict, "incremental_from": dict, "nonce": str}),
+                      "code_trees": dict, "incremental_from": dict, "nonce": str,
+                      "spawn_prompt": str, "spawn_sha": str}),
     # a host hook saw an expert spawned with exactly a handout's prompt (standalone §4.3)
     "spawn": _spec("hook", ("payload.tool_use_id",), None,
                    {"handout_event_id": str, "tool_use_id": str}),
+    # a spawn that named a handout but was not its spawn prompt, and an expert's answer
+    # that did not qualify (first message not the spawn prompt, PROMPT-FILE not read or
+    # changed, transcript unreadable): diagnostics only, no check reads them
+    "spawn_rejected": _spec("hook", ("payload.handout_event_id", "payload.tool_use_id",
+                                     "payload.reason"), None,
+                            {"handout_event_id": str, "tool_use_id": str, "reason": str},
+                            {"got_sha": str, "got_len": int}),
+    "answer_rejected": _spec("hook", ("payload.handout_event_id", "payload.tool_use_id",
+                                      "payload.reason"), None,
+                             {"handout_event_id": str, "tool_use_id": str, "reason": str}),
     # one answer per handout: the event id derives from the handout, so a second
     # spawn of the same handout can never add a second answer (a retry needs a new
     # handout attempt)

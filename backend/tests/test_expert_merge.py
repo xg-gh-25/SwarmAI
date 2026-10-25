@@ -96,7 +96,7 @@ def test_review_start_tells_security_a_change_is_high_risk(tmp_path, monkeypatch
         assert r.v1("stage-complete", "--artifact", r.artifact("report", report)).get("ok")
         started = r.v1("review-start")
         assert started.get("ok") is True, started
-        prompts = {h["event"]["payload"]["expert_id"]: h["prompt"] for h in started["handouts"]}
+        prompts = {h["event"]["payload"]["expert_id"]: __import__("pathlib").Path(h["path"]).read_text(encoding="utf-8") for h in started["handouts"]}
         assert set(prompts) == {"correctness", "security"}, set(prompts)
         assert "HIGH-RISK CHANGE" in prompts["security"]
         assert "HIGH-RISK CHANGE" not in prompts["correctness"]

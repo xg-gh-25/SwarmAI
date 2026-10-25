@@ -1044,7 +1044,8 @@ class RunEngine:
             expert_id="gate0-skeptic", stage="evaluate", round=1,
             attempt=round_number, at=_now(),
             expert_instructions=prompt_path.read_text(encoding="utf-8"),
-            review_input=(f"GATE-0 ATTEMPT {round_number} OF 2\n" +
+            review_input=(f"GATE-0 ATTEMPT {round_number} OF 2\n"
+                          f"WORK TYPE: {state['profile']}\n" +
                           json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)))
         return {"required": True, "round": round_number, "handout": handout}
 
@@ -1806,7 +1807,14 @@ class RunEngine:
                     self.record_cap_exceeded("gate0_round", stage="evaluate")
                 if disposition in {"awaiting_answer", "needs_round_2"}:
                     self.write_projection()
-                    return {"ok": False, "gate0": disposition, "state": self.projection()}
+                    out = {"ok": False, "gate0": disposition, "state": self.projection()}
+                    if disposition == "awaiting_answer":
+                        # what each Gate-0 handout is waiting for, and its spawn
+                        # prompt to dispatch again (handout-by-file design §3.5)
+                        from core.run_protocol.next_step import waiting_handouts
+                        out["handouts"] = waiting_handouts(self.store.read_events(),
+                                                           "evaluate")
+                    return out
                 if disposition in {"framing_rejected", "already_satisfied"}:
                     self.store.append_new(
                         writer=self.authority.writer("cli"), kind="gate0_exhausted", at=_now(),

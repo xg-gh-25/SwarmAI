@@ -74,7 +74,7 @@ def _review(r: Rig, files: dict[str, str], *, guide: str | None = None,
     assert out.get("ok") is True, out
     started = r.v1("review-start")
     assert started.get("ok") is True, started
-    started["prompts"] = {h["event"]["payload"]["expert_id"]: h["prompt"]
+    started["prompts"] = {h["event"]["payload"]["expert_id"]: __import__("pathlib").Path(h["path"]).read_text(encoding="utf-8")
                           for h in started["handouts"]}
     started["ids"] = [row["id"] for row in started["reviewers"]]
     return started

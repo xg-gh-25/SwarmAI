@@ -63,7 +63,8 @@ def test_a_changed_prompt_binds_nothing_and_an_unbound_answer_is_dropped(tmp_pat
     prompt = _handout(store)
     assert hb.bind_spawn(store, prompt + " changed", "tool-1") is None
     assert hb.record_answer(store, prompt, "NO FINDINGS", completed_at=AT) is None
-    assert _kinds(store) == ["handout"]
+    # the refused spawn leaves its reason (handout-by-file design §3.2); no answer
+    assert _kinds(store) == ["handout", "spawn_rejected"]
 
 
 def test_a_transcript_head_binds_through_the_spawn(tmp_path):

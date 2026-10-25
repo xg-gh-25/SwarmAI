@@ -131,7 +131,7 @@ def test_a_small_change_that_triggers_review_patterns_gets_correctness(tmp_path,
     started = engine.review_start()
     assert [r["id"] for r in started["reviewers"]] == ["correctness"]
     assert "RP1" in started["reviewers"][0]["reason"]
-    prompt = started["handouts"][0]["prompt"]
+    prompt = __import__("pathlib").Path(started["handouts"][0]["path"]).read_text(encoding="utf-8")
     assert "REPOSITORY REVIEW PATTERNS" in prompt
     assert "| RP1 |" in prompt and ".swarmai/review.md" in prompt
 
@@ -155,4 +155,4 @@ def test_a_failed_pattern_selection_still_dispatches_correctness(tmp_path, monke
     engine.stage_complete(_report())
     started = engine.review_start()
     assert [r["id"] for r in started["reviewers"]] == ["correctness"]
-    assert "could not read the pattern table" in started["handouts"][0]["prompt"]
+    assert "could not read the pattern table" in __import__("pathlib").Path(started["handouts"][0]["path"]).read_text(encoding="utf-8")

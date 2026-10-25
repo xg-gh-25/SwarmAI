@@ -46,7 +46,7 @@ direct is for a small, unambiguous change: `create --profile direct --requiremen
 
 ## REVIEW
 
-Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground, each `prompt` unchanged (its `PIPELINE-HANDOUT` line binds the expert's answer to the run).
+Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground, each `prompt` unchanged. A `prompt` is four lines: its `PIPELINE-HANDOUT` line binds the expert's answer to the run, and the expert reads its full instructions and the diff from `PROMPT-FILE`. An answer counts only from an expert spawned with exactly those lines that read the file; when a spawn or answer is rejected, `next` (or the Gate-0 `stage-complete` output) lists each waiting handout with its state, reason and `spawn_prompt` to dispatch again.
 
 - Default: correctness only for >=50 source lines.
 - Security is added only when the change is declared security-relevant: the repo's `.swarmai/review.md` has a `security:` line that matches, your BUILD report says `"risk": ["security"]`, or the design names security boundaries. There is no built-in path or API rule, so declare `risk` whenever the change touches authentication, permissions, input validation, credentials, network, file paths or shell commands. At >=50 lines its handout starts with a HIGH-RISK CHANGE line, which makes it do its "High-risk change" section (there is no second security reviewer).

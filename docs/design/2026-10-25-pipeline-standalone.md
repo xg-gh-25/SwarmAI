@@ -98,6 +98,9 @@ Codex 文档原话：工具 hook 是"有用的护栏，不是完整的强制边�
 - **CLI 先把绑定写进日志。** `review-start` 发 handout 时就生成 nonce，写进 handout 事件（今天 nonce 只在
   SwarmAI 进程内存里，外部 hook 每次是新进程，读不到）。handout 的 prompt 里带一行
   `PIPELINE-HANDOUT: <nonce>`。主 agent 看得到 nonce，这没关系：回答不由它交。
+- **handout 以文件交给专家**（2026-10-25-pipeline-handout-by-file）。派发的 prompt 只有 4 行，其中
+  `PROMPT-FILE` 指向全文的审计 blob；答案只从首条消息就是这 4 行、且读过该文件的子 agent 记下，
+  被拒的 spawn 或答案留下 `spawn_rejected` / `answer_rejected` 和原因。
 - **回答由宿主交来（`source: host`）：**
   - Claude Code、Codex：SubagentStop hook，用 `agent_transcript_path` 读子 agent 收到的第一条 prompt
     （里面有 nonce）和 `last_assistant_message`，调现有的 `record_answer`。

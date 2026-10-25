@@ -65,7 +65,7 @@ def test_a_change_in_test_goes_back_to_review_for_an_incremental_review(rig):
     started = r.v1("review-start")
     assert started.get("incremental") is True, started
     (handout,) = started["handouts"]
-    diff = handout["prompt"].split("INCREMENTAL REVIEW", 1)[1]
+    diff = __import__("pathlib").Path(handout["path"]).read_text(encoding="utf-8").split("INCREMENTAL REVIEW", 1)[1]
     # exactly the change since the last review: the fix, not the original swap
     assert "+    return b + a  # checked" in diff and "-    return a + b" not in diff
     event = next(e for e in r.events() if e["kind"] == "handout"
@@ -168,7 +168,8 @@ def test_reported_test_needs_a_passing_command_on_the_current_code(rig):
     assert proof["evidence_type"] == "reported_test" and proof["command"] == TEST_CMD
     assert _status(r, finding_id) == "open"      # until R2 judges the test (below)
     (handout,) = out["handouts"]
-    assert TEST_CMD in handout["prompt"] and "test_x fails before" in handout["prompt"]
+    full = __import__("pathlib").Path(handout["path"]).read_text(encoding="utf-8")
+    assert TEST_CMD in full and "test_x fails before" in full
 
 
 @pytest.mark.parametrize("verdict,expected", [("ADEQUATE", "closed_proven"),

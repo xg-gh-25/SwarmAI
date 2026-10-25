@@ -567,7 +567,7 @@ def test_a_committed_or_new_file_is_in_the_review_diff(rig):
     (r.worktree / "backend" / "core" / "new_mod.py").write_text("def n():\n    return 2\n")
     _git(r.worktree, "add", "backend/core/mod.py"); _git(r.worktree, "commit", "-qm", "wip")
     started = r.v1("review-start")
-    prompt = "\n".join(h["prompt"] for h in started.get("handouts") or [])
+    prompt = "\n".join(__import__("pathlib").Path(h["path"]).read_text(encoding="utf-8") for h in started.get("handouts") or [])
     roster = [row["id"] for row in started.get("reviewers") or []]
     assert started.get("ok") is True, started
     assert roster, "a new code file always gets a reviewer"

@@ -25,6 +25,7 @@ Public symbols: ``handout_line``, ``parse_binding``, ``prompt_sha``, ``store_for
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -91,13 +92,54 @@ def _spawned(store: AuditStore, handout_id: str) -> "str | None":
     return rows[0]["payload"]["tool_use_id"] if rows else None
 
 
+_REJECT_CAP = 3   # rejection events kept per handout and kind (diagnostics, not a log flood)
+
+
+def _expected_sha(payload: Mapping[str, Any]) -> "str | None":
+    """The sha a spawn of this handout must have: its four-line spawn prompt, or the full
+    prompt for a handout written before the file form."""
+    return payload.get("spawn_sha") or payload.get("prompt_sha")
+
+
+def _matches(payload: Mapping[str, Any], prompt: str) -> bool:
+    """*prompt* is the handout's spawn text, allowing only ONE missing final newline
+    (a host or a copy can drop it; nothing else is tolerated)."""
+    expected = _expected_sha(payload)
+    return expected in (prompt_sha(prompt), prompt_sha(prompt + "\n"))
+
+
+def _reject(store: AuditStore, kind: str, handout: Mapping[str, Any], tool_use_id: str,
+            reason: str, **extra: Any) -> None:
+    """Leave a reason for a refused spawn / answer (handout-by-file design §3.2-3.3):
+    at most _REJECT_CAP per handout and kind, none once the handout is answered."""
+    hid = handout["event_id"]
+    events = store.read_events()
+    mine = [e for e in events if (e.get("payload") or {}).get("handout_event_id") == hid]
+    if any(e.get("kind") == "answer" for e in mine) or \
+            sum(e.get("kind") == kind for e in mine) >= _REJECT_CAP:
+        return
+    try:
+        store.append_new(writer=store.authority.writer("hook"), kind=kind, at=_now(),
+                         stage=handout["stage"], round=handout["round"],
+                         attempt=handout["attempt"],
+                         payload={"handout_event_id": hid, "tool_use_id": str(tool_use_id),
+                                  "reason": reason, **extra})
+    except StoreError:
+        pass        # the same rejection already recorded
+
+
 def bind_spawn(store: AuditStore, prompt: str, tool_use_id: str) -> "dict[str, Any] | None":
-    """Record that *tool_use_id* spawns an expert with exactly a handout's prompt.
-    Anything else (another prompt, a changed one, no tool call id) binds nothing."""
+    """Record that *tool_use_id* spawns an expert with exactly a handout's spawn prompt
+    (only a missing final newline is tolerated). A prompt that names a pending handout
+    but differs leaves a ``spawn_rejected``; anything else binds nothing."""
     if not isinstance(prompt, str) or not tool_use_id:
         return None
     handout = _handout(store, prompt)
-    if handout is None or handout["payload"].get("prompt_sha") != prompt_sha(prompt):
+    if handout is None:
+        return None
+    if not _matches(handout["payload"], prompt):
+        _reject(store, "spawn_rejected", handout, tool_use_id, "prompt_differs",
+                got_sha=prompt_sha(prompt), got_len=len(prompt))
         return None
     try:
         event, _ = store.append_new(
@@ -131,7 +173,7 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
         return None
     payload = handout["payload"]
     if exact:
-        if payload.get("prompt_sha") != prompt_sha(prompt_text):
+        if not _matches(payload, prompt_text):
             return None
         call = str(tool_use_id or f"nonce:{payload['nonce']}")
     else:
@@ -222,16 +264,61 @@ def on_spawn(prompt: str, tool_use_id: str) -> bool:
     return found is not None and bind_spawn(found[0], prompt, tool_use_id) is not None
 
 
+def _prompt_file(store: AuditStore, payload: Mapping[str, Any]) -> "str | None":
+    """The file a file-form handout's expert must read: the prompt's own audit blob."""
+    if not payload.get("spawn_sha") or not payload.get("prompt_sha"):
+        return None
+    return os.path.realpath(store.paths.blobs / str(payload["prompt_sha"]))
+
+
+def _refusal(store: AuditStore, handout: Mapping[str, Any],
+             transcript_path: "str | None") -> "str | None":
+    """Why this sub-agent's answer may not be recorded for *handout*, or None
+    (handout-by-file design §3.3): its first message must be the spawn text the
+    handout's spawn was bound with, and a file-form expert must have read PROMPT-FILE
+    from the top, the file still being the prompt the handout names."""
+    from core import subagent_transcript
+    payload = handout["payload"]
+    prompt_file = _prompt_file(store, payload)
+    evidence = (subagent_transcript.spawn_evidence(transcript_path, prompt_file)
+                if transcript_path else None)
+    if evidence is None:
+        return "transcript_unreadable"
+    if _expected_sha(payload) not in evidence["first_shas"]:
+        return "spawn_prompt_differs"
+    if prompt_file is not None:
+        if not evidence["read_ok"]:
+            return "prompt_file_not_read"
+        try:
+            data = Path(prompt_file).read_bytes()
+        except OSError:
+            return "prompt_file_changed"
+        if hashlib.sha256(data).hexdigest() != payload["prompt_sha"]:
+            return "prompt_file_changed"
+    return None
+
+
 def on_subagent_stop(prompt_head: str, final_text: str, *,
                      transcript_path: str | None = None,
                      completed_at: str | None = None) -> "dict[str, Any] | None":
     """A host's SubagentStop: record the expert's answer (copied to the run owner's
-    session stream), then the expert's own token usage from its transcript."""
+    session stream), then the expert's own token usage from its transcript. An answer
+    that does not qualify (``_refusal``) is not recorded; an ``answer_rejected`` says
+    why, and the handout can be dispatched again."""
     found = store_for(prompt_head) if prompt_head else None
     if found is None:
         return None
     store, owner = found
     at = completed_at or _now()
+    handout = _handout(store, prompt_head)
+    if handout is None:
+        return None
+    reason = _refusal(store, handout, transcript_path)
+    if reason is not None:
+        who = (f"transcript:{Path(transcript_path).name}" if transcript_path
+               else "transcript:none")
+        _reject(store, "answer_rejected", handout, who, reason)
+        return None
     recorded = record_answer(store, prompt_head, final_text, completed_at=at,
                              session_id=owner)
     if recorded is not None and transcript_path:

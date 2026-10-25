@@ -43,10 +43,12 @@ def test_handout_has_exact_contract_and_is_hash_bound(tmp_path):
     handout = review.handout(expert_id="correctness", stage="REVIEW", round=1,
                              attempt=1, at=AT, expert_instructions="Check correctness",
                              review_input="diff --git a/x b/x")
-    assert lint_prompt(handout["prompt"], expert_id="correctness", round=1) == []
-    assert OUTPUT_CONTRACT in handout["prompt"]
+    full = open(handout["path"], encoding="utf-8").read()
+    assert lint_prompt(full, expert_id="correctness", round=1) == []
+    assert OUTPUT_CONTRACT in full
     assert handout["event"]["payload"]["prompt_sha"] == handout["sha"]
-    assert open(handout["path"], encoding="utf-8").read() == handout["prompt"]
+    # the agent dispatches the four spawn lines; the expert reads the full prompt file
+    assert f"PROMPT-FILE: {handout['path']}" in handout["prompt"]
 
 
 def test_r1_finding_clusters_and_minimal_r2_flow(tmp_path):
@@ -72,7 +74,8 @@ def test_r1_finding_clusters_and_minimal_r2_flow(tmp_path):
                         attempt=2, at="2026-10-22T00:02:00+00:00",
                         expert_instructions="Recheck", review_input=r2_input,
                         finding_ids=sorted(addressed))
-    assert "R2 ONLY" in r2["prompt"] and "whole diff" in r2["prompt"]
+    r2_full = __import__("pathlib").Path(r2["path"]).read_text(encoding="utf-8")
+    assert "R2 ONLY" in r2_full and "whole diff" in r2_full
     bound_r2 = bridge.track_tool_use("tool-r2", r2["prompt"])
     assert bound_r2
     answer = "\n".join(
@@ -226,4 +229,4 @@ def test_the_handout_prompt_is_kept_whole_in_the_audit_area(tmp_path):
     handout = review.handout(expert_id="correctness", stage="review", round=1, attempt=1,
                              at=AT, expert_instructions="Check", review_input="diff --git a b")
     blob = handout["event"]["payload"]["prompt"]["blob"]
-    assert (review.store.paths.blobs / blob).read_text(encoding="utf-8") == handout["prompt"]
+    assert (review.store.paths.blobs / blob).resolve() == __import__("pathlib").Path(handout["path"])

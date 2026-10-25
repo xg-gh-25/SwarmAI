@@ -66,6 +66,32 @@ def _reflect_prepared(events: list[dict[str, Any]], state: dict[str, Any]) -> bo
     return False
 
 
+def waiting_summary(events: list[dict[str, Any]], waiting: list[dict[str, Any]]) -> str:
+    """One line per unanswered handout: its expert, state and reason, and what to do
+    (handout-by-file design §3.5). The spawn prompt itself is in ``handouts``."""
+    from core.run_protocol import review
+    parts = []
+    for handout in waiting:
+        s = review.handout_status(events, handout)
+        part = f"{s['expert_id']}: {s['state']}" + (f" ({s['reason']})" if s["reason"] else "")
+        if s["state"] in ("not_spawned", "spawn_rejected", "answer_rejected"):
+            part += " - dispatch its spawn_prompt (in handouts) unchanged"
+        parts.append(part)
+    return "; ".join(parts)
+
+
+def waiting_handouts(events: list[dict[str, Any]], stage: str) -> list[dict[str, Any]]:
+    """handout_status of each latest unanswered handout of *stage* (per expert and round)."""
+    from core.run_protocol import review
+    latest: dict[tuple[Any, Any], dict[str, Any]] = {}
+    for event in events:
+        if event.get("kind") == "handout" and event.get("stage") == stage:
+            latest[(event["payload"].get("expert_id"), event.get("round"))] = event
+    answered = {e["payload"].get("handout_event_id") for e in events if e.get("kind") == "answer"}
+    return [review.handout_status(events, h) for h in latest.values()
+            if h["event_id"] not in answered]
+
+
 def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
                    blocking: list[dict[str, str]], dispatched: int | None) -> tuple[str, str, str]:
     # per expert and round, the latest handout (a re-dispatch replaces an earlier one):
@@ -77,9 +103,11 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
     answered = {e["payload"].get("handout_event_id") for e in events if e.get("kind") == "answer"}
     waiting = [h for h in latest.values() if h["event_id"] not in answered]
     if waiting:
-        return "dispatch" if dispatched else "wait", "", (
-            f"spawn the {dispatched} handout(s) in this response in one parallel message"
-            if dispatched else f"{len(waiting)} dispatched expert(s) have not answered yet")
+        if dispatched:
+            return "dispatch", "", \
+                f"spawn the {dispatched} handout(s) in this response in one parallel message"
+        return "wait", "", (f"{len(waiting)} dispatched expert(s) have not answered yet: "
+                            + waiting_summary(events, waiting))
     if any(row.get("check") == "RV-4" for row in blocking):
         # S6-2: the code changed since a review saw it (TEST sent the run back, or an
         # edit after R2): only the change since then is reviewed
@@ -181,9 +209,11 @@ def next_step(engine, *, previous_stage: str | None = None,
     blocking = blocking_checks(engine, state)
     out["blocking"] = blocking
     if stage == "review":
-        action, command, why = _review_action(engine, engine.store.read_events(), state,
-                                              blocking, dispatched)
+        events = engine.store.read_events()
+        action, command, why = _review_action(engine, events, state, blocking, dispatched)
         out.update(action=action, command=command, why=why)
+        if action == "wait":
+            out["handouts"] = waiting_handouts(events, "review")
         return out
     if stage in _TDD_STAGES or stage == "test":
         # S6-1: the agent tests natively and ends the stage with its validation report

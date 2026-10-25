@@ -263,9 +263,21 @@ class Rig:
             return None
         transcript = self.root / "transcripts" / f"{tool_use_id}.jsonl"
         transcript.parent.mkdir(parents=True, exist_ok=True)
+        # an expert reads its PROMPT-FILE before answering (handout-by-file design §3.3)
+        prompt_file = next((line.split(": ", 1)[1] for line in prompt.splitlines()
+                            if line.startswith("PROMPT-FILE: ")), None)
+        reads = () if prompt_file is None else (
+            {"type": "assistant", "isSidechain": True, "message": {
+                "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_read",
+                                                  "name": "Read",
+                                                  "input": {"file_path": prompt_file}}]}},
+            {"type": "user", "isSidechain": True, "message": {
+                "role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_read",
+                                             "content": "(prompt)"}]}})
         transcript.write_text("\n".join(json.dumps(r) for r in (
             {"type": "user", "isSidechain": True,
              "message": {"role": "user", "content": prompt}},
+            *reads,
             {"type": "assistant", "isSidechain": True,
              "message": {"role": "assistant", "content": [{"type": "text", "text": answer}],
                          "usage": {"input_tokens": 10, "output_tokens": 5}}},
