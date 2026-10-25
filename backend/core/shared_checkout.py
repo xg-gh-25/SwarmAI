@@ -55,6 +55,7 @@ def _live_contexts():
         from core import session_registry
         router = session_registry.session_router
     except Exception:  # noqa: BLE001
+        logger.debug("shared_checkout: no session router", exc_info=True)
         return []
     if router is None:
         return []

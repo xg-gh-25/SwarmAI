@@ -111,6 +111,7 @@ def _compute_excluded(root: str) -> bool:
         data = os.path.realpath(str(get_app_data_dir()))
         ws = os.path.realpath(str(get_swarmws()))
     except Exception:  # noqa: BLE001
+        logger.debug("repo_guidance: app/workspace dirs unavailable", exc_info=True)
         return False
     if root == ws or root.startswith(ws + os.sep):
         return True
@@ -127,6 +128,7 @@ def _bound_roots() -> set:
             from core.repo_changes import allowed_roots
             _bound_cache[1] = set(allowed_roots())
         except Exception:  # noqa: BLE001
+            logger.debug("repo_guidance: bound roots unavailable", exc_info=True)
             _bound_cache[1] = set()
         _bound_cache[0] = now
     return _bound_cache[1]
