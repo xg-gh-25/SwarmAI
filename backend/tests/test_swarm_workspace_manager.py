@@ -1283,7 +1283,7 @@ class TestInitializationIdempotence:
             files_after_first = {
                 k: v for k, v in _collect_all_files(root).items()
                 if k not in (".legacy_cleaned", ".swarm_privacy_migrated",
-                             ".swarm_ai_instr_untracked")
+                             ".swarm_ai_instr_untracked", ".swarm_projections_untracked")
             }
             dirs_after_first = _collect_all_dirs(root)
 
@@ -1294,7 +1294,7 @@ class TestInitializationIdempotence:
             files_after_second = {
                 k: v for k, v in _collect_all_files(root).items()
                 if k not in (".legacy_cleaned", ".swarm_privacy_migrated",
-                             ".swarm_ai_instr_untracked")
+                             ".swarm_ai_instr_untracked", ".swarm_projections_untracked")
             }
             dirs_after_second = _collect_all_dirs(root)
 

@@ -373,7 +373,31 @@ class TestExpertPromptsProjected:
         assert dst.read_text() == "v2"
 
 
-def test_projected_experts_are_gitignored_in_the_workspace():
+def test_projected_dirs_are_gitignored_in_the_workspace():
     """A regenerated copy must not show up as user changes in the workspace's git."""
-    from core.swarm_workspace_manager import GITIGNORE_CONTENT
-    assert ".claude/experts/" in GITIGNORE_CONTENT.splitlines()
+    from core.swarm_workspace_manager import GITIGNORE_CONTENT, PROJECTED_DIRS
+    lines = GITIGNORE_CONTENT.splitlines()
+    assert all(f"{d}/" in lines for d in PROJECTED_DIRS)
+
+
+def test_already_tracked_projections_are_untracked_once(tmp_path):
+    """.gitignore does not untrack files already committed; the migration does, from
+    the index only (files stay on disk), and writes its marker."""
+    import subprocess
+    from core.swarm_workspace_manager import (
+        SwarmWorkspaceManager, _PROJECTION_UNTRACK_MARKER)
+    ws = tmp_path / "ws"
+    (ws / ".claude" / "skills" / "s_a").mkdir(parents=True)
+    (ws / ".claude" / "skills" / "s_a" / "SKILL.md").write_text("x")
+    (ws / "notes.md").write_text("user file")
+    run = lambda *a: subprocess.run(["git", *a], cwd=ws, check=True, capture_output=True)
+    run("init", "-q")
+    run("add", "-A")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.hooksPath=/dev/null",
+        "commit", "-q", "-m", "init")
+    SwarmWorkspaceManager._untrack_projections(ws)
+    tracked = subprocess.run(["git", "ls-files"], cwd=ws, capture_output=True,
+                             text=True).stdout.split()
+    assert tracked == ["notes.md"]
+    assert (ws / ".claude" / "skills" / "s_a" / "SKILL.md").is_file()
+    assert (ws / _PROJECTION_UNTRACK_MARKER).is_file()
