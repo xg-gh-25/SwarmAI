@@ -142,7 +142,7 @@ with long-running operations → health endpoint starves.
 
 ---
 
-## Examples of HIGH findings from SwarmAI history
+## Examples of HIGH findings
 
 ```json
 {"severity":"HIGH","confidence":9,"path":"backend/jobs/executor.py","line":156,"category":"concurrency","summary":"subprocess.run(timeout=480s) on default asyncio thread pool. Pool has 8 workers shared with health endpoint aiosqlite. 4 concurrent jobs = pool exhaustion = health endpoint hangs = Tauri 'not responding'.","fix":"Use dedicated _job_executor = ThreadPoolExecutor(4) instead of default pool","specialist":"concurrency"}

@@ -86,7 +86,7 @@ External input includes: user action, API response, subprocess exit, network eve
 - Good: timeout → fallback state → recovery path
 - Bad: state waits forever → system hangs
 
-**Known patterns from SwarmAI:**
+**Known patterns:**
 - STREAMING state → process dies → no event → stuck at STREAMING forever
   Fix: L2 poll (3s interval) checks backend state → forces IDLE
 - WAITING_INPUT → user closes tab → no input event → stuck
@@ -144,7 +144,7 @@ not its live one, once a newer cycle runs.
 
 ---
 
-## Examples of HIGH findings from SwarmAI history
+## Examples of HIGH findings
 
 ```json
 {"severity":"HIGH","confidence":9,"path":"hooks/useChatStreamingLifecycle.ts","line":142,"category":"state-machine","summary":"isStreaming stuck: disconnect timeout handler mutates ref directly (tabState.isStreaming = false) but never triggers React re-render. State CHANGE without state PROPAGATION.","fix":"Use setIsStreaming(false) which triggers setPendingStreamTabs → re-render","specialist":"state-machine"}

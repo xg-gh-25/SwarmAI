@@ -15,8 +15,8 @@ visibility: public
 Scope: When changeset touches router files, endpoint handlers, request/response
 models, response schemas, or API-facing interfaces.
 
-> **Protocol-neutral.** The examples below use REST/HTTP + FastAPI/Pydantic (SwarmAI's
-> stack), but the contract checks apply to ANY API surface — adapt to the project's
+> **Protocol-neutral.** The examples below use REST/HTTP + FastAPI/Pydantic, but the
+> contract checks apply to ANY API surface — adapt to the project's
 > protocol from TECH.md `## Stack`: gRPC (proto field numbers, required→optional,
 > backward compat), GraphQL (schema field removal, nullability), WebSocket/event
 > messages (payload shape), or a plain library's public function signatures. "Endpoint"
