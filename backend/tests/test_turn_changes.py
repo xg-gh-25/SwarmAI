@@ -315,8 +315,8 @@ async def test_this_turns_landings_join_the_card(repo, monkeypatch):
     """The card's landings are read for this session's turn id (core/session_landings);
     a turn that wrote nothing in place but landed still gets a card."""
     seen = {}
-    def _read(session_id, *, deadline, turn_id=None, **kw):
-        seen.update(session_id=session_id, turn_id=turn_id)
+    def _read(session_id, *, deadline, turn_id=None, limit=None, **kw):
+        seen.update(session_id=session_id, turn_id=turn_id, limit=limit)
         return {"landed": [{"repo": "r", "branch": "session/x", "dest": "main", "count": 1,
                             "files": [{"path": "f.py", "added": 1, "deleted": 0}]}],
                 "unverified": 1, "truncated": True, "unknown": [{"repo": "q", "reason": "no-reflog"}]}
@@ -325,7 +325,7 @@ async def test_this_turns_landings_join_the_card(repo, monkeypatch):
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32)
     await t.ready()
     block = await t.finish()
-    assert seen == {"session_id": "s1", "turn_id": "t" * 32}
+    assert seen == {"session_id": "s1", "turn_id": "t" * 32, "limit": tc.MAX_LANDINGS}
     assert block["type"] == "turn_changes" and block["files"] == []
     assert block["turn_id"] == "t" * 32 and block["landed"][0]["branch"] == "session/x"
     assert block["landed_truncated"] is True and block["unverified"] == 1

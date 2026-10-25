@@ -72,6 +72,9 @@ MAX_DIFF_CHARS = 1_000_000
 # for the whole of finish(); on expiry that tree / the card is left out.
 GIT_TIMEOUT_S = 30.0
 FINISH_BUDGET_S = 10.0
+# Landings expanded on one card (core/session_landings, ~9 git calls each); a turn
+# with more says so (landed_truncated) and Canvas lists them.
+MAX_LANDINGS = 4
 # The tools whose input names the file they write (dot paths have no file_changed).
 WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 
@@ -348,7 +351,7 @@ class TurnChanges:
             return await loop.run_in_executor(
                 _pool(), lambda: session_landings.read_session(
                     self._session_id, deadline=session_landings.Deadline(FINISH_BUDGET_S),
-                    turn_id=self._turn_id))
+                    turn_id=self._turn_id, limit=MAX_LANDINGS))
         except Exception as exc:  # noqa: BLE001 — a display aid
             logger.debug("turn_changes: landings unreadable: %s", exc)
             return None

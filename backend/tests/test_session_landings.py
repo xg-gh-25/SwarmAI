@@ -199,3 +199,12 @@ def test_bound_checkouts_are_main_checkouts_only(tmp_path, monkeypatch):
     monkeypatch.setattr("core.needs_human_review._bound_worktree_roots",
                         lambda ws: ((str(repo), "proj"), (str(wt), "proj-wt")))
     assert sl._bound_checkouts() == [os.path.realpath(repo)]
+
+
+def test_a_limit_keeps_the_newest_and_says_there_are_more(tmp_path, monkeypatch):
+    repo = _repo(tmp_path / "proj")
+    _land(monkeypatch, repo, "t1", {"b.py": "b\n"})
+    _land(monkeypatch, repo, "t2", {"c.py": "c\n"})
+    res = _read(repo, limit=1)
+    assert [x["files"][0]["path"] for x in res["landed"]] == ["c.py"] and res["truncated"]
+    assert not _read(repo, limit=2)["truncated"]
