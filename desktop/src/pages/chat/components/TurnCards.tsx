@@ -11,7 +11,7 @@
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
  * @exports AttentionCard, AssumptionsDisclosure, isVerificationAttentionItem,
- *          OutputCard, ProductList, productsShownInTurn, middleEllipsis
+ *          OutputCard, ProductList, remoteProducts, middleEllipsis
  */
 import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -146,7 +146,7 @@ export function middleEllipsis(name: string, max = 28): string {
   return `${stem.slice(0, head)}…${stem.slice(stem.length - (room - head))}${ext}`;
 }
 
-function DeliverableTile({ file, shownAbove = false }: { file: TurnDeliverable; shownAbove?: boolean }) {
+function DeliverableTile({ file }: { file: TurnDeliverable }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [thumbFailed, setThumbFailed] = useState(false);
@@ -173,11 +173,6 @@ function DeliverableTile({ file, shownAbove = false }: { file: TurnDeliverable; 
           <FileTypeIcon name={name} size="md" muted />
         )}
         <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
-        {shownAbove && (
-          <span data-testid="shown-above" className="shrink-0 text-[11.5px] text-[var(--color-text-dim)]">
-            {tf(t, 'chat.turn.deliverables.shownAbove', 'shown above')}
-          </span>
-        )}
       </Head>
       {!readOnly && (
         <div className="ml-auto shrink-0 flex items-center gap-3">
@@ -192,11 +187,91 @@ function DeliverableTile({ file, shownAbove = false }: { file: TurnDeliverable; 
 }
 
 type RemoteProduct = Extract<TurnProductContent, { product: 'remote' }>;
-type FileProduct = Extract<TurnProductContent, { product: 'file' }>;
+
+/** A path's folder, home shown as ~. */
+function folderOf(abs: string): string {
+  const dir = abs.replace(/\/[^/]*$/, '') || '/';
+  return dir.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
+}
+
+/** The output card's tile shell (2026-10-26, Gawan): the turn's main result, so a
+ *  bordered card per product, its name a link, the actions right beside it. */
+const CARD_TILE = 'group flex items-center gap-3 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5 transition-colors hover:border-primary/50';
+
+/** One file the turn produced, on the output card: type icon (or the image itself),
+ *  the name as a link that opens it in the Canvas, its folder below; Open in Canvas and
+ *  Copy path right next to it. */
+function DeliverableCardTile({ file }: { file: TurnDeliverable }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const readOnly = useContext(ReadOnlyContext);
+  const name = baseName(file.path || file.absolutePath);
+  const thumb = IMAGE_EXT.test(name) && !thumbFailed ? resolveImageSrc(file.absolutePath) : undefined;
+  const open = () => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: file.absolutePath } }));
+  const copy = async () => {
+    if (await copyToClipboard(file.absolutePath)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+  const Head = readOnly ? 'div' : 'button';
+  const headProps = readOnly ? {} : { type: 'button' as const, onClick: open };
+  const copyLabel = copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path');
+  return (
+    <li data-testid="deliverable" data-path={file.absolutePath} className={CARD_TILE}>
+      <Head {...headProps} title={file.absolutePath} className="min-w-0 flex-1 flex items-center gap-3 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+        {thumb ? (
+          <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-9 h-9 rounded-md object-cover shrink-0 border border-[var(--color-border)]" />
+        ) : (
+          <span className="w-9 h-9 shrink-0 rounded-md flex items-center justify-center bg-[var(--color-hover)]">
+            <FileTypeIcon name={name} size="md" />
+          </span>
+        )}
+        {/* the name, then its folder in grey on the same line; hover: the full path */}
+        <span className="min-w-0 flex items-baseline gap-2">
+          <span data-testid="deliverable-name" className={`shrink-0 max-w-[60%] truncate text-[13.5px] font-semibold text-primary ${readOnly ? '' : 'group-hover:underline'}`}>{middleEllipsis(name, 40)}</span>
+          <span data-testid="deliverable-dir" title={file.absolutePath} className="min-w-0 truncate font-mono text-[11.5px] text-[var(--color-text-dim)]">{folderOf(file.absolutePath)}</span>
+        </span>
+      </Head>
+      {!readOnly && (
+        <div className="shrink-0 flex items-center gap-1">
+          <button type="button" onClick={open} className="btn-sm btn-secondary">{tf(t, 'chat.turn.deliverables.open', 'Open in Canvas')}</button>
+          <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className="icon-btn">
+            <span aria-hidden="true" className="material-symbols-outlined icon-sm">{copied ? 'check' : 'content_copy'}</span>
+          </button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** A remote action on the output card, in the same tile: what was done and on what;
+ *  a link only when the backend found one in the tool's own output. */
+function RemoteProductCardTile({ product }: { product: RemoteProduct }) {
+  const { t } = useTranslation();
+  const readOnly = useContext(ReadOnlyContext);
+  return (
+    <li data-testid="remote-product" data-tool={product.tool} className={CARD_TILE}>
+      <span className="w-9 h-9 shrink-0 rounded-md flex items-center justify-center bg-[var(--color-hover)]">
+        <span aria-hidden="true" className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">send</span>
+      </span>
+      <span className="min-w-0 flex-1 flex items-baseline gap-2">
+        <span className="shrink-0 max-w-[60%] truncate text-[13.5px] font-semibold text-[var(--color-text)]">{product.action}</span>
+        {product.target && <span className="truncate font-mono text-[11.5px] text-[var(--color-text-dim)]" title={product.target}>{product.target}</span>}
+      </span>
+      {product.url && !readOnly && (
+        <button type="button" onClick={() => void openExternal(product.url!)} className="shrink-0 btn-sm btn-secondary" title={product.url}>
+          {tf(t, 'chat.turn.deliverables.openLink', 'Open link')}
+        </button>
+      )}
+    </li>
+  );
+}
 
 /** A remote action the turn did (a Slack post, an email, a ticket, a push): what and
  *  on what; a link only when the backend found one in the tool's own output. */
-function RemoteProductTile({ product, shownAbove = false }: { product: RemoteProduct; shownAbove?: boolean }) {
+function RemoteProductTile({ product }: { product: RemoteProduct }) {
   const { t } = useTranslation();
   const readOnly = useContext(ReadOnlyContext);
   const open = () => { if (product.url) void openExternal(product.url); };
@@ -205,7 +280,6 @@ function RemoteProductTile({ product, shownAbove = false }: { product: RemotePro
       <span aria-hidden="true" className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">send</span>
       <span className="shrink-0 text-[12.5px] text-[var(--color-text)]">{product.action}</span>
       {product.target && <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate" title={product.target}>{product.target}</span>}
-      {shownAbove && <span data-testid="shown-above" className="shrink-0 text-[11.5px] text-[var(--color-text-dim)]">{tf(t, 'chat.turn.deliverables.shownAbove', 'shown above')}</span>}
       {product.url && !readOnly && (
         <button type="button" onClick={open} className="ml-auto shrink-0 btn-sm btn-ghost" title={product.url}>{tf(t, 'chat.turn.deliverables.openLink', 'Open link')}</button>
       )}
@@ -231,16 +305,10 @@ export function ProductList({ blocks }: { blocks: TurnProductContent[] }) {
   return <ul data-testid="product-list" className="divide-y divide-[var(--color-border)]">{rows}</ul>;
 }
 
-/** The files and remote actions shown in the turn (top-level calls' product rows): the
- *  card lists them too, marked as shown above. Sub-agent products are on the card only. */
-export function productsShownInTurn(products: TurnProductContent[]): { files: Set<string>; remote: RemoteProduct[] } {
-  const files = new Set<string>();
-  const remote: RemoteProduct[] = [];
-  for (const p of products) {
-    if (p.product === 'file') { if (!p.parentToolUseId) files.add((p as FileProduct).absolutePath); }
-    else remote.push(p);
-  }
-  return { files, remote };
+/** The turn's remote products (top-level and sub-agent), in order: the output card
+ *  lists them beside the files (the files come from turn_deliverables). */
+export function remoteProducts(products: TurnProductContent[]): RemoteProduct[] {
+  return products.filter((p): p is RemoteProduct => p.product === 'remote');
 }
 
 function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
@@ -358,13 +426,10 @@ export function RunResult({ summary, showReasons = false, collapseDetails = fals
  * neither → no card. A file is in one section only (the caller drops deliverables
  * from the changes rows).
  */
-export function OutputCard({ changes, deliverables, summary, remote = [], shownAbove }: {
+export function OutputCard({ changes, deliverables, summary, remote = [] }: {
   changes?: TurnChangesContent; deliverables: TurnDeliverable[]; summary?: PipelineSummaryContent;
   /** The turn's remote products (turn_product blocks), in order. */
   remote?: RemoteProduct[];
-  /** Products the turn already showed in place (files by path; remote ones are the
-   *  top-level ones): listed here too, marked "shown above". */
-  shownAbove?: Set<string>;
 }) {
   const { t } = useTranslation();
   const docs = summary?.docs ?? [];
@@ -375,16 +440,16 @@ export function OutputCard({ changes, deliverables, summary, remote = [], shownA
       {changes && <ChangesCard block={changes} />}
       {(deliverables.length > 0 || remote.length > 0 || docs.length > 0) && (
         <div data-testid="output-deliverables">
-          <div className="mb-1 flex items-baseline gap-2 text-[12px] font-medium text-[var(--color-text-muted)]">
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-dim)]">
             {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
           </div>
           {(deliverables.length > 0 || remote.length > 0) && (
-            <ul className="divide-y divide-[var(--color-border)]">
-              {deliverables.map((f) => <DeliverableTile key={f.absolutePath} file={f} shownAbove={!!shownAbove?.has(f.absolutePath)} />)}
-              {remote.map((r) => <RemoteProductTile key={`r-${r.toolUseId}`} product={r} shownAbove={!r.parentToolUseId} />)}
+            <ul className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+              {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
+              {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
             </ul>
           )}
-          {docs.length > 0 && <ul className={deliverables.length || remote.length ? 'mt-1' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
+          {docs.length > 0 && <ul className={deliverables.length || remote.length ? 'mt-2' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
         </div>
       )}
     </section>

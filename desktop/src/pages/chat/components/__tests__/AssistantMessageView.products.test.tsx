@@ -7,8 +7,8 @@
  * - nothing moves: the earlier WORKING folds later by the existing 2 s rule, while
  *   the product row's DOM node stays the same; the running call is untouched;
  * - a sub-agent's product is not drawn in the turn; it is on the card;
- * - the ending card lists the files once, marks the in-turn ones "shown above", and
- *   lists remote products; a turn whose only product is remote still has a card;
+ * - the ending card lists the files once (no "shown above" marker) and lists remote
+ *   products; a turn whose only product is remote still has a card;
  * - a turn with no product blocks is drawn exactly as before (no products zone).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -86,15 +86,14 @@ describe('a product ends the work that made it', () => {
 });
 
 describe('the ending card', () => {
-  it('lists each file once, marks the in-turn ones shown above, and lists remote products', () => {
+  it('lists each file once with no marker, and lists remote products as cards', () => {
     const blocks = [write('w1', '/u/Desktop/q3.md'), tr('w1'), fileP('w1', '/u/Desktop/q3.md'),
       bash('m1', 'post'), tr('m1'), remoteP('m1'), tx('Done.'), deliv('/u/Desktop/q3.md', '/u/Desktop/other.md')];
     render(view(blocks, false));
     const card = screen.getByTestId('output-card');
     const tiles = card.querySelectorAll('[data-testid="deliverable"]');
     expect([...tiles].map((t) => t.getAttribute('data-path'))).toEqual(['/u/Desktop/q3.md', '/u/Desktop/other.md']);
-    expect(tiles[0].querySelector('[data-testid="shown-above"]')).not.toBeNull();
-    expect(tiles[1].querySelector('[data-testid="shown-above"]')).toBeNull();
+    expect(card.querySelector('[data-testid="shown-above"]')).toBeNull();
     expect(card.querySelector('[data-testid="remote-product"]')!.textContent).toContain('Posted to Slack');
     expect(card.textContent).toContain('3 deliverables');
   });

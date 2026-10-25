@@ -157,7 +157,10 @@ describe('pipeline_attention — what needs the user', () => {
 });
 
 describe('turn_deliverables — what the turn produced', () => {
-  it('one compact row per file, after the answer, deduped across rows', () => {
+  // 2026-10-26 (Gawan): the deliverables are the turn's main result: one card per file,
+  // the name a link, the folder under it, the actions right next to it (was: one
+  // compact borderless row with the actions at the far edge).
+  it('one card per file, after the answer, deduped across rows', () => {
     renderView([...PIPELINE, deliv('docs/report.md')]);
     const output = screen.getByTestId('output-card');
     const card = screen.getByTestId('output-deliverables');
@@ -166,8 +169,16 @@ describe('turn_deliverables — what the turn produced', () => {
     const rows = within(card).getAllByTestId('deliverable');
     expect(rows.map((e) => e.getAttribute('data-path')))
       .toEqual(['/ws/docs/report.md', '/ws/out/deck.pptx']);
-    expect(rows.every((row) => row.classList.contains('flex'))).toBe(true);
-    expect(rows.every((row) => !row.className.match(/border|rounded-md|grid/))).toBe(true);
+    expect(rows.every((row) => /\bborder\b/.test(row.className) && /rounded-lg/.test(row.className))).toBe(true);
+    expect(rows[0].parentElement!.className).toContain('grid');
+    const name = within(rows[1]).getByTestId('deliverable-name');
+    expect(name.textContent).toBe('deck.pptx');
+    expect(name.className).toContain('text-primary');
+    const dir = within(rows[1]).getByTestId('deliverable-dir');
+    expect(dir.textContent).toBe('/ws/out');
+    expect(dir.getAttribute('title')).toBe('/ws/out/deck.pptx');
+    expect(dir.parentElement).toBe(name.parentElement);   // same line, right after the name
+    expect(name.nextElementSibling).toBe(dir);
     const result = screen.getByTestId('turn-result');
     expect(result.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -180,9 +191,9 @@ describe('turn_deliverables — what the turn produced', () => {
     fireEvent.click(screen.getByText('Open in Canvas'));
     document.removeEventListener(OPEN_FILE_EVENT, on);
     expect(seen).toEqual([{ path: '/ws/out/deck.pptx' }]);
-    fireEvent.click(screen.getByText('Copy path'));
+    fireEvent.click(screen.getByLabelText('Copy path'));
     expect(copySpy).toHaveBeenCalledWith('/ws/out/deck.pptx');
-    expect(await screen.findByText('Copied')).toBeTruthy();
+    expect(await screen.findByLabelText('Copied')).toBeTruthy();
   });
 
   it('an image gets a thumbnail; other files a type icon', () => {
@@ -214,7 +225,7 @@ describe('turn_deliverables — what the turn produced', () => {
     const tile = screen.getByTestId('deliverable');
     expect(tile.querySelector('button')).toBeNull();
     expect(screen.queryByText('Open in Canvas')).toBeNull();
-    expect(screen.queryByText('Copy path')).toBeNull();
+    expect(screen.queryByLabelText('Copy path')).toBeNull();
     fireEvent.click(tile.firstElementChild!);
     document.removeEventListener(OPEN_FILE_EVENT, on);
     expect(seen).toEqual([]);

@@ -39,7 +39,7 @@ import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ChatErrorMessage } from '../../../components/chat';
-import { AssumptionsDisclosure, AttentionCard, isVerificationAttentionItem, OutputCard, ProductList, productsShownInTurn, RunResult } from './TurnCards';
+import { AssumptionsDisclosure, AttentionCard, isVerificationAttentionItem, OutputCard, ProductList, remoteProducts, RunResult } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
@@ -469,9 +469,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     ? [...(b.docs ?? []), ...(b.doc ? [b.doc] : [])].map((d) => d.absolutePath) : [])));
   const deliverables = view.deliverables.filter((d) => !stageDocPaths.has(d.absolutePath)
     && !summaryDocs.some((x) => x.absolutePath === d.absolutePath));
-  // What the turn already showed in place (products zones), and its remote products
-  // (session-products design §3.2): listed on the card too, marked shown above.
-  const shown = productsShownInTurn(view.products);
+  // The turn's remote products (session-products design §3.2): on the card beside the files.
+  const remote = remoteProducts(view.products);
   const changes = useMemo(() => {
     if (!ending || !view.changes) return undefined;
     const files = view.changes.files.filter(
@@ -514,11 +513,11 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       </div>,
     );
   }
-  if (ending && (changes || deliverables.length || summaryDocs.length || shown.remote.length)) {
+  if (ending && (changes || deliverables.length || summaryDocs.length || remote.length)) {
     contentBlocks.push(
       <div key="output" className={hasResult ? 'mt-5' : ZONE_GAP}>
         <OutputCard changes={changes} deliverables={deliverables} summary={summary}
-          remote={shown.remote} shownAbove={shown.files} />
+          remote={remote} />
       </div>,
     );
   }
