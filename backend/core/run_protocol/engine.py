@@ -1771,7 +1771,7 @@ class RunEngine:
         if stage in validation_report.STAGES and artifact and "reports" in artifact:
             self._record_validation_reports(stage, artifact)
         if stage == "deliver":
-            if state.get("pending_landing") is None and lifecycle.caps(profile).lands_code:
+            if lifecycle.deliver_route(state) == "land":
                 raise EngineError("DELIVER finishes with `land`; stage-complete is only for "
                                   "the not-landed path")
             return self.finish_not_landed()
@@ -2002,7 +2002,7 @@ class RunEngine:
         from core.run_protocol import audit as audit_protocol
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "deliver" or (
-                state.get("pending_landing") is None and lifecycle.caps(state["profile"]).lands_code):
+                lifecycle.deliver_route(state) == "land"):
             raise EngineError("the not-landed path needs active DELIVER with a not-landed reason")
         cap = lifecycle.REASON_CAPS.get((state.get("pending_landing") or {}).get("reason"))
         if cap is not None:
@@ -2515,6 +2515,8 @@ class RunEngine:
         state = self.projection()
         if not lifecycle.caps(self.contract["profile"]).lands_code:
             raise EngineError(RESEARCH_LANDS_NOTHING)     # before any event is written
+        # (a run already on the not-landed path is finished below: `land` there still
+        # ends it, the same end `next` names, deliver_route == "finish")
         if state["status"] != "active" or state["stage"] != "deliver":
             raise EngineError("normal land requires active DELIVER")
         if state.get("pending_landing") is not None:

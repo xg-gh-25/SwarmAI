@@ -16,7 +16,7 @@ import pytest
 from core.run_protocol.lifecycle import PROFILE_STAGES
 from tests.pipeline_v1_rig import SWARM, Rig
 
-KNOWN = {"bugfix", "full-two-readings", "build-exhausted"}
+KNOWN = {"bugfix", "full-two-readings"}
 
 
 def _sub(command: str) -> list[str]:

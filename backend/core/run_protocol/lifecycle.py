@@ -148,6 +148,15 @@ def gate0_required(profile: str, readings: Any) -> bool:
     rule = caps(profile).gate0
     return rule == "always" or (rule == "readings" and isinstance(readings, list)
                                 and len(readings) >= 2)
+
+
+def deliver_route(run: Mapping[str, Any]) -> str:
+    """How DELIVER ends, the one rule the commands and ``next`` both read (design
+    2026-10-26-pipeline-two-ends §5): ``"finish"`` (stage-complete: the not-landed path,
+    or a profile that lands no code) or ``"land"``."""
+    if run.get("pending_landing") is not None or not caps(run["profile"]).lands_code:
+        return "finish"
+    return "land"
 IGNORED = frozenset({
     "handout", "spawn", "spawn_rejected", "answer", "answer_rejected",
     "finding_occ", "finding_status",
@@ -251,7 +260,7 @@ def _attempt(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             raise LifecycleError("land attempt check_ids are not a valid action guard set")
     elif stage == "deliver":
         ids = frozenset(check_ids)
-        report_only = run.get("pending_landing") is not None or not caps(run["profile"]).lands_code
+        report_only = deliver_route(run) == "finish"
         if ids != RF_CHECKS and not (ids == REPORT_ONLY and report_only):
             raise LifecycleError("DELIVER attempts are RF-1~4, or DV-1 on the not-landed path")
     else:
