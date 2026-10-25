@@ -95,7 +95,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
                       "code_trees": dict, "incremental_from": dict, "nonce": str,
                       "spawn_prompt": str, "spawn_sha": str}),
-    # a host hook saw an expert spawned with exactly a handout's prompt (standalone §4.3)
+    # a host hook saw an expert spawned with exactly a handout's spawn prompt
+    # (standalone §4.3, handout-by-file design §3.2)
     "spawn": _spec("hook", ("payload.tool_use_id",), None,
                    {"handout_event_id": str, "tool_use_id": str}),
     # a spawn that named a handout but was not its spawn prompt, and an expert's answer

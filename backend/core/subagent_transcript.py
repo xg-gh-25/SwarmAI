@@ -3,8 +3,9 @@ its head, and its final text. Used by the SwarmAI session's SubagentStop hook
 (``runtime_hooks``) and by ``python-backend hook subagent-stop`` (``core.host_hooks``).
 
 ``spawn_evidence`` is what an answer needs before it is recorded (handout-by-file
-design §3.3): the hashes of the sub-agent's whole first message, and whether it read
-a given file from the top without the read failing.
+design §3.3): the hashes of the sub-agent's whole first message, whether it read a
+given file from the top without the read failing, and whether anyone told it
+anything after it was spawned.
 
 Public symbols: ``read_prompt_head``, ``read_final_text``, ``spawn_evidence``.
 """
@@ -14,7 +15,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -101,11 +101,14 @@ def read_final_text(transcript_path: str) -> str:
 
 
 _EVIDENCE_SCAN_BYTES = 16 * 1024 * 1024   # same bound as runtime_hooks._prompt_reads
-_CAT_RE = re.compile(r"(?:^|[;&|(]\s*|\s)cat\s+(?:-\w+\s+)*(['\"]?)([^\s'\"`;|&]+)\1")
+# a user record after the first that only marks an interruption is not an instruction
+_INTERRUPTED = "[Request interrupted"
 
 
-def _real(path: str) -> str:
-    return os.path.realpath(os.path.expanduser(path))
+def _literal(path: str) -> str:
+    """The path as written, normalized but NOT resolved through symlinks: a Read of a
+    link that points at the prompt file is not a read of the prompt file."""
+    return os.path.normpath(os.path.abspath(os.path.expanduser(path)))
 
 
 def _message_text(content) -> str:
@@ -116,20 +119,22 @@ def _message_text(content) -> str:
 
 
 def spawn_evidence(transcript_path: str, prompt_file: "str | None") -> "dict | None":
-    """``{"first_shas": set, "read_ok": bool}`` for an expert's transcript, or None when
-    it cannot be read. ``first_shas``: sha256 of the WHOLE first user message as given and
-    with one final newline added. ``read_ok``: a Read of *prompt_file* starting at its top
-    (no offset, or 0 / 1) or a ``cat`` of it, whose tool_result is not an error. Paths
-    compare by realpath. A later paged Read does not matter; a Read that starts in the
-    middle is not a read of the top."""
+    """``{"first_shas": set, "read_ok": bool, "told_after_spawn": bool}`` for an expert's
+    transcript, or None when it cannot be read. ``first_shas``: sha256 of the WHOLE first
+    user message as given and with one final newline added. ``read_ok``: a Read of
+    *prompt_file* (the path exactly as given, not through a symlink) starting at its top
+    (no offset, or 0 / 1) whose tool_result is not an error; a later paged Read does not
+    matter, a Read starting in the middle is not a read of the top. Only the Read tool
+    counts. ``told_after_spawn``: a later user record carries text (a message sent to the
+    expert after it was spawned), other than an interruption marker."""
     try:
         p = Path(transcript_path)
         if not p.is_file() or p.stat().st_size > _EVIDENCE_SCAN_BYTES:
             return None
-        target = _real(prompt_file) if prompt_file else None
+        target = _literal(prompt_file) if prompt_file else None
         first: "str | None" = None
         pending: set[str] = set()
-        read_ok = False
+        read_ok = told = False
         with open(p, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
@@ -143,6 +148,10 @@ def spawn_evidence(transcript_path: str, prompt_file: "str | None") -> "dict | N
                 if rec.get("type") == "user" and first is None:
                     first = _message_text(content)
                     continue
+                if rec.get("type") == "user":
+                    later = _message_text(content).strip()
+                    if later and not later.startswith(_INTERRUPTED):
+                        told = True
                 if target is None or not isinstance(content, list):
                     continue
                 for b in content:
@@ -150,12 +159,9 @@ def spawn_evidence(transcript_path: str, prompt_file: "str | None") -> "dict | N
                         continue
                     if b.get("type") == "tool_use":
                         inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                        hit = False
-                        if b.get("name") == "Read" and isinstance(inp.get("file_path"), str):
-                            hit = (inp.get("offset") in (None, 0, 1)
-                                   and _real(inp["file_path"]) == target)
-                        elif b.get("name") == "Bash" and isinstance(inp.get("command"), str):
-                            hit = any(_real(m[1]) == target for m in _CAT_RE.findall(inp["command"]))
+                        hit = (b.get("name") == "Read" and isinstance(inp.get("file_path"), str)
+                               and inp.get("offset") in (None, 0, 1)
+                               and _literal(inp["file_path"]) == target)
                         if hit and isinstance(b.get("id"), str):
                             pending.add(b["id"])
                     elif b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
@@ -165,7 +171,7 @@ def spawn_evidence(transcript_path: str, prompt_file: "str | None") -> "dict | N
             return None
         variants = {first, first + "\n"}   # a host may drop the final newline
         return {"first_shas": {hashlib.sha256(v.encode("utf-8")).hexdigest() for v in variants},
-                "read_ok": read_ok}
+                "read_ok": read_ok, "told_after_spawn": told}
     except Exception:
         logger.debug("spawn_evidence: suppressed exception on a fail-safe path", exc_info=True)
         return None

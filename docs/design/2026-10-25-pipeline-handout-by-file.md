@@ -88,9 +88,12 @@ REVIEW 派不出专家。本文档只处理那次暴露的 pipeline 问题；`ru
 1. **首条消息就是 spawn prompt。** 子 agent 第一条消息整体的 sha（`<first:N>`，含结尾换行的变体）里有一个
    等于 `spawn_sha`（旧 handout：等于 `prompt_sha`）。这堵住 H5：另派的改过内容的子 agent，首条消息对不上。
    reason `spawn_prompt_differs`。
-2. **读过 PROMPT-FILE。**（仅带 `spawn_sha` 的 handout）transcript 里至少有一次对 PROMPT-FILE 的读取：
-   `Read` 的 `file_path` 经 `realpath` 后等于 PROMPT-FILE（offset 为空、0 或 1，即从头读），或 Bash
-   `cat <path>`；而且对应的 `tool_result` 没有 `is_error`。允许分页读。reason `prompt_file_not_read`。
+2. **读过 PROMPT-FILE。**（仅带 `spawn_sha` 的 handout）transcript 里至少有一次 `Read`，`file_path`
+   按字面（规范化，不跟随 symlink）等于 PROMPT-FILE，从头读（offset 为空、0 或 1），对应的 `tool_result`
+   没有 `is_error`。允许分页读。只认 Read 工具：`cat` 在 echo 字符串、注释、丢弃输出里都会误判（实现审查）。
+   reason `prompt_file_not_read`。
+3. **spawn 之后没人再对它说话。** 首条之后的 user 记录里出现 text（协调者 SendMessage 进来的话），
+   就不是这个 handout 的审查；中断标记 `[Request interrupted…` 不算。reason `instructed_after_spawn`。
    同时 PROMPT-FILE 此刻的 sha 等于 `prompt_sha`（外部宿主没有写保护 gate，用它发现事后篡改），否则
    reason `prompt_file_changed`。
 
@@ -104,8 +107,8 @@ transcript 读不了时 reason `transcript_unreadable`，同样不记。
 runtime_hooks.py:1035 已算的 `_prompt_reads`：后者只认 `evidence/prompts/` 下的文件，也不看 tool_result，
 复用它要改旧 marker 的行为。代价是进程内路径多扫一次 transcript（transcript 通常几百 KB，在 hook 线程里）。
 
-`exact=True`（Kiro 宿主交全文的路径，standalone T5 尚未实现）：比较对象改为 spawn prompt；没有 transcript
-时按 `transcript_unreadable` 拒绝。Kiro 落地时再定是否降为 relayed。
+`exact=True`（Kiro 宿主交全文的路径，standalone T5 尚未实现）：维持 main 上的规则，比较全文 `prompt_sha`，
+不接受 4 行 spawn prompt（接受它就绕过了上面的读取检查）。Kiro 落地时再定。
 
 `answer_rejected` payload `{handout_event_id, tool_use_id, reason}`，每个 handout 最多记 3 条。被拒不算答案，
 同一 handout 可以重新派发。
@@ -158,6 +161,15 @@ runtime_hooks.py:1035 已算的 `_prompt_reads`：后者只认 `evidence/prompts
   和专家略读代码同类，由审查结论本身体现。
 - 外部宿主里"专家读完后文件被改又改回"的情况不处理（那里没有写保护 gate；`prompt_file_changed`
   只能发现没改回的篡改）。
+- **已知缺口（实现审查 security HIGH，main 上已存在）：transcript 是宿主写的普通文件，没有写保护。**
+  一个不带 `EXPERT-ID` 行的子 agent 不受 `expert_type_gate` 约束，可以改写自己的 transcript，让首条消息、
+  读取记录都"对上"。本次的检查挡住的是失误（派错 prompt、给专家追加指示），挡不住蓄意伪造，和事件日志
+  "有校验和、无签名"（S6-3）是同一个威胁模型。修法候选：SubagentStop 的 `agent_id` 和绑定 spawn 的
+  `tool_use_id` 对应起来；读取证据改由子 agent 内的 PreToolUse/PostToolUse 记录；带 `PIPELINE-HANDOUT` 行
+  的 spawn 一律要求 `pipeline-expert`。另起任务。
+- 外部宿主没有审计目录写保护，blob 在专家读时被换、停时换回，只靠停时的 sha 发现不了（TOCTOU）。
+- 首条消息被宿主拆成多个 text block 时会被拒（`spawn_prompt_differs`）。2026-10-26 抽查 406 个真实
+  Claude Code 子 agent transcript，首条消息全部是单个字符串，暂不处理。
 - 不改 `run_003e9c64`。它的 REVIEW handout 已按旧形式发出；本次落地后用 `abandon` 收掉，业务改动重新起一个
   run 走完，顺带验证本修复。
 
@@ -179,6 +191,9 @@ runtime_hooks.py:1035 已算的 `_prompt_reads`：后者只认 `evidence/prompts
 和成功的 tool_result；`test_pipeline_v1_direct_e2e.py:158`、`test_pipeline_v1_real_e2e.py:570`、
 `test_pipeline_v1_rehearsal.py:84` 对 `handouts[*]["prompt"]` 内容的断言改为读 PROMPT-FILE；
 `tests/review_bridge_helper.py` 的 `track_tool_use` 用 spawn prompt。实施时先 grep 全部 `["prompt"]` 消费方（R27）。
+
+实现审查后补的测试：只认 Read（`cat … > /dev/null` 被拒）、读 symlink 被拒、spawn 后收到协调者消息被拒、
+中断标记不算、被拒后重派期间状态是 `spawned_no_answer` 且答案记在新 spawn 名下、exact 路径仍要全文。
 
 每个新测试在修复撤回后要变红（变异检查）。
 
@@ -206,3 +221,13 @@ runtime_hooks.py:1035 已算的 `_prompt_reads`：后者只认 `evidence/prompts
 - evidence 文件同名覆盖 → 专家改读 blob，不再依赖 evidence 文件（§3.1）。
 - 进程内路径扫两遍 transcript → 复用已算的证据（§3.3）。
 - 若干行号过期 → 已更正。
+
+## 8. 实现审查（correctness + security，一轮）
+
+采纳并修复：`handout_status` 按固定优先级判状态，重派后仍显示 rejected → 按日志顺序，重派绑定后为
+`spawned_no_answer`；`_spawned` 取第一条 spawn → 取最新；Gate-0 状态只看最近一次人工回答之后；`cat`
+识别误判 → 只认 Read；读取路径跟随 symlink → 字面比对；spawn 后追加指示仍记答案 → `instructed_after_spawn`；
+`exact=True` 接受 4 行 spawn 而绕过读取检查 → 维持 main 的全文规则；`_reject` 在锁外计数 → 放进 run 锁，
+`tool_use_id` 截断到 128，接住 `EventError`；几处过期 docstring。
+记为已知缺口（§4）：transcript 可被子 agent 自己改写（HIGH，main 上已存在，另起任务）；外部宿主的 TOCTOU；
+多 text block 首条消息。

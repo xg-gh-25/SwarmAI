@@ -79,21 +79,24 @@ def handout_status(events: Sequence[Mapping[str, Any]],
     answer_rejected, answered; ``reason`` names the latest rejection; ``spawn_prompt``
     is the text to dispatch again (None for a handout written before the file form)."""
     hid = handout.get("event_id")
-    mine = [e for e in events if (e.get("payload") or {}).get("handout_event_id") == hid]
-    kinds = [e.get("kind") for e in mine]
-    reason = None
-    if "answer" in kinds:
+    mine = [e for e in events if (e.get("payload") or {}).get("handout_event_id") == hid
+            and e.get("kind") in ("answer", "answer_rejected", "spawn", "spawn_rejected")]
+    state, reason = "not_spawned", None
+    if any(e.get("kind") == "answer" for e in mine):
         state = "answered"
-    elif "answer_rejected" in kinds:
-        state = "answer_rejected"
-    elif "spawn" in kinds:
-        state = "spawned_no_answer"
-    elif "spawn_rejected" in kinds:
-        state = "spawn_rejected"
     else:
-        state = "not_spawned"
-    if state in ("answer_rejected", "spawn_rejected"):
-        reason = [e for e in mine if e.get("kind") == state][-1]["payload"].get("reason")
+        # a spawn bound after the latest refused answer is an expert still running (a
+        # re-dispatch); a refused spawn never displaces a bound one
+        cut = max((i for i, e in enumerate(mine) if e.get("kind") == "answer_rejected"),
+                  default=-1)
+        spawned = any(e.get("kind") == "spawn" for e in mine[cut + 1:])
+        if spawned:
+            state = "spawned_no_answer"
+        elif cut >= 0:
+            state, reason = "answer_rejected", mine[cut]["payload"].get("reason")
+        elif any(e.get("kind") == "spawn_rejected" for e in mine):
+            state = "spawn_rejected"
+            reason = [e for e in mine if e.get("kind") == "spawn_rejected"][-1]["payload"].get("reason")
     payload = handout.get("payload") or {}
     return {"handout_event_id": hid, "expert_id": payload.get("expert_id"),
             "state": state, "reason": reason, "spawn_prompt": payload.get("spawn_prompt")}

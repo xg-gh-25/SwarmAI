@@ -946,8 +946,9 @@ def _extract_expert_id(prompt_head: str) -> Optional[str]:
 
 
 def create_v1_review_handout_tracker(session_context: Optional[dict] = None):
-    """PreToolUse Agent|Task: an expert spawned with exactly a handout's prompt is a
-    ``spawn`` event in that run (``hook_bridge.bind_spawn``). The prompt is never
+    """PreToolUse Agent|Task: an expert spawned with exactly a handout's spawn prompt (its
+    four lines naming PROMPT-FILE) is a ``spawn`` event in that run
+    (``hook_bridge.bind_spawn``); a differing one leaves a ``spawn_rejected``. The prompt is never
     rewritten: its ``PIPELINE-HANDOUT`` line is already there, written by the CLI, so
     a host that cannot rewrite tool input binds the same way (standalone §4.3)."""
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
@@ -1027,11 +1028,12 @@ def create_agent_tool_audit_hook(
                 prompt_head = (
                     _read_subagent_prompt_head(transcript_path) if transcript_path else ""
                 )
-                # Which run and which expert: a prompt FILE that the v1 review handout
-                # (`pipeline_v1.py review-start`) wrote under runs/<run_id>/evidence/prompts/
-                # and the sub-agent read in full names both, so a session working on two
-                # runs credits the right one, and a "Read <file> and follow it" spawn with
-                # no EXPERT-ID line of its own still counts (16 such spawns 2026-10-18).
+                # Legacy session-marker attribution: a prompt FILE under
+                # runs/<run_id>/evidence/prompts/ that the sub-agent read in full names
+                # the run and expert. A v1 expert now reads its handout's audit blob
+                # (PROMPT-FILE), not that file, so for v1 this falls back to the
+                # spawn's own EXPERT-ID line; the v1 answer itself is bound below by
+                # hook_bridge.on_subagent_stop, not by this marker.
                 reads = _prompt_reads(transcript_path) if transcript_path else None
                 owner, expert_id, attributed_by = _resolve_attribution(
                     _extract_expert_id(prompt_head) if prompt_head else None,

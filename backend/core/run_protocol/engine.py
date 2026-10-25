@@ -1812,7 +1812,8 @@ class RunEngine:
                         # what each Gate-0 handout is waiting for, and its spawn
                         # prompt to dispatch again (handout-by-file design §3.5)
                         from core.run_protocol.next_step import waiting_handouts
-                        out["handouts"] = waiting_handouts(self.store.read_events(),
+                        # only the rounds since the person's last answer count
+                        out["handouts"] = waiting_handouts(self._since_last_answer(),
                                                            "evaluate")
                     return out
                 if disposition in {"framing_rejected", "already_satisfied"}:

@@ -6,18 +6,26 @@ hook hands the facts it saw to these functions; nothing is kept in a session's m
 so a hook in another process (Claude Code, Codex, Kiro, a SwarmAI session) binds the
 same way (design 2026-10-25-pipeline-standalone §4.3):
 
-- ``bind_spawn`` — a PreToolUse saw an expert spawned with exactly a handout's prompt:
-  a ``spawn`` event records the tool call.
+- ``bind_spawn`` — a PreToolUse saw an expert spawned with exactly a handout's spawn
+  prompt (the four lines naming PROMPT-FILE; the full prompt for a handout written
+  before the file form; one missing final newline tolerated): a ``spawn`` event
+  records the tool call. A prompt naming a pending handout but differing leaves a
+  ``spawn_rejected`` with its reason.
 - ``record_answer`` — the expert's final text, with the prompt the host gave it. The
   prompt may be only the head of the expert's transcript (a long prompt is read
   bounded), so it needs a ``spawn`` for the handout; with ``exact=True`` (a host
-  that hands the full spawn prompt and the result together, Kiro's PostToolUse) the
-  prompt must equal the handout's. One answer per handout, under the run lock.
+  that hands the full prompt and the result together, Kiro's PostToolUse) the
+  prompt must equal the handout's full prompt. One answer per handout, under the run
+  lock. It does not judge the transcript: ``on_subagent_stop`` does, before calling it.
 - ``record_usage`` — an expert's own token usage, measured from its transcript.
 - ``parse_binding`` / ``handout_line`` / ``store_for`` — the line, and the run it names.
 - ``on_spawn`` / ``on_subagent_stop`` — what every host's hook calls (a SwarmAI
   session's in-process hooks and ``python-backend hook``): resolve the run, then bind
-  or record.
+  or record. ``on_subagent_stop`` records an answer only from a sub-agent whose first
+  message is the bound spawn text, that read PROMPT-FILE and was told nothing else
+  after it was spawned; otherwise an ``answer_rejected`` says why (handout-by-file
+  design §3.3). The transcript is the host's file: a sub-agent that rewrites its own
+  transcript is not caught here (known gap, see the design).
 
 Public symbols: ``handout_line``, ``parse_binding``, ``prompt_sha``, ``store_for``,
 ``bind_spawn``, ``record_answer``, ``record_usage``, ``on_spawn``, ``on_subagent_stop``.
@@ -86,10 +94,11 @@ def _handout(store: AuditStore, text: str) -> "dict[str, Any] | None":
 
 
 def _spawned(store: AuditStore, handout_id: str) -> "str | None":
-    """The tool call a host hook bound to *handout_id* (its first ``spawn``), else None."""
+    """The tool call a host hook bound to *handout_id* (its latest ``spawn``: after a
+    refused answer the handout is dispatched again), else None."""
     rows = [row for row in store.read_events() if row.get("kind") == "spawn"
             and (row.get("payload") or {}).get("handout_event_id") == handout_id]
-    return rows[0]["payload"]["tool_use_id"] if rows else None
+    return rows[-1]["payload"]["tool_use_id"] if rows else None
 
 
 _REJECT_CAP = 3   # rejection events kept per handout and kind (diagnostics, not a log flood)
@@ -112,20 +121,25 @@ def _reject(store: AuditStore, kind: str, handout: Mapping[str, Any], tool_use_i
             reason: str, **extra: Any) -> None:
     """Leave a reason for a refused spawn / answer (handout-by-file design §3.2-3.3):
     at most _REJECT_CAP per handout and kind, none once the handout is answered."""
+    from core.run_protocol.events import EventError
+    from core.run_protocol.oplock import operation
     hid = handout["event_id"]
-    events = store.read_events()
-    mine = [e for e in events if (e.get("payload") or {}).get("handout_event_id") == hid]
-    if any(e.get("kind") == "answer" for e in mine) or \
-            sum(e.get("kind") == kind for e in mine) >= _REJECT_CAP:
-        return
     try:
-        store.append_new(writer=store.authority.writer("hook"), kind=kind, at=_now(),
-                         stage=handout["stage"], round=handout["round"],
-                         attempt=handout["attempt"],
-                         payload={"handout_event_id": hid, "tool_use_id": str(tool_use_id),
-                                  "reason": reason, **extra})
-    except StoreError:
-        pass        # the same rejection already recorded
+        # count and append under the run lock, so parallel hooks keep the cap
+        with operation(store.paths.root, store.paths.run_id):
+            mine = [e for e in store.read_events()
+                    if (e.get("payload") or {}).get("handout_event_id") == hid]
+            if any(e.get("kind") == "answer" for e in mine) or \
+                    sum(e.get("kind") == kind for e in mine) >= _REJECT_CAP:
+                return
+            store.append_new(writer=store.authority.writer("hook"), kind=kind, at=_now(),
+                             stage=handout["stage"], round=handout["round"],
+                             attempt=handout["attempt"],
+                             payload={"handout_event_id": hid,
+                                      "tool_use_id": str(tool_use_id)[:128],
+                                      "reason": reason, **extra})
+    except (StoreError, EventError):
+        pass        # the same rejection already recorded, or a malformed host id
 
 
 def bind_spawn(store: AuditStore, prompt: str, tool_use_id: str) -> "dict[str, Any] | None":
@@ -173,7 +187,8 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
         return None
     payload = handout["payload"]
     if exact:
-        if not _matches(payload, prompt_text):
+        # the host hands the full prompt it spawned with (main's rule, unchanged)
+        if payload.get("prompt_sha") != prompt_sha(prompt_text):
             return None
         call = str(tool_use_id or f"nonce:{payload['nonce']}")
     else:
@@ -286,6 +301,8 @@ def _refusal(store: AuditStore, handout: Mapping[str, Any],
         return "transcript_unreadable"
     if _expected_sha(payload) not in evidence["first_shas"]:
         return "spawn_prompt_differs"
+    if evidence["told_after_spawn"]:
+        return "instructed_after_spawn"
     if prompt_file is not None:
         if not evidence["read_ok"]:
             return "prompt_file_not_read"
