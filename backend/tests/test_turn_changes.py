@@ -441,3 +441,18 @@ async def test_excludes_activity_context_and_deliverable_copies(repo):
     rows = _rows(await t.finish())
     assert set(rows) == {"a.py", "Knowledge/Notes/n.md", "docs/.context.md",
                          "src/.context/payload.py", "lib/Knowledge/DailyActivity/x.py"}
+
+
+def test_git_reads_never_take_optional_locks(tmp_path, monkeypatch):
+    """Turn-end reads run while other sessions commit: no index.lock from a refresh."""
+    seen = []
+    real = subprocess.run
+    real(["git", "init", "-q", str(tmp_path)], check=True)
+
+    def run(cmd, *a, **kw):
+        seen.append(kw.get("env") or {})
+        return real(cmd, *a, **kw)
+    monkeypatch.setattr(tc.subprocess, "run", run)
+    tc._git(str(tmp_path), "rev-parse", "--git-dir")
+    tc._git(str(tmp_path), "status", "--porcelain", env={"X": "1"})
+    assert seen and all(e.get("GIT_OPTIONAL_LOCKS") == "0" for e in seen)

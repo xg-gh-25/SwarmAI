@@ -195,6 +195,53 @@ def test_land_refuses_a_squash_that_undoes_the_base(tmp_path):
     assert (repo / "b.py").read_text() == "b = 2  # landed by another session\n"
 
 
+def _land_with_base_moving(tmp_path, monkeypatch, *, when):
+    """Land t4 while another session commits b.py to main at a chosen point.
+
+    when="after_rebase": between our rebase and the revert check.
+    when="before_merge": after the revert check, before the ff-only merge.
+    """
+    from scripts import session_worktree as sw
+    repo = _repo(tmp_path / "proj")
+    rc, out = _cli("create", str(repo), "--name", "t4")
+    wt = out["path"]
+    with open(os.path.join(wt, "a.py"), "w") as f:
+        f.write("a = 4\n")
+    _g(wt, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "mine")
+
+    def other_lands():
+        (repo / "b.py").write_text("b = 5  # another session\n")
+        _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "other session")
+
+    real_git, real_check = sw._git, sw.check_no_revert.reverted_paths
+    if when == "after_rebase":
+        def git(cwd, *args, **kw):
+            p = real_git(cwd, *args, **kw)
+            if args[:1] == ("rebase",) and p.returncode == 0 and "--abort" not in args:
+                other_lands()
+            return p
+        monkeypatch.setattr(sw, "_git", git)
+    else:
+        def check(*a, **kw):
+            r = real_check(*a, **kw)
+            other_lands()
+            return r
+        monkeypatch.setattr(sw.check_no_revert, "reverted_paths", check)
+    return repo, _cli("land", wt)
+
+
+@pytest.mark.parametrize("when", ["after_rebase", "before_merge"])
+def test_land_reports_a_base_that_moved_mid_land_not_a_false_revert(tmp_path, monkeypatch,
+                                                                    when):
+    """The check and the rebase judge one pinned tip; a later move is named, not merged."""
+    repo, (rc, out) = _land_with_base_moving(tmp_path, monkeypatch, when=when)
+    assert rc == 1
+    assert "moved while landing" in out["error"], out
+    assert "puts" not in out["error"]                      # not blamed as our revert
+    assert (repo / "a.py").read_text() == "a = 1\n"        # nothing merged
+    assert (repo / "b.py").read_text() == "b = 5  # another session\n"
+
+
 def test_land_and_remove_only_touch_session_worktrees(tmp_path):
     repo = _repo(tmp_path / "proj")
     rc, out = _cli("remove", str(repo))

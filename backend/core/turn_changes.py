@@ -92,10 +92,13 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
 def _git(cwd: str, *args: str, env: Optional[dict] = None, ok: Iterable[int] = (0,),
          stdin: Optional[bytes] = None) -> str:
     # Literal pathspecs: a Next.js route file `[id].tsx` is a glob otherwise and
-    # would pull another file's hunks into its row.
+    # would pull another file's hunks into its row. GIT_OPTIONAL_LOCKS=0: these reads
+    # run at every turn end and must never take the checkout's index.lock (a status /
+    # diff refresh would, and a concurrent commit there would then fail).
     r = subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, timeout=GIT_TIMEOUT_S, input=stdin,
-        env={**os.environ, "GIT_LITERAL_PATHSPECS": "1", **(env or {})},
+        env={**os.environ, "GIT_LITERAL_PATHSPECS": "1", "GIT_OPTIONAL_LOCKS": "0",
+             **(env or {})},
     )
     if r.returncode not in tuple(ok):
         raise RuntimeError(f"git {args[0]} failed ({r.returncode}): {r.stderr.decode('utf-8', 'replace')[:200]}")

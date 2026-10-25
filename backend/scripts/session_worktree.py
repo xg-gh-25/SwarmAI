@@ -125,19 +125,28 @@ def land(path: str) -> dict:
     if _out(wt, "status", "--porcelain"):
         raise Refused(f"{wt} has uncommitted changes; commit them first")
     base = _branch_of_main(main)
-    p = _git(wt, "rebase", "-q", base)
+    # Pin the base tip once: the rebase and the revert check both use this commit, so
+    # another session landing in between cannot make the check judge a tip the branch
+    # was never rebased onto (it would call that session's files our reverts).
+    target = _out(main, "rev-parse", "--verify", f"refs/heads/{base}^{{commit}}")
+    p = _git(wt, "rebase", "-q", target)
     if p.returncode != 0:
         _git(wt, "rebase", "--abort")
         raise Refused(f"rebase onto {base} stopped (conflict); resolve it in {wt} by hand: "
                       + (p.stderr or p.stdout).strip()[:400])
     # ff-only checks that the branch continues the base, not what it does to files:
     # a squash from an old tree passes it and undoes what others landed meanwhile.
-    reverted = check_no_revert.reverted_paths(str(main), branch, base)
+    reverted = check_no_revert.reverted_paths(str(main), branch, target)
     if reverted:
         raise Refused(f"{branch} puts {len(reverted)} file(s) back to where it began, "
                       f"undoing what {base} changed since: {', '.join(reverted[:10])}"
                       + (" ..." if len(reverted) > 10 else "")
                       + f". Squash with `git reset --soft $(git merge-base HEAD {base})`.")
+    # The check holds only for the pinned tip. If the base moved since, say so; a move
+    # after this read is still caught by ff-only (the branch does not contain it).
+    if _out(main, "rev-parse", "--verify", f"refs/heads/{base}^{{commit}}") != target:
+        raise Refused(f"{base} moved while landing (another session landed); "
+                      "nothing merged, run land again")
     p = _git(main, "merge", "--ff-only", "-q", branch)
     if p.returncode != 0:
         raise Refused(f"merge --ff-only into {base} refused: "
