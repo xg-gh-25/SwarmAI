@@ -94,7 +94,6 @@ export interface Expert {
   displayNameEn: string;
   domain: string;           // grouping key (e.g. 'code')
   scope: string;            // one-line "what this expert reviews"
-  spawnAs: string;          // e.g. 'adversarial'
   visibility: string;       // 'public' | ...
   isValid: boolean;         // health: every required frontmatter field present
 }

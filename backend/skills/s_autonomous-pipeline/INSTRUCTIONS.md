@@ -49,7 +49,7 @@ direct is for a small, unambiguous change: `create --profile direct --requiremen
 Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground.
 
 - Default: correctness only for >=50 source lines.
-- Add security and red-team only for clear security risk; below 50 risky lines, security only.
+- Add security only for clear security risk; at >=50 risky lines its handout starts with a HIGH-RISK CHANGE line, which makes it do its "High-risk change" section (there is no second security reviewer).
 - Small changes and docs-only changes dispatch nobody unless explicitly required.
 - R1 reviews the full diff. Collect the whole round, cluster by cause, fix once, then call `review-address --artifact <handoff.json>`; its returned handouts are the complete R2 roster.
 - A behavior/contract finding's fix is proven by a test you ran: record its report with `"$SWARM_BACKEND_BIN" pipeline-v1 report-tests --project <P> --run-id <R> --artifact -`, then give the item `"proof": {"evidence_type": "reported_test", "command": "<the command as in that report>"}`. The command must pass on the current code; R2 judges whether it shows the fix (ADEQUATE / TEST_INADEQUATE). Refuted findings and structural fixes go through `review-proof`. Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.

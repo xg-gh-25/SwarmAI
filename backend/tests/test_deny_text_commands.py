@@ -66,10 +66,10 @@ def test_every_named_pipeline_v1_command_parses(monkeypatch):
 
 
 def test_experts_the_pipeline_does_not_dispatch_say_so():
-    """E: the v1 roster is correctness / security / red-team; every other code expert
+    """E: the v1 roster is correctness / security (§3.5.1); every other code expert
     file says it is not dispatched, and the agent type names no retired gate."""
     from core import pipeline_expert_agent
-    roster = {"correctness", "security", "red-team"}
+    roster = {"correctness", "security"}
     for path in sorted((BACKEND / "experts" / "code").glob("*.md")):
         text = path.read_text(encoding="utf-8")
         assert (path.stem in roster) != ("Pipeline v1: not dispatched" in text), path.name

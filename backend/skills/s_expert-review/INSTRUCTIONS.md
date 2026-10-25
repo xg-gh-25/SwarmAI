@@ -12,14 +12,14 @@ Read the diff, then pick from CATALOG.md:
 | The change | Call |
 |---|---|
 | Ordinary logic of some size (more than a few lines of real code) | `correctness` |
-| Auth, permissions, input validation, credentials, network, file paths, shell commands | `security`; add `red-team` when the risk is high or the diff is large |
+| Auth, permissions, input validation, credentials, network, file paths, shell commands | `security` (when the risk is high or the diff is large, ask it to do its "High-risk change" section) |
 | Concurrency, locks, async, retries, shared state | `concurrency` |
 | A state machine or lifecycle | `state-machine` |
 | A public interface, schema or data format | `api-contract` |
 | Several modules, or callers changed | `integration` |
 | A hot path or large data | `performance` |
-| Deploy, config, logging, background jobs, recovery | `operational` |
-| UI interaction | `ux-test` |
+| Background jobs, retries, timeouts, logging, failure recovery | `operational` |
+| UI interaction | `ux` |
 | A tiny change or docs only | usually nobody |
 
 A repository's own guidance can ask for more (its AGENTS.md or `.swarmai/review.md`,

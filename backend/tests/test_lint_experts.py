@@ -33,7 +33,7 @@ def _write_expert(tmp_path: Path, name: str, fields: dict) -> Path:
 
 _GOOD = {
     "expert": "x", "display_name_zh": "x", "display_name_en": "X",
-    "domain": "code", "scope": "s", "spawn_as": "adversarial", "visibility": "public",
+    "domain": "code", "scope": "s", "visibility": "public",
 }
 
 
@@ -43,7 +43,7 @@ def test_good_expert_passes(tmp_path):
     assert lint_experts.lint_expert(p) == []
 
 
-@pytest.mark.parametrize("missing", ["spawn_as", "domain", "scope"])
+@pytest.mark.parametrize("missing", ["domain", "scope"])
 def test_missing_required_field_is_rejected(tmp_path, missing):
     """MUTATION PROOF: dropping any D3 required field makes the linter flag it.
 
@@ -58,7 +58,7 @@ def test_missing_required_field_is_rejected(tmp_path, missing):
 
 @pytest.mark.parametrize("mem_key", ["memory", "memory_store", "persistent_state"])
 def test_declared_memory_is_rejected(tmp_path, mem_key):
-    """An expert declaring persistent memory is a crewmate → rejected (D3 crit 3)."""
+    """An expert declaring persistent memory is a crewmate → rejected (D3 crit 2)."""
     fields = dict(_GOOD)
     fields[mem_key] = "somevalue"
     p = _write_expert(tmp_path, "crewmate", fields)
@@ -69,18 +69,18 @@ def test_declared_memory_is_rejected(tmp_path, mem_key):
 
 def test_core_stance_domain_rule_relaxed_but_scope_still_required(tmp_path):
     """_core is exempt from the 'no universal expert' domain rule, but still needs
-    spawn_as + scope, and still must not declare memory."""
-    # _core WITH scope + spawn_as → clean
+    a scope, and still must not declare memory."""
+    # _core WITH scope → clean
     ok = _write_expert(tmp_path, "stance", {
         "expert": "_s", "display_name_zh": "x", "display_name_en": "X",
-        "domain": "_core", "scope": "shared stance", "spawn_as": "adversarial",
+        "domain": "_core", "scope": "shared stance",
         "visibility": "internal",
     })
     assert lint_experts.lint_expert(ok) == []
     # _core MISSING scope → still rejected
     bad = _write_expert(tmp_path, "stance2", {
         "expert": "_s", "display_name_zh": "x", "display_name_en": "X",
-        "domain": "_core", "spawn_as": "adversarial", "visibility": "internal",
+        "domain": "_core", "visibility": "internal",
     })
     assert any("scope" in f for f in lint_experts.lint_expert(bad))
 

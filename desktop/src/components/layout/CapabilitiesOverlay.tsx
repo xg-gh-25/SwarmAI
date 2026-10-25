@@ -498,7 +498,6 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
                           />
                           <span className="truncate">
                             <span className="">{e.isValid ? 'ready' : 'malformed'}</span>
-                            {e.spawnAs && <span className="text-[var(--color-text-faint)]"> · {e.spawnAs}</span>}
                           </span>
                         </div>
                       </div>

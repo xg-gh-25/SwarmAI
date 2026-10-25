@@ -28,12 +28,12 @@ def client():
     return TestClient(app)
 
 
-# The 12 code experts expected from the real tree (mirrors
+# The 9 code experts expected from the real tree (mirrors
 # test_expert_manager.py's roster — the design §D2 code domain).
 _EXPECTED_CODE_EXPERTS = {
-    "api-contract", "code-quality", "concurrency", "correctness",
-    "integration", "operational", "performance", "red-team",
-    "spec-compliance", "state-machine", "security", "ux-test",
+    "api-contract", "concurrency", "correctness",
+    "integration", "operational", "performance",
+    "state-machine", "security", "ux",
 }
 
 
@@ -55,11 +55,11 @@ class TestListExperts:
         )
 
     def test_every_expert_carries_the_7_fields_plus_health(self, client):
-        """AC1: each expert projects the 7 frontmatter fields + is_valid (not a stub)."""
+        """AC1: each expert projects the 6 frontmatter fields + is_valid (not a stub)."""
         data = client.get("/api/experts").json()
         required = {
             "expert_id", "display_name_zh", "display_name_en", "domain",
-            "scope", "spawn_as", "visibility", "is_valid",
+            "scope", "visibility", "is_valid",
         }
         for expert in data["code"]:
             assert required <= set(expert.keys()), (
@@ -102,7 +102,7 @@ class TestSerializationContract:
         # A malformed expert (missing fields) must project is_valid=False.
         broken = ExpertInfo(
             expert_id="x", display_name_zh="", display_name_en="",
-            domain="code", scope="", spawn_as="", visibility="",
+            domain="code", scope="", visibility="",
             path=Path("/tmp/x.md"), missing_fields=("display_name_en", "scope"),
         )
         resp = _expert_info_to_response(broken)
@@ -119,7 +119,7 @@ class TestSerializationContract:
         good = ExpertInfo(
             expert_id="correctness", display_name_zh="正确性评审官",
             display_name_en="Correctness Auditor", domain="code",
-            scope="逻辑、边界条件、错误处理", spawn_as="adversarial",
+            scope="逻辑、边界条件、错误处理",
             visibility="public", path=Path("/tmp/c.md"), missing_fields=(),
         )
         resp = _expert_info_to_response(good)
@@ -152,7 +152,7 @@ class TestCrossBoundaryContract:
     # emitting one, the frontend silently renders '' — this set is the contract.
     _FRONTEND_CONSUMED_KEYS = {
         "expert_id", "display_name_zh", "display_name_en", "domain",
-        "scope", "spawn_as", "visibility", "is_valid",
+        "scope", "visibility", "is_valid",
     }
 
     def test_backend_emits_exactly_the_keys_the_frontend_consumes(self, client):

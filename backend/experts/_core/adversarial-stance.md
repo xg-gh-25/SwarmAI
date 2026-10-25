@@ -4,7 +4,6 @@ display_name_zh: 对抗骨架
 display_name_en: Adversarial Stance (shared core)
 domain: _core
 scope: "所有领域专家共享的对抗姿态:fresh-context、只挑错不干活、不被作者说服、零记忆"
-spawn_as: adversarial
 visibility: internal
 ---
 

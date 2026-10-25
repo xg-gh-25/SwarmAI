@@ -40,7 +40,6 @@ def _expert_info_to_response(info: ExpertInfo) -> ExpertResponse:
         display_name_en=info.display_name_en,
         domain=info.domain,
         scope=info.scope,
-        spawn_as=info.spawn_as,
         visibility=info.visibility,
         is_valid=info.is_valid,
     )

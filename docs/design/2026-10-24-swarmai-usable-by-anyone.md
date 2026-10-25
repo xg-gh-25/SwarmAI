@@ -383,6 +383,8 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 
 **没解决、留给 S5 的**：合并后高风险改动只剩 security 一个视角，会不会漏东西，要看 S5 的 run 数据（security 在高风险改动上的 finding 数和后来发现的漏网问题）。如果漏得明显，再考虑给 security 加第二轮，而不是恢复 red-team。
 
+**已实施（S6-4a，2026-10-25）**：按上面的清单做完。计划里没写到的一处：原来 `reviewers()` 给出的理由不会进专家的 prompt，security 没法知道这次是高风险改动。所以 `reviewers()` 给 ≥50 行且有安全风险的 security 那一行加 `high_risk: true`，engine 在 R1 和增量审查的 handout 开头写一行 `HIGH-RISK CHANGE (<理由>)`，security.md 的"高风险改动"一节以这一行为触发条件。另外：`ux` 不再审测试覆盖；`integration` 加了"替换 / 搬移的对等性"一节（来自 code-quality）；`operational` 的 §1 换成和语言、部署方式无关的表；`correctness` 的 API contract 一条不再点名 Pydantic 和 `toCamelCase`；`lint_experts.py` 不再要求 `spawn_as`；前端专家列表不再显示它。
+
 ## 4. 用户场景
 
 | 场景 | 体验 |

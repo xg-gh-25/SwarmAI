@@ -3,24 +3,25 @@ expert: operational
 display_name_zh: 运维评审官
 display_name_en: Operational Auditor
 domain: code
-scope: "hook/定时任务/后台/daemon 的无人值守健壮性"
-spawn_as: adversarial
+scope: "后台任务、重试、超时、故障恢复、日志"
 visibility: public
 ---
 
-> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+> **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # Operational Specialist Review
 <!-- version: 2026-05-19 | origin: Meta-Review (deployment context + scaling) -->
 
-Scope: Dispatched when changeset touches hooks, scheduled jobs, background tasks,
-daemon code, or infrastructure that runs unattended.
+Scope: Dispatched when the changeset adds or changes background work: scheduled or
+queued jobs, workers, hooks, retries, timeouts, long-running services, failure
+recovery, or logging of code that runs unattended.
 
 **Purpose:** Find bugs that only exist in PRODUCTION context — not in dev.
 Code review verifies logic; this specialist verifies ENVIRONMENT ASSUMPTIONS.
 
-Proven pattern: 7+ pipeline runs shipped code that was correct in dev but broken
-in production (daemon env, first-run state, accumulated data, concurrent sessions).
+Common pattern: code that is correct in a developer's shell but broken where it
+really runs (a service's stripped environment, first-run state, data accumulated
+over months, several callers at once).
 
 Output: JSON objects, one finding per line.
 
@@ -49,23 +50,19 @@ Every finding MUST include confidence (1-10):
 
 ### 1. Deployment Context Mismatch
 
-**Where does this code actually run?** (daemon 24/7, subprocess, CLI, hook, cron job)
+**Where does this code actually run?** (a long-running service, a subprocess, a CLI, a hook, a scheduled job)
 
-Check each assumption that differs between dev and production. *(The rows below are
-**Python/PyInstaller examples** — SwarmAI's runtime. The dev-vs-prod-context RISK is
-language-neutral; translate each row to the project's stack from TECH.md `## Stack`:
-`sys.executable`→ Go `os.Executable()` / Rust `std::env::current_exe()`; `Path(__file__)`→
-the language's "path to my own source/bundle"; `$HOME`/`$USER` env assumptions apply to
-any language. The daemon/Hive columns are SwarmAI's deploy targets — use the project's.)*
+Check each assumption that differs between a developer's shell and where the code
+really runs. Name the project's real runtimes (from its docs or build files) and
+check each env-dependent call against every one of them:
 
-| Assumption (SwarmAI-self: Python) | Dev | Daemon | Hive | Why It Breaks |
-|-----------|-----|--------|------|---------------|
-| `sys.executable` | Python binary | Frozen PyInstaller | Frozen | `-c` flag crashes frozen binary |
-| `Path(__file__)` | Source tree | `_internal/` dir | Same | Wrong paths for bundled resources |
-| `$HOME` | Available | NOT in env | Available | `os.path.expandvars` returns literal |
-| `$USER` | Available | NOT in env | Available | `getpass.getuser()` is the safe path |
-| Network access | Full | Full | Full (but NAT) | VPN-dependent services fail |
-| Concurrent sessions | 1 (dev) | 3-4 tabs + 1 channel | Same | Race conditions, file locks |
+| Assumption | Developer shell | Service / job / packaged build | Why it breaks |
+|---|---|---|---|
+| Interpreter / own executable path | the dev toolchain | a packaged or frozen binary | re-invoking "myself" with dev flags fails |
+| Path to bundled resources | the source tree | an install or bundle directory | resources looked up relative to the source are missing |
+| `HOME`, `USER`, `PATH`, locale | set by the login shell | often absent or minimal | env lookups return empty or a literal `$VAR` |
+| Network | full | firewalled, proxied or offline | a call that never times out hangs the job |
+| Concurrency | one caller | several workers, sessions or replicas | races on files, locks, shared state |
 
 **For each env-dependent call in the changeset:** Does it work when stripped?
 

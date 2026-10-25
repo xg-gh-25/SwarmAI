@@ -17,7 +17,7 @@ from pydantic import BaseModel
 class ExpertResponse(BaseModel):
     """API response for a single enumerated expert.
 
-    Projection of ``ExpertInfo`` — the 7 declarative frontmatter fields plus the
+    Projection of ``ExpertInfo`` — the 6 declarative frontmatter fields plus the
     derived ``is_valid`` health signal (``True`` when every REQUIRED_FIELD was
     present; ``False`` surfaces a malformed expert without dropping it).
     """
@@ -27,6 +27,5 @@ class ExpertResponse(BaseModel):
     display_name_en: str
     domain: str
     scope: str
-    spawn_as: str
     visibility: str
     is_valid: bool

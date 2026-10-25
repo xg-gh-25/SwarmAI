@@ -2103,6 +2103,8 @@ class RunEngine:
             review_input = "\n\n".join(diffs)
             if item["id"] == "correctness":
                 review_input = review.patterns_block(patterns) + "\n\n" + review_input
+            if item.get("high_risk"):
+                review_input = review.high_risk_notice(item["reason"]) + review_input
             mine = [h for h in prior if h["payload"]["expert_id"] == item["id"]]
             expert_attempt = attempt
             if mine:
@@ -2151,8 +2153,9 @@ class RunEngine:
         r1 = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
               and e.get("round") == 1]
         earlier = {e["payload"]["expert_id"] for e in r1}
-        picked = {row["id"] for row in review.reviewers(
+        picked_rows = {row["id"]: row for row in review.reviewers(
             profile=self.contract["profile"], changed=changed, patterns=[])}
+        picked = set(picked_rows)
         roster = ["correctness"] + sorted((picked & earlier) - {"correctness"})
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
@@ -2174,7 +2177,9 @@ class RunEngine:
             handouts.append(orchestrator.handout(
                 expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
                 expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
-                review_input="INCREMENTAL REVIEW: only the change since the last review.\n\n"
+                review_input=(review.high_risk_notice(picked_rows[expert]["reason"])
+                              if picked_rows.get(expert, {}).get("high_risk") else "")
+                             + "INCREMENTAL REVIEW: only the change since the last review.\n\n"
                              + "\n\n".join(diffs),
                 code_trees=trees, incremental_from={k: last[k] for k in trees if k in last}))
         return {"reviewers": [{"id": e, "reason": "incremental review"} for e in roster],

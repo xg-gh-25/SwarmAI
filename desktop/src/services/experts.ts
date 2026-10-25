@@ -25,7 +25,6 @@ export const toCamelExpert = (data: Record<string, unknown>): Expert => {
     displayNameEn: (data.display_name_en as string) ?? '',
     domain: (data.domain as string) ?? '',
     scope: (data.scope as string) ?? '',
-    spawnAs: (data.spawn_as as string) ?? '',
     visibility: (data.visibility as string) || 'public',
     isValid: (data.is_valid as boolean) ?? false,
   };

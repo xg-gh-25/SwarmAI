@@ -28,7 +28,7 @@ def test_roster_is_lightweight_and_security_is_risk_triggered():
     assert [row["id"] for row in reviewers(profile="full", changed=plain)] == ["correctness"]
     risky = [{"path": "backend/core/security_hooks.py", "insertions": 60, "deletions": 0}]
     assert [row["id"] for row in reviewers(profile="full", changed=risky)] == [
-        "correctness", "security", "red-team"]
+        "correctness", "security"]
     small_risk = [{"path": "backend/auth.py", "insertions": 15, "deletions": 0}]
     assert [row["id"] for row in reviewers(profile="direct", changed=small_risk)] == ["security"]
     assert reviewers(profile="full", changed=plain, small_change=True) == []

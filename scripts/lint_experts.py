@@ -3,13 +3,10 @@
 
 An **expert** is a cross-Super-IC shared adversarial reviewer (see
 ``core.expert_manager``). Adding one is a system-level capability extension, so it
-must pass three admission criteria (design 2026-10-16 §D3) — fail CLOSED on any:
+must pass two admission criteria (design 2026-10-16 §D3) — fail CLOSED on any:
 
-  1. **Zero-context adversarial** — declares ``spawn_as`` (so ``subagent_type``
-     structurally hits the adversarial classifier; the stance is not left to prose
-     luck).
-  2. **Domain declared** — declares a non-empty ``domain`` (no "universal expert").
-  3. **No persistent identity / memory** — must NOT declare ``memory`` /
+  1. **Domain declared** — declares a non-empty ``domain`` (no "universal expert").
+  2. **No persistent identity / memory** — must NOT declare ``memory`` /
      ``memory_store`` / persistent state (that would be a crewmate, not an expert).
 
 Also requires ``scope`` (the demo介绍词 + what the reviewer covers), which the
@@ -46,18 +43,19 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # reads, and that width must be reviewable, not implicit.
 EXPERTS_DIR = Path("backend/experts")
 
-# The three D3 admission fields that MUST be present + non-empty. A missing one is a
+# The D3 admission fields that MUST be present + non-empty (``spawn_as`` was
+# removed in S6-4, design usable-by-anyone §3.5.1: nothing read it any more). A missing one is a
 # fail-closed REJECTION, never a warning — the whole point of the gate is that a
 # malformed expert cannot land.
-REQUIRED_FIELDS = ("spawn_as", "domain", "scope")
+REQUIRED_FIELDS = ("domain", "scope")
 
 # Keys whose mere PRESENCE means the file declared persistent memory/state → it is a
-# crewmate, not an expert (D3 criterion 3). Fail closed on any.
+# crewmate, not an expert (D3 criterion 2). Fail closed on any.
 FORBIDDEN_MEMORY_KEYS = ("memory", "memory_store", "persistent_state", "state_store")
 
 # The shared adversarial-stance skeleton is scaffolding, not a dispatchable expert.
 # It legitimately carries domain: _core and is NOT held to the per-expert field set
-# the same way (it still must declare spawn_as + a scope, and must NOT declare
+# the same way (it still must declare a scope, and must NOT declare
 # memory — those still apply; only the "no universal expert" domain rule is relaxed
 # because _core IS the shared layer).
 _CORE_DOMAIN = "_core"
@@ -137,7 +135,7 @@ def lint_expert(path: Path) -> list[str]:
 
     for fld in REQUIRED_FIELDS:
         # The "no universal expert" domain rule (criterion 2) is relaxed only for the
-        # _core skeleton — but spawn_as + scope still apply to it.
+        # _core skeleton — but scope still applies to it.
         if fld == "domain" and is_core:
             continue
         if not str(meta.get(fld, "") or "").strip():
@@ -150,7 +148,7 @@ def lint_expert(path: Path) -> list[str]:
         if bad in meta:
             findings.append(
                 f"{path}: declares '{bad}' — an expert must be stateless / zero-memory "
-                f"(D3 criterion 3). A file that needs persistent memory is a crewmate, "
+                f"(D3 criterion 2). A file that needs persistent memory is a crewmate, "
                 f"not an expert."
             )
 

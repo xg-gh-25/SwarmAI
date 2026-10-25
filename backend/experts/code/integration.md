@@ -4,11 +4,10 @@ display_name_zh: 集成评审官
 display_name_en: Integration Auditor
 domain: code
 scope: "新代码是否真接进系统(非孤岛)"
-spawn_as: adversarial
 visibility: public
 ---
 
-> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+> **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # Integration Specialist Review
 <!-- version: 2026-10-18 | origin: PE Finding #1 (governance gate dead code); §6 consumer trace added from the compaction-summary review (RP89-RP91) -->
@@ -52,11 +51,13 @@ Every finding MUST include confidence (1-10):
 For each new public function or class in the changeset:
 
 ```bash
-grep -rn "function_name" <project_root> --include="*.py" | grep -v "def function_name" | grep -v "test_"
+grep -rn "function_name" <project_root> | grep -v "<its definition line>" | grep -v "<test paths>"
 ```
 
 - **0 callers (excluding tests):** HIGH — dead code. Function exists, passes tests, but nothing in production calls it.
-- **1+ callers:** Verify the caller's context matches the function's assumptions (see #3).
+- **1+ callers:** Verify the caller's context matches the function's assumptions (see #3),
+  including the calling convention (a sync caller of an async function, a blocking call
+  on an event loop, a callback that is never awaited).
 
 ### 2. Registration/Wiring (for new hooks, handlers, adapters)
 
@@ -119,6 +120,17 @@ the value survives it:
 **Proven failure pattern:** every confirmed bug of one review was in unchanged code —
 the store merge, the paging query, the turn-end fallback, the "load older" cursor —
 while the hunks themselves were correct.
+
+### 7. Replace / Move Parity (when code is moved, renamed or replaced)
+
+- **Feature parity:** every capability of the old code exists in the new code, or its
+  removal is stated as intended.
+- **Orphans:** the old function, file, config key or route now has 0 callers and is
+  deleted, not left behind.
+- **Control flow:** moved code still runs at the same point (before / after the same
+  steps, under the same lock, on the same error paths).
+- **Duplicates:** the old and new definitions do not both survive (same name defined
+  twice in a module, two routes for one path).
 
 ---
 

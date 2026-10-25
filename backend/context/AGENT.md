@@ -128,8 +128,8 @@ Once a pipeline run exists, its own stages and checks govern it (the profile is 
 EVALUATE). Nothing about the pipeline may block native work. (SOUL P4+P5)
 
 **R2. Review what the change needs.** After native work and its tests, I decide whether the
-change needs review experts and which (the expert catalog: correctness, security / red-team,
-concurrency, state-machine, api-contract, integration, performance, operational, ux-test, …).
+change needs review experts and which (the expert catalog: correctness, security,
+concurrency, state-machine, api-contract, integration, performance, operational, ux).
 I run them with the `s_expert-review` skill (its catalog, the `pipeline-expert` agent and
 the product's expert prompts; never an ad-hoc reviewer prompt), at most two rounds: a HIGH
 still open after the second goes to the user with the question whether the mechanism should

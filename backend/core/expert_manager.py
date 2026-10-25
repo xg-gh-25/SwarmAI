@@ -33,7 +33,7 @@ from core.skill_manager import SkillParseError, parse_frontmatter
 # is backend/. The experts tree is backend/experts/.
 _EXPERTS_ROOT = Path(__file__).resolve().parents[1] / "experts"
 
-# The 7 declarative fields every domain expert MUST carry (design §D2). Kept here
+# The 6 declarative fields every domain expert MUST carry (design §D2). Kept here
 # as the read-side contract; the WRITE-side admission gate (lint_experts.py) is the
 # authority that REJECTS a violation — this list is what the registry expects to
 # find, mirrored there so the two cannot silently disagree about the field set.
@@ -43,7 +43,6 @@ REQUIRED_FIELDS = (
     "display_name_en",
     "domain",
     "scope",
-    "spawn_as",
     "visibility",
 )
 
@@ -61,7 +60,6 @@ class ExpertInfo:
     display_name_en: str
     domain: str
     scope: str
-    spawn_as: str
     visibility: str
     path: Path
     missing_fields: tuple[str, ...] = field(default=())
@@ -108,7 +106,7 @@ class ExpertManager:
                 # health surface shows it, keyed by filename stem as a last resort.
                 registry[md.stem] = ExpertInfo(
                     expert_id=md.stem, display_name_zh="", display_name_en="",
-                    domain="", scope="", spawn_as="", visibility="",
+                    domain="", scope="", visibility="",
                     path=md, missing_fields=REQUIRED_FIELDS,
                 )
                 continue
@@ -128,7 +126,6 @@ class ExpertManager:
                 display_name_en=str(meta.get("display_name_en", "") or ""),
                 domain=domain,
                 scope=str(meta.get("scope", "") or ""),
-                spawn_as=str(meta.get("spawn_as", "") or ""),
                 visibility=str(meta.get("visibility", "") or ""),
                 path=md,
                 missing_fields=missing,

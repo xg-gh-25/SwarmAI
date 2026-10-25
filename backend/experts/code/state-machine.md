@@ -4,11 +4,10 @@ display_name_zh: 状态机评审官
 display_name_en: State-Machine Auditor
 domain: code
 scope: "状态枚举、生命周期、状态转移完整性"
-spawn_as: adversarial
 visibility: public
 ---
 
-> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+> **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # State Machine Specialist Review
 <!-- version: 2026-10-18 | origin: Pipeline Meta-Intelligence (GAP 8); orphan-adoption + RP89 live/reload parity added from the compaction-summary review -->

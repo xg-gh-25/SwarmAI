@@ -379,11 +379,6 @@ def test_review_docs_say_how_to_fetch_full_rows(doc):
     assert "pass / N/A / fail" in text, doc
 
 
-def test_code_quality_expert_uses_the_compact_listing():
-    text = (_BACKEND / "experts" / "code" / "code-quality.md").read_text(encoding="utf-8")
-    assert "--patterns-rows" in text and "Read REVIEW_PATTERNS.md and apply" not in text
-    assert "only if that command fails" in text  # a fallback when the cwd is not the repo root
-
 
 def test_correctness_handout_command_path_exists_from_repo_root():
     """The --patterns-rows command the engine puts in the correctness handout runs

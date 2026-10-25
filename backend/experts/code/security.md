@@ -3,8 +3,7 @@ expert: security
 display_name_zh: 安全评审官
 display_name_en: Security Auditor
 domain: code
-scope: "注入、authz、数据流、密钥(合并 security + security-safety)"
-spawn_as: adversarial
+scope: "注入、authz、数据流、密钥;高风险改动逐条确认防护成立"
 visibility: public
 ---
 
@@ -239,6 +238,40 @@ The scopes below are the REVIEW PROCEDURE — merged in when `security` and
    verified principal, egress jail, provenance check), or merely a prompt instruction /
    client-side toggle? Assume injection SUCCEEDS — the dangerous action must be
    ungrantable, not discouraged.
+
+## High-risk change
+
+Applies when the handout says the change is high risk (a large change on a
+security-sensitive surface), and whenever you judge it so yourself. It replaces the
+former second reviewer for these changes, so it is done in full, after the
+categories above.
+
+For each trust boundary the change adds or touches, confirm the protection holds and
+give the file and line that shows it. A row you could not confirm is marked
+UNCHECKED, never left out and never assumed fine:
+
+1. **Where input enters.** Name every entry point the change reaches: request
+   handlers, CLI arguments, files read, queue messages, tool or model output, other
+   processes. For each, confirm it is validated before it is used, on the server
+   side, not only by a client.
+2. **Who the caller is.** Confirm identity and permission come from a verified
+   principal, not from a field the caller supplies, and that a denied caller changes
+   nothing.
+3. **Every route to the same action.** Confirm the check sits on the one path that
+   every route goes through (a second handler, a background job, a retry, a
+   migration or an admin script does not skip it).
+4. **Failure.** Confirm a partial failure leaves no half-applied state, a caught
+   error is not silently swallowed, and the guard fails closed when its own input
+   is missing or malformed.
+5. **Across boundaries.** Where data crosses a process, language or format boundary,
+   confirm both sides agree on its shape, escaping and error form, and that
+   concurrent callers cannot interleave a check and its use.
+6. **Evidence.** Confirm the validation report runs a test for each protection
+   above that would fail if the protection were removed; a protection with no such
+   test is a finding.
+
+Report each row as `#N: holds (file:line)`, `#N: finding` (as a finding row), or
+`#N: UNCHECKED (why)`.
 
 ## Anti-Rationalization
 

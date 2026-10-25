@@ -70,9 +70,7 @@ _EXPERTS_ROOT = Path(__file__).resolve().parents[1] / "experts"
 
 _PATH_REFERENCED_TEMPLATES = (
     _EXPERTS_ROOT / "code" / "security.md",
-    _EXPERTS_ROOT / "code" / "code-quality.md",
-    _EXPERTS_ROOT / "code" / "ux-test.md",
-    _EXPERTS_ROOT / "code" / "red-team.md",
+    _EXPERTS_ROOT / "code" / "ux.md",
 )
 
 

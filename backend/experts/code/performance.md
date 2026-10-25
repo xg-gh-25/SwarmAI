@@ -4,11 +4,10 @@ display_name_zh: 性能评审官
 display_name_en: Performance Auditor
 domain: code
 scope: "端点、DB 查询、集合循环、渲染路径"
-spawn_as: adversarial
 visibility: public
 ---
 
-> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+> **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # Performance Specialist Review
 <!-- version: 2026-09-13 | synced with: REVIEW_PATTERNS.md RP1-RP88 -->

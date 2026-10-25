@@ -422,8 +422,8 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
 
   const grouped: ExpertsByDomain = {
     code: [
-      { expertId: 'correctness', displayNameZh: '正确性评审官', displayNameEn: 'Correctness Auditor', domain: 'code', scope: '逻辑、边界条件、错误处理', spawnAs: 'adversarial', visibility: 'public', isValid: true },
-      { expertId: 'security', displayNameZh: '安全评审官', displayNameEn: 'Security Auditor', domain: 'code', scope: '鉴权、注入、密钥', spawnAs: 'adversarial', visibility: 'public', isValid: true },
+      { expertId: 'correctness', displayNameZh: '正确性评审官', displayNameEn: 'Correctness Auditor', domain: 'code', scope: '逻辑、边界条件、错误处理', visibility: 'public', isValid: true },
+      { expertId: 'security', displayNameZh: '安全评审官', displayNameEn: 'Security Auditor', domain: 'code', scope: '鉴权、注入、密钥', visibility: 'public', isValid: true },
     ],
   };
 
@@ -442,8 +442,8 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
   it('health signal: a valid expert shows ready, a malformed one shows malformed (the ONE standout)', async () => {
     listExperts.mockResolvedValue({
       code: [
-        { expertId: 'good', displayNameZh: '好', displayNameEn: 'Good', domain: 'code', scope: 's', spawnAs: 'adversarial', visibility: 'public', isValid: true },
-        { expertId: 'bad', displayNameZh: '坏', displayNameEn: 'Bad', domain: 'code', scope: 's', spawnAs: 'adversarial', visibility: 'public', isValid: false },
+        { expertId: 'good', displayNameZh: '好', displayNameEn: 'Good', domain: 'code', scope: 's', visibility: 'public', isValid: true },
+        { expertId: 'bad', displayNameZh: '坏', displayNameEn: 'Bad', domain: 'code', scope: 's', visibility: 'public', isValid: false },
       ],
     });
     renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);

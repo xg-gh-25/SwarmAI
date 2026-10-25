@@ -16,13 +16,12 @@ import pytest
 
 from core.expert_manager import REQUIRED_FIELDS, ExpertInfo, ExpertManager, scan_experts
 
-# INDEPENDENT statement of intent — the 12 code experts R1 must produce. Sourced
-# from the design roster (2026-10-16 §D2), NOT from scan_experts() — so this list
+# INDEPENDENT statement of intent — the 9 code experts after the S6-4 merge. Sourced
+# from the design roster (2026-10-24 usable-by-anyone §3.5.1), NOT from scan_experts() — so this list
 # is a real external expectation the registry is checked AGAINST (RP47 Tell 5).
 EXPECTED_CODE_EXPERTS = frozenset({
-    "correctness", "concurrency", "state-machine", "security", "red-team",
-    "api-contract", "integration", "operational", "performance",
-    "spec-compliance", "code-quality", "ux-test",
+    "correctness", "concurrency", "state-machine", "security",
+    "api-contract", "integration", "operational", "performance", "ux",
 })
 
 _EXPERTS_ROOT = Path(__file__).resolve().parents[1] / "experts"
@@ -56,21 +55,12 @@ def test_every_code_expert_has_all_7_fields_nonempty():
             ("display_name_en", info.display_name_en),
             ("domain", info.domain),
             ("scope", info.scope),
-            ("spawn_as", info.spawn_as),
             ("visibility", info.visibility),
         ):
             assert isinstance(val, str) and val.strip(), (
                 f"expert '{eid}' field '{fld}' empty/non-string: {val!r}"
             )
 
-
-def test_every_code_expert_spawns_adversarial():
-    """spawn_as=adversarial for every code expert — the structural adversarial hook."""
-    registry = scan_experts()
-    for eid in EXPECTED_CODE_EXPERTS:
-        assert registry[eid].spawn_as == "adversarial", (
-            f"expert '{eid}' spawn_as={registry[eid].spawn_as!r}, expected 'adversarial'"
-        )
 
 
 def test_core_stance_is_excluded_from_registry():
@@ -99,8 +89,7 @@ def test_missing_field_is_detected_mutation_proof(tmp_path):
         "display_name_zh: 坏专家\n"
         "display_name_en: Broken\n"
         "domain: code\n"
-        "spawn_as: adversarial\n"
-        "visibility: public\n"
+                "visibility: public\n"
         "---\n\nbody\n"
     )
     mgr = ExpertManager(experts_root=tmp_path)
@@ -119,16 +108,16 @@ def test_by_domain_groups_code_experts(tmp_path):
     for eid in ("alpha", "beta"):
         (code_dir / f"{eid}.md").write_text(
             f"---\nexpert: {eid}\ndisplay_name_zh: x\ndisplay_name_en: x\n"
-            f"domain: code\nscope: s\nspawn_as: adversarial\nvisibility: public\n---\n\nb\n"
+            f"domain: code\nscope: s\nvisibility: public\n---\n\nb\n"
         )
     grouped = ExpertManager(experts_root=tmp_path).by_domain()
     assert list(grouped.keys()) == ["code"]
     assert [e.expert_id for e in grouped["code"]] == ["alpha", "beta"]  # sorted
 
 
-def test_required_fields_contract_is_the_7_declared():
+def test_required_fields_contract_is_the_6_declared():
     """Pin the field contract so a silent shrink of REQUIRED_FIELDS is caught."""
     assert set(REQUIRED_FIELDS) == {
         "expert", "display_name_zh", "display_name_en",
-        "domain", "scope", "spawn_as", "visibility",
+        "domain", "scope", "visibility",
     }

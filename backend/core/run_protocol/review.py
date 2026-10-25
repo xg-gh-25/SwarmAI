@@ -164,15 +164,26 @@ def patterns_block(patterns: Mapping[str, Any]) -> str:
     return "REVIEW PATTERNS: no source file changed; no rows apply."
 
 
+# Experts removed by the §3.5.1 merge -> the roster expert that took their job.
+_RETIRED = {"red-team": "security", "spec-compliance": "correctness",
+            "code-quality": "correctness", "ux-test": "correctness"}
+
+
 def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
               required: Sequence[str] = (), small_change: bool = False,
               patterns: Sequence[str] = ()) -> list[dict[str, str]]:
-    """P3a E1 roster: default correctness; security/red-team only on clear risk.
+    """P3a E1 roster: default correctness; security only on clear risk. A >=50-line
+    risky change gets security's "High-risk change" section (§3.5.1: red-team merged
+    into security), not a second reviewer.
 
     *patterns*: REVIEW_PATTERNS rows the change triggers by path or diff
     (review_patterns). Any of them dispatches correctness, also for a small change:
-    the RP lens has no other reviewer since REVIEW stopped dispatching code-quality."""
+    the RP lens has no other reviewer (code-quality was deleted, §3.5.1).
+
+    *required*: an id from the roster is kept; a retired id maps to the expert that
+    took its job (``_RETIRED``); anything else falls back to correctness."""
     picked: dict[str, str] = {}
+    high_risk = False
     if patterns:
         shown = ", ".join(patterns[:6]) + (f" +{len(patterns) - 6}" if len(patterns) > 6 else "")
         picked["correctness"] = f"review patterns triggered: {shown}"
@@ -186,16 +197,25 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
     if source and total >= 50:
         picked["correctness"] = "changeset >= 50 source lines"
         if risk:
-            picked["security"] = risk
-            picked["red-team"] = risk
+            picked["security"] = f"high-risk change: {risk}"
+            high_risk = True
     elif risk:
         picked["security"] = risk
-    allowed = {"correctness", "security", "red-team"}
+    allowed = {"correctness", "security"}
     for expert in required:
         if isinstance(expert, str) and expert:
-            target = expert if expert in allowed else "correctness"
+            target = expert if expert in allowed else _RETIRED.get(expert, "correctness")
             picked.setdefault(target, f"required expert {expert}")
-    return [{"id": expert, "reason": reason} for expert, reason in picked.items()]
+    return [{"id": expert, "reason": reason,
+             **({"high_risk": True} if expert == "security" and high_risk else {})}
+            for expert, reason in picked.items()]
+
+
+def high_risk_notice(reason: str) -> str:
+    """The line a high-risk security handout starts with: it is what makes security do
+    its "High-risk change" section (§3.5.1)."""
+    return (f"HIGH-RISK CHANGE ({reason}): do the \"High-risk change\" section of your "
+            "instructions in full, after the categories.\n\n")
 
 
 

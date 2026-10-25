@@ -4,11 +4,10 @@ display_name_zh: 并发安全评审官
 display_name_en: Concurrency Auditor
 domain: code
 scope: "竞态、锁、共享可变状态、async 阻塞"
-spawn_as: adversarial
 visibility: public
 ---
 
-> **Pipeline v1: not dispatched.** The review roster is correctness, security and red-team (expert simplification E1); this checklist is merged into correctness. The file stays for the Experts library.
+> **Pipeline v1: not dispatched.** The review roster is correctness and security (expert simplification E1; §3.5.1 merge); this checklist is merged into correctness. The file stays for the Experts library.
 
 # Concurrency Specialist Review
 <!-- version: 2026-06-08 | origin: Pipeline Meta-Intelligence (GAP 8) -->
