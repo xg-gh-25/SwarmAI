@@ -360,6 +360,22 @@ async def test_the_row_budget_spans_landings_and_in_place_rows(repo, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_two_landings_share_one_row_budget(repo, monkeypatch):
+    half = [{"path": f"f{i}.py", "added": 1, "deleted": 0} for i in range(tc.MAX_FILES - 10)]
+    from core import session_landings
+    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: {
+        "landed": [{"repo": "r", "branch": "session/a", "files": half},
+                   {"repo": "r", "branch": "session/b", "files": list(half)}],
+        "unverified": 0, "truncated": False, "unknown": []})
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32)
+    await t.ready()
+    block = await t.finish()
+    a, b = block["landed"]
+    assert len(a["files"]) == tc.MAX_FILES - 10 and len(b["files"]) == 10
+    assert b["omitted"] == tc.MAX_FILES - 20
+
+
+@pytest.mark.asyncio
 async def test_outside_the_code_trees_is_not_a_code_change(repo, tmp_path):
     other = _init(tmp_path / "ws")
     t = await _started([str(repo)])
