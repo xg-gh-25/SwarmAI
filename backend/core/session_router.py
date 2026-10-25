@@ -35,6 +35,7 @@ from uuid import uuid4
 from . import session_events
 from .turn_writer import TurnWriter
 from . import transcript_feed  # noqa: F401 — publishes out-of-turn transcript changes
+from . import transcript_order
 from .session_unit import SessionState, SessionUnit
 from .turn_phase import PREPARING as TURN_PHASE_PREPARING, turn_phase_event
 
@@ -4356,15 +4357,17 @@ class SessionRouter:
                 # this, resume splices it back into the prompt and re-induces the
                 # leak. Lossless on clean text; fenced/inline discussion preserved.
                 user_content = _clean_blocks_for_persist(user_content, assistant=False)
-                await db.messages.put({
-                    "id": persisted_msg_id,
-                    "session_id": session_id,
-                    "role": "user",
-                    "content": user_content,
-                    "model": None,
-                    "created_at": datetime.now().isoformat(),
-                    **({"metadata": _msg_metadata} if _msg_metadata else {}),
-                })
+                # after every row a running Stop writes (core/transcript_order)
+                async with transcript_order.user_row(session_id):
+                    await db.messages.put({
+                        "id": persisted_msg_id,
+                        "session_id": session_id,
+                        "role": "user",
+                        "content": user_content,
+                        "model": None,
+                        "created_at": datetime.now().isoformat(),
+                        **({"metadata": _msg_metadata} if _msg_metadata else {}),
+                    })
                 row_written = True
                 if reserved_send:
                     await send_requests.persisted(reserved_send, persisted_msg_id)
@@ -5331,6 +5334,13 @@ class SessionRouter:
         # a retry between attempts leaves the unit COLD while its turn still runs
         retrying = getattr(unit, "_retrying", False) is True
         turn_running = retrying or unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+        # Every row this Stop writes comes before a message sent meanwhile
+        # (core/transcript_order): held from the receipt's flush to the products.
+        async with transcript_order.stop_writes(session_id):
+            return await self._interrupt_session_writes(session_id, unit, retrying, turn_running)
+
+    async def _interrupt_session_writes(self, session_id: str, unit: SessionUnit,
+                                        retrying: bool, turn_running: bool) -> dict:
         stop_rows = await self._persist_stop_receipt(session_id, unit)
         products = (asyncio.ensure_future(self._turn_products_at_stop(unit, stop_rows))
                     if stop_rows and turn_running else None)

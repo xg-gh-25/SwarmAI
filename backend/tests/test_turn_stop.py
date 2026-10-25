@@ -374,3 +374,101 @@ async def test_a_second_stop_while_one_runs_writes_no_second_receipt():
         third = await router.interrupt_session("s1")
         assert third["message"] == "Stopped background agents", "a later Stop works"
     assert persisted == ["turn_stop", "turn_stop"]
+
+
+# ── the order of a Stop's rows and a message sent meanwhile (core/transcript_order) ──
+
+async def _user_row(sid: str):
+    """A user row written the way the send path writes it."""
+    from datetime import datetime
+    from uuid import uuid4
+    from core import transcript_order
+    from database import db
+    async with transcript_order.user_row(sid):
+        await db.messages.put({"id": str(uuid4()), "session_id": sid, "role": "user",
+                               "content": [{"type": "text", "text": "next"}],
+                               "created_at": datetime.now().isoformat()})
+
+
+async def _kinds(sid: str) -> list:
+    from database import db
+    rows = await db.messages.list_by_session(sid)
+    return [r["content"][0]["type"] if r["role"] == "assistant" else "user" for r in rows]
+
+
+def _stopping_unit(interrupt):
+    unit = _fake_unit(SessionState.STREAMING)
+    unit.begin_stop_receipt = MagicMock(return_value={"type": "turn_stop", "calls": [], "agents": []})
+    unit.interrupt = interrupt
+    unit._turn_changes = MagicMock()
+    unit._turn_changes.finish = AsyncMock(return_value={"type": "turn_changes", "files": [{"path": "a"}]})
+    return unit
+
+
+@pytest.mark.asyncio
+async def test_a_message_sent_during_the_interrupt_lands_after_the_stopped_turns_products():
+    """Real SQLite (conftest). The products are written after the interrupt; a message
+    sent while it runs must come after them, or a reload shows the stopped turn's card
+    under the next turn (history merges only consecutive assistant rows)."""
+    import asyncio
+    from uuid import uuid4
+    sid = f"s-order-{uuid4().hex[:8]}"
+    sent = []
+    async def _interrupt():
+        sent.append(asyncio.ensure_future(_user_row(sid)))
+        await asyncio.sleep(0.05)              # the send gets every chance to write first
+        return True
+    await _router_with(_stopping_unit(_interrupt)).interrupt_session(sid)
+    await sent[0]
+    assert await _kinds(sid) == ["turn_stop", "turn_changes", "user"]
+
+
+@pytest.mark.asyncio
+async def test_a_message_sent_while_the_running_turn_is_flushed_lands_after_the_receipt():
+    """The window before the receipt: Stop first flushes the running turn's held rows."""
+    import asyncio
+    from uuid import uuid4
+    from core.turn_writer import TurnWriter
+    sid = f"s-order-{uuid4().hex[:8]}"
+    release = asyncio.Event()
+    flushing = asyncio.Event()
+    class _Running:
+        async def flush(self):
+            flushing.set()
+            await release.wait()
+    router = _router_with(_stopping_unit(AsyncMock(return_value=True)))
+    with patch.object(TurnWriter, "running", staticmethod(lambda s: _Running())):
+        stop = asyncio.ensure_future(router.interrupt_session(sid))
+        await flushing.wait()
+        send = asyncio.ensure_future(_user_row(sid))
+        await asyncio.sleep(0.05)
+        release.set()
+        await stop
+        await send
+    assert await _kinds(sid) == ["turn_stop", "turn_changes", "user"]
+
+
+@pytest.mark.asyncio
+async def test_a_user_row_never_waits_past_its_bound():
+    import asyncio
+    from core import transcript_order
+    async with transcript_order.stop_writes("s-bound"):
+        async def _write():
+            async with transcript_order.user_row("s-bound", wait_s=0.05):
+                return "written"
+        assert await asyncio.wait_for(_write(), 1) == "written"
+    transcript_order.forget("s-bound")
+
+
+def test_the_send_path_writes_the_user_row_under_the_order_lock():
+    import inspect
+    from core.session_router import SessionRouter
+    src = inspect.getsource(SessionRouter)
+    at = src.index('"role": "user",')
+    assert "transcript_order.user_row(" in src[max(0, at - 1500):at]
+
+
+def test_the_order_lock_is_released_with_the_session():
+    import inspect
+    from core.lifecycle_manager import LifecycleManager
+    assert "transcript_order" in inspect.getsource(LifecycleManager._release_session_state)

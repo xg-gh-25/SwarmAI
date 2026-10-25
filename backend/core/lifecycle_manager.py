@@ -1142,12 +1142,18 @@ class LifecycleManager:
         - permission_manager prompt board          (open prompts + reader futures)
         - session_events hub replay buffer          (up to 4000 envelopes)
         - repo_guidance._STATE                      (repos already injected)
+        - transcript_order lock                     (Stop vs. user-row order)
         """
         try:
             from core import session_state as _ss
             _ss.forget(session_id)
         except Exception:  # noqa: BLE001
             logger.debug("session state forget failed session=%s", session_id, exc_info=True)
+        try:
+            from core import transcript_order
+            transcript_order.forget(session_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("transcript_order forget failed session=%s", session_id, exc_info=True)
         try:
             from . import session_registry
             session_registry.system_prompt_metadata.pop(session_id, None)
