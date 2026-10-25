@@ -985,6 +985,13 @@ class SessionUnit:
         # prevents an intruding send during WAITING_INPUT from clobbering the open
         # turn's stash (that send RAISES SessionBusyError before the reset, upstream).
         self._turn_client_id: Optional[str] = None
+        # The key of the turn's CURRENT assistant segment (design chat-steer D4):
+        # the turn's client_id until a steer is read, then that steer's. Rows,
+        # continuations and the Stop receipt key on it; the turn's identity
+        # (_turn_client_id, what is published) does not change.
+        self._turn_row_key: Optional[str] = None
+        # every segment key of the running turn, in order (D4, D5)
+        self._turn_segments: list[str] = []
         # The turn's products (content / knowledge files written), by path — read and
         # filled by the router's three loops (main / answer / permission) and emitted
         # as ONE turn_deliverables block at the turn's single `result`. Same lifecycle
@@ -1380,6 +1387,7 @@ class SessionUnit:
         self._user_stopped_current_turn = False
         self._reset_turn_state()
         self._turn_client_id = client_id
+        self._turn_row_key = client_id
         self._turn_stream = ts
         self._transition(SessionState.STREAMING)
         self._health_sensor.record_activity()
@@ -1439,6 +1447,8 @@ class SessionUnit:
         # continue_with_answer/continue_with_permission — SEPARATE methods that never
         # re-enter send() — so this reset cannot drop a stash a continuation needs.
         self._turn_client_id = None
+        self._turn_row_key = None
+        self._turn_segments = []
         # Same lifecycle: the products of a turn paused for a question / permission
         # ride the unit until that turn's `result` (router continuation loops).
         self._turn_files = {}

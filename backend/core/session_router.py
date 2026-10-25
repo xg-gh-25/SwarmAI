@@ -5074,6 +5074,10 @@ class SessionRouter:
                 # clobbering the open turn's stash (that send raises before this loop).
                 if client_id and unit._turn_client_id != client_id:
                     unit._turn_client_id = client_id
+                # the segment key starts as the turn's own and is never written back
+                # here once a steer moved it (design chat-steer D4, H1)
+                if client_id and getattr(unit, "_turn_row_key", None) is None:
+                    unit._turn_row_key = client_id
 
                 # ── TTFT probe: record the first user-visible content token ──
                 # Observability-only. Wrapped in a broad try/except so a formatting
@@ -5362,7 +5366,7 @@ class SessionRouter:
         if extra:
             extra = await self._persist_assistant_blocks(
                 session_id, extra, None, label="turn_stop-products",
-                client_id=getattr(unit, "_turn_client_id", None),
+                client_id=self._turn_row_key_of(unit),
             )
         # PIT01 recycle: a user Stop recycles the subprocess to COLD, so a stopped
         # turn does not imply a live process. Re-read is_alive for liveness.
@@ -5392,7 +5396,7 @@ class SessionRouter:
             await running.flush()
         return await self._persist_assistant_blocks(
             session_id, [block], None, label="turn_stop",
-            client_id=getattr(unit, "_turn_client_id", None),
+            client_id=self._turn_row_key_of(unit),
         )
 
     async def _turn_products_at_stop(self, unit: SessionUnit, stop_rows: list[dict] | None = None) -> list[dict]:
@@ -5533,9 +5537,25 @@ class SessionRouter:
         return {"status": "released", "alive_count": self.alive_count}
 
     def _continuation_client_id(self, session_id: str) -> Optional[str]:
+        """What a continuation (answer / permission) publishes as its turn: the
+        turn's identity, unchanged by a steer (design chat-steer D4, L5)."""
         unit = self.get_unit(session_id)
         tcid = getattr(unit, "_turn_client_id", None) if unit is not None else None
         return f"{tcid}-asst" if tcid else None
+
+    @staticmethod
+    def _turn_row_key_of(unit: Any) -> Optional[str]:
+        """The key of the running turn's current segment: rows written into the
+        turn from outside its writer (Stop receipt, Stop products) and a
+        continuation's rows go there, after a steer too (design chat-steer D4)."""
+        if unit is None:
+            return None
+        key = getattr(unit, "_turn_row_key", None)
+        return key if isinstance(key, str) and key else getattr(unit, "_turn_client_id", None)
+
+    def _continuation_row_key(self, session_id: str) -> Optional[str]:
+        key = self._turn_row_key_of(self.get_unit(session_id))
+        return f"{key}-asst" if key else None
 
     async def continue_with_answer(
         self, session_id: str, answer: str,
@@ -5545,7 +5565,8 @@ class SessionRouter:
 
         No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
         row_key = self._continuation_client_id(session_id)
-        writer = TurnWriter(self, session_id, row_key=row_key, label="answer")
+        writer = TurnWriter(self, session_id, row_key=self._continuation_row_key(session_id),
+                            label="answer")
         if self.get_unit(session_id) is None:
             async for ev in self._continue_with_answer_impl(session_id, answer, tool_use_id=tool_use_id,
                                                             answered_by=answered_by, writer=writer):
@@ -5611,7 +5632,8 @@ class SessionRouter:
 
         No unit → the SESSION_NOT_FOUND reply goes to the caller only (no turn)."""
         row_key = self._continuation_client_id(session_id)
-        writer = TurnWriter(self, session_id, row_key=row_key, label="permission")
+        writer = TurnWriter(self, session_id, row_key=self._continuation_row_key(session_id),
+                            label="permission")
         if self.get_unit(session_id) is None:
             async for ev in self._continue_with_cmd_permission_impl(session_id, request_id, allowed,
                                                                     writer=writer):

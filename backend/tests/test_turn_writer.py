@@ -192,3 +192,102 @@ async def test_a_result_is_durable_before_the_next_event():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+# ── steer (design docs/design/2026-10-24-chat-steer.md D4: T6, T16) ──────────
+
+def _steered_turn(after_steer: str = "end", hold: asyncio.Event | None = None,
+                  release: asyncio.Event | None = None):
+    async def send(**kwargs: Any):
+        sid = kwargs.get("app_session_id")
+        yield {"type": "session_start", "sessionId": sid}
+        yield {"type": "assistant", "model": "test", "content": [
+            {"type": "text", "text": "A"},
+            {"type": "tool_use", "id": "toolu_a", "name": "Bash", "summary": "Running: ls"}]}
+        yield {"type": "tool_result", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_a", "content": "out", "is_error": False}]}
+        yield {"type": "user_steered", "clientId": "c-steer", "outcome": "folded", "sessionId": sid}
+        yield {"type": "assistant", "model": "test", "content": [{"type": "text", "text": "B"}]}
+        if after_steer == "hang":
+            hold.set()
+            await release.wait()
+    return send
+
+
+async def _assistant_rows(sid: str) -> list[tuple]:
+    from database import db
+    rows = await db.messages.list_by_session(sid, include_pending=True)
+    return [((r.get("metadata") or {}).get("client_id"),
+             [b.get("text") or b.get("tool_use_id") or b.get("id") for b in r["content"]])
+            for r in rows if r["role"] == "assistant"]
+
+
+@pytest.mark.asyncio
+async def test_t6_the_rows_after_a_steer_are_its_answer():
+    sid = "s-tw-steer"
+    router = _router()
+    seen: list[dict] = []
+    real = TurnWriter.write
+
+    async def spy(self, event, **k):
+        out = await real(self, event, **k)
+        if event.get("type") == "user_steered":
+            seen.append(dict(event))
+        return out
+    with patch.object(TurnWriter, "write", spy):
+        await _turn(router, sid, _steered_turn())
+    rows = await _assistant_rows(sid)
+    assert rows[0][0] == f"local-{sid}-asst" and rows[0][1] == ["A", "toolu_a", "toolu_a"]
+    assert rows[1] == ("c-steer-asst", ["B"])
+    (ev,) = seen
+    assert ev["rowKey"] == "c-steer-asst" and ev["segments"] == [f"local-{sid}-asst", "c-steer-asst"]
+    unit = router.get_unit(sid)
+    assert unit._turn_client_id == f"local-{sid}"          # the turn's identity: unchanged
+
+
+@pytest.mark.asyncio
+async def test_t16_after_a_steer_continuations_and_the_stop_receipt_key_on_its_segment():
+    from database import db
+    sid, hold, release = "s-tw-steer-stop", asyncio.Event(), asyncio.Event()
+    router = _router()
+    task = asyncio.ensure_future(_turn(router, sid, _steered_turn("hang", hold, release)))
+    await asyncio.wait_for(hold.wait(), 5)
+    unit = router.get_unit(sid)
+    # the main loop rewrites the identity on every event; the segment key stays
+    assert unit._turn_row_key == "c-steer" and unit._turn_client_id == f"local-{sid}"
+    assert router._continuation_row_key(sid) == "c-steer-asst"
+    assert router._continuation_client_id(sid) == f"local-{sid}-asst"   # published: unchanged
+    unit._transition(SessionState.STREAMING)
+    receipt = await router._persist_stop_receipt(sid, unit)
+    release.set()
+    await task
+    assert receipt
+    rows = await db.messages.list_by_session(sid, include_pending=True)
+    (stop_row,) = [r for r in rows if any(b["type"] == "turn_stop" for b in r["content"])]
+    assert (stop_row.get("metadata") or {}).get("client_id") == "c-steer"
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_a_steer_keeps_one_segment():
+    sid = "s-tw-nosteer"
+    router = _router()
+    await _turn(router, sid, _tool_then("stop"))
+    unit = router.get_unit(sid)
+    assert unit._turn_row_key == f"local-{sid}" and unit._turn_segments == []
+
+
+@pytest.mark.asyncio
+async def test_the_next_turn_starts_on_its_own_segment_after_a_steered_one():
+    sid = "s-tw-steer-next"
+    router = _router()
+    await _turn(router, sid, _steered_turn())
+    unit = router.get_unit(sid)
+    unit._transition(SessionState.IDLE)
+    unit._reset_turn_state()   # the real send() does it at admission (send is patched here)
+    with patch("core.session_unit.SessionUnit.send", side_effect=_tool_then("stop")):
+        async for _ in router.run_conversation(agent_id="default", user_message="next",
+                                               session_id=sid, client_id="local-next"):
+            pass
+    assert unit._turn_row_key == "local-next" and unit._turn_segments == []
+    rows = await _assistant_rows(sid)
+    assert rows[-1][0] == "local-next-asst"

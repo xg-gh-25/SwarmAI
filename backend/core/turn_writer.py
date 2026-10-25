@@ -25,6 +25,13 @@ continue_with_cmd_permission, run_injected_turn) gets ONE ``TurnWriter``:
   into the running turn from outside it (``_persist_stop_receipt`` flushes
   ``running(sid)`` first), so the turn's rows keep the order the turn showed.
 
+- A ``user_steered`` event (design chat-steer D4): the CLI read a steer here. The
+  results held so far go onto the current row; the turn's later rows are keyed
+  ``{steer_client_id}-asst`` (the steer's answer), the unit's ``_turn_row_key``
+  follows (continuations and the Stop receipt write there too), and the event
+  goes out with ``rowKey`` and the turn's ``segments`` (every segment key, in
+  order).
+
 ``write`` / ``flush`` / ``close`` are serialised by one lock: the Stop request
 runs concurrently with the turn, and a flush between a write's row insert and
 its clearing of the held results would write them twice.
@@ -62,6 +69,7 @@ class TurnWriter:
         self._row_key = row_key
         self._label = label
         self._held: list[dict] = []   # step results waiting for the next assistant row
+        self._fresh_segment = False   # a steer's segment with no assistant row yet
         self._closed = False
         self._lock = asyncio.Lock()
 
@@ -91,6 +99,11 @@ class TurnWriter:
         async with self._lock:
             token = TRANSCRIPT_FEED_SUPPRESSED.set(True)   # the turn's events carry these rows
             try:
+                if event.get("type") == "user_steered":
+                    await self._steer_segment(event)
+                    return []
+                if event.get("type") == "assistant":
+                    self._fresh_segment = False
                 out = await self._router._persist_stream_event(
                     self._session_id, event, self._held, label=self._label,
                     client_id=self._row_key, files=files, changes=changes,
@@ -108,6 +121,24 @@ class TurnWriter:
             finally:
                 TRANSCRIPT_FEED_SUPPRESSED.reset(token)
 
+    async def _steer_segment(self, event: dict) -> None:
+        """The CLI read a steer at this point of the turn: start its segment."""
+        if self._held:
+            await self._write_results_now()    # onto the row that holds their calls
+        cid = event.get("clientId")
+        unit = self._router.get_unit(self._session_id) if hasattr(self._router, "get_unit") else None
+        segments = list(getattr(unit, "_turn_segments", None) or ([self._row_key] if self._row_key else []))
+        if cid:
+            self._row_key = f"{cid}-asst"
+            self._fresh_segment = True
+            if self._row_key not in segments:
+                segments.append(self._row_key)
+            if unit is not None:
+                unit._turn_row_key = cid
+                unit._turn_segments = segments
+        event["rowKey"] = self._row_key
+        event["segments"] = segments
+
     async def _write_results_now(self) -> None:
         """The held step results onto the turn's newest row (the one holding their
         tool calls), else a row of their own."""
@@ -115,6 +146,12 @@ class TurnWriter:
         from database import db
         if self._row_key and await db.messages.append_to_turn_row(self._session_id, self._row_key, held):
             return
+        if self._fresh_segment:
+            # a result for a call made before the steer was read: the CLI echoed the
+            # steer before every result of that step was back, which no experiment
+            # showed (E2, E9). Observed, not repaired: it goes into a row of its own.
+            logger.error("turn_writer.steer_result_after_segment session_id=%s row_key=%s",
+                         self._session_id, self._row_key)
         await self._router._persist_assistant_blocks(
             self._session_id, held, None,
             label=f"{self._label or 'turn'}-results", client_id=self._row_key)
