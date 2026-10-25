@@ -4,4 +4,4 @@ Delivery is already available. Background processing judges and routes each less
 
 RF-5 is recorded only. Exhaustion produces `reflect: degraded`, not a blocked delivery.
 
-The SwarmAI daemon does this after your next pipeline command: it judges each lesson, writes it to its destination (DDD doc, or the project's proposal queue), records the outcome, and completes REFLECT (`reflect: degraded` when its bounded budget ends). There is no command for you to run; `"$SWARM_BACKEND_BIN" pipeline-v1 status --project <P> --run-id <R>` shows when it is done.
+The `land` command does this before it returns, with no daemon: it judges each lesson, writes it to its destination (DDD doc, or the project's proposal queue), records the outcome, completes REFLECT (`reflect: degraded` when its bounded budget ends) and removes the run's worktree and branch. There is no command for you to run. If the run is still `reflecting` (that command stopped early), `next` is `"$SWARM_BACKEND_BIN" pipeline-v1 resume --project <P> --run-id <R>`, which finishes it.

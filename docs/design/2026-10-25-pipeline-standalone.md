@@ -182,7 +182,7 @@ Codex 文档原话：工具 hook 是"有用的护栏，不是完整的强制边�
 
 | 步 | 内容 | 验收 |
 |---|---|---|
-| T1 | REFLECT 和回收在 CLI 里同步做（§4.6） | daemon 离线时 Node 样例仓库的 run 结束在 `completed`，worktree 和 `run/` 分支已回收 |
+| T1（已做） | REFLECT 和回收在 CLI 里同步做（§4.6）。实现：`reflect_job.finish_in_cli`（`land` 或未落地收尾的同一条命令里跑 REFLECT，失败记 degraded），`process_run` 在 run 的操作锁里并在锁内重判状态；`RunEngine.release_landed_worktrees` 只删和落地 commit 完全一致的 worktree，落地后又改过的先快照进 ledger；`reflecting` 的 run 由 `resume` 收尾，`next` 指向它 | daemon 离线时 Node 和无测试样例仓库的 run 结束在 `completed`，worktree 和 `run/` 分支已回收（`test_pipeline_v1_acceptance_matrix`、`test_reflect_in_cli`） |
 | T2 | handout 绑定写进日志；`hook` 子命令和归一事件；SwarmAI 会话的 hook 改成调同一批函数 | 现有审查测试不变；外部进程的 SubagentStop 能记下回答 |
 | T3 | Claude Code 适配器 + `install-hooks --host claude` | 一个真实的 `claude -p` full run 在 Node 样例仓库从 create 到 land，专家回答 `source: host` |
 | T4 | Codex 适配器 | 同上，`codex exec` |
@@ -197,3 +197,4 @@ T1 不依赖任何宿主，可以先做。T3–T5 需要本机装有对应的 CL
 
 - r1（2026-10-25）：初稿。宿主能力按 2026-10-25 的官方文档整理（§1）。
 - r2（2026-10-25，XG）：人工通道 a + b；没装 hook 也允许跑；hook 默认写用户级。
+- r3（2026-10-25）：T1 实施。

@@ -1,7 +1,9 @@
-"""Pipeline v1 REFLECT background processing (fixing spec D1, design §B7).
+"""Pipeline v1 REFLECT processing (fixing spec D1, design §B7; standalone §4.6).
 
 The agent writes its lessons during DELIVER (``reflect-prepare``); everything after the
-landing happens here, in the daemon, never in the agent's CLI:
+landing happens here. The CLI command that landed the run runs it before it returns
+(``finish_in_cli``), so no daemon is needed; a SwarmAI daemon still queues a run it
+finds ``reflecting`` (its CLI stopped). The agent has no command for the processing:
 
 - ``judge`` — the existing deterministic lesson gate (``ddd_cultivation.is_noise`` and
   ``is_quality_lesson``): ``keep`` / ``noise`` / ``suspect``. No model call.
@@ -15,13 +17,16 @@ landing happens here, in the daemon, never in the agent's CLI:
   proposal queue (``.artifacts/proposals/``) for the existing human-reviewed flow —
   this job never edits a governed context file. A lesson whose project or DDD doc does
   not exist is kept in the run's own record (``kept_in_run``) and listed in its REPORT.
-- ``process_run`` — runs ``reflect.process`` with its attempt / time caps, records each
-  lesson's outcome in ``artifacts/reflect.json`` and ends REFLECT as the daemon
-  (``reflect_complete`` or, when a cap was hit, ``reflect_exhausted``: degraded).
+- ``process_run`` — under the run's operation lock, runs ``reflect.process`` with its
+  attempt / time caps, records each lesson's outcome in ``artifacts/reflect.json`` and
+  ends REFLECT (``reflect_complete`` or, at a cap, ``reflect_exhausted``: degraded).
 - ``schedule`` — fire-and-forget on one worker thread, after a pipeline command of the
   owning session; never on the chat path.
+- ``finish_in_cli`` — the CLI's end of a run: ``process_run`` (or REFLECT degraded on a
+  failure), then ``RunEngine.release_landed_worktrees``.
 
-Public symbols: ``judge``, ``route``, ``annotate_entry``, ``process_run``, ``schedule``,
+Public symbols: ``judge``, ``route``, ``annotate_entry``, ``process_run``, ``finish_in_cli``,
+``schedule``,
 ``reschedule_reflecting``,
 ``candidates_for``,
 ``create_reflect_trigger``.
@@ -279,10 +284,54 @@ def candidates_for(lessons: Any, project: str) -> dict[str, list[str]]:
 
 
 def process_run(engine) -> dict[str, Any] | None:
-    """Process a ``reflecting`` run once (daemon only). None when it is not reflecting."""
-    from core.run_protocol import reflect
+    """Process a ``reflecting`` run once. None when it is not reflecting, or when another
+    process holds the run (it is processing it). Under the run's operation lock, judged
+    again inside it: the CLI that landed the run and the daemon's worker never both
+    route its lessons."""
+    from core.run_protocol.oplock import RunBusy, operation
     if engine.projection().get("status") != "reflecting":
         return None
+    try:
+        with operation(engine.audit_root, engine.run_id, timeout=MAX_SECONDS + 60.0):
+            if engine.projection().get("status") != "reflecting":
+                return None
+            return _process_run(engine)
+    except RunBusy:
+        return None
+
+
+def finish_in_cli(engine) -> dict[str, Any] | None:
+    """The CLI ends a ``reflecting`` run in the command that put it there (standalone
+    §4.6): REFLECT, then the run's worktrees and branch. A failure ends REFLECT
+    degraded, so the run never stays ``reflecting`` for want of a daemon. None when
+    the run is not reflecting."""
+    if engine.projection().get("status") != "reflecting":
+        return None
+    try:
+        result = process_run(engine)
+    except Exception as exc:  # noqa: BLE001 — never leave the run reflecting
+        logger.warning("v1 reflect of %s failed in the CLI", engine.run_id, exc_info=True)
+        result = None
+        if engine.projection().get("status") == "reflecting":
+            engine.reflect_complete(degraded=True,
+                                    reason=f"reflection failed: {type(exc).__name__}")
+    out: dict[str, Any] = {"reflect": engine.projection().get("reflect") or "complete",
+                           "lessons": len((result or {}).get("lessons") or [])}
+    if engine.projection().get("status") != "reflecting":
+        try:
+            rows = engine.release_landed_worktrees()
+            out["released"] = [row["repo"] for row in rows if row.get("ok")]
+            errors = [f"{row['repo']}: {row.get('error')}" for row in rows if not row.get("ok")]
+            if errors:
+                out["release_errors"] = errors
+        except Exception as exc:  # noqa: BLE001 — the worktree stays; nothing is lost
+            logger.warning("release of %s failed in the CLI", engine.run_id, exc_info=True)
+            out["release_errors"] = [str(exc)[:200]]
+    return out
+
+
+def _process_run(engine) -> dict[str, Any]:
+    from core.run_protocol import reflect
     path = engine.run_dir / "artifacts" / "reflect.json"
     try:
         document = json.loads(path.read_text(encoding="utf-8"))

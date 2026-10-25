@@ -66,7 +66,8 @@ def test_without_a_transcript_token_cost_is_warn_with_the_reason(rig):
     report = _land(r)
     missing = [e for e in r.events() if e["kind"] == "metric"
                and e["payload"]["name"] == "usage_not_available"]
-    assert [e["stage"] for e in missing] == ["deliver"], missing
+    # before the DELIVER REPORT, and again as the landing's command ends REFLECT
+    assert [e["stage"] for e in missing] == ["deliver", "reflect"], missing
     row = _row(report, "Token Cost")
     assert row.startswith("| Token Cost | WARN | not measured（"), row
 
@@ -86,7 +87,7 @@ def test_with_a_transcript_the_report_shows_the_tokens_up_to_delivery(rig):
     report = _land(r)
     measured = [e for e in r.events() if e["kind"] == "metric"
                 and e["payload"]["name"] == "input_tokens"]
-    assert [e["stage"] for e in measured] == ["deliver"], measured
+    assert [e["stage"] for e in measured] == ["deliver", "reflect"], measured
     row = _row(report, "Token Cost")
     assert "not measured" not in row and " total · " in row, row
 

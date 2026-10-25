@@ -43,8 +43,8 @@ DO NOT USE: for a single stage (use the specific skill directly).
 | research | evaluate → think → deliver → reflect |
 
 `"$SWARM_BACKEND_BIN" pipeline-v1 create` → follow each response's `next` / `stage-complete` (REVIEW via
-`review-start`, BUILD and TEST end with your validation report) → `land` in DELIVER → REFLECT runs in the
-daemon's background and completes itself.
+`review-start`, BUILD and TEST end with your validation report) → `land` in DELIVER, which also runs
+REFLECT and removes the run's worktree before it returns.
 
 ## Verification
 

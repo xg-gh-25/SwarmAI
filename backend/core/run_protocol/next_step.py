@@ -139,7 +139,10 @@ def next_step(engine, *, previous_stage: str | None = None,
                    "(`decision.ask_user_question`); the answer arrives from the person")
         return out
     if status == "reflecting":
-        out.update(action="wait", why="REFLECT runs in the SwarmAI daemon; nothing to do")
+        # a landing's own command ends REFLECT; still reflecting means that command
+        # stopped before it finished (standalone §4.6)
+        out.update(action="run", command=_cmd(engine, "resume"),
+                   why="REFLECT did not finish: resume finishes it")
         return out
     if status == "paused":
         reason = state.get("reason") or "see status"

@@ -613,17 +613,15 @@ def test_create_records_the_sessions_own_transcript(rig, monkeypatch):
 
 # ── D1: REFLECT is the daemon's background work ─────────────────────────────
 
-def test_the_agent_cannot_complete_reflect_and_the_daemon_does(rig):
-    from core.run_protocol import reflect_job
+def test_the_agent_cannot_complete_reflect_and_the_landing_does(rig):
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
     r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
-    r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
-    assert r.state()["status"] == "reflecting"
     out = r.v1("reflect-complete")
     assert out.get("ok") is not True                       # the command is gone
-    reflect_job.process_run(r.engine())
+    # the landing's own command runs REFLECT before it returns (standalone §4.6)
+    r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     state = r.state()
     assert state["status"] == "completed" and state.get("reflect") in ("ok", None), state
     complete = [e for e in r.events() if e["kind"] == "reflect_complete"]

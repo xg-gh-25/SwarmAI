@@ -30,7 +30,7 @@ For every stage:
 2. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST end with your validation report as the artifact (see Tests).
 3. Continue immediately with the returned `next`. Stop only for a DC-1 human decision, user stop, or terminal state.
 
-Token usage is measured by the daemon when REFLECT ends; there is no measuring command.
+Token usage is measured from the run's transcripts before the DELIVER REPORT and again when REFLECT ends; there is no measuring command.
 
 Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, goal, trivial, direct, research. There is no skipped stage.
 
@@ -71,7 +71,7 @@ Normal delivery: `"$SWARM_BACKEND_BIN" pipeline-v1 land --project <P> --run-id <
 
 Human run-land is executable and always two-step: `run-land --prepare [--skip-tests] [--note ...]`, then `run-land --request <id> --message <message>`. The request command asks the person; their approval is recorded once, bound to session/run/request; the landing rechecks every tree and persists each repo commit. A failed action consumes the authorization; prepare and approve a new request. Snapshot deletion and finding acceptance use the same exact one-use authorization model. Abandoned/not-landed work keeps its `run/<id>` branch, bundle and diff indefinitely.
 
-REFLECT processing is the daemon's background work and cannot change landing: it judges and routes each lesson, records its outcome and completes REFLECT itself (`degraded` at its cap); you have no command for it. The daemon measures the run's token usage from its transcripts when REFLECT ends.
+REFLECT processing cannot change landing. The `land` command itself (or the command that ended the run not landed) does it before it returns: it judges and routes each lesson, records its outcome, completes REFLECT (`degraded` at its cap) and removes the run's worktree and branch. You have no command for it. If that command stopped before REFLECT finished, `next` says `resume`, which finishes it.
 
 ## Human boundary
 

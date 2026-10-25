@@ -221,9 +221,21 @@ def execute(args) -> dict[str, Any]:
             if refused:
                 return refused
             _note_transcripts(engine)
+            from core.run_protocol import reflect_job
+            # a run left reflecting (its CLI stopped after the landing): finish it first;
+            # `resume` exists for exactly this (next_step names it)
+            earlier = reflect_job.finish_in_cli(engine)
+            if earlier is not None and args.command == "resume":
+                return _with_next(engine, {"ok": True, "reflect": earlier},
+                                  previous_stage="reflect", mutating=True)
             before = engine.projection()["stage"]
-            return _with_next(engine, _execute_loaded(args, engine), previous_stage=before,
-                              mutating=True)
+            result = _execute_loaded(args, engine)
+            # the landing (or the not-landed path) moved it to REFLECT: end the run here,
+            # no daemon needed (standalone §4.6)
+            finished = reflect_job.finish_in_cli(engine)
+            if finished is not None:
+                result["reflect"] = finished
+            return _with_next(engine, result, previous_stage=before, mutating=True)
     engine = _load(args, note=False)
     if args.command == "status" and _missing_worktrees(engine) \
             and _request().session_id == engine.owner_session():

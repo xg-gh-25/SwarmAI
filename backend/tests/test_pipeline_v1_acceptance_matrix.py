@@ -127,6 +127,10 @@ def test_a_node_run_lands_with_no_daemon(tmp_path, monkeypatch, profile):
         assert _git(r.repo, "status", "--porcelain") == ""
         text = _git(r.repo, "show", f"{head}:{report}")
         assert "node --test → pass" in text, text
+        # standalone T1: the landing's own command ended the run and cleaned up
+        assert r.state()["status"] == "completed", r.state()
+        assert r.worktree is not None and not r.worktree.exists()
+        assert _git(r.repo, "branch", "--list", "run/*") == ""
         kinds = [e["kind"] for e in r.events()]
         if profile == "full":            # the full path really ran: its documents and review
             assert {"stage_complete", "handout", "answer"} <= set(kinds), sorted(set(kinds))
@@ -195,6 +199,8 @@ def test_a_repo_with_no_tests_lands_with_no_daemon(tmp_path, monkeypatch, profil
         assert changed == {GUIDE, report}, changed
         assert _git(r.repo, "show", f"{head}:{GUIDE}") + "\n" == NEW_GUIDE
         assert _git(r.repo, "status", "--porcelain") == ""
+        assert r.state()["status"] == "completed", r.state()
+        assert r.worktree is not None and not r.worktree.exists()
         text = _git(r.repo, "show", f"{head}:{report}")
         # the REPORT says what was not run and why (Markdown escapes the underscore),
         # and Quality does not call an unverified change verified

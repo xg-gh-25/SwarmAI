@@ -987,6 +987,35 @@ class RunEngine:
         return entries
 
     @_one_operation
+    def release_landed_worktrees(self) -> list[dict[str, Any]]:
+        """Remove the worktree and the merged ``run/<id>`` branch of every repo this run
+        LANDED (standalone §4.6): its code is on main now. A repo that did not land
+        keeps its worktree for a person's landing or ``restore``. Read from the
+        contract and the logged landing, not run.json (whose rows lack the git dir the
+        sweeper needs)."""
+        from core.run_protocol import tree
+        commits = self.landed_commits()
+        reserved = (tree.report_path(self.run_id).rsplit("/", 1)[0] + "/",)
+        entries = []
+        for entry in self._active_entries():
+            name = entry["repo_name"]
+            if name not in commits:
+                continue
+            # the worktree is exactly what landed: remove it. Anything else (an edit
+            # after the landing) is snapshotted to the ledger first, as a release does
+            # for an active worktree; nothing in it is lost
+            current = tree.build_code_trees({name: self.effective_repos()[name]}, self.run_id,
+                                            git_tree.write_tree, git_tree.list_reserved)[name]
+            same = current == git_tree.commit_code_tree(entry["main"], commits[name], reserved)
+            entries.append({**entry, "state": "integrated" if same else "active"})
+        if not entries:
+            return []
+        landed = set(commits)
+        mains = {entry["repo_name"]: Path(entry["main"]) for entry in entries}
+        return run_worktree.release(self.run_id, {"worktrees": entries}, mains,
+                                    "run completed", landed=landed)
+
+    @_one_operation
     def gate0_start(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "evaluate" \
