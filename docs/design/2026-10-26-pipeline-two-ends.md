@@ -3,7 +3,7 @@ title: Pipeline 只管两头 — 合并 native-execution 草稿、现行 spec �
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r2 — 设计，待 XG 确认 §7 的决定
+status: r3 — 已实施（§8 第 1–7 步）；自动续跑、spec profile 另议
 ---
 
 # Pipeline 只管两头
@@ -192,7 +192,26 @@ engine、lifecycle、next_step、checks、schemas、cli_commands 里按名字比
 
 改动只在 CLI 和 pipeline 模块里，不碰聊天的发送路径。需要重新打包才会生效。
 
+## 11. 实施记录（r3）
+
+XG 同意 §0.2 的理解和 §7 的四条建议（删 goal；不做 spec profile；自动续跑另开一轮；NE-3 作废）。七个提交都在本地 main，没有 push：
+
+| 步 | 提交 | 和设计不同的地方 |
+|---|---|---|
+| 1 | `8de5421d5` | 无 |
+| 2 | `4aa3ef235` | review 卡片同时缩到 2000 字以内（`test_pipeline_v1_cards` 从 `1bff6525f` 起在 main 上是红的）；卡片改写成"`review-address` 会把 ±10 行内的 finding 当成一簇，漏掉的会点名"，聚类本身仍由 `findings.cluster_findings` 做 |
+| 3 | `617f2ba6c` | `lifecycle.REMOVED_PROFILES`：`create --profile goal` 和旧 goal run 的日志都给出同一句说明；`checks.py` 的 profile 列（`CODE` 等字符串）里也有 goal，一并删除 |
+| 4 | `a7aac6fb8` | 能力表比 §4.2 多两个字段：`triad`（bugfix 的 current / expected / unchanged）和 `decisions`（direct 不能发 decision）；`checks.py` 的 profile 列改为从表推导（`profiles_where`）；结构测试原来的正则太宽（传参、报错文字也算），收紧为只认比较写法，在第 3 步的 engine 上数出 19 处；`pipeline_profiles.py` 里旧的 docs profile 说明并进 `REMOVED_PROFILES` |
+| 5 | `c2b15cdc5` | `land` 遇到已在不落地路径上的 run 仍会把它结束（原有行为），和 `next` 给出的结局相同，没有改成拒绝 |
+| 6 | `237785146` | `_gate0_disposition` 拆出 `needs_handout`（还没派 handout），原来和"派了没回答"一样都是 `awaiting_answer`，这就是 bugfix 卡在 EVALUATE 的直接原因；跟随测试加了一个 Gate-0 第二轮的用例 |
+| 7 | 本提交 | 现行 spec 改为五个 profile（r30）；`backend/context/AGENT.md` 的 profile 列表去掉 goal 和 docs；NE 草稿标为被本文取代 |
+
+验收：`test_pipeline_v1_follow_next` 9 个用例全部通过，`KNOWN` 为空；`test_pipeline_v1_profile_table`、`test_pipeline_v1_no_prescription` 的 `KNOWN` 也为空；每一步都做了变异检查。pipeline / run_protocol 测试文件只剩 `test_run_protocol_events` 一个失败，在 main 上同样失败（`1bff6525f` 新增的事件类型没有登记用例），和本轮无关。
+
+要重新打包才会在 SwarmAI 里生效。
+
 ## 修订
 
+- r3（2026-10-26）：实施完成，§11 记录每一步和设计不同的地方。
 - r2（2026-10-26，XG：主旨"绝对要 follow"）：§0 换成 XG 10-22 的原文；加 §0.1 四个问题、§0.2 说明"确定性检查"在 r7 之后判定的是证据；按主旨重新核对，发现 NE-1 没做完（BUILD、REVIEW 卡片和 `next` 还在规定写法，§3.3），加入实施第 2 步；加 §9 逐项对照主旨；自动续跑先查有没有原生机制。
 - r1（2026-10-26）：初稿。

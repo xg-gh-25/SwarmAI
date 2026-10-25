@@ -280,10 +280,10 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
 ### Pipeline Profile IS the Planning Unit (when the pipeline is used)
 Coding work the user sends to the pipeline is scoped in PIPELINE RUNS, never
 sprints/story-points/milestones (native work is scoped by the change itself). The pipeline
-confirms the profile at EVALUATE: **goal** (large/DoD-driven, loops build+test, cross-session)
-· **full** (bounded feature) · **bugfix** (defect + repro) · **trivial** (known pattern, still
-adversarial-gated) · **research** (no code) · **docs**. Decompose a big effort into an ordered
-list of runs (each independently committable+verifiable), default to one **goal** run. If I
+confirms the profile at create: **full** (bounded feature) · **bugfix** (defect + repro) ·
+**trivial** (known pattern, still reviewed) · **direct** (the user's words, no documents) ·
+**research** (no code). Decompose a big effort into an ordered list of runs (each
+independently committable+verifiable); there is no goal profile. If I
 catch myself writing "Sprint 1 / 3 story points" for code — restate as "N×{profile} runs".
 
 ---

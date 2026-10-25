@@ -116,8 +116,8 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 
 #### 3.3.2 保留的流程（全部保留，只改不通用的地方）
 
-- **六个 profile 全部保留**：`direct`、`trivial`、`full`、`bugfix`、`goal`、`research`，阶段顺序不变（`lifecycle.py:77-83`）。
-- **阶段全部保留**：evaluate、think、plan、build / goal_cycle、review、test、deliver、reflect。
+- **五个 profile**：`direct`、`trivial`、`full`、`bugfix`、`research`，阶段顺序不变（`lifecycle.PROFILE_STAGES`）。`goal` 已在 2026-10-26 删除（r30）：它的 `goal_cycle` 就是换了名字的 BUILD，检查同样是 BX-3；大任务拆成一串按顺序执行的 run。每个 profile 能做什么只写在 `lifecycle.PROFILE_CAPS` 一处（`2026-10-26-pipeline-two-ends.md` §4）。
+- **阶段全部保留**：evaluate、think、plan、build、review、test、deliver、reflect（`goal_cycle` 随 goal 删除）。
 - **文档规范保留**：REQUIREMENTS（结构化 EARS、R 编号）、DESIGN_SPEC（P/F/T/X 编号、properties、failure_modes、trace 矩阵）、fixing-spec、REFLECT 的 lessons。这是质量收敛的骨架，本身和编程语言无关。
 - **两道审查保留**：Gate-0（EVALUATE 的问题定义审查）、Gate-2（REVIEW 的专家审查：R1 全量 + R2 只复查已处理的 finding，finding 账本、聚类、fixing-spec、修复、复审、轮数上限）。原来的 Gate-1 已在 10 月的简化里删除，本设计不恢复。
 - **REFLECT 保留**：daemon 后台判断并沉淀 lessons 到项目 DDD（产品能力，每个用户的项目都有 DDD）。r8：project 在 SwarmWS 里不存在或没有 DDD 文档时，lessons 写进 run 自己的 REFLECT 记录并在 REPORT 里列出，不再静默丢弃（今天 `reflect_job.py:56-70,168-209` 会拒收未知项目）。
@@ -202,7 +202,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 **已实施（S6-4c，2026-10-25）**：
 - 测试引用：`test` / `ref` 是"仓库相对路径 + 可选的测试名"，路径到第一个 `::`、`#` 或空格为止，后面的部分按仓库自己的写法，不解析（`pkg/a_test.go TestAdd`、`src/lib.rs#tests::adds`、`tests/x.py::test_a` 都行）。路径可以是文件或目录，必须存在或在 `creates_test_files` 里；越界路径、通配符照旧拒绝。后缀白名单删除。`properties[].kind` 改为可选，给了就必须是非空文字。
 - RQ-3、RQ-8b 从检查表删除，连同中英文词表。gate0-skeptic 的检查清单加了第 5 问：每条验收标准是否可验证、`negative` / `universal` 标记是否和文字一致，用需求本身的语言判断；不合格时 verdict 最多是 SUPPORTED-WITH-CHANGES，run 照常继续，EVALUATE 卡片要求 agent 先改掉点名的验收项。这两项原来就是"只记录、不阻断"，所以阻断行为没有变化。
-- 一个已知差别：Gate-0 只在 bugfix profile 或需求有两种以上理解时才派，其余 full / goal / trivial run 没有人检查措辞（原来的词表检查对它们也只记录不阻断）。S5 有数据后再看要不要对所有带需求文档的 profile 都派。
+- 一个已知差别：Gate-0 只在 bugfix profile 或需求有两种以上理解时才派，其余 full / trivial run 没有人检查措辞（原来的词表检查对它们也只记录不阻断）。S5 有数据后再看要不要对所有带需求文档的 profile 都派。
 
 **审查后修复（S6-4c 之后，2026-10-25）**：fresh-context correctness 审查找出四处，两处是 S6-4c 引入的，两处原来就有：
 - 路径可以含空格或 `#`（`My Tests/a.spec.ts`），按第一个分隔符截断会读成别的路径：`test dir/a.go` 被当成目录 `test`，只要 `test/` 存在就通过。现在 `schemas.resolve_test_ref` 依次试每个分隔符位置，取最长的已知路径（文件，或含文件的目录）；目录后面紧跟的词还像路径（含 `/`）时不算命中。
@@ -466,7 +466,7 @@ S4b-1（`d0194fc74`）已删除 `worktree_mode` 设置（P7.5）。
 
 **security 什么时候派**（任一成立；产品里不再有任何内置的路径或 API 判断）：
 1. 某个仓库的 `.swarmai/review.md` 里 `security:` 命中这次改动；
-2. BUILD（或 goal_cycle）的验证报告里，agent 声明 `"risk": ["security"]`（新增的可选字段，只接受 `security`）；
+2. BUILD 的验证报告里，agent 声明 `"risk": ["security"]`（新增的可选字段，只接受 `security`）；
 3. full profile 的 DESIGN_SPEC 里 `security_boundaries` 非空。
 
 ≥50 行时照旧带高风险标记（§3.5.1）。理由写明是哪一条触发的。
@@ -625,3 +625,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r27（2026-10-25）：验收矩阵加"无测试"仓库（direct、full 都落地）；unborn 仓库今天不能落地（停在 worktree_unavailable），记为待设计。
 - r28（2026-10-25）：DELIVER 的 REPORT 统计到落地为止的 token；没有专家核实时写明测试结果仅由 agent 报告。
 - r29（XG，2026-10-25）：不支持没有任何 commit 的仓库（unborn），`create` 直接拒绝并说明；Go、Rust 样例仓库不做。
+- r30（XG，2026-10-26）：goal profile 删除，现在是五个 profile（`2026-10-26-pipeline-two-ends.md` §6）；profile 能力只在 `lifecycle.PROFILE_CAPS`；`next` 和命令共用 `deliver_route`、`gate0_status`；卡片和 `next` 不再规定写法（主旨"中段不自己造"）。上面 r7 里"六个 profile"以本条为准。
