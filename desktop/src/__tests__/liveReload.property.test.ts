@@ -75,9 +75,11 @@ import { messageStoreRegistry } from '../stores/MessageStore';
 import { chatService, parseSSEEvent, toMessageCamelCase } from '../services/chat';
 import { toDisplayMessage } from '../pages/chat/utils';
 import { testTabMap, createMockDeps, initTestTab, resetTestState } from './helpers/streamingTestUtils';
+import { sendWhileBusy, type TurnControlDeps } from '../pages/chat/turnControls';
 
 type Step =
   | { kind: 'user'; clientId: string; text: string; post?: Record<string, unknown>[]; ended?: boolean }
+  | { kind: 'busy_user'; clientId: string; text: string; post: Record<string, unknown>[] }
   | { kind: 'stop'; receipt: Record<string, unknown>[] }
   | { kind: 'event'; env: Record<string, unknown>; sub?: false }
   | { kind: 'disconnect' }
@@ -258,6 +260,35 @@ async function replay(s: Scenario, renderLifecycle: () => { current: Lifecycle }
       // kept pending server-side) the reply that ended it without a turn
       for (const ev of st.post ?? []) act(() => { post!.handler(parseSSEEvent(JSON.stringify(ev))); });
       if (st.ended) endPost();
+    } else if (st.kind === 'busy_user') {
+      // ChatPage's send while the turn streams: the real turnControls.sendWhileBusy,
+      // its POST answered with what this send's POST got (the receipt: steered into
+      // the running turn, or queued)
+      const st_ = st;
+      const deps = {
+        tabs: () => testTabMap,
+        agentId: () => 'default',
+        composer: { text: () => '', attachments: () => [], clear: () => {}, clearText: () => {}, restore: () => {} },
+        buildContent: async () => [{ type: 'text', text: st_.text }] as ContentBlock[],
+        stores: {
+          get: (id: string) => messageStoreRegistry.get(id),
+          getOrCreate: (id: string, o?: { sessionId?: string }) => messageStoreRegistry.getOrCreate(id, o),
+        },
+        options: () => ({ enableSkills: false, enableMCP: false }),
+        editorContext: () => ({}),
+        rebindQueue: (id: string) => hook.current.rebindQueue(id),
+        syncQueuedBadges: (id: string) => hook.current.syncQueuedBadges(id),
+        newClientId: () => st_.clientId,
+        chat: {
+          streamChat: (_r: unknown, onEvent: (e: StreamEvent) => void, onComplete: () => void) => {
+            for (const ev of st_.post) onEvent(parseSSEEvent(JSON.stringify(ev)));
+            onComplete();
+            return () => {};
+          },
+        },
+        stream: { liveness: () => ({}) },
+      } as unknown as TurnControlDeps;
+      await act(async () => { await sendWhileBusy(deps, 'T', st_.text, []); });
     } else if (st.kind === 'stop') {
       // ChatPage.handleStop: the stream is aborted and /chat/stop called; the
       // receipt it persists comes back on the transcript feed (an event step)

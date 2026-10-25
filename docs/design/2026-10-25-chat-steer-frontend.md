@@ -237,6 +237,10 @@ turn 的用量、耗时、输出卡片只在最后一段：`result` 落在当时
   场景（folded / opened、两条连读、Stop），得先在后端那边加生成脚本，再在前端断言直播结束和重载后结构
   一致。时间竞态（B1）它模拟不了，由 B-T1 管。
 - 每个修复做变异检查（撤掉修复，测试变红）。
+- **已落地（2026-10-26）：** 生成器加了 7 个 steer 场景（`STEER_VARIANTS`：folded、opened、两条、同一点两条、
+  下面还压着一条 Waiting、Stop 在新段为空时、Stop 在新段有内容后），每个后面再跟一个普通 turn。前端用真实的
+  `sendWhileBusy` 发出（`busy_user` 步骤）。T10j（turn 结束的 reconcile）由 property test 的 reconciled 模式在这些
+  场景上覆盖，T10n 是 `stop_empty`。变异检查：去掉切段、占位放到末尾、保留空段、B2 改回裸 key，各自变红。
 
 ## 10. 改动清单
 

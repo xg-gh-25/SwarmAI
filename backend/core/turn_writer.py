@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -145,7 +146,6 @@ class TurnWriter:
         event["segments"] = segments
 
     async def _restamp_steer_row(self, client_id: str) -> None:
-        from datetime import datetime
         from . import session_pending
         try:
             if not await session_pending.restamp_steer(self._session_id, client_id,

@@ -72,6 +72,25 @@ N_NET_SCENARIOS = 30
 #: of the dying process's clean-up reaches the DB (no finally block writes)
 N_CRASH_SCENARIOS = 10
 NET_KINDS = ("gap", "gap_late", "restart", "restart_idle")
+#: then scenarios where a message sent during a turn is steered into it (design
+#: chat-steer): the real router admission (_try_steer), session_pending, TurnWriter
+#: segments and history; only the CLI's reading of it is scripted (its echo and the
+#: orchestrator's ``user_steered`` marker at a chosen frame). Steps per variant:
+#: ``send`` / ``read`` are step indices (the hook runs before that step's first frame;
+#: a read puts the marker there), ``stop`` stops the turn right after the given step.
+STEER_VARIANTS = (
+    ("folded", ["text", "tool", "text", "tool"], [{"send": 1, "read": 2, "outcome": "folded"}], None),
+    ("opened", ["text", "tool", "text", "text"], [{"send": 2, "read": 3, "outcome": "opened"}], None),
+    ("two", ["text", "tool", "text", "tool", "text"],
+     [{"send": 1, "read": 2, "outcome": "folded"}, {"send": 3, "read": 4, "outcome": "folded"}], None),
+    ("same_point", ["text", "tool", "text", "tool"],
+     [{"send": 1, "read": 2, "outcome": "folded"}, {"send": 1, "read": 2, "outcome": "folded"}], None),
+    # S2 still Waiting under S1 when S1 is read: S1's segment goes between them
+    ("waiting_below", ["text", "tool", "text", "tool", "text"],
+     [{"send": 1, "read": 2, "outcome": "folded"}, {"send": 1, "read": 4, "outcome": "folded"}], None),
+    ("stop_empty", ["text", "tool", "text"], [{"send": 1, "read": 2, "outcome": "folded"}], 2),
+    ("stop_after", ["text", "tool", "text", "text"], [{"send": 1, "read": 2, "outcome": "folded"}], 3),
+)
 
 WORDS = ("checked the gate", "found two issues", "the test is red", "patched the parser",
          "all green", "looking at the log", "reading session_router", "agent three is back")
@@ -175,6 +194,60 @@ def _keyed(rng: random.Random, turns: list[dict], sid: str) -> None:
                     out.append(dict(start))      # the repeated start of the same block
                 out.append(d)
             step[:] = out + rest
+
+
+def _steer_scenario(rng: random.Random, variant: tuple) -> list[dict]:
+    """A plain chat turn, the steered turn, and a next turn (it must not touch the
+    steered turn's segments)."""
+    ids = itertools.count(1)
+    name, kinds, steers, stop = variant
+
+    def step(kind: str) -> list[dict]:
+        (st,) = _items_of(rng, ids, kind)
+        return st
+    turns = [{"kind": "chat", "steps": _items(rng, ids), "pause": None, "queued": 0}]
+    turns.append({"kind": "steer", "variant": name, "steps": [step(k) for k in kinds], "pause": None,
+                  "queued": 0, "steers": [dict(x) for x in steers], "stop": stop})
+    turns.append({"kind": "chat", "steps": _items(rng, ids), "pause": None, "queued": 0})
+    return turns
+
+
+def _items_of(rng: random.Random, ids, kind: str) -> list[list[dict]]:
+    """One step of the given kind, as _items draws it."""
+    if kind == "text":
+        t = rng.choice(WORDS) + f" #{rng.randint(1, 99)}"
+        k = rng.randint(1, len(t) - 1)
+        return [[{"type": "text_delta", "text": t[:k], "index": 0},
+                 {"type": "text_delta", "text": t[k:], "index": 0},
+                 {"type": "assistant", "content": [{"type": "text", "text": t}], "model": "m"}]]
+    tid = f"toolu_{next(ids)}"
+    return [[{"type": "assistant", "model": "m", "content": [
+                {"type": "tool_use", "id": tid, "name": "Bash", "summary": "Running: ls", "category": "bash"}]},
+             {"type": "tool_result", "content": [
+                {"type": "tool_result", "tool_use_id": tid, "content": "out", "is_error": False,
+                 "truncated": False, "outcome": "ok"}]}]]
+
+
+class _SteerReader:
+    """What the router's steer admission reads of the CLI stream reader."""
+
+    def __init__(self) -> None:
+        self.error = None
+        self._claims: dict = {}
+
+    def claim(self, uuid: str, kind: str, client_id: str | None = None):
+        c = SimpleNamespace(kind=kind, client_id=client_id)
+        self._claims[uuid] = c
+        return c
+
+    def drop_claim(self, uuid: str) -> None:
+        self._claims.pop(uuid, None)
+
+
+class _StdIn:
+    async def query(self, prompt, session_id: str = "default") -> None:
+        async for _ in prompt:
+            pass
 
 
 def _crash(rng: random.Random, turns: list[dict]) -> int:
@@ -464,6 +537,87 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
                       "envs": await _resubscribe(hub, {sid: cursor}, old_epoch),
                       "history": await _history(router, sid)})
 
+    async def steered_turn(turn: dict, n: int) -> None:
+        """A user turn into which the tab sends messages while it streams; the CLI
+        reads each where the variant says (``user_steered`` marker + the reader's
+        echo callback), and its end after the turn (``end``, echo seen)."""
+        cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
+        steers = turn["steers"]
+        stop = turn["stop"]
+        steps_ = turn["steps"] if stop is None else turn["steps"][:stop]
+        frames = _frames({**turn, "steps": steps_}, n, sid, session_start=True,
+                         upto=None if stop is None else len(steps_))
+
+        def start(k: int) -> int:
+            return 1 + sum(len(st) for st in turn["steps"][:k])
+        # the markers, inserted at their steps' starts (in steer order at one point)
+        inserts = sorted(((start(x["read"]), j) for j, x in enumerate(steers)), key=lambda t: t[0])
+        final_read: dict[int, int] = {}
+        for pos, j in sorted(inserts, key=lambda t: (t[0], t[1]), reverse=True):
+            frames.insert(pos, {"type": "user_steered", "clientId": f"local-{sid[-2:]}.{n}s{j}",
+                                "outcome": steers[j]["outcome"], "sessionId": sid})
+        for j, x in enumerate(steers):
+            before = sum(1 for p, _ in inserts if p < start(x["read"]))
+            same = sum(1 for p, jj in inserts if p == start(x["read"]) and jj < j)
+            final_read[j] = start(x["read"]) + before + same
+        hooks: dict[int, list] = {}
+        uuids: dict[int, str] = {}
+
+        def armed() -> None:
+            # what a running user turn shows the router (set after the scripted
+            # send's admission reset): its reader, stdin, the human claim, D6 open
+            if not isinstance(unit._stream_reader, _SteerReader):
+                unit._stream_reader = _SteerReader()
+                unit._client = _StdIn()
+                unit._turn_stream = SimpleNamespace(kind="human")
+                unit._steer_accepting = True
+
+        for j, x in enumerate(steers):
+            scid = f"local-{sid[-2:]}.{n}s{j}"
+            q = start(x["send"]) + sum(1 for p, _ in inserts if p < start(x["send"]))
+
+            async def send(j=j, scid=scid):
+                armed()
+                collect()          # what the tab got so far comes before this send
+                step = {"kind": "busy_user", "clientId": scid, "text": f"steer {n}.{j}", "post": []}
+                steps.append(step)
+                async for ev in router.run_conversation(agent_id="default", user_message=step["text"],
+                                                        session_id=sid, client_id=scid):
+                    step["post"].append(json.loads(json.dumps(ev)))
+                uuids[j] = next(u for u, (_r, c, _p) in unit._steer_rows.items() if c == scid)
+
+            async def read(j=j):
+                unit._stream_reader.drop_claim(uuids[j])
+                router._on_steer_event(unit, "echo", uuids[j], steers[j]["outcome"], False)
+                await asyncio.gather(*list(SessionRouter._STEER_TASKS))
+            hooks.setdefault(q, []).append(send)
+            hooks.setdefault(final_read[j], []).append(read)
+
+        async def ended():
+            for j in range(len(steers)):
+                router._on_steer_event(unit, "end", uuids[j], steers[j]["outcome"], True)
+            await asyncio.gather(*list(SessionRouter._STEER_TASKS))
+            unit._stream_reader = None
+            unit._client = object()
+            unit._steer_accepting = False
+        at: dict = {}
+        for i, fns in hooks.items():
+            async def run_all(fns=fns):
+                for f in fns:
+                    await f()
+            at[i] = run_all
+        receipt: list[dict] = []
+
+        async def after():
+            if stop is not None:
+                receipt.extend(await router._persist_stop_receipt(sid, unit))
+            await ended()
+        with patch.object(SessionRouter, "_steer_enabled", classmethod(lambda cls: True)):
+            await chat(cid, text, _scripted(unit, frames, pause=None, after=after, at=at))
+        collect()
+        if stop is not None:
+            steps.append({"kind": "stop", "receipt": json.loads(json.dumps(receipt))})
+
     # client_ids are unique across scenarios: they share one test DB, and the send
     # ledger (core/send_requests) answers a client_id it has seen as a duplicate
     for n, turn in enumerate(turns, 1):
@@ -502,6 +656,8 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
         if kind == "chat":
             cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
             await drive(chat(cid, text, scripted(_frames(turn, n, sid, session_start=True))), killed, hard=bool(net and net["kind"] == "crash"))
+        elif kind == "steer":
+            await steered_turn(turn, n)
         elif kind == "stop":
             cid, text = f"local-{sid[-2:]}.{n}", f"user message {n}"
             receipt: list[dict] = []
@@ -590,9 +746,11 @@ async def _run(turns: list[dict], sid: str, hub) -> tuple[list[dict], SessionRou
 async def _generate() -> dict:
     rng = random.Random(SEED)
     out = []
-    for i in range(N_SCENARIOS + N_NET_SCENARIOS + N_CRASH_SCENARIOS):
-        turns = _scenario(rng)
-        buffer = (_crash(rng, turns) if i >= N_SCENARIOS + N_NET_SCENARIOS
+    n_base = N_SCENARIOS + N_NET_SCENARIOS + N_CRASH_SCENARIOS
+    for i in range(n_base + len(STEER_VARIANTS)):
+        turns = _scenario(rng) if i < n_base else _steer_scenario(rng, STEER_VARIANTS[i - n_base])
+        buffer = (10_000 if i >= n_base
+                  else _crash(rng, turns) if i >= N_SCENARIOS + N_NET_SCENARIOS
                   else _net(rng, turns) if i >= N_SCENARIOS else 10_000)
         sid = f"sess-lr-{i:02d}"
         _keyed(random.Random(f"{SEED}-keys-{i}"), turns, sid)
@@ -605,6 +763,7 @@ async def _generate() -> dict:
                 patch("core.session_router.datetime", stamp), \
                 patch("core.compact_summary.datetime", stamp), \
                 patch("core.session_pending.datetime", stamp), \
+                patch("core.turn_writer.datetime", stamp), \
                 patch("core.turn_stop.datetime", SimpleNamespace(now=lambda tz=None: clock.now())), \
                 patch("core.background_agents._now_ms", lambda: int(clock.t.timestamp() * 1000)), \
                 patch("core.session_events.time.time_ns",       # activity_seq (chat-turn-liveness S1)
@@ -623,7 +782,8 @@ async def _generate() -> dict:
         out.append({"name": f"s{i:02d}", "sid": sid,
                     "shape": [t["kind"] + (f"/{t['pause']}" if t.get("pause") else "")
                               + (f"x{t['queued']}" if t.get("queued") else "")
-                              + (f"!{t['net']['kind']}" if t.get("net") else "") for t in turns],
+                              + (f"!{t['net']['kind']}" if t.get("net") else "")
+                              + (f":{t['variant']}" if t.get("variant") else "") for t in turns],
                     "steps": steps, "history": history})
     return {"seed": SEED, "scenarios": out}
 
@@ -640,7 +800,7 @@ async def test_fixture_is_current():
     assert hash(current) == hash(text), (
         "backend behaviour changed: regenerate with LIVE_RELOAD_UPDATE=1 and rerun "
         "desktop liveReload.property.test.ts")
-    assert len(data["scenarios"]) == N_SCENARIOS + N_NET_SCENARIOS + N_CRASH_SCENARIOS
+    assert len(data["scenarios"]) == N_SCENARIOS + N_NET_SCENARIOS + N_CRASH_SCENARIOS + len(STEER_VARIANTS)
     assert all(s["history"] for s in data["scenarios"])
     # every connection case is in the fixture (a seed change must not drop one)
     cases = set()
