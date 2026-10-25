@@ -16,7 +16,10 @@ finds ``reflecting`` (its CLI stopped). The agent has no command for the process
   ``MEMORY`` / ``EVOLUTION`` / ``self-evolution-proposal`` lessons go to the project's
   proposal queue (``.artifacts/proposals/``) for the existing human-reviewed flow —
   this job never edits a governed context file. A lesson whose project or DDD doc does
-  not exist is kept in the run's own record (``kept_in_run``) and listed in its REPORT.
+  not exist goes to the shared Library, ``Knowledge/Library/pipeline-lessons/<repo>.md``
+  (``reflect_library``; outcome ``library``); without a repo for it (a multi-repo run's
+  lesson that names none) or when that write fails, it is kept in the run's own record
+  (``kept_in_run``). Both are listed in the run's REPORT.
 - ``process_run`` — under the run's operation lock, runs ``reflect.process`` with its
   attempt / time caps, records each lesson's outcome in ``artifacts/reflect.json`` and
   ends REFLECT (``reflect_complete`` or, at a cap, ``reflect_exhausted``: degraded).
@@ -206,7 +209,27 @@ def annotate_entry(workspace: Path, project: str, entry: str, note: str) -> str:
 
 
 def route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
-          project: str, run_id: str) -> str:
+          project: str, run_id: str, repos: "Mapping[str, str] | None" = None) -> str:
+    """``_route``, then a lesson it would keep in the run goes to the shared Library
+    (``reflect_library``, knowledge-delivery-gaps §3.1): the file of the lesson's repo
+    (its ``repo`` field, or the run's only repo). *repos*: the run's repo name -> main
+    checkout. Without a repo for it, or when the Library cannot be written, the lesson
+    stays ``kept_in_run``."""
+    result = _route(lesson, destination, workspace=workspace, project=project, run_id=run_id)
+    if result != KEPT_IN_RUN or not repos:
+        return result
+    name = lesson.get("repo")
+    if name is None and len(repos) == 1:
+        name = next(iter(repos))
+    if not isinstance(name, str) or name not in repos:
+        return KEPT_IN_RUN
+    from core.run_protocol import reflect_library
+    written = reflect_library.write(workspace, repos[name], lesson, destination, run_id)
+    return written or KEPT_IN_RUN
+
+
+def _route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
+           project: str, run_id: str) -> str:
     """Write one kept lesson; returns the writer's result string. Each relation to an
     existing entry has its own write (design §B7, conformance F19): ``reinforces``
     adds an evidence reference after that entry (its text is not copied),
@@ -340,7 +363,8 @@ def _process_run(engine) -> dict[str, Any]:
     result = reflect.process(
         document, judge=judge,
         writer=lambda lesson, dest: route(lesson, dest, workspace=engine.workspace,
-                                          project=engine.project, run_id=engine.run_id),
+                                          project=engine.project, run_id=engine.run_id,
+                                          repos=dict(engine.contract.get("repo_roots") or {})),
         max_attempts=MAX_ATTEMPTS, max_seconds=MAX_SECONDS)
     for row in result["lessons"]:      # RF-5 reads the judge's verdict
         row["judge"] = (row.get("outcome") or {}).get("status")

@@ -1,6 +1,6 @@
 # DELIVER
 
-Write `artifacts/reflect.json` through `"$SWARM_BACKEND_BIN" pipeline-v1 reflect-prepare --project <P> --run-id <R> --artifact <json>` with `{"lessons": [...]}` (zero lessons is valid), then request deterministic landing. Each lesson's `evidence` cites this run's event ids (`"$SWARM_BACKEND_BIN" pipeline-v1 events --project <P> --run-id <R>` lists them); the CLI finds the dedup candidates itself and RF-4 names them when a `relation` must point at one.
+Write `artifacts/reflect.json` through `"$SWARM_BACKEND_BIN" pipeline-v1 reflect-prepare --project <P> --run-id <R> --artifact <json>` with `{"lessons": [...]}` (zero lessons is valid), then request deterministic landing. Each lesson's `evidence` cites this run's event ids (`"$SWARM_BACKEND_BIN" pipeline-v1 events --project <P> --run-id <R>` lists them); the CLI finds the dedup candidates itself and RF-4 names them when a `relation` must point at one. A run with more than one repo: give each lesson `"repo": "<repo name>"`, the repo it is about (used when the project has no DDD doc for it; the lesson then goes to that repo's file in the shared Library).
 
 Normal landing evaluates RF-1–RF-4 and LG-1, LG-3, LG-4 (LG-1: the TEST report is on the tree that lands). Push readiness is the fold of all push-effect checks, never a model field.
 

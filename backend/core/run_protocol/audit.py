@@ -405,7 +405,13 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "test_reports": _commands(test_reports),
                "kept_lessons": [{"id": row.get("id"), "statement": row.get("statement")}
                                 for row in lessons if isinstance(row, Mapping)
-                                and (row.get("outcome") or {}).get("status") == "kept_in_run"]}
+                                and (row.get("outcome") or {}).get("status") == "kept_in_run"],
+               # knowledge-delivery-gaps §3.1: lessons no project DDD took, in the Library
+               "library_lessons": [{"id": row.get("id"), "statement": row.get("statement"),
+                                    "path": str((row.get("outcome") or {}).get("result") or "")
+                                    .removeprefix("library:")}
+                                   for row in lessons if isinstance(row, Mapping)
+                                   and (row.get("outcome") or {}).get("status") == "library"]}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -549,6 +555,13 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                       for cmd in commands[:10]]
             if len(commands) > 10:
                 lines.append(f"- 另有 {len(commands) - 10} 条，见 run_audit.json")
+    library = details.get("library_lessons") or []
+    if library:
+        lines += ["", "## 写进公共 Library 的经验", "",
+                  "这个项目没有对应的 DDD 文档，下面的经验写进了公共 Library（之后的会话会召回；"
+                  "以后给这个仓库建 DDD 时，可以拿它作素材）：", ""]
+        lines += [f"- {_text(row.get('id'), 20)}：{_text(row.get('statement'), 400)}"
+                  f"（`{_text(row.get('path'), 200)}`）" for row in library]
     kept = details.get("kept_lessons") or []
     if kept:
         lines += ["", "## 没有写进项目 DDD 的经验", "",

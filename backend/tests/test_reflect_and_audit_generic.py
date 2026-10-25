@@ -6,7 +6,9 @@ What is tested:
 - REFLECT: a lesson for a project that has no DDD doc, a project directory that does
   not exist, or another project that does not exist is kept in the run's own REFLECT
   record (outcome ``kept_in_run``), not rejected, not degraded, and never raises; a
-  destination that walks out of ``Projects/`` is still rejected;
+  destination that walks out of ``Projects/`` is still rejected (``route`` called
+  without the run's repos; with them such a lesson goes to the shared Library:
+  tests/test_reflect_library.py);
 - the run directory's REPORT lists the kept lessons (escaped, as plain text);
 - the trace matrix has no result column (no runner, no pass semantics); the audit
   details and the REPORT list each TEST report's commands and results;
@@ -100,38 +102,6 @@ def test_quality_counts_a_reported_test_closure_only_when_review_confirmed_it():
     q = _audit(findings=[confirmed, pending])["summary"]["quality"]
     assert (q["findings_closed"], q["findings_confirmed"], q["findings_total"]) == (1, 1, 2)
     assert q["verdict"] == "WARN"
-
-
-def test_a_run_in_a_project_without_ddd_keeps_its_lesson_and_reports_it(tmp_path, monkeypatch):
-    """End to end through the CLI rig: the rig's project has no DDD docs. REFLECT ends
-    normally (not degraded), the lesson is kept in the run, and the run's REPORT lists it."""
-    import json
-    from tests.pipeline_v1_rig import Rig
-    r = Rig(tmp_path / "case", monkeypatch, profile="direct")
-    try:
-        r.create()
-        r.drive(until="deliver")
-        evidence = [r.events()[0]["event_id"]]
-        lesson = {"id": "L1", "type": "guideline", "scope": "domain:P",
-                  "statement": LESSON["statement"], "tell": "a blocking call on a shared pool",
-                  "evidence": evidence, "relation": {"kind": "new", "entry": None}}
-        out = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": [lesson]}))
-        assert out.get("ok") is True, out
-        from tests.pipeline_v1_rig import SWARM
-        from core.run_protocol import reflect_job as job
-        landed = r.v1("land", "--message", "fix: swap the operands" + SWARM)
-        assert landed.get("ok") is True, landed
-        job.process_run(r.engine())            # the daemon's background REFLECT
-        state = r.state()
-        assert state["status"] == "completed", state
-        assert "reflect_complete" in r.kinds() and "reflect_exhausted" not in r.kinds()
-        engine = r.engine()
-        rows = json.loads((engine.run_dir / "artifacts" / "reflect.json").read_text())["lessons"]
-        assert rows[0]["outcome"]["status"] == "kept_in_run", rows
-        report = (engine.run_dir / "REPORT.md").read_text()
-        assert "## 没有写进项目 DDD 的经验" in report and "worker pool" in report
-    finally:
-        r.close()
 
 
 # --- review of f84035312 ------------------------------------------------------------

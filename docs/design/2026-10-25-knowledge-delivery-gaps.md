@@ -3,10 +3,18 @@ title: 知识送达的缺口 — REFLECT 没有 DDD 时写到哪，以及 Recall
 created: 2026-10-25
 updated: 2026-10-25
 project: SwarmAI
-status: r2 — XG 定了 G4（Slack 私聊给 owner 开召回）；G2 改为在 repo_guidance 里统一做
+status: r3 — B（G1）已实施；A（G2、G4）实施中
 ---
 
 # 知识送达的缺口
+
+## 两部分
+
+- **A. SwarmAI 的召回优化**（native 和 pipeline 会话都受益）：G2 会话第一次碰到仓库时送它的经验和 DDD
+  （§3.2）；G4 channel 的 owner 私聊开召回（§3.3）；G3、G5 不做。
+- **B. pipeline REFLECT 在没有 DDD 的项目上**：G1 经验写进公共 Library（§3.1）。
+
+A 的 G2 送的经验文件由 B 写出，所以先做 B。
 
 ## 0. 一句话
 
@@ -49,7 +57,23 @@ agent 手上"，一共四处缺口。本文逐个说明现状（核对代码）�
 
 ## 3. 方案
 
-### 3.1 G1：没有 DDD 时，经验写进 Library
+### 3.1 G1：没有 DDD 时，经验写进 Library（B，已实施）
+
+实施（2026-10-25）：`core/run_protocol/reflect_library.py`；`reflect_job.route` 多了 `repos`（run 的仓库名 →
+主 checkout，来自 contract 的 `repo_roots`），原来会是 `kept_in_run` 的经验改写进 Library，结果 `library:<路径>`，
+outcome `library`；`reflect.prepare` 接受可选的 `repo`，必须是 run 的仓库之一；REPORT 新增"写进公共 Library 的经验"一节；
+DELIVER、REFLECT 卡片写明。和下面原方案的两处差别：
+- 去重只认完全相同的经验文字（同一条再来，在原条目下加 `reinforced by <run> <lesson>`；同一个 run 的同一条再来什么都不写）。
+  `reinforces` / `refines` / `contradicts` 指向的候选来自项目 DDD 的召回，没有 DDD 时没有候选，经验只能是 `new`，
+  所以不存在"作用于 Library 文件里的条目"的情况。要让关系也能指向 Library 里的条目，得让 `candidates_for` 也读这个文件，
+  这次没做。
+- 写不进 Library（路径上有符号链接、文件头记的不是这个仓库、读写失败）时，经验仍是 `kept_in_run`。
+
+测试：`tests/test_reflect_library.py`（10 个，含一个经 CLI 的端到端 run）；变异 5 个（去掉 Library 分支、去掉同名规则、
+去掉重放检查、允许跟随符号链接、多仓库时猜仓库）都变红。`test_reflect_and_audit_generic` 里"没有 DDD 的 run 把经验留在 run 里"
+那个端到端测试删掉了，它测的正是被替换的行为。
+
+原方案：
 
 - **位置**：`Knowledge/Library/pipeline-lessons/<仓库名>.md`，一个仓库一个文件。
   - 仓库名取主 checkout 目录的名字。文件头记下主 checkout 的绝对路径。如果同名文件记的是别的路径，文件名改成
@@ -128,4 +152,5 @@ agent 手上"，一共四处缺口。本文逐个说明现状（核对代码）�
 ## 修订记录
 
 - r1（2026-10-25）：初稿。XG 定了 G1 写进 Library、按仓库归档、create 时点名。
+- r3（2026-10-25）：B（G1）实施，写明和原方案的两处差别；开头标出 A、B 两部分。
 - r2（2026-10-25，XG）：G2 不只做 pipeline：改为在 `repo_guidance`（会话第一次碰到仓库）里统一送经验文件和 DDD 路径，native 和 pipeline 共用，create 不再另外点名；G4 给 owner 的私聊开召回。

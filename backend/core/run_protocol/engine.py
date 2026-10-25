@@ -2325,7 +2325,8 @@ class RunEngine:
         event_ids = {event["event_id"] for event in self.store.read_events()}
         if candidates is None:      # the CLI's own recall (RF-4): the agent cannot pick them
             candidates = reflect_job.candidates_for(list(lessons), self.project)
-        document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates)
+        document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates,
+                                   repos=set(self.contract.get("expected_repos") or ()))
         path = self.run_dir / "artifacts" / "reflect.json"
         DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
                                                indent=2))

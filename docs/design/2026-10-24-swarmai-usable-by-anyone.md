@@ -121,6 +121,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 - **文档规范保留**：REQUIREMENTS（结构化 EARS、R 编号）、DESIGN_SPEC（P/F/T/X 编号、properties、failure_modes、trace 矩阵）、fixing-spec、REFLECT 的 lessons。这是质量收敛的骨架，本身和编程语言无关。
 - **两道审查保留**：Gate-0（EVALUATE 的问题定义审查）、Gate-2（REVIEW 的专家审查：R1 全量 + R2 只复查已处理的 finding，finding 账本、聚类、fixing-spec、修复、复审、轮数上限）。原来的 Gate-1 已在 10 月的简化里删除，本设计不恢复。
 - **REFLECT 保留**：daemon 后台判断并沉淀 lessons 到项目 DDD（产品能力，每个用户的项目都有 DDD）。r8：project 在 SwarmWS 里不存在或没有 DDD 文档时，lessons 写进 run 自己的 REFLECT 记录并在 REPORT 里列出，不再静默丢弃（今天 `reflect_job.py:56-70,168-209` 会拒收未知项目）。
+  - 后续（2026-10-25，`docs/design/2026-10-25-knowledge-delivery-gaps.md` §3.1）：这类经验改写进公共 Library 的 `Knowledge/Library/pipeline-lessons/<仓库名>.md`（outcome `library`），只有多仓库 run 没写 `repo`、或写不进 Library 时才是 `kept_in_run`。
   - 已实施（S6-4d，2026-10-25）：lesson 的目标项目不存在、或项目没有对应的 DDD 文档时，结果是 `kept_in_run`：留在 `artifacts/reflect.json`，REFLECT 不算降级，run 目录的 REPORT 列在"没有写进项目 DDD 的经验"一节。走出 `Projects/` 的目标照旧拒绝。原来项目目录不存在时 `_queue` 会抛 `FileNotFoundError`，重试两次后 REFLECT 降级，也一起修掉了。
   - 审查后修复（2026-10-25）：项目名必须是单个普通路径段，在碰文件系统之前检查；必须和 `Projects/` 下的目录名完全一致（大小写不敏感的文件系统上 `foo` 原来会写进 `Foo`）；检查之后、写入之前 DDD 文档被删掉，结果也是 `kept_in_run`；proposal 写到一半失败时删掉残缺文件，重试不再误判 `rejected_integrity`；读不出的 TEST 报告在审计里标\"报告读不出\"，不再抛错（这一步在 `reflect_complete` 记下之后跑，抛错会让 run.json、REPORT 和卡片停在旧状态）。
 - **落地协议保留，签名删除（r12，XG 定）**：事件改为只追加日志（§3.3.5），其余保留：producer 权限、不可变 contract 和 tree 绑定、owner 转移、一次性授权、`auth_consumed`、`land_intent`、REPORT 渲染、交付 tree、base 复核、部分落地记录、隔离 worktree。

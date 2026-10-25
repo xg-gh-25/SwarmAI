@@ -37,6 +37,8 @@ APPLIED_RESULTS = frozenset({"applied", "created_section", "duplicate"})
 TRANSIENT_RESULTS = frozenset({"locked"})
 # the destination does not exist: the lesson stays in the run's record (S6-4d)
 KEPT_RESULTS = frozenset({"kept_in_run"})
+# ... or went to the shared Library instead (knowledge-delivery-gaps §3.1)
+LIBRARY_PREFIX = "library:"
 
 
 def destination(lesson_type: str, scope: str) -> str:
@@ -58,15 +60,20 @@ def destination(lesson_type: str, scope: str) -> str:
 
 
 def prepare(lessons: Sequence[Mapping[str, Any]], *, event_ids: set[str],
-            candidates: Mapping[str, Sequence[str]]) -> dict[str, Any]:
+            candidates: Mapping[str, Sequence[str]],
+            repos: "set[str] | None" = None) -> dict[str, Any]:
+    """*repos*: the run's repo names; a lesson may name one in ``repo`` (where a lesson
+    no project DDD takes is written: knowledge-delivery-gaps §3.1)."""
     if not isinstance(lessons, (list, tuple)):
         raise ReflectError("lessons must be a list")
     out = []
     ids: set[str] = set()
     for index, raw in enumerate(lessons):
         required = {"id", "type", "scope", "statement", "tell", "evidence", "relation"}
-        if not isinstance(raw, Mapping) or set(raw) != required:
+        if not isinstance(raw, Mapping) or set(raw) - {"repo"} != required:
             raise ReflectError(f"lesson {index} has wrong fields")
+        if "repo" in raw and raw["repo"] not in (repos or set()):
+            raise ReflectError(f"lesson {index} repo is not one of this run's repos")
         lesson_id, lesson_type = raw["id"], raw["type"]
         if not isinstance(lesson_id, str) or not re.fullmatch(r"L[1-9][0-9]*", lesson_id) \
                 or lesson_id in ids or lesson_type not in TYPES:
@@ -126,6 +133,7 @@ def process(document: Mapping[str, Any], *,
                         raise TransientWrite(result)
                     outcome = {"status": "applied" if result in APPLIED_RESULTS
                                or result.startswith("queued:") else
+                               "library" if result.startswith(LIBRARY_PREFIX) else
                                "kept_in_run" if result in KEPT_RESULTS else "rejected",
                                "result": result, "attempts": attempt}
                 else:
