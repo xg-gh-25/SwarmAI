@@ -134,7 +134,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P3b — PROJECT AGENT** ⭐ | **Every brain.** Generate `project-agent.yaml` (next to `bindings.yaml`, section ⑤) from what this brain now knows — see "Generating the Project Agent" below. Show it to the person as a short table and ask them to confirm or change it. They review and revise; they never fill it in. Set `status: reviewed` and `reviewed_at` only after they confirm. | P6 ⑤ Project Agent check: present with only supported profiles and placements → PASS; missing → PENDING. |
 | **P4 — REFRESHER (code-intel / spec-details)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset that is bound + pulled.** Run `s_repo-to-ddd` to generate `code-intel.json`, and write `spec-details/` if the domain warrants rich per-subsystem specs. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** Do NOT build code-intel for a data-agent or pure-knowledge brain. | P6 ⑥ check: code-repo asset + code-intel present → PASS; code-repo asset not yet pulled → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
-| **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME>` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
+| **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME> --record` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
 
 ### Generating the Project Agent (P3b)
 
@@ -175,7 +175,7 @@ next step is either to open the map or to describe a first change for a Run.
 **P6 gate — the exit门禁 for the whole flow:**
 
 ```bash
-"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME>
+"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME> --record   # --record: ready on PASS, so Brain Hub stops showing "being born"
 # or, on a foreign host / arbitrary path:
 "$SWARM_BACKEND_BIN" py .../scripts/verify_ddd_complete.py --project-dir /abs/path/to/DDD  [--json]
 ```

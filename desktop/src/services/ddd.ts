@@ -83,6 +83,9 @@ export interface BrainSummary {
   kind: string;
   sectionsPresent: Record<SectionKey, boolean>;
   lifecycleStage: 'CREATE' | 'GROW' | 'REVIEW' | 'DISTRIBUTE';
+  /** Setup (s_project-manager P0..P6): 'setting-up' from create_project until the P6
+   *  gate records 'ready'. null/absent = no record (an older Brain) — never "being born". */
+  setupState?: 'setting-up' | 'ready' | null;
   health: BrainHealth;
   /** 7-type histogram for the compact card's 3-layer ontology bar. Rides the
    *  gallery's existing single parse (zero extra glob). OPTIONAL for daemon skew:

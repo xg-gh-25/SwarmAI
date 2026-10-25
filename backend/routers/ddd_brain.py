@@ -71,6 +71,7 @@ from core.ddd_entry_lifecycle import (
 )
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
 from core.project_agent import PROJECT_AGENT_FILE, load_project_agent
+from core.ddd_setup_state import read_setup_state
 from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR, get_pinned_projects
 
 logger = logging.getLogger(__name__)
@@ -600,6 +601,8 @@ def build_brain_state(
         "description": _read_description(project_dir),
         "sectionsPresent": present,
         "lifecycleStage": _lifecycle_stage(project_dir, present, pending, entry_count=entry_count),
+        # setting-up | ready | None (no record: a Brain made before setup tracking)
+        "setupState": read_setup_state(project_dir),
         "health": health,
         "typeCounts": stats["typeCounts"],
     }

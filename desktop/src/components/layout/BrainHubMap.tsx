@@ -114,7 +114,7 @@ export function BrainHubMap({ brains, selfName, onOpen }: {
               </g>
             )}
             <text x={p.x} y={p.y + D + R + 14} textAnchor="middle" className="text-small font-semibold fill-[var(--color-text)]">{b.name}</text>
-            {b.lifecycleStage === 'CREATE' && (
+            {b.setupState === 'setting-up' && (
               <text x={p.x} y={p.y + D + R + 28} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]"
                 data-testid={`brainhub-map-born-${b.name}`}>being born</text>
             )}

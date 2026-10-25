@@ -422,6 +422,28 @@ def verify_project(project_dir: str | Path) -> dict[str, Any]:
 _ICON = {STATUS_PASS: "✓", STATUS_FAIL: "✗", STATUS_PENDING: "…", STATUS_NA: "–"}
 
 
+def record_setup_state(project_dir: Path, report: dict[str, Any]) -> None:
+    """Write .artifacts/setup.json from a P6 report: ready on PASS, else setting-up.
+
+    Uses core.ddd_setup_state on a SwarmAI host; off-host (a distributed DDD) it
+    writes the same two-field shape itself. Never raises: recording is a side note
+    of the gate, not part of its verdict.
+    """
+    state = "ready" if report.get("overall") == STATUS_PASS else "setting-up"
+    try:
+        from core.ddd_setup_state import write_setup_state  # noqa: PLC0415
+        write_setup_state(project_dir, state, report.get("counts"))
+    except ImportError:
+        try:
+            p = project_dir / ".artifacts" / "setup.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"state": state, "counts": report.get("counts")}, indent=2), encoding="utf-8")
+        except OSError as exc:
+            print(f"warning: could not record setup state: {exc}", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        print(f"warning: could not record setup state: {exc}", file=sys.stderr)
+
+
 def _render(report: dict[str, Any]) -> str:
     lines = [f"DDD completeness — {report['project']}: {report['overall']}"]
     for c in report["checks"]:
@@ -447,6 +469,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--project", help="project name under SwarmWS/Projects/")
     ap.add_argument("--project-dir", help="absolute path to a DDD project dir (overrides --project)")
     ap.add_argument("--json", action="store_true", help="emit the report as JSON")
+    ap.add_argument("--record", action="store_true",
+                    help="record the result in .artifacts/setup.json (ready on PASS); the Brain Hub "
+                         "shows a Brain as being born until it is ready")
     args = ap.parse_args(argv)
 
     if not args.project and not args.project_dir:
@@ -458,6 +483,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     report = verify_project(d)
+    if args.record:
+        record_setup_state(d, report)
     if args.json:
         print(json.dumps(report, indent=2))
     else:

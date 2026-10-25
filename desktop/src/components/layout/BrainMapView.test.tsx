@@ -162,11 +162,15 @@ describe('BrainHubMap', () => {
     expect(screen.queryByTestId('brainhub-map-born-A')).toBeNull();
   });
 
-  it('a Brain still at CREATE is marked as being born', () => {
-    const born = { name: 'New', kind: 'knowledge', lifecycleStage: 'CREATE',
-      sectionsPresent: { identity: true, knowledge: false, gates: false, capabilities: true, delivery: false, refresher: false },
-      health: { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '--' } };
-    render(<BrainHubMap brains={[born] as never} onOpen={vi.fn()} />);
+  it('only a Brain whose setup is recorded as setting-up is marked as being born', () => {
+    const mk = (name: string, setupState: unknown, lifecycleStage = 'GROW') => ({ name, kind: 'knowledge', lifecycleStage, setupState,
+      sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: true, delivery: false, refresher: false },
+      health: { sinking: 0, pending: 0, liveRun: false, lastChangeRelative: '--' } });
+    // GROW but still setting up (knowledge written, P6 not passed) -> born;
+    // ready -> not; an old Brain with no record, even at CREATE -> not.
+    render(<BrainHubMap brains={[mk('New', 'setting-up'), mk('Done', 'ready'), mk('Old', null, 'CREATE')] as never} onOpen={vi.fn()} />);
     expect(screen.getByTestId('brainhub-map-born-New')).toBeTruthy();
+    expect(screen.queryByTestId('brainhub-map-born-Done')).toBeNull();
+    expect(screen.queryByTestId('brainhub-map-born-Old')).toBeNull();
   });
 });

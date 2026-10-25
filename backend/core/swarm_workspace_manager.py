@@ -31,6 +31,7 @@ import subprocess
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
 from core.project_registry import DDD_CANONICAL_DOCS  # Run 0: single source of truth
 from core.ddd_paths import ddd_path, ddd_write_path  # six-section layout resolver (SSOT)
+from core.ddd_setup_state import write_setup_state  # Brain setup: setting-up until P6 records ready
 
 logger = logging.getLogger(__name__)
 
@@ -2920,6 +2921,9 @@ class SwarmWorkspaceManager:
         # Provision DDD document templates for the new project
         await self.provision_project_ddd(project_name, workspace_path)
 
+        # A NEW project starts its setup (P0..P6): the Brain Hub shows it as being
+        # born until the P6 gate records `ready` (core.ddd_setup_state).
+        await anyio.to_thread.run_sync(lambda: write_setup_state(project_dir, "setting-up"))
         # Update in-memory UUID index
         self._uuid_index[project_id] = project_dir
 
