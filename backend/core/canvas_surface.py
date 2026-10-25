@@ -87,6 +87,23 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
+def _session_worktree_rel(p: Path) -> Optional[str]:
+    """The path inside its session worktree when *p* is under the session-worktree
+    root (``scripts.session_worktree.root``, the one definition of where they live):
+    ``<root>/<name>/<repo>/<rel>`` → ``<rel>``; a path directly under the root or a
+    name dir → ``""`` (not a worktree file); outside the root → None."""
+    try:
+        from scripts.session_worktree import root as _sw_root
+        base = Path(os.path.realpath(_sw_root()))
+    except Exception:  # noqa: BLE001 — no root known: nothing is a session worktree
+        logger.debug("canvas_surface: session-worktree root unavailable", exc_info=True)
+        return None
+    if not p.is_relative_to(base):
+        return None
+    parts = p.relative_to(base).parts
+    return str(Path(*parts[2:])) if len(parts) > 2 else ""
+
+
 def is_canvas_surfaceable(
     abs_path: str,
     *,
@@ -122,19 +139,31 @@ def is_canvas_surfaceable(
         #    surfaceable=False here and at step 1 alike. canvas_noise is the SOLE copy
         #    of these shapes — add new ones there, never inline (run_4de279ca's lesson:
         #    a second denylist drifts).
-        from core.canvas_noise import is_noise_path
+        from core.canvas_noise import is_noise_path, is_noise_shape
+        from core.needs_human_review import _has_dot_segment, _owning_tree
+        from core.project_registry import get_swarmws
 
-        if is_noise_path(p):
+        # 0') A native session's own worktree (<app data>/session-worktrees/<name>/
+        #     <repo>, design 2026-10-26-session-products.md §3.3). It lies inside
+        #     ~/.swarm-ai, whose root canvas_noise denies, so it is judged here by the
+        #     rules needs_human_review applies inside a known tree: the tree-relative
+        #     dot-segment rule (a tracked .env never surfaces) and the noise shapes;
+        #     check-ignore below still declines a gitignored file. It is not a known
+        #     tree for needs_human_review / auto_commit and does not become one.
+        in_session_wt = False
+        sw_rel = _session_worktree_rel(p)
+        if sw_rel is not None:
+            if not sw_rel or _has_dot_segment(sw_rel) or is_noise_shape(p):
+                return CanvasSurface(False)
+            in_session_wt = True
+        elif is_noise_path(p):
             return CanvasSurface(False)
 
         # 1) INSIDE a known tree → not our job (needs_human_review owns those).
         #    Reuse the SAME owning-tree resolver so the boundary can never drift
         #    between the two predicates (P8: one brain, consistent doors).
-        from core.needs_human_review import _owning_tree
-        from core.project_registry import get_swarmws
-
         ws_root = Path(swarmws_root).resolve() if swarmws_root is not None else Path(get_swarmws()).resolve()
-        if _owning_tree(p, ws_root) is not None:
+        if not in_session_wt and _owning_tree(p, ws_root) is not None:
             return CanvasSurface(False)  # inside SwarmWS / a bound worktree
 
         # 2) OUTSIDE every known tree. Find the file's own directory to probe git.

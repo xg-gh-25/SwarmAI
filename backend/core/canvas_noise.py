@@ -222,6 +222,36 @@ def clear_noise_cache() -> None:
     _root_exceptions.cache_clear()
 
 
+def _noise_shape(p: Path) -> bool:
+    """The basename / extension / segment rules of ``is_noise_path`` (no roots)."""
+    name = p.name
+    if name in _NOISE_BASENAMES:
+        return True
+    if p.suffix.lower() in _NOISE_EXTENSIONS:
+        return True
+    # editor/office scratch: `foo.py~` (vim/emacs), `.#foo.py` (emacs lock),
+    # `~$report.docx` (Word lock file)
+    if name.endswith("~") or name.startswith(".#") or name.startswith("~$"):
+        return True
+    # parts[0] is the anchor ("/" or "C:\\") — never a real segment.
+    for seg in p.parts[1:]:
+        if seg in NOISE_SEGMENTS or seg.endswith(".egg-info"):
+            return True
+    return False
+
+
+def is_noise_shape(path: "str | Path") -> bool:
+    """True if ``path``'s basename, extension or a segment marks it noise, whatever
+    root it lives under. For a caller that judges the root itself (canvas_surface's
+    session-worktree branch). Pure, never raises, fails open like is_noise_path."""
+    try:
+        return _noise_shape(Path(os.path.expanduser(str(path))))
+    except Exception:  # noqa: BLE001 — hot-path fail-safe, fail OPEN
+        import logging as _logging
+        _logging.getLogger(__name__).debug("is_noise_shape: suppressed exception on a fail-safe path", exc_info=True)
+        return False
+
+
 def is_noise_path(path: "str | Path") -> bool:
     """True if ``path``'s SHAPE marks it machine noise that must never surface.
 
@@ -240,21 +270,8 @@ def is_noise_path(path: "str | Path") -> bool:
         p = Path(os.path.expanduser(str(path)))
         if not p.is_absolute():
             return False
-
-        name = p.name
-        if name in _NOISE_BASENAMES:
+        if _noise_shape(p):
             return True
-        if p.suffix.lower() in _NOISE_EXTENSIONS:
-            return True
-        # editor/office scratch: `foo.py~` (vim/emacs), `.#foo.py` (emacs lock),
-        # `~$report.docx` (Word lock file)
-        if name.endswith("~") or name.startswith(".#") or name.startswith("~$"):
-            return True
-
-        # parts[0] is the anchor ("/" or "C:\\") — never a real segment.
-        for seg in p.parts[1:]:
-            if seg in NOISE_SEGMENTS or seg.endswith(".egg-info"):
-                return True
 
         for exc in _root_exceptions():
             if p.is_relative_to(exc):
