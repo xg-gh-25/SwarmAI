@@ -80,6 +80,9 @@ const DOT_FILL: Record<MapTone, string> = {
   needs: 'fill-[var(--color-status-error)]',
   busy: 'fill-[var(--color-primary)]',
 };
+/** Part outlines: 1.5px on screen at any map width (the viewBox scales down to ~0.85). */
+const OUTLINE = { strokeWidth: 1.5, vectorEffect: 'non-scaling-stroke' as const };
+
 /** What a line means, by colour: a request coming in, the Run flow, knowledge written,
  *  a rule waiting for your OK. Each has its own arrowhead of the same colour. */
 type Flow = 'request' | 'run' | 'learn' | 'approve';
@@ -133,7 +136,9 @@ function Part({ label, onClick, testid, children }: {
 
 export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLine, evalLine, tones = {}, onOpen }: BrainMapProps) {
   const d = secPos('delivery'), k = secPos('knowledge'), g = secPos('gates');
-  const box = 'fill-[var(--color-card)] stroke-[var(--color-border)] group-hover:stroke-[var(--color-primary)] group-focus:stroke-[var(--color-primary)]';
+  // outlines: the muted text colour (the border colour sinks into a dark card), and a
+  // fixed width on screen however wide the map is drawn
+  const box = 'fill-[var(--color-card)] stroke-[color-mix(in_srgb,var(--color-text-muted)_70%,transparent)] group-hover:stroke-[var(--color-primary)] group-focus:stroke-[var(--color-primary)]';
   const shown = runs.slice(0, 12);
   const cTop = P.conductor.y - 50;
   return (
@@ -168,7 +173,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
 
       {/* the DDD flower */}
       <Part label="Brain: open its knowledge" onClick={() => onOpen('browse')} testid="bm-brain">
-        <polygon points={hex(C.x, C.y, HR)} className="fill-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] stroke-[var(--color-primary)]" strokeWidth={2} />
+        <polygon points={hex(C.x, C.y, HR)} className="fill-[color-mix(in_srgb,var(--color-primary)_14%,transparent)] stroke-[var(--color-primary)]" {...OUTLINE} strokeWidth={2.5} />
         <text x={C.x} y={C.y - 3} textAnchor="middle" className="text-heading font-semibold fill-[var(--color-text)]">Brain</text>
         <text x={C.x} y={C.y + 15} textAnchor="middle" className="text-small fill-[var(--color-primary)]">{version}</text>
       </Part>
@@ -176,7 +181,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
         const p = secPos(key);
         return (
           <Part key={key} label={`${label}: ${counts[key]}`} onClick={() => onOpen('browse', key)} testid={`bm-sec-${key}`}>
-            <polygon points={hex(p.x, p.y, HR)} className={box} strokeWidth={1.4} />
+            <polygon points={hex(p.x, p.y, HR)} className={box} {...OUTLINE} />
             <Dot x={p.x} y={p.y - 26} tone={tones[key]} />
             <text x={p.x} y={p.y + 2} textAnchor="middle" className={TITLE}>{label}</text>
             <text x={p.x} y={p.y + 19} textAnchor="middle" className={SUB}>{counts[key]}</text>
@@ -186,7 +191,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
 
       {/* Project Agent + sources */}
       <Part label="Project Agent" onClick={() => onOpen('agent')} testid="bm-agent">
-        <rect x={P.agent.x - 72} y={P.agent.y - 38} width={144} height={76} rx={10} className={box} />
+        <rect x={P.agent.x - 72} y={P.agent.y - 38} width={144} height={76} rx={10} className={box} {...OUTLINE} />
         <Dot x={P.agent.x - 58} y={P.agent.y - 24} tone={tones.agent} />
         <text x={P.agent.x} y={P.agent.y - 12} textAnchor="middle" className={TITLE}>Project Agent</text>
         <text x={P.agent.x} y={P.agent.y + 6} textAnchor="middle" className={SUB}>delivers with you</text>
@@ -194,16 +199,16 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
       </Part>
       {SRC.map((s, i) => (
         <Part key={s.name} label={`Source: ${s.name}${s.mock ? ' (mock)' : ''}`} onClick={() => onOpen('agent')} testid={`bm-src-${i}`}>
-          <rect x={30} y={432 + i * 44} width={82} height={28} rx={14} className={box} strokeDasharray={s.mock ? '4 3' : undefined} />
+          <rect x={30} y={432 + i * 44} width={82} height={28} rx={14} className={box} {...OUTLINE} strokeDasharray={s.mock ? '4 3' : undefined} />
           <text x={71} y={450 + i * 44} textAnchor="middle"
             className={`text-small ${s.mock ? 'fill-[var(--color-text-muted)]' : 'fill-[var(--color-text)]'}`}>{s.name}</text>
-          {s.mock && <text x={71} y={472 + i * 44} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]" data-testid="bm-map-mock">mock</text>}
+          {s.mock && <text x={71} y={475 + i * 44} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]" data-testid="bm-map-mock">mock</text>}
         </Part>
       ))}
 
       {/* the one Conductor + this brain's Runs */}
       <Part label="Run Conductor" onClick={() => onOpen('runs')} testid="bm-conductor">
-        <rect x={P.conductor.x - 132} y={cTop} width={264} height={104} rx={10} className={box} />
+        <rect x={P.conductor.x - 132} y={cTop} width={264} height={104} rx={10} className={box} {...OUTLINE} />
         <Dot x={P.conductor.x - 118} y={cTop + 14} tone={tones.conductor} />
         <text x={P.conductor.x} y={cTop + 22} textAnchor="middle" className={TITLE}>Run Conductor</text>
         <text x={P.conductor.x} y={cTop + 40} textAnchor="middle" className={SUB}>
@@ -223,7 +228,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
 
       {/* Reflect / Evolution */}
       <Part label="Reflect and Evolution" onClick={() => onOpen('reflect')} testid="bm-reflect">
-        <circle cx={P.evo.x} cy={P.evo.y} r={66} className="fill-[color-mix(in_srgb,var(--color-zone-cognitive)_16%,transparent)] stroke-[var(--color-zone-cognitive)] group-hover:stroke-[var(--color-primary)]" />
+        <circle cx={P.evo.x} cy={P.evo.y} r={66} className="fill-[color-mix(in_srgb,var(--color-zone-cognitive)_16%,transparent)] stroke-[var(--color-zone-cognitive)] group-hover:stroke-[var(--color-primary)]" {...OUTLINE} strokeWidth={2} />
         <Dot x={P.evo.x} y={P.evo.y - 40} tone={tones.reflect} />
         <text x={P.evo.x} y={P.evo.y - 14} textAnchor="middle" className={TITLE}>Reflect</text>
         <text x={P.evo.x} y={P.evo.y + 4} textAnchor="middle" className={SUB}>learns from Runs</text>
@@ -233,7 +238,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
 
       {/* You, Eval */}
       <Part label={`You: ${needs} need you`} onClick={() => onOpen('need')} testid="bm-you">
-        <circle cx={P.need.x} cy={P.need.y} r={28}
+        <circle cx={P.need.x} cy={P.need.y} r={28} {...OUTLINE} strokeWidth={2}
           className={needs ? 'fill-[color-mix(in_srgb,var(--color-status-error)_14%,transparent)] stroke-[var(--color-status-error)]'
             : 'fill-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)] stroke-[var(--color-status-success)]'} />
         <text x={P.need.x} y={P.need.y + 6} textAnchor="middle"
@@ -242,7 +247,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
         <text x={P.need.x + 40} y={P.need.y + 15} className={SUB}>review &amp; judge</text>
       </Part>
       <Part label="Eval" onClick={() => onOpen('eval')} testid="bm-eval">
-        <rect x={P.eval.x - 80} y={P.eval.y - 26} width={160} height={52} rx={10} className={box} />
+        <rect x={P.eval.x - 80} y={P.eval.y - 26} width={160} height={52} rx={10} className={box} {...OUTLINE} />
         <text x={P.eval.x} y={P.eval.y - 5} textAnchor="middle" className={TITLE}>Eval</text>
         <text x={P.eval.x} y={P.eval.y + 13} textAnchor="middle" className={SUB}>{evalLine ?? 'reads offline · 5 dims'}</text>
       </Part>
