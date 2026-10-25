@@ -1079,6 +1079,11 @@ def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int) -> bool:
         return bool(sig_re.search(_normalize_newlines_quote_aware(command)))
     if any(seg_pred(seg) for seg in segments):
         return True
+    # `sh -c STRING` and `eval STRING` run their argument as a command line
+    if depth < _BODY_DEPTH and any(
+            _judge_with_bodies(s, seg_pred, sig_re, depth + 1)
+            for s in _nested_command_lines(command, segments)):
+        return True
     for kind, body in _executed_bodies(command, segments):
         if kind == "shell":
             if depth >= _BODY_DEPTH or _judge_with_bodies(body, seg_pred, sig_re, depth + 1):
@@ -1086,6 +1091,18 @@ def _judge_with_bodies(command: str, seg_pred, sig_re, depth: int) -> bool:
         elif sig_re.search(body) and (kind != "python" or _code_can_execute(body)):
             return True
     return False
+
+
+def _nested_command_lines(command: str, segments: "list[list[str]]") -> list[str]:
+    """The command lines a segment hands to a shell to run: ``sh -c STRING``
+    (_inner_shell_scripts, which also returns the heredoc a stdin shell reads) and
+    ``eval ARGS`` (its arguments joined, as eval does)."""
+    out = list(_inner_shell_scripts(command, segments))
+    for seg in segments:
+        prog = _unwrap_program(seg)
+        if prog and prog[0] == "eval" and len(prog) > 1:
+            out.append(" ".join(prog[1:]))
+    return out
 
 
 _GIT_RETARGET_RE = re.compile(r"\bGIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE)\b")
@@ -1111,6 +1128,9 @@ def _discard_dirs(command: str, cwd: str) -> "list[str] | None":
     for kind, body in _executed_bodies(command, segments):
         if _DISCARD_SIG_RE.search(body) and (kind != "python" or _code_can_execute(body)):
             return None
+    # a discard inside `sh -c '…'`: where it runs is not followed into the string
+    if any(_discards_work(s) for s in _nested_command_lines(command, segments)):
+        return None
     out: list[str] = []
     cur = cwd or ""
     stack: list[str] = []
@@ -1154,8 +1174,8 @@ def _segment_discard_target(seg: list[str], cur: str) -> "str | None":
 
 def _git_dir_of(seg: list[str], cur: str) -> str:
     """The directory a git segment runs in: *cur*, moved by each ``-C DIR``."""
-    tokens = _skip_leading_wrappers(seg)
-    if not tokens or tokens[0] != "git":
+    tokens = _unwrap_program(seg)
+    if not tokens or os.path.basename(tokens[0]) != "git":
         return cur
     d = cur
     i = 1
@@ -1184,19 +1204,11 @@ _PY_INTERPRETER_RE = re.compile(r"(?:^|/)python[\d.]*$")
 
 def _segment_git_subcommand(tokens: list[str]) -> "tuple[str, list[str]] | None":
     """``(subcommand, rest)`` when ONE segment is a git command (env assignments,
-    wrappers and git global options skipped), else None."""
-    _WRAPPERS = {"sudo", "env", "command", "nice", "nohup", "time"}
-    i = 0
-    while i < len(tokens):
-        t = tokens[i]
-        if "=" in t and t.split("=", 1)[0].replace("_", "").isalnum() and not t.startswith("-"):
-            i += 1  # env assignment NAME=value
-        elif t in _WRAPPERS:
-            i += 1
-        else:
-            break
-    tokens = tokens[i:]
-    if not tokens or tokens[0] != "git":
+    wrappers and git global options skipped), else None. Wrappers are the shared
+    normalizer's (_unwrap_program: env, sudo, timeout DUR, xargs, …); git is matched
+    by program name, so ``/usr/bin/git`` counts."""
+    tokens = _unwrap_program(tokens)
+    if not tokens or os.path.basename(tokens[0]) != "git":
         return None
     # Skip git global options that precede the subcommand (`git -C p rebase …`).
     k = 1
@@ -1255,7 +1267,11 @@ def _checkout_discards(rest: "list[str]", d: "str | None") -> bool:
     if "." in pos or len(pos) >= 2:
         return True
     if len(pos) == 1:
-        return d is None or os.path.lexists(os.path.join(d, pos[0]))
+        op = pos[0]
+        # a glob or pathspec magic (`'*.py'`, `:(top)x`) is a pathspec, never a branch
+        if op.startswith(":") or any(c in op for c in "*?["):
+            return True
+        return d is None or os.path.lexists(os.path.join(d, op))
     return False
 
 
@@ -1278,25 +1294,30 @@ def _segment_discards(tokens: list[str], d: "str | None" = None) -> bool:
         worktree = "--worktree" in rest or "W" in flags
         return worktree or not staged
     if sub == "switch":
-        return any(a in ("-f", "--force", "--discard-changes") for a in rest)
+        return "f" in _short_flags(rest) or any(
+            a in ("--force", "--discard-changes") for a in rest)
     if sub == "clean":
         flags = _short_flags(rest)
         if "--dry-run" in rest or "n" in flags:
             return False
         return "--force" in rest or "f" in flags
     if sub == "worktree":
-        return bool(rest) and rest[0] == "remove" and any(
-            a in ("-f", "--force") or a.startswith("--force") for a in rest[1:])
+        return bool(rest) and rest[0] == "remove" and (
+            "f" in _short_flags(rest[1:]) or any(a.startswith("--force") for a in rest[1:]))
     return False
 
 
-def _foreign_uncommitted(dirs: "list[str] | None", mine: "dict | None") -> str:
+def _foreign_uncommitted(dirs: "list[str] | None", mine: "dict | None",
+                         deadline: "float | None" = None) -> str:
     """What a discard in *dirs* (_discard_dirs; None or "" = unknown directory) would
     destroy of other sessions' work: "" when nothing, else a short description for the
     approval card. The facts are shared_checkout's: files another session wrote
     (its file tracker) that git still reports as uncommitted, read fresh. An unknown
     directory is judged against every repo another session wrote in. Raises
-    shared_checkout.GitUnknown when git cannot tell. Runs git: call off the event loop."""
+    shared_checkout.GitUnknown when git cannot tell, or when *deadline* (a
+    time.monotonic() value) passes before every repo was read: the gate has given up
+    by then, so no more git is started. Runs git: call off the event loop."""
+    import time
     from core import shared_checkout
     from core.repo_guidance import _repo_root
     roots: set[str] = set()
@@ -1309,6 +1330,8 @@ def _foreign_uncommitted(dirs: "list[str] | None", mine: "dict | None") -> str:
                 roots.add(r)
     parts = []
     for root in sorted(roots):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise shared_checkout.GitUnknown(root)
         for _sid, rels in shared_checkout.sibling_uncommitted(root, mine, strict=True):
             shown = ", ".join(rels[:5]) + (f" (+{len(rels) - 5} more)" if len(rels) > 5 else "")
             parts.append(f"{root}: {shown}")
@@ -1553,9 +1576,11 @@ def create_dangerous_command_gate(
                 dirs = []
             if dirs != []:
                 from core import executors
+                deadline = time.monotonic() + _DISCARD_CHECK_TIMEOUT
                 try:
                     discard_reason = await asyncio.wait_for(
-                        executors.run_in("gate", _foreign_uncommitted, dirs, session_context),
+                        executors.run_in("discard", _foreign_uncommitted, dirs,
+                                         session_context, deadline),
                         timeout=_DISCARD_CHECK_TIMEOUT)
                 except Exception:  # noqa: BLE001 — cannot tell: a person decides
                     logger.debug("discard check could not read git", exc_info=True)
@@ -1579,8 +1604,9 @@ def create_dangerous_command_gate(
             }
 
         # Check session approvals. A v1 authorization is asked every time: each one is
-        # a person's decision about one logged request.
-        if not _is_v1_land_request(command) \
+        # a person's decision about one logged request; so is a discard, which is a
+        # decision about the files its card listed, not about the command text.
+        if not _is_v1_land_request(command) and not discard_reason \
                 and permission_mgr.is_command_approved(session_key, command):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
             return {"decision": "approve"}
@@ -1635,7 +1661,8 @@ def create_dangerous_command_gate(
         permission_mgr.remove_pending_request(request_id)
 
         if decision == "approve":
-            permission_mgr.approve_command(session_key, command)
+            if not discard_reason:
+                permission_mgr.approve_command(session_key, command)
             if _is_v1_land_request(command):
                 record_land_approval(tool_use_id, command)
             else:   # a v1 authorization is a human decision, not a required approval

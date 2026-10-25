@@ -243,3 +243,79 @@ async def test_git_failing_is_asked(repos, router, monkeypatch):
     assert _asked(await _run(me, "git reset --hard", repos.main))
     # the inject-only note treats the same failure as "nothing to say"
     assert sc.sibling_uncommitted(str(repos.main), me) == []
+
+
+# ── expert review round 1 (2026-10-25): shapes the classifier missed ─────────
+# The discard parser had its own wrapper list and never opened `sh -c` / `eval`
+# bodies; it now goes through the shared normalizer (_unwrap_program,
+# _inner_shell_scripts) the other command predicates use.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cmd", [
+    "sh -c 'git reset --hard'",
+    "bash -lc 'cd . && git checkout -- a.py'",
+    "eval 'git reset --hard'",
+    "timeout 30 git reset --hard",
+    "/usr/bin/git reset --hard",
+    "git switch -fq main",
+    "git checkout '*.py'",
+    "git checkout ':(top)a.py'",
+])
+async def test_review_round1_discard_shapes_are_asked(repos, router, cmd):
+    me = router(ME)
+    _sibling_dirty(router, repos.main / "a.py")
+    assert _asked(await _run(me, cmd, repos.main))
+
+
+@pytest.mark.asyncio
+async def test_worktree_remove_with_clustered_force_is_asked(repos, router):
+    me = router(ME)
+    _sibling_dirty(router, repos.wt / "a.py")
+    assert _asked(await _run(me, f"git worktree remove -ff {repos.wt}", repos.main))
+
+
+@pytest.mark.asyncio
+async def test_a_discard_approval_is_not_reused(repos, router):
+    """An approved discard is one decision about the files on that card: running the
+    same text again (later, other files at stake) asks again."""
+    from core.permission_manager import PermissionManager
+    from core.security_hooks import create_dangerous_command_gate
+    me = router(ME)
+    _sibling_dirty(router, repos.main / "a.py")
+    pm = PermissionManager()
+    answers = iter(["approve", "deny"])
+
+    async def _answer(request_id, timeout=300):
+        return next(answers)
+    pm.wait_for_permission_decision = _answer  # type: ignore[method-assign]
+    gate = create_dangerous_command_gate(me, ME, pm, enable_human_approval=True)
+    call = {"tool_name": "Bash", "cwd": str(repos.main),
+            "tool_input": {"command": "git reset --hard"}}
+    assert await gate(call, "tu-1", None) == {"decision": "approve"}
+    assert _asked(await gate(call, "tu-2", None))
+
+
+@pytest.mark.asyncio
+async def test_the_discard_check_runs_on_its_own_pool(repos, router, monkeypatch):
+    """Not on the 'gate' pool every other tool-call judgment waits on."""
+    from core import executors
+    seen = []
+    real = executors.run_in
+
+    async def _spy(name, fn, *a, **k):
+        seen.append(name)
+        return await real(name, fn, *a, **k)
+    monkeypatch.setattr(executors, "run_in", _spy)
+    me = router(ME)
+    _sibling_dirty(router, repos.main / "a.py")
+    assert _asked(await _run(me, "git reset --hard", repos.main))
+    assert "discard" in seen and "gate" not in seen
+
+
+def test_the_discard_check_stops_at_its_deadline(repos, router):
+    """Past the deadline it stops scanning repos and reports 'cannot tell' rather than
+    leaving uncancellable git work running after the gate gave up."""
+    from core.security_hooks import _foreign_uncommitted
+    me = router(ME)
+    _sibling_dirty(router, repos.main / "a.py")
+    with pytest.raises(sc.GitUnknown):
+        _foreign_uncommitted([str(repos.main)], me, deadline=0.0)

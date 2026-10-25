@@ -278,7 +278,9 @@ S4b 实现（2026-10-24）：
 - 移动 ref 的操作（rebase、amend、移动 ref 的 `reset`、`branch -f/-D/-M`、`checkout -B`、`update-ref`、`filter-*`）不再询问：旧 commit 在 reflog 里，可以找回。git 也不允许删除另一个 worktree 正在 checkout 的分支。
 - 销毁未提交改动的操作（`reset --hard/--merge`、`checkout -f` / `-p` / `-- <path>` / `.` / 一个指向现有文件的操作数、`restore`（工作区）、`switch -f/--discard-changes`、`clean -f`、`worktree remove --force`）只在一种情况下询问：它运行的仓库（`worktree remove` 则是被删的 worktree）里，有**另一个 session 写过、git 仍报告未提交**的文件。用的就是上面检测用的那份事实（`shared_checkout.sibling_uncommitted`，strict：不用缓存，git 失败或超时就询问）。目录跟踪 `cd X &&` 和 `git -C`，跟不上的（`eval`、反引号、`GIT_DIR`、heredoc 里由 shell 执行的命令、解析不了）按"另一个 session 写过文件的所有仓库"判断。审批卡片列出会丢的文件。
 - 不保护：用户手动改、没有任何 session 写过的文件（和原来单 session 时一样；把"本 session 没写过的脏文件"当成别人的，会把格式化工具、脚本生成的文件也算进去）；`git stash drop/clear`（stash 不是某个 session 写的文件，这份事实说不了它）；另一个 daemon 外的进程。
-- 成本：只有命令里有销毁类 git 操作才会跑；没有别的 session 写过文件时不启动 git；有的话每个仓库一次 `git status`（只查那些文件），在 gate 线程池里跑。
+- 成本：只有命令里有销毁类 git 操作才会跑；没有别的 session 写过文件时不启动 git；有的话每个仓库一次 `git status`（只查那些文件），在专用的 `discard` 线程池里跑（不占其它 gate 等的 `gate` 池），带截止时间：超时就不再启动 git，按"判断不了"询问。
+- 专家评审第 1 轮（correctness / security / concurrency，2026-10-25）后修正，根因都是这条规则有自己的一套命令解析，没用其它 gate 共用的：git 命令改由 `_unwrap_program` 识别（`timeout`、`env`、`xargs`、`/usr/bin/git`）；`sh -c '…'` 和 `eval '…'` 里的命令也会判断，目录按"判断不了"处理；`switch -fq`、`worktree remove -ff` 这类合写的短选项；`checkout '*.py'`、`checkout ':(top)x'` 这类 pathspec 算丢弃。审批只管这一次：同一条命令下次再跑会重新检查、重新询问，不按命令文本缓存。
+- 已知没做（评审提出、评估后不做）：检查和命令真正执行之间仍有很短的窗口，期间别的 session 新写的文件不在卡片上（要彻底解决得给每个仓库加写锁，代价远大于这个兜底规则）；`checkout <被删掉的已跟踪文件>` 判断不出；COLD/DEAD session 留下的未提交文件照样保护（那些改动还在磁盘上，不会因为 session 退出就不算数）。
 - 删除：`_is_history_rewrite`、`_segment_is_history_rewrite`、`_rewrite_is_branch_local`、`_rewrite_dirs`、`_rewrites_only_scratch`、`_scratch_dir`、`_temp_roots`、`_repo_store_of`、`_own_run_worktree`、`_under_any`、`_other_live_sessions_present`。pipeline run 的 `run_amend_gate` 不变。
 ### 3.9 P7 清单：产品代码里认 SwarmAI 的地方（S4b，2026-10-24 盘点）
 
