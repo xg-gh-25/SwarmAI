@@ -85,17 +85,24 @@ def _repo_path(value: Any, out: list[SchemaIssue], check: str, path: str) -> boo
     return True
 
 
-def _nodeid(value: Any, out: list[SchemaIssue], check: str, path: str) -> bool:
-    if not isinstance(value, str) or not value:
-        _issue(out, check, path, "must be a test nodeid")
+_TEST_NAME_SEP = re.compile(r"::|#| ")
+
+
+def test_ref_path(value: str) -> str:
+    """The path part of a test reference (S6-4c, §3.3.4): everything before the first
+    ``::``, ``#`` or space. What follows names the test in the repo's own convention
+    (``tests/x.py::test_a``, ``pkg/a_test.go TestAdd``, ``src/lib.rs#tests::adds``)
+    and is not interpreted."""
+    return _TEST_NAME_SEP.split(value, 1)[0]
+
+
+def _test_ref(value: Any, out: list[SchemaIssue], check: str, path: str) -> bool:
+    """An opaque repo test reference: a repo-relative file or directory path,
+    optionally followed by a test name. No language or framework is assumed."""
+    if not isinstance(value, str) or not value.strip():
+        _issue(out, check, path, "must be a test reference (a repo path, optionally a test name)")
         return False
-    file = value.split("::", 1)[0]
-    if not _repo_path(file, out, check, path):
-        return False
-    if not file.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".rs")):
-        _issue(out, check, path, "test nodeid must begin with a supported test file")
-        return False
-    return True
+    return _repo_path(test_ref_path(value), out, check, path)
 
 
 def _acceptance(value: Any, out: list[SchemaIssue], path: str,
@@ -343,24 +350,28 @@ def _design_rows(document: Mapping[str, Any], requirement_ids: set[str],
         for file in (task.get("creates_test_files") or []) if isinstance(file, str)
     }
 
-    def test_exists(nodeid: Any, issue_path: str) -> None:
-        if existing_files is None or not isinstance(nodeid, str):
+    def test_exists(ref: Any, issue_path: str) -> None:
+        if existing_files is None or not isinstance(ref, str):
             return
-        file = nodeid.split("::", 1)[0]
-        if file not in existing_files and file not in planned_test_files:
-            _issue(out, "DS-2a", issue_path, "test file does not exist and is not planned")
+        target = test_ref_path(ref)
+        prefix = target + "/"          # a directory (a package, a test folder)
+        if target in existing_files or target in planned_test_files or any(
+                f.startswith(prefix) for f in (*existing_files, *planned_test_files)):
+            return
+        _issue(out, "DS-2a", issue_path, "test file does not exist and is not planned")
     properties = _id_rows(
         document.get("properties", []), out, check="DS-2a", path="properties",
         pattern=PROP_ID, allowed={"id", "statement", "validates", "test", "kind"},
-        required={"id", "statement", "validates", "test", "kind"},
+        required={"id", "statement", "validates", "test"},
     )
     prop_ids = {row.get("id") for row in properties if isinstance(row.get("id"), str)}
     for i, row in enumerate(properties):
         _text(row, "statement", out, "DS-2a", f"properties[{i}]")
-        _nodeid(row.get("test"), out, "DS-2a", f"properties[{i}].test")
+        _test_ref(row.get("test"), out, "DS-2a", f"properties[{i}].test")
         test_exists(row.get("test"), f"properties[{i}].test")
-        if row.get("kind") not in ("example", "pbt"):
-            _issue(out, "DS-2a", f"properties[{i}].kind", "must be example or pbt")
+        # optional description of how it is tested (S6-4c: no fixed example | pbt)
+        if "kind" in row and (not isinstance(row["kind"], str) or not row["kind"].strip()):
+            _issue(out, "DS-2a", f"properties[{i}].kind", "must be non-empty text when given")
         _refs(row.get("validates"), out, f"properties[{i}].validates", requirement_ids)
 
     failures = _id_rows(
@@ -372,7 +383,7 @@ def _design_rows(document: Mapping[str, Any], requirement_ids: set[str],
     for i, row in enumerate(failures):
         for key in ("scenario", "expected"):
             _text(row, key, out, "DS-2a", f"failure_modes[{i}]")
-        _nodeid(row.get("test"), out, "DS-2a", f"failure_modes[{i}].test")
+        _test_ref(row.get("test"), out, "DS-2a", f"failure_modes[{i}].test")
         test_exists(row.get("test"), f"failure_modes[{i}].test")
 
     tasks = _id_rows(
@@ -408,7 +419,7 @@ def _design_rows(document: Mapping[str, Any], requirement_ids: set[str],
         if kind not in ("test", "manual"):
             _issue(out, "DS-9a", f"{path}.kind", "unknown exit kind")
         if kind == "test":
-            _nodeid(row.get("ref"), out, "DS-9a", f"{path}.ref")
+            _test_ref(row.get("ref"), out, "DS-9a", f"{path}.ref")
             test_exists(row.get("ref"), f"{path}.ref")
         else:
             _text(row, "ref", out, "DS-9a", path)

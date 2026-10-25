@@ -270,8 +270,9 @@ def test_a_probe_exit_is_unknown_and_covers_must_resolve():
 def test_optional_lite_properties_are_validated_when_present():
     doc = lite_design()
     doc["properties"] = [{"id": "P1", "statement": "p", "validates": ["R1.1"],
-                          "test": "tests/x.py::test_p", "kind": "wrong"}]
+                          "test": "tests/x.py::test_p", "kind": ""}]
     issues = sc.validate_design_spec(doc, variant="lite", requirement_ids={"R1.1"})
+    # S6-4c: kind is optional free text, but empty text is refused
     assert "properties[0].kind" in paths(issues)
 
 

@@ -2,7 +2,7 @@
 
 Write `artifacts/requirements.json` using the full REQUIREMENTS schema. Use structured EARS fields; do not write `REQUIREMENTS.md`.
 
-Required checks: RQ-1, RQ-2, RQ-4 (bugfix), RQ-5, RQ-6, RQ-8. RQ-3 and RQ-8b are recorded only.
+Required checks: RQ-1, RQ-2, RQ-4 (bugfix), RQ-5, RQ-6, RQ-8. Whether each acceptance criterion is verifiable and its negative / universal flags match its text is judged by the Gate-0 reviewer, in any language (no word list); fix every acceptance id it names before completing EVALUATE.
 
 Gate-0 is dispatched only for bugfix, or when `understanding.readings` has at least two reasonable readings. Before stage completion run `"$SWARM_BACKEND_BIN" pipeline-v1 gate0-start --project <P> --run-id <R> --artifact <json>`; if `required` is true, dispatch its exact handout. A negative/unparsed first answer requires exactly one second `gate0-start`; no third round. Ask the user only through `decision-request` when the JSON passes DC-1, then follow INSTRUCTIONS "Asking a person".
 

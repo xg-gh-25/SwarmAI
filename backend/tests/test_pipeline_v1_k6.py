@@ -1,7 +1,7 @@
-"""K6 (conformance L1, L2, L4): three checks follow the design text exactly.
+"""K6 (conformance L2, L4): two checks follow the design text exactly.
 
-- L1: RQ-8b's keyword table is the design's table (v13 §B1), pinned here verbatim;
-  a gapped term ("所有…都", "every … SHALL") matches across the gap.
+- (L1, RQ-8b's zh/en keyword table, was removed in S6-4c: Gate-0 judges the wording
+  in any language; tests/test_design_spec_generic.py.)
 - L2: a full DESIGN_SPEC must name ``properties`` and ``failure_modes`` (empty is fine).
 - L4: a ``.py`` change is judged on its AST: only comments and layout are not code;
   every string is, docstrings included (XG 2026-10-23); so are an added / deleted
@@ -11,29 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from core.run_protocol import checks, schemas
+from core.run_protocol import schemas
 from core.run_protocol.engine import _comment_only_diff
-
-# v13 §B1, copied from the design text (the line under "RQ-8 直接读")
-DESIGN_ZH = "\"不得 / 不再 / 不能出现 / 禁止 / 没有任何 / 不存在 / 不包含 / 全部改为 / 一律改为 / 所有…都\""
-DESIGN_EN = "`SHALL NOT`、`no longer`、`never`、`none of`、`no … remains`、`all … SHALL`、`every … SHALL`"
-
-
-def test_the_rq8b_table_is_the_designs():
-    zh = DESIGN_ZH.strip('"')
-    en = ", ".join(term.strip("`") for term in DESIGN_EN.split("、"))
-    assert checks.RQ8B_TABLE_ZH == zh and checks.RQ8B_TABLE_EN == en
-
-
-@pytest.mark.parametrize("text,hit", [
-    ("所有请求都必须签名", True), ("全部改为异步", True), ("不能出现空值", True),
-    ("every call SHALL be logged", True), ("no stale row remains", True),
-    ("The API SHALL NOT retry", True), ("全部完成后返回", False), ("evermore", False),
-    ("every call is logged", False),
-])
-def test_rq8b_matches_the_table_terms(text, hit):
-    assert checks._negative_or_universal(text) is hit
-
 
 def _design(**over):
     base = {"alternatives": [{"id": "a"}], "chosen": "a",

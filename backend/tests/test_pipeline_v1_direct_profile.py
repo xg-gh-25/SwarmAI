@@ -34,10 +34,11 @@ def test_direct_registers_no_document_or_decision_check():
 
 def test_trivial_keeps_its_stages_and_document_checks():
     """S6-1 removed the runner's checks (DS-2b/4b/9b, BX-1/2, TS-2, LG-2/5, QX-1/2, MD-2)
-    and added BX-3; S6-2 added RV-4; every other trivial check is as the frozen snapshot recorded it."""
+    and added BX-3; S6-2 added RV-4; S6-4c removed RQ-3 / RQ-8b; every other trivial check is as the frozen snapshot recorded it."""
     snap = json.loads(SNAPSHOT.read_text())
     removed = {"DS-2b", "DS-4b", "DS-9b", "BX-1", "BX-2", "TS-2", "LG-2", "LG-5",
-               "QX-1", "QX-2", "MD-2"}
+               "QX-1", "QX-2", "MD-2",
+               "RQ-3", "RQ-8b"}       # S6-4c: wording is judged by Gate-0, no word list
     assert list(lifecycle.PROFILE_STAGES["trivial"]) == snap["stages"]
     now = {s.check_id: s for s in checks._for("trivial")}
     assert set(now) == (set(snap["checks"]) - removed) | {"BX-3", "RV-4"}

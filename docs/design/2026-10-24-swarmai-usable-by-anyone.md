@@ -194,6 +194,12 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 | worktree 只软链 `desktop/node_modules` | 由 `pipeline.toml` 的 `[worktree] link` 声明；没有声明就不软链 |
 | skill 卡片（INSTRUCTIONS.md、stages/*） | 去掉 Python CLI、`pipeline_test.py`、TDD 文件上限等写死的内容；测试一节改成"用 native 方式测试并在 artifact 里报告"；命令改用 `$SWARM_BACKEND_BIN pipeline-v1` |
 
+**已实施（S6-4c，2026-10-25）**：
+- 测试引用：`test` / `ref` 是"仓库相对路径 + 可选的测试名"，路径到第一个 `::`、`#` 或空格为止，后面的部分按仓库自己的写法，不解析（`pkg/a_test.go TestAdd`、`src/lib.rs#tests::adds`、`tests/x.py::test_a` 都行）。路径可以是文件或目录，必须存在或在 `creates_test_files` 里；越界路径、通配符照旧拒绝。后缀白名单删除。`properties[].kind` 改为可选，给了就必须是非空文字。
+- RQ-3、RQ-8b 从检查表删除，连同中英文词表。gate0-skeptic 的检查清单加了第 5 问：每条验收标准是否可验证、`negative` / `universal` 标记是否和文字一致，用需求本身的语言判断；不合格时 verdict 最多是 SUPPORTED-WITH-CHANGES，run 照常继续，EVALUATE 卡片要求 agent 先改掉点名的验收项。这两项原来就是"只记录、不阻断"，所以阻断行为没有变化。
+- 一个已知差别：Gate-0 只在 bugfix profile 或需求有两种以上理解时才派，其余 full / goal / trivial run 没有人检查措辞（原来的词表检查对它们也只记录不阻断）。S5 有数据后再看要不要对所有带需求文档的 profile 都派。
+
+
 #### 3.3.5 删掉签名机制，事件改为只追加日志（r12，XG 定）
 
 P5 已定不防 agent 作恶，S6 之后测试证据又是 agent 自己写的报告。签名剩下的作用只是证明"这条记录是本 run 写的"，这本身就是防作恶，却要长期维护密钥、daemon 代执行和一次性 token，还让 pipeline 离不开在线的 daemon。
@@ -584,3 +590,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r18（XG，2026-10-25）：新增 §3.5.1 专家合并，S6-4 实施，12 个减到 9 个；§3.4 记下 `1dfdedba0`：补删 S4 漏下的 `_adv_` marker 链路，以及 `audit_marker_write_gate` 15 次拒绝的核对结果。
 - r19（2026-10-25）：§3.5.1 记下 S6-4a（`82de614d7`）的实施和后续修复 `dede1ae2f`（合并前开始的 run 在 R2 读已删的专家文件）。
 - r20（2026-10-25）：§3.4.1 记下 gate 和专家的前后对比；新增 §3.5.2：通用清单就是专家 prompt，仓库自己的清单和 security 触发条件放在它的 `.swarmai/review.md`（在 run 的 base 读取），security 只按声明派，产品里没有内置的路径或 API 判断；SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`。S6-4b 实施。
+- r21（2026-10-25）：S6-4c 实施：DESIGN_SPEC 测试引用改为不透明的仓库引用（路径 + 可选测试名），`kind` 可选；RQ-3、RQ-8b 和词表删除，措辞检查进 Gate-0 第 5 问（§3.3.4）。

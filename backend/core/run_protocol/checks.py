@@ -119,12 +119,10 @@ DESIGN = "full bugfix goal trivial"
 _SPECS = [
     _c("RQ-1", "requirements", "stage", "evaluate plan", "full lite", DOCS),
     _c("RQ-2", "requirements", "stage", "evaluate plan", "full lite", DOCS),
-    _c("RQ-3", "requirements", "", "evaluate plan", "full lite", DOCS),
     _c("RQ-4", "requirements", "stage", "evaluate", "full", "bugfix"),
     _c("RQ-5", "requirements", "stage", "evaluate", "full", FULL_REQ),
     _c("RQ-6", "requirements", "stage", "evaluate", "full", FULL_REQ),
     _c("RQ-8", "requirements", "stage", "evaluate plan", "full lite", DOCS),
-    _c("RQ-8b", "requirements", "", "evaluate plan", "full lite", DOCS),
 
     _c("DS-1", "design_spec", "push", "plan", "full lite", DESIGN),
     _c("DS-2a", "design_spec", "stage", "plan", "full lite", DESIGN),
@@ -374,35 +372,9 @@ def _answers(context: CheckContext, expert: str | None = None) -> list[Mapping[s
             and complete(event)]
 
 
-# RQ-8b's keyword table, copied verbatim from the design (v13 §B1, used by §A2.3 RQ-8b;
-# conformance L1). "…" stands for any text between the two parts. The pin test checks
-# these two lines against the parsed terms.
-RQ8B_TABLE_ZH = "不得 / 不再 / 不能出现 / 禁止 / 没有任何 / 不存在 / 不包含 / 全部改为 / 一律改为 / 所有…都"
-RQ8B_TABLE_EN = "SHALL NOT, no longer, never, none of, no … remains, all … SHALL, every … SHALL"
-
-
-def _rq8b_patterns() -> tuple[re.Pattern[str], ...]:
-    terms = [t.strip() for t in RQ8B_TABLE_ZH.split("/")] + \
-            [t.strip() for t in RQ8B_TABLE_EN.split(",")]
-    out = []
-    for term in terms:
-        parts = [re.escape(part.strip()) for part in term.split("…")]
-        body = r".*?".join(parts)
-        # an English word matches on word boundaries; a Chinese term anywhere
-        out.append(re.compile(rf"\b{body}\b" if term.isascii() else body, re.IGNORECASE))
-    return tuple(out)
-
-
-_RQ8B = _rq8b_patterns()
-
-
-def _negative_or_universal(text: str) -> bool:
-    return any(pattern.search(text) for pattern in _RQ8B)
-
-
 def _evaluate_check(check_id: str, context: CheckContext) -> Result:
     schema_ids = {cid for cid in CHECKS if cid.startswith(("RQ-", "DS-"))}
-    if check_id in schema_ids - {"RQ-3", "RQ-8b"}:
+    if check_id in schema_ids:
         return _document_check(check_id, context)
     if check_id in ("BX-3", "TS-1", "LG-1"):
         return _report_check(check_id, context)
@@ -544,18 +516,4 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
                      and row["relation"].get("kind") in
                      ("new", "reinforces", "refines", "contradicts") for row in lessons)
         return _result(ok, f"{check_id} {'passed' if ok else 'failed'}")
-    if check_id == "RQ-3":
-        vague = ("fast", "easy", "appropriate", "快速", "简单", "合适")
-        bad = [row.get("id") for req in context.requirements.get("requirements", [])
-               if isinstance(req, Mapping) for row in req.get("acceptance", [])
-               if isinstance(row, Mapping) and any(word in str(row.get("response", "")).lower()
-                                                   for word in vague)
-               and not any(ch.isdigit() for ch in str(row.get("response", "")))]
-        return _result(not bad, "no unbounded vague acceptance" if not bad else f"vague: {bad}")
-    if check_id == "RQ-8b":
-        bad = [row.get("id") for req in context.requirements.get("requirements", [])
-               if isinstance(req, Mapping) for row in req.get("acceptance", [])
-               if isinstance(row, Mapping) and _negative_or_universal(str(row.get("response", "")))
-               and row.get("negative") is not True and row.get("universal") is not True]
-        return _result(not bad, "structured flags match text" if not bad else f"unmarked: {bad}")
     raise CheckError(f"no evaluator for {check_id}")

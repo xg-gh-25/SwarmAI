@@ -67,7 +67,7 @@ _GATE_IDS = ("gate0-skeptic",)
 # lines, trailing newline included). Measured pre-move; never recompute these
 # from the post-move files — that would make the check circular.
 _PRE_MOVE_SHA256 = {
-    "gate0-skeptic": "f6eaa63c591d786f13f1e45c8d9ae15ca54f3eeabd4a73503ca58694704d640f",  # pragma: allowlist secret
+    "gate0-skeptic": "2429e4aa5f4f984321f69864c628484d11dec37250b51704bcbde05245eb40d0",  # pragma: allowlist secret  # S6-4c: question 5 (acceptance wording) replaces RQ-3 / RQ-8b
 }
 
 

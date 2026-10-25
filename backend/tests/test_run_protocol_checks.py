@@ -13,7 +13,7 @@ from core.run_protocol import checks, events
 AUTH = events.EventAuthority()
 
 EXPECTED = {
-    "RQ-1", "RQ-2", "RQ-3", "RQ-4", "RQ-5", "RQ-6", "RQ-8", "RQ-8b",
+    "RQ-1", "RQ-2", "RQ-4", "RQ-5", "RQ-6", "RQ-8",
     "DS-1", "DS-2a", "DS-3", "DS-4a", "DS-5", "DS-6",
     "DS-7", "DS-9a", "BX-3", "RV-1a", "RV-1b", "RV-1c",
     "DC-1", "DC-2", "RV-2", "RV-4", "FX-1", "TS-1", "TS-3", "DV-1",
@@ -28,8 +28,9 @@ def ids(specs):
 
 def test_registry_is_the_complete_v13_table():
     assert set(checks.CHECKS) == EXPECTED
-    # v13's 46 + BX-2, minus the runner's checks, plus BX-3 (S6-1), plus RV-4 (S6-2)
-    assert len(checks.CHECKS) == 38
+    # v13's 46 + BX-2, minus the runner's checks, plus BX-3 (S6-1), plus RV-4 (S6-2),
+    # minus the word-list checks RQ-3 / RQ-8b (S6-4c: Gate-0 judges wording)
+    assert len(checks.CHECKS) == 36
     assert checks.coverage_errors() == []
 
 
@@ -47,7 +48,7 @@ def test_effects_are_independent_not_one_block_advise_flag():
     assert checks.CHECKS["LG-1"].effects == {"land"}
     assert checks.CHECKS["TS-1"].effects == {"stage", "push"}
     assert checks.CHECKS["DS-1"].effects == {"push"}
-    assert checks.CHECKS["RQ-3"].effects == set()
+    assert checks.CHECKS["DS-3"].effects == set()
     assert checks.CHECKS["DV-1"].effects == {"stage"}
 
 
