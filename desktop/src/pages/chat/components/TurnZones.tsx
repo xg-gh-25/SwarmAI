@@ -13,8 +13,9 @@
  * - `RESULT`: the label over the turn's answer text (a text zone with `result`); not
  *   foldable.
  * Inside a group, in stream order: thoughts (one row in the strip column, `✻ Thought`,
- * the first line, open for all of it), light strips (one call each; `Read ×N` /
- * `Bash ×N` merges) and Agents panels (one per batch of sub-agents that ran at the
+ * the first line, open for all of it), light strips (one call each; settled calls of one
+ * kind merge as `Explored` / `Ran` / `Edited`, carrying the finished thoughts between
+ * them, one tool with no thought as `Read ×N`) and Agents panels (one per batch of sub-agents that ran at the
  * same time). The text the agent wrote between calls stands where it was written and
  * carries the work after it under a ▸: while live only the latest text's work is open
  * (the fold moves on only while the user follows the bottom); opened later, all fold.
