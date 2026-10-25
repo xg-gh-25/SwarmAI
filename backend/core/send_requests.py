@@ -124,7 +124,13 @@ async def receipt(record: dict) -> dict:
         try:
             from database import db
             row = await db.messages.get(mid)
-            out["queued"] = bool(row) and row.get("sent") == 0
+            meta = (row or {}).get("metadata")
+            # a steer written to the running turn and not read yet is not queued: it
+            # cannot be cancelled (design chat-steer D2, L3)
+            steering = isinstance(meta, dict) and meta.get("steer") == "inflight"
+            if steering:
+                out["steer"] = True  # only then: other receipts keep their shape
+            out["queued"] = bool(row) and row.get("sent") == 0 and not steering
         except Exception as exc:  # noqa: BLE001 — a display aid
             logger.debug("send_requests.receipt_row_read_failed %s: %s", mid, exc)
     return out

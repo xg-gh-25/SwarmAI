@@ -18,6 +18,15 @@ Three-phase row lifecycle (F4 — never lose a claimed-but-undelivered message):
     | claimed | 0    | <ts>       | a drain took it, send() in flight    |
     | sent    | 1    | (cleared)  | confirmed delivered to the subprocess|
 
+A steer (docs/design/2026-10-24-chat-steer.md D2) adds one more phase: a message
+written into the RUNNING turn's stdin that the CLI has not read yet. It is
+``sent = 0`` with ``claimed_at`` set, ``pending_seq`` NULL and
+``metadata.steer = "inflight"``: not history (``sent = 0``), not the queue (every
+queue reader below excludes it, a drain never claims it, a cancel answers
+``claimed``). It leaves that phase exactly once: ``confirm_steer`` (the CLI read
+it: history at the echo time) or ``release_steer`` (it was never read: the queue,
+with a new seq).
+
 Concurrency (F6): ``pending_seq`` is assigned ``MAX(pending_seq)+1`` inside a
 per-session :class:`asyncio.Lock` (keyed by ``session_id``), created independently
 of the SessionUnit so it is valid on the persist-before-slot path (which can run
@@ -55,6 +64,16 @@ logger = logging.getLogger(__name__)
 # drain is never deleted mid-flight — only rows whose 90-day window fully elapses
 # are reaped, by which point the session is unambiguously dead.
 _PENDING_TTL_SECONDS = 90 * 24 * 60 * 60
+
+#: metadata.steer of a steer written to stdin and not yet read (module docstring)
+STEER_INFLIGHT = "inflight"
+#: confirm_steer outcome -> metadata.steered (the bubble's label, D7)
+_STEERED_LABEL = {"folded": "during", "opened": "after"}
+#: a row that is not a steer in flight (malformed metadata counts as "not a steer")
+_NOT_STEER_SQL = ("json_extract(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, "
+                  "'$.steer') IS NULL")
+_IS_STEER_SQL = ("json_extract(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, "
+                 "'$.steer') = 'inflight'")
 
 # backend/schemas/message.py TerminalContext.buffer_tail max_length: a pending
 # send's terminal output, and a combined drain's, stay within it.
@@ -447,7 +466,7 @@ async def peek_pending_batch(session_id: str) -> list[PendingMessage]:
             await conn.execute("PRAGMA busy_timeout=5000")
             cursor = await conn.execute(
                 "SELECT id, session_id, pending_seq, content, created_at, metadata "
-                "FROM messages WHERE session_id = ? AND sent = 0 "
+                f"FROM messages WHERE session_id = ? AND sent = 0 AND {_NOT_STEER_SQL} "
                 "ORDER BY pending_seq ASC",
                 (session_id,),
             )
@@ -634,7 +653,7 @@ async def count_pending(session_id: str) -> int:
     db_path = _get_db_path()
     async with _pooled(db_path, readonly=True) as conn:
         cursor = await conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE session_id = ? AND sent = 0",
+            f"SELECT COUNT(*) FROM messages WHERE session_id = ? AND sent = 0 AND {_NOT_STEER_SQL}",
             (session_id,),
         )
         row = await cursor.fetchone()
@@ -670,7 +689,8 @@ async def list_pending(session_id: str) -> list[dict]:
     async with _pooled(db_path, readonly=True) as conn:
         cursor = await conn.execute(
             f"SELECT id, pending_seq, {_PREVIEW_SQL}, created_at, metadata, claimed_at "
-            "FROM messages WHERE session_id = ? AND sent = 0 ORDER BY pending_seq ASC LIMIT ?",
+            f"FROM messages WHERE session_id = ? AND sent = 0 AND {_NOT_STEER_SQL} "
+            "ORDER BY pending_seq ASC LIMIT ?",
             (_PREVIEW_CHARS, _PREVIEW_CHARS, session_id, _LIST_MAX),
         )
         rows = await cursor.fetchall()
@@ -740,6 +760,13 @@ async def reopen_dangling_claims(session_id: str | None = None) -> int:
     ``claimed`` phase (claimed_at set, sent=0) by a crash back to ``pending``
     (claimed_at=NULL). Returns the number of rows reopened.
 
+    A steer still in flight (the daemon died before its echo) goes back to the
+    queue FIRST, with a new ``pending_seq`` (design chat-steer D2, E7: the CLI
+    never ran it, so queueing it cannot send it twice). Clearing its claim the
+    way the other rows are cleared would leave a queued row with
+    ``pending_seq = NULL``: a drain would claim it and ``mark_sent_batch``
+    (``pending_seq IN``) would never flip it.
+
     Runs once at daemon startup before serving. Idempotent. Does NOT touch
     already-sent rows (sent=1) — those were delivered.
 
@@ -747,24 +774,131 @@ async def reopen_dangling_claims(session_id: str | None = None) -> int:
     (the startup case). Pass a session_id to scope to one session (tests).
     """
     db_path = _get_db_path()
+    scope, args = ("", ()) if session_id is None else (" AND session_id = ?", (session_id,))
     async with _pooled(db_path) as conn:
         await conn.execute("PRAGMA busy_timeout=5000")
-        if session_id is None:
+        cursor = await conn.execute(
+            f"SELECT id, session_id FROM messages WHERE sent = 0 AND {_IS_STEER_SQL}{scope} "
+            "ORDER BY session_id, created_at, rowid", args)
+        steers = await cursor.fetchall()
+        now = datetime.now().isoformat()
+        for msg_id, sid in steers:
             cursor = await conn.execute(
-                "UPDATE messages SET claimed_at = NULL "
-                "WHERE sent = 0 AND claimed_at IS NOT NULL"
-            )
-        else:
-            cursor = await conn.execute(
-                "UPDATE messages SET claimed_at = NULL "
-                "WHERE session_id = ? AND sent = 0 AND claimed_at IS NOT NULL",
-                (session_id,),
-            )
-        reopened = cursor.rowcount
+                "SELECT COALESCE(MAX(pending_seq), 0) FROM messages WHERE session_id = ?", (sid,))
+            next_seq = (await cursor.fetchone())[0] + 1
+            await conn.execute(
+                "UPDATE messages SET claimed_at = NULL, pending_seq = ?, "
+                "metadata = json_remove(metadata, '$.steer'), updated_at = ? WHERE id = ?",
+                (next_seq, now, msg_id))
+        cursor = await conn.execute(
+            f"UPDATE messages SET claimed_at = NULL "
+            f"WHERE sent = 0 AND claimed_at IS NOT NULL AND {_NOT_STEER_SQL}{scope}", args)
+        reopened = cursor.rowcount + len(steers)
         await conn.commit()
     if reopened:
         logger.info(
             "session_pending.reopen_dangling_claims: reopened %d dangling "
-            "claimed row(s) to pending", reopened,
+            "claimed row(s) to pending (%d steer)", reopened, len(steers),
         )
     return reopened
+
+
+# ---------------------------------------------------------------------------
+# Steer rows (design docs/design/2026-10-24-chat-steer.md D2)
+# ---------------------------------------------------------------------------
+
+async def _report_row(row_id: str) -> None:
+    """Hand a committed change of one row to the transcript feed (other tabs see it
+    now, not at their next resync). The raw UPDATEs here only bump the row's rev
+    through the trigger; the feed is pushed by the messages table."""
+    try:
+        from database import db
+        await db.messages._report(row_id)
+    except Exception:  # noqa: BLE001 — a display aid: the row itself is committed
+        logger.warning("session_pending: transcript feed push failed row=%s", row_id, exc_info=True)
+
+
+async def mark_steer_inflight(session_id: str, message_id: str) -> bool:
+    """Move the send's just-written user row (sent=1, persist-before-slot) into the
+    steer-in-flight phase, BEFORE the steer is written to stdin. False when the row
+    is not a delivered user row of this session (missing, queued, already a steer):
+    the caller then does not steer."""
+    db_path = _get_db_path()
+    now = datetime.now().isoformat()
+
+    async def _do() -> bool:
+        async with _get_seq_lock(session_id):
+            async with _pooled(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    "UPDATE messages SET sent = 0, claimed_at = ?, pending_seq = NULL, "
+                    "metadata = json_set(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, "
+                    "'$.steer', ?), updated_at = ? "
+                    f"WHERE id = ? AND session_id = ? AND role = 'user' "
+                    f"AND (sent IS NULL OR sent = 1) AND {_NOT_STEER_SQL}",
+                    (now, STEER_INFLIGHT, now, message_id, session_id))
+                await conn.commit()
+                return cursor.rowcount == 1
+
+    return await _with_retry(_do)
+
+
+async def confirm_steer(session_id: str, message_id: str, echo_at: str, outcome: str) -> bool:
+    """The CLI read the steer (its echo): the row becomes history at ``echo_at``
+    (``sent = 1``), labelled ``metadata.steered`` = ``during`` (``folded``) or
+    ``after`` (``opened``), and is pushed to the live feed. False, and nothing
+    written or pushed, when the row is not a steer in flight."""
+    label = _STEERED_LABEL.get(outcome)
+    if label is None:
+        raise ValueError(f"confirm_steer: unknown outcome {outcome!r}")
+    db_path = _get_db_path()
+    now = datetime.now().isoformat()
+
+    async def _do() -> bool:
+        async with _get_seq_lock(session_id):
+            async with _pooled(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    "UPDATE messages SET sent = 1, claimed_at = NULL, created_at = ?, "
+                    "metadata = json_set(json_remove(metadata, '$.steer'), '$.steered', ?), "
+                    f"updated_at = ? WHERE id = ? AND session_id = ? AND sent = 0 AND {_IS_STEER_SQL}",
+                    (echo_at, label, now, message_id, session_id))
+                await conn.commit()
+                return cursor.rowcount == 1
+
+    done = await _with_retry(_do)
+    if done:
+        await _report_row(message_id)
+    return done
+
+
+async def release_steer(session_id: str, message_id: str) -> int | None:
+    """The steer was never read (the process went, a Stop, a write failure): the row
+    goes back to the queue with a fresh ``pending_seq``, last in line, and the drain
+    sends it like any queued message (its ``created_at`` becomes the claim time).
+    Returns the seq, or None when the row is not a steer in flight. The caller kicks
+    the drain."""
+    db_path = _get_db_path()
+    now = datetime.now().isoformat()
+
+    async def _do() -> int | None:
+        async with _get_seq_lock(session_id):
+            async with _pooled(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    f"SELECT 1 FROM messages WHERE id = ? AND session_id = ? AND sent = 0 AND {_IS_STEER_SQL}",
+                    (message_id, session_id))
+                if await cursor.fetchone() is None:
+                    return None
+                cursor = await conn.execute(
+                    "SELECT COALESCE(MAX(pending_seq), 0) FROM messages WHERE session_id = ?",
+                    (session_id,))
+                next_seq = (await cursor.fetchone())[0] + 1
+                await conn.execute(
+                    "UPDATE messages SET claimed_at = NULL, pending_seq = ?, "
+                    "metadata = json_remove(metadata, '$.steer'), updated_at = ? WHERE id = ?",
+                    (next_seq, now, message_id))
+                await conn.commit()
+                return next_seq
+
+    return await _with_retry(_do)
