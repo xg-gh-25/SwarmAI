@@ -18,6 +18,10 @@ For a ``pipeline_v1.py`` command:
   session's id right before the call when it is the first simple command
   (``_with_session``, ``_token_binding``) via ``updatedInput``. Any other variable set
   on the call is refused.
+- **session_worktree** (no ownership rules, never denies): an exact first-of-line
+  ``scripts.session_worktree`` call gets this session's id and, from the main agent
+  only, the turn's id (``_session_worktree_rewrite``), which ``land`` stamps into the
+  landing's reflog entry (design docs/design/2026-10-25-turn-result-card.md §3.2).
 - **approval**: the person-approved actions (``AFTER_APPROVAL`` with ``--request``)
   are handled in the ``phase="approved"`` registration, after dangerous_command_gate
   recorded the person's approval for this exact command: the gate takes the run over
@@ -427,6 +431,58 @@ def _with_session(command: str, sid: str) -> "str | None":
 _APPROVED_ACTIONS = frozenset({"run-land", "accept-finding", "discard-snapshot"})
 
 
+# ── session_worktree: hand it the session and the turn (no ownership rules) ──
+# design docs/design/2026-10-25-turn-result-card.md §3.2. Its own strict rule, apart
+# from the pipeline binding (_token_binding accepts a heredoc head): the command's
+# first simple command must be exactly the module call, nothing in front of it (a
+# heredoc head, a cd, a wrapper or an assignment makes something else the first
+# command) and no substitution anywhere. Never denies.
+
+_SW_MODULE = "scripts.session_worktree"
+_SW_VERBS = frozenset({"create", "land", "remove"})
+_SW_BACKEND = frozenset({"$SWARM_BACKEND_BIN", "${SWARM_BACKEND_BIN}"})
+_SW_PYTHON = frozenset({"python", "python3"})
+
+
+def _is_session_worktree_call(tokens: "list[str]") -> bool:
+    if tokens[:1] and tokens[0] in _SW_BACKEND:
+        rest = tokens[1:]
+        if rest[:1] != ["py"]:
+            return False
+        rest = rest[1:]
+    elif tokens[:1] and tokens[0] in _SW_PYTHON:
+        rest = tokens[1:]
+    else:
+        return False
+    return rest[:2] == ["-m", _SW_MODULE] and len(rest) > 2 and rest[2] in _SW_VERBS
+
+
+def _session_worktree_rewrite(command: str, sid: str, turn_id: "str | None",
+                              sub_agent: bool) -> "str | None":
+    """*command* with ``SWARM_APP_SESSION_ID`` (and, for the main agent,
+    ``SWARM_TURN_ID``) put before its session_worktree call, or None. A sub-agent
+    can outlive the turn that started it, so its call never carries a turn id."""
+    from core.app_session_id import valid_turn_id
+    from core.security_hooks import _gate_shell_segments
+    from core.session_router import PREWARM_SESSION_PREFIX
+    if sid.startswith(PREWARM_SESSION_PREFIX) or any(x in command for x in _SUBST):
+        return None
+    if f"{_SESSION_ENV}=" in command:
+        return None              # already handed over, or set by the command itself
+    seps: list[str] = []
+    segs = _gate_shell_segments(command, seps)
+    if not segs or seps[0] != "" or not _is_session_worktree_call(segs[0]):
+        return None
+    body = command.lstrip()
+    prefix = f"{_SESSION_ENV}={shlex.quote(sid)} "
+    if not sub_agent and valid_turn_id(turn_id):
+        prefix += f"{_TURN_ENV}={turn_id} "
+    return command[:len(command) - len(body)] + prefix + body
+
+
+_TURN_ENV = "SWARM_TURN_ID"
+
+
 def _record_approval(run_id: str, request_id: str) -> "str | None":
     """The person approved this command: the daemon records the ``auth`` fact for the
     logged land_request it names (fixing spec C1/C3: no CLI process can write it).
@@ -465,6 +521,21 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         tool_input = input_data.get("tool_input") or {}
         command = tool_input.get("command") or ""
         from core import pipeline_command
+        if phase == "check" and isinstance(command, str) and _SW_MODULE in command \
+                and not pipeline_command.mentions(command):
+            # pure string work, no IO: decided inline
+            try:
+                rewrite = _session_worktree_rewrite(
+                    command, str(session_context.get("sdk_session_id") or ""),
+                    session_context.get("_turn_id"), bool(input_data.get("agent_id")))
+            except Exception:  # noqa: BLE001 — fail-open, never blocks a command
+                logger.warning("run_owner_gate: session_worktree rewrite failed", exc_info=True)
+                rewrite = None
+            if rewrite is None:
+                return {"decision": "approve"}
+            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                           "permissionDecision": "allow",
+                                           "updatedInput": {**tool_input, "command": rewrite}}}
         if not isinstance(command, str) or not (pipeline_command.mentions(command)
                                                 or "/api/pipelines/" in command):
             return {"decision": "approve"}  # cheap path: no IO

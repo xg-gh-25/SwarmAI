@@ -1392,6 +1392,14 @@ class SessionUnit:
         # each new user message should get a fresh recovery attempt
         # if it triggers a different buffer overflow.
         self._retry_count = 0
+        # The turn's id (design 2026-10-25-turn-result-card.md §3.2): run_owner_gate
+        # hands it to a session_worktree land of the main agent, which stamps it into
+        # the landing's reflog entry. A question / permission continuation is the same
+        # turn (it does not come through here) and keeps it.
+        ctx = getattr(self, "_hook_session_context", None)
+        if isinstance(ctx, dict):
+            import uuid
+            ctx["_turn_id"] = uuid.uuid4().hex
         # Clear last turn's spawn timing at the new-turn admission point
         # (same lifecycle as the per-turn fields around it). A warm turn never
         # reaches _spawn, so this reset is what guarantees it relays None — not a
