@@ -316,6 +316,14 @@ export interface UnifiedTab {
     hostedTurn?: { turnId: string; hostId: string; baseLen: number };
     /** the bubble the tab's latest POST send streams into */
     postBubbleId?: string;
+    /** Where the running turn writes after a steer split it (design
+     *  2026-10-25-chat-steer-frontend.md §5/§6): for the turn ``turnId``, a
+     *  handler made for bubble ``host`` writes into ``byHost[host]``. On the turn
+     *  record, not in a handler's closure: the error handler is made by each
+     *  caller with the first bubble's id and has no handler object to ask.
+     *  Cleared where a subscription turn begins (it renders from turn_start); a
+     *  new POST send has a new bubble, so an old entry never matches it. */
+    segmentTarget?: { turnId?: string; byHost: Record<string, string> };
   };
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */

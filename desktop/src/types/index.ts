@@ -1660,6 +1660,17 @@ export interface StreamingStateEntry {
   queuedReason?: 'question' | 'permission' | 'busy';
 }
 
+/** Turn event ``user_steered`` (backend TurnWriter, design chat-steer D4): the CLI
+ *  read a steer here; what follows belongs to the segment ``rowKey``. */
+export interface SteerReadEvent {
+  type: 'user_steered';
+  clientId: string;
+  outcome: 'folded' | 'opened';
+  rowKey: string;
+  segments?: string[];
+  turnId?: string;
+}
+
 /** One steer of a session, written into its running turn, not read yet. */
 export interface SteeringEntry {
   clientId: string;

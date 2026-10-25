@@ -41,6 +41,7 @@ import { streamingReducer, INITIAL_STATE, type StreamingEvent } from './streamin
 export { isActivelyStreaming, isInputBlocked, type StreamingMode, type StreamingState, type StreamingEvent } from './streaming-machine';
 import type {
   Message,
+  SteerReadEvent,
   ContentBlock,
   TextContent,
   ThinkingContent,
@@ -2511,6 +2512,64 @@ export function useChatStreamingLifecycle(
     );
   };
 
+  /** The bubble a handler made for ``host`` writes into: ``host``, or the segment
+   *  a steer opened after it in the running turn (design
+   *  2026-10-25-chat-steer-frontend.md §6). */
+  const segmentTargetOf = (tabId: string | null | undefined, host: string): string => {
+    const seg = tabId ? tabMapRef.current.get(tabId)?._turnHandlers?.segmentTarget : undefined;
+    return seg?.byHost[host] ?? host;
+  };
+
+  /**
+   * The CLI read a steer (turn event ``user_steered``, design
+   * 2026-10-25-chat-steer-frontend.md §5): its bubble is labelled in place with
+   * the row's own field (``metadata.steered``: ``during`` / ``after``), and --
+   * while the turn streams -- the next segment opens right after it: the bubble
+   * ``rowKey`` (= ``{clientId}-asst``, the key its DB rows carry), which the
+   * handler of ``host`` writes into from now on. A steer segment still empty
+   * when the next steer is read is taken out (the DB has no row for it). A
+   * steer bubble the tab does not have yet comes from the snapshot's preview.
+   */
+  const applySteerRead = (tabId: string, ev: SteerReadEvent, host: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    const store = messageStoreRegistry.get(tabId);
+    const cid = ev.clientId;
+    if (!tab || !store || !cid) return;
+    const label = ev.outcome === 'opened' ? 'after' : 'during';
+    const isSteer = (m: Message) => m.role === 'user' && (m.id === cid || m.metadata?.client_id === cid);
+    if (!store.messages.some(isSteer)) {
+      const preview = tab._serverSteering?.find((s) => s.clientId === cid)?.preview ?? '';
+      store.append({ id: cid, role: 'user', content: [{ type: 'text', text: preview }],
+        timestamp: new Date().toISOString(), metadata: { client_id: cid, provisional: true } });
+    }
+    const bubble = store.messages.find(isSteer)!;
+    store.updateById(bubble.id, (m) => ({ ...m, isQueued: undefined, steerWaiting: undefined, queuedReason: undefined,
+      metadata: { ...(m.metadata ?? {}), steered: label } }));
+    tab._queuedLocal?.delete(cid);
+    tab._steerLocal?.delete(cid);
+    if (tab._serverSteering) tab._serverSteering = tab._serverSteering.filter((s) => s.clientId !== cid);
+    if (store.phase !== 'streaming') return;   // a Stop / the turn ended: the label only
+    const handlers = turnHandlersOf(tab);
+    const turnId = (ev as { turnId?: string }).turnId;
+    const prev = handlers.segmentTarget && handlers.segmentTarget.turnId === turnId ? handlers.segmentTarget.byHost : {};
+    const current = prev[host];
+    if (current && current !== host) {
+      const seg = store.messages.find((m) => m.id === current);
+      if (seg && seg.role === 'assistant' && (seg.content?.length ?? 0) === 0) store.remove((m) => m.id === current);
+    }
+    const rowKey = ev.rowKey || `${cid}-asst`;
+    if (!store.messages.some((m) => m.id === rowKey)) {
+      const msgs = store.messages;
+      const i = msgs.findIndex((m) => m.id === bubble.id);
+      const placeholder: Message = { id: rowKey, role: 'assistant', content: [], timestamp: new Date().toISOString(),
+        metadata: { client_id: rowKey } };
+      if (i < 0 || i === msgs.length - 1) store.append(placeholder);
+      else store.insertBefore(msgs[i + 1].id, placeholder);
+    }
+    handlers.segmentTarget = { turnId, byHost: { ...prev, [host]: rowKey } };
+    if (tabId === activeTabIdRef.current) setMessages(store.getSnapshot());
+  };
+
   const wrapPostHandler = (
     tabId: string | null | undefined,
     inner: (event: StreamEvent) => void,
@@ -2533,10 +2592,13 @@ export function useChatStreamingLifecycle(
   };
 
   const createStreamHandler = useCallback(
-    (assistantMessageId: string, tabId?: string, source: 'post' | 'sub' = 'post') => {
+    (hostMessageId: string, tabId?: string, source: 'post' | 'sub' = 'post') => {
       // Capture the tab this handler belongs to. Falls back to active tab
       // for backward compatibility with single-tab usage.
       const capturedTabId = tabId ?? activeTabIdRef.current;
+      // The bubble this handler writes into: the one it was made for, or the
+      // segment a steer opened after it (segmentTargetOf, §6). Read per event.
+      const currentTarget = (): string => segmentTargetOf(capturedTabId, hostMessageId);
       // Evidence (docs/design/2026-10-24-chat-stream-structure.md A0): a repeated
       // start of a block already streaming, absorbed by its block key. Which path
       // delivers it decides whether Track B is needed. Once per block, no content.
@@ -2559,7 +2621,7 @@ export function useChatStreamingLifecycle(
       // the begin sets it right before this handler gets its first event.
       const turnStartOf = (): number => {
         const h = capturedTabId ? tabMapRef.current.get(capturedTabId)?._turnHandlers?.hostedTurn : undefined;
-        return h && h.hostId === assistantMessageId ? h.baseLen : 0;
+        return h && h.hostId === currentTarget() ? h.baseLen : 0;
       };
       // Capture stream generation at creation time — events from a stale
       // generation (e.g. old response arriving after user sent a new message)
@@ -2605,11 +2667,13 @@ export function useChatStreamingLifecycle(
       if (capturedTabId) {
         const streamStore = messageStoreRegistry.get(capturedTabId);
         if (streamStore) {
-          streamStore.startStreaming(assistantMessageId);
+          streamStore.startStreaming(hostMessageId);
         }
       }
 
       const inner = (event: StreamEvent) => {
+        // the bubble this event writes into (after a steer: its segment)
+        const assistantMessageId = currentTarget();
         // ╔══════════════════════════════════════════════════════════════╗
         // ║ CRITICAL — watchdog liveness reset. Keep this FIRST.           ║
         // ╚══════════════════════════════════════════════════════════════╝
@@ -2860,6 +2924,12 @@ export function useChatStreamingLifecycle(
         // block below, so it never counts as stream data (that flag gates the
         // connection-phase silent retry). Any later event other than liveness
         // pings clears it, so a phase cannot outlive the wait it describes.
+        // The CLI read a steer here (design 2026-10-25-chat-steer-frontend.md §5):
+        // label it, and what follows goes into the segment it opens.
+        if (event.type === 'user_steered') {
+          if (capturedTabId) applySteerRead(capturedTabId, event as unknown as SteerReadEvent, hostMessageId);
+          return;
+        }
         if (event.type === 'turn_phase') {
           if (tabState && capturedTabId && (event.phase === 'preparing' || event.phase === 'starting' || event.phase === 'waiting')) {
             tabState.turnPhase = { phase: event.phase, since: Date.now() };
@@ -3893,19 +3963,21 @@ export function useChatStreamingLifecycle(
       };
       // A POST send's handler goes through the turn router; a subscription
       // turn's handler is called by the router directly.
-      return source === 'post' ? wrapPostHandler(capturedTabId, inner, assistantMessageId) : inner;
+      return source === 'post' ? wrapPostHandler(capturedTabId, inner, hostMessageId) : inner;
     },
     [queryClient, setLocalSending, incrementStreamGen, updateTabStatus, applyContextUsage], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   const createErrorHandlerInner = useCallback(
-    (assistantMessageId: string, tabId?: string) => {
+    (hostMessageId: string, tabId?: string) => {
       const capturedTabId = tabId ?? activeTabIdRef.current;
       // Capture stream generation — stale errors from a previous stream
       // must not kill the spinner or invalidate handlers for the current stream.
       const capturedStreamGen = streamGenRef.current;
 
       return (error: Error) => {
+        // the bubble the turn writes into now (after a steer: its segment, §6)
+        const assistantMessageId = segmentTargetOf(capturedTabId, hostMessageId);
         // Generation guard: discard errors from a previous stream.
         if (capturedTabId) {
           const genCheckTab = tabMapRef.current.get(capturedTabId);
@@ -4577,6 +4649,9 @@ export function useChatStreamingLifecycle(
     const handlers = turnHandlersOf(tab);
     const route = turnStateOf(tab);
     const postBubble = route.postTurnId === ev.turnId ? handlers.postBubbleId : undefined;
+    // rendering starts at the turn's start: a replay re-delivers its user_steered
+    // events, which rebuild the split (§8); another turn never inherits it
+    handlers.segmentTarget = undefined;
     // ONE bubble per run of assistant turns, as the reload shows it (the history
     // endpoint merges consecutive assistant rows into one message; live == reload,
     // liveReload.property.test.ts). A turn that does not follow a user message — a
