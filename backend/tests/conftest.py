@@ -81,6 +81,7 @@ import signal
 import tempfile
 
 import pytest
+import pytest_asyncio
 
 
 
@@ -356,6 +357,53 @@ def pytest_configure(config):
 
 
 # ---------------------------------------------------------------------------
+# A function-loop test's own DB pools are closed on its own loop
+# ---------------------------------------------------------------------------
+
+_SETTLE_FIXTURE = "_settle_test_loop"
+
+
+def _runs_on_its_own_loop(item) -> bool:
+    """An async test on a per-test (function-scoped) loop: the loops pytest-asyncio
+    closes right after the test. Session/module-loop tests keep their loop, and
+    reset_database closes the session loop's pools on that loop."""
+    import inspect
+    fn = getattr(item, "function", None)
+    if fn is None or not inspect.iscoroutinefunction(fn):
+        return False
+    marker = item.get_closest_marker("asyncio")
+    scope = (marker.kwargs.get("loop_scope") or marker.kwargs.get("scope")) if marker else None
+    return (scope or "function") == "function"
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def _settle_test_loop():
+    """End what the test left running, then close this loop's DB pools, while the
+    loop still runs (tests/test_conftest_test_loop_teardown.py).
+
+    Without it, a task left by the test can have a read in flight when pytest-asyncio
+    closes the loop: aiosqlite's worker then cannot hand the result back, dies, and
+    the next close of that connection (reset_database, on the session loop) waits
+    forever. Leftover tasks are cancelled, as closing the loop would do anyway, in
+    rounds: a task can start another as it ends. Closing a pool queues ``close``
+    behind any read still on its worker, so the read finishes on a live loop.
+    Added by pytest_collection_modifyitems to function-loop async tests only.
+    """
+    yield
+    import asyncio as _asyncio
+    from database.sqlite import close_loop_pools
+    current = _asyncio.current_task()
+    for _ in range(10):
+        pending = [t for t in _asyncio.all_tasks() if t is not current and not t.done()]
+        if not pending:
+            break
+        for t in pending:
+            t.cancel()
+        await _asyncio.wait(pending, timeout=2)
+    await close_loop_pools()
+
+
+# ---------------------------------------------------------------------------
 # Auto-mark tests for tiered execution
 # ---------------------------------------------------------------------------
 
@@ -383,6 +431,11 @@ def pytest_collection_modifyitems(config, items):
     _SLOW_PATTERNS = {"stress", "e2e"}
 
     for item in items:
+        if _runs_on_its_own_loop(item) and _SETTLE_FIXTURE not in item.fixturenames:
+            # Appended, not inserted first: set up ahead of the session loop, it made
+            # the next test's reset_database run on a closed loop (seen).
+            item.fixturenames.append(_SETTLE_FIXTURE)
+
         module = item.module
         if module is None:
             continue

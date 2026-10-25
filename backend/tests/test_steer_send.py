@@ -18,7 +18,6 @@ from typing import Any
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
-import pytest_asyncio
 
 from core import session_events, session_pending, session_state
 from core.session_router import SessionRouter
@@ -50,15 +49,6 @@ def _switch(monkeypatch):
     async def _skip(self, session_id):
         return None
     monkeypatch.setattr(SessionRouter, "drain_pending", _skip)
-
-
-@pytest_asyncio.fixture(autouse=True, loop_scope="function")
-async def _finish_tasks():
-    yield
-    pend = [t for t in asyncio.all_tasks() if not t.done() and t is not asyncio.current_task()
-            and any(k in getattr(t.get_coro(), "__qualname__", "") for k in ("publish", "_confirm_steer", "_release_steer_row"))]
-    if pend:
-        await asyncio.wait(pend, timeout=2)
 
 
 def _router() -> SessionRouter:
