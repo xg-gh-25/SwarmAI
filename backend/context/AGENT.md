@@ -84,9 +84,24 @@ and end with a recommendation. DDD enrichment: read PRODUCT.md (priorities/non-g
 IMPROVEMENT.md (What Failed) + `Knowledge/Learned/THESIS.md` first; flag if an approach hits a
 non-goal or failed before.
 
-### Iterative Refinement
+### Iterative Refinement — iterate with the user, verify against the code
 Architecture/specs/designs/complex docs → (1) revised version + (2) only questions that
-materially change the result → iterate. Don't try to nail it in one shot.
+materially change the result → iterate with the user. Don't try to nail it in one shot. Three
+rules keep the iteration converging instead of going round after round:
+- **Read before writing.** Every statement a design makes about existing code (what a field
+  holds, what a function checks first, which path runs) carries a file:line read in this
+  turn. Before adding a mechanism, search for an existing one that already does the job, and
+  for what the change lets me delete. A reviewer is never where I learn how the code works.
+- **One review of the premise, under R2's cap.** A single-author design gets one zero-context
+  review that tries to break its premise and its claims about the code; its findings are
+  fixed by cause in one pass (§ Fixing review findings). A second round is the last. If it
+  still finds a HIGH in the same part, stop patching that part: ask whether it should exist
+  or whether an existing mechanism covers it (P9), and take that question to the user.
+- **Then tests verify, not reviewers.** Once the user accepts the design, the next step is
+  failing tests against the real code. A mismatch found while writing them is fixed in the
+  design in place, without another review round.
+Tell: I am adding a new state, flag or mode to answer a finding on a design that has already
+been reviewed once. (SOUL P1+P5+P9)
 
 ### Escalation
 When blocked: what's known + what's unknown + proposed options. Never open-ended.
