@@ -542,17 +542,45 @@ def lint_sizes(repo_root: Path | None = None,
     return findings
 
 
+def metadata_targets(root: Path) -> list[Path]:
+    """The SKILL.md files of the skills under *root* that ship.
+
+    The same set the package carries (``scripts/shipped_skills.py`` of the backend
+    whose ``core`` this linter imports, loaded by path like the PyInstaller spec loads
+    it): tracked skills plus untracked ones not yet committed, but never a skill the
+    checkout's ``.gitignore`` excludes (a user's own local skills). Linting those made
+    a local run red on files CI never sees and no installer carries. Raises
+    ``RuntimeError`` when git cannot list the files.
+    """
+    import importlib.util
+
+    import core
+
+    spec = importlib.util.spec_from_file_location(
+        "_lint_shipped_skills",
+        Path(core.__file__).resolve().parent.parent / "scripts" / "shipped_skills.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        names = module.shipped_skill_names(root)
+    except Exception as exc:  # git failed inside a work tree: no scope, no verdict
+        raise RuntimeError(f"cannot list the shipped skills under {root}: {exc}") from exc
+    return [md for md in sorted(root.glob("s_*/SKILL.md")) if md.parent.name in names]
+
+
 def main() -> int:
     all_errors: list[str] = []
 
     # Pass 1 — metadata, one SKILL.md per skill.
     #
-    # This pass globs the FILESYSTEM while pass 2 enumerates via GIT, so the two
-    # deliberately disagree about what "the corpus" is. An untracked skill is
-    # metadata-linted (it must still load at runtime) but never body-linted, which
-    # is correct: the body rule exists because the corpus is PUBLISHED, and a file
-    # git does not track is never published. Stated here because a silent
-    # disagreement between two passes over one tree otherwise reads as a bug.
+    # This pass covers the skills that SHIP (metadata_targets: the package's own
+    # list) while pass 2 enumerates TRACKED files, so the two deliberately differ on
+    # one case: an untracked, not-ignored skill is metadata-linted (it ships in a
+    # local build and must load at runtime) but never body-linted, which is correct:
+    # the body rule exists because the corpus is PUBLISHED, and a file git does not
+    # track is never published. A gitignored local skill is in neither pass, because
+    # no package carries it. Stated here because a silent disagreement between two
+    # passes over one tree otherwise reads as a bug.
     meta_count = 0
     scoped = False
     for skill_dir in SKILL_DIRS:
@@ -560,7 +588,13 @@ def main() -> int:
         if not root.exists():
             continue  # nothing in scope — a consumer need not carry a corpus
         scoped = True
-        for skill_md in sorted(root.glob("s_*/SKILL.md")):
+        try:
+            targets = metadata_targets(root)
+        except RuntimeError as e:
+            print(f"\nskill lint could not run: {e}")
+            print("  Blocking rather than reporting a clean corpus it never read.")
+            return 1
+        for skill_md in targets:
             meta_count += 1
             all_errors.extend(lint_skill(skill_md))
     if scoped and meta_count == 0:
