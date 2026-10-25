@@ -17,6 +17,12 @@
  *      carry live mtime + entryCount (run_a607f2b0, Approach A).
  *
  * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
+ *
+ * Brain map (2026-10-25): the Gallery opens with a Hub map (BrainHubMap: every
+ * brain feeding the one Run Conductor), and a brain opens on its Map view
+ * (BrainMapView: the DDD flower, Project Agent, Conductor, Reflect, Eval, plus a
+ * Needs-you / Project Agent / Runs / Reflect / Eval panel). `defaultView` picks the
+ * first detail view (default 'map').
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -34,6 +40,8 @@ import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
+import { BrainMapView } from './BrainMapView';
+import { BrainHubMap } from './BrainHubMap';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -91,7 +99,7 @@ export function hunkSummary(diffText: string): {
 type Mode = 'gallery' | 'detail';
 /** The 4 true-peer detail views (item 5). overview/browse were the old inner
  *  sub-tabs; review/distribute were promoted DOWN from false top-level peers. */
-type DetailView = 'overview' | 'browse' | 'review' | 'distribute';
+type DetailView = 'map' | 'overview' | 'browse' | 'review' | 'distribute';
 
 /** `onRequestClose` — the host overlay's `ctx.close` (overlaySurfaces passes it).
  *  Approach A (run_a607f2b0): opening a DDD doc closes THIS overlay first, then
@@ -102,12 +110,12 @@ type DetailView = 'overview' | 'browse' | 'review' | 'distribute';
  *  a chat prompt (the Distribute HITL run trigger). OPTIONAL: without it, Distribute
  *  falls back to clipboard-copy (older webview / non-overlay mount). */
 export function BrainHub(
-  { onRequestClose, onDispatch }:
-  { onRequestClose?: () => void; onDispatch?: (msg: string) => boolean } = {},
+  { onRequestClose, onDispatch, defaultView = 'map' }:
+  { onRequestClose?: () => void; onDispatch?: (msg: string) => boolean; defaultView?: DetailView } = {},
 ) {
   const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
-  const [detailView, setDetailView] = useState<DetailView>('overview');
+  const [detailView, setDetailView] = useState<DetailView>(defaultView);
 
   // Cached gallery list (run_cfb460ac): re-opening the overlay within the 30s window
   // is instant instead of paying the ~4s aggregate scan again. `refetch` powers Retry.
@@ -121,11 +129,11 @@ export function BrainHub(
   // (useBrainsWithPinned above); a brain's detail is fetched lazily only when opened.
 
   // Enter the detail shell on a specific brain, at a specific view (default Overview).
-  const openBrain = useCallback((name: string, view: DetailView = 'overview') => {
+  const openBrain = useCallback((name: string, view: DetailView = defaultView) => {
     setSelected(name);
     setDetailView(view);
     setMode('detail');
-  }, []);
+  }, [defaultView]);
   const backToGallery = useCallback(() => { setMode('gallery'); }, []);
 
   // Deep-link: `swarm:show-brain-hub` MAY carry `detail.brain` to open a specific
@@ -241,6 +249,7 @@ function BrainDetailShell(
 
       {/* 4 true-peer sub-tabs */}
       <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-small" data-testid="brainhub-detail-nav">
+        <TabBtn active={detailView === 'map'} onClick={() => onSelectView('map')} testid="brainhub-tab-map">Map</TabBtn>
         <TabBtn active={detailView === 'overview'} onClick={() => onSelectView('overview')} testid="brainhub-tab-overview">Overview</TabBtn>
         <TabBtn active={detailView === 'browse'} onClick={() => onSelectView('browse')} testid="brainhub-tab-browse">Browse</TabBtn>
         <TabBtn active={detailView === 'review'} onClick={() => onSelectView('review')} testid="brainhub-tab-review">
@@ -256,6 +265,9 @@ function BrainDetailShell(
       <BrainSearchRow name={name} onOpenFile={shellOpenFile} />
 
       <div className="flex-1 overflow-auto">
+        {detailView === 'map' && (
+          <BrainMapView name={name} onGoTo={onSelectView} onDispatch={onDispatch} />
+        )}
         {detailView === 'overview' && (
           <BrainView
             name={name}
@@ -423,6 +435,10 @@ function Gallery(
 
   return (
     <div className="p-4" data-testid="brainhub-gallery">
+      <div className="mb-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2">
+        <div className="px-1 text-small font-semibold">Your Brains</div>
+        <BrainHubMap brains={ordered} selfName={selfName} onOpen={onOpen} />
+      </div>
       <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }} data-testid="brainhub-card-wall">
         {ordered.map((b) => (
           <CompactBrain key={b.name} b={b} isSelf={b.name === selfName} onOpen={onOpen} />
