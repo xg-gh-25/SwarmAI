@@ -2647,10 +2647,11 @@ class SessionUnit:
             await self._crash_to_cold_async(clear_identity=False)
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
-        # Also respawn if IDLE but client is gone (CLI exited after
-        # error_max_turns — state stayed IDLE for hooks/slots, but
-        # process is dead). Transition to COLD first so _ensure_spawned
-        # works correctly.
+        # Also respawn if IDLE but the client is gone (a teardown that left the
+        # unit IDLE). Transition to COLD first so _ensure_spawned works
+        # correctly. (error_max_turns no longer gets here: the CLI does not exit
+        # after it, so that branch keeps the client and the poison guard above
+        # recycles it.)
         _reader = getattr(self, "_stream_reader", None)
         if self.state == SessionState.IDLE and _reader is not None and _reader.dead:
             # The CLI's stream failed or ended between turns: the subprocess is gone.

@@ -2462,13 +2462,15 @@ class StreamingOrchestrator:
                     # user can send the next message to continue work.
                     self._parent._transition(SessionState.IDLE)
                     self._parent.last_used = awake_time()
-                    # CLI exited after error_max_turns (exit code 1).
-                    # Clear process references so next send() knows to
-                    # respawn (instead of writing to dead pipe → crash →
-                    # retry). Keep _sdk_session_id intact so respawn uses
-                    # --resume and preserves conversation context.
-                    self._parent._client = None
-                    self._parent._wrapper = None
+                    # The CLI does NOT exit after error_max_turns: it reports
+                    # idle and keeps reading stdin (measured 2026-10-25, design
+                    # chat-steer §5 E13c/E14). Keep _client / _wrapper so the
+                    # process stays owned (pid, RSS checks, kill). This branch
+                    # leaves _last_turn_clean False, so the next send() recycles
+                    # it through the poison guard (_crash_to_cold_async →
+                    # _force_kill) and respawns with --resume. Clearing the
+                    # references here used to leak the live CLI until the
+                    # daemon restarted: nothing could reach its pid any more.
                     # Still emit usage/metadata for this completed segment
                     self._parent._lifecycle_response_count += 1
                     usage = getattr(message, "usage", None) or {}

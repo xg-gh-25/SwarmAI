@@ -2492,7 +2492,8 @@ class PromptBuilder:
         # default of 100 turns. Pipeline runs routinely hit 100+ turns
         # (8 stages × 12-15 turns/stage). At turn 101, CLI emits
         # ResultMessage(is_error=True, subtype="error_max_turns") and
-        # exits — causing "Interrupted" in the UI mid-pipeline.
+        # stops the turn — causing "Interrupted" in the UI mid-pipeline. (The
+        # CLI then waits for the next message; it does not exit.)
         #
         # FIX: Explicit DESKTOP_MAX_TURNS (500) for desktop, CHANNEL_MAX_TURNS
         # (100) for channels. Both sourced from session_healing so the CLI limit
