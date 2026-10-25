@@ -4,8 +4,10 @@
  * Source: the trailing ```next-steps block of the final answer (STEERING #7
  * format), lifted out by `deriveTurnView` (pages/chat/turnView.ts) so the raw
  * block is never rendered. Each chip has two actions:
- *   - click the text → put it in the input box (the user can edit, then send)
- *   - click ↑        → send it now
+ *   - click the text → ADD it to the input box after what is already there (a
+ *                      blank line between), so several chips can be picked and
+ *                      edited together before one send
+ *   - click ↑        → send that one step now
  * Both go through the existing inject-chat-input contract (injectChatInput.ts),
  * so there is exactly one input/send path. Nothing is ever sent without a click.
  * Keys 1/2/3 fill the matching chip, only when focus is not in an editable field,
@@ -50,7 +52,7 @@ export function NextSteps({ steps }: NextStepsProps) {
       const i = ['1', '2', '3'].indexOf(e.key);
       if (i < 0 || i >= steps.length) return;
       e.preventDefault();
-      dispatchInjectChatInput({ text: steps[i], focus: true, autoSend: false });
+      dispatchInjectChatInput({ text: steps[i], focus: true, autoSend: false, append: true });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -71,7 +73,7 @@ export function NextSteps({ steps }: NextStepsProps) {
             <button
               type="button"
               data-testid="next-step-fill"
-              onClick={() => dispatchInjectChatInput({ text: step, focus: true, autoSend: false })}
+              onClick={() => dispatchInjectChatInput({ text: step, focus: true, autoSend: false, append: true })}
               title={`${step}\n${tf(t, 'chat.nextSteps.fill', 'Add to input (shortcut {{key}})', { key: i + 1 })}`}
               className="pl-3.5 pr-1.5 py-1.5 text-[13.5px] text-[var(--color-text-secondary)] group-hover/chip:text-[var(--color-text)] text-left whitespace-normal break-words rounded-l-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/50"
             >
