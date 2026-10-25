@@ -16,7 +16,8 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { BrainSummary, SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
-import { SECTION_ORDER, brainSignal, hubNeeds, hubSummary, type BrainSignalTone } from './brainMapModel';
+import { SECTION_ORDER, brainSignal, hubNeeds, hubSummary, type BrainSignalTone, type HubNeed } from './brainMapModel';
+import { openOverlayAt } from '../../utils/overlayTarget';
 
 /** "5m" / "3h" / "2d" since an ISO time; '' when unparseable. */
 function waited(iso: string, now = Date.now()): string {
@@ -116,13 +117,21 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
   }, [brains, analytics, filter, selfName]);
 
   const openNewBrain = () => window.dispatchEvent(new CustomEvent('swarm:show-new-brain'));
+  /** Each Need-you item opens where it is handled: a Run on its Pipelines drawer, a
+   *  proposal in the Brain's Reflect tab, a draft in its Project Agent tab, the rest
+   *  (escalations, failing jobs, Runs the analytics did not list) in Need You. */
+  const goNeed = (n: HubNeed) => {
+    if (n.kind === 'run') openOverlayAt('pipeline', n.id);
+    else if (n.kind === 'proposals') onOpen(n.brain, { view: 'review' });
+    else if (n.kind === 'agent') onOpen(n.brain, { view: 'map', panel: 'agent' });
+    else window.dispatchEvent(new CustomEvent('swarm:show-needs-you'));
+  };
   const openPipelines = () => window.dispatchEvent(new CustomEvent('swarm:show-pipeline'));
 
   return (
     <div className="p-4" data-testid="brainhub-gallery">
       <div className="flex items-center gap-3">
         <span className="text-heading font-semibold">Brain Hub</span>
-        <span className="text-small text-[var(--color-text-muted)]">What each project knows, how it delivers, what it learned</span>
         <div className="ml-auto flex items-center gap-2 relative">
           <button className="btn-sm btn-secondary" onClick={() => setPicking((v) => !v)} aria-expanded={picking} data-testid="hub-add-knowledge">
             <span className="material-symbols-outlined icon-xs">add</span>Add knowledge
@@ -169,9 +178,8 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
               <span className="flex-1 min-w-0 truncate">{n.text}</span>
               {n.since && <span className="text-meta text-[var(--color-text-muted)] shrink-0">{waited(n.since)}</span>}
               <button className="btn-sm btn-secondary shrink-0" data-testid={`hub-need-go-${n.id}`}
-                onClick={() => onOpen(n.brain, n.kind === 'run' ? { view: 'map', panel: 'need' }
-                  : n.kind === 'agent' ? { view: 'map', panel: 'agent' } : { view: 'review' })}>
-                {n.kind === 'run' ? 'Answer' : n.kind === 'agent' ? 'Open' : 'Review'}
+                onClick={() => goNeed(n)}>
+                {n.kind === 'run' ? 'Answer' : n.kind === 'proposals' ? 'Review' : 'Open'}
               </button>
             </div>
           ))}

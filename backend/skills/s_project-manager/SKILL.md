@@ -175,7 +175,8 @@ leave it out. A 0-asset brain gets `default_profile: research` and no validation
 Landing approval is always `human`.
 
 **After P6 passes** (run with `--record`, so Brain Hub stops showing it as being born),
-open Brain Hub for the person with the `show-brain-hub` UI action, and end with: the
+open this Brain's page for the person with the `show-brain-hub` UI action and
+`brain: <NAME>`, and end with: the
 brain is ready, and the next step is either to look at its map or to describe a first
 change for a Run.
 

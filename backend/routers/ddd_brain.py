@@ -307,28 +307,36 @@ def _relative_time(iso: Optional[str]) -> str:
 
 # ─── Pending proposals (read-only) ───────────────────────────────────────────
 
-def _pending_count(project_name: str) -> int:
-    """Count of items in THIS brain's Need You queue.
+def _pending_by_source(project_name: str) -> dict[str, int]:
+    """THIS brain's Need You items, counted per source (escalation | paused_run |
+    cultivation | job).
 
     Asks the unified AttentionAuthority (per-brain query) — NOT just cultivation.
     Historically this only counted `read_pending_proposals` (cultivation), so a
     brain with an open L2 escalation or a paused-decision run still showed
     "✓ Nothing needs you" — a lying badge (design 2026-08-08 §1 root cause #1).
-    The authority's per-brain query includes escalation + cultivation + paused
-    runs for this brain, and correctly EXCLUDES OS-level governance (brain=None),
-    which does not belong to any single brain.
+    The per-source split lets the Hub say WHAT waits (a Run, a rule proposal, an
+    escalation) instead of calling every item a proposal. Governance (brain=None)
+    is OS-level and excluded.
     """
     try:
         from core.attention_authority import collect
 
-        return len(collect(_workspace_root(), brain=project_name).items)
+        out: dict[str, int] = {}
+        for it in collect(_workspace_root(), brain=project_name).items:
+            out[it.source] = out.get(it.source, 0) + 1
+        return out
     except Exception as e:
-        # Degrade-observable (GC19): still return 0 so the gallery cannot 500
+        # Degrade-observable (GC19): still return {} so the gallery cannot 500
         # (list_brains needs no-500), but LOG the failure type — a silent
-        # `return 0` here rendered a real authority failure as a truthful-looking
-        # "✓ nothing needs you" badge (the lying-badge root cause).
+        # empty result renders a real authority failure as "nothing needs you".
         logger.warning("pending_count failed for %s, defaulting to 0: %s", project_name, e)
-        return 0
+        return {}
+
+
+def _pending_count(project_name: str) -> int:
+    """Count of items in THIS brain's Need You queue (all sources)."""
+    return sum(_pending_by_source(project_name).values())
 
 
 # ─── Section member enumeration (six-section, SSOT-resolved) ─────────────────
@@ -549,7 +557,7 @@ def _brain_health_base(project_dir: Path, present: dict, pending: int, *, sinkin
 
 
 def build_brain_state(
-    project_dir: Path, *, with_noise: bool, pending_override: Optional[int] = None,
+    project_dir: Path, *, with_noise: bool, pending_override: Optional[dict[str, int]] = None,
     parsed: Optional[dict[str, list[EntryMetadata]]] = None,
     run_facts: Optional[dict] = None,
 ) -> dict:
@@ -578,7 +586,8 @@ def build_brain_state(
     # ONCE via collect(ws) and partition per-brain, instead of paying a full-workspace
     # collect(brain=name) scan per project (measured 4.67s × N = the 7s stall). When
     # None (the detail/single-brain path), fall back to the per-brain _pending_count.
-    pending = pending_override if pending_override is not None else _pending_count(name)
+    by_source = pending_override if pending_override is not None else _pending_by_source(name)
+    pending = sum(by_source.values())
     # `parsed` (run_43dc94f6): the detail path parses the ② docs once and passes them
     # here so stats + metrics reuse them (None → self-parse, gallery unchanged).
     stats = _gallery_entry_stats(project_dir, parsed=parsed)  # sinking + typeCounts
@@ -611,6 +620,9 @@ def build_brain_state(
         "projectAgentStatus": project_agent_status(project_dir),
         "health": health,
         "typeCounts": stats["typeCounts"],
+        # health.pending split by source: escalation | paused_run | cultivation | job.
+        # A sibling of health (the gallery's 4-key health contract holds).
+        "pendingBySource": by_source,
         # ddd-changelog entries stamped in the last 30 days. A sibling of health (like
         # typeCounts) so the gallery's 4-key health contract holds; detail health
         # carries the same number as health.recentActivity (one computation).
@@ -867,7 +879,7 @@ def _read_description(project_dir: Path) -> Optional[str]:
     return None
 
 
-def _brain_summary(project_dir: Path, pending_override: Optional[int] = None,
+def _brain_summary(project_dir: Path, pending_override: Optional[dict[str, int]] = None,
                    run_facts: Optional[dict] = None) -> dict:
     """Gallery card data (cheap: build_brain_state with_noise=False).
 
@@ -1032,15 +1044,16 @@ async def list_brains() -> dict:
     #   per brain here. Fail-soft: any error -> every brain pending=0.
     # - runs: each project's last landing + in-progress state from its runs of the
     #   last 30 days (_run_facts, a cached run_index read). Fail-soft -> no facts.
-    async def _pending_leg() -> dict[str, int]:
-        by_brain: dict[str, int] = {}
+    async def _pending_leg() -> dict[str, dict[str, int]]:
+        by_brain: dict[str, dict[str, int]] = {}
         try:
             from core.attention_authority import collect
 
             agg = await executors.run_nav(collect, _workspace_root())
             for it in agg.items:
                 if it.brain:  # governance items have brain=None — excluded (parity with _pending_count)
-                    by_brain[it.brain] = by_brain.get(it.brain, 0) + 1
+                    src = by_brain.setdefault(it.brain, {})
+                    src[it.source] = src.get(it.source, 0) + 1
         except Exception as e:  # never 500 the gallery on an attention-scan hiccup
             logger.warning("attention aggregate failed, brains show pending=0: %s", e)
         return by_brain
@@ -1059,7 +1072,7 @@ async def list_brains() -> dict:
     t_sum = _time.perf_counter()
     results = await asyncio.gather(
         *(
-            executors.run_nav(_brain_summary, d, pending_by_brain.get(d.name, 0),
+            executors.run_nav(_brain_summary, d, pending_by_brain.get(d.name, {}),
                               run_facts.get(d.name, {}))
             for d in dirs
         ),

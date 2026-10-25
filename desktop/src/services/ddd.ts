@@ -92,6 +92,8 @@ export interface BrainSummary {
   /** project-agent.yaml: 'draft' waits for the person to confirm; 'invalid' has
    *  problems; null/absent = no file (or an old daemon). */
   projectAgentStatus?: 'draft' | 'reviewed' | 'invalid' | null;
+  /** health.pending split by source: escalation | paused_run | cultivation | job. */
+  pendingBySource?: Record<string, number>;
   health: BrainHealth;
   /** 7-type histogram for the compact card's 3-layer ontology bar. Rides the
    *  gallery's existing single parse (zero extra glob). OPTIONAL for daemon skew:
@@ -172,6 +174,8 @@ export interface BrainDetail {
    *  from the DDD and reviewed by the person. null = none yet; undefined = an old
    *  daemon that does not send it. `problems` lists unsupported values. */
   projectAgent?: ProjectAgent | null;
+  /** Need You items split by source (same as BrainSummary.pendingBySource). */
+  pendingBySource?: Record<string, number>;
   /** Setup state (same as BrainSummary.setupState): 'setting-up' shows Continue setup. */
   setupState?: 'setting-up' | 'ready' | null;
 }

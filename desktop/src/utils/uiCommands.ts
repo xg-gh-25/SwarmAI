@@ -30,6 +30,7 @@
  */
 import { ALL_SHOW_EVENTS, BACK_TO_CHAT_EVENT } from '../components/layout/useExclusiveOverlay';
 import type { UiCommandResult } from './uiContext';
+import { openOverlayAt } from './overlayTarget';
 
 /** The Canvas commands whose outcome the agent sees next turn (canvas-proprioception
  *  §5). Their result is REPORTED here as an event and RECORDED only by useCanvasHost
@@ -100,8 +101,9 @@ export const UI_COMMAND_TABLE: Record<string, UiCommandEntry> = {
  * below): open-canvas-file forwards `{ path }` to swarm:open-file — a DATA path, not
  * an event/target (the routing is STILL derived from UI_COMMAND_TABLE, never the
  * wire), and the path is filtered downstream by the workspace-scoped
- * /workspace/file/resolve. The security crux (backend can't pick the event/target)
- * is unchanged.
+ * /workspace/file/resolve. show-brain-hub forwards `{ brain }` (a project name,
+ * checked against the project-name rule) so the agent can open the Brain it just
+ * created. The security crux (backend can't pick the event/target) is unchanged.
  */
 const PATH_CARRYING_CMDS = new Set(['open-canvas-file']);
 
@@ -127,6 +129,7 @@ export function dispatchUiCommand(
   path?: unknown,
   originTabId?: string,
   allowAbs?: boolean,
+  brain?: unknown,
 ): boolean {
   if (typeof cmd !== 'string' || !cmd) {
     console.warn('[ui_command] rejected non-string cmd:', cmd);
@@ -205,7 +208,16 @@ export function dispatchUiCommand(
     targetObj.dispatchEvent(new CustomEvent(entry.event, { detail }));
     return true;
   }
+  // show-brain-hub may name ONE Brain to open (a project name, checked again here;
+  // the backend already dropped anything else). It only selects a Brain in the Hub.
+  if (cmd === 'show-brain-hub' && typeof brain === 'string' && BRAIN_NAME_RE.test(brain)) {
+    openOverlayAt('brain-hub', brain);
+    return true;
+  }
   // Pure-nav command: payload-less (a supplied path is ignored by design).
   targetObj.dispatchEvent(new CustomEvent(entry.event));
   return true;
 }
+
+/** A project name (create_project's rule). */
+const BRAIN_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,99}$/;

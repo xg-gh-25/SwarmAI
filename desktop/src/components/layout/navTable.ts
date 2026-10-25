@@ -53,7 +53,7 @@ export const NAV: Record<OverlayId, NavEntry> = {
   // Cognition zone
   context: { zone: 'cognitive', navLabel: 'C&M', subtitle: 'Global Brain', mode: 'BRAIN', width: 'xl' },
   library: { zone: 'cognitive', navLabel: 'Library', subtitle: 'Bookshelf', mode: 'LIBRARY', width: 'xl' },
-  'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'phase-1 · read-only lens', mode: 'BRAIN', width: 'xl' },
+  'brain-hub': { zone: 'cognitive', navLabel: 'Brain Hub', subtitle: 'what each project knows, delivers and learns', mode: 'BRAIN', width: 'xl' },
   'new-brain': { zone: 'cognitive', navLabel: 'New Brain', subtitle: 'Grow a new brain', mode: 'BRAIN', width: 'xl' },
   // Work zone
   todo: { zone: 'work', navLabel: 'ToDo', mode: 'TODO', width: 'xl' },

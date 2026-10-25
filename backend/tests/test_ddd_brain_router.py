@@ -967,14 +967,26 @@ class TestPerfDedupRun9af622ee:
 
         def _counting(name):
             calls["n"] += 1
-            return 3
+            return {"cultivation": 2, "paused_run": 1}
 
-        monkeypatch.setattr(m, "_pending_count", _counting)
+        monkeypatch.setattr(m, "_pending_by_source", _counting)
         state = m.build_brain_state(pd, with_noise=True)
         assert calls["n"] == 1, f"_pending_count called {calls['n']}× on detail open — must be 1 (double-scan)"
         # value still correct in BOTH consumers (health.pending + escalationPending)
         assert state["health"]["pending"] == 3
         assert state["health"]["escalationPending"] == 3
+        assert state["pendingBySource"] == {"cultivation": 2, "paused_run": 1}
+
+    def test_pending_split_by_source_sums_to_pending(self, monkeypatch, tmp_path):
+        """The Hub names what waits (a Run, a proposal, an escalation): the gallery's
+        once-per-request aggregate arrives split by source and health.pending is its sum."""
+        from routers import ddd_brain as m
+        pd = tmp_path / "P"
+        (pd / ".artifacts").mkdir(parents=True)
+        st = m._brain_summary(pd, {"cultivation": 2, "escalation": 1})
+        assert st["pendingBySource"] == {"cultivation": 2, "escalation": 1}
+        assert st["health"]["pending"] == 3
+        assert m._brain_summary(pd, {})["health"]["pending"] == 0
 
     def test_detail_lifecycle_reuses_parsed_count(self, monkeypatch, tmp_path):
         """AC6: on the detail path (_brain_detail passes `parsed`), _lifecycle_stage

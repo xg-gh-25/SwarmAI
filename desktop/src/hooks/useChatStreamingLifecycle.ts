@@ -3011,6 +3011,7 @@ export function useChatStreamingLifecycle(
             _uev.path,
             capturedTabId ?? undefined,
             _uev.allowAbs === true,
+            _uev.brain,
           );
         }
 

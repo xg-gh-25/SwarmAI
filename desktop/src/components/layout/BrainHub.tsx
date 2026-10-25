@@ -44,6 +44,7 @@ import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
+import { Hint } from '../overlay';
 import {
   BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge,
   type BrainTab, type MapPanel,
@@ -52,6 +53,7 @@ import { BrainHubHome, Flower } from './BrainHubHome';
 import { hubSummary } from './brainMapModel';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
+import { takeOverlayTarget } from '../../utils/overlayTarget';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -155,8 +157,12 @@ export function BrainHub(
   // Deep-link: `swarm:show-brain-hub` MAY carry `detail.brain` to open a specific
   // brain's detail view directly. No detail → Gallery, the default.
   useEffect(() => {
+    // the event that mounted us has already fired: a target recorded for it waits here
+    const pending = takeOverlayTarget('brain-hub');
+    if (pending) openBrain(pending);
     const onShow = (e: Event) => {
       const name = (e as CustomEvent<{ brain?: string }>).detail?.brain;
+      takeOverlayTarget('brain-hub');
       if (name) openBrain(name);
     };
     window.addEventListener('swarm:show-brain-hub', onShow);
@@ -202,7 +208,6 @@ export function BrainHub(
       onRequestClose={onRequestClose}
       onDispatch={onDispatch}
       addOpen={addOpen}
-      liveRun={brains?.find((b) => b.name === selected)?.health.liveRun ?? false}
     />
   );
 }
@@ -212,12 +217,12 @@ export function BrainHub(
  *  box at their end, then the active tab's body. Actions live in the tab they belong
  *  to (Add knowledge in Brain (DDD), Start a Run in Project Agent). */
 function BrainDetailShell(
-  { name, brains, selfName, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, liveRun, addOpen }:
+  { name, brains, selfName, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, addOpen }:
   {
     name: string; brains: BrainSummary[] | null; selfName?: string;
     detailView: DetailView; onSelectView: (v: DetailView) => void;
     onSwitchBrain: (n: string) => void; onBack: () => void;
-    onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; liveRun?: boolean;
+    onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
     addOpen?: boolean;
   },
 ) {
@@ -274,8 +279,7 @@ function BrainDetailShell(
         )}
         {detailView === 'needs' && <BrainNeedsView name={name} onGoTo={goTab} />}
         {detailView === 'brain' && (
-          <BrainView name={name} onRequestClose={onRequestClose} onGoToReview={() => onSelectView('reflect')}
-            liveRun={liveRun} onDispatch={onDispatch} addOpen={addOpen} />
+          <BrainView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} addOpen={addOpen} />
         )}
         {detailView === 'agent' && <BrainAgentView name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />}
         {detailView === 'runs' && <BrainRunsView name={name} />}
@@ -454,14 +458,14 @@ function Gallery(
 // What the Brain knows, top to bottom:
 //   Add knowledge — the primary action of this tab (a card that opens in place).
 //   §① Ontology (3-layer×7-type) — the existing DddCard density=full IS the ontology.
-//   §② Knowledge upkeep — proposals→Reflect, liveRun, reclaimable, sinking.
+//   §② Knowledge upkeep — sinking and reclaimable entries.
 //   §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) + [Weekly Report].
 //   Files — the real Projects/<name> file tree + Code Graph.
 
 function BrainView(
-  { name, onRequestClose, onGoToReview, liveRun, onDispatch, addOpen = false }:
-  { name: string; onRequestClose?: () => void; onGoToReview?: () => void;
-    liveRun?: boolean; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; addOpen?: boolean },
+  { name, onRequestClose, onDispatch, addOpen = false }:
+  { name: string; onRequestClose?: () => void;
+    onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; addOpen?: boolean },
 ) {
   const [showWeekly, setShowWeekly] = useState(false);
   const [adding, setAdding] = useState(addOpen);
@@ -511,8 +515,6 @@ function BrainView(
       <BrainOverview
         detail={detail}
         review={review}
-        liveRun={liveRun}
-        onGoToReview={onGoToReview}
         onOpenFile={openFile}
         showWeekly={showWeekly}
         onToggleWeekly={() => setShowWeekly((v) => !v)}
@@ -526,16 +528,14 @@ function BrainView(
 // ── §Overview — fixed order: ① Ontology → ② Need-You → ③ 4 core-doc cards ───────
 
 function BrainOverview(
-  { detail, review, liveRun, onGoToReview, onOpenFile, showWeekly, onToggleWeekly }:
+  { detail, review, onOpenFile, showWeekly, onToggleWeekly }:
   {
-    detail: BrainDetail; review: ReviewData | null; liveRun?: boolean;
-    onGoToReview?: () => void; onOpenFile: (p: string) => void;
+    detail: BrainDetail; review: ReviewData | null; onOpenFile: (p: string) => void;
     showWeekly: boolean; onToggleWeekly: () => void;
   },
 ) {
   const knowledge = detail.sections.find((s) => s.key === 'knowledge');
   const members = knowledge?.members ?? [];
-  const pending = detail.health?.escalationPending ?? 0;
   // Memoize the O(hunks) signal map + weekly model so an unrelated re-render (weekly
   // toggle, hover) doesn't re-scan the whole review (meta-review LOW; matches the
   // useMemo discipline the Gallery already uses for aggregateTypeCounts).
@@ -582,16 +582,11 @@ function BrainOverview(
         )}
       </div>
 
-      {/* §② Need-You — FIXED-position block, never removed. The SINGLE needs-you
-          owner (run_115aa182): besides proposals + liveRun it also surfaces
-          reclaimable + sinking (previously only shown by the §① FullBody needs-you,
-          which is now suppressed via ontologyOnly to kill the duplicate block). */}
-      <NeedYouBlock
-        pending={pending}
-        liveRun={liveRun}
+      {/* §② Knowledge upkeep — sinking and reclaimable entries. What waits on the
+          person (Runs, proposals) lives in the Needs you tab, not here. */}
+      <UpkeepBlock
         reclaimable={detail.health?.noise?.reclaimable ?? 0}
         sinking={detail.health?.sinking ?? 0}
-        onGoToReview={onGoToReview}
       />
 
       {/* §③ 4 core-doc cards + group header with [Weekly Report]. */}
@@ -608,57 +603,26 @@ function BrainOverview(
   );
 }
 
-/** §② the fixed-position Need-You block — the SINGLE needs-you owner for the
- *  Overview (run_115aa182): proposals (interactive → Review) + liveRun +
- *  reclaimable + sinking. reclaimable/sinking moved here from the §① FullBody
- *  needs-you (now suppressed) so they're not lost when the duplicate is removed. */
-function NeedYouBlock(
-  { pending, liveRun, reclaimable = 0, sinking = 0, onGoToReview }:
-  { pending: number; liveRun?: boolean; reclaimable?: number; sinking?: number;
-    onGoToReview?: () => void },
-) {
-  const hasWork = pending > 0 || !!liveRun || reclaimable > 0 || sinking > 0;
+/** §② Knowledge upkeep: entries sinking toward the archive and reclaimable noise. */
+function UpkeepBlock({ reclaimable = 0, sinking = 0 }: { reclaimable?: number; sinking?: number }) {
+  const hasWork = reclaimable > 0 || sinking > 0;
   return (
-    <div
-      data-testid="brainhub-needyou"
-      className={`rounded-lg border px-3 py-2.5 ${hasWork ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)] border-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)]' : 'bg-[var(--color-card)] border-[var(--color-border)]'}`}
-    >
-      <div className={`text-meta uppercase tracking-wide font-semibold mb-1.5 ${hasWork ? 'text-[var(--color-status-warning)]' : 'text-[var(--color-text-faint)]'}`}>
-        {hasWork ? '▲ Needs you' : 'Need you'}
-      </div>
+    <div data-testid="brainhub-upkeep" className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5">
+      <div className="text-small font-semibold mb-1">Knowledge upkeep</div>
       {!hasWork ? (
-        <div data-testid="needyou-empty" className="text-meta text-[var(--color-text-faint)]">Nothing queued.</div>
+        <div data-testid="upkeep-empty" className="text-meta text-[var(--color-text-muted)]">Nothing to tidy. Every entry is in use.</div>
       ) : (
-        <div className="flex flex-col gap-1.5">
-          {pending > 0 && (
-            <button
-              data-testid="needyou-review"
-              onClick={onGoToReview}
-              className="flex items-center gap-2 text-meta text-left rounded-md px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)]"
-            >
-              <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{pending}</span>
-              <span className="text-[var(--color-text-muted)]">proposal{pending === 1 ? '' : 's'} awaiting review</span>
-              <span className="ml-auto flex items-center gap-0.5 text-[var(--color-status-warning)]">
-                Go to Review <span className="material-symbols-outlined icon-xs">arrow_forward</span>
-              </span>
-            </button>
-          )}
-          {liveRun && (
-            <div data-testid="needyou-live-run" className="flex items-center gap-2 text-meta px-2 py-1">
-              <span className="material-symbols-outlined icon-xs text-[var(--color-status-warning)]">pending_actions</span>
-              <span className="text-[var(--color-text-muted)]">a pipeline run in progress</span>
+        <div className="flex flex-col gap-1">
+          {sinking > 0 && (
+            <div data-testid="upkeep-sinking" className="flex items-center gap-2 text-small">
+              <span className="font-semibold text-[var(--color-status-warning)] min-w-[28px]">{sinking}</span>
+              <span className="text-[var(--color-text-muted)]">entr{sinking === 1 ? 'y is' : 'ies are'} sinking: not used for a while, on the way to the archive</span>
             </div>
           )}
           {reclaimable > 0 && (
-            <div data-testid="needyou-reclaimable" className="flex items-center gap-2 text-meta px-2 py-1">
-              <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{reclaimable}</span>
-              <span className="text-[var(--color-text-muted)]">reclaimable (run reclaim)</span>
-            </div>
-          )}
-          {sinking > 0 && (
-            <div data-testid="needyou-sinking" className="flex items-center gap-2 text-meta px-2 py-1">
-              <span className="font-semibold text-[var(--color-status-warning)] min-w-[22px]">{sinking}</span>
-              <span className="text-[var(--color-text-muted)]">entr{sinking === 1 ? 'y' : 'ies'} sinking (decaying)</span>
+            <div data-testid="upkeep-reclaimable" className="flex items-center gap-2 text-small">
+              <span className="font-semibold text-[var(--color-status-warning)] min-w-[28px]">{reclaimable}</span>
+              <span className="text-[var(--color-text-muted)]">can be reclaimed as noise (ask the agent to run reclaim)</span>
             </div>
           )}
         </div>
@@ -965,6 +929,7 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
 
   return (
     <div className="p-4" data-testid="brainhub-review">
+      <div className="mb-3"><Hint>After every Run, Reflect writes what it learned. Facts go straight into the Brain and can be undone here; a change to its rules waits for your OK.</Hint></div>
       {/* diff header — plain language first, git internals folded */}
       <div className="mb-3" data-testid="review-diff-header">
         <div className="flex items-center gap-2 text-body text-[var(--color-text)]">
@@ -1026,28 +991,14 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
         </div>
       )}
 
-      {/* Zone A — auto-cultivated (already committed) */}
-      <ReviewZone
-        testid="review-zone-a" title="Auto-cultivated · already in brain"
-        desc="applied + git-committed — NOT awaiting approval. Reject reverts that hunk."
-        color="var(--color-primary)"
-      >
-        {zoneA.length === 0 ? <ZoneEmpty text="no auto-applied changes since last review" />
-          : zoneA.map((h) => (
-            <HunkCard key={h.signature} hunk={h} busy={busy}
-              onReject={() => onRejectHunk(h)}
-              onOpenFile={() => openHunkFile(h.file)} />
-          ))}
-      </ReviewZone>
-
       {/* Zone C — pending risky proposals (the ONLY true Approve/Reject gate) */}
       <ReviewZone
-        testid="review-zone-c" title="Pending approval · NOT yet in brain"
-        desc="risky proposals in .artifacts/proposals/ — the real gate."
+        testid="review-zone-c" title="Waiting for your OK"
+        desc="Changes to how this Brain judges (its rules). Nothing is written until you approve."
         color="var(--color-status-warning)"
       >
         {data.proposals.length === 0 && riskyHunks.length === 0
-          ? <ZoneEmpty text="no proposals awaiting decision" />
+          ? <ZoneEmpty text="No rule changes waiting for you." />
           : data.proposals.map((p) => (
             <div key={p.id} className="rounded-md border border-dashed border-[color-mix(in_srgb,var(--color-status-warning)_28%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_6%,transparent)] p-2 mb-1.5" data-testid="review-proposal">
               <div className="flex items-center gap-1.5 mb-1 text-meta">
@@ -1067,6 +1018,20 @@ function ReviewView({ name, onRequestClose }: { name: string; onRequestClose?: (
               </div>
               <div className="text-meta text-[var(--color-text-muted)] line-clamp-2">{p.content}</div>
             </div>
+          ))}
+      </ReviewZone>
+
+      {/* Zone A — auto-cultivated (already committed) */}
+      <ReviewZone
+        testid="review-zone-a" title="Written automatically"
+        desc="Facts Reflect added from Runs. They are already in the Brain; Reject undoes one."
+        color="var(--color-primary)"
+      >
+        {zoneA.length === 0 ? <ZoneEmpty text="Nothing written automatically since your last review." />
+          : zoneA.map((h) => (
+            <HunkCard key={h.signature} hunk={h} busy={busy}
+              onReject={() => onRejectHunk(h)}
+              onOpenFile={() => openHunkFile(h.file)} />
           ))}
       </ReviewZone>
     </div>

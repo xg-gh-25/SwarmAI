@@ -31,6 +31,7 @@ import { Stat, SectionLabel, StatusBadge, Hint, type Tone } from '../overlay';
 import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from './BrainMap';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
+import { openOverlayAt } from '../../utils/overlayTarget';
 import {
   sectionCounts, projectRuns, runTone, needsYouItems, brainEval, type RunTone,
 } from './brainMapModel';
@@ -52,7 +53,9 @@ const TONE_LABEL: Record<RunTone, string> = {
 function Mock() {
   return <span className="ml-1.5 text-meta font-semibold text-[var(--color-status-warning)]" data-testid="bm-mock">mock</span>;
 }
-function openPipelines() { window.dispatchEvent(new CustomEvent('swarm:show-pipeline')); }
+/** Pipelines, opened on one Run's drawer (its question, its report). */
+function openRun(id: string) { openOverlayAt('pipeline', id); }
+function openNeedYou() { window.dispatchEvent(new CustomEvent('swarm:show-needs-you')); }
 
 /** Send a prompt to chat now; on success close the Hub so its tab shows. */
 function useSend(onDispatch?: Dispatch, onRequestClose?: () => void) {
@@ -72,7 +75,7 @@ function useBrainData(name: string) {
     queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
   });
   const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
-  const needs = useMemo(() => needsYouItems(runs, review, detail?.projectAgent), [runs, review, detail]);
+  const needs = useMemo(() => needsYouItems(runs, review, detail?.projectAgent, detail?.pendingBySource), [runs, review, detail]);
   const ev = useMemo(() => brainEval(runs, detail, review), [runs, detail, review]);
   return { detail, review, runs, needs, ev };
 }
@@ -187,7 +190,8 @@ function NeedList({ items, onGoTo }: { items: ReturnType<typeof needsYouItems>; 
             <div className="text-small line-clamp-2">{it.title}</div>
             <div className="text-meta text-[var(--color-text-muted)] truncate">{it.detail}</div>
           </div>
-          {it.kind === 'run' && <button className="btn-sm btn-secondary shrink-0" onClick={openPipelines}>Answer</button>}
+          {it.kind === 'run' && <button className="btn-sm btn-secondary shrink-0" onClick={() => openRun(it.id)}>Answer</button>}
+          {it.kind === 'other' && <button className="btn-sm btn-secondary shrink-0" onClick={openNeedYou}>Open</button>}
           {it.kind === 'proposal' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('reflect')}>Review</button>}
           {it.kind === 'agent' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('agent')}>Open</button>}
         </div>
@@ -503,7 +507,7 @@ function RunsPanel({ runs }: { runs: PipelineRunSummary[] }) {
         {runs.map((r) => {
           const t = runTone(r);
           return (
-            <button key={r.id} type="button" onClick={openPipelines} data-testid={`bm-runrow-${r.id}`}
+            <button key={r.id} type="button" onClick={() => openRun(r.id)} data-testid={`bm-runrow-${r.id}`}
               className="w-full text-left py-1.5 border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-hover)]">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-small truncate">{r.requirement || r.id}</span>

@@ -2400,6 +2400,7 @@ class StreamingOrchestrator:
                                 block.input.get("cmd"),
                                 block.input.get("path"),
                                 allow_abs=not _has_chan,
+                                brain=block.input.get("brain"),
                             )
                             if _ui_ev is not None:
                                 yield _ui_ev

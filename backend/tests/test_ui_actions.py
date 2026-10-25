@@ -184,6 +184,17 @@ def test_payload_less_commands_never_carry_a_path():
     assert "path" not in ev
 
 
+def test_show_brain_hub_carries_only_a_valid_brain_name():
+    """show-brain-hub may name the Brain to open (e.g. one just created); the name
+    must be a project name. A path, a traversal or an empty value is dropped, and no
+    other command ever carries it."""
+    assert build_ui_command_event("show-brain-hub", brain="payments-api")["brain"] == "payments-api"
+    for bad in ("../etc", "/abs", "", "a/b", "-lead", "x" * 101, 7, None):
+        ev = build_ui_command_event("show-brain-hub", brain=bad)
+        assert ev is not None and "brain" not in ev, bad
+    assert "brain" not in build_ui_command_event("show-pipeline", brain="payments-api")
+
+
 # ── expected-post-state ack (proprioception feedback arc) ────────────────────
 # The ui_action SUCCESS ack must tell the agent WHAT to verify on its next turn,
 # referencing the SENSE-RENDERED signal (the "## Current UI State" prose lines

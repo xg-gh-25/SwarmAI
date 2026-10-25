@@ -28,7 +28,7 @@
  *
  * @exports PipelineOverlay
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { overlayQuery } from './overlayQueries';
 import api, { classifyLoadError } from '../../services/api';
@@ -43,6 +43,7 @@ import {
 import { fmtTs, WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 import { Stat as StatCard, SectionLabel, StatusBadge, type Tone } from '../overlay';
 import { OverlayError } from './OverlayState';
+import { takeOverlayTarget } from '../../utils/overlayTarget';
 
 export interface PipelineContentProps {
   /** Hand a prompt to a chat tab (land+activate a tab, THEN inject). Returns true
@@ -160,6 +161,12 @@ export function PipelineContent({ close, onContinue }: PipelineContentProps) {
     if (landed) requestAnimationFrame(() => requestAnimationFrame(() => close()));
     return landed;
   }, [onContinue, close]);
+
+  // Opened AT a Run (Brain Hub's "Answer"): show that Run's drawer, with its question.
+  useEffect(() => {
+    const id = takeOverlayTarget('pipeline');
+    if (id) openRun(id);
+  }, [openRun]);
 
   const refreshDetail = useCallback(async (runId: string) => {
     const [a, d] = await Promise.all([pipelinesService.fetchAnalytics(window),

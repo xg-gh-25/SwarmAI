@@ -244,3 +244,27 @@ describe('dispatchUiCommand — Canvas command results (canvas-proprioception §
     expect(results(spy)).toEqual([]);
   });
 });
+
+describe('show-brain-hub with a Brain', () => {
+  it('opens that Brain: the name rides the event and waits for the Hub to mount', async () => {
+    const { takeOverlayTarget } = await import('../overlayTarget');
+    const spy = vi.spyOn(window, 'dispatchEvent');
+    expect(dispatchUiCommand('show-brain-hub', undefined, undefined, false, 'payments-api')).toBe(true);
+    const ev = spy.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.type === 'swarm:show-brain-hub')!;
+    expect(ev.detail).toEqual({ brain: 'payments-api' });
+    expect(takeOverlayTarget('brain-hub')).toBe('payments-api');
+    expect(takeOverlayTarget('brain-hub')).toBeUndefined();   // taken once
+  });
+
+  it('a name that is not a project name is dropped: the Hub opens on its home', async () => {
+    const { takeOverlayTarget } = await import('../overlayTarget');
+    for (const bad of ['../x', '/abs', '', 7, 'a/b']) {
+      const spy = vi.spyOn(window, 'dispatchEvent');
+      dispatchUiCommand('show-brain-hub', undefined, undefined, false, bad);
+      const ev = spy.mock.calls.map((c) => c[0] as CustomEvent).find((e) => e.type === 'swarm:show-brain-hub')!;
+      expect(ev.detail).toBeNull();
+      expect(takeOverlayTarget('brain-hub')).toBeUndefined();
+      spy.mockRestore();
+    }
+  });
+});

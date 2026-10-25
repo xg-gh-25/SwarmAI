@@ -154,6 +154,7 @@ const GALLERY: BrainSummary[] = [
     sectionsPresent: { identity: true, knowledge: true, gates: false, capabilities: false, delivery: true, refresher: true },
     lifecycleStage: 'CREATE',
     health: { sinking: 0, pending: 2, liveRun: false, lastChangeRelative: '5d ago' },
+    pendingBySource: { cultivation: 2 },
   },
 ];
 
@@ -299,6 +300,13 @@ describe('BrainHub — Gallery (AC3)', () => {
     expect(screen.getByTestId('brainhub-breadcrumb').textContent).toContain('AIDLC');
   });
 
+  it('a target recorded before the Hub mounted (agent: show-brain-hub with a Brain) opens that Brain', async () => {
+    const { setOverlayTarget } = await import('../../utils/overlayTarget');
+    setOverlayTarget('brain-hub', 'AIDLC');
+    render(<BrainHub defaultView="brain" />);
+    await waitFor(() => expect(screen.getByTestId('brainhub-switcher').textContent).toContain('AIDLC'));
+  });
+
   it('deep-link with NO detail.brain leaves Gallery as the default view', async () => {
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
@@ -357,7 +365,7 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
   // NOT brainhub-healthstrip (which only appears when health.noise is present).
   function assertFixedOrder() {
     const ov = screen.getByTestId('brainhub-overview');
-    const order = ['brainhub-ontology', 'brainhub-needyou', 'brainhub-coredocs']
+    const order = ['brainhub-ontology', 'brainhub-upkeep', 'brainhub-coredocs']
       .map((id) => Array.from(ov.querySelectorAll('[data-testid]')).findIndex((el) => el.getAttribute('data-testid') === id));
     expect(order[0]).toBeGreaterThanOrEqual(0);   // §① slot present
     expect(order[1]).toBeGreaterThan(order[0]);    // §② after §①
@@ -516,32 +524,23 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
   }
 
   // AC3 — three Need-You states, block ALWAYS present
-  it('AC3: pending>0 → "Go to Review" action switches to the Review tab', async () => {
-    // DETAIL.health.escalationPending = 2
+  it('§② Knowledge upkeep shows sinking and reclaimable entries only (what waits on you is in Needs you)', async () => {
+    // fixture: escalationPending=2, noise.reclaimable=3, sinking=0
     await openOverview();
-    const btn = screen.getByTestId('needyou-review');
-    expect(btn.textContent).toContain('2');
-    fireEvent.click(btn);
-    // parent switches to Review tab for the same brain
-    await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
+    const up = screen.getByTestId('brainhub-upkeep');
+    expect(up.querySelector('[data-testid="upkeep-reclaimable"]')?.textContent).toContain('3');
+    expect(up.querySelector('[data-testid="upkeep-sinking"]')).toBeNull();
+    expect(up.textContent).not.toContain('proposal');
+    expect(screen.queryByTestId('brainhub-needyou')).toBeNull();
   });
 
-  it('AC3: liveRun (from gallery summary, NOT detail.health) surfaces in Need-You', async () => {
-    // SwarmAI gallery summary has liveRun:true; detail.health has NO liveRun (F3)
-    await openOverview();
-    expect(screen.getByTestId('needyou-live-run')).toBeTruthy();
-  });
-
-  it('AC3: no work → Need-You block still present with a muted "Nothing queued" line', async () => {
-    // §② now also surfaces reclaimable + sinking (run_115aa182), so "no work" means
-    // ALL of pending/liveRun/reclaimable/sinking are zero.
+  it('§② nothing to tidy → the upkeep block still holds its place with a muted line', async () => {
     await openOverview(
       { health: { ...DETAIL.health!, escalationPending: 0, sinking: 0, noise: { reclaimable: 0, rate: 0 } } },
       [{ ...GALLERY[0], health: { ...GALLERY[0].health, pending: 0, liveRun: false } }, GALLERY[1]],
     );
-    expect(screen.getByTestId('brainhub-needyou')).toBeTruthy();       // always present
-    expect(screen.getByTestId('needyou-empty')).toBeTruthy();
-    expect(screen.queryByTestId('needyou-review')).toBeNull();
+    expect(screen.getByTestId('brainhub-upkeep')).toBeTruthy();
+    expect(screen.getByTestId('upkeep-empty')).toBeTruthy();
   });
 
   // AC4/AC5 — 4 core-doc cards + signal marking
@@ -1050,28 +1049,12 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     expect(v?.textContent?.toLowerCase()).not.toContain('healthy');
   });
 
-  it('§② NeedYouBlock is the SINGLE needs-you owner: proposals + reclaimable + sinking', async () => {
-    // run_115aa182: needs-you moved from §① FullBody to the dedicated §② block, which
-    // now surfaces reclaimable + sinking too (no longer lost). fixture: escalationPending=2,
-    // noise.reclaimable=3, sinking=0 → review row (2) + reclaimable row (3), no sinking row.
-    await openBrain();
-    const needs = await screen.findByTestId('brainhub-needyou');
-    expect(needs.querySelector('[data-testid="needyou-review"]')).toBeTruthy();       // 2 proposals
-    expect(needs.querySelector('[data-testid="needyou-reclaimable"]')).toBeTruthy();  // 3 reclaimable
-    expect(needs.querySelector('[data-testid="needyou-sinking"]')).toBeNull();        // sinking=0 → no row
-    expect(needs.textContent).toMatch(/3/);
-    expect(needs.textContent?.toLowerCase()).toMatch(/reclaim/);
-  });
-
-  it('NO duplicate needs-you: the Overview has EXACTLY ONE needs-you block (run_115aa182)', async () => {
-    // The user-reported bug: §① healthstrip AND §② both rendered a needs-you block.
-    // Fix = §① is ontologyOnly → only §② (brainhub-needyou) remains.
+  it('NO needs-you block in the Brain (DDD) tab: the ontology strip has none, and §② is upkeep', async () => {
     await openBrain();
     await waitFor(() => expect(screen.getByTestId('brainhub-overview')).toBeTruthy());
-    // The FullBody needs-you (ddd-needs-you) must NOT appear anywhere in the Overview.
     expect(screen.queryAllByTestId('ddd-needs-you')).toHaveLength(0);
-    // Exactly one dedicated needs-you block (§②).
-    expect(screen.queryAllByTestId('brainhub-needyou')).toHaveLength(1);
+    expect(screen.queryAllByTestId('brainhub-needyou')).toHaveLength(0);
+    expect(screen.getAllByTestId('brainhub-upkeep')).toHaveLength(1);
   });
 
   it('trust fact is a DISTRIBUTION (% ≥ high), NOT a collapsed rollup verdict word', async () => {

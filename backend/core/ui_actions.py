@@ -15,7 +15,9 @@ Security model (the whole point of this module — Gate-1 hardened):
    the orchestrator emits nothing. The allowlist is the ONLY authority.
 3. **Non-destructive nav/display only.** Run 2's allowlist is limited to opening
    Canvas, switching a fullscreen nav overlay, and returning to chat — all
-   `window`-target, none carrying a data payload. Explicitly EXCLUDED (would be a
+   `window`-target. Two carry one data field, each per-cmd and validated:
+   open-canvas-file a workspace-relative `path`, show-brain-hub a `brain` project
+   name (it only selects which Brain the Hub opens). Explicitly EXCLUDED (would be a
    real hazard if reachable): `open-terminal-here` (spawns a PTY),
    `inject-chat-input` (could self-drive the chat), `open-file` (its resolver
    allows arbitrary host paths → information disclosure — Gate-1 BLOCK 3).
@@ -38,6 +40,7 @@ SENSE snapshot → the agent verifies the effect took hold.
 from __future__ import annotations
 
 import logging
+import re
 import os
 from typing import Optional, TypedDict
 
@@ -200,9 +203,15 @@ _CANVAS_CMDS = frozenset({"open-canvas", "open-canvas-file", "fold-canvas",
 # paths + `..`. A pure-nav command never gains a path key even if one is supplied.
 _PATH_CARRYING_CMDS = frozenset({"open-canvas-file"})
 
+# show-brain-hub may name ONE Brain to open (e.g. the one just created). The name is a
+# project name (the create_project rule), never a path: it only selects a Brain in
+# the Hub, which itself resolves names against Projects/ with a containment check.
+_BRAIN_CARRYING_CMDS = frozenset({"show-brain-hub"})
+_BRAIN_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9 _.\-]{0,99}$")
+
 
 def build_ui_command_event(
-    cmd: object, path: object = None, allow_abs: bool = False
+    cmd: object, path: object = None, allow_abs: bool = False, brain: object = None,
 ) -> Optional[dict]:
     """Build the ``ui_command`` SSE payload for *cmd*, or None if not allowlisted.
 
@@ -238,6 +247,10 @@ def build_ui_command_event(
         "event": entry["event"],
         "target": entry["target"],
     }
+    # A Brain name rides ONLY show-brain-hub, and only when it is a valid project name;
+    # anything else is dropped (the Hub then opens on its home, never fails).
+    if cmd in _BRAIN_CARRYING_CMDS and isinstance(brain, str) and _BRAIN_NAME_RE.match(brain):
+        ev["brain"] = brain
     # Attach path ONLY for a path-carrying cmd AND only when a non-empty str given.
     if cmd in _PATH_CARRYING_CMDS and isinstance(path, str) and path:
         # SECURITY (Gate-2 CRITICAL, run_c0550cc2 + run_cbaecb86): the AGENT efferent
@@ -360,12 +373,13 @@ def get_ui_mcp_server():
             "canvas-tab-changes), 'open-canvas-file' shows a file — pass "
             "`path` = the workspace-relative file path (e.g. 'Knowledge/Designs/foo.md'); "
             "only files inside the workspace open. A file with unsaved edits is never "
-            "replaced (the open is ignored). Opening or folding while you are still "
+            "replaced (the open is ignored). 'show-brain-hub' takes an optional `brain` = a "
+            "project name to open that Brain's page instead of the Hub home. Opening or folding while you are still "
             "answering applies when the answer finishes. Each outcome shows in the next "
             "'Current UI State'. Non-destructive only — this cannot write, delete, "
             "send, or run anything."
         ),
-        {"cmd": str, "path": str},
+        {"cmd": str, "path": str, "brain": str},
     )
     async def ui_action(args: dict) -> dict:
         cmd = args.get("cmd")

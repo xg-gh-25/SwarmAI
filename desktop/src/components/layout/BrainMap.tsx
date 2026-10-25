@@ -46,7 +46,8 @@ const P = {
   agent: { x: 92, y: 246 }, conductor: { x: 360, y: 500 }, evo: { x: 622, y: 412 },
   need: { x: 70, y: 56 }, eval: { x: 620, y: 56 },
 };
-const SRC = ['Chat tab', 'Slack', 'Schedule'];
+/** request sources; only the chat tab exists today (the others are drawn as mocks) */
+const SRC = [{ name: 'Chat tab', mock: false }, { name: 'Slack', mock: true }, { name: 'Schedule', mock: true }];
 
 function secPos(k: SectionKey) {
   const a = (ANG[k] * Math.PI) / 180;
@@ -175,9 +176,11 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
         {agentLine && <text x={P.agent.x} y={P.agent.y + 24} textAnchor="middle" className={SUB}>{agentLine}</text>}
       </Part>
       {SRC.map((s, i) => (
-        <Part key={s} label={`Source: ${s}`} onClick={() => onOpen('agent')} testid={`bm-src-${i}`}>
-          <rect x={30} y={432 + i * 44} width={82} height={28} rx={14} className={box} />
-          <text x={71} y={450 + i * 44} textAnchor="middle" className="text-small fill-[var(--color-text)]">{s}</text>
+        <Part key={s.name} label={`Source: ${s.name}${s.mock ? ' (mock)' : ''}`} onClick={() => onOpen('agent')} testid={`bm-src-${i}`}>
+          <rect x={30} y={432 + i * 44} width={82} height={28} rx={14} className={box} strokeDasharray={s.mock ? '4 3' : undefined} />
+          <text x={71} y={450 + i * 44} textAnchor="middle"
+            className={`text-small ${s.mock ? 'fill-[var(--color-text-muted)]' : 'fill-[var(--color-text)]'}`}>{s.name}</text>
+          {s.mock && <text x={71} y={472 + i * 44} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]" data-testid="bm-map-mock">mock</text>}
         </Part>
       ))}
 
@@ -189,13 +192,15 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
         <text x={P.conductor.x} y={cTop + 40} textAnchor="middle" className={SUB}>
           Chat tab {lanes.chat} · Local Worker {lanes.worker}/1 · Hive {lanes.hive}/2
         </text>
+        <text x={P.conductor.x} y={cTop + 56} textAnchor="middle" className="text-meta fill-[var(--color-status-warning)]"
+          data-testid="bm-map-mock">Local Worker and Hive are mocks</text>
         {shown.map((r, i) => (
-          <circle key={r.id} cx={P.conductor.x - 99 + i * 18} cy={cTop + 70} r={6.5} className={RUN_FILL[r.tone]} data-testid={`bm-run-${r.id}`}>
+          <circle key={r.id} cx={P.conductor.x - 99 + i * 18} cy={cTop + 80} r={6.5} className={RUN_FILL[r.tone]} data-testid={`bm-run-${r.id}`}>
             <title>{r.title}</title>
           </circle>
         ))}
         {shown.length === 0 && (
-          <text x={P.conductor.x} y={cTop + 74} textAnchor="middle" className={SUB}>no Runs in 30 days</text>
+          <text x={P.conductor.x} y={cTop + 84} textAnchor="middle" className={SUB}>no Runs in 30 days</text>
         )}
       </Part>
 
