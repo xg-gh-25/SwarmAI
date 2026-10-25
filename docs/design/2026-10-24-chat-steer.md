@@ -4,7 +4,7 @@ date: 2026-10-24
 created: 2026-10-24
 updated: 2026-10-25
 project: SwarmAI
-status: draft v1.3（§9 已拍板；P0 实验 E1–E7 与 skeptic 审查已完成，结论已并入 D1–D8；T1–T17 失败测试未写）
+status: draft v1.4（§9 已拍板；P0 实验 E1–E9 与 skeptic 审查已完成，结论已并入 D1–D8；T1–T18 失败测试未写）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -108,6 +108,7 @@ CLI 会把消息当下一轮（X7），由 D6 接住，不需要再判断一次�
 - 先把 user 行转成 **steer 在途**状态（见下），再 `reader.claim(uuid, "steer", target_turn=…)`，
   claim 上记下这条消息的 `client_id`；
 - 消息带 `"priority": "next"`；content 和普通消息一样是 content list，图片照常（E5）；
+  写入前先按下面"消息组装"拼好前缀；
 - **不设** `unit._turn_stream`；
 - 写失败 → `drop_claim`，`release_steer_to_pending`，回执改成 `queued: true`。
 
@@ -134,6 +135,36 @@ CLI 不执行它、历史里也没有它，所以转回排队不会重复。剩�
 还没写完时 daemon 崩溃，这条行会在重启后再发一次。缩小办法：回显后**先** `confirm_steer`，再处理
 后面的帧；`confirm_steer` 不经过 `TurnWriter`（它吞写入错误，`turn_writer.py`），失败时记 ERROR
 并重试一次，不转 pending。
+
+**消息组装。** D1 的判断点在 `_run_conversation_impl` 里 `opener.open` 失败处，这时 content 还是
+用户原话加附件：正常发送要拼的前缀都在后面（`session_router.py` 发送路径），排队的消息则存下
+`terminal_context`，等 drain 发出时再走一遍完整发送路径。steer 不走那段路径，所以要自己拼：
+
+| 前缀 | 正常发送 | steer | 理由 |
+|---|---|---|---|
+| terminal（`_prepend_terminal_to_query`） | 无条件 | **要**，无条件 | 它把终端内容包成 UNTRUSTED-DATA，是 prompt injection 的防线（R32 B 类），不能少；用户中途说"看终端这个报错"时模型也靠它 |
+| UI-SENSE（`_decide_ui_block` + `_prepend_dynamic_context_to_query`） | 只在复用活进程时 | **要**，`warm=True` | turn 进行中进程一定是活的，system prompt 不会重建，query 是唯一通道。`_decide_ui_block` 会更新 `unit._last_ui_block`，这正确：子进程确实收到了 |
+| recall（`_recall_query_block`） | 每个 turn 一次 | **不跑** | recall 是 turn 级的一步：它写 `_recall_query_block`、`_recall_snapshot`、`session_registry.recall_snapshot`、`_pending_recall_snapshot`，正在跑的 turn 已经做过；中途再跑会覆盖这个 turn 的 TSCC 记录。代价：回退成新 turn 的那条也没有 recall。用起来发现缺，再单独设计 |
+| resume（`_prepend_resume_to_query`） | 冷启动续接时 | 不适用 | 进程是活的 |
+
+`unit._delivered_query_prefix`（TSCC 显示的本 turn 前缀）不覆盖，steer 的前缀不进 TSCC（P1 已知
+限制）。为了不让两条路径各拼各的、日后走样，把发送路径里"terminal + UI-SENSE"这两步抽成一个
+函数，发送和 steer 都调它，T18 覆盖。
+
+**hook（E8）。** CLI 在并入的那一刻对 steer 触发 UserPromptSubmit（紧挨在回显之前），hook 返回的
+`additionalContext` 模型收得到。SwarmAI 注册的五个 UserPromptSubmit hook（`runtime_hooks.py`
+`register_runtime_hooks`）逐个看了 turn 中途触发的后果：
+
+| hook | 中途触发 | 结论 |
+|---|---|---|
+| `user_correction_detector` | 记下 steer 里的纠正 | 想要的：中途插话最常见的就是纠正 |
+| `enforcement_injector` | 按 steer 的语言注入每轮提醒 | 正确 |
+| `post_compact_injection` | 一次性注入被 steer 消耗 | 正确：上下文照样注入了 |
+| `high_signal_capture` | 记一条观察 | 正确 |
+| `persist_skill_tracker_reset` | 按"UserPromptSubmit = 新 turn"清空本 turn 已调用的 persist 类 skill | 偏差：steer 之前调过 s_persist、之后手改 MEMORY 时会多报一次 WARN。只是 WARN、不拒绝，P1 接受，记为已知问题 |
+
+回显前 hook 已经跑过，所以纠正检测记下的是并入（或回退成新 turn）的那一条；回显前进程就死了的
+steer（E7）不触发 hook，转回排队后由 drain 正常触发一次，不重复记录。
 
 回执：`accepted` 带 `steer: true`。POST 到这里结束，后续都走订阅流（和排队一样，HTTP 断开
 不影响投递）。claim 的结果由一个服务端任务等待（D6），不挂在 HTTP 请求上。
@@ -208,10 +239,10 @@ turn 正常结束处理。由 T12 覆盖。
 turn 级的身份不变：发布信封里的 `turn_client_id` 仍是原 turn 的 client_id（前端靠它认 turn），
 段的 row_key 只用于行。
 
-**跨段的 tool result（F5）。** `append_to_turn_row` 现在按 row_key 找"本 turn 最新的行"。steer
-之前发出的 tool_use，其 result 可能在回显之后才到（并行 tool call；E2 的子 agent 已证明父级
-result 在回显之前，但并行调用没测），按新 row_key 会落进新段、和 tool_use 分开。改成按
-`tool_use_id` 找含有这个 tool_use 的行（在本 turn 的各段里找），找不到再用最新段。
+**跨段的 tool result（F5，已由实验排除）。** skeptic 担心 steer 之前发出的 tool_use，result 会在回显
+之后才到、落进新段。实测不会：子 agent（E2）和同一条消息里的并行调用（E9）都是整批 result 回来
+之后才回显。所以 `append_to_turn_row` 不改。只加一个不变量检查：tool result 对应的 tool_use 在
+更早的段里时记 ERROR（观察 CLI 行为是否变了，不做恢复）。
 
 **前端重放（F5）。** `beginSubscriptionTurn` 重放时只清 `metadata.client_id === cid` 的行
 （`useChatStreamingLifecycle.ts`），中途重新订阅的 tab 会把 steer 之后那段显示两次。改成清掉
@@ -332,7 +363,7 @@ Stop 后照常发出。不在 Stop 时撤回已写入 stdin 的消息。
 ### 实验
 
 SDK 0.2.168，CLI 2.1.301，Bedrock，开 replay。脚本 `/tmp/steer_script/exp4.py <e1..e6>`、
-`exp5.py`（E7 写入后杀进程）、`exp6.py <session_id>`（E7 `--resume`），不进仓库。每项跑一次。
+`exp5.py`（E7 写入后杀进程）、`exp6.py <session_id>`（E7 `--resume`）、`exp7.py <e8|par>`（E8、E9），不进仓库。每项跑一次。
 
 | # | 场景 | 结果 | 影响 |
 |---|---|---|---|
@@ -342,6 +373,8 @@ SDK 0.2.168，CLI 2.1.301，Bedrock，开 replay。脚本 `/tmp/steer_script/exp
 | E4 | 后台任务通知触发的 injected turn 里，第一个 tool_use 时写入 | 在 tool result 处正常并入 | D1 允许已接手的 injected turn |
 | E5 | content list 带一张 PNG + 文字 | 在 tool result 处并入，模型认出颜色 | D2 沿用现有 content list |
 | E6 | steer 在最终回复阶段写入（回退），再在 ResultMessage 时写 continuation | 两条按写入顺序各成一个 turn（`init 2` steer，`init 3` continuation），没有合并 | D3：continuation 和 steer 互相等的死锁成立，合并重复这次没出现；两者都由"有 steer claim 时不写 continuation"覆盖 |
+| E8 | 注册一个 UserPromptSubmit hook，第一个 tool_use 时写入 steer；hook 对含 steer 文字的 prompt 返回 additionalContext | hook 对初始消息和 steer 各触发一次；steer 那次在 tool result 之后、回显之前；模型同时照 steer 和 additionalContext 做了（回复 `DONE BANANA MANGO`） | D2 hook 一节：纠正检测等 hook 对 steer 照常生效 |
+| E9 | 同一条消息里并行两个 Bash（3 秒、12 秒），第一个 tool_use 时写入 | 两个 result 都回来之后才回显 | D4：没有跨段 tool result，删掉按 `tool_use_id` 回填 |
 | E7 | 写入 0.5 秒后（回显前）关闭客户端杀进程，再 `--resume` | transcript 只有一条 `queue-operation` 入队记录；`--resume` 后 20 秒无自发活动，模型列出的历史里没有这条消息 | D6/D8：回显前进程没了 → 转 pending 不会重复。只测了一个时间点 |
 
 ### skeptic 审查
@@ -392,10 +425,11 @@ SDK 0.2.168，CLI 2.1.301，Bedrock，开 replay。脚本 `/tmp/steer_script/exp
 | T13 | tool-hang 看门狗中断、进程留着，steer 未回显（F2） | 下一个 idle 以 `not_consumed` 结束 claim；之后的发送不报 `SessionBusyError` |
 | T14 | user 行状态机（F3 + XG 要求）：POST → steer 在途 → 并入 / 开 turn / 转 pending / 启动恢复 | 每一步的 `sent`、`claimed_at`、`pending_seq`、`metadata.steer`、`created_at` 按 D2 表；在途行不被 `claim_pending_batch` 取走、不出现在 `list_pending` / `count_pending`、`cancel_unclaimed` 返回 `claimed`；`reopen_dangling_claims` 把在途行转成排队并分配 seq；转 pending 后 `mark_sent_batch` 能翻它 |
 | T15 | 原 turn 结束到 D6 拿到 turn 的间隙（F4） | `is_busy`、`has_background_work` 为真；RSS 检查 / TTL / eviction 不杀进程；`reader_closed` + `echo_seen` 时不转 pending |
-| T16 | 并入后同一 turn 里出现 AskUserQuestion / 权限 / Stop 回执（F5） | 续写的行用 `{steer_cid}-asst`；steer 之前发出的 tool_use 的 result 落回它所在的行 |
+| T16 | 并入后同一 turn 里出现 AskUserQuestion / 权限 / Stop 回执（F5） | 续写的行用 `{steer_cid}-asst` |
+| T18 | steer 的消息组装 | 有终端上下文时带 UNTRUSTED-DATA 包装的 terminal 块；带 UI-SENSE 块（与上次相同时为 `UI_STATE_UNCHANGED`）；没有 recall 块；`_delivered_query_prefix` 不变；发送路径和 steer 调同一个组装函数 |
 | T17 | 前端：并入后中途重新订阅、重放（F5） | 按 `segments` 清行，steer 之后那段只显示一次 |
 
-T1–T4、T7、T12、T13 用 fake 帧序列驱动 reader（按 X5–X8、E1–E7 的实测顺序），不依赖真实 CLI。
+T1–T4、T7、T12、T13 用 fake 帧序列驱动 reader（按 X5–X8、E1–E9 的实测顺序），不依赖真实 CLI。
 每条测试回退对应改动后必须变红（AGENT R28）。
 
 ## 7. 不做什么
@@ -412,8 +446,8 @@ T1–T4、T7、T12、T13 用 fake 帧序列驱动 reader（按 X5–X8、E1–E7
 
 | 阶段 | 内容 | 上线条件 |
 |---|---|---|
-| P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7），结论在 §5，已改 D1–D8。剩下：T1–T9、T12–T16 先写成失败的测试 | — |
-| P1 | 后端 D1–D6、D8，开关默认关 | T1–T9、T12–T16 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
+| P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7–E9），结论在 §5，已改 D1–D8。剩下：T1–T9、T12–T16、T18 先写成失败的测试 | — |
+| P1 | 后端 D1–D6、D8，开关默认关 | T1–T9、T12–T16、T18 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
 | P2 | 前端 D7；打开开关 | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
 | P3 | 观察一周后删开关 | 日志里 `steer_folded` / `steer_fell_back` / `steer_not_consumed` 计数无异常 |
 
@@ -441,6 +475,9 @@ T1–T4、T7、T12、T13 用 fake 帧序列驱动 reader（按 X5–X8、E1–E7
 ## 修订记录
 
 - 2026-10-24 v1：初稿。依据 X1–X8 实测和现有代码阅读。
+- 2026-10-25 v1.4：D2 补"消息组装"（terminal 和 UI-SENSE 要拼、recall 不跑，抽成共用函数）和 hook 一节
+  （E8：UserPromptSubmit 对 steer 触发；五个 hook 逐个看过，`persist_skill_tracker_reset` 多报 WARN 记为
+  已知问题）；E9：并行调用整批 result 后才并入，D4 删掉按 `tool_use_id` 跨段回填；加 T18。
 - 2026-10-25 v1.3：D7 按用户视角重写成四个状态（Waiting / Read during / Read after / Queued），附
   mock `2026-10-25-chat-steer-ui-mock.html`；气泡从发出到读取不移动；排队带 `queued_reason`；并入的行记
   `metadata.steered`；T10 改写。
