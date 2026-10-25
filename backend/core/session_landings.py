@@ -22,11 +22,14 @@ Public: ``Deadline``, ``read_repo``, ``read_session``, ``TURN_CAP``, ``CANVAS_CA
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
 import time
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 TURN_CAP = 200
 CANVAS_CAP = 2000
@@ -144,7 +147,8 @@ def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str
                 out["landed"].append(land)
     except _OutOfTime:
         out["unknown"] = "timeout"
-    except Exception:  # noqa: BLE001 — a display aid: said, never raised
+    except Exception as exc:  # noqa: BLE001 — a display aid: said, never raised
+        logger.warning("session_landings: %s unreadable: %s", root, exc)
         out["unknown"] = "unreadable"
     return out
 
@@ -177,6 +181,7 @@ def _bound_checkouts() -> list[str]:
         from core.needs_human_review import _bound_worktree_roots
         from core.project_registry import get_swarmws
         roots = [os.path.realpath(p) for p, _r in _bound_worktree_roots(str(get_swarmws()))]
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — no roots: no landings to read
+        logger.warning("session_landings: bound repos unavailable: %s", exc)
         return []
     return sorted({r for r in roots if os.path.isdir(os.path.join(r, ".git"))})
