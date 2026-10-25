@@ -146,45 +146,6 @@ export function middleEllipsis(name: string, max = 28): string {
   return `${stem.slice(0, head)}…${stem.slice(stem.length - (room - head))}${ext}`;
 }
 
-function DeliverableTile({ file }: { file: TurnDeliverable }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const [thumbFailed, setThumbFailed] = useState(false);
-  // A read-only preview (History) shows what was produced but does not act on it.
-  const readOnly = useContext(ReadOnlyContext);
-  const name = baseName(file.path || file.absolutePath);
-  const thumb = IMAGE_EXT.test(name) && !thumbFailed ? resolveImageSrc(file.absolutePath) : undefined;
-  const open = () => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: file.absolutePath } }));
-  const copy = async () => {
-    if (await copyToClipboard(file.absolutePath)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }
-  };
-  const Head = readOnly ? 'div' : 'button';
-  const headProps = readOnly ? {} : { type: 'button' as const, onClick: open };
-  const action = 'btn-sm btn-ghost';
-  return (
-    <li data-testid="deliverable" data-path={file.absolutePath} className="flex items-center gap-2 min-w-0 py-1.5">
-      <Head {...headProps} title={file.absolutePath} className="min-w-0 flex-1 flex items-center gap-2 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
-        {thumb ? (
-          <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-7 h-7 rounded object-cover shrink-0" />
-        ) : (
-          <FileTypeIcon name={name} size="md" muted />
-        )}
-        <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate">{middleEllipsis(name)}</span>
-      </Head>
-      {!readOnly && (
-        <div className="ml-auto shrink-0 flex items-center gap-3">
-          <button type="button" onClick={open} className={action}>{tf(t, 'chat.turn.deliverables.open', 'Open in Canvas')}</button>
-          <button type="button" onClick={copy} className={action}>
-            {copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path')}
-          </button>
-        </div>
-      )}
-    </li>
-  );
-}
 
 type RemoteProduct = Extract<TurnProductContent, { product: 'remote' }>;
 
@@ -194,9 +155,11 @@ function folderOf(abs: string): string {
   return dir.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
 }
 
-/** The output card's tile shell (2026-10-26, Gawan): the turn's main result, so a
- *  bordered card per product, its name a link, the actions right beside it. */
-const CARD_TILE = 'group flex items-center gap-3 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5 transition-colors hover:border-primary/50';
+/** THE product tile (2026-10-26, Gawan), one look in the turn and on the output card:
+ *  a bordered card that hugs its content, one per line; the full name as a link (never
+ *  shortened, it wraps if it must), the folder after it, the actions right beside it. */
+const TILE_LIST = 'flex flex-col items-start gap-1.5';
+const CARD_TILE = 'group flex w-fit max-w-full items-center gap-3 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5 transition-colors hover:border-primary/50';
 
 /** One file the turn produced, on the output card: type icon (or the image itself),
  *  the name as a link that opens it in the Canvas, its folder below; Open in Canvas and
@@ -230,8 +193,8 @@ function DeliverableCardTile({ file }: { file: TurnDeliverable }) {
         )}
         {/* the name, then its folder in grey on the same line; hover: the full path */}
         <span className="min-w-0 flex items-baseline gap-2">
-          <span data-testid="deliverable-name" className={`shrink-0 max-w-[60%] truncate text-[13.5px] font-semibold text-primary ${readOnly ? '' : 'group-hover:underline'}`}>{middleEllipsis(name, 40)}</span>
-          <span data-testid="deliverable-dir" title={file.absolutePath} className="min-w-0 truncate font-mono text-[11.5px] text-[var(--color-text-dim)]">{folderOf(file.absolutePath)}</span>
+          <span data-testid="deliverable-name" className={`break-all text-[13.5px] font-semibold text-primary ${readOnly ? '' : 'group-hover:underline'}`}>{name}</span>
+          <span data-testid="deliverable-dir" title={file.absolutePath} className="min-w-[3ch] shrink-[100] truncate font-mono text-[11.5px] text-[var(--color-text-dim)]">{folderOf(file.absolutePath)}</span>
         </span>
       </Head>
       {!readOnly && (
@@ -257,7 +220,7 @@ function RemoteProductCardTile({ product }: { product: RemoteProduct }) {
         <span aria-hidden="true" className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">send</span>
       </span>
       <span className="min-w-0 flex-1 flex items-baseline gap-2">
-        <span className="shrink-0 max-w-[60%] truncate text-[13.5px] font-semibold text-[var(--color-text)]">{product.action}</span>
+        <span className="break-words text-[13.5px] font-semibold text-[var(--color-text)]">{product.action}</span>
         {product.target && <span className="truncate font-mono text-[11.5px] text-[var(--color-text-dim)]" title={product.target}>{product.target}</span>}
       </span>
       {product.url && !readOnly && (
@@ -269,23 +232,6 @@ function RemoteProductCardTile({ product }: { product: RemoteProduct }) {
   );
 }
 
-/** A remote action the turn did (a Slack post, an email, a ticket, a push): what and
- *  on what; a link only when the backend found one in the tool's own output. */
-function RemoteProductTile({ product }: { product: RemoteProduct }) {
-  const { t } = useTranslation();
-  const readOnly = useContext(ReadOnlyContext);
-  const open = () => { if (product.url) void openExternal(product.url); };
-  return (
-    <li data-testid="remote-product" data-tool={product.tool} className="flex items-center gap-2 min-w-0 py-1.5">
-      <span aria-hidden="true" className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">send</span>
-      <span className="shrink-0 text-[12.5px] text-[var(--color-text)]">{product.action}</span>
-      {product.target && <span className="min-w-0 font-mono text-[12.5px] text-[var(--color-text-secondary)] truncate" title={product.target}>{product.target}</span>}
-      {product.url && !readOnly && (
-        <button type="button" onClick={open} className="ml-auto shrink-0 btn-sm btn-ghost" title={product.url}>{tf(t, 'chat.turn.deliverables.openLink', 'Open link')}</button>
-      )}
-    </li>
-  );
-}
 
 /** A products zone (design 2026-10-26-session-products.md §3.1): one row per file
  *  written (the deliverable look) and per remote action, in the order they happened. */
@@ -297,12 +243,12 @@ export function ProductList({ blocks }: { blocks: TurnProductContent[] }) {
       if (seen.has(b.absolutePath)) continue;
       seen.add(b.absolutePath);
       const file: TurnDeliverable = { path: b.path, absolutePath: b.absolutePath, kind: b.fileKind, operation: 'written' };
-      rows.push(<DeliverableTile key={`f-${b.absolutePath}`} file={file} />);
+      rows.push(<DeliverableCardTile key={`f-${b.absolutePath}`} file={file} />);
     } else {
-      rows.push(<RemoteProductTile key={`r-${b.toolUseId}`} product={b} />);
+      rows.push(<RemoteProductCardTile key={`r-${b.toolUseId}`} product={b} />);
     }
   }
-  return <ul data-testid="product-list" className="divide-y divide-[var(--color-border)]">{rows}</ul>;
+  return <ul data-testid="product-list" className={TILE_LIST}>{rows}</ul>;
 }
 
 /** The turn's remote products (top-level and sub-agent), in order: the output card
@@ -444,7 +390,7 @@ export function OutputCard({ changes, deliverables, summary, remote = [] }: {
             {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
           </div>
           {(deliverables.length > 0 || remote.length > 0) && (
-            <ul className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+            <ul className={TILE_LIST}>
               {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
               {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
             </ul>

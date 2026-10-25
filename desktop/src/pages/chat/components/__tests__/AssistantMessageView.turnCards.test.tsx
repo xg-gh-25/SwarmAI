@@ -170,7 +170,9 @@ describe('turn_deliverables — what the turn produced', () => {
     expect(rows.map((e) => e.getAttribute('data-path')))
       .toEqual(['/ws/docs/report.md', '/ws/out/deck.pptx']);
     expect(rows.every((row) => /\bborder\b/.test(row.className) && /rounded-lg/.test(row.className))).toBe(true);
-    expect(rows[0].parentElement!.className).toContain('grid');
+    // one file per line (2026-10-26, Gawan): a column, never a grid
+    expect(rows[0].parentElement!.className).toContain('flex-col');
+    expect(rows[0].parentElement!.className).not.toContain('grid');
     const name = within(rows[1]).getByTestId('deliverable-name');
     expect(name.textContent).toBe('deck.pptx');
     expect(name.className).toContain('text-primary');
@@ -229,6 +231,14 @@ describe('turn_deliverables — what the turn produced', () => {
     fireEvent.click(tile.firstElementChild!);
     document.removeEventListener(OPEN_FILE_EVENT, on);
     expect(seen).toEqual([]);
+  });
+
+  it('a file name is never shortened on the card', () => {
+    const long = '2026-10-18-quarterly-business-review-final-v3-with-appendix.pptx';
+    renderView([tu('a', 'Bash'), tr('a'), tx('done'), deliv(`out/${long}`)]);
+    const name = screen.getByTestId('deliverable-name');
+    expect(name.textContent).toBe(long);
+    expect(name.className).not.toMatch(/truncate|ellipsis/);
   });
 
   it('keeps the extension when the name is shortened', () => {

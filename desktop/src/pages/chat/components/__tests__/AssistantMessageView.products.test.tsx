@@ -47,6 +47,15 @@ function view(content: ContentBlock[], isStreaming = false) {
 const zones = (root: HTMLElement) => [...root.querySelectorAll('[data-zone]')].map((e) => e.getAttribute('data-zone'));
 
 describe('a product ends the work that made it', () => {
+  it('the in-turn row is the same tile as the ending card (one look)', () => {
+    const blocks = [write('w1', '/u/Desktop/q3.md'), tr('w1'), fileP('w1', '/u/Desktop/q3.md'), tx('Done.'), deliv('/u/Desktop/q3.md')];
+    render(view(blocks, false));
+    const inTurn = screen.getByTestId('zone-products').querySelector('[data-testid="deliverable"]')!;
+    const onCard = screen.getByTestId('output-card').querySelector('[data-testid="deliverable"]')!;
+    expect(inTurn.className).toBe(onCard.className);
+    expect(inTurn.querySelector('[data-testid="deliverable-name"]')!.textContent).toBe('q3.md');
+  });
+
   it('streaming: products zone after its WORKING; the next call opens a new WORKING', () => {
     const blocks = [write('w1', '/u/Desktop/q3.md'), tr('w1'), fileP('w1', '/u/Desktop/q3.md'), bash('b1', 'ls')];
     const { container } = render(view(blocks, true));
