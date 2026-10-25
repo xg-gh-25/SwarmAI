@@ -46,7 +46,7 @@ h1{font-size:18px;margin:0 0 4px}
 <div class="flow"><b>状态流</b>（后端 D2 / D3 / D6 决定；两种读取结果都在同一个 turn 里，前端只投影）：
 <code>POST</code> → <code>Waiting</code>（steer 在途）→ 三选一：
 <code>Read during the turn</code>（folded） · <code>Read after the reply</code>（opened） ·
-<code>Queued</code>（not_consumed / Stop 前未读，release 回排队，又可取消）。
+<code>Queued</code>（读到之前按了 Stop、进程没了或到了 turn 上限：claim 以 reader_closed 结束，转回排队，又可取消）。
 不能 steer 的消息直接 <code>Queued</code>，并写明原因。</div>
 
 <div class="grid">
@@ -103,7 +103,7 @@ h1{font-size:18px;margin:0 0 4px}
 <!-- C: read after the turn -->
 <div class="frame">
   <div class="ft">C · Read after the reply</div>
-  <div class="fq">用户的问题：为什么它没改，最后还是跑完了？</div>
+  <div class="fq">用户的问题：为什么前面那段回复没理我？</div>
   <div class="chat">
     <div class="u"><div class="ub">Summarize the three design options</div></div>
     <div class="a">
@@ -137,7 +137,7 @@ h1{font-size:18px;margin:0 0 4px}
   <div class="ann"><b>设计</b><ul>
     <li>排队的标签写明原因，原因由后端回执给出：<code>queued_reason</code> = <code>question</code> / <code>permission</code> / <code>busy</code>（开关关、channel、中断中等，统一显示 "sends when this turn ends"）。</li>
     <li>问题卡片挂着时，用户最容易把输入框当成回答。标签直接指向上面的问题。</li>
-    <li>A 状态下没被读到的 steer 回到这里（not_consumed / Stop），从此又可以取消。</li>
+    <li>A 状态下没被读到的 steer 回到这里（按了 Stop、进程没了、turn 上限），从此又可以取消。</li>
   </ul></div>
 </div>
 

@@ -4,7 +4,7 @@ date: 2026-10-24
 created: 2026-10-24
 updated: 2026-10-25
 project: SwarmAI
-status: draft v1.7（§9 已拍板；E1–E11 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 改为原 turn 接着读，删掉接管；这一版待复审；失败测试未写）
+status: draft v1.8（§9 已拍板；E1–E11 与四轮 skeptic 审查已完成，结论已并入 D1–D8；D6 改为原 turn 接着读，删掉接管，v1.8 补 max_turns 与 turn carry；E12、E13 未做；失败测试未写）
 related: chat-turn-liveness.md（S1 会话活动、S3 排队只在后端）, 2026-10-24-chat-stream-structure.md（turn 内容怎么到前端）, chat-transcript-single-source.md
 ---
 
@@ -379,15 +379,47 @@ steer 的 claim。
 
 - reader 里有 `kind == "steer"`、还没回显的 claim（取写入顺序最早的那条）；
 - 没有用户 Stop（`_user_stopped_current_turn`、`_stopping`），`_client` 还在；
+- 这个 Result 之后 CLI 不会退出：`subtype != "error_max_turns"`（见下）。
 
 就：`_record_token_usage_bg` 记下这一轮的用量（leak 那里同样这么做），把它的用量和 `duration_ms`
 累加到本 turn 的计数里；不发 `result`；`unit._turn_stream = 那条 steer claim`；
 `response_iter = self._turn_iter()`；`is_first_message = True`；记 `_awaiting_steer = True`；
 `continue`。读到第一帧时清掉 `_awaiting_steer`。
 
-这个判断放在 ResultMessage 分支的最前面：在 API 错误 continuation、空回复的 raise 重试、leak
-continuation 之前（D3"continuation 不和 steer 抢"）。tool-hang 看门狗的中断（T13）设的是
-`_tool_hang_interrupted`，不是用户 Stop，所以中断后 CLI 接着跑 steer（E1）时照样接着读。
+这个判断放在 ResultMessage 分支的最前面，**在 `self.reset_turn_carry()` 之前**
+（`streaming_orchestrator.py` ResultMessage 分支第一行），也在 `error_max_turns` 分支、API 错误
+continuation、空回复的 raise 重试、leak continuation 之前（D3"continuation 不和 steer 抢"）。
+tool-hang 看门狗的中断（T13）设的是 `_tool_hang_interrupted`，不是用户 Stop，所以中断后 CLI 接着跑
+steer（E1）时照样接着读。
+
+**turn carry 不能在两轮之间清（T28）。** `reset_turn_carry()` 把 `self._turn_carry` 换成一个新的空
+dict。正在跑的这次 `_read_formatted_response` 不受影响：它的局部变量（`_tool_names`、
+`_pending_file_changes`、`_background_agents`、`_agent_inputs`、`_pending_stage_watch` 等）在方法入口
+就绑定了旧的 dict，`continue` 之后继续往旧 dict 里记（分支开头的注释"The locals of THIS stream keep
+their (now detached) dicts"）。但 `self._turn_carry` 还有两个读者，它们会拿到新的空 dict：
+
+- steer 那一轮里出现权限 / AskUserQuestion 时，`continue_with_answer` / `continue_with_cmd_permission`
+  会再调一次 `_read_formatted_response`，局部变量从 `self._turn_carry` 重新绑定。steer 那一轮发出的
+  tool_use 记在已脱钩的旧 dict 里，续写的流里它的 result 对不上：被放行的调用丢掉结果、turn 显示
+  成 Stopped。这正是 carry 做成实例字段要修的那个 bug（`__init__` 里 `_turn_carry` 的注释）；
+- Stop 的残留收集（`session_unit.py` 读 `_streaming_orchestrator._turn_carry["pending_file_changes"]`）
+  拿到空 dict，停在 steer 那一轮的 Bash 写了哪些文件不会出现在 Stop 回执里。
+
+carry 是 turn 级的，D6 接着读的两轮是同一个 turn，所以 D6 不清它：判断放在 `reset_turn_carry()` 之前，
+接着读时直接 `continue`，不调 reset。第一轮的 tool_use 在 Result 时都已有 result，留在 carry 里不会被
+误配；后台 Agent（`background_agents`）本来就该跨这两轮保留。D6 不接着读（没有 steer、或 max_turns）
+时照旧 reset。
+
+**`error_max_turns` 不接着读（T27）。** 这个 Result 之后 CLI 退出（`error_max_turns` 分支里把
+`_client`、`_wrapper` 置空），但判断时 `_client` 还没清，前两条条件都满足。如果 D6 接着读，等来的是
+EOF：扣下的 Result 没发，原本正常的 `turn_limit_reached` 收尾变成 end-of-stream 处理（僵尸检测 →
+`--resume` 重试）。所以 max_turns 照现有分支收尾（发 `turn_limit_reached` 和 `result`，转 IDLE），
+steer 不在这里处理：CLI 退出时 reader EOF，steer claim 以 `reader_closed` 结束，
+`echo_seen = False` → `release_steer_to_pending`，drain 发出它、`--resume` 后接着做。对用户来说就是
+"Turn limit reached — send a message to continue"里的那条消息，他已经发了。CLI 在 max_turns 退出前
+会不会先读排着的 `next` 消息没测，补 E13。如果会读（`echo_seen = True`），steer 已在 CLI 的历史里、
+user 行已确认，但没有回复；这时不能转回排队（会发两次），要由 drain 发一条续接消息让 `--resume` 后的
+CLI 回答它。P1 按 E13 的结果定这一支。
 
 **不用改的。** 从头到尾只有一个 SwarmAI turn：unit 一直是 STREAMING，hub claim 一直在原 turn 手里，
 `is_busy`、Stop、TTL、eviction、lifecycle 的 RSS 检查（只看 IDLE 的 unit）、injected sink、drain 都按
@@ -594,6 +626,7 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | # | 场景 | 要确认 |
 |---|---|---|
 | E12 | API 错误的 Result（`is_error`）之后，排着的 `next` 消息会不会被执行 | 决定 T12b 的帧序；不执行时走 D6 的兜底，不会丢、不会重复 |
+| E13 | `max_turns` 设小（如 2），最后一次 tool 时写 steer，到 `error_max_turns` | CLI 退出前会不会回显 steer。不回显：按 D6 走 `reader_closed` → 转回排队；回显：D6 那一支要改成续接（T27） |
 
 代码确认：
 
@@ -636,8 +669,10 @@ claim、重试、来源、行 key、Stop、续写都要重接，每接一处漏�
 | T25 | D6 等 steer 时（回显前）按 Stop（D8） | 转回排队，回收完后发出一次 |
 | T26 | D6 等 steer 时进程崩溃 | steer 转回排队；原 turn 走现有的中途崩溃重试，重发的是第一条消息加续接提示，不是 steer；重试结束后 drain 发出 steer 一次 |
 | T23 | 在途行重复 POST（L3） | 回执 `steer: true`、`queued: false` |
+| T27 | `error_max_turns` 的 Result 时有未回显的 steer claim，随后 EOF（D6） | 不接着读；照常发 `turn_limit_reached` 和 `result`、转 IDLE，不进 end-of-stream 重试；steer 以 `reader_closed` 结束、转回排队，drain 发出一次。回显一支按 E13 补 |
+| T28 | D6 接着读后，steer 那一轮里出现权限请求，放行后在续写的流里收到 tool result；以及在 steer 那一轮里按 Stop（D6 carry） | 续写流里该 tool_use 的 result 正常配对（工具名、父级都在），turn 不显示 Stopped；Stop 回执里有 steer 那一轮 Bash 写的文件；第一个 Result 处没有调用 `reset_turn_carry` |
 
-T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T26 用 fake 帧序列驱动 reader 和 orchestrator（按 X5–X8、E1–E12 的实测顺序），不依赖真实 CLI。
+T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T28 用 fake 帧序列驱动 reader 和 orchestrator（按 X5–X8、E1–E13 的实测顺序），不依赖真实 CLI。
 每条测试回退对应改动后必须变红（AGENT R28）。
 
 ## 7. 不做什么
@@ -657,7 +692,7 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T26 用 fake 帧序列驱�
 | 阶段 | 内容 | 上线条件 |
 |---|---|---|
 | P0 | ~~skeptic 审查；E1–E6 实验；§5 代码确认~~ 已完成（2026-10-25，另加 E7–E9），结论在 §5，已改 D1–D8 | — |
-| P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。剩下：E12；无上下文 reviewer 只审 v1.7 的 D6（重点：ResultMessage 分支里判断的位置、兜底先回收再收尾、TurnAbandoned 那条路径）；然后把 T1–T9、T12a–T16、T18–T26 写成失败的测试 | 复审没有新的 HIGH |
+| P0b | ~~E10、E11；复审 v1.5、v1.6~~ 已完成，转成 v1.7。剩下：E12、E13；无上下文 reviewer 只审 v1.7 的 D6（重点：ResultMessage 分支里判断的位置、兜底先回收再收尾、TurnAbandoned 那条路径）；然后把 T1–T9、T12a–T16、T18–T28 写成失败的测试 | 复审没有新的 HIGH |
 | P1 | 后端 D1–D6、D8，开关默认关；P1a（D2 行状态）不依赖 D6，可以先做 | T1–T9、T12a–T16、T18–T26 绿；开关关时行为与现在逐字节一致（现有排队测试全绿）；实现完后再请一个无上下文的 skeptic 审一次 diff |
 | P2 | 前端 D7；打开开关 | T10、T17 绿；T11 冒烟通过；按 AGENT R16 单独部署、发一条 steer、切 tab 后重载确认顺序 |
 | P3 | 观察一周后删开关 | 日志里 `steer_folded` / `steer_opened` / `steer_never_read` 计数无异常（最后一个应为 0） |
@@ -693,7 +728,15 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T26 用 fake 帧序列驱�
   现在它留在 store 里它后面那条消息之前，没有就放最后。D7 的 steer 气泡按 client_id 对上记录行，
   不走这条规则。
 
+- **leak / api_retry continuation 后的 turn carry（读代码得出，未测）。** 这两种 continuation 都在
+  `reset_turn_carry()` 之后才 `continue`，续写那一轮里若出现权限 / AskUserQuestion，续写流从新的空
+  carry 绑定，和 D6 一节说的是同一个问题。现有行为，不在本设计里改；D6 自己不 reset，所以 steer 不受影响。
+
 ## 修订记录
+
+- 2026-10-25 v1.8：D6 补两条。判断移到 `reset_turn_carry()` 之前、接着读时不清 carry（T28）；
+  `error_max_turns` 不接着读，steer 随 CLI 退出转回排队（T27），加 E13。§10 记 leak / api_retry
+  continuation 的同类问题。mock 删掉 `not_consumed`。
 
 - 2026-10-25 v1.7：第四轮 skeptic（审 v1.6）3 HIGH / 5 MEDIUM / 4 LOW。按 XG 定的方向（§9 第 6 条）：D6 改成
   CLI 的一轮结束时原 turn 接着读未回显的 steer（照 leak continuation 的做法，不写 stdin），删掉 v1.6 的接管
