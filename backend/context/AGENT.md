@@ -247,8 +247,13 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   `timeout` / `gtimeout`): a run still going at the Bash timeout is moved to the background
   and returns nothing, and a runner's own per-test timeout doesn't count. Run serially unless
   the user asks otherwise: parallel workers can outlive the cap and keep the command running.
-  Never background, smallest scope (a few files per run), max 2 runs/task; the full suite needs
-  user approval. **The exit code and the runner's own failure list decide the result, never
+  Never background. **Smallest scope** = the tests this step wrote or changed, plus the 1–3
+  files that directly assert the changed behaviour; a file list built with `ls` / `grep -l`, or
+  longer than 3 files, is the full suite under another name. Max 2 runs/task; the whole
+  regression runs once, when the work is done, and needs user approval. **When testing is not
+  efficient** (a run is slow, times out, is re-run, or its file list keeps growing): stop and
+  re-read this rule and the test lessons in EVOLUTION.md / MEMORY.md before running anything
+  else; a timeout seen mid-task is noted for that final run, not chased. **The exit code and the runner's own failure list decide the result, never
   whether a summary line appeared:** a repo's config or one extra quiet flag can hide the
   summary, so empty output is not a pass. (A habit, not a gate: nothing denies an uncapped run.)
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
