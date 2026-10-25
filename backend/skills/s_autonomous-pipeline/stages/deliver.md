@@ -8,4 +8,6 @@ The renderer creates REPORT before commit-tree. Do not hand-edit `.aidlc/deliver
 
 Run `"$SWARM_BACKEND_BIN" pipeline-v1 land --project <P> --run-id <R> --message <message>`; on a deterministic not-landed result continue to REFLECT and report the reason.
 
+A research run lands nothing: after `reflect-prepare`, finish with `stage-complete` (it ends `no_code`).
+
 For an abandoned, paused, or completed-not-landed run, use the explicit recovery commands: `resume`, `restore`, or `run-land --prepare`. Human landing is two-step: prepare returns a request ID; then run `"$SWARM_BACKEND_BIN" pipeline-v1 run-land --project <P> --run-id <R> --request <request-id> --message <message>`. The second command must pass the UI approval gate and consumes one tree-bound token; any failure requires a new prepare and approval.

@@ -33,6 +33,10 @@ from core.run_protocol.store import NEXT, AuditStore, StoreError
 logger = logging.getLogger(__name__)
 
 
+RESEARCH_LANDS_NOTHING = ("a research run lands nothing: finish DELIVER with "
+                          "`pipeline-v1 stage-complete` (it ends the run no_code)")
+
+
 class EngineError(RuntimeError):
     """The run cannot proceed safely or its durable protocol state is invalid."""
 
@@ -1506,6 +1510,8 @@ class RunEngine:
     def _prepare_land_request(self, *, action: str, note: str | None = None,
                               request_id: str | None = None) -> dict[str, Any]:
         from core.run_protocol import audit as audit_protocol, findings as finding_protocol, landing, tree
+        if self.contract["profile"] == "research":
+            raise EngineError(RESEARCH_LANDS_NOTHING)
         state = self.projection()
         if self.contract["mode"] == "isolated" and set(self.effective_repos()) != set(self.contract["expected_repos"]):
             if state["status"] == "abandoned" or (
@@ -2508,6 +2514,8 @@ class RunEngine:
         import dataclasses
         from core.run_protocol import landing, tree
         state = self.projection()
+        if self.contract["profile"] == "research":
+            raise EngineError(RESEARCH_LANDS_NOTHING)     # before any event is written
         if state["status"] != "active" or state["stage"] != "deliver":
             raise EngineError("normal land requires active DELIVER")
         if state.get("pending_landing") is not None:

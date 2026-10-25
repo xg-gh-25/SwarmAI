@@ -95,10 +95,13 @@ def prepare(lessons: Sequence[Mapping[str, Any]], *, event_ids: set[str],
                 or relation.get("kind") not in RELATIONS:
             raise ReflectError(f"lesson {lesson_id} relation is invalid")
         available = list(candidates.get(lesson_id, ()))
-        if available and relation["kind"] == "new":
-            raise ReflectError(f"lesson {lesson_id} must relate to a dedup candidate")
+        # "new" stays allowed with candidates: they are the CLI's keyword recall, kept on
+        # the lesson below, so the agent's judgment that they are unrelated is on record
+        # (research-deliver #3; forcing a relation made every new lesson unwritable)
         if relation["kind"] != "new" and relation.get("entry") not in available:
-            raise ReflectError(f"lesson {lesson_id} relation target is not a candidate")
+            shown = "; ".join(available) if available else "none"
+            raise ReflectError(f"lesson {lesson_id} relation target is not a candidate "
+                               f"(candidates: {shown})")
         out.append({**dict(raw), "layer": LAYERS[lesson_type],
                     "destination": destination(lesson_type, raw["scope"]),
                     "candidates": available, "outcome": None})

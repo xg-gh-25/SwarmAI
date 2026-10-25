@@ -27,9 +27,12 @@ def test_prepare_derives_layer_destination_and_keeps_one_source():
     assert row["outcome"] is None
 
 
-def test_candidate_requires_relation_and_target_must_exist():
-    with pytest.raises(ReflectError, match="must relate"):
-        prepare([_lesson()], event_ids={EVENT}, candidates={"L1": ["old"]})
+def test_candidate_relation_target_must_exist_and_new_stays_allowed():
+    # research-deliver #3: "new" with candidates is accepted (they stay on the lesson)
+    assert prepare([_lesson()], event_ids={EVENT}, candidates={"L1": ["old"]})
+    with pytest.raises(ReflectError, match="not a candidate"):
+        prepare([_lesson(relation={"kind": "refines", "entry": "other"})],
+                event_ids={EVENT}, candidates={"L1": ["old"]})
     related = _lesson(relation={"kind": "refines", "entry": "old"})
     assert prepare([related], event_ids={EVENT}, candidates={"L1": ["old"]})
 

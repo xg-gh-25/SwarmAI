@@ -191,6 +191,10 @@ def next_step(engine, *, previous_stage: str | None = None,
             out.update(action="write_artifact",
                        command=_cmd(engine, "reflect-prepare --artifact -"),
                        why="record the run's lessons (zero is allowed) before landing")
+        elif state.get("profile") == "research":
+            # a research run has no code and no TEST: it never lands (research-deliver #1)
+            out.update(action="run", command=_cmd(engine, "stage-complete"),
+                       why="a research run lands nothing: finish DELIVER (it ends no_code)")
         else:
             # LG-1 (S6-1): after main moved and the worktree was synced, the TEST report
             # is for the old tree; test the new one before landing again
