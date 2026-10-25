@@ -4501,22 +4501,25 @@ def create_session_link_gate(session_context: dict[str, Any]):
 #     directory or anything under it;
 #   • Bash that writes into it: a redirect whose target names it; a verb in
 #     _AUDIT_WRITE_VERBS with an argument that names it (copy verbs: the
-#     destination); `sed -i`, `find -delete/-exec`, `tar -x` on it; interpreter code
-#     (python -c, a heredoc fed to node, bash -c, eval, …) that names it at all;
+#     destination; `sort` only with -o); `sed -i`, `find -delete/-exec`, `tar -x` on
+#     it; interpreter code (python -c, a heredoc fed to node, eval, …) that names it
+#     AND writes (_AUDIT_CODE_WRITE_RE: open for writing, write, delete, move, copy,
+#     chmod, shell out); shell code (bash -c, sh fed by xargs) walked as a command;
 #     a removal of the directory or of an ancestor (`rm -rf ~/.swarm-ai/state`);
-#     a `cd`/`pushd` into it (the Bash tool keeps its cwd between calls, so a later
-#     relative `> m.marker` would be invisible); via `xargs` or a `read` loop, a
-#     write verb in a command that names it anywhere; any of these inside $(…),
-#     backticks or <(…). Relative words resolve against the cwd the hook input
-#     reports, then against each `cd` in the command.
+#     via `xargs` (its placeholders and $1…$@ read as paths in the dir) or a `read`
+#     loop, a write verb in a command that names it anywhere; any of these inside
+#     $(…), backticks or <(…). Relative words resolve against the cwd the hook input
+#     reports, then against each `cd` in the command, so a `cd` into it is no write
+#     by itself (2026-10-25: all 9 of its logged denies that were not about the
+#     retired key were read-only commands: cd + ls, python reading JSON, xargs cat).
 # "Names it" (for a PATH word): a whole path component equals the dir name, the word
 # expands a variable assigned from such a word (`D=…/pipeline_agent_audit; echo x >
 # $D/m`) or a `for` list over it, or an absolute/cwd-resolved path matches it
 # component-wise, globs included (`~/.swarm-ai/state/*`). So ~, $HOME and absolute
 # spellings all match, but `pipeline_agent_audit_reader.py` and a same-named dir under
-# a DIFFERENT root (`/tmp/x/pipeline_agent_audit`) do NOT. Inline interpreter code is
-# matched by substring, not component, and is denied even when it only reads, because
-# telling read from write inside a program is a regex arms race.
+# a DIFFERENT root (`/tmp/x/pipeline_agent_audit`) do NOT. Inline interpreter code
+# that only reads passes: the write signals are read from the code text, which guards
+# against a mistake, not against code built to hide its write (S6-3, P5).
 # Reads by absolute path pass (cat, ls, jq, grep, cp OUT of it, git commit -m text).
 # No operator bypass (gate_force.UNFORCEABLE).
 # Fail-open on any internal error. A command the tokenizer cannot parse fails CLOSED
@@ -4524,7 +4527,8 @@ def create_session_link_gate(session_context: dict[str, Any]):
 # a genuinely malformed one is separately denied by bash_syntax_guard). RESIDUAL, read
 # as command text: a path assembled at run time ("pipeline_agent" + "_audit"), a
 # standalone script FILE that writes there, brace expansion (`pipeline_agent_{audit,x}`),
-# a sed `w`-command, or a relative path whose cwd the command never shows. It closes
+# a sed `w`-command, a relative path whose cwd neither the command nor the hook input
+# shows, or interpreter code whose write uses none of the listed signals. It closes
 # the natural forgery forms; it is not a sandbox.
 _AUDIT_WRITE_VERBS = frozenset({
     "rm", "rmdir", "unlink", "mv", "ln", "link", "touch", "tee", "truncate", "shred",
@@ -5027,15 +5031,60 @@ def _audit_inline_code(verb: str, args: list[str]) -> "tuple[list[str], bool, bo
     return codes, not codes, inplace, []
 
 
+def _audit_fill_placeholders(word: str, wrapper: list[str], path: str) -> str:
+    """*word* with the xargs replace string (-I / -J / --replace, default `{}` for -i)
+    and the positional parameters a shell receives from xargs replaced by *path*."""
+    marks = {"{}"}
+    for i, w in enumerate(wrapper):
+        if w in ("-I", "-J") and i + 1 < len(wrapper):
+            marks.add(wrapper[i + 1])
+        elif w.startswith(("-I", "-J")) and len(w) > 2:
+            marks.add(w[2:])
+        elif w.startswith("--replace="):
+            marks.add(w.split("=", 1)[1] or "{}")
+    for m in sorted(marks, key=len, reverse=True):
+        word = word.replace(m, path)
+    return re.sub(r'\$\{?(?:[1-9@*])\}?', path, word)
+
+
+# What interpreter code does when it WRITES: opens a file for writing, writes,
+# deletes, moves, copies or chmods one, or shells out. Code that names the audit
+# directory without any of these only reads it. This reads what the code says; it
+# does not prove the code harmless (S6-3, design 2026-10-24-swarmai-usable-by-anyone
+# §3.4: the gate guards against mistakes, P5 does not defend against a hostile agent).
+_AUDIT_CODE_WRITE_RE = re.compile(
+    r"""open\s*\([^)]*?['"][rbtU]*[wax+]"""          # open(p, 'w') / .open('a')
+    r"""|mode\s*=\s*['"][rbtU]*[wax+]"""
+    r"""|\.write(?:_text|_bytes|lines)?\s*\("""        # f.write( / Path.write_text(
+    r"""|\b(?:remove|unlink|rmdir|removedirs|rename|renames|replace|rmtree|move|"""
+    r"""copy|copy2|copyfile|copytree|chmod|chown|truncate|touch|mkdir|makedirs|"""
+    r"""symlink|link|utime|mkstemp|dump)\s*\("""
+    r"""|\b(?:system|popen|Popen|run|call|check_call|check_output|spawn\w*|"""
+    r"""exec[lv]p?e?|execSync|spawnSync|execFile\w*)\s*\("""   # shelling out
+    r"""|\b(?:writeFile|appendFile|createWriteStream|rm|rmSync|cp|cpSync|"""
+    r"""renameSync|unlinkSync|mkdirSync|copyFile\w*|rename)\w*\s*\("""
+    r"""|File\.(?:write|delete|open|rename|unlink)|FileUtils\.|\bIO\.write"""
+    r"""|\bopen\s*\(?\s*\w+\s*,\s*['"]?\+?[>|]"""      # perl open F, ">f"
+    r"""|[^<>=!]>{1,2}\s*['"$/~]"""                       # shell-style > inside code
+    r"""|\bprint\s*\(?[^)]*\bfile\s*="""
+    r"""|\bunlink\b|\brename\b|\bsystem\b|`""",       # perl/ruby builtins, backticks
+)
+
+
+def _audit_code_writes(code: str) -> bool:
+    return bool(_AUDIT_CODE_WRITE_RE.search(code))
+
+
 def _audit_code_hit(verb: str, args: list[str], any_in: bool, herestrings: list[str],
-                    has_heredoc: bool, state: dict) -> "str | None":
-    """Hit for a shell / eval / interpreter call (see the block comment)."""
+                    has_heredoc: bool, state: dict, fed_in: bool = False) -> "str | None":
+    """Hit for a shell / eval / interpreter call (see the block comment). *fed_in*:
+    xargs feeds it paths that may be in the audit directory."""
     tainted, cwd_in = state["tainted"], state["cwd_in"]
     if verb == "eval":
         codes, from_stdin, inplace, operands = [" ".join(args)], False, False, []
     else:
         codes, from_stdin, inplace, operands = _audit_inline_code(verb, args)
-    op_in = any(_audit_path_hit(o, tainted, state["cwd"]) == "in" for o in operands)
+    op_in = fed_in or any(_audit_path_hit(o, tainted, state["cwd"]) == "in" for o in operands)
     if has_heredoc:
         codes.append(state["bodies"])
     codes.extend(herestrings)
@@ -5052,7 +5101,8 @@ def _audit_code_hit(verb: str, args: list[str], any_in: bool, herestrings: list[
                 return f"{verb} code: {hit}"
         return None
     code = "\n".join(c for c in codes if c)
-    if code.strip() and (_audit_code_names_dir(code, tainted) or cwd_in or op_in):
+    if code.strip() and (_audit_code_names_dir(code, tainted) or cwd_in or op_in) \
+            and _audit_code_writes(code):
         return f"{verb} code that writes into the audit directory"
     return None
 
@@ -5076,11 +5126,10 @@ def _audit_segment_hit(seg: list[str], state: dict) -> "str | None":
                            if not a.startswith("-") and (i == 0 or args[i - 1] not in skip))
         return None
     if verb in ("cd", "pushd", "popd"):
-        # A cd INTO the directory is denied: the Bash tool keeps its cwd between
-        # calls, so a later call's relative `> m.marker` would be invisible here.
+        # A cd INTO the directory is no write. A relative write after it is still
+        # caught: later in this command through the cwd tracked here, in a later call
+        # through the cwd the hook input reports (the Bash tool keeps its cwd).
         target = next((a for a in args if not a.startswith("-")), "")
-        if verb != "popd" and target and _audit_path_hit(target, tainted, state["cwd"]) == "in":
-            return f"{verb} into the audit directory"
         if verb == "popd" or target.startswith("$") or (verb == "cd" and args[:1] == ["-"]):
             _audit_set_cwd(state, None)
         elif not target:
@@ -5096,7 +5145,13 @@ def _audit_segment_hit(seg: list[str], state: dict) -> "str | None":
     via_stdin = from_stdin and state["path_names_dir"]
     if verb in _AUDIT_SHELLS or verb in _AUDIT_INTERPRETERS or verb == "eval":
         if via_stdin:
-            return f"xargs {verb} fed a path in the audit directory"
+            # xargs feeds it paths that may be in the dir: judge the code as if every
+            # placeholder (`{}` / the -I string, $1…$9, $@, $*) were such a path.
+            fed = str(_AGENT_AUDIT_DIR / "fed")
+            args = [_audit_fill_placeholders(a, rest[:k], fed) for a in args]
+            hit = _audit_code_hit(verb, args, True, herestrings, has_heredoc, state,
+                                  fed_in=True)
+            return f"xargs {verb}: {hit}" if hit else None
         return _audit_code_hit(verb, args, any_in, herestrings, has_heredoc, state)
     return _audit_tool_hit(verb, args, hits, cwd_in or via_stdin, tainted, state["cwd"])
 
@@ -5167,6 +5222,16 @@ def _audit_tool_hit(verb: str, args: list[str], hits: list, implicit: bool,
         # Only the extract DESTINATION matters; reading an archive FROM the dir is a read.
         dh = _audit_path_hit(dest, tainted, cwd) if dest is not None else ("in" if implicit else None)
         return f"{verb} extract into the audit directory" if extracting and dh in ("in", "ancestor") else None
+    if verb == "sort":
+        # sort writes a file only through -o / --output; its operands are inputs.
+        outs = [args[i + 1] for i, a in enumerate(args[:-1]) if a == "-o"]
+        outs += [a[2:] for a in args if a.startswith("-o") and len(a) > 2]
+        outs += [a.split("=", 1)[1] for a in args if a.startswith("--output=")]
+        outs += [args[i + 1] for i, a in enumerate(args[:-1]) if a == "--output"]
+        if any(_audit_path_hit(o, tainted, cwd) == "in" or (implicit and not
+               os.path.isabs(_audit_expand_home(o))) for o in outs):
+            return "sort -o into the audit directory"
+        return None
     if verb in _AUDIT_WRITE_VERBS:
         if touched:
             return f"{verb} on the audit directory"

@@ -6,10 +6,12 @@ tree, the real async hook is driven with asyncio.run, and every forgery form nam
 the gate's section comment is a parametrized deny case next to a read that must pass.
 
 Invariants:
-  • every write form (redirect, write/copy verbs, interpreter code, ancestor rm, cd
-    into the dir, xargs/read loops, command substitution) is denied, by any spelling
-    of the path (~, $HOME, absolute, glob, variable, differently cased);
-  • reads by absolute path pass, and so do unrelated commands and paths;
+  • every write form (redirect, write/copy verbs, interpreter code that writes,
+    ancestor rm, a relative write after a cd into the dir, xargs/read loops, command
+    substitution) is denied, by any spelling of the path (~, $HOME, absolute, glob,
+    variable, differently cased);
+  • reads pass: by absolute path, after a cd into the dir, interpreter code that only
+    reads, xargs into a reading shell (the 9 logged false denies, LOGGED_READS);
   • Write/Edit/MultiEdit/NotebookEdit deny by resolved path, including via symlink;
   • SWARM_GATE_FORCE lets a call through (S6-3); an internal error fails open;
   • build_hooks registers the gate for Bash (ahead of session_link_gate and the HITL
@@ -94,7 +96,7 @@ DENY_COMMANDS = [
     f"cat <(rm {D}/m)",
     f"D={D}; echo $(touch $D/m)",
     f"(cd {D} && touch m)",
-    f"cd {D} && ls",
+    f"cd {D} && ls && touch m",
     "cd ~/.swarm-ai && rm -rf state",
     "cd ~/.swarm-ai/state && rm -rf *",
     "echo hi > ~/.swarm-ai/state/PIPELINE_AGENT_AUDIT/m",
@@ -293,3 +295,58 @@ def test_classification_is_bounded_on_pathological_input(home):
         assert time.monotonic() - t < 5.0, probe[:40]
 
 
+
+
+# The 9 read-only commands the gate denied in gate_decisions.jsonl (2026-10-21..24),
+# reduced to their shape. A cd into the dir is no write by itself: a relative write
+# after it is still caught, in the same command by the cd it follows, in a later call
+# by the cwd the hook input reports. Interpreter code that names the dir is denied
+# only when it also writes (S6-3: the gate guards against mistakes, not a hostile
+# agent, so it reads what the code says, it does not prove the code harmless).
+LOGGED_READS = [
+    f"cd {D}; ls | head; ls | wc -l; find . -type f | head -20",
+    f"cd {D} && ls | wc -l; du -sh .; ls | sed -E 's/^(run)_?.*/\\1/' | sort | uniq -c",
+    f"cd {D}/runs/run_1; cat contract.json; python3 -c \"\nimport json\nfor l in open('events.jsonl'):\n    print(json.loads(l).get('seq'))\"",
+    f"python3 -I - <<'EOF'\nimport glob,os,json\nfs=glob.glob(os.path.expanduser('{D}/session_*.marker'))\nprint(len(fs), [json.loads(open(f).read()) for f in fs])\nEOF",
+    f"while read r; do python3 -I -c \"import json,sys;d=json.load(open(sys.argv[1]));print(len(d))\" {D}/handout_$r.json; done < /tmp/l",
+    f"D={D}/runs; for r in $(ls -t $D | head -12); do python3 -I -c '\nimport json,sys,os\nd=sys.argv[1]; print(json.load(open(d+\"/contract.json\")))\n' $D/$r; done",
+    f"D={D}/runs/run_1; ls $D; python3 -I -c \"import json,sys;print(json.load(open(sys.argv[1])))\" $D/run.json",
+    "find ~/.swarm-ai -maxdepth 3 -name backup_state.json | head -3 | xargs -I{} sh -c 'echo {}; cat {}'",
+    f"sort {D}/x.marker | uniq -c",
+    f"find {D} -name '*.json' | xargs -I{{}} sh -c 'jq . {{}} | head'",
+]
+
+LOGGED_READS_WRITE_TWINS = [
+    f"cd {D}; ls; echo x > m.marker",
+    f"cd {D} && ls | sort -o list.txt",
+    f"cd {D} && rm -f *.marker",
+    f"cd {D}/runs/run_1; python3 -c \"open('events.jsonl','a').write('x')\"",
+    f"python3 -I - <<'EOF'\nimport glob,os\nfor f in glob.glob(os.path.expanduser('{D}/*.marker')): os.remove(f)\nEOF",
+    f"D={D}/runs/run_1; python3 -c \"import json,sys;json.dump({{}},open(sys.argv[1],'w'))\" $D/run.json",
+    f"python3 -c \"import pathlib; pathlib.Path('{D}/m').unlink()\"",
+    f"python3 -c \"import shutil; shutil.rmtree('{D}')\"",
+    f"node -e \"require('fs').unlinkSync('{D}/m')\"",
+    f"find {D} -name '*.marker' | xargs -I{{}} sh -c 'rm {{}}'",
+    f"find {D} -name '*.marker' | xargs sh -c 'rm \"$@\"' _",
+    f"ls {D}/* | xargs python3 -c \"import sys,os; [os.remove(p) for p in sys.argv[1:]]\"",
+]
+
+
+@pytest.mark.parametrize("command", LOGGED_READS)
+def test_logged_read_only_commands_pass(home, command):
+    assert not _denied(_run("Bash", {"command": command})), command
+
+
+@pytest.mark.parametrize("command", LOGGED_READS_WRITE_TWINS)
+def test_the_same_commands_with_a_write_are_denied(home, command):
+    assert _denied(_run("Bash", {"command": command})), command
+
+
+def test_a_relative_write_in_a_later_call_is_caught_by_the_hook_cwd(home):
+    """After `cd {D}` the Bash tool's cwd stays there; the next call's relative write
+    is resolved against the cwd the hook input reports."""
+    audit = str(home / ".swarm-ai" / "state" / "pipeline_agent_audit")
+    assert not _denied(_run("Bash", {"command": f"cd {D}"}))
+    assert _denied(_run("Bash", {"command": "echo x > m.marker"}, cwd=audit))
+    assert _denied(_run("Bash", {"command": "python3 -c \"open('m','w')\""}, cwd=audit))
+    assert not _denied(_run("Bash", {"command": "cat m.marker | head"}, cwd=audit))

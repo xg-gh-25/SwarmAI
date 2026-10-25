@@ -253,6 +253,8 @@ implementations in `security_hooks.py`). By category:
    S6-3 that log is append-only with a checksum per record, not signed (design
    `docs/design/2026-10-24-swarmai-usable-by-anyone.md` §3.3.5): a torn last line is dropped, a
    damaged record stops the run for a person. The gate guards against mistakes and can be forced.
+   It denies only what writes: a `cd` into the directory, and interpreter code that only reads
+   it, pass.
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; every new run gets them, there is
    no setting to turn them off (usable-by-anyone P7); `$SWARM_WORKTREE_MODE=off` is only the
    test suite's switch until S6): `run_owner_gate`
