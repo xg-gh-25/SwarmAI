@@ -2454,7 +2454,8 @@ class SessionRouter:
     # same kinds the live Canvas rail lists, so the persisted record the session's
     # Canvas is rebuilt from (core/canvas_session) matches what the rail showed.
     # Source edits are the turn_changes card; process / bookkeeping files are noise.
-    _DELIVERABLE_KINDS = frozenset({"content", "knowledge", "external-diff", "external-nodiff"})
+    # One definition of which emit-gate kinds are products (core/turn_products).
+    from .turn_products import PRODUCT_FILE_KINDS as _DELIVERABLE_KINDS
 
     @staticmethod
     def _turn_files_of(unit: object) -> Optional[dict]:

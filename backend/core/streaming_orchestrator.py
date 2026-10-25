@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from . import executors
 from . import pipeline_stage_events as _pse
+from . import turn_products as _turn_products
 from .compaction_guard import EscalationLevel
 from .cli_stream_reader import SteerRead, TurnAbandoned
 from .session_healing import get_process_rss_mb
@@ -275,7 +276,7 @@ class StreamingOrchestrator:
             "pending_file_changes": {}, "pending_file_deletes": {},
             "tool_names": {}, "tool_parent": {},
             "task_parent": {}, "subagent_last": {}, "pending_stage_watch": {},
-            "background_agents": {}, "agent_inputs": {},
+            "background_agents": {}, "agent_inputs": {}, "product_candidates": {},
         }
 
     def reset_turn_carry(self) -> None:
@@ -889,6 +890,22 @@ class StreamingOrchestrator:
                 "operation": "deleted",
             })
         return events
+
+    @staticmethod
+    def _product_event(tool_use_id: Optional[str], file_events: list[dict], candidate: Optional[dict],
+                       result: Any, parent: Optional[str]) -> Optional[dict]:
+        """One ``assistant`` event carrying the ``turn_product`` blocks a SUCCESSFUL
+        call made (core/turn_products), or None. Persisted as its own row, like a
+        pipeline_stage row, so live and reload show the same. Not model output:
+        ``_content_emitted`` is left alone. Never raises."""
+        if not tool_use_id:
+            return None
+        try:
+            blocks = _turn_products.blocks_for_result(tool_use_id, file_events, candidate, result, parent)
+        except Exception:  # noqa: BLE001 — a display aid never breaks the turn
+            logger.debug("turn_products: blocks failed", exc_info=True)
+            return None
+        return {"type": "assistant", "content": blocks, "model": None} if blocks else None
 
     @staticmethod
     def _notice_event(text: str) -> dict:
@@ -1529,6 +1546,9 @@ class StreamingOrchestrator:
         _background_agents: dict[str, bool] = self._turn_carry.setdefault("background_agents", {})
         # top-level Agent tool_use id → its description (for a launch seen only in its result)
         _agent_inputs: dict[str, dict] = self._turn_carry.setdefault("agent_inputs", {})
+        # tool_use_id → the redacted remote product a listed call makes (core/
+        # turn_products.remote_candidate, taken at the tool_use; raw input not kept).
+        _product_candidates: dict[str, dict] = self._turn_carry.setdefault("product_candidates", {})
         # tool_use_id → run_id for ANY Bash `artifact_cli.py … --run-id <id>` call.
         # Its successful result re-reads run.json and yields a persisted
         # pipeline_stage block per newly finished stage (_pipeline_stage_events) —
@@ -2057,6 +2077,7 @@ class StreamingOrchestrator:
                 # carries `parent_tool_use_id` (the Agent step it nests under).
                 # Its own SSE type, NOT "assistant": the router persists only a
                 # compact {tool_use_id, is_error, outcome} of it, never the content.
+                _um_parents: dict[str, str] = {}
                 if isinstance(_um_content, list):
                     _tr_blocks = []
                     for _blk in _um_content:
@@ -2079,6 +2100,7 @@ class StreamingOrchestrator:
                             _parent_id = _tool_parent.pop(_blk.tool_use_id, None)
                             if _parent_id:
                                 _tr["parent_tool_use_id"] = _parent_id
+                                _um_parents[_blk.tool_use_id] = _parent_id
                             _tr_blocks.append(_tr)
                     if _tr_blocks:
                         yield {"type": "tool_result", "content": _tr_blocks}
@@ -2088,14 +2110,23 @@ class StreamingOrchestrator:
                             continue
                         _tuid = getattr(_blk, "tool_use_id", None)
                         if not getattr(_blk, "is_error", False):
+                            _um_written: list[dict] = []
                             if _tuid in _pending_file_changes:
                                 _um_writes = _pending_file_changes.pop(_tuid, None)
                                 if _um_writes:
                                     _wr_events = await self._build_file_write_events(
                                         _um_writes, _resolve_cache
                                     )
+                                    _um_written = _wr_events
                                     for _ev in _wr_events:
                                         yield _ev
+                            # ── The call's products (core/turn_products), after its
+                            #    file_changed: one persisted assistant event.
+                            _um_prod = self._product_event(
+                                _tuid, _um_written, _product_candidates.pop(_tuid, None),
+                                getattr(_blk, "content", None), _um_parents.get(_tuid))
+                            if _um_prod:
+                                yield _um_prod
                             if _tuid in _pending_file_deletes:
                                 _um_dels = _pending_file_deletes.pop(_tuid, None)
                                 if _um_dels:
@@ -2120,6 +2151,7 @@ class StreamingOrchestrator:
                             _pending_file_changes.pop(_tuid, None)
                             _pending_file_deletes.pop(_tuid, None)
                             _pending_stage_watch.pop(_tuid, None)
+                            _product_candidates.pop(_tuid, None)
                 # ── Glitch prefix in history → clean + resume at this boundary ──
                 # Tool results just came back, so the model is about to write
                 # its next response from a history that still holds the glitch
@@ -2443,6 +2475,13 @@ class StreamingOrchestrator:
                             _tool_parent[block.id] = _am_parent
                         content_blocks.append(_tu_block)
                         _tool_names[block.id] = block.name
+                        try:
+                            _cand = _turn_products.remote_candidate(block.name, block.input)
+                        except Exception:  # noqa: BLE001 — a display aid never breaks the turn
+                            logger.debug("turn_products: candidate failed", exc_info=True)
+                            _cand = None
+                        if _cand:
+                            _product_candidates[block.id] = _cand
                         if block.name == "Agent" and _am_parent is None and isinstance(block.input, dict):
                             _agent_inputs[block.id] = {"description": block.input.get("description")}
                         if block.name == "Agent" and isinstance(block.input, dict) \
@@ -2521,6 +2560,12 @@ class StreamingOrchestrator:
                                 _fc_events += await self._build_file_write_events(
                                     _written_paths, _resolve_cache
                                 )
+                            _am_prod = self._product_event(
+                                block.tool_use_id, list(_fc_events),
+                                _product_candidates.pop(block.tool_use_id, None),
+                                block.content, _tool_parent.get(block.tool_use_id))
+                            if _am_prod:
+                                _fc_events.append(_am_prod)
                             _deleted_paths = _pending_file_deletes.pop(block.tool_use_id, None)
                             if _deleted_paths:
                                 _fc_events += await self._build_file_delete_events(
@@ -2540,6 +2585,7 @@ class StreamingOrchestrator:
                             _pending_file_changes.pop(block.tool_use_id, None)
                             _pending_file_deletes.pop(block.tool_use_id, None)
                             _pending_stage_watch.pop(block.tool_use_id, None)
+                            _product_candidates.pop(block.tool_use_id, None)
                         if _fc_events:
                             # Flush accumulated content blocks first (ordering:
                             # the tool_result must precede its file_changed).

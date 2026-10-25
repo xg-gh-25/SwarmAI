@@ -69,3 +69,16 @@ async def test_put_stores_search_text_seg(tmp_path):
     assert seg == message_content_seg(_BLOCKS)
     assert "iVBORw0KGgo" not in seg
     assert hits == 1
+
+
+def test_turn_products_are_searchable_by_path_and_target():
+    blocks = [
+        {"type": "turn_product", "toolUseId": "toolu_x", "product": "file",
+         "path": "Knowledge/Notes/q3-report.md", "absolutePath": "/w/Knowledge/Notes/q3-report.md",
+         "fileKind": "content"},
+        {"type": "turn_product", "toolUseId": "toolu_y", "product": "remote",
+         "tool": "mcp__slack-mcp__post_message", "action": "Posted to Slack", "target": "#launch"},
+    ]
+    text = message_search_text(blocks)
+    assert "q3-report.md" in text and "Posted to Slack #launch" in text
+    assert "toolu_" not in text and "/w/" not in text

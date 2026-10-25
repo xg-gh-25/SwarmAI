@@ -470,9 +470,22 @@ export interface PipelineAttentionContent {
 export interface TurnDeliverable {
   path: string;
   absolutePath: string;
-  kind: 'content' | 'knowledge';
+  /** The emit gate's kind (backend router _DELIVERABLE_KINDS). */
+  kind: 'content' | 'knowledge' | 'external-diff' | 'external-nodiff';
   operation: 'written';
 }
+
+/** One product of one call (backend core/turn_products, design
+ *  2026-10-26-session-products.md §2): a file it wrote or a remote action it did,
+ *  inserted by the backend after the call's successful result. camelCase as sent. */
+export type TurnProductContent = {
+  type: 'turn_product';
+  toolUseId: string;
+  parentToolUseId?: string;
+} & (
+  | { product: 'file'; path: string; absolutePath: string; fileKind: TurnDeliverable['kind'] }
+  | { product: 'remote'; tool: string; action: string; target: string; url?: string }
+);
 
 /** The turn's products — written by the BACKEND just before `result`
  *  (SessionRouter._persist_stream_event). */
@@ -590,7 +603,7 @@ export interface BackgroundFinishedContent {
 
 export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent | PipelineStageContent
   | PipelineRunContent | PipelineAttentionContent | PipelineSummaryContent | TurnDeliverablesContent | TurnChangesContent
-  | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent;
+  | TurnNoticeContent | BackgroundFinishedContent | TurnStopContent | TurnProductContent;
 
 export interface Message {
   id: string;

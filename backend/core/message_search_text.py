@@ -11,9 +11,10 @@ produced a 6.6 MB ``content_seg``), thinking signatures, JSON keys
 can be searched meaningfully, and it made ``content_seg`` + ``messages_fts``
 the largest part of the database.
 
-Kept: ``text`` blocks and each ``tool_use`` block's one-line ``summary`` (falls
+Kept: ``text`` blocks, each ``tool_use`` block's one-line ``summary`` (falls
 back to the tool ``name``), so "the session where I ran X on file Y" stays
-findable. Dropped: thinking, tool results, images, documents, ids, keys.
+findable, and each ``turn_product`` block's path or action + target. Dropped:
+thinking, tool results, images, documents, ids, keys.
 
 A ``content`` that is not a JSON block list (a legacy plain string) is indexed
 whole, as before.
@@ -47,6 +48,11 @@ def _block_text(block: Any) -> str:
             return summary
         name = block.get("name")
         return name if isinstance(name, str) else ""
+    if kind == "turn_product":
+        # What the turn produced (core/turn_products): the file's path, or the
+        # remote action and its target, so "the report I wrote" is findable.
+        parts = [block.get(k) for k in ("path", "action", "target")]
+        return " ".join(p for p in parts if isinstance(p, str) and p)
     return ""
 
 
