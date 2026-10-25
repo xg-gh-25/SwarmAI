@@ -334,7 +334,16 @@
         "titleOne": "1 file changed",
         "toggle": "Show diff",
         "tooLarge": "Some changes are too large to show as a diff. Click a file name to open it.",
-        "failed": "Couldn't load the diff. Close and open the row to retry."
+        "failed": "Couldn't load the diff. Close and open the row to retry.",
+        "landed": "{{count}} commits landed",
+        "landedOne": "1 commit landed",
+        "titleNone": "Changes",
+        "onBranch": "on {{dest}}",
+        "offBranch": "not on {{dest}}",
+        "moreCommits": "{{n}} more commits",
+        "unknown": "Could not read landings in {{repo}} ({{reason}}).",
+        "truncated": "More landings may exist; see Canvas.",
+        "unverified": "{{n}} landing records could not be verified."
       },
       "output": {
         "deliverableOne": "1 deliverable",

@@ -501,13 +501,41 @@ export interface TurnChangeFile {
   end: string;
 }
 
+/** One landing of this turn: a session worktree branch merged into the checkout's
+ *  branch, read from the stamp `session_worktree land` writes into git
+ *  (core/session_landings). Its rows diff `onto..new` like a turn's rows. */
+export interface TurnLanding {
+  repo: string;
+  gitRoot: string;
+  /** the branch it was merged into (the checkout's branch, not always `main`) */
+  dest: string;
+  branch: string;
+  onto: string;
+  new: string;
+  count: number;
+  subjects: { sha: string; subject: string }[];
+  /** `on`: still on `dest`; `off`: `dest` was reset or rewound since */
+  state: 'on' | 'off';
+  files: TurnChangeFile[];
+  omitted?: number;
+}
+
 /** The turn's code changes — written by the BACKEND just before `result`, from a
- *  change-tree snapshot taken when the turn started (core/turn_changes). */
+ *  change-tree snapshot taken when the turn started (core/turn_changes), plus the
+ *  landings this turn made. */
 export interface TurnChangesContent {
   type: 'turn_changes';
   files: TurnChangeFile[];
   /** Files beyond the row cap that are not listed. */
   omitted?: number;
+  turnId?: string;
+  landed?: TurnLanding[];
+  /** more landings may exist than the card lists (see Canvas) */
+  landedTruncated?: boolean;
+  /** landing records that did not hold against git */
+  unverified?: number;
+  /** repos whose landings could not be read, and why */
+  unknown?: { repo: string; reason: string }[];
 }
 
 /** Why a turn's last call did not finish — written by the BACKEND when it restarts

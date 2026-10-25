@@ -4,8 +4,8 @@
  *
  * The backend is the only source: Artifacts = the session's attribution record
  * (core/session_outputs, written as its turns run) joined with the product catalog;
- * Changes = what the session's own transcript says it changed (core/session_changes):
- * each turn's "files changed" card and the commits its messages name. The two are
+ * Changes = each turn's "files changed" card from the session's own transcript, and
+ * the session's landings read from git's stamp (core/session_changes). The two are
  * separate requests and separate slots
  * of the cache (a part never waits for the other); the store keeps them per session
  * and fresh:
@@ -77,27 +77,23 @@ export interface TurnChangeCard {
   omitted: number;
 }
 
-export interface CommitFile {
-  path: string;
-  added: number | null;
-  deleted: number | null;
-}
-
-/** A commit the session's messages name, confirmed by git in one bound repo. */
-export interface MentionedCommit {
-  sha: string;
-  short: string;
-  subject: string;
-  at: string;
+/** One landing of this session: a session worktree branch merged into its checkout's
+ *  branch, read from the stamp `session_worktree land` writes into git
+ *  (core/session_landings). Its files diff `onto..new` (`start` / `end` trees). */
+export interface SessionLanding {
   repo: string;
-  /** the repo's main checkout */
-  root: string;
-  /** when the session last named it */
-  mentionedAt: string;
-  /** the upstream contains it; null: no upstream, or not checked (older commits) */
-  pushed: boolean | null;
-  files: CommitFile[];
-  omittedFiles: number;
+  gitRoot: string;
+  /** the branch it was merged into (the checkout's branch) */
+  dest: string;
+  branch: string;
+  onto: string;
+  new: string;
+  count: number;
+  subjects: { sha: string; subject: string }[];
+  /** `on`: still on `dest`; `off`: `dest` was reset or rewound since */
+  state: 'on' | 'off';
+  files: ChangedFile[];
+  omitted?: number;
 }
 
 /** The session's Changes (core/session_changes.read). */
@@ -105,9 +101,16 @@ export interface SessionChanges {
   turns: TurnChangeCard[];
   /** turns beyond the cap */
   olderTurns: number;
-  commits: MentionedCommit[];
   /** false: earlier messages of the session were not scanned */
   scannedAll: boolean;
+  /** this session's landings, newest first (last 30 days, at most 20) */
+  landed: SessionLanding[];
+  /** more landings may exist than listed */
+  landedTruncated: boolean;
+  /** landing records that did not hold against git */
+  unverified: number;
+  /** repos whose landings could not be read, and why */
+  unknown: { repo: string; reason: string }[];
 }
 
 export interface SessionOutputs {
@@ -119,7 +122,9 @@ export interface SessionOutputs {
 
 type Part = 'artifacts' | 'changes';
 
-const NO_CHANGES: SessionChanges = { turns: [], olderTurns: 0, commits: [], scannedAll: true };
+const NO_CHANGES: SessionChanges = {
+  turns: [], olderTurns: 0, scannedAll: true, landed: [], landedTruncated: false, unverified: 0, unknown: [],
+};
 
 export const canvasSessionService = {
   async artifacts(sessionId: string): Promise<SessionArtifact[]> {
@@ -133,11 +138,7 @@ export const canvasSessionService = {
     const c = r.data?.changes;
     return c ? { ...NO_CHANGES, ...c } : NO_CHANGES;
   },
-  async commitDiff(root: string, sha: string, path: string): Promise<{ diff: string; truncated: boolean }> {
-    const r = await api.get<{ diff: string; truncated: boolean }>('/canvas/changes/diff', { params: { root, sha, path } });
-    return r.data ?? { diff: '', truncated: false };
-  },
-  /** One file of a turn card; null when the diff is not available (404). */
+  /** One file of a turn card or a landing; null when the diff is not available (404). */
   async treeDiff(root: string, start: string, end: string, path: string): Promise<string | null> {
     try {
       const r = await api.get<{ diff: string }>('/canvas/changes/tree-diff', { params: { root, start, end, path } });

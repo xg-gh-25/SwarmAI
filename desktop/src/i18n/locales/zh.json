@@ -334,7 +334,16 @@
         "titleOne": "1 file changed",
         "toggle": "Show diff",
         "tooLarge": "Some changes are too large to show as a diff. Click a file name to open it.",
-        "failed": "Couldn't load the diff. Close and open the row to retry."
+        "failed": "Couldn't load the diff. Close and open the row to retry.",
+        "landed": "{{count}} 个 commit 已合入",
+        "landedOne": "1 个 commit 已合入",
+        "titleNone": "改动",
+        "onBranch": "在 {{dest}} 上",
+        "offBranch": "不在 {{dest}} 上",
+        "moreCommits": "还有 {{n}} 个 commit",
+        "unknown": "读不到 {{repo}} 的合入记录（{{reason}}）。",
+        "truncated": "可能还有更多合入，见 Canvas。",
+        "unverified": "{{n}} 条合入记录核对不上。"
       },
       "output": {
         "deliverableOne": "1 deliverable",

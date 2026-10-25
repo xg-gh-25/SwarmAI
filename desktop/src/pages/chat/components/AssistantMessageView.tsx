@@ -43,7 +43,7 @@ import { AssumptionsDisclosure, AttentionCard, isVerificationAttentionItem, Outp
 import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
-import { deriveTurnView, extractNextSteps } from '../turnView';
+import { deriveTurnView, extractNextSteps, hasTurnChanges } from '../turnView';
 import type { TurnView } from '../turnView';
 import { hasOpenQuestion, phaseSegments, stripView, turnZones } from '../turnZones';
 import type { PhaseMember, Zone } from '../turnZones';
@@ -462,7 +462,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       (f) => !view.deliverables.some((d) => isSameFile(f.absolutePath, d.path, d.absolutePath))
         && !summaryDocs.some((x) => !!x.absolutePath && isSameFile(f.absolutePath, x.path ?? '', x.absolutePath)),
     );
-    return files.length ? { ...view.changes, files } : undefined;
+    const next = { ...view.changes, files };
+    return hasTurnChanges(next) ? next : undefined;
   }, [view, ended, summaryDocs]);
   const attention = view.attention && view.attention.items.length > 0 ? view.attention : undefined;
   const hasActionAttention = !!attention?.items.some((item) => !isVerificationAttentionItem(item));

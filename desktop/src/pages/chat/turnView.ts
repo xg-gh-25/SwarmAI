@@ -60,7 +60,7 @@
  * and ignored by everything else here, so a sub-agent's 40 reads never look
  * like the main agent's steps.
  *
- * @exports deriveTurnView, toolCall, stepLabel, displayCommand, extractNextSteps,
+ * @exports deriveTurnView, hasTurnChanges, toolCall, stepLabel, displayCommand, extractNextSteps,
  *          isLandmarkText, isGateStage, isGateBlock, isUnanswered, stripStageHeading,
  *          and the TurnView / TurnUnit / ProcessUnit / ThoughtUnit / Step / ToolStep /
  *          ToolStatus / StepLabel / StepVerb / ToolCallView / NextStepsResult types
@@ -82,6 +82,14 @@ import type {
   TurnStopContent,
   SubAgentProgress,
 } from '../../types';
+
+/** Whether a `turn_changes` block has anything to show: in-place rows, a landing,
+ *  or a notice about landings that could not be read (an empty block is dropped). */
+export function hasTurnChanges(block: TurnChangesContent | undefined | null): boolean {
+  if (!block) return false;
+  return !!(block.files?.length || block.landed?.length || block.unknown?.length
+    || block.unverified || block.landedTruncated);
+}
 
 /** `waiting` = the tool has not run: an unanswered permission / question gates it.
  *  `unknown` = the turn ENDED on this call (no result, nothing written after it) —
@@ -518,7 +526,7 @@ export function deriveTurnView(
       return;
     }
     if (block.type === 'turn_changes') {
-      if (Array.isArray(block.files) && block.files.length) changes = block;
+      if (hasTurnChanges(block as unknown as TurnChangesContent)) changes = block;
       return;
     }
     if (block.type === 'turn_deliverables') {

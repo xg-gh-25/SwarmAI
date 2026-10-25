@@ -8,10 +8,13 @@
  *   - Files changed: each turn's "files changed" card, newest first, as recorded
  *     (what a card left off, older turns past the cap, and earlier messages that were
  *     not scanned are said, not guessed);
- *   - Commits mentioned: the commits the session's messages name, confirmed by git.
- * `ChangesDetail` is the content card below it (a turn file's diff, or a commit's
- * files and patches). Selection lives in FileViewerPanel so both halves agree. No
- * action buttons: committing, pushing or removing is not done from here.
+ *   - Landed: the session's landings, read from git's stamp (branch → destination,
+ *     commit count, still on the destination or not); what could not be read about
+ *     them is said.
+ * `ChangesDetail` is the content card below it (a turn file's diff, or a landing's
+ * commits and files, each file's diff from the landing's two trees). Selection lives
+ * in FileViewerPanel so both halves agree. No action buttons: committing, pushing or
+ * removing is not done from here.
  *
  * @exports ChangesNav, ChangesDetail, ChangesCount, ChangesRefresh, changesKey,
  *   ChangesSelection, diffLineClass
@@ -19,19 +22,19 @@
 import { useEffect, useState } from 'react';
 import {
   canvasSessionService, refreshCanvasChanges, useCanvasSession,
-  type ChangedFile, type MentionedCommit, type SessionChanges, type TurnChangeCard,
+  type ChangedFile, type SessionChanges, type SessionLanding, type TurnChangeCard,
 } from '../../services/canvasSession';
 import { FileTypeIcon } from '../common/FileTypeIcon';
 import { CopyPathButton } from '../common/CopyPathButton';
 
 export type ChangesSelection =
   | { kind: 'file'; turn: string; path: string }
-  | { kind: 'commit'; root: string; sha: string }
+  | { kind: 'landing'; root: string; sha: string }
   | null;
 
 export function changesKey(s: ChangesSelection): string {
   if (!s) return '';
-  return s.kind === 'commit' ? `${s.root}@${s.sha}` : `${s.turn}:${s.path}`;
+  return s.kind === 'landing' ? `${s.root}@${s.sha}` : `${s.turn}:${s.path}`;
 }
 
 const SEL = 'canvas-row-sel';
@@ -150,29 +153,38 @@ function TurnBlock({ turn, multiRepo, selected, onSelect }: {
   );
 }
 
-function CommitRow({ c, on, onSelect }: { c: MentionedCommit; on: boolean; onSelect: (s: ChangesSelection) => void }) {
+function LandingRow({ l, on, onSelect }: { l: SessionLanding; on: boolean; onSelect: (s: ChangesSelection) => void }) {
   return (
-    <button type="button" data-testid="changes-commit"
-      onClick={() => onSelect({ kind: 'commit', root: c.root, sha: c.sha })}
-      title={`${c.short} · ${c.repo} · ${c.at}`} data-selected={on || undefined}
+    <button type="button" data-testid="changes-landing"
+      onClick={() => onSelect({ kind: 'landing', root: l.gitRoot, sha: l.new })}
+      title={`${l.branch} → ${l.dest} · ${l.new.slice(0, 9)}`} data-selected={on || undefined}
       className={`w-full flex items-center gap-1.5 h-[26px] pl-[18px] pr-2 rounded-md text-left text-[12px] ${on ? SEL : HOVER}`}>
-      <span className={`material-symbols-outlined icon-xs shrink-0 ${on ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`} aria-hidden="true">commit</span>
-      <span className="font-mono text-[11.5px] text-[var(--color-primary)] shrink-0">{c.short}</span>
-      <span className={`flex-1 min-w-0 truncate text-[var(--color-text)] ${on ? 'font-semibold' : ''}`}>{c.subject}</span>
-      {c.pushed !== null && (
-        <span className={CHIP} title={c.pushed ? 'The upstream branch has this commit.' : 'A local commit, not pushed.'}>
-          {c.pushed ? 'pushed' : 'committed'}
-        </span>
-      )}
+      <span className={`material-symbols-outlined icon-xs shrink-0 ${on ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-dim)]'}`} aria-hidden="true">merge</span>
+      <span className={`flex-1 min-w-0 truncate font-mono text-[11.5px] text-[var(--color-text)] ${on ? 'font-semibold' : ''}`}>
+        {l.branch} <span className="text-[var(--color-text-muted)]">→ {l.dest}</span>
+      </span>
+      <span className="shrink-0 text-[11px] text-[var(--color-text-muted)]">{l.count === 1 ? '1 commit' : `${l.count} commits`}</span>
+      <span className={CHIP} title={l.state === 'on' ? `${l.dest} has these commits.` : `${l.dest} was reset or rewound since.`}>
+        {l.state === 'on' ? `on ${l.dest}` : `not on ${l.dest}`}
+      </span>
     </button>
   );
+}
+
+/** What could not be read about the session's landings, said rather than hidden. */
+function landedNotes(c: SessionChanges): string[] {
+  return [
+    ...c.unknown.map((u) => `Could not read landings in ${u.repo} (${u.reason}).`),
+    ...(c.landedTruncated ? ['More landings may exist than are listed.'] : []),
+    ...(c.unverified ? [`${c.unverified} landing record${c.unverified === 1 ? '' : 's'} could not be verified.`] : []),
+  ];
 }
 
 export function ChangesNav({ selected, onSelect }: {
   selected: ChangesSelection; onSelect: (s: ChangesSelection) => void;
 }) {
   const { data, error, loading, sessionId } = useCanvasSession();
-  // opening the tab re-reads (a commit or push made outside a turn shows up)
+  // opening the tab re-reads (a landing made outside a turn shows up)
   useEffect(() => { void refreshCanvasChanges(); }, []);
   const msg = 'px-2 py-2 text-[12px] text-[var(--color-text-muted)]';
   if (!sessionId) return <div className={msg}>No session yet.</div>;
@@ -186,7 +198,8 @@ export function ChangesNav({ selected, onSelect }: {
     );
   }
   if (!c) return <div className={msg}>Loading…</div>;
-  if (!c.turns.length && !c.commits.length) {
+  const notes = landedNotes(c);
+  if (!c.turns.length && !c.landed.length && !notes.length) {
     return <div className={msg}>No code changes in this session yet.{!c.scannedAll && ' (Only recent messages were scanned.)'}</div>;
   }
   const key = changesKey(selected);
@@ -196,8 +209,9 @@ export function ChangesNav({ selected, onSelect }: {
       {c.turns.length > 0 && <div className={SECTION}>Files changed</div>}
       {c.turns.map((t) => <TurnBlock key={t.id} turn={t} multiRepo={multiRepo} selected={selected} onSelect={onSelect} />)}
       {c.olderTurns > 0 && <div data-testid="changes-older" className={NOTE}>{c.olderTurns} older turns are not listed.</div>}
-      {c.commits.length > 0 && <div className={`${SECTION} mt-1`}>Commits mentioned</div>}
-      {c.commits.map((m) => <CommitRow key={`${m.root}@${m.sha}`} c={m} on={key === `${m.root}@${m.sha}`} onSelect={onSelect} />)}
+      {(c.landed.length > 0 || notes.length > 0) && <div className={`${SECTION} mt-1`}>Landed</div>}
+      {c.landed.map((l) => <LandingRow key={`${l.gitRoot}@${l.new}`} l={l} on={key === `${l.gitRoot}@${l.new}`} onSelect={onSelect} />)}
+      {notes.map((n) => <div key={n} data-testid="changes-landed-note" className={NOTE}>{n}</div>)}
       {!c.scannedAll && (
         <div data-testid="changes-not-scanned" className={NOTE}>Some earlier messages of this session were not scanned.</div>
       )}
@@ -261,29 +275,32 @@ function FileDiff({ f }: { f: ChangedFile }) {
   return <PatchView state={state} gone="The diff is no longer available." />;
 }
 
-function CommitPatch({ root, sha, path }: { root: string; sha: string; path: string }) {
-  const state = usePatch(() => canvasSessionService.commitDiff(root, sha, path), [root, sha, path]);
-  return <PatchView state={state} gone="Diff unavailable." />;
-}
-
-function CommitDetail({ commit }: { commit: MentionedCommit }) {
-  const [open, setOpen] = useState<string | null>(commit.files.length === 1 ? commit.files[0].path : null);
-  useEffect(() => { setOpen(commit.files.length === 1 ? commit.files[0].path : null); }, [commit]);
+function LandingDetail({ landing }: { landing: SessionLanding }) {
+  const [open, setOpen] = useState<string | null>(landing.files.length === 1 ? landing.files[0].path : null);
+  useEffect(() => { setOpen(landing.files.length === 1 ? landing.files[0].path : null); }, [landing]);
   return (
     <div>
-      {commit.files.map((f) => (
+      <ul className="px-2 pb-2 text-[12px] text-[var(--color-text-secondary)]">
+        {landing.subjects.map((s) => (
+          <li key={s.sha} className="truncate"><span className="font-mono text-[var(--color-text-muted)]">{s.sha}</span> {s.subject}</li>
+        ))}
+        {landing.count > landing.subjects.length && (
+          <li className="text-[var(--color-text-muted)]">{landing.count - landing.subjects.length} more commits</li>
+        )}
+      </ul>
+      {landing.files.map((f) => (
         <div key={f.path}>
-          <button type="button" data-testid="changes-commit-file" onClick={() => setOpen((o) => (o === f.path ? null : f.path))}
+          <button type="button" data-testid="changes-landing-file" onClick={() => setOpen((o) => (o === f.path ? null : f.path))}
             className={`w-full flex items-center gap-2 px-2 py-[5px] rounded-md text-left text-[12px] ${open === f.path ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : HOVER}`}>
             <FileTypeIcon name={splitPath(f.path)[0]} />
             <span className="font-mono flex-1 min-w-0 truncate" title={f.path}>{f.path}</span>
             <Delta ins={f.added} del={f.deleted} />
           </button>
-          {open === f.path && <CommitPatch root={commit.root} sha={commit.sha} path={f.path} />}
+          {open === f.path && <FileDiff f={f} />}
         </div>
       ))}
-      {commit.omittedFiles > 0 && (
-        <div className="px-2 py-1 text-[11.5px] text-[var(--color-text-muted)]">{commit.omittedFiles} more files are not listed.</div>
+      {!!landing.omitted && (
+        <div className="px-2 py-1 text-[11.5px] text-[var(--color-text-muted)]">{landing.omitted} more files are not listed.</div>
       )}
     </div>
   );
@@ -293,34 +310,34 @@ export function ChangesDetail({ selected }: { selected: ChangesSelection }) {
   const c = useChanges();
   const turn = selected?.kind === 'file' ? c?.turns.find((t) => t.id === selected.turn) : undefined;
   const file = selected?.kind === 'file' ? turn?.files.find((f) => f.path === selected.path) : undefined;
-  const commit = selected?.kind === 'commit'
-    ? c?.commits.find((m) => m.root === selected.root && m.sha === selected.sha) : undefined;
-  if (!file && !commit) {
+  const landing = selected?.kind === 'landing'
+    ? c?.landed.find((l) => l.gitRoot === selected.root && l.new === selected.sha) : undefined;
+  if (!file && !landing) {
     return (
       <div className="h-full flex items-center justify-center text-[12px] text-[var(--color-text-muted)]">
-        Select a file or a commit.
+        Select a file or a landing.
       </div>
     );
   }
-  // One title line: what (icon + name, or sha + subject) · when / repo · +/−.
+  // One title line: what (icon + name, or branch → destination) · repo / state · +/−.
   const name = file ? splitPath(file.path)[0] : '';
   const state = file
     ? `${file.repo} · turn at ${when(turn!.at)}`
-    : `${commit!.repo}${commit!.pushed === null ? '' : commit!.pushed ? ' · pushed' : ' · committed'} · ${when(commit!.at)}`;
+    : `${landing!.repo} · ${landing!.count === 1 ? '1 commit' : `${landing!.count} commits`} · ${landing!.state === 'on' ? 'on' : 'not on'} ${landing!.dest}`;
   return (
     <div data-testid="changes-detail" className="h-full flex flex-col">
       <div className="flex items-center gap-2 min-w-0 h-9 px-3 border-b border-[var(--color-border)] text-[11.5px] text-[var(--color-text-muted)]"
-        title={file ? file.absolutePath || file.path : `${commit!.sha} · ${commit!.subject}`}
+        title={file ? file.absolutePath || file.path : `${landing!.branch} → ${landing!.dest} · ${landing!.onto}..${landing!.new}`}
         data-testid="changes-detail-title">
-        {file ? <FileTypeIcon name={name} /> : <span className="font-mono text-[11.5px] text-[var(--color-primary)] shrink-0">{commit!.short}</span>}
-        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[var(--color-text)]">{file ? name : commit!.subject}</span>
+        {file ? <FileTypeIcon name={name} /> : <span aria-hidden="true" className="material-symbols-outlined icon-xs shrink-0 text-[var(--color-primary)]">merge</span>}
+        <span className="min-w-0 truncate text-[12.5px] font-semibold text-[var(--color-text)]">{file ? name : `${landing!.branch} → ${landing!.dest}`}</span>
         <span data-testid="changes-state" className="shrink-0 whitespace-nowrap">· {state}</span>
         <span className="flex-1" />
         {file && <Delta ins={file.added} del={file.deleted} />}
       </div>
       <div className="flex-1 overflow-auto px-2 py-2">
         {file && <FileDiff f={file} />}
-        {commit && <CommitDetail commit={commit} />}
+        {landing && <LandingDetail landing={landing} />}
       </div>
     </div>
   );

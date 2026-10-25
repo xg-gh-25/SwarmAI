@@ -239,6 +239,15 @@ export const toCamelCaseContentBlock = (block: Record<string, unknown>): Record<
   if (block.type === 'tool_use') {
     return enrichToolUseSummary(parentToCamel(block));
   }
+  if (block.type === 'turn_changes') {
+    // its rows are camelCase already; the landing fields are not (core/turn_changes)
+    const { turn_id: turnId, landed_truncated: landedTruncated, ...rest } = block;
+    return {
+      ...rest,
+      ...(turnId !== undefined ? { turnId } : {}),
+      ...(landedTruncated !== undefined ? { landedTruncated } : {}),
+    };
+  }
   return block;
 };
 

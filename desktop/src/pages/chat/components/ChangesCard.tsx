@@ -14,6 +14,12 @@
  * tinted by sign; once git has pruned the trees the row says so, and a failed
  * fetch (network) can be retried by opening the row again.
  *
+ * The turn's landings (design docs/design/2026-10-25-turn-result-card.md §5.2) come
+ * first: per landing `<branch> → <dest>`, its commits, whether it is still on
+ * `dest`, and its rows (the same rows, diffing `onto..new`). The title counts both
+ * ("N files changed · M commits landed"). What could not be read about landings
+ * (unknown repos, a truncated read, unverified records) is said at the end.
+ *
  * Inert in a read-only preview (ReadOnlyContext): names do not open, diffs still
  * expand (reading is not acting).
  *
@@ -22,7 +28,7 @@
 import { useContext, useRef, useState } from 'react';
 import { chatService } from '../../../services/chat';
 import { useTranslation } from 'react-i18next';
-import type { TurnChangeFile, TurnChangesContent } from '../../../types';
+import type { TurnChangeFile, TurnChangesContent, TurnLanding } from '../../../types';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
 import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
 import { tf } from '../tf';
@@ -168,27 +174,83 @@ function ChangeRow({ file }: { file: TurnChangeFile }) {
   );
 }
 
+/** One landing: `<branch> → <dest>`, its commits, whether it is still on `dest`,
+ *  then its file rows (they diff `onto..new` through the same turn diff). */
+function LandingGroup({ landing }: { landing: TurnLanding }) {
+  const { t } = useTranslation();
+  const on = landing.state === 'on';
+  return (
+    <li data-testid="turn-landing" className="border-b border-[var(--color-border)]">
+      <div className="flex items-center gap-2 px-3 py-1.5 min-w-0">
+        <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none text-[var(--color-text-muted)]">merge</span>
+        <span className="min-w-0 truncate font-mono text-[12.5px] text-[var(--color-text)]">
+          {landing.branch} <span className="text-[var(--color-text-muted)]">→ {landing.dest}</span>
+        </span>
+        <span data-testid="landing-state"
+          className={`ml-auto shrink-0 px-1.5 rounded-full border border-[var(--color-border)] text-[11px] ${on ? ADD : 'text-[var(--color-text-muted)]'}`}>
+          {on
+            ? tf(t, 'chat.turn.changes.onBranch', 'on {{dest}}', { dest: landing.dest })
+            : tf(t, 'chat.turn.changes.offBranch', 'not on {{dest}}', { dest: landing.dest })}
+        </span>
+      </div>
+      <ul className="px-3 pb-1.5 text-[12px] text-[var(--color-text-secondary)]">
+        {landing.subjects.map((s) => (
+          <li key={s.sha} className="truncate"><span className="font-mono text-[var(--color-text-muted)]">{s.sha}</span> {s.subject}</li>
+        ))}
+        {landing.count > landing.subjects.length && (
+          <li className="italic text-[var(--color-text-muted)]">
+            {tf(t, 'chat.turn.changes.moreCommits', '{{n}} more commits', { n: landing.count - landing.subjects.length })}
+          </li>
+        )}
+      </ul>
+      {!!landing.files.length && <ul className="border-t border-[var(--color-border)]">{landing.files.map((f) => <ChangeRow key={f.absolutePath} file={f} />)}</ul>}
+      {!!landing.omitted && (
+        <p className="px-3 py-1.5 border-t border-[var(--color-border)] text-[12px] italic text-[var(--color-text-muted)]">
+          {tf(t, 'chat.turn.changes.omitted', '{{n}} more files are not listed.', { n: landing.omitted })}
+        </p>
+      )}
+    </li>
+  );
+}
+
+function title(t: Parameters<typeof tf>[0], files: number, commits: number): string {
+  const f = files === 1 ? tf(t, 'chat.turn.changes.titleOne', '1 file changed')
+    : tf(t, 'chat.turn.changes.title', '{{count}} files changed', { count: files });
+  const c = commits === 1 ? tf(t, 'chat.turn.changes.landedOne', '1 commit landed')
+    : tf(t, 'chat.turn.changes.landed', '{{count}} commits landed', { count: commits });
+  if (files && commits) return `${f} · ${c}`;
+  if (commits) return c;
+  if (files) return f;
+  return tf(t, 'chat.turn.changes.titleNone', 'Changes');
+}
+
 /** `bare`: a section of the turn's output card (TurnCards OutputCard), no frame of its own. */
 export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?: boolean }) {
   const { t } = useTranslation();
-  const files = block.files;
-  const sum = totals(files);
+  const files = block.files ?? [];
+  const landed = block.landed ?? [];
+  const sum = totals([...files, ...landed.flatMap((l) => l.files)]);
   const count = files.length + (block.omitted ?? 0);
-  const anyFileOnly = files.some((f) => !f.diffable && !f.binary);
+  const commits = landed.reduce((n, l) => n + l.count, 0);
+  const anyFileOnly = [...files, ...landed.flatMap((l) => l.files)].some((f) => !f.diffable && !f.binary);
+  const notes: string[] = [
+    ...(block.unknown ?? []).map((u) => tf(t, 'chat.turn.changes.unknown',
+      'Could not read landings in {{repo}} ({{reason}}).', { repo: u.repo, reason: u.reason })),
+    ...(block.landedTruncated ? [tf(t, 'chat.turn.changes.truncated', 'More landings may exist; see Canvas.')] : []),
+    ...(block.unverified ? [tf(t, 'chat.turn.changes.unverified',
+      '{{n}} landing records could not be verified.', { n: block.unverified })] : []),
+  ];
   return (
     <section data-testid="turn-changes" className={bare ? '' : 'rounded-lg border border-[var(--color-border)] overflow-hidden'}>
       <header className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span aria-hidden="true" className="material-symbols-outlined icon-sm leading-none text-[var(--color-text-muted)]">difference</span>
-        <span className="font-mono text-[13px] text-[var(--color-text)]">
-          {count === 1
-            ? tf(t, 'chat.turn.changes.titleOne', '1 file changed')
-            : tf(t, 'chat.turn.changes.title', '{{count}} files changed', { count })}
-        </span>
+        <span className="font-mono text-[13px] text-[var(--color-text)]">{title(t, count, commits)}</span>
         <span className="ml-auto flex gap-2 tabular-nums text-[12.5px]">
           {!!sum.added && <span className={ADD}>+{sum.added}</span>}
           {!!sum.deleted && <span className={DEL}>−{sum.deleted}</span>}
         </span>
       </header>
+      {!!landed.length && <ul>{landed.map((l) => <LandingGroup key={`${l.gitRoot}:${l.new}`} landing={l} />)}</ul>}
       {(anyFileOnly || !!block.omitted) && (
         <p className="px-3 py-1.5 border-b border-[var(--color-border)] text-[12px] italic text-[var(--color-text-muted)]">
           {block.omitted
@@ -196,7 +258,10 @@ export function ChangesCard({ block, bare }: { block: TurnChangesContent; bare?:
             : tf(t, 'chat.turn.changes.tooLarge', 'Some changes are too large to show as a diff. Click a file name to open it.')}
         </p>
       )}
-      <ul>{files.map((f) => <ChangeRow key={f.absolutePath} file={f} />)}</ul>
+      {!!files.length && <ul>{files.map((f) => <ChangeRow key={f.absolutePath} file={f} />)}</ul>}
+      {notes.map((n) => (
+        <p key={n} data-testid="changes-note" className="px-3 py-1.5 border-t border-[var(--color-border)] text-[12px] italic text-[var(--color-text-muted)]">{n}</p>
+      ))}
     </section>
   );
 }

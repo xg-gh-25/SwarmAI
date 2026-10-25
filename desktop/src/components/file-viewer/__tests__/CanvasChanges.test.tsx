@@ -5,9 +5,10 @@
  * What is tested: "Files changed" lists each turn's card, newest first, as recorded
  * (status letter, name, directory, +/−), "+N more files" for a card's omitted rows,
  * "N older turns" past the cap, and says when earlier messages were not scanned; a
- * file opens its diff via tree-diff (its row's root + two trees); "Commits mentioned"
- * lists each commit (short sha, subject, pushed / committed / no state), opens its
- * files and a one-file commit its patch; an empty session says so; the tab reads
+ * file opens its diff via tree-diff (its row's root + two trees); "Landed" lists each
+ * landing (branch → destination, commit count, on / not on) and opens its commits and
+ * files, a file's diff via tree-diff with the landing's two trees; what could not be
+ * read about landings is said; an empty session says so; the tab reads
  * Changes only; a newly opened file brings the Artifacts tab forward; the Changes
  * tab hides (never unmounts) the file viewer.
  *
@@ -20,13 +21,11 @@ import { useState } from 'react';
 
 const artifacts = vi.fn();
 const changes = vi.fn();
-const commitDiff = vi.fn();
 const treeDiff = vi.fn();
 vi.mock('../../../services/canvasSession', async (orig) => {
   const real = await orig<typeof import('../../../services/canvasSession')>();
   real.canvasSessionService.artifacts = (s: string) => artifacts(s);
   real.canvasSessionService.changes = (s: string) => changes(s);
-  real.canvasSessionService.commitDiff = (r: string, s: string, p: string) => commitDiff(r, s, p);
   real.canvasSessionService.treeDiff = (r: string, a: string, b: string, p: string) => treeDiff(r, a, b, p);
   return real;
 });
@@ -45,12 +44,18 @@ const CHANGES = {
     { id: 'm1:0', at: '2026-10-24T19:05:00Z', files: [file('src/a.ts', { start: 's0', end: 'e0' })], omitted: 0 },
   ],
   olderTurns: 3,
-  commits: [
-    { sha: SHA, short: 'aaaaaaaaa', subject: 'feat: one', at: 't3', repo: 'swarmai', root: '/r/swarmai',
-      mentionedAt: 't4', pushed: false, files: [{ path: 'src/a.ts', added: 3, deleted: 1 }], omittedFiles: 0 },
-    { sha: 'b'.repeat(40), short: 'bbbbbbbbb', subject: 'fix: two', at: 't1', repo: 'swarmai', root: '/r/swarmai',
-      mentionedAt: 't2', pushed: null, files: [{ path: 'x', added: 1, deleted: 0 }, { path: 'y', added: 1, deleted: 0 }], omittedFiles: 5 },
+  landed: [
+    { repo: 'swarmai', gitRoot: '/r/swarmai', dest: 'main', branch: 'session/abc-fix', turn: 'none',
+      onto: SHA, new: 'b'.repeat(40), count: 2, state: 'on',
+      subjects: [{ sha: 'bbbbbbb', subject: 'fix: two' }, { sha: 'ccccccc', subject: 'feat: one' }],
+      files: [file('src/l.ts', { start: 'T0', end: 'N0' })] },
+    { repo: 'swarmai', gitRoot: '/r/swarmai', dest: 'main', branch: 'session/abc-old', turn: 'none',
+      onto: 'c'.repeat(40), new: 'd'.repeat(40), count: 1, state: 'off',
+      subjects: [{ sha: 'ddddddd', subject: 'old' }], files: [], omitted: 5 },
   ],
+  landedTruncated: true,
+  unverified: 1,
+  unknown: [{ repo: 'other', reason: 'no-reflog' }],
   scannedAll: false,
 };
 
@@ -67,7 +72,7 @@ async function load(c: unknown) {
 
 beforeEach(() => {
   resetCanvasSession();
-  [artifacts, changes, commitDiff, treeDiff].forEach((m) => m.mockReset());
+  [artifacts, changes, treeDiff].forEach((m) => m.mockReset());
 });
 
 describe('Changes tab (this session\'s transcript)', () => {
@@ -140,24 +145,44 @@ describe('Changes tab (this session\'s transcript)', () => {
     expect(changes).toHaveBeenCalledTimes(1);
   });
 
-  it('commits mentioned: pushed / committed / no state; a commit opens its files', async () => {
+  it('landed: branch → destination, count, on / not on; a landing opens its commits and files', async () => {
     await load(CHANGES);
-    commitDiff.mockResolvedValue({ diff: '@@ -1 +1 @@\n+x', truncated: false });
+    treeDiff.mockResolvedValue('@@ -1 +1 @@\n+landed');
     render(<Tab />);
-    const rows = await screen.findAllByTestId('changes-commit');
-    expect(rows[0].textContent).toMatch(/aaaaaaaaa.*feat: one.*committed/);
-    expect(rows[1].textContent).toMatch(/bbbbbbbbb.*fix: two/);
-    expect(rows[1].textContent).not.toMatch(/committed|pushed/);
+    const rows = await screen.findAllByTestId('changes-landing');
+    expect(rows[0].textContent).toMatch(/session\/abc-fix.*main.*2 commits.*on main/);
+    expect(rows[1].textContent).toMatch(/session\/abc-old.*1 commit.*not on main/);
     fireEvent.click(rows[0]);
-    expect((await screen.findByTestId('changes-commit-file')).textContent).toMatch(/src\/a\.ts.*\+3 −1/);
-    expect((await screen.findByTestId('changes-patch')).textContent).toContain('+x');
-    expect(commitDiff).toHaveBeenCalledWith('/r/swarmai', SHA, 'src/a.ts');
+    const detail = await screen.findByTestId('changes-detail');
+    expect(detail.textContent).toContain('fix: two');
+    // a one-file landing opens its file
+    expect(await screen.findByTestId('changes-landing-file')).toBeTruthy();
+    expect((await screen.findByTestId('changes-patch')).textContent).toContain('+landed');
+    expect(treeDiff).toHaveBeenCalledWith('/r/swarmai', 'T0', 'N0', 'src/l.ts');
     fireEvent.click(rows[1]);
     expect(await screen.findByText(/5 more files/)).toBeTruthy();
   });
 
+  it('what could not be read about landings is said', async () => {
+    await load(CHANGES);
+    render(<Tab />);
+    const notes = (await screen.findAllByTestId('changes-landed-note')).map((n) => n.textContent).join(' ');
+    expect(notes).toContain('other');
+    expect(notes).toContain('no-reflog');
+    expect(notes).toContain('More landings');
+    expect(notes).toContain('1 landing record');
+  });
+
+  it('a session with only landings is not empty', async () => {
+    await load({ turns: [], olderTurns: 0, scannedAll: true, landed: CHANGES.landed.slice(0, 1),
+      landedTruncated: false, unverified: 0, unknown: [] });
+    render(<Tab />);
+    expect(await screen.findByTestId('changes-landing')).toBeTruthy();
+    expect(screen.queryByText(/No code changes/)).toBeNull();
+  });
+
   it('a session with no changes says so', async () => {
-    await load({ turns: [], olderTurns: 0, commits: [], scannedAll: true });
+    await load({ turns: [], olderTurns: 0, scannedAll: true, landed: [], landedTruncated: false, unverified: 0, unknown: [] });
     render(<Tab />);
     expect(await screen.findByText(/No code changes in this session yet/)).toBeTruthy();
     expect(screen.queryByTestId('changes-count')).toBeNull();
