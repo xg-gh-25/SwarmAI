@@ -3,7 +3,7 @@ title: Turn attention tiers (what in a chat turn gets the user's attention, deci
 date: 2026-10-25
 created: 2026-10-25
 updated: 2026-10-25
-status: draft v5 (v4 redesigned from the root; v5 fixes the frontend seam found by the v4 review, whose backend half passed); for Gawan's review
+status: v5 accepted; step 1 (pilot) implemented `e391955ce`, awaiting Gawan's light/dark check; steps 2-4 not started
 ---
 
 # Turn attention tiers
@@ -52,8 +52,11 @@ Every part of a turn has one attention level:
   `<div key={z.id} data-zone={z.kind}>` for top-level zones (`TurnZones.tsx` ~991) and the
   host `BodyZone` renders for a zone inside a stage (`TurnZones.tsx` ~894). No node is added,
   moved or re-keyed.
-- One CSS rule in `index.css`, on process TEXT zones only:
-  `[data-zone="text"][data-attn="process"] { --color-text: var(--color-text-secondary); }`.
+- One CSS rule in `index.css`: `[data-prose="process"] { --color-text: var(--color-text-secondary); }`.
+  `data-prose="process"` is set on the agent's process prose wherever it renders: a process
+  `text` zone's host, a note inside a phase (`PhaseNote`), a note inside a stage (`BodyZone`).
+  (As built in step 1, `e391955ce`: v5 keyed the rule on text-zone hosts only, which missed the
+  notes inside phases and stages.)
   Markdown sets every prose element to `text-[var(--color-text)]`
   (`MarkdownRenderer.tsx` ~909-1048, `index.css` ~1708), so overriding the variable on the host
   dims paragraphs, headings, lists and bold together, with no change to `MarkdownRenderer`.
@@ -165,8 +168,10 @@ colour and the answer's does not. No closure scan, no colour migration.
 ## 6. The process-tier changes (the pilot)
 
 - note and restatement text → secondary colour (via `data-attn`).
-- a thought being written inside a phase shows its first line (it only grows, so the stream
-  stays monotonic); open it for the full text. Today it is shown in full while written
+- a thought inside a phase shows one line, while written and after: the first line of its
+  newest paragraph. Two thinking blocks in a row are joined into one passage
+  (`turnView.ts` ~575), so "its first line" would hide the newest block, the step arriving now
+  (found by the stream-order property test while building step 1). Open it for the full text. Today it is shown in full while written
   (`TurnZones.tsx` ~265-267); this changes that. The first THINKING passage stays full (v6 §2.1).
 - a strip with detail shows ▸; the detail stays the persisted outcome (raw output is live only).
 
