@@ -163,5 +163,6 @@ def test_quality_counts_the_agents_test_reports_and_reports_them():
     q = audit["summary"]["quality"]
     assert (q["verification_passed"], q["verification_required"]) == (1, 1)
     report = render(audit, fmt="report")
-    assert "agent 自己报告的结果" in report and "2 通过，0 失败" in report
+    # no review expert answered in these events: the reports are the agent's word alone
+    assert "仅由 agent 报告" in report and "2 通过，0 失败" in report
 

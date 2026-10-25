@@ -172,6 +172,8 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - **审查记录审过的 tree（r14）**：今天的 R2 只审已处理 finding 对应的 hunk（`review.py:238-240,428`），审查事件也不记 tree，所以 TEST 退回时那段新改动对应不到任何 finding，R2 派不出去；硬派的话新 hunk 也没人审。改法：每次 R1、R2 和增量审查的完成事件都写入它审过的 `code_tree`；新增"增量审查"，对象是 `diff(上一次审过的 tree, 当前 tree)` 的全部内容，不限于 finding 的 hunk，由 correctness 加上原 R1 里命中这些路径的专家来审。R2 仍然只复查已处理的 finding。
   - 落地时 LG-1 要求 TEST 验证报告的 `code_tree` 等于落地的 tree，并且这个 tree 等于某一次审查（R1、R2 或增量审查）事件里记下的 `code_tree`。这样每一次进入落地的代码都被审查过，最终验证报告也对应同一份代码。
 - REPORT 里分开写：agent 报告的测试，和审查员核实过的部分。不再有机器打的 verified / unverified 标签。
+  - 已实施（2026-10-25）：没有 REVIEW 专家回答过的 run（例如小改动不派专家），结论行写"测试结果仅由 agent 报告，没有审查专家核实"，测试一节的标题也这样写；有专家回答过，标题写"审查专家审阅过这些报告"。
+  - 已实施（2026-10-25）：`land`、`run-land --prepare` 和未落地收尾在渲染 DELIVER 的 REPORT 之前先统计一次 token（run 开始到此刻，记在 deliver 阶段）；REFLECT 结束时再统计一次全程。没有 transcript 时 Token Cost 是 WARN 并写明原因，不再是 BLOCK "not measured"（专家没被计量时仍按 §E5 是 BLOCK）。
 - 挡不挡落地：还有未解决的 HIGH/CRITICAL finding 就挡（RV-2）；TEST 验证报告里有"失败"的命令也挡（agent 自己报告失败，就不能交付）；MEDIUM/LOW 作为残余风险写进 REPORT。
 
 #### 3.3.4 核心里要改成通用的地方
@@ -620,3 +622,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r25（2026-10-25）：S6-5c 实施：`run_worktree.code_repos` 删除，`governed_repo_roots` 是项目仓库的唯一读取方。
 - r26（2026-10-25）：验收的第一格：Node 样例仓库在无 daemon、无网络时 direct 和 full 落地（自动测试）；记下三个未解决项。
 - r27（2026-10-25）：验收矩阵加"无测试"仓库（direct、full 都落地）；unborn 仓库今天不能落地（停在 worktree_unavailable），记为待设计。
+- r28（2026-10-25）：DELIVER 的 REPORT 统计到落地为止的 token；没有专家核实时写明测试结果仅由 agent 报告。

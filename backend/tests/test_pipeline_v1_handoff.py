@@ -123,7 +123,9 @@ def test_reflect_without_a_transcript_records_usage_not_available(rig):
     events = r.events()
     missing = [e for e in events if e["kind"] == "metric"
                and e["payload"]["name"] == "usage_not_available"]
-    assert len(missing) == 1 and missing[0]["payload"]["reason"]
+    # measured before the DELIVER REPORT, and again when REFLECT ends
+    assert [e["stage"] for e in missing] == ["deliver", "reflect"], missing
+    assert all(e["payload"]["reason"] for e in missing)
     audit = json.loads((r.engine().run_dir / "run_audit.json").read_text())
     token = audit["summary"]["token_cost"] if "token_cost" in audit["summary"] \
         else audit["summary"]["token"]

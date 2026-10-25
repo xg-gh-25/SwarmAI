@@ -1501,6 +1501,7 @@ class RunEngine:
                     "no TEST report on the current tree of " + ", ".join(stale)
                     + ": run the tests and submit them with `report-tests --artifact -`, "
                     "then --prepare again; or --skip-tests to land untested")
+        self._record_usage("deliver")           # the REPORT rendered below: tokens so far
         context = self.check_context()
         push = self.push_status(manual_landing=True)
         def render(_request_id, _results):
@@ -1963,6 +1964,7 @@ class RunEngine:
         cap = lifecycle.REASON_CAPS.get((state.get("pending_landing") or {}).get("reason"))
         if cap is not None:
             self.record_cap_exceeded(cap, stage="deliver")
+        self._record_usage("deliver")
         value = self.build_audit(through="DELIVER", persist=True,
                                  commits=self.landed_commits() or None)
         report = audit_protocol.render(value, fmt="report")
@@ -2324,15 +2326,17 @@ class RunEngine:
         extra = self._read_json(self.store.paths.run / "transcripts.json", []) or []
         return list(dict.fromkeys([*self.contract.get("transcript_ids", []), *extra]))
 
-    def _record_run_usage(self) -> None:
-        """The run's token usage, measured by the daemon when REFLECT ends (r6 §2.3):
-        the agent never calls a measuring command. No transcript, or none in the run's
-        window, is recorded as ``metric(usage_not_available)`` with the reason, and
-        Token Cost reads WARN for it instead of BLOCK."""
+    def _record_usage(self, stage: str) -> None:
+        """The run's token usage from its start until now, measured from the run's
+        transcripts (r6 §2.3: the agent never calls a measuring command): before the
+        DELIVER REPORT is rendered (``stage="deliver"``) and again when REFLECT ends
+        (``"reflect"``; the later measurement is the total). No transcript, or none in
+        the run's window, is recorded as ``metric(usage_not_available)`` with the
+        reason, and Token Cost reads WARN for it instead of BLOCK."""
         from core.run_protocol import usage
         try:
             usage.measure(self.store, transcript_ids=self.transcript_ids(),
-                          created_at=self.contract["created_at"])
+                          created_at=self.contract["created_at"], stage=stage)
         except usage.UsageError as exc:
             events = self.store.read_events()
             attempt = 1 + sum(e.get("kind") == "metric"
@@ -2340,7 +2344,7 @@ class RunEngine:
                               for e in events)
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="metric", at=_now(),
-                stage="reflect", attempt=attempt,
+                stage=stage, attempt=attempt,
                 payload={"name": "usage_not_available", "value": 1,
                          "reason": str(exc)[:300]})
 
@@ -2514,6 +2518,7 @@ class RunEngine:
             if not all(passed for passed, _ in results.values()):
                 close("an earlier landing guard failed")
                 return self._land_failed(results)
+            self._record_usage("deliver")       # the REPORT's tokens: up to this landing
             push = self.push_status()
             report_events = self.store.read_events()
             self.store.append_new(
@@ -2636,7 +2641,7 @@ class RunEngine:
             raise EngineError("reflect completion requires reflecting")
         kind = "reflect_exhausted" if degraded else "reflect_complete"
         payload = {"reason": reason or "background reflection exhausted"} if degraded else {}
-        self._record_run_usage()
+        self._record_usage("reflect")
         self.store.append_new(writer=self.authority.writer("hook"), kind=kind, at=_now(),
                               ordinal=NEXT, payload=payload)
         self._settle()

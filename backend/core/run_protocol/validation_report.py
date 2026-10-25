@@ -16,7 +16,7 @@ is the tree the engine computes for that repo's worktree at that moment, never a
 the agent supplied. The log records only that this report was submitted on this tree;
 whether its content is true is for review to judge.
 
-Public: ``parse``, ``event_payload``, ``read``, ``latest``, ``report_lines``,
+Public: ``parse``, ``event_payload``, ``read``, ``latest``, ``report_lines``, ``reports_reviewed``,
 ``STAGES``, ``RESULTS``, ``RISKS``, ``ReportError``.
 """
 from __future__ import annotations
@@ -170,5 +170,16 @@ def report_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
             lines.append(f"- {stage} · {repo} @ {str(p['code_tree'])[:12]}："
                          f"{p['n_pass']} 通过，{p['n_fail']} 失败，{p['n_not_run']} 未运行")
     if lines:
-        lines = ["## 测试（agent 自己报告的结果，pipeline 没有重跑）", ""] + lines
+        head = ("## 测试（agent 报告，pipeline 没有重跑；审查专家审阅过这些报告）"
+                if reports_reviewed(events) else
+                "## 测试（仅由 agent 报告：pipeline 没有重跑，也没有审查专家核实）")
+        lines = [head, ""] + lines
     return lines
+
+
+def reports_reviewed(events: Sequence[Mapping[str, Any]]) -> bool:
+    """A REVIEW expert answered: someone other than the agent read the run's reports
+    (the review handout carries them). Without one, the reports are the agent's word
+    alone, and the REPORT says so."""
+    return any(event.get("kind") == "answer" and event.get("stage") == "review"
+               for event in events)

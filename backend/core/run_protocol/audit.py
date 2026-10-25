@@ -208,6 +208,11 @@ def _validation_lines(event_rows) -> list[str]:
     return report_lines(event_rows)
 
 
+def _reports_reviewed(event_rows) -> bool:
+    from core.run_protocol.validation_report import reports_reviewed
+    return reports_reviewed(event_rows)
+
+
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
           findings: Sequence[Mapping[str, Any]],
           contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
@@ -393,6 +398,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows),
+               # whether a review expert answered after reading the agent's reports
+               "reports_reviewed": _reports_reviewed(event_rows),
                "trace_matrix": trace_protocol.matrix(design),
                # S6-4d: what the agent says it ran, per repo (the latest TEST report)
                "test_reports": _commands(test_reports),
@@ -444,7 +451,8 @@ def _token_text(token: Mapping[str, Any]) -> str:
     """§E9.4: observed totals; an incomplete count says so, never a made-up total."""
     total, accounted, calls = token.get("total_tokens"), token.get("accounted_calls"), token.get("total_calls")
     if total is None:
-        return "not measured"
+        why = token.get("not_available")
+        return f"not measured（{_text(why, 120)}）" if why else "not measured"
     if calls is None or accounted != calls:
         shown = f"{accounted}/{calls}" if calls is not None else f"{accounted}/unknown"
         return f"{_k(total)} observed · {shown} calls accounted"
@@ -488,10 +496,13 @@ def _conclusion(audit: Mapping[str, Any]) -> str:
     outcome, details = audit["outcome"], audit.get("details") or {}
     what = _text(details.get("requirement") or f"run {audit['run_id']}", 200)
     landing = outcome.get("landing")
+    agent_only = ("测试结果仅由 agent 报告，没有审查专家核实。"
+                  if details.get("validation") and not details.get("reports_reviewed") else "")
     if audit.get("audit_through") == "DELIVER" and landing is None:
-        return f"交付：{what}。落地守卫通过。"
+        return f"交付：{what}。落地守卫通过。{agent_only}"
     if landing in ("landed", "human_override"):
-        return f"交付：{what}。已落地（{'人工' if landing == 'human_override' else '守卫通过'}）。"
+        return (f"交付：{what}。已落地（{'人工' if landing == 'human_override' else '守卫通过'}）。"
+                + agent_only)
     return f"未落地：{what}。reason：{outcome.get('reason') or landing or 'unknown'}。"
 
 
