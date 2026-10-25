@@ -150,7 +150,7 @@ class Rig:
         (self.ws / "Projects" / PROJECT).mkdir(parents=True)
         self.repo = tmp_path / "repo" if with_repo else None
         if self.repo is not None:
-            write(self.repo, {**BASE_FILES, **(extra or {})})
+            write(self.repo, {**self.BASE_FILES, **(extra or {})})
             _git(self.repo, "init", "-q", "-b", "main")
             _git(self.repo, "add", "-A")
             _git(self.repo, "commit", "-q", "-m", "init")
@@ -316,7 +316,17 @@ class Rig:
     CHANGE = {"backend/core/mod.py": "def add(a, b):\n    return b + a\n"}
     _edited = False
 
-    def create(self, *args: str, requirement: str | None = REQUIREMENT) -> dict:
+    # ── what a subclass overrides for another sample repo (a Node rig, the
+    # acceptance matrix): its files, its change, its documents and its report ──
+    BASE_FILES = BASE_FILES
+    REQUIREMENT = REQUIREMENT
+
+    def documents(self) -> dict[str, Any]:
+        return documents(self.profile)
+
+    def create(self, *args: str, requirement: "str | None" = ...) -> dict:  # type: ignore[assignment]
+        if requirement is ...:
+            requirement = self.REQUIREMENT
         repo_args = ["--repo", f"repo={self.repo}"] if self.repo is not None else []
         req = ["--requirement", requirement] if requirement is not None else []
         out = self.v1("create", "--project", PROJECT, "--profile", self.profile,
@@ -325,7 +335,7 @@ class Rig:
         return out
 
     def gate0(self, verdict: str = "SUPPORTED", n: int = 1) -> dict:
-        docs = documents(self.profile)
+        docs = self.documents()
         out = self.v1("gate0-start", "--artifact", self.artifact("requirements", docs["evaluate"]))
         assert out.get("ok") is True, out
         if out.get("required"):
@@ -358,7 +368,7 @@ class Rig:
     def complete_stage(self) -> dict:
         """Do the normal work of the current stage and complete it."""
         stage = self.state()["stage"]
-        docs = documents(self.profile)
+        docs = self.documents()
         if stage == "evaluate":
             if self.profile == "bugfix":
                 self.gate0()
