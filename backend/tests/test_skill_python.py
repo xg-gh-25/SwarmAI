@@ -51,7 +51,6 @@ INVOCATION = re.compile(
 # (file under the docs root, text on the line): a repository's own code in its own environment,
 # or prose. Everything else runs in SwarmAI's environment and must use py.
 EXEMPT = [
-    ("s_code-review/INSTRUCTIONS.md", "python3 -m ruff"),                 # the reviewed repo's tool
     ("s_memory-distill/SKILL.md", "never use `python3 locked_write.py`"),  # prose
     ("s_self-evolution/SKILL.md", "Never `python3 locked_write.py`"),     # prose
 ]

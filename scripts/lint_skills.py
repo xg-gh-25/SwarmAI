@@ -180,11 +180,6 @@ BODY_ALLOWLIST: dict[str, set[str]] = {
     "backend/skills/s_persist/scripts/locked_write.py": {"O001"},
     # Comments quoting the on-disk entry shapes this checker parses.
     "backend/skills/s_loops-health/scripts/loops_health_check.py": {"C037", "DEC01"},
-    # Parser comments quoting the header shape and the cross-reference phrasings
-    # the regexes below them match.
-    "backend/skills/s_steeringify/steeringify.py": {"C007", "C008", "C012"},
-    # The same phrasings, documented for the reader of the skill.
-    "backend/skills/s_steeringify/INSTRUCTIONS.md": {"C005", "C007"},
     # The portable twin of s_persist above, provisioned into user DDDs. Same
     # reason and same shape: an entry-id sample its ``### {entry_id} |`` parser
     # matches and its CLI help tells the user to imitate. Only ``O001`` is listed

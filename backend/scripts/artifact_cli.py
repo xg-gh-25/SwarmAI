@@ -102,7 +102,7 @@ def _read_json_arg(raw: str, argname: str) -> str:
 
 def cmd_publish(args, reg: ArtifactRegistry) -> None:
     """Publish a bare artifact (no run, no stage): manifest-tracked, read by id.
-    Standalone skills (s_evaluate on ESCALATE, s_deliver / s_qa standalone) emit an
+    Standalone skills (s_evaluate on ESCALATE, s_qa standalone) emit an
     artifact this way; Pipeline v1 run documents go through ``pipeline_v1.py``."""
     _raw = _read_json_arg(args.data, "--data")
     try:

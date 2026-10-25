@@ -81,6 +81,7 @@ skeptic 实测：把单条描述限到 200 字符，清单约 2.3 万 + 插件�
    - `s_internal-*`：按 glob 枚举，不手写名单（第一批时本机有 5 个，其中 concur、invoice-collect 已删）。`s_internal-crux-review` 在 SecDLC DDD 里已有一份，先合并，不要再复制一份。
    - **打包只带 git 跟踪的 skill**：现在打包从工作区复制，gitignored 的本地 skill 也进了安装包。这样 XG 本机的包和 CI 打出的包不一样，违反 usable-by-anyone P7 第 3 条（同一条使用路径）。
 2. **功能重复的合并**，逐个读内容后决定留哪个：`s_code-review` / `s_qa` / `s_expert-review`；`s_deep-research` / 插件的 deep-research；`s_save-activity`、`s_save-context` / 自动 DailyActivity；`s_steeringify` / `s_self-evolution`；`s_summarize`。
+   - 2026-10-25 已删：`s_steeringify`（连同 `distillation_hook` 里只写不读的 `steeringify_proposals.json`）、`s_deliver`（pipeline v1 不调用）、`s_code-review`（与 CLI 自带 `/code-review` 同名同功能；DDD 绑定的 `review_path` 改为 `s_expert-review`）、`s_save-activity`（自动 DailyActivity 已覆盖）、`s_summarize`。留下：`s_save-context`（交接给别的 agent）、`s_qa`（跑测试修 bug，归第 4 步）、`s_memory-distill`（蒸馏 hook 失败时的补救路径）、`s_deep-research`（本机没有插件版）。
 3. **坏了的删**：引用的脚本、模块已不存在。
 4. **最后才看零使用**：对陌生用户也说不清价值的删；说得清的留，让第二层召回帮它被找到。
 

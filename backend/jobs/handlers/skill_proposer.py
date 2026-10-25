@@ -234,7 +234,7 @@ def _gather_skill_context(gap: dict) -> dict:
 
     # 3 example skills (diverse types) for style reference
     examples: list[str] = []
-    example_skills = ["s_summarize", "s_weather", "s_radar-todo"]
+    example_skills = ["s_weather", "s_radar-todo", "s_pdf"]
     skills_dir = Path(__file__).resolve().parents[2] / "skills"
     for name in example_skills:
         skill_path = skills_dir / name / "SKILL.md"

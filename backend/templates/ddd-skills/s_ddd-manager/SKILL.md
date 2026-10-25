@@ -96,7 +96,7 @@ contract** declared in `Projects/<name>/bindings.yaml`. A DDD may bind many repo
 
 | Shape | bindings.yaml | DEVELOP path | SYNC-BACK |
 |---|---|---|---|
-| **External** (GitHub) | `kind: external` | branch + PR + `s_code-review` | opt-in |
+| **External** (GitHub) | `kind: external` | branch + PR + `s_expert-review` | opt-in |
 | **Internal** (enterprise host) | `kind: internal` | the host's `s_internal-*` toolchain (provided by that host, not this package) | opt-in |
 | **No-repo** (pure DDD) | none | docs ARE the deliverable — edit directly | n/a |
 
@@ -111,7 +111,7 @@ bindings:
       remote_kind: github-pr       # github-pr | code-amazon-cr | self-hosted-main
       build_system: none           # none | local-script | (an enterprise build system)  (orthogonal to remote_kind)
       branch: main
-      review_path: s_code-review   # s_code-review (github) | the host's internal review skill
+      review_path: s_expert-review   # s_expert-review (github) | the host's internal review skill
       auto_send: manual-push       # manual-push = stop at PUSH-READY (commit=auto, push=user) | on-clean-review; required
       refresh_policy: on-develop   # when the ⑥ refresher regenerates code-intel
 ```

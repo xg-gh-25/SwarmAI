@@ -16,8 +16,7 @@ Key public symbols:
                                 of message dicts and returns a
                                 ``StructuredSummary``.
 
-Used by both the automatic ``DailyActivityExtractionHook`` and the
-on-demand ``s_save-activity`` skill to ensure consistent extraction.
+Used by the automatic ``DailyActivityExtractionHook``.
 """
 
 from __future__ import annotations

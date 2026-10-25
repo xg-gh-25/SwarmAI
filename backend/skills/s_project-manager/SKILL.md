@@ -452,7 +452,7 @@ hardcoded path), so the SAME lifecycle serves all three:
 | Project shape | `bindings.yaml`? | BIND/PULL | DEVELOP path | SYNC-BACK |
 |---|---|---|---|---|
 | **Internal repo** (code.amazon.com / Brazil) | yes — `kind: internal` | PULL deferred (Midway/Brazil auth) | `s_internal-brazil` (build/release) → `s_internal-crux-cr` (CR) → `s_internal-crux-review` | yes (opt-in map) |
-| **External repo** (GitHub) | yes — `kind: external` | `bind_repo` clones + indexes | normal git branch + PR + `s_code-review` (NO CRUX, NO brazil) | yes (opt-in map) |
+| **External repo** (GitHub) | yes — `kind: external` | `bind_repo` clones + indexes | normal git branch + PR + `s_expert-review` (NO CRUX, NO brazil) | yes (opt-in map) |
 | **No-repo project** (pure DDD docs) | **no** — never bound | N/A — stops at CREATE | N/A — DDD docs ARE the deliverable; edit them directly | N/A |
 
 The discriminator is the delivery contract's `remote_kind` (`code-amazon-cr` vs
@@ -549,7 +549,7 @@ delivery skill chosen by the binding's `delivery_contract`. **Read `remote_kind`
 **B) `remote_kind: github-pr` (external — GitHub):**
 - Normal git flow: branch, commit, `git push` to a fork/branch, open a PR. This is the
   ordinary public-git path — **no CRUX, no Brazil, no `s_internal-*` skills.**
-- Review with **`s_code-review`** (PR/diff review), not `s_internal-crux-review`.
+- Review the change with **`s_expert-review`** before opening the PR, not `s_internal-crux-review`.
 
 **C) No-repo project (no `bindings.yaml`):** DEVELOP does not apply — there is no repo to
 deliver to. The 4 DDD docs ARE the deliverable; edit them directly (or via `s_persist`).

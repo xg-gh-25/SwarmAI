@@ -266,7 +266,7 @@ For thorough research on a topic:
 
 1. **Search** to find relevant URLs
 2. **Extract** full content from top results
-3. **Summarize** (use s_summarize) or analyze
+3. **Summarize** or analyze
 
 ```bash
 # Step 1: Search
@@ -291,7 +291,6 @@ Tavily is a building block for other skills:
 | Skill | How Tavily Helps |
 |---|---|
 | s_deep-research | Primary search engine for multi-round research |
-| s_summarize | Fetch content from URLs before summarizing |
 
 ---
 

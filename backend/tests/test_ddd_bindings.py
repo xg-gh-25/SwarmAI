@@ -478,7 +478,7 @@ def test_classify_external_when_all_external(tmp_path: Path):
         "repo": "gh", "kind": "external",
         "clone": "https://github.com/o/gh.git", "worktree": None,
         "delivery_contract": {"remote_kind": "github-pr", "branch": "main",
-                              "review_path": "s_code-review", "auto_send": "on-clean-review"},
+                              "review_path": "s_expert-review", "auto_send": "on-clean-review"},
     }]})
     assert classify_project(tmp_path) == "external"
 
