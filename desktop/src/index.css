@@ -1705,6 +1705,13 @@ body {
   font-family: inherit;
 }
 
+/* Attention tiers (docs/design/2026-10-25-turn-attention-tiers.md §3): the agent's
+   process prose (restatement, notes between and inside groups) recedes behind the
+   answer. Markdown colours every prose element with var(--color-text), so overriding
+   the variable on the prose host dims paragraphs, headings, lists and bold together;
+   links and code keep their own colours. Theme values are literal, so no cycle. */
+[data-prose="process"] { --color-text: var(--color-text-secondary); }
+
 .assistant-message .markdown-content h1,
 .assistant-message .markdown-content h2,
 .assistant-message .markdown-content h3,

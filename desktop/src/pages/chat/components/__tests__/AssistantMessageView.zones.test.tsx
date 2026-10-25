@@ -124,17 +124,16 @@ describe('AC2 — notes stay in their group', () => {
     expect(within(screen.getAllByTestId('zone-phase')[0]).getByText(/so the store writes/)).toBeTruthy();
   });
 
-  it('a thought is one ✻ Thought row in the strips’ column; the one being written is open, it folds 2s after', () => {
+  it('a thought is one ✻ Thought row in the strips’ column; the one being written shows its first line, not all of it', () => {
     vi.useFakeTimers();
     const head = [tx('go'), bash('a', 'cat a.ts'), tr('a'), th('first line\nsecond line')];
     const r = render(view(head, true));
-    // being written: the step working now, in full
-    expect(screen.getByTestId('thought').getAttribute('data-folded')).toBe('false');
-    expect(screen.getByTestId('thought-text').textContent).toContain('second line');
-    // the next call starts: the thought is done, it folds FOLD_DELAY_MS later (never on the spot)
+    // being written: process prose, one line (attention tiers §6; was: open in full)
+    expect(screen.getByTestId('thought').getAttribute('data-folded')).toBe('true');
+    expect(screen.getByTestId('thought').textContent).not.toContain('second line');
+    // the next call starts, then settles: the row does not change
     const blocks = [...head, bash('b', 'make'), tr('b')];
     r.rerender(view(blocks, true));
-    expect(screen.getByTestId('thought').getAttribute('data-folded')).toBe('false');
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
     r.rerender(view(blocks, true));
     const thought = screen.getByTestId('thought');

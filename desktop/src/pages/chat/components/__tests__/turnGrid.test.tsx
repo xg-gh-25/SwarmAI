@@ -111,6 +111,9 @@ describe('one column grid for a turn', () => {
   it('settled and opened by the user: the same columns, and each row where it was live', () => {
     vi.useFakeTimers();
     const r = render(view(CHAT, true));
+    // the live thought shows one line (attention tiers §6): open it, as the user would,
+    // so its detail column is on the live grid to compare with
+    for (const b of r.container.querySelectorAll('[data-testid="thought-toggle"][aria-expanded="false"]')) act(() => { (b as HTMLElement).click(); });
     const live = grid(r.container);
     r.rerender(view([...CHAT, tx('Final answer.')], false));
     act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });

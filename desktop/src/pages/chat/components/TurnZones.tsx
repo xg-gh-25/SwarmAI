@@ -42,6 +42,7 @@ import type { ThoughtUnit, ToolStep } from '../turnView';
 import { STOP_TURN_EVENT, agentBatches, mergeStrips, phaseSegments, stripView, zoneStats } from '../turnZones';
 import type { PhaseMember, StageZone, StopReceiptView, StripItem, Zone } from '../turnZones';
 import { ReadingContext } from '../readingContext';
+import { attnProps, zoneAttention, PROCESS_PROSE } from '../attention';
 import { StageResult } from './StageDocs';
 import { agentStatus, useBackgroundAgents, useHasRunningAgent } from '../../../stores/backgroundAgentsStore';
 import type { BackgroundAgent } from '../../../stores/backgroundAgentsStore';
@@ -262,11 +263,15 @@ const THOUGHT_TEXT = 'text-[12.5px] italic leading-relaxed text-[var(--color-tex
 /** A thought inside a phase: one row in the strip column, `✻ Thought`, its first line
  *  and how long it ran; the row opens to all of it. Open, the row drops the preview:
  *  the full text below starts with that same line, shown once. The thought being
- *  written is open in full (it is the step working now); it folds to its row
- *  FOLD_DELAY_MS after it ended, like every finished item (XG 2026-10-22). */
+ *  written shows its first line too (the first line only grows, so the row never jumps):
+ *  process prose does not take the reader's attention (attention tiers §6). The first
+ *  THINKING passage of a turn is a ThinkingGroup, shown in full while written. */
 function PhaseThought({ unit, scope, open, onToggle }: { unit: ThoughtUnit; scope: string; open: boolean; onToggle: (o: boolean) => void }) {
   const { t } = useTranslation();
-  const first = unit.text.trim().split('\n')[0];
+  // The row's line: the first line of its newest paragraph (two thinking blocks in a row
+  // are one passage, joined by a blank line), so while written the step arriving now is
+  // on screen; the same rule once finished, so the row does not change when it ends.
+  const first = (unit.text.trim().split(/\n\s*\n/).pop() ?? '').trim().split('\n')[0];
   const seconds = callSeconds(`${scope}:th-${unit.ordinal}`, unit.live);
   return (
     <div data-testid="thought" data-live={unit.live ? 'true' : 'false'} data-folded={open ? 'false' : 'true'} {...ANCHOR_PROPS}>
@@ -374,6 +379,10 @@ export const ToolStripV6 = memo(function ToolStripV6({ item }: { item: StripItem
         </span>
         {object}
         <span data-testid="strip-time" className={`ml-auto w-[7ch] shrink-0 text-right tabular-nums ${stopped ? 'text-[var(--color-text-dim)]' : 'text-[var(--color-text-muted)]'}`}>{time}</span>
+        {/* every strip keeps the slot, so the time column lines up with or without detail */}
+        <span data-testid="strip-chevron" aria-hidden="true"
+          className="material-symbols-outlined icon-xs w-[14px] shrink-0 -mr-1 inline-flex items-center justify-center leading-none text-[var(--color-text-dim)] transition-transform duration-150"
+          style={open ? { transform: 'rotate(90deg)' } : undefined}>{detail ? 'chevron_right' : ''}</span>
       </button>
       {open && (
         <div data-testid="strip-detail" className={`${DETAIL_INSET} space-y-0.5 font-mono text-[11.5px] text-[var(--color-text-dim)]`}>
@@ -700,7 +709,7 @@ function PhaseNote({ text, renderKey, hasWork, open, onToggle, ctx }: {
     onToggle(!open);
   };
   return (
-    <div data-testid="phase-text" data-open={hasWork ? String(open) : undefined} onClick={toggle}
+    <div data-testid="phase-text" {...PROCESS_PROSE} data-open={hasWork ? String(open) : undefined} onClick={toggle}
       className={`${HANG} flex items-start gap-1.5 text-[14px] ${hasWork ? 'cursor-pointer' : ''}`} {...ANCHOR_PROPS}>
       {hasWork
         ? (
@@ -731,9 +740,6 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
   const steps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
   // while the user reads (scrolled up) nothing changes shape: no fold, no unfold
   const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active, reading);
-  // the thought being written stays open; a finished one folds FOLD_DELAY_MS later
-  const thoughts = members.filter((m): m is ThoughtUnit => m.kind === 'thought');
-  const thoughtSettled = useSettled(thoughts.map((th) => ({ id: `th-${th.ordinal}`, done: !th.live })), active, reading);
   const batchOf = agentBatches(steps);
   const { lead, segments } = phaseSegments(members);
   // A segment folds FOLD_DELAY_MS after a LATER segment started work (a call, not just
@@ -771,7 +777,7 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
     const columnRow = (it: BodyItem) => {
       if ('thought' in it) {
         const k = `th-${it.thought.ordinal}`;
-        return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) ?? !thoughtSettled(k)} onToggle={(o) => ctx.choose(k, o)} />;
+        return <PhaseThought key={it.key} unit={it.thought} scope={ctx.scope} open={ctx.choice(k) ?? false} onToggle={(o) => ctx.choose(k, o)} />;
       }
       if ('strips' in it) return it.strips.map((s) => <ToolStripV6 key={s.key} item={s} />);
       return null;
@@ -893,11 +899,11 @@ export function StageGroup({ zone, ctx, mustOpen }: { zone: StageZone; ctx: Zone
  *  a note is the agent's text; a needs card stays a card. */
 function BodyZone({ zone, ctx }: { zone: Zone; ctx: ZoneContext }) {
   if (zone.kind === 'phase') return <PhaseBody members={zone.members} live={zone.live} ctx={ctx} />;
-  if (zone.kind === 'text') return <div data-testid="zone-note" className="text-[14px]" {...ANCHOR_PROPS}>{ctx.renderText(zone.text, `${zone.id}-b`)}</div>;
+  if (zone.kind === 'text') return <div data-testid="zone-note" data-attn={zoneAttention(zone)} {...PROCESS_PROSE} className="text-[14px]" {...ANCHOR_PROPS}>{ctx.renderText(zone.text, `${zone.id}-b`)}</div>;
   // a card and a stage-result row are positioned by kind, not by the stage body they
   // are in: back out to the first-level columns (card at 0, mark in the gutter)
-  if (zone.kind === 'needs' || zone.kind === 'failure') return <div data-testid="card-slot" className={HANG}>{ctx.renderNeeds(zone)}</div>;
-  if (zone.kind === 'stageResult') return <div className={HANG}><StageResultRow zone={zone} ctx={ctx} /></div>;
+  if (zone.kind === 'needs' || zone.kind === 'failure') return <div data-testid="card-slot" data-attn={zoneAttention(zone)} className={HANG}>{ctx.renderNeeds(zone)}</div>;
+  if (zone.kind === 'stageResult') return <div data-attn={zoneAttention(zone)} className={HANG}><StageResultRow zone={zone} ctx={ctx} /></div>;
   return null;
 }
 
@@ -988,7 +994,7 @@ export function TurnZoneList({ zones, ctx, hasOpenQuestionIn }: {
         }
         // the stopped line and receipt sit in the text column, like every text row
         const cls = z.kind === 'stopped' ? `${gap} ${TEXT_COL}`.trim() : gap;
-        return <div key={z.id} data-zone={z.kind} className={cls}>{el}</div>;
+        return <div key={z.id} data-zone={z.kind} {...attnProps(z)} className={cls}>{el}</div>;
       })}
     </>
   );
