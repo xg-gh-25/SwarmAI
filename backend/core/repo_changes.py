@@ -43,6 +43,11 @@ def allowed_roots() -> dict[str, str]:
     return {root: name for root, (name, _project) in _bindings().items()}
 
 
+def bound_projects() -> dict[str, str]:
+    """{realpath root: project} of every bound code repo with a checkout on disk."""
+    return {root: project for root, (_name, project) in _bindings().items()}
+
+
 def _bindings() -> dict[str, tuple[str, str]]:
     """{realpath root: (repo name, project)} from every Projects/<P>/bindings.yaml —
     the project is the one whose bindings name the repo, not a name match."""

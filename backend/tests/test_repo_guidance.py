@@ -26,13 +26,13 @@ def _iso(tmp_path, monkeypatch):
     rg._STATE.clear()
     rg._root_cache.clear()
     rg._excluded_cache.clear()
-    rg._bound_cache[:] = [0.0, set()]
+    rg._bound_cache[:] = [0.0, {}]
     data = tmp_path / "appdata"
     ws = data / "SwarmWS"
     ws.mkdir(parents=True)
     monkeypatch.setattr("config.get_app_data_dir", lambda: data)
     monkeypatch.setattr("core.project_registry.get_swarmws", lambda: ws)
-    monkeypatch.setattr("core.repo_changes.allowed_roots", lambda: {})
+    monkeypatch.setattr("core.repo_changes.bound_projects", lambda: {})
     yield {"data": data, "ws": ws}
     rg._STATE.clear()
 
@@ -96,8 +96,8 @@ def test_trust_levels(tmp_path, monkeypatch):
     text = _call("PostToolUse", "Read", file_path=str(repo / "src.py"))
     assert "Unconfirmed repository guidance" in text and "ask first" in text
     rg._STATE.clear()
-    rg._bound_cache[:] = [0.0, set()]
-    monkeypatch.setattr("core.repo_changes.allowed_roots",
+    rg._bound_cache[:] = [0.0, {}]
+    monkeypatch.setattr("core.repo_changes.bound_projects",
                         lambda: {str(repo.resolve()): "proj"})
     text = _call("PostToolUse", "Read", file_path=str(repo / "src.py"))
     assert "bound to a project" in text and "CONTRIBUTING" in text

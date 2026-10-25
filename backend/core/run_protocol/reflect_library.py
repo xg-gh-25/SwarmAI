@@ -20,7 +20,10 @@ first time a session touches the repo (``repo_guidance``, part A).
 Writes walk ``Knowledge/Library/pipeline-lessons`` by directory fds that follow no
 symlink, take a sidecar lock (``utils.file_lock``) and replace the file atomically.
 
-Public: ``SUBDIR``, ``file_for``, ``write``.
+- ``find(workspace, root)`` — the existing file of one main checkout, read-only (for
+  ``repo_guidance``).
+
+Public: ``SUBDIR``, ``LESSONS``, ``PENDING``, ``file_for``, ``find``, ``write``.
 """
 from __future__ import annotations
 
@@ -91,6 +94,28 @@ def file_for(workspace: "str | Path", root: str) -> "Path | None":
         return None
     try:
         return Path(workspace).joinpath(*SUBDIR, _name(fd, root))
+    finally:
+        os.close(fd)
+
+
+def find(workspace: "str | Path", root: str) -> "Path | None":
+    """The EXISTING lessons file of main checkout *root*, or None. Read-only: creates
+    nothing and follows no symlink (repo_guidance calls this on every first touch)."""
+    try:
+        fd = os.open(Path(workspace), os.O_RDONLY | os.O_DIRECTORY)
+    except OSError:
+        return None
+    try:
+        for part in SUBDIR:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        name = _name(fd, root)
+        if _owner(_read(fd, name)) != root:
+            return None
+        return Path(workspace).joinpath(*SUBDIR, name)
+    except (OSError, UnicodeDecodeError):
+        return None
     finally:
         os.close(fd)
 

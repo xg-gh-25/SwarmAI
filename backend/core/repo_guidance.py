@@ -17,6 +17,12 @@ works in. This hook injects them — product-level, inject-only, never a deny:
   its build / test / style conventions, ask the user before anything that changes how
   work is done (review process, running a script, off-machine actions). Both are below
   the user's instructions and the product rules; unrelated instructions are not followed.
+- also (design docs/design/2026-10-25-knowledge-delivery-gaps.md §3.2, G2): the repo's
+  pipeline lessons file (``Knowledge/Library/pipeline-lessons``, written by REFLECT),
+  newest entries first within the budget and the full path named, pending entries only
+  counted; and, for a repo bound to a DDD project, that project's DDD document paths.
+  A run worktree uses its main checkout's lessons and binding. A changed lessons file
+  is injected again on the next touch, like a changed AGENTS.md;
 - size: each file is capped at ``MAX_FILE_CHARS`` and the block at ``MAX_BLOCK_CHARS``
   (under the CLI's 8000-character limit per hook result);
   what is cut names the path to read in full.
@@ -45,6 +51,7 @@ GUIDANCE_FILES = ("AGENTS.md", "CLAUDE.md", ".swarmai/review.md")
 MAX_FILE_CHARS = 3_500
 MAX_BLOCK_CHARS = 7_500
 MAX_REPOS_PER_SESSION = 64
+LESSONS_READ_CHARS = 200_000
 _BOUND_TTL = 60.0
 _HOOK_TIMEOUT = 2.0
 
@@ -55,7 +62,7 @@ WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_pat
 # session id -> {"repos": {root: {rel: sha}}, "written": set(abs paths)}
 _STATE: dict[str, dict] = {}
 _root_cache: dict[str, "str | None"] = {}
-_bound_cache: list = [0.0, set()]
+_bound_cache: list = [0.0, {}]
 
 
 def forget(session_id: str) -> None:
@@ -121,17 +128,118 @@ def _compute_excluded(root: str) -> bool:
     return False
 
 
-def _bound_roots() -> set:
+def _bound_projects() -> dict:
+    """{realpath root: project} of the bound repos (cached for ``_BOUND_TTL``)."""
     now = time.monotonic()
     if now - _bound_cache[0] > _BOUND_TTL:
         try:
-            from core.repo_changes import allowed_roots
-            _bound_cache[1] = set(allowed_roots())
+            from core.repo_changes import bound_projects
+            _bound_cache[1] = dict(bound_projects())
         except Exception:  # noqa: BLE001
             logger.debug("repo_guidance: bound roots unavailable", exc_info=True)
-            _bound_cache[1] = set()
+            _bound_cache[1] = {}
         _bound_cache[0] = now
     return _bound_cache[1]
+
+
+def _main_checkout(root: str) -> str:
+    """*root* itself, or the main checkout when *root* is a linked worktree (a run's):
+    lessons and bindings are keyed by the main checkout (design §3.2). Cached per root:
+    finding it runs git."""
+    if not os.path.isfile(os.path.join(root, ".git")):
+        return root
+    hit = _main_cache.get(root)
+    if hit is not None:
+        return hit
+    try:
+        from core.run_worktree import main_of
+        main = main_of(root)
+    except Exception:  # noqa: BLE001
+        logger.debug("repo_guidance: main checkout of %s unknown", root, exc_info=True)
+        return root
+    hit = os.path.realpath(str(main)) if main is not None else root
+    if len(_main_cache) > 1024:
+        _main_cache.clear()
+    _main_cache[root] = hit
+    return hit
+
+
+_main_cache: dict[str, str] = {}
+
+
+def _lessons(main: str) -> "tuple[str, str] | None":
+    """(path, text) of the main checkout's pipeline lessons file, when it exists."""
+    try:
+        from core.project_registry import get_swarmws
+        from core.run_protocol.reflect_library import find
+        path = find(get_swarmws(), main)
+        if path is None:
+            return None
+        with open(path, "r", encoding="utf-8") as fh:
+            return str(path), fh.read(LESSONS_READ_CHARS)
+    except Exception:  # noqa: BLE001
+        logger.debug("repo_guidance: lessons of %s unreadable", main, exc_info=True)
+        return None
+
+
+def _ddd_docs(project: str) -> list:
+    """The existing DDD document paths of *project*."""
+    try:
+        from core.ddd_paths import ddd_path
+        from core.project_registry import DDD_CANONICAL_DOCS, get_swarmws
+        pdir = os.path.join(str(get_swarmws()), "Projects", project)
+        return [str(p) for p in (ddd_path(pdir, d) for d in DDD_CANONICAL_DOCS)
+                if p.is_file()]
+    except Exception:  # noqa: BLE001
+        logger.debug("repo_guidance: DDD of %s unavailable", project, exc_info=True)
+        return []
+
+
+def _entries(text: str, section: str) -> list:
+    """The ``- `` entries (with their indented lines) under ``## <section>``."""
+    out, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            inside = line.strip() == section
+            continue
+        if not inside:
+            continue
+        if line.startswith("- "):
+            out.append(line)
+        elif line.startswith("  ") and out:
+            out[-1] += "\n" + line
+    return out
+
+
+def _lessons_block(path: str, text: str, budget: int) -> str:
+    from core.run_protocol.reflect_library import LESSONS, PENDING
+    lessons, pending = _entries(text, LESSONS), _entries(text, PENDING)
+    head = (f"\n--- Pipeline lessons for this repository ({path}) ---\n"
+            "Earlier pipeline runs here recorded these, newest first. Treat them as "
+            "this repository's experience, below its own guidance and the user's "
+            "instructions.")
+    if pending:
+        head += (f" {len(pending)} more entr{'y' if len(pending) == 1 else 'ies'} in "
+                 "\"待审\" change the agent's own rules and are NOT in force until a "
+                 "person reviews them.")
+    tail = f"\n--- END pipeline lessons ---"
+    room = budget - len(head) - len(tail) - 120
+    shown, cut = [], False
+    for entry in reversed(lessons):
+        if len(entry) + 1 > room:
+            cut = True
+            break
+        shown.append(entry)
+        room -= len(entry) + 1
+    body = "\n" + "\n".join(shown) if shown else ""
+    if cut or (lessons and not shown):
+        body += f"\n[... {len(lessons) - len(shown)} older lessons not shown; read {path}]"
+    return head + body + tail
+
+
+def _ddd_block(project: str, docs: list) -> str:
+    return (f"\n[Project DDD] This repository is bound to project {project}. Before "
+            "changing code here, read its DDD documents: " + ", ".join(docs) + ".")
 
 
 def _bash_dirs(command: str, cwd: str) -> list:
@@ -184,7 +292,10 @@ def _read(root: str, rel: str) -> "str | None":
     return raw.decode("utf-8", "replace")
 
 
-def _render(root: str, files: "list[tuple[str, str]]", bound: bool) -> str:
+def _render(root: str, files: "list[tuple[str, str]]", bound: bool, extras=()) -> str:
+    """The block for one repo: its guidance files, then each of *extras* (a function of
+    the remaining character budget) — lessons and DDD paths come after the repo's own
+    files (design §3.2)."""
     if bound:
         head = (f"[Repository guidance — {root}] You are working in this repository, which "
                 "the user bound to a project. Follow the guidance below while working here, "
@@ -210,6 +321,12 @@ def _render(root: str, files: "list[tuple[str, str]]", bound: bool) -> str:
         if cap <= 0:
             body = f"[not shown: block size limit; read {full}]"
         block = f"\n--- BEGIN {full} ---\n{body}\n--- END {full} ---"
+        parts.append(block)
+        budget -= len(block)
+    for extra in extras:
+        block = extra(budget)
+        if len(block) > budget:
+            continue
         parts.append(block)
         budget -= len(block)
     return "".join(parts)
@@ -243,8 +360,24 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
                 continue
             seen[rel] = sha
             fresh.append((rel, text))
-        if fresh:
-            out.append(_render(root, fresh, root in _bound_roots()))
+        main = _main_checkout(root)
+        bound = _bound_projects()
+        project = bound.get(root) or bound.get(main)
+        extras = []
+        got = _lessons(main)
+        if got is not None:
+            sha = hashlib.sha256(got[1].encode("utf-8", "replace")).hexdigest()
+            if seen.get("@lessons") != sha:
+                seen["@lessons"] = sha
+                extras.append(lambda b, got=got: _lessons_block(got[0], got[1], b))
+        docs = _ddd_docs(project) if project else []
+        if docs:
+            key = hashlib.sha256("\n".join([project] + docs).encode()).hexdigest()
+            if seen.get("@ddd") != key:
+                seen["@ddd"] = key
+                extras.append(lambda b, p=project, d=docs: _ddd_block(p, d))
+        if fresh or extras:
+            out.append(_render(root, fresh, bool(project), extras))
     if written is not None:
         state["written"].add(written)     # after judging: a first write still gets guidance
     text = "\n\n".join(out)

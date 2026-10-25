@@ -3,7 +3,7 @@ title: 知识送达的缺口 — REFLECT 没有 DDD 时写到哪，以及 Recall
 created: 2026-10-25
 updated: 2026-10-25
 project: SwarmAI
-status: r3 — B（G1）已实施；A（G2、G4）实施中
+status: r4 — B（G1）、A 的 G2 已实施；G4 实施中
 ---
 
 # 知识送达的缺口
@@ -106,6 +106,9 @@ DELIVER、REFLECT 卡片写明。和下面原方案的两处差别：
 - 大小：现有的 `MAX_BLOCK_CHARS` 预算里先放仓库自己的三个文件，再放这两样；放不下的部分写明路径。
 - 经验文件内容变了（下一次 REFLECT 写进新经验），和 `AGENTS.md` 一样，会话下次碰到时重新注入。
 - pipeline 的 create 不再另外点名：同一件事只走一条路。run 的第一个阶段一定会读写仓库，会触发这里。
+- 实施（r4）：`repo_changes.bound_projects()` 给出每个绑定仓库的项目名；`reflect_library.find` 只读地找已有的经验文件（不建目录、不跟随符号链接）；
+  经验和 DDD 路径各按内容的 sha 记在每个会话的状态里，变了才重新注入。没有 `AGENTS.md` 的仓库，只要有经验或绑定了 DDD，也会注入。
+  worktree 到主 checkout 的换算要跑 git，按仓库缓存。
 - 送不到的情况：会话没碰过任何仓库，只是在聊天。这种情况下用不到某个仓库的经验，现有的召回照常运行。
 
 ### 3.3 G4：Slack 等 channel 的 owner 私聊开召回（XG 定）
@@ -152,5 +155,6 @@ DELIVER、REFLECT 卡片写明。和下面原方案的两处差别：
 ## 修订记录
 
 - r1（2026-10-25）：初稿。XG 定了 G1 写进 Library、按仓库归档、create 时点名。
+- r4（2026-10-25）：A 的 G2 实施（§3.2 末尾写明实施细节）。
 - r3（2026-10-25）：B（G1）实施，写明和原方案的两处差别；开头标出 A、B 两部分。
 - r2（2026-10-25，XG）：G2 不只做 pipeline：改为在 `repo_guidance`（会话第一次碰到仓库）里统一送经验文件和 DDD 路径，native 和 pipeline 共用，create 不再另外点名；G4 给 owner 的私聊开召回。
