@@ -3,7 +3,7 @@ title: profile 的能力只定义一次，`next` 和命令用同一套判断
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r1 — 设计，待 XG 确认
+status: 被取代 — 并入 2026-10-26-pipeline-two-ends.md（§3–§5），不单独实施
 ---
 
 # profile 的能力只定义一次，`next` 和命令用同一套判断
