@@ -382,24 +382,9 @@ class TestBase64FalsePositive:
 
 
 class TestDistillationDedup:
-    """_run_locked_write() deduplicates entries by 120-char prefix."""
-
-    def test_duplicate_entry_skipped(self, tmp_path):
-        """Entries already in MEMORY.md (by 120-char prefix) are not written again."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        memory_file = tmp_path / "MEMORY.md"
-        existing_entry = "- 2026-05-01: **Memory sovereignty is a first principle** — All memory must be self-owned."
-        memory_file.write_text(f"## Key Decisions\n{existing_entry}\n")
-
-        # Try to write the same entry again
-        DistillationTriggerHook._run_locked_write(
-            memory_file, "Key Decisions", existing_entry,
-        )
-
-        # Should appear exactly once
-        content = memory_file.read_text()
-        assert content.count("Memory sovereignty") == 1
+    """_run_locked_write() writes entries whole. Write-time dedup was deleted
+    (design 2026-10-25-memory-write-entry-dedup); exact duplicates are swept by
+    reclaim_duplicate_entries (see test_memory_entry_spans.py)."""
 
     def test_unique_entry_written(self, tmp_path):
         """New entries not matching existing content are written normally."""

@@ -1825,10 +1825,12 @@ class TestMemoryWorthyCorrectionGate:
     async def test_memory_write_dedups(
         self, corrections_file, session_context, tmp_path, monkeypatch
     ):
-        """AC4: a lesson already present in MEMORY is not re-appended (dedup=True).
+        """AC4 (design 2026-10-25-memory-write-entry-dedup): the lesson is written as a
+        canonical entry; a repeat is an exact duplicate the context-health sweep removes
+        (writes no longer dedup line by line).
 
         JUDGE-GATED (run_04fd397c): judge mocked to pass so the correction reaches
-        the write; dedup must still stop the second append.
+        the write.
         """
         import core.eval_hooks as eh
         import core.ingestion_gate as ig
@@ -1847,8 +1849,16 @@ class TestMemoryWorthyCorrectionGate:
         await hook({"prompt": real}, None, MagicMock())
         await hook({"prompt": real}, None, MagicMock())
 
+        from datetime import date as _date
+        from core.ddd_entry_lifecycle import parse_entries, reclaim_duplicate_entries
+        pits = [e for e in parse_entries(mem.read_text()) if e.section == "Pitfalls"]
+        assert len(pits) == 2 and all(e.entry_type == "pitfall" and e.source == "auto"
+                                      for e in pits)
+        reclaim_duplicate_entries(mem.read_text(), _date.today(), mem.parent,
+                                  archive_name="MEMORY-archive-t.md", source_path=mem,
+                                  dry_run=False)
         assert mem.read_text().count("TAURI_SIGNING") == 1, \
-            "duplicate lesson must not be appended twice"
+            "the sweep must collapse the repeated lesson to one entry"
 
     @pytest.mark.asyncio
     async def test_judge_runs_off_event_loop(

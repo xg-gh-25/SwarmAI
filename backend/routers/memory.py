@@ -192,12 +192,11 @@ async def save_session_to_memory(req: SaveSessionRequest):
     """Extract key decisions/lessons from a chat session and save to MEMORY.md.
 
     This powers the frontend 🧠 "Save to Memory" button. Uses LLM extraction
-    (Sonnet) to identify important entries, then writes via ``locked_write.py``
-    with ``dedup=True`` — a MECHANICAL filter (120-char prefix + bold-title
-    match, shared with distillation via ``filter_duplicate_entries``) drops
-    entries already present in MEMORY.md, inside the write lock. (The LLM prompt
-    also sees existing content as a soft hint, but the mechanical filter is the
-    real guarantee — R3-C.)
+    (Sonnet) to identify important entries, then writes them in the canonical
+    entry shape via ``locked_write.py``. Exact duplicates (e.g. a re-saved
+    extraction) are removed by the context-health sweep at session close, not at
+    write time (design docs/design/2026-10-25-memory-write-entry-dedup.md). The LLM
+    prompt also sees existing content as a soft hint.
 
     The ``since_message_idx`` field enables incremental saves — on a second
     click within the same session, only new messages are processed.

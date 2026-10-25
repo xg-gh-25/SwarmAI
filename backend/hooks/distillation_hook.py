@@ -32,7 +32,8 @@ from pathlib import Path
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
 from core.ddd_entry_lifecycle import (
-    MEMORY_TYPE_TO_SECTION, format_memory_entry, VALID_TYPES as _VALID_TYPES,
+    MEMORY_TYPE_TO_SECTION, format_memory_entry, parse_entries,
+    VALID_TYPES as _VALID_TYPES,
 )
 _VALID_TYPES_SET = frozenset(_VALID_TYPES)
 from core.ddd_paths import ddd_path
@@ -270,6 +271,97 @@ def _extract_repo_paths(tech_md_content: str) -> list[Path]:
                 if len(p) > 5:  # Skip trivially short paths
                     candidates.append(Path(p))
     return candidates
+
+
+_COE_SESSIONS_RE = re.compile(r"Sessions:\s*([0-9][0-9, \-]*?)\s*\((\d{4}-\d{2}-\d{2})\)\s*$")
+_COE_META_LAST_RE = re.compile(r"(\| last:)[\w\-]+")
+
+
+def coe_key(topic: str) -> str:
+    """Record key of a COE topic: its title exactly as format_memory_entry stores it
+    (``strip().strip("*").rstrip(".").strip()``), casefolded."""
+    return topic.strip().strip("*").rstrip(".").strip().casefold()
+
+
+def _coe_dates(lead: str) -> "list[str] | None":
+    """Session dates of a canonical COE lead, or None when its list does not parse."""
+    m = _COE_SESSIONS_RE.search(lead)
+    if not m:
+        return None
+    out = []
+    for d in (x.strip() for x in m.group(1).split(",")):
+        try:
+            date.fromisoformat(d)
+        except ValueError:
+            return None
+        out.append(d)
+    return out or None
+
+
+def merge_coe_section(body: str, events: "list[tuple[str, str, str]]") -> str:
+    """Return the COE Registry section body with ``events`` upserted (pure).
+
+    events: (file_date, signal, topic) with signal in {candidate, resolution}.
+    For each topic key: every canonical entry with that key whose Sessions list
+    parses is merged with the new events into ONE entry (dates = sorted union,
+    Resolved if any side resolved, metadata = the highest-ref old entry's line with
+    ``last:`` = the newest date) placed at the section top. An entry whose body does
+    not parse is left as it is (the events then form a new entry). When the merge
+    reproduces a single existing entry exactly, nothing moves (a replay is a no-op).
+    Non-canonical legacy lines are never touched.
+    """
+    lines = body.split("\n")
+    parsed = parse_entries("## COE Registry\n" + body)
+    # parse offsets are relative to the synthetic header line
+    by_key: dict[str, list] = {}
+    for e in parsed:
+        by_key.setdefault(coe_key(e.title), []).append(e)
+
+    grouped: dict[str, list[tuple[str, str, str]]] = {}
+    for ev in events:
+        grouped.setdefault(coe_key(ev[2]), []).append(ev)
+
+    drop: set[int] = set()
+    new_blocks: list[str] = []
+    for key, evs in grouped.items():
+        olds = []
+        for e in by_key.get(key, []):
+            lead = lines[e.line_number - 1]
+            dates = _coe_dates(lead)
+            if dates is not None:
+                olds.append((e, lead, dates))
+        dates = sorted({d for _, _, ds in olds for d in ds} | {d for d, _, _ in evs})
+        resolved = any("Resolved" in lead for _, lead, _ in olds) or any(
+            sig == "resolution" for _, sig, _ in evs)
+        status = "✅ Resolved" if resolved else "🔍 Investigating"
+        title = olds[0][0].title if olds else evs[0][2]
+        new_lead, new_meta = format_memory_entry(
+            "pitfall", title, f"{status}. Sessions: {', '.join(dates)}", dates[0],
+            source="auto",
+        )
+        if olds:
+            best = max(olds, key=lambda o: o[0].ref_count)[0]
+            meta_idx = next((i for i in range(best.line_number, best.end_line + 1)
+                             if "<!-- ref:" in lines[i - 1]), None)
+            if meta_idx is not None:
+                new_meta = _COE_META_LAST_RE.sub(rf"\g<1>{dates[-1]}", lines[meta_idx - 1], 1)
+        else:
+            new_meta = _COE_META_LAST_RE.sub(rf"\g<1>{dates[-1]}", new_meta, 1)
+        if len(olds) == 1:
+            e = olds[0][0]
+            span = lines[e.line_number - 1:e.end_line]
+            if span[:2] == [new_lead, new_meta]:
+                continue  # replay: identical record, leave it where it is
+        for e, _, _ in olds:
+            drop.update(range(e.line_number - 1, e.end_line))
+        new_blocks.append(f"{new_lead}\n{new_meta}")
+
+    if not new_blocks:
+        return body
+    kept = [ln for i, ln in enumerate(lines) if i not in drop]
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    return "\n".join(new_blocks + kept)
 
 
 class DistillationTriggerHook:
@@ -1614,35 +1706,9 @@ class DistillationTriggerHook:
         evolution_path: Path,
         competence_entries: list[tuple[str, str]],
     ) -> None:
-        """Write competence entries to EVOLUTION.md under 'Competence Learned'.
-
-        Each entry gets a K-prefixed sequential ID. All entries are batched
-        into a single locked_write call.
-        """
-        try:
-            content = evolution_path.read_text(encoding="utf-8")
-            existing_ids = re.findall(r"### K(\d+)", content)
-            next_id = max((int(x) for x in existing_ids), default=0) + 1
-        except Exception:
-            next_id = 1
-
-        blocks: list[str] = []
-        for file_date, entry in competence_entries:
-            entry_id = f"K{next_id:03d}"
-            blocks.append(
-                f"### {entry_id} | {file_date}\n"
-                f"- **Competence**: {entry}\n"
-                f"- **Status**: active\n"
-            )
-            next_id += 1
-
-        if blocks:
-            self._run_locked_write(
-                evolution_path, "Competence Learned", "\n".join(blocks)
-            )
-
-        logger.info(
-            "Wrote %d competence entries to EVOLUTION.md", len(competence_entries)
+        """Write competence entries to EVOLUTION.md under 'Competence Learned' (K ids)."""
+        self._write_evolution_blocks(
+            evolution_path, "Competence Learned", "K", "Competence", competence_entries,
         )
 
     @staticmethod
@@ -1693,41 +1759,53 @@ class DistillationTriggerHook:
         evolution_path: Path,
         corrections: list[tuple[str, str]],
     ) -> None:
-        """Write correction entries to EVOLUTION.md under 'Corrections Captured'.
-
-        Each correction gets a C-prefixed sequential ID. All entries are
-        batched into a single locked_write call.
+        """Write correction entries to EVOLUTION.md under 'Corrections Captured' (C ids).
 
         C6 (run_0d60e04e): entries are pre-gated by _gate_evolution_entries at the caller
         (the format-hole fix) — by the time they reach here, they are gate-"auto". This
         function is the EXECUTION layer (writes what admission already cleared).
         """
-        # Read current EVOLUTION.md to find next C-ID
-        try:
-            content = evolution_path.read_text(encoding="utf-8")
-            existing_ids = re.findall(r"### C(\d+)", content)
-            next_id = max((int(x) for x in existing_ids), default=0) + 1
-        except Exception:
-            next_id = 1
-
-        blocks: list[str] = []
-        for file_date, correction in corrections:
-            entry_id = f"C{next_id:03d}"
-            blocks.append(
-                f"### {entry_id} | {file_date}\n"
-                f"- **Correction**: {correction}\n"
-                f"- **Status**: active\n"
-            )
-            next_id += 1
-
-        if blocks:
-            self._run_locked_write(
-                evolution_path, "Corrections Captured", "\n".join(blocks)
-            )
-
-        logger.info(
-            "Wrote %d correction entries to EVOLUTION.md", len(corrections)
+        self._write_evolution_blocks(
+            evolution_path, "Corrections Captured", "C", "Correction", corrections,
         )
+
+    @staticmethod
+    def _write_evolution_blocks(
+        evolution_path: Path,
+        section: str,
+        prefix: str,
+        label: str,
+        entries: list[tuple[str, str]],
+    ) -> None:
+        """Prepend one ``### <prefix>NNN | date`` block per entry, in ONE locked step.
+
+        The next id is computed from the content read UNDER the file lock (callable
+        text), so a writer that landed an id while we waited for the lock cannot cause
+        a duplicate id (design 2026-10-25-memory-write-entry-dedup §3.5). Blocks are
+        written whole — no write-time dedup.
+        """
+        if not entries:
+            return
+        id_re = re.compile(rf"^### {prefix}(\d+)\b", re.MULTILINE)
+
+        def build(content: str) -> str:
+            next_id = max((int(x) for x in id_re.findall(content)), default=0) + 1
+            blocks = []
+            for offset, (file_date, body) in enumerate(entries):
+                blocks.append(
+                    f"### {prefix}{next_id + offset:03d} | {file_date}\n"
+                    f"- **{label}**: {body}\n"
+                    f"- **Status**: active\n"
+                )
+            return "\n".join(blocks)
+
+        from scripts.locked_write import locked_read_modify_write
+        try:
+            locked_read_modify_write(evolution_path, section, build, mode="prepend")
+        except Exception as e:  # noqa: BLE001 — best-effort distillation write
+            logger.warning("EVOLUTION %s write failed: %s", section, e)
+            return
+        logger.info("Wrote %d %s entries to EVOLUTION.md", len(entries), label.lower())
 
     @staticmethod
     def _signal_evolution_corrections(ws_path: Path, count: int) -> None:
@@ -1764,13 +1842,11 @@ class DistillationTriggerHook:
         """Write a distilled section to MEMORY.md via the SINGLE shared facade.
 
         Delegates to ``scripts.locked_write.locked_read_modify_write`` — the one
-        writer that owns flock + MemoryGuard + line-level dedup. This used to be a
-        hand-rolled PARALLEL copy of that facade (its own flock + guard +
-        filter_duplicate_entries + _modify_content + prepend) — byte-for-byte the
-        same pipeline, just diverged. Collapsed to the facade so the write path
-        can't drift. The old "call _modify_content directly to avoid a nested-lock
-        deadlock" note no longer applies: this is a SINGLE call into the facade's
-        own lock, not a lock nested inside another.
+        writer that owns flock + MemoryGuard + content validation. It writes the
+        text whole: write-time line dedup was deleted (design
+        docs/design/2026-10-25-memory-write-entry-dedup.md — it dropped field and
+        metadata lines and wrote half entries); exact duplicates are removed by the
+        context-health sweep (reclaim_duplicate_entries) that runs after this hook.
 
         No reindex: the in-prompt MEMORY index was deleted (live MEMORY.md is
         full-injected and recall scans the body with FTS5+BM25), so there is no
@@ -1778,9 +1854,7 @@ class DistillationTriggerHook:
         """
         from scripts.locked_write import locked_read_modify_write
         try:
-            locked_read_modify_write(
-                memory_path, section, text, mode="prepend", dedup=True,
-            )
+            locked_read_modify_write(memory_path, section, text, mode="prepend")
         except LockedWriteError as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
         except Exception as e:  # noqa: BLE001 — best-effort distillation write
@@ -1819,46 +1893,33 @@ class DistillationTriggerHook:
         memory_path: Path,
         entries: list[tuple[str, str, str]],
     ) -> None:
-        """Write COE entries to MEMORY.md under '## COE Registry'.
+        """Upsert COE topics in MEMORY.md '## COE Registry' (one record per topic).
 
-        Groups by topic. If a topic has both candidate + resolution entries,
-        marks it as resolved.
+        A COE topic is a keyed record, not a list item: a new event for a known topic
+        updates that entry in place (dates merged, Resolved kept once seen) instead of
+        adding a second one. The merge is computed from the section read UNDER the
+        MEMORY.md lock and written through the guarded facade (MemoryGuard + content
+        validation run on the result). Design 2026-10-25-memory-write-entry-dedup §3.5.
         """
-        # Group by topic
-        by_topic: dict[str, list[tuple[str, str]]] = {}
-        for file_date, signal, topic in entries:
-            key = topic.lower().strip()
-            if key not in by_topic:
-                by_topic[key] = []
-            by_topic[key].append((file_date, signal))
+        if not entries:
+            return
+        from scripts.locked_write import _find_section_range, locked_read_modify_write
 
-        blocks: list[str] = []
-        for topic_key, events in by_topic.items():
-            # Use the original casing from the first entry
-            original_topic = next(
-                t for _, _, t in entries if t.lower().strip() == topic_key
-            )
-            dates = sorted(set(d for d, _ in events))
-            has_resolution = any(s == "resolution" for _, s in events)
-            status = "✅ Resolved" if has_resolution else "🔍 Investigating"
+        def build(content: str) -> str:
+            rng = _find_section_range(content, "COE Registry")
+            body = content[rng[0]:rng[1]] if rng else ""
+            return merge_coe_section(body, entries).rstrip("\n") + "\n"
 
-            # run_3cb6b9ae Cycle-2 (#1): route through the SSOT formatter so a COE
-            # entry carries the canonical `- [type] **title**` shape + 4-field
-            # metadata (was a bare `- {date}: **topic** — status` with no [type] and
-            # no meta → invisible to decay/dedup/recall). COE entries are the
-            # `pitfall` type (per MEMORY_SECTIONS["COE Registry"].type).
-            body = f"{status}. Sessions: {', '.join(dates)}"
-            entry_line, meta_line = format_memory_entry(
-                "pitfall", original_topic, body, dates[0], source="auto",
-            )
-            blocks.append(f"{entry_line}\n{meta_line}")
-
-        if blocks:
-            self._run_locked_write(
-                memory_path, "COE Registry", "\n".join(blocks)
-            )
-
-        logger.info("Wrote %d COE registry entries to MEMORY.md", len(by_topic))
+        try:
+            locked_read_modify_write(memory_path, "COE Registry", build, mode="replace")
+        except LockedWriteError as e:
+            logger.warning("locked_write failed for section COE Registry: %s", e)
+            return
+        except Exception as e:  # noqa: BLE001 — best-effort distillation write
+            logger.warning("locked_write failed for section COE Registry: %s", e)
+            return
+        logger.info("Upserted %d COE topic(s) in MEMORY.md",
+                    len({coe_key(t) for _, _, t in entries}))
 
     def _update_open_threads(
         self,

@@ -1818,7 +1818,9 @@ class ContextHealthHook:
 
         try:
             content = evolution_path.read_text(encoding="utf-8")
-            entries = parse_entries(content)
+            # skip_h3_spans: a ### Cnnn / ### CLASS block is one record; its field
+            # bullets are not entries (design 2026-10-25-memory-write-entry-dedup §3.4).
+            entries = parse_entries(content, skip_h3_spans=True)
             if not entries:
                 return
 
@@ -1853,6 +1855,7 @@ class ContextHealthHook:
                 archive_name=evo_shard,
                 source_path=evolution_path,
                 dry_run=False,
+                skip_h3_spans=True,
             )
             if reclaim_report.new_content is not None:
                 content = reclaim_report.new_content
@@ -1869,6 +1872,7 @@ class ContextHealthHook:
                 archive_name=evo_shard,
                 source_path=evolution_path,
                 dry_run=False,
+                skip_h3_spans=True,
             )
             if dup_report.new_content is not None:
                 logger.info(

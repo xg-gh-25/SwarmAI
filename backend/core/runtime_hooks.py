@@ -432,15 +432,17 @@ def create_user_correction_detector(
                         body = distilled or summary
                         memory_path = ws / ".context" / "MEMORY.md"
                         if memory_path.exists():
+                            from core.ddd_entry_lifecycle import canonical_entry_from_text
                             today = time.strftime("%Y-%m-%d")
-                            entry_text = (
-                                f"\n- [pitfall] **{body}** — "
-                                f"({today}, {sid[:8]}, correction)\n"
+                            # Canonical entry (lead + metadata) so the context-health
+                            # sweep can parse it and remove an exact repeat; written
+                            # whole (no write-time dedup, design
+                            # 2026-10-25-memory-write-entry-dedup §3.3/§3.6).
+                            entry_text = canonical_entry_from_text(
+                                body, "pitfall", today, run_id=sid[:8], source="auto",
                             )
-                            # dedup=True: don't re-append a lesson already in MEMORY.
                             locked_read_modify_write(
-                                memory_path, "## Pitfalls", entry_text,
-                                mode="append", dedup=True,
+                                memory_path, "## Pitfalls", entry_text, mode="append",
                             )
                 except Exception:
                     logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)

@@ -847,7 +847,16 @@ def _remove_memory_entry(entry_prefix: str) -> bool:
 
         content = memory_path.read_text(encoding="utf-8")
         lines = content.split("\n")
-        new_lines = [l for l in lines if needle not in l]
+        # Remove WHOLE entries (design 2026-10-25-memory-write-entry-dedup §3.7): a
+        # matching line that starts a parsed entry takes its span (metadata + Detail
+        # tail) with it; any other matching line (legacy un-parsed shapes) goes alone.
+        from core.ddd_entry_lifecycle import parse_entries
+        spans = {e.line_number: e.end_line for e in parse_entries(content)}
+        drop: set[int] = set()
+        for idx, line in enumerate(lines):
+            if needle in line:
+                drop.update(range(idx, max(spans.get(idx, idx), idx) + 1))
+        new_lines = [l for i, l in enumerate(lines) if i not in drop]
         removed = len(lines) - len(new_lines)
 
         if removed > 0:

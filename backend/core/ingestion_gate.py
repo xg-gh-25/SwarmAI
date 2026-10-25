@@ -795,7 +795,8 @@ def ingestion_gate(
                 if dedup_fn is not None and dedup_fn(text):
                     return _emit_and_return("discard", ran, "duplicate")
                 # no dedup_fn wired here → pass (dedup also enforced downstream at
-                # apply_to_ddd / locked_write dedup=True, so this is not the sole guard)
+                # apply_to_ddd and by the context-health reclaim_duplicate_entries sweep,
+                # so this is not the sole guard)
 
         # All declared implemented tiers passed. The auto/review split for DDD trust
         # still lives in admission_band until C3; at C1/C2 a fully-passing candidate is

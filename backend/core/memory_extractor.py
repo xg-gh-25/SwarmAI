@@ -324,9 +324,11 @@ def _write_entries(
 ) -> bool:
     """Write extracted entries to MEMORY.md via locked_read_modify_write.
 
-    All entries for a section are joined into a single prepend call
-    to minimize lock acquisitions.  Calls the function directly instead
-    of spawning a subprocess (which breaks in PyInstaller bundles where
+    Each extracted line (``- YYYY-MM-DD: Title — body``) is written as a canonical
+    entry of the section's type (``canonical_entry_from_text``), so the
+    context-health sweep can parse it and remove an exact re-save. All entries for a
+    section are joined into a single prepend call. Calls the function directly
+    instead of spawning a subprocess (which breaks in PyInstaller bundles where
     ``sys.executable`` points to the bundled binary, not Python).
 
     Returns:
@@ -335,26 +337,18 @@ def _write_entries(
     if not entries:
         return True
 
-    # Collapse any embedded newlines per entry BEFORE joining (R3-C Gate-2 LOW):
-    # dedup (and _modify_content) operate line-by-line via splitlines(); an LLM
-    # entry containing an escaped "\n" would otherwise be split into independent
-    # physical lines, letting dedup drop half and orphan the rest. Each extracted
-    # entry must be exactly one physical line.
-    text = "\n".join(" ".join(e.splitlines()) for e in entries)
+    from core.ddd_entry_lifecycle import MEMORY_SECTIONS, canonical_entry_from_text
+    etype = MEMORY_SECTIONS.get(section, {}).get("type", "guideline")
+    today = date.today().isoformat()
+    text = "\n".join(
+        canonical_entry_from_text(e, etype, today, source="manual") for e in entries
+    )
 
     try:
-        # dedup=True (R3-C): apply the SAME mechanical dedup distillation uses
-        # (120-char prefix + bold-title), inside the lock against existing
-        # content — the LLM prompt's soft dedup is non-deterministic and a
-        # re-saved session (since_message_idx) can re-extract the same entry.
-        # No reindex: the in-prompt MEMORY index was deleted (live MEMORY.md is
-        # full-injected and recall scans the body with FTS5+BM25), so there is no
-        # index for this write to leave stale. The facade still accepts a
-        # ``reindex_memory`` flag for call-site compatibility, but it does nothing —
-        # passing it here would only read as though an index still existed.
-        locked_read_modify_write(
-            memory_path, section, text, mode="prepend", dedup=True,
-        )
+        # Written whole: write-time dedup was deleted (design
+        # docs/design/2026-10-25-memory-write-entry-dedup.md); a re-saved entry is an
+        # exact duplicate the sweep removes at session close.
+        locked_read_modify_write(memory_path, section, text, mode="prepend")
         return True
     except LockedWriteError as e:
         logger.error("locked_write failed for section %s: %s", section, e)

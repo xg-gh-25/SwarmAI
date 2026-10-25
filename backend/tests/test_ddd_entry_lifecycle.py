@@ -1960,23 +1960,29 @@ class TestReclaimDuplicateEntries:
         assert report.archived == 0  # dry_run
         assert len(report.candidates) == 1
 
-    def test_keep_class_dup_never_selected(self, tmp_path):
+    def test_keep_class_dup_in_one_section_is_selected(self, tmp_path):
+        """Design 2026-10-25-memory-write-entry-dedup §3.2: every type is dedup-eligible
+        within one section (a second identical principle carries nothing the first
+        lacks); only COE Registry is excluded."""
         from core.ddd_entry_lifecycle import reclaim_duplicate_entries
         today = date(2026, 8, 8)
-        # Two IDENTICAL-signature principles → keep-class (type=principle) → immune.
         content = (
             "## Principles\n"
             "- [principle] **Verify dont infer** — read the source, not memory (2026-01-01)\n"
             + self._meta(ref=0) + "\n"
             "- [principle] **Verify dont infer** — read the source, not memory (2026-06-01)\n"
             + self._meta(ref=0) + "\n"
+            "## COE Registry\n"
+            "- [pitfall] **Disk full** — 🔍 Investigating. Sessions: 2026-06-01 (2026-06-01)\n"
+            + self._meta(ref=0) + "\n"
+            "- [pitfall] **Disk full** — 🔍 Investigating. Sessions: 2026-06-01 (2026-06-01)\n"
+            + self._meta(ref=0) + "\n"
         )
         report = reclaim_duplicate_entries(
             content, today, tmp_path, archive_name="T-archive.md",
             source_path=None, dry_run=True,
         )
-        assert report.candidates == []       # keep-class never a dedup candidate
-        assert report.kept_protected >= 1
+        assert report.candidates == ["Verify dont infer"]
 
     def test_no_dup_is_noop(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_duplicate_entries

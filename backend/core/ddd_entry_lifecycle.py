@@ -373,6 +373,42 @@ def format_memory_entry(
     return entry_line, meta_line
 
 
+_LEAD_SCAFFOLD_RE = re.compile(r"^\s*(?:-\s+)?(?:\d{4}-\d{2}-\d{2}:?\s+)?(?:\[\w+\]\s+)?")
+
+
+def canonical_entry_from_text(
+    text: str,
+    entry_type: str,
+    date_str: str,
+    *,
+    run_id: "str | None" = None,
+    source: str = "auto",
+) -> str:
+    """Build a canonical MEMORY entry (lead + metadata) from free text.
+
+    For writers that receive a plain sentence rather than (title, body) parts —
+    Save-to-Memory extraction (``- 2026-10-25: Title — body``) and the runtime
+    correction pitfall. Strips a leading ``- ``, ``YYYY-MM-DD:`` and ``[type] ``,
+    collapses newlines, splits title/body on the first ``—`` (no dash: title = the
+    first 60 chars, body = the whole text), then calls ``format_memory_entry``. The
+    type is given by the caller and never re-guessed, so a Save-to-Memory bucket
+    keeps its section's type (design 2026-10-25-memory-write-entry-dedup §3.6).
+    """
+    clean = " ".join(text.split())
+    clean = _LEAD_SCAFFOLD_RE.sub("", clean, count=1).strip()
+    if "—" in clean:
+        title, body = (part.strip(" —-") for part in clean.split("—", 1))
+        if not title:
+            title = body[:60].strip()
+        if not body:
+            body = title
+    else:
+        title, body = clean[:60].strip(), clean
+    lead, meta = format_memory_entry(entry_type, title.strip("*"), body, date_str,
+                                     run_id, source=source)
+    return f"{lead}\n{meta}"
+
+
 # ── Dataclasses ───────────────────────────────────────────────────────────────
 
 
@@ -397,6 +433,9 @@ class EntryMetadata:
     # [created_date, valid_until]). Both None for a live entry.
     valid_until: Optional[date] = None
     superseded_by: Optional[str] = None  # title-anchor of the superseding entry
+    # Last line index (inclusive) of this entry's span — see entry_span_end. -1 when
+    # the entry was not built by parse_entries.
+    end_line: int = -1
 
     def __post_init__(self):
         if self.entry_type not in VALID_TYPES:
@@ -518,11 +557,68 @@ def classify_entry_type(text: str) -> str:
     return DEFAULT_TYPE
 
 
-def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMetadata]:
+_HEADING_RE = re.compile(r"^#{1,6} ")
+
+
+def entry_span_end(lines: "list[str]", start: int) -> int:
+    """Exclusive end index of the entry whose lead bullet is ``lines[start]``.
+
+    THE one definition of an entry's extent, used by ``parse_entries`` (``end_line``)
+    and both strip helpers, so what is read as one entry is removed as one entry
+    (design 2026-10-25-memory-write-entry-dedup §3.1). An entry is the lead bullet,
+    its continuation lines, its ``<!-- ref ... -->`` metadata line (directly or after
+    one blank line), and the indented lines right after the metadata (the
+    ``Detail:`` / ``valid_from`` tail distillation writes). It ends before a blank
+    line, a column-0 ``- ``, or any markdown heading.
+    """
+    n = len(lines)
+    j = start + 1
+    while j < n:
+        nxt = lines[j]
+        if nxt.startswith("- ") or _HEADING_RE.match(nxt):
+            return j
+        if _META_RE.match(nxt):
+            j += 1
+            break
+        if nxt.strip() == "":
+            if j + 1 < n and _META_RE.match(lines[j + 1]):
+                j += 2
+                break
+            return j
+        j += 1
+    else:
+        return j
+    # Indented tail after the metadata line.
+    while j < n and lines[j].strip() and lines[j][0] in " \t" and not _META_RE.match(lines[j]):
+        j += 1
+    return j
+
+
+def _h3_span_lines(lines: "list[str]") -> "set[int]":
+    """Line indices inside a ``###`` block (header to the next ``###`` / ``##``)."""
+    inside: set[int] = set()
+    in_block = False
+    for idx, ln in enumerate(lines):
+        if ln.startswith("### "):
+            in_block = True
+        elif ln.startswith("## ") or ln.startswith("# "):
+            in_block = False
+        if in_block:
+            inside.add(idx)
+    return inside
+
+
+def parse_entries(content: str, *, include_prose: bool = False,
+                  skip_h3_spans: bool = False) -> list[EntryMetadata]:
     """Parse all knowledge entries from DDD markdown content.
 
     Extracts entries from bullet lists (- **Title** ...) with optional
     [type] prefix and optional inline metadata comment.
+
+    skip_h3_spans=True: lines inside a ``###`` block produce no entries. Only the
+    EVOLUTION.md sweeps pass it — there a ``### Cnnn`` / ``### CLASS`` block is one
+    record whose field bullets are not entries of their own (§3.4). Default False
+    leaves every other caller unchanged.
 
     include_prose=False (DEFAULT): narrow matcher — the shape every autonomous
     lifecycle path (inject/decay/reclaim) must use, so emoji-prefixed curated
@@ -538,6 +634,7 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
     lines = content.splitlines()
     entries: list[EntryMetadata] = []
     current_section = ""
+    skip = _h3_span_lines(lines) if skip_h3_spans else frozenset()
     i = 0
 
     while i < len(lines):
@@ -546,6 +643,10 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
         # Track section headers
         if line.startswith("## ") and not line.startswith("### "):
             current_section = line[3:].strip()
+            i += 1
+            continue
+
+        if i in skip:
             i += 1
             continue
 
@@ -563,7 +664,7 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
             j = i + 1
             while j < len(lines):
                 next_line = lines[j]
-                if next_line.startswith("- ") or next_line.startswith("## "):
+                if next_line.startswith("- ") or _HEADING_RE.match(next_line):
                     break
                 if _META_RE.match(next_line):
                     break
@@ -573,7 +674,8 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
                     k = j + 1
                     while k < len(lines) and lines[k].strip() == "":
                         k += 1
-                    if k >= len(lines) or lines[k].startswith("- ") or lines[k].startswith("## "):
+                    if (k >= len(lines) or lines[k].startswith("- ")
+                            or _HEADING_RE.match(lines[k])):
                         break
                 raw_lines.append(next_line)
                 j += 1
@@ -631,6 +733,7 @@ def parse_entries(content: str, *, include_prose: bool = False) -> list[EntryMet
                 source=source,
                 valid_until=valid_until,
                 superseded_by=superseded_by,
+                end_line=entry_span_end(lines, i) - 1,
             ))
             i = j
         else:
@@ -1560,6 +1663,7 @@ def reclaim_noise_entries(
     archive_name: str = "IMPROVEMENT-archive.md",
     source_path: "Path | None" = None,
     dry_run: bool = True,
+    skip_h3_spans: bool = False,
 ) -> ReclaimReport:
     """Reclaim (archive + physically strip) stale operational-noise entries.
 
@@ -1586,7 +1690,7 @@ def reclaim_noise_entries(
     if not content or not content.strip():
         return report
 
-    entries = parse_entries(content)
+    entries = parse_entries(content, skip_h3_spans=skip_h3_spans)
     if not entries:
         return report
 
@@ -1643,6 +1747,7 @@ def reclaim_duplicate_entries(
     archive_name: str = "IMPROVEMENT-archive.md",
     source_path: "Path | None" = None,
     dry_run: bool = True,
+    skip_h3_spans: bool = False,
 ) -> ReclaimReport:
     """Reclaim ALREADY-ACCUMULATED EXACT duplicates (archive + physically strip).
 
@@ -1687,50 +1792,36 @@ def reclaim_duplicate_entries(
     if not content or not content.strip():
         return report
 
-    entries = parse_entries(content)
+    entries = parse_entries(content, skip_h3_spans=skip_h3_spans)
     if not entries:
         return report
 
-    # Dedup protection is by TYPE ONLY — NOT full is_keep_class (which also protects
-    # evergreen SECTIONS). Rationale: removing an EXACT duplicate loses nothing (the
-    # survivor keeps the content), so it is safe in ANY section — an evergreen
-    # section protects against AGE-death, not against de-duplication. But the 4
-    # judgment TYPES (principle/correction/decision/model) are hand-authored and a
-    # same-signature "dup" there may be an intentional cross-reference, so those are
-    # never auto-deduped (retire by name instead). This is the key difference from
-    # reclaim_noise_entries (which uses full is_keep_class) — and it is what lets
-    # dedup act on EVOLUTION at all (EVOLUTION is fully evergreen for age-decay, so
-    # a section-based guard would make dedup a permanent no-op there too).
-    def _dedup_protected(e: EntryMetadata) -> bool:
-        return e.entry_type in _KEEP_TYPES or "COE" in e.section or "COE" in e.title
+    # ONE duplicate rule (design 2026-10-25-memory-write-entry-dedup §3.2): two
+    # entries are duplicates iff they sit in the SAME section and have the same
+    # content_signature. Every type is eligible: a second copy of a decision in the
+    # same section carries nothing the first lacks, and section scoping keeps a
+    # deliberate cross-section repeat. Only the COE Registry is excluded — it is a
+    # keyed record updated in place (distillation _write_coe_registry), not a list.
+    def _dedup_excluded(e: EntryMetadata) -> bool:
+        return "COE" in e.section or "COE" in e.title
 
     def _sig(e: EntryMetadata) -> str:
         # raw_text already includes the leading "- " bullet marker; do NOT prepend
         # another (a double "- - " leaves a residual "- " that content_signature's
         # single-marker strip can't remove, poisoning the signature). Fall back to
-        # a synthesized bullet only when raw_text is empty.
+        # a synthesized bullet only when raw_text is empty. raw_text ends before the
+        # metadata line, so the Detail/valid_from tail never enters the signature.
         raw = e.raw_text if (e.raw_text and e.raw_text.lstrip().startswith("- ")) else "- " + (e.raw_text or e.title)
         return content_signature(raw)
 
-    # Group non-type-protected entries by exact content_signature.
-    groups: dict[str, list[EntryMetadata]] = {}
+    groups: dict[tuple[str, str], list[EntryMetadata]] = {}
     for entry in entries:
-        if _dedup_protected(entry):
+        if _dedup_excluded(entry):
             continue
         sig = _sig(entry)
         if not sig:
             continue
-        groups.setdefault(sig, []).append(entry)
-
-    # Count type-protected entries that DO collide (protected-from-dedup gauge).
-    _keep_sigs: dict[str, int] = {}
-    for entry in entries:
-        if not _dedup_protected(entry):
-            continue
-        sig = _sig(entry)
-        if sig:
-            _keep_sigs[sig] = _keep_sigs.get(sig, 0) + 1
-    report.kept_protected = sum(n - 1 for n in _keep_sigs.values() if n > 1)
+        groups.setdefault((entry.section, sig), []).append(entry)
 
     # Within each collision group (>=2), keep the survivor, select the rest.
     def _rank(e: EntryMetadata) -> tuple:
@@ -1949,22 +2040,8 @@ def _strip_entries(content: str, keys: "set[tuple[str, str]]", *,
             continue
         m = _match_entry_line(line, include_prose=include_prose)
         if m and (m.group(2), current_section) in keys:
-            # Skip this entry's whole block: bullet + continuations + meta.
-            i += 1
-            while i < n:
-                nxt = lines[i]
-                if nxt.startswith("- ") or nxt.startswith("## "):
-                    break
-                if _META_RE.match(nxt):
-                    i += 1  # consume the metadata line, then stop
-                    break
-                if nxt.strip() == "":
-                    # Blank: stop unless it's the separator before this block's meta.
-                    peek = i + 1
-                    if peek < n and _META_RE.match(lines[peek]):
-                        i = peek + 1
-                    break
-                i += 1
+            # Skip this entry's whole span (entry_span_end: the one boundary rule).
+            i = entry_span_end(lines, i)
             # Drop a single trailing blank separator left behind, to avoid
             # accumulating blank-line runs across repeated reclaims.
             if result and result[-1].strip() == "" and i < n and lines[i].strip() == "":
@@ -2002,21 +2079,8 @@ def _strip_entries_by_line(content: str, start_lines: "set[int]") -> str:
     n = len(lines)
     while i < n:
         if i in start_lines:
-            # Skip this entry's whole block: bullet + continuations + meta.
-            i += 1
-            while i < n:
-                nxt = lines[i]
-                if nxt.startswith("- ") or nxt.startswith("## "):
-                    break
-                if _META_RE.match(nxt):
-                    i += 1  # consume the metadata line, then stop
-                    break
-                if nxt.strip() == "":
-                    peek = i + 1
-                    if peek < n and _META_RE.match(lines[peek]):
-                        i = peek + 1
-                    break
-                i += 1
+            # Skip this entry's whole span (entry_span_end: the one boundary rule).
+            i = entry_span_end(lines, i)
             # Drop a single trailing blank separator to avoid blank-run buildup.
             if result and result[-1].strip() == "" and i < n and lines[i].strip() == "":
                 i += 1

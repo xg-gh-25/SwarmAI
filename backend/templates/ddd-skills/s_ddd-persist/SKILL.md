@@ -81,7 +81,7 @@ via the 养成 ladder, not dropped into a knowledge section. Only NON-rule knowl
   --prepend '- [pitfall] **Title** — concise description (YYYY-MM-DD)
   <!-- ref:0 | last:none | decay:active | source:manual -->'
 ```
-`locked_write.py` does an fcntl-locked read-modify-write (+ intra-batch dedup) so concurrent
+`locked_write.py` does an fcntl-locked read-modify-write so concurrent
 writers never corrupt a section. `--prepend` = newest-first. Modes: `--append` / `--prepend`
 / `--replace`.
 
@@ -122,7 +122,7 @@ bare delete.)
   is sovereign, preserved byte-for-byte.
 - **Confident-only** — persist what's verified; tag speculation `[UNVERIFIED]`, don't assert it.
 - **Newest-first** — prepend to the section.
-- **Don't duplicate** — the engine dedups intra-batch; also check by title before writing.
+- **Don't duplicate** — the engine writes exactly what you give it; check by title before writing.
 - **Source-stamp** — every entry carries `(YYYY-MM-DD)` + `source:manual`.
 - **The 养成 ladder** — a recurring pitfall climbs: prose (here, IMPROVEMENT.md) → rule →
   (3× recurrence) an executable ③ `gates/` gate with a knockout test. This skill writes the
