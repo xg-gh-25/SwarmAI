@@ -315,6 +315,40 @@ export function hostForInjectedTurn<M extends { id: string; role: string }>(
     const again = messages.find((m) => m.id === hosted.hostId);
     if (again) return again;
   }
-  const last = messages[messages.length - 1];
+  // A Waiting steer or a queued message at the bottom is not sent yet: the
+  // turn renders above it, into the bubble before it (chat-steer frontend §8).
+  let i = messages.length - 1;
+  while (i >= 0 && isUnsentUser(messages[i])) i -= 1;
+  const last = messages[i];
   return last && last.role === 'assistant' ? last : null;
+}
+
+/** The id of the first user bubble after a turn's own prompt that is a steer
+ *  (read: ``metadata.steered``) or not sent yet (Waiting / queued): where a
+ *  replay of that turn puts its first bubble (chat-steer frontend §8). The
+ *  prompt is the user bubble ``turnClientId`` names (``{cid}-asst``), else the
+ *  last user bubble that is neither. */
+export function firstSteerOfTurn(
+  messages: readonly { id: string; role: string }[], turnClientId: string | undefined,
+): string | null {
+  const isSteer = (m: { id: string; role: string }) => m.role === 'user'
+    && (isUnsentUser(m) || !!(m as { metadata?: { steered?: unknown } | null }).metadata?.steered);
+  const own = turnClientId?.endsWith('-asst') ? turnClientId.slice(0, -5) : undefined;
+  let start = own ? messages.findIndex((m) => m.role === 'user'
+    && (m.id === own || (m as { metadata?: { client_id?: unknown } | null }).metadata?.client_id === own)) : -1;
+  if (start < 0) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'user' && !isSteer(messages[i])) { start = i; break; }
+    }
+  }
+  for (let i = start + 1; i < messages.length; i += 1) if (isSteer(messages[i])) return messages[i].id;
+  return null;
+}
+
+/** A user bubble the CLI has not read yet: a Waiting steer or a queued message
+ *  (the same rule UserMessageView labels by). A read steer is a sent message. */
+export function isUnsentUser(msg: { role: string }): boolean {
+  const m = msg as { role: string; isQueued?: boolean; steerWaiting?: boolean;
+    metadata?: { steered?: unknown } | null };
+  return m.role === 'user' && !m.metadata?.steered && (!!m.isQueued || !!m.steerWaiting);
 }

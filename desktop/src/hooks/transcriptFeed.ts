@@ -98,9 +98,21 @@ export function planTranscriptChange(
 
   if (msg.role === 'user') {
     const cid = field(row.metadata, 'client_id');
-    const have = messages.some((m) => m.id === rowId
+    const held = messages.find((m) => m.id === rowId
       || (typeof cid === 'string' && cid && (m.id === cid || m.metadata?.client_id === cid)));
-    return have ? [] : [{ kind: 'append', msg }];
+    if (!held) return [{ kind: 'append', msg }];
+    // A row the CLI read as a steer labels the bubble in every tab, even one that
+    // missed `user_steered`; a provisional bubble (built from the snapshot's
+    // 200-char preview) takes the row's full content (chat-steer frontend §8).
+    const steered = field(row.metadata, 'steered');
+    if (!steered) return [];
+    return [{ kind: 'update', id: held.id, update: (m) => {
+      const provisional = !!m.metadata?.provisional;
+      const { provisional: _drop, ...meta } = (m.metadata ?? {}) as Record<string, unknown>;
+      return { ...m, steerWaiting: false,
+        content: provisional ? msg.content : m.content,
+        metadata: { ...meta, steered } as Message['metadata'] };
+    } }];
   }
 
   if (msg.role !== 'assistant') return [];

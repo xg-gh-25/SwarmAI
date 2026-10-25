@@ -173,4 +173,68 @@ describe('steer splits the turn into segments', () => {
     expect(ms.find((m) => m.id === 'local-s-asst')!.isError).toBe(true);
     expect(ms.find((m) => m.id === HOST)!.isError).toBeFalsy();
   });
+
+  it('T17: a replay after the split rebuilds it: each segment once, the first one above the steer', () => {
+    const h = setup([user('local-s', { steerWaiting: true })]);
+    h.emit(text('first part'));
+    h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
+    h.emit(text('second part'));
+    // reconnect: the subscription replays the turn from its turn_start
+    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'T1' }); });
+    seq = 0;
+    h.emit({ type: 'turn_start', turnClientId: HOST });
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s']);           // the replay goes above the steer
+    h.emit(text('first part'));
+    h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
+    h.emit(text('second part'));
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'local-s-asst']);
+    expect(h.body(HOST).match(/first part/g)?.length).toBe(1);
+    expect(h.body(HOST)).not.toContain('second part');
+    expect(h.body('local-s-asst').match(/second part/g)?.length).toBe(1);
+  });
+
+  it('T17b: a replay while the steer still waits goes above it', () => {
+    const h = setup([user('local-s', { steerWaiting: true })]);
+    h.emit(text('first part'));
+    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'T1' }); });
+    seq = 0;
+    h.emit({ type: 'turn_start', turnClientId: HOST });
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s']);
+    h.emit(text('first part'));
+    expect(h.body(HOST).match(/first part/g)?.length).toBe(1);
+  });
+
+  it('T17c: a continuation hosted by the steer segment, replayed, keeps its segment and shows its text once', () => {
+    const h = setup([user('local-s', { steerWaiting: true })]);
+    h.emit(text('first part'));
+    h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
+    h.emit(text('second part'));
+    // the answer to a question continues the turn: same client id, a new turn id
+    const cont = { type: 'turn_start', turnId: 'T2', source: 'answer', turnClientId: HOST };
+    h.emit(cont);
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'local-s-asst']);
+    h.emit({ ...text('third part'), turnId: 'T2' });
+    act(() => { fake.emit({ type: 'resync', sessionId: 'S', eventSeq: 0, activeTurnId: 'T2' }); });
+    seq = 0;
+    h.emit(cont);
+    h.emit({ ...text('third part'), turnId: 'T2' });
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'local-s-asst']);
+    expect(h.body('local-s-asst')).toContain('second part');
+    expect(h.body('local-s-asst').match(/third part/g)?.length).toBe(1);
+    expect(h.body(HOST)).not.toContain('third part');
+  });
+
+  it('the next turn never clears the segments of the turn before it', () => {
+    const h = setup([user('local-s', { steerWaiting: true })]);
+    h.emit(text('first part'));
+    h.emit(steered('local-s', 'folded', [HOST, 'local-s-asst']));
+    h.emit(text('second part'));
+    // the next turn starts (the backend clears segments only then: the tab still holds T1's)
+    h.emit({ type: 'result' });
+    h.emit({ type: 'turn_end' });
+    act(() => { h.store().append(user('local-n')); });
+    h.emit({ type: 'turn_start', turnId: 'T3', turnClientId: 'local-n-asst' });
+    expect(h.ids()).toEqual(['local-u', HOST, 'local-s', 'local-s-asst', 'local-n', 'local-n-asst']);
+    expect(h.body('local-s-asst')).toContain('second part');
+  });
 });

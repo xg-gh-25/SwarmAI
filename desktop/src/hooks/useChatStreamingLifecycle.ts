@@ -59,7 +59,7 @@ import type {
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { applyCompactionEvent } from '../pages/chat/compaction';
-import { shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, computeDrainRetirement, healGraceExpiryVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
+import { shouldResurfaceQuestion, shouldResurfacePermission, queuedBehindApprovalText, isServerQueuedErrorCode, hostForInjectedTurn, firstSteerOfTurn, computeDrainRetirement, healGraceExpiryVerdict, nextReconcileDelay, type HealGraceVerdict } from './streaming-guards';
 import { errorFieldsFromEvent } from './errorFields';
 import { chatService } from '../services/chat';
 import { sessionEvents } from '../services/sessionEvents';
@@ -2548,6 +2548,9 @@ export function useChatStreamingLifecycle(
     tab._queuedLocal?.delete(cid);
     tab._steerLocal?.delete(cid);
     if (tab._serverSteering) tab._serverSteering = tab._serverSteering.filter((s) => s.clientId !== cid);
+    // the turn's segment keys as the backend has them: a replay clears them (§8)
+    const segs = (ev as { segments?: unknown }).segments;
+    if (Array.isArray(segs)) tab._turnSegments = segs.filter((k): k is string => typeof k === 'string');
     if (store.phase !== 'streaming') return;   // a Stop / the turn ended: the label only
     const handlers = turnHandlersOf(tab);
     const turnId = (ev as { turnId?: string }).turnId;
@@ -4660,6 +4663,11 @@ export function useChatStreamingLifecycle(
     // continuation's POST that same bubble). An empty bubble of this turn from an
     // earlier start (a replay) goes first.
     const hosts = source === 'injected' || continuation;
+    // The turn's segments (§8), as the snapshot or its user_steered events last
+    // gave them: only this turn's (the backend clears them at the next turn's
+    // start, so a list from an earlier turn starts with another key).
+    const known = tab._turnSegments ?? [];
+    const segments = cid && known[0] === cid ? known : [];
     if (hosts) {
       store.remove((m) => m.role === 'assistant' && (m.content?.length ?? 0) === 0
         && (m.id === postBubble || m.id === `local-sub-${ev.turnId}`));
@@ -4677,6 +4685,13 @@ export function useChatStreamingLifecycle(
           (b.type === 'text' || b.type === 'thinking') ? { ...b, _confirmed: true } as typeof b : b),
       }));
       handlers.hostedTurn = { turnId: ev.turnId!, hostId: host.id, baseLen };
+      // the host keeps what it had (baseLen); the segments after it are rebuilt.
+      // A continuation's host can itself be a segment (the one the question
+      // was in): only the keys after it go.
+      const at = segments.indexOf(host.id);
+      const after = new Set(at >= 0 ? segments.slice(at + 1) : segments.filter((k) => k !== host.id));
+      if (after.size) store.remove((m) => m.role === 'assistant' && (after.has(m.id)
+        || (typeof m.metadata?.client_id === 'string' && after.has(m.metadata.client_id))));
     } else {
       handlers.hostedTurn = undefined;
     }
@@ -4686,16 +4701,25 @@ export function useChatStreamingLifecycle(
       // The replay rebuilds this turn from its start: drop what was shown of it —
       // its placeholder, the POST bubble when it is this tab's own send, and (for a
       // turn that is not a continuation) its persisted rows.
+      const segSet = new Set(continuation ? [] : segments);
       store.remove((m) => m.role === 'assistant' && (
         m.id === id || (!!postBubble && m.id === postBubble)
-        || (!continuation && !!cid && m.metadata?.client_id === cid)));
-      store.appendMany([{
+        || (!continuation && !!cid && m.metadata?.client_id === cid)
+        || segSet.has(m.id)
+        || (typeof m.metadata?.client_id === 'string' && segSet.has(m.metadata.client_id))));
+      const placeholder = {
         id, role: 'assistant', content: [], timestamp: new Date().toISOString(),
         metadata: {
           ...(cid ? { client_id: cid } : {}),
           ...(source ? { turn_source: source } : {}),
         },
-      } as Message]);
+      } as Message;
+      // It goes above this turn's first steer -- read, Waiting, or a queued
+      // message (§8): with the steer still Waiting, appending put the replay
+      // under it.
+      const above = firstSteerOfTurn(store.getSnapshot(), cid);
+      if (above) store.insertBefore(above, placeholder);
+      else store.appendMany([placeholder]);
     }
     if (tab._disconnectTimeoutId) { clearTimeout(tab._disconnectTimeoutId); tab._disconnectTimeoutId = undefined; }
     tab.isReconnecting = false;
