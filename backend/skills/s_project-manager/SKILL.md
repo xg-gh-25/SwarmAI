@@ -174,6 +174,29 @@ open Brain Hub for the person with the `show-brain-hub` UI action, and end with:
 brain is ready, and the next step is either to look at its map or to describe a first
 change for a Run.
 
+### Continue an unfinished setup
+
+A Brain whose `.artifacts/setup.json` says `setting-up` shows **Continue setup** in
+Brain Hub. Run P6 first (without `--record`) to see what is missing, then do only the
+missing phases in order. Never redo or overwrite a phase that already passes. Finish
+with P6 `--record`.
+
+### Add knowledge to an existing Brain
+
+Brain Hub's **Add knowledge** sends material sorted GOVERN / DISTILL / SHELF. Route
+each item to the skill that owns that write, with that skill's rules:
+
+| Role | Do | Owner |
+|------|----|-------|
+| DISTILL (file, doc) | Read it; sediment only what passes the admission gate into PRODUCT / TECH / IMPROVEMENT / PROJECT, additively, each entry with a source pointer | this Brain's `s_ddd-persist` |
+| DISTILL (link) | Make a knowledge card first, then distill from it | `s_learn-content` → `s_ddd-persist` |
+| SHELF (folder) | Mount it in the Library for recall; do not copy it into the docs | `s_library` |
+| GOVERN (repo, data source) | Add it as an asset: P3 bind + P4 code-intel; if it changes how the Brain delivers, revise `project-agent.yaml` and ask the person to confirm | this skill, P3 / P3b / P4 |
+
+A change to ③ Gates or to the Delivery rules is a proposal for the person, never a
+direct write. Report what was added, what was skipped and why, and what could not be
+reached. Finish with P6 `--record`.
+
 **P6 gate — the exit门禁 for the whole flow:**
 
 ```bash

@@ -146,6 +146,59 @@ describe('BrainMapView · Project Agent definition', () => {
   });
 });
 
+describe('BrainMapView · Continue setup and Add knowledge', () => {
+  it('a Brain still setting up shows Continue setup, which sends the resume prompt and closes the Hub', () => {
+    (DETAIL as Record<string, unknown>).setupState = 'setting-up';
+    const onDispatch = vi.fn((_m: string, _o?: { autoSend?: boolean }) => true);
+    const onRequestClose = vi.fn();
+    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={onDispatch} onRequestClose={onRequestClose} />);
+    fireEvent.click(screen.getByTestId('bm-setup-resume'));
+    expect(onDispatch.mock.calls[0][0]).toContain('Continue setting up the "P" Brain');
+    expect(onDispatch.mock.calls[0][1]).toEqual({ autoSend: true });
+    expect(onRequestClose).toHaveBeenCalled();
+    delete (DETAIL as Record<string, unknown>).setupState;
+  });
+
+  it('a ready Brain has no Continue setup', () => {
+    (DETAIL as Record<string, unknown>).setupState = 'ready';
+    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
+    expect(screen.queryByTestId('bm-setup-banner')).toBeNull();
+    delete (DETAIL as Record<string, unknown>).setupState;
+  });
+
+  it('Add knowledge collects material by role and sends one routed prompt', () => {
+    const onDispatch = vi.fn((_m: string, _o?: { autoSend?: boolean }) => true);
+    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={onDispatch} />);
+    fireEvent.click(screen.getByTestId('bm-add-open'));
+    const send = screen.getByTestId('bm-add-send') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    const input = screen.getByTestId('bm-add-material-input');
+    for (const v of ['https://wiki.acme.dev/runbook', '/Users/me/notes/']) {
+      fireEvent.change(input, { target: { value: v } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+    }
+    expect(screen.getByTestId('bm-add').textContent).toContain('1 to distill · 1 to shelve');
+    fireEvent.click(send);
+    const msg = onDispatch.mock.calls[0][0];
+    expect(msg).toContain('Add knowledge to the "P" Brain');
+    expect(msg).toContain('- https://wiki.acme.dev/runbook');
+    expect(msg).toContain('s_library');
+    // sent: the picker is cleared for the next batch
+    expect(screen.getByTestId('bm-add-empty')).toBeTruthy();
+  });
+
+  it('when no chat tab takes it, the material stays and the reason is shown', () => {
+    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={() => false} />);
+    fireEvent.click(screen.getByTestId('bm-add-open'));
+    const input = screen.getByTestId('bm-add-material-input');
+    fireEvent.change(input, { target: { value: '/Users/me/doc.md' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.click(screen.getByTestId('bm-add-send'));
+    expect(screen.getByTestId('bm-add-failed')).toBeTruthy();
+    expect(screen.queryByTestId('bm-add-empty')).toBeNull();
+  });
+});
+
 describe('BrainHubMap', () => {
   it('draws every brain and opens one on click', () => {
     const onOpen = vi.fn();

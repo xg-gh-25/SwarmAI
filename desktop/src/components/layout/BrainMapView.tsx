@@ -21,11 +21,13 @@ import { useBrainDetail, useReview, type ProjectAgent, type SectionKey } from '.
 import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } from '../../services/pipelines';
 import { Stat, SectionLabel, Tabs, StatusBadge, Hint, type Tone } from '../overlay';
 import { BrainMap, type BrainMapTarget } from './BrainMap';
+import { MaterialPicker, type MaterialRow } from './StarterMaterial';
+import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import {
   sectionCounts, projectRuns, runTone, needsYouItems, brainEval, type RunTone,
 } from './brainMapModel';
 
-export type MapPanel = 'need' | 'agent' | 'runs' | 'reflect' | 'eval';
+export type MapPanel = 'need' | 'agent' | 'runs' | 'reflect' | 'eval' | 'add';
 
 const TONE_OF: Record<RunTone, Tone> = {
   running: 'primary', needs: 'error', landed: 'success', failed: 'warning', stopped: 'neutral',
@@ -39,10 +41,12 @@ function Mock() {
 }
 function openPipelines() { window.dispatchEvent(new CustomEvent('swarm:show-pipeline')); }
 
-export function BrainMapView({ name, onGoTo, onDispatch }: {
+export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
   name: string;
   onGoTo: (view: 'browse' | 'review') => void;
-  onDispatch?: (msg: string) => boolean;
+  onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
+  /** Close the Brain Hub so the chat tab that received a dispatch is visible. */
+  onRequestClose?: () => void;
 }) {
   const [panel, setPanel] = useState<MapPanel>('need');
   const { data: detail = null } = useBrainDetail(name);
@@ -60,13 +64,38 @@ export function BrainMapView({ name, onGoTo, onDispatch }: {
     if (t === 'browse') onGoTo('browse');
     else setPanel(t === 'reflect' ? 'reflect' : t);
   };
+  /** Send a prompt to chat now; on success close the Hub so its tab shows. */
+  const sendToChat = (msg: string): boolean => {
+    let ok = false;
+    try { ok = onDispatch ? onDispatch(msg, { autoSend: true }) : false; } catch { ok = false; }
+    if (ok) onRequestClose?.();
+    return ok;
+  };
 
   return (
-    <div className="grid gap-3 p-3 min-h-full" style={{ gridTemplateColumns: 'minmax(380px, 1fr) minmax(420px, 1fr)' }} data-testid="brain-map-view">
+    <div className="flex flex-col gap-3 p-3 min-h-full" data-testid="brain-map-view">
+    {detail?.setupState === 'setting-up' && (
+      <div className="flex items-center gap-3 rounded-lg border px-3 py-2 border-[color-mix(in_srgb,var(--color-status-warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)]"
+        data-testid="bm-setup-banner">
+        <span className="material-symbols-outlined icon-sm text-[var(--color-status-warning)]">construction</span>
+        <div className="flex-1 min-w-0">
+          <div className="text-small font-semibold">Setup is not finished</div>
+          <div className="text-meta text-[var(--color-text-muted)]">The agent checks what is missing and finishes only that, then marks it ready.</div>
+        </div>
+        <button className="btn-sm btn-primary shrink-0" data-testid="bm-setup-resume"
+          onClick={() => sendToChat(buildResumeSetupPrompt(name))}>Continue setup in chat</button>
+      </div>
+    )}
+    <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(380px, 1fr) minmax(420px, 1fr)' }}>
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2 self-start">
         <div className="flex items-center justify-between px-1 text-small">
           <span className="font-semibold">Brain map</span>
-          <span className="text-meta text-[var(--color-text-muted)]">click any part to open it</span>
+          <span className="flex items-center gap-2">
+            <span className="text-meta text-[var(--color-text-muted)]">click any part to open it</span>
+            <button className="btn-sm btn-secondary" onClick={() => setPanel('add')} data-testid="bm-add-open">
+              <span className="material-symbols-outlined icon-xs">add</span> Add knowledge
+            </button>
+          </span>
         </div>
         <BrainMap
           version={version}
@@ -94,21 +123,56 @@ export function BrainMapView({ name, onGoTo, onDispatch }: {
             { key: 'runs', label: 'Runs', count: runs.length, testid: 'bm-tab-runs' },
             { key: 'reflect', label: 'Reflect', count: ev.brain.pending || undefined, testid: 'bm-tab-reflect' },
             { key: 'eval', label: 'Eval', testid: 'bm-tab-eval' },
+            { key: 'add', label: 'Add knowledge', testid: 'bm-tab-add' },
           ]}
         />
         <div className="pt-3" data-testid={`bm-panel-${panel}`}>
           {panel === 'need' && <NeedPanel items={needs} onReview={() => onGoTo('review')} />}
-          {panel === 'agent' && <AgentPanel name={name} runs={runs} delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []} agent={detail ? detail.projectAgent : undefined} onDispatch={onDispatch} />}
+          {panel === 'agent' && <AgentPanel name={name} runs={runs} delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []} agent={detail ? detail.projectAgent : undefined} onDispatch={sendToChat} />}
           {panel === 'runs' && <RunsPanel runs={runs} />}
           {panel === 'reflect' && <ReflectPanel review={review} onReview={() => onGoTo('review')} />}
           {panel === 'eval' && <EvalPanel ev={ev} />}
+          {panel === 'add' && <AddKnowledgePanel name={name} onSend={sendToChat} />}
         </div>
       </div>
+    </div>
     </div>
   );
 }
 
 // ── panels ─────────────────────────────────────────────────────────────────────
+
+/** Add material to this Brain: the New Brain picker, then one prompt to chat that
+ *  routes each role to the skill that owns the write (buildAddKnowledgePrompt). */
+function AddKnowledgePanel({ name, onSend }: { name: string; onSend: (msg: string) => boolean }) {
+  const [items, setItems] = useState<MaterialRow[]>([]);
+  const [draft, setDraft] = useState('');
+  const [failed, setFailed] = useState(false);
+  const counts = (r: string) => items.filter((it) => it.role === r).length;
+  const send = () => {
+    // a typed-but-not-added line is committed by the input's blur before this click
+    if (!items.length) return;
+    const ok = onSend(buildAddKnowledgePrompt(name, items.map(({ value, kind, role }) => ({ value, kind, role }))));
+    setFailed(!ok);
+    if (ok) { setItems([]); setDraft(''); }
+  };
+  return (
+    <div className="flex flex-col gap-3 min-h-[360px]" data-testid="bm-add">
+      <Hint>Files, folders, links or repos. Each is sorted by type: documents are distilled into the knowledge docs, folders are shelved for reference, a repo becomes a new asset. The agent keeps only what is worth keeping and tells you what it skipped.</Hint>
+      <MaterialPicker items={items} setItems={setItems} draft={draft} setDraft={setDraft} testPrefix="bm-add"
+        emptyText="Add what this Brain should learn from: design docs, runbooks, a wiki page, another repo." />
+      <div className="flex items-center gap-3">
+        <span className="text-meta text-[var(--color-text-muted)] flex-1">
+          {items.length ? `${counts('DISTILL')} to distill · ${counts('SHELF')} to shelve · ${counts('GOVERN')} new asset${counts('GOVERN') === 1 ? '' : 's'}` : 'Nothing added yet.'}
+        </span>
+        <button className="btn-md btn-primary" disabled={!items.length} onClick={send} data-testid="bm-add-send">
+          Distill into the Brain
+        </button>
+      </div>
+      {failed && <div className="text-meta text-[var(--color-status-error)]" data-testid="bm-add-failed">No chat tab could take it right now. Close a busy tab or send the draft that is waiting, then try again.</div>}
+    </div>
+  );
+}
 
 function Row({ children, testid }: { children: React.ReactNode; testid?: string }) {
   return <div className="py-2 border-b border-[var(--color-border)] last:border-b-0" data-testid={testid}>{children}</div>;
@@ -243,7 +307,7 @@ const PLACES = [
 
 function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
   name: string; runs: PipelineRunSummary[]; delivery: string[];
-  agent?: ProjectAgent | null; onDispatch?: (msg: string) => boolean;
+  agent?: ProjectAgent | null; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
 }) {
   const [req, setReq] = useState('');
   const [title, setTitle] = useState('');

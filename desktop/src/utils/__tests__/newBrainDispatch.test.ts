@@ -10,6 +10,8 @@ import {
   detectKind,
   previewSections,
   validateBrainName,
+  buildAddKnowledgePrompt,
+  buildResumeSetupPrompt,
   type StarterItem,
 } from '../newBrainDispatch';
 
@@ -121,6 +123,26 @@ describe('buildBrainManifest', () => {
     expect(p.toLowerCase()).toContain('cannot reach');
     expect(p.toLowerCase()).toContain('conflict');
     expect(p).toContain('Brain Hub');
+  });
+});
+
+describe('buildAddKnowledgePrompt / buildResumeSetupPrompt', () => {
+  it('routes each role to the skill that owns the write, and ends with P6 --record', () => {
+    const p = buildAddKnowledgePrompt(' Acme ', [
+      { value: '~/docs/runbook.md', role: 'DISTILL' },
+      { value: '~/notes/', role: 'SHELF' },
+      { value: 'github.com/acme/billing', role: 'GOVERN' },
+    ]);
+    expect(p).toContain('"Acme" Brain');
+    expect(p.indexOf('GOVERN')).toBeLessThan(p.indexOf('DISTILL'));
+    expect(p).toContain('- ~/docs/runbook.md');
+    for (const s of ['s_ddd-persist', 's_learn-content', 's_library', 'proposal for me to review', '--record']) expect(p).toContain(s);
+  });
+  it('a resume verifies first and redoes nothing', () => {
+    const p = buildResumeSetupPrompt('Acme');
+    expect(p).toContain('P6 check first');
+    expect(p).toContain('Do not redo');
+    expect(p).toContain('--record');
   });
 });
 

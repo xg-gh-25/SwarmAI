@@ -163,6 +163,8 @@ export interface BrainDetail {
    *  from the DDD and reviewed by the person. null = none yet; undefined = an old
    *  daemon that does not send it. `problems` lists unsupported values. */
   projectAgent?: ProjectAgent | null;
+  /** Setup state (same as BrainSummary.setupState): 'setting-up' shows Continue setup. */
+  setupState?: 'setting-up' | 'ready' | null;
 }
 
 export interface ProjectAgent {

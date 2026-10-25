@@ -41,6 +41,7 @@ export const FILES = [
   'components/layout/BrainMap.tsx',
   'components/layout/BrainMapView.tsx',
   'components/layout/BrainHubMap.tsx',
+  'components/layout/StarterMaterial.tsx',
   'components/layout/DddCard.tsx',
   'components/layout/NewBrainOverlay.tsx',
   'components/layout/ToDoOverlay.tsx',

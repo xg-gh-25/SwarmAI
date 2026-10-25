@@ -177,3 +177,57 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
   );
   return lines.join('\n');
 }
+
+/** The material lines, grouped GOVERN → DISTILL → SHELF (shared by both prompts). */
+function materialLines(items: StarterItem[], notes: Record<StarterRole, string>): string[] {
+  const out: string[] = [];
+  for (const role of ['GOVERN', 'DISTILL', 'SHELF'] as StarterRole[]) {
+    const entries = items.filter((it) => it.role === role);
+    if (!entries.length) continue;
+    out.push(`  ${notes[role]}:`);
+    for (const it of entries) out.push(`    - ${it.value.trim()}`);
+  }
+  return out;
+}
+
+/**
+ * The prompt that adds material to an EXISTING Brain. It routes each role to the
+ * skill that already owns that write, with that skill's own discipline:
+ * DISTILL → s_ddd-persist (admission gate: most facts are not persisted; additive,
+ * locked writes, a source pointer per entry; a rule change for Gates / Delivery is
+ * proposed, not written), links → s_learn-content cards first, SHELF → s_library,
+ * GOVERN → bind it as a new asset (P3 + P4) and revise the Project Agent if it
+ * changes how the Brain delivers. Ends with P6 --record.
+ */
+export function buildAddKnowledgePrompt(name: string, items: StarterItem[]): string {
+  const lines = [`Add knowledge to the "${name.trim()}" Brain (s_project-manager: Add knowledge to an existing Brain).`, '', 'Material:'];
+  lines.push(...materialLines(items, {
+    GOVERN: 'GOVERN (a new asset: bind it in bindings.yaml, build code-intel for a repo)',
+    DISTILL: 'DISTILL (read it, then sediment what is worth keeping into PRODUCT/TECH/IMPROVEMENT/PROJECT)',
+    SHELF: 'SHELF (mount for reference in the Library; do not copy it into the docs)',
+  }));
+  lines.push('');
+  lines.push(
+    'Use the skills that own each write, with their rules: this Brain\'s s_ddd-persist for every doc write (its admission ' +
+      'gate decides what is worth keeping; additive, with a source pointer on each entry; never ' +
+      'overwrite existing judgment), s_learn-content for a link before distilling it, s_library to ' +
+      'shelve a folder, and s_project-manager P3/P4 for a new asset. A change to Gates or to how the ' +
+      'Brain delivers is a proposal for me to review, not a direct write; if a new asset changes the ' +
+      'Project Agent, show me the revised project-agent.yaml to confirm. Tell me what you added, ' +
+      'what you skipped and why, and anything you could not reach. Finish with P6 (--record).',
+  );
+  return lines.join('\n');
+}
+
+/** The prompt that resumes an unfinished setup: verify first, then do only what is missing. */
+export function buildResumeSetupPrompt(name: string): string {
+  return [
+    `Continue setting up the "${name.trim()}" Brain.`,
+    '',
+    'Run the P6 check first (s_project-manager verify_ddd_complete.py --project ' +
+      `"${name.trim()}") to see which phases are missing, then finish only those, in order: ` +
+      'P2 knowledge, P3 bind, P3b the Project Agent (show it to me to confirm), P4 code-intel, ' +
+      'P5 skills. Do not redo or overwrite what is already written. Finish with P6 --record, ' +
+      'then open Brain Hub for me and tell me it is ready.',
+  ].join('\n');
+}

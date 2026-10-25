@@ -111,7 +111,7 @@ type DetailView = 'map' | 'overview' | 'browse' | 'review' | 'distribute';
  *  falls back to clipboard-copy (older webview / non-overlay mount). */
 export function BrainHub(
   { onRequestClose, onDispatch, defaultView = 'map' }:
-  { onRequestClose?: () => void; onDispatch?: (msg: string) => boolean; defaultView?: DetailView } = {},
+  { onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; defaultView?: DetailView } = {},
 ) {
   const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
@@ -202,7 +202,7 @@ function BrainDetailShell(
     name: string; brains: BrainSummary[] | null;
     detailView: DetailView; onSelectView: (v: DetailView) => void;
     onSwitchBrain: (n: string) => void; onBack: () => void;
-    onRequestClose?: () => void; onDispatch?: (msg: string) => boolean; liveRun?: boolean;
+    onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; liveRun?: boolean;
   },
 ) {
   // Review sub-tab badge: the pending count from the cheap gallery summary (zero
@@ -266,7 +266,7 @@ function BrainDetailShell(
 
       <div className="flex-1 overflow-auto">
         {detailView === 'map' && (
-          <BrainMapView name={name} onGoTo={onSelectView} onDispatch={onDispatch} />
+          <BrainMapView name={name} onGoTo={onSelectView} onDispatch={onDispatch} onRequestClose={onRequestClose} />
         )}
         {detailView === 'overview' && (
           <BrainView
@@ -1182,7 +1182,7 @@ function repoForTarget(target: string): { label: string; install: string } {
 
 function DistributeView(
   { name, onRequestClose, onDispatch }:
-  { name: string; onRequestClose?: () => void; onDispatch?: (msg: string) => boolean },
+  { name: string; onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean },
 ) {
   // Cached query (run_cfb460ac): re-opening Distribute inside the 30s window is
   // served from cache — the old useEffect+then refetched on every mount.

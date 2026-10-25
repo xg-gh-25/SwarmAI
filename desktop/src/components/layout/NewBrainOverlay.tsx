@@ -18,18 +18,14 @@
  *
  * @exports NewBrainOverlay, NewBrainOverlayProps
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useOverlayDraft } from '../../hooks/useOverlayDraft';
+import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import {
-  classifyStarterItem,
   buildBrainManifest,
-  detectKind,
   previewSections,
   validateBrainName,
   type PreviewSection,
-  type StarterItem,
-  type StarterKind,
-  type StarterRole,
 } from '../../utils/newBrainDispatch';
 
 export interface NewBrainContentProps {
@@ -94,23 +90,7 @@ const NEXT_STEPS: { n: number; title: string; body: string }[] = [
   { n: 3, title: 'Ready', body: 'When the check passes, open its map or describe a first change for a Run.' },
 ];
 
-/** The three roles, as a segmented choice on each material row. */
-const ROLES: { role: StarterRole; label: string; hint: string; tone: string }[] = [
-  { role: 'GOVERN', label: 'Govern', hint: 'An asset it manages: bound, and a repo gets code-intel', tone: 'var(--color-primary)' },
-  { role: 'DISTILL', label: 'Distill', hint: 'Read once and distilled into its knowledge', tone: 'var(--color-status-warning)' },
-  { role: 'SHELF', label: 'Shelf', hint: 'Kept for reference, read when needed', tone: 'var(--color-text-muted)' },
-];
-
-const KIND_ICON: Record<string, string> = {
-  repo: 'code', folder: 'folder', file: 'description', link: 'link', text: 'notes',
-};
-
-let itemSeq = 0;
-
-interface RowItem extends StarterItem {
-  id: number;
-  displayKind: string;
-}
+type RowItem = MaterialRow;
 
 /** The persisted draft shape for the New Brain form (useOverlayDraft). */
 interface BrainForm {
@@ -143,75 +123,6 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
     [setForm],
   );
   const setDraft = useCallback((v: string) => setForm((f) => ({ ...f, draft: v })), [setForm]);
-  // Guards against a second native dialog opening while one is already pending
-  // (rapid double-click). Mirrors LibraryOverlay.AddFolderButton's `busy` flag.
-  // NOT part of the persisted draft — transient in-flight UI state.
-  const [picking, setPicking] = useState(false);
-
-  const addItem = useCallback((raw: string, kindOverride?: StarterKind) => {
-    const value = raw.trim();
-    if (!value) return;
-    setItems((prev) => {
-      if (prev.some((it) => it.value === value)) return prev; // dedupe
-      const kind = kindOverride ?? detectKind(value);
-      const role = classifyStarterItem({ value, kind });
-      return [...prev, { id: ++itemSeq, value, kind, role, displayKind: kind }];
-    });
-  }, [setItems]);
-
-  const commitDraft = useCallback(() => {
-    // Allow pasting several lines at once — one item per line.
-    draft.split('\n').forEach((line) => addItem(line));
-    setDraft('');
-  }, [draft, addItem]);
-
-  // The REAL upload affordance: open the native OS file browser via the Tauri
-  // dialog plugin, which returns ABSOLUTE paths (unlike an OS drag, whose `.path`
-  // is undefined in the webview → only a basename the agent can't resolve). This
-  // clones LibraryOverlay.AddFolderButton: dynamic import + try/catch → toast
-  // fallback so a non-Tauri/dev environment (where the import rejects) degrades
-  // gracefully instead of dead-ending the click.
-  //   - mode 'file'   → open({ multiple:true })            → string[]
-  //   - mode 'folder' → open({ directory:true })           → string
-  //   - cancel        → null (nothing added)
-  // Each picked path feeds the SAME addItem() with a kind hint, so classification
-  // (file→DISTILL, folder→SHELF) and dispatch are identical to a pasted path.
-  const pickAndAdd = useCallback(
-    async (mode: 'file' | 'folder') => {
-      if (picking) return; // a dialog is already open — ignore the double-click
-      setPicking(true);
-      try {
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const picked = await open({
-          multiple: mode === 'file',
-          directory: mode === 'folder',
-          title: mode === 'file' ? 'Add files to this brain' : 'Add a folder to this brain',
-        });
-        // Normalize string | string[] | null → a path array (cancel = []).
-        const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
-        paths.forEach((p) => addItem(p, mode));
-      } catch {
-        // dialog unavailable (non-Tauri/dev) — fall back to the type/paste route.
-        document.dispatchEvent(
-          new CustomEvent('swarm:toast', {
-            detail: { message: 'File browser unavailable here — paste a full path into the field instead.' },
-          }),
-        );
-      } finally {
-        setPicking(false);
-      }
-    },
-    [addItem, picking],
-  );
-
-  const removeItem = useCallback((id: number) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
-  }, [setItems]);
-
-  const setRole = useCallback((id: number, role: StarterRole) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, role } : it)));
-  }, [setItems]);
-
   const nameError = useMemo(() => validateBrainName(name, existingNames), [name, existingNames]);
 
   // Create: build ONE manifest → dispatch → close ONLY if it landed (F4: the
@@ -249,58 +160,6 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
 
   const filled = useMemo(() => previewSections(items), [items]);
   const assetCount = items.filter((it) => it.role === 'GOVERN').length;
-
-  const onDropZoneDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      // Path 1 (PRIMARY — the reliable one): a drag from the app's own Workspace
-      // Explorer carries `application/json` = a FileTreeItem with a REAL workspace
-      // path (this is the ChatDropZone precedent). Unlike ChatDropZone we accept
-      // BOTH file AND directory — a directory is valid starter material (→ SHELF).
-      // The OS `.path` route below is unreliable in the Tauri webview (`.path` is
-      // non-standard + dragDropEnabled isn't configured), so this internal-drag
-      // path is how "material already in the workspace" actually gets in.
-      const jsonData = e.dataTransfer.getData('application/json');
-      if (jsonData) {
-        try {
-          const fileData = JSON.parse(jsonData) as { path?: string; name?: string; type?: string };
-          const val = fileData.path || fileData.name;
-          if (val) {
-            // A directory drag → force SHELF via the folder kind (its path has no
-            // trailing slash, so detectKind alone could mis-read it).
-            const kind = fileData.type === 'directory' ? 'folder' : undefined;
-            addItem(val, kind);
-          }
-        } catch {
-          /* malformed payload — ignore, nothing to add */
-        }
-        return; // internal drag handled; don't double-add from files/text
-      }
-      // Path 2 (fallback): native OS file drop. In the Tauri/browser webview `.path`
-      // is undefined, so only the basename arrives — a path the agent cannot open.
-      // Never add a basename as if it were a path: say so and point at the picker.
-      let added = false;
-      let lostPath = false;
-      for (const f of Array.from(e.dataTransfer.files ?? [])) {
-        const path = (f as File & { path?: string }).path;
-        if (path) { addItem(path); added = true; } else { lostPath = true; }
-      }
-      if (lostPath) {
-        document.dispatchEvent(new CustomEvent('swarm:toast', {
-          detail: { message: 'Files dropped from Finder arrive without their full path here. Use Choose files or Choose folder instead.' },
-        }));
-        return;
-      }
-      // Path 3: text/URI drop (links, pasted text) — only if no files came with it,
-      // so a single drop carrying BOTH files and a uri-list can't double-add (#4c).
-      if (!added) {
-        const text = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
-        if (text) text.split('\n').forEach((l) => addItem(l));
-      }
-    },
-    [addItem],
-  );
 
   const canCreate = !!name.trim() && !nameError;
 
@@ -341,89 +200,13 @@ export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBr
         </div>
 
         {/* ── Right: what it starts from ──────────────────────────────────── */}
-        <div
-          className="p-6 flex flex-col min-w-0 min-h-0"
-          data-testid="new-brain-dropzone"
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={onDropZoneDrop}
-        >
-          <div className="flex items-baseline justify-between">
+        <div className="p-6 flex flex-col min-w-0 min-h-0">
+          <div className="flex items-baseline justify-between mb-2">
             <span className="text-small font-semibold text-[var(--color-text)]">Starter material</span>
             <span className="text-meta text-[var(--color-text-muted)]">Optional</span>
           </div>
-
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              data-testid="new-brain-material-input"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
-              onBlur={commitDraft}
-              placeholder="Paste a repo URL, a link or a local path"
-              className="flex-1 min-w-0 h-10 bg-[var(--color-input-bg)] border border-[var(--color-border)] rounded-lg px-3 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-            />
-            <button type="button" data-testid="new-brain-material-add" onClick={commitDraft}
-              disabled={!draft.trim()} className="btn-md btn-secondary shrink-0 disabled:opacity-40">
-              Add
-            </button>
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <button type="button" data-testid="new-brain-add-files" onClick={() => pickAndAdd('file')}
-              disabled={picking} className="btn-md btn-ghost disabled:opacity-50">
-              <span className="material-symbols-outlined icon-sm">upload_file</span> Choose files
-            </button>
-            <button type="button" data-testid="new-brain-add-folder" onClick={() => pickAndAdd('folder')}
-              disabled={picking} className="btn-md btn-ghost disabled:opacity-50">
-              <span className="material-symbols-outlined icon-sm">folder_open</span> Choose folder
-            </button>
-          </div>
-
-          <div className="mt-4 flex-1 min-h-0 flex flex-col">
-            {items.length === 0 ? (
-              <div className="flex-1 min-h-[220px] rounded-xl border border-dashed border-[var(--color-border)] grid place-items-center text-center px-6"
-                data-testid="new-brain-empty">
-                <div>
-                  <span className="material-symbols-outlined text-[var(--color-text-muted)]" aria-hidden>move_to_inbox</span>
-                  <div className="text-body text-[var(--color-text)] mt-1">Drop files or folders here</div>
-                  <div className="text-small text-[var(--color-text-muted)] mt-1 max-w-[420px]">
-                    A repo becomes an asset it governs, documents are distilled into knowledge, folders are kept for reference.
-                    With nothing at all it starts as a pure-knowledge Brain.
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2">
-                {items.map((it) => (
-                  <div key={it.id} data-testid={`new-brain-item-${it.id}`} data-role={it.role}
-                    className="flex items-center gap-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg pl-3 pr-1.5 py-1.5">
-                    <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{KIND_ICON[it.displayKind] ?? 'description'}</span>
-                    <span className="flex-1 min-w-0 text-small break-all" title={it.value}>{it.value}</span>
-                    <div role="radiogroup" aria-label="Role" className="flex shrink-0 rounded-md border border-[var(--color-border)] overflow-hidden">
-                      {ROLES.map((r) => {
-                        const on = it.role === r.role;
-                        return (
-                          <button key={r.role} type="button" role="radio" aria-checked={on} title={r.hint}
-                            data-testid={`new-brain-role-${it.id}-${r.role}`}
-                            onClick={() => setRole(it.id, r.role)}
-                            className={`h-7 px-2.5 text-meta ${on ? 'font-semibold' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-                            style={on ? { color: r.tone, background: `color-mix(in srgb, ${r.tone} 14%, transparent)` } : undefined}>
-                            {r.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <button aria-label={`Remove ${it.value}`} data-testid={`new-brain-remove-${it.id}`}
-                      onClick={() => removeItem(it.id)} className="icon-btn shrink-0">
-                      <span className="material-symbols-outlined icon-sm">close</span>
-                    </button>
-                  </div>
-                ))}
-                <div className="text-meta text-[var(--color-text-muted)] mt-1">
-                  Each item was sorted by type. Hover a role to see what it means; drop more files here any time.
-                </div>
-              </div>
-            )}
-          </div>
+          <MaterialPicker items={items} setItems={setItems} draft={draft} setDraft={setDraft}
+            emptyText="A repo becomes an asset it governs, documents are distilled into knowledge, folders are kept for reference. With nothing at all it starts as a pure-knowledge Brain." />
         </div>
       </div>
 
