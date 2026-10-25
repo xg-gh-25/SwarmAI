@@ -927,7 +927,7 @@ export function ChatInput({
                 disabled
                   ? t('chat.disconnectedPlaceholder', 'Backend offline...')
                   : isStreaming
-                    ? 'Type to queue a follow-up...'
+                    ? 'Type to add to the running turn...'
                     : 'Ask Swarm anything...'
               }
               rows={DEFAULT_ROWS}
