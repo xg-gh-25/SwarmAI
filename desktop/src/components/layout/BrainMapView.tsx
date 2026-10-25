@@ -170,10 +170,25 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
           <StatusBadge tone="warning">needs attention</StatusBadge>
           <StatusBadge tone="error">needs you</StatusBadge>
           <StatusBadge tone="primary">running</StatusBadge>
-          <span>dashed line: written only after your OK</span>
+          <span className="text-[var(--color-border)]">|</span>
+          <LineKey v="--color-primary">a request</LineKey>
+          <LineKey v="--color-text-muted">the Run</LineKey>
+          <LineKey v="--color-status-success">knowledge written</LineKey>
+          <LineKey v="--color-status-warning" dashed>waits for your OK</LineKey>
         </div>
       </div>
     </div>
+  );
+}
+
+/** A legend swatch: the same stroke the map draws for that kind of line. */
+function LineKey({ v, dashed, children }: { v: string; dashed?: boolean; children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <svg width="22" height="6" aria-hidden="true"><line x1="1" y1="3" x2="21" y2="3" strokeWidth="2" strokeLinecap="round"
+        strokeDasharray={dashed ? '5 4' : undefined} style={{ stroke: `var(${v})` }} /></svg>
+      {children}
+    </span>
   );
 }
 

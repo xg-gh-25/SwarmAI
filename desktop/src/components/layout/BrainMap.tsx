@@ -3,7 +3,8 @@
  * Brain, with You (review & judge), the Project Agent, the request sources, the one
  * Run Conductor, Reflect / Evolution and Eval laid out around it, and arrows that
  * say who does what. Each arrow's meaning is written ON the map, in a label pill
- * beside the line ("drafts, you submit", "writes rules after your OK"), and each
+ * beside the line ("drafts, you submit", "writes rules after your OK"), coloured by what
+ * it carries (a request, the Run flow, knowledge written, a rule waiting for your OK), and each
  * part carries a status dot (healthy / attention / needs you) and one line of what
  * it is, so the picture reads without a legend.
  *
@@ -79,7 +80,12 @@ const DOT_FILL: Record<MapTone, string> = {
   needs: 'fill-[var(--color-status-error)]',
   busy: 'fill-[var(--color-primary)]',
 };
-const LINE = 'stroke-[var(--color-text-muted)] fill-none';
+/** What a line means, by colour: a request coming in, the Run flow, knowledge written,
+ *  a rule waiting for your OK. Each has its own arrowhead of the same colour. */
+type Flow = 'request' | 'run' | 'learn' | 'approve';
+const FLOW_VAR: Record<Flow, string> = {
+  request: '--color-primary', run: '--color-text-muted', learn: '--color-status-success', approve: '--color-status-warning',
+};
 const SUB = 'text-small fill-[var(--color-text-muted)]';
 const TITLE = 'text-body font-semibold fill-[var(--color-text)]';
 
@@ -89,20 +95,24 @@ function Dot({ x, y, tone }: { x: number; y: number; tone?: MapTone }) {
 }
 
 /** An arrow with its meaning in a pill beside the line (never on top of it). */
-function Arrow({ a, b, label, dashed, lx, ly }: {
-  a: { x: number; y: number }; b: { x: number; y: number }; label?: string; dashed?: boolean; lx?: number; ly?: number;
+function Arrow({ a, b, via = [], label, dashed, lx, ly, flow = 'run' }: {
+  a: { x: number; y: number }; b: { x: number; y: number }; via?: { x: number; y: number }[];
+  label?: string; dashed?: boolean; lx?: number; ly?: number; flow?: Flow;
 }) {
   const x = lx ?? (a.x + b.x) / 2, y = ly ?? (a.y + b.y) / 2;
   const w = label ? label.length * 6.4 + 18 : 0;
+  const v = FLOW_VAR[flow];
   return (
-    <g>
-      <path d={`M${a.x},${a.y} L${b.x},${b.y}`} className={LINE} strokeWidth={1.4}
-        strokeDasharray={dashed ? '5 4' : undefined} markerEnd="url(#bm-arrow)" />
+    <g data-flow={flow}>
+      {/* non-scaling: 2px on screen however wide the map is drawn */}
+      <path d={`M${a.x},${a.y} ${via.map((q) => `L${q.x},${q.y} `).join('')}L${b.x},${b.y}`} fill="none" strokeLinejoin="round" style={{ stroke: `var(${v})` }} strokeWidth={2}
+        vectorEffect="non-scaling-stroke" strokeLinecap="round"
+        strokeDasharray={dashed ? '6 5' : undefined} markerEnd={`url(#bm-arrow-${flow})`} />
       {label && (
         <g>
-          <rect x={x - w / 2} y={y - 10} width={w} height={20} rx={10}
-            className="fill-[var(--color-card)] stroke-[var(--color-border)]" />
-          <text x={x} y={y + 4} textAnchor="middle" className="text-meta fill-[var(--color-text-muted)]">{label}</text>
+          <rect x={x - w / 2} y={y - 10} width={w} height={20} rx={10} className="fill-[var(--color-card)]"
+            style={{ stroke: `color-mix(in srgb, var(${v}) 55%, transparent)` }} />
+          <text x={x} y={y + 4} textAnchor="middle" className="text-meta" style={{ fill: `var(${v})` }}>{label}</text>
         </g>
       )}
     </g>
@@ -130,23 +140,30 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Brain map" data-testid="brain-map"
       className="block mx-auto max-w-[860px]">
       <defs>
-        <marker id="bm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0L10,5L0,10z" className="fill-[var(--color-text-muted)]" />
-        </marker>
+        {(Object.keys(FLOW_VAR) as Flow[]).map((f) => (
+          <marker key={f} id={`bm-arrow-${f}`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11" markerHeight="11"
+            markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+            <path d="M0,0L10,5L0,10z" style={{ fill: `var(${FLOW_VAR[f]})` }} />
+          </marker>
+        ))}
       </defs>
 
       {/* faint Eval reads: it scores the Brain and the Runs, offline */}
-      <path d={`M${P.eval.x - 20},${P.eval.y + 26} L${C.x + 40},${C.y - HD - 34}`} className="stroke-[var(--color-border)] fill-none" strokeDasharray="2 5" />
-      <path d={`M${P.eval.x},${P.eval.y + 26} L${P.evo.x},${P.evo.y - 58}`} className="stroke-[var(--color-border)] fill-none" strokeDasharray="2 5" />
+      <path d={`M${P.eval.x - 20},${P.eval.y + 26} L${C.x + 40},${C.y - HD - 34}`} fill="none" style={{ stroke: 'var(--color-text-muted)' }}
+        strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="1 5" strokeLinecap="round" />
+      <path d={`M${P.eval.x},${P.eval.y + 26} L${P.evo.x},${P.evo.y - 58}`} fill="none" style={{ stroke: 'var(--color-text-muted)' }}
+        strokeWidth={1.5} vectorEffect="non-scaling-stroke" strokeDasharray="1 5" strokeLinecap="round" />
 
-      <Arrow a={{ x: P.agent.x + 72, y: P.agent.y }} b={{ x: d.x - HR + 4, y: d.y }} label="reads" lx={(P.agent.x + 72 + d.x - HR) / 2} ly={P.agent.y - 16} />
-      <Arrow a={{ x: P.agent.x, y: P.agent.y + 38 }} b={{ x: P.conductor.x - 132, y: cTop + 6 }} label="drafts, you submit" lx={150} ly={372} />
+      <Arrow a={{ x: P.agent.x + 72, y: P.agent.y }} b={{ x: d.x - HR + 4, y: d.y }} label="reads" lx={(P.agent.x + 72 + d.x - HR) / 2} ly={P.agent.y - 16} flow="request" />
+      <Arrow a={{ x: P.agent.x, y: P.agent.y + 38 }} b={{ x: P.conductor.x - 132, y: cTop + 6 }} label="drafts, you submit" lx={150} ly={372} flow="request" />
       <Arrow a={{ x: C.x, y: C.y + HD * 0.87 + HR - 2 }} b={{ x: C.x, y: cTop }} label="each Run uses this version" lx={C.x} ly={(C.y + HD * 0.87 + HR + cTop) / 2} />
       <Arrow a={{ x: P.conductor.x + 132, y: P.conductor.y - 4 }} b={{ x: P.evo.x - 58, y: P.evo.y + 14 }} label="REPORT" lx={540} ly={474} />
-      <Arrow a={{ x: P.evo.x - 6, y: P.evo.y - 58 }} b={toward(k, P.evo, HR * 0.92)} label="writes knowledge" lx={574} ly={310} />
-      <Arrow a={{ x: P.evo.x - 40, y: P.evo.y - 42 }} b={toward(g, P.evo, HR * 0.92)} label="writes rules after your OK" dashed lx={556} ly={344} />
+      {/* around Gates, so it plainly ends at Knowledge (not under the Gates hex) */}
+      <Arrow a={{ x: P.evo.x + 26, y: P.evo.y - 61 }} via={[{ x: P.evo.x + 26, y: k.y }]} b={{ x: k.x + HR * 0.87 + 3, y: k.y }}
+        label="writes knowledge" lx={P.evo.x + 26} ly={262} flow="learn" />
+      <Arrow a={{ x: P.evo.x - 40, y: P.evo.y - 42 }} b={toward(g, P.evo, HR * 0.92)} label="writes rules after your OK" dashed lx={552} ly={330} flow="approve" />
       {SRC.map((_, i) => (
-        <Arrow key={i} a={{ x: 112, y: 446 + i * 44 }} b={{ x: P.conductor.x - 132, y: P.conductor.y - 6 + i * 14 }} />
+        <Arrow key={i} a={{ x: 112, y: 446 + i * 44 }} b={{ x: P.conductor.x - 132, y: P.conductor.y - 6 + i * 14 }} flow="request" />
       ))}
 
       {/* the DDD flower */}
