@@ -9,10 +9,11 @@ Never shows another session's work, and is the same live, after a reload or a re
   HEAD (``inHead``: the rail's NEW / UPD badge; one ``git ls-tree`` per repo). A
   session recorded before that store existed is imported once from its
   ``turn_deliverables`` blocks.
-- **Changes** ← core/session_changes: what the session's own transcript says it
-  changed — each persisted ``turn_changes`` card, and the commits its assistant text
-  names (confirmed by git in a bound repo). How a change was made is not asked; no
-  run.json is read (docs/design/canvas-changes-from-turns.md).
+- **Changes** ← core/session_changes: each persisted ``turn_changes`` card of the
+  session's own transcript, and the session's landings read from the stamp
+  ``session_worktree land`` writes into git (core/session_landings). How a change was
+  made is not asked; no run.json is read (docs/design/canvas-changes-from-turns.md,
+  docs/design/2026-10-25-turn-result-card.md).
 
 The two parts are independent requests (``parts``): Artifacts are a file read on the
 single-worker ``canvas_session`` pool (behind the session_outputs writes the router

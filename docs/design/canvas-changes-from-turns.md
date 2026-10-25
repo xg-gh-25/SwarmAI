@@ -3,7 +3,7 @@ title: Canvas Changes from the session's own transcript
 status: v4 (v3 + skeptic review 3 fixes; v1 and v2 rejected)
 date: 2026-10-24
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-25
 owner: Gawan
 ---
 
@@ -75,7 +75,9 @@ Two facts, both already in the transcript:
   written at `result` and at a user Stop (`_turn_products_at_stop`, persisted before
   `/chat/stop` returns). Rows: `{path, absolutePath, repo, status, added, deleted,
   binary, diffable, gitRoot, start, end}`, at most 60 plus `omitted`.
-- **Commits mentioned** — commit ids the session's **assistant text** names in an
+- **Commits mentioned** — *(removed 2026-10-25: Canvas now lists the session's
+  landings read from git's stamp, docs/design/2026-10-25-turn-result-card.md; prose
+  is no longer scanned for commit ids. The text below is kept as history.)* commit ids the session's **assistant text** names in an
   inline code span: a markdown code span (parsed, not a raw regex; fenced code blocks
   do not count) whose whole content is 7-40 or 64 hex digits, case-insensitive, in a
   `text` block of an assistant row (not tool output, user messages or thinking). A
