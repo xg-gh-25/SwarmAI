@@ -313,7 +313,7 @@ describe('BrainHubHome', () => {
     expect(onOpen).toHaveBeenLastCalledWith('T', { view: 'map', panel: 'agent' });
   });
 
-  it('cards open their brain; Add knowledge picks a brain and opens its Add panel; New Brain opens the form', () => {
+  it('a whole card opens its brain; Add knowledge picks a brain and opens its Add panel; New Brain opens the form', () => {
     const onOpen = vi.fn();
     const shown: string[] = [];
     const listen = (e: Event) => shown.push(e.type);
@@ -321,8 +321,7 @@ describe('BrainHubHome', () => {
     render(<BrainHubHome brains={brains as never} onOpen={onOpen} />);
     fireEvent.click(screen.getByTestId('dddcard-T'));
     expect(onOpen).toHaveBeenLastCalledWith('T');
-    fireEvent.click(screen.getByTestId('hub-card-add-T'));
-    expect(onOpen).toHaveBeenLastCalledWith('T', { view: 'map', panel: 'add' });
+    expect(screen.queryByTestId('hub-card-add-T')).toBeNull();   // no hidden hover action on a card
     fireEvent.click(screen.getByTestId('hub-add-knowledge'));
     fireEvent.click(screen.getByTestId('hub-add-pick-S'));
     expect(onOpen).toHaveBeenLastCalledWith('S', { view: 'map', panel: 'add' });

@@ -339,6 +339,9 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'Reflect · Evolution', 'Eval']);
     expect(screen.getByTestId('brainhub-overview')).toBeTruthy();
     expect(screen.getByTestId('brainhub-browse')).toBeTruthy();
+    // search sits in this tab, next to what it searches; the tab bar is navigation only
+    expect(screen.getByTestId('brainhub-brain').querySelector('[data-testid="brainhub-search-input"]')).toBeTruthy();
+    expect(screen.getByTestId('brainhub-detail-nav').querySelector('[data-testid="brainhub-search-input"]')).toBeNull();
     // Add knowledge is this tab's action, closed until asked for
     expect(screen.getByTestId('bm-add-open')).toBeTruthy();
     expect(screen.queryByTestId('bm-add')).toBeNull();

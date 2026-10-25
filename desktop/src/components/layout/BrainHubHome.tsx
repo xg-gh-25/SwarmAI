@@ -130,9 +130,22 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
 
   return (
     <div className="p-4" data-testid="brainhub-gallery">
-      <div className="flex items-center gap-3">
-        <span className="text-heading font-semibold">Brain Hub</span>
-        <div className="ml-auto flex items-center gap-2 relative">
+      <div className="flex items-stretch gap-3">
+      <div className="flex-1 min-w-0 flex rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden" role="radiogroup" aria-label="Show brains">
+        <SumCell label="BRAINS" value={sum.brains} filter="all" active={filter === 'all'} onPick={setFilter} />
+        <SumCell label="NEED YOU" value={sum.needsYou} tone={sum.needsYou ? 'text-[var(--color-status-error)]' : undefined}
+          filter="need" active={filter === 'need'} onPick={setFilter} />
+        <SumCell label="RUNNING" value={sum.running} tone={sum.running ? 'text-[var(--color-primary)]' : undefined}
+          filter="running" active={filter === 'running'} onPick={setFilter} />
+        <SumCell label="BEING BORN" value={sum.born} tone={sum.born ? 'text-[var(--color-status-warning)]' : undefined}
+          filter="born" active={filter === 'born'} onPick={setFilter} />
+        <div className="ml-auto flex">
+          <SumCell label="LEARNED · 30 DAYS" value={sum.learned === null ? 'UNKNOWN' : `+${sum.learned}`}
+            sub={sum.learned === null ? undefined : `entries, ${sum.learnedBrains} Brain${sum.learnedBrains === 1 ? '' : 's'}`} />
+          <SumCell label="SINKING" value={sum.sinking} sub="dormant or archived entries" />
+        </div>
+      </div>
+        <div className="flex items-center gap-2 relative shrink-0">
           <button className="btn-sm btn-secondary" onClick={() => setPicking((v) => !v)} aria-expanded={picking} data-testid="hub-add-knowledge">
             <span className="material-symbols-outlined icon-xs">add</span>Add knowledge
           </button>
@@ -154,23 +167,8 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
         </div>
       </div>
 
-      <div className="mt-3 flex rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden" role="radiogroup" aria-label="Show brains">
-        <SumCell label="BRAINS" value={sum.brains} filter="all" active={filter === 'all'} onPick={setFilter} />
-        <SumCell label="NEED YOU" value={sum.needsYou} tone={sum.needsYou ? 'text-[var(--color-status-error)]' : undefined}
-          filter="need" active={filter === 'need'} onPick={setFilter} />
-        <SumCell label="RUNNING" value={sum.running} tone={sum.running ? 'text-[var(--color-primary)]' : undefined}
-          filter="running" active={filter === 'running'} onPick={setFilter} />
-        <SumCell label="BEING BORN" value={sum.born} tone={sum.born ? 'text-[var(--color-status-warning)]' : undefined}
-          filter="born" active={filter === 'born'} onPick={setFilter} />
-        <div className="ml-auto flex">
-          <SumCell label="LEARNED · 30 DAYS" value={sum.learned === null ? 'UNKNOWN' : `+${sum.learned}`}
-            sub={sum.learned === null ? undefined : `entries, ${sum.learnedBrains} Brain${sum.learnedBrains === 1 ? '' : 's'}`} />
-          <SumCell label="SINKING" value={sum.sinking} sub="dormant or archived entries" />
-        </div>
-      </div>
-
       {filter === 'need' && (
-        <div className="rounded-b-lg border border-t-0 border-[var(--color-border)] bg-[var(--color-card)]" data-testid="hub-needs">
+        <div className="mt-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="hub-needs">
           {needs.length === 0 && <div className="px-4 py-2 text-small text-[var(--color-text-muted)]">Nothing is waiting on you.</div>}
           {needs.map((n) => (
             <div key={n.id} className="flex items-center gap-3 px-4 py-2 border-t border-[var(--color-border)] first:border-t-0 text-small" data-testid={`hub-need-${n.id}`}>
@@ -186,37 +184,32 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
         </div>
       )}
 
-      <div className="mt-4 grid gap-2.5" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }} data-testid="brainhub-card-wall">
+      <div className="mt-3 grid gap-2.5 content-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }} data-testid="brainhub-card-wall">
         {cards.map(({ b, sig }) => (
-          <div key={b.name} className="group relative rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] hover:border-[var(--color-primary)] focus-within:border-[var(--color-primary)]"
-            data-testid={`hub-card-${b.name}`}>
-            <button className="w-full text-left px-4 py-3.5 outline-none" onClick={() => onOpen(b.name)} aria-label={`Open ${b.name}`}
-              data-testid={`dddcard-${b.name}`}>
+          <div key={b.name} className="min-w-0" data-testid={`hub-card-${b.name}`}>
+            <button className="w-full h-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3 hover:border-[var(--color-primary)] focus-visible:border-[var(--color-primary)] outline-none"
+              onClick={() => onOpen(b.name)} aria-label={`Open ${b.name}`} data-testid={`dddcard-${b.name}`}>
               <div className="flex items-center gap-3">
-                <Flower b={b} />
-                <div className="min-w-0">
+                <Flower b={b} size={48} />
+                <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 text-heading font-semibold">
                     <span className="truncate">{b.name}</span>
                     {b.name === selfName && (
-                      <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]"
+                      <span className="shrink-0 text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]"
                         data-testid="dddcard-self-tag">SELF</span>
                     )}
                   </div>
-                  <div className={`text-small ${TONE_TEXT[sig.tone]}`} data-testid={`hub-signal-${b.name}`}>{sig.text}</div>
+                  <div className={`text-small truncate ${TONE_TEXT[sig.tone]}`} data-testid={`hub-signal-${b.name}`}>{sig.text}</div>
                 </div>
               </div>
-              <div className={`mt-2.5 text-small line-clamp-2 min-h-[2lh] ${b.description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-status-warning)]'}`}
+              <div className={`mt-2 text-small line-clamp-2 ${b.description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-faint)]'}`}
                 data-testid={`hub-desc-${b.name}`}>
-                {b.description || 'No description yet. Add one line in aim.json.'}
+                {b.description || 'No description yet'}
               </div>
-            </button>
-            <button className="absolute top-2.5 right-3 text-meta text-[var(--color-primary)] opacity-0 group-hover:opacity-100 focus:opacity-100"
-              data-testid={`hub-card-add-${b.name}`} onClick={() => onOpen(b.name, { view: 'map', panel: 'add' })}>
-              Add knowledge
             </button>
           </div>
         ))}
-        {cards.length === 0 && <div className="col-span-3 py-6 text-center text-small text-[var(--color-text-muted)]">No Brain matches this filter.</div>}
+        {cards.length === 0 && <div className="col-span-full py-6 text-center text-small text-[var(--color-text-muted)]">No Brain matches this filter.</div>}
       </div>
 
       <div className="mt-4 pt-2.5 flex items-center justify-between border-t border-[var(--color-border)] text-meta text-[var(--color-text-muted)]">

@@ -213,9 +213,9 @@ export function BrainHub(
 }
 
 /** The detail shell: a two-line header (icon, name as the Brain switcher, status;
- *  the description under it; More menu on the right), the seven tabs with the search
- *  box at their end, then the active tab's body. Actions live in the tab they belong
- *  to (Add knowledge in Brain (DDD), Start a Run in Project Agent). */
+ *  the description under it; More menu on the right), the seven tabs, then the active
+ *  tab's body. Actions live in the tab they belong to (Search and Add knowledge in
+ *  Brain (DDD), Start a Run in Project Agent). */
 function BrainDetailShell(
   { name, brains, selfName, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, addOpen }:
   {
@@ -270,7 +270,6 @@ function BrainDetailShell(
             </button>
           );
         })}
-        <div className="ml-auto py-1.5"><BrainSearchBox name={name} onOpenFile={shellOpenFile} /></div>
       </div>
 
       <div className="flex-1 overflow-auto">
@@ -366,8 +365,9 @@ function MenuItem({ onClick, testid, children }: { onClick: () => void; testid: 
 }
 
 /**
- * BrainSearchBox (run_d0cd4414, AC7) — the Brain's search box at the end of the tab
- * bar, wired to GET /api/ddd/brains/{name}/recall via brainRecall(). Owns its query/
+ * BrainSearchBox (run_d0cd4414, AC7) — search what this Brain knows (its DDD docs,
+ * Knowledge notes and memory), at the top of the Brain (DDD) tab: next to what it
+ * searches. Wired to GET /api/ddd/brains/{name}/recall via brainRecall(). Owns its query/
  * hits state + a debounce so it does NOT fetch per keystroke. The results drop down
  * under the box only when q is non-empty AND hits exist. Clicking a hit calls
  * onOpenFile (the shell's close-then-open primitive).
@@ -394,15 +394,15 @@ function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: st
   const showPanel = q.trim().length >= 2 && hits.length > 0;
 
   return (
-    <div className="relative w-64" data-testid="brainhub-search-row">
-      <div className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 h-7">
+    <div className="relative" data-testid="brainhub-search-row">
+      <div className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 h-9 focus-within:border-[var(--color-primary)]">
         <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">search</span>
         <input
           data-testid="brainhub-search-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search this Brain"
-          className="flex-1 min-w-0 bg-transparent text-small text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
+          placeholder={`Search what ${name} knows: its docs, notes and decisions`}
+          className="flex-1 min-w-0 bg-transparent text-body text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
         />
         {q && (
           <button data-testid="brainhub-search-clear" onClick={() => setQ('')} aria-label="Clear search"
@@ -412,7 +412,7 @@ function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: st
         )}
       </div>
       {showPanel && (
-        <div className="absolute right-0 top-full mt-1 z-10 w-[420px] flex flex-col gap-1 max-h-[50vh] overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
+        <div className="absolute left-0 right-0 top-full mt-1 z-10 flex flex-col gap-1 max-h-[50vh] overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
           data-testid="brainhub-search-results">
           {hits.map((h, i) => (
             <button
@@ -494,7 +494,8 @@ function BrainView(
 
   return (
     <div className="flex flex-col pt-3" data-testid="brainhub-brain">
-      <div className="px-4 pb-3">
+      <div className="px-4 pb-3 flex flex-col gap-2">
+        <BrainSearchBox name={name} onOpenFile={openFile} />
         {adding ? (
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
             <div className="flex items-center justify-between mb-2">

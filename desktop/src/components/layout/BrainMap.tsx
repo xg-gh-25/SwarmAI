@@ -128,7 +128,7 @@ export function BrainMap({ version, counts, runs, lanes, needs, reflect, agentLi
   const cTop = P.conductor.y - 50;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Brain map" data-testid="brain-map"
-      className="block mx-auto max-w-[820px]">
+      className="block mx-auto max-w-[860px]">
       <defs>
         <marker id="bm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0L10,5L0,10z" className="fill-[var(--color-text-muted)]" />

@@ -136,42 +136,41 @@ export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
             onClick={() => send(buildResumeSetupPrompt(name))}>Continue setup in chat</button>
         </div>
       )}
+      {/* what needs you and how it is doing first; the map below, at full width */}
       <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'minmax(0, 1fr) 320px' }}>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
-          <div className="flex items-center justify-between text-small">
-            <span className="font-semibold">Brain map</span>
-            <span className="text-meta text-[var(--color-text-muted)]">click a part to open its tab</span>
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="bm-panel-need">
+          <div className="flex items-center justify-between px-3 py-2">
+            <span className="text-small font-semibold">Needs you</span>
+            <span className={`text-small font-semibold ${needs.length ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}>{needs.length}</span>
           </div>
-          <BrainMap
-            version={version}
-            counts={sectionCounts(detail)}
-            runs={runs.map((r) => ({ id: r.id, title: r.requirement || r.id, tone: runTone(r) }))}
-            lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, worker: 0, hive: 0 }}
-            needs={needs.length}
-            reflect={{ auto: ev.brain.autoApplied, pending: ev.brain.pending }}
-            agentLine={agentLine(detail?.projectAgent)}
-            evalLine={`${ev.runs.landed} of ${ev.runs.total} Runs landed`}
-            tones={mapTones(detail, runs, ev)}
-            onOpen={open}
-          />
-          <div className="flex flex-wrap items-center gap-4 pt-1 text-meta text-[var(--color-text-muted)]">
-            <StatusBadge tone="success">healthy</StatusBadge>
-            <StatusBadge tone="warning">needs attention</StatusBadge>
-            <StatusBadge tone="error">needs you</StatusBadge>
-            <StatusBadge tone="primary">running</StatusBadge>
-            <span>dashed line: written only after your OK</span>
-          </div>
+          <NeedList items={needs} onGoTo={onGoTo} />
         </div>
+        <EvalSummary ev={ev} onOpen={() => onGoTo('eval')} />
+      </div>
 
-        <div className="flex flex-col gap-3 min-w-0">
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="bm-panel-need">
-            <div className="flex items-center justify-between px-3 py-2">
-              <span className="text-small font-semibold">Needs you</span>
-              <span className={`text-small font-semibold ${needs.length ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}>{needs.length}</span>
-            </div>
-            <NeedList items={needs} onGoTo={onGoTo} />
-          </div>
-          <EvalSummary ev={ev} onOpen={() => onGoTo('eval')} />
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+        <div className="flex items-center justify-between text-small">
+          <span className="font-semibold">Brain map</span>
+          <span className="text-meta text-[var(--color-text-muted)]">click a part to open its tab</span>
+        </div>
+        <BrainMap
+          version={version}
+          counts={sectionCounts(detail)}
+          runs={runs.map((r) => ({ id: r.id, title: r.requirement || r.id, tone: runTone(r) }))}
+          lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, worker: 0, hive: 0 }}
+          needs={needs.length}
+          reflect={{ auto: ev.brain.autoApplied, pending: ev.brain.pending }}
+          agentLine={agentLine(detail?.projectAgent)}
+          evalLine={`${ev.runs.landed} of ${ev.runs.total} Runs landed`}
+          tones={mapTones(detail, runs, ev)}
+          onOpen={open}
+        />
+        <div className="flex flex-wrap items-center justify-center gap-4 pt-1 text-meta text-[var(--color-text-muted)]">
+          <StatusBadge tone="success">healthy</StatusBadge>
+          <StatusBadge tone="warning">needs attention</StatusBadge>
+          <StatusBadge tone="error">needs you</StatusBadge>
+          <StatusBadge tone="primary">running</StatusBadge>
+          <span>dashed line: written only after your OK</span>
         </div>
       </div>
     </div>
