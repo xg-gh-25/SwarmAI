@@ -2,7 +2,9 @@
 <!--
   Brain demo: one interactive, self-contained page that walks the whole
   Brain-driven delivery flow end to end with mocked data:
-  New Brain (repo scan -> DDD six sections, storage, Project Agent definition)
+  New Brain (name + starter material sorted GOVERN / DISTILL / SHELF, live preview;
+  Create hands off to chat, which runs P0 -> P6 and generates the Project Agent
+  from the DDD for the person to confirm; the Brain is stored locally)
   -> Project Agent drafts a Run, the human submits it (chat, Slack, schedule)
   -> Conductor places it (chat tab inline, Local Worker, Hive) and runs it
   -> the Run asks / asks for approval in one "Needs you" queue
@@ -85,7 +87,7 @@ footer{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top
 </header>
 <main>
  <section id="wiz" class="wiz">
-  <div class="steps" id="wSteps"><span>1 · Point at a repo</span><span>2 · Where the Brain lives</span><span>3 · Project Agent</span><span>4 · Create</span></div>
+  <div class="steps" id="wSteps"><span>1 · Name it, add what you have</span><span>2 · Set it up together in chat</span><span>3 · Ready</span></div>
   <div class="card" style="padding:16px" id="wBody"></div>
  </section>
  <section id="view" class="view hidden">
@@ -169,7 +171,7 @@ function pickScript(text){
 
 /* ---------- state ---------- */
 let S;
-function fresh(){return {phase:'wiz',w:1,repo:'github.com/acme/payments-api',scanned:false,scanning:false,scanLines:[],storage:'repo',
+function fresh(){return {phase:'wiz',w:'form',name:'',mat:[],matDraft:'',setup:null,repo:'github.com/acme/payments-api',storage:'local',
  agent:{profile:'bugfix',experts:{correctness:true,reliability:true,security:false,concurrency:false},valid:'selected pytest + ruff',
   place:{'Chat tab':true,'Local Worker':true,'hive-ec2-1':true},notes:[]},
  brain:null,ver:0,vlog:[],know:[],gates:[],caps:[],runs:[],items:[],evo:[],chat:[],draft:null,drafts:0,
@@ -185,30 +187,65 @@ function item(o){o.id='i'+(++S.seq);o.t=S.t;o.done=null;S.items.push(o);}
 function log(r,who,text){r.thread.push({t:S.t,who,text});}
 function bump(why){S.ver++;S.vlog.push({v:S.ver,why,t:S.t});}
 
-/* ---------- New Brain ---------- */
-const SCAN=['Reading README.md, AGENTS.md, CONTRIBUTING.md','pyproject.toml → Python 3.11 · FastAPI · SQLAlchemy','.github/workflows/ci.yml → pytest, ruff, mypy',
- 'Indexed 214 files · 38 test files · 3 services','Drafted Identity (1) · Knowledge (23) · Gates (4) · Capabilities (3)','Brain draft ready. Nothing is written until you create it.'];
-function scan(){
- if(S.scanned||S.scanning)return;S.scanning=true;S.scanLines=[];let i=0;
- (function next(){S.scanLines.push(SCAN[i++]);render();if(i<SCAN.length)setTimeout(next,320/speed());else{S.scanning=false;S.scanned=true;render();}})();
+/* ---------- New Brain (same flow as the app's New Brain launcher) ---------- */
+const ROLE_NEXT={GOVERN:'DISTILL',DISTILL:'SHELF',SHELF:'GOVERN'};
+const EXAMPLE_MAT=[['git@github.com:acme/payments-api.git','GOVERN'],['~/docs/payments-architecture.md','DISTILL'],
+ ['https://wiki.acme.dev/payments/runbook','DISTILL'],['~/notes/payments/','SHELF']];
+function roleOf(v){return /git@|\.git$|github\.com|gitlab\.com/.test(v)?'GOVERN':/\/$/.test(v)?'SHELF':'DISTILL';}
+function addMat(v,role){v=(v||'').trim();if(!v||S.mat.some(m=>m.v===v))return;S.mat.push({v,role:role||roleOf(v)});}
+/** which sections the material fills at creation (the app's previewSections rule) */
+function preview(){const g=S.mat.some(m=>m.role==='GOVERN'),d=S.mat.some(m=>m.role==='DISTILL');
+ return {Identity:true,Knowledge:g||d,Gates:g,Capabilities:true,Delivery:true,Refresher:g};}
+function fillExample(){if(!S.name)S.name='payments-api';EXAMPLE_MAT.forEach(([v,r])=>addMat(v,r));}
+/* the generated Project Agent: derived from the DDD with the pipeline profiles, each row with its source */
+const GEN={summary:'Card payments API for merchants; most changes are bug fixes behind the service layer.',profile:'bugfix',
+ rules:[['a config-only or docs-only change','direct'],['a new public API endpoint or a money-handling change','full']],
+ focus:[['money handling','amounts are integer minor units, never floats','TECH.md'],['reliability','retries and webhooks talk to merchants\' systems','PRODUCT.md'],
+  ['security','no secrets in code or logs','3-gates (detect-secrets)']],
+ valid:[['pytest -q','.github/workflows/ci.yml'],['ruff check .','.github/workflows/ci.yml'],['mypy src','.github/workflows/ci.yml']],
+ places:['Chat tab','Local Worker','Hive (mock)'],landing:'you approve every landing · via github-pr',
+ sources:['PRODUCT.md','TECH.md','IMPROVEMENT.md','bindings.yaml','.github/workflows/ci.yml']};
+const SETUP=[
+ {k:'P0',t:'Confirm the governed assets',log:a=>a+' governed asset · 2 documents to distill · 1 folder to shelve. You confirmed.',fill:[]},
+ {k:'P1',t:'Create the skeleton',log:()=>'Six sections created under SwarmWS/Projects/'+S.name+'. It is on the Hub map now, being born.',fill:['Identity','Capabilities']},
+ {k:'P2',t:'Write the knowledge',log:()=>'PRODUCT, TECH, IMPROVEMENT, PROJECT written from the README, the design doc and the runbook: 23 entries. The login-walled wiki page was asked about.',fill:['Knowledge']},
+ {k:'P3',t:'Bind the repo',log:()=>'bindings.yaml: github-pr on main. CI rules found → Gates.',fill:['Gates']},
+ {k:'P3b',t:'Generate the Project Agent',log:()=>'project-agent.yaml drafted from this knowledge with the pipeline profiles. Review it below.',fill:['Delivery'],wait:true},
+ {k:'P4',t:'Build code-intel',log:()=>'214 files indexed for the Refresher.',fill:['Refresher']},
+ {k:'P5',t:'Skills',log:()=>'3 skills: repo-to-ddd, ddd-persist, ddd-manager.',fill:[]},
+ {k:'P6',t:'Verify',log:()=>'All seven checks PASS, including ⑤ Project Agent (reviewed).',fill:[]}];
+function startSetup(){
+ if(S.setup||!S.name.trim())return;
+ S.setup={i:-1,filled:{},waiting:false,confirmed:false,done:false,msgs:[{who:'me',text:'Create a new Brain "'+S.name+'" from '+S.mat.length+' items of starter material.'}],revisions:[]};
+ S.w='setup';S.rules=GEN.rules.slice();render();setupStep();
 }
-function readAgent(){
- const p=$('#apProfile');if(!p)return;
- S.agent.profile=p.value;S.agent.valid=$('#apValid').value;
- document.querySelectorAll('[data-exp]').forEach(c=>S.agent.experts[c.dataset.exp]=c.checked);
- document.querySelectorAll('[data-place]').forEach(c=>S.agent.place[c.dataset.place]=c.checked);
+function setupStep(){
+ const s=S.setup;if(!s||s.waiting||s.done)return;
+ s.i++;const p=SETUP[s.i];
+ if(!p){s.done=true;s.msgs.push({who:'ag',text:'The Brain is ready. Its map is in Brain Hub. Open it, or describe a first change for a Run.'});render();return;}
+ p.fill.forEach(f=>s.filled[f]=true);
+ s.msgs.push({who:'ag',k:p.k,text:p.t+': '+p.log(S.mat.filter(m=>m.role==='GOVERN').length)});
+ if(p.wait){s.waiting=true;render();return;}
+ render();setTimeout(setupStep,700/speed());
 }
+function confirmAgent(){const s=S.setup;if(!s||!s.waiting)return;s.waiting=false;s.confirmed=true;
+ s.msgs.push({who:'me',text:'Looks right, confirm it.'});s.msgs.push({who:'ag',text:'Project Agent confirmed: status reviewed.'});render();setTimeout(setupStep,500/speed());}
+function reviseAgent(note){const s=S.setup;note=(note||'').trim();if(!s||!s.waiting||!note)return;
+ s.msgs.push({who:'me',text:'Revise: '+note});S.rules.push([note,/full/i.test(note)?'full':/direct/i.test(note)?'direct':'bugfix']);s.revisions.push(note);
+ s.msgs.push({who:'ag',text:'Updated project-agent.yaml with your change. Confirm when it looks right.'});render();}
 function createBrain(){
  if(S.brain)return;
- S.brain={name:S.repo.split('/').pop()||'project',repo:S.repo};
+ const repo=(S.mat.find(m=>m.role==='GOVERN')||{}).v;if(repo)S.repo=repo.replace(/^git@github\.com:/,'github.com/').replace(/\.git$/,'');
+ S.brain={name:S.name.trim()||'project',repo:S.repo};
+ S.agent.profile=GEN.profile;S.agent.valid=GEN.valid.map(x=>x[0]).join(' · ');S.agent.generated=true;
  S.know=['Card payments API for merchants; FastAPI routers call a service layer.','CI runs on Python 3.11.','The webhook sender lives in src/payments/webhooks.',
   'Money is stored as integer minor units, never floats.','Refunds settle asynchronously through the ledger worker.','Run `make lint` before committing; ruff config is in pyproject.toml.']
   .map((text,i)=>({id:'K'+i,text,src:'repo scan',t:0,st:'active'}));
  S.gates=['No secrets in code or logs (detect-secrets).','Public API changes need a changelog entry.','Migrations need a rollback step.','Tests never call the live card network.']
   .map(text=>({text,src:'repo scan'}));
- S.caps=['repo-to-ddd','pytest-selector','release-notes'];
- bump('Created from '+S.repo);S.phase='view';S.tab='agent';
- S.chat=[{who:'ag',text:'I am the Project Agent for '+S.brain.name+'. Tell me what you want changed. I draft Runs from the Brain; you decide whether to submit them.'}];
+ S.caps=['repo-to-ddd','ddd-persist','ddd-manager'];
+ bump('Created in chat from '+S.mat.length+' items of starter material');S.phase='view';S.tab='agent';
+ S.chat=[{who:'ag',text:'I am the Project Agent for '+S.brain.name+', built from this Brain (profile '+GEN.profile+'). Tell me what you want changed. I draft Runs; you decide whether to submit them.'}];
  render();pulse('brain','agent');
 }
 
@@ -418,34 +455,65 @@ function label(r){
 }
 function pill(t,c){return '<span class="pill '+(c||'')+'">'+esc(t)+'</span>';}
 function stageBar(r){return '<div class="sb">'+SH.map((_,i)=>'<i class="'+(i<r.stage||r.st==='done'?'d':i===r.stage?((r.st==='parked'||r.st==='approval')?'w':'c'):'')+'"></i>').join('')+'</div>';}
+function flower(filled,label){
+ const R=30,D=Math.sqrt(3)*R+4,cx=115,cy=105;let h='<svg viewBox="0 0 230 210" width="100%" aria-label="Brain preview">';
+ [['Identity',-120],['Knowledge',-60],['Gates',0],['Capabilities',60],['Refresher',120],['Delivery',180]].forEach(([n,a])=>{
+  const t=a*Math.PI/180,x=cx+D*Math.cos(t),y=cy+D*Math.sin(t),on=filled[n];
+  h+='<polygon points="'+hexPts(x,y,R)+'" style="fill:'+(on?'var(--acc-s)':'var(--panel)')+';stroke:'+(on?'var(--acc)':'var(--border2)')+';stroke-dasharray:'+(on?'0':'3 3')+';transition:fill .4s"/>'+
+   '<text x="'+x+'" y="'+(y+3)+'" text-anchor="middle" style="font-size:8px;'+(on?'font-weight:600':'fill:var(--muted)')+'">'+n+'</text>';});
+ const l0=label||'Brain',l=l0.length>8?l0.slice(0,7)+'…':l0;
+ return h+'<polygon points="'+hexPts(cx,cy,R)+'" style="fill:var(--acc)"/><text x="'+cx+'" y="'+(cy+4)+'" text-anchor="middle" style="font-size:10px;font-weight:600;fill:var(--on)">'+esc(l)+'</text></svg>';
+}
+const NEXT3=[['Set it up together in chat','Confirm assets → write the knowledge → bind → the agent proposes the Project Agent, you confirm → verify.'],
+ ['Watch it grow in Brain Hub','It appears on the map as soon as the skeleton exists; petals fill as each section is written.'],
+ ['Ready','When the check passes, open its Brain map or describe a first change for a Run.']];
+const RCLS={GOVERN:'p-acc',DISTILL:'p-warn',SHELF:''};
 function renderWiz(){
- document.querySelectorAll('#wSteps span').forEach((s,i)=>s.className=i+1===S.w?'on':i+1<S.w?'done':'');
+ const stage=S.w==='form'?0:S.setup&&S.setup.done?2:1;
+ document.querySelectorAll('#wSteps span').forEach((s,i)=>s.className=i===stage?'on':i<stage?'done':'');
  let h='';
- if(S.w===1){
-  h='<div class="b" style="font-size:15px">New Brain</div><div class="mut sm" style="margin-bottom:10px">A Brain is one project\'s DDD: Identity · Knowledge · Gates · Capabilities · Delivery · Refresher. Same six sections for every domain. Start from a repo, a DDD package, or nothing.</div>'+
-   '<div class="row"><input id="repo" data-keep style="flex:1" value="'+esc(S.repo)+'"><button class="btn pri" data-act="scan"'+(S.scanning||S.scanned?' disabled':'')+'>Scan repository</button></div>'+
-   '<div class="log" style="margin-top:10px">'+(S.scanLines.length?S.scanLines.map(l=>'› '+esc(l)).join('\n'):'<span class="mut">Scan output appears here.</span>')+'</div>';
-  if(S.scanned)h+='<div class="grid3" style="margin-top:10px">'+[['Identity','Card payments API · Python 3.11 · FastAPI'],['Knowledge','23 entries from docs, code and CI'],['Gates','4 rules found in CI and AGENTS.md'],
-   ['Capabilities','3 skills'],['Delivery','set in step 3'],['Refresher','weekly re-scan, 90-day decay']].map(x=>'<div class="card" style="padding:8px 10px"><div class="b">'+x[0]+'</div><div class="sm mut">'+x[1]+'</div></div>').join('')+'</div>';
- }else if(S.w===2){
-  h='<div class="b" style="font-size:15px">Where does this Brain live?</div><div class="mut sm" style="margin-bottom:10px">Run records (REPORT, reflect, audit) follow their Brain. One storage adapter: read a version, write against a version, ask for the head.</div><div class="grid3">'+
-   [['local','Local','~/.swarm-ai/brains/payments-api','Private to this machine.',''],['repo','Git repo','git@github.com:acme/payments-brain.git','Shareable, every change is a commit.',''],['cloud','Cloud store','org store · s3 + dynamodb','Org-wide stats and sharing.','mock']]
-   .map(o=>'<div class="opt'+(S.storage===o[0]?' on':'')+'" data-act="store" data-k="'+o[0]+'"><div class="row"><span class="b">'+o[1]+'</span>'+(o[4]?pill('mock','p-warn'):'')+'</div><div class="sm mono" style="margin:4px 0">'+o[2]+'</div><div class="sm mut">'+o[3]+'</div></div>').join('')+'</div>';
- }else if(S.w===3){
-  const a=S.agent;
-  h='<div class="b" style="font-size:15px">Project Agent</div><div class="mut sm" style="margin-bottom:10px">The delivery agent that works with you on this Brain. This is the Brain\'s Delivery section. It drafts Runs; you submit them.</div>'+
-   '<div class="grid2"><label class="col sm">Default profile<select id="apProfile" data-keep>'+['direct','bugfix','full'].map(p=>'<option'+(a.profile===p?' selected':'')+'>'+p+'</option>').join('')+'</select></label>'+
-   '<label class="col sm">Validations<input id="apValid" data-keep value="'+esc(a.valid)+'"></label></div>'+
-   '<div class="sm b" style="margin-top:10px">Review experts</div><div class="row sm">'+Object.keys(a.experts).map(k=>'<label class="row"><input type="checkbox" data-exp="'+k+'"'+(a.experts[k]?' checked':'')+'>'+k+'</label>').join('')+'</div>'+
-   '<div class="sm b" style="margin-top:10px">Where its Runs may run</div><div class="row sm">'+PLACES.map(p=>'<label class="row"><input type="checkbox" data-place="'+p+'"'+(a.place[p]?' checked':'')+'>'+p+(p==='hive-ec2-1'?' '+pill('mock','p-warn'):'')+'</label>').join('')+'</div>'+
-   '<div class="sm mut" style="margin-top:10px">Eval is not defined here. The agent that does the work does not write its own grade.</div>';
+ if(S.w==='form'){
+  const assets=S.mat.filter(m=>m.role==='GOVERN').length;
+  h='<div class="b" style="font-size:15px">New Brain</div><div class="mut sm" style="margin-bottom:12px">A brain is one project\'s domain that gets smarter every time you work in it: what it knows, how it delivers, and what it learns. Name it and give it what you already have; it is set up with you in chat.</div>'+
+   '<div style="display:grid;grid-template-columns:250px 1fr;gap:16px"><div>'+
+   '<div class="xs b mut">NAME</div><input id="nbName" style="width:100%;margin-top:4px" placeholder="e.g. Acme Payments" value="'+esc(S.name)+'">'+
+   '<div class="xs b mut" style="margin-top:12px">BRAIN PREVIEW</div>'+flower(preview(),S.name)+
+   '<div class="sm">'+(assets?'It governs <b>'+assets+'</b> asset. A repo gets code-intel, and the agent proposes the Project Agent from its CI.':'<b>A pure-knowledge brain.</b> No asset to bind, and that is complete.')+'</div>'+
+   '<div class="xs mut" style="margin-top:3px">Solid: filled by this material. Dashed: grows later.</div></div><div>'+
+   '<div class="row" style="justify-content:space-between"><span class="xs b mut">STARTER MATERIAL</span><span class="xs mut">optional · click a role to change it</span></div>'+
+   '<div class="row" style="margin-top:6px"><button class="btn" data-act="mexample">Add files…</button><button class="btn" data-act="mexample">Add folder…</button>'+
+   '<input id="nbLink" data-keep style="flex:1" placeholder="https://… · git@… · or paste a path"><button class="btn" data-act="madd">Add</button></div>'+
+   (S.mat.length?S.mat.map((m,i)=>'<div class="row" style="border:1px solid var(--border);border-radius:8px;padding:6px 10px;margin-top:6px;background:var(--panel)">'+
+     '<span class="sm mono" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(m.v)+'</span>'+
+     '<span class="pill '+RCLS[m.role]+'" style="cursor:pointer" data-act="mrole" data-i="'+i+'">'+m.role+' ▾</span><span class="mut" style="cursor:pointer" data-act="mdel" data-i="'+i+'">✕</span></div>').join('')
+    :'<div class="sm mut" style="margin-top:10px">No material yet. That is fine: it becomes a pure-knowledge brain you grow in chat.</div>')+
+   '<div class="xs mut" style="margin-top:8px;border:1px dashed var(--border);border-radius:8px;padding:7px;text-align:center">Drag files or folders here</div>'+
+   '<div class="xs mut" style="margin-top:6px">'+pill('GOVERN','p-acc')+' an asset it manages · '+pill('DISTILL','p-warn')+' read, distilled into knowledge · '+pill('SHELF')+' kept for reference</div>'+
+   '</div></div>'+
+   '<div class="xs b mut" style="margin-top:14px">WHAT HAPPENS ON CREATE</div><div class="grid3" style="margin-top:4px">'+NEXT3.map((x,i)=>'<div class="card" style="padding:8px 10px"><div class="sm b">'+(i+1)+' · '+x[0]+'</div><div class="xs mut">'+x[1]+'</div></div>').join('')+'</div>'+
+   '<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn pri" data-act="nbcreate"'+(S.name.trim()?'':' disabled')+'>Create in chat →</button></div>';
  }else{
-  h='<div class="b" style="font-size:15px">Create Brain</div><div class="sm" style="margin:8px 0">'+esc(S.repo)+' → <b>Brain v1</b> · stored in <b>'+S.storage+'</b> · Project Agent profile <b>'+esc(S.agent.profile)+'</b></div>'+
-   '<button class="btn pri" data-act="create">Create Brain</button>';
+  const s=S.setup;
+  h='<div class="row" style="justify-content:space-between"><span class="b" style="font-size:15px">Chat · setting up "'+esc(S.name)+'"</span><span class="xs mut">s_project-manager · P0 → P6</span></div>'+
+   '<div style="display:grid;grid-template-columns:230px 1fr;gap:16px;margin-top:8px"><div><div class="xs b mut">ON THE HUB MAP</div>'+flower(s.filled,S.name)+
+   '<div class="sm" style="text-align:center">'+(s.done?pill('ready','p-ok'):pill('being born','p-warn'))+'</div>'+
+   '<div class="col xs" style="gap:2px;margin-top:8px">'+SETUP.map((p,i)=>'<div class="row"><span style="width:28px" class="mono">'+p.k+'</span><span class="'+(i<s.i||s.done?'':'mut')+'">'+(i<s.i||s.done||(i===s.i&&!p.wait)?'✓ ':i===s.i?'… ':'')+p.t+'</span></div>').join('')+'</div></div>'+
+   '<div><div class="chat" style="max-height:330px" id="setupChat">'+s.msgs.map(m=>'<div class="msg '+(m.who==='me'?'me':'ag')+'">'+(m.k?'<span class="pill p-acc">'+m.k+'</span> ':'')+esc(m.text)+'</div>').join('')+'</div>';
+  if(s.waiting)h+='<div class="card" style="padding:10px 12px;margin-top:8px;border-color:var(--acc)"><div class="row" style="justify-content:space-between"><span class="b">Project Agent · project-agent.yaml</span>'+pill('draft · needs your review','p-warn')+'</div>'+
+   '<div class="xs mut">built from '+GEN.sources.join(', ')+'</div><div class="sm" style="margin:4px 0">'+esc(GEN.summary)+'</div>'+
+   '<table class="sm" style="width:100%;border-collapse:collapse">'+
+   '<tr style="border-top:1px solid var(--border)"><td class="mut" style="width:96px;padding:4px 0;vertical-align:top">Profile</td><td><b>'+GEN.profile+'</b> by default'+S.rules.map(r=>'<div class="xs"><b>'+r[1]+'</b> <span class="mut">when '+esc(r[0])+'</span></div>').join('')+'</td></tr>'+
+   '<tr style="border-top:1px solid var(--border)"><td class="mut" style="padding:4px 0;vertical-align:top">Review focus</td><td>'+GEN.focus.map(f=>'<div><b>'+f[0]+'</b> <span class="xs mut">· '+esc(f[1])+' ('+f[2]+')</span></div>').join('')+'</td></tr>'+
+   '<tr style="border-top:1px solid var(--border)"><td class="mut" style="padding:4px 0;vertical-align:top">Validations</td><td>'+GEN.valid.map(v=>'<div><span class="mono xs">'+v[0]+'</span> <span class="xs mut">· '+v[1]+'</span></div>').join('')+'</td></tr>'+
+   '<tr style="border-top:1px solid var(--border)"><td class="mut" style="padding:4px 0">Runs on</td><td>'+GEN.places.join(', ')+'</td></tr>'+
+   '<tr style="border-top:1px solid var(--border)"><td class="mut" style="padding:4px 0">Landing</td><td>'+GEN.landing+'</td></tr></table>'+
+   '<div class="xs mut" style="margin-top:4px">Only the pipeline\'s profiles (full, bugfix, goal, trivial, direct, research). You review and revise; you do not fill it in.</div>'+
+   '<div class="row" style="margin-top:6px"><input id="nbRevise" data-keep style="flex:1" placeholder="What to change, e.g. use full for any change to refunds"><button class="btn" data-act="nbrevise">Revise</button><button class="btn pri" data-act="nbconfirm">Confirm</button></div></div>';
+  if(s.done)h+='<div class="card" style="padding:10px 12px;margin-top:8px;border-color:var(--ok)"><div class="b">'+esc(S.name)+' is ready</div><div class="sm mut">All checks passed. Its map is in Brain Hub.</div>'+
+   '<div class="row" style="margin-top:6px"><button class="btn pri" data-act="create">Open the Brain map</button><button class="btn" data-act="create">Describe a first change</button></div></div>';
+  h+='</div></div>';
  }
- h+='<div class="row" style="justify-content:space-between;margin-top:14px"><button class="btn" data-act="wback"'+(S.w===1?' disabled':'')+'>Back</button>'+
-  (S.w<4?'<button class="btn pri" data-act="wnext"'+(S.w===1&&!S.scanned?' disabled':'')+'>Continue</button>':'')+'</div>';
- keep($('#wBody'),h);
+ keep($('#wBody'),h);const sc=$('#setupChat');if(sc)sc.scrollTop=sc.scrollHeight;
 }
 const TABS=[['need','Needs you'],['brain','Brain (DDD)'],['agent','Project Agent'],['runs','Conductor · Runs'],['evo','Reflect · Evolution'],['eval','Eval']];
 function renderTabs(){$('#tabs').innerHTML=TABS.map(t=>'<div class="tab'+(S.tab===t[0]?' on':'')+'" data-tab="'+t[0]+'">'+t[1]+(t[0]==='need'&&openCount()?' '+pill(openCount(),'p-dan'):'')+'</div>').join('');}
@@ -582,10 +650,10 @@ function render(){
 
 /* ---------- guided demo: each Next performs the real action ---------- */
 const STEPS=[
- {t:'Point a new Brain at a repo',d:'Every project is a Brain: one DDD with six sections. It starts from a scan of the repo.',act:()=>{S.w=1;scan();}},
- {t:'Choose where the Brain lives',d:'Local, a git repo or the org cloud store. Run records follow their Brain.',until:()=>S.scanned,act:()=>{S.w=2;S.storage='repo';}},
- {t:'Define the Project Agent',d:'The delivery agent for this Brain: default profile, review experts, validations, where its Runs may run. Eval is not defined here.',act:()=>{S.w=3;}},
- {t:'Create the Brain',d:'Brain v1 is written. The map: the DDD in the centre, the Project Agent, the Conductor and the learning loop.',act:()=>{readAgent();S.w=4;createBrain();}},
+ {t:'Name it and add what you have',d:'A name plus starter material, sorted by type: a repo is an asset it governs, docs are distilled, folders are shelved. The preview shows which sections this fills.',act:()=>{fillExample();}},
+ {t:'Create: set it up together in chat',d:'The launcher hands off to chat. The agent runs P0 → P6 with you, and the Brain grows on the Hub map as each section is written.',act:()=>{startSetup();}},
+ {t:'Review the generated Project Agent',d:'Built from the Brain\'s own knowledge with the pipeline\'s profiles, every row with its source. You review and confirm; you do not fill it in.',until:()=>!!(S.setup&&S.setup.waiting),act:()=>confirmAgent()},
+ {t:'Ready: open the Brain map',d:'All checks pass. The map: the DDD in the centre, the Project Agent, the Conductor and the learning loop.',until:()=>!!(S.setup&&S.setup.done),act:()=>createBrain()},
  {t:'Ask the Project Agent for a change',d:'You describe the change in the project chat. The agent drafts a Run from the Brain. It never submits one itself.',
   act:()=>{go('agent');send('Retries on 503 hammer the upstream, add jittered backoff and respect Retry-After');}},
  {t:'You submit, the Conductor places it',d:'The Run is pinned to the current Brain version and goes to the Local Worker in the background.',until:()=>!!S.draft,act:()=>{submitDraft();go('runs');}},
@@ -608,12 +676,12 @@ const STEPS=[
 ];
 const G={i:0,auto:null};
 function renderGuide(){
- // keep the guide in step with clicks made by hand in the wizard
- const w=S.phase==='view'?4:S.w===1?(S.scanned||S.scanning?1:0):Math.min(S.w,3);
+ // keep the guide in step with clicks made by hand in the New Brain flow
+ const w=S.phase==='view'?4:S.setup?(S.setup.done?3:S.setup.confirmed?3:2):(S.mat.length&&S.name?1:0);
  if(G.i<w)G.i=w;
  const s=STEPS[G.i],ok=!s.end&&(!s.until||s.until());
  $('#gNum').textContent='Step '+(G.i+1)+' / '+STEPS.length;$('#gTitle').textContent=s.t;
- $('#gDesc').textContent=s.d+(!s.end&&!ok?' (waiting for the Runs…)':'');
+ $('#gDesc').textContent=s.d+(!s.end&&!ok?' (waiting…)':'');
  $('#gNext').disabled=!ok;
 }
 function next(){const i=G.i,s=STEPS[i];if(s.end||(s.until&&!s.until()))return;s.act();G.i=Math.max(G.i,Math.min(i+1,STEPS.length-1));render();}
@@ -628,11 +696,14 @@ let timer=null;function startTick(){if(timer)clearInterval(timer);timer=setInter
 /* ---------- events ---------- */
 function act(b){
  const a=b.dataset.act,id=b.dataset.id;
- if(a==='scan'){const r=$('#repo');if(r)S.repo=r.value.trim()||S.repo;scan();}
- else if(a==='wnext'){if(S.w===3)readAgent();S.w=Math.min(4,S.w+1);render();}
- else if(a==='wback'){if(S.w===3)readAgent();S.w=Math.max(1,S.w-1);render();}
- else if(a==='store'){S.storage=b.dataset.k;render();}
- else if(a==='create'){createBrain();G.i=Math.max(G.i,4);render();}
+ if(a==='mexample'){fillExample();render();}
+ else if(a==='madd'){const i=$('#nbLink');if(i){addMat(i.value);i.value='';}render();}
+ else if(a==='mrole'){const m=S.mat[+b.dataset.i];if(m){m.role=ROLE_NEXT[m.role];render();}}
+ else if(a==='mdel'){S.mat.splice(+b.dataset.i,1);render();}
+ else if(a==='nbcreate'){startSetup();}
+ else if(a==='nbconfirm'){confirmAgent();}
+ else if(a==='nbrevise'){const i=$('#nbRevise'),t=i?i.value:'';if(i)i.value='';reviseAgent(t);}
+ else if(a==='create'){createBrain();G.i=Math.max(G.i,4);if(b.textContent.indexOf('first change')>=0)go('agent');render();}
  else if(a==='send'){const i=$('#chatIn'),t=i?i.value:'';if(i)i.value='';const old=$('#dTitle');if(old)old.removeAttribute('id');send(t);if(G.i===4)G.i=5;render();}
  else if(a==='submit'){submitDraft();if(G.i===5)G.i=6;render();}
  else if(a==='discard'){S.draft=null;render();}
@@ -649,7 +720,9 @@ function act(b){
  else if(a==='go')go(b.dataset.k);
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(b&&!b.disabled)act(b);const t=e.target.closest('[data-tab]');if(t)go(t.dataset.tab);});
-document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='chatIn'){e.preventDefault();act({dataset:{act:'send'}});}});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='chatIn'){e.preventDefault();act({dataset:{act:'send'}});}
+ if(e.key==='Enter'&&e.target.id==='nbLink'){e.preventDefault();act({dataset:{act:'madd'}});}});
+document.addEventListener('input',e=>{if(e.target.id==='nbName'){S.name=e.target.value;render();}});
 $('#gNext').onclick=next;$('#gAuto').onclick=()=>setAuto(!G.auto);
 $('#speed').oninput=()=>{startTick();if(G.auto)setAuto(true);};
 $('#bReset').onclick=()=>{setAuto(false);S=fresh();G.i=0;render();};
