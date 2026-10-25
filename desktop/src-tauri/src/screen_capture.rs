@@ -3,12 +3,16 @@
 //! Exposes `screen_capture_current_display`: grabs the display the mouse cursor
 //! is currently on and writes a PNG the chat attachment pipeline can read.
 //!
-//! # Why this lives in the signed GUI process (not a child/CLI)
-//! macOS TCC Screen-Recording permission is granted to the *responsible* process
-//! and does NOT inherit to child processes. The SDK child-process chain
-//! (python-backend → bundled `claude` → shell → screencapture) is therefore
-//! denied. The Tauri Rust main process IS the signed `.app` that holds the grant,
-//! so capture MUST happen here. (See Knowledge/Notes/2026-08-02-macos-screen-audio-capture-for-ai-tauri.md)
+//! # Why this lives in the GUI app's process tree (not the agent's)
+//! macOS TCC grants Screen-Recording to the *responsible* process, and a child
+//! process inherits its parent's responsible process. The daemon is launched by
+//! launchd, not by this app, so the agent's chain (python-backend → bundled
+//! `claude` → shell → screencapture) is attributed to `python-backend` and is
+//! denied. Anything this app spawns — this command, or a child started with
+//! `std::process::Command` / the integrated-terminal PTY — is attributed to
+//! SwarmAI.app, which holds the grant. Measured with
+//! `responsibility_get_pid_responsible_for_pid`: a terminal shell spawned here
+//! reports SwarmAI.app; a shell under the daemon reports python-backend.
 //!
 //! # Storage location
 //! PNGs are written under `~/.swarm-ai/tmp/screenshots/` — inside the frontend's
