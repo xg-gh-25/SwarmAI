@@ -733,11 +733,6 @@ def _isolate_app_data_dir(tmp_path_factory, monkeypatch):
     defends. Re-rooting BOTH on every test keeps them equal."""
     d = tmp_path_factory.mktemp("app_data")
     monkeypatch.setenv("SWARM_DATA_DIR", str(d))
-    # Pipeline runs get isolated worktrees unless $SWARM_WORKTREE_MODE=off (a test-only
-    # switch since the config setting was removed, usable-by-anyone P7). Pin the shared
-    # mode every test ran under; a test that needs worktrees sets the variable itself
-    # (its setenv runs after this one and wins).
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
     _reroot_frozen_app_data_constants(
         d, monkeypatch, basetemp=tmp_path_factory.getbasetemp()
     )

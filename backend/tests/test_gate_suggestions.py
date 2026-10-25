@@ -38,7 +38,6 @@ def ws(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     root.mkdir()
     monkeypatch.setenv("SWARM_WORKSPACE", str(root))
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
     monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(root))
     monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
     return root
@@ -158,7 +157,6 @@ def iso(tmp_path, monkeypatch):
     ws = tmp / "ws"
     monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
     monkeypatch.setenv("SWARM_WORKTREE_ROOT", str(tmp / "wt"))
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
     monkeypatch.setattr(sh, "_ACTIVE_RUN_GLOB_ROOT", str(ws))
     monkeypatch.delenv("SWARM_GATE_FORCE", raising=False)
     script = tmp / "cli" / "backend" / "scripts" / "artifact_cli.py"

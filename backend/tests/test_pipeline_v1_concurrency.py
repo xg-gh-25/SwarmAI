@@ -218,32 +218,6 @@ def test_a_daemon_mutation_waits_for_the_runs_operation_lock(tmp_path, monkeypat
         r.close()
 
 
-def test_two_live_shared_runs_cannot_share_a_repo(tmp_path):
-    """Re-audit ca91762f HIGH: two shared-mode runs over one checkout computed finals
-    and delivery trees from the same files, so one could test and land the other's
-    edits. A second live shared run of a repo is refused; once the first ends, a new
-    one may start. Isolated runs are not affected (each has its own worktree)."""
-    import subprocess
-    from core.run_protocol.engine import EngineError, RunEngine
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    (repo / "a.py").write_text("a = 1\n")
-    for args in (("add", "-A"), ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")):
-        subprocess.run(["git", "-C", str(repo), *args], check=True)
-    ws, data = tmp_path / "ws", tmp_path / "data"
-
-    def make(rid):
-        return RunEngine.create(data_dir=data, workspace=ws, project="P", profile="direct",
-                                requirement="x", session_id="s1", repos={"repo": str(repo)},
-                                mode="shared", run_id=rid)
-    first = make("run_aaaa0001")
-    with pytest.raises(EngineError, match="shared"):
-        make("run_aaaa0002")
-    assert not (ws / "Projects" / "P" / ".artifacts" / "runs" / "run_aaaa0002").exists()
-    first.abandon(reason="done")
-    make("run_aaaa0003")
-
 
 def test_a_stale_projection_is_rebuilt_from_the_signed_log(tmp_path, monkeypatch):
     """Re-audit ca91762f MED: a signed land event is durable, then the process died

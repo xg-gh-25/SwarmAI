@@ -131,7 +131,7 @@ def _write_run(ws: Path, run_id: str, data: dict, project: str = "SwarmAI",
     cp = contract_path(get_app_data_dir(), run_id)
     cp.parent.mkdir(parents=True, exist_ok=True)
     cp.write_text(json.dumps({"run_id": run_id, "protocol_version": 1, "project": project,
-                              "profile": profile, "mode": "shared",
+                              "profile": profile, "mode": "isolated",
                               "requirement": requirement}))
     d = ws / "Projects" / project / ".artifacts" / "runs" / run_id
     d.mkdir(parents=True, exist_ok=True)

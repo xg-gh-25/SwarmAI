@@ -33,9 +33,9 @@ import pytest
 def _create(tmp_path, **kw):
     from core.run_protocol.engine import RunEngine
     args = dict(data_dir=tmp_path / "data", workspace=tmp_path / "ws", project="P",
-                profile="research", session_id="s1", repos={}, mode="shared")
+                profile="research", session_id="s1", repos={})
     args.update(kw)
-    return RunEngine._create(**args)
+    return RunEngine.create(**args)
 
 
 def test_a_create_that_dies_before_the_rename_leaves_no_run(tmp_path, monkeypatch):

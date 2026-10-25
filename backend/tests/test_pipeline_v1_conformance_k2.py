@@ -271,7 +271,7 @@ def test_a_recovered_landed_repo_then_a_preflight_failure_is_a_partial_land(tmp_
     roots, bases, bindings = _repos(tmp_path)
     a = Path(roots["a"])
     made = landing._prepare_commit(roots["a"], bases["a"], bindings["a"]["delivery_tree"],
-                                   "land", author="t <t@t>", in_place=False)
+                                   "land", author="t <t@t>")
     landing._fast_forward(roots["a"], made)          # the crash came right after this
     b = Path(roots["b"])
     (b / "other.py").write_text("moved\n")

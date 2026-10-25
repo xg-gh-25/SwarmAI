@@ -696,31 +696,6 @@ def test_worktree_mode_is_not_a_setting(mgr):
     assert "pipeline" not in mgr.load()
 
 
-@pytest.mark.parametrize("content", [
-    None, "{not json", '{"aws_region": "us-east-1"}',
-    '{"pipeline": {"worktree_mode": "off"}}', '{"pipeline": {"worktree_mode": false}}',
-])
-def test_mode_enabled_ignores_config(tmp_path, monkeypatch, content):
-    """An old config.json that still says "off" no longer changes anything."""
-    from core import run_worktree as rw
-    monkeypatch.delenv("SWARM_WORKTREE_MODE", raising=False)
-    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path))
-    if content is not None:
-        (tmp_path / "SwarmWS").mkdir()
-        (tmp_path / "SwarmWS" / "config.json").write_text(content)
-    assert rw.mode_enabled() is True
-
-
-def test_mode_enabled_test_override(monkeypatch):
-    """$SWARM_WORKTREE_MODE stays only as the test suite's switch until S6 removes the
-    shared mode together with the runner."""
-    from core import run_worktree as rw
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
-    assert rw.mode_enabled() is False
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
-    assert rw.mode_enabled() is True
-
-
 def test_update_refuses_a_hand_edit_that_no_longer_parses(mgr, tmp_config):
     import os
     mgr.load()

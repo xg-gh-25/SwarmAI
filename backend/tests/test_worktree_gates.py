@@ -235,7 +235,7 @@ def test_a_quoted_heredoc_write_before_the_command_is_allowed(env):
 
 
 def test_steering_env_on_a_pipeline_command_is_denied(env):
-    c = "SWARM_WORKTREE_MODE=off " + _cmd(LAND)
+    c = "SWARM_WORKSPACE=/elsewhere " + _cmd(LAND)
     assert _denied(og._decide("s1", c, {"command": c}))
 
 
@@ -354,15 +354,8 @@ def _gate(sid, **ctx):
 
 @pytest.fixture
 def r4(env, monkeypatch):
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "on")
     (env["ws"] / "Projects" / "SwarmAI").mkdir(parents=True)   # the repo's project
     return env
-
-
-def _run_json(env, rid, sid, **kw):
-    rd = env["ws"] / "Projects" / "P" / ".artifacts" / "runs" / rid
-    rd.mkdir(parents=True)
-    (rd / "run.json").write_text(json.dumps({"id": rid, "project": "P", "session_id": sid, **kw}))
 
 
 def test_no_run_session_may_write_main_but_not_a_run_worktree(r4):
@@ -375,7 +368,7 @@ def test_no_run_session_may_write_main_but_not_a_run_worktree(r4):
     assert _denied(g(_call("Write", file_path=str(r4["other"] / "a.py"))))   # a run's worktree
 
 
-def test_no_run_rule_spares_ignored_unbound_scratch_and_shared(r4, tmp_path):
+def test_no_run_rule_spares_ignored_unbound_and_scratch(r4, tmp_path):
     (r4["main"] / ".gitignore").write_text("build/\n")
     assert not _denied(_gate("s5")(_call("Write", file_path=str(r4["main"] / "build" / "x"))))
     # hook_builder's fallback context (a prewarm): it could never start a run
@@ -390,17 +383,6 @@ def test_no_run_rule_spares_ignored_unbound_scratch_and_shared(r4, tmp_path):
     _g(scratch, "add", "-A")
     _g(scratch, "commit", "-q", "-m", "i")
     assert not _denied(_gate("s5")(_call("Edit", file_path=str(scratch / "x.py"))))
-    # a session whose own run is shared-mode keeps writing main as before
-    _run_json(r4, "run_5ab5ab5a", "s6", status="active", worktree_mode="shared")
-    assert not _denied(_gate("s6")(_call("Edit", file_path=str(r4["main"] / "a.py"))))
-
-
-def test_no_run_rule_is_off_with_the_mode_off(r4, monkeypatch):
-    monkeypatch.setenv("SWARM_WORKTREE_MODE", "off")
-    for rid in (RID, OTHER):          # no worktree anywhere and mode off: the gate is free
-        rw._remove(rid, json.loads(r4["runs"][rid].read_text())["worktrees"][0], r4["main"],
-                   merged=False)
-    assert not _denied(_gate("s5")(_call("Edit", file_path=str(r4["main"] / "a.py"))))
 
 
 # ── a denied target that is already uncommitted in main gets the claim route ──────

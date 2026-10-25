@@ -255,9 +255,9 @@ implementations in `security_hooks.py`). By category:
    damaged record stops the run for a person. The gate guards against mistakes and can be forced.
    It denies only what writes: a `cd` into the directory, and interpreter code that only reads
    it, pass.
-   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; every new run gets them, there is
-   no setting to turn them off (usable-by-anyone P7); `$SWARM_WORKTREE_MODE=off` is only the
-   test suite's switch until S6): `run_owner_gate`
+   Per-run worktrees (`docs/design/pipeline-run-worktree.md`; every run gets them and nothing
+   turns them off: S6-5 removed the shared mode, where a run edited the main checkout, and
+   `$SWARM_WORKTREE_MODE`): `run_owner_gate`
    (Bash, right after `commit_gate`; for a mutating `pipeline-v1` call it reads the owner
    from the run's logged events, never run.json, takes a crashed owner's run over only when
    the old owner is confirmed not live (writing an `owner_transfer` event first, so human

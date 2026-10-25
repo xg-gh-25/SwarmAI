@@ -170,9 +170,7 @@ class Rig:
                     "SWARM_WORKTREE_LEDGER", "SWARM_APP_SESSION_ID"):
             monkeypatch.setenv(key, env[key])
         # this process plays the daemon (hooks, a person's answers); pipeline commands
-        # run in their own CLI process (S6-3). The default is isolated (conftest turns
-        # worktrees off for every other test).
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", env.get("SWARM_WORKTREE_MODE") or "on")
+        # run in their own CLI process (S6-3)
         monkeypatch.setenv("SWARM_TEST_CACHE_DIR", env["SWARM_TEST_CACHE_DIR"])
         from core import runtime_hooks
         monkeypatch.setattr(runtime_hooks, "_PIPELINE_AUDIT_DIR",
@@ -190,8 +188,6 @@ class Rig:
     def _exec(self, argv: list[str], extra_env: dict[str, str] | None = None,
               timeout: float = 150) -> tuple[dict, int]:
         env = {**self.env, **(extra_env or {})}
-        # the daemon (this process) reads the mode a test set on r.env
-        os.environ["SWARM_WORKTREE_MODE"] = env.get("SWARM_WORKTREE_MODE") or "on"
         proc = subprocess.run(argv, env=env, capture_output=True, text=True,
                               timeout=timeout, cwd=str(self.root))
         lines = [line for line in proc.stdout.strip().splitlines() if line.strip()]

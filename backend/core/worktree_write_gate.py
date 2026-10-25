@@ -555,30 +555,25 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
     from core import executors
     cache: dict = {}
 
-    def _state(sid: str, mode_on: bool, any_wt: bool):
+    def _state(sid: str, any_wt: bool):
         from core.run_worktree import own_isolated_run
         from core.security_hooks import _pipeline_runs_root
         r = own_isolated_run(sid, _pipeline_runs_root()) if sid and any_wt else None
         own = _Own(r["id"], r["worktrees"], project=r.get("project"),
                    lazy=not r.get("settled") and r.get("status") in ("active", "reflecting")) if r else None
         nr = None
-        if mode_on and sid and own is None and not session_context.get("_unbound"):
+        if sid and own is None and not session_context.get("_unbound"):
             runs = _session_runs_light(sid)
-            if not any(x.get("worktree_mode") == "shared" for x in runs):
-                nr = _NoRun(runs[0] if runs else None)   # a shared-mode run writes main as before
+            nr = _NoRun(runs[0] if runs else None)
         return own, nr
 
     def _decide(sid: str, input_data: dict) -> "dict | None":
-        from core.run_worktree import mode_enabled
-        mode_on = mode_enabled()
         any_wt = _any_run_worktree()
-        if not mode_on and not any_wt:
-            return None
         if not any_wt and input_data.get("tool_name") in ("Read", "Grep"):
             return None      # rules 1–3 need a worktree; rule 4 never judges reads
         hit = cache.get(sid)
         if hit is None or time.monotonic() - hit[0] > _OWN_TTL:
-            own, nr = _state(sid, mode_on, any_wt)
+            own, nr = _state(sid, any_wt)
             cache.clear()
             cache[sid] = (time.monotonic(), own, nr)
             return judge(input_data, own, no_run=nr)
@@ -602,13 +597,6 @@ def create_worktree_write_gate(session_context: "dict[str, Any]"):
                     context: Any) -> "dict[str, Any]":
         # No verdict → {} (not "approve": an approve would skip can_use_tool's checks).
         if input_data.get("tool_name") not in _PATH_KEYS and input_data.get("tool_name") != "Bash":
-            return {}
-        try:
-            from core.run_worktree import mode_enabled
-            if not _any_run_worktree() and not mode_enabled():  # inline: off is free
-                return {}
-        except Exception:  # noqa: BLE001 — fail-open
-            logger.debug("worktree_write_gate: WT_ROOT check failed", exc_info=True)
             return {}
         sid = str(session_context.get("sdk_session_id") or "")
         t0 = time.monotonic()

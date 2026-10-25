@@ -4,17 +4,14 @@ Methodology: runs are driven only through ``pipeline-v1``
 and the real hooks (``tests/pipeline_v1_rig.py``); assertions read the run's signed
 event log, its sealed finals and git. Covered:
 
-- the profile × {isolated, shared} matrix (F9): every code profile lands in both
-  modes, the contract records the mode, and the TEST final of each repo is bound to
-  the tree that landed;
+- every code profile lands (F9; every run is isolated since S6-5 removed the shared
+  mode), and the TEST final of each repo is bound to the tree that landed;
 - §D4 items 1, 4, 5, 6 on two real isolated runs of one repo, asserting finals, not
   only trees (F9);
-- the §D4 end-to-end scenarios in BOTH modes: TEST red -> not_landed(tests_red) and
+- the §D4 end-to-end scenarios: TEST red -> not_landed(tests_red) and
   push_ready false, the circuit breaker, a person's run-land (human_override), a
   decision with awaiting_human, abandon/restore;
-- the shared landing primitive (``landing._land_in_place``): another session's
-  deletion stays deleted, a staged change or a held index lock lands nothing, and a
-  person's run-land after a partial_land keeps the landed repo and lands the rest.
+- a person's run-land after a partial_land keeps the landed repo and lands the rest.
 """
 from __future__ import annotations
 
@@ -34,10 +31,8 @@ CODE_PROFILES = ("direct", "trivial", "full", "bugfix", "goal")
 def rig(tmp_path, monkeypatch):
     rigs: list[Rig] = []
 
-    def make(profile: str = "direct", mode: str = "on", **kwargs) -> Rig:
-        monkeypatch.setenv("SWARM_WORKTREE_MODE", mode)
+    def make(profile: str = "direct", **kwargs) -> Rig:
         r = Rig(tmp_path / f"case{len(rigs)}", monkeypatch, profile=profile, **kwargs)
-        r.env["SWARM_WORKTREE_MODE"] = mode
         rigs.append(r)
         return r
     yield make
@@ -96,16 +91,15 @@ def _landed_is_final_plus_report(r: Rig, head: str) -> None:
     assert changed == [f".aidlc/deliverables/{r.run_id}/REPORT.md"], changed
 
 
-@pytest.mark.parametrize("mode", ["on", "off"], ids=["isolated", "shared"])
 @pytest.mark.parametrize("profile", CODE_PROFILES)
-def test_every_code_profile_lands_in_both_modes(rig, profile, mode):
-    r = rig(profile, mode)
+def test_every_code_profile_lands(rig, profile):
+    r = rig(profile)
     r.create()
     base = _git(r.repo, "rev-parse", "main")
     state = r.drive()
     assert state["status"] == "completed" and state["landing"] == "landed", state
     engine = r.engine()
-    assert engine.contract["mode"] == ("isolated" if mode == "on" else "shared")
+    assert engine.contract["mode"] == "isolated"
     head = _git(r.repo, "rev-parse", "main")
     assert head != base and _git(r.repo, "rev-parse", "main^") == base
     landed_tree = _git(r.repo, "rev-parse", "main^{tree}")
@@ -113,21 +107,17 @@ def test_every_code_profile_lands_in_both_modes(rig, profile, mode):
     assert landed_tree
     _landed_is_final_plus_report(r, head)
     _every_stage_checked_and_completed(r)
-    push = engine.push_status()
-    if mode == "off":                  # a shared run is never push-ready (MD-1)
-        assert push["push_ready"] is False and "MD-1" in push["reasons"], push
-    # the main checkout ends clean: the landed commit is what is checked out, and a
-    # shared run's own edits became that commit (no leftover diff, no staged rest)
+    # the main checkout ends clean: the landed commit is what is checked out
     assert _git(r.repo, "status", "--porcelain") == ""
 
 
 # ── v13 §D4 concurrent isolation acceptance: items 1, 4, 5, 6 with finals ───
 
-def _second_run(r: Rig, mode: str = "on") -> Rig:
+def _second_run(r: Rig) -> Rig:
     """A second run on the SAME repo, data dir and hook oracle as *r*."""
     import copy
     other = copy.copy(r)
-    other.env = {**r.env, "SWARM_WORKTREE_MODE": mode}
+    other.env = dict(r.env)
     other.ctx = dict(r.ctx)
     other.run_id = None
     other.worktree = None
@@ -206,42 +196,21 @@ def test_d4_4_a_persons_answer_reaches_only_the_run_that_asked(rig):
     assert not any(e["kind"] in ("decision", "human_answer") for e in b.events())
 
 
-def test_d4_5_a_shared_runs_checkout_edits_never_enter_an_isolated_final(rig):
-    iso = rig("direct", "on")
-    shared = _second_run(iso, mode="off")
-    iso.create()
-    shared.create()
-    assert shared.engine().contract["mode"] == "shared"
-    shared.drive(until="build")
-    shared.edit({"backend/core/other.py": "def other():\n    return 1  # shared\n"})
-    _ = iso.drive(until="build")
-    iso.edit({"backend/core/mod.py": A_CHANGE})
-    assert iso.report_and_complete().get("ok") is True
-    iso.drive(until="deliver")
-    tree = iso.tested_tree()
-    assert "# shared" not in _git(iso.repo, "cat-file", "-p", f"{tree}:backend/core/other.py")
-    assert "# shared" in (iso.repo / "backend/core/other.py").read_text()
+# ── §D4 end-to-end scenarios ─────────────────────────────────────────────────
 
 
-# ── §D4 end-to-end scenarios in both modes ───────────────────────────────────
-
-MODES = pytest.mark.parametrize("mode", ["on", "off"], ids=["isolated", "shared"])
-
-
-@MODES
-def test_tests_red_ends_not_landed_and_never_push_ready(rig, mode):
+def test_tests_red_ends_not_landed_and_never_push_ready(rig):
     from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red
-    r = rig("trivial", mode)
+    r = rig("trivial")
     base = _git(r.repo, "rev-parse", "main")
     _not_landed_tests_red(r)
     assert _git(r.repo, "rev-parse", "main") == base
     assert r.engine().push_status()["push_ready"] is False
 
 
-@MODES
-def test_a_persons_run_land_lands_as_human_override(rig, mode):
+def test_a_persons_run_land_lands_as_human_override(rig):
     from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red, _prepare, _request
-    r = rig("trivial", mode)
+    r = rig("trivial")
     _not_landed_tests_red(r)
     base = _git(r.repo, "rev-parse", "main")
     out = _request(r, _prepare(r))
@@ -255,11 +224,10 @@ def test_a_persons_run_land_lands_as_human_override(rig, mode):
     assert _git(r.repo, "status", "--porcelain") == ""
 
 
-@MODES
-def test_a_decision_waits_for_the_person_then_continues(rig, mode):
+def test_a_decision_waits_for_the_person_then_continues(rig):
     from tests.test_pipeline_v1_real_e2e import _decision
     from tests.pipeline_v1_rig import documents
-    r = rig("bugfix", mode)
+    r = rig("bugfix")
     r.create()
     r.gate0("WRONG-FRAME", n=1)
     r.gate0("WRONG-FRAME", n=2)
@@ -272,9 +240,8 @@ def test_a_decision_waits_for_the_person_then_continues(rig, mode):
     assert out.get("ok") is True and r.state()["stage"] == "think", out
 
 
-@MODES
-def test_abandon_then_restore_continues_to_a_bound_landing(rig, mode):
-    r = rig("direct", mode)
+def test_abandon_then_restore_continues_to_a_bound_landing(rig):
+    r = rig("direct")
     r.create()
     r.drive(until="review")
     assert r.v1("abandon", "--reason", "rehearse").get("ok") is True
@@ -287,82 +254,7 @@ def test_abandon_then_restore_continues_to_a_bound_landing(rig, mode):
     _landed_is_final_plus_report(r, _git(r.repo, "rev-parse", "main"))
 
 
-# ── the shared landing primitive ─────────────────────────────────────────────
-
-def _shared_repo(tmp_path):
-    """A checkout whose run edits sit uncommitted, and the delivery tree they make."""
-    repo = tmp_path / "s"
-    repo.mkdir()
-    _git(repo, "init", "-q", "-b", "main")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    (repo / "f.py").write_text("old\n")
-    (repo / "g.py").write_text("g\n")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "init")
-    base = _git(repo, "rev-parse", "HEAD")
-    (repo / "f.py").write_text("new\n")
-    (repo / "n.py").write_text("created by the run\n")
-    report = ".aidlc/deliverables/run_s/REPORT.md"
-    import os
-    env = {**os.environ, "GIT_INDEX_FILE": str(tmp_path / "idx")}
-    subprocess.run(["git", "-C", str(repo), "read-tree", base], check=True, env=env)
-    subprocess.run(["git", "-C", str(repo), "add", "f.py", "n.py"], check=True, env=env)
-    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
-                          input=b"# REPORT\n", check=True, capture_output=True).stdout.decode().strip()
-    subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--cacheinfo",
-                    f"100644,{blob},{report}"], check=True, env=env)
-    tree = subprocess.run(["git", "-C", str(repo), "write-tree"], check=True, env=env,
-                          capture_output=True, text=True).stdout.strip()
-    return repo, base, tree, report
-
-
-def _land_shared(tmp_path, repo, base, tree, **kw):
-    from core.run_protocol import landing
-    return landing.commit_repos(run_id="run_s", integration_roots={"s": str(repo)},
-                                bases={"s": base}, bindings={"s": {"delivery_tree": tree}},
-                                message="land", in_place=True,
-                                progress_path=tmp_path / "progress.json", **kw)
-
-
-def test_a_shared_landing_commits_the_runs_files_and_writes_only_its_report(tmp_path):
-    repo, base, tree, report = _shared_repo(tmp_path)
-    commits = _land_shared(tmp_path, repo, base, tree)
-    assert _git(repo, "rev-parse", "main") == commits["s"]
-    assert (repo / report).read_text() == "# REPORT\n"
-    assert _git(repo, "status", "--porcelain") == ""
-
-
-def test_another_sessions_deletion_is_never_brought_back(tmp_path, monkeypatch):
-    from core.run_protocol import landing
-    repo, base, tree, report = _shared_repo(tmp_path)
-    real = landing._land_in_place
-
-    def deleted_meanwhile(*args, **kwargs):
-        (repo / "n.py").unlink()                 # another session, between the phases
-        return real(*args, **kwargs)
-    monkeypatch.setattr(landing, "_land_in_place", deleted_meanwhile)
-    _land_shared(tmp_path, repo, base, tree)
-    assert not (repo / "n.py").exists()
-    assert (repo / report).is_file()
-
-
-def test_a_staged_change_or_a_held_index_lock_lands_nothing(tmp_path):
-    from core.run_protocol import landing
-    repo, base, tree, _report = _shared_repo(tmp_path)
-    (repo / "g.py").write_text("someone staged this\n")
-    _git(repo, "add", "g.py")
-    with pytest.raises(landing.LandingError, match="staged"):
-        _land_shared(tmp_path, repo, base, tree)
-    assert _git(repo, "rev-parse", "main") == base
-    _git(repo, "restore", "--staged", "g.py")
-    (tmp_path / "progress.json").unlink()
-    lock = repo / ".git" / "index.lock"
-    lock.write_text("")
-    with pytest.raises(landing.LandingError, match="index"):
-        _land_shared(tmp_path, repo, base, tree)
-    assert _git(repo, "rev-parse", "main") == base and lock.exists()
-    assert (repo / "g.py").read_text() == "someone staged this\n"
+# ── a person's landing after a partial land ──────────────────────────────────
 
 
 def test_a_run_land_after_a_partial_land_keeps_the_landed_repo(tmp_path):
@@ -385,81 +277,4 @@ def test_a_run_land_after_a_partial_land_keeps_the_landed_repo(tmp_path):
                              progress_path=tmp_path / "p3.json", adopted={"a": "f" * 40})
 
 
-# ── review round 2: after the CAS nothing escapes unrecorded or unsafely ────
-
-def test_a_failure_after_the_cas_is_landed_and_named_unsettled(tmp_path, monkeypatch):
-    from core.run_protocol import landing
-    repo, base, tree, report = _shared_repo(tmp_path)
-
-    def broken(self, built):
-        raise OSError("disk full while installing the index")
-    monkeypatch.setattr(landing._IndexLock, "install", broken)
-    commits = _land_shared(tmp_path, repo, base, tree)
-    assert _git(repo, "rev-parse", "main") == commits["s"]       # the commit landed
-    assert commits.unsettled == ["s"]                            # and it says so
-    assert not (repo / ".git" / "index.lock").exists()
-
-
-def test_the_report_is_never_written_through_a_symlink(tmp_path):
-    repo, base, tree, report = _shared_repo(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (repo / ".aidlc").symlink_to(outside, target_is_directory=True)
-    commits = _land_shared(tmp_path, repo, base, tree)
-    assert commits.unsettled == ["s"]
-    assert not any(outside.rglob("REPORT.md"))
-
-
-def test_an_adopted_shared_commit_is_settled_or_named(tmp_path):
-    from core.run_protocol import landing
-    repo, base, tree, report = _shared_repo(tmp_path)
-    import os
-    env = {**os.environ, **{"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}}    # the repo's own identity (no pipeline.toml)
-    commit = subprocess.run(["git", "-C", str(repo), "commit-tree", tree, "-p", base, "-m",
-                             "normal land"], check=True, capture_output=True, text=True,
-                            env=env).stdout.strip()
-    _git(repo, "update-ref", "refs/heads/main", commit, base)    # a CAS, then a crash
-    commits = _land_shared(tmp_path, repo, base, tree, adopted={"s": commit})
-    assert commits == {"s": commit} and commits.unsettled == []
-    assert (repo / report).read_text() == "# REPORT\n"
-    assert _git(repo, "status", "--porcelain") == ""
-
-
 # ── review round 3 ───────────────────────────────────────────────────────────
-
-def test_a_partial_land_names_a_landed_checkout_it_left_unfinished(tmp_path, monkeypatch):
-    from core.run_protocol import landing
-    roots, bases, bindings = {}, {}, {}
-    for name in ("a", "b"):
-        (tmp_path / name).mkdir()
-        repo, base, tree, _report = _shared_repo(tmp_path / name)
-        roots[name], bases[name], bindings[name] = str(repo), base, {"delivery_tree": tree}
-    real, real_install = landing._land_in_place, landing._IndexLock.install
-
-    def install(self, built):
-        if str(self.git_dir).startswith(roots["a"]):
-            raise OSError("disk full")              # repo a: after its CAS
-        return real_install(self, built)
-
-    def second_refused(root, branch, base, commit, **kw):
-        if root == roots["b"]:
-            raise landing.LandingError("raced")     # repo b: before its CAS
-        return real(root, branch, base, commit, **kw)
-    monkeypatch.setattr(landing._IndexLock, "install", install)
-    monkeypatch.setattr(landing, "_land_in_place", second_refused)
-    with pytest.raises(landing.PartialLanding) as caught:
-        landing.commit_repos(run_id="run_s", integration_roots=roots, bases=bases,
-                             bindings=bindings, message="land", in_place=True,
-                             progress_path=tmp_path / "progress.json")
-    assert set(caught.value.landed) == {"a"} and caught.value.unsettled == ["a"]
-
-
-def test_a_stale_file_where_the_report_goes_is_not_called_finished(tmp_path):
-    repo, base, tree, report = _shared_repo(tmp_path)
-    (repo / report).parent.mkdir(parents=True)
-    (repo / report).write_text("someone else's text\n")
-    commits = _land_shared(tmp_path, repo, base, tree)
-    assert commits.unsettled == ["s"]
-    assert (repo / report).read_text() == "someone else's text\n"
-
-

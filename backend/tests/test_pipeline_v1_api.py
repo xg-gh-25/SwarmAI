@@ -10,6 +10,17 @@ from core.run_protocol.engine import RunEngine
 from routers.pipelines import _to_response
 
 
+def _git_repo(path):
+    """A one-commit git repo: every code run names one (S6-5 removed the shared mode)."""
+    import subprocess
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    (path / "a.txt").write_text("a\n")
+    for args in (("add", "-A"), ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")):
+        subprocess.run(["git", "-C", str(path), *args], check=True)
+    return path
+
+
 def test_active_v1_projection_maps_to_running_and_counts_stage_dict():
     response = _to_response({
         "id": "run_x", "project": "P", "requirement": "x", "status": "active",
@@ -40,7 +51,8 @@ def _real_v1(tmp_path, monkeypatch, run_id: str) -> tuple[RunEngine, TestClient]
     monkeypatch.setenv("SWARM_DATA_DIR", str(data_dir))
     engine = RunEngine.create(
         data_dir=data_dir, workspace=workspace, project="P", profile="direct", requirement="test change",
-        session_id="session-real", repos={}, mode="shared", run_id=run_id)
+        session_id="session-real", repos={"repo": str(_git_repo(tmp_path / "repo"))},
+        run_id=run_id)
     from main import app
     patcher = patch("routers.pipelines._get_swarmws", return_value=workspace)
     patcher.start()

@@ -235,7 +235,7 @@ def test_a_denied_takeover_command_transfers_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root", lambda: str(tmp_path))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
     monkeypatch.setattr("core.runtime_hooks.write_session_run_map", lambda *_a, **_k: None)
-    command = "SWARM_WORKTREE_MODE=off " + _cmd("stage-complete")
+    command = "SWARM_WORKSPACE=/elsewhere " + _cmd("stage-complete")
     assert _denied(gate._decide("session-b", command, {"command": command}))
     assert json.loads(run_file.read_text())["session_id"] == "session-a"
 

@@ -45,14 +45,26 @@ def _decision(request_id: str = "q1") -> dict:
              "reversible": False, "risk": "high"}]}
 
 
+def _git_repo(path):
+    """A one-commit git repo: every code run names one (S6-5 removed the shared mode)."""
+    import subprocess
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    (path / "a.txt").write_text("a\n")
+    for args in (("add", "-A"), ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")):
+        subprocess.run(["git", "-C", str(path), *args], check=True)
+    return path
+
+
 @pytest.fixture()
 def run(tmp_path, monkeypatch):
     workspace, data = tmp_path / "workspace", tmp_path / "data"
     monkeypatch.setenv("SWARM_DATA_DIR", str(data))
     monkeypatch.setattr(pipeline_human, "_workspace", lambda: workspace)
     engine = RunEngine.create(data_dir=data, workspace=workspace, project="P",
-                              profile="trivial", session_id=OWNER, repos={},
-                              mode="shared", run_id="run_human1")
+                              profile="trivial", session_id=OWNER,
+                              repos={"repo": str(_git_repo(tmp_path / "repo"))},
+                              run_id="run_human1")
     engine.write_projection()
     return engine
 
@@ -142,7 +154,7 @@ def test_ask_gate_records_only_a_person(run, monkeypatch):
 
 
 def test_the_agent_has_no_answer_command():
-    import scripts.pipeline_v1 as cli
+    from core.run_protocol import cli_main as cli
     with pytest.raises(SystemExit):
         cli.parser().parse_args(["decision-answer", "--project", "P", "--run-id", "run_x",
                                  "--request-id", "q1", "--option-id", "a"])

@@ -11,7 +11,6 @@ Public symbols:
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import re
 import logging
@@ -383,79 +382,16 @@ class RunEngine:
 
     @classmethod
     def create(cls, *, data_dir: str | Path, workspace: str | Path, project: str,
-               repos: Mapping[str, str] | None = None, mode: str = "isolated",
-               **kwargs: Any) -> "RunEngine":
-        """Create a run. A shared-mode run reserves its repo roots: while another
-        shared run of one of them is not terminal, it is refused (re-audit ca91762f:
-        two shared runs computed finals and delivery trees from the same files). The
-        check and the create hold a per-repo lock, so two creates cannot both pass."""
-        if mode != "shared" or not repos:
-            return cls._create(data_dir=data_dir, workspace=workspace, project=project,
-                               repos=repos or {}, mode=mode, **kwargs)
-        import contextlib
-        import hashlib
-        from utils.file_lock import flock_exclusive, flock_unlock
-        roots = sorted({str(Path(root).resolve()) for root in repos.values()})
-        lock_dir = Path(data_dir) / "state" / "pipeline_agent_audit" / "shared_repos"
-        lock_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with contextlib.ExitStack() as stack:
-            for root in roots:
-                handle = stack.enter_context(open(
-                    lock_dir / (hashlib.sha256(root.encode()).hexdigest()[:32] + ".lock"),
-                    "a+", encoding="utf-8"))
-                flock_exclusive(handle)
-                stack.callback(flock_unlock, handle)
-            holder = cls._live_shared_holder(Path(data_dir), Path(workspace), set(roots))
-            if holder:
-                raise EngineError(f"run {holder} is a live shared run of the same repo: a "
-                                  "second shared run would test and land its edits. Finish "
-                                  "or abandon it first, or use worktree mode")
-            return cls._create(data_dir=data_dir, workspace=workspace, project=project,
-                               repos=repos, mode=mode, **kwargs)
-
-    @classmethod
-    def _live_shared_holder(cls, data_dir: Path, workspace: Path,
-                            roots: "set[str]") -> "str | None":
-        """The id of a non-terminal shared run whose contract names one of *roots*; a
-        run whose logged state cannot be read counts as live (fail closed)."""
-        from core.run_protocol.contract import read_contract
-        base = data_dir / "state" / "pipeline_agent_audit" / "runs"
-        for entry in sorted(base.iterdir()) if base.is_dir() else []:
-            try:
-                contract = read_contract(data_dir, entry.name)
-            except Exception as exc:  # noqa: BLE001 — an unreadable contract: its repos unknown
-                logger.warning("run %s: contract unreadable while checking shared "
-                               "holders: %s", entry.name, exc)
-                # a run its projection calls finished holds nothing; any other might
-                # hold these repos: fail closed (re-audit 84b72ec1 MED)
-                if not logged_terminal(data_dir, entry.name):
-                    return entry.name
-                continue
-            if not isinstance(contract, dict) or contract.get("mode") != "shared":
-                continue
-            theirs = {str(Path(r).resolve()) for r in (contract.get("repo_roots") or {}).values()}
-            if not theirs & roots:
-                continue
-            try:
-                other = cls.load(data_dir=data_dir, workspace=workspace,
-                                 project=str(contract.get("project")), run_id=entry.name)
-                if other.projection(allow_pending=True)["status"] in lifecycle.TERMINAL:
-                    continue
-            except Exception as exc:  # noqa: BLE001 — unknown state: treated as live
-                logger.warning("run %s: state unreadable, treated as live shared "
-                               "holder: %s", entry.name, exc)
-            return entry.name
-        return None
-
-    @classmethod
-    def _create(cls, *, data_dir: str | Path, workspace: str | Path, project: str,
-               profile: str, session_id: str, repos: Mapping[str, str],
-               mode: str = "isolated", decision_cap: int = 2,
+               profile: str, session_id: str, repos: Mapping[str, str] | None = None,
+               decision_cap: int = 2,
                run_id: str | None = None,
                transcript_ids: Sequence[str] = (),
                requirement: str | None = None) -> "RunEngine":
-        if profile not in lifecycle.PROFILE_STAGES or mode not in {"isolated", "shared"}:
-            raise EngineError("unknown profile or mode")
+        """Create a run. Every run's code is in its own git worktree per repo (S6-5: the
+        shared mode, where a run edited the main checkout, is gone)."""
+        repos = repos or {}
+        if profile not in lifecycle.PROFILE_STAGES:
+            raise EngineError("unknown profile")
         if requirement is not None and (not isinstance(requirement, str)
                                         or len(requirement) > REQUIREMENT_MAX):
             raise EngineError(f"requirement must be text of at most {REQUIREMENT_MAX} chars")
@@ -463,7 +399,7 @@ class RunEngine:
         if profile == "direct" and not requirement:
             # direct has no REQUIREMENTS document: the user's own words ARE the requirement
             raise EngineError("direct needs --requirement: the user's request, verbatim")
-        if mode == "isolated" and profile != "research" and not repos:
+        if profile != "research" and not repos:
             raise EngineError("code profile requires at least one repo")
         run_id = run_id or "run_" + secrets.token_hex(4)
         from core.app_session_id import valid_app_session_id
@@ -505,7 +441,7 @@ class RunEngine:
             engine.store = _store(stage_audit_root, run_id, authority)
             contract = {"run_id": run_id, "project": project,
                         "protocol_version": 1, "profile": profile,
-                        "session_id": session_id, "mode": mode,
+                        "session_id": session_id, "mode": "isolated",
                         "expected_repos": sorted(repos),
                         "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
                         "decision_cap": decision_cap,
@@ -653,9 +589,6 @@ class RunEngine:
                 payload=expected)
 
     def effective_repos(self) -> dict[str, str]:
-        roots = self.contract["repo_roots"]
-        if self.contract["mode"] == "shared":
-            return dict(roots)
         out = {}
         for name in self.contract["expected_repos"]:
             path = run_worktree.wt_path(self.run_id, name)
@@ -665,7 +598,7 @@ class RunEngine:
 
     @_one_operation
     def ensure_worktrees(self) -> dict[str, str]:
-        if self.contract["mode"] == "shared" or self.contract["profile"] == "research":
+        if self.contract["profile"] == "research":
             return self.effective_repos()
         current = self.effective_repos()
         if set(current) == set(self.contract["expected_repos"]):
@@ -1629,7 +1562,6 @@ class RunEngine:
                 session_id=self.owner_session(), repos=self.effective_repos(),
                 integration_roots=self.contract["repo_roots"], message=message,
                 at=_now(), now=now, branches=self._recorded_branches(),
-                in_place=self.contract.get("mode") == "shared",
                 adopted=self._partially_landed(),
                 progress_path=self.run_dir / "artifacts" / f"landing-progress-{request_id}.json")
         except landing.PartialLanding as exc:
@@ -2466,8 +2398,6 @@ class RunEngine:
         code tree then changes, so LG-1 asks for a TEST report on the new tree
         (``report-tests``). A sync that changed the run's own patch (a conflict
         resolution) is new code no review saw: LG-4 fails with ``patch_changed``."""
-        if self.contract["mode"] == "shared":
-            return                  # a shared run's code is the main checkout itself
         for entry in self._active_entries():
             name = entry["repo_name"]
             main = self.contract["repo_roots"][name]
@@ -2648,7 +2578,6 @@ class RunEngine:
                 run_id=self.run_id, integration_roots=self.contract["repo_roots"],
                 bases=bases, bindings=bindings, message=message,
                 branches=self._recorded_branches(),
-                in_place=self.contract.get("mode") == "shared",
                 progress_path=self.run_dir / "artifacts" / "landing-progress-normal.json")
         except landing.PartialLanding as exc:
             self.store.append_new(
@@ -2746,8 +2675,6 @@ class RunEngine:
         return dict(partial["payload"]["landed"]) if partial else {}
 
     def _recorded_branches(self) -> dict[str, str]:
-        if self.contract.get("mode") == "shared":
-            return {}               # the shared checkout's own branch, read at landing
         value = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
         return {str(k): str(v) for k, v in value.items()}
 

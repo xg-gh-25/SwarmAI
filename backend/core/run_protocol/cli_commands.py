@@ -23,7 +23,6 @@ from config import get_app_data_dir
 from core.run_protocol import request_ctx
 from core.run_protocol.engine import EngineError, RunEngine
 from core.run_protocol.landing import LandingError
-from core.run_worktree import mode_enabled
 
 
 def _workspace() -> Path:
@@ -204,8 +203,6 @@ def execute(args) -> dict[str, Any]:
         engine = RunEngine.create(
             data_dir=get_app_data_dir(), workspace=_workspace(), project=args.project,
             profile=args.profile, session_id=args.session_id, repos=_repos(args.repo),
-            # the mode is a setting, never the agent's choice (C4, design §C5.1)
-            mode="isolated" if mode_enabled() else "shared",
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement)
         return _with_next(engine, {"ok": True, "pipeline_id": engine.run_id,

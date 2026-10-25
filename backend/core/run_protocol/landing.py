@@ -353,7 +353,7 @@ class PartialLanding(LandingError):
 
 
 def _prepare_commit(root: str, base: str, delivery_tree: str, message: str, *,
-                    author: str, in_place: bool = False) -> str:
+                    author: str) -> str:
     """Phase 1 for one repo: everything that can fail, and no ref moves (§A3.7).
     The integration branch is still at *base*; the commit object is written; and git
     itself, in a dry run of the same two-tree checkout ``merge --ff-only`` performs,
@@ -366,15 +366,6 @@ def _prepare_commit(root: str, base: str, delivery_tree: str, message: str, *,
                   env={**os.environ, **_ident_env(author)})
     if len(commit) != 40:
         raise LandingError("commit-tree returned invalid sha")
-    if in_place:
-        # a shared run's code IS this checkout's files: nothing is checked out, so the
-        # only thing the landing could lose is a staged change (the index is refreshed)
-        staged = subprocess.run(["git", "-C", root, "diff", "--cached", "--quiet", "HEAD"],
-                                capture_output=True, timeout=60).returncode
-        if staged != 0:
-            raise LandingError("the shared checkout has staged changes; the landing "
-                               "would overwrite the index")
-        return commit
     try:
         _git(root, "read-tree", "-n", "-m", "-u", "HEAD", commit)
     except LandingError as exc:
@@ -418,176 +409,14 @@ def _fast_forward(root: str, commit: str) -> None:
     _git(root, "merge", "--ff-only", "-q", commit)
 
 
-class _IndexLock:
-    """git's own lock on a checkout's index (``index.lock``, created exclusively):
-    while it is held no other git process can change that index, and the new index is
-    installed by renaming the lock over it, as git itself does."""
-
-    def __init__(self, root: str):
-        self.git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir"))
-        self.path = self.git_dir / "index.lock"
-        self._fd: int | None = None
-
-    def __enter__(self) -> "_IndexLock":
-        try:
-            self._fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError as exc:
-            raise LandingError("another git process holds the checkout's index") from exc
-        return self
-
-    def install(self, built: Path) -> None:
-        assert self._fd is not None
-        data = memoryview(built.read_bytes())
-        while data:                         # a short write must never install a torn index
-            n = os.write(self._fd, data)
-            if n <= 0:
-                raise OSError("index write made no progress")
-            data = data[n:]
-        os.fsync(self._fd)
-        os.close(self._fd)
-        self._fd = None
-        os.replace(self.path, self.git_dir / "index")
-
-    def __exit__(self, *exc: Any) -> None:
-        if self._fd is not None:
-            os.close(self._fd)
-            self._fd = None
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
-
-
-def _index_is(root: str, tree_ish: str) -> bool:
-    """The checkout's index holds exactly *tree_ish* (read only; takes no lock)."""
-    return subprocess.run(["git", "-C", root, "diff-index", "--cached", "--quiet", tree_ish,
-                           "--"], capture_output=True, timeout=60).returncode == 0
-
-
 class Landed(dict):
-    """repo -> commit on its integration branch. ``unsettled``: shared checkouts whose
-    branch moved but whose index or REPORT could not be finished; the logged land
-    event names them, so no checkout is reported finished that is not (K5 review r2)."""
+    """repo -> commit on its integration branch. ``unsettled``: repos whose branch
+    moved but whose ``merge --ff-only`` failed after that (its checkout is not
+    finished); the logged land event names them (K5 review r2)."""
 
     def __init__(self, commits: Mapping[str, str], unsettled: Sequence[str] = ()):
         super().__init__(commits)
         self.unsettled = sorted(set(unsettled))
-
-
-class _Unsettled(Exception):
-    """The branch moved (the commit landed); finishing the shared checkout failed."""
-
-
-def _create_owned(root: str, rel: str, content: bytes) -> None:
-    """Create *rel* under *root* unless it exists, never following a symlink: every
-    directory is opened relative to its parent with O_NOFOLLOW, the file with
-    O_EXCL | O_NOFOLLOW, so a symlinked component cannot carry the write out of the
-    checkout (K5 review r2)."""
-    parts = rel.split("/")
-    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for part in parts[:-1]:
-            if part in ("", ".", ".."):
-                raise LandingError(f"unsafe reserved path {rel!r}")
-            try:
-                os.mkdir(part, 0o755, dir_fd=fd)
-            except FileExistsError:
-                pass
-            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
-            os.close(fd)
-            fd = child
-        try:
-            out = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                          0o644, dir_fd=fd)
-        except FileExistsError:
-            # left alone; it counts as finished only when it IS the rendered REPORT
-            # (K5 review r3): a regular file with exactly the commit's bytes
-            try:
-                have = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
-            except OSError as exc:
-                raise LandingError(f"{rel} exists and is not a regular file") from exc
-            try:
-                import stat
-                if not stat.S_ISREG(os.fstat(have).st_mode):
-                    raise LandingError(f"{rel} exists and is not a regular file")
-                chunks = []
-                while chunk := os.read(have, 1 << 16):
-                    chunks.append(chunk)
-            finally:
-                os.close(have)
-            if b"".join(chunks) != content:
-                raise LandingError(f"{rel} exists with other content")
-            return
-        try:
-            view = memoryview(content)
-            while view:
-                view = view[os.write(out, view):]
-        finally:
-            os.close(out)
-    finally:
-        os.close(fd)
-
-
-def _land_in_place(root: str, branch: str, base: str, commit: str, *, reserved: str,
-                   move: bool = True) -> None:
-    """Phase 2 for a SHARED run's repo (conformance K5). Its files already are the
-    commit's code, uncommitted, so ``merge`` would refuse its own change. Under git's
-    index lock: the index must still be exactly *base* (a staged change would be lost),
-    the commit's index is built aside, the branch moves by compare-and-swap from *base*,
-    and the built index is renamed into place. Then only files the renderer owns (under
-    *reserved*) that the checkout lacks are created (``_create_owned``); every other
-    file is left as it is — a file another session removed meanwhile stays removed. No
-    file is overwritten or deleted, and no ``reset`` is used.
-
-    Raises ``LandingError`` while nothing moved, ``_Unsettled`` for ANY failure after
-    the CAS. *move* False finishes a landing whose branch already moved (a crash after
-    the CAS, or an adopted partial landing): the index is installed only if it is still
-    exactly *base*; every failure is then ``_Unsettled``."""
-    moved = not move
-    try:
-        with _IndexLock(root) as lock:
-            if _index_is(root, base):
-                built = lock.git_dir / f"index.pipeline-{uuid.uuid4().hex}"
-                try:
-                    env = {**os.environ, "GIT_INDEX_FILE": str(built)}
-                    _git(root, "read-tree", commit, env=env)
-                    # re-stat only; rc 1 just means some files differ from the commit
-                    subprocess.run(["git", "-C", root, "update-index", "-q", "--refresh"],
-                                   capture_output=True, timeout=120, env=env)
-                    if move:
-                        _git(root, "update-ref", "-m", "pipeline-v1 land", branch, commit,
-                             base)
-                        moved = True
-                    lock.install(built)
-                finally:
-                    try:
-                        built.unlink()
-                    except FileNotFoundError:
-                        pass
-            elif move:
-                raise LandingError("the shared checkout has staged changes; the landing "
-                                   "would overwrite the index")
-            elif not _index_is(root, commit):
-                raise LandingError("the shared checkout's index changed meanwhile")
-        owned = _git(root, "diff", "--name-only", "--no-renames", "--diff-filter=AMT", "-z",
-                     base, commit, "--", reserved)
-        for rel in (p for p in owned.split("\0") if p):
-            blob = subprocess.run(["git", "-C", root, "cat-file", "blob", f"{commit}:{rel}"],
-                                  check=True, capture_output=True, timeout=60).stdout
-            _create_owned(root, rel, blob)
-    except (LandingError, OSError, subprocess.SubprocessError) as exc:
-        if moved:
-            raise _Unsettled(str(exc)) from exc
-        raise LandingError(str(exc)) from exc
-
-
-def _settled(root: str, base: str, commit: str, reserved: str) -> bool:
-    """Finish a shared landing already on its branch; False = still unsettled."""
-    try:
-        _land_in_place(root, "", base, commit, reserved=reserved, move=False)
-    except (_Unsettled, LandingError):
-        return False
-    return True
 
 
 def _atomic_progress(path: Path, value: Mapping[str, Any]) -> None:
@@ -652,20 +481,18 @@ def adoptable(integration_roots: Mapping[str, str], plan: Mapping[str, Any],
 def commit_repos(
     *, run_id: str, integration_roots: Mapping[str, str], bases: Mapping[str, str],
     bindings: Mapping[str, Mapping[str, str]], message: str, progress_path: str | Path,
-    branches: Mapping[str, str | None] | None = None, in_place: bool = False,
+    branches: Mapping[str, str | None] | None = None,
     adopted: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Land every repo or none (design §A3.7, conformance K2).
     *adopted*: repo -> commit a logged partial_land already put on its branch; a later
     landing of the run keeps it as landed and lands only the rest (review K5 r1).
-    *in_place*: a shared run, whose code is the integration checkout's own files
-    (``_land_in_place``); otherwise each repo fast-forwards.
 
     Phase 1 checks and prepares EVERY repo while no ref has moved; phase 2 only
     fast-forwards. A phase-2 failure after a repo moved raises ``PartialLanding``
     (the caller ends the run not_landed(partial_land)); one before any moved raises
     ``LandingError`` and nothing landed. Each repo lands on ITS integration branch:
-    *branches* (the run's recorded ones) or, when none was recorded (a shared run), the
+    *branches* (the run's recorded ones) or, when none was recorded, the
     branch checked out at phase 1; the checkout must still be on it at phase 2. A
     retry verifies recorded commits against git, and adopts a fast-forward that
     happened just before a crash (``adoptable``).
@@ -708,7 +535,6 @@ def commit_repos(
     else:
         progress = {"schema": 1, "run_id": run_id, "plan": plan, "commits": {}}
         _atomic_progress(path, progress)
-    reserved = f".aidlc/deliverables/{run_id}/"
     unsettled: list[str] = []
     commits = dict(progress["commits"])
     for name, commit in sorted((adopted or {}).items()):
@@ -726,8 +552,6 @@ def commit_repos(
                                   stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
             raise LandingError(f"{name}: the partially landed commit is not on its branch")
         commits[name] = commit
-        if in_place and not _settled(root, bases[name], commit, reserved):
-            unsettled.append(name)
     for name, recorded in commits.items():
         if name in (adopted or {}) and recorded == (adopted or {}).get(name):
             continue
@@ -739,8 +563,6 @@ def commit_repos(
                                    recorded, "HEAD"], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, timeout=30).returncode != 0:
             raise LandingError(f"{name}: persisted landing fact no longer matches git")
-        if in_place and not _settled(root, base, recorded, reserved):
-            unsettled.append(name)
     # phase 1: every remaining repo, before any of them moves (design §A3.7)
     prepared: dict[str, str] = {}
     for name in sorted(expected - set(commits)):
@@ -757,12 +579,10 @@ def commit_repos(
         if head != base and _ours(root, head, base, delivery_tree, msgs[name],
                                   plan[name]["author"]):
             commits[name] = head        # a crash after the ff, before the progress write
-            if in_place and not _settled(root, base, head, reserved):
-                unsettled.append(name)
             continue
         try:
             prepared[name] = _prepare_commit(root, base, delivery_tree, msgs[name],
-                                             author=plan[name]["author"], in_place=in_place)
+                                             author=plan[name]["author"])
         except LandingError as exc:
             if commits:
                 # a repo recovered above IS landed: this is a partial land, never
@@ -780,13 +600,7 @@ def commit_repos(
         try:
             if _branch(integration_roots[name], None) != plan[name]["branch"]:
                 raise LandingError(f"the main checkout left {plan[name]['branch']}")
-            if in_place:
-                _land_in_place(integration_roots[name], plan[name]["branch"],
-                               bases[name], prepared[name], reserved=reserved)
-            else:
-                _fast_forward(integration_roots[name], prepared[name])
-        except _Unsettled:
-            unsettled.append(name)          # landed; the checkout is named unfinished
+            _fast_forward(integration_roots[name], prepared[name])
         except (LandingError, OSError, subprocess.SubprocessError) as exc:
             try:
                 moved = _git(integration_roots[name], "rev-parse", "HEAD") == prepared[name]
@@ -817,7 +631,7 @@ def execute_request(
     session_id: str, repos: Mapping[str, str], integration_roots: Mapping[str, str],
     message: str, at: str, now: float | None = None,
     progress_path: str | Path | None = None,
-    branches: Mapping[str, str | None] | None = None, in_place: bool = False,
+    branches: Mapping[str, str | None] | None = None,
     adopted: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Consume the hook's approval of *request_id*, then durably land every repo.
@@ -861,7 +675,7 @@ def execute_request(
         commits = commit_repos(
             run_id=request["run_id"], integration_roots=integration_roots,
             bases=dict(bases), bindings=current, message=message, progress_path=path,
-            branches=branches, in_place=in_place, adopted=adopted)
+            branches=branches, adopted=adopted)
     except PartialLanding as exc:
         # logged evidence of what moved, before the person sees the error (K2)
         store.append_new(

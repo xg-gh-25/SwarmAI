@@ -14,7 +14,7 @@ gate and the daemon sweep call it. Invariants:
 - An unintegrated worktree is deleted only after a verified ledger snapshot (§8.1).
 
 Key public symbols: ``WorktreeError``, ``wt_root``, ``wt_path``, ``branch_ref``,
-``mode_enabled``, ``code_repos``, ``create``, ``validate``, ``change_tree``,
+``code_repos``, ``create``, ``validate``, ``change_tree``,
 ``untracked_new_files``, ``changed_paths``, ``sync``, ``land``, ``release``,
 ``snapshot_to_ledger``, ``sweep``, ``mark``, ``diff_since``, ``own_isolated_run``,
 ``run_for_path``, ``active_worktree_roots``, ``last_activity``.
@@ -352,16 +352,6 @@ def _symbolic_head(cwd) -> "str | None":
 
 
 # ── switch and bindings ──────────────────────────────────────────────────────
-def mode_enabled() -> bool:
-    """True: every new pipeline run gets its own git worktree per repo it writes.
-    There is no product setting for this (usable-by-anyone P7: the ``worktree_mode``
-    config switch is gone; an old ``config.json`` that still has it is ignored).
-    ``$SWARM_WORKTREE_MODE=off`` remains only as the test suite's switch for the shared
-    mode, until S6 deletes the shared mode together with the runner."""
-    env = (os.environ.get("SWARM_WORKTREE_MODE") or "").strip().lower()
-    return env != "off"
-
-
 def code_repos(workspace: "str | Path", project: str, self_repo: "str | Path") -> "list[tuple[str, Path]]":
     """(repo_name, main checkout) for each ``kind: code-repo`` asset of the project's
     bindings.yaml. A ``source_workspace`` path is used as is; an asset without one is the

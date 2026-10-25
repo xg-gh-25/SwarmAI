@@ -53,6 +53,7 @@ deliver 的 stage-complete ──► push_ready 成立就直接落地（run-comm
 开关 `config.json["pipeline"]["worktree_mode"]`（`off` | `on`）只决定新 run 建不建 worktree；已经存在的 run 一律
 
 > 2026-10-24（usable-by-anyone P7、S4b）：这个开关已删除，不再是设置项；`config.json` 里残留的 `pipeline.worktree_mode` 被忽略，新 run 一律建 worktree。`$SWARM_WORKTREE_MODE=off` 只留给测试，S6 随 shared 模式一起删。
+> 2026-10-25（usable-by-anyone S6-5b）：shared 模式和 `$SWARM_WORKTREE_MODE` 已删除。下文关于 shared run、开关和 `in_place` 落地的内容只是历史。
 按它自己 run.json 里的模式处理（§9）。P0–P2 验收期间默认 `off`；2026-10-21 起默认 `on`，只有显式写 `off` 才关闭。
 
 ## 4. 前置（P0）：run 锁与归属

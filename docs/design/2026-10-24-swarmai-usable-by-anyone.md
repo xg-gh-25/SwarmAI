@@ -564,6 +564,7 @@ S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时
 | S6-4 | 通用化：DESIGN_SPEC 测试引用改为不透明路径；RQ-3、RQ-8b 词表改进 Gate-0 检查清单；review 去掉 Python/React 启发式，security 按声明和 `.swarmai/review.md` 派；通用 review 清单，SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`；专家 prompt 去掉 RP 编号；REFLECT 未知项目回退；五维审计改读验证报告；专家合并（§3.5.1：red-team 并入 security，删 spec-compliance、code-quality，operational 通用化，ux-test 改为 ux，删 `spawn_as`） | S6-2 |
 | S6-5 | 收尾：删旧命令形式（`python …/pipeline_v1.py`）和 `utils/source_repo.py`；删 shared 模式和 `SWARM_WORKTREE_MODE`，测试改用隔离 worktree；`run_worktree.code_repos` 改用 `governed_repo_roots`；skill 卡片重写；重写受影响的 E2E 测试 | S6-1 至 S6-4 |
 | S6-5a（已做） | 删 `backend/scripts/pipeline_v1.py`（CLI 搬到 `core/run_protocol/cli_main.py`，只经 `pipeline-v1` 子命令进入）和 `utils/source_repo.py`、构建里的 `source_repo.json`；`pipeline_command` 只认 `"$SWARM_BACKEND_BIN" pipeline-v1` / `python-backend` 一种形式；`next_step` 的 `_cmd` 不再带工具名；测试 rig 用指向当前解释器的 `python-backend` 启动器跑程序形式 | S6-4 |
+| S6-5b（已做） | 删 shared 模式：`run_worktree.mode_enabled` 和 `$SWARM_WORKTREE_MODE`、`RunEngine.create` 的 `mode` 参数和 shared run 的仓库预留（`_live_shared_holder`）、engine 里的 shared 分支、`landing` 的 `in_place` 落地（`_land_in_place`、`_IndexLock` 等）、`worktree_write_gate` 和 `prompt_builder` 里只在开关关闭时走的路径；contract 的 `mode` 恒为 `isolated`（MD-1 等读者保留，旧 shared run 仍过不了）；代码 profile 必须带 repo；测试套件不再整体钉 shared，全部按隔离 worktree 跑 | S6-5a |
 | 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
 
 
@@ -613,3 +614,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r21（2026-10-25）：S6-4c 实施：DESIGN_SPEC 测试引用改为不透明的仓库引用（路径 + 可选测试名），`kind` 可选；RQ-3、RQ-8b 和词表删除，措辞检查进 Gate-0 第 5 问（§3.3.4）。
 - r22（2026-10-25）：S6-4d 实施：REFLECT 的未知项目回退（`kept_in_run`，REPORT 列出）；五维审计改读验证报告，trace 矩阵去掉结果列，Quality 只把 R2 确认过的 reported_test 关闭算作关闭。S6-4 全部完成。
 - r23（2026-10-25）：S6-5a 实施：pipeline CLI 只剩 `"$SWARM_BACKEND_BIN" pipeline-v1` 一种形式；脚本和 `source_repo` 删除。
+- r24（2026-10-25）：S6-5b 实施：shared 模式和 `$SWARM_WORKTREE_MODE` 删除，每个 run 都在自己的 worktree 里。
