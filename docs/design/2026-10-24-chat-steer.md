@@ -386,16 +386,26 @@ steer 的 claim。
 **规则。** orchestrator 在进程还活着时看到 CLI 的一轮结束（ResultMessage；以及 reader 以
 `TurnAbandoned` 结束这一轮的那条路径），如果同时满足：
 
-- reader 里有 `kind == "steer"`、还没回显的 claim（取写入顺序最早的那条）；
-- 没有用户 Stop（`_user_stopped_current_turn`、`_stopping`），`_client` 还在。
+- reader 里有一条 steer 的流还没人读（`reader.take_steer()`，按写入顺序取最早的一条）。**不能只看还在
+  等的 claim**（P1 写测试时发现）：reader 是独立的任务，会跑在原 turn 前面，原 turn 读到自己的 Result
+  时，steer 那一轮可能已经开了、回显了，甚至结束了，这时它已不在 `_claims` 里。只看 `_claims` 就会
+  判成"没有 steer"、turn 结束，steer 那一轮的流没人读。所以 reader 另记 `_steers`：并入的、撤回的
+  （`drop_claim`）、没回显就结束的不交出去，其余按顺序交给原 turn；
+- 没有用户 Stop（`_user_stopped_current_turn`、`_stopping`；不看 `_interrupted`，tool-hang 看门狗的
+  自动中断也会设它），`_client` 还在。
+
+判断不接着读的那一刻（还没有任何 await），orchestrator 把 `unit._steer_accepting` 置 False（每次进入
+`_read_formatted_response` 时置 True）。D2 写入前的同步重判读它：Result 已经处理过、turn 正在收尾时
+写进来的 steer 没人会读，所以改为排队。
 
 不看 Result 的 subtype：成功、API 错误（E12）、`error_max_turns`（E13）、`error_during_execution`（E1）
 之后，CLI 都直接执行排着的 steer。
 
-就：`_record_token_usage_bg` 记下这一轮的用量（leak 那里同样这么做），把它的用量和 `duration_ms`
-累加到本 turn 的计数里；不发 `result`；`unit._turn_stream = 那条 steer claim`；
+就：扣下这个 Result；不发 `result`；`unit._turn_stream = 那条 steer claim`；
 `response_iter = self._turn_iter()`；`is_first_message = True`；记 `_awaiting_steer = True`；
-`continue`。读到第一帧时清掉 `_awaiting_steer`。
+`continue`。读到 steer 那一轮的第一帧时清掉 `_awaiting_steer`，这时才用 `_record_token_usage_bg` 记下
+扣下那一轮的用量、把它的用量和 `duration_ms` 加到本 turn 的计数里，最后发出的 `result` 带上总和。
+不在扣下时就记：兜底会把扣下的 Result 按正常路径收尾一次，提前记就算了两次（T24）。
 
 这个判断放在 ResultMessage 分支的最前面，**在 `self.reset_turn_carry()` 之前**
 （`streaming_orchestrator.py` ResultMessage 分支第一行），也在 `error_max_turns` 分支、API 错误
@@ -773,6 +783,10 @@ T1–T4、T7、T12a/b、T13、T19、T21、T22、T24–T29 用 fake 帧序列驱�
   重起，用户看到的行为不变。测试在 `test_turn_limit_reached.py`。
 
 ## 修订记录
+
+- 2026-10-25 v1.11（P1 实现中）：D6 改成 `reader.take_steer()` 取"还没人读的 steer 流"，不只看等着的
+  claim（reader 跑在原 turn 前面时 steer 那一轮已经开了）；加 `unit._steer_accepting`，D2 的同步重判读它；
+  扣下那一轮的用量等 steer 那一轮开始才计入（兜底时不重复）。
 
 - 2026-10-25 v1.10：取消 P0b 的 D6 复审（XG）。对照今天落地的改动补三处：D6 不为 steer 调
   `_reset_turn_state`，turn id 不变，landing 留在同一张 turn 结果卡上（T7）；D8 转回排队的行靠

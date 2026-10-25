@@ -150,6 +150,7 @@ class TurnStream:
         self.uuid = uuid
         self.client_id: Optional[str] = None  # a steer claim's message (D3/D4)
         self._steer_reported = False  # on_steer_end fired
+        self._steer_outcome: Optional[str] = None  # folded / opened / reader_closed
         self.origin: Optional[dict] = None
         self.echo_seen = False
         self.transferred = False
@@ -225,6 +226,8 @@ class CliStreamReader:
         self._open: Optional[TurnStream] = None
         self._merged: Optional[TurnStream] = None  # a claimant sharing a started injected turn
         self._claims: "OrderedDict[str, TurnStream]" = OrderedDict()
+        # steer claims, in write order, until the running turn takes one (take_steer)
+        self._steers: "OrderedDict[str, TurnStream]" = OrderedDict()
         self._notif_count = 0
         self._notif_at_idle = 0
         self._state: Optional[str] = None  # last session_state_changed value
@@ -293,11 +296,29 @@ class CliStreamReader:
         ts.client_id = client_id
         ts._notif_mark = self._notif_count if notif_mark is None else notif_mark
         self._claims[uuid] = ts
+        if kind == "steer":
+            self._steers[uuid] = ts
         return ts
 
     def next_steer(self) -> Optional[TurnStream]:
         """The earliest-written steer claim the CLI has not read yet, or None."""
         return next((ts for ts in self._claims.values() if ts.kind == "steer"), None)
+
+    def take_steer(self) -> Optional[TurnStream]:
+        """Hand the running turn the earliest steer whose stream nobody reads yet:
+        still waiting, or already its own round (this reader can be ahead of the
+        turn's reader: the round may have opened, even ended, before the turn reads
+        its own Result). A folded steer, a withdrawn one and one that ended unread
+        are not handed out. None once the stream failed."""
+        while self._steers:
+            uuid, ts = next(iter(self._steers.items()))
+            del self._steers[uuid]
+            if self.error is not None:
+                continue
+            if ts._steer_outcome == "folded" or (ts.closed and not ts.echo_seen):
+                continue
+            return ts
+        return None
 
     def drop_claim(self, uuid: str) -> None:
         """Withdraw a claim whose message was never written (the write failed)."""
@@ -399,6 +420,7 @@ class CliStreamReader:
 
     def _steer_read(self, ts: TurnStream, into: TurnStream, outcome: str) -> None:
         """Put the steer's marker at its echo into *into* and report the echo."""
+        ts._steer_outcome = outcome
         into._put(SteerRead(ts.uuid, ts.client_id, outcome))
         logger.info("cli_stream_reader.steer_read session_id=%s uuid=%s outcome=%s",
                     self._session_id, ts.uuid, outcome)

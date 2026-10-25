@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 from . import executors
 from . import pipeline_stage_events as _pse
 from .compaction_guard import EscalationLevel
+from .cli_stream_reader import SteerRead, TurnAbandoned
 from .session_healing import get_process_rss_mb
 from .ui_actions import (
     build_ui_command_event,
@@ -550,6 +551,41 @@ class StreamingOrchestrator:
         if opened is not None and (start is None or opened < start):
             return opened
         return start
+
+    def _take_steer_stream(self) -> Any:
+        """The stream of a steer written into this turn that nobody reads yet
+        (D6), or None: no stream reader, no live client, or a user Stop."""
+        parent = self._parent
+        reader = getattr(parent, "_stream_reader", None)
+        if reader is None or parent._client is None:
+            return None
+        if getattr(parent, "_user_stopped_current_turn", False) or getattr(parent, "_stopping", False):
+            return None
+        take = getattr(reader, "take_steer", None)
+        return take() if callable(take) else None
+
+    @staticmethod
+    def _absorb_steer_round(acc: dict, result: Any) -> None:
+        """Add a round's time and tokens to the turn's (its Result is not sent)."""
+        acc["duration_ms"] += getattr(result, "duration_ms", 0) or 0
+        for k, v in (getattr(result, "usage", None) or {}).items():
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                acc["usage"][k] = acc["usage"].get(k, 0) + v
+
+    @staticmethod
+    def _with_steer_rounds(acc: dict, event: dict) -> dict:
+        """The turn's ``result`` event with the absorbed rounds added: one turn,
+        one ending (D6, D7). Unchanged when no round was absorbed."""
+        if not acc["duration_ms"] and not acc["usage"]:
+            return event
+        event["duration_ms"] = (event.get("duration_ms") or 0) + acc["duration_ms"]
+        usage = event.get("usage") or {}
+        for k, v in acc["usage"].items():
+            if k in ("input_tokens", "output_tokens", "cache_read_input_tokens",
+                     "cache_creation_input_tokens"):
+                usage[k] = (usage.get(k) or 0) + v
+        event["usage"] = usage or None
+        return event
 
     def _turn_iter(self) -> Any:
         """The iterator the current turn reads: its claimed TurnStream (also for
@@ -1379,6 +1415,19 @@ class StreamingOrchestrator:
         _api_error_text: Optional[str] = None
         # whether the model had produced anything before that error line
         _api_error_after_content = False
+        # ── Steer (design docs/design/2026-10-24-chat-steer.md D6) ──
+        # A round the CLI runs for a steer written into this turn is read as part
+        # of the SAME turn: at the end of a CLI round, if a steer's stream is
+        # still unread, this loop goes on reading it (no `result`, no reset of
+        # the turn carry, no other continuation). _steer_accepting tells the
+        # write path whether this loop will still look (it is cleared, before
+        # any await, at the round end where it decides not to): a steer written
+        # after that point is queued instead (D1).
+        _awaiting_steer = False          # reading a steer's stream, no frame yet
+        _held_result: Any = None         # the round's Result kept back meanwhile
+        _steer_given_up = False          # the fallback recycled the process
+        _steer_rounds: dict = {"duration_ms": 0, "usage": {}}  # rounds absorbed
+        self._parent._steer_accepting = True
         # True once a main-thread text block carried the glitch-prefix shape
         # ("core 跑测试…"). The word is stripped from what is shown/persisted,
         # but the CLI's in-memory history keeps it and the model copies it, so
@@ -1618,10 +1667,33 @@ class StreamingOrchestrator:
 
             # ── The SDK read finished, or this message's deadline passed ──
             if not timed_out:
-                message = self._take_sdk_read(sdk_read)
+                try:
+                    message = self._take_sdk_read(sdk_read)
+                except TurnAbandoned:
+                    # the reader ended this round without its Result (the CLI went
+                    # idle first): a steer still to read is read next (D6)
+                    _steer_ts = self._take_steer_stream()
+                    if _steer_ts is None:
+                        raise
+                    logger.warning(
+                        "session_unit.steer_continue session_id=%s uuid=%s after=abandoned_round",
+                        self._parent.session_id, _steer_ts.uuid)
+                    self._parent._turn_stream = _steer_ts
+                    response_iter = self._turn_iter()
+                    is_first_message = True
+                    _awaiting_steer = True
+                    continue
                 if message is _STREAM_EXHAUSTED:
                     break
                 is_first_message = False
+                if _held_result is not None:
+                    # the steer's round has begun: the held round is part of this
+                    # turn now (its tokens were spent; its time and tokens join the
+                    # turn's result)
+                    self._record_token_usage_bg(_held_result, getattr(_held_result, "usage", None) or {})
+                    self._absorb_steer_round(_steer_rounds, _held_result)
+                    _held_result = None
+                _awaiting_steer = False
             else:
                 phase = "init" if is_first_message else "streaming"
                 # ── Tool-FREE CPU-liveness gate (run_dcd668a6) ─────────
@@ -1687,17 +1759,33 @@ class StreamingOrchestrator:
                         # doesn't immediately kill on the same stale silence.
                         _parent._last_event_time = awake_time()
                         continue  # same pending read, new deadline
-                logger.error(
-                    "session_unit.%s_timeout session_id=%s — "
-                    "no SDK message for %.0fs (resume=%s), breaking stream",
-                    phase, self._parent.session_id, current_timeout, is_resume,
-                )
-                self._discard_sdk_read()
-                raise RuntimeError(
-                    f"Streaming timeout ({phase}): no SDK response for "
-                    f"{current_timeout:.0f}s (session_id={self._parent.session_id}, "
-                    f"resume={is_resume})"
-                )
+                if _awaiting_steer and _held_result is not None:
+                    # D6 fallback: the CLI never read the steer. Not a raise (a
+                    # retry would resend the turn's first message): recycle the
+                    # process -- the unread steer goes with it (E7) and its claim
+                    # ends reader_closed, so it is queued again -- then finish the
+                    # round's Result as if there had been no steer.
+                    logger.error(
+                        "session_unit.steer_never_read session_id=%s — no frame for "
+                        "%.0fs after the round's result; recycling the process",
+                        self._parent.session_id, current_timeout)
+                    self._discard_sdk_read()
+                    await self._parent._crash_to_cold_async(clear_identity=False)
+                    message, _held_result = _held_result, None
+                    _awaiting_steer = False
+                    _steer_given_up = True
+                else:
+                    logger.error(
+                        "session_unit.%s_timeout session_id=%s — "
+                        "no SDK message for %.0fs (resume=%s), breaking stream",
+                        phase, self._parent.session_id, current_timeout, is_resume,
+                    )
+                    self._discard_sdk_read()
+                    raise RuntimeError(
+                        f"Streaming timeout ({phase}): no SDK response for "
+                        f"{current_timeout:.0f}s (session_id={self._parent.session_id}, "
+                        f"resume={is_resume})"
+                    )
 
             # ── Heartbeat: track liveness for diagnostics ──────────
             # Reset BOTH liveness timers on every SDK event:
@@ -1731,6 +1819,16 @@ class StreamingOrchestrator:
                     getattr(self._parent, "session_id", "?"),
                     f"{type(hb_exc).__name__}: {hb_exc}",
                 )
+
+            # ── Steer marker: where the CLI read a steer (D3, D4) ──
+            if isinstance(message, SteerRead):
+                yield {
+                    "type": "user_steered",
+                    "clientId": message.client_id,
+                    "outcome": message.outcome,
+                    "sessionId": self._parent.session_id,
+                }
+                continue
 
             # Capture SDK session ID from init message
             if hasattr(message, "session_id") and message.session_id:
@@ -2419,6 +2517,26 @@ class StreamingOrchestrator:
 
             # ── ResultMessage — response complete or error ──────────
             if isinstance(message, ResultMessage):
+                # ── D6: a steer still to read → read its round, same turn ──
+                # First, before the carry reset and every other branch (turn
+                # limit, API-error continuation, empty-response retry, leak
+                # continuation): for the user the steer IS the next step, and the
+                # CLI runs it after any Result subtype (E1, E12, E13).
+                _steer_ts = None if _steer_given_up else self._take_steer_stream()
+                if _steer_ts is not None:
+                    logger.info(
+                        "session_unit.steer_continue session_id=%s uuid=%s subtype=%s",
+                        self._parent.session_id, _steer_ts.uuid, getattr(message, "subtype", None))
+                    _held_result = message
+                    self._parent._turn_stream = _steer_ts
+                    response_iter = self._turn_iter()
+                    is_first_message = True
+                    _awaiting_steer = True
+                    _leak_tail = False
+                    _api_error_text = None
+                    _api_error_after_content = False
+                    continue
+                self._parent._steer_accepting = False
                 # Turn over: later streams (injected turn) start clean. The
                 # locals of THIS stream keep their (now detached) dicts.
                 self.reset_turn_carry()
@@ -2460,7 +2578,8 @@ class StreamingOrchestrator:
                     }
                     # Transition to IDLE (not error) — session is healthy,
                     # user can send the next message to continue work.
-                    self._parent._transition(SessionState.IDLE)
+                    if not _steer_given_up:  # the D6 fallback left the unit COLD
+                        self._parent._transition(SessionState.IDLE)
                     self._parent.last_used = awake_time()
                     # The CLI does NOT exit after error_max_turns: it reports
                     # idle and keeps reading stdin (measured 2026-10-25, design
@@ -2485,7 +2604,7 @@ class StreamingOrchestrator:
                         self._parent._lifecycle_response_count,
                     )
                     # Yield result event so frontend knows the turn ended
-                    yield {
+                    yield self._with_steer_rounds(_steer_rounds, {
                         "type": "result",
                         "subtype": "turn_limit_reached",
                         "stop_reason": "turn_limit",
@@ -2499,7 +2618,7 @@ class StreamingOrchestrator:
                             "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
                             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
                         } if usage else None,
-                    }
+                    })
                     # Persist token usage (same as normal result path)
                     if usage:
                         try:
@@ -2954,7 +3073,7 @@ class StreamingOrchestrator:
                 # and progressive. Non-parent writes (sub-agent/skill/CLI/hook) are not
                 # surfaced live. Nothing to emit here — go straight to the `result` yield.
 
-                yield {
+                yield self._with_steer_rounds(_steer_rounds, {
                     "type": "result",
                     "subtype": subtype,
                     "stop_reason": stop_reason,
@@ -2968,7 +3087,7 @@ class StreamingOrchestrator:
                         "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
                         "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
                     } if usage else None,
-                }
+                })
 
                 # ── Persist token usage (fire-and-forget) ─────────
                 if usage:
@@ -3030,7 +3149,8 @@ class StreamingOrchestrator:
                 # turn-end, or the retry streams into a UI that thinks it's
                 # done). See the "Retry guards" block above the yield.
 
-                self._parent._transition(SessionState.IDLE)
+                if not _steer_given_up:  # the D6 fallback left the unit COLD
+                    self._parent._transition(SessionState.IDLE)
                 self._parent.last_used = awake_time()
                 self._parent._retry_count = 0
                 # Resume-poison guard: this is the ONE clean-completion point —

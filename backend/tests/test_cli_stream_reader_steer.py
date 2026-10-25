@@ -349,3 +349,40 @@ async def test_an_opened_round_the_cli_abandons_with_an_idle_ends_reader_closed(
     assert calls.end == [(S1, "reader_closed", True)]
     r.close()
     assert calls.end == [(S1, "reader_closed", True)]
+
+
+# ── handing the steer's stream to the running turn (D6) ──────────────────────
+
+async def test_take_steer_hands_out_a_round_the_reader_already_opened():
+    """The reader is its own task: it can open (and finish) the steer's round
+    before the turn reads its Result. take_steer still hands that stream out,
+    with every frame; a folded steer is never handed out."""
+    c, calls = FakeClient(), _Calls()
+    r = _reader(c, calls)
+    first = r.claim(U1, "human")
+    s0 = r.claim(S2, "steer", client_id="c-s0")
+    c.feed([_state("running"), _init(), _echo(U1), _tool_use("t1"), _tool_result("t1"), _echo(S2)])
+    s1 = r.claim(S1, "steer", client_id="c-s1")
+    c.feed([_text("A"), _result(), _state("idle"), _state("running"), _init(), _echo(S1),
+            _text("B"), _result(), _state("idle")])
+    await _settle(c)
+    assert s0._steer_outcome == "folded" and r.next_steer() is None
+    assert await asyncio.wait_for(_drain(first), 1)
+    got = r.take_steer()
+    assert got is s1
+    assert _kinds(await asyncio.wait_for(_drain(got), 1)) == ["init", "steer:opened:c-s1", "text:B", "result"]
+    assert r.take_steer() is None
+    r.close()
+
+
+async def test_take_steer_skips_a_steer_that_ended_unread_and_any_after_a_dead_stream():
+    c, calls = FakeClient(), _Calls()
+    r = _reader(c, calls)
+    await _human_turn_open(c, r, calls)
+    r.claim(S1, "steer", client_id="c-s1")
+    r.drop_claim(S1)
+    assert r.take_steer() is None
+    r.claim(S2, "steer", client_id="c-s2")
+    c.q.put_nowait(None)
+    await _settle(c)
+    assert r.take_steer() is None
