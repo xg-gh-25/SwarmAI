@@ -1,0 +1,673 @@
+<!doctype html>
+<!--
+  Brain demo: one interactive, self-contained page that walks the whole
+  Brain-driven delivery flow end to end with mocked data:
+  New Brain (repo scan -> DDD six sections, storage, Project Agent definition)
+  -> Project Agent drafts a Run, the human submits it (chat, Slack, schedule)
+  -> Conductor places it (chat tab inline, Local Worker, Hive) and runs it
+  -> the Run asks / asks for approval in one "Needs you" queue
+  -> REPORT + five-dimension audit -> Reflect distils lessons
+     (Knowledge auto-applied with undo, Gates/Delivery go to review, duplicates dropped)
+  -> the next Run reads the newer Brain version -> Eval reads everything offline.
+  Everything is simulated in the page; nothing calls a backend.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Brain · demo</title>
+<style>
+:root{--bg:#f6f5f2;--panel:#fff;--elev:#fbfbfa;--text:#1d1d1f;--muted:#6e6e73;--muted2:#4a4a4f;--border:#e3e2dd;--border2:#c9c8c2;
+ --acc:#2f6db5;--acc-s:#e8f0fa;--ok:#2e7d4f;--ok-s:#e7f4ec;--warn:#a86b00;--warn-s:#fdf3e1;--dan:#c0392b;--dan-s:#fbeaea;--vio:#6b4fb3;--vio-s:#efeafa;--on:#fff}
+[data-theme=dark]{--bg:#18181a;--panel:#222225;--elev:#2a2a2e;--text:#ececee;--muted:#9a9aa2;--muted2:#c2c2c8;--border:#38383d;--border2:#55555c;
+ --acc:#6ea2e6;--acc-s:#24324a;--ok:#5cbf86;--ok-s:#1f3a2b;--warn:#e0a640;--warn-s:#3d321c;--dan:#ee7466;--dan-s:#43231f;--vio:#a58ce8;--vio-s:#2f2845;--on:#111}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",system-ui,sans-serif;background:var(--bg);color:var(--text)}
+button{font:inherit;color:inherit}
+.row{display:flex;align-items:center;gap:8px}.col{display:flex;flex-direction:column;gap:8px}
+.mut{color:var(--muted)}.sm{font-size:11.5px}.xs{font-size:10.5px}.b{font-weight:600}.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+.pill{font-size:10.5px;padding:1px 7px;border-radius:10px;border:1px solid var(--border);white-space:nowrap;background:var(--panel)}
+.p-acc{color:var(--acc);background:var(--acc-s);border-color:transparent}.p-ok{color:var(--ok);background:var(--ok-s);border-color:transparent}
+.p-warn{color:var(--warn);background:var(--warn-s);border-color:transparent}.p-dan{color:var(--dan);background:var(--dan-s);border-color:transparent}
+.p-vio{color:var(--vio);background:var(--vio-s);border-color:transparent}
+.btn{font-size:12px;padding:4px 11px;border-radius:7px;border:1px solid var(--border);background:var(--panel);cursor:pointer}
+.btn:hover{border-color:var(--border2)}.btn:disabled{opacity:.45;cursor:not-allowed}
+.pri{background:var(--acc);border-color:var(--acc);color:var(--on)}.danb{color:var(--dan)}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px}
+input,textarea,select{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:7px;border:1px solid var(--border);background:var(--elev);color:var(--text)}
+header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel);position:sticky;top:0;z-index:5}
+main{padding:14px 16px 90px}
+.wiz{max-width:860px;margin:10px auto}
+.steps{display:flex;gap:6px;margin-bottom:12px}.steps span{flex:1;text-align:center;font-size:11px;padding:4px;border-radius:6px;background:var(--elev);color:var(--muted);border:1px solid var(--border)}
+.steps span.on{color:var(--acc);border-color:var(--acc);background:var(--acc-s)}.steps span.done{color:var(--ok)}
+.log{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;background:var(--elev);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-height:120px;white-space:pre-wrap}
+.opt{border:1px solid var(--border);border-radius:9px;padding:10px 12px;cursor:pointer;background:var(--panel)}.opt.on{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc)}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.view{display:grid;grid-template-columns:minmax(420px,1fr) minmax(460px,1.05fr);gap:12px;align-items:start}
+.viz{position:sticky;top:62px;padding:8px}
+svg text{fill:var(--text);font-family:inherit}
+.hexc{cursor:pointer;transition:opacity .2s}.hexc:hover polygon{stroke:var(--acc)}
+.node{cursor:pointer}.node:hover circle,.node:hover rect{stroke:var(--acc)}
+.tabs{display:flex;border-bottom:1px solid var(--border);padding:0 6px;overflow-x:auto}
+.tab{padding:8px 11px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap}.tab.on{color:var(--text);border-color:var(--acc)}
+.pane{padding:12px}
+.li{padding:9px 0;border-bottom:1px solid var(--border)}.li:last-child{border-bottom:0}
+.need{border-left:3px solid var(--dan);padding-left:10px}
+.sb{display:flex;gap:2px;margin:5px 0}.sb i{flex:1;height:5px;border-radius:3px;background:var(--border)}.sb i.d{background:var(--ok)}.sb i.c{background:var(--acc)}.sb i.w{background:var(--dan)}
+.lane{border:1px solid var(--border);border-radius:9px;padding:8px 10px;margin-bottom:8px;background:var(--elev)}
+.rc{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:7px 9px;margin-top:6px;cursor:pointer}.rc.sel{border-color:var(--acc)}
+.chat{max-height:240px;overflow:auto;border:1px solid var(--border);border-radius:9px;padding:8px;background:var(--elev)}
+.msg{margin:4px 0;padding:6px 9px;border-radius:8px;max-width:92%}.me{background:var(--acc-s);margin-left:auto}.ag{background:var(--panel);border:1px solid var(--border)}
+.diff{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:var(--elev);border:1px solid var(--border);border-radius:7px;padding:6px 8px;white-space:pre;overflow:auto}
+.add{color:var(--ok)}.del{color:var(--dan)}
+.kpi{padding:9px 11px}.kpi .v{font-size:18px;font-weight:600}
+.flash{animation:fl 1.2s ease}@keyframes fl{0%{background:var(--acc-s)}100%{background:transparent}}
+footer{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--border);padding:9px 16px;display:flex;align-items:center;gap:12px;z-index:6}
+.gstep{font-size:11px;color:var(--acc);background:var(--acc-s);padding:2px 8px;border-radius:10px;white-space:nowrap}
+.hidden{display:none!important}
+.legend span{display:inline-flex;align-items:center;gap:4px;margin-right:10px}.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+ <div class="row">
+  <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><polygon points="12,2 21,7 21,17 12,22 3,17 3,7" fill="none" stroke="var(--acc)" stroke-width="2"/><circle cx="12" cy="12" r="3" fill="var(--acc)"/></svg>
+  <span class="b" style="font-size:15px">Brain</span>
+  <span id="hdrBrain" class="row"></span>
+ </div>
+ <div class="row">
+  <span id="hdrNeed"></span>
+  <button class="btn" id="bTheme" title="Light / dark">Theme</button>
+  <button class="btn" id="bExport" title="Copy the demo state as JSON">Export JSON</button>
+  <button class="btn" id="bReset">Reset demo</button>
+ </div>
+</header>
+<main>
+ <section id="wiz" class="wiz">
+  <div class="steps" id="wSteps"><span>1 · Point at a repo</span><span>2 · Where the Brain lives</span><span>3 · Project Agent</span><span>4 · Create</span></div>
+  <div class="card" style="padding:16px" id="wBody"></div>
+ </section>
+ <section id="view" class="view hidden">
+  <div class="card viz">
+   <div class="row" style="justify-content:space-between;padding:2px 6px"><span class="b">Brain map</span><span class="sm mut" id="vizCap">click any part to open it</span></div>
+   <svg id="viz" viewBox="0 0 640 560" width="100%" role="img" aria-label="Brain map"></svg>
+   <div class="legend xs mut" style="padding:0 6px 4px">
+    <span><i class="dot" style="background:var(--acc)"></i>running</span><span><i class="dot" style="background:var(--dan)"></i>needs you</span>
+    <span><i class="dot" style="background:var(--warn)"></i>queued / parked</span><span><i class="dot" style="background:var(--ok)"></i>landed</span>
+    <span><i class="dot" style="background:var(--vio)"></i>learning</span>
+   </div>
+  </div>
+  <div class="card" style="min-height:560px">
+   <div class="tabs" id="tabs"></div>
+   <div class="pane" id="pane"></div>
+  </div>
+ </section>
+</main>
+<footer>
+ <span class="gstep" id="gNum"></span>
+ <div style="flex:1;min-width:0"><div class="b" id="gTitle"></div><div class="sm mut" id="gDesc"></div></div>
+ <label class="sm mut row" title="Simulation speed"><input type="range" id="speed" min="1" max="4" value="2" style="width:80px;padding:0">speed</label>
+ <button class="btn" id="gAuto">Auto-play</button>
+ <button class="btn pri" id="gNext">Next ›</button>
+</footer>
+<script>
+(function(){
+'use strict';
+const $=s=>document.querySelector(s);
+const NS='http://www.w3.org/2000/svg';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SH=['EVAL','THINK','PLAN','DESIGN','BUILD','REVIEW','TEST','DELIVER','REFLECT'];
+const SECTIONS=['Identity','Knowledge','Gates','Capabilities','Delivery','Refresher'];
+const PLACES=['Chat tab','Local Worker','hive-ec2-1'];
+const SLOTS={'Local Worker':1,'hive-ec2-1':2};
+const SCAN_EXTRA=17; // knowledge entries from the scan that are not listed one by one
+
+/* ---------- mocked Run scripts: what each Run will do ---------- */
+const SCRIPTS={
+ backoff:{title:'Jittered backoff for upstream 503 retries',req:'Retries on 503 hammer the upstream. Add jittered exponential backoff and respect Retry-After.',
+  ask:{at:3,q:'Cap the total retry time at 30s, or keep only the per-call limit?',why:'The requirement does not say how long a caller may wait, and the two choices change the public timeout behaviour. The Brain has no rule for it.',
+   opts:[{k:'A',l:'Cap total at 30s',c:'Slow calls fail sooner; callers see a new RetryBudgetExceeded error.'},{k:'B',l:'Per-call limit only',c:'No API change; a call can wait about 4 minutes in the worst case.'}]},
+  files:[['src/payments/http/retry.py',34,9],['src/payments/http/client.py',6,2],['tests/http/test_retry.py',41,0]],
+  diff:'@@ src/payments/http/retry.py\n- delay = base * 2 ** attempt\n+ delay = min(cap, base * 2 ** attempt)\n+ delay = random.uniform(0, delay)  # full jitter\n+ if retry_after:\n+     delay = max(delay, retry_after)',
+  tests:'9/9',experts:['correctness','reliability'],tok:520,
+  lessons:[{layer:'Knowledge',text:'Upstream sends Retry-After on 503; honour it before adding jitter.'},
+   {layer:'Knowledge',text:'Integration tests need `make localstack` running first.'},
+   {layer:'Gates',text:'Changes to retry or backoff code must include the concurrency reviewer.',why:'REVIEW missed a shared-counter race that TEST caught; it took 2 fix rounds.'},
+   {layer:'dup',text:'CI runs on Python 3.11.',why:'Already in Knowledge from the repo scan.'}]},
+ webhook:{title:'Fix duplicate webhook delivery on timeout',req:'When the merchant endpoint times out we resend, and the merchant gets the same webhook twice.',
+  files:[['src/payments/webhooks/sender.py',22,7],['tests/webhooks/test_sender.py',30,0]],
+  diff:'@@ src/payments/webhooks/sender.py\n- send(event)\n+ if store.seen(event.id):\n+     return\n+ send(event, idempotency_key=event.id)',
+  tests:'6/6',experts:['correctness'],tok:310,
+  lessons:[{layer:'Knowledge',text:'Webhook event ids are the idempotency key; dedupe on them, never on a payload hash.'},
+   {layer:'dup',text:'The webhook sender lives in src/payments/webhooks.',why:'Already in Knowledge.'}]},
+ sweep:{title:'Weekly flaky-test sweep · Oct 26',req:'Find tests that failed and then passed on retry in the last 7 days; fix or quarantine them.',
+  files:[['tests/refunds/test_refund_race.py',12,4]],
+  diff:'@@ tests/refunds/test_refund_race.py\n- time.sleep(0.1)\n+ wait_until(lambda: ledger.settled(refund_id), timeout=2)',
+  tests:'14/14',experts:['correctness'],tok:240,
+  lessons:[{layer:'Knowledge',text:'test_refund_race is flaky under pytest -n 4: it sleeps instead of waiting for settlement.'}]},
+ budget:{title:'Make the retry budget configurable per client',req:'Some merchants want a longer retry budget. Make it configurable per API client.',
+  files:[['src/payments/config.py',11,0],['src/payments/http/retry.py',18,5],['tests/http/test_retry.py',27,0]],
+  diff:'@@ src/payments/config.py\n+ retry_budget_s: float = 30.0\n@@ src/payments/http/retry.py\n- cap_total = 30\n+ cap_total = client.config.retry_budget_s',
+  tests:'12/12',experts:['correctness','reliability'],tok:380,
+  lessons:[{layer:'Delivery',text:'Default profile for config-only changes: direct.',why:'The last 3 config changes needed no PLAN or DESIGN.'}]}
+};
+function customScript(text){
+ const t=text.length>60?text.slice(0,57).replace(/\s+\S*$/,'')+'…':text;
+ const ex=Object.keys(S.agent.experts).filter(k=>S.agent.experts[k]);
+ return {title:t,req:text,files:[['src/payments/service.py',14,3],['tests/test_service.py',20,0]],
+  diff:'@@ src/payments/service.py\n+ # change for: '+t,tests:'5/5',experts:ex.length?ex:['correctness'],tok:290,
+  lessons:[{layer:'Knowledge',text:'From "'+t+'": the service layer owns validation; routers stay thin.'}]};
+}
+function pickScript(text){
+ if(/configur/i.test(text))return 'budget';
+ if(/webhook/i.test(text))return 'webhook';
+ if(/flaky/i.test(text))return 'sweep';
+ if(/retr|backoff|503/i.test(text))return 'backoff';
+ return 'custom';
+}
+
+/* ---------- state ---------- */
+let S;
+function fresh(){return {phase:'wiz',w:1,repo:'github.com/acme/payments-api',scanned:false,scanning:false,scanLines:[],storage:'repo',
+ agent:{profile:'bugfix',experts:{correctness:true,reliability:true,security:false,concurrency:false},valid:'selected pytest + ruff',
+  place:{'Chat tab':true,'Local Worker':true,'hive-ec2-1':true},notes:[]},
+ brain:null,ver:0,vlog:[],know:[],gates:[],caps:[],runs:[],items:[],evo:[],chat:[],draft:null,drafts:0,
+ tab:'agent',sel:null,hl:null,openEv:{},t:0,seq:0,busy:0,ticks:0};}
+S=fresh();
+const clock=t=>{const m=9*60+t*3;return String(Math.floor(m/60)%24).padStart(2,'0')+':'+String(m%60).padStart(2,'0');};
+const run=id=>S.runs.find(r=>r.id===id);
+const idOf=k=>(S.runs.find(r=>r.key===k)||{}).id;
+const doneRun=k=>{const r=S.runs.find(x=>x.key===k);return !!r&&r.st==='done';};
+const openItem=(type,id)=>S.items.find(i=>!i.done&&i.type===type&&(i.run===id||i.evo===id));
+const openCount=()=>S.items.filter(i=>!i.done).length;
+function item(o){o.id='i'+(++S.seq);o.t=S.t;o.done=null;S.items.push(o);}
+function log(r,who,text){r.thread.push({t:S.t,who,text});}
+function bump(why){S.ver++;S.vlog.push({v:S.ver,why,t:S.t});}
+
+/* ---------- New Brain ---------- */
+const SCAN=['Reading README.md, AGENTS.md, CONTRIBUTING.md','pyproject.toml → Python 3.11 · FastAPI · SQLAlchemy','.github/workflows/ci.yml → pytest, ruff, mypy',
+ 'Indexed 214 files · 38 test files · 3 services','Drafted Identity (1) · Knowledge (23) · Gates (4) · Capabilities (3)','Brain draft ready. Nothing is written until you create it.'];
+function scan(){
+ if(S.scanned||S.scanning)return;S.scanning=true;S.scanLines=[];let i=0;
+ (function next(){S.scanLines.push(SCAN[i++]);render();if(i<SCAN.length)setTimeout(next,320/speed());else{S.scanning=false;S.scanned=true;render();}})();
+}
+function readAgent(){
+ const p=$('#apProfile');if(!p)return;
+ S.agent.profile=p.value;S.agent.valid=$('#apValid').value;
+ document.querySelectorAll('[data-exp]').forEach(c=>S.agent.experts[c.dataset.exp]=c.checked);
+ document.querySelectorAll('[data-place]').forEach(c=>S.agent.place[c.dataset.place]=c.checked);
+}
+function createBrain(){
+ if(S.brain)return;
+ S.brain={name:S.repo.split('/').pop()||'project',repo:S.repo};
+ S.know=['Card payments API for merchants; FastAPI routers call a service layer.','CI runs on Python 3.11.','The webhook sender lives in src/payments/webhooks.',
+  'Money is stored as integer minor units, never floats.','Refunds settle asynchronously through the ledger worker.','Run `make lint` before committing; ruff config is in pyproject.toml.']
+  .map((text,i)=>({id:'K'+i,text,src:'repo scan',t:0,st:'active'}));
+ S.gates=['No secrets in code or logs (detect-secrets).','Public API changes need a changelog entry.','Migrations need a rollback step.','Tests never call the live card network.']
+  .map(text=>({text,src:'repo scan'}));
+ S.caps=['repo-to-ddd','pytest-selector','release-notes'];
+ bump('Created from '+S.repo);S.phase='view';S.tab='agent';
+ S.chat=[{who:'ag',text:'I am the Project Agent for '+S.brain.name+'. Tell me what you want changed. I draft Runs from the Brain; you decide whether to submit them.'}];
+ render();pulse('brain','agent');
+}
+
+/* ---------- Project Agent: draft, the human submits ---------- */
+function send(text){
+ text=(text||'').trim();if(!text)return;
+ S.chat.push({who:'me',text});
+ const key=pickScript(text);const sc=key==='custom'?customScript(text):SCRIPTS[key];
+ const place=S.agent.place['Local Worker']?'Local Worker':'Chat tab';
+ S.draft={key,sc,title:sc.title,place,profile:S.agent.profile};S.drafts++;
+ S.chat.push({who:'ag',text:'Drafted a Run from your request, using Brain v'+S.ver+'. Check the title and where it runs, then submit it. I do not submit Runs myself.'});
+ render();
+}
+function submitDraft(){
+ const d=S.draft;if(!d)return;
+ const t=$('#dTitle'),p=$('#dPlace');
+ const r=newRun(d.key,'chat tab "'+S.brain.name+'"',p?p.value:d.place,d.sc,t&&t.value.trim()?t.value.trim():d.title);
+ S.draft=null;S.chat.push({who:'ag',text:'You submitted '+r.title+' ('+r.id+'). It runs on '+r.place+'. I will put anything that needs you in Needs you.'});
+ S.sel=r.id;render();
+}
+function hivePlace(){return S.agent.place['hive-ec2-1']?'hive-ec2-1':'Local Worker';}
+function slackReq(){if(!idOf('webhook'))newRun('webhook','Slack #payments-oncall',hivePlace());}
+function fireSched(){if(!idOf('sweep'))newRun('sweep','schedule "Weekly flaky-test sweep"',hivePlace());}
+function newRun(key,src,place,sc,title){
+ sc=sc||SCRIPTS[key];
+ const gate=S.gates.find(g=>g.src!=='repo scan'&&/concurrency/i.test(g.text));
+ const applies=!!gate&&/retr/i.test(sc.title+' '+sc.req);
+ const r={id:'run_'+(0x4a10+(++S.seq)).toString(16),key,sc,title:title||sc.title,req:sc.req,src,place,v:S.ver,stage:0,st:'queued',
+  asked:false,answer:null,evid:false,cr:0,qcount:0,thread:[],created:S.t,start:null,end:null,qwait:0,wait:0,
+  experts:sc.experts.concat(applies?['concurrency']:[]),gate:applies?gate.text:null,audit:null};
+ log(r,'Conductor','Submitted from '+src+' · Brain v'+r.v+' pinned · placed on '+place);
+ if(applies)log(r,'Brain','Gate from v'+r.v+' applies: "'+gate.text+'" → concurrency reviewer added');
+ S.runs.push(r);pulse('agent','conductor','var(--acc)');pulse('brain','conductor','var(--acc)');render();return r;
+}
+
+/* ---------- Conductor: one global scheduler, slots per executor ---------- */
+const used=pl=>S.runs.filter(r=>r.place===pl&&r.st==='running').length;
+function canStart(r){return r.place==='Chat tab'||used(r.place)<SLOTS[r.place];}
+function tick(){
+ if(S.phase!=='view')return;S.t++;S.ticks++;
+ if(S.hl&&S.t>S.hlT)S.hl=null;
+ for(const st of ['resume_pending','queued'])for(const r of S.runs){
+  if(r.st!==st||!canStart(r))continue;
+  if(st==='resume_pending')log(r,'Conductor','Resumed first, with your input, on '+r.place);
+  else{r.start=S.t;log(r,'Conductor','Started on '+r.place);}
+  r.st='running';
+ }
+ for(const r of S.runs){
+  if(r.st==='queued')r.qwait++;
+  if(r.st==='parked'||r.st==='approval')r.wait++;
+  if(r.st==='reflecting'){reflect(r);continue;}
+  if(r.st!=='running')continue;
+  const a=r.sc.ask;
+  if(a&&!r.asked&&r.stage===a.at){
+   r.asked=true;r.qcount++;r.st='parked';item({type:'question',run:r.id});log(r,'Run','Question: '+a.q);
+   if(r.place!=='Chat tab')log(r,'Conductor','Worker turn ended cleanly; Run parked, slot released');
+   pulse('conductor','need','var(--dan)');continue;
+  }
+  if(r.stage===7){
+   r.st='approval';item({type:'approval',run:r.id});
+   log(r,'Run','Ready to land '+r.sc.files.length+' files · review PASS ('+r.experts.join(', ')+') · tests '+r.sc.tests);
+   pulse('conductor','need','var(--dan)');continue;
+  }
+  r.stage++;
+  if(r.stage===5)log(r,'Run','REVIEW · experts: '+r.experts.join(', '));
+  if(r.stage===6)log(r,'Run','TEST · own validation report on the current tree: '+r.sc.tests);
+ }
+ if(used('Local Worker'))S.busy++;
+ render();
+}
+function answer(id,k){
+ const r=run(id),it=openItem('question',id);if(!r||!it)return;
+ const o=r.sc.ask.opts.find(x=>x.k===k);it.done='Answered '+k;r.answer=k;r.stage++;r.st='resume_pending';
+ log(r,'You','Answered '+k+' · '+o.l);pulse('need','conductor','var(--acc)');render();
+}
+function evid(id){const r=run(id);if(r){r.evid=true;render();}}
+function audit(r){return [['Isolation','worktree run/'+r.id+' · landed ff-only'],['Quality','review PASS · tests '+r.sc.tests+(r.cr?' · '+r.cr+' change request':'')],
+ ['Autonomy',r.qcount?r.qcount+' question answered by you':'no questions'],['Speed',((r.end-r.start)*3)+' min active · '+(r.wait*3)+' min waiting on you'],['Cost',r.sc.tok+'k tokens']];}
+function approve(id){
+ const r=run(id),it=openItem('approval',id);if(!r||!it||!r.evid)return;
+ it.done='Approved';r.stage=8;r.st='reflecting';r.end=S.t;r.audit=audit(r);
+ log(r,'You','Approved landing');log(r,'Conductor','Landed into main (ff-only) · REPORT written · reflecting');
+ pulse('need','conductor','var(--ok)');pulse('conductor','evo','var(--vio)');render();
+}
+function changes(id){
+ const r=run(id),it=openItem('approval',id),n=$('#note-'+id);if(!r||!it)return;
+ const note=n?n.value.trim():'';if(!note)return;
+ it.done='Changes requested';r.cr++;r.stage=4;r.evid=false;r.st='resume_pending';
+ log(r,'You','Requested changes: '+note);log(r,'Conductor','Landing request voided; back to BUILD. Review and the test report must be redone.');render();
+}
+function reflect(r){
+ for(const L of r.sc.lessons){
+  const e={id:'L'+(++S.seq),run:r.id,title:r.title,layer:L.layer,text:L.text,why:L.why||'',t:S.t};
+  if(L.layer==='Knowledge'){e.st='auto';S.know.push({id:e.id,text:L.text,src:r.id,t:S.t,st:'active'});bump('Knowledge +1 from '+r.id);pulse('evo','sec:Knowledge');}
+  else if(L.layer==='dup')e.st='discarded';
+  else{e.st='pending';item({type:'proposal',evo:e.id});pulse('evo','need','var(--dan)');}
+  S.evo.push(e);
+ }
+ r.st='done';log(r,'Reflect',r.sc.lessons.length+' lessons: '+cnt(r,'auto')+' written to Knowledge, '+cnt(r,'pending')+' waiting for your review, '+cnt(r,'discarded')+' dropped');
+}
+const cnt=(r,st)=>S.evo.filter(e=>e.run===r.id&&e.st===st).length;
+function papprove(eid){
+ const e=S.evo.find(x=>x.id===eid),it=openItem('proposal',eid);if(!e||!it)return;
+ it.done='Approved';e.st='approved';
+ if(e.layer==='Gates')S.gates.push({text:e.text,src:e.run});else S.agent.notes.push(e.text);
+ bump(e.layer+' rule approved, from '+e.run);S.hl=e.layer;S.hlT=S.t+3;pulse('need','sec:'+e.layer,'var(--vio)');render();
+}
+function preject(eid){const e=S.evo.find(x=>x.id===eid),it=openItem('proposal',eid);if(!e||!it)return;it.done='Rejected';e.st='rejected';render();}
+function undo(eid){
+ const e=S.evo.find(x=>x.id===eid);if(!e||e.st!=='auto')return;e.st='reverted';
+ const k=S.know.find(x=>x.id===eid);if(k)k.st='reverted';bump('Reverted a Knowledge entry from '+e.run);render();
+}
+
+/* ---------- Brain map (SVG) ---------- */
+const C={x:320,y:222},HR=40,HD=Math.sqrt(3)*HR+6;
+const ANG={Identity:-120,Knowledge:-60,Gates:0,Capabilities:60,Refresher:120,Delivery:180};
+const P={brain:C,agent:{x:76,y:222},conductor:{x:320,y:450},evo:{x:566,y:372},need:{x:84,y:50},eval:{x:556,y:50},
+ src0:{x:62,y:392},src1:{x:62,y:438},src2:{x:62,y:484}};
+function secPos(n){const a=ANG[n]*Math.PI/180;return {x:C.x+HD*Math.cos(a),y:C.y+HD*Math.sin(a)};}
+function pt(id){return id.indexOf('sec:')===0?secPos(id.slice(4)):P[id];}
+// point on the way from c towards p, at distance r from c (so an arrow stops at a hex edge)
+function toward(c,p,r){const dx=p.x-c.x,dy=p.y-c.y,l=Math.hypot(dx,dy)||1;return {x:c.x+dx/l*r,y:c.y+dy/l*r};}
+function hexPts(x,y,r){const p=[];for(let i=0;i<6;i++){const a=Math.PI/180*(60*i-90);p.push((x+r*Math.cos(a)).toFixed(1)+','+(y+r*Math.sin(a)).toFixed(1));}return p.join(' ');}
+function initViz(){
+ $('#viz').innerHTML='<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" style="fill:var(--border2)"/></marker></defs><g id="base"></g><g id="fx"></g>';
+ $('#viz').addEventListener('click',e=>{const g=e.target.closest('[data-go]');if(!g)return;if(g.dataset.sec){S.hl=g.dataset.sec;S.hlT=S.t+3;}go(g.dataset.go);});
+}
+function line(a,b,label,dash,lx,ly){
+ return '<path d="M'+a.x+','+a.y+' L'+b.x+','+b.y+'" style="stroke:var(--border2);stroke-width:1.4;fill:none'+(dash?';stroke-dasharray:4 4':'')+'" marker-end="url(#ar)"/>'+
+  (label?'<text x="'+(lx!=null?lx:(a.x+b.x)/2)+'" y="'+(ly!=null?ly:(a.y+b.y)/2-5)+'" text-anchor="middle" style="font-size:10px;fill:var(--muted)">'+esc(label)+'</text>':'');
+}
+function secCount(n){
+ if(n==='Identity')return '1 doc';
+ if(n==='Knowledge')return (SCAN_EXTRA+S.know.filter(k=>k.st==='active').length)+' entries';
+ if(n==='Gates'){const p=S.evo.filter(e=>e.st==='pending'&&e.layer==='Gates').length;return S.gates.length+' rules'+(p?' · '+p+' to review':'');}
+ if(n==='Capabilities')return S.caps.length+' skills';
+ if(n==='Delivery')return 'profile '+S.agent.profile;
+ return 'weekly';
+}
+function stColor(r){return {queued:'var(--warn)',resume_pending:'var(--warn)',running:'var(--acc)',parked:'var(--dan)',approval:'var(--dan)',reflecting:'var(--vio)',done:'var(--ok)'}[r.st];}
+function renderViz(){
+ let h='';
+ const d=secPos('Delivery'),k=secPos('Knowledge'),g=secPos('Gates');
+ h+=line({x:P.agent.x+62,y:P.agent.y},{x:d.x-HR+4,y:d.y},'reads');
+ h+=line({x:P.agent.x,y:P.agent.y+30},{x:P.conductor.x-122,y:P.conductor.y-22},'drafts → you submit',false,110,345);
+ h+=line({x:C.x,y:C.y+HD*0.87+HR-2},{x:C.x,y:P.conductor.y-46},'Brain v'+S.ver+' pinned per Run',false,C.x+72,392);
+ h+=line({x:P.conductor.x+122,y:P.conductor.y-6},{x:P.evo.x-46,y:P.evo.y+12},'REPORT');
+ h+=line({x:P.evo.x-10,y:P.evo.y-44},toward(k,P.evo,HR*0.9),'auto',false,522,262);
+ h+=line({x:P.evo.x-30,y:P.evo.y-34},toward(g,P.evo,HR*0.9),'after your OK',true,468,318);
+ for(let i=0;i<3;i++)h+=line({x:P['src'+i].x+50,y:P['src'+i].y},{x:P.conductor.x-122,y:P.conductor.y-4+i*12});
+ [[P.eval,C],[P.eval,P.evo]].forEach(([a,b])=>h+='<path d="M'+a.x+','+(a.y+18)+' L'+b.x+','+(b.y-HR)+'" style="stroke:var(--border);stroke-width:1;stroke-dasharray:2 5;fill:none"/>');
+ // DDD flower
+ h+='<g class="hexc" data-go="brain"><polygon points="'+hexPts(C.x,C.y,HR)+'" style="fill:var(--acc-s);stroke:var(--acc);stroke-width:2"/>'+
+  '<text x="'+C.x+'" y="'+(C.y-4)+'" text-anchor="middle" style="font-weight:600;font-size:13px">Brain</text><text x="'+C.x+'" y="'+(C.y+12)+'" text-anchor="middle" style="font-size:11px;fill:var(--acc)">DDD v'+S.ver+'</text></g>';
+ SECTIONS.forEach(n=>{const p=secPos(n),hot=S.hl===n;
+  h+='<g class="hexc" data-go="brain" data-sec="'+n+'"><polygon points="'+hexPts(p.x,p.y,HR)+'" style="fill:var(--panel);stroke:'+(hot?'var(--vio)':'var(--border2)')+';stroke-width:'+(hot?2.5:1.4)+'"/>'+
+   '<text x="'+p.x+'" y="'+(p.y-3)+'" text-anchor="middle" style="font-size:11.5px;font-weight:600">'+n+'</text>'+
+   '<text x="'+p.x+'" y="'+(p.y+12)+'" text-anchor="middle" style="font-size:9.5px;fill:var(--muted)">'+esc(secCount(n))+'</text></g>';});
+ // Project Agent
+ h+='<g class="node" data-go="agent"><rect x="'+(P.agent.x-62)+'" y="'+(P.agent.y-30)+'" width="124" height="60" rx="10" style="fill:var(--panel);stroke:var(--border2)"/>'+
+  '<text x="'+P.agent.x+'" y="'+(P.agent.y-6)+'" text-anchor="middle" style="font-weight:600;font-size:12px">Project Agent</text>'+
+  '<text x="'+P.agent.x+'" y="'+(P.agent.y+11)+'" text-anchor="middle" style="font-size:10px;fill:var(--muted)">delivers with you</text></g>';
+ ['Chat tab','Slack','Schedule'].forEach((s,i)=>{const p=P['src'+i];h+='<g class="node" data-go="agent"><rect x="'+(p.x-12)+'" y="'+(p.y-11)+'" width="62" height="22" rx="11" style="fill:var(--elev);stroke:var(--border)"/><text x="'+(p.x+19)+'" y="'+(p.y+4)+'" text-anchor="middle" style="font-size:10px">'+s+'</text></g>';});
+ // Conductor + Runs
+ const c=P.conductor;
+ h+='<g class="node" data-go="runs"><rect x="'+(c.x-122)+'" y="'+(c.y-44)+'" width="244" height="98" rx="10" style="fill:var(--panel);stroke:var(--border2)"/>'+
+  '<text x="'+c.x+'" y="'+(c.y-24)+'" text-anchor="middle" style="font-weight:600;font-size:12px">Run Conductor</text>'+
+  '<text x="'+c.x+'" y="'+(c.y-8)+'" text-anchor="middle" style="font-size:10px;fill:var(--muted)">Chat tab '+S.runs.filter(r=>r.place==='Chat tab'&&r.st!=='done').length+
+  ' · Local Worker '+used('Local Worker')+'/1 · Hive '+used('hive-ec2-1')+'/2</text>';
+ S.runs.slice(-12).forEach((r,i)=>{const x=c.x-99+i*18,y=c.y+20;
+  h+='<circle cx="'+x+'" cy="'+y+'" r="6.5" style="fill:'+stColor(r)+'"><title>'+esc(r.title+' · '+label(r)[0])+'</title></circle>';});
+ if(!S.runs.length)h+='<text x="'+c.x+'" y="'+(c.y+24)+'" text-anchor="middle" style="font-size:10px;fill:var(--muted)">no Runs yet</text>';
+ h+='</g>';
+ // Reflect / Evolution
+ const ev=P.evo,pend=S.evo.filter(e=>e.st==='pending').length,auto=S.evo.filter(e=>e.st==='auto').length;
+ h+='<g class="node" data-go="evo"><circle cx="'+ev.x+'" cy="'+ev.y+'" r="46" style="fill:var(--vio-s);stroke:var(--vio)"/>'+
+  '<text x="'+ev.x+'" y="'+(ev.y-8)+'" text-anchor="middle" style="font-weight:600;font-size:11.5px">Reflect</text>'+
+  '<text x="'+ev.x+'" y="'+(ev.y+7)+'" text-anchor="middle" style="font-size:10px">Evolution</text>'+
+  '<text x="'+ev.x+'" y="'+(ev.y+22)+'" text-anchor="middle" style="font-size:9.5px;fill:var(--muted)">'+auto+' auto · '+pend+' review</text></g>';
+ // You / Needs you, Eval
+ const n=openCount(),nd=P.need;
+ h+='<g class="node" data-go="need"><circle cx="'+nd.x+'" cy="'+nd.y+'" r="24" style="fill:'+(n?'var(--dan-s)':'var(--ok-s)')+';stroke:'+(n?'var(--dan)':'var(--ok)')+'"/>'+
+  '<text x="'+nd.x+'" y="'+(nd.y+5)+'" text-anchor="middle" style="font-weight:600;font-size:14px;fill:'+(n?'var(--dan)':'var(--ok)')+'">'+n+'</text>'+
+  '<text x="'+(nd.x+34)+'" y="'+(nd.y-2)+'" style="font-weight:600;font-size:12px">You</text><text x="'+(nd.x+34)+'" y="'+(nd.y+13)+'" style="font-size:10px;fill:var(--muted)">review &amp; judge</text></g>';
+ const e=P.eval;
+ h+='<g class="node" data-go="eval"><rect x="'+(e.x-58)+'" y="'+(e.y-20)+'" width="116" height="40" rx="10" style="fill:var(--panel);stroke:var(--border2)"/>'+
+  '<text x="'+e.x+'" y="'+(e.y-3)+'" text-anchor="middle" style="font-weight:600;font-size:12px">Eval</text><text x="'+e.x+'" y="'+(e.y+12)+'" text-anchor="middle" style="font-size:9.5px;fill:var(--muted)">reads offline · 5 dims</text></g>';
+ $('#base').innerHTML=h;
+}
+function pulse(a,b,col){
+ const fx=document.getElementById('fx');
+ if(!fx||typeof requestAnimationFrame!=='function'||(window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches))return;
+ const A=pt(a),B=pt(b);if(!A||!B)return;
+ const c=document.createElementNS(NS,'circle');c.setAttribute('r','6');c.setAttribute('style','fill:'+(col||'var(--vio)'));fx.appendChild(c);
+ const t0=performance.now(),D=900;
+ (function f(now){const k=Math.min(1,(now-t0)/D),q=k<.5?2*k*k:1-Math.pow(-2*k+2,2)/2;
+  c.setAttribute('cx',A.x+(B.x-A.x)*q);c.setAttribute('cy',A.y+(B.y-A.y)*q);c.setAttribute('opacity',k<.8?1:(1-k)/.2);
+  if(k<1)requestAnimationFrame(f);else c.remove();})(t0);
+}
+
+/* ---------- panels ---------- */
+function label(r){
+ const pos=S.runs.filter(x=>x.place===r.place&&x.st==='queued').indexOf(r)+1;
+ return ({queued:['queued #'+pos,'p-warn'],running:[SH[r.stage],'p-acc'],
+  parked:[r.place==='Chat tab'?'question · tab idle':'question · parked','p-dan'],resume_pending:['your input in · resumes first','p-warn'],
+  approval:['approval','p-dan'],reflecting:['landed · reflecting','p-vio'],done:['landed','p-ok']})[r.st];
+}
+function pill(t,c){return '<span class="pill '+(c||'')+'">'+esc(t)+'</span>';}
+function stageBar(r){return '<div class="sb">'+SH.map((_,i)=>'<i class="'+(i<r.stage||r.st==='done'?'d':i===r.stage?((r.st==='parked'||r.st==='approval')?'w':'c'):'')+'"></i>').join('')+'</div>';}
+function renderWiz(){
+ document.querySelectorAll('#wSteps span').forEach((s,i)=>s.className=i+1===S.w?'on':i+1<S.w?'done':'');
+ let h='';
+ if(S.w===1){
+  h='<div class="b" style="font-size:15px">New Brain</div><div class="mut sm" style="margin-bottom:10px">A Brain is one project\'s DDD: Identity · Knowledge · Gates · Capabilities · Delivery · Refresher. Same six sections for every domain. Start from a repo, a DDD package, or nothing.</div>'+
+   '<div class="row"><input id="repo" data-keep style="flex:1" value="'+esc(S.repo)+'"><button class="btn pri" data-act="scan"'+(S.scanning||S.scanned?' disabled':'')+'>Scan repository</button></div>'+
+   '<div class="log" style="margin-top:10px">'+(S.scanLines.length?S.scanLines.map(l=>'› '+esc(l)).join('\n'):'<span class="mut">Scan output appears here.</span>')+'</div>';
+  if(S.scanned)h+='<div class="grid3" style="margin-top:10px">'+[['Identity','Card payments API · Python 3.11 · FastAPI'],['Knowledge','23 entries from docs, code and CI'],['Gates','4 rules found in CI and AGENTS.md'],
+   ['Capabilities','3 skills'],['Delivery','set in step 3'],['Refresher','weekly re-scan, 90-day decay']].map(x=>'<div class="card" style="padding:8px 10px"><div class="b">'+x[0]+'</div><div class="sm mut">'+x[1]+'</div></div>').join('')+'</div>';
+ }else if(S.w===2){
+  h='<div class="b" style="font-size:15px">Where does this Brain live?</div><div class="mut sm" style="margin-bottom:10px">Run records (REPORT, reflect, audit) follow their Brain. One storage adapter: read a version, write against a version, ask for the head.</div><div class="grid3">'+
+   [['local','Local','~/.swarm-ai/brains/payments-api','Private to this machine.',''],['repo','Git repo','git@github.com:acme/payments-brain.git','Shareable, every change is a commit.',''],['cloud','Cloud store','org store · s3 + dynamodb','Org-wide stats and sharing.','mock']]
+   .map(o=>'<div class="opt'+(S.storage===o[0]?' on':'')+'" data-act="store" data-k="'+o[0]+'"><div class="row"><span class="b">'+o[1]+'</span>'+(o[4]?pill('mock','p-warn'):'')+'</div><div class="sm mono" style="margin:4px 0">'+o[2]+'</div><div class="sm mut">'+o[3]+'</div></div>').join('')+'</div>';
+ }else if(S.w===3){
+  const a=S.agent;
+  h='<div class="b" style="font-size:15px">Project Agent</div><div class="mut sm" style="margin-bottom:10px">The delivery agent that works with you on this Brain. This is the Brain\'s Delivery section. It drafts Runs; you submit them.</div>'+
+   '<div class="grid2"><label class="col sm">Default profile<select id="apProfile" data-keep>'+['direct','bugfix','full'].map(p=>'<option'+(a.profile===p?' selected':'')+'>'+p+'</option>').join('')+'</select></label>'+
+   '<label class="col sm">Validations<input id="apValid" data-keep value="'+esc(a.valid)+'"></label></div>'+
+   '<div class="sm b" style="margin-top:10px">Review experts</div><div class="row sm">'+Object.keys(a.experts).map(k=>'<label class="row"><input type="checkbox" data-exp="'+k+'"'+(a.experts[k]?' checked':'')+'>'+k+'</label>').join('')+'</div>'+
+   '<div class="sm b" style="margin-top:10px">Where its Runs may run</div><div class="row sm">'+PLACES.map(p=>'<label class="row"><input type="checkbox" data-place="'+p+'"'+(a.place[p]?' checked':'')+'>'+p+(p==='hive-ec2-1'?' '+pill('mock','p-warn'):'')+'</label>').join('')+'</div>'+
+   '<div class="sm mut" style="margin-top:10px">Eval is not defined here. The agent that does the work does not write its own grade.</div>';
+ }else{
+  h='<div class="b" style="font-size:15px">Create Brain</div><div class="sm" style="margin:8px 0">'+esc(S.repo)+' → <b>Brain v1</b> · stored in <b>'+S.storage+'</b> · Project Agent profile <b>'+esc(S.agent.profile)+'</b></div>'+
+   '<button class="btn pri" data-act="create">Create Brain</button>';
+ }
+ h+='<div class="row" style="justify-content:space-between;margin-top:14px"><button class="btn" data-act="wback"'+(S.w===1?' disabled':'')+'>Back</button>'+
+  (S.w<4?'<button class="btn pri" data-act="wnext"'+(S.w===1&&!S.scanned?' disabled':'')+'>Continue</button>':'')+'</div>';
+ keep($('#wBody'),h);
+}
+const TABS=[['need','Needs you'],['brain','Brain (DDD)'],['agent','Project Agent'],['runs','Conductor · Runs'],['evo','Reflect · Evolution'],['eval','Eval']];
+function renderTabs(){$('#tabs').innerHTML=TABS.map(t=>'<div class="tab'+(S.tab===t[0]?' on':'')+'" data-tab="'+t[0]+'">'+t[1]+(t[0]==='need'&&openCount()?' '+pill(openCount(),'p-dan'):'')+'</div>').join('');}
+function go(t){S.tab=t;render();}
+function runLine(r){const L=label(r);return '<div class="rc'+(S.sel===r.id?' sel':'')+'" data-act="sel" data-id="'+r.id+'"><div class="row" style="justify-content:space-between"><span class="b">'+esc(r.title)+'</span>'+pill(L[0],L[1])+'</div>'+
+ '<div class="xs mut">'+r.id+' · '+esc(r.src)+' · Brain v'+r.v+'</div>'+stageBar(r)+'</div>';}
+function paneNeed(){
+ const open=S.items.filter(i=>!i.done),done=S.items.filter(i=>i.done).slice(-6).reverse();
+ let h='<div class="sm mut" style="margin-bottom:6px">Everything in this Brain that is waiting for your judgement: Run questions, landing approvals and rule proposals.</div>';
+ if(!open.length)h+='<div class="card mut" style="padding:12px;text-align:center">Nothing needs you right now.</div>';
+ for(const it of open){
+  if(it.type==='question'){const r=run(it.run),a=r.sc.ask;
+   h+='<div class="li need">'+pill('Run question','p-dan')+' <b>'+esc(r.title)+'</b> <span class="xs mut">'+r.id+' · '+r.place+' · round 1/3</span>'+
+    '<div style="margin:5px 0">'+esc(a.q)+'</div><div class="sm mut">Why it asks: '+esc(a.why)+'</div><div class="col" style="margin-top:6px">'+
+    a.opts.map(o=>'<div class="row"><button class="btn" data-act="ans" data-id="'+r.id+'" data-k="'+o.k+'">'+o.k+' · '+esc(o.l)+'</button><span class="sm mut">'+esc(o.c)+'</span></div>').join('')+'</div></div>';}
+  else if(it.type==='approval'){const r=run(it.run),sc=r.sc;
+   h+='<div class="li need">'+pill('Landing approval','p-warn')+' <b>'+esc(r.title)+'</b> <span class="xs mut">'+r.id+' · '+r.place+'</span>'+
+    '<div class="sm" style="margin:5px 0">'+sc.files.length+' files · +'+sc.files.reduce((s,f)=>s+f[1],0)+' −'+sc.files.reduce((s,f)=>s+f[2],0)+' · review PASS · tests '+sc.tests+'</div>';
+   if(r.evid)h+='<div class="sm">'+sc.files.map(f=>'<div class="mono xs">'+esc(f[0])+' <span class="add">+'+f[1]+'</span> <span class="del">−'+f[2]+'</span></div>').join('')+'</div>'+
+    '<div class="diff" style="margin:5px 0">'+sc.diff.split('\n').map(l=>'<span class="'+(l[0]==='+'?'add':l[0]==='-'?'del':'mut')+'">'+esc(l)+'</span>').join('\n')+'</div>'+
+    '<div class="sm">Review: '+r.experts.map(x=>pill(x+' ✓','p-ok')).join(' ')+' · 0 open findings'+(r.gate?' · <span class="p-vio pill">gate applied</span>':'')+'</div>'+
+    '<div class="sm">Validation report: '+sc.tests+' on tree '+r.id.slice(4)+'e1 · same tree as the one being landed</div>';
+   h+='<div class="row" style="margin-top:6px;flex-wrap:wrap">'+(r.evid?'':'<button class="btn" data-act="evid" data-id="'+r.id+'">Review evidence</button>')+
+    '<button class="btn pri" data-act="approve" data-id="'+r.id+'"'+(r.evid?'':' disabled title="Open the evidence first"')+'>Approve landing</button>'+
+    '<input id="note-'+r.id+'" data-keep style="flex:1;min-width:160px" placeholder="What to change (needed to request changes)"><button class="btn" data-act="changes" data-id="'+r.id+'">Request changes</button></div></div>';}
+  else{const e=S.evo.find(x=>x.id===it.evo);
+   h+='<div class="li need">'+pill(e.layer+' rule proposal','p-vio')+' <span class="xs mut">from '+e.run+' · '+esc(e.title)+'</span><div style="margin:5px 0">'+esc(e.text)+'</div>'+
+    '<div class="sm mut">Evidence: '+esc(e.why)+'</div><div class="sm mut">It changes how the Brain judges, so it waits for you. Knowledge facts go in on their own.</div>'+
+    '<div class="row" style="margin-top:6px"><button class="btn pri" data-act="papprove" data-id="'+e.id+'">Approve rule</button><button class="btn" data-act="preject" data-id="'+e.id+'">Reject</button></div></div>';}
+ }
+ if(done.length)h+='<div class="sm b mut" style="margin-top:12px">Handled recently</div>'+done.map(i=>{const r=i.run?run(i.run):null,e=i.evo?S.evo.find(x=>x.id===i.evo):null;
+  return '<div class="sm mut li">'+clock(i.t)+' · '+esc(r?r.title:e.text)+' · <b>'+esc(i.done)+'</b></div>';}).join('');
+ return h;
+}
+function paneBrain(){
+ const card=(n,body)=>'<div class="card'+(S.hl===n?' flash':'')+'" style="padding:10px 12px;margin-bottom:8px"><div class="row" style="justify-content:space-between"><span class="b">'+n+'</span><span class="xs mut">'+esc(secCount(n))+'</span></div>'+body+'</div>';
+ const kn=S.know.filter(k=>k.st==='active').slice().reverse();
+ let h='<div class="row" style="justify-content:space-between;margin-bottom:8px"><span><b>'+esc(S.brain.name)+'</b> · Brain v'+S.ver+' · stored in '+S.storage+'</span><span class="xs mut">each Run pins the version it read</span></div>';
+ h+=card('Identity','<div class="sm">Card payments API for merchants · Python 3.11 · FastAPI · Postgres · '+esc(S.repo)+'</div>');
+ h+=card('Knowledge',kn.map(k=>'<div class="sm li">'+(k.src==='repo scan'?'':pill('from '+k.src,'p-vio')+' ')+esc(k.text)+'</div>').join('')+'<div class="xs mut">+ '+SCAN_EXTRA+' more from the repo scan</div>');
+ h+=card('Gates',S.gates.slice().reverse().map(g=>'<div class="sm li">'+(g.src==='repo scan'?'':pill('approved · from '+g.src,'p-vio')+' ')+esc(g.text)+'</div>').join(''));
+ h+=card('Capabilities','<div class="sm">'+S.caps.map(c=>pill(c)).join(' ')+'</div>');
+ h+=card('Delivery','<div class="sm">Project Agent · profile '+esc(S.agent.profile)+' · experts '+Object.keys(S.agent.experts).filter(k=>S.agent.experts[k]).join(', ')+' · validations: '+esc(S.agent.valid)+'</div>'+
+  S.agent.notes.map(n=>'<div class="sm li">'+pill('approved','p-vio')+' '+esc(n)+'</div>').join(''));
+ h+=card('Refresher','<div class="sm">Weekly re-scan for drift · Knowledge unused for 90 days is marked stale</div>');
+ h+='<div class="sm b" style="margin-top:6px">Version history</div>'+S.vlog.slice().reverse().slice(0,8).map(v=>'<div class="sm mut">v'+v.v+' · '+clock(v.t)+' · '+esc(v.why)+'</div>').join('');
+ return h;
+}
+function paneAgent(){
+ const a=S.agent;let h='<div class="sm mut" style="margin-bottom:6px">Profile '+esc(a.profile)+' · experts '+Object.keys(a.experts).filter(k=>a.experts[k]).join(', ')+' · may run on '+PLACES.filter(p=>a.place[p]).join(', ')+'</div>';
+ h+='<div class="chat" id="chatBox">'+S.chat.map(m=>'<div class="msg '+(m.who==='me'?'me':'ag')+'">'+esc(m.text)+'</div>').join('')+'</div>';
+ if(S.draft){const d=S.draft;
+  h+='<div class="card" style="padding:10px 12px;margin-top:8px;border-color:var(--acc)"><div class="sm b mut">DRAFT RUN · not submitted</div>'+
+   '<label class="col sm" style="margin-top:4px">Title<input id="dTitle" data-keep value="'+esc(d.title)+'"></label>'+
+   '<div class="sm" style="margin:6px 0;border-left:3px solid var(--border2);padding-left:8px">'+esc(d.sc.req)+'</div>'+
+   '<div class="row sm">Profile '+pill(d.profile)+' Brain '+pill('v'+S.ver)+' Run on <select id="dPlace" data-keep>'+PLACES.filter(p=>a.place[p]).map(p=>'<option'+(p===d.place?' selected':'')+'>'+p+'</option>').join('')+'</select></div>'+
+   '<div class="row" style="margin-top:8px"><button class="btn pri" data-act="submit">Submit Run</button><button class="btn" data-act="discard">Discard</button></div></div>';}
+ h+='<div class="row" style="margin-top:8px"><input id="chatIn" data-keep style="flex:1" placeholder="Describe a change for '+esc(S.brain.name)+'"><button class="btn pri" data-act="send">Send</button></div>';
+ h+='<div class="sm b" style="margin-top:12px">Other ways in</div><div class="li row" style="justify-content:space-between"><span class="sm">Slack #payments-oncall · "webhooks are sent twice on timeout"</span><button class="btn" data-act="slack"'+(idOf('webhook')?' disabled':'')+'>Simulate Slack request</button></div>'+
+  '<div class="li row" style="justify-content:space-between"><span class="sm">Schedule "Weekly flaky-test sweep" · Mon 09:00 · on '+hivePlace()+'</span><button class="btn" data-act="sched"'+(idOf('sweep')?' disabled':'')+'>Fire now</button></div>';
+ return h;
+}
+function paneRuns(){
+ let h='<div class="sm mut" style="margin-bottom:6px">One Conductor for the whole machine; this view shows the Runs of this Brain. A parked Run frees its slot; an answered one goes back first.</div>';
+ for(const p of PLACES){const rs=S.runs.filter(r=>r.place===p);
+  h+='<div class="lane"><div class="row" style="justify-content:space-between"><span class="b">'+p+(p==='hive-ec2-1'?' '+pill('mock','p-warn'):'')+'</span><span class="xs mut">'+
+   (p==='Chat tab'?'inline in your tabs':used(p)+'/'+SLOTS[p]+' slots in use')+'</span></div>'+(rs.length?rs.map(runLine).join(''):'<div class="xs mut" style="margin-top:4px">no Runs</div>')+'</div>';}
+ const r=S.sel&&run(S.sel);
+ if(r){h+='<div class="card" style="padding:10px 12px"><div class="row" style="justify-content:space-between"><span class="b" style="font-size:14px">'+esc(r.title)+'</span>'+pill(label(r)[0],label(r)[1])+'</div>'+
+  '<div class="xs mut">'+r.id+' · '+esc(r.src)+' · '+r.place+' · Brain v'+r.v+'</div><div class="sm" style="margin:6px 0;border-left:3px solid var(--border2);padding-left:8px">'+esc(r.req)+'</div>'+stageBar(r)+
+  '<div class="sm b" style="margin-top:6px">Thread</div>'+r.thread.map(m=>'<div class="sm"><span class="mut mono xs">'+clock(m.t)+'</span> <b>'+esc(m.who)+'</b> · '+esc(m.text)+'</div>').join('');
+  if(r.audit)h+='<div class="sm b" style="margin-top:8px">REPORT · five dimensions</div>'+r.audit.map(a=>'<div class="row sm"><span class="b" style="width:72px">'+a[0]+'</span><span>'+esc(a[1])+'</span></div>').join('')+
+   '<div class="xs mut" style="margin-top:4px">Stored with the Brain ('+S.storage+'): REPORT.md, review, validation report, event log, reflect record</div>';
+  h+='</div>';}
+ return h;
+}
+function paneEvo(){
+ const L={auto:['written to Knowledge','p-ok'],pending:['waiting for you','p-acc'],approved:['approved','p-vio'],rejected:['rejected',''],discarded:['dropped',''],reverted:['undone','p-warn']};
+ const c=st=>S.evo.filter(e=>e.st===st).length;
+ let h='<div class="grid4" style="margin-bottom:8px">'+[['Auto',c('auto'),'Knowledge facts'],['To review',c('pending'),'Gates / Delivery'],['Approved',c('approved'),'by you'],['Dropped',c('discarded'),'duplicates']]
+  .map(k=>'<div class="card kpi"><div class="xs mut">'+k[0]+'</div><div class="v">'+k[1]+'</div><div class="xs mut">'+k[2]+'</div></div>').join('')+'</div>';
+ h+='<div class="sm mut" style="margin-bottom:4px">Routing: a fact goes into Knowledge on its own and can be undone; a change to how the Brain judges (Gates, Delivery, Identity) waits for you; a duplicate is dropped with the reason kept.</div>';
+ if(!S.evo.length)h+='<div class="sm mut">Nothing distilled yet. Lessons appear when a Run lands.</div>';
+ for(const e of S.evo.slice().reverse()){const l=L[e.st];
+  h+='<div class="li"><div class="row" style="justify-content:space-between"><span>'+pill(l[0],l[1])+' '+pill(e.layer==='dup'?'duplicate':e.layer)+' <span class="xs mut">'+clock(e.t)+' · from '+e.run+'</span></span>'+
+   (e.st==='auto'?'<button class="btn" data-act="undo" data-id="'+e.id+'">Undo</button>':'')+(e.st==='pending'?'<button class="btn" data-act="go" data-k="need">Review</button>':'')+'</div>'+
+   '<div class="sm">'+esc(e.text)+'</div>'+(e.why?'<div class="xs mut">'+esc(e.why)+'</div>':'')+'</div>';}
+ return h;
+}
+function med(a){if(!a.length)return null;const s=a.slice().sort((x,y)=>x-y);return s[Math.floor(s.length/2)];}
+function paneEval(){
+ const landed=S.runs.filter(r=>r.audit),auto=landed.filter(r=>!r.qcount&&!r.cr).length;
+ const appr=S.items.filter(i=>i.type==='approval'&&i.done),crs=appr.filter(i=>i.done==='Changes requested').length;
+ const qw=med(S.runs.filter(r=>r.start!=null).map(r=>r.qwait*3)),act=med(landed.map(r=>(r.end-r.start)*3));
+ const ki=S.evo.filter(e=>e.layer==='Knowledge'),rev=ki.filter(e=>e.st==='reverted').length;
+ const kpi=(t,v,s)=>'<div class="card kpi"><div class="xs mut">'+t+'</div><div class="v">'+v+'</div><div class="xs mut">'+s+'</div></div>';
+ let h='<div class="sm mut" style="margin-bottom:8px">Eval reads the records the Runs already wrote. It runs offline, never blocks a Run, and the Project Agent does not define it. A number that cannot be measured says UNKNOWN.</div>';
+ h+='<div class="sm b">Runs</div><div class="grid4" style="margin:4px 0 10px">'+kpi('Landed',landed.length+' / '+S.runs.length,'Runs of this Brain')+
+  kpi('Autonomy',landed.length?Math.round(100*auto/landed.length)+'%':'UNKNOWN','landed with no question or change request')+kpi('Active time',act!=null?act+' min':'UNKNOWN','median per landed Run')+
+  kpi('Cost',landed.reduce((s,r)=>s+r.sc.tok,0)+'k','tokens, landed Runs')+'</div>';
+ if(landed.length)h+='<table class="sm" style="width:100%;border-collapse:collapse;margin-bottom:10px"><tr class="mut xs"><td>Run</td><td>Isolation</td><td>Quality</td><td>Autonomy</td><td>Speed</td><td>Cost</td></tr>'+
+  landed.map(r=>'<tr style="border-top:1px solid var(--border)"><td>'+esc(r.title)+'</td><td>✓</td><td>'+(r.cr?'✓ after changes':'✓')+'</td><td>'+(r.qcount?r.qcount+' question':'✓')+'</td><td>'+(r.end-r.start)*3+'m</td><td>'+r.sc.tok+'k</td></tr>').join('')+'</table>';
+ h+='<div class="sm b">Conductor</div><div class="grid4" style="margin:4px 0 10px">'+kpi('Queue wait',qw!=null?qw+' min':'UNKNOWN','median before start')+
+  kpi('Local Worker',S.ticks?Math.round(100*S.busy/S.ticks)+'%':'UNKNOWN','busy time')+kpi('Waiting on you',S.runs.reduce((s,r)=>s+r.wait*3,0)+' min','parked + approval, total')+kpi('Parked now',S.runs.filter(r=>r.st==='parked').length,'slot released')+'</div>';
+ h+='<div class="sm b">Project Agent</div><div class="grid4" style="margin:4px 0 10px">'+kpi('Drafts',S.drafts,'submitted by you: '+S.runs.filter(r=>r.src.indexOf('chat')===0).length)+
+  kpi('Questions',S.runs.reduce((s,r)=>s+r.qcount,0),'it could not answer from the Brain')+kpi('Change requests',appr.length?Math.round(100*crs/appr.length)+'%':'UNKNOWN','of landing approvals')+kpi('Self-submitted',0,'it never submits a Run')+'</div>';
+ h+='<div class="sm b">Brain</div><div class="grid4" style="margin:4px 0">'+kpi('Version','v'+S.ver,S.vlog.length+' changes')+kpi('Knowledge',(SCAN_EXTRA+S.know.filter(k=>k.st==='active').length),'+'+ki.filter(e=>e.st==='auto').length+' from Runs')+
+  kpi('Undo rate',ki.length?Math.round(100*rev/ki.length)+'%':'UNKNOWN','auto entries you undid')+kpi('Does it help Runs?','UNKNOWN','no measurement yet; not guessed')+'</div>';
+ return h;
+}
+/* keep typed input values and focus across re-renders */
+function keep(el,html){
+ const vals={},act=document.activeElement,aid=act&&act.id;let sel=null;
+ el.querySelectorAll('[data-keep]').forEach(i=>vals[i.id]=i.value);
+ if(aid&&act.selectionStart!=null&&act.tagName==='INPUT')sel=[act.selectionStart,act.selectionEnd];
+ el.innerHTML=html;
+ for(const id in vals){const i=document.getElementById(id);if(i)i.value=vals[id];}
+ if(aid){const i=document.getElementById(aid);if(i){i.focus();if(sel&&i.setSelectionRange)i.setSelectionRange(sel[0],sel[1]);}}
+}
+function renderPane(){
+ const f={need:paneNeed,brain:paneBrain,agent:paneAgent,runs:paneRuns,evo:paneEvo,eval:paneEval}[S.tab];
+ keep($('#pane'),f());const cb=$('#chatBox');if(cb)cb.scrollTop=cb.scrollHeight;
+}
+function renderHdr(){
+ $('#hdrBrain').innerHTML=S.brain?pill(S.brain.name)+pill('v'+S.ver,'p-acc')+pill('stored in '+S.storage):'<span class="sm mut">no Brain yet</span>';
+ const n=openCount();$('#hdrNeed').innerHTML=S.brain?'<button class="btn" data-act="go" data-k="need">'+(n?pill(n+' need you','p-dan'):pill('all clear','p-ok'))+'</button>':'';
+}
+function render(){
+ renderHdr();
+ const v=S.phase==='view';$('#wiz').classList.toggle('hidden',v);$('#view').classList.toggle('hidden',!v);
+ if(v){renderViz();renderTabs();renderPane();}else renderWiz();
+ renderGuide();
+}
+
+/* ---------- guided demo: each Next performs the real action ---------- */
+const STEPS=[
+ {t:'Point a new Brain at a repo',d:'Every project is a Brain: one DDD with six sections. It starts from a scan of the repo.',act:()=>{S.w=1;scan();}},
+ {t:'Choose where the Brain lives',d:'Local, a git repo or the org cloud store. Run records follow their Brain.',until:()=>S.scanned,act:()=>{S.w=2;S.storage='repo';}},
+ {t:'Define the Project Agent',d:'The delivery agent for this Brain: default profile, review experts, validations, where its Runs may run. Eval is not defined here.',act:()=>{S.w=3;}},
+ {t:'Create the Brain',d:'Brain v1 is written. The map: the DDD in the centre, the Project Agent, the Conductor and the learning loop.',act:()=>{readAgent();S.w=4;createBrain();}},
+ {t:'Ask the Project Agent for a change',d:'You describe the change in the project chat. The agent drafts a Run from the Brain. It never submits one itself.',
+  act:()=>{go('agent');send('Retries on 503 hammer the upstream, add jittered backoff and respect Retry-After');}},
+ {t:'You submit, the Conductor places it',d:'The Run is pinned to the current Brain version and goes to the Local Worker in the background.',until:()=>!!S.draft,act:()=>{submitDraft();go('runs');}},
+ {t:'More requests: Slack and a schedule',d:'A Slack request and the weekly schedule arrive. The Conductor places both on the Hive.',act:()=>{slackReq();fireSched();}},
+ {t:'A Run needs you',d:'The backoff Run hit a question the Brain cannot answer. The Worker parks it and frees the slot. It lands in one queue: Needs you.',
+  until:()=>!!openItem('question',idOf('backoff')),act:()=>go('need')},
+ {t:'Answer; the Run resumes first',d:'You pick A. The Run goes back to the front of the queue with your answer.',act:()=>answer(idOf('backoff'),'A')},
+ {t:'Review the evidence, then approve',d:'An approval opens the diff, the review verdict and the test report first. Only then can you approve landing.',
+  until:()=>!!openItem('approval',idOf('backoff')),act:()=>{go('need');evid(idOf('backoff'));approve(idOf('backoff'));}},
+ {t:'Approve the Hive Runs too',d:'The Slack and scheduled Runs are ready. Same evidence, same queue.',
+  until:()=>['webhook','sweep'].every(k=>openItem('approval',idOf(k))||doneRun(k)),act:()=>['webhook','sweep'].forEach(k=>{evid(idOf(k));approve(idOf(k));})},
+ {t:'Reflect feeds the Brain',d:'Each landed Run is distilled. Facts go into Knowledge on their own and can be undone; rule changes wait for you; duplicates are dropped with a reason.',
+  until:()=>doneRun('backoff'),act:()=>go('evo')},
+ {t:'Approve the new Gate',d:'"Retry changes must include the concurrency reviewer" changes how the Brain judges, so it needs your OK.',
+  until:()=>S.evo.some(x=>x.st==='pending'&&x.layer==='Gates'),act:()=>{papprove(S.evo.find(x=>x.st==='pending'&&x.layer==='Gates').id);go('brain');}},
+ {t:'The next Run reads the newer Brain',d:'A new Run pins the latest version and picks up the Gate: the concurrency reviewer is added without anyone asking.',
+  act:()=>{if(!idOf('budget')){const r=newRun('budget','chat tab "'+S.brain.name+'"','Local Worker');S.sel=r.id;}go('runs');}},
+ {t:'Eval reads all of it, offline',d:'Runs, Conductor, Project Agent and Brain health, plus the five autonomy dimensions. It never sits in a Run\'s path.',act:()=>go('eval')},
+ {t:'That is the loop',d:'Brain → Project Agent → Conductor → Runs → Reflect → Brain, and you review and judge it all from one place. Reset to run it again.',end:true}
+];
+const G={i:0,auto:null};
+function renderGuide(){
+ // keep the guide in step with clicks made by hand in the wizard
+ const w=S.phase==='view'?4:S.w===1?(S.scanned||S.scanning?1:0):Math.min(S.w,3);
+ if(G.i<w)G.i=w;
+ const s=STEPS[G.i],ok=!s.end&&(!s.until||s.until());
+ $('#gNum').textContent='Step '+(G.i+1)+' / '+STEPS.length;$('#gTitle').textContent=s.t;
+ $('#gDesc').textContent=s.d+(!s.end&&!ok?' (waiting for the Runs…)':'');
+ $('#gNext').disabled=!ok;
+}
+function next(){const i=G.i,s=STEPS[i];if(s.end||(s.until&&!s.until()))return;s.act();G.i=Math.max(G.i,Math.min(i+1,STEPS.length-1));render();}
+function setAuto(on){
+ if(G.auto){clearInterval(G.auto);G.auto=null;}
+ if(on)G.auto=setInterval(()=>{if(STEPS[G.i].end){setAuto(false);return;}next();},2600/speed());
+ $('#gAuto').textContent=G.auto?'Pause':'Auto-play';
+}
+const speed=()=>+(($('#speed')||{}).value||2);
+let timer=null;function startTick(){if(timer)clearInterval(timer);timer=setInterval(tick,1100/speed());}
+
+/* ---------- events ---------- */
+function act(b){
+ const a=b.dataset.act,id=b.dataset.id;
+ if(a==='scan'){const r=$('#repo');if(r)S.repo=r.value.trim()||S.repo;scan();}
+ else if(a==='wnext'){if(S.w===3)readAgent();S.w=Math.min(4,S.w+1);render();}
+ else if(a==='wback'){if(S.w===3)readAgent();S.w=Math.max(1,S.w-1);render();}
+ else if(a==='store'){S.storage=b.dataset.k;render();}
+ else if(a==='create'){createBrain();G.i=Math.max(G.i,4);render();}
+ else if(a==='send'){const i=$('#chatIn'),t=i?i.value:'';if(i)i.value='';const old=$('#dTitle');if(old)old.removeAttribute('id');send(t);if(G.i===4)G.i=5;render();}
+ else if(a==='submit'){submitDraft();if(G.i===5)G.i=6;render();}
+ else if(a==='discard'){S.draft=null;render();}
+ else if(a==='slack')slackReq();
+ else if(a==='sched')fireSched();
+ else if(a==='ans')answer(id,b.dataset.k);
+ else if(a==='evid')evid(id);
+ else if(a==='approve')approve(id);
+ else if(a==='changes')changes(id);
+ else if(a==='papprove')papprove(id);
+ else if(a==='preject')preject(id);
+ else if(a==='undo')undo(id);
+ else if(a==='sel'){S.sel=S.sel===id?null:id;render();}
+ else if(a==='go')go(b.dataset.k);
+}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(b&&!b.disabled)act(b);const t=e.target.closest('[data-tab]');if(t)go(t.dataset.tab);});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.id==='chatIn'){e.preventDefault();act({dataset:{act:'send'}});}});
+$('#gNext').onclick=next;$('#gAuto').onclick=()=>setAuto(!G.auto);
+$('#speed').oninput=()=>{startTick();if(G.auto)setAuto(true);};
+$('#bReset').onclick=()=>{setAuto(false);S=fresh();G.i=0;render();};
+$('#bTheme').onclick=()=>{const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark';};
+$('#bExport').onclick=()=>{
+ const data=JSON.stringify({brain:S.brain,version:S.ver,versions:S.vlog,storage:S.storage,projectAgent:S.agent,knowledge:S.know,gates:S.gates,
+  runs:S.runs.map(r=>({id:r.id,title:r.title,requirement:r.req,source:r.src,placement:r.place,brainVersion:r.v,status:r.st,audit:r.audit,thread:r.thread})),
+  evolution:S.evo,needsYou:S.items},null,2);
+ const done=()=>{$('#bExport').textContent='Copied';setTimeout(()=>$('#bExport').textContent='Export JSON',1500);};
+ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(data).then(done,()=>dl(data));else dl(data);
+};
+function dl(data){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:'application/json'}));a.download='brain-demo.json';a.click();}
+if(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.dataset.theme='dark';
+initViz();render();startTick();
+// open the file with #auto to play the whole flow on its own (presenting or screenshots)
+if(location.hash==='#auto'){$('#speed').value=4;startTick();setAuto(true);}
+window.__brainDemo={get S(){return S;},G,next,tick,STEPS};
+})();
+</script>
+</body>
+</html>
