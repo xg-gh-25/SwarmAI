@@ -3,200 +3,191 @@ title: What a session produced reaches the user (any task, any location, any kin
 date: 2026-10-26
 created: 2026-10-26
 updated: 2026-10-26
-status: v3 draft (v1 worktree-only, v2 files-only; v3 adds remote products and the mid-turn row), not reviewed; no code yet
+status: v4 draft (rebuilt after the v3 skeptic review, verdict needs redesign); no code yet
 ---
 
 # What a session produced reaches the user
 
 ## 0. Principle
 
-SwarmAI runs every kind of task, most of them not coding. Of everything the agent does,
-the user's attention belongs on its **products**: what it made or changed that outlives
-the turn. Everything else (reading, searching, scratch commands, thinking) is process.
-Coding and pipeline runs are reference cases, not the frame.
+SwarmAI runs every kind of task, most of them not coding. The user's attention belongs on
+the agent's **products**: what it made or did that outlives the turn. Reading, searching,
+scratch commands and thinking are process. Coding and pipeline runs are reference cases.
 
-Two kinds of product, one treatment:
+A product reaches the user in four places: **at the moment it happens** in the turn, on
+the **output card** at the end, in the **Canvas rail** (files), and **by name** in the
+answer (a click opens it). All four read **one record**.
 
-| Kind | Examples | Fact it rests on |
+## 1. What v3 got wrong (review 2026-10-26, each finding checked against code)
+
+| v3 | Why it fails | v4 |
 |---|---|---|
-| **file** | report, deck, Knowledge note, Desktop doc, design doc in a repo or a session worktree | the emit gate's `kind` for a written path (`needs_human_review` / `canvas_surface` / `canvas_noise`) |
-| **remote** | email sent or drafted, Slack post, ticket / task / CRM record created or updated, PR opened, branch pushed | the tool's class in the one risk taxonomy (`core/tool_risk`) plus its result: the call succeeded |
+| A product row sits in its group, then is lifted out when the group folds | The phase body mounts only while open (`TurnZones.tsx:868`, `open && <PhaseBody>`): moving a row out of it remounts it, and drawing it outside from the start lets later calls grow above it | A product is a **first-level element that ends the current group** (§3.1), the rule v6 §2.3 already applies to questions, permission prompts and the pipeline divider. Nothing moves |
+| "One record" but four sources (`turn_product`, `turn_deliverables`, `session_outputs`, resolve's cascade) | Three persisted copies with their own dedupe; "shown above" still shows a product twice | `turn_product` is the turn's record; the card is derived from it; `session_outputs` stays the Canvas rail's per-session view, written from the **same event** |
+| Session worktree added to `_SWARM_AUTHOR_FACING` | Bypasses `needs_human_review`'s tree-relative dot-segment rule (`needs_human_review.py:392`): a tracked `.env` there would surface | A Canvas-only classifier for session worktrees that applies the same tree-relative dot-segment rule and `git check-ignore` (§3.3) |
+| Remote product = `tool_risk` class `EXTERNAL` or `WRITE_LOCAL` | Approval risk is a different question; `WRITE_LOCAL` verbs (`draft/create/add/set/save`) do not prove a remote object was made; the orchestrator does not keep tool input to result time; approval prompts only on `EXTERNAL` (`security_hooks.py:1738`), so v3's "widens approval" was wrong too | An explicit **product capability table**, separate from approval; unknown tools and actions are left off (§2.2). Approval is not touched |
+| URL = first URL in the persisted outcome | The outcome is one first/last line cut to 120 chars (`tool_summarizer.py:575-588`); the URL is usually gone, and a first arbitrary URL may be presigned | URL only from a named field of a registered tool's full result, host checked; else no link |
+| Bash parser "like C041" | A second parser drifts from C041's chain splitting, wrappers and git global options | Extract C041's segment parser into one pure function both use |
+| Several products match a name → open the newest | A guess | Several matches → no pick: a toast lists them; the user opens one from the rail |
+| — | Pipeline run docs would show twice (StageResult already shows them) | StageResult is the in-turn row for run documents; they get no `turn_product` |
 
-Each product must reach the user in all four places, and all four read the same record:
+## 2. The record
 
-1. **at the moment it happens**, as a row in the turn (know tier, not folded);
-2. **on the turn's output card**, listed once;
-3. **in the Canvas rail** (files);
-4. **when the answer names it**, the name opens it.
+### 2.1 `turn_product` block
 
-## 1. Today, per kind (checked against code 2026-10-26)
-
-| | in the turn | output card | Canvas rail | name opens it |
-|---|---|---|---|---|
-| file in SwarmWS / Desktop / external repo | only a tool strip, folds away | yes (`turn_deliverables`) | yes | only if under SwarmWS / `Projects/*` / a bound checkout |
-| file in a session worktree | strip only | **no** | **no** | **no** |
-| remote product | strip only | **no** | n/a | n/a |
-
-Root causes:
-- `canvas_noise` treats `~/.swarm-ai` as app plumbing except a list (`SwarmWS`, skill
-  dirs); session worktrees (added 2026-10-24) were never added. Checked: `is_noise_path`
-  is True for the observed doc, and that session's Canvas record holds only two run docs.
-- Nothing records a remote product. `tool_risk.classify` decides the class but only the
-  approval gate reads it.
-- `/workspace/file/resolve` searches fixed folders and never asks what the session wrote.
-- Nothing puts a product into the turn where it happened; the card is the only place.
-
-## 2. The record: one `turn_product` block per product
-
-Same pattern as `pipeline_stage` (a persisted block the backend inserts after the call
-that caused it, streamed and stored identically, so live and reload show the same):
+One persisted block per product, inserted by the backend right after the successful
+result of the call that made it (the `pipeline_stage` pattern: same bytes streamed and
+stored, so live and reload agree).
 
 ```
-{"type": "turn_product", "toolUseId": "<the call>", "product": "file" | "remote",
- // file
- "path", "absolutePath", "fileKind": "<emit-gate kind>", "operation": "written" | "deleted",
- // remote
- "tool": "<tool name>", "action": "<verb token>", "target": "<strip object>", "url"?: "<http(s) URL from the result>"}
+{"type": "turn_product", "toolUseId", "parentToolUseId"?,
+ "product": "file", "path", "absolutePath", "fileKind", "operation": "written" | "deleted"}
+{"type": "turn_product", "toolUseId", "parentToolUseId"?,
+ "product": "remote", "tool", "action", "target", "url"?}
 ```
 
-Who writes it (`streaming_orchestrator`, at the call's successful `tool_result`, where
-`_pending_file_changes` is already keyed by `tool_use_id`):
+Identity: `toolUseId + absolutePath + operation` (file), `toolUseId` (remote). One call
+writing three files yields three blocks.
 
-- **file**: each `file_changed` it emits of a product kind (the existing
-  `_DELIVERABLE_KINDS`) also yields a `turn_product` for the same call. One fact, two
-  views: `file_changed` keeps feeding Canvas and `turn_deliverables`.
-- **remote**: an MCP tool (`mcp__*`) that `tool_risk.classify` puts in `EXTERNAL` or
-  `WRITE_LOCAL` (an MCP "local" write such as `email_draft` or `create_task` still writes
-  to the remote service; the class only says it needs no approval), with a non-error
-  result. Built-in tools are never remote products (Write/Edit are files, Agent/Skill/
-  Todo are in-process).
-- **remote, Bash**: a new pure function in `tool_risk`, `remote_action(command)`, using
-  the same `shlex` tokenizing as the C041 check: `git push`, `gh pr create|merge|close`,
-  `gh issue create|close`, `gh release create`, with a zero exit. Any other Bash is not a
-  product (a `curl -X POST` is not recognised; §4).
-- `target` reuses `tool_summarizer`'s object for that call (the strip's object column),
-  not a new parser. `url`: the first `https://` URL in the persisted outcome, if any; it
-  is text in the record, so nothing is inferred. None: the row shows no link.
+### 2.2 What is a product
 
-A failed call yields no product (the strip already records it).
+- **File**: a `file_changed` the orchestrator already emits, with a product kind
+  (`content`, `knowledge`, `external-diff`, `external-nodiff`; the router's existing
+  `_DELIVERABLE_KINDS`). The same event feeds `session_outputs` (rail), so rail and turn
+  cannot disagree. Code files in bound repos and run worktrees stay `source` and keep
+  their existing home, the `turn_changes` card section and the landing row
+  (`2026-10-25-turn-attention-tiers.md` step 3). Pipeline run documents: §1 last row.
+- **Remote**: a call listed in a new table `core/turn_products.py :: REMOTE_PRODUCTS`,
+  keyed by exact tool name, and for action-dispatch tools by exact `tool_input.action`
+  value. Each entry names: the action label, which input field is the target, and which
+  result field (if any) holds the URL plus its allowed hosts. Examples: Slack
+  `post_message` (target `channel`), Outlook `email_send` / `email_draft` (target
+  `to` / `subject`), Taskei `TaskeiCreateTask` (target `name`), SIM-T
+  `TicketingWriteActions` with `action=create-ticket` (target `title`). At `tool_use` the
+  orchestrator keeps only the redacted label and target for a listed call (not the raw
+  input); on a non-error result it emits the block. A tool not in the table is not a
+  product, and adding one is one table row with a test.
+- **Remote via Bash**: `git push`, `gh pr create|merge`, `gh issue create`,
+  `gh release create`, found by the parser shared with C041, with a non-error result.
+
+### 2.3 Lifecycle
+
+- Failed call: no product. Stop mid-call: no result, no product.
+- Parallel calls: blocks follow the order their results are persisted, each after its own
+  result row; a row never moves later.
+- Sub-agent calls: the block carries `parentToolUseId` and is drawn in the parent's
+  Agents panel position (§3.1). A background agent finishing in a later turn: its
+  products belong to that later turn.
+- A file written several times in a turn: one block per write call; the card lists it
+  once.
+- Steer-continued turns: the card is drawn only on the terminal segment (existing rule).
+- History: old turns have no blocks; their card keeps reading `turn_deliverables`.
 
 ## 3. The four places
 
-### 3.1 In the turn (`turnZones.ts` + a `ProductRow`)
+### 3.1 In the turn: a product ends the group
 
-A `turn_product` block becomes a `product` item at its position. When the segment or
-phase that holds it folds, product items are lifted out and drawn after the fold's header,
-in order, so they stay visible: the folded group says how it worked, the rows say what it
-made. A file row is the existing `DocCard` look (badge, name, path, Open); a remote row
-is `tool · action · target` with the URL as a link when present. Tier `know`, tone
-neutral (§3 of `2026-10-25-turn-attention-tiers.md`; no success colour, a product is not
-proof of success).
+`turnZones.ts` turns consecutive `turn_product` blocks into one `products` zone at the
+first level, exactly like v6 §2.3 treats a question or the pipeline divider: the current
+WORKING group ends there, and calls after it start a new group below. Consequences:
 
-Invariants kept: rows arrive in stream order after their call, so the turn only grows
-downward; running calls and thoughts are untouched; the 2 s fold delay and the freeze
-while reading still decide folds; phase and segment levels are unchanged (a product row
-is a sibling of the fold header, not a new level).
+- Nothing moves. The row is appended where the stream is, and the group above it folds by
+  the existing rules (2 s, freeze while reading, the user's own choice).
+- Running calls and thoughts are untouched; they are in a group, the row is after it.
+- Phase and segment levels are unchanged; this adds one zone kind, not a level.
+- A products zone shows one row per product: a file as the existing `DocCard` look (type
+  badge, name, path, Open in Canvas); a remote product as `action · target`, the URL as a
+  link when present. Several files from one call: one row `N files · a.md, b.md`,
+  expanding to one row each (v6 bans `… N more`, not a counted merge).
+- Attention tier `know`, tone neutral (no success colour).
+- A sub-agent's product appears inside the Agents panel, under that agent's line, not as a
+  first-level row (the panel is where the sub-agent's work is).
+
+Spec v6 §2.3 gains "a product" in its list of first-level elements that end a group.
 
 ### 3.2 The output card
 
-Lists the turn's products once: files from `turn_deliverables` (unchanged), remote
-products from the turn's `turn_product` blocks. A product already shown in the turn is
-listed by name with "shown above" and no excerpt, keyed by `absolutePath` (files) or
-`toolUseId` (remote). The card no longer disappears when a turn's products are only
-remote.
+For a turn with `turn_product` blocks, the card's product list is derived from them: each
+file once (by `absolutePath`), each remote product once. A product shown in the turn is
+on the card by name only (no excerpt), so the card stays the one complete list for the
+turn and the in-turn row is where it happened. `turn_changes` (code files) and the landing
+section are unchanged. A turn whose only products are remote now has a card.
+`turn_deliverables` keeps being written for old readers and is read only for turns
+without `turn_product` blocks.
 
-### 3.3 Canvas rail
+### 3.3 Canvas rail: session worktrees
 
-Fixed by the classification change: add `.swarm-ai/session-worktrees` to
-`canvas_noise._SWARM_AUTHOR_FACING`. Its files then pass `canvas_surface` like any repo
-the app does not bind (`external-diff` with a diff base; gitignored → declined). That
-same kind feeds `turn_deliverables`, `session_outputs` and the new `turn_product`.
-`needs_human_review` / `auto_commit` are not touched.
+New `canvas_surface` branch for paths under `<app data>/session-worktrees/<name>/<repo>/`:
+take the tree-relative path, reject any dot segment (the `needs_human_review` rule, same
+function), reject `git check-ignore` hits, otherwise `external-diff` with the existing
+diff base. `canvas_noise` stays as it is except that this root is handed to that branch
+instead of being dropped. `_owning_tree` / `auto_commit` are not widened.
 
-### 3.4 The name opens it (`/workspace/file/resolve` + `MarkdownRenderer`)
+### 3.4 By name
 
-- Resolve takes an optional `session_id`. A new first stage matches the reference against
-  that session's products (`session_outputs.read`, the rail's record, on its
-  `canvas_session` pool): absolute path equal to a row's `absolutePath`, or a relative
-  path that is a whole-segment tail of one. One match opens it; none falls through to
-  today's cascade unchanged; several open the newest `lastAt` (review point, §6).
-  `useCanvasHost` sends the tab's session id. The streaming hot-path caller passes none.
-- The inline file chip uses the markdown link look (`text-primary`, underline), keeps the
-  type badge, title `Open in Canvas`.
-- A remote product is opened by its own `url` link in the row and on the card.
+- `/workspace/file/resolve` takes an optional `session_id`. First stage: match the
+  reference against that session's products (`session_outputs.read`, skipping deleted
+  rows): an absolute path equal to a row's `absolutePath`, or a relative path that is a
+  whole-segment tail of exactly one row. One match opens it. Several: `409` with the
+  candidate paths; the frontend shows a toast naming them. None: today's cascade.
+- `useCanvasHost` sends the tab's session id and stores it on the opened `CanvasFile`, so
+  the following `GET /workspace/file` / preview reads carry it and the existing
+  per-session allowlist applies. `_resolve_file_path` and every PUT path are unchanged.
+- The inline file chip uses the markdown link look, title `Open in Canvas`.
 
-## 4. Known limits (decided, not hidden)
+## 4. Registration checklist for the new block
 
-- **Unrecognised off-machine Bash** (`curl -X POST`, a vendor CLI) is not a product: the
-  command would have to be guessed at. The agent names such results in its answer.
-- **MCP tools with no verb** in the taxonomy fall to `READ` (tool_risk's fail-open rule)
-  and are not products. Checked 2026-10-26: `mcp__builder-mcp__TaskeiCreateTask` and
-  `mcp__builder-mcp__TicketingWriteActions` both classify `READ`, because `_mcp_tokens`
-  splits only on `_` (not CamelCase) and an action-dispatch tool carries its verb in the
-  input's `action`. So creating a Taskei task or a SIM ticket would be missed today, and
-  is also not approval-gated. Fix in the one taxonomy, as its own step (§8 step 3a):
-  split CamelCase tokens, and when the call's `tool_input` has a string `action`, add its
-  tokens (`create-ticket` → `create`, `ticket`). That changes approval prompts too, so it
-  gets its own tests and is listed for review (§6).
-- **The landed commit row** stays as designed in `2026-10-25-turn-attention-tiers.md`
-  step 3 (`turn_changes.landed` + `tool=` in the stamp). It could become a `turn_product`
-  later; not merged here so that design is not reopened.
-- **History**: old turns have no `turn_product` blocks and are not recomputed; their card
-  and rail are as before.
+`context_injector._TOOL_ONLY_TYPES` (resume exclusion); orchestrator carry of listed
+remote candidates; `types/index.ts` interface + `ContentBlock` union; the services
+snake→camel mapper (`tool_use_id`, `parent_tool_use_id`, `absolute_path`); `turnView`
+scan; stream `blockKey`; transcript-feed identity; live/reload signatures and keyed-block
+preservation; `message_search_text` (products indexed by path and target, so recall finds
+"the report I wrote"); fix `TurnDeliverable.kind`, which omits the external kinds.
 
 ## 5. Cost
 
-- File products: one extra dict per product `file_changed`, already on the orchestrator's
-  path after the result. Remote: one `classify()` (pure, name tokens) per finished non-Bash
-  call, one `remote_action()` (shlex) per finished Bash call. No I/O, no pool, nothing per
-  token.
-- Resolve: one small JSON read (≤300 rows) per click, on the `canvas_session` pool.
-- Frontend: product items are a filter over blocks the model already walks.
+All new work runs where the orchestrator already handles a finished call: one dict per
+product, one table lookup per call at `tool_use`, the shared Bash parser per Bash call. No
+I/O, nothing per token, nothing on send. Resolve: one small JSON read per click on the
+`canvas_session` pool.
 
-## 6. Open points for review
+## 6. Acceptance tests (written first, red on today's code)
 
-- Several products matching one relative name: newest `lastAt`, or fall through?
-- Lifting product rows out of a folded group: does any existing zone key or the
-  stream-order / liveReload property depend on the fold body holding every block?
-- MCP `WRITE_LOCAL` counted as remote: any MCP tool in use whose local-write verb really
-  is local-only (and would then show a misleading row)?
-- Step 3a widens which calls ask for approval (a `create-ticket` action would then be
-  `WRITE_LOCAL`, a `send` action `EXTERNAL`). Is that wanted, or should products read the
-  new tokens while approval keeps the old ones?
+1. Session-worktree file → `external-diff`; a tracked `.env`, a `.git/` path and a
+   gitignored file → declined.
+2. Write of a Desktop `.md`, a Knowledge note and a session-worktree doc → one
+   `turn_product` each, after its result; failed write → none; run docs → none.
+3. Listed remote call with a non-error result → block with target and URL when the
+   registered field holds one; error result, unlisted tool, `get_*` → none.
+4. Shared Bash parser: same verdicts as C041's existing tests, plus `git push origin x`
+   and `gh pr create` as products, `echo "git push"` and `gh pr view` not.
+5. Persisted and identical on reload; stream-order and liveReload properties green.
+6. Zones: a product ends the group; the group above folds after 2 s and the product row's
+   DOM node is the same before and after; running rows unchanged; freeze while reading.
+7. Card: each product once; a remote-only turn has a card; a turn without blocks reads
+   `turn_deliverables` as today.
+8. Resolve: one match opens it over a same-named SwarmWS or main file; several → 409; none
+   → cascade; no `session_id` → today's result; an outside-home product readable only
+   with its session id.
+9. Chip: link classes, title, sends the tab's session id.
 
-## 7. Acceptance tests (written first, red on today's code)
+Each fix gets a mutation check.
 
-Backend:
-1. `is_noise_path` False under `~/.swarm-ai/session-worktrees/`, still True for
-   `~/.swarm-ai/logs`, `data.db`.
-2. A Write in a session worktree yields `file_changed(kind=external-diff)`, a
-   `turn_deliverables` row, a `session_outputs` row and a `turn_product(file)` with the
-   call's `toolUseId`; gitignored → none.
-3. A successful `mcp__slack-mcp__post_message` / `mcp__aws-outlook-mcp__email_draft`
-   yields `turn_product(remote)` with target and URL when the outcome has one; an error
-   result, a `get_*`, `Read`, `Agent` yield none.
-4. `remote_action`: `git push origin feat`, `gh pr create ...` yes; `git status`,
-   `echo "git push"`, `gh pr view` no; a failed exit no.
-5. The block is persisted on the row and identical on reload.
-6. Resolve with `session_id`: a relative tail of one product opens it even when SwarmWS
-   or main has the same relative path; a Desktop product opens; no match falls through;
-   without `session_id` exactly today's.
+## 7. Steps (each one commit, ff-merged to local main, not pushed)
 
-Frontend:
-7. A product item appears after its call; when its group folds it stays visible after the
-   header, in order; running rows and thoughts unchanged; stream-order and liveReload
-   properties green.
-8. The card lists each product once, "shown above" for in-turn ones; a turn whose only
-   product is remote still shows the card.
-9. Inline file chip: link classes, `title="Open in Canvas"`, sends the tab's session id.
+1. Canvas classifier for session worktrees (tests 1).
+2. Resolve + chip (tests 8-9).
+3. `turn_product` record: files, `REMOTE_PRODUCTS`, shared Bash parser, registration
+   (tests 2-5).
+4. Products zone + derived card (tests 6-7); stop for Gawan's light/dark check.
+5. Spec v6 §2.3 / §8 and the attention-tiers doc.
 
-Each fix gets a mutation check (revert it, its test goes red).
+## 8. Decisions for Gawan
 
-## 8. Steps (each one commit, ff-merged to local main, not pushed)
-
-1. Classification (`canvas_noise`) + tests 1-2 (rail and card fixed for worktree files).
-2. Resolve + link look + tests 6, 9.
-3. `turn_product` block (file + remote, `remote_action`) + tests 2-5.
-3a. `tool_risk` tokens: CamelCase + `tool_input.action` + tests (product and approval).
-4. In-turn rows and card listing + tests 7-8; stop for Gawan's light/dark check.
-5. Update spec v6 (§2.3 product rows, §8 card) and the attention-tiers doc.
+- Code files in repos stay on the card and the landing row only, not as in-turn product
+  rows, so a coding turn is not a list of every edited file. Documents in a repo
+  (`docs/design/*.md`) are `source` today and also get no in-turn row; only the session
+  worktree case, as `external-diff`, does. Should repo documents get rows too? That needs
+  a rule for which repo files are documents (by extension: `.md .docx .pptx .pdf .html`).
+- `REMOTE_PRODUCTS` starts with the tools in daily use (Slack, Outlook, Taskei, SIM-T,
+  GitHub via `gh`); anything else is left off until added.
