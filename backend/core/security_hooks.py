@@ -436,49 +436,15 @@ def _is_irreversible_external_op(command: str) -> bool:
     # a fix-induced bypass — PIT56). Normalize raw newlines to `;` separators
     # BEFORE tokenizing. A newline inside a quoted message is rare and at worst
     # splits the (benign) message into two non-destructive segments.
-    try:
-        all_tokens = shlex.split(command.replace("\n", " ; ").replace("\r", " ; "))
-    except ValueError:
+    from core.shell_segments import split_segments
+    segments = split_segments(command)
+    if segments is None:
         # Unparseable input cannot be tokenized for precise judgment. Fail
         # closed ONLY when a destructive signature is literally visible in the
         # raw text — not on the bare presence of "git"/"gh" (PIT: an apostrophe
         # in a comment, `Find ws_path's git repo`, made shlex choke and flagged
         # a read-only `git log`).
         return bool(_IRREVERSIBLE_FALLBACK_RE.search(command))
-    if not all_tokens:
-        return False
-    # Re-split any token that carries a glued ';' (e.g. 'status;') into the word
-    # and a standalone ';' separator. shlex already stripped quotes, so a ';'
-    # surviving in a token is a real shell separator, not message text.
-    _resplit: list[str] = []
-    for tok in all_tokens:
-        if ";" in tok and tok != ";":
-            parts = tok.split(";")
-            for idx, p in enumerate(parts):
-                if p:
-                    _resplit.append(p)
-                if idx < len(parts) - 1:
-                    _resplit.append(";")
-        else:
-            _resplit.append(tok)
-    all_tokens = _resplit
-
-    # Split into segments on shell separators so a destructive op chained after
-    # a benign command (`git status && git push -f`, `x; gh repo delete y`) is
-    # evaluated on its own. shlex keeps `;`/`&&`/`|` as standalone tokens.
-    _SEPARATORS = {";", "&&", "||", "|", "&"}
-    segments: list[list[str]] = []
-    current: list[str] = []
-    for tok in all_tokens:
-        if tok in _SEPARATORS:
-            if current:
-                segments.append(current)
-            current = []
-        else:
-            current.append(tok)
-    if current:
-        segments.append(current)
-
     return any(_segment_is_irreversible(seg) for seg in segments)
 
 
@@ -487,17 +453,8 @@ def _segment_is_irreversible(tokens: list[str]) -> bool:
     # Strip leading env-assignments (NAME=val) and benign wrapper words so the
     # real command word is found: `GH_TOKEN=x gh repo delete`, `sudo gh …`,
     # `env A=b git push -f`, `command git push -f`.
-    _WRAPPERS = {"sudo", "env", "command", "nice", "nohup", "time"}
-    i = 0
-    while i < len(tokens):
-        t = tokens[i]
-        if "=" in t and t.split("=", 1)[0].replace("_", "").isalnum() and not t.startswith("-"):
-            i += 1  # env assignment NAME=value
-        elif t in _WRAPPERS:
-            i += 1
-        else:
-            break
-    tokens = tokens[i:]
+    from core.shell_segments import command_tokens, git_subcommand_index
+    tokens = command_tokens(tokens)
     if not tokens:
         return False
 
@@ -544,17 +501,7 @@ def _segment_is_irreversible(tokens: list[str]) -> bool:
     # ── git family ── (handle global options that precede the subcommand:
     # `git -C path push -f`, `git --git-dir=… push -f`, `git -c k=v push -f`)
     if tokens[0] == "git":
-        k = 1
-        while k < len(tokens):
-            t = tokens[k]
-            if t in ("-C", "-c", "--namespace"):
-                k += 2  # option that consumes a value
-            elif t.startswith(("--git-dir", "--work-tree", "--namespace=", "-C", "-c")):
-                k += 1  # =form, self-contained
-            elif t.startswith("-"):
-                k += 1  # any other global flag
-            else:
-                break  # the subcommand
+        k = git_subcommand_index(tokens)
         if k >= len(tokens) or tokens[k] != "push":
             return False
         args = tokens[k + 1:]
