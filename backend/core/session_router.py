@@ -4186,7 +4186,9 @@ class SessionRouter:
         try:
             from .app_config_manager import AppConfigManager
             return AppConfigManager.instance().get(cls.STEER_SETTING, False) is True
-        except Exception:  # noqa: BLE001 — no config: off
+        except Exception as e:  # noqa: BLE001 — no config: off
+            # debug, not warning: this runs on every busy send and state publish
+            logger.debug("steer setting unreadable, steer off: %s", e)
             return False
 
     def _steer_blocker(self, unit: Any) -> Optional[str]:
