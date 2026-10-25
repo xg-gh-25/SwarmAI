@@ -1,6 +1,6 @@
 ---
 title: Memory files are changed whole entries at a time, never lines
-status: draft v4 (2026-10-25; v1/v2 needs-redesign → v3 deleted write-time dedup; v3 review kept the direction and asked for four invariants, folded in here)
+status: implemented v4 (2026-10-25; v1/v2 needs-redesign → v3 deleted write-time dedup; v3 review kept the direction and asked for four invariants, folded in here; §8 lists where the build differs)
 date: 2026-10-25
 created: 2026-10-25
 updated: 2026-10-25
@@ -213,3 +213,24 @@ Each fix is mutation-checked: revert that fix, its named test goes red.
   `tests/test_runtime_hooks.py` AC4, `tests/test_memory_hardening.py` ~385-418 →
   replaced by §6.
 - `reclaim_duplicate_entries` `_dedup_protected`: drop the type protection (keep COE).
+
+## 8. As built (differences from the text above)
+
+- §3.5's `locked_section_transform` was not added as a second facade. Instead
+  `locked_read_modify_write` accepts `text` as a callable `build(content) -> str`,
+  called once with the content read under the lock; its result passes the same
+  MemoryGuard + MEMORY validation as a string, and an empty result is a no-op (except
+  in replace mode). One write door, not two. COE uses it with `mode="replace"` on the
+  COE section; C/K blocks with `mode="prepend"`.
+- §3.6's helper is `core.ddd_entry_lifecycle.canonical_entry_from_text`; the
+  Save-to-Memory type comes from `MEMORY_SECTIONS[section]["type"]`.
+- §3.1 also makes the continuation scan in `parse_entries` and both strip helpers stop
+  at any markdown heading (`#`..`######`). Before, a `### …` line after an entry was
+  read as its continuation and stripped with it.
+- The EVOLUTION branch passes `skip_h3_spans=True` to its decay `parse_entries` as well
+  as to both reclaim calls. The decay one is not observable by a test today (every
+  EVOLUTION section is evergreen, so decay never transitions); it keeps the three
+  steps reading the same entries.
+- The archive still stores `raw_text` (lead + continuation). A swept duplicate's
+  `Detail:` / `valid_from` tail (provenance only) is not copied to the archive.
+
