@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "id": "pollinate",
+  "version": "1.0.0",
+  "displayName": "Pollinate",
+  "description": "Turn one message into a publishable media package.",
+  "instanceMode": "singleton",
+  "brainInterface": null,
+  "resources": [
+    {
+      "id": "skill:s_pollinate",
+      "type": "skill",
+      "source": "backend/skills/s_pollinate",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "builtin:skill:s_pollinate",
+          "profiles": {
+            "desktop-daemon": {
+              "supported": true,
+              "requires": ["agent-skills", "chat-launcher", "local-filesystem"]
+            },
+            "desktop-subprocess": {
+              "supported": true,
+              "requires": ["agent-skills", "chat-launcher", "local-filesystem"]
+            },
+            "hive": {
+              "supported": true,
+              "requires": ["agent-skills", "chat-launcher", "linux-arm64", "remote-filesystem"]
+            }
+          }
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "backend:api",
+      "type": "backend",
+      "source": "backend/routers/pollinate.py",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "builtin:router:pollinate",
+          "profiles": {
+            "desktop-daemon": {
+              "supported": true,
+              "requires": ["in-process-backend", "workspace-files"]
+            },
+            "desktop-subprocess": {
+              "supported": true,
+              "requires": ["in-process-backend", "workspace-files"]
+            },
+            "hive": {
+              "supported": true,
+              "requires": ["in-process-backend", "workspace-files"]
+            }
+          }
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "surface:gallery",
+      "type": "surface",
+      "source": "desktop/src/components/layout/PollinateOverlay.tsx",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "builtin:surface:pollinate",
+          "profiles": {
+            "desktop-daemon": {
+              "supported": true,
+              "requires": ["api-client", "tauri-ui"]
+            },
+            "desktop-subprocess": {
+              "supported": true,
+              "requires": ["api-client", "tauri-ui"]
+            },
+            "hive": {
+              "supported": true,
+              "requires": ["same-origin-api", "web-ui"]
+            }
+          }
+        },
+        "kirocrew": {
+          "mode": "unsupported",
+          "required": false,
+          "omission": "P1 capability package has no Pollinate gallery"
+        }
+      },
+      "fixtures": []
+    },
+    {
+      "id": "host-binding:frontend-client",
+      "type": "host-binding",
+      "source": "desktop/src/services/pollinate.ts",
+      "required": true,
+      "permissions": [],
+      "targets": {
+        "swarmai": {
+          "binding": "builtin:client:pollinate",
+          "profiles": {
+            "desktop-daemon": {"supported": true, "requires": ["api-client"]},
+            "desktop-subprocess": {"supported": true, "requires": ["api-client"]},
+            "hive": {"supported": true, "requires": ["same-origin-api"]}
+          }
+        }
+      },
+      "fixtures": []
+    }
+  ],
+  "dependencies": [
+    {"resource": "core:surface:canvas", "version": "1", "required": true},
+    {"resource": "core:service:workspace-files", "version": "1", "required": true},
+    {"resource": "core:service:product-registry", "version": "1", "required": true}
+  ],
+  "permissionTemplates": {
+    "default": {
+      "files": {
+        "read": ["Knowledge/Pollinate/**"],
+        "write": ["Knowledge/Pollinate/**"]
+      },
+      "network": [],
+      "secrets": [],
+      "externalActions": []
+    }
+  },
+  "distribution": {
+    "targets": [],
+    "visibility": "internal"
+  }
+}

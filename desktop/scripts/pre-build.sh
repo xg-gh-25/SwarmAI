@@ -18,3 +18,26 @@ fi
 # Build frontend (Vite)
 cd "$(dirname "$SCRIPT_DIR")"
 npm run build
+
+
+# App Platform Phase A: bind the canonical App/binding identity to the exact
+# staged backend/resources AND compiled frontend. This runs after Vite and before
+# Tauri bundles the resource, so source metadata cannot stand in for built bytes.
+REPO_ROOT="$(dirname "$PROJECT_ROOT")"
+STAGE_DIR="$PROJECT_ROOT/src-tauri/bundle-backend"
+INSTALL_MANIFEST="$STAGE_DIR/install-manifest.json"
+[ -f "$INSTALL_MANIFEST" ] || { echo "ERROR: backend install manifest missing; run the backend build first" >&2; exit 1; }
+TARGET="$(node -e 'const fs=require("fs"); console.log(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).target)' "$INSTALL_MANIFEST")"
+case "$TARGET" in
+  *-apple-darwin) APP_PROFILE="desktop-daemon" ;;
+  *) APP_PROFILE="desktop-subprocess" ;;
+esac
+PY=python3; python3 -c '' >/dev/null 2>&1 || PY=python
+"$PY" "$REPO_ROOT/backend/scripts/generate_app_execution_releases.py" \
+  --apps-index "$REPO_ROOT/backend/generated/apps_index.json" \
+  --install-manifest "$INSTALL_MANIFEST" \
+  --profile "$APP_PROFILE" \
+  --frontend-dir "$PROJECT_ROOT/dist" \
+  --dependency-lock "$REPO_ROOT/backend/uv.lock" \
+  --dependency-lock "$PROJECT_ROOT/package-lock.json" \
+  --output "$STAGE_DIR/app-execution-releases.json"

@@ -26,6 +26,8 @@
 #   C13 macOS: the app's own signature is intact (a broken one makes macOS call the app "damaged")
 #   C14 the bundled Python runs skills: `py -c` imports the standard library and every skill's
 #       python-deps, and `py <skill script>` runs a real skill script (S3c)
+#   C15 App execution attestation exists, matches installed backend/resource bytes, and is
+#       internally consistent; frontend hashes are retained pre-bundle measurements
 # Checks still to add: onboarding reachable, MCP tools, update + rollback;
 # C7 should call the app's own deploy code instead of mirroring it.
 #
@@ -524,6 +526,33 @@ if [ "$DEPLOYED" = 1 ]; then
     fi
 else
     result SKIP C14 "nothing deployed"
+fi
+
+# ---------------------------------------------------------------------------
+# C15: Host Execution Release attestation binds the App source/index to these
+# exact installed backend/resource bytes and validates every retained identity digest.
+# The frontend rows are measurements of Vite output made before Tauri embeds it; C15
+# cannot independently enumerate those bytes from the installed executable. Clean-room
+# product proof must additionally verify packaged UI behavior.
+# ---------------------------------------------------------------------------
+ATTEST="${RES:+$RES/app-execution-releases.json}"
+ATTEST_LABEL="$LABEL.app-attestation"
+if [ "$DEPLOYED" = 1 ] && [ -f "$MANIFEST" ] && [ -f "$ATTEST" ]; then
+    ATTEST_OUT="$WORK/app-attestation.out"
+    start_job "$ATTEST_LABEL" "$ATTEST_OUT" "$RT/python-backend$EXE_SUFFIX" py -c \
+        "import json,sys; from scripts.generate_app_execution_releases import verify_attestation; m=json.load(open(sys.argv[1],encoding='utf-8')); a=json.load(open(sys.argv[2],encoding='utf-8')); verify_attestation(m,a); print('app-attestation-ok')" \
+        "$MANIFEST" "$ATTEST" >/dev/null 2>&1
+    code=""
+    for _ in $(seq 1 30); do code="$(job_exit_code "$ATTEST_LABEL")"; [ -n "$code" ] && break; sleep 1; done
+    if [ "$code" = 0 ] && grep -q app-attestation-ok "$ATTEST_OUT"; then
+        result PASS C15 "App attestation matches installed backend/resources; retained identities are consistent"
+    else
+        result FAIL C15 "App execution attestation mismatch (exit ${code:-timeout}): $(tail -1 "$ATTEST_OUT" 2>/dev/null | cut -c1-160)"
+    fi
+elif [ -n "$RES" ]; then
+    result FAIL C15 "app-execution-releases.json or install-manifest.json is missing"
+else
+    result SKIP C15 "nothing installed to inspect"
 fi
 
 # ---------------------------------------------------------------------------

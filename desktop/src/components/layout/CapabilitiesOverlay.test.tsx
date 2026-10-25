@@ -13,6 +13,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import { groupSkills, orderedCategories, mostUsed, byFrequencyThenName, CapabilitiesContent } from './CapabilitiesOverlay';
 import type { Skill, SkillHealthMap, ExpertsByDomain } from '../../types';
+import type { AppsCatalog } from '../../services/apps';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
 import { render as __render } from '@testing-library/react';
 // The overlay reads its data through TanStack Query (overlayQueries): a fresh client
@@ -43,6 +44,19 @@ vi.mock('../../services/skills', () => ({
 vi.mock('../../services/experts', () => ({
   expertsService: { list: () => listExperts() },
 }));
+const listApps = vi.fn<() => Promise<AppsCatalog>>(() => Promise.resolve({
+  schemaVersion: 1,
+  hostContractVersion: '1',
+  currentProfile: 'desktop-daemon',
+  apps: [],
+}));
+vi.mock('../../services/apps', () => ({
+  appsService: { list: () => listApps() },
+}));
+vi.mock('../../generated/appBindings', () => ({
+  BUILTIN_APP_BINDING_DIGEST: 'b'.repeat(64),
+  BUILTIN_APP_SURFACE_IMPORTS: {},
+}));
 const listAllMcp = vi.fn(() => Promise.resolve([]));
 vi.mock('../../services/mcpConfig', () => ({
   mcpConfigService: {
@@ -54,6 +68,11 @@ vi.mock('../../services/mcpConfig', () => ({
 vi.mock('../../services/api', () => ({
   classifyLoadError: (_e: unknown, ctx: string) => `${ctx} failed`,
 }));
+
+function renderSkills(): void {
+  renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+  fireEvent.click(screen.getByTestId('cap-view-skills'));
+}
 
 function skill(partial: Partial<Skill> & { folderName: string }): Skill {
   return {
@@ -146,6 +165,58 @@ describe('groupSkills — fail-safe (§5)', () => {
   });
 });
 
+describe('CapabilitiesContent — Apps catalog-only default (Phase A)', () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    listApps.mockReset();
+    listApps.mockResolvedValue({
+      schemaVersion: 1, hostContractVersion: '1', currentProfile: 'desktop-daemon', apps: [],
+    });
+  });
+
+  it('opens on Apps and renders Pollinate without lifecycle controls', async () => {
+    listApps.mockResolvedValue({
+      schemaVersion: 1,
+      hostContractVersion: '1',
+      currentProfile: 'desktop-daemon',
+      apps: [{
+        appId: 'pollinate', displayName: 'Pollinate', description: 'Media package',
+        version: '1.0.0', instanceMode: 'singleton', sourceTier: 'built-in',
+        evidenceState: 'catalog-only', lifecycleControls: [],
+        packageReleaseDigest: 'a'.repeat(64), executionReleaseDigest: null,
+        bindingMapDigest: 'b'.repeat(64), proofBlockers: ['proof-not-run'],
+        profileAccounting: [{ profile: 'desktop-daemon', contractVersion: '1',
+          capabilityDigest: 'c'.repeat(64), supported: true, blockedResources: [] }],
+        resourceCount: 4,
+      }],
+    });
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    const card = await screen.findByTestId('cap-app-pollinate');
+    expect(screen.getByTestId('cap-view-apps').getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('cap-app-state-pollinate').textContent).toContain('catalog-only');
+    expect(screen.getByTestId('cap-app-profile-pollinate').textContent).toContain('compatible');
+    expect(card.querySelector('button')).toBeNull();
+    expect(listSkills).not.toHaveBeenCalled();
+  });
+
+  it('blocks compatibility when API and compiled binding digests differ', async () => {
+    listApps.mockResolvedValue({
+      schemaVersion: 1, hostContractVersion: '1', currentProfile: 'desktop-daemon',
+      apps: [{
+        appId: 'pollinate', displayName: 'Pollinate', description: 'Media', version: '1.0.0',
+        instanceMode: 'singleton', sourceTier: 'built-in', evidenceState: 'catalog-only',
+        lifecycleControls: [], packageReleaseDigest: 'a'.repeat(64), executionReleaseDigest: null,
+        bindingMapDigest: 'x'.repeat(64), proofBlockers: ['proof-not-run'], resourceCount: 4,
+        profileAccounting: [{ profile: 'desktop-daemon', contractVersion: '1',
+          capabilityDigest: 'c'.repeat(64), supported: true, blockedResources: [] }],
+      }],
+    });
+    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    expect(await screen.findByTestId('cap-app-profile-pollinate')).toHaveTextContent('compiled bindings mismatch');
+  });
+});
+
 describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (run_a85e6641)', () => {
   afterEach(() => {
     cleanup();
@@ -160,7 +231,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
   it('a failed skills load shows the error with a Retry that fetches again (OverlayState)', async () => {
     listSkills.mockRejectedValueOnce(new Error('down')).mockResolvedValue(twoSkills);
     getHealth.mockResolvedValue({});
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     expect(await screen.findByTestId('cap-error')).toHaveTextContent('Capabilities failed');
     fireEvent.click(screen.getByTestId('cap-retry'));
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
@@ -177,7 +248,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     };
     getHealth.mockResolvedValue(health);
 
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
 
     // Card renders first (from list()), independent of health.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
@@ -192,7 +263,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockRejectedValue(new Error('network down'));
 
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
 
     // The skill cards are fully usable even though health failed.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
@@ -208,7 +279,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
   it('first-run: empty health map ({}) → cards render, NO grey wall of "loading" lines', async () => {
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockResolvedValue({} as SkillHealthMap); // backend empty-table guard returns {}
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
     await waitFor(() => expect(getHealth).toHaveBeenCalled());
     // Settled-empty → no health lines at all (not a wall of perpetual loaders).
@@ -219,7 +290,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
   it('renders a faint tier marker per row (always/lazy)', async () => {
     listSkills.mockResolvedValue(twoSkills);
     getHealth.mockResolvedValue({});
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     await waitFor(() => expect(screen.getByTestId('cap-tier-s_deep-research')).toBeTruthy());
     expect(screen.getByTestId('cap-tier-s_deep-research').getAttribute('data-tier')).toBe('always');
     expect(screen.getByTestId('cap-tier-s_narrative-writing').getAttribute('data-tier')).toBe('lazy');
@@ -231,7 +302,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
       's_deep-research': h('healthy', 12, 0.92, '2026-08-06'),
       's_narrative-writing': h('never_used', null),
     } as SkillHealthMap);
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     // The health line is ON the card (not a drawer) and carries success% + last-used.
     await waitFor(() => {
       const line = screen.getByTestId('cap-healthline-s_deep-research');
@@ -248,7 +319,7 @@ describe('CapabilitiesContent — health dot (lazy + fail-safe) + tier marker (r
     listSkills.mockResolvedValue(twoSkills);
     let resolveHealth: (v: SkillHealthMap) => void = () => {};
     getHealth.mockReturnValue(new Promise<SkillHealthMap>((r) => { resolveHealth = r; }));
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     // Card is present before health resolves.
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
     // Health line not yet populated (lazy) — placeholder present, no % yet.
@@ -275,7 +346,7 @@ describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5
       's_summarize': h('healthy', 20, 0.8, '2026-08-05'),
       's_narrative-writing': h('never_used', null),
     } as SkillHealthMap);
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     await waitFor(() => expect(screen.getByTestId('cap-most-used')).toBeTruthy());
     // Most-used strip contains the high-frequency skills (never_used excluded).
     const strip = screen.getByTestId('cap-most-used');
@@ -285,7 +356,7 @@ describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5
   it('AC5 fail-safe: strip ABSENT before health settles + when health empty', async () => {
     listSkills.mockResolvedValue(threeSkills);
     getHealth.mockResolvedValue({} as SkillHealthMap);
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     await waitFor(() => expect(screen.getByTestId('cap-skill-s_deep-research')).toBeTruthy());
     await waitFor(() => expect(getHealth).toHaveBeenCalled());
     // Empty health → no strip (no flash of mis-ranked/dead skills), list still renders.
@@ -296,7 +367,7 @@ describe('CapabilitiesContent — Most-Used strip + noise reduction (AC2/AC4/AC5
   it('AC4: per-group count header removed (no bare number beside the category name)', async () => {
     listSkills.mockResolvedValue(threeSkills);
     getHealth.mockResolvedValue({} as SkillHealthMap);
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     await waitFor(() => expect(screen.getByTestId('cap-group-Research')).toBeTruthy());
     // The group header is just the category name — no count span. The old markup put a
     // bare "{list.length}" beside it; assert no lone digit text node in the header.
@@ -379,7 +450,7 @@ describe('CapabilitiesContent — Connections registry honesty (run_3989a574)', 
     listSkills.mockResolvedValue([]);
     getHealth.mockResolvedValue({} as SkillHealthMap);
     listAllMcp.mockReturnValue(Promise.resolve(mcps));
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     await waitFor(() => expect(screen.getByTestId('cap-view-connections')).toBeTruthy());
     fireEvent.click(screen.getByTestId('cap-view-connections'));
     await waitFor(() => expect(screen.getByTestId('cap-connections-view')).toBeTruthy());
@@ -431,7 +502,7 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
     listSkills.mockResolvedValue([]);
     getHealth.mockResolvedValue({});
     listExperts.mockResolvedValue(grouped);
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     fireEvent.click(screen.getByTestId('cap-view-experts'));
     await waitFor(() => expect(screen.getByTestId('cap-expert-group-code')).toBeTruthy());
     const card = screen.getByTestId('cap-expert-correctness');
@@ -446,7 +517,7 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
         { expertId: 'bad', displayNameZh: '坏', displayNameEn: 'Bad', domain: 'code', scope: 's', visibility: 'public', isValid: false },
       ],
     });
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     fireEvent.click(screen.getByTestId('cap-view-experts'));
     await waitFor(() => expect(screen.getByTestId('cap-expert-health-good')).toBeTruthy());
     expect(screen.getByTestId('cap-expert-health-good').getAttribute('data-valid')).toBe('true');
@@ -459,7 +530,7 @@ describe('CapabilitiesContent — Experts view (R2)', () => {
     listSkills.mockResolvedValue([]);
     getHealth.mockResolvedValue({});
     listExperts.mockRejectedValue(new Error('network down'));
-    renderQ(<CapabilitiesContent onDispatch={() => true} close={() => {}} />);
+    renderSkills();
     fireEvent.click(screen.getByTestId('cap-view-experts'));
     await waitFor(() => expect(screen.getByTestId('cap-experts-empty')).toBeTruthy());
   });

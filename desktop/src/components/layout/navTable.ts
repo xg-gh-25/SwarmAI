@@ -64,7 +64,7 @@ export const NAV: Record<OverlayId, NavEntry> = {
   community: { zone: 'work', navLabel: 'Community', mode: 'COMMUNITY', width: 'xl' },
   // System zone
   jobs: { zone: 'system', navLabel: 'Jobs & Runs', mode: 'JOBS', width: 'xl' },
-  capabilities: { zone: 'system', navLabel: 'Capabilities', subtitle: 'What your AI can do', mode: 'CAPABILITIES', width: 'xl' },
+  capabilities: { zone: 'system', navLabel: 'Apps & Capabilities', subtitle: 'Products and abilities', mode: 'CAPABILITIES', width: 'xl' },
   hive: { zone: 'system', navLabel: 'Hive', subtitle: 'Fleet', mode: 'HIVE', width: 'xl' },
   eval: { zone: 'system', navLabel: 'OS Eval', mode: 'EVAL', width: 'xl' },
   settings: { zone: 'system', navLabel: 'Settings', mode: 'SETTINGS', width: 'xl' },

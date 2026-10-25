@@ -4,7 +4,8 @@
       "../resources/*": "./",
       "../resources/daemon/*": "daemon/",
       "bundle-backend/python-backend": "python-backend/",
-      "bundle-backend/install-manifest.json": "install-manifest.json"
+      "bundle-backend/install-manifest.json": "install-manifest.json",
+      "bundle-backend/app-execution-releases.json": "app-execution-releases.json"
     },
     "macOS": {
       "signingIdentity": "-"

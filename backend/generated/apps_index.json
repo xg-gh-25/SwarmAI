@@ -1,0 +1,164 @@
+{
+  "apps": [
+    {
+      "app_id": "pollinate",
+      "binding_map_digest": "00a5415e8e957354cbb993fba47c24556fadc941f5706a90679cedc2eb06cab3",
+      "dependencies": [
+        {
+          "required": true,
+          "resource": "core:surface:canvas",
+          "version": "1"
+        },
+        {
+          "required": true,
+          "resource": "core:service:workspace-files",
+          "version": "1"
+        },
+        {
+          "required": true,
+          "resource": "core:service:product-registry",
+          "version": "1"
+        }
+      ],
+      "description": "Turn one message into a publishable media package.",
+      "display_name": "Pollinate",
+      "evidence_state": "catalog-only",
+      "execution_release_digest": null,
+      "instance_mode": "singleton",
+      "lifecycle_controls": [],
+      "package_release_digest": "ee8584f57ce7ad6e59c0fed4d83dfaf1801b7965b6731d9121287e17f2e3f6eb",
+      "profile_accounting": [
+        {
+          "blocked_resources": [],
+          "capability_digest": "a928fdecb40aaff0f0ed70dfabf640b67d6b26534c0e5dea9212465c98806539",
+          "contract_version": "1",
+          "profile": "desktop-daemon",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_pollinate",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "backend:api",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "surface:gallery",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "host-binding:frontend-client",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "a928fdecb40aaff0f0ed70dfabf640b67d6b26534c0e5dea9212465c98806539",
+          "contract_version": "1",
+          "profile": "desktop-subprocess",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_pollinate",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "backend:api",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "surface:gallery",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "host-binding:frontend-client",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        },
+        {
+          "blocked_resources": [],
+          "capability_digest": "e1ebf8d24a406d29f0883af450d6b7deb472bc8319ef2296f73567d8c995454d",
+          "contract_version": "1",
+          "profile": "hive",
+          "resources": [
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "skill:s_pollinate",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "backend:api",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "surface:gallery",
+              "status": "mapped"
+            },
+            {
+              "missing_capabilities": [],
+              "reason": null,
+              "resource_id": "host-binding:frontend-client",
+              "status": "mapped"
+            }
+          ],
+          "supported": true
+        }
+      ],
+      "proof_blockers": [
+        "host-build-attestation-missing",
+        "proof-not-run"
+      ],
+      "resources": [
+        {
+          "required": true,
+          "resource_id": "skill:s_pollinate",
+          "resource_type": "skill"
+        },
+        {
+          "required": true,
+          "resource_id": "backend:api",
+          "resource_type": "backend"
+        },
+        {
+          "required": true,
+          "resource_id": "surface:gallery",
+          "resource_type": "surface"
+        },
+        {
+          "required": true,
+          "resource_id": "host-binding:frontend-client",
+          "resource_type": "host-binding"
+        }
+      ],
+      "source_tier": "built-in",
+      "version": "1.0.0"
+    }
+  ],
+  "binding_map_digest": "00a5415e8e957354cbb993fba47c24556fadc941f5706a90679cedc2eb06cab3",
+  "host_contract_version": "1",
+  "schema_version": 1
+}

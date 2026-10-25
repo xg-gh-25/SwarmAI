@@ -5,7 +5,9 @@
  * agent-openable via UI_COMMAND_ALLOWLIST — payload-less show-only). Promotes
  * Capabilities from a Settings tab to a first-class user-facing domain (run_b5d98151).
  *
- * Two views inside the host frame (Skills | Connections):
+ * Four views inside the host frame (Apps | Skills | Experts | Connections):
+ *   • APPS        — the immutable App Registry projection. Phase A shows Pollinate
+ *                   as catalog-only with profile accounting and no lifecycle controls.
  *   • SKILLS      — abilities browsed by CURATED CATEGORY, with the signature skills
  *                   (pipeline, pollinate) as hero cards. Rows are plain-language
  *                   (icon + name + one-line description) — NO version/tier/folderName
@@ -55,7 +57,10 @@ import { OverlayError } from './OverlayState';
 import { mcpConfigService, type ConfigEntry } from '../../services/mcpConfig';
 import { classifyLoadError } from '../../services/api';
 import type { Skill, SkillHealthMap, SkillHealthStatus, ExpertsByDomain } from '../../types';
+import type { AppCatalogEntry } from '../../services/apps';
+import { BUILTIN_APP_BINDING_DIGEST } from '../../generated/appBindings';
 import { WorkbenchToolbar, OverlayDrawer } from './overlayShell';
+import { Hint, Segmented, StatusBadge } from '../overlay';
 
 /** Health dot presentation — the ONE scannable standout (Von Restorff). Qualitative only;
  *  no raw counts on the row (R30#4). Keyed by the qualitative status the backend folds. */
@@ -104,7 +109,7 @@ export interface CapabilitiesContentProps {
   close: () => void;
 }
 
-type ViewMode = 'skills' | 'connections' | 'experts';
+type ViewMode = 'apps' | 'skills' | 'experts' | 'connections';
 
 /** The two signature abilities — rendered as heroes, the ONE thing that stands out.
  *  Keys are the exact folder_name (hyphenated, s_ prefix) — matched by `in SIGNATURE`. */
@@ -180,13 +185,14 @@ export function groupSkills(skills: Skill[]): { heroes: Skill[]; groups: [string
 }
 
 // stable empties: a fresh [] / {} per render would re-run every memo below
+const EMPTY_APPS: AppCatalogEntry[] = [];
 const EMPTY_SKILLS: Skill[] = [];
 const EMPTY_MCPS: ConfigEntry[] = [];
 const EMPTY_HEALTH: SkillHealthMap = {};
 const EMPTY_EXPERTS: ExpertsByDomain = {};
 
 export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentProps) {
-  const [view, setView] = useState<ViewMode>('skills');
+  const [view, setView] = useState<ViewMode>('apps');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Skill | null>(null);
   // Skills + MCPs, health and experts through the shared overlay queries
@@ -195,22 +201,36 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
   // their failure never blocks or crashes the list; `*Settled` distinguishes "not
   // fetched yet" (a loading placeholder) from "fetched — empty or failed" (nothing).
   const qc = useQueryClient();
-  const mainQ = useQuery(overlayQuery.capabilities());
+  const appsQ = useQuery(overlayQuery.capabilitiesApps());
+  const apps: AppCatalogEntry[] = appsQ.data?.apps ?? EMPTY_APPS;
+  const currentProfile = appsQ.data?.currentProfile;
+  const mainQ = useQuery({
+    ...overlayQuery.capabilities(),
+    enabled: view === 'skills' || view === 'connections',
+  });
   const skills: Skill[] = mainQ.data?.skills ?? EMPTY_SKILLS;
   const mcps: ConfigEntry[] = mainQ.data?.mcps ?? EMPTY_MCPS;
-  const loading = mainQ.isFetching;
-  const error = mainQ.isError && !mainQ.data ? classifyLoadError(mainQ.error, 'Capabilities') : null;
   const setMcps = useCallback((f: (prev: ConfigEntry[]) => ConfigEntry[]) => {
     qc.setQueryData(overlayQuery.capabilities().queryKey,
       (d: { skills: Skill[]; mcps: ConfigEntry[] } | undefined) => d && { ...d, mcps: f(d.mcps) });
   }, [qc]);
   const load = useCallback(() => invalidateOverlay(qc, 'capabilities'), [qc]);
-  const healthQ = useQuery(overlayQuery.capabilitiesHealth());
+  const healthQ = useQuery({ ...overlayQuery.capabilitiesHealth(), enabled: view === 'skills' });
   const health: SkillHealthMap = healthQ.data ?? EMPTY_HEALTH;
   const healthSettled = !healthQ.isPending;
-  const expertsQ = useQuery(overlayQuery.capabilitiesExperts());
+  const expertsQ = useQuery({ ...overlayQuery.capabilitiesExperts(), enabled: view === 'experts' });
   const experts: ExpertsByDomain = expertsQ.data ?? EMPTY_EXPERTS;
   const expertsSettled = !expertsQ.isPending;
+  const loading = view === 'apps'
+    ? appsQ.isFetching
+    : view === 'experts'
+      ? expertsQ.isFetching
+      : mainQ.isFetching;
+  const error = view === 'apps'
+    ? (appsQ.isError && !appsQ.data ? classifyLoadError(appsQ.error, 'Apps') : null)
+    : view === 'skills' || view === 'connections'
+      ? (mainQ.isError && !mainQ.data ? classifyLoadError(mainQ.error, 'Capabilities') : null)
+      : null;
 
   // The full health LINE shown ON each card by default (lazy: renders once health resolves;
   // absent health → a muted placeholder so the card layout never jumps). Format:
@@ -350,25 +370,16 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
         testid="capabilities-toolbar"
         loading={loading}
         left={
-          <div className="flex items-center gap-1 rounded-lg border border-[var(--color-border)] p-0.5">
-            {(['skills', 'experts', 'connections'] as ViewMode[]).map((v) => (
-              <button
-                key={v}
-                role="radio"
-                aria-checked={view === v}
-                data-testid={`cap-view-${v}`}
-                onClick={() => setView(v)}
-                className={
-                  'px-3 py-1 text-body rounded-md ' +
-                  (view === v
-                    ? 'bg-[color-mix(in_srgb,var(--color-primary)_15%,transparent)] text-[var(--color-primary)] font-semibold '
-                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)]')
-                }
-              >
-                {v === 'skills' ? 'Skills' : v === 'experts' ? 'Experts' : 'Connections'}
-              </button>
-            ))}
-          </div>
+          <Segmented
+            value={view}
+            onChange={setView}
+            options={[
+              { key: 'apps', label: 'Apps', testid: 'cap-view-apps' },
+              { key: 'skills', label: 'Skills', testid: 'cap-view-skills' },
+              { key: 'experts', label: 'Experts', testid: 'cap-view-experts' },
+              { key: 'connections', label: 'Connections', testid: 'cap-view-connections' },
+            ]}
+          />
         }
         right={
           view === 'skills' ? (
@@ -385,7 +396,63 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {error && (
-          <OverlayError testid="cap-error" retryTestid="cap-retry" message={error} onRetry={() => { void mainQ.refetch(); }} />
+          <OverlayError
+            testid="cap-error"
+            retryTestid="cap-retry"
+            message={error}
+            onRetry={() => { void (view === 'apps' ? appsQ.refetch() : mainQ.refetch()); }}
+          />
+        )}
+
+        {!error && view === 'apps' && (
+          <div data-testid="cap-apps-view">
+            <Hint>
+              Apps are product boundaries. Phase A is catalog-only: lifecycle controls stay hidden until ownership cutover.
+            </Hint>
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              {apps.map((app) => {
+                const profile = app.profileAccounting.find((item) => item.profile === currentProfile);
+                const bindingsMatch = app.bindingMapDigest === BUILTIN_APP_BINDING_DIGEST;
+                const compatible = profile?.supported === true && bindingsMatch;
+                return (
+                  <div
+                    key={app.appId}
+                    data-testid={`cap-app-${app.appId}`}
+                    className="rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-4 min-w-0"
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className="material-symbols-outlined icon-md text-[var(--color-primary)]">local_florist</span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-heading font-semibold text-[var(--color-text)] truncate">{app.displayName}</span>
+                          <StatusBadge testid={`cap-app-state-${app.appId}`}>{app.evidenceState}</StatusBadge>
+                        </div>
+                        <p className="text-small text-[var(--color-text-muted)] mt-1 line-clamp-2">{app.description}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-[var(--color-border)] flex items-center gap-3">
+                      <StatusBadge
+                        tone={compatible ? 'success' : 'error'}
+                        testid={`cap-app-profile-${app.appId}`}
+                      >
+                        {bindingsMatch
+                          ? `${currentProfile ?? 'unknown profile'} · ${compatible ? 'declared compatible' : 'blocked'}`
+                          : 'compiled bindings mismatch'}
+                      </StatusBadge>
+                      <span className="ml-auto text-meta text-[var(--color-text-faint)] tabular-nums">
+                        {app.resourceCount} resources · v{app.version}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {!loading && apps.length === 0 && (
+              <div className="text-body text-[var(--color-text-faint)] py-8 text-center" data-testid="cap-apps-empty">
+                No Apps found.
+              </div>
+            )}
+          </div>
         )}
 
         {!error && view === 'skills' && (
@@ -534,10 +601,16 @@ export function CapabilitiesContent({ onDispatch, close }: CapabilitiesContentPr
           >
             <span className="material-symbols-outlined icon-md">auto_awesome</span> Teach Swarm a new skill
           </button>
-        ) : (
+        ) : view === 'apps' ? (
           <span className="text-meta text-[var(--color-text-faint)]">
-            Enabled = available for a session to use. Bolt: loads at session start · moon: loads on demand · tower: in channel sessions. Toggle to enable/disable.
+            Catalog-only Apps are visible for inspection but have no install, enable, disable, or uninstall controls.
           </span>
+        ) : view === 'connections' ? (
+          <span className="text-meta text-[var(--color-text-faint)]">
+            Enabled = available for a session to use. Bolt: loads at session start · moon: loads on demand · tower: in channel sessions.
+          </span>
+        ) : (
+          <span className="text-meta text-[var(--color-text-faint)]">Experts are read-only review capabilities.</span>
         )}
       </div>
 

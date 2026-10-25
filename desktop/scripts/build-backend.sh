@@ -108,6 +108,11 @@ echo "Installing dependencies with uv (locked)..."
 # uv.lock is the single source of truth; regenerate with `cd backend && uv lock`.
 uv sync --extra dev
 
+# App Platform Phase A: generated bindings/index are build inputs, never a runtime
+# filesystem discovery fallback. Check the SOURCE tree after dependencies exist so
+# a stale manifest cannot be packaged under an old catalog or binding attestation.
+python scripts/generate_app_registry.py --check --root "$PROJECT_ROOT/.."
+
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
 # Isolated: `import main` runs main's module-level logging setup, and with no
@@ -226,6 +231,10 @@ for _src in _shipped_skill_files('skills'):
     datas.append((_src, _os.path.dirname(_src)))
 # Include DDD templates for default project provisioning
 datas += [('templates', 'templates')]
+# App Platform Phase A: canonical built-in manifests are provenance inputs; runtime
+# consumes only the generated immutable index (no manifest scan on request paths).
+datas += [('apps', 'apps')]
+datas += [('generated/apps_index.json', 'generated')]
 # Include the expert library (backend/experts/<domain>/<id>.md): core.expert_manager
 # reads it at runtime (registry API, and the SubagentStop hook's registry-backed
 # adversarial classification). Missing here, the packaged daemon scans an absent dir,
@@ -258,7 +267,7 @@ import glob
 
 LOCAL_PACKAGES = [
     'core', 'routers', 'schemas', 'database', 'middleware',
-    'channels', 'mcp_servers', 'hooks', 'jobs', 'utils', 'scripts',
+    'channels', 'mcp_servers', 'hooks', 'jobs', 'utils', 'scripts', 'generated',
 ]
 
 local_modules = ['main', 'config']
@@ -384,7 +393,7 @@ APP_VERSION="$($PY -c 'import json,sys;print(json.load(open(sys.argv[1]))["versi
 $PY "$SCRIPT_DIR/write_install_manifest.py" "$STAGE_DIR" "$PROJECT_ROOT/resources" "$APP_VERSION" "$TARGET"
 
 echo "Backend built successfully (onedir): $OUTPUT_BINARY_DIR"
-echo "Staged for the installer: $STAGE_DIR/python-backend (+ install-manifest.json)"
+echo "Staged for the installer: $STAGE_DIR/python-backend (+ install-manifest.json; full App attestation follows frontend build)"
 echo ""
 echo "Directory size: $(du -sh "$OUTPUT_BINARY_DIR" | cut -f1)"
 echo "Executable: $OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"

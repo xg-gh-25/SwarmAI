@@ -1049,7 +1049,6 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           // Property: Active button SHALL have distinct styling from inactive buttons
           for (const item of navItems) {
             const button = screen.getByTestId(navToTestId[item]);
-            const buttonClasses = button.className;
 
             if (item === activeItem) {
               // A10: active styling is CSS-driven via .a10-card--active (bg+ring
@@ -1098,7 +1097,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       { testId: 'nav-swarmws', label: 'Workspace' },  // Work order XG 2026-10-23
       { testId: 'nav-community', label: 'Community' },  // Work: last (run_5165013e)
       { testId: 'nav-jobs', label: 'Jobs & Runs' },
-      { testId: 'nav-capabilities', label: 'Capabilities' },  // System: after Jobs (run_5165013e)
+      { testId: 'nav-capabilities', label: 'Apps & Capabilities' },  // System: after Jobs
       { testId: 'nav-hive', label: 'Hive' },
       { testId: 'nav-eval', label: 'OS Eval' },
       { testId: 'nav-settings', label: 'Settings' },

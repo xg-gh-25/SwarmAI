@@ -19,7 +19,7 @@ from pathlib import Path
 from config import settings, get_app_data_dir, get_log_file_path
 from core import session_registry
 from utils.bundle_paths import get_resource_file
-from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router
+from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router, apps_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
 from routers.pipelines import router as pipelines_router
 from routers.pollinate import router as pollinate_router
@@ -1788,6 +1788,7 @@ app.include_router(escalations_router, tags=["escalations"])
 app.include_router(attention_router, tags=["attention"])  # prefix /api/attention set in router
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
+app.include_router(apps_router, prefix="/api/apps", tags=["apps"])
 
 # DDD Cultivation API (list/approve/reject proposals)
 from routers.cultivation import router as cultivation_router

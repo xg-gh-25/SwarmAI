@@ -1,0 +1,345 @@
+{
+  "$defs": {
+    "AppDependency": {
+      "additionalProperties": false,
+      "description": "Reference to another owner's immutable capability definition.",
+      "properties": {
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "resource": {
+          "title": "Resource",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource",
+        "version"
+      ],
+      "title": "AppDependency",
+      "type": "object"
+    },
+    "AppResource": {
+      "additionalProperties": false,
+      "description": "One versioned contribution in the canonical App resource graph.",
+      "properties": {
+        "fixtures": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fixtures",
+          "type": "array"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9-]*:[A-Za-z0-9_.:-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Permissions",
+          "type": "array"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "targets": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TargetBinding"
+          },
+          "title": "Targets",
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "skill",
+            "agent",
+            "sop",
+            "knowledge",
+            "command",
+            "mcp",
+            "job",
+            "service",
+            "surface",
+            "backend",
+            "host-binding",
+            "project-template",
+            "fixture"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "source",
+        "targets"
+      ],
+      "title": "AppResource",
+      "type": "object"
+    },
+    "Distribution": {
+      "additionalProperties": false,
+      "properties": {
+        "targets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Targets",
+          "type": "array"
+        },
+        "visibility": {
+          "default": "internal",
+          "enum": [
+            "internal",
+            "private",
+            "public"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        }
+      },
+      "title": "Distribution",
+      "type": "object"
+    },
+    "FilePermissions": {
+      "additionalProperties": false,
+      "properties": {
+        "read": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Read",
+          "type": "array"
+        },
+        "write": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Write",
+          "type": "array"
+        }
+      },
+      "title": "FilePermissions",
+      "type": "object"
+    },
+    "PermissionTemplate": {
+      "additionalProperties": false,
+      "properties": {
+        "externalActions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Externalactions",
+          "type": "array"
+        },
+        "files": {
+          "$ref": "#/$defs/FilePermissions"
+        },
+        "network": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Network",
+          "type": "array"
+        },
+        "secrets": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Secrets",
+          "type": "array"
+        }
+      },
+      "title": "PermissionTemplate",
+      "type": "object"
+    },
+    "ProfileBinding": {
+      "additionalProperties": false,
+      "description": "One resource's compatibility declaration for a SwarmAI profile.",
+      "properties": {
+        "requires": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Requires",
+          "type": "array"
+        },
+        "supported": {
+          "title": "Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "supported"
+      ],
+      "title": "ProfileBinding",
+      "type": "object"
+    },
+    "TargetBinding": {
+      "additionalProperties": false,
+      "description": "One host-target rendering decision for a resource.",
+      "properties": {
+        "binding": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Binding"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "const": "unsupported",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mode"
+        },
+        "omission": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Omission"
+        },
+        "profiles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ProfileBinding"
+          },
+          "title": "Profiles",
+          "type": "object"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Required"
+        }
+      },
+      "title": "TargetBinding",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Strict canonical source manifest. Package-authored trust is impossible.",
+  "properties": {
+    "brainInterface": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Braininterface"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/AppDependency"
+      },
+      "title": "Dependencies",
+      "type": "array"
+    },
+    "description": {
+      "default": "",
+      "maxLength": 500,
+      "title": "Description",
+      "type": "string"
+    },
+    "displayName": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Displayname",
+      "type": "string"
+    },
+    "distribution": {
+      "$ref": "#/$defs/Distribution"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9-]{1,62}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "instanceMode": {
+      "enum": [
+        "singleton",
+        "per-project"
+      ],
+      "title": "Instancemode",
+      "type": "string"
+    },
+    "permissionTemplates": {
+      "additionalProperties": {
+        "$ref": "#/$defs/PermissionTemplate"
+      },
+      "title": "Permissiontemplates",
+      "type": "object"
+    },
+    "resources": {
+      "items": {
+        "$ref": "#/$defs/AppResource"
+      },
+      "title": "Resources",
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 1,
+      "title": "Schemaversion",
+      "type": "integer"
+    },
+    "version": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "id",
+    "version",
+    "displayName",
+    "instanceMode",
+    "resources",
+    "distribution"
+  ],
+  "title": "AppManifest",
+  "type": "object"
+}

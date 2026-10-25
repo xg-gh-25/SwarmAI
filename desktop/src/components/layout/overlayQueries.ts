@@ -22,6 +22,7 @@ import { pipelinesService } from '../../services/pipelines';
 import { jobsService } from '../../services/jobs';
 import { hiveService } from '../../services/hive';
 import { skillsService } from '../../services/skills';
+import { appsService } from '../../services/apps';
 import { expertsService } from '../../services/experts';
 import { mcpConfigService, type ConfigEntry } from '../../services/mcpConfig';
 import type { SkillHealthMap, ExpertsByDomain } from '../../types';
@@ -110,6 +111,11 @@ export const overlayQuery = {
   hiveInstances: () => ({
     queryKey: ['overlay', 'hive', 'instances'] as const,
     queryFn: () => hiveService.listInstances(),
+    staleTime: OVERLAY_STALE_MS,
+  }),
+  capabilitiesApps: () => ({
+    queryKey: ['overlay', 'capabilities', 'apps'] as const,
+    queryFn: () => appsService.list(),
     staleTime: OVERLAY_STALE_MS,
   }),
   capabilities: () => ({
@@ -210,7 +216,7 @@ export const NAV_PREFETCH: Partial<Record<OverlayId, (ctx: PrefetchCtx) => AnyOp
   pipeline: () => [overlayQuery.pipelineAnalytics('30d'), overlayQuery.pipelineRunning()],
   jobs: () => [overlayQuery.jobsRoster(), overlayQuery.jobsOverview()],
   hive: () => [overlayQuery.hiveAccounts(), overlayQuery.hiveInstances()],
-  capabilities: () => [overlayQuery.capabilities(), overlayQuery.capabilitiesHealth()],
+  capabilities: () => [overlayQuery.capabilitiesApps()],
   community: () => [overlayQuery.community('feed')],
   'needs-you': () => [overlayQuery.needsYou()],
   // the list + the last-shown location's own summary (its tree loads on open)

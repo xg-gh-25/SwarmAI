@@ -23,6 +23,7 @@ from .escalations import router as escalations_router
 from .attention import router as attention_router
 from .voice import router as voice_router
 from .hive import router as hive_router
+from .apps import router as apps_router
 
 __all__ = [
     "agents_router",
@@ -49,4 +50,5 @@ __all__ = [
     "attention_router",
     "voice_router",
     "hive_router",
+    "apps_router",
 ]
