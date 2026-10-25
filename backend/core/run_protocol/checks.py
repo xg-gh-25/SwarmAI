@@ -148,6 +148,9 @@ _SPECS = [
 _SPECS += [
     _c("TS-1", "validation_report", "stage push", "test", "test", CODE),
     _c("TS-3", "test_report", "", "test", "test", DESIGN),
+    # every DESIGN_SPEC test reference names a file of the tested code (DS-2a also
+    # accepted a file the plan said it would create; nothing checked it was)
+    _c("TS-4", "test_report", "stage", "test", "test", DESIGN),
     _c("DV-1", "report", "stage", "deliver", "report", ALL),
     _c("LG-1", "final", "land", "land run_land", "final", CODE),
     _c("LG-3", "report", "land", "land run_land", "report", CODE),
@@ -172,7 +175,7 @@ def _exemption_reason(profile: str, check_id: str) -> str:
     if check_id in ("RQ-4", "DS-4a"):
         return "profile is not bugfix and has no current/expected/unchanged triad"
     if profile == "direct" and (check_id.startswith(("RQ-", "DS-", "DC-"))
-                                or check_id == "TS-3"):
+                                or check_id in ("TS-3", "TS-4")):
         return ("direct writes no REQUIREMENTS / DESIGN_SPEC and has no exit criteria; its "
                 "requirement is the user's words in contract.json, an ambiguous one is "
                 "abandoned and re-run as trivial (execution plan v2 N1)")
@@ -459,6 +462,14 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         missing = sorted(i for i in required - covers if isinstance(i, str))
         return _result(not missing, "trace covers requirements" if not missing
                        else f"trace missing: {missing}")
+    if check_id == "TS-4":
+        from core.run_protocol import schemas
+        known = set(context.existing_files)
+        missing = [f"{path} {ref!r}" for path, ref in schemas.test_refs(context.design or {})
+                   if schemas.resolve_test_ref(ref, known) is None]
+        return _result(not missing, "every test reference names a file of the tested code"
+                       if not missing else "test references that name no file of the "
+                       f"tested code (create the test or fix the reference): {missing[:10]}")
     if check_id == "DV-1":
         ok = any(event.get("kind") == "render" and event["payload"].get("document") == "REPORT"
                  for event in context.events)

@@ -84,3 +84,60 @@ def test_word_list_checks_are_gone_and_gate0_judges_wording():
     text = GATE0.read_text(encoding="utf-8").lower()
     for phrase in ("acceptance", "verifiable", "negative", "universal", "any language"):
         assert phrase in text, phrase
+
+
+# --- review of 31e50759a ------------------------------------------------------------
+
+def test_a_path_with_a_space_resolves_to_the_whole_path_not_its_first_word():
+    files = {"My Tests/foo.spec.ts", "test dir/a.go", "test/other.go"}
+    assert _issues(_design("My Tests/foo.spec.ts"), files) == []
+    assert _issues(_design("test dir/a.go TestA"), files) == []
+    # `test/` exists, but the reference names `test dir/…`, which does not: refused,
+    # not accepted as the directory `test` (it used to be)
+    issues = _issues(_design("test dir/b.go TestB"), files)
+    assert any("not planned" in i.message for i in issues), issues
+
+
+def test_resolve_test_ref_takes_the_longest_known_prefix():
+    known = {"web/app.test.ts", "src/lib.rs", "pkg/a_test.go"}
+    assert sc.resolve_test_ref("web/app.test.ts::adds two numbers", known) == "web/app.test.ts"
+    assert sc.resolve_test_ref("src/lib.rs#tests::adds", known) == "src/lib.rs"
+    assert sc.resolve_test_ref("pkg TestAdd", known) == "pkg"           # a directory
+    assert sc.resolve_test_ref("pk TestAdd", known) is None             # no prefix match
+    assert sc.resolve_test_ref("nope/x.go", known) is None
+
+
+def test_a_backslash_path_is_refused_with_a_hint():
+    issues = _issues(_design("pkg\\a_test.go TestAdd"))
+    assert any("/" in i.message and "backslash" in i.message for i in issues), issues
+    doc = _design("pkg/a_test.go TestAdd")
+    doc["tasks"][0]["creates_test_files"] = ["pkg\\b_test.go"]
+    assert any("backslash" in i.message for i in _issues(doc))
+
+
+def _ts4(design: dict, files: set[str]):
+    from core.run_protocol import events as ev
+    context = checks.make_context(
+        profile="full", requirement_variant="full", requirements={}, design_variant="full",
+        design=design, authority=ev.EventAuthority(), existing_files=files)
+    return checks.evaluate("TS-4", context)
+
+
+def test_ts4_a_planned_test_file_must_exist_when_test_completes():
+    """DS-2a accepts a reference to a file the plan says it will create; nothing
+    checked later that it was created. TS-4 resolves every reference against the
+    tested code tree, the plan no longer counts."""
+    doc = _design("pkg/b_test.go TestB")
+    doc["tasks"][0]["creates_test_files"] = ["pkg/b_test.go"]
+    ok, detail = _ts4(doc, set(_FILES))
+    assert not ok and "pkg/b_test.go" in detail, detail
+    ok, detail = _ts4(doc, set(_FILES) | {"pkg/b_test.go"})
+    assert ok, detail
+
+
+def test_ts4_is_a_blocking_test_check_for_the_design_profiles():
+    spec = checks.CHECKS["TS-4"]
+    assert "stage" in spec.effects and spec.stages == ("test",)
+    for profile in ("full", "bugfix", "goal", "trivial"):
+        assert "TS-4" in {s.check_id for s in checks.stage_checks(profile, "test")}
+    assert "TS-4" not in {s.check_id for s in checks.stage_checks("direct", "test")}

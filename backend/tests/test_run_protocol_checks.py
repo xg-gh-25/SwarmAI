@@ -16,7 +16,7 @@ EXPECTED = {
     "RQ-1", "RQ-2", "RQ-4", "RQ-5", "RQ-6", "RQ-8",
     "DS-1", "DS-2a", "DS-3", "DS-4a", "DS-5", "DS-6",
     "DS-7", "DS-9a", "BX-3", "RV-1a", "RV-1b", "RV-1c",
-    "DC-1", "DC-2", "RV-2", "RV-4", "FX-1", "TS-1", "TS-3", "DV-1",
+    "DC-1", "DC-2", "RV-2", "RV-4", "FX-1", "TS-1", "TS-3", "TS-4", "DV-1",
     "LG-1", "LG-3", "LG-4",
     "MD-1", "MD-3", "RF-1", "RF-2", "RF-3", "RF-4", "RF-5",
 }
@@ -29,8 +29,9 @@ def ids(specs):
 def test_registry_is_the_complete_v13_table():
     assert set(checks.CHECKS) == EXPECTED
     # v13's 46 + BX-2, minus the runner's checks, plus BX-3 (S6-1), plus RV-4 (S6-2),
-    # minus the word-list checks RQ-3 / RQ-8b (S6-4c: Gate-0 judges wording)
-    assert len(checks.CHECKS) == 36
+    # minus the word-list checks RQ-3 / RQ-8b (S6-4c: Gate-0 judges wording),
+    # plus TS-4 (every DESIGN_SPEC test reference names a file of the tested code)
+    assert len(checks.CHECKS) == 37
     assert checks.coverage_errors() == []
 
 

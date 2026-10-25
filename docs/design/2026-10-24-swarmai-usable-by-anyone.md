@@ -199,6 +199,12 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 - RQ-3、RQ-8b 从检查表删除，连同中英文词表。gate0-skeptic 的检查清单加了第 5 问：每条验收标准是否可验证、`negative` / `universal` 标记是否和文字一致，用需求本身的语言判断；不合格时 verdict 最多是 SUPPORTED-WITH-CHANGES，run 照常继续，EVALUATE 卡片要求 agent 先改掉点名的验收项。这两项原来就是"只记录、不阻断"，所以阻断行为没有变化。
 - 一个已知差别：Gate-0 只在 bugfix profile 或需求有两种以上理解时才派，其余 full / goal / trivial run 没有人检查措辞（原来的词表检查对它们也只记录不阻断）。S5 有数据后再看要不要对所有带需求文档的 profile 都派。
 
+**审查后修复（S6-4c 之后，2026-10-25）**：fresh-context correctness 审查找出四处，两处是 S6-4c 引入的，两处原来就有：
+- 路径可以含空格或 `#`（`My Tests/a.spec.ts`），按第一个分隔符截断会读成别的路径：`test dir/a.go` 被当成目录 `test`，只要 `test/` 存在就通过。现在 `schemas.resolve_test_ref` 依次试每个分隔符位置，取最长的已知路径（文件，或含文件的目录）；目录后面紧跟的词还像路径（含 `/`）时不算命中。
+- 路径里的反斜杠永远对不上 git 的 `/`：现在直接拒绝，提示用 `/`。
+- （原来就有）DS-2a 只在 PLAN 跑，`creates_test_files` 里写了就算数，之后没人检查文件到底建没建、PLAN 时有的测试后来是否被删。新增 TS-4：TEST 结束时（阻断），每条测试引用都要在被测的代码 tree 里找到，计划不再算数；direct 不写 DESIGN_SPEC，豁免。
+- （原来就有）判断\"存在\"用的文件清单是 `git ls-files`：漏掉没 `git add` 的新文件，非 ASCII 文件名被 git 转义成带引号的八进制。现在对算好的代码 tree（落地后对落地 commit）跑 `git ls-tree -r -z --name-only`。
+
 
 #### 3.3.5 删掉签名机制，事件改为只追加日志（r12，XG 定）
 

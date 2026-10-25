@@ -172,6 +172,19 @@ def _git(root: str | Path, *args: str) -> str:
         raise EngineError(f"git {' '.join(args[:2])} failed: {exc}") from exc
 
 
+def _tree_paths(root: str | Path, tree: str) -> set[str]:
+    """Every file path in *tree* (a tree or commit), exactly as named: NUL-separated
+    and unquoted, so a non-ASCII or spaced name is not octal-escaped, and unstripped,
+    so a leading space survives."""
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "-z", "--name-only",
+                              tree], check=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise EngineError(f"git ls-tree failed: {exc}") from exc
+    return {p for p in out.split("\0") if p}
+
+
 def find_run_dir(workspace: str | Path, run_id: str) -> Path:
     matches = list((Path(workspace) / "Projects").glob(f"*/.artifacts/runs/{run_id}"))
     matches = [path for path in matches if path.is_dir()]
@@ -784,7 +797,7 @@ class RunEngine:
                     roots[name] = main
                     code_trees[name] = git_tree.commit_code_tree(main, commit, reserved)
                     bases[name] = _git(main, "rev-parse", f"{commit}^")
-                    existing |= set(_git(main, "ls-tree", "-r", "--name-only", commit).splitlines())
+                    existing |= _tree_paths(main, commit)
                     changed[name] = sorted(p for p in _git(
                         main, "-c", "core.quotepath=off", "diff", "--name-only", "--no-renames",
                         bases[name], commit).splitlines() if p and not p.startswith(reserved[0]))
@@ -797,7 +810,8 @@ class RunEngine:
                     continue
                 roots[name] = root
                 code_trees[name] = git_tree.write_tree(root, reserved, {})
-                existing |= set(_git(root, "ls-files").splitlines())
+                # the files of that tree (untracked ones included), not `ls-files`
+                existing |= _tree_paths(root, code_trees[name])
                 bases[name] = self._fork_base(name, root)
                 # the tree already holds committed, staged, unstaged and untracked
                 # changes (git_tree adds -A on a private index): one diff against it

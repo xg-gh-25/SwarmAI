@@ -4,6 +4,8 @@ Public symbols:
 - ``validate_requirements`` — validate full/lite requirements and structured EARS.
 - ``validate_design_spec`` — validate full/lite design, IDs and references.
 - ``SchemaIssue`` — one check-id/path/message result.
+- ``resolve_test_ref`` / ``test_refs`` — which repo path a DESIGN_SPEC test reference
+  names, and every reference of a design (DS-2a at PLAN, TS-4 at TEST).
 
 Validation is pure and language-independent. Unknown fields are errors: obsolete model
 self-claims cannot silently survive the v1 cutover.
@@ -75,10 +77,13 @@ def _repo_path(value: Any, out: list[SchemaIssue], check: str, path: str) -> boo
     if not isinstance(value, str) or not value:
         _issue(out, check, path, "must be a repo-relative file path")
         return False
-    normalized = value.replace("\\", "/")
+    if "\\" in value:
+        # git names files with `/`; a backslash path never matches one (review of S6-4c)
+        _issue(out, check, path, "must use `/` between directories, not a backslash")
+        return False
     if value.startswith(("/", ":")) or (len(value) > 1 and value[1] == ":") \
-            or "\x00" in value or normalized.endswith("/") \
-            or any(part in ("", ".", "..") for part in normalized.split("/")) \
+            or "\x00" in value or value.endswith("/") \
+            or any(part in ("", ".", "..") for part in value.split("/")) \
             or any(char in value for char in "*?[]"):
         _issue(out, check, path, "must be a repo-relative file path without traversal or glob")
         return False
@@ -94,6 +99,43 @@ def test_ref_path(value: str) -> str:
     (``tests/x.py::test_a``, ``pkg/a_test.go TestAdd``, ``src/lib.rs#tests::adds``)
     and is not interpreted."""
     return _TEST_NAME_SEP.split(value, 1)[0]
+
+
+def resolve_test_ref(value: str, known: set[str] | frozenset[str]) -> str | None:
+    """The path a test reference names, given the repo's *known* files: the longest
+    prefix of *value* that ends at a separator (or is all of it) and is a known file
+    or a directory holding one. A path may itself hold a space or ``#``
+    (``My Tests/a.spec.ts``), so the first separator alone cannot tell (review of
+    S6-4c: ``test dir/a.go`` read as the directory ``test``). None when no prefix is
+    known."""
+    cuts = sorted({len(value), *(m.start() for m in _TEST_NAME_SEP.finditer(value))},
+                  reverse=True)
+    for cut in cuts:
+        candidate = value[:cut]
+        if not candidate:
+            continue
+        if candidate in known:
+            return candidate
+        if any(f.startswith(candidate + "/") for f in known):
+            # a directory: when the next word continues it as a path (`test dir/a.go`
+            # with only `test/` known), the reference names a path that is not there
+            rest = _TEST_NAME_SEP.sub(" ", value[cut:]).split()
+            return None if rest and "/" in rest[0] else candidate
+    return None
+
+
+def test_refs(document: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """(issue path, reference) of every test reference in a DESIGN_SPEC."""
+    out: list[tuple[str, str]] = []
+    for key in ("properties", "failure_modes"):
+        for i, row in enumerate(document.get(key) or []):
+            if isinstance(row, Mapping) and isinstance(row.get("test"), str):
+                out.append((f"{key}[{i}].test", row["test"]))
+    for i, row in enumerate(document.get("exit_criteria") or []):
+        if isinstance(row, Mapping) and row.get("kind") == "test" \
+                and isinstance(row.get("ref"), str):
+            out.append((f"exit_criteria[{i}].ref", row["ref"]))
+    return out
 
 
 def _test_ref(value: Any, out: list[SchemaIssue], check: str, path: str) -> bool:
@@ -353,10 +395,7 @@ def _design_rows(document: Mapping[str, Any], requirement_ids: set[str],
     def test_exists(ref: Any, issue_path: str) -> None:
         if existing_files is None or not isinstance(ref, str):
             return
-        target = test_ref_path(ref)
-        prefix = target + "/"          # a directory (a package, a test folder)
-        if target in existing_files or target in planned_test_files or any(
-                f.startswith(prefix) for f in (*existing_files, *planned_test_files)):
+        if resolve_test_ref(ref, existing_files | planned_test_files) is not None:
             return
         _issue(out, "DS-2a", issue_path, "test file does not exist and is not planned")
     properties = _id_rows(
