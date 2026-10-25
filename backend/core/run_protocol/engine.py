@@ -466,11 +466,11 @@ class RunEngine:
         if mode == "isolated" and profile != "research" and not repos:
             raise EngineError("code profile requires at least one repo")
         run_id = run_id or "run_" + secrets.token_hex(4)
+        from core.app_session_id import valid_app_session_id
         from core.session_ids import valid_session_id
         # every run has an owner from the start (R1 review r1): the contract is where
         # that invariant lives, whoever calls create
-        if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}",
-                                                                session_id):
+        if not valid_app_session_id(session_id):
             raise EngineError("create requires the owning app session id")
         if any(not valid_session_id(value) for value in transcript_ids):
             raise EngineError("invalid transcript id")

@@ -478,7 +478,8 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
                              "recorded for this command); rerun it as ONE command so the "
                              "user is asked")
         sid = str(session_context.get("sdk_session_id") or "")
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", sid):
+        from core.app_session_id import valid_app_session_id
+        if not valid_app_session_id(sid):
             return {"decision": "approve"}
         try:
             res = await asyncio.wait_for(

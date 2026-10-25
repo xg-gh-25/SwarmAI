@@ -8,15 +8,20 @@ When another session has uncommitted edits in the same checkout
     "$SWARM_BACKEND_BIN" py -m scripts.session_worktree land <worktree path>
     "$SWARM_BACKEND_BIN" py -m scripts.session_worktree remove <worktree path>
 
-- create: a new branch ``session/<name>`` at the main checkout's HEAD, checked out in
-  ``<app data>/session-worktrees/<name>/<repo dir name>``; the dirs the repo declares in
-  ``.swarmai/pipeline.toml`` ``[worktree] link`` are symlinked in (core/run_worktree).
-  The other session's uncommitted edits stay in the main checkout.
+- create: a new branch ``session/<key>-<name>`` (``session/<name>`` without a session
+  id; ``<key>`` = core.app_session_id.session_key) at the main checkout's HEAD, checked
+  out in ``<app data>/session-worktrees/<name>/<repo dir name>``; the dirs the repo
+  declares in ``.swarmai/pipeline.toml`` ``[worktree] link`` are symlinked in
+  (core/run_worktree). The other session's uncommitted edits stay in the main checkout.
 - land: the worktree must have no uncommitted changes; its branch is rebased onto the
   main checkout's current branch, then ``merge --ff-only`` there. A refusal (conflict,
   or the main checkout has uncommitted edits to the same files) is printed as is and
   nothing is forced. Before the merge, a branch that puts a file back to where the
   branch began while the base changed it since is refused (scripts/check_no_revert).
+  The merge writes the landing's one record, git's own reflog entry of the
+  destination branch, stamped ``swarm-land <branch> session=<key> turn=<id>
+  onto=<target>`` (design docs/design/2026-10-25-turn-result-card.md §3); "Already up
+  to date" lands nothing (``landed: false``).
 - remove: removes the worktree and deletes its branch, only once the branch is merged
   into the main checkout's branch (land first). Never deletes unmerged work.
 
@@ -36,6 +41,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core import app_session_id as asi  # noqa: E402
 from core import run_worktree as rw  # noqa: E402
 from scripts import check_no_revert  # noqa: E402
 
@@ -52,8 +58,8 @@ def root() -> Path:
     return Path(os.path.realpath(env)) if env else rw._data_dir() / "session-worktrees"
 
 
-def _git(cwd, *args, timeout=120.0):
-    return rw.git(cwd, *args, timeout=timeout)
+def _git(cwd, *args, timeout=120.0, env=None):
+    return rw.git(cwd, *args, timeout=timeout, env=env)
 
 
 def _out(cwd, *args) -> str:
@@ -81,6 +87,16 @@ def _branch_of_main(main: Path) -> str:
     return ref[len("refs/heads/"):]
 
 
+def _attribution() -> "tuple[str, str]":
+    """(session key, turn id) for the landing stamp, each ``none`` when absent or
+    invalid. ``SWARM_APP_SESSION_ID`` / ``SWARM_TURN_ID`` come from the session's
+    env or from run_owner_gate (design 2026-10-25-turn-result-card.md §3.2)."""
+    sid = os.environ.get("SWARM_APP_SESSION_ID")
+    turn = os.environ.get("SWARM_TURN_ID")
+    return (asi.session_key(sid) if asi.valid_app_session_id(sid) else "none",
+            turn if asi.valid_turn_id(turn) else "none")
+
+
 def create(repo: str, name: "str | None") -> dict:
     main = _main_checkout(Path(repo))
     base = _branch_of_main(main)
@@ -93,7 +109,8 @@ def create(repo: str, name: "str | None") -> dict:
     path = root() / name / main.name
     if path.exists():
         raise Refused(f"{path} already exists")
-    branch = BRANCH_PREFIX + name
+    key = _attribution()[0]
+    branch = BRANCH_PREFIX + (f"{key}-{name}" if key != "none" else name)
     path.parent.mkdir(parents=True, exist_ok=True)
     p = _git(main, "worktree", "add", "-q", "-b", branch, str(path), "HEAD")
     if p.returncode != 0:
@@ -147,12 +164,25 @@ def land(path: str) -> dict:
     if _out(main, "rev-parse", "--verify", f"refs/heads/{base}^{{commit}}") != target:
         raise Refused(f"{base} moved while landing (another session landed); "
                       "nothing merged, run land again")
-    p = _git(main, "merge", "--ff-only", "-q", branch)
+    head = _out(wt, "rev-parse", "HEAD")
+    key, turn = _attribution()
+    attribution = {"session": key, "turn": turn}
+    if head == target:     # "Already up to date": no ref moves, so no landing
+        return {"landed": False, "landed_branch": branch, "into": base, "main": str(main),
+                "head": head[:12], "attribution": attribution}
+    # The stamp is the landing's record: git writes it, under its own ref lock, into
+    # the destination's reflog entry; the session's cards read only that
+    # (design docs/design/2026-10-25-turn-result-card.md §3.1).
+    stamp = f"swarm-land {branch} session={key} turn={turn} onto={target}"
+    p = _git(main, "-c", "core.logAllRefUpdates=always", "merge", "--ff-only", "-q", branch,
+             env={"GIT_REFLOG_ACTION": stamp})
     if p.returncode != 0:
         raise Refused(f"merge --ff-only into {base} refused: "
                       + (p.stderr or p.stdout).strip()[:400])
-    return {"landed": branch, "into": base, "main": str(main),
-            "head": _out(main, "rev-parse", "--short", "HEAD")}
+    has_log = _git(main, "reflog", "exists", f"refs/heads/{base}").returncode == 0
+    return {"landed": True, "landed_branch": branch, "into": base, "main": str(main),
+            "onto": target, "new": head, "head": head[:12], "attribution": attribution,
+            "record": "ok" if has_log else "missing"}
 
 
 def remove(path: str) -> dict:
