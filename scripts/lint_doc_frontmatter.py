@@ -8,6 +8,11 @@ Usage:
     python scripts/lint_doc_frontmatter.py                    # check all docs/*.md
     python scripts/lint_doc_frontmatter.py file1.md file2.md  # check specific files
     python scripts/lint_doc_frontmatter.py --staged           # check git-staged docs only
+    python scripts/lint_doc_frontmatter.py --diff BASE        # check docs changed in BASE..HEAD (CI)
+
+``--staged`` is what the repo-local pre-commit runs; ``--diff`` is the same scope
+in CI, where nobody's local hooks run. Both cover every ``docs/**/*.md`` the change
+adds or modifies, so an old doc is checked only when someone touches it.
 
 Exit codes:
     0 = all pass
@@ -114,6 +119,38 @@ def get_staged_docs() -> list[Path]:
     return staged
 
 
+def get_diff_docs(base: str) -> list[Path]:
+    """docs/**/*.md added or modified between ``base`` and HEAD.
+
+    Needs only those two commits, so it works in a shallow CI clone once
+    ``base`` has been fetched. Fail-closed like ``get_staged_docs``.
+    """
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACM", base, "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: git diff {base} HEAD failed: {result.stderr.strip()}",
+              file=sys.stderr)
+        sys.exit(1)
+    return [Path(line) for line in result.stdout.split("\n")
+            if line.startswith("docs/") and line.endswith(".md")]
+
+
+def read_head_content(filepath: Path) -> str:
+    """Read a file as committed at HEAD (what CI is checking)."""
+    result = subprocess.run(
+        ["git", "show", f"HEAD:{filepath}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: git show HEAD:{filepath} failed", file=sys.stderr)
+        sys.exit(1)
+    return result.stdout
+
+
 def read_staged_content(filepath: Path) -> str:
     """Read file content from git staging area (not working tree).
 
@@ -134,10 +171,23 @@ def read_staged_content(filepath: Path) -> str:
 def main():
     args = sys.argv[1:]
     use_staged = "--staged" in args
+    diff_base = None
+    if "--diff" in args:
+        i = args.index("--diff")
+        if i + 1 >= len(args) or args[i + 1].startswith("--"):
+            print("usage: lint_doc_frontmatter.py --diff BASE", file=sys.stderr)
+            sys.exit(2)
+        diff_base = args[i + 1]
 
     if use_staged:
         files = get_staged_docs()
         if not files:
+            sys.exit(0)
+    elif diff_base is not None:
+        files = get_diff_docs(diff_base)
+        if not files:
+            if "--quiet" not in args:
+                print("✓ no docs changed")
             sys.exit(0)
     elif [a for a in args if a.endswith(".md")]:
         files = [Path(a) for a in args if a.endswith(".md")]
@@ -148,7 +198,12 @@ def main():
 
     for filepath in files:
         # FIX #3: In staged mode, read from git index (not working tree)
-        content = read_staged_content(filepath) if use_staged else None
+        if use_staged:
+            content = read_staged_content(filepath)
+        elif diff_base is not None:
+            content = read_head_content(filepath)
+        else:
+            content = None
         violations = check_file(filepath, content=content)
         if violations:
             all_violations[str(filepath)] = violations

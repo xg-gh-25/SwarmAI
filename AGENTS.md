@@ -566,7 +566,7 @@ Claude trailer to Swarm). An earlier version of this file called them dead; that
 |---|---|---|
 | `prepare-commit-msg` | sed-rewrites `Co-Authored-By: Claude…<noreply@anthropic.com>` → `Co-Authored-By: Swarm <swarm@swarmai.dev>` | live |
 | `pre-commit` | CMHK SDK-drift check | live |
-| `pre-commit` | `scripts/lint_doc_frontmatter.py --staged` (when `docs/*.md` is staged) | live |
+| `pre-commit` | `scripts/lint_doc_frontmatter.py --staged` (when `docs/*.md` is staged); CI runs the same check as `--diff BASE` on the docs a push / PR adds or modifies | live |
 | `pre-commit` | `scripts/sync_discussions.py --check` mirror drift (when `docs/discussions/` is staged) | live |
 
 What these hooks do NOT cover:

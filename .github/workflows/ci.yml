@@ -58,6 +58,19 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE" || { echo "base commit not fetchable; skipped"; exit 0; }
           python scripts/lint_terms.py --diff "$BASE"
 
+      # SwarmAI's own docs rule (closing guards D3): every docs/**/*.md this
+      # push / PR adds or modifies carries created:/updated: frontmatter. Same
+      # scope as the repo-local pre-commit, which only runs on the owner's machine.
+      - name: Lint changed docs frontmatter (scripts/lint_doc_frontmatter.py)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "no base commit to diff against; skipped"; exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE" || { echo "base commit not fetchable; skipped"; exit 0; }
+          python scripts/lint_doc_frontmatter.py --diff "$BASE"
+
       - name: Lint expert corpus (D3 admission — spawn_as/domain/scope, no memory)
         run: python scripts/lint_experts.py
 
