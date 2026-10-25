@@ -312,7 +312,7 @@ def _check_delivery(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, st
 
 
 def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[str, str, str]:
-    """⑥ REFRESHER / code-intel — THE asset-aware check (the XG constraint).
+    """⑥ REFRESHER / code-intel — THE asset-aware check.
 
     - No code-repo governed asset → N/A (data-agent / pure-knowledge — NEVER FAIL).
     - Has a code-repo asset + code-intel.json found → PASS.

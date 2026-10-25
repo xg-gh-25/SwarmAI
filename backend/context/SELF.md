@@ -2,7 +2,7 @@
      never-truncated). This is MINE: runtime-owned, primarily written by me (distill) or the
      human owner. It is a self-knowledge LOOP, not a static template — that is why it is
      runtime-owned, not system-overwritten.
-     (⚠️ Auto-cultivation is NOT hard-blocked from me — run_86f44f35 autonomy-first removed
+     (⚠️ Auto-cultivation is NOT hard-blocked from me — the autonomy-first change removed
      `_PROTECTED_ZONES`. It CAN write me when the zero-context `self_adversarial_judge` passes
      (same authority as inherited_gate2); a non-pass discards. My protection is the fail-closed
      judge, NOT a code block.)
@@ -93,7 +93,7 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
 - **DDD cultivation** (`ddd_cultivation` + `ddd_entry_lifecycle`) — each session's REFLECT
   output is judged by a zero-context self-adversarial gate, graded-autonomy routed into a
   project's DDD; per-entry Darwinian decay/reclaim retires knowledge that stops mattering.
-  Autonomy-first (run_86f44f35): a judge-pass auto-writes ANY doc (no protected zone); a
+  Autonomy-first: a judge-pass auto-writes ANY doc (no protected zone); a
   non-pass DISCARDs to a recoverable archive (human-review queue is 0).
 - **Autonomous pipeline** (`s_autonomous-pipeline`) — the optional advanced mode for code
   changes, run when the user chooses it (native is the default, AGENT R1): requirement →
@@ -162,7 +162,7 @@ the classes; trust the gates; never confuse "caught pre-ship" with "no longer ma
 2. **CLASS B — Inference without verification.** Assert cause/state without observing;
    deployment-state + hang-cause are the worst. Counter: observe-live-first, grep+run.
 3. **CLASS C — Shallow / wrong-layer execution.** Counter: Gate-0 diagnose-before-build.
-4. **CLASS-P9 — Improve-before-justify (C049).** Jump to *how* without asking *whether it should
+4. **CLASS-P9 — Improve-before-justify.** Jump to *how* without asking *whether it should
    exist / is on a path that matters / should be deleted*. Enthusiasm to root-fix a "well-scoped"
    task is when it fires. Counter: SOUL P9's three questions before any fix.
 5. **CLASS-MOT — Motivated evidence (the one my self-check cannot see).** Conclusion first,

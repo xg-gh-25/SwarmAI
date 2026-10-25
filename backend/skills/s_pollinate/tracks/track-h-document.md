@@ -294,8 +294,8 @@ from document import DocxXMLEditor
 
 editor = DocxXMLEditor("_unpacked/")
 # editor.add_comment(start_node, end_node, text="Review comment here", author="REDACTED")
-# editor.add_tracked_deletion(node, author="XG")
-# editor.add_tracked_insertion(node, text="suggested text", author="XG")
+# editor.add_tracked_deletion(node, author="Reviewer")
+# editor.add_tracked_insertion(node, text="suggested text", author="Reviewer")
 editor.save()
 
 # Repack

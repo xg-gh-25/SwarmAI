@@ -13,7 +13,7 @@ Key properties tested:
 - governed_assets parsed WITHOUT core.ddd_bindings.load_bindings (which raises on
   the governed_assets-only bindings.yaml shape)
 - code-intel.json required ONLY when a kind=code-repo governed asset exists; absent
-  code-repo asset → N/A (never FAIL) — the XG constraint
+  code-repo asset → N/A (never FAIL) — the asset-aware constraint
 - a code-repo asset with no code-intel.json → PENDING, never FAIL (Gate-1 refinement)
 - missing DDD doc / placeholder doc → FAIL naming the doc
 - broken bindings.yaml → fail-open (classifies no-repo, never crashes)

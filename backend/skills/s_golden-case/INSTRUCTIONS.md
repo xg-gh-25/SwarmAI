@@ -24,7 +24,7 @@ The sanctioned path to add/validate/promote SwarmAI eval golden cases. Mechanism
    ```
 3. PASS → move the case from `golden_set.private.yaml` to `golden_set.yaml`.
    FAIL (privacy) → it references instance structure; it stays private. This is the
-   ship boundary — a human (XG) reviews promotions; the gate is the mechanical backstop.
+   ship boundary — a human reviews promotions; the gate is the mechanical backstop.
 
 ### VALIDATE — re-check an existing case or the whole set
 Run the validator over a case (or loop the corpus) to catch drift: a case edited

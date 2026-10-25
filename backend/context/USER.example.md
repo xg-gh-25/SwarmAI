@@ -2,7 +2,7 @@
 
 _Example of a filled-in USER.md. Copy this to USER.md and customize._
 
-- **Name:** [Xiaogang]
+- **Name:** [your name]
 - **What to call you:** [the name you want to be called]
 - **Timezone:** [your timezone]
 - **Primary language:** English, Chinese (bilingual — may switch mid-conversation)

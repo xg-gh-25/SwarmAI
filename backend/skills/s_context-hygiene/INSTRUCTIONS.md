@@ -54,7 +54,7 @@ The three classes (read out of `user_customized` + the auto-gen set):
 - `SELF.md` is `user_customized=True` (runtime-owned, edit `.context/`) even though it
   reads like a system file — but its own header says human/distill-only; don't auto-cultivate it.
 - A system-file edit is NOT live until rebuild+restart (binary mtime > source mtime). Restart is
-  destructive → **needs XG approval** (AGENT R12).
+  destructive → **needs the user's approval** (AGENT R12).
 
 ---
 
@@ -68,7 +68,7 @@ Cut these (each is drift or noise, git-recoverable):
    **Fix:** replace with the *reproducible method* (`run git ls-files | …`) or a qualitative
    fact ("runs in production daily"), OR delete. Never store the frozen output.
 2. **CJK-in-system-prose** — in the 4 always-injected SYSTEM files (SWARMAI/IDENTITY/SOUL/AGENT),
-   prefer English for cognition text. **KEEP:** XG's verbatim quotes (they're evidence),
+   prefer English for cognition text. **KEEP:** the user's verbatim quotes (they're evidence),
    detection-term lists, and direct-mode triggers ("直接做" / "just do it") — those are
    load-bearing, not decoration.
 3. **Echoed titles** — `- [type] **T** — T — body` where the body repeats the title verbatim.
@@ -134,7 +134,7 @@ Compression must cut NARRATION, never JUDGMENT. Non-negotiable:
 **Always:** derive routing live (§1); read-and-judge each candidate (§3); preserve
 pattern+tell / principle kernel (§4); git is the recovery net (delete noise, don't archive).
 
-**Ask first:** touching a SYSTEM file (needs build+restart — get XG approval, AGENT R12);
+**Ask first:** touching a SYSTEM file (needs build+restart — get the user's approval, AGENT R12);
 deleting anything borderline (not clearly noise/drift).
 
 **Never:** auto-fix / batch-delete (scan.py is read-only by iron law); rebuild
@@ -154,7 +154,7 @@ mode and MUST never grow one (§3 + §4). Every hit is a lead for human judgment
 
 ## 7. Sweep Mode — the weekly autonomous Darwinian-forgetting sweep
 
-**Philosophy (XG, 2026-08-15): a cognitive store that only grows violates Darwin —
+**Philosophy: a cognitive store that only grows violates Darwin —
 forgetting (deletion) is a design FEATURE, not a risk.** `value, not age, decides
 survival`; the danger is never "we deleted" but "we deleted a load-bearing entry with
 nobody to challenge it". So the sweep deletes freely — but every delete must
@@ -188,7 +188,7 @@ agent switches roles, per store:
 
 ```
 1. JUDGE role  — read the store. Produce a DELETE-CANDIDATE list, GROUPED by
-   store/section (group granularity — XG decision 2026-08-15, not per-item: per-item
+   store/section (group granularity, not per-item: per-item
    adversarial is too costly and turns a weekly job into a burden; grouping still closes
    the "deleted with nobody challenging" risk). Each group = {store, section, candidates[], one-line why-noise each}.
 2. SKEPTIC role — for EACH group, RE-READ only the candidates with a fresh adversarial
@@ -218,7 +218,7 @@ agent switches roles, per store:
 The skeptic treats these as **presumed load-bearing — KEEP unless overwhelmingly proven dead**:
 - a correction's `pattern` + `durable tell`; a principle/rule kernel (§4)
 - `MEMORY_EVERGREEN` / `KNOWLEDGE_EVERGREEN` sections; DDD evergreen-guarded entries
-- XG-curated prose (Open-Threads, hand-written decisions) — `source:manual`, not `source:auto`
+- User-curated prose (Open-Threads, hand-written decisions) — `source:manual`, not `source:auto`
 - a "wrong on purpose" example (R30#4 counter-example, e.g. a stale number kept AS the lesson)
 - SYSTEM files (SWARMAI/IDENTITY/SOUL/AGENT) are OUT OF SCOPE for the sweep entirely —
   they need build+restart and human sign-off (AGENT R12). Sweep touches runtime + DDD + archive ONLY.

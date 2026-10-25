@@ -249,7 +249,7 @@ Agent creates these from detected patterns:
 |-------|----------|---------|
 | `meeting_title` | **YES** | `"Sprint Review"` |
 | `meeting_date` | **YES** | `"2026-03-31"` |
-| `attendees` | **YES** | `"XG, REDACTED, Fan Gu"` |
+| `attendees` | **YES** | `"Alice, Bob, Carol"` |
 | `action_item` | **YES** | The specific action assigned |
 | `meeting_id` | Optional | Calendar event ID |
 | `notes_url` | Optional | Link to meeting notes |

@@ -263,7 +263,7 @@ for page in reader.pages:
 
 writer.add_metadata({
     '/Title': '{document_title}',
-    '/Author': 'XG / SwarmAI',
+    '/Author': '{signature.footer.name}',  # omit the key if unset
     '/Subject': '{topic}',
     '/Creator': 'SwarmAI Pollinate',
     '/Producer': 'Playwright + pypdf',

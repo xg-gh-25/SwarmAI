@@ -47,7 +47,7 @@
 # Examples:
 #   md2pdf.sh README.md
 #   md2pdf.sh design.md output.pdf --style professional --toc --preview
-#   md2pdf.sh report.md --title "Q1 Report" --author "XG"
+#   md2pdf.sh report.md --title "Q1 Report" --author "Jane Doe"
 #   md2pdf.sh doc.md --title ""   # suppress YAML frontmatter title
 #   md2pdf.sh --preset pe-review design.md             # PE-quality single file
 #   md2pdf.sh --preset pe-review --batch *.md           # PE-quality batch

@@ -47,7 +47,7 @@ controls them via data/pointers — never contains code, never runs a pipeline: 
 不含+不跑). The **4 knowledge documents above are section ② KNOWLEDGE** — ONE of the six
 sections, not a competing structure. The full canonical shape:
 
-> **SKELETON vs CONTENT — the distinction that governs provisioning (XG decision
+> **SKELETON vs CONTENT — the distinction that governs provisioning (design decision
 > 2026-07-12, option A):** CREATE materializes the **skeleton** of ①③④⑥ so the
 > standard is CONCRETE in SwarmWS — SwarmAI-maintenance follows it, and AIM export
 > is low-variance. Two kinds of ④ content differ: the **3 default DDD-native skills

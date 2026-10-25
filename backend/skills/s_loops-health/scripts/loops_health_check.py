@@ -422,8 +422,8 @@ class SelfLoopsHealthEngine:
         # K4: Codebase nav valid
         nav_section = self._extract_section(knowledge, "## Codebase Navigation", "")
         entry_points = re.findall(r"`(\w+\.(?:py|tsx?))`", nav_section)
-        # (It used to rglob these names in the SwarmAI source checkout, which only XG
-        # has -- usable-by-anyone P7. Repos are per project now; this check has none.)
+        # (It used to rglob these names in the SwarmAI source checkout, which only its
+        # maintainer has -- usable-by-anyone P7. Repos are per project now; this check has none.)
         self.report.findings.append(Finding(
             id="K4", name="Codebase nav valid", dimension="knowledge", status="n/a",
             detail=(f"{len(entry_points)} entry points listed; not checked against a repo"
