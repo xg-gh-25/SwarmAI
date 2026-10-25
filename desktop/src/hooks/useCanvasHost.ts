@@ -233,7 +233,22 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // it restores on tab-switch, clears on close, and getCanvasSnapshot reads it
   // straight from mapRef (the synchronous source of truth) with no stale-closure
   // mirror to keep in sync.
-  const [slice, setSlice] = useState<CanvasTabState>(EMPTY);
+  // Stored WITH the tab it belongs to. When the active tab changes, the new tab's
+  // slice is taken from mapRef during this same render (React's "adjust state
+  // while rendering"), so the switch commit already shows the new tab's Canvas.
+  // A post-paint effect painted one frame with the OLD tab's Canvas, then moved
+  // the chat column's width a frame later: the tab-switch jitter.
+  const [shown, setShown] = useState<{ k: string; s: CanvasTabState }>(() => ({
+    k: keyFor(activeTabId),
+    s: mapRef.current.get(keyFor(activeTabId)) ?? EMPTY,
+  }));
+  const activeKey = keyFor(activeTabId);
+  let slice = shown.s;
+  if (shown.k !== activeKey) {
+    slice = mapRef.current.get(activeKey) ?? EMPTY;
+    setShown({ k: activeKey, s: slice });
+  }
+  const setSlice = useCallback((k: string, s: CanvasTabState) => setShown({ k, s }), []);
 
   // ── RESIDENT output-rail store (run_9e42c066) ───────────────────────────────
   // useCanvasHost is mounted UNCONDITIONALLY in ChatPage, so calling
@@ -271,12 +286,6 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   const outputCount = rows.length;
 
 
-  // Restore the active tab's slice whenever the active tab changes.
-  useEffect(() => {
-    const k = keyFor(activeTabId);
-    setSlice(mapRef.current.get(k) ?? EMPTY);
-  }, [activeTabId]);
-
   // QUIET write (canvas-proprioception §3.2 / §5): state only the agent's snapshot
   // reads goes to mapRef and NEVER through setSlice, so it costs ChatPage no render.
   const writeQuiet = useCallback((k: string, p: Partial<CanvasTabState>) => {
@@ -305,7 +314,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       next = { ...(mapRef.current.get(k) ?? EMPTY), ...p, deferred: null };
     }
     mapRef.current.set(k, next);
-    setSlice(next);
+    setSlice(k, next);
   }, [activeTabId, recordCommand]);
 
   // ── Agent Canvas changes (canvas-proprioception §4) ──────────────────────────
@@ -338,7 +347,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
     }
     const applied = { ...(mapRef.current.get(k) ?? EMPTY), ...r.next };
     mapRef.current.set(k, applied);
-    if (active) startTransition(() => setSlice(applied));
+    if (active) startTransition(() => setSlice(k, applied));
     rec(r.result, r.reason);
   }, [recordCommand, writeQuiet]);
   // The answer finished (or the user came back to the tab): apply what waited.
@@ -532,7 +541,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       const cur = mapRef.current.get(k) ?? EMPTY;
       const next = { ...cur, manuallyOpen: true };
       mapRef.current.set(k, next);
-      if (activeTabIdRef.current === landingTab) setSlice(next);
+      if (activeTabIdRef.current === landingTab) setSlice(k, next);
     };
     window.addEventListener('swarm:open-canvas', onOpenCanvas);
     return () => window.removeEventListener('swarm:open-canvas', onOpenCanvas);
@@ -695,7 +704,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         if (auto) return;
         const held = { ...cur, pendingOpen: opened };
         mapRef.current.set(k, held);
-        if (activeTabIdRef.current === landingTab) setSlice(held);
+        if (activeTabIdRef.current === landingTab) setSlice(k, held);
         return;
       }
       const next = {
@@ -708,7 +717,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
         ...(fileChanged ? { railed: false } : {}),
       };
       mapRef.current.set(k, next);
-      if (activeTabIdRef.current === landingTab) setSlice(next);
+      if (activeTabIdRef.current === landingTab) setSlice(k, next);
     };
     document.addEventListener('swarm:open-file', handleOpenFile);
     return () => {

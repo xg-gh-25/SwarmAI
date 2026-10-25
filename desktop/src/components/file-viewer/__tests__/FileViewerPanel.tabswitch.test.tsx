@@ -54,6 +54,7 @@ function Harness() {
   return (
     <div>
       <button data-testid="open-A" onClick={() => setFileByTab((m) => ({ ...m, 'tab-A': { filePath: 'a/alpha.md', fileName: 'alpha.md' } }))}>openA</button>
+      <button data-testid="open-B" onClick={() => setFileByTab((m) => ({ ...m, 'tab-B': { filePath: 'b/beta.md', fileName: 'beta.md' } }))}>openB</button>
       <button data-testid="to-B" onClick={() => setActiveTabId('tab-B')}>toB</button>
       <button data-testid="to-A" onClick={() => setActiveTabId('tab-A')}>toA</button>
       <FileViewerPanel
@@ -101,6 +102,37 @@ describe('Canvas cross-tab bleed (real FileViewer render path)', () => {
     // On tab B: beta.md shows, alpha.md must be GONE (not lingering as a stale tab)
     await waitFor(() => expect(screen.queryAllByText('beta.md').length).toBeGreaterThan(0));
     expect(screen.queryAllByText('alpha.md')).toHaveLength(0);
+  });
+});
+
+describe('Canvas on a chat-tab switch: lands at once, no ease or fade', () => {
+  it('opening on the same tab eases + fades; a switch that changes the Canvas does neither', async () => {
+    // real frame order: callbacks run only when the test paints a frame
+    let frames: FrameRequestCallback[] = [];
+    vi.mocked(window.requestAnimationFrame).mockImplementation((cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+    const paint = () => act(() => { const f = frames; frames = []; f.forEach((cb) => cb(0)); });
+    render(<Harness />);
+    paint();
+    await act(async () => { screen.getByTestId('open-A').click(); });
+    // opened on THIS tab -> eased width + faded content (unchanged behaviour)
+    expect(screen.getByTestId('file-viewer-panel').className).toContain('canvas-width-reveal');
+    expect(screen.getByTestId('canvas-content-column').className).toContain('canvas-content-fade');
+
+    // A (open) -> B (closed): the width change lands at once
+    await act(async () => { screen.getByTestId('to-B').click(); });
+    expect(screen.getByTestId('file-viewer-panel').className).not.toContain('canvas-width-reveal');
+
+    // B (closed) -> A (open): no ease, and the content column does not fade in
+    await act(async () => { screen.getByTestId('to-A').click(); });
+    expect(screen.getByTestId('file-viewer-panel').className).not.toContain('canvas-width-reveal');
+    expect(screen.getByTestId('canvas-content-column').className).not.toContain('canvas-content-fade');
+
+    // two frames later the ease is back for the next open/close on this tab
+    paint(); paint();
+    await act(async () => { screen.getByTestId('to-B').click(); });
+    paint(); paint();
+    await act(async () => { screen.getByTestId('open-B').click(); });
+    expect(screen.getByTestId('file-viewer-panel').className).toContain('canvas-width-reveal');
   });
 });
 

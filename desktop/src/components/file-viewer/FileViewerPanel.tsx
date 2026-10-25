@@ -10,7 +10,7 @@
  * - `PANEL_CONSTANTS`   — Min/max/default width values
  */
 
-import { memo, useState, useCallback, useEffect, useRef, useReducer, type CSSProperties } from 'react';
+import { memo, useState, useCallback, useEffect, useLayoutEffect, useRef, useReducer, type CSSProperties } from 'react';
 import FileViewer from './FileViewer';
 import type { FileViewerProps } from './FileViewer';
 import { CanvasOutputRail } from './CanvasOutputRail';
@@ -301,6 +301,39 @@ function FileViewerPanelImpl({
   // (the active tab's CanvasTabState slice), written via `setCollapse`. No panel-local
   // useState, no localStorage — so collapsing tab A's Canvas no longer bleeds to tab B.
   const { railed, outputsCollapsed } = collapse;
+
+  // ── Tab switch: no width ease, no content fade ──
+  // The width ease and the content fade are for opening / closing the Canvas on
+  // THIS tab. A chat-tab switch that changes the Canvas (tab A open, tab B closed)
+  // must land at once: easing the width for 220ms re-lays out the chat column's
+  // message list every frame and reads as jitter. `tabSwitched` is true only in the
+  // render where the owning tab changed; the fade choice is fixed when the content
+  // column mounts, because adding the fade class to a visible column replays it.
+  const scopeRef = useRef(props.tabScopeKey);
+  const tabSwitched = scopeRef.current !== props.tabScopeKey;
+  // Held off until two frames have painted: a render that follows the switch in
+  // the same frame must not put the ease back before the browser applied the width.
+  const noEaseRef = useRef(false);
+  if (tabSwitched) noEaseRef.current = true;
+  const branch = !isOpen ? 'closed' : railed ? 'rail' : 'full';
+  const branchRef = useRef(branch);
+  const fadeRef = useRef(true);
+  if (branch === 'full' && branchRef.current !== 'full') fadeRef.current = !noEaseRef.current;
+  useLayoutEffect(() => {
+    scopeRef.current = props.tabScopeKey;
+    branchRef.current = branch;
+  });
+  useLayoutEffect(() => {
+    if (!tabSwitched) return undefined;
+    let id2 = 0;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => { noEaseRef.current = false; });
+    });
+    return () => { cancelAnimationFrame(id1); cancelAnimationFrame(id2); };
+    // keyed on the tab only: a later render on the same tab must not cancel the release
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.tabScopeKey]);
+  const widthEase = noEaseRef.current ? '' : 'canvas-width-reveal';
   const toggleOutputs = useCallback(() => setCollapse({ outputsCollapsed: !outputsCollapsed }), [setCollapse, outputsCollapsed]);
   const collapseToRail = useCallback(() => setCollapse({ railed: true }), [setCollapse]);
   const expandFromRail = useCallback(() => setCollapse({ railed: false }), [setCollapse]);
@@ -554,7 +587,7 @@ function FileViewerPanelImpl({
   if (!isOpen) {
     return (
       <div
-        className="relative flex-shrink-0 canvas-width-reveal"
+        className={`relative flex-shrink-0 ${widthEase}`}
         style={{ width: RAIL_WIDTH, marginRight: PANEL_CONSTANTS.RIGHT_GAP, '--spout-tint': canvasTint } as CSSProperties}
         data-testid="file-viewer-panel"
       >
@@ -598,7 +631,7 @@ function FileViewerPanelImpl({
   if (railed) {
     return (
       <div
-        className="relative flex-shrink-0 canvas-width-reveal"
+        className={`relative flex-shrink-0 ${widthEase}`}
         style={{ width: RAIL_WIDTH, marginRight: PANEL_CONSTANTS.RIGHT_GAP, '--spout-tint': canvasTint } as CSSProperties}
         data-testid="file-viewer-panel"
       >
@@ -644,7 +677,7 @@ function FileViewerPanelImpl({
 
   return (
     <div
-      className={`relative flex-shrink-0 flex ${isDragging ? '' : 'canvas-width-reveal'}`}
+      className={`relative flex-shrink-0 flex ${isDragging ? '' : widthEase}`}
       style={{ width: revealWidth, marginRight: PANEL_CONSTANTS.RIGHT_GAP, '--spout-tint': canvasTint } as CSSProperties}
       data-testid="file-viewer-panel"
     >
@@ -712,7 +745,7 @@ function FileViewerPanelImpl({
           effect at rest); the resize handle is a SIBLING of this column, so it stays
           live. `contain:layout` is orthogonal (layout containment, not hit-testing). */}
       <div
-        className="flex-1 min-w-0 flex flex-col overflow-hidden canvas-content-fade"
+        className={`flex-1 min-w-0 flex flex-col overflow-hidden ${fadeRef.current ? 'canvas-content-fade' : ''}`}
         style={{ contain: 'layout', pointerEvents: isDragging ? 'none' : undefined }}
         data-testid="canvas-content-column"
       >

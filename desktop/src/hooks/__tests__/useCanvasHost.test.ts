@@ -394,4 +394,26 @@ describe('useCanvasHost — pill lastSeenOutputCount (run_9dd59523, no nagging)'
     expect(result.current.outputCount).toBe(1);
     expect(result.current.lastSeenOutputCount).toBe(0); // B not seen — A's open didn't bleed
   });
+
+  it('the very first render after a tab switch already carries the new tab\'s Canvas (no stale frame)', () => {
+    const seen: Array<{ t: string; file: string | null }> = [];
+    const { result, rerender } = renderHook(
+      ({ t }) => {
+        const h = useCanvasHost({ activeTabId: t, sessionId: 's-' + t, isStreaming: false });
+        seen.push({ t, file: h.file?.filePath ?? null });
+        return h;
+      },
+      { initialProps: { t: 'A' } },
+    );
+    act(() => result.current.setFile({ filePath: 'a.md', fileName: 'a.md' }));
+    seen.length = 0;
+    rerender({ t: 'B' });
+    // every committed or discarded render for B shows B's (empty) Canvas, never A's
+    expect(seen.filter((r) => r.t === 'B').every((r) => r.file === null)).toBe(true);
+    seen.length = 0;
+    rerender({ t: 'A' });
+    expect(seen.filter((r) => r.t === 'A').map((r) => r.file).at(-1)).toBe('a.md');
+    // the render React commits for A shows a.md (a discarded render-phase pass may precede it)
+    expect(result.current.file?.filePath).toBe('a.md');
+  });
 });
