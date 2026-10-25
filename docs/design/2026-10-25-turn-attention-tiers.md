@@ -3,273 +3,188 @@ title: Turn attention tiers (what in a chat turn gets the user's attention, deci
 date: 2026-10-25
 created: 2026-10-25
 updated: 2026-10-25
-status: draft v3, after two fresh-context reviews (v1 and v2 verdict "needs redesign"); for Gawan's review
+status: draft v4, redesigned from the root after three reviews of v1-v3 (all "needs redesign"); for Gawan's review
 ---
 
 # Turn attention tiers
 
-Governs how loudly each part of a chat turn is drawn. Files: `desktop/src/pages/chat/turnZones.ts`,
-`components/TurnZones.tsx`, `TurnCards.tsx`, `AssistantMessageView.tsx`, `ChangesCard.tsx`,
-`EscalationBlock.tsx`, `InlinePermissionRequest.tsx`, `StageDocs.tsx`, `CompactNotice.tsx`,
-`NextSteps.tsx`, `AssistantHeader.tsx`, `components/chat/ChatErrorMessage.tsx`,
-`components/common/AskUserQuestion.tsx`, and one backend observer. Display spec:
-`Knowledge/Designs/2026-10-19-chat-turn-display-spec.md` (v6); §7 lists which v6 lines change.
+Governs how loudly each part of a chat turn is drawn. Display spec:
+`Knowledge/Designs/2026-10-19-chat-turn-display-spec.md` (v6); §7 lists the v6 lines that change.
 
-## 1. The problem
+## 1. Why v1-v3 kept failing
 
-Gawan, 2026-10-25: only what the user cares about gets colour; agent chatter must not take
-attention; key outputs (what was committed) must show where they happen; a general scheme
-covering every place, not one more row; no regressions.
+Three reviews each found new blockers. They came from two root errors in the design, not
+from missing details.
 
-Nothing decides attention today. Each component picks its own weight and colour: 63 Tailwind
-palette classes in 7 turn files alone (counted 2026-10-25), plus hard-coded colours in the
-renderers they import (`ChatErrorMessage`, `AskUserQuestion`, `AssistantHeader`), status
-variables and inline styles. The same meaning gets different colours ("Needs you" is
-`orange-500` on a failed call, the primary colour elsewhere). A note between two WORKED
-groups is drawn like the answer. A commit landed mid-turn leaves no mark until the end card.
-Showing every call's outcome is not the fix: most outcomes are the last line of a `sed` or
-`grep` (`320-}`, `urlparse:`, session `db83772e`).
+**R1. "Attention" was treated as "recolour every component".** v1-v3 planned to move every
+colour in 13 components into a new tone system. That forced an import-closure guard, a tone
+policy for every nested sub-part, an "is it actionable" rule across components, and each
+review found another part the policy did not reach. But the audit of today's colours (§5)
+shows they already mean something specific (diff counts, a card's own state, the agent
+texture, the call running now), and nearly all sit on cards. Two colours break a v6 rule. The
+problems Gawan saw are elsewhere: agent chatter is drawn as loud as the answer, and a landed
+commit leaves no mark in the turn. Recolouring was not needed for either.
 
-## 2. Two axes, one policy
+**R2. A second, live source for landings.** v1-v3 added a mid-turn observer that read the
+landings again while the turn ran. A second reader of the same fact brought every later
+blocker: counting before the command ran, races between parallel calls, attribution,
+dedupe, a new block type, live vs reload. The fact already exists exactly once: the
+`turn_changes` block's `landed` list, read at turn end from git's stamp, persisted, the same
+live and on reload. What it lacks is only **which call in the turn did the landing**.
 
-v1 used one axis and could not say "a process row that is running" or "a landed fact that is
-an error" without exceptions. v2 separates them:
+v4 drops both: no colour migration, no second reader.
 
-- **attention** (how loud): `act` | `know` | `process`.
-  - `act`: the user must do something now. Card, primary-colour label, buttons. Never folds.
-  - `know`: a result the user should know. Normal text weight. Never folds.
-  - `process`: how the agent got there. Secondary or dim text. Folds (v6 rules).
-- **tone** (what a colour means, only from a record or a live state the app owns):
-  `neutral` | `action` | `success` | `error` | `running` | `agent` | `diffAdd` | `diffDelete`.
+## 2. The rule
 
-One file, `desktop/src/pages/chat/attention.ts`, holds the policy: for every part (§3) its
-attention, and its tone as a function of that part's own recorded state. It also holds the
-allowed pairs, enforced by the type:
+Every part of a turn has one attention level:
 
-| attention | allowed tones |
-|---|---|
-| act | action, error |
-| know | neutral, success, error, diffAdd, diffDelete |
-| process | neutral, running, agent |
-
-Shape (so the pairs are a type, not a convention):
-
-```ts
-type ToneByAttention = { act: 'action' | 'error'; know: 'neutral' | 'success' | 'error' | 'diffAdd' | 'diffDelete'; process: 'neutral' | 'running' | 'agent' };
-type Decision<A extends Attention = Attention> = { [K in A]: { attention: K; tone: ToneByAttention[K] } }[A];
-```
-
-Every policy function returns a `Decision`, so `process` + `success` (a green test line
-guessed from output) does not type-check.
-
-`act` needs a control: a part is `act` only when it renders something the user can do (an
-answer, an approve / deny, a decision button, a Retry). A failure the user can only read is
-`know` + `error`.
-`running` (amber on the call running now) and `agent` (the Agents panel tint) are v6 §3.1 /
-§3.2 textures and stay as they are, now named.
-
-Tokens, defined once in `index.css`: `--attn-tone-<tone>` (text) and `--attn-tone-<tone>-tint`
-(`color-mix(<tone> 8%, transparent)`), mapped onto the existing theme variables
-(`--color-primary`, `--color-status-success/error`, the current amber and purple). Plus
-`.attn-act`, `.attn-know`, `.attn-process` for weight and text colour. Components ask the
-policy and use its class; they do not pick colours.
-
-## 3. Every part, with its attention and tone
-
-The boundary is everything `AssistantMessageView` renders for one assistant message, the
-renderers it imports included. Rows `TabView` draws between messages (compaction divider,
-reconnect, turn-phase line, busy-wait, back-to-latest) are outside the turn; they are listed
-in §3.3 so they are not forgotten, and are out of scope.
-
-### 3.1 Zones (`Zone['kind']` in `turnZones.ts`: ten kinds today, `landing` makes eleven)
-
-| Part | attention | tone | Change |
-|---|---|---|---|
-| `needs`: question / permission / escalation, **pending** | act | action | colours from tokens |
-| `needs`, **answered / decided / resolved** | process | neutral | secondary text only; its content stays as today (every recorded answer, multi-select chips included) |
-| `failure`: a call that failed and ended the turn | know | error | it has no control, so not act; `orange-500` "Needs you" label → `know`/`error` tokens |
-| `text` answer | know | neutral | none (no RESULT label exists, and none is added: a test asserts it, and colour by position would guess success) |
-| `text` restatement | process | neutral | secondary text |
-| `text` note (between groups) | process | neutral | **body colour → secondary** |
-| `thinking` (THINKING / THOUGHTS, before the first text or call) | process | neutral | unchanged: shown in full while written (it is the receipt, v6 §0.3 / §2.1) |
-| thought rows inside a phase | process | neutral | **the one being written shows its first line; open it for all** |
-| `phase` (WORKING / WORKED) | process | neutral | — |
-| tool strip | process | running while running, else neutral | ▸ when it has detail; the detail stays the persisted outcome |
-| Agents panel (inside a phase or stage) | process | agent | — |
-| `pipelineStart` | process | neutral | — |
-| `stage` group | process | running while running, else neutral | — |
-| `stageResult` (summary + docs) | know | neutral | — |
-| `gate` PASS | know | neutral | — |
-| `gate` BLOCK | know | error | a BLOCK that stops the run is also an `act` card already |
-| `stopped` | know | neutral | — |
-| **landing row (new zone kind `landing`)** | know | success, or error when its record says it is not on the destination (`state: off`) | new, §4 |
-
-### 3.2 Parts `AssistantMessageView` adds around the zones
-
-| Part | attention | tone |
+| Level | Meaning | Look |
 |---|---|---|
-| Background-finished card | know | neutral |
-| `RunResult` | know | success / error from the run's recorded verdict, else neutral |
-| `AttentionCard` (pipeline needs-you) | act | action |
-| Output card: files, deliverables, landings | know | diffAdd / diffDelete on counts; success / error on a landing's recorded state |
-| Assumptions disclosure | process | neutral |
-| Terminal error (`ChatErrorMessage`) that renders Retry (today `QUEUE_TIMEOUT`) | act | error |
-| Terminal error without a control | know | error |
-| Message action note (Compact / Save result) | know | success / error from its recorded `severity`, else neutral |
-| Answered-card controls, stage document cards, wait hint | as their part | from their part |
-| Next-step chips | know | neutral |
-| Assistant header, avatar, action buttons, bee, streaming dot | process | neutral, the streaming dot `running`; avatar and bee SVG are brand artwork, exempt by name |
+| act | the user must do something | a card with controls (as today) |
+| know | a result the user should know | normal text, never folds; a landed fact gets a faint success tint |
+| process | how the agent got there | secondary / dim text, folds; no colour except the two v6 textures (§5) |
 
-Exempt from tone everywhere (content, not attention): the user's own text and markdown, syntax highlighting, file-type badges (`FileTypeIcon`), avatar, bee.
+## 3. Attention is decided in the model, once
 
-### 3.3 Outside the turn (out of scope, listed)
+- `turnZones.ts` gets `ATTENTION: Record<Zone['kind'], Attention | ((z) => Attention)>`. A
+  `Record` over the kind union: a new zone kind without an entry is a type error.
+- Each zone's attention goes on the host node that already exists for it,
+  `<div key={z.id} data-zone={z.kind}>` (`TurnZones.tsx` ~991), as `data-attn`. No node is
+  added, moved or re-keyed.
+- One CSS rule in `index.css`: text directly in a `[data-attn="process"]` text zone uses
+  `--color-text-secondary`. Components do not pick text colours for this.
 
-`TabView`: compaction divider and compaction notice (`CompactNotice`), reconnect / resume, turn-phase line, busy-wait, background-agent
-row, back-to-latest. Tab notice bar, toasts, Canvas.
+| Zone kind | Attention |
+|---|---|
+| `needs` | act (the card itself already collapses to a one-line receipt once answered, v6 §4) |
+| `failure` | know (it reports; it has no control) |
+| `text` answer | know |
+| `text` restatement, `text` note | process |
+| `thinking`, `phase`, `stage`, `pipelineStart` | process |
+| `stageResult`, `gate`, `stopped`, `landing` (new, §4) | know |
 
-### 3.4 How completeness is checked
+Parts outside the zone list are fixed and already distinct cards; they keep their look:
+background-finished (know), `RunResult` (know), `AttentionCard` (act), output card (know),
+assumptions (process), terminal error (act when it renders Retry, else know), next steps
+(know), header / actions (process). A test lists these by testid so a new part has to be
+added to the list.
 
-- Zones: `type ZoneKind = Zone['kind']`; the policy is `Record<ZoneKind, …>`, so adding a zone
-  kind without a policy entry is a type error.
-- No new elements. Zones already render on one stable keyed host,
-  `<div key={z.id} data-zone={z.kind}>` (`TurnZones.tsx` ~991); the §3.2 parts already have
-  their own keyed wrappers (`AssistantMessageView.tsx` ~470-530). `attnProps(part, state)`
-  returns `{ 'data-attn', 'data-tone', className }` and is spread onto those existing nodes,
-  so no node is added, moved or re-keyed.
-- Test: a fixture holding every part of §3.1 and §3.2 asserts every first-level child of the
-  turn carries `data-attn`, and (in the replay and column-grid suites) that node identity and
-  every measured x offset are unchanged by this step.
-- Nested colour is covered by the §6 guard, not by `data-attn`.
+## 4. Where a landing happened: one source
 
-## 4. Mid-turn landings (the only backend change)
+### 4.1 Backend: the stamp names its call
 
-### 4.1 Trigger and read
+- `run_owner_gate` already prefixes a main-agent `session_worktree land` with
+  `SWARM_APP_SESSION_ID=… SWARM_TURN_ID=…` (`_session_worktree_rewrite`,
+  `run_owner_gate.py` ~463). It adds `SWARM_TOOL_USE_ID=<tool_use_id>` the same way, under the
+  same conditions (main agent, valid turn id). The gate already receives `tool_use_id`
+  (`run_owner_gate.py` ~523).
+- `session_worktree land` writes it into the stamp: `swarm-land <branch> session=<s>
+  turn=<t> tool=<id> onto=<sha>`, after validating it (`^[A-Za-z0-9_]{1,64}$`, the shape of
+  an SDK tool id such as `toolu_01…`; invalid or absent → `tool=` is left out, so a stamp can
+  never carry a space or `=` from it).
+- `session_landings._STAMP` accepts an optional `tool=<id>` field. A stamp without it (every
+  stamp written before this change) parses exactly as today. Each returned landing gains
+  `toolUseId` when its stamp has one.
+- `turn_changes` passes it through; `TurnLanding` (`types/index.ts` ~506) gains optional
+  `toolUseId`. Nothing else in the read changes: same reader, same pool, same time, same block.
 
-- Trigger: the gate that already recognises a `session_worktree land` handed the turn's id
-  (`run_owner_gate.py` ~544, where it increments `_turn_lands`) also records that call's
-  `tool_use_id` in the turn's `_land_calls` set (reset with `_turn_lands`,
-  `session_unit.py` ~1442). The gate runs BEFORE the command, so the set says "this call may
-  land", never "it landed". `_turn_lands` stays only the end card's `expect` hint.
-- The observer runs only on the ToolResult whose id is in `_land_calls` (so a parallel,
-  unrelated result can never consume the read before the merge wrote its stamp), removes the
-  id whatever the outcome, and then calls `session_landings.read_session(session_id, turn_id=…,
-  deadline=Deadline(…))` in the **`turn_changes` pool** (it runs several git commands; the
-  end card uses the same pool), with a short deadline and an outer wait bound. Both
-  ToolResult delivery paths are handled, the way `_pipeline_stage_events` is
-  (`streaming_orchestrator.py` ~2106, ~2528).
-- Each landing in the result not yet emitted this turn becomes one `turn_landing` block,
-  carrying that landing as `read_session` returns it (`repo, gitRoot, dest, branch, onto, new,
-  count, subjects, state`) plus `at`. Dedupe key: `(gitRoot, dest, new)`, held on the
-  `SessionUnit` and reset with the turn's state, so retries and question / permission
-  continuations of the same turn share it.
-- Nothing stamped → nothing shown (same rule as the end card). A land that refused, failed
-  or was already up to date wrote no stamp, so its read finds nothing new and nothing shows. Two sessions
-  landing in one repo: git's ref lock serialises them; each read filters by its own
-  session/turn stamp.
-- The block is persisted before it is forwarded, like `pipeline_stage`
-  (`session_router.py` ~2524), so live == reload. It is added to `ContentBlock`,
-  `DISPLAY_TYPES` and `deriveTurnView` (frontend) and to `context_injector`'s
-  non-conversational list (backend).
+### 4.2 Frontend: the row is placed at the call's group
 
-- The end card's read is separate and unchanged: it still reads at turn end with
-  `expect = _turn_lands`; the mid-turn read never writes anything it uses.
+- In `turnZones`, for each `view.changes.landed[i]` with a `toolUseId`, find the top-level
+  zone (a `phase`, or a `stage`) that contains that call and insert a `landing` zone right
+  after it. The phase is not split, so v6 §2.3's boundaries and every existing zone's key stay
+  as they are.
+- The row: `⎇ <dest> · <sha> <subject>` per commit (the subjects the reader already returns;
+  "N more commits" beyond them), a faint success tint and left bar; `state: off` (the
+  destination was rewound since) uses the error tint. Click opens the landing in Canvas.
+- No `toolUseId`, or a call id not in this turn (sub-agent lands, which carry no turn id by
+  design; turns before this change): no row. It shows only on the end card, as today.
+- End card: a landing that has a row above lists its files only and "↑ landed above"; its
+  subjects are not repeated (v6 §0.9). Decided from the same block, so it cannot disagree.
 
-Cost: nothing on send or per token. The same git reads the end card makes, once per land, in
-the pool the end card already uses.
+### 4.3 Timing (a deliberate trade-off)
 
-### 4.2 Shown once
+`turn_changes` arrives just before the turn's `result`. So the landing row appears at its place
+when the turn ends, not the moment the merge happens. During a long turn the user sees the
+land call's strip, not yet the row. This keeps one source, live == reload, and no new
+mid-turn machinery. Showing it the moment it lands would need the mid-turn reader v1-v3
+could not make safe; it is not part of this design.
 
-The landing row shows the commits: `⎇ main · <sha> <subject>` per commit (up to the
-reader's subject cap, then "N more commits"). The end card's landing section then shows, for a
-landing already shown as a row in this turn, only its files and a "landed above" link to the
-row, not the subjects again. Which landings were shown is read from the turn's own
-`turn_landing` blocks (same `new`), not guessed.
+## 5. Colour audit (the whole list, once)
 
-## 5. Not recognised, on purpose (never guess)
+Today's colours in the turn's components (2026-10-25), by meaning:
 
-- Test or build pass / fail (would mean parsing tool output). A failure the agent cannot
-  handle already reaches the user as an `act` card.
-- Commits that were not landed (turn-result-card §1).
-- A call's outcome line is never promoted out of the strip's detail.
-- Raw tool output: `content` is live only and not persisted (`types/index.ts` ~242), so the
-  strip detail stays the persisted outcome. Showing more would need its own persisted, bounded,
-  redacted field and is not part of this design.
+| Colour | Where | Verdict |
+|---|---|---|
+| amber on the running strip / stage | `TurnZones` ~369 | keep: v6 §3.1 "running" texture |
+| purple Agents panel, background-finished card | `TurnZones` ~540-616, `AssistantMessageView` ~106-112 | keep: v6 §3.2 agent texture |
+| green / red diff counts and bars | `ChangesCard` ~37-72 | keep: know, the numbers themselves |
+| red BLOCK, amber "Not ready to push" | `TurnCards` ~59-98 | keep: know, the run's recorded verdict |
+| questions / permissions / escalation colours | `AskUserQuestion`, `InlinePermissionRequest`, `EscalationBlock` | keep: act cards and their own states |
+| error / warning tones, Retry countdown | `ChatErrorMessage` | keep: act / know error card |
+| green / red memory-save icon, action note | `AssistantMessageView` ~598-677 | keep: the action's recorded result |
+| primary focus rings | many | keep: accessibility, not attention |
+| **blue pulsing dot in the header while streaming** | `AssistantHeader.tsx` ~56 | **remove**: v6 §0.7 allows one animated signal, the bee |
+| **orange "Needs you" on a failed call** | `AssistantMessageView.tsx` ~428 | **change** to "Failed" in the error tone: nothing for the user to do on it |
 
-## 6. Guard
+Guard (narrow, stable): `turnAttention.test.ts` asserts (a) every zone carries `data-attn`
+over a fixture of every kind; (b) the process-zone renderers in `TurnZones.tsx` (thought,
+strip, phase header, note) contain no colour class other than the amber running texture,
+the purple agent texture and primary focus rings. No closure scan, no colour migration.
 
-`turnAttention.test.ts` (the `navVisualSystem.test.ts` pattern) scans the turn render
-closure: the files reachable by import from `AssistantMessageView.tsx` within
-`desktop/src/pages/chat/` and `desktop/src/components/{chat,common}/`, computed by the test
-from the import graph (so a new imported file is scanned without editing the test), minus
-the content exemptions of §3.2. It looks for: Tailwind palette colour
-classes, raw hex / rgb / hsl, inline `color` / `background` / `border` styles, and
-`--color-status-*` / `--color-primary` used outside the tier tokens. Per-file counts must equal
-`KNOWN`; step 1 records today's real counts, each migration step lowers its entry, the end
-state is `{}` apart from the named brand-artwork exemptions.
+## 6. The process-tier changes (the pilot)
+
+- note and restatement text → secondary colour (via `data-attn`).
+- a thought being written inside a phase shows its first line (it only grows, so the stream
+  stays monotonic); open it for the full text. The first THINKING passage stays full (v6 §2.1).
+- a strip with detail shows ▸; the detail stays the persisted outcome (raw output is live only).
 
 ## 7. Spec v6 changes
 
-- §0.6 adds: "colour carries a tone read from a record or a live state the app owns; only
-  `act` uses the primary colour."
-- §0.8 / §2.3: a thought being written INSIDE a phase shows its first line (it only grows,
-  so the stream stays monotonic); open it for the full text. §2.1 (the first THINKING passage,
-  in full) is unchanged. Test that changes: `AssistantMessageView.zones.test.tsx` AC2 (~127-149,
-  the in-phase live thought); AC1 (~78-83, the first THINKING) stays.
 - §2.4: a note between groups is secondary colour.
+- §2.3: a thought being written inside a phase shows its first line.
 - §3.1: a strip with detail shows ▸.
-- §4: an answered card is a process receipt (secondary text; content unchanged, so
-  `ContentBlockRenderer.askUserQuestion.test.tsx` keeps passing). A failure with no control is
-  `know`, not "Needs you".
-- §1 table: new row "landing, at the call that landed"; §8: the end card does not repeat a
-  landing's subjects shown above.
+- §1 table + §8: a landing row after the group that holds the call; the end card does not
+  repeat its subjects.
+- §4: a failed call with nothing to decide is "Failed", not "Needs you".
 
 ## 8. Regression control
 
-1. Acceptance tests first, red on today's code by assertion, each fix mutation-checked:
-   - backend: a counted land yields one `turn_landing` block from the stamp; a second read in
-     the turn emits nothing; an unstamped or refused land emits nothing; a continuation of the
-     turn does not re-emit; the read runs in `turn_changes`, never on the event loop.
-   - frontend: §3.4 completeness (type + runtime fixture); a `landing` zone renders at its
-     call's place, live == reload, in the stream-order, replay and column-grid suites; the
-     end card does not repeat a shown landing's subjects; the live thought shows its first
-     line and opens to full; a note's colour differs from the answer's; the §6 guard.
-2. Existing suites green. A test changes only where §7 changes the rule it asserts, each
-   listed in the commit message. Known today: zones AC2 live thought (step 2);
-   `AssistantMessageView.turnCards.test.tsx` ~99 and ~151 exact colour classes (step 4); the
-   failure card's "Needs you" label (step 4). New red tests before code: note tone, strip ▸,
-   in-phase live thought first line, `failure` not labelled "Needs you". Suites: today `src/pages/chat` (74 files, 868 tests),
-   `test_pipeline_stage_events.py`, `test_session_landings.py`, `test_turn_changes.py`,
-   `test_context_injector*.py`.
-3. Light, dark and both locales: the pilot (step 2) is checked by Gawan in light and dark;
-   new strings exist in `en.json` and `zh.json` (the i18n parity test covers it).
-4. Data is not touched. Presentation changes for every turn, old ones included (they re-render
-   with the new look); old turns have no `turn_landing` blocks and show no landing rows.
+1. Red tests first, by assertion, each fix mutation-checked:
+   - backend: a land with `SWARM_TOOL_USE_ID` stamps `tool=`; the reader returns `toolUseId`;
+     a stamp without `tool=` parses as before (existing stamp fixtures unchanged); an invalid
+     id is left out; the gate adds the variable only where it adds the turn id (sub-agent:
+     neither).
+   - frontend: every zone has `data-attn`; a note's colour differs from the answer's; the
+     landing row sits right after the group holding its call, in the stream-order, replay and
+     column-grid suites, and existing zone keys are unchanged; no row without `toolUseId`; the
+     end card omits subjects shown above; in-phase live thought first line; strip ▸; no blue
+     dot; "Failed" label.
+2. Existing suites green; a test changes only where §7 changes its rule, listed in the
+   commit: `AssistantMessageView.zones.test.tsx` AC2 (in-phase live thought), the
+   `needs-failure` label assertions, any header-dot assertion. Suites: `src/pages/chat`,
+   `test_session_landings.py`, `test_session_worktree*.py`, `test_turn_changes.py`,
+   `test_run_owner_gate*.py`.
+3. Gawan checks the pilot in light and dark before step 3. New strings in `en.json` and `zh.json`.
+4. Data is not touched. Old turns re-render with the new text weights; they have no
+   `toolUseId`, so no landing rows.
 
 ## 9. Steps (one ff-merged commit each, own worktree, no push, no build)
 
-1. `attention.ts` policy + tokens + `attnProps` on the existing host nodes + guard at today's counts. No visual change.
-2. Pilot: note → secondary, in-phase live thought → first line, strip ▸, answered card → receipt, `failure` → know.
-   Stop for Gawan's light/dark check.
-3. `turn_landing`: backend observer, block, frontend `landing` zone, end-card "shown above".
-4. Migrate every colour in the closure to tokens, file by file, `KNOWN` → `{}`.
-5. Spec v6 edits of §7; status → implemented.
+1. `ATTENTION` + `data-attn` + the process CSS rule + §6 pilot + guard. Stop for Gawan's check.
+2. §5 fixes: header dot, "Failed" label.
+3. Landing placement: gate variable, stamp field, reader field, `landing` zone, end card.
+4. Spec v6 edits; status → implemented.
 
-## 10. Review history
+## 10. What happened to the v1-v3 review findings
 
-- v2 → second fresh-context review: needs redesign. Taken: land trigger by the call's own
-  `tool_use_id` (v2's counter, incremented before the command runs, could be consumed by a
-  parallel result before the stamp existed and miss the land); `act` only with a control
-  (`failure` and Retry-less errors are `know`/`error`); compaction is outside the turn;
-  closure computed from the import graph, action note / streaming dot / content exemptions
-  added; `TurnPart` element replaced by attributes on the existing host nodes (no reparent);
-  first THINKING stays full, only the in-phase live thought shows one line; answered cards
-  keep their content; typed `Decision`; affected tests listed.
-- v1 (2026-10-25) → fresh-context review: needs redesign. Taken: two axes instead of one;
-  boundary and completeness check over every rendered part, not a hand list; stateful tiers
-  (answered card, compaction failure by action); guard over the whole render closure and all
-  colour forms; trigger by `_turn_lands` + `read_session` (v1 called `read_repo` with the wrong
-  shape) in the `turn_changes` pool; dedupe by `(gitRoot, dest, new)` on the `SessionUnit`;
-  strip detail stays the persisted outcome (raw content is live only; v1 broke live == reload);
-  no RESULT label and no positional colour (v1 assumed a label that does not exist); first
-  line, not latest line, for the live thought (monotonic); end card does not repeat subjects;
-  "old turns look as today" corrected.
+Findings tied to the removed mechanisms no longer apply: the mid-turn observer (counter
+race, parallel calls, `read_session` shape, pool, dedupe key, continuation lifetime, new
+block type, live/reload of that block), the colour migration (closure guard, nested tone
+policy, `Decision` pair types, `color-mix` syntax, actionability across components, barrel
+imports). Findings still in force and answered here: first THINKING stays full; raw
+output not shown; no RESULT label or positional colour; answered cards keep their content;
+no new wrapper nodes; end card does not repeat subjects; affected tests listed; old turns
+re-render. Left as it is today, stated: sub-agent lands carry no turn id, so they get no row
+(v3 review asked for it; it needs a turn attribution for agents that can outlive the turn,
+which turn-result-card left out on purpose).
