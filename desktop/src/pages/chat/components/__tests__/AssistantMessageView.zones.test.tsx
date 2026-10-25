@@ -276,6 +276,44 @@ describe('AC2b — a note carries the work after it; earlier ones fold', () => {
     r.rerender(view(blocks, true));
     expect(isShown('runner.py')).toBe(false);
   });
+
+  it('scrolling up keeps what already folded folded (reading freezes, it does not unfold)', () => {
+    vi.useFakeTimers();
+    // TabView always provides ReadingContext; toggling only its value never remounts
+    const at = (b: ContentBlock[], away: boolean) => <ReadingContext.Provider value={away}>{view(b, true)}</ReadingContext.Provider>;
+    const reading = (b: ContentBlock[]) => at(b, true);
+    const following = (b: ContentBlock[]) => at(b, false);
+    const r = render(following(blocks.slice(0, 6)));
+    r.rerender(following(blocks));
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(following(blocks));
+    expect(isShown('runner.py')).toBe(false); // folded while following
+    r.rerender(reading(blocks));
+    expect(isShown('runner.py')).toBe(false); // the user scrolls up: it stays folded
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(reading(blocks));
+    expect(isShown('runner.py')).toBe(false);
+    r.rerender(following(blocks));
+    expect(isShown('runner.py')).toBe(false); // and after coming back
+  });
+
+  it('a step that finished while the user read folds FOLD_DELAY_MS after they return, not on the spot', () => {
+    vi.useFakeTimers();
+    // TabView always provides ReadingContext; toggling only its value never remounts
+    const at = (b: ContentBlock[], away: boolean) => <ReadingContext.Provider value={away}>{view(b, true)}</ReadingContext.Provider>;
+    const reading = (b: ContentBlock[]) => at(b, true);
+    const following = (b: ContentBlock[]) => at(b, false);
+    const r = render(reading(blocks.slice(0, 6)));
+    r.rerender(reading(blocks));
+    act(() => { vi.advanceTimersByTime(3 * FOLD_DELAY_MS); });
+    r.rerender(reading(blocks));
+    expect(isShown('runner.py')).toBe(true);
+    r.rerender(following(blocks));
+    expect(isShown('runner.py')).toBe(true); // back at the bottom: not on the spot
+    act(() => { vi.advanceTimersByTime(FOLD_DELAY_MS + 50); });
+    r.rerender(following(blocks));
+    expect(isShown('runner.py')).toBe(false);
+  });
 });
 
 describe('AC3 — groups toggle; headers count steps and commands only', () => {

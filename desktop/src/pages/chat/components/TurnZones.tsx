@@ -150,21 +150,37 @@ function callSeconds(id: string, running: boolean): number | undefined {
 
 /** Ids that have SETTLED: done, and held done for FOLD_DELAY_MS (or done when first
  *  seen). Only a settled call joins a merge and only a settled thought folds to one
- *  line, so nothing changes shape the moment a call finishes. Inactive → all settled. */
-function useSettled(items: Array<{ id: string; done: boolean }>, active: boolean): (id: string) => boolean {
+ *  line, so nothing changes shape the moment a call finishes. Inactive → all settled.
+ *
+ *  `frozen` (the user scrolled up to read): nothing changes shape. What had settled
+ *  stays settled, what had not stays open, no timer runs. On the way back each item
+ *  still waiting restarts its FOLD_DELAY_MS, so nothing folds the moment they return. */
+function useSettled(items: Array<{ id: string; done: boolean }>, active: boolean, frozen = false): (id: string) => boolean {
   const doneAt = useRef<Map<string, number> | null>(null);
+  const frozenAt = useRef<number | null>(null);
   const [, setTick] = useState(0);
-  const now = Date.now();
+  let now = Date.now();
   if (doneAt.current === null) doneAt.current = new Map(items.filter((i) => i.done).map((i) => [i.id, -Infinity]));
-  else for (const i of items) {
-    if (i.done && !doneAt.current.has(i.id)) doneAt.current.set(i.id, now);
-    // no longer done (a segment became the latest again, the user started reading):
-    // forget it, so it settles FOLD_DELAY_MS after it is done again, not at once
-    else if (!i.done) doneAt.current.delete(i.id);
-  }
   const map = doneAt.current;
-  const pending = items.filter((i) => i.done).map((i) => map.get(i.id)!).filter((at) => at + FOLD_DELAY_MS > now);
-  const nextAt = pending.length ? Math.min(...pending) + FOLD_DELAY_MS : null;
+  if (frozen) {
+    if (frozenAt.current === null) frozenAt.current = now;
+    now = frozenAt.current;
+  } else {
+    if (frozenAt.current !== null) {
+      const at = frozenAt.current;
+      const back = now;
+      for (const [id, t] of map) if (t + FOLD_DELAY_MS > at) map.set(id, back);
+      frozenAt.current = null;
+    }
+    for (const i of items) {
+      if (i.done && !map.has(i.id)) map.set(i.id, now);
+      // no longer done (a segment became the latest again): forget it, so it
+      // settles FOLD_DELAY_MS after it is done again, not at once
+      else if (!i.done) map.delete(i.id);
+    }
+  }
+  const pending = items.filter((i) => i.done && map.has(i.id)).map((i) => map.get(i.id)!).filter((at) => at + FOLD_DELAY_MS > now);
+  const nextAt = frozen || !pending.length ? null : Math.min(...pending) + FOLD_DELAY_MS;
   useEffect(() => {
     if (!active || nextAt === null) return undefined;
     const t = setTimeout(() => setTick((n) => n + 1), Math.max(0, nextAt - Date.now()) + 1);
@@ -713,10 +729,11 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
   const active = live || lingering;
   const reading = useContext(ReadingContext);
   const steps = members.flatMap((m) => (m.kind === 'process' ? m.steps : []));
-  const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active);
+  // while the user reads (scrolled up) nothing changes shape: no fold, no unfold
+  const settled = useSettled(steps.map((s) => ({ id: s.block.id, done: s.status !== 'pending' })), active, reading);
   // the thought being written stays open; a finished one folds FOLD_DELAY_MS later
   const thoughts = members.filter((m): m is ThoughtUnit => m.kind === 'thought');
-  const thoughtSettled = useSettled(thoughts.map((th) => ({ id: `th-${th.ordinal}`, done: !th.live })), active);
+  const thoughtSettled = useSettled(thoughts.map((th) => ({ id: `th-${th.ordinal}`, done: !th.live })), active, reading);
   const batchOf = agentBatches(steps);
   const { lead, segments } = phaseSegments(members);
   // A segment folds FOLD_DELAY_MS after a LATER segment started work (a call, not just
@@ -738,8 +755,8 @@ export function PhaseBody({ members, live, ctx }: { members: PhaseMember[]; live
   const segSettled = useSettled(segments.map((sg) => {
     const id = `seg-tx-${sg.note.textOrdinal}`;
     const holdsRunningAgent = segSteps(sg).some((s) => bgRunning.has(s.block.id));
-    return { id, done: id !== latest && id !== newest && !reading && !holdsRunningAgent };
-  }), active);
+    return { id, done: id !== latest && id !== newest && !holdsRunningAgent };
+  }), active, reading);
 
   const renderItems = (items: BodyItem[]) => {
     // Adjacent thoughts and strips share one column (strip spacing); a panel stands apart.
