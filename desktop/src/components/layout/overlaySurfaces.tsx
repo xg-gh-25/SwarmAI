@@ -16,6 +16,7 @@ import { continueInSession } from './continueInSession';
 import { OVERLAY_CHUNK } from './overlayChunks';
 import { useLayout } from '../../contexts/LayoutContext';
 import type { ToDo } from '../../types/todo';
+import { useBrainsWithPinned } from '../../services/ddd';
 
 // Every overlay's content is its own chunk (design left-nav-overlay-single-source.md
 // S4; the G2 split of run_06c49540 did three). Each lazy component below is built on
@@ -104,9 +105,18 @@ registerOverlay({
 registerOverlay({
   id: 'new-brain',
   render: ({ close, dispatchPrompt }) => (
-    <NewBrainContent onDispatch={dispatchPrompt ?? (() => false)} close={close} />
+    <NewBrainWithNames close={close} onDispatch={dispatchPrompt ?? (() => false)} />
   ),
 });
+
+/** New Brain needs the existing Brain names to refuse a duplicate before dispatch;
+ *  it reads the same cached gallery query the Brain Hub uses (no extra fetch when warm). */
+function NewBrainWithNames({ close, onDispatch }: {
+  close: () => void; onDispatch: (prompt: string, opts?: { autoSend?: boolean }) => boolean;
+}) {
+  const { data } = useBrainsWithPinned();
+  return <NewBrainContent onDispatch={onDispatch} close={close} existingNames={(data?.brains ?? []).map((b) => b.name)} />;
+}
 
 // ── history (session browser) ─────────────────────────────────────────────────────────
 // DATA-REACTIVE + agent-scoped: self-fetches sessions/agents from the shared query

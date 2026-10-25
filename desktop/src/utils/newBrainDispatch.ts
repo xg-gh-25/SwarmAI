@@ -93,6 +93,26 @@ export function classifyStarterItem(input: { value: string; kind?: StarterKind }
   }
 }
 
+// The backend's project-name rule (swarm_workspace_manager._PROJECT_NAME_RE +
+// reserved names), checked BEFORE dispatch so a bad name fails in the form, not
+// minutes later in chat when create_project returns 400/409.
+const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9 _.-]{0,99}$/;
+const RESERVED = new Set(['CON', 'PRN', 'AUX', 'NUL',
+  ...Array.from({ length: 9 }, (_, i) => `COM${i + 1}`), ...Array.from({ length: 9 }, (_, i) => `LPT${i + 1}`)]);
+
+/** Why this Brain name cannot be used, or null when it can. Empty → null (the
+ *  Create button is disabled for an empty name instead of showing an error). */
+export function validateBrainName(raw: string, existing: string[] = []): string | null {
+  const name = raw.trim();
+  if (!name) return null;
+  if (!NAME_RE.test(name)) {
+    return 'Use letters, numbers, spaces, - _ or . (start with a letter or number, at most 100).';
+  }
+  if (RESERVED.has(name.split('.')[0].toUpperCase())) return `"${name}" is a reserved name on Windows.`;
+  if (existing.some((e) => e.toLowerCase() === name.toLowerCase())) return `A Brain named "${name}" already exists.`;
+  return null;
+}
+
 export type PreviewSection =
   | 'identity' | 'knowledge' | 'gates' | 'capabilities' | 'delivery' | 'refresher';
 
@@ -151,8 +171,9 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
       'P3 bind any repo → P3b generate the Project Agent (project-agent.yaml) from this knowledge, ' +
       'using only the pipeline profiles, and show it to me to confirm or change → P4 code-intel ' +
       'for a repo → P5 skills → P6 verify). Surface anything you cannot reach (login-walled links, ' +
-      'missing paths) or any conflicts between sources for me to resolve. When P6 passes, tell me ' +
-      'the brain is ready and that its map is in Brain Hub.',
+      'missing paths) or any conflicts between sources for me to resolve. If the name is taken ' +
+      '(create returns 409), stop and ask me for another name. Run P6 with --record. When it passes, ' +
+      'open Brain Hub for me and tell me the brain is ready.',
   );
   return lines.join('\n');
 }

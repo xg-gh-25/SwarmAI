@@ -25,6 +25,7 @@ import {
   buildBrainManifest,
   detectKind,
   previewSections,
+  validateBrainName,
   type PreviewSection,
   type StarterItem,
   type StarterKind,
@@ -35,9 +36,11 @@ export interface NewBrainContentProps {
   /** Lands a prompt into a chat tab (new or reused). Returns true on success;
    *  false (all tabs busy / unsent draft) must keep the launcher open. From the
    *  OverlayHost ctx bridge = ChatPage's handleDispatchJobPrompt. */
-  onDispatch: (prompt: string) => boolean;
+  onDispatch: (prompt: string, opts?: { autoSend?: boolean }) => boolean;
   /** Close the surface (host's closeOverlay). */
   close: () => void;
+  /** Names of the Brains that already exist (case-insensitive collision check). */
+  existingNames?: string[];
 }
 
 /** The six sections in Brain-map order, with the hex angle used by the preview. */
@@ -86,18 +89,17 @@ function BrainPreview({ name, filled }: { name: string; filled: Record<PreviewSe
 }
 
 const NEXT_STEPS: { n: number; title: string; body: string }[] = [
-  { n: 1, title: 'Set it up together in chat', body: 'Confirm assets → write the knowledge → bind → the agent proposes the Project Agent from it, you confirm → verify. Unreachable links and conflicts are asked there.' },
-  { n: 2, title: 'Watch it grow in Brain Hub', body: 'It appears on the Brain map as soon as the skeleton exists, and its petals fill as each section is written.' },
-  { n: 3, title: 'Ready', body: 'When the check passes, open its Brain map or describe a first change for a Run.' },
+  { n: 1, title: 'Set up together in chat', body: 'Assets, knowledge, binding, then the Project Agent the agent proposes for you to confirm.' },
+  { n: 2, title: 'Grows in Brain Hub', body: 'It shows on the Brain map as being born; each petal fills as its section is written.' },
+  { n: 3, title: 'Ready', body: 'When the check passes, open its map or describe a first change for a Run.' },
 ];
 
-const ROLE_STYLE: Record<StarterRole, { label: string; cls: string }> = {
-  GOVERN: { label: 'GOVERN', cls: 'text-[var(--color-primary)] border-[var(--color-primary)]/40 bg-[var(--color-primary)]/12' },
-  DISTILL: { label: 'DISTILL', cls: 'text-[var(--color-status-warning)] border-[color-mix(in_srgb,var(--color-status-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_12%,transparent)]' },
-  SHELF: { label: 'SHELF', cls: 'text-[var(--color-primary)] border-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)]' },
-};
-
-const ROLE_CYCLE: StarterRole[] = ['GOVERN', 'DISTILL', 'SHELF'];
+/** The three roles, as a segmented choice on each material row. */
+const ROLES: { role: StarterRole; label: string; hint: string; tone: string }[] = [
+  { role: 'GOVERN', label: 'Govern', hint: 'An asset it manages: bound, and a repo gets code-intel', tone: 'var(--color-primary)' },
+  { role: 'DISTILL', label: 'Distill', hint: 'Read once and distilled into its knowledge', tone: 'var(--color-status-warning)' },
+  { role: 'SHELF', label: 'Shelf', hint: 'Kept for reference, read when needed', tone: 'var(--color-text-muted)' },
+];
 
 const KIND_ICON: Record<string, string> = {
   repo: 'code', folder: 'folder', file: 'description', link: 'link', text: 'notes',
@@ -126,7 +128,7 @@ const EMPTY_FORM: BrainForm = { name: '', items: [], draft: '' };
  * former reset-on-raw-event hack (which existed because the old overlay stayed mounted
  * and `open` didn't observably transition on rapid reopen) is no longer needed.
  */
-export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
+export function NewBrainContent({ onDispatch, close, existingNames = [] }: NewBrainContentProps) {
   // Draft memory (run_754fe3e8): the overlay UNMOUNTS on close (OverlayHost
   // renderedId→null), so component-local useState is destroyed — an accidental
   // Esc used to discard everything. useOverlayDraft parks the form in a
@@ -206,19 +208,18 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
     setItems((prev) => prev.filter((it) => it.id !== id));
   }, [setItems]);
 
-  const cycleRole = useCallback((id: number) => {
-    setItems((prev) =>
-      prev.map((it) =>
-        it.id === id
-          ? { ...it, role: ROLE_CYCLE[(ROLE_CYCLE.indexOf(it.role) + 1) % ROLE_CYCLE.length] }
-          : it,
-      ),
-    );
+  const setRole = useCallback((id: number, role: StarterRole) => {
+    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, role } : it)));
   }, [setItems]);
+
+  const nameError = useMemo(() => validateBrainName(name, existingNames), [name, existingNames]);
 
   // Create: build ONE manifest → dispatch → close ONLY if it landed (F4: the
   // boolean guards the deferred close; a refusal keeps the launcher open).
+  // autoSend: clicking Create IS the send — the person already reviewed the form;
+  // making them press Send again on a generated prompt was a second, empty step.
   const handleCreate = useCallback(() => {
+    if (validateBrainName(name, existingNames)) return;
     const manifest = buildBrainManifest(
       name,
       items.map(({ value, kind, role }) => ({ value, kind, role })),
@@ -228,7 +229,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
     // never let the exception dead-end the click with no feedback + no close.
     let landed = false;
     try {
-      landed = onDispatch(manifest);
+      landed = onDispatch(manifest, { autoSend: true });
     } catch {
       landed = false;
     }
@@ -244,7 +245,7 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
       // any reopen without the visible form ever rendering empty during the fade.
       requestAnimationFrame(() => requestAnimationFrame(() => { close(); clearForm(); }));
     }
-  }, [name, items, onDispatch, close, clearForm]);
+  }, [name, items, existingNames, onDispatch, close, clearForm]);
 
   const filled = useMemo(() => previewSections(items), [items]);
   const assetCount = items.filter((it) => it.role === 'GOVERN').length;
@@ -276,15 +277,20 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
         }
         return; // internal drag handled; don't double-add from files/text
       }
-      // Path 2 (fallback): native OS file drop. NOTE: `.path` is undefined in the
-      // Tauri/browser webview → we can only get the basename, which the agent
-      // can't resolve. Kept as best-effort; the reliable routes are Path 1 and
-      // pasting a full path/URL into the input.
+      // Path 2 (fallback): native OS file drop. In the Tauri/browser webview `.path`
+      // is undefined, so only the basename arrives — a path the agent cannot open.
+      // Never add a basename as if it were a path: say so and point at the picker.
       let added = false;
+      let lostPath = false;
       for (const f of Array.from(e.dataTransfer.files ?? [])) {
-        const path = (f as File & { path?: string }).path || f.name;
-        addItem(path);
-        added = true;
+        const path = (f as File & { path?: string }).path;
+        if (path) { addItem(path); added = true; } else { lostPath = true; }
+      }
+      if (lostPath) {
+        document.dispatchEvent(new CustomEvent('swarm:toast', {
+          detail: { message: 'Files dropped from Finder arrive without their full path here. Use Choose files or Choose folder instead.' },
+        }));
+        return;
       }
       // Path 3: text/URI drop (links, pasted text) — only if no files came with it,
       // so a single drop carrying BOTH files and a uri-list can't double-add (#4c).
@@ -296,170 +302,154 @@ export function NewBrainContent({ onDispatch, close }: NewBrainContentProps) {
     [addItem],
   );
 
-  return (
-      <div className="flex-1 min-h-0 flex flex-col" data-testid="new-brain-overlay">
-        {/* Declaration */}
-        <div className="px-6 pt-4 pb-3 border-b border-[var(--color-border)]">
-          <p className="text-body text-[var(--color-text-muted)] max-w-[680px]">
-            A brain is <span className="text-[var(--color-text)] font-semibold">one project&apos;s domain that gets smarter every time you work in it</span>: what it knows, how it delivers, and what it learns. Name it and give me what you already have. I set it up with you in chat.
-          </p>
-        </div>
+  const canCreate = !!name.trim() && !nameError;
 
-        {/* Body: left (name + live Brain preview) · right (starter material) */}
-        <div className="flex-1 min-h-0 grid grid-cols-[300px_1fr]">
-          <div className="p-5 border-r border-[var(--color-border)] flex flex-col gap-4 overflow-y-auto">
-            <div>
-              <label htmlFor="new-brain-name-input" className="block text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">NAME</label>
-              <input
-                id="new-brain-name-input"
-                data-testid="new-brain-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Acme Payments"
-                className="w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg px-3 py-2 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-              />
-            </div>
-            <div>
-              <div className="text-meta font-semibold tracking-wide text-[var(--color-text-muted)]">BRAIN PREVIEW</div>
-              <BrainPreview name={name} filled={filled} />
-              <div className="text-small" data-testid="new-brain-assets">
-                {assetCount > 0
-                  ? <>It governs <span className="font-semibold">{assetCount}</span> asset{assetCount === 1 ? '' : 's'}. A repo gets code-intel, and the agent proposes the Project Agent from its CI.</>
-                  : <><span className="font-semibold">A pure-knowledge brain.</span> No asset to bind, and that is complete.</>}
-              </div>
-              <div className="text-meta text-[var(--color-text-muted)] mt-1">Solid: filled by this material. Dashed: grows later as you work in it.</div>
+  return (
+    <div className="flex-1 min-h-0 flex flex-col" data-testid="new-brain-overlay">
+      <div className="flex-1 min-h-0 grid grid-cols-[340px_1fr]">
+        {/* ── Left: who it is ─────────────────────────────────────────────── */}
+        <div className="p-6 border-r border-[var(--color-border)] flex flex-col gap-5 overflow-y-auto">
+          <div>
+            <label htmlFor="new-brain-name-input" className="block text-small font-semibold text-[var(--color-text)] mb-1.5">Name</label>
+            <input
+              id="new-brain-name-input"
+              data-testid="new-brain-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Acme Payments"
+              aria-invalid={!!nameError}
+              aria-describedby="new-brain-name-help"
+              className={`w-full h-10 bg-[var(--color-input-bg)] border rounded-lg px-3 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] ${
+                nameError ? 'border-[var(--color-status-error)]' : 'border-[var(--color-border)]'}`}
+            />
+            <div id="new-brain-name-help" data-testid="new-brain-name-help"
+              className={`mt-1.5 text-meta ${nameError ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}>
+              {nameError ?? 'Also its folder name in your workspace.'}
             </div>
           </div>
 
-          <div className="p-5 flex flex-col min-w-0">
-            <div className="flex items-baseline justify-between mb-2">
-              <span className="text-meta font-semibold tracking-wide text-[var(--color-text-muted)]">STARTER MATERIAL</span>
-              <span className="text-meta text-[var(--color-text-faint)]">optional</span>
+          <div>
+            <div className="text-small font-semibold text-[var(--color-text)]">Preview</div>
+            <BrainPreview name={name} filled={filled} />
+            <div className="text-small" data-testid="new-brain-assets">
+              {assetCount > 0
+                ? <>Governs <span className="font-semibold">{assetCount}</span> asset{assetCount === 1 ? '' : 's'}. The agent proposes its Project Agent from the repo and CI.</>
+                : <><span className="font-semibold">Pure-knowledge Brain.</span> Nothing to bind, and that is complete.</>}
             </div>
+            <div className="text-meta text-[var(--color-text-muted)] mt-1">Solid sections come from this material. Dashed ones grow as you work in it.</div>
+          </div>
+        </div>
 
-            {/* Acquisition zone — two DISTINCT input methods, not one box (a local
-                file and a URL are different acquisition modes). Local: native OS
-                file browser → absolute paths. Link: a free-text field (paste a
-                URL / repo / path, or type). */}
-            <div className="flex flex-col gap-2 mb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-meta font-semibold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Local</span>
-                <button
-                  type="button"
-                  data-testid="new-brain-add-files"
-                  onClick={() => pickAndAdd('file')}
-                  disabled={picking}
-                  className="btn-md btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <span className="material-symbols-outlined icon-sm">description</span> Add files…
-                </button>
-                <button
-                  type="button"
-                  data-testid="new-brain-add-folder"
-                  onClick={() => pickAndAdd('folder')}
-                  disabled={picking}
-                  className="btn-md btn-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <span className="material-symbols-outlined icon-sm">folder</span> Add folder…
-                </button>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-meta font-semibold tracking-wide uppercase text-[var(--color-text-faint)] w-[42px] shrink-0">Link</span>
-                <input
-                  data-testid="new-brain-material-input"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
-                  onBlur={commitDraft}
-                  placeholder="https://…  ·  git@…  ·  or paste a path"
-                  className="flex-1 min-w-0 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-1.5 text-small text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] placeholder:text-[var(--color-text-faint)]"
-                />
-                <button
-                  type="button"
-                  data-testid="new-brain-material-add"
-                  onClick={commitDraft}
-                  className="btn-md btn-secondary transition-colors shrink-0"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
+        {/* ── Right: what it starts from ──────────────────────────────────── */}
+        <div
+          className="p-6 flex flex-col min-w-0 min-h-0"
+          data-testid="new-brain-dropzone"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={onDropZoneDrop}
+        >
+          <div className="flex items-baseline justify-between">
+            <span className="text-small font-semibold text-[var(--color-text)]">Starter material</span>
+            <span className="text-meta text-[var(--color-text-muted)]">Optional</span>
+          </div>
 
-            {/* Collected list — also a drop target (internal Explorer drag = the
-                reliable path; OS drag is best-effort). The drag cue lives in the
-                empty state, where it's contextual, not a permanent shout. */}
-            <div
-              data-testid="new-brain-dropzone"
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={onDropZoneDrop}
-              className="flex-1 min-h-[160px] flex flex-col"
-            >
-              <div className="flex-1 flex flex-col gap-1.5 overflow-y-auto">
-                {items.length === 0 && (
-                  <div className="text-small text-[var(--color-text-muted)] py-2">
-                    No material yet. That is fine: it becomes a pure-knowledge brain you grow in chat.
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              data-testid="new-brain-material-input"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitDraft(); } }}
+              onBlur={commitDraft}
+              placeholder="Paste a repo URL, a link or a local path"
+              className="flex-1 min-w-0 h-10 bg-[var(--color-input-bg)] border border-[var(--color-border)] rounded-lg px-3 text-body text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+            />
+            <button type="button" data-testid="new-brain-material-add" onClick={commitDraft}
+              disabled={!draft.trim()} className="btn-md btn-secondary shrink-0 disabled:opacity-40">
+              Add
+            </button>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <button type="button" data-testid="new-brain-add-files" onClick={() => pickAndAdd('file')}
+              disabled={picking} className="btn-md btn-ghost disabled:opacity-50">
+              <span className="material-symbols-outlined icon-sm">upload_file</span> Choose files
+            </button>
+            <button type="button" data-testid="new-brain-add-folder" onClick={() => pickAndAdd('folder')}
+              disabled={picking} className="btn-md btn-ghost disabled:opacity-50">
+              <span className="material-symbols-outlined icon-sm">folder_open</span> Choose folder
+            </button>
+          </div>
+
+          <div className="mt-4 flex-1 min-h-0 flex flex-col">
+            {items.length === 0 ? (
+              <div className="flex-1 min-h-[220px] rounded-xl border border-dashed border-[var(--color-border)] grid place-items-center text-center px-6"
+                data-testid="new-brain-empty">
+                <div>
+                  <span className="material-symbols-outlined text-[var(--color-text-muted)]" aria-hidden>move_to_inbox</span>
+                  <div className="text-body text-[var(--color-text)] mt-1">Drop files or folders here</div>
+                  <div className="text-small text-[var(--color-text-muted)] mt-1 max-w-[420px]">
+                    A repo becomes an asset it governs, documents are distilled into knowledge, folders are kept for reference.
+                    With nothing at all it starts as a pure-knowledge Brain.
                   </div>
-                )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2">
                 {items.map((it) => (
-                  <div key={it.id} className="flex items-center gap-2.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg px-3 py-2">
-                    <span className="w-4 text-center material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{KIND_ICON[it.displayKind] ?? 'description'}</span>
-                    <span className="flex-1 min-w-0 truncate text-small" title={it.value}>{it.value}</span>
-                    <button
-                      data-testid={`new-brain-role-${it.id}`}
-                      onClick={() => cycleRole(it.id)}
-                      className={`btn-sm btn-secondary tracking-wide ${ROLE_STYLE[it.role].cls}`}
-                      title="Click to change the role"
-                    >
-                      {ROLE_STYLE[it.role].label} ▾
-                    </button>
-                    <button
-                      aria-label="remove"
-                      data-testid={`new-brain-remove-${it.id}`}
-                      onClick={() => removeItem(it.id)}
-                      className="text-[var(--color-text-faint)] hover:text-[var(--color-text)] text-body"
-                    >
-                      ✕
+                  <div key={it.id} data-testid={`new-brain-item-${it.id}`} data-role={it.role}
+                    className="flex items-center gap-3 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg pl-3 pr-1.5 py-1.5">
+                    <span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{KIND_ICON[it.displayKind] ?? 'description'}</span>
+                    <span className="flex-1 min-w-0 text-small break-all" title={it.value}>{it.value}</span>
+                    <div role="radiogroup" aria-label="Role" className="flex shrink-0 rounded-md border border-[var(--color-border)] overflow-hidden">
+                      {ROLES.map((r) => {
+                        const on = it.role === r.role;
+                        return (
+                          <button key={r.role} type="button" role="radio" aria-checked={on} title={r.hint}
+                            data-testid={`new-brain-role-${it.id}-${r.role}`}
+                            onClick={() => setRole(it.id, r.role)}
+                            className={`h-7 px-2.5 text-meta ${on ? 'font-semibold' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+                            style={on ? { color: r.tone, background: `color-mix(in srgb, ${r.tone} 14%, transparent)` } : undefined}>
+                            {r.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button aria-label={`Remove ${it.value}`} data-testid={`new-brain-remove-${it.id}`}
+                      onClick={() => removeItem(it.id)} className="icon-btn shrink-0">
+                      <span className="material-symbols-outlined icon-sm">close</span>
                     </button>
                   </div>
                 ))}
-              </div>
-              <div className="mt-2 border border-dashed border-[var(--color-border)] rounded-lg py-2 text-center text-meta text-[var(--color-text-muted)]">
-                Drag files or folders here. Each is sorted by type; click its role to change it.
-              </div>
-              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-meta text-[var(--color-text-muted)]">
-                <span><span className={`px-1.5 rounded ${ROLE_STYLE.GOVERN.cls}`}>GOVERN</span> an asset it manages, bound</span>
-                <span><span className={`px-1.5 rounded ${ROLE_STYLE.DISTILL.cls}`}>DISTILL</span> read once, distilled into knowledge</span>
-                <span><span className={`px-1.5 rounded ${ROLE_STYLE.SHELF.cls}`}>SHELF</span> kept for reference</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Footer: what happens next + dispatch */}
-        <div className="px-6 py-3.5 border-t border-[var(--color-border)] bg-[var(--color-bg-chrome)]">
-          <div className="text-meta font-semibold tracking-wide text-[var(--color-text-muted)] mb-1.5">WHAT HAPPENS ON CREATE</div>
-          <div className="grid grid-cols-3 gap-2" data-testid="new-brain-next-steps">
-            {NEXT_STEPS.map((s) => (
-              <div key={s.n} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex w-[18px] h-[18px] items-center justify-center rounded-full text-meta font-semibold bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] text-[var(--color-primary)]">{s.n}</span>
-                  <span className="text-small font-semibold">{s.title}</span>
+                <div className="text-meta text-[var(--color-text-muted)] mt-1">
+                  Each item was sorted by type. Hover a role to see what it means; drop more files here any time.
                 </div>
-                <div className="text-meta text-[var(--color-text-muted)] mt-1">{s.body}</div>
               </div>
-            ))}
-          </div>
-          <div className="flex justify-end mt-3">
-            <button
-              data-testid="new-brain-create"
-              onClick={handleCreate}
-              disabled={!name.trim()}
-              className="btn-lg btn-primary disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110 transition"
-            >
-              Create in chat →
-            </button>
+            )}
           </div>
         </div>
       </div>
+
+      {/* ── Footer: what happens on Create + the one action ─────────────────── */}
+      <div className="px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-bg-chrome)] flex items-center gap-6">
+        <ol className="flex-1 grid grid-cols-3 gap-4" data-testid="new-brain-next-steps">
+          {NEXT_STEPS.map((s) => (
+            <li key={s.n} className="flex gap-2.5 min-w-0">
+              <span className="shrink-0 inline-flex w-5 h-5 items-center justify-center rounded-full text-meta font-semibold bg-[color-mix(in_srgb,var(--color-primary)_16%,transparent)] text-[var(--color-primary)]">{s.n}</span>
+              <span className="min-w-0">
+                <span className="block text-small font-semibold">{s.title}</span>
+                <span className="block text-meta text-[var(--color-text-muted)]">{s.body}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+        <button
+          data-testid="new-brain-create"
+          onClick={handleCreate}
+          disabled={!canCreate}
+          title={canCreate ? 'Starts the setup in a chat tab' : 'Give it a valid name first'}
+          className="btn-lg btn-primary shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Create Brain
+        </button>
+      </div>
+    </div>
   );
 }

@@ -9,6 +9,7 @@ import {
   buildBrainManifest,
   detectKind,
   previewSections,
+  validateBrainName,
   type StarterItem,
 } from '../newBrainDispatch';
 
@@ -120,6 +121,21 @@ describe('buildBrainManifest', () => {
     expect(p.toLowerCase()).toContain('cannot reach');
     expect(p.toLowerCase()).toContain('conflict');
     expect(p).toContain('Brain Hub');
+  });
+});
+
+describe('validateBrainName — the backend rule, checked before dispatch', () => {
+  it('accepts what create_project accepts', () => {
+    for (const n of ['Acme Payments', 'payments-api', 'a', 'v2.1_core']) expect(validateBrainName(n)).toBeNull();
+    expect(validateBrainName('')).toBeNull();
+  });
+  it('refuses bad characters, a bad first character, reserved names and duplicates', () => {
+    expect(validateBrainName('支付')).toContain('Use letters');
+    expect(validateBrainName('-lead')).toContain('Use letters');
+    expect(validateBrainName('x'.repeat(101))).toContain('Use letters');
+    expect(validateBrainName('con')).toContain('reserved');
+    expect(validateBrainName('Com1.txt')).toContain('reserved');
+    expect(validateBrainName('SWARMAI', ['SwarmAI'])).toContain('already exists');
   });
 });
 

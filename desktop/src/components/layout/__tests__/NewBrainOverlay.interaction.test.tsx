@@ -26,8 +26,14 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 // M3: NewBrainOverlay → NewBrainContent (OverlayHost registry). Content renders
 // immediately (host-owned open + fresh mount per open); `close` is now a prop (was
 // useExclusiveOverlay). Helper renders it with a stub close + the given onDispatch.
-function renderContent(onDispatch: (p: string) => boolean, close = () => {}) {
-  return render(<NewBrainContent onDispatch={onDispatch} close={close} />);
+function renderContent(
+  onDispatch: (p: string, o?: { autoSend?: boolean }) => boolean, close = () => {}, existingNames: string[] = [],
+) {
+  return render(<NewBrainContent onDispatch={onDispatch} close={close} existingNames={existingNames} />);
+}
+/** The role of every material row, in order (data-role on the row). */
+function roles(): string[] {
+  return Array.from(document.querySelectorAll('[data-testid^="new-brain-item-"]')).map((e) => e.getAttribute('data-role') ?? '');
 }
 function openOverlay() { /* no-op: NewBrainContent renders immediately (host-owned open) */ }
 
@@ -64,6 +70,46 @@ describe('NewBrainOverlay', () => {
     expect(create.disabled).toBe(false);
   });
 
+  it('a name the backend would refuse is caught in the form, and Create stays off', async () => {
+    const onDispatch = vi.fn(() => true);
+    renderContent(onDispatch, () => {}, ['SwarmAI', 'IVTHub']);
+    await screen.findByTestId('new-brain-overlay');
+    const create = screen.getByTestId('new-brain-create') as HTMLButtonElement;
+    const help = () => screen.getByTestId('new-brain-name-help').textContent ?? '';
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: '支付' } });
+    expect(help()).toContain('Use letters');
+    expect(create.disabled).toBe(true);
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'swarmai' } });
+    expect(help()).toContain('already exists');
+    expect(create.disabled).toBe(true);
+    fireEvent.click(create);
+    expect(onDispatch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Payments API' } });
+    expect(create.disabled).toBe(false);
+  });
+
+  it('Create sends the prompt right away (autoSend): the click is the send', async () => {
+    const onDispatch = vi.fn((_p: string, _o?: { autoSend?: boolean }) => true);
+    renderContent(onDispatch);
+    await screen.findByTestId('new-brain-overlay');
+    fireEvent.change(screen.getByTestId('new-brain-name'), { target: { value: 'Acme' } });
+    fireEvent.click(screen.getByTestId('new-brain-create'));
+    expect(onDispatch.mock.calls[0][1]).toEqual({ autoSend: true });
+  });
+
+  it('a Finder drop without a full path is refused with a toast, never added as a basename', async () => {
+    renderContent(() => true);
+    await screen.findByTestId('new-brain-overlay');
+    const toastSpy = vi.fn();
+    document.addEventListener('swarm:toast', toastSpy as EventListener);
+    fireEvent.drop(screen.getByTestId('new-brain-dropzone'), {
+      dataTransfer: { getData: () => '', files: [new File(['x'], 'notes.md')], types: ['Files'] },
+    });
+    expect(toastSpy).toHaveBeenCalled();
+    expect(roles()).toEqual([]);
+    document.removeEventListener('swarm:toast', toastSpy as EventListener);
+  });
+
   it('auto-classifies added items by type into GOVERN/DISTILL/SHELF', async () => {
     renderContent(() => true);
     openOverlay();
@@ -75,8 +121,7 @@ describe('NewBrainOverlay', () => {
     fireEvent.change(input, { target: { value: '~/work/acme/notes/' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    expect(await screen.findByText('GOVERN ▾')).toBeTruthy(); // repo
-    expect(await screen.findByText('SHELF ▾')).toBeTruthy();  // folder
+    await waitFor(() => expect(roles()).toEqual(['GOVERN', 'SHELF'])); // repo, folder
   });
 
   it('Create dispatches ONE manifest containing the collected data, then closes', async () => {
@@ -151,7 +196,7 @@ describe('NewBrainOverlay', () => {
 
     // real workspace path landed, and a directory → SHELF (not mis-read by detectKind)
     expect(await screen.findByText('/Users/me/work/acme/payments')).toBeTruthy();
-    expect(await screen.findByText('SHELF ▾')).toBeTruthy();
+    expect(roles()).toEqual(['SHELF']);
   });
 
   it('#1: an internal file drag classifies by type (repo/doc → GOVERN/DISTILL)', async () => {
@@ -167,7 +212,7 @@ describe('NewBrainOverlay', () => {
       },
     });
     expect(await screen.findByText('/abs/decisions.pdf')).toBeTruthy();
-    expect(await screen.findByText('DISTILL ▾')).toBeTruthy();
+    expect(roles()).toEqual(['DISTILL']);
   });
 
   it('#3: Create WITHOUT pressing Enter still includes the typed draft (blur-commit)', async () => {
@@ -191,7 +236,7 @@ describe('NewBrainOverlay', () => {
   // time by construction. The mount/unmount lifecycle is covered by OverlayHost.test.
   // A direct-render test here can no longer exercise "reopen" (there is no host).
 
-  it('a role pill cycles GOVERN→DISTILL→SHELF on click (user override)', async () => {
+  it('a role is chosen from the segmented control on the row (user override)', async () => {
     renderContent(() => true);
     openOverlay();
     await screen.findByTestId('new-brain-overlay');
@@ -199,9 +244,12 @@ describe('NewBrainOverlay', () => {
     fireEvent.change(input, { target: { value: 'github.com/acme/payments' } }); // → GOVERN
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    const pill = await screen.findByText('GOVERN ▾');
-    fireEvent.click(pill);
-    expect(await screen.findByText('DISTILL ▾')).toBeTruthy();
+    await waitFor(() => expect(roles()).toEqual(['GOVERN']));
+    const row = document.querySelector('[data-testid^="new-brain-item-"]')!;
+    const id = row.getAttribute('data-testid')!.replace('new-brain-item-', '');
+    fireEvent.click(screen.getByTestId(`new-brain-role-${id}-DISTILL`));
+    expect(roles()).toEqual(['DISTILL']);
+    expect(screen.getByTestId(`new-brain-role-${id}-DISTILL`).getAttribute('aria-checked')).toBe('true');
   });
 
   // ── Native file picker (AC1/AC2/AC4) — the "real upload" affordance ──
@@ -218,7 +266,7 @@ describe('NewBrainOverlay', () => {
     expect(await screen.findByText('/Users/me/work/runbook.pdf')).toBeTruthy();
     expect(await screen.findByText('/Users/me/work/notes.txt')).toBeTruthy();
     // …a doc file → DISTILL (file kind, not a basename)
-    expect(screen.getAllByText('DISTILL ▾').length).toBeGreaterThanOrEqual(2);
+    expect(roles().filter((r) => r === 'DISTILL').length).toBeGreaterThanOrEqual(2);
     // picker was asked for FILES, not a directory
     expect(mockOpen).toHaveBeenCalledWith(expect.objectContaining({ multiple: true, directory: false }));
   });
@@ -232,7 +280,7 @@ describe('NewBrainOverlay', () => {
     fireEvent.click(screen.getByTestId('new-brain-add-folder'));
 
     expect(await screen.findByText('/Users/me/work/acme-infra')).toBeTruthy();
-    expect(await screen.findByText('SHELF ▾')).toBeTruthy();
+    expect(roles()).toEqual(['SHELF']);
     expect(mockOpen).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
   });
 

@@ -1056,6 +1056,10 @@ async def lifespan(app: FastAPI):
     # program that runs `pipeline-v1` and `py` (utils/backend_bin.py, design §3.2)
     from utils.backend_bin import export_backend_bin
     export_backend_bin()
+    # SWARM_BACKEND_PORT for the same children: a skill that calls this daemon's API
+    # (s_project-manager's create_project) must reach dev (8000) as well as the
+    # packaged daemon (18321), not a hardcoded port.
+    os.environ["SWARM_BACKEND_PORT"] = str(_detect_backend_port())
 
     # One-time migration: ~/.swarm-ai/.context/ → ~/.swarm-ai/state/
     from jobs.paths import _migrate_legacy_state_dir

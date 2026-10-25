@@ -169,8 +169,10 @@ Rules: only the six pipeline profiles above (anything else FAILs P6). Every
 leave it out. A 0-asset brain gets `default_profile: research` and no validations.
 Landing approval is always `human`.
 
-**After P6 passes**, end with: the brain is ready, its map is in **Brain Hub**, and the
-next step is either to open the map or to describe a first change for a Run.
+**After P6 passes** (run with `--record`, so Brain Hub stops showing it as being born),
+open Brain Hub for the person with the `show-brain-hub` UI action, and end with: the
+brain is ready, and the next step is either to look at its map or to describe a first
+change for a Run.
 
 **P6 gate — the exit门禁 for the whole flow:**
 
@@ -306,9 +308,11 @@ Create + register the project via the daemon's projects API (it delegates to
 six-section skeleton — no path/CWD guessing, no manual `mkdir`):
 
 ```bash
-# Register + scaffold in one call. Returns 201 with the project metadata, or 409 if the
-# name already exists (then it's already registered — just populate the docs).
-curl -sS -X POST http://127.0.0.1:18321/api/projects \
+# Register + scaffold in one call. 201 = created (it starts as setting-up in Brain Hub).
+# 409 = a Brain with that name ALREADY EXISTS: stop and ask the person for another name.
+# Never write into the existing one — that is another Brain's knowledge.
+# 400 = the name breaks the naming rule; show the message and ask for another name.
+curl -sS -X POST "http://127.0.0.1:${SWARM_BACKEND_PORT:-18321}/api/projects" \
   -H 'Content-Type: application/json' \
   -d '{"name": "ProjectName"}'
 ```
