@@ -220,14 +220,14 @@ for _m in SKILL_PY_DEPS:  # e.g. python-pptx's default template, markitdown's re
 datas += collect_data_files('botocore')
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
-# Include skills but EXCLUDE node_modules — Remotion's alone is 609MB/15K+ files
-# which causes PyInstaller OOM (SIGKILL exit 137). Templates run npm install at runtime.
+# Include the skills the repo ships: git-tracked or untracked-but-not-ignored files, so a
+# checkout's gitignored local skills stay out of the installer (scripts/shipped_skills.py).
+# node_modules is always skipped — Remotion's alone is 609MB/15K+ files, which causes
+# PyInstaller OOM (SIGKILL exit 137); templates run npm install at runtime.
 import os as _os
-for _root, _dirs, _files in _os.walk('skills'):
-    _dirs[:] = [d for d in _dirs if d != 'node_modules' and d != '__pycache__']
-    for _f in _files:
-        _src = _os.path.join(_root, _f)
-        datas.append((_src, _os.path.dirname(_src)))
+from shipped_skills import shipped_files as _shipped_skill_files
+for _src in _shipped_skill_files('skills'):
+    datas.append((_src, _os.path.dirname(_src)))
 # Include DDD templates for default project provisioning
 datas += [('templates', 'templates')]
 # Include the expert library (backend/experts/<domain>/<id>.md): core.expert_manager

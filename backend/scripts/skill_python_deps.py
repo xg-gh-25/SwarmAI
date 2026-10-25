@@ -9,8 +9,9 @@ need beyond the standard library and the backend's own packages:
     python-optional-deps: [playwright]    # NOT bundled; the script fails with a clear message
 
 - ``declared(skills_root)`` -> ``{skill_dir_name: (deps, optional_deps)}``
-- ``bundled_imports(skills_root)`` -> sorted set of every ``python-deps`` name; the PyInstaller
-  spec in desktop/scripts/build-backend.sh collects each one.
+- ``bundled_imports(skills_root)`` -> sorted set of every ``python-deps`` name of the skills
+  that go into the package (scripts/shipped_skills.py); the PyInstaller spec in
+  desktop/scripts/build-backend.sh collects each one.
 
 One source for the build and for backend/tests/test_skill_python.py. Deliberately imports
 nothing from the backend (the PyInstaller spec loads it by path), only PyYAML.
@@ -51,7 +52,14 @@ def declared(skills_root: Path | str) -> dict[str, tuple[list[str], list[str]]]:
 
 
 def bundled_imports(skills_root: Path | str) -> list[str]:
-    return sorted({name for deps, _opt in declared(skills_root).values() for name in deps})
+    """Every python-deps name of the skills that go into the package (shipped_skills.py)."""
+    if __package__:  # imported as scripts.skill_python_deps (tests)
+        from .shipped_skills import shipped_skill_names
+    else:  # loaded by path (the PyInstaller spec, verify_installer.sh)
+        from shipped_skills import shipped_skill_names
+    shipped = shipped_skill_names(skills_root)
+    return sorted({name for skill, (deps, _opt) in declared(skills_root).items()
+                   if skill in shipped for name in deps})
 
 
 if __name__ == "__main__":
