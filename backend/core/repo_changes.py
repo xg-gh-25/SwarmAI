@@ -1,31 +1,25 @@
-"""repo_changes — one commit's patches, for the Canvas Changes tab.
+"""repo_changes — which repos are bound, and which roots a diff may be read from.
 
-The Canvas Changes tab (core/session_changes) lists the commits a session's messages
-name; a file of a commit opens here: ``commit_diff(root, sha, path)`` (its patch,
-size-capped).
+The bound code repos come from Projects/*/bindings.yaml only (never run.json). One
+object store is one repo (``repo_identities``); ``authorized_root`` admits a bound
+repo or the main checkout of a bound repo's store, and is what the Canvas Changes
+tree diffs (core/session_changes.tree_diff) and the terminal's working repo check.
 
-Read-only (``GIT_OPTIONAL_LOCKS=0``), bounded by GIT_TIMEOUT_S, and only for a root
-that is a bound repo or the main checkout of a bound repo's object store
-(``authorized_root``: Projects/*/bindings.yaml only, never run.json), a hex sha and a
-repo-relative path after ``--``. Blocking: run it in an executor pool.
+Read-only (``GIT_OPTIONAL_LOCKS=0``), bounded by GIT_TIMEOUT_S. Blocking: run it in
+an executor pool.
 
-Public: ``commit_diff``, ``allowed_roots``, ``repo_identities``, ``authorized_root``,
-``RepoChangesError``, ``MAX_DIFF_CHARS``.
+Public: ``allowed_roots``, ``repo_identities``, ``authorized_root``, ``RepoChangesError``.
 """
 from __future__ import annotations
 
 import logging
 import os
-import re
 import subprocess
 import threading
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MAX_DIFF_CHARS = 400_000
 GIT_TIMEOUT_S = 10.0
-_SHA = re.compile(r"(?:[0-9a-f]{7,40}|[0-9a-f]{64})")   # SHA-1 (or a prefix) or SHA-256
 
 
 class RepoChangesError(Exception):
@@ -146,21 +140,3 @@ def authorized_root(root: str) -> str | None:
             return real
     return None
 
-
-def _checked_root(root: str) -> str:
-    real = authorized_root(root)
-    if real is None:
-        raise RepoChangesError("unknown repo")
-    return real
-
-
-def commit_diff(root: str, sha: str, path: str) -> dict[str, Any]:
-    # input first: a malformed request costs no git call
-    if not _SHA.fullmatch(sha or ""):
-        raise RepoChangesError("bad sha")
-    if not path or path.startswith(("/", "-")) or ".." in path.split("/") or "\0" in path:
-        raise RepoChangesError("bad path")
-    root = _checked_root(root)
-    text = _git(root, "show", "--format=", "--no-renames", "--no-ext-diff", sha, "--", path)
-    truncated = len(text) > MAX_DIFF_CHARS
-    return {"diff": text[:MAX_DIFF_CHARS], "truncated": truncated}

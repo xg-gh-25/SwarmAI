@@ -743,6 +743,19 @@ def _isolate_app_data_dir(tmp_path_factory, monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_live_bound_repos_for_landings(monkeypatch):
+    """core.session_landings reads the bound repos of get_swarmws(), which in tests is
+    the LIVE ~/.swarm-ai/SwarmWS unless SWARMWS is set: every turn card and Canvas read
+    in a test would run git in the user's real repos. Pinned to none; a test that
+    reads landings calls read_repo on its own repo or patches this itself."""
+    try:
+        from core import session_landings
+    except Exception:  # noqa: BLE001 — module absent in an old checkout
+        return
+    monkeypatch.setattr(session_landings, "_bound_checkouts", lambda: [])
+
+
 # Top-level packages swept for frozen app-data paths. A NAME ALLOWLIST was tried and
 # abandoned: `from .paths import CONFIG_FILE` binds a SEPARATE frozen copy into every
 # importing module, so the leaky set is not "modules that call get_app_data_dir()" but

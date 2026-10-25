@@ -26,6 +26,8 @@ import pytest
 from core import app_session_id as asi
 from core import session_landings as sl
 
+_REAL_BOUND_CHECKOUTS = sl._bound_checkouts    # conftest pins it to [] per test
+
 SID = "11111111-2222-3333-4444-555555555555"
 OTHER = "99999999-2222-3333-4444-555555555555"
 T1 = "0123456789abcdef0123456789abcdef"
@@ -175,3 +177,25 @@ def test_an_exhausted_deadline_starts_no_git(tmp_path, monkeypatch):
     monkeypatch.setattr(sl.subprocess, "run", lambda *a, **k: called.append(a))
     res = sl.read_repo(str(repo), asi.session_key(SID), deadline=sl.Deadline(0))
     assert res["unknown"] == "timeout" and called == []
+
+
+def test_read_session_spans_the_bound_checkouts(tmp_path, monkeypatch):
+    repo = _repo(tmp_path / "proj")
+    other = _repo(tmp_path / "other")
+    _g(other, "checkout", "-q", "--detach")
+    _land(monkeypatch, repo, "t1", {"b.py": "b\n"})
+    monkeypatch.setattr(sl, "_bound_checkouts", lambda: [str(repo), str(other)])
+    res = sl.read_session(SID, deadline=sl.Deadline(10))
+    assert [x["branch"] for x in res["landed"]] == [f"session/{asi.session_key(SID)}-t1"]
+    assert res["unknown"] == [{"repo": "other", "reason": "no-branch"}]
+    assert sl.read_session("bad/id", deadline=sl.Deadline(10))["landed"] == []
+
+
+def test_bound_checkouts_are_main_checkouts_only(tmp_path, monkeypatch):
+    repo = _repo(tmp_path / "proj")
+    wt = tmp_path / "wt"
+    _g(repo, "worktree", "add", "-q", "-b", "side", str(wt))
+    monkeypatch.setattr(sl, "_bound_checkouts", _REAL_BOUND_CHECKOUTS)   # undo the conftest pin
+    monkeypatch.setattr("core.needs_human_review._bound_worktree_roots",
+                        lambda ws: ((str(repo), "proj"), (str(wt), "proj-wt")))
+    assert sl._bound_checkouts() == [os.path.realpath(repo)]

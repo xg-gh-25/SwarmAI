@@ -1,12 +1,12 @@
 """Canvas tabs of one chat session: GET /session/{id} = its Artifacts and Changes
 (core/canvas_session → core/session_changes); /changes/tree-diff is one file of a
-turn card, /changes/diff one file's patch in a commit (core/repo_changes).
+turn card or of a landing (both are two trees).
 
 Read-only. Everything runs on the "canvas_changes" pool (core/executors): never on
 'subprocess', whose fail-open safety gates must not wait on it, and never on
 "turn_changes", which a streaming turn's finish waits on. Roots are bound repos only
-(repo_changes.authorized_root). 400 for bad input (unknown repo, malformed sha or
-path), 503 when git itself fails.
+(repo_changes.authorized_root). 404 when a diff is not available, 503 when git
+itself fails.
 """
 from __future__ import annotations
 
@@ -17,17 +17,6 @@ from fastapi import APIRouter, HTTPException, Path, Query
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/canvas", tags=["canvas"])
-
-
-async def _run(fn, *args):
-    from core import executors
-    from core.repo_changes import RepoChangesError
-    try:
-        return await executors.run_in("canvas_changes", fn, *args)
-    except RepoChangesError as exc:
-        msg = str(exc)
-        bad_input = msg in ("unknown repo", "bad sha", "bad path")
-        raise HTTPException(status_code=400 if bad_input else 503, detail=msg)
 
 
 @router.get("/session/{session_id}")
@@ -53,13 +42,6 @@ async def get_working_repo(session_id: str = Path(..., min_length=1, max_length=
     from database import db
     return {"workingRepo": await executors.run_in("canvas_changes", session_changes.working_repo,
                                                   session_id, str(db.db_path))}
-
-
-@router.get("/changes/diff")
-async def get_diff(root: str = Query(..., max_length=4096), sha: str = Query(..., max_length=64),
-                   path: str = Query(..., max_length=4096)):
-    from core.repo_changes import commit_diff
-    return await _run(commit_diff, root, sha, path)
 
 
 @router.get("/changes/tree-diff")

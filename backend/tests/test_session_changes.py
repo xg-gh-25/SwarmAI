@@ -8,9 +8,9 @@ repo_changes.allowed_roots. No real repository or database is read.
 
 Invariants:
 - cards are the persisted turn_changes blocks, newest first, as recorded;
-- commit candidates come only from markdown code spans in assistant text blocks
-  (not fences, tool results, user rows, thinking), and a commit is listed only when
-  git confirms it in exactly one bound repo's object store;
+- landings come only from core/session_landings (Canvas limits, cached by the bound
+  checkouts' branch tips); prose is never read for commits, so a text-only row is not
+  even a candidate;
 - the read is incremental by transcript rev: a new or edited row is picked up, a
   deletion or a change older than the window re-reads it, an unchanged session reads
   no message row; the window is bounded and says when earlier rows were not scanned;
@@ -98,25 +98,18 @@ def text(t):
 
 # ── extraction ──────────────────────────────────────────────────────────────
 
-def test_code_span_shas_takes_inline_spans_only():
-    t = ("landed `abc1234`, see ``DEF5678ab`` and `not-hex` and plain 1234567abc\n"
-         "~~~\nin a fence: `fedcba9876`\n~~~\n\\`aaaaaaa\\` and `" + "e" * 64 + "`")
-    assert sc.code_span_shas(t) == ["abc1234", "def5678ab", "e" * 64]
 
 
-def test_code_span_shas_ignores_too_short_and_too_long():
-    assert sc.code_span_shas("`abc123` `" + "a" * 41 + "` `abcdef0`") == ["abcdef0"]
 
 
-def test_row_facts_reads_cards_and_text_but_not_tool_results_or_thinking():
+def test_row_facts_reads_cards_only():
     blocks = [card("a.py", omitted=3), text("did `abcdef1`"),
               {"type": "thinking", "thinking": "`abcdef2`"},
               {"type": "tool_result", "content": "`abcdef3`"}]
     f = sc.row_facts("m1", "t1", json.dumps(blocks))
-    assert [c["id"] for c in f["cards"]] == ["m1:0"]
+    assert f == {"cards": [f["cards"][0]]} and f["cards"][0]["id"] == "m1:0"
     assert f["cards"][0]["omitted"] == 3 and f["cards"][0]["files"][0]["gitRoot"] == "/r"
-    assert f["shas"] == ["abcdef1"]
-    assert sc.row_facts("m2", "t", json.dumps([text("nothing here")])) is None
+    assert sc.row_facts("m2", "t", json.dumps([text("landed `abcdef1`")])) is None
     assert sc.row_facts("m3", "t", "not json") is None
 
 
@@ -131,7 +124,40 @@ def test_turns_are_the_cards_newest_first_from_assistant_sent_rows_only(db, monk
     put(db, "o1", "2026-10-24T12:30", [card("other.py")], session="s2")
     out = sc.read("s1", db)
     assert [t["files"][0]["path"] for t in out["turns"]] == ["b.py", "a.py"]
-    assert out["scannedAll"] is True and out["olderTurns"] == 0 and out["commits"] == []
+    assert out["scannedAll"] is True and out["olderTurns"] == 0
+    assert out["landed"] == [] and out["unknown"] == [] and "commits" not in out
+
+
+def test_landed_comes_from_session_landings_with_canvas_limits(db, monkeypatch):
+    from core import session_landings
+    asked = []
+    def _read(session_id, *, deadline, turn_id=None, cap, since_days, limit):
+        asked.append((session_id, turn_id, cap, since_days, limit))
+        return {"landed": [{"branch": "session/x", "new": "n" * 40}], "unverified": 2,
+                "truncated": True, "unknown": [{"repo": "r", "reason": "no-reflog"}]}
+    monkeypatch.setattr(session_landings, "read_session", _read)
+    monkeypatch.setattr(sc, "_tips", lambda: (("/r", "refs/heads/main", "a" * 40),))
+    out = sc.read("s1", db)
+    assert asked == [("s1", None, session_landings.CANVAS_CAP, sc.LANDED_DAYS, sc.LANDED_MAX)]
+    assert out["landed"] == [{"branch": "session/x", "new": "n" * 40}]
+    assert out["landedTruncated"] is True and out["unverified"] == 2
+    assert out["unknown"] == [{"repo": "r", "reason": "no-reflog"}]
+    sc.read("s1", db)
+    assert len(asked) == 1, "unchanged tips: cached"
+    monkeypatch.setattr(sc, "_tips", lambda: (("/r", "refs/heads/main", "b" * 40),))
+    sc.read("s1", db)
+    assert len(asked) == 2, "a tip moved: read again"
+
+
+def test_a_text_only_row_is_not_a_candidate(db, monkeypatch):
+    """Commit ids in prose are no longer read (design 2026-10-25-turn-result-card.md §7)."""
+    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
+    put(db, "m1", "t1", [text("landed `abcdef1`")])
+    import sqlite3 as _s
+    conn = _s.connect(db)
+    hits = conn.execute("SELECT count(*) FROM messages m WHERE " + sc._CANDIDATE, ("s1",)).fetchone()[0]
+    conn.close()
+    assert hits == 0
 
 
 def test_a_new_row_an_edit_and_a_delete_are_each_picked_up(db, monkeypatch):
@@ -216,10 +242,9 @@ def test_the_byte_budget_is_checked_before_content_is_fetched(db, monkeypatch):
 
 def test_row_facts_are_capped_per_row():
     many = {"type": "turn_changes", "files": [{"path": f"f{i}.py"} for i in range(70)], "omitted": 5}
-    f = sc.row_facts("m", "t", json.dumps([many] * 5 + [text(" ".join(f"`abcdef{i:x}0`" for i in range(30)))]))
+    f = sc.row_facts("m", "t", json.dumps([many] * 5))
     assert len(f["cards"]) == sc.ROW_MAX_CARDS
     assert len(f["cards"][0]["files"]) == 60 and f["cards"][0]["omitted"] == 15
-    assert len(f["shas"]) == sc.ROW_MAX_SHAS
 
 
 def test_the_session_cache_is_bounded_by_count(db, monkeypatch):
@@ -230,10 +255,6 @@ def test_the_session_cache_is_bounded_by_count(db, monkeypatch):
     assert len(sc._SESSIONS) == 3
 
 
-def test_clear_cache_resets_the_facts_size():
-    sc._FACTS_SIZE[0] = 10**9
-    sc.clear_cache()
-    assert sc._FACTS_SIZE[0] == 0
 
 
 def test_concurrent_reads_of_one_session_are_consistent(db, monkeypatch):
@@ -261,18 +282,9 @@ def test_concurrent_reads_of_one_session_are_consistent(db, monkeypatch):
     assert len(sc.read("s1", db)["turns"]) == 40
 
 
-def test_an_abbreviated_hit_expires_a_full_id_does_not(monkeypatch):
-    ident = {"store": "S", "root": "/nowhere"}
-    sc._CONFIRMED[("S", "abcdef1")] = ("abcdef1" + "0" * 33, 0.0)
-    sc._CONFIRMED[("S", "a" * 40)] = ("a" * 40, 0.0)
-    asked = []
-    monkeypatch.setattr(sc, "_git", lambda root, *a, stdin=None, **k: asked.append(stdin) or "")
-    monkeypatch.setattr(sc.time, "monotonic", lambda: sc.PREFIX_TTL_S + 1)
-    out = sc._confirm(ident, ["abcdef1", "a" * 40])
-    assert out == {"a" * 40: "a" * 40} and asked == ["abcdef1\n"]
 
 
-# ── commits and diffs (real git) ─────────────────────────────────────────────
+# ── diffs and repo identity (real git) ─────────────────────────────────────────────
 
 @pytest.fixture
 def repo(tmp_path):
@@ -290,40 +302,16 @@ def repo(tmp_path):
     return Path(os.path.realpath(work))
 
 
-def test_a_mentioned_commit_is_listed_only_when_git_confirms_it(db, repo, monkeypatch):
-    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj"})
-    first = _git(repo, "rev-parse", "HEAD~1")
-    second = _git(repo, "rev-parse", "HEAD")
-    tree = _git(repo, "rev-parse", "HEAD^{tree}")
-    put(db, "m1", "t1", [text(f"pushed `{first[:9]}`, tree `{tree[:9]}`, bogus `deadbee0`")])
-    put(db, "m2", "t2", [text(f"then `{second[:12]}` and again `{first[:7]}`")])
-    put(db, "u1", "t3", [text(f"`{second}`")], role="user")
-    out = sc.read("s1", db)["commits"]
-    assert [(c["sha"], c["subject"]) for c in out] == [(second, "second (local)"), (first, "first")]
-    assert [c["mentionedAt"] for c in out] == ["t2", "t2"]
-    assert out[0]["pushed"] is False and out[1]["pushed"] is True
-    assert out[0]["files"] == [{"path": "b.py", "added": 1, "deleted": 0}]
-    assert out[0]["root"] == str(repo) and out[0]["repo"] == "proj" and out[0]["omittedFiles"] == 0
 
 
-def test_a_commit_in_two_bound_repos_is_left_off(db, repo, tmp_path, monkeypatch):
-    other = tmp_path / "copy"
-    _git(tmp_path, "clone", "-q", str(repo), str(other))
-    sha = _git(repo, "rev-parse", "HEAD~1")
-    monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj", os.path.realpath(other): "copy"})
-    put(db, "m1", "t1", [text(f"`{sha[:9]}`")])
-    assert sc.read("s1", db)["commits"] == []
 
 
-def test_two_worktrees_of_one_store_are_one_repo(db, repo, tmp_path, monkeypatch):
+def test_two_worktrees_of_one_store_are_one_repo(repo, tmp_path, monkeypatch):
     wt = tmp_path / "wt"
     _git(repo, "worktree", "add", "-q", "-b", "side", str(wt))
-    sha = _git(repo, "rev-parse", "HEAD")
     monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj", os.path.realpath(wt): "proj-wt"})
-    put(db, "m1", "t1", [text(f"`{sha[:9]}`")])
-    out = sc.read("s1", db)["commits"]
-    assert [c["sha"] for c in out] == [sha] and out[0]["root"] == str(repo)
-    assert rc.authorized_root(str(repo)) == str(repo)
+    [ident] = rc.repo_identities()
+    assert ident["root"] == str(repo) and rc.authorized_root(str(repo)) == str(repo)
 
 
 def test_tree_diff_is_authorized_by_bindings_only(repo, tmp_path, monkeypatch):
@@ -338,26 +326,14 @@ def test_tree_diff_is_authorized_by_bindings_only(repo, tmp_path, monkeypatch):
     assert sc.tree_diff(str(repo), "bad", end, "b.py") is None
 
 
-def test_commit_diff_no_longer_falls_back_to_code_roots(repo, monkeypatch):
-    from core import turn_changes as tc
-    monkeypatch.setattr(rc, "allowed_roots", lambda: {})
-    monkeypatch.setattr(tc, "allowed_repo", lambda r: True)
-    with pytest.raises(rc.RepoChangesError, match="unknown repo"):
-        rc.commit_diff(str(repo), _git(repo, "rev-parse", "HEAD"), "b.py")
 
 
-def test_bad_input_costs_no_git_and_sha256_is_accepted(repo, monkeypatch):
+def test_bad_input_costs_no_git(repo, monkeypatch):
     called = []
     monkeypatch.setattr(rc, "repo_identities", lambda: called.append(1) or [])
-    with pytest.raises(rc.RepoChangesError, match="bad sha"):
-        rc.commit_diff(str(repo), "zz", "b.py")
-    with pytest.raises(rc.RepoChangesError, match="bad path"):
-        rc.commit_diff(str(repo), "a" * 40, "../x")
     assert sc.tree_diff(str(repo), "bad", "b" * 40, "b.py") is None
+    assert sc.tree_diff(str(repo), "a" * 40, "b" * 40, "../x") is None
     assert called == []
-    with pytest.raises(rc.RepoChangesError, match="unknown repo"):
-        rc.commit_diff(str(repo), "a" * 64, "b.py")      # passes the sha rule, then authorization
-    assert called == [1]
 
 
 def test_a_replaced_repo_at_the_same_path_is_looked_up_again(repo, tmp_path, monkeypatch):
@@ -381,7 +357,7 @@ def test_the_changes_path_reads_no_run_json(db, repo, monkeypatch):
     monkeypatch.setattr(rc, "allowed_roots", lambda: {str(repo): "proj"})
     put(db, "m1", "t1", [card("a.py", root=str(repo)), text(f"`{_git(repo, 'rev-parse', 'HEAD')[:9]}`")])
     out = sc.read("s1", db)
-    assert len(out["turns"]) == 1 and len(out["commits"]) == 1
+    assert len(out["turns"]) == 1 and "commits" not in out
 
 
 def test_endpoint_returns_changes_through_fastapi(db, repo, monkeypatch):
