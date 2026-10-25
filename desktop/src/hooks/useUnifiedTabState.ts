@@ -233,6 +233,15 @@ export interface UnifiedTab {
   /** Messages this tab sent while busy, shown queued until a list read after
    *  their `accepted` (value: its time; undefined until then) decides. */
   _queuedLocal?: Map<string, number | undefined>;
+  /** Messages this tab sent while busy that the backend wrote into the running
+   *  turn (receipt ``steer``; value: its time): "Waiting" until a list read after
+   *  it decides (the snapshot's ``steering`` / ``pending``), as _queuedLocal. */
+  _steerLocal?: Map<string, number>;
+  /** The snapshot's ``steering`` (not-yet-read steers), ``queued_reason`` and the
+   *  running turn's ``segments``, as last read (design 2026-10-25-chat-steer-frontend.md). */
+  _serverSteering?: import('../types').SteeringEntry[];
+  _serverQueuedReason?: 'question' | 'permission' | 'busy';
+  _turnSegments?: string[];
   /** The newest transcript rev this tab has seen (feed envelopes, since_rev reads);
    *  a resync asks the server what changed after it (hooks/transcriptFeed). */
   transcriptRev?: number;

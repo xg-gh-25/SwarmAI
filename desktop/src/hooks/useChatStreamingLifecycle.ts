@@ -955,7 +955,8 @@ export interface ChatStreamingLifecycle {
   /** The POST the tab opens sends this request (kept for Retry until `accepted`). */
   noteSend: (tabId: string, request: ChatRequest) => ChatRequest;
   /** The server's queue for a tab's session (session_state `pending`, read at ``at``). */
-  applyServerQueue: (tabId: string, list: PendingQueueEntry[], at: number) => void;
+  applyServerQueue: (tabId: string, list: PendingQueueEntry[], at: number, complete?: boolean,
+    steer?: Pick<StreamingStateEntry, 'steering' | 'segments' | 'queuedReason'>) => void;
   /** Re-derive the tab's "Queued" marks (after a local change to the queue). */
   syncQueuedBadges: (tabId: string) => void;
   /** reset the queue fields when the tab's session changed */
@@ -1302,7 +1303,7 @@ export function useChatStreamingLifecycle(
             if (qSid && !pushed && (!qEntry || qEntry.pending)
                 && (tabState._serverQueueAt === undefined || tabState._serverQueueAt < readAt)) {
               const qList = qEntry?.pending ?? [];
-              applyServerQueue(tabId, qList, readAt, !qEntry || qEntry.pendingComplete === true);
+              applyServerQueue(tabId, qList, readAt, !qEntry || qEntry.pendingComplete === true, qEntry);
             }
           }
           // Post-disconnect mode ends once the backend says the session is idle
@@ -1804,12 +1805,20 @@ export function useChatStreamingLifecycle(
       tab._serverQueueSeq = undefined;
       tab._serverQueueComplete = undefined;
       tab._queuedLocal = undefined;
+      tab._steerLocal = undefined;
+      tab._serverSteering = undefined;
+      tab._serverQueuedReason = undefined;
+      tab._turnSegments = undefined;
     }
     tab._serverQueueSid = tab.sessionId;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
-  /** Set each user bubble's "Queued" mark from the server's list + the tab's
-   *  just-sent ones (store write only where it changes). */
+  /** Set each user bubble's "Queued" and steer "Waiting" marks from the server's
+   *  lists + the tab's just-sent ones (store write only where it changes).
+   *  Waiting (design 2026-10-25-chat-steer-frontend.md §4): on the snapshot's
+   *  ``steering`` or still decided locally (_steerLocal); it is sticky -- only a
+   *  read (``metadata.steered``), the queue or the turn's end takes it away, so a
+   *  snapshot that drops it before the read arrives does not blank the line. */
   const syncQueuedBadges = useCallback((tabId: string, onList?: Set<string>) => {
     const tab = tabMapRef.current.get(tabId);
     const store = messageStoreRegistry.get(tabId);
@@ -1831,15 +1840,35 @@ export function useChatStreamingLifecycle(
     }
     for (const p of list) {
       if (p.claimed || !p.clientId || shown.has(p.clientId) || shown.has(p.id)) continue;
+      shown.add(p.clientId);
       store.append({ id: p.clientId, role: 'user', content: [{ type: 'text', text: p.preview || '[Attachments]' }],
         timestamp: p.createdAt || new Date().toISOString(), metadata: { client_id: p.clientId }, isQueued: true });
     }
+    // a steer the store does not show (another tab's, after a reload): its bubble
+    // from the preview, provisional until the feed brings the row (§8)
+    const steering = tab._serverSteering ?? [];
+    for (const s of steering) {
+      if (shown.has(s.clientId)) continue;
+      shown.add(s.clientId);
+      store.append({ id: s.clientId, role: 'user', content: [{ type: 'text', text: s.preview || '[Attachments]' }],
+        timestamp: new Date().toISOString(), metadata: { client_id: s.clientId, provisional: true }, steerWaiting: true });
+    }
+    const waitingNow = new Set(steering.map((s) => s.clientId));
+    for (const cid of tab._steerLocal?.keys() ?? []) waitingNow.add(cid);
+    const reasonOf = (m: Message, cid: string) =>
+      tab._queuedLocal?.has(cid) ? m.queuedReason : (tab._serverQueuedReason ?? undefined);
     for (const m of store.messages) {
       if (m.role !== 'user') continue;
       const cid = (m.metadata?.client_id as string | undefined) ?? m.id;
       const want = queued.has(cid) || queued.has(m.id)
         || (!!listed && !!m.isQueued && !listed.has(cid) && !listed.has(m.id));
-      if (!!m.isQueued !== want) store.updateById(m.id, (x) => ({ ...x, isQueued: want || undefined }));
+      const read = !!m.metadata?.steered;
+      const wait = !want && !read && (waitingNow.has(cid) || waitingNow.has(m.id) || !!m.steerWaiting);
+      const reason = want ? reasonOf(m, cid) : undefined;
+      if (!!m.isQueued !== want || !!m.steerWaiting !== wait || m.queuedReason !== reason) {
+        store.updateById(m.id, (x) => ({ ...x, isQueued: want || undefined, steerWaiting: wait || undefined,
+          queuedReason: reason }));
+      }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
@@ -1851,18 +1880,28 @@ export function useChatStreamingLifecycle(
    * `accepted` decides (tab._queuedLocal). ``at`` = when the list was read (a
    * poll's send time, a push's arrival).
    */
-  const applyServerQueue = useCallback((tabId: string, list: PendingQueueEntry[], at: number, complete = true) => {
+  const applyServerQueue = useCallback((tabId: string, list: PendingQueueEntry[], at: number, complete = true,
+                                        steer?: Pick<StreamingStateEntry, 'steering' | 'segments' | 'queuedReason'>) => {
     const tab = tabMapRef.current.get(tabId);
     if (!tab) return;
     rebindQueue(tabId);
     tab._serverQueue = list;
     tab._serverQueueAt = at;
     tab._serverQueueComplete = complete;
+    // the steer fields come with the same snapshot (absent = none)
+    tab._serverSteering = steer?.steering ?? [];
+    tab._serverQueuedReason = steer?.queuedReason;
+    tab._turnSegments = steer?.segments ?? [];
     const onList = new Set(list.filter((p) => !p.claimed && p.clientId).map((p) => p.clientId!));
     const listed = new Set(list.map((p) => p.clientId).filter(Boolean) as string[]);
     for (const [cid, acceptedAt] of [...(tab._queuedLocal ?? new Map()).entries()]) {
       // the server decides now: a list read after the receipt that covers it
       if (acceptedAt !== undefined && at > acceptedAt && (complete || listed.has(cid))) tab._queuedLocal!.delete(cid);
+    }
+    const steeringIds = new Set(tab._serverSteering.map((s) => s.clientId));
+    for (const [cid, acceptedAt] of [...(tab._steerLocal ?? new Map<string, number>()).entries()]) {
+      // the server decides a steer once a list read after its receipt carries it
+      if (at > acceptedAt && (steeringIds.has(cid) || onList.has(cid))) tab._steerLocal!.delete(cid);
     }
     syncQueuedBadges(tabId, onList);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
@@ -2013,6 +2052,14 @@ export function useChatStreamingLifecycle(
     scheduleTurnEndReconcile(tabState.sessionId, tabId);
     // post-disconnect mode ends with the turn (queued messages are the server's)
     tabState._postDisconnectUncertain = false;
+    // a steer still Waiting when its turn ends was not read in it: the queue or
+    // the history has it now (design 2026-10-25-chat-steer-frontend.md §4)
+    tabState._steerLocal = undefined;
+    tabState._serverSteering = undefined;
+    const store = messageStoreRegistry.get(tabId);
+    for (const m of store?.messages ?? []) {
+      if (m.steerWaiting) store!.updateById(m.id, (x) => ({ ...x, steerWaiting: undefined }));
+    }
   };
 
   /**
@@ -4699,7 +4746,7 @@ export function useChatStreamingLifecycle(
             rebindQueue(tabId);
             if (entry.pending && (typeof seq !== 'number' || seq > (tab._serverQueueSeq ?? -1))) {
               if (typeof seq === 'number') tab._serverQueueSeq = seq;
-              applyServerQueue(tabId, entry.pending, Date.now(), entry.pendingComplete === true);
+              applyServerQueue(tabId, entry.pending, Date.now(), entry.pendingComplete === true, entry);
             }
           }
           pushedStateRef.current?.(sid, entry);

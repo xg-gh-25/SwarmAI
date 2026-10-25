@@ -616,6 +616,14 @@ export interface Message {
   suggestedAction?: string;
   /** Ephemeral — renders "Queued" badge. Never persisted to DB. */
   isQueued?: boolean;
+  /** Ephemeral, user messages only: why a queued message waits (the send's
+   *  receipt, then the snapshot's ``queued_reason``): ``question`` / ``permission``
+   *  name what to answer first; ``busy`` or absent keeps the plain label. */
+  queuedReason?: 'question' | 'permission' | 'busy';
+  /** Ephemeral, user messages only: written into the running turn and not read
+   *  yet (steer "Waiting", design 2026-10-25-chat-steer-frontend.md §4). Once read,
+   *  the row's own ``metadata.steered`` says so. */
+  steerWaiting?: boolean;
   /** Ephemeral, user messages only: 'failed' = the backend never accepted this
    *  send (no `accepted` receipt; e.g. it was unreachable). Renders "Not sent ·
    *  Retry". A DB row for it (it was persisted after all) replaces the mark. */
@@ -1641,6 +1649,21 @@ export interface StreamingStateEntry {
   /** The session's queued messages, oldest first (backend session_pending.list_pending,
    *  capped at 50): the one queue (docs/design/chat-turn-liveness.md S3). */
   pending?: PendingQueueEntry[];
+  /** Messages written into the running turn and not read yet (chat-steer D5);
+   *  absent when there are none. */
+  steering?: SteeringEntry[];
+  /** The running turn's segment keys (``{client_id}-asst``), in order; absent
+   *  when the turn has had no steer. */
+  segments?: string[];
+  /** Why the queue waits (``question`` / ``permission`` / ``busy``), while it
+   *  holds a message and the steer switch is on. */
+  queuedReason?: 'question' | 'permission' | 'busy';
+}
+
+/** One steer of a session, written into its running turn, not read yet. */
+export interface SteeringEntry {
+  clientId: string;
+  preview: string;
 }
 
 /** One queued message of a session as the server holds it. ``claimed``: a drain

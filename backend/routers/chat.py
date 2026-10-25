@@ -858,7 +858,7 @@ async def get_streaming_state_endpoint():
     for unit in sr.list_units():
         if not unit.session_id or unit.session_id.startswith(PREWARM_SESSION_PREFIX):
             continue
-        result[unit.session_id] = await session_state_entry(unit)
+        result[unit.session_id] = await session_state_entry(unit, sr)
     return {"sessions": result}
 
 

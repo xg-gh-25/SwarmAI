@@ -236,7 +236,15 @@
       "label": "已排队，轮到时发送",
       "cancel": "取消排队的消息",
       "alreadySending": "这条消息已经在发送了。",
-      "cancelFailed": "没能取消排队的消息，请再试一次。"
+      "cancelFailed": "没能取消排队的消息，请再试一次。",
+      "afterQuestion": "已排队，回答上面的问题后发送",
+      "afterPermission": "已排队，处理上面的权限请求后发送"
+    },
+    "steer": {
+      "waiting": "当前这一步结束后读到",
+      "stopAndSend": "停止并立即发送",
+      "readDuring": "回答过程中读到",
+      "readAfter": "回复写完后读到"
     },
     "input": {
       "dropFiles": "把文件拖到这里",

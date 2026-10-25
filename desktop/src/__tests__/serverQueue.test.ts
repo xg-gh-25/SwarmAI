@@ -246,3 +246,99 @@ describe('ChatPage queue (send / stop behaviour: pages/chat/__tests__/turnContro
     expect(cancel).not.toMatch(/activeTabIdRef\.current|setInputValue\(/);
   });
 });
+
+// ── steer (frontend design 2026-10-25 §4) ─────────────────────────────────────
+describe('steer: Waiting comes from the receipt and the server, read from the row', () => {
+  const steerPush = (eventSeq: number, pending: unknown[], steering: { client_id: string; preview: string }[],
+                     extra: Record<string, unknown> = {}) => {
+    const p = statePush(eventSeq, pending);
+    Object.assign(p.state, steering.length ? { steering } : {}, extra);
+    return p;
+  };
+  const waiting = (store: ReturnType<typeof messageStoreRegistry.getOrCreate>) =>
+    store.messages.filter((m) => m.steerWaiting).map((m) => m.id);
+
+  it('T10a: a steer receipt turns the bubble Waiting in place, not queued', () => {
+    const { hook, tab, store } = setup();
+    act(() => { store.appendMany([user('local-p'), { ...user('local-s'), isQueued: true }] as never); });
+    tab._queuedLocal = new Map();
+    tab._steerLocal = new Map([['local-s', Date.now()]]);
+    act(() => { hook.current.applyServerQueue('Q', [], Date.now() - 1000); });   // read before the receipt
+    expect(store.messages.map((m) => m.id)).toEqual(['local-p', 'local-s']);
+    expect(waiting(store)).toEqual(['local-s']);
+    expect(queuedIds(store)).toEqual([]);
+  });
+
+  it('T10d: Waiting, then the server moves it to the queue (never read): Queued', () => {
+    const { tab, store } = setup();
+    act(() => { store.appendMany([user('local-s')] as never); });
+    tab._steerLocal = new Map([['local-s', Date.now() - 10]]);
+    act(() => { fake.emit(steerPush(2, [], [{ client_id: 'local-s', preview: 'x' }])); });
+    expect(waiting(store)).toEqual(['local-s']);
+    expect(tab._steerLocal.has('local-s'), 'the server governs it now').toBe(false);
+    act(() => { fake.emit(steerPush(3, [pend('local-s')], [])); });
+    expect(waiting(store)).toEqual([]);
+    expect(queuedIds(store)).toEqual(['local-s']);
+  });
+
+  it('T10m: Waiting stays when a snapshot drops it before the read arrives', () => {
+    const { store } = setup();
+    act(() => { store.appendMany([user('local-s')] as never); });
+    act(() => { fake.emit(steerPush(2, [], [{ client_id: 'local-s', preview: 'x' }])); });
+    act(() => { fake.emit(steerPush(3, [], [])); });
+    expect(waiting(store)).toEqual(['local-s']);
+  });
+
+  it('a read steer (metadata.steered) is never Waiting', () => {
+    const { store } = setup();
+    act(() => { store.appendMany([{ ...user('local-s'), metadata: { client_id: 'local-s', steered: 'during' } }] as never); });
+    act(() => { fake.emit(steerPush(2, [], [{ client_id: 'local-s', preview: 'x' }])); });
+    expect(waiting(store)).toEqual([]);
+  });
+
+  it('T10i: a steer the store does not show gets a provisional Waiting bubble, once', () => {
+    const { store } = setup();
+    act(() => { store.appendMany([user('local-p')] as never); });
+    act(() => { fake.emit(steerPush(2, [], [{ client_id: 'local-o', preview: 'from another tab' }])); });
+    act(() => { fake.emit(steerPush(3, [], [{ client_id: 'local-o', preview: 'from another tab' }])); });
+    expect(store.messages.map((m) => m.id)).toEqual(['local-p', 'local-o']);
+    expect(store.messages[1]).toMatchObject({ role: 'user', steerWaiting: true,
+      metadata: { client_id: 'local-o', provisional: true },
+      content: [{ type: 'text', text: 'from another tab' }] });
+  });
+
+  it('the turn ending clears Waiting', async () => {
+    vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+    vi.spyOn(chatService, 'getSessionMessagesReconcileTail').mockImplementation(async () => [] as never);
+    const { tab, store } = setup();
+    act(() => { store.appendMany([user('local-s')] as never); });
+    act(() => { fake.emit(steerPush(2, [], [{ client_id: 'local-s', preview: 'x' }])); });
+    expect(waiting(store)).toEqual(['local-s']);
+    const idle = steerPush(3, [], []);
+    Object.assign(idle.state, { streaming: false, state: 'idle', activity: 'idle', activity_seq: 9 });
+    await act(async () => { fake.emit(idle); await Promise.resolve(); });
+    expect(waiting(store)).toEqual([]);
+    expect(tab._serverSteering ?? []).toEqual([]);
+  });
+
+  it('T10e: the queue reason follows the snapshot; none keeps the old label', () => {
+    const { store } = setup();
+    act(() => { store.appendMany([user('local-q')] as never); });
+    act(() => { fake.emit(steerPush(2, [pend('local-q')], [], { queued_reason: 'question' })); });
+    expect(store.messages[0]).toMatchObject({ isQueued: true, queuedReason: 'question' });
+    act(() => { fake.emit(steerPush(3, [pend('local-q')], [], { queued_reason: 'busy' })); });
+    expect(store.messages[0].queuedReason).toBe('busy');
+    act(() => { fake.emit(steerPush(4, [pend('local-q')], [])); });              // switch off
+    expect(store.messages[0].queuedReason).toBeUndefined();
+  });
+
+  it('maps steering, segments and queued_reason from the wire; absent stays absent', () => {
+    const e = chatService.toStreamingStateEntry({ streaming: true, state: 'streaming', pending: [],
+      steering: [{ client_id: 'c1', preview: 'p' }], segments: ['a-asst', 'c1-asst'], queued_reason: 'permission' } as never);
+    expect(e.steering).toEqual([{ clientId: 'c1', preview: 'p' }]);
+    expect(e.segments).toEqual(['a-asst', 'c1-asst']);
+    expect(e.queuedReason).toBe('permission');
+    const off = chatService.toStreamingStateEntry({ streaming: true, state: 'streaming', pending: [] } as never);
+    expect('steering' in off || 'segments' in off || 'queuedReason' in off).toBe(false);
+  });
+});

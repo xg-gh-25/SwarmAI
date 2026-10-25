@@ -328,3 +328,36 @@ async def test_a_steer_queued_after_the_recheck_keeps_its_terminal_output():
     (queued,) = await session_pending.peek_pending_batch(b.sid)
     assert queued.terminal_context and "boom" in queued.terminal_context["buffer_tail"]
     b.close()
+
+
+# ── the snapshot's queued_reason (frontend design 2026-10-25 §4) ─────────────
+
+@pytest.mark.asyncio
+async def test_the_snapshot_says_why_the_queue_waits_and_follows_the_state():
+    b = _Busy("s-steer-qreason")
+    await b.open_turn()
+    b.unit._pending_tool_use_id = "tq"
+    b.unit._pending_question = {"tool_use_id": "tq"}
+    events = await b.send()
+    assert events[0]["queued"] is True and events[0]["queuedReason"] == "question"
+    snap = await session_state.session_state_entry(b.unit, b.router)
+    assert snap["queued_reason"] == "question"
+    b.unit._pending_tool_use_id = None            # answered: the queue now waits for the turn
+    b.unit._pending_question = None
+    snap = await session_state.session_state_entry(b.unit, b.router)
+    assert snap["queued_reason"] == "busy"
+    b.close()
+
+
+@pytest.mark.asyncio
+async def test_no_queued_reason_without_a_queue_or_with_the_switch_off(monkeypatch):
+    b = _Busy("s-steer-qreason-off")
+    await b.open_turn()
+    snap = await session_state.session_state_entry(b.unit, b.router)
+    assert "queued_reason" not in snap                     # nothing queued
+    b.unit._steer_accepting = False
+    await b.send()                                         # queued (busy)
+    monkeypatch.setattr(SessionRouter, "_steer_enabled", classmethod(lambda cls: False))
+    snap = await session_state.session_state_entry(b.unit, b.router)
+    assert snap["pending"] and "queued_reason" not in snap
+    b.close()

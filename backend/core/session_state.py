@@ -72,7 +72,7 @@ def bg_snapshot(unit) -> list:
         return []
 
 
-async def session_state_entry(unit) -> dict:
+async def session_state_entry(unit, router=None) -> dict:
     """One session's state: what the spinner, the "waiting for you" line and the
     prompts read. The ONE producer — the streaming-state endpoint and the
     `session_state` envelope the subscription carries (``publish`` below) are
@@ -158,7 +158,26 @@ async def session_state_entry(unit) -> dict:
         # segment keys (design chat-steer D5): only when there are any, so a turn
         # without a steer keeps the snapshot it always had
         **_steer_snapshot(unit),
+        **_queued_reason(unit, router, pending),
     }
+
+
+def _queued_reason(unit, router, pending: list) -> dict:
+    """Why the session's queue waits, while it holds a message not yet taken
+    (frontend design 2026-10-25 §4): what the running turn waits on (``question`` /
+    ``permission``) or ``busy``. The send's receipt carries the reason only to the
+    tab that sent it; this one follows the state (a question answered) and reaches
+    every tab and a reload. Only with the steer switch on: off, the snapshot keeps
+    the shape it always had."""
+    if router is None or not any(not p.get("claimed") for p in pending):
+        return {}
+    try:
+        if not router._steer_enabled():
+            return {}
+        return {"queued_reason": router._steer_blocker(unit) or "busy"}
+    except Exception:  # noqa: BLE001 — a display aid
+        logger.debug("queued_reason failed session=%s", getattr(unit, "session_id", None), exc_info=True)
+        return {}
 
 
 def _steer_snapshot(unit) -> dict:
@@ -209,7 +228,7 @@ def publish(router, session_id: str) -> None:
         _SCHEDULED.pop(session_id, None)   # changes from here on schedule a new push
         try:
             from . import session_events
-            entry = await session_state_entry(unit)
+            entry = await session_state_entry(unit, router)
             if _LATEST.get(session_id) != n:
                 return   # a newer push is under way
             session_events.hub().publish(session_id, {"type": "session_state", "state": entry}, turn_id="")
@@ -228,7 +247,7 @@ async def snapshot(router, session_id: str):
     unit = router.get_unit(session_id) if router is not None else None
     if unit is None or session_id.startswith(PREWARM_SESSION_PREFIX):
         return None
-    return await session_state_entry(unit)
+    return await session_state_entry(unit, router)
 
 
 def forget(session_id: str) -> None:

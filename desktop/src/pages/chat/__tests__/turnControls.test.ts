@@ -266,6 +266,34 @@ describe('sendMessage while busy (the server queues it)', () => {
     expect(h2.tabs.get('A')!._unsentRequests!.has('local-1')).toBe(true);
   });
 
+  it('T10a: `accepted` steer: Waiting (decided locally until the server speaks), not queued', async () => {
+    const h = busy();
+    const p = sendMessage(h.d); h.attachmentsRead(); await p; await flush();
+    const [onEvent] = h.posts[0].handlers as [(e: unknown) => void];
+    onEvent({ type: 'accepted', queued: false, steer: true });
+    const t = h.tabs.get('A')!;
+    expect(t._queuedLocal!.has('local-1')).toBe(false);
+    expect(typeof t._steerLocal!.get('local-1')).toBe('number');
+    expect(h.d.syncQueuedBadges).toHaveBeenCalledWith('A');
+  });
+
+  it('T10l: a receipt after the read (the event came first) does not make it Waiting again', async () => {
+    const h = busy();
+    const p = sendMessage(h.d); h.attachmentsRead(); await p; await flush();
+    h.stores.A.updateById('local-1', (m) => ({ ...m, isQueued: undefined, metadata: { ...m.metadata, steered: 'during' } }));
+    const [onEvent] = h.posts[0].handlers as [(e: unknown) => void];
+    onEvent({ type: 'accepted', queued: false, steer: true });
+    expect(h.tabs.get('A')!._steerLocal?.has('local-1') ?? false).toBe(false);
+  });
+
+  it('T10e: `accepted` queued with a reason puts the reason on the bubble', async () => {
+    const h = busy();
+    const p = sendMessage(h.d); h.attachmentsRead(); await p; await flush();
+    const [onEvent] = h.posts[0].handlers as [(e: unknown) => void];
+    onEvent({ type: 'accepted', queued: true, queuedReason: 'question' });
+    expect(h.stores.A.messages[0].queuedReason).toBe('question');
+  });
+
   it('a busy send stopped or rebound while preparing is not sent; its draft goes back to its own tab', async () => {
     const h = busy();
     const p = sendMessage(h.d);

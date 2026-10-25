@@ -399,7 +399,7 @@ async def test_a_burst_of_queue_changes_shares_one_read(monkeypatch):
     from core import session_state
     reads = []
 
-    async def entry(unit):
+    async def entry(unit, router=None):
         reads.append(unit.session_id)
         return {"pending": []}
     monkeypatch.setattr(session_state, "session_state_entry", entry)
@@ -426,7 +426,7 @@ async def test_a_push_left_on_a_closed_loop_does_not_hold_back_the_next(monkeypa
     from core import session_state
     reads = []
 
-    async def entry(unit):
+    async def entry(unit, router=None):
         reads.append(unit.session_id)
         return {"pending": []}
     monkeypatch.setattr(session_state, "session_state_entry", entry)

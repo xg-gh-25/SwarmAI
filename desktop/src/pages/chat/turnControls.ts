@@ -182,8 +182,18 @@ export async function sendWhileBusy(d: TurnControlDeps, tabId: string, text: str
       const t = d.tabs().get(tabId);
       if (!t) return;
       t._unsentRequests?.delete(clientId);
-      if ((ev as { queued?: boolean }).queued) t._queuedLocal?.set(clientId, Date.now());
-      else t._queuedLocal?.delete(clientId);   // it runs now: not queued
+      const rc = ev as { queued?: boolean; steer?: boolean; queuedReason?: Message['queuedReason'] };
+      const st = d.stores.get(tabId);
+      if (rc.queued) {
+        t._queuedLocal?.set(clientId, Date.now());
+        if (rc.queuedReason) st?.updateById(clientId, (m) => ({ ...m, queuedReason: rc.queuedReason }));
+      } else {
+        t._queuedLocal?.delete(clientId);   // it runs now: not queued
+        // written into the running turn: Waiting until the server decides -- unless
+        // its read already arrived (the CLI read it before this receipt came back)
+        const read = st?.messages.some((m) => m.id === clientId && !!m.metadata?.steered);
+        if (rc.steer && !read) (t._steerLocal ??= new Map()).set(clientId, Date.now());
+      }
       d.syncQueuedBadges(tabId);
     },
     () => settle(),

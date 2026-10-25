@@ -13,6 +13,13 @@
  * - ``UserMessageView``       — Main component for rendering user messages
  * - ``UserMessageViewProps``   — Props interface accepting a Message object
  *
+ * Steer (docs/design/2026-10-25-chat-steer-frontend.md §4): one line under the
+ * bubble -- "Read after the current step" + Stop while ``message.steerWaiting``
+ * (written into the running turn, not read yet; no Cancel: it cannot be taken
+ * back), "Read during the turn" / "Read after the reply" from the row's own
+ * ``metadata.steered``. A queued message names what it waits for
+ * (``queuedReason`` question / permission), else keeps the plain label.
+ *
  * Overflow detection uses a ResizeObserver on the text container to
  * re-evaluate clamping when the chat area width changes (e.g., sidebar
  * toggle or window resize), satisfying Requirement 8.1.
@@ -23,6 +30,7 @@ import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
 import type { Message } from '../../../types';
 import MarkdownRenderer from '../../../components/common/MarkdownRenderer';
+import { STOP_TURN_EVENT } from '../turnZones';
 // USER_MESSAGE_MAX_LINES (= 5) from constants defines the truncation threshold.
 // Tailwind requires static class names, so we use `line-clamp-5` directly.
 
@@ -32,6 +40,8 @@ export interface UserMessageViewProps {
   onCancelQueued?: () => void;
   /** Re-send a message the backend never accepted (message.sendState === 'failed'). */
   onRetrySend?: () => void;
+  /** The tab's session: the Waiting line's Stop link stops its turn. */
+  sessionId?: string;
 }
 
 /**
@@ -42,7 +52,7 @@ export interface UserMessageViewProps {
  * - ResizeObserver-based overflow re-evaluation (Requirement 8.1)
  * - Queued message badge with cancel button when isQueued is true
  */
-export function UserMessageView({ message, onCancelQueued, onRetrySend }: UserMessageViewProps) {
+export function UserMessageView({ message, onCancelQueued, onRetrySend, sessionId }: UserMessageViewProps) {
   const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isClamped, setIsClamped] = useState(false);
@@ -96,6 +106,13 @@ export function UserMessageView({ message, onCancelQueued, onRetrySend }: UserMe
   }
 
   const combinedText = textBlocks.map((b) => b.text).join('\n');
+  const steered = message.metadata?.steered;
+  const waiting = !!message.steerWaiting && !steered && !message.isQueued;
+  const queuedLabel = message.queuedReason === 'question'
+    ? tf(t, 'chat.queued.afterQuestion', 'Queued — sends after you answer the question above')
+    : message.queuedReason === 'permission'
+      ? tf(t, 'chat.queued.afterPermission', 'Queued — sends after you decide the permission above')
+      : tf(t, 'chat.queued.label', 'Queued — will send when ready');
 
   return (
     <div className="flex justify-end">
@@ -154,7 +171,7 @@ export function UserMessageView({ message, onCancelQueued, onRetrySend }: UserMe
         {message.isQueued && (
           <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-muted)] justify-end">
             <span className="material-symbols-outlined icon-xs">schedule_send</span>
-            <span>{tf(t, 'chat.queued.label', 'Queued — will send when ready')}</span>
+            <span>{queuedLabel}</span>
             {onCancelQueued && (
               <button
                 onClick={onCancelQueued}
@@ -164,6 +181,31 @@ export function UserMessageView({ message, onCancelQueued, onRetrySend }: UserMe
                 <span className="material-symbols-outlined icon-sm">close</span>
               </button>
             )}
+          </div>
+        )}
+
+        {/* Steer: written into the running turn, waiting for the current step */}
+        {waiting && (
+          <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-muted)] justify-end" role="status">
+            <span className="material-symbols-outlined icon-xs">hourglass_top</span>
+            <span>{tf(t, 'chat.steer.waiting', 'Read after the current step')}</span>
+            {sessionId && (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent(STOP_TURN_EVENT, { detail: { sessionId } }))}
+                className="ml-1 underline hover:text-[var(--color-text)] transition-colors"
+              >
+                {tf(t, 'chat.steer.stopAndSend', 'Stop & send now')}
+              </button>
+            )}
+          </div>
+        )}
+        {(steered === 'during' || steered === 'after') && !message.isQueued && (
+          <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--color-text-muted)] justify-end">
+            <span className="material-symbols-outlined icon-xs">done</span>
+            <span>{steered === 'during'
+              ? tf(t, 'chat.steer.readDuring', 'Read during the turn')
+              : tf(t, 'chat.steer.readAfter', 'Read after the reply')}</span>
           </div>
         )}
       </div>

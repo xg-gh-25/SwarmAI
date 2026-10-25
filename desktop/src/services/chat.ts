@@ -33,6 +33,9 @@ interface RawStreamingStateEntry {
   activity_seq?: number;
   pending?: { id: string; client_id: string | null; pending_seq: number; preview: string;
     created_at: string; claimed: boolean }[];
+  steering?: { client_id: string; preview?: string }[];
+  segments?: string[];
+  queued_reason?: string;
   /** core/background_agents.py snapshot (camelCase keys already) */
   background_agents?: unknown[];
 }
@@ -586,6 +589,13 @@ function toStreamingStateEntry(raw: RawStreamingStateEntry): StreamingStateEntry
           id: p.id, clientId: p.client_id ?? null, pendingSeq: p.pending_seq,
           preview: p.preview ?? '', createdAt: p.created_at, claimed: !!p.claimed,
         })) }
+      : {}),
+    ...(Array.isArray(raw.steering)
+      ? { steering: raw.steering.filter((s) => s && s.client_id).map((s) => ({ clientId: s.client_id, preview: s.preview ?? '' })) }
+      : {}),
+    ...(Array.isArray(raw.segments) ? { segments: raw.segments.filter((k) => typeof k === 'string') } : {}),
+    ...(raw.queued_reason === 'question' || raw.queued_reason === 'permission' || raw.queued_reason === 'busy'
+      ? { queuedReason: raw.queued_reason }
       : {}),
   };
 }

@@ -236,7 +236,15 @@
       "label": "Queued — will send when ready",
       "cancel": "Cancel queued message",
       "alreadySending": "That message is already being sent.",
-      "cancelFailed": "Could not cancel the queued message. Try again."
+      "cancelFailed": "Could not cancel the queued message. Try again.",
+      "afterQuestion": "Queued — sends after you answer the question above",
+      "afterPermission": "Queued — sends after you decide the permission above"
+    },
+    "steer": {
+      "waiting": "Read after the current step",
+      "stopAndSend": "Stop & send now",
+      "readDuring": "Read during the turn",
+      "readAfter": "Read after the reply"
     },
     "input": {
       "dropFiles": "Drop files here",

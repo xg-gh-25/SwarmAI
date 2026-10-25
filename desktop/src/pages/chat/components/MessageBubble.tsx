@@ -76,6 +76,7 @@ function MessageBubbleImpl({
         message={message}
         onCancelQueued={message.isQueued ? onCancelQueued : undefined}
         onRetrySend={message.sendState === 'failed' ? onRetrySend : undefined}
+        sessionId={sessionId}
       />
     );
   }
