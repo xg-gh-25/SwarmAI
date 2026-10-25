@@ -256,7 +256,9 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   the user asks otherwise: parallel workers can outlive the cap and keep the command running.
   Never background. **Every run answers a question stated before it starts**; a test file you
   cannot say that about is not run. Three levels: while writing a fix → the tests just written,
-  plus a mutation check (revert the fix, the test goes red); before a commit → the existing tests
+  plus a mutation check (revert the fix, the test goes red: `"$SWARM_BACKEND_BIN" py -m
+  scripts.mutation_check <spec.json> -- <test command>` runs each, any language, and always
+  restores the file); before a commit → the existing tests
   of what the change touched, found from the change itself (the tests of the changed function,
   field or contract and of its direct callers); when the work is done → once, the set the design
   or plan named up front: the invariants the change must keep. A design or plan for multi-step
