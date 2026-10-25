@@ -247,10 +247,17 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   `timeout` / `gtimeout`): a run still going at the Bash timeout is moved to the background
   and returns nothing, and a runner's own per-test timeout doesn't count. Run serially unless
   the user asks otherwise: parallel workers can outlive the cap and keep the command running.
-  Never background. **Smallest scope** = the tests this step wrote or changed, plus the 1–3
-  files that directly assert the changed behaviour; a file list built with `ls` / `grep -l`, or
-  longer than 3 files, is the full suite under another name. Max 2 runs/task; the whole
-  regression runs once, when the work is done, and needs user approval. **When testing is not
+  Never background. **Every run answers a question stated before it starts**; a test file you
+  cannot say that about is not run. Three levels: while writing a fix → the tests just written,
+  plus a mutation check (revert the fix, the test goes red); before a commit → the existing tests
+  of what the change touched, found from the change itself (the tests of the changed function,
+  field or contract and of its direct callers); when the work is done → once, the set the design
+  or plan named up front: the invariants the change must keep. A design or plan for multi-step
+  work names that set; it is chosen there, before the end, so it does not grow at the end. A list
+  built from a directory, a glob, `ls` or `grep -l` is not a scope, whatever the run is called.
+  Broad coverage belongs to CI, or to a full suite the user asks for: on a shared, loaded machine
+  a wide run produces timeouts, not findings. The same scope runs at most twice per task (red,
+  then green). **When testing is not
   efficient** (a run is slow, times out, is re-run, or its file list keeps growing): stop and
   re-read this rule and the test lessons in EVOLUTION.md / MEMORY.md before running anything
   else; a timeout seen mid-task is noted for that final run, not chased. **The exit code and the runner's own failure list decide the result, never
@@ -277,8 +284,9 @@ catch myself writing "Sprint 1 / 3 story points" for code — restate as "N×{pr
 deploy, release or CI, use them instead of raw scripts. Exception: debugging a broken skill
 after invoking it and observing its failure. (SOUL P4)
 
-**R9. Test scope** — targeted tests proactive; the full suite (however the repo's own AGENTS.md
-says to run it) needs user approval. Cap every run below the Bash timeout. Max 2 runs/task. (SOUL P1)
+**R9. Test scope** — targeted tests proactive, each run scoped by the question it answers
+(§ Coding Execution Safety, Tests); the full suite (however the repo's own AGENTS.md says to run
+it) needs user approval. Cap every run below the Bash timeout. (SOUL P1+P6)
 
 **R10. Codebase-first** — a code change lands in the project's repo, not as a workspace-only
 copy. (SOUL P1)
