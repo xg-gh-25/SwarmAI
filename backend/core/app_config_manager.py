@@ -109,6 +109,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # did not. Short name; resolved to a Bedrock ID via bedrock_model_map /
     # the registry, never passed raw to converse().
     "eval_judge_model": DEFAULT_JUDGE_MODEL,
+    # Chat steer (design 2026-10-24-chat-steer): a message sent while a turn
+    # streams is written into the running turn instead of queued. A setting like
+    # any other: PUT /api/settings turns it on or off without a restart.
+    "steer_busy_send": False,
     "evolution": {
         "enabled": True,
         "max_retries": 3,
