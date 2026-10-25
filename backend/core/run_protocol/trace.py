@@ -1,36 +1,24 @@
 """The run's traceability matrix: requirement / property / failure mode → task →
-exit criterion → result (design §E9.2, conformance F22; NE §9.2 reuses it).
+exit criterion (design §E9.2, conformance F22; NE §9.2 reuses it).
 
 One definition, two readers: ``run_audit.json`` details and, later, the human-readable
 spec renderer. The structure comes from the validated DESIGN_SPEC (tasks and exit
-criteria, with the run's decisions overlaid); the results come only from *final*'s
-trace rows, per repo. Since S6-1 there is no runner final (callers pass ``{}``), so
-every result is ``None`` until the audit reads validation reports (S6-4). Nothing is
-inferred; a run without a DESIGN_SPEC has no matrix and says why.
+criteria, with the run's decisions overlaid). It has no result column (S6-4d,
+usable-by-anyone §3.3.4: TS-3 keeps the matrix without pass semantics): the pipeline
+runs no test, and matching an exit's reference to a command the agent reported would
+be a guess. What was tested is the TEST reports, listed separately in the audit.
+Nothing is inferred; a run without a DESIGN_SPEC has no matrix and says why.
 
-- ``matrix(design, final)`` — ``{"rows": {id: row}, "unavailable": reason | None}``.
+- ``matrix(design)`` — ``{"rows": {id: row}, "unavailable": reason | None}``.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
 
-def _results(final: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """exit id → {repo: result} from the final's trace rows."""
-    out: dict[str, dict[str, Any]] = {}
-    repos = (final or {}).get("repos") if isinstance(final, Mapping) else None
-    for repo, row in sorted((repos or {}).items()):
-        for trace in (row or {}).get("trace") or []:
-            if isinstance(trace, Mapping) and isinstance(trace.get("exit"), str):
-                out.setdefault(trace["exit"], {})[repo] = trace.get("result")
-    return out
-
-
-def matrix(design: Mapping[str, Any] | None,
-           final: Mapping[str, Any] | None) -> dict[str, Any]:
+def matrix(design: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(design, Mapping) or not isinstance(design.get("exit_criteria"), list):
         return {"rows": {}, "unavailable": "no DESIGN_SPEC for this run"}
-    results = _results(final)
     rows: dict[str, dict[str, Any]] = {}
 
     def row(identifier: str) -> dict[str, Any]:
@@ -45,8 +33,7 @@ def matrix(design: Mapping[str, Any] | None,
         if not isinstance(exit_row, Mapping) or not isinstance(exit_row.get("id"), str):
             continue
         entry = {"exit": exit_row["id"], "kind": exit_row.get("kind"),
-                 "ref": exit_row.get("ref"),
-                 "results": results.get(exit_row["id"], {}) or None}
+                 "ref": exit_row.get("ref")}
         for covered in exit_row.get("covers") or []:
             if isinstance(covered, str):
                 row(covered)["exits"].append(entry)

@@ -1580,7 +1580,8 @@ class RunEngine:
                 **self._audit_facts(),
                 run_id=self.run_id,
                 projection=lifecycle.fold(prior, self.authority), events=prior,
-                final={}, findings=finding_protocol.fold(prior, self.authority),
+                findings=finding_protocol.fold(prior, self.authority),
+                test_reports=self._test_reports(prior),
                 contract=self.contract, push=push, audit_through="DELIVER")
             guards = ("LG-3", "LG-4") if action == "land_skip_tests" else (
                 "LG-1", "LG-3", "LG-4")
@@ -2283,6 +2284,18 @@ class RunEngine:
                    if isinstance(r, Mapping)] if isinstance(value, Mapping) else []
         return stories[0] if stories and isinstance(stories[0], str) else None
 
+    def _test_reports(self, events: Sequence[Mapping[str, Any]]) -> dict[str, dict]:
+        """repo -> the latest TEST validation report among *events* (its blob)."""
+        return {repo: validation_report.read(self.store, event)
+                for repo, event in validation_report.latest(events, "test").items()}
+
+    def _reflected_lessons(self) -> list[dict]:
+        """REFLECT's processed lessons (artifacts/reflect.json): the audit lists the
+        ones kept in the run because their project has no DDD (S6-4d)."""
+        value = self._read_json(self.run_dir / "artifacts" / "reflect.json", {}) or {}
+        rows = value.get("lessons") if isinstance(value, Mapping) else None
+        return [row for row in rows or [] if isinstance(row, Mapping)]
+
     def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
                     persist: bool = True,
                     event_rows: Sequence[Mapping[str, Any]] | None = None,
@@ -2294,7 +2307,8 @@ class RunEngine:
         value = audit_protocol.build(
             **self._audit_facts(),
             run_id=self.run_id, projection=lifecycle.fold(rows, self.authority),
-            events=rows, final={}, findings=projected_findings,
+            events=rows, findings=projected_findings,
+            test_reports=self._test_reports(rows), lessons=self._reflected_lessons(),
             contract={**self.contract, "requirement": self._delivered_summary()},
             push=dict(push or self.push_status()), audit_through=through,
             commits=commits)

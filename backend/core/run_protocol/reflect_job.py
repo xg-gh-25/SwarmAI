@@ -13,7 +13,8 @@ landing happens here, in the daemon, never in the agent's CLI:
   lesson is appended to that project's DDD doc through ``ddd_cultivation.apply_to_ddd``;
   ``MEMORY`` / ``EVOLUTION`` / ``self-evolution-proposal`` lessons go to the project's
   proposal queue (``.artifacts/proposals/``) for the existing human-reviewed flow —
-  this job never edits a governed context file.
+  this job never edits a governed context file. A lesson whose project or DDD doc does
+  not exist is kept in the run's own record (``kept_in_run``) and listed in its REPORT.
 - ``process_run`` — runs ``reflect.process`` with its attempt / time caps, records each
   lesson's outcome in ``artifacts/reflect.json`` and ends REFLECT as the daemon
   (``reflect_complete`` or, when a cap was hit, ``reflect_exhausted``: degraded).
@@ -37,6 +38,9 @@ from typing import Any, Mapping
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2
+# a lesson whose project (or DDD doc) does not exist: kept in artifacts/reflect.json and
+# listed in the run's REPORT (design usable-by-anyone §3.3.2), not rejected
+KEPT_IN_RUN = "kept_in_run"
 MAX_SECONDS = 60.0
 _POOL: list[ThreadPoolExecutor] = []
 _RUNNING: set[str] = set()
@@ -68,6 +72,8 @@ def _queue(workspace: Path, project: str, run_id: str, lesson: Mapping[str, Any]
     project_dir = _project_dir(workspace, project)
     if project_dir.resolve().parent != root or project_dir.is_symlink():
         return "rejected_unknown_project"
+    if not project_dir.is_dir():
+        return KEPT_IN_RUN          # no such project: the lesson stays in the run (§3.3.2)
     # run id and lesson id are both validated shapes (run_*, L<n>)
     name = f"reflect-{run_id}-{lesson['id']}.json"
     data = json.dumps({"source_run_id": run_id, "destination": destination,
@@ -199,9 +205,15 @@ def route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
         _, target_project, doc_section = destination.split(":", 2)
         root = (Path(workspace) / "Projects").resolve()
         target = _project_dir(workspace, target_project).resolve()
-        if target.parent != root or not target.is_dir():   # never outside Projects/
+        if target.parent != root:                   # never outside Projects/
             return "rejected_unknown_project"
         doc, _, section = doc_section.partition(":")
+        from core.ddd_paths import ddd_path
+        if not target.is_dir() or not (ddd_path(target, f"{doc}.md").exists()
+                                       or ddd_path(target, f"{doc}.md").is_symlink()):
+            # the project, or its DDD doc, does not exist: keep the lesson in the run's
+            # own REFLECT record and REPORT, never drop it (§3.3.2, r8)
+            return KEPT_IN_RUN
         proposal = ddd_cultivation.CultivationProposal(
             target_doc=f"{doc}.md", target_section=section,
             content=str(lesson["statement"]), source_run_id=run_id, confidence=0.8)

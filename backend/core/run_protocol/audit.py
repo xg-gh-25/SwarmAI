@@ -1,7 +1,7 @@
 """Five-dimension Pipeline v1 run audit and shared renderers.
 
 Public symbols:
-- ``build`` — derive run_audit.json solely from events/final/findings/contract.
+- ``build`` — derive run_audit.json from events, findings, contract and the TEST reports.
 - ``render`` — render the same summary as REPORT or completed chat card.
 - ``write`` — atomically persist the machine-readable audit.
 """
@@ -186,20 +186,38 @@ def _experts(events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _commands(test_reports: Mapping[str, Mapping[str, Any]] | None) -> dict[str, list]:
+    """repo -> the commands of its TEST report: command, result, reason when given."""
+    out: dict[str, list] = {}
+    for repo, report in sorted((test_reports or {}).items()):
+        rows = []
+        for cmd in (report or {}).get("commands") or []:
+            if isinstance(cmd, Mapping):
+                rows.append({key: cmd[key] for key in ("command", "result", "reason")
+                             if cmd.get(key) is not None})
+        out[repo] = rows
+    return out
+
+
 def _validation_lines(event_rows) -> list[str]:
     from core.run_protocol.validation_report import report_lines
     return report_lines(event_rows)
 
 
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
-          final: Mapping[str, Any], findings: Sequence[Mapping[str, Any]],
+          findings: Sequence[Mapping[str, Any]],
           contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
           commits: Mapping[str, str] | None = None,
           repos_isolated: int | None = None,
           retained: Sequence[Mapping[str, Any]] = (),
           manual: Mapping[str, Any] | None = None,
           title: str | None = None,
-          design: Mapping[str, Any] | None = None) -> dict[str, Any]:
+          design: Mapping[str, Any] | None = None,
+          test_reports: Mapping[str, Mapping[str, Any]] | None = None,
+          lessons: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+    """*test_reports*: repo -> the latest TEST validation report (its commands are
+    listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
+    the run because their project has no DDD are listed in the REPORT)."""
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -248,7 +266,6 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
              "budget_seconds": budget_seconds if speed_complete else None,
              "waiting_seconds": round(waiting, 3)}
 
-    repos = final.get("repos") if isinstance(final, Mapping) else {}
     expected = list(contract.get("expected_repos") or [])
     contamination = sum(1 for event in event_rows if event.get("kind") == "integrity"
                         and str(event.get("payload", {}).get("conflict_type", "")).startswith("cross_run"))
@@ -264,13 +281,17 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     # S6-1: one TEST report per repo, counted as verified when it reports passing
     # commands and no failed one (the agent's own report; review judges its content)
     from core.run_protocol.validation_report import latest as _latest_reports
-    test_reports = _latest_reports(event_rows, "test")
+    test_events = _latest_reports(event_rows, "test")
     required = len(expected)
     passed = sum(1 for name in expected
-                 if (test_reports.get(name) or {}).get("payload", {}).get("n_pass", 0) > 0
-                 and not test_reports[name]["payload"].get("n_fail"))
-    closed_states = {"closed_proven", "closed_asserted", "refuted", "accepted"}
-    closed = sum(row.get("status") in closed_states for row in findings)
+                 if (test_events.get(name) or {}).get("payload", {}).get("n_pass", 0) > 0
+                 and not test_events[name]["payload"].get("n_fail"))
+    # a finding closed by a reported test counts as closed only when R2 judged the test
+    # ADEQUATE (S6-4d): before that it is the agent's claim, not a review's
+    closed_states = {"closed_asserted", "refuted", "accepted"}
+    confirmed = sum(row.get("status") == "closed_proven" and row.get("r2_status") == "ADEQUATE"
+                    for row in findings)
+    closed = confirmed + sum(row.get("status") in closed_states for row in findings)
     landing = projection.get("landing")
     reason = _reason(projection, event_rows)
     from core.run_protocol.lifecycle import QUALITY_BLOCK_REASONS   # one list
@@ -285,7 +306,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         quality_verdict = "PASS"
     quality = {"verdict": quality_verdict, "verification_passed": passed,
                "verification_required": required, "findings_closed": closed,
-               "findings_total": len(findings)}
+               "findings_confirmed": confirmed, "findings_total": len(findings)}
 
     # answered decisions + run-land (both in the projection) + accept_finding (§E9.3, D4)
     human_decisions = int(projection.get("human_decisions") or 0) + sum(
@@ -352,7 +373,6 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     details = {"events": [row.get("event_id") for row in event_rows],
                "push_reasons": dict(push.get("reasons") or {}),
                "findings": [dict(row) for row in findings],
-               "repos": dict(repos) if isinstance(repos, Mapping) else {},
                "commits": commit_map,
                "expected_repos": list(contract.get("expected_repos") or []),
                "unsettled_checkouts": _unsettled(event_rows),
@@ -363,13 +383,18 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "retained": [dict(row) for row in retained],
                "manual": dict(manual) if manual else None,
                "title": title or run_id,
-               # §E9.2 (conformance F22): measured from the events and the final only
+               # §E9.2 (conformance F22): measured from the events only
                "critical_path": _critical_path(event_rows, waits),
                "experts": _experts(event_rows),
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows),
-               "trace_matrix": trace_protocol.matrix(design, final)}
+               "trace_matrix": trace_protocol.matrix(design),
+               # S6-4d: what the agent says it ran, per repo (the latest TEST report)
+               "test_reports": _commands(test_reports),
+               "kept_lessons": [{"id": row.get("id"), "statement": row.get("statement")}
+                                for row in lessons if isinstance(row, Mapping)
+                                and (row.get("outcome") or {}).get("status") == "kept_in_run"]}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -428,8 +453,10 @@ def _token_text(token: Mapping[str, Any]) -> str:
 def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:
     if quality.get("verdict") == "N/A":
         return str(reason or "no code")
+    confirmed = quality.get("findings_confirmed")
     return (f"{quality['verification_passed']}/{quality['verification_required']} verification · "
-            f"{quality['findings_closed']}/{quality['findings_total']} findings closed")
+            f"{quality['findings_closed']}/{quality['findings_total']} findings closed"
+            + (f" ({confirmed} test-closed, confirmed by review)" if confirmed else ""))
 
 
 def _isolation_text(row: Mapping[str, Any]) -> str:
@@ -496,6 +523,20 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     lines += ["", "Full machine-readable audit is stored with this run."]
     if details.get("validation"):
         lines += [""] + [str(line) for line in details["validation"]]
+    for repo, commands in (details.get("test_reports") or {}).items():
+        if commands:
+            lines += ["", f"TEST · {_text(repo, 80)}："]
+            lines += [f"- {_text(cmd.get('command'), 200)} → {_text(cmd.get('result'), 20)}"
+                      + (f"（{_text(cmd['reason'], 200)}）" if cmd.get("reason") else "")
+                      for cmd in commands[:10]]
+            if len(commands) > 10:
+                lines.append(f"- 另有 {len(commands) - 10} 条，见 run_audit.json")
+    kept = details.get("kept_lessons") or []
+    if kept:
+        lines += ["", "## 没有写进项目 DDD 的经验", "",
+                  "这个项目没有对应的 DDD 文档，下面的经验只保存在这次 run 里：", ""]
+        lines += [f"- {_text(row.get('id'), 20)}：{_text(row.get('statement'), 400)}"
+                  for row in kept]
     if not outcome.get("push_ready"):
         reasons = dict(details.get("push_reasons") or {})
         high = [f"- {cid}: HIGH security_policy finding still has push effect"

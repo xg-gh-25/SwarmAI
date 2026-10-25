@@ -29,7 +29,7 @@ def _facts(events=None, landing="landed", push=True):
                           "n_pass": 2, "n_fail": 0, "n_not_run": 0}}
     events = [{"kind": "run_create", "at": "2026-10-22T00:00:00+00:00", "payload": {}},
               *events, report, {"kind": "land", "at": "2026-10-22T00:00:30+00:00", "payload": {}}]
-    return build(run_id="run_x", projection=projection, events=events, final={},
+    return build(run_id="run_x", projection=projection, events=events, 
                  repos_isolated=1,
                  findings=[], contract=contract,
                  push={"push_ready": push, "reasons": {} if push else {"RV-2": "open"}},
@@ -132,7 +132,7 @@ def test_missing_time_is_null_and_quality_na_shows_the_reason():
     projection = {"run_id": "run_x", "status": "completed", "landing": "not_landed",
                   "reason": "framing_rejected", "human_decisions": 0}
     contract = {"run_id": "run_x", "mode": "isolated", "expected_repos": ["repo"]}
-    audit = build(run_id="run_x", projection=projection, events=[], final={}, findings=[],
+    audit = build(run_id="run_x", projection=projection, events=[], findings=[],
                   contract=contract, push={"push_ready": False, "reasons": {}},
                   audit_through="COMPLETED", repos_isolated=None,
                   retained=[{"repo_name": "repo", "ledger": "/l/run_x/repo"}])
@@ -149,7 +149,7 @@ def test_a_high_security_policy_finding_is_listed_first():
     projection = {"run_id": "run_x", "status": "completed", "landing": "landed",
                   "reason": None, "human_decisions": 0}
     contract = {"run_id": "run_x", "mode": "isolated", "expected_repos": ["repo"]}
-    audit = build(run_id="run_x", projection=projection, events=[], final={},
+    audit = build(run_id="run_x", projection=projection, events=[], 
                   findings=[finding], contract=contract,
                   push={"push_ready": False, "reasons": {"MD-1": "a", "RV-2": "b"}},
                   audit_through="DELIVER", repos_isolated=1)

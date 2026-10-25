@@ -185,7 +185,7 @@ def test_unmetered_experts_still_block_token_cost():
         return audit.build(
             run_id="run_x", projection={"run_id": "run_x", "status": "completed",
                                         "landing": "landed", "human_decisions": 0},
-            events=events, final={}, findings=[], repos_isolated=1,
+            events=events, findings=[], repos_isolated=1,
             contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a"]},
             push={"push_ready": False, "reasons": {}},
             audit_through="COMPLETED")["summary"]["token_cost"]["verdict"]

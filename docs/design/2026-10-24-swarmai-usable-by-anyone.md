@@ -121,6 +121,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 - **文档规范保留**：REQUIREMENTS（结构化 EARS、R 编号）、DESIGN_SPEC（P/F/T/X 编号、properties、failure_modes、trace 矩阵）、fixing-spec、REFLECT 的 lessons。这是质量收敛的骨架，本身和编程语言无关。
 - **两道审查保留**：Gate-0（EVALUATE 的问题定义审查）、Gate-2（REVIEW 的专家审查：R1 全量 + R2 只复查已处理的 finding，finding 账本、聚类、fixing-spec、修复、复审、轮数上限）。原来的 Gate-1 已在 10 月的简化里删除，本设计不恢复。
 - **REFLECT 保留**：daemon 后台判断并沉淀 lessons 到项目 DDD（产品能力，每个用户的项目都有 DDD）。r8：project 在 SwarmWS 里不存在或没有 DDD 文档时，lessons 写进 run 自己的 REFLECT 记录并在 REPORT 里列出，不再静默丢弃（今天 `reflect_job.py:56-70,168-209` 会拒收未知项目）。
+  - 已实施（S6-4d，2026-10-25）：lesson 的目标项目不存在、或项目没有对应的 DDD 文档时，结果是 `kept_in_run`：留在 `artifacts/reflect.json`，REFLECT 不算降级，run 目录的 REPORT 列在"没有写进项目 DDD 的经验"一节。走出 `Projects/` 的目标照旧拒绝。原来项目目录不存在时 `_queue` 会抛 `FileNotFoundError`，重试两次后 REFLECT 降级，也一起修掉了。
 - **落地协议保留，签名删除（r12，XG 定）**：事件改为只追加日志（§3.3.5），其余保留：producer 权限、不可变 contract 和 tree 绑定、owner 转移、一次性授权、`auth_consumed`、`land_intent`、REPORT 渲染、交付 tree、base 复核、部分落地记录、隔离 worktree。
 - **上限和熔断保留**：阶段尝试上限、决策上限、复审轮数上限。
 
@@ -204,6 +205,12 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
 - 路径里的反斜杠永远对不上 git 的 `/`：现在直接拒绝，提示用 `/`。
 - （原来就有）DS-2a 只在 PLAN 跑，`creates_test_files` 里写了就算数，之后没人检查文件到底建没建、PLAN 时有的测试后来是否被删。新增 TS-4：TEST 结束时（阻断），每条测试引用都要在被测的代码 tree 里找到，计划不再算数；direct 不写 DESIGN_SPEC，豁免。
 - （原来就有）判断\"存在\"用的文件清单是 `git ls-files`：漏掉没 `git add` 的新文件，非 ASCII 文件名被 git 转义成带引号的八进制。现在对算好的代码 tree（落地后对落地 commit）跑 `git ls-tree -r -z --name-only`。
+
+**已实施（S6-4d，2026-10-25）**：五维审计不再读 runner 的 final（`audit.build` 去掉 `final` 参数）。
+- trace 矩阵去掉"结果"一列：pipeline 不跑测试，把 exit 的引用和 agent 报告的命令对上只能靠猜，所以矩阵只是 agent 的声明（TS-3 不变）。测过什么另外列：`details.test_reports` 是每个仓库最新 TEST 报告的命令和结果，REPORT 里逐条列出（每个仓库最多 10 条）。
+- Quality 的 `findings_closed`：用 `reported_test` 关闭的 finding，只有 R2 判 `ADEQUATE` 才算关闭（原来提交证据就算）；新增 `findings_confirmed` 记这类数目，REPORT 写"N test-closed, confirmed by review"。
+- Speed 原本就只用事件时间，没有改。
+
 
 
 #### 3.3.5 删掉签名机制，事件改为只追加日志（r12，XG 定）
@@ -602,3 +609,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r19（2026-10-25）：§3.5.1 记下 S6-4a（`82de614d7`）的实施和后续修复 `dede1ae2f`（合并前开始的 run 在 R2 读已删的专家文件）。
 - r20（2026-10-25）：§3.4.1 记下 gate 和专家的前后对比；新增 §3.5.2：通用清单就是专家 prompt，仓库自己的清单和 security 触发条件放在它的 `.swarmai/review.md`（在 run 的 base 读取），security 只按声明派，产品里没有内置的路径或 API 判断；SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`。S6-4b 实施。
 - r21（2026-10-25）：S6-4c 实施：DESIGN_SPEC 测试引用改为不透明的仓库引用（路径 + 可选测试名），`kind` 可选；RQ-3、RQ-8b 和词表删除，措辞检查进 Gate-0 第 5 问（§3.3.4）。
+- r22（2026-10-25）：S6-4d 实施：REFLECT 的未知项目回退（`kept_in_run`，REPORT 列出）；五维审计改读验证报告，trace 矩阵去掉结果列，Quality 只把 R2 确认过的 reported_test 关闭算作关闭。S6-4 全部完成。

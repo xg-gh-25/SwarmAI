@@ -157,7 +157,7 @@ def test_the_partial_land_event_and_report_name_what_landed(tmp_path, monkeypatc
         run_id="run_x", projection={"run_id": "run_x", "status": "completed", "landing": "not_landed",
                                     "reason": "partial_land", "human_decisions": 0},
         events=[{"kind": "run_create", "at": "2026-10-23T00:00:00+00:00", "payload": {}}],
-        final={}, findings=[], repos_isolated=2,
+        findings=[], repos_isolated=2,
         contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a", "b"]},
         push={"push_ready": False, "reasons": {}}, audit_through="DELIVER",
         commits={"a": "c" * 40})
@@ -256,7 +256,7 @@ def test_a_later_manual_partial_land_is_the_audits_outcome():
         run_id="run_x", projection={"run_id": "run_x", "status": "completed",
                                     "landing": "not_landed", "reason": "tests_red",
                                     "human_decisions": 0},
-        events=events, final={}, findings=[], repos_isolated=2,
+        events=events, findings=[], repos_isolated=2,
         contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a", "b"]},
         push={"push_ready": False, "reasons": {}}, audit_through="COMPLETED",
         commits={"a": "c" * 40})

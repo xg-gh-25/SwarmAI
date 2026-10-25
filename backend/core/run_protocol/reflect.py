@@ -35,6 +35,8 @@ class TransientWrite(RuntimeError):
 # writer results (ddd_cultivation.apply_to_ddd): what counts as applied, what is retried
 APPLIED_RESULTS = frozenset({"applied", "created_section", "duplicate"})
 TRANSIENT_RESULTS = frozenset({"locked"})
+# the destination does not exist: the lesson stays in the run's record (S6-4d)
+KEPT_RESULTS = frozenset({"kept_in_run"})
 
 
 def destination(lesson_type: str, scope: str) -> str:
@@ -123,7 +125,8 @@ def process(document: Mapping[str, Any], *,
                     if result in TRANSIENT_RESULTS:
                         raise TransientWrite(result)
                     outcome = {"status": "applied" if result in APPLIED_RESULTS
-                               or result.startswith("queued:") else "rejected",
+                               or result.startswith("queued:") else
+                               "kept_in_run" if result in KEPT_RESULTS else "rejected",
                                "result": result, "attempts": attempt}
                 else:
                     outcome = {"status": "judge_error", "detail": str(verdict), "attempts": attempt}

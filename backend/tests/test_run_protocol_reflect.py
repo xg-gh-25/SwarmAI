@@ -81,8 +81,10 @@ def test_routing_never_leaves_the_workspace_projects(tmp_path):
     lesson = _lesson()
     assert reflect_job.route(lesson, "domain:..:TECH:Conventions", workspace=tmp_path,
                              project="P", run_id="run_1") == "rejected_unknown_project"
+    # S6-4d: a project that does not exist is not outside Projects/: the lesson is kept
+    # in the run's own record (and REPORT), not rejected
     assert reflect_job.route(lesson, "domain:Q:TECH:Conventions", workspace=tmp_path,
-                             project="P", run_id="run_1") == "rejected_unknown_project"
+                             project="P", run_id="run_1") == "kept_in_run"
 
 
 def test_annotating_an_entry_twice_writes_one_note(tmp_path):

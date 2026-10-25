@@ -47,7 +47,7 @@ def _contract(**extra):
 def _audit(events, **kw):
     return audit_protocol.build(
         run_id="run_k4", projection={"run_id": "run_k4", "status": "active"}, events=events,
-        final=kw.pop("final", {"repos": {}}), findings=[], contract=_contract(),
+        findings=[], contract=_contract(),
         push={"push_ready": False}, audit_through="DELIVER", **kw)
 
 
@@ -67,13 +67,11 @@ def test_f22_details_carry_critical_path_experts_waits_and_trace_matrix():
          "payload": {"request_id": "q1"}},
         {"kind": "stage_complete", "event_id": "e4", "stage": "review", "at": "2026-10-23T00:10:00+00:00"},
     ]
-    final = {"repos": {"repo": {"trace": [
-        {"exit": "X1", "kind": "test", "covers": ["R1"], "result": "pass", "seq": 1}]}}}
     design = {"tasks": [{"id": "T1", "requirements": ["R1"]}],
               "exit_criteria": [{"id": "X1", "kind": "test", "ref": "tests/test_a.py::test_a",
                                  "covers": ["R1"]}],
               "properties": [{"id": "P1", "validates": ["R1"], "test": "tests/test_a.py::test_a"}]}
-    details = _audit(events, final=final, design=design)["details"]
+    details = _audit(events, design=design)["details"]
     build, review = details["critical_path"]
     assert (build["stage"], build["seconds"], build["attempts"]) == ("build", 180.0, 1)
     # REVIEW: 7 min wall, of which 2 min waited on a person; the expert took 2 min
@@ -85,8 +83,8 @@ def test_f22_details_carry_critical_path_experts_waits_and_trace_matrix():
     assert details["waits"][0]["seconds"] == 120.0 and details["waits"][0]["kind"] == "decision"
     r1 = details["trace_matrix"]["rows"]["R1"]
     assert r1["tasks"] == ["T1"]
-    assert r1["exits"] == [{"exit": "X1", "kind": "test", "ref": "tests/test_a.py::test_a",
-                            "results": {"repo": "pass"}}]
+    # S6-4d: no result column (the pipeline runs no test; TEST reports are listed apart)
+    assert r1["exits"] == [{"exit": "X1", "kind": "test", "ref": "tests/test_a.py::test_a"}]
     assert details["trace_matrix"]["rows"]["P1"]["validates"] == ["R1"]
     assert _audit(events)["details"]["trace_matrix"] == {
         "rows": {}, "unavailable": "no DESIGN_SPEC for this run"}

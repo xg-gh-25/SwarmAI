@@ -97,7 +97,7 @@ def test_f18_a_dispatch_cap_blocks_token_too():
     value = audit.build(
         run_id="run_x", projection={"run_id": "run_x", "status": "active", "landing": None,
                                     "human_decisions": 0},
-        events=events, final={}, findings=[], repos_isolated=1,
+        events=events, findings=[], repos_isolated=1,
         contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a"]},
         push={"push_ready": False, "reasons": {}}, audit_through="DELIVER")
     assert value["summary"]["speed"]["verdict"] == "BLOCK"
