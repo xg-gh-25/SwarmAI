@@ -95,3 +95,22 @@ def test_a_gate0_answer_with_two_verdicts_has_no_verdict():
     two = parse_answer("VERDICT: SUPPORTED\nwait\nVERDICT: UNSUPPORTED",
                        expert_id="gate0-skeptic", round=1)
     assert two.state == "unparsed" and two.verdict is None
+
+
+def test_rows_written_with_the_contracts_own_labels_parse():
+    """OUTPUT_CONTRACT shows rows as `New finding: {...}` and `R2 status: {...}`; an
+    expert that copies the label (every Gate-0 answer in run_bb7b1850) must not be
+    unparsed for it."""
+    gate = parse_answer(f"VERDICT: SUPPORTED-WITH-CHANGES\nreason\n\nNew finding: {FINDING}",
+                        expert_id="gate0-skeptic", round=1)
+    assert gate.state == "parsed" and gate.findings[0]["claim"] == "crashes"
+    status = (f'R2 status: {{"finding_id":"{A}","status":"RESOLVED",'
+              '"kind_confirm":null,"note":"fixed"}')
+    r2 = parse_answer(f"{status}\nNO FINDINGS", expert_id="correctness", round=2,
+                      finding_ids=[A])
+    assert r2.state == "parsed" and r2.statuses[0]["status"] == "RESOLVED"
+    bullet = parse_answer(f"- New finding: {FINDING}", expert_id="correctness", round=1)
+    assert bullet.state == "parsed"
+    # another label is still not a row
+    other = parse_answer(f"Note: {FINDING}", expert_id="correctness", round=1)
+    assert other.state == "unparsed"

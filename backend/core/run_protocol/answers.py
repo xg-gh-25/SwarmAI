@@ -24,6 +24,7 @@ R2_STATUSES = frozenset({
     "RESOLVED", "OPEN", "REFUTED", "ADEQUATE", "TEST_INADEQUATE",
 })
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*$", re.IGNORECASE)
+_ROW_LABEL = re.compile(r"^(?:New finding|R2 status)\s*:\s*", re.IGNORECASE)
 
 
 class AnswerError(ValueError):
@@ -59,6 +60,9 @@ def _object_lines(text: str) -> tuple[list[tuple[int, Mapping[str, Any]]], list[
             fenced = not fenced
             continue
         candidate = line.lstrip("-*• ").strip()
+        # the OUTPUT CONTRACT shows rows with these labels; an expert copying them
+        # writes the row after the label (run_bb7b1850 Gate-0 answer)
+        candidate = _ROW_LABEL.sub("", candidate, count=1)
         if not (candidate.startswith("{") or candidate.endswith("}")):
             continue
         try:
