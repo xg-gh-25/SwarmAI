@@ -208,7 +208,7 @@ function markHeld(zones: Zone[]): void {
  * ended yet (RESULT, Stopped, stopped-at). Liveness still follows `isStreaming`, so
  * WORKING reads Worked at once; only the moves wait, and then happen in one frame.
  */
-export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = isStreaming): Zone[] {
+export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = isStreaming, continued = false): Zone[] {
   const units = view.units;
   const hasCalls = units.some((u) => u.kind === 'process' && u.steps.length > 0);
   const zones: Zone[] = [];
@@ -225,12 +225,14 @@ export function turnZones(view: TurnView, isStreaming: boolean, hold: boolean = 
   const lastIndex = Math.max(-1, ...units.map((u) => (u.kind === 'process' ? (u.steps[u.steps.length - 1]?.index ?? -1) : firstIndex(u))));
   const noticeEnds = !hold && !!notice && !unfinished
     && (notice.reason === 'superseded' || lastIndex < notice.index);
-  const stopped = !!view.stoppedMarker || (unfinished && hasResults) || noticeEnds;
+  // a segment a steer continued (chat-steer frontend §7) is not the turn's end:
+  // nothing in it is judged stopped and it has no RESULT
+  const stopped = !continued && (!!view.stoppedMarker || (unfinished && hasResults) || noticeEnds);
 
   // RESULT: the first text after the last call, once the turn ended, with nothing still
   // waiting for the user after it, in a turn that did not stop.
   let resultOrdinal: number | null = null;
-  if (hasCalls && !hold && !stopped) {
+  if (hasCalls && !hold && !stopped && !continued) {
     const first = units.find((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome');
     const waits = first && units.some((u) => u.kind === 'interrupt' && u.index > first.index && isUnanswered(u.block));
     if (first && !waits) resultOrdinal = first.textOrdinal;

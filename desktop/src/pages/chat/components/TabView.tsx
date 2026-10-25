@@ -55,6 +55,7 @@ import { TurnPhaseLine } from './TurnPhaseLine';
 import { tf } from '../tf';
 import { focusAgent } from '../agentFocus';
 import { StreamingBee } from './StreamingBee';
+import { steerChain } from '../steerChain';
 
 /** The bee's "new content" input while no turn streams: nothing ever arrives, so
  *  its 45s line says how long the background agents have been working. Stable. */
@@ -639,6 +640,10 @@ function TabViewImpl({
     () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
     [messages],
   );
+  // A steered turn's segments (pages/chat/steerChain, design chat-steer frontend
+  // §7): one rule for the live list and the reloaded history.
+  const streamingAssistantId = isStreaming && lastAssistantIdx >= 0 ? messages[lastAssistantIdx].id : undefined;
+  const steerFlags = useMemo(() => steerChain(messages, streamingAssistantId), [messages, streamingAssistantId]);
 
   // Last resume boundary index — messages before this render dimmed (prior
   // session). Only TRUE resume boundaries trigger dimming; same-session
@@ -810,6 +815,9 @@ function TabViewImpl({
                   isStreaming={isLastAssistantForStreaming}
                   sessionId={sessionId}
                   isLastAssistant={idx === lastAssistantIdx}
+                  continued={steerFlags.get(msg.id)?.continued}
+                  afterSteer={steerFlags.get(msg.id)?.afterSteer}
+                  headerLive={steerFlags.get(msg.id)?.headerLive}
                   contextWarning={idx === lastAssistantIdx ? contextWarning : null}
                   onCancelQueued={msg.isQueued && tabId ? () => onCancelQueued(tabId, msg.id) : undefined}
                   onRetrySend={msg.sendState === 'failed' && tabId && onRetrySend ? () => onRetrySend(tabId, msg.id) : undefined}

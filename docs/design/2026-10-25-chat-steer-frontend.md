@@ -176,7 +176,7 @@ RESULT、出现动作行。turn 其实还在跑，这违反"一个 turn 一个�
   （`AssistantHeader.tsx:55-56`）。第一段不再直播、后面的段又不画抬头，脉冲就没了，只剩尾部的 bee
   （不变量 8 要两个信号）。所以 TabView 给一串（第一段 + 它后面所有 `afterSteer` 的段）的第一个气泡传
   `headerLive`：这一串的最后一段在直播时为真。
-- **两条规则都跳过还没发出的 user 气泡**（Waiting / 排队），只认已读的 steer。
+- **两条规则只认已读的 steer。** Waiting / 排队的气泡不切段；它们也不会夹在 steer 和它的段之间（段紧接 steer 插入，之后的发送追加在后面），所以不需要跳过规则（实现时变异检查发现跳过规则没有可达的场景，删掉了）。
 
 turn 的用量、耗时、输出卡片只在最后一段：`result` 落在当时的目标气泡上，turn_changes / deliverables 行
 由后端写在最后一段的 key 下（后端 D4）。

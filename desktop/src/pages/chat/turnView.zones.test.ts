@@ -364,3 +364,14 @@ describe('mergeStrips', () => {
     expect(mergeStrips([step(rd('a', '/p/a.ts')), step(rd('b', '/p/b.ts'))], (id) => id !== 'b')).toHaveLength(2);
   });
 });
+
+describe('turnZones — a segment a steer continued (chat-steer frontend §7)', () => {
+  it('has no RESULT and is never judged stopped: the turn goes on after the steer', () => {
+    const v = deriveTurnView([tx('go'), tu('a'), tr('a'), tx('so far')], false);
+    expect(turnZones(v, false, false).some((z) => z.kind === 'text' && z.result)).toBe(true);   // control
+    expect(turnZones(v, false, false, true).some((z) => z.kind === 'text' && z.result)).toBe(false);
+    const u = deriveTurnView([tu('a'), tr('a'), tu('b')], false);
+    expect(kinds(turnZones(u, false, false))).toContain('stopped');                          // control
+    expect(kinds(turnZones(u, false, false, true))).not.toContain('stopped');
+  });
+});

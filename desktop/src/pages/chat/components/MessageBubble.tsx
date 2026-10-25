@@ -37,6 +37,10 @@ export interface MessageBubbleProps {
   isStreaming?: boolean;
   sessionId?: string;
   isLastAssistant?: boolean;
+  /** Steer segments (pages/chat/steerChain): see AssistantMessageView. */
+  continued?: boolean;
+  afterSteer?: boolean;
+  headerLive?: boolean;
   contextWarning?: ContextWarning | null;
   /** Called when user cancels a queued message. Only relevant for user messages with isQueued=true. */
   onCancelQueued?: () => void;
@@ -62,6 +66,9 @@ function MessageBubbleImpl({
   isStreaming,
   sessionId,
   isLastAssistant,
+  continued,
+  afterSteer,
+  headerLive,
   contextWarning,
   onCancelQueued,
   onRetrySend,
@@ -93,6 +100,9 @@ function MessageBubbleImpl({
       isStreaming={isStreaming}
       sessionId={sessionId}
       isLastAssistant={isLastAssistant}
+      continued={continued}
+      afterSteer={afterSteer}
+      headerLive={headerLive}
       contextWarning={contextWarning}
       onContinue={onContinue}
       onRetryError={onRetryError}

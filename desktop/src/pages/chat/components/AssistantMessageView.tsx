@@ -192,6 +192,13 @@ export interface AssistantMessageViewProps {
   sessionId?: string;
   /** Whether this is the last assistant message in the session */
   isLastAssistant?: boolean;
+  /** A steer continued the turn after this segment (pages/chat/steerChain): it is
+   *  not the turn's end -- no RESULT, no ending cards, no next steps. */
+  continued?: boolean;
+  /** This segment goes on after a read steer: no avatar, no header. */
+  afterSteer?: boolean;
+  /** The chain's first segment while a later one streams: the header keeps its pulse. */
+  headerLive?: boolean;
   /** Context warning from the backend context monitor (per-session, display mirror) */
   contextWarning?: ContextWarning | null;
   /** Callback to send a continuation prompt when model stopped prematurely */
@@ -222,6 +229,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   isStreaming,
   sessionId,
   isLastAssistant,
+  continued = false,
+  afterSteer = false,
+  headerLive = false,
   contextWarning,
   onContinue,
   onRetryError,
@@ -382,7 +392,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // turnZones decides the first level (THOUGHTS · restatement · WORKED · note · … ·
   // pipeline · RESULT); TurnZoneList renders it with the two spacing steps. Every zone
   // keys by an id that only grows while streaming and survives the reconcile.
-  const zones = useMemo(() => turnZones(view, !!isStreaming, settling), [view, isStreaming, settling]);
+  const zones = useMemo(() => turnZones(view, !!isStreaming, settling, continued), [view, isStreaming, settling, continued]);
 
   useEffect(() => {
     const onFocusAgent = (event: Event) => {
@@ -449,7 +459,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   // The ending (spec §8): one output card. Code changes come only from turn_changes;
   // a deliverable is not listed again as a changed file; a pipeline run's documents are
   // in the deliverables section only. A direct run has its summary too (XG 2026-10-20).
-  const summary = ended ? view.summary : undefined;
+  // the turn's end (chat-steer: not in a segment a steer continued)
+  const ending = ended && !continued;
+  const summary = ending ? view.summary : undefined;
   const summaryDocs = summary?.docs ?? [];
   // A document already shown as a card on its stage row is not a deliverable tile too.
   const stageDocPaths = new Set(turnContent.flatMap((b) => (b.type === 'pipeline_stage'
@@ -457,15 +469,15 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const deliverables = view.deliverables.filter((d) => !stageDocPaths.has(d.absolutePath)
     && !summaryDocs.some((x) => x.absolutePath === d.absolutePath));
   const changes = useMemo(() => {
-    if (!ended || !view.changes) return undefined;
+    if (!ending || !view.changes) return undefined;
     const files = view.changes.files.filter(
       (f) => !view.deliverables.some((d) => isSameFile(f.absolutePath, d.path, d.absolutePath))
         && !summaryDocs.some((x) => !!x.absolutePath && isSameFile(f.absolutePath, x.path ?? '', x.absolutePath)),
     );
     const next = { ...view.changes, files };
     return hasTurnChanges(next) ? next : undefined;
-  }, [view, ended, summaryDocs]);
-  const attention = view.attention && view.attention.items.length > 0 ? view.attention : undefined;
+  }, [view, ending, summaryDocs]);
+  const attention = !continued && view.attention && view.attention.items.length > 0 ? view.attention : undefined;
   const hasActionAttention = !!attention?.items.some((item) => !isVerificationAttentionItem(item));
   const hasVerificationAttention = !!attention
     && (attention.items.some(isVerificationAttentionItem) || (attention.more ?? 0) > 0);
@@ -498,14 +510,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       </div>,
     );
   }
-  if (ended && (changes || deliverables.length || summaryDocs.length)) {
+  if (ending && (changes || deliverables.length || summaryDocs.length)) {
     contentBlocks.push(
       <div key="output" className={hasResult ? 'mt-5' : ZONE_GAP}>
         <OutputCard changes={changes} deliverables={deliverables} summary={summary} />
       </div>,
     );
   }
-  if (ended && attention && hasVerificationAttention) {
+  if (ending && attention && hasVerificationAttention) {
     contentBlocks.push(
       <div key="assumptions" className={ZONE_GAP}>
         <AssumptionsDisclosure block={attention} />
@@ -538,22 +550,29 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   return (
     <ReadOnlyContext.Provider value={!!readOnly}>
     <div ref={messageRef} className="assistant-message group/msg min-w-0 flex gap-2.5 items-start">
-      {/* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */}
-      <div
-        className="w-6 h-6 rounded-[6px] flex items-center justify-center flex-shrink-0 mt-0.5 text-[13px]"
-        style={{
-          background: 'linear-gradient(180deg, #d4a537, #a67c20)',
-          boxShadow: '0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15)',
-        }}
-        aria-hidden="true"
-      >
-        <span role="img" aria-label={ASSISTANT_NAME}>&#x1F41D;</span>
-      </div>
+      {afterSteer ? (
+        /* the reply goes on under the steer: same column, no avatar (chat-steer §7) */
+        <div className="w-6 flex-shrink-0" aria-hidden="true" />
+      ) : (
+        /* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */
+        <div
+          className="w-6 h-6 rounded-[6px] flex items-center justify-center flex-shrink-0 mt-0.5 text-[13px]"
+          style={{
+            background: 'linear-gradient(180deg, #d4a537, #a67c20)',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15)',
+          }}
+          aria-hidden="true"
+        >
+          <span role="img" aria-label={ASSISTANT_NAME}>&#x1F41D;</span>
+        </div>
+      )}
       <div className="flex-1 min-w-0">
-        <AssistantHeader
-        timestamp={message.timestamp}
-        isStreaming={isStreaming}
-      />
+        {!afterSteer && (
+          <AssistantHeader
+            timestamp={message.timestamp}
+            isStreaming={isStreaming || headerLive}
+          />
+        )}
 
       <div className="text-[var(--color-text-secondary)]">
         {contentBlocks}
@@ -566,7 +585,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
       {/* Next steps — the reply's trailing ```next-steps block as clickable chips.
           Only on the latest successful answer (older or interrupted suggestions are stale). */}
-      {!readOnly && ended && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
+      {!readOnly && ending && !message.isError && isLastAssistant && <NextSteps steps={view.nextSteps} />}
 
       {/* Action buttons — appear on hover below content, hidden while streaming.
           Hidden entirely in read-only (History preview) — Copy/Save/Compact/
