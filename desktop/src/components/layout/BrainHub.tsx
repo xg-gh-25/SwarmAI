@@ -25,7 +25,8 @@
  * parts of the Brain map: Overview (the map, Needs you, Eval summary) · Needs you ·
  * Brain (DDD) (Add knowledge, docs, files) · Project Agent (definition, Start a Run) ·
  * Conductor · Runs · Reflect · Evolution (the review queue) · Eval. Clicking a map
- * part opens its tab. Distribute opens from More. `defaultView` picks the first
+ * part opens its tab. The last tab, Distribute, ships the Brain out (an internal git
+ * package or an external GitHub repo). `defaultView` picks the first
  * detail view (default 'overview').
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -100,9 +101,9 @@ export function hunkSummary(diffText: string): {
 
 type Mode = 'gallery' | 'detail';
 /** The detail views: the seven tabs (one per part of the Brain map, plus Overview)
- *  and Distribute, which opens from the header's More menu. */
+ *  and Distribute, the last step of a Brain's lifecycle (ship it out). */
 type DetailView = BrainTab | 'distribute';
-const TABS: { key: BrainTab; label: string }[] = [
+const TABS: { key: DetailView; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'needs', label: 'Needs you' },
   { key: 'brain', label: 'Brain (DDD)' },
@@ -110,6 +111,7 @@ const TABS: { key: BrainTab; label: string }[] = [
   { key: 'runs', label: 'Conductor · Runs' },
   { key: 'reflect', label: 'Reflect · Evolution' },
   { key: 'eval', label: 'Eval' },
+  { key: 'distribute', label: 'Distribute' },
 ];
 
 /** `onRequestClose` — the host overlay's `ctx.close` (overlaySurfaces passes it).
@@ -203,7 +205,7 @@ export function BrainHub(
       selfName={selfName}
       detailView={detailView}
       onSelectView={setDetailView}
-      onSwitchBrain={(n) => openBrain(n, detailView === 'distribute' ? 'overview' : detailView)}
+      onSwitchBrain={(n) => openBrain(n, detailView)}
       onBack={backToGallery}
       onRequestClose={onRequestClose}
       onDispatch={onDispatch}
@@ -250,7 +252,6 @@ function BrainDetailShell(
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
       <BrainHeader name={name} summary={summary} brains={brains ?? []} isSelf={name === selfName} needs={needs}
         onBack={onBack} onSwitch={onSwitchBrain}
-        onDistribute={() => onSelectView('distribute')}
         onOpenFile={shellOpenFile}
         onResume={summary?.setupState === 'setting-up' ? sendResume : undefined} />
 
@@ -291,10 +292,10 @@ function BrainDetailShell(
 }
 
 /** Header: icon + name (the Brain switcher) + status on one line, the description
- *  under it, and the More menu (Distribute, Continue setup, Edit aim.json). */
-function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, onDistribute, onOpenFile, onResume }: {
+ *  under it, and the More menu (Continue setup, Edit aim.json). */
+function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, onOpenFile, onResume }: {
   name: string; summary?: BrainSummary; brains: BrainSummary[]; isSelf: boolean; needs: number;
-  onBack: () => void; onSwitch: (n: string) => void; onDistribute: () => void;
+  onBack: () => void; onSwitch: (n: string) => void;
   onOpenFile: (p: string) => void; onResume?: () => void;
 }) {
   const [menu, setMenu] = useState<'none' | 'switch' | 'more'>('none');
@@ -347,7 +348,6 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
             <div className="fixed inset-0 z-[9]" onClick={close} aria-hidden="true" />
             <div role="menu" className="absolute right-0 top-full mt-1 z-10 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] py-1">
               {onResume && <MenuItem testid="brainhub-more-resume" onClick={() => { close(); onResume(); }}>Continue setup in chat</MenuItem>}
-              <MenuItem testid="brainhub-more-distribute" onClick={() => { close(); onDistribute(); }}>Distribute this Brain</MenuItem>
               <MenuItem testid="brainhub-more-aim" onClick={() => { close(); onOpenFile(`Projects/${name}/aim.json`); }}>Edit aim.json</MenuItem>
             </div>
           </>
@@ -1139,8 +1139,8 @@ function HunkCard({ hunk, busy, onReject, onOpenFile }: {
 // AND the guideline legend render from this — never restate the mapping in prose (a
 // second copy would drift from this one; Gate-2 meta-review caught exactly that).
 const TARGET_REPO_MAP: Record<string, { label: string; install: string }> = {
-  'aim-capabilities': { label: 'internal AIM package', install: 'CR/PR → aim plugins install' },
-  'open-plugin': { label: 'public code host', install: 'git push → install.sh' },
+  'aim-capabilities': { label: 'internal git package', install: 'CR → aim plugins install' },
+  'open-plugin': { label: 'external GitHub repo', install: 'git push → install.sh' },
 };
 function repoForTarget(target: string): { label: string; install: string } {
   // Unknown target (vocab drift) → passthrough: show the raw name, no fabricated repo.
@@ -1375,6 +1375,7 @@ function DistributeView(
                 {Object.entries(TARGET_REPO_MAP).map(([t, { label, install }]) => (
                   <div key={t}><span className="font-mono">{t}</span> → <b>{label}</b> (<span className="font-mono">{install}</span>).</div>
                 ))}
+                <div data-testid="distribute-cloud-unsupported">Cloud storage (e.g. S3) → <b>not supported yet</b>: no packager target writes there.</div>
               </div>
             </div>
             <div>

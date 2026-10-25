@@ -332,11 +332,11 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     await waitFor(() => expect(screen.getByTestId('brainhub-browse')).toBeTruthy());
   }
 
-  // ── the seven tabs mirror the Brain map; Brain (DDD) holds knowledge + files ──
-  it('the seven tabs are the parts of the Brain map; Brain (DDD) shows the docs, then the files', async () => {
+  // ── the tabs mirror the Brain map, then Distribute; Brain (DDD) holds knowledge + files ──
+  it('the tabs are the parts of the Brain map plus Distribute; Brain (DDD) shows the docs, then the files', async () => {
     await openBrain();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent?.replace(/\d+$/, ''));
-    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'Reflect · Evolution', 'Eval']);
+    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'Reflect · Evolution', 'Eval', 'Distribute']);
     expect(screen.getByTestId('brainhub-overview')).toBeTruthy();
     expect(screen.getByTestId('brainhub-browse')).toBeTruthy();
     // search sits in this tab, next to what it searches; the tab bar is navigation only
@@ -349,18 +349,25 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(screen.getByTestId('bm-add')).toBeTruthy();
   });
 
-  it('header: name switches Brain, description under it, More holds Distribute', async () => {
+  it('header: name switches Brain, description under it; Distribute is the last tab, not in More', async () => {
     mockGetPinned.mockReturnValue(['SwarmAI']);
     await openBrain();
     expect(screen.getByTestId('brainhub-breadcrumb').textContent).toContain('SELF');
     expect(screen.getByTestId('brainhub-desc')).toBeTruthy();
-    expect(screen.queryByTestId('brainhub-tab-distribute')).toBeNull();
+    const tabs = screen.getByTestId('brainhub-detail-nav').querySelectorAll('[role="tab"]');
+    expect(tabs[tabs.length - 1].getAttribute('data-testid')).toBe('brainhub-tab-distribute');
+    fireEvent.click(screen.getByTestId('brainhub-more'));
+    expect(screen.queryByTestId('brainhub-more-distribute')).toBeNull();
+    fireEvent.click(screen.getByTestId('brainhub-more'));
     fireEvent.click(screen.getByTestId('brainhub-switcher'));
     fireEvent.click(screen.getByTestId('brainhub-switch-AIDLC'));
     await waitFor(() => expect(screen.getByTestId('brainhub-switcher').textContent).toContain('AIDLC'));
-    fireEvent.click(screen.getByTestId('brainhub-more'));
-    fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
+    fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
     await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
+    // switching Brain keeps the Distribute tab open
+    fireEvent.click(screen.getByTestId('brainhub-switcher'));
+    fireEvent.click(screen.getByTestId('brainhub-switch-SwarmAI'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute').getAttribute('aria-selected')).toBe('true'));
   });
 
   // Helper: assert the fixed §①→②→③ order via the STABLE slot testids (ontology
@@ -818,9 +825,8 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('brainhub-more')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brainhub-more'));
-    fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
     await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
   }
 
@@ -843,9 +849,9 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     const rows = screen.getAllByTestId('distribute-target-row');
     expect(rows.length).toBe(2);
     const all = rows.map((r) => r.textContent ?? '').join(' | ');
-    // aim-capabilities → internal AIM package; open-plugin → public code host
-    expect(all).toContain('internal AIM package');
-    expect(all).toContain('public code host');
+    // aim-capabilities → internal git package; open-plugin → external GitHub repo
+    expect(all).toContain('internal git package');
+    expect(all).toContain('external GitHub repo');
   });
 
   it('F2: null source_changed_since renders "freshness unknown", NOT "up to date"', async () => {
@@ -936,9 +942,8 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
       render(<BrainHub defaultView="brain" onRequestClose={onRequestClose} />);
       await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
       fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-more')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('brainhub-more'));
-      fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
       await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
       fireEvent.click(screen.getByTestId('distribute-open-aim'));
       await waitFor(() => expect(openEvents.length).toBe(1));
@@ -971,9 +976,8 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
       render(<BrainHub defaultView="brain" onRequestClose={onRequestClose} />);  // default fixture = distributable
       await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
       fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-more')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('brainhub-more'));
-      fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
       await waitFor(() => expect(screen.getByTestId('distribute-edit-aim')).toBeTruthy());
       fireEvent.click(screen.getByTestId('distribute-edit-aim'));
       await waitFor(() => expect(openEvents.length).toBe(1));
@@ -994,7 +998,8 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     await waitFor(() => expect(screen.getByTestId('distribute-guideline-body')).toBeTruthy());
     const body = screen.getByTestId('distribute-guideline-body').textContent ?? '';
     expect(body).toContain('emit');       // emit ≠ publish rule
-    expect(body).toContain('internal AIM package');  // target→repo mapping legend
+    expect(body).toContain('internal git package');  // target→repo mapping legend
+    expect(screen.getByTestId('distribute-cloud-unsupported').textContent).toContain('not supported yet');
     expect(body.toLowerCase()).toContain('step');     // the 3-step flow
   });
 
@@ -1013,10 +1018,10 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     fireEvent.click(screen.getByTestId('distribute-guideline-toggle'));
     await waitFor(() => expect(screen.getByTestId('distribute-guideline-body')).toBeTruthy());
     const legend = screen.getByTestId('distribute-guideline-body').textContent ?? '';
-    // both the row and the legend say "internal AIM package" for aim-capabilities —
+    // both the row and the legend say "internal git package" for aim-capabilities —
     // if TARGET_REPO_MAP changes, BOTH move together (they read the same map).
-    expect(rowLabel).toContain('internal AIM package');
-    expect(legend).toContain('internal AIM package');
+    expect(rowLabel).toContain('internal git package');
+    expect(legend).toContain('internal git package');
     expect(legend).toContain('aim-capabilities');
     expect(legend).toContain('open-plugin');  // legend lists ALL known targets, not just declared
   });
