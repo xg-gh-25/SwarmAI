@@ -102,55 +102,40 @@ def _landing(root: str, dest: str, deadline: Deadline, branch: str, turn: str, o
             "state": "on" if on else "off", "files": files}
 
 
-def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str]" = None,
-              cap: int = TURN_CAP, since_days: "Optional[int]" = None,
-              limit: "Optional[int]" = None, expect: "Optional[int]" = None) -> dict:
-    """This session's landings into the checkout *root*'s current branch, newest first:
-    ``{landed, unverified, truncated, unknown}``. ``turn_id``: only that turn's.
-    ``since_days`` / ``limit``: Canvas's window (by the reflog's own date).
-    ``expect``: how many lands were handed this turn's id (run_owner_gate counts
-    them); finding that many stamps is complete even when the read hit its cap — a
-    busy branch's reflog is longer than any cap (this repo's main: ~1700 entries)."""
-    out: dict = {"landed": [], "unverified": 0, "truncated": False, "unknown": None}
+def _scan(root: str, key: str, deadline: Deadline, turn_id: "Optional[str]", cap: int,
+          since_days: "Optional[int]") -> dict:
+    """One checkout's stamps of this session, newest first, not yet checked:
+    ``{dest, cands: [(at, branch, turn, onto, new)], capped, unknown}``. ``capped``:
+    the read hit *cap* before the reflog (or the ``since_days`` window) ended."""
+    out: dict = {"root": root, "dest": None, "cands": [], "capped": False, "unknown": None}
     try:
         rc, ref = _git(root, deadline, "symbolic-ref", "-q", "HEAD", ok=(0, 1))
         if rc != 0 or not ref.strip().startswith("refs/heads/"):
             out["unknown"] = "no-branch"
             return out
-        dest = ref.strip()[len("refs/heads/"):]
+        dest = out["dest"] = ref.strip()[len("refs/heads/"):]
         if _git(root, deadline, "reflog", "exists", f"refs/heads/{dest}", ok=(0, 1))[0] != 0:
             out["unknown"] = "no-reflog"
             return out
         raw = _git(root, deadline, "reflog", "show", "--date=unix",
                    "--format=%H%x00%gs%x00%gd", f"-n{cap}", f"refs/heads/{dest}", "--")[1]
         lines = [x for x in raw.splitlines() if x]
-        if len(lines) >= cap:
-            out["truncated"] = True
+        out["capped"] = len(lines) >= cap
         floor = time.time() - since_days * 86400 if since_days else None
         for line in lines:
             parts = line.split("\0")
             if len(parts) != 3:
                 continue
             new, msg, selector = parts
+            at_m = re.search(r"@\{(\d+)\}$", selector)
+            at = int(at_m.group(1)) if at_m else 0
+            if floor is not None and at_m and at < floor:
+                out["capped"] = False        # the window ended inside the read
+                break
             m = _STAMP.match(msg)
             if not m or m.group(2) != key or (turn_id and m.group(3) != turn_id):
                 continue
-            if floor is not None:
-                at = re.search(r"@\{(\d+)\}$", selector)
-                if at and int(at.group(1)) < floor:
-                    out["truncated"] = False
-                    break
-            if limit is not None and len(out["landed"]) >= limit:
-                out["truncated"] = True
-                break
-            land = _landing(root, dest, deadline, m.group(1), m.group(3), m.group(4), new)
-            if land is None:
-                out["unverified"] += 1
-            else:
-                out["landed"].append(land)
-            if expect is not None and len(out["landed"]) + out["unverified"] >= expect:
-                out["truncated"] = False     # every stamp this turn handed out is found
-                break
+            out["cands"].append((at, m.group(1), m.group(3), m.group(4), new))
     except _OutOfTime:
         out["unknown"] = "timeout"
     except Exception as exc:  # noqa: BLE001 — a display aid: said, never raised
@@ -159,30 +144,72 @@ def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str
     return out
 
 
+def _expand(scans: "list[dict]", deadline: Deadline, limit: "Optional[int]",
+            expect: "Optional[int]") -> dict:
+    """The scans' stamps merged newest first across checkouts, at most *limit*
+    expanded (checked against git). Complete when every scan ended before its cap,
+    or when *expect* stamps (the lands this turn handed its id) were found."""
+    res: dict = {"landed": [], "unverified": 0, "truncated": False, "unknown": []}
+    cands = [(c, sc) for sc in scans for c in sc["cands"]]
+    cands.sort(key=lambda x: -x[0][0])      # stable: one repo's reflog order is kept
+    res["truncated"] = any(sc["capped"] for sc in scans)
+    if expect is not None and len(cands) >= expect:
+        res["truncated"] = False             # every stamp handed out is found
+        cands = cands[:expect]
+    timed_out: set = set()
+    for i, ((_at, branch, turn, onto, new), sc) in enumerate(cands):
+        if limit is not None and len(res["landed"]) >= limit:
+            res["truncated"] = True
+            break
+        try:
+            land = _landing(sc["root"], sc["dest"], deadline, branch, turn, onto, new)
+        except _OutOfTime:
+            timed_out.update(id(s) for _c, s in cands[i:])
+            break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("session_landings: %s unreadable: %s", sc["root"], exc)
+            sc["unknown"] = sc["unknown"] or "unreadable"
+            continue
+        if land is None:
+            res["unverified"] += 1
+        else:
+            res["landed"].append(land)
+    for sc in scans:
+        reason = sc["unknown"] or ("timeout" if id(sc) in timed_out else None)
+        if reason:
+            res["unknown"].append({"repo": os.path.basename(sc["root"]), "reason": reason})
+    return res
+
+
+def read_repo(root: str, key: str, *, deadline: Deadline, turn_id: "Optional[str]" = None,
+              cap: int = TURN_CAP, since_days: "Optional[int]" = None,
+              limit: "Optional[int]" = None, expect: "Optional[int]" = None) -> dict:
+    """This session's landings into the checkout *root*'s current branch, newest first:
+    ``{landed, unverified, truncated, unknown}`` (``unknown``: one reason or None).
+    ``turn_id``: only that turn's. ``since_days`` / ``limit``: Canvas's window (by the
+    reflog's own date, judged on every entry). ``expect``: how many lands were handed
+    this turn's id (run_owner_gate counts them); finding that many is complete even
+    when the read hit its cap — a busy branch's reflog is longer than any cap (this
+    repo's main: ~1700 entries)."""
+    res = _expand([_scan(root, key, deadline, turn_id, cap, since_days)], deadline,
+                  limit, expect)
+    res["unknown"] = res["unknown"][0]["reason"] if res["unknown"] else None
+    return res
+
+
 def read_session(session_id: str, *, deadline: Deadline, turn_id: "Optional[str]" = None,
                  cap: int = TURN_CAP, since_days: "Optional[int]" = None,
                  limit: "Optional[int]" = None, expect: "Optional[int]" = None) -> dict:
-    """``read_repo`` over every bound main checkout: ``{landed, unverified,
-    truncated, unknown: [{repo, reason}]}``. Blocking: run it on a dedicated pool."""
+    """``read_repo`` over every bound main checkout, with ONE *limit* / *expect* for
+    the session and newest first across them: ``{landed, unverified, truncated,
+    unknown: [{repo, reason}]}``. Blocking: run it on a dedicated pool."""
     from core.app_session_id import session_key, valid_app_session_id
-    res: dict = {"landed": [], "unverified": 0, "truncated": False, "unknown": []}
     if not valid_app_session_id(session_id):
-        return res
+        return {"landed": [], "unverified": 0, "truncated": False, "unknown": []}
     key = session_key(session_id)
-    found = 0
-    for root in _bound_checkouts():
-        if expect is not None and found >= expect:
-            break                        # every stamp handed out is found
-        one = read_repo(root, key, deadline=deadline, turn_id=turn_id, cap=cap,
-                        since_days=since_days, limit=limit,
-                        expect=None if expect is None else max(expect - found, 0) or None)
-        res["landed"] += one["landed"]
-        res["unverified"] += one["unverified"]
-        found += len(one["landed"]) + one["unverified"]
-        res["truncated"] = res["truncated"] or one["truncated"]
-        if one["unknown"]:
-            res["unknown"].append({"repo": os.path.basename(root), "reason": one["unknown"]})
-    return res
+    scans = [_scan(root, key, deadline, turn_id, cap, since_days)
+             for root in _bound_checkouts()]
+    return _expand(scans, deadline, limit, expect)
 
 
 def _bound_checkouts() -> list[str]:

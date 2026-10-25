@@ -472,3 +472,25 @@ def test_the_order_lock_is_released_with_the_session():
     import inspect
     from core.lifecycle_manager import LifecycleManager
     assert "transcript_order" in inspect.getsource(LifecycleManager._release_session_state)
+
+
+@pytest.mark.asyncio
+async def test_forget_during_a_stop_keeps_the_stops_lock():
+    import asyncio
+    """A forced release that cleans up the session while its Stop still writes must
+    not hand a user row a fresh, free lock: the row still waits for the Stop."""
+    from core import transcript_order
+    order = []
+    async with transcript_order.stop_writes("s-forget"):
+        transcript_order.forget("s-forget")
+        row = asyncio.ensure_future(_row_after(transcript_order, "s-forget", order))
+        await asyncio.sleep(0.05)
+        order.append("stop done")
+    await row
+    assert order == ["stop done", "row"]
+    assert "s-forget" not in transcript_order._locks, "forgotten once nobody holds it"
+
+
+async def _row_after(transcript_order, sid, order):
+    async with transcript_order.user_row(sid, wait_s=1):
+        order.append("row")

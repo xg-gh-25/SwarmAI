@@ -125,3 +125,29 @@ def test_continuations_do_not_reset_the_turn():
     from core.session_unit import SessionUnit
     for name in ("continue_with_answer", "continue_with_permission"):
         assert "_reset_turn_state" not in inspect.getsource(getattr(SessionUnit, name))
+
+
+PIPE = '"$SWARM_BACKEND_BIN" pipeline-v1 status run_abc'
+
+
+def test_a_land_followed_by_a_pipeline_call_keeps_its_stamp(monkeypatch):
+    """The pipeline checks still run for the later segment; when they allow the
+    line, the first-segment land still gets the session and turn id."""
+    from core import run_owner_gate as rog
+    seen = []
+    monkeypatch.setattr(rog, "_decide", lambda sid, cmd, *a: seen.append(cmd) or None)
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_lands": 0}
+    cmd = f"{LAND} && {PIPE}"
+    new = _rewritten(_run(cmd, ctx=ctx))
+    assert seen == [cmd], "the pipeline check ran"
+    assert new == f"SWARM_APP_SESSION_ID={shlex.quote(SID)} SWARM_TURN_ID={TURN} {cmd}"
+    assert ctx["_turn_lands"] == 1
+
+
+def test_a_denied_pipeline_segment_denies_the_line_and_counts_no_land(monkeypatch):
+    from core import run_owner_gate as rog
+    monkeypatch.setattr(rog, "_decide", lambda *a: rog._deny("not yours"))
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_lands": 0}
+    out = _run(f"{LAND} && {PIPE}", ctx=ctx)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert ctx["_turn_lands"] == 0

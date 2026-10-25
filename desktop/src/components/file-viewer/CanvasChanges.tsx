@@ -28,13 +28,13 @@ import { FileTypeIcon } from '../common/FileTypeIcon';
 import { CopyPathButton } from '../common/CopyPathButton';
 
 export type ChangesSelection =
-  | { kind: 'file'; turn: string; path: string }
+  | { kind: 'file'; turn: string; root: string; path: string }   // root: a turn spans repos
   | { kind: 'landing'; root: string; sha: string }
   | null;
 
 export function changesKey(s: ChangesSelection): string {
   if (!s) return '';
-  return s.kind === 'landing' ? `${s.root}@${s.sha}` : `${s.turn}:${s.path}`;
+  return s.kind === 'landing' ? `${s.root}@${s.sha}` : `${s.turn}:${s.root}:${s.path}`;
 }
 
 const SEL = 'canvas-row-sel';
@@ -64,10 +64,11 @@ function useChanges(): SessionChanges | null {
   return data?.changes ?? null;
 }
 
-/** The Changes tab's count badge: distinct files across the listed turns. */
+/** The Changes tab's count badge: distinct files across the listed turns and landings. */
 export function ChangesCount() {
   const c = useChanges();
-  const n = new Set((c?.turns ?? []).flatMap((t) => t.files.map((f) => f.absolutePath || f.path))).size;
+  const files = [...(c?.turns ?? []).flatMap((t) => t.files), ...(c?.landed ?? []).flatMap((l) => l.files)];
+  const n = new Set(files.map((f) => f.absolutePath || `${f.gitRoot}:${f.path}`)).size;
   return n > 0
     ? <span data-testid="changes-count" className="text-[10.5px] px-1.5 rounded-full tabular-nums bg-[color-mix(in_srgb,var(--color-text)_10%,transparent)]">{n}</span>
     : null;
@@ -102,7 +103,7 @@ function FileRow({ turn, f, multiRepo, on, onSelect }: {
   turn: string; f: ChangedFile; multiRepo: boolean; on: boolean; onSelect: (s: ChangesSelection) => void;
 }) {
   const [name, dir] = splitPath(f.path);
-  const pick = () => onSelect({ kind: 'file', turn, path: f.path });
+  const pick = () => onSelect({ kind: 'file', turn, root: f.gitRoot, path: f.path });
   return (
     // A row, not a <button>: it holds the copy-path button (no nested buttons).
     <div role="button" tabIndex={0} data-testid="changes-file" onClick={pick}
@@ -139,8 +140,9 @@ function TurnBlock({ turn, multiRepo, selected, onSelect }: {
         <span>· {count === 1 ? '1 file' : `${count} files`}</span>
       </div>
       {files.map((f) => (
-        <FileRow key={f.path} turn={turn.id} f={f} multiRepo={multiRepo}
-          on={key === `${turn.id}:${f.path}`} onSelect={onSelect} />
+        <FileRow key={`${f.gitRoot}:${f.path}`} turn={turn.id} f={f} multiRepo={multiRepo}
+          on={key === changesKey({ kind: 'file', turn: turn.id, root: f.gitRoot, path: f.path })}
+          onSelect={onSelect} />
       ))}
       {turn.files.length > SHOWN && (
         <button type="button" onClick={() => setMore((m) => !m)}
@@ -309,7 +311,8 @@ function LandingDetail({ landing }: { landing: SessionLanding }) {
 export function ChangesDetail({ selected }: { selected: ChangesSelection }) {
   const c = useChanges();
   const turn = selected?.kind === 'file' ? c?.turns.find((t) => t.id === selected.turn) : undefined;
-  const file = selected?.kind === 'file' ? turn?.files.find((f) => f.path === selected.path) : undefined;
+  const file = selected?.kind === 'file' ? turn?.files.find((f) => f.path === selected.path && f.gitRoot === selected.root)
+    : undefined;
   const landing = selected?.kind === 'landing'
     ? c?.landed.find((l) => l.gitRoot === selected.root && l.new === selected.sha) : undefined;
   if (!file && !landing) {

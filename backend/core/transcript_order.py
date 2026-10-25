@@ -29,39 +29,59 @@ logger = logging.getLogger(__name__)
 USER_ROW_WAIT_S = 30.0
 
 _locks: dict[str, asyncio.Lock] = {}
+#: How many stop_writes / user_row blocks use the session's lock (holding or waiting).
+_users: dict[str, int] = {}
+#: Sessions forgotten while their lock was in use: dropped when the last user leaves.
+_forgotten: set[str] = set()
 
 
-def _lock(session_id: str) -> asyncio.Lock:
+@asynccontextmanager
+async def _use(session_id: str) -> AsyncIterator[asyncio.Lock]:
+    """The session's lock, kept alive (not dropped by ``forget``) while in use."""
     lock = _locks.get(session_id)
     if lock is None:
         lock = _locks[session_id] = asyncio.Lock()
-    return lock
+    _users[session_id] = _users.get(session_id, 0) + 1
+    try:
+        yield lock
+    finally:
+        _users[session_id] -= 1
+        if not _users[session_id]:
+            del _users[session_id]
+            if session_id in _forgotten:
+                _forgotten.discard(session_id)
+                _locks.pop(session_id, None)
 
 
 @asynccontextmanager
 async def stop_writes(session_id: str) -> AsyncIterator[None]:
     """Held by a Stop from its first write to its last."""
-    async with _lock(session_id):
+    async with _use(session_id) as lock, lock:
         yield
 
 
 @asynccontextmanager
 async def user_row(session_id: str, wait_s: float = USER_ROW_WAIT_S) -> AsyncIterator[None]:
     """Held while a user row's ``created_at`` is chosen and the row is written."""
-    lock = _lock(session_id)
-    try:
-        await asyncio.wait_for(lock.acquire(), wait_s)
-    except asyncio.TimeoutError:
-        logger.warning("transcript_order: Stop writes of %s still running after %.0fs; "
-                       "writing the user row now", session_id, wait_s)
-        yield
-        return
-    try:
-        yield
-    finally:
-        lock.release()
+    async with _use(session_id) as lock:
+        try:
+            await asyncio.wait_for(lock.acquire(), wait_s)
+        except asyncio.TimeoutError:
+            logger.warning("transcript_order: Stop writes of %s still running after %.0fs; "
+                           "writing the user row now", session_id, wait_s)
+            yield
+            return
+        try:
+            yield
+        finally:
+            lock.release()
 
 
 def forget(session_id: str) -> None:
-    """Drop the session's lock (LifecycleManager._release_session_state)."""
-    _locks.pop(session_id, None)
+    """Drop the session's lock (LifecycleManager._release_session_state). A lock a
+    Stop or a user row still holds or waits for is dropped when the last one leaves:
+    a forced release during a Stop must not give the next user row a fresh lock."""
+    if _users.get(session_id):
+        _forgotten.add(session_id)
+    else:
+        _locks.pop(session_id, None)

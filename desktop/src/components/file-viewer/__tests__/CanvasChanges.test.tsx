@@ -91,8 +91,8 @@ describe('Changes tab (this session\'s transcript)', () => {
     expect(turns[0].textContent).toContain('2 more files');
     expect(screen.getByTestId('changes-older').textContent).toContain('3 older turns');
     expect(screen.getByTestId('changes-not-scanned')).toBeTruthy();
-    // the badge counts distinct files: a.ts twice + new.ts once
-    expect(screen.getByTestId('changes-count').textContent).toBe('2');
+    // the badge counts distinct files: a.ts twice + new.ts once + the landed l.ts
+    expect(screen.getByTestId('changes-count').textContent).toBe('3');
     expect(changes).toHaveBeenCalledWith('s1');
     expect(artifacts).not.toHaveBeenCalled();
   });
@@ -108,6 +108,28 @@ describe('Changes tab (this session\'s transcript)', () => {
     expect(patch.textContent).not.toContain('diff --git');
     expect(screen.getAllByTestId('changes-file')[2].className).toContain('canvas-row-sel');
     expect(screen.getAllByTestId('changes-file')[0].className).not.toContain('canvas-row-sel');
+  });
+
+  it('the same path in two repos is two rows: own key, own selection, own diff', async () => {
+    const other = { gitRoot: '/r/docs', absolutePath: '/r/docs/README.md', repo: 'docs', start: 'd0', end: 'd1' };
+    await load({ ...CHANGES, landed: [], turns: [{ id: 'm5:0', at: 't', omitted: 0,
+      files: [file('README.md'), file('README.md', other)] }] });
+    treeDiff.mockResolvedValue('@@ -1 +1 @@\n-a\n+b');
+    render(<Tab />);
+    const rows = await screen.findAllByTestId('changes-file');
+    expect(rows).toHaveLength(2);
+    fireEvent.click(rows[1]);
+    expect(treeDiff).toHaveBeenCalledWith('/r/docs', 'd0', 'd1', 'README.md');
+    const after = screen.getAllByTestId('changes-file');
+    expect(after[1].className).toContain('canvas-row-sel');
+    expect(after[0].className).not.toContain('canvas-row-sel');
+    expect(screen.getByTestId('changes-count').textContent).toBe('2');
+  });
+
+  it('a session with only a landing still has a count badge', async () => {
+    await load({ ...CHANGES, turns: [] });
+    render(<Tab />);
+    expect((await screen.findByTestId('changes-count')).textContent).toBe('1');
   });
 
   it('a diff no longer there says so', async () => {

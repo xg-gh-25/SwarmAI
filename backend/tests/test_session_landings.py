@@ -224,3 +224,49 @@ def test_a_limit_keeps_the_newest_and_says_there_are_more(tmp_path, monkeypatch)
     res = _read(repo, limit=1)
     assert [x["files"][0]["path"] for x in res["landed"]] == ["c.py"] and res["truncated"]
     assert not _read(repo, limit=2)["truncated"]
+
+
+def _land_at(monkeypatch, repo, name, files, when, **kw):
+    """A landing whose reflog entry is dated *when* (unix seconds)."""
+    monkeypatch.setenv("GIT_COMMITTER_DATE", f"@{when} +0000")
+    try:
+        return _land(monkeypatch, repo, name, files, **kw)
+    finally:
+        monkeypatch.delenv("GIT_COMMITTER_DATE")
+
+
+def test_limit_and_newest_first_span_all_bound_checkouts(tmp_path, monkeypatch):
+    """One limit for the session, not one per repo, and newest first across repos;
+    only the landings shown are expanded (the cost bound)."""
+    a, z = _repo(tmp_path / "a"), _repo(tmp_path / "z")
+    _land_at(monkeypatch, z, "z1", {"b.py": "1\n"}, 1_700_000_000)
+    _land_at(monkeypatch, a, "a1", {"b.py": "2\n"}, 1_700_000_100)
+    _land_at(monkeypatch, z, "z2", {"c.py": "3\n"}, 1_700_000_200)
+    monkeypatch.setattr(sl, "_bound_checkouts", lambda: [str(a), str(z)])
+    real, expanded = sl._landing, []
+    monkeypatch.setattr(sl, "_landing", lambda *x: expanded.append(x) or real(*x))
+    res = sl.read_session(SID, deadline=sl.Deadline(10), limit=2)
+    assert [x["branch"].rsplit("-", 1)[1] for x in res["landed"]] == ["z2", "a1"]
+    assert res["truncated"] and len(expanded) == 2
+
+
+def test_expect_met_in_a_later_repo_is_complete(tmp_path, monkeypatch):
+    """A repo that hit its cap without the stamp does not make the read 'maybe more'
+    once every stamp the turn handed out was found in another repo."""
+    a, z = _repo(tmp_path / "a"), _repo(tmp_path / "z")
+    for _ in range(3):
+        _g(a, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "x")
+    _land(monkeypatch, z, "z1", {"b.py": "1\n"})
+    monkeypatch.setattr(sl, "_bound_checkouts", lambda: [str(a), str(z)])
+    res = sl.read_session(SID, deadline=sl.Deadline(10), turn_id=T1, cap=2, expect=1)
+    assert len(res["landed"]) == 1 and not res["truncated"]
+
+
+def test_an_old_unrelated_entry_closes_the_canvas_window(tmp_path, monkeypatch):
+    """since_days is judged on every reflog entry, not only this session's stamps."""
+    monkeypatch.setenv("GIT_COMMITTER_DATE", "@1000000000 +0000")
+    repo = _repo(tmp_path / "proj")
+    _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "old")
+    monkeypatch.delenv("GIT_COMMITTER_DATE")
+    res = _read(repo, cap=1, since_days=30)
+    assert res == {"landed": [], "unverified": 0, "truncated": False, "unknown": None}

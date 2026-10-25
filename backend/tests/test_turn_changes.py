@@ -24,6 +24,7 @@ What is tested (real git repos in tmp_path, no daemon):
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import time
@@ -571,3 +572,26 @@ def test_git_reads_never_take_optional_locks(tmp_path, monkeypatch):
     tc._git(str(tmp_path), "rev-parse", "--git-dir")
     tc._git(str(tmp_path), "status", "--porcelain", env={"X": "1"})
     assert seen and all(e.get("GIT_OPTIONAL_LOCKS") == "0" for e in seen)
+
+
+@pytest.mark.asyncio
+async def test_rows_and_landings_share_one_finish_budget(repo, monkeypatch):
+    """FINISH_BUDGET_S bounds the whole turn end: the landings read gets what the
+    rows left, not a fresh budget of its own."""
+    from core import session_landings
+    monkeypatch.setattr(tc, "FINISH_BUDGET_S", 0.3)
+
+    async def slow(self, raw):
+        await asyncio.sleep(0.2)
+    monkeypatch.setattr(TurnChanges, "_finish", slow)
+    seen = {}
+    monkeypatch.setattr(session_landings, "read_session", lambda sid, **k: seen.update(
+        left=k["deadline"].left()) or {"landed": [], "unverified": 0, "truncated": False,
+                                        "unknown": []})
+    ctx = {"_turn_id": "t" * 32, "_turn_lands": 1}
+    t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32, context=ctx)
+    await t.ready()
+    (repo / "a.py").write_text("changed\n")
+    t.note_tool({"type": "tool_use", "name": "Write", "input": {"file_path": str(repo / "a.py")}})
+    await t.finish()
+    assert seen["left"] < 0.15, seen

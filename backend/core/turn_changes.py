@@ -330,12 +330,14 @@ class TurnChanges:
         return copy.deepcopy(block) if block is not None else None
 
     async def _compute(self) -> Optional[dict]:
+        from core.session_landings import Deadline
+        deadline = Deadline(FINISH_BUDGET_S)    # one budget for rows and landings
         raw, self._raw = self._raw, {}
         self._partial = []
         landings: Optional[dict] = None
         if raw:
             try:
-                await asyncio.wait_for(self._finish(raw), FINISH_BUDGET_S)
+                await asyncio.wait_for(self._finish(raw), max(deadline.left(), 0))
             except asyncio.TimeoutError:
                 logger.warning("turn_changes: finish exceeded %.0fs — showing %d rows", FINISH_BUDGET_S, len(self._partial))
         if self._session_id and self._turn_id:
@@ -343,22 +345,23 @@ class TurnChanges:
             if self._context is not None:
                 expect = int(self._context.get("_turn_lands") or 0)
             if expect != 0:              # no land handed this turn's id: no stamp to read
-                landings = await self._landings(expect)
+                landings = await self._landings(expect, deadline)
         block = _block(self._partial, landings)
         if block is not None and self._turn_id:
             block["turn_id"] = self._turn_id
         return block
 
-    async def _landings(self, expect: Optional[int] = None) -> Optional[dict]:
+    async def _landings(self, expect: Optional[int], deadline) -> Optional[dict]:
         """This turn's landings (core/session_landings), on the turn_changes pool,
-        under the same budget as the rows. *expect*: how many lands were handed this
-        turn's id; the read ends once it found that many."""
+        with what is left of the turn end's budget (*deadline*: no git call starts
+        after it). *expect*: how many lands were handed this turn's id; the read is
+        complete once it found that many."""
         from core import session_landings
         loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(
                 _pool(), lambda: session_landings.read_session(
-                    self._session_id, deadline=session_landings.Deadline(FINISH_BUDGET_S),
+                    self._session_id, deadline=deadline,
                     turn_id=self._turn_id, limit=MAX_LANDINGS, expect=expect))
         except Exception as exc:  # noqa: BLE001 — a display aid
             logger.debug("turn_changes: landings unreadable: %s", exc)

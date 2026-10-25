@@ -150,8 +150,12 @@ a turn, when it found `expect` stamps (the lands the gate handed this turn's id,
 Measured on a clone of this repo: main's reflog has ~1700 entries, so without
 `expect` every turn read hit the cap and every card said "more landings may exist".
 Canvas's 30-day cutoff uses the reflog date in the selector (`%gd` with
-`--date=unix`), never a commit date; reaching 30 days before the cap is complete. A
-turn reads at most `MAX_LANDINGS` (4); a fifth is `truncated`.
+`--date=unix`), never a commit date, judged on every entry (not only this session's);
+reaching 30 days before the cap is complete. A turn reads at most `MAX_LANDINGS` (4);
+a fifth is `truncated`. The limit and `expect` are the session's, not each repo's:
+every bound checkout is scanned (one reflog read each), the stamps are merged newest
+first by reflog date, and only the ones shown are expanded (the 7 calls). The turn end
+has one `FINISH_BUDGET_S` deadline for its rows and its landings together.
 
 ## 5. Where it is shown
 

@@ -527,9 +527,9 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         tool_input = input_data.get("tool_input") or {}
         command = tool_input.get("command") or ""
         from core import pipeline_command
-        if phase == "check" and isinstance(command, str) and _SW_MODULE in command \
-                and not pipeline_command.mentions(command):
-            # pure string work, no IO: decided inline
+        sw_allow = None
+        if phase == "check" and isinstance(command, str) and _SW_MODULE in command:
+            # pure string work, no IO
             try:
                 got = _session_worktree_rewrite(
                     command, str(session_context.get("sdk_session_id") or ""),
@@ -537,20 +537,30 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
             except Exception:  # noqa: BLE001 — fail-open, never blocks a command
                 logger.warning("run_owner_gate: session_worktree rewrite failed", exc_info=True)
                 got = None
-            if got is None:
-                return {"decision": "approve"}
-            rewrite, verb, with_turn = got
-            if verb == "land" and with_turn:
-                # TurnChanges reads this turn's landings only when one was handed the
-                # turn's id, and knows how many to look for (a busy reflog is longer
-                # than any cap, so "found them all" is what makes the read complete)
-                session_context["_turn_lands"] = int(session_context.get("_turn_lands") or 0) + 1
-            return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                           "permissionDecision": "allow",
-                                           "updatedInput": {**tool_input, "command": rewrite}}}
+            if got is not None:
+                def sw_allow(got=got):
+                    rewrite, verb, with_turn = got
+                    if verb == "land" and with_turn:
+                        # TurnChanges reads this turn's landings only when one was
+                        # handed the turn's id, and knows how many to look for (a busy
+                        # reflog is longer than any cap, so "found them all" is what
+                        # makes the read complete). Counted only once the line is allowed.
+                        session_context["_turn_lands"] = \
+                            int(session_context.get("_turn_lands") or 0) + 1
+                    return {"hookSpecificOutput": {
+                        "hookEventName": "PreToolUse", "permissionDecision": "allow",
+                        "updatedInput": {**tool_input, "command": rewrite}}}
         if not isinstance(command, str) or not (pipeline_command.mentions(command)
                                                 or "/api/pipelines/" in command):
-            return {"decision": "approve"}  # cheap path: no IO
+            return sw_allow() if sw_allow else {"decision": "approve"}  # cheap path: no IO
+        res = await _pipeline_decision(command, tool_input, input_data, tool_use_id)
+        if sw_allow and _plain_allow(res):
+            # the land is the line's first command and the pipeline checks of a later
+            # segment allowed it: the land still gets its ids
+            return sw_allow()
+        return res
+
+    async def _pipeline_decision(command, tool_input, input_data, tool_use_id):
         if phase == "approved" and not any(c in command for c in AFTER_APPROVAL):
             return {"decision": "approve"}  # nothing of this phase in the command
         if phase == "approved":
@@ -575,3 +585,11 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         return res or {"decision": "approve"}
 
     return _gate
+
+
+def _plain_allow(res: "dict | None") -> bool:
+    """*res* lets the command run as it is (no deny, no ask, no rewrite of its own)."""
+    if not res or res.get("decision") == "approve":
+        return True
+    out = res.get("hookSpecificOutput") or {}
+    return out.get("permissionDecision") == "allow" and "updatedInput" not in out
