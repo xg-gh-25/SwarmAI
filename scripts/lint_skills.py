@@ -556,14 +556,13 @@ def metadata_targets(root: Path) -> list[Path]:
 
     import core
 
-    spec = importlib.util.spec_from_file_location(
-        "_lint_shipped_skills",
-        Path(core.__file__).resolve().parent.parent / "scripts" / "shipped_skills.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    source = Path(core.__file__).resolve().parent.parent / "scripts" / "shipped_skills.py"
     try:
+        spec = importlib.util.spec_from_file_location("_lint_shipped_skills", source)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
         names = module.shipped_skill_names(root)
-    except Exception as exc:  # git failed inside a work tree: no scope, no verdict
+    except Exception as exc:  # no list (module missing, or git failed): no scope, no verdict
         raise RuntimeError(f"cannot list the shipped skills under {root}: {exc}") from exc
     return [md for md in sorted(root.glob("s_*/SKILL.md")) if md.parent.name in names]
 

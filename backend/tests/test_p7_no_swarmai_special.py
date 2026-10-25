@@ -7,15 +7,19 @@ product code may find "the SwarmAI checkout" by a guessed location, a dev-only
 environment variable, or the existence of SwarmAI's own build script.
 
 What is scanned: every git-tracked ``backend/**/*.py`` and ``*.sh`` that ships, i.e.
-everything except test files. Python is parsed: string literals that are not
-docstrings, plus function, name and import identifiers. Comments and docstrings may
-mention SwarmAI's paths as examples; code may not use them. Shell files: every
-non-comment line.
+everything except test files. Python is parsed: str and bytes literals that are not
+docstrings, ``Path.home() / <segment>`` chains, and function, class, name, attribute
+and import identifiers. Comments and docstrings may mention SwarmAI's paths as
+examples; code may not use them. Shell files: every non-comment line.
 
-A hit is allowed only by a reviewed line in ``tests/p7_exceptions.txt``. Two checks keep
-this test from going quietly blind: every exception must still match a hit (an unused
-exception is deleted), and the scan must actually have read the product tree (a
-broken file list would otherwise pass over nothing).
+A hit is allowed only by a reviewed line in ``tests/p7_exceptions.txt``, which names the
+file, the token and the exact number of hits: one more hit in an excepted file is a new
+violation, one fewer means the line must shrink. The scan must also have read the
+product tree (a broken file list would otherwise pass over nothing).
+
+Known limit: a bare ``"SwarmAI"`` literal (the product name, also the seeded default
+project's name) is not a rule; the default-project literals of usable-by-anyone §3.9
+class B are a separate cleanup.
 """
 
 from __future__ import annotations
@@ -36,8 +40,12 @@ STRING_RULES = re.compile(
     r"|SWARMAI_CODEBASE_DIR|SWARMAI_DIR\b|SWARMAI_PROJECT_ROOT"  # env vars that point at it
     r"|/(?:Users|home)/[A-Za-z][\w.-]*"         # an absolute path naming one account
 )
-#: A string that is exactly this is the ``Path.home() / "Desktop" / ...`` guess.
-DESKTOP = "Desktop"
+#: A home-relative development location written as a string: ``~/Desktop/...``,
+#: ``.../Desktop`` or the exact segment ``"Desktop"``, ``~/swarmai``, ``~/Projects/...``.
+PATH_STRING_RULES = re.compile(r"(?:^|/)Desktop(?:/|$)|^~/(?:swarmai|Projects)(?:/|$)")
+#: ``Path.home() / <first> / ...`` whose first segment is a place a developer keeps
+#: checkouts. App data lives under ``Library`` / ``AppData`` / ``.local`` / ``.swarm-ai``.
+HOME_DEV_DIRS = {"Desktop", "Projects", "swarmai", "SwarmAI-Workspace"}
 #: Identifiers whose only job is to find SwarmAI's checkout.
 NAME_RULES = re.compile(r"_find_swarmai_(?:root|repo)\b")
 
@@ -65,18 +73,37 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return ids
 
 
+def _home_chain_first_segment(node: ast.BinOp) -> str | None:
+    """For ``Path.home() / "a" / "b"`` the first segment ``"a"``; None otherwise."""
+    while isinstance(node.left, ast.BinOp) and isinstance(node.left.op, ast.Div):
+        node = node.left
+    left, right = node.left, node.right
+    is_home = (isinstance(left, ast.Call) and isinstance(left.func, ast.Attribute)
+               and left.func.attr == "home")
+    if is_home and isinstance(right, ast.Constant) and isinstance(right.value, str):
+        return right.value
+    return None
+
+
 def _python_hits(rel: str, text: str) -> list[tuple[str, int, str]]:
     tree = ast.parse(text, filename=rel)
     docs = _docstring_nodes(tree)
     hits = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
-            hits += [(rel, node.lineno, m.group(0)) for m in STRING_RULES.finditer(node.value)]
-            if node.value == DESKTOP:
-                hits.append((rel, node.lineno, DESKTOP))
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)) \
+                and id(node) not in docs:
+            value = node.value if isinstance(node.value, str) else node.value.decode("latin-1")
+            hits += [(rel, node.lineno, m.group(0)) for m in STRING_RULES.finditer(value)]
+            hits += [(rel, node.lineno, m.group(0)) for m in PATH_STRING_RULES.finditer(value)]
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            first = _home_chain_first_segment(node)
+            if first in HOME_DEV_DIRS and not (isinstance(node.left, ast.BinOp)):
+                hits.append((rel, node.lineno, f"Path.home() / {first!r}"))
         else:
-            ident = (node.name if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.alias))
-                     else node.id if isinstance(node, ast.Name) else None)
+            ident = (node.name if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                    ast.ClassDef, ast.alias))
+                     else node.id if isinstance(node, ast.Name)
+                     else node.attr if isinstance(node, ast.Attribute) else None)
             if ident and NAME_RULES.search(ident):
                 hits.append((rel, getattr(node, "lineno", 0), NAME_RULES.search(ident).group(0)))
     return hits
@@ -99,15 +126,23 @@ def scan(files: list[str]) -> list[tuple[str, int, str]]:
     return hits
 
 
-def _exceptions() -> set[tuple[str, str]]:
-    allowed = set()
+def _exceptions() -> dict[tuple[str, str], int]:
+    allowed: dict[tuple[str, str], int] = {}
     for line in EXCEPTIONS.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        path, token, reason = (part.strip() for part in line.split("|", 2))
+        path, token, count, reason = (part.strip() for part in line.split("|", 3))
         assert reason, f"exception without a reason: {line!r}"
-        allowed.add((path, token))
+        assert (path, token) not in allowed, f"duplicate exception: {line!r}"
+        allowed[(path, token)] = int(count)
     return allowed
+
+
+def _counts(hits) -> dict[tuple[str, str], int]:
+    counts: dict[tuple[str, str], int] = {}
+    for path, _no, token in hits:
+        counts[(path, token)] = counts.get((path, token), 0) + 1
+    return counts
 
 
 def test_scan_reads_the_product_tree():
@@ -120,17 +155,22 @@ def test_scan_reads_the_product_tree():
 
 def test_product_code_does_not_look_for_swarmai():
     allowed = _exceptions()
-    unexplained = sorted(f"{p}:{n}: {t}" for p, n, t in scan(_shipped_files()) if (p, t) not in allowed)
+    hits = scan(_shipped_files())
+    counts = _counts(hits)
+    unexplained = sorted(f"{p}:{n}: {t}" for p, n, t in hits
+                         if counts[(p, t)] > allowed.get((p, t), 0))
     assert not unexplained, (
         "product code finds SwarmAI's own checkout, machine or project (usable-by-anyone P7). "
         "Use what any install has (bindings.yaml, the session's working repo, runtime paths), "
         "or add a reviewed line to tests/p7_exceptions.txt:\n" + "\n".join(unexplained))
 
 
-def test_every_exception_is_still_needed():
-    found = {(p, t) for p, _n, t in scan(_shipped_files())}
-    stale = sorted(f"{p} | {t}" for p, t in _exceptions() - found)
-    assert not stale, "exceptions that match nothing; delete them:\n" + "\n".join(stale)
+def test_every_exception_matches_exactly():
+    counts = _counts(scan(_shipped_files()))
+    wrong = sorted(f"{p} | {t} | {n} (found {counts.get((p, t), 0)})"
+                   for (p, t), n in _exceptions().items() if counts.get((p, t), 0) < n)
+    assert not wrong, ("exceptions that allow more hits than exist; lower the count or "
+                       "delete the line:\n" + "\n".join(wrong))
 
 
 def test_the_rules_catch_what_they_name():
@@ -141,8 +181,18 @@ def test_the_rules_catch_what_they_name():
             'def _find_swarmai_repo():\n'
             '    return Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"\n'
             'ROOT = "/Users/someone/x"\n'
-            'BUILD = "prod.sh"\n')
+            'BUILD = "prod.sh"\n'
+            'A = Path.home() / "swarmai"\n'
+            'B = Path.home() / "Projects" / "swarmai"\n'
+            'm._find_swarmai_root()\n'
+            'C = b"/Users/bob/x"\n'
+            'D = "~/Desktop/swarmai"\n'
+            'LOGS = Path.home() / ".local" / "share" / "swarmai" / "logs"\n'
+            'APP = Path.home() / "Library" / "Application Support" / "SwarmAI"\n')
     tokens = sorted(t for _p, _n, t in _python_hits("x.py", code))
-    assert tokens == sorted(["_find_swarmai_repo", "Desktop", "SwarmAI-Workspace",
-                             "/Users/someone", "prod.sh"])
+    assert tokens == sorted([
+        "_find_swarmai_repo", "Desktop", "Path.home() / 'Desktop'", "SwarmAI-Workspace",
+        "/Users/someone", "prod.sh", "Path.home() / 'swarmai'", "Path.home() / 'Projects'",
+        "_find_swarmai_root", "/Users/bob", "/Desktop/",
+    ])
     assert [t for _p, _n, t in _shell_hits("x.sh", "# prod.sh\n./prod.sh build\n")] == ["prod.sh"]

@@ -1,21 +1,24 @@
 # Reviewed exceptions for tests/test_p7_no_swarmai_special.py.
 # Design: docs/design/2026-10-25-usable-by-anyone-closed-world-guards.md §3.1 K1.
 #
-# One line per (file, token): <path relative to the repo> | <token> | <reason>
-# <token> is the text the scan reports. Every line must still match a real hit, or
-# the test fails: an exception nothing needs is deleted, never kept "just in case".
-# "temporary:" lines name the decision or ToDo that removes them.
+# One line per (file, token): <path relative to the repo> | <token> | <hits> | <reason>
+# <token> is the text the scan reports; <hits> is the exact number allowed in that file.
+# A new hit in an excepted file fails (the count went up); a line that allows more hits
+# than exist fails (lower it, or delete the line). "temporary:" lines name the decision
+# or ToDo that removes them.
 
-backend/core/ddd_packager.py | SwarmAI-Workspace | the redaction pattern that strips this path from a distributed package
-backend/core/swarm_workspace_manager.py | Projects/SwarmAI | the seeded default project every workspace has (usable-by-anyone §3.9 A')
-backend/hive/user_data.py | /home/swarm | the Hive EC2 instance's own service account, not a user's machine
-backend/scripts/newuser_smoke_e2e.sh | prod.sh | SwarmAI's own packaging smoke script, run inside a SwarmAI checkout
-backend/core/eval_service.py | Projects/SwarmAI | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | SwarmAI-Workspace | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | Desktop | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | _find_swarmai_repo | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_spine_probe.py | _find_swarmai_repo | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/main.py | SWARMAI_PROJECT_ROOT | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | SwarmAI-Workspace | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | Desktop | temporary: /api/system/upgrade, closing guards D1
-backend/main.py | prod.sh | temporary: /api/system/upgrade, closing guards D1
+backend/core/ddd_packager.py | SwarmAI-Workspace | 1 | the redaction pattern that strips this path from a distributed package
+backend/core/swarm_workspace_manager.py | Projects/SwarmAI | 4 | the seeded default project every workspace has (usable-by-anyone §3.9 A')
+backend/hive/user_data.py | /home/swarm | 3 | the Hive EC2 instance's own service account, not a user's machine
+backend/scripts/newuser_smoke_e2e.sh | prod.sh | 1 | SwarmAI's own packaging smoke script, run inside a SwarmAI checkout
+backend/core/eval_service.py | Projects/SwarmAI | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
+backend/scripts/eval_runner.py | SwarmAI-Workspace | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
+backend/scripts/eval_runner.py | Desktop | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
+backend/scripts/eval_runner.py | Path.home() / 'Desktop' | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
+backend/scripts/eval_runner.py | _find_swarmai_repo | 6 | temporary: OS Eval generalization ToDo (closing guards D2)
+backend/scripts/eval_spine_probe.py | _find_swarmai_repo | 2 | temporary: OS Eval generalization ToDo (closing guards D2)
+backend/main.py | SWARMAI_PROJECT_ROOT | 2 | temporary: /api/system/upgrade, closing guards D1
+backend/main.py | SwarmAI-Workspace | 1 | temporary: /api/system/upgrade, closing guards D1
+backend/main.py | Desktop | 1 | temporary: /api/system/upgrade, closing guards D1
+backend/main.py | Path.home() / 'Desktop' | 1 | temporary: /api/system/upgrade, closing guards D1
+backend/main.py | prod.sh | 3 | temporary: /api/system/upgrade, closing guards D1

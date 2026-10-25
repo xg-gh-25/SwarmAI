@@ -130,18 +130,19 @@ def _session_code_repo(session_id: str, db_path: str) -> Optional[Path]:
     Reads ``core.session_changes.working_repo``: the same record Canvas Changes and
     the terminal use (the newest "files changed" card whose ``gitRoot`` is a bound
     repo's main checkout). It works for any repo a project binds, found from what the
-    session did, never from a guessed checkout location. Blocking (sqlite + cached
-    git identities): call it off the event loop. A session with no recorded change in
-    a bound repo, or a store that cannot be read, gives None, and the hook then counts
-    only the workspace's own commits.
+    session did, never from a guessed checkout location. Only the newest such repo is
+    returned, so a session that worked in two bound repos is judged by one (as before:
+    the hook has always looked at one code repo). Blocking (sqlite + cached git
+    identities): call it on the ``canvas_changes`` pool, like the router does. A
+    session with no recorded change in a bound repo, or a record that cannot be read
+    for any reason, gives None, and the hook then counts only the workspace's own
+    commits: one unreadable record never skips the session's ToDo transitions.
     """
-    import sqlite3
-
     from core.session_changes import working_repo
 
     try:
         repo = working_repo(session_id, db_path)
-    except (sqlite3.Error, OSError) as exc:
+    except Exception as exc:  # best effort: fall back to the workspace, never skip the hook
         logger.debug("TodoLifecycleHook: working repo of %s unavailable: %s", session_id, exc)
         return None
     return Path(repo["path"]) if repo else None
@@ -196,8 +197,9 @@ class TodoLifecycleHook:
         workspace_path = get_app_data_dir() / "SwarmWS"
         # The bound repo this session worked in (any project's repo, from the
         # session's own change record).
-        codebase_path = await asyncio.get_running_loop().run_in_executor(
-            None, _session_code_repo, session_id, str(db.db_path),
+        from core import executors
+        codebase_path = await executors.run_in(
+            "canvas_changes", _session_code_repo, session_id, str(db.db_path),
         )
 
         # --- Mode 1: Explicit binding ---

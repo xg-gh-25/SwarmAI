@@ -267,8 +267,9 @@ async def test_commits_are_counted_in_the_repo_the_session_changed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unreadable_change_record_counts_only_the_workspace(tmp_path):
-    import sqlite3
+@pytest.mark.parametrize("error", [__import__("sqlite3").OperationalError("locked"),
+                                   KeyError("cards"), TypeError("bad row")])
+async def test_unreadable_change_record_counts_only_the_workspace(tmp_path, error):
     hook = TodoLifecycleHook()
     ctx = _make_context()
     session = {"id": "test-session-1", "metadata": json.dumps({"todo_id": "todo-abc"}),
@@ -277,7 +278,7 @@ async def test_unreadable_change_record_counts_only_the_workspace(tmp_path):
     with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
          patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
          patch("config.get_app_data_dir", return_value=tmp_path / "appdata"), \
-         patch("core.session_changes.working_repo", side_effect=sqlite3.OperationalError("locked")), \
+         patch("core.session_changes.working_repo", side_effect=error), \
          patch("hooks.todo_lifecycle_hook._get_session_commit_count", return_value=0) as count:
         mock_db.sessions.get = AsyncMock(return_value=session)
         mock_tm.transition_status = AsyncMock(return_value=True)
