@@ -32,7 +32,8 @@
     ],
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "infoPlist": "Info.plist"
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist"
     },
     "windows": {
       "webviewInstallMode": {
