@@ -3,7 +3,7 @@ title: usable-by-anyone 收口 — 用闭集检查代替一次性盘点
 created: 2026-10-25
 updated: 2026-10-25
 project: SwarmAI
-status: r3 — D1、D2、D3 已定并落地（D2 另起 ToDo），D4 已由 f43275e41 解决
+status: r4 — K1、K2、K3 与 C1、C2、C3 全部落地，三个检查都在 CI；D2（OS Eval 通用化）另起 ToDo
 parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 ---
 
@@ -136,3 +136,4 @@ parent: docs/design/2026-10-24-swarmai-usable-by-anyone.md
 - r1（2026-10-25）：初稿。§1 对着 HEAD `67cd437ea` 核对；S6-4b 已解决的三项从问题清单里移出。
 - r2（2026-10-25）：D2 由 XG 定，另起 ToDo；D4 已由 `f43275e41` 解决；C2 和 K3 交给 / 等待做 skill 清理的那个 session。已落地：C1（L1 ToDo hook 用 `working_repo`，L2 删 frontmatter 自动改写；K1 首次扫描另外发现的三处一起删：`proactive_intelligence._RADAR_ZONES` 是已删 Recurrence Radar 的残留，`scripts/replay_test_selection.py` 回放已删的 runner，`scripts/memory_judge_audit.py` 写死了用户路径，都没有调用方）、K1（AST 扫描 + `p7_exceptions.txt`，加入 BVT manifest）、K2（`GATE_CLASS` 闭集）、C3、L7。L3（D1）和 L4（D2）在 K1 里作为带理由的临时例外。
 - r3（2026-10-25）：D1 由 XG 定为删除：`/api/system/upgrade`、`/upgrade/status`、`_resolve_project_root`、`_resolve_sidecar_binary`、启动时的 deployed_no_restart 扫描和 `daemon_guard` 的结果文件逻辑一起删掉，K1 里 `main.py` 的临时例外随之删除。D3 由 XG 定为接 CI：`lint_doc_frontmatter.py` 新增 `--diff BASE`，CI 只查本次 push / PR 新增或修改的 `docs/**/*.md`，范围与本地 pre-commit 一致；改名后又改内容的文档也会被检查。
+- r4（2026-10-25）：不再有另一个 session，C2 和 K3 由本 session 做完。C2：skill、context 种子和一个测试 fixture 里写给 XG 的话改成 "the user" 或占位名；`EVOLUTION_CHANGELOG.jsonl` 种子重新清空（它带着一条真实的变更记录，会复制进每个新工作区）；`USER.example.md` 示例名改成 `[your name]`；`SELF.md` 去掉两个 run id 和一个登记号。K3：`lint_skills.py` 新增 owner 名字规则，名字列表在 `scripts/owner_identity.txt`，只列 owner 自己的公开标识，不列同事（文件是公开的）；正文检查范围扩到 `backend/experts` 和 `backend/context`。K2、L7、K3 的测试加进 BVT 清单。
