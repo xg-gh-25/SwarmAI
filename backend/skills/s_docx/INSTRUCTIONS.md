@@ -64,11 +64,9 @@ You need raw XML access for: comments, complex formatting, document structure, e
 
 When creating a new Word document from scratch, use **docx-js**, which allows you to create Word documents using JavaScript/TypeScript.
 
-### User Style Standard
+### Default Style
 
-**READ FIRST**: Before creating any document, read [`xg-doc-style-standard.md`](xg-doc-style-standard.md) for the user's preferred formatting: Calibri 10.5pt body, 0.7" margins, 1.15 line spacing, KaiTi for Chinese text, compact tables (8-9pt), bold+underline inline labels, and specific heading/color conventions. Apply these defaults unless the user specifies otherwise.
-
-**Amazon Narrative Format**: If the user requests an "Amazon narrative", "LT review doc", "6-pager", or is writing for L7+ Amazon leadership — use the **Amazon Narrative Format** section in `xg-doc-style-standard.md`. Key differences: dense prose (not bullets), bold lead assertions per paragraph, flat section structure via `List Paragraph` style, tables only in appendix, Tenets as first appendix section. Body target ~2 pages excluding appendix.
+**READ FIRST**: Before creating any document, read [`default-doc-style.md`](default-doc-style.md). It says which style wins (the user's request, a reference document they send, a style file named in their profile, then the plain default) and gives the default page setup, fonts (including the East Asian font for CJK text), spacing and docx-js constants. For a narrative decision document (six-pager, decision memo), use its **Dense Narrative Layout** section.
 
 ### Design Principles
 
