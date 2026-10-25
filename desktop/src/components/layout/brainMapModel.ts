@@ -58,14 +58,18 @@ export function runTone(r: PipelineRunSummary): RunTone {
 }
 
 export interface NeedItem {
-  kind: 'run' | 'proposal';
+  kind: 'run' | 'proposal' | 'agent';
   id: string;
   title: string;
   detail: string;
 }
 
-/** Everything in this brain that waits for a person, in one list. */
-export function needsYouItems(runs: PipelineRunSummary[], review: ReviewData | null): NeedItem[] {
+/** Everything in this brain that waits for a person, in one list: Runs, rule
+ *  proposals, and a Project Agent draft to confirm (or a file with problems). */
+export function needsYouItems(
+  runs: PipelineRunSummary[], review: ReviewData | null,
+  agent?: { status?: string; problems?: string[] } | null,
+): NeedItem[] {
   const items: NeedItem[] = [];
   for (const r of runs) {
     if (!r.needsYou) continue;
@@ -79,6 +83,11 @@ export function needsYouItems(runs: PipelineRunSummary[], review: ReviewData | n
       kind: 'proposal', id: p.id, title: p.content,
       detail: `rule proposal · ${p.target_doc}${p.target_section ? ' / ' + p.target_section : ''}${p.source_run_id ? ' · from ' + p.source_run_id : ''}`,
     });
+  }
+  if (agent && agent.problems && agent.problems.length) {
+    items.push({ kind: 'agent', id: 'project-agent', title: 'The Project Agent file has problems to fix', detail: agent.problems.join(' · ') });
+  } else if (agent && agent.status !== 'reviewed') {
+    items.push({ kind: 'agent', id: 'project-agent', title: 'Confirm the Project Agent draft', detail: 'generated from this Brain; review it, then confirm or revise' });
   }
   return items;
 }

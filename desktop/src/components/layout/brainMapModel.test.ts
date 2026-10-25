@@ -63,6 +63,13 @@ describe('brainMapModel', () => {
     expect(runTone(run({ status: 'paused' }))).toBe('stopped');
   });
 
+  it('needsYouItems: a Project Agent draft (or a broken file) waits on the person; a reviewed one does not', () => {
+    expect(needsYouItems([], null, { status: 'draft', problems: [] }).map((i) => i.title)).toEqual(['Confirm the Project Agent draft']);
+    expect(needsYouItems([], null, { status: 'reviewed', problems: ['bad profile'] })[0]).toMatchObject({ kind: 'agent', detail: 'bad profile' });
+    expect(needsYouItems([], null, { status: 'reviewed', problems: [] })).toEqual([]);
+    expect(needsYouItems([], null, null)).toEqual([]);
+  });
+
   it('needsYouItems: Runs with needsYou plus every proposal, nothing else', () => {
     const items = needsYouItems([run({ id: 'r1', needsYou: true, pauseKind: 'decision' }), run({ id: 'r2' })], review);
     expect(items.map((i) => i.kind + ':' + i.id)).toEqual(['run:r1', 'proposal:p1']);

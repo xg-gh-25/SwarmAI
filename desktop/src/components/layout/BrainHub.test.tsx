@@ -229,7 +229,7 @@ beforeEach(() => {
 
 describe('BrainHub — Gallery (AC3)', () => {
   it('renders one card per real brain', async () => {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy();
   });
@@ -238,7 +238,7 @@ describe('BrainHub — Gallery (AC3)', () => {
     // R27 migration: the two-zone partition + hero row are GONE. Every brain is an
     // equal card in ONE grid; a needs card (pending>0) self-signals via its amber
     // left-border in-wall, not a separate zone.
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
     // the flat wall exists; the removed zone/hero surfaces do NOT
     const wall = screen.getByTestId('brainhub-card-wall');
@@ -252,14 +252,14 @@ describe('BrainHub — Gallery (AC3)', () => {
 
   it('SwarmAI carries the SELF marker; a normal brain does not (AC2)', async () => {
     mockGetPinned.mockReturnValue(['SwarmAI']);
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     expect(screen.getByTestId('hub-card-SwarmAI').querySelector('[data-testid="dddcard-self-tag"]')).toBeTruthy();
     expect(screen.getByTestId('hub-card-AIDLC').querySelector('[data-testid="dddcard-self-tag"]')).toBeNull();
   });
 
   it('a brain with proposals says so on its card and comes first (Hub home)', async () => {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-AIDLC')).toBeTruthy());
     // AIDLC pending=2 -> its one signal is the proposals, and it leads the wall
     expect(screen.getByTestId('hub-signal-AIDLC').textContent).toBe('2 proposals to review');
@@ -268,7 +268,7 @@ describe('BrainHub — Gallery (AC3)', () => {
   });
 
   it('a CALM gallery card no longer shows the redundant-ink widgets (presence / 2×2 cheap grid)', async () => {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     // SwarmAI is pending==0 → calm card → presence bar + boxed cheap grid are GONE
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
@@ -278,7 +278,7 @@ describe('BrainHub — Gallery (AC3)', () => {
   });
 
   it('renders NO recall-heat / crown / ref_count number anywhere (R30#4)', async () => {
-    const { container } = render(<BrainHub defaultView="overview" />);
+    const { container } = render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     const html = container.innerHTML.toLowerCase();
     for (const banned of ['ref_count', 'refcount', 'recall', 'crown', 'heat', '×']) {
@@ -287,7 +287,7 @@ describe('BrainHub — Gallery (AC3)', () => {
   });
 
   it('deep-link: swarm:show-brain-hub with detail.brain opens THAT brain (Brain Home calm-click)', async () => {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     // starts on Gallery
     expect(screen.queryByTestId('brainhub-brain')).toBeNull();
@@ -300,7 +300,7 @@ describe('BrainHub — Gallery (AC3)', () => {
   });
 
   it('deep-link with NO detail.brain leaves Gallery as the default view', async () => {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     window.dispatchEvent(new CustomEvent('swarm:show-brain-hub'));
     // no target → stays on Gallery, does not jump to a brain view
@@ -311,7 +311,7 @@ describe('BrainHub — Gallery (AC3)', () => {
 
 describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c68088f)', () => {
   async function openBrain() {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
@@ -320,18 +320,36 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
   // (master→detail: the 4 detail views are unified under brainhub-tab-* peer tabs.)
   async function openBrowse() {
     await openBrain();
-    fireEvent.click(screen.getByTestId('brainhub-tab-browse'));
+    // files are part of the Brain (DDD) tab
     await waitFor(() => expect(screen.getByTestId('brainhub-browse')).toBeTruthy());
   }
 
-  // ── AC1: fixed layout — Overview is the default, both sub-tabs always present ──
-  it('opens on Overview by default; both [Overview|Browse] sub-tabs are present for every brain', async () => {
+  // ── the seven tabs mirror the Brain map; Brain (DDD) holds knowledge + files ──
+  it('the seven tabs are the parts of the Brain map; Brain (DDD) shows the docs, then the files', async () => {
     await openBrain();
-    expect(screen.getByTestId('brainhub-detail-nav')).toBeTruthy();
-    expect(screen.getByTestId('brainhub-overview')).toBeTruthy();      // default
-    expect(screen.queryByTestId('brainhub-browse')).toBeNull();        // browse not shown yet
-    // the tree is NOT in the default view — it's behind Browse
-    expect(screen.queryByTestId('library-tree-mock')).toBeNull();
+    const tabs = screen.getAllByRole('tab').map((t) => t.textContent?.replace(/\d+$/, ''));
+    expect(tabs).toEqual(['Overview', 'Needs you', 'Brain (DDD)', 'Project Agent', 'Conductor · Runs', 'Reflect · Evolution', 'Eval']);
+    expect(screen.getByTestId('brainhub-overview')).toBeTruthy();
+    expect(screen.getByTestId('brainhub-browse')).toBeTruthy();
+    // Add knowledge is this tab's action, closed until asked for
+    expect(screen.getByTestId('bm-add-open')).toBeTruthy();
+    expect(screen.queryByTestId('bm-add')).toBeNull();
+    fireEvent.click(screen.getByTestId('bm-add-open'));
+    expect(screen.getByTestId('bm-add')).toBeTruthy();
+  });
+
+  it('header: name switches Brain, description under it, More holds Distribute', async () => {
+    mockGetPinned.mockReturnValue(['SwarmAI']);
+    await openBrain();
+    expect(screen.getByTestId('brainhub-breadcrumb').textContent).toContain('SELF');
+    expect(screen.getByTestId('brainhub-desc')).toBeTruthy();
+    expect(screen.queryByTestId('brainhub-tab-distribute')).toBeNull();
+    fireEvent.click(screen.getByTestId('brainhub-switcher'));
+    fireEvent.click(screen.getByTestId('brainhub-switch-AIDLC'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-switcher').textContent).toContain('AIDLC'));
+    fireEvent.click(screen.getByTestId('brainhub-more'));
+    fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
   });
 
   // Helper: assert the fixed §①→②→③ order via the STABLE slot testids (ontology
@@ -385,11 +403,11 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     const onClose = vi.fn();
     const openFile = vi.fn();
     document.addEventListener('swarm:open-file', openFile as EventListener);
-    render(<BrainHub defaultView="overview" onRequestClose={onClose} />);
+    render(<BrainHub defaultView="brain" onRequestClose={onClose} />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brainhub-tab-browse'));
+    // files are part of the Brain (DDD) tab
     await screen.findByTestId('library-tree-mock');
     fireEvent.click(screen.getByTestId('tree-file-click'));
     expect(onClose).toHaveBeenCalled();
@@ -446,7 +464,7 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
 
 describe('BrainHub — detail search box (run_d0cd4414, AC7)', () => {
   async function openBrain() {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
@@ -491,7 +509,7 @@ describe('BrainHub — Overview §② Need-You + §③ core-doc cards + Weekly (
   async function openOverview(detailOverride?: Partial<BrainDetail>, galleryOverride?: BrainSummary[]) {
     if (galleryOverride) mockGetBrains.mockResolvedValue(galleryOverride);
     if (detailOverride) mockGetBrainDetail.mockResolvedValue({ ...DETAIL, ...detailOverride });
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-overview')).toBeTruthy());
@@ -578,7 +596,7 @@ describe('BrainHub — a wall card opens its brain (run_d0cd4414, was AC6 hero)'
     // R27 migration: the full-density pinned HERO is gone. SwarmAI is now a normal
     // (self-marked) compact card in the flat wall; clicking it still opens the brain.
     mockGetPinned.mockReturnValue(['SwarmAI']);
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('brainhub-card-wall')).toBeTruthy());
     expect(screen.queryByTestId('brainhub-pinned-row')).toBeNull();  // hero gone
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
@@ -595,11 +613,11 @@ describe('BrainHub — a wall card opens its brain (run_d0cd4414, was AC6 hero)'
 
 describe('BrainHub — Review tab (Run 2, AC5)', () => {
   async function openReview() {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));         // selects + opens Brain
-    await waitFor(() => expect(screen.getByTestId('brainhub-tab-review')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brainhub-tab-review'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-tab-reflect')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brainhub-tab-reflect'));
     await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
   }
 
@@ -749,11 +767,11 @@ describe('BrainHub — Review tab (Run 2, AC5)', () => {
     const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
     document.addEventListener('swarm:open-file', onOpen);
     try {
-      render(<BrainHub defaultView="overview" onRequestClose={onRequestClose} />);
+      render(<BrainHub defaultView="brain" onRequestClose={onRequestClose} />);
       await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
       fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-tab-review')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('brainhub-tab-review'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-tab-reflect')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-tab-reflect'));
       await waitFor(() => expect(screen.getByTestId('brainhub-review')).toBeTruthy());
       fireEvent.click(screen.getByTestId('hunk-open-file-sigA1'));
       await waitFor(() => expect(openEvents.length).toBe(1));
@@ -795,11 +813,12 @@ describe('hunkSummary — pure helper (run_32cd6a60)', () => {
 
 describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
   async function openDistribute() {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-    await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
+    await waitFor(() => expect(screen.getByTestId('brainhub-more')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('brainhub-more'));
+    fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
     await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
   }
 
@@ -912,11 +931,12 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
     document.addEventListener('swarm:open-file', onOpen);
     try {
-      render(<BrainHub defaultView="overview" onRequestClose={onRequestClose} />);
+      render(<BrainHub defaultView="brain" onRequestClose={onRequestClose} />);
       await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
       fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-more')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-more'));
+      fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
       await waitFor(() => expect(screen.getByTestId('brainhub-distribute')).toBeTruthy());
       fireEvent.click(screen.getByTestId('distribute-open-aim'));
       await waitFor(() => expect(openEvents.length).toBe(1));
@@ -946,11 +966,12 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
     const onOpen = (e: Event) => { seq.push('open'); openEvents.push(e as CustomEvent); };
     document.addEventListener('swarm:open-file', onOpen);
     try {
-      render(<BrainHub defaultView="overview" onRequestClose={onRequestClose} />);  // default fixture = distributable
+      render(<BrainHub defaultView="brain" onRequestClose={onRequestClose} />);  // default fixture = distributable
       await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
       fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
-      await waitFor(() => expect(screen.getByTestId('brainhub-tab-distribute')).toBeTruthy());
-      fireEvent.click(screen.getByTestId('brainhub-tab-distribute'));
+      await waitFor(() => expect(screen.getByTestId('brainhub-more')).toBeTruthy());
+      fireEvent.click(screen.getByTestId('brainhub-more'));
+      fireEvent.click(screen.getByTestId('brainhub-more-distribute'));
       await waitFor(() => expect(screen.getByTestId('distribute-edit-aim')).toBeTruthy());
       fireEvent.click(screen.getByTestId('distribute-edit-aim'));
       await waitFor(() => expect(openEvents.length).toBe(1));
@@ -1001,7 +1022,7 @@ describe('BrainHub — Distribute tab (Run 3, AC4)', () => {
 
 describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
   async function openBrain() {
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
@@ -1069,7 +1090,7 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
   it('renders NOTHING when health is undefined (daemon-skew guard)', async () => {
     const { health: _omit, ...noHealth } = DETAIL;
     mockGetBrainDetail.mockResolvedValueOnce(noHealth);
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());
@@ -1080,7 +1101,7 @@ describe('BrainHub — Detail HealthStrip (design 2026-08-04)', () => {
     // A partial/old daemon could send `health` present but the required `noise`
     // field absent — a wire-type violation the runtime must survive, not TypeError.
     mockGetBrainDetail.mockResolvedValueOnce({ ...DETAIL, health: {} as BrainDetail['health'] });
-    render(<BrainHub defaultView="overview" />);
+    render(<BrainHub defaultView="brain" />);
     await waitFor(() => expect(screen.getByTestId('dddcard-SwarmAI')).toBeTruthy());
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
     await waitFor(() => expect(screen.getByTestId('brainhub-brain')).toBeTruthy());

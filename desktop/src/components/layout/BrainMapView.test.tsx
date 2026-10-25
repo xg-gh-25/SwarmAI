@@ -6,7 +6,7 @@
  * Agent submits to chat through onDispatch; unbuilt parts are labelled mock; Eval
  * says UNKNOWN for what nobody measures; the Hub home filters, queues and opens.
  */
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockAnalytics = vi.fn();
@@ -31,7 +31,7 @@ vi.mock('../../services/ddd', () => ({
 }));
 vi.mock('../../services/pipelines', () => ({ pipelinesService: { fetchAnalytics: vi.fn() } }));
 
-import { BrainMapView } from './BrainMapView';
+import { BrainMapView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge, BrainNeedsView } from './BrainMapView';
 import { BrainHubHome } from './BrainHubHome';
 
 const run = (id: string, o: Record<string, unknown> = {}) => ({
@@ -61,32 +61,57 @@ describe('BrainMapView', () => {
     expect(screen.getByTestId('bm-you').textContent).toContain('2');   // 1 Run + 1 proposal
   });
 
-  it('Needs you lists the waiting Run and the proposal; Review goes to the Review view', () => {
+  it('Needs you sits beside the map; Review opens Reflect · Evolution, and the Needs you tab lists the same', () => {
     const onGoTo = vi.fn();
     render(<BrainMapView name="P" onGoTo={onGoTo} />);
     expect(screen.getByTestId('bm-need-run_1')).toBeTruthy();
     fireEvent.click(screen.getByTestId('bm-need-p1').querySelector('button')!);
-    expect(onGoTo).toHaveBeenCalledWith('review');
+    expect(onGoTo).toHaveBeenCalledWith('reflect');
+    expect(screen.getByTestId('bm-eval-summary').textContent).toContain('1 / 2');
+    cleanup();
+    render(<BrainNeedsView name="P" onGoTo={onGoTo} />);
+    expect(screen.getByTestId('bm-need-run_1')).toBeTruthy();
+    expect(screen.getByTestId('bm-need-p1')).toBeTruthy();
   });
 
-  it('clicking map parts opens the matching panel; a section opens Browse', () => {
+  it('each map part opens its tab', () => {
     const onGoTo = vi.fn();
     render(<BrainMapView name="P" onGoTo={onGoTo} />);
-    fireEvent.click(screen.getByTestId('bm-conductor'));
-    expect(screen.getByTestId('bm-panel-runs')).toBeTruthy();
+    const go = (id: string) => { fireEvent.click(screen.getByTestId(id)); return onGoTo.mock.calls.at(-1)?.[0]; };
+    expect(go('bm-you')).toBe('needs');
+    expect(go('bm-brain')).toBe('brain');
+    expect(go('bm-sec-gates')).toBe('brain');
+    expect(go('bm-agent')).toBe('agent');
+    expect(go('bm-src-1')).toBe('agent');
+    expect(go('bm-conductor')).toBe('runs');
+    expect(go('bm-reflect')).toBe('reflect');
+    expect(go('bm-eval')).toBe('eval');
+  });
+
+  it('the map shows status dots and its arrows say what they mean', () => {
+    render(<BrainMapView name="P" onGoTo={vi.fn()} />);
+    const map = screen.getByTestId('brain-map');
+    for (const label of ['drafts, you submit', 'writes rules after your OK', 'writes knowledge', 'each Run uses this version']) {
+      expect(map.textContent).toContain(label);
+    }
+    // a Run waits on you -> the Conductor dot says so; a proposal -> Gates and Reflect
+    expect(screen.getByTestId('bm-conductor').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('needs');
+    expect(screen.getByTestId('bm-sec-gates').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('needs');
+    expect(screen.getByTestId('bm-reflect').querySelector('[data-tone]')?.getAttribute('data-tone')).toBe('needs');
+  });
+
+  it('Conductor · Runs and Eval tabs show this Brain only', () => {
+    render(<BrainRunsView name="P" />);
     expect(screen.getByTestId('bm-runrow-run_2')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('bm-reflect'));
-    expect(screen.getByTestId('bm-panel-reflect').textContent).toContain('Add a concurrency reviewer');
-    fireEvent.click(screen.getByTestId('bm-eval'));
+    expect(screen.queryByTestId('bm-runrow-run_9')).toBeNull();
+    cleanup();
+    render(<BrainEvalView name="P" />);
     expect(screen.getByTestId('bm-panel-eval').textContent).toContain('UNKNOWN');
-    fireEvent.click(screen.getByTestId('bm-sec-gates'));
-    expect(onGoTo).toHaveBeenCalledWith('browse');
   });
 
   it('the Project Agent submits a request to chat and marks unbuilt places as mock', async () => {
     const onDispatch = vi.fn(() => true);
-    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={onDispatch} />);
-    fireEvent.click(screen.getByTestId('bm-agent'));
+    render(<BrainAgentView name="P" onDispatch={onDispatch} />);
     expect(screen.getAllByTestId('bm-mock').length).toBeGreaterThan(0);
     const submit = screen.getByTestId('bm-agent-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
@@ -108,8 +133,7 @@ describe('BrainMapView · Project Agent definition', () => {
     placements: ['chat-tab'], landing: { approval: 'human', via: 'github-pr' }, sources: ['TECH.md'], problems: [],
   };
   const openAgent = (onDispatch = vi.fn(() => true)) => {
-    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={onDispatch} />);
-    fireEvent.click(screen.getByTestId('bm-agent'));
+    render(<BrainAgentView name="P" onDispatch={onDispatch} />);
     return onDispatch;
   };
 
@@ -168,8 +192,7 @@ describe('BrainMapView · Continue setup and Add knowledge', () => {
 
   it('Add knowledge collects material by role and sends one routed prompt', () => {
     const onDispatch = vi.fn((_m: string, _o?: { autoSend?: boolean }) => true);
-    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={onDispatch} />);
-    fireEvent.click(screen.getByTestId('bm-add-open'));
+    render(<BrainAddKnowledge name="P" onDispatch={onDispatch} />);
     const send = screen.getByTestId('bm-add-send') as HTMLButtonElement;
     expect(send.disabled).toBe(true);
     const input = screen.getByTestId('bm-add-material-input');
@@ -188,8 +211,7 @@ describe('BrainMapView · Continue setup and Add knowledge', () => {
   });
 
   it('when no chat tab takes it, the material stays and the reason is shown', () => {
-    render(<BrainMapView name="P" onGoTo={vi.fn()} onDispatch={() => false} />);
-    fireEvent.click(screen.getByTestId('bm-add-open'));
+    render(<BrainAddKnowledge name="P" onDispatch={() => false} />);
     const input = screen.getByTestId('bm-add-material-input');
     fireEvent.change(input, { target: { value: '/Users/me/doc.md' } });
     fireEvent.keyDown(input, { key: 'Enter' });
@@ -278,9 +300,3 @@ describe('BrainHubHome', () => {
   });
 });
 
-describe('BrainMapView initialPanel', () => {
-  it('opens on the panel the Hub asked for', () => {
-    render(<BrainMapView name="P" onGoTo={vi.fn()} initialPanel="add" />);
-    expect(screen.getByTestId('bm-add')).toBeTruthy();
-  });
-});

@@ -10,7 +10,7 @@
  *
  * Data: the gallery summaries already fetched by BrainHub plus the 30-day pipeline
  * analytics (the same cached query the Brain map uses). No other call.
- * Exports: BrainHubHome, HubFilter
+ * Exports: BrainHubHome, HubFilter, Flower (the six-petal icon, also in the Brain header)
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -51,10 +51,10 @@ function hex(x: number, y: number, r: number) {
 }
 
 /** The six-petal flower: a petal is filled when that DDD section exists. */
-function Flower({ b }: { b: BrainSummary }) {
+export function Flower({ b, size = 56 }: { b: BrainSummary; size?: number }) {
   const R = 7, D = Math.sqrt(3) * R + 1.2, c = 24;
   return (
-    <svg viewBox="0 0 48 48" width={56} height={56} aria-hidden="true" className="shrink-0">
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true" className="shrink-0">
       {SECTION_ORDER.map(({ key }) => {
         const a = (ANG[key] * Math.PI) / 180;
         const on = b.sectionsPresent?.[key];

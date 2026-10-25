@@ -1,7 +1,15 @@
 /**
- * BrainMapView — the Brain Hub detail "Map" view: the Brain map on the left and,
- * on the right, the six things a person reviews and judges for one Brain:
- * Needs you · Project Agent · Runs (Conductor) · Reflect · Eval.
+ * BrainMapView — the bodies of a Brain's detail tabs that read the Brain map data.
+ * The tabs mirror the parts of the map (Overview, Needs you, Brain (DDD), Project
+ * Agent, Conductor · Runs, Reflect · Evolution, Eval); clicking a map part opens its
+ * tab.
+ *   BrainMapView      Overview: the Brain map, and beside it Needs you + Eval summary
+ *   BrainNeedsView    Needs you: Runs, rule proposals, a Project Agent draft
+ *   BrainAgentView    Project Agent: review / revise / confirm, and Start a Run
+ *   BrainRunsView     Conductor · Runs: the three lanes with this Brain's Runs
+ *   BrainEvalView     Eval: the five dimensions, UNKNOWN where nobody measures
+ *   BrainAddKnowledge Brain (DDD): add files / folders / links / repos, distilled in chat
+ * The tab bar, header and the Brain (DDD) / Reflect bodies live in BrainHub.
  *
  * Reads only records that already exist: the brain detail + review queue (cached
  * ddd hooks) and the 30-day pipeline analytics (one cached query, the same payload
@@ -10,24 +18,29 @@
  * Project Agent eval) is shown and labelled `mock`. The Project Agent definition is
  * real: project-agent.yaml, generated from the DDD at creation; this view only shows
  * it and sends revise / confirm requests to chat (the agent edits the file).
- * Submitting a request is real: it goes to chat as a pipeline Run request, the one
- * placement that exists today (P6: the person chose the pipeline).
+ * Submitting a request is real: it goes to chat as a pipeline Run request.
  *
- * Exports: BrainMapView, MapPanel
+ * Exports: BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView,
+ *          BrainAddKnowledge, BrainTab, MapPanel
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useBrainDetail, useReview, type ProjectAgent, type SectionKey } from '../../services/ddd';
+import { useBrainDetail, useReview, type BrainDetail, type ProjectAgent, type SectionKey } from '../../services/ddd';
 import { pipelinesService, type PipelineAnalytics, type PipelineRunSummary } from '../../services/pipelines';
-import { Stat, SectionLabel, Tabs, StatusBadge, Hint, type Tone } from '../overlay';
-import { BrainMap, type BrainMapTarget } from './BrainMap';
+import { Stat, SectionLabel, StatusBadge, Hint, type Tone } from '../overlay';
+import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from './BrainMap';
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import {
   sectionCounts, projectRuns, runTone, needsYouItems, brainEval, type RunTone,
 } from './brainMapModel';
 
-export type MapPanel = 'need' | 'agent' | 'runs' | 'reflect' | 'eval' | 'add';
+/** The detail tabs of a Brain: one per part of the Brain map, plus Overview. */
+export type BrainTab = 'overview' | 'needs' | 'brain' | 'agent' | 'runs' | 'reflect' | 'eval';
+/** Where the Hub home may land inside a Brain (kept for its callers). */
+export type MapPanel = 'need' | 'agent' | 'add';
+
+type Dispatch = (msg: string, opts?: { autoSend?: boolean }) => boolean;
 
 const TONE_OF: Record<RunTone, Tone> = {
   running: 'primary', needs: 'error', landed: 'success', failed: 'warning', stopped: 'neutral',
@@ -41,105 +54,232 @@ function Mock() {
 }
 function openPipelines() { window.dispatchEvent(new CustomEvent('swarm:show-pipeline')); }
 
-export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose, initialPanel = 'need' }: {
-  name: string;
-  onGoTo: (view: 'browse' | 'review') => void;
-  onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean;
-  /** Close the Brain Hub so the chat tab that received a dispatch is visible. */
-  onRequestClose?: () => void;
-  /** The panel to open on (the Hub home's Add knowledge opens on 'add'). */
-  initialPanel?: MapPanel;
-}) {
-  const [panel, setPanel] = useState<MapPanel>(initialPanel);
-  const { data: detail = null } = useBrainDetail(name);
-  const { data: review = null } = useReview(name);
-  const { data: analytics = null } = useQuery<PipelineAnalytics>({
-    queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
-  });
-
-  const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
-  const needs = useMemo(() => needsYouItems(runs, review), [runs, review]);
-  const ev = useMemo(() => brainEval(runs, detail, review), [runs, detail, review]);
-  const version = review?.head_sha ? `@ ${review.head_sha.slice(0, 7)}` : 'DDD';
-
-  const open = (t: BrainMapTarget, _s?: SectionKey) => {
-    if (t === 'browse') onGoTo('browse');
-    else setPanel(t === 'reflect' ? 'reflect' : t);
-  };
-  /** Send a prompt to chat now; on success close the Hub so its tab shows. */
-  const sendToChat = (msg: string): boolean => {
+/** Send a prompt to chat now; on success close the Hub so its tab shows. */
+function useSend(onDispatch?: Dispatch, onRequestClose?: () => void) {
+  return (msg: string): boolean => {
     let ok = false;
     try { ok = onDispatch ? onDispatch(msg, { autoSend: true }) : false; } catch { ok = false; }
     if (ok) onRequestClose?.();
     return ok;
   };
+}
+
+/** The one data read every Brain-map tab shares (all cached queries). */
+function useBrainData(name: string) {
+  const { data: detail = null } = useBrainDetail(name);
+  const { data: review = null } = useReview(name);
+  const { data: analytics = null } = useQuery<PipelineAnalytics>({
+    queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
+  });
+  const runs = useMemo(() => projectRuns(analytics, name), [analytics, name]);
+  const needs = useMemo(() => needsYouItems(runs, review, detail?.projectAgent), [runs, review, detail]);
+  const ev = useMemo(() => brainEval(runs, detail, review), [runs, detail, review]);
+  return { detail, review, runs, needs, ev };
+}
+
+/** Status dots on the map, from the same records as the numbers. */
+function mapTones(detail: BrainDetail | null, runs: PipelineRunSummary[], ev: ReturnType<typeof brainEval>): BrainMapProps['tones'] {
+  const has = (k: SectionKey) => (detail?.sections.find((s) => s.key === k)?.members.length ?? 0) > 0;
+  const base = (k: SectionKey): MapTone => (has(k) ? 'ok' : 'attention');
+  const pa = detail?.projectAgent;
+  return {
+    identity: base('identity'),
+    knowledge: has('knowledge') ? ((ev.brain.sinking ?? 0) > 0 ? 'attention' : 'ok') : 'attention',
+    gates: ev.brain.pending ? 'needs' : base('gates'),
+    capabilities: base('capabilities'),
+    delivery: base('delivery'),
+    refresher: base('refresher'),
+    agent: pa === undefined ? undefined : pa === null ? 'attention'
+      : (pa.problems.length || pa.status !== 'reviewed') ? 'needs' : 'ok',
+    conductor: runs.some((r) => r.needsYou) ? 'needs' : runs.some((r) => r.status === 'running') ? 'busy' : runs.length ? 'ok' : undefined,
+    reflect: ev.brain.pending ? 'needs' : ev.brain.autoApplied ? 'ok' : undefined,
+  };
+}
+
+function agentLine(pa: ProjectAgent | null | undefined): string | undefined {
+  if (pa === undefined) return undefined;
+  if (pa === null) return 'not generated yet';
+  if (pa.problems.length) return 'file has problems';
+  return `${pa.status === 'reviewed' ? 'reviewed' : 'draft'} · ${pa.defaultProfile ?? '--'}`;
+}
+
+/** Overview tab: the Brain map, Needs you and an Eval summary. Map parts open tabs. */
+export function BrainMapView({ name, onGoTo, onDispatch, onRequestClose }: {
+  name: string;
+  onGoTo: (tab: BrainTab) => void;
+  onDispatch?: Dispatch;
+  /** Close the Brain Hub so the chat tab that received a dispatch is visible. */
+  onRequestClose?: () => void;
+}) {
+  const { detail, review, runs, needs, ev } = useBrainData(name);
+  const send = useSend(onDispatch, onRequestClose);
+  const version = review?.head_sha ? `@ ${review.head_sha.slice(0, 7)}` : 'DDD';
+
+  const open = (t: BrainMapTarget) => {
+    onGoTo(t === 'need' ? 'needs' : t === 'browse' ? 'brain' : t);
+  };
 
   return (
-    <div className="flex flex-col gap-3 p-3 min-h-full" data-testid="brain-map-view">
-    {detail?.setupState === 'setting-up' && (
-      <div className="flex items-center gap-3 rounded-lg border px-3 py-2 border-[color-mix(in_srgb,var(--color-status-warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)]"
-        data-testid="bm-setup-banner">
-        <span className="material-symbols-outlined icon-sm text-[var(--color-status-warning)]">construction</span>
-        <div className="flex-1 min-w-0">
-          <div className="text-small font-semibold">Setup is not finished</div>
-          <div className="text-meta text-[var(--color-text-muted)]">The agent checks what is missing and finishes only that, then marks it ready.</div>
+    <div className="flex flex-col gap-3 p-4 min-h-full" data-testid="brain-map-view">
+      {detail?.setupState === 'setting-up' && (
+        <div className="flex items-center gap-3 rounded-lg border px-3 py-2 border-[color-mix(in_srgb,var(--color-status-warning)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_8%,transparent)]"
+          data-testid="bm-setup-banner">
+          <span className="material-symbols-outlined icon-sm text-[var(--color-status-warning)]">construction</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-small font-semibold">Setup is not finished</div>
+            <div className="text-meta text-[var(--color-text-muted)]">The agent checks what is missing and finishes only that, then marks it ready.</div>
+          </div>
+          <button className="btn-sm btn-primary shrink-0" data-testid="bm-setup-resume"
+            onClick={() => send(buildResumeSetupPrompt(name))}>Continue setup in chat</button>
         </div>
-        <button className="btn-sm btn-primary shrink-0" data-testid="bm-setup-resume"
-          onClick={() => sendToChat(buildResumeSetupPrompt(name))}>Continue setup in chat</button>
-      </div>
-    )}
-    <div className="grid gap-3" style={{ gridTemplateColumns: 'minmax(380px, 1fr) minmax(420px, 1fr)' }}>
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-2 self-start">
-        <div className="flex items-center justify-between px-1 text-small">
-          <span className="font-semibold">Brain map</span>
-          <span className="flex items-center gap-2">
-            <span className="text-meta text-[var(--color-text-muted)]">click any part to open it</span>
-            <button className="btn-sm btn-secondary" onClick={() => setPanel('add')} data-testid="bm-add-open">
-              <span className="material-symbols-outlined icon-xs">add</span> Add knowledge
-            </button>
-          </span>
+      )}
+      <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'minmax(0, 1fr) 320px' }}>
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+          <div className="flex items-center justify-between text-small">
+            <span className="font-semibold">Brain map</span>
+            <span className="text-meta text-[var(--color-text-muted)]">click a part to open its tab</span>
+          </div>
+          <BrainMap
+            version={version}
+            counts={sectionCounts(detail)}
+            runs={runs.map((r) => ({ id: r.id, title: r.requirement || r.id, tone: runTone(r) }))}
+            lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, worker: 0, hive: 0 }}
+            needs={needs.length}
+            reflect={{ auto: ev.brain.autoApplied, pending: ev.brain.pending }}
+            agentLine={agentLine(detail?.projectAgent)}
+            evalLine={`${ev.runs.landed} of ${ev.runs.total} Runs landed`}
+            tones={mapTones(detail, runs, ev)}
+            onOpen={open}
+          />
+          <div className="flex flex-wrap items-center gap-4 pt-1 text-meta text-[var(--color-text-muted)]">
+            <StatusBadge tone="success">healthy</StatusBadge>
+            <StatusBadge tone="warning">needs attention</StatusBadge>
+            <StatusBadge tone="error">needs you</StatusBadge>
+            <StatusBadge tone="primary">running</StatusBadge>
+            <span>dashed line: written only after your OK</span>
+          </div>
         </div>
-        <BrainMap
-          version={version}
-          counts={sectionCounts(detail)}
-          runs={runs.map((r) => ({ id: r.id, title: r.requirement || r.id, tone: runTone(r) }))}
-          lanes={{ chat: runs.filter((r) => r.status === 'running' || r.needsYou).length, worker: 0, hive: 0 }}
-          needs={needs.length}
-          reflect={{ auto: ev.brain.autoApplied, pending: ev.brain.pending }}
-          onOpen={open}
-        />
-        <div className="flex flex-wrap gap-3 px-1 pb-1">
-          {(['running', 'needs', 'landed', 'failed'] as RunTone[]).map((t) => (
-            <StatusBadge key={t} tone={TONE_OF[t]}>{TONE_LABEL[t]}</StatusBadge>
-          ))}
-        </div>
-      </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 pb-3 min-w-0">
-        <Tabs<MapPanel>
-          value={panel}
-          onChange={setPanel}
-          items={[
-            { key: 'need', label: 'Needs you', count: needs.length, testid: 'bm-tab-need' },
-            { key: 'agent', label: 'Project Agent', testid: 'bm-tab-agent' },
-            { key: 'runs', label: 'Runs', count: runs.length, testid: 'bm-tab-runs' },
-            { key: 'reflect', label: 'Reflect', count: ev.brain.pending || undefined, testid: 'bm-tab-reflect' },
-            { key: 'eval', label: 'Eval', testid: 'bm-tab-eval' },
-            { key: 'add', label: 'Add knowledge', testid: 'bm-tab-add' },
-          ]}
-        />
-        <div className="pt-3" data-testid={`bm-panel-${panel}`}>
-          {panel === 'need' && <NeedPanel items={needs} onReview={() => onGoTo('review')} />}
-          {panel === 'agent' && <AgentPanel name={name} runs={runs} delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []} agent={detail ? detail.projectAgent : undefined} onDispatch={sendToChat} />}
-          {panel === 'runs' && <RunsPanel runs={runs} />}
-          {panel === 'reflect' && <ReflectPanel review={review} onReview={() => onGoTo('review')} />}
-          {panel === 'eval' && <EvalPanel ev={ev} />}
-          {panel === 'add' && <AddKnowledgePanel name={name} onSend={sendToChat} />}
+        <div className="flex flex-col gap-3 min-w-0">
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="bm-panel-need">
+            <div className="flex items-center justify-between px-3 py-2">
+              <span className="text-small font-semibold">Needs you</span>
+              <span className={`text-small font-semibold ${needs.length ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text-muted)]'}`}>{needs.length}</span>
+            </div>
+            <NeedList items={needs} onGoTo={onGoTo} />
+          </div>
+          <EvalSummary ev={ev} onOpen={() => onGoTo('eval')} />
         </div>
       </div>
-    </div>
     </div>
   );
+}
+
+function NeedList({ items, onGoTo }: { items: ReturnType<typeof needsYouItems>; onGoTo: (t: BrainTab) => void }) {
+  if (items.length === 0) {
+    return <div className="px-3 pb-3 text-small text-[var(--color-status-success)]" data-testid="bm-need-empty">Nothing needs you right now.</div>;
+  }
+  return (
+    <div>
+      {items.map((it) => (
+        <div key={it.kind + it.id} className="flex items-start gap-2 px-3 py-2 border-t border-[var(--color-border)]" data-testid={`bm-need-${it.id}`}>
+          <div className="flex-1 min-w-0">
+            <div className="text-small line-clamp-2">{it.title}</div>
+            <div className="text-meta text-[var(--color-text-muted)] truncate">{it.detail}</div>
+          </div>
+          {it.kind === 'run' && <button className="btn-sm btn-secondary shrink-0" onClick={openPipelines}>Answer</button>}
+          {it.kind === 'proposal' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('reflect')}>Review</button>}
+          {it.kind === 'agent' && <button className="btn-sm btn-secondary shrink-0" onClick={() => onGoTo('agent')}>Open</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const pct = (x: number | null) => (x == null ? 'UNKNOWN' : `${Math.round(x * 100)}%`);
+const num = (x: number | null, unit = '') => (x == null ? 'UNKNOWN' : `${x}${unit}`);
+
+function EvalSummary({ ev, onOpen }: { ev: ReturnType<typeof brainEval>; onOpen: () => void }) {
+  const rows: [string, string, string?][] = [
+    ['Runs landed', `${ev.runs.landed} / ${ev.runs.total}`],
+    ['Average cycle', num(ev.runs.avgCycleMin, ' min')],
+    ['Knowledge, 30 days', ev.brain.recentActivity == null ? 'UNKNOWN' : `+${ev.brain.recentActivity}`],
+    ['Sinking entries', num(ev.brain.sinking), ev.brain.sinking ? 'text-[var(--color-status-warning)]' : undefined],
+    ['Tokens', ev.runs.tokens == null ? 'UNKNOWN' : `${Math.round(ev.runs.tokens / 1000)}k`],
+  ];
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]" data-testid="bm-eval-summary">
+      <div className="flex items-center justify-between px-3 py-2">
+        <span className="text-small font-semibold">Eval · 30 days</span>
+        <button className="text-meta text-[var(--color-primary)]" onClick={onOpen} data-testid="bm-eval-open">All of Eval ›</button>
+      </div>
+      {rows.map(([k, v, cls]) => (
+        <div key={k} className="flex items-center justify-between px-3 py-1.5 border-t border-[var(--color-border)] text-small">
+          <span className="text-[var(--color-text-muted)]">{k}</span>
+          <span className={`font-semibold ${v === 'UNKNOWN' ? 'text-[var(--color-text-muted)]' : cls ?? ''}`}>{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Delivery tab: the Project Agent and Start a Run on the left, the Runs on the right. */
+/** Needs you tab: everything waiting on the person, full width. */
+export function BrainNeedsView({ name, onGoTo }: { name: string; onGoTo: (t: BrainTab) => void }) {
+  const { needs } = useBrainData(name);
+  return (
+    <div className="p-4" data-testid="bm-needs-view">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
+        <div className="px-3 py-2"><Hint>Everything in this Brain that waits for your judgement: Runs that need you, rule proposals from Reflect, and a Project Agent draft to confirm.</Hint></div>
+        <NeedList items={needs} onGoTo={onGoTo} />
+      </div>
+    </div>
+  );
+}
+
+/** Project Agent tab: the definition (review / revise / confirm) and Start a Run. */
+export function BrainAgentView({ name, onDispatch, onRequestClose }: {
+  name: string; onDispatch?: Dispatch; onRequestClose?: () => void;
+}) {
+  const { detail, runs } = useBrainData(name);
+  const send = useSend(onDispatch, onRequestClose);
+  return (
+    <div className="p-4 max-w-[900px]" data-testid="bm-panel-agent">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+        <AgentPanel name={name} runs={runs}
+          delivery={detail?.sections.find((s) => s.key === 'delivery')?.members.map((m) => m.path) ?? []}
+          agent={detail ? detail.projectAgent : undefined} onDispatch={send} />
+      </div>
+    </div>
+  );
+}
+
+/** Conductor · Runs tab: the three lanes and this Brain's Runs. */
+export function BrainRunsView({ name }: { name: string }) {
+  const { runs } = useBrainData(name);
+  return (
+    <div className="p-4 max-w-[900px]" data-testid="bm-panel-runs">
+      <RunsPanel runs={runs} />
+    </div>
+  );
+}
+
+/** Eval tab: every dimension, full width. */
+export function BrainEvalView({ name }: { name: string }) {
+  const { ev } = useBrainData(name);
+  return (
+    <div className="p-4" data-testid="bm-panel-eval">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3"><EvalPanel ev={ev} /></div>
+    </div>
+  );
+}
+
+/** Brain (DDD) tab: add material, distilled into this Brain through chat. */
+export function BrainAddKnowledge({ name, onDispatch, onRequestClose }: {
+  name: string; onDispatch?: Dispatch; onRequestClose?: () => void;
+}) {
+  const send = useSend(onDispatch, onRequestClose);
+  return <AddKnowledgePanel name={name} onSend={send} />;
 }
 
 // ── panels ─────────────────────────────────────────────────────────────────────
@@ -178,31 +318,6 @@ function AddKnowledgePanel({ name, onSend }: { name: string; onSend: (msg: strin
 
 function Row({ children, testid }: { children: React.ReactNode; testid?: string }) {
   return <div className="py-2 border-b border-[var(--color-border)] last:border-b-0" data-testid={testid}>{children}</div>;
-}
-
-function NeedPanel({ items, onReview }: { items: ReturnType<typeof needsYouItems>; onReview: () => void }) {
-  return (
-    <div>
-      <Hint>Everything in this Brain that waits for your judgement: Runs that need you and rule proposals from Reflect.</Hint>
-      {items.length === 0 && (
-        <div className="mt-3 text-body text-[var(--color-status-success)]" data-testid="bm-need-empty">Nothing needs you right now.</div>
-      )}
-      {items.map((it) => (
-        <Row key={it.kind + it.id} testid={`bm-need-${it.id}`}>
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <StatusBadge tone={it.kind === 'run' ? 'error' : 'primary'}>{it.kind === 'run' ? 'Run' : 'Rule proposal'}</StatusBadge>
-              <div className="text-body line-clamp-2">{it.title}</div>
-              <div className="text-meta text-[var(--color-text-muted)] truncate">{it.detail}</div>
-            </div>
-            {it.kind === 'run'
-              ? <button className="btn-sm btn-secondary shrink-0" onClick={openPipelines}>Open in Pipelines</button>
-              : <button className="btn-sm btn-secondary shrink-0" onClick={onReview}>Review</button>}
-          </div>
-        </Row>
-      ))}
-    </div>
-  );
 }
 
 const PLACE_LABEL: Record<string, string> = { 'chat-tab': 'Chat tab', 'local-worker': 'Local Worker', hive: 'Hive' };
@@ -418,36 +533,6 @@ function Lane({ title, meta, mock, children }: { title: string; meta: string; mo
     </div>
   );
 }
-
-function ReflectPanel({ review, onReview }: { review: import('../../services/ddd').ReviewData | null; onReview: () => void }) {
-  const auto = (review?.hunks ?? []).filter((h) => h.tag === 'cultivation·auto-applied');
-  const pending = review?.proposals ?? [];
-  return (
-    <div className="flex flex-col gap-3">
-      <Hint>A fact goes into Knowledge on its own and can be undone in Review. A change to how the Brain judges (Gates, Delivery) waits for your OK.</Hint>
-      <div className="grid grid-cols-2 gap-2">
-        <Stat label="Written automatically" value={auto.length} hint="since your last review" tone="success" />
-        <Stat label="Waiting for you" value={pending.length} hint="rule proposals" tone={pending.length ? 'primary' : undefined} />
-      </div>
-      <div>
-        <SectionLabel right={<button className="btn-sm btn-secondary" onClick={onReview}>Open Review</button>}>Recent</SectionLabel>
-        {pending.map((p) => (
-          <Row key={p.id}><StatusBadge tone="primary">waiting for you</StatusBadge>
-            <div className="text-small">{p.content}</div>
-            <div className="text-meta text-[var(--color-text-muted)]">{p.target_doc} / {p.target_section}{p.source_run_id ? ` · from ${p.source_run_id}` : ''}</div></Row>
-        ))}
-        {auto.slice(0, 8).map((h) => (
-          <Row key={h.signature}><StatusBadge tone="success">written</StatusBadge>
-            <div className="text-meta text-[var(--color-text-muted)] truncate">{h.file}</div></Row>
-        ))}
-        {pending.length + auto.length === 0 && <div className="text-meta text-[var(--color-text-muted)]">Nothing new since your last review.</div>}
-      </div>
-    </div>
-  );
-}
-
-const pct = (x: number | null) => (x == null ? 'UNKNOWN' : `${Math.round(x * 100)}%`);
-const num = (x: number | null, unit = '') => (x == null ? 'UNKNOWN' : `${x}${unit}`);
 
 function EvalPanel({ ev }: { ev: ReturnType<typeof brainEval> }) {
   const grid = 'grid grid-cols-2 gap-2 mt-1';

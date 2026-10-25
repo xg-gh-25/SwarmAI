@@ -18,15 +18,18 @@
  *
  * Reuses: the app Canvas via swarm:open-file. No new tree/editor/modal built.
  *
- * Brain map (2026-10-25): the Gallery is the Hub home (BrainHubHome: a summary row
+ * Brain Hub (2026-10-25): the Gallery is the Hub home (BrainHubHome: a summary row
  * whose counts filter the cards, one Needs-you queue, one card per brain, and a
- * Conductor / Eval footer), and a brain opens on its Map view
- * (BrainMapView: the DDD flower, Project Agent, Conductor, Reflect, Eval, plus a
- * Needs-you / Project Agent / Runs / Reflect / Eval panel). `defaultView` picks the
- * first detail view (default 'map').
+ * Conductor / Eval footer). A brain opens on a two-line header (icon, name as the
+ * Brain switcher, status; description; More menu) and seven tabs that mirror the
+ * parts of the Brain map: Overview (the map, Needs you, Eval summary) · Needs you ·
+ * Brain (DDD) (Add knowledge, docs, files) · Project Agent (definition, Start a Run) ·
+ * Conductor · Runs · Reflect · Evolution (the review queue) · Eval. Clicking a map
+ * part opens its tab. Distribute opens from More. `defaultView` picks the first
+ * detail view (default 'overview').
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
   approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
@@ -41,8 +44,14 @@ import { CodeGraph } from '../code-intel/CodeGraph';
 import { LibraryTree } from './LibraryTree';
 import { docSignalMap, weeklyReportModel, type WeeklyReportModel } from './dddOverview';
 import { OverlayError } from './OverlayState';
-import { BrainMapView, type MapPanel } from './BrainMapView';
-import { BrainHubHome } from './BrainHubHome';
+import {
+  BrainMapView, BrainNeedsView, BrainAgentView, BrainRunsView, BrainEvalView, BrainAddKnowledge,
+  type BrainTab, type MapPanel,
+} from './BrainMapView';
+import { BrainHubHome, Flower } from './BrainHubHome';
+import { hubSummary } from './brainMapModel';
+import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
+import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -79,28 +88,27 @@ export function hunkSummary(diffText: string): {
   return { adds, dels, startLine, section };
 }
 
-// ── Root — MASTER→DETAIL nav model (run_3d371424, item 5) ───────────────────────
+// ── Root — MASTER→DETAIL nav model ──────────────────────────────────────────────
 //
-// XG directive (this session): the old 4 top-level tabs (Gallery | Brain·<name> |
-// Review | Distribute) were FALSE PEERS — Gallery selects WHICH brain (a list),
-// the other three are VIEWS of the selected brain (a detail). Mounting them as
-// siblings meant 3 disabled/greyed tabs on open (empty-state anti-pattern), a split
-// grouping (Overview/Browse were sub-tabs under `Brain` while their true siblings
-// Review/Distribute sat at the top level), and no way to switch brain without
-// returning to Gallery. This is the standard master→detail fix:
-//   • TOP LEVEL = just the Gallery (the brain list). No greyed tabs.
-//   • Selecting a brain enters the DETAIL shell: a breadcrumb (← All brains / <name>)
-//     + a brain SWITCHER, and FOUR TRUE-PEER sub-tabs: Overview | Browse | Review |
-//     Distribute. Same tab set + order for every brain (no dynamic layout — "dynamic
-//     makes users lost", the prior fixed-sub-tabs directive, now widened to 4).
+//   • TOP LEVEL = just the Gallery (the Hub home). No greyed tabs.
+//   • Selecting a brain enters the DETAIL shell: header + the seven tabs above.
+//     Same tab set + order for every brain (no dynamic layout).
 //
 // `mode` is the top-level state: 'gallery' (list) or 'detail' (a brain is selected).
-// `detailTab` (below, on the shell) is which of the 4 peer views is showing.
 
 type Mode = 'gallery' | 'detail';
-/** The 4 true-peer detail views (item 5). overview/browse were the old inner
- *  sub-tabs; review/distribute were promoted DOWN from false top-level peers. */
-type DetailView = 'map' | 'overview' | 'browse' | 'review' | 'distribute';
+/** The detail views: the seven tabs (one per part of the Brain map, plus Overview)
+ *  and Distribute, which opens from the header's More menu. */
+type DetailView = BrainTab | 'distribute';
+const TABS: { key: BrainTab; label: string }[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'needs', label: 'Needs you' },
+  { key: 'brain', label: 'Brain (DDD)' },
+  { key: 'agent', label: 'Project Agent' },
+  { key: 'runs', label: 'Conductor · Runs' },
+  { key: 'reflect', label: 'Reflect · Evolution' },
+  { key: 'eval', label: 'Eval' },
+];
 
 /** `onRequestClose` — the host overlay's `ctx.close` (overlaySurfaces passes it).
  *  Approach A (run_a607f2b0): opening a DDD doc closes THIS overlay first, then
@@ -108,42 +116,44 @@ type DetailView = 'map' | 'overview' | 'browse' | 'review' | 'distribute';
  *  host (the SwarmWS-explorer z-index precedent). OPTIONAL: tests / a non-overlay
  *  mount omit it — file-open then just dispatches without a close (still correct).
  *  `onDispatch` (item 3) — the overlay ctx `dispatchPrompt` bridge: injects + sends
- *  a chat prompt (the Distribute HITL run trigger). OPTIONAL: without it, Distribute
- *  falls back to clipboard-copy (older webview / non-overlay mount). */
+ *  a chat prompt. OPTIONAL: without it, sends fall back to the clipboard. */
 export function BrainHub(
-  { onRequestClose, onDispatch, defaultView = 'map' }:
+  { onRequestClose, onDispatch, defaultView = 'overview' }:
   { onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; defaultView?: DetailView } = {},
 ) {
   const [mode, setMode] = useState<Mode>('gallery');
   const [selected, setSelected] = useState<string | null>(null);
   const [detailView, setDetailView] = useState<DetailView>(defaultView);
-  // the Brain map panel to open on (Hub home: Add knowledge / a Run that needs you)
-  const [mapPanel, setMapPanel] = useState<MapPanel | undefined>(undefined);
+  // the Hub home's Add knowledge lands on Brain (DDD) with the add card open
+  const [addOpen, setAddOpen] = useState(false);
 
   // Cached gallery list (run_cfb460ac): re-opening the overlay within the 30s window
   // is instant instead of paying the ~4s aggregate scan again. `refetch` powers Retry.
   const { data: bp, error: bpErr, refetch } = useBrainsWithPinned();
   const brains = bp?.brains ?? null;
   const pinned = useMemo(() => bp?.pinned ?? [], [bp]);
+  const selfName = pinned[0] && brains?.some((b) => b.name === pinned[0]) ? pinned[0] : undefined;
   const error = bpErr ? String((bpErr as { message?: string })?.message ?? bpErr) : null;
 
-  // run_d0cd4414: the gallery is now a flat card wall — no primary hero, so NO second
-  // getBrainDetail fetch here. The gallery makes exactly ONE data call
-  // (useBrainsWithPinned above); a brain's detail is fetched lazily only when opened.
-
-  // Enter the detail shell on a specific brain, at a specific view (default Overview).
-  const openBrain = useCallback((name: string, view: DetailView = defaultView, panel?: MapPanel) => {
+  // Enter the detail shell on a specific brain, at a specific view.
+  const openBrain = useCallback((name: string, view: DetailView = defaultView, add = false) => {
     setSelected(name);
     setDetailView(view);
-    setMapPanel(panel);
+    setAddOpen(add);
     setMode('detail');
   }, [defaultView]);
   const backToGallery = useCallback(() => { setMode('gallery'); }, []);
+  /** The Hub home's targets ('map' + a panel, or 'review') → a tab. */
+  const openFromHome = useCallback((n: string, t?: { view?: 'map' | 'review'; panel?: MapPanel }) => {
+    if (t?.view === 'review') return openBrain(n, 'reflect');
+    if (t?.panel === 'need') return openBrain(n, 'needs');
+    if (t?.panel === 'agent') return openBrain(n, 'agent');
+    if (t?.panel === 'add') return openBrain(n, 'brain', true);
+    return openBrain(n);
+  }, [openBrain]);
 
   // Deep-link: `swarm:show-brain-hub` MAY carry `detail.brain` to open a specific
-  // brain's detail view directly (Brain Home calm-card click). No detail → Gallery,
-  // the default. The overlay is already open by the time this fires (OverlayContext
-  // handles the same event to mount us), so we only need to route the sub-view.
+  // brain's detail view directly. No detail → Gallery, the default.
   useEffect(() => {
     const onShow = (e: Event) => {
       const name = (e as CustomEvent<{ brain?: string }>).detail?.brain;
@@ -166,187 +176,207 @@ export function BrainHub(
     );
   }
 
-  // GALLERY (master) — the brain list is the ONLY top-level surface. No greyed tabs.
+  // GALLERY (master) — the brain list is the ONLY top-level surface.
   if (mode === 'gallery' || !selected) {
     return (
       <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
         <div className="flex-1 overflow-auto">
-          <Gallery brains={brains} pinned={pinned}
-            onOpen={(n, t) => openBrain(n, t?.view ?? defaultView, t?.panel)} />
+          <Gallery brains={brains} selfName={selfName} onOpen={openFromHome} />
         </div>
       </div>
     );
   }
 
-  // DETAIL (a brain is selected) — breadcrumb + switcher + 4 true-peer sub-tabs.
-  // key={selected} remounts the shell on a brain switch so no view-local state
-  // (tree root, graph, review armed-state) leaks across brains.
+  // DETAIL — key={selected} remounts the shell on a brain switch so no view-local
+  // state (tree root, graph, review armed-state) leaks across brains.
   return (
     <BrainDetailShell
       key={selected}
       name={selected}
       brains={brains}
+      selfName={selfName}
       detailView={detailView}
       onSelectView={setDetailView}
-      onSwitchBrain={(n) => openBrain(n, detailView)}
+      onSwitchBrain={(n) => openBrain(n, detailView === 'distribute' ? 'overview' : detailView)}
       onBack={backToGallery}
       onRequestClose={onRequestClose}
       onDispatch={onDispatch}
-      mapPanel={mapPanel}
+      addOpen={addOpen}
       liveRun={brains?.find((b) => b.name === selected)?.health.liveRun ?? false}
     />
   );
 }
 
-/** The detail shell: breadcrumb (← All brains / <name>) + a brain SWITCHER + the 4
- *  true-peer sub-tabs (Overview | Browse | Review | Distribute), then the active view.
- *  Replaces the old top-level TabBtn row + the inner [Overview|Browse] toggle — one
- *  consistent 4-peer bar for every brain (item 5). */
+/** The detail shell: a two-line header (icon, name as the Brain switcher, status;
+ *  the description under it; More menu on the right), the seven tabs with the search
+ *  box at their end, then the active tab's body. Actions live in the tab they belong
+ *  to (Add knowledge in Brain (DDD), Start a Run in Project Agent). */
 function BrainDetailShell(
-  { name, brains, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, liveRun, mapPanel }:
+  { name, brains, selfName, detailView, onSelectView, onSwitchBrain, onBack, onRequestClose, onDispatch, liveRun, addOpen }:
   {
-    name: string; brains: BrainSummary[] | null;
+    name: string; brains: BrainSummary[] | null; selfName?: string;
     detailView: DetailView; onSelectView: (v: DetailView) => void;
     onSwitchBrain: (n: string) => void; onBack: () => void;
     onRequestClose?: () => void; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; liveRun?: boolean;
-    mapPanel?: MapPanel;
+    addOpen?: boolean;
   },
 ) {
-  // Review sub-tab badge: the pending count from the cheap gallery summary (zero
-  // extra fetch) — surfaces "N awaiting review" right on the tab (wireframe).
-  const pending = brains?.find((b) => b.name === name)?.health.pending ?? 0;
+  const summary = brains?.find((b) => b.name === name);
+  const { data: analytics = null } = useQuery<PipelineAnalytics>({
+    queryKey: ['pipeline-analytics', '30d'], queryFn: () => pipelinesService.fetchAnalytics('30d'), staleTime: 30_000,
+  });
+  // same count as the map's You: each Run waiting, each proposal, a Project Agent draft
+  const needs = summary ? hubSummary([summary], analytics).needsYou : 0;
+  const pending = summary?.health.pending ?? 0;
 
-  // Shell-local openFile for the search row (Gate-1 fix): openFile is BrainView-local,
-  // so instead of threading it up we rebuild the SAME primitive here — close this
-  // overlay BEFORE dispatching swarm:open-file so the Canvas isn't rendered under the
-  // host (the swarmws z-index precedent, identical to BrainView.openFile).
+  // close THIS overlay BEFORE dispatching swarm:open-file so the Canvas isn't
+  // rendered under the host (the swarmws z-index precedent)
   const shellOpenFile = useCallback((workspaceRelPath: string) => {
     onRequestClose?.();
     document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: workspaceRelPath } }));
   }, [onRequestClose]);
+  const sendResume = () => {
+    const ok = onDispatch ? onDispatch(buildResumeSetupPrompt(name), { autoSend: true }) : false;
+    if (ok) onRequestClose?.();
+  };
+  const goTab = (t: BrainTab) => onSelectView(t);
 
   return (
     <div className="flex flex-col h-full bg-[var(--color-bg)] text-[var(--color-text)]" data-testid="brain-hub">
-      {/* breadcrumb + brain switcher */}
-      <div className="flex items-center gap-2 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-small" data-testid="brainhub-breadcrumb">
-        <button
-          data-testid="brainhub-back"
-          onClick={onBack}
-          className="flex items-center gap-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-        >
-          <span className="material-symbols-outlined icon-sm">arrow_back</span>
-          All brains
-        </button>
-        <span className="text-[var(--color-text-faint)]">/</span>
-        {/* brain switcher — jump to another brain WITHOUT returning to Gallery. A
-            native <select> (accessible, zero extra deps); keeps the current view. */}
-        {brains && brains.length > 1 ? (
-          <select
-            data-testid="brainhub-switcher"
-            value={name}
-            onChange={(e) => onSwitchBrain(e.target.value)}
-            className="bg-[var(--color-card)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-small font-semibold text-[var(--color-text)]"
-          >
-            {brains.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
-          </select>
-        ) : (
-          <span className="font-semibold">{name}</span>
-        )}
-      </div>
+      <BrainHeader name={name} summary={summary} brains={brains ?? []} isSelf={name === selfName} needs={needs}
+        onBack={onBack} onSwitch={onSwitchBrain}
+        onDistribute={() => onSelectView('distribute')}
+        onOpenFile={shellOpenFile}
+        onResume={summary?.setupState === 'setting-up' ? sendResume : undefined} />
 
-      {/* 4 true-peer sub-tabs */}
-      <div className="flex items-center gap-1 px-3 h-9 border-b border-[var(--color-border)] flex-shrink-0 text-small" data-testid="brainhub-detail-nav">
-        <TabBtn active={detailView === 'map'} onClick={() => onSelectView('map')} testid="brainhub-tab-map">Map</TabBtn>
-        <TabBtn active={detailView === 'overview'} onClick={() => onSelectView('overview')} testid="brainhub-tab-overview">Overview</TabBtn>
-        <TabBtn active={detailView === 'browse'} onClick={() => onSelectView('browse')} testid="brainhub-tab-browse">Browse</TabBtn>
-        <TabBtn active={detailView === 'review'} onClick={() => onSelectView('review')} testid="brainhub-tab-review">
-          Review{pending > 0 ? <span data-testid="review-tab-badge" className="ml-1 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-[color-mix(in_srgb,var(--color-status-warning)_25%,transparent)] text-[var(--color-status-warning)] text-meta font-semibold">{pending}</span> : null}
-        </TabBtn>
-        <TabBtn active={detailView === 'distribute'} onClick={() => onSelectView('distribute')} testid="brainhub-tab-distribute">Distribute</TabBtn>
+      <div className="flex items-center gap-5 px-4 border-b border-[var(--color-border)] flex-shrink-0" role="tablist" data-testid="brainhub-detail-nav">
+        {TABS.map((t) => {
+          const on = detailView === t.key;
+          const count = t.key === 'needs' ? needs : t.key === 'reflect' ? pending : 0;
+          return (
+            <button key={t.key} role="tab" aria-selected={on} data-testid={`brainhub-tab-${t.key}`}
+              onClick={() => onSelectView(t.key)}
+              className={`py-2 -mb-px border-b-2 text-body whitespace-nowrap ${on
+                ? 'border-[var(--color-primary)] text-[var(--color-text)] font-semibold'
+                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+              {t.label}
+              {count > 0 && <span className="ml-1.5 text-meta font-semibold text-[var(--color-status-error)]"
+                data-testid={t.key === 'reflect' ? 'review-tab-badge' : `brainhub-tab-count-${t.key}`}>{count}</span>}
+            </button>
+          );
+        })}
+        <div className="ml-auto py-1.5"><BrainSearchBox name={name} onOpenFile={shellOpenFile} /></div>
       </div>
-
-      {/* Search row (AC7): spans all sub-tabs, scoped to this brain. Uses a
-          shell-local openFile built from the onRequestClose the shell already holds
-          (Gate-1: openFile is BrainView-local, so we do NOT thread it up — the shell
-          reconstructs the same close-then-dispatch primitive). */}
-      <BrainSearchRow name={name} onOpenFile={shellOpenFile} />
 
       <div className="flex-1 overflow-auto">
-        {detailView === 'map' && (
-          <BrainMapView name={name} onGoTo={onSelectView} onDispatch={onDispatch} onRequestClose={onRequestClose}
-            initialPanel={mapPanel} />
-        )}
         {detailView === 'overview' && (
-          <BrainView
-            name={name}
-            onRequestClose={onRequestClose}
-            onGoToReview={() => onSelectView('review')}
-            liveRun={liveRun}
-          />
+          <BrainMapView name={name} onGoTo={goTab} onDispatch={onDispatch} onRequestClose={onRequestClose} />
         )}
-        {detailView === 'browse' && (
-          <BrainView
-            name={name}
-            onRequestClose={onRequestClose}
-            onGoToReview={() => onSelectView('review')}
-            liveRun={liveRun}
-            forceBrowse
-          />
+        {detailView === 'needs' && <BrainNeedsView name={name} onGoTo={goTab} />}
+        {detailView === 'brain' && (
+          <BrainView name={name} onRequestClose={onRequestClose} onGoToReview={() => onSelectView('reflect')}
+            liveRun={liveRun} onDispatch={onDispatch} addOpen={addOpen} />
         )}
-        {detailView === 'review' && <ReviewView name={name} onRequestClose={onRequestClose} />}
+        {detailView === 'agent' && <BrainAgentView name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />}
+        {detailView === 'runs' && <BrainRunsView name={name} />}
+        {detailView === 'reflect' && <ReviewView name={name} onRequestClose={onRequestClose} />}
+        {detailView === 'eval' && <BrainEvalView name={name} />}
         {detailView === 'distribute' && <DistributeView name={name} onRequestClose={onRequestClose} onDispatch={onDispatch} />}
       </div>
     </div>
   );
 }
 
-function TabBtn({ active, disabled, onClick, testid, children }: {
-  active: boolean; disabled?: boolean; onClick: () => void; testid: string; children: React.ReactNode;
+/** Header: icon + name (the Brain switcher) + status on one line, the description
+ *  under it, and the More menu (Distribute, Continue setup, Edit aim.json). */
+function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, onDistribute, onOpenFile, onResume }: {
+  name: string; summary?: BrainSummary; brains: BrainSummary[]; isSelf: boolean; needs: number;
+  onBack: () => void; onSwitch: (n: string) => void; onDistribute: () => void;
+  onOpenFile: (p: string) => void; onResume?: () => void;
 }) {
+  const [menu, setMenu] = useState<'none' | 'switch' | 'more'>('none');
+  const close = () => setMenu('none');
+  const born = summary?.setupState === 'setting-up';
+  const last = summary?.health.lastChangeRelative;
   return (
-    <button
-      data-testid={testid}
-      role="tab"
-      aria-selected={active}
-      disabled={disabled}
-      onClick={onClick}
-      className={`px-3 py-1 rounded-md transition-colors ${
-        active ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-      } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
-    >
-      {children}
-    </button>
+    <div className="flex items-start gap-3 px-4 pt-3 pb-2 flex-shrink-0" data-testid="brainhub-breadcrumb">
+      {summary ? <Flower b={summary} size={44} /> : <span className="w-11" />}
+      <div className="flex-1 min-w-0">
+        <button data-testid="brainhub-back" onClick={onBack}
+          className="text-meta text-[var(--color-text-muted)] hover:text-[var(--color-text)]">‹ All brains</button>
+        <div className="flex items-center gap-2 relative">
+          <button data-testid="brainhub-switcher" aria-haspopup="menu" aria-expanded={menu === 'switch'}
+            onClick={() => setMenu(menu === 'switch' ? 'none' : 'switch')}
+            className="flex items-center gap-1 text-title font-semibold hover:text-[var(--color-primary)]">
+            {name}<span className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">expand_more</span>
+          </button>
+          {isSelf && <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]">SELF</span>}
+          <span className="flex items-center gap-1.5 text-small text-[var(--color-text-muted)]" data-testid="brainhub-status">
+            <span className={`w-2 h-2 rounded-full ${born ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-success)]'}`} />
+            {born ? (summary?.setupProgress ? `Being born · ${summary.setupProgress.done} of ${summary.setupProgress.total} checks` : 'Being born') : 'Ready'}
+            {last && last !== '--' && <span>· last landed {last}</span>}
+            {needs > 0 && <span className="text-[var(--color-status-error)]">· {needs} need{needs === 1 ? 's' : ''} you</span>}
+          </span>
+          {menu === 'switch' && (
+            <>
+              <div className="fixed inset-0 z-[9]" onClick={close} aria-hidden="true" />
+              <div role="menu" className="absolute left-0 top-full mt-1 z-10 w-64 max-h-80 overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] py-1">
+                {brains.map((b) => (
+                  <button key={b.name} role="menuitem" data-testid={`brainhub-switch-${b.name}`}
+                    onClick={() => { close(); if (b.name !== name) onSwitch(b.name); }}
+                    className={`w-full text-left px-3 py-1.5 text-body hover:bg-[var(--color-hover)] ${b.name === name ? 'font-semibold' : ''}`}>{b.name}</button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div className={`text-small ${summary?.description ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-faint)]'}`} data-testid="brainhub-desc">
+          {summary?.description || 'No description yet. Add one line to aim.json.'}
+        </div>
+      </div>
+      <div className="relative">
+        <button className="icon-btn" aria-label="More" aria-haspopup="menu" aria-expanded={menu === 'more'} data-testid="brainhub-more"
+          onClick={() => setMenu(menu === 'more' ? 'none' : 'more')}>
+          <span className="material-symbols-outlined icon-sm">more_horiz</span>
+        </button>
+        {menu === 'more' && (
+          <>
+            <div className="fixed inset-0 z-[9]" onClick={close} aria-hidden="true" />
+            <div role="menu" className="absolute right-0 top-full mt-1 z-10 w-56 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] py-1">
+              {onResume && <MenuItem testid="brainhub-more-resume" onClick={() => { close(); onResume(); }}>Continue setup in chat</MenuItem>}
+              <MenuItem testid="brainhub-more-distribute" onClick={() => { close(); onDistribute(); }}>Distribute this Brain</MenuItem>
+              <MenuItem testid="brainhub-more-aim" onClick={() => { close(); onOpenFile(`Projects/${name}/aim.json`); }}>Edit aim.json</MenuItem>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MenuItem({ onClick, testid, children }: { onClick: () => void; testid: string; children: React.ReactNode }) {
+  return (
+    <button role="menuitem" data-testid={testid} onClick={onClick}
+      className="w-full text-left px-3 py-1.5 text-body hover:bg-[var(--color-hover)]">{children}</button>
   );
 }
 
 /**
- * BrainSearchRow (run_d0cd4414, AC7) — the Brain Hub's search box, wired to the
- * pre-existing GET /api/ddd/brains/{name}/recall endpoint via brainRecall(). Lives
- * in the detail shell (scoped to the selected brain, matching the single-brain
- * endpoint). Self-contained: owns its query/hits state + a debounce so it does NOT
- * fetch per keystroke. A conditional results panel renders ONLY when q is non-empty
- * AND hits exist — so it never crowds the view when unused. Clicking a hit calls
- * onOpenFile (the shell-local opener built from onRequestClose — Gate-1: openFile is
- * BrainView-local, so the shell builds its own rather than threading it up).
+ * BrainSearchBox (run_d0cd4414, AC7) — the Brain's search box at the end of the tab
+ * bar, wired to GET /api/ddd/brains/{name}/recall via brainRecall(). Owns its query/
+ * hits state + a debounce so it does NOT fetch per keystroke. The results drop down
+ * under the box only when q is non-empty AND hits exist. Clicking a hit calls
+ * onOpenFile (the shell's close-then-open primitive).
  */
-function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: string) => void }) {
+function BrainSearchBox({ name, onOpenFile }: { name: string; onOpenFile: (p: string) => void }) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<RecallHit[]>([]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset when switching brains (the shell remounts on name change via key, but guard
-  // an in-place name change too — stale hits from another brain would mislead).
   useEffect(() => { setQ(''); setHits([]); }, [name]);
 
-  // Debounced recall: blank q short-circuits (brainRecall itself also guards, but
-  // clearing hits here removes the panel immediately). A stale-response guard
-  // (`alive`) prevents an out-of-order slow response from overwriting a newer one.
-  // Gate-2 meta-review (MED, operational): recall_all is UNCACHED per call (re-reads
-  // + re-parses the DDD docs + Knowledge corpus + FTS stores). So (a) require ≥2
-  // non-blank chars — a 1-char query scans everything for near-useless results — and
-  // (b) 350ms debounce, to bound the worst-case scan rate for a fast typist on a
-  // large-corpus brain. Fail-soft endpoint means this is throughput-only, not a
-  // correctness gate.
+  // Debounced recall: ≥2 non-blank chars and 350ms (recall_all is uncached per call),
+  // with a stale-response guard so a slow older answer never overwrites a newer one.
   useEffect(() => {
     if (timer.current) clearTimeout(timer.current);
     if (q.trim().length < 2) { setHits([]); return; }
@@ -360,31 +390,32 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
   const showPanel = q.trim().length >= 2 && hits.length > 0;
 
   return (
-    <div className="px-3 py-2 border-b border-[var(--color-border)] flex-shrink-0" data-testid="brainhub-search-row">
-      <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1">
+    <div className="relative w-64" data-testid="brainhub-search-row">
+      <div className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2 h-7">
         <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)]">search</span>
         <input
           data-testid="brainhub-search-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder={`Search ${name}'s knowledge…`}
-          className="flex-1 bg-transparent text-small text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
+          placeholder="Search this Brain"
+          className="flex-1 min-w-0 bg-transparent text-small text-[var(--color-text)] placeholder:text-[var(--color-text-faint)] outline-none"
         />
         {q && (
-          <button data-testid="brainhub-search-clear" onClick={() => setQ('')}
+          <button data-testid="brainhub-search-clear" onClick={() => setQ('')} aria-label="Clear search"
             className="text-[var(--color-text-faint)] hover:text-[var(--color-text)]">
             <span className="material-symbols-outlined icon-sm">close</span>
           </button>
         )}
       </div>
       {showPanel && (
-        <div className="mt-1.5 flex flex-col gap-1 max-h-[40vh] overflow-auto" data-testid="brainhub-search-results">
+        <div className="absolute right-0 top-full mt-1 z-10 w-[420px] flex flex-col gap-1 max-h-[50vh] overflow-auto rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-1.5"
+          data-testid="brainhub-search-results">
           {hits.map((h, i) => (
             <button
               key={`${h.source}-${i}`}
               data-testid="brainhub-search-hit"
               onClick={() => onOpenFile(h.source)}
-              className="text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 hover:border-[var(--color-border)]"
+              className="text-left rounded-md border border-[var(--color-border)] bg-[var(--color-card)] px-2.5 py-1.5 hover:border-[var(--color-primary)]"
             >
               <div className="flex items-baseline gap-2">
                 <span className="text-small text-[var(--color-text)] truncate">{h.title || h.source}</span>
@@ -408,55 +439,43 @@ function BrainSearchRow({ name, onOpenFile }: { name: string; onOpenFile: (p: st
  * get_pinned_projects, existence-guarded); pinned empty (old daemon) → no marker.
  */
 function Gallery(
-  { brains, pinned, onOpen }:
-  { brains: BrainSummary[] | null; pinned: string[];
+  { brains, selfName, onOpen }:
+  { brains: BrainSummary[] | null; selfName?: string;
     onOpen: (n: string, target?: { view?: 'map' | 'review'; panel?: MapPanel }) => void },
 ) {
   if (brains === null) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading brains</div>;
   if (brains.length === 0) return <div className="p-4 text-[var(--color-text-muted)] text-body">No DDD brains found.</div>;
-  const selfName = pinned[0] && brains.some((b) => b.name === pinned[0]) ? pinned[0] : undefined;
   return <BrainHubHome brains={brains} selfName={selfName} onOpen={onOpen} />;
 }
 
 
-// ── Brain view — Overview / Browse (view switching OWNED by the detail shell) ────
+// ── Brain (DDD) tab ──────────────────────────────────────────────────────────
 //
-// run_3d371424 (item 5): the old INNER [Overview | Browse] toggle was REMOVED — view
-// switching moved UP to the BrainDetailShell's 4-peer sub-tab bar (Overview | Browse |
-// Review | Distribute). BrainView now renders ONE view per mount, chosen by the
-// `forceBrowse` prop the shell passes. The two mental modes are unchanged:
-//   • OVERVIEW (forceBrowse=false, default) — "what state / what should I do":
-//       §① Ontology (3-layer×7-type) — the existing DddCard density=full IS the
-//          ontology + verdict (Gate-0 C046: relocated, not rebuilt); fixed FIRST.
-//       §② Need-You — a FIXED-POSITION action block (proposals→[Go to Review];
-//          liveRun; reclaimable; sinking; all-zero → a muted "Nothing queued").
-//       §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) + [Weekly Report].
-//   • BROWSE (forceBrowse=true) — the real Projects/<name> file tree + Code Graph.
+// What the Brain knows, top to bottom:
+//   Add knowledge — the primary action of this tab (a card that opens in place).
+//   §① Ontology (3-layer×7-type) — the existing DddCard density=full IS the ontology.
+//   §② Knowledge upkeep — proposals→Reflect, liveRun, reclaimable, sinking.
+//   §③ 4 core-doc cards (PRODUCT/TECH/IMPROVEMENT/PROJECT) + [Weekly Report].
+//   Files — the real Projects/<name> file tree + Code Graph.
 
 function BrainView(
-  { name, onRequestClose, onGoToReview, liveRun, forceBrowse = false }:
+  { name, onRequestClose, onGoToReview, liveRun, onDispatch, addOpen = false }:
   { name: string; onRequestClose?: () => void; onGoToReview?: () => void;
-    liveRun?: boolean; forceBrowse?: boolean },
+    liveRun?: boolean; onDispatch?: (msg: string, opts?: { autoSend?: boolean }) => boolean; addOpen?: boolean },
 ) {
   const [showWeekly, setShowWeekly] = useState(false);
+  const [adding, setAdding] = useState(addOpen);
 
-  // Cached fetches (run_cfb460ac): re-opening the same brain no longer refetches
-  // within the 30s staleTime. detail drives the view; review is best-effort (§③
-  // signals + Weekly): a review error must NOT blank the Overview, so we read only
-  // its data (null on error → docSignalMap is null-safe).
+  // Cached fetches (run_cfb460ac): detail drives the view; review is best-effort (§③
+  // signals + Weekly): a review error must NOT blank the tab.
   const { data: detail = null, error: detailErr } = useBrainDetail(name);
   const { data: review = null } = useReview(name);
   const error = detailErr ? String((detailErr as { message?: string })?.message ?? detailErr) : null;
 
-  // Reset view-local UI state when switching brains (the shell's keyed remount already
-  // does this for a brain switch; this guards a future in-place name change).
   useEffect(() => { setShowWeekly(false); }, [name]);
 
-  // Open a doc/tree file in the app-level CANVAS. Paths are WORKSPACE-RELATIVE
-  // (Projects/<name>/… — the LibraryTree + the ③ card both produce this shape) so
-  // the useCanvasHost resolver takes them directly. Z-index (Gate-1, swarmws
-  // precedent): close THIS overlay BEFORE the dispatch so the Canvas/FileViewer is
-  // never rendered UNDER the host.
+  // Open a doc/tree file in the app-level CANVAS (workspace-relative paths). Close
+  // THIS overlay BEFORE the dispatch so the FileViewer is never rendered under it.
   const openFile = useCallback((workspaceRelPath: string) => {
     onRequestClose?.();
     document.dispatchEvent(new CustomEvent('swarm:open-file', {
@@ -465,29 +484,41 @@ function BrainView(
   }, [onRequestClose]);
 
   if (error) return <div className="p-4 text-[var(--color-status-error)] text-body">Failed to load brain: {error}</div>;
-  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading {name}…</div>;
+  if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading {name}</div>;
 
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
 
   return (
-    <div className="flex flex-col h-full" data-testid="brainhub-brain">
-      {forceBrowse ? (
-        <BrainBrowse
-          name={name}
-          hasCodeIntel={hasCodeIntel}
-          onOpenFile={openFile}
-        />
-      ) : (
-        <BrainOverview
-          detail={detail}
-          review={review}
-          liveRun={liveRun}
-          onGoToReview={onGoToReview}
-          onOpenFile={openFile}
-          showWeekly={showWeekly}
-          onToggleWeekly={() => setShowWeekly((v) => !v)}
-        />
-      )}
+    <div className="flex flex-col pt-3" data-testid="brainhub-brain">
+      <div className="px-4 pb-3">
+        {adding ? (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-small font-semibold">Add knowledge</span>
+              <button className="btn-sm btn-ghost" onClick={() => setAdding(false)} data-testid="bm-add-close">Close</button>
+            </div>
+            <BrainAddKnowledge name={name} onDispatch={onDispatch} onRequestClose={onRequestClose} />
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-[var(--color-border)] px-3 py-2">
+            <span className="text-small text-[var(--color-text-muted)] flex-1">Teach this Brain from files, folders, links or another repo. The agent distills what is worth keeping.</span>
+            <button className="btn-sm btn-primary" onClick={() => setAdding(true)} data-testid="bm-add-open">
+              <span className="material-symbols-outlined icon-xs">add</span> Add knowledge
+            </button>
+          </div>
+        )}
+      </div>
+      <BrainOverview
+        detail={detail}
+        review={review}
+        liveRun={liveRun}
+        onGoToReview={onGoToReview}
+        onOpenFile={openFile}
+        showWeekly={showWeekly}
+        onToggleWeekly={() => setShowWeekly((v) => !v)}
+      />
+      <div className="px-4 pt-1 pb-1.5 text-small font-semibold">Files</div>
+      <BrainBrowse name={name} hasCodeIntel={hasCodeIntel} onOpenFile={openFile} />
     </div>
   );
 }
