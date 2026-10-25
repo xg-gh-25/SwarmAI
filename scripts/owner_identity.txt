@@ -1,0 +1,14 @@
+# Names that identify one specific person. scripts/lint_skills.py fails when a
+# shipped file (skills, experts, context seeds) contains one of them: the product
+# runs on strangers' machines, and "needs XG approval" means nothing there.
+#
+# This is SwarmAI's own lint config, not product data; product code never reads it.
+# It is in a PUBLIC repo, so list only the owner's own public identifiers here.
+# Never add a colleague's name: this file would publish it.
+#
+# One name per line. An all-caps entry matches case-sensitively ("XG" but not
+# "xg" inside a URL or slug); every other entry matches case-insensitively.
+# Matches are whole words.
+XG
+Xiaogang
+gawan

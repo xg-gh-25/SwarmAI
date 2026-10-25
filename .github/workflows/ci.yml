@@ -43,7 +43,7 @@ jobs:
         working-directory: ./backend
         run: python ../scripts/smoke_import.py
 
-      - name: Lint skill corpus (metadata + no machine-local references)
+      - name: Lint shipped corpus (skill metadata; no machine-local references or owner names)
         run: python scripts/lint_skills.py
 
       # SwarmAI's own wording + frontend-style rules (moved out of the product, P7):

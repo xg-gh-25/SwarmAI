@@ -90,6 +90,14 @@ SKILL_DIRS = [
     Path("backend/templates/ddd-skills"),
 ]
 
+# Shipped trees that are not skills: the body rules apply, the SKILL.md metadata
+# pass does not. Expert prompts are spawned in users' repos, and context seeds are
+# copied into every new workspace, so both are published as much as a skill is.
+BODY_ONLY_DIRS = [
+    Path("backend/experts"),
+    Path("backend/context"),
+]
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The run-id shape, shared with the cognitive-store door so the two cannot drift.
@@ -142,6 +150,31 @@ REGISTER_RE = re.compile(
 # lowercase left ``/Users/Gawan`` passing. ``/home/`` is the Linux twin of the
 # same exposure.
 OWNER_PATH_RE = re.compile(r"/(?:Users|home)/[A-Za-z][A-Za-z0-9_.-]*")
+
+# Names of one specific person (the repo's own config, ``scripts/owner_identity.txt``).
+# A shipped file that says "needs <owner> approval" or uses a real person as the
+# example reads wrong on every other install. Loaded once; an absent file means this
+# checkout declares no names (a consumer copy of this script need not carry one).
+OWNER_IDENTITY_FILE = Path(__file__).resolve().parent / "owner_identity.txt"
+
+
+def load_owner_names(path: Path = OWNER_IDENTITY_FILE) -> list[re.Pattern]:
+    """One whole-word pattern per listed name; all-caps entries are case-sensitive."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return []
+    out = []
+    for raw in lines:
+        name = raw.strip()
+        if not name or name.startswith("#"):
+            continue
+        flags = 0 if name.isupper() else re.IGNORECASE
+        out.append(re.compile(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", flags))
+    return out
+
+
+OWNER_NAMES = load_owner_names()
 
 # A neutral placeholder is documentation, not an exposure. Compared
 # case-insensitively, since the pattern above accepts either case.
@@ -286,7 +319,7 @@ def corpus_files() -> list[Path]:
             yielded no files.
     """
     out: list[Path] = []
-    for skill_dir in SKILL_DIRS:
+    for skill_dir in [*SKILL_DIRS, *BODY_ONLY_DIRS]:
         root = skill_dir if skill_dir.is_absolute() else _REPO_ROOT / skill_dir
         if not root.exists():
             continue  # nothing in scope here — a real no-op, not a blind pass
@@ -392,6 +425,14 @@ def lint_body(path: Path) -> list[str]:
                 f"{path}:{lineno}: path '{m.group()}' names a specific machine owner "
                 f"— use a neutral placeholder or a repo-relative path"
             )
+        for rx in OWNER_NAMES:
+            for m in rx.finditer(line):
+                if m.group() in allowed:
+                    continue
+                findings.append(
+                    f"{path}:{lineno}: '{m.group()}' names one specific person — write "
+                    f"'the user' / 'the owner', or use a placeholder name in examples"
+                )
     return findings
 
 
@@ -625,7 +666,8 @@ def main() -> int:
 
     print(
         f"{meta_count} SKILL.md files pass metadata checks ✓  ·  "
-        f"{len(body_files)} corpus files carry no machine-local references ✓  ·  "
+        f"{len(body_files)} corpus files carry no machine-local references or "
+        f"owner names ✓  ·  "
         f"pipeline stage docs within size limits "
         f"({len(_SIZE_PENDING_SPLIT)} pending split) ✓"
     )
