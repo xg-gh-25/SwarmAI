@@ -70,8 +70,8 @@ from core.ddd_entry_lifecycle import (
     parse_entries,
 )
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
-from core.project_agent import PROJECT_AGENT_FILE, load_project_agent
-from core.ddd_setup_state import read_setup_state
+from core.project_agent import PROJECT_AGENT_FILE, load_project_agent, project_agent_status
+from core.ddd_setup_state import read_setup_progress, read_setup_state
 from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR, get_pinned_projects
 
 logger = logging.getLogger(__name__)
@@ -605,6 +605,10 @@ def build_brain_state(
         "lifecycleStage": _lifecycle_stage(project_dir, present, pending, entry_count=entry_count),
         # setting-up | ready | None (no record: a Brain made before setup tracking)
         "setupState": read_setup_state(project_dir),
+        # {done, total} checks from the last P6 --record while setting up, else None
+        "setupProgress": read_setup_progress(project_dir),
+        # draft (waits for the person) | reviewed | invalid | None (no project-agent.yaml)
+        "projectAgentStatus": project_agent_status(project_dir),
         "health": health,
         "typeCounts": stats["typeCounts"],
         # ddd-changelog entries stamped in the last 30 days. A sibling of health (like

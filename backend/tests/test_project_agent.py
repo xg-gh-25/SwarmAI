@@ -93,3 +93,22 @@ def test_p6_gate(tmp_path):
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_PASS
     (tmp_path / "project-agent.yaml").write_text(GOOD.replace("default_profile: bugfix", "default_profile: turbo"))
     assert mod._check_project_agent(tmp_path)[1] == mod.STATUS_FAIL
+
+
+def test_status_for_the_hub_home(tmp_path):
+    """The gallery's projectAgentStatus: draft waits for the person, reviewed does
+    not, a broken file is invalid, no file is None."""
+    from core.project_agent import project_agent_status
+    from routers import ddd_brain as m
+
+    assert project_agent_status(tmp_path) is None
+    f = tmp_path / "project-agent.yaml"
+    f.write_text(GOOD)
+    assert project_agent_status(tmp_path) == "draft"
+    assert m._brain_summary(tmp_path)["projectAgentStatus"] == "draft"
+    f.write_text(GOOD.replace("status: draft", "status: reviewed"))
+    assert project_agent_status(tmp_path) == "reviewed"
+    f.write_text(GOOD.replace("default_profile: bugfix", "default_profile: yolo"))
+    assert project_agent_status(tmp_path) == "invalid"
+    f.write_text("- not\n- a mapping\n")
+    assert project_agent_status(tmp_path) == "invalid"

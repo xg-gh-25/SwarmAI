@@ -11,10 +11,12 @@ Writers (exactly two, one per transition):
   keeps ``setting-up`` on FAIL.
 
 Reader: the Brain Hub gallery (``setupState``) shows "being born" while it is
-``setting-up``. A Brain without the file (made before this existed) is ``None`` and
-is never shown as being born.
+``setting-up``, with ``setupProgress`` (checks done of all, from the last P6 counts)
+when a P6 run recorded them. A Brain without the file (made before this existed) is
+``None`` and is never shown as being born.
 
-Key public symbols: ``SETUP_FILE``, ``STATES``, ``read_setup_state``, ``write_setup_state``.
+Key public symbols: ``SETUP_FILE``, ``STATES``, ``read_setup_state``,
+``read_setup_progress``, ``write_setup_state``.
 """
 from __future__ import annotations
 
@@ -32,17 +34,43 @@ SETUP_FILE = ".artifacts/setup.json"
 STATES = frozenset({"setting-up", "ready"})
 
 
-def read_setup_state(project_dir: Path) -> Optional[str]:
-    """``setting-up`` / ``ready``, or None when the Brain has no (valid) record."""
+def _read_record(project_dir: Path) -> Optional[dict]:
     p = project_dir / SETUP_FILE
     try:
         if not p.is_file() or p.is_symlink() or p.stat().st_size > 8192:
             return None
-        state = json.loads(p.read_text(encoding="utf-8")).get("state")
-    except (OSError, UnicodeError, ValueError, AttributeError) as exc:
+        body = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
         logger.debug("setup.json unreadable in %s: %s", project_dir, exc)
         return None
+    return body if isinstance(body, dict) else None
+
+
+def read_setup_state(project_dir: Path) -> Optional[str]:
+    """``setting-up`` / ``ready``, or None when the Brain has no (valid) record."""
+    body = _read_record(project_dir)
+    state = body.get("state") if body else None
     return state if state in STATES else None
+
+
+def read_setup_progress(project_dir: Path) -> Optional[dict[str, int]]:
+    """How far an unfinished setup got, from the last P6 ``--record``:
+    ``{"done": PASS + N/A, "total": every check}``. None when the Brain is not
+    setting up, or no P6 run recorded counts yet (right after create_project)."""
+    body = _read_record(project_dir)
+    if not body or body.get("state") != "setting-up":
+        return None
+    counts = body.get("counts")
+    if not isinstance(counts, dict):
+        return None
+    try:
+        nums = {str(k): int(v) for k, v in counts.items()}
+    except (TypeError, ValueError):
+        return None
+    total = sum(nums.values())
+    if total <= 0:
+        return None
+    return {"done": nums.get("PASS", 0) + nums.get("N/A", 0), "total": total}
 
 
 def write_setup_state(project_dir: Path, state: str, counts: Optional[dict[str, Any]] = None) -> None:

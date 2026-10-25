@@ -119,7 +119,8 @@ export function brainEval(
 
 export interface HubSummary {
   brains: number;
-  /** items waiting on a person: Runs that need you + staged rule proposals */
+  /** items waiting on a person: Runs that need you + staged rule proposals +
+   *  Project Agents to confirm or fix */
   needsYou: number;
   /** brains with a Run in progress */
   running: number;
@@ -139,14 +140,18 @@ export interface HubSummary {
 
 export interface HubNeed {
   brain: string;
-  kind: 'run' | 'proposals';
+  kind: 'run' | 'proposals' | 'agent';
   id: string;
   text: string;
   /** ISO time it started waiting (Runs only) */
   since: string | null;
 }
 
-/** Every item across all brains that waits for a person, oldest Run first, then proposals. */
+/** A Project Agent waits on the person while it is a draft (confirm) or has problems (fix). */
+const agentWaits = (b: BrainSummary) => b.projectAgentStatus === 'draft' || b.projectAgentStatus === 'invalid';
+
+/** Every item across all brains that waits for a person: oldest Run first, then
+ *  proposals, then Project Agents to confirm or fix. */
 export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | undefined): HubNeed[] {
   const known = new Set(brains.map((b) => b.name));
   const runs: HubNeed[] = [];
@@ -163,7 +168,11 @@ export function hubNeeds(brains: BrainSummary[], a: PipelineAnalytics | null | u
     brain: b.name, kind: 'proposals', id: `${b.name}-proposals`,
     text: `${b.health.pending} rule proposal${b.health.pending === 1 ? '' : 's'} to review`, since: null,
   }));
-  return [...runs, ...props];
+  const agents: HubNeed[] = brains.filter(agentWaits).map((b) => ({
+    brain: b.name, kind: 'agent', id: `${b.name}-agent`, since: null,
+    text: b.projectAgentStatus === 'draft' ? 'Project Agent draft to confirm' : 'Project Agent file has problems to fix',
+  }));
+  return [...runs, ...props, ...agents];
 }
 
 export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null): HubSummary {
@@ -172,7 +181,8 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null)
   const reported = brains.filter((b) => typeof b.recentActivity === 'number');
   return {
     brains: brains.length,
-    needsYou: runs.filter((r) => r.needsYou).length + brains.reduce((s, b) => s + (b.health.pending ?? 0), 0),
+    needsYou: runs.filter((r) => r.needsYou).length + brains.reduce((s, b) => s + (b.health.pending ?? 0), 0)
+      + brains.filter(agentWaits).length,
     running: brains.filter((b) => b.health.liveRun).length,
     born: brains.filter((b) => b.setupState === 'setting-up').length,
     learned: reported.length ? reported.reduce((s, b) => s + (b.recentActivity ?? 0), 0) : null,
@@ -194,8 +204,13 @@ export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): Brai
   const pending = b.health.pending ?? 0;
   if (runNeeds) return { tone: 'error', rank: 0, text: runNeeds === 1 ? 'A Run needs you' : `${runNeeds} Runs need you` };
   if (pending) return { tone: 'error', rank: 0, text: `${pending} proposal${pending === 1 ? '' : 's'} to review` };
+  if (b.projectAgentStatus === 'draft') return { tone: 'error', rank: 0, text: 'Project Agent to confirm' };
+  if (b.projectAgentStatus === 'invalid') return { tone: 'error', rank: 0, text: 'Project Agent has problems' };
   if (b.health.liveRun) return { tone: 'primary', rank: 1, text: 'Run in progress' };
-  if (b.setupState === 'setting-up') return { tone: 'warning', rank: 2, text: 'Being born' };
+  if (b.setupState === 'setting-up') {
+    const p = b.setupProgress;
+    return { tone: 'warning', rank: 2, text: p ? `Being born · ${p.done} of ${p.total} checks` : 'Being born' };
+  }
   const last = b.health.lastChangeRelative;
   return { tone: 'muted', rank: 3, text: last && last !== '--' ? `Last landed ${last}` : 'No landed change in 30 days' };
 }

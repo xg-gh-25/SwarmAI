@@ -14,6 +14,7 @@ Key public symbols:
 - ``PROFILES``             pipeline profiles a definition may name (from the run protocol)
 - ``PLACEMENTS``           where a Run may execute
 - ``load_project_agent``   parse + validate -> dict for the Brain Hub, or None if absent
+- ``project_agent_status`` draft / reviewed / invalid / None, for the Hub home
 - ``validate``             the list of problems in a parsed definition ([] = valid)
 """
 from __future__ import annotations
@@ -102,3 +103,14 @@ def load_project_agent(project_dir: Path) -> dict[str, Any] | None:
         "sources": str_list(doc.get("sources")),
         "problems": validate(doc),
     }
+
+
+def project_agent_status(project_dir: Path) -> str | None:
+    """The one word the Brain Hub home needs: ``draft`` (waits for the person to
+    confirm), ``reviewed``, ``invalid`` (the file has problems), or None (no file)."""
+    pa = load_project_agent(project_dir)
+    if pa is None:
+        return None
+    if pa.get("problems"):
+        return "invalid"
+    return "reviewed" if pa.get("status") == "reviewed" else "draft"

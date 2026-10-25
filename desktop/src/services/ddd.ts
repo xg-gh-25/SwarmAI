@@ -86,6 +86,12 @@ export interface BrainSummary {
   /** Setup (s_project-manager P0..P6): 'setting-up' from create_project until the P6
    *  gate records 'ready'. null/absent = no record (an older Brain) — never "being born". */
   setupState?: 'setting-up' | 'ready' | null;
+  /** While setting up: checks done (PASS + N/A) of all, from the last P6 --record.
+   *  null/absent = no P6 run recorded yet, or not setting up. */
+  setupProgress?: { done: number; total: number } | null;
+  /** project-agent.yaml: 'draft' waits for the person to confirm; 'invalid' has
+   *  problems; null/absent = no file (or an old daemon). */
+  projectAgentStatus?: 'draft' | 'reviewed' | 'invalid' | null;
   health: BrainHealth;
   /** 7-type histogram for the compact card's 3-layer ontology bar. Rides the
    *  gallery's existing single parse (zero extra glob). OPTIONAL for daemon skew:

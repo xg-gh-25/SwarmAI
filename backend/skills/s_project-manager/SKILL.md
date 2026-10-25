@@ -136,6 +136,11 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
 | **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME> --record` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
 
+**Progress while it is being born.** After each phase from P2 on, run the same P6
+command with `--record`. It keeps the Brain `setting-up` until everything passes and
+records how many checks pass, which Brain Hub shows on the card ("Being born · 4 of 7
+checks"). A FAIL at that point is expected and is not a reason to stop.
+
 ### Generating the Project Agent (P3b)
 
 The Project Agent is the delivery agent that works with the person on this brain. Its

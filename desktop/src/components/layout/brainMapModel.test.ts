@@ -110,15 +110,18 @@ describe('brainMapModel', () => {
     expect(hubSummary([brain('C')], null).learned).toBeNull();
   });
 
-  it('hubNeeds: Runs waiting on you oldest first, then each brain with proposals', () => {
+  it('hubNeeds: Runs waiting on you oldest first, then each brain with proposals, then Project Agents', () => {
     const a = an({ A: [
       run({ id: 'new', needsYou: true, pauseKind: 'decision', requirement: 'Pick a column', updatedAt: '2026-10-25T00:00:00Z' }),
       run({ id: 'old', needsYou: true, pauseKind: 'stopped', requirement: 'Resume me', updatedAt: '2026-10-20T00:00:00Z' }),
     ] });
-    const items = hubNeeds([brain('A'), brain('B', {}, { pending: 1 })], a);
-    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'B-proposals']);
+    const items = hubNeeds([brain('A', { projectAgentStatus: 'reviewed' }), brain('B', { projectAgentStatus: 'draft' }, { pending: 1 }),
+      brain('C', { projectAgentStatus: 'invalid' })], a);
+    expect(items.map((i) => i.id)).toEqual(['old', 'new', 'B-proposals', 'B-agent', 'C-agent']);
     expect(items[1].text).toBe('Run question: Pick a column');
     expect(items[2]).toMatchObject({ brain: 'B', kind: 'proposals', text: '1 rule proposal to review' });
+    expect(items[3]).toMatchObject({ kind: 'agent', text: 'Project Agent draft to confirm' });
+    expect(hubSummary([brain('B', { projectAgentStatus: 'draft' }), brain('C', { projectAgentStatus: 'reviewed' })], null).needsYou).toBe(1);
   });
 
   it('brainSignal picks the one most urgent thing: needs you > running > being born > last change', () => {
@@ -127,6 +130,12 @@ describe('brainMapModel', () => {
     expect(brainSignal(brain('B', {}, { pending: 2 }), a).text).toBe('2 proposals to review');
     expect(brainSignal(brain('C', { setupState: 'setting-up' }, { liveRun: true }), a)).toMatchObject({ tone: 'primary', rank: 1 });
     expect(brainSignal(brain('D', { setupState: 'setting-up' }), a)).toMatchObject({ tone: 'warning', text: 'Being born' });
+    expect(brainSignal(brain('D2', { setupState: 'setting-up', setupProgress: { done: 4, total: 7 } }), a).text)
+      .toBe('Being born · 4 of 7 checks');
+    expect(brainSignal(brain('G', { projectAgentStatus: 'draft' }, { liveRun: true }), a))
+      .toMatchObject({ tone: 'error', rank: 0, text: 'Project Agent to confirm' });
+    expect(brainSignal(brain('H', { projectAgentStatus: 'invalid' }), a).text).toBe('Project Agent has problems');
+    expect(brainSignal(brain('I', { projectAgentStatus: 'reviewed' }), a).tone).toBe('muted');
     expect(brainSignal(brain('E', {}, { lastChangeRelative: '2h ago' }), a).text).toBe('Last landed 2h ago');
     expect(brainSignal(brain('F'), a)).toMatchObject({ tone: 'muted', rank: 3, text: 'No landed change in 30 days' });
   });

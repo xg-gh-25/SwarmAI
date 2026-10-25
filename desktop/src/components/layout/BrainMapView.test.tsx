@@ -243,6 +243,16 @@ describe('BrainHubHome', () => {
     expect(onOpen).toHaveBeenLastCalledWith('Q', { view: 'review' });
   });
 
+  it('a Project Agent draft is a Need-you item that opens the Project Agent panel', () => {
+    const onOpen = vi.fn();
+    render(<BrainHubHome brains={[brain('T', { projectAgentStatus: 'draft' })] as never} onOpen={onOpen} />);
+    expect(screen.getByTestId('hub-filter-need').textContent).toContain('1');
+    expect(screen.getByTestId('hub-signal-T').textContent).toBe('Project Agent to confirm');
+    fireEvent.click(screen.getByTestId('hub-filter-need'));
+    fireEvent.click(screen.getByTestId('hub-need-go-T-agent'));
+    expect(onOpen).toHaveBeenLastCalledWith('T', { view: 'map', panel: 'agent' });
+  });
+
   it('cards open their brain; Add knowledge picks a brain and opens its Add panel; New Brain opens the form', () => {
     const onOpen = vi.fn();
     const shown: string[] = [];

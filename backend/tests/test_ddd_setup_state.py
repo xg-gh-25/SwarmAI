@@ -72,3 +72,23 @@ def test_gallery_summary_carries_setup_state(tmp_path):
     from routers.ddd_brain import _brain_summary
     write_setup_state(tmp_path, "ready")
     assert _brain_summary(tmp_path)["setupState"] == "ready"
+
+
+def test_setup_progress_reads_the_last_p6_counts(tmp_path):
+    """The Hub card's 'Being born · N of M checks': PASS + N/A of all checks, from
+    the counts the last P6 --record wrote. No counts yet, or ready -> None."""
+    from core.ddd_setup_state import read_setup_progress
+    from routers import ddd_brain as m
+
+    assert read_setup_progress(tmp_path) is None                     # no record
+    write_setup_state(tmp_path, "setting-up")                         # create_project
+    assert read_setup_progress(tmp_path) is None                      # no P6 run yet
+    write_setup_state(tmp_path, "setting-up", {"PASS": 3, "FAIL": 2, "PENDING": 1, "N/A": 1})
+    assert read_setup_progress(tmp_path) == {"done": 4, "total": 7}
+    assert m._brain_summary(tmp_path)["setupProgress"] == {"done": 4, "total": 7}
+    write_setup_state(tmp_path, "ready", {"PASS": 6, "PENDING": 1})
+    assert read_setup_progress(tmp_path) is None                      # finished
+    (tmp_path / SETUP_FILE).write_text(json.dumps({"state": "setting-up", "counts": {"PASS": "x"}}))
+    assert read_setup_progress(tmp_path) is None                      # garbage never raises
+    (tmp_path / SETUP_FILE).write_text("[1, 2]")
+    assert read_setup_state(tmp_path) is None and read_setup_progress(tmp_path) is None

@@ -29,7 +29,7 @@ function waited(iso: string, now = Date.now()): string {
 }
 
 export type HubFilter = 'all' | 'need' | 'running' | 'born';
-type OpenTarget = { view?: 'map' | 'review'; panel?: 'need' | 'add' };
+type OpenTarget = { view?: 'map' | 'review'; panel?: 'need' | 'add' | 'agent' };
 
 const ANG: Record<SectionKey, number> = {
   identity: -120, knowledge: -60, gates: 0, capabilities: 60, refresher: 120, delivery: 180,
@@ -169,8 +169,9 @@ export function BrainHubHome({ brains, selfName, onOpen }: {
               <span className="flex-1 min-w-0 truncate">{n.text}</span>
               {n.since && <span className="text-meta text-[var(--color-text-muted)] shrink-0">{waited(n.since)}</span>}
               <button className="btn-sm btn-secondary shrink-0" data-testid={`hub-need-go-${n.id}`}
-                onClick={() => onOpen(n.brain, n.kind === 'run' ? { view: 'map', panel: 'need' } : { view: 'review' })}>
-                {n.kind === 'run' ? 'Answer' : 'Review'}
+                onClick={() => onOpen(n.brain, n.kind === 'run' ? { view: 'map', panel: 'need' }
+                  : n.kind === 'agent' ? { view: 'map', panel: 'agent' } : { view: 'review' })}>
+                {n.kind === 'run' ? 'Answer' : n.kind === 'agent' ? 'Open' : 'Review'}
               </button>
             </div>
           ))}
