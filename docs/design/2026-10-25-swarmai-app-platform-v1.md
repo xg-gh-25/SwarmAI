@@ -110,6 +110,11 @@ V1 does **not**:
   current enabled state, grant and activation generation.
 - External distribution is opt-in and declaration-bounded: **emit is not publish**.
 - A broken App degrades itself; it never blocks backend health or chat readiness.
+- A capability is labelled product-proven only after it runs from a packaged artifact in a
+  clean environment with no source checkout, developer-global Skill, untracked file or
+  pre-existing user workspace.
+- Mutable user data, live DDDs and machine-local configuration are Instance/deployment
+  inputs, never implicit App or Host Execution Release build inputs.
 - The runtime consumes a cached registry. It does not rediscover Apps on hot paths.
 
 ## 2. Current state and the missing boundary
@@ -1040,6 +1045,8 @@ and entry criteria for later delivery; they do not expand the V1 definition of d
 - Generate typed built-in binding maps, deterministic built-in index and Host Execution
   Release attestations binding package source to the compiled host build.
 - Add read-only App Registry and `/api/apps` projection.
+- Add the clean-room product-capability harness and `catalog-only` / `development` /
+  `product-proven` evidence states; labels are computed from retained proof reports.
 - Add Apps as the default view inside Apps & Capabilities.
 - Show Pollinate as `catalog-only`; expose no lifecycle control or ownership claim.
 
@@ -1053,8 +1060,12 @@ and entry criteria for later delivery; they do not expand the V1 definition of d
 - Delete superseded Pollinate hand registration in the same cutover.
 - Prove disable and uninstall remove executable resolution while retaining products and
   preferences; data purge remains a separately confirmed, dependency-checked action.
-- Run Desktop and Hive profile fixtures; a missing required Hive capability blocks Hive
-  activation without weakening Desktop behavior.
+- Pass the clean-room packaged-product proof on each claimed Desktop profile before
+  Pollinate is labelled `product-proven`.
+- Run Hive profile accounting and fixtures, but keep Pollinate-on-Hive below
+  `product-proven` while Host Execution Release creation depends on the live local DDD;
+  a missing required Hive capability blocks Hive activation without weakening Desktop
+  behavior.
 
 ### Phase C — host-adapter contract
 
@@ -1128,6 +1139,8 @@ and entry criteria for later delivery; they do not expand the V1 definition of d
 |---|---|
 | malformed built-in manifest or unresolved binding | build fails; broken product is not shipped |
 | package source digest lacks a matching host execution attestation | activation fails; source metadata cannot stand in for compiled or rendered bytes |
+| clean-room run needs source checkout, live SwarmWS, global Skill, untracked file or prior database | product proof fails and the App remains `development`/`catalog-only` |
+| a package or proof record contains an absolute developer path or undeclared local input | build/proof fails with the exact path/input; no product capability claim is emitted |
 | rollback execution release is absent from the current host | rollback is unavailable and surfaced explicitly; runtime never substitutes another host build |
 | malformed installed manifest | App disabled and surfaced as invalid; Core continues |
 | duplicate lifecycle owner | activation fails before desired-state commit |
@@ -1247,6 +1260,44 @@ Tests are written before each implementation phase.
 - Mutation checks remove ownership filtering, generation checks, requiredness accounting,
   package closure and final-destination checks; their corresponding tests turn red.
 
+### Product-capability proof
+
+Repository tests prove source correctness; they do not by themselves prove a product
+capability. Before App Center labels any App/profile `product-proven`, a release candidate
+must pass this clean-room sequence:
+
+1. create the candidate from tracked source at an immutable commit; untracked files are
+   absent and generated inputs are recreated rather than copied from the developer tree;
+2. use a new empty HOME/app-data root with no `~/.swarm-ai`, global Skills, ambient
+   credentials, DDDs, caches, prior database or developer configuration; any required
+   provider credential is injected afterward only through the declared product setup/Core
+   secret path, belongs to a dedicated least-privilege proof principal rather than the
+   author's ambient identity, and is recorded by reference, never copied into proof artifacts;
+3. install only the produced Host/App artifacts and declared dependencies, then make the
+   source checkout unavailable;
+4. start the supported host/profile and verify Registry identity, Host Execution Release
+   attestation, install, enable, disable, re-enable and retained-data behavior through public
+   product APIs/UI rather than importing source modules or reading test fixtures directly;
+5. run positive, negative and ablation fixtures, then scan the package, logs and generated
+   records for absolute developer paths, usernames, undeclared files and secret values;
+6. reproduce the package/output digests on a second clean builder and execute the relevant
+   platform smoke test on another clean runtime environment.
+
+Every proof report records source commit, package/execution/activation digests, host build,
+profile and contract versions, exact artifact paths/digests, environment declaration,
+fixtures, omissions and failures. A local checkout test, the author's live SwarmWS, a
+pre-existing daemon database or an already-installed global Skill cannot satisfy any step.
+A failure leaves the App `development` or `catalog-only`; it never becomes a warning on a
+`product-proven` label.
+
+SwarmAI Hive has an explicit current blocker: `hive/release.sh` consumes the author's live
+SwarmAI DDD and declares packaging local-only. That path may remain a private deployment
+workflow, but it is not product proof. Pollinate-on-Hive cannot be labelled product-proven
+until Hive Host Execution Release creation accepts a declared immutable seed/deployment
+input by digest and is reproducible without an implicit `~/.swarm-ai/SwarmWS` dependency.
+Private DDD content remains deployment data and is never folded into the canonical App or
+Host Execution Release digest as an undeclared build input.
+
 ### Measured hot-path proof
 
 Instrument startup/reconciliation separately from send and stream. Compare before and
@@ -1288,6 +1339,9 @@ paths. Report measured timings, but do not freeze machine-specific numbers into 
     P1 subsets require explicit target-scoped optionality for every omission.
 19. Disable, uninstall and purge are separate transitions; uninstall retains tombstoned data
     and provenance by default, while purge is separately confirmed and dependency-checked.
+20. A product capability claim requires a reproducible packaged artifact running in a clean
+    environment without source checkout or developer-local state; current local-only Hive
+    DDD seeding cannot satisfy that claim.
 
 ## 15. Deferred decisions
 
@@ -1315,6 +1369,9 @@ V1 is complete only when:
 
 - Pollinate has one manifest, one App ownership record and an attested Host Execution
   Release matching the compiled host build;
+- Pollinate passes the clean-room packaged-product proof on every profile labelled
+  `product-proven`, with no source checkout, live SwarmWS, global Skill, prior database,
+  untracked input, absolute developer path or secret in its artifact/proof records;
 - every Pollinate resource is explicitly accounted for on SwarmAI Desktop and Hive
   profiles, with missing required Hive capabilities blocking only Hive activation;
 - App Center, Work-nav visibility and Skill resolution consume that record;
@@ -1472,6 +1529,14 @@ The same pass made `grants_ref` an immutable complete grant-set snapshot per gra
 so changing one permission cannot leave sibling grant rows with ambiguous authority. Targeted
 architecture and security reviews of these corrections returned CLEAN with no BLOCKER, HIGH
 or MEDIUM findings.
+
+A final product-readiness check then found that source tests and host attestations still did
+not prove independence from the author's machine. The design now requires a reproducible
+packaged clean-room run with empty app data, no source checkout/global Skills/untracked
+inputs, absolute-path and secret scans, ablation and a second builder/runtime. It also records
+the current `hive/release.sh` live-DDD dependency as an explicit blocker for any
+Pollinate-on-Hive `product-proven` claim rather than treating local-only packaging as product
+evidence.
 
 No reviewer finding was dismissed as an accepted deviation. The remaining deliberate
 boundary is that V1 proves a trusted built-in product boundary, not third-party
