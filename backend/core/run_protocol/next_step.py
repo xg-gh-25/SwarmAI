@@ -181,6 +181,23 @@ def next_step(engine, *, previous_stage: str | None = None,
                        why=f"the run is paused ({reason})")
         return out
     if stage in _ARTIFACT_STAGES:
+        if stage == "evaluate":
+            gate = engine.gate0_status()
+            disposition = gate["disposition"] if gate["required"] else None
+            if disposition in {"needs_handout", "needs_round_2"}:
+                out.update(action="write_artifact",
+                           command=_cmd(engine, "gate0-start --artifact -"),
+                           why=("Gate-0 is required for this requirement: pass the same "
+                                "requirements artifact on stdin and dispatch the returned "
+                                "handout `prompt` unchanged" if disposition == "needs_handout"
+                                else "Gate-0's first answer did not clear the frame: start "
+                                "its second and last round the same way"))
+                return out
+            if disposition == "awaiting_answer":
+                out.update(action="wait", why="wait for the Gate-0 answer; dispatch its "
+                           "`spawn_prompt` again if it was never spawned")
+                out["handouts"] = waiting_handouts(engine._since_last_answer(), "evaluate")
+                return out
         out.update(action="write_artifact",
                    command=_cmd(engine, "stage-complete --artifact -"),
                    why=f"write the {stage} artifact the card describes and pass it on stdin")

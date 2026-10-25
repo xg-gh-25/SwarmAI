@@ -1073,6 +1073,24 @@ class RunEngine:
         return latest.get("state") != "parsed" or \
             latest.get("verdict") in {"WRONG-FRAME", "UNSUPPORTED"}
 
+    def gate0_status(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        """Where Gate-0 stands for this EVALUATE, the one rule the commands and ``next``
+        both read (design 2026-10-26-pipeline-two-ends §5). *requirements*: the artifact
+        about to be completed (default: the stored one). ``{"required": bool,
+        "disposition": "needs_handout" | "awaiting_answer" | "needs_round_2" |
+        "framing_rejected" | "already_satisfied" | "continue" | None}``."""
+        state = self.projection()
+        if state["status"] != "active" or state["stage"] != "evaluate" \
+                or lifecycle.caps(state["profile"]).gate0 == "never":
+            return {"required": False, "disposition": None}
+        value = requirements if requirements is not None else self._read_json(
+            self.run_dir / "artifacts" / "requirements.json", {})
+        readings = ((value.get("understanding") or {}).get("readings")
+                    if isinstance(value, Mapping) else None)
+        if not lifecycle.gate0_required(state["profile"], readings):
+            return {"required": False, "disposition": None}
+        return {"required": True, "disposition": self._gate0_disposition()}
+
     def _gate0_disposition(self) -> str:
         events = self._since_last_answer()
         answered = len(events) != len(self.store.read_events())
@@ -1084,7 +1102,9 @@ class RunEngine:
         answers = [event for event in events
                    if event.get("kind") == "answer"
                    and event.get("payload", {}).get("expert_id") == "gate0-skeptic"]
-        if not handouts or len(answers) < len(handouts):
+        if not handouts:
+            return "needs_handout"     # nothing dispatched yet: gate0-start (two-ends §5)
+        if len(answers) < len(handouts):
             return "awaiting_answer"
         verdicts = [event.get("payload", {}).get("verdict") for event in answers
                     if event.get("payload", {}).get("state") == "parsed"]
@@ -1801,16 +1821,14 @@ class RunEngine:
             self._settle(); self.write_projection()
             return {"ok": False, "error": str(exc), **result, "state": self.projection()}
         if stage == "evaluate" and lifecycle.caps(profile).gate0 != "never":
-            readings = ((artifact.get("understanding") or {}).get("readings")
-                        if isinstance(artifact, Mapping) else None)
-            gate_required = lifecycle.gate0_required(profile, readings)
-            if gate_required:
-                disposition = self._gate0_disposition()
+            gate = self.gate0_status(artifact if isinstance(artifact, Mapping) else None)
+            if gate["required"]:
+                disposition = gate["disposition"]
                 if disposition == "continue" and self._gate0_ended_at_cap():
                     # both rounds ran and the second still did not clear the frame:
                     # the gate stops at its cap rather than passing (K3 review r3)
                     self.record_cap_exceeded("gate0_round", stage="evaluate")
-                if disposition in {"awaiting_answer", "needs_round_2"}:
+                if disposition in {"needs_handout", "awaiting_answer", "needs_round_2"}:
                     self.write_projection()
                     out = {"ok": False, "gate0": disposition, "state": self.projection()}
                     if disposition == "awaiting_answer":

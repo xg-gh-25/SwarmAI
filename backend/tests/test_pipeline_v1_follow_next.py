@@ -5,18 +5,18 @@ What is tested: a follower that reads only `next` (action + command) and supplie
 artifact the named command takes drives a run from create to its terminal state. It
 knows no stage rules, the way an agent uses the pipeline. Cases: every profile; full
 with two readings (Gate-0 required); BUILD failing three times (not-landed path); main
-moving during DELIVER. A command that fails is not an error by itself (`next` must lead
+moving during DELIVER; a Gate-0 second round. A command that fails is not an error by itself (`next` must lead
 back); the same steps repeating is.
 
-KNOWN: cases red today, marked xfail(strict=True). A fix that makes one pass turns the
-test red until the case leaves KNOWN; KNOWN may only shrink and ends empty (§8 step 6).
+KNOWN: cases red, marked xfail(strict=True); a fix that makes one pass turns the test
+red until the case leaves KNOWN. Emptied in two-ends step 6; it may only shrink.
 """
 import pytest
 
 from core.run_protocol.lifecycle import PROFILE_STAGES
 from tests.pipeline_v1_rig import SWARM, Rig
 
-KNOWN = {"bugfix", "full-two-readings"}
+KNOWN: set[str] = set()   # emptied in two-ends step 6
 
 
 def _sub(command: str) -> list[str]:
@@ -56,8 +56,10 @@ def _run(r: Rig, sub: list[str], stage: str, step: int) -> dict:
     return r.v1(*sub)
 
 
-def follow(r: Rig, limit: int = 40, before=None) -> tuple[dict, list[str]]:
+def follow(r: Rig, limit: int = 40, before=None, gate0_answers=None) -> tuple[dict, list[str]]:
+    """*gate0_answers*: the Gate-0 verdicts to give, in order (default: SUPPORTED)."""
     trail: list[str] = []
+    gate0_answers = list(gate0_answers or [])
     for step in range(limit):
         status = r.v1("status")
         state, nxt = status["state"], status["next"]
@@ -67,7 +69,8 @@ def follow(r: Rig, limit: int = 40, before=None) -> tuple[dict, list[str]]:
             return state, trail
         if nxt["action"] == "wait":
             for i, h in enumerate(nxt.get("handouts") or []):
-                answer = ("VERDICT: SUPPORTED\nEvidence: backend/core/mod.py"
+                verdict = gate0_answers.pop(0) if gate0_answers else "SUPPORTED"
+                answer = (f"VERDICT: {verdict}\nEvidence: backend/core/mod.py"
                           if state["stage"] == "evaluate" else "NO FINDINGS")
                 r.spawn_reviewer(h.get("spawn_prompt") or h["prompt"], answer,
                                  f"{state['stage']}-{step}-{i}")
@@ -115,6 +118,19 @@ def test_gate0_required_reaches_landed_by_next(tmp_path, monkeypatch, case):
         r.create()
         state, trail = follow(r)
         assert state["landing"] == "landed", (trail, state)
+    finally:
+        r.close()
+
+
+@pytest.mark.parametrize("case", [_case("gate0-second-round")])
+def test_gate0_second_round_reaches_landed_by_next(tmp_path, monkeypatch, case):
+    """First Gate-0 answer negative: `next` starts the second (last) round."""
+    r = Rig(tmp_path, monkeypatch, profile="bugfix")
+    try:
+        r.create()
+        state, trail = follow(r, gate0_answers=["UNSUPPORTED", "SUPPORTED"])
+        assert state["landing"] == "landed", (trail, state)
+        assert sum(1 for s in trail if s.startswith("evaluate:gate0-start")) == 2, trail
     finally:
         r.close()
 
