@@ -3,7 +3,7 @@ title: Pipeline v1 standalone — 在 Claude Code、Codex、Kiro CLI / KiroCrew 
 created: 2026-10-25
 updated: 2026-10-25
 project: SwarmAI
-status: draft r1 — 待 XG 定 §6 的三个问题
+status: r2 — XG 2026-10-25 定了 §6 的三个问题
 ---
 
 # Pipeline v1 standalone
@@ -162,7 +162,14 @@ Codex 文档原话：工具 hook 是"有用的护栏，不是完整的强制边�
 | REFLECT 收尾、回收 | CLI 同步 | CLI 同步 | CLI 同步 | CLI 同步 |
 | token | 量得到 | 尽量（格式不稳定） | 量不到（WARN） | Claude 量得到，其余 WARN |
 
-## 6. 要 XG 定的问题
+## 6. XG 定的三件事（2026-10-25）
+
+- 人工通道用 **a + b**：Claude Code 用 `AskUserQuestion`（PostToolUse 读人的答案，T3 先实测），Codex 和 Kiro 用终端命令 `pipeline-v1 approve`。
+- **没装 hook 也允许跑**：专家回答记为 `relayed`，REPORT 写明。
+- `install-hooks` **默认写用户级**配置，`--project` 才写项目级。
+
+原来的问题：
+
 
 1. **人工通道**：§4.4 选 a + b（Claude 用 AskUserQuestion，其余用终端命令），还是只做 d（外部宿主里人的
    决策和人工落地不支持，只能在 SwarmAI 里做）？前者多一个子命令和 tty 判断，后者范围最小。
@@ -189,3 +196,4 @@ T1 不依赖任何宿主，可以先做。T3–T5 需要本机装有对应的 CL
 ## 修订记录
 
 - r1（2026-10-25）：初稿。宿主能力按 2026-10-25 的官方文档整理（§1）。
+- r2（2026-10-25，XG）：人工通道 a + b；没装 hook 也允许跑；hook 默认写用户级。
