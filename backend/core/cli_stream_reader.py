@@ -33,6 +33,23 @@ Turn ownership (verified against the real CLI, see the design doc §2):
 - A ResultMessage closes the open turn; a claimant turn that never showed its echo is
   logged as ``turn_owner_mismatch``.
 
+Steer claims (``kind="steer"``, design docs/design/2026-10-24-chat-steer.md D3): a
+message written INTO a running turn. Its echo marks where the CLI read it, as a
+``SteerRead`` item in the stream of the turn it lands in:
+
+- the claim's own round (``init`` opened it), or an injected turn nobody consumes
+  yet (transferred as above): ``opened`` -- the claim owns the round;
+- any other open turn (a human turn, a sink-started injected turn, another steer's
+  round): ``folded`` -- the claim ends there and is NEVER merged (no frame is
+  delivered to two streams).
+
+``on_steer_echo(uuid, outcome)`` fires once at the echo; ``on_steer_end(uuid,
+outcome, echo_seen)`` once when the claim ends: ``folded`` (at the echo),
+``opened`` (its round's ResultMessage) or ``reader_closed`` (ended without one:
+close, end of stream, stream error, or an idle before its result). A withdrawn
+claim (``drop_claim``) is not reported. A steer claim is never ended by the idle
+rule for unconsumed claims: the running turn reads it (D6).
+
 Quiescence (``quiescent``): the CLI may be written to only when its last
 ``session_state_changed`` was ``idle`` with no finished-task signal since (a
 ``task_notification`` or a terminal ``task_updated``), no turn open and no claim waiting. Without session-state frames (an older CLI) a ResultMessage
@@ -58,6 +75,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from core.awake_clock import awake_time  # liveness durations exclude sleep
 from collections import OrderedDict
 from typing import Any, Callable, Optional
@@ -114,12 +132,24 @@ def is_message_not_consumed(err: Any) -> bool:
     return isinstance(err, MessageNotConsumed) or str(err).startswith(_NOT_CONSUMED)
 
 
+@dataclass(frozen=True)
+class SteerRead:
+    """In a turn's stream: the CLI read the steer ``uuid`` here (its echo).
+    ``outcome``: ``folded`` (read inside this turn) or ``opened`` (this round is
+    the steer's own). ``client_id``: the message's, for its row key (D4)."""
+    uuid: str
+    client_id: Optional[str]
+    outcome: str
+
+
 class TurnStream:
     """One turn's frames. Async iterator with the ``receive_response()`` contract."""
 
     def __init__(self, kind: str, uuid: Optional[str] = None) -> None:
         self.kind = kind
         self.uuid = uuid
+        self.client_id: Optional[str] = None  # a steer claim's message (D3/D4)
+        self._steer_reported = False  # on_steer_end fired
         self.origin: Optional[dict] = None
         self.echo_seen = False
         self.transferred = False
@@ -178,8 +208,12 @@ class CliStreamReader:
         on_error: Optional[Callable[[], None]] = None,
         on_task: Optional[Callable[[str, Any], None]] = None,
         on_bg_frame: Optional[Callable[[str, Any], None]] = None,
+        on_steer_echo: Optional[Callable[[str, str], None]] = None,
+        on_steer_end: Optional[Callable[[str, str, bool], None]] = None,
     ) -> None:
         self._client = client
+        self._on_steer_echo = on_steer_echo
+        self._on_steer_end = on_steer_end
         self._on_task = on_task
         self._on_bg_frame = on_bg_frame
         self._session_id = session_id
@@ -245,7 +279,8 @@ class CliStreamReader:
         return frozenset(self._bg)
 
     def claim(self, uuid: str, kind: str = "human",
-              notif_mark: Optional[int] = None) -> TurnStream:
+              notif_mark: Optional[int] = None,
+              client_id: Optional[str] = None) -> TurnStream:
         """Register the next turn's owner. Call BEFORE writing the query.
 
         *notif_mark*: the finished-task count the caller saw when it decided the CLI
@@ -255,9 +290,14 @@ class CliStreamReader:
         if self.error is not None:
             raise self.error
         ts = TurnStream(kind, uuid)
+        ts.client_id = client_id
         ts._notif_mark = self._notif_count if notif_mark is None else notif_mark
         self._claims[uuid] = ts
         return ts
+
+    def next_steer(self) -> Optional[TurnStream]:
+        """The earliest-written steer claim the CLI has not read yet, or None."""
+        return next((ts for ts in self._claims.values() if ts.kind == "steer"), None)
 
     def drop_claim(self, uuid: str) -> None:
         """Withdraw a claim whose message was never written (the write failed)."""
@@ -321,6 +361,7 @@ class CliStreamReader:
         The background-task set goes with the stream (the tasks cannot report back)."""
         for ts in (self._open, self._merged, *self._claims.values()):
             if ts is not None:
+                self._steer_ended(ts, "reader_closed")
                 ts._end(exc)
         self._open = None
         self._merged = None
@@ -356,11 +397,36 @@ class CliStreamReader:
         self._open.opened_at = awake_time()
         self._open._put(msg)
 
+    def _steer_read(self, ts: TurnStream, into: TurnStream, outcome: str) -> None:
+        """Put the steer's marker at its echo into *into* and report the echo."""
+        into._put(SteerRead(ts.uuid, ts.client_id, outcome))
+        logger.info("cli_stream_reader.steer_read session_id=%s uuid=%s outcome=%s",
+                    self._session_id, ts.uuid, outcome)
+        if self._on_steer_echo is not None:
+            try:
+                self._on_steer_echo(ts.uuid, outcome)
+            except Exception:  # noqa: BLE001
+                logger.exception("cli_stream_reader.on_steer_echo_failed session_id=%s", self._session_id)
+
+    def _steer_ended(self, ts: TurnStream, outcome: str) -> None:
+        """Report a steer claim's end, once."""
+        if ts.kind != "steer" or ts._steer_reported or ts.closed:
+            return
+        ts._steer_reported = True
+        if self._on_steer_end is not None:
+            try:
+                self._on_steer_end(ts.uuid, outcome, ts.echo_seen)
+            except Exception:  # noqa: BLE001
+                logger.exception("cli_stream_reader.on_steer_end_failed session_id=%s", self._session_id)
+
     def _on_echo(self, uuid: str) -> None:
         """A user message we wrote was consumed by the CLI in the open turn."""
         cur = self._open
         if cur is not None and cur.uuid == uuid:
+            first = not cur.echo_seen
             cur.echo_seen = True
+            if cur.kind == "steer" and first:
+                self._steer_read(cur, cur, "opened")  # its own round (X7/X8, E10)
             return
         claim = self._claims.pop(uuid, None)
         if claim is None:
@@ -370,6 +436,8 @@ class CliStreamReader:
             # an echo outside any turn (should not happen): the claimant owns what follows
             claim.opened_at = awake_time()
             self._open = claim
+            if claim.kind == "steer":
+                self._steer_read(claim, claim, "opened")
             return
         claim.opened_at = cur.opened_at
         if cur.kind == "injected" and not cur.started:
@@ -380,6 +448,14 @@ class CliStreamReader:
             self._open = claim
             logger.info("cli_stream_reader.claim_transferred session_id=%s uuid=%s",
                         self._session_id, uuid)
+            if claim.kind == "steer":
+                self._steer_read(claim, claim, "opened")  # E11 / E13a
+            return
+        if claim.kind == "steer":
+            # read inside a turn that is not its own: folded there, never merged (H4)
+            self._steer_read(claim, cur, "folded")
+            self._steer_ended(claim, "folded")
+            claim._end()
             return
         self._merged = claim
         logger.warning("cli_stream_reader.merged_into_injected session_id=%s uuid=%s open_kind=%s",
@@ -409,6 +485,7 @@ class CliStreamReader:
                     if self._open is not None:
                         logger.error("cli_stream_reader.idle_with_open_turn session_id=%s kind=%s",
                                      self._session_id, self._open.kind)
+                        self._steer_ended(self._open, "reader_closed")
                         self._open._end(TurnAbandoned("the CLI went idle before the turn's result"))
                         if self._merged is not None:
                             self._merged._end(TurnAbandoned("the CLI went idle before the turn's result"))
@@ -488,7 +565,7 @@ class CliStreamReader:
         right after a result) precedes the CLI reading that message and must not
         abandon it."""
         for uuid, ts in list(self._claims.items()):
-            if ts._running_seen:
+            if ts._running_seen and ts.kind != "steer":  # the running turn reads a steer (D6)
                 del self._claims[uuid]
                 logger.error("cli_stream_reader.claim_not_consumed session_id=%s uuid=%s kind=%s",
                              self._session_id, uuid, ts.kind)
@@ -503,6 +580,7 @@ class CliStreamReader:
                 logger.error(
                     "cli_stream_reader.turn_owner_mismatch session_id=%s kind=%s uuid=%s origin=%s",
                     self._session_id, ts.kind, ts.uuid, ts.origin)
+            self._steer_ended(ts, "opened")
             ts._end()
         self._open = None
         self._merged = None
