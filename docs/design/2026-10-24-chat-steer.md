@@ -500,42 +500,10 @@ v1.7 接受这两点，记在 §10；T22 覆盖"不丢 steer、不死锁"。
 
 ### D7 前端
 
-mock：`docs/design/2026-10-25-chat-steer-ui-mock.html`。用户不知道什么是 tool result 间隙，
-他只关心：我的话它看到没有、什么时候看到的、有没有改变它正在做的事。每个状态回答其中一个问题。
-
-**气泡不移动。** steer 气泡从发出起就待在正在跑的 turn 的最下方（和现在的排队气泡一样在 store
-末尾），live 内容在它上面的 assistant 条目里继续长。被读到时：并入，就在原地固定，新段占位
-`local-{steer_client_id}-asst` 接在它下面；回退，上一段回复在它上面写完，后面的回复接在它下面，
-还是同一个 turn（D6）。两种结果下已显示的东西都不移动、不重挂（design-judgment Surface 6 不变量 10）。
-
-| 状态 | 何时 | 气泡下的一行灰字 | 回答的问题 |
-|---|---|---|---|
-| Waiting | 回执 `steer: true`，或快照 `steering` 里有它 | "Read after the current step · **Stop & send now**"；没有 ✕ | 看到了吗？要等多久？ |
-| Read during the turn | 收到 `user_steered` | "Read during the turn"，重载后保留 | 它照我说的改了吗？ |
-| Read after the reply | outcome `opened`（CLI 写完那段回复才读它，D6 接着读） | "Read after the reply"，重载后保留 | 为什么前面那段回复没理我？ |
-| Queued | 后端选择排队，或 steer 转回排队 | "Queued — sends after you answer the question above" / "…when this turn ends"，有 ✕ | 为什么这条没插进去？ |
-
-- **等待时长不另起计时。** "当前步骤"就是气泡正上方那条 running strip（或 Agents 面板），工具名和
-  计时它已经有了，不在气泡上重复（一件事一个表示）。也不加 spinner：聊天界面只有 header 脉冲和
-  尾部的 bee 两个流式信号。
-- **不可取消要看得出来。** Waiting 没有 ✕，不用虚线和半透明（那是可取消的排队样式）。
-  **Stop & send now** 就是 Stop：进程回收，未读的 steer 按 D8 转回排队，回收完马上发出。很急或者
-  发错时用户有出路，不用新增后端能力。以后做 `priority: now`，这个入口直接换成"立即打断"。
-- **确认靠模型自己说。** 并入后模型通常会先说一句（"Got it, skipping…"），界面不再另加 ✓。
-- **一个 turn 一个结尾。** 并入或回退后的后半段都不另起回复头，用量、耗时、输出卡片只在整个 turn 的
-  末尾出现一次。
-- **排队要说原因。** 回执和快照的 pending 项带 `queued_reason`：`question`（挂着
-  AskUserQuestion）、`permission`、`busy`（开关关、channel、中断 / 重试 / 回收中、别的 claim 在等，
-  统一显示 "sends when this turn ends"）。原因由 D1 的判断给出。问题卡片挂着时，用户最容易把
-  输入框当成回答，标签直接指向上面的问题。
-- **持久化的标签。** 两个标签重载后都要能显示：`confirm_steer` 给 user 行记 `metadata.steered`
-  （`"during"` / `"after"`，D2 表"已读取"一行）。v1.6 回退的行是新 turn 的开头、重载后不带标签；v1.7
-  它在 turn 中间，不带标签就看不出为什么插在这里。
-
-A1 已落地（`76ddabbac`：send / stop / continue 移出 ChatPage，`turnControls.ts`；一个 content
-reducer 在 hook 里），turn 结果卡（`2026-10-25-turn-result-card.md`）也已落地，D7 现在可以单独设计。
-分段的实现读 A1 的 controllers 和 reducer 后定，原则是：
-新段的占位 id 用后端给的 row_key，不在前端另造。
+单独成文：`docs/design/2026-10-25-chat-steer-frontend.md`（mock：`2026-10-25-chat-steer-ui-mock.html`）。
+要点：一个 turn 按 steer 切成几段，每段一个 assistant 气泡，steer 气泡夹在两段之间，和 DB 的行形状一致；
+四种状态（Waiting / Read during / Read after / Queued + 原因）由一个函数从回执、快照和行上的
+`metadata.steered` 推出；被 steer 接着的前一段不当成 turn 结束来排版。
 
 ### D8 Stop
 
