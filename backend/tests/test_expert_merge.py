@@ -96,3 +96,23 @@ def test_review_start_tells_security_a_change_is_high_risk(tmp_path, monkeypatch
         assert "HIGH-RISK CHANGE" not in prompts["correctness"]
     finally:
         r.close()
+
+
+def test_a_retired_expert_id_reads_its_successors_prompt():
+    """A run started before the merge keeps red-team in its events and findings, so
+    its R2 handout asks for red-team's prompt; that must be security's, never the
+    deleted file (FileNotFoundError mid review-address, after events were written)."""
+    from core.run_protocol.review import expert_prompt
+    assert expert_prompt("red-team") == expert_prompt("security")
+    for old in ("spec-compliance", "code-quality", "ux-test"):
+        assert expert_prompt(old) == expert_prompt("correctness")
+    assert expert_prompt("ux") != expert_prompt("correctness")
+
+
+def test_engine_reads_every_expert_prompt_through_expert_prompt():
+    """One place resolves an id to a prompt file: no engine call site opens
+    experts/code/<id>.md itself."""
+    engine = (Path(__file__).resolve().parents[1] / "core" / "run_protocol" / "engine.py")
+    text = engine.read_text(encoding="utf-8")
+    assert '"experts" / "code"' not in text
+    assert text.count("review.expert_prompt(") == 3

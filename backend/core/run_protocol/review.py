@@ -168,6 +168,16 @@ def patterns_block(patterns: Mapping[str, Any]) -> str:
 _RETIRED = {"red-team": "security", "spec-compliance": "correctness",
             "code-quality": "correctness", "ux-test": "correctness"}
 
+_EXPERTS_CODE = Path(__file__).resolve().parents[2] / "experts" / "code"
+
+
+def expert_prompt(expert_id: str) -> str:
+    """The prompt text for *expert_id*, for every handout (R1, R2, incremental). A run
+    started before the §3.5.1 merge keeps its recorded ids (events, findings), so a
+    retired id reads the prompt of the expert that took its job (``_RETIRED``)."""
+    return (_EXPERTS_CODE / f"{_RETIRED.get(expert_id, expert_id)}.md").read_text(
+        encoding="utf-8")
+
 
 def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
               required: Sequence[str] = (), small_change: bool = False,

@@ -1133,7 +1133,6 @@ class RunEngine:
                 stage="review", attempt=len(prior) + 1,
                 payload={"canonical_id": finding_id, "pass": handoff["pass"], **proof})
         roster = orchestrator.r2_roster(set(handoff["addressed"]))
-        expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
         handouts = []
         trees = self._current_code(list(self.contract["expected_repos"]))[1]
         events = self.store.read_events()
@@ -1148,7 +1147,7 @@ class RunEngine:
             handouts.append(orchestrator.handout(
                 expert_id=expert, stage="review", round=2, attempt=len(earlier) + 2,
                 at=_now(),
-                expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
+                expert_instructions=review.expert_prompt(expert),
                 review_input=review_input, finding_ids=ids, code_trees=trees))
         self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
@@ -2092,14 +2091,13 @@ class RunEngine:
                               "reason": f"review patterns unavailable ({patterns['error']})"})
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         handouts = []
-        expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
         events = self.store.read_events()
         prior = [e for e in events if e.get("kind") == "handout" and e.get("stage") == "review"
                  and e.get("round") == 1]
         answers = {e["payload"]["handout_event_id"]: e for e in events
                    if e.get("kind") == "answer" and e.get("stage") == "review"}
         for item in roster:
-            instructions = (expert_root / f"{item['id']}.md").read_text(encoding="utf-8")
+            instructions = review.expert_prompt(item["id"])
             review_input = "\n\n".join(diffs)
             if item["id"] == "correctness":
                 review_input = review.patterns_block(patterns) + "\n\n" + review_input
@@ -2158,7 +2156,6 @@ class RunEngine:
         picked = set(picked_rows)
         roster = ["correctness"] + sorted((picked & earlier) - {"correctness"})
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
-        expert_root = Path(__file__).resolve().parents[2] / "experts" / "code"
         answered = {e["payload"]["handout_event_id"] for e in events
                     if e.get("kind") == "answer"}
         handouts = []
@@ -2176,7 +2173,7 @@ class RunEngine:
             attempt = max((int(e["attempt"]) for e in mine), default=0) + 1
             handouts.append(orchestrator.handout(
                 expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
-                expert_instructions=(expert_root / f"{expert}.md").read_text(encoding="utf-8"),
+                expert_instructions=review.expert_prompt(expert),
                 review_input=(review.high_risk_notice(picked_rows[expert]["reason"])
                               if picked_rows.get(expert, {}).get("high_risk") else "")
                              + "INCREMENTAL REVIEW: only the change since the last review.\n\n"
