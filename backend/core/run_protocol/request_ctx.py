@@ -1,7 +1,7 @@
 """Who is running the pipeline command in this process, and its input (S6-3).
 
 A pipeline command runs in the agent's own process (design usable-by-anyone §3.3.5:
-no daemon execution, no token). ``scripts/pipeline_v1.py`` builds one ``Request``
+no daemon execution, no token). ``cli_main`` builds one ``Request``
 from its environment and stdin and runs the command inside ``active``; tests and
 in-daemon callers do the same with the values they mean.
 

@@ -3,7 +3,7 @@
 Why this exists: pipeline stage progress used to reach the chat ONLY as text the
 model chose to write (`## ✦ ⑤ BUILD`). Two full runs in one afternoon wrote none,
 so the user saw a wall of folded tool calls and no stage. The fix observes the
-chokepoint the agent always crosses — an ``pipeline_v1.py`` Bash call carrying a
+chokepoint the agent always crosses — an ``pipeline-v1`` Bash call carrying a
 run id — reads run.json (the authority) when that call returns, and emits one
 persisted ``pipeline_stage`` content block per stage that newly reached a terminal
 status.
@@ -37,43 +37,43 @@ from core import pipeline_stage_events as pse
 class TestParseWatchedRunId:
     def test_run_update_with_literal_run_id(self):
         cmd = ("cd /x/swarmai && source backend/.venv/bin/activate && "
-               "python backend/scripts/pipeline_v1.py run-update --project SwarmAI "
+               "python-backend pipeline-v1 run-update --project SwarmAI "
                "--run-id run_d9c6d3c0 --stage-json '{\"stage\":\"think\"}'")
         assert pse.parse_watched_run_id(cmd) == "run_d9c6d3c0"
 
     def test_any_subcommand_counts(self):
         for sub in ("publish", "advance", "stage-complete", "stage-start", "run-get"):
-            cmd = f"python backend/scripts/pipeline_v1.py {sub} --project P --run-id run_ab12"
+            cmd = f"python-backend pipeline-v1 {sub} --project P --run-id run_ab12"
             assert pse.parse_watched_run_id(cmd) == "run_ab12", sub
 
     def test_id_followed_directly_by_a_shell_operator(self):
         assert pse.parse_watched_run_id(
-            "python pipeline_v1.py run-get --run-id run_ab; echo exit=$?") == "run_ab"
+            "python-backend pipeline-v1 run-get --run-id run_ab; echo exit=$?") == "run_ab"
         assert pse.parse_watched_run_id(
-            "python pipeline_v1.py run-get --run-id run_ab&& echo ok") == "run_ab"
+            "python-backend pipeline-v1 run-get --run-id run_ab&& echo ok") == "run_ab"
 
     def test_the_last_artifact_cli_call_owns_the_run_id(self):
         # an id quoted earlier (heredoc / echo) is not the call that runs
         cmd = ("cat <<EOF\nold: --run-id run_old\nEOF\n"
-               "python backend/scripts/pipeline_v1.py stage-complete --run-id run_new")
+               "python-backend pipeline-v1 stage-complete --run-id run_new")
         assert pse.parse_watched_run_id(cmd) == "run_new"
 
     def test_the_last_assignment_before_the_reference_wins(self):
         assert pse.parse_watched_run_id(
-            "R=run_a; echo x; R=run_b; python pipeline_v1.py advance --run-id $R") == "run_b"
+            "R=run_a; echo x; R=run_b; python-backend pipeline-v1 advance --run-id $R") == "run_b"
         # an assignment AFTER the call cannot be its value
         assert pse.parse_watched_run_id(
-            "python pipeline_v1.py advance --run-id $R; R=run_late") is None
+            "python-backend pipeline-v1 advance --run-id $R; R=run_late") is None
 
     def test_equals_form(self):
         assert pse.parse_watched_run_id(
-            "python pipeline_v1.py advance --run-id=run_x9 --state build") == "run_x9"
+            "python-backend pipeline-v1 advance --run-id=run_x9 --state build") == "run_x9"
 
     def test_shell_variable_run_id_is_not_guessed(self):
         assert pse.parse_watched_run_id(
-            'python backend/scripts/pipeline_v1.py run-update --run-id "$RID" --status running') is None
+            'python-backend pipeline-v1 run-update --run-id "$RID" --status running') is None
         assert pse.parse_watched_run_id(
-            "python backend/scripts/pipeline_v1.py run-update --run-id $RID") is None
+            "python-backend pipeline-v1 run-update --run-id $RID") is None
 
     def test_variable_assigned_in_the_same_command_is_resolved(self):
         # Each Bash call is a fresh shell, so a $VAR run id can only come from an
@@ -81,20 +81,20 @@ class TestParseWatchedRunId:
         # (Real shapes: data.db replay, 168 of 170 such calls.)
         assert pse.parse_watched_run_id(
             "source backend/.venv/bin/activate\nRID=run_da39669c\n"
-            "python backend/scripts/pipeline_v1.py advance --run-id $RID --state review") == "run_da39669c"
+            "python-backend pipeline-v1 advance --run-id $RID --state review") == "run_da39669c"
         assert pse.parse_watched_run_id(
-            'export RUN="run_1b2655df" && python pipeline_v1.py run-update --run-id "${RUN}" --status x'
+            'export RUN="run_1b2655df" && python-backend pipeline-v1 run-update --run-id "${RUN}" --status x'
         ) == "run_1b2655df"
         # a flag bundle in a variable still carries the literal id
         assert pse.parse_watched_run_id(
-            'P="--project SwarmAI --run-id run_bfd8b9d3"; python pipeline_v1.py run-update $P --profile full'
+            'P="--project SwarmAI --run-id run_bfd8b9d3"; python-backend pipeline-v1 run-update $P --profile full'
         ) == "run_bfd8b9d3"
         # an assigned value that is not a valid id is still rejected
         assert pse.parse_watched_run_id(
-            "RID=../../x; python pipeline_v1.py advance --run-id $RID") is None
+            "RID=../../x; python-backend pipeline-v1 advance --run-id $RID") is None
         # a different variable's assignment does not count
         assert pse.parse_watched_run_id(
-            "OTHER=run_aa; python pipeline_v1.py advance --run-id $RID") is None
+            "OTHER=run_aa; python-backend pipeline-v1 advance --run-id $RID") is None
 
     def test_not_artifact_cli(self):
         assert pse.parse_watched_run_id("python other.py --run-id run_x1") is None
@@ -102,7 +102,7 @@ class TestParseWatchedRunId:
 
     def test_traversal_shaped_id_rejected(self):
         assert pse.parse_watched_run_id(
-            "python pipeline_v1.py run-update --run-id ../../etc") is None
+            "python-backend pipeline-v1 run-update --run-id ../../etc") is None
 
     def test_non_string(self):
         assert pse.parse_watched_run_id(None) is None
@@ -110,13 +110,13 @@ class TestParseWatchedRunId:
 
 
 def test_pipeline_v1_commands_are_watched():
-    assert pse.is_run_create("python backend/scripts/pipeline_v1.py create --project P")
+    assert pse.is_run_create("python-backend pipeline-v1 create --project P")
     assert not pse.is_run_create(
-        "python backend/scripts/pipeline_v1.py status --project P --run-id run_v1")
+        "python-backend pipeline-v1 status --project P --run-id run_v1")
     for command in ("status", "gate0-start", "stage-complete", "review-start",
                     "push-status", "land", "review-address", "reflect-prepare",
                     "events"):
-        cmd = f"python backend/scripts/pipeline_v1.py {command} --project P --run-id run_v1"
+        cmd = f"python-backend pipeline-v1 {command} --project P --run-id run_v1"
         assert pse.parse_watched_run_id(cmd) == "run_v1", command
 
 
@@ -292,8 +292,8 @@ def _isolated_queue():
     permission_manager.clear_session("sess-test")
 
 
-CLI = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
-       "backend/scripts/pipeline_v1.py run-update --project SwarmAI --run-id {rid} "
+CLI = ("cd /x/swarmai && \"$SWARM_BACKEND_BIN\" pipeline-v1 "
+       "run-update --project SwarmAI --run-id {rid} "
        "--stage-json '{{\"stage\":\"think\",\"status\":\"completed\"}}'")
 
 
@@ -663,7 +663,7 @@ def test_the_requirement_and_run_id_rules_are_the_protocols(tmp_path, monkeypatc
     _write_run(tmp_path, "run_req1", {"stages": {}, "requirement": "forged words"})
     assert pse.read_stage_state("run_req1")["requirement"] in ("", None)
     long_id = "run_" + "a" * 80
-    assert pse.parse_watched_run_id(f"python pipeline_v1.py status --run-id {long_id}") == long_id
+    assert pse.parse_watched_run_id(f"python-backend pipeline-v1 status --run-id {long_id}") == long_id
 
 
 def test_a_run_document_swapped_for_a_symlink_mid_check_is_never_read(tmp_path, monkeypatch):

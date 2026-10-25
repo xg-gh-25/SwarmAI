@@ -131,8 +131,8 @@ def test_a_new_turn_announces_a_running_run_again(monkeypatch):
     assert again[0]["requirement"] == "Do X"
 
 
-RUN_CREATE = ("cd /x/swarmai && source backend/.venv/bin/activate && python "
-              "backend/scripts/pipeline_v1.py create --project SwarmAI --requirement 'Do X'")
+RUN_CREATE = ("cd /x/swarmai && \"$SWARM_BACKEND_BIN\" pipeline-v1 "
+              "create --project SwarmAI --requirement 'Do X'")
 
 
 def _created(tu, out):
@@ -195,11 +195,11 @@ def test_run_create_result_inside_an_assistant_message_also_announces(monkeypatc
 
 @pytest.mark.parametrize("command,expected", [
     (RUN_CREATE, True),
-    ("python pipeline_v1.py create --project P --requirement R", True),
-    ('python "backend/scripts/pipeline_v1.py" create --project P', True),
-    ("python pipeline_v1.py run-create --project P --requirement R", False),
-    ("python pipeline_v1.py run-update --project P --run-id run_a --stage-json '{\"s\":\"run-create\"}'", False),
-    ("python pipeline_v1.py create --project P && python pipeline_v1.py status --run-id run_a", False),
+    ("python-backend pipeline-v1 create --project P --requirement R", True),
+    ('python-backend pipeline-v1 create --project P', True),
+    ("python-backend pipeline-v1 run-create --project P --requirement R", False),
+    ("python-backend pipeline-v1 run-update --project P --run-id run_a --stage-json '{\"s\":\"run-create\"}'", False),
+    ("python-backend pipeline-v1 create --project P && python-backend pipeline-v1 status --run-id run_a", False),
     ("echo run-create", False),
     (None, False),
 ])

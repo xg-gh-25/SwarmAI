@@ -24,7 +24,7 @@ tier: lazy
 # Autonomous Pipeline
 
 > One requirement in → a landed, audited delivery out, through the event-sourced Pipeline v1
-> protocol (`backend/scripts/pipeline_v1.py`). Deterministic checks own every stage exit,
+> protocol (`"$SWARM_BACKEND_BIN" pipeline-v1`). Deterministic checks own every stage exit,
 > the landing and push readiness; the model proposes, the checks dispose.
 
 > This skill loads full instructions on activation. Read INSTRUCTIONS.md before proceeding.

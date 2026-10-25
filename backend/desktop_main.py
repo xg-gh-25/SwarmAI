@@ -8,7 +8,7 @@ system Python:
 
 - ``daemon [--host H] [--port N]`` — the HTTP backend (also the default when the first
   argument is a flag or absent, which is how launchd and Tauri start it).
-- ``pipeline-v1 <args>`` — the pipeline CLI (``scripts/pipeline_v1.py``). Not supported on
+- ``pipeline-v1 <args>`` — the pipeline CLI (``core/run_protocol/cli_main.py``). Not supported on
   Windows: it says so and exits 2.
 - ``py <script.py> [args]`` / ``py -m <module> [args]`` / ``py -c <code> [args]`` — run
   Python with the interpreter and modules this program carries (``runpy``). Product code
@@ -99,7 +99,7 @@ def run_pipeline_v1(argv: "list[str]") -> int:
         print(json.dumps({"ok": False, "error": "unsupported_platform",
                           "message": WINDOWS_PIPELINE_MESSAGE}))
         return 2
-    from scripts.pipeline_v1 import main as pipeline_main
+    from core.run_protocol.cli_main import main as pipeline_main
     return pipeline_main(argv)
 
 

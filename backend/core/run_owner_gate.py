@@ -95,7 +95,7 @@ def _opt(tokens: list[str], name: str) -> "str | None":
 
 def parse_cli_calls(command: str) -> "tuple[list[dict], bool]":
     """(calls, single) for *command*: the shared recogniser ``core.pipeline_command``
-    (both the ``"$SWARM_BACKEND_BIN" pipeline-v1`` form and the legacy script form)."""
+    (the ``"$SWARM_BACKEND_BIN" pipeline-v1`` form)."""
     from core import pipeline_command
     return pipeline_command.calls(command)
 

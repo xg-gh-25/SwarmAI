@@ -2,7 +2,7 @@
 """CLI for the artifact registry, DDD maintenance and the release CI gate.
 
 Called by the agent via bash. A standalone script with no FastAPI dependency.
-Pipeline runs are not here: Pipeline v1 runs live in ``scripts/pipeline_v1.py``.
+Pipeline runs are not here: Pipeline v1 runs live in ``"$SWARM_BACKEND_BIN" pipeline-v1``.
 
 Usage:
     python artifact_cli.py discover --project SwarmAI --types research,alternatives [--full]
@@ -103,7 +103,7 @@ def _read_json_arg(raw: str, argname: str) -> str:
 def cmd_publish(args, reg: ArtifactRegistry) -> None:
     """Publish a bare artifact (no run, no stage): manifest-tracked, read by id.
     Standalone skills (s_evaluate on ESCALATE, s_qa standalone) emit an
-    artifact this way; Pipeline v1 run documents go through ``pipeline_v1.py``."""
+    artifact this way; Pipeline v1 run documents go through ``pipeline-v1``."""
     _raw = _read_json_arg(args.data, "--data")
     try:
         data = json.loads(_raw)

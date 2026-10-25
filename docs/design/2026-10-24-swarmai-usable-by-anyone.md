@@ -563,6 +563,7 @@ S6 拆分（r16，2026-10-24）。每步一个或几个 commit，每步结束时
 | S6-3 | 删签名（§3.3.5）：事件改为只追加日志加校验和；删 `authority.key`、`allow_hook_writer`、`daemon_exec`、`hook_token`；pipeline 命令回到本地执行；保留 `_with_session`、操作锁、owner 转移；`audit_marker_write_gate` 只留提醒 | S6-1（runner 的 lease 和 token 已随 S6-1 删掉） |
 | S6-4 | 通用化：DESIGN_SPEC 测试引用改为不透明路径；RQ-3、RQ-8b 词表改进 Gate-0 检查清单；review 去掉 Python/React 启发式，security 按声明和 `.swarmai/review.md` 派；通用 review 清单，SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`；专家 prompt 去掉 RP 编号；REFLECT 未知项目回退；五维审计改读验证报告；专家合并（§3.5.1：red-team 并入 security，删 spec-compliance、code-quality，operational 通用化，ux-test 改为 ux，删 `spawn_as`） | S6-2 |
 | S6-5 | 收尾：删旧命令形式（`python …/pipeline_v1.py`）和 `utils/source_repo.py`；删 shared 模式和 `SWARM_WORKTREE_MODE`，测试改用隔离 worktree；`run_worktree.code_repos` 改用 `governed_repo_roots`；skill 卡片重写；重写受影响的 E2E 测试 | S6-1 至 S6-4 |
+| S6-5a（已做） | 删 `backend/scripts/pipeline_v1.py`（CLI 搬到 `core/run_protocol/cli_main.py`，只经 `pipeline-v1` 子命令进入）和 `utils/source_repo.py`、构建里的 `source_repo.json`；`pipeline_command` 只认 `"$SWARM_BACKEND_BIN" pipeline-v1` / `python-backend` 一种形式；`next_step` 的 `_cmd` 不再带工具名；测试 rig 用指向当前解释器的 `python-backend` 启动器跑程序形式 | S6-4 |
 | 验收 | G1 的通用 pipeline 部分：一个非 Python 样例仓库从 create 到 land 走通；daemon 不在线时 pipeline 照常工作 | S6-5 |
 
 
@@ -611,3 +612,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r20（2026-10-25）：§3.4.1 记下 gate 和专家的前后对比；新增 §3.5.2：通用清单就是专家 prompt，仓库自己的清单和 security 触发条件放在它的 `.swarmai/review.md`（在 run 的 base 读取），security 只按声明派，产品里没有内置的路径或 API 判断；SwarmAI 的 `REVIEW_PATTERNS.md` 搬进它的 `.swarmai/review.md`。S6-4b 实施。
 - r21（2026-10-25）：S6-4c 实施：DESIGN_SPEC 测试引用改为不透明的仓库引用（路径 + 可选测试名），`kind` 可选；RQ-3、RQ-8b 和词表删除，措辞检查进 Gate-0 第 5 问（§3.3.4）。
 - r22（2026-10-25）：S6-4d 实施：REFLECT 的未知项目回退（`kept_in_run`，REPORT 列出）；五维审计改读验证报告，trace 矩阵去掉结果列，Quality 只把 R2 确认过的 reported_test 关闭算作关闭。S6-4 全部完成。
+- r23（2026-10-25）：S6-5a 实施：pipeline CLI 只剩 `"$SWARM_BACKEND_BIN" pipeline-v1` 一种形式；脚本和 `source_repo` 删除。

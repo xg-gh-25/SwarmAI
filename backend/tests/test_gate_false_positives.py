@@ -27,7 +27,7 @@ from core.security_hooks import (
     _discards_work,
 )
 
-CLI = ("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_v1.py land "
+CLI = ("python-backend pipeline-v1 land "
        "--project SwarmAI --run-id run_x --stage deliver")
 
 # An edit script whose text names rebase and has an odd apostrophe (the shlex split of
@@ -150,7 +150,7 @@ def test_the_cli_call_first_gets_the_token(cmd):
     b = _token_binding(cmd)
     assert b is not None
     head, rest = b
-    assert rest.startswith("/repo/backend/.venv/bin/python /repo/backend/scripts/pipeline_v1.py")
+    assert rest.startswith("python-backend pipeline-v1")
     assert cmd == head + rest
 
 

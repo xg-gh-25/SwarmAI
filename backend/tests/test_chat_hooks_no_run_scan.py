@@ -42,7 +42,7 @@ async def test_reflect_trigger_returns_before_the_run_lookup(monkeypatch):
     loop_thread = threading.get_ident()
 
     await asyncio.wait_for(
-        hook({"tool_input": {"command": "python pipeline_v1.py land"}}, "t", None), 1.0)
+        hook({"tool_input": {"command": "python-backend pipeline-v1 land"}}, "t", None), 1.0)
     release.set()
     for _ in range(100):
         if "thread" in seen:

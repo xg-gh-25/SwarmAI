@@ -51,13 +51,12 @@ def _code_spans(text: str) -> list[str]:
 def test_every_pipeline_v1_command_in_the_cards_parses():
     import shlex
     import sys
-    sys.path.insert(0, str(ROOT.parents[2] / "scripts"))
-    import pipeline_v1
+    from core.run_protocol import cli_main as pipeline_v1
     parser = pipeline_v1.parser()
     seen = 0
     for doc in DOCS:
         for span in _code_spans(doc.read_text(encoding="utf-8")):
-            word = next((w for w in ("pipeline-v1 ", "pipeline_v1.py ") if w in span), None)
+            word = "pipeline-v1 " if "pipeline-v1 " in span else None
             if word is None:
                 continue
             argv = span.split(word, 1)[1]
@@ -83,7 +82,6 @@ def test_every_field_name_in_the_cards_exists_in_the_protocol():
     appear in the protocol code: a renamed field leaves no stale card behind."""
     source = "\n".join(p.read_text(encoding="utf-8") for p in
                        [*(ROOT.parents[2] / "core" / "run_protocol").glob("*.py"),
-                        ROOT.parents[2] / "scripts" / "pipeline_v1.py",
                         ROOT.parents[2] / "core" / "pipeline_profiles.py"])
     missing = []
     for doc in DOCS:
@@ -109,8 +107,7 @@ def test_every_option_in_the_cards_exists_and_no_card_names_the_runner():
     direct create always carries --requirement. S6-1: the pipeline no longer runs tests,
     so no card or skill doc names the old runner or its modes."""
     import sys
-    sys.path.insert(0, str(ROOT.parents[2] / "scripts"))
-    import pipeline_v1
+    from core.run_protocol import cli_main as pipeline_v1
     known = _options(pipeline_v1.parser())
     for doc in DOCS:
         text = doc.read_text(encoding="utf-8")
@@ -118,7 +115,7 @@ def test_every_option_in_the_cards_exists_and_no_card_names_the_runner():
         for span in _code_spans(text):
             for flag in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", span):
                 assert flag in known, (doc.name, span, flag)
-            if "pipeline_v1.py create" in span and "--profile direct" in span:
+            if "pipeline-v1 create" in span and "--profile direct" in span:
                 assert "--requirement" in span, (doc.name, span)
 
 

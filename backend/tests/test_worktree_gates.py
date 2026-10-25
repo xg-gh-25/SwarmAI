@@ -40,12 +40,9 @@ def _v1_args(line: str):
     """Parse an emitted hint with pipeline_v1's real argparse (the command must run)."""
     import shlex as _shlex
     import sys as _sys
-    _scripts = str(Path(__file__).resolve().parents[1] / "scripts")
-    if _scripts not in _sys.path:
-        _sys.path.insert(0, _scripts)
-    import pipeline_v1
+    from core.run_protocol import cli_main as pipeline_v1
     toks = _shlex.split(line.strip())
-    i = next(n for n, t in enumerate(toks) if t.endswith("pipeline_v1.py") or t == "pipeline-v1")
+    i = next(n for n, t in enumerate(toks) if t == "pipeline-v1")
     return pipeline_v1.parser().parse_args(toks[i + 1:])
 
 def _g(cwd, *a):
@@ -174,7 +171,7 @@ def test_read_of_main_gets_reminder(env):
 
 # ── owner gate (v1 only, r6 §5) ─────────────────────────────────────────────
 # this backend's own CLI: only its scripts receive a token (B round 1)
-CLI = "python " + str(Path(__file__).resolve().parents[1] / "scripts" / "pipeline_v1.py")
+CLI = '"$SWARM_BACKEND_BIN" pipeline-v1'
 LAND = "land --message x"                       # the token command of a normal landing
 
 
@@ -267,7 +264,7 @@ def test_takeover_denied_while_owner_live(env, monkeypatch):
 
 @pytest.mark.parametrize("c", [
     # the script path is only an ARGUMENT of a hookless agent: never gets the token
-    f"claude --print --bare -p go /x/backend/scripts/pipeline_v1.py land --project P "
+    f"claude --print --bare -p go python-backend pipeline-v1 land --project P "
     f"--run-id {RID} --message x",
 ])
 def test_script_mentioned_but_not_run_gets_no_token(env, c):

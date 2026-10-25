@@ -2,7 +2,7 @@
 
 A run is driven ONLY through the shipped surfaces:
 
-- ``scripts/pipeline_v1.py`` as a subprocess, every
+- ``"$SWARM_BACKEND_BIN" pipeline-v1`` as a subprocess, every
   mutating command first passed through the real PreToolUse ``run_owner_gate`` (which
   may hand it the session id) and then executed by ``bash -c``;
 - hook-side events through the real hook functions: the v1 handout tracker
@@ -26,7 +26,24 @@ from pathlib import Path
 from typing import Any
 
 BACKEND = Path(__file__).resolve().parents[1]
-PV1 = BACKEND / "scripts" / "pipeline_v1.py"
+DESKTOP_MAIN = BACKEND / "desktop_main.py"
+
+
+def backend_program(where: Path) -> Path:
+    """A ``python-backend`` launcher for THIS interpreter and this checkout (the dev shim
+    picks the checkout's .venv, which a scratch worktree does not have). Commands run as
+    ``"$SWARM_BACKEND_BIN" pipeline-v1 ...``, the only form since S6-5."""
+    program = where / "bin" / "python-backend"
+    program.parent.mkdir(parents=True, exist_ok=True)
+    program.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} "
+                       f"{shlex.quote(str(DESKTOP_MAIN))} \"$@\"\n", encoding="utf-8")
+    program.chmod(0o755)
+    return program
+
+
+def pv1_argv(program: Path, *args: str) -> list[str]:
+    """argv of one pipeline call through *program* (no shell)."""
+    return [str(program), "pipeline-v1", *args]
 PROJECT = "P"
 SESSION = "aaaaaaaa-0000-4000-8000-000000000001"
 SWARM = "\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"
@@ -146,6 +163,8 @@ class Rig:
             SWARM_TEST_CACHE_DIR=str(tmp_path / "cache"),
             SWARM_TEST_PYTHON=sys.executable, SWARM_TEST_MAX_WORKERS="1",
             SWARM_APP_SESSION_ID=SESSION)
+        self.program = backend_program(tmp_path)
+        env["SWARM_BACKEND_BIN"] = str(self.program)
         self.env = env
         for key in ("SWARM_DATA_DIR", "SWARM_WORKSPACE", "SWARM_WORKTREE_ROOT",
                     "SWARM_WORKTREE_LEDGER", "SWARM_APP_SESSION_ID"):
@@ -190,9 +209,10 @@ class Rig:
         return ["--project", PROJECT, "--run-id", self.run_id]
 
     def v1(self, command: str, *args: str) -> dict:
-        """One pipeline_v1.py call. Mutations go through the real run_owner_gate."""
-        argv = [str(PV1), command, *(self._run_args() if command != "create" else []), *args]
-        out = self.bash(" ".join([shlex.quote(sys.executable), *map(shlex.quote, argv)]))
+        """One "$SWARM_BACKEND_BIN" pipeline-v1 call. Mutations go through the real run_owner_gate."""
+        argv = [command, *(self._run_args() if command != "create" else []), *args]
+        out = self.bash(" ".join(['"$SWARM_BACKEND_BIN"', "pipeline-v1",
+                                  *map(shlex.quote, argv)]))
         if command == "create" and out.get("pipeline_id"):
             self.run_id = out["pipeline_id"]
         # every response names where the run's code is (r6 §2.3: no stage-start)

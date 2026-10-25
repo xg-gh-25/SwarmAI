@@ -232,7 +232,7 @@ implementations in `security_hooks.py`). By category:
    (advisory; Write|Edit, and Bash writes — sed -i, redirects, interpreter heredoc
    patches — to governed context files), the `commit_gate` group (Bash, registered before
    `dangerous_command_gate`, members in order): `run_amend_gate` (in this session's active run,
-   denies `git commit --amend` and points at the run's own landing (`pipeline_v1.py land --message`) instead of letting
+   denies `git commit --amend` and points at the run's own landing (`pipeline-v1 land --message`) instead of letting
    `dangerous_command_gate` park the run on an approval prompt), `active_run_commit_gate` (the run's own logged
    owner session (`RunEngine.owner_session`) may not hand-commit files that run changed
    (`RunEngine.owned_paths`) or its REPORT: they land only through the run's landing; any
@@ -258,7 +258,7 @@ implementations in `security_hooks.py`). By category:
    Per-run worktrees (`docs/design/pipeline-run-worktree.md`; every new run gets them, there is
    no setting to turn them off (usable-by-anyone P7); `$SWARM_WORKTREE_MODE=off` is only the
    test suite's switch until S6): `run_owner_gate`
-   (Bash, right after `commit_gate`; for a mutating `pipeline_v1.py` call it reads the owner
+   (Bash, right after `commit_gate`; for a mutating `pipeline-v1` call it reads the owner
    from the run's logged events, never run.json, takes a crashed owner's run over only when
    the old owner is confirmed not live (writing an `owner_transfer` event first, so human
    authorizations follow the new owner) and denies while the owner is live or its liveness
@@ -270,9 +270,8 @@ implementations in `security_hooks.py`). By category:
    The agent runs `"$SWARM_BACKEND_BIN" pipeline-v1 <sub>` (packaged and dev alike:
    `SWARM_BACKEND_BIN` is the daemon's own program, in dev the `backend/bin/python-backend`
    shim; `desktop_main.py` also has `py <script>` for Python without a system interpreter).
-   The legacy `python …/pipeline_v1.py` form still works until S6-5, when its
-   script resolves to this backend's own source checkout
-   (`utils/source_repo.py`; the packaged daemon reads `source_repo.json`). Pipeline
+   That is the only form (S6-5 removed the `python …/pipeline_v1.py` script and
+   `utils/source_repo.py`; the CLI is `core/run_protocol/cli_main.py`). Pipeline
    commands run in the agent's own process, daemon up or not (S6-3: the daemon execution
    socket, the hook token and the signing key were removed); a command acts only for the
    run's owner session. `run-land` / `accept-finding` / `discard-snapshot` with `--request`
@@ -281,7 +280,7 @@ implementations in `security_hooks.py`). By category:
    only it) and `worktree_write_gate`
    (Write|Edit|MultiEdit|NotebookEdit|Bash|Read|Grep, its own group; keeps an isolated
    run's writes in its own worktrees, denies a write into any other isolatable git repo with
-   the `pipeline_v1.py create --repo` command for a run that includes it (v1 repos are fixed at
+   the `pipeline-v1 create --repo` command for a run that includes it (v1 repos are fixed at
    create), denies a write under a v1 run's `.aidlc/deliverables/` (its landing writes it),
    denies stash / shared-ref changes from a run worktree). Run liveness everywhere
    (`run_index.LIVE_STATUSES`, the worktree sweeper, these gates) counts every non-terminal

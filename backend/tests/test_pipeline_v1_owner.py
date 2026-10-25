@@ -45,8 +45,9 @@ _FORM = {"cli": "script"}
 
 @pytest.fixture(autouse=True, params=["script", "program"])
 def _cli_form(request):
-    """Every test runs with both command forms the gate recognises until S6: the legacy
-    script and the program form the agent is told to run (core.pipeline_command)."""
+    """Every test runs with both program words the gate recognises (core.pipeline_command):
+    the ``$SWARM_BACKEND_BIN`` reference and a ``python-backend`` path ("script" is
+    the historical param name; the script form itself was removed in S6-5)."""
     _FORM["cli"] = request.param
     yield request.param
     _FORM["cli"] = "script"
@@ -54,7 +55,7 @@ def _cli_form(request):
 
 def _cmd(command: str, project: str = "proj") -> str:
     head = ('"$SWARM_BACKEND_BIN" pipeline-v1' if _FORM["cli"] == "program"
-            else "python backend/scripts/pipeline_v1.py")
+            else "/opt/swarm/runtime/2.3.0/python-backend pipeline-v1")
     return f"{head} {command} --project {project} --run-id run_one"
 
 
@@ -74,9 +75,9 @@ def _denied(value) -> bool:
 def test_parser_recognizes_pipeline_v1_mutation(_cli_form):
     calls, single = gate.parse_cli_calls(_cmd("stage-complete"))
     assert single
-    where = ({"script": "backend/scripts/pipeline_v1.py", "form": "script", "program": None}
+    where = ({"form": "program", "program": "/opt/swarm/runtime/2.3.0/python-backend"}
              if _cli_form == "script" else
-             {"script": None, "form": "program", "program": "$SWARM_BACKEND_BIN"})
+             {"form": "program", "program": "$SWARM_BACKEND_BIN"})
     assert calls == [{
         "tool": "pipeline_v1", "sub": "stage-complete", "run_id": "run_one", **where,
         "project": "proj", "stage": None, "status": None, "session_id": None,
@@ -136,7 +137,7 @@ def test_read_only_status_does_not_take_over(tmp_path, monkeypatch):
 
 
 def test_create_rejects_foreign_explicit_session():
-    command = ("python backend/scripts/pipeline_v1.py create --project proj "
+    command = ("python-backend pipeline-v1 create --project proj "
                "--session-id session-b")
     result = gate._decide("session-a", command, {})
     assert _denied(result)

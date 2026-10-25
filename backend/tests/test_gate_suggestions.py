@@ -182,7 +182,7 @@ def iso(tmp_path, monkeypatch):
 
 def test_run_owner_gate_suggestion_passes_the_chain(iso):
     # a key option given twice: the gate suggests the one argparse would act on
-    command = (f"python backend/scripts/pipeline_v1.py land --project P "
+    command = (f"python-backend pipeline-v1 land --project P "
                f"--run-id run_other --run-id {iso['rid']} --message x")
     hits = _chain(command, cwd=iso["wt"])
     assert any("DENY (run owner gate)" in r for _, r in hits), hits

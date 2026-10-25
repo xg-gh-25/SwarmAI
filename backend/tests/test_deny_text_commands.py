@@ -2,7 +2,7 @@
 
 Methodology: collect the deny / warning texts that name a pipeline command, then
 - no text names a retired ``artifact_cli.py run-*`` command (main() refuses them);
-- every ``pipeline_v1.py <sub> ...`` in a text parses with the CLI's own argparse
+- every ``pipeline-v1 <sub> ...`` in a text parses with the CLI's own argparse
   parser after its ``<placeholders>`` are filled in (a real parse, not a regex check).
 """
 from __future__ import annotations
@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BACKEND / "scripts"))
 
 RETIRED = re.compile(r"artifact_cli(?:\.py)?\s+(run-create|run-update|run-commit|run-diff|"
                      r"run-checkpoint|run-resume|run-report|run-observe)\b")
@@ -55,7 +54,7 @@ def test_no_deny_text_names_a_retired_command(name, monkeypatch):
 
 
 def test_every_named_pipeline_v1_command_parses(monkeypatch):
-    import pipeline_v1
+    from core.run_protocol import cli_main as pipeline_v1
     parser = pipeline_v1.parser()
     seen = 0
     for name, text in _texts(monkeypatch).items():

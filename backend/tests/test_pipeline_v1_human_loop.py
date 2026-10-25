@@ -205,7 +205,7 @@ def test_gate_takeover_records_owner_transfer(run, monkeypatch):
     monkeypatch.setattr(security_hooks, "_pipeline_runs_root",
                         lambda: str(run.workspace))
     monkeypatch.setattr(gate, "_owner_live", lambda _owner: False)
-    command = ("python backend/scripts/pipeline_v1.py resume --project P "
+    command = ("python-backend pipeline-v1 resume --project P "
                "--run-id run_human1")
     result = gate._decide(OTHER, command, {"command": command})
     assert (result or {}).get("hookSpecificOutput", {}).get("permissionDecision") != "deny"

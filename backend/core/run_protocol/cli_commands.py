@@ -1,6 +1,6 @@
 """Pipeline v1 commands (design usable-by-anyone §3.3.5, S6-3).
 
-``scripts/pipeline_v1.py`` runs them in the agent's own process, daemon up or not.
+``pipeline-v1`` (``cli_main``) runs them in the agent's own process, daemon up or not.
 Every response is one JSON object; no command pushes or deploys. There is no answer
 command: a human decision is recorded by the daemon (chat question card or
 dashboard), never by the agent.
@@ -66,7 +66,7 @@ def _json_arg(value: str | None) -> dict[str, Any]:
 def _request() -> request_ctx.Request:
     req = request_ctx.current()
     if req is None:
-        raise ValueError("no pipeline request in this process (run scripts/pipeline_v1.py)")
+        raise ValueError('no pipeline request in this process (run "$SWARM_BACKEND_BIN" pipeline-v1)')
     return req
 
 
@@ -106,7 +106,7 @@ def _not_owner(engine: RunEngine, run_id: str) -> "dict | None":
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="pipeline_v1.py")
+    root = argparse.ArgumentParser(prog="pipeline-v1")
     sub = root.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
     create.add_argument("--project", required=True)

@@ -1,5 +1,7 @@
-#!/usr/bin/env python3
-"""Pipeline v1 command line (design usable-by-anyone §3.3.5, S6-3).
+"""Pipeline v1 command line: ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub> ...`` (design
+usable-by-anyone §3.2, §3.3.5). ``desktop_main`` dispatches the ``pipeline-v1``
+subcommand here; there is no other way to run it (S6-5 removed the
+python-plus-script-path form, and its script).
 
 Every command runs in this process (``core/run_protocol/cli_commands.py``), whether
 or not the SwarmAI daemon is up. The caller is the app session in
@@ -15,11 +17,6 @@ import json
 import os
 import sys
 from pathlib import Path
-
-_BACKEND = Path(__file__).resolve().parents[1]
-if str(_BACKEND) not in sys.path:
-    sys.path.insert(0, str(_BACKEND))
-
 
 def parser():
     from core.run_protocol.cli_commands import parser as _parser
@@ -92,6 +89,3 @@ def main(argv: "list[str] | None" = None) -> int:
     print(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
     return rc
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())

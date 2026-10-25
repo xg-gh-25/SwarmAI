@@ -385,6 +385,6 @@ async def test_t9_the_reflect_hook_returns_without_scanning_on_the_loop(tmp_path
     monkeypatch.setattr(reflect_job, "_pool", lambda: MagicMock(submit=lambda *a: submitted.append(a)))
     hook = reflect_job.create_reflect_trigger({"sdk_session_id": "s-t9"})
     t0 = time.perf_counter()
-    await hook({"tool_input": {"command": "python pipeline_v1.py land"}}, "tu", None)
+    await hook({"tool_input": {"command": "python-backend pipeline-v1 land"}}, "tu", None)
     assert (time.perf_counter() - t0) < 0.005
     assert submitted, "the lookup must be handed to the reflect worker"

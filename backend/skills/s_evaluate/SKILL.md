@@ -370,7 +370,7 @@ artifact so context is preserved for async resolution:
   --data '<JSON of evaluation output>'
 ```
 
-**Inside a pipeline run:** stage progress is recorded by `backend/scripts/pipeline_v1.py`
+**Inside a pipeline run:** stage progress is recorded by `"$SWARM_BACKEND_BIN" pipeline-v1`
 (`stage-complete --project <PROJECT> --run-id <RUN_ID>`), never by this skill. Standalone,
 publishing the artifact above is the whole hand-off.
 

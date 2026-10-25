@@ -1,13 +1,10 @@
 """pipeline_command — the one place that recognises a pipeline command in a Bash
 command line (design docs/design/2026-10-24-swarmai-usable-by-anyone.md §3.2, r14).
 
-Two forms are recognised until S6-5 removes the second one:
-
-- program form (the one the agent is told to run, packaged and dev alike):
-  ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub> ...`` — the program word is the
-  ``$SWARM_BACKEND_BIN`` reference or a ``python-backend[.exe]`` path, the next word is
-  ``pipeline-v1``.
-- legacy script form: ``<python> [-flags] .../pipeline_v1.py <args>``.
+One form, packaged and dev alike: ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub> ...`` — the
+program word is the ``$SWARM_BACKEND_BIN`` reference or a ``python-backend[.exe]`` path,
+the next word is ``pipeline-v1``. (The python-plus-script-path form was
+removed in S6-5 together with the script.)
 
 Every other module asks here instead of matching ``pipeline_v1`` / ``pipeline-v1`` text
 (structural test ``tests/test_pipeline_command.py``).
@@ -32,12 +29,11 @@ SUBCOMMAND = "pipeline-v1"
 ENV_VAR = "SWARM_BACKEND_BIN"
 _ENV_REFS = frozenset({f"${ENV_VAR}", f"${{{ENV_VAR}}}"})
 _PROGRAM_NAMES = frozenset({"python-backend", "python-backend.exe"})
-LEGACY_SCRIPTS = {"pipeline_v1.py": "pipeline_v1"}
-_TEXT_MARKERS = ("pipeline_v1", SUBCOMMAND)
+_TEXT_MARKERS = (SUBCOMMAND,)
 _KEY_OPTS = ("--run-id", "--project", "--stage", "--status", "--session-id")
 _SUBST = ("$(", "`", "<(", ">(")
-# a call word, in plain text: `pipeline-v1` or `pipeline_v1.py`
-_CALL_WORD_RE = re.compile(r"(?<![\w.-])(?:pipeline-v1|[^\s'\";&|()]*pipeline_v1\.py)(?![\w.-])")
+# a call word, in plain text
+_CALL_WORD_RE = re.compile(r"(?<![\w.-])pipeline-v1(?![\w.-])")
 
 
 def mentions(command: object) -> bool:
@@ -50,11 +46,11 @@ def _is_program_word(word: str) -> bool:
 
 def program_word(base: str) -> bool:
     """A program word (basename) that runs a pipeline CLI or the backend program."""
-    return base.startswith("pipeline_v1") or base in _PROGRAM_NAMES
+    return base in _PROGRAM_NAMES
 
 
 def segment_mentions(tokens: "list[str]") -> bool:
-    return any(os.path.basename(t) in LEGACY_SCRIPTS or t == SUBCOMMAND for t in tokens)
+    return SUBCOMMAND in tokens
 
 
 def _opt_all(tokens: "list[str]", name: str) -> "list[str]":
@@ -107,15 +103,7 @@ def recognize(prog: "list[str]") -> "dict | None":
     if not prog or not segment_mentions(prog):
         return None
     if _is_program_word(prog[0]) and len(prog) > 1 and prog[1] == SUBCOMMAND:
-        return _call("pipeline_v1", prog[2:], form="program", program=prog[0], script=None)
-    from core.security_hooks import _PY_INTERP_RE
-    j = 1
-    while j < len(prog) and prog[j].startswith("-") and prog[j] not in ("-c", "-m"):
-        j += 1
-    if (_PY_INTERP_RE.match(os.path.basename(prog[0])) and j < len(prog)
-            and os.path.basename(prog[j]) in LEGACY_SCRIPTS):
-        return _call(LEGACY_SCRIPTS[os.path.basename(prog[j])], prog[j + 1:],
-                     form="script", script=prog[j], program=None)
+        return _call("pipeline_v1", prog[2:], form="program", program=prog[0])
     return dict(_FOREIGN)
 
 
@@ -181,6 +169,6 @@ def command_text(args: str) -> str:
     return f'"${ENV_VAR}" {SUBCOMMAND} {args}'.rstrip()
 
 
-__all__ = ["ENV_VAR", "LEGACY_SCRIPTS", "SUBCOMMAND", "calls", "command_text", "is_create",
+__all__ = ["ENV_VAR", "SUBCOMMAND", "calls", "command_text", "is_create",
            "is_land", "last_call_offset", "mentions", "program_word", "recognize",
            "segment_mentions"]

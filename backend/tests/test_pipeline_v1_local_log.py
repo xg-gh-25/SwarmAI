@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from tests.pipeline_v1_rig import PROJECT, PV1, SESSION, Rig
+from tests.pipeline_v1_rig import PROJECT, SESSION, Rig
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -46,10 +46,10 @@ def test_an_adopted_prewarm_session_creates_a_run_it_owns(rig):
     from core import run_owner_gate
     r = rig()
     r.env.pop("SWARM_APP_SESSION_ID")              # a prewarmed subprocess's fixed env
-    command = " ".join(map(shlex.quote, [sys.executable, str(PV1), "create", "--project",
+    command = " ".join(['"$SWARM_BACKEND_BIN"', "pipeline-v1", *map(shlex.quote, ["create", "--project",
                                          PROJECT, "--profile", "direct", "--requirement",
                                          "Swap the operands.", "--repo",
-                                         f"repo={r.repo}"]))
+                                         f"repo={r.repo}"])])
     decided = run_owner_gate._decide(SESSION, command, {"command": command})
     handed = decided["hookSpecificOutput"]["updatedInput"]["command"]
     assert handed.startswith(f"SWARM_APP_SESSION_ID={SESSION} ")

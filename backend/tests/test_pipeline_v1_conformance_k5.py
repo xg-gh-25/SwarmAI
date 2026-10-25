@@ -1,6 +1,6 @@
 """Conformance K5: v13 §D4 acceptance, end to end (conformance spec §3 K5).
 
-Methodology: runs are driven only through ``pipeline_v1.py``
+Methodology: runs are driven only through ``pipeline-v1``
 and the real hooks (``tests/pipeline_v1_rig.py``); assertions read the run's signed
 event log, its sealed finals and git. Covered:
 

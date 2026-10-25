@@ -27,11 +27,10 @@ _TDD_STAGES = {"build", "goal_cycle"}      # the card: TDD on the files changed 
 _HUMAN_PAUSES = {"user_stop", "session_lost"}
 
 
-def _cmd(engine, tool: str, rest: str) -> str:
+def _cmd(engine, rest: str) -> str:
     """The command the agent runs next, with this backend's script by ABSOLUTE path:
     the same command packaged and in dev, wherever the agent's cwd is."""
     from core.worktree_write_gate import v1_command
-    del tool    # always the run CLI now (S6-1: the test runner is gone)
     args = f"{rest} --project {engine.project} --run-id {engine.run_id}".strip()
     return v1_command(args).replace("  ", " ")
 
@@ -84,15 +83,15 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
     if any(row.get("check") == "RV-4" for row in blocking):
         # S6-2: the code changed since a review saw it (TEST sent the run back, or an
         # edit after R2): only the change since then is reviewed
-        return "run", _cmd(engine, "pipeline_v1.py", "review-start"), \
+        return "run", _cmd(engine, "review-start"), \
             "the code changed since the last review: review-start hands out an " \
             "incremental review of that change only"
     if not blocking and (latest or dispatched == 0):
         # every answer is in (or this change needs no expert) and the checks pass
-        return "run", _cmd(engine, "pipeline_v1.py", "stage-complete"), \
+        return "run", _cmd(engine, "stage-complete"), \
             "every review check passes"
     if not latest:
-        return "run", _cmd(engine, "pipeline_v1.py", "review-start"), \
+        return "run", _cmd(engine, "review-start"), \
             "start the review: deterministic checks, then the expert handouts (if it " \
             "dispatches none, complete the stage)"
     # an expert whose latest answer was not parsed produced no findings: one redispatch
@@ -108,11 +107,11 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
                 if states.get(hs[-1]["event_id"]) not in ("parsed", "partial")]
     if unusable:
         if any(len(hs) < 2 for hs in unusable):
-            return "run", _cmd(engine, "pipeline_v1.py", "review-start"), \
+            return "run", _cmd(engine, "review-start"), \
                 "an expert answer could not be parsed: review-start dispatches it once more"
-        return "run", _cmd(engine, "pipeline_v1.py", "stage-complete"), \
+        return "run", _cmd(engine, "stage-complete"), \
             "an expert gave no usable answer twice: the review checks decide the stage"
-    return "fix", _cmd(engine, "pipeline_v1.py", "review-address --artifact -"), \
+    return "fix", _cmd(engine, "review-address --artifact -"), \
         ("address the open findings once (cluster by file ±10 lines), prove each "
          "(review-proof, or the test that shows the fix in your next report), then "
          "review-start for R2")
@@ -148,18 +147,18 @@ def next_step(engine, *, previous_stage: str | None = None,
             out.update(action="wait", why=f"the run is paused ({reason}): resume it only "
                        "when the person asks you to continue")
         else:
-            out.update(action="run", command=_cmd(engine, "pipeline_v1.py", "resume"),
+            out.update(action="run", command=_cmd(engine, "resume"),
                        why=f"the run is paused ({reason})")
         return out
     if stage in _ARTIFACT_STAGES:
         out.update(action="write_artifact",
-                   command=_cmd(engine, "pipeline_v1.py", "stage-complete --artifact -"),
+                   command=_cmd(engine, "stage-complete --artifact -"),
                    why=f"write the {stage} artifact the card describes and pass it on stdin")
         return out
     if stage == "deliver":
         if not _reflect_prepared(engine.store.read_events(), state):
             out.update(action="write_artifact",
-                       command=_cmd(engine, "pipeline_v1.py", "reflect-prepare --artifact -"),
+                       command=_cmd(engine, "reflect-prepare --artifact -"),
                        why="record the run's lessons (zero is allowed) before landing")
         else:
             # LG-1 (S6-1): after main moved and the worktree was synced, the TEST report
@@ -167,12 +166,12 @@ def next_step(engine, *, previous_stage: str | None = None,
             passed, detail = checks.evaluate("LG-1", engine.check_context())
             if not passed:
                 out.update(action="write_artifact",
-                           command=_cmd(engine, "pipeline_v1.py", "report-tests --artifact -"),
+                           command=_cmd(engine, "report-tests --artifact -"),
                            why="the code changed since the TEST report (" + str(detail)[:200]
                            + "): run the tests on the current tree and send the report, "
                            "then land")
             else:
-                out.update(action="run", command=_cmd(engine, "pipeline_v1.py",
+                out.update(action="run", command=_cmd(engine,
                                                       'land --message "<commit message>"'),
                            why="land the run")
         return out
@@ -186,7 +185,7 @@ def next_step(engine, *, previous_stage: str | None = None,
     if stage in _TDD_STAGES or stage == "test":
         # S6-1: the agent tests natively and ends the stage with its validation report
         out.update(action="write_artifact",
-                   command=_cmd(engine, "pipeline_v1.py", "stage-complete --artifact -"),
+                   command=_cmd(engine, "stage-complete --artifact -"),
                    why=("run the change's tests yourself (write the failing test first), "
                         "then pass your report on stdin: "
                         '{"reports": [{"repo", "commands": [{"command", "cwd", "result": '
@@ -196,10 +195,10 @@ def next_step(engine, *, previous_stage: str | None = None,
                         "code in TEST), then pass the report on stdin in the same shape"))
         return out
     if not blocking:
-        out.update(action="run", command=_cmd(engine, "pipeline_v1.py", "stage-complete"),
+        out.update(action="run", command=_cmd(engine, "stage-complete"),
                    why=f"every {stage} check passes")
         return out
-    out.update(action="fix", command=_cmd(engine, "pipeline_v1.py", "stage-complete"),
+    out.update(action="fix", command=_cmd(engine, "stage-complete"),
                why=f"{len(blocking)} {stage} check(s) do not pass yet")
     return out
 

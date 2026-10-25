@@ -2,7 +2,7 @@
 
 What is tested: the PreToolUse Bash gate that keeps the run↔session link intact.
 The run gates only apply to runs whose run.json session_id is this session's id,
-which pipeline_v1.py create reads from SWARM_APP_SESSION_ID. A command that removes
+which pipeline-v1 create reads from SWARM_APP_SESSION_ID. A command that removes
 or overrides that variable would create an unowned run and switch those gates off,
 so the gate denies it ALWAYS.
 
@@ -57,7 +57,7 @@ REMOVALS = [
     f"unset -v {V}",
     f"unset OTHER {V}",
     f"unset \"SWARM_APP_\"SESSION_ID",
-    f"env -u {V} python backend/scripts/pipeline_v1.py create",
+    f"env -u {V} python-backend pipeline-v1 create",
     f"env -u {V} ls",
     f"env -u{V} ls",
     f"env -iu {V} ls",
@@ -72,7 +72,7 @@ REMOVALS = [
     f"declare {V}",
 ]
 OVERRIDES = [
-    f"{V}=forged python backend/scripts/pipeline_v1.py create --project SwarmAI",
+    f"{V}=forged python-backend pipeline-v1 create --project SwarmAI",
     f"{V}= python a.py",
     f"{V}=x",
     f"{V}+=x",
@@ -119,18 +119,18 @@ NESTED = [
     f"exec env -u {V} python a.py",
 ]
 RESETS_DENIED = [
-    "env -i python backend/scripts/pipeline_v1.py create --project SwarmAI",
-    "env -i PATH=/usr/bin .venv/bin/python backend/scripts/pipeline_v1.py status",
+    "env -i python-backend pipeline-v1 create --project SwarmAI",
+    "env -i PATH=/usr/bin python-backend pipeline-v1 status",
     "env - python3 a.py",
     "env --ignore-environment python a.py",
     "env -i -- python a.py",
     "env -0i python a.py",
-    "env -i bash -c 'python backend/scripts/pipeline_v1.py create'",
-    "env -i sh <<EOF\npython backend/scripts/pipeline_v1.py create\nEOF",
-    "env -i uv run backend/scripts/pipeline_v1.py create",
+    "env -i bash -c 'python-backend pipeline-v1 create'",
+    "env -i sh <<EOF\npython-backend pipeline-v1 create\nEOF",
+    "env -i uv run pipeline-v1 create",
     "bash -c 'env -i python a.py'",
     "exec -c python a.py",
-    "sudo python backend/scripts/pipeline_v1.py create",
+    "sudo python-backend pipeline-v1 create",
     "sudo -u root python3 a.py",
     "sudo --preserve-env=PATH python a.py",
 ]

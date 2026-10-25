@@ -1,6 +1,6 @@
 """Pipeline v1 real end-to-end tests (fixing spec §2, group G).
 
-Every run here is driven only through ``pipeline_v1.py`` and the
+Every run here is driven only through ``"$SWARM_BACKEND_BIN" pipeline-v1`` and the
 real hook functions (``tests/pipeline_v1_rig.py``); no test appends an event. Each
 negative path asserts the outcome the v13 design requires; every fixing-spec item
 has landed, so no case is marked as expected to fail.
@@ -212,24 +212,6 @@ def test_a_person_answers_and_the_agent_cannot(rig):
     assert r.kinds().count("human_answer") == 1 and r.state()["status"] == "active"
 
 
-def test_the_cli_process_holds_no_key_and_no_engine(rig):
-    """B-class B-b: the CLI only sends its command to the daemon. Its module imports
-    no engine, store or key code, so nothing in the agent's process signs (C3 by
-    construction, no longer by narrowing the process)."""
-    import subprocess, sys
-    from tests.pipeline_v1_rig import PV1
-    code = ("import runpy, sys\n"
-            "sys.argv = [%r, '--help']\n"
-            "try:\n"
-            "    runpy.run_path(%r, run_name='not_main')\n"
-            "except SystemExit:\n"
-            "    pass\n"
-            "bad = [m for m in sys.modules if m in ('core.run_protocol.engine', "
-            "'core.run_protocol.store', 'core.run_protocol.keys')]\n"
-            "print(bad)\n" % (str(PV1), str(PV1)))
-    proc = subprocess.run([sys.executable, "-c", code], env=rig("direct").env,
-                          capture_output=True, text=True, cwd=str(PV1.parents[1]))
-    assert proc.stdout.strip().splitlines()[-1] == "[]", proc.stdout + proc.stderr
 
 
 def test_user_stop_pauses_and_resume_continues(rig):
@@ -423,7 +405,7 @@ def test_the_approval_card_shows_what_lands(rig):
     _not_landed_tests_red(r)
     prepared = _prepare(r)
     request = prepared["prepared"]["request"]
-    command = f"python backend/scripts/pipeline_v1.py run-land --project P --run-id {r.run_id} " \
+    command = f"\"$SWARM_BACKEND_BIN\" pipeline-v1 run-land --project P --run-id {r.run_id} " \
               f"--request {request['request_id']} --message m"
     card = security_hooks.v1_land_card(command)
     row = request["bindings"]["repos"]["repo"]
@@ -487,13 +469,12 @@ def test_a_tested_prepare_on_an_untested_tree_asks_for_a_test_report(rig):
 
 def test_a_land_from_a_session_that_does_not_own_the_run_changes_nothing(rig):
     """S6-3: no token, no daemon; a command acts only for the run's owner session."""
-    import sys
-    from tests.pipeline_v1_rig import PV1
+    from tests.pipeline_v1_rig import pv1_argv
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
     base = _main(r)
-    argv = [sys.executable, str(PV1), "land", *r._run_args(), "--message",
+    argv = [*pv1_argv(r.program), "land", *r._run_args(), "--message",
             "fix\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>"]
     out, _ = r._exec(argv, extra_env={"SWARM_APP_SESSION_ID": "someone-else"})
     assert out.get("code") == "not_owner", out

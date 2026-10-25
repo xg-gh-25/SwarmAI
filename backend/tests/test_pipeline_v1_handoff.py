@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from tests.pipeline_v1_rig import PROJECT, PV1, SESSION, Rig, documents
+from tests.pipeline_v1_rig import PROJECT, SESSION, Rig, documents, pv1_argv
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -56,7 +56,7 @@ def test_the_retired_commands_are_gone(rig):
     r = rig()
     r.create()
     for command in ("stage-start", "measure-usage"):
-        proc = subprocess.run([sys.executable, str(PV1), command, "--project", PROJECT,
+        proc = subprocess.run([*pv1_argv(r.program), command, "--project", PROJECT,
                                "--run-id", str(r.run_id)], env=r.env, capture_output=True,
                               text=True, timeout=60)
         assert proc.returncode == 2 and "invalid choice" in proc.stderr, command
@@ -66,7 +66,7 @@ def test_an_artifact_can_come_on_stdin(rig):
     """``--artifact -``: the CLI forwards its stdin to the daemon with the command."""
     r = rig("full")
     r.create()
-    argv = [sys.executable, str(PV1), "stage-complete", "--project", PROJECT,
+    argv = [*pv1_argv(r.program), "stage-complete", "--project", PROJECT,
             "--run-id", str(r.run_id), "--artifact", "-"]
     body = json.dumps(documents("full")["evaluate"])
     out = r.bash(" ".join(map(shlex.quote, argv)) + f" <<'JSON'\n{body}\nJSON")
@@ -84,7 +84,7 @@ def test_a_pipeline_command_runs_without_the_daemon_and_only_for_the_owner(rig):
         env = {k: v for k, v in r.env.items() if k != "SWARM_APP_SESSION_ID"}
         if session is not None:
             env["SWARM_APP_SESSION_ID"] = session
-        proc = subprocess.run([sys.executable, str(PV1), "abandon", "--project", PROJECT,
+        proc = subprocess.run([*pv1_argv(r.program), "abandon", "--project", PROJECT,
                                "--run-id", str(r.run_id), "--reason", "x"], env=env,
                               capture_output=True, text=True, timeout=60)
         return json.loads(proc.stdout.strip().splitlines()[-1]), proc.returncode

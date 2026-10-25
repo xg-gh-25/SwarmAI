@@ -1,8 +1,6 @@
 """B-e three-way re-audit fixes (fixing log §32) that still apply after S6-3 (the
 daemon execution and its tokens are gone):
 
-- the packaged daemon names the SOURCE checkout's scripts (utils.source_repo, until
-  S6-5 removes the legacy script form);
 - an owner change between a command's decision and its write changes nothing;
 - a create killed before run_create leaves an intent startup proves is its own and
   removes; a created run and a create in THIS process are never touched;
@@ -18,44 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from utils import source_repo
 
 
-# ── packaged daemon: the source checkout's scripts ─────────────────────────────
-def _checkout(root: Path) -> Path:
-    for tool in ("pipeline_v1",):
-        f = root / "backend" / "scripts" / f"{tool}.py"
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text("# script\n")
-    return root
 
 
-def test_frozen_bundle_names_the_checkout_it_was_built_from(tmp_path, monkeypatch):
-    src = _checkout(tmp_path / "src")
-    bundle = tmp_path / "bundle"
-    bundle.mkdir()
-    (bundle / "source_repo.json").write_text(json.dumps({"root": str(src)}))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
-    assert source_repo.root() == src.resolve()
-    assert source_repo.pipeline_script("pipeline_v1") == \
-        (src / "backend" / "scripts" / "pipeline_v1.py").resolve()
-    # the command the agent is told to run is the program form, packaged and in dev (S3)
-    from core.worktree_write_gate import v1_command
-    assert v1_command("status") == '"$SWARM_BACKEND_BIN" pipeline-v1 status'
 
 
-def test_frozen_bundle_from_another_machine_names_no_script(tmp_path, monkeypatch):
-    bundle = tmp_path / "bundle"
-    bundle.mkdir()
-    (bundle / "source_repo.json").write_text(json.dumps({"root": "/nonexistent/ci/swarmai"}))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
-    assert source_repo.root() is None
 
 
-def test_dev_checkout_is_this_repo():
-    assert source_repo.root() == Path(__file__).resolve().parents[2]
 
 
 # ── queued commands never run after their client gave up ──────────────────────
@@ -124,9 +92,7 @@ def test_create_builds_the_run_in_staging_and_renames_it_whole(tmp_path, monkeyp
 
 # ── the agent's cwd decides what a relative path means ────────────────────────
 def test_the_cli_reads_an_artifact_file_in_its_own_cwd(tmp_path, monkeypatch):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    import importlib
-    pv1 = importlib.import_module("pipeline_v1")
+    from core.run_protocol import cli_main as pv1
     (tmp_path / "a.json").write_text('{"x": 1}')
     monkeypatch.chdir(tmp_path)
     argv, stdin = pv1._localize(["stage-complete", "--project", "P", "--run-id", "run_1",
@@ -234,9 +200,8 @@ def test_a_former_owner_command_does_not_even_note_its_transcript(tmp_path, monk
 
 
 def _pv1():
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-    import importlib
-    return importlib.import_module("pipeline_v1")
+    from core.run_protocol import cli_main
+    return cli_main
 
 
 def test_repeated_artifact_flags_send_only_the_last_and_read_stdin_once(tmp_path, monkeypatch):

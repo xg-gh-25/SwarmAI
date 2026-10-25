@@ -1,8 +1,9 @@
 """core.pipeline_command — the one recogniser of pipeline commands (design
 2026-10-24-swarmai-usable-by-anyone §3.2, r14).
 
-- both forms are recognised: ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub>`` (and a
-  ``python-backend`` path) and the legacy ``python .../pipeline_v1.py`` until S6;
+- one form is recognised: ``"$SWARM_BACKEND_BIN" pipeline-v1 <sub>`` (or a
+  ``python-backend`` path); the ``python .../pipeline_v1.py`` script form is not a call
+  any more (S6-5 removed it with the script);
 - a pipeline word that is only an argument is ``foreign`` and never gets a token;
 - the program form is OURS only via the unreassigned variable or this backend's binary;
 - the watchers (stage events, run-create, daily activity) see the program form;
@@ -33,9 +34,11 @@ def test_program_form_is_a_v1_call():
         ("pipeline_v1", "stage-complete", "run_ab", "P", "program")
 
 
-def test_legacy_form_is_still_recognised():
-    call, _ = _one("python3 -u /x/backend/scripts/pipeline_v1.py status --run-id run_q")
-    assert (call["tool"], call["sub"], call["form"]) == ("pipeline_v1", "status", "script")
+def test_the_removed_script_form_is_not_a_call():
+    call, _ = _one("python-backend pipeline-v1 status --run-id run_q")
+    assert (call["tool"], call["sub"], call["form"]) == ("pipeline_v1", "status", "program")
+    # S6-5: the script and its command form are gone; naming it runs nothing of ours
+    assert pc.calls("python3 -u /x/backend/scripts/pipeline_v1.py status --run-id run_q")[0] == []
     # the test runner is gone (S6-1): its script is not a pipeline call any more
     assert pc.calls("perl -e 'alarm 110; exec @ARGV' python /x/scripts/pipeline_test.py "
                     "--run-id run_q")[0] == []
@@ -43,7 +46,7 @@ def test_legacy_form_is_still_recognised():
 
 @pytest.mark.parametrize("command", [
     "echo pipeline-v1 status", "grep -n pipeline-v1 notes.md", "cat backend/scripts/pipeline_v1.py",
-    "claude --print 'run python backend/scripts/pipeline_v1.py'",
+    "claude --print 'run python-backend pipeline-v1'",
     '"$SWARM_BACKEND_BIN" py pipeline-v1.py',
 ])
 def test_a_mention_that_does_not_run_the_cli_is_foreign(command):
@@ -57,7 +60,7 @@ def test_watchers_see_the_program_form():
     assert not is_run_create(f"{PROG} status --run-id run_ab")
     assert not is_run_create(f"{PROG} create --requirement x; {PROG} status --run-id run_ab")
     assert parse_watched_run_id(f"{PROG} status --project P --run-id run_ab12") == "run_ab12"
-    assert pc.is_create("python backend/scripts/pipeline_v1.py create --requirement x")
+    assert pc.is_create("python-backend pipeline-v1 create --requirement x")
     assert pc.is_land(f"{PROG} land --project P --run-id run_a --message m")
     assert pc.is_land(f"{PROG} run-land --request q --run-id run_a")
     assert not pc.is_land(f"{PROG} status --run-id run_a")

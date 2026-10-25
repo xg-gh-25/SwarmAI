@@ -3779,7 +3779,7 @@ def create_run_amend_gate(session_context: dict[str, Any]):
 #   • a wholesale env reset (`env -i` / `env -` / `--ignore-environment`, `exec -c`,
 #     `sudo` without -E / --preserve-env, `su -|-l -c`) whose wrapped command is a
 #     link reader (_is_link_reader_program: the PROGRAM is python* / uv /
-#     pipeline_v1* or computed at run time, or a word is a path to pipeline_v1.py).
+#     python-backend or computed at run time, or a word is `pipeline-v1`).
 #     The link is consumed by Python CLIs only,
 #     so `sudo dnf install python3.11`, `env -i make run` or `env -i node a.js` pass;
 #     a reset in front of a shell is judged by the commands of that shell string;
@@ -4110,9 +4110,9 @@ def _reader_in_text(text: str) -> bool:
 def _is_link_reader_program(tokens: list[str]) -> bool:
     """True iff the simple command *tokens* runs a link reader: its PROGRAM word
     (before and after unwrapping, _skip_leading_wrappers / _unwrap_program) is
-    python* / uv / pipeline_v1* or is computed at run time (`$P`,
-    `"$(which python3)"`), or one of its words is a path ending in pipeline_v1.py
-    (`py scripts/pipeline_v1.py`). A word merely containing
+    python* / uv / python-backend or is computed at run time (`$P`,
+    `"$(which python3)"`), or one of its words is the `pipeline-v1` subcommand. A word
+    merely containing
     "python" (`dnf install python3.11`, `chown … ~/.swarm-ai/python`) is not one."""
     from core import pipeline_command
     for t in (_skip_leading_wrappers(tokens), _unwrap_program(tokens)):
