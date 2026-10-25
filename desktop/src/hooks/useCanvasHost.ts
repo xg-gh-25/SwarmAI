@@ -599,6 +599,10 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
   // paths may be source-repo-relative, so resolve to a workspace path first.
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
+  // The active tab's session: a click resolves against that session's own products
+  // first (design 2026-10-26-session-products.md §3.4).
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   // Per-tab open generation (run_a9806ea0 adversarial B): each open-file bumps its
   // tab's counter; a resolve that completes AFTER a newer open on the SAME tab is
   // stale and discards itself, so out-of-order /resolve completions can't clobber
@@ -629,14 +633,36 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       const gen = (openGenRef.current.get(k) ?? 0) + 1;
       openGenRef.current.set(k, gen);
       let resolvedPath = filePath;
+      // The session whose products are matched first: the active tab's, for an open
+      // that carries no session of its own (a click on a reference in the chat). An
+      // open that names its session (a Canvas rail row) already points at the file
+      // and resolves as before. Captured before the await.
+      const resolveSid = !openSessionId && landingTab === activeTabIdRef.current ? sessionIdRef.current ?? undefined : undefined;
+      let productSid: string | undefined;
       try {
-        const resp = await api.get<{ resolved_path: string }>('/workspace/file/resolve', { params: { path: filePath } });
+        const resp = await api.get<{ resolved_path: string; session_product?: boolean }>('/workspace/file/resolve', {
+          params: { path: filePath, ...(resolveSid ? { session_id: resolveSid } : {}) },
+        });
         if (!mounted) return;
         resolvedPath = resp.data.resolved_path;
+        // A file the session wrote keeps its session on the opened file, so its reads
+        // pass that session's render gate (an outside-home product).
+        if (resp.data.session_product && resolveSid) productSid = resolveSid;
       } catch (err: unknown) {
         if (!mounted) return;
         const status = (err as { response?: { status?: number } })?.response?.status;
         if (status === 400) { settle('ignored', 'invalid path'); return; } // path traversal / invalid — drop
+        // 409 = several files this session wrote match the name: nothing is picked;
+        // the toast names them so the user opens the one they mean from the rail.
+        if (status === 409) {
+          const cands = (err as { response?: { data?: { detail?: { candidates?: unknown } } } })?.response?.data?.detail?.candidates;
+          const list = Array.isArray(cands) ? cands.filter((c): c is string => typeof c === 'string') : [];
+          document.dispatchEvent(new CustomEvent('swarm:toast', {
+            detail: { message: `Several files match ${filePath}: ${list.join(', ')}`, severity: 'warning', id: 'canvas-file-ambiguous' },
+          }));
+          settle('ignored', 'several files match');
+          return;
+        }
         // 404 = the exhaustive resolve cascade found the file NOWHERE → it is
         // genuinely nonexistent. DROP it (run_f49d3ff3 R1): the old fall-through to
         // the raw path opened Canvas onto a file /workspace/file also can't read →
@@ -675,7 +701,7 @@ export function useCanvasHost({ activeTabId, sessionId, isStreaming }: UseCanvas
       // so a restored railed tab is never un-railed. Only un-rail when the file actually
       // CHANGES (a re-open of the same path must not fight a deliberate manual re-rail).
       const fileChanged = cur.file?.filePath !== resolvedPath;
-      const opened: CanvasFile = { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId, auto: auto || undefined };
+      const opened: CanvasFile = { filePath: resolvedPath, fileName, autoDiff: autoDiff || undefined, gitStatus, workspaceId, baseRef, sessionId: openSessionId ?? productSid, auto: auto || undefined };
       if (by === 'agent') {
         // §4: shown and unfolded like the user's own open, but never over unsaved
         // edits and without the "discard?" prompt (the agent must not interrupt).

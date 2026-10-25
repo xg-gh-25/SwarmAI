@@ -830,8 +830,10 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
         onKeyDown={handleKeyDown}
         role="button"
         tabIndex={0}
-        className="px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-[var(--color-text-secondary)] font-mono cursor-pointer hover:text-[var(--color-text)] hover:underline transition-colors inline-flex items-center gap-1"
-        title={`Open ${cleanPath}`}
+        // Drawn as a link (design 2026-10-26-session-products.md §3.4): a file the
+        // answer names is clicked to open, so it must not look like plain code.
+        className="px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary font-mono cursor-pointer transition-colors inline-flex items-center gap-1"
+        title="Open in Canvas"
       >
         {/* One file, one look: the same type icon as the Canvas OUTPUTS rail and
             the chat's FileChip, desaturated so a type never reads as a status. */}

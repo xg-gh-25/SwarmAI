@@ -1344,9 +1344,37 @@ def resolve_path_to_physical(path: str, workspace_root: Path) -> dict | None:
     return None
 
 
+def _session_product_matches(session_id: str, ref: str) -> list[str]:
+    """The absolute paths of *session_id*'s live products (core/session_outputs, the
+    Canvas rail's record) that *ref* names: an absolute *ref* equal to a product, or a
+    relative *ref* whose whole segments end a product's path. Deleted rows and files no
+    longer on disk are skipped. Blocking (runs on the canvas_session pool)."""
+    from core import session_outputs
+    try:
+        rows = session_outputs.read(session_id)["rows"]
+    except Exception:  # noqa: BLE001 — no record: no product match, the cascade decides
+        logger.debug("resolve: session products unavailable", exc_info=True)
+        return []
+    norm = os.path.normpath(os.path.expanduser(ref))
+    if norm in (".", ""):
+        return []
+    out: list[str] = []
+    for row in rows:
+        ap = row.get("absolutePath")
+        if row.get("deleted") or not isinstance(ap, str) or not os.path.isabs(ap):
+            continue
+        real = os.path.realpath(ap)
+        hit = (real == os.path.realpath(norm)) if os.path.isabs(norm) else (
+            ap == norm or ap.endswith(os.sep + norm) or real.endswith(os.sep + norm))
+        if hit and os.path.isfile(real) and real not in out:
+            out.append(real)
+    return out
+
+
 @router.get("/workspace/file/resolve")
 async def resolve_workspace_file(
     path: str = Query(..., description="Partial or relative file path to resolve", max_length=1024),
+    session_id: str | None = Query(None, description="The session whose own products are matched first", max_length=128),
 ):
     """Resolve a partial file path to a workspace-relative path.
 
@@ -1373,6 +1401,24 @@ async def resolve_workspace_file(
     normalized = os.path.normpath(path)
     if not os.path.isabs(normalized) and normalized.startswith(".."):
         raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    # The session's own products first (design 2026-10-26-session-products.md §3.4):
+    # a file the session wrote is what its answer names, wherever it lives (a
+    # Desktop report, a session worktree). Several matches are not guessed between.
+    if session_id:
+        matches = await executors.run_in("canvas_session", _session_product_matches, session_id, path)
+        if len(matches) > 1:
+            raise HTTPException(status_code=409, detail={"message": "Several files this session wrote match",
+                                                         "candidates": matches})
+        if matches:
+            # The same display form the cascade gives that file: workspace-relative
+            # inside SwarmWS, Projects/<name>/... through a project link, else absolute.
+            real_ws = os.path.realpath(workspace_root)
+            if matches[0].startswith(real_ws + os.sep):
+                return {"resolved_path": os.path.relpath(matches[0], real_ws), "session_product": True}
+            hit = await asyncio.to_thread(resolve_path_to_physical, matches[0], workspace_root)
+            if hit is not None:
+                return {"resolved_path": hit["relative"], "session_product": True}
 
     # The bare-name branch walks the tree — keep it off the event loop.
     resolved = await asyncio.to_thread(resolve_path_to_physical, path, workspace_root)

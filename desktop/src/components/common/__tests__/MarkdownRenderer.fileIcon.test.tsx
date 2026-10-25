@@ -37,4 +37,16 @@ describe('MarkdownRenderer — typed file references', () => {
     render(<MarkdownRenderer content="call `foo()` now" />);
     expect(screen.queryByRole('button')).toBeNull();
   });
+
+  // design 2026-10-26-session-products.md §3.4: a reference reads as a link.
+  it('a file reference looks like a link and says it opens in the Canvas', () => {
+    render(<MarkdownRenderer content={'see `docs/plan.md` and `foo()`'} />);
+    const ref = screen.getByRole('button', { name: /docs\/plan\.md/ });
+    expect(ref.getAttribute('title')).toBe('Open in Canvas');
+    expect(ref.className).toContain('text-primary');
+    expect(ref.className).toContain('underline');
+    const plain = screen.getByText('foo()');
+    expect(plain.className).not.toContain('text-primary');
+    expect(plain.className).not.toContain('underline');
+  });
 });
