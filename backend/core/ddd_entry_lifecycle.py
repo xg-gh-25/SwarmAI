@@ -647,6 +647,39 @@ def split_entries(body: str) -> "list[str]":
     return out
 
 
+def split_blocks(body: str) -> "list[tuple[str, str]]":
+    """*body* as recall units, in order: each column-0 ``- `` entry (read as
+    ``split_entries`` reads it) is ``("entry", text)``; what lies between entries is cut
+    at blank lines into ``("block", text)`` -- a paragraph, a table, a ``###`` heading with
+    the lines under it. For docs written as prose (PRODUCT): a whole ``## `` section is
+    too coarse to rank (one 40K-character section matches any query), a paragraph is not.
+    run-knowledge §3.6.9."""
+    lines = body.splitlines()
+    out: list[tuple[str, str]] = []
+    buf: list[str] = []
+
+    def flush() -> None:
+        text = "\n".join(buf).strip()
+        if text:
+            out.append(("block", text))
+        buf.clear()
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("- "):
+            flush()
+            _text_end, _meta, end = _scan_entry(lines, i)
+            out.append(("entry", "\n".join(lines[i:end]).strip()))
+            i = max(end, i + 1)
+            continue
+        if not lines[i].strip():
+            flush()
+        else:
+            buf.append(lines[i])
+        i += 1
+    flush()
+    return out
+
+
 def parse_entries(content: str, *, include_prose: bool = False,
                   skip_h3_spans: bool = False) -> list[EntryMetadata]:
     """Parse all knowledge entries from DDD markdown content.

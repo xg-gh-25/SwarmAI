@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r11 — 步骤 0–7 和 §3.5 已实施；步骤 8（聊天）待实施；§5 的度量待 S5
+status: r12 — 步骤 0–7、§3.5、§3.6.9 已实施；步骤 8（聊天）回放后不合入（§3.6.10）；§5 的度量待 S5
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -554,6 +554,57 @@ pipeline 分阶段接入 `recall_ddd`：
   REFLECT 候选只取 contract、direct 改用 requirement、REPORT 不分两段、design 召回出错时抛出、专家块不用
   review。
 
+#### 3.6.9 PRODUCT 按段落召回（r12）
+
+问题：步骤 6 让 PRODUCT 按 `##` 小节召回，但 SwarmAI 的 PRODUCT 有几个大杂烩小节（Design Philosophy 44K
+字符、Competitive Positioning 17K），几乎任何查询都能匹配上，一旦排到前面就把整节截到 900 字，读的人
+看到的是小节开头，不是匹配上的那一段。
+
+改法：新增 `ddd_entry_lifecycle.split_blocks(body)`，把一节切成召回单位：每个 `- ` 条目（和
+`split_entries` 读法一样）是一个单位，条目之间的文字按空行切成段落、表格、`###` 小标题块。新 mode
+`block`：一份文档内这些单位放在一个语料里排名，已完成的 `[x]`、superseded 条目、只有标题和注释的块
+不参与；条目按类型加权。requirement 里 PRODUCT 改为 `("block", 3, 1800)`。
+
+样例集脚本改了计分口径：期望条目只有出现在**读的人看得到的文本**里才算命中（after 用 `clipped`，
+before 用每条截到单条上限后的文本）。原来按完整原文算，一个 44K 的小节因为深处有匹配就算命中，但这段
+在截断后根本看不到。按新口径，main 上（按小节）和改后（按段落）requirement 都是 6/7，design 8/11、
+review 2/2 不变；`memory-provider-req` 的期望条目在两边都看不到（main 是被截掉，改后是 Memory
+sovereignty 那张表排在第 11）。召回耗时中位数 41.5 ms。
+
+测试：`test_product_is_recalled_by_paragraph_not_by_section`，命中的是匹配的那一段，不是它所在的整节；
+把 `split_blocks` 换回整节，这个测试变红。
+
+#### 3.6.10 步骤 8：聊天改用 `recall_ddd` 的回放结果（r12，未合入）
+
+试过的改法：`_inject_ddd_for_active_project` 里 4 份 canonical 文档改由 `recall_ddd(purpose="chat")` 给出
+（每份文档 2 个单位，`block` mode），ddd 桶里其他来源（项目的 Knowledge/、数据契约、code-intel 领域、
+spec 块）保持不变，然后照旧做覆盖率过滤，注入小节指针。
+
+回放：最近 30 个会话的 519 条真实消息，data.db 只读，同一批消息在 main 和改后各跑一遍。
+
+| | main | 改后 |
+|---|---|---|
+| 有 DDD 块的消息 | 21 | 18 |
+| 其中只有项目指针、没有小节 | 0 | 5 |
+| 有小节的消息 | 21 | 13 |
+| 每个有小节的块里的小节数（平均） | 1.57 | 2.54 |
+| 小节来自哪份文档 | TECH 16 · PROJECT 7 · IMPROVEMENT 4 · PRODUCT 4 | TECH 9 · PRODUCT 9 · IMPROVEMENT 8 · PROJECT 5 |
+| DDD 块合计字符 | 5431 | 5284 |
+| 召回耗时中位数 / p90 | 167 / 445 ms | 146 / 427 ms |
+
+§3.6.4 写的合入标准（注入字符数和耗时上升都不超过 10%）满足，但看逐条变化，质量是好坏参半：
+
+- 变好的：调研 talkstream 包装成 App 的消息拿到了 PRODUCT 的定位小节；PRODUCT 的出现次数从 4 到 9。
+- 变差的：8 条消息原来有小节、改后只剩指针或什么都没有，例如"给 SwarmAI 加 Hive - Always on 的固定 Tab"
+  原来指向 TECH 的 Key Subsystems，改后没有。原因是覆盖率过滤原来作用在整节文字上，改后作用在一个
+  段落或条目上，单位小了，能覆盖到的查询词少，被过滤掉的多。
+- 变吵的："修正 SELF.md 和 STEERING 里过时的 gate 清单"一条消息改后注入了 7 个小节指针。
+
+结论：不合入。成本标准没有说明质量，而质量证据是混合的；聊天注入每条消息都会用到，不能用一组好坏
+参半的回放去换。`DDD_PURPOSES["chat"]` 留在配置表里（测试用它验证按文档分名额），但聊天没有接它。
+要再做的话，先解决覆盖率过滤和小单位不匹配的问题（比如按小节聚合各单位再过滤），并用回放加人工判读
+一起看质量，不只看字数和耗时。
+
 ## 4. 不做的
 
 - BUILD 不再召回。THINK / PLAN 只读 EVALUATE 之后算好的 knowledge_design.md，阶段中途不再召回；agent 在
@@ -614,3 +665,4 @@ S5 加两个数，按 run 统计：
 - r9（2026-10-26）：XG 指出 EVALUATE 只召回了 TECH / IMPROVEMENT，需求分析该看 PRODUCT / PROJECT，THINK / PLAN 该看 TECH / IMPROVEMENT。实测 run_85e81059 确认是 4 份文档混排、数量压倒相关性。新增 §3.6：平台 `recall_ddd` 按用途分配置，pipeline 分阶段接入，聊天单独一步回放验证；加上没有 DDD / DDD 不完整或损坏时都不能 crash 的硬性要求和测试矩阵（实测发现一份非 UTF-8 文档会让整个项目的 DDD 召回失效）。步骤 5–8 待实施。
 - r10（2026-10-26）：步骤 5、6 实施（§3.6.7）：加载器只跳过坏的那一份；`recall_ddd` + 配置表 + 样例集脚本，16 条样例上 requirement 4/7 → 7/7、design 7/11 → 8/11、review 2/2 不变，耗时下降。
 - r11（2026-10-26）：步骤 7 实施（§3.6.8）：knowledge.md 按 requirement、EVALUATE 之后 knowledge_design.md 按 design（`knowledge_recalled` 事件）、专家块按 review、REFLECT 候选取两处；删掉 `recall_ddd_entries`。
+- r12（2026-10-27）：PRODUCT 按段落召回（§3.6.9，`split_blocks` + `block` mode），样例集改为按读者看得到的文本计分；步骤 8 回放 519 条真实消息，成本标准满足但质量好坏参半（有小节的消息 21 → 13），不合入（§3.6.10）。

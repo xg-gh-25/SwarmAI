@@ -81,12 +81,19 @@ def test_pinned_sections_come_whatever_the_query(ddd):
     assert "Not a chatbot" not in nongoals["clipped"] and "PRODUCT.md#Non-Goals" in nongoals["clipped"]
 
 
-def test_product_is_recalled_by_section(ddd):
-    ddd("PRODUCT.md", "# PRODUCT\n\n## Pricing\n\nThe quokka plan costs nothing; "
-                      "it is a paragraph, not a bullet.\n\n## Brand\n\nBlue.\n")
+def test_product_is_recalled_by_paragraph_not_by_section(ddd):
+    """§3.6.9: a prose doc is ranked by its paragraphs and entries, so the hit is the
+    paragraph that matches, not the whole section around it."""
+    filler = "".join(f"Paragraph {i} is about rivers, hills and weather number {i}.\n\n"
+                     for i in range(30))
+    ddd("PRODUCT.md", "# PRODUCT\n\n## Strategy\n\n" + filler +
+        "The quokka plan costs nothing; it is a paragraph, not a bullet.\n\n" + filler +
+        "## Brand\n\nBlue.\n")
     hits = rm.recall_ddd("quokka plan", P, "requirement")
-    sec = [h for h in hits if h["kind"] == "section"]
-    assert sec and sec[0]["section"] == "Pricing" and "costs nothing" in sec[0]["clipped"]
+    ranked = [h for h in hits if h["kind"] in ("block", "entry")]
+    assert ranked and ranked[0]["section"] == "Strategy" and ranked[0]["kind"] == "block"
+    assert "costs nothing" in ranked[0]["clipped"]
+    assert "rivers" not in ranked[0]["content"]          # not the section around it
 
 
 def test_budget_holds_and_metadata_is_not_spent(ddd):

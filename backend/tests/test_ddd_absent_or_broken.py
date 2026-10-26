@@ -80,7 +80,7 @@ def test_platform_recall_never_raises(ws, state):
     for purpose in DDD_PURPOSES:
         hits = recall_ddd("swap operands add", PROJECT, purpose)
         assert isinstance(hits, list)
-        found += [h for h in hits if h["kind"] in ("entry", "section")]
+        found += [h for h in hits if h["kind"] in ("entry", "block")]
     assert bool(found) == (EXPECTED[state] == "recalled"), found
 
 

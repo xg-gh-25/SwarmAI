@@ -853,7 +853,8 @@ def _load_ddd_docs_text(project: Optional[str]):
 
 # ── DDD recall by purpose (run-knowledge §3.6.2) ─────────────────────────────
 # What each reader of a project's DDD needs, as DATA: per doc, how to recall it
-# ("entry" = ``- `` entries, "section" = whole ``## `` sections), how many, and how
+# ("entry" = ``- `` entries, "block" = entries plus the paragraphs / tables between
+# them, for prose docs; §3.6.9), how many, and how
 # many characters that doc may use. Docs are ranked ONE AT A TIME -- never in one
 # shared corpus, where TECH + IMPROVEMENT (~89% of SwarmAI's entries) out-numbered
 # PRODUCT / PROJECT whatever the query (run_85e81059). A doc's unused quota is not
@@ -863,7 +864,7 @@ def _load_ddd_docs_text(project: Optional[str]):
 TYPE_WEIGHT = 1.5          # §3.6.6: best of 1.0 / 1.2 / 1.5 on the case set (design 8/11 vs 7/11)
 DDD_PURPOSES: dict[str, dict] = {
     "requirement": {
-        "docs": {"PRODUCT.md": ("section", 2, 1800), "PROJECT.md": ("entry", 4, 1200)},
+        "docs": {"PRODUCT.md": ("block", 3, 1800), "PROJECT.md": ("entry", 4, 1200)},
         "weighted": ("decision", "principle"),
         "pinned": {"PRODUCT.md": ("Vision", "Success Criteria", "Target Users")},
         "pointers": {"PRODUCT.md": ("Non-Goals",)},
@@ -883,14 +884,17 @@ DDD_PURPOSES: dict[str, dict] = {
         "weighted": (),
     },
     "chat": {
-        "docs": {"PRODUCT.md": ("entry", 2, 600), "TECH.md": ("entry", 2, 600),
-                 "IMPROVEMENT.md": ("entry", 2, 600), "PROJECT.md": ("entry", 2, 600)},
+        # NOT wired into chat: replayed and not merged (run-knowledge §3.6.10)
+        "docs": {"PRODUCT.md": ("block", 2, 600), "TECH.md": ("block", 2, 600),
+                 "IMPROVEMENT.md": ("block", 2, 600), "PROJECT.md": ("block", 2, 600)},
         "weighted": (),
     },
 }
 PINNED_CAP = 450           # one pinned section, inside its doc's budget
 _DONE_RE = re.compile(r"^-\s*\[[xX]\]")
 _TYPE_RE = re.compile(r"^-\s*\[(\w+)\]")
+# the bi-temporal supersession marker (same rule as _ddd_entry_hits)
+_SUPERSEDED_RE = re.compile(r"<!--[^>]*\|\s*superseded_by:(?!null\b)[^|]+?-->")
 _META_RE = re.compile(r"[ \t]*<!--.*?-->[ \t]*\n?", re.S)
 
 
@@ -919,19 +923,46 @@ def _doc_entries(query: str, doc: str, text: str, sections: dict, quota: int,
     return out[:quota]
 
 
-def _doc_sections(query: str, doc: str, sections: dict, quota: int,
-                  skip: set) -> list[dict]:
+def _bare(text: str) -> bool:
+    """A block that is only headings and metadata comments: nothing to read."""
+    return all(not line.strip() or line.lstrip().startswith("#")
+               for line in _readable(text).splitlines())
+
+
+def _doc_blocks(query: str, doc: str, sections: dict, quota: int, skip: set,
+                weighted: tuple, weight: float) -> list[dict]:
+    """The doc's best *quota* units -- entries and the prose blocks between them
+    (``split_blocks``) -- ranked in one corpus per doc. Done items, superseded entries
+    and blocks that are only headings / comments are not candidates."""
     from core import memory_index
-    pool = {k: v for k, v in sections.items() if k not in skip and v.strip()}
-    if not pool:
+    from core.ddd_entry_lifecycle import split_blocks
+    units: dict[str, tuple[str, str, str]] = {}      # key -> (section, kind, text)
+    for section, body in sections.items():
+        if section in skip:
+            continue
+        for kind, text in split_blocks(body):
+            if kind == "entry" and (_DONE_RE.match(text) or _SUPERSEDED_RE.search(text)):
+                continue
+            if _bare(text):
+                continue
+            units[str(len(units))] = (section, kind, text)
+    if not units:
         return []
-    raw = memory_index._bm25_scores(query, pool)
+    raw = memory_index._bm25_scores(query, {k: v[2] for k, v in units.items()})
     if not raw:
         return []
     norm = memory_index._normalize_bm25_scores(raw)
-    ranked = sorted(norm, key=lambda k: norm[k], reverse=True)[:quota]
-    return [{"doc": doc, "section": k, "score": norm[k], "kind": "section",
-             "content": f"## {k}\n{pool[k].strip()}"} for k in ranked if norm[k] > 0]
+    scored = []
+    for k, score in norm.items():
+        section, kind, text = units[k]
+        if score <= 0:
+            continue
+        if kind == "entry" and _entry_type(text) in weighted:
+            score *= weight
+        scored.append({"doc": doc, "section": section, "kind": kind, "score": score,
+                       "content": text})
+    scored.sort(key=lambda h: h["score"], reverse=True)
+    return scored[:quota]
 
 
 def _section_named(sections: dict, name: str) -> Optional[str]:
@@ -950,8 +981,8 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
     Returns hits in config order (pinned first, then each doc's ranked hits), each
     ``{"doc", "section", "kind", "score", "content", "clipped"}``: ``content`` is the
     whole entry/section (ids are taken from it), ``clipped`` is it cut by the §3.0
-    rules to the doc's budget, by rank, never skipping. ``kind`` is entry / section /
-    pinned / pointer. A doc that is missing or unreadable is simply absent; one that
+    rules to the doc's budget, by rank, never skipping. ``kind`` is entry / block /
+    block / pinned / pointer. A doc that is missing or unreadable is simply absent; one that
     fails to parse is skipped alone (§3.6.5 H1-H3). READ-only, keyword-only.
     Raises ``KeyError`` only for an unknown *purpose* (a caller bug)."""
     from core import recall_filter
@@ -978,9 +1009,10 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
                 group.append({"doc": doc, "section": name, "kind": "pointer", "score": 1.0,
                               "content": f"## {name} (not shown: read {doc}#{name})"})
             if has_query:
-                if mode == "section":
-                    group += _doc_sections(query, doc, sections, quota,
-                                           {p for p in pinned + pointers if p})
+                if mode == "block":
+                    group += _doc_blocks(query, doc, sections, quota,
+                                         {p for p in pinned + pointers if p},
+                                         tuple(cfg.get("weighted", ())), w)
                 else:
                     group += _doc_entries(query, doc, text, sections, quota,
                                           tuple(cfg.get("weighted", ())), w)

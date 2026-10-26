@@ -9,7 +9,10 @@ substring of each entry). For every case this compares:
   ``recall_ddd_entries`` did;
 - ``after``: ``recall_ddd(query, project, purpose)`` at each ``--weights`` value.
 
-and prints hits per purpose, the PRODUCT / PROJECT hits of the requirement cases, and
+An expected entry counts only when it is in the text the reader is SHOWN (``clipped``
+after; before, each entry cut to one hit's cap as knowledge.md did): a match deep in a
+whole section that is cut away before anyone reads it is not a hit (§3.6.9).
+Prints hits per purpose, the PRODUCT / PROJECT hits of the requirement cases, and
 recall time. READ-only, keyword-only: it reads the project's DDD docs and nothing else
 (no data.db). The case file is the operator's (it names their project's entries), so
 it lives in their workspace, not in this repo.
@@ -32,7 +35,9 @@ BEFORE_TOP = {"review": 5}
 
 
 def _found(expect: list[str], hits: list[dict]) -> list[str]:
-    texts = [str(h.get("content") or "") for h in hits]
+    from core.recall_filter import HIT_CHAR_CAP, clip
+    texts = [str(h["clipped"]) if "clipped" in h else clip(str(h.get("content") or ""), HIT_CHAR_CAP)
+             for h in hits]
     return [e for e in expect if any(e in t for t in texts)]
 
 
