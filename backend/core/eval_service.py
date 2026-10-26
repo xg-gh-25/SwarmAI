@@ -337,7 +337,8 @@ class EvalService:
         try:
             from jobs.scheduler import load_jobs
             return next((j for j in load_jobs() if j.id == job_id and j.enabled), None)
-        except Exception:  # noqa: BLE001 — no scheduler config: no next run to show
+        except Exception as exc:  # noqa: BLE001 — no scheduler config: no next run to show
+            logger.debug("eval_service: no scheduler job %s to show a next run for: %s", job_id, exc)
             return None
 
     def _next_job_fire(self, job_id: str, now: datetime) -> str | None:
