@@ -29,9 +29,9 @@ query are worth the model's attention.
 
 Public:
 - ``query_terms(query)``
-- ``filter_recall(result, prompt_text="")`` -> BucketedRecall
+- ``filter_recall(result, prompt_text="", followup=False)`` -> BucketedRecall
 - ``in_prompt_text(text, prompt_norm)``
-- ``DOMAIN_CHAR_CAPS``, ``LIBRARY_TOP``, ``ARCHIVE_SLOTS``, ``NO_INJECT_PREFIXES``
+- ``DOMAIN_CHAR_CAPS``, ``FOLLOWUP_CHAR_CAPS``, ``FOLLOWUP_SLOTS``, ``LIBRARY_TOP``, ``ARCHIVE_SLOTS``, ``NO_INJECT_PREFIXES``
 """
 
 from __future__ import annotations
@@ -53,6 +53,21 @@ DOMAIN_CHAR_CAPS: dict[str, int] = {
     "memory_archive": 1200,   # the library leg's archive slots (D4), own budget
 }
 HIT_CHAR_CAP = 900
+
+# Follow-up recall (a later message on a new topic) gets a smaller block: the
+# whole session shares one budget (session_router._RECALL_SESSION_CHARS), and
+# the first hit of a leg carries most of its value (library rank 1 useful 62%,
+# rank 2 37%, rank 3+ under 30%; past sessions 37% overall). Halving each
+# follow-up roughly doubles how many a session gets (design 2026-10-26 §9).
+FOLLOWUP_CHAR_CAPS: dict[str, int] = {
+    "context_files": 700,
+    "ddd": 1000,
+    "library": 1400,
+    "session": 900,
+    "codeintel": 300,
+    "memory_archive": 600,
+}
+FOLLOWUP_SLOTS: dict[str, int] = {"library": 2, "memory_archive": 1, "session": 1}
 
 # Precision rules measured on replayed real traffic (design
 # docs/design/2026-10-26-recall-precision-and-coverage.md §2.3, D1). The term
@@ -187,8 +202,13 @@ def _keep(domain: str, text: str, terms: list[str], prompt_norm: str,
     return not _in_prompt(text, prompt_norm)
 
 
-def filter_recall(result: Any, prompt_text: str = "") -> Any:
-    """Return a copy of ``result`` holding only relevant, new, budgeted hits."""
+def filter_recall(result: Any, prompt_text: str = "", followup: bool = False) -> Any:
+    """Return a copy of ``result`` holding only relevant, new, budgeted hits.
+
+    ``followup``: a later message's recall; uses ``FOLLOWUP_CHAR_CAPS`` and
+    ``FOLLOWUP_SLOTS`` instead of the first-message sizes."""
+    caps = FOLLOWUP_CHAR_CAPS if followup else DOMAIN_CHAR_CAPS
+    slots = FOLLOWUP_SLOTS if followup else {}
     from core.recall_multi import BucketedRecall
 
     raw_terms = (result.query or "").split()
@@ -218,19 +238,22 @@ def filter_recall(result: Any, prompt_text: str = "") -> Any:
             kept = [h for h in hits if isinstance(h, dict)
                     and _keep(domain, _hit_text(domain, h), terms, prompt_norm, code_terms)]
             if domain == "library":
-                kept = _library_slots(kept)
+                kept = _library_slots(kept, slots.get("library", LIBRARY_TOP),
+                                      slots.get("memory_archive", ARCHIVE_SLOTS))
             elif domain == "session":
                 kept = [h for h in kept if _session_fresh_or_strong(h, terms)]
-        out.buckets[domain] = _budget(domain, kept)
+                kept = kept[:slots["session"]] if "session" in slots else kept
+        out.buckets[domain] = _budget(domain, kept, caps)
         if hits and not out.buckets[domain]:
             out.hit_layers[domain] = "filtered"
     return out
 
 
-def _library_slots(hits: list[dict]) -> list[dict]:
-    """Rank slots for the library leg: the first LIBRARY_TOP ordinary hits plus up
-    to ARCHIVE_SLOTS memory-archive hits, in their original order; fetched feeds
-    never. Applied after the relevance gate, so ranks are among relevant hits."""
+def _library_slots(hits: list[dict], top: int = LIBRARY_TOP,
+                   archive_slots: int = ARCHIVE_SLOTS) -> list[dict]:
+    """Rank slots for the library leg: the first ``top`` ordinary hits plus up
+    to ``archive_slots`` memory-archive hits, in their original order; fetched
+    feeds never. Applied after the relevance gate, so ranks are among relevant hits."""
     out: list[dict] = []
     ordinary = archive = 0
     for h in hits:
@@ -238,10 +261,10 @@ def _library_slots(hits: list[dict]) -> list[dict]:
         if src.startswith(NO_INJECT_PREFIXES):
             continue
         if src.startswith(ARCHIVE_PREFIX):
-            if archive < ARCHIVE_SLOTS:
+            if archive < archive_slots:
                 archive += 1
                 out.append(h)
-        elif ordinary < LIBRARY_TOP:
+        elif ordinary < top:
             ordinary += 1
             out.append(h)
     return out
@@ -263,21 +286,22 @@ def _session_fresh_or_strong(hit: dict, terms: list[str]) -> bool:
     return _coverage(_hit_text("session", hit), terms) >= SESSION_STALE_MIN_TERMS
 
 
-def _budget(domain: str, hits: list[dict]) -> list[dict]:
+def _budget(domain: str, hits: list[dict], caps: dict[str, int] = DOMAIN_CHAR_CAPS) -> list[dict]:
     if domain == "library":
         # Archive slots carry their own budget, so ordinary hits ranked above
         # them cannot use it up (D4); original order is kept.
         tagged = [{**h, "_i": i} for i, h in enumerate(hits)]
         is_arch = [str(h.get("source") or "").startswith(ARCHIVE_PREFIX) for h in tagged]
-        kept = (_budget_one("library", [h for h, a in zip(tagged, is_arch) if not a])
-                + _budget_one("memory_archive", [h for h, a in zip(tagged, is_arch) if a]))
+        kept = (_budget_one("library", [h for h, a in zip(tagged, is_arch) if not a], caps)
+                + _budget_one("memory_archive", [h for h, a in zip(tagged, is_arch) if a], caps))
         kept.sort(key=lambda h: h["_i"])
         return [{k: v for k, v in h.items() if k != "_i"} for h in kept]
-    return _budget_one(domain, hits)
+    return _budget_one(domain, hits, caps)
 
 
-def _budget_one(domain: str, hits: list[dict]) -> list[dict]:
-    cap = DOMAIN_CHAR_CAPS.get(domain, 1500)
+def _budget_one(domain: str, hits: list[dict],
+                caps: dict[str, int] = DOMAIN_CHAR_CAPS) -> list[dict]:
+    cap = caps.get(domain, 1500)
     used = 0
     out: list[dict] = []
     for h in hits:

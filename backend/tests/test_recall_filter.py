@@ -148,7 +148,7 @@ async def test_followup_recall_runs_on_a_new_topic_only(monkeypatch):
     from unittest.mock import MagicMock
 
     calls = []
-    def fake_body(q, project, prompt_text, sid, deadline):
+    def fake_body(q, project, prompt_text, sid, deadline, followup=False):
         calls.append((q, prompt_text))
         return "new knowledge about pipeline worktree", []
     monkeypatch.setattr(sr, "_unified_recall_body", fake_body)

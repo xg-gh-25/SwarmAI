@@ -199,3 +199,32 @@ def test_code_hits_match_the_symbol_name_not_a_project_name(monkeypatch):
     out = filter_recall(BucketedRecall(
         query="SwarmAI s_autonomous-pipeline session_router", buckets={"codeintel": hits}))
     assert [h["name"] for h in out.buckets["codeintel"]] == ["build"]   # via its file
+
+
+def test_followup_recall_is_smaller_than_the_first():
+    """§9: a follow-up keeps 2 library hits, 1 archive, 1 past session, under
+    FOLLOWUP_CHAR_CAPS; the first recall keeps the full sizes."""
+    lib = [_lib(f"Notes/n{i}.md", i) for i in range(4)] + \
+          [_lib(f".context/Archives/MEMORY-archive-2026-0{i}.md", 10 + i) for i in range(2)]
+    ses = [{"text": "**2026-10-25 · session s%d**\n- User: pipeline worktree isolation %s" % (i, "q" * 900),
+            "date": "2026-10-25"} for i in range(3)]
+    r = BucketedRecall(query=_Q, buckets={"library": lib, "session": ses})
+    first = filter_recall(r)
+    later = filter_recall(r, followup=True)
+    assert len(first.buckets["library"]) == 5 and len(later.buckets["library"]) == 3
+    assert len(first.buckets["session"]) >= 2 and len(later.buckets["session"]) == 1
+    size = lambda out: sum(len(h.get("content") or h.get("text") or "")
+                           for b in out.buckets.values() for h in b)
+    assert size(later) <= sum(rf.FOLLOWUP_CHAR_CAPS[d] for d in ("library", "memory_archive", "session"))
+    assert size(later) < size(first)
+
+
+async def test_followup_path_asks_for_the_small_block(monkeypatch):
+    import core.session_router as sr
+    seen = []
+    monkeypatch.setattr(sr, "_unified_recall_body", lambda *a: seen.append(a) or ("w" * 50, []))
+    u, o = _unit(_recall_injected=True, _recall_terms=frozenset({"x"}), _recall_history="",
+                 _recall_chars=0, _app_session_id="s"), MagicMock()
+    o.system_prompt = ""
+    await sr._maybe_followup_recall("pipeline worktree 隔离", o, u, False)
+    assert seen and seen[0][-1] is True

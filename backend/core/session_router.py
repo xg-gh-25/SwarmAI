@@ -1037,7 +1037,7 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
 def _unified_recall_body(
     query: str, active_project: Optional[tuple[Optional[str], str]] = None,
     prompt_text: str = "", exclude_session_id: Optional[str] = None,
-    deadline: Optional[float] = None,
+    deadline: Optional[float] = None, followup: bool = False,
 ) -> tuple[str, Optional[list[dict]]]:
     """Returns (rendered_body_str, structured_hits | None).
 
@@ -1097,7 +1097,7 @@ def _unified_recall_body(
         # Relevance gate + "not already in the prompt" + size budget
         # (core/recall_filter.py): ranking alone never says "nothing relevant".
         from .recall_filter import filter_recall
-        result = filter_recall(result, prompt_text)
+        result = filter_recall(result, prompt_text, followup=followup)
         graph_context = _graph_enrich_recall(query)
         body = render_recall_body(result, project=project, graph_context=graph_context)
         # Structured hits from the SAME result object (the real recalled hits with
@@ -1340,7 +1340,7 @@ async def _maybe_followup_recall(
         body, _hits = await asyncio.wait_for(
             executors.run_in("io", _unified_recall_body, keywords, project, seen,
                              getattr(unit, "_app_session_id", None) or unit.session_id,
-                             time.monotonic() + _RECALL_DISASTER_TIMEOUT_S),
+                             time.monotonic() + _RECALL_DISASTER_TIMEOUT_S, True),
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         ms = (time.perf_counter() - t0) * 1000.0

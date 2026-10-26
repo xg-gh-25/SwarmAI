@@ -236,7 +236,7 @@ def _replay_session(args: tuple) -> list[dict]:
         if counterfactual and not rec["ran"] and rec["kw"]:
             seen = opts.system_prompt + "\n" + (getattr(unit, "_recall_history", "") or "")
             body, would = sr._unified_recall_body(rec["kw"], unit._active_project, seen, sid,
-                                                  time.monotonic() + 8.0)
+                                                  time.monotonic() + 8.0, True)
             rec["would"] = [{k: h.get(k) for k in ("domain", "source", "text")}
                             for h in would or []] if body else []
         records.append(rec)
