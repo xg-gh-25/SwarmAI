@@ -188,7 +188,8 @@ def main(argv: list[str]) -> int:
                 return 2
 
             def broken():
-                doc = tmp / "IMPROVEMENT.md"
+                from core.ddd_paths import ddd_write_path
+                doc = ddd_write_path(tmp / "NoisyProject", "IMPROVEMENT.md")
                 doc.write_text("## Lessons\n\n" + "".join(
                     _NOISY_ENTRY.format(i=i) for i in range(1, 5)), encoding="utf-8")
                 return _noise_fails_noisy_doc(str(doc))
