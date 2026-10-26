@@ -228,3 +228,16 @@ async def test_followup_path_asks_for_the_small_block(monkeypatch):
     o.system_prompt = ""
     await sr._maybe_followup_recall("pipeline worktree 隔离", o, u, False)
     assert seen and seen[0][-1] is True
+
+
+def test_old_daily_activity_needs_three_terms(monkeypatch):
+    """§10: DailyActivity older than 7 days needs 3 matched terms, like sessions."""
+    monkeypatch.setattr(rf, "_today", lambda: "2026-10-26")
+    two = "pipeline worktree " + "d" * 80
+    hits = [{"source": "DailyActivity/2026-10-01.md", "heading": "x", "content": two},
+            {"source": "DailyActivity/2026-10-02.md", "heading": "x", "content": two + " isolation"},
+            {"source": "DailyActivity/2026-10-24.md", "heading": "x", "content": two},
+            {"source": "Notes/old-note.md", "heading": "x", "content": two}]
+    out = filter_recall(BucketedRecall(query=_Q, buckets={"library": hits}))
+    assert [h["source"] for h in out.buckets["library"]] == [
+        "DailyActivity/2026-10-02.md", "DailyActivity/2026-10-24.md", "Notes/old-note.md"]

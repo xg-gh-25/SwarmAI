@@ -21,8 +21,8 @@ is applied between ``recall_all`` and rendering:
    coverage did NOT separate useful from noise hits): the library leg keeps its
    first ``LIBRARY_TOP`` relevant hits plus up to ``ARCHIVE_SLOTS`` MEMORY /
    EVOLUTION archive hits with their own budget, and never fetched feeds
-   (``NO_INJECT_PREFIXES``); a past session older than ``SESSION_FRESH_DAYS``
-   must match ``SESSION_STALE_MIN_TERMS`` query terms.
+   (``NO_INJECT_PREFIXES``); a past session or a DailyActivity day older than
+   ``SESSION_FRESH_DAYS`` must match ``SESSION_STALE_MIN_TERMS`` query terms.
 
 Nothing is removed from any corpus; this only decides which hits of this
 query are worth the model's attention.
@@ -85,6 +85,10 @@ NO_INJECT_PREFIXES = ("Signals/", "Archives/Signals/", "DailyBriefs/")
 # older session must match at least SESSION_STALE_MIN_TERMS query terms.
 SESSION_FRESH_DAYS = 7
 SESSION_STALE_MIN_TERMS = 3
+# DailyActivity follows the same age rule (design 2026-10-26 §10): useful 83%
+# within 2 days, 42% at 3-7 days, 13% at 8-30 days, 9% older. Its date is the
+# file name (``DailyActivity/YYYY-MM-DD.md``).
+_DAILY_RE = re.compile(r"(?:^|/)DailyActivity/(\d{4}-\d{2}-\d{2})")
 
 
 def _today() -> str:
@@ -238,6 +242,7 @@ def filter_recall(result: Any, prompt_text: str = "", followup: bool = False) ->
             kept = [h for h in hits if isinstance(h, dict)
                     and _keep(domain, _hit_text(domain, h), terms, prompt_norm, code_terms)]
             if domain == "library":
+                kept = [h for h in kept if _daily_fresh_or_strong(h, terms)]
                 kept = _library_slots(kept, slots.get("library", LIBRARY_TOP),
                                       slots.get("memory_archive", ARCHIVE_SLOTS))
             elif domain == "session":
@@ -270,10 +275,9 @@ def _library_slots(hits: list[dict], top: int = LIBRARY_TOP,
     return out
 
 
-def _session_fresh_or_strong(hit: dict, terms: list[str]) -> bool:
-    """A past session recent enough, or old but matching enough terms. A hit with
-    no date keeps the old behaviour (kept): its age is unknown, not old."""
-    day = str(hit.get("date") or "")[:10]
+def _fresh_or_strong(day: str, text: str, terms: list[str]) -> bool:
+    """Recent enough (<= SESSION_FRESH_DAYS before today), or older but matching
+    SESSION_STALE_MIN_TERMS query terms. No or bad date: kept (age unknown, not old)."""
     if not day:
         return True
     try:
@@ -283,7 +287,18 @@ def _session_fresh_or_strong(hit: dict, terms: list[str]) -> bool:
         return True
     if age <= SESSION_FRESH_DAYS:
         return True
-    return _coverage(_hit_text("session", hit), terms) >= SESSION_STALE_MIN_TERMS
+    return _coverage(text, terms) >= SESSION_STALE_MIN_TERMS
+
+
+def _session_fresh_or_strong(hit: dict, terms: list[str]) -> bool:
+    """The age rule for a past-session hit (date = its best match's day)."""
+    return _fresh_or_strong(str(hit.get("date") or "")[:10], _hit_text("session", hit), terms)
+
+
+def _daily_fresh_or_strong(hit: dict, terms: list[str]) -> bool:
+    """The age rule for a DailyActivity library hit; other sources pass."""
+    m = _DAILY_RE.search(str(hit.get("source") or ""))
+    return not m or _fresh_or_strong(m.group(1), _hit_text("library", hit), terms)
 
 
 def _budget(domain: str, hits: list[dict], caps: dict[str, int] = DOMAIN_CHAR_CAPS) -> list[dict]:
