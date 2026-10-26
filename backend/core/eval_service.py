@@ -286,6 +286,8 @@ class EvalService:
                     for c in ((r.get("release") or {}).get("checks") or []) if isinstance(c, dict)
                 ],
                 "report": report,
+                # per dimension and tier: passed / failed / not_run (the trend lines)
+                "dimension_summary": r.get("dimension_summary") or {},
                 "total_cases": r.get("total_cases"),
                 "cases_passed": r.get("cases_passed"),
                 "cases_failed": r.get("cases_failed"),
@@ -594,6 +596,8 @@ class EvalService:
 
     def get_golden_set(self, category: Optional[str] = None) -> dict:
         """Return golden set metadata + cases (optionally filtered)."""
+        from core.eval_release import tier_of
+
         cases = self._cases
         if category:
             cases = [c for c in cases if c.get("category") == category]
@@ -617,6 +621,9 @@ class EvalService:
                     # governance state — expose only for product cases (Gate-2 leak).
                     "source": c.get("source") if c.get("_origin") != "private" else None,
                     "tier": c.get("tier", "active"),
+                    # red | gate | watch: how much say the case has in a release
+                    # (core/eval_release.tier_of — the run uses the same function)
+                    "release_tier": tier_of(c),
                     "eval_method": c.get("eval_method"),
                     # _origin is the product|private TAG only (never private content) —
                     # lets the UI tell shipped product cases from the user's own

@@ -62,3 +62,23 @@ def test_the_quick_line_carries_the_days(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_next_job_fire", lambda job, now: None)
     quick = svc.get_lines(now=datetime(2026, 10, 26, tzinfo=timezone.utc))["quick"]
     assert quick["days"] == [{k: v for k, v in days[0].items() if k != "extra"}]
+
+
+def test_list_rows_carry_the_release_tier_and_history_the_dimension_summary(tmp_path, monkeypatch):
+    from scripts.golden_case_validator import compute_case_stamp
+    gate = {"id": "G", "category": "recall", "dimension": "cognition", "gating": "gate",
+            "tier": "stable", "evaluators": ["canary_pass"], "eval_method": "programmatic"}
+    gate["validated_by_4gate"] = compute_case_stamp(gate)
+    red = {**gate, "id": "R", "redline": True, "gating": "watch"}
+    watch = {**gate, "id": "W", "gating": "watch"}
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []},
+                           product_cases=[{**c, "_origin": "product"} for c in (gate, red, watch)])
+    hist = tmp_path / "Eval" / "EvalHistory"
+    hist.mkdir(parents=True)
+    summary = {"cognition": {"gate": {"passed": 1, "failed": 0, "not_run": 0}}}
+    (hist / "r.json").write_text(json.dumps({"run_id": "r", "triggered_at": "2026-10-20T03:00:00+00:00",
+                                             "cases": [], "dimension_summary": summary}))
+    svc = EvalService(workspace_root=tmp_path)
+    tiers = {c["id"]: c["release_tier"] for c in svc.get_golden_set()["cases"]}
+    assert tiers == {"G": "gate", "R": "red", "W": "watch"}
+    assert svc.get_history()[0]["dimension_summary"] == summary
