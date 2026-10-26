@@ -413,6 +413,8 @@ export function deriveTurnView(
   let summary: PipelineSummaryContent | undefined;
   const deliverables: TurnDeliverable[] = [];
   const products: TurnProductContent[] = [];
+  /** Files that already have an in-turn product row (one row per file per turn). */
+  const shownFiles = new Set<string>();
   let changes: TurnChangesContent | undefined;
   // One tool step (and its sub-agent children) into the open process segment. `stand`:
   // a stand-in Agent step for sub-agent calls whose Agent was called in an earlier turn
@@ -546,6 +548,12 @@ export function deriveTurnView(
     if (block.type === 'turn_product') {
       products.push(block);
       if (block.parentToolUseId) return; // a sub-agent's product: on the card only
+      // One row per file in the turn (Gawan 2026-10-26): a file written again keeps
+      // the row it already has. The repeat is not a zone and does not end the work.
+      if (block.product === 'file') {
+        if (shownFiles.has(block.absolutePath)) return;
+        shownFiles.add(block.absolutePath);
+      }
       seg = null;
       const prev = units[units.length - 1];
       if (prev?.kind === 'products') prev.blocks.push(block);

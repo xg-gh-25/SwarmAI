@@ -92,6 +92,27 @@ describe('a product ends the work that made it', () => {
     const { container } = render(view(blocks, false));
     expect(zones(container)).not.toContain('products');
   });
+
+  it('a file written again later in the turn keeps its one row; the later write adds none', () => {
+    // Gawan 2026-10-26: the same file appeared after two WORKED groups
+    const blocks = [write('w1', '/u/a.py'), tr('w1'), fileP('w1', '/u/a.py'),
+      bash('b1', 'x'), tr('b1'),
+      write('w2', '/u/a.py'), tr('w2'), fileP('w2', '/u/a.py'),
+      write('w3', '/u/b.py'), tr('w3'), fileP('w3', '/u/b.py'), tx('Done.')];
+    const { container } = render(view(blocks, false));
+    const rows = [...container.querySelectorAll('[data-testid="zone-products"] [data-testid="deliverable"]')];
+    expect(rows.map((r) => r.getAttribute('data-path'))).toEqual(['/u/a.py', '/u/b.py']);
+    // the second write of a.py does not end the work: no extra zone for it
+    expect(zones(container).filter((z) => z === 'products')).toHaveLength(2);
+  });
+
+  it('a repeat write alone does not split the work it is part of', () => {
+    const blocks = [write('w1', '/u/a.py'), tr('w1'), fileP('w1', '/u/a.py'),
+      bash('b1', 'x'), tr('b1'), write('w2', '/u/a.py'), tr('w2'), fileP('w2', '/u/a.py'),
+      bash('b2', 'y'), tr('b2'), tx('Done.')];
+    const { container } = render(view(blocks, false));
+    expect(zones(container).filter((z) => z === 'phase')).toHaveLength(2);
+  });
 });
 
 describe('the ending card', () => {
