@@ -107,9 +107,12 @@ async def test_build_joins_the_catalog_and_backfills_an_old_session(tmp_path, mo
 
 
 @pytest.mark.asyncio
-async def test_the_parts_are_independent(monkeypatch):
+async def test_the_parts_are_independent(tmp_path, monkeypatch):
     from core import canvas_session as cs
-    so.record("s1", [_ev("a.md")], at="t1")
+    ws = tmp_path / "ws"; f = ws / "Knowledge" / "Library" / "a.md"
+    f.parent.mkdir(parents=True); f.write_text("x")
+    monkeypatch.setattr("core.project_registry.get_swarmws", lambda: ws)
+    so.record("s1", [_ev("a.md", absolutePath=str(f))], at="t1")
     so.backfill("s1", [])
 
     async def no_blocks(sid, needles):

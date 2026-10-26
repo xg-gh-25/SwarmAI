@@ -172,3 +172,23 @@ def test_a_removed_session_worktree_row_reads_its_landed_file(tmp_path, monkeypa
                              None, "sess-1")
     assert row["absolutePath"] == gone and row["exists"] is True and row["inHead"] is True
     assert seen == [(gone, "sess-1")]
+
+
+def test_canvas_artifacts_keep_only_products(tmp_path, monkeypatch):
+    """design 2026-10-26-artifacts-one-rule.md: Canvas Artifacts = the session's rows the
+    product rule keeps (the same rule Left Nav reads); repo code, external files and
+    dot-folder backups are the turn's facts, not artifacts."""
+    from core import session_outputs
+    ws = tmp_path / "ws"
+    note = ws / "Knowledge" / "Library" / "n.md"
+    backup = ws / ".context" / ".sweep-backups" / "x" / "EVOLUTION.md"
+    for f in (note, backup):
+        f.parent.mkdir(parents=True); f.write_text("x")
+    code = tmp_path / "swt" / "x" / "repo" / "a.py"
+    rows = [{"path": p.name, "absolutePath": str(p), "kind": k, "firstAt": "t", "lastAt": "t",
+             "writes": 1, "deleted": False}
+            for p, k in ((note, "content"), (backup, "knowledge"), (code, "external-diff"))]
+    monkeypatch.setattr(session_outputs, "read", lambda sid: {"rows": rows, "backfilled": True})
+    monkeypatch.setattr(cs, "in_head", lambda paths: {})
+    got = cs._artifacts("s1", str(ws), None)
+    assert [r["absolutePath"] for r in got] == [str(note)]

@@ -145,11 +145,14 @@ def _landed(path: str, session_id: Optional[str]) -> str:
 # ── the request ─────────────────────────────────────────────────────────────
 
 def _artifacts(session_id: str, workspace: Optional[str], backfill_turns: Optional[list]) -> list[dict]:
-    """Blocking, on the canvas_session pool (after the router's queued writes)."""
+    """Blocking, on the canvas_session pool (after the router's queued writes). Only
+    the rows the product rule keeps: the same rule as Left Nav's Artifacts (design
+    2026-10-26-artifacts-one-rule.md); the turn's own rows list every write."""
     from core import session_outputs
     if backfill_turns is not None:
         session_outputs.backfill(session_id, backfill_turns)
-    return artifact_rows(session_outputs.read(session_id)["rows"], workspace, session_id)
+    rows = artifact_rows(session_outputs.read(session_id)["rows"], workspace, session_id)
+    return [r for r in rows if r["product"]]
 
 
 async def build(session_id: str, parts: str = "all") -> dict[str, Any]:

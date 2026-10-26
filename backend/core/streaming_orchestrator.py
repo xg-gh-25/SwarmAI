@@ -209,6 +209,12 @@ async def write_user_message(
     return claim
 
 
+def _ignored_product(abs_path: str, ws_root) -> bool:
+    """ProductRegistry.is_ignored_product for the emit gates (blocking; run on io)."""
+    from core.product_registry import ProductRegistry
+    return ProductRegistry(ws_root).is_ignored_product(abs_path)
+
+
 class StreamingOrchestrator:
     """Owns SDK response streaming and event formatting logic.
 
@@ -741,6 +747,12 @@ class StreamingOrchestrator:
                 verdict = await executors.run_in(
                     "io", needs_human_review, resolved["absolute"], "written"
                 )
+                if not verdict.review_worthy and await executors.run_in(
+                        "io", _ignored_product, resolved["absolute"], ws_root):
+                    # A gitignored PRODUCT (a deck under Projects/*/assets): a fact of
+                    # the turn like any other deliverable (design
+                    # 2026-10-26-artifacts-one-rule.md §2.3).
+                    verdict = type(verdict)(True, "content", verdict.repo)
                 if not verdict.review_worthy:
                     # SwarmWS/bound-worktree machine-noise → never surface. BUT a file
                     # the session touched OUTSIDE every known tree (an external repo or
@@ -861,6 +873,12 @@ class StreamingOrchestrator:
                     logger.debug("_build_file_delete_events: suppressed exception on a fail-safe path", exc_info=True)
                     resolved = None
                 resolve_cache[raw] = resolved
+            if not _worthy:
+                try:
+                    _worthy = await executors.run_in(
+                        "io", _ignored_product, resolved["absolute"] if resolved else raw, ws_root)
+                except Exception:  # noqa: BLE001 — fail-safe: fall to the external check
+                    logger.debug("_build_file_delete_events: product check failed", exc_info=True)
             if not _worthy:
                 # An OUTSIDE-tree file (external repo / plain FS) is declined by
                 # needs_human_review, but if it WAS surfaced as an external row, its

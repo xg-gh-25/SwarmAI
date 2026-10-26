@@ -1144,3 +1144,38 @@ class TestStarred:
             assert "Knowledge/fav.html" in paths, "a starred row must NEVER be evicted, even as oldest"
         finally:
             pr.MAX_PRODUCTS = old_cap
+
+
+
+class TestOneRuleSwarmWSOnly:
+    """design 2026-10-26-artifacts-one-rule.md: a product is a SwarmWS file; a bound
+    repo's file is never one, whatever its name; a gitignored file is one only under a
+    product dir (is_ignored_product, no git call)."""
+
+    def test_a_bound_repo_file_is_not_a_product(self, ws, tmp_path, monkeypatch):
+        from core import product_registry as pr
+        repo = tmp_path / "repo"
+        f = repo / "Knowledge" / "Designs" / "d.md"
+        f.parent.mkdir(parents=True); f.write_text("x")
+        monkeypatch.setattr(pr, "_owning_tree",
+                            lambda p, root: (repo, str(Path(p).relative_to(repo)), "repo")
+                            if str(p).startswith(str(repo)) else None)
+        reg = pr.ProductRegistry(ws)
+        assert reg.lookup([str(f)])[str(f)]["product"] is False
+        reg.register_batch([str(f)])
+        assert reg.list_products() == []
+
+    @pytest.mark.parametrize("rel,want", [
+        ("Projects/X/assets/deck.html", True),
+        ("Knowledge/Library/report.pdf", True),
+        ("Projects/X/notes.md", False),
+        (".context/x.md", False),
+        ("Projects/X/assets/.env", False),
+    ])
+    def test_is_ignored_product(self, ws, rel, want):
+        from core.product_registry import ProductRegistry
+        assert ProductRegistry(ws).is_ignored_product(str(ws / rel)) is want
+
+    def test_is_ignored_product_outside_swarmws_is_false(self, ws, tmp_path):
+        from core.product_registry import ProductRegistry
+        assert ProductRegistry(ws).is_ignored_product(str(tmp_path.parent / "elsewhere-not-ws" / "assets" / "d.html")) is False

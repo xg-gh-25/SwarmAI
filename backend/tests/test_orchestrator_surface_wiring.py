@@ -205,3 +205,31 @@ def test_layer4_frontend_gate_accepts_the_emitted_kind():
     assert "knowledge" in accepted, (
         f"a REPORT.md surface emits kind=knowledge; frontend AUTO_POP_KINDS are "
         f"{accepted} — if 'knowledge' is missing, Canvas would never auto-open on it")
+
+
+
+# ── (e) a gitignored PRODUCT (assets deck) is a fact of the turn: emitted ───────
+# design 2026-10-26-artifacts-one-rule.md §2.3
+
+def test_gitignored_product_write_is_emitted_as_content(monkeypatch):
+    _patch_boundaries(monkeypatch, review_worthy=False, kind="process")
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(
+        _drive(orch, [_write_tool_use(file_path="Projects/X/assets/deck.html"),
+                      _tool_result(), _make_result_message()])
+    )
+    assert raised is None
+    fc = [e for e in events if e.get("type") == "file_changed" and e.get("operation") == "written"]
+    assert [(e["path"], e["kind"]) for e in fc] == [("Projects/X/assets/deck.html", "content")]
+
+
+def test_gitignored_product_delete_is_emitted(monkeypatch):
+    _patch_boundaries(monkeypatch, review_worthy=False, kind="process")
+    orch = _make_orchestrator()
+    events, raised = asyncio.run(
+        _drive(orch, [_bash_rm_tool_use(path="Projects/X/assets/deck.html"),
+                      _tool_result(tool_use_id="tu-rm1"), _make_result_message()])
+    )
+    assert raised is None
+    deleted = [e for e in events if e.get("type") == "file_changed" and e.get("operation") == "deleted"]
+    assert len(deleted) == 1 and deleted[0]["path"].endswith("assets/deck.html")

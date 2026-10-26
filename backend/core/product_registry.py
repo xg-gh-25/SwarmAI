@@ -540,7 +540,25 @@ class ProductRegistry:
         if owning is None:
             return None  # external / $HOME / tmp — not our product (AC4)
         tree_root, rel_path, repo = owning
+        if repo is not None:
+            # A bound repo's or run's worktree: code-tree files are a turn's changes,
+            # never a SwarmWS product, whatever their name (design
+            # 2026-10-26-artifacts-one-rule.md §2.2).
+            return None
         return tree_root, rel_path.replace("\\", "/"), repo
+
+    def is_ignored_product(self, abs_path: str) -> bool:
+        """Would *abs_path* be a product even though git ignores it? The product rule
+        with ``ignored=True``: only a SwarmWS file under a product dir (assets/,
+        Library/, ...) passes. Pure (no git call). The emit gate asks it for a SwarmWS
+        path ``needs_human_review`` declined, so a gitignored deck a session made is
+        a fact of its turn (design 2026-10-26-artifacts-one-rule.md §2.3). Never raises."""
+        try:
+            r = self._resolve(abs_path)
+            return r is not None and self._classify(r[0], r[1], r[2], True) is not None
+        except Exception:  # noqa: BLE001 — a display aid: unknown = not a product
+            logger.debug("is_ignored_product failed for %s", abs_path, exc_info=True)
+            return False
 
     def _classify(
         self,
