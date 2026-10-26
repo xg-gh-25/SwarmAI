@@ -44,7 +44,7 @@ def test_five_dimensions_and_completed_card_share_numbers():
     report = render(audit, fmt="report")
     for name in ("Run Isolation", "Speed", "Quality", "Autonomy", "Token Cost"):
         assert name in card and name in report
-    assert "PUSH READY" in card and "push 前还需要" in report
+    assert "PUSH READY" in card and "deploy" not in report.lower()
 
 
 def test_token_calls_without_measurement_block_and_manual_landing_warns():
@@ -122,7 +122,7 @@ def test_accept_finding_is_a_human_decision_and_approvals_are_counted():
 def test_report_has_one_conclusion_no_guard_line_and_the_card_its_label():
     audit = _facts(events=list(MEASURED))
     report = render(audit, fmt="report")
-    assert "已落地" in report and "Landing guards" not in report
+    assert "Landed (" in report and "Landing guards" not in report
     assert "Full machine-readable audit is stored with this run." in report
     assert audit["card"].rstrip().endswith("Final audit through COMPLETED")
     assert "% budget" in report
@@ -140,7 +140,7 @@ def test_missing_time_is_null_and_quality_na_shows_the_reason():
     assert "Quality        N/A · framing_rejected" in audit["card"]
     assert audit["summary"]["isolation"]["verdict"] == "WARN"      # not measured
     report = render(audit, fmt="report")
-    assert "未落地" in report and "/l/run_x/repo" in report and "time incomplete" in report
+    assert "Not landed:" in report and "/l/run_x/repo" in report and "time incomplete" in report
 
 
 def test_a_high_security_policy_finding_is_listed_first():
@@ -154,7 +154,7 @@ def test_a_high_security_policy_finding_is_listed_first():
                   push={"push_ready": False, "reasons": {"MD-1": "a", "RV-2": "b"}},
                   audit_through="DELIVER", repos_isolated=1)
     report = render(audit, fmt="report")
-    section = report.split("## Push 前需要你看的")[1]
+    section = report.split("## Look at these before you push")[1]
     assert section.strip().startswith("- CF-aaaaaaaa"), section
 
 
@@ -164,5 +164,5 @@ def test_quality_counts_the_agents_test_reports_and_reports_them():
     assert (q["verification_passed"], q["verification_required"]) == (1, 1)
     report = render(audit, fmt="report")
     # no review expert answered in these events: the reports are the agent's word alone
-    assert "仅由 agent 报告" in report and "2 通过，0 失败" in report
+    assert "reported by the agent only" in report and "2 pass, 0 fail" in report
 

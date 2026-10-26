@@ -81,7 +81,7 @@ def test_direct_run_reaches_landed_completed(tmp_path, monkeypatch):
     final_report = (engine.run_dir / "REPORT.md").read_text()
     assert "Final audit through COMPLETED" in final_report
     # the person's request survives the COMPLETED rebuild (derived from signed events)
-    assert f"人工落地：request {request_id}" in final_report
+    assert f"Landed by a person: request {request_id}" in final_report
 
     assert all(row["verdict"] != "BLOCK" for row in audit["summary"].values())
 

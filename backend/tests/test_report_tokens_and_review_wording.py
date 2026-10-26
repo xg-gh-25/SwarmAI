@@ -7,7 +7,7 @@ What is tested (real CLI and hooks, ``tests/pipeline_v1_rig.py``):
   records ``metric(usage_not_available)`` at DELIVER and Token Cost is WARN with the
   reason, never BLOCK "not measured" (the old REPORT, rendered before REFLECT measured);
 - a run whose test reports no review expert saw (a small direct change dispatches
-  none) says so in the conclusion and the test section: "仅由 agent 报告";
+  none) says so in the conclusion and the test section: "reported by the agent only";
 - a run whose review experts answered says the reports were reviewed instead.
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ def test_without_a_transcript_token_cost_is_warn_with_the_reason(rig):
     # before the DELIVER REPORT, and again as the landing's command ends REFLECT
     assert [e["stage"] for e in missing] == ["deliver", "reflect"], missing
     row = _row(report, "Token Cost")
-    assert row.startswith("| Token Cost | WARN | not measured（"), row
+    assert row.startswith("| Token Cost | WARN | not measured ("), row
 
 
 def test_with_a_transcript_the_report_shows_the_tokens_up_to_delivery(rig):
@@ -98,8 +98,8 @@ def test_reports_no_expert_saw_are_called_agent_only(rig):
     report = _land(r)
     assert not [e for e in r.events() if e["kind"] in ("handout", "answer")]
     conclusion = report.splitlines()[2]
-    assert "测试结果仅由 agent 报告，没有审查专家核实" in conclusion, conclusion
-    assert "## 测试（仅由 agent 报告：pipeline 没有重跑，也没有审查专家核实）" in report, report
+    assert "Test results are reported by the agent only; no review expert checked them" in conclusion, conclusion
+    assert "## Tests (reported by the agent only: not rerun by the pipeline, not checked by a review expert)" in report, report
 
 
 def test_reports_the_experts_reviewed_say_so(rig):
@@ -107,5 +107,5 @@ def test_reports_the_experts_reviewed_say_so(rig):
     r.create()
     report = _land(r)
     assert [e for e in r.events() if e["kind"] == "answer" and e["stage"] == "review"]
-    assert "仅由 agent 报告" not in report, report
-    assert "## 测试（agent 报告，pipeline 没有重跑；审查专家审阅过这些报告）" in report, report
+    assert "reported by the agent only" not in report, report
+    assert "## Tests (reported by the agent, not rerun by the pipeline; review experts read these reports)" in report, report

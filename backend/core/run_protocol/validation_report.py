@@ -167,12 +167,12 @@ def report_lines(events: Sequence[Mapping[str, Any]]) -> list[str]:
     for stage in ("build", "test"):
         for repo, event in sorted(latest(events, stage).items()):
             p = event["payload"]
-            lines.append(f"- {stage} · {repo} @ {str(p['code_tree'])[:12]}："
-                         f"{p['n_pass']} 通过，{p['n_fail']} 失败，{p['n_not_run']} 未运行")
+            lines.append(f"- {stage} · {repo} @ {str(p['code_tree'])[:12]}: "
+                         f"{p['n_pass']} pass, {p['n_fail']} fail, {p['n_not_run']} not run")
     if lines:
-        head = ("## 测试（agent 报告，pipeline 没有重跑；审查专家审阅过这些报告）"
+        head = ("## Tests (reported by the agent, not rerun by the pipeline; review experts read these reports)"
                 if reports_reviewed(events) else
-                "## 测试（仅由 agent 报告：pipeline 没有重跑，也没有审查专家核实）")
+                "## Tests (reported by the agent only: not rerun by the pipeline, not checked by a review expert)")
         lines = [head, ""] + lines
     return lines
 

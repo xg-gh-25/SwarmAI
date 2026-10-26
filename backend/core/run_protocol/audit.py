@@ -458,7 +458,7 @@ def _token_text(token: Mapping[str, Any]) -> str:
     total, accounted, calls = token.get("total_tokens"), token.get("accounted_calls"), token.get("total_calls")
     if total is None:
         why = token.get("not_available")
-        return f"not measured（{_text(why, 120)}）" if why else "not measured"
+        return f"not measured ({_text(why, 120)})" if why else "not measured"
     if calls is None or accounted != calls:
         shown = f"{accounted}/{calls}" if calls is not None else f"{accounted}/unknown"
         return f"{_k(total)} observed · {shown} calls accounted"
@@ -500,16 +500,17 @@ def _text(value: Any, limit: int = 300) -> str:
 def _conclusion(audit: Mapping[str, Any]) -> str:
     """§B8 item 1: what was delivered and whether landing passed; else the reason."""
     outcome, details = audit["outcome"], audit.get("details") or {}
-    what = _text(details.get("requirement") or f"run {audit['run_id']}", 200)
+    # the sentence adds its own full stop: a requirement ending in one would read ".."
+    what = _text(details.get("requirement") or f"run {audit['run_id']}", 200).rstrip(" .\u3002")
     landing = outcome.get("landing")
-    agent_only = ("测试结果仅由 agent 报告，没有审查专家核实。"
+    agent_only = (" Test results are reported by the agent only; no review expert checked them."
                   if details.get("validation") and not details.get("reports_reviewed") else "")
     if audit.get("audit_through") == "DELIVER" and landing is None:
-        return f"交付：{what}。落地守卫通过。{agent_only}"
+        return f"Delivered: {what}. Landing checks passed.{agent_only}"
     if landing in ("landed", "human_override"):
-        return (f"交付：{what}。已落地（{'人工' if landing == 'human_override' else '守卫通过'}）。"
+        return (f"Delivered: {what}. Landed ({'by a person' if landing == 'human_override' else 'landing checks passed'})."
                 + agent_only)
-    return f"未落地：{what}。reason：{outcome.get('reason') or landing or 'unknown'}。"
+    return f"Not landed: {what}. Reason: {outcome.get('reason') or landing or 'unknown'}."
 
 
 def render(audit: Mapping[str, Any], *, fmt: str) -> str:
@@ -538,7 +539,7 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     cutoff = "Final audit through COMPLETED" if audit["audit_through"] == "COMPLETED" \
         else "Audit through DELIVER"
     run_title = _text(details.get("title") or audit["run_id"], 120)
-    lines = [f"# {run_title}　　{cutoff}", "", _conclusion(audit), "",
+    lines = [f"# {run_title} · {cutoff}", "", _conclusion(audit), "",
              "## Run Audit", "", "| Dimension | Result | This run |", "|---|---|---|"]
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
     lines += ["", "Full machine-readable audit is stored with this run."]
@@ -546,27 +547,29 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         lines += [""] + [str(line) for line in details["validation"]]
     for repo, commands in (details.get("test_reports") or {}).items():
         if commands and commands[0].get("result") == "unreadable":
-            lines += ["", f"TEST · {_text(repo, 80)}：报告读不出（"
-                      f"{_text(commands[0].get('reason'), 200)}），本次不列命令"]
+            lines += ["", f"TEST · {_text(repo, 80)}: the report could not be read ("
+                      f"{_text(commands[0].get('reason'), 200)}); no commands listed"]
         elif commands:
-            lines += ["", f"TEST · {_text(repo, 80)}："]
+            lines += ["", f"TEST · {_text(repo, 80)}:"]
             lines += [f"- {_text(cmd.get('command'), 200)} → {_text(cmd.get('result'), 20)}"
-                      + (f"（{_text(cmd['reason'], 200)}）" if cmd.get("reason") else "")
+                      + (f" ({_text(cmd['reason'], 200)})" if cmd.get("reason") else "")
                       for cmd in commands[:10]]
             if len(commands) > 10:
-                lines.append(f"- 另有 {len(commands) - 10} 条，见 run_audit.json")
+                lines.append(f"- {len(commands) - 10} more in run_audit.json")
     library = details.get("library_lessons") or []
     if library:
-        lines += ["", "## 写进公共 Library 的经验", "",
-                  "这个项目没有对应的 DDD 文档，下面的经验写进了公共 Library（之后的会话会召回；"
-                  "以后给这个仓库建 DDD 时，可以拿它作素材）：", ""]
-        lines += [f"- {_text(row.get('id'), 20)}：{_text(row.get('statement'), 400)}"
-                  f"（`{_text(row.get('path'), 200)}`）" for row in library]
+        lines += ["", "## Lessons written to the shared Library", "",
+                  "This project has no DDD doc, so these lessons went to the shared Library "
+                  "(later sessions recall them; they are a starting point for a DDD for this "
+                  "repo):", ""]
+        lines += [f"- {_text(row.get('id'), 20)}: {_text(row.get('statement'), 400)}"
+                  f" (`{_text(row.get('path'), 200)}`)" for row in library]
     kept = details.get("kept_lessons") or []
     if kept:
-        lines += ["", "## 没有写进项目 DDD 的经验", "",
-                  "这个项目没有对应的 DDD 文档，下面的经验只保存在这次 run 里：", ""]
-        lines += [f"- {_text(row.get('id'), 20)}：{_text(row.get('statement'), 400)}"
+        lines += ["", "## Lessons kept in this run", "",
+                  "This project has no DDD doc and no repo to file them under, so these "
+                  "lessons are kept in this run's record only:", ""]
+        lines += [f"- {_text(row.get('id'), 20)}: {_text(row.get('statement'), 400)}"
                   for row in kept]
     if not outcome.get("push_ready"):
         reasons = dict(details.get("push_reasons") or {})
@@ -574,30 +577,31 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                 for cid in details.get("high_security_policy") or []]
         items = [f"- {_text(key, 80)}: {_text(detail)}" for key, detail in reasons.items()]
         if high or items:
-            lines += ["", "## Push 前需要你看的"] + high + items[:5]
+            lines += ["", "## Look at these before you push"] + high + items[:5]
             if len(items) > 5:
-                lines.append(f"- 另有 {len(items) - 5} 条，见 run_audit.json")
+                lines.append(f"- {len(items) - 5} more in run_audit.json")
     if outcome.get("reason") == "partial_land":
         landed = dict(details.get("commits") or {})
         expected = [str(name) for name in details.get("expected_repos") or []]
         missing = [name for name in expected if name not in landed]
-        lines += ["", "## 只落地了一部分", ""]
-        lines += [f"- 已落地：{name} @ {str(sha)[:12]}" for name, sha in sorted(landed.items())]
-        lines += [f"- 未落地：{name}" for name in missing]
-        lines.append("- main 上现在只有这次改动的一部分：先处理未落地的仓库，再 push。")
+        lines += ["", "## Only part of the change landed", ""]
+        lines += [f"- landed: {name} @ {str(sha)[:12]}" for name, sha in sorted(landed.items())]
+        lines += [f"- not landed: {name}" for name in missing]
+        lines.append("- main now holds only part of this change: deal with the repos that did "
+                     "not land before you push.")
     for name in details.get("unsettled_checkouts") or []:
-        lines.append(f"- {name}：已落地到分支，但共享 checkout 的 index / REPORT 没能收尾；"
-                     "`git status` 可能显示与 HEAD 的差异，文件没有丢失。")
+        lines.append(f"- {name}: landed on the branch, but the checkout's index / REPORT was not "
+                     "settled; `git status` may show differences from HEAD. No file was lost.")
     manual = details.get("manual")
     if manual:
-        lines += ["", f"人工落地：request {manual.get('request_id')}"
+        lines += ["", f"Landed by a person: request {manual.get('request_id')}"
                   + (f" — {_text(manual['note'])}" if manual.get("note") else "")]
-    lines += ["", "push 前还需要：构建 + 部署验证。"]
     retained = details.get("retained") or []
     if retained and outcome.get("landing") not in ("landed", "human_override"):
         where = ", ".join(str(row.get("ledger") or row.get("repo_name")) for row in retained)
-        lines += ["", f"未集成的工作保存在 {where}；用 `\"$SWARM_BACKEND_BIN\" pipeline-v1 restore` 恢复，"
-                  "或 `\"$SWARM_BACKEND_BIN\" pipeline-v1 run-land --prepare` 交给人落地。"]
+        lines += ["", f"The unintegrated work is saved in {where}; restore it with "
+                  "`\"$SWARM_BACKEND_BIN\" pipeline-v1 restore`, or hand it to a person with "
+                  "`\"$SWARM_BACKEND_BIN\" pipeline-v1 run-land --prepare`."]
     return "\n".join(lines).rstrip() + "\n"
 
 

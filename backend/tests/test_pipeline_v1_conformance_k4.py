@@ -123,7 +123,7 @@ def test_s5_manual_rescues_are_not_measured_and_never_decide_autonomy():
 def test_l6_report_title_is_the_run_title():
     value = _audit([], title="Add the shared lock helper")
     text = audit_protocol.render(value, fmt="report")
-    assert text.splitlines()[0] == "# Add the shared lock helper　　Audit through DELIVER"
+    assert text.splitlines()[0] == "# Add the shared lock helper · Audit through DELIVER"
     assert "Pipeline Delivery" not in text
 
 

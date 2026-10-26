@@ -75,7 +75,7 @@ def test_report_lists_kept_lessons_as_plain_text():
                 "outcome": {"status": "kept_in_run", "result": "kept_in_run"}},
                {"id": "L2", "statement": "applied one", "outcome": {"status": "applied"}}]
     report = render(_audit(findings=[], lessons=lessons), fmt="report")
-    section = report.split("## 没有写进项目 DDD 的经验")[1]
+    section = report.split("## Lessons kept in this run")[1]
     assert "L1" in section and "L2" not in section
     assert "[link](http://x)" not in section and "\\[link\\]" in section
 
@@ -125,7 +125,7 @@ def test_an_unreadable_test_report_blob_does_not_break_the_completed_audit(tmp_p
     assert reports["repo"].get("unreadable"), reports
     audit = _audit(findings=[], test_reports=reports)
     report = render(audit, fmt="report")
-    assert "repo" in report and "读不出" in report
+    assert "repo" in report and "could not be read" in report
 
 
 def test_a_doc_removed_between_the_check_and_the_write_is_kept_not_rejected(tmp_path, monkeypatch):

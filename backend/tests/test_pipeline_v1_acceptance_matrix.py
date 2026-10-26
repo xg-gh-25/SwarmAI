@@ -204,8 +204,8 @@ def test_a_repo_with_no_tests_lands_with_no_daemon(tmp_path, monkeypatch, profil
         text = _git(r.repo, "show", f"{head}:{report}")
         # the REPORT says what was not run and why (Markdown escapes the underscore),
         # and Quality does not call an unverified change verified
-        assert f"{UNRUN} → not\\_run（the repo has no tests" in text, text
-        assert "0 通过，0 失败，1 未运行" in text, text
+        assert f"{UNRUN} → not\\_run (the repo has no tests" in text, text
+        assert "0 pass, 0 fail, 1 not run" in text, text
         assert "| Quality | WARN | 0/1 verification" in text, text
     finally:
         r.close()

@@ -174,6 +174,7 @@ r8：要做到"不需要系统 Python"，只加两个子命令不够。打包版
   - 落地时 LG-1 要求 TEST 验证报告的 `code_tree` 等于落地的 tree，并且这个 tree 等于某一次审查（R1、R2 或增量审查）事件里记下的 `code_tree`。这样每一次进入落地的代码都被审查过，最终验证报告也对应同一份代码。
 - REPORT 里分开写：agent 报告的测试，和审查员核实过的部分。不再有机器打的 verified / unverified 标签。
   - 已实施（2026-10-25）：没有 REVIEW 专家回答过的 run（例如小改动不派专家），结论行写"测试结果仅由 agent 报告，没有审查专家核实"，测试一节的标题也这样写；有专家回答过，标题写"审查专家审阅过这些报告"。
+  - r31（2026-10-26）：REPORT 是提交进用户仓库的文件，所有固定文案统一为英文（上面两句现在是 "Test results are reported by the agent only; no review expert checked them" 和 "review experts read these reports"）；用户内容（需求原文）照原样引用。删除结尾固定的"push 前还需要：构建 + 部署验证"：那是 SwarmAI 自己发版的要求，对没有部署步骤的仓库是错的；SwarmAI 仓库的 push 要求写在它自己的 AGENTS.md。`tests/test_report_language.py` 守着这两条。
   - 已实施（2026-10-25）：`land`、`run-land --prepare` 和未落地收尾在渲染 DELIVER 的 REPORT 之前先统计一次 token（run 开始到此刻，记在 deliver 阶段）；REFLECT 结束时再统计一次全程。没有 transcript 时 Token Cost 是 WARN 并写明原因，不再是 BLOCK "not measured"（专家没被计量时仍按 §E5 是 BLOCK）。
 - 挡不挡落地：还有未解决的 HIGH/CRITICAL finding 就挡（RV-2）；TEST 验证报告里有"失败"的命令也挡（agent 自己报告失败，就不能交付）；MEDIUM/LOW 作为残余风险写进 REPORT。
 
@@ -626,3 +627,4 @@ S4 删掉 `pipeline_test_gate` 时，runner 仍然存在：S4 只删 gate 中"�
 - r28（2026-10-25）：DELIVER 的 REPORT 统计到落地为止的 token；没有专家核实时写明测试结果仅由 agent 报告。
 - r29（XG，2026-10-25）：不支持没有任何 commit 的仓库（unborn），`create` 直接拒绝并说明；Go、Rust 样例仓库不做。
 - r30（XG，2026-10-26）：goal profile 删除，现在是五个 profile（`2026-10-26-pipeline-two-ends.md` §6）；profile 能力只在 `lifecycle.PROFILE_CAPS`；`next` 和命令共用 `deliver_route`、`gate0_status`；卡片和 `next` 不再规定写法（主旨"中段不自己造"）。上面 r7 里"六个 profile"以本条为准。
+- r31（XG，2026-10-26）：REPORT 固定文案统一为英文；删除结尾写死的"push 前还需要：构建 + 部署验证"（§3.3.3 补了说明）。

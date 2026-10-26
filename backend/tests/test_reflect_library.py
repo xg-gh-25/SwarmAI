@@ -171,6 +171,6 @@ def test_a_run_without_ddd_puts_its_lesson_in_the_library(tmp_path, monkeypatch)
         target = r.ws / LIB / f"{Path(engine.contract['repo_roots']['repo']).name}.md"
         assert "worker pool" in target.read_text(encoding="utf-8")
         report = (engine.run_dir / "REPORT.md").read_text()
-        assert "## 写进公共 Library 的经验" in report and str(target.relative_to(r.ws)) in report
+        assert "## Lessons written to the shared Library" in report and str(target.relative_to(r.ws)) in report
     finally:
         r.close()

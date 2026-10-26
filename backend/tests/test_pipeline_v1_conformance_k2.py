@@ -162,7 +162,7 @@ def test_the_partial_land_event_and_report_name_what_landed(tmp_path, monkeypatc
         push={"push_ready": False, "reasons": {}}, audit_through="DELIVER",
         commits={"a": "c" * 40})
     report = audit.render(value, fmt="report")
-    assert "已落地：a @ cccccccccccc" in report and "未落地：b" in report
+    assert "landed: a @ cccccccccccc" in report and "not landed: b" in report
     assert value["summary"]["quality"]["verdict"] == "BLOCK"
 
 
@@ -261,7 +261,7 @@ def test_a_later_manual_partial_land_is_the_audits_outcome():
         push={"push_ready": False, "reasons": {}}, audit_through="COMPLETED",
         commits={"a": "c" * 40})
     assert value["outcome"]["reason"] == "partial_land"
-    assert "未落地：b" in audit.render(value, fmt="report")
+    assert "not landed: b" in audit.render(value, fmt="report")
 
 
 def test_a_recovered_landed_repo_then_a_preflight_failure_is_a_partial_land(tmp_path):
