@@ -68,7 +68,7 @@ export function TraceTags({ trace }: { trace: RunTrace }) {
           <Field k="Brain">{brain.name}</Field>
           <Field k="版本">{brain.version}</Field>
           <Field k="文档">{brain.docs.join(' · ')}</Field>
-          <div className={`mt-2 text-[11.5px] text-[var(--color-text-dim)]`}>这个 run 的上下文从这个 Brain 打包，结果也只回流到它。</div>
+          <div className={`mt-2 text-[11.5px] text-[var(--color-text-dim)]`}>来自 Brain Hub。这个 run 的上下文从这个 Brain 打包，结果也只回流到它。</div>
         </>}
       </TraceTag>
 
@@ -80,7 +80,7 @@ export function TraceTags({ trace }: { trace: RunTrace }) {
           <Field k="验证">{agent.validations.join(' · ')}</Field>
           <Field k="执行在">{agent.placement}</Field>
           <Field k="落地">{agent.landing}</Field>
-          <div className={`mt-2 text-[11.5px] text-[var(--color-text-dim)]`}>来自这个 Brain 的 project-agent.yaml。</div>
+          <div className={`mt-2 text-[11.5px] text-[var(--color-text-dim)]`}>来自 Brain Hub 里这个 Brain 的 Project Agent（project-agent.yaml）；草稿状态的 Agent 先在 Brain Hub 审过。</div>
         </>}
       </TraceTag>
 
