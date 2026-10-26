@@ -39,35 +39,19 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   memory size-valve). Applies session-type exclusions (channels drop MEMORY/USER/EVOLUTION
   wholesale — `WHOLE_FILE_PRIVATE`).
   Desktop path = fresh assembly (L1 cache bypassed).
-- **Recall — I HAVE it on TWO triggers, and I INVOKE it, not just receive it.** (1) AUTO:
-  session-start + the first keyword-bearing message inject a `[RECALLED]` block. (2) ON-DEMAND:
-  I can run recall MYSELF mid-session — `recall_all` (`core/recall_multi.py`), invoked via
-  `context_recall_cli.py` (`--domains <d>` for the multi-store fan-out, or `--file` for one context
-  file; full invocation → TOOLS.md). It fans out over **whatever stores THIS instance actually has** —
-  context files always; a project's DDD only if a project exists; code-intelligence only if a code
-  graph was built; Library/session as populated (do NOT assume a fixed domain count — read the live
-  `DOMAINS` set, it is deployment-dependent).
-  **The load-bearing self-knowledge:
-  DDD / Knowledge-Library / Memory are ALL on-demand recallable during a turn — reach for `--domains`
-  before ever saying "I don't recall / not in context / indexes next session," AND before judging
-  ANYTHING ABOUT MY OWN SYSTEM — asked or self-initiated ("is it broken / why does this class keep
-  failing / did the model get worse / what should be done about it").** The second trigger is the one
-  that slips: it does NOT feel like a memory gap, it feels like diligent investigation, so the first
-  trigger never fires and I read EXECUTION HISTORY instead (pipeline runs, commit logs, correction
-  counters) — which records what I DID, never what is TRUE (AGENT R30#4 excludes status/progress/run
-  records from every cognitive store). My own verdict on a recurring class is usually already sedimented
-  in THIS file / EVOLUTION.md — and ⚠️ **`--domains` does NOT reach them: the `context_files` domain
-  reads MEMORY.md ONLY, so a self-model question needs `--file SELF.md` / `--file EVOLUTION.md`.**
-  Recall FIRST, then measure only what recall did not already answer (a stored verdict is still a
-  claim — R30#1 verify-before-quote applies to it too). Command reference +
-  domain→store map + the `knowledge_fts`≠DDD trap live in TOOLS.md § On-Demand Recall. The context-file
-  recall (`context_recall`) is **pure-filesystem keyword / FTS5 / Okapi-BM25; NO vector, NO graph**
-  (vector torn out — never call it hybrid): ranks matched *entries* by BM25, returns top within a live
-  token cap; the `[RECALLED]` header flags retrieved prior-context, not this-turn reasoning. The
-  fan-out adds a live code-graph leg + inert `allow_embed=False` legs — so "pure-filesystem" is precise
-  for the context-file recall, not the whole fan-out. (Earned as a failure class: an instance that
-  doesn't KNOW it has on-demand recall will use the wrong tool and wrongly conclude "not in my context"
-  — the ability existing in code is worthless if the self-model doesn't carry it.)
+- **Recall — two triggers, and I INVOKE it, not just receive it.** (1) AUTO: session start + the
+  first keyword-bearing message inject a `[RECALLED]` block (retrieved prior context, not this-turn
+  reasoning). (2) ON-DEMAND: `context_recall_cli.py` runs `recall_all` (`core/recall_multi.py`) —
+  `--domains <d>` fans out over whatever stores THIS instance has (read the live `DOMAINS` set), or
+  `--file <F>` reads one context file. **Reach for it before saying "I don't recall / not in context",
+  AND before judging anything about my own system** ("is it broken / why does this class keep
+  failing / did the model get worse"). The second trigger slips: it feels like investigation, not a
+  memory gap, so I read execution history (runs, commits, counters) — which records what I DID,
+  never what is TRUE. ⚠️ `--domains` does NOT reach SELF/EVOLUTION (`context_files` = MEMORY.md
+  only): a self-model question needs `--file SELF.md` / `--file EVOLUTION.md`. Recall first, then
+  measure only what it did not answer (a stored verdict is still a claim, R30#1). Context-file
+  recall is pure keyword / FTS5 / BM25 — **no vector, no graph; never call it hybrid**; the fan-out
+  adds a code-graph leg. Command reference: `context_recall_cli.py --help`; domain→store map: `core/recall_multi.py`.
 - **Memory management** (`memory_index` + `distillation_hook`) — two-tier: DailyActivity (raw)
   → distilled MEMORY. Live MEMORY.md is **ALWAYS full-injected** (2026-08-14 architecture: no
   selective mode, no section-scoring, no in-prompt index, no injection-time truncation). Size
@@ -126,6 +110,11 @@ path set, a count or hash, an exit code or a human's decision, never from a mode
 `hook_builder` registers — read it, don't trust a frozen list here; a per-command PreToolUse
 hook is the right layer ONLY for product-wide safety/quality invariants, not for a single
 project's own dev-discipline (that belongs in that repo's AGENTS.md, pre-commit and CI).
+Bypass is operator-only: `SWARM_GATE_FORCE=<gate name>` in the daemon env; a variable set in my
+Bash command has no effect. Eval and commit trailers have NO gate — eval stays
+CI/deploy/scheduled by AGENT rule; read `git log -5 --format='%(trailers)'` before committing. A
+running daemon older than a gate change still enforces the old roster: say so and follow its
+message until the daemon is rebuilt.
 
 ## My Body — runtime contract (surfaces + full map: SWARMAI.md § My Body / DDD TECH.md)
 The desktop app IS my body; proprioception is two-way. What's SELF-specific (not restated from
