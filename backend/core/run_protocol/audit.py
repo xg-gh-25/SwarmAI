@@ -25,6 +25,11 @@ class AuditError(ValueError):
 
 
 
+# metric(delivery_untracked): written by the landing (landing.record_untracked); a count
+# of files, never a token measurement
+UNTRACKED_METRIC = "delivery_untracked"
+
+
 def _token_metrics(event_rows):
     """(cli measurements, summed expert records, usage_not_available reason, expert
     record count) from the metric events. The main agent's transcript measurement
@@ -42,7 +47,8 @@ def _token_metrics(event_rows):
             unavailable = event["payload"].get("reason") or "not measured"
             continue
         if not isinstance(name, str) or not isinstance(value, (int, float)) \
-                or name == "required_approval" or name.startswith("cap_exceeded."):
+                or name in ("required_approval", UNTRACKED_METRIC) \
+                or name.startswith("cap_exceeded."):
             continue
         if event.get("producer") == "cli":
             measured[name] = value                     # a later measurement replaces
@@ -219,6 +225,47 @@ def _validation_lines(event_rows) -> list[str]:
     return report_lines(event_rows)
 
 
+def select_untracked(event_rows, read_blob) -> dict[str, Any] | None:
+    """``{files: repo -> paths, reason}`` of the landing's metric(delivery_untracked),
+    or None when no landing recorded one. Only the landing's own (cli) records count,
+    and once a land event exists, only the record of the landing it names (its
+    request_id through auth_consumed, or its stage_attempt_event_id): a later prepare or
+    a failed attempt records a list of its own. Before landing, the latest record. The
+    list is read from its blob (*read_blob*: digest -> bytes), never from the worktree,
+    which is gone by the COMPLETED rebuild."""
+    rows = [event for event in event_rows if event.get("kind") == "metric"
+            and event.get("producer") == "cli"
+            and (event.get("payload") or {}).get("name") == UNTRACKED_METRIC]
+    if not rows:
+        return None
+    chosen = rows[-1]
+    lands = [event.get("payload") or {} for event in event_rows if event.get("kind") == "land"]
+    if lands:
+        key = lands[-1].get("stage_attempt_event_id")
+        consumed_id = lands[-1].get("auth_consumed_event_id")
+        if consumed_id:
+            key = next(((event.get("payload") or {}).get("request_id")
+                        for event in event_rows if event.get("kind") == "auth_consumed"
+                        and event.get("event_id") == consumed_id), None)
+        chosen = next((row for row in reversed(rows)
+                       if (row.get("payload") or {}).get("landing") == key), chosen)
+    payload = chosen.get("payload") or {}
+    reason = payload.get("reason")
+    raw: Any = {}
+    if payload.get("files_blob"):
+        try:
+            raw = json.loads(read_blob(payload["files_blob"]).decode("utf-8")).get("files") or {}
+        except (OSError, ValueError, AttributeError) as exc:
+            raw, reason = {}, f"the recorded list could not be read: {type(exc).__name__}"
+    files = {str(repo): sorted(str(p) for p in paths)
+             for repo, paths in sorted((raw if isinstance(raw, Mapping) else {}).items())
+             if isinstance(paths, list) and paths}
+    return {"files": files, "reason": reason}
+
+
+UNTRACKED_SHOWN = 20     # per repo in REPORT; run_audit.json keeps every path
+
+
 def _reports_reviewed(event_rows) -> bool:
     from core.run_protocol.validation_report import reports_reviewed
     return reports_reviewed(event_rows)
@@ -235,14 +282,17 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
           design: Mapping[str, Any] | None = None,
           test_reports: Mapping[str, Mapping[str, Any]] | None = None,
           lessons: Sequence[Mapping[str, Any]] = (),
-          knowledge: Mapping[str, Any] | None = None) -> dict[str, Any]:
+          knowledge: Mapping[str, Any] | None = None,
+          untracked: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """*test_reports*: repo -> the latest TEST validation report (its commands are
     listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
     the run because their project has no DDD are listed in the REPORT); *open_checks*:
     check id -> detail of each audit-effect check that does not pass (one line in the
     Quality cell; no push verdict, XG 2026-10-26); *knowledge*: ``{status, entries,
     cited}`` of the run's knowledge.md (run-knowledge §3.5), None for a run created
-    before it -- REPORT gets one line, never the recalled text."""
+    before it -- REPORT gets one line, never the recalled text; *untracked*: the
+    landing's untracked files from ``select_untracked`` (REPORT lists them; no verdict
+    reads them)."""
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -418,6 +468,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "trace_matrix": trace_protocol.matrix(design),
                # S6-4d: what the agent says it ran, per repo (the latest TEST report)
                "test_reports": _commands(test_reports),
+               # files the landing's code tree took in only because they were untracked
+               # in the worktree (shown in REPORT; no verdict reads it)
+               "untracked_in_delivery": dict(untracked) if untracked else None,
                "kept_lessons": [{"id": row.get("id"), "statement": row.get("statement")}
                                 for row in lessons if isinstance(row, Mapping)
                                 and (row.get("outcome") or {}).get("status") == "kept_in_run"],
@@ -616,6 +669,22 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                       for cmd in commands[:10]]
             if len(commands) > 10:
                 lines.append(f"- {len(commands) - 10} more in run_audit.json")
+    untracked = details.get("untracked_in_delivery") or {}
+    if untracked.get("files"):
+        lines += ["", "## Files delivered without being added to git", "",
+                  "These files were untracked in the run's worktree (not ignored, never "
+                  "added to git), so they are in this delivery. Check that they belong "
+                  "before pushing: build or test output here usually means the repo's "
+                  "ignore rules do not cover it.", ""]
+        for repo, paths in untracked["files"].items():
+            lines += [f"- {_text(repo, 80)}: {_text(path, 300)}"
+                      for path in paths[:UNTRACKED_SHOWN]]
+            if len(paths) > UNTRACKED_SHOWN:
+                lines.append(f"- {_text(repo, 80)}: {len(paths) - UNTRACKED_SHOWN} more "
+                             "in run_audit.json")
+    elif untracked.get("reason"):
+        lines += ["", f"Untracked files in this delivery: not listed "
+                  f"({_text(untracked['reason'], 300)})"]
     library = details.get("library_lessons") or []
     if library:
         lines += ["", "## Lessons written to the shared Library", "",

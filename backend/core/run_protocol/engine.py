@@ -2330,8 +2330,9 @@ class RunEngine:
 
     def _audit_facts(self) -> dict[str, Any]:
         """Measured inputs the audit cannot read from events (§E9.3, D5): how many repos
-        really got a run worktree (recorded at creation, in the audit area) and the
-        retained, unintegrated work."""
+        really got a run worktree (recorded at creation, in the audit area), the
+        retained, unintegrated work, and the landing's untracked files (their list is in
+        a blob the events name)."""
         made = self._read_json(self.store.paths.run / "integration_branches.json", {}) or {}
         isolated = (len([n for n in self.contract["expected_repos"] if n in made])
                     if self.contract["mode"] == "isolated" else 0)
@@ -2348,7 +2349,10 @@ class RunEngine:
         design = self._read_json(self.run_dir / "artifacts" / "design_spec.json", None)
         if isinstance(design, Mapping):     # the decisions are part of the design (K3)
             design = self._with_decisions("DESIGN_SPEC", design)
+        from core.run_protocol import audit as audit_protocol
+        untracked = audit_protocol.select_untracked(rows, self.store.read_blob)
         return {"repos_isolated": isolated, "manual": manual, "title": self._run_title(),
+                "untracked": untracked,
                 "design": design if isinstance(design, Mapping) else None,
                 "retained": [{"repo_name": row.get("repo_name"), "ledger": row.get("ledger")}
                              for row in self._retention_entries()
@@ -2703,6 +2707,10 @@ class RunEngine:
                 close("an earlier landing guard failed")
                 return self._land_failed(results)
             self._record_usage("deliver")       # the REPORT's tokens: up to this landing
+            # the files these code trees took in only because they are untracked: the
+            # REPORT below is built from the events read after this record
+            landing.record_untracked(self.store, repos, self.run_id, at=_now(),
+                                     landing=opened["event_id"])
             open_checks = self.open_checks()["open"]
             report_events = self.store.read_events()
             self.store.append_new(

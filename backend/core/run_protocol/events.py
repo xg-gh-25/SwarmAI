@@ -225,7 +225,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                     {"name": str, "value": (int, float)},
                     # metric(cap_exceeded.<cap>): a count cap of the run was hit (F18);
                     # metric(usage_not_available): why the run's usage was not measured
-                    {"cap": str, "reason": str}),
+                    # metric(delivery_untracked): files_blob = blob of {repo: paths} of
+                    # the untracked, non-ignored worktree files a landing's code tree took
+                    # in (a blob: a path list can pass the event line limit); landing =
+                    # that landing's request_id or stage_attempt_event_id
+                    {"cap": str, "reason": str, "files_blob": str, "landing": str}),
     "turn": _spec("cli", ("payload.message_id",), None, {"message_id": str}),
     "integrity": _spec(("cli", "hook"), ("payload.conflict_id", "ordinal"),
                        "payload.conflict_id", {"conflict_id": str,

@@ -2,6 +2,7 @@
 
 Public symbols:
 - ``write_tree`` — full tracked/untracked worktree via private temporary index.
+- ``untracked_files`` — the untracked, non-ignored files ``write_tree`` takes in.
 - ``list_reserved`` — list every existing item below a delivery-reserved prefix.
 - ``diff_trees`` — exact status/path/content digest for LG-3.
 """
@@ -65,6 +66,25 @@ def list_reserved(root: str, reserved: str) -> list[str]:
         return [prefix.rstrip("/")]
     return sorted(path.relative_to(root).as_posix() for path in directory.rglob("*")
                   if path.exists() or path.is_symlink())
+
+
+def untracked_files(root: str, excludes: tuple[str, ...]) -> list[str]:
+    """The worktree files ``write_tree`` takes in although they are neither in HEAD nor
+    in the worktree's index: untracked and not ignored, by git's own ignore rules
+    (``.gitignore``, ``.git/info/exclude``, ``core.excludesFile``) and nothing else.
+    Paths under an excluded prefix are left out. Read NUL-separated, so any file name
+    comes back as written."""
+    prefixes = tuple(_safe(path, prefix=True) for path in excludes)
+    raw = _run(root, "ls-files", "-z", "--others", "--exclude-standard", "--", ".")
+    names = [name for name in raw.decode("utf-8", "replace").split("\0") if name]
+    if names:
+        # out of the index but still in HEAD (`git rm --cached`): write_tree starts its
+        # index from HEAD, so the file is delivered as tracked, not as a new untracked one
+        head = _run(root, "ls-tree", "-r", "-z", "--name-only", "HEAD")
+        in_head = set(head.decode("utf-8", "replace").split("\0"))
+        names = [name for name in names if name not in in_head]
+    return sorted(name for name in names
+                  if not any(name == p.rstrip("/") or name.startswith(p) for p in prefixes))
 
 
 def write_tree(root: str, excludes: tuple[str, ...], overlays: Mapping[str, bytes]) -> str:

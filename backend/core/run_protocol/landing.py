@@ -1,6 +1,7 @@
 """Authorized Pipeline v1 landing and manual-run recovery protocol.
 
 Public symbols:
+- ``record_untracked`` — log the untracked, non-ignored files a landing's code tree takes.
 - ``prepare_request`` — land_intent → REPORT → tree guards → land_request.
 - ``request_event`` — the logged land_request payload: the only source execution reads.
 - ``approve_from_event`` — the daemon's ``auth`` fact after the person approved (C1, C3).
@@ -49,6 +50,43 @@ def _require(results: Mapping[str, tuple[bool, str]]) -> None:
         raise LandingError(f"landing guards failed: {failed}")
 
 
+def record_untracked(store: AuditStore, repos: Mapping[str, str], run_id: str, *,
+                     at: str, landing: str) -> dict[str, list[str]]:
+    """Log, as one metric(delivery_untracked) event, every repo's files that its code
+    tree takes in only because they are untracked (not ignored, never added to git) in
+    the run's worktree. Both landings call it after building the code trees and before
+    land_intent, so the REPORT rendered from the events before land_intent lists them,
+    and every later audit rebuild still has them once the worktree is gone. *landing* is
+    the request_id (run-land) or stage_attempt_event_id (land) the land event will name,
+    so the audit shows the list of the landing that landed (audit.select_untracked). The
+    list goes into a blob: a path list can pass the event line limit. A listing that
+    fails is logged with its reason instead of stopping the landing."""
+    from core.run_protocol.audit import UNTRACKED_METRIC
+    reserved = (tree.report_path(run_id).rsplit("/", 1)[0] + "/",)
+    files: dict[str, list[str]] = {}
+    reason = None
+    try:
+        for name, root in sorted(repos.items()):
+            paths = git_tree.untracked_files(root, reserved)
+            if paths:
+                files[name] = paths
+    except git_tree.GitTreeError as exc:
+        files, reason = {}, f"untracked files could not be listed: {exc}"
+    attempt = 1 + sum(event.get("kind") == "metric"
+                      and event.get("payload", {}).get("name") == UNTRACKED_METRIC
+                      for event in store.read_events())
+    blob = store.put_blob(json.dumps({"files": files}, sort_keys=True,
+                                     ensure_ascii=False).encode("utf-8"))
+    payload: dict[str, Any] = {"name": UNTRACKED_METRIC,
+                               "value": sum(len(paths) for paths in files.values()),
+                               "files_blob": blob, "landing": landing}
+    if reason:
+        payload["reason"] = reason
+    store.append_new(writer=store.authority.writer("cli"), kind="metric", at=at,
+                     stage="deliver", attempt=attempt, payload=payload)
+    return files
+
+
 def prepare_request(
     store: AuditStore, *, run_id: str, session_id: str, action: str,
     repos: Mapping[str, str], context: checks.CheckContext, at: str,
@@ -90,6 +128,8 @@ def prepare_request(
             payload={"stage_attempt_event_id": attempt_event["event_id"],
                      "check_id": check_id, "passed": passed, "detail": detail})
     _require(pre)
+    # before land_intent: the REPORT rendered below reads it
+    record_untracked(store, repos, run_id, at=at, landing=request_id)
     intent, _ = store.append_new(
         writer=store.authority.writer("cli"), kind="land_intent", at=at,
         stage="deliver", attempt=attempt_number, payload={"request_id": request_id},
