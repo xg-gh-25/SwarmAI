@@ -169,6 +169,9 @@ def in_prompt_text(text: str, prompt_norm: str) -> bool:
 
 # A sentence ends at one of these followed by whitespace or the end of the text.
 _SENTENCE_END = re.compile(r"[。！？!?.](?=\s|$)")
+# Then a clause end: CJK text often has no space, so a space fallback alone would
+# cut a Chinese clause mid-word.
+_CLAUSE_END = re.compile(r"[，；、：,;:]")
 # A hit too short to carry a sentence is left out rather than shown as a stub (R3).
 MIN_CLIP_ROOM = 120
 
@@ -176,7 +179,7 @@ MIN_CLIP_ROOM = 120
 def clip(text: str, cap: int, pointer: str = "") -> str:
     """*text* in at most *cap* characters, cut where meaning survives (design
     2026-10-26-run-knowledge §3.0 R2): at the last sentence end, else the last line
-    end, else the last space -- each used only when it keeps at least half the room,
+    end, else the last clause mark (，；、：,;:), else the last space -- each used only when it keeps at least half the room,
     so a cut never lands mid-word. A cut text ends with ``…（全文 N 字符：<pointer>）``
     so the reader knows it is partial and where the whole entry is. The ONE truncation
     of every recall leg; *pointer* names the source (``doc#section``, a Library path,
@@ -192,6 +195,9 @@ def clip(text: str, cap: int, pointer: str = "") -> str:
     if cut < room * 0.5:
         nl = window.rfind("\n")
         cut = nl if nl >= room * 0.5 else 0
+    if cut < room * 0.5:
+        for end in _CLAUSE_END.finditer(window):
+            cut = end.end()
     if cut < room * 0.5:
         sp = window.rfind(" ")
         cut = sp if sp > 0 else room

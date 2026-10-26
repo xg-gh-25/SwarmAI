@@ -82,6 +82,13 @@ def test_clip_falls_back_to_line_then_space_never_mid_word():
     assert text.startswith(head) and text[len(head)] == " ", out
 
 
+def test_clip_cuts_chinese_without_spaces_at_a_clause_mark():
+    text = "修复自身过完整流程，跑了一百多个测试，结论写进报告" * 8
+    out = recall_filter.clip(text, 100, "TECH.md#S")
+    head = out.split(" …（", 1)[0]
+    assert head.endswith("，"), out
+
+
 def test_clip_leaves_short_text_alone():
     assert recall_filter.clip("short.", 100, "x.md") == "short."
 
