@@ -16,7 +16,6 @@ from core.evolution_optimizer import (
     CycleReport,
     DeployResult,
     ExecutionTraceCollector,
-    AntiPatternGenerator,
 )
 from core.session_miner import EvalExample
 
@@ -893,393 +892,43 @@ class TestExecutionTraceCollector:
         assert len(traces[0]) <= 2000
 
 
-class TestAntiPatternGenerator:
-    """Tests for anti-pattern section generation from corrections."""
+class TestHighConfidenceWritesNoProposal:
+    """HIGH confidence writes no skill proposal: the proposal file's readers keep
+    only governance rows, so a skill row had no approve or deploy path
+    (docs/design/2026-10-26-evolution-loop-admission.md §3.3)."""
 
-    @pytest.fixture
-    def generator(self):
-        return AntiPatternGenerator()
-
-    def test_generate_from_remove_corrections(self, generator):
-        """Generates anti-patterns from 'remove' action corrections."""
-        corrections = [
-            ("include verbose output", "remove", "high"),
-            ("use deprecated API calls", "remove", "high"),
-            ("add timestamps", "add", "high"),  # 'add' = not an anti-pattern
-        ]
-        result = generator.generate(corrections)
-        assert "## Anti-patterns" in result
-        assert "verbose output" in result
-        assert "deprecated API" in result
-        assert "timestamps" not in result  # 'add' corrections excluded
-
-    def test_generate_empty_when_no_remove(self, generator):
-        """Returns empty string when no 'remove' corrections exist."""
-        corrections = [
-            ("add error handling", "add", "high"),
-            ("use async", "add", "low"),
-        ]
-        result = generator.generate(corrections)
-        assert result == ""
-
-    def test_deduplicates_similar_corrections(self, generator):
-        """Deduplicates by lowercased content."""
-        corrections = [
-            ("Include Verbose Output", "remove", "high"),
-            ("include verbose output", "remove", "high"),  # duplicate
-            ("use deprecated calls", "remove", "high"),
-        ]
-        result = generator.generate(corrections)
-        # Should have exactly 2 items, not 3
-        assert result.count("- ❌") == 2
-
-    def test_caps_at_max_anti_patterns(self, generator):
-        """Caps at MAX_ANTI_PATTERNS (10)."""
-        corrections = [(f"bad pattern number {i}", "remove", "high") for i in range(20)]
-        result = generator.generate(corrections)
-        assert result.count("- ❌") == 10
-
-    def test_skips_short_fragments(self, generator):
-        """Skips corrections shorter than 5 chars."""
-        corrections = [
-            ("ok", "remove", "high"),  # Too short
-            ("use deprecated API patterns", "remove", "high"),
-        ]
-        result = generator.generate(corrections)
-        assert result.count("- ❌") == 1
-
-    def test_prefix_normalization(self, generator):
-        """Adds 'Don't' prefix when correction doesn't start with negation."""
-        corrections = [("include verbose output", "remove", "high")]
-        result = generator.generate(corrections)
-        assert "Don't include verbose output" in result
-
-    def test_preserves_existing_negation_prefix(self, generator):
-        """Doesn't double-negate corrections that already start with 'Don't'."""
-        corrections = [("Don't use verbose mode", "remove", "high")]
-        result = generator.generate(corrections)
-        assert "Don't use verbose mode" in result
-        assert "Don't Don't" not in result
-
-    def test_merge_with_no_existing_section(self, generator):
-        """Appends anti-patterns section when none exists."""
-        skill_text = "# My Skill\n\nDo things properly.\n"
-        anti_patterns = generator.generate([("verbose output", "remove", "high")])
-        merged = generator.merge_with_existing(skill_text, anti_patterns)
-        assert "## Anti-patterns" in merged
-        assert merged.startswith("# My Skill")
-
-    def test_merge_with_existing_section_dedup(self, generator):
-        """Deduplicates when merging with existing anti-patterns section."""
-        skill_text = "# My Skill\n\n## Anti-patterns\n\n- ❌ Don't use verbose output\n\n## Other\n"
-        new_anti_patterns = "## Anti-patterns (auto-generated from corrections)\n\n- ❌ Don't use verbose output\n- ❌ Don't use deprecated APIs\n"
-        merged = generator.merge_with_existing(skill_text, new_anti_patterns)
-        # Should only add the new one, not duplicate "verbose output"
-        assert merged.count("verbose output") == 1
-        assert "deprecated APIs" in merged
-
-
-class TestProposalFreshnessCheck:
-    """Verify ACT phase filters out changes already present in target file (LL02)."""
-
-    def test_skips_proposal_when_all_changes_already_present(self, tmp_path):
-        """If all proposed changes are already in the current skill text,
-        no proposal should be written."""
-        from core.evolution_optimizer import (
-            run_evolution_cycle,
-        )
+    def test_high_branch_runs_and_writes_nothing(self, tmp_path, caplog):
+        import logging
+        from unittest.mock import patch
+        from core import evolution_optimizer as eo
+        from core.session_miner import SessionMiner
 
         skills_dir = tmp_path / "skills"
-        # Skill already contains the correction text
-        _make_skill(
-            skills_dir, "already_fixed",
-            body="Always add timestamps to output.\nDon't include verbose output.",
+        _make_skill(skills_dir, "needs_fix", body="Always include verbose output in results.")
+        examples = [_make_example(correction=f"should add timestamps to output {i}", score=0.2)
+                    for i in range(4)] + [_make_example() for _ in range(4)]
+
+        def _mine_all(self):
+            return {"needs_fix": examples}
+
+        ctx_dir = tmp_path / "ctx"
+        evals_dir = ctx_dir / "SkillEvals"
+        evals_dir.mkdir(parents=True)
+        (tmp_path / "t").mkdir()
+
+        accepted = eo.OptimizationResult(
+            skill_name="needs_fix", original_score=0.2, optimized_score=0.8,
+            changes=[eo.TextChange(original="", replacement="- add timestamps", reason="test")],
+            accepted=True, reason="test",
         )
+        with patch.object(SessionMiner, "mine_all", _mine_all), \
+                patch.object(eo, "compute_confidence", return_value=1.0), \
+                patch.object(eo.EvolutionOptimizer, "optimize_skill", return_value=accepted), \
+                caplog.at_level(logging.INFO, logger=eo.logger.name):
+            eo.run_evolution_cycle(skills_dir, tmp_path / "t", evals_dir, dry_run=False)
 
-        transcripts_dir = tmp_path / "transcripts"
-        transcripts_dir.mkdir()
-        # Create transcripts with corrections that are already applied
-        records = []
-        for i in range(6):
-            records.append(json.dumps({
-                "type": "user",
-                "message": {"content": f"already_fixed my service {i}"},
-            }))
-            records.append(json.dumps({
-                "type": "assistant",
-                "message": {"content": f"Processing request {i}..."},
-            }))
-            records.append(json.dumps({
-                "type": "user",
-                "message": {"content": "don't include verbose output"},
-            }))
-        (transcripts_dir / "session_1.jsonl").write_text("\n".join(records))
-
-        evals_dir = tmp_path / "evals"
-        evals_dir.mkdir(parents=True, exist_ok=True)
-
-        result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
-
-        # Proposals file should either not exist or not contain this skill
-        proposals_path = evals_dir / ".evolution_proposals.json"
-        if proposals_path.exists():
-            proposals = json.loads(proposals_path.read_text())
-            skill_names = [p["skill_name"] for p in proposals]
-            assert "already_fixed" not in skill_names, (
-                "Proposal written for already-present changes"
-            )
-
-    def test_writes_proposal_for_novel_changes(self, tmp_path):
-        """If proposed changes are NOT in the current skill text,
-        proposal should be written normally."""
-        from core.evolution_optimizer import run_evolution_cycle
-
-        skills_dir = tmp_path / "skills"
-        # Skill does NOT contain the correction
-        _make_skill(
-            skills_dir, "needs_fix",
-            body="Always include verbose output in results.",
-        )
-
-        transcripts_dir = tmp_path / "transcripts"
-        transcripts_dir.mkdir()
-        records = []
-        for i in range(6):
-            records.append(json.dumps({
-                "type": "user",
-                "message": {"content": f"needs_fix my service {i}"},
-            }))
-            records.append(json.dumps({
-                "type": "assistant",
-                "message": {"content": f"Processing request {i} with verbose output..."},
-            }))
-            records.append(json.dumps({
-                "type": "user",
-                "message": {"content": "should add timestamps to output"},
-            }))
-        (transcripts_dir / "session_1.jsonl").write_text("\n".join(records))
-
-        evals_dir = tmp_path / "evals"
-        evals_dir.mkdir(parents=True, exist_ok=True)
-
-        run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
-
-        # If confidence threshold is met, a proposal should exist
-        # (This test verifies novel changes pass through — the confidence
-        # threshold may prevent the proposal from being written, which is fine.
-        # The important guarantee is tested above: already-present = no proposal.)
-
-
-class TestProposalFreshnessAdversarial:
-    """Adversarial tests for the freshness check — targeting edge cases."""
-
-    def test_short_substring_false_positive(self):
-        """Short replacement text could false-match as substring of unrelated content.
-
-        Example: replacement "validate" would match "Always validate input..."
-        even though the FULL instruction "validate all user inputs before processing"
-        was never added. This is a substring containment issue.
-        """
-        from core.evolution_optimizer import TextChange
-
-        # Simulate the freshness filter logic directly
-        current_text = "Always validate input and sanitize output."
-        current_lower = current_text.lower()
-
-        # This is a different instruction — should NOT be filtered
-        change_novel = TextChange(
-            original="",
-            replacement="validate all user inputs before processing them",
-            reason="User said should validate",
-        )
-        # This IS present (exact substring match)
-        change_present = TextChange(
-            original="",
-            replacement="validate input and sanitize output",
-            reason="Already there",
-        )
-
-        changes = [change_novel, change_present]
-        novel = [
-            c for c in changes
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-
-        # change_novel SHOULD pass — "validate all user inputs before processing them"
-        # is NOT a substring of current_text
-        assert change_novel in novel, (
-            "Novel change incorrectly filtered as already-present (false positive)"
-        )
-        # change_present should be filtered — exact substring match
-        assert change_present not in novel
-
-    def test_very_short_replacement_false_positive(self):
-        """A very short replacement like 'add' WILL false-match in any file
-        containing the word 'add'. This tests whether this is a real problem
-        with actual correction data (corrections are typically full phrases)."""
-        from core.evolution_optimizer import TextChange
-
-        current_text = "Additionally, run all checks before deploy."
-        current_lower = current_text.lower()
-
-        # Realistic correction (full phrase) — should NOT be false-positive
-        realistic = TextChange(
-            original="",
-            replacement="should add timestamps to deploy log",
-            reason="User said add timestamps",
-        )
-        # Pathological short fragment — WILL false-positive
-        pathological = TextChange(
-            original="",
-            replacement="add",
-            reason="Garbage fragment",
-        )
-
-        changes = [realistic, pathological]
-        novel = [
-            c for c in changes
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-
-        # Realistic full-phrase correction should pass through
-        assert realistic in novel, "Full-phrase correction incorrectly filtered"
-        # Short garbage filtered — acceptable (quality gate upstream should
-        # have caught this anyway via _is_quality_correction min-length check)
-        assert pathological not in novel
-
-    def test_remove_operation_empty_replacement_dropped(self):
-        """TextChange with empty replacement (= remove operation) gets filtered
-        by `c.replacement.strip()` being falsy. This means remove-only proposals
-        never surface. Verify this is the actual behavior and assess impact.
-
-        FINDING: This IS a gap — if the text to remove is still in the file,
-        the change is novel and should be proposed. However, remove operations
-        reaching the proposal path is rare because:
-        1. Heuristic removes require the original text to exist at optimize time
-        2. The whole skill was re-read at optimize time (same cycle)
-        3. Stale removes (text already gone) are correctly filtered
-        """
-        from core.evolution_optimizer import TextChange
-
-        current_text = "Always include verbose output.\nRun full pipeline."
-        current_lower = current_text.lower()
-
-        remove_change = TextChange(
-            original="Always include verbose output.",
-            replacement="",  # Remove operation
-            reason="User said don't include verbose output",
-        )
-        add_change = TextChange(
-            original="",
-            replacement="should add error handling",
-            reason="User said add error handling",
-        )
-
-        changes = [remove_change, add_change]
-        novel = [
-            c for c in changes
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-
-        # Remove operation gets dropped — empty replacement is falsy
-        assert remove_change not in novel
-        # Add operation passes through (novel content)
-        assert add_change in novel
-
-        # If remove was the ONLY change, novel_changes would be empty
-        # and the proposal would be skipped — this is the gap
-        remove_only = [remove_change]
-        novel_remove_only = [
-            c for c in remove_only
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-        assert len(novel_remove_only) == 0, (
-            "Remove-only proposals will be silently dropped"
-        )
-
-    def test_multiline_replacement_matching(self):
-        """Multiline replacement text should still match via substring `in`."""
-        from core.evolution_optimizer import TextChange
-
-        current_text = (
-            "Step 1: Read input.\n"
-            "Step 2: Validate format.\n"
-            "Step 3: Process data.\n"
-        )
-        current_lower = current_text.lower()
-
-        # Multi-line change that's already present
-        present_multiline = TextChange(
-            original="",
-            replacement="Step 2: Validate format.\nStep 3: Process data.",
-            reason="Already there as multiline",
-        )
-        # Multi-line change that's novel
-        novel_multiline = TextChange(
-            original="",
-            replacement="Step 4: Write output.\nStep 5: Verify checksum.",
-            reason="New steps",
-        )
-
-        changes = [present_multiline, novel_multiline]
-        novel = [
-            c for c in changes
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-
-        assert present_multiline not in novel
-        assert novel_multiline in novel
-
-    def test_skill_deleted_between_optimize_and_proposal(self):
-        """If skill file is deleted after optimize but before freshness check,
-        _read_skill_text returns None → `or ""` → current_text is empty →
-        all changes are novel → proposal still written. Verify this behavior."""
-        from core.evolution_optimizer import TextChange
-
-        # Simulate: skill was deleted → _read_skill_text returned None → ""
-        current_text = ""
-        current_lower = current_text.lower()
-
-        change = TextChange(
-            original="",
-            replacement="should add timestamps",
-            reason="User correction",
-        )
-
-        novel = [
-            c for c in [change]
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-
-        # When file is empty/deleted, everything is "novel" — proposal still written
-        # This is safe: orphan proposals get cleaned up by dedup on next cycle
-        assert change in novel
-
-    def test_case_insensitive_matching(self):
-        """Freshness check should be case-insensitive."""
-        from core.evolution_optimizer import TextChange
-
-        current_text = "Always Validate Input Before Processing."
-        current_lower = current_text.lower()
-
-        # Same content, different case
-        same_content = TextChange(
-            original="",
-            replacement="always validate input before processing.",
-            reason="Same but lowercase",
-        )
-
-        novel = [
-            c for c in [same_content]
-            if c.replacement.strip()
-            and c.replacement.strip().lower() not in current_lower
-        ]
-
-        # Should be filtered (case-insensitive match)
-        assert same_content not in novel
+        # The HIGH branch was reached (otherwise this test proves nothing) ...
+        assert any("no skill proposal is written" in r.getMessage() for r in caplog.records), \
+            [r.getMessage() for r in caplog.records]
+        # ... and nothing was written where proposals used to go.
+        assert not (ctx_dir / ".evolution_proposals.json").exists()

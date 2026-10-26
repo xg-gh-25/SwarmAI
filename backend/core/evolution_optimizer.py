@@ -101,7 +101,6 @@ class SkillHealthEntry:
     # v2.3 GEPA-inspired fields
     llm_judge_score: float | None = None   # Layer 2 score (None if skipped/failed)
     combined_fitness: float | None = None   # 0.4×L1 + 0.6×L2 (None if L2 unavailable)
-    anti_patterns_count: int = 0            # Number of anti-patterns generated
 
 
 @dataclass
@@ -473,101 +472,6 @@ class ExecutionTraceCollector:
                 break
 
         return traces
-
-
-class AntiPatternGenerator:
-    """Generate anti-patterns section from accumulated corrections.
-
-    GEPA's observation: the optimized skill included 13 anti-patterns auto-generated
-    from failure feedback. We replicate this by clustering "remove" corrections
-    into a deduplicated, structured markdown section.
-    """
-
-    MAX_ANTI_PATTERNS = 10  # Cap to prevent unbounded growth
-
-    def generate(self, corrections: list[tuple[str, str, str]]) -> str:
-        """Generate anti-patterns markdown from correction evidence.
-
-        Args:
-            corrections: List of (text, action_type, confidence) tuples.
-                         Only "remove" actions become anti-patterns.
-
-        Returns:
-            Markdown string with anti-patterns section, or empty string if none.
-        """
-        # Filter to "remove" corrections only
-        remove_items = [
-            text.strip() for text, action, _ in corrections
-            if action == "remove" and text.strip()
-        ]
-
-        if not remove_items:
-            return ""
-
-        # Deduplicate by lowercased content
-        seen: set[str] = set()
-        unique: list[str] = []
-        for item in remove_items:
-            key = item.lower().strip()
-            if key not in seen and len(key) > 5:  # Skip trivial fragments
-                seen.add(key)
-                unique.append(item)
-
-        if not unique:
-            return ""
-
-        # Cap at max
-        unique = unique[: self.MAX_ANTI_PATTERNS]
-
-        # Format as markdown
-        lines = ["\n## Anti-patterns (auto-generated from corrections)\n"]
-        for item in unique:
-            # Normalize: ensure it reads as an anti-pattern instruction
-            if not item.startswith(("Don't", "don't", "Never", "never", "Avoid", "avoid")):
-                lines.append(f"- ❌ Don't {item}")
-            else:
-                lines.append(f"- ❌ {item}")
-
-        return "\n".join(lines) + "\n"
-
-    def merge_with_existing(self, skill_text: str, new_anti_patterns: str) -> str:
-        """Merge new anti-patterns into skill text, deduplicating with existing.
-
-        If skill already has an anti-patterns section, appends new unique items.
-        If not, appends the entire section at the end.
-        """
-        if not new_anti_patterns:
-            return skill_text
-
-        # Check for existing anti-patterns section
-        existing_match = re.search(
-            r"^## Anti-patterns.*?(?=^## |\Z)",
-            skill_text,
-            re.MULTILINE | re.DOTALL,
-        )
-
-        if existing_match:
-            existing_section = existing_match.group(0)
-            existing_lower = existing_section.lower()
-
-            # Extract new items and add only truly new ones
-            new_items = [
-                line for line in new_anti_patterns.split("\n")
-                if line.startswith("- ❌") and line.lower() not in existing_lower
-            ]
-
-            if not new_items:
-                return skill_text  # All already present
-
-            # Insert new items at end of existing section content (before next heading)
-            # existing_match.end() points to the start of the next ## or \Z
-            # We insert with a leading newline to maintain proper markdown spacing
-            insertion_point = existing_match.end()
-            new_block = "\n".join(new_items) + "\n\n"
-            return skill_text[:insertion_point] + new_block + skill_text[insertion_point:]
-        else:
-            # No existing section — append at end
-            return skill_text.rstrip() + "\n" + new_anti_patterns
 
 
 class EvolutionOptimizer:
@@ -1371,14 +1275,6 @@ def _run_evolution_cycle_locked(
                     constraint_check=opt_result.reason,
                 )
 
-        # v2.3: Generate anti-patterns from "remove" corrections
-        anti_patterns_count = 0
-        if correction_count > 0 and precomputed_corrections:
-            anti_gen = AntiPatternGenerator()
-            anti_section = anti_gen.generate(precomputed_corrections)
-            if anti_section:
-                anti_patterns_count = sum(1 for line in anti_section.split("\n") if line.startswith("- "))
-
         # v2.3: LLM judge scoring (Layer 2) — run for skills with corrections
         llm_judge_score = None
         combined_fitness = None
@@ -1411,7 +1307,6 @@ def _run_evolution_cycle_locked(
             optimizer_used=optimizer_used,
             llm_judge_score=llm_judge_score,
             combined_fitness=combined_fitness,
-            anti_patterns_count=anti_patterns_count,
         )
         health_entries.append(health_entry)
         skill_assessments.append((skill_name, confidence, avg_score, examples, opt_result))
@@ -1464,97 +1359,15 @@ def _run_evolution_cycle_locked(
         if confidence >= high_threshold and n_corr < 2:
             confidence = med_threshold  # Demote to recommend tier
         if confidence >= high_threshold and opt_result and opt_result.accepted and opt_result.changes:
-            # v2.3: Generate and append anti-patterns as an additional TextChange
-            precomputed = optimizer._extract_corrections(examples)
-            if precomputed:
-                anti_gen = AntiPatternGenerator()
-                anti_section = anti_gen.generate(precomputed)
-                if anti_section:
-                    # Read current skill to check for existing anti-patterns section
-                    current_text = optimizer._read_skill_text(skill_name) or ""
-                    merged = anti_gen.merge_with_existing(current_text, anti_section)
-                    if merged != current_text:
-                        # Add as a TextChange — appends anti-patterns section
-                        diff_start = len(current_text)
-                        added_text = merged[diff_start:]
-                        if added_text.strip():
-                            opt_result.changes.append(TextChange(
-                                original="",  # append-only change
-                                replacement=added_text.strip(),
-                                reason="Auto-generated anti-patterns from correction history (GEPA v2.3)",
-                            ))
-
-            if dry_run:
-                # DRY RUN: log what would be deployed without writing SKILL.md
-                logger.info(
-                    "Evolution DRY RUN: would deploy %s (confidence=%.2f, "
-                    "score %.2f→%.2f, %d changes)",
-                    skill_name, confidence,
-                    opt_result.original_score, opt_result.optimized_score,
-                    len(opt_result.changes),
-                )
-                for change in opt_result.changes:
-                    logger.info(
-                        "  DRY RUN change: %s", change.reason[:100],
-                    )
-                deploy_results.append(DeployResult(
-                    skill_name=f"s_{skill_name}",
-                    success=False,
-                    changes_applied=0,
-                    changes_skipped=len(opt_result.changes),
-                    verified=False,
-                    rolled_back=False,
-                    error="dry_run=True — proposed changes logged, not applied",
-                ))
-                # Still save evals for audit trail
-                miner.save_evals(skill_name, examples)
-                continue
-
-            # LIVE: write proposal for human approval instead of silent deploy.
-            # Proposals are stored in .context/.evolution_proposals.json and
-            # surfaced as a Radar todo. The next cycle (or manual approval)
-            # deploys them. This closes the "evolution observes but never acts"
-            # gap while keeping human in the loop.
-
-            # ── Freshness check (LL02): re-read current file and filter out
-            # changes already present. The target file may have been updated
-            # since the MINE phase ran (same session or manual edit).
-            current_text = optimizer._read_skill_text(skill_name) or ""
-            current_lower = current_text.lower()
-            novel_changes = [
-                c for c in opt_result.changes
-                if c.replacement.strip()
-                and c.replacement.strip().lower() not in current_lower
-            ]
-            if not novel_changes:
-                logger.info(
-                    "Evolution cycle: all proposed changes for %s already present "
-                    "in current file — skipping proposal.",
-                    skill_name,
-                )
-                miner.save_evals(skill_name, examples)
-                continue
-
-            proposal = {
-                "skill_name": skill_name,
-                "confidence": round(confidence, 3),
-                "score_before": round(opt_result.original_score, 3),
-                "score_after": round(opt_result.optimized_score, 3),
-                "changes": [{"reason": c.reason, "preview": c.replacement[:200]} for c in novel_changes],
-                "proposed_at": datetime.now(timezone.utc).isoformat(),
-            }
-            _write_evolution_proposal(evals_dir.parent, proposal)
-            deployed_count += 1  # Count as "actioned" for reporting
-            miner.save_evals(skill_name, examples)
+            # HIGH writes no skill proposal: the proposal file's readers keep only
+            # governance rows, so a skill row had no approve or deploy path, and its
+            # text was correction wording copied verbatim into a skill
+            # (docs/design/2026-10-26-evolution-loop-admission.md §3.3).
             logger.info(
-                "Evolution cycle: PROPOSED %s for approval (confidence=%.2f, "
-                "score %.2f → %.2f, %d changes, %d filtered as already-present). "
-                "Radar todo created.",
+                "Evolution cycle: %s reached HIGH confidence (%.2f); no skill proposal is written",
                 skill_name, confidence,
-                opt_result.original_score, opt_result.optimized_score,
-                len(novel_changes),
-                len(opt_result.changes) - len(novel_changes),
             )
+            miner.save_evals(skill_name, examples)
         elif confidence >= med_threshold:
             # MED: recommendation surfaced in skill_health.json
             logger.info(
@@ -1705,29 +1518,6 @@ def _run_evolution_cycle_locked(
             logger.debug("Failed to clean up %s: %s", bak_file, exc)
 
     return report
-
-
-def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
-    """Write an evolution proposal to its persistent home for approval.
-
-    Proposals accumulate in .context/.evolution_proposals.json. Each proposal
-    is a skill optimization that reached HIGH confidence but awaits human
-    approval before deployment. This file IS the proposal's home — the human
-    reviews it there. No Radar todo is written (run_50db230a): the ToDo card is
-    a pure user-planning surface, not a system-proposal feed.
-    """
-    proposals_path = ctx_dir / ".evolution_proposals.json"
-    proposals = []
-    if proposals_path.exists():
-        try:
-            proposals = json.loads(proposals_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # Deduplicate: replace existing proposal for same skill
-    proposals = [p for p in proposals if p.get("skill_name") != proposal["skill_name"]]
-    proposals.append(proposal)
-    proposals_path.write_text(json.dumps(proposals, indent=2), encoding="utf-8")
 
 
 def _write_skill_health(path: Path, report: SkillHealthReport) -> None:
