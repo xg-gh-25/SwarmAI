@@ -361,6 +361,10 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     passed = sum(1 for name in expected
                  if (test_events.get(name) or {}).get("payload", {}).get("n_pass", 0) > 0
                  and not test_events[name]["payload"].get("n_fail"))
+    # commands the agent says it did not run (its reason, not checked): never a PASS
+    # (design 2026-10-26-pipeline-review-closure §4.3); a fail still blocks TEST / LG-1
+    not_run = sum(int((test_events.get(name) or {}).get("payload", {}).get("n_not_run") or 0)
+                  for name in expected)
     # "closed" is findings.is_closed (the closure table): a finding closed by a reported
     # test counts only once R2 judged the test ADEQUATE, a reviewed-only HIGH never
     confirmed = sum(row.get("status") == "closed_proven" and row.get("r2_status") == "ADEQUATE"
@@ -374,12 +378,13 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     elif landing in {"no_code", "not_landed"}:
         quality_verdict = "N/A"
     elif landing == "human_override" or passed < required or closed < len(findings) \
-            or open_checks:
+            or open_checks or not_run:
         quality_verdict = "WARN"
     else:
         quality_verdict = "PASS"
     quality = {"verdict": quality_verdict, "verification_passed": passed,
-               "verification_required": required, "findings_closed": closed,
+               "verification_required": required, "verification_not_run": not_run,
+               "findings_closed": closed,
                "findings_confirmed": confirmed, "findings_total": len(findings),
                "open": _open_lines(open_checks, [row["canonical_id"] for row in findings
                                                  if push_effect(row)])}
@@ -547,8 +552,10 @@ def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:
         return str(reason or "no code")
     confirmed = quality.get("findings_confirmed")
     opened = [str(line) for line in quality.get("open") or []]
+    not_run = int(quality.get("verification_not_run") or 0)
     return (f"{quality['verification_passed']}/{quality['verification_required']} verification · "
-            f"{quality['findings_closed']}/{quality['findings_total']} findings closed"
+            + (f"{not_run} not run · " if not_run else "")
+            + f"{quality['findings_closed']}/{quality['findings_total']} findings closed"
             + (f" ({confirmed} test-closed, confirmed by review)" if confirmed else "")
             + (f" · {opened[0]}" if opened else "")
             + (f" · +{len(opened) - 1} more" if len(opened) > 1 else ""))
@@ -675,6 +682,17 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                       for cmd in commands[:10]]
             if len(commands) > 10:
                 lines.append(f"- {len(commands) - 10} more in run_audit.json")
+    skipped = [(repo, cmd) for repo, commands in (details.get("test_reports") or {}).items()
+               for cmd in commands or () if cmd.get("result") == "not_run"]
+    if skipped:
+        # every one, with its reason: "red at base" is a reason like any other, and the
+        # person decides whether main needs fixing first (§4.3)
+        lines += ["", "## Not run (the agent's reason, not checked)", ""]
+        lines += [f"- {_text(repo, 80)} · {_text(cmd.get('command'), 200)}: "
+                  f"{_text(cmd.get('reason') or 'no reason given', 300)}"
+                  for repo, cmd in skipped[:50]]
+        if len(skipped) > 50:
+            lines.append(f"- {len(skipped) - 50} more in run_audit.json")
     untracked = details.get("untracked_in_delivery") or {}
     if untracked.get("files"):
         lines += ["", "## Files delivered without being added to git", "",
