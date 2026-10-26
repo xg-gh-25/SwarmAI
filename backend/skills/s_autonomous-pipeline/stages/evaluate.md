@@ -2,6 +2,8 @@
 
 Read `artifacts/knowledge.md` first: what the project DDD (PRODUCT, PROJECT) and the Library hold for this request. They are leads; check them against the code. List the ids of entries you relied on in `knowledge_refs` (optional; an id not in that file is refused).
 
+If the request has parts that can each be committed and verified on their own, make each part its own run, one after another; do not finish one large run and split it afterwards.
+
 Write `artifacts/requirements.json` using the full REQUIREMENTS schema. Use structured EARS fields; do not write `REQUIREMENTS.md`.
 
 Required checks: RQ-1, RQ-2, RQ-4 (bugfix), RQ-5, RQ-6, RQ-8. Whether each acceptance criterion is verifiable and its negative / universal flags match its text is judged by the Gate-0 reviewer, in any language (no word list); fix every acceptance id it names before completing EVALUATE.

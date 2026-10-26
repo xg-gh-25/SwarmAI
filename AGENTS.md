@@ -520,6 +520,8 @@ git worktree add --lock --reason "<agent> session scratch" -b <agent>/<topic> <s
 #   NOT under ~/.swarm-ai/worktrees; --lock: see "Never prune" below
 # edit + test inside the worktree; run tests with the main checkout's venv python
 #   (backend/.venv/bin/python by absolute path — a .venv symlink trips conftest's WRONG PYTHON);
+#   start pytest from the worktree's backend/: the venv's editable-install .pth puts the MAIN
+#   checkout's backend on sys.path, so a script run elsewhere imports main's core, not yours;
 #   frontend: symlink desktop/node_modules from the main checkout
 git commit -- <paths>                 # explicit pathspec, never a bare `git commit -a`
 git rebase main                       # main moves every few minutes

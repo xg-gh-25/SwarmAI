@@ -1,6 +1,6 @@
 # TEST
 
-Run the final verification on the reviewed tree yourself: the change's tests and the wider checks the repo expects before a commit (its README, AGENTS.md or CI tell you which). Do not change code in TEST. If a fix is needed, make it and end TEST as usual: the run goes back to REVIEW for an incremental review of that change, then returns to TEST (at most twice).
+Run the final verification on the reviewed tree yourself: the change's tests and the wider checks the repo expects before a commit (its README, AGENTS.md or CI tell you which). Run it from the worktree's own source directory (an editable install from the main checkout can load main's code instead). Do not change code in TEST. If a fix is needed, make it and end TEST as usual: the run goes back to REVIEW for an incremental review of that change, then returns to TEST (at most twice).
 
 End TEST with the validation report on stdin, in the same shape as BUILD: `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -`.
 

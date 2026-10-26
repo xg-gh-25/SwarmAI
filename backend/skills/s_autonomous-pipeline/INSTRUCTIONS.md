@@ -14,7 +14,9 @@ Pass the user's words as `--requirement` for every profile: create recalls proje
 
 Every run's code is in its own git worktree per repo; there is no other mode. Worktree creation failure pauses the run.
 
-Read state with `"$SWARM_BACKEND_BIN" pipeline-v1 status --project <P> --run-id <R>` before anything else in a turn that continues a run. `paused` with reason `user_stop` / `session_lost` means the user stopped it: continue only when the user asks, then `resume`. Restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. Continuing another session's run is allowed once that session is not streaming: your first owner command records the takeover. A run without protected `contract.json` is unsupported; create a v1 run instead of migrating it.
+Each `pipeline-v1` command prints one JSON object on stdout, logs on stderr: never `2>&1`.
+
+Read state with `"$SWARM_BACKEND_BIN" pipeline-v1 status --project <P> --run-id <R>` before anything else in a turn that continues a run. `paused` with reason `user_stop` / `session_lost` means the user stopped it: continue only when the user asks, then `resume`. Restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. Continuing another session's run is allowed once that session is not streaming: your first owner command records the takeover. A run without protected `contract.json` is unsupported: create a new run.
 
 Gate-0 is executable only through `gate0-start`. Never edit `run.json` to simulate any transition.
 
@@ -34,7 +36,7 @@ For every stage:
 
 Token usage is measured from the run's transcripts before the DELIVER REPORT and again when REFLECT ends; there is no measuring command.
 
-Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, trivial, direct, research (goal was removed: split a large task into a sequence of runs). There is no skipped stage.
+Profiles and exact stage order come from `core/run_protocol/lifecycle.py`: full/bugfix, trivial, direct, research (no goal profile: EVALUATE says how to split a task into runs). There is no skipped stage.
 
 direct is for a small, unambiguous change: `create --profile direct --requirement "<the user's words>"` (required), stages build → review → test → deliver → reflect, no REQUIREMENTS / DESIGN_SPEC, no exit criteria, no decision. If the request has more than one reasonable reading, abandon the direct run and re-create it as trivial, and ask there.
 
