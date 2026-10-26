@@ -1014,8 +1014,12 @@ class RunEngine:
             return []
         landed = set(commits)
         mains = {entry["repo_name"]: Path(entry["main"]) for entry in entries}
-        return run_worktree.release(self.run_id, {"worktrees": entries}, mains,
-                                    "run completed", landed=landed)
+        results = run_worktree.release(self.run_id, {"worktrees": entries}, mains,
+                                       "run completed", landed=landed)
+        # run.json lists the worktrees on disk: rewrite it, or it keeps the removed
+        # one as active and the sweeper retries it forever
+        self.write_projection()
+        return results
 
     @_one_operation
     def gate0_start(self, requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:

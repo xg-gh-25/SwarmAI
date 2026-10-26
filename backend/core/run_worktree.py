@@ -1798,6 +1798,9 @@ def sweep(workspace: "str | Path", owner_active: "Callable[[str | None], bool]",
 def _sweep_run(rid, f, data, owner_active, now, report, update_run, RunLockTimeout) -> None:
     entries = active_entries(data) + [e for e in data.get("worktrees") or []
                                       if isinstance(e, dict) and e.get("state") == "integrated"]
+    # a row whose worktree is gone has nothing left to release (its run/<id> branch
+    # is _sweep_branches' job); retrying it only logs "main checkout unknown"
+    entries = [e for e in entries if wt_path(rid, str(e.get("repo_name"))).exists()]
     if not entries:
         return
     if data.get("_unreadable"):
