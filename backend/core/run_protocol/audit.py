@@ -482,6 +482,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                                    and (row.get("outcome") or {}).get("status") == "library"],
                "knowledge": ({"status": str(knowledge.get("status") or "none"),
                               "entries": int(knowledge.get("entries") or 0),
+                              "parts": [dict(p) for p in knowledge.get("parts") or ()
+                                        if isinstance(p, Mapping)],
                               "cited": sorted({str(i) for i in knowledge.get("cited") or ()})}
                              if isinstance(knowledge, Mapping) else None)}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
@@ -647,8 +649,13 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
     known = details.get("knowledge")
     if isinstance(known, Mapping):
-        lines += ["", f"Knowledge: {_text(known.get('status'), 20)} · "
-                  f"{int(known.get('entries') or 0)} entries · cited {len(known.get('cited') or ())}"]
+        parts = [p for p in known.get("parts") or () if isinstance(p, Mapping)] or \
+            [{"purpose": "requirement", "status": known.get("status"),
+              "entries": known.get("entries")}]
+        lines += ["", "Knowledge: " + " · ".join(
+            f"{_text(p.get('purpose'), 12)} {_text(p.get('status'), 20)} · "
+            f"{int(p.get('entries') or 0)}" for p in parts)
+            + f" · cited {len(known.get('cited') or ())}"]
     sources = details.get("answer_sources") or {}
     relayed = int(sources.get("relayed") or 0) if isinstance(sources, Mapping) else 0
     if relayed:

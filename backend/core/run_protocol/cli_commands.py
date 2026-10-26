@@ -228,9 +228,12 @@ def execute(args) -> dict[str, Any]:
         repos = _repos(args.repo)
         binding = project_binding.resolve(args.project, repos)   # run-knowledge §3.2
         from core.run_protocol import run_knowledge                # run-knowledge §3.3
+        from core.run_protocol.lifecycle import PROFILE_STAGES
+        # a profile without EVALUATE goes straight to code: give it the design recall
+        purpose = "requirement" if "evaluate" in PROFILE_STAGES[args.profile] else "design"
         knowledge = run_knowledge.build(
             args.requirement, project=binding.project, has_ddd=binding.has_ddd,
-            workspace=_workspace(), repo_roots=repos)
+            workspace=_workspace(), repo_roots=repos, purpose=purpose)
         engine = RunEngine.create(
             data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
             profile=args.profile, session_id=args.session_id, repos=repos,
@@ -239,7 +242,7 @@ def execute(args) -> dict[str, Any]:
             bound_repos=binding.bound_repos,
             knowledge=run_knowledge.contract_record(knowledge),
             owner_source=owner_source, review_answers=review_answers)
-        knowledge_file = engine.write_knowledge(knowledge.markdown)
+        knowledge_file = engine.write_knowledge(knowledge.markdown, purpose)
         result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
                   "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json"),
                   "knowledge": {"file": str(knowledge_file), "status": knowledge.status,

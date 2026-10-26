@@ -28,8 +28,6 @@ flag. Ingestion (the WRITE path) is a separate subsystem.
 Public symbols:
 - ``BucketedRecall``  — per-domain hits + per-domain hit_layer
 - ``recall_all``      — the unified multi-domain fan-out
-- ``recall_ddd_entries`` — up to N content-bearing DDD entries (for callers whose
-  reader cannot follow a section pointer, e.g. pipeline review sub-agents)
 - ``recall_ddd`` / ``DDD_PURPOSES`` — DDD recall by PURPOSE (run-knowledge §3.6.2):
   each doc ranked on its own with its own quota and char budget, ``- [x]`` done items
   skipped, typed entries soft-weighted, template sections pinned
@@ -818,7 +816,7 @@ def _load_ddd_docs_text(project: Optional[str]):
     """Return ``(project_dir, {doc_name: text})`` for a project's canonical DDD docs.
 
     The ONE loader for "read this project's DDD docs": ``_recall_ddd`` (the recall
-    fan-out leg) and ``recall_ddd_entries`` (the expert-prompt leg) both read through
+    fan-out leg) and ``recall_ddd`` (recall by purpose) both read through
     it, so the two can never disagree about which docs a project has. Layout comes
     from the SSOTs — ``DDD_CANONICAL_DOCS`` for the doc set and ``ddd_path`` for where
     each doc lives — so nothing here knows any section name or directory layout.
@@ -853,29 +851,6 @@ def _load_ddd_docs_text(project: Optional[str]):
     return base, docs_text
 
 
-def recall_ddd_entries(query: str, project: Optional[str], top_n: int = 8) -> list[dict]:
-    """Top ``top_n`` content-bearing ENTRY hits from a project's DDD docs.
-
-    Unlike the ``ddd`` leg of :func:`recall_all` — which returns ``## section``
-    pointers plus at most ONE entry with its text — this returns up to ``top_n``
-    entries WITH their text, each as ``{"doc", "section", "score", "content"}``
-    highest-first. It exists for callers that hand the recalled knowledge to a
-    reader who cannot follow a pointer cheaply (a review sub-agent with a bounded
-    tool budget), so the knowledge has to arrive as text.
-
-    Structure-agnostic: any ``- `` entry under any ``## `` section of any canonical
-    doc can match; superseded entries are filtered (same rule as recall_all).
-    READ-only, keyword-only. Returns ``[]`` for no project, an unknown project, a
-    project with no docs, or a query sharing no vocabulary with any entry.
-    """
-    _base, docs_text = _load_ddd_docs_text(project)
-    if not docs_text or not (query or "").strip():
-        return []
-    sections_by_doc = _parse_docs_sections(docs_text)
-    return _ddd_entry_hits(query, docs_text, max(1, int(top_n)),
-                           sections_by_doc=sections_by_doc)
-
-
 # ── DDD recall by purpose (run-knowledge §3.6.2) ─────────────────────────────
 # What each reader of a project's DDD needs, as DATA: per doc, how to recall it
 # ("entry" = ``- `` entries, "section" = whole ``## `` sections), how many, and how
@@ -900,6 +875,12 @@ DDD_PURPOSES: dict[str, dict] = {
     "review": {
         "docs": {"TECH.md": ("entry", 4, 1500), "IMPROVEMENT.md": ("entry", 2, 1000)},
         "weighted": ("pitfall", "decision", "guideline"),
+    },
+    # REFLECT's dedup candidates: one entry per doc a lesson could have come from
+    "reflect": {
+        "docs": {"PRODUCT.md": ("entry", 1, 900), "TECH.md": ("entry", 1, 900),
+                 "IMPROVEMENT.md": ("entry", 1, 900), "PROJECT.md": ("entry", 1, 900)},
+        "weighted": (),
     },
     "chat": {
         "docs": {"PRODUCT.md": ("entry", 2, 600), "TECH.md": ("entry", 2, 600),

@@ -1,6 +1,6 @@
 # PLAN
 
-Write `artifacts/design_spec.json` (lite for trivial). Markdown is renderer-owned. direct has no PLAN. Ids of `artifacts/knowledge.md` entries the design relies on go in its optional `knowledge_refs`.
+Write `artifacts/design_spec.json` (lite for trivial). Markdown is renderer-owned. direct has no PLAN. Read `artifacts/knowledge_design.md` first (no THINK in trivial). Ids of `knowledge.md` / `knowledge_design.md` entries the design relies on go in its optional `knowledge_refs`.
 
 Required checks: DS-2a, DS-4a (bugfix), DS-5, DS-6 (full), DS-7, DS-9a. DS-1 and DS-3 affect audit/push only.
 

@@ -1,6 +1,6 @@
 # EVALUATE
 
-Read `artifacts/knowledge.md` first: entries recalled for this run from the project DDD, the Library and this repo's lessons. They are leads; check them against the code. List the ids of entries you relied on in `knowledge_refs` (optional; an id not in that file is refused).
+Read `artifacts/knowledge.md` first: what the project DDD (PRODUCT, PROJECT) and the Library hold for this request. They are leads; check them against the code. List the ids of entries you relied on in `knowledge_refs` (optional; an id not in that file is refused).
 
 Write `artifacts/requirements.json` using the full REQUIREMENTS schema. Use structured EARS fields; do not write `REQUIREMENTS.md`.
 

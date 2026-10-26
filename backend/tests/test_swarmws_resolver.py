@@ -56,11 +56,11 @@ def test_recall_and_pipeline_read_the_same_workspace(monkeypatch, tmp_path):
     monkeypatch.delenv("SWARMWS", raising=False)
     monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
     from core import project_registry
-    from core.recall_multi import recall_ddd_entries
+    from core.recall_multi import recall_ddd
     from core.run_protocol import cli_commands
     assert project_registry.get_swarmws() == ws
     assert cli_commands._workspace() == ws
-    hits = recall_ddd_entries("quokka midnight", "P", top_n=3)
+    hits = recall_ddd("quokka midnight", "P", "design")
     assert hits and "Quokka rule" in hits[0]["content"]
 
 

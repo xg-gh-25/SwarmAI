@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r10 — 步骤 0–6 和 §3.5 已实施；步骤 7、8 待实施；§5 的度量待 S5
+status: r11 — 步骤 0–7 和 §3.5 已实施；步骤 8（聊天）待实施；§5 的度量待 S5
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -521,6 +521,39 @@ run 的需求 + 9 条常见任务）。
   关键词对不上）和 `approve-into-void`（在 IMPROVEMENT 里单独排第 10，名额 3）。这是关键词召回的限制，
   名额加大会把噪音也带进来，这一步不改。
 
+#### 3.6.8 步骤 7 的实施（r11）
+
+pipeline 分阶段接入 `recall_ddd`：
+
+- **knowledge.md**（create）：`recall_ddd(purpose="requirement")` + Library。pipeline-lessons 移到 design 那一份。
+  direct 没有 EVALUATE，create 时直接按 design 召回，contract 里记 `purpose: design`。
+- **knowledge_design.md**（EVALUATE 的 `stage-complete` 通过后）：`run_knowledge.build(purpose="design")`，
+  查询词是用户原话的前 10 个词，加上 REQUIREMENTS 正文里新出现的词（`query_for`，最多 18 个，原话的词
+  永远在前）。id 写进 CLI 事件 `knowledge_recalled`（每个 purpose 只有一条，EVALUATE 重做也不会替换；
+  lifecycle 忽略它）。召回出错时文件和事件都写 `unavailable` 和原因，EVALUATE 照常完成。`stage-complete`
+  的输出多一个 `knowledge_design`（文件、状态、条数）。
+- **专家块**：`recall_ddd(purpose="review")`。
+- **`knowledge_refs`** 认 contract 和 `knowledge_recalled` 事件的并集；**REFLECT 去重候选**同样取两处的
+  DDD 条目，另一路改用新 purpose `reflect`（4 份文档每份 1 条，只取条目）。
+- **REPORT**：`Knowledge: requirement recalled · 11 · design recalled · 4 · cited 1`。
+- **卡片**：EVALUATE 说 knowledge.md 里是 PRODUCT / PROJECT 和 Library；THINK、PLAN 先读 knowledge_design.md。
+  `next` 在阶段切换时本来就带卡片全文，所以没有另改 `next`。INSTRUCTIONS 改后 9924 字符。
+- **删掉 `recall_ddd_entries`**：调用方都换成了 `recall_ddd`；样例集脚本的 before 改为直接用一个混合语料
+  排名，效果和原来相同。
+
+实测（只读 SwarmAI 的真实 DDD，run_85e81059 的需求）：knowledge.md 11 条（PRODUCT 5、PROJECT 3、Library 3），
+83 ms；knowledge_design.md 4 条（TECH 2、IMPROVEMENT 2），108 ms。两次召回都在 CLI 里，不在聊天路径上。
+
+验证：
+
+- 新增和改写的测试：requirement / design 各自读哪些来源、查询词顺序、EVALUATE 写出 knowledge_design.md 和
+  事件、PLAN 能引用 design 条目、direct 在 create 时拿到 design、design 召回出错仍能完成 EVALUATE、REPORT
+  两段、REFLECT 能 reinforce 只在 design 那一份里出现的 TECH 条目。
+- §3.6.5 的不 crash 矩阵改为按 purpose 断言：full、bugfix 还要检查 knowledge_design.md 和事件的状态。
+- 8 处变异检查都让测试变红：requirement 改读 design、EVALUATE 不召回、`knowledge_refs` 只认 contract、
+  REFLECT 候选只取 contract、direct 改用 requirement、REPORT 不分两段、design 召回出错时抛出、专家块不用
+  review。
+
 ## 4. 不做的
 
 - BUILD 不再召回。THINK / PLAN 只读 EVALUATE 之后算好的 knowledge_design.md，阶段中途不再召回；agent 在
@@ -580,3 +613,4 @@ S5 加两个数，按 run 统计：
 - r8（2026-10-26）：§3.5 实施（§3.5.1），并修了 REFLECT 候选带 bullet 导致 reinforces / refines 永远落空的 bug。
 - r9（2026-10-26）：XG 指出 EVALUATE 只召回了 TECH / IMPROVEMENT，需求分析该看 PRODUCT / PROJECT，THINK / PLAN 该看 TECH / IMPROVEMENT。实测 run_85e81059 确认是 4 份文档混排、数量压倒相关性。新增 §3.6：平台 `recall_ddd` 按用途分配置，pipeline 分阶段接入，聊天单独一步回放验证；加上没有 DDD / DDD 不完整或损坏时都不能 crash 的硬性要求和测试矩阵（实测发现一份非 UTF-8 文档会让整个项目的 DDD 召回失效）。步骤 5–8 待实施。
 - r10（2026-10-26）：步骤 5、6 实施（§3.6.7）：加载器只跳过坏的那一份；`recall_ddd` + 配置表 + 样例集脚本，16 条样例上 requirement 4/7 → 7/7、design 7/11 → 8/11、review 2/2 不变，耗时下降。
+- r11（2026-10-26）：步骤 7 实施（§3.6.8）：knowledge.md 按 requirement、EVALUATE 之后 knowledge_design.md 按 design（`knowledge_recalled` 事件）、专家块按 review、REFLECT 候选取两处；删掉 `recall_ddd_entries`。

@@ -4,7 +4,7 @@ run-knowledge §3.6.2. Fixture DDDs under tmp_path (no one's real DDD), one test
 rule of the table:
 
 - each doc is ranked on its own, so a big doc cannot crowd a small one out (the
-  shared-corpus ranking ``recall_ddd_entries`` does is shown losing the same entry);
+  one shared-corpus ranking of all docs is shown losing the same entry);
 - ``- [x]`` done items are never recalled;
 - typed entries are soft-weighted: ranked up, the untyped ones are not dropped;
 - pinned template sections come whatever the query, a pointer section is named only,
@@ -42,8 +42,9 @@ def test_a_small_doc_is_not_crowded_out_by_a_big_one(ddd):
     ddd("TECH.md", "# TECH\n\n## Traps\n\n" + _entries(40, "quokka"))
     ddd("PROJECT.md", "# PROJECT\n\n## Recent Decisions\n\n"
                       "- [decision] **quokka tier**: the quokka gate stays observe-only.\n")
-    shared = rm.recall_ddd_entries("quokka", P, top_n=8)
-    assert all(h["doc"] == "TECH.md" for h in shared)   # what the shared corpus does
+    _base, docs = rm._load_ddd_docs_text(P)
+    shared = rm._ddd_entry_hits("quokka", docs, 8)
+    assert all(h["doc"] == "TECH.md" for h in shared)   # what one shared corpus does
     hits = rm.recall_ddd("quokka", P, "chat")
     assert any(h["doc"] == "PROJECT.md" and "quokka tier" in h["content"] for h in hits)
     assert sum(h["doc"] == "TECH.md" for h in hits) == 2         # its own quota only

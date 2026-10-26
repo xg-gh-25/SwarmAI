@@ -296,16 +296,16 @@ def candidates_for(lessons: Any, project: str,
              if isinstance(row, Mapping) and row.get("source") and row.get("head")]
     out: dict[str, list[str]] = {}
     try:
-        from core.recall_multi import recall_ddd_entries
+        from core.recall_multi import recall_ddd
     except Exception:  # noqa: BLE001 — no recall: only knowledge.md's, RF-4 still checks shape
         logger.debug("recall unavailable for reflect candidates", exc_info=True)
-        recall_ddd_entries = None
+        recall_ddd = None
     for row in lessons if isinstance(lessons, list) else []:
         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
             continue
         try:
-            hits = (recall_ddd_entries(str(row.get("statement") or ""), project, top_n=3)
-                    if recall_ddd_entries else [])
+            hits = [h for h in (recall_ddd(str(row.get("statement") or ""), project, "reflect")
+                                if recall_ddd else []) if h.get("kind") == "entry"]
         except Exception:  # noqa: BLE001
             logger.debug("reflect candidate recall failed lesson=%s", row.get("id"), exc_info=True)
             hits = []

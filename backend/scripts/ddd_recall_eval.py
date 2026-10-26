@@ -4,8 +4,9 @@
 Each case is a request, a purpose and the entries that request should find (a
 substring of each entry). For every case this compares:
 
-- ``before``: what the run got before §3.6 -- ``recall_ddd_entries`` over the 4 docs
-  in one shared corpus (top 6, the knowledge.md / THINK view; top 5 for review);
+- ``before``: what the run got before §3.6 -- the 4 docs' entries ranked in ONE shared
+  corpus (top 6, the knowledge.md / THINK view; top 5 for review), as the retired
+  ``recall_ddd_entries`` did;
 - ``after``: ``recall_ddd(query, project, purpose)`` at each ``--weights`` value.
 
 and prints hits per purpose, the PRODUCT / PROJECT hits of the requirement cases, and
@@ -43,13 +44,17 @@ def _timed(fn):
 
 def evaluate(cases: list[dict], project: str, weights: list[float]) -> dict:
     from core.recall_filter import extract_query_keywords
-    from core.recall_multi import recall_ddd, recall_ddd_entries
+    from core.recall_multi import _ddd_entry_hits, _load_ddd_docs_text, recall_ddd
+
+    def before(query: str, top: int) -> list[dict]:
+        _base, docs = _load_ddd_docs_text(project)
+        return _ddd_entry_hits(query, docs, top) if docs and query.strip() else []
     rows, times = [], {"before": [], **{f"after@{w}": [] for w in weights}}
     for case in cases:
         query = extract_query_keywords(case["request"])
         expect = list(case["expect"])
         top = BEFORE_TOP.get(case["purpose"], 6)
-        hits, ms = _timed(lambda: recall_ddd_entries(query, project, top_n=top))
+        hits, ms = _timed(lambda: before(query, top))
         times["before"].append(ms)
         row = {"id": case["id"], "purpose": case["purpose"], "expect": len(expect),
                "before": _found(expect, hits)}

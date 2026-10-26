@@ -56,6 +56,7 @@ OCCURRENCE_FIELDS: dict[str, tuple[str, ...]] = {
     "partial_land": ("ordinal",),
     "abandon": ("ordinal",),
     "restore": ("ordinal",),
+    "knowledge_recalled": ("payload.purpose",),
     "metric": ("stage", "payload.name", "attempt"),
     "turn": ("payload.message_id",),
     "integrity": ("payload.conflict_id", "ordinal"),
@@ -249,6 +250,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # (S6-2, design usable-by-anyone §3.3.3); the engine appends it, never the agent
     "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str}),
     "gate0_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
+    # what THINK / PLAN were given when EVALUATE completed (run-knowledge §3.6.3): the
+    # ids knowledge_refs are checked against, and the DDD entries REFLECT dedups with;
+    # one per purpose, so a re-completed EVALUATE cannot replace it
+    "knowledge_recalled": _spec("cli", ("payload.purpose",), None,
+                                {"purpose": str, "status": str, "items": list}, {"ddd": list}),
     "resume": _spec("cli", ("ordinal",), None, {"worktree_ready": bool}),
     # the run's infrastructure failed (conformance F11): the CLI that met it records it
     "infrastructure_failed": _spec("cli", ("ordinal",), None, {"reason": str}),

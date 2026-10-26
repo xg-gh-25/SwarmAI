@@ -8,7 +8,7 @@ What is tested:
 - The candidates of a lesson include the DDD entries recalled into knowledge.md at
   create (from the contract, which the agent cannot edit), merged with the keyword
   recall and de-duplicated.
-- REPORT carries one line ``Knowledge: <status> · N entries · cited M`` and no recalled
+- REPORT carries one line ``Knowledge: <purpose> <status> · N ... · cited M`` and no recalled
   text; M counts the distinct ids cited by REQUIREMENTS / DESIGN_SPEC knowledge_refs and
   by findings; a run created before step 3 has no line.
 """
@@ -64,7 +64,12 @@ def _build(**knowledge):
 def test_report_has_one_knowledge_line_and_no_recalled_text():
     a = _build(status="recalled", entries=7, cited=["0a1b2c3d", "1b2c3d4e"])
     text = audit.render(a, fmt="report")
-    assert "Knowledge: recalled · 7 entries · cited 2" in text
+    assert "Knowledge: requirement recalled · 7 · cited 2" in text
+    b = _build(status="recalled", entries=9, cited=[],
+               parts=[{"purpose": "requirement", "status": "recalled", "entries": 4},
+                      {"purpose": "design", "status": "none", "entries": 0}])
+    assert "Knowledge: requirement recalled · 4 · design none · 0 · cited 0" in \
+        audit.render(b, fmt="report")
     assert a["details"]["knowledge"]["cited"] == ["0a1b2c3d", "1b2c3d4e"]
 
 
@@ -95,13 +100,24 @@ def test_end_to_end_cited_entry_reaches_report_and_reflect(tmp_path, monkeypatch
               "statement": "xylophone tuning stays out of scope", "tell": "seen in this run",
               "evidence": [r.events()[0]["event_id"]],
               "relation": {"kind": "reinforces", "entry": f"{cited['source']}: {cited['head']}"}}
-    prep = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": [lesson]}))
+    design = [e for e in r.events() if e["kind"] == "knowledge_recalled"][0]["payload"]
+    tech_entry = next(row for row in design["ddd"] if row["source"].startswith("TECH.md#"))
+    lesson2 = {**lesson, "id": "L2", "statement": "marimba tuning stays out of scope",
+               # only knowledge_design.md (the event, not the contract) offers this one
+               "relation": {"kind": "reinforces",
+                            "entry": f"{tech_entry['source']}: {tech_entry['head']}"}}
+    prep = r.v1("reflect-prepare", "--artifact",
+                r.artifact("reflect", {"lessons": [lesson, lesson2]}))
     assert prep.get("ok") is True, prep
     r.v1("land", "--message", "fix: swap the operands" + SWARM)
     state = r.state()
     assert state["status"] == "completed" and state["landing"] == "landed", state
     report = (r.repo / ".aidlc" / "deliverables" / r.run_id / "REPORT.md").read_text(encoding="utf-8")
-    assert f"Knowledge: recalled · {len(record['items'])} entries · cited 1" in report
-    assert "never feed after midnight" not in report          # no recalled text in REPORT
+    assert (f"Knowledge: requirement recalled · {len(record['items'])} · "
+            f"design recalled · {len(design['items'])} · cited 1") in report, report
+    assert "feeder only skips midnight" not in report         # no recalled text in REPORT
+    assert cited["source"].startswith("PROJECT.md#")
+    doc = (r.ws / "Projects" / PROJECT / "2-understanding" / "PROJECT.md").read_text(encoding="utf-8")
+    assert f"  - reinforced by {r.run_id} L1" in doc, doc
     tech = (r.ws / "Projects" / PROJECT / "2-understanding" / "TECH.md").read_text(encoding="utf-8")
-    assert f"  - reinforced by {r.run_id} L1" in tech, tech
+    assert f"  - reinforced by {r.run_id} L2" in tech, tech

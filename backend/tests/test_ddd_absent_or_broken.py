@@ -2,7 +2,7 @@
 
 run-knowledge §3.6.5 (H1-H5). One matrix of DDD states, each checked on every reader:
 
-- the platform recall (``recall_ddd_entries``) and its loader: a doc that cannot be
+- the platform recall (``recall_ddd``, every purpose) and its loader: a doc that cannot be
   read is skipped ALONE, the other docs still answer (H1; red on main, where one
   non-UTF-8 doc raised and took the whole project's DDD recall down);
 - chat injection (``_inject_ddd_for_active_project``) never raises and still injects
@@ -11,7 +11,8 @@ run-knowledge §3.6.5 (H1-H5). One matrix of DDD states, each checked on every r
   ``reflect_job.candidates_for``, including a recall that raises (H3: ``unavailable``
   with the reason, never ``none``, never blank);
 - the real CLI: full, bugfix and direct runs reach ``landed`` in every state, with a
-  knowledge.md whose status line matches the state and a REPORT (H4).
+  knowledge.md (and, after EVALUATE, a knowledge_design.md and its knowledge_recalled
+  event) whose status matches the state, and a REPORT (H4).
 
 Fixtures build the workspace from scratch under tmp_path; no one's real DDD is read.
 """
@@ -27,11 +28,18 @@ from tests.pipeline_v1_rig import PROJECT, Rig
 TRAP = "- **Operands trap**: swapping the operands of add needs the commutativity test.\n"
 STATES = ("no_project", "no_docs", "tech_only", "product_only", "one_doc_not_utf8",
           "headings_only")
-# knowledge.md status when the run's request is the rig's REQUIREMENT (no data.db, no
-# lessons in the rig, so only the DDD leg can recall anything)
+# whether any purpose recalls something (the platform view)
 EXPECTED = {"no_project": "none", "no_docs": "none", "tech_only": "recalled",
             "product_only": "recalled", "one_doc_not_utf8": "recalled",
             "headings_only": "none"}
+# per purpose, for the rig's REQUIREMENT (no data.db, no lessons in the rig, so only the
+# DDD leg can recall anything): requirement reads PRODUCT / PROJECT, design TECH /
+# IMPROVEMENT (run-knowledge §3.6.3)
+BY_PURPOSE = {
+    "requirement": {**{k: "none" for k in STATES}, "product_only": "recalled"},
+    "design": {**{k: "none" for k in STATES}, "tech_only": "recalled",
+               "one_doc_not_utf8": "recalled"},
+}
 
 
 def _make(ws: Path, state: str) -> None:
@@ -66,11 +74,14 @@ def ws(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("state", STATES)
 def test_platform_recall_never_raises(ws, state):
-    from core.recall_multi import recall_ddd_entries
+    from core.recall_multi import DDD_PURPOSES, recall_ddd
     _make(ws, state)
-    hits = recall_ddd_entries("swap operands add", PROJECT, top_n=5)
-    assert isinstance(hits, list)
-    assert bool(hits) == (EXPECTED[state] == "recalled"), hits
+    found = []
+    for purpose in DDD_PURPOSES:
+        hits = recall_ddd("swap operands add", PROJECT, purpose)
+        assert isinstance(hits, list)
+        found += [h for h in hits if h["kind"] in ("entry", "section")]
+    assert bool(found) == (EXPECTED[state] == "recalled"), found
 
 
 def test_one_unreadable_doc_is_skipped_alone(ws, caplog):
@@ -104,10 +115,11 @@ def test_pipeline_readers_never_raise(ws, state, tmp_path):
     from core.run_protocol.reflect_job import candidates_for
     _make(ws, state)
     has = has_ddd_docs(PROJECT)
-    k = rk.build("Swap the operands of core.mod.add.", project=PROJECT, has_ddd=has,
-                 workspace=ws, repo_roots={})
-    assert k.status == EXPECTED[state], (k.status, k.errors)
-    assert k.markdown.strip() and f"Status: {k.status}" in k.markdown
+    for purpose, expected in BY_PURPOSE.items():
+        k = rk.build("Swap the operands of core.mod.add.", project=PROJECT, has_ddd=has,
+                     workspace=ws, repo_roots={}, purpose=purpose)
+        assert k.status == expected[state], (purpose, k.status, k.errors)
+        assert k.markdown.strip() and f"Status: {k.status}" in k.markdown
     text, ids, status = rk.expert_block(project=PROJECT, has_ddd=has,
                                         paths=["backend/core/mod.py"],
                                         requirement="swap the operands of add")
@@ -141,10 +153,17 @@ def test_run_lands_in_every_ddd_state(tmp_path, monkeypatch, state, profile):
     r = Rig(tmp_path, monkeypatch, profile=profile)
     _make(r.ws, state)
     out = r.create()
-    assert out["knowledge"]["status"] == EXPECTED[state], out["knowledge"]
+    first = "design" if profile == "direct" else "requirement"   # direct has no EVALUATE
+    want = BY_PURPOSE[first][state]
+    assert out["knowledge"]["status"] == want, out["knowledge"]
     text = Path(out["knowledge"]["file"]).read_text(encoding="utf-8")
-    assert f"Status: {EXPECTED[state]}" in text
+    assert f"Status: {want}" in text
     state_out = r.drive()
+    if profile != "direct":         # EVALUATE's completion wrote the design recall
+        design = Path(out["knowledge"]["file"]).with_name("knowledge_design.md")
+        assert f"Status: {BY_PURPOSE['design'][state]}" in design.read_text(encoding="utf-8")
+        recalled = [e for e in r.events() if e["kind"] == "knowledge_recalled"]
+        assert [e["payload"]["status"] for e in recalled] == [BY_PURPOSE["design"][state]]
     assert state_out["status"] == "completed" and state_out["landing"] == "landed", state_out
     report = r.repo / ".aidlc" / "deliverables" / r.run_id / "REPORT.md"
     assert report.is_file() and "Delivered:" in report.read_text(encoding="utf-8")

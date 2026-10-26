@@ -463,7 +463,8 @@ class RunEngine:
                         "decision_cap": decision_cap,
                         "has_ddd": bool(has_ddd), "bound_repos": sorted(bound_repos),
                         "owner_source": owner_source, "review_answers": review_answers,
-                        "knowledge": {"status": str((knowledge or {}).get("status") or "none"),
+                        "knowledge": {"purpose": str((knowledge or {}).get("purpose") or "requirement"),
+                                      "status": str((knowledge or {}).get("status") or "none"),
                                       "items": [str(i) for i in (knowledge or {}).get("items") or []],
                                       "ddd": [dict(row) for row in (knowledge or {}).get("ddd") or []
                                               if isinstance(row, Mapping)]},
@@ -1907,10 +1908,14 @@ class RunEngine:
         self.store.append_new(writer=self.authority.writer("cli"), kind="stage_complete",
                               at=_now(), stage=stage, attempt=result["attempt"], payload=payload)
         self._settle()
+        design = self._recall_design_knowledge() if stage == "evaluate" else None
         if stage in {"review", "test", "deliver"} and "review" in lifecycle.PROFILE_STAGES[profile]:
             self._write_review_documents()          # its checks and evidence moved on (F20)
         self.write_projection()
-        return {"ok": True, **result, "state": self.projection()}
+        out = {"ok": True, **result, "state": self.projection()}
+        if design:
+            out["knowledge_design"] = design
+        return out
 
     @_one_operation
     def report_tests(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -1947,13 +1952,58 @@ class RunEngine:
                 ordinal=NEXT, payload=validation_report.event_payload(
                     stage, report, code_trees[report["repo"]]))
 
-    def write_knowledge(self, markdown: str) -> Path:
-        """artifacts/knowledge.md, what the run recalled at create (run-knowledge §3.3).
-        Its entry ids are in the contract; this file is the readable copy."""
-        path = self.run_dir / "artifacts" / "knowledge.md"
+    def write_knowledge(self, markdown: str, purpose: str = "requirement") -> Path:
+        """``artifacts/knowledge.md`` (requirement, at create) or
+        ``artifacts/knowledge_design.md`` (design, when EVALUATE completes): the readable
+        copy of a recall whose ids are in the contract / a knowledge_recalled event."""
+        from core.run_protocol.run_knowledge import FILES
+        path = self.run_dir / "artifacts" / FILES[purpose]
         path.parent.mkdir(parents=True, exist_ok=True)
         DocumentStore._atomic(path, markdown)
         return path
+
+    def _knowledge_records(self) -> list[dict]:
+        """Every recall this run made, from where the agent cannot edit it: the
+        contract's (at create) and each knowledge_recalled event's (run-knowledge §3.6.3)."""
+        records = []
+        if isinstance(self.contract.get("knowledge"), Mapping):
+            records.append({"purpose": "requirement", **self.contract["knowledge"]})
+        for event in self.store.read_events():
+            if event.get("kind") == "knowledge_recalled":
+                records.append(dict(event["payload"]))
+        return records
+
+    def _recall_design_knowledge(self) -> dict[str, Any] | None:
+        """When EVALUATE completes: recall the DDD for design (TECH + IMPROVEMENT) and
+        this repo's lessons, for the request plus REQUIREMENTS, into
+        knowledge_design.md, and record its ids in a knowledge_recalled event. Once per
+        run (a profile that recalled for design at create has it already). Never
+        raises: a failure is written down as ``unavailable``, and the run goes on."""
+        if any(r.get("purpose") == "design" for r in self._knowledge_records()):
+            return None
+        from core.run_protocol import run_knowledge
+        has_ddd = bool(self.contract.get("has_ddd"))
+        try:
+            requirements = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
+            k = run_knowledge.build(
+                self.contract.get("requirement"), project=self.project, has_ddd=has_ddd,
+                workspace=self.workspace, repo_roots=self.contract.get("repo_roots") or {},
+                purpose="design", extra_text=run_knowledge.requirements_text(requirements))
+        except Exception as exc:  # noqa: BLE001 -- the run goes on without it, said so
+            logger.warning("run %s: design knowledge failed", self.run_id, exc_info=True)
+            k = run_knowledge.unavailable("design", f"{type(exc).__name__}: {str(exc)[:160]}",
+                                          project=self.project, has_ddd=has_ddd)
+        try:
+            path = self.write_knowledge(k.markdown, "design")
+            record = run_knowledge.contract_record(k)
+            record["ddd"] = record["ddd"][:12]
+            self.store.append_new(writer=self.authority.writer("cli"), kind="knowledge_recalled",
+                                  at=_now(), payload=record)
+            self._settle()
+        except Exception:  # noqa: BLE001 -- knowledge never stops a run
+            logger.warning("run %s: design knowledge not recorded", self.run_id, exc_info=True)
+            return {"status": "unavailable", "entries": 0, "error": "not recorded"}
+        return {"file": str(path), "status": k.status, "entries": len(k.items)}
 
     def _check_knowledge_refs(self, document: Mapping[str, Any] | None, check_id: str) -> None:
         """Every id in *document*'s ``knowledge_refs`` names an entry recalled at create
@@ -1962,11 +2012,12 @@ class RunEngine:
         refs = (document or {}).get("knowledge_refs") if isinstance(document, Mapping) else None
         if not isinstance(refs, list):
             return                      # absent, or a shape error the schema reports
-        known = set(((self.contract.get("knowledge") or {}).get("items")) or [])
+        known = {str(i) for r in self._knowledge_records() for i in r.get("items") or ()}
         unknown = sorted({str(r) for r in refs} - known)
         if unknown:
             message = (f"knowledge_refs {', '.join(unknown)} are not entries of this run's "
-                       "knowledge.md (artifacts/knowledge.md lists each entry's id)")
+                       "knowledge files (artifacts/knowledge.md and, after EVALUATE, "
+                       "artifacts/knowledge_design.md list each entry's id)")
             raise DocumentError(f"{check_id} knowledge_refs: {message}", {check_id: message})
 
     def _render_failed(self, document: str, exc: Exception) -> None:
@@ -2409,20 +2460,23 @@ class RunEngine:
         the contract, and the entries cited -- knowledge_refs of REQUIREMENTS /
         DESIGN_SPEC and findings' knowledge_ref -- counted only when the contract lists
         them. None for a run created before knowledge.md."""
-        record = self.contract.get("knowledge")
-        if not isinstance(record, Mapping):
+        records = self._knowledge_records()
+        if not records:
             return None
-        known = set(record.get("items") or ())
+        known = {str(i) for r in records for i in r.get("items") or ()}
         cited: set[str] = set()
         for name in ("requirements.json", "design_spec.json"):
             value = self._read_json(self.run_dir / "artifacts" / name, {})
             if isinstance(value, Mapping) and isinstance(value.get("knowledge_refs"), list):
                 cited |= {str(r) for r in value["knowledge_refs"]} & known
         # a finding's ref names an entry of its handout's block (checked when the hook
-        # wrote it), not necessarily of knowledge.md
+        # wrote it), not necessarily of a knowledge file
         cited |= {str(e["payload"]["knowledge_ref"]) for e in rows
                   if e.get("kind") == "finding_occ" and e.get("payload", {}).get("knowledge_ref")}
-        return {"status": record.get("status"), "entries": len(known), "cited": sorted(cited)}
+        return {"status": records[0].get("status"), "entries": len(known), "cited": sorted(cited),
+                "parts": [{"purpose": str(r.get("purpose") or "requirement"),
+                           "status": str(r.get("status") or "none"),
+                           "entries": len(r.get("items") or ())} for r in records]}
 
     def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
                     persist: bool = True,
@@ -2478,7 +2532,8 @@ class RunEngine:
         if candidates is None:      # the CLI's own recall (RF-4): the agent cannot pick them
             candidates = reflect_job.candidates_for(
                 list(lessons), self.project,
-                knowledge=(self.contract.get("knowledge") or {}).get("ddd"))
+                knowledge=[row for r in self._knowledge_records() for row in r.get("ddd") or ()
+                           if isinstance(row, Mapping)])
         document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates,
                                    repos=set(self.contract.get("expected_repos") or ()))
         path = self.run_dir / "artifacts" / "reflect.json"

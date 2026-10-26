@@ -8,7 +8,7 @@ Create one run:
 
 `"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile <profile> --requirement "<the user's request>" --repo <name>=<absolute-main-repo>`
 
-Pass the user's words as `--requirement` for every profile: create recalls what the project DDD, the Library and this repo's lessons know for them into `artifacts/knowledge.md`.
+Pass the user's words as `--requirement` for every profile: create recalls project knowledge for them into `artifacts/knowledge.md`; EVALUATE adds `knowledge_design.md`.
 
 `<P>` is the project the repo is bound to (`Projects/<P>/bindings.yaml`); create refuses another name. For an unbound repo name one; `has_ddd` says if it has a DDD.
 
