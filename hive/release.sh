@@ -113,8 +113,12 @@ rsync -a \
     --exclude='*.pyc' \
     "${PROJECT_ROOT}/hive/" "${STAGING}/hive/"
 
-echo "[release] Copying VERSION..."
-cp "${VERSION_FILE}" "${STAGING}/VERSION"
+# Write the version this package is built as (the argument, or the VERSION file when
+# none is given). The update step checks that /health reports exactly this string,
+# so copying the repo VERSION file made every package built with an explicit
+# version fail that check and roll back.
+echo "[release] Writing VERSION (${VERSION})..."
+printf '%s\n' "${VERSION}" > "${STAGING}/VERSION"
 
 # ---------------------------------------------------------------------------
 # Hive seed material (run_ca7f92c1; source-swapped run_eb45c28d) — a fresh Hive
