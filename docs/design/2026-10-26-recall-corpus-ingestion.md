@@ -3,7 +3,7 @@ title: Recall 语料的写入与准入 — Memory、DDD、Knowledge 三块统一
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r2 — 设计，待评审（r1 只覆盖 Knowledge，已被本版替换）
+status: r3 — 设计，待评审（r1 只覆盖 Knowledge；r3 在 r2 基础上加入质量、去向、准入三张答题卡）
 ---
 
 # Recall 语料的写入与准入
@@ -122,28 +122,65 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 ## 4. 设计
 
-### 4.1 一个准入入口
+### 4.1 一个写入入口，三张答题卡
 
-`ingestion_gate.admit(store, candidate, *, writer, authority)` 是三个存储的唯一写入入口：
+`ingestion_gate.admit(candidate, *, writer, authority)` 是所有知识类存储的唯一写入入口。候选内容按顺序过三张答题卡，
+任何一张答"否"或拿不准，就不写（fail-closed）。每张卡的答案都要给出依据，最后一起记进 `admission_log.jsonl`
+（替换现在分散的 `discarded-*.jsonl`），写入和丢弃都记，用来校准判官。
 
-1. **形状**：符合规范格式（类型标签、标题、元数据行）。
-2. **路由**：按契约判断该放哪。MEMORY 的候选先确定项目：用会话碰过的绑定仓库
-   （`repo_guidance.session_bound_project`），或 run 所在的仓库。能确定项目且内容只和这个项目有关的，
-   转到这个项目的 DDD。
-3. **去重**：按契约里的身份和范围检查。
-4. **判官**：用契约里这个存储的准入问题；拿不准就不写。
-5. **写入**：加锁写入，带 `source:<writer>` 元数据。
+**卡 1：质量（这条内容本身够格吗）**
 
-`authority="human"`（人工批准的提案、用户明确说"记住"）**只跳过判官**，形状、路由、去重照常执行。
+| 问题 | 答"否"的例子 |
+|---|---|
+| 够精炼吗？一条只讲一件事，去掉复述和过程 | 把整段会话结论原样贴进来 |
+| 对判断有价值吗？以后遇到同类情况会改变做法 | "已完成 X"、"测试 56 个全绿" |
+| 自洽吗？本身前后不矛盾，不依赖"这里/刚才/上面" | "按上面的方案改" |
+| 去噪音了吗？没有会话 id、临时路径、会变的数字、PID | 带 scratch 路径和 commit 统计的流水 |
+| 值得记下来吗？这次不记，以后会有损失 | 只在这次会话里有用的状态 |
+
+**卡 2：去向（该存到哪）**
+
+| 去向 | 条件 | 写入方式 |
+|---|---|---|
+| MEMORY | 跨项目、不依赖查询、多数会话都会影响判断 | 自动 |
+| EVOLUTION | 关于 agent 自己的能力或纠正（不是关于某个项目） | 自动 |
+| 某个项目的 DDD（并指明哪份文档：PRODUCT / TECH / IMPROVEMENT / PROJECT） | 只影响这个项目的判断；项目由会话碰过的绑定仓库（`repo_guidance.session_bound_project`）或 run 所在仓库确定，确定不了就不写 | 自动 |
+| Knowledge Library（Notes / Library / Learned） | 离开原会话也能独立读懂的参考材料，不是规则 | 自动（backflow）或人工 |
+| context 文件（AGENT / STEERING / SOUL / USER / TOOLS） | 改的是"怎么判断"而不是"知道什么"（AGENTS.md 里的 OS 层） | **只生成提案，必须人工批准**，自动写入一律不允许 |
+| DailyActivity | 只是这次会话发生了什么 | 不过三张卡，它是日志（见下） |
+| 不写 | 以上都不是 | — |
+
+**卡 3：准入（和已有内容什么关系）**
+
+先在卡 2 选定的去向里 recall：用读取侧现在的检索函数，查最相近的几条。MEMORY 还要同时查 steering、SOUL、AGENT
+和目标项目的 DDD。写入时比较的对象，就是以后召回会命中的那些内容。然后给出一个动作，并指出对应的旧条目：
+
+| 动作 | 条件 | 执行 |
+|---|---|---|
+| 不变 | 已经有了 | 不写 |
+| 新加 | 没有相关条目 | 追加 |
+| 补充 | 旧条目没错但不完整 | 合并进旧条目，保留它的锚点 |
+| 替换 | 旧条目已经过时（和现在的代码或事实冲突） | 旧条目先归档，新条目写 `supersedes:` 指向它 |
+| 改投 | 查到的内容说明它属于别处 | 回到卡 2 |
+
+**成本**：卡 1 和卡 2 合成一次判官调用，输出结构化答案。卡 3 先做一次 BM25 查询（毫秒级）；
+查不到相近条目就直接"新加"，不调判官；查到了，再调一次判官，把相近条目放进去。
+沿用现有的判官预算（60 次 / 300 秒），只在后台 hook、REFLECT 和 skill 里运行，不在 chat 发送路径上。
+
+**人工写入**（用户说"记住"、批准提案）：卡 1 和卡 2 的结论给人看，人可以改；卡 3 照常 recall 并给出建议动作，
+最后由人确认。人工只能决定判断，不能跳过 recall。
+
+**不过三张卡的**：DailyActivity 的会话记录和 checkpoint。它们是日志，按会话 id 覆盖写（§4.2）。
+它们是三张卡的**输入**，不是知识存储。
 
 改走这个入口的写入者：
 
 | 写入者 | 现在 | 改为 |
 |---|---|---|
-| REFLECT（`reflect_job.py:231-284`） | 直接 `apply_to_ddd` | `admit(store="ddd")` |
-| 人工批准 cultivation 提案 | 直接 `apply_to_ddd` | `admit(store="ddd", authority="human")` |
-| 自动蒸馏 → MEMORY | 共用判官，没有路由 | `admit(store="memory")`，先路由 |
-| 即时纠正 → MEMORY（`runtime_hooks.py:300-447`） | 共用判官 | `admit(store="memory")` |
+| REFLECT（`reflect_job.py:231-284`） | 直接 `apply_to_ddd` | `admit()` |
+| 人工批准 cultivation 提案 | 直接 `apply_to_ddd` | `admit(authority="human")` |
+| 自动蒸馏 → MEMORY | 共用判官，没有路由 | `admit()`，由卡 2 决定去 MEMORY 还是 DDD |
+| 即时纠正 → MEMORY（`runtime_hooks.py:300-447`） | 共用判官 | `admit()` |
 | DailyActivity 决策/纠正 → DDD | 一律写到 SwarmAI | 按会话的绑定仓库确定项目；确定不了就不写 |
 | session 结束 writeback | 置信度 0.5 永远过不了 0.7，实际已经不写 | 删掉这条路径（它的内容由 REFLECT 和 DailyActivity 覆盖），或者给它一个真实的置信度；实施时先看过去 30 天它丢弃的候选再定 |
 | `s_persist` / `s_self-evolution` / `s_ddd-persist` | Edit 或 `locked_write` 直写 | 用同一个 `admit` 的 CLI，`authority="human"` |
@@ -237,14 +274,15 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
   通过条件：噪音比例下降，"需要 recall 且拿到有用内容"不下降，注入总量不超过现在。
 
 **阶段 2：写入准入**
-4. `ingestion_gate.admit` + 三个存储的契约问题；fail-closed。
+4. `ingestion_gate.admit` + 三张答题卡；fail-closed；`admission_log.jsonl`。
 5. 改走 `admit`：REFLECT、人工批准、自动蒸馏（含项目路由）、即时纠正、DailyActivity → DDD 的项目归属、
    三个 skill；删除 `s_memory-distill`；编辑接口加锁和形状检查；writeback 先看丢弃日志再定去留。
 6. backflow 身份去重 + 契约判官；checkpoint 随会话结束条目一起替换；已删除会话不写；DailyActivity 块断言。
 - 验收：
   - 用今天审计里已经分好类的样本当夹具：MEMORY 的 97 条、DDD 抽的 40 条、backflow 抽的 15 篇。
-    `admit` 对"该留"的放行率和对其余类的拦截率分别报出来；对"只关一个项目"的 MEMORY 候选，
-    路由到对应 DDD 的比例要报出来。
+    分别报出三张卡的结果：卡 1 对"该留"的放行率、对"不是持久内容"的拦截率；卡 2 对 51 条项目专属 MEMORY 条目
+    给出正确 DDD 的比例；卡 3 对审计里确认的重复对（例如两条措辞不同的 git checkout 教训）给出"不变"、
+    对过时条目（例如"recall 还在 shadow"）给出"替换"的比例。
   - 每条规则一个单测并做 mutation 检查（撤掉修复，测试必须变红）。
   - 上线后一周的只读观察：新写入 MEMORY 的条目里项目专属的占比、REFLECT 被拦下的条数、
     同一消息产出两份 Note 的次数（应为 0）。
@@ -258,7 +296,8 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 - **不做候选收件箱**（审计建议自动内容先进一个 candidate 状态再提升）。fail-closed 的判官已经做到"拿不准不写"，
   再加一层状态和提升流程会多出一套要维护的东西；先看阶段 2 上线后的拦截效果再说。
-- **不做近似去重和语义合并。** 只做同一身份或完全相同内容的去重；近似的交给契约复审逐条判断。
+- **不做自动的语义合并。** 近似内容由卡 3 在写入前判断（不变 / 补充 / 替换），每次只动一条、有依据、可回查；
+  不做批量的相似度合并。
 - **不排除 Pollinate、`Knowledge/Archives/` 整类来源**，只排除其中的依赖目录。
 - **不改 DailyActivity 的 LLM 提炼门槛**，要单独评估成本。
 - **不重切、不重建索引**（r1 的 S3 已撤回，原因见 §0）。
@@ -267,7 +306,8 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 1. 第一次契约复审只出提案、你看过再执行；之后每周自动执行（归档优先、每次有上限、有日志）。这样可以吗？
 2. 删除 `s_memory-distill` 这个 skill（它和生产代码矛盾，做的事由蒸馏 hook 完成）。可以吗？
-3. 阶段 1 不改任何语料，可以先做；阶段 2、3 依次做，每个阶段验收通过再进下一个。
+3. context 文件（AGENT / STEERING / SOUL 等）只接受提案、必须人工批准，自动写入一律不允许。可以吗？
+4. 阶段 1 不改任何语料，可以先做；阶段 2、3 依次做，每个阶段验收通过再进下一个。
 
 ## 10. 验收结果
 
