@@ -148,3 +148,9 @@ def test_a_docs_fix_in_a_file_that_also_changed_code_closes_as_reviewed_only(rig
     out = _prove(rig, finding_id)
     assert out.get("ok") is True, out
     assert _status(rig, finding_id) == "closed_unproven"     # LOW: counts as closed
+    from core.run_protocol import review
+    engine = rig.engine()
+    row = next(r for r in review.ReviewOrchestrator(engine.store, engine.run_dir).findings()
+               if r["canonical_id"] == finding_id)
+    assert row["evidence_event_id"], row                       # it points at its proof
+    assert finding_id not in engine.check_context().run["stale_closures"]

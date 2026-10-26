@@ -386,9 +386,13 @@ def _review_reopen(run: dict[str, Any], event: Mapping[str, Any]) -> None:
             or "review" not in PROFILE_STAGES[run["profile"]] \
             or run.get("open_attempt") is not None:
         raise LifecycleError("review_reopen is only for an active TEST between attempts")
-    if run.get("review_reopens", 0) >= REVIEW_REOPEN_CAP:
+    # a doc-only reopen (the engine completes that REVIEW itself, review-closure §5.2
+    # point 1) is not one of the agent's REVIEW_REOPEN_CAP incremental reviews
+    doc_only = bool((event.get("payload") or {}).get("doc_paths"))
+    if not doc_only and run.get("review_reopens", 0) >= REVIEW_REOPEN_CAP:
         raise LifecycleError("review_reopen cap reached")
-    run["review_reopens"] = run.get("review_reopens", 0) + 1
+    if not doc_only:
+        run["review_reopens"] = run.get("review_reopens", 0) + 1
     run["stages"]["test"] = "pending"
     run["stages"]["review"] = "open"
     run["stage"] = "review"

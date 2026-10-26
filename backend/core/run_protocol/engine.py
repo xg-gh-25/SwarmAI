@@ -210,7 +210,8 @@ def _budgets(runs_root: Path, profile: str) -> dict[str, Any]:
         return baselines.compute(runs_root, profile)
     except Exception:  # noqa: BLE001 — a reference line is optional; the run is not
         logger.warning("run baselines unreadable for %s", profile, exc_info=True)
-        return {"budget_seconds": None, "budget_tokens": None, "baseline_runs": 0}
+        return {"budget_seconds": None, "budget_tokens": None, "baseline_runs": 0,
+                "token_baseline_runs": 0}
 
 
 def _git(root: str | Path, *args: str) -> str:
@@ -2153,13 +2154,14 @@ class RunEngine:
                 and not self._patch_reviewed(context):
             # TEST changed the code (S6-2, §3.3.3): back to REVIEW for an incremental
             # review of what changed; past the cap the attempt fails instead
-            if state.get("review_reopens", 0) < lifecycle.REVIEW_REOPEN_CAP:
-                # only doc-class files changed since the last reviewed tree: the
-                # incremental review would hand out nothing, so the engine completes
-                # REVIEW itself and TEST goes on with the report it was given (design
-                # 2026-10-26-pipeline-review-closure §5.2 point 1; LG-1 is unchanged)
-                doc_paths = (self._doc_paths_since_review(context)
-                             if not context.run.get("unreviewed") else None)
+            # only doc-class files changed since the last reviewed tree: the incremental
+            # review would hand out nothing, so the engine completes REVIEW itself and
+            # TEST goes on with the report it was given (design 2026-10-26-pipeline-
+            # review-closure §5.2 point 1; LG-1 is unchanged). Not one of the capped
+            # code reopens.
+            doc_paths = (self._doc_paths_since_review(context)
+                         if not context.run.get("unreviewed") else None)
+            if doc_paths or state.get("review_reopens", 0) < lifecycle.REVIEW_REOPEN_CAP:
                 payload: dict[str, Any] = {"reason": "the code changed in TEST"}
                 if doc_paths:
                     payload = {"reason": "only doc-class files changed in TEST",
@@ -2209,6 +2211,8 @@ class RunEngine:
         last = context.run.get("last_reviewed_trees") or {}
         for name, root in self.effective_repos().items():
             before, now = last.get(name), context.run["code_trees"].get(name)
+            if now and not before:
+                return {}      # a repo no review saw a tree of: not doc-only (fail closed)
             if not before or not now or before == now:
                 continue
             paths = sorted(p for p in _git(root, "diff", "--name-only", "--no-renames",
@@ -2223,10 +2227,19 @@ class RunEngine:
         check does not pass: the agent then runs REVIEW as usual."""
         context = self.check_context()
         profile = self.contract["profile"]
-        result = complete_stage(self.store, profile=profile, stage="review",
-                                variant=lifecycle.document_variant(profile, "review"),
-                                context=context,
-                                at=_now(), attempt=self._next_attempt("review"))
+        variant = lifecycle.document_variant(profile, "review")
+        # judged first, recording nothing: a check that does not pass leaves REVIEW to
+        # the agent without using one of its 3 attempts
+        try:
+            if not all(checks.evaluate(spec.check_id, context)[0]
+                       for spec in checks.stage_checks(profile, "review", variant)):
+                return False
+            result = complete_stage(self.store, profile=profile, stage="review",
+                                    variant=variant, context=context,
+                                    at=_now(), attempt=self._next_attempt("review"))
+        except (EngineError, checks.CheckError, lifecycle.LifecycleError) as exc:
+            logger.warning("run %s: REVIEW not completed by the engine: %s", self.run_id, exc)
+            return False
         self._settle()
         if not result["passed"]:
             return False
@@ -3002,9 +3015,11 @@ class RunEngine:
                 base = self._fork_base(name, root)
             except EngineError:
                 base = None
+            payload = (reports.get(name) or {}).get("payload") or {}
+            # a report with a failed command is not fresh evidence, whatever its tree
             out[name] = {"base": base, "tree": trees.get(name),
-                         "report_tree": ((reports.get(name) or {}).get("payload") or {})
-                         .get("code_tree")}
+                         "report_tree": payload.get("code_tree")
+                         if not payload.get("n_fail") else None}
         return out
 
     def _base_moved_note(self, before: Mapping[str, Mapping[str, Any]]) -> str | None:

@@ -109,3 +109,15 @@ def test_a_report_stale_before_the_sync_gets_no_prefix(rig):
     r.commit_on_main({"elsewhere.py": "y = 1\n"})
     out = _land(r)
     assert out.get("ok") is False and _lg1(out) and not _lg1(out).startswith("base_moved"), out
+
+
+def test_a_failing_report_before_the_sync_gets_no_prefix(rig):
+    """Review fix: a TEST report with a failed command is not fresh evidence."""
+    r = rig
+    r.create()
+    r.drive(until="deliver")
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("report-tests", "--artifact", r.artifact("red", r.report("fail")))
+    r.commit_on_main({"elsewhere.py": "y = 1\n"})
+    out = _land(r)
+    assert out.get("ok") is False and _lg1(out) and not _lg1(out).startswith("base_moved"), out

@@ -64,9 +64,9 @@ def test_a_refutation_follows_its_refs():
     refs = [{"kind": "path", "path": "m.py", "lines": [1, 2], "blob": "m1"},
             {"kind": "event", "event_id": "e"}]
     rows, events = [_row("R", "refuted", "x.py")], [_proof("R", "refuted", refs)]
-    fresh = {(NOW, "m.py"): "m1"}
+    fresh = {(NOW, "m.py"): "m1", (TREE, "x.py"): "x1", (NOW, "x.py"): "x1"}
     assert facts.stale_closures(rows, events, {"r": NOW}, blob_of=_blobs(fresh)) == set()
-    moved = {(NOW, "m.py"): "m2"}
+    moved = {(NOW, "m.py"): "m2", (TREE, "x.py"): "x1", (NOW, "x.py"): "x1"}
     assert facts.stale_closures(rows, events, {"r": NOW}, blob_of=_blobs(moved)) == {"R"}
 
 
@@ -89,3 +89,17 @@ def test_a_finding_waiting_for_r2_can_be_accepted(tmp_path, monkeypatch):
     rows = {row["canonical_id"]: row for row in findings.fold(rig.events(), engine.authority)}
     assert rows[ids["docs"]]["status"] == "accepted"
     assert rig.v1("status").get("ok") is True
+
+
+def test_a_refutation_also_follows_its_own_file_and_event_refs_alone_are_not_enough():
+    """Review fix: a refutation with only event refs, or path refs to other files, went
+    stale on no change at all; the finding's own file always counts."""
+    event_only = [{"kind": "event", "event_id": "e"}]
+    rows = [_row("A", "refuted", "a.py"), _row("B", "refuted", "a.py")]
+    events = [_proof("A", "refuted", event_only),
+              _proof("B", "refuted", [{"kind": "path", "path": "b.py", "lines": [1, 1],
+                                       "blob": "b1"}])]
+    moved = {(TREE, "a.py"): "a1", (NOW, "a.py"): "a2", (NOW, "b.py"): "b1"}
+    assert facts.stale_closures(rows, events, {"r": NOW}, blob_of=_blobs(moved)) == {"A", "B"}
+    same = {(TREE, "a.py"): "a1", (NOW, "a.py"): "a1", (NOW, "b.py"): "b1"}
+    assert facts.stale_closures(rows, events, {"r": NOW}, blob_of=_blobs(same)) == set()

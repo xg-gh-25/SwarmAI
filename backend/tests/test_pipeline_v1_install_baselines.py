@@ -46,7 +46,8 @@ def test_four_runs_give_no_line_five_give_the_p95(tmp_path):
     _write_run(tmp_path, "run_open", landed=False)
     _write_run(tmp_path, "run_other", profile="full")
     four = baselines.compute(tmp_path, "direct")
-    assert four == {"budget_seconds": None, "budget_tokens": None, "baseline_runs": 4}
+    assert four == {"budget_seconds": None, "budget_tokens": None, "baseline_runs": 4,
+                    "token_baseline_runs": 4}
     _write_run(tmp_path, "run_4", seconds=500.0)
     five = baselines.compute(tmp_path, "direct")
     assert five["baseline_runs"] == 5 and five["budget_seconds"] == 500.0
@@ -58,6 +59,7 @@ def test_tokens_only_from_runs_that_recorded_cache_reads(tmp_path):
         _write_run(tmp_path, f"run_old{i}", tokens=(90000, 100))   # an old run's sum
     value = baselines.compute(tmp_path, "direct")
     assert value["budget_seconds"] is not None and value["budget_tokens"] is None
+    assert value["token_baseline_runs"] == 0             # the Token cell counts its own runs
 
 
 def _cells(contract_extra: dict, metrics: list[tuple[str, float]], *, caps=()):

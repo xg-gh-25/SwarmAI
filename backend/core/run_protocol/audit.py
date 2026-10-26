@@ -466,7 +466,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         token_verdict = "PASS" if total_tokens <= budget_tokens else "WARN"
     cache_reads = (measured or experts).get("cache_read_tokens")
     token = {"verdict": token_verdict, "total_tokens": total_tokens,
-             "cache_read_tokens": cache_reads, "baseline_runs": contract.get("baseline_runs"),
+             "cache_read_tokens": cache_reads,
+             "baseline_runs": contract.get("token_baseline_runs",
+                                           contract.get("baseline_runs")),
              "input_tokens": input_tokens, "output_tokens": output_tokens,
              "budget_tokens": budget_tokens if isinstance(budget_tokens, (int, float)) else None,
              "accounted_calls": accounted, "total_calls": total_calls,

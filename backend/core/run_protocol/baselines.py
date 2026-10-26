@@ -52,8 +52,9 @@ def _landed(events: list[Mapping[str, Any]]) -> bool:
 
 
 def compute(runs_root: Path, profile: str) -> dict[str, Any]:
-    """``{budget_seconds, budget_tokens, baseline_runs}`` for a new *profile* run;
-    ``baseline_runs`` is how many landed runs were read (the audit prints n/MIN_RUNS)."""
+    """``{budget_seconds, budget_tokens, baseline_runs, token_baseline_runs}`` for a new
+    *profile* run: how many landed runs were read, and how many of them recorded
+    cache_read_tokens (the Token line's own count); the audit prints n/MIN_RUNS."""
     from core.run_protocol.audit import active_seconds, token_totals
     try:
         dirs = [d for d in Path(runs_root).iterdir() if (d / "contract.json").is_file()]
@@ -90,4 +91,4 @@ def compute(runs_root: Path, profile: str) -> dict[str, Any]:
         if used >= RECENT:
             break
     return {"budget_seconds": _p95(seconds), "budget_tokens": _p95(tokens),
-            "baseline_runs": used}
+            "baseline_runs": used, "token_baseline_runs": len(tokens)}

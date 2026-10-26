@@ -261,10 +261,10 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
             # changed code, so the docs fix closes like a reviewed-only one (a HIGH
             # stays open; design 2026-10-26-pipeline-review-closure §2.3 point 4)
             row["status"] = "closed_unproven"
-            return
-        if row["kind"] == "docs" and executable:
+        elif row["kind"] == "docs" and executable:
             raise FindingError("docs diff assertion touches or did not classify executable lines")
-        row["status"] = rule["state"]
+        else:
+            row["status"] = rule["state"]
     elif etype == "refuted":
         refs = payload.get("refs")
         if row["r2_status"] != "REFUTED" or result != "refuted" \
