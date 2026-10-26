@@ -26,6 +26,49 @@ export interface RunJudge {
   live?: boolean;
 }
 
+/**
+ * The trace of one Swarm Out run, in the order the run is built:
+ * PREPARED before it starts (brain → Project Agent → context → Hive placement → start)
+ * and DELIVERED after it ends (report → five-dimension audit → end, duration, tokens
+ * → what flowed back into the brain). Every field is what the run record will hold;
+ * a value not known yet (a run still going) is undefined, never a placeholder.
+ */
+export interface RunTrace {
+  /** The DDD the context came from; undefined = a task with no brain (general agent). */
+  brain?: { name: string; version: string; docs: string[] };
+  /** From the brain's project-agent.yaml: why this agent ran the task this way. */
+  agent?: {
+    name: string;
+    status: 'reviewed' | 'draft';
+    profile: string;
+    rule: string;
+    validations: string[];
+    placement: string;
+    landing: string;
+  };
+  context: {
+    goal: string;
+    acceptance: string;
+    scope?: string;
+    slices: { source: string; score: number }[];
+    memory: number;
+    tokens: string;
+    packedAt: string;
+  };
+  hive: { instance: string; slot: number; session: string; run?: string };
+  startedAt?: string;
+  endedAt?: string;
+  duration: string;
+  tokens: string;
+  report?: {
+    outcome: string;
+    deliverables: string[];
+    turns: number;
+    flowedBack: string[];
+    path: string;
+  };
+}
+
 export interface RunRow {
   id: string;
   title: string;
@@ -35,9 +78,10 @@ export interface RunRow {
   action?: string;
   when?: string;
   stage?: { now: string; next: string };
-  eta?: { progress: number; text: string };
+  eta?: { text: string };
   worker?: string;
   judge?: RunJudge;
+  trace?: RunTrace;
 }
 
 export interface FleetHive {
@@ -78,7 +122,7 @@ export const WAITING: RunRow[] = [
 export const RUNNING: RunRow[] = [
   {
     id: 'r1', title: '清掉 skill 文档里的私有引用', sub: 'pipeline · trivial', state: 'running',
-    stage: { now: 'BUILD', next: 'REVIEW' }, eta: { progress: 55, text: '还要 10–20 分' }, worker: '#1',
+    stage: { now: 'BUILD', next: 'REVIEW' }, eta: { text: '还要 10–20 分' }, worker: '#1',
     judge: {
       outcome: 'RUNNING · BUILD', live: true,
       verdicts: ['PASS', 'PENDING', 'PASS', 'PASS', 'PASS'],
@@ -87,7 +131,7 @@ export const RUNNING: RunRow[] = [
   },
   {
     id: 'r2', title: '调研：Agent SDK 后台会话做法', sub: '调研', state: 'running',
-    stage: { now: '读资料', next: '写报告' }, eta: { progress: 40, text: '还要 20–30 分' }, worker: '#2',
+    stage: { now: '读资料', next: '写报告' }, eta: { text: '还要 20–30 分' }, worker: '#2',
     judge: {
       outcome: 'RUNNING · 读资料', live: true,
       verdicts: ['PASS', 'NA', 'PASS', 'PASS', 'PASS'],
@@ -182,3 +226,151 @@ export const BY_TYPE = [
   { type: '调研', runs: 4, qualified: 'N/A', active: '26 分', tokens: '300k', reason: '资料源打不开（1 次）' },
   { type: '定时任务', runs: 6, qualified: 'N/A', active: '4 分', tokens: '40k', reason: 'npm 源超时（1 次）' },
 ];
+
+// ---------------------------------------------------------------------------
+// Run traces (sample) — attached to the rows above by id.
+// ---------------------------------------------------------------------------
+
+const SWARMAI_BRAIN = { name: 'SwarmAI', version: 'main@b88de602 · 23:15 打包', docs: ['PRODUCT.md', 'TECH.md', 'IMPROVEMENT.md', 'PROJECT.md'] };
+const swarmaiAgent = (profile: string, rule: string) => ({
+  name: 'SwarmAI Project Agent',
+  status: 'draft' as const,
+  profile,
+  rule,
+  validations: ['受影响的 backend pytest', 'frontend vitest + tsc', 'mutation check'],
+  placement: 'hive',
+  landing: 'host 自动落到本机 main · push 等你',
+});
+
+const TRACES: Record<string, RunTrace> = {
+  w1: {
+    brain: SWARMAI_BRAIN,
+    agent: swarmaiAgent('full', '改权限策略或安全相关的配置'),
+    context: {
+      goal: '让 Hive 能把任务结果写进 S3 的 records/',
+      acceptance: '写 Record 的代码有测试；IAM 只加 PutObject 到 records/*',
+      scope: 'backend/hive/provisioner.py、IAM 策略',
+      slices: [{ source: 'TECH.md § Hive 部署', score: 0.81 }, { source: 'Hive-Mind 设计 § 共享记录层', score: 0.78 }, { source: 'IMPROVEMENT.md § 权限最小化', score: 0.66 }],
+      memory: 1, tokens: '7.4k', packedAt: '21:04',
+    },
+    hive: { instance: 'explorer', slot: 2, session: 'ses_3fa1…c07', run: 'run_7c1e40a2' },
+    startedAt: '21:05', duration: '11 分 active · 等你 6 小时', tokens: '186k',
+  },
+  w2: {
+    brain: SWARMAI_BRAIN,
+    agent: swarmaiAgent('trivial', '只改文档、不改行为'),
+    context: {
+      goal: '把 skill 示例里的本机路径换成通用写法',
+      acceptance: 'lint_skills 跑绿；示例意思不变',
+      slices: [{ source: 'TECH.md § skill 规范', score: 0.74 }, { source: 'AGENT R30#7 · 发布物不带私有标识', score: 0.71 }],
+      memory: 1, tokens: '4.2k', packedAt: '22:43',
+    },
+    hive: { instance: 'explorer', slot: 2, session: 'ses_91d2…e4a', run: 'run_9a27e4b0' },
+    startedAt: '22:44', endedAt: '23:00', duration: '16 分', tokens: '212k',
+    report: {
+      outcome: 'COMPLETED · NOT_LANDED · NOT PUSH READY',
+      deliverables: ['改动包：4 个 SKILL.md（没落地，等你决定）'],
+      turns: 31,
+      flowedBack: [],
+      path: 'runs/run_9a27e4b0/REPORT.md',
+    },
+  },
+  r1: {
+    brain: SWARMAI_BRAIN,
+    agent: swarmaiAgent('trivial', '只改文档、不改行为'),
+    context: {
+      goal: '清掉 skill 文档里只有本机能解析的路径、run id 和人名',
+      acceptance: 'lint_skills 跑绿',
+      slices: [{ source: 'AGENT R30#7 · 发布物不带私有标识', score: 0.83 }, { source: 'TECH.md § skill 规范', score: 0.72 }],
+      memory: 0, tokens: '3.9k', packedAt: '23:40',
+    },
+    hive: { instance: 'explorer', slot: 1, session: 'ses_52b8…1d9', run: 'run_4be0c913' },
+    startedAt: '23:41', duration: '已跑 12 分', tokens: '141k',
+  },
+  r2: {
+    context: {
+      goal: '对比 Claude Agent SDK 的后台会话做法',
+      acceptance: '一份带来源的报告，结论在第一段',
+      slices: [{ source: 'Library · 2026-08 SDK 笔记', score: 0.69 }],
+      memory: 0, tokens: '1.8k', packedAt: '23:34',
+    },
+    hive: { instance: 'explorer', slot: 2, session: 'ses_c41e…7b0' },
+    startedAt: '23:35', duration: '已跑 18 分', tokens: '96k',
+  },
+  e1: {
+    brain: SWARMAI_BRAIN,
+    agent: swarmaiAgent('bugfix', '有复现的缺陷'),
+    context: {
+      goal: 'steer 回放时排到别的消息前面，修好',
+      acceptance: '回放顺序和直播一致；新测试撤掉修复会变红',
+      scope: 'desktop/src/pages/chat/steerSegments.ts 及其测试',
+      slices: [{ source: 'TECH.md § Steer 回放', score: 0.82 }, { source: 'IMPROVEMENT.md § live==reload', score: 0.77 }, { source: 'MEMORY · COE steer 时间戳', score: 0.64 }],
+      memory: 2, tokens: '6.1k', packedAt: '22:19',
+    },
+    hive: { instance: 'explorer', slot: 1, session: 'ses_0e7f…a52', run: 'run_3c81f0d2' },
+    startedAt: '22:20', endedAt: '22:58', duration: '38 分', tokens: '519k',
+    report: {
+      outcome: 'COMPLETED · LANDED · PUSH READY · 7d34ab1',
+      deliverables: ['改动 2 个文件，已落到本机 main（7d34ab1）'],
+      turns: 64,
+      flowedBack: ['1 条判断 → SwarmAI IMPROVEMENT.md：直播和回放的时间必须来自同一个写入方'],
+      path: 'runs/run_3c81f0d2/REPORT.md',
+    },
+  },
+  e2: {
+    context: {
+      goal: '今天的 GitHub Trending，按你的兴趣挑出相关的',
+      acceptance: '一份 Signals 条目',
+      slices: [{ source: 'USER · 关注方向', score: 0.7 }],
+      memory: 1, tokens: '1.1k', packedAt: '08:59',
+    },
+    hive: { instance: 'explorer', slot: 3, session: 'ses_aa02…f31' },
+    startedAt: '09:00', endedAt: '09:04', duration: '4 分', tokens: '38k',
+    report: {
+      outcome: 'COMPLETED',
+      deliverables: ['Signals/2026-10-27-github-trending.md'],
+      turns: 7,
+      flowedBack: [],
+      path: 'records/ses_aa02/report.md',
+    },
+  },
+  e3: {
+    brain: SWARMAI_BRAIN,
+    context: {
+      goal: '后台常驻会话的 3 种做法，给 Swarm Out 选一种',
+      acceptance: '结论在第一段，带对比和推荐',
+      slices: [{ source: 'Hive-Mind 设计 § Dispatcher', score: 0.85 }, { source: 'TECH.md § session 生命周期', score: 0.73 }],
+      memory: 1, tokens: '5.3k', packedAt: '00:47',
+    },
+    hive: { instance: 'explorer', slot: 1, session: 'ses_7d10…c88' },
+    startedAt: '00:48', endedAt: '01:40', duration: '52 分', tokens: '288k',
+    report: {
+      outcome: 'COMPLETED',
+      deliverables: ['Knowledge/Reports/2026-10-27-background-sessions.md'],
+      turns: 22,
+      flowedBack: ['1 条判断 → SwarmAI TECH.md：调度放在云端队列，Hive 按空槽拉取'],
+      path: 'records/ses_7d10/report.md',
+    },
+  },
+  e4: {
+    brain: SWARMAI_BRAIN,
+    agent: swarmaiAgent('bugfix', '有复现的缺陷'),
+    context: {
+      goal: '升级 Hive 上的 Node 依赖',
+      acceptance: 'npm ci 通过，前端 build 绿',
+      slices: [{ source: 'TECH.md § Hive 打包', score: 0.76 }],
+      memory: 0, tokens: '3.0k', packedAt: '22:42',
+    },
+    hive: { instance: 'explorer', slot: 2, session: 'ses_e2c9…04d', run: 'run_b18d27e5' },
+    startedAt: '22:43', endedAt: '23:10', duration: '27 分', tokens: '102k',
+    report: {
+      outcome: 'COMPLETED · NOT_LANDED · checks_exhausted',
+      deliverables: ['没完成：进展保留在 Record'],
+      turns: 18,
+      flowedBack: ['1 条 pitfall → SwarmAI IMPROVEMENT.md：Hive 上 npm 源不稳定，先配镜像'],
+      path: 'runs/run_b18d27e5/REPORT.md',
+    },
+  },
+};
+
+for (const row of [...WAITING, ...RUNNING, ...ENDED]) row.trace = TRACES[row.id];

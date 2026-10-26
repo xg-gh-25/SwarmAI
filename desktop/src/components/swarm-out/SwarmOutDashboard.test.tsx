@@ -4,14 +4,17 @@
  * Questions: does the tag show the worst verdict (any BLOCK → BLOCK, else the WARN
  * count, else ✓; N/A and PENDING not counted) rather than an average; does a click
  * open the five-dimension matrix and Esc close it; does the dashboard say its data is
- * a sample and switch between its two views.
+ * a sample and switch between its two views; does every prepared run carry its trace
+ * (Brain → Agent → Context → Hive → Report + time and tokens), with a missing part
+ * saying so (无 Brain, Report 生成中) instead of vanishing.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { JudgeTag } from './JudgeTag';
 import { judgeState, judgeSummary } from './judge';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import type { RunJudge } from './mockData';
+import { TraceTags } from './TraceTags';
+import type { RunJudge, RunTrace } from './mockData';
 
 const judge = (verdicts: RunJudge['verdicts']): RunJudge => ({
   outcome: 'COMPLETED · NOT_LANDED · NOT PUSH READY',
@@ -90,5 +93,58 @@ describe('SwarmOutDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: '历史' }));
     expect(screen.getByTestId('swarm-out-history')).toBeTruthy();
     expect(screen.queryByTestId('swarm-out-overview')).toBeNull();
+  });
+});
+
+const trace = (over: Partial<RunTrace> = {}): RunTrace => ({
+  brain: { name: 'SwarmAI', version: 'v3', docs: ['TECH.md'] },
+  agent: { name: 'swarmai-agent', status: 'reviewed', profile: 'bugfix', rule: '有复现的缺陷', validations: ['pytest'], placement: 'hive', landing: '自动落到 main' },
+  context: { goal: '修 X', acceptance: '测试绿', slices: [{ source: 'TECH.md § Recall', score: 0.82 }], memory: 2, tokens: '6.1k', packedAt: '22:19' },
+  hive: { instance: 'explorer', slot: 1, session: 'ses_1', run: 'run_1' },
+  startedAt: '22:20', endedAt: '22:58', duration: '38 分', tokens: '519k',
+  report: { outcome: 'COMPLETED · LANDED', deliverables: ['commit abc'], turns: 14, flowedBack: ['IMPROVEMENT.md 1 条'], path: 'records/ses_1/report.md' },
+  ...over,
+});
+
+describe('TraceTags', () => {
+  it('each prepared part opens its detail', () => {
+    render(<TraceTags trace={trace()} />);
+    fireEvent.click(screen.getByTestId('trace-context'));
+    const ctx = screen.getByTestId('trace-context-popover');
+    expect(ctx.textContent).toContain('TECH.md § Recall');
+    expect(ctx.textContent).toContain('0.82');
+    fireEvent.click(screen.getByTestId('trace-agent'));
+    expect(screen.getByTestId('trace-agent-popover').textContent).toContain('有复现的缺陷');
+    fireEvent.click(screen.getByTestId('trace-report'));
+    expect(screen.getByTestId('trace-report-popover').textContent).toContain('IMPROVEMENT.md 1 条');
+  });
+
+  it('a task with no brain says 无 Brain and has nothing to open', () => {
+    render(<TraceTags trace={trace({ brain: undefined, agent: undefined })} />);
+    const tag = screen.getByTestId('trace-brain');
+    expect(tag.textContent).toContain('无 Brain');
+    expect(tag.tagName).not.toBe('BUTTON');
+    expect(screen.getByTestId('trace-agent').textContent).toContain('通用 Agent');
+  });
+
+  it('a running run shows Report 生成中, not an openable report', () => {
+    render(<TraceTags trace={trace({ report: undefined, endedAt: undefined })} />);
+    const tag = screen.getByTestId('trace-report');
+    expect(tag.textContent).toContain('Report 生成中');
+    expect(tag.tagName).not.toBe('BUTTON');
+  });
+});
+
+describe('SwarmOutDashboard run rows', () => {
+  it('every run that was sent out has a trace line; scheduled runs do not', () => {
+    render(<SwarmOutDashboard />);
+    const rows = screen.getAllByTestId('run-row');
+    const traces = screen.getAllByTestId('run-trace-row');
+    // 2 waiting + 2 running + 4 ended were prepared; 2 scheduled were not
+    expect(rows).toHaveLength(10);
+    expect(traces).toHaveLength(8);
+    const metas = screen.getAllByTestId('trace-meta').map((m) => m.textContent ?? '');
+    expect(metas).toContain('22:20 → 22:58 · 38 分 · 519k tokens');
+    expect(metas).toContain('23:41 开始 · 已跑 12 分 · 还要 10–20 分 · 141k tokens');
   });
 });

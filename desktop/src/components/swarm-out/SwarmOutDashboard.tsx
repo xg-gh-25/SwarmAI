@@ -12,11 +12,12 @@
  * audit aggregate it will read do not exist yet. A banner says so, so a sample number
  * is never read as a live one.
  */
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { JudgeTag } from './JudgeTag';
+import { TraceTags } from './TraceTags';
 import {
   BY_TYPE, DAILY_COMPLETED, DAILY_LABELS, ENDED, FLEET, HISTORY_DIMENSIONS, HISTORY_VERDICT,
-  OCCUPANCY, OCCUPANCY_DAYS, RUNNING, SCHEDULED, WAITING, type RunRow,
+  OCCUPANCY, OCCUPANCY_DAYS, RUNNING, SCHEDULED, WAITING, type RunRow, type RunTrace,
 } from './mockData';
 
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -32,61 +33,82 @@ function Dot({ state }: { state: RunRow['state'] }) {
   return <span className={`${base} bg-[var(--color-text-dim)]`} />;
 }
 
+/** Start → end · duration · tokens. A run still going has no end yet: it shows the
+ *  start, how long it has run and how long it is expected to take, never a "—"
+ *  pretending to be a value. (The estimate lives here, with the other times, rather
+ *  than in its own column: the row's first line has no room for it on a narrow
+ *  dashboard.) */
+function TraceMeta({ trace, eta }: { trace: RunTrace; eta?: string }) {
+  const span = trace.startedAt ? (trace.endedAt ? `${trace.startedAt} → ${trace.endedAt}` : `${trace.startedAt} 开始`) : null;
+  return (
+    <span className={`text-[11.5px] whitespace-nowrap tabular-nums ${muted}`} data-testid="trace-meta">
+      {[span, trace.duration, eta, `${trace.tokens} tokens`].filter(Boolean).join(' · ')}
+    </span>
+  );
+}
+
 /** Columns are decided once per table and every row renders every one of them, so
  *  cells line up; `table-fixed` + a title column that takes the rest makes the
- *  title and sub lines truncate instead of widening the table past its card. */
+ *  title and sub lines truncate instead of widening the table past its card.
+ *  A run with a trace gets a second line spanning every column after the dot: the
+ *  trace tags (what was prepared, what came back) on the left, time and tokens on
+ *  the right. Scheduled runs have not been prepared yet, so they have no second line. */
 function RunTable({ rows, empty }: { rows: RunRow[]; empty: string }) {
   if (rows.length === 0) return <div className={`px-3 py-3 text-[12.5px] ${muted}`}>{empty}</div>;
   const has = {
     stage: rows.some((r) => r.stage),
-    eta: rows.some((r) => r.eta),
     flag: rows.some((r) => r.flag),
     action: rows.some((r) => r.action),
     judge: rows.some((r) => r.judge),
   };
+  // the trace line spans every column after the dot
+  const span = 2 + Number(has.stage) + Number(has.flag) + Number(has.action) + Number(has.judge);
+  // a row followed by its trace line keeps its top padding and hands the bottom to the trace line
+  const pad = (r: RunRow) => (r.trace ? 'pt-2.5 pb-1' : 'py-2.5');
   return (
     <table className="w-full border-collapse table-fixed">
       <colgroup>
         <col style={{ width: 22 }} />
         <col />
         {has.stage && <col style={{ width: 136 }} />}
-        {has.eta && <col style={{ width: 168 }} />}
         {has.flag && <col style={{ width: 84 }} />}
         {has.action && <col style={{ width: 52 }} />}
         {has.judge && <col style={{ width: 196 }} />}
         <col style={{ width: 96 }} />
       </colgroup>
       <tbody>
-        {rows.map((r) => (
-          <tr key={r.id} className="border-t border-[var(--color-border)] first:border-t-0">
-            <td className="pl-2 pr-1 py-2.5 align-middle"><Dot state={r.state} /></td>
-            <td className="px-2 py-2.5 overflow-hidden">
+        {rows.map((r, i) => (
+          <Fragment key={r.id}>
+          <tr className={i > 0 ? 'border-t border-[var(--color-border)]' : ''} data-testid="run-row">
+            <td className={`pl-2 pr-1 align-middle ${pad(r)}`}><Dot state={r.state} /></td>
+            <td className={`px-2 overflow-hidden ${pad(r)}`}>
               <div className="font-medium truncate" title={r.title}>{r.title}</div>
               <div className={`text-[12px] ${muted} truncate`} title={r.sub}>{r.sub}</div>
             </td>
             {has.stage && (
-              <td className="px-2 py-2.5 text-[12px] whitespace-nowrap overflow-hidden text-[var(--color-text-secondary)]">
+              <td className={`px-2 text-[12px] whitespace-nowrap overflow-hidden text-[var(--color-text-secondary)] ${pad(r)}`}>
                 {r.stage && <><b className="font-semibold">{r.stage.now}</b>{' '}<span className="text-[var(--color-text-dim)]">→ {r.stage.next}</span></>}
               </td>
             )}
-            {has.eta && (
-              <td className="px-2 py-2.5 whitespace-nowrap overflow-hidden">
-                {r.eta && (
-                  <span className="inline-flex items-center gap-2">
-                    <span className="relative w-[64px] h-[4px] rounded bg-[var(--color-hover)] overflow-hidden flex-shrink-0">
-                      <span className="absolute left-0 top-0 bottom-0 rounded bg-[var(--color-status-success)]" style={{ width: `${r.eta.progress}%` }} />
-                    </span>
-                    <span className={`text-[12px] ${muted}`}>{r.eta.text}</span>
-                  </span>
-                )}
-              </td>
-            )}
-            {has.flag && <td className="px-2 py-2.5 text-[12px] font-semibold whitespace-nowrap text-[var(--color-status-warning)]">{r.flag}</td>}
+            {has.flag && <td className={`px-2 text-[12px] font-semibold whitespace-nowrap text-[var(--color-status-warning)] ${pad(r)}`}>{r.flag}</td>}
             {/* Not wired yet: shown as plain text, not a link that does nothing. */}
-            {has.action && <td className={`px-2 py-2.5 text-[12.5px] whitespace-nowrap ${muted}`}>{r.action}</td>}
-            {has.judge && <td className="px-2 py-2.5 whitespace-nowrap">{r.judge && <JudgeTag judge={r.judge} title={r.title} />}</td>}
-            <td className={`pl-2 pr-3 py-2.5 text-[12px] whitespace-nowrap text-right tabular-nums ${muted}`}>{r.worker ?? r.when}</td>
+            {has.action && <td className={`px-2 text-[12.5px] whitespace-nowrap ${muted} ${pad(r)}`}>{r.action}</td>}
+            {has.judge && <td className={`px-2 whitespace-nowrap ${pad(r)}`}>{r.judge && <JudgeTag judge={r.judge} title={r.title} />}</td>}
+            <td className={`pl-2 pr-3 text-[12px] whitespace-nowrap text-right tabular-nums ${muted} ${pad(r)}`}>{r.worker ?? r.when}</td>
           </tr>
+          {r.trace && (
+            <tr data-testid="run-trace-row">
+              <td />
+              <td colSpan={span} className="pl-1 pr-3 pb-2.5 pt-0.5">
+                {/* narrow dashboard: time and tokens wrap under the tags, still right-aligned */}
+                <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 min-w-0">
+                  <TraceTags trace={r.trace} />
+                  <span className="ml-auto"><TraceMeta trace={r.trace} eta={r.eta?.text} /></span>
+                </div>
+              </td>
+            </tr>
+          )}
+          </Fragment>
         ))}
       </tbody>
     </table>
