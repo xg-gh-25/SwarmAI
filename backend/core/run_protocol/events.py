@@ -116,19 +116,22 @@ EVENT_SPECS: dict[str, EventSpec] = {
     # handout attempt)
     # one answer per tool call (design §A3.1); one per handout is the bridge's rule,
     # checked under the run lock (F-2)
-    "answer": _spec("hook", ("payload.tool_use_id",), "payload.expert_id",
+    # cli: review-answer, where no host hook reads the expert (standalone T6), always
+    # with source relayed (the bridge writes both; a run takes relayed answers only when
+    # its contract says so)
+    "answer": _spec(("hook", "cli"), ("payload.tool_use_id",), "payload.expert_id",
                     {"handout_event_id": str, "prompt_sha": str, "tool_use_id": str,
                      "expert_id": str, "stage": str, "round": int, "state": str}, {"raw": str, "verdict": (str, type(None)),
                      "n_findings": int, "n_status": int,
                      # host: a host hook read it from the expert; relayed: the agent gave it
                      "source": str}),
-    "finding_occ": _spec("hook", ("payload.answer_event_id", "ordinal"),
+    "finding_occ": _spec(("hook", "cli"), ("payload.answer_event_id", "ordinal"),
                          "event_id:canonical", {"answer_event_id": str,
                          "expert": str, "severity": str,
                          "finding_kind": str, "file": str, "line": int, "claim": str},
                          # knowledge_ref: a DDD entry the handout carried (§3.4)
                          {"fix": (str, type(None)), "knowledge_ref": (str, type(None))}),
-    "finding_status": _spec("hook", ("payload.answer_event_id", "ordinal"),
+    "finding_status": _spec(("hook", "cli"), ("payload.answer_event_id", "ordinal"),
                             "payload.canonical_id", {"answer_event_id": str,
                             "canonical_id": str, "status": str},
                             {"kind_confirm": (str, type(None))}),

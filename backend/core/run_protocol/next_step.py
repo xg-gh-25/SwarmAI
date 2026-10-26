@@ -32,7 +32,11 @@ def _cmd(engine, rest: str) -> str:
     the same command packaged and in dev, wherever the agent's cwd is."""
     from core.worktree_write_gate import v1_command
     args = f"{rest} --project {engine.project} --run-id {engine.run_id}".strip()
-    return v1_command(args).replace("  ", " ")
+    command = v1_command(args).replace("  ", " ")
+    if (getattr(engine, "contract", None) or {}).get("owner_source") == "run":
+        # a run-level owner (standalone T6): the command carries it, nothing else does
+        command = f"SWARM_APP_SESSION_ID={engine.owner_session()} {command}"
+    return command
 
 
 def blocking_checks(engine, state: dict[str, Any]) -> list[dict[str, str]]:

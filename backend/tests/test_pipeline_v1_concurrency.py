@@ -285,6 +285,7 @@ def test_every_public_engine_mutator_takes_the_operation_lock():
                 "execute_land_request", "normal_land", "prepare_reflect", "note_transcript",
                 "measure_usage", "abandon", "restore", "resume", "stage_complete",
                 "review_start", "review_address", "review_proof", "answer_decision",
+                "relayed_answer",
                 "reflect_complete", "finish_not_landed", "ensure_worktrees",
                 "transfer_owner", "record_stop"]
     missing = [m for m in mutators if not hasattr(getattr(RunEngine, m), "__wrapped__")]

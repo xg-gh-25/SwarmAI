@@ -17,6 +17,8 @@ same way (design 2026-10-25-pipeline-standalone §4.3):
   that hands the full prompt and the result together, Kiro's PostToolUse) the
   prompt must equal the handout's full prompt. One answer per handout, under the run
   lock. It does not judge the transcript: ``on_subagent_stop`` does, before calling it.
+- ``record_relayed`` — the same answer handed over by the agent where no host hook
+  reads it (standalone T6 ``review-answer``): ``source: relayed``, producer ``cli``.
 - ``record_usage`` — an expert's own token usage, measured from its transcript.
 - ``parse_binding`` / ``handout_line`` / ``store_for`` — the line, and the run it names.
 - ``on_spawn`` / ``on_subagent_stop`` — what every host's hook calls (a SwarmAI
@@ -31,7 +33,7 @@ same way (design 2026-10-25-pipeline-standalone §4.3):
   answer whose write still fails leaves ``answer_rejected`` with ``record_failed``.
 
 Public symbols: ``handout_line``, ``parse_binding``, ``prompt_sha``, ``store_for``,
-``bind_spawn``, ``record_answer``, ``record_usage``, ``on_spawn``, ``on_subagent_stop``.
+``bind_spawn``, ``record_answer``, ``record_relayed``, ``record_usage``, ``on_spawn``, ``on_subagent_stop``.
 """
 from __future__ import annotations
 
@@ -199,13 +201,35 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
         call = _spawned(store, handout["event_id"])
         if call is None:
             return None          # no host saw this spawn with the exact prompt
+    return _write(store, handout, final_text, call=call, source="host", producer="hook",
+                  completed_at=completed_at, session_id=session_id)
+
+
+def record_relayed(store: AuditStore, handout_event_id: str, final_text: str, *,
+                   completed_at: str) -> "dict[str, Any] | None":
+    """The agent hands over an expert's reply where no host hook reads it (standalone
+    T6, ``review-answer``): the same answer and findings a hook writes, with
+    ``source: relayed`` and producer ``cli``. The caller holds the run's operation lock
+    and has checked the run takes relayed answers. None: no such handout in this run,
+    or it is already answered."""
+    handout = next((e for e in store.read_events() if e.get("kind") == "handout"
+                    and e.get("event_id") == handout_event_id), None)
+    if handout is None:
+        return None
+    return _write(store, handout, final_text, call=f"relayed:{handout['payload']['nonce']}",
+                  source="relayed", producer="cli", completed_at=completed_at,
+                  session_id=None)
+
+
+def _write(store, handout, final_text, *, call, source, producer, completed_at, session_id):
+    payload = handout["payload"]
     expert, review_round = payload["expert_id"], handout["round"]
     parsed = parse_answer(final_text, expert_id=expert, round=review_round,
                           finding_ids=payload.get("finding_ids", ()))
     answer_payload = {
         "handout_event_id": handout["event_id"], "prompt_sha": payload["prompt_sha"],
         "tool_use_id": call, "expert_id": expert, "stage": handout["stage"],
-        "round": review_round, **parsed.answer_payload, "raw": final_text, "source": "host",
+        "round": review_round, **parsed.answer_payload, "raw": final_text, "source": source,
     }
     handout_id = handout["event_id"]
 
@@ -253,7 +277,7 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
     try:
         # the answer and everything it says are one write (r6 §2.2, review f227e2ed)
         answer = store.append_batch(
-            writer=store.authority.writer("hook"), refuse=answered,
+            writer=store.authority.writer(producer), refuse=answered,
             first={"kind": "answer", "at": completed_at, "stage": stage,
                    "round": review_round, "attempt": attempt, "payload": answer_payload},
             children=children)[0]

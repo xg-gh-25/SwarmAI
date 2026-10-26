@@ -5,8 +5,10 @@ python-plus-script-path form, and its script).
 
 Every command runs in this process (``core/run_protocol/cli_commands.py``), whether
 or not the SwarmAI daemon is up. The caller is the app session in
-``SWARM_APP_SESSION_ID``; ``CLAUDE_CODE_SESSION_ID`` names its transcript (usage is
-measured from it); ``--artifact -`` reads stdin. Prints one JSON object.
+``SWARM_APP_SESSION_ID`` (set by a host hook), else Claude Code's
+``CLAUDE_CODE_SESSION_ID`` (no hook, standalone T6); that variable also names the
+transcript usage is measured from. ``--artifact -`` / ``--answer -`` read stdin. Prints
+one JSON object.
 
 - ``parser()`` — the CLI's argparse definition (re-exported for tests and cards).
 - ``main(argv)`` — exit code: 0 ok, 1 ``ok: false``, 2 refused / unavailable.
@@ -34,6 +36,18 @@ def _localize(argv: "list[str]") -> "tuple[list[str], str | None]":
     args = parser().parse_args(argv)
     artifact = getattr(args, "artifact", None)
     stdin: "str | None" = None
+    # review-answer's text (standalone T6): stdin, or a file in the agent's cwd
+    answer = getattr(args, "answer", None)
+    if answer == "-":
+        return argv, sys.stdin.read()
+    if answer is not None:
+        with open(os.path.expanduser(answer), encoding="utf-8") as handle:
+            text = handle.read()
+        # the value argparse took is the last --answer: `--answer X` or `--answer=X`
+        at = max(i for i, a in enumerate(argv)
+                 if a == f"--answer={answer}" or (a == answer and i and argv[i - 1] == "--answer"))
+        return [*argv[:at], "--answer=-" if argv[at].startswith("--answer=") else "-",
+                *argv[at + 1:]], text
     if artifact == "-":
         stdin = sys.stdin.read()
     elif artifact is not None and not _is_json(artifact):
@@ -71,6 +85,19 @@ def _is_json(text: str) -> bool:
     return True
 
 
+def _session(transcript: str) -> "tuple[str, str]":
+    """(session id, where it came from), standalone T6 §4.2: SWARM_APP_SESSION_ID (a
+    host hook set it), else Claude Code's own session id (no hook installed), else none
+    (create then makes a run-level owner)."""
+    from core.app_session_id import valid_app_session_id
+    app = (os.environ.get("SWARM_APP_SESSION_ID") or "").strip()
+    if app:
+        return app, "host"
+    if valid_app_session_id(transcript):
+        return transcript, "host_transcript"
+    return "", ""
+
+
 def main(argv: "list[str] | None" = None) -> int:
     from core.run_protocol import cli_commands, request_ctx
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -81,8 +108,9 @@ def main(argv: "list[str] | None" = None) -> int:
         print(json.dumps({"ok": False, "error": f"artifact unreadable: {exc}"}))
         return 2
     transcript = (os.environ.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    session, source = _session(transcript)
     req = request_ctx.Request(
-        session_id=(os.environ.get("SWARM_APP_SESSION_ID") or "").strip(),
+        session_id=session, session_source=source,
         transcript_ids=(transcript,) if transcript else (), stdin=stdin)
     with request_ctx.active(req):
         out, rc = cli_commands.run(cli_commands.parser().parse_args(argv))

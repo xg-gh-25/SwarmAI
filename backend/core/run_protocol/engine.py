@@ -392,7 +392,8 @@ class RunEngine:
                transcript_ids: Sequence[str] = (),
                requirement: str | None = None, has_ddd: bool = False,
                bound_repos: Sequence[str] = (),
-               knowledge: Mapping[str, Any] | None = None) -> "RunEngine":
+               knowledge: Mapping[str, Any] | None = None,
+               owner_source: str = "host", review_answers: str = "host") -> "RunEngine":
         """Create a run. Every run's code is in its own git worktree per repo (S6-5: the
         shared mode, where a run edited the main checkout, is gone). *has_ddd* and
         *bound_repos* come from the repos' bindings (project_binding.resolve,
@@ -418,6 +419,11 @@ class RunEngine:
         # that invariant lives, whoever calls create
         if not valid_app_session_id(session_id):
             raise EngineError("create requires the owning app session id")
+        # standalone T6: where the owner id came from, and how experts' answers arrive
+        # (host: a host hook reads them; relayed: the agent hands them over, review-answer)
+        if owner_source not in ("host", "host_transcript", "run") \
+                or review_answers not in ("host", "relayed"):
+            raise EngineError("invalid owner_source / review_answers")
         if any(not valid_session_id(value) for value in transcript_ids):
             raise EngineError("invalid transcript id")
         workspace_path, data_path = Path(workspace), Path(data_dir)
@@ -456,6 +462,7 @@ class RunEngine:
                         "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
                         "decision_cap": decision_cap,
                         "has_ddd": bool(has_ddd), "bound_repos": sorted(bound_repos),
+                        "owner_source": owner_source, "review_answers": review_answers,
                         "knowledge": {"status": str((knowledge or {}).get("status") or "none"),
                                       "items": [str(i) for i in (knowledge or {}).get("items") or []],
                                       "ddd": [dict(row) for row in (knowledge or {}).get("ddd") or []
@@ -2094,6 +2101,37 @@ class RunEngine:
         self._settle(); self.write_projection()
         return {"ok": True, "landing": self.projection()["landing"], **result,
                 "state": self.projection()}
+
+    def review_answers(self) -> str:
+        """How this run's expert answers arrive (standalone T6): ``host`` (a host hook
+        records them; every run created before T6) or ``relayed`` (review-answer)."""
+        return "relayed" if self.contract.get("review_answers") == "relayed" else "host"
+
+    @_one_operation
+    def relayed_answer(self, handout_event_id: str, text: str) -> dict[str, Any]:
+        """Record the expert's reply the agent hands over (``review-answer``). Only a
+        relayed run takes one: where a hook reads the expert, an answer the agent types
+        would weaken what the run's review proves."""
+        from core.run_protocol import hook_bridge
+        if self.review_answers() != "relayed":
+            raise EngineError("this run's expert answers are recorded by the host's hook; "
+                              "review-answer is only for a run created without one")
+        if not isinstance(text, str) or not text.strip():
+            raise EngineError("review-answer needs the expert's reply on stdin")
+        events = self.store.read_events()
+        if not any(e.get("kind") == "handout" and e.get("event_id") == handout_event_id
+                   for e in events):
+            raise EngineError(f"no handout {handout_event_id} in this run")
+        if any(e.get("kind") == "answer"
+               and e["payload"].get("handout_event_id") == handout_event_id for e in events):
+            raise EngineError(f"handout {handout_event_id} is already answered")
+        done = hook_bridge.record_relayed(self.store, handout_event_id, text,
+                                          completed_at=_now())
+        if done is None:
+            raise EngineError(f"handout {handout_event_id} is already answered")
+        answer = done["answer"]["payload"]
+        return {"recorded": {"expert": answer["expert_id"], "state": answer["state"],
+                             "findings": len(done["parsed"].findings)}}
 
     @_one_operation
     def review_start(self, *, attempt: int = 1) -> dict[str, Any]:

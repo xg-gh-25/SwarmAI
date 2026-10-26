@@ -1,9 +1,9 @@
 ---
 title: Pipeline v1 standalone — 在 Claude Code、Codex、Kiro CLI / KiroCrew 里都能跑完
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 project: SwarmAI
-status: r2 — XG 2026-10-25 定了 §6 的三个问题
+status: r5 — T1、T2、T6 已实施（§7、§7.1）；T3–T5、T7、T8 待做
 ---
 
 # Pipeline v1 standalone
@@ -190,11 +190,34 @@ Codex 文档原话：工具 hook 是"有用的护栏，不是完整的强制边�
 | T3 | Claude Code 适配器 + `install-hooks --host claude` | 一个真实的 `claude -p` full run 在 Node 样例仓库从 create 到 land，专家回答 `source: host` |
 | T4 | Codex 适配器 | 同上，`codex exec` |
 | T5 | Kiro 适配器（PostToolUse 读子 agent 回答） | 同上，`kiro-cli chat --no-interactive` |
-| T6 | 无 hook 降级：`review-answer`、run 级 owner、REPORT 写证据来源 | 不装 hook 的 full run 落地，REPORT 写"回答由 agent 转交" |
+| T6（已做） | 无 hook 降级：`review-answer`、run 级 owner、REPORT 写证据来源。实现见 §7.1 | 不装 hook 的 full run 落地，REPORT 写 `Review answers: N of N relayed by the agent`（`test_pipeline_v1_relayed`） |
 | T7 | 人工通道（按 §6 问题 1 的结论） | 决策和人工落地在每个宿主各跑一次 |
 | T8 | 宿主 transcript 读取器（Codex、Kiro 尽量） | Token Cost 在 Claude 有数字，其余是 WARN 并写明原因 |
 
 T1 不依赖任何宿主，可以先做。T3–T5 需要本机装有对应的 CLI 并登录；验收用真实 agent，不用脚本驱动的 rig。
+
+### 7.1 T6 的实施（r5）
+
+- **owner 从哪来**（`cli_main._session`）：`SWARM_APP_SESSION_ID` → Claude Code 的 `CLAUDE_CODE_SESSION_ID`
+  （没装 hook 时 Bash 里也有）→ 都没有时 create 生成一个 uuid 当 run 级 owner。contract 记 `owner_source`
+  （`host` / `host_transcript` / `run`）。**和 §4.2 不同**：run 级 owner 不加 `--owner` 参数，而是由
+  `next.command` 带上 `SWARM_APP_SESSION_ID=<id>` 前缀（`next_step._cmd`），agent 照着输出的命令跑就对，
+  不用每个子命令都加参数。
+- **回答怎么来，create 时定死**：contract 的 `review_answers` = `host`（`SWARM_APP_SESSION_ID` 存在：只有宿主
+  hook 会设它，SwarmAI 会话或装了适配器的宿主）或 `relayed`。T6 之前建的 run 没有这个字段，按 `host`。
+- **`review-answer --handout <id> --answer -`**：只有 `relayed` 的 run 收，只收 owner 的，每个 handout 一次，
+  写的 answer 和 hook 写的同一个函数（`hook_bridge._write`），`source: relayed`、producer `cli`
+  （`answer` / `finding_occ` / `finding_status` 的 producer 因此放宽到 cli 或 hook）。**`host` 的 run 拒收**：
+  不然 SwarmAI 会话里的 agent 可以绕过 hook 自己写专家回答，证据就变弱了；SwarmAI 会话里
+  `SWARM_APP_SESSION_ID` 本来就删不掉（`session_link_gate`），所以也建不出 `relayed` 的 run。
+- **agent 怎么知道要转交**：`INSTRUCTIONS.md` 已经 9945 / 10000 字符，没再加字。改由 CLI 输出说：create 的
+  `notes` 说明要转交，`relayed` 的 run 里每个 handout 带 `answer_command`。
+- **REPORT**：有转交的回答时加一行 `Review answers: M of N relayed by the agent (no host hook recorded them)`；
+  `run_audit.json` 的 `details.answer_sources` 按来源计数。全是 host 时没有这一行。
+- **没做的**：§4.2 的"30 分钟没动静就允许接管"。外部宿主里没有 gate，另一个会话跑命令只会拿到 `not_owner`，
+  不会出错；要换会话继续，用 create 输出的 owner id。等 T3–T5 有了真实宿主再看是否需要。
+- **已知的边界**：用户在没装 hook 的终端里手动设了 `SWARM_APP_SESSION_ID`，run 会被当成 `host`，审查会一直
+  等 hook 的回答。T5 的 Kiro 有 hook 但设不了这个变量，到时要加自己的判断。
 
 ## 修订记录
 
@@ -202,3 +225,4 @@ T1 不依赖任何宿主，可以先做。T3–T5 需要本机装有对应的 CL
 - r2（2026-10-25，XG）：人工通道 a + b；没装 hook 也允许跑；hook 默认写用户级。
 - r3（2026-10-25）：T1 实施。
 - r4（2026-10-25）：T2 实施。
+- r5（2026-10-26）：T6 实施（§7.1）。

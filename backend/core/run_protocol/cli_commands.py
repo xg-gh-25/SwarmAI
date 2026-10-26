@@ -2,11 +2,13 @@
 
 ``pipeline-v1`` (``cli_main``) runs them in the agent's own process, daemon up or not.
 Every response is one JSON object; no command pushes or deploys. There is no answer
-command: a human decision is recorded by the daemon (chat question card or
-dashboard), never by the agent.
+command for a person: a human decision is recorded by the daemon (chat question card or
+dashboard), never by the agent. ``review-answer`` hands over an EXPERT's reply, only on
+a run created where no host hook reads experts (standalone T6).
 
 Who runs a command is the request's session (``request_ctx``: the CLI builds it from
-``SWARM_APP_SESSION_ID``).
+``SWARM_APP_SESSION_ID``, else Claude Code's session id). Without either, create makes a
+run-level owner id and every ``next.command`` carries it.
 
 - ``parser()`` — the CLI's argparse definition.
 - ``run(args)`` — (result, exit code) of one command, as the CLI prints it.
@@ -134,6 +136,12 @@ def parser() -> argparse.ArgumentParser:
         item.add_argument("--run-id", required=True)
         if command == "land":
             item.add_argument("--message", required=True)
+    answer = sub.add_parser("review-answer")
+    answer.add_argument("--project", required=True)
+    answer.add_argument("--run-id", required=True)
+    answer.add_argument("--handout", required=True, help="the handout's event id")
+    answer.add_argument("--answer", required=True,
+                        help="the expert's final reply, unchanged: - for stdin, or a file")
     gate0 = sub.add_parser("gate0-start")
     gate0.add_argument("--project", required=True)
     gate0.add_argument("--run-id", required=True)
@@ -204,13 +212,18 @@ def parser() -> argparse.ArgumentParser:
 def execute(args) -> dict[str, Any]:
     if args.command == "create":
         # the owner is the calling session: a different --session-id is refused
-        owner = _request().session_id
+        owner, owner_source = _request().session_id, _request().session_source
         if not owner:
-            raise ValueError("create needs this session's id (SWARM_APP_SESSION_ID); run "
-                             "it from a SwarmAI session")
+            # no host session at all (standalone T6 §4.2): the run owns itself; the id
+            # only keeps two sessions from driving one run, it is no credential
+            import uuid
+            owner, owner_source = str(uuid.uuid4()), "run"
         if args.session_id and args.session_id != owner:
             raise ValueError("create --session-id must be this session")
         args.session_id = owner
+        # SWARM_APP_SESSION_ID comes only from a host hook, and that hook reads the
+        # experts; without it the agent relays their replies (standalone §4.3)
+        review_answers = "host" if owner_source == "host" else "relayed"
         from core.run_protocol import project_binding
         repos = _repos(args.repo)
         binding = project_binding.resolve(args.project, repos)   # run-knowledge §3.2
@@ -224,14 +237,24 @@ def execute(args) -> dict[str, Any]:
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement, has_ddd=binding.has_ddd,
             bound_repos=binding.bound_repos,
-            knowledge=run_knowledge.contract_record(knowledge))
+            knowledge=run_knowledge.contract_record(knowledge),
+            owner_source=owner_source, review_answers=review_answers)
         knowledge_file = engine.write_knowledge(knowledge.markdown)
         result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
                   "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json"),
                   "knowledge": {"file": str(knowledge_file), "status": knowledge.status,
-                                "entries": len(knowledge.items)}}
-        if binding.notes:
-            result["notes"] = binding.notes
+                                "entries": len(knowledge.items)},
+                  "owner": owner, "review_answers": review_answers}
+        notes = list(binding.notes)
+        if owner_source == "run":
+            notes.append(f"no host session id: this run's owner is {owner}; every command "
+                         "in `next` carries it as SWARM_APP_SESSION_ID")
+        if review_answers == "relayed":
+            notes.append("no host hook reads the review experts: after each expert returns, "
+                         "pass its final reply unchanged to the handout's `answer_command`; "
+                         "REPORT says the answers were relayed")
+        if notes:
+            result["notes"] = notes
         return _with_next(engine, result, previous_stage="", mutating=True)
     if args.command not in _READ_ONLY:
         # one read-decide-write operation at a time on this run (r6 §2.2): a parallel
@@ -305,7 +328,27 @@ def _with_next(engine: RunEngine, result: dict[str, Any], *, previous_stage: str
     handouts = result.get("handouts")
     result["next"] = next_step(engine, previous_stage=previous_stage,
                                dispatched=len(handouts) if isinstance(handouts, list) else None)
+    if engine.review_answers() == "relayed":
+        for listed in (handouts, result["next"].get("handouts")):
+            for item in listed if isinstance(listed, list) else ():
+                _answer_command(engine, item)
     return result
+
+
+def _answer_command(engine: RunEngine, handout: Any) -> None:
+    """A relayed run's handout names the command its expert's reply goes to (T6)."""
+    from core.run_protocol import hook_bridge
+    from core.run_protocol.next_step import _cmd
+    if not isinstance(handout, dict):
+        return
+    hid = handout.get("handout_event_id")
+    if not hid:
+        bound = hook_bridge.parse_binding(str(handout.get("prompt") or ""))
+        hid = next((e["event_id"] for e in engine.store.read_events()
+                    if bound and e.get("kind") == "handout"
+                    and e["payload"].get("nonce") == bound[1]), None)
+    if hid:
+        handout["answer_command"] = _cmd(engine, "review-answer") + f" --handout {hid} --answer -"
 
 
 def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
@@ -321,6 +364,8 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
                                      expected_stage=args.expect_stage)
     if args.command == "review-start":
         return {"ok": True, **engine.review_start()}
+    if args.command == "review-answer":
+        return {"ok": True, **engine.relayed_answer(args.handout, _request_stdin())}
     if args.command == "review-address":
         return {"ok": True, **engine.review_address(_json_arg(args.artifact))}
     if args.command == "report-tests":

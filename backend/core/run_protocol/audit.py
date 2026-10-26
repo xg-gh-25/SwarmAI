@@ -204,6 +204,16 @@ def _commands(test_reports: Mapping[str, Mapping[str, Any]] | None) -> dict[str,
     return out
 
 
+def _answer_sources(event_rows) -> dict[str, int]:
+    """Expert answers per ``source``; an answer from before T6 has none and is a host's."""
+    out: dict[str, int] = {}
+    for event in event_rows:
+        if event.get("kind") == "answer":
+            source = str((event.get("payload") or {}).get("source") or "host")
+            out[source] = out.get(source, 0) + 1
+    return out
+
+
 def _validation_lines(event_rows) -> list[str]:
     from core.run_protocol.validation_report import report_lines
     return report_lines(event_rows)
@@ -398,6 +408,8 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                # §E9.2 (conformance F22): measured from the events only
                "critical_path": _critical_path(event_rows, waits),
                "experts": _experts(event_rows),
+               # standalone T6: how each expert answer arrived (host hook / the agent)
+               "answer_sources": _answer_sources(event_rows),
                "waits": waits,
                # S6-1: the agent's own validation reports (counts per stage and repo)
                "validation": _validation_lines(event_rows),
@@ -584,6 +596,12 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     if isinstance(known, Mapping):
         lines += ["", f"Knowledge: {_text(known.get('status'), 20)} · "
                   f"{int(known.get('entries') or 0)} entries · cited {len(known.get('cited') or ())}"]
+    sources = details.get("answer_sources") or {}
+    relayed = int(sources.get("relayed") or 0) if isinstance(sources, Mapping) else 0
+    if relayed:
+        total = sum(int(v or 0) for v in sources.values())
+        lines += ["", f"Review answers: {relayed} of {total} relayed by the agent "
+                  "(no host hook recorded them)"]
     lines += ["", "Full machine-readable audit is stored with this run."]
     if details.get("validation"):
         lines += [""] + [str(line) for line in details["validation"]]

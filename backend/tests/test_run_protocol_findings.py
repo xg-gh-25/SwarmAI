@@ -107,8 +107,14 @@ def test_finding_occ_wrong_producer_or_forged_ckey_is_rejected_by_event_contract
     payload = {"answer_event_id": answer["event_id"], "expert": "correctness",
                "severity": "HIGH", "finding_kind": "behavior", "file": "x.py",
                "line": 1, "claim": "x"}
-    with pytest.raises(ev.EventError, match="producer"):
-        stream.add("finding_occ", payload, producer="cli", round=1)
+    # standalone T6: the CLI may write findings, but only for an answer it wrote itself
+    # (a relayed one); a CLI finding under a hook's answer is refused by the fold
+    forged = Stream()
+    hook_answer = forged.answer("correctness", 1, tool_use_id="t")
+    forged.add("finding_occ", {**payload, "answer_event_id": hook_answer["event_id"]},
+               producer="cli", round=1)
+    with pytest.raises(fd.FindingError, match="producer"):
+        forged.projected()
     event = stream.add("finding_occ", payload, round=1)
     event["ckey"] = "CF-deadbeef"
     with pytest.raises(fd.FindingError, match="invalid event chain"):
@@ -344,3 +350,18 @@ def test_accept_finding_digest_cannot_be_rebound_to_another_finding():
         stream.add("auth_consumed", rebound)
 
 
+
+
+def test_a_cli_answer_must_be_a_relayed_one():
+    """Standalone T6: the CLI writes an answer only as review-answer's relayed reply."""
+    stream = Stream()
+    answer = stream.answer("correctness", 1, tool_use_id="t")
+    stream.rows.pop()                         # the same answer, written by the CLI
+    stream.add("answer", answer["payload"], producer="cli", stage=answer.get("stage"),
+               round=answer.get("round"), attempt=answer.get("attempt"))
+    with pytest.raises(fd.FindingError, match="relayed"):
+        stream.projected()
+    stream.rows.pop()
+    stream.add("answer", {**answer["payload"], "source": "relayed"}, producer="cli",
+               stage=answer.get("stage"), round=answer.get("round"), attempt=answer.get("attempt"))
+    stream.projected()                        # a relayed CLI answer folds

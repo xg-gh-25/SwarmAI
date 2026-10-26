@@ -265,9 +265,15 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
         if kind == "validation_report":
             reports[event["event_id"]] = event
         elif kind == "answer":
+            # the CLI writes an answer only as the agent's relayed reply (standalone T6)
+            if event.get("producer") == "cli" and event["payload"].get("source") != "relayed":
+                raise FindingError("an answer written by the CLI must be source relayed")
             answers[event["event_id"]] = event
         elif kind == "finding_occ":
             answer = answers.get(event["payload"]["answer_event_id"])
+            # what an answer says is written by whoever wrote the answer (T6)
+            if answer is not None and answer.get("producer") != event.get("producer"):
+                raise FindingError("finding_occ producer differs from its answer's")
             if answer is None or answer["payload"]["expert_id"] != event["payload"]["expert"] \
                     or answer["payload"]["state"] not in USABLE_STATES \
                     or answer["payload"]["round"] != event.get("round"):
@@ -283,6 +289,8 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
             if event["ckey"] not in r2_targets:
                 raise FindingError("finding_status canonical id was not in the R2 handout")
             answer = answers.get(event["payload"]["answer_event_id"])
+            if answer is not None and answer.get("producer") != event.get("producer"):
+                raise FindingError("finding_status producer differs from its answer's")
             if answer is None or answer["payload"]["expert_id"] != row["expert"] \
                     or answer["payload"]["state"] not in USABLE_STATES \
                     or answer["payload"]["round"] != 2 or event.get("round") != 2:
