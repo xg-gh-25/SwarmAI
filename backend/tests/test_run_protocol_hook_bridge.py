@@ -127,3 +127,70 @@ def test_usage_metrics_are_recorded_by_the_hook(tmp_path):
     metrics = store.read_events()
     assert [row["producer"] for row in metrics] == ["hook", "hook", "hook"]
     assert [row["payload"]["value"] for row in metrics] == [7, 2, 1]
+
+
+# ── ced6caa3: one invalid R2 status line must not drop the whole answer ──────────
+
+def _ledger_store(tmp_path):
+    """A store that refuses any finding event the finding ledger cannot fold, as the
+    engine's store does (engine._store)."""
+    from core.run_protocol import findings
+    authority = ev.EventAuthority()
+
+    def validate(chain):
+        if chain[-1].get("kind") in ("answer", "finding_occ", "finding_status", "integrity"):
+            findings.fold(chain, authority)
+        return None
+    return AuditStore(tmp_path / "audit", "run_one", authority, validator=validate)
+
+
+def _two_open_findings(store):
+    prompt = _handout(store, "Review this diff", nonce="c" * 32)
+    hb.bind_spawn(store, prompt, "tool-r1")
+    second = FINDING.replace('"line":12', '"line":80').replace("crash", "leak")
+    hb.record_answer(store, prompt, f"{FINDING}\n{second}", completed_at=AT)
+    return [row["ckey"] for row in store.read_events() if row["kind"] == "finding_occ"]
+
+
+def test_an_invalid_r2_status_line_is_ignored_and_the_rest_of_the_answer_counts(tmp_path):
+    from core.run_protocol import findings
+    store = _ledger_store(tmp_path)
+    first, second = _two_open_findings(store)
+    prompt = _handout(store, "Recheck", round=2, ids=[first, second], nonce="d" * 32)
+    hb.bind_spawn(store, prompt, "tool-r2")
+    # ADEQUATE is only valid for a closed_proven finding; *first* is still open
+    result = hb.record_answer(
+        store, prompt,
+        f'{{"finding_id":"{first}","status":"ADEQUATE"}}\n'
+        f'{{"finding_id":"{second}","status":"RESOLVED"}}\nNO FINDINGS',
+        completed_at="2026-10-22T00:02:00+00:00")
+    assert result is not None
+    kinds = _kinds(store)
+    assert kinds.count("answer") == 2
+    assert [r["payload"]["canonical_id"] for r in store.read_events()
+            if r["kind"] == "finding_status"] == [second]
+    notes = [r for r in store.read_events() if r["kind"] == "integrity"]
+    assert [n["payload"]["conflict_type"] for n in notes] == ["invalid_r2_status"]
+    rows = {row["canonical_id"]: row for row in findings.fold(store.read_events(),
+                                                               store.authority)}
+    assert rows[second]["r2_status"] == "RESOLVED"
+    # the ignored line counts as a missing one: the finding stays open (§A3.2)
+    assert rows[first]["status"] == "open" and rows[first]["r2_status"] == "OPEN"
+
+
+def test_a_record_failure_leaves_an_answer_rejected_instead_of_nothing(tmp_path,
+                                                                        monkeypatch):
+    from core.run_protocol.store import StoreError
+    store = _store(tmp_path)
+    prompt = _handout(store)
+    hb.bind_spawn(store, prompt, "tool-1")
+    monkeypatch.setattr(hb, "store_for", lambda text: (store, ""))
+    monkeypatch.setattr(hb, "_refusal", lambda *a, **k: None)
+
+    def boom(*args, **kwargs):
+        raise StoreError("simulated write failure")
+    monkeypatch.setattr(hb, "record_answer", boom)
+    assert hb.on_subagent_stop(prompt, "NO FINDINGS", transcript_path=None) is None
+    rejected = [r for r in store.read_events() if r["kind"] == "answer_rejected"]
+    assert [r["payload"]["reason"] for r in rejected] == ["record_failed"]
+    assert "simulated write failure" in rejected[0]["payload"]["detail"]

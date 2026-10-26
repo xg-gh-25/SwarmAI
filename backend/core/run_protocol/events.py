@@ -108,7 +108,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                             {"got_sha": str, "got_len": int}),
     "answer_rejected": _spec("hook", ("payload.handout_event_id", "payload.tool_use_id",
                                       "payload.reason"), None,
-                             {"handout_event_id": str, "tool_use_id": str, "reason": str}),
+                             {"handout_event_id": str, "tool_use_id": str, "reason": str},
+                             {"detail": str}),   # record_failed: the write's error
     # one answer per handout: the event id derives from the handout, so a second
     # spawn of the same handout can never add a second answer (a retry needs a new
     # handout attempt)

@@ -25,7 +25,10 @@ same way (design 2026-10-25-pipeline-standalone §4.3):
   message is the bound spawn text, that read PROMPT-FILE and was told nothing else
   after it was spawned; otherwise an ``answer_rejected`` says why (handout-by-file
   design §3.3). The transcript is the host's file: a sub-agent that rewrites its own
-  transcript is not caught here (known gap, see the design).
+  transcript is not caught here (known gap, see the design). An R2 status line the
+  finding ledger cannot apply to its finding (ADEQUATE on an open finding) is left out
+  as an ``invalid_r2_status`` integrity note and the rest of the answer is recorded; an
+  answer whose write still fails leaves ``answer_rejected`` with ``record_failed``.
 
 Public symbols: ``handout_line``, ``parse_binding``, ``prompt_sha``, ``store_for``,
 ``bind_spawn``, ``record_answer``, ``record_usage``, ``on_spawn``, ``on_subagent_stop``.
@@ -211,6 +214,10 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
             and row.get("payload", {}).get("handout_event_id") == handout_id
             for row in chain) else None)
     stage, attempt = handout["stage"], handout["attempt"]
+    # a status line the ledger cannot apply to its finding's current state (ADEQUATE on
+    # an open finding) is dropped and noted, so the rest of the answer still counts
+    # instead of the whole write being refused (ced6caa3)
+    statuses, notes = _applicable_statuses(store, parsed)
 
     def children(answer: dict[str, Any]) -> list[dict[str, Any]]:
         if parsed.state not in ("parsed", "partial"):
@@ -227,11 +234,11 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
                     "answer_event_id": answer["event_id"],
                     "canonical_id": status["finding_id"], "status": status["status"],
                     "kind_confirm": status.get("kind_confirm")}}
-                 for ordinal, status in enumerate(parsed.statuses, 1)]
-        for ordinal, note in enumerate(parsed.integrity, 1):
+                 for ordinal, status in enumerate(statuses, 1)]
+        for ordinal, (note, conflict) in enumerate(notes, 1):
             digest_note = hashlib.sha256(note.encode("utf-8")).hexdigest()
             rows.append({**common, "kind": "integrity", "ordinal": ordinal, "payload": {
-                "conflict_id": digest_note, "conflict_type": "foreign_r2_status",
+                "conflict_id": digest_note, "conflict_type": conflict,
                 "first_hash": hashlib.sha256(b"ignored").hexdigest(),
                 "new_hash": digest_note}})
         return rows
@@ -249,6 +256,32 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
     if session_id:
         store.copy_to_session(session_id, answer)
     return {"answer": answer, "parsed": parsed}
+
+
+def _applicable_statuses(store: AuditStore, parsed) -> "tuple[list, list]":
+    """(*parsed*'s R2 status rows the finding ledger can apply, integrity notes as
+    ``(text, conflict_type)``). A row naming a finding the ledger does not hold is kept:
+    the ledger's own refusal of it is unchanged."""
+    notes = [(note, "foreign_r2_status") for note in parsed.integrity]
+    if not parsed.statuses:
+        return [], notes
+    from core.run_protocol import findings
+    try:
+        current = {row["canonical_id"]: row["status"]
+                   for row in findings.fold(store.read_events(), store.authority)}
+    except findings.FindingError:
+        # a log the ledger cannot fold refuses every finding write anyway (the engine's
+        # store validator); nothing to filter against, the write reports the error
+        current = {}
+    kept = []
+    for status in parsed.statuses:
+        held = current.get(status["finding_id"])
+        if held is not None and not findings.r2_status_allowed(held, status["status"]):
+            notes.append((f"invalid R2 status ignored: {status['finding_id']} "
+                          f"{status['status']} for {held}", "invalid_r2_status"))
+        else:
+            kept.append(status)
+    return kept, notes
 
 
 def record_usage(store: AuditStore, usage: Mapping[str, Any], *, completed_at: str) -> None:
@@ -336,8 +369,17 @@ def on_subagent_stop(prompt_head: str, final_text: str, *,
                else "transcript:none")
         _reject(store, "answer_rejected", handout, who, reason)
         return None
-    recorded = record_answer(store, prompt_head, final_text, completed_at=at,
-                             session_id=owner)
+    from core.run_protocol.findings import FindingError
+    try:
+        recorded = record_answer(store, prompt_head, final_text, completed_at=at,
+                                 session_id=owner)
+    except (StoreError, FindingError) as exc:
+        # the answer could not be written: say so on the run, never drop it silently
+        import logging
+        logging.getLogger(__name__).warning("v1 answer not recorded: %s", exc)
+        _reject(store, "answer_rejected", handout, f"handout:{handout['event_id']}",
+                "record_failed", detail=str(exc)[:300])
+        return None
     if recorded is not None and transcript_path:
         try:
             from core import transcript_usage

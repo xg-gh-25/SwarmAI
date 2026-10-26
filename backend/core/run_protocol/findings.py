@@ -141,11 +141,18 @@ def _reclassify(row: dict[str, Any], event: Mapping[str, Any]) -> None:
     }
 
 
+def r2_status_allowed(finding_status: str, status: str) -> bool:
+    """Whether an R2 status line may apply to a finding in *finding_status*: ADEQUATE /
+    TEST_INADEQUATE judge the test that closed a ``closed_proven`` finding; RESOLVED /
+    OPEN / REFUTED judge any other. The ledger and the answer recorder both ask this."""
+    allowed = R2_PROVEN if finding_status == "closed_proven" else R2_OPEN
+    return str(status).upper() in allowed
+
+
 def _status(row: dict[str, Any], event: Mapping[str, Any]) -> None:
     payload = event["payload"]
     status = payload["status"].upper()
-    allowed = R2_PROVEN if row["status"] == "closed_proven" else R2_OPEN
-    if status not in allowed:
+    if not r2_status_allowed(row["status"], status):
         raise FindingError(f"R2 status {status!r} is invalid for {row['status']}")
     row["r2_status"] = status
     if row["status"] == "closed_proven" and status == "TEST_INADEQUATE":
