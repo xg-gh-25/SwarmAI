@@ -803,6 +803,47 @@ class TestH5UpdateNeverOverwritesCaddyfile:
             "backfill must precede the backend restart (else migration is a no-op this cycle)"
 
 
+async def _script_sent_by_update(version: str = "2.3.0") -> str:
+    """Run HiveProvisioner.update() against mocks and return the one script it sends to SSM."""
+    from hive.provisioner import HiveProvisioner
+
+    p = HiveProvisioner(Path("/tmp/test.db"))
+    instance = {"id": "inst-1", "name": "t", "account_ref": "acc-1", "region": "us-east-1",
+                "ec2_instance_id": "i-abc123", "s3_bucket": "swarmai-hive-test"}
+    sent: list[str] = []
+    ssm = MagicMock()
+
+    def send_command(**kw):
+        sent.extend(kw["Parameters"]["commands"])
+        return {"Command": {"CommandId": "c-1"}}
+
+    ssm.send_command.side_effect = send_command
+    ssm.get_command_invocation.return_value = {"Status": "Success", "StandardOutputContent": ""}
+    session = MagicMock()
+    session.client.return_value = ssm
+
+    async def run_inline(fn, *a, **kw):
+        return fn(*a, **kw)
+
+    cursor = MagicMock(rowcount=1)
+    conn = AsyncMock()
+    conn.execute = AsyncMock(return_value=cursor)
+    conn.__aenter__ = AsyncMock(return_value=conn)
+    conn.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=instance), \
+         patch.object(p, "_get_account", new_callable=AsyncMock, return_value={}), \
+         patch.object(p, "_update_instance", new_callable=AsyncMock), \
+         patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock), \
+         patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True), \
+         patch.object(p, "_get_session", return_value=session), \
+         patch("hive.provisioner.aiosqlite.connect", return_value=conn), \
+         patch("hive.provisioner.asyncio.to_thread", side_effect=run_inline):
+        await p.update("inst-1", version)
+    assert len(sent) == 1
+    return sent[0]
+
+
 class TestUpdateInstallsSystemdUnit:
     """The unit is installed only at provision; update() must install the package's unit
     when it differs, or a Hive provisioned before a unit change keeps the old one (the
@@ -810,45 +851,7 @@ class TestUpdateInstallsSystemdUnit:
 
     @pytest.mark.asyncio
     async def test_update_script_installs_changed_unit_before_restart(self):
-        from hive.provisioner import HiveProvisioner
-
-        p = HiveProvisioner(Path("/tmp/test.db"))
-        instance = {"id": "inst-1", "name": "t", "account_ref": "acc-1", "region": "us-east-1",
-                    "ec2_instance_id": "i-abc123", "s3_bucket": "swarmai-hive-test"}
-        sent: list[str] = []
-        ssm = MagicMock()
-
-        def send_command(**kw):
-            sent.extend(kw["Parameters"]["commands"])
-            return {"Command": {"CommandId": "c-1"}}
-
-        ssm.send_command.side_effect = send_command
-        ssm.get_command_invocation.return_value = {"Status": "Success",
-                                                   "StandardOutputContent": ""}
-        session = MagicMock()
-        session.client.return_value = ssm
-
-        async def run_inline(fn, *a, **kw):
-            return fn(*a, **kw)
-
-        cursor = MagicMock(rowcount=1)
-        conn = AsyncMock()
-        conn.execute = AsyncMock(return_value=cursor)
-        conn.__aenter__ = AsyncMock(return_value=conn)
-        conn.__aexit__ = AsyncMock(return_value=False)
-
-        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=instance), \
-             patch.object(p, "_get_account", new_callable=AsyncMock, return_value={}), \
-             patch.object(p, "_update_instance", new_callable=AsyncMock), \
-             patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock), \
-             patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True), \
-             patch.object(p, "_get_session", return_value=session), \
-             patch("hive.provisioner.aiosqlite.connect", return_value=conn), \
-             patch("hive.provisioner.asyncio.to_thread", side_effect=run_inline):
-            await p.update("inst-1", "2.3.0")
-
-        assert len(sent) == 1
-        lines = [ln.strip() for ln in sent[0].splitlines()]
+        lines = [ln.strip() for ln in (await _script_sent_by_update()).splitlines()]
         cmp_i = lines.index("if ! cmp -s /opt/swarmai/hive/swarmai-hive.service "
                             "/etc/systemd/system/swarmai-hive.service; then")
         install_i = lines.index("install -m 644 /opt/swarmai/hive/swarmai-hive.service "
@@ -856,6 +859,33 @@ class TestUpdateInstallsSystemdUnit:
         reload_i = lines.index("systemctl daemon-reload")
         restart_i = lines.index("systemctl restart swarmai-hive --no-block")
         assert cmp_i < install_i < reload_i < restart_i
+
+
+class TestUpdateBackfillExtractsHash:
+    """The hive-auth.env backfill must actually pull the bcrypt hash out of a deployed
+    Caddyfile when bash runs it (an escaped dollar became an end-of-line anchor once
+    bash had read it, so the backfill never matched and wrote nothing)."""
+
+    @pytest.mark.asyncio
+    async def test_backfill_snippet_prints_the_caddyfile_hash(self, tmp_path):
+        import shutil
+        import subprocess
+
+        if not shutil.which("bash") or not shutil.which("python3"):
+            pytest.skip("needs bash and python3")
+        script = await _script_sent_by_update()
+        start = script.index('MIG_HASH=$(python3 -c "')
+        end = script.index('")', start) + 2
+        snippet = script[start:end]
+        bcrypt = "$2a$14$abcdefghijklmnopqrstuuWXYZ0123456789abcdefghijklmnopq"
+        caddyfile = tmp_path / "Caddyfile"
+        caddyfile.write_text("example.com {\n    basic_auth @protected {\n"
+                             f"        admin {bcrypt}\n    }}\n}}\n")
+        snippet = snippet.replace("/etc/caddy/Caddyfile", str(caddyfile))
+        out = subprocess.run(["bash", "-c", snippet + '\nprintf %s "$MIG_HASH"'],
+                             capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, out.stderr
+        assert out.stdout == bcrypt
 
 
 class TestH2SystemctlTimeout:

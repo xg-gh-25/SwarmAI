@@ -1190,13 +1190,16 @@ cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 # (run_1e1cc8af); without it, deploying this feature would lock out every existing hive.
 if [ ! -f /etc/swarmai/hive-auth.env ]; then
   echo "hive-auth.env absent — backfilling from deployed Caddyfile (pre-auth hive migration)"
+  # The regex writes a literal dollar as [$]: inside these bash double quotes a
+  # backslash-dollar reaches Python as a bare dollar, which the regex reads as
+  # end-of-line, so the hash never matched and this backfill wrote nothing.
   MIG_HASH=$(python3 -c "
 import re, sys
 try:
     content = open('/etc/caddy/Caddyfile').read()
 except OSError:
     sys.exit(0)  # no Caddyfile → nothing to migrate; middleware stays fail-closed
-m = re.search(r'\\s+admin\\s+(\\$2[abxy]\\$\\S+)', content)
+m = re.search(r'\\s+admin\\s+([$]2[abxy][$]\\S+)', content)
 print(m.group(1) if m else '')
 ")
   if [ -n "$MIG_HASH" ]; then
