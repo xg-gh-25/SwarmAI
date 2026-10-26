@@ -36,10 +36,8 @@ from core.artifact_registry import ArtifactRegistry
 
 def _get_workspace() -> Path:
     """Resolve workspace root from environment or default."""
-    import os
-    from config import get_app_data_dir
-    ws = os.environ.get("SWARM_WORKSPACE", str(get_app_data_dir() / "SwarmWS"))
-    return Path(ws).expanduser().resolve()
+    from config import get_swarmws
+    return get_swarmws().expanduser().resolve()
 
 
 def cmd_discover(args, reg: ArtifactRegistry) -> None:

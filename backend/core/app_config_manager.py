@@ -39,7 +39,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from config import get_app_data_dir
+from config import get_app_data_dir, get_swarmws
 from model_registry import (
     DEFAULT_JUDGE_MODEL,
     FLAGSHIP_MODEL,
@@ -178,7 +178,7 @@ class AppConfigManager:
         cls._instance = None
 
     def __init__(self, config_path: Path | None = None) -> None:
-        self._config_path: Path = config_path or (get_app_data_dir() / "SwarmWS" / "config.json")
+        self._config_path: Path = config_path or (get_swarmws() / "config.json")
         # Secrets live in a SEPARATE file next to config.json — NEVER in
         # config.json itself (which is git-tracked / backed up). This file is
         # 0o600 and gitignored. It is the durable store for SECRET_KEYS so an

@@ -20,6 +20,8 @@ continuous-monitoring eye that catches model/dependency drift (AWS Eval-First:
 """
 import logging
 from pathlib import Path
+
+from config import get_swarmws
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ _DRIFT_TOLERANCE = 5.0
 # Bedrock blips (1/146 = 0.7%) while catching a real cohort collapse.
 _COVERAGE_ALERT_THRESHOLD = 0.20
 
-_ALERT_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-scheduled-alert.json"
+_ALERT_STATE = get_swarmws() / ".context" / ".eval-scheduled-alert.json"
 
 # Every-two-weeks gate (run_6980cb35). The cron fires EVERY Monday but this job
 # should only actually run once per 14 days. We use our OWN timestamp file —
@@ -43,7 +45,7 @@ _ALERT_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-sched
 # incl. a skip (executor.py:2111), so gating on last_run would let each weekly
 # skip reset the clock → permanent deadlock (Gate-1 F). This file is written
 # ONLY when a REAL run happens, so a skip never advances the clock.
-_BIWEEKLY_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-biweekly-last-run.json"
+_BIWEEKLY_STATE = get_swarmws() / ".context" / ".eval-biweekly-last-run.json"
 _BIWEEKLY_INTERVAL_DAYS = 14
 _BIWEEKLY_SLACK_S = 86400
 
@@ -153,7 +155,7 @@ def run_eval_scheduled(
     dry_run: never send a notification (still returns the verdict).
     notifier / runner / root: injected test seams.
     """
-    root = root or (Path.home() / ".swarm-ai" / "SwarmWS")
+    root = root or get_swarmws()
     run = runner or _default_runner
 
     # Every-two-weeks gate (run_6980cb35, Gate-1 F): the cron fires every Monday

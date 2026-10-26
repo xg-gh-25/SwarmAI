@@ -188,9 +188,9 @@ class EvolutionMaintenanceHook:
         """Resolve the .context directory path."""
         if self._context_dir:
             return self._context_dir
-        # Default: ~/.swarm-ai/SwarmWS/.context/
-        home = Path.home()
-        ctx = home / ".swarm-ai" / "SwarmWS" / ".context"
+        # Default: <SwarmWS>/.context/
+        from config import get_swarmws
+        ctx = get_swarmws() / ".context"
         return ctx if ctx.is_dir() else None
 
     async def execute(self, context: HookContext) -> None:

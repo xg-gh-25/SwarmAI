@@ -21,10 +21,8 @@ from ..models import JobResult, RawSignal, SchedulerState, TIER_WEIGHTS
 logger = logging.getLogger(__name__)
 
 # Output directories — relative to SwarmWS root
-SWARMWS = Path(os.environ.get(
-    "SWARMWS_DIR",
-    os.path.expanduser("~/.swarm-ai/SwarmWS"),
-))
+from config import get_swarmws as _get_swarmws
+SWARMWS = _get_swarmws()
 SIGNALS_DIR = Path(os.environ.get(
     "SWARM_SIGNALS_DIR",
     str(SWARMWS / "Knowledge" / "Signals"),

@@ -240,9 +240,9 @@ def _default_discard(case: dict, reason: str) -> None:
     (autonomy-first: no human-review queue; recoverable via archive, never unlink).
     """
     import json as _json
-    from pathlib import Path as _Path
 
-    archive = (_Path.home() / ".swarm-ai" / "SwarmWS" / "Eval"
+    from config import get_swarmws as _get_swarmws
+    archive = (_get_swarmws() / "Eval"
                / "discarded-seed-candidates.jsonl")
     archive.parent.mkdir(parents=True, exist_ok=True)
     entry = {"id": case.get("id"), "reason": reason, "case": case}

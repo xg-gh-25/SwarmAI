@@ -9,11 +9,11 @@ System job definitions live in code (system_jobs.py), not YAML.
 from __future__ import annotations
 
 
-from config import get_app_data_dir
+from config import get_app_data_dir, get_swarmws
 
 # Root paths (derived from single source of truth: config.get_app_data_dir())
 APP_DATA_DIR = get_app_data_dir()
-SWARMWS = APP_DATA_DIR / "SwarmWS"
+SWARMWS = get_swarmws()   # resolved at import; call config.get_swarmws() where it can move
 
 # Job system data directory (workspace-level)
 JOBS_DATA_DIR = SWARMWS / "Services" / "swarm-jobs"

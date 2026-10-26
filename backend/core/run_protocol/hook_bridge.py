@@ -81,7 +81,8 @@ def store_for(text: str) -> "tuple[AuditStore, str] | None":
     if not isinstance(contract, dict) or not contract.get("project"):
         return None
     import os
-    workspace = Path(os.environ.get("SWARM_WORKSPACE") or data / "SwarmWS")
+    from config import get_swarmws
+    workspace = get_swarmws()
     engine = RunEngine.load(data_dir=data, workspace=workspace,
                             project=str(contract["project"]), run_id=binding[0])
     return engine.store, engine.owner_session()

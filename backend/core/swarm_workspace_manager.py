@@ -2613,7 +2613,8 @@ class SwarmWorkspaceManager:
             Expanded absolute path string.
         """
         if workspace_path is None:
-            return self.expand_path(DEFAULT_WORKSPACE_CONFIG["file_path"])
+            from config import get_swarmws
+            return str(get_swarmws())
         return self.expand_path(workspace_path)
 
     @staticmethod

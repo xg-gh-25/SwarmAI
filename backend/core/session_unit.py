@@ -41,8 +41,9 @@ import subprocess
 import time
 from core.awake_clock import awake_time  # liveness durations exclude sleep
 import traceback
+
+from config import get_swarmws as _get_swarmws
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
@@ -2980,7 +2981,7 @@ class SessionUnit:
                     self._recovery_coordinator.record_heal_start(trigger=trigger)
                     # Build rich TaskCheckpoint (git floor + history enrichment).
                     # Workspace dir from standard path (same as context_injector)
-                    _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
+                    _ws_dir = str(_get_swarmws())
                     # ── Per-trigger wrap-up policy (intentional) ──────
                     # turn_approaching → graceful two-phase wrap-up (handled
                     #   above: subprocess still healthy, ~20-turn buffer exists).
@@ -5592,7 +5593,7 @@ class SessionUnit:
                 if (allow_wrapup and getattr(self, "_wrapup_conclusion", ""))
                 else ""
             )
-            _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
+            _ws_dir = str(_get_swarmws())
             _turn_count = getattr(
                 getattr(self, "_health_sensor", None), "turn_count", 0
             )

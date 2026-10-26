@@ -37,7 +37,7 @@ try:
 except ImportError:
     SLACK_BOLT_AVAILABLE = False
 
-from config import get_app_data_dir
+from config import get_app_data_dir, get_swarmws
 from channels.base import (
     ATTACH_TYPE_FILE,
     ATTACH_TYPE_IMAGE,
@@ -202,7 +202,7 @@ def _find_slack_mcp_config() -> Optional[dict]:
     Searches the SwarmWS mcp-dev.json for the slack-mcp entry.
     """
     # SwarmWS location (standard path)
-    mcp_dev = get_app_data_dir() / "SwarmWS" / ".claude" / "mcps" / "mcp-dev.json"
+    mcp_dev = get_swarmws() / ".claude" / "mcps" / "mcp-dev.json"
     if not mcp_dev.is_file():
         return None
 

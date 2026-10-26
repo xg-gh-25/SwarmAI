@@ -49,8 +49,8 @@ router = APIRouter()
 
 def _get_workspace_path() -> Path:
     """Resolve the SwarmWS workspace path."""
-    from config import get_app_data_dir
-    return get_app_data_dir() / "SwarmWS"
+    from config import get_swarmws
+    return get_swarmws()
 
 
 def _atomic_write_json(path: Path, data: list[dict]) -> None:

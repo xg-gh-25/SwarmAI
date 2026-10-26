@@ -3099,9 +3099,17 @@ def _pending_commit_paths(dir_path: str, command: str):
 # reaches this gate. A relevant run that cannot be read, or a commit retargeted at
 # another repo (`git -C`, `--git-dir`), is denied rather than let through (R1 review).
 
-# Scan root for active pipeline runs. Overridable in tests. The daemon's live
-# workspace is ~/.swarm-ai/SwarmWS; runs live at Projects/*/.artifacts/runs/*/run.json.
-_ACTIVE_RUN_GLOB_ROOT = os.path.expanduser("~/.swarm-ai/SwarmWS")
+# Scan root for active pipeline runs: the SwarmWS (config.get_swarmws); runs live at
+# Projects/*/.artifacts/runs/*/run.json. A test may pin it by setting this to a path.
+_ACTIVE_RUN_GLOB_ROOT: "str | None" = None
+
+
+def _runs_scan_root() -> str:
+    """The workspace whose runs the gates scan: a test's pin, else get_swarmws()."""
+    if _ACTIVE_RUN_GLOB_ROOT:
+        return _ACTIVE_RUN_GLOB_ROOT
+    from config import get_swarmws
+    return str(get_swarmws())
 
 
 class _UnreadableContract(Exception):
@@ -3122,7 +3130,7 @@ def _runs_touching(pending: set) -> "list[tuple[str, str]]":
     from core.run_protocol.engine import logged_terminal
     from core.run_protocol.contract import read_contract
     data_dir = get_app_data_dir()
-    projects = os.path.join(_ACTIVE_RUN_GLOB_ROOT, "Projects")
+    projects = os.path.join(_runs_scan_root(), "Projects")
     out: list = []
     try:
         project_names = os.listdir(projects)
@@ -3177,7 +3185,7 @@ def _active_run_ownership(touching: "list[tuple[str, str]]") -> "dict[str, tuple
     out: dict = {}
     data_dir = get_app_data_dir()
     for project, run_id in touching:
-        engine = RunEngine.load(data_dir=data_dir, workspace=_ACTIVE_RUN_GLOB_ROOT,
+        engine = RunEngine.load(data_dir=data_dir, workspace=_runs_scan_root(),
                                 project=project, run_id=run_id)
         if engine.projection()["status"] in lifecycle.TERMINAL:
             continue
@@ -3396,15 +3404,9 @@ except Exception as _exc:  # pragma: no cover - import-time path edge
 
 
 def _pipeline_runs_root() -> str:
-    """Workspace root whose Projects/*/.artifacts/runs/*/run.json hold pipeline runs.
-
-    Mirrors artifact_cli._get_workspace, the WRITER of run.json: SWARM_WORKSPACE wins,
-    else the default the active-run gate scans (_ACTIVE_RUN_GLOB_ROOT, read at call
-    time so tests can repoint it)."""
-    ws = os.environ.get("SWARM_WORKSPACE")
-    if ws:
-        return os.path.expanduser(ws)
-    return _ACTIVE_RUN_GLOB_ROOT
+    """Workspace root whose Projects/*/.artifacts/runs/*/run.json hold pipeline runs:
+    the same root the pipeline writes them under (config.get_swarmws)."""
+    return _runs_scan_root()
 
 
 def _run_activity_time(path: str, data: dict) -> float:

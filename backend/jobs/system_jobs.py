@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from config import get_swarmws
 from utils.backend_bin import bundled_path, py_command
 
 from .models import Job, JobSafety
@@ -375,7 +376,8 @@ SYSTEM_JOBS: list[Job] = [
             "command": _py(
                 str(bundled_path("skills", "s_loops-health", "scripts", "loops_health_check.py")),
                 "--auto-fix", "--alert-threshold", "70",
-            ) + " --output-dir ${HOME}/.swarm-ai/SwarmWS/Knowledge/JobResults",
+                "--output-dir", str(get_swarmws() / "Knowledge" / "JobResults"),
+            ),
             "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=300),

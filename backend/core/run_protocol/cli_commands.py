@@ -20,14 +20,14 @@ import os
 from pathlib import Path
 from typing import Any
 
-from config import get_app_data_dir
+from config import get_app_data_dir, get_swarmws
 from core.run_protocol import lifecycle, request_ctx
 from core.run_protocol.engine import EngineError, RunEngine
 from core.run_protocol.landing import LandingError
 
 
 def _workspace() -> Path:
-    return Path(os.environ.get("SWARM_WORKSPACE") or get_app_data_dir() / "SwarmWS")
+    return get_swarmws()
 
 
 def _repos(values: list[str]) -> dict[str, str]:

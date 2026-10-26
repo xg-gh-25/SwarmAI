@@ -68,7 +68,8 @@ def reindex_projects(full: bool = False) -> dict:
     from core.code_intel import load_project_graph
     from core.code_intel.freshness import check_freshness
 
-    ws_path = Path.home() / ".swarm-ai" / "SwarmWS"
+    from config import get_swarmws
+    ws_path = get_swarmws()
     projects_dir = ws_path / "Projects"
 
     if not projects_dir.is_dir():

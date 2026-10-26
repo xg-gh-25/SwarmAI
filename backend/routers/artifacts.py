@@ -459,12 +459,8 @@ from core.artifact_registry import ArtifactRegistry
 
 def _get_registry() -> ArtifactRegistry:
     """Lazy-init the singleton ArtifactRegistry."""
-    workspace_path = swarm_workspace_manager.expand_path(
-        swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG.get(
-            "file_path", "~/.swarm-ai/SwarmWS"
-        )
-    )
-    return ArtifactRegistry(Path(workspace_path))
+    from config import get_swarmws
+    return ArtifactRegistry(get_swarmws())
 
 
 class PipelineProjectStatus(BaseModel):

@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from config import settings, get_app_data_dir, get_log_file_path
+from config import settings, get_app_data_dir, get_log_file_path, get_swarmws
 from core import session_registry
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router, apps_router
@@ -1353,7 +1353,7 @@ async def lifespan(app: FastAPI):
     # IMPROVEMENT.md write-back: closes the DDD learning loop.
     # Runs after auto-commit so workspace state is settled.
     hook_manager.register(ImprovementWritebackHook(
-        workspace_path=app_config.get("workspace_path", str(get_app_data_dir() / "SwarmWS")),
+        workspace_path=app_config.get("workspace_path", str(get_swarmws())),
     ))
     # ToDo lifecycle: auto-complete bound todos, implicit file matching
     # Runs after auto-commit so git log reflects the session's work.

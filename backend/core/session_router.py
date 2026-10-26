@@ -1120,10 +1120,10 @@ def _graph_enrich_recall(query: str) -> str:
     """
     try:
         import re as _re
-        from pathlib import Path as _Path
         from .knowledge_graph import load_graph, query_related_entries
 
-        graph_path = _Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".knowledge-graph.yaml"
+        from config import get_swarmws as _get_swarmws
+        graph_path = _get_swarmws() / ".context" / ".knowledge-graph.yaml"
         if not graph_path.exists():
             return ""
 

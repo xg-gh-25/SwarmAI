@@ -372,7 +372,6 @@ def create_user_correction_detector(
                 # corrections.jsonl append above is the durable signal the post-session
                 # classifier consumes, so a judge-discard here loses NO signal, only noise.
                 try:
-                    from pathlib import Path as _Path
                     from core.ingestion_gate import admit_memory_lesson
                     from scripts.locked_write import locked_read_modify_write
                     summary = prompt[:150].replace("\n", " ").strip()
@@ -406,7 +405,8 @@ def create_user_correction_detector(
                         from core import executors as _executors
                         verdict, _section, _reason, distilled = await _executors.run_in(
                             "llm", admit_memory_lesson, summary)
-                    ws = _Path.home() / ".swarm-ai" / "SwarmWS"
+                    from config import get_swarmws as _get_swarmws
+                    ws = _get_swarmws()
                     if verdict == "pending":
                         # RECOVERABLE (judge budget-exhausted / infra down) — DEFER to the
                         # shared distill-pending.jsonl, never drop. Fixes the silent-drop:
@@ -1228,8 +1228,8 @@ _RUN_JSON_MAX_BYTES = 4 * 1024 * 1024
 def _projects_root() -> Optional[str]:
     """realpath of the workspace's Projects dir (where every run lives), or None."""
     try:
-        from config import get_app_data_dir  # local import: avoids a load-time cycle
-        return os.path.realpath(get_app_data_dir() / "SwarmWS" / "Projects")
+        from config import get_swarmws  # local import: avoids a load-time cycle
+        return os.path.realpath(get_swarmws() / "Projects")
     except Exception:  # noqa: BLE001
         return None
 

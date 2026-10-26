@@ -3794,8 +3794,10 @@ class SQLiteDatabase(BaseDatabase):
             except Exception as e:
                 logger.warning("Legacy cleanup: Failed to drop swarm_workspaces table: %s", e)
 
+            from config import get_swarmws
             app_data_dir = str(get_app_data_dir())
-            swarmws_dir = str(Path(app_data_dir) / "SwarmWS")
+            # never delete the live workspace, nor the default one when it is relocated
+            keep_dirs = {Path(get_swarmws()).resolve(), (Path(app_data_dir) / "SwarmWS").resolve()}
 
             for raw_path in legacy_paths:
                 expanded = raw_path
@@ -3803,7 +3805,7 @@ class SQLiteDatabase(BaseDatabase):
                     expanded = expanded.replace("{app_data_dir}", app_data_dir)
                 expanded = str(Path(expanded).expanduser())
 
-                if Path(expanded).resolve() == Path(swarmws_dir).resolve():
+                if Path(expanded).resolve() in keep_dirs:
                     logger.info("Legacy cleanup: Skipping active SwarmWS directory: %s", expanded)
                     continue
 

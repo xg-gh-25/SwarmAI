@@ -15,7 +15,6 @@ Key functions:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 # ─── Constants ───────────────────────────────────────────────────────────────
@@ -53,8 +52,9 @@ SWARMAI = DEFAULT_PROJECT_NAME  # older alias
 # ─── Core Functions (must be defined before alias discovery) ─────────────────
 
 def get_swarmws() -> Path:
-    """Resolve SwarmWS root path. Respects SWARMWS env var override."""
-    return Path(os.environ.get("SWARMWS", os.path.expanduser("~/.swarm-ai/SwarmWS")))
+    """The SwarmWS root: ``config.get_swarmws`` (the one resolver)."""
+    from config import get_swarmws as _resolve
+    return _resolve()
 
 
 def get_projects_dir() -> Path:

@@ -70,8 +70,8 @@ async def run_conversation_digest(
     — the EXPECTED steady state until XG enables a channel.
     """
     if workspace is None:
-        from config import get_app_data_dir
-        workspace = get_app_data_dir() / "SwarmWS"
+        from config import get_swarmws
+        workspace = get_swarmws()
 
     enabled = _load_enabled_channels(workspace)
     if not enabled:

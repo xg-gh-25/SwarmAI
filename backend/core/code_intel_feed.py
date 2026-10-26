@@ -45,8 +45,8 @@ def _get_channel_threshold(channel: str, default: float) -> float:
         from core.proposal_feedback import ProposalFeedbackTracker, THRESHOLD_FLOOR
         import json as _json
 
-        from config import get_app_data_dir
-        stats_file = get_app_data_dir() / "SwarmWS" / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts" / "channel_stats.json"
+        from config import get_swarmws
+        stats_file = get_swarmws() / "Projects" / DEFAULT_PROJECT_NAME / ".artifacts" / "channel_stats.json"
         if not stats_file.exists():
             return max(default, THRESHOLD_FLOOR)
 

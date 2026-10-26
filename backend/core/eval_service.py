@@ -75,8 +75,9 @@ class EvalService:
     def _find_workspace() -> Path:
         """Find SwarmWS root by what eval actually reads (Eval/golden_set.yaml),
         NOT a DDD folder — keeps eval-root discovery decoupled from Projects/."""
+        from config import get_swarmws
         candidates = [
-            Path.home() / ".swarm-ai" / "SwarmWS",
+            get_swarmws(),
             Path.cwd(),
         ]
         for c in candidates:

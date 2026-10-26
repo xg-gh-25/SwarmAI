@@ -616,9 +616,9 @@ class BackgroundHookExecutor:
         if not self._hook_stats:
             return
         try:
-            from config import get_app_data_dir
+            from config import get_swarmws
 
-            stats_path = get_app_data_dir() / "SwarmWS" / "hook_stats.json"
+            stats_path = get_swarmws() / "hook_stats.json"
             if not stats_path.parent.is_dir():
                 return
 

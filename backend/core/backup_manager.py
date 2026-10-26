@@ -231,7 +231,14 @@ class BackupManager:
         # Ensure swarm_dir exists — restore may be the FIRST op on a fresh machine,
         # and the in-progress marker below is written here (run_037a02af).
         self.swarm_dir.mkdir(parents=True, exist_ok=True)
-        self.workspace_dir = Path(workspace_dir or self.swarm_dir / "SwarmWS")
+        # the workspace of an explicit backup root sits inside it; otherwise the live one
+        if workspace_dir:
+            self.workspace_dir = Path(workspace_dir)
+        elif swarm_dir:
+            self.workspace_dir = self.swarm_dir / "SwarmWS"
+        else:
+            from config import get_swarmws
+            self.workspace_dir = get_swarmws()
         self.db_path = Path(db_path or self.swarm_dir / "data.db")
         self.state_path = self.swarm_dir / "backup_state.json"
         # In-progress marker: written BEFORE clone, removed only on full success.

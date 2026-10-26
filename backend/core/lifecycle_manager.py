@@ -1352,7 +1352,7 @@ class LifecycleManager:
             handled_count = 0
             try:
                 import json as _json
-                from config import get_app_data_dir
+                from config import get_swarmws
 
                 pending = await db.todos.list_by_status("pending")
                 todo_ids_to_handle: list[str] = []
@@ -1374,7 +1374,7 @@ class LifecycleManager:
                             continue
                         project = metadata.get("project", DEFAULT_PROJECT_NAME)
                         run_path = (
-                            get_app_data_dir() / "SwarmWS" / "Projects" / project
+                            get_swarmws() / "Projects" / project
                             / ".artifacts" / "runs" / run_id / "run.json"
                         )
                         if run_path.exists():

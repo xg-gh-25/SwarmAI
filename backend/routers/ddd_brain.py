@@ -119,7 +119,8 @@ def _workspace_root() -> Path:
         return Path(swarm_workspace_manager.get_workspace_path())
     except Exception:  # pragma: no cover - defensive fallback
         logger.debug("_workspace_root: suppressed exception on a fail-safe path", exc_info=True)
-        return Path.home() / ".swarm-ai" / "SwarmWS"
+        from config import get_swarmws
+        return get_swarmws()
 
 
 def _projects_root() -> Path:

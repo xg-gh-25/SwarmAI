@@ -67,6 +67,23 @@ def get_app_data_dir() -> Path:
     return Path.home() / ".swarm-ai"
 
 
+def get_swarmws() -> Path:
+    """The SwarmWS workspace root: the ONE place it is resolved (design
+    2026-10-26-run-knowledge §3.1). Every reader and writer of the workspace -- the
+    pipeline, recall, project registry, hooks, jobs -- calls this, so a test or
+    sandbox that relocates the workspace relocates all of them at once.
+
+    Order: ``SWARM_WORKSPACE`` (the pipeline's and the plugin scripts' variable),
+    then ``SWARMWS`` (the tests' variable), then ``get_app_data_dir() / "SwarmWS"``.
+    With none set this is ``~/.swarm-ai/SwarmWS``, as before. Read on every call:
+    never freeze it in a module constant."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return get_app_data_dir() / "SwarmWS"
+
+
 def get_log_file_path() -> Path:
     """Get the daemon log file path — the single source of truth for the log
     filename across all consumers (main.py's RotatingFileHandler AND any job
