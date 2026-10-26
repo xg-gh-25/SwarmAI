@@ -3,7 +3,7 @@ title: One look for every turn card, and the code-changes card after native codi
 date: 2026-10-26
 created: 2026-10-26
 updated: 2026-10-26
-status: v2 draft (§3 rewritten from the root cause), awaiting review
+status: v3 draft (turn id via a backend-owned file; v2 refuted by review), awaiting review
 owner: Gawan
 ---
 
@@ -31,11 +31,11 @@ background-agent card (I), the header dot.
 | # | Surface | Today | After |
 |---|---|---|---|
 | A | Product rows (in turn + end card) | v3 box, a long name may wrap | same box; name `nowrap`, never cut; only the grey folder shrinks (middle cut) |
-| B | Pipeline run: `RunResult`, `AttentionCard` ("Not ready to push", "Needs your judgement") | own cards, amber | **not rendered**. The agent says it in its normal answer. Backend blocks unchanged, history untouched |
+| B | Pipeline run: `RunResult`, `AttentionCard` ("Not ready to push", "Needs your judgement") | own cards, amber | **not rendered**; one grey run line (§5). Backend blocks unchanged, history untouched |
 | C | Pipeline docs: `DocCard` under a stage, `SummaryDocRow` on the end card | own looks (Show full text / Open, purpose, REVIEW stats, skipped rows) | the product row under the stage row; the run's present docs join the one DELIVERABLES box. Skipped docs and stats are not shown |
 | D | Act cards: AskUserQuestion, permission, escalation | three looks; "Claude needs your input" | one frame (border, primary left bar, header line, body, buttons right); "Swarm needs your decision"; once answered, one grey line |
 | E | Code-changes card look | own rows | same box and row as A, plus `+N −M` and ▸ diff; a COMMITS section |
-| F | Code-changes card data after native coding | empty: lands are stamped `turn=none`; session worktrees are not code trees | the backend reads git records by session and turn boundary (§3) |
+| F | Code-changes card data after native coding | empty: lands are stamped `turn=none`; session worktrees are not code trees | turn id from a backend-owned file; session worktrees are code trees (§3) |
 
 Not changed: which file goes on which card (a file is on one card only), the
 `turn_product` model, the stamp format (`session_landings` builds the landing facts as
@@ -59,149 +59,172 @@ Name: `whitespace-nowrap shrink-0`. Folder: `shortFolder` (middle cut), `truncat
 shrink-[100]`, full path on hover. If the name alone is wider than the column, the
 box scrolls horizontally inside itself (`overflow-x-auto`); the name is still whole.
 
-## 3. Code changes after native coding (F): the backend observes, the agent carries nothing
+## 3. Code changes after native coding (F)
 
 ### 3.1 Root cause (verified 2026-10-26)
 
-What a turn did is today attributed by **identifiers the agent's command must carry**:
-
-- **Commits / landings.** `run_owner_gate` writes `SWARM_TURN_ID` into a
-  `session_worktree land` command only when the land is the line's first segment
-  (`2026-10-25-turn-result-card.md` §3.2). The stamp then carries the turn id;
-  `TurnChanges` reads landings by turn id, and only when the gate counted a land
-  (`_turn_lands > 0`). In main's reflog **all 33 `swarm-land` stamps say `turn=none`**
-  (`git reflog show -n 3000 refs/heads/main`). Calling `_session_worktree_rewrite`
-  directly: `cd <wt> && … land` and `W=$(…); … land $W` both get no turn id. The
-  session key is always right: `SWARM_APP_SESSION_ID` is in the CLI process env from
-  spawn. A turn id cannot be put there: the CLI process lives across turns.
+- **Commits / landings.** A landing is attributed to a turn by the turn id in its
+  `swarm-land` stamp, and that id reaches `session_worktree land` only through
+  `run_owner_gate`'s rewrite, which fires only when the land is its line's first
+  segment (`2026-10-25-turn-result-card.md` §3.2). In main's reflog **all 33
+  `swarm-land` stamps say `turn=none`**. Calling `_session_worktree_rewrite` directly:
+  `cd <wt> && … land` and `W=$(…); … land $W` get no turn id. `TurnChanges` reads
+  landings only by turn id and only when the gate counted one (`_turn_lands > 0`), so
+  the card has no commits. The session key is always right: `SWARM_APP_SESSION_ID` is
+  in the CLI process env from spawn. The turn id cannot be put there: the CLI process
+  lives across turns.
 - **File rows.** `code_roots()` is bound checkouts + run worktrees. A session worktree
-  (`session_worktree create`, the tool AGENT.md prescribes) is neither, so its edits
-  have no row.
+  is neither, so its edits have no row.
 
-So the card depends on command shape and on a registry of trees. The fix removes both
-dependencies: the backend, which knows when each turn starts and ends, reads git's own
-records.
+Turn attribution by stamp is right (v2's reflog-offset window was refuted: async race
+with the first land, reftable, branch switch mid-turn, gc / expire). Only the hand-off
+of the id is wrong: it depends on the shape of the agent's command.
 
-### 3.2 Which commits are this turn's
+### 3.2 The turn id reaches `land` from a file the backend owns
 
-Two facts, both recorded by git, plus the turn's start and end the backend owns:
+- **Write.** Where `SessionUnit._reset_turn_state()` sets `ctx["_turn_id"]` (every turn
+  admission: `send()`, `begin_injected_turn`; a question / permission continuation
+  keeps it), the backend also writes the id to
+  `<app data>/session-turns/<session key>` (32 hex bytes, `0600`, tmp + `os.replace`).
+  The write runs on a pool thread and is **awaited before the query is written to the
+  CLI**, so no tool call of the turn can run before it. Measured: 0.25 ms p50, 0.8 ms
+  p99 (200 writes, this machine). That is the only addition to the send path; nothing
+  is added per token or per tool call. A failed write logs and leaves the turn
+  without an id (its lands show `turn=none`, as today); it never blocks the send.
+- **Read.** `session_worktree._attribution()` reads `SWARM_TURN_ID` when set (kept for
+  tests and the rewrite's old callers), else the file named by
+  `session_key(SWARM_APP_SESSION_ID)`. Invalid or missing → `none`. Any command shape
+  works: `cd && land`, `$(…)`, a script, a sub-agent.
+- **Card.** `TurnChanges._compute` calls `session_landings.read_session(session,
+  turn_id=…)` whenever the turn has an id, with no `expect` (its scan stops at the
+  existing cap; a turn that landed nothing reads one bounded reflog page per bound
+  checkout, inside `FINISH_BUDGET_S`, measured below). `read_session` goes through git
+  commands, so reftable, branch switches and gc are handled as today.
+- **Removed:** the `SWARM_TURN_ID` prefix in `_session_worktree_rewrite`,
+  `ctx["_turn_lands"]` and its counting, the `expect` path. `SWARM_APP_SESSION_ID` is
+  still handed (a prewarmed process may lack it). Canvas and ToDo call `read_session`
+  without a turn and are unaffected; the stamp grammar (`turn=`) is unchanged.
 
-1. A `swarm-land` reflog entry names its session (`session=<key>`, `key =
-   session_key(session id)`). That is the attribution to the session.
-2. The entry's **position** in the destination branch's reflog file
-   (`<common dir>/logs/refs/heads/<branch>`, append-only by git) says when it was
-   written relative to the turn.
+A sub-agent's land carries the turn that is current when it lands. A stale file from
+an ended turn can only be read by a land made between turns (no turn running), which
+the card of the next turn does not read (its id differs).
 
-- **Turn start**, inside the existing start job on the `turn_snapshot` pool (async,
-  alongside today's snapshots): for each bound main checkout, read its current branch
-  (`HEAD` file) and `os.stat` that branch's reflog file → `(branch, inode, size)`.
-- **Turn end** (`finish`, `turn_changes` pool, inside `FINISH_BUDGET_S`): read only the
-  bytes after `size` of the same file. Each appended line is `<old> <new> <ident> <ts>
-  <tz>\t<message>`; a line whose message is a stamp with this session's key is this
-  turn's landing. Its commits, files and checks are what `session_landings` builds
-  today from a stamp (`onto..new`, ancestry checks, the same row cap), so the card
-  shows the same facts as a stamped land does now.
-- The file was replaced or shrank (inode changed, size smaller: `reflog expire`, a
-  rewrite) → that repo is `unknown: reflog-rewritten`, never an empty list.
-- Not a reflog window over main in the v4-v7 sense: unstamped entries are never read
-  for meaning and nothing on main is attributed by time. The window only says which
-  turn a stamp *already naming this session* belongs to.
+### 3.3 Session worktrees are code trees
 
-Removed: the turn id in the stamp's meaning, `SWARM_TURN_ID` in the rewrite,
-`_turn_lands` and `expect`. The stamp keeps `turn=` for old readers; nothing reads it.
-`run_owner_gate` keeps handing `SWARM_APP_SESSION_ID` (a prewarmed process may lack it).
+`session_worktree create` names its branch `session/<key>-<name>` when the session id
+is valid (always, through the session env).
 
-### 3.3 Which file rows are this turn's
+- **Turn start**, inside the existing start job on the `turn_snapshot` pool:
+  `git worktree list --porcelain` per bound repo (21 ms measured); every worktree on a
+  `refs/heads/session/<key>-…` branch is a code tree of this session and gets today's
+  start snapshot, counted in `MAX_START_SNAPSHOTS`, with today's rule: a snapshot
+  taken after the turn's first tool call is not used (that tree is left off, never
+  diffed from a guess).
+- **Created during the turn**: start = the commit in the branch reflog's creation entry
+  (`git reflog show --format=%H%x00%gs refs/heads/<branch>`, the oldest entry,
+  `branch: Created from …`; a git command, so reftable works). No such entry → left
+  off.
+- **Turn end**: rows as today for the session trees the turn wrote into. A worktree
+  removed during the turn after its land: its committed rows arrive with the landing;
+  uncommitted edits in it no longer exist and are not shown. A detached-HEAD worktree
+  is not found by the prefix and is left off.
 
-A session's worktrees are known by name: `session_worktree create` names the branch
-`session/<key>-<name>`.
+### 3.4 Pipeline runs
 
-- **Turn start**, same start job: list each bound repo's `<common dir>/worktrees/*/`
-  (file reads: `gitdir`, `HEAD`); every worktree whose `HEAD` is
-  `ref: refs/heads/session/<key>-…` is a code tree of this session and gets today's
-  start snapshot (`_snapshot_root`). Counted in the existing `MAX_START_SNAPSHOTS`.
-- **Created during the turn** (not present at start): its start is the creation commit,
-  the first line of `<common dir>/worktrees/<id>/logs/HEAD` (`branch: Created from`).
-  No such line → left off.
-- **Turn end**: rows as today for every session tree the turn wrote into (`note` /
-  `note_tool` paths). If the worktree was removed during the turn (land, then
-  `remove`), its committed rows are already on the card through its landing (§3.2);
-  its uncommitted edits no longer exist and are not shown.
-- A row and a landing row for the same file are merged as today (one row).
+A pipeline landing makes its own merge without a `swarm-land` stamp; its sha is in
+`pipeline_summary.landedSha`. The COMMITS section lists it (sha + "pipeline run
+<run id>"), so a pipeline turn's commit is on the same card.
 
-### 3.4 What is never done
-
-No snapshot before a write, nothing on send or per tool call, no attribution by time
-of anything unstamped, no reading of the agent's command text for identity, no guess of
-a start. A tree or repo whose facts are missing is left off or marked unknown.
-
-## 4. Cost (measured 2026-10-26 on this repo, best of 5)
+## 4. Cost (measured 2026-10-26 on this repo)
 
 | Step | Where | Cost |
 |---|---|---|
-| send, each token, each tool call | — | 0 (nothing added) |
-| turn start: per bound checkout, read `HEAD` + `stat` the branch reflog | start job, `turn_snapshot` pool, async | < 0.1 ms |
-| turn start: list `worktrees/*/HEAD` | same | < 1 ms |
-| turn start: snapshot each of this session's worktrees | same | ~0.2 s each, as today's code roots, in parallel with the model's first thought |
-| turn end: read appended reflog bytes | `turn_changes` pool | < 1 ms (a turn appends a few lines) |
-| turn end: per landing, today's `session_landings` facts | same, inside `FINISH_BUDGET_S` | as today (~40 ms) |
+| send: write the turn id file | pool thread, awaited before the query goes to the CLI | 0.25 ms p50, 0.8 ms p99 |
+| each token, each tool call | — | 0 |
+| turn start: `git worktree list` per bound repo + snapshot of each session worktree | start job, `turn_snapshot` pool, async | 21 ms + ~0.2 s per worktree, as today's code roots |
+| turn end: `read_session(turn_id)` | `turn_changes` pool, inside `FINISH_BUDGET_S` | measured in step 1 (one bounded reflog page per bound checkout); must stay < 0.3 s on this repo or the step stops |
 
-A turn that lands nothing reads a few appended bytes and starts no git process at its
-end. A test pins that `send()` and `note_tool()` start no subprocess.
+A test pins that `note_tool()` and the per-token path start no subprocess.
 
-## 5. Removed
+## 5. The pipeline run line (B)
 
-Frontend: `RunResult`, `AttentionCard` and their rendering; `DocCard`'s Show full text
-/ Open / excerpt; `SummaryDocRow`; the amber not-push-ready styles; the separate
-answered/decided cards (now one grey line). Backend: `SWARM_TURN_ID` in
-`_session_worktree_rewrite`, `_turn_lands` counting, the `expect` path of
-`read_session`. Tests of each are rewritten to the new rule, reasons in the commit
-message.
+`RunResult` and `AttentionCard` are not rendered. One grey line takes their place after
+the answer, from `pipeline_summary` only (no colour, no box, no "not ready to push"):
 
-## 6. Acceptance tests (written first, red on today's code)
+- landed: `run_8f2a · landed c063b99 · 4 documents`
+- ended without landing: `run_8f2a · <status> · not landed` (status = completed /
+  abandoned / cancelled / failed)
+
+Why it cannot push, self-answered questions and assumptions are the agent's answer to
+say. The audit card, REVIEW stats, skipped-doc reasons and inline "Show full text" go
+(a document opens in the Canvas from its row). Backend blocks unchanged, history
+untouched.
+
+## 6. Removed
+
+Frontend: `RunResult`, `AttentionCard`, `SummaryDocRow`, `DocCard`'s excerpt and
+buttons, the amber styles, the separate answered/decided cards (one grey line now).
+Backend: the turn-id rewrite, `_turn_lands`, `read_session(expect=)`. Tests of each are
+rewritten to the new rule, reasons in the commit message.
+
+## 7. Acceptance tests (written first, red on today's code)
 
 Frontend
-1. A long file name renders whole on one line (`nowrap`, no ellipsis) in product,
-   pipeline-doc and changed-file rows; only the folder truncates.
+1. A long file name renders whole on one line in product, pipeline-doc and
+   changed-file rows (`nowrap`, no ellipsis; the box's `scrollWidth > clientWidth`
+   when narrower); only the folder truncates.
 2. Those rows and the commit row share one `ItemRow`.
-3. `pipeline_summary` + `pipeline_attention` render neither a run-result nor an
-   attention card; the run's present docs are rows in the DELIVERABLES box; skipped
-   docs are absent.
-4. AskUserQuestion / permission / escalation: one frame; header says Swarm; answered
-   → one grey line.
+3. `pipeline_summary` + `pipeline_attention` → no run-result / attention card; one grey
+   run line with status, landed sha, document count; present docs are rows in the
+   DELIVERABLES box; skipped docs absent.
+4. AskUserQuestion / permission / escalation: one frame; header says Swarm; answered →
+   one grey line.
 
-Backend (real git repos in tmp, real `session_worktree` script)
-5. `cd <wt> && … session_worktree land` (no turn id reaches it) in a turn → the card
-   lists the landing's commits and files.
-6. Another session's stamped land and an unstamped `merge --ff-only` on main during
-   the turn → not on this card.
-7. This session's land in the previous turn → not on this turn's card.
-8. Edits in a session worktree that existed at turn start, not landed → rows.
-9. A worktree created and edited in the turn, not landed → rows from its creation
-   commit.
-10. Another session's worktree edited → no rows.
-11. The branch reflog expired mid-turn → `unknown: reflog-rewritten`.
-12. `send()` / `note_tool()` start no subprocess; `finish` stays in budget with a
-    stalled tree.
-13. stream-order and liveReload properties stay green.
+Backend (real git repos in tmp, the real `session_worktree` script)
+5. `cd <wt> && … session_worktree land` and `W=$(…); land $W` in a turn → stamp has the
+   turn id; card lists the commits and files.
+6. Another session's land and a land in the previous turn → not on this card.
+7. Edits in a session worktree present at turn start, not landed → rows.
+8. A worktree created and edited in the turn → rows from its creation commit.
+9. Another session's worktree → no rows; a detached worktree → no rows.
+10. Branch switched mid-turn and land into the new branch → on the card.
+11. The turn-id file write fails → turn proceeds, land stamps `turn=none`.
+12. The query is not written to the CLI before the turn-id file exists; `note_tool()`
+    starts no subprocess; `finish` stays inside its budget with a stalled tree.
+13. A pipeline turn's `landedSha` is in COMMITS.
+14. stream-order and liveReload properties stay green.
 
 Each fix gets a mutation check.
 
-## 7. Steps (one ff-merged commit each, no push)
+## 8. Steps (one ff-merged commit each, no push)
 
-1. Backend §3 + tests 5-12.
+1. Backend §3 + tests 5-13 (and the turn-end timing of `read_session`).
 2. `ItemBox` / `ItemRow`; product rows and changes card on it (A, E); tests 1-2.
-3. Pipeline (B, C); test 3.
+3. Pipeline (B, C, §5); test 3.
 4. Act cards (D); test 4.
 5. Gawan checks light and dark; then spec v6 §8, `2026-10-25-turn-result-card.md`
    §3.2 and the session-products doc are synced.
 
-## 8. Residuals
+## 9. Residuals
 
-- A land not made by `session_worktree` (a hand-written `merge --ff-only`) has no
-  stamp and is not on the card. AGENT.md already forbids it.
-- A background sub-agent started in an earlier turn that lands during this turn is on
-  this turn's card: the land did happen in this turn.
+- A land not made by `session_worktree` (a hand-written `merge --ff-only`) has no stamp
+  and is not on the card. AGENT.md already forbids it.
+- A background sub-agent from an earlier turn that lands during this turn is on this
+  turn's card (the land happened in this turn).
 - Uncommitted edits in a worktree removed during the turn are not shown.
-- A write into a session worktree only by a Bash command that names no path is not in
-  `note` (as today) and has no row; its land still shows.
+- A session worktree whose start snapshot finished after the turn's first tool call is
+  left off for that turn (existing rule).
+- Stamps are unauthenticated (existing R2 of the prior design): display only.
+- "Show full text" for a pipeline document is gone; the Canvas opens it.
+
+## 10. Review history
+
+- v1: worktree registry + per-tool HEAD tracking. Replaced after the root cause was
+  found (§3.1).
+- v2: no turn id; turn boundary from the branch reflog file's byte offset. Skeptic
+  (2026-10-26) REDESIGN, verified: async offset can be taken after the first land (B1);
+  creation line is in the branch reflog, not the worktree's `logs/HEAD` (B2, checked
+  on this repo); files-backend only, no reftable (B3); branch switch, gc/expire (M1,
+  M2); pipeline lands are unstamped (M6); removing RunResult loses run status (M5).
+  v3 keeps the stamp, moves the id hand-off to a backend-owned file, reads through git,
+  keeps one run status line.
