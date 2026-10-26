@@ -9,6 +9,7 @@ Mutation endpoints: CRUD on golden set cases, run triggers, promotions.
 """
 
 from core import executors
+
 import logging
 from typing import Optional
 
@@ -56,6 +57,13 @@ class CreateCaseRequest(BaseModel):
     assertions: list[str] = Field(default_factory=list)
     # gate | watch (core/eval_release.tier_of); absent = watch, the default for a new case
     gating: Optional[str] = None
+    # programmatic (quick check) | behavior (offline case); absent = derived from the
+    # scenario (a prompt means an offline case), see EvalService._with_defaults
+    eval_method: Optional[str] = None
+    # offline case: "PASS only if …; FAIL if …" for the judge, and how the steps match
+    decision_rubric: Optional[str] = None
+    trajectory_match: Optional[str] = None
+    allowed_tools: Optional[list[str]] = None
 
 
 class UpdateCaseRequest(BaseModel):
@@ -73,6 +81,10 @@ class UpdateCaseRequest(BaseModel):
     assertions: Optional[list[str]] = None
     gating: Optional[str] = None
     tier: Optional[str] = None
+    eval_method: Optional[str] = None
+    decision_rubric: Optional[str] = None
+    trajectory_match: Optional[str] = None
+    allowed_tools: Optional[list[str]] = None
 
 
 class TriggerRunRequest(BaseModel):
@@ -154,12 +166,21 @@ async def get_run_detail(run_id: str):
 # ─── POST Endpoints (P3 — Mutations) ────────────────────────────────────────
 
 
+@router.post("/golden-set/try")
+async def try_case(req: CreateCaseRequest):
+    """Run every admission check on a case without saving it: the validator gates
+    and, for a quick check, a trial run of its command and negative command. Runs
+    on the subprocess pool (the trial runs commands)."""
+    svc = get_eval_service()
+    return await executors.run_in("subprocess", svc.try_case, req.model_dump(exclude_none=True))
+
+
 @router.post("/golden-set")
 async def create_case(req: CreateCaseRequest):
-    """Create a new golden set case."""
+    """Create one of the user's own cases (full admission, then stamped)."""
     svc = get_eval_service()
     try:
-        case = svc.add_case(req.model_dump(exclude_none=True))
+        case = await executors.run_in("subprocess", svc.add_case, req.model_dump(exclude_none=True))
         return {"status": "created", "case": case}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -173,21 +194,21 @@ async def update_case(case_id: str, req: UpdateCaseRequest):
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
     try:
-        case = svc.update_case(case_id, updates)
+        case = await executors.run_in("subprocess", svc.update_case, case_id, updates)
         return {"status": "updated", "case": case}
     except ValueError as e:
-        raise HTTPException(status_code=400 if "Cannot change" in str(e) else 404, detail=str(e))
+        raise HTTPException(status_code=404 if "not found" in str(e) else 400, detail=str(e))
 
 
 @router.delete("/golden-set/{case_id}")
 async def delete_case(case_id: str):
-    """Archive (soft-delete) a golden set case."""
+    """Delete one of the user's own cases (removed from the file, not archived)."""
     svc = get_eval_service()
     try:
-        case = svc.delete_case(case_id)
-        return {"status": "archived", "case_id": case_id}
+        svc.delete_case(case_id)
+        return {"status": "deleted", "case_id": case_id}
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404 if "not found" in str(e) else 400, detail=str(e))
 
 
 @router.post("/golden-set/hard-delete")

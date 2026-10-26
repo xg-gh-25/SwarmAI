@@ -32,7 +32,8 @@ def eval_workspace(tmp_path, monkeypatch):
             {
                 "id": "GS001",
                 "category": "compliance",
-                "dimension": "compliance",
+                "dimension": "responsibility",
+                "purpose": {"en": "The pipeline file mentions the pipeline."},
                 "level": "session",
                 "title": "Pipeline mandatory for code changes",
                 "source": "C011",
@@ -41,12 +42,13 @@ def eval_workspace(tmp_path, monkeypatch):
                 "evaluators": ["file_contains"],
                 "scenario": {"turns": [{"input": "Fix typo"}]},
                 "expected_trajectory": ["pipeline"],
-                "verification": {"file": "test.py", "grep": "pipeline"},
+                "verification": {"file": "test.py", "grep": "pipeline", "negative_command": "false"},
             },
             {
                 "id": "GS002",
                 "category": "recall",
-                "dimension": "factual_accuracy",
+                "dimension": "cognition",
+                "purpose": {"en": "Memory recall answers X."},
                 "level": "session",
                 "title": "Memory recall accuracy",
                 "source": "KD01",
@@ -54,7 +56,9 @@ def eval_workspace(tmp_path, monkeypatch):
                 "evaluators": ["canary_pass"],
                 "scenario": {"turns": [{"input": "What is X?"}]},
                 "expected_trajectory": ["read_memory"],
-                "verification": {"command": "echo OK", "expected_contains": "OK"},
+                "verification": {"command": "printf 'GS2_%s\\n' OK", "expected_contains": "GS2_OK",
+                                 "negative_command": "printf 'GS2_%s\\n' TEETH",
+                                 "negative_expected_contains": "GS2_TEETH"},
             },
         ],
     }
@@ -100,7 +104,7 @@ class TestAddCase:
             "id": "GS003",
             "purpose": {"en": "test case"},
             "category": "compliance",
-            "dimension": "compliance",
+            "dimension": "responsibility",
             "level": "session",
             "title": "New test case",
             "source": "manual",
@@ -122,7 +126,7 @@ class TestAddCase:
             "id": "GS001",  # already exists
             "purpose": {"en": "test case"},
             "category": "compliance",
-            "dimension": "compliance",
+            "dimension": "responsibility",
             "title": "Duplicate",
             "evaluators": ["file_contains"],
             "affected_by": ["AGENT.md"],
@@ -161,7 +165,7 @@ class TestAddCase:
         # STEERING.md WITHOUT an R1 rule → STEERING.R1 resolves empty (the drift class)
         (ctx / "STEERING.md").write_text("### 1. Some rule\nbody\n")
         bad = {
-            "id": "GS_DRIFT", "category": "compliance", "dimension": "compliance",
+            "id": "GS_DRIFT", "category": "compliance", "dimension": "responsibility",
             "purpose": {"en": "test case"},
             "title": "Drifted ref", "eval_method": "llm",
             "evaluators": ["goal_success"], "affected_by": ["STEERING.R1"],
@@ -176,7 +180,7 @@ class TestAddCase:
         ctx.mkdir(exist_ok=True)
         (ctx / "AGENT.md").write_text("R1. **Pipeline is mandatory** for all changes.\n")
         good = {
-            "id": "GS_RESOLVE", "category": "compliance", "dimension": "compliance",
+            "id": "GS_RESOLVE", "category": "compliance", "dimension": "responsibility",
             "purpose": {"en": "test case"},
             "title": "Resolvable ref", "eval_method": "llm",
             "evaluators": ["goal_success"], "affected_by": ["AGENT.R1"],
@@ -190,14 +194,15 @@ class TestAddCase:
             "id": "GS004",
             "purpose": {"en": "test case"},
             "category": "recall",
-            "dimension": "factual_accuracy",
+            "dimension": "cognition",
             "level": "session",
             "title": "Persisted case",
             "source": "test",
             "affected_by": ["KNOWLEDGE.md"],
             "evaluators": ["canary_pass"],
-            "verification": {"command": "echo hi", "expected_contains": "hi",
-                             "negative_command": "false"},
+            "verification": {"command": "printf 'GS4_%s\\n' OK", "expected_contains": "GS4_OK",
+                             "negative_command": "printf 'GS4_%s\\n' TEETH",
+                             "negative_expected_contains": "GS4_TEETH"},
         }
         svc.add_case(new_case)
 
@@ -245,12 +250,9 @@ class TestUpdateCase:
 
 
 class TestDeleteCase:
-    def test_delete_case_archives(self, svc):
-        result = svc.delete_case("GS002")
-        assert result["tier"] == "archived"
-        # Case still accessible via detail
-        case = svc.get_case_detail("GS002")
-        assert case["tier"] == "archived"
+    def test_delete_case_removes_it(self, svc):
+        assert svc.delete_case("GS002") == {"id": "GS002", "deleted": True}
+        assert svc.get_case_detail("GS002") is None
 
     def test_delete_case_not_found(self, svc):
         with pytest.raises(ValueError, match="not found"):
@@ -361,11 +363,11 @@ class TestTriggerRun:
         magnitude. The fixture golden_set has 0 behavior-method cases."""
         assert svc.behavior_case_count() == 0
         svc.add_case({
-            "id": "GS_BEH", "category": "compliance", "dimension": "compliance",
+            "id": "GS_BEH", "category": "compliance", "dimension": "responsibility",
             "purpose": {"en": "test case"},
             "title": "A behavior case", "eval_method": "behavior",
             "evaluators": ["goal_success"], "affected_by": ["AGENT.md"],
-            "scenario": {"turns": [{"input": "x"}]},
+            "scenario": {"prompt": "x"}, "expected_trajectory": ["Read"],
         })
         assert svc.behavior_case_count() == 1
 
@@ -403,7 +405,7 @@ class TestPersistPreservesDiskOnlyCases:
         external = {
             "id": "GS_EXTERNAL",
             "category": "compliance",
-            "dimension": "compliance",
+            "dimension": "responsibility",
             "level": "session",
             "title": "Added by a parallel session after svc loaded",
             "source": "external",
@@ -440,7 +442,7 @@ class TestPersistPreservesDiskOnlyCases:
         # svc (loaded BEFORE the tag edit) persists via an update to GS001.
         svc.update_case("GS001", {"title": "touch"})
 
-        # Read the file itself: get_case_detail redacts a private case's content.
+        # Read the file itself: tags and notes are not in the private detail allowlist.
         on_disk = {c["id"]: c for c in yaml.safe_load(path.read_text())["cases"]}
         gs002 = on_disk["GS002"]
         assert gs002.get("tags") == ["behavior_trajectory", "full"], "user-owned tags lost"
@@ -450,7 +452,7 @@ class TestPersistPreservesDiskOnlyCases:
         """AC4: a soft-deleted (archived) case is preserved once, not resurrected
         as active nor duplicated. delete_case keeps it in _cases as archived;
         the disk-only append must not re-add it."""
-        svc.delete_case("GS002")  # tier -> archived, persisted
+        svc.update_case("GS002", {"tier": "archived"})  # archived, persisted
         svc.update_case("GS001", {"title": "touch again"})  # another persist
 
         svc2 = EvalService(workspace_root=eval_workspace)
@@ -493,7 +495,7 @@ class TestPersistPreservesDiskOnlyCases:
         memory) must still be PHYSICALLY deleted — not reported not_found and left.
         hard_delete _load()s disk truth first, so it operates on the current corpus."""
         self._external_add_case(eval_workspace, {
-            "id": "GS_ONDISK", "category": "compliance", "dimension": "compliance",
+            "id": "GS_ONDISK", "category": "compliance", "dimension": "responsibility",
             "level": "session", "title": "added to disk after load", "source": "ext",
             "affected_by": ["STEERING.md"], "evaluators": ["file_contains"],
             "verification": {"file": "z.py", "grep": "z"},
@@ -628,13 +630,13 @@ class TestPersistCrossProcessLock:
                 "id": case_id,
                 "purpose": {"en": "test case"},
                 "category": "compliance",
-                "dimension": "compliance",
+                "dimension": "responsibility",
                 "level": "session",
                 "title": f"case {case_id}",
                 "source": "concurrency",
                 "affected_by": ["AGENT.md"],
                 "evaluators": ["file_contains"],
-                "verification": {"file": "x.py", "grep": "y", "negative_command": "false"},
+                "verification": {"file": "x.py", "grep": case_id, "negative_command": "false"},
             })
 
         # add_case holds _data_lock in-process; to exercise the cross-process

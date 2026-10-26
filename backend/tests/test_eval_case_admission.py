@@ -16,8 +16,9 @@ PURPOSE = {"en": "Checks one thing; if it breaks the user loses it.", "zh": "检
 
 
 def _case(cid, **kw):
-    return {"id": cid, "category": "decision", "dimension": "judgment_quality",
-            "evaluators": ["goal_success"], "affected_by": [], "eval_method": "llm",
+    return {"id": cid, "category": "decision", "dimension": "quality",
+            "evaluators": ["goal_success"], "affected_by": ["backend/context/AGENT.md"],
+            "eval_method": "llm",
             "title": cid, "purpose": PURPOSE, **kw}
 
 
@@ -63,9 +64,9 @@ def test_add_case_stops_at_the_total_cap(ws, monkeypatch):
     install_golden_fixture(monkeypatch, ws, {"version": 2, "cases": full + archived},
                            product_cases=[_case("PRODUCT1")])
     svc = EvalService(workspace_root=ws)  # product 1 + private 79 live = 80
-    with pytest.raises(ValueError, match="Retire a case"):
+    with pytest.raises(ValueError, match="Delete a case"):
         svc.add_case(_case("ONE_TOO_MANY"))
-    svc.delete_case("C000")  # archiving one frees a slot
+    svc.delete_case("C000")  # deleting one frees a slot
     assert svc.add_case(_case("FITS"))["id"] == "FITS"
 
 

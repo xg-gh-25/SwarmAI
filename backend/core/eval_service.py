@@ -464,21 +464,23 @@ class EvalService:
             ],
         }
 
-    # ALLOWLIST (not denylist) of fields kept in PRIVATE case detail. A denylist
-    # leaks any NEW content field by default (Gate-2 run_1f588e53: expected_response_contains
-    # + source slipped a denylist); an allowlist fails closed — an unanticipated
-    # field is dropped, never exposed. Private cases can reference instance state
-    # (MEMORY/STEERING/local governance), so only safe rendering metadata survives.
+    # ALLOWLIST (not denylist) of fields kept in PRIVATE case detail: an allowlist
+    # fails closed, so a field nobody anticipated is dropped, never exposed. It holds
+    # exactly what the Golden Cases form shows and edits (the user's own case, read
+    # back by the user's own app so it can be edited — design eval-as-product §8
+    # item 3); anything else on a private case stays out.
     # NOTE: `source` (e.g. "STEERING R1 + C011") is instance-identifying → NOT kept.
     _PRIVATE_DETAIL_ALLOWED = (
         "id", "category", "dimension", "level", "title", "tier",
         "eval_method", "affected_by", "evaluators", "_origin",
+        "purpose", "gating", "redline", "verification", "scenario",
+        "expected_trajectory", "trajectory_match", "allowed_tools", "decision_rubric",
+        "validated_by_4gate",
     )
 
     def get_case_detail(self, case_id: str) -> Optional[dict]:
-        """Return case detail + history. For PRIVATE cases, return ONLY an
-        allowlist of rendering metadata (fail-closed) so instance content never
-        leaves via the API; PRODUCT cases return in full."""
+        """Return case detail + history. A PRIVATE case returns only the allowlisted
+        fields the form shows and edits (fail-closed); a PRODUCT case returns in full."""
         case = next((c for c in self._cases if c.get("id") == case_id), None)
         if not case:
             return None
@@ -486,7 +488,6 @@ class EvalService:
         if case.get("_origin") == "private":
             detail = {k: case[k] for k in self._PRIVATE_DETAIL_ALLOWED if k in case}
             detail["history"] = self._get_case_history(case_id)
-            detail["_content_redacted"] = True
             return detail
         return {**case, "history": self._get_case_history(case_id)}
 
@@ -494,104 +495,140 @@ class EvalService:
 
     _REQUIRED_CASE_FIELDS = {"id", "category", "dimension", "evaluators", "affected_by"}
 
-    def add_case(self, case_data: dict) -> dict:
-        """Add a new case to golden set. Raises ValueError on invalid input.
+    # A trial run of a quick check (positive + negative command) is capped here so a
+    # hung command cannot hold a save; a real run uses the case's own timeout.
+    _TRIAL_TIMEOUT_S = 60
 
-        Gate enforcement (code, not convention):
-        - gate_refs (C044/run_b1efcb5b): EVERY case's dotted refs (MEMORY./STEERING./
-          AGENT./SOUL./EVOLUTION.) must resolve to non-empty .context content, else
-          the case silently feeds the LLM judge empty/wrong context. Fail-open when
-          the workspace has no .context/. Bare filenames (AGENT.md) are out of scope.
-        - gate_teeth + auto-stamp (run_5edf2cc0 G2/G3/G6/G8): a GATE-ELIGIBLE case
-          (fast deterministic evaluator, would enter the BVT) MUST declare a
-          negative_command and is auto-stamped with its content-bound
-          validated_by_4gate hash. Without this it lands unstamped → compute_bvt
-          drops it → the gate silently shrinks. Non-gate-eligible cases (auto-seed
-          behavior cases) skip teeth/stamp but still pass gate_refs."""
+    @staticmethod
+    def _with_defaults(case: dict) -> dict:
+        """Fill the two fields the form does not ask for. An offline case (a prompt the
+        agent answers, plus the tool steps that must appear) is ``behavior``; anything
+        else is a quick check (``programmatic``). Tier follows the method."""
+        out = dict(case)
+        scenario = out.get("scenario") or {}
+        if not out.get("eval_method"):
+            out["eval_method"] = ("behavior" if str(scenario.get("prompt") or "").strip()
+                                  else "programmatic")
+        if not out.get("tier"):
+            out["tier"] = "behavior" if out["eval_method"] == "behavior" else "active"
+        return out
+
+    def _admission(self, case: dict) -> dict:
+        """Every check a new or edited case must pass (golden_case_validator.validate_case,
+        the same gates the CLI runs), then, for a quick check with a command, a trial
+        run: the command must pass and the negative command must print its own failure
+        marker. Returns ``{ok, checks: [{name, ok, errors}], trial, stamp}``; never
+        writes anything."""
+        from scripts.golden_case_validator import _is_gate_eligible, validate_case
+
+        others = [c for c in self._cases if c.get("id") != case.get("id")]
+        ok, report = validate_case(case, others, for_public=False, grandfathered=False,
+                                   root=self._workspace_root)
+        stamp = report.pop("stamp", None)
+        checks = [{"name": n, "ok": r[0], "errors": list(r[1])} for n, r in report.items()]
+
+        trial = None
+        v = case.get("verification") or {}
+        if ok and _is_gate_eligible(case) and str(v.get("command") or "").strip():
+            if not str(v.get("negative_expected_contains") or "").strip():
+                errs = ["teeth: a quick check names the marker its negative command prints "
+                        "(verification.negative_expected_contains), so the trial can prove "
+                        "the check fails when the thing it checks is broken"]
+                checks.append({"name": "trial", "ok": False, "errors": errs})
+                ok = False
+            else:
+                from scripts.eval_runner import evaluate_case
+                r = evaluate_case(case, self._workspace_root, programmatic_only=True,
+                                  verify_teeth=True, canary_timeout=self._TRIAL_TIMEOUT_S)
+                trial = {"status": r.get("status"), "notes": str(r.get("notes") or "")[:500]}
+                passed = r.get("status") == "passed"
+                checks.append({"name": "trial", "ok": passed,
+                               "errors": [] if passed else [f"trial run {trial['status']}: {trial['notes']}"]})
+                ok = ok and passed
+        return {"ok": ok, "checks": checks, "trial": trial, "stamp": stamp if ok else None}
+
+    @staticmethod
+    def _rejection(prefix: str, result: dict) -> ValueError:
+        errs = [e for c in result["checks"] if not c["ok"] for e in c["errors"]]
+        return ValueError(f"{prefix}: {'; '.join(errs)}")
+
+    def try_case(self, case_data: dict) -> dict:
+        """Run the full admission on a case without saving it (the form's "try")."""
+        case = self._with_defaults(case_data)
+        result = self._admission(case)
+        result.pop("stamp", None)
+        return result
+
+    def add_case(self, case_data: dict) -> dict:
+        """Add one of the user's own cases. Raises ValueError on invalid input.
+
+        Runs the whole admission (``_admission``: every validator gate, plus a trial
+        run of a quick check's command and negative command), then stamps the case
+        with its content-bound ``validated_by_4gate`` hash so it enters the run as
+        validated. Product cases cannot be added here (they ship with the backend)."""
         missing = self._REQUIRED_CASE_FIELDS - set(case_data.keys())
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
+        from core.golden_set_store import PRIVATE_ORIGIN, TOTAL_CAP
 
-        from core.golden_set_store import TOTAL_CAP
-        from scripts.golden_case_validator import (
-            _is_gate_eligible, gate_teeth, gate_refs, gate_purpose, gate_gating,
-            compute_case_stamp,
-        )
-        # Anti-drift (C044 BLOCKER 2): every dotted ref (MEMORY./STEERING./AGENT./
-        # SOUL./EVOLUTION.) MUST resolve to non-empty content, else the case silently
-        # feeds the LLM judge empty/wrong context. Fail-open if this workspace has no
-        # .context/ (gate_refs handles that). Applies to ALL cases, not just
-        # gate-eligible — an LLM-judge case is exactly where a drifted ref hides.
-        ok, errs = gate_refs(case_data, root=self._workspace_root)
-        if not ok:
-            raise ValueError(f"Case rejected (refs drift): {'; '.join(errs)}")
-        ok, errs = gate_purpose(case_data)
-        if not ok:
-            raise ValueError(f"Case rejected: {'; '.join(errs)}")
-        ok, errs = gate_gating(case_data)
-        if not ok:
-            raise ValueError(f"Case rejected: {'; '.join(errs)}")
-        if _is_gate_eligible(case_data):
-            ok, errs = gate_teeth(case_data, grandfathered=False)
-            if not ok:
-                raise ValueError(f"Gate-eligible case rejected: {'; '.join(errs)}")
-            # Auto-stamp so it enters the BVT (and re-stamps on any later edit via
-            # update_case, which recomputes nothing — drift is caught at compute_bvt).
-            case_data = {**case_data, "validated_by_4gate": compute_case_stamp(case_data)}
-
+        # A new case is always the user's own: whatever origin tag the caller sent
+        # is replaced, in memory too (readers such as get_case_detail key on it; the
+        # tag is stripped on write).
+        case = self._with_defaults({**case_data, "_origin": PRIVATE_ORIGIN})
         with self._data_lock:
-            case_id = case_data["id"]
-            if any(c.get("id") == case_id for c in self._cases):
-                raise ValueError(f"Case '{case_id}' already exists")
+            if any(c.get("id") == case["id"] for c in self._cases):
+                raise ValueError(f"Case '{case['id']}' already exists")
             live = sum(1 for c in self._cases if c.get("tier") != "archived")
             if live >= TOTAL_CAP:
                 raise ValueError(
                     f"The golden set already has {live} cases (limit {TOTAL_CAP}). "
-                    f"Retire a case before adding one."
+                    f"Delete a case before adding one."
                 )
-
-            self._cases.append(case_data)
+        result = self._admission(case)
+        if not result["ok"]:
+            raise self._rejection("Case rejected", result)
+        case["validated_by_4gate"] = result["stamp"]
+        with self._data_lock:
+            if any(c.get("id") == case["id"] for c in self._cases):
+                raise ValueError(f"Case '{case['id']}' already exists")
+            self._cases.append(case)
             self._persist_golden_set()
-        return case_data
+        return case
 
     def update_case(self, case_id: str, updates: dict) -> dict:
-        """Update an existing case. Raises ValueError if not found or changing id."""
+        """Edit one of the user's own cases. The MERGED case goes through the same
+        admission as a new one and is re-stamped, so an edited quick check stays in
+        the run as validated instead of dropping out on a stale stamp."""
         if "id" in updates and updates["id"] != case_id:
             raise ValueError("Cannot change case ID via update")
-
-        from scripts.golden_case_validator import gate_gating, gate_refs
         with self._data_lock:
             case = next((c for c in self._cases if c.get("id") == case_id), None)
             if case is None:
                 raise ValueError(f"Case '{case_id}' not found")
             self._refuse_product(case)
-
-            # Validate the MERGED result (C044): an update that re-anchors a ref must
-            # land on a resolvable target, not just any string. This is the sanctioned
-            # path to fix drifted refs — the gate confirms the fix actually resolves.
-            merged = {**case, **updates}
-            ok, errs = gate_refs(merged, root=self._workspace_root)
-            if not ok:
-                raise ValueError(f"Update rejected (refs drift): {'; '.join(errs)}")
-            ok, errs = gate_gating(merged)
-            if not ok:
-                raise ValueError(f"Update rejected: {'; '.join(errs)}")
-
-            case.update(updates)
+            merged = self._with_defaults({**case, **updates})
+        result = self._admission(merged)
+        if not result["ok"]:
+            raise self._rejection("Update rejected", result)
+        merged["validated_by_4gate"] = result["stamp"]
+        with self._data_lock:
+            case = next((c for c in self._cases if c.get("id") == case_id), None)
+            if case is None:
+                raise ValueError(f"Case '{case_id}' not found")
+            case.clear()
+            case.update(merged)
             self._persist_golden_set()
         return case
 
     def delete_case(self, case_id: str) -> dict:
-        """Archive (soft-delete) a case. Sets tier='archived'."""
-        with self._data_lock:
-            case = next((c for c in self._cases if c.get("id") == case_id), None)
-            if case is None:
-                raise ValueError(f"Case '{case_id}' not found")
-            self._refuse_product(case)
-
-            case["tier"] = "archived"
-            self._persist_golden_set()
-        return case
+        """Delete one of the user's own cases from the file (no archive: a case that
+        is needed again is added again). Product cases are read-only."""
+        result = self.hard_delete_cases([case_id])
+        if result["refused"]:
+            raise ValueError(f"Case '{case_id}' is a product case and is read-only")
+        if not result["deleted"]:
+            raise ValueError(f"Case '{case_id}' not found")
+        return {"id": case_id, "deleted": True}
 
     @staticmethod
     def _refuse_product(case: dict) -> None:

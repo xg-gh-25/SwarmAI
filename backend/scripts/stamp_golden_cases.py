@@ -39,7 +39,7 @@ def stamp_all(svc: EvalService, dry_run: bool = False) -> dict:
     from core.golden_set_store import is_product_case
 
     cases = svc._cases
-    stamped, skipped, already, product_stale = [], [], [], []
+    stamped, skipped, already, product_stale, rejected = [], [], [], [], []
     for c in cases:
         if not _is_gate_eligible(c) or c.get("tier") == "draft":
             skipped.append(c.get("id"))
@@ -51,11 +51,18 @@ def stamp_all(svc: EvalService, dry_run: bool = False) -> dict:
         if is_product_case(c):
             product_stale.append(c.get("id"))
             continue
-        stamped.append(c.get("id"))
-        if not dry_run:
-            svc.update_case(c["id"], {"validated_by_4gate": want})
+        if dry_run:
+            stamped.append(c.get("id"))
+            continue
+        # update_case re-runs the full admission and stamps only a case that passes
+        # it; a case that no longer passes is reported, never stamped.
+        try:
+            svc.update_case(c["id"], {})
+            stamped.append(c.get("id"))
+        except ValueError as e:
+            rejected.append({"id": c.get("id"), "reason": str(e)[:300]})
     return {"stamped": stamped, "already": already, "skipped_non_eligible": len(skipped),
-            "product_stale": product_stale, "dry_run": dry_run}
+            "product_stale": product_stale, "rejected": rejected, "dry_run": dry_run}
 
 
 def main() -> int:
@@ -71,7 +78,9 @@ def main() -> int:
     if summary["product_stale"]:
         print("  product cases with a stale stamp (fix in templates/eval/golden_set.yaml):",
               ", ".join(summary["product_stale"]))
-    return 0
+    for r in summary["rejected"]:
+        print(f"  not stamped, fails admission: {r['id']}: {r['reason']}")
+    return 1 if summary["rejected"] else 0
 
 
 if __name__ == "__main__":

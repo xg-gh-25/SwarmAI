@@ -17,6 +17,10 @@ Gates:
   gate_redline    — if `redline` present it must be bool; if true it must carry a
                     RUNNABLE evaluator (else it always-skips = always-passes = an
                     unenforceable red-line). run_21490939.
+  gate_dimension  — (non-grandfathered) dimension is cognition / quality /
+                    responsibility (cost and performance are read online, no case)
+  gate_offline    — an offline (behavior) case has a prompt, expected tool steps, and
+                    a rubric that says when it passes and when it fails
   privacy_scan    — (PROMOTE only) no sensitive words / instance-paths / DDD refs.
                     Instance cases are FINE in private; this is the ship boundary.
 
@@ -292,6 +296,43 @@ def gate_gating(case: dict) -> tuple[bool, list[str]]:
     return True, []
 
 
+def gate_dimension(case: dict) -> tuple[bool, list[str]]:
+    """A new or edited case names one of the five dimensions it measures
+    (core/eval_release.FIVE_DIMENSIONS). Cost and performance have no golden case
+    (they are read from usage records online), so a case is cognition, quality or
+    responsibility."""
+    from core.eval_release import FIVE_DIMENSIONS
+
+    allowed = [d for d in FIVE_DIMENSIONS if d not in ("cost", "performance")]
+    if case.get("dimension") not in allowed:
+        return False, [f"dimension: must be one of {allowed} (got {case.get('dimension')!r})"]
+    return True, []
+
+
+_RUBRIC_PASS = re.compile(r"\bpass(es|ed)?\b|通过", re.I)
+_RUBRIC_FAIL = re.compile(r"\bfail(s|ed)?\b|不通过|失败", re.I)
+
+
+def gate_offline(case: dict) -> tuple[bool, list[str]]:
+    """An offline case (eval_method behavior: a real agent answers a prompt) has the
+    prompt it is given and the tool steps that must appear; a judge rubric, when
+    there is one, says both when it passes and when it fails, so two people reading
+    it reach the same verdict."""
+    if case.get("eval_method") != "behavior":
+        return True, []
+    errs = []
+    if not str((case.get("scenario") or {}).get("prompt") or "").strip():
+        errs.append("offline: scenario.prompt is empty (the message the agent receives)")
+    steps = case.get("expected_trajectory")
+    if not isinstance(steps, list) or not [s for s in steps if str(s).strip()]:
+        errs.append("offline: expected_trajectory is empty (the tool steps that must appear)")
+    rubric = str(case.get("decision_rubric") or "")
+    if rubric.strip() and not (_RUBRIC_PASS.search(rubric) and _RUBRIC_FAIL.search(rubric)):
+        errs.append('offline: decision_rubric must say when it passes and when it fails '
+                    '("PASS only if …; FAIL if …")')
+    return (not errs, errs)
+
+
 def privacy_scan(case: dict) -> tuple[bool, list[str]]:
     blob = json.dumps(case, ensure_ascii=False)
     hits = []
@@ -390,7 +431,7 @@ def gate_refs(case: dict, root: Path | None = None) -> tuple[bool, list[str]]:
 
 
 def validate_case(case: dict, existing: list[dict], for_public: bool,
-                  grandfathered: bool = False) -> tuple[bool, dict]:
+                  grandfathered: bool = False, root: Path | None = None) -> tuple[bool, dict]:
     """Run all gates. privacy_scan runs ONLY for_public (PROMOTE). gate_teeth +
     gate_refs are skipped for grandfathered (legacy) cases (so the pre-existing
     drifted corpus doesn't all fail at once — same containment as gate_teeth). New/
@@ -409,10 +450,14 @@ def validate_case(case: dict, existing: list[dict], for_public: bool,
     g_gt = gate_gating(case); report["gating"] = g_gt
     gates = [g1, g2, g3, g4, g_rl, g_gt]
     if not grandfathered:
-        g5 = gate_refs(case); report["refs"] = g5
+        g5 = gate_refs(case, root=root); report["refs"] = g5
         gates.append(g5)
         g6 = gate_purpose(case, require_both=for_public); report["purpose"] = g6
         gates.append(g6)
+        g7 = gate_dimension(case); report["dimension"] = g7
+        gates.append(g7)
+        g8 = gate_offline(case); report["offline"] = g8
+        gates.append(g8)
     if for_public:
         gp = privacy_scan(case); report["privacy"] = gp
         gates.append(gp)

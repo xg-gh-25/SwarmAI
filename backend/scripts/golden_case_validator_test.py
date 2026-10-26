@@ -11,7 +11,7 @@ from scripts.golden_case_validator import (  # noqa: E402
 
 def _ok_case(cid="GS_NEW", **over):
     c = {
-        "id": cid, "category": "compliance", "dimension": "compliance",
+        "id": cid, "category": "compliance", "dimension": "responsibility",
         "eval_method": "programmatic", "affected_by": ["backend/core/x.py"],
         "evaluators": ["file_contains"],
         # gate-eligible (programmatic + file_contains) → gate_teeth requires a
@@ -238,7 +238,7 @@ def test_cli_main_exits_zero_on_clean_public_pass(tmp_path):
     import json
     import subprocess
     case = {
-        "id": "GS_CLI_SMOKE", "category": "recall", "dimension": "capability",
+        "id": "GS_CLI_SMOKE", "category": "recall", "dimension": "cognition",
         "eval_method": "programmatic",
         "purpose": {"en": "Resume fills its budget.", "zh": "恢复上下文能填满预算。"},
         "affected_by": ["backend/core/context_injector.py"],
@@ -416,3 +416,40 @@ def test_validate_case_runs_gate_gating():
     ok, report = validate_case(_gq(gating="gate", eval_method="llm"), [], for_public=False,
                                grandfathered=True)
     assert ok is False and report["gating"][0] is False
+
+
+# ── gate_dimension / gate_offline (eval-as-product §8 item 3) ──────────────────
+from scripts.golden_case_validator import gate_dimension, gate_offline  # noqa: E402
+
+
+@pytest.mark.parametrize("dim, ok", [
+    ("cognition", True), ("quality", True), ("responsibility", True),
+    ("cost", False), ("performance", False), ("compliance", False), (None, False),
+])
+def test_gate_dimension(dim, ok):
+    assert gate_dimension({"dimension": dim})[0] is ok
+
+
+@pytest.mark.parametrize("case, ok", [
+    ({"eval_method": "programmatic"}, True),
+    ({"eval_method": "behavior", "scenario": {"prompt": "q"}, "expected_trajectory": ["Read"]}, True),
+    ({"eval_method": "behavior", "scenario": {"prompt": "q"}, "expected_trajectory": ["Read"],
+      "decision_rubric": "PASS only if x. FAIL if y."}, True),
+    ({"eval_method": "behavior", "scenario": {"prompt": "q"}, "expected_trajectory": ["Read"],
+      "decision_rubric": "通过：说出 x；不通过：猜测"}, True),
+    ({"eval_method": "behavior", "scenario": {"prompt": "q"}, "expected_trajectory": ["Read"],
+      "decision_rubric": "PASS only if x."}, False),
+    ({"eval_method": "behavior", "scenario": {}, "expected_trajectory": ["Read"]}, False),
+    ({"eval_method": "behavior", "scenario": {"prompt": "q"}, "expected_trajectory": [" "]}, False),
+])
+def test_gate_offline(case, ok):
+    assert gate_offline(case)[0] is ok
+
+
+def test_product_set_passes_the_new_gates():
+    """Every shipped product case already meets the two gates a new case must pass."""
+    import yaml
+    backend = Path(__file__).resolve().parent.parent
+    cases = yaml.safe_load((backend / "templates/eval/golden_set.yaml").read_text())["cases"]
+    bad = [(c["id"], g(c)[1]) for c in cases for g in (gate_dimension, gate_offline) if not g(c)[0]]
+    assert not bad, bad
