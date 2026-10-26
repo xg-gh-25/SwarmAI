@@ -258,7 +258,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                             {"degraded": bool, "code_trees": dict, "patch_ids": dict}),
     # TEST changed the code: the run goes back to REVIEW for an incremental review
     # (S6-2, design usable-by-anyone §3.3.3); the engine appends it, never the agent
-    "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str}),
+    # doc_paths: repo -> the doc-class paths (``.md/.txt/.rst``) changed since the last
+    # reviewed tree when ONLY those changed: the engine completed that REVIEW itself
+    # (design 2026-10-26-pipeline-review-closure §5.2 point 1)
+    "review_reopen": _spec("cli", ("ordinal",), None, {"reason": str}, {"doc_paths": dict}),
     "gate0_exhausted": _spec("cli", ("ordinal",), None, {"reason": str}),
     # what THINK / PLAN were given when EVALUATE completed (run-knowledge §3.6.3): the
     # ids knowledge_refs are checked against, and the DDD entries REFLECT dedups with;

@@ -2157,17 +2157,31 @@ class RunEngine:
             # TEST changed the code (S6-2, §3.3.3): back to REVIEW for an incremental
             # review of what changed; past the cap the attempt fails instead
             if state.get("review_reopens", 0) < lifecycle.REVIEW_REOPEN_CAP:
+                # only doc-class files changed since the last reviewed tree: the
+                # incremental review would hand out nothing, so the engine completes
+                # REVIEW itself and TEST goes on with the report it was given (design
+                # 2026-10-26-pipeline-review-closure §5.2 point 1; LG-1 is unchanged)
+                doc_paths = (self._doc_paths_since_review(context)
+                             if not context.run.get("unreviewed") else None)
+                payload: dict[str, Any] = {"reason": "the code changed in TEST"}
+                if doc_paths:
+                    payload = {"reason": "only doc-class files changed in TEST",
+                               "doc_paths": doc_paths}
                 self.store.append_new(
                     writer=self.authority.writer("cli"), kind="review_reopen", at=_now(),
-                    ordinal=NEXT, payload={"reason": "the code changed in TEST"})
-                self._settle(); self.write_projection()
-                return {"ok": False, "reopened": "review", "state": self.projection(),
-                        "error": "the code changed after REVIEW: the run is back in "
-                                 "REVIEW; run review-start for an incremental review"}
-            self.record_cap_exceeded("review_reopen", stage="test",
-                                     attempt=self._next_attempt(stage))
-            forced = {"TS-1": "the code changed after REVIEW and the run already went "
-                              f"back to REVIEW {lifecycle.REVIEW_REOPEN_CAP} times"}
+                    ordinal=NEXT, payload=payload)
+                self._settle()
+                if not doc_paths or not self._complete_review_without_experts():
+                    self.write_projection()
+                    return {"ok": False, "reopened": "review", "state": self.projection(),
+                            "error": "the code changed after REVIEW: the run is back in "
+                                     "REVIEW; run review-start for an incremental review"}
+                context = self.check_context()      # REVIEW done; TEST goes on
+            else:
+                self.record_cap_exceeded("review_reopen", stage="test",
+                                         attempt=self._next_attempt(stage))
+                forced = {"TS-1": "the code changed after REVIEW and the run already went "
+                                  f"back to REVIEW {lifecycle.REVIEW_REOPEN_CAP} times"}
         result = complete_stage(self.store, profile=profile, stage=stage,
                                 variant=variant, context=context, at=_now(),
                                 attempt=self._next_attempt(stage), forced=forced)
@@ -2190,6 +2204,44 @@ class RunEngine:
         if design:
             out["knowledge_design"] = design
         return out
+
+    def _doc_paths_since_review(self, context: checks.CheckContext) -> dict[str, list[str]]:
+        """repo -> the paths changed between the last tree a review saw and now, every
+        one doc-class (the incremental review's own rule left nothing to review)."""
+        out: dict[str, list[str]] = {}
+        last = context.run.get("last_reviewed_trees") or {}
+        for name, root in self.effective_repos().items():
+            before, now = last.get(name), context.run["code_trees"].get(name)
+            if not before or not now or before == now:
+                continue
+            paths = sorted(p for p in _git(root, "diff", "--name-only", "--no-renames",
+                                           before, now).splitlines() if p)
+            if paths:
+                out[name] = paths
+        return out
+
+    def _complete_review_without_experts(self) -> bool:
+        """Complete the REVIEW a doc-only TEST change reopened, with the normal checks
+        (RV-4 passes: nothing to review), recording the new patch id. False when a
+        check does not pass: the agent then runs REVIEW as usual."""
+        context = self.check_context()
+        profile = self.contract["profile"]
+        result = complete_stage(self.store, profile=profile, stage="review",
+                                variant=lifecycle.document_variant(profile, "review"),
+                                context=context,
+                                at=_now(), attempt=self._next_attempt("review"))
+        self._settle()
+        if not result["passed"]:
+            return False
+        self.store.append_new(
+            writer=self.authority.writer("cli"), kind="stage_complete", at=_now(),
+            stage="review", attempt=result["attempt"],
+            payload={"stage_attempt_event_id": result["stage_attempt_event_id"],
+                     "code_trees": {k: v for k, v in context.run["code_trees"].items() if v},
+                     "patch_ids": dict(context.run["patch_ids"])})
+        self._settle()
+        self._write_review_documents()
+        return True
 
     @_one_operation
     def report_tests(self, artifact: Mapping[str, Any]) -> dict[str, Any]:

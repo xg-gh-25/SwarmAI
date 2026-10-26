@@ -220,6 +220,18 @@ def _answer_sources(event_rows) -> dict[str, int]:
     return out
 
 
+def _doc_paths_not_reviewed(event_rows) -> dict[str, list[str]]:
+    """repo -> the paths of every review_reopen the engine closed itself (cli only)."""
+    out: dict[str, set[str]] = {}
+    for event in event_rows:
+        payload = event.get("payload") or {}
+        if event.get("kind") == "review_reopen" and event.get("producer", "cli") == "cli" \
+                and isinstance(payload.get("doc_paths"), Mapping):
+            for repo, paths in payload["doc_paths"].items():
+                out.setdefault(str(repo), set()).update(str(p) for p in paths or ())
+    return {repo: sorted(paths) for repo, paths in sorted(out.items())}
+
+
 def _validation_lines(event_rows) -> list[str]:
     from core.run_protocol.validation_report import report_lines
     return report_lines(event_rows)
@@ -475,6 +487,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                # files the landing's code tree took in only because they were untracked
                # in the worktree (shown in REPORT; no verdict reads it)
                "untracked_in_delivery": dict(untracked) if untracked else None,
+               # doc-class paths a TEST change touched that no review was sent (the
+               # engine completed that REVIEW itself, review-closure §5.2 point 1)
+               "doc_paths_not_reviewed": _doc_paths_not_reviewed(event_rows),
                "kept_lessons": [{"id": row.get("id"), "statement": row.get("statement")}
                                 for row in lessons if isinstance(row, Mapping)
                                 and (row.get("outcome") or {}).get("status") == "kept_in_run"],
@@ -693,6 +708,12 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                   for repo, cmd in skipped[:50]]
         if len(skipped) > 50:
             lines.append(f"- {len(skipped) - 50} more in run_audit.json")
+    doc_only = details.get("doc_paths_not_reviewed") or {}
+    if doc_only:
+        lines += ["", "## Doc-class files changed after REVIEW, not sent to a review", ""]
+        lines += [f"- {_text(repo, 80)}: " + ", ".join(_text(p, 200) for p in paths[:20])
+                  + (f" (+{len(paths) - 20} more)" if len(paths) > 20 else "")
+                  for repo, paths in doc_only.items()]
     untracked = details.get("untracked_in_delivery") or {}
     if untracked.get("files"):
         lines += ["", "## Files delivered without being added to git", "",
