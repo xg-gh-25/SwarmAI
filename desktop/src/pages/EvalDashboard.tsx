@@ -2400,6 +2400,7 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
   const [form, setForm] = useState({
     id: '',
     title: '',
+    purpose: '',
     category: categories[0] || 'compliance',
     dimension: 'compliance',
     evaluators: 'file_contains',
@@ -2423,6 +2424,9 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
     createCase.mutate({
       id: form.id,
       title: form.title,
+      // One sentence in the language it was written in (en or zh); the backend
+      // rejects a new case without it.
+      purpose: { [/[\u3400-\u9fff]/.test(form.purpose) ? 'zh' : 'en']: form.purpose.trim() },
       category: form.category,
       dimension: form.dimension,
       evaluators: [form.evaluators],
@@ -2469,6 +2473,17 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="Brief description of expected behavior"
               required
+              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
+            />
+          </label>
+          <label className="block">
+            <span className="text-meta text-[var(--color-text-muted)] uppercase">Purpose</span>
+            <input
+              value={form.purpose}
+              onChange={(e) => setForm({ ...form, purpose: e.target.value })}
+              placeholder="What this protects, and what breaks for you if it fails"
+              required
+              maxLength={200}
               className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-small"
             />
           </label>

@@ -28,6 +28,12 @@ from pathlib import Path
 PRODUCT_ORIGIN = "product"
 PRIVATE_ORIGIN = "private"
 
+# 宁缺毋滥 (design 2026-10-26-eval-as-product §3.2): the product set stays at or
+# below PRODUCT_CAP; product + a user's private cases stay at or below TOTAL_CAP
+# (add_case refuses past it — retire a case first).
+PRODUCT_CAP = 50
+TOTAL_CAP = 80
+
 
 def product_golden_set_path() -> Path:
     """The product set shipped with this backend (``_MEIPASS`` when packaged,

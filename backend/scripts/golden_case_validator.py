@@ -160,6 +160,30 @@ def gate_schema(case: dict) -> tuple[bool, list[str]]:
     return (not errs, errs)
 
 
+PURPOSE_MAX_CHARS = 200
+
+
+def gate_purpose(case: dict, require_both: bool = False) -> tuple[bool, list[str]]:
+    """A case says in plain words what it protects and what breaks for the user if
+    it fails (design 2026-10-26-eval-as-product §3.2): ``purpose: {en: ..., zh: ...}``.
+    A user's own case needs at least one language; a product case (require_both)
+    needs both. Each is at most PURPOSE_MAX_CHARS."""
+    purpose = case.get("purpose")
+    if not isinstance(purpose, dict):
+        return False, ["purpose: missing — say in one sentence what this case protects "
+                       "and what breaks for the user if it fails ({en: ..., zh: ...})"]
+    errs = []
+    texts = {lang: (purpose.get(lang) or "").strip() for lang in ("en", "zh")}
+    present = [lang for lang, t in texts.items() if t]
+    if require_both:
+        errs += [f"purpose.{lang}: missing" for lang, t in texts.items() if not t]
+    elif not present:
+        errs.append("purpose: needs an en or zh sentence")
+    errs += [f"purpose.{lang}: longer than {PURPOSE_MAX_CHARS} characters"
+             for lang, t in texts.items() if len(t) > PURPOSE_MAX_CHARS]
+    return (not errs, errs)
+
+
 def _verif_key(case: dict) -> str:
     v = case.get("verification", {}) or {}
     return f"{v.get('file','')}|{v.get('grep','')}|{v.get('command','')}|{v.get('expected_contains','')}"
@@ -352,6 +376,8 @@ def validate_case(case: dict, existing: list[dict], for_public: bool,
     if not grandfathered:
         g5 = gate_refs(case); report["refs"] = g5
         gates.append(g5)
+        g6 = gate_purpose(case, require_both=for_public); report["purpose"] = g6
+        gates.append(g6)
     if for_public:
         gp = privacy_scan(case); report["privacy"] = gp
         gates.append(gp)

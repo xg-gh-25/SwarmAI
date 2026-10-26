@@ -108,7 +108,7 @@ def test_service_keeps_product_cases_read_only(fresh_ws):
 
     svc.add_case({"id": "MY_LLM_CASE", "category": "decision", "dimension": "judgment_quality",
                   "evaluators": ["goal_success"], "affected_by": [], "eval_method": "llm",
-                  "title": "mine"})
+                  "title": "mine", "purpose": {"en": "my own check"}})
     private = yaml.safe_load((fresh_ws / "Eval" / "golden_set.private.yaml").read_text())
     assert [c["id"] for c in private["cases"]] == ["MY_LLM_CASE"]
     assert "_origin" not in private["cases"][0]
@@ -133,5 +133,6 @@ def test_service_without_a_workspace_writes_nothing(tmp_path, monkeypatch):
     svc = EvalService(workspace_root=None)
     with pytest.raises(RuntimeError, match="no workspace"):
         svc.add_case({"id": "X", "category": "decision", "dimension": "judgment_quality",
-                      "evaluators": ["goal_success"], "affected_by": [], "eval_method": "llm"})
+                      "evaluators": ["goal_success"], "affected_by": [], "eval_method": "llm",
+                      "purpose": {"en": "x"}})
     assert not any(tmp_path.iterdir()), "the no-workspace service created files"

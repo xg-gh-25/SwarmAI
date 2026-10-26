@@ -43,6 +43,9 @@ class CreateCaseRequest(BaseModel):
     category: str
     dimension: str
     title: str = ""
+    # {en: ..., zh: ...}: what the case protects and what breaks if it fails.
+    # add_case rejects a new case without one (eval-as-product §3.2).
+    purpose: dict = Field(default_factory=dict)
     level: str = "session"
     source: str = ""
     affected_by: list[str] = Field(default_factory=list)
@@ -55,6 +58,7 @@ class CreateCaseRequest(BaseModel):
 
 class UpdateCaseRequest(BaseModel):
     title: Optional[str] = None
+    purpose: Optional[dict] = None
     category: Optional[str] = None
     dimension: Optional[str] = None
     level: Optional[str] = None

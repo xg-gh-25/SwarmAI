@@ -98,6 +98,7 @@ class TestAddCase:
     def test_add_case_success(self, svc):
         new_case = {
             "id": "GS003",
+            "purpose": {"en": "test case"},
             "category": "compliance",
             "dimension": "compliance",
             "level": "session",
@@ -119,6 +120,7 @@ class TestAddCase:
     def test_add_case_duplicate_id_fails(self, svc):
         duplicate = {
             "id": "GS001",  # already exists
+            "purpose": {"en": "test case"},
             "category": "compliance",
             "dimension": "compliance",
             "title": "Duplicate",
@@ -145,6 +147,7 @@ class TestAddCase:
         (ctx / "STEERING.md").write_text("### 1. Some rule\nbody\n")
         bad = {
             "id": "GS_DRIFT", "category": "compliance", "dimension": "compliance",
+            "purpose": {"en": "test case"},
             "title": "Drifted ref", "eval_method": "llm",
             "evaluators": ["goal_success"], "affected_by": ["STEERING.R1"],
             "scenario": {"turns": [{"input": "x"}]},
@@ -159,6 +162,7 @@ class TestAddCase:
         (ctx / "AGENT.md").write_text("R1. **Pipeline is mandatory** for all changes.\n")
         good = {
             "id": "GS_RESOLVE", "category": "compliance", "dimension": "compliance",
+            "purpose": {"en": "test case"},
             "title": "Resolvable ref", "eval_method": "llm",
             "evaluators": ["goal_success"], "affected_by": ["AGENT.R1"],
             "scenario": {"turns": [{"input": "x"}]},
@@ -169,6 +173,7 @@ class TestAddCase:
     def test_add_case_persists_to_disk(self, svc, eval_workspace):
         new_case = {
             "id": "GS004",
+            "purpose": {"en": "test case"},
             "category": "recall",
             "dimension": "factual_accuracy",
             "level": "session",
@@ -335,6 +340,7 @@ class TestTriggerRun:
         assert svc.behavior_case_count() == 0
         svc.add_case({
             "id": "GS_BEH", "category": "compliance", "dimension": "compliance",
+            "purpose": {"en": "test case"},
             "title": "A behavior case", "eval_method": "behavior",
             "evaluators": ["goal_success"], "affected_by": ["AGENT.md"],
             "scenario": {"turns": [{"input": "x"}]},
@@ -598,6 +604,7 @@ class TestPersistCrossProcessLock:
         def add(case_id):
             svc.add_case({
                 "id": case_id,
+                "purpose": {"en": "test case"},
                 "category": "compliance",
                 "dimension": "compliance",
                 "level": "session",

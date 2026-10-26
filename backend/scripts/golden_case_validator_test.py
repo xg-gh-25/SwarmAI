@@ -20,6 +20,8 @@ def _ok_case(cid="GS_NEW", **over):
         # default and need the field present.
         "verification": {"file": "backend/core/x.py", "grep": "class Foo",
                          "negative_command": "grep -q 'class Foo' /dev/null"},
+        # A new case says what it protects; PROMOTE (for_public) needs both languages.
+        "purpose": {"en": "Foo exists.", "zh": "Foo 存在。"},
     }
     c.update(over)
     return c
@@ -237,6 +239,7 @@ def test_cli_main_exits_zero_on_clean_public_pass(tmp_path):
     case = {
         "id": "GS_CLI_SMOKE", "category": "recall", "dimension": "capability",
         "eval_method": "programmatic",
+        "purpose": {"en": "Resume fills its budget.", "zh": "恢复上下文能填满预算。"},
         "affected_by": ["backend/core/context_injector.py"],
         "evaluators": ["canary_pass"],
         "verification": {

@@ -7,10 +7,9 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.golden_set_store import product_golden_set_path  # noqa: E402
-from scripts.golden_case_validator import _is_gate_eligible, compute_case_stamp  # noqa: E402
+from core.golden_set_store import PRODUCT_CAP, product_golden_set_path  # noqa: E402
+from scripts.golden_case_validator import _is_gate_eligible, compute_case_stamp, gate_purpose  # noqa: E402
 
-PRODUCT_CAP = 50
 # Things only one machine, one user or one source checkout has.
 _INSTANCE = re.compile(r"/Users/|Desktop/|\.venv/|cd backend|python backend/|Projects/|\.context/"
                        r"|SwarmAI-Workspace|gawan", re.I)
@@ -26,11 +25,8 @@ def test_product_set_stays_small():
 
 def test_every_case_says_why_it_exists_in_both_languages():
     for c in _cases():
-        purpose = c.get("purpose") or {}
-        for lang in ("en", "zh"):
-            text = (purpose.get(lang) or "").strip()
-            assert text, f"{c['id']}: purpose.{lang} missing"
-            assert len(text) <= 200, f"{c['id']}: purpose.{lang} too long"
+        ok, errs = gate_purpose(c, require_both=True)
+        assert ok, f"{c['id']}: {errs}"
 
 
 def test_no_case_depends_on_one_machine_or_checkout():

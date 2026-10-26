@@ -415,8 +415,9 @@ class EvalService:
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
 
+        from core.golden_set_store import TOTAL_CAP
         from scripts.golden_case_validator import (
-            _is_gate_eligible, gate_teeth, gate_refs, compute_case_stamp,
+            _is_gate_eligible, gate_teeth, gate_refs, gate_purpose, compute_case_stamp,
         )
         # Anti-drift (C044 BLOCKER 2): every dotted ref (MEMORY./STEERING./AGENT./
         # SOUL./EVOLUTION.) MUST resolve to non-empty content, else the case silently
@@ -426,6 +427,9 @@ class EvalService:
         ok, errs = gate_refs(case_data, root=self._workspace_root)
         if not ok:
             raise ValueError(f"Case rejected (refs drift): {'; '.join(errs)}")
+        ok, errs = gate_purpose(case_data)
+        if not ok:
+            raise ValueError(f"Case rejected: {'; '.join(errs)}")
         if _is_gate_eligible(case_data):
             ok, errs = gate_teeth(case_data, grandfathered=False)
             if not ok:
@@ -438,6 +442,12 @@ class EvalService:
             case_id = case_data["id"]
             if any(c.get("id") == case_id for c in self._cases):
                 raise ValueError(f"Case '{case_id}' already exists")
+            live = sum(1 for c in self._cases if c.get("tier") != "archived")
+            if live >= TOTAL_CAP:
+                raise ValueError(
+                    f"The golden set already has {live} cases (limit {TOTAL_CAP}). "
+                    f"Retire a case before adding one."
+                )
 
             self._cases.append(case_data)
             self._persist_golden_set()
