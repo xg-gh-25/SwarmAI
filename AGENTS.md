@@ -505,8 +505,13 @@ there blocks a run's `merge --ff-only` landing. All three happened on 2026-10-19
   BUILD and TEST end with the agent's own validation report on the current tree (BX-3,
   TS-1); for this repo, `backend/scripts/swarm_select_tests.py` prints which backend tests
   and `validations.json` checks a change needs. An ambiguous request is abandoned and
-  re-run as trivial. A small change (at most 20 non-test source lines, no new code file, no
-  sensitive path) dispatches no review expert; its report and landing checks still run.
+  re-run as trivial. Which review experts a run dispatches is decided by
+  `core/run_protocol/review.py` `reviewers()`, called from `engine.py` at REVIEW:
+  `correctness` when the change has at least 50 non-test source lines (`.md`/`.txt`/`.rst`
+  do not count) or a row of the repo's `.swarmai/review.md` triggers (and whenever those
+  rows cannot be read); `security` when a risk is declared (review.md's `security:` line,
+  the BUILD report's `risk`, or a design with security boundaries). A change with none of
+  these dispatches no expert; its report and landing checks still run.
 - Every agent (SwarmAI app sessions, Claude Code, Kiro, Kiro Crew, Cursor, Codex) does it
   the same way:
 
