@@ -15,7 +15,7 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 1. **准入不问"该不该放在这里"。** 共用的 LLM 判官只检查一条内容是否具体、能否执行，不检查它属不属于这个存储。
    所以每轮都会注入的 MEMORY 里，有一半以上是只和某个项目有关的条目。
-2. **写入者能绕过准入。** DDD 最大的写入者 REFLECT（592 条）直接写入，跳过了准入；还有好几个 skill 和
+2. **写入者能绕过准入。** DDD 最大的写入路径 REFLECT（标为 auto-cultivated 的 592 条）直接写入，跳过了准入；还有好几个 skill 和
    编辑器接口也能直接写。
 3. **"用过没有"这个信号是死的。** `ref` 字段从来没有生产代码去加。MEMORY 87 条全是 `ref:0`，
    DDD 也基本如此。所有退出决策（衰减、归档）都只能按时间和类型来判断。
@@ -40,6 +40,69 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 | Knowledge | 各目录由谁写、按什么条件写；目录统计；backflow 写的 Note 抽 15 篇判断价值；10 月的中途 checkpoint |
 
 同时用到前面读取侧回放和盲评的数据：库里 21062 个 chunk、约 3000 个打过标签的命中。
+
+## 2. 发现
+
+### 2.1 Memory（每轮整份注入）
+
+| 实测 | |
+|---|---|
+| live MEMORY.md 的 97 条语义条目（87 条 parser 可见 + 10 条 Open Threads） | 该留 31（34% 字符）· **只关某个项目、该进 DDD 51（57%）** · 该归档 3 · 和 steering/SOUL/AGENT 重复 12 |
+| `ref` 字段 | 87 条全是 `ref:0`。`bump_references()` 没有生产调用者；会话结束时的生命周期代码明确写着 `bumped = 0`（`context_health_hook.py:1536-1549`） |
+| 能按时间退出的 | 只有 `guideline` / `process` 两类；`decision` / `model` / `principle` / `correction` / `pitfall`、COE、Open Threads、Standing Preferences、EVOLUTION 全部 section 都不受时间影响 |
+| 每周 Memory Health | LLM 只看 MEMORY 前 8K 字符；被判过时的条目**直接删除**，不先归档 |
+
+根因：
+- 共用判官（`ingestion_gate`）的评分标准只问"具体吗、能执行吗、自洽吗"，判断不了的项目背景默认放行。
+  它不问"这条内容是不是跨项目、不依赖查询、大多数会话都用得上"，而这是整份注入的存储唯一该问的问题。
+- 自动蒸馏从 DailyActivity 提升到全局 MEMORY 时，**不先判断它属于哪个项目**。所以 57% 的内容是项目专属的。
+- 绕过准入的写入口：`s_memory-distill` skill 的说明已经过时（段名、阈值、锁、"不删除"的规则都和代码不一致）；
+  `s_persist` / `s_self-evolution` 用 Edit 直接写；两个工作区编辑接口可以不加锁地整文件覆盖。
+
+### 2.2 DDD（按项目注入 section 指针）
+
+| 实测 | |
+|---|---|
+| 写入路径及写入条数（SwarmAI TECH + IMPROVEMENT） | REFLECT 直写（标为 auto-cultivated）**592** · session 结束 writeback 196（大多是旧格式；现在的置信度 0.5 低于 0.7 的阈值，**实际已写不进去**） · DailyActivity 决策/纠正 20 · signal 桥 0 · 来源无法识别 333 |
+| 随机抽 40 条 | 该留 23（57.5%）· 过时 4 · 重复 5 · 不是持久内容（会话流水、会变的数字）8 |
+| 48 次真实 DDD 注入的 101 个指针 | 有用 28.7% · 沾边 32.7% · **噪音 38.6%**；43.8% 的消息至少拿到一个有用指针；项目识别正确 93.8% |
+| 指针指向的 section | 中位 16K 字符，P90 234K；9% 指向已经不存在的 section 名 |
+| 使用信号 | `ref` 没人加；`record_ddd_hit` 只记"最后命中日期"。而且渲染时只输出 `doc § section`，丢掉了 entry 正文，使用记录照样写，所以"命中过"不等于"内容被看到过" |
+
+根因：
+- **REFLECT 新增领域经验时直接调用 `apply_to_ddd`，绕过了 `admission_band`**（`reflect_job.py:231-284`）。
+  它是 DDD 最大的写入路径，却是唯一不过判官的。
+- 人工批准 cultivation 提案也直接写入（`routers/cultivation.py:130-236`）。人工批准可以跳过判官，
+  但现在连去重和路由也一起跳过了。
+- DailyActivity 里的决策和纠正一律归到 SwarmAI，代码注释写着"future: infer"（`context_health_hook.py:961-969`）。
+- 去重只比完全相同的整串文字；TECH 没有自动退出路径；`pitfall` 永远不衰减；
+  矛盾替换时直接删除旧条目（`ddd_cultivation.py:978-1007`）。
+
+### 2.3 Knowledge Library（召回时排名过滤）
+
+| 实测 | |
+|---|---|
+| backflow Note（418 篇，抽 15 篇） | 可复用 6 · **只在原会话里有意义 8** · 和人写的文档重复 1 |
+| backflow 的同内容多份 | 515 组重复 chunk（按日期重复存） |
+| 中途 checkpoint（10 月 20 块，覆盖 15 个会话） | 抽的 10 个会话，**都有完整的会话结束条目**，checkpoint 没有任何独立价值 |
+| Pollinate 的 700 个 chunk | **429 个（61%）来自 `node_modules`** |
+| 版本族（`-v2`、`final`、`r3` 并存） | 至少 24 组，没有"当前版本"这个标记 |
+| DailyActivity | 冒烟探针 23 条（会话已被删除）；一个不属于任何条目的 `## Session Resume` 块 |
+| frontmatter 开头的 chunk | 897 个，约 40% 没有正文；盲评 有用 28%、噪音 38% |
+
+根因：backflow 的准入只看"长度 + 表面标记"，不问内容离开原会话还有没有意义、有没有更权威的文档已经覆盖；
+索引只按目录排除，`node_modules` 这种依赖树会被扫进来；checkpoint 在会话结束条目写入之后没有被替换掉。
+
+### 2.4 三块的共同问题
+
+| 问题 | Memory | DDD | Knowledge |
+|---|---|---|---|
+| 准入不问"该不该在这里" | 判官不问跨项目 | 判官默认放行 | backflow 只看长度 |
+| 写入者绕过准入 | 3 个 skill、2 个编辑接口 | REFLECT、人工批准 | 通用文件接口（人工，可接受） |
+| 路由（放到哪） | 不先判断项目 | DailyActivity 一律 SwarmAI | 自动内容直接进可搜索目录 |
+| 去重 | 只在会话结束时做同 section 的完全相同去重；不和 steering/DDD 比 | 只做完全相同去重 | 按日期重复存 |
+| 使用信号 | `ref` 死了 | `ref` 死了，命中记录多报 | 无 |
+| 退出 | 大部分类型不受时间影响；有直接删除 | TECH 无退出；有直接删除 | 精选目录永不老化；版本族没有当前版标记 |
 
 ## 3. 存储契约
 
@@ -89,14 +152,14 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 ### 4.2 写入者按生产者身份去重（Knowledge）
 
-- **backflow**：同一条 assistant 消息只产出一个 Note，文件名带消息 id，存在就跳过（r1 的 S2）。
+- **backflow**：同一条 assistant 消息只产出一个 Note，文件名带消息 id，存在就跳过。
   同时按契约过判官：内容离开原会话读不懂（进度汇报、review 结论、"暂停等你决定"）就不写；
   已有人写的同主题文档就不写。按审计的样本，15 篇里能留下 6 篇。
 - **checkpoint**：会话结束条目写入时，在同一个锁里删掉这个会话的 checkpoint 块（`upsert_session_block`
   已经按会话和类型定位块）。checkpoint 只在会话没有正常结束时保留，用于崩溃恢复。
-- **已删除的会话**：DailyActivity 和 backflow 两个 hook 开头先查会话是否还在，不在就不写（r1 的 S2）。
+- **已删除的会话**：DailyActivity 和 backflow 两个 hook 开头先查会话是否还在，不在就不写。
 - **DailyActivity 块格式**：`upsert_session_block` 断言块以条目头开头、块内没有 `## `；
-  追查 `## Session Resume` 独立块的写入者（r1 的 S2）。
+  追查 `## Session Resume` 独立块的写入者。
 
 ### 4.3 真实的使用信号
 
@@ -118,7 +181,7 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
   - 正文少于 200 字的命中丢掉；
   - 文档标题在渲染时从 frontmatter 的 `title` 或来源路径取出，显示在来源行上，**不写进 chunk 正文，
     不参与覆盖率计算**；
-  - 内容完全相同的命中先折叠，再取排名名额（r1 的 S4，顺序固定并写测试）。
+  - 内容完全相同的命中先折叠，再取排名名额（顺序固定，写测试）。
 - **索引排除依赖目录**：来源策略里加一条规则，路径中含 `node_modules`、`.venv`、`dist`、`build`
   的文件不进索引。下一次索引同步会把这些派生 chunk 删掉（文件本身不动）。
 - 这一节不重切、不重建索引，所以 prompt 内去重（最近两天的 DailyActivity）、覆盖率门槛、排名名额
