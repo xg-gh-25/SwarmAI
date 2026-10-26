@@ -121,8 +121,12 @@ card. (Built that way, 2026-10-26: the design derived the card's files from
 
 New `canvas_surface` branch for paths under `<app data>/session-worktrees/<name>/<repo>/`:
 take the tree-relative path, reject any dot segment (the `needs_human_review` rule, same
-function), reject `git check-ignore` hits, otherwise `external-diff` with the existing
-diff base. `canvas_noise` stays as it is except that this root is handed to that branch
+function), reject `git check-ignore` hits. (Corrected 2026-10-26, 2da051205: the file then gets
+the kind the same file gets in its main checkout, `needs_human_review._classify_kind`
+with the repo: code and repo docs are `source`, a DDD doc `knowledge`. The first
+version said `external-diff`, which put a native session's repo code under Canvas
+Artifacts and the turn's deliverables; session worktrees are code trees for the
+changes card since 2026-10-26-turn-cards-unified.md §3.4.) `canvas_noise` stays as it is except that this root is handed to that branch
 instead of being dropped. `_owning_tree` / `auto_commit` are not widened.
 
 ### 3.4 By name
