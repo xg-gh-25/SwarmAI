@@ -34,26 +34,24 @@ background-agent card (I), the header dot.
 | B | Pipeline run: `RunResult`, `AttentionCard` ("Not ready to push", "Needs your judgement") | own cards, amber | **not rendered**; one grey run line (§5). Backend blocks unchanged, history untouched |
 | C | Pipeline docs: `DocCard` under a stage, `SummaryDocRow` on the end card | own looks (Show full text / Open, purpose, REVIEW stats, skipped rows) | the product row under the stage row; the run's present docs join the one DELIVERABLES box. Skipped docs and stats are not shown |
 | D | Act cards: AskUserQuestion, permission, escalation | three looks; "Claude needs your input" | one frame (border, primary left bar, header line, body, buttons right); "Swarm needs your decision"; once answered, one grey line |
-| E | Code-changes card look | own rows | same box and row as A, plus `+N −M` and ▸ diff; a COMMITS section |
+| E | Code-changes card look | KiroCrew card (full width, ▸ diff, five-square bar, +/- on the right) | **unchanged**: it keeps its KiroCrew look. (Step 2 first moved it into the product box; Gawan 2026-10-26 rejected that: what changed in code and what files a turn produced are different questions. Reverted in 07f93fcd8.) |
 | F | Code-changes card data after native coding | empty: lands are stamped `turn=none`; session worktrees are not code trees | the gate exports the turn id to the whole command; exact reflog search by turn id; session worktrees are code trees (§3) |
 
 Not changed: which file goes on which card (a file is on one card only), the
 `turn_product` model, the stamp format (`session_landings` builds the landing facts as
 today).
 
-## 2. One row, one box (A, C, E)
+## 2. One row, one box (A, C)
 
-One component family in `TurnCards.tsx`: `ItemBox` (border, radius 10, `w-fit
-max-w-full`, optional header line) and `ItemRow` (badge · name · folder · tail ·
-actions). Every card uses it:
+One component family in `ItemRows.tsx`: `ItemBox` (border, radius 10, `w-full`: the
+content column's width; it was `w-fit` until 07f93fcd8, which made cards narrow; optional
+header line) and `ItemRow` (badge · name · folder · tail · actions). Products and run
+documents use it:
 
 - product file: tail empty, action Copy path; the row and the name open the Canvas
 - remote product: name = action, folder = target, action ↗ when a URL is known
 - pipeline doc: same as a product file (name = `REVIEW.md`, folder = run dir)
-- changed file: tail = `added`/`deleted`/`binary` and `+N −M`; leading ▸ expands the
-  diff below the row (today's on-demand `GET /api/chat/turn-diff`)
-- commit: badge = short sha, name = subject (may truncate: it is not a file name),
-  tail = `→ main` when it is on the checkout's branch, `not on main` otherwise
+- the code-changes card is NOT part of this family: it keeps its KiroCrew look (§1 E)
 
 Name: `whitespace-nowrap shrink-0`. Folder: `shortFolder` (middle cut), `truncate
 shrink-[100]`, full path on hover. If the name alone is wider than the column, the
@@ -268,7 +266,7 @@ Each fix gets a mutation check.
 ## 8. Steps (one ff-merged commit each, no push)
 
 1. Backend §3 + tests 5-12 (incl. 9a, 9b; `pipeline_summary.commits`).
-2. `ItemBox` / `ItemRow`; product rows and changes card (A, E); tests 1-2.
+2. `ItemBox` / `ItemRow`; product rows (A); tests 1-2. (The changes card stays KiroCrew-style.)
 3. Pipeline (B, C, §5, §5.1, `summary_block.audit`); tests 3, 3a, 3b.
 4. Act cards (D); test 4.
 5. Gawan checks light and dark; then spec v6 §8 and `2026-10-25-turn-result-card.md`
