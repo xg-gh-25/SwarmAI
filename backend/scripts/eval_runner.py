@@ -1406,6 +1406,16 @@ _FINAL_TEXT_MAX = 4000
 # The per-case fields a run record keeps beyond status / notes: an offline case's
 # trajectory, expected steps, tool steps and final answer (the drill-down).
 _RECORD_DETAIL = ("observed_trajectory", "expected_check", "steps", "final_text")
+# The two that carry text the agent read or wrote. A product case runs in the shipped
+# fixture workspace, so its text is shipped content; a user's own case runs in their
+# real workspace (MEMORY, USER, project docs) and the run record is a git-tracked file
+# in that workspace, so it keeps only tool names and the expected-step check.
+_RECORD_TEXT_DETAIL = ("steps", "final_text")
+
+
+def _record_detail(r: dict, product: bool) -> dict:
+    return {k: r[k] for k in _RECORD_DETAIL
+            if k in r and (product or k not in _RECORD_TEXT_DETAIL)}
 
 
 def _clip_step(step: str) -> str:
@@ -1967,7 +1977,9 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         results.append(result)
 
     from core.eval_release import decide_release, summarize_dimensions
+    from core.golden_set_store import is_product_case
 
+    product_ids = {c["id"] for c in cases if is_product_case(c)}
     scores = compute_scores(cases, results)
     now = datetime.now(timezone.utc)
 
@@ -1988,7 +2000,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
                 "eval_method": r.get("eval_method", "programmatic"),
                 "duration_ms": r.get("duration_ms", 0),
                 "notes": r.get("notes", ""),
-                **{k: r[k] for k in _RECORD_DETAIL if k in r},
+                **_record_detail(r, r["id"] in product_ids),
             }
             for r in results
         ],

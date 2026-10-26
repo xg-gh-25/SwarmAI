@@ -372,7 +372,8 @@ def _turn_costs(rows: list[tuple[str, str, float]], since: str, until: str | Non
     timestamp, cost_usd)`` in insertion order. ``cost_usd`` is the CLI process's
     running total, so a turn's cost is the increase over the previous row of the
     same session; a lower value means a new process started (its value is that
-    turn's cost). A session's first row has no baseline and is not counted."""
+    turn's cost), and so does a session's first row ever. The rows include each
+    session's last row before the window (``token_cost_rows``) as its baseline."""
     prev: dict[str, float] = {}
     out: list[float] = []
     for sid, ts, cost in rows:
@@ -380,10 +381,9 @@ def _turn_costs(rows: list[tuple[str, str, float]], since: str, until: str | Non
             c = float(cost)
         except (TypeError, ValueError):
             continue
-        if sid in prev:
-            d = c - prev[sid] if c >= prev[sid] else c
-            if d > 0 and str(ts) >= since and (until is None or str(ts) < until):
-                out.append(d)
+        d = c - prev[sid] if sid in prev and c >= prev[sid] else c
+        if d > 0 and str(ts) >= since and (until is None or str(ts) < until):
+            out.append(d)
         prev[sid] = c
     return out
 
@@ -469,7 +469,7 @@ def run_session_quality(
                     trend = _with_trend(trend, entry)
             except Exception as exc:  # noqa: BLE001 — a failed backfill only leaves weeks empty
                 logger.error("session_quality: weekly backfill failed (%s)", exc)
-        trend = _with_trend(trend, _trend_entry(_week_label(now), now.isoformat(),
+        trend = _with_trend(trend, _trend_entry(_week_label(now_local), now.isoformat(),
                                                 scored["checks"], scored["metrics"]))
     state["trend"] = trend
     if not dry_run:

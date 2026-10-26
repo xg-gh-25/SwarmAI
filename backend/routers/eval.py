@@ -13,7 +13,7 @@ from core import executors
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 # Module-scope (not lazy): both /context-health and /context-health/lite use it, and
@@ -34,6 +34,17 @@ router = APIRouter()
 # definitions cleanly (Gate-2 HIGH-2 — was a call-time-safe forward ref; hoisted
 # for legibility). Single source of truth for the source allowlist.
 _ARCHIVE_SOURCES = {"memory", "evolution"}
+
+
+def _json_body(request: Request) -> None:
+    """The endpoints that run a case's commands or store a case accept a JSON body
+    only. A cross-site page can send a body WITHOUT a content type as a "simple"
+    request (no CORS preflight), which FastAPI would still parse as JSON; requiring
+    the header makes the browser preflight it, and the preflight is refused for an
+    origin not on the CORS list."""
+    ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype != "application/json":
+        raise HTTPException(status_code=415, detail="Content-Type must be application/json")
 
 
 # ─── Request Models ──────────────────────────────────────────────────────────
@@ -154,7 +165,7 @@ async def get_judges():
     return await executors.run_nav(get_eval_service().get_judges)
 
 
-@router.post("/calibration")
+@router.post("/calibration", dependencies=[Depends(_json_body)])
 async def record_calibration(req: CalibrationRequest):
     """The owner agrees or disagrees with a low online-judge score."""
     try:
@@ -186,7 +197,7 @@ async def get_run_detail(run_id: str):
 # ─── POST Endpoints (P3 — Mutations) ────────────────────────────────────────
 
 
-@router.post("/golden-set/try")
+@router.post("/golden-set/try", dependencies=[Depends(_json_body)])
 async def try_case(req: CreateCaseRequest):
     """Run every admission check on a case without saving it: the validator gates
     and, for a quick check, a trial run of its command and negative command. Runs
@@ -195,7 +206,7 @@ async def try_case(req: CreateCaseRequest):
     return await executors.run_in("subprocess", svc.try_case, req.model_dump(exclude_none=True))
 
 
-@router.post("/golden-set")
+@router.post("/golden-set", dependencies=[Depends(_json_body)])
 async def create_case(req: CreateCaseRequest):
     """Create one of the user's own cases (full admission, then stamped)."""
     svc = get_eval_service()
@@ -206,7 +217,7 @@ async def create_case(req: CreateCaseRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/golden-set/{case_id}")
+@router.put("/golden-set/{case_id}", dependencies=[Depends(_json_body)])
 async def update_case(case_id: str, req: UpdateCaseRequest):
     """Update an existing golden set case."""
     svc = get_eval_service()

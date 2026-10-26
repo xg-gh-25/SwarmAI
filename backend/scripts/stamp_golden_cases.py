@@ -52,7 +52,13 @@ def stamp_all(svc: EvalService, dry_run: bool = False) -> dict:
             product_stale.append(c.get("id"))
             continue
         if dry_run:
-            stamped.append(c.get("id"))
+            # the same admission, nothing written
+            verdict = svc.try_case(c)
+            if verdict["ok"]:
+                stamped.append(c.get("id"))
+            else:
+                rejected.append({"id": c.get("id"), "reason": "; ".join(
+                    e for chk in verdict["checks"] if not chk["ok"] for e in chk["errors"])[:300]})
             continue
         # update_case re-runs the full admission and stamps only a case that passes
         # it; a case that no longer passes is reported, never stamped.

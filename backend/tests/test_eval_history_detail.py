@@ -61,7 +61,8 @@ def test_the_quick_line_carries_the_days(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_next_full_run", lambda now: None)
     monkeypatch.setattr(svc, "_next_job_fire", lambda job, now: None)
     quick = svc.get_lines(now=datetime(2026, 10, 26, tzinfo=timezone.utc))["quick"]
-    assert quick["days"] == [{k: v for k, v in days[0].items() if k != "extra"}]
+    assert quick["days"] == [{**{k: v for k, v in days[0].items() if k != "extra"},
+                              "error": None, "skipped": None}]
 
 
 def test_list_rows_carry_the_release_tier_and_history_the_dimension_summary(tmp_path, monkeypatch):
@@ -82,3 +83,16 @@ def test_list_rows_carry_the_release_tier_and_history_the_dimension_summary(tmp_
     tiers = {c["id"]: c["release_tier"] for c in svc.get_golden_set()["cases"]}
     assert tiers == {"G": "gate", "R": "red", "W": "watch"}
     assert svc.get_history()[0]["dimension_summary"] == summary
+
+
+def test_the_newest_run_by_time_owns_the_report_whatever_the_file_name(tmp_path, monkeypatch):
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    hist = tmp_path / "Eval" / "EvalHistory"
+    hist.mkdir(parents=True)
+    early, late = "2026-10-20T03:00:00+00:00", "2026-10-20T05:00:00+00:00"
+    _run(tmp_path, "2026-10-20_scheduled", early, "scheduled", None)          # older name format
+    _run(tmp_path, "2026-10-20_050000_scheduled", late, "scheduled", None)
+    (hist / f"{_local_day(late)}_scheduled.html").write_text("<html></html>")
+    by_id = {r["run_id"]: r for r in EvalService(workspace_root=tmp_path).get_history()}
+    assert by_id["2026-10-20_050000_scheduled"]["report"] == f"{_local_day(late)}_scheduled.html"
+    assert by_id["2026-10-20_scheduled"]["report"] is None

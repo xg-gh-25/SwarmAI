@@ -1386,6 +1386,16 @@ class TestDailyEvalCanary:
             {"passed": 2, "failed": 1, "timeout": 0, "total": 3, "not_run": 0}
         assert [d["date"] for d in days].count(today) == 1
 
+    def test_an_errored_case_is_not_counted_as_not_run(self, hook, workspace):
+        er = _eval_runner_module()
+
+        def outcome(c, t):
+            return {"status": "error" if c["id"] == "GS_E" else "passed", "notes": "x"}
+        with patch.object(er, "evaluate_case", _FakeEval(outcome)):
+            hook._run_daily_canary(workspace, [_canary_case("GS_E"), _canary_case("GS_P")], _deadline=0.0)
+        day = _daily_state(workspace)["days"][-1]
+        assert (day["error"], day["not_run"], day["passed"]) == (1, 0, 1)
+
     def test_lock_prevents_concurrent_daily_runs(self, hook, workspace):
         """An orphaned hook thread holding the tier → the next run skips it."""
         from utils.file_lock import md_lock

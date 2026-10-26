@@ -72,10 +72,20 @@ def test_capture_records_drilldown_and_run_record_keeps_it(monkeypatch, tmp_path
 
     monkeypatch.setattr(er, "evaluate_case", lambda case, root, **kw: dict(result))
     monkeypatch.setattr(er, "compute_code_digest", lambda root: "d")
-    run = er.run_eval({"cases": [_case()]}, "manual", None, tmp_path, include_behavior=True)
+    run = er.run_eval({"cases": [{**_case(), "_origin": "product"}]}, "manual", None, tmp_path,
+                      include_behavior=True)
     rec = run["cases"][0]
     for key in ("observed_trajectory", "expected_check", "steps", "final_text"):
         assert rec[key] == result[key], key
+
+    # A user's own case runs in their real workspace and its record is a git-tracked
+    # file there: the answer and the tool output (what the agent read) stay out.
+    run = er.run_eval({"cases": [{**_case(), "_origin": "private"}]}, "manual", None, tmp_path,
+                      include_behavior=True)
+    rec = run["cases"][0]
+    assert "final_text" not in rec and "steps" not in rec
+    assert rec["observed_trajectory"] == result["observed_trajectory"]
+    assert rec["expected_check"] == result["expected_check"]
 
 
 def test_final_text_is_bounded(monkeypatch):

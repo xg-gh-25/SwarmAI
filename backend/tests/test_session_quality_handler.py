@@ -273,7 +273,11 @@ def test_turn_costs_are_increases_of_the_running_total():
             ("b", "2026-10-20T10:08:00", 9.25),  # +0.25
             ("a", "2026-10-28T10:00:00", 0.9)]   # +0.6, outside the window
     costs = sq._turn_costs(rows, "2026-10-19T00:00:00", "2026-10-26T00:00:00")
-    assert sorted(costs) == [0.25, 0.3, 0.5]
+    # a and b: a first row ever is that turn's cost (the CLI's total starts at 0)
+    assert sorted(costs) == [0.25, 0.3, 0.5, 1.0, 9.0]
+    baseline = [("a", "2026-10-18T10:00:00", 0.8)] + rows   # a's last row before the window
+    assert sorted(sq._turn_costs(baseline, "2026-10-19T00:00:00", "2026-10-26T00:00:00")) == \
+        pytest.approx(sorted([0.2, 0.5, 0.3, 9.0, 0.25]))
 
 
 def test_the_state_carries_turn_metrics_and_the_prompt_version(tmp_path):
@@ -285,7 +289,8 @@ def test_the_state_carries_turn_metrics_and_the_prompt_version(tmp_path):
     state = sq.run_session_quality(sampler=lambda since: {"sessions": sessions}, scorer=_scorer(),
                                    corrections_path=tmp_path / "c.jsonl", state_path=spath, now=NOW,
                                    cost_reader=lambda since: rows)
-    assert state["metrics"] == {"turns": 3, "turn_p50_s": 90, "cost_p50_usd": 0.75}
+    # costs: 1.0 (a's first row ever), 1.0, 0.5
+    assert state["metrics"] == {"turns": 3, "turn_p50_s": 90, "cost_p50_usd": 1.0}
     assert state["judge_prompt_sha"] == JUDGE_PROMPT_SHA
     assert state["trend"][-1]["metrics"] == state["metrics"]
     assert json.loads(spath.read_text())["metrics"] == state["metrics"]
@@ -354,6 +359,29 @@ def test_the_database_returns_cost_rows_in_order(tmp_path):
     assert asyncio.run(db.token_cost_rows("2999-01-01T00:00:00")) == []
 
 
+def test_the_database_adds_each_sessions_baseline_row(tmp_path):
+    from database.sqlite import SQLiteDatabase
+
+    db = SQLiteDatabase(str(tmp_path / "t.db"))
+    asyncio.run(db.initialize())
+
+    import sqlite3
+    con = sqlite3.connect(str(tmp_path / "t.db"))
+    rows = [("warm", "2026-10-10T10:00:00", 1.0), ("warm", "2026-10-11T10:00:00", 2.0),
+            ("warm", "2026-10-20T10:00:00", 2.5), ("cold", "2026-10-11T10:00:00", 4.0),
+            ("new", "2026-10-21T10:00:00", 0.7)]
+    con.execute("DELETE FROM token_usage")
+    con.executemany("INSERT INTO token_usage (session_id, timestamp, cost_usd) VALUES (?, ?, ?)", rows)
+    con.commit()
+    con.close()
+    got = asyncio.run(db.token_cost_rows("2026-10-19T00:00:00"))
+    # warm: its last row before the window + the in-window row; cold has nothing in it
+    assert [(r[0], r[1]) for r in got] == [("warm", "2026-10-11T10:00:00"),
+                                           ("warm", "2026-10-20T10:00:00"),
+                                           ("new", "2026-10-21T10:00:00")]
+    assert sorted(sq._turn_costs(got, "2026-10-19T00:00:00", None)) == [0.5, 0.7]
+
+
 def test_the_default_judge_is_asked_for_the_reason_in_the_users_language(tmp_path, monkeypatch):
     import core.session_scorer as ss
 
@@ -380,3 +408,21 @@ def test_backfilled_weeks_land_in_week_order_before_an_existing_run(tmp_path):
     weeks = [t["week"] for t in state["trend"]]
     assert weeks == sorted(weeks) and weeks[-2:] == ["2026-W43", "2026-W44"]
     assert state["trend"][-2]["rates"] == {"O1_LANGUAGE": 0.5}   # a real run is never overwritten
+
+
+def test_this_weeks_entry_is_labelled_in_local_time(tmp_path, monkeypatch):
+    """The backfill names weeks in local time; this run's entry must too, or near a
+    week boundary it lands on the wrong week."""
+    import time as _time
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    _time.tzset()
+    try:
+        sunday_evening_la = datetime(2026, 11, 2, 3, tzinfo=timezone.utc)  # Sun 1 Nov 19:00 in LA
+        state = sq.run_session_quality(
+            sampler=lambda since: {"sessions": {}}, scorer=_scorer(),
+            corrections_path=tmp_path / "c.jsonl", state_path=tmp_path / "s.json",
+            now=sunday_evening_la, history=_history_of({}, []), cost_reader=lambda s: [])
+        assert state["trend"][-1]["week"] == "2026-W44"   # UTC would say W45
+    finally:
+        monkeypatch.delenv("TZ")
+        _time.tzset()

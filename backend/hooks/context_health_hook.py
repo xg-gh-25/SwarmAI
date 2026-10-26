@@ -653,7 +653,8 @@ class ContextHealthHook:
         still listed (``timeouts``): a hang must not disappear.
 
         ``days`` keeps one entry per day for the last ``_CANARY_DAYS_KEPT`` days
-        (``{date, passed, failed, timeout, total, not_run, verdict}``, today's
+        (``{date, passed, failed, timeout, error, skipped, total, not_run, verdict}``,
+        ``not_run`` = no result yet; today's
         replaced on every write): the Offline Eval tab's day-by-day row.
         """
         ids = [c["id"] for c in cases]
@@ -684,8 +685,8 @@ class ContextHealthHook:
         })
         if state.get("date"):
             day = {"date": state["date"], "passed": n["passed"], "failed": n["failed"],
-                   "timeout": n["timeout"], "total": len(ids),
-                   "not_run": len(ids) - n["passed"] - n["failed"] - n["timeout"],
+                   "timeout": n["timeout"], "error": n["error"], "skipped": n["skipped"],
+                   "total": len(ids), "not_run": len(ids) - len(done),
                    "verdict": state["verdict"]}
             days = [d for d in (state.get("days") or [])
                     if isinstance(d, dict) and d.get("date") != state["date"]]

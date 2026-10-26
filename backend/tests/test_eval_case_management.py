@@ -195,3 +195,70 @@ def test_private_detail_returns_what_the_form_edits(svc):
     d = svc.get_case_detail("OFF_DETAIL")
     for key in ("scenario", "expected_trajectory", "decision_rubric"):
         assert key in d, key
+
+
+def test_an_edit_does_not_overwrite_a_change_made_while_it_was_checked(svc, monkeypatch):
+    svc.add_case(_offline("OFF_RACE"))
+    real = svc._admission
+
+    def slow_admission(case):
+        out = real(case)
+        # another save lands while this one is being checked
+        next(c for c in svc._cases if c["id"] == "OFF_RACE")["title"] = "the other save"
+        return out
+    monkeypatch.setattr(svc, "_admission", slow_admission)
+    with pytest.raises(ValueError, match="changed while it was being checked"):
+        svc.update_case("OFF_RACE", {"decision_rubric": "PASS only if x. FAIL if y."})
+    assert svc.get_case_detail("OFF_RACE")["title"] == "the other save"
+
+
+def test_the_cap_is_rechecked_after_the_admission(svc, monkeypatch):
+    import core.golden_set_store as store
+    monkeypatch.setattr(store, "TOTAL_CAP", 2)  # product 1 + this one
+    real = svc._admission
+
+    def racing(case):
+        out = real(case)
+        svc._cases.append({**_offline("OFF_OTHER"), "_origin": "private"})  # a concurrent add
+        return out
+    monkeypatch.setattr(svc, "_admission", racing)
+    with pytest.raises(ValueError, match="limit 2"):
+        svc.add_case(_offline("OFF_CAP"))
+    assert svc.get_case_detail("OFF_CAP") is None
+
+
+def test_assertions_read_back_so_an_edit_does_not_wipe_them(svc):
+    svc.add_case({**_offline("OFF_ASSERT"), "assertions": ["reply_cjk"]})
+    assert svc.get_case_detail("OFF_ASSERT")["assertions"] == ["reply_cjk"]
+
+
+def test_write_endpoints_take_json_only(svc, monkeypatch):
+    """A cross-site page can POST a body with no content type without a CORS
+    preflight; those endpoints run or store commands, so they refuse it."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import json as _json
+    import routers.eval as eval_router
+
+    monkeypatch.setattr(eval_router, "get_eval_service", lambda: svc)
+    app = FastAPI()
+    app.include_router(eval_router.router, prefix="/api/eval")
+    client = TestClient(app)
+    raw = _json.dumps(_quick("QC_CSRF")).encode()
+    for method, url in (("POST", "/api/eval/golden-set/try"), ("POST", "/api/eval/golden-set"),
+                        ("PUT", "/api/eval/golden-set/QC_CSRF"), ("POST", "/api/eval/calibration")):
+        r = client.request(method, url, content=raw, headers={"content-type": "text/plain"})
+        assert r.status_code == 415, (method, url, r.status_code)
+        r = client.request(method, url, content=raw)  # no content type at all
+        assert r.status_code == 415, (method, url, r.status_code)
+    assert svc.get_case_detail("QC_CSRF") is None
+
+
+def test_stamp_dry_run_reports_what_the_real_run_would_reject(svc):
+    from scripts.stamp_golden_cases import stamp_all
+    svc._cases.append({**_quick("QC_STALE", neg_prints="OK"), "_origin": "private",
+                       "validated_by_4gate": "stale"})
+    out = stamp_all(svc, dry_run=True)
+    assert "QC_STALE" not in out["stamped"]
+    assert [r["id"] for r in out["rejected"]] == ["QC_STALE"]
+    assert "trial run failed" in out["rejected"][0]["reason"]

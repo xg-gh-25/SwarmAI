@@ -15,6 +15,7 @@ Serves the Eval Dashboard API with zero-latency reads.
 Cache invalidated on: eval run completion, manual reload.
 """
 
+import copy
 import json
 import logging
 import subprocess
@@ -254,8 +255,10 @@ class EvalService:
         later run that day overwriting it), so the report belongs to the NEWEST run
         of that day and trigger; ``runs`` is newest first."""
         claimed: set = set()
-        out = []
-        for r in runs:
+        names: dict[int, str | None] = {}
+        for i in sorted(range(len(runs)), key=lambda i: str(runs[i].get("triggered_at") or ""),
+                        reverse=True):
+            r = runs[i]
             name = None
             try:
                 day = datetime.fromisoformat(str(r.get("triggered_at")).replace("Z", "+00:00"))
@@ -265,8 +268,8 @@ class EvalService:
                     claimed.add(cand)
             except (TypeError, ValueError):
                 pass
-            out.append(name)
-        return out
+            names[i] = name
+        return [names[i] for i in range(len(runs))]
 
     def get_history(self, limit: int = 20) -> list[dict]:
         """List eval runs sorted by date (newest first)."""
@@ -345,8 +348,8 @@ class EvalService:
         if canary.get("updated_at"):
             quick = {"last_run": canary["updated_at"], "passed": canary.get("passed"),
                      "total": canary.get("total")}
-        days = [{k: d.get(k) for k in ("date", "passed", "failed", "timeout", "total",
-                                       "not_run", "verdict")}
+        days = [{k: d.get(k) for k in ("date", "passed", "failed", "timeout", "error",
+                                       "skipped", "total", "not_run", "verdict")}
                 for d in (canary.get("days") or []) if isinstance(d, dict)][-30:]
         if quick_run and (quick["last_run"] or "") < (quick_run.get("triggered_at") or ""):
             bvt = quick_run.get("bvt") or {}
@@ -567,6 +570,11 @@ class EvalService:
         from jobs.handlers import session_quality as sq
         from scripts import eval_runner as er
 
+        def _shown(template: str) -> str:
+            # str.format's escaped braces as the model receives them; the
+            # {placeholders} stay, they name what is filled in per call
+            return template.replace("{{", "{").replace("}}", "}")
+
         cfg = AppConfigManager.instance()
         live = [c for c in self._cases if c.get("tier") != "archived"]
         judged = [c for c in live if c.get("decision_rubric") or c.get("eval_method") == "llm"]
@@ -580,13 +588,13 @@ class EvalService:
             "gating_judged": sum(1 for c in gating if c in judged),
             "judges": [
                 {"id": "offline_decision", "line": "offline",
-                 "prompt": er.DECISION_JUDGE_PROMPT, "system": er.DECISION_JUDGE_SYSTEM,
+                 "prompt": _shown(er.DECISION_JUDGE_PROMPT), "system": er.DECISION_JUDGE_SYSTEM,
                  "temperature": er.DECISION_JUDGE_TEMPERATURE,
                  "max_tokens": er.DECISION_JUDGE_MAX_TOKENS,
                  "case_ids": sorted(c["id"] for c in judged if c.get("decision_rubric")),
                  "calibration": None},
                 {"id": "online_session", "line": "online",
-                 "prompt": ss.JUDGE_PROMPT, "system": ss.JUDGE_SYSTEM,
+                 "prompt": _shown(ss.JUDGE_PROMPT), "system": ss.JUDGE_SYSTEM,
                  "temperature": ss.JUDGE_TEMPERATURE, "max_tokens": ss.JUDGE_MAX_TOKENS,
                  "sample_cap": sq._SAMPLE_CAP, "low_threshold": sq._LOW_SCORE_THRESHOLD,
                  "prompt_sha": ss.JUDGE_PROMPT_SHA,
@@ -648,7 +656,7 @@ class EvalService:
         "eval_method", "affected_by", "evaluators", "_origin",
         "purpose", "gating", "redline", "verification", "scenario",
         "expected_trajectory", "trajectory_match", "allowed_tools", "decision_rubric",
-        "validated_by_4gate",
+        "assertions", "validated_by_4gate",
     )
 
     def get_case_detail(self, case_id: str) -> Optional[dict]:
@@ -670,7 +678,7 @@ class EvalService:
 
     # A trial run of a quick check (positive + negative command) is capped here so a
     # hung command cannot hold a save; a real run uses the case's own timeout.
-    _TRIAL_TIMEOUT_S = 60
+    _TRIAL_TIMEOUT_S = 20  # per command, the same cap as a manual quick-check run
 
     @staticmethod
     def _with_defaults(case: dict) -> dict:
@@ -762,8 +770,15 @@ class EvalService:
             raise self._rejection("Case rejected", result)
         case["validated_by_4gate"] = result["stamp"]
         with self._data_lock:
+            # re-checked: the admission ran without the lock
             if any(c.get("id") == case["id"] for c in self._cases):
                 raise ValueError(f"Case '{case['id']}' already exists")
+            live = sum(1 for c in self._cases if c.get("tier") != "archived")
+            if live >= TOTAL_CAP:
+                raise ValueError(
+                    f"The golden set already has {live} cases (limit {TOTAL_CAP}). "
+                    f"Delete a case before adding one."
+                )
             self._cases.append(case)
             self._persist_golden_set()
         return case
@@ -779,15 +794,20 @@ class EvalService:
             if case is None:
                 raise ValueError(f"Case '{case_id}' not found")
             self._refuse_product(case)
-            merged = self._with_defaults({**case, **updates})
+            before = copy.deepcopy(case)
+            merged = self._with_defaults({**before, **updates})
         result = self._admission(merged)
         if not result["ok"]:
             raise self._rejection("Update rejected", result)
         merged["validated_by_4gate"] = result["stamp"]
         with self._data_lock:
+            # The admission ran without the lock: write only onto the case it checked.
             case = next((c for c in self._cases if c.get("id") == case_id), None)
             if case is None:
                 raise ValueError(f"Case '{case_id}' not found")
+            self._refuse_product(case)
+            if case != before:
+                raise ValueError(f"Case '{case_id}' changed while it was being checked; try again")
             case.clear()
             case.update(merged)
             self._persist_golden_set()

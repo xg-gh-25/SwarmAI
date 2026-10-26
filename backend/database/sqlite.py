@@ -4520,15 +4520,21 @@ class SQLiteDatabase(BaseDatabase):
 
     async def token_cost_rows(self, since: str) -> list[tuple[str, str, float]]:
         """``(session_id, timestamp, cost_usd)`` for every row with a cost at or after
-        ``since`` (local time, the column's own format), in insertion order. Online
-        eval scoring (jobs/handlers/session_quality._turn_costs) turns these into
-        per-turn costs: ``cost_usd`` is the CLI process's running total."""
+        ``since`` (local time, the column's own format), plus each such session's last
+        row before ``since``, in insertion order. Online eval scoring
+        (jobs/handlers/session_quality._turn_costs) turns these into per-turn costs:
+        ``cost_usd`` is the CLI process's running total, so the row before the window
+        is the baseline of the session's first turn in it."""
         async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
             cursor = await conn.execute(
-                "SELECT session_id, timestamp, cost_usd FROM token_usage "
-                "WHERE cost_usd IS NOT NULL AND session_id IS NOT NULL AND timestamp >= ? "
+                "SELECT session_id, timestamp, cost_usd FROM token_usage t "
+                "WHERE cost_usd IS NOT NULL AND session_id IS NOT NULL AND (timestamp >= ? "
+                "OR id = (SELECT MAX(b.id) FROM token_usage b WHERE b.session_id = t.session_id "
+                "AND b.cost_usd IS NOT NULL AND b.timestamp < ? AND EXISTS ("
+                "SELECT 1 FROM token_usage w WHERE w.session_id = t.session_id "
+                "AND w.cost_usd IS NOT NULL AND w.timestamp >= ?))) "
                 "ORDER BY id",
-                (since,),
+                (since, since, since),
             )
             return [(r[0], r[1], r[2]) for r in await cursor.fetchall()]
 
