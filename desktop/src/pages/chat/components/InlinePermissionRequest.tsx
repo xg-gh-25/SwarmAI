@@ -3,7 +3,11 @@
  * directly in the chat stream (not a modal popup).
  *
  * Follows the same inline pattern as AskUserQuestion: appears as a
- * content block within the assistant message, scoped to the tab/session.
+ * content block within the assistant message, scoped to the tab/session, in the one
+ * frame every card that waits on the user uses (ActCard; design
+ * 2026-10-26-turn-cards-unified.md §1 D): "Swarm needs your approval", the timeout in
+ * the header, Deny / Approve on the right. Every other state is one grey line that
+ * keeps the command and what happened to it.
  *
  * States:
  * 1. Pending — command + reason + Deny/Approve buttons + countdown
@@ -26,6 +30,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { tf } from '../tf';
+import { ActDone, ActFrame } from '../../../components/common/ActCard';
 
 /** Display timeout in ms — mirrors backend PERMISSION_ANSWER_TIMEOUT_SECONDS (4 h).
  *  Counted from when this card mounted, so it can only run out AFTER the backend's. */
@@ -114,99 +119,57 @@ export function InlinePermissionRequest({
     return `${sec}s`;
   };
 
-  // Decided state — compact display
+  // Decided: one grey line that keeps the decision (the command and what was decided)
   if (effectiveDecision) {
     const isApproved = effectiveDecision === 'approve';
     return (
-      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md my-1 ${
-        isApproved
-          ? 'bg-green-500/10 border border-green-500/20'
-          : 'bg-red-500/10 border border-red-500/20'
-      }`}>
-        <span className={`material-symbols-outlined icon-xs ${isApproved ? 'text-green-500' : 'text-red-500'}`}>
-          {isApproved ? 'check_circle' : 'cancel'}
-        </span>
-        <span className="text-sm text-[var(--color-text-muted)]">
-          <code className="text-xs bg-[var(--color-hover)] px-1 py-0.5 rounded">{command.length > 60 ? command.slice(0, 60) + '...' : command}</code>
-        </span>
-        <span className={`ml-auto text-xs font-medium ${isApproved ? 'text-green-500' : 'text-red-500'}`}>
-          {isApproved ? 'Approved' : 'Denied'}
-        </span>
-      </div>
+      <ActDone testId="permission-done" icon={isApproved ? 'check' : 'close'}
+        label={isApproved ? tf(t, 'chat.permission.approved', 'Approved') : tf(t, 'chat.permission.denied', 'Denied')}>
+        <code title={command} className="font-mono text-[12px] text-[var(--color-text)]">{short(command)}</code>
+      </ActDone>
     );
   }
 
-  // Read-only (History preview) with no decision recorded: the request was
-  // still pending when the session ended. Render a muted, non-actionable shell
-  // — never live-looking Deny/Approve buttons or a running countdown.
-  // Expired (the display countdown ran out with no decision) renders the same
-  // muted shell with a "Timed out" label: no decision was sent from here.
+  // Read-only (History preview) with no decision recorded, expired (the display
+  // countdown ran out: no decision was sent from here), no longer pending, or not live
+  // in this tab: the same grey line, never live-looking Deny/Approve buttons.
   if (readOnly || expired || gone || !isPending) {
     return (
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md my-1 bg-[var(--color-hover)] border border-[var(--color-border)]">
-        <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">{expired ? 'timer_off' : 'shield'}</span>
-        <span className="text-sm text-[var(--color-text-muted)]">
-          <code className="text-xs bg-[var(--color-bg)] px-1 py-0.5 rounded">{command.length > 60 ? command.slice(0, 60) + '...' : command}</code>
-        </span>
-        <span className="ml-auto text-xs font-medium text-[var(--color-text-muted)]">
-          {expired
-            ? tf(t, 'chat.permission.timedOut', 'Timed out')
-            : gone
-              ? tf(t, 'chat.permission.noLongerPending', 'No longer pending')
-              : tf(t, 'chat.permission.awaiting', 'Awaiting decision')}
-        </span>
-      </div>
+      <ActDone testId="permission-done" icon={expired ? 'timer_off' : 'shield'}
+        label={expired
+          ? tf(t, 'chat.permission.timedOut', 'Timed out')
+          : gone
+            ? tf(t, 'chat.permission.noLongerPending', 'No longer pending')
+            : tf(t, 'chat.permission.awaiting', 'Awaiting decision')}>
+        <code title={command} className="font-mono text-[12px] text-[var(--color-text)]">{short(command)}</code>
+      </ActDone>
     );
   }
 
-  // Pending state — full display with action buttons
+  // Waiting: the one frame (ActCard), the timeout in the header, Deny / Approve right
   return (
-    <div className="bg-[var(--color-card)] border border-amber-500/30 rounded-lg overflow-hidden my-2">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border-b border-amber-500/20">
-        <span className="material-symbols-outlined icon-xs text-amber-500">shield</span>
-        <span className="text-sm font-medium text-[var(--color-text)]">{tf(t, 'chat.permission.title', 'Permission Required')}</span>
-        {showCountdown && (
-          <span className="ml-auto text-xs text-amber-400 font-mono tabular-nums">
-            {formatRemaining(remainingSec)}
-          </span>
-        )}
+    <ActFrame testId="permission-request" icon="shield" title={tf(t, 'chat.permission.title', 'Swarm needs your approval')}
+      meta={showCountdown
+        ? formatRemaining(remainingSec)
+        : `${tf(t, 'chat.permission.timesOutIn', 'Times out in')} ${formatRemaining(remainingSec)}`}
+      footer={(
+        <>
+          <button type="button" onClick={handleDeny} className="btn-sm btn-secondary">
+            {tf(t, 'chat.permission.deny', 'Deny')}
+          </button>
+          <button type="button" onClick={handleApprove} className="btn-sm btn-primary">
+            {tf(t, 'chat.permission.approve', 'Approve')}
+          </button>
+        </>
+      )}>
+      <p className="text-[12.5px] text-[var(--color-text-secondary)]">{reason}</p>
+      <div className="rounded-[7px] bg-[var(--color-bg)] px-2.5 py-1.5 font-mono text-[12px]">
+        <span className="select-none text-[var(--color-text-dim)]">$ </span>
+        <code className="break-all whitespace-pre-wrap text-[var(--color-text)]">{command}</code>
       </div>
-
-      {/* Command */}
-      <div className="px-3 py-2 space-y-2">
-        <div className="flex items-start gap-2 text-xs text-[var(--color-text-muted)]">
-          <span className="shrink-0 mt-0.5">{tf(t, 'chat.permission.flagged', 'Flagged:')}</span>
-          <span className="text-amber-400">{reason}</span>
-        </div>
-        <div className="bg-[var(--color-bg)] rounded p-2 font-mono text-xs">
-          <div className="flex items-start gap-2">
-            <span className="text-[var(--color-text-muted)] shrink-0 select-none">$</span>
-            <code className="text-red-400 break-all whitespace-pre-wrap">{command}</code>
-          </div>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-2 px-3 py-2 border-t border-[var(--color-border)]">
-        <button
-          onClick={handleDeny}
-          className="btn-sm btn-danger transition-colors"
-        >
-          <span className="material-symbols-outlined icon-xs">close</span>
-          Deny
-        </button>
-        <button
-          onClick={handleApprove}
-          className="btn-sm btn-success transition-colors"
-        >
-          <span className="material-symbols-outlined icon-xs">check</span>
-          Approve
-        </button>
-        <span className="ml-auto text-[11px] text-[var(--color-text-muted)]">
-          {tf(t, 'chat.permission.timesOutIn', 'Times out in')} {formatRemaining(Math.ceil(remainingMs / 1000))}
-        </span>
-      </div>
-    </div>
+    </ActFrame>
   );
 }
+
+/** A long command cut for the grey line; the full one is its tooltip. */
+const short = (cmd: string) => (cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd);

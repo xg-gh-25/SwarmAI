@@ -1,6 +1,20 @@
+/**
+ * AskUserQuestion — the agent's multiple-choice question, in the one frame every card
+ * that waits on the user uses (ActCard; design 2026-10-26-turn-cards-unified.md §1 D).
+ *
+ * - Waiting: "Swarm needs your decision", each question with its tag, its options as
+ *   ActOption boxes (multi-select ones square), "Other (custom answer)" with a text
+ *   field, and Submit on the right of the footer.
+ * - Answered (the block carries `answers`): one grey line per question that keeps the
+ *   decision: the question, then what was chosen (a multi-select answer split back
+ *   into its picks, a custom answer as typed). No form, no Submit.
+ *
+ * @exports AskUserQuestion (default)
+ */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { AskUserQuestion as AskUserQuestionType } from '../../types';
-import Button from './Button';
+import { ActDone, ActFrame, ActOption } from './ActCard';
 
 interface AskUserQuestionProps {
   questions: AskUserQuestionType[];
@@ -9,9 +23,8 @@ interface AskUserQuestionProps {
   disabled?: boolean;
   /**
    * The user's submitted answers (question text → selected label(s)). When
-   * present, the component renders a compact read-only summary of what was
-   * chosen instead of the interactive (or disabled) form. Sourced from the
-   * persisted block, so it survives tab-switch + reconcile.
+   * present, the component renders the answered lines instead of the form.
+   * Sourced from the persisted block, so it survives tab-switch + reconcile.
    */
   answers?: Record<string, string>;
 }
@@ -23,6 +36,7 @@ export default function AskUserQuestion({
   disabled = false,
   answers: submittedAnswers,
 }: AskUserQuestionProps) {
+  const { t } = useTranslation();
   // Defensive: questions may arrive as undefined/non-array from malformed
   // DB history or SSE events — guard to prevent crash (t.every is not a function).
   const questions = Array.isArray(rawQuestions) ? rawQuestions : [];
@@ -33,23 +47,15 @@ export default function AskUserQuestion({
 
   const handleOptionToggle = (question: string, optionLabel: string, multiSelect: boolean) => {
     if (disabled) return;
-
     setAnswers((prev) => {
       const current = prev[question] || [];
-
       if (multiSelect) {
-        // Toggle for multi-select
-        if (current.includes(optionLabel)) {
-          return { ...prev, [question]: current.filter((o) => o !== optionLabel) };
-        } else {
-          return { ...prev, [question]: [...current, optionLabel] };
-        }
-      } else {
-        // Replace for single-select
-        return { ...prev, [question]: [optionLabel] };
+        return current.includes(optionLabel)
+          ? { ...prev, [question]: current.filter((o) => o !== optionLabel) }
+          : { ...prev, [question]: [...current, optionLabel] };
       }
+      return { ...prev, [question]: [optionLabel] };
     });
-
     // Clear custom input when selecting predefined option
     setShowCustom((prev) => ({ ...prev, [question]: false }));
     setCustomInputs((prev) => ({ ...prev, [question]: '' }));
@@ -57,7 +63,6 @@ export default function AskUserQuestion({
 
   const handleCustomToggle = (question: string) => {
     if (disabled) return;
-
     setShowCustom((prev) => ({ ...prev, [question]: !prev[question] }));
     if (!showCustom[question]) {
       // Clear predefined selections when switching to custom
@@ -65,203 +70,91 @@ export default function AskUserQuestion({
     }
   };
 
-  const handleCustomInputChange = (question: string, value: string) => {
-    if (disabled) return;
-    setCustomInputs((prev) => ({ ...prev, [question]: value }));
-  };
-
   const handleSubmit = () => {
     const finalAnswers: Record<string, string> = {};
-
     questions.forEach((q) => {
       if (showCustom[q.question] && customInputs[q.question]) {
         finalAnswers[q.question] = customInputs[q.question];
       } else {
-        const selected = answers[q.question] || [];
-        finalAnswers[q.question] = selected.join(', ');
+        finalAnswers[q.question] = (answers[q.question] || []).join(', ');
       }
     });
-
     onSubmit(toolUseId, finalAnswers);
   };
 
-  const isComplete = questions.every((q) => {
-    if (showCustom[q.question]) {
-      return !!customInputs[q.question]?.trim();
-    }
-    return (answers[q.question] || []).length > 0;
-  });
+  const isComplete = questions.every((q) => (showCustom[q.question]
+    ? !!customInputs[q.question]?.trim()
+    : (answers[q.question] || []).length > 0));
 
   // Nothing to render — don't show empty shell with a Submit button.
   // (Placed after hooks to comply with Rules of Hooks.)
   if (questions.length === 0) return null;
 
-  // ── Answered state: read-only summary ──────────────────────────────────
-  // Once the user submits, the block carries `submittedAnswers`. Render a
-  // compact summary of WHAT WAS CHOSEN instead of a disabled, selection-less
-  // form (the old bug: a greyed-out shell with a dead Submit and no record of
-  // the answer). Placed after hooks + the empty guard to comply with Rules of
-  // Hooks. Has its own answers → never shows the interactive option grid.
+  // ── Answered: one grey line per question that keeps the decision ───────
   if (submittedAnswers && Object.keys(submittedAnswers).length > 0) {
     return (
-      <div className="bg-[var(--color-card)] border border-primary/20 rounded-lg p-4 my-3">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="material-symbols-outlined icon-xs text-primary">check_circle</span>
-          <span className="font-medium text-[var(--color-text)]">Answered</span>
-        </div>
-        <div className="space-y-2">
-          {questions.map((q, qIndex) => {
-            const chosen = submittedAnswers[q.question];
-            // Multi-select answers are persisted as a ", "-joined string. Split
-            // them back into individual chips so the summary is structurally
-            // faithful to what was chosen. Caveat: an option label that itself
-            // contains the substring ", " would over-split into extra chips —
-            // a cosmetic display-only issue (the answer sent to the backend is
-            // the unsplit string and is unaffected). A fully robust fix would
-            // persist multi-select as a string[]; out of scope for this UX run.
-            const picks = chosen
-              ? q.multiSelect
-                ? chosen.split(', ').filter(Boolean)
-                : [chosen]
-              : [];
-            return (
-              <div key={qIndex} className="flex flex-col gap-1">
-                <p className="text-[var(--color-text-muted)] text-xs">{q.question}</p>
-                {picks.length === 0 ? (
-                  <p className="text-[var(--color-text)] text-sm font-medium">
-                    <span className="text-[var(--color-text-muted)] italic">(no selection)</span>
-                  </p>
-                ) : q.multiSelect ? (
-                  <div className="flex flex-wrap gap-1">
-                    {picks.map((p, i) => (
-                      <span
-                        key={i}
-                        className="text-[var(--color-text)] text-xs font-medium bg-primary/10 border border-primary/20 rounded px-2 py-0.5"
-                      >
-                        {p}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-[var(--color-text)] text-sm font-medium">{picks[0]}</p>
-                )}
-              </div>
-            );
-          })}
-        </div>
+      <div data-testid="ask-answered" className="my-1">
+        {questions.map((q, i) => {
+          const chosen = submittedAnswers[q.question];
+          // Multi-select answers are persisted as a ", "-joined string: split them
+          // back into the picks (an option label holding ", " over-splits; display
+          // only — the answer sent was the unsplit string).
+          const picks = chosen ? (q.multiSelect ? chosen.split(', ').filter(Boolean) : [chosen]) : [];
+          return (
+            <ActDone key={i} label={t('chat.ask.answered', 'Answered')}>
+              {q.question} →{' '}
+              {picks.length === 0
+                ? <span className="italic text-[var(--color-text-dim)]">{t('chat.ask.noSelection', 'no selection')}</span>
+                : picks.map((p, j) => (
+                  <span key={j}>{j > 0 && ', '}<span className="text-[var(--color-text)]">{p}</span></span>
+                ))}
+            </ActDone>
+          );
+        })}
       </div>
     );
   }
 
+  const meta = questions.length === 1 ? questions[0].header : undefined;
   return (
-    <div className="bg-[var(--color-card)] border border-primary/30 rounded-lg p-4 my-3">
-      <div className="flex items-center gap-2 mb-4">
-        <span className="material-symbols-outlined icon-md text-primary">help_outline</span>
-        <span className="font-medium text-[var(--color-text)]">Claude needs your input</span>
-      </div>
-
+    <ActFrame testId="ask-question" icon="help" title={t('chat.ask.title', 'Swarm needs your decision')} meta={meta}
+      footer={(
+        <button type="button" onClick={handleSubmit} disabled={disabled || !isComplete} className="btn-sm btn-primary">
+          {questions.length > 1 ? t('chat.ask.submitMany', 'Submit Answers') : t('chat.ask.submit', 'Submit Answer')}
+        </button>
+      )}>
       {questions.map((q, qIndex) => (
-        <div key={qIndex} className="mb-4 last:mb-0">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="px-2 py-0.5 bg-primary/20 text-primary text-xs rounded">
-              {q.header}
-            </span>
-            {q.multiSelect && (
-              <span className="text-xs text-[var(--color-text-muted)]">(Select multiple)</span>
-            )}
-          </div>
-          <p className="text-[var(--color-text)] text-sm mb-3">{q.question}</p>
-
-          <div className="space-y-2">
-            {(q.options || []).map((option, optIndex) => {
-              const isSelected = (answers[q.question] || []).includes(option.label);
-              const isDisabledByCustom = showCustom[q.question];
-
-              return (
-                <button
-                  key={optIndex}
-                  onClick={() => handleOptionToggle(q.question, option.label, q.multiSelect)}
-                  disabled={disabled || isDisabledByCustom}
-                  className={`w-full text-left p-3 rounded-lg border transition-all ${
-                    isSelected
-                      ? 'border-primary bg-primary/10'
-                      : isDisabledByCustom
-                      ? 'border-[var(--color-border)] bg-[var(--color-bg)] opacity-50 cursor-not-allowed'
-                      : 'border-[var(--color-border)] bg-[var(--color-bg)] hover:border-primary/50'
-                  } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`w-5 h-5 rounded-${q.multiSelect ? 'sm' : 'full'} border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                        isSelected ? 'border-primary bg-primary' : 'border-[var(--color-text-muted)]'
-                      }`}
-                    >
-                      {isSelected && (
-                        <span className="material-symbols-outlined icon-xs text-[var(--color-text)]">
-                          {q.multiSelect ? 'check' : 'circle'}
-                        </span>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-[var(--color-text)] text-sm font-medium">{option.label}</p>
-                      <p className="text-[var(--color-text-muted)] text-xs mt-0.5">{option.description}</p>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-
-            {/* Custom "Other" option */}
-            <div className="pt-2 border-t border-[var(--color-border)]">
-              <button
-                onClick={() => handleCustomToggle(q.question)}
+        <div key={qIndex} className="space-y-1.5">
+          {questions.length > 1 && (
+            <div className="text-[11px] text-[var(--color-text-dim)]">{q.header}</div>
+          )}
+          <p className="text-[13px] text-[var(--color-text)]">
+            {q.question}
+            {q.multiSelect && <span className="ml-1.5 text-[11.5px] text-[var(--color-text-dim)]">{t('chat.ask.multi', '(Select multiple)')}</span>}
+          </p>
+          <div className="space-y-1.5">
+            {(q.options || []).map((option, optIndex) => (
+              <ActOption key={optIndex} label={option.label} description={option.description || undefined}
+                round={!q.multiSelect}
+                selected={(answers[q.question] || []).includes(option.label)}
+                onClick={() => handleOptionToggle(q.question, option.label, q.multiSelect)}
+                disabled={disabled || !!showCustom[q.question]} />
+            ))}
+            <ActOption label={t('chat.ask.other', 'Other (custom answer)')} selected={!!showCustom[q.question]}
+              onClick={() => handleCustomToggle(q.question)} disabled={disabled} />
+            {showCustom[q.question] && (
+              <input
+                type="text"
+                value={customInputs[q.question] || ''}
+                onChange={(e) => !disabled && setCustomInputs((prev) => ({ ...prev, [q.question]: e.target.value }))}
+                placeholder={t('chat.ask.customPlaceholder', 'Enter your custom answer...')}
                 disabled={disabled}
-                className={`w-full text-left p-3 rounded-lg border transition-all ${
-                  showCustom[q.question]
-                    ? 'border-primary bg-primary/10'
-                    : 'border-[var(--color-border)] bg-[var(--color-bg)] hover:border-primary/50'
-                } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                      showCustom[q.question] ? 'border-primary bg-primary' : 'border-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    {showCustom[q.question] && (
-                      <span className="material-symbols-outlined icon-xs text-[var(--color-text)]">circle</span>
-                    )}
-                  </div>
-                  <span className="text-[var(--color-text)] text-sm">Other (custom answer)</span>
-                </div>
-              </button>
-
-              {showCustom[q.question] && (
-                <div className="mt-2 ml-8">
-                  <input
-                    type="text"
-                    value={customInputs[q.question] || ''}
-                    onChange={(e) => handleCustomInputChange(q.question, e.target.value)}
-                    placeholder="Enter your custom answer..."
-                    disabled={disabled}
-                    className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] text-sm placeholder-[var(--color-text-muted)] focus:outline-none focus:border-primary"
-                  />
-                </div>
-              )}
-            </div>
+                className="w-full px-3 py-1.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[7px] text-[13px] text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-primary"
+              />
+            )}
           </div>
         </div>
       ))}
-
-      <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
-        <Button
-          onClick={handleSubmit}
-          disabled={disabled || !isComplete}
-          className="w-full"
-        >
-          Submit Answer{questions.length > 1 ? 's' : ''}
-        </Button>
-      </div>
-    </div>
+    </ActFrame>
   );
 }
