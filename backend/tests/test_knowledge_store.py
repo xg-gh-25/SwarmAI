@@ -392,7 +392,7 @@ class TestSyncKnowledgeIndex:
             s.endswith("MEMORY.md") or s.endswith("USER.md") or s.endswith("EVOLUTION.md")
             for s in indexed
         ), "active private docs must NEVER be recall-indexed"
-        # source_file keeps 'Archives' semantics (memory_chain_probe invariant)
+        # source_file keeps 'Archives' semantics
         assert any("Archives" in s for s in indexed if "MEMORY-archive-2026-08" in s)
 
     def test_sync_indexes_all_context_archives_not_just_memory(self, tmp_path):
@@ -467,7 +467,7 @@ class TestSyncKnowledgeIndex:
         # The two must have DISTINCT source_file keys (no overwrite)
         assert legacy_hits != private_hits
         assert all("Archives" in s for s in (legacy_hits | private_hits)), \
-            "both keep 'Archives' in source_file (memory_chain_probe invariant)"
+            "both keep 'Archives' in source_file"
 
     def test_sync_delta_skips_unchanged(self, tmp_path):
         from core.knowledge_store import KnowledgeStore, sync_knowledge_index

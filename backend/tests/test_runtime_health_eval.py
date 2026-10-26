@@ -84,7 +84,8 @@ import sys as _sys
 
 
 def test_ac1_rth_cases_in_biweekly_scheduled_set():
-    """① GS_RTH001/002/003 must survive the biweekly (non-behavior) filter AND be
+    """① The recovery cases (SAFE_RECOVERY, SAFE_TAB_ISOLATION — they replaced
+    GS_RTH001/002/003 in the product set) must survive the biweekly (non-behavior) filter AND be
     GRADED (not tier:draft, which evaluate_case silently skips) — so they actually
     run + score in CI, not just on-demand. Loads the REAL golden_set.
 
@@ -98,7 +99,7 @@ def test_ac1_rth_cases_in_biweekly_scheduled_set():
     from scripts.eval_runner import load_merged_golden_set
     gs = load_merged_golden_set(_P(tempfile.mkdtemp()))  # the product set
     by_id = {c["id"]: c for c in gs["cases"]}
-    for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
+    for cid in ("SAFE_RECOVERY", "SAFE_TAB_ISOLATION"):
         assert cid in by_id, f"{cid} missing from golden_set"
         case = by_id[cid]
         assert case.get("eval_method") != "behavior", f"{cid} excluded from biweekly (behavior)"
@@ -153,29 +154,16 @@ def test_ac5_dumb_spawn_harness_non_vacuous():
     assert "NON_VACUOUS ok" in p.stdout
 
 
-def test_ac6_all_three_rth_cases_pass_via_evaluate_case():
-    """All 3 runtime_health cases dispatch + pass through evaluate_case."""
-    from pathlib import Path as _P
-    import tempfile
-    from scripts.eval_runner import load_merged_golden_set, evaluate_case
-    gs = load_merged_golden_set(_P(tempfile.mkdtemp()))  # the product set
-    by_id = {c["id"]: c for c in gs["cases"]}
-    for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
-        r = evaluate_case(by_id[cid], _REPO)
-        assert r["status"] == "passed", f"{cid}: {r}"
-        assert r["evaluator"] == "runtime_health"
-
-
 def test_ac6_rth_cases_score_into_recovery_dimension():
     """Gate-2 LOW: a passed case that maps to no scored dimension inflates
-    confidence without moving the health score. Assert the 3 RTH cases actually
+    confidence without moving the health score. Assert the recovery cases actually
     produce a 'recovery' dimension in a real run_eval output."""
     from pathlib import Path as _P
     import tempfile
     from scripts.eval_runner import load_merged_golden_set, run_eval
     gs = load_merged_golden_set(_P(tempfile.mkdtemp()))  # the product set
     result = run_eval(gs, trigger="manual",
-                      case_filter=["GS_RTH001", "GS_RTH002", "GS_RTH003"],
+                      case_filter=["SAFE_RECOVERY", "SAFE_TAB_ISOLATION"],
                       root=_REPO, programmatic_only=True)
     assert "recovery" in result.get("dimensions", {}), \
-        f"runtime_health cases did not score into 'recovery': {result.get('dimensions')}"
+        f"recovery cases did not score into 'recovery': {result.get('dimensions')}"

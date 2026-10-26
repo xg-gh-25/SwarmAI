@@ -826,7 +826,7 @@ def sync_knowledge_index(
     # YYYY-MM.md of the same basename (both map to the same current_files key → the
     # second insert silently drops the first from the index + causes chunk-thrash).
     # The synthetic prefix still contains the literal "Archives" so recall
-    # source_file semantics + the memory_chain_probe "Archives in source_file"
+    # source_file semantics + the "Archives in source_file"
     # invariant hold, while keeping the two physical files' keys disjoint.
     context_dir = knowledge_dir.parent / ".context"
     if context_dir.is_dir():

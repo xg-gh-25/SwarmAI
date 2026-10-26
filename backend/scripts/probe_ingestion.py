@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""probe_ingestion — product eval probes for what gets admitted into memory and
+project docs.
+
+Contract: scripts/_probe_kit.py. Subcommands:
+  judge_down  a memory lesson the judge could not review (budget spent, judge
+              erroring) is deferred to pending, never dropped
+  floors      without any network, the deterministic floors still keep out a too-
+              short entry, a governance rule and an entry aimed at the wrong store
+  ddd_archive a project-doc proposal that is not admitted lands in a recoverable
+              archive file, not nowhere
+  preserve    a store that looks corrupt is renamed aside with its data intact,
+              never deleted; a locked database is not treated as corrupt
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+from pathlib import Path
+from unittest import mock
+
+from scripts._probe_kit import run, tempdir, verdict
+
+_LESSON = "[decision] Use atomic temp-file rename for every config write to avoid torn state."
+
+
+# ── judge_down ────────────────────────────────────────────────────────────────
+
+def _judge_down_holds(judge_up_refusing: bool) -> tuple[bool, str]:
+    from core import ingestion_gate as ig
+
+    if judge_up_refusing:  # broken input: the judge ran and refused
+        with mock.patch.object(ig, "self_adversarial_judge", return_value=("suspect", "judged")), \
+             mock.patch.object(ig, "_judge_budget_available", return_value=True):
+            v = ig.admit_memory_lesson(_LESSON)[0]
+        return (v == "pending"), f"a refused lesson gave {v!r}"
+    with mock.patch.dict(os.environ, {"SWARM_JUDGE_BUDGET_MAX": "0"}):
+        budget = ig.admit_memory_lesson(_LESSON)
+    with mock.patch.object(ig, "_judge_client", side_effect=RuntimeError("bedrock down")), \
+         mock.patch.object(ig, "_judge_budget_available", return_value=True):
+        erroring = ig.admit_memory_lesson(_LESSON)
+    for label, got in (("budget spent", budget), ("judge erroring", erroring)):
+        if got[0] != "pending":
+            return False, f"{label}: the lesson was {got[0]!r} ({got[2]}), not pending"
+    return True, ""
+
+
+def judge_down(negative: bool) -> int:
+    return verdict("ING_JUDGE_DOWN", negative, lambda: _judge_down_holds(False),
+                   lambda: _judge_down_holds(True))
+
+
+# ── floors ────────────────────────────────────────────────────────────────────
+
+def _floors_holds(floors_on: bool) -> tuple[bool, str]:
+    from core import ingestion_gate as ig
+
+    cases = [("ok", "MEMORY", "memory_distill", {"discard"}),
+             ("new rule: STEERING must always run the full test suite before every reply",
+              "MEMORY", "memory_distill", {"discard", "review"}),
+             (_LESSON, "EVOLUTION", "memory_distill", {"review", "discard"})]
+    no_network = mock.patch.object(ig, "_judge_client", side_effect=AssertionError("no network"))
+    off = (mock.patch.object(ig, "thin_floor", return_value=False),
+           mock.patch.object(ig, "content_floor", return_value=(False, "")),
+           mock.patch.dict(ig.__dict__, {}))
+    with no_network, mock.patch.object(ig, "_judge_budget_available", return_value=False):
+        if not floors_on:
+            for p in off:
+                p.start()
+        try:
+            for text, store, trigger, allowed in cases:
+                got = ig.ingestion_gate(text, store, trigger, dedup_fn=lambda t: False)
+                if got.verdict not in allowed or got.verdict == "auto":
+                    return False, f"{text[:30]!r} → {got.verdict} ({got.reason})"
+        finally:
+            if not floors_on:
+                for p in off:
+                    p.stop()
+    return True, ""
+
+
+def floors(negative: bool) -> int:
+    return verdict("ING_FLOORS", negative, lambda: _floors_holds(True),
+                   lambda: _floors_holds(False))
+
+
+# ── ddd_archive ───────────────────────────────────────────────────────────────
+
+def _archive_holds(writable: bool) -> tuple[bool, str]:
+    from core import ddd_cultivation as dc
+    from core import ingestion_gate as ig
+
+    with tempdir() as d:
+        project = d / "Projects" / "Demo"
+        (project / "2-understanding").mkdir(parents=True)
+        (project / "2-understanding" / "IMPROVEMENT.md").write_text(
+            "# Improvement\n\n## What Worked\n\n", encoding="utf-8")
+        (project / ".artifacts").mkdir()
+        if not writable:
+            os.chmod(project / ".artifacts", 0o500)
+        p = dc.CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="Ship the config writer behind an atomic rename so readers never see torn files.",
+            source_run_id="probe", confidence=0.9)
+        try:
+            with mock.patch.object(ig, "_judge_client", side_effect=RuntimeError("judge down")):
+                dc._cultivate_proposals([p], project)
+            log = project / ".artifacts" / "discarded-proposals.jsonl"
+            archived = log.exists() and p.content[:30] in log.read_text(encoding="utf-8")
+        finally:
+            os.chmod(project / ".artifacts", 0o700)
+    return archived, "a declined proposal did not reach the recoverable archive"
+
+
+def ddd_archive(negative: bool) -> int:
+    return verdict("ING_DDD_ARCHIVE", negative, lambda: _archive_holds(True),
+                   lambda: _archive_holds(False))
+
+
+# ── preserve ──────────────────────────────────────────────────────────────────
+
+def _preserve_holds(isolate) -> tuple[bool, str]:
+    from core.data_safety import is_corruption_error
+
+    if is_corruption_error(sqlite3.OperationalError("database is locked")):
+        return False, "a locked database was classified as corrupt"
+    if not is_corruption_error(sqlite3.DatabaseError("file is not a database")):
+        return False, "real corruption was not recognised"
+    with tempdir() as d:
+        db = d / "store.db"
+        db.write_bytes(b"USER DATA 7f3")
+        Path(str(db) + "-wal").write_bytes(b"WAL 7f3")
+        isolate(db)
+        kept = [p for p in d.iterdir() if ".corrupt-" in p.name]
+        data = b"".join(p.read_bytes() for p in kept)
+        if b"USER DATA 7f3" not in data or b"WAL 7f3" not in data:
+            return False, "the store or its WAL was not preserved under a .corrupt- name"
+    return True, ""
+
+
+def preserve(negative: bool) -> int:
+    from core.data_safety import isolate_store
+
+    return verdict("ING_PRESERVE", negative, lambda: _preserve_holds(isolate_store),
+                   lambda: _preserve_holds(lambda p: Path(p).unlink()))  # a recovery that deletes
+
+
+if __name__ == "__main__":
+    raise SystemExit(run({"judge_down": judge_down, "floors": floors,
+                          "ddd_archive": ddd_archive, "preserve": preserve}))

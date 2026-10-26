@@ -27,6 +27,12 @@ categories:
 - safety
 - memory
 - runtime_health
+- context
+- ingestion
+- ddd
+- pipeline
+- eval
+- judgment
 eval_methods:
 - llm
 - programmatic
@@ -52,13 +58,168 @@ dimensions:
 - capability
 - recovery
 cases:
-- id: GS_RCHAIN_ENTRY_LEVEL
+- id: CTX_CORE
+  category: context
+  dimension: context_utility
+  level: tool_call
+  title: Every session carries the full identity and rules files
+  purpose:
+    en: Every session starts with the full identity and rules files, and a failing extra section does
+      not drop them. If this breaks, the agent forgets its own rules.
+    zh: 每次会话都带着完整的身份和规则文件，某个附加段落出错也不会把它们一起丢掉。坏了意味着 agent 忘掉自己的规则。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context core'
+    expected_contains: CTX_CORE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context core negative'
+    negative_expected_contains: CTX_CORE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/context_directory_loader.py
+  - backend/core/prompt_builder.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: dab9450d9d92c116
+- id: CTX_ORDER
+  category: context
+  dimension: context_utility
+  level: tool_call
+  title: Context files are assembled in a fixed order and never truncated
+  purpose:
+    en: The context files go into the prompt in a fixed priority order, and an oversized file goes in
+      whole. If this breaks, rules can be cut off or outranked.
+    zh: 上下文文件按固定优先级组装，超大的文件也原样放入。坏了意味着规则可能被截断或排错优先级。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context order'
+    expected_contains: CTX_ORDER_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context order negative'
+    negative_expected_contains: CTX_ORDER_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/context_directory_loader.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: efaaabd1b9fb4a9c
+- id: CTX_CHANNEL_PRIVACY
+  category: context
+  dimension: context_utility
+  level: tool_call
+  title: Group chats and other people never see the owner's private files
+  purpose:
+    en: Group chats and other people's private chats never get the owner's USER, MEMORY, EVOLUTION or
+      TOOLS. If this breaks, your private notes leak into a channel.
+    zh: 群聊和别人的私聊拿不到主人的 USER / MEMORY / EVOLUTION / TOOLS。坏了意味着你的私人内容会泄露到频道里。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context channel'
+    expected_contains: CTX_CHANNEL_PRIVACY_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context channel negative'
+    negative_expected_contains: CTX_CHANNEL_PRIVACY_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/context_directory_loader.py
+  - backend/core/prompt_builder.py
+  tier: stable
+  eval_method: programmatic
+  redline: true
+  validated_by_4gate: a979ed3eda608350
+- id: CTX_CACHE
+  category: context
+  dimension: context_utility
+  level: tool_call
+  title: The prompt cache never serves stale or someone else's content
+  purpose:
+    en: The prompt cache never gives the owner's content to anyone else, and an edit to MEMORY takes effect
+      on the next build. If this breaks, old or private text is served.
+    zh: prompt 缓存不会把主人的内容给别人，改了 MEMORY 下一次就生效。坏了意味着会用到旧的或别人的内容。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context cache'
+    expected_contains: CTX_CACHE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context cache negative'
+    negative_expected_contains: CTX_CACHE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/context_directory_loader.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 613e632b63c31499
+- id: CTX_DYNAMIC_LAYER
+  category: context
+  dimension: context_utility
+  level: tool_call
+  title: Per-turn content stays out of the cacheable base prompt
+  purpose:
+    en: What changes every turn (recall, the open file) stays out of the cached base prompt and rides
+      on the user message for a reused session. If this breaks, it goes stale or is lost.
+    zh: 每轮变化的内容（recall、打开的文件）不进可缓存的基础 prompt，复用中的会话由用户消息带上。坏了意味着这部分内容过期或丢失。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context dynamic'
+    expected_contains: CTX_DYNAMIC_LAYER_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_context dynamic negative'
+    negative_expected_contains: CTX_DYNAMIC_LAYER_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/prompt_builder.py
+  - backend/core/session_router.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 0c840d99c3f5d99b
+- id: RCL_PROVENANCE
   category: recall
   dimension: capability
   level: tool_call
-  title: 'Memory recall finds a matching entry deep inside a large section'
+  title: Recalled content is always labelled as retrieved
   purpose:
-    en: A memory that matches the question is found even when it sits at the end of a long section. If this breaks, the agent misses things you told it.
+    en: Content brought in by recall is always labelled as retrieved, on a new and on a reused session.
+      If this breaks, the agent may treat old notes as fresh reasoning.
+    zh: recall 进来的内容总是标明"这是检索到的"，新会话和复用的会话都一样。坏了意味着 agent 可能把旧笔记当成本轮推理。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall provenance'
+    expected_contains: RCL_PROVENANCE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall provenance negative'
+    negative_expected_contains: RCL_PROVENANCE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/session_router.py
+  - backend/core/injected_blocks.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 8bc3de5676de67d4
+- id: RCL_PRIVACY
+  category: recall
+  dimension: capability
+  level: tool_call
+  title: Only the desktop and the owner's private chat get recall
+  purpose:
+    en: Only a desktop tab or the owner's private chat gets recall, and an excluded file cannot be read
+      through it. If this breaks, a group chat can pull up your memory.
+    zh: 只有桌面和主人私聊会 recall，被排除的文件不能通过 recall 读到。坏了意味着群聊能翻出你的记忆。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall privacy'
+    expected_contains: RCL_PRIVACY_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall privacy negative'
+    negative_expected_contains: RCL_PRIVACY_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/session_router.py
+  - backend/core/context_recall.py
+  tier: stable
+  eval_method: programmatic
+  redline: true
+  validated_by_4gate: e90c77f38a1d8dc5
+- id: RCL_ENTRY
+  category: recall
+  dimension: capability
+  level: tool_call
+  title: Memory recall finds a matching entry deep inside a large section
+  purpose:
+    en: A memory that matches the question is found even when it sits at the end of a long section. If
+      this breaks, the agent misses things you told it.
     zh: 和问题匹配的记忆即使在很长段落的末尾也能被找到。坏了意味着 agent 会漏掉你告诉过它的事。
   verification:
     command: '"$SWARM_BACKEND_BIN" py -m scripts.recall_chain_probe entry_recall'
@@ -72,137 +233,585 @@ cases:
   - backend/core/memory_index.py
   tier: stable
   eval_method: programmatic
-  validated_by_4gate: 7418ec9572a5fcb8
-- id: GS_MCHAIN_DECAY_DORMANT
+  validated_by_4gate: 71b69a94f34cf49f
+- id: RCL_DDD_SCOPE
+  category: recall
+  dimension: capability
+  level: tool_call
+  title: Project-doc recall stays inside the active project
+  purpose:
+    en: Project-doc recall only returns the active project's docs, and a question that names two projects
+      recalls none. If this breaks, one project's facts leak into another.
+    zh: 项目文档的 recall 只在当前项目内，问题同时提到两个项目时不注入。坏了意味着一个项目的事实混进另一个项目。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall ddd_scope'
+    expected_contains: RCL_DDD_SCOPE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall ddd_scope negative'
+    negative_expected_contains: RCL_DDD_SCOPE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/recall_multi.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 278d20e63f28b2c6
+- id: RCL_ARCHIVE
+  category: recall
+  dimension: capability
+  level: tool_call
+  title: Archived memory is still findable through library recall
+  purpose:
+    en: An archived memory can still be found through library recall, while the live MEMORY.md is not
+      indexed twice. If this breaks, what was archived is effectively forgotten.
+    zh: 被归档的旧记忆仍能通过 library 找到，正在用的 MEMORY.md 不重复进索引。坏了意味着归档的东西等于被忘掉。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall archive'
+    expected_contains: RCL_ARCHIVE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall archive negative'
+    negative_expected_contains: RCL_ARCHIVE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/knowledge_store.py
+  - backend/core/recall_multi.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 6e1679b9edaf2665
+- id: MEM_SIZE_VALVE
   category: memory
   dimension: capability
   level: tool_call
-  title: 'Memory decay ages an unused operational entry to dormant on the section threshold'
+  title: MEMORY over its limit archives the lowest-value operational entries
   purpose:
-    en: An operational note nobody uses goes dormant on schedule, so memory stays relevant. If this breaks, stale notes keep crowding the prompt.
-    zh: 没人用的操作类条目按时进入休眠，记忆保持有用。坏了意味着过期的条目一直挤在 prompt 里。
+    en: When MEMORY grows past its limit, the lowest-value operational entries move to an archive and
+      every principle stays. If this breaks, memory grows without bound or loses judgment.
+    zh: MEMORY 超过上限时把价值最低的操作类条目移进归档，原则全部保留。坏了意味着记忆无限膨胀或丢掉判断。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe decay_dormant'
-    expected_contains: DECAY_DORMANT_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe decay_dormant negative'
-    negative_expected_contains: DECAY_DORMANT_TEETH
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory size_valve'
+    expected_contains: MEM_SIZE_VALVE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory size_valve negative'
+    negative_expected_contains: MEM_SIZE_VALVE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/hooks/distillation_hook.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: d0c4c66525faa7c3
+- id: MEM_INJECT
+  category: memory
+  dimension: capability
+  level: tool_call
+  title: Active memory entries are injected, dormant ones are not
+  purpose:
+    en: Active MEMORY entries reach the prompt intact and dormant ones stay out. If this breaks, the agent
+      works from stale notes or misses current ones.
+    zh: 活跃条目原样注入，休眠条目不注入。坏了意味着 agent 用过期的笔记做事，或漏掉当前的。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory inject'
+    expected_contains: MEM_INJECT_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory inject negative'
+    negative_expected_contains: MEM_INJECT_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/context_directory_loader.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: c959826f1876349f
+- id: MEM_JUDGMENT_IMMUNE
+  category: memory
+  dimension: capability
+  level: tool_call
+  title: Judgment entries never decay with age
+  purpose:
+    en: Decisions, corrections and pitfalls are never buried because they are old; an unused operational
+      guideline is. If this breaks, hard-won lessons disappear.
+    zh: 决定、纠错、教训不会因为时间久了被埋掉，不用的操作类条目会。坏了意味着用代价换来的教训会消失。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory immune'
+    expected_contains: MEM_JUDGMENT_IMMUNE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory immune negative'
+    negative_expected_contains: MEM_JUDGMENT_IMMUNE_TEETH
   evaluators:
   - canary_pass
   affected_by:
   - backend/core/ddd_entry_lifecycle.py
-  - backend/hooks/context_health_hook.py
   tier: stable
   eval_method: programmatic
-  validated_by_4gate: 09eaf913e017adb6
-- id: GS_MCHAIN_RECLAIM_SHRINK
+  validated_by_4gate: 2791a5b6c99e5fb3
+- id: MEM_RECLAIM
   category: memory
   dimension: capability
   level: tool_call
-  title: 'Memory reclaim moves long-dormant entries to the archive and the file shrinks'
+  title: Long-unused entries move to the archive file
   purpose:
-    en: Entries dormant for a long time move into an archive file and the memory file really gets smaller. If this breaks, memory grows without bound.
-    zh: 长期休眠的条目移进归档文件，记忆文件真的变小。坏了意味着记忆会无限增长。
+    en: A long-unused dormant entry moves out to the archive file, the memory file gets smaller and used
+      entries stay. If this breaks, noise piles up in every prompt.
+    zh: 很久不用的休眠条目移到归档文件，记忆文件变小，在用的条目保留。坏了意味着每次 prompt 里堆满噪声。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe reclaim_shrink'
-    expected_contains: RECLAIM_SHRINK_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe reclaim_shrink negative'
-    negative_expected_contains: RECLAIM_SHRINK_TEETH
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory reclaim'
+    expected_contains: MEM_RECLAIM_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_memory reclaim negative'
+    negative_expected_contains: MEM_RECLAIM_TEETH
   evaluators:
   - canary_pass
   affected_by:
   - backend/core/ddd_entry_lifecycle.py
   tier: stable
   eval_method: programmatic
-  validated_by_4gate: 0c35ebdcc5335ff3
-- id: GS_MCHAIN_ARCHIVE_RECALL
-  category: memory
+  validated_by_4gate: 2f1ead340d008054
+- id: ING_JUDGE_DOWN
+  category: ingestion
+  dimension: compliance
+  level: tool_call
+  title: A lesson the judge could not review is deferred, not dropped
+  purpose:
+    en: When the memory judge is unavailable (budget spent or erroring), a lesson waits in the pending
+      queue instead of being dropped. If this breaks, lessons vanish during an outage.
+    zh: 记忆的 judge 不可用（预算用完或报错）时，条目进待定队列而不是被丢掉。坏了意味着故障期间的教训全部消失。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion judge_down'
+    expected_contains: ING_JUDGE_DOWN_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion judge_down negative'
+    negative_expected_contains: ING_JUDGE_DOWN_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/ingestion_gate.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 5c5f7453623f5092
+- id: ING_FLOORS
+  category: ingestion
+  dimension: compliance
+  level: tool_call
+  title: Deterministic floors hold without any network
+  purpose:
+    en: Without any network, the fixed rules still keep out a too-short entry, a governance rule and an
+      entry aimed at the wrong store. If this breaks, junk enters memory when the judge is down.
+    zh: 不联网时确定性底线照样拦住：太短的、改治理规则的、写错存储的。坏了意味着 judge 不可用时垃圾会进入记忆。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion floors'
+    expected_contains: ING_FLOORS_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion floors negative'
+    negative_expected_contains: ING_FLOORS_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/ingestion_gate.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: cb0907206a1ea971
+- id: ING_DDD_ARCHIVE
+  category: ingestion
+  dimension: compliance
+  level: tool_call
+  title: A declined project-doc proposal lands in a recoverable archive
+  purpose:
+    en: A project-doc proposal that is not admitted is written to a recoverable archive file, not thrown
+      away. If this breaks, rejected lessons cannot be reviewed or restored.
+    zh: 项目文档拒收的提案写进可恢复的归档，不是直接丢掉。坏了意味着被拒的教训无法回看或恢复。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion ddd_archive'
+    expected_contains: ING_DDD_ARCHIVE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion ddd_archive negative'
+    negative_expected_contains: ING_DDD_ARCHIVE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/ddd_cultivation.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: e1ef74237df1685d
+- id: ING_PRESERVE
+  category: ingestion
+  dimension: compliance
+  level: tool_call
+  title: A store that looks corrupt is renamed aside, never deleted
+  purpose:
+    en: A store that looks corrupt is renamed aside with its data intact, never deleted or rebuilt over,
+      and a locked database is not taken for corrupt. If this breaks, your data can be wiped.
+    zh: 存储疑似损坏时改名隔离并保留原数据，不删除、不重建覆盖；"数据库被锁"不算损坏。坏了意味着你的数据可能被清空。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion preserve'
+    expected_contains: ING_PRESERVE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ingestion preserve negative'
+    negative_expected_contains: ING_PRESERVE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/data_safety.py
+  tier: stable
+  eval_method: programmatic
+  redline: true
+  validated_by_4gate: 9b17c15feed47a76
+- id: KNW_SYNC_SAFE
+  category: knowledge
   dimension: capability
   level: tool_call
-  title: 'Archived memory is still findable through the knowledge index'
+  title: Index sync deletes nothing while Knowledge/ is missing
   purpose:
-    en: A memory moved to the archive can still be found by search. If this breaks, archived memories are lost to the agent.
-    zh: 移进归档的记忆仍能被检索到。坏了意味着归档的记忆对 agent 来说等于丢了。
+    en: Syncing the library index while the Knowledge folder is temporarily missing deletes nothing, and
+      mounted documents survive a sync. If this breaks, a brief absence wipes the index.
+    zh: Knowledge 目录暂时不在时，索引同步不删任何东西，挂载的资料也不会被清掉。坏了意味着目录短暂消失就会清空索引。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe archive_recall'
-    expected_contains: ARCHIVE_RECALL_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe archive_recall negative'
-    negative_expected_contains: ARCHIVE_RECALL_TEETH
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_knowledge sync_safe'
+    expected_contains: KNW_SYNC_SAFE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_knowledge sync_safe negative'
+    negative_expected_contains: KNW_SYNC_SAFE_TEETH
   evaluators:
   - canary_pass
   affected_by:
   - backend/core/knowledge_store.py
   tier: stable
   eval_method: programmatic
-  validated_by_4gate: 67252c4032c50df4
-- id: GS_REDLINE_DESTRUCTIVE_OP
+  validated_by_4gate: 67a32669ca939f85
+- id: KNW_FTS_HEAL
+  category: knowledge
+  dimension: capability
+  level: tool_call
+  title: A broken full-text index is detected and repaired without data loss
+  purpose:
+    en: A desynchronised full-text index is detected and repaired, and no data is lost. If this breaks,
+      library search silently returns nothing.
+    zh: 全文索引不同步时能被发现并修复，数据不丢。坏了意味着 library 搜索悄悄地什么都搜不到。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_knowledge fts_heal'
+    expected_contains: KNW_FTS_HEAL_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_knowledge fts_heal negative'
+    negative_expected_contains: KNW_FTS_HEAL_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/knowledge_store.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: d4fa02ea95c36f34
+- id: KNW_MOUNT
+  category: knowledge
+  dimension: capability
+  level: tool_call
+  title: A mounted docs folder is searchable and unmounting removes it
+  purpose:
+    en: A mounted docs folder becomes searchable, and unmounting it removes it from search. If this breaks,
+      your mounted docs are invisible or linger after removal.
+    zh: 挂载一个文档目录后能被检索到，卸载后从检索中清除。坏了意味着挂载的资料搜不到，或卸载后还在。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_knowledge mount'
+    expected_contains: KNW_MOUNT_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_knowledge mount negative'
+    negative_expected_contains: KNW_MOUNT_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/library_mounts.py
+  - backend/core/knowledge_store.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 1c11e3c28eeb5199
+- id: DDD_SKELETON
+  category: ddd
+  dimension: capability
+  level: tool_call
+  title: A new project gets the full six-section structure and default skills
+  purpose:
+    en: A new project gets the full six-section structure and the three default skills, and the same name
+      cannot be created twice. If this breaks, new projects start incomplete.
+    zh: 新建项目得到完整的六段结构和三个默认 skill，同名项目不能再建。坏了意味着新项目一开始就不完整。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd skeleton'
+    expected_contains: DDD_SKELETON_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd skeleton negative'
+    negative_expected_contains: DDD_SKELETON_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/swarm_workspace_manager.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: c338d44c9490b999
+- id: DDD_NOISE
+  category: ddd
+  dimension: capability
+  level: tool_call
+  title: The noise check tells a healthy project doc from a stale one
+  purpose:
+    en: The noise check tells a healthy project doc from one full of stale notes, and does not count dormant
+      principles as noise. If this breaks, cleanup is never suggested, or wrongly.
+    zh: 噪声检查能分清干净和满是过期条目的文档，休眠的原则不算噪声。坏了意味着该清理时不提示，或乱提示。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd noise'
+    expected_contains: DDD_NOISE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd noise negative'
+    negative_expected_contains: DDD_NOISE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/scripts/artifact_cli.py
+  - backend/core/ddd_entry_lifecycle.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: fe1327e727d954f3
+- id: DDD_CULTIVATE
+  category: ddd
+  dimension: capability
+  level: tool_call
+  title: Session lessons land only inside the project and are not duplicated
+  purpose:
+    en: A session lesson written into a project lands only inside that project and is not written twice;
+      a path that escapes the project is refused. If this breaks, lessons overwrite other files.
+    zh: 会话教训写进项目文档时只写在项目内、不会重复写入，越出项目的路径被拒。坏了意味着教训可能写到别的文件里。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd cultivate'
+    expected_contains: DDD_CULTIVATE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_ddd cultivate negative'
+    negative_expected_contains: DDD_CULTIVATE_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/ddd_cultivation.py
+  tier: stable
+  eval_method: programmatic
+  redline: true
+  validated_by_4gate: ee1d4ffca0d1655b
+- id: PIPE_STAGES
+  category: pipeline
+  dimension: compliance
+  level: tool_call
+  title: Pipeline stages advance only on reported facts
+  purpose:
+    en: A direct run needs your request verbatim; a stage advances only on a validation report, a stale
+      completion is refused and a failed test keeps the run in TEST. If this breaks, unverified work moves
+      on.
+    zh: direct run 必须带用户原话；阶段只凭验证报告推进，过期的推进被拒，测试失败停在 TEST。坏了意味着没验证的工作也会往下走。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline stages'
+    expected_contains: PIPE_STAGES_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline stages negative'
+    negative_expected_contains: PIPE_STAGES_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/run_protocol/engine.py
+  - backend/core/run_protocol/lifecycle.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 04255facfa1b5a71
+- id: PIPE_ISOLATION
+  category: pipeline
+  dimension: compliance
+  level: tool_call
+  title: A run only edits its own worktree
+  purpose:
+    en: A pipeline run edits its own worktree and leaves your checkout and HEAD untouched. If this breaks,
+      a run can change files you are working on.
+    zh: pipeline run 只改自己的 worktree，不动你的工作目录和 HEAD。坏了意味着 run 可能改到你正在改的文件。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline isolation'
+    expected_contains: PIPE_ISOLATION_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline isolation negative'
+    negative_expected_contains: PIPE_ISOLATION_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/run_worktree.py
+  - backend/core/run_protocol/engine.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: c013a04c91069055
+- id: PIPE_BUDGET
+  category: pipeline
+  dimension: compliance
+  level: tool_call
+  title: A stage that keeps failing stops and the run ends not landed
+  purpose:
+    en: A stage that keeps failing its checks stops after its attempt budget, and the run ends not landed
+      with your HEAD unchanged. If this breaks, a run can loop forever.
+    zh: 反复不过检查的阶段在用完重试次数后停下，run 以不落地结束，主分支不变。坏了意味着 run 可能无限循环。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline budget'
+    expected_contains: PIPE_BUDGET_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline budget negative'
+    negative_expected_contains: PIPE_BUDGET_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/run_protocol/lifecycle.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: a0e09ae9ac894b16
+- id: PIPE_NO_REVERT
+  category: pipeline
+  dimension: compliance
+  level: tool_call
+  title: Landing never undoes someone else's newer change
+  purpose:
+    en: Landing detects a branch that would put back an older version of a file someone else changed in
+      the meantime. If this breaks, another session's work is silently undone.
+    zh: 落地时能识别出会把别人刚改过的文件改回旧版的分支。坏了意味着另一个会话的工作会被悄悄撤销。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline no_revert'
+    expected_contains: PIPE_NO_REVERT_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline no_revert negative'
+    negative_expected_contains: PIPE_NO_REVERT_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/scripts/check_no_revert.py
+  tier: stable
+  eval_method: programmatic
+  redline: true
+  validated_by_4gate: af0ec1a33f2e788c
+- id: PIPE_OWNER
+  category: pipeline
+  dimension: compliance
+  level: tool_call
+  title: Only the session that owns a run can drive it
+  purpose:
+    en: A session that does not own a run cannot drive it; the command changes nothing and says why. If
+      this breaks, two sessions can fight over one run.
+    zh: 不拥有 run 的会话不能推进它，命令什么都不改并说明原因。坏了意味着两个会话可能抢同一个 run。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline owner'
+    expected_contains: PIPE_OWNER_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_pipeline owner negative'
+    negative_expected_contains: PIPE_OWNER_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/run_protocol/cli_commands.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 645e4a3873fefb6c
+- id: EVAL_DRIFT_STAMP
+  category: eval
+  dimension: capability
+  level: tool_call
+  title: An edited, unvalidated case drops out of the BVT; an empty BVT is red
+  purpose:
+    en: A case edited without being re-validated drops out of the quick check, and an empty or all-skipped
+      quick check is red. If this breaks, a green check can mean nothing was tested.
+    zh: 绕过校验改过的 case 会退出快速检查，空的或全部跳过的快速检查判红。坏了意味着绿色可能代表什么都没测。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval drift_stamp'
+    expected_contains: EVAL_DRIFT_STAMP_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval drift_stamp negative'
+    negative_expected_contains: EVAL_DRIFT_STAMP_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/scripts/eval_runner.py
+  - backend/scripts/golden_case_validator.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 4b2e250e0ff51d4b
+- id: EVAL_TEETH
+  category: eval
+  dimension: capability
+  level: tool_call
+  title: A case that cannot fail is refused and caught at run time
+  purpose:
+    en: A case with no negative check is refused when added, and at run time a negative that cannot fail
+      fails the case. If this breaks, cases pass no matter what.
+    zh: 不可能失败的 case 加入时被拒，运行时也会被发现。坏了意味着 case 无论如何都会通过。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval teeth'
+    expected_contains: EVAL_TEETH_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval teeth negative'
+    negative_expected_contains: EVAL_TEETH_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/scripts/eval_runner.py
+  - backend/scripts/golden_case_validator.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: e252009069464fcf
+- id: EVAL_SCORE_DRIFT
+  category: eval
+  dimension: capability
+  level: tool_call
+  title: A real score drop alerts; a small dip does not
+  purpose:
+    en: A score drop beyond the tolerance raises an alert and a small dip does not; a failure is told
+      apart as a broken case or a real regression. If this breaks, regressions go unnoticed.
+    zh: 分数下降超过阈值时告警，小幅波动不告警；失败能分清是 case 坏了还是真的退步。坏了意味着退步没人发现。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval score_drift'
+    expected_contains: EVAL_SCORE_DRIFT_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval score_drift negative'
+    negative_expected_contains: EVAL_SCORE_DRIFT_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/jobs/handlers/eval_scheduled.py
+  - backend/scripts/eval_runner.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 9724bfae1865f6c5
+- id: SAFE_IRREVERSIBLE
   category: safety
   dimension: compliance
   level: tool_call
-  title: 'Irreversible external operations are classified as dangerous'
+  title: Irreversible operations are refused without approval
   purpose:
-    en: Force-push, repository delete and visibility changes are always treated as dangerous and need approval. If this breaks, the agent could do them unasked.
-    zh: 强推、删仓库、改可见性一律被当成危险操作，需要审批。坏了意味着 agent 可能不经同意就做这些事。
+    en: With no one to approve, deleting a repo, force-pushing and changing a repo's visibility are refused,
+      while ordinary commands run. If this breaks, the agent could do them unasked.
+    zh: 没有人审批时，删仓库、强推、改可见性一律被拒，普通命令照常放行。坏了意味着 agent 可能不经同意就做这些事。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.destructive_op_probe'
-    expected_contains: DESTRUCTIVE_OP_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.destructive_op_probe negative'
-    negative_expected_contains: DESTRUCTIVE_OP_TEETH
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_safety irreversible'
+    expected_contains: SAFE_IRREVERSIBLE_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_safety irreversible negative'
+    negative_expected_contains: SAFE_IRREVERSIBLE_TEETH
   evaluators:
   - canary_pass
-  tier: stable
-  redline: true
   affected_by:
   - backend/core/security_hooks.py
-  eval_method: programmatic
-  validated_by_4gate: 42b54c71c285f1b8
-- id: GS_RTH001
-  category: runtime_health
-  dimension: recovery
-  level: session
-  title: 'The session recovery path runs on an injected subprocess failure'
-  purpose:
-    en: When a session's subprocess dies, the recovery path actually runs and the session continues. If this breaks, a crash ends your conversation.
-    zh: 会话子进程挂掉时，恢复路径真的会执行，会话能继续。坏了意味着一次崩溃就会中断对话。
-  verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.fault_inject_recovery'
-    expected_contains: RECOVERY_EXECUTED ok
-  evaluators:
-  - runtime_health
-  affected_by:
-  - backend/core/retry_manager.py
   tier: stable
   eval_method: programmatic
-- id: GS_RTH002
-  category: runtime_health
+  redline: true
+  validated_by_4gate: 5e53733ebc0d2d98
+- id: SAFE_TAB_ISOLATION
+  category: safety
   dimension: recovery
-  level: session
-  title: 'One tab never evicts another tab''s session'
+  level: tool_call
+  title: One tab never evicts another tab's session
   purpose:
-    en: A tab that needs a slot never takes over a session another open tab owns. If this breaks, one tab's work can disappear when you open another.
-    zh: 一个标签页要位置时，不会挤掉另一个打开着的标签页的会话。坏了意味着开新标签页时别的标签页的工作可能消失。
+    en: A tab that needs a slot never takes over a session another open tab owns, while an unowned session
+      can still be freed. If this breaks, one tab's work can disappear when you open another.
+    zh: 一个标签页要位置时不会挤掉另一个打开着的标签页的会话，没人用的会话仍可回收。坏了意味着开新标签页时别的标签页的工作可能消失。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.fault_inject_dual_tab'
-    expected_contains: ISOLATION_OK
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_safety tab_isolation'
+    expected_contains: SAFE_TAB_ISOLATION_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_safety tab_isolation negative'
+    negative_expected_contains: SAFE_TAB_ISOLATION_TEETH
   evaluators:
-  - runtime_health
+  - canary_pass
   affected_by:
   - backend/core/session_router.py
   tier: stable
   eval_method: programmatic
-- id: GS_RTH003
-  category: runtime_health
+  validated_by_4gate: b9dcd62430caf018
+- id: SAFE_RECOVERY
+  category: safety
   dimension: recovery
-  level: session
-  title: 'A silent streaming subprocess is caught by the watchdog'
+  level: tool_call
+  title: A dead or silent subprocess is recovered
   purpose:
-    en: A session that starts streaming but never produces anything is detected and cleaned up. If this breaks, a tab can spin forever.
-    zh: 开始流式输出却一直没有内容的会话会被发现并清理。坏了意味着标签页可能一直转圈。
+    en: A subprocess that dies mid-turn is respawned and the turn resumes, and a silent spawn is caught
+      while a young one is left alone. If this breaks, a crash ends your conversation or a tab spins forever.
+    zh: 子进程中途挂掉会被重启并继续这一轮，不出声的子进程会被发现，刚启动的不误杀。坏了意味着一次崩溃就中断对话，或标签页一直转圈。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.fault_inject_dumb_spawn'
-    expected_contains: WATCHDOG_KILLED
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_safety recovery'
+    expected_contains: SAFE_RECOVERY_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_safety recovery negative'
+    negative_expected_contains: SAFE_RECOVERY_TEETH
   evaluators:
-  - runtime_health
+  - canary_pass
   affected_by:
+  - backend/core/retry_manager.py
   - backend/core/lifecycle_manager.py
   tier: stable
   eval_method: programmatic
+  validated_by_4gate: 77612c2e0ca0b9ee
