@@ -105,6 +105,13 @@ check_absent "\.DS_Store"              "No .DS_Store"
 check_absent "\.hypothesis"            "No .hypothesis"
 check_absent "conftest\.py"            "No conftest.py"
 check_absent "\.mypy_cache"            "No .mypy_cache"
+# gitignored files of the packaging checkout (release.sh ships only what the repo ships)
+check_absent "^backend/\.env$"         "No backend/.env"
+check_absent "\.db$"                   "No *.db files"
+check_absent "node_modules/"           "No node_modules (built on the packaging host's platform)"
+check_absent "/skills/s_internal-"     "No s_internal-* skills"
+check_absent "/templates/ddd-gates/"   "No internal DDD gate templates"
+check_absent "MagicMock"               "No test-leak junk"
 
 # ── Summary ───────────────────────────────────────────────
 

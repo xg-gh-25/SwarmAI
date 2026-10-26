@@ -79,18 +79,27 @@ STAGING="${DIST_DIR}/${PACKAGE_NAME}"
 rm -rf "${STAGING}" "${ARCHIVE}"
 mkdir -p "${STAGING}"
 
-echo "[release] Copying backend..."
-rsync -a \
-    --exclude='.venv' \
-    --exclude='__pycache__' \
-    --exclude='*.pyc' \
-    --exclude='.pytest_cache' \
-    --exclude='tests/' \
-    --exclude='.mypy_cache' \
-    --exclude='.DS_Store' \
-    --exclude='.hypothesis' \
-    --exclude='conftest.py' \
-    "${PROJECT_ROOT}/backend/" "${STAGING}/backend/"
+# The backend files that ship are the ones the repo ships — the same rule the desktop
+# installer uses (backend/scripts/shipped_skills.py): git-tracked plus untracked-but-not-
+# ignored, node_modules/__pycache__ always skipped. Walking the directory instead put the
+# checkout's gitignored files on every Hive: backend/.env (a placeholder JWT secret that
+# stopped the per-boot random one), a stray data.db, test-leak junk, the s_internal-*
+# skills and templates/ddd-gates (internal-only), and node_modules installed on macOS
+# (darwin-only native binaries that cannot run on linux-arm64). A failing git ls-files
+# aborts the build (set -e) rather than falling back to the walk.
+echo "[release] Copying backend (the files the repo ships)..."
+BACKEND_LIST="${STAGING}.backend-files"
+(cd "${PROJECT_ROOT}" && python3 backend/scripts/shipped_skills.py backend) > "${BACKEND_LIST}.all"
+grep -v -E '(^|/)(tests|\.pytest_cache|\.mypy_cache|\.hypothesis|\.venv)/|(^|/)(conftest\.py|\.DS_Store)$|\.pyc$' \
+    "${BACKEND_LIST}.all" > "${BACKEND_LIST}" || true
+rm -f "${BACKEND_LIST}.all"
+if ! grep -qx 'backend/main.py' "${BACKEND_LIST}"; then
+    echo "[release] ERROR: backend file list has no backend/main.py — aborting" >&2
+    exit 1
+fi
+rsync -a --files-from="${BACKEND_LIST}" "${PROJECT_ROOT}/" "${STAGING}/"
+echo "[release]   backend files: $(wc -l < "${BACKEND_LIST}" | tr -d ' ')"
+rm -f "${BACKEND_LIST}"
 
 echo "[release] Copying pre-built frontend..."
 mkdir -p "${STAGING}/desktop/dist"

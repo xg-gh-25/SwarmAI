@@ -19,6 +19,10 @@ ignored skills back into the package.
 
 Deliberately imports nothing from the backend: the PyInstaller spec in
 desktop/scripts/build-backend.sh loads it by path.
+
+hive/release.sh applies the same rule to the whole backend tree
+(``python3 backend/scripts/shipped_skills.py backend``), so the Hive package and the desktop
+installer leave out the same gitignored files.
 """
 from __future__ import annotations
 
