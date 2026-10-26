@@ -32,6 +32,7 @@ import { BrainMap, type BrainMapTarget, type BrainMapProps, type MapTone } from 
 import { MaterialPicker, type MaterialRow } from './StarterMaterial';
 import { buildAddKnowledgePrompt, buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { openOverlayAt } from '../../utils/overlayTarget';
+import { copyToClipboard } from '../../utils/clipboard';
 import {
   sectionCounts, projectRuns, runTone, needsYouItems, brainEval, type RunTone,
 } from './brainMapModel';
@@ -451,10 +452,12 @@ function AgentPanel({ name, runs, delivery, agent, onDispatch }: {
   const profiles = runs.reduce<Record<string, number>>((m, r) => { if (r.profile) m[r.profile] = (m[r.profile] ?? 0) + 1; return m; }, {});
   const usual = Object.entries(profiles).sort((a, b) => b[1] - a[1])[0]?.[0];
 
-  const send = (msg: string, label: string) => {
-    const ok = onDispatch ? onDispatch(msg) : false;
-    if (!ok) void navigator.clipboard?.writeText(msg);
-    setSent(ok ? `Sent to chat: ${label}` : `Copied to the clipboard: ${label}. Paste it into a chat tab.`);
+  const send = async (msg: string, label: string) => {
+    if (onDispatch?.(msg)) { setSent(`Sent to chat: ${label}`); return; }
+    const copied = await copyToClipboard(msg);
+    setSent(copied
+      ? `Copied to the clipboard: ${label}. Paste it into a chat tab.`
+      : `Could not send or copy: ${label}. Open a chat tab and try again.`);
   };
   const submit = () => {
     const text = req.trim();

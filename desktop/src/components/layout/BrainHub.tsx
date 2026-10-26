@@ -55,6 +55,7 @@ import { hubSummary } from './brainMapModel';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { takeOverlayTarget } from '../../utils/overlayTarget';
+import { copyToClipboard } from '../../utils/clipboard';
 
 /** hunkSummary — derive a plain-language what/where from a single-hunk `diff_text`
  *  (Run 2, run_32cd6a60). PURE + exported so prod render + tests share one source
@@ -1177,7 +1178,7 @@ function DistributeView(
   // s_ddd-distribute's confirm/scan/emit≠publish gates run. Falls back to clipboard
   // when onDispatch is absent (older webview / non-overlay mount).
   const distributeCmd = `distribute this ddd: ${name}`;
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'ok' | 'failed' | null>(null);
   // AC3 (run_8d2ec26c): collapsed-by-default guideline (reuses the graphOpen disclosure
   // pattern — own local state, not a shared name). Progressive disclosure: no noise until asked.
   const [guidelineOpen, setGuidelineOpen] = useState(false);
@@ -1190,15 +1191,12 @@ function DistributeView(
       const sent = onDispatch(distributeCmd);
       if (sent) { onRequestClose?.(); return; }
     }
-    // Fallback: copy the command (older webview / no dispatch bridge / no active tab).
-    // Guard BOTH the method (clipboard may be absent) AND the returned promise (?. on
-    // .then) — Gate-2 HIGH: `clipboard?.writeText(x).then` still throws if clipboard
-    // exists but writeText returns undefined.
-    const p = navigator.clipboard?.writeText(distributeCmd);
-    p?.then(
-      () => { setCopied(true); setTimeout(() => setCopied(false), 2000); },
-      () => {},
-    );
+    // Fallback: copy the command (no dispatch bridge / no active tab). Goes through
+    // copyToClipboard: navigator.clipboard is denied in the Tauri webview.
+    void copyToClipboard(distributeCmd).then((ok) => {
+      setCopied(ok ? 'ok' : 'failed');
+      setTimeout(() => setCopied(null), ok ? 2000 : 2500);
+    });
   }, [distributeCmd, onDispatch, onRequestClose]);
 
   if (error) return <div className="p-4 text-[var(--color-status-error)] text-body" data-testid="distribute-error">Failed to load distribution: {error}</div>;
@@ -1332,7 +1330,8 @@ function DistributeView(
             }
           >
             <span className="material-symbols-outlined icon-xs">{onDispatch ? 'send' : 'content_copy'}</span>
-            {copied ? 'Copied — paste into a chat tab'
+            {copied === 'ok' ? 'Copied — paste into a chat tab'
+              : copied === 'failed' ? 'Could not copy — open a chat tab and retry'
               : onDispatch ? 'Distribute this brain →'
               : 'Distribute a brain'}
           </button>

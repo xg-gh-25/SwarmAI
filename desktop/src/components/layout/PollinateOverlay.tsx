@@ -35,6 +35,7 @@ import {
 } from '../../services/pollinate';
 import { WorkbenchToolbar, OverlayDrawer } from './overlayShell';
 import { OverlayError } from './OverlayState';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export interface PollinateContentProps {
   /** Hand a prompt to a chat tab (land+activate, THEN inject). Mirrors ChatPage's
@@ -523,11 +524,11 @@ function AssetDrawer({ card, asset, knownChannels, captionCache, onClose, onOpen
   // fall back to the path only if the body couldn't be fetched.
   const doCopy = useCallback(async () => {
     setCopyErr(false);
-    try {
-      await navigator.clipboard.writeText(body ?? asset.filePath);
+    // copyToClipboard, not navigator.clipboard: the latter is denied in the Tauri webview.
+    if (await copyToClipboard(body ?? asset.filePath)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
+    } else {
       // B7: clipboard blocked was a silent no-op — the button showed no
       // 'Copied' and no error, so the user couldn't tell it failed.
       setCopyErr(true);
