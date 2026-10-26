@@ -1777,6 +1777,7 @@ class TestMemoryWorthyCorrectionGate:
         mem.parent.mkdir(parents=True)
         mem.write_text("## Pitfalls\n")
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
 
         from core.runtime_hooks import create_user_correction_detector
         hook = create_user_correction_detector(str(corrections_file), session_context)
@@ -1809,6 +1810,7 @@ class TestMemoryWorthyCorrectionGate:
         # A correction stays a [pitfall]→## Pitfalls (fixed home; judge admits, not re-routes).
         mem.write_text("## Pitfalls\n")
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
 
         real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
                 "environment-fixed updater-signing gap, not a regression; relaunch "
@@ -1840,6 +1842,7 @@ class TestMemoryWorthyCorrectionGate:
         mem.parent.mkdir(parents=True)
         mem.write_text("## Pitfalls\n")
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
 
         real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
                 "environment-fixed updater-signing gap, not a regression; relaunch "
@@ -1880,6 +1883,7 @@ class TestMemoryWorthyCorrectionGate:
 
         monkeypatch.setattr(ig, "admit_memory_lesson", _spy)
         monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
         real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
                 "environment-fixed updater-signing gap, not a regression; relaunch "
                 "the built app and it runs clean")

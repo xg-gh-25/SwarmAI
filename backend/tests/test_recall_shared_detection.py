@@ -224,11 +224,14 @@ class TestTriggerTimingPreserved:
     """PRESERVED: the DDD leg still fires pre-keyword-gate (signal-1 zero-keyword)."""
 
     @pytest.mark.asyncio
-    async def test_zero_keyword_opener_with_editor_still_injects_ddd(self):
+    async def test_zero_keyword_opener_with_editor_still_injects_ddd(self, tmp_path, monkeypatch):
         """A zero-keyword opener ("继续") + an editor file in Projects/<X>/ must STILL
         trigger DDD injection via signal-1 — the refactor shares the detection RESULT
-        but must NOT move the DDD trigger behind the keyword gate."""
+        but must NOT move the DDD trigger behind the keyword gate. The project lives in
+        a sandbox workspace (it used to rely on the live one having SwarmAI)."""
         from core.session_router import _maybe_inject_recall
+        (tmp_path / "Projects" / "SwarmAI").mkdir(parents=True)
+        monkeypatch.setenv("SWARMWS", str(tmp_path))
 
         unit = _make_unit()
         injected = {"ddd": False}
