@@ -27,7 +27,7 @@ export const OVERLAY_CHUNK = {
   jobs: () => import('./JobsRunsOverlay'),
   capabilities: () => import('./CapabilitiesOverlay'),
   hive: () => import('./HiveFleetOverlay'),
-  eval: () => import('../../pages/EvalDashboard'),
+  eval: () => import('../../pages/eval/EvalOverlay'),
   settings: () => import('../../pages/SettingsPage'),
   // swarmws: WorkspaceExplorer is also the app's own sidebar, so it is in the first
   // bundle anyway — nothing to split.

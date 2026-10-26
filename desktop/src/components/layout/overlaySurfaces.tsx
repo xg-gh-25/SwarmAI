@@ -39,7 +39,7 @@ const PollinateContent = lazy(() => OVERLAY_CHUNK.pollinate().then((m) => ({ def
 const HiveFleetContent = lazy(() => OVERLAY_CHUNK.hive().then((m) => ({ default: m.HiveFleetContent })));
 const BrainHub = lazy(() => OVERLAY_CHUNK['brain-hub']().then((m) => ({ default: m.BrainHub })));
 const SettingsPage = lazy(() => OVERLAY_CHUNK.settings());
-const EvalDashboard = lazy(() => OVERLAY_CHUNK.eval());
+const EvalOverlay = lazy(() => OVERLAY_CHUNK.eval());
 
 // Chrome (title, mode, width, zone tint, spout target) lives in navTable.NAV, not here:
 // each entry below is only an id + its content.
@@ -223,7 +223,7 @@ registerOverlay({
 // + Modal-fullscreen path (chatAreaBounds/navSource geometry — the D5 disease). Folding
 // them here makes activeOverlay the SOLE fullscreen authority, unblocking M5's deletion of
 // the legacy trio. settingsTab stays LayoutContext state (the deep-link contract);
-// EvalDashboard shows its own score header, so no dynamic title needed here.
+// The Eval overlay shows its own header, so no dynamic title needed here.
 // (WorkspaceSettings + file-editor stay on activeModal — they are NOT fullscreen and carry
 // no legacy geometry.)
 
@@ -234,7 +234,9 @@ registerOverlay({
 
 registerOverlay({
   id: 'eval',
-  render: () => <EvalDashboard />,
+  render: ({ close, dispatchPrompt, resumeSession }) => (
+    <EvalOverlay close={close} dispatchPrompt={dispatchPrompt} resumeSession={resumeSession} />
+  ),
 });
 
 // ── hive (Fleet) — nav-card-only, NOT in ALL_SHOW_EVENTS ──────────────────────────────

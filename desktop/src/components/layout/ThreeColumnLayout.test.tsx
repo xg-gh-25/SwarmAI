@@ -61,12 +61,12 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 // Settings + OS Eval migrated to the OverlayHost registry (M3-tail) — they render
-// through overlaySurfaces (SettingsPage / EvalDashboard), not a Modal wrapper. Mock the
+// through overlaySurfaces (SettingsPage / EvalOverlay), not a Modal wrapper. Mock the
 // heavy page content so the layout tests don't fire the pages' internal HTTP.
 vi.mock('../../pages/SettingsPage', () => ({
   default: () => <div data-testid="settings-page" />,
 }));
-vi.mock('../../pages/EvalDashboard', () => ({
+vi.mock('../../pages/eval/EvalOverlay', () => ({
   default: () => <div data-testid="eval-dashboard" />,
 }));
 

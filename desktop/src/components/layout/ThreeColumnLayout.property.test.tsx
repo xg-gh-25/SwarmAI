@@ -40,11 +40,11 @@ vi.mock('../../services/tauri', async () => {
 });
 
 // Settings + OS Eval migrated to the OverlayHost registry (M3-tail) — render via
-// overlaySurfaces (SettingsPage / EvalDashboard). Mock the heavy page content.
+// overlaySurfaces (SettingsPage / EvalOverlay). Mock the heavy page content.
 vi.mock('../../pages/SettingsPage', () => ({
   default: () => <div data-testid="settings-page" />,
 }));
-vi.mock('../../pages/EvalDashboard', () => ({
+vi.mock('../../pages/eval/EvalOverlay', () => ({
   default: () => <div data-testid="eval-dashboard" />,
 }));
 
