@@ -1,9 +1,9 @@
 ---
-title: Recall 语料的写入与准入 — 提取与 ingestion 解耦，Memory、DDD、Knowledge 统一的 Inbox、答题卡、写入与认知流 dashboard
+title: Recall 语料的写入与准入 — 提取与 ingestion 解耦，Memory、DDD、Knowledge 统一的 Inbox、答题卡、写入与 Cognitive Distillation Flow dashboard
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r13 — 设计，待评审（提取与 ingestion 解耦；修订记录见 §18）
+status: r13b — 设计，待评审（提取与 ingestion 解耦；修订记录见 §18）
 ---
 
 # Recall 语料的写入与准入
@@ -18,15 +18,15 @@ r13 改成**提取和 ingestion 解耦**：
 ```
 各 source  ──只负责提取──▶  Inbox（data.db）  ──按各自的节奏──▶  Ingestion worker  ──▶  MEMORY / EVOLUTION / DDD / Library / 用户 context
 （蒸馏、纠正、REFLECT、         候选、状态、审计        整理 → 答题卡 → 目的地规则         唯一写入者
- backflow、DailyActivity、     有保留期，会被清理       → 检索已有内容 → routing → 写入
+ backflow、DailyActivity、     只保留 30 天           → 检索已有内容 → routing → 写入
  cultivation、skill、"记住"）                                    │
                                                                 ▼
-                                     Need You overlay 的「认知流」视图（统一 dashboard）
+                                     Need You overlay 的 Cognitive Distillation Flow（统一 dashboard）
 ```
 
 - **source** 只做两件事：按自己定制的格式提取，然后入队。入队是一次插库操作，毫秒级完成，不会打断会话、run 或 chat。
 - **Ingestion** 是唯一的写入者，在后台按自己的节奏和要求处理：整理、分类、打分、执行目的地规则、和已有内容比对、routing、写入。
-- **Inbox** 有保留期，过期的原始内容会被清理（§4）。
+- **Inbox** 只保留 30 天，更早的行先汇总成统计数据，再删除（§4）。
 - **dashboard** 放在 Need You overlay 里：这条流程是认知系统的核心，不再另开一个页面（§10）。
 
 r13 取代 r12。r12 里大部分复杂机制，起因都是"多个写入者各自当场写"：准备→提交、租约、多写入者版本冲突、跨进程配额计数、受控写入的三层强制。解耦之后这些都不需要了。
@@ -144,19 +144,16 @@ r12 里经过评审、而且仍然成立的结论都保留下来：答题卡的�
 - `merged`：同一批里内容相同或可以合并的候选，被并进另一个候选；本行记下它并进了哪个候选。
 - 同一个 `id` 再次入队时：内容和信封都一致，就返回已有状态；任何一项不一致，就记 `id_collision` 并告警。
 
-**清理：原始内容不会无限增长**
+**清理：只保留 30 天**
 
-| 规则 | 默认值（写在契约里，可配置） |
-|---|---|
-| 终态行（written / rejected / merged / expired）的原始 `payload` 保留多久 | 30 天。之后只保留哈希、原因码、去向、写入锚点和 200 字的节选，原文清掉 |
-| 压缩后的行保留多久 | 180 天，之后整行删除 |
-| 未结束的行（queued / deferred）上限 | 2000 行或 20 MB。超出时，先把同一 source 同一来源的旧候选合并掉；还超就丢弃最旧的，并在 dashboard 上计数 |
-| 整表上限 | 100 MB。超出时提前压缩最旧的终态行 |
-| 空间回收 | 每次清理后执行 `PRAGMA incremental_vacuum`，表启用 `auto_vacuum=INCREMENTAL` |
-| 谁来执行 | worker 的 maintenance lane（§6），每天一次 |
+- 规则只有一条：`created_at` 早于 30 天的行，不论状态，整行删除。30 天这个值写在契约里，可配置。
+- 删除前先把这些行汇总进 `ingestion_daily_stats`，按（日期、source、lane、目的地、状态、原因码）分组，记录条数、LLM 调用次数和 token 数。汇总表只存数字，不存任何内容，每年最多几万行，不需要另外清理。
+- 由 worker 的 maintenance lane 每天执行一次。删除和汇总在同一个事务里完成，崩溃后重跑不会重复计数：汇总按天写入，用 upsert 覆盖。
+- 未处理完的行不需要单独设上限：`deferred` 最多重试 5 次，几天之内就会变成 `expired`；一直排着没处理的，到 30 天也一起删掉，并计入汇总表的 `expired_unprocessed`。
+- 每次删除后执行 `PRAGMA incremental_vacuum`，表启用 `auto_vacuum=INCREMENTAL`。
 
 source 自己的原始数据（会话 transcript、DailyActivity、run 记录）**仍归 source 自己管理**，Inbox 不复制它们，只在 payload 里存提取出来的内容和来源 id。
-Inbox 被清理之后，审计仍然能通过来源 id 回到原始会话。原始会话按它自己的保留规则过期。
+超过 30 天的候选，dashboard 只显示汇总统计，不显示原始内容，也不再提供单条详情（§10）。
 
 **不进召回，也不进索引**：Inbox 是状态和审计记录，不是知识。
 
@@ -196,7 +193,7 @@ worker 用这个格式解析 payload；各 source 可以给出不同的提示，
 - **一个 worker，一个队列**：所有 lane 都由同一个 worker 按优先级取任务，同一时刻只处理一条或一批，所以受控存储的写入天然是串行的。
 - **"到期了吗"只记一处**：每个 lane 上次运行的时间存在 `<app data>/state/ingestion_lanes.json`。不论哪个触发点先到，都调用同一个入口去判断。
 - **所有模式都能跑**：daemon、subprocess、hive、dev 模式下，backend 启动和会话 idle 都会触发，所以各模式都能处理全部 lane。daemon / hive 的调度器只是让 `scheduled` 和 `maintenance` 更准时。
-- **"记住"的反馈**：agent 调用 `ingest submit --wait 10`。10 秒内 worker 处理完，就直接告诉用户写到了哪里、或者为什么被拒；超时就回复"已收到，结果会显示在 Need You → 认知流"。
+- **"记住"的反馈**：agent 调用 `ingest submit --wait 10`。10 秒内 worker 处理完，就直接告诉用户写到了哪里、或者为什么被拒；超时就回复"已收到，结果会显示在 Need You → 认知蒸馏流"。
 
 ## 7. Ingestion pipeline：整理 → 标准答题卡 → 目的地规则 → 和已有内容比对 → 写入
 
@@ -416,7 +413,7 @@ worker 用这个格式解析 payload；各 source 可以给出不同的提示，
 
 **带外修改检测**：maintenance lane 每天把各受控文件的单元集合和"基线 + writer 写过的版本"做比对，对不上的部分在审计里记一行 `writer=unknown` 并附上 diff，同时在 Need You 里出现一条记录（§10）。
 
-**迁移顺序**：一次改一个 source，每改完一个，在认知流里观察一天，确认这个 source 的候选能正常走完全流程，再改下一个。不做影子模式：每个 source 改完就直接生效，旧的写入路径同时删掉。
+**迁移顺序**：一次改一个 source，每改完一个，在认知蒸馏流里观察一天，确认这个 source 的候选能正常走完全流程，再改下一个。不做影子模式：每个 source 改完就直接生效，旧的写入路径同时删掉。
 
 ## 9. 来源和污染（沿用 r12，入口改为 `enqueue()`）
 
@@ -455,11 +452,11 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 每个条目附一句可以直接发进 chat 的 prompt（沿用现有的 dispatch 机制），例如"看下 ingestion 为什么积压"。
 不会因为某个候选被拒就产生条目：被拒是正常结果，在第 2 页查看。
 
-**第 2 页「认知流」**（新增）
-- **流程总览**：source → Inbox → 整理 → 卡 0/1/2 → 目的地规则 → 卡 3 → 写入，每一段显示最近 24 小时和 7 天的数量，按 lane 着色。点任意一段，下面的列表就按这一段筛选。
-- **候选列表**：时间、source、lane、内容开头、状态、去向、原因码。可以按 source、目的地、状态、原因码、关键词、时间筛选，分页显示。
+**第 2 页「Cognitive Distillation Flow / 认知蒸馏流」**（新增）
+- **流程总览**：source → Inbox → 整理 → 卡 0/1/2 → 目的地规则 → 卡 3 → 写入，每一段显示最近 24 小时、7 天、30 天的数量，按 lane 着色。点任意一段，下面的列表就按这一段筛选。
+- **候选列表**：时间、source、lane、内容开头、状态、去向、原因码。可以按 source、目的地、状态、原因码、关键词、时间筛选，分页显示。只列最近 30 天的候选。
 - **候选详情**：
-  - 原始 payload（如果已被清理，显示节选，并提供"打开原会话"链接）；
+  - 原始 payload，以及"打开原会话"链接；
   - 来源信封；
   - 整理阶段的拆分和合并；
   - 每个单元在卡 0–3 上每道题的答案和理由；
@@ -467,10 +464,11 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 卡 3 的每个命中和最终算出的动作；
   - 写到了哪个文件的哪一条，可以点开；替换或跳过了哪一条，归档在哪里；
   - 写了哪些关系边。
+- **历史趋势**（30 天以前）：只读 `ingestion_daily_stats`，按周或按月显示每个 source 的入队量、写入率、拒绝的原因码分布、各目的地的写入量和 LLM 成本。不显示任何原始内容。
 - **健康区**：各 lane 的积压和最老一条的等待时间、熔断记录、每天的 LLM 调用次数和 token、判官与关键词分类器不一致的次数、Inbox 大小和上次清理时间、MEMORY 与 EVOLUTION 的大小及注入时省略的单元数。
 
-**实现**：后端在 `attention_authority.collect()` 里加 `_collect_ingestion()`；新增只读接口 `GET /api/ingestion/flow`（总览）、`/api/ingestion/items`（列表）、`/api/ingestion/items/{id}`（详情）。三个接口都跑在 `executors.run_nav` 上，做同步、参数化的 SQLite 只读查询，并且只读当前实例自己的 `data.db`。
-前端改动：`NeedYouOverlay` 加 Tabs；新增 `IngestionFlowView`；`AttentionEntry.source` 加 `ingestion`，`ATTENTION_SOURCE_LABEL` 加对应标签；`overlayQueries` 加预取；补中英文 i18n；遵守 Nav visual system，并通过 nav visual 测试和相等性测试。
+**实现**：后端在 `attention_authority.collect()` 里加 `_collect_ingestion()`；新增只读接口 `GET /api/ingestion/flow`（总览）、`/api/ingestion/items`（列表）、`/api/ingestion/items/{id}`（详情）、`/api/ingestion/stats`（历史趋势，读汇总表）。四个接口都跑在 `executors.run_nav` 上，做同步、参数化的 SQLite 只读查询，并且只读当前实例自己的 `data.db`。
+前端改动：`NeedYouOverlay` 加 Tabs；新增 `CognitiveDistillationFlow` 视图；`AttentionEntry.source` 加 `ingestion`，`ATTENTION_SOURCE_LABEL` 加对应标签；`overlayQueries` 加预取；补中英文 i18n；遵守 Nav visual system，并通过 nav visual 测试和相等性测试。
 
 **不提供审批按钮**：dashboard 只用来看。判断有误就去改契约、规则或 prompt，然后把版本号加一。可以对 Inbox 离线重放，验证修改的效果（§14）。
 
@@ -497,8 +495,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
     3. 认知层和操作层各自按本轮查询的 BM25 分数排序，再按单元在文件里的顺序排序，依次装入，装满为止。
     4. 输出时按单元原来的顺序拼接。
   - 没装进去的单元仍然能被检索到：recall 的 `context_files` 那一路（读取侧设计 `2026-10-26-recall-precision-and-coverage.md` D4：只检索 MEMORY 里不在 prompt 中的条目）照常能召回它们。
-  - STEERING、USER、TOOLS 由用户自己管，不设上限，只在超过 8K tokens 时在认知流里提示。
-  - `over_budget` 警告保留，额外记录被省略的单元数，显示在认知流的健康区。
+  - STEERING、USER、TOOLS 由用户自己管，不设上限，只在超过 8K tokens 时在认知蒸馏流里提示。
+  - `over_budget` 警告保留，额外记录被省略的单元数，显示在认知蒸馏流的健康区。
   - 实施时同步改 AGENTS.md 的 Context and Memory System 一节和 `context_directory_loader` 的文档，L1 缓存的预算头也跟着改。
 - **DDD 注入不改**：仍然注入 section 指针，带上整段的 what、how、why。r12 计划改成只注入几条正文，2026-10-26 的成对盲评里 8 对输了 7 对，已经撤回。唯一的改动是：被 supersedes 的条目，命中时转交给它的链头（§7.3）。
 - **Library 过滤不做**：多取后补足、过滤 frontmatter 和短正文，这几项在盲评里和基线持平，所以没有合并。等写入侧干净之后再评估。被污染的 Library 内容放进不可信数据边界里渲染。
@@ -548,18 +546,18 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - **不通过**：只改 prompt 和规则，不进入第 1 步。
 
 **第 1 步：Inbox、worker、writer、dashboard，加第一个 source**
-4. v16 迁移（`ingestion_inbox`、`session_inputs`）、`enqueue()`、lane 调度、负载感知、清理、writer（加锁、版本比较、先归档后移除、原子写入、关系图 v2）。
-5. Need You 的「认知流」页，以及 `AttentionAuthority` 的 `ingestion` source。
+4. v16 迁移（`ingestion_inbox`、`ingestion_daily_stats`、`session_inputs`）、`enqueue()`、lane 调度、负载感知、清理、writer（加锁、版本比较、先归档后移除、原子写入、关系图 v2）。
+5. Need You 的「认知蒸馏流」页，以及 `AttentionAuthority` 的 `ingestion` source。
 6. 第一个 source：backflow。它当前质量最差（15 条里 9 条只在原会话里有意义），而且只写 Library，风险最小。
 - 验收：
-  - 一天的真实流量里，backflow 每个候选在认知流里都能看到完整的处理过程；
+  - 一天的真实流量里，backflow 每个候选在认知蒸馏流里都能看到完整的处理过程；
   - 同一条消息只产出一份；
   - 被拒的原因码合理；
   - chat 的 p90 不变，因为入队只是一次插库。
 
 **第 2 步：依次迁移其余 source**
-顺序：REFLECT → DailyActivity 决策和纠正 → 会话结束蒸馏 → 即时纠正和"记住" → cultivation → 其余。每迁移一个，就删掉它原来的写入路径，在认知流里观察一天再继续。
-- 每个 source 的验收：它的候选在认知流里能完整走完；它原来的写入路径已经删除（静态测试会因为直接写入而变红）；没有出现带外修改。
+顺序：REFLECT → DailyActivity 决策和纠正 → 会话结束蒸馏 → 即时纠正和"记住" → cultivation → 其余。每迁移一个，就删掉它原来的写入路径，在认知蒸馏流里观察一天再继续。
+- 每个 source 的验收：它的候选在认知蒸馏流里能完整走完；它原来的写入路径已经删除（静态测试会因为直接写入而变红）；没有出现带外修改。
 
 **第 3 步：退役会改动已沉淀内容的维护机制，并加上注入预算**
 - 验收：
@@ -572,9 +570,9 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - `swarm_select_tests.py` 选出的测试全部通过；
 - Windows CI 通过；
 - 四种运行模式下，lane 都能被触发；
-- Inbox 清理后，数据库大小有上限（用 soak 测试验证）。
+- Inbox 只保留 30 天；删掉的行在汇总表里的计数和删除前一致，重跑清理也不会重复计数（用测试验证）。
 
-上线后：每次改 prompt 或规则，都先对最近 30 天的真实 Inbox 做离线重放，比较前后的决定，确认没有退化再合并。
+上线后：每次改 prompt 或规则，都先对 Inbox 里现有的 30 天真实数据做离线重放，比较前后的决定，确认没有退化再合并。
 
 ## 15. 不做
 
@@ -594,7 +592,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 | source 的登记信息（lane、payload 格式、提示） | `store_contracts` | 人改 | `enqueue()`、worker |
 | 标准答题卡、路由表、DDD 段矩阵、配额、注入预算、Inbox 保留期 | `store_contracts` | 人改 | worker、读取侧 |
 | 目的地规则 | `core/ingestion_rules/*.py` | 人改 | worker |
-| 候选的原始内容、状态、每张卡的结果、去向、理由 | `ingestion_inbox` | `enqueue()`、worker | worker、dashboard |
+| 候选的原始内容、状态、每张卡的结果、去向、理由（最近 30 天） | `ingestion_inbox` | `enqueue()`、worker | worker、dashboard |
+| 30 天以前的统计 | `ingestion_daily_stats` | maintenance lane，在删除前汇总 | dashboard 的历史趋势 |
 | 输入事件和它的 trust | `session_inputs` | 消息入口、工具结果入口 | `enqueue()`、dashboard |
 | 每个 lane 上次运行的时间 | `<app data>/state/ingestion_lanes.json` | worker | 触发点 |
 | 基线 | `<app data>/state/baseline.json` | 上线时生成一次，用户编辑时修订 | writer、比对、验收 |
@@ -609,7 +608,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 1. 全自动：答题卡就是最终决定，人看审计（r6）。
 2. 已经沉淀的内容系统不动（r7）。用户自己编辑时，修订基线（r12）。
 3. 每轮注入的文件有确定性的预算，源文件不变（r12）。
-4. 提取和 ingestion 解耦。Inbox 有保留期，原始内容会被清理。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里。按时效性分 lane 触发（r13）。
+4. 提取和 ingestion 解耦。Inbox 只保留 30 天，更早的只留统计。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里，叫 Cognitive Distillation Flow（认知蒸馏流）。按时效性分 lane 触发（r13）。
 5. DDD 的注入方式不改；所有 DDD 规则都以保住 what、how、why 为前提（r13）。
 6. 先做第 0 步（离线 go/no-go），通过之后再接入真实的 source。
 
@@ -652,7 +651,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 每轮注入文件改为确定性的预算选取（修改 AGENTS.md 里"永不截断"的规定）；用户编辑算基线修订；日志类文件不纳入字节不变的检查范围。
   - 验收改成同一查询成对回放；夹具分层，分 train/dev/test，并事先估算样本量；门槛取置信区间下界；模型行为测试从真实检索入口开始；对需要按新不变量重写的现有测试列出清单。
 
-- **r13：提取与 ingestion 解耦**（Gawan 提出）。source 只负责提取和入队，Inbox 有保留期并定期清理，ingestion worker 是唯一写入者；标准答题卡之外，每类目的地有定制规则（DDD 必须保住 what、how、why）；source 可以有定制的提取格式；按时效性分 lane 触发；统一 dashboard 放在 Need You overlay（「认知流」页，加上 `AttentionAuthority` 的 ingestion 异常）。r12 里为多写入者并发设计的准备→提交、租约、跨进程配额、三层强制全部删除。DDD 注入方式和 Library 过滤不改（依据第 1 步的盲评结果）。新增第 0 步：先做离线 go/no-go。
+- **r13b**（Gawan）：Inbox 清理简化为只保留 30 天，删除前汇总进 `ingestion_daily_stats`；dashboard 对超过 30 天的数据只显示统计；dashboard 定名为 Cognitive Distillation Flow（认知蒸馏流）。
+- **r13：提取与 ingestion 解耦**（Gawan 提出）。source 只负责提取和入队，Inbox 有保留期并定期清理，ingestion worker 是唯一写入者；标准答题卡之外，每类目的地有定制规则（DDD 必须保住 what、how、why）；source 可以有定制的提取格式；按时效性分 lane 触发；统一 dashboard 放在 Need You overlay（「认知蒸馏流」页，加上 `AttentionAuthority` 的 ingestion 异常）。r12 里为多写入者并发设计的准备→提交、租约、跨进程配额、三层强制全部删除。DDD 注入方式和 Library 过滤不改（依据第 1 步的盲评结果）。新增第 0 步：先做离线 go/no-go。
 
 ## 19. 验收结果
 
