@@ -661,6 +661,31 @@ def _reset_recall_health_counters():
     yield
 
 @pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """Put the real ``database.db`` back into every app module that kept a mock of it.
+
+    ``from database import db`` binds the object at import time. A module first
+    imported while a test had ``patch("database.db")`` active keeps the MagicMock
+    after the patch exits, for the rest of the worker: core.session_manager did after
+    test_sse_disconnect_chain, and every later test that stored a session failed
+    (test_steer_send: 21 SESSION_BUSY). Runs after the test's own fixtures are torn
+    down, so a test's monkeypatch of a module's ``db`` is already undone; only a Mock
+    left behind is replaced. Guarded by tests/test_conftest_frozen_db.py.
+    """
+    yield
+    from unittest.mock import NonCallableMock
+    real = getattr(database_module, "db", None)
+    if real is None or isinstance(real, NonCallableMock):
+        return
+    for name, mod in list(_sys.modules.items()):
+        if mod is None or not name.startswith(_APP_MODULE_PREFIXES):
+            continue
+        held = getattr(mod, "__dict__", {}).get("db")
+        if held is not None and held is not real and isinstance(held, NonCallableMock):
+            mod.db = real
+
+
+@pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
     """Put back the thread's event loop when a test cleared it.
 
