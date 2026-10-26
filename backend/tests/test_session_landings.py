@@ -171,20 +171,20 @@ def test_exactly_the_cap_is_truncated(tmp_path, monkeypatch):
     assert not res["truncated"] and len(res["landed"]) == 1
 
 
-def test_expect_ends_the_read_at_that_many_landings(tmp_path, monkeypatch):
-    """A busy reflog (this repo's main has ~1700 entries) is always longer than the cap;
-    the turn knows how many lands it handed its id, so finding them all is complete."""
+def test_read_turn_finds_the_turns_land_past_any_cap_once(tmp_path, monkeypatch):
+    """read_turn (design 2026-10-26-turn-cards-unified.md §3.3): an exact search by the
+    turn id, so a busy reflog hides nothing; the branch and HEAD reflog hits of one
+    land are one landing; another turn's land is not this turn's."""
     repo = _repo(tmp_path / "proj")
     _land(monkeypatch, repo, "t1", {"b.py": "b\n"})
-    for _ in range(6):
-        _g(repo, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "x")
-    key = asi.session_key(SID)
-    res = sl.read_repo(str(repo), key, deadline=sl.Deadline(10), cap=8, turn_id=T1, expect=1)
-    assert len(res["landed"]) == 1 and not res["truncated"]
-    res = sl.read_repo(str(repo), key, deadline=sl.Deadline(10), cap=8, turn_id=T1, expect=2)
-    assert len(res["landed"]) == 1 and res["truncated"], "fewer found and the cap reached"
-    res = sl.read_repo(str(repo), key, deadline=sl.Deadline(10), cap=50, turn_id=T1, expect=2)
-    assert len(res["landed"]) == 1 and not res["truncated"], "the reflog ended: complete"
+    _land(monkeypatch, repo, "t2", {"c.py": "c\n"}, turn=T2)
+    for _ in range(sl.TURN_CAP + 5):
+        _g(repo, "update-ref", "-m", "noise", "refs/heads/main", "HEAD")
+    monkeypatch.setattr(sl, "_bound_checkouts", lambda: [str(repo)])
+    res = sl.read_turn(SID, T1, deadline=sl.Deadline(10))
+    assert [x["branch"] for x in res["landed"]] == [f"session/{asi.session_key(SID)}-t1"]
+    assert not res["truncated"] and res["unknown"] == []
+    assert sl.read_turn(OTHER, T1, deadline=sl.Deadline(10))["landed"] == []
 
 
 def test_an_exhausted_deadline_starts_no_git(tmp_path, monkeypatch):
@@ -248,18 +248,6 @@ def test_limit_and_newest_first_span_all_bound_checkouts(tmp_path, monkeypatch):
     res = sl.read_session(SID, deadline=sl.Deadline(10), limit=2)
     assert [x["branch"].rsplit("-", 1)[1] for x in res["landed"]] == ["z2", "a1"]
     assert res["truncated"] and len(expanded) == 2
-
-
-def test_expect_met_in_a_later_repo_is_complete(tmp_path, monkeypatch):
-    """A repo that hit its cap without the stamp does not make the read 'maybe more'
-    once every stamp the turn handed out was found in another repo."""
-    a, z = _repo(tmp_path / "a"), _repo(tmp_path / "z")
-    for _ in range(3):
-        _g(a, "-c", "core.hooksPath=/dev/null", "commit", "-q", "--allow-empty", "-m", "x")
-    _land(monkeypatch, z, "z1", {"b.py": "1\n"})
-    monkeypatch.setattr(sl, "_bound_checkouts", lambda: [str(a), str(z)])
-    res = sl.read_session(SID, deadline=sl.Deadline(10), turn_id=T1, cap=2, expect=1)
-    assert len(res["landed"]) == 1 and not res["truncated"]
 
 
 def test_an_old_unrelated_entry_closes_the_canvas_window(tmp_path, monkeypatch):

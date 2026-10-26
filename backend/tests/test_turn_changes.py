@@ -316,13 +316,13 @@ async def test_this_turns_landings_join_the_card(repo, monkeypatch):
     """The card's landings are read for this session's turn id (core/session_landings);
     a turn that wrote nothing in place but landed still gets a card."""
     seen = {}
-    def _read(session_id, *, deadline, turn_id=None, limit=None, **kw):
+    def _read(session_id, turn_id, *, deadline, limit=None):
         seen.update(session_id=session_id, turn_id=turn_id, limit=limit)
         return {"landed": [{"repo": "r", "branch": "session/x", "dest": "main", "count": 1,
                             "files": [{"path": "f.py", "added": 1, "deleted": 0}]}],
                 "unverified": 1, "truncated": True, "unknown": [{"repo": "q", "reason": "no-reflog"}]}
     from core import session_landings
-    monkeypatch.setattr(session_landings, "read_session", _read)
+    monkeypatch.setattr(session_landings, "read_turn", _read)
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32)
     await t.ready()
     block = await t.finish()
@@ -337,7 +337,7 @@ async def test_this_turns_landings_join_the_card(repo, monkeypatch):
 async def test_no_turn_id_reads_no_landings_and_nothing_is_no_card(repo, monkeypatch):
     from core import session_landings
     calls = []
-    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: calls.append(k) or {
+    monkeypatch.setattr(session_landings, "read_turn", lambda *a, **k: calls.append(k) or {
         "landed": [], "unverified": 0, "truncated": False, "unknown": []})
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id=None)
     await t.ready()
@@ -346,13 +346,15 @@ async def test_no_turn_id_reads_no_landings_and_nothing_is_no_card(repo, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_a_turn_that_handed_no_land_its_id_reads_no_landings(repo, monkeypatch):
-    """No land of this turn means no stamp of this turn: no git call at turn end."""
+async def test_a_turn_that_ran_no_session_worktree_reads_no_landings(repo, monkeypatch):
+    """No session_worktree command this turn (run_owner_gate sets ``_turn_sw``) means
+    no stamp of this turn: no git call at turn end (design
+    2026-10-26-turn-cards-unified.md §3.3)."""
     from core import session_landings
     calls = []
-    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: calls.append(k) or {
+    monkeypatch.setattr(session_landings, "read_turn", lambda *a, **k: calls.append(k) or {
         "landed": [], "unverified": 0, "truncated": False, "unknown": []})
-    ctx = {"_turn_id": "t" * 32, "_turn_lands": 0}
+    ctx = {"_turn_id": "t" * 32, "_turn_sw": False}
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32, context=ctx)
     await t.ready()
     assert await t.finish() is None
@@ -360,24 +362,24 @@ async def test_a_turn_that_handed_no_land_its_id_reads_no_landings(repo, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_the_landings_read_expects_the_turns_land_calls(repo, monkeypatch):
+async def test_a_turn_that_ran_session_worktree_reads_its_landings(repo, monkeypatch):
     from core import session_landings
     seen = {}
-    monkeypatch.setattr(session_landings, "read_session", lambda sid, **k: seen.update(k) or {
-        "landed": [], "unverified": 0, "truncated": False, "unknown": []})
-    ctx = {"_turn_id": "t" * 32, "_turn_lands": 0}
+    monkeypatch.setattr(session_landings, "read_turn", lambda sid, turn, **k: seen.update(
+        turn=turn) or {"landed": [], "unverified": 0, "truncated": False, "unknown": []})
+    ctx = {"_turn_id": "t" * 32, "_turn_sw": False}
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32, context=ctx)
     await t.ready()
-    ctx["_turn_lands"] = 2           # counted by run_owner_gate while the turn ran
+    ctx["_turn_sw"] = True           # set by run_owner_gate while the turn ran
     await t.finish()
-    assert seen["expect"] == 2 and seen["turn_id"] == "t" * 32
+    assert seen["turn"] == "t" * 32
 
 
 @pytest.mark.asyncio
 async def test_the_row_budget_spans_landings_and_in_place_rows(repo, monkeypatch):
     many = [{"path": f"f{i}.py", "added": 1, "deleted": 0} for i in range(tc.MAX_FILES + 5)]
     from core import session_landings
-    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: {
+    monkeypatch.setattr(session_landings, "read_turn", lambda *a, **k: {
         "landed": [{"repo": "r", "branch": "session/x", "files": many}],
         "unverified": 0, "truncated": False, "unknown": []})
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32)
@@ -394,7 +396,7 @@ async def test_the_row_budget_spans_landings_and_in_place_rows(repo, monkeypatch
 async def test_two_landings_share_one_row_budget(repo, monkeypatch):
     half = [{"path": f"f{i}.py", "added": 1, "deleted": 0} for i in range(tc.MAX_FILES - 10)]
     from core import session_landings
-    monkeypatch.setattr(session_landings, "read_session", lambda *a, **k: {
+    monkeypatch.setattr(session_landings, "read_turn", lambda *a, **k: {
         "landed": [{"repo": "r", "branch": "session/a", "files": half},
                    {"repo": "r", "branch": "session/b", "files": list(half)}],
         "unverified": 0, "truncated": False, "unknown": []})
@@ -585,10 +587,10 @@ async def test_rows_and_landings_share_one_finish_budget(repo, monkeypatch):
         await asyncio.sleep(0.2)
     monkeypatch.setattr(TurnChanges, "_finish", slow)
     seen = {}
-    monkeypatch.setattr(session_landings, "read_session", lambda sid, **k: seen.update(
+    monkeypatch.setattr(session_landings, "read_turn", lambda sid, turn, **k: seen.update(
         left=k["deadline"].left()) or {"landed": [], "unverified": 0, "truncated": False,
                                         "unknown": []})
-    ctx = {"_turn_id": "t" * 32, "_turn_lands": 1}
+    ctx = {"_turn_id": "t" * 32, "_turn_sw": True}
     t = TurnChanges.start([str(repo)], session_id="s1", turn_id="t" * 32, context=ctx)
     await t.ready()
     (repo / "a.py").write_text("changed\n")

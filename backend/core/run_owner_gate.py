@@ -18,10 +18,12 @@ For a ``pipeline_v1.py`` command:
   session's id right before the call when it is the first simple command
   (``_with_session``, ``_token_binding``) via ``updatedInput``. Any other variable set
   on the call is refused.
-- **session_worktree** (no ownership rules, never denies): an exact first-of-line
-  ``scripts.session_worktree`` call gets this session's id and, from the main agent
-  only, the turn's id (``_session_worktree_rewrite``), which ``land`` stamps into the
-  landing's reflog entry (design docs/design/2026-10-25-turn-result-card.md §3.2).
+- **session_worktree** (no ownership rules, never denies): a line that names
+  ``scripts.session_worktree`` gets ``export`` of this session's id and, from the
+  main agent only, the turn's id in front of the whole line
+  (``_session_worktree_export``), which ``land`` stamps into the landing's reflog
+  entry; composed with the pipeline rewrite into one updatedInput (design
+  docs/design/2026-10-26-turn-cards-unified.md §3.2).
 - **approval**: the person-approved actions (``AFTER_APPROVAL`` with ``--request``)
   are handled in the ``phase="approved"`` registration, after dangerous_command_gate
   recorded the person's approval for this exact command: the gate takes the run over
@@ -432,58 +434,31 @@ _APPROVED_ACTIONS = frozenset({"run-land", "accept-finding", "discard-snapshot"}
 
 
 # ── session_worktree: hand it the session and the turn (no ownership rules) ──
-# design docs/design/2026-10-25-turn-result-card.md §3.2. Its own strict rule, apart
-# from the pipeline binding (_token_binding accepts a heredoc head): the command's
-# first simple command must be exactly the module call, nothing in front of it (a
-# heredoc head, a cd, a wrapper or an assignment makes something else the first
-# command) and no substitution anywhere. Never denies.
+# design docs/design/2026-10-26-turn-cards-unified.md §3.2: any line naming the module
+# gets an ``export`` in front of the whole line (the shape of the command does not
+# matter; a wrapper script that does not name it is not seen). Never denies.
 
 _SW_MODULE = "scripts.session_worktree"
-_SW_VERBS = frozenset({"create", "land", "remove"})
-_SW_BACKEND = frozenset({"$SWARM_BACKEND_BIN", "${SWARM_BACKEND_BIN}"})
-_SW_PYTHON = frozenset({"python", "python3"})
 
 
-def _session_worktree_verb(tokens: "list[str]") -> "str | None":
-    """create / land / remove when *tokens* are exactly a session_worktree call."""
-    if tokens[:1] and tokens[0] in _SW_BACKEND:
-        rest = tokens[1:]
-        if rest[:1] != ["py"]:
-            return None
-        rest = rest[1:]
-    elif tokens[:1] and tokens[0] in _SW_PYTHON:
-        rest = tokens[1:]
-    else:
-        return None
-    if rest[:2] == ["-m", _SW_MODULE] and len(rest) > 2 and rest[2] in _SW_VERBS:
-        return rest[2]
-    return None
-
-
-def _session_worktree_rewrite(command: str, sid: str, turn_id: "str | None",
-                              sub_agent: bool) -> "tuple[str, str, bool] | None":
-    """(command with ``SWARM_APP_SESSION_ID`` and, for the main agent,
-    ``SWARM_TURN_ID`` put before its session_worktree call, its verb, whether the
-    turn id was handed over), or None. A sub-agent can outlive the turn that started
-    it, so its call never carries a turn id."""
-    from core.app_session_id import valid_turn_id
-    from core.security_hooks import _gate_shell_segments
+def _session_worktree_export(command: str, sid: str, turn_id: "str | None",
+                             sub_agent: bool) -> "str | None":
+    """``export SWARM_APP_SESSION_ID=… SWARM_TURN_ID=…; `` to put in front of the WHOLE
+    line *command*, or None (design 2026-10-26-turn-cards-unified.md §3.2). ``export``
+    reaches every later segment and subshell, so ``cd <wt> && … land``, ``W=$(…); …
+    land $W`` and ``bash -c '… land'`` all stamp the turn. A sub-agent can outlive the
+    turn that started it, so its call never carries a turn id. A command that sets
+    either variable itself is left as it is. Pure string work."""
+    from core.app_session_id import valid_app_session_id, valid_turn_id
     from core.session_router import PREWARM_SESSION_PREFIX
-    if sid.startswith(PREWARM_SESSION_PREFIX) or any(x in command for x in _SUBST):
-        return None
-    if f"{_SESSION_ENV}=" in command:
+    if sid.startswith(PREWARM_SESSION_PREFIX) or not valid_app_session_id(sid):
+        return None              # not a session yet: nothing to hand over
+    if f"{_SESSION_ENV}=" in command or f"{_TURN_ENV}=" in command:
         return None              # already handed over, or set by the command itself
-    seps: list[str] = []
-    segs = _gate_shell_segments(command, seps)
-    verb = _session_worktree_verb(segs[0]) if segs and seps[0] == "" else None
-    if verb is None:
-        return None
-    body = command.lstrip()
-    prefix = f"{_SESSION_ENV}={shlex.quote(sid)} "
-    with_turn = not sub_agent and valid_turn_id(turn_id)
-    if with_turn:
-        prefix += f"{_TURN_ENV}={turn_id} "
-    return command[:len(command) - len(body)] + prefix + body, verb, bool(with_turn)
+    assign = f"{_SESSION_ENV}={shlex.quote(sid)}"
+    if not sub_agent and valid_turn_id(turn_id):
+        assign += f" {_TURN_ENV}={turn_id}"
+    return f"export {assign}; "
 
 
 _TURN_ENV = "SWARM_TURN_ID"
@@ -530,34 +505,36 @@ def create_run_owner_gate(session_context: "dict[str, Any]", phase: str = "check
         sw_allow = None
         if phase == "check" and isinstance(command, str) and _SW_MODULE in command:
             # pure string work, no IO
+            sub_agent = bool(input_data.get("agent_id"))
             try:
-                got = _session_worktree_rewrite(
+                export = _session_worktree_export(
                     command, str(session_context.get("sdk_session_id") or ""),
-                    session_context.get("_turn_id"), bool(input_data.get("agent_id")))
+                    session_context.get("_turn_id"), sub_agent)
             except Exception:  # noqa: BLE001 — fail-open, never blocks a command
                 logger.warning("run_owner_gate: session_worktree rewrite failed", exc_info=True)
-                got = None
-            if got is not None:
-                def sw_allow(got=got):
-                    rewrite, verb, with_turn = got
-                    if verb == "land" and with_turn:
-                        # TurnChanges reads this turn's landings only when one was
-                        # handed the turn's id, and knows how many to look for (a busy
-                        # reflog is longer than any cap, so "found them all" is what
-                        # makes the read complete). Counted only once the line is allowed.
-                        session_context["_turn_lands"] = \
-                            int(session_context.get("_turn_lands") or 0) + 1
+                export = None
+            if export is not None:
+                if not sub_agent:
+                    # TurnChanges reads this turn's landings only when it ran one
+                    # (design 2026-10-26-turn-cards-unified.md §3.3)
+                    session_context["_turn_sw"] = True
+
+                def sw_allow(base: str, export=export):
                     return {"hookSpecificOutput": {
                         "hookEventName": "PreToolUse", "permissionDecision": "allow",
-                        "updatedInput": {**tool_input, "command": rewrite}}}
+                        "updatedInput": {**tool_input, "command": export + base}}}
         if not isinstance(command, str) or not (pipeline_command.mentions(command)
                                                 or "/api/pipelines/" in command):
-            return sw_allow() if sw_allow else {"decision": "approve"}  # cheap path: no IO
+            return sw_allow(command) if sw_allow else {"decision": "approve"}  # no IO
         res = await _pipeline_decision(command, tool_input, input_data, tool_use_id)
-        if sw_allow and _plain_allow(res):
-            # the land is the line's first command and the pipeline checks of a later
-            # segment allowed it: the land still gets its ids
-            return sw_allow()
+        if sw_allow is None:
+            return res
+        if _plain_allow(res):
+            return sw_allow(command)
+        out = (res or {}).get("hookSpecificOutput") or {}
+        if out.get("permissionDecision") == "allow" and "updatedInput" in out:
+            # hooks do not feed each other's updatedInput: ONE input carries both
+            return sw_allow(str((out.get("updatedInput") or {}).get("command") or command))
         return res
 
     async def _pipeline_decision(command, tool_input, input_data, tool_use_id):

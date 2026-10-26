@@ -191,6 +191,56 @@ def code_roots() -> list[str]:
         return []
 
 
+def session_trees(session_id: Optional[str]) -> list[tuple[str, str]]:
+    """This session's own worktrees (``scripts/session_worktree`` create:
+    ``refs/heads/session/<key>-…``) in the bound repos, as (realpath, branch): code
+    trees of its turns (design 2026-10-26-turn-cards-unified.md §3.4). One
+    ``git worktree list`` per bound repo; blocking, run it in a pool."""
+    from core.app_session_id import session_key, valid_app_session_id
+    if not valid_app_session_id(session_id):
+        return []
+    try:
+        from core.session_landings import _bound_checkouts
+        repos = _bound_checkouts()
+    except Exception as exc:  # noqa: BLE001 — no repos: no session trees
+        logger.debug("turn_changes: bound repos unavailable: %s", exc)
+        return []
+    prefix = f"refs/heads/session/{session_key(session_id)}-"
+    out: list[tuple[str, str]] = []
+    for repo in repos:
+        try:
+            listing = _git(repo, "worktree", "list", "--porcelain")
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            logger.debug("turn_changes: worktree list of %s failed: %s", repo, exc)
+            continue
+        path = None
+        for line in listing.splitlines():
+            if line.startswith("worktree "):
+                path = line[len("worktree "):]
+            elif line.startswith("branch ") and path and line[len("branch "):].startswith(prefix):
+                if os.path.isdir(path):
+                    out.append((os.path.realpath(path), line[len("branch refs/heads/"):]))
+    return out
+
+
+def _created_tree(top: str, branch: str) -> Optional[str]:
+    """The tree of the commit *branch* was created at (its reflog's ``branch: Created
+    from`` entry, read through git), or None: then the tree is left off, never
+    diffed from a guess."""
+    try:
+        raw = _git(top, "reflog", "show", "--format=%H%x00%gs", f"refs/heads/{branch}", "--")
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return None
+    created = [x.split("\0", 1)[0] for x in raw.splitlines()
+               if "\0" in x and x.split("\0", 1)[1].startswith("branch: Created from")]
+    if not created:
+        return None
+    try:
+        return _git(top, "rev-parse", f"{created[-1]}^{{tree}}").strip() or None
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return None
+
+
 # Start snapshots per send are bounded: past this many trees the rest are not
 # snapshotted, and their edits are left off the card (never diffed from a guess).
 MAX_START_SNAPSHOTS = 32
@@ -249,8 +299,8 @@ class TurnChanges:
         self._given = None if roots is None else [os.path.realpath(r) for r in roots]
         # This turn's landings are read by (session, turn id) from the stamp
         # session_worktree land writes (core/session_landings); no turn id, none.
-        # *context* is the session's hook context: run_owner_gate counts there the
-        # lands it handed this turn's id (``_turn_lands``); none counted, no read.
+        # *context* is the session's hook context: run_owner_gate marks there that the
+        # turn ran a session_worktree command (``_turn_sw``); none, no read.
         self._session_id, self._turn_id, self._context = session_id, turn_id, context
         # The card, computed once per turn: result and Stop may both finish it.
         self._result: Optional[asyncio.Future] = None
@@ -272,7 +322,12 @@ class TurnChanges:
         pool = _pool("turn_snapshot")
 
         async def kick() -> None:
-            found = tc._given if tc._given is not None else await loop.run_in_executor(pool, code_roots)
+            if tc._given is not None:
+                found = tc._given
+            else:
+                found = await loop.run_in_executor(pool, code_roots)
+                own = await loop.run_in_executor(pool, session_trees, tc._session_id)
+                found = [*found, *(p for p, _b in own if p not in found)]
             tc._skipped = set(found[MAX_START_SNAPSHOTS:])
             if tc._skipped:
                 logger.warning("turn_changes: %d code trees not snapshotted (cap %d)", len(tc._skipped), MAX_START_SNAPSHOTS)
@@ -340,29 +395,25 @@ class TurnChanges:
                 await asyncio.wait_for(self._finish(raw), max(deadline.left(), 0))
             except asyncio.TimeoutError:
                 logger.warning("turn_changes: finish exceeded %.0fs — showing %d rows", FINISH_BUDGET_S, len(self._partial))
-        if self._session_id and self._turn_id:
-            expect = None
-            if self._context is not None:
-                expect = int(self._context.get("_turn_lands") or 0)
-            if expect != 0:              # no land handed this turn's id: no stamp to read
-                landings = await self._landings(expect, deadline)
+        if self._session_id and self._turn_id and (
+                self._context is None or self._context.get("_turn_sw")):
+            landings = await self._landings(deadline)   # no session_worktree: no git
         block = _block(self._partial, landings)
         if block is not None and self._turn_id:
             block["turn_id"] = self._turn_id
         return block
 
-    async def _landings(self, expect: Optional[int], deadline) -> Optional[dict]:
-        """This turn's landings (core/session_landings), on the turn_changes pool,
-        with what is left of the turn end's budget (*deadline*: no git call starts
-        after it). *expect*: how many lands were handed this turn's id; the read is
-        complete once it found that many."""
+    async def _landings(self, deadline) -> Optional[dict]:
+        """This turn's landings (core/session_landings.read_turn: an exact search by
+        the turn id), on the turn_changes pool, with what is left of the turn end's
+        budget (*deadline*: no git call starts after it)."""
         from core import session_landings
         loop = asyncio.get_running_loop()
         try:
             return await loop.run_in_executor(
-                _pool(), lambda: session_landings.read_session(
-                    self._session_id, deadline=deadline,
-                    turn_id=self._turn_id, limit=MAX_LANDINGS, expect=expect))
+                _pool(), lambda: session_landings.read_turn(
+                    self._session_id, self._turn_id, deadline=deadline,
+                    limit=MAX_LANDINGS))
         except Exception as exc:  # noqa: BLE001 — a display aid
             logger.debug("turn_changes: landings unreadable: %s", exc)
             return None
@@ -373,7 +424,8 @@ class TurnChanges:
         if self._discovery is not None:
             await self._discovery
         known = sorted([*self._jobs, *self._skipped], key=len, reverse=True)
-        by_root, later = await loop.run_in_executor(pool, _group, raw, known)
+        by_root, later = await loop.run_in_executor(pool, _group, raw, known,
+                                                    self._session_id)
         for root, paths in sorted(by_root.items()):
             if root not in self._jobs:
                 logger.info("turn_changes: %s was not snapshotted (cap) — left off", root)
@@ -388,9 +440,10 @@ class TurnChanges:
                 logger.info("turn_changes: start snapshot of %s came after the first tool call — left off", root)
                 continue
             await self._diff_into(loop, pool, top, paths, start)
-        # Run worktrees that went live during the turn: from HEAD.
-        for top, paths in sorted(later.items()):
-            await self._diff_into(loop, pool, top, paths, None)
+        # Trees that went live during the turn: a run worktree from its HEAD, a
+        # session worktree from the commit it was created at.
+        for top, (paths, start) in sorted(later.items()):
+            await self._diff_into(loop, pool, top, paths, start)
 
     async def _diff_into(self, loop, pool, top: str, paths: list[str], start: Optional[str]) -> None:
         rels = sorted({rel for rel in (os.path.relpath(p, top) for p in paths if p.startswith(top + os.sep))
@@ -403,9 +456,11 @@ class TurnChanges:
             logger.warning("turn_changes: diff of %s failed: %s", top, exc)
 
 
-def _group(raw: dict[str, str], known: list[str]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def _group(raw: dict[str, str], known: list[str], session_id: Optional[str] = None,
+           ) -> tuple[dict[str, list[str]], dict[str, tuple[list[str], Optional[str]]]]:
     """Touched paths (realpath'd, in the pool) by the code tree that was snapshotted
-    at the start; paths in a tree that is live NOW but was not then, by toplevel."""
+    at the start; paths in a tree that is live NOW but was not then, by toplevel,
+    with the start to diff from (None: its HEAD)."""
     by_root: dict[str, list[str]] = {}
     rest: list[str] = []
     for p in raw:
@@ -415,20 +470,29 @@ def _group(raw: dict[str, str], known: list[str]) -> tuple[dict[str, list[str]],
             by_root.setdefault(root, []).append(path)
         else:
             rest.append(path)
-    later: dict[str, list[str]] = {}
+    later: dict[str, tuple[list[str], Optional[str]]] = {}
+    if not rest:
+        return by_root, later
     wt_home = _run_worktree_home()
-    if rest:
-        # Only a run worktree the turn CREATED may diff from HEAD (its HEAD is the run's
-        # base). Any other tree missing at the start (a binding added mid-turn) is left
-        # off: HEAD would show earlier uncommitted work as this turn's.
-        new = sorted((r for r in code_roots() if r not in known
-                      and wt_home and r.startswith(wt_home + os.sep)),
-                     key=len, reverse=True)
-        for path in rest:
-            root = next((r for r in new if path.startswith(r + os.sep)), None)
-            top = _toplevel(root) if root else None
-            if top:
-                later.setdefault(top, []).append(path)
+    # Only a run worktree the turn CREATED may diff from HEAD (its HEAD is the run's
+    # base), and a session worktree it created from the commit it was created at. Any
+    # other tree missing at the start (a binding added mid-turn) is left off: HEAD
+    # would show earlier uncommitted work as this turn's.
+    starts: dict[str, Optional[str]] = {}
+    for r in code_roots():
+        if r not in known and wt_home and r.startswith(wt_home + os.sep):
+            starts[r] = None
+    for r, branch in session_trees(session_id):
+        if r not in known and r not in starts:
+            created = _created_tree(r, branch)
+            if created:
+                starts[r] = created
+    trees = sorted(starts, key=len, reverse=True)
+    for path in rest:
+        root = next((r for r in trees if path.startswith(r + os.sep)), None)
+        top = _toplevel(root) if root else None
+        if top:
+            later.setdefault(top, ([], starts[root]))[0].append(path)
     return by_root, later
 
 
@@ -465,9 +529,12 @@ def _block(files: list[dict], landings: Optional[dict] = None) -> Optional[dict]
     """The card: in-place rows sorted by size, then this turn's landings
     (core/session_landings). One row budget, MAX_FILES, spans all of them; each
     group says how many it left out. None when there is nothing to show."""
-    files = sorted(files, key=lambda f: -((f["added"] or 0) + (f["deleted"] or 0)))
     landings = landings or {}
     landed = [dict(x) for x in landings.get("landed") or []]
+    # a file both edited in place and landed this turn is shown once, under the landing
+    under = {(f.get("gitRoot"), f.get("path")) for x in landed for f in x.get("files") or []}
+    files = [f for f in files if (f.get("gitRoot"), f.get("path")) not in under]
+    files = sorted(files, key=lambda f: -((f["added"] or 0) + (f["deleted"] or 0)))
     unknown = list(landings.get("unknown") or [])
     unverified = int(landings.get("unverified") or 0)
     truncated = bool(landings.get("truncated"))

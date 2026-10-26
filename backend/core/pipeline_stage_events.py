@@ -199,6 +199,10 @@ def read_stage_state(run_id: object) -> Optional[dict]:
                 "landed": any(c.get("landed") for c in commits),
                 "landed_shas": [str(c["sha"]) for c in commits
                                 if c.get("landed") and isinstance(c.get("sha"), str)],
+                # every repo's landed commit (a run can land several repos)
+                "landed_commits": [{"repo": str(c.get("repo") or ""), "sha": str(c["sha"])}
+                                   for c in commits
+                                   if c.get("landed") and isinstance(c.get("sha"), str)],
                 "audit_card": _text(data.get("audit_card")),
                 "run_dir": str(run_dir)}
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
@@ -450,6 +454,7 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
     return {"type": SUMMARY_BLOCK_TYPE, "runId": run_id, "profile": state.get("profile"),
             "intent": _clip(state.get("requirement"), 200), "solved": None,
             "landedSha": str(landed[-1])[:12] if landed else None,
+            "commits": [dict(c) for c in state.get("landed_commits") or []],
             "status": state.get("status"), "landing": state.get("landing"),
             "notLandedReason": _clip(state.get("reason"), 200) if not_landed else None,
             "stagesDone": sum(1 for s in order if _status(state, s) == "completed"),

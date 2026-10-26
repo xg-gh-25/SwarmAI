@@ -1,16 +1,17 @@
-"""run_owner_gate's session_worktree rewrite (design 2026-10-25-turn-result-card.md §3.2).
+"""run_owner_gate's session_worktree hand-off (design 2026-10-26-turn-cards-unified.md §3.2).
 
 What is tested (the real gate factory, no IO):
-- an exact first-of-line ``"$SWARM_BACKEND_BIN" py -m scripts.session_worktree
-  create|land|remove`` (or ``python3 -m ...``) from the main agent gets
-  ``SWARM_APP_SESSION_ID`` and ``SWARM_TURN_ID`` prefixed via updatedInput;
-- from a sub-agent (hook input with ``agent_id``) only the session id, never a turn id;
-- not rewritten: a later command (``cd x && ...``), ``echo``, a heredoc, a ``$(...)``,
-  a backtick, a wrapper or an assignment in front, another module, an unknown verb;
-- a prewarmed (not yet adopted) session and a context without a turn id;
+- any Bash line of the main agent that names ``scripts.session_worktree`` gets
+  ``export SWARM_APP_SESSION_ID=… SWARM_TURN_ID=…;`` in front of the WHOLE line via
+  updatedInput, whatever its shape (``cd &&``, ``$(…)``, a heredoc, a wrapper);
+- from a sub-agent (hook input with ``agent_id``): only the session id, never a turn id;
+- not rewritten: a line that does not name the module, a line that sets either
+  variable itself, a prewarmed session, an invalid session id, the approved phase;
+- ``_turn_sw`` is set by a main-agent session_worktree line only; a new turn resets it;
 - SessionUnit._reset_turn_state gives each admitted turn a fresh turn id, and a
   question / permission continuation keeps it;
-- the pipeline rewrite (_with_session) is unchanged for its own command.
+- a denied pipeline segment denies the line; the pipeline rewrite (_with_session) is
+  unchanged for its own command.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from core.run_owner_gate import _with_session, create_run_owner_gate
 SID = "11111111-2222-3333-4444-555555555555"
 TURN = "0123456789abcdef0123456789abcdef"
 LAND = '"$SWARM_BACKEND_BIN" py -m scripts.session_worktree land /w/x'
+EXPORT = f"export SWARM_APP_SESSION_ID={shlex.quote(SID)} SWARM_TURN_ID={TURN}; "
 
 
 def _run(command, *, ctx=None, agent_id=None, phase="check"):
@@ -42,62 +44,52 @@ def _rewritten(out):
 @pytest.mark.parametrize("cmd", [
     LAND,
     '"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create /r --name t',
-    '"$SWARM_BACKEND_BIN" py -m scripts.session_worktree remove /w/x',
-    "python3 -m scripts.session_worktree land /w/x",
-    "python -m scripts.session_worktree land /w/x | tail -1",
-    "  " + LAND,
+    "python3 -m scripts.session_worktree land /w/x | tail -1",
+    "cd /w/x && " + LAND,
+    "W=$(ls -d /w/*); " + LAND + " $W",
+    "cat > /tmp/a <<'EOF'\nx\nEOF\n" + LAND,
+    "timeout 60 " + LAND,
+    "bash -c '" + LAND + "'",
+    "echo scripts.session_worktree",
 ])
-def test_main_agent_call_gets_session_and_turn(cmd):
-    new = _rewritten(_run(cmd))
-    prefix = f"SWARM_APP_SESSION_ID={shlex.quote(SID)} SWARM_TURN_ID={TURN} "
-    assert new == cmd[:len(cmd) - len(cmd.lstrip())] + prefix + cmd.lstrip()
+def test_main_agent_line_gets_the_export_in_front(cmd):
+    assert _rewritten(_run(cmd)) == EXPORT + cmd
 
 
-def test_sub_agent_call_gets_no_turn_id():
+def test_sub_agent_line_gets_no_turn_id():
     new = _rewritten(_run(LAND, agent_id="a123"))
-    assert new == f"SWARM_APP_SESSION_ID={shlex.quote(SID)} {LAND}"
-    assert "SWARM_TURN_ID" not in new
+    assert new == f"export SWARM_APP_SESSION_ID={shlex.quote(SID)}; {LAND}"
 
 
 @pytest.mark.parametrize("cmd", [
-    "cd /w/x && " + LAND,
-    "echo scripts.session_worktree land",
-    "cat > /tmp/a <<'EOF'\nx\nEOF\n" + LAND,
-    LAND + " $(date)",
-    LAND + " `date`",
-    "env " + LAND,
-    "timeout 60 " + LAND,
-    "FOO=1 " + LAND,
     '"$SWARM_BACKEND_BIN" py -m scripts.other land /w/x',
-    '"$SWARM_BACKEND_BIN" py -m scripts.session_worktree frob /w/x',
-    '"$SWARM_BACKEND_BIN" py scripts/session_worktree.py land /w/x',
+    "SWARM_TURN_ID=" + TURN + " " + LAND,
+    f"SWARM_APP_SESSION_ID={SID} " + LAND,
 ])
 def test_not_rewritten(cmd):
     assert _rewritten(_run(cmd)) is None
 
 
-def test_prewarmed_session_and_missing_turn_id():
+def test_prewarmed_or_invalid_session_and_missing_turn_id():
     from core.session_router import PREWARM_SESSION_PREFIX
     assert _rewritten(_run(LAND, ctx={"sdk_session_id": PREWARM_SESSION_PREFIX + "x",
                                       "_turn_id": TURN})) is None
+    assert _rewritten(_run(LAND, ctx={"sdk_session_id": "", "_turn_id": TURN})) is None
     new = _rewritten(_run(LAND, ctx={"sdk_session_id": SID}))
-    assert new == f"SWARM_APP_SESSION_ID={shlex.quote(SID)} {LAND}"
+    assert new == f"export SWARM_APP_SESSION_ID={shlex.quote(SID)}; {LAND}"
 
 
 def test_approved_phase_does_not_rewrite():
     assert _rewritten(_run(LAND, phase="approved")) is None
 
 
-def test_land_calls_handed_the_turn_id_are_counted():
-    """TurnChanges reads landings only when this turn handed a land its id, and stops at
-    that many (design 2026-10-25-turn-result-card.md §4)."""
-    ctx = {"sdk_session_id": SID, "_turn_id": TURN}
-    _run(LAND, ctx=ctx)
-    _run(LAND, ctx=ctx)
-    _run('"$SWARM_BACKEND_BIN" py -m scripts.session_worktree create /r', ctx=ctx)
-    _run(LAND, ctx=ctx, agent_id="a1")                  # a sub-agent: no turn id, not counted
-    _run("cd /x && " + LAND, ctx=ctx)                    # not rewritten, not counted
-    assert ctx["_turn_lands"] == 2
+def test_turn_sw_is_set_by_a_main_agent_line_only():
+    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_sw": False}
+    _run("ls /tmp", ctx=ctx)
+    _run(LAND, ctx=ctx, agent_id="a1")
+    assert ctx["_turn_sw"] is False
+    _run("cd /x && " + LAND, ctx=ctx)
+    assert ctx["_turn_sw"] is True
 
 
 def test_pipeline_rewrite_is_unchanged():
@@ -115,9 +107,9 @@ def test_each_admitted_turn_gets_a_fresh_turn_id():
     second = unit._hook_session_context["_turn_id"]
     from core.app_session_id import valid_turn_id
     assert valid_turn_id(first) and valid_turn_id(second) and first != second
-    unit._hook_session_context["_turn_lands"] = 3
+    unit._hook_session_context["_turn_sw"] = True
     unit._reset_turn_state()
-    assert unit._hook_session_context["_turn_lands"] == 0, "a new turn counts its own lands"
+    assert unit._hook_session_context["_turn_sw"] is False, "a new turn starts unmarked"
 
 
 def test_continuations_do_not_reset_the_turn():
@@ -130,24 +122,17 @@ def test_continuations_do_not_reset_the_turn():
 PIPE = '"$SWARM_BACKEND_BIN" pipeline-v1 status run_abc'
 
 
-def test_a_land_followed_by_a_pipeline_call_keeps_its_stamp(monkeypatch):
-    """The pipeline checks still run for the later segment; when they allow the
-    line, the first-segment land still gets the session and turn id."""
+def test_a_land_and_an_allowed_pipeline_call_keep_the_export(monkeypatch):
     from core import run_owner_gate as rog
     seen = []
     monkeypatch.setattr(rog, "_decide", lambda sid, cmd, *a: seen.append(cmd) or None)
-    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_lands": 0}
     cmd = f"{LAND} && {PIPE}"
-    new = _rewritten(_run(cmd, ctx=ctx))
+    assert _rewritten(_run(cmd)) == EXPORT + cmd
     assert seen == [cmd], "the pipeline check ran"
-    assert new == f"SWARM_APP_SESSION_ID={shlex.quote(SID)} SWARM_TURN_ID={TURN} {cmd}"
-    assert ctx["_turn_lands"] == 1
 
 
-def test_a_denied_pipeline_segment_denies_the_line_and_counts_no_land(monkeypatch):
+def test_a_denied_pipeline_segment_denies_the_line(monkeypatch):
     from core import run_owner_gate as rog
     monkeypatch.setattr(rog, "_decide", lambda *a: rog._deny("not yours"))
-    ctx = {"sdk_session_id": SID, "_turn_id": TURN, "_turn_lands": 0}
-    out = _run(f"{LAND} && {PIPE}", ctx=ctx)
+    out = _run(f"{LAND} && {PIPE}")
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert ctx["_turn_lands"] == 0

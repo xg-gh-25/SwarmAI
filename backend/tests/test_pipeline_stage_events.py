@@ -709,3 +709,17 @@ def test_a_run_directory_swapped_for_a_symlink_mid_check_is_never_read(tmp_path,
     monkeypatch.setattr(pathlib.Path, "resolve", swap_after_check)
     ref = pse._doc_ref(str(run_dir), "REPORT.md")
     assert ref is None or "TOP SECRET" not in (ref.get("excerpt") or "")
+
+
+def test_12_a_run_landing_two_repos_lists_both_commits(tmp_path, monkeypatch):
+    """Design 2026-10-26-turn-cards-unified.md §3.5: pipeline_summary.commits carries
+    every repo's landed commit (landedSha keeps only the last, for old readers)."""
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    _write_run(tmp_path, "run_two", {"status": "completed", "stages": {}, "landing": "landed",
+                                     "commits": [{"repo": "a", "sha": "a" * 40, "landed": True},
+                                                 {"repo": "b", "sha": "b" * 40, "landed": True},
+                                                 {"repo": "c", "sha": "c" * 40, "landed": False}]})
+    state = pse.read_stage_state("run_two")
+    sb = pse.summary_block("run_two", state, "now")
+    assert sb["commits"] == [{"repo": "a", "sha": "a" * 40}, {"repo": "b", "sha": "b" * 40}]
+    assert sb["landedSha"] == ("b" * 40)[:12]
