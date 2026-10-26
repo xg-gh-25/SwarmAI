@@ -801,7 +801,7 @@ class TestTrajectoryCaptureDispatch:
         case = dict(self._CASE, allowed_tools=["Read", "Bash", "Write"])
         captured = {}
 
-        def _spy(prompt, allowed_tools=None, timeout=120, system="bare"):
+        def _spy(prompt, allowed_tools=None, timeout=120, system="bare", workspace=None):
             captured["tools"] = list(allowed_tools or [])
             return (['Read {"file_path": "SELF.md"}'], "ok", "")
 
@@ -945,7 +945,7 @@ class TestBehaviorSpawnTimeoutFallback:
         # with timeout=240 (the raised fallback), captured at the real call.
         captured = {}
 
-        def fake_spawn(prompt, allowed_tools=None, timeout=None, system="bare"):
+        def fake_spawn(prompt, allowed_tools=None, timeout=None, system="bare", workspace=None):
             captured["timeout"] = timeout
             return (['Read {"file_path": "/ws/X"}'], "done", "")
 
@@ -957,7 +957,7 @@ class TestBehaviorSpawnTimeoutFallback:
         # An explicit per-case scenario_timeout overrides the fallback.
         captured = {}
 
-        def fake_spawn(prompt, allowed_tools=None, timeout=None, system="bare"):
+        def fake_spawn(prompt, allowed_tools=None, timeout=None, system="bare", workspace=None):
             captured["timeout"] = timeout
             return (['Read {"file_path": "/ws/X"}'], "done", "")
 

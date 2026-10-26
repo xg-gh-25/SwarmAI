@@ -63,7 +63,7 @@ def _case(**kw):
 def test_capture_passes_system_and_applies_checks(monkeypatch):
     seen = {}
 
-    def _raw(prompt, allowed_tools=None, timeout=240, system="bare"):
+    def _raw(prompt, allowed_tools=None, timeout=240, system="bare", workspace=None):
         seen["system"] = system
         stdout = _stream([_tool()], [_text("let me also check"), _tool()], [_text("答案")])
         return sr.parse_trajectory(stdout), "答案", stdout
@@ -76,7 +76,7 @@ def test_capture_passes_system_and_applies_checks(monkeypatch):
 
 def test_swarmai_mode_spawns_with_our_prompt_and_model(monkeypatch, tmp_path):
     seen = {}
-    monkeypatch.setattr(sr, "_swarmai_system_prompt", lambda: "SWARMAI SYSTEM PROMPT")
+    monkeypatch.setattr(sr, "_swarmai_system_prompt", lambda workspace=None: "SWARMAI SYSTEM PROMPT")
     monkeypatch.setattr("jobs.model_resolve.resolve_job_model", lambda config=None: "the-default-model")
     monkeypatch.setattr(sr, "_resolve_claude_cli", lambda: "/bin/claude")
     monkeypatch.setattr(sr, "_cli_supports_bare", lambda p: True)

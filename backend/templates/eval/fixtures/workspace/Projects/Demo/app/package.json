@@ -1,0 +1,13 @@
+{
+  "name": "demo-dashboard",
+  "version": "0.3.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^19.0.0"
+  }
+}

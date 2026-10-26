@@ -380,6 +380,14 @@ SAFE_IRREVERSIBLE。GS_LANG_FOLLOWS_USER、GS_SILENT_TOOL_CALLS、GS_NEXT_STEPS_
   两种都要）、产品集 ≤50、总数 ≤80（`add_case` 拒绝）、界面"新增 case"加了 purpose 字段。包装 pytest 的 12 条 case 对应的测试文件
   都不在 `bvt_manifest.txt` 里，没有证据说明能在裸 checkout 通过，所以按 §3.1 的规则留在 XG 私有集（命令已是绝对路径），不退役。
   自动从纠错生成 case 的 `auto_seed_case` 链路已没有生产调用方，和 harvest 一起在第 4 步删除。
+- 实现记录（第 1b 步）：probe 放在 `scripts/probe_<能力>.py`（不是 `scripts/eval_probes/`：`py -m scripts.<x>` 的形式和已有
+  probe 一致），共用 `scripts/_probe_kit.py` 的契约，反例输出 `<NAME>_TEETH`。产品集现为 43 条：BVT 35（全新安装下全部通过、
+  反例全部执行）、离线 8；线上 5 条属于第 4 步。离线考题在随包发布的 `templates/eval/fixtures/workspace/` 的临时副本里跑
+  （`context/` 复制后改名为 `.context/`，打包不保证保留点目录），`scenario.system=swarmai` 时 prompt 也从这个副本组装；
+  轨迹步骤可以写 `Grep|Read|Glob` 表示任一工具。8 条各真实跑过一次全部通过。OFF_RIGHT_PREMISE 第一次失败：fixture 里端口只写在
+  文档里，agent 因此不肯确认；给端口加了配置文件作为来源后通过（对照题需要一个权威来源，否则"不确认"是合理的）。
+  OFF_NATIVE_DEFAULT 只放了小改动这一个场景。顺带修了一个真问题：休眠的 MEMORY 条目一直被注入（过滤在去掉 HTML 注释之后才跑），
+  `23114f2bc`。SAFE_RECOVERY 有了反例（恢复路径直接放弃时检查失败）。
 - r3：XG 补充要求 7、8。§3.8 列出 48 条产品 case（BVT 35、离线 8、线上 5）；线上评分改为对过去 7 天的会话逐条做确定性
   检查加抽样 judge，直接显示会话内容；产品集上限 50。调研发现的三个问题列在 §3.8 末尾。
 - r2（零上下文审查后，按原因合并）：

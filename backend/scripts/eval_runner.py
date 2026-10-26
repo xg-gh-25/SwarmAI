@@ -33,6 +33,7 @@ LLM judge evaluators (uses pinned judge model from config):
 
 import argparse
 import html as html_mod
+import contextlib
 import json
 import logging
 import os
@@ -1399,6 +1400,22 @@ def _eval_trajectory_tool_strict(case: dict, actual: list[str]) -> dict:
     def _tool_of(step: str) -> str:
         return step.strip().split(None, 1)[0].lower() if step.strip() else ""
 
+    # A step's head may name alternatives ("Grep|Read archive"): any one of those
+    # tools with the rest of the step satisfies it (any_order only).
+    if any("|" in e.strip().split(None, 1)[0] for e in expected if e.strip()) \
+            and case.get("trajectory_match", "in_order") == "any_order":
+        missing = []
+        for step in expected:
+            head, _, rest = step.strip().partition(" ")
+            options = [f"{tool} {rest}".strip() for tool in head.split("|")]
+            if not any(eval_trajectory({"expected_trajectory": [opt], "trajectory_match": "any_order"},
+                                       actual_trajectory=[a for a in actual
+                                                          if _tool_of(a) == _tool_of(opt)])
+                       ["status"] == "passed" for opt in options):
+                missing.append(step)
+        if missing:
+            return {"status": "failed", "notes": f"Missing steps: {missing}"}
+        return {"status": "passed", "notes": f"All {len(expected)} expected steps found"}
     expected_tools = {e.strip().split(None, 1)[0].lower() for e in expected if e.strip()}
     tool_anchored_actual = [s for s in actual if _tool_of(s) in expected_tools]
     return eval_trajectory(case, actual_trajectory=tool_anchored_actual)
@@ -1480,10 +1497,16 @@ def eval_trajectory_capture(case: dict) -> dict:
     # Bedrock throttling would lie the health score red (eval_llm_judge lesson).
     # scenario.system: "bare" (default) = a plain CLI that reads our files;
     # "swarmai" = SwarmAI's own system prompt + configured model (the product agent).
+    # A product case runs in the shipped fixture workspace (a fresh temporary copy),
+    # never in the user's own projects and memory; a private case runs in the user's.
+    from core.golden_set_store import fixture_workspace, is_product_case
     system = (case.get("scenario") or {}).get("system", "bare")
+    workspace = fixture_workspace() if is_product_case(case) else contextlib.nullcontext()
     try:
-        actual, final_text, stdout = run_scenario_raw(
-            prompt, allowed_tools=allowed_tools, timeout=timeout, system=system)
+        with workspace as ws:
+            actual, final_text, stdout = run_scenario_raw(
+                prompt, allowed_tools=allowed_tools, timeout=timeout, system=system,
+                workspace=ws)
     except ScenarioInfraError as e:
         return {"status": "error", "notes": f"scenario infra failure: {e}",
                 "observed_trajectory": []}

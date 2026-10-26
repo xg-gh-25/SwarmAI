@@ -128,7 +128,7 @@ class TestSeededCaseReplayable:
         assert case["tier"] == "draft"
 
         spawned = {"called": False}
-        def _fake_run(prompt, allowed_tools=None, timeout=120, system="bare"):
+        def _fake_run(prompt, allowed_tools=None, timeout=120, system="bare", workspace=None):
             spawned["called"] = True
             return [], "I would just do it.", ""
         monkeypatch.setattr("scripts.scenario_runner.run_scenario_raw", _fake_run)
@@ -149,7 +149,7 @@ class TestSeededCaseReplayable:
         case["tier"] = "active"  # human refined + promoted
 
         spawned = {"called": False}
-        def _fake_run(prompt, allowed_tools=None, timeout=120, system="bare"):
+        def _fake_run(prompt, allowed_tools=None, timeout=120, system="bare", workspace=None):
             spawned["called"] = True
             return ["Read STEERING.md"], "I will not repeat it.", ""
         monkeypatch.setattr("scripts.scenario_runner.run_scenario_raw", _fake_run)

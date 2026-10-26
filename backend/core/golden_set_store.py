@@ -23,6 +23,8 @@ already used must not stop that user's eval from loading.
 """
 from __future__ import annotations
 
+import contextlib
+
 from pathlib import Path
 
 PRODUCT_ORIGIN = "product"
@@ -101,3 +103,21 @@ def load_merged(workspace: Path, *, product_path: Path | None = None) -> dict:
 
 def is_product_case(case: dict) -> bool:
     return case.get("_origin") == PRODUCT_ORIGIN
+
+
+@contextlib.contextmanager
+def fixture_workspace():
+    """A fresh copy of the workspace the product's offline cases run in
+    (``templates/eval/fixtures/workspace``), in a temporary directory that is removed
+    afterwards. The shipped ``context/`` folder becomes ``.context/`` (a dot folder is
+    not guaranteed to survive packaging). Yields the workspace path."""
+    import shutil
+    import tempfile
+    from utils.backend_bin import bundled_path
+
+    src = bundled_path("templates", "eval", "fixtures", "workspace")
+    with tempfile.TemporaryDirectory(prefix="swarm-eval-ws-") as tmp:
+        ws = Path(tmp) / "workspace"
+        shutil.copytree(src, ws)
+        (ws / "context").rename(ws / ".context")
+        yield ws

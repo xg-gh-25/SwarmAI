@@ -47,7 +47,9 @@ def test_every_product_case_passes_on_a_fresh_install(fresh_ws):
     bad = {cid: (r["status"], (r.get("notes") or "")[:160])
            for cid, r in by_id.items() if r["status"] != "passed"}
     assert not bad, bad
-    assert set(by_id) == {c["id"] for c in gs["cases"]}
+    # offline (behavior) cases spawn a real agent: they run in the scheduled /
+    # on-demand behavior run, not in this test
+    assert set(by_id) == {c["id"] for c in gs["cases"] if c.get("eval_method") != "behavior"}
 
 
 def test_a_run_never_writes_outside_its_temp_dirs(fresh_ws, tmp_path):

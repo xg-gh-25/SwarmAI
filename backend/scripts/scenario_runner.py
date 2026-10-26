@@ -197,21 +197,22 @@ def parse_pre_tool_text(stdout: str) -> list[int]:
     return lengths
 
 
-_SWARMAI_PROMPT_CACHE: str | None = None
+_SWARMAI_PROMPT_CACHE: dict[str, str] = {}
 
 
-def _swarmai_system_prompt() -> str:
+def _swarmai_system_prompt(workspace=None) -> str:
     """SwarmAI's own base system prompt (the 11 governed files + framing).
 
     The same string a desktop session starts from
     (``PromptBuilder.build_default_system_prompt``: no per-turn briefing, recall
     or UI state, so a scenario is not moved by today's DailyActivity). Built once
     per process, on a private event loop in a worker thread, so it works whether
-    or not the caller is already inside a running loop.
+    or not the caller is already inside a running loop. ``workspace`` (default: the
+    user's) is where its ``.context/`` is read from.
     """
-    global _SWARMAI_PROMPT_CACHE
-    if _SWARMAI_PROMPT_CACHE is not None:
-        return _SWARMAI_PROMPT_CACHE
+    root = str(workspace or SWARMWS)
+    if root in _SWARMAI_PROMPT_CACHE:
+        return _SWARMAI_PROMPT_CACHE[root]
     import asyncio
     import concurrent.futures
 
@@ -223,13 +224,13 @@ def _swarmai_system_prompt() -> str:
 
     def _build() -> str:
         return asyncio.run(PromptBuilder(config=cfg).build_default_system_prompt(
-            agent_config={}, working_directory=str(SWARMWS)))
+            agent_config={}, working_directory=root))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         text = pool.submit(_build).result()
     if not text or not text.strip():
         raise ScenarioInfraError("SwarmAI system prompt assembled empty")
-    _SWARMAI_PROMPT_CACHE = text
+    _SWARMAI_PROMPT_CACHE[root] = text
     return text
 
 
@@ -259,6 +260,7 @@ def run_scenario_raw(
     allowed_tools: list[str] | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     system: str = "bare",
+    workspace=None,
 ) -> tuple[list[str], str, str]:
     """``run_scenario_full`` plus the raw stream-json stdout, with a choice of agent.
 
@@ -266,7 +268,10 @@ def run_scenario_raw(
     files only by reading them — tests whether the DOCUMENTS drive a decision.
     ``system="swarmai"``: SwarmAI's own base system prompt (``--system-prompt-file``)
     and the configured default model — tests what the PRODUCT agent does.
+    ``workspace`` (default: the user's) is where the agent runs and may read; a
+    product case passes the eval fixture workspace.
     """
+    root = str(workspace or SWARMWS)
     if system not in ("bare", "swarmai"):
         raise ScenarioInfraError(f"unknown scenario system {system!r}")
     # Defense-in-depth: this filter is a SHELL-command blocklist (curl/rm -rf/…).
@@ -297,7 +302,7 @@ def run_scenario_raw(
 
         from jobs.model_resolve import resolve_job_model
         try:
-            text = _swarmai_system_prompt()
+            text = _swarmai_system_prompt(root)
         except ScenarioInfraError:
             raise
         except Exception as e:  # assembly failure = infra, not behavior
@@ -324,7 +329,7 @@ def run_scenario_raw(
         "--allowedTools", ",".join(tools),
         # CRITICAL (Gate 1): grant read access to the workspace, else every
         # Read of SELF.md / DDD docs is denied -> all behavior cases fail.
-        "--add-dir", str(SWARMWS),
+        "--add-dir", root,
         "-p", prompt,
     ]
 
@@ -336,7 +341,7 @@ def run_scenario_raw(
             text=True,
             timeout=timeout,
             env=env,
-            cwd=str(SWARMWS),  # CRITICAL (Gate 1): run INSIDE the workspace
+            cwd=root,  # CRITICAL (Gate 1): run INSIDE the workspace
         )
     except subprocess.TimeoutExpired:
         logger.warning("scenario_runner: spawn timed out after %ss", timeout)
