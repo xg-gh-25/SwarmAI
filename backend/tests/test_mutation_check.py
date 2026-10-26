@@ -83,7 +83,8 @@ def test_a_run_at_the_cap_is_killed_caught_and_the_file_restored(repo):
         os.kill(pid, 0)
 
 
-def test_sigterm_mid_run_restores_the_file(repo, tmp_path):
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGALRM])
+def test_a_stop_signal_mid_run_restores_the_file(repo, tmp_path, signum):
     spec = _spec(tmp_path, [{"file": "calc.py", "old": "return a + b", "new": "return a - b"}])
     backend = Path(mc.__file__).resolve().parents[1]
     proc = subprocess.Popen(
@@ -94,7 +95,7 @@ def test_sigterm_mid_run_restores_the_file(repo, tmp_path):
     while "a - b" not in (repo / "calc.py").read_text():
         assert time.monotonic() < deadline, "the mutation was never written"
         time.sleep(0.05)
-    proc.send_signal(signal.SIGTERM)
+    proc.send_signal(signum)
     out, _ = proc.communicate(timeout=20)
     assert proc.returncode == 1 and "restored" in json.loads(out)["error"]
     assert (repo / "calc.py").read_text() == FIX

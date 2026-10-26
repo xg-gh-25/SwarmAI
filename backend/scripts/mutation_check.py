@@ -22,7 +22,8 @@ For each mutation, in order:
   Each write moves the file's mtime strictly forward, so a cache keyed on mtime + size
   (``.pyc``, build tools) never runs the previous version of the file.
   4. the original bytes are written back and the backup removed — also on an exception,
-     Ctrl-C or SIGTERM. Only SIGKILL can leave a mutated file; its backup stays on disk,
+     Ctrl-C, SIGTERM, SIGALRM (a wall-clock cap such as ``perl -e 'alarm N; exec …'``)
+     or SIGHUP. Only SIGKILL can leave a mutated file; its backup stays on disk,
      and a later run refuses that file until ``--restore`` puts the original back.
 
 Before any mutation the command runs once unchanged; if that run is not green, nothing is
@@ -49,7 +50,7 @@ BACKUP_SUFFIX = ".mutation-backup"
 
 
 class _Terminated(Exception):
-    """SIGTERM arrived: unwind so every ``finally`` restores its file."""
+    """SIGTERM / SIGALRM / SIGHUP arrived: unwind so every ``finally`` restores its file."""
 
 
 def _on_term(_signum, _frame):  # pragma: no cover - exercised through a subprocess test
@@ -200,7 +201,11 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(json.dumps({"ok": False, "error": f"bad spec: {exc}"}))
         return 2
-    signal.signal(signal.SIGTERM, _on_term)
+    # SIGALRM: the documented test cap (``perl -e 'alarm N; exec …'``) delivers it to
+    # this process; its default action ends it before any ``finally`` runs
+    for name in ("SIGTERM", "SIGALRM", "SIGHUP"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), _on_term)
     try:
         out = check(spec, cmd, cwd, a.timeout, baseline=not a.no_baseline)
     except _Terminated:
