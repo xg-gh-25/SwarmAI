@@ -12,8 +12,3 @@ backend/core/swarm_workspace_manager.py | Projects/SwarmAI | 4 | the seeded defa
 backend/hive/user_data.py | /home/swarm | 3 | the Hive EC2 instance's own service account, not a user's machine
 backend/scripts/newuser_smoke_e2e.sh | prod.sh | 1 | SwarmAI's own packaging smoke script, run inside a SwarmAI checkout
 backend/core/eval_service.py | Projects/SwarmAI | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | SwarmAI-Workspace | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | Desktop | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | Path.home() / 'Desktop' | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_runner.py | _find_swarmai_repo | 6 | temporary: OS Eval generalization ToDo (closing guards D2)
-backend/scripts/eval_spine_probe.py | _find_swarmai_repo | 2 | temporary: OS Eval generalization ToDo (closing guards D2)

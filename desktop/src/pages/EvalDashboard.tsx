@@ -65,7 +65,7 @@ export interface GoldenSetCase {
   title: string;
   tier: string;
   eval_method?: string;
-  _origin?: string; // "public" | "private" — ship tag, set by backend
+  _origin?: string; // "product" | "private" — set by backend
   evaluators: string[];
   affected_by: string[];
   last_result: { status: string; run_id: string; triggered_at: string } | null;
@@ -600,7 +600,7 @@ export function GoldenSetTab() {
         </div>
 
         {/* Grouped case list — collapsible category sections. Each row shows an
-            origin badge (public/private) + eval_method so curated vs instance and
+            origin badge (product/private) + eval_method so shipped vs own cases and
             test type are distinguishable at a glance (fixes "傻傻分不清"). */}
         <div className="border border-[var(--color-border)] rounded-lg overflow-y-auto flex-1 min-h-0" data-testid="golden-set-groups">
           {groupedByCat.length === 0 && (
@@ -2102,11 +2102,11 @@ function StatusBadge({ status }: { status?: string }) {
 // cases (gitignored). The single most-requested distinction for the golden set.
 function OriginBadge({ origin }: { origin?: string }) {
   if (!origin) return <span className="text-meta text-[var(--color-text-muted)]">—</span>;
-  const isPublic = origin === 'public';
-  const cls = isPublic ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
+  const isProduct = origin === 'product';
+  const cls = isProduct ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
-      <span className="material-symbols-outlined icon-xs">{isPublic ? 'public' : 'lock'}</span>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta font-semibold ${cls}`} title={isProduct ? 'Product — ships with SwarmAI, the same on every install' : 'Private — your own case, kept on this machine'}>
+      <span className="material-symbols-outlined icon-xs">{isProduct ? 'verified' : 'lock'}</span>
       {origin}
     </span>
   );

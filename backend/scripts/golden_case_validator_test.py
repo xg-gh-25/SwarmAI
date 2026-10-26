@@ -266,16 +266,14 @@ def test_cli_main_exits_zero_on_clean_public_pass(tmp_path):
 def _write_corpus(tmp_path, cases, private_cases=None):
     """Build a minimal SwarmWS-shaped workspace: Eval/ + .context/ with a
     STEERING.md that has NO 'R5' rule (so STEERING.R5 resolves EMPTY) but DOES
-    have AGENT.R1 (so that ref resolves). The golden set carries `version: 2`
-    because validate_corpus reuses eval_runner.load_golden_set, which asserts it."""
+    have AGENT.R1 (so that ref resolves). The cases are the user's own (the
+    private file); the product set ships with the backend and is merged in by
+    eval_runner.load_merged_golden_set, which validate_corpus reuses."""
     import yaml
     (tmp_path / "Eval").mkdir()
     (tmp_path / ".context").mkdir()
-    (tmp_path / "Eval" / "golden_set.yaml").write_text(
-        yaml.safe_dump({"version": 2, "cases": cases}))
-    if private_cases is not None:
-        (tmp_path / "Eval" / "golden_set.private.yaml").write_text(
-            yaml.safe_dump({"version": 2, "cases": private_cases}))
+    (tmp_path / "Eval" / "golden_set.private.yaml").write_text(
+        yaml.safe_dump({"version": 2, "cases": list(cases) + list(private_cases or [])}))
     (tmp_path / ".context" / "STEERING.md").write_text("### 1. Prevention\nsome text\n")
     (tmp_path / ".context" / "AGENT.md").write_text("R1. **Pipeline mandatory**\nfull text\n\n")
     (tmp_path / ".context" / "MEMORY.md").write_text("- [DEC38] real entry\n")
@@ -338,9 +336,9 @@ def test_validate_corpus_report_only_exits_zero(tmp_path):
 
 
 def test_validate_corpus_wrong_root_fails_loud_not_clean(tmp_path):
-    """Gate-2 F5: a typo'd --root (no Eval/golden_set.yaml) must NOT false-green
-    to 'CORPUS CLEAN'. load_golden_set raises FileNotFoundError → exit 2 +
-    'UNVERIFIABLE', never a silent clean report."""
+    """Gate-2 F5: a typo'd --root (a directory that does not exist) must NOT
+    false-green to 'CORPUS CLEAN' over the product set alone: the sweep raises
+    FileNotFoundError → exit 2 + 'UNVERIFIABLE', never a silent clean report."""
     import subprocess
     bad = tmp_path / "definitely_nonexistent"
     backend = Path(__file__).resolve().parent.parent
@@ -356,8 +354,8 @@ def test_validate_corpus_wrong_root_fails_loud_not_clean(tmp_path):
 
 
 def test_validate_corpus_dup_id_fails_loud(tmp_path):
-    """Gate-2 F2: an id present in BOTH public + private is a migration error.
-    Reusing load_golden_set makes the sweep fail LOUD (exit 2) instead of
+    """Gate-2 F2: an id repeated inside the private set is a data error.
+    Reusing the shared loader makes the sweep fail LOUD (exit 2) instead of
     silently double-counting (the bug in the first self-rolled loader)."""
     import subprocess
     case = {

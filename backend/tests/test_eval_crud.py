@@ -12,11 +12,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.eval_service import EvalService
+from tests._eval_golden_fixture import install_golden_fixture
 
 
 @pytest.fixture
-def eval_workspace(tmp_path):
-    """Create a minimal eval workspace with golden_set.yaml and EvalHistory."""
+def eval_workspace(tmp_path, monkeypatch):
+    """A minimal eval workspace: the fixture cases are the user's own (private
+    file, the only file the service writes) plus EvalHistory."""
     project_dir = tmp_path / "Eval"
     project_dir.mkdir(parents=True)
     history_dir = project_dir / "EvalHistory"
@@ -59,7 +61,7 @@ def eval_workspace(tmp_path):
 
     # Write YAML
     import yaml
-    (project_dir / "golden_set.yaml").write_text(yaml.dump(golden_set, default_flow_style=False))
+    install_golden_fixture(monkeypatch, tmp_path, golden_set)
 
     # Write a sample run
     run = {
@@ -358,7 +360,7 @@ class TestPersistPreservesDiskOnlyCases:
     def _external_add_case(self, eval_workspace, case):
         """Simulate another session/manual edit appending a case to disk."""
         import yaml
-        path = eval_workspace / "Eval" / "golden_set.yaml"
+        path = eval_workspace / "Eval" / "golden_set.private.yaml"
         data = yaml.safe_load(path.read_text())
         data["cases"].append(case)
         path.write_text(yaml.dump(data, default_flow_style=False))
@@ -399,7 +401,7 @@ class TestPersistPreservesDiskOnlyCases:
         """AC2: for a case present in BOTH disk and memory, user-owned disk
         fields (tags/notes/promoted_from) survive a persist that didn't touch them."""
         import yaml
-        path = eval_workspace / "Eval" / "golden_set.yaml"
+        path = eval_workspace / "Eval" / "golden_set.private.yaml"
         data = yaml.safe_load(path.read_text())
         for c in data["cases"]:
             if c["id"] == "GS002":
@@ -410,8 +412,9 @@ class TestPersistPreservesDiskOnlyCases:
         # svc (loaded BEFORE the tag edit) persists via an update to GS001.
         svc.update_case("GS001", {"title": "touch"})
 
-        svc2 = EvalService(workspace_root=eval_workspace)
-        gs002 = svc2.get_case_detail("GS002")
+        # Read the file itself: get_case_detail redacts a private case's content.
+        on_disk = {c["id"]: c for c in yaml.safe_load(path.read_text())["cases"]}
+        gs002 = on_disk["GS002"]
         assert gs002.get("tags") == ["behavior_trajectory", "full"], "user-owned tags lost"
         assert gs002.get("notes") == "hand-written note", "user-owned notes lost"
 
@@ -497,23 +500,18 @@ class TestPersistPreservesDiskOnlyCases:
 
     def test_id_less_in_memory_case_still_written(self, svc, eval_workspace):
         """Gate-1 edge: an in-memory case with a falsy/absent id must still be
-        PRESERVED on persist (not dropped). Under the public/private split
-        (run_69b1c644), an untagged case routes to the PRIVATE file (fail-closed
-        default — never auto-publish a case that didn't go through PROMOTE).
-        The data-loss guard still holds; only the destination is private."""
+        PRESERVED on persist (not dropped). An untagged case is a newly added one
+        and lands in the PRIVATE file; the product set is never written."""
+        import core.golden_set_store as store
+        product_before = store.product_golden_set_path().read_bytes()
         svc._cases.append({"title": "no id here", "category": "compliance"})
         svc.update_case("GS001", {"title": "touch"})  # triggers persist
 
         import yaml
-        proj = eval_workspace / "Eval"
-        pub = yaml.safe_load((proj / "golden_set.yaml").read_text())
-        priv_path = proj / "golden_set.private.yaml"
-        priv = yaml.safe_load(priv_path.read_text()) if priv_path.exists() else {"cases": []}
-        all_titles = [c.get("title") for c in pub["cases"] + priv.get("cases", [])]
-        assert "no id here" in all_titles, "id-less in-memory case was dropped on persist"
-        # fail-closed: untagged case must NOT auto-land in the tracked public file
-        pub_titles = [c.get("title") for c in pub["cases"]]
-        assert "no id here" not in pub_titles, "untagged case leaked into public file"
+        priv = yaml.safe_load((eval_workspace / "Eval" / "golden_set.private.yaml").read_text())
+        assert "no id here" in [c.get("title") for c in priv["cases"]], \
+            "id-less in-memory case was dropped on persist"
+        assert store.product_golden_set_path().read_bytes() == product_before
 
 
 class TestPersistCrossProcessLock:
@@ -525,7 +523,7 @@ class TestPersistCrossProcessLock:
     """
 
     def _lock_path(self, eval_workspace):
-        return eval_workspace / "Eval" / "golden_set.yaml.lock"
+        return eval_workspace / "Eval" / "golden_set.private.yaml.lock"
 
     def test_persist_acquires_exclusive_lock(self, svc, eval_workspace):
         """The persist must BLOCK while another fd holds the sidecar lock,
@@ -674,8 +672,11 @@ class TestDimensionCategoryGuard:
     surfaces the drift the moment a case is loaded. (run_8c44b7bf)
     """
 
+    @pytest.fixture(autouse=True)
+    def _mp(self, monkeypatch):
+        self.monkeypatch = monkeypatch
+
     def _workspace(self, tmp_path, cases, dimensions=None, categories=None):
-        import yaml
         project_dir = tmp_path / "Eval"
         project_dir.mkdir(parents=True)
         (project_dir / "EvalHistory").mkdir()
@@ -685,7 +686,7 @@ class TestDimensionCategoryGuard:
             "dimensions": dimensions or ["compliance", "factual_accuracy"],
             "cases": cases,
         }
-        (project_dir / "golden_set.yaml").write_text(yaml.dump(gs, default_flow_style=False))
+        install_golden_fixture(self.monkeypatch, tmp_path, gs)
         return tmp_path
 
     def _case(self, cid, dimension, category="compliance"):

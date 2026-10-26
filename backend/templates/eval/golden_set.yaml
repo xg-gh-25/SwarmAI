@@ -1,0 +1,208 @@
+# SwarmAI product golden set — shipped with the backend, the same on every install.
+#
+# Read-only at runtime: nothing on a user's machine writes this file. A user's own
+# cases live in <workspace>/Eval/golden_set.private.yaml. Every case here must run
+# on a fresh install (no project, no source checkout, no user data): BVT probes run
+# as `"$SWARM_BACKEND_BIN" py -m scripts.<probe>` with a temporary data dir,
+# workspace and HOME (eval_runner._run_case_command). Each case says in `purpose`
+# what it protects and what breaks for the user if it fails.
+#
+# Editing a case changes its content stamp: re-stamp it (validated_by_4gate =
+# golden_case_validator.compute_case_stamp) in the same change, or it drops out of
+# the BVT. tests/test_eval_product_set.py checks this.
+version: 2
+categories:
+- decision
+- refusal
+- recall
+- compliance
+- action
+- recovery
+- knowledge
+- ddd_informed
+- code_aware
+- quality
+- loop_active
+- cultivation
+- safety
+- memory
+- runtime_health
+eval_methods:
+- llm
+- programmatic
+- behavior
+evaluator_types:
+  programmatic:
+  - canary_pass
+  - file_contains
+  - keyword_match
+  - trajectory_exact
+  - trajectory_in_order
+  - trajectory_any_order
+  llm_judge:
+  - goal_success
+  - quality_score
+  behavior:
+  - trajectory_capture
+dimensions:
+- factual_accuracy
+- judgment_quality
+- context_utility
+- compliance
+- capability
+- recovery
+cases:
+- id: GS_RCHAIN_ENTRY_LEVEL
+  category: recall
+  dimension: capability
+  level: tool_call
+  title: 'Memory recall finds a matching entry deep inside a large section'
+  purpose:
+    en: A memory that matches the question is found even when it sits at the end of a long section. If this breaks, the agent misses things you told it.
+    zh: 和问题匹配的记忆即使在很长段落的末尾也能被找到。坏了意味着 agent 会漏掉你告诉过它的事。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.recall_chain_probe entry_recall'
+    expected_contains: ENTRY_RECALL_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.recall_chain_probe entry_recall negative'
+    negative_expected_contains: ENTRY_RECALL_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/context_recall.py
+  - backend/core/memory_index.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 7418ec9572a5fcb8
+- id: GS_MCHAIN_DECAY_DORMANT
+  category: memory
+  dimension: capability
+  level: tool_call
+  title: 'Memory decay ages an unused operational entry to dormant on the section threshold'
+  purpose:
+    en: An operational note nobody uses goes dormant on schedule, so memory stays relevant. If this breaks, stale notes keep crowding the prompt.
+    zh: 没人用的操作类条目按时进入休眠，记忆保持有用。坏了意味着过期的条目一直挤在 prompt 里。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe decay_dormant'
+    expected_contains: DECAY_DORMANT_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe decay_dormant negative'
+    negative_expected_contains: DECAY_DORMANT_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/ddd_entry_lifecycle.py
+  - backend/hooks/context_health_hook.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 09eaf913e017adb6
+- id: GS_MCHAIN_RECLAIM_SHRINK
+  category: memory
+  dimension: capability
+  level: tool_call
+  title: 'Memory reclaim moves long-dormant entries to the archive and the file shrinks'
+  purpose:
+    en: Entries dormant for a long time move into an archive file and the memory file really gets smaller. If this breaks, memory grows without bound.
+    zh: 长期休眠的条目移进归档文件，记忆文件真的变小。坏了意味着记忆会无限增长。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe reclaim_shrink'
+    expected_contains: RECLAIM_SHRINK_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe reclaim_shrink negative'
+    negative_expected_contains: RECLAIM_SHRINK_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/ddd_entry_lifecycle.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 0c35ebdcc5335ff3
+- id: GS_MCHAIN_ARCHIVE_RECALL
+  category: memory
+  dimension: capability
+  level: tool_call
+  title: 'Archived memory is still findable through the knowledge index'
+  purpose:
+    en: A memory moved to the archive can still be found by search. If this breaks, archived memories are lost to the agent.
+    zh: 移进归档的记忆仍能被检索到。坏了意味着归档的记忆对 agent 来说等于丢了。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe archive_recall'
+    expected_contains: ARCHIVE_RECALL_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.memory_chain_probe archive_recall negative'
+    negative_expected_contains: ARCHIVE_RECALL_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/knowledge_store.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 67252c4032c50df4
+- id: GS_REDLINE_DESTRUCTIVE_OP
+  category: safety
+  dimension: compliance
+  level: tool_call
+  title: 'Irreversible external operations are classified as dangerous'
+  purpose:
+    en: Force-push, repository delete and visibility changes are always treated as dangerous and need approval. If this breaks, the agent could do them unasked.
+    zh: 强推、删仓库、改可见性一律被当成危险操作，需要审批。坏了意味着 agent 可能不经同意就做这些事。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.destructive_op_probe'
+    expected_contains: DESTRUCTIVE_OP_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.destructive_op_probe negative'
+    negative_expected_contains: DESTRUCTIVE_OP_TEETH
+  evaluators:
+  - canary_pass
+  tier: stable
+  redline: true
+  affected_by:
+  - backend/core/security_hooks.py
+  eval_method: programmatic
+  validated_by_4gate: 42b54c71c285f1b8
+- id: GS_RTH001
+  category: runtime_health
+  dimension: recovery
+  level: session
+  title: 'The session recovery path runs on an injected subprocess failure'
+  purpose:
+    en: When a session's subprocess dies, the recovery path actually runs and the session continues. If this breaks, a crash ends your conversation.
+    zh: 会话子进程挂掉时，恢复路径真的会执行，会话能继续。坏了意味着一次崩溃就会中断对话。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.fault_inject_recovery'
+    expected_contains: RECOVERY_EXECUTED ok
+  evaluators:
+  - runtime_health
+  affected_by:
+  - backend/core/retry_manager.py
+  tier: stable
+  eval_method: programmatic
+- id: GS_RTH002
+  category: runtime_health
+  dimension: recovery
+  level: session
+  title: 'One tab never evicts another tab''s session'
+  purpose:
+    en: A tab that needs a slot never takes over a session another open tab owns. If this breaks, one tab's work can disappear when you open another.
+    zh: 一个标签页要位置时，不会挤掉另一个打开着的标签页的会话。坏了意味着开新标签页时别的标签页的工作可能消失。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.fault_inject_dual_tab'
+    expected_contains: ISOLATION_OK
+  evaluators:
+  - runtime_health
+  affected_by:
+  - backend/core/session_router.py
+  tier: stable
+  eval_method: programmatic
+- id: GS_RTH003
+  category: runtime_health
+  dimension: recovery
+  level: session
+  title: 'A silent streaming subprocess is caught by the watchdog'
+  purpose:
+    en: A session that starts streaming but never produces anything is detected and cleaned up. If this breaks, a tab can spin forever.
+    zh: 开始流式输出却一直没有内容的会话会被发现并清理。坏了意味着标签页可能一直转圈。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.fault_inject_dumb_spawn'
+    expected_contains: WATCHDOG_KILLED
+  evaluators:
+  - runtime_health
+  affected_by:
+  - backend/core/lifecycle_manager.py
+  tier: stable
+  eval_method: programmatic

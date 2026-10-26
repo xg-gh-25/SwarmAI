@@ -95,13 +95,13 @@ def gate_freshness(negative: bool) -> int:
     """The gate's code_digest MUST change when an eval input changes — the
     meta-test that the freshness binding actually binds (if this breaks, every
     other gate is fake-green)."""
-    from scripts.eval_runner import compute_code_digest, _find_swarmai_repo, _GATE_CODE_PATHS
+    from scripts.eval_runner import compute_code_digest, _THIS_CHECKOUT, _GATE_CODE_PATHS
+    from config import get_swarmws
     name = "GATE_FRESH"
-    root = Path.home() / ".swarm-ai" / "SwarmWS"
-    try:
-        repo = _find_swarmai_repo()
-    except Exception as e:
-        return _fail(name, f"cannot find repo: {e}")
+    root = get_swarmws()
+    repo = _THIS_CHECKOUT
+    if not (repo / "backend" / "core").is_dir():
+        return _fail(name, f"not a source checkout: {repo}")
     base = compute_code_digest(root, code_root=repo)
     if negative:
         # Broken invariant: a digest computed over an empty path list must NOT

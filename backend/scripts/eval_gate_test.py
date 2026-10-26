@@ -58,11 +58,16 @@ def test_digest_changes_when_code_changes(git_repo):
     assert d1 != d2, "digest must change when eval-relevant code changes"
 
 
-def test_digest_changes_when_public_golden_set_changes(git_repo):
+def test_digest_changes_when_product_golden_set_changes(git_repo, monkeypatch):
+    import core.golden_set_store as store
+    product = git_repo / "backend" / "templates" / "eval" / "golden_set.yaml"
+    product.parent.mkdir(parents=True)
+    product.write_text("version: 2\ncases: []\n")
+    monkeypatch.setattr(store, "product_golden_set_path", lambda: product)
     d1 = compute_code_digest(git_repo, code_root=git_repo)
-    (git_repo / "Eval" / "golden_set.yaml").write_text("version: 2\ncases: [{id: X}]\n")
+    product.write_text("version: 2\ncases: [{id: X}]\n")
     d2 = compute_code_digest(git_repo, code_root=git_repo)
-    assert d1 != d2, "editing the public golden set must invalidate the digest"
+    assert d1 != d2, "editing the product golden set must invalidate the digest"
 
 
 def test_digest_changes_when_private_golden_set_changes(git_repo):

@@ -25,10 +25,10 @@ vi.mock('../../services/api', () => ({
 }));
 
 const CASES = [
-  { id: 'a', category: 'compliance', dimension: 'compliance', level: 'session', title: 'Comp A', tier: 'active', eval_method: 'llm', _origin: 'public', evaluators: [], affected_by: [], last_result: { status: 'passed', run_id: 'r', triggered_at: 't' } },
+  { id: 'a', category: 'compliance', dimension: 'compliance', level: 'session', title: 'Comp A', tier: 'active', eval_method: 'llm', _origin: 'product', evaluators: [], affected_by: [], last_result: { status: 'passed', run_id: 'r', triggered_at: 't' } },
   { id: 'b', category: 'compliance', dimension: 'capability', level: 'session', title: 'Comp B', tier: 'stable', eval_method: 'programmatic', _origin: 'private', evaluators: [], affected_by: [], last_result: { status: 'failed', run_id: 'r', triggered_at: 't' } },
   { id: 'c', category: 'decision', dimension: 'judgment_quality', level: 'session', title: 'Dec C', tier: 'active', eval_method: 'llm', _origin: 'private', evaluators: [], affected_by: [], last_result: null },
-  { id: 'd', category: 'recall', dimension: 'utility', level: 'trace', title: 'Rec D', tier: 'draft', _origin: 'public', evaluators: [], affected_by: [], last_result: null },
+  { id: 'd', category: 'recall', dimension: 'utility', level: 'trace', title: 'Rec D', tier: 'draft', _origin: 'product', evaluators: [], affected_by: [], last_result: null },
 ];
 
 const GS_RESPONSE = {
@@ -131,7 +131,7 @@ describe('GoldenSetTab grouping + origin badge (run_1f588e53)', () => {
     renderTab();
     await screen.findByTestId('golden-set-groups');
     // public + private both appear as badge text (Comp A=public, Comp B=private)
-    expect(screen.getAllByText('public').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('product').length).toBeGreaterThan(0);
     expect(screen.getAllByText('private').length).toBeGreaterThan(0);
   });
 

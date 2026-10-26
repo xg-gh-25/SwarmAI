@@ -5,9 +5,12 @@ with their content-bound validated_by_4gate hash (run_5edf2cc0 C3, gap G1).
 WHY a script and not the validator: validate_case computes the stamp but has no
 write path (Gate-1 BLOCK-B). The only sanctioned writer is
 EvalService.update_case → _persist_golden_set (holds the file locks, strips
-_origin, keeps the public/private split). This script walks every gate-eligible
-non-draft case and writes its stamp through that path, so compute_bvt (which
-requires a matching stamp) keeps a NON-EMPTY green set after the C2 tightening.
+_origin, writes only the private file). This script walks every gate-eligible
+non-draft PRIVATE case and writes its stamp through that path, so compute_bvt
+(which requires a matching stamp) keeps a NON-EMPTY green set after the C2
+tightening. Product cases are read-only at runtime: a stale product stamp is
+reported, and is fixed in backend/templates/eval/golden_set.yaml (CI asserts
+every product stamp is current).
 
 Legacy cases are stamped as-is (grandfathered for gate_teeth — they predate the
 negative_command requirement). Idempotent: a case already carrying the correct
@@ -33,8 +36,10 @@ def stamp_all(svc: EvalService, dry_run: bool = False) -> dict:
     is an allowlisted projection that injects read-time fields (last_result) and
     drops others, so a stamp computed over it would never match the full case that
     compute_bvt/load_golden_set sees on disk. The stamp must be over the raw body."""
+    from core.golden_set_store import is_product_case
+
     cases = svc._cases
-    stamped, skipped, already = [], [], []
+    stamped, skipped, already, product_stale = [], [], [], []
     for c in cases:
         if not _is_gate_eligible(c) or c.get("tier") == "draft":
             skipped.append(c.get("id"))
@@ -43,11 +48,14 @@ def stamp_all(svc: EvalService, dry_run: bool = False) -> dict:
         if c.get("validated_by_4gate") == want:
             already.append(c.get("id"))
             continue
+        if is_product_case(c):
+            product_stale.append(c.get("id"))
+            continue
         stamped.append(c.get("id"))
         if not dry_run:
             svc.update_case(c["id"], {"validated_by_4gate": want})
     return {"stamped": stamped, "already": already, "skipped_non_eligible": len(skipped),
-            "dry_run": dry_run}
+            "product_stale": product_stale, "dry_run": dry_run}
 
 
 def main() -> int:
@@ -60,6 +68,9 @@ def main() -> int:
           f"already={len(summary['already'])} non-eligible-skipped={summary['skipped_non_eligible']}")
     if summary["stamped"]:
         print("  newly stamped:", ", ".join(summary["stamped"][:20]))
+    if summary["product_stale"]:
+        print("  product cases with a stale stamp (fix in templates/eval/golden_set.yaml):",
+              ", ".join(summary["product_stale"]))
     return 0
 
 

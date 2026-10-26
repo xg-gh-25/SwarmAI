@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from unittest.mock import patch
 
 from backend.scripts.eval_runner import (
-    load_golden_set,
+    load_merged_golden_set,
     compute_scores,
     eval_keyword_match,
     eval_trajectory,
@@ -25,7 +25,7 @@ from backend.scripts.eval_runner import (
     evaluate_case,
     filter_cases_by_tags,
     _find_workspace_root,
-    _find_swarmai_repo,
+    _THIS_CHECKOUT,
     _get_judge_model,
 )
 import backend.scripts.eval_runner as eval_runner_mod
@@ -35,24 +35,26 @@ FIXTURE_PATH = Path(__file__).resolve().parent / "testdata" / "golden_set_fixtur
 
 
 def _workspace_available() -> bool:
-    """Check if live workspace golden_set exists (not available in CI)."""
-    try:
-        root = _find_workspace_root()
-        return (root / "Eval" / "golden_set.yaml").exists()
-    except FileNotFoundError:
-        return False
+    """Check if a live workspace exists (not available in CI)."""
+    return _find_workspace_root().is_dir()
+
+
+def _load_fixture(tmp_path_factory=None):
+    """The committed fixture, loaded as a product set with no private cases."""
+    import tempfile
+    return load_merged_golden_set(Path(tempfile.mkdtemp()), product_path=FIXTURE_PATH)
 
 
 class TestLoadGoldenSet:
     """Test golden_set.yaml loading and validation (uses fixture for CI-safety)."""
 
     def test_loads_successfully(self):
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         assert data["version"] == 2
         assert len(data["cases"]) >= 3
 
     def test_all_cases_have_required_fields(self):
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         for case in data["cases"]:
             assert "id" in case, f"Missing id: {case.get('title')}"
             assert "evaluators" in case, f"{case['id']} missing evaluators"
@@ -62,12 +64,12 @@ class TestLoadGoldenSet:
             assert "title" in case, f"{case['id']} missing title"
 
     def test_unique_ids(self):
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         ids = [c["id"] for c in data["cases"]]
         assert len(ids) == len(set(ids)), f"Duplicate IDs: {[i for i in ids if ids.count(i) > 1]}"
 
     def test_valid_categories(self):
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         valid_categories = set(data["categories"])
         for case in data["cases"]:
             assert case["category"] in valid_categories, f"{case['id']} has invalid category '{case['category']}'"
@@ -75,9 +77,7 @@ class TestLoadGoldenSet:
     @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
     def test_live_workspace_loads(self):
         """Smoke test: live workspace golden_set parses without error."""
-        root = _find_workspace_root()
-        gs_path = root / "Eval" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
+        data = load_merged_golden_set(_find_workspace_root())
         assert data["version"] == 2
         assert len(data["cases"]) >= 10
 
@@ -119,14 +119,13 @@ class TestComputeScores:
 class TestPathResolution:
     """Test workspace/repo discovery."""
 
-    @pytest.mark.skipif(not _workspace_available(), reason="needs live Eval/golden_set.yaml")
-    def test_workspace_found(self):
-        root = _find_workspace_root()
-        assert (root / "Eval" / "golden_set.yaml").exists()
+    def test_workspace_is_the_configured_one(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("SWARM_WORKSPACE", raising=False)
+        monkeypatch.setenv("SWARMWS", str(tmp_path))
+        assert _find_workspace_root() == tmp_path
 
-    def test_swarmai_repo_found(self):
-        repo = _find_swarmai_repo()
-        assert (repo / "backend" / "core").is_dir()
+    def test_this_checkout_is_the_repo_root(self):
+        assert (_THIS_CHECKOUT / "backend" / "core").is_dir()
 
 
 class TestKeywordMatch:
@@ -320,7 +319,7 @@ class TestProgrammaticFirstCascade:
             "expected_response_contains": ["pipeline"],
             "affected_by": ["STEERING.R1"],
         }
-        repo_root = _find_swarmai_repo()
+        repo_root = _THIS_CHECKOUT
         result = evaluate_case(case, repo_root, simulated_response="Run the pipeline here")
         assert result["evaluator"] == "keyword_match"
         assert result["status"] == "passed"
@@ -335,7 +334,7 @@ class TestProgrammaticFirstCascade:
             "assertions": ["Agent decides correctly"],
             "affected_by": ["MEMORY.KD34"],
         }
-        repo_root = _find_swarmai_repo()
+        repo_root = _THIS_CHECKOUT
         result = evaluate_case(case, repo_root)
         assert result["evaluator"] == "goal_success"
         assert result["status"] == "skipped"  # LLM not implemented yet
@@ -367,7 +366,7 @@ class TestCanaryTeeth:
     def test_teeth_off_by_default_ignores_negative(self):
         """back-compat: verify_teeth defaults False — the negative is never run,
         even when fully declared. Behaves exactly as today."""
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         case = self._case("echo M_OK", "M_OK", negative="echo M_OK", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo)  # default verify_teeth=False
         assert result["status"] == "passed"
@@ -375,7 +374,7 @@ class TestCanaryTeeth:
     def test_vacuous_negative_still_prints_marker_is_RED(self):
         """AC1: positive passes, but the negative STILL prints the positive
         marker => vacuous probe => FAIL (even though FAIL token would match)."""
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         # negative echoes BOTH the positive marker and the fail token
         case = self._case("echo M_OK", "M_OK", negative="echo 'M_OK M_FAIL'", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo, verify_teeth=True)
@@ -385,7 +384,7 @@ class TestCanaryTeeth:
     def test_real_negative_emits_fail_token_is_GREEN(self):
         """AC2: positive passes AND negative emits its FAIL token AND omits the
         positive marker (it discriminates) => passed."""
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         case = self._case("echo M_OK", "M_OK", negative="echo M_FAIL", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo, verify_teeth=True)
         assert result["status"] == "passed", result
@@ -394,7 +393,7 @@ class TestCanaryTeeth:
         """AC5/HIGH-1: a negative that never ran the wire (typo => exit 127, or
         a no-op like `true`) emits NO fail token => NO TEETH => FAIL.
         'marker merely absent' must NOT pass."""
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         for bad_neg in ("this_is_a_typo_cmd_xyz", "true"):
             case = self._case("echo M_OK", "M_OK", negative=bad_neg, neg_expected="M_FAIL")
             result = eval_canary_pass(case, repo, verify_teeth=True)
@@ -405,7 +404,7 @@ class TestCanaryTeeth:
         """CRITICAL-1: a case with negative_command but NO
         negative_expected_contains is NOT runtime-executed (spine-probe
         convention is left alone). Even a vacuous negative passes."""
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         case = self._case("echo M_OK", "M_OK", negative="echo M_OK")  # no neg_expected
         result = eval_canary_pass(case, repo, verify_teeth=True)
         assert result["status"] == "passed", result
@@ -413,7 +412,7 @@ class TestCanaryTeeth:
     def test_fail_token_in_stderr_only_is_RED(self):
         """MEDIUM-1: match on stdout only. A fail token that appears solely in
         stderr (e.g. command echoed in an error) does NOT count as emitted."""
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         # 'M_FAIL' only reaches stderr via the not-found command name echo
         case = self._case("echo M_OK", "M_OK", negative="M_FAIL_not_a_real_cmd", neg_expected="M_FAIL")
         result = eval_canary_pass(case, repo, verify_teeth=True)
@@ -424,7 +423,7 @@ class TestCanaryTeeth:
         """AC3: verify_teeth threads run_eval -> evaluate_case -> eval_canary_pass.
         A vacuous opted-in case fails ONLY when run_eval verify_teeth=True."""
         from backend.scripts.eval_runner import run_eval
-        repo = _find_swarmai_repo()
+        repo = _THIS_CHECKOUT
         gs = {"cases": [self._case("echo M_OK", "M_OK",
                                     negative="echo 'M_OK M_FAIL'", neg_expected="M_FAIL")]}
         r_off = run_eval(gs, "manual", None, repo)
@@ -438,19 +437,19 @@ class TestGoldenSetNewFields:
 
     def test_tags_field_accepted(self):
         """Cases with tags field should load without error."""
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         tagged_cases = [c for c in data["cases"] if c.get("tags")]
         assert len(tagged_cases) >= 3, f"Expected >=3 tagged cases in fixture, got {len(tagged_cases)}"
 
     def test_promoted_from_field_accepted(self):
         """Cases with promoted_from field should load without error."""
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         promoted = [c for c in data["cases"] if c.get("promoted_from")]
         assert len(promoted) >= 1, "Expected at least 1 case with promoted_from in fixture"
 
     def test_fixture_has_all_evaluator_types(self):
         """Fixture covers all programmatic evaluator types."""
-        data = load_golden_set(FIXTURE_PATH)
+        data = _load_fixture()
         evaluators_used = set()
         for case in data["cases"]:
             for ev in case.get("evaluators", []):
@@ -659,7 +658,7 @@ class TestTrajectoryCaptureDispatch:
         # Mock the spawn to return (trajectory, final_text). Trajectory contains
         # the expected Read. Asserts observed_trajectory is surfaced verbatim.
         captured = ['Read {"file_path": "/ws/.context/SELF.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=(captured, "summary")):
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=(captured, "summary", "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "passed"
         assert r["evaluator"] == "trajectory_capture"
@@ -668,29 +667,29 @@ class TestTrajectoryCaptureDispatch:
     def test_fails_when_expected_read_absent_negative_control(self):
         # Agent used a DIFFERENT tool (didn't read the file) -> must FAIL,
         # not pass, not skip. This is the whole point: observe real usage.
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(['Grep {"pattern": "foo"}'], "")):
+        with patch("scripts.scenario_runner.run_scenario_raw",
+                   return_value=(['Grep {"pattern": "foo"}'], "", "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed"
 
     def test_empty_trajectory_fails_not_skips(self):
         # Spawn failed / agent did nothing -> empty trajectory ([], NOT None)
         # -> FAIL (the expected Read did not happen), never a silent skip.
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=([], "")):
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=([], "", "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed", "empty trajectory must fail a Read assertion"
 
     def test_never_calls_llm_judge(self):
         # trajectory_capture is programmatic — must NOT fall through to the
         # circular LLM judge, even when the trajectory is empty.
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=([], "")), \
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=([], "", "")), \
              patch("backend.scripts.eval_runner.eval_llm_judge") as judge:
             evaluate_case(self._CASE, Path("/tmp"))
         judge.assert_not_called()
 
     def test_gated_off_under_programmatic_only(self):
         # Canary path (programmatic_only=True) must NOT spawn an agent.
-        with patch("scripts.scenario_runner.run_scenario_full") as spawn:
+        with patch("scripts.scenario_runner.run_scenario_raw") as spawn:
             r = evaluate_case(self._CASE, Path("/tmp"), programmatic_only=True)
         spawn.assert_not_called()
         assert r["status"] == "skipped"
@@ -720,8 +719,8 @@ class TestTrajectoryCaptureDispatch:
     def test_decision_judge_pass_when_direction_correct(self):
         # Trajectory passes AND the decision judge says the stance is correct.
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "NO to big-bang — use strangler-fig.")), \
+        with patch("scripts.scenario_runner.run_scenario_raw",
+                   return_value=(traj, "NO to big-bang — use strangler-fig.", "")), \
              patch("backend.scripts.eval_runner._judge_decision_direction",
                    return_value={"status": "passed", "notes": "recommended incremental"}):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
@@ -731,8 +730,8 @@ class TestTrajectoryCaptureDispatch:
         # Read happened, but the judge finds the stance went the WRONG way ->
         # FAIL. This is the case substring matching could not reliably detect.
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "Names incremental, but: do the big-bang rewrite.")), \
+        with patch("scripts.scenario_runner.run_scenario_raw",
+                   return_value=(traj, "Names incremental, but: do the big-bang rewrite.", "")), \
              patch("backend.scripts.eval_runner._judge_decision_direction",
                    return_value={"status": "failed", "notes": "recommended big-bang"}):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
@@ -744,8 +743,8 @@ class TestTrajectoryCaptureDispatch:
         # a trajectory that passed must not be scored a behavior FAIL because the
         # judge was down (would lie the score red).
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "some answer")), \
+        with patch("scripts.scenario_runner.run_scenario_raw",
+                   return_value=(traj, "some answer", "")), \
              patch("backend.scripts.eval_runner._judge_decision_direction",
                    return_value={"status": "error", "notes": "judge throttled"}):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
@@ -753,8 +752,8 @@ class TestTrajectoryCaptureDispatch:
 
     def test_decision_no_read_fails_before_judge(self):
         # No Read at all -> fails on trajectory; decision judge never invoked.
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=([], "use the incremental approach")), \
+        with patch("scripts.scenario_runner.run_scenario_raw",
+                   return_value=([], "use the incremental approach", "")), \
              patch("backend.scripts.eval_runner._judge_decision_direction") as dj:
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
         assert r["status"] == "failed"
@@ -777,7 +776,7 @@ class TestTrajectoryCaptureDispatch:
         # (scripts.scenario_runner) so the raised class identity matches the
         # `except ScenarioInfraError` (avoids the dual-load identity trap).
         import scripts.scenario_runner as sr
-        with patch("scripts.scenario_runner.run_scenario_full",
+        with patch("scripts.scenario_runner.run_scenario_raw",
                    side_effect=sr.ScenarioInfraError("claude CLI not found")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "error"
@@ -786,13 +785,13 @@ class TestTrajectoryCaptureDispatch:
         # Gate-2 MED: a Grep whose pattern contains "read" must NOT satisfy a
         # "Read SELF.md" assertion — the agent never opened the file.
         fake = ['Grep {"pattern": "read", "path": "/ws/.context/SELF.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=(fake, "")):
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=(fake, "", "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed", "Grep != Read — must not false-pass"
 
     def test_real_read_passes_under_tool_strict(self):
         real = ['Read {"file_path": "/ws/.context/SELF.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=(real, "ok")):
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=(real, "ok", "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "passed"
 
@@ -802,11 +801,11 @@ class TestTrajectoryCaptureDispatch:
         case = dict(self._CASE, allowed_tools=["Read", "Bash", "Write"])
         captured = {}
 
-        def _spy(prompt, allowed_tools=None, timeout=120):
+        def _spy(prompt, allowed_tools=None, timeout=120, system="bare"):
             captured["tools"] = list(allowed_tools or [])
-            return (['Read {"file_path": "SELF.md"}'], "ok")
+            return (['Read {"file_path": "SELF.md"}'], "ok", "")
 
-        with patch("scripts.scenario_runner.run_scenario_full", _spy):
+        with patch("scripts.scenario_runner.run_scenario_raw", _spy):
             evaluate_case(case, Path("/tmp"))
         assert "Bash" not in captured["tools"]
         assert "Write" not in captured["tools"]
@@ -828,7 +827,7 @@ class TestBehaviorCaseDefaultGating:
     def test_default_run_excludes_behavior_cases(self):
         from backend.scripts.eval_runner import run_eval
         gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
-        with patch("scripts.scenario_runner.run_scenario_full") as spawn:
+        with patch("scripts.scenario_runner.run_scenario_raw") as spawn:
             r = run_eval(gs, "manual", None, Path("/tmp"))
         spawn.assert_not_called()
         ran_ids = {c["id"] for c in r["cases"]}
@@ -839,7 +838,7 @@ class TestBehaviorCaseDefaultGating:
         from backend.scripts.eval_runner import run_eval
         b = dict(self._BEHAVIOR, tags=["behavior_trajectory"])
         gs = {"cases": [b]}
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=(['Read X'], "ok")) as spawn:
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=(['Read X'], "ok", "")) as spawn:
             r = run_eval(gs, "manual", None, Path("/tmp"), tags=["behavior_trajectory"])
         spawn.assert_called_once()
         assert "GS_TRAJ_X" in {c["id"] for c in r["cases"]}
@@ -847,7 +846,7 @@ class TestBehaviorCaseDefaultGating:
     def test_explicit_case_filter_includes_behavior_case(self):
         from backend.scripts.eval_runner import run_eval
         gs = {"cases": [self._BEHAVIOR]}
-        with patch("scripts.scenario_runner.run_scenario_full", return_value=(['Read X'], "ok")) as spawn:
+        with patch("scripts.scenario_runner.run_scenario_raw", return_value=(['Read X'], "ok", "")) as spawn:
             r = run_eval(gs, "manual", ["GS_TRAJ_X"], Path("/tmp"))
         spawn.assert_called_once()
 
@@ -858,8 +857,8 @@ class TestBehaviorCaseDefaultGating:
         # this RED.
         from backend.scripts.eval_runner import run_eval
         gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(['Read X'], "ok")) as spawn:
+        with patch("scripts.scenario_runner.run_scenario_raw",
+                   return_value=(['Read X'], "ok", "")) as spawn:
             r = run_eval(gs, "scheduled", None, Path("/tmp"), include_behavior=True)
         spawn.assert_called_once()
         ran_ids = {c["id"] for c in r["cases"]}
@@ -870,7 +869,7 @@ class TestBehaviorCaseDefaultGating:
         # hook / _execute_run paths (which never pass include_behavior) stay safe.
         from backend.scripts.eval_runner import run_eval
         gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
-        with patch("scripts.scenario_runner.run_scenario_full") as spawn:
+        with patch("scripts.scenario_runner.run_scenario_raw") as spawn:
             r = run_eval(gs, "manual", None, Path("/tmp"), include_behavior=False)
         spawn.assert_not_called()
         assert "GS_TRAJ_X" not in {c["id"] for c in r["cases"]}
@@ -946,11 +945,11 @@ class TestBehaviorSpawnTimeoutFallback:
         # with timeout=240 (the raised fallback), captured at the real call.
         captured = {}
 
-        def fake_spawn(prompt, allowed_tools=None, timeout=None):
+        def fake_spawn(prompt, allowed_tools=None, timeout=None, system="bare"):
             captured["timeout"] = timeout
-            return (['Read {"file_path": "/ws/X"}'], "done")
+            return (['Read {"file_path": "/ws/X"}'], "done", "")
 
-        with patch("scripts.scenario_runner.run_scenario_full", side_effect=fake_spawn):
+        with patch("scripts.scenario_runner.run_scenario_raw", side_effect=fake_spawn):
             eval_runner_mod.eval_trajectory_capture(self._CASE)
         assert captured["timeout"] == 240
 
@@ -958,12 +957,12 @@ class TestBehaviorSpawnTimeoutFallback:
         # An explicit per-case scenario_timeout overrides the fallback.
         captured = {}
 
-        def fake_spawn(prompt, allowed_tools=None, timeout=None):
+        def fake_spawn(prompt, allowed_tools=None, timeout=None, system="bare"):
             captured["timeout"] = timeout
-            return (['Read {"file_path": "/ws/X"}'], "done")
+            return (['Read {"file_path": "/ws/X"}'], "done", "")
 
         case = dict(self._CASE, scenario_timeout=90)
-        with patch("scripts.scenario_runner.run_scenario_full", side_effect=fake_spawn):
+        with patch("scripts.scenario_runner.run_scenario_raw", side_effect=fake_spawn):
             eval_runner_mod.eval_trajectory_capture(case)
         assert captured["timeout"] == 90
 

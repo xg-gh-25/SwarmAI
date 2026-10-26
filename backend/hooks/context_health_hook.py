@@ -402,16 +402,18 @@ class ContextHealthHook:
             sys.path.insert(0, str(scripts_dir))
 
         try:
-            from eval_runner import load_golden_set, run_eval, _golden_set_path
+            from eval_runner import load_merged_golden_set, run_eval
         except ImportError:
-            logger.debug("context_health: eval_runner not importable, skipping canary")
+            logger.warning("context_health: eval_runner not importable, skipping canary")
             return
 
-        gs_path = _golden_set_path(root)
-        if not gs_path.exists():
+        try:
+            golden_set = load_merged_golden_set(root)
+        except (FileNotFoundError, ValueError, AssertionError) as exc:
+            # A missing product set means a broken install; say so instead of
+            # silently skipping the canary every day.
+            logger.warning("context_health: golden set not loadable, canary skipped: %s", exc)
             return
-
-        golden_set = load_golden_set(gs_path)
 
         all_programmatic = [
             c for c in golden_set["cases"] if c.get("eval_method") == "programmatic"

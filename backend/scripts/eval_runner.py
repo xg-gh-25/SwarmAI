@@ -11,7 +11,8 @@ isolation — analogous to closing your eyes to check balance. The isolation
 prevents attention contamination from prior user turns while testing
 canonical behavior.
 
-Reads Eval/golden_set.yaml, runs programmatic evaluators,
+Reads the golden set (the product set shipped in templates/eval/ plus the
+workspace's Eval/golden_set.private.yaml), runs programmatic evaluators,
 outputs JSON to Eval/EvalHistory/{date}_{trigger}.json.
 
 Usage:
@@ -62,36 +63,33 @@ except ImportError:
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 def _find_workspace_root() -> Path:
-    """Find SwarmWS root by what eval actually reads (Eval/golden_set.yaml).
-    Decoupled from Projects/ — eval is a top-level system subsystem now."""
-    # Candidates resolve to SwarmWS (the workspace), NOT the code repo — the old
-    # __file__.parent.parent.parent candidate pointed at the code repo root, which
-    # has no Eval/ and could never match post-decouple (removed, was dead code).
-    candidates = [
-        Path.home() / ".swarm-ai" / "SwarmWS",
-        Path.cwd(),
-    ]
-    for c in candidates:
-        if (c / "Eval" / "golden_set.yaml").exists():
-            return c
-    raise FileNotFoundError("Cannot locate SwarmWS with Eval/golden_set.yaml")
+    """The user's workspace (SwarmWS), where the private golden set and
+    EvalHistory/ live. The product golden set ships with the backend
+    (core.golden_set_store), so a fresh install with no Eval/ folder is a valid
+    workspace: EvalHistory/ is created on first write."""
+    from config import get_swarmws
+
+    return get_swarmws()
 
 
-def _find_swarmai_repo() -> Path:
-    """Find swarmai codebase root (has backend/ directory)."""
-    candidates = [
-        Path(__file__).resolve().parent.parent.parent,  # backend/scripts/ → backend/ → swarmai/
-        Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai",
-        Path.cwd(),
-    ]
-    for c in candidates:
-        if (c / "backend" / "core").is_dir():
-            return c
-    raise FileNotFoundError("Cannot locate swarmai repo with backend/core/")
+# The checkout this module was loaded from (backend/scripts/ -> repo root). Only
+# the SwarmAI repo's own push gate reads source files through it
+# (compute_code_digest); in a packaged install those files are absent and hash as
+# MISSING markers, so a packaged digest never equals a checkout's.
+_THIS_CHECKOUT = Path(__file__).resolve().parents[2]
 
 
-def _golden_set_path(root: Path) -> Path:
-    return root / "Eval" / "golden_set.yaml"
+def _code_file(rel: str) -> Path:
+    """A path a case names relative to the repo root (``backend/core/x.py``),
+    resolved inside the running backend: ``_MEIPASS`` when packaged, ``backend/``
+    in a checkout. Other relative paths are left to the caller (workspace)."""
+    from utils.backend_bin import bundled_path, is_frozen
+
+    if rel.startswith("backend/"):
+        return bundled_path(*Path(rel[len("backend/"):]).parts)
+    if not is_frozen() and (_THIS_CHECKOUT / rel).exists():
+        return _THIS_CHECKOUT / rel  # e.g. docs/... or desktop/... in a checkout
+    return bundled_path(*Path(rel).parts)
 
 
 def _eval_history_dir(root: Path) -> Path:
@@ -104,14 +102,15 @@ def _eval_history_dir(root: Path) -> Path:
 
 # Eval-relevant paths the gate's freshness binds to. Scoped (NOT all of backend/)
 # so unrelated churn doesn't make the gate perpetually stale (Gate-1 #2). The
-# public golden_set content is hashed separately (it lives in the workspace repo,
-# not necessarily the code repo). git-ls-tree respects .gitignore by construction
+# golden set files (the product set + the workspace's private set) are hashed
+# separately. git-ls-tree respects .gitignore by construction
 # and is O(1) subprocess vs hashing GBs of artifacts (Gate-1 #1).
 _GATE_CODE_PATHS = [
     "backend/scripts/eval_runner.py",
     "backend/scripts/ci_eval_gate.py",
     "backend/scripts/scenario_runner.py",
     "backend/core/eval_service.py",
+    "backend/core/golden_set_store.py",
 ]
 
 # Fast-deterministic evaluators eligible for the BVT gate. Excludes runtime_health
@@ -162,22 +161,19 @@ _GATE_ELIGIBLE_EVALUATORS = frozenset(
 
 
 def compute_code_digest(root: Path, code_root: Path | None = None) -> str:
-    """SHA-256 of eval-relevant code + public golden_set, hashing WORKING-TREE
+    """SHA-256 of eval-relevant code + the golden set files, hashing WORKING-TREE
     content (the bytes on disk that eval actually ran against — Gate-1: git HEAD
     sees only committed, the index only staged; neither reflects unstaged edits).
 
     Binds the gate to its INPUTS, not to HEAD — so committing the eval report (an
     unrelated tracked file) does NOT change the digest, while editing eval code or
-    the public golden_set DOES. code_root defaults to the swarmai repo (where
+    a golden set file DOES. code_root defaults to the checkout this module is in (where
     backend/ lives); pass it explicitly in tests. Missing files hash as a marker
     rather than crashing (gate degrades to 'cannot verify' not exception)."""
     import hashlib
 
     if code_root is None:
-        try:
-            code_root = _find_swarmai_repo()
-        except Exception:
-            code_root = root
+        code_root = _THIS_CHECKOUT
 
     parts: list[str] = []
     for rel in _GATE_CODE_PATHS:
@@ -187,12 +183,14 @@ def compute_code_digest(root: Path, code_root: Path | None = None) -> str:
         except Exception:
             parts.append(f"{rel}:MISSING")
     # Hash BOTH golden sets: bvt counts gate-eligible cases from the MERGED set
-    # (public + private), so a changed PRIVATE gate-eligible case must also
+    # (product + private), so a changed PRIVATE gate-eligible case must also
     # invalidate the digest — else a stale report stays green (Gate-2 C1).
     # Consequence (correct): a public-only clone produces a different digest than
     # the instance, because it runs a different bvt set — they SHOULD NOT collide.
-    gs_pub = _golden_set_path(root)
-    gs_priv = gs_pub.with_name("golden_set.private.yaml")
+    from core.golden_set_store import private_golden_set_path, product_golden_set_path
+
+    gs_pub = product_golden_set_path()
+    gs_priv = private_golden_set_path(root)
     for gs, tag in ((gs_pub, "golden_set"), (gs_priv, "golden_set_private")):
         try:
             parts.append(f"{tag}:" + hashlib.sha256(gs.read_bytes()).hexdigest())
@@ -303,38 +301,16 @@ def compute_redline(cases: list, results: list[dict]) -> dict:
 
 # ─── Load & Validate ─────────────────────────────────────────────────────────
 
-def load_golden_set(path: Path) -> dict:
-    """Parse golden_set.yaml (public) merged with a sibling golden_set.private.yaml
-    (private instance cases, OPTIONAL) and validate basic structure.
+def load_merged_golden_set(root: Path, *, product_path: Path | None = None) -> dict:
+    """The golden set this workspace's eval runs: the product set shipped with the
+    backend plus the workspace's private set (core.golden_set_store.load_merged,
+    the one reader every caller uses), with basic structure validated."""
+    from core.golden_set_store import load_merged
 
-    Decouple v3 (run_69b1c644): private instance cases live in a gitignored
-    sibling file so they don't ship in the public repo, but they must still RUN
-    here. The runner only READS the golden set (write_run targets EvalHistory,
-    not golden_set) — so merging here carries no public/private leak risk; the
-    leak guard lives in eval_service's split-WRITE. Private absent → public only
-    (clone-safe). An id present in BOTH files is a migration error → fail loud.
-    """
-    if not path.exists():
-        raise FileNotFoundError(f"Golden set not found: {path}")
-
-    with open(path) as f:
-        data = yaml.safe_load(f)
-
-    # Merge sibling private file if present
-    private_path = path.with_name("golden_set.private.yaml")
-    if private_path.exists():
-        with open(private_path) as f:
-            private_data = yaml.safe_load(f) or {}
-        pub_cases = data.get("cases", []) or []
-        priv_cases = private_data.get("cases", []) or []
-        pub_ids = {c.get("id") for c in pub_cases if c.get("id")}
-        for pc in priv_cases:
-            if pc.get("id") in pub_ids:
-                raise AssertionError(
-                    f"golden-set id collision '{pc.get('id')}' in both public and "
-                    f"private files — an id must live in exactly one file"
-                )
-        data["cases"] = pub_cases + priv_cases
+    data = load_merged(root, product_path=product_path)
+    if data.get("shadowed_private_ids"):
+        print(f"⚠️  private cases skipped (same id as a product case): "
+              f"{', '.join(data['shadowed_private_ids'])}", file=sys.stderr)
 
     # Basic schema validation (applies to the MERGED set)
     assert data.get("version") == 2, f"Expected version 2, got {data.get('version')}"
@@ -559,7 +535,7 @@ def _validate_canary_command(command: str) -> str | None:
 
     Returns None if safe, or an error message if rejected.
 
-    Policy: canary commands come from golden_set.yaml (trusted local data),
+    Policy: canary commands come from the golden set (trusted local data),
     but we add a structural guard against accidental injection if the file
     ever becomes writable by less-trusted automation (e.g. auto-seed from
     corrections, MCP-driven edits).
@@ -580,6 +556,45 @@ def _validate_canary_command(command: str) -> str | None:
     if BLOCKED_PATTERNS.search(command):
         return f"Command blocked by safety filter: {command[:80]}"
     return None
+
+
+def _run_case_command(command: str, case: dict, root: Path, timeout: int) -> subprocess.CompletedProcess:
+    """Run a case's shell command the same way on every install.
+
+    - ``SWARM_BACKEND_BIN`` is always set (the daemon exports it; a terminal run
+      or a test would otherwise see it empty), so a command written as
+      ``"$SWARM_BACKEND_BIN" py -m scripts.<probe>`` runs with the backend's own
+      Python, packaged or in a checkout.
+    - cwd is a fresh empty directory: ``py -m`` puts cwd first on sys.path, so a
+      ``scripts/`` or ``core/`` folder in the workspace must not shadow the
+      backend's modules.
+    - A product case gets its own temporary data dir, workspace and HOME, so it
+      can never read or write the user's real data. A private case is the user's
+      own check about their own workspace and sees it (``SWARM_WORKSPACE`` /
+      ``SWARMWS``, the variables config.get_swarmws reads).
+    """
+    import tempfile
+    from core.golden_set_store import is_product_case
+    from utils.backend_bin import backend_bin
+
+    with tempfile.TemporaryDirectory(prefix="swarm-eval-") as tmp:
+        t = Path(tmp)
+        cwd = t / "cwd"
+        cwd.mkdir()
+        env = dict(os.environ)
+        env["SWARM_BACKEND_BIN"] = env.get("SWARM_BACKEND_BIN") or backend_bin()
+        if is_product_case(case):
+            for sub in ("data", "home", "ws"):
+                (t / sub).mkdir()
+            ws = str(t / "ws")
+            env.update({"SWARM_DATA_DIR": str(t / "data"), "HOME": str(t / "home")})
+        else:
+            ws = str(root)
+        # Both variables config.get_swarmws reads, so neither can point the probe
+        # at a different workspace (SWARM_WORKSPACE wins when set).
+        env.update({"SWARM_WORKSPACE": ws, "SWARMWS": ws})
+        return subprocess.run(command, shell=True, capture_output=True, text=True,
+                              timeout=timeout, cwd=str(cwd), env=env)
 
 
 def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = None,
@@ -617,11 +632,7 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
     cmd_timeout = min(20, timeout_override) if timeout_override else 20
 
     try:
-        repo_root = _find_swarmai_repo()
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=cmd_timeout, cwd=str(repo_root)
-        )
+        result = _run_case_command(command, case, root, cmd_timeout)
         output = result.stdout + result.stderr
 
         positive_passed = (expected and expected in output) or (result.returncode == 0 and not expected)
@@ -633,7 +644,7 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
 
         # Teeth: the positive passed. If asked, prove the probe actually
         # discriminates by running the negative variant.
-        teeth_result = _verify_canary_teeth(verification, expected, repo_root, cmd_timeout) if verify_teeth else None
+        teeth_result = _verify_canary_teeth(case, expected, root, cmd_timeout) if verify_teeth else None
         if teeth_result is not None:
             return teeth_result
 
@@ -645,7 +656,7 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
         return {"status": "failed", "notes": f"Error: {str(e)[:200]}"}
 
 
-def _verify_canary_teeth(verification: dict, expected: str, repo_root: Path,
+def _verify_canary_teeth(case: dict, expected: str, root: Path,
                          cmd_timeout: int) -> dict | None:
     """Execute a canary's negative_command and verify the probe discriminates —
     it affirmatively emits its FAIL token (`negative_expected_contains`) AND
@@ -673,6 +684,7 @@ def _verify_canary_teeth(verification: dict, expected: str, repo_root: Path,
     Matching is on stdout only (stderr can echo the command string / tracebacks
     that incidentally contain a marker — Gate-2 MEDIUM-1).
     """
+    verification = case.get("verification", {}) or {}
     negative_expected = (verification.get("negative_expected_contains") or "").strip()
     if not negative_expected:
         return None  # not opted into runtime teeth — positive verdict stands
@@ -687,10 +699,7 @@ def _verify_canary_teeth(verification: dict, expected: str, repo_root: Path,
         return {"status": "failed", "notes": f"negative_command blocked by safety filter: {safety_error}"}
 
     try:
-        neg = subprocess.run(
-            negative_command, shell=True, capture_output=True, text=True,
-            timeout=cmd_timeout, cwd=str(repo_root)
-        )
+        neg = _run_case_command(negative_command, case, root, cmd_timeout)
     except subprocess.TimeoutExpired:
         return {"status": "failed", "notes": f"negative_command timed out ({cmd_timeout}s) — teeth inconclusive"}
     except Exception as e:
@@ -750,11 +759,7 @@ def eval_runtime_health(case: dict, root: Path, *, timeout_override: int | None 
     cmd_timeout = max(15, min(30, timeout_override)) if timeout_override else 30
 
     try:
-        repo_root = _find_swarmai_repo()
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
-            timeout=cmd_timeout, cwd=str(repo_root)
-        )
+        result = _run_case_command(command, case, root, cmd_timeout)
         output = result.stdout + result.stderr
         # Recovery contract: exit 0 AND the recovery-executed marker present.
         if result.returncode == 0 and (not expected or expected in output):
@@ -788,9 +793,8 @@ def eval_file_contains(case: dict, root: Path) -> dict:
     if not file_path:
         return {"status": "error", "notes": "No file specified in verification (misconfigured case)"}
 
-    # Resolve relative to swarmai repo or workspace
-    repo_root = _find_swarmai_repo()
-    full_path = repo_root / file_path
+    # Resolve inside the running backend (``backend/...``), else the workspace.
+    full_path = _code_file(file_path)
     if not full_path.exists():
         full_path = root / file_path
     if not full_path.exists():
@@ -947,17 +951,11 @@ def _resolve_reference(ref: str, root: Path) -> str:
         key = ref.replace("EVOLUTION.", "")
         return _extract_evolution_entry(key, root)
 
-    # File paths (check both workspace and repo)
+    # File paths: the workspace first, then the running backend's own files.
     if "/" in ref:
-        try:
-            repo = _find_swarmai_repo()
-        except FileNotFoundError:
-            repo = None
-
-        # Try workspace path first
         full = root / ref
-        if not full.exists() and repo:
-            full = repo / ref
+        if not full.exists():
+            full = _code_file(ref)
         if full.exists() and full.is_file():
             content = full.read_text(encoding="utf-8", errors="replace")
             # For large files, just return first 500 chars
@@ -1856,7 +1854,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
     file_contains), then LLM judge only if programmatic can't determine.
 
     Args:
-        golden_set: Parsed golden_set.yaml dict.
+        golden_set: Parsed golden set dict (load_merged_golden_set).
         trigger: What triggered this run (manual, weekly, steering_edit, etc.)
         case_filter: Optional list of case IDs to run.
         root: Workspace root path.
@@ -2855,7 +2853,7 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
     <div class="footer">
         <p>Generated: {triggered_at} UTC | Golden Set: <strong>{golden_size}</strong> defined · <strong>{executed}</strong> run this cycle · <strong>{pending}</strong> pending{f" · {orphans} orphan" if orphans else ""} | {len(history)} historical runs ({non_comparable_excluded} non-comparable excluded from trend)</p>
         <p>Programmatic: every session, $0, &lt;1s | LLM Judge: monthly, ~$0.05, ~2min | Behavior: real agent spawn</p>
-        <p>Source: Eval/golden_set.yaml | Engine: backend/scripts/eval_runner.py</p>
+        <p>Source: product golden set + Eval/golden_set.private.yaml | Engine: backend/scripts/eval_runner.py</p>
     </div>
 </div>
 </body>
@@ -2873,10 +2871,10 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 def cmd_run(args):
     """Execute eval and write results."""
     root = _find_workspace_root()
-    gs_path = _golden_set_path(root)
-
-    golden_set = load_golden_set(gs_path)
-    print(f"Loaded {len(golden_set['cases'])} cases from {gs_path.name}")
+    golden_set = load_merged_golden_set(root)
+    n_product = sum(1 for c in golden_set["cases"] if c.get("_origin") == "product")
+    print(f"Loaded {len(golden_set['cases'])} cases "
+          f"({n_product} product, {len(golden_set['cases']) - n_product} private)")
 
     case_filter = args.cases.split(",") if args.cases else None
     affected = getattr(args, "affected_by", None)
@@ -2934,12 +2932,11 @@ def cmd_run(args):
 
 
 def cmd_validate(args):
-    """Validate golden_set.yaml schema only."""
+    """Validate the merged golden set's schema only."""
     root = _find_workspace_root()
-    gs_path = _golden_set_path(root)
 
     try:
-        data = load_golden_set(gs_path)
+        data = load_merged_golden_set(root)
         print(f"Valid: {len(data['cases'])} cases, version {data['version']}")
         for case in data["cases"]:
             evs = case.get("evaluators", [])
@@ -2983,7 +2980,7 @@ def main():
                             "their previous status (LLM-judged cases are not deterministic).")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
-    sub.add_parser("validate", help="Validate golden_set.yaml schema")
+    sub.add_parser("validate", help="Validate the golden set schema (product + private)")
 
     args = parser.parse_args()
 

@@ -6,7 +6,9 @@ equal in ontological status to SOUL/AGENT/STEERING. This service manages
 that contract and the history of self-evaluation runs.
 
 Parsed on startup from:
-  - Eval/golden_set.yaml (behavioral contract)
+  - the golden set: the product set shipped with the backend
+    (templates/eval/golden_set.yaml, read-only) + the workspace's
+    Eval/golden_set.private.yaml (core.golden_set_store)
   - Eval/EvalHistory/*.json (self-eval run results)
 
 Serves the Eval Dashboard API with zero-latency reads.
@@ -47,6 +49,7 @@ class EvalService:
         self._data_lock = threading.Lock()  # Guards _cases/_golden_set mutations
         self._run_lock = threading.Lock()   # Guards _running flag
         self._running: bool = False
+        self.shadowed_private_ids: list[str] = []
 
         if workspace_root is self._UNSET:
             self._workspace_root = self._find_workspace()
@@ -57,33 +60,36 @@ class EvalService:
             self._golden_set_path = self._project_dir / "golden_set.yaml"
             self._private_golden_set_path = self._project_dir / "golden_set.private.yaml"
             self._history_dir = self._project_dir / "EvalHistory"
+            self.empty = True
             return
         else:
             self._workspace_root = workspace_root
 
         # Eval is a SYSTEM-LEVEL subsystem (top-level Eval/, sibling of Projects/),
         # decoupled from DDD — it does NOT live under Projects/SwarmAI/ anymore.
+        from core.golden_set_store import private_golden_set_path, product_golden_set_path
+
+        self.empty = False
         self._project_dir = self._workspace_root / "Eval"
-        self._golden_set_path = self._project_dir / "golden_set.yaml"
-        # Private (gitignored) instance cases — merged at load, written back to
-        # their OWN file so they never leak into the tracked public file.
-        self._private_golden_set_path = self._project_dir / "golden_set.private.yaml"
+        # The product set ships with the backend and is READ-ONLY here: no method
+        # of this service writes it (see _merge_and_write). The user's own cases
+        # live in the private file, the only golden-set file this service writes.
+        self._golden_set_path = product_golden_set_path()
+        self._private_golden_set_path = private_golden_set_path(self._workspace_root)
         self._history_dir = self._project_dir / "EvalHistory"
         self._load()
 
     @staticmethod
     def _find_workspace() -> Path:
-        """Find SwarmWS root by what eval actually reads (Eval/golden_set.yaml),
-        NOT a DDD folder — keeps eval-root discovery decoupled from Projects/."""
+        """The user's workspace. A fresh install has no Eval/ folder yet and is a
+        valid workspace: the product set ships with the backend and EvalHistory/
+        is created on the first run."""
         from config import get_swarmws
-        candidates = [
-            get_swarmws(),
-            Path.cwd(),
-        ]
-        for c in candidates:
-            if (c / "Eval" / "golden_set.yaml").exists():
-                return c
-        raise FileNotFoundError("Cannot locate SwarmWS")
+
+        ws = get_swarmws()
+        if not ws.is_dir():
+            raise FileNotFoundError(f"workspace not found: {ws}")
+        return ws
 
     def _load(self) -> None:
         """Load golden set + history into memory."""
@@ -91,64 +97,38 @@ class EvalService:
         self._load_history()
 
     def _load_golden_set(self) -> None:
-        """Parse golden_set.yaml (public) + golden_set.private.yaml (private),
-        merging both into self._cases with an internal ``_origin`` tag on each
-        case ("public" | "private"). The private file is OPTIONAL — when absent
-        (e.g. someone clones the public repo) only public cases load.
-
-        ``_origin`` drives the split-write (_merge_and_write) so a private case
-        is never serialized into the tracked public file (Gate-1 CRITICAL).
-        It is stripped on serialize — never written to disk.
-        """
+        """Load the product set + the private set through the one shared reader
+        (core.golden_set_store.load_merged). Each case carries an in-memory
+        ``_origin`` tag ("product" | "private") that keeps product cases read-only
+        and is stripped on write. A load error leaves the set empty and is logged
+        as an ERROR (never silently)."""
         if yaml is None:
             logger.warning("eval_service: PyYAML not available, golden set not loaded")
             self._golden_set = {"version": 2, "cases": []}
             self._cases = []
             return
 
-        def _read(path: Path) -> dict:
-            if not path.exists():
-                return {}
-            try:
-                with open(path, encoding="utf-8") as f:
-                    return yaml.safe_load(f) or {}
-            except Exception as e:
-                logger.error("eval_service: failed to parse %s: %s", path.name, e)
-                return {}
+        from core.golden_set_store import load_merged
 
-        public_data = _read(self._golden_set_path)
-        private_data = _read(self._private_golden_set_path)
+        try:
+            data = load_merged(self._workspace_root, product_path=self._golden_set_path)
+        except Exception as e:
+            logger.error("eval_service: golden set not loaded: %s", e)
+            self._golden_set = {"version": 2, "cases": []}
+            self._cases = []
+            return
 
-        if not self._golden_set_path.exists() and not self._private_golden_set_path.exists():
-            logger.warning("eval_service: no golden_set.yaml found at %s", self._golden_set_path)
-
-        # Keep the public dict as the canonical container metadata (version,
-        # categories, dimensions). Private contributes only cases.
-        self._golden_set = public_data or {"version": 2, "cases": []}
-
-        merged: list[dict] = []
-        seen: dict[str, str] = {}  # id -> origin (collision detection)
-        for origin, data in (("public", public_data), ("private", private_data)):
-            for case in data.get("cases", []) or []:
-                cid = case.get("id")
-                if cid and cid in seen:
-                    raise ValueError(
-                        f"eval_service: golden-set id collision '{cid}' present in "
-                        f"both {seen[cid]} and {origin} files — fix the migration "
-                        f"(an id must live in exactly one file)."
-                    )
-                if cid:
-                    seen[cid] = origin
-                tagged = dict(case)
-                tagged["_origin"] = origin
-                merged.append(tagged)
-
+        merged = data["cases"]
+        self.shadowed_private_ids = list(data.get("shadowed_private_ids") or [])
+        if self.shadowed_private_ids:
+            logger.warning("eval_service: private cases skipped (same id as a product case): %s",
+                           ", ".join(self.shadowed_private_ids))
+        self._golden_set = {k: v for k, v in data.items() if k != "shadowed_private_ids"}
         self._cases = merged
-        self._golden_set["cases"] = merged
         logger.info(
-            "eval_service: loaded %d cases (%d public, %d private)",
+            "eval_service: loaded %d cases (%d product, %d private)",
             len(merged),
-            sum(1 for c in merged if c.get("_origin") == "public"),
+            sum(1 for c in merged if c.get("_origin") == "product"),
             sum(1 for c in merged if c.get("_origin") == "private"),
         )
         self._validate_case_taxonomy(merged)
@@ -371,13 +351,13 @@ class EvalService:
                     "level": c.get("level"),
                     "title": c.get("title"),
                     # `source` (e.g. "STEERING R1 + C011") is instance-identifying
-                    # governance state — expose only for public cases (Gate-2 leak).
+                    # governance state — expose only for product cases (Gate-2 leak).
                     "source": c.get("source") if c.get("_origin") != "private" else None,
                     "tier": c.get("tier", "active"),
                     "eval_method": c.get("eval_method"),
-                    # _origin is the public|private TAG only (never private content) —
-                    # lets the UI visually distinguish curated public cases from
-                    # gitignored instance cases. Allowlist projection, so no content leaks.
+                    # _origin is the product|private TAG only (never private content) —
+                    # lets the UI tell shipped product cases from the user's own
+                    # cases. Allowlist projection, so no content leaks.
                     "_origin": c.get("_origin"),
                     "affected_by": c.get("affected_by", []),
                     "evaluators": c.get("evaluators", []),
@@ -401,7 +381,7 @@ class EvalService:
     def get_case_detail(self, case_id: str) -> Optional[dict]:
         """Return case detail + history. For PRIVATE cases, return ONLY an
         allowlist of rendering metadata (fail-closed) so instance content never
-        leaves via the API; PUBLIC cases return in full."""
+        leaves via the API; PRODUCT cases return in full."""
         case = next((c for c in self._cases if c.get("id") == case_id), None)
         if not case:
             return None
@@ -473,6 +453,7 @@ class EvalService:
             case = next((c for c in self._cases if c.get("id") == case_id), None)
             if case is None:
                 raise ValueError(f"Case '{case_id}' not found")
+            self._refuse_product(case)
 
             # Validate the MERGED result (C044): an update that re-anchors a ref must
             # land on a resolvable target, not just any string. This is the sanctioned
@@ -492,10 +473,22 @@ class EvalService:
             case = next((c for c in self._cases if c.get("id") == case_id), None)
             if case is None:
                 raise ValueError(f"Case '{case_id}' not found")
+            self._refuse_product(case)
 
             case["tier"] = "archived"
             self._persist_golden_set()
         return case
+
+    @staticmethod
+    def _refuse_product(case: dict) -> None:
+        """Product cases ship with the backend and are read-only on every install;
+        a change to one is a code change to templates/eval/golden_set.yaml."""
+        from core.golden_set_store import is_product_case
+
+        if is_product_case(case):
+            raise ValueError(
+                f"Case '{case.get('id')}' is a product case and is read-only"
+            )
 
     def hard_delete_cases(self, ids) -> dict:
         """PHYSICALLY remove cases from the golden_set file(s) — not soft-archive.
@@ -523,15 +516,20 @@ class EvalService:
         load() here guarantees THIS process sees disk truth; other processes must
         reload() to converge. Not a general multi-writer-safe primitive.
 
-        Returns {"deleted": [...], "not_found": [...]} — destructive-op semantics:
-        a typo'd id is reported, never a silent no-op.
+        Returns {"deleted": [...], "not_found": [...], "refused": [...]} —
+        destructive-op semantics: a typo'd id is reported, never a silent no-op;
+        a product case id is refused (product cases are read-only).
         """
+        from core.golden_set_store import is_product_case
+
         want = list(dict.fromkeys(ids))  # dedupe, preserve order
         with self._data_lock:
             self._load()  # disk truth before judging present/absent (Gate-2 F)
-            present = {c.get("id") for c in self._cases}
+            product = {c.get("id") for c in self._cases if is_product_case(c)}
+            present = {c.get("id") for c in self._cases} - product
+            refused = [i for i in want if i in product]
             deleted = [i for i in want if i in present]
-            not_found = [i for i in want if i not in present]
+            not_found = [i for i in want if i not in present and i not in product]
             if deleted:
                 drop = set(deleted)
                 snapshot = list(self._cases)  # rollback point (Gate-2 E)
@@ -541,7 +539,7 @@ class EvalService:
                 except Exception:
                     self._cases = snapshot  # restore — never leave memory diverged
                     raise
-        return {"deleted": deleted, "not_found": not_found}
+        return {"deleted": deleted, "not_found": not_found, "refused": refused}
 
     # ─── Run Triggers (P3) ────────────────────────────────────────────────
 
@@ -864,9 +862,13 @@ class EvalService:
         # into gate-eligible 'stable' — is defined in exactly one place).
         from scripts.eval_runner import _NON_PROMOTABLE_TIERS
 
+        from core.golden_set_store import is_product_case
+
         with self._data_lock:
             for case in self._cases:
-                if case.get("tier") in _NON_PROMOTABLE_TIERS:
+                # A product case's tier is part of its stamp and ships with the
+                # backend; promoting it would drop it out of the BVT (stale stamp).
+                if case.get("tier") in _NON_PROMOTABLE_TIERS or is_product_case(case):
                     continue
 
                 case_id = case["id"]
@@ -1007,6 +1009,9 @@ class EvalService:
         """
         if yaml is None:
             raise RuntimeError("PyYAML not available, cannot persist")
+        if getattr(self, "empty", False):
+            # The no-workspace stand-in has nowhere to write; never invent a path.
+            raise RuntimeError("eval_service: no workspace, golden set not writable")
 
         # Cross-process serialization: self._data_lock is a threading.Lock
         # (in-process only). Two SwarmAI processes (e.g. daemon + a CLI eval run)
@@ -1016,51 +1021,38 @@ class EvalService:
         # release AFTER the rename) so the merge always sees a quiescent file.
         # flock auto-releases if the holder process dies, so no stale lock.
         # (run_0fac5a91, todo 7e233ecb — closes the TOCTOU narrowed by run_fb4b42d2.)
-        # Lock BOTH files for the whole split read-modify-write (public + private).
-        # Acquire in a fixed order (public then private) to avoid deadlock between
-        # two processes. flock auto-releases on holder death (no stale lock).
-        public_lock = open(
-            self._golden_set_path.with_suffix(self._golden_set_path.suffix + ".lock"), "w"
-        )
+        # Only the private file is ever written (the product set is read-only),
+        # so only its sidecar lock is taken. flock auto-releases on holder death.
+        self._private_golden_set_path.parent.mkdir(parents=True, exist_ok=True)
         private_lock = open(
             self._private_golden_set_path.with_suffix(
                 self._private_golden_set_path.suffix + ".lock"
             ),
             "w",
         )
-        flock_exclusive(public_lock)
         flock_exclusive(private_lock)
         try:
             self._merge_and_write(yaml, removed_ids=removed_ids)
         finally:
             flock_unlock(private_lock)
             private_lock.close()
-            flock_unlock(public_lock)
-            public_lock.close()
 
     def _merge_and_write(self, yaml, removed_ids: frozenset = frozenset()) -> None:
         """Read-modify-write body of _persist_golden_set. MUST be called only
-        while the caller holds BOTH sidecar exclusive locks (see _persist_golden_set).
+        while the caller holds the private file's sidecar lock.
 
-        Split-write: partition in-memory cases by ``_origin`` and write each
-        partition back to ITS OWN file, each with an independent disk re-read +
-        merge-preserve + atomic rename. A private case is therefore NEVER written
-        into the tracked public file (Gate-1 CRITICAL). ``_origin`` is stripped
-        before serialize — it is an in-memory routing tag, never persisted.
+        Writes ONLY the private file: product cases are skipped, so nothing on a
+        user's machine can write the shipped product set (this is the structural
+        half of "product cases are read-only"; the methods refuse first). A case
+        without ``_origin`` is a newly added one and is private. ``_origin`` is
+        stripped before serialize — it is an in-memory tag, never persisted.
 
-        removed_ids (run_110678fb): hard-deleted ids, passed UNFILTERED to both
-        partitions (origin-agnostic) so neither file resurrects them.
+        removed_ids (run_110678fb): hard-deleted ids, so the merge-preserve
+        re-append does not resurrect them.
         """
-        # Partition memory by origin. A case missing _origin defaults to public
-        # ONLY if it has no instance-coupling signal — but since all loaded cases
-        # are tagged, an untagged case here is a newly-added one: default private
-        # (fail-closed — never auto-publish a case that didn't go through PROMOTE).
-        public_mem = [c for c in self._cases if c.get("_origin", "private") == "public"]
-        private_mem = [c for c in self._cases if c.get("_origin", "private") != "public"]
+        from core.golden_set_store import is_product_case
 
-        public_meta = {k: v for k, v in self._golden_set.items() if k != "cases"}
-        self._write_partition(yaml, self._golden_set_path, public_mem, public_meta, removed_ids)
-        # Private file carries only cases (no shared container metadata needed).
+        private_mem = [c for c in self._cases if not is_product_case(c)]
         self._write_partition(yaml, self._private_golden_set_path, private_mem, {"version": 2}, removed_ids)
 
     @staticmethod
@@ -1229,7 +1221,7 @@ class EvalService:
         # the whole point) rather than reverting to a 404 ghost.
         terminal_written = False
         try:
-            from scripts.eval_runner import run_eval, generate_html_report, load_golden_set
+            from scripts.eval_runner import run_eval, generate_html_report
 
             cases_data = {"cases": [c for c in self._cases if c.get("tier") != "archived"]}
             # Manual/GUI full run → verify canary teeth (the per-session canary
@@ -1243,14 +1235,12 @@ class EvalService:
             with self._data_lock:
                 self._load_history()
 
-            # Generate HTML report alongside JSON (best-effort)
+            # Generate HTML report alongside JSON (best-effort), over the same
+            # merged set the run used (product + private).
             try:
-                gs_path = self._golden_set_path
-                if gs_path.exists():
-                    golden_set = load_golden_set(gs_path)
-                    generate_html_report(result, golden_set, self._workspace_root)
+                generate_html_report(result, self._golden_set, self._workspace_root)
             except Exception as html_err:
-                logger.debug("eval_service: HTML report generation skipped: %s", html_err)
+                logger.warning("eval_service: HTML report generation failed: %s", html_err)
 
             # Post-run: promote stable cases (best-effort)
             try:
@@ -1498,9 +1488,11 @@ def get_eval_service() -> EvalService:
             if _eval_service is None:  # Double-check after lock
                 try:
                     _eval_service = EvalService()
-                except FileNotFoundError:
-                    logger.warning("eval_service: workspace not found, creating empty service")
-                    _eval_service = EvalService(workspace_root=None)
+                except FileNotFoundError as e:
+                    # The workspace folder does not exist yet (startup ordering):
+                    # not cached, so the next call retries once it exists.
+                    logger.warning("eval_service: not ready (%s); empty service for this call", e)
+                    return EvalService(workspace_root=None)
                 except Exception as e:
                     logger.error("eval_service: init failed: %s", e)
                     _eval_service = EvalService(workspace_root=None)

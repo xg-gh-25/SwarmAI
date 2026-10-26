@@ -27,13 +27,12 @@ from scripts.eval_runner import (
     _dim_snapshot_key,
     _report_populations,
     generate_html_report,
-    load_golden_set,
+    load_merged_golden_set,
     DIMENSIONS,
 )
 
 WS = Path(os.path.expanduser("~/.swarm-ai/SwarmWS"))
 SNAPSHOT = WS / "Eval/EvalHistory/2026-07-02_124314_biweekly.json"
-GOLDEN = WS / "Eval/golden_set.yaml"
 
 
 # ─── fixtures ────────────────────────────────────────────────────────────────
@@ -46,9 +45,7 @@ def snapshot():
 
 @pytest.fixture
 def golden():
-    if not GOLDEN.exists():
-        pytest.skip("golden_set.yaml not present in this workspace")
-    return load_golden_set(GOLDEN)
+    return load_merged_golden_set(WS)
 
 
 # ─── _classify_failure (C044 triage) ─────────────────────────────────────────

@@ -60,7 +60,7 @@ def test_affected_by_with_no_match_runs_nothing(monkeypatch, tmp_path):
     import argparse
     calls = []
     monkeypatch.setattr(er, "_find_workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(er, "load_golden_set", lambda p: {"cases": CASES})
+    monkeypatch.setattr(er, "load_merged_golden_set", lambda root: {"cases": CASES})
     monkeypatch.setattr(er, "run_eval", lambda *a, **k: calls.append(a) or {})
     args = argparse.Namespace(cases=None, tags=None, trigger="deploy", affected_by="STEERING",
                               repeat=2, programmatic_only=False, include_behavior=False,
@@ -75,7 +75,7 @@ def test_affected_by_drops_behavior_cases_without_consent(monkeypatch, tmp_path)
     cases = [{"id": "P", "affected_by": ["AGENT"]},
              {"id": "B", "affected_by": ["AGENT"], "eval_method": "behavior"}]
     monkeypatch.setattr(er, "_find_workspace_root", lambda: tmp_path)
-    monkeypatch.setattr(er, "load_golden_set", lambda p: {"cases": cases})
+    monkeypatch.setattr(er, "load_merged_golden_set", lambda root: {"cases": cases})
     monkeypatch.setattr(er, "write_run", lambda r, root: tmp_path / "x.json")
     monkeypatch.setattr(er, "generate_html_report", lambda *a: None)
 

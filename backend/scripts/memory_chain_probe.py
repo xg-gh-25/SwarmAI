@@ -168,7 +168,7 @@ _ARCHIVE_MARKER = "zephyr_archived_sidecar_decommission_marker"
 def _archive_recall(negative: bool = False) -> int:
     """An archived MEMORY-archive entry must be FTS5-retrievable. Proves the
     library recall leg can reach long-term archived memory (Archives/ was
-    un-skipped, run_e9b8507e). Builds an ISOLATED :memory: KnowledgeStore —
+    un-skipped). Builds an ISOLATED :memory: KnowledgeStore —
     never touches the live ~/.swarm-ai/data.db — and drives the REAL
     ensure_tables + upsert_chunk + fts5_search (no embedding leg).
 
@@ -181,23 +181,6 @@ def _archive_recall(negative: bool = False) -> int:
 
     conn = sqlite3.connect(":memory:")
     try:
-        # ensure_tables() creates a vec0 virtual table → the sqlite-vec
-        # extension must be loaded into THIS connection (same as the real
-        # vec_db.py connection builder). FTS5 is built into sqlite; only vec0
-        # needs the extension. If sqlite-vec is unavailable, skip cleanly
-        # rather than error — the probe's subject is FTS5 recall, not vectors.
-        try:
-            import sqlite_vec as _sqlite_vec
-            conn.enable_load_extension(True)
-            _sqlite_vec.load(conn)
-            conn.enable_load_extension(False)
-        except Exception as exc:  # noqa: BLE001
-            # SKIP is neither pass nor fail: the marker-based harness already
-            # reports non-pass (the _OK/_TEETH marker is absent), but return a
-            # DISTINCT exit code (2) so exit-code consumers also see non-pass —
-            # never a false-green (Gate-2 LOW, run_2a5ff539).
-            print(f"ARCHIVE_RECALL_SKIP (sqlite-vec unavailable: {exc})")
-            return 2
         store = KnowledgeStore(conn)
         store.ensure_tables()
         content = (

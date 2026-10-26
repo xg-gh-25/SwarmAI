@@ -178,7 +178,7 @@ def test_default_runner_imports_resolve():
     src = inspect.getsource(mod._default_runner)
     # the names _default_runner imports must all exist in eval_runner
     import scripts.eval_runner as er
-    for name in ("load_golden_set", "_golden_set_path", "run_eval", "write_run", "_load_history"):
+    for name in ("load_merged_golden_set", "run_eval", "write_run", "_load_history"):
         assert hasattr(er, name), f"eval_runner missing {name} — _default_runner import would crash"
     # and the buggy bare name must NOT be what we import
     assert "import load_history" not in src or "_load_history as load_history" in src

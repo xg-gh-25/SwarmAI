@@ -26,10 +26,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.eval_service import EvalService
 import core.eval_hooks as eval_hooks
 from scripts import eval_runner
+from tests._eval_golden_fixture import install_golden_fixture
 
 
 @pytest.fixture
-def eval_workspace(tmp_path):
+def eval_workspace(tmp_path, monkeypatch):
     project_dir = tmp_path / "Eval"
     project_dir.mkdir(parents=True)
     (project_dir / "EvalHistory").mkdir()
@@ -39,7 +40,7 @@ def eval_workspace(tmp_path):
         "dimensions": ["compliance"],
         "cases": [],
     }
-    (project_dir / "golden_set.yaml").write_text(yaml.dump(golden_set))
+    install_golden_fixture(monkeypatch, tmp_path, golden_set)
     return tmp_path
 
 

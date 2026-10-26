@@ -1384,8 +1384,6 @@ class TestDailyEvalCanary:
         golden = {"cases": [_canary_case("GS_FC", "file_contains"),
                             _canary_case("GS_CP"),
                             _canary_case("GS_RH", "runtime_health")]}
-        gs_file = workspace / "golden.yaml"
-        gs_file.write_text("x")
         run_eval_ids: list[list[str]] = []
 
         def fake_run_eval(gs, trigger, case_filter, root, **kw):
@@ -1397,8 +1395,7 @@ class TestDailyEvalCanary:
                     "duration_seconds": 0.1, "cases": []}
 
         fake = _FakeEval()
-        with patch.object(er, "_golden_set_path", lambda root: gs_file), \
-             patch.object(er, "load_golden_set", lambda p: golden), \
+        with patch.object(er, "load_merged_golden_set", lambda root: golden), \
              patch.object(er, "run_eval", fake_run_eval), \
              patch.object(er, "evaluate_case", fake):
             hook._run_eval_canary(workspace)

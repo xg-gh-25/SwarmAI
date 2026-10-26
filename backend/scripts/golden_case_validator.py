@@ -2,7 +2,9 @@
 """golden_case_validator.py — quality gates for golden cases (run_69b1c644 Cycle 5).
 
 The mechanism behind s_golden-case: a case cannot enter the corpus (ADD) or be
-promoted to the shippable public set (PROMOTE) without passing these gates. This
+proposed for the product set shipped with SwarmAI (PROMOTE, --for-public; the
+product set itself is backend/templates/eval/golden_set.yaml, changed by a code
+change) without passing these gates. This
 is what makes adding cases "不能太随便".
 
 Gates:
@@ -360,12 +362,12 @@ def validate_case(case: dict, existing: list[dict], for_public: bool,
 
 
 def _load_corpus_cases(root: Path) -> list[dict]:
-    """Load every case the runner sees — REUSE eval_runner.load_golden_set so the
-    sweep shares ONE loader with the runner (no divergent second view). That loader
-    merges public + sibling private, FAILS LOUD on an id present in BOTH files
-    (migration error), raises FileNotFoundError if the public set is absent (so a
-    typo'd --root can't false-green to "CLEAN"), and validates basic structure
-    (version/cases/required fields) — closing the malformed-corpus crash surface.
+    """Load every case the runner sees — REUSE eval_runner.load_merged_golden_set
+    so the sweep shares ONE loader with the runner (no divergent second view). That
+    loader merges the product set with the workspace's private set, raises
+    FileNotFoundError if the product set is absent, fails loud on an id repeated
+    inside one file, and validates basic structure (version/cases/required fields)
+    — closing the malformed-corpus crash surface.
 
     The import is lazy + path-shimmed because eval_runner itself lazily imports
     THIS module (compute_case_stamp) — top-level import would risk a cycle; a
@@ -374,8 +376,12 @@ def _load_corpus_cases(root: Path) -> list[dict]:
     _here = str(Path(__file__).resolve().parent.parent)  # …/backend
     if _here not in _sys.path:
         _sys.path.insert(0, _here)
-    from scripts.eval_runner import load_golden_set
-    gs = load_golden_set(root / "Eval" / "golden_set.yaml")
+    from scripts.eval_runner import load_merged_golden_set
+    if not Path(root).is_dir():
+        # The product set would still load; a typo'd root must not report the
+        # user's corpus as clean.
+        raise FileNotFoundError(f"workspace not found: {root}")
+    gs = load_merged_golden_set(root)
     return gs.get("cases", []) or []
 
 
@@ -406,7 +412,7 @@ def main() -> int:
     ap.add_argument("--for-public", action="store_true", help="run privacy gate (PROMOTE)")
     ap.add_argument("--validate-corpus", action="store_true",
                     help="sweep gate_refs over ALL cases in the corpus (drift report)")
-    ap.add_argument("--root", help="SwarmWS root for --validate-corpus (default: ~/.swarm-ai/SwarmWS)")
+    ap.add_argument("--root", help="workspace root for --validate-corpus (default: the user's workspace)")
     ap.add_argument("--exit-nonzero", action="store_true",
                     help="with --validate-corpus: exit 1 if any stale ref found "
                          "(default: report-only, exit 0 — so CI adoption doesn't red "
@@ -414,10 +420,15 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.validate_corpus:
-        root = Path(args.root) if args.root else (Path.home() / ".swarm-ai" / "SwarmWS")
+        if args.root:
+            root = Path(args.root)
+        else:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+            from config import get_swarmws
+            root = get_swarmws()
         try:
             rows = validate_corpus(root)
-        except (FileNotFoundError, AssertionError) as e:
+        except (FileNotFoundError, AssertionError, ValueError) as e:
             # wrong --root (no golden set), dup-id collision, or a malformed/
             # under-spec corpus — a drift gate must fail LOUD + ACTIONABLE on a
             # corpus it cannot trust, never silently report "CLEAN" (Gate-2 F2/F4/F5).

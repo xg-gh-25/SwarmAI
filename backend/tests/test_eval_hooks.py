@@ -10,10 +10,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import yaml
 from core.eval_service import EvalService
+from tests._eval_golden_fixture import install_golden_fixture
 
 
 @pytest.fixture
-def eval_workspace(tmp_path):
+def eval_workspace(tmp_path, monkeypatch):
     """Minimal eval workspace."""
     project_dir = tmp_path / "Eval"
     project_dir.mkdir(parents=True)
@@ -52,7 +53,7 @@ def eval_workspace(tmp_path):
         ],
     }
 
-    (project_dir / "golden_set.yaml").write_text(yaml.dump(golden_set, default_flow_style=False))
+    install_golden_fixture(monkeypatch, tmp_path, golden_set)
 
     # Write multiple runs with consecutive passes for GS001
     for i in range(12):
@@ -185,7 +186,7 @@ class TestStablePromotion:
         case = svc2.get_case_detail("GS001")
         assert case["tier"] == "stable"
 
-    def test_live_tier_not_promoted(self, tmp_path):
+    def test_live_tier_not_promoted(self, tmp_path, monkeypatch):
         """A tier='live' case with a long passing streak must NEVER auto-promote to
         'stable'. 'stable' IS gate-eligible, so promoting a live case
         would silently re-admit a runtime-state-dependent case to the BVT release
@@ -213,7 +214,7 @@ class TestStablePromotion:
                 "verification": {"command": "echo OK", "expected_contains": "OK"},
             }],
         }
-        (project_dir / "golden_set.yaml").write_text(yaml.dump(golden_set, default_flow_style=False))
+        install_golden_fixture(monkeypatch, tmp_path, golden_set)
         # 12 consecutive passes — would promote any active case
         for i in range(12):
             run = {

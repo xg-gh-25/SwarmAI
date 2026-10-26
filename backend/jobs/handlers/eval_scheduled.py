@@ -120,10 +120,10 @@ def _default_runner(root: Path) -> dict:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from scripts.eval_runner import (
-        load_golden_set, _golden_set_path, run_eval, write_run,
+        load_merged_golden_set, run_eval, write_run,
         _load_history as load_history,
     )
-    gs = load_golden_set(_golden_set_path(root))
+    gs = load_merged_golden_set(root)
     history = load_history(root)  # prior runs, newest last
     baseline = history[-1] if history else None
     # include_behavior=True: this biweekly sweep is the intended full-coverage
