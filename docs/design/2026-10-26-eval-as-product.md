@@ -396,8 +396,8 @@ Reports 并入 Offline Eval 的放行记录。下面每一项写清写入方和�
 - 每一项先写会失败的测试，修完做变异检查（`scripts.mutation_check`）。
 - 最终测试集：`test_eval_release`、`test_eval_followups`、`test_eval_crud`、`test_eval_case_admission`、
   `test_session_quality_handler`、`test_session_scorer`、`test_eval_lines`、`test_eval_report_render`、
-  `test_eval_timeout_status`、`eval_runner_test`、`ci_eval_gate_test`，加本次新增的测试文件；前端全部
-  `EvalDashboard*.test.tsx` 和 tsc。
+  `test_eval_timeout_status`、`eval_runner_test`、`ci_eval_gate_test`，加本次新增的测试文件；前端
+  `src/pages/eval/__tests__/*`（旧的 `EvalDashboard*.test.tsx` 随旧页面删除）、`navVisualSystem.test.ts` 和 tsc。
 - 审查：后端做完一次 correctness + security（新接口接收用户输入、会话内容进状态文件和接口）；前端做完一次
   correctness，UI 按 `design-judgment.md` 自查。
 - 端到端：在临时工作区跑一次带离线考题的真实运行，确认运行记录里有轨迹和最终回答（rebuild 后由 XG 在界面上看）。
@@ -417,6 +417,14 @@ Reports 并入 Offline Eval 的放行记录。下面每一项写清写入方和�
   后者只按 R18 用 judge 判断，不检查 ```next-steps 块（那是 XG 自己 STEERING #7 的格式，不是产品规则）。产品集 46 条
   （BVT 36、离线 10），私有集为空。其余私有 case 已硬删除：源码检查归 CI，项目文档上的 behavior case 已被 fixture 上的
   离线考题覆盖，语言和工具调用前不说话改由线上评分 O1/O2 检查。
+- 实现记录（§8，native）：后端 8 项分 6 次提交（`976e354db` 起），前端 `4e8068f86`。和 §8 表格不同的地方：
+  - security 审查后，用户自己的 case 的运行记录只留工具名，不写 `final_text`、步骤输入输出（这些记录在工作区里被 git 跟踪）；
+    产品 case 照常保留。写运行记录只接受 JSON 请求体；并发修改同一条 case 不会丢掉另一次修改。
+  - correctness R2 发现线上评分补算历史周的成本基线是逐行相关子查询，在真实库上要 22 秒，改成一次线性查询。
+  - 前端按仓库的视觉规范（`navVisualSystem.test.ts`）：字号只用 type scale（大数字是 `text-display`，比 mock 小）、颜色只用主题变量、
+    按钮用 `btn-*`。Guide 的飞轮每一环点开对应的 tab（"构建"没有对应 tab）。
+  - 发现但不在本次范围：daemon 的 POST 接口都能被网页跨站触发，已建 ToDo（全局 CSRF / Host 校验）。
+  - 未做：带离线考题的真实运行要在 rebuild 后跑，才能在界面上看到三层下钻的真实内容；在那之前，旧运行记录显示"没有保存工具轨迹"。
 - 实现记录（第 3–6 步）：
   - 第 3 步：`timeout` 状态及全部读者（含每日 canary：它原来只认 `failed`，超时延后和计数都会失效）；`build_follow_ups`
     （`core/eval_followups.py`），HTML 报告第一节和 `/api/eval/health` 共用，替换旧的 Next Action 尾注。快速检查的失败用

@@ -348,8 +348,8 @@ async def get_context_health_lite():
     token_block (Context tab + load rail), the pending_proposals list (Review),
     and a governance-pending count (Approve). It deliberately does NOT run the
     heavy read ops the full endpoint does (_ch_ddd_staleness, get_semantic_drift,
-    _build_learning_dashboard) — those feed EvalDashboard, not the overlay, and
-    stay on GET /context-health. (The old read_refresh_log op was removed with
+    _build_learning_dashboard) — those stay on GET /context-health, which has no
+    UI reader since the Eval overlay dropped its Context Health tab. (The old read_refresh_log op was removed with
     the auto_refresh module, run_781ffbd9.)
 
     ⚠️ DISTINCT schema from /context-health (3 keys, not 7). Fail-soft: any read
@@ -420,9 +420,8 @@ async def get_context_health():
 
     # 1. auto-refresh log READ REMOVED (run_781ffbd9): the auto_refresh module was
     # deleted (zero output in production, superseded by R30#4). The refresh_log /
-    # weeks_available keys stay in the payload (default [] / 0 above) so the
-    # EvalDashboard frontend, which treats refresh_log as required (.length), is
-    # unaffected — the panel simply renders empty.
+    # weeks_available keys stay in the payload (default [] / 0 above) for any
+    # client that still reads them.
 
     # 2. DDD staleness signals
     try:
@@ -477,7 +476,7 @@ async def get_context_health():
     # 5. Token block — read-only telemetry for the C&M Brain overlay UI (Context
     # tab + overview rail): calibrated per-file token sizes + composition % +
     # ownership/priority/lock. NOT consumed by Eval logic; OPTIONAL field, so
-    # existing consumers (EvalDashboard) that don't read it are unaffected.
+    # a client that does not read it is unaffected.
     try:
         from core.context_brain import build_context_token_block
 
@@ -493,7 +492,7 @@ def _build_learning_dashboard(root) -> dict:
     """Build learning metrics from DDD entry metadata (source tags + decay states).
 
     Scans IMPROVEMENT.md and TECH.md for entries with metadata comments.
-    Returns counts for the OS Eval Context Health tab.
+    Returns counts for GET /context-health's learning block.
     """
     from datetime import datetime, timedelta
     from core.ddd_entry_lifecycle import parse_entries

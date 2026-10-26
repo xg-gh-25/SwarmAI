@@ -132,8 +132,8 @@ A YAML corpus of cases, each a small probe of the OS's cognition. It lives in th
 > python backend/scripts/golden_case_validator.py --validate-corpus \
 >   --root ~/.swarm-ai/SwarmWS
 > ```
-> For a category/tier/dimension breakdown, the dashboard **Golden Set** tab
-> computes it live from `cases[]` (`eval-breakdowns.ts`) — it never stores a snapshot.
+> For a breakdown by line, category and release tier, the overlay's **Golden Cases**
+> tab computes it live from `cases[]` — it never stores a snapshot.
 
 ### Case schema (the real fields)
 ```yaml
@@ -374,25 +374,23 @@ use, so the deny has zero cost.
 
 ---
 
-## The EvalDashboard (in-product surface)
+## The Eval overlay (in-product surface)
 
-`desktop/src/pages/EvalDashboard.tsx` — the operable lens over the whole
-subsystem. Tabs:
+`desktop/src/pages/eval/` — the operable lens over the whole subsystem (design
+`docs/design/2026-10-26-eval-as-product.md` §8). Tabs:
 
 | Tab | Shows |
 |-----|-------|
-| **Overview** | OS Health Score, Intelligence Velocity, cases passed/failed, dimension grid, recent runs, Run-Canary / Run-Full buttons |
-| **Golden Set** | live breakdowns (category/tier/eval_method/dimension), filter bar, grouped case table with **public/private origin badges**, case-detail drawer, Add/Import/Archive/Run |
-| **Session Quality** | Layer ②③ overview (scored / low / drafts / pending), weekly low-rate trend, **pending-draft queue with Promote/Discard** (the human-ratify gate), low-score session table |
-| **Context Health** | semantic drift (DDD self-audit), stale docs, pending proposals, auto-refresh log, at-risk golden cases |
-| **Governance** | pending rule/gate proposals + evidence + Accept/Reject/Defer |
-| **Trends** | overall + per-dimension sparklines, per-run detail |
-| **Reports** | HTML eval report list (open in browser) |
-| **Guide** | the authoritative in-product 3-layer methodology doc + architecture diagrams |
+| **Overview** | the release verdict, the four release checks in order, "needs you" (problems with the evaluation itself) and Evolution Suggestion (behaviour signals), the five dimensions with 12-week trends, where the results come from |
+| **Golden Cases** | cases by line (quick check / offline case) and category with their release tier (red / gate / watch), case detail, your own cases: add / edit / delete / try with every admission check; product cases are read-only |
+| **Online Eval** | per-turn code checks, the weekly judge sample, low-scored sessions with agree / disagree (the judge's calibration) |
+| **Offline Eval** | the quick check with its day row, offline cases with the session → trajectory → step drill-down, the release record (each full run's four checks and its HTML report) |
+| **LLM Judges** | the two judges as they run (model, prompt, settings), how much of the release uses a judge, the method's requirements against what is done, the judge model setting |
+| **Guide** | the Eval-First method in twelve sections |
 
-The **Guide tab is the authoritative in-product description** and stays aligned to
-the 3-layer model; this design doc and the Guide should agree — if they diverge,
-reconcile both against code.
+Context health and governance proposals are in the C&M overlay, not here. The
+**Guide tab is the authoritative in-product description**; if it and this doc
+diverge, reconcile both against code.
 
 ### Read APIs (`backend/routers/eval.py`)
 `GET /eval/health` · `/eval/history` · `/eval/golden-set[/{id}]` (private cases
@@ -473,7 +471,7 @@ same change** (a stale diagram is the highest-risk doc rot; nothing auto-regener
 | Agent-block on eval | `backend/core/security_hooks.py` (`eval_command_guard`) |
 | Change-triggered affected-cases hook | `backend/core/eval_hooks.py` |
 | `s_golden-case` operations (ADD/PROMOTE/VALIDATE/AUDIT) | `backend/skills/s_golden-case/` |
-| Dashboard tabs, Guide, breakdowns | `desktop/src/pages/EvalDashboard.tsx`, `eval-breakdowns.ts` |
+| Overlay tabs, Guide | `desktop/src/pages/eval/` |
 | Read/mutation APIs | `backend/routers/eval.py` |
 | Diagrams | `desktop/public/eval-*.svg` |
 
