@@ -373,12 +373,12 @@ export const ToolStripV6 = memo(function ToolStripV6({ item, scope = '' }: { ite
       : label.kind === 'edit' ? tf(t, 'chat.turn.zone.edits', n === 1 ? '{{count}} edit' : '{{count}} edits', { count: n })
         : tf(t, 'chat.turn.zone.calls', n === 1 ? '{{count}} call' : '{{count}} calls', { count: n }),
     label.thoughts > 0 && tf(t, 'chat.turn.zone.thoughtCount', label.thoughts === 1 ? '{{count}} thought' : '{{count}} thoughts', { count: label.thoughts }),
-    item.objects.join(', '),
   ].filter(Boolean).join(' · ') : '';
+  // A merged row shows counts only: its calls are listed when it is opened, and in its title.
   const object = label.verb
     ? <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{counts}</span>
-    : n > 1 && item.objects.length > 1
-    ? <span className="truncate min-w-0 text-[var(--color-text-secondary)]">{item.objects.join(', ')}</span>
+    : n > 1
+    ? null
     : v.dir !== undefined && v.file
       ? <PathObject dir={v.dir} file={v.file} />
       : <span className="truncate min-w-0 text-[var(--color-text-muted)]">{v.object}</span>;

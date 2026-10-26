@@ -58,7 +58,18 @@ describe('finished phase: merged by kind', () => {
     expect(toolNames()).toEqual(['Explored', 'Edit', 'Ran']);
     expect(screen.queryByText(/PLAN-THOUGHT/)).toBeNull();
     const explored = screen.getAllByTestId('tool-strip')[0];
-    expect(explored.textContent).toMatch(/3 calls · 2 thoughts · a\.ts/);
+    const row = within(explored).getAllByRole('button')[0];
+    expect(row.textContent).toMatch(/3 calls · 2 thoughts/);
+    expect(row.textContent).not.toMatch(/a\.ts|steer|sed/);
+  });
+
+  it('a same-tool merge (Read ×2) shows no file names on the row; they are in its title', () => {
+    render(view([tx('Looking.'), use('a', 'Read', '/p/a.ts'), tr('a'), use('b', 'Read', '/p/b.ts'), tr('b'), tx('Done.')]));
+    openPhase();
+    const strip = screen.getAllByTestId('tool-strip').find((s) => /Read ×2/.test(s.textContent ?? ''))!;
+    const row = within(strip).getAllByRole('button')[0];
+    expect(row.textContent).not.toMatch(/a\.ts|b\.ts/);
+    expect(row.getAttribute('title')).toMatch(/a\.ts[\s\S]*b\.ts/);
   });
 
   it('opened, the Explored strip lists its calls and thoughts in stream order', () => {
