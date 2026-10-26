@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r4 — 步骤 0、1 已实施（§3.0.1、§3.1.1）；步骤 2–4 待做
+status: r5 — 步骤 0–2 已实施（§3.0.1、§3.1.1、§3.2.1）；步骤 3–4 待做
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -219,6 +219,26 @@ create 对每个 `--repo` 取它的主 checkout，查 `bound_projects`：
 
 `has_ddd` 和项目名写进 contract（不可改）。REFLECT 的路由读 contract，不再自己猜。
 
+### 3.2.1 步骤 2 的实施（r5）
+
+- 新模块 `core/run_protocol/project_binding.py`：`resolve(project, repos)` 先按 `repo_changes.bound_projects`
+  查每个 `--repo` 的主 checkout（linked worktree 换算成它的主 checkout），再决定项目；create 在写任何东西之前
+  调它。contract 新增 `has_ddd` 和 `bound_repos`，create 的输出带 `project`、`has_ddd`，有未绑定的仓库时带 `notes`。
+- 和 §3.2 表格不一样的两处：
+  - **`--project` 仍然必填。** `run_owner_gate` 要求每个会改状态的 pipeline 调用都带明确的 `--project`，
+    create 也不例外；放开它要改 gate，不在本步范围。所以"没给 `--project`"那一行不存在，绑定的作用是
+    "名字必须和绑定一致"。
+  - **未绑定的仓库：`has_ddd` 看所命名项目有没有 DDD 文档，不是一律 false。** 一律 false 会和 REFLECT 冲突：
+    REFLECT 按项目目录是否有 DDD 文档来写经验，项目有 DDD 时经验仍会写进去。两处用同一条规则。
+    create 的 `notes` 会提示"这个仓库没绑定，去 bindings.yaml 绑上"。
+  - 一个 run 里同时有绑定和未绑定的仓库：归绑定的那个项目，`notes` 列出未绑定的仓库。
+- REFLECT 的路由没改：它本来就按 run 的项目写经验，项目由绑定确定后，经验就进了对的 DDD。
+- INSTRUCTIONS 的 create 一节加了一句：`<P>` 是仓库绑定的项目。
+- 测试 `tests/test_pipeline_v1_project_binding.py`（6 个，通过真实 CLI 和真实 bindings.yaml）在 main 上全红；
+  四处变异（不比对名字、不拒绝两个项目、不换算 linked worktree、`has_ddd` 恒为 false）各自让对应测试变红。
+  linked worktree 的测试第一版只看项目名，名字是 `--project` 传进去的，变异测不出来；已改成同时断言
+  `bound_repos`。
+
 ### 3.3 前端：`artifacts/knowledge.md`（步骤 3）
 
 create 时由 CLI 算一次，写进 run 的 artifacts（在 SwarmWS 里，**不进用户仓库**）：
@@ -307,3 +327,4 @@ S5 加两个数，按 run 统计：
   repo_guidance）和 pipeline 用同一套 R1–R4；§3.3、§3.4 不再自定截断规则。
 - r3（2026-10-26）：步骤 0 实施；记录和设计不同的三处，以及改前改后的实测（§3.0.1），含真实消息回放。
 - r4（2026-10-26）：步骤 1 实施（§3.1.1）。
+- r5（2026-10-26）：步骤 2 实施（§3.2.1）。

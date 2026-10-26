@@ -118,7 +118,8 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="pipeline-v1")
     sub = root.add_subparsers(dest="command", required=True)
     create = sub.add_parser("create")
-    create.add_argument("--project", required=True)
+    create.add_argument("--project", required=True,
+                        help="the run's project; it must be the one a bound --repo names")
     create.add_argument("--profile", default="direct")
     create.add_argument("--session-id", default=None)
     create.add_argument("--repo", action="append", default=[])
@@ -210,14 +211,20 @@ def execute(args) -> dict[str, Any]:
         if args.session_id and args.session_id != owner:
             raise ValueError("create --session-id must be this session")
         args.session_id = owner
+        from core.run_protocol import project_binding
+        repos = _repos(args.repo)
+        binding = project_binding.resolve(args.project, repos)   # run-knowledge §3.2
         engine = RunEngine.create(
-            data_dir=get_app_data_dir(), workspace=_workspace(), project=args.project,
-            profile=args.profile, session_id=args.session_id, repos=_repos(args.repo),
+            data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
+            profile=args.profile, session_id=args.session_id, repos=repos,
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
-            requirement=args.requirement)
-        return _with_next(engine, {"ok": True, "pipeline_id": engine.run_id,
-                                   "run_file": str(engine.run_dir / "run.json")},
-                          previous_stage="", mutating=True)
+            requirement=args.requirement, has_ddd=binding.has_ddd,
+            bound_repos=binding.bound_repos)
+        result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
+                  "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json")}
+        if binding.notes:
+            result["notes"] = binding.notes
+        return _with_next(engine, result, previous_stage="", mutating=True)
     if args.command not in _READ_ONLY:
         # one read-decide-write operation at a time on this run (r6 §2.2): a parallel
         # call waits, then is judged on the state the first one left

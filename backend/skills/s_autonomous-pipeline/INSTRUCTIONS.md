@@ -10,6 +10,8 @@ Create one run:
 
 For `direct`, also pass the user's words: `"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile direct --requirement "<the user's request>" --repo <name>=<absolute-main-repo>`.
 
+`<P>` is the project the repo is bound to (its `Projects/<P>/bindings.yaml`); create refuses another name and says which. For a repo bound to no project, name one; create's `notes` say so and `has_ddd` says whether that project has a DDD.
+
 Every run's code is in its own git worktree per repo; there is no other mode. Worktree creation failure pauses the run.
 
 Read state with `"$SWARM_BACKEND_BIN" pipeline-v1 status --project <P> --run-id <R>` before anything else in a turn that continues a run. `paused` with reason `user_stop` / `session_lost` means the user stopped it: continue only when the user asks, then `resume`. Restore an abandoned or completed-not-landed snapshot with `restore`; explicitly stop a nonterminal run with `abandon --reason <reason>`. Continuing another session's run is allowed once that session is not streaming: your first owner command records the takeover. A run without protected `contract.json` is unsupported; create a v1 run instead of migrating it.

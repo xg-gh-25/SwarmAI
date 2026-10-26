@@ -390,9 +390,12 @@ class RunEngine:
                decision_cap: int = 2,
                run_id: str | None = None,
                transcript_ids: Sequence[str] = (),
-               requirement: str | None = None) -> "RunEngine":
+               requirement: str | None = None, has_ddd: bool = False,
+               bound_repos: Sequence[str] = ()) -> "RunEngine":
         """Create a run. Every run's code is in its own git worktree per repo (S6-5: the
-        shared mode, where a run edited the main checkout, is gone)."""
+        shared mode, where a run edited the main checkout, is gone). *has_ddd* and
+        *bound_repos* come from the repos' bindings (project_binding.resolve,
+        run-knowledge §3.2) and are fixed in the contract."""
         repos = repos or {}
         if profile not in lifecycle.PROFILE_STAGES:
             raise EngineError(lifecycle.REMOVED_PROFILES.get(profile, "unknown profile"))
@@ -449,6 +452,7 @@ class RunEngine:
                         "expected_repos": sorted(repos),
                         "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
                         "decision_cap": decision_cap,
+                        "has_ddd": bool(has_ddd), "bound_repos": sorted(bound_repos),
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
