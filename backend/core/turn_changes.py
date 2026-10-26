@@ -206,6 +206,12 @@ def session_trees(session_id: Optional[str]) -> list[tuple[str, str]]:
         logger.debug("turn_changes: bound repos unavailable: %s", exc)
         return []
     prefix = f"refs/heads/session/{session_key(session_id)}-"
+    try:
+        from scripts.session_worktree import root as _sw_root
+        sw_root = os.path.realpath(_sw_root())
+    except Exception as exc:  # noqa: BLE001 — no root known: no detached worktree is ours
+        logger.debug("turn_changes: session-worktree root unavailable: %s", exc)
+        sw_root = None
     out: list[tuple[str, str]] = []
     for repo in repos:
         try:
@@ -213,6 +219,7 @@ def session_trees(session_id: Optional[str]) -> list[tuple[str, str]]:
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             logger.debug("turn_changes: worktree list of %s failed: %s", repo, exc)
             continue
+        ours: Optional[set[str]] = None      # this session's branches, read once if needed
         path = None
         for line in listing.splitlines():
             if line.startswith("worktree "):
@@ -220,25 +227,89 @@ def session_trees(session_id: Optional[str]) -> list[tuple[str, str]]:
             elif line.startswith("branch ") and path and line[len("branch "):].startswith(prefix):
                 if os.path.isdir(path):
                     out.append((os.path.realpath(path), line[len("branch refs/heads/"):]))
+            elif line == "detached" and path and sw_root and os.path.isdir(path):
+                # create names it <root>/<name>/<repo> on session/<key>-<name> (§3.6):
+                # detached, it is ours when that branch exists for its <name>
+                real = os.path.realpath(path)
+                parts = os.path.relpath(real, sw_root).split(os.sep)
+                if len(parts) != 2 or parts[0] in ("..", "."):
+                    continue
+                if ours is None:
+                    try:
+                        # for-each-ref matches whole path segments: list session/, filter
+                        ours = {r for r in _git(repo, "for-each-ref", "--format=%(refname)",
+                                                "refs/heads/session/").split() if r.startswith(prefix)}
+                    except (RuntimeError, OSError, subprocess.SubprocessError):
+                        ours = set()
+                if prefix + parts[0] in ours:
+                    out.append((real, (prefix + parts[0])[len("refs/heads/"):]))
     return out
 
 
 def _created_tree(top: str, branch: str) -> Optional[str]:
-    """The tree of the commit *branch* was created at (its reflog's ``branch: Created
-    from`` entry, read through git), or None: then the tree is left off, never
-    diffed from a guess."""
+    """The tree of the commit *branch* was created at, or None (see _created_commit)."""
+    commit = _created_commit(top, branch)
+    return _tree_of(top, commit) if commit else None
+
+
+def _tree_of(top: str, commit: str) -> Optional[str]:
+    try:
+        return _git(top, "rev-parse", f"{commit}^{{tree}}").strip() or None
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return None
+
+
+def _created_commit(top: str, branch: str) -> Optional[str]:
+    """The commit *branch* was created at (its reflog's ``branch: Created from``
+    entry, read through git), or None: then the tree is left off, never diffed from
+    a guess."""
     try:
         raw = _git(top, "reflog", "show", "--format=%H%x00%gs", f"refs/heads/{branch}", "--")
     except (RuntimeError, OSError, subprocess.SubprocessError):
         return None
     created = [x.split("\0", 1)[0] for x in raw.splitlines()
                if "\0" in x and x.split("\0", 1)[1].startswith("branch: Created from")]
-    if not created:
-        return None
+    return created[-1] if created else None
+
+
+# A fixed identity for the throwaway commit _rebased_start makes of a start tree
+# (unreferenced; gc removes it). Never the user's.
+_REPLAY_ID = {"GIT_AUTHOR_NAME": "swarm-turn", "GIT_AUTHOR_EMAIL": "turn@swarm.invalid",
+              "GIT_COMMITTER_NAME": "swarm-turn", "GIT_COMMITTER_EMAIL": "turn@swarm.invalid",
+              "GIT_AUTHOR_DATE": "@0 +0000", "GIT_COMMITTER_DATE": "@0 +0000"}
+
+
+def _rebased_start(top: str, start: str, head_s: str, base_s: str, base_e: str) -> Optional[str]:
+    """The turn-start tree *start* (HEAD *head_s* then) moved from merge-base *base_s*
+    onto *base_e* (design 2026-10-26-turn-cards-unified.md §3.6): *start* itself when
+    the base did not move, the replayed tree when it did, None when the replay
+    conflicts or git cannot do it (the tree is then left off, never diffed S..E)."""
+    if base_s == base_e:
+        return start
     try:
-        return _git(top, "rev-parse", f"{created[-1]}^{{tree}}").strip() or None
-    except (RuntimeError, OSError, subprocess.SubprocessError):
+        commit = _git(top, "commit-tree", start, "-p", head_s, "-m", "turn start",
+                      env=_REPLAY_ID).strip()
+        out = _git(top, "merge-tree", "--write-tree", f"--merge-base={base_s}", base_e, commit)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        logger.info("turn_changes: start of %s not replayable onto the new base (%s) — left off", top, exc)
         return None
+    return out.splitlines()[0].strip() if out.strip() else None
+
+
+def _start_on_base(top: str, start: str, head_s: Optional[str]) -> Optional[str]:
+    """_rebased_start for a session tree: the bases are its merge-bases with the main
+    checkout's branch (where ``land`` lands it) at the start and now. Unknown head or
+    base: *start*, as before (nothing to correct with)."""
+    if not head_s:
+        return start
+    try:
+        ref = _git(_main_checkout(top), "symbolic-ref", "-q", "HEAD").strip()
+        head_e = _git(top, "rev-parse", "HEAD").strip()
+        base_s = _git(top, "merge-base", head_s, ref).strip()
+        base_e = _git(top, "merge-base", head_e, ref).strip()
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return start
+    return _rebased_start(top, start, head_s, base_s, base_e)
 
 
 # Start snapshots per send are bounded: past this many trees the rest are not
@@ -264,7 +335,14 @@ def _cooling(root: str) -> bool:
     return _cool_off.get(root, 0.0) > time.monotonic()
 
 
-def _snapshot_root(root: str) -> tuple[str, str, float]:
+def _head(top: str) -> Optional[str]:
+    try:
+        return _git(top, "rev-parse", "-q", "--verify", "HEAD^{commit}").strip() or None
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return None
+
+
+def _snapshot_root(root: str) -> tuple[str, str, float, Optional[str]]:
     """(toplevel, start tree, monotonic time it was taken) of one code tree. A job that ran as long as a git
     timeout — whatever it raised: _toplevel turns a timeout into "not a tree" —
     puts the root in cool-off."""
@@ -275,7 +353,8 @@ def _snapshot_root(root: str) -> tuple[str, str, float]:
         top = _toplevel(root)
         if not top:
             raise RuntimeError("not a git tree")
-        return top, _tree(top), time.monotonic()
+        head = _head(top)
+        return top, _tree(top), time.monotonic(), head
     except Exception:
         if time.monotonic() - began >= GIT_TIMEOUT_S * 0.9:
             _cool_off[root] = time.monotonic() + _COOL_OFF_S
@@ -309,6 +388,7 @@ class TurnChanges:
         self._raw: dict[str, str] = {}                  # path as noted -> last operation
         self._partial: list[dict] = []
         self._skipped: set[str] = set()                 # live at the start, not snapshotted
+        self._session_roots: set[str] = set()           # this session's worktrees at the start
         # When the turn's first tool call was seen: a start snapshot taken after it
         # may already hold the turn's own edit, so that tree is left off.
         self._first_tool_at: Optional[float] = None
@@ -327,6 +407,7 @@ class TurnChanges:
             else:
                 found = await loop.run_in_executor(pool, code_roots)
                 own = await loop.run_in_executor(pool, session_trees, tc._session_id)
+                tc._session_roots = {p for p, _b in own}
                 found = [*found, *(p for p, _b in own if p not in found)]
             tc._skipped = set(found[MAX_START_SNAPSHOTS:])
             if tc._skipped:
@@ -432,17 +513,25 @@ class TurnChanges:
                 continue
             try:
                 # shield: a timed-out finish must not cancel the shared job
-                top, start, taken = await asyncio.shield(self._jobs[root])
+                top, start, taken, head_s = await asyncio.shield(self._jobs[root])
             except Exception as exc:  # noqa: BLE001 — no start: this tree stays off
                 logger.info("turn_changes: no start snapshot for %s (%s) — left off", root, exc)
                 continue
             if self._first_tool_at is not None and taken > self._first_tool_at:
                 logger.info("turn_changes: start snapshot of %s came after the first tool call — left off", root)
                 continue
+            if root in self._session_roots:
+                start = await loop.run_in_executor(pool, _start_on_base, top, start, head_s)
+                if start is None:
+                    continue
             await self._diff_into(loop, pool, top, paths, start)
         # Trees that went live during the turn: a run worktree from its HEAD, a
         # session worktree from the commit it was created at.
-        for top, (paths, start) in sorted(later.items()):
+        for top, (paths, start, head_s) in sorted(later.items()):
+            if head_s:
+                start = await loop.run_in_executor(pool, _start_on_base, top, start, head_s)
+                if start is None:
+                    continue
             await self._diff_into(loop, pool, top, paths, start)
 
     async def _diff_into(self, loop, pool, top: str, paths: list[str], start: Optional[str]) -> None:
@@ -457,10 +546,11 @@ class TurnChanges:
 
 
 def _group(raw: dict[str, str], known: list[str], session_id: Optional[str] = None,
-           ) -> tuple[dict[str, list[str]], dict[str, tuple[list[str], Optional[str]]]]:
+           ) -> tuple[dict[str, list[str]], dict[str, tuple[list[str], Optional[str], Optional[str]]]]:
     """Touched paths (realpath'd, in the pool) by the code tree that was snapshotted
     at the start; paths in a tree that is live NOW but was not then, by toplevel,
-    with the start to diff from (None: its HEAD)."""
+    with the start to diff from (None: its HEAD) and, for a session worktree, the
+    commit it was created at (to move that start onto a new base, §3.6)."""
     by_root: dict[str, list[str]] = {}
     rest: list[str] = []
     for p in raw:
@@ -470,7 +560,7 @@ def _group(raw: dict[str, str], known: list[str], session_id: Optional[str] = No
             by_root.setdefault(root, []).append(path)
         else:
             rest.append(path)
-    later: dict[str, tuple[list[str], Optional[str]]] = {}
+    later: dict[str, tuple[list[str], Optional[str], Optional[str]]] = {}
     if not rest:
         return by_root, later
     wt_home = _run_worktree_home()
@@ -478,21 +568,22 @@ def _group(raw: dict[str, str], known: list[str], session_id: Optional[str] = No
     # base), and a session worktree it created from the commit it was created at. Any
     # other tree missing at the start (a binding added mid-turn) is left off: HEAD
     # would show earlier uncommitted work as this turn's.
-    starts: dict[str, Optional[str]] = {}
+    starts: dict[str, tuple[Optional[str], Optional[str]]] = {}
     for r in code_roots():
         if r not in known and wt_home and r.startswith(wt_home + os.sep):
-            starts[r] = None
+            starts[r] = (None, None)
     for r, branch in session_trees(session_id):
         if r not in known and r not in starts:
-            created = _created_tree(r, branch)
+            commit = _created_commit(r, branch)
+            created = _tree_of(r, commit) if commit else None
             if created:
-                starts[r] = created
+                starts[r] = (created, commit)
     trees = sorted(starts, key=len, reverse=True)
     for path in rest:
         root = next((r for r in trees if path.startswith(r + os.sep)), None)
         top = _toplevel(root) if root else None
         if top:
-            later.setdefault(top, ([], starts[root]))[0].append(path)
+            later.setdefault(top, ([], *starts[root]))[0].append(path)
     return by_root, later
 
 

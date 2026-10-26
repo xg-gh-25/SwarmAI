@@ -145,10 +145,8 @@ worktree list --porcelain` per bound repo (15-25 ms measured) finds worktrees on
 snapshot finished after the turn's first tool call is not used). A worktree created
 during the turn: start = the commit of the branch reflog's `branch: Created from` entry
 (`git reflog show refs/heads/<branch>`, through git). No such entry → left off. Rows
-are limited to the files the turn wrote (`note` / `note_tool`, as today). Two known
-inexact cases, listed in §9 rather than guessed around: a detached session worktree
-is not found; a rebase after creation brings other sessions' lines in the same files
-into an unlanded row (a landed row diffs `onto..new` and is exact).
+are limited to the files the turn wrote (`note` / `note_tool`, as today). A detached
+session worktree and a rebase of an unlanded one: §3.6.
 
 ### 3.5 Pipeline runs
 
@@ -157,6 +155,35 @@ A pipeline landing writes no stamp. A run can land several repos; the engine kee
 last as `landedSha`. `pipeline_summary` gains `commits: [{repo, sha}]` from
 `landed_shas` (additive; old blocks keep `landedSha`, read as one commit). COMMITS lists
 each as `<sha> · pipeline run <run id>`.
+
+### 3.6 Residuals closed (step 6, Gawan 2026-10-26)
+
+**Detached session worktree.** `session_trees` found a worktree only by its branch line
+in `git worktree list`, so a detached one (a rebase stopped on a conflict, a checkout of
+a sha) had no rows. `create` names the worktree `<root>/<name>/<repo>` and its branch
+`session/<key>-<name>`, so a detached worktree under the session-worktree root is this
+session's when `refs/heads/session/<key>-<name>` exists for its `<name>` (one `git
+for-each-ref` per bound repo, in the same start job). Not a guess: the name is unique per
+create, and the branch must exist.
+
+**Rebase of an unlanded session worktree.** The row diffs the turn's start tree S with
+the end tree E, so after `git rebase <base>` it also held what the base gained (other
+sessions' lines in the same files). For a session tree, the start is moved onto the new
+base first: B_s = merge-base(HEAD at start, base), B_e = merge-base(HEAD at end, base),
+where base is the main checkout's branch (`session_worktree._branch_of_main`). If B_s =
+B_e nothing moved and S is used as today. Otherwise S' = `git merge-tree --write-tree
+--merge-base=B_s B_e <S as a commit>` (S is committed with `commit-tree`, unreferenced),
+and the row diffs S'..E: exactly this turn's edits on the new base. A conflict (exit 1) or
+an older git leaves that tree's rows off; never S..E. A worktree created in the turn has
+S = the `Created from` tree, so S' is B_e's tree. The start snapshot of a session tree
+also records its HEAD (one `rev-parse`). Cost: at turn end, two `merge-base` per touched
+session tree; `commit-tree` + `merge-tree` only when a rebase happened.
+
+**Wrapper scripts.** Not changed. Handing the turn id to every Bash line would make
+`run_owner_gate` return `updatedInput` (an allow) on every call and read landings at
+every turn end. Measured: of the 11 lands on 2026-10-26 after 12:00, the 7 with
+`turn=none` all came before 446c0c526 (15:19); none since. AGENT.md says to call the
+tool directly; a wrapper's land stays on Canvas.
 
 ## 4. Cost (measured 2026-10-26 on this repo)
 
@@ -284,9 +311,9 @@ Each fix gets a mutation check.
 - Stamps are unauthenticated (prior R2): display only.
 - A wrapper script that calls session_worktree without the outer command naming it
   lands with `turn=none` and is on Canvas only.
-- A detached session worktree is not found; its edits have no row.
-- A rebase of an unlanded session worktree after creation can show other sessions'
-  lines in the files this turn touched (landed rows are exact).
+- A detached session worktree whose `<name>` no longer has its branch (deleted by
+  hand) is not found.
+- A rebase whose replay of the turn's start conflicts leaves that tree's rows off (§3.6).
 - The injected-turn window (first entry) is not measured; review 4: unbounded while
   the unit is busy, and only a land started inside it is affected.
 

@@ -16,7 +16,12 @@ real shell, the real ``run_owner_gate``, the real ``TurnChanges``):
   carrying both;
 - 10: a session worktree present at the start, edited, not landed: rows; one created
   during the turn: rows from its creation commit; another session's worktree: none;
-- 11: two units of one session hand their own turn ids.
+- 11: two units of one session hand their own turn ids;
+- 12 (§3.6): a detached session worktree of this session has rows; a detached one of
+  another session (its ``<name>`` has another session's branch) has none;
+- 13 (§3.6): after ``git rebase <base>`` in an unlanded session worktree (present at the
+  start, or created in the turn) a row holds only this turn's lines, not what the base
+  gained; a start that cannot be replayed onto the new base leaves the tree off.
 """
 from __future__ import annotations
 
@@ -322,3 +327,90 @@ def test_11_two_units_of_one_session_hand_their_own_turn_ids():
     assert f"SWARM_TURN_ID={T1};" in _gate(cmd, a)
     assert f"SWARM_TURN_ID={T0};" in _gate(cmd, b)
     assert asi.valid_turn_id(T1) and asi.valid_turn_id(T0)
+
+
+# ── 12 / 13: detached and rebased session worktrees (§3.6) ───────────────────
+
+TEN = "".join(f"l{i} = {i}\n" for i in range(1, 11))
+
+
+def _line(text, n, new):
+    lines = text.splitlines(keepends=True)
+    lines[n - 1] = new + "\n"
+    return "".join(lines)
+
+
+def _main_commit(env, text):
+    """Another session lands a change to a.py on main."""
+    (env["repo"] / "a.py").write_text(text)
+    _g(env["repo"], "add", "-A")
+    _g(env["repo"], "-c", "core.hooksPath=/dev/null", "commit", "-qm", "other")
+
+
+def _rows(block):
+    return [(f["path"], f["added"], f["deleted"]) for f in (block or {}).get("files", [])]
+
+
+def test_12_a_detached_session_worktree_present_at_the_start_has_rows(env):
+    async def go():
+        wt = _create(env, "s12")
+        _g(wt, "checkout", "-q", "--detach")
+        t = await _turn(_ctx())
+        (wt / "a.py").write_text("a = 2\n")
+        _write_tool(t, wt / "a.py")
+        return await t.finish()
+    assert _rows(asyncio.run(go())) == [("a.py", 1, 1)]
+
+
+def test_12_another_sessions_detached_worktree_has_no_rows(env):
+    async def go():
+        wt = _create(env, "s12o", sid=OTHER)
+        _g(wt, "checkout", "-q", "--detach")
+        t = await _turn(_ctx())
+        (wt / "a.py").write_text("a = 2\n")
+        _write_tool(t, wt / "a.py")
+        return await t.finish()
+    assert asyncio.run(go()) is None
+
+
+def test_13_a_rebase_in_the_turn_shows_only_this_turns_lines(env):
+    """Present at the start: an earlier turn changed l10; during this turn another
+    session's l1 lands on main, the worktree rebases, and this turn changes l5."""
+    _main_commit(env, TEN)
+    async def go():
+        wt = _create(env, "s13")
+        _commit(wt, "a.py", _line(TEN, 10, "l10 = 'earlier turn'"))
+        t = await _turn(_ctx())
+        _main_commit(env, _line(TEN, 1, "l1 = 'other session'"))
+        _g(wt, "-c", "core.hooksPath=/dev/null", "rebase", "-q", "main")
+        (wt / "a.py").write_text(_line((wt / "a.py").read_text(), 5, "l5 = 'this turn'"))
+        _write_tool(t, wt / "a.py")
+        return await t.finish()
+    assert _rows(asyncio.run(go())) == [("a.py", 1, 1)]
+
+
+def test_13_a_worktree_created_and_rebased_in_the_turn_shows_only_its_lines(env):
+    _main_commit(env, TEN)
+    async def go():
+        t = await _turn(_ctx())
+        wt = _create(env, "s13b")
+        _commit(wt, "a.py", _line(TEN, 5, "l5 = 'this turn'"))
+        _write_tool(t, wt / "a.py")
+        _main_commit(env, _line(TEN, 1, "l1 = 'other session'"))
+        _g(wt, "-c", "core.hooksPath=/dev/null", "rebase", "-q", "main")
+        return await t.finish()
+    assert _rows(asyncio.run(go())) == [("a.py", 1, 1)]
+
+
+def test_13_a_start_that_cannot_be_replayed_leaves_the_tree_off(env, tmp_path):
+    """_rebased_start: the turn-start state conflicts with what the base gained."""
+    _main_commit(env, TEN)
+    repo = str(env["repo"])
+    head_s = _g(repo, "rev-parse", "HEAD").strip()
+    (env["repo"] / "a.py").write_text(_line(TEN, 1, "l1 = 'uncommitted at start'"))
+    start = tc._tree(repo)
+    _g(repo, "checkout", "-q", "--", "a.py")
+    _main_commit(env, _line(TEN, 1, "l1 = 'base'"))
+    head_e = _g(repo, "rev-parse", "HEAD").strip()
+    assert tc._rebased_start(repo, start, head_s, head_s, head_e) is None
+    assert tc._rebased_start(repo, start, head_s, head_s, head_s) == start
