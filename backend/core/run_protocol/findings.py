@@ -242,8 +242,13 @@ def _resolved_ref(ref: Any) -> bool:
     return False
 
 
-def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[dict[str, Any]]:
-    """Project canonical findings from a complete validated event chain."""
+def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
+         r2_silence: bool = True) -> list[dict[str, Any]]:
+    """Project canonical findings from a complete validated event chain.
+
+    *r2_silence* False skips the end-of-chain rule that turns an R2 target with no
+    answer yet into OPEN: the state an R2 answer being recorded now is applied to
+    (the answer recorder asks which of its status lines fit, ced6caa3)."""
     errors = ev.verify_chain(list(events), authority)
     if errors:
         raise FindingError(f"invalid event chain: {errors[0]}")
@@ -312,7 +317,7 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority) -> list[
                 raise FindingError("R2 handout roster does not match this expert's findings")
             r2_targets.update(ids)
     # R2 silence never closes: only exact canonical IDs listed in the handout become OPEN.
-    for canonical_id in sorted(r2_targets - answered):
+    for canonical_id in sorted(r2_targets - answered) if r2_silence else ():
         row = findings[canonical_id]
         if row["status"] not in ("accepted", "refuted"):
             row["status"], row["r2_status"] = "open", "OPEN"

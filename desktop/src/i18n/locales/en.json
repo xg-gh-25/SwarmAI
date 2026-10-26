@@ -301,10 +301,8 @@
         }
       },
       "deliverables": {
-        "open": "Open in Canvas",
         "copyPath": "Copy path",
         "copied": "Copied",
-        "shownAbove": "shown above",
         "openLink": "Open link"
       },
       "summary": {

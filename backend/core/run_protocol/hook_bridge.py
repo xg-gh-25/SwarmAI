@@ -267,8 +267,11 @@ def _applicable_statuses(store: AuditStore, parsed) -> "tuple[list, list]":
         return [], notes
     from core.run_protocol import findings
     try:
+        # the state this answer's status lines apply to: before the "R2 silence is
+        # OPEN" rule, which would count this very answer's targets as unanswered
         current = {row["canonical_id"]: row["status"]
-                   for row in findings.fold(store.read_events(), store.authority)}
+                   for row in findings.fold(store.read_events(), store.authority,
+                                            r2_silence=False)}
     except findings.FindingError:
         # a log the ledger cannot fold refuses every finding write anyway (the engine's
         # store validator); nothing to filter against, the write reports the error
