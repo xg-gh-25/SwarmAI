@@ -98,6 +98,7 @@ async def get_eval_health():
     svc = get_eval_service()
     health = svc.get_health()
     health["intelligence_velocity"] = svc.compute_intelligence_velocity(detail=True)
+    health["follow_ups"] = svc.get_follow_ups()
     return health
 
 
@@ -654,6 +655,9 @@ async def get_archive_search(q: str = "", source: str = "memory"):
 # ─── Reports (HTML) ───────────────────────────────────────────────────────
 
 
+ROUTINE_REPORT_TRIGGERS = frozenset({"scheduled", "deploy"})
+
+
 @router.get("/reports")
 async def list_reports():
     """List available HTML eval reports (newest first)."""
@@ -672,10 +676,15 @@ async def list_reports():
         out = []
         for f in sorted(reports_dir.glob("*.html"), reverse=True):
             stat = f.stat()
+            trigger = f.stem.split("_", 1)[1] if "_" in f.stem else ""
             out.append({
                 "filename": f.name,
                 "sizeBytes": stat.st_size,
                 "modified": stat.st_mtime,
+                "trigger": trigger,
+                # scheduled / deploy reports are listed; hand-run and debug ones
+                # sit behind "show all" (design eval-as-product §3.4)
+                "routine": trigger in ROUTINE_REPORT_TRIGGERS,
             })
         return out
 

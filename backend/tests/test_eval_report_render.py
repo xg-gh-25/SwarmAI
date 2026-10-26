@@ -209,3 +209,23 @@ def test_generate_report_from_snapshot_has_new_sections(snapshot, golden, tmp_pa
     # map defined-but-unused) — proves _dim_snapshot_key feeds the render path.
     assert "各维度趋势" in html or "Per-dimension trend" in html
     assert "mini-spark" in html
+
+
+def test_the_report_opens_with_the_follow_up_list(tmp_path):
+    """The first section is build_follow_ups' list (design eval-as-product §3.4)."""
+    golden = {"cases": [{"id": "P1", "category": "recall", "dimension": "capability",
+                         "tier": "stable", "_origin": "product",
+                         "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}]}
+    run = {"run_id": "r1", "triggered_by": "canary", "triggered_at": "2026-10-26T00:00:00+00:00",
+           "overall_score": 0.0, "dimensions": {}, "total_cases": 1, "cases_passed": 0,
+           "cases_failed": 1, "cases_skipped": 0, "cases_error": 0, "scored_count": 1,
+           "duration_seconds": 1, "bvt": {"total": 1, "green": False},
+           "cases": [{"id": "P1", "status": "failed", "eval_method": "programmatic",
+                      "notes": "Expected 'X_OK' not found"}]}
+    html = Path(generate_html_report(run, golden, tmp_path)).read_text()
+    body = html[html.index("<body>"):]
+    later = [body.index(m) for m in ('class="growth', 'class="delta-section', 'class="matrix',
+                                       'class="dimension', 'class="footer"') if m in body]
+    assert later and body.index('class="follow-ups"') < min(later)
+    assert "A product check failed: Recall finds memory" in body
+    assert "Next Action" not in body

@@ -367,3 +367,21 @@ class TestBehaviorRedSegregation:
                                notifier=spy, root=tmp_path)
         assert r["status"] == "regression"
         assert any("infra degraded" in x for x in r["reasons"]), "real deterministic collapse must alert"
+
+
+def test_default_runner_writes_the_html_report(tmp_path, monkeypatch):
+    """The scheduled full run leaves a report for the Reports tab (design
+    eval-as-product §3.4): before this, only hand-run evals wrote one."""
+    import jobs.handlers.eval_scheduled as mod
+    import scripts.eval_runner as er
+
+    result = {"run_id": "r", "cases": []}
+    written = []
+    monkeypatch.setattr(er, "load_merged_golden_set", lambda root: {"cases": []})
+    monkeypatch.setattr(er, "_load_history", lambda root: [])
+    monkeypatch.setattr(er, "run_eval", lambda *a, **k: result)
+    monkeypatch.setattr(er, "write_run", lambda r, root: None)
+    monkeypatch.setattr(er, "generate_html_report", lambda r, gs, root: written.append(r))
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("no daemon")))
+    out = mod._default_runner(tmp_path)
+    assert out["this"] is result and written == [result]

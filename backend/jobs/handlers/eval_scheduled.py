@@ -120,7 +120,7 @@ def _default_runner(root: Path) -> dict:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from scripts.eval_runner import (
-        load_merged_golden_set, run_eval, write_run,
+        generate_html_report, load_merged_golden_set, run_eval, write_run,
         _load_history as load_history,
     )
     gs = load_merged_golden_set(root)
@@ -131,6 +131,10 @@ def _default_runner(root: Path) -> dict:
     # default stays False (safe); only this caller + CLI --include-behavior opt in.
     result = run_eval(gs, "scheduled", None, root, verify_teeth=True, include_behavior=True)
     write_run(result, root)
+    try:   # the report users open from the Reports tab (its first section: follow-ups)
+        generate_html_report(result, gs, root)
+    except Exception as e:  # noqa: BLE001 — the run and its alert stand without it
+        logger.warning("eval-scheduled report failed (non-fatal): %s", e)
     # Refresh the daemon's in-memory EvalService singleton so the GUI
     # (/api/eval/health + /history) reflects this run — write_run only touches
     # disk (Gate-1 D: the deleted CLI job did this via curl /api/eval/reload).
@@ -217,9 +221,15 @@ def run_eval_scheduled(
     reasons = []
     if bvt_red:
         reasons.append(f"BVT RED: {bvt.get('passed')}/{bvt.get('total')} "
-                       f"(failed={bvt.get('failed')}, error={bvt.get('error')})")
+                       f"(failed={bvt.get('failed')}, error={bvt.get('error')}, timeout={bvt.get('timeout', 0)})")
     if drift:
         reasons.append(f"score drift: {base_score}% → {score}% (>{_DRIFT_TOLERANCE} drop)")
+    # A check that did not finish is listed on its own: not scored, not a judge-infra
+    # collapse (it is usually a loaded machine), but BVT stays red above, so a real
+    # hang is not hidden.
+    timed_out = [c.get("id") for c in det_cases if c.get("status") == "timeout"]
+    if timed_out:
+        reasons.append(f"⏱️ {len(timed_out)} case(s) timed out: {', '.join(timed_out[:5])}")
 
     # Coverage collapse — judge infra (Bedrock/creds) degraded. DETERMINISTIC-ONLY
     # (behavior spawn-errors are non-deterministic infra flakes, not judge-infra

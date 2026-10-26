@@ -207,12 +207,14 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
     deterministic) AND eval_method != 'llm'. green requires:
       total > 0  (non-empty — empty set is RED, never vacuous-green)
       AND passed > 0  (all-skipped is RED, not green)
-      AND failed == 0 AND error == 0  (any regression = RED).
+      AND failed == 0 AND error == 0 AND timeout == 0  (any regression = RED;
+      a timeout is not scored, but a check that never finished is not proven to
+      work, and a hang is exactly what some of these cases guard).
     """
     from scripts.golden_case_validator import compute_case_stamp
 
     by_id = {r["id"]: r for r in results}
-    total = passed = failed = error = skipped = 0
+    total = passed = failed = error = skipped = timeout = 0
     for c in cases:
         if c.get("eval_method") == "llm":
             continue
@@ -242,10 +244,12 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
             error += 1
         elif st == "skipped":
             skipped += 1
-    green = total > 0 and passed > 0 and failed == 0 and error == 0
+        elif st == "timeout":
+            timeout += 1
+    green = total > 0 and passed > 0 and failed == 0 and error == 0 and timeout == 0
     return {
         "total": total, "passed": passed, "failed": failed,
-        "error": error, "skipped": skipped, "green": green,
+        "error": error, "skipped": skipped, "timeout": timeout, "green": green,
     }
 
 
@@ -265,8 +269,9 @@ def compute_redline(cases: list, results: list[dict]) -> dict:
       - Iterates ONLY cases where ``case.get("redline") is True`` (explicit opt-in;
         redline=false / absent is NOT a red-line). NO mechanism filter — a red-line
         gates however it is judged.
-      - status failed/error -> a violation (an ERROR is a violation, not a free
-        pass: a red-line that cannot even run is not proven safe).
+      - status failed/error/timeout -> a violation (an ERROR or a TIMEOUT is a
+        violation, not a free pass: a red-line that cannot even finish is not
+        proven safe).
       - status skipped -> reported in ``skipped[]`` but NOT a violation. Fail-closed
         on FAIL/ERROR, never on not-run — an llm red-line legitimately skips in a
         programmatic_only canary run; flipping the gate red there would false-block
@@ -287,7 +292,7 @@ def compute_redline(cases: list, results: list[dict]) -> dict:
             continue
         total += 1
         st = by_id.get(c["id"], {}).get("status")
-        if st in ("failed", "error"):
+        if st in ("failed", "error", "timeout"):
             violations.append({"id": c["id"], "status": st,
                                "eval_method": c.get("eval_method", "programmatic")})
         elif st == "skipped":
@@ -652,7 +657,7 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
         note = f"Output contains '{expected}'" if expected else "Command exited 0"
         return {"status": "passed", "notes": note}
     except subprocess.TimeoutExpired:
-        return {"status": "failed", "notes": f"Command timed out ({cmd_timeout}s)"}
+        return {"status": "timeout", "notes": f"Command timed out ({cmd_timeout}s)"}
     except Exception as e:
         return {"status": "failed", "notes": f"Error: {str(e)[:200]}"}
 
@@ -702,7 +707,7 @@ def _verify_canary_teeth(case: dict, expected: str, root: Path,
     try:
         neg = _run_case_command(negative_command, case, root, cmd_timeout)
     except subprocess.TimeoutExpired:
-        return {"status": "failed", "notes": f"negative_command timed out ({cmd_timeout}s) — teeth inconclusive"}
+        return {"status": "timeout", "notes": f"negative_command timed out ({cmd_timeout}s) — teeth inconclusive"}
     except Exception as e:
         return {"status": "failed", "notes": f"negative_command errored: {str(e)[:150]} — teeth inconclusive"}
 
@@ -773,7 +778,7 @@ def eval_runtime_health(case: dict, root: Path, *, timeout_override: int | None 
                       f"expected '{expected}'. Output: {output[:200]}")
         }
     except subprocess.TimeoutExpired:
-        return {"status": "failed", "notes": f"runtime_health command timed out ({cmd_timeout}s)"}
+        return {"status": "timeout", "notes": f"runtime_health command timed out ({cmd_timeout}s)"}
     except Exception as e:
         return {"status": "error", "notes": f"runtime_health error: {str(e)[:200]}"}
 
@@ -1829,10 +1834,12 @@ def evaluate_case(case: dict, root: Path, *,
 def compute_scores(cases: list, results: list[dict]) -> dict:
     """Compute overall score and per-dimension scores."""
     # Only count cases with definitive results (passed/failed).
-    # "skipped" = evaluator can't determine; "error" = misconfiguration.
-    # Neither counts toward pass/fail score.
+    # "skipped" = evaluator can't determine; "error" = misconfiguration;
+    # "timeout" = the check did not finish (often a loaded machine). None of them
+    # counts toward the pass/fail score; compute_bvt still treats error and
+    # timeout as red.
     scored = [(c, r) for c, r in zip(cases, results)
-              if r["status"] not in ("skipped", "error")]
+              if r["status"] not in ("skipped", "error", "timeout")]
 
     if not scored:
         return {"overall": 0.0, "dimensions": {}, "scored_count": 0, "skipped_count": len(results)}
@@ -1963,6 +1970,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         "cases_failed": sum(1 for r in results if r["status"] == "failed"),
         "cases_skipped": sum(1 for r in results if r["status"] == "skipped"),
         "cases_error": sum(1 for r in results if r["status"] == "error"),
+        "cases_timeout": sum(1 for r in results if r["status"] == "timeout"),
         "scored_count": scores["scored_count"],
         "duration_seconds": round(sum(r.get("duration_ms", 0) for r in results) / 1000, 2),
         # Git-bound gate fields (run_69b1c644 Cycle 4). code_digest binds the
@@ -2177,11 +2185,13 @@ def _run_is_comparable(run: dict) -> bool:
     Comparability is by COVERAGE, not trigger name (Gate-1 fix): a canary is
     programmatic-only (scored_count << total_cases); a single-case manual probe
     is total_cases=1. trigger 'manual-full' does not exist as a value. So the
-    reliable discriminator is scored_count / total_cases and a minimum size.
+    reliable discriminator is scored_count / total_cases and a minimum size. The
+    minimum stays below the product set's size, so a fresh install's full runs
+    (product cases only) are comparable too.
     """
     total = run.get("total_cases") or 0
     scored = run.get("scored_count") or 0
-    if total < 50:  # single-case / tiny probe runs are not comparable
+    if total < 20:  # single-case / tiny probe runs are not comparable
         return False
     return scored / total >= 0.9  # total>=50 here, so no ZeroDivision
 
@@ -2298,6 +2308,38 @@ def compare_repeats(history: list[dict], runs: list[dict]) -> dict:
     return out
 
 
+
+def _report_follow_ups(run_result: dict, history: list, golden_set: dict, root: Path) -> list:
+    """The report's first section: core.eval_followups.build_follow_ups over this run
+    and the earlier ones (newest first), the same list the dashboard shows."""
+    from core.eval_followups import build_follow_ups
+
+    runs = [run_result] + [h for h in reversed(history) if h.get("run_id") != run_result.get("run_id")]
+    try:
+        online = json.loads((Path(root) / ".context" / ".session-quality-state.json")
+                            .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        online = None
+    return build_follow_ups(runs, (golden_set or {}).get("cases") or [],
+                            online if isinstance(online, dict) else None,
+                            shadowed=(golden_set or {}).get("shadowed_private_ids") or ())
+
+
+def _render_follow_ups(items: list) -> str:
+    esc = html_mod.escape
+    if not items:
+        return ('<div class="follow-ups"><h2>Suggested follow-up · 需要你注意的事</h2>'
+                '<p class="fu-none">Nothing needs handling · 没有需要处理的事</p></div>')
+    rows = []
+    for i in items:
+        sub = " · ".join(p for p in (i.get("why") or "", i["action"]["en"]) if p)
+        rows.append(f'<div class="fu fu-{esc(i["severity"])}"><div class="fu-what">{esc(i["what"]["en"])}'
+                    f' <span class="fu-sub">{esc(i["what"]["zh"])}</span></div>'
+                    f'<div class="fu-sub">{esc(sub)}</div></div>')
+    return ('<div class="follow-ups"><h2>Suggested follow-up · 需要你注意的事</h2>'
+            + "".join(rows) + "</div>")
+
+
 def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path:
     """Generate purpose-driven HTML report organized by 6 cognitive dimensions.
 
@@ -2306,7 +2348,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     - Trend: streak count + history sparkline
     - Expandable case details per dimension
     - Staleness warning for LLM dimensions
-    - Actionable next steps footer
+    - First section: Suggested follow-up (core.eval_followups.build_follow_ups)
     """
 
     cases = golden_set["cases"]
@@ -2352,6 +2394,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         failed = 0
         skipped = 0
         errored = 0
+        timed_out = 0
         failures = []
         all_case_details = []
         for c in dim_cases:
@@ -2368,6 +2411,10 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
                 errored += 1
                 failures.append({"id": c["id"], "title": c.get("title", "(untitled)"),
                                  "notes": "🔴 ERROR: " + r.get("notes", "judge infra failed")})
+            elif status == "timeout":
+                timed_out += 1
+                failures.append({"id": c["id"], "title": c.get("title", "(untitled)"),
+                                 "notes": "⏱️ TIMEOUT: " + r.get("notes", "did not finish")})
             else:
                 skipped += 1
             all_case_details.append({
@@ -2380,6 +2427,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         dim_stats.append({
             **dim,
             "errored": errored,
+            "timed_out": timed_out,
             "passed": passed,
             "failed": failed,
             "skipped": skipped,
@@ -2608,7 +2656,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         # Expandable case list
         case_list_html = f'<details class="case-details"><summary>{d["case_count"]} cases in this dimension</summary><ul class="case-list">'
         for c in d["all_cases"]:
-            icon = {"passed": "✅", "failed": "❌", "error": "🔴"}.get(c["status"], "⏸️")
+            icon = {"passed": "✅", "failed": "❌", "error": "🔴", "timeout": "⏱️"}.get(c["status"], "⏸️")
             _em = c["eval_method"]
             _label = "behavior-observed" if _em == "behavior" else ("config-static" if _em in ("programmatic", "llm") else _em)
             method_badge = f'<span class="badge badge-{_em}">{_label}</span>'
@@ -2686,39 +2734,8 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     </div>
     '''
 
-    # Next action
-    # ── Failure triage (C044): split failures into case-broken vs agent-regressed ──
-    # A red case is NOT automatically a regression. If the judge note says the
-    # referenced rule/memory is absent-from-context or points at the wrong entry,
-    # the CASE is broken (audit it — do NOT "make the agent green"). Only genuine
-    # behavioral degradation is a regression. Default = regressed (fail-safe).
-    failed_results = [r for r in run_result.get("cases", []) if r.get("status") == "failed"]
-    triage = {"case-broken": [], "regressed": []}
-    for r in failed_results:
-        triage[_classify_failure(r.get("notes", ""))].append(r.get("id", "?"))
-    n_broken = len(triage["case-broken"])
-    n_regressed = len(triage["regressed"])
-
-    next_action = ""
-    if total_failed > 0:
-        broken_line = (f'<p>🔧 <strong>{n_broken} case-broken</strong> — 引用的 rule/memory 在 context 中缺失或指向错误条目。'
-                       f'<em>审查 case 有效性（C044 五轴），不是把 agent 改绿</em>: {", ".join(html_mod.escape(x) for x in triage["case-broken"][:8])}</p>'
-                       if n_broken else "")
-        regressed_line = (f'<p>⚠️ <strong>{n_regressed} regressed</strong> — 真实行为退化，修复 agent 行为: '
-                          f'{", ".join(html_mod.escape(x) for x in triage["regressed"][:8])}</p>'
-                          if n_regressed else "")
-        next_action = f'''<div class="next-action next-action-fix">
-            <h4>Next Action — {n_broken} case-broken · {n_regressed} regressed</h4>
-            {broken_line}
-            {regressed_line}
-        </div>'''
-    elif pending > 0:
-        next_action = f'''<div class="next-action">
-            <h4>Next Action</h4>
-            <p>{pending} case(s) not run this cycle (incl. behavior-tier). Run a full sweep to evaluate them:</p>
-            <code>python backend/scripts/eval_runner.py run --trigger monthly</code>
-            <p class="action-meta">behavior tier proves the agent USES memory/DDD — not covered by programmatic+judge.</p>
-        </div>'''
+    # First section: what needs the user's attention (eval_followups).
+    follow_html = _render_follow_ups(_report_follow_ups(run_result, history, golden_set, root))
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -2798,10 +2815,13 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 .method-card p {{ font-size: 0.78rem; color: var(--muted); }}
 
 /* Next action */
-.next-action {{ background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.3); border-radius: 10px; padding: 1rem 1.25rem; margin-top: 1.5rem; }}
-.next-action h4 {{ font-size: 0.95rem; margin-bottom: 0.4rem; color: var(--accent); }}
-.next-action p {{ font-size: 0.85rem; margin: 0.3rem 0; }}
-.next-action code {{ background: var(--bg); padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.8rem; display: block; margin: 0.5rem 0; }}
+.follow-ups {{ margin-bottom: 2rem; }}
+.follow-ups h2 {{ font-size: 1rem; margin-bottom: 0.75rem; }}
+.follow-ups .fu {{ margin: 0 0 0.9rem; }}
+.follow-ups .fu-what {{ font-size: 0.9rem; }}
+.follow-ups .fu-high .fu-what {{ font-weight: 700; color: #ef4444; }}
+.follow-ups .fu-sub {{ font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }}
+.follow-ups .fu-none {{ font-size: 0.85rem; color: var(--muted); }}
 .action-meta {{ font-size: 0.75rem; color: var(--muted); }}
 .next-action-fix {{ border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.08); }}
 .next-action-fix h4 {{ color: var(--red); }}
@@ -2866,12 +2886,12 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
         {sparkline_svg}
     </div>
 
+    {follow_html}
     {growth_html}
     {delta_html}
     {matrix_html}
     {dim_sections}
     {methodology_html}
-    {next_action}
 
     <div class="footer">
         <p>Generated: {triggered_at} UTC | Golden Set: <strong>{golden_size}</strong> defined · <strong>{executed}</strong> run this cycle · <strong>{pending}</strong> pending{f" · {orphans} orphan" if orphans else ""} | {len(history)} historical runs ({non_comparable_excluded} non-comparable excluded from trend)</p>

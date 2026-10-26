@@ -242,6 +242,7 @@ class EvalService:
                 "cases_failed": latest.get("cases_failed", 0),
                 "cases_skipped": latest.get("cases_skipped", 0),
                 "cases_error": latest.get("cases_error", 0),
+                "cases_timeout": latest.get("cases_timeout", 0),
             },
             "total_cases": len(self._cases),
             "trend": trend,
@@ -260,6 +261,7 @@ class EvalService:
                 "cases_failed": r.get("cases_failed"),
                 "cases_skipped": r.get("cases_skipped"),
                 "cases_error": r.get("cases_error", 0),
+                "cases_timeout": r.get("cases_timeout", 0),
                 "duration_seconds": r.get("duration_seconds"),
                 "dimensions": r.get("dimensions", {}),
             }
@@ -294,6 +296,27 @@ class EvalService:
             "dimension": d.get("dimension"),
             "reason": reason,
         }
+
+    def get_follow_ups(self) -> list[dict]:
+        """What needs the user's attention (core.eval_followups.build_follow_ups):
+        the same list the HTML report's first section shows."""
+        from core.eval_followups import build_follow_ups
+
+        return build_follow_ups(self._runs, self._cases, self._online_state(),
+                                shadowed=self.shadowed_private_ids)
+
+    def _online_state(self) -> dict | None:
+        """The online-scoring state file as written, or None when absent / unreadable."""
+        import json as _json
+
+        if not self._workspace_root:
+            return None
+        path = self._workspace_root / ".context" / ".session-quality-state.json"
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
 
     def get_session_quality(self) -> dict:
         """Layer③ overview: the latest session-quality run summary + weekly

@@ -7,6 +7,7 @@
  * Data fetched from /api/eval/* endpoints via TanStack Query.
  */
 import { useState, useEffect, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 import { getApiBaseUrl } from '../services/tauri';
@@ -42,6 +43,17 @@ interface EvalHealth {
   total_cases: number;
   trend: { delta: number; direction: string } | null;
   intelligence_velocity?: IntelligenceVelocity;
+  follow_ups?: FollowUp[];
+}
+
+/** One "needs your attention" item (backend core/eval_followups.build_follow_ups). */
+export interface FollowUp {
+  severity: 'high' | 'medium' | 'low';
+  rule: number;
+  what: { en: string; zh: string };
+  why: string;
+  action: { en: string; zh: string };
+  case_ids: string[];
 }
 
 interface EvalRun {
@@ -214,6 +226,7 @@ interface RunDetailData {
   cases_failed?: number;
   cases_skipped?: number;
   cases_error?: number;
+  cases_timeout?: number;
   duration_seconds?: number;
   cases?: RunCaseResult[];
 }
@@ -325,6 +338,8 @@ function OverviewTab() {
           {runCanary.isSuccess && `✓ Canary complete: ${(runCanary.data as { overall_score?: number })?.overall_score}%`}
         </div>
       )}
+
+      <FollowUps items={health.follow_ups} />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-5 gap-3 mb-6">
@@ -1003,7 +1018,7 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
     return m;
   }, [gs?.cases]);
 
-  const STATUS_ORDER = ['failed', 'error', 'skipped', 'passed'];
+  const STATUS_ORDER = ['failed', 'error', 'timeout', 'skipped', 'passed'];
   const grouped = useMemo(() => {
     const m = new Map<string, RunCaseResult[]>();
     for (const c of run?.cases ?? []) {
@@ -1034,6 +1049,7 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
               <span className="text-[var(--color-status-error)]">{run.cases_failed ?? 0} failed</span>
               <span className="text-[var(--color-text-muted)]">{run.cases_skipped ?? 0} skipped</span>
               {(run.cases_error ?? 0) > 0 && <span className="text-[var(--color-status-warning)]">{run.cases_error} error</span>}
+              {(run.cases_timeout ?? 0) > 0 && <span className="text-[var(--color-status-warning)]">{run.cases_timeout} timed out</span>}
             </div>
             {/* Per-case grouped by status */}
             {grouped.map(([status, cases]) => (
@@ -1280,12 +1296,50 @@ function ContextHealthTab() {
   );
 }
 
+// ─── Suggested follow-up ─────────────────────────────────────────────────────
+// What needs the user's attention, at the top of Overview. The list is decided by
+// the backend (the HTML report shows the same one); this only renders it: one line
+// per item, the high ones in the error colour, why + what to do muted beneath.
+
+export function FollowUps({ items }: { items?: FollowUp[] }) {
+  const { i18n } = useTranslation();
+  const lang: 'en' | 'zh' = i18n?.language?.startsWith('zh') ? 'zh' : 'en';
+  if (!items) return null;
+  return (
+    <section className="mb-6" data-testid="eval-follow-ups">
+      <h3 className="text-small font-semibold mb-2">
+        {lang === 'zh' ? '需要你注意的事' : 'Suggested follow-up'}
+      </h3>
+      {items.length === 0 ? (
+        <p className="text-small text-[var(--color-text-muted)]">
+          {lang === 'zh' ? '没有需要处理的事' : 'Nothing needs handling'}
+        </p>
+      ) : (
+        <ul className="space-y-2.5">
+          {items.map((f, i) => (
+            <li key={`${f.rule}-${i}`} data-severity={f.severity}>
+              <div className={`text-small ${f.severity === 'high' ? 'font-semibold text-[var(--color-status-error)]' : ''}`}>
+                {f.what[lang]}
+              </div>
+              <div className="text-meta text-[var(--color-text-muted)]">
+                {[f.why, f.action[lang]].filter(Boolean).join(' · ')}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // ─── Reports Tab ─────────────────────────────────────────────────────────────
 
 interface EvalReport {
   filename: string;
   sizeBytes: number;
   modified: number;
+  trigger?: string;
+  routine?: boolean;
 }
 
 function useEvalReports() {
@@ -1297,7 +1351,12 @@ function useEvalReports() {
 }
 
 export function ReportsTab() {
-  const { data: reports, isLoading, isError } = useEvalReports();
+  const { data: allReports, isLoading, isError } = useEvalReports();
+  // Scheduled / deploy reports by default; hand-run and debug ones behind "show all".
+  const [showAll, setShowAll] = useState(false);
+  const routine = (allReports ?? []).filter((r) => r.routine);
+  const reports = showAll ? allReports : routine;
+  const hidden = (allReports?.length ?? 0) - routine.length;
 
   // Reports open in the SYSTEM BROWSER, not an in-app iframe. srcDoc rendering in
   // the Tauri WebKit webview proved unreliable, and rendering arbitrary report HTML
@@ -1311,21 +1370,31 @@ export function ReportsTab() {
 
   if (isError) return <ErrorState message="Failed to load reports. Is the backend running?" />;
   if (isLoading) return <Loading />;
+  const toggle = hidden > 0 && (
+    <button onClick={() => setShowAll((v) => !v)} className="text-meta text-[var(--color-primary)] hover:underline"
+            data-testid="reports-show-all">
+      {showAll ? 'Show scheduled only' : `Show all (${hidden} hand-run)`}
+    </button>
+  );
   if (!reports || reports.length === 0) {
     return (
       <div className="max-w-5xl mx-auto p-6">
         <p className="text-body text-[var(--color-text-muted)]">
-          No HTML eval reports found. Run a full eval sweep to generate reports.
+          No scheduled eval reports yet. The full run writes one every time it runs.
         </p>
+        {toggle && <div className="mt-2">{toggle}</div>}
       </div>
     );
   }
 
   return (
     <div className="max-w-5xl mx-auto p-6">
-      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">
-        Eval Reports ({reports.length})
-      </h3>
+      <div className="flex items-baseline justify-between mb-4">
+        <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide">
+          Eval Reports
+        </h3>
+        {toggle}
+      </div>
       <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
         <table className="w-full text-small">
           <thead>
@@ -2094,6 +2163,7 @@ function StatusBadge({ status }: { status?: string }) {
   if (!status) return <span className="text-meta text-[var(--color-text-muted)]">—</span>;
   const cls = status === 'passed' ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]'
     : status === 'failed' ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] text-[var(--color-status-error)]'
+    : status === 'timeout' || status === 'error' ? 'bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] text-[var(--color-status-warning)]'
     : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
   return <span className={`inline-block px-1.5 py-0.5 rounded text-meta font-semibold uppercase ${cls}`}>{status}</span>;
 }
