@@ -139,3 +139,12 @@ def test_a_path_in_two_repos_resolves_by_the_r1_handout():
     assert _repo_of_finding("x.md", {"a": "t0", "b": "t2"}, {"a": "t1", "b": "t2"}, has) == "b"
     with pytest.raises(EngineError):
         _repo_of_finding("x.md", {"a": "t1", "b": "t2"}, {"a": "t1", "b": "t2"}, has)
+
+
+def test_a_docs_fix_in_a_file_that_also_changed_code_closes_as_reviewed_only(rig):
+    finding_id, _ = _at_r2(rig, "docs", "backend/core/mod.py", 1, {
+        "backend/core/mod.py": MOD.replace("the old note", "the new note").replace(
+            "a + b", "b + a")})
+    out = _prove(rig, finding_id)
+    assert out.get("ok") is True, out
+    assert _status(rig, finding_id) == "closed_unproven"     # LOW: counts as closed

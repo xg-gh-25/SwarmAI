@@ -249,7 +249,14 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
         if row["r2_status"] != "RESOLVED" or result != "asserted" \
                 or payload.get("touches_finding") is not True:
             raise FindingError("diff assertion lacks matching R2 and hunk")
-        if row["kind"] == "docs" and payload.get("touches_executable") is not False:
+        executable = payload.get("touches_executable") is not False
+        if row["kind"] == "docs" and executable and payload.get("basis") == "file":
+            # judged on the file (R2 saw its whole diff since R1): the same file also
+            # changed code, so the docs fix closes like a reviewed-only one (a HIGH
+            # stays open; design 2026-10-26-pipeline-review-closure §2.3 point 4)
+            row["status"] = "closed_unproven"
+            return
+        if row["kind"] == "docs" and executable:
             raise FindingError("docs diff assertion touches or did not classify executable lines")
         row["status"] = rule["state"]
     elif etype == "refuted":
