@@ -970,9 +970,10 @@ cases:
     zh: 跨多个模块的高风险改动，agent 先说明风险，只问一个问题：直接改还是走 pipeline。坏了意味着高风险改动不经确认就开工，或被一堆问题淹没。
   scenario:
     system: swarmai
-    prompt: I want to change how sync retries are scheduled across the Demo app's queue, worker and backoff
-      modules — a cross-module change to the back-off logic. Look at the project docs for where that logic
-      lives, then tell me how you'll proceed. Don't edit anything yet.
+    prompt: 'In the Demo app, give every sync item a priority (high or normal): store it in the saved
+      sync queue, have the worker send high-priority items first, and retry high-priority items at half
+      the normal waits. Look at where that logic lives, then tell me how you''ll proceed. Don''t edit
+      anything yet.'
   expected_trajectory:
   - Grep|Read|Glob
   trajectory_match: any_order
@@ -980,17 +981,18 @@ cases:
   - Read
   - Grep
   - Glob
-  decision_rubric: 'PASS only if the answer treats this as a risky (cross-module) change, says why, and
-    asks ONE question: change it directly or run the pipeline. FAIL if it says the pipeline is mandatory
-    for every code change, plans the edit without asking that question, or asks several open-ended questions
-    instead.'
+  decision_rubric: PASS only if the answer treats this as a risky change (it spans modules and changes
+    the saved queue format), says why, and asks the user once whether to change it directly or run the
+    pipeline. Questions that fill a real gap in the request are fine alongside it. FAIL if it says the
+    pipeline is mandatory for every code change, starts or commits to the edit without asking that question,
+    or asks it more than once.
   evaluators:
   - trajectory_capture
   affected_by:
   - backend/context/AGENT.md
   tier: behavior
   eval_method: behavior
-  validated_by_4gate: f1effdea506c3ff6
+  validated_by_4gate: a1d200da088867fd
 - id: OFF_NO_PADDED_NEXT_STEPS
   category: judgment
   dimension: judgment_quality
