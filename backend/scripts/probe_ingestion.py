@@ -19,6 +19,7 @@ import sqlite3
 from pathlib import Path
 from unittest import mock
 
+from core.ddd_paths import ddd_write_path
 from scripts._probe_kit import run, tempdir, verdict
 
 _LESSON = "[decision] Use atomic temp-file rename for every config write to avoid torn state."
@@ -92,8 +93,7 @@ def _archive_holds(writable: bool) -> tuple[bool, str]:
 
     with tempdir() as d:
         project = d / "Projects" / "Demo"
-        (project / "2-understanding").mkdir(parents=True)
-        (project / "2-understanding" / "IMPROVEMENT.md").write_text(
+        ddd_write_path(project, "IMPROVEMENT.md").write_text(
             "# Improvement\n\n## What Worked\n\n", encoding="utf-8")
         (project / ".artifacts").mkdir()
         if not writable:

@@ -18,6 +18,7 @@ import json
 from argparse import Namespace
 from unittest import mock
 
+from core.ddd_paths import ddd_write_path
 from scripts._probe_kit import arun, run, tempdir, verdict
 
 
@@ -86,7 +87,7 @@ def _noise_verdict(text: str) -> str:
     from scripts.artifact_cli import cmd_ddd_noise
 
     with tempdir() as d:
-        doc = d / "IMPROVEMENT.md"
+        doc = ddd_write_path(d, "IMPROVEMENT.md")
         doc.write_text(text, encoding="utf-8")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -127,8 +128,7 @@ def _cultivate_holds(target_doc_escape: str) -> tuple[bool, str]:
 
     with tempdir() as d:
         project = d / "Projects" / "Demo"
-        (project / "2-understanding").mkdir(parents=True)
-        (project / "2-understanding" / "IMPROVEMENT.md").write_text(
+        ddd_write_path(project, "IMPROVEMENT.md").write_text(
             "# Improvement\n\n## What Worked\n\n", encoding="utf-8")
         outside = d / "AGENT.md"
         outside.write_text("# outside the project\n", encoding="utf-8")
