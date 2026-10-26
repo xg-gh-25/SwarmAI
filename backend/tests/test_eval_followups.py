@@ -87,6 +87,18 @@ def test_rule3_offline_pass_to_fail_only():
     assert 3 not in _rules(build_follow_ups(h, CASES, ONLINE, NOW))
 
 
+def test_rule3_a_new_offline_case_failing_its_first_run_is_listed():
+    h = [_run("scheduled", 1, {"P1": "passed", "B1": "failed"}),
+         _run("scheduled", 15, {"P1": "passed"}),                 # B1 did not exist yet
+         _run("canary", 0, {"P1": "passed"}, full=False)]
+    h.sort(key=lambda r: r["triggered_at"], reverse=True)
+    items = build_follow_ups(h, CASES, ONLINE, NOW)
+    assert _rules(items) == [3] and items[0]["case_ids"] == ["B1"]
+    assert "first run" in items[0]["what"]["en"] and "Corrects a wrong premise" in items[0]["what"]["en"]
+    only = build_follow_ups([r for r in h if r["triggered_at"] != h[2]["triggered_at"]], CASES, ONLINE, NOW)  # first full run
+    assert [i["case_ids"] for i in only if i["rule"] == 3] == [["B1"]]
+
+
 def test_rule4_online_worse_low_and_sampler_error():
     worse = dict(ONLINE, checks={"O1_LANGUAGE": {"rate": 0.3, "examples": [{"title": "Chat A"}]}},
                  trend=[{"week": "2026-W42", "rates": {"O1_LANGUAGE": 0.1}},

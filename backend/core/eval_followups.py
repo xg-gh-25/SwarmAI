@@ -13,7 +13,8 @@ Rules (numbered as in the design):
   1. a quick check (BVT) failed in the latest run that ran it
   2. cases were not measured: an environment error, a timeout, or the same case
      timing out in two runs in a row (possibly really stuck)
-  3. an offline case passed in the previous comparable full run and fails now
+  3. an offline case passed in the previous comparable full run and fails now, or a
+     new offline case (no result in that run) fails on its first full run
   4. online scoring: a check fails more often than the week before, low-scoring
      sessions, or the sampler failed
   5. a line is overdue: quick check > 2 days, full run > 15 days, online > 8 days
@@ -153,21 +154,35 @@ def _not_measured(runs: Sequence[Mapping[str, Any]], by_id) -> list[dict]:
 
 
 def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[dict]:
-    if len(full_runs) < 2:
+    if not full_runs:
         return []
-    now, before = _statuses(full_runs[0]), _statuses(full_runs[1])
-    flipped = [cid for cid, r in now.items()
-               if r.get("eval_method") in ("behavior", "llm") and r.get("status") == "failed"
-               and (before.get(cid) or {}).get("status") == "passed"]
-    if not flipped:
-        return []
-    names = "; ".join(_label(by_id.get(c), c, "en") for c in flipped[:3])
-    names_zh = "；".join(_label(by_id.get(c), c, "zh") for c in flipped[:3])
-    return [_item("medium", 3, f"{len(flipped)} offline case(s) passed last time and fail now: {names}",
-                  f"{len(flipped)} 条离线考题上次通过、这次不通过：{names_zh}",
-                  _first_line(now[flipped[0]].get("notes")),
-                  "Read the agent's answer in the run detail; find which rule it no longer follows.",
-                  "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped)]
+    now = _statuses(full_runs[0])
+    before = _statuses(full_runs[1]) if len(full_runs) > 1 else {}
+    failing = [cid for cid, r in now.items()
+               if r.get("eval_method") in ("behavior", "llm") and r.get("status") == "failed"]
+    # Failing in both runs is not news (rule 6 lists a case that keeps failing).
+    flipped = [c for c in failing if (before.get(c) or {}).get("status") == "passed"]
+    new = [c for c in failing if c not in before]
+    out = []
+
+    def names(ids, lang, sep):
+        return sep.join(_label(by_id.get(c), c, lang) for c in ids[:3])
+    if flipped:
+        out.append(_item("medium", 3, f"{len(flipped)} offline case(s) passed last time and fail now: "
+                                      f"{names(flipped, 'en', '; ')}",
+                         f"{len(flipped)} 条离线考题上次通过、这次不通过：{names(flipped, 'zh', '；')}",
+                         _first_line(now[flipped[0]].get("notes")),
+                         "Read the agent's answer in the run detail; find which rule it no longer follows.",
+                         "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped))
+    if new:
+        out.append(_item("medium", 3, f"{len(new)} new offline case(s) fail on their first run: "
+                                      f"{names(new, 'en', '; ')}",
+                         f"{len(new)} 条新离线考题第一次运行没通过：{names(new, 'zh', '；')}",
+                         _first_line(now[new[0]].get("notes")),
+                         "Check the case first (can the right answer be reached in the sample "
+                         "workspace?), then the agent's answer.",
+                         "先检查 case 本身（样例工作区里能不能做出正确答案），再看 agent 的回答。", new))
+    return out
 
 
 def _consecutive_weeks(before: Any, after: Any) -> bool:
