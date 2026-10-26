@@ -121,6 +121,7 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
     """
     import re as _re
     from core import memory_index
+    from core.ddd_entry_lifecycle import split_entries
 
     # Bi-temporal supersession (run_24299917): a superseded DDD entry is filtered
     # from default recall (its lineage is preserved on disk, but it must not
@@ -146,12 +147,9 @@ def _ddd_entry_hits(query: str, docs_text: dict[str, str], top_n: int,
         if not sections:
             continue
         for section, body in sections.items():
-            # Split on line-anchored entry starts ('- ' at col 0); lookahead keeps
-            # the delimiter so each chunk is a whole entry incl. its metadata line.
-            for chunk in _re.split(r"(?m)^(?=- )", body):
-                e = chunk.strip()
-                if not e.startswith("- "):
-                    continue
+            # One entry = what ddd_entry_lifecycle reads as one (run-knowledge §3.0
+            # R1); a ``###`` subsection or table after a bullet is not part of it.
+            for e in split_entries(body):
                 if not include_superseded and _SUPERSEDED_RE.search(e):
                     continue  # filtered from default recall (lineage kept on disk)
                 k = str(len(entries))
@@ -716,8 +714,10 @@ def _memory_outside_prompt(content: str, prompt_text: str) -> str:
     was built. Scoring the whole file instead let in-prompt sections take every
     top slot, then the duplicate filter emptied them (931 raw -> 6 kept), so the
     out-of-prompt entries could never surface (design 2026-10-26 D4). Entry =
-    a column-0 ``- `` bullet with its following non-heading lines.
+    what ``ddd_entry_lifecycle._scan_entry`` reads as one (run-knowledge §3.0 R1);
+    lines between entries belong to none.
     """
+    from core.ddd_entry_lifecycle import _scan_entry
     from core.recall_filter import _norm, in_prompt_text
 
     prompt_norm = _norm(prompt_text)
@@ -739,16 +739,20 @@ def _memory_outside_prompt(content: str, prompt_text: str) -> str:
             out.extend(entry)
         entry.clear()
 
-    for line in content.splitlines():
+    lines = content.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         if line.startswith("## "):
-            _flush()
             heading, heading_emitted = line, False
+            i += 1
         elif line.startswith("- "):
+            _text_end, _meta, end = _scan_entry(lines, i)
+            entry.extend(lines[i:end])
             _flush()
-            entry.append(line)
-        elif entry:
-            entry.append(line)
-    _flush()
+            i = max(end, i + 1)
+        else:
+            i += 1
     return "\n".join(out)
 
 

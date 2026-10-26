@@ -167,14 +167,46 @@ def in_prompt_text(text: str, prompt_norm: str) -> bool:
     return all(p in prompt_norm for p in probes)
 
 
-def _truncate(text: str, cap: int) -> str:
+# A sentence ends at one of these followed by whitespace or the end of the text.
+_SENTENCE_END = re.compile(r"[。！？!?.](?=\s|$)")
+# A hit too short to carry a sentence is left out rather than shown as a stub (R3).
+MIN_CLIP_ROOM = 120
+
+
+def clip(text: str, cap: int, pointer: str = "") -> str:
+    """*text* in at most *cap* characters, cut where meaning survives (design
+    2026-10-26-run-knowledge §3.0 R2): at the last sentence end, else the last line
+    end, else the last space -- each used only when it keeps at least half the room,
+    so a cut never lands mid-word. A cut text ends with ``…（全文 N 字符：<pointer>）``
+    so the reader knows it is partial and where the whole entry is. The ONE truncation
+    of every recall leg; *pointer* names the source (``doc#section``, a Library path,
+    a session id)."""
     if len(text) <= cap:
         return text
-    cut = text[:cap]
-    nl = cut.rfind("\n")
-    if nl > cap * 0.6:
-        cut = cut[:nl]
-    return cut.rstrip() + " …"
+    tail = f" …（全文 {len(text)} 字符" + (f"：{pointer}）" if pointer else "）")
+    room = max(cap - len(tail), 0)
+    window = text[:room]
+    cut = 0
+    for end in _SENTENCE_END.finditer(window):
+        cut = end.end()
+    if cut < room * 0.5:
+        nl = window.rfind("\n")
+        cut = nl if nl >= room * 0.5 else 0
+    if cut < room * 0.5:
+        sp = window.rfind(" ")
+        cut = sp if sp > 0 else room
+    return window[:cut].rstrip() + tail
+
+
+def _pointer(domain: str, hit: dict) -> str:
+    """Where the whole text of *hit* is, for ``clip``'s tail."""
+    if domain == "session":
+        return f"session {hit.get('session_id') or ''}".strip()
+    if domain == "context_files":
+        return "MEMORY.md" + (f"#{hit['section']}" if hit.get("section") else "")
+    src = str(hit.get("doc") or hit.get("source") or "")
+    sec = str(hit.get("section") or hit.get("heading") or "")
+    return f"{src}#{sec}" if src and sec and not sec.startswith("(") else src
 
 
 def _split_sections(content: str) -> list[str]:
@@ -324,9 +356,12 @@ def _budget_one(domain: str, hits: list[dict],
         text = h.get(key)
         if isinstance(text, str) and text:
             per_hit = cap if domain == "context_files" else HIT_CHAR_CAP
-            text = _truncate(text, min(per_hit, cap - used))
-            if len(text) < 60 and used:
+            room = min(per_hit, cap - used)
+            # by rank (R3): a hit that does not fit whole is clipped, never skipped
+            # for a later one; past MIN_CLIP_ROOM there is no room for a sentence
+            if used and room < MIN_CLIP_ROOM and len(text) > room:
                 break
+            text = clip(text, room, _pointer(domain, h))
             h = {**h, key: text}
             used += len(text)
         else:

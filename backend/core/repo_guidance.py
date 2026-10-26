@@ -204,19 +204,17 @@ def _ddd_docs(project: str) -> list:
 
 
 def _entries(text: str, section: str) -> list:
-    """The ``- `` entries (with their indented lines) under ``## <section>``."""
-    out, inside = [], False
+    """The ``- `` entries under ``## <section>``, read the way every recall leg reads
+    an entry (``ddd_entry_lifecycle.split_entries``, run-knowledge §3.0 R1)."""
+    from core.ddd_entry_lifecycle import split_entries
+    body, inside = [], False
     for line in text.splitlines():
         if line.startswith("## "):
             inside = line.strip() == section
             continue
-        if not inside:
-            continue
-        if line.startswith("- "):
-            out.append(line)
-        elif line.startswith("  ") and out:
-            out[-1] += "\n" + line
-    return out
+        if inside:
+            body.append(line)
+    return split_entries("\n".join(body))
 
 
 def _lessons_block(path: str, text: str, budget: int) -> str:
@@ -232,10 +230,15 @@ def _lessons_block(path: str, text: str, budget: int) -> str:
                  "person reviews them.")
     tail = f"\n--- END pipeline lessons ---"
     room = budget - len(head) - len(tail) - 120
+    from core.recall_filter import MIN_CLIP_ROOM, clip
     shown, cut = [], False
-    for entry in reversed(lessons):
+    for entry in reversed(lessons):       # newest first; by rank, never skipped (R3)
         if len(entry) + 1 > room:
             cut = True
+            # the clipped entry shares the room with the "older lessons" note below
+            left = room - 1 - len(f"\n[... {len(lessons)} older lessons not shown; read {path}]")
+            if left >= MIN_CLIP_ROOM:
+                shown.append(clip(entry, left, path))
             break
         shown.append(entry)
         room -= len(entry) + 1

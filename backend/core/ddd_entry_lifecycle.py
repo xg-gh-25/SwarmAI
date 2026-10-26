@@ -22,6 +22,7 @@ Public API:
     DecayTransition      — dataclass for state change records
     NoiseReport          — dataclass for per-doc noise measurement
     parse_entries(content) → list[EntryMetadata]
+    split_entries(body) → list[str]  (recall's entry splitter)
     inject_entry_metadata(content, entries) → str
     bump_references(entries, text, today) → int
     assess_decay(entries, today) → list[DecayTransition]
@@ -625,6 +626,25 @@ def _h3_span_lines(lines: "list[str]") -> "set[int]":
         if in_block:
             inside.add(idx)
     return inside
+
+
+def split_entries(body: str) -> "list[str]":
+    """Every column-0 ``- `` entry of *body*, read by ``_scan_entry``: the lead bullet,
+    its continuation lines and sub-bullets, and its metadata tail. What lies between
+    entries (a ``###`` subsection, a table, a paragraph) belongs to none of them.
+    Recall's one entry splitter (design 2026-10-26-run-knowledge §3.0 R1), so what
+    recall shows as an entry is what parse_entries, decay and dedup treat as one."""
+    lines = body.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("- "):
+            _text_end, _meta, end = _scan_entry(lines, i)
+            out.append("\n".join(lines[i:end]).strip())
+            i = max(end, i + 1)
+        else:
+            i += 1
+    return out
 
 
 def parse_entries(content: str, *, include_prose: bool = False,
