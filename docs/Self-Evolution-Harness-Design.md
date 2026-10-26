@@ -377,6 +377,8 @@ The full MINE -> ASSESS -> ACT -> AUDIT cycle is a ~5-minute job and is **no lon
 
 ### 5.7 Evolution Pipeline v3 --- Cognitive Axis (Governance Routing)
 
+> **Superseded 2026-10-26.** The classify -> count -> escalate chain described in this section was deleted: a bucket count carried no text a human could act on. Proposals now come only from GC candidates with specific text, a filled "checked against" column and 3x evidence. See `docs/design/2026-10-26-evolution-loop-admission.md`. The section is kept as history.
+
 The v2 optimizer improves *skill text*. But the most damaging failures are not bad skill prose --- they are **judgment failures**: shipping untested code, coding against an unverified API, researching at the wrong layer. These cannot be fixed by rewriting a SKILL.md, and auto-deploying a change to the agent's constitution (SOUL/AGENT/STEERING) would be reckless. v3 adds a **cognitive axis** that runs alongside v2, discriminated by **blast radius**.
 
 **Implementation:** `core/evolution/` --- `judgment_classifier.py`, `governance_router.py`, `correction_tracker.py`, `escalation_ladder.py`, `class_key.py` (plus `governance_miner.py`, `closed_loop.py`).

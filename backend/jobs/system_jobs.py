@@ -195,8 +195,7 @@ SYSTEM_JOBS: list[Job] = [
     # --- Session Quality (layer②③: score real sessions → harvest golden drafts) ---
     # Weekly low-frequency batch (N=10/week): samples real desktop sessions
     # (with-correction OR turn-anomalous), scores each on goal+tool axes via the
-    # eval judge, records low scores to correction_tracker (drift radar), and
-    # harvests a golden DRAFT from each low-score session (human ratifies at
+    # eval judge, and harvests a golden DRAFT from each low-score session (human ratifies at
     # promote — NEVER auto-promoted). Friday, end-of-week harvest (was Sunday —
     # moved off the weekend per the no-weekend-clock-job policy, test_job_schedules
     # test_no_clock_job_runs_on_weekend; weekend runs go unmonitored).

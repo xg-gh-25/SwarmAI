@@ -1,6 +1,7 @@
-"""Evolution subsystem — correction class tracking and self-monitoring.
+"""Evolution subsystem — governance proposal mining and the proposal sink.
 
 Modules:
-    correction_tracker — CorrectionClassTracker: records correction events,
-                         tracks gate effectiveness, auto-resolves after 30 days.
+    governance_miner  — turns mature GC candidates (EVOLUTION.md) into proposals
+    governance_router — the flock-safe proposal file (append / remove)
+    class_key         — the one class-key normalizer
 """

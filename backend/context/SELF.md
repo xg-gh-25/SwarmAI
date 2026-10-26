@@ -69,9 +69,11 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   (`GET /api/eval/archive-list`), which parses the shapes the `--file` route can't. Per-route
   detail: `core/memory_index`'s header. Memory is sovereign (local-first, portable, never
   platform-locked).
-- **Self-evolution** (`core/evolution/`: `correction_tracker` → `judgment_classifier` →
-  `governance_router` → `escalation_ladder`) — corrections are bias-tagged, classed, and at 3×
-  recurrence an autonomous structural-fix proposal fires. Upgrades JUDGMENT in layers (L0 skill
+- **Self-evolution** (`core/evolution/`: `governance_miner` → `governance_router`) — a
+  correction becomes a C-entry in EVOLUTION.md; a recurring pattern with specific rule text
+  becomes a GC candidate, and only a GC row with a filled "checked against" column and 3×
+  evidence is surfaced as a proposal. Nothing classifies or counts corrections into buckets:
+  a bucket count carries no text a human can act on. Upgrades JUDGMENT in layers (L0 skill
   / L1 AGENT / L2 SOUL / L3 self-model); **governance (SOUL/AGENT) is never auto-written — the
   human gate is the only promotion path.**
 - **DDD cultivation** (`ddd_cultivation` + `ddd_entry_lifecycle`) — each session's REFLECT

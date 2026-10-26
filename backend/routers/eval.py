@@ -746,10 +746,10 @@ async def get_pending_governance():
 
 @router.post("/governance/decision")
 async def decide_governance(req: GovernanceDecisionRequest):
-    """Accept (-> register_rule/register_gate), reject (-> remove), or defer a proposal.
+    """Accept or reject (both remove the proposal) or defer (keep it).
 
-    NEVER writes SOUL/AGENT/STEERING — accept only records the fix in the tracker,
-    which makes the rule->gate escalation reachable on the next recurrence.
+    NEVER writes SOUL/AGENT/STEERING: writing an accepted rule into a governance
+    file is the s_self-evolution path, on the user's approval.
     """
     svc = get_eval_service()
     result = svc.decide_governance(req.proposal_id, req.decision)

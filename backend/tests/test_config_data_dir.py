@@ -71,21 +71,6 @@ def test_task_manager_tasks_dir_resolves_at_call_time():
     )
 
 
-def test_correction_tracker_default_state_path_resolves_at_call_time(tmp_path, monkeypatch):
-    """AC2: correction_tracker default state path honors live SWARM_DATA_DIR, AND a
-    passed state_path still overrides it (lazy override preserved)."""
-    from core.evolution.correction_tracker import _default_state_path, CorrectionClassTracker
-
-    resolved = _default_state_path()
-    assert resolved == get_app_data_dir() / "state" / "correction_tracker.json"
-    assert resolved != Path.home() / ".swarm-ai" / "state" / "correction_tracker.json"
-
-    # override-if-passed semantics must survive functionizing
-    explicit = tmp_path / "custom_state.json"
-    tracker = CorrectionClassTracker(state_path=explicit)
-    assert tracker._state_path == explicit
-
-
 def test_ddd_bindings_default_root_resolves_at_call_time():
     """AC2: ddd_bindings default bindings root honors the live SWARM_DATA_DIR."""
     from core.ddd_bindings import _default_bindings_root

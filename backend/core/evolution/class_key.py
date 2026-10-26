@@ -1,16 +1,8 @@
 """Canonical correction-class key — the single normalization home.
 
-Extracted from escalation_ladder.py (Gate-1: decoupling, NOT cycle-breaking —
-escalation_ladder is a leaf module, so no runtime cycle existed; this keeps the
-tracker dependency-free and gives ALL key writers one shared normalizer).
-
-The bug this fixes: the EVOLUTION.md miner emits "CLASS A: Confidence → Skip
-Process" and operational axes arrive lowercase ("operational"), while the tracker
-stored/read RAW keys and escalate_class wrote the CANONICAL key — so the same
-logical class split across two entries and the escalation ladder's gate rung
-could never fire. Routing every key operation (record/get/register + proposal
-generation) through this one function makes accumulation, escalation-read, and
-rule/gate registration converge on ONE key.
+The EVOLUTION.md miner emits "CLASS A: Confidence → Skip Process" and operational
+axes arrive lowercase ("operational"); every reader that compares class keys goes
+through this one function so the same logical class is never split in two.
 
 Public symbols:
     canonical_class_key(name) -> str
@@ -24,8 +16,7 @@ from __future__ import annotations
 # CLASS_A/B/C (a recurring JUDGMENT pattern). OPERATIONAL/UNCLASSIFIED are the
 # operational/unlabeled axes — they record tool failures and unrouted noise, which
 # even when frequent are not governance ("propose a rule") or loop-closure signal.
-# Single home so the escalation ladder AND the closed-loop audit share ONE
-# definition (no drift between "what can escalate" and "what the audit judges").
+# Single home so the miner and the proposal readers share ONE definition.
 NON_COGNITIVE_CLASSES = frozenset({"OPERATIONAL", "UNCLASSIFIED"})
 
 

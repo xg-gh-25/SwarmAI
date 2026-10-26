@@ -63,9 +63,3 @@ def test_empty_and_none():
 
 def test_whitespace_collapses_to_empty():
     assert canonical_class_key("   ") == ""
-
-
-def test_reexport_from_escalation_ladder_still_works():
-    """governance_miner.py + test_escalation_ladder.py import it from there."""
-    from core.evolution.escalation_ladder import canonical_class_key as cck
-    assert cck("operational") == "OPERATIONAL"

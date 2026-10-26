@@ -135,7 +135,7 @@ def test_sampler_failure_is_loud_not_silent_empty():
     res = run_session_quality(
         dry_run=True, sampler=_boom_sampler,
         scorer=lambda p, r, t: {"status": "success", "goal_score": 1.0, "tool_score": 1.0},
-        harvester=lambda **k: None, recorder=lambda *a: None,
+        harvester=lambda **k: None,
     )
     assert res["status"] == "degraded"
     assert "sampler_error" in res

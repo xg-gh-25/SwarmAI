@@ -2,8 +2,8 @@
 
 The closed loop, once per week (Sunday, offset from Monday's eval-scheduled):
   sample real sessions → score each (layer③, session_scorer) → for each LOW
-  score: record to correction_tracker (drift radar) + harvest a golden draft
-  (layer②, session_harvest) → write a weekly report.
+  score: harvest a golden draft (layer②, session_harvest) → write a weekly
+  report.
 
 SAMPLING 口径 (XG-fixed, NOT configurable — select_sessions):
   a session qualifies if it HAS a correction OR is turn-anomalous
@@ -92,7 +92,6 @@ def run_session_quality(
     sampler: Optional[Callable[[], dict]] = None,
     scorer: Optional[Callable[..., dict]] = None,
     harvester: Optional[Callable[..., object]] = None,
-    recorder: Optional[Callable[..., None]] = None,
     corrections_path: Optional[Path] = None,
 ) -> dict:
     """Weekly orchestration. All boundaries injected for tests.
@@ -100,7 +99,6 @@ def run_session_quality(
     sampler() → {"session_turns": {sid: turns}, "sessions": {sid: {prompt, response, tool_names}}}
     scorer(prompt, response, tool_names) → session_scorer.score_session output
     harvester(session_id, prompt, score) → session_harvest.harvest_draft output
-    recorder(session_id, score) → correction_tracker.record wrapper
 
     Returns a result dict {status, scored, low, drafts}.
     """
@@ -125,17 +123,6 @@ def run_session_quality(
             svc = get_eval_service()
             return harvest_draft(session_id=session_id, prompt=prompt, score=score,
                                  invoke_fn=default_invoke_fn, add_case_fn=svc.add_case)
-    if recorder is None:
-        from core.evolution.correction_tracker import CorrectionClassTracker
-
-        def recorder(session_id, score):  # noqa: E306
-            CorrectionClassTracker().record(
-                "SESSION_LOW_QUALITY",
-                evidence=f"{session_id}: goal={score.get('goal_score')} "
-                         f"tool={score.get('tool_score')} — {score.get('reason','')}",
-                correction_ref=session_id,  # idempotent by session (no triple-count)
-            )
-
     sample = sampler()
     session_turns = sample.get("session_turns", {})
     sessions = sample.get("sessions", {})
@@ -157,7 +144,6 @@ def run_session_quality(
             low += 1
             low_details.append({"session_id": sid, **result})
             if not dry_run:
-                recorder(sid, result)
                 if harvester(session_id=sid, prompt=s.get("prompt", ""), score=result) is not None:
                     drafts += 1
 

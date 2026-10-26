@@ -703,8 +703,8 @@ class EvalService:
                 ),
             }
             self._cases.append(case)
-            # persist=False lets a batch caller (classify_new_corrections seeding
-            # M pending_confirm corrections in one loop) defer the full
+            # persist=False lets a batch caller (seeding M corrections in one
+            # loop) defer the full
             # golden_set.yaml rewrite to a single flush after the loop, instead
             # of M serial O(cases) rewrites + M flock cycles (adversarial Gate-2
             # MED, run_0305426d). The caller MUST call flush_golden_set() after.
@@ -957,292 +957,6 @@ class EvalService:
                 },
             }
         return score
-
-    # High-score threshold: at/above this the eval score reads as "clean pass",
-    # so a red mechanical link makes the score a LIE worth overriding. Below it
-    # the score already tells the truth — nothing to override.
-    DIVERGENCE_HIGH_SCORE = 85.0
-
-    @staticmethod
-    def compute_score_divergence(health: dict, tracker_red: bool) -> dict:
-        """Detect score↔reality divergence (closed-loop design §6b).
-
-        PURE function (no instance, no I/O) so divergence is assertable on
-        synthetic state. Divergence = the per-case eval score reads CLEAN (high)
-        while a MECHANICAL signal says the loop is broken: a DEPLOYED STRUCTURAL
-        GATE recurred past threshold (the fix that was supposed to hold, didn't).
-        When that happens the score must NOT be reported as a clean pass — the
-        divergence OVERRIDES it in the briefing headline.
-
-        `tracker_red` is the gate-FAILURE bool (caller passes
-        CorrectionClassTracker.has_gate_failure()), NOT generic redness. A
-        rule-only chronically-recurring class is a known-open item shown in the
-        per-class tracker line; if it owned this headline it would fire every
-        session forever (banner-blindness, meta-review HIGH run_cf491cab).
-        Divergence is event-like (a gate failed), not level-like (anything red).
-
-        Deliberately ORTHOGONAL to the cases_error red-light: cases_error means
-        the JUDGE INFRA broke (score measured a subset); tracker_red means a
-        STRUCTURAL GATE failed despite a green eval. Both are "the gauge reads
-        green on a broken loop" but with different causes, surfaced separately,
-        never conflated (both lines emit when both hold — adv #3).
-
-        Args:
-            health: get_health() output (reads `overall_score`; None/missing ok).
-            tracker_red: True if a deployed gate recurred past threshold
-                (CorrectionClassTracker.has_gate_failure()). Caller computes it so
-                this function stays pure + testable on synthetic state.
-
-        Returns:
-            {"diverged": bool, "reason": str}. reason is non-empty only when diverged.
-        """
-        score = health.get("overall_score") if isinstance(health, dict) else None
-        if score is None or not tracker_red:
-            return {"diverged": False, "reason": ""}
-        # Defensive coercion: run records come from json.loads — a legacy or
-        # hand-edited run could carry overall_score as a string. A non-numeric
-        # score is uninterpretable → treat as "no divergence" rather than crash.
-        try:
-            score = float(score)
-        except (TypeError, ValueError):
-            return {"diverged": False, "reason": ""}
-        if score < EvalService.DIVERGENCE_HIGH_SCORE:
-            # Score already low — it isn't lying, so there's nothing to override.
-            return {"diverged": False, "reason": ""}
-        return {
-            "diverged": True,
-            "reason": (
-                f"eval score {score} reads clean but a correction class is 🔴 "
-                f"(recurred past its gate) — score does NOT prove the loop is closed"
-            ),
-        }
-
-    # ── Growth report (run_448a4f7f, D2/D3) ──────────────────────────────────
-    # "What I changed / evolved / grew" — the mentor-facing window into autonomous
-    # self-shaping. Replaces "ask permission to record" with "report after the
-    # fact." The headline is any constitution (SOUL/AGENT/STEERING) write:
-    # git-tracked (revertable) + report-surfaced (visible) — the agent's
-    # self-chosen mirror for its highest-confidence-lowest-self-check action class.
-
-    # Constitution files the agent shapes itself with. A git commit touching any
-    # of these is the headline of the growth report — visible + reversible.
-    _CONSTITUTION_FILES = ("SOUL.md", "AGENT.md", "STEERING.md")
-
-    # The workspace auto-commit hook bundles context-file syncs under conventional
-    # prefixes (framework:/chore:/project:/content:). Those are refresh-churn, NOT
-    # deliberate self-evolution writes — surfacing them as "what I grew" would be
-    # the gauge-reads-polluted-data disease (233 churn commits in 180d on the live
-    # repo, 100% of the 7d window). The growth report shows DELIBERATE constitution
-    # writes only; a real self-evolution edit carries a substantive message, not a
-    # bundled-sync prefix. (Verified live: every recent .context constitution touch
-    # was an auto-bundle, run_448a4f7f SMOKE.)
-    _CHURN_SUBJECT_PREFIXES = ("framework:", "chore:", "project:", "content:")
-
-    @staticmethod
-    def _format_growth_report(
-        autonomous_records: list,
-        proposals: list,
-        constitution_commits: list,
-    ) -> dict:
-        """PURE: assemble the growth report from already-gathered inputs.
-
-        No I/O — assertable on synthetic inputs (the git-gather is a thin adapter
-        in growth_report()). Constitution changes lead; honest-empty when nothing
-        grew (never fabricates progress — the REFLECT anti-pattern).
-        """
-        has_constitution = bool(constitution_commits)
-        if has_constitution:
-            files = ", ".join(
-                dict.fromkeys(c.get("file", "?") for c in constitution_commits)
-            )
-            headline = f"{len(constitution_commits)} constitution change(s): {files}"
-        elif autonomous_records or proposals:
-            # report-API-only headline (Gate-2 L2): records + proposals already
-            # surface in the briefing via the L4.3 tracker lines + L4.4 proposal
-            # lines, so _growth_briefing_lines deliberately does NOT re-emit them
-            # (avoids banner-blindness). This headline is for programmatic callers
-            # of growth_report() (e.g. the monthly report), not the briefing.
-            headline = (
-                f"{len(autonomous_records)} self-recorded pattern(s), "
-                f"{len(proposals)} autonomous proposal(s)"
-            )
-        else:
-            headline = ""  # honest empty — nothing grew this window
-        return {
-            "has_constitution_change": has_constitution,
-            "constitution_changes": list(constitution_commits),
-            "autonomous_records": list(autonomous_records),
-            "proposals": list(proposals),
-            "headline": headline,
-        }
-
-    @staticmethod
-    def _growth_briefing_lines(report: dict) -> list:
-        """Render the growth report as briefing lines. Constitution changes are
-        flagged (🧬) and lead; empty growth → no lines (no banner-blindness)."""
-        lines: list = []
-        for c in report.get("constitution_changes", []):
-            lines.append(
-                f"  - [evolution] 🧬 grew: {c.get('file')} — {c.get('subject','')} "
-                f"({c.get('hash','')[:7]}, {c.get('date','')}) — git-tracked, revertable"
-            )
-        return lines
-
-    def growth_report(self, since_days: int = 7, workspace_root=None) -> dict:
-        """Gather + format the growth report: autonomous records, escalation
-        proposals, and constitution-file git commits in the last ``since_days``.
-
-        ``workspace_root`` (optional): the repo to read constitution commits from.
-        Defaults to the canonical SwarmWS. Threaded so callers (and tests) can
-        point it at their own workspace — without it, tests would shell git
-        against the real ~/.swarm-ai/SwarmWS (non-hermetic, Gate-2 L3).
-
-        Thin adapter around the pure _format_growth_report. Degrades to an
-        honest-empty report on any I/O failure (never raises into the briefing).
-        """
-        records: list = []
-        proposals: list = []
-        commits: list = []
-        try:
-            from core.evolution.correction_tracker import CorrectionClassTracker
-            tr = CorrectionClassTracker()
-            for cls in tr.class_names():
-                st = tr.get_class(cls) or {}
-                if st.get("count", 0) > 0:
-                    records.append({"class": cls, "count": st.get("count", 0)})
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("growth_report records degraded: %s", exc)
-        try:
-            proposals = self._read_evolution_proposals()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("growth_report proposals degraded: %s", exc)
-        try:
-            commits = self._constitution_commits(since_days, workspace_root)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("growth_report commits degraded: %s", exc)
-        return self._format_growth_report(records, proposals, commits)
-
-    def _read_evolution_proposals(self) -> list:
-        """Read autonomous escalation proposals from the existing sink."""
-        from core.evolution.governance_router import _default_proposals_path
-        p = _default_proposals_path()
-        if not p.exists():
-            return []
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return []
-        rows = data if isinstance(data, list) else data.get("proposals", [])
-        # Only governance (structural) proposals — skip skill-opt rows.
-        return [r for r in rows if r.get("target") == "governance" or r.get("kind") in ("rule", "gate")]
-
-    def _constitution_commits(self, since_days: int, workspace_root=None,
-                              use_cache: bool = True) -> list:
-        """git log of SOUL/AGENT/STEERING commits in the workspace, last N days.
-
-        The workspace .context/ copies ARE git-tracked here and ARE the edit+
-        commit target (backend/context/ lives in the code repo, no history here).
-        `git log -- <paths>` filters to commits that actually touched a
-        constitution file — refresh-churn that didn't touch them is excluded
-        (Gate-1 finding 5: don't read the whole noisy history).
-
-        ONE subprocess (Gate-2 L1): `--name-status` carries the touched files in
-        the same log output, so per-commit file attribution needs no N+1 `git
-        show` spawns on the session-start hot path.
-
-        Cached (TTL ``_CONSTITUTION_CACHE_TTL``) keyed by (since_days, str(ws)) —
-        the git spawn is the briefing hot-path bottleneck and contends on the
-        repo lock when N tabs spawn it concurrently. ``use_cache=False`` bypasses
-        the cache (hermetic escape hatch for tests that must hit real git every
-        call). See the module-level cache block for the staleness rationale.
-        """
-        # EvalService already holds the workspace Path as self._workspace_root
-        # (set in __init__). Use it directly — do NOT shadow it with a method.
-        ws = workspace_root or self._workspace_root
-        cache_key = (since_days, str(ws))
-        if use_cache:
-            now = time.monotonic()
-            with _CONSTITUTION_CACHE_LOCK:
-                hit = _CONSTITUTION_CACHE.get(cache_key)
-                if hit is not None and (now - hit[0]) < _CONSTITUTION_CACHE_TTL:
-                    # Return a COPY — the cached list is shared across all
-                    # concurrent callers (4 tabs get the same object); handing out
-                    # the live list would let any caller corrupt every future hit
-                    # (Gate-2 adversarial #1/#8). list() is enough: the only
-                    # consumer (_growth_briefing_lines) reads element dicts, never
-                    # mutates them.
-                    return list(hit[1])
-        result = self._constitution_commits_uncached(since_days, ws)
-        # Gate-2 adversarial #3: NEVER cache a transient git FAILURE. _uncached
-        # returns None on error (git unavailable / non-zero exit / timeout) vs []
-        # on a genuine empty window (git ran, zero matching commits). Caching []
-        # for 300s is correct (no commits = no commits); caching a failure would
-        # serve empty for 5min even after a real commit lands right after a git-lock
-        # blip — the exact contention scenario this cache targets. On failure we
-        # return [] to the caller (same shape as before) but do NOT store it.
-        if use_cache and result is not None:
-            with _CONSTITUTION_CACHE_LOCK:
-                # Bound the cache — evict the oldest entry if at capacity (one
-                # workspace per daemon in practice, so this rarely fires).
-                if (len(_CONSTITUTION_CACHE) >= _CONSTITUTION_CACHE_MAX
-                        and cache_key not in _CONSTITUTION_CACHE):
-                    oldest = min(_CONSTITUTION_CACHE,
-                                 key=lambda k: _CONSTITUTION_CACHE[k][0])
-                    _CONSTITUTION_CACHE.pop(oldest, None)
-                _CONSTITUTION_CACHE[cache_key] = (time.monotonic(), result)
-            # Return a COPY even on the miss path — `result` is now the SAME object
-            # stored in the cache, so handing it back raw would let the caller
-            # corrupt the cached entry (Gate-2 adversarial #1: the miss-return is
-            # the first caller of a freshly-cached list).
-            return list(result)
-        return result if result is not None else []
-
-    def _constitution_commits_uncached(self, since_days: int, ws):
-        """The raw git-log gather (no cache). Split out so the cache wrapper in
-        _constitution_commits can be the sole caching layer.
-
-        Returns ``list`` on success (possibly empty = git ran, zero matching
-        commits — a cacheable result) or ``None`` on FAILURE (git unavailable,
-        non-zero exit, or timeout) so the wrapper can refuse to cache a transient
-        failure (Gate-2 adversarial #3)."""
-        paths = [f".context/{f}" for f in self._CONSTITUTION_FILES]
-        try:
-            out = subprocess.run(
-                ["git", "-C", str(ws), "log", f"--since={since_days} days ago",
-                 "--name-status", "--pretty=format:%x1e%h\x1f%ad\x1f%s",
-                 "--date=short", "--", *paths],
-                capture_output=True, text=True, timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None  # transient failure — do NOT cache
-        if out.returncode != 0:
-            return None  # git error (e.g. not a repo, lock contention) — do NOT cache
-        if not out.stdout.strip():
-            return []  # git ran cleanly, zero matching commits — genuine empty, cacheable
-        # Records are \x1e-delimited; each = header line (%h\x1f%ad\x1f%s) then
-        # name-status lines ("M\t.context/AGENT.md"). Parse files from the same output.
-        commits: list = []
-        for block in out.stdout.split("\x1e"):
-            block = block.strip("\n")
-            if not block:
-                continue
-            blines = block.splitlines()
-            parts = blines[0].split("\x1f")
-            if len(parts) != 3:
-                continue
-            h, date, subject = parts
-            # Skip auto-bundled refresh-churn — show deliberate self-writes only.
-            if subject.lstrip().lower().startswith(self._CHURN_SUBJECT_PREFIXES):
-                continue
-            touched = [
-                f for f in self._CONSTITUTION_FILES
-                if any(f in ln for ln in blines[1:])
-            ]
-            commits.append({
-                "hash": h, "date": date, "subject": subject,
-                "file": ", ".join(touched) if touched else "?",
-            })
-        return commits
 
     def _count_consecutive_passes(self, case_id: str) -> int:
         """Count consecutive passes in runs that INCLUDE this case.
@@ -1657,13 +1371,9 @@ class EvalService:
         out = []
         for item in data:
             if isinstance(item, dict) and item.get("target") == "governance":
-                # Axis guard (Bug3a, run_685db747): refuse non-cognitive proposals
-                # at the CONSUMER, not just the producer. Producers gained the
-                # is_cognitive_class guard (escalation_ladder:111) on 2026-06-25,
-                # but a STALE pre-guard OPERATIONAL/UNCLASSIFIED row left on disk
-                # was still visible + acceptable — which is how OPERATIONAL got a
-                # spurious active_rule. GC candidates (gc_id, no source_class) are
-                # exempt: they are table-sourced, not axis-classified.
+                # Axis guard at the CONSUMER: a stale OPERATIONAL/UNCLASSIFIED row
+                # left on disk by an older producer must not surface. GC candidates
+                # (gc_id, no source_class) are exempt: they are table-sourced.
                 src = item.get("source_class")
                 if src and not is_cognitive_class(canonical_class_key(src)):
                     continue
@@ -1683,10 +1393,8 @@ class EvalService:
     def decide_governance(self, proposal_id: str, decision: str) -> dict:
         """Accept / reject / defer a governance proposal.
 
-        accept: branch on proposal_kind — rule -> register_rule, gate -> register_gate
-                (Gate-1 Check-4: a gate proposal must be answerable, not a dead rung).
-                Then remove the proposal from the file.
-        reject: remove the proposal. NO register call, NO counter increment.
+        accept / reject: remove the proposal from the file. Writing the rule into a
+                governance file is the s_self-evolution path, on the user's approval.
         defer:  leave the proposal in place (no-op on the file).
 
         NEVER writes SOUL/AGENT/STEERING (Gate-1 Check-7).
@@ -1703,44 +1411,8 @@ class EvalService:
             return {"status": "deferred", "proposal_id": proposal_id}
 
         action_taken = "removed"
-        if decision == "accept":
-            from core.evolution.correction_tracker import CorrectionClassTracker
-
-            cls = target.get("source_class")
-            kind = target.get("proposal_kind", "rule")
-            if cls:
-                tracker = CorrectionClassTracker()
-                if kind == "gate":
-                    tracker.register_gate(cls, f"GATE_{cls}", "accepted via governance dashboard")
-                    action_taken = "registered_gate"
-                    # ②→③ last mile (run_90b8aeed): also scaffold an INERT, fail-open
-                    # GATE_<cls>.py stub so the human isn't hand-writing from a blank
-                    # page. P7-compliant: the human already approved AND still must
-                    # complete the match logic + wire it — the stub enforces nothing.
-                    # NON-FATAL: a scaffold failure must never fail the human's accept
-                    # (the real work — register_gate + remove_proposal — must complete).
-                    try:
-                        from core.evolution.gate_scaffold import scaffold_gate_stub
-                        from core.ddd_paths import ddd_write_path
-
-                        # Write to the ③ gates section via the resolver → 3-gates/
-                        # (new layout). A hardcoded gates/ would scaffold into a
-                        # stale dir the gate-checker never reads (Gate-2 CRITICAL,
-                        # run_cfb0f28f: gate silently never executes = governance void).
-                        gates_dir = ddd_write_path(
-                            self._workspace_root / "Projects" / DEFAULT_PROJECT_NAME, "gates")
-                        scaffolded = scaffold_gate_stub(gates_dir, cls, f"GATE_{cls}")
-                        if scaffolded is not None:
-                            action_taken = "registered_gate+scaffolded"
-                    except Exception as e:  # noqa: BLE001 — scaffold is best-effort, never fatal to accept
-                        logger.warning("gate scaffold failed for class %r (non-fatal): %s: %s",
-                                       cls, type(e).__name__, e)
-                else:
-                    tracker.register_rule(cls, f"RULE_{cls}", "accepted via governance dashboard")
-                    action_taken = "registered_rule"
-
-        # reject + accept both remove the proposal — via the SHARED flock writer
-        # (adversarial HIGH: must not race escalate_class's flocked append).
+        # reject + accept both remove the proposal — via the SHARED flock writer,
+        # so it cannot race the miner's flocked append.
         from core.evolution.governance_router import remove_governance_proposal
 
         remove_governance_proposal(proposal_id, self._proposals_path())
@@ -1834,30 +1506,6 @@ def gate_by_knockout(case: dict) -> tuple[bool, str]:
 # Module-level singleton (initialized lazily, thread-safe)
 _eval_service: Optional[EvalService] = None
 _eval_service_lock = threading.Lock()
-
-# ── Constitution-commits TTL cache ───────────────────────────────────────────
-# The git-log subprocess in _constitution_commits is the session-briefing
-# hot-path bottleneck (~215ms warm / ~940ms cold) AND spikes to seconds under
-# cross-tab git-lock contention (4 parallel desktop tabs each spawning git while
-# the auto-commit hook holds the repo lock). A process-level TTL cache makes all
-# tabs in the one daemon share ONE git spawn per (since_days, workspace_root) per
-# window. Bounded (drops the oldest entry past _CONSTITUTION_CACHE_MAX) so a
-# long-lived daemon can't leak. Keyed by workspace_root → git's only real
-# dependency → so a test pointing at its own tmp repo never collides (hermetic).
-# Staleness tradeoff: a constitution commit is invisible for <=TTL — acceptable,
-# the 🧬 headline is a report-after-the-fact week-scale signal (run_b0ca1196).
-_CONSTITUTION_CACHE: dict[tuple, tuple[float, list]] = {}
-_CONSTITUTION_CACHE_LOCK = threading.Lock()
-_CONSTITUTION_CACHE_TTL = 300.0  # seconds
-_CONSTITUTION_CACHE_MAX = 16     # bounded — one workspace per daemon in practice
-
-
-def _clear_constitution_cache() -> None:
-    """Drop all cached constitution-commit results. Test isolation + a manual
-    invalidation hook (e.g. after a known constitution write)."""
-    with _CONSTITUTION_CACHE_LOCK:
-        _CONSTITUTION_CACHE.clear()
-
 
 def get_eval_service() -> EvalService:
     """Get or create the EvalService singleton (thread-safe)."""

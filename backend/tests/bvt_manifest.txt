@@ -41,12 +41,10 @@ test_ddd_canonical_docs_single_source.py
 test_deliver_template_drift.py
 test_diff_parser.py
 test_distill_write_targets.py
-test_escalation_ladder.py
 test_executor_ram_gate.py
 test_file_change_classifier.py
 test_frontmatter.py
 test_golden_case_stamp.py
-test_judgment_classifier.py
 test_lint_skills_body.py
 test_load_amplifier_caps.py
 test_mcp_response_tier.py

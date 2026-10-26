@@ -121,8 +121,8 @@ _CORRECTION_PATTERNS_META = re.compile(
 
 # Free-text VALUE fields per correction entry type that carry attacker-influenced
 # content and are later replayed/fed-to-LLM. `user_correction.prompt` is scanned
-# with sentence-split because judgment_classifier feeds it RAW to a live Bedrock
-# call (a 2nd-sentence payload is a real threat there). `tool_failure` fields are
+# with sentence-split because a correction prompt is attacker-influenced text that
+# may be replayed to a model (a 2nd-sentence payload is a real threat there). `tool_failure` fields are
 # deliberately NOT scanned — they are self-generated tool output/input, FP-prone,
 # and an attacker controlling them already controls the agent (low marginal safety).
 _CORRECTION_SCAN_FIELDS: dict[str, tuple[str, ...]] = {
@@ -343,13 +343,10 @@ def create_user_correction_detector(
             ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
             ctx["_correction_just_detected"] = True  # Signal for observation DDD event
 
-            # Evolution v3 Phase 1: classification + counting moved to the
-            # post-session judgment classifier (governance_router.classify_new_corrections),
-            # which assigns a REAL class (CLASS_A/B/C) instead of "UNCLASSIFIED" and
-            # gates on a watermark. Counting here was a premature blind increment that
-            # (a) double-counted against the post-session record() and (b) left every
-            # entry stuck at UNCLASSIFIED (never promoted). The corrections.jsonl append
-            # above is the durable signal the classifier consumes. (Gate-1 fix, run_7a8f9866.)
+            # The corrections.jsonl append above is the durable signal. Nothing
+            # classifies or counts corrections into buckets any more: a bucket
+            # count carried no text a human could act on (design
+            # 2026-10-26-evolution-loop-admission §3.1).
 
             # Persistent side-effects (MEMORY pitfall) fire ONLY for explicit-error
             # corrections — a recorded mistake. META-only redirects are steering,
@@ -359,11 +356,8 @@ def create_user_correction_detector(
                 # from this hot path. It used to fire seed_from_correction(...,
                 # "UNCLASSIFIED") synchronously on every explicit-error prompt —
                 # BEFORE any classification — which dumped unclassified test-session
-                # noise (GS_C_test-ses_*) straight into golden_set. Seeding now
-                # happens POST-SESSION via governance_router.classify_new_corrections
-                # (evolution_maintenance_hook), gated on a REAL CLASS
-                # (counter_state=pending_confirm) so operator/transient noise
-                # (counter_state=ignored) never seeds a case. The corrections.jsonl
+                # noise (GS_C_test-ses_*) straight into golden_set. Seeding from
+                # corrections was then decommissioned altogether. The corrections.jsonl
                 # append above is the durable signal that path consumes.
 
                 # Gap #17: Immediate correction → MEMORY.md.

@@ -586,14 +586,13 @@ class TestSizeValve:
             assert key not in body, "a successfully-archived block IS removed from live"
 
 
-class TestClassifierRunsOffEventLoop:
-    """classify_new_corrections makes blocking Bedrock calls; on the loop thread it
-    stalled /health for the whole classification (asyncio.wait_for cannot interrupt
-    sync code). It must run in a worker thread."""
+class TestHookWritesNoGovernanceProposal:
+    """Session close classifies nothing and proposes nothing: the bucket-count
+    chain (classify -> count -> ladder -> proposal) was deleted
+    (docs/design/2026-10-26-evolution-loop-admission.md §3.1)."""
 
     @pytest.mark.asyncio
-    async def test_classify_runs_in_worker_thread(self, tmp_path, monkeypatch):
-        import threading
+    async def test_hook_never_appends_a_proposal(self, tmp_path, monkeypatch):
         import core.evolution.governance_router as gr
 
         ctx_dir = tmp_path / ".context"
@@ -602,15 +601,9 @@ class TestClassifierRunsOffEventLoop:
         (ctx_dir / "EVOLUTION.md").write_text(_make_evolution_md([]))
         (ctx_dir / "EVOLUTION_CHANGELOG.jsonl").write_text("")
 
-        loop_thread = threading.get_ident()
-        seen: list[int] = []
-
-        def _spy(**kw):
-            seen.append(threading.get_ident())
-            return {"processed": 0}
-
-        monkeypatch.setattr(gr, "classify_new_corrections", _spy)
+        appended: list[dict] = []
+        monkeypatch.setattr(gr, "_append_proposal", lambda p, path: appended.append(p))
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
-        assert seen, "classify_new_corrections was not called"
-        assert all(t != loop_thread for t in seen)
+        assert appended == []
+        assert not hasattr(gr, "classify_new_corrections")

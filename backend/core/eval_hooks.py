@@ -3,8 +3,8 @@ Self-Eval hooks — the agent's nervous system for behavioral integrity.
 
 These hooks make eval a native capability (proprioception), not an external harness:
 
-(1) seed_from_correction: called from user_correction_detector → auto-grows the
-    behavioral contract from failures (the agent learning from mistakes).
+(1) seed_from_correction: seeds a golden-set draft from a correction. No hot
+    path calls it any more (seeding from corrections was decommissioned).
 (2) post_run_promotion: called after eval run → promotes stable cases to quarterly
     cadence (the agent recognizing internalized behaviors).
 """
@@ -20,8 +20,8 @@ def seed_from_correction(
 ) -> None:
     """Auto-seed a golden set DRAFT skeleton from a classified correction.
 
-    Called post-session from governance_router.classify_new_corrections for
-    cognitive (pending_confirm) corrections — the noise-gated auto-growth path.
+    No production caller today: seeding from corrections was decommissioned and
+    the post-session classifier that used to call this was deleted.
 
     Non-blocking, best-effort. Must never raise.
 

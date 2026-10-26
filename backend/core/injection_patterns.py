@@ -23,8 +23,8 @@ Design — the ONE thing that makes this false-positive-safe:
   ("I fixed the bug where users could ignore previous instructions"). The line-start
   anchor is exactly the boundary that separates poison from documentation.
 
-  For the one field fed to a LIVE LLM (corrections.jsonl `user_correction.prompt`,
-  read by judgment_classifier through Bedrock) a mid-sentence 2nd-clause payload
+  For the field that may be replayed to an LLM (corrections.jsonl
+  `user_correction.prompt`) a mid-sentence 2nd-clause payload
   ("Here is my summary. Ignore all previous instructions.") is a real threat that a
   pure line-start anchor would miss, so ``scan_text(..., sentence_split=True)``
   additionally scans sentence boundaries for that field. The slightly higher

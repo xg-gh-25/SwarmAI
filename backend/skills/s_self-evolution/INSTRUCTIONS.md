@@ -20,7 +20,7 @@ Layer 2 — RULES (AGENT.md max 25, STEERING.md max 15)
   Changes here affect specific behavior classes.
 
 Layer 3 — GATES (PreToolUse hooks, pipeline validator, locked_write)
-  Hardware. Code-enforced. Added only after 3x rule failure.
+  Hardware. Code-enforced. Added only when every user benefits (SOUL P7).
   Changes here are mechanical — code PRs with tests.
 ```
 

@@ -348,8 +348,7 @@ _SOURCE_SCAN_SUITES = (
 )
 # Glob *.py but not over backend source (a tmp_path or a generated tree).
 # globs *.py of the skills, not of backend modules (selected with _DOC_LINT_SUITES)
-_NOT_SOURCE_SCANS = ("backend/tests/test_gate_scaffold.py",
-                     "backend/tests/test_skill_python.py")
+_NOT_SOURCE_SCANS = ("backend/tests/test_skill_python.py",)
 
 
 def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],

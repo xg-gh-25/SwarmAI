@@ -307,8 +307,6 @@ a **weekly job** (`session-quality`), **offset** from the golden-set schedule.
    │          empty prompt → skipped;  bad judge output → error      │
    │          (never fabricates a passing score)                    │
    │   ▼                                                            │
-   │ RECORD   low scores → correction_tracker (drift radar)         │
-   │   ▼                                                            │
    │ ② HARVEST  low-scorers (min(goal,tool) < threshold) →          │
    │          session_harvest.harvest_draft → an assertion-style    │
    │          golden case, tier=DRAFT, source=session_id            │
