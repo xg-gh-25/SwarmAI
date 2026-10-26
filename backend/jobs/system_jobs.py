@@ -193,16 +193,14 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
-    # --- Session Quality (layer②③: score real sessions → harvest golden drafts) ---
-    # Weekly low-frequency batch (N=10/week): samples real desktop sessions
-    # (with-correction OR turn-anomalous), scores each on goal+tool axes via the
-    # eval judge, and harvests a golden DRAFT from each low-score session (human ratifies at
-    # promote — NEVER auto-promoted). Friday, end-of-week harvest (was Sunday —
-    # moved off the weekend per the no-weekend-clock-job policy, test_job_schedules
+    # --- Online eval scoring (jobs/handlers/session_quality.py) ---
+    # Weekly: checks the owner's sessions from the last 7 days (O1–O3 over every
+    # session, the judge on at most 10) and writes the state the Online tab and the
+    # follow-ups read. Friday, end of week (no weekend clock jobs: test_job_schedules
     # test_no_clock_job_runs_on_weekend; weekend runs go unmonitored).
     Job(
         id="session-quality",
-        name="Session Quality — score real sessions + harvest golden drafts (layer②③)",
+        name="Online eval scoring — check the last 7 days of sessions",
         type="session_quality",
         schedule="0 8 * * 5",          # Friday UTC 08:00 = ICT 16:00 (end-of-week, weekday-only policy)
         enabled=True,

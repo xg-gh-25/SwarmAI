@@ -55,4 +55,15 @@ describe('Online tab', () => {
     expect(screen.getByText('Sessions where you corrected it').className).not.toContain('status-error');
     expect(screen.getByTestId('online-check-O4_GOAL').textContent).toMatch(/no data/);
   });
+
+  it('shows a judge failure on the judged checks, and compares only with the week right before', async () => {
+    payload = {
+      last_run: '2026-10-24T10:00:00+00:00', sessions_checked: 3, judge_error: '10/10 judged sessions failed: ThrottlingException',
+      checks: { O1_LANGUAGE: { checked: 5, failed: 0, rate: 0 } },
+      trend: [{ week: '2026-W40', rates: { O1_LANGUAGE: 0.5 } }, { week: '2026-W43', rates: { O1_LANGUAGE: 0 } }],
+    };
+    show();
+    expect((await screen.findByTestId('online-check-O4_GOAL')).textContent).toMatch(/judge did not run.*Throttling/);
+    expect(screen.getByTestId('online-check-O1_LANGUAGE').textContent).not.toMatch(/last/);   // W40 is not last week
+  });
 });

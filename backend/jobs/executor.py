@@ -486,7 +486,7 @@ def execute_job(
             # "degraded" straight through would ValidationError (models.py status
             # Literal has no "degraded") → swallowed → misreported as "failed" with
             # the sampler_error lost (adversarial catch). Surface the fault in summary.
-            sq_err = sq_result.get("sampler_error")
+            sq_err = sq_result.get("sampler_error") or sq_result.get("judge_error")
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
                 status="partial" if sq_err else "success",

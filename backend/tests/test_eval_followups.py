@@ -89,10 +89,12 @@ def test_rule3_offline_pass_to_fail_only():
 
 def test_rule4_online_worse_low_and_sampler_error():
     worse = dict(ONLINE, checks={"O1_LANGUAGE": {"rate": 0.3, "examples": [{"title": "Chat A"}]}},
-                 trend=[{"rates": {"O1_LANGUAGE": 0.1}}, {"rates": {"O1_LANGUAGE": 0.3}}])
+                 trend=[{"week": "2026-W42", "rates": {"O1_LANGUAGE": 0.1}},
+                        {"week": "2026-W43", "rates": {"O1_LANGUAGE": 0.3}}])
     items = build_follow_ups(_clean_history(), CASES, worse, NOW)
     assert _rules(items) == [4] and "Chat A" in items[0]["why"]
-    better = dict(worse, trend=[{"rates": {"O1_LANGUAGE": 0.5}}, {"rates": {"O1_LANGUAGE": 0.3}}])
+    better = dict(worse, trend=[{"week": "2026-W42", "rates": {"O1_LANGUAGE": 0.5}},
+                                {"week": "2026-W43", "rates": {"O1_LANGUAGE": 0.3}}])
     assert build_follow_ups(_clean_history(), CASES, better, NOW) == []
     assert _rules(build_follow_ups(_clean_history(), CASES, dict(ONLINE, sampler_error="db locked"), NOW)) == [4]
     low = dict(ONLINE, low_details=[{"title": "Chat B"}])
@@ -189,7 +191,8 @@ def test_online_fields_are_bounded_and_snippets_never_leave():
                  checks={"O1_LANGUAGE": {"rate": 0.4, "examples": [
                              {"title": long, "snippet": "SECRET_SNIPPET", "reason": "SECRET_REASON"}]},
                          "<script>": {"rate": 0.9}},
-                 trend=[{"rates": {"O1_LANGUAGE": 0.1, "<script>": 0.0}}, {"rates": {}}],
+                 trend=[{"week": "2026-W42", "rates": {"O1_LANGUAGE": 0.1, "<script>": 0.0}},
+                        {"week": "2026-W43", "rates": {}}],
                  low_details=[{"title": "Chat C", "snippet": "SECRET_SNIPPET", "reason": "SECRET_REASON"}],
                  sampler_error="OperationalError: /Users/someone/.swarm-ai/data.db is locked")
     items = build_follow_ups(_clean_history(), CASES, state, NOW)
@@ -215,3 +218,14 @@ def test_the_online_state_file_is_private_in_every_workspace():
 
     assert ".context/.session-quality-state.json" in GITIGNORE_CONTENT.splitlines()
     assert ".context/.session-quality-state.json" in _PRIVACY_GITIGNORE_RULES   # appended to old workspaces
+
+
+
+def test_online_compares_only_with_the_week_right_before_and_reports_a_judge_failure():
+    gap = dict(ONLINE, checks={"O1_LANGUAGE": {"rate": 0.3}},
+               trend=[{"week": "2026-W40", "rates": {"O1_LANGUAGE": 0.1}}, {"week": "2026-W43", "rates": {}}])
+    assert build_follow_ups(_clean_history(), CASES, gap, NOW) == []
+    adjacent = dict(gap, trend=[{"week": "2026-W42", "rates": {"O1_LANGUAGE": 0.1}}, {"week": "2026-W43", "rates": {}}])
+    assert _rules(build_follow_ups(_clean_history(), CASES, adjacent, NOW)) == [4]
+    judged = dict(ONLINE, judge_error="10/10 judged sessions failed: ThrottlingException")
+    assert "judge" in build_follow_ups(_clean_history(), CASES, judged, NOW)[0]["what"]["en"]

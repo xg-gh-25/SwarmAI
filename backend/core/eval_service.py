@@ -346,6 +346,7 @@ class EvalService:
                              "title": str((d or {}).get("title") or "")[:80] if isinstance(d, dict) else ""}
                             for d in (data.get("low_details") or [])],
             "sampler_error": str(sampler_error)[:300] if sampler_error else None,
+            "judge_error": str(data["judge_error"])[:300] if data.get("judge_error") else None,
             "trend": [t for t in (data.get("trend") or []) if isinstance(t, dict)][-12:],
         }
 

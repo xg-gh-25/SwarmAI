@@ -1473,7 +1473,21 @@ export interface OnlineScoring {
   checks?: Record<string, OnlineCheck>;
   low_details?: OnlineLowDetail[];
   sampler_error?: string | null;
+  judge_error?: string | null;
   trend?: { week?: string; rates?: Record<string, number> }[];
+}
+
+/** ISO-week labels (2026-W43 → 2026-W44) exactly one week apart. */
+export function consecutiveWeeks(before?: string, after?: string): boolean {
+  const monday = (label?: string) => {
+    const m = /^(\d{4})-W(\d{2})$/.exec(label ?? '');
+    if (!m) return null;
+    const jan4 = new Date(Date.UTC(Number(m[1]), 0, 4));
+    const day = (jan4.getUTCDay() + 6) % 7;
+    return jan4.getTime() - day * 86_400_000 + (Number(m[2]) - 1) * 7 * 86_400_000;
+  };
+  const b = monday(before), a = monday(after);
+  return b != null && a != null && a - b === 7 * 86_400_000;
 }
 
 function useSessionQuality() {
@@ -1504,7 +1518,9 @@ export function SessionQualityTab() {
   if (isLoading) return <Loading />;
 
   const trend = online?.trend ?? [];
-  const lastWeek = trend.length >= 2 ? trend[trend.length - 2].rates ?? {} : {};
+  // "last week" only when the entry before this one is the week before
+  const lastWeek = trend.length >= 2 && consecutiveWeeks(trend[trend.length - 2].week, trend[trend.length - 1].week)
+    ? trend[trend.length - 2].rates ?? {} : {};
   const low = online?.low_details ?? [];
   let status: string | null = null;
   if (!online?.last_run) status = zh ? '还没有运行过。它每周运行一次，也可以在 Jobs & Runs 里手动运行。' : 'Not run yet. It runs weekly; you can also run it from Jobs & Runs.';
@@ -1539,6 +1555,11 @@ export function SessionQualityTab() {
                     {before != null && ` · ${zh ? '上周' : 'last'} ${pct(before)}`}
                   </span>
                 </div>
+                {online?.judge_error && (c.id === 'O4_GOAL' || c.id === 'O5_TOOLS') && (
+                  <div className="text-meta text-[var(--color-status-warning)] mt-1 pl-3">
+                    {(zh ? '这周 judge 没跑成：' : 'The judge did not run this week: ') + online.judge_error}
+                  </div>
+                )}
                 {(check.examples ?? []).map((e, i) => (
                   <div key={`${e.session_id}-${i}`} className="text-meta text-[var(--color-text-muted)] mt-1 pl-3">
                     <span className="text-[var(--color-text)]">{e.title || e.session_id}</span>

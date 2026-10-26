@@ -20,7 +20,8 @@ and tasks got done in real use.
 The result is written to ``<workspace>/.context/.session-quality-state.json``
 (gitignored: it holds session titles, snippets and reasons for the owner):
 ``{version, last_run, window_days, sessions_checked, checks: {id: {checked, failed,
-rate, examples}}, low_details, sampler_error, trend}``. ``trend`` gets this week's
+rate, examples}}, low_details, sampler_error, judge_error, trend}``; ``judge_error``
+is set when every judged session failed (O4/O5 then did not run). ``trend`` gets this week's
 rates appended before the file is written (one entry per ISO week, last 12 kept), so
 ``trend[-2]`` is the week before (core.eval_followups reads it that way).
 Readers: EvalService.get_session_quality (the Online tab) and eval_followups.
@@ -122,11 +123,30 @@ def split_turns(messages: list[dict], since: str) -> list[dict]:
     return turns
 
 
+def _final_text(blocks: list) -> str:
+    """The turn's answer: its last text block, as the offline check reads the
+    agent's final text (not the narration between tool calls)."""
+    texts = [t for t in (_text_of([b]) for b in blocks if isinstance(b, dict)) if t.strip()]
+    return texts[-1] if texts else ""
+
+
+def _asked_in(text: str) -> str | None:
+    """The user's language. A Chinese question that pastes an English log is still a
+    Chinese question (R19: CJK in, CJK out), so two CJK characters outside code make
+    it Chinese; otherwise English words make it English."""
+    from scripts.eval_runner import prose_counts
+
+    cjk, latin = prose_counts(text)
+    if cjk >= 2:
+        return "cjk"
+    return "latin" if latin else None
+
+
 def check_language(turn: dict) -> tuple[bool, str]:
     """(applies, failure reason or ""). R19: the reply follows the user's language."""
     from scripts.eval_runner import _behavior_check_failures, prose_language
 
-    asked, reply = prose_language(turn["user"]), _text_of(turn["blocks"])
+    asked, reply = _asked_in(turn["user"]), _final_text(turn["blocks"])
     if asked is None or not reply.strip():
         return False, ""
     if asked == "cjk":
@@ -191,14 +211,18 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
         tallies["O3_CORRECTIONS"].add(corrected, sid, session, turns[0]["user"],
                                       "the user corrected the agent" if corrected else "")
     low: list[dict] = []
-    for sid in select_sessions(session_turns=turn_counts, correction_session_ids=correction_ids):
+    judge_errors: list[str] = []
+    sample = select_sessions(session_turns=turn_counts, correction_session_ids=correction_ids)
+    for sid in sample:
         session = sessions[sid]
         turns = split_turns(session.get("messages") or [], since)
         blocks = [b for t in turns for b in t["blocks"]]
         tools = [b.get("name") for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-        replies = [t for t in (_text_of([b]) for b in blocks if isinstance(b, dict)) if t.strip()]
-        result = scorer(turns[0]["user"], replies[-1] if replies else "", tools)
-        if result.get("status") in ("skipped", "error"):
+        result = scorer(turns[0]["user"], _final_text(blocks), tools)
+        if result.get("status") == "error":
+            judge_errors.append(str(result.get("notes") or "judge error"))
+            continue
+        if result.get("status") == "skipped":
             continue
         goal, tool = result.get("goal_score", 1.0), result.get("tool_score", 1.0)
         reason = str(result.get("reason") or "")
@@ -208,8 +232,13 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
             low.append({"session_id": sid, "title": (session.get("title") or "")[:_TITLE_MAX],
                         "goal_score": goal, "tool_score": tool, "dimension": result.get("dimension"),
                         "reason": reason[:_REASON_MAX]})
+    # Every judged session failing is a fault, not "no data" (the judge is down).
+    judge_error = (f"{len(judge_errors)}/{len(sample)} judged sessions failed: "
+                   f"{judge_errors[0].split(':', 1)[0][:80]}"
+                   if sample and len(judge_errors) == len(sample) else None)
     return {"sessions_checked": len(turn_counts),
-            "checks": {cid: t.out() for cid, t in tallies.items()}, "low_details": low}
+            "checks": {cid: t.out() for cid, t in tallies.items()}, "low_details": low,
+            "judge_error": judge_error}
 
 
 def _with_trend(previous: dict | None, checks: dict, now: datetime) -> list[dict]:

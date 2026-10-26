@@ -170,6 +170,16 @@ def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[
                   "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped)]
 
 
+def _consecutive_weeks(before: Any, after: Any) -> bool:
+    """ISO-week labels like 2026-W43 / 2026-W44 one week apart."""
+    try:
+        b = datetime.strptime(f"{before}-1", "%G-W%V-%u")
+        a = datetime.strptime(f"{after}-1", "%G-W%V-%u")
+    except (TypeError, ValueError):
+        return False
+    return a - b == timedelta(days=7)
+
+
 def _session_label(entry: Any) -> str:
     if not isinstance(entry, Mapping):
         return ""
@@ -187,8 +197,16 @@ def _online(state: Mapping[str, Any] | None, include_session_text: bool) -> list
                          kind,
                          "Fix the cause, then run the session-quality job once.",
                          "修好原因后，手动跑一次 session-quality 任务。"))
+    if state.get("judge_error"):
+        out.append(_item("medium", 4, "The online judge did not run this week (goal and tool checks)",
+                         "这周线上评分的 judge 没跑成（目标和工具两项）",
+                         str(state["judge_error"]).split(":", 1)[0][:80],
+                         "Check the model credentials, then run the session-quality job once.",
+                         "检查模型凭证，然后手动跑一次 session-quality 任务。"))
     trend = [t for t in state.get("trend") or [] if isinstance(t, Mapping)]
-    previous = (trend[-2].get("rates") or {}) if len(trend) >= 2 else {}
+    # "last week" only when the entry before this one IS the week before
+    previous = (trend[-2].get("rates") or {}) if len(trend) >= 2 and _consecutive_weeks(
+        trend[-2].get("week"), trend[-1].get("week")) else {}
     checks = state.get("checks") if isinstance(state.get("checks"), Mapping) else {}
     for cid, check in sorted(checks.items()):
         if not isinstance(check, Mapping) or not _ONLINE_CHECK_ID.match(str(cid)):

@@ -31,7 +31,7 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 # The 6 canonical dimensions (SSOT: eval_runner.DIMENSIONS). The judge attributes
-# a low-scoring session to one of these so a harvested draft lands with the right
+# a low-scoring session to one of these, so the Online tab names a known
 # dimension. Kept as a frozenset for validation, not re-derived from eval_runner
 # to avoid a scripts<-core import cycle (the same reason golden_case_validator
 # hand-mirrors its evaluator set).

@@ -199,3 +199,27 @@ def test_degraded_maps_to_valid_JobResult_literal():
     with pytest.raises(Exception):
         JobResult(job_id="x", timestamp=datetime.now(timezone.utc), status="degraded", summary="",
                   duration_seconds=0.0)
+
+
+
+def test_a_judge_that_fails_on_every_session_is_reported_not_shown_as_no_data(tmp_path):
+    def broken(prompt, response, tools):
+        return {"status": "error", "notes": "judge call failed: ThrottlingException: slow down"}
+    corr = [{"type": "user_correction", "session_id": "a", "ts": NOW.timestamp()}]
+    result, _, _ = _run(tmp_path, {"a": _good()}, corrections=corr, scorer=broken)
+    assert result["judge_error"].startswith("1/1 judged sessions failed")
+    ok, _, _ = _run(tmp_path, {"a": _good()}, corrections=corr)
+    assert ok["judge_error"] is None
+
+
+def test_language_is_judged_on_the_answer_and_a_pasted_log_keeps_a_chinese_question_chinese(tmp_path):
+    log = "Traceback (most recent call last): File app.py line 3 in main ValueError invalid literal for int"
+    sessions = {
+        "log": {"title": "log", "messages": [_msg("user", f"为什么报错？{log}"),
+                                             _msg("assistant", [_text("因为输入不是数字。")])]},
+        "narrated": {"title": "narr", "messages": [_msg("user", "改一下这个函数"),
+                                                   _msg("assistant", [_text("Let me read the function first and check what it currently returns before I change anything at all."), _tool(),
+                                                                      _text("已经改好了，现在返回整数。")])]},
+    }
+    result, _, _ = _run(tmp_path, sessions)
+    assert result["checks"]["O1_LANGUAGE"] == {"checked": 2, "failed": 0, "rate": 0.0, "examples": []}
