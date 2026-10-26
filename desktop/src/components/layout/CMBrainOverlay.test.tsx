@@ -42,10 +42,10 @@ const REVIEW_PROPS = [
   { id: 'proposal_1d7c2e', target_doc: 'TECH.md', target_section: 'Architecture', content: 'Record the lite-endpoint split as a TECH decision.', confidence: 0.71 },
   { id: 'proposal_e65e4b', target_doc: 'PRODUCT.md', target_section: 'C&M overlay', content: 'Locked context files open read-only in Canvas.', confidence: 0.64 },
 ];
-// Real-shaped governance (Approve) proposals — source_class/occurrence/proposed_rule.
+// Real-shaped governance (Approve) proposals — GC rows: gc_id / proposed_rule / checked.
 const GOV_PROPS = [
-  { id: 'CLASS_B:rule', source_class: 'CLASS_B', proposal_kind: 'rule', occurrence_count: 6, proposed_rule: 'Any runtime/deploy-state claim must cite a same-turn observation.', confidence: 0.9 },
-  { id: 'CLASS_A:gate', source_class: 'CLASS_A', proposal_kind: 'gate', occurrence_count: 5, proposed_rule: 'Block commit when a self-authored test patches the symbol-under-change.', confidence: 0.85 },
+  { id: 'GC14', gc_id: 'GC14', occurrence_count: 3, proposed_rule: 'Any runtime/deploy-state claim must cite a same-turn observation.', checked: 'checked against: R16b — new because it names the same-turn rule' },
+  { id: 'GC15', gc_id: 'GC15', occurrence_count: 3, proposed_rule: 'Block commit when a self-authored test patches the symbol-under-change.', checked: 'checked against: R28 — new because it names the patch' },
 ];
 
 // lite endpoint shape: exactly { token_block, pending_proposals, governance_pending_count }
@@ -510,9 +510,9 @@ describe('CMBrainOverlay — AC3/4/5 proposal cards + dual-route actions', () =>
     act(() => { screen.getByTestId('cm-needs-approve').click(); });
     await screen.findByTestId('cm-needs-list');
     // the governance LIST is lazy (fetched only when Approve opens) — wait for the card
-    const card = await screen.findByTestId('cm-proposal-CLASS_B:rule');
+    const card = await screen.findByTestId('cm-proposal-GC14');
     const list = screen.getByTestId('cm-needs-list');
-    expect(list.textContent).toMatch(/CLASS_B/);
+    expect(list.textContent).toMatch(/GC14/);
     expect(list.textContent).toMatch(/same-turn observation/);
     // governance card has a Defer action (cultivation does not)
     act(() => { (card.querySelector('[data-testid="cm-card-defer"]') as HTMLElement).click(); });
@@ -521,7 +521,7 @@ describe('CMBrainOverlay — AC3/4/5 proposal cards + dual-route actions', () =>
       const gov = calls.find((c) => (c[0] as string).includes('/eval/governance/decision'));
       expect(gov).toBeTruthy();
       expect((gov![1] as { proposal_id: string; decision: string }).decision).toBe('defer');
-      expect((gov![1] as { proposal_id: string }).proposal_id).toBe('CLASS_B:rule');
+      expect((gov![1] as { proposal_id: string }).proposal_id).toBe('GC14');
     });
   });
 });
@@ -549,7 +549,7 @@ describe('CMBrainOverlay — Gate-2: lazy Approve list shows loading, not a fals
     expect(screen.getByTestId('cm-needs-list').textContent).not.toMatch(/nothing/i);
     // resolve → cards appear
     await act(async () => { resolveGov(null); });
-    await screen.findByTestId('cm-proposal-CLASS_B:rule');
+    await screen.findByTestId('cm-proposal-GC14');
   });
 });
 
@@ -611,69 +611,17 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     expect(explainer.textContent).toMatch(/checked against/i);
   });
 
-  // AC2: source_class rendered as a human phrase, not the raw CLASS_x token as the subject.
-  it('Approve card renders a human phrase for source_class (not raw CLASS_B as the subject)', async () => {
+  // A GC proposal shows its id and what it was checked against (the why).
+  it('Approve card shows the GC id and the Checked text', async () => {
     mockHealth({}, { governancePending: 2 });
     renderOverlay();
     openOverlay();
     await screen.findByTestId('cm-overview-rail');
     await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
     act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const card = await screen.findByTestId('cm-proposal-CLASS_B:rule');
-    // a human phrase for CLASS_B (infer-without-verify / verification family) appears
-    const cls = card.querySelector('[data-testid="cm-class-phrase"]');
-    expect(cls).not.toBeNull();
-    expect(cls!.textContent!.toLowerCase()).toMatch(/verif|observ|infer/);
-    // the phrase text is not merely the raw token
-    expect(cls!.textContent).not.toBe('CLASS_B');
-  });
-
-  it('source_class resolver falls back gracefully for an unmapped class code', async () => {
-    mockHealth({}, { governancePending: 1 });
-    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: REVIEW_PROPS, governance_pending_count: 1 } });
-      if (url.includes('governance/pending')) return Promise.resolve({ data: { proposals: [{ id: 'CLASS_Z:rule', source_class: 'CLASS_Z', proposal_kind: 'rule', occurrence_count: 3, proposed_rule: 'Some unmapped-class rule.', confidence: 0.9 }], total: 1 } });
-      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 1 } });
-    });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const card = await screen.findByTestId('cm-proposal-CLASS_Z:rule');
-    // does not crash; the class-phrase slot renders SOMETHING readable (the raw code as graceful fallback is allowed)
-    const cls = card.querySelector('[data-testid="cm-class-phrase"]');
-    expect(cls).not.toBeNull();
-    expect(cls!.textContent!.length).toBeGreaterThan(0);
-  });
-
-  // AC3: low-confidence governance items are visually demoted (Approve branch only).
-  it('demotes a low-confidence governance item (conf < 0.7) as not-yet-actionable', async () => {
-    mockHealth({}, { governancePending: 1 });
-    (api.get as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
-      if (url.includes('context-health/lite')) return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: REVIEW_PROPS, governance_pending_count: 1 } });
-      if (url.includes('governance/pending')) return Promise.resolve({ data: { proposals: [{ id: 'CLASS_C:rule', source_class: 'CLASS_C', proposal_kind: 'rule', occurrence_count: 3, proposed_rule: 'A low-confidence emerging rule.', confidence: 0.5 }], total: 1 } });
-      if (url.includes('brain-trend')) return Promise.resolve({ data: { points: [], count: 0, launch_date: null } });
-      return Promise.resolve({ data: { token_block: TOKEN_BLOCK, pending_proposals: [], governance_pending_count: 1 } });
-    });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const card = await screen.findByTestId('cm-proposal-CLASS_C:rule');
-    // demoted marker present
-    expect(card.querySelector('[data-testid="cm-demoted"]')).not.toBeNull();
-  });
-
-  it('does NOT demote a high-confidence governance item (conf >= 0.7)', async () => {
-    mockHealth({}, { governancePending: 2 });
-    renderOverlay();
-    openOverlay();
-    await screen.findByTestId('cm-overview-rail');
-    await waitFor(() => expect(screen.getByTestId('cm-needs-approve').textContent).toContain('2'));
-    act(() => { screen.getByTestId('cm-needs-approve').click(); });
-    const card = await screen.findByTestId('cm-proposal-CLASS_B:rule'); // conf 0.9
-    expect(card.querySelector('[data-testid="cm-demoted"]')).toBeNull();
+    const card = await screen.findByTestId('cm-proposal-GC14');
+    expect(card.querySelector('[data-testid="cm-gc-id"]')!.textContent).toBe('GC14');
+    expect(card.textContent).toMatch(/checked against: R16b/);
   });
 
   it('does NOT apply the demotion cut to Review items (Review conf = extraction quality)', async () => {

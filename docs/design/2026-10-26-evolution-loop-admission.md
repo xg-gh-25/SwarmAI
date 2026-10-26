@@ -239,6 +239,12 @@ Threads 的 Evolution Pipeline 条）。
 
 ## 8. 修订记录
 
+- **实现备注（2026-10-26，代码审查后）**：correctness 与 state-machine 两位专家指出，proposal 文件作为 GC 表的
+  第二份副本会产生竞态（已裁决的提案被挖掘器重新追加）、过期（GC 行被改后提案仍在）和旧行残留。按原因一次修：
+  删掉这份副本，GC 表成为唯一存储，读取方每次从 EVOLUTION.md 推导，裁决在原行写入；`governance_router` 和
+  优化器的 Phase 3c 随之删除。接受的裁决写 `✔ ACCEPTED`（规则还没写进文件，不叫 PROMOTED）。回写只改 GC 段内
+  未裁决的行、保留换行与文件权限、支持 `\|`；`--affected-by` 不再自动带出 behavior case；接口的阻塞锁放进线程；
+  审计状态文件损坏时自动重写 baseline。§3.2、§5、§6 中关于 `.evolution_proposals.json` 的描述以此为准。
 - **r3（定稿）**：XG 选 §4 的 A；§3.1、§4、§7 改为已定结论，不再列待定项。
 - **r2（零上下文审查后）**，按原因合并：
   - **我对评估能力的判断错了**：只看了公开 golden set，漏了 runner 合并的私有集（172 条，60 条覆盖治理

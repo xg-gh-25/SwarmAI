@@ -1,58 +1,52 @@
-"""Governance miner — turns mature GC candidates into proposals, and nothing else.
+"""Governance proposals — read straight from the GC table, decided in place.
 
-Reads the Governance Candidates table in EVOLUTION.md:
+The Governance Candidates table in EVOLUTION.md is the ONLY store of governance
+proposals:
 
+    ## Governance Candidates
     | ID | Proposed Rule | Evidence | Count | Since | Checked |
 
-A row becomes a proposal only when ALL of these hold (宁缺毋滥 — an empty or
+A row is a pending proposal while ALL of these hold (宁缺毋滥 — an empty or
 unchecked proposal is worse than none; docs/design/2026-10-26-evolution-loop-admission.md §3.2):
 
-  - Count reaches the threshold ("3/3"),
-  - the Checked cell says what the rule was checked against and why it is new
+  - its Count cell reads N/M with N at the threshold ("3/3"),
+  - its Checked cell says what the rule was checked against and why it is new
     ("checked against: R27, P1 — new because …"). The agent writes it when it
     bumps the count; it has every governance file in its prompt, so the semantic
-    check happens there. The miner only tests that the cell is filled,
-  - the row carries no verdict yet (✅ PROMOTED / ✖ REJECTED in the Count cell).
+    check happens there. This module only tests that the cell is filled.
 
-``mark_gc_decision`` writes the human's verdict back into the row, so a decided
-candidate is never mined again.
+``mark_gc_decision`` replaces the Count cell with the human's verdict
+(``✔ ACCEPTED <date>`` / ``✖ REJECTED <date>``); a verdict no longer parses as
+N/M, so the row is never proposed again. There is no second copy of a proposal
+to drift, race or go stale — readers derive the list from the table every time.
 
-SAFETY INVARIANT: this module NEVER writes SOUL/AGENT/STEERING. It produces
-proposal data, and edits only the Count cell of one GC row in EVOLUTION.md.
+SAFETY INVARIANT: this module NEVER writes SOUL/AGENT/STEERING. It edits only the
+Count cell of undecided GC rows in EVOLUTION.md.
 """
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-PROMOTED = "✅ PROMOTED"
+ACCEPTED = "✔ ACCEPTED"
 REJECTED = "✖ REJECTED"
 
+_SECTION = "## Governance Candidates"
 # A Checked cell that is present but says nothing is treated as empty.
 _EMPTY_CHECKED = {"", "-", "—", "–", "n/a", "na", "none", "tbd"}
-
-_GC_ROW = re.compile(r"^\|\s*(GC\d+)\s*\|", re.MULTILINE)
-
-
-@dataclass
-class GCCandidate:
-    """A parsed row of the Governance Candidates table."""
-
-    gc_id: str
-    proposed_rule: str
-    evidence: list[str]
-    evidence_count: int
-    since: str = ""
-    checked: str = ""
+_GC_ROW = re.compile(r"^\|\s*(GC\d+)\s*\|")
+_COUNT = re.compile(r"^\s*(\d+)/\d+")
+_CELL_SPLIT = re.compile(r"(?<!\\)\|")   # a markdown "\|" stays inside its cell
 
 
 @dataclass
 class GovernanceProposal:
-    """A governance proposal — the miner's only output."""
+    """A pending GC row, in the shape the dashboard / Need-You readers expect."""
 
     gc_id: str
     proposed_rule: str
@@ -70,9 +64,9 @@ class GovernanceProposal:
         return text[:120]
 
     def to_proposal_dict(self) -> dict:
-        """Serialize to the format expected by .evolution_proposals.json."""
         return {
             "target": "governance",
+            "id": self.gc_id,
             "gc_id": self.gc_id,
             "title": self.title,
             "proposed_rule": self.proposed_rule,
@@ -82,97 +76,90 @@ class GovernanceProposal:
         }
 
 
+def _section_lines(lines: list[str]) -> range:
+    """Index range of the Governance Candidates section (empty when absent)."""
+    start = next((i for i, l in enumerate(lines) if l.strip().startswith(_SECTION)), None)
+    if start is None:
+        return range(0)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    return range(start + 1, end)
+
+
 def _cells(line: str) -> list[str]:
-    return [c.strip() for c in line.strip().strip("|").split("|")]
-
-
-def mine_gc_candidates(evolution_md: Path) -> list[GCCandidate]:
-    """Parse every GC row that has no verdict yet (any count)."""
-    if not evolution_md.exists():
-        return []
-    results: list[GCCandidate] = []
-    for line in evolution_md.read_text(encoding="utf-8").splitlines():
-        if not _GC_ROW.match(line):
-            continue
-        cells = _cells(line)
-        if len(cells) < 5:
-            continue
-        gc_id, rule, evidence_str, count_str, since = cells[:5]
-        checked = cells[5] if len(cells) > 5 else ""
-        # A verdict (✅ PROMOTED / ✖ REJECTED) replaces the "N/M" count, so a
-        # decided row fails this match and is never mined again.
-        count_match = re.match(r"(\d+)/\d+", count_str)
-        if not count_match:
-            continue
-        results.append(
-            GCCandidate(
-                gc_id=gc_id,
-                proposed_rule=rule.strip('"'),
-                evidence=[e.strip() for e in evidence_str.split(",") if e.strip()],
-                evidence_count=int(count_match.group(1)),
-                since=since,
-                checked=checked,
-            )
-        )
-    return results
+    parts = _CELL_SPLIT.split(line.rstrip("\r"))
+    return [c.strip() for c in parts[1:-1]] if len(parts) > 2 else []
 
 
 def generate_governance_proposals(evolution_md: Path, threshold: int = 3) -> list[GovernanceProposal]:
-    """Proposals for GC rows at the threshold with a filled Checked cell.
-
-    SAFETY: never writes any file. Returns data only.
-    """
-    return [
-        GovernanceProposal(
-            gc_id=gc.gc_id,
-            proposed_rule=gc.proposed_rule,
-            evidence=gc.evidence[:5],
-            occurrence_count=gc.evidence_count,
-            checked=gc.checked,
-        )
-        for gc in mine_gc_candidates(evolution_md)
-        if gc.evidence_count >= threshold and gc.checked.lower() not in _EMPTY_CHECKED
-    ]
+    """The pending proposals: undecided GC rows at the threshold with Checked filled."""
+    if not evolution_md.exists():
+        return []
+    lines = evolution_md.read_text(encoding="utf-8").split("\n")
+    out: list[GovernanceProposal] = []
+    for i in _section_lines(lines):
+        if not _GC_ROW.match(lines[i]):
+            continue
+        cells = _cells(lines[i])
+        if len(cells) < 5:
+            continue
+        gc_id, rule, evidence_str, count_str = cells[:4]
+        checked = cells[5] if len(cells) > 5 else ""
+        m = _COUNT.match(count_str)          # a verdict does not parse as N/M
+        if not m or int(m.group(1)) < threshold or checked.lower() in _EMPTY_CHECKED:
+            continue
+        out.append(GovernanceProposal(
+            gc_id=gc_id,
+            proposed_rule=rule.strip('"'),
+            evidence=[e.strip() for e in evidence_str.split(",") if e.strip()][:5],
+            occurrence_count=int(m.group(1)),
+            checked=checked,
+        ))
+    return out
 
 
 def mark_gc_decision(evolution_md: Path, gc_id: str, accepted: bool, today: date | None = None) -> bool:
-    """Write the human's verdict into the GC row's Count cell, under EVOLUTION.md's lock.
+    """Write the verdict into the Count cell of every UNDECIDED row with this id.
 
-    Returns True when the row was found and rewritten. Only that one cell of that
-    one row changes; every other byte of the file is kept.
+    Runs under EVOLUTION.md's lock (shared with locked_write and the maintenance
+    hook). A row that already carries a verdict is left alone. Line endings, the
+    trailing newline and the file mode are preserved; nothing but those cells
+    changes. Returns True when at least one row was marked.
     """
     if not evolution_md.exists():
         return False
     from utils.file_lock import flock_exclusive, flock_unlock
 
-    verdict = f"{PROMOTED if accepted else REJECTED} {(today or date.today()).isoformat()}"
+    verdict = f"{ACCEPTED if accepted else REJECTED} {(today or date.today()).isoformat()}"
     lock_path = evolution_md.with_suffix(evolution_md.suffix + ".lock")
     with open(lock_path, "w") as fd:
         flock_exclusive(fd)
         try:
-            text = evolution_md.read_text(encoding="utf-8")
+            with open(evolution_md, encoding="utf-8", newline="") as f:
+                text = f.read()
             lines = text.split("\n")
             changed = False
-            for i, line in enumerate(lines):
-                m = _GC_ROW.match(line)
+            for i in _section_lines(lines):
+                m = _GC_ROW.match(lines[i])
                 if not m or m.group(1) != gc_id:
                     continue
-                parts = line.split("|")
-                # parts: ['', ' GC14 ', rule, evidence, count, since, ...]
-                if len(parts) < 6:
-                    return False
-                parts[4] = f" {verdict} "
-                lines[i] = "|".join(parts)
+                spans = [s.start() for s in _CELL_SPLIT.finditer(lines[i])]
+                if len(spans) < 6:
+                    continue
+                a, b = spans[3], spans[4]           # the Count cell lies between pipes 4 and 5
+                if not _COUNT.match(lines[i][a + 1:b]):
+                    continue                         # already decided, or not a count
+                lines[i] = f"{lines[i][:a + 1]} {verdict} {lines[i][b:]}"
                 changed = True
-                break
             if not changed:
                 return False
             tmp = tempfile.NamedTemporaryFile(
-                "w", dir=evolution_md.parent, suffix=".tmp", delete=False, encoding="utf-8"
+                "w", dir=evolution_md.parent, suffix=".tmp", delete=False,
+                encoding="utf-8", newline="",
             )
             try:
                 tmp.write("\n".join(lines))
                 tmp.close()
+                shutil.copymode(evolution_md, tmp.name)
                 os.replace(tmp.name, evolution_md)
             except Exception:
                 tmp.close()

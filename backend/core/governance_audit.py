@@ -10,7 +10,7 @@ State: ``<workspace>/.context/.governance_audit.json``
     {"baseline_model": "<model at first start>", "audited_model": "<model last audited>"}
 
 - ``record_baseline`` — daemon startup; writes ``baseline_model`` only when the file
-  does not exist (a first install gets no hint; nothing has been audited, so it is
+  does not exist or cannot be read (a first install gets no hint; nothing has been audited, so it is
   never recorded as ``audited_model``).
 - ``audit_hint`` — pure read, for the session briefing. Never writes.
 - ``record_audit`` — the s_context-hygiene audit, after the user approved its edits:
@@ -60,9 +60,14 @@ def _write(workspace_dir: str | Path, data: dict) -> None:
 
 
 def record_baseline(workspace_dir: str | Path, default_model: str | None) -> bool:
-    """Write ``baseline_model`` when no state exists yet. Returns True if written."""
-    if not default_model or _path(workspace_dir).exists():
+    """Write ``baseline_model`` when no readable state exists yet. Returns True if written."""
+    if not default_model:
         return False
+    if _path(workspace_dir).exists():
+        if _read(workspace_dir) is not None:
+            return False
+        # An unreadable file would silence the hint forever: start over.
+        logger.warning("governance audit state unreadable; rewriting the baseline")
     _write(workspace_dir, {"baseline_model": default_model})
     return True
 

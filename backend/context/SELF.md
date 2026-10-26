@@ -69,7 +69,7 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   (`GET /api/eval/archive-list`), which parses the shapes the `--file` route can't. Per-route
   detail: `core/memory_index`'s header. Memory is sovereign (local-first, portable, never
   platform-locked).
-- **Self-evolution** (`core/evolution/`: `governance_miner` → `governance_router`) — a
+- **Self-evolution** (`core/evolution/governance_miner`) — a
   correction becomes a C-entry in EVOLUTION.md; a recurring pattern with specific rule text
   becomes a GC candidate, and only a GC row with a filled "checked against" column and 3×
   evidence is surfaced as a proposal. Nothing classifies or counts corrections into buckets:

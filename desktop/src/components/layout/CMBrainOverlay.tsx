@@ -90,29 +90,6 @@ interface ArchiveListResp { files: ArchiveFile[]; total_files: number; source: A
 interface ArchiveSearchHit { title: string; snippet: string; source_file: string; shard: string; }
 interface ArchiveSearchResp { results: ArchiveSearchHit[]; q: string; source: ArchiveSource; }
 
-// ── Governance source_class → human phrase (R20: never surface a raw CLASS_x token
-// as the subject). Keyed on the canonical class name the backend serves. An unmapped
-// code falls back to a readable generic (never crashes, never a bare token as subject).
-// SOURCE OF TRUTH: backend/core/evolution/class_key.py + judgment_classifier — only
-// cognitive classes (CLASS_A/B/C, SESSION_LOW_QUALITY) reach the Approve queue today
-// (is_cognitive_class filters OPERATIONAL/UNCLASSIFIED). If the backend adds a class
-// (e.g. CLASS_D), add it here — until then the fallback below renders it gracefully.
-const CLASS_PHRASE: Record<string, string> = {
-  CLASS_A: 'over-confidence → skipped a step',
-  CLASS_B: 'inferred without verifying',
-  CLASS_C: 'fixed the wrong layer',
-  SESSION_LOW_QUALITY: 'low-quality session signal',
-};
-function classPhrase(sourceClass: string): string {
-  if (!sourceClass) return 'recurring pattern';
-  return CLASS_PHRASE[sourceClass] ?? `recurring pattern (${sourceClass})`;
-}
-
-// Below this recurrence-confidence, a governance proposal is not-yet-actionable and
-// is visually DEMOTED (display-only — the backend still serves it). Approve-queue ONLY:
-// Review conf is extraction quality, a different axis, and is never cut here.
-const GOV_ACTIONABLE_CONF = 0.7;
-
 // Per-queue meta: the intent-bearing label + a one-line explainer stating WHAT the
 // queue governs AND what its `conf` means there — the two queues govern different
 // objects (knowledge sedimentation vs rule/gate governance) and their conf axes differ.
@@ -393,12 +370,8 @@ function ProposalCard({
   const [state, setState] = useState<null | string>(null);
   const conf = typeof item.confidence === 'number' ? (item.confidence as number) : null;
 
-  // Approve-queue ONLY: demote a below-threshold (not-yet-actionable) governance item.
-  // Review conf is extraction quality (different axis) → never demoted here.
-  const demoted = kind === 'approve' && conf != null && conf < GOV_ACTIONABLE_CONF;
-
   // What / Where / Why differ by queue.
-  let what: string, where: ReactNode, why: string, tag: ReactNode = null, classPhraseNode: ReactNode = null;
+  let what: string, where: ReactNode, why: string, tag: ReactNode = null;
   if (kind === 'review') {
     const doc = String(item.target_doc ?? '');
     const section = String(item.target_section ?? '');
@@ -406,26 +379,22 @@ function ProposalCard({
     where = <>propose in <span className="font-mono" style={{ color: 'var(--color-primary)' }}>{doc}{section ? ` › ${section}` : ''}</span></>;
     why = String(item.content ?? '');
   } else {
-    const cls = String(item.source_class ?? '');
+    // A Governance Candidate (EVOLUTION.md GC row): 3× evidence, already checked
+    // against the existing rules. The GC id is the tag; the Checked text is the why.
+    const gcId = String(item.gc_id ?? id);
     const occ = item.occurrence_count;
-    const proposalKind = String(item.proposal_kind ?? 'rule');
-    const phrase = classPhrase(cls);
-    what = `Add ${proposalKind}: ${String(item.proposed_rule ?? '(no rule text)')}`;
-    where = <>governance {proposalKind}</>;
-    // Why = the human-readable failure pattern + how often it recurred (no raw CLASS_x subject).
-    why = `${phrase}${typeof occ === 'number' ? ` · recurred ${occ}×` : ''}`;
-    // Tag carries the human phrase (data-testid=cm-class-phrase), the raw code demoted to a title tooltip.
-    classPhraseNode = (
+    what = `Add rule: ${String(item.proposed_rule ?? '(no rule text)')}`;
+    where = <>governance rule · EVOLUTION.md {gcId}</>;
+    why = `${String(item.checked ?? '')}${typeof occ === 'number' ? ` · seen ${occ}×` : ''}`;
+    tag = (
       <span
-        data-testid="cm-class-phrase"
-        title={cls}
-        className="mr-1.5 rounded px-1.5 py-[1px] text-meta font-semibold"
-        style={{ color: 'var(--color-status-error)', background: 'color-mix(in srgb, var(--color-status-error) 14%, transparent)' }}
+        data-testid="cm-gc-id"
+        className="mr-1.5 rounded px-1.5 py-[1px] text-meta font-semibold font-mono"
+        style={{ color: 'var(--color-primary)', background: 'color-mix(in srgb, var(--color-primary) 14%, transparent)' }}
       >
-        {phrase}
+        {gcId}
       </span>
     );
-    tag = classPhraseNode;
   }
 
   async function act(decision: 'accept' | 'reject' | 'defer') {
@@ -437,15 +406,12 @@ function ProposalCard({
     <div
       data-testid={`cm-proposal-${id}`}
       className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3.5 py-3"
-      style={{ opacity: state ? 0.4 : demoted ? 0.6 : 1 }}
+      style={{ opacity: state ? 0.4 : 1 }}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div data-testid="cm-card-what" className="text-body font-semibold leading-snug text-[var(--color-text)]">{tag}{what}</div>
           <div className="mt-0.5 text-meta text-[var(--color-text-muted)]">{where}</div>
-          {demoted && (
-            <div className="mt-1"><StatusBadge testid="cm-demoted" tone="neutral">still emerging — not yet actionable</StatusBadge></div>
-          )}
         </div>
         {conf != null && <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-[1px] text-meta text-[var(--color-text-faint)]">conf {conf.toFixed(2)}</span>}
       </div>

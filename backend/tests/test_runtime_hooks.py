@@ -219,9 +219,9 @@ class TestUserCorrectionDetector:
         self, corrections_file, session_context, monkeypatch
     ):
         """M5 Part 2: an EXPLICIT-error correction is LOGGED to corrections.jsonl
-        (the durable signal the post-session classifier consumes) but is NOT
+        (the durable signal) but is NOT
         synchronously seeded into golden_set from this hot path. Seeding moved to
-        governance_router.classify_new_corrections, gated on a real CLASS — so
+        a post-session classifier (since deleted), gated on a real CLASS — so
         unclassified test-session noise no longer dumps straight into golden_set
         (run_0305426d). This replaces the old 'still seeds' regression guard,
         which asserted the very blind-seed behavior we removed."""

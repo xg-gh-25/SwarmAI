@@ -587,23 +587,21 @@ class TestSizeValve:
 
 
 class TestHookWritesNoGovernanceProposal:
-    """Session close classifies nothing and proposes nothing: the bucket-count
-    chain (classify -> count -> ladder -> proposal) was deleted
-    (docs/design/2026-10-26-evolution-loop-admission.md §3.1)."""
+    """Session close classifies nothing, counts nothing and proposes nothing: the
+    bucket-count chain was deleted (docs/design/2026-10-26-evolution-loop-admission.md §3.1)."""
 
     @pytest.mark.asyncio
-    async def test_hook_never_appends_a_proposal(self, tmp_path, monkeypatch):
-        import core.evolution.governance_router as gr
-
+    async def test_hook_writes_none_of_the_chain_stores(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
         _write_recent_evolution_state(ctx_dir)
         (ctx_dir / "EVOLUTION.md").write_text(_make_evolution_md([]))
         (ctx_dir / "EVOLUTION_CHANGELOG.jsonl").write_text("")
-
-        appended: list[dict] = []
-        monkeypatch.setattr(gr, "_append_proposal", lambda p, path: appended.append(p))
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
-        assert appended == []
-        assert not hasattr(gr, "classify_new_corrections")
+        for p in (ctx_dir / ".evolution_proposals.json",
+                  ctx_dir / ".governance_promotion_candidates.json",
+                  tmp_path / ".swarm-ai" / "state" / "governance_pending.json",
+                  tmp_path / ".swarm-ai" / "state" / "correction_tracker.json"):
+            assert not p.exists(), p

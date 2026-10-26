@@ -1381,43 +1381,6 @@ def _run_evolution_cycle_locked(
                 skill_name, confidence,
             )
 
-    # ── Phase 3c: GOVERNANCE MINING (L1) ──
-    # Mine EVOLUTION.md for recurring judgment patterns and generate
-    # governance proposals (STEERING/AGENT rule candidates).
-    # Never writes to governance files — proposals only.
-    governance_proposals_count = 0
-    try:
-        from core.evolution.governance_miner import generate_governance_proposals
-
-        # Locate context files relative to evals_dir
-        # evals_dir = ~/.swarm-ai/SwarmWS/.context/SkillEvals → parent = .context/
-        ctx_dir = evals_dir.parent
-        evolution_md_path = ctx_dir / "EVOLUTION.md"
-
-        if evolution_md_path.exists():
-            gov_proposals = generate_governance_proposals(evolution_md_path, threshold=3)
-            if gov_proposals:
-                # Write governance proposals to the same proposals file
-                proposals_path = ctx_dir / ".evolution_proposals.json"
-                # v3 Phase 2 (adversarial HIGH): route through the SHARED flock-safe
-                # _append_proposal helper instead of an unlocked read-text/write-text.
-                # The optimizer (evolution cycle) and the dashboard's remove path write
-                # the SAME file; a plain write_text races the flocked writer and clobbers
-                # appended proposals. _append_proposal does flock + tmp+atomic-replace +
-                # gc_id dedup — one source of truth.
-                from core.evolution.governance_router import _append_proposal
-
-                for gp in gov_proposals:
-                    _append_proposal(gp.to_proposal_dict(), proposals_path)
-                governance_proposals_count = len(gov_proposals)
-                logger.info(
-                    "Evolution cycle: generated %d governance proposals (L1)",
-                    governance_proposals_count,
-                )
-    except Exception as exc:
-        errors.append(f"Governance mining failed: {exc}")
-        logger.warning("Governance mining error: %s", exc)
-
     # ── Phase 4: AUDIT ──
     duration = time.monotonic() - start_time
 

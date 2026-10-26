@@ -1,6 +1,6 @@
-"""Evolution subsystem — governance proposal mining and the proposal sink.
+"""Evolution subsystem — governance proposals.
 
 Modules:
-    governance_miner  — turns mature GC candidates (EVOLUTION.md) into proposals
-    governance_router — the flock-safe proposal file (append / remove)
+    governance_miner — the pending proposals, read from EVOLUTION.md's Governance
+                       Candidates table, and the in-place verdict write-back
 """

@@ -255,7 +255,7 @@ Sub-threshold proposals (1-2x evidence, not yet 3x) live in EVOLUTION.md "Candid
 The column order is what the governance miner parses. When you add evidence, bump Count and
 fill **Checked**: which existing rules you compared it with, and why it is a new axis. A row
 reaches the dashboard only with Count at 3/3 AND Checked filled; the user's accept / reject
-replaces Count with `✅ PROMOTED <date>` / `✖ REJECTED <date>`, and the row is never proposed
+replaces Count with `✔ ACCEPTED <date>` / `✖ REJECTED <date>`, and the row is never proposed
 again. Accepting does not write the rule: run PROMOTE with the user.
 
 ---

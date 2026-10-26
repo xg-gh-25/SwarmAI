@@ -1347,32 +1347,20 @@ class EvalService:
 
     # --- v3 Phase 3: governance proposal review (accept / reject / defer) ---
 
-    def _proposals_path(self) -> Path:
-        return self._workspace_root / ".context" / ".evolution_proposals.json"
+    def _evolution_md(self) -> Path:
+        return self._workspace_root / ".context" / "EVOLUTION.md"
 
     def _read_governance_proposals(self) -> list[dict]:
-        """Read .evolution_proposals.json: GC proposals only.
+        """The pending governance proposals, derived from the GC table every time.
 
-        A GC proposal (gc_id) is the only kind the miner produces now. Rows an
-        older version left on disk — skill-optimization rows and bucket-count
-        rule/gate rows (source_class, no gc_id) — are never surfaced: they carry
-        no text a human can act on (design 2026-10-26-evolution-loop-admission §3.2).
+        EVOLUTION.md's Governance Candidates table is the only store
+        (core/evolution/governance_miner.py): there is no second copy to race,
+        drift or go stale. Rows an older version left in .evolution_proposals.json
+        are not read (design 2026-10-26-evolution-loop-admission §3.2).
         """
-        p = self._proposals_path()
-        if not p.exists():
-            return []
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return []
-        if not isinstance(data, list):
-            return []
-        out = []
-        for item in data:
-            if isinstance(item, dict) and item.get("target") == "governance" and item.get("gc_id"):
-                item["id"] = item.get("id") or item["gc_id"]
-                out.append(item)
-        return out
+        from core.evolution.governance_miner import generate_governance_proposals
+
+        return [p.to_proposal_dict() for p in generate_governance_proposals(self._evolution_md())]
 
     def get_pending_governance(self) -> dict:
         """List governance proposals awaiting human decision."""
@@ -1382,9 +1370,9 @@ class EvalService:
     def decide_governance(self, proposal_id: str, decision: str) -> dict:
         """Accept / reject / defer a governance proposal.
 
-        accept / reject: write ✅ PROMOTED / ✖ REJECTED into the GC row (so it is
-                not mined again), then remove the proposal. Writing the rule into a
-                governance file is the s_self-evolution path, on the user's approval.
+        accept / reject: write ✔ ACCEPTED / ✖ REJECTED into the GC row's Count cell,
+                so it is never proposed again. Writing the rule into a governance
+                file is the s_self-evolution path, on the user's approval.
         defer:  leave the proposal in place (no-op on the file).
 
         NEVER writes SOUL/AGENT/STEERING (Gate-1 Check-7).
@@ -1400,20 +1388,18 @@ class EvalService:
         if decision == "defer":
             return {"status": "deferred", "proposal_id": proposal_id}
 
-        # Write the verdict into the GC row first, so the next mining cycle does
-        # not bring the same candidate back; then remove the proposal through the
-        # SHARED flock writer, so it cannot race the miner's flocked append.
         from core.evolution.governance_miner import mark_gc_decision
-        from core.evolution.governance_router import remove_governance_proposal
 
-        marked = mark_gc_decision(
-            self._workspace_root / ".context" / "EVOLUTION.md",
-            target["gc_id"], accepted=(decision == "accept"),
-        )
-        remove_governance_proposal(proposal_id, self._proposals_path())
-        action_taken = "marked+removed" if marked else "removed"
-        return {"status": "rejected" if decision == "reject" else "accepted",
-                "proposal_id": proposal_id, "action_taken": action_taken}
+        if not mark_gc_decision(self._evolution_md(), target["gc_id"], accepted=(decision == "accept")):
+            # The row changed between reading the list and writing the verdict
+            # (decided elsewhere, edited or deleted): report it, write nothing.
+            return {"status": "not_found", "proposal_id": proposal_id}
+        result = {"status": "rejected" if decision == "reject" else "accepted",
+                  "proposal_id": proposal_id, "action_taken": "marked"}
+        if decision == "accept":
+            result["next_step"] = ("Write the rule into AGENT/STEERING/SOUL with "
+                                   "s_self-evolution — accepting records the verdict only.")
+        return result
 
 
 def _class_to_affected_by(class_name: str) -> str:

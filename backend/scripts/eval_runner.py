@@ -2187,7 +2187,7 @@ def select_by_affected_by(cases: list[dict], tokens: list[str]) -> list[str]:
     out = []
     for c in cases:
         refs = [str(a) for a in (c.get("affected_by") or [])]
-        if any(t and t in r for t in tokens for r in refs):
+        if c.get("id") and any(t and t in r for t in tokens for r in refs):
             out.append(c["id"])
     return out
 
@@ -2827,6 +2827,11 @@ def cmd_run(args):
     affected = getattr(args, "affected_by", None)
     if affected:
         picked = select_by_affected_by(golden_set["cases"], affected.split(","))
+        if not getattr(args, "include_behavior", False):
+            # A selected id counts as "named individually" in run_eval, which would
+            # let behavior cases (each spawns a real agent) through without consent.
+            behavior = {c.get("id") for c in golden_set["cases"] if c.get("eval_method") == "behavior"}
+            picked = [c for c in picked if c not in behavior]
         case_filter = [c for c in picked if case_filter is None or c in case_filter]
         print(f"  --affected-by {affected}: {len(case_filter)} case(s)")
         if not case_filter:
@@ -2842,6 +2847,8 @@ def cmd_run(args):
                               programmatic_only=getattr(args, "programmatic_only", False),
                               include_behavior=getattr(args, "include_behavior", False),
                               verify_teeth=getattr(args, "verify_teeth", False))
+        if repeat > 1:
+            run_result["repeat_index"] = len(runs) + 1   # repeats are separate history entries
         out_path = write_run(run_result, root)
         runs.append(run_result)
     if repeat > 1:

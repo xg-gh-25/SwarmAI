@@ -67,3 +67,25 @@ def test_affected_by_with_no_match_runs_nothing(monkeypatch, tmp_path):
                               verify_teeth=False, json=False)
     er.cmd_run(args)
     assert calls == []
+
+
+def test_affected_by_drops_behavior_cases_without_consent(monkeypatch, tmp_path):
+    import argparse
+    seen = []
+    cases = [{"id": "P", "affected_by": ["AGENT"]},
+             {"id": "B", "affected_by": ["AGENT"], "eval_method": "behavior"}]
+    monkeypatch.setattr(er, "_find_workspace_root", lambda: tmp_path)
+    monkeypatch.setattr(er, "load_golden_set", lambda p: {"cases": cases})
+    monkeypatch.setattr(er, "write_run", lambda r, root: tmp_path / "x.json")
+    monkeypatch.setattr(er, "generate_html_report", lambda *a: None)
+
+    def _run_eval(gs, trigger, case_filter, root, **k):
+        seen.append(list(case_filter))
+        return {"overall_score": 0, "cases_passed": 0, "cases_failed": 0, "cases_skipped": 0,
+                "dimensions": {}, "duration_seconds": 0, "cases": []}
+    monkeypatch.setattr(er, "run_eval", _run_eval)
+    base = dict(cases=None, tags=None, trigger="deploy", affected_by="AGENT", repeat=1,
+                programmatic_only=False, verify_teeth=False, json=False)
+    er.cmd_run(argparse.Namespace(include_behavior=False, **base))
+    er.cmd_run(argparse.Namespace(include_behavior=True, **base))
+    assert seen == [["P"], ["P", "B"]]

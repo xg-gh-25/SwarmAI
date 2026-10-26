@@ -46,3 +46,12 @@ def test_briefing_uses_default_model_not_the_tab_override(tmp_path):
             asyncio.run(builder.build_system_prompt(agent_config=agent_config, working_directory=str(tmp_path)))
         full = (agent_config.get("_system_prompt_metadata") or {}).get("full_text", "")
         assert "Default model changed to claude-sonnet-4-6" in full, agent_config
+
+
+def test_unreadable_state_is_rewritten_not_silenced(tmp_path):
+    p = tmp_path / ".context" / ".governance_audit.json"
+    p.parent.mkdir(parents=True)
+    p.write_text("{not json")
+    assert ga.audit_hint(tmp_path, "m2") is None
+    assert ga.record_baseline(tmp_path, "m1") is True
+    assert "m2" in ga.audit_hint(tmp_path, "m2")

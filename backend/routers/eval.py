@@ -737,8 +737,8 @@ class GovernanceDecisionRequest(BaseModel):
 async def get_pending_governance():
     """List governance proposals (rule/gate) awaiting human decision.
 
-    Reads .evolution_proposals.json filtered to target=='governance'. Each item
-    carries a stable `id` (gc_id or source_class:proposal_kind) for accept/reject.
+    Derived from EVOLUTION.md's Governance Candidates table. Each item carries
+    `id` (= gc_id) for accept/reject.
     """
     svc = get_eval_service()
     return svc.get_pending_governance()
@@ -746,13 +746,16 @@ async def get_pending_governance():
 
 @router.post("/governance/decision")
 async def decide_governance(req: GovernanceDecisionRequest):
-    """Accept or reject (both remove the proposal) or defer (keep it).
+    """Accept or reject (the verdict is written into the GC row) or defer.
 
     NEVER writes SOUL/AGENT/STEERING: writing an accepted rule into a governance
-    file is the s_self-evolution path, on the user's approval.
+    file is the s_self-evolution path, on the user's approval. Runs off the event
+    loop: the write-back waits on EVOLUTION.md's file lock.
     """
+    import asyncio
+
     svc = get_eval_service()
-    result = svc.decide_governance(req.proposal_id, req.decision)
+    result = await asyncio.to_thread(svc.decide_governance, req.proposal_id, req.decision)
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail=f"proposal {req.proposal_id} not found")
     if result.get("status") == "error":
