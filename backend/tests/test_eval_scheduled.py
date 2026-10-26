@@ -203,6 +203,19 @@ class TestBiweeklyGuard:
         last = now - timedelta(days=7)  # only 1 week ago
         assert _should_run_biweekly(last, now) is False
 
+    def test_late_start_does_not_push_the_run_a_week(self):
+        """The stamp is the time the job STARTED, which can be well after the cron
+        fire (the scheduler is serial). Two weeks later the cron fires a little
+        before that stamp turns 14 days old; that fire must still run, or the
+        biweekly run slips to three weeks (observed: stamp 11:11 UTC, cron 10:30)."""
+        from jobs.handlers.eval_scheduled import _should_run_biweekly
+        from datetime import datetime, timezone, timedelta
+        last = datetime(2026, 10, 12, 11, 11, tzinfo=timezone.utc)
+        assert _should_run_biweekly(last, datetime(2026, 10, 26, 10, 30, tzinfo=timezone.utc)) is True
+        # one week after a late start is still a skip
+        assert _should_run_biweekly(last, datetime(2026, 10, 19, 10, 30, tzinfo=timezone.utc)) is False
+        assert _should_run_biweekly(last, datetime(2026, 10, 19, 23, 0, tzinfo=timezone.utc)) is False
+
     def test_stale_run_runs(self):
         from jobs.handlers.eval_scheduled import _should_run_biweekly
         from datetime import datetime, timezone, timedelta

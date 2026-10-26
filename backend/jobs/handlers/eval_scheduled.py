@@ -3,7 +3,7 @@
 Runs the FULL golden set (programmatic + LLM judge + behavior-tier via
 include_behavior=True — Bedrock cost is fine on this cadence, never gates) and
 compares the overall score against the previous run.
-Cron fires every Monday 12:30 ICT, but a 14-day gate (_should_run_biweekly, own
+Cron fires every Monday 18:30 ICT (10:30 UTC), but a 14-day gate (_should_run_biweekly, own
 timestamp file — NOT JobState.last_run, which a skip would reset → deadlock) makes
 a REAL run happen only once per 2 WEEKS (run_6980cb35). Behavior-tier cases spawn
 real headless agents (slow/costly); their failures are segregated from the
@@ -45,6 +45,7 @@ _ALERT_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-sched
 # ONLY when a REAL run happens, so a skip never advances the clock.
 _BIWEEKLY_STATE = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".eval-biweekly-last-run.json"
 _BIWEEKLY_INTERVAL_DAYS = 14
+_BIWEEKLY_SLACK_S = 86400
 
 
 def _should_run_biweekly(last_run, now, interval_days: int = _BIWEEKLY_INTERVAL_DAYS) -> bool:
@@ -63,7 +64,12 @@ def _should_run_biweekly(last_run, now, interval_days: int = _BIWEEKLY_INTERVAL_
             last_run = last_run.replace(tzinfo=timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
-        return (now - last_run).total_seconds() >= interval_days * 86400
+        # The stamp is when the run STARTED, which can be well after the cron fire
+        # (serial scheduler). A day of slack lets the fire two weeks later run even
+        # when it lands before the stamp is a full 14 days old; without it the run
+        # slips to three weeks. A day is far below the weekly cron spacing, so a
+        # fire one week later still skips.
+        return (now - last_run).total_seconds() >= interval_days * 86400 - _BIWEEKLY_SLACK_S
     except (AttributeError, TypeError):
         return True  # fail-open
 
