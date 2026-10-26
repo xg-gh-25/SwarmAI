@@ -14,12 +14,14 @@
  * tiles go 2×2. Runs are cards in a grid that fits as many columns as the width
  * allows (RUN_CARD_MIN), so no width squeezes a run's title into a few characters.
  *
- * Data is STATIC for now (./mockData.ts) — the conductor, record layer and cross-run
- * audit aggregate it will read do not exist yet. A banner says so, so a sample number
- * is never read as a live one.
+ * The 真实派发 section (LiveDispatches) is live: tasks dispatched to Hives and the
+ * questions they wait on. Everything below it is STATIC (./mockData.ts) — the fleet,
+ * run cards and cross-run audit it will read do not exist yet. A banner says which is
+ * which, so a sample number is never read as a live one.
  */
 import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import { JudgeTag } from './JudgeTag';
+import { LiveDispatches } from './LiveDispatches';
 import { TraceTags } from './TraceTags';
 import {
   BY_TYPE, DAILY_COMPLETED, DAILY_LABELS, ENDED, FLEET, HISTORY_DIMENSIONS, HISTORY_VERDICT,
@@ -354,10 +356,10 @@ export function SwarmOutDashboard({ hidden = false }: { hidden?: boolean }) {
         </span>
       </div>
       <div className={`${compact ? 'mx-4 mt-2' : 'mx-6 mt-3'} rounded-lg px-3 py-1.5 text-[12px] bg-[var(--color-hover)] text-[var(--color-text-muted)] flex-shrink-0`}>
-        示例数据：还没接 Hive。右边的对话是真的 chat session。
+        「真实派发」一节是真的；它下面的机群、run 卡片和历史仍是示例数据。右边的对话是真的 chat session。
       </div>
       <div className={`flex-1 overflow-y-auto overflow-x-hidden ${padX} ${compact ? 'pt-3 pb-5' : 'pt-4 pb-6'}`}>
-        {view === 'run' ? <Overview width={width} /> : <History />}
+        {view === 'run' ? <><LiveDispatches hidden={hidden} /><Overview width={width} /></> : <History />}
       </div>
     </div>
     </Compact.Provider>

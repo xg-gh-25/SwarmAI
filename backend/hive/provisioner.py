@@ -73,13 +73,43 @@ HIVE_IAM_POLICY = {
             "Resource": "*",
         },
         {
+            # Release packages only (v<version>/...). Was the whole bucket, which let
+            # every Hive in the account read every other Hive's Swarm Out bridge.
             "Sid": "S3HivePackage",
             "Effect": "Allow",
-            "Action": ["s3:GetObject", "s3:ListBucket"],
+            "Action": ["s3:GetObject"],
+            "Resource": ["arn:aws:s3:::swarmai-hive-*/v*"],
+        },
+        {
+            # Swarm Out bridge (core/swarm_out_bridge.py): a Hive writes its own
+            # questions and closed markers ...
+            "Sid": "SwarmOutBridgeWrite",
+            "Effect": "Allow",
+            "Action": ["s3:PutObject"],
             "Resource": [
-                "arn:aws:s3:::swarmai-hive-*",
-                "arn:aws:s3:::swarmai-hive-*/*",
+                "arn:aws:s3:::swarmai-hive-*/bridge/${aws:PrincipalTag/HiveName}/ask/*",
+                "arn:aws:s3:::swarmai-hive-*/bridge/${aws:PrincipalTag/HiveName}/closed/*",
             ],
+        },
+        {
+            # ... and reads only its own answers, which only the Host can write.
+            "Sid": "SwarmOutBridgeRead",
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"],
+            "Resource": ["arn:aws:s3:::swarmai-hive-*/bridge/${aws:PrincipalTag/HiveName}/answer/*"],
+        },
+        {
+            "Sid": "SwarmOutBridgeList",
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": ["arn:aws:s3:::swarmai-hive-*"],
+            # answer/: to find the Host's answers; ask/ + closed/: to close, after a
+            # restart, the asks whose waiters are gone (swarm_out_bridge.reconcile).
+            "Condition": {"StringLike": {"s3:prefix": [
+                "bridge/${aws:PrincipalTag/HiveName}/answer/*",
+                "bridge/${aws:PrincipalTag/HiveName}/ask/*",
+                "bridge/${aws:PrincipalTag/HiveName}/closed/*",
+            ]}},
         },
         {
             "Sid": "SelfTagging",
@@ -106,6 +136,22 @@ EC2_TRUST_POLICY = {
 
 # SSM parameter for latest Amazon Linux 2023 ARM64 AMI
 AL2023_ARM64_SSM_PARAM = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+
+
+def _put_hive_role_policy(iam, role_name: str) -> None:
+    """Write the current HIVE_IAM_POLICY as the role's inline policy (replaces it), and
+    make sure the role carries its HiveName tag: every bridge statement is scoped by
+    ``${aws:PrincipalTag/HiveName}``, which resolves to nothing on an untagged role.
+    Called at create and at every update, so an existing Hive picks up a changed
+    policy (an inline policy is replaced whole, so a removed statement is removed)."""
+    if role_name.startswith("SwarmAI-Hive-"):
+        iam.tag_role(RoleName=role_name,
+                     Tags=[{"Key": "HiveName", "Value": role_name[len("SwarmAI-Hive-"):]}])
+    iam.put_role_policy(
+        RoleName=role_name,
+        PolicyName="SwarmAI-Hive-Policy",
+        PolicyDocument=json.dumps(HIVE_IAM_POLICY),
+    )
 
 
 class HiveProvisioner:
@@ -325,12 +371,7 @@ class HiveProvisioner:
                 resp = iam.get_role(RoleName=role_name)
                 role_arn = resp["Role"]["Arn"]
 
-            # Attach inline policy
-            iam.put_role_policy(
-                RoleName=role_name,
-                PolicyName="SwarmAI-Hive-Policy",
-                PolicyDocument=json.dumps(HIVE_IAM_POLICY),
-            )
+            _put_hive_role_policy(iam, role_name)
             # SSM managed policy (for updates via SSM Run Command)
             iam.attach_role_policy(
                 RoleName=role_name,
@@ -1148,6 +1189,10 @@ class HiveProvisioner:
 
             # Ensure new version is in S3
             await self._sync_release_to_s3(session, bucket, version, region)
+
+            # Refresh the role's inline policy so a policy change reaches existing Hives
+            await asyncio.to_thread(
+                _put_hive_role_policy, session.client("iam"), f"SwarmAI-Hive-{instance['name']}")
 
             # SSM Run Command
             update_script = f"""#!/bin/bash

@@ -1530,6 +1530,14 @@ async def lifespan(app: FastAPI):
         )
         logger.info("In-process scheduler started (60min interval)")
 
+    # ── Swarm Out bridge (hive only) ──────────────────────────────────
+    # Mirrors this Hive's open prompts to S3 and delivers the Host's answers
+    # (core/swarm_out_bridge.py). Off when the instance has no Hive identity.
+    _swarm_out_bridge_task: asyncio.Task | None = None
+    if backend_mode == "hive":
+        from core.swarm_out_bridge import run_bridge_loop
+        _swarm_out_bridge_task = asyncio.create_task(run_bridge_loop(), name="swarm-out-bridge")
+
     # ── Code Intelligence FS watchers (daemon/hive only) ─────────────
     # Start watchers for indexed projects so code-intel stays fresh.
     if backend_mode in ("daemon", "hive"):
@@ -1671,6 +1679,8 @@ async def lifespan(app: FastAPI):
         logger.debug("Workspace surface watcher shutdown skipped", exc_info=True)
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
+    if _swarm_out_bridge_task and not _swarm_out_bridge_task.done():
+        _swarm_out_bridge_task.cancel()
         try:
             await _scheduler_task
         except asyncio.CancelledError:
@@ -1798,6 +1808,8 @@ app.include_router(escalations_router, tags=["escalations"])
 app.include_router(attention_router, tags=["attention"])  # prefix /api/attention set in router
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
+from routers.swarm_out import router as swarm_out_router  # noqa: E402
+app.include_router(swarm_out_router, prefix="/api/swarm-out", tags=["swarm-out"])
 app.include_router(apps_router, prefix="/api/apps", tags=["apps"])
 
 # DDD Cultivation API (list/approve/reject proposals)

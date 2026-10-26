@@ -384,6 +384,11 @@ class PermissionManager:
             return _aqm.is_open(key)
         return self.is_open(key)
 
+    def prompt_session_ids(self) -> list[str]:
+        """Sessions that currently have something on their board (the Hive bridge
+        walks these to mirror open prompts; ``open_prompts`` drops dead ones)."""
+        return list(self._prompts)
+
     def open_prompts(self, session_id: str) -> list[dict[str, Any]]:
         """The session's prompts that are live and undecided, oldest first.
         Prompts whose waiter is gone are dropped from the board here."""

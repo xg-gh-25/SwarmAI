@@ -16,6 +16,12 @@ import { SwarmOutDashboard } from './SwarmOutDashboard';
 import { TraceTags } from './TraceTags';
 import type { RunJudge, RunTrace } from './mockData';
 
+// The dashboard's live section polls /api/swarm-out/runs; these tests cover the sample
+// parts, so the service answers with nothing (LiveDispatches.test.tsx covers the live part).
+vi.mock('../../services/swarmOut', () => ({
+  swarmOutService: { runs: vi.fn(async () => ({ runs: [], asks: [], errors: [] })), answer: vi.fn() },
+}));
+
 const judge = (verdicts: RunJudge['verdicts']): RunJudge => ({
   outcome: 'COMPLETED · NOT_LANDED · NOT PUSH READY',
   verdicts,

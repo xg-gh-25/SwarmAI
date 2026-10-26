@@ -3,7 +3,7 @@ title: "Swarm Out v0：把任务派到 Hive worker 上跑完，人工介入走�
 created: 2026-10-27
 updated: 2026-10-27
 project: SwarmAI
-status: draft v0（只有设计，没有代码）
+status: v0 已实现（2026-10-27）；§8 记录实现时对设计的改动
 tags: [swarm-out, hive, dispatch, bridge, autonomy]
 related:
   - docs/design/2026-10-27-swarm-out.md   # 远期方向（Brain 驱动的 context、记录回流、交付），不在 v0 范围
@@ -130,3 +130,16 @@ XG 2026-10-27 定的范围：**把任务派发出去，在 Hive worker 上跑完
 | S0-1 | 用 `set_answer(tool_use_id, answers)` 直接解开等待，和网页走 `/api/chat/answer-question` 的效果是否一致（后者还会经过 `session_unit` 续流，`session_unit.py:4532`） |
 | S0-2 | 用 `POST /api/agents` 建的 agent，它的 `system_prompt` 和 `enable_human_approval` 在 `/api/chat/stream` 路径上是否真的生效 |
 | S0-3 | 等待期间占着的并发位：一台 Hive 同时有几个 session 在等人时，新派发是否还能进来 |
+
+## 8. 实现时对设计的改动（2026-10-27）
+
+按 security、integration 两轮审查和实测，实现和上面的设计有这些不同，以本节为准：
+
+- **答案的交付**：不直接调 `set_answer` / `set_permission_decision`。一个等人的 unit 已经停止读流（WAITING_INPUT，`streaming_orchestrator.py` 在问题和审批两处都是先切状态再 `return`），只调 `set_answer` 会解开 hook 却没人读这一轮剩下的输出。bridge 改走网页用的同一条续流：`session_router.continue_with_answer` / `continue_with_cmd_permission`，在一个保持引用的后台任务里读到结束；session id 用"正在等这个 key 的 unit"（`_pending_tool_use_id`），因为提示板可能用第一轮的临时 id 记它。续流失败或报 error 事件时，下一轮重试。
+- **等待上限保持 4 小时**，没有改成 24 小时：它必须小于 lifecycle 的 WAITING_INPUT 看门狗（4h05m，`permission_manager.py` 的注释）。超时后 agent 会重新问，新问题照样经 bridge 送来。Host 不显示超过 4h05m 的问题。
+- **没有 `done/` 结束标记**：Hive 活着时 Host 可以直接问它；Hive 没了标记也写不出来。改为 `closed/`：问题离开提示板时写，bridge 启动时把重启前留下、已经没有 waiter 的问题全部标记 closed（`reconcile`）。
+- **命令行没有 `answer`**：回答只能在 Swarm Out 面板上点。读了 Hive 写回来的文字的 agent，不能离"批准那段文字要求的命令"只差一条命令。
+- **没有专用 worker agent**：无人值守的说明作为任务正文的开头一起发出（`UNATTENDED_PREAMBLE`），用 Hive 的 default agent。
+- **Host 把 Hive 写的问题按已知字段重建**，`hive` 字段用 Host 自己记录的名字；回答用 S3 条件写（`IfNoneMatch`），两个回答同时到时第二个被拒绝。
+- **IAM**：发布包读权限收窄到 `v*`；bridge 读写按 `${aws:PrincipalTag/HiveName}` 限定；每次 update 都重写整份策略并补 `HiveName` tag。
+- **已知、不在 v0**：桌面 daemon 没有 Host 头校验（DNS rebinding，之前就有）；夜间备份到 `backups/` 没有写权限（之前就有）；`bridge/` 前缀没有 lifecycle 规则（改它会整体替换桶上已有的规则）。
