@@ -1236,6 +1236,16 @@ async def lifespan(app: FastAPI):
     app_config.load()
     logger.info("AppConfigManager loaded (config.json)")
 
+    # First start only: remember the default model the governed files were
+    # written for, so a later default-model change can prompt a prompt audit
+    # (core/governance_audit.py). Best-effort; never blocks startup.
+    try:
+        from core.governance_audit import record_baseline
+        from core.project_registry import get_swarmws as _gov_ws
+        await asyncio.to_thread(record_baseline, _gov_ws(), app_config.get("default_model"))
+    except Exception:
+        logger.debug("governance audit baseline skipped", exc_info=True)
+
     # Load dangerous command patterns (creates ~/.swarm-ai/dangerous_commands.json if missing)
     from core.security_hooks import load_dangerous_patterns
     dangerous_patterns = load_dangerous_patterns()

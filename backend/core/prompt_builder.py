@@ -1454,6 +1454,15 @@ class PromptBuilder:
                     # io pool: build_session_briefing is fs-only now (sqlite/glob
                     # legs deleted).
                     briefing = await executors.run_in("io", build_session_briefing, working_directory)
+                    # The default-model-changed hint is computed here, where the
+                    # config is known; build_session_briefing stays filesystem-only.
+                    from .governance_audit import audit_hint
+                    hint = await executors.run_in(
+                        "io", audit_hint, working_directory,
+                        self._config.get("default_model") if self._config is not None else None,
+                    )
+                    if hint:
+                        briefing = f"{briefing}\n{hint}" if briefing else f"## Session Briefing\n{hint}"
                     if briefing:
                         ephemeral_text += f"\n\n{briefing}"
                 except Exception as exc:
