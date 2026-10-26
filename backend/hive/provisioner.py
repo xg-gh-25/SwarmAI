@@ -1211,6 +1211,17 @@ print(m.group(1) if m else '')
   fi
 fi
 
+# The systemd unit is installed once, at provision (user_data.py), and rsync only
+# refreshes the copy under /opt/swarmai/hive/. A Hive provisioned before a unit change
+# kept running the old unit: one without EnvironmentFile=/etc/swarmai/hive-auth.env
+# started the backend with an empty HIVE_PASS_HASH, and app-layer auth denied every
+# API request from that update on. Install the package's unit whenever it differs.
+if ! cmp -s /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-hive.service; then
+  echo "systemd unit changed — installing the package's swarmai-hive.service"
+  install -m 644 /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-hive.service
+  systemctl daemon-reload
+fi
+
 systemctl restart swarmai-hive --no-block
 echo "Waiting for swarmai-hive to start..."
 for i in $(seq 1 30); do
