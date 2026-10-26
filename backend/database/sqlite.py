@@ -4518,6 +4518,20 @@ class SQLiteDatabase(BaseDatabase):
             logger.warning("Failed to prune recall metrics", exc_info=True)
             return 0
 
+    async def token_cost_rows(self, since: str) -> list[tuple[str, str, float]]:
+        """``(session_id, timestamp, cost_usd)`` for every row with a cost at or after
+        ``since`` (local time, the column's own format), in insertion order. Online
+        eval scoring (jobs/handlers/session_quality._turn_costs) turns these into
+        per-turn costs: ``cost_usd`` is the CLI process's running total."""
+        async with _get_pool(str(self.db_path)).borrow(readonly=True) as conn:
+            cursor = await conn.execute(
+                "SELECT session_id, timestamp, cost_usd FROM token_usage "
+                "WHERE cost_usd IS NOT NULL AND session_id IS NOT NULL AND timestamp >= ? "
+                "ORDER BY id",
+                (since,),
+            )
+            return [(r[0], r[1], r[2]) for r in await cursor.fetchall()]
+
     async def get_token_usage_summary(self) -> dict:
         """Return aggregated token usage: today + total (tokens and cost).
 

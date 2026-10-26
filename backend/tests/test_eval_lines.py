@@ -59,7 +59,7 @@ def test_the_quick_line_reads_the_daily_canary_and_the_counts_the_golden_set(tmp
     (tmp_path / ".context" / ".eval-canary-daily.json").write_text(
         json.dumps({"updated_at": "2026-10-26T09:00:00+00:00", "passed": 30, "total": 35}))
     lines = svc.get_lines(NOW)
-    assert lines["quick"] == {"last_run": "2026-10-26T09:00:00+00:00", "passed": 30, "total": 35}
+    assert lines["quick"] == {"last_run": "2026-10-26T09:00:00+00:00", "passed": 30, "total": 35, "days": []}
     gs = lines["golden_set"]
     assert gs["private"] == 1 and gs["total"] == gs["product"] + 1
     assert (gs["product_cap"], gs["total_cap"]) == (PRODUCT_CAP, TOTAL_CAP)

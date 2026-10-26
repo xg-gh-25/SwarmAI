@@ -1312,6 +1312,27 @@ def _coerce_conf(v) -> float:
         return 0.0
 
 
+# The offline decision judge: its prompt and settings are module constants so a run
+# and the LLM Judges page (GET /api/eval/judges) read the same text.
+DECISION_JUDGE_PROMPT = """You are an eval judge for SwarmAI. An agent was asked to make a decision after consulting its own knowledge docs. Below is the agent's ACTUAL final answer. Judge ONLY whether it satisfies the rubric — do not judge style or completeness.
+
+RUBRIC (the single pass/fail criterion):
+{rubric}
+
+AGENT'S ACTUAL FINAL ANSWER:
+\"\"\"
+{final_text}
+\"\"\"
+
+Judge the DIRECTION/STANCE of the recommendation, not whether keywords appear. An answer that NAMES an option while recommending AGAINST it does NOT recommend that option.
+
+Respond in this exact JSON format:
+{{"verdict": "passed" or "failed", "confidence": 0.0 to 1.0, "notes": "one-line: what did it actually recommend"}}"""
+DECISION_JUDGE_SYSTEM = "You are a precise eval judge. Respond only with the requested JSON."
+DECISION_JUDGE_TEMPERATURE = 0.0
+DECISION_JUDGE_MAX_TOKENS = 400
+
+
 def _judge_decision_direction(case: dict, final_text: str) -> dict:
     """LLM-judge whether the agent's REAL conclusion went the right way.
 
@@ -1336,20 +1357,7 @@ def _judge_decision_direction(case: dict, final_text: str) -> dict:
         # No rubric, or the agent produced no answer to judge → caller decides.
         return {"status": "skipped", "notes": "no decision_rubric or empty final_text"}
 
-    judge_prompt = f"""You are an eval judge for SwarmAI. An agent was asked to make a decision after consulting its own knowledge docs. Below is the agent's ACTUAL final answer. Judge ONLY whether it satisfies the rubric — do not judge style or completeness.
-
-RUBRIC (the single pass/fail criterion):
-{rubric}
-
-AGENT'S ACTUAL FINAL ANSWER:
-\"\"\"
-{final_text[:4000]}
-\"\"\"
-
-Judge the DIRECTION/STANCE of the recommendation, not whether keywords appear. An answer that NAMES an option while recommending AGAINST it does NOT recommend that option.
-
-Respond in this exact JSON format:
-{{"verdict": "passed" or "failed", "confidence": 0.0 to 1.0, "notes": "one-line: what did it actually recommend"}}"""
+    judge_prompt = DECISION_JUDGE_PROMPT.format(rubric=rubric, final_text=final_text[:4000])
 
     try:
         judge_model = _get_judge_model()
@@ -1361,8 +1369,9 @@ Respond in this exact JSON format:
         _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
         response = converse_with_retry(
             messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
-            system=[{"text": "You are a precise eval judge. Respond only with the requested JSON."}],
-            inference_config={"maxTokens": 400, "temperature": 0.0},
+            system=[{"text": DECISION_JUDGE_SYSTEM}],
+            inference_config={"maxTokens": DECISION_JUDGE_MAX_TOKENS,
+                              "temperature": DECISION_JUDGE_TEMPERATURE},
             model_id=judge_model,
             region=_judge_region,
             read_timeout=_JUDGE_READ_TIMEOUT,  # fail-fast: throwaway client, one hung judge can't blow the wall

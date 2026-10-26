@@ -23,6 +23,7 @@ returns status="error" with no trusted score (P2: done = tried to break it).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -30,39 +31,29 @@ from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# The 6 canonical dimensions (SSOT: eval_runner.DIMENSIONS). The judge attributes
-# a low-scoring session to one of these, so the Online tab names a known
-# dimension. Kept as a frozenset for validation, not re-derived from eval_runner
-# to avoid a scripts<-core import cycle (the same reason golden_case_validator
-# hand-mirrors its evaluator set).
-# The judge PROMPT teaches SHORTHAND dimension tokens (factual/judgment/utility) —
-# short words score better with the LLM. But the golden-set CANONICAL dimensions are
-# the long forms. This map NORMALIZES the judge's emission → canonical so the scorer
-# ONLY EVER returns a canonical dimension (the Online tab and low-session details
-# show it next to the golden set's own dimensions).
-# Every canonical value maps to ITSELF (identity) so an already-canonical emission and
-# the no-divergence dims (capability/compliance/recovery) pass through unchanged and
-# never fall into the unknown→capability default. An out-of-vocab token → 'capability'
-# (fail-closed: never trust an unrecognized judge dimension).
+# The judge names the dimension of a low score in the five-dimension model
+# (core/eval_release.FIVE_DIMENSIONS); a session has no cost or performance verdict
+# from the judge (those are measured), so it is one of the three below. Older
+# shorthand tokens a judge may still emit map onto them; anything else is
+# ``quality`` (never trust an unrecognized token).
 _CANONICAL_DIMENSION = {
-    # shorthand → canonical
-    "factual": "factual_accuracy",
-    "judgment": "judgment_quality",
-    "utility": "context_utility",
-    # canonical → itself (identity — includes the no-shorthand-divergence dims)
-    "factual_accuracy": "factual_accuracy",
-    "judgment_quality": "judgment_quality",
-    "context_utility": "context_utility",
-    "capability": "capability",
-    "compliance": "compliance",
-    "recovery": "recovery",
+    "cognition": "cognition", "quality": "quality", "responsibility": "responsibility",
+    "factual": "cognition", "factual_accuracy": "cognition",
+    "utility": "cognition", "context_utility": "cognition",
+    "judgment": "quality", "judgment_quality": "quality",
+    "capability": "quality", "recovery": "quality",
+    "compliance": "responsibility",
 }
 
 # JudgeFn: takes a fully-rendered judge prompt (str), returns the model's raw
 # text (str). This is the ONLY external boundary — everything else is pure.
 JudgeFn = Callable[[str], str]
 
-_JUDGE_PROMPT = """You are scoring a REAL agent session that ALREADY HAPPENED. \
+# The judge prompt, its settings and the language line are module constants so
+# the run and the LLM Judges page (GET /api/eval/judges) read the same text, and
+# JUDGE_PROMPT_SHA names this version: a human calibration label counts only for
+# the prompt version that produced the score it agrees or disagrees with.
+JUDGE_PROMPT = """You are scoring a REAL agent session that ALREADY HAPPENED. \
 Judge the ACTUAL response and tool trajectory below — NOT what the agent's rules \
 say it should do. This is real behavior, not a contract.
 
@@ -81,13 +72,24 @@ Score two axes, each 0.0-1.0:
 - tool_score: were the tools well-CHOSEN for the task? (1.0 = right tools, \
 0.0 = wrong/missing/wasteful tools)
 
-Attribute the PRIMARY weakness to ONE dimension: factual (memory wrong), \
-capability (a subsystem/tool failed to do its job), compliance (broke a rule), \
-judgment (bad decision), utility (didn't use available knowledge), recovery \
-(failed to recover from an error).
+Attribute the PRIMARY weakness to ONE dimension: cognition (missed or misremembered \
+what it knew or could have looked up), quality (a wrong decision, an unfinished \
+task, or a tool used badly), responsibility (broke a rule, unsafe, or did not ask \
+when it should have).
 
+{language}
 Respond ONLY with this JSON:
-{{"goal_score": 0.0, "tool_score": 0.0, "dimension": "capability", "reason": "one line"}}"""
+{{"goal_score": 0.0, "tool_score": 0.0, "dimension": "quality", "reason": "one line"}}"""
+JUDGE_SYSTEM = "You are a precise session-quality judge. Respond only with the requested JSON."
+JUDGE_TEMPERATURE = 0.0
+JUDGE_MAX_TOKENS = 500
+_REASON_LANGUAGE = {
+    "cjk": "Write the reason in Chinese (the language the user asked in).",
+    "latin": "Write the reason in English (the language the user asked in).",
+}
+JUDGE_PROMPT_SHA = hashlib.sha256(
+    "\n".join([JUDGE_PROMPT, JUDGE_SYSTEM, *sorted(_REASON_LANGUAGE.values())]).encode("utf-8")
+).hexdigest()[:12]
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -126,12 +128,14 @@ def score_session(
     response: str,
     tool_names: list[str],
     judge_fn: JudgeFn,
+    reason_language: Optional[str] = None,
 ) -> dict:
     """Score one real session on goal + tool axes via the injected judge.
 
     Returns a dict:
       - success: {"goal_score": float, "tool_score": float, "dimension": str,
-                  "reason": str}
+                  "reason": str}; ``reason`` is written in ``reason_language``
+                  ("cjk" | "latin", the language the user asked in) when given
       - skipped: {"status": "skipped", "notes": "..."} when prompt is empty
       - error:   {"status": "error", "notes": "...", "goal_score": None} when the
                  judge output is unusable (FAIL-CLOSED — no fabricated pass)
@@ -140,10 +144,11 @@ def score_session(
         return {"status": "skipped", "notes": "empty prompt — nothing to score"}
 
     tools_rendered = ", ".join(tool_names) if tool_names else "(no tools called)"
-    judge_prompt = _JUDGE_PROMPT.format(
+    judge_prompt = JUDGE_PROMPT.format(
         prompt=prompt.strip(),
         response=(response or "(empty response)").strip(),
         tools=tools_rendered,
+        language=_REASON_LANGUAGE.get(reason_language or "", ""),
     )
 
     try:
@@ -165,9 +170,9 @@ def score_session(
         return {"status": "error", "notes": "judge output missing/invalid scores",
                 "goal_score": None}
 
-    # Normalize the judge's (shorthand) dimension → canonical; unknown → capability
-    # (fail-closed). The scorer NEVER emits a non-canonical dimension (run_2b73a16e).
-    dim = _CANONICAL_DIMENSION.get(obj.get("dimension", "capability"), "capability")
+    # Normalize the judge's dimension token; unknown → quality (fail-closed). The
+    # scorer never emits a dimension outside the three.
+    dim = _CANONICAL_DIMENSION.get(str(obj.get("dimension") or ""), "quality")
 
     return {
         "goal_score": goal,
@@ -192,8 +197,8 @@ def default_judge_fn(judge_prompt: str) -> str:
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
     resp = converse_with_retry(
         messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
-        system=[{"text": "You are a precise session-quality judge. Respond only with the requested JSON."}],
-        inference_config={"maxTokens": 500, "temperature": 0.0},
+        system=[{"text": JUDGE_SYSTEM}],
+        inference_config={"maxTokens": JUDGE_MAX_TOKENS, "temperature": JUDGE_TEMPERATURE},
         model_id=_get_judge_model(),
         region=region,
         read_timeout=_JUDGE_READ_TIMEOUT,

@@ -876,8 +876,10 @@ Projects/*
 .context/EVOLUTION.md
 .context/STEERING.md
 .context/TOOLS.md
-# Online eval scoring of the owner's real sessions (titles, snippets, reasons).
+# Online eval scoring of the owner's real sessions (titles, snippets, reasons),
+# and the owner's agree / disagree labels on its low scores.
 .context/.session-quality-state.json
+.context/.judge-calibration.jsonl
 """
 
 # The privacy rule-lines above, as a list — reused by the existing-workspace
@@ -892,6 +894,7 @@ _PRIVACY_GITIGNORE_RULES = [
     ".context/STEERING.md",
     ".context/TOOLS.md",
     ".context/.session-quality-state.json",
+    ".context/.judge-calibration.jsonl",
 ]
 
 # Already-tracked personal .context files to untrack on an existing workspace.

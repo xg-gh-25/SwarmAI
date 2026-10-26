@@ -1365,6 +1365,27 @@ class TestDailyEvalCanary:
         assert fake.calls == [("GS_A", 20)]
         assert _daily_state(workspace)["date"] == date.today().isoformat()
 
+    def test_the_daily_state_keeps_one_entry_per_day(self, hook, workspace):
+        """``days``: the day-by-day row of the Offline Eval tab. Today's entry is
+        replaced on every write, earlier days carry over a new day, 30 are kept."""
+        er = _eval_runner_module()
+        state_path = workspace / ".context" / ".eval-canary-daily.json"
+        old = [{"date": f"2000-01-{d:02d}", "passed": 1, "total": 1} for d in range(1, 31)]
+        state_path.write_text(json.dumps({"date": "2000-01-30", "complete": True, "days": old,
+                                          "results": {"GS_A": {"status": "passed"}}}))
+
+        def outcome(c, t):
+            return {"status": "failed" if c["id"] == "GS_B" else "passed", "notes": "x"}
+        with patch.object(er, "evaluate_case", _FakeEval(outcome)):
+            hook._run_daily_canary(workspace, [_canary_case("GS_A"), _canary_case("GS_B"),
+                                               _canary_case("GS_C")], _deadline=0.0)
+        days = _daily_state(workspace)["days"]
+        today = date.today().isoformat()
+        assert len(days) == 30 and days[0]["date"] == "2000-01-02" and days[-1]["date"] == today
+        assert {k: days[-1][k] for k in ("passed", "failed", "timeout", "total", "not_run")} == \
+            {"passed": 2, "failed": 1, "timeout": 0, "total": 3, "not_run": 0}
+        assert [d["date"] for d in days].count(today) == 1
+
     def test_lock_prevents_concurrent_daily_runs(self, hook, workspace):
         """An orphaned hook thread holding the tier → the next run skips it."""
         from utils.file_lock import md_lock

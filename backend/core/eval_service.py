@@ -248,6 +248,26 @@ class EvalService:
             "total_cases": len(self._cases),
         }
 
+    def _report_names(self, runs: list[dict]) -> list:
+        """Each run's HTML report file name, or None. eval_runner writes one report
+        per local day and trigger (``EvalHistory/<YYYY-MM-DD>_<trigger>.html``, a
+        later run that day overwriting it), so the report belongs to the NEWEST run
+        of that day and trigger; ``runs`` is newest first."""
+        claimed: set = set()
+        out = []
+        for r in runs:
+            name = None
+            try:
+                day = datetime.fromisoformat(str(r.get("triggered_at")).replace("Z", "+00:00"))
+                cand = f"{day.astimezone().date().isoformat()}_{r.get('triggered_by')}.html"
+                if cand not in claimed and (self._history_dir / cand).is_file():
+                    name = cand
+                    claimed.add(cand)
+            except (TypeError, ValueError):
+                pass
+            out.append(name)
+        return out
+
     def get_history(self, limit: int = 20) -> list[dict]:
         """List eval runs sorted by date (newest first)."""
         return [
@@ -257,6 +277,15 @@ class EvalService:
                 "triggered_at": r.get("triggered_at"),
                 "release": (r.get("release") or {}).get("verdict"),
                 "release_reason": (r.get("release") or {}).get("reason"),
+                "release_checks": [
+                    {"id": c.get("id"), "passed": c.get("passed"), "selected": c.get("selected"),
+                     "with_result": c.get("with_result"), "reason": c.get("reason"),
+                     "cases": [{"id": x.get("id"), "status": x.get("status")}
+                               for x in (c.get("cases") or c.get("known_issues") or [])[:20]
+                               if isinstance(x, dict)]}
+                    for c in ((r.get("release") or {}).get("checks") or []) if isinstance(c, dict)
+                ],
+                "report": report,
                 "total_cases": r.get("total_cases"),
                 "cases_passed": r.get("cases_passed"),
                 "cases_failed": r.get("cases_failed"),
@@ -265,7 +294,7 @@ class EvalService:
                 "cases_timeout": r.get("cases_timeout", 0),
                 "duration_seconds": r.get("duration_seconds"),
             }
-            for r in self._runs[:limit]
+            for r, report in zip(self._runs[:limit], self._report_names(self._runs[:limit]))
         ]
 
     @staticmethod
@@ -314,6 +343,9 @@ class EvalService:
         if canary.get("updated_at"):
             quick = {"last_run": canary["updated_at"], "passed": canary.get("passed"),
                      "total": canary.get("total")}
+        days = [{k: d.get(k) for k in ("date", "passed", "failed", "timeout", "total",
+                                       "not_run", "verdict")}
+                for d in (canary.get("days") or []) if isinstance(d, dict)][-30:]
         if quick_run and (quick["last_run"] or "") < (quick_run.get("triggered_at") or ""):
             bvt = quick_run.get("bvt") or {}
             quick = {"last_run": quick_run.get("triggered_at"), "passed": bvt.get("passed"),
@@ -321,7 +353,7 @@ class EvalService:
         live = [c for c in cases if c.get("tier") != "archived"]
         product = sum(1 for c in live if is_product_case(c))
         return {
-            "quick": quick,
+            "quick": {**quick, "days": days},
             "full": {"last_run": (full_run or {}).get("triggered_at"),
                      "release": ((full_run or {}).get("release") or {}).get("verdict"),
                      "next_run": self._next_full_run(now)},
@@ -423,7 +455,141 @@ class EvalService:
                             for d in (data.get("low_details") or [])],
             "sampler_error": str(sampler_error)[:300] if sampler_error else None,
             "judge_error": str(data["judge_error"])[:300] if data.get("judge_error") else None,
-            "trend": [t for t in (data.get("trend") or []) if isinstance(t, dict)][-12:],
+            "metrics": self._project_metrics(data.get("metrics")),
+            "trend": [{"week": str(t.get("week") or "")[:10], "at": t.get("at"),
+                       "rates": {str(k)[:40]: v for k, v in (t.get("rates") or {}).items()
+                                 if isinstance(v, (int, float))},
+                       "metrics": self._project_metrics(t.get("metrics")),
+                       "backfilled": bool(t.get("backfilled"))}
+                      for t in (data.get("trend") or []) if isinstance(t, dict)][-12:],
+            "calibration": self._calibration_view(data),
+        }
+
+    @staticmethod
+    def _project_metrics(m) -> dict:
+        m = m if isinstance(m, dict) else {}
+        return {k: m.get(k) if isinstance(m.get(k), (int, float)) else None
+                for k in ("turns", "turn_p50_s", "cost_p50_usd")}
+
+    # ─── Judge calibration (design §8 item 5) ──────────────────────────────
+
+    _CALIBRATION_FILE = ".judge-calibration.jsonl"
+    _CALIBRATION_LABELS = ("agree", "disagree")
+
+    def _calibration_path(self) -> Path:
+        if not self._workspace_root:
+            raise RuntimeError("no workspace: calibration labels are not stored")
+        return self._workspace_root / ".context" / self._CALIBRATION_FILE
+
+    def _calibration_labels(self, prompt_sha: str) -> dict:
+        """``{session_id: label}`` for the given judge prompt, the latest label per
+        session winning. A missing or garbled file reads as no labels."""
+        import json as _json
+
+        labels: dict[str, str] = {}
+        try:
+            lines = self._calibration_path().read_text(encoding="utf-8").splitlines()
+        except (OSError, RuntimeError):
+            return labels
+        for line in lines:
+            try:
+                e = _json.loads(line)
+            except ValueError:
+                continue
+            if (isinstance(e, dict) and e.get("judge_prompt_sha") == prompt_sha
+                    and e.get("human") in self._CALIBRATION_LABELS and e.get("session_id")):
+                labels[str(e["session_id"])] = e["human"]
+        return labels
+
+    def _calibration_view(self, state: dict) -> dict:
+        """What the Online tab needs to show the agree / disagree buttons: whether
+        the last batch can take labels (it was scored by today's judge prompt) and
+        the labels already given to it."""
+        from core.session_scorer import JUDGE_PROMPT_SHA
+
+        sha = state.get("judge_prompt_sha")
+        accepting = bool(sha) and sha == JUDGE_PROMPT_SHA
+        return {"accepting": accepting,
+                "reason": None if accepting else (
+                    "scored by an older judge prompt" if sha else
+                    "scored before calibration labels were recorded"),
+                "labels": self._calibration_labels(JUDGE_PROMPT_SHA) if accepting else {}}
+
+    def record_calibration(self, session_id: str, human: str) -> dict:
+        """The owner agrees or disagrees with a low score the online judge gave.
+        Only a session in the last run's low-scored list, scored by the current
+        judge prompt, takes a label (an older batch would calibrate a prompt that no
+        longer runs). Appends one line to ``.context/.judge-calibration.jsonl``
+        (gitignored, the owner's); the latest label per session counts."""
+        import json as _json
+        from datetime import datetime as _dt, timezone as _tz
+
+        from core.session_scorer import JUDGE_PROMPT_SHA
+
+        if human not in self._CALIBRATION_LABELS:
+            raise ValueError(f"label must be one of {list(self._CALIBRATION_LABELS)}")
+        state = self._context_state(".session-quality-state.json") or {}
+        view = self._calibration_view(state)
+        if not view["accepting"]:
+            raise ValueError(f"This batch does not take labels: {view['reason']}")
+        low = {str((d or {}).get("session_id")) for d in (state.get("low_details") or [])
+               if isinstance(d, dict)}
+        if session_id not in low:
+            raise ValueError("Not a low-scored session of the last online run")
+        path = self._calibration_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = {"at": _dt.now(_tz.utc).isoformat(), "session_id": session_id,
+                "judge_prompt_sha": JUDGE_PROMPT_SHA, "judge": "low", "human": human}
+        with self._data_lock, path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(line) + "\n")
+        return self._calibration_summary()
+
+    def _calibration_summary(self) -> dict:
+        from core.session_scorer import JUDGE_PROMPT_SHA
+
+        labels = self._calibration_labels(JUDGE_PROMPT_SHA)
+        agree = sum(1 for v in labels.values() if v == "agree")
+        return {"prompt_sha": JUDGE_PROMPT_SHA, "labels": len(labels), "agree": agree,
+                "agreement": round(agree / len(labels), 3) if labels else None}
+
+    # ─── LLM judges (design §8 item 6) ─────────────────────────────────────
+
+    def get_judges(self) -> dict:
+        """The two judges as they run: model, prompt text, settings, which cases
+        use them and how the online judge agrees with the owner. The prompts are
+        the module constants the runs format (eval_runner.DECISION_JUDGE_PROMPT,
+        session_scorer.JUDGE_PROMPT), so this page cannot drift from the run."""
+        from core import session_scorer as ss
+        from core.app_config_manager import AppConfigManager
+        from core.eval_release import tier_of
+        from jobs.handlers import session_quality as sq
+        from scripts import eval_runner as er
+
+        cfg = AppConfigManager.instance()
+        live = [c for c in self._cases if c.get("tier") != "archived"]
+        judged = [c for c in live if c.get("decision_rubric") or c.get("eval_method") == "llm"]
+        gating = [c for c in live if tier_of(c) in ("red", "gate")]
+        return {
+            "judge_model": cfg.get("eval_judge_model") or er.DEFAULT_JUDGE_MODEL,
+            "agent_model": cfg.get("default_model"),
+            "cases_total": len(live),
+            "cases_judged": len(judged),
+            "gating_total": len(gating),
+            "gating_judged": sum(1 for c in gating if c in judged),
+            "judges": [
+                {"id": "offline_decision", "line": "offline",
+                 "prompt": er.DECISION_JUDGE_PROMPT, "system": er.DECISION_JUDGE_SYSTEM,
+                 "temperature": er.DECISION_JUDGE_TEMPERATURE,
+                 "max_tokens": er.DECISION_JUDGE_MAX_TOKENS,
+                 "case_ids": sorted(c["id"] for c in judged if c.get("decision_rubric")),
+                 "calibration": None},
+                {"id": "online_session", "line": "online",
+                 "prompt": ss.JUDGE_PROMPT, "system": ss.JUDGE_SYSTEM,
+                 "temperature": ss.JUDGE_TEMPERATURE, "max_tokens": ss.JUDGE_MAX_TOKENS,
+                 "sample_cap": sq._SAMPLE_CAP, "low_threshold": sq._LOW_SCORE_THRESHOLD,
+                 "prompt_sha": ss.JUDGE_PROMPT_SHA,
+                 "calibration": self._calibration_summary()},
+            ],
         }
 
     def get_golden_set(self, category: Optional[str] = None) -> dict:

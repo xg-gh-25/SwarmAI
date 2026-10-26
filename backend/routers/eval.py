@@ -99,6 +99,11 @@ class TriggerRunRequest(BaseModel):
     )
 
 
+class CalibrationRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=200)
+    human: str = Field(..., description="agree | disagree")
+
+
 class HardDeleteRequest(BaseModel):
     case_ids: list[str] = Field(min_length=1, max_length=500,
                                 description="Case IDs to PHYSICALLY remove (not soft-archive)")
@@ -141,6 +146,21 @@ async def get_session_quality():
     sessions from the last 7 days, low-scoring sessions, weekly trend)."""
     svc = get_eval_service()
     return svc.get_session_quality()
+
+
+@router.get("/judges")
+async def get_judges():
+    """The LLM judges: model, prompt, settings, cases that use them, calibration."""
+    return await executors.run_nav(get_eval_service().get_judges)
+
+
+@router.post("/calibration")
+async def record_calibration(req: CalibrationRequest):
+    """The owner agrees or disagrees with a low online-judge score."""
+    try:
+        return await executors.run_nav(get_eval_service().record_calibration, req.session_id, req.human)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/golden-set/{case_id}")

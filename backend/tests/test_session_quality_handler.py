@@ -250,3 +250,133 @@ def test_the_judge_sees_one_question_with_its_own_answer(tmp_path):
     corr = [{"type": "user_correction", "session_id": "a", "ts": NOW.timestamp()}]
     _run(tmp_path, {"a": session}, corrections=corr, scorer=scorer)
     assert calls == [("端口是多少？", "端口是 7421。", ["Grep"])]
+
+
+# ── metrics, weekly backfill, judge prompt version (design §8 item 4) ────────────
+
+def _at(days_ago, minute=0):
+    return (NOW - timedelta(days=days_ago, minutes=-minute)).astimezone().replace(tzinfo=None).isoformat()
+
+
+def _timed(days_ago, seconds, text="端口是多少？"):
+    return {"title": "t", "messages": [
+        _msg("user", text, at=_at(days_ago)),
+        _msg("assistant", [_text("端口是 7421。")],
+             at=(datetime.fromisoformat(_at(days_ago)) + timedelta(seconds=seconds)).isoformat())]}
+
+
+def test_turn_costs_are_increases_of_the_running_total():
+    rows = [("a", "2026-10-20T10:00:00", 1.0),   # first row of a: no baseline
+            ("a", "2026-10-20T10:05:00", 1.5),   # +0.5
+            ("b", "2026-10-20T10:06:00", 9.0),   # first row of b
+            ("a", "2026-10-20T10:07:00", 0.3),   # new process: 0.3
+            ("b", "2026-10-20T10:08:00", 9.25),  # +0.25
+            ("a", "2026-10-28T10:00:00", 0.9)]   # +0.6, outside the window
+    costs = sq._turn_costs(rows, "2026-10-19T00:00:00", "2026-10-26T00:00:00")
+    assert sorted(costs) == [0.25, 0.3, 0.5]
+
+
+def test_the_state_carries_turn_metrics_and_the_prompt_version(tmp_path):
+    from core.session_scorer import JUDGE_PROMPT_SHA
+
+    sessions = {"a": _timed(1, 60), "b": _timed(2, 120), "c": _timed(3, 7 * 3600)}  # c: tab left open
+    rows = [("a", _at(1), 1.0), ("a", _at(1, 1), 2.0), ("a", _at(1, 2), 2.5)]
+    spath = tmp_path / "state.json"
+    state = sq.run_session_quality(sampler=lambda since: {"sessions": sessions}, scorer=_scorer(),
+                                   corrections_path=tmp_path / "c.jsonl", state_path=spath, now=NOW,
+                                   cost_reader=lambda since: rows)
+    assert state["metrics"] == {"turns": 3, "turn_p50_s": 90, "cost_p50_usd": 0.75}
+    assert state["judge_prompt_sha"] == JUDGE_PROMPT_SHA
+    assert state["trend"][-1]["metrics"] == state["metrics"]
+    assert json.loads(spath.read_text())["metrics"] == state["metrics"]
+
+
+def _history_of(sessions, calls):
+    def history(since, consume):
+        calls.append(since)
+        for sid, s in sessions.items():
+            consume(sid, s)
+    return history
+
+
+def test_weeks_before_the_first_run_are_backfilled_once(tmp_path):
+    past = {"w1": _english_answer_to_chinese(), "w2": _good()}
+    for m in past["w1"]["messages"]:
+        m["created_at"] = _at(10)          # 2026-W42
+    for m in past["w2"]["messages"]:
+        m["created_at"] = _at(4)           # 2026-W43, the last whole week
+    cpath = tmp_path / "c.jsonl"
+    start_epoch = (NOW - timedelta(days=8)).timestamp()      # the log covers from W42's last day
+    cpath.write_text(json.dumps({"type": "tool_failure", "ts": start_epoch}) + "\n"
+                     + json.dumps({"type": "user_correction", "session_id": "w2",
+                                   "ts": (NOW - timedelta(days=4)).timestamp()}) + "\n")
+    spath = tmp_path / "state.json"
+    calls: list = []
+    run = lambda: sq.run_session_quality(  # noqa: E731
+        sampler=lambda since: {"sessions": {"now": _good()}}, scorer=_scorer(),
+        corrections_path=cpath, state_path=spath, now=NOW, history=_history_of(past, calls),
+        cost_reader=lambda since: [])
+    state = run()
+    trend = {t["week"]: t for t in state["trend"]}
+    assert len(state["trend"]) == 12 and state["trend"][-1]["week"] == "2026-W44"
+    assert [t["week"] for t in state["trend"]] == sorted(trend)
+    two_back, last = trend["2026-W42"], trend["2026-W43"]
+    assert two_back["backfilled"] and two_back["rates"]["O1_LANGUAGE"] == 1.0
+    assert "O3_CORRECTIONS" not in two_back["rates"]          # the log did not cover that week
+    assert last["rates"]["O3_CORRECTIONS"] == 1.0              # covered, and w2 was corrected
+    assert not ({"O4_GOAL", "O5_TOOLS"} & set(last["rates"]))  # the judge is not backfilled
+    assert trend["2026-W40"]["metrics"]["turns"] == 0          # an empty week is still recorded
+    assert len(calls) == 1
+    run()
+    assert len(calls) == 1                                     # nothing left to backfill
+
+
+def test_no_backfill_when_the_sampler_failed_or_none_is_injected(tmp_path):
+    calls: list = []
+    state = sq.run_session_quality(
+        sampler=lambda since: {"sessions": {}, "sampler_error": "X: y"}, scorer=_scorer(),
+        corrections_path=tmp_path / "c.jsonl", state_path=tmp_path / "s.json", now=NOW,
+        history=_history_of({"a": _good()}, calls))
+    assert state["trend"] == []
+    result, _, _ = _run(tmp_path, {"a": _good()})                # injected sampler only
+    assert [t["week"] for t in result["trend"]] == ["2026-W44"]
+
+
+def test_the_database_returns_cost_rows_in_order(tmp_path):
+    from database.sqlite import SQLiteDatabase
+
+    db = SQLiteDatabase(str(tmp_path / "t.db"))
+    asyncio.run(db.initialize())
+    for sid, cost in (("a", 1.0), ("b", None), ("a", 1.5)):
+        asyncio.run(db.record_token_usage(session_id=sid, cost_usd=cost))
+    rows = asyncio.run(db.token_cost_rows("2000-01-01T00:00:00"))
+    assert [(r[0], r[2]) for r in rows] == [("a", 1.0), ("a", 1.5)]
+    assert asyncio.run(db.token_cost_rows("2999-01-01T00:00:00")) == []
+
+
+def test_the_default_judge_is_asked_for_the_reason_in_the_users_language(tmp_path, monkeypatch):
+    import core.session_scorer as ss
+
+    prompts = []
+    monkeypatch.setattr(ss, "default_judge_fn", lambda p: (prompts.append(p), json.dumps(
+        {"goal_score": 0.2, "tool_score": 0.2, "dimension": "quality", "reason": "没交付"}))[1])
+    corr = [{"type": "user_correction", "session_id": "a", "ts": (NOW - timedelta(days=1)).timestamp()}]
+    cpath = tmp_path / "c.jsonl"
+    cpath.write_text(json.dumps(corr[0]) + "\n")
+    result = sq.run_session_quality(sampler=lambda since: {"sessions": {"a": _good()}},
+                                    corrections_path=cpath, state_path=tmp_path / "s.json", now=NOW)
+    assert "in Chinese" in prompts[0]
+    assert result["low_details"][0]["reason"] == "没交付"
+
+
+def test_backfilled_weeks_land_in_week_order_before_an_existing_run(tmp_path):
+    prior = {"trend": [{"week": "2026-W43", "rates": {"O1_LANGUAGE": 0.5}}]}
+    spath = tmp_path / "s.json"
+    spath.write_text(json.dumps(prior))
+    state = sq.run_session_quality(
+        sampler=lambda since: {"sessions": {"a": _good()}}, scorer=_scorer(),
+        corrections_path=tmp_path / "c.jsonl", state_path=spath, now=NOW,
+        history=_history_of({}, []), cost_reader=lambda since: [])
+    weeks = [t["week"] for t in state["trend"]]
+    assert weeks == sorted(weeks) and weeks[-2:] == ["2026-W43", "2026-W44"]
+    assert state["trend"][-2]["rates"] == {"O1_LANGUAGE": 0.5}   # a real run is never overwritten

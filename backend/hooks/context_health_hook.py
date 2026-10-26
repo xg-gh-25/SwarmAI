@@ -60,6 +60,7 @@ _DECISION_NOISE_PREFIXES = (
 # so a session-tier run never overwrites the daily result.
 _CANARY_STATE_FILE = ".eval-canary.json"
 _CANARY_DAILY_STATE_FILE = ".eval-canary-daily.json"
+_CANARY_DAYS_KEPT = 30  # per-day quick-check record in the daily state (``days``)
 _CANARY_STATE_PREFIX = ".eval-canary"
 # Daily tier: per-case cap = the manual-run cap in eval_runner.eval_canary_pass.
 _CANARY_DAILY_CASE_TIMEOUT = 20
@@ -547,11 +548,13 @@ class ContextHealthHook:
             today = date.today().isoformat()
             state = self._load_daily_canary_state(state_path)
             if state.get("date") != today:
-                # Claim today's tier BEFORE running anything.
+                # Claim today's tier BEFORE running anything; the per-day record
+                # (``days``) carries over.
                 state = {
                     "date": today,
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "results": {},
+                    "days": [d for d in (state.get("days") or []) if isinstance(d, dict)],
                 }
                 self._write_daily_canary_state(state_path, state, cases)
             self._resume_daily_canary(root, state_path, state, cases,
@@ -648,6 +651,10 @@ class ContextHealthHook:
         (core/eval_release.decide_release): a case not run yet today counts as having
         no result, so the verdict is incomplete until every case has run. A timeout is
         still listed (``timeouts``): a hang must not disappear.
+
+        ``days`` keeps one entry per day for the last ``_CANARY_DAYS_KEPT`` days
+        (``{date, passed, failed, timeout, total, not_run, verdict}``, today's
+        replaced on every write): the Offline Eval tab's day-by-day row.
         """
         ids = [c["id"] for c in cases]
         results = state.get("results", {})
@@ -675,6 +682,14 @@ class ContextHealthHook:
                 for i in ids if results.get(i, {}).get("status") == "timeout"
             ],
         })
+        if state.get("date"):
+            day = {"date": state["date"], "passed": n["passed"], "failed": n["failed"],
+                   "timeout": n["timeout"], "total": len(ids),
+                   "not_run": len(ids) - n["passed"] - n["failed"] - n["timeout"],
+                   "verdict": state["verdict"]}
+            days = [d for d in (state.get("days") or [])
+                    if isinstance(d, dict) and d.get("date") != state["date"]]
+            state["days"] = sorted(days + [day], key=lambda d: str(d.get("date")))[-_CANARY_DAYS_KEPT:]
         tmp = state_path.with_name(state_path.name + ".tmp")
         try:
             tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
