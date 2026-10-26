@@ -765,10 +765,8 @@ async def decide_governance(req: GovernanceDecisionRequest):
     file is the s_self-evolution path, on the user's approval. Runs off the event
     loop: the write-back waits on EVOLUTION.md's file lock.
     """
-    import asyncio
-
     svc = get_eval_service()
-    result = await asyncio.to_thread(svc.decide_governance, req.proposal_id, req.decision)
+    result = await executors.run_nav(svc.decide_governance, req.proposal_id, req.decision)
     if result.get("status") == "not_found":
         raise HTTPException(status_code=404, detail=f"proposal {req.proposal_id} not found")
     if result.get("status") == "error":
