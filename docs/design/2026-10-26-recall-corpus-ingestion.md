@@ -3,7 +3,7 @@ title: Recall 语料的写入与准入 — Memory、DDD、Knowledge 三块统一
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r11 — 定稿，已过三轮独立评审（修订记录见 §10）
+status: r12 — 定稿，已吸收三轮独立评审（修订记录见 §10）
 ---
 
 # Recall 语料的写入与准入
@@ -111,8 +111,8 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 | 存储 | 属于召回语料吗 | 准入问题 | 允许的动作 | 退出 |
 |---|---|---|---|---|
-| MEMORY | 是（每轮整份注入） | 跨项目、不依赖查询、多数会话都会影响判断 | 新加 / 补充 / 替换 | 复审（§4.10） |
-| EVOLUTION | 是（每轮整份注入） | 关于 agent 自己的能力或纠正，不针对某个项目 | 新加 / 补充 / 替换 | 复审 |
+| MEMORY | 是（每轮注入，有确定性的预算，§4.9） | 跨项目、不依赖查询、多数会话都会影响判断 | 新加 / 补充 / 替换 | 复审（§4.10） |
+| EVOLUTION | 是（每轮注入，有确定性的预算） | 关于 agent 自己的能力或纠正，不针对某个项目 | 新加 / 补充 / 替换 | 复审 |
 | 项目 DDD（PRODUCT / TECH / IMPROVEMENT / PROJECT） | 是（按项目按需注入） | 离开这次会话或 run 以后，还会影响这个项目的判断 | 新加 / 补充 / 替换 | 复审 |
 | Knowledge Library（Notes / Library / Learned） | 是（召回时排名） | 离开原会话也能独立读懂、可以复用的参考材料 | 新加（一个文件） | 复审 |
 | 用户 context 文件（USER / STEERING / TOOLS） | 是（每轮整份注入） | 改变的是这个用户"怎么判断" | 新加 / 补充 / 替换，写到用户的 `.context/`（§4.11） | 复审 |
@@ -124,424 +124,513 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 | 身份 | 用途 | 定义 |
 |---|---|---|
 | `candidate_id` | 同一个候选重放时不重复处理（幂等） | `writer:来源 id:序号` 的哈希，例如 backflow 用消息 id |
-| 来源信封 | 出处、证据强度、是否被污染（§4.4） | 由受信入口根据原始事件生成，候选自己不能声明 |
+| 来源信封 | 依据的输入事件、证据强度、是否被污染（§4.4） | 由输入账本和写入者给出的 `source_event_ids` 算出，候选自己不能声明 |
 | 内容指纹 | 完全相同的内容去重 | 规范化后正文的哈希（复用 `content_signature`） |
-| 单元锚点 | 卡 3 的比较对象、关系图的端点、注入时跳过哪条 | `工作区相对路径 # 段标题 # 单元身份`。单元身份对条目用 `cand:<id>`；已沉淀内容用基线清单里的单元哈希（§6）。光靠标题不够唯一 |
-| 基线 | 哪些内容属于"已沉淀" | 上线时一次性生成的清单（§6） |
+| 单元锚点 | 卡 3 的比较对象、关系图的端点、链头转发 | `工作区相对路径 # 段标题 # identity`，由 `parse_units()` 统一给出（§4.3）。光靠标题不够唯一 |
+| 基线 | 哪些内容属于"已沉淀" | 上线时生成的清单，用户编辑时修订（§6） |
 
 ## 4. 设计
 
-### 4.1 唯一写入口，靠三层强制
+### 4.1 写入口：拦截 + 检测，写入者清单从调用点扫描生成
 
-r10 只靠"把底层写函数改成私有，再加一个静态扫描测试"。这挡不住 SDK 工具调用、shell 重定向、HTTP 写入、别名导入和动态路径。r11 改成三层强制：
+**做不到的事要先讲清楚**：在 PreToolUse 这一层，挡不住所有写法。Bash 写入检测（`file_change_classifier.py:99-106`）只识别有把握的模式，有意宁可漏报。`python patch.py`、`perl -pi`、带变量的路径、可执行程序在内部写文件，它都看不出来。要彻底挡住，必须在操作系统层把受控文件对 agent 子进程设为只读，写入只能走 daemon 的 RPC。这个改动太大，而且各平台做法不同（r12 决定不做）。r12 的承诺是：**常见写法当场拦下，其余所有绕过都能被看见。**
 
-1. **运行时写入适配器**：受控路径（MEMORY、EVOLUTION、USER、STEERING、TOOLS、各项目 `2-understanding/` 下的四份 DDD、`Knowledge/{Notes,Library,Learned}`、`.knowledge-graph.yaml`）只有 `governed_store` 里的适配器能写。适配器负责加锁、版本校验、原子替换和记审计。backend 里其他所有写这些路径的代码都改成调用适配器。
-2. **PreToolUse 门** `governed_corpus_gate`（Write / Edit / MultiEdit / Bash）：agent 直接写受控路径时拒绝，并提示改用 `"$SWARM_BACKEND_BIN" ingest submit --text … --why …`。这条命令把内容作为候选交给 `submit()`。判断 Bash 是否写入时，复用 `governance_file_gate` 现有的写入检测（sed -i、重定向、解释器 heredoc）。这个门符合 AGENTS.md 对产品级 gate 的要求：每个用户都受益（记忆不被绕过），正常工作仍然有路可走（submit 命令）。它不碰代码、测试和提交。实施时要把它登记进 `hook_builder.py`，并更新 AGENTS.md 的 Security Architecture 列表。
-3. **静态架构测试**：作为补充防线，扫描 `backend/` 中写受控路径或导入适配器私有函数的代码，必须在白名单里并标明类别。另外加运行时绕过测试，覆盖直接 `Path.write_text`、rename、subprocess、symlink 和路径穿越。
+1. **适配器**：`governed_store` 里的写入适配器，是 backend 代码写受控路径的唯一函数。受控路径包括 MEMORY、EVOLUTION、USER、STEERING、TOOLS、各项目 `2-understanding/` 下的四份 DDD、`Knowledge/{Notes,Library,Learned}`、`.knowledge-graph.yaml`。这些路径由契约给出，按当前工作区的真实根目录解析。临时工作区、测试工作区不算受控路径。
+2. **拦截** `governed_corpus_gate`（PreToolUse，匹配 Write、Edit、MultiEdit、NotebookEdit、Bash）：agent 直接写受控路径时拒绝，并提示改用 `"$SWARM_BACKEND_BIN" ingest submit --stdin`。Bash 部分复用 `governance_file_gate` 的写入检测。它只是**提前提示**，不是安全边界。它不碰代码、测试和提交；登记在 `hook_builder.py`，AGENTS.md 同步更新。
+3. **检测**：每次 drain 时（§4.10），对每个受控文件做一次比对，比较当前文件的单元集合，和"基线 + 适配器写过的所有版本"。凡是对不上的改动，都在审计里记一行 `writer=unknown`，内容是这次改动的 diff，同时发通知。被检测出的改动不回滚，人决定怎么处理；但这些新内容没有 `cand:` 标记，不会被复审，也不会被当作已沉淀内容保护。
+4. **静态测试**：作为补充，扫描 `backend/` 里对受控路径的文件写入点（`open(...,"w")`、`write_text`、`replace`、`rename`、`locked_write`、`apply_to_ddd`、`annotate_entry` 等），每一处都必须在白名单里，并标明类别。
 
-用户自己在编辑器里改受控文件，走适配器的整文件 CAS 写入，记为 `writer=user_edit`，不跑答题卡。上传文件到受控目录同样处理。
+**`ingest submit` 命令**：在 `desktop_main.py` 的分发里，和 `py`、`pipeline-v1`、`hook`、`daemon` 并列，加一个 `ingest`，放在 daemon import 之前，只初始化数据库和工作区服务。内容从 stdin 或权限为 0600 的 JSON 文件读入，不放在 argv 里，避免进程列表和长度限制的问题。命令输出结构化 JSON，退出码固定。这个命令只负责入队，不在进程里跑答题卡，答题卡由 backend 的 drain 跑。
 
-**写入者分类**：
+**写入者清单**：r11 是按机制名逐个列的，漏了好几个。r12 改成从生产代码的调用点扫描生成，静态测试保证清单不会再漂。
 
-| 类别 | 写入者 | 规则 |
+| 类别 | 写入者（调用点） | 规则 |
 |---|---|---|
-| 语义写入（必须走 `submit`） | REFLECT 的新加 / 强化 / 细化（`reflect_job.py:157-281`）、REFLECT 写 pipeline-lessons（`reflect_library.py:145-228`）、会话结束蒸馏、即时纠正、`memory_extractor.py:351`、`evolution_optimizer.py:899`、DailyActivity 决策和纠正 → DDD、backflow、cultivation 的候选生成（signal、learn、code-change 三路）、agent 调用的 skill（`s_persist`、`s_self-evolution`、`s_ddd-persist`，以及改造后的 `s_memory-distill`） | 全部答题卡 |
-| 结构刷新和元数据 | `ddd_orchestrator.py:566-590` 的机械替换、`ddd_maturity.py:521-539` 的成熟度注释 | 通过适配器的结构写函数；只能动带 `cand:` 的单元和文件头注释，不能动基线单元（§6） |
-| 退出 | 复审（§4.10） | 只动带 `cand:` 的单元 |
-| 退役 | 每周 Memory Health 的修改阶段（`memory_health.py:500-1057`：删 MEMORY 条目、移动 Open Threads、标记 superseded、删除和压缩 EVOLUTION）、EVOLUTION prune（`evolution_maintenance_hook.py:921-954`）、DDD 矛盾剥离（`ddd_cultivation.py:978-1007`、`:1096-1125`）、size valve 和 section cap 对已沉淀条目的驱逐（`distillation_hook.py:2470-2915`）、`locked_write` 每次写入时删除旧 Memory Index（`locked_write.py:570-608`）、session 结束 writeback（置信度 0.5 永远过不了 0.7） | 这些都会修改已沉淀内容，和 §6 冲突。改动方式：修改阶段删掉，只保留只读的统计和报告；size valve 改成只能驱逐带 `cand:` 的单元，进入复审 |
-| 日志和过程产出 | DailyActivity、checkpoint、JobResults（`jobs/executor.py:2007-2056`）、Signals 摘要、Reports、Pollinate 包 | 不是知识存储，在契约里写明召回规则 |
-| 初始化 | `ensure_directory` 复制模板、工作区骨架 | 不变 |
+| 语义写入（走 `submit`） | REFLECT 新加（`reflect_job.py:267-282`）、REFLECT 强化/细化（`annotate_entry`，`:157-213`）、REFLECT 写 pipeline-lessons（`reflect_library.py:145-228`）；会话结束蒸馏；即时纠正；`memory_extractor.py:351`；`evolution_optimizer.py:899`；DailyActivity 决策/纠正 → DDD（`context_health_hook.py:902-1041`）；backflow；cultivation 的三路候选生成；agent 调用的 skill（`s_persist`、`s_self-evolution`、`s_ddd-persist`、改造后的 `s_memory-distill`）；`ingest submit` | 全部答题卡 |
+| 退役：会改已沉淀内容 | 每周 Memory Health 的修改阶段（`memory_health.py:500-1057`）；ContextHealth 对 MEMORY 的生命周期元数据改写、归档剥离、去重、旧索引清理（`context_health_hook.py:1482-1660`），以及对 KNOWLEDGE、EVOLUTION 的去重和改写（`:1666-1870`）；ContextHealth 的生产验证改成熟度（`:1190-1272`）；`ddd_maturity.promote_section()`（`:348-385`）；EVOLUTION prune 和 size cap（`evolution_maintenance_hook.py:674-961`）；MEMORY size valve 和 section cap（`distillation_hook.py:2382-2915`）；`locked_write` 每次写 MEMORY 时清理旧索引（`locked_write.py:570-613`）；DDD 矛盾剥离（`ddd_cultivation.py:978-1007`、`:1096-1125`）；session 结束 writeback | 修改阶段删除，只保留只读的统计和报告。确实需要的功能（size 控制、成熟度）改成只作用于 `cand:` 单元，或者改到读取侧做（§4.9） |
+| 结构元数据 | `ddd_maturity.py:521-539` 刷新证据注释（只改段头的注释行） | 只能改段头注释，不能改单元；改动走适配器 |
+| 退出 | 复审（§4.10） | 只作用于 `cand:` 单元 |
+| 用户编辑 | 两个工作区编辑接口（`workspace_api.py:1759-1813`、`workspace.py:715-790`）、上传接口 | 走适配器的 CAS 整文件写，记为 `writer=user_edit`，不跑答题卡；同时触发一次基线修订（§6） |
+| 日志和过程产出 | DailyActivity、checkpoint、JobResults、Signals 摘要、Reports、Pollinate 包 | 不是知识存储；召回规则写在契约里 |
+| 初始化 | `ensure_directory` 复制模板、工作区骨架、`swarm_workspace_manager` 新建项目 | 不变；DDD 模板只保留一个来源（§4.2 卡 2） |
 
 ### 4.2 答题卡：卡 0 规则 → 卡 1 内容本身 → 卡 2 路由表 → 卡 3 和已有内容的关系
 
-**输入和输出都有固定结构**，每次决定都记下契约版本、prompt 版本和模型 id。每道题的结果是 `PASS`、`REJECT`、`DEFER` 之一，外加一个原因码。
-
+每次决定都记下契约、prompt、模型三个版本。每道题的结果是 `PASS` / `REJECT` / `DEFER` 之一，外加一个原因码。
 - `REJECT`：判断过了，不该写，不重试。判官拿不准时也给 `REJECT`，原因码 `uncertain`。
 - `DEFER`：没法判断，比如判官预算用完、LLM 出错、输出解析失败、检索不可用或过期、拿不到锁、版本冲突、项目有歧义。候选留在候选表里，稍后重试（§4.5）。
 
-#### 顺序
-
-卡 0 规则（不调 LLM）→ 卡 1 内容本身（1 次 LLM）→ 卡 2 路由表（不调 LLM）→ 卡 3 和已有内容的关系（只有检索到命中时才调 1 次 LLM）→ 必要时改投回卡 2，最多 1 次 → 执行。
-
-- 卡 2 依赖卡 1 给出的分类字段，卡 3 的检索范围依赖卡 2 选定的去向，所以这个顺序由依赖关系决定。
-- "值得记吗"和"重复吗"是相对已有内容才能回答的问题，所以放在卡 3。
-- 不采用"先检索再定去向"：现有内容里 57% 放错了地方，照着它们找去向，只会接着放错。
+**顺序**：卡 0（不调 LLM）→ 卡 1（1 次 LLM）→ 卡 2（不调 LLM）→ 卡 3（检索到命中才调 LLM；替换时再加 1 次，用来生成有效单元）→ 必要时改投回卡 2，最多 1 次 → 提交。这个顺序由依赖关系决定：卡 2 要用卡 1 的字段，卡 3 的检索范围要用卡 2 的去向。"值得记吗"和"重复吗"要和已有内容比较才答得出来，所以放在卡 3。
 
 #### 卡 0：规则（不调 LLM）
 
-| 检查 | 不通过时 |
+| 检查 | 不通过 |
 |---|---|
-| 来源信封（§4.4）：标记为被污染，且去向可能是 MEMORY、EVOLUTION、context 文件 | 只允许进 Library；其他去向在卡 2 给 `REJECT tainted_source` |
+| 来源信封（§4.4）里是"被污染"，并且候选是 rule | `REJECT tainted_rule`（被污染的规则一律不写，不会改投到别处） |
 | `MemoryGuard` 扫描（附加检测，不是安全边界） | `REJECT unsafe` |
-| 噪音规则：会话 id、scratch 路径、PID、提交哈希、"N 个测试通过" | `REJECT noisy` |
-| 长度：rule 类候选超过 600 字；reference 类超过契约上限 | `REJECT not_atomic` / `too_large` |
-| 内容指纹和任何受控单元完全相同 | `REJECT already_exists` |
-| 会话已经删除 | `REJECT session_gone` |
+| 噪音规则：会话 id、scratch 路径、PID、提交哈希、"N 个测试通过"之类 | `REJECT noisy` |
+| 长度：rule 超过 600 字；reference 超过契约上限 | `REJECT not_atomic` / `too_large` |
+| 内容指纹和某个受控单元完全相同 | `REJECT already_exists` |
+| 会话已被删除 | `REJECT session_gone` |
 | 配额（§4.6） | `REJECT quota` |
+| `candidate_id` 已存在，但内容哈希、来源信封或项目快照有任何一项不同 | `REJECT id_collision`，同时告警，审计里记下两边的哈希。完全一致时直接返回已有的状态 |
 
 #### 卡 1：内容本身（1 次 LLM）
 
-**分类字段**：都从固定枚举里选，选不出来就 `REJECT untyped`。
+**输出是一个判别联合类型**，只有下面 7 种合法形状。判官的输出不属于其中任何一种，就判 `REJECT untyped`。
 
-| 字段 | 取值 |
+| 形状 | 字段 |
 |---|---|
-| `form` | `rule`（会改变做法）· `reference`（供查阅的材料） |
-| `type`（只有 rule 才有） | `principle` · `correction` · `decision` · `model` · `guideline` · `pitfall` · `process`，取自 `VALID_TYPES` |
-| `subject`（只有 rule 才有） | `user`：和这个用户怎么协作 · `agent`：agent 自身 · `project`：某个项目 · `world`：领域知识 |
-| `user_kind`（subject=user） | `preference`（偏好和做事方式）· `profile`（用户本人的事实）· `environment`（用户的工具和环境） |
-| `agent_kind`（subject=agent） | `correction`（自己犯过的错）· `competence`（学会的能力） |
-| `scope` | `single_project:<名字>`，名字只能取自项目快照 · `cross_project`。分不清是哪个项目时 `DEFER ambiguous_project` |
-| `project_topic`（scope=single_project） | `decision` · `product`（定位、目标、非目标、用户）· `architecture`（架构、机制、约定）· `lesson`（经验、坑、做对和做错的事）· `status`（当前进展） |
-| `reference_kind`（form=reference） | `learned`（外部内容的学习卡）· `analysis`（研究和分析）· `spec`（规格和参考） |
-| `applicability`（rule） | 一句话写明适用条件，卡 3 判断冲突范围时用 |
-| `claims` | 把内容拆成 1–5 个原子主张，卡 3 逐条比较时用 |
+| `Reference` | `reference_kind` ∈ {learned, analysis, spec}；可选 `project`（取自项目快照） |
+| `UserCross` | `type`；`user_kind` ∈ {preference, profile, environment} |
+| `UserSingle` | `type`；`project`；`topic` ∈ {decision, product, architecture, lesson}（例如"在 X 仓库里用中文写 commit"属于 architecture） |
+| `Agent` | `type`；`agent_kind` ∈ {correction, competence} |
+| `ProjectSingle` | `type`；`project`；`topic` ∈ {decision, product, architecture, lesson} |
+| `WorldSingle` | `type`；`project`；`topic`（同上）。领域知识，但目前只和这一个项目有关 |
+| `WorldCrossGlobal` | `type`；**`global_relevance` 必须为 true**，含义是：不依赖具体查询，在多数会话里都会影响判断 |
 
-**质量题**：按 `form` 分支，任何一题答"否"就 `REJECT`。
+- `type` 只能取 `VALID_TYPES` 里的值。`project` 只能从项目快照里选；有多个候选项目分不清时，`DEFER ambiguous_project`。
+- 不存在 `ProjectCross`：项目的内容不进 MEMORY。不存在 `status` 这个 topic：进度和状态是 DailyActivity 的事。
+- `WorldCross` 但 `global_relevance=false`：`REJECT not_global`。这种内容应该在 Library 里作为参考，或者等它和某个项目有关时再写。
+- rule 类形状都要附带两样东西：`applicability`（一句话写清适用条件）和 `claims`（1 到 5 条原子主张）。
+
+**质量题**：按 reference 或 rule 分支，任何一题答"否"就 `REJECT`。
 
 | 维度 | rule | reference | 原因码 |
 |---|---|---|---|
 | 原子 | 只讲一件事（强相关的两件算一件） | 只讲一个主题 | `not_atomic` |
-| 价值 | 下次遇到同样的情况会改变做法，并且写清了触发条件和做法 | 以后会有人检索到并读它，读懂不需要原会话 | `no_judgment_value` / `no_reference_value` |
+| 价值 | 下次遇到同类情况会改变做法，并且写明了触发条件和做法 | 以后会被检索到、被读，并且读懂不需要原会话 | `no_judgment_value` / `no_reference_value` |
 | 自洽 | 不依赖"上面""刚才"这类指代 | 同左 | `not_self_contained` |
-| 持久 | 会话结束后仍然成立，不是进度或状态 | 不是某次 review 或某个 run 的流水 | `not_durable` |
-| 有依据 | 来自用户明说、实测、失败、评审，而不是推测 | 有出处 | `speculative` |
+| 持久 | 会话结束后仍然成立，不是进度或状态 | 不是某次 review 或某次 run 的流水 | `not_durable` |
+| 有依据 | 来自用户明说、实测、失败或评审，不是推测 | 有出处 | `speculative` |
 | 内部一致 | 前后不矛盾 | 同左 | `self_contradictory` |
 | 精炼 | 去掉复述、过程和寒暄 | 同左 | `not_concise` |
-| 全局相关（只在 scope=cross_project 时问） | **不依赖具体查询，大多数会话里都会影响判断**。只在某类任务里有用的，不算 | — | `not_global` |
 
-最后一题直接对应 MEMORY 的准入问题。只要 `cross_project` 就能进每轮都注入的 MEMORY，这条路堵住了：`not_global` 的规则不会进 MEMORY；如果它和某个项目有关，可以重新按项目路由。
-
-七类的判别句式，判官 prompt 和黄金用例共用这一份：
-
-| 类型 | 判别句式 |
-|---|---|
-| 原则 | 任何领域都成立的思考规则 |
-| 纠错 | 我曾经这样做错了 → 正确的做法 |
-| 决定 | 在几个方案里选了 X，理由是… |
-| 心智模型 | X 是这样运作的（机制） |
-| 经验 | 做 X 时这样做效果好 |
-| 坑 | 现象 → 原因 → 怎么避开 |
-| 流程 | 有先后顺序的步骤 |
+七类的判别句式（判官 prompt 和黄金用例共用）：原则 = 任何领域都成立的思考规则；纠错 = 我曾经这样做错 → 正确做法；决定 = 在几个选项里选了 X，理由是…；心智模型 = X 是这样运作的；经验 = 做 X 时这样做效果好；坑 = 现象 → 原因 → 怎么避开；流程 = 有先后顺序的步骤。
 
 #### 卡 2：路由表（确定性，不调 LLM）
 
-先看 `form`，再看其他字段。每个合法的字段组合**恰好命中一行**，用属性测试穷举验证。
+一种形状只对应一行，所以不存在一个候选同时命中两行的情况。
 
-| # | 条件 | 去向：文件 § 段（真实标题） |
-|---|---|---|
-| R1 | form=reference | Library：`learned` → `Knowledge/Learned/`；`analysis` → `Knowledge/Notes/`；`spec` → `Knowledge/Library/` |
-| R2 | rule，subject=user | `preference` → `STEERING.md`；`profile` → `USER.md`；`environment` → `TOOLS.md`。段名取自文件里已有的标题；没有合适的段，就追加到契约指定的默认段 |
-| R3 | rule，subject=agent | `EVOLUTION.md`：`correction` → `## Corrections Captured`；`competence` → `## Competence Learned` |
-| R4 | rule，subject ∈ {project, world}，scope=single_project | 项目 DDD：`decision` → `PROJECT.md` § Recent Decisions；`status` → `PROJECT.md` § Current Focus；`product` → `PRODUCT.md`；`architecture` → `TECH.md`；`lesson` → `IMPROVEMENT.md`。具体段由 `type` 加模板标题表（`backend/templates/ddd/*.md`）决定，契约里写一张完整的表 |
-| R5 | rule，scope=cross_project，并且通过了 `not_global` 那一题 | `MEMORY.md`，段由 `MEMORY_TYPE_TO_SECTION[type]` 给出（`ddd_entry_lifecycle.py:133-141`） |
-| R6 | rule，scope=cross_project，`not_global` 那一题没通过 | 不写，`REJECT not_global`（它在卡 1 就已经被拒了，这一行是为了让路由表把所有组合都覆盖到） |
-
-- `subject=user` 但 `scope=single_project`（例如"在 SwarmAI 仓库里用中文写 commit"）：走 R4，写进项目 DDD，归为 `project_topic=architecture`（约定），不进 STEERING。STEERING 只放跨项目的用户偏好。
-- 写入前校验目标段是否真的存在：解析目标文件的实时标题，找不到就 `DEFER missing_section`，不会自己新建段。
-- SOUL、AGENT、IDENTITY、SWARMAI 是产品文件，不会是去向（§4.11）。
-- 层由一个函数唯一决定：`layer = layer_for(target_section, type)`，列出全部合法组合，组合不合法就拒绝。审计、文件元数据和复审都只读这个函数的结果（§4.3）。
-
-#### 卡 3：和已有内容的关系（先检索，有命中才调 LLM）
-
-**检索语料**：卡 3 有自己专用的语料，不调用读取侧的注入函数。读取侧的 `context_files` 那一路只读 MEMORY，还会排除已经在 prompt 里的内容，正好和这里的需求相反。语料范围是：卡 2 选定的去向，加上每轮都会注入的 MEMORY、EVOLUTION、STEERING、USER、TOOLS、SOUL、AGENT；去向是 DDD 时，再加上这个项目的另外三份文档。按单元锚点（§3）把这些文件解析成可比较的单元，用 `memory_index._bm25_scores` 统一打分。检索结果是三路的并集：内容指纹、标题或锚点、BM25 的前 8 个。
-
-**检索结果带类型**：`OK_EMPTY` 直接新加，不调 LLM；`OK_HITS` 进入下一步；`UNAVAILABLE`、`STALE` 一律 `DEFER`。
-
-**逐个命中判定**：判官拿到全部命中，对每个命中分别输出下面几项，执行前再检查这些判定彼此相容。
-
-| 维度 | 输出 |
+| 形状 | 去向：文件 § 段 |
 |---|---|
-| 重复度 | `same` / `contained`（新内容被旧内容包含）/ `contains`（新内容包含旧内容）/ `unrelated` |
-| 主张对照 | 对候选的每一条 `claims`：`agrees` / `refutes` / `refines` / `independent`，并指出对应旧单元里的哪一句 |
-| 适用范围 | 新旧两条的 `applicability` 关系：相同 / 新的更窄 / 新的更宽 / 不重叠 |
-| 证据 | 新旧两条各自来源信封里的证据强度（§4.4） |
-| 能否改动 | 旧单元带不带 `cand:`；基线单元一律不能改 |
+| `Reference` | `learned` → `Knowledge/Learned/`；`analysis` → `Knowledge/Notes/`；`spec` → `Knowledge/Library/` |
+| `UserCross` | `preference` → `STEERING.md`；`profile` → `USER.md`；`environment` → `TOOLS.md`。段取文件里已有的标题，取不到就用契约给的默认段 |
+| `Agent` | `EVOLUTION.md`：`correction` → `## Corrections Captured`；`competence` → `## Competence Learned` |
+| `UserSingle` / `ProjectSingle` / `WorldSingle` | 该项目的 DDD，按下面的 topic × type 矩阵定位 |
+| `WorldCrossGlobal` | `MEMORY.md` § `MEMORY_TYPE_TO_SECTION[type]` |
 
-**动作**（由上表按规则算出来，判官只给上表的判定）：
+**DDD 段矩阵**：段名取自 `backend/templates/ddd/*.md`。
 
-| 条件 | 动作 |
+| topic \ type | principle / model | decision | guideline / process | pitfall / correction |
+|---|---|---|---|---|
+| decision | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions |
+| product | `PRODUCT.md` § Vision（principle）/ § What Makes … Different（model） | `PRODUCT.md` § Strategic Priorities | `PRODUCT.md` § Success Criteria | `PRODUCT.md` § Non-Goals |
+| architecture | `TECH.md` § Architecture（principle）/ § Key Subsystems（model） | `TECH.md` § Architecture | `TECH.md` § Conventions | `TECH.md` § Runtime Traps |
+| lesson | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Failed |
+
+- 这张矩阵的唯一真实来源是契约，文档里的版本由契约生成。DDD 模板也只保留一个来源 `backend/templates/ddd/*.md`：`swarm_workspace_manager.py:379-467` 里内嵌的那份 `DDD_TEMPLATES` 改成从这些文件读取。测试检查矩阵里的每个段在模板里都存在。
+- 写入前解析目标文件里实际存在的标题。找不到目标段就 `DEFER missing_section`，不会自己新建段。用户的项目如果删过段，这条候选会留在审计里，看得见。
+- 层由 `layer_for(target_section, type)` 唯一决定（§4.3）。
+
+#### 卡 3：和已有内容的关系
+
+**检索语料**：一个专用的单元语料，范围是卡 2 选定的去向，加上每轮都会注入的 MEMORY、EVOLUTION、STEERING、USER、TOOLS、SOUL、AGENT；去向是 DDD 时，再加上该项目的另外三份文档。语料由**统一的单元解析器**生成（§4.3），用 `memory_index._bm25_scores` 打分。召回取三路结果的并集：内容指纹、标题或锚点、BM25 前 8 个。被取代的单元**不剔除**，它们的命中按 §4.3 转交给当前生效的那一条。
+
+**检索结果带类型**：`OK_EMPTY` 直接新加，不调 LLM；`OK_HITS` 继续往下走；`UNAVAILABLE` 和 `STALE` 一律 `DEFER`。
+
+**判官对每个命中输出**（不是只对最接近的一个）：
+
+| 字段 | 取值 |
 |---|---|
-| 有一个命中 `same` 或 `contained` | 不变，`REJECT already_exists` |
-| 没有 `refutes`；有一个命中主题和适用范围都相同，且是 `cand:` 单元 | 补充那一条 |
-| 没有 `refutes`；有一个命中主题和适用范围都相同，但是基线单元 | 新加一条，加 `extends` 边 |
-| 没有 `refutes`，其余情况 | 新加 |
-| 有 `refutes`，适用范围相同，新证据更强，或证据一样强且新的直接反驳了旧的 | 替换（见下文） |
-| 有 `refutes`，新的适用范围更窄 | 作为例外新加：正文写明适用条件，加 `extends` 边；旧条目在它自己的范围内照样有效，不跳过 |
-| 有 `refutes`，旧证据更强 | `REJECT conflicts_stronger`，审计里把两条并排列出 |
-| 各个命中之间的动作不相容（比如要替换两条彼此不同的旧条目），或者关系会形成环 | `REJECT incompatible_hits` |
-| 命中明显表明内容属于别的去向 | 改投回卡 2，只允许一次 |
+| `overlap` | `same` / `contained`（候选被旧单元包含）/ `contains`（候选包含旧单元）/ `related` / `unrelated` |
+| `same_topic` | true / false：主题和适用条件都相同 |
+| `claim_verdicts` | 候选的每条 claim 一个结论：`agrees` / `refines`（更细或更准）/ `refutes` / `independent`，并指出旧单元里对应的那一句 |
+| `scope_relation` | `equal` / `narrower`（候选更窄）/ `wider` / `disjoint` |
+
+**证据强弱**由来源信封决定（§4.4），是全序：`user_explicit` > `measured` > `review` > `run_lesson` > `inferred`。
+
+**动作由两个纯函数算出**，判官只负责给出上面那张表：
+
+`relation_for_hit(hit) →` 按顺序，命中第一条就停：
+1. 有任何 `refutes`，并且 `scope_relation=narrower` → `exception`
+2. 有任何 `refutes`，并且 `scope_relation ∈ {equal, wider}` → 候选证据更强，或者一样强但更新 → `replace`；否则 → `blocked`
+3. 有任何 `refutes`，并且 `scope_relation=disjoint` → `independent`
+4. `overlap ∈ {same, contained}`，并且没有 `refutes` → `duplicate`
+5. `same_topic=true`，并且没有 `refutes`（包含 `refines`、`agrees`、`contains`）→ `refine`
+6. 其余 → `independent`
+
+`aggregate_hits(relations) →` 按顺序，命中第一条就停：
+1. 任何一个命中是 `blocked` → `REJECT conflicts_stronger`，审计里把两条并排列出
+2. 有 `replace` 或 `exception`，同时又有 `duplicate` → `REJECT incompatible_hits`（同一批里既重复又冲突，说明已有内容自相矛盾，这时不再往里写）
+3. 有两个或以上 `replace` → `REJECT incompatible_hits`
+4. 恰好一个 `replace` → 替换那一条
+5. 有 `duplicate` → `REJECT already_exists`
+6. 有 `exception` → 新加，作为例外，加 `extends` 边
+7. 有一个或多个 `refine` → 选分数最高的那一条，分数相同时取锚点字典序最小的。它是 `cand:` 单元就补充它；是基线单元就新加一条，加 `extends`
+8. 其余 → 新加
+9. 命中明显说明候选属于别的去向 → 改投，回到卡 2，只允许一次（判官单独给出一个 `reroute_to` 字段，跟上面这些规则分开）
+
+两个函数都要做全枚举的属性测试，包括命中顺序打乱后结果不变。
 
 **替换**：
-- 旧单元带 `cand:`：先归档旧单元再移除，然后写入新单元，加 `supersedes` 边。
-- 旧单元是基线单元：判官生成一个**完整的有效单元**，包含旧单元里仍然成立的全部主张，加上新主张。这个有效单元要重新过一遍卡 1，并且检查旧单元每一条没被反驳的主张都还在（逐条对照 `claims`）。通过之后新加这一条，加 `新 —supersedes→ 旧`。读取侧在注入前跳过旧单元（§4.3）。旧单元的文件一个字节不改。
-- 有效单元生成不出来，或者对照发现丢了主张：`REJECT conflict_unresolved`。宁可这一次不写。
+- 旧单元是 `cand:`：先归档再移除，写入新单元，加 `supersedes` 边。
+- 旧单元是基线单元，分三步：
+  1. **列出旧单元的全部主张**：第二次判官调用，为旧单元生成一份主张清单，每条带原文句子的位置。条数不设上限。
+  2. **生成有效单元**：同一次调用里，对清单上每一条旧主张标明 `preserve` / `refute` / `refine`，然后写出新的有效单元。
+  3. **校验**：每条 `preserve` 和 `refine` 的旧主张，在有效单元里都要能找到对应的句子；每条 `refute` 都要有候选里的一条 claim 支持。有效单元必须重新通过卡 1。任何一条旧主张没有对上，就 `REJECT conflict_unresolved`。
+- 通过之后新加有效单元，加 `新 —supersedes→ 旧`。旧单元的文件不改。
 
-r10 的"部分冲突只加标注、旧条目照常注入"取消了。独立评审指出：新旧两条可能出现在不同的注入块里，可能因为预算截断只剩旧的一条，也可能被模型忽略。这样模型照样会按旧的过时说法去做。改成"完整有效单元 + 确定性跳过"之后，模型永远只看到一个说法。
+**用户说"记住"**：同样过全部的卡，没有特权，只是证据强弱按来源信封走（§4.4）。被拒时，agent 当场把原因码告诉用户。
 
-**用户说"记住"**：同样要过全部的卡，没有任何特权。区别只在来源信封里的证据强度是 `user_explicit`（§4.4）。被拒绝时，agent 当场把原因码告诉用户。
+**已知局限**：没有向量库，换个说法、跨中英文的重复 BM25 可能找不到，由复审兜底。卡 3 端到端的重复召回率有门槛（§7）。
 
-**已知局限**：系统不用向量库，换个说法或者中英文混用的重复，BM25 找不到。这类重复交给复审兜底，卡 3 端到端的重复召回率要有门槛（§7）。
+### 4.3 单元、层、关系，以及读取侧怎么用
 
-### 4.3 Ontology：类型、层、关系，以及读取侧怎么用
+- **统一的单元解析器** `parse_units(path) -> [Unit]`，每个 Unit 有这几个字段：`path`（工作区相对路径）、`section`、`byte_start`、`byte_end`、`identity`、`byte_hash`。
+  - bullet 形式的单元（MEMORY、DDD）和 `###` 块形式的单元（EVOLUTION）都由它解析。
+  - 基线生成、卡 3 语料、MEMORY 组装、DDD 条目召回、DDD 段语料重建、渲染，这六处都只用这一个解析器。现有的 `context_directory_loader.py:256-302` 和 `recall_multi.py:100-220` 改成调用它。
+  - `byte_hash` 是原始字节的哈希，用于"已沉淀内容不变"的验收。
+  - `identity` 用于查找：`cand:` 单元取它的 `cand:<id>`；基线单元取基线清单里记下的 `byte_hash`。在单元后面追加新单元，不会改变已有单元的字节，所以已有单元的 identity 保持稳定。
+- **单元锚点**：`<path>#<section>#<identity>`。
+- **层**：`layer_for(target_section, type)`，所有合法组合列成一张表，非法组合直接拒绝。审计、文件元数据、复审只读这个函数的结果。
+- **关系图 schema v2**（`knowledge_graph.py`）：
+  - 边的两端是 `subject_anchor` 和 `object_anchor`，另外有 `predicate`、`scope`、`attrs`、`created`、`expired`。
+  - 去重身份是 `(subject_anchor, predicate, object_anchor, scope)`。YAML 读写带版本号。旧边读进来时，title 原样当 anchor 用，并标 `legacy=true`。
+  - `batch_add_relations()` 改为接收带类型的输入。
+  - 锁改用 `utils.file_lock`（现在的写法是模块顶层 `import fcntl`，Windows 上会失败）。
+- **supersedes 的图约束**（写入时在锁里校验，不满足就 `REJECT incompatible_hits`）：
+  - 不能有环。
+  - 每个锚点最多有一个生效中的取代者。第二次想取代同一个旧单元时，必须改为取代当前的链头，也就是"新 → 当前头"。
+  - 边的两端都必须是能解析出来的单元。
+  - 只有提交协议（§4.5）能写入 supersedes 边。
+- **链头**：`active_head(anchor)` 沿着生效中的 supersedes 边一直走到终点。复审要归档某个链头时，必须在同一个事务里把这条边设为失效，让它的前驱重新成为链头。
+- **读取侧**（MEMORY 组装、DDD 条目召回、DDD 段打分、渲染）：
+  - 检索命中某个被取代的单元时，**不丢掉这次命中**，把它的分数和命中理由转给 `active_head`。同一个链头被多次命中时，取最高分。
+  - 被取代的单元本身不进入输出。
+  - 这样处理之后，查询只匹配旧措辞时，模型看到的是当前有效的那条；任何情况下都不会同时看到新旧两种说法。
+- **Library 文件**：frontmatter 写 `ontology_types:`，可以为空。
+- **类型对照**：`classify_entry_type()` 只作为对照信号写进审计；它和判官给的类型不一致时单独计数，不阻断写入。
 
-- **类型** 由卡 1 判定，`classify_entry_type()` 只作为对照信号写进审计；两者不一致时单独计数，不阻断写入。
-- **层** 只来自 `layer_for(target_section, type)` 这一个函数，不再有别的来源。例如 `COE Registry` 段里的 pitfall 属于元认知层。
-- **Library 文件** 的 frontmatter 写 `ontology_types:`，允许为空。
-- **关系图 schema v2**（`knowledge_graph.py`）：`Relation` 新增可选字段 `scope`、`attrs`、`unit_anchor`；YAML 读写加上这几个字段；去重身份改为 `(s, p, o, scope)`；旧边读入时 `scope=None`。`batch_add_relations()` 改为接收带类型的 `RelationInput`。
-  `knowledge_graph.py` 现在在模块顶部直接 `import fcntl`，Windows 上会失败。改成用 `utils.file_lock`。
-- **卡 3 写的边**：`supersedes`、`extends`、`applies_to`（路径必须真实存在）、`produced_by`。被拒绝的冲突只写进审计，不写进关系图。
-- **读取侧跳过被取代的单元**：新增 `superseded_anchors(graph) -> set`，只返回有效 `supersedes` 边的目标。
-  不用 `query_related_entries()`，它是双向的，不适合做压制。
-  这个集合传给 MEMORY 组装（`context_directory_loader.py:256-305`、`:1066-1078`，和剥掉 dormant/archived 走同一处）、DDD 条目解析（`recall_multi.py:124-166`）、DDD 段打分（`:170-220`，打分**之前**先剔除），以及渲染。
-  被跳过的单元既不参与打分，也不出现在输出里。测试要覆盖：预算截断、条目在不同注入块里、BM25 只召回到旧单元，这三种情况下模型都看不到旧单元。
-- **复审** 用同一套规则，判断 `cand:` 单元的类型和层是否还对，以及有没有新的 `supersedes`。
+### 4.4 来源信封和污染：按输入事件记录
 
-### 4.4 来源信封、污染和证据强度
+**信任从哪里来**：后端没法知道一段文字是用户亲手打的，还是粘贴进来的。所以 r12 不再声称能区分这两种情况。所有信任判断都基于"这段内容来自哪个输入事件"。
 
-全自动之后，答题卡是唯一的把关。"证据强度"和"是否被污染"如果能由候选自己声明，就会被伪造。所以：
+- **输入事件**：每次有内容进入会话，都记一条事件，带不可变的 `event_id` 和 `trust`。会话里所有事件 id 都记进会话的**输入账本**（`session_inputs` 表）。账本随会话持久化，压缩和恢复会话之后仍然保留，`HookContext` 和 run 记录都会带上它。
 
-- **来源信封由受信入口生成**，`submit()` 不接受调用方自己填的证据和信任字段。入口和它们给出的信封：
+| 输入事件 | trust |
+|---|---|
+| 用户在 dashboard 或已绑定频道里**本人发出**的消息（已认证的发送者） | `user`。如果消息里有引用块、转发块、附件，或者有 fenced 代码块，这些部分单独记为 `external` 事件 |
+| 白名单里的结构化测量器（pytest 的通过/失败计数、`/health` 字段、exit code），只取结构化字段 | `measured` |
+| 其他所有工具或命令的输出、网页抓取、MCP 返回、读入的文件、他人发的频道消息 | `external`（工具和命令输出默认都算这一档，因为它们可能把外部文本原样打出来） |
+| agent 自己产生的文本 | 不是输入事件，信任等级继承它所依据的输入 |
 
-| 入口 | 证据强度 | 污染 |
-|---|---|---|
-| 用户在 dashboard / 已绑定频道里**本人发出**的消息，且候选正文能在这条消息原文里找到（排除引用块、粘贴的代码块、转发内容） | `user_explicit` | 否 |
-| 用户本人的消息，但候选来自其中的引用、粘贴或转发内容 | `inferred` | 是 |
-| 测试或命令的实际输出 | `measured` | 否 |
-| 评审结论（pipeline expert、独立 reviewer） | `review` | 视输入而定 |
-| REFLECT | `run_lesson` | 视输入而定 |
-| agent 自己的推断 | `inferred` | 视输入而定 |
-| 网页抓取、MCP 返回、别人发的频道消息、读进来的外部文件 | — | 是 |
-
-- **污染会传递**：一个会话、run 或 Library 文件只要读过被污染的内容，从它派生出的候选就继承污染，信任等级取所有输入里最低的那个。污染标记写进候选行，也写进 Library 文件的 frontmatter（`taint: external`）。
-- **被污染的候选永远进不了每轮注入的文件**，只能进 Library。从被污染的 Library 文件再蒸馏出来的规则也带着污染，所以同样进不了 MEMORY。这就把"外部内容 → Library → 召回或蒸馏 → 长期规则"这条路堵死了。
-- **召回时**，被污染的 Library 内容放在不可信数据边界里渲染（现有的 untrusted-data 包装），模型只把它当数据，不当指令。
+- **候选必须声明依据**：`submit` 要求写入者给出这条候选所依据的 `source_event_ids`，并且只能引用这个会话账本里已有的 id。
+  - **证据**：所依据的事件全部是 `user`，证据为 `user_explicit`；全部是 `user` 或 `measured`，证据为 `measured`；其余情况，证据按写入者类型取 `review` / `run_lesson` / `inferred`。
+  - **污染**：所依据的事件里只要有一个 `external`，就是 `tainted`。
+- **写入者不声明依据时**，按最坏情况处理：会话账本里有任何 `external` 事件，就算 `tainted`。蒸馏、backflow、REFLECT 这类自动写入者，如果拿不出逐条依据，就走这条兜底规则。会话里先读过网页、后来用户又亲口纠正过的情况：只要纠正那条候选的依据只指向用户那条消息，它就不算被污染。
+- **转述不能降级**：agent 转述、REFLECT 总结、review expert 的结论，都继承原始输入的污染。review expert 和 pipeline run 也各自维护输入账本。
+- **规则**：被污染的 rule 一律 `REJECT tainted_rule`（卡 0）；被污染的 reference 只能写进 Library，frontmatter 标 `taint: external`。从被污染的 Library 文件里再提炼出来的内容，依据会指向那个文件，所以仍然是被污染的。
+- **召回**：被污染的 Library 内容放在不可信数据边界里渲染。
 - `MemoryGuard` 只是附加检测，不是安全边界。
 
 ### 4.5 候选表：一个状态机管重试、执行和审计
 
-- **`ingestion_candidates` 表**：加进 `SQLiteDatabase.SCHEMA`（新库直接建表），同时加一个幂等的 v16 迁移，把 `CURRENT_SCHEMA_VERSION` 改成 16（`database/sqlite.py:2103`、`:2166-2805`），并提供专用的 repository API。测试覆盖 `initialize(skip_init=True)`。
+- **`ingestion_candidates` 和 `session_inputs`** 两张表都加进 `SQLiteDatabase.SCHEMA`，新库直接创建。另外加一个幂等的 v16 迁移，`CURRENT_SCHEMA_VERSION` 改成 16（`database/sqlite.py:2103`）。两张表都有专门的 repository API，测试覆盖 `initialize(skip_init=True)` 这条路径。
 
 | 字段 | 内容 |
 |---|---|
 | `candidate_id`、`created_at`、`decided_at` | 幂等键和时间 |
-| `writer`、`envelope` | 谁产出的；来源信封（§4.4） |
-| `content`、`content_hash` | 全文和哈希 |
+| `writer`、`envelope` | 写入者；来源信封：`source_event_ids`、证据强度、是否被污染 |
+| `content`、`content_hash`、`content_retained` | 全文、哈希、全文是否还在（§4.6） |
 | `project_snapshot` | §4.8 的快照 |
-| `card0`–`card3`、`ontology` | 每张卡的结构化答案、原因码、理由；类型、层、关系 |
+| `card0`–`card3`、`ontology` | 每张卡的结构化答案；类型、层、关系 |
 | `state` | `received → judged → prepared → committed`，或者结束于 `rejected` / `deferred` / `expired` |
-| `target` | 存储、工作区相对路径、段、单元锚点、动作 |
-| `staged` | 只在 `prepared` 状态用：要写的文件新版本和关系图新版本的暂存路径及其校验和 |
-| `replaced` | 被替换或跳过的旧单元锚点，以及归档位置 |
+| `targets` | 每个目标一项：存储、工作区相对路径、单元锚点、动作，以及 `original_hash` / `staged_hash` / `original_snapshot` / `staged_path` / `install_state` |
+| `replaced` | 被替换或被取代的旧单元锚点，以及它的归档位置 |
 | `versions` | 契约、prompt、模型的版本 |
-| `retry_count`、`next_attempt_at`、`error_class` | 给 `deferred` 用 |
+| `lease_owner`、`lease_until` | 防止多个触发点同时处理同一行（§4.10） |
+| `retry_count`、`next_attempt_at`、`error_class` | `deferred` 状态用 |
 
-- **提交协议**：一条候选会同时改三处，语料文件、关系图和这张表，没有现成的跨三处原子操作。所以用"准备再提交"：
-  1. 拿到目标文件锁和关系图锁，在锁里比较版本。
-  2. 把目标文件的新版本和关系图的新版本写进暂存文件，在同一个 SQLite 事务里把状态改成 `prepared`，并记下 `staged`。
-  3. 需要归档的，先写归档。
-  4. 用原子替换装上目标文件，再装上关系图。
-  5. 状态改成 `committed`，清理暂存文件。
-- **恢复**：启动时，以及每次 drain 之前，检查所有 `prepared` 状态的行。两个暂存文件都在、校验和也对，就把剩下的步骤做完；否则用记录下的原版本把已经装上的那一处还原，状态改回 `deferred`。每个崩溃点的预期状态列成一张表，逐个写测试。r5 里的"事务日志"就是这个状态机，不另外再存一份。
-- **重试**：`deferred` 按指数退避，最多 5 次，之后变成 `expired`；`rejected` 不重试。
-- **保留**：180 天（可配置）。过期行由 drain 顺带清理。
-- **不进召回，也不进索引。**
+- **提交协议**：一次写入涉及语料文件、关系图、数据库三处，没有跨这三处的原子操作，所以先准备、再提交。
+  1. **准备**：拿到所有目标文件和关系图的锁。在锁里读出当前内容，计算 `original_hash`，并在同一文件系统上保存一份**旧版本快照**。生成新版本，写入暂存文件，计算 `staged_hash`。快照和暂存文件都 fsync，所在目录也 fsync。然后在一个 SQLite 事务里把状态改成 `prepared`，同时写入每个目标的四项信息（`original_hash`、`staged_hash`、`original_snapshot`、`staged_path`）。
+  2. **归档**（替换 `cand:` 单元时才有）：写入归档文件。归档带幂等 id，重复执行不会写出两份。
+  3. **逐个安装**：对每个目标做一次原子替换，然后把它的 `install_state` 改成 `installed`。
+  4. **提交**：状态改成 `committed`，再清理快照和暂存文件。
+- **恢复**：启动时，以及每次 drain 之前，处理所有处于 `prepared` 的行。对每个目标读出当前文件的哈希，分三种情况：
+  - 等于 `staged_hash`：已经装好了。
+  - 等于 `original_hash`：还没装。
+  - **两者都不等**：崩溃之后有别人写过这个文件。这时**不覆盖**，整行改成 `deferred`，`error_class=concurrent_change`，保留现场并发出通知。
 
-### 4.6 配额和预算
+  每个目标都是"已装好"或"还没装"时：暂存文件都在、校验和也对，就把剩下的装完；否则把"已装好"的目标用 `original_snapshot` 还原，前提是还原前再确认一次它的当前哈希仍等于 `staged_hash`。还原完把行改成 `deferred`。
+- **崩溃点测试**：每个崩溃点的预期状态列成一张表，逐项写测试。另外两个场景必须覆盖：崩溃之后用户编辑了文件；崩溃之后另一个候选先提交了。
+- **重试**：`deferred` 按指数退避重试，最多 5 次，之后改成 `expired`。`rejected` 不重试。
+- 这两张表不进召回，也不进索引。
 
-上线时就带着硬上限，数值都写在契约里，可以配置：
+### 4.6 配额、熔断和预算
+
+上线时就带硬上限，都写在契约里，可以配置。
 
 | 上限 | 默认 |
 |---|---|
-| 每个写入者每小时最多多少候选 | 60 |
-| 每个来源（同一会话 / run）最多多少候选 | 30 |
-| 同时处于 `deferred` 的候选数 | 500 |
-| 候选表大小 | 50 MB，超过后最旧的已结束行只保留哈希和决定，正文删掉 |
-| 每天新增的 Library 文件 / 字节 | 50 个 / 5 MB |
+| 每个写入者每小时提交的候选数 | 60 |
+| 每个来源（同一会话或 run）的候选数 | 30 |
+| 所有未结束状态（`received` / `judged` / `prepared` / `deferred`）合计 | 1000 行 / 20 MB |
+| 候选表总大小 | 50 MB。超过后，最旧的已结束行只留哈希和决定，`content_retained=false`；每次清理后执行 `incremental_vacuum` |
+| 每个每轮注入文件（MEMORY、EVOLUTION、STEERING、USER、TOOLS）的 `cand:` 字节数 | 每天新增 4 KB，总量 40 KB |
+| 每个项目 DDD 每天新增 | 20 KB |
+| Library 每天新增 | 50 个文件 / 5 MB |
 | 每次提交新增的关系边 | 10 |
 
-- 超过上限的候选直接 `REJECT quota`，只记哈希和原因，不存全文。
-- **熔断**：同一个写入者 1 小时内 `REJECT` 和 `DEFER` 占比超过 80%，就暂停这个写入者 1 小时，并发一条通知。
-- 判官调用的预算：现有的进程内预算加锁，按优先级分通道：用户纠正 > 会话结束 > REFLECT > 复审。复审另有一份维护预算。预算用完就 `DEFER`。
-- 每天的候选数、LLM 调用次数、token 用量、积压时长，都从候选表统计出来，显示在审计页面顶部。
+- 超出上限：`REJECT quota`，只记哈希和原因。
+- **熔断只看系统故障**：同一个写入者在 1 小时内至少处理过 20 个候选，并且其中 `DEFER` 里的基础设施、解析、检索三类错误占比超过 50%，就暂停这个写入者 1 小时并发通知。内容被拒绝（`REJECT`）不计入熔断，宁缺毋滥是正常结果，只在审计里看。
+- 计数、预算、熔断状态都存在数据库里，用原子计数器，跨进程共享，因为 `ingest submit` 的 CLI 和 backend 是两个进程。
+- **判官预算**：一个全局计数器，分优先级通道：用户纠正 > 会话结束 > REFLECT > 复审。复审另有一份维护预算。预算用完时返回 `DEFER`。
 
-### 4.7 执行顺序（汇总）
+### 4.7 追加式插入原语
 
-卡 0 → 卡 1 → 卡 2 → 卡 3 → 提交协议（§4.5）。提交时：新单元带 `cand:<id>` 和类型标签；Library 文件的 frontmatter 带 `ingestion_candidate`、`ontology_types`，被污染的还带 `taint`。插入用适配器里的 **追加式插入原语**：
-
-- 只在目标段的末尾插入新行，已有单元的每一个字节都原样保留。
-- 不触发 `locked_write` 的旧索引清理。
-- 不触发 size valve 对基线单元的驱逐。
+提交时用适配器里的**字节级插入**：
+- 先用统一解析器找到目标段，只在段末插入新单元的字节，其余字节原样保留。
+- 找不到目标段时拒绝写入，不会新建段。
+- 写入方式：在锁内写临时文件，fsync，再原子替换。
+- 新单元的格式：bullet 形式写成 `- [type] … <!-- cand:<id> | source:<writer> -->`；`###` 块形式在标题下第一行写 `<!-- cand:<id> -->`。
+- 语义写入不再直接调用 `locked_write` 或 `apply_to_ddd`。这两个函数里会改动已沉淀内容的分支（旧索引清理、矛盾剥离、新建段）随 §4.1 的退役一起删除。
 
 ### 4.8 Knowledge 写入者和项目快照
 
-- **项目快照**：hook 入队之前（`lifecycle_manager.enqueue_hooks`），把会话碰过的仓库根目录、对应的绑定，以及"是否有歧义"一起写进 `HookContext`，同一份快照也写进 DailyActivity 的每条 JSONL 记录。延迟执行的扫描只读这份快照。`context_health_hook.py:961-969` 里写死 SwarmAI 的那段删掉。
-- **backflow**：用消息 id 当 `candidate_id`，再过全部答题卡。
-- **checkpoint**：新的 checkpoint 写进不进索引的恢复文件 `<app data>/state/checkpoints/<session>.json`，会话正常结束时删掉。已有的 checkpoint 块留在原处不动，读取侧不再召回它们。
-- **已删除的会话**：DailyActivity 和 backflow 两个 hook 开头先检查会话还在不在，不在就不写。
-- **DailyActivity 块格式**：`upsert_session_block` 加断言。另外追查 `## Session Resume` 独立块是谁写的。
+- **项目快照**：在 hook 入队之前（`lifecycle_manager.enqueue_hooks`），把会话碰过的仓库根目录、对应的绑定、是否有歧义，连同会话的输入账本 id 一起写进 `HookContext`。DailyActivity 的每条 JSONL 记录也带上同一份快照。延迟执行的扫描只读快照。`context_health_hook.py:961-969` 里写死 SwarmAI 的那段删掉。
+- **backflow**：`candidate_id` 用消息 id，`source_event_ids` 指向那条 assistant 消息所依据的输入。backflow 拿不出依据时，按会话账本兜底（§4.4）。
+- **checkpoint**：新的 checkpoint 写到不进索引的恢复文件 `<app data>/state/checkpoints/<session>.json`，会话正常结束时删除。已有的 checkpoint 块留在原处，读取侧不再召回。
+- **已删除的会话**：DailyActivity 和 backflow 两个 hook 开头先查会话还在不在，不在就直接返回。
+- **DailyActivity 块格式**：`upsert_session_block` 加断言。另外要查清 `## Session Resume` 那个独立块是谁写的。
 
-### 4.9 使用信号和读取侧
+### 4.9 读取侧：注入预算、使用信号、召回
 
-- 注入块渲染完之后，收集最终块里实际出现的单元锚点，调用一次批量的 `record_ddd_deliveries()`（一把锁、一次原子写），删掉 `record_ddd_hit`。MEMORY 不做使用统计。这一步计入 recall 延迟。
-- **DDD 注入条目正文**：一次检索直接返回选中的条目正文、经过校验的 section 和排名。渲染、长度上限、来源、使用信号都用这一个对象，不做第二次检索。先剔除被取代的单元（§4.3），再打分。
-- **Library 多取再补足**：先取 24 条，依次丢掉只有 frontmatter 的、正文少于 200 字的、旧 checkpoint 块，再用 `RecallEngine.search()` 现有的哈希去重，最后补足到 8 条。被污染的内容放在不可信数据边界里渲染。标题在渲染时加到来源行上。
+- **每轮注入文件的确定性预算**（本次改变 AGENTS.md 里"读取侧永不截断"的规则）：
+  - MEMORY、EVOLUTION 各有一个注入上限，默认 MEMORY 24K tokens、EVOLUTION 8K tokens，可配置。源文件一个字节都不改。
+  - 文件超过上限时，按单元选取，规则固定：
+    1. 先剔除被取代的单元。
+    2. 元认知层整层保留。
+    3. 认知层和操作层各自按本轮查询的 BM25 分数排序，再按单元在文件里的顺序排序，依次装入，装满为止。
+    4. 输出时按单元原来的顺序拼接。
+  - 没装进去的单元仍然能被检索到：recall 的 `context_files` 那一路（读取侧设计 `2026-10-26-recall-precision-and-coverage.md` D4：只检索 MEMORY 里不在 prompt 中的条目）照常覆盖它们。
+  - STEERING、USER、TOOLS 由用户自己管，不设上限，只在超过 8K tokens 时在审计页面提示。
+  - `over_budget` 警告保留，额外记录被省略的单元数，显示在审计页顶部。
+  - 实施时同步改 AGENTS.md 的 Context and Memory System 一节和 `context_directory_loader` 的文档，L1 缓存的预算头也跟着改。
+- **使用信号**：渲染完成后，把最终块里实际出现的单元锚点交给一次批量调用 `record_ddd_deliveries()`，一把锁、一次原子写入。删掉 `record_ddd_hit`。
+- **DDD 注入条目正文**：一次检索直接返回条目正文、校验过的 section 和排名。被取代的命中转交给当前生效的那一条（§4.3）。
+- **Library 多取后补足**：先取 24 条，依次丢掉只有 frontmatter 的、正文少于 200 字的、旧 checkpoint 块，再用 `RecallEngine.search()` 现有的哈希去重，最后补足到 8 条。被污染的内容放进不可信数据边界里渲染。标题在渲染时加到来源行上。
 - **索引排除依赖目录**：`node_modules`、`.venv`、`dist`、`build`。
-- 不重切、不重建索引。
+- 不重切 chunk，不重建索引。
 
-### 4.10 退出：复审只管新能力写入的单元
+### 4.10 复审和后台任务
 
-- 复审范围只包括带 `cand:` 的单元和带 `ingestion_candidate` 的 Library 文件。基线内容不读、不判、不动。
-- 按存储契约逐条判断：保留 / 改投 / 替换 / 归档 / 重复，直接执行，走 §4.5 的提交协议，每一个动作都是一行审计记录（`writer=review`）。
-- 读完整文件，分段送判官；每次处理的条数有上限；复审有单独的维护预算。
-- **触发方式**：判断"到期没有"的地方只有一处，即 `<app data>/state/review.json` 里的上次运行时间，每 7 天最多跑一次。三个时机都会去检查它：
-  1. backend 启动时，所有模式都会。
-  2. 会话 idle hook。它在会话空闲 120 秒后触发，不是会话关闭时（`lifecycle_manager.py:65`、`:968-1000`）。
-  3. daemon / hive 的定时 job，只是让检查更及时。
-- **重试和 `prepared` 恢复** 也用这三个时机。这样 subprocess 和 dev 模式不依赖下一次 idle，启动时就会补跑。关闭时不等这些后台任务做完，没做完的状态留在候选表里，下次启动接着做。
-- 复审改了某个正在使用的会话已经加载的 MEMORY/context 时，那个会话下一次组装 prompt 才会读到新内容，和现在的 L1 缓存失效机制一致。
+- 复审只处理带 `cand:` 的单元和带 `ingestion_candidate` 的 Library 文件。每个动作走 §4.5 的提交协议，并且都是审计里的一行（`writer=review`）。读完整文件，分段处理，每次的条数和预算都有上限。被取代链的链头要归档时，按 §4.3 重新连接前驱。
+- **drain**（恢复 `prepared`、重试 `deferred`、检测带外修改、7 天一次的复审）只有一个入口函数，三处会触发它：
+  1. backend 启动时，四种模式都会。放在 lifespan 里数据库和工作区初始化之后。
+  2. 会话空闲 120 秒后（`lifecycle_manager.py:968-1000`）。注册的是一个单独的轻量 hook，不复用整条 hook 链。
+  3. daemon / hive 下的定时 job，只是为了更及时。
+- 同一行候选在同一时间只能被一个触发点处理，靠候选行上的租约（`lease_owner`、`lease_until`，跨进程有效）。
+- `ingest submit` 只负责入队，不在 CLI 进程里跑 drain。
+- 复审改了某个正在运行的会话已经加载的文件时，那个会话下一次组装 prompt 才读到新内容，沿用 L1 缓存失效机制。
 
 ### 4.11 context 文件：自动写进用户的 `.context/`，不写源码仓库
 
 | | 位置 | 归属 |
 |---|---|---|
-| 模板 | `backend/context/*.md`，即 `templates_dir`，由 `Path(__file__)` 推出 | 产品。dev 模式和 worktree 里它就在源码仓库里，打包后在安装包里 |
-| 用户的 live 文件 | `<workspace>/.context/*.md` | 当前用户。prompt 读的就是这一份 |
+| 模板 | `backend/context/*.md`，即 `templates_dir`。dev 模式和 worktree 里它在源码仓库内，打包后在安装包内 | 产品 |
+| 用户的 live 文件 | `<workspace>/.context/*.md` | 当前用户，prompt 读的是这一份 |
 
-1. `ContextFileSpec` 新增 `auto_write_eligible`，只有 USER、STEERING、TOOLS 为真。这个标记不能从 `user_customized` 推出来。SWARMAI、IDENTITY、SOUL、AGENT 是产品文件，用户的规则一律改写到 STEERING。
-2. **候选里存工作区 id 和相对路径**（`.context/STEERING.md`），不存绝对路径。执行时用当时的 `get_workspace_path()` 重新解析，所以工作区搬家、换盘符、容器挂载都不会让候选失效。绝对路径只作为审计里的快照。
-3. **执行前在锁里校验**：解析出的路径必须正好落在 live `.context/` 下，不在 `templates_dir` 下；文件必须是 git 未跟踪或已忽略的；版本必须一致，不一致就 `DEFER`。
-4. **写入原语** `write_context_cas()`：加锁 → 锁里比较版本 → 归档整份旧文件 → 安全扫描 → 按文件名做格式校验 → 原子替换 → 保持 0o644 权限。自动写入和两个工作区编辑接口都用它。对已有内容只追加，不改动（§4.7 追加式插入）。
-5. 受控模块没有写 `templates_dir` 的能力。源码仓库里的模板只在开发时、由人明确指定时，走普通的代码修改流程来改。
+1. `ContextFileSpec` 新增 `auto_write_eligible`，只有 USER、STEERING、TOOLS 为真；不能从 `user_customized` 推出来。SWARMAI、IDENTITY、SOUL、AGENT 是产品文件，用户的规则一律写进 STEERING。
+2. 候选里存工作区 id 和相对路径，执行时重新解析。绝对路径只作为审计里的快照。
+3. 执行前在锁里校验：路径解析后必须正好在 live `.context/` 目录下，不在 `templates_dir` 下；工作区是 git 仓库时，目标文件必须是未跟踪或已忽略的；文件版本必须没变，变了就 `DEFER`。
+4. 用户编辑走 `write_context_cas()`：加锁 → 在锁里比较版本 → 归档整份旧文件 → 安全扫描 → 按文件名做格式校验 → 原子替换 → 保持 0o644 权限 → 触发基线修订（§6）。系统写入走 §4.7 的插入原语，再经过同样的校验。
+5. 受控模块没有写 `templates_dir` 的能力。
 
 ### 4.12 Ingestion 审计（产品功能）
 
-- **数据来源**：只读 `ingestion_candidates` 一张表，不新建任何存储。
+- **数据**：读 `ingestion_candidates` 和 `session_inputs` 两张表，不新增存储。
 - **接口**
-  - `GET /api/ingestion/candidates`：按时间、写入者、存储、状态、原因码、关键词筛选，分页，单页最多 100 行。列表里正文截到前 200 字。
-  - `GET /api/ingestion/candidates/{id}`：返回一行的完整内容。
-  - 两个接口都是只读的，跑在 `nav` 线程池上（`executors.run_nav`）。
-- **隔离和安全**
-  - 服务端只读当前 backend 实例自己的 `data.db`，调用方不能传路径或用户参数。
-  - 接口沿用 dashboard 现有的本机认证，CORS 继续只放行明确列出的来源。
-  - 正文、来源、路径一律当纯文本渲染，不解析 Markdown 或 HTML。
-  - 疑似密钥由 `MemoryGuard` 的密钥规则打码后再返回。
-  - 访问本身也写进日志。
-- **界面**：在 Left Nav 加一个 overlay，要更新 `overlayIds.ts` 的 ID 元组、`navTable.ts` 的 `NAV`、chunk loader 和 `registerOverlay`，相关的相等性测试也要过。界面遵守 Nav visual system，用共享组件，中英文都做 i18n。
-  - **列表**：时间、写入者、内容开头、去向、状态、原因码。
-  - **详情**：完整内容；来源信封（证据强度、是否被污染）；卡 0 到卡 3 每道题的答案和理由；类型和层；写了哪些关系边；写到了哪一个单元，可以点开；替换或跳过了哪个旧单元、归档到哪里。
-  - **顶部统计**：最近 7 天按状态、去向、原因码的计数；`deferred` 积压量；每天的 LLM 调用次数和 token 用量；判官和关键词分类器结论不一致的次数；熔断记录。
-- **不提供审批按钮**。发现判断有错，就去改契约、prompt 或规则，然后把版本号加一。
-- **通知**：判官或检索连续失败超过 1 小时、触发熔断、运行时拦下一次绕过写入，都会通知。
+  - `GET /api/ingestion/candidates`：可以按时间、写入者、存储、状态、原因码、关键词筛选；分页，每页最多 100 条；正文截断到 200 字。
+  - `GET /api/ingestion/candidates/{id}`：返回完整的一行。全文已被清理时返回 `content_retained=false`。
+  - 两个接口都只读。实现方式是同步 SQLite 只读查询，用 `executors.run_nav` 包起来，固定连当前实例自己的 `data.db`，查询全部参数化。调用方不能传路径或用户参数。
+  - 沿用 dashboard 现有的本机认证，CORS 仍然只放行列出的来源。
+  - 正文、来源、路径都按纯文本渲染；疑似密钥打码；访问记日志。
+  - 后端要接的地方：新增 router，在 `main.py` 里 import 并 include；新增 service 或 query 模块。
+- **overlay**
+  - 前端要改的地方：`overlayIds.ts`、`navTable.ts`、`overlayChunks.ts`、`overlayRegistry.tsx`、`overlayQueries.ts`（预取）；`ThreeColumnLayout.tsx` 的 System 区，在 Eval 和 Settings 旁边加一张卡；加图标；加中英文 i18n；补相等性测试和 nav visual 测试。
+  - 遵守 Nav visual system，用共享组件。
+  - **列表**：时间、写入者、内容开头、去向、状态、原因码。`writer=unknown` 的行（带外修改，§4.1）高亮显示。
+  - **详情**
+    - 完整内容。
+    - 来源信封：依据了哪些输入事件，每个事件的 trust，是否被污染。
+    - 卡 0 到卡 3 每一题的答案和理由。卡 3 里每个命中的关系、聚合后的动作；替换的话，还有旧单元的主张清单和逐条映射。
+    - 类型和层。
+    - 写了哪些边。写入的单元可以点开；被替换或被取代的旧单元可以点开；归档位置。
+  - **顶部统计**
+    - 最近 7 天的计数，按状态、去向、原因码分组。
+    - `deferred` 积压量。
+    - 每天的 LLM 调用次数和 token 用量。
+    - 判官和关键词分类器的结论不一致次数。
+    - 熔断记录。
+    - 带外修改次数。
+    - MEMORY 和 EVOLUTION 的大小，以及每轮注入时被省略的单元数（§4.9）。
+- **不提供审批按钮。** 发现判断有错，就改契约或 prompt，再把版本号加一。
+- **通知**：以下情况发通知：判官或检索连续失败超过 1 小时；触发熔断；检测到带外修改；恢复时遇到 `concurrent_change`；`id_collision`。
 
 ### 4.13 对每个用户都可用，不依赖这台机器
 
-- **路径**：只从 `config`、`get_workspace_path()`、app 数据目录取，不写死 `~/.swarm-ai`、仓库路径或项目名。候选里存的是工作区相对路径（§4.11）。项目归属只看用户自己的 DDD 和 `bindings.yaml`。
-- **平台**：文件锁一律用 `utils.file_lock`，包括 `knowledge_graph.py`；原子写用现有的跨平台工具。
-- **运行模式**：daemon、subprocess、hive、dev 四种模式下，写入、重试、恢复、复审、审计都能跑（§4.10）。
-- **打包**：打包后 `templates_dir` 在安装包里，§4.11 的校验照样成立。不调用 `sys.executable -m`。
-- **不依赖开发者自己的东西**：运行时不用 `Projects/SwarmAI` 里的 skill、回放脚本，也不用盲评脚本。
-- **工作区不是 git 仓库时**：§4.11 第 3 条的 git 检查跳过，只检查目录归属。
-- **`s_memory-distill`**：改造成一个手动触发入口，调用 `governed_store` 的"立即蒸馏"和"立即复审"，然后汇总这一次的审计结果。skill 里不再写任何阈值或段名。
+- **路径**：只从 `config`、`get_workspace_path()`、app 数据目录取，不写死 `~/.swarm-ai`、仓库路径或项目名。候选里存的是工作区相对路径。项目归属只看用户自己的 DDD 和 `bindings.yaml`。
+- **平台**：文件锁一律用 `utils.file_lock`，`knowledge_graph.py` 也一样。原子写和 fsync 用现有的跨平台工具。
+- **运行模式**：daemon、subprocess、hive、dev 四种模式都能完成写入、重试、恢复、检测、复审和审计（§4.10）。
+- **打包**：打包后 `templates_dir` 在安装包里，§4.11 的校验照样成立。不调用 `sys.executable -m`；`ingest` 走 `desktop_main.py` 的分发。
+- **不依赖开发者自己的东西**：运行时不用 `Projects/SwarmAI` 里的 skill，不用回放或盲评脚本。
+- **工作区不是 git 仓库**：跳过 §4.11 第 3 条里的 git 检查，只检查目录归属。
+- **`s_memory-distill`**：改造成手动触发入口，调用 `governed_store` 的立即蒸馏和立即复审，再汇总这一次的审计结果。skill 本身不写阈值，也不写段名。
 
 ## 5. 每个事实在哪、谁写谁读
 
 | 事实 | 唯一来源 | 写 | 读 |
 |---|---|---|---|
-| 准入问题、路由表、段标题表、配额、来源策略 | `store_contracts` | 人改 | `governed_store`、读取侧、复审 |
+| 准入问题、卡 1 形状、路由表、DDD 段矩阵、配额、注入预算、来源策略 | `store_contracts` | 人改 | `governed_store`、读取侧、复审 |
+| DDD 模板 | `backend/templates/ddd/*.md` | 人改 | 新建项目、卡 2 校验 |
 | 哪些 context 文件能自动写 | `ContextFileSpec.auto_write_eligible` | 人改 | `governed_store` |
-| 基线（哪些内容已沉淀） | `<app data>/state/baseline.json` | 上线时生成一次 | 适配器、复审、验收 |
+| 单元是什么 | `parse_units()` | — | 所有读写方 |
+| 基线 | `<app data>/state/baseline.json` | 上线时生成，用户编辑时修订 | 适配器、检测、复审、验收 |
+| 输入事件和它的 trust | `session_inputs` | 消息入口、工具结果入口 | `submit`、审计 |
 | 候选的状态、卡、去向、理由、暂存 | `ingestion_candidates` | `submit`、drain、复审 | drain、审计接口 |
-| 来源信封 | 候选行的 `envelope` | 受信入口 | 卡 0、卡 3、审计 |
 | 会话属于哪个项目 | `HookContext` 快照（DailyActivity 记录里有同一份） | 入队前 | 卡 1、卡 2 |
-| 条目的类型和层 | 条目上的类型标签；`layer_for()` | 卡 1、卡 2 | 读取侧、生命周期、复审 |
-| 关系 | `.knowledge-graph.yaml`（schema v2） | 提交协议 | 读取侧（`superseded_anchors`、`query_related_entries`）、审计 |
-| 条目有没有送达过模型 | `.ddd-usage.json` | 注入后批量写 | 复审 |
+| 类型和层 | 单元上的类型标签；`layer_for()` | 卡 1、卡 2 | 读取侧、复审 |
+| 关系和链头 | `.knowledge-graph.yaml` v2；`active_head()` | 提交协议 | 读取侧、审计 |
+| 单元有没有送达过模型 | `.ddd-usage.json` | 注入后批量写 | 复审 |
 
-热路径：答题卡、候选表、复审都只在后台跑，不碰 chat 的发送路径。读取侧的改动在发送路径上，要实测：多取一次 FTS，DDD 少一次重复加载，使用信号从 N 次文件事务变成 1 次，`superseded_anchors` 在关系图加载时缓存一次。验收要求不比现在慢。
+**热路径**：答题卡、候选表、复审、检测都在后台跑。要在发送路径上实测的有：
 
-## 6. 已经沉淀的内容：一律不动
+- `session_inputs` 写入，每条消息和每个工具结果各写一行；
+- 注入预算的选取，在 MEMORY 超过上限时才发生；
+- 链头转发，`active_head` 在加载关系图时缓存一次；
+- Library 多一次 FTS 查询；
+- DDD 少一次重复加载；
+- 使用信号合并成一次批量写。
 
-- **基线**：上线后 backend 第一次启动时，生成一次 `baseline.json`，记录每个受控文件里每个已有单元的锚点和字节哈希，以及每个非受控记录文件（Note、DailyActivity、会话、Reports、Signals）的整文件哈希。这一步只读，不改任何文件。
-- **规则**：基线里的单元和文件，新功能和现有维护机制都不读来改、不移动、不删除、不加标记。
-  - §4.1 里那些会改动已沉淀内容的维护路径（Memory Health 的修改阶段、EVOLUTION prune、DDD 矛盾剥离、size valve 和 section cap 对基线单元的驱逐、`locked_write` 的旧索引清理）全部退役，或者改成只作用于 `cand:` 单元。
-  - 上一版（r10）决定的"三处直接删除改成先归档"随之作废：这几处不再碰基线内容，所以没有可删的。
-- **新旧内容怎么相处**：卡 3 检索得到基线单元，只拿来判断。补充时写一条新单元，加 `extends`；替换时写一条完整的有效单元，加 `supersedes`，读取侧跳过旧单元（§4.2、§4.3）。
-- **读取侧**（§4.9）只改变召回什么、怎么渲染。
-- **派生索引**：`node_modules` 之类的 chunk 下次同步时从索引里删掉，源文件不动。
-- **已知后果**：MEMORY 不再按大小驱逐基线条目，所以这个文件只会变大。新条目要先过 `not_global`，复审也会处理 `cand:` 条目，所以增长会比现在慢很多。每轮注入的预算超了，读取侧照现在的做法只报 `over_budget` 警告，不截断。审计页面顶部显示 MEMORY 的大小。
+要求和现在持平或更快。`session_inputs` 写入要放在 chat 池之外的 executor 上。
+
+## 6. 已经沉淀的内容：系统不动，用户可以改
+
+- **基线**：上线后 backend 第一次启动时，对每个受控文件跑一遍 `parse_units()`，把每个单元的锚点和 `byte_hash` 记进 `baseline.json`。这一步只读不写。
+- **系统不动**：基线单元不会被任何系统路径修改、移动、删除或打标记。这包括新功能、复审、所有维护机制（§4.1 的退役清单），以及插入原语，后者只往段末追加字节。
+- **用户可以改**：用户通过编辑器或上传修改受控文件时，适配器在同一个事务里做三件事：
+  1. 对修改后的文件重跑 `parse_units()`；
+  2. 更新 `baseline.json` 里这个文件的单元表。被删的单元移出基线；被改过的单元换成新的 `byte_hash`；新出现、但没有 `cand:` 的单元也算作基线，因为它们是用户亲手写的；
+  3. 关系图里指向已消失单元的边设为失效。
+
+  这次修订在审计里记一行 `writer=user_edit`，附 diff。
+- **带外修改**：没经过适配器的改动由 drain 检测出来，记作 `writer=unknown`（§4.1）。基线**不会**自动修订，等用户在编辑器里保存一次（就算一次确认），或者下次启动时再修订。
+- **新旧共存**：卡 3 检索到的基线单元只用于判断。补充时新加一条，加 `extends` 边；替换时新加一个完整的有效单元，加 `supersedes` 边，读取侧把命中转发给链头（§4.2、§4.3）。
+- **不在不变范围内的**：DailyActivity、会话、Reports、Signals、checkpoint、派生索引。它们是持续追加或会被 upsert 的日志和派生数据，不属于基线。验收时只检查切换前已有的记录仍然存在、内容不变，粒度到记录或块。
+- **预算**：MEMORY 不再按大小驱逐基线单元，文件会变大，但每轮注入有确定性的上限（§4.9），所以 prompt 大小有界。`cand:` 单元的增长另有配额（§4.6）。
 
 ## 7. 实施和验收
 
-每一步一个 worktree，ff-merge 成一个 commit，不 push，不 rebuild。
+每一步一个 worktree，ff-merge 一个 commit，不 push，不 rebuild。
 
-**第 1 步：读取侧和索引**（不改语料）
-1. `store_contracts` 里的来源策略部分，加上依赖目录排除。
-2. Library：多取、过滤、补足名额；标题在渲染时加上；旧 checkpoint 块不召回；被污染的内容放在不可信边界里渲染。
-3. DDD：一次检索拿到条目正文，校验 section，批量记录使用信号。
-- 验收：用固定的回放清单（第 101–200 个会话，清单哈希写进文档），A/B 随机分组盲评，判官的评分标准和模型版本固定。
-  通过条件：噪音比例下降至少 3 个百分点；"有用"比例和"需要且拿到"比例各自下降不超过 1 个百分点；注入总字符数不超过基线；recall p90 不超过基线。
+**第 1 步：读取侧和索引**（不改语料，也不涉及注入预算）
+1. `store_contracts` 加来源策略，排除依赖目录。
+2. Library：多取、过滤、补足名额；渲染时加标题；旧 checkpoint 块不召回。
+3. DDD：一次检索拿到条目正文；校验 section；使用信号批量写。
+- **验收：成对回放**
+  - 用固定清单（第 101–200 个会话，清单哈希写进文档）。每条查询同时生成基线版和新版的注入块，盲化、随机左右顺序后，由判官成对打分。判官的评分标准、模型、温度固定。
+  - 通过条件：
+    - 噪音比例下降的 95% 置信区间下界 ≥ 1 个百分点；
+    - "有用"和"需要且拿到"两项，下降幅度的 95% 置信区间上界 ≤ 1 个百分点；
+    - 注入总字符数 ≤ 基线；
+    - recall p90 ≤ 基线。
 
 **第 2 步：受控写入、答题卡、候选表、审计**（一次切换）
-4. 契约、身份、基线生成、`ingestion_candidates` 迁移、来源信封、配额。
-5. `governed_store`：适配器、追加式插入原语、`submit` 和四张卡、提交协议和恢复、drain（启动时、idle 时、定时）。
-6. 关系图 schema v2、`superseded_anchors` 接进三个读取点、`knowledge_graph` 改用 `utils.file_lock`。
-7. 所有语义写入者一次切过来；会改动已沉淀内容的维护路径退役或缩小范围；`governed_corpus_gate` 登记进 `hook_builder.py`，AGENTS.md 同步更新；静态测试和运行时绕过测试。
-8. 项目快照、backflow 身份、checkpoint 改写到恢复文件、已删除会话不写、DailyActivity 块断言。
-9. 审计接口和 overlay；`s_memory-distill` 改造。
-- 验收：
-  - **夹具**：一份可以提交进仓库的合成语料，放在 `backend/tests/fixtures/ingestion/`，不含任何私人内容，CI 必须能跑。内容包括：
-    - 七类 × 两种形式 × 四种主体，按卡 1 的维度标注 200 条；
-    - 留出 50 条不参与 prompt 调试；
-    - 30 对"换了说法的重复"、20 对"部分冲突"、10 对"整条冲突"、10 条"窄例外"；
-    - 中英文都有。
-    今天审计用的私人样本只作为本地补充，不是 CI 的必需输入。
-  - **门槛**（预先定好，跑之前不再改）：
-    - 写入内容的精确率 ≥ 95%（写进去的内容里，人工标注为"该写"的比例）；
-    - 卡 1 对"该写"的召回率 ≥ 80%；
-    - 写进 MEMORY 的内容里，项目专属或不具全局相关性的 ≤ 3%；
-    - 卡 3 对换了说法的重复，端到端检出率 ≥ 70%；
-    - 冲突对的动作正确率 ≥ 90%；
-    - 类型一致率 ≥ 85%，层一致率 ≥ 95%。
-    结果按写入者、语言分组报告置信区间。
-  - **路由属性测试**：穷举卡 1 字段的所有合法组合，每个组合恰好命中一行；目标段在模板里真实存在。
-  - **读取侧行为测试**：被 `supersedes` 的旧单元，在预算截断、不同注入块、BM25 只召回旧单元三种情况下都不出现。再加一组模型行为测试：把有效单元和问题一起交给模型，模型按新说法行动；对照组同时给新旧两条，用来量化差别。
-  - **安全测试**：
-    - 被污染的候选进不了 MEMORY、EVOLUTION、context 文件；
-    - 从被污染的 Library 文件蒸馏出的候选同样进不去；
-    - 引用或粘贴内容拿不到 `user_explicit`；
-    - 覆盖中文、改写、分步诱导三类注入样本；
-    - 审计页面渲染恶意内容时不执行；
-    - 跨工作区读不到别人的候选表。
-  - **配额和熔断**：一个恶意写入者持续换 `candidate_id`，另一个持续出故障，各跑 1 小时 soak。候选表和 Library 的增长不超过上限，熔断正常触发。
-  - **提交协议**：在每个崩溃点（暂存之后、归档之后、文件装上之后、关系图装上之后）杀掉进程，恢复后的状态和预期表一致。再加两个写入者并发、复审和写入并发两种情况。
-  - **唯一写入口**：静态测试中故意加一处直接写 MEMORY，测试失败；运行时用 `Path.write_text`、rename、subprocess、symlink、路径穿越各写一次，都被拒；agent 用 Write 和 Bash 直接写受控文件，都被 `governed_corpus_gate` 拒，并提示 submit 命令。
-  - **已沉淀内容不变**：上线前后对比基线里每个单元的字节哈希；对每个受控文件，检查基线单元按原顺序构成新文件的一个子序列（新单元只能插在段末）；非受控记录文件比对整文件哈希。
-  - **全平台矩阵**：daemon、subprocess、hive、dev × macOS、Windows、Linux × 源码运行、打包安装 × 工作区在 git 里、不在 git 里、搬过家。每个组合都要跑通写入、重试、恢复、复审、审计。CI 覆盖其中能自动化的部分（backend 和 backend-windows 两个 job），其余列成发布检查表。
-  - 每条规则都做 mutation 检查：撤掉修复，对应的测试必须变红。
+4. 契约、`parse_units()`、基线生成、v16 迁移（两张表）、输入账本的入口（消息、工具结果）、来源信封、配额和熔断。
+5. `governed_store`：适配器、插入原语、`submit` 和四张卡（两个纯函数）、提交协议和恢复、drain 和三个触发点、租约、带外检测。
+6. 关系图 v2、图约束、`active_head` 接入四个读取点、`knowledge_graph` 改用 `utils.file_lock`。
+7. 注入预算（§4.9），并同步更新 AGENTS.md。
+8. 语义写入者全部切过来；退役清单里的写入者删除或缩到 `cand:` 范围；`governed_corpus_gate` 登记进 `hook_builder.py`，并同步 AGENTS.md；静态测试。
+9. 项目快照、backflow、checkpoint、已删除会话、DailyActivity 断言；DDD 模板只保留一个来源。
+10. `ingest submit` 命令；审计接口和 overlay；改造 `s_memory-distill`。
+
+**验收**
+
+- **夹具**：放在 `backend/tests/fixtures/ingestion/`，合成数据，可以提交进仓库，没有私人内容。
+  - 按卡 1 的 7 种形状分层生成。
+  - 分成 train、dev、test 三份：test 冻结，调 prompt 只用 train 和 dev。
+  - 每层的样本量事先按目标置信区间算好：test 至少 400 条，冲突对至少 120 对，换说法的重复至少 100 对。中英文各占一半。
+  - 私人的真实样本只在本地补充使用，不是 CI 必需的。
+- **门槛**：用 test 集 95% 置信区间的下界判定，事先写定。
+  - 写入精确率 ≥ 93%；
+  - 卡 1 对"该写"的召回率 ≥ 75%；
+  - 写进 MEMORY 的内容里，非全局的比例，其上界 ≤ 5%；
+  - 卡 3 换说法重复的端到端检出率 ≥ 60%；
+  - 冲突对的动作正确率 ≥ 85%；
+  - 形状正确率 ≥ 85%；
+  - 层正确率 ≥ 95%。
+
+  结果按写入者、语言、目标存储分别报告。
+- **纯函数**：`relation_for_hit` 和 `aggregate_hits` 对全部输入做穷举的属性测试，打乱命中顺序结果不变。路由表的 7 种形状各有且只有一行；矩阵里每个段在模板里都存在。
+- **supersedes**：
+  - 查询只匹配旧措辞时，输出里是当前有效的那一条，并且包含所需的 claim。不能只检查"旧的没出现"。
+  - 同一个旧单元被取代两次，链头唯一。
+  - 链头被归档后，前驱恢复成链头。
+  - 有环或有悬空边时拒绝。
+- **有效单元**：覆盖以下夹具：限定条件漂移、否定词、数值边界、多段单元、超过 5 条主张。只要有一条旧主张没被映射，就 `REJECT`。
+- **模型行为**：从真实的检索入口开始，固定模型和温度，每个用例重复 10 次。用"有效单元"作答，按新说法行动的比例 ≥ 90%。同时量化对照组"同时注入新旧两条"的结果。
+- **安全**（四种模式都要做端到端）：
+  - 读外部内容 → 改写 → REFLECT 或 review → 提交：rule 被拒，reference 带污染标记写进 Library。
+  - 被污染的 Library 再被提炼：仍然被拒。
+  - 命令输出里回显攻击文本：算 `external`。
+  - 用户本人发的消息，附带引用块：引用部分算 `external`。
+  - 注入攻击样本覆盖中文、改写、分多步诱导三类。
+  - 恶意内容在审计页面渲染时不会被执行。
+  - 跨工作区读不到别人的候选。
+- **配额和熔断**：跑 1 小时 soak，三种写入者：恶意换 `candidate_id` 的、持续出故障的、拒绝率高但本身健康的。期望：候选表和每个存储的增长不超过上限；故障写入者被熔断；健康写入者不被熔断。
+- **提交协议**：每个崩溃点都杀一次进程，恢复后的状态和预期表一致。还要覆盖：崩溃后用户编辑同一文件、崩溃后另一个候选提交，这两种情况都不能覆盖掉别人的写入。另外测两个写入者并发、复审和写入并发。
+- **写入口**：
+  - agent 用 Write、Edit、MultiEdit、NotebookEdit、Bash 直接写受控文件，都被 gate 拒绝，并提示用 submit 命令。
+  - 用 `python -c`、`perl -pi`、带变量的路径绕过 gate 写入：下一次 drain 时记为 `writer=unknown` 并发通知。
+  - 静态测试：故意新增一处直接写入，测试变红。
+  - 临时工作区里的 `.context` 夹具不受影响。
+- **已沉淀内容**：
+  - 每个基线单元的 `byte_hash` 在上线前后一致。
+  - 每个受控文件里，基线单元按原来的顺序构成新文件的一个子序列。
+  - 用户编辑之后基线修订正确，被删单元的边失效。
+  - 切换前已有的日志类记录仍然存在，内容不变。
+- **注入预算**：MEMORY 超过上限时，元认知层完整保留；选取结果是确定的，同样的输入得到同样的输出；被省略的单元能被 recall 的 `context_files` 路检索到；prompt 大小不超过上限。
+- **全平台矩阵**：{daemon, subprocess, hive, dev} × {macOS, Windows, Linux} × {源码, 打包} × {git 工作区, 非 git 工作区, 迁移过的工作区}。每个组合都要跑通写入、重试、恢复、检测、复审、审计。CI 跑能自动化的部分（backend 和 backend-windows 两个 job），其余列进发布检查表。
+- **mutation 检查**：每条规则都做一次，撤掉修复后对应的测试必须变红。
+- **现有测试**：`test_section_caps.py`、`test_memory_promotion.py`、`test_context_health_hook_memory_lifecycle.py`、`test_evolution_maintenance_hook.py`、`test_context_budget.py` 按新的不变量重写，不变量是"基线不动、`cand:` 有配额、注入有上限"，不再是"总能降到低水位"。
 
 **第 3 步：复审**
-10. 复审只针对 `cand:` 单元，按三个时机触发。
-- 验收：在合成夹具上，复审结论和标注的一致率 ≥ 80%；用只含基线内容的夹具跑复审，所有字节不变；每个动作都能在审计里看到。
+11. 复审只处理 `cand:` 单元，由三个触发点驱动，链头归档时重新连接前驱。
+- 验收：在合成 test 集上，结论和标注一致率的置信区间下界 ≥ 75%；只含基线的夹具跑完后字节完全不变；每个动作都出现在审计里。
 
-上线后第一周每天看一次审计统计。某一类判断持续出错，就改契约或 prompt，然后把版本号加一。
+上线后第一周，每天看一次审计统计。某一类判断持续出错，就改契约或 prompt，再把版本号加一。
 
 ## 8. 不做
 
-- **不做人工审批和提案。** 判断交给答题卡，人看审计。cultivation 原来的提案审批状态机删除，它的三路输入改成产出普通候选。
+- **不做人工审批或提案。** 答题卡就是决定，人看审计。cultivation 的提案审批状态机删除，它的三路输入改成产出普通候选。
+- **不做 OS 层的写入隔离**（受控文件对 agent 子进程只读、写入走 RPC）。只做拦截加检测（§4.1）。
 - **不做候选收件箱，也不做"提升"流程。**
 - **不做批量的语义合并。**
-- **不引入向量库。** 换了说法的重复靠卡 3 的 BM25 加复审来抓，并设检出率门槛。
+- **不引入向量库。**
 - **不做影子模式、切换日，也不让新旧写入路径并存。**
-- **不整理已经沉淀的内容。**
+- **系统不整理已经沉淀的内容。**
 - **不整类排除** Pollinate 或 `Knowledge/Archives/`，只排除依赖目录。
 - **不改 DailyActivity 的 LLM 提炼门槛。**
-- **不重切、不重建索引。**
+- **不重切 chunk，也不重建索引。**
 
 ## 9. 已确认
 
-1. 全自动：答题卡就是最终决定，人看审计（r6）。
-2. 已经沉淀的内容一律不动，只让新内容走新流程（r7）。会改动已沉淀内容的维护路径退役，或者缩小到只作用于 `cand:` 单元（r11，见 §6）。
-3. 先实施第 1 步。
+1. 全自动：答题卡就是决定，人看审计（r6）。
+2. 已经沉淀的内容系统不动，新内容走新流程（r7）。用户自己编辑算一次基线修订（r12）。
+3. 每轮注入的文件有确定性的上限，源文件不变。这一条改变了 AGENTS.md 里"读取侧永不截断"的规定（r12）。
+4. 写入口做拦截加检测，不做 OS 层隔离（r12）。
+5. 先实施第 1 步。
 
 ## 10. 修订记录（非规范，仅供追溯，不按这里的旧说法实现）
 
@@ -570,6 +659,17 @@ r10 的"部分冲突只加标注、旧条目照常注入"取消了。独立评�
   - 候选里存工作区相对路径。
   - 审计接口补上隔离、转义、打码、分页上限。
   - 验收改用可提交进仓库的合成夹具；门槛改为以写入精确率为主；增加模型行为测试和全平台矩阵。
+
+- **r12：吸收第三轮独立评审**（代码可行性 6 个 BLOCKER + 7 个 MAJOR，设计 5 个 BLOCKER + 4 个 MAJOR），并按 Gawan 的三条决定修改：
+  - 写入口改成"拦截 + 检测"，带外修改记为 `writer=unknown`；`ingest submit` 改从 stdin 读入；写入者清单改为从调用点扫描生成，补上 ContextHealth、两处成熟度写入和 `annotate_entry`。
+  - 卡 1 改成 7 种形状的判别联合，去掉 `status`；卡 2 每种形状对应一行，补上 DDD 段矩阵；DDD 模板只保留一个来源。
+  - 卡 3 改为逐个命中输出，动作由 `relation_for_hit` 和 `aggregate_hits` 两个纯函数计算，证据强弱是全序；替换前先列出旧单元的完整主张清单，逐条映射。
+  - 统一的单元解析器；关系图 v2 的两端都用锚点；supersedes 的图约束；读取侧不再先剔除旧单元，而是把命中转发给链头。
+  - 来源改为基于输入事件和输入账本；工具输出默认 `external`；不再声称能区分"亲手打的"和"粘贴的"；被污染的 rule 一律拒绝。
+  - 提交协议先存旧版本快照，恢复时做三态 CAS，不覆盖他人的写入；新增租约和 `id_collision`。
+  - 熔断只看系统故障，并设最小样本量；所有未结束状态和每轮注入文件都有硬上限；计数器跨进程共享。
+  - 每轮注入文件改为确定性的预算选取（修改 AGENTS.md 里"永不截断"的规定）；用户编辑算基线修订；日志类文件不纳入字节不变的检查范围。
+  - 验收改成同一查询成对回放；夹具分层，分 train/dev/test，并事先估算样本量；门槛取置信区间下界；模型行为测试从真实检索入口开始；对需要按新不变量重写的现有测试列出清单。
 
 ## 11. 验收结果
 
