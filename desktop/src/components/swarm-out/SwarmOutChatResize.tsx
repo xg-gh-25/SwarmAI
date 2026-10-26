@@ -54,16 +54,9 @@ export function clampWidth(w: number, ceiling: number): number {
   return Math.round(Math.max(SWARM_OUT_CHAT.MIN_WIDTH, Math.min(ceiling, w)));
 }
 
-/** Side gutter of the Swarm Out chat column. The shared token (index.css
- *  --chat-gutter, clamp(12px, 2cqi, 24px)) bottoms out at 12px in a column this narrow,
- *  which puts the composer almost against the Canvas rail; the column sets the token
- *  itself so the transcript and the composer keep lining up. */
-export const SWARM_OUT_CHAT_GUTTER = '20px';
-
 /** Inline style for the chat column while Swarm Out is active. */
 export function chatColumnStyle(width: number): CSSProperties {
   return {
-    ['--chat-gutter' as string]: SWARM_OUT_CHAT_GUTTER,
     flex: `0 1 ${width}px`,
     minWidth: SWARM_OUT_CHAT.MIN_WIDTH,
     maxWidth: `calc(100% - ${SWARM_OUT_CHAT.DASHBOARD_MIN}px)`,

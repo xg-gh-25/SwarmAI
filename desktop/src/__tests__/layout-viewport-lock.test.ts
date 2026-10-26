@@ -174,6 +174,8 @@ describe('Layout viewport lock — MUST NOT CHANGE (preserved behaviors)', () =>
     expect(body('chat-column')).toMatch(/width:\s*min\(100%,\s*clamp\(940px,\s*70cqi,\s*1200px\)\)/);
     expect(body('chat-column')).toMatch(/margin-inline:\s*auto/);
     expect(body('chat-gutter')).toMatch(/padding-inline:\s*var\(--chat-gutter\)/);
+    // A narrow panel (Canvas open, Swarm Out column) still gets a 20px gutter.
+    expect(INDEX_CSS).toMatch(/--chat-gutter:\s*clamp\(20px,\s*2cqi,\s*28px\)/);
     // The scrollbar sits inside the right gutter: right = gutter - bar width.
     const scroll = body('chat-scroll-gutter');
     expect(scroll).toMatch(/padding-left:\s*var\(--chat-gutter\)/);

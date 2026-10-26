@@ -59,10 +59,3 @@ describe('Swarm Out chat width', () => {
     expect(chatColumnStyle(2000).maxWidth).toBe(`calc(100% - ${SWARM_OUT_CHAT.DASHBOARD_MIN}px)`);
   });
 });
-
-describe('Swarm Out chat gutter', () => {
-  it('the column sets a wider chat gutter than the 12px floor of the shared token', () => {
-    const style = chatColumnStyle(560) as Record<string, unknown>;
-    expect(style['--chat-gutter']).toBe('20px');
-  });
-});

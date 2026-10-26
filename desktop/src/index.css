@@ -355,10 +355,12 @@ body {
  * --scrollbar-size is the ONE value for the styled scrollbar below AND for the
  * chat-scroll-gutter compensation, so the bar and the gutter maths cannot drift.
  * --chat-gutter uses cqi, which resolves where the variable is USED — i.e.
- * against the nearest `chat-panel` container, not against :root. */
+ * against the nearest `chat-panel` container, not against :root. Its 20px floor is
+ * what a narrow panel gets (Canvas open, the Swarm Out column): at 12px the
+ * composer sat almost against the Canvas divider. */
 :root {
   --scrollbar-size: 6px;
-  --chat-gutter: clamp(12px, 2cqi, 24px);
+  --chat-gutter: clamp(20px, 2cqi, 28px);
 }
 
 /* Scrollbar styling.
