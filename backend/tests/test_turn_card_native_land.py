@@ -263,14 +263,18 @@ def test_9a_a_file_edited_and_landed_in_one_turn_is_one_row(env):
 
 
 def test_10_an_unlanded_session_worktree_present_at_the_start_has_rows(env):
+    """Diffed from the turn's start snapshot: an earlier turn's commit there is not
+    this turn's change."""
     async def go():
         wt = _create(env, "s10")
+        _commit(wt, "a.py", "a = 1\nb = 2\nc = 3\nd = 4\n")     # an earlier turn
         t = await _turn(_ctx())
-        (wt / "a.py").write_text("a = 5\n")
+        (wt / "a.py").write_text("a = 1\nb = 2\nc = 3\nd = 5\n")
         _write_tool(t, wt / "a.py")
         return await t.finish()
     block = asyncio.run(go())
-    assert [(f["path"], f["status"]) for f in block["files"]] == [("a.py", "modified")]
+    assert [(f["path"], f["status"], f["added"], f["deleted"]) for f in block["files"]] \
+        == [("a.py", "modified", 1, 1)]
 
 
 def test_10_a_session_worktree_created_in_the_turn_diffs_from_its_creation(env):

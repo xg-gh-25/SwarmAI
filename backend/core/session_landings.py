@@ -185,7 +185,8 @@ def _turn_scans(root: str, key: str, turn_id: str, deadline: Deadline) -> "list[
     """Every reflog entry of checkout *root* stamped with *turn_id* by this session,
     as one scan per destination branch (design 2026-10-26-turn-cards-unified.md §3.3).
     One land updates its branch's reflog AND the checkout's ``HEAD`` reflog: only the
-    branch hit is kept, so a land is one candidate. Through git: files and reftable."""
+    branch hit (``refs/heads/…@{…}``) is kept, so a land is one candidate. Through
+    git: files and reftable."""
     out: dict = {}
     try:
         raw = _git(root, deadline, "log", "-g", "--all", "--date=unix",
@@ -198,7 +199,6 @@ def _turn_scans(root: str, key: str, turn_id: str, deadline: Deadline) -> "list[
         logger.warning("session_landings: %s unreadable: %s", root, exc)
         return [{"root": root, "dest": None, "cands": [], "capped": False,
                  "unknown": "unreadable"}]
-    seen: set = set()
     for line in raw.splitlines():
         parts = line.split("\0")
         if len(parts) != 3:
@@ -208,9 +208,6 @@ def _turn_scans(root: str, key: str, turn_id: str, deadline: Deadline) -> "list[
         stamp = _STAMP.match(msg)
         if not m or not stamp or stamp.group(2) != key or stamp.group(3) != turn_id:
             continue
-        if (new, msg) in seen:
-            continue
-        seen.add((new, msg))
         dest = m.group(1)
         sc = out.setdefault(dest, {"root": root, "dest": dest, "cands": [],
                                    "capped": False, "unknown": None})
