@@ -10,7 +10,11 @@ call, with the Pipeline v1 remedy (re-apply in the worktree; no claim command) �
 (another session may write main at the same time). It never moves anything.
 
 State: ``<worktree ledger>/<run id>/main-dirty-seen.json`` = {main: {path: [status,
-size, mtime_ns]}}, the dirty files of each main checkout as last seen. It lives in the
+size, mtime_ns]}}, the dirty files of each main checkout as last seen, plus
+``REPORTED_KEY`` = {main: [path, ...]}: the paths already reported in full (the baseline
+counts: it was reported at worktree creation). A reported path that changes again goes
+into one closing line ("still changing, reported before: ..."), not the full report
+(design 2026-10-26-pipeline-review-closure §5.2 point 4). It lives in the
 ledger, outside every repo: in the run dir (tracked in SwarmWS) the daemon would commit
 other sessions' paths. Worktree creation writes it (``record_baseline``, the moment
 those edits are reported) and the hook rewrites it after a scan finished within its
@@ -47,6 +51,7 @@ logger = logging.getLogger(__name__)
 _SCAN_TIMEOUT = 3.0
 MAX_LISTED = 20
 SEEN_FILE = "main-dirty-seen.json"
+REPORTED_KEY = "_reported"     # never a main checkout path (those are absolute)
 
 
 def _signature(main: str, row: dict) -> list:
@@ -98,6 +103,9 @@ def record_baseline(run_dir: "str | Path", main: "str | Path", rows: "list[dict]
     try:
         seen = _load_seen(run_dir)
         seen[m] = signatures_of(m, rows)
+        reported = seen.get(REPORTED_KEY) if isinstance(seen.get(REPORTED_KEY), dict) else {}
+        reported[m] = sorted(set(reported.get(m) or ()) | set(seen[m]))
+        seen[REPORTED_KEY] = reported
         _save_seen(run_dir, seen)
     except Exception:  # noqa: BLE001 — a missing baseline only costs one silent scan
         logger.warning("main_dirty_scan: baseline not recorded for %s", m, exc_info=True)
@@ -148,8 +156,10 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
             if m is not None:
                 mains[os.path.realpath(str(m))] = True
         seen = _load_seen(run_dir)
+        reported = seen.get(REPORTED_KEY) if isinstance(seen.get(REPORTED_KEY), dict) else {}
         dirty = False
         changed: "list[str]" = []
+        again: "list[str]" = []
         for main in mains:
             now = signatures(main)
             before = seen.get(main)
@@ -157,10 +167,22 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
                 seen[main], dirty = now, True
             if not isinstance(before, dict):
                 continue   # no baseline yet: record one, report nothing
+            known = set(reported.get(main) or ())
             for path, sig in sorted(now.items()):
                 if before.get(path) != sig:
-                    changed.append(os.path.join(main, path))
+                    (again if path in known else changed).append(os.path.join(main, path))
+                    known.add(path)
+            if known != set(reported.get(main) or ()):
+                reported[main] = sorted(known)
+        if reported:
+            seen[REPORTED_KEY] = reported
         save = seen if dirty else None
+        tail = (" still changing, reported before: " + ", ".join(
+            os.path.basename(p) for p in again[:MAX_LISTED])
+            + (f" (+{len(again) - MAX_LISTED} more)" if len(again) > MAX_LISTED else "") + "."
+            if again else "")
+        if not changed and again:
+            return "Main checkout of this run's repo:" + tail, run_dir, save
         if not changed:
             return None, run_dir, save
         shown = changed[:MAX_LISTED]
@@ -171,7 +193,7 @@ def create_main_dirty_reporter(session_context: "dict[str, Any]"):
                 "This run's code belongs in its worktree, and landing refuses a main edit that "
                 "overlaps the run. " + __import__(
                     "core.worktree_write_gate", fromlist=["V1_MAIN_EDIT_REMEDY"]
-                ).V1_MAIN_EDIT_REMEDY), run_dir, save
+                ).V1_MAIN_EDIT_REMEDY + tail), run_dir, save
 
     async def _hook(input_data: "dict[str, Any]", tool_use_id: "str | None",
                     context: Any) -> "dict[str, Any]":

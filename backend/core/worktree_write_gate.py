@@ -487,13 +487,30 @@ def _bash_targets(command: str, cwd: str, with_raw: bool = False):
         late_cd = late_cd or other
         if t:
             base = t
-    raw = (parse_bash_write_targets(command) + parse_bash_heredoc_write_candidates(command)
-           + parse_bash_delete_targets(command))
-    out = [_real(r, base) for r in dict.fromkeys(raw)]
+    plain = parse_bash_write_targets(command) + parse_bash_delete_targets(command)
+    heredoc = [r for r in parse_bash_heredoc_write_candidates(command) if r not in plain]
+    raw = list(dict.fromkeys(plain + heredoc))
+    out = [_real(r, base) for r in raw]
     if not with_raw:
         return out
-    sure = [not late_cd or os.path.isabs(os.path.expanduser(r)) for r in dict.fromkeys(raw)]
-    return list(zip(out, sure))
+    sure = [not late_cd or os.path.isabs(os.path.expanduser(r)) for r in raw]
+    # (path, sure, the string as written, read from an interpreter heredoc's text)
+    return [(p, ok, r, r in heredoc) for p, ok, r in zip(out, sure, raw)]
+
+
+def _heredoc_hint(verdict: dict, raw: str) -> dict:
+    """A deny of a string read from an interpreter heredoc: which string was taken for
+    a write target, why, and the two ways through (design 2026-10-26-pipeline-review-
+    closure §5.2 point 3). The deny itself is unchanged: the after-the-fact scan cannot
+    catch writes this would let through (another run's worktree, ignored files)."""
+    out = verdict.get("hookSpecificOutput") or {}
+    out["permissionDecisionReason"] = str(out.get("permissionDecisionReason", "")) + (
+        f" The string {raw!r} was read as a possible write target: this heredoc goes to "
+        "an interpreter and its text has a write call, so every path-like string in it "
+        "counts. Two ways through: write the script to a file and run it (python3 "
+        "/tmp/x.py is not read as a heredoc), or cd outside the checkout first so a "
+        "relative path no longer lands in it.")
+    return verdict
 
 def judge(input_data: "dict[str, Any]", own: "_Own | None",
           no_run: "_NoRun | None" = None) -> "dict | None":
@@ -527,11 +544,13 @@ def judge(input_data: "dict[str, Any]", own: "_Own | None",
                 v = _no_run_git_verdict(g, no_run, command)
             if v is not None:
                 return v
-    for p, sure in _bash_targets(command, cwd, with_raw=True):
+    for p, sure, raw, from_heredoc in _bash_targets(command, cwd, with_raw=True):
         v = _file_verdict(p, own)
         if v is None and no_run is not None and sure:
             v = _no_run_verdict(p, no_run)
         if v is not None:
+            if from_heredoc and v.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+                return _heredoc_hint(v, raw)
             return v
     return None
 
