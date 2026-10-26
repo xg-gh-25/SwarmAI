@@ -426,3 +426,23 @@ def test_this_weeks_entry_is_labelled_in_local_time(tmp_path, monkeypatch):
     finally:
         monkeypatch.delenv("TZ")
         _time.tzset()
+
+
+def test_the_cost_query_stays_linear(tmp_path):
+    """The baseline lookup must not be a per-row correlated subquery: on a few
+    thousand rows the old form took seconds (22 s on a real install)."""
+    import sqlite3
+    import time as _time
+    from database.sqlite import SQLiteDatabase
+
+    db = SQLiteDatabase(str(tmp_path / "t.db"))
+    asyncio.run(db.initialize())
+    con = sqlite3.connect(str(tmp_path / "t.db"))
+    rows = [(f"s{i % 300}", f"2026-{9 + (i * 2 // 20000):02d}-{1 + (i % 28):02d}T10:00:00", float(i)) for i in range(20000)]
+    con.executemany("INSERT INTO token_usage (session_id, timestamp, cost_usd) VALUES (?, ?, ?)", rows)
+    con.commit()
+    con.close()
+    start = _time.monotonic()
+    got = asyncio.run(db.token_cost_rows("2026-10-20T00:00:00"))
+    assert _time.monotonic() - start < 2.0
+    assert any(r[1] >= "2026-10-20" for r in got)
