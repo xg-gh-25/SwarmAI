@@ -1,257 +1,210 @@
 ---
-title: Recall 语料的写入与入库 — 来源策略、写入者身份、切块规范、读侧折叠
+title: Recall 语料的写入与准入 — Memory、DDD、Knowledge 三块统一的准入、身份、使用信号与退出
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r1 — 设计，待评审
+status: r2 — 设计，待评审（r1 只覆盖 Knowledge，已被本版替换）
 ---
 
-# Recall 语料的写入与入库
+# Recall 语料的写入与准入
 
 ## 0. 一句话
 
-读取侧（`2026-10-26-recall-precision-and-coverage.md`）已经按排名、日期、来源过滤；剩下的噪音大多在
-**写入时就进了语料**：同一段回复按日期被存成多份 Note，被删除的冒烟会话写进 DailyActivity，
-只有 frontmatter 的 chunk 被当成正文召回和注入，chunk 不带文档标题。这些问题分散在多个写入者里，
-规则也散落在三个文件中。本设计把它们收成四个结构：
+读取侧已经按排名、日期、来源做了过滤（`2026-10-26-recall-precision-and-coverage.md`）。这一版看写入侧：
+Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一遍。结论是三块犯的是同一组错误：
 
-1. **一份来源策略**：每类来源"进不进索引、能不能自动注入、走哪条时间规则、怎么切块"只写在一个模块里。
-2. **写入者按生产者身份去重**：一条消息、一个会话只对应一份产出，用 id 判断，不用内容或日期。
-3. **一个入库口规范 chunk**：去掉 frontmatter、带上文档标题、过短的段并进上一段。
-4. **读侧折叠完全相同的内容**：已有的重复不动数据，在召回时只留一份。
+1. **准入不问"该不该放在这里"。** 共用的 LLM 判官只检查一条内容是否具体、能否执行，不检查它属不属于这个存储。
+   所以每轮都会注入的 MEMORY 里，有一半以上是只和某个项目有关的条目。
+2. **写入者能绕过准入。** DDD 最大的写入者 REFLECT（592 条）直接写入，跳过了准入；还有好几个 skill 和
+   编辑器接口也能直接写。
+3. **"用过没有"这个信号是死的。** `ref` 字段从来没有生产代码去加。MEMORY 87 条全是 `ref:0`，
+   DDD 也基本如此。所有退出决策（衰减、归档）都只能按时间和类型来判断。
+4. **大部分条目没有退出路径。** 按类型免疫、按 section 常青，TECH 甚至完全没有自动退出。有几条退出路径是
+   直接删除，不先归档。
+5. **注入形态和内容大小不匹配。** DDD 注入的是 section 指针，指向的 section 中位约 16K 字符，最大 234K。
 
-不改、不删任何已有文件和会话数据。
+本设计给三块定一份统一的**存储契约**（§3），再把每个问题落到契约上（§4）。
 
-## 1. 现状：谁写什么、怎么进索引
+**和 r1 的关系**：r1 只覆盖 Knowledge，其中 S3 要重切全部 chunk，太重，而且给 chunk 加标题行会让读侧的覆盖率判断变松。
+本版改成在读取和渲染时处理（§4.4），不重切、不重建索引。
 
-| 来源 | 写入者 | 写入时机 | 进入哪个检索面 |
+## 1. 怎么评估的
+
+三个只读子 agent 并行审计，不改任何文件、不读会话数据。只有 Knowledge 那一路以只读方式查了派生的
+`knowledge_chunks` 表。审计报告留在 scratch，不进仓库，因为里面引用了私人内容。这里只放汇总数字。
+
+| 块 | 看了什么 |
+|---|---|
+| Memory | 所有写入和退出路径（带代码行号）；live MEMORY.md 每一条逐条分类；EVOLUTION 按 section 分类；`ref`/`decay` 元数据的维护 |
+| DDD | 所有写入者及各自写入的条数；使用信号；把 48 次真实 DDD 注入指向的 section 打开，逐个判断有没有用、项目对不对；SwarmAI 的 TECH 和 IMPROVEMENT 随机抽 40 条做分类 |
+| Knowledge | 各目录由谁写、按什么条件写；目录统计；backflow 写的 Note 抽 15 篇判断价值；10 月的中途 checkpoint |
+
+同时用到前面读取侧回放和盲评的数据：库里 21062 个 chunk、约 3000 个打过标签的命中。
+
+## 3. 存储契约
+
+三块共用一份契约。每个存储回答四个问题，答案写在一个模块里（`backend/core/store_contracts.py`，
+吸收 r1 里的 `recall_sources` 来源策略），所有写入者和读取侧都读它：
+
+| | MEMORY（每轮整份注入） | 项目 DDD（按项目按需注入） | Knowledge Library（召回时排名） |
 |---|---|---|---|
-| `Knowledge/DailyActivity/<date>.md` | `hooks/daily_activity_hook.py`（会话结束）、`core/runtime_hooks.py`（会话中 checkpoint），都经 `daily_activity_writer.upsert_session_block` | 后台 hook | `knowledge_chunks` / `knowledge_fts`（`context_health_hook._sync_knowledge_library` → `knowledge_store.sync_knowledge_index`）；最近 2 天另外直接注入 prompt |
-| `Knowledge/Notes/*-<hash6>.md` | `hooks/knowledge_backflow_hook.py`：会话结束时扫这个会话的全部 assistant 消息，长且像分析的整段存为一页 | 后台 hook | 同上 |
-| `Knowledge/Notes/` 其他、`Designs/`、`Reports/`、`Library/`、`Learned/`、`Pollinate/` | 人、skill、各类 job | 不定 | 同上 |
-| `Knowledge/Signals/`、`DailyBriefs/` | signal 抓取 job 和由它生成的 brief | 定时 | 同上（读取侧已不自动注入） |
-| `.context/*-archive*.md` | MEMORY / EVOLUTION 的归档阀 | 后台 | 同上，来源前缀 `.context/Archives/`，按条目切块 |
-| 会话消息 | `messages` 表写入时生成 `content_seg`（`message_search_text`） | 实时 | `messages_fts` |
+| **准入问题** | 跨项目、不依赖查询、在多数会话里都会影响判断吗？ | 离开这次会话或 run，以后还会影响这个项目的判断吗？（不是流水，不是会变的数字） | 离开原会话也能独立读懂、可复用吗？已有更权威的文档覆盖了吗？ |
+| **答"否"时去哪** | 只关一个项目 → 那个项目的 DDD；只是这一次的事 → 不写 | 不写（它本来就在会话和 DailyActivity 里） | 不写（它本来就在会话里，过去会话那一路能召回） |
+| **身份（去重的键）** | 条目标题签名 | 条目内容签名 + 来源（run id / 会话 id） | 生产者 id（消息 id、会话 id） |
+| **去重范围** | live MEMORY + steering/SOUL/AGENT + 目标项目的 DDD | 整份 DDD 文档 | 同一生产者 id 的已有文件 |
+| **退出** | 契约复审（§4.5）；归档优先 | 契约复审；归档优先 | 版本族只留当前版；归档优先 |
 
-规则散落的位置：
+"宁缺毋滥"落在这张表的意思是：**判官拿不准就不写**（fail-closed）。现在的判官为避免漏掉内容，
+默认放行；这对按需召回的库问题不大，但对每轮注入的 MEMORY 正好相反。
 
-- 进不进索引：`knowledge_store._SKIP_DIRS` / `_SKIP_NESTED_PREFIXES`
-- 能不能自动注入：`recall_filter.NO_INJECT_PREFIXES`
-- 归档单独占名额：`recall_filter.ARCHIVE_PREFIX`
-- 时间规则：`recall_filter._DAILY_RE`，以及过去会话的 `date` 字段
+## 4. 设计
 
-同一个"这类来源怎么对待"的事实分在两个模块、五个常量里。
+### 4.1 一个准入入口
 
-## 2. 实测问题和根因
+`ingestion_gate.admit(store, candidate, *, writer, authority)` 是三个存储的唯一写入入口：
 
-数据：`knowledge_chunks` 全表（21062 个 chunk，只读查询）、10 月 DailyActivity 全部 229 条、
-今天三轮盲评打过标签的约 3000 个命中（`2026-10-26-recall-precision-and-coverage.md` §8–§10）。
+1. **形状**：符合规范格式（类型标签、标题、元数据行）。
+2. **路由**：按契约判断该放哪。MEMORY 的候选先确定项目：用会话碰过的绑定仓库
+   （`repo_guidance.session_bound_project`），或 run 所在的仓库。能确定项目且内容只和这个项目有关的，
+   转到这个项目的 DDD。
+3. **去重**：按契约里的身份和范围检查。
+4. **判官**：用契约里这个存储的准入问题；拿不准就不写。
+5. **写入**：加锁写入，带 `source:<writer>` 元数据。
 
-### W1 backflow 把同一段回复按日期存成多份
+`authority="human"`（人工批准的提案、用户明确说"记住"）**只跳过判官**，形状、路由、去重照常执行。
 
-| 实测 | |
-|---|---|
-| Notes 文件 | 568 个，其中 419 个是 backflow 自动写的 |
-| 内容完全相同的 chunk 组 | 917 组，515 组来自 Notes；9、10 月仍在新增 |
-| 盲评 有用 / 噪音 | backflow 写的 34% / 42%；人写的 42% / 28% |
+改走这个入口的写入者：
 
-根因：文件名是 `日期-slug-内容哈希6位`，"已存在就跳过"只看这个文件名。backflow 每次会话结束都重扫
-整个会话，一个跨天的长会话每关一次，同一条回复就以当天日期再存一份（例：`werner-vogels-…-1cfc2f`
-连续 5 天）。去重用的是"内容 + 日期"，而"同一份产出"本该由**生产者给的 id**（消息 id）决定。
+| 写入者 | 现在 | 改为 |
+|---|---|---|
+| REFLECT（`reflect_job.py:231-284`） | 直接 `apply_to_ddd` | `admit(store="ddd")` |
+| 人工批准 cultivation 提案 | 直接 `apply_to_ddd` | `admit(store="ddd", authority="human")` |
+| 自动蒸馏 → MEMORY | 共用判官，没有路由 | `admit(store="memory")`，先路由 |
+| 即时纠正 → MEMORY（`runtime_hooks.py:300-447`） | 共用判官 | `admit(store="memory")` |
+| DailyActivity 决策/纠正 → DDD | 一律写到 SwarmAI | 按会话的绑定仓库确定项目；确定不了就不写 |
+| session 结束 writeback | 置信度 0.5 永远过不了 0.7，实际已经不写 | 删掉这条路径（它的内容由 REFLECT 和 DailyActivity 覆盖），或者给它一个真实的置信度；实施时先看过去 30 天它丢弃的候选再定 |
+| `s_persist` / `s_self-evolution` / `s_ddd-persist` | Edit 或 `locked_write` 直写 | 用同一个 `admit` 的 CLI，`authority="human"` |
+| `s_memory-distill` | 说明和代码多处矛盾 | 删除这个 skill（同样的工作由会话结束的蒸馏 hook 完成） |
+| 工作区编辑接口写 MEMORY/EVOLUTION | 不加锁，整文件覆盖 | 加锁 + `MemoryGuard` 形状检查；人工编辑内容不跑判官 |
 
-### W2 DailyActivity 记录了被删除的冒烟会话和不属于任何条目的块
+### 4.2 写入者按生产者身份去重（Knowledge）
 
-| 实测（10 月） | |
-|---|---|
-| 测试探针条目 | 23 条（`Reply with exactly one word: SMOKE_OK`、`Count slowly from 1 to 40`），都来自 `scripts/smoke_e2e.py` |
-| 不是条目头的 `##` 块 | 例：`2026-10-14.md` 里一个独立的 `## Session Resume` 块（`context_injector` 的段标题），切块后单独成一个 chunk |
+- **backflow**：同一条 assistant 消息只产出一个 Note，文件名带消息 id，存在就跳过（r1 的 S2）。
+  同时按契约过判官：内容离开原会话读不懂（进度汇报、review 结论、"暂停等你决定"）就不写；
+  已有人写的同主题文档就不写。按审计的样本，15 篇里能留下 6 篇。
+- **checkpoint**：会话结束条目写入时，在同一个锁里删掉这个会话的 checkpoint 块（`upsert_session_block`
+  已经按会话和类型定位块）。checkpoint 只在会话没有正常结束时保留，用于崩溃恢复。
+- **已删除的会话**：DailyActivity 和 backflow 两个 hook 开头先查会话是否还在，不在就不写（r1 的 S2）。
+- **DailyActivity 块格式**：`upsert_session_block` 断言块以条目头开头、块内没有 `## `；
+  追查 `## Session Resume` 独立块的写入者（r1 的 S2）。
 
-根因：
-- `smoke_e2e.py` 跑完会删除自己的会话（`DELETE /api/chat/sessions/{id}`），但会话结束的 hook
-  仍然拿到了消息、写了条目。写入时没有检查"这个会话还在不在"。
-- DailyActivity 文件里的块格式只靠写入者自觉。切块按任意 `##`/`###` 切，所以一个混进来的 `##` 块
-  会变成独立 chunk。这个 `## Session Resume` 块是哪个写入者写的，代码里还没找到，实施时先追到
-  写入点，再决定修法，不按内容猜。
+### 4.3 真实的使用信号
 
-另外看了只有"What happened"（用户原话）、没有 LLM 提炼的条目：7 天内的有用率 79%，
-有提炼的 98%；7 天以前的都低（11% / 28%）。原话条目对"刚才在干嘛"有用，**不删也不改写**；
-旧条目的噪音由读取侧的时间规则处理。
+现在的 `ref` 没人加，`record_ddd_hit` 又会把没送到模型的内容也记成"用过"。改成只有一种信号：
 
-### W3 切块把 frontmatter 当正文，chunk 不带文档标题
+- **"送达"事件**：recall 或 DDD 那一路把一个条目的正文真正写进注入块时，记一条
+  `(存储, 条目锚点, 日期)`，写进现有的 `.ddd-usage.json` 边车文件（同一个写入者、同一把锁，不新建存储）。
+  只输出指针、没有正文时不记。
+- MEMORY 每轮整份注入，"送达"对它没有意义，所以 MEMORY 不做使用统计，它的退出靠 §4.5 的复审。
+- 不再依赖条目上的 `ref:N` 字段做任何判断。字段保留，不批量改写已有条目。
 
-| 实测 | |
-|---|---|
-| 以 YAML frontmatter 开头的 chunk | 897 个；抽查 400 个，约 40% 除了 frontmatter 没有正文 |
-| 盲评 有用 / 噪音 | frontmatter 开头的 28% / 38%；其余 44% / 28% |
-| 少于 200 字的库命中 | 有用 14%，噪音 55%；少于 80 字的 chunk 有 507 个 |
+### 4.4 注入形态和读侧联动（不改语料）
 
-根因：`chunk_markdown` 把第一个标题之前的内容（frontmatter + H1）整段作为一个 chunk；其余 chunk
-只带自己的 `##`/`###` 小标题，不带文档标题。于是 "### Summary" 这种 chunk 被召回后，模型看不出
-它属于哪份文档；只有 frontmatter 的 chunk 匹配上 `title`/`related` 里的词就被注入。
+- **DDD 注入条目正文，不注入 section 指针。** 每个命中的 section 只取和查询最相关的几条 entry
+  （`_recall_ddd` 内部已经有这些 entry），按 `recall_filter.DOMAIN_CHAR_CAPS["ddd"]` 截断，
+  经 `_deliver_block` 注入并计入会话预算。指针目标在渲染时先校验是否存在，不存在的丢掉。
+- **Library 命中在读侧处理 r1 的 S3 想解决的问题**：
+  - 只有 frontmatter、没有正文的命中直接丢掉；
+  - 正文少于 200 字的命中丢掉；
+  - 文档标题在渲染时从 frontmatter 的 `title` 或来源路径取出，显示在来源行上，**不写进 chunk 正文，
+    不参与覆盖率计算**；
+  - 内容完全相同的命中先折叠，再取排名名额（r1 的 S4，顺序固定并写测试）。
+- **索引排除依赖目录**：来源策略里加一条规则，路径中含 `node_modules`、`.venv`、`dist`、`build`
+  的文件不进索引。下一次索引同步会把这些派生 chunk 删掉（文件本身不动）。
+- 这一节不重切、不重建索引，所以 prompt 内去重（最近两天的 DailyActivity）、覆盖率门槛、排名名额
+  这三条读侧规则的输入都不变。r1 里那几处联动风险不再存在。
 
-### W4 规则散落，同一类来源在两处各自判断
+### 4.5 退出：归档优先，契约复审
 
-见 §1 末尾。新增一类来源（比如以后的 `Meetings/`）要记得改两个模块；改漏一处就是不一致。
+- **所有删除改成先归档。** 每周 Memory Health 删 MEMORY/EVOLUTION 条目、DDD 矛盾替换删旧条目、
+  EVOLUTION 的 prune，统一改为调用已有的 `archive_entries`，再从原文件去掉。
+- **契约复审替代"按类型免疫"。** 现在大部分类型不受时间影响，是为了保护来之不易的经验；
+  问题是没有任何别的出口。新增一个离线复审（并进现有的每周 Memory Health job，不新建 job）：
+  - 读**完整**文件，分段送判官，而不是只看前 8K 字符；
+  - 按存储契约逐条判断：该留、该移去 DDD、该归档、和别处重复；
+  - 输出一份提案列表，每条带理由。执行方式：都是归档优先（可以从归档恢复），所以每周自动执行，
+    每次最多执行固定条数（沿用 Memory Health 现在的上限），执行结果写进 `EVOLUTION_CHANGELOG.jsonl`
+    和每周报告。不额外加人工确认这一步；**第一次**复审例外（见 §6），因为积压量大，先给你看。
+  - DDD 的 TECH 也进入复审范围（现在它没有任何退出路径）。
+- **版本族**：Designs、Library 里 `-v2`/`final` 并存的文件，复审时提议把旧版移进 `Archives/`。不自动移动。
 
-### 不属于本设计的观察
-
-- 过去会话命中里常出现 `Running: grep …` 这类工具摘要，是因为会话内消息按"命中词数"排序。
-  盲评中工具摘要占多数的命中有用率（37%）和其余持平，先不改。
-- Pollinate（有用 21%、噪音 57%）、`Knowledge/Archives/`（不含 `.context`；11% / 74%）样本都很少
-  （28 个、19 个）。按"不因为样本噪音就排除整类来源"的原则，不排除，交给读取侧规则，继续观察。
-
-## 3. 设计
-
-### S1 来源策略：一个模块，一张表
-
-新建 `backend/core/recall_sources.py`，是"这类来源怎么对待"的唯一来源：
-
-```python
-@dataclass(frozen=True)
-class SourcePolicy:
-    prefix: str             # 相对 Knowledge 索引根的路径前缀，最长前缀优先
-    index: bool             # 进不进 knowledge_fts
-    auto_inject: bool       # 会话 recall 能不能自动注入（主动搜索不受影响）
-    age_rule: bool          # 是否走"N 天以前要命中更多词"的时间规则
-    date_from: str          # 日期来源："filename" | "frontmatter" | "none"
-    own_slots: bool         # 是否单独占名额和预算（归档）
-    chunk_mode: str         # "section" | "entry"（按条目头切）
-
-def policy_for(source_file: str) -> SourcePolicy: ...
-```
-
-表里的行（初值 = 今天已经生效的行为，搬过来不改语义）：
-
-| prefix | index | auto_inject | age_rule | own_slots | chunk_mode |
-|---|---|---|---|---|---|
-| `DailyActivity/` | 是 | 是 | 是（文件名日期） | 否 | entry |
-| `Archives/DailyActivity/` | 是 | 是 | 是 | 否 | entry |
-| `.context/Archives/` | 是 | 是 | 否 | 是 | entry |
-| `Signals/`、`Archives/Signals/`、`DailyBriefs/` | 是 | 否 | 否 | 否 | section |
-| `JobResults*`（任意层） | 否 | — | — | — | — |
-| 其余 | 是 | 是 | 否 | 否 | section |
-
-消费者：
-- `knowledge_store.sync_knowledge_index`：用 `index` 决定扫不扫；用 `chunk_mode` 选切法。
-  `_SKIP_DIRS`（`__pycache__`、`.git`、`.artifacts`）是文件系统层面的跳过，留在原处。
-- `recall_filter`：`auto_inject` 替代 `NO_INJECT_PREFIXES`；`age_rule` + `date_from` 替代 `_DAILY_RE`；
-  `own_slots` 替代 `ARCHIVE_PREFIX`。
-
-删除那些常量后，搜索全仓库确认没有别的读者。新增一类来源只改这张表，加一行测试。
-
-### S2 写入者按生产者身份去重
-
-**backflow**（W1）：同一条 assistant 消息只产出一个 Note。
-- 文件名改为 `<首次写入日期>-<slug>-<消息 id 前 8 位>.md`；frontmatter 增加 `source_message: <消息 id>`。
-- 写之前用 `glob("*-<id8>.md")` 查这条消息是否已经存过，存过就跳过，不管是哪天写的。
-- 内容哈希不再参与判断。同一条消息之后被编辑过，仍然算同一份，不重复写。
-- 已有的 419 个旧文件不改名、不删除。它们之间的重复由 S4 在读侧折叠。
-
-**DailyActivity**（W2）：
-- 会话结束 hook（DailyActivity 和 backflow 两个）开头先查 `sessions` 表：会话已被删除就不写，
-  并打一条 INFO 日志。冒烟测试删除自己的会话，所以它不会再产生条目。这是按"会话是否存在"这个事实判断，
-  不靠消息内容（"SMOKE_OK"）识别。
-- `upsert_session_block` 是 DailyActivity 的唯一写入口：它断言写入的块以条目头
-  `## HH:MM | <sid8> | <标题>` 开头，块内不能再有 `## ` 行（只允许 `###` 及以下），否则拒绝并打 WARNING。
-  这样文件里的每个 `##` 都是一个条目头，S3 才能按条目切块。
-- 追查 `## Session Resume` 独立块的写入者：如果它不经过 `upsert_session_block`，就让它改走这个入口；
-  如果经过，断言会在测试里把它暴露出来。
-
-### S3 一个入库口规范 chunk
-
-`knowledge_store.chunk_markdown` 是所有 Library 文件变成 chunk 的唯一入口，规范在这里做：
-
-1. **frontmatter 不进正文。** 开头的 `---…---` 块解析出来，放进 chunk 的 `metadata`（已有字段），
-   不放进 `content`；`title` 用作下一步的文档标题。
-2. **每个 chunk 带文档标题。** 文档标题取 frontmatter 的 `title`，没有就取第一个 `# H1`，再没有就用文件名。
-   chunk 的 `content` 以一行 `# <文档标题>` 开头（DailyActivity 用 `# <日期>`），后面是原来的小标题和正文。
-   这一行也进 FTS，所以按文档名搜能命中它的段。
-3. **过短的段并进上一段。** 正文少于 `_MIN_CHUNK_CHARS`（初值 200，按 W3 的盲评数据）的段，
-   并入同一文件的上一个 chunk，不单独成块；文件只有这一段时照常成块。不丢内容。
-4. **`chunk_mode="entry"` 只在条目头切。** DailyActivity 按 `## HH:MM |` 切，归档按已有的
-   `_ARCHIVE_ENTRY_RE` 切；条目内部的 `##`/`###` 不再切开。
-
-这四条改变了 chunk 内容，所以内容哈希会变。`sync_knowledge_index` 按哈希做增量同步，部署后的第一次同步
-会把全部 chunk 重写一遍。这是派生索引（来源是磁盘上的 Markdown 文件，文件本身不动），在后台 hook 里跑，
-不在 chat 路径上。重写耗时先在 scratch 里对同一份文件建一次索引来测，写进 §8。
-
-### S4 读侧折叠完全相同的内容
-
-`recall_filter` 处理库那一路时，把正文（去掉 S3 加的标题行、空白规整后）完全相同的命中折叠成一个，
-保留排名最高的那条，来源列表里注明"另有 N 份相同"。已有的 917 组重复不需要改任何文件就不再重复注入；
-S2 生效后新的重复不再产生。
-
-折叠只看"内容完全相同"，不做近似去重：近似判断就是猜，会把不同版本的设计稿错合成一个。
-
-## 4. 每个事实在哪、谁写谁读
+## 5. 每个事实在哪、谁写谁读
 
 | 事实 | 唯一来源 | 写 | 读 |
 |---|---|---|---|
-| 一类来源怎么对待 | `recall_sources.SOURCE_POLICIES` | 人改表 | `knowledge_store`、`recall_filter` |
-| 一个 Note 来自哪条消息 | Note 的 frontmatter `source_message` + 文件名里的 id8 | backflow hook | backflow hook（查重） |
-| 会话还在不在 | `sessions` 表 | 会话增删 | 两个会话结束 hook |
-| 一个 DailyActivity 条目属于哪个会话 | 条目头里的 sid8 + `da:summary:<sid>` 标记（已有） | `upsert_session_block` | 切块、读侧时间规则 |
-| chunk 的文档标题、frontmatter | `knowledge_chunks.content` 首行 / `metadata` | `chunk_markdown` | FTS、渲染 |
+| 一个存储的准入问题、路由、身份、去重范围、退出 | `store_contracts` | 人改表 | `ingestion_gate.admit`、复审 job |
+| 一类来源进不进索引、能不能自动注入、走不走时间规则 | `store_contracts`（来源策略部分） | 人改表 | `knowledge_store` 同步、`recall_filter` |
+| 会话属于哪个项目 | `repo_guidance` 的会话状态 + `bindings.yaml` | repo_guidance hook | `admit` 路由、DDD 注入 |
+| 一个条目有没有送达过模型 | `.ddd-usage.json` | recall / DDD 注入（只在正文送达时） | 复审 job |
+| 一个 Note 来自哪条消息 | 文件名里的消息 id + frontmatter `source_message` | backflow | backflow |
 
-没有新增存储，没有新增 endpoint 和 hook。热路径成本：S1–S3 都在后台 hook 和索引同步里；S4 是对已取回的
-十几个命中做一次哈希，在内存里完成。都不碰事件循环，也不碰 chat 路径等待的线程池。
+热路径：`admit` 只在后台 hook、REFLECT 后台任务、skill 调用里运行，不在 chat 发送路径上；判官调用沿用现有的
+预算（60 次 / 300 秒）。读侧改动（§4.4）是对已经取回的十几个命中做内存里的过滤和折叠，DDD 正文注入
+只读已经加载的文档。都不碰事件循环，也不碰 chat 等待的线程池。
 
-## 5. 历史数据
+## 6. 历史数据
 
-- 不改名、不删除、不改写任何已有的 Note、DailyActivity 文件和会话。
-- 已有的重复在读侧折叠（S4）。已有的探针条目留在文件里；它们只和冒烟测试自己的提示词匹配，
-  7 天后还要命中 3 个词才会被注入。
-- 唯一会重写的是派生的 `knowledge_chunks` / `knowledge_fts`（S3），它由文件重新生成，见 §9 待确认。
+- 不改名、不删除、不改写任何已有的 Note、DailyActivity、会话。
+- 已有的重复、frontmatter chunk 在读侧处理（§4.4）。
+- `node_modules` 的 chunk 会在下一次索引同步时从**派生索引**里消失，源文件不动。
+- **MEMORY 里的 51 条项目专属条目和 12 条重复**属于现有内容的整理，不是 bug 修复，所以不自动搬。
+  第一次契约复审只生成提案列表（每条：目标位置、理由），由你看过之后再按归档优先执行；之后的每周复审
+  按 §4.5 自动执行。
 
-## 6. 验收
+## 7. 实施顺序和验收
 
-1. **公平对照**：S3 改的是索引内容，不能拿线上已有的索引和新切法比。做法是用同一份 `Knowledge/` 文件，
-   在 scratch 里分别按旧切法和新切法各建一个只含知识表的 sqlite（`knowledge_store` 本身就能对任意连接建表），
-   不复制 `data.db`。`recall_replay.py` 增加 `--knowledge-db <path>`，让库那一路读这个 scratch 库，
-   过去会话那一路照旧只读 `data.db`。
-2. **样本**：第 101–200 个会话（和读取侧验收同一批，便于对照）。
-3. **机械指标**（新切法相对旧切法）：
-   - 注入里"只有 frontmatter"的 chunk 数降为 0；
-   - 注入里内容完全相同的命中数降为 0（S4）；
-   - 注入里不带文档标题的库命中数降为 0；
-   - 少于 200 字的库命中数明显下降；
-   - 注入总量不上升。
-4. **盲评**：命中发生变化的消息，改前改后各一份，打乱后由无上下文的子 agent 判定。
-   通过条件：噪音比例下降，"需要 recall 且拿到有用命中"不下降。
-5. **单测**（每条做 mutation 检查，撤掉修复测试必须变红）：
-   - `policy_for` 最长前缀优先；`Archives/Signals/` 不自动注入、`Archives/DailyActivity/` 走时间规则；
-   - backflow：同一条消息隔天再跑不产生第二个文件；不同消息即使内容相同也各写一份；
-   - 会话已删除时，DailyActivity 和 backflow 都不写；
-   - `upsert_session_block` 拒绝不以条目头开头或块内含 `## ` 的内容；
-   - `chunk_markdown`：只有 frontmatter 的文件不产生 chunk，frontmatter 进 metadata，每个 chunk 首行是文档标题，
-     短段并进上一段，DailyActivity 只在条目头切；
-   - 读侧折叠：两个内容相同、来源不同的命中只注入一个。
-6. **写入端的线上观察**（部署后，只读）：一周内新增 Note 中同一 `source_message` 出现两次的数量为 0；
-   新增 DailyActivity 条目中来自已删除会话的为 0。
+每一步一个 worktree、一个 ff-merge 的 commit，不 push、不 rebuild。
 
-## 7. 不做
+**阶段 1：读侧和索引（不改语料内容）**
+1. `store_contracts` 的来源策略部分：替换 `_SKIP_*`、`NO_INJECT_PREFIXES`、`_DAILY_RE`、`ARCHIVE_PREFIX`，
+   加依赖目录排除。行为不变（排除规则除外），现有测试全绿即证明。
+2. Library 读侧：frontmatter-only / 过短命中丢掉、渲染时加标题、相同内容先折叠再取名额。
+3. DDD 注入条目正文 + 指针校验 + 只在送达时记使用。
+- 验收：回放第 101–200 个会话，改前改后成对盲评（同今天的做法）。DDD 部分单独盲评注入的正文。
+  通过条件：噪音比例下降，"需要 recall 且拿到有用内容"不下降，注入总量不超过现在。
 
-- **不排除 Pollinate、`Knowledge/Archives/`。** 样本太少（§2），排除整类来源违背"修召回质量，不丢来源"的原则。
-- **不改 DailyActivity 的提炼门槛**（现在超过 8 条消息才做 LLM 提炼）。有提炼的条目确实更有用，
-  但每个短会话多一次 LLM 调用，值不值得要单独量，不放进这次。
-- **不做近似去重。** 只折叠完全相同的内容（S4）。
-- **不改过去会话的消息排序**（工具摘要排前，§2 观察）。
+**阶段 2：写入准入**
+4. `ingestion_gate.admit` + 三个存储的契约问题；fail-closed。
+5. 改走 `admit`：REFLECT、人工批准、自动蒸馏（含项目路由）、即时纠正、DailyActivity → DDD 的项目归属、
+   三个 skill；删除 `s_memory-distill`；编辑接口加锁和形状检查；writeback 先看丢弃日志再定去留。
+6. backflow 身份去重 + 契约判官；checkpoint 随会话结束条目一起替换；已删除会话不写；DailyActivity 块断言。
+- 验收：
+  - 用今天审计里已经分好类的样本当夹具：MEMORY 的 97 条、DDD 抽的 40 条、backflow 抽的 15 篇。
+    `admit` 对"该留"的放行率和对其余类的拦截率分别报出来；对"只关一个项目"的 MEMORY 候选，
+    路由到对应 DDD 的比例要报出来。
+  - 每条规则一个单测并做 mutation 检查（撤掉修复，测试必须变红）。
+  - 上线后一周的只读观察：新写入 MEMORY 的条目里项目专属的占比、REFLECT 被拦下的条数、
+    同一消息产出两份 Note 的次数（应为 0）。
 
-## 8. 实施顺序
+**阶段 3：退出**
+7. 所有删除改为归档优先。
+8. 契约复审并进每周 Memory Health：读完整文件，按契约提案；第一次只出提案（§6）。
+- 验收：复审对今天审计样本的判断和审计结论的一致率；所有退出路径的单测证明"先归档后去掉"。
 
-都在自己的 worktree 里做，每步一个 ff-merge 的 commit，不 push、不 rebuild：
+## 8. 不做
 
-1. S1 `recall_sources` + 把三处常量换成它；行为不变，现有测试全绿即证明。
-2. S4 读侧折叠（只动 `recall_filter`，立刻对已有重复生效）。
-3. S2 backflow 按消息 id 去重；两个会话结束 hook 检查会话是否存在；`upsert_session_block` 断言；
-   追查 `## Session Resume` 块的写入者。
-4. S3 切块规范；`recall_replay.py --knowledge-db`；scratch 里建新旧两份索引，量重建耗时。
-5. 回放 + 盲评（§6），结果写进 §10。
+- **不做候选收件箱**（审计建议自动内容先进一个 candidate 状态再提升）。fail-closed 的判官已经做到"拿不准不写"，
+  再加一层状态和提升流程会多出一套要维护的东西；先看阶段 2 上线后的拦截效果再说。
+- **不做近似去重和语义合并。** 只做同一身份或完全相同内容的去重；近似的交给契约复审逐条判断。
+- **不排除 Pollinate、`Knowledge/Archives/` 整类来源**，只排除其中的依赖目录。
+- **不改 DailyActivity 的 LLM 提炼门槛**，要单独评估成本。
+- **不重切、不重建索引**（r1 的 S3 已撤回，原因见 §0）。
 
 ## 9. 待确认
 
-- S3 部署后第一次索引同步会重写全部派生的 `knowledge_chunks`（由 `Knowledge/` 文件重新生成，文件和会话都不动）。
-  这算不算"动历史数据"？如果不接受，S3 只对之后新增或修改的文件生效，旧 chunk 保持原样。
+1. 第一次契约复审只出提案、你看过再执行；之后每周自动执行（归档优先、每次有上限、有日志）。这样可以吗？
+2. 删除 `s_memory-distill` 这个 skill（它和生产代码矛盾，做的事由蒸馏 hook 完成）。可以吗？
+3. 阶段 1 不改任何语料，可以先做；阶段 2、3 依次做，每个阶段验收通过再进下一个。
 
 ## 10. 验收结果
 
