@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r3 — 步骤 0 已实施（§3.0.1 是实测结果）；步骤 1–4 待 XG 定
+status: r4 — 步骤 0、1 已实施（§3.0.1、§3.1.1）；步骤 2–4 待做
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -183,6 +183,28 @@ Pipeline 的核心是 DDD 驱动的自主交付（two-ends 设计 §0）。但�
   `SWARMWS` / `SWARM_WORKSPACE`。用一个只许缩小的 KNOWN 集合起步，本步结束时为空。
   在子进程里单独运行的 skill 脚本走同一个函数；做不到 import 的，列进 KNOWN 并写明原因。
 
+### 3.1.1 步骤 1 的实施（r4）
+
+- `config.get_swarmws()` 是唯一的解析函数，按 `SWARM_WORKSPACE` → `SWARMWS` → `get_app_data_dir()/SwarmWS`
+  的顺序取，每次调用都重新读，不冻结在模块常量里。三个都没设时仍是 `~/.swarm-ai/SwarmWS`，生产不变。
+  核对过 launchd plist、Hive 的 systemd unit、Tauri subprocess：它们都不设这两个变量。
+- 改了 30 个文件，约 30 处：`project_registry.get_swarmws` 委托给它；`swarm_workspace_manager` 的默认
+  workspace、pipeline CLI、hook_bridge、artifact_cli、security_hooks 扫 run 的根目录（测试仍可钉
+  `_ACTIVE_RUN_GLOB_ROOT`）、session_unit、runtime_hooks、session_router、eval、jobs、routers、Slack 都用它。
+- 和设计不一样的两处：
+  - `signal_digest` 原来还读一个 `SWARMWS_DIR` 变量（只有它和一个 skill 脚本读），已删。
+  - 旧目录清理（`database/sqlite.py`）同时保留当前 workspace 和默认的 `<app data>/SwarmWS`：
+    workspace 被重定位时，绝不删默认的那个。
+- 结构测试 `tests/test_swarmws_resolver.py` 用 AST 检查产品代码（core、jobs、routers、hooks、channels、
+  database、middleware、utils、main.py、artifact_cli）：不许再拼 `"SwarmWS"` 路径、不许把
+  `~/.swarm-ai/SwarmWS` 当路径用、不许读这两个变量。例外列在 `ALLOWED`（4 处，各写原因，不再需要时测试会红）。
+  `KNOWN` 为空。
+- **范围外**：`backend/scripts/` 下手动运行的开发和维护脚本（约 20 个，如 recall_suite、eval_runner）、
+  skill 脚本仍各自写死路径，它们不在产品运行路径上，本步不改。
+- 改完后有两个旧测试变红，都是因为它们依赖真实 workspace：`test_runtime_hooks` 靠改 `Path.home` 移动
+  MEMORY.md；`test_recall_shared_detection` 靠真实 workspace 里有 SwarmAI 项目才通过。两者都改成在
+  sandbox workspace 里自己建。
+
 ### 3.2 项目由绑定确定（步骤 2）
 
 create 对每个 `--repo` 取它的主 checkout，查 `bound_projects`：
@@ -284,3 +306,4 @@ S5 加两个数，按 run 统计：
   bug），以及截断在句子中间、预算会让排名倒挂。新增步骤 0，并按 XG 的要求让系统级召回（聊天注入、
   repo_guidance）和 pipeline 用同一套 R1–R4；§3.3、§3.4 不再自定截断规则。
 - r3（2026-10-26）：步骤 0 实施；记录和设计不同的三处，以及改前改后的实测（§3.0.1），含真实消息回放。
+- r4（2026-10-26）：步骤 1 实施（§3.1.1）。
