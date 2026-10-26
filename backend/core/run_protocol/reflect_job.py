@@ -284,25 +284,34 @@ def _route(lesson: Mapping[str, Any], destination: str, *, workspace: Path,
     return _queue(workspace, project, run_id, lesson, destination)
 
 
-def candidates_for(lessons: Any, project: str) -> dict[str, list[str]]:
-    """Dedup candidates for each lesson from the project's DDD entries (existing
-    keyword recall), computed by the CLI so the agent cannot choose them (RF-4)."""
+def candidates_for(lessons: Any, project: str,
+                   knowledge: "list[Mapping[str, Any]] | None" = None) -> dict[str, list[str]]:
+    """Dedup candidates for each lesson, computed by the CLI so the agent cannot
+    choose them (RF-4): the DDD entries recalled into this run's knowledge.md at create
+    (*knowledge*, from the contract; run-knowledge §3.5) and the project's entries the
+    lesson's own words recall. A candidate is ``doc#section: <the entry's first line,
+    without its bullet>``, the form ``annotate_entry`` finds the entry by."""
+    from core.run_protocol.run_knowledge import entry_head
+    known = [f"{row.get('source')}: {str(row.get('head'))[:120]}" for row in knowledge or []
+             if isinstance(row, Mapping) and row.get("source") and row.get("head")]
     out: dict[str, list[str]] = {}
     try:
         from core.recall_multi import recall_ddd_entries
-    except Exception:  # noqa: BLE001 — no recall: no candidate, RF-4 still checks shape
+    except Exception:  # noqa: BLE001 — no recall: only knowledge.md's, RF-4 still checks shape
         logger.debug("recall unavailable for reflect candidates", exc_info=True)
-        return out
+        recall_ddd_entries = None
     for row in lessons if isinstance(lessons, list) else []:
         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
             continue
         try:
-            hits = recall_ddd_entries(str(row.get("statement") or ""), project, top_n=3)
+            hits = (recall_ddd_entries(str(row.get("statement") or ""), project, top_n=3)
+                    if recall_ddd_entries else [])
         except Exception:  # noqa: BLE001
             logger.debug("reflect candidate recall failed lesson=%s", row.get("id"), exc_info=True)
             hits = []
-        out[row["id"]] = [f"{h.get('doc')}#{h.get('section')}: {str(h.get('content'))[:120]}"
-                          for h in hits if isinstance(h, Mapping)]
+        recalled = [f"{h.get('doc')}#{h.get('section')}: {entry_head(h.get('content') or '')[:120]}"
+                    for h in hits if isinstance(h, Mapping)]
+        out[row["id"]] = list(dict.fromkeys(recalled + known))
     return out
 
 

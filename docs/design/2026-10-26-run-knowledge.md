@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r7 — 步骤 0–4 已实施（§3.0.1、§3.1.1、§3.2.1、§3.3.1、§3.4.1）；§3.5 待做
+status: r8 — 全部实施（§3.0.1–§3.5.1）；§5 的度量待 S5
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -339,6 +339,26 @@ create 事件记下的列表里，否则 `stage-complete` 拒绝（和测试引�
 - REFLECT 的去重候选改为读 `knowledge.md` 里的 DDD 条目加原有的按经验召回，合并去重。
   `reinforces` / `refines` 自然就能指向这次真正用过的条目。
 
+### 3.5.1 §3.5 的实施（r8）
+
+- **REPORT 一行**：`Knowledge: <状态> · N entries · cited M`，放在审计表下面。N 是 knowledge.md 的条目数；
+  M 是被引用的不同条目数，来源有两处：REQUIREMENTS / DESIGN_SPEC 的 `knowledge_refs`（只算 contract
+  里有的 id），以及 finding 的 `knowledge_ref`（hook 写入时已核对过属于那次 handout）。完整的 id 列表在
+  `run_audit.json` 的 `details.knowledge`。REPORT 不含任何召回正文。步骤 3 之前建的 run 没有这一行。
+- **REFLECT 候选**：`candidates_for` 合并两路，去重：
+  1. create 时召回进 knowledge.md 的 DDD 条目。从 **contract** 读（新增 `knowledge.ddd: [{id, source, head}]`），
+     不读 agent 能改的 knowledge.md，所以仍然满足 RF-4"候选由 CLI 算、agent 选不了"；
+  2. 原有的、按经验原文的关键词召回。
+- **顺带修了一个已有的 bug**：原来的候选写成 `doc#section: - **标题**…`，带着条目开头的 `- `；
+  `annotate_entry` 按"去掉 `- ` 之后的文本"去找条目，所以永远找不到，`reinforces` / `refines` 全部变成
+  `entry_missing`。run_bb7b1850 的两条 refines 就是这样丢的。现在候选统一用 `entry_head`
+  （条目第一行、不带 bullet），和 `annotate_entry` 的找法一致。旧的测试都是手写的候选字符串，没有经过
+  `candidates_for`，所以没发现。
+- 测试 `tests/test_pipeline_v1_knowledge_report.py`（6 个），其中一个端到端：真实 CLI 建 run → REQUIREMENTS
+  引用条目 → REFLECT 用一条和条目没有共同词的经验去 reinforce（只有 knowledge 候选能提供它）→ 落地 →
+  REPORT 里有 `cited 1` 且没有召回正文 → DDD 条目下多了一行 reinforced 注记。四处变异（候选带回 bullet、
+  不传 knowledge 候选、不渲染这一行、不统计 knowledge_refs）各自让测试变红。
+
 ## 4. 不做的
 
 - 不在 THINK、PLAN、BUILD 再召回。agent 在 SwarmAI 里本来就有按需检索的工具，native 优先。
@@ -385,3 +405,4 @@ S5 加两个数，按 run 统计：
 - r5（2026-10-26）：步骤 2 实施（§3.2.1）。
 - r6（2026-10-26）：步骤 3 实施（§3.3.1）。
 - r7（2026-10-26）：步骤 4 实施（§3.4.1）。
+- r8（2026-10-26）：§3.5 实施（§3.5.1），并修了 REFLECT 候选带 bullet 导致 reinforces / refines 永远落空的 bug。

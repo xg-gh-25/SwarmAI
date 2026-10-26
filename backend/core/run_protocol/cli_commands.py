@@ -224,7 +224,7 @@ def execute(args) -> dict[str, Any]:
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement, has_ddd=binding.has_ddd,
             bound_repos=binding.bound_repos,
-            knowledge={"status": knowledge.status, "items": [i["id"] for i in knowledge.items]})
+            knowledge=run_knowledge.contract_record(knowledge))
         knowledge_file = engine.write_knowledge(knowledge.markdown)
         result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
                   "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json"),

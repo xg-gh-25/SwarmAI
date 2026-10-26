@@ -23,7 +23,8 @@ Public:
 - ``build(query_text, *, project, has_ddd, workspace, repo_roots, ...)`` -> Knowledge
 - ``expert_block(*, project, has_ddd, paths, requirement, ...)`` -> (text, ids, status)
 - ``path_terms(paths)``: search words from changed file paths
-- ``Knowledge`` (status, items, markdown); ``item_id(text)``
+- ``Knowledge`` (status, items, markdown); ``item_id(text)``; ``entry_head(text)``
+- ``contract_record(k)``: what the contract keeps (status, ids, the DDD entries' heads)
 - ``STATUSES``: recalled / none / unavailable
 """
 from __future__ import annotations
@@ -54,6 +55,13 @@ class Knowledge:
     markdown: str = ""
 
 
+def entry_head(text: str) -> str:
+    """An entry's first line without its bullet: how ``reflect_job.annotate_entry``
+    finds the entry again in its DDD doc."""
+    first = str(text).strip().splitlines()[0] if str(text).strip() else ""
+    return first[2:].strip() if first.startswith("- ") else first.strip()
+
+
 def item_id(text: str) -> str:
     """8 hex characters naming one recalled entry (its whole text, whitespace folded)."""
     return hashlib.sha256(" ".join(str(text).split()).encode("utf-8")).hexdigest()[:8]
@@ -68,7 +76,8 @@ def _ddd_rows(query: str, project: str, top: int, cap: int) -> list[dict]:
     # _budget_one keeps rank order and never skips (R3): clipped[i] is hits[i], cut
     clipped = recall_filter._budget_one("ddd", hits, {"ddd": cap})
     return [{"kind": "ddd", "source": f"{whole['doc']}#{whole['section']}",
-             "id": item_id(whole["content"]), "text": cut["content"]}
+             "id": item_id(whole["content"]), "text": cut["content"],
+             "head": entry_head(whole["content"])[:120]}
             for whole, cut in zip(hits, clipped) if cut.get("content")]
 
 
@@ -149,10 +158,19 @@ def build(query_text: str | None, *, project: str, has_ddd: bool, workspace: str
         if row["id"] not in seen:
             seen.add(row["id"]); unique.append(row)
     status = "unavailable" if errors else ("recalled" if unique else "none")
-    k = Knowledge(status, [{k: r[k] for k in ("id", "kind", "source")} for r in unique],
-                  errors, reason)
+    k = Knowledge(status, [{k: r[k] for k in ("id", "kind", "source", "head") if k in r}
+                           for r in unique], errors, reason)
     k.markdown = _render(k, unique, project=project, has_ddd=has_ddd, query=query)
     return k
+
+
+def contract_record(k: Knowledge) -> dict:
+    """The contract's copy (the agent cannot edit it): status, every entry id, and
+    for DDD entries where they are (``source``) and their first line (``head``), the
+    REFLECT dedup candidates (§3.5)."""
+    return {"status": k.status, "items": [i["id"] for i in k.items],
+            "ddd": [{"id": i["id"], "source": i["source"], "head": i["head"]}
+                    for i in k.items if i["kind"] == "ddd" and i.get("head")]}
 
 
 _TITLES = {"ddd": "Project DDD", "library": "Knowledge Library", "lesson": "Pipeline lessons for this repository"}

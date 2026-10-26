@@ -224,12 +224,15 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
           title: str | None = None,
           design: Mapping[str, Any] | None = None,
           test_reports: Mapping[str, Mapping[str, Any]] | None = None,
-          lessons: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
+          lessons: Sequence[Mapping[str, Any]] = (),
+          knowledge: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """*test_reports*: repo -> the latest TEST validation report (its commands are
     listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
     the run because their project has no DDD are listed in the REPORT); *open_checks*:
     check id -> detail of each audit-effect check that does not pass (one line in the
-    Quality cell; no push verdict, XG 2026-10-26)."""
+    Quality cell; no push verdict, XG 2026-10-26); *knowledge*: ``{status, entries,
+    cited}`` of the run's knowledge.md (run-knowledge §3.5), None for a run created
+    before it -- REPORT gets one line, never the recalled text."""
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -411,7 +414,11 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                                     "path": str((row.get("outcome") or {}).get("result") or "")
                                     .removeprefix("library:")}
                                    for row in lessons if isinstance(row, Mapping)
-                                   and (row.get("outcome") or {}).get("status") == "library"]}
+                                   and (row.get("outcome") or {}).get("status") == "library"],
+               "knowledge": ({"status": str(knowledge.get("status") or "none"),
+                              "entries": int(knowledge.get("entries") or 0),
+                              "cited": sorted({str(i) for i in knowledge.get("cited") or ()})}
+                             if isinstance(knowledge, Mapping) else None)}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
              "summary": {"isolation": isolation, "speed": speed, "quality": quality,
@@ -573,6 +580,10 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
     lines = [f"# {run_title} · {cutoff}", "", _conclusion(audit), "",
              "## Run Audit", "", "| Dimension | Result | This run |", "|---|---|---|"]
     lines += [f"| {name} | {row['verdict']} | {detail} |" for name, row, detail in rows]
+    known = details.get("knowledge")
+    if isinstance(known, Mapping):
+        lines += ["", f"Knowledge: {_text(known.get('status'), 20)} · "
+                  f"{int(known.get('entries') or 0)} entries · cited {len(known.get('cited') or ())}"]
     lines += ["", "Full machine-readable audit is stored with this run."]
     if details.get("validation"):
         lines += [""] + [str(line) for line in details["validation"]]

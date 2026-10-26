@@ -457,7 +457,9 @@ class RunEngine:
                         "decision_cap": decision_cap,
                         "has_ddd": bool(has_ddd), "bound_repos": sorted(bound_repos),
                         "knowledge": {"status": str((knowledge or {}).get("status") or "none"),
-                                      "items": [str(i) for i in (knowledge or {}).get("items") or []]},
+                                      "items": [str(i) for i in (knowledge or {}).get("items") or []],
+                                      "ddd": [dict(row) for row in (knowledge or {}).get("ddd") or []
+                                              if isinstance(row, Mapping)]},
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
@@ -2360,6 +2362,26 @@ class RunEngine:
         rows = value.get("lessons") if isinstance(value, Mapping) else None
         return [row for row in rows or [] if isinstance(row, Mapping)]
 
+    def _knowledge_summary(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+        """REPORT's knowledge line (run-knowledge §3.5): knowledge.md's status and size from
+        the contract, and the entries cited -- knowledge_refs of REQUIREMENTS /
+        DESIGN_SPEC and findings' knowledge_ref -- counted only when the contract lists
+        them. None for a run created before knowledge.md."""
+        record = self.contract.get("knowledge")
+        if not isinstance(record, Mapping):
+            return None
+        known = set(record.get("items") or ())
+        cited: set[str] = set()
+        for name in ("requirements.json", "design_spec.json"):
+            value = self._read_json(self.run_dir / "artifacts" / name, {})
+            if isinstance(value, Mapping) and isinstance(value.get("knowledge_refs"), list):
+                cited |= {str(r) for r in value["knowledge_refs"]} & known
+        # a finding's ref names an entry of its handout's block (checked when the hook
+        # wrote it), not necessarily of knowledge.md
+        cited |= {str(e["payload"]["knowledge_ref"]) for e in rows
+                  if e.get("kind") == "finding_occ" and e.get("payload", {}).get("knowledge_ref")}
+        return {"status": record.get("status"), "entries": len(known), "cited": sorted(cited)}
+
     def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
                     persist: bool = True,
                     event_rows: Sequence[Mapping[str, Any]] | None = None,
@@ -2373,6 +2395,7 @@ class RunEngine:
             run_id=self.run_id, projection=lifecycle.fold(rows, self.authority),
             events=rows, findings=projected_findings,
             test_reports=self._test_reports(rows), lessons=self._reflected_lessons(),
+            knowledge=self._knowledge_summary(rows),
             contract={**self.contract, "requirement": self._delivered_summary()},
             open_checks=dict(open_checks if open_checks is not None
                              else self.open_checks()["open"]), audit_through=through,
@@ -2411,7 +2434,9 @@ class RunEngine:
         from core.run_protocol import reflect_job
         event_ids = {event["event_id"] for event in self.store.read_events()}
         if candidates is None:      # the CLI's own recall (RF-4): the agent cannot pick them
-            candidates = reflect_job.candidates_for(list(lessons), self.project)
+            candidates = reflect_job.candidates_for(
+                list(lessons), self.project,
+                knowledge=(self.contract.get("knowledge") or {}).get("ddd"))
         document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates,
                                    repos=set(self.contract.get("expected_repos") or ()))
         path = self.run_dir / "artifacts" / "reflect.json"
