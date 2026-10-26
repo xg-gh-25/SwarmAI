@@ -127,10 +127,10 @@ class TestSeededCaseReplayable:
         assert case["tier"] == "draft"
 
         spawned = {"called": False}
-        def _fake_run(prompt, allowed_tools=None, timeout=120):
+        def _fake_run(prompt, allowed_tools=None, timeout=120, system="bare"):
             spawned["called"] = True
-            return [], "I would just do it."
-        monkeypatch.setattr("scripts.scenario_runner.run_scenario_full", _fake_run)
+            return [], "I would just do it.", ""
+        monkeypatch.setattr("scripts.scenario_runner.run_scenario_raw", _fake_run)
 
         result = eval_runner.eval_trajectory_capture(case)
 
@@ -148,10 +148,10 @@ class TestSeededCaseReplayable:
         case["tier"] = "active"  # human refined + promoted
 
         spawned = {"called": False}
-        def _fake_run(prompt, allowed_tools=None, timeout=120):
+        def _fake_run(prompt, allowed_tools=None, timeout=120, system="bare"):
             spawned["called"] = True
-            return ["Read STEERING.md"], "I will not repeat it."
-        monkeypatch.setattr("scripts.scenario_runner.run_scenario_full", _fake_run)
+            return ["Read STEERING.md"], "I will not repeat it.", ""
+        monkeypatch.setattr("scripts.scenario_runner.run_scenario_raw", _fake_run)
         # decision judge would fire after trajectory pass; stub it to avoid Bedrock.
         monkeypatch.setattr(eval_runner, "_judge_decision_direction",
                             lambda case, txt: {"status": "passed", "notes": "ok"})

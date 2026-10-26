@@ -162,6 +162,77 @@ def parse_final_text(stdout: str) -> str:
     return "\n".join(block_texts)
 
 
+def parse_pre_tool_text(stdout: str) -> list[int]:
+    """Length of the assistant text emitted before each tool_use, in order.
+
+    Text is counted from the previous tool_use (or the start) up to the next
+    tool_use, across stream events. Used by the ``no_pre_tool_text`` check
+    (AGENT R20: a response that makes a tool call carries no text before it,
+    except the one restatement sentence that opens a task).
+    """
+    lengths: list[int] = []
+    pending = 0
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        if not isinstance(message, dict) or message.get("role") not in (None, "assistant"):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                pending += len(block["text"].strip())
+            elif block.get("type") == "tool_use":
+                lengths.append(pending)
+                pending = 0
+    return lengths
+
+
+_SWARMAI_PROMPT_CACHE: str | None = None
+
+
+def _swarmai_system_prompt() -> str:
+    """SwarmAI's own base system prompt (the 11 governed files + framing).
+
+    The same string a desktop session starts from
+    (``PromptBuilder.build_default_system_prompt``: no per-turn briefing, recall
+    or UI state, so a scenario is not moved by today's DailyActivity). Built once
+    per process, on a private event loop in a worker thread, so it works whether
+    or not the caller is already inside a running loop.
+    """
+    global _SWARMAI_PROMPT_CACHE
+    if _SWARMAI_PROMPT_CACHE is not None:
+        return _SWARMAI_PROMPT_CACHE
+    import asyncio
+    import concurrent.futures
+
+    from core.app_config_manager import AppConfigManager
+    from core.prompt_builder import PromptBuilder
+
+    cfg = AppConfigManager.instance()
+    cfg.load()
+
+    def _build() -> str:
+        return asyncio.run(PromptBuilder(config=cfg).build_default_system_prompt(
+            agent_config={}, working_directory=str(SWARMWS)))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        text = pool.submit(_build).result()
+    if not text or not text.strip():
+        raise ScenarioInfraError("SwarmAI system prompt assembled empty")
+    _SWARMAI_PROMPT_CACHE = text
+    return text
+
+
 def run_scenario_full(
     prompt: str,
     allowed_tools: list[str] | None = None,
@@ -179,6 +250,25 @@ def run_scenario_full(
         (CLI missing, timeout, spawn crash, unsafe prompt, or non-zero exit with
         zero tool calls) so the caller scores `error`, never a misleading `failed`.
     """
+    trajectory, final_text, _stdout = run_scenario_raw(prompt, allowed_tools, timeout)
+    return trajectory, final_text
+
+
+def run_scenario_raw(
+    prompt: str,
+    allowed_tools: list[str] | None = None,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    system: str = "bare",
+) -> tuple[list[str], str, str]:
+    """``run_scenario_full`` plus the raw stream-json stdout, with a choice of agent.
+
+    ``system="bare"`` (default): a plain Sonnet CLI that reaches the governed
+    files only by reading them — tests whether the DOCUMENTS drive a decision.
+    ``system="swarmai"``: SwarmAI's own base system prompt (``--system-prompt-file``)
+    and the configured default model — tests what the PRODUCT agent does.
+    """
+    if system not in ("bare", "swarmai"):
+        raise ScenarioInfraError(f"unknown scenario system {system!r}")
     # Defense-in-depth: this filter is a SHELL-command blocklist (curl/rm -rf/…).
     # Against a natural-language prompt it catches only accidentally-embedded
     # shell strings — it is NOT the real safety boundary. The real protection is
@@ -200,6 +290,23 @@ def run_scenario_full(
         raise ScenarioInfraError("claude CLI not found")
 
     tools = allowed_tools or ["Read"]
+    model_args = ["--model", "sonnet"]
+    prompt_file = None
+    if system == "swarmai":
+        import tempfile
+
+        from jobs.model_resolve import resolve_job_model
+        try:
+            text = _swarmai_system_prompt()
+        except ScenarioInfraError:
+            raise
+        except Exception as e:  # assembly failure = infra, not behavior
+            raise ScenarioInfraError(f"SwarmAI system prompt: {type(e).__name__}: {e}") from e
+        prompt_file = tempfile.NamedTemporaryFile(
+            "w", suffix=".md", prefix="scenario-system-", delete=False, encoding="utf-8")
+        prompt_file.write(text)
+        prompt_file.close()
+        model_args = ["--model", resolve_job_model(), "--system-prompt-file", prompt_file.name]
     cmd = [
         claude_path,
         "--print",
@@ -207,9 +314,13 @@ def run_scenario_full(
         "--output-format", "stream-json",
         "--verbose",  # required for stream-json to emit per-tool events
         "--no-session-persistence",
-        "--model", "sonnet",
+        *model_args,
         "--permission-mode", "bypassPermissions",
         "--strict-mcp-config",  # ignore user Claude settings; tools below only
+        # --tools is the AVAILABLE set; --allowedTools only auto-approves. With
+        # bypassPermissions, --allowedTools alone left Bash/Write/Edit usable
+        # (observed: a Read/Grep case ran Bash). Both are needed for a read-only run.
+        "--tools", ",".join(tools),
         "--allowedTools", ",".join(tools),
         # CRITICAL (Gate 1): grant read access to the workspace, else every
         # Read of SELF.md / DDD docs is denied -> all behavior cases fail.
@@ -233,6 +344,13 @@ def run_scenario_full(
     except Exception as e:  # spawn failure = infra, not behavior
         logger.error("scenario_runner: spawn failed: %s: %s", type(e).__name__, e)
         raise ScenarioInfraError(f"spawn failed: {type(e).__name__}: {e}") from e
+    finally:
+        if prompt_file is not None:
+            import os
+            try:
+                os.unlink(prompt_file.name)
+            except OSError:
+                pass
 
     trajectory = parse_trajectory(proc.stdout or "")
     final_text = parse_final_text(proc.stdout or "")
@@ -251,7 +369,7 @@ def run_scenario_full(
                 f"{(proc.stderr or '')[:150]}"
             )
 
-    return trajectory, final_text
+    return trajectory, final_text, proc.stdout or ""
 
 
 def run_scenario(

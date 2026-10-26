@@ -1470,18 +1470,22 @@ def eval_trajectory_capture(case: dict) -> dict:
     timeout = case.get("scenario_timeout", 240)
 
     try:
-        from scripts.scenario_runner import run_scenario_full, ScenarioInfraError
+        from scripts.scenario_runner import run_scenario_raw, parse_pre_tool_text, ScenarioInfraError
     except ImportError:
         try:
-            from scenario_runner import run_scenario_full, ScenarioInfraError  # type: ignore
+            from scenario_runner import run_scenario_raw, parse_pre_tool_text, ScenarioInfraError  # type: ignore
         except ImportError:
             return {"status": "error", "notes": "scenario_runner unavailable"}
 
     # Infra failure (CLI missing / timeout / spawn crash / unsafe prompt / exit
     # with no tool calls) = `error`, NOT a behavior `failed`. Otherwise transient
     # Bedrock throttling would lie the health score red (eval_llm_judge lesson).
+    # scenario.system: "bare" (default) = a plain CLI that reads our files;
+    # "swarmai" = SwarmAI's own system prompt + configured model (the product agent).
+    system = (case.get("scenario") or {}).get("system", "bare")
     try:
-        actual, final_text = run_scenario_full(prompt, allowed_tools=allowed_tools, timeout=timeout)
+        actual, final_text, stdout = run_scenario_raw(
+            prompt, allowed_tools=allowed_tools, timeout=timeout, system=system)
     except ScenarioInfraError as e:
         return {"status": "error", "notes": f"scenario infra failure: {e}",
                 "observed_trajectory": []}
@@ -1528,7 +1532,58 @@ def eval_trajectory_capture(case: dict) -> dict:
             ).strip()
         # dj skipped (empty answer / no rubric handled above) → leave trajectory verdict
         result["final_text_excerpt"] = (final_text or "")[:300]
+    # Deterministic checks on the real run (no judge): a failure here overrides a pass.
+    if result.get("status") == "passed" and case.get("checks"):
+        failed = _behavior_check_failures(case["checks"], final_text or "", parse_pre_tool_text(stdout))
+        if failed:
+            result["status"] = "failed"
+            result["notes"] = f"check failed: {'; '.join(failed)}. {result.get('notes', '')}".strip()
     return result
+
+
+_CJK = _re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_LATIN_WORD = _re.compile(r"[A-Za-z]+")
+_CODE = _re.compile(r"```.*?```|`[^`]*`", _re.S)
+# AGENT R20 lets the task-opening restatement (one sentence) precede the first
+# tool call; any text before a later call is a violation.
+_OPENING_RESTATEMENT_MAX = 300
+
+
+def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[int]) -> list[str]:
+    """Deterministic checks a behavior case can declare in ``checks``.
+
+    - ``reply_cjk``: the answer is written in Chinese (AGENT R19 — a CJK
+      question gets a CJK answer; English technical terms are allowed).
+    - ``no_pre_tool_text``: no text before any tool call except the opening
+      restatement before the first (AGENT R20). Requires at least one tool call.
+    - ``no_next_steps_block``: the answer carries no ```next-steps block
+      (STEERING #7 / R18: none when there is no real next step).
+    Unknown names fail closed, so a typo cannot silently pass.
+    """
+    out: list[str] = []
+    for name in checks:
+        if name == "reply_cjk":
+            # Compare CJK characters with English WORDS outside code spans: a
+            # Chinese answer keeps English technical terms (R19), a CJK character
+            # is roughly a word.
+            prose = _CODE.sub(" ", final_text)
+            cjk, latin = len(_CJK.findall(prose)), len(_LATIN_WORD.findall(prose))
+            if cjk == 0 or cjk < latin:
+                out.append(f"reply_cjk (cjk={cjk}, latin={latin})")
+        elif name == "no_pre_tool_text":
+            if not pre_tool_text:
+                out.append("no_pre_tool_text (no tool call)")
+            else:
+                first, rest = pre_tool_text[0], pre_tool_text[1:]
+                bad = [n for n in rest if n > 0]
+                if first > _OPENING_RESTATEMENT_MAX or bad:
+                    out.append(f"no_pre_tool_text (before calls: {pre_tool_text})")
+        elif name == "no_next_steps_block":
+            if "```next-steps" in final_text:
+                out.append("no_next_steps_block")
+        else:
+            out.append(f"unknown check {name!r}")
+    return out
 
 
 # Judge-model resolution logging. A dedicated logger (this script has no
