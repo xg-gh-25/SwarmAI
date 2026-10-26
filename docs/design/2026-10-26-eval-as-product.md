@@ -145,7 +145,7 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 ### 3.2 case 精炼、能看懂、不超过 80（要求 2）
 
 - **新字段 `purpose`**：一句话，写给用户看：这条检查什么，坏了对你意味着什么。中英各一句：
-  `purpose: {en: "...", zh: "..."}`，每句不超过 120 字符，不出现 run id、COE 编号、模块名。
+  `purpose: {en: "...", zh: "..."}`，每句不超过 200 字符（实现时放宽：一句话要同时说清守住什么和坏了的后果），不出现 run id、COE 编号、模块名。
   例：GS_SAFE001 →「群聊里的 agent 拿不到你的私人记忆和个人资料。坏了意味着私人信息可能出现在群里。」
 - **stamp**：`purpose` 纳入 `compute_case_stamp`。迁入产品集的 case 加 purpose 后全部重新 stamp，否则会掉出 BVT。
 - **校验**：`golden_case_validator` 增加一道检查：产品集的每条 case 必须有 `purpose`；新加的私有 case 也必须有。已有的
@@ -380,6 +380,25 @@ SAFE_IRREVERSIBLE。GS_LANG_FOLLOWS_USER、GS_SILENT_TOOL_CALLS、GS_NEXT_STEPS_
   两种都要）、产品集 ≤50、总数 ≤80（`add_case` 拒绝）、界面"新增 case"加了 purpose 字段。包装 pytest 的 12 条 case 对应的测试文件
   都不在 `bvt_manifest.txt` 里，没有证据说明能在裸 checkout 通过，所以按 §3.1 的规则留在 XG 私有集（命令已是绝对路径），不退役。
   自动从纠错生成 case 的 `auto_seed_case` 链路已没有生产调用方，和 harvest 一起在第 4 步删除。
+- 实现记录（第 3–6 步）：
+  - 第 3 步：`timeout` 状态及全部读者（含每日 canary：它原来只认 `failed`，超时延后和计数都会失效）；`build_follow_ups`
+    （`core/eval_followups.py`），HTML 报告第一节和 `/api/eval/health` 共用，替换旧的 Next Action 尾注。快速检查的失败用
+    `compute_bvt` 同一套成员判断（`bvt_member`），每日 canary 状态也算快速检查。按 --cases / --tags / 只跑 programmatic
+    的运行记为 `filtered`，不算全量；可比较全量的最小条数从 50 改为 20（全新安装只有产品集）。定时全量现在也写 HTML 报告，
+    Reports 默认只列定时和部署的报告。security 审查后：线上状态只按白名单字段、限长读出，HTML 报告不放任何会话标题，
+    `.session-quality-state.json` 进 workspace 的 gitignore。
+  - 第 4 步：线上评分按 §3.5 重写；纠正只认 `user_correction`（corrections.jsonl 里还有工具失败，原来都被算成纠正）；
+    O1 读本轮最终回答，中文提问里贴英文日志仍算中文提问；judge 全部失败时记 `judge_error`，不显示成"无数据"；"上周"
+    只在相邻 ISO 周时比较。删除 harvest、knockout 门、correction→case 种子及其清理（含测试）。会话"可点开"未做：前端
+    没有按 session id 打开标签页的入口，现在显示标题和 id。
+  - 第 5 步：`/api/eval/health` 的 `lines`（`EvalService.get_lines`，下次全量 = 14 天门槛放行的第一次 cron 触发，
+    `jobs.cron_utils.next_fire`）；Overview 三条线代替 KPI 卡、维度卡和 Intelligence Velocity；Golden Set 按线分组、
+    显示 purpose；Guide 只写机制，测试断言没有数字和星期；删除四张 SVG。
+  - 第 6 步：`s_golden-case`（两套 case、PROPOSE 产品 case 的方法）、`s_self-evolution`、SELF 的 OS Eval 段、
+    SwarmAI TECH.md 的 eval model。
+  - 已知未做：私有集有 56 条活跃 case，加产品集 43 条超过总上限 80，新增私有 case 会被拒绝，Suggested follow-up
+    会提示；退役哪些由 XG 决定（已软退役 11 条和产品 case 重复的）。O1/O2 的私有行为 case（GS_LANG_FOLLOWS_USER、
+    GS_SILENT_TOOL_CALLS）在线上评分上线后可退役。
 - 实现记录（第 1b 步）：probe 放在 `scripts/probe_<能力>.py`（不是 `scripts/eval_probes/`：`py -m scripts.<x>` 的形式和已有
   probe 一致），共用 `scripts/_probe_kit.py` 的契约，反例输出 `<NAME>_TEETH`。产品集现为 43 条：BVT 35（全新安装下全部通过、
   反例全部执行）、离线 8；线上 5 条属于第 4 步。离线考题在随包发布的 `templates/eval/fixtures/workspace/` 的临时副本里跑

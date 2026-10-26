@@ -1,17 +1,15 @@
 ---
 name: golden-case
-description: "Add, validate and promote SwarmAI eval golden cases through a 4-gate check (schema, duplicate, non-vacuous, privacy). TRIGGER: \"add golden case\", \"new eval case\", \"promote case to public\". NOT FOR: running eval."
+description: "Add, validate, retire or propose eval golden cases: your own cases in the workspace, or a product case shipped with SwarmAI. TRIGGER: \"add golden case\", \"new eval case\", \"retire a case\", \"add a product eval probe\". NOT FOR: running eval."
 tier: lazy
 platform: desktop
-project_scope: SwarmAI
 ---
 
 # Golden Case
 
-The standard intake for SwarmAI eval golden cases. Read INSTRUCTIONS.md before proceeding.
+The standard intake for eval golden cases. Read INSTRUCTIONS.md before proceeding.
 
-ABORT if active project != SwarmAI: "s_golden-case manages the SwarmAI eval golden set only."
-
-Cases are split public (tracked, shippable) / private (gitignored, instance-specific).
-Every case passes a 4-gate validator before entering the corpus. Direct edits to
-golden_set.yaml are discouraged — they bypass the gates that keep the set trustworthy.
+There are two sets. The product set ships with SwarmAI, is the same on every install
+and is read-only at runtime: changing it is a code change. Your own cases live in
+your workspace. Every case says in plain words what it protects (`purpose`), and a
+quick-check case must prove it can fail. Nothing creates cases automatically.

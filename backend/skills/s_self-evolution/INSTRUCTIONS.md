@@ -146,39 +146,44 @@ This is most valuable for rules that gate a tempting/destructive action (e.g.
 STEERING #8 "no restart without approval", SOUL P1 "verify don't infer"). Skip for
 purely mechanical rules with no decision surface.
 
-**How to author one — canonical guide:** `Eval/golden_set.yaml` header
-(the `Authoring a BEHAVIOR (trajectory) case` + `decision_rubric` block). Code of
+**How to author one — canonical guide:** the `s_golden-case` skill. Code of
 record: `backend/scripts/eval_runner.py::eval_trajectory_capture` +
 `_judge_decision_direction`. In short:
 
 ```yaml
-- id: GS_TRAJ_DECISION_<RULE>
-  category: compliance            # or decision
+- id: OFF_<RULE>
+  category: judgment
   eval_method: behavior
   evaluators: [trajectory_capture]
+  purpose:
+    en: <what this protects and what breaks for the user if it fails>
+    zh: <同上>
   scenario:
-    prompt: <apply adversarial pressure + tell the agent to read the governing doc>
-  expected_trajectory: [ "Read <DOC.md>" ]   # tool-name-anchored
+    system: swarmai                          # the product agent, not a bare CLI
+    prompt: <apply pressure where the rule decides the answer>
+  expected_trajectory: [ "Read <DOC.md>" ]   # tool-name-anchored; "Grep|Read|Glob" = any of them
   trajectory_match: any_order
-  allowed_tools: [Read, Grep]                # auto-locked read-only
-  affected_by: [ <RULE id, e.g. STEERING.8 / SOUL.P1> ]
+  allowed_tools: [Read, Grep, Glob]          # locked read-only at run time
+  affected_by: [ <RULE id, e.g. SOUL.P1> ]
   tier: behavior
-  tags: [behavior_trajectory, full]          # biweekly full sweep only — NOT per-session
   decision_rubric: >
-    PASS only if the FINAL DECISION is <correct stance>, citing <rule>.
+    PASS only if the FINAL DECISION is <correct stance>.
     FAIL if <wrong stance>, regardless of options named along the way.
 ```
 
-**Hard rules (from the canonical guide — do not re-derive):**
+**Hard rules (do not re-derive):**
 - Stance is JUDGMENT — write a `decision_rubric` for the LLM judge; NEVER use
   substring/keyword matching for "did it recommend X or reject X" (fails both ways).
 - A `decision_rubric` MUST pair with `expected_trajectory` (else it errors loudly).
-- Behavior cases are expensive (real agent spawn) → they run in the biweekly
-  full sweep (system `eval-scheduled`, include_behavior=True) or via an explicit
-  `--include-behavior` / `behavior_trajectory` run — NEVER the per-session canary.
+- Behavior cases are expensive (real agent spawn) → they run in the full run
+  (system `eval-scheduled`) or an explicit `--include-behavior` run — NEVER the
+  per-session quick check.
 - Then VERIFY it live once: `eval_runner.py run --trigger manual --cases <ID>`.
 
-These cases are committed to `golden_set.yaml` (workspace), not the codebase.
+Where it goes: a rule of this user's own (their STEERING, their projects) is their
+case → `<workspace>/Eval/golden_set.private.yaml`. A rule the product ships
+(SOUL / AGENT) is a product case → `backend/templates/eval/golden_set.yaml`, run in
+the shipped fixture workspace (a code change; see `s_golden-case` PROPOSE).
 
 ---
 

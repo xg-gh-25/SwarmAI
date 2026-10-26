@@ -85,9 +85,16 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   changes, run when the user chooses it (native is the default, AGENT R1): requirement →
   documented, expert-reviewed (Gate-0 + Gate-2), isolated, landed code. Profile picked at
   EVALUATE, immutable after.
-- **OS Eval** (`eval_runner` + `golden_set` + `ci_eval_gate`) — decoupled, system-level
-  self-eval scoring the DEPLOYED system; git-bound (a code change marks it stale until it
-  re-runs). Triggered by CI / deploy / scheduled ONLY — **never inside a coding pipeline.**
+- **OS Eval** (`eval_runner` + `golden_set_store` + `eval_followups` + `ci_eval_gate`) —
+  system-level self-eval in three lines: the **quick check** (deterministic probes, run on a
+  temporary workspace, at the first session of each day and on demand), **offline tests** (a
+  real agent on a shipped fixture workspace, in the full run every two weeks) and **online
+  scoring** (the owner's sessions from the past week, weekly, no expected answer). The product
+  golden set ships with the backend and is read-only; the user's own cases live in the
+  workspace; nothing creates cases automatically. What needs attention is one list
+  (`eval_followups`) at the top of the dashboard and of every report. Git-bound (a code change
+  marks it stale until it re-runs). Triggered by CI / deploy / schedule / the user's own
+  dashboard button ONLY — **never inside a coding pipeline.**
 - **Between-session cognition** — hooks fire between turns (warm start, briefing injection,
   audit markers); scheduled **jobs** (launchd) run background work independent of any chat;
   **self-healing** respawns a broken session invisibly.
