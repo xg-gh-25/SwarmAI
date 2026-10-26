@@ -213,9 +213,13 @@ def test_generate_report_from_snapshot_has_new_sections(snapshot, golden, tmp_pa
 
 def test_the_report_opens_with_the_follow_up_list(tmp_path):
     """The first section is build_follow_ups' list (design eval-as-product §3.4)."""
-    golden = {"cases": [{"id": "P1", "category": "recall", "dimension": "capability",
-                         "tier": "stable", "_origin": "product",
-                         "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}]}
+    from scripts.golden_case_validator import compute_case_stamp
+
+    case = {"id": "P1", "category": "recall", "dimension": "capability", "tier": "stable",
+            "_origin": "product", "evaluators": ["canary_pass"], "eval_method": "programmatic",
+            "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}
+    case["validated_by_4gate"] = compute_case_stamp(case)
+    golden = {"cases": [case]}
     run = {"run_id": "r1", "triggered_by": "canary", "triggered_at": "2026-10-26T00:00:00+00:00",
            "overall_score": 0.0, "dimensions": {}, "total_cases": 1, "cases_passed": 0,
            "cases_failed": 1, "cases_skipped": 0, "cases_error": 0, "scored_count": 1,
@@ -229,3 +233,12 @@ def test_the_report_opens_with_the_follow_up_list(tmp_path):
     assert later and body.index('class="follow-ups"') < min(later)
     assert "A product check failed: Recall finds memory" in body
     assert "Next Action" not in body
+
+
+
+def test_follow_up_text_is_escaped_in_the_report():
+    from scripts.eval_runner import _render_follow_ups
+
+    html = _render_follow_ups([{"severity": "high", "rule": 1, "what": {"en": "<script>x</script>", "zh": "<b>"},
+                                "why": "<img onerror=1>", "action": {"en": "a&b", "zh": ""}, "case_ids": []}])
+    assert "<script>" not in html and "<img" not in html and "&lt;script&gt;" in html

@@ -55,6 +55,7 @@ def test_the_scheduled_alert_lists_timeouts_apart_from_judge_infra():
     with mock.patch.object(es, "_should_run_biweekly", return_value=True), \
             mock.patch.object(es, "_write_biweekly_last_run"):
         got = es.run_eval_scheduled(dry_run=True, runner=lambda root: out, root=Path("."))
-    assert any("timed out" in r and "slow1" in r for r in got["reasons"]), got["reasons"]
+    assert "slow1" in got["timeout_note"]
+    assert not any("timed out" in r for r in got["reasons"]), got["reasons"]   # not in the fingerprint
     assert not any("judge infra" in r for r in got["reasons"]), got["reasons"]
     assert not any("drift" in r for r in got["reasons"]), got["reasons"]   # 8/8 scored passed

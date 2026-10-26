@@ -10,10 +10,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.eval_followups import build_follow_ups  # noqa: E402
 from core.golden_set_store import PRODUCT_ORIGIN, TOTAL_CAP  # noqa: E402
 
+from scripts.golden_case_validator import compute_case_stamp  # noqa: E402
+
 NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
-CASES = [{"id": "P1", "tier": "stable", "_origin": PRODUCT_ORIGIN,
-          "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}},
-         {"id": "B1", "tier": "behavior", "_origin": PRODUCT_ORIGIN,
+
+
+def _stamped(c):
+    c["validated_by_4gate"] = compute_case_stamp(c)
+    return c
+
+
+CASES = [_stamped({"id": "P1", "tier": "stable", "_origin": PRODUCT_ORIGIN, "evaluators": ["canary_pass"],
+                   "eval_method": "programmatic",
+                   "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}),
+         {"id": "B1", "tier": "behavior", "_origin": PRODUCT_ORIGIN, "eval_method": "behavior",
+          "evaluators": ["trajectory_capture"],
           "purpose": {"en": "Corrects a wrong premise", "zh": "指出错误前提"}}]
 ONLINE = {"last_run": (NOW - timedelta(days=1)).isoformat(), "checks": {}, "trend": [], "low_details": []}
 
@@ -150,3 +161,57 @@ def test_reports_are_marked_routine_only_for_scheduled_and_deploy(tmp_path, monk
     got = {r["filename"]: r["routine"] for r in asyncio.run(eval_router.list_reports())}
     assert got == {"2026-10-24_scheduled.html": True, "2026-10-15_manual.html": False,
                    "2026-07-07___lockprobe__.html": False}
+
+
+
+def test_rule1_only_bvt_members_and_private_ones_are_not_called_product():
+    h = _clean_history()
+    h[0] = _run("canary", 0, {"P1": "failed", "D1": "failed", "M1": "failed"}, full=False)
+    cases = CASES + [_stamped({"id": "D1", "tier": "draft", "evaluators": ["canary_pass"]}),
+                     _stamped({"id": "M1", "tier": "active", "evaluators": ["canary_pass"],
+                               "title": "my own check"})]
+    items = [i for i in build_follow_ups(h, cases, ONLINE, NOW) if i["rule"] == 1]
+    assert sorted(i["case_ids"][0] for i in items) == ["M1", "P1"]          # the draft is not in the BVT
+    mine = next(i for i in items if i["case_ids"] == ["M1"])
+    assert mine["what"]["en"].startswith("A quick check failed")
+
+
+def test_the_daily_canary_counts_as_a_quick_check():
+    old = [_run("scheduled", 3, {"P1": "passed", "B1": "passed"})]
+    daily = {"updated_at": NOW.isoformat(), "results": {"P1": {"status": "failed", "notes": "boom"}}}
+    items = build_follow_ups(old, CASES, ONLINE, NOW, daily_canary=daily)
+    assert _rules(items) == [1] and items[0]["why"] == "boom"   # and it is not "quick check never ran"
+
+
+def test_online_fields_are_bounded_and_snippets_never_leave():
+    long = "T" * 300
+    state = dict(ONLINE,
+                 checks={"O1_LANGUAGE": {"rate": 0.4, "examples": [
+                             {"title": long, "snippet": "SECRET_SNIPPET", "reason": "SECRET_REASON"}]},
+                         "<script>": {"rate": 0.9}},
+                 trend=[{"rates": {"O1_LANGUAGE": 0.1, "<script>": 0.0}}, {"rates": {}}],
+                 low_details=[{"title": "Chat C", "snippet": "SECRET_SNIPPET", "reason": "SECRET_REASON"}],
+                 sampler_error="OperationalError: /Users/someone/.swarm-ai/data.db is locked")
+    items = build_follow_ups(_clean_history(), CASES, state, NOW)
+    text = repr(items)
+    assert "SECRET_SNIPPET" not in text and "SECRET_REASON" not in text
+    assert "<script>" not in text and "/Users/" not in text
+    assert "T" * 80 in text and "T" * 81 not in text
+    on_disk = repr(build_follow_ups(_clean_history(), CASES, state, NOW, include_session_text=False))
+    assert "Chat C" not in on_disk and "TTTT" not in on_disk
+
+
+def test_a_filtered_or_programmatic_only_run_is_not_a_full_run():
+    from scripts.eval_runner import _run_is_comparable
+
+    base = {"total_cases": 40, "scored_count": 40}
+    assert _run_is_comparable(base)
+    assert not _run_is_comparable(dict(base, filtered=True))
+    assert _run_is_comparable({"total_cases": 40, "scored_count": 30, "cases_timeout": 10})
+
+
+def test_the_online_state_file_is_private_in_every_workspace():
+    from core.swarm_workspace_manager import _PRIVACY_GITIGNORE_RULES, GITIGNORE_CONTENT
+
+    assert ".context/.session-quality-state.json" in GITIGNORE_CONTENT.splitlines()
+    assert ".context/.session-quality-state.json" in _PRIVACY_GITIGNORE_RULES   # appended to old workspaces

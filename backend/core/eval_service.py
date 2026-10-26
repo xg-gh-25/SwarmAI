@@ -302,16 +302,19 @@ class EvalService:
         the same list the HTML report's first section shows."""
         from core.eval_followups import build_follow_ups
 
-        return build_follow_ups(self._runs, self._cases, self._online_state(),
-                                shadowed=self.shadowed_private_ids)
+        with self._data_lock:
+            runs, cases = list(self._runs), list(self._cases)
+        return build_follow_ups(runs, cases, self._context_state(".session-quality-state.json"),
+                                shadowed=self.shadowed_private_ids,
+                                daily_canary=self._context_state(".eval-canary-daily.json"))
 
-    def _online_state(self) -> dict | None:
-        """The online-scoring state file as written, or None when absent / unreadable."""
+    def _context_state(self, name: str) -> dict | None:
+        """A JSON state file under .context/ as written, or None when absent / unreadable."""
         import json as _json
 
         if not self._workspace_root:
             return None
-        path = self._workspace_root / ".context" / ".session-quality-state.json"
+        path = self._workspace_root / ".context" / name
         try:
             data = _json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):

@@ -210,29 +210,12 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
       AND failed == 0 AND error == 0 AND timeout == 0  (any regression = RED;
       a timeout is not scored, but a check that never finished is not proven to
       work, and a hang is exactly what some of these cases guard).
+    Membership is bvt_member.
     """
-    from scripts.golden_case_validator import compute_case_stamp
-
     by_id = {r["id"]: r for r in results}
     total = passed = failed = error = skipped = timeout = 0
     for c in cases:
-        if c.get("eval_method") == "llm":
-            continue
-        if not (set(c.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS):
-            continue
-        # Fail-closed ALLOWLIST: only _GATE_TIERS (active, stable) gate. This
-        # excludes draft (not yet trustworthy — compute_bvt's own G2 rule),
-        # archived (soft-deleted; delete_case sets tier='archived' — was the lone
-        # gate-path leak before run_5edf2cc0), AND any unknown/future tier that
-        # hasn't been deliberately added to _GATE_TIERS. The default 'active'
-        # preserves the prior denylist's treatment of tier-less legacy cases
-        # (None counted) — mirrors get_golden_set:254's .get("tier","active").
-        if c.get("tier", "active") not in _GATE_TIERS:
-            continue
-        # G1/G8: only cases carrying a CURRENT validated_by_4gate stamp (matching
-        # the canonical body hash) count. A case edited outside the sanctioned
-        # 4-gate path (stamp absent or stale) drifts out — drift-detection.
-        if c.get("validated_by_4gate") != compute_case_stamp(c):
+        if not bvt_member(c):
             continue
         st = by_id.get(c["id"], {}).get("status")
         total += 1
@@ -251,6 +234,28 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
         "total": total, "passed": passed, "failed": failed,
         "error": error, "skipped": skipped, "timeout": timeout, "green": green,
     }
+
+
+def bvt_member(c: dict) -> bool:
+    """True when a case counts in the BVT (compute_bvt, and the follow-ups that
+    report BVT failures): a gate-eligible evaluator, not llm, a gating tier, and a
+    current stamp."""
+    from scripts.golden_case_validator import compute_case_stamp
+
+    if c.get("eval_method") == "llm":
+        return False
+    if not (set(c.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS):
+        return False
+    # Fail-closed ALLOWLIST: only _GATE_TIERS (active, stable) gate. This
+    # excludes draft (not yet trustworthy), archived (soft-deleted; delete_case
+    # sets tier='archived') AND any unknown/future tier not deliberately added to
+    # _GATE_TIERS. The default 'active' keeps tier-less legacy cases counted.
+    if c.get("tier", "active") not in _GATE_TIERS:
+        return False
+    # G1/G8: only cases carrying a CURRENT validated_by_4gate stamp (matching the
+    # canonical body hash) count. A case edited outside the sanctioned 4-gate path
+    # (stamp absent or stale) drifts out — drift-detection.
+    return c.get("validated_by_4gate") == compute_case_stamp(c)
 
 
 def compute_redline(cases: list, results: list[dict]) -> dict:
@@ -1971,6 +1976,9 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         "cases_skipped": sum(1 for r in results if r["status"] == "skipped"),
         "cases_error": sum(1 for r in results if r["status"] == "error"),
         "cases_timeout": sum(1 for r in results if r["status"] == "timeout"),
+        # a run limited to some cases (or programmatic-only) is not a full run
+        # (_run_is_comparable)
+        "filtered": bool(case_filter or tags or programmatic_only),
         "scored_count": scores["scored_count"],
         "duration_seconds": round(sum(r.get("duration_ms", 0) for r in results) / 1000, 2),
         # Git-bound gate fields (run_69b1c644 Cycle 4). code_digest binds the
@@ -2187,13 +2195,18 @@ def _run_is_comparable(run: dict) -> bool:
     is total_cases=1. trigger 'manual-full' does not exist as a value. So the
     reliable discriminator is scored_count / total_cases and a minimum size. The
     minimum stays below the product set's size, so a fresh install's full runs
-    (product cases only) are comparable too.
+    (product cases only) are comparable too; a run limited by --cases / --tags
+    (``filtered``, recorded since 2026-10-26) never is. A timeout counts as
+    covered: it did run, and a loaded machine must not drop a full run from the
+    trend.
     """
+    if run.get("filtered"):
+        return False
     total = run.get("total_cases") or 0
-    scored = run.get("scored_count") or 0
+    scored = (run.get("scored_count") or 0) + (run.get("cases_timeout") or 0)
     if total < 20:  # single-case / tiny probe runs are not comparable
         return False
-    return scored / total >= 0.9  # total>=50 here, so no ZeroDivision
+    return scored / total >= 0.9  # total>=20 here, so no ZeroDivision
 
 
 def _comparable_full_runs(history: list) -> tuple:
@@ -2315,14 +2328,20 @@ def _report_follow_ups(run_result: dict, history: list, golden_set: dict, root: 
     from core.eval_followups import build_follow_ups
 
     runs = [run_result] + [h for h in reversed(history) if h.get("run_id") != run_result.get("run_id")]
-    try:
-        online = json.loads((Path(root) / ".context" / ".session-quality-state.json")
-                            .read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        online = None
+
+    def _state(name):
+        try:
+            data = json.loads((Path(root) / ".context" / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+    # The report is a file on disk (and may sit in a git-tracked workspace): no
+    # session titles or ids in it — those are shown in the dashboard only.
     return build_follow_ups(runs, (golden_set or {}).get("cases") or [],
-                            online if isinstance(online, dict) else None,
-                            shadowed=(golden_set or {}).get("shadowed_private_ids") or ())
+                            _state(".session-quality-state.json"),
+                            shadowed=(golden_set or {}).get("shadowed_private_ids") or (),
+                            daily_canary=_state(".eval-canary-daily.json"),
+                            include_session_text=False)
 
 
 def _render_follow_ups(items: list) -> str:
@@ -2354,8 +2373,10 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     cases = golden_set["cases"]
     case_results = {r["id"]: r for r in run_result["cases"]}
 
-    # Load history for trend + delta
-    history = _load_history(root)
+    # Load history for trend + delta. The run being reported is usually already on
+    # disk (write_run comes first): leave it out, or the delta compares it with
+    # itself and the trend counts it twice.
+    history = [h for h in _load_history(root) if h.get("run_id") != run_result.get("run_id")]
     delta = _compute_delta(run_result, history)
     # Trend/streak use ONLY comparable full runs — a canary (programmatic-only,
     # skips 89 cases) or a single-case manual probe on the same line = sawtooth

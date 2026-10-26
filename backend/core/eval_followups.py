@@ -21,13 +21,27 @@ Rules (numbered as in the design):
      be broken)
   7. the golden set is over its limits, a product case has no purpose, or a private
      case is hidden by a product case with the same id
+
+Inputs: the run records (EvalHistory), the daily canary state (the per-session
+quick check, which writes no run record) and the online-scoring state. From the
+online state only these fields are read, each bounded: a check id of the form
+``O<n>_NAME``, its ``rate``, up to 3 example sessions' ``title`` (80 chars) or
+``session_id``, the low sessions' ``title`` / ``session_id``, the type name of a
+``sampler_error``, and ``trend[-2].rates``: the writer appends this week's entry to
+``trend`` before it writes the file, so ``trend[-2]`` is the week before. Snippets
+and judge reasons never leave the state file through here. With
+``include_session_text=False`` (the HTML report, a file on disk) no session title
+or id is included at all.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-QUICK_TRIGGERS = frozenset({"canary", "session_canary"})
+QUICK_TRIGGERS = frozenset({"canary", "session_canary", "deploy"})
+_ONLINE_CHECK_ID = re.compile(r"^O[1-9]_[A-Z_]{1,30}$")
+_TITLE_MAX = 80
 _SEVERITY = {"high": 0, "medium": 1, "low": 2}
 _QUICK_MAX_AGE = timedelta(days=2)
 _FULL_MAX_AGE = timedelta(days=15)
@@ -77,19 +91,25 @@ def _statuses(run: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
 # ── rules ─────────────────────────────────────────────────────────────────────
 
 def _bvt_failures(latest: Mapping[str, Any] | None, by_id) -> list[dict]:
-    from scripts.eval_runner import _classify_failure
+    from core.golden_set_store import is_product_case
+    from scripts.eval_runner import _classify_failure, bvt_member
 
     if not latest:
         return []
     out = []
     for cid, r in _statuses(latest).items():
-        if r.get("status") != "failed" or r.get("eval_method", "programmatic") != "programmatic":
-            continue
         case = by_id.get(cid)
+        # the same membership compute_bvt uses: a failure outside the BVT is not
+        # "a quick check failed"
+        if r.get("status") != "failed" or case is None or not bvt_member(dict(case)):
+            continue
         broken = _classify_failure(r.get("notes")) == "case-broken"
+        product = is_product_case(dict(case))
         out.append(_item(
-            "high", 1, f"A product check failed: {_label(case, cid, 'en')}",
-            f"产品功能坏了：{_label(case, cid, 'zh')}", _first_line(r.get("notes")),
+            "high", 1,
+            f"{'A product check' if product else 'A quick check'} failed: {_label(case, cid, 'en')}",
+            f"{'产品功能坏了' if product else '快速检查失败'}：{_label(case, cid, 'zh')}",
+            _first_line(r.get("notes")),
             "Check the case first: its reference looks missing." if broken
             else "Fix the behaviour, then re-run the quick check.",
             "先检查这条 case：它引用的东西像是不存在了。" if broken else "修好这个功能，再跑一次快速检查。",
@@ -150,35 +170,44 @@ def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[
                   "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped)]
 
 
-def _online(state: Mapping[str, Any] | None) -> list[dict]:
+def _session_label(entry: Any) -> str:
+    if not isinstance(entry, Mapping):
+        return ""
+    return str(entry.get("title") or entry.get("session_id") or "")[:_TITLE_MAX]
+
+
+def _online(state: Mapping[str, Any] | None, include_session_text: bool) -> list[dict]:
     if not state:
         return []
     out = []
     if state.get("sampler_error"):
+        # the exception's type only: its message can carry paths or session text
+        kind = str(state["sampler_error"]).split(":", 1)[0].strip()[:60]
         out.append(_item("medium", 4, "This week's online scoring did not run", "这周的线上评分没评成",
-                         _first_line(state["sampler_error"]),
+                         kind,
                          "Fix the cause, then run the session-quality job once.",
                          "修好原因后，手动跑一次 session-quality 任务。"))
     trend = [t for t in state.get("trend") or [] if isinstance(t, Mapping)]
     previous = (trend[-2].get("rates") or {}) if len(trend) >= 2 else {}
-    for cid, check in sorted((state.get("checks") or {}).items()):
-        if not isinstance(check, Mapping):
+    checks = state.get("checks") if isinstance(state.get("checks"), Mapping) else {}
+    for cid, check in sorted(checks.items()):
+        if not isinstance(check, Mapping) or not _ONLINE_CHECK_ID.match(str(cid)):
             continue
         rate, last = check.get("rate"), previous.get(cid)
         if not isinstance(rate, (int, float)) or not isinstance(last, (int, float)) or rate <= last:
             continue
-        sessions = [e.get("title") or e.get("session_id") for e in (check.get("examples") or [])[:3]
-                    if isinstance(e, Mapping)]
+        sessions = [_session_label(e) for e in (check.get("examples") or [])[:3]] \
+            if include_session_text else []
         out.append(_item("medium", 4, f"Online check {cid} fails more often: {last:.0%} → {rate:.0%}",
                          f"线上检查 {cid} 失败变多：{last:.0%} → {rate:.0%}",
-                         "; ".join(str(s) for s in sessions if s),
+                         "; ".join(s for s in sessions if s),
                          "Open the example sessions and see which rule was not kept.",
                          "打开例子里的会话，看哪条规则没守住。"))
     low = [d for d in state.get("low_details") or [] if isinstance(d, Mapping)]
     if low:
         out.append(_item("low", 4, f"{len(low)} low-scoring session(s) this week",
                          f"本周有 {len(low)} 个低分会话",
-                         "; ".join(str(d.get("title") or d.get("session_id") or "") for d in low[:3]),
+                         "; ".join(_session_label(d) for d in low[:3]) if include_session_text else "",
                          "Open them; decide whether one deserves a case.",
                          "打开看看，决定要不要据此写一条 case。"))
     return out
@@ -239,12 +268,32 @@ def _golden_set(cases: Sequence[Mapping[str, Any]], shadowed: Iterable[str]) -> 
     return out
 
 
+def _daily_canary_run(state: Mapping[str, Any] | None) -> dict | None:
+    """The per-session daily canary (context_health_hook) as a quick-check run: it
+    writes a state file, not a run record."""
+    results = (state or {}).get("results")
+    if not isinstance(results, Mapping) or not results:
+        return None
+    return {"triggered_by": "session_canary", "triggered_at": state.get("updated_at"),
+            "bvt": {"total": len(results)},
+            "cases": [{"id": cid, "status": r.get("status"), "notes": r.get("notes", ""),
+                       "eval_method": "programmatic"}
+                      for cid, r in results.items() if isinstance(r, Mapping)]}
+
+
 def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mapping[str, Any]],
                      online_state: Mapping[str, Any] | None = None, now: datetime | None = None,
-                     shadowed: Iterable[str] = ()) -> list[dict]:
-    """``history`` is the run records newest first; ``cases`` the merged golden set."""
+                     shadowed: Iterable[str] = (), daily_canary: Mapping[str, Any] | None = None,
+                     include_session_text: bool = True) -> list[dict]:
+    """``history`` is the run records; ``cases`` the merged golden set;
+    ``daily_canary`` the daily canary state."""
     now = now or datetime.now(timezone.utc)
     runs = [r for r in history if isinstance(r, Mapping)]
+    canary = _daily_canary_run(daily_canary)
+    if canary:
+        runs.append(canary)
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
+    runs.sort(key=lambda r: _ts(r.get("triggered_at")) or oldest, reverse=True)
     by_id = {c.get("id"): c for c in cases if isinstance(c, Mapping)}
     full_runs = [r for r in runs if _is_full(r)]
     # The lines a user sees: quick checks and full runs. A hand-run probe of one
@@ -252,7 +301,7 @@ def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mappi
     measured = [r for r in runs if r.get("triggered_by") in QUICK_TRIGGERS or _is_full(r)]
     bvt_run = next((r for r in measured if (r.get("bvt") or {}).get("total")), None)
     items = (_bvt_failures(bvt_run, by_id) + _not_measured(measured, by_id)
-             + _offline_regressions(full_runs, by_id) + _online(online_state)
+             + _offline_regressions(full_runs, by_id) + _online(online_state, include_session_text)
              + _overdue(runs, full_runs, online_state, now) + _always_failing(full_runs, by_id)
              + _golden_set(cases, shadowed))
     return sorted(items, key=lambda i: (_SEVERITY[i["severity"]], i["rule"]))

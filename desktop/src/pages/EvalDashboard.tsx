@@ -540,6 +540,7 @@ export function GoldenSetTab() {
     if (filterStatus === 'passed' && c.last_result?.status !== 'passed') return false;
     if (filterStatus === 'failed' && c.last_result?.status !== 'failed') return false;
     if (filterStatus === 'skipped' && c.last_result?.status !== 'skipped') return false;
+    if (filterStatus === 'timeout' && c.last_result?.status !== 'timeout') return false;
     return true;
   });
 
@@ -598,6 +599,7 @@ export function GoldenSetTab() {
             <option value="passed">Passed</option>
             <option value="failed">Failed</option>
             <option value="skipped">Skipped</option>
+            <option value="timeout">Timed out</option>
           </select>
           <select
             data-testid="filter-tier"

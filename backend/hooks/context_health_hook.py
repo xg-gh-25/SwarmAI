@@ -506,7 +506,7 @@ class ContextHealthHook:
         it would be on a manual run. A timeout under a smaller budget-derived cap
         says nothing about the case.
         """
-        if result.get("status") != "failed" or case_timeout >= full_cap:
+        if result.get("status") not in ("timeout", "failed") or case_timeout >= full_cap:
             return False
         return bool(cls._CANARY_TIMEOUT_RE.search(result.get("notes", "")))
 
@@ -626,10 +626,10 @@ class ContextHealthHook:
 
         state["deferred"] = deferred
         summary = self._write_daily_canary_state(state_path, state, cases)
-        if summary.get("complete") and summary.get("failed"):
+        if summary.get("complete") and (summary.get("failed") or summary.get("timeout")):
             logger.warning(
-                "context_health: daily eval canary FAILED %d/%d cases (score=%s%%)",
-                summary["failed"], summary["total"], summary.get("score"),
+                "context_health: daily eval canary FAILED %d/%d cases, %d timed out (score=%s%%)",
+                summary["failed"], summary["total"], summary.get("timeout", 0), summary.get("score"),
             )
         else:
             logger.info(
@@ -658,13 +658,14 @@ class ContextHealthHook:
 
         Only cases in ``cases`` count (a case removed from the golden set mid-day
         drops out). ``score`` = passed / (passed + failed) like
-        eval_runner.compute_scores; skipped/error/pending never count.
+        eval_runner.compute_scores; skipped/error/timeout/pending never count. A
+        timeout is still listed (``timeouts``): a hang must not disappear.
         """
         ids = [c["id"] for c in cases]
         results = state.get("results", {})
         done = [results[i] for i in ids if i in results]
         n = {s: sum(1 for r in done if r.get("status") == s)
-             for s in ("passed", "failed", "error", "skipped")}
+             for s in ("passed", "failed", "error", "skipped", "timeout")}
         scored = n["passed"] + n["failed"]
         state.update({
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -677,6 +678,10 @@ class ContextHealthHook:
             "failures": [
                 {"id": i, "notes": results[i].get("notes", "")}
                 for i in ids if results.get(i, {}).get("status") == "failed"
+            ],
+            "timeouts": [
+                {"id": i, "notes": results[i].get("notes", "")}
+                for i in ids if results.get(i, {}).get("status") == "timeout"
             ],
         })
         tmp = state_path.with_name(state_path.name + ".tmp")

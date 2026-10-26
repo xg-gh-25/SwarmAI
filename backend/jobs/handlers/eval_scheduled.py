@@ -225,11 +225,12 @@ def run_eval_scheduled(
     if drift:
         reasons.append(f"score drift: {base_score}% → {score}% (>{_DRIFT_TOLERANCE} drop)")
     # A check that did not finish is listed on its own: not scored, not a judge-infra
-    # collapse (it is usually a loaded machine), but BVT stays red above, so a real
-    # hang is not hidden.
+    # collapse (it is usually a loaded machine). A timed-out BVT case already turns
+    # the BVT red above, so a real hang is not hidden; the note itself stays out of
+    # the alert fingerprint (the ids change run to run on a loaded machine).
     timed_out = [c.get("id") for c in det_cases if c.get("status") == "timeout"]
-    if timed_out:
-        reasons.append(f"⏱️ {len(timed_out)} case(s) timed out: {', '.join(timed_out[:5])}")
+    timeout_note = (f"⏱️ {len(timed_out)} case(s) timed out (not scored): "
+                    f"{', '.join(timed_out[:5])}" if timed_out else "")
 
     # Coverage collapse — judge infra (Bedrock/creds) degraded. DETERMINISTIC-ONLY
     # (behavior spawn-errors are non-deterministic infra flakes, not judge-infra
@@ -260,7 +261,7 @@ def run_eval_scheduled(
         if reasons and fingerprint != prev:
             send = notifier or _default_notifier
             try:
-                send(message="\n".join(f"- {r}" for r in reasons),
+                send(message="\n".join(f"- {r}" for r in reasons + ([timeout_note] if timeout_note else [])),
                      title="🔴 SwarmAI scheduled eval — regression/drift",
                      channels=["slack"])
                 notified = True
@@ -283,6 +284,7 @@ def run_eval_scheduled(
         "bvt_green": bvt.get("green"),
         "reasons": reasons,
         "behavior_note": behavior_note,  # non-deterministic layer, segregated from hard alert
+        "timeout_note": timeout_note,
         "behavior_failed": behavior_failed,
         "notified": notified,
     }

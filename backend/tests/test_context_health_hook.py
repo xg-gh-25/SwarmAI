@@ -1227,27 +1227,27 @@ class TestDailyEvalCanary:
         import time as _time
         er = _eval_runner_module()
         cases = [_canary_case("GS_SLOW_1"), _canary_case("GS_SLOW_2")]
-        fake = _FakeEval(lambda c, t: {"status": "failed",
+        fake = _FakeEval(lambda c, t: {"status": "timeout",
                                        "notes": f"Command timed out ({t}s)"})
         with patch.object(er, "evaluate_case", fake):
             hook._run_daily_canary(workspace, cases, _deadline=_time.monotonic() + 8)
         st = _daily_state(workspace)
         assert all(t < 20 for _, t in fake.calls), fake.calls
-        assert st["failed"] == 0 and st["failures"] == []
+        assert st["failed"] == 0 and st["failures"] == [] and st["timeouts"] == []
         assert st["pending"] == 2 and st["complete"] is False
         assert set(st["deferred"]) == {"GS_SLOW_1", "GS_SLOW_2"}
 
     def test_full_cap_timeout_is_a_real_failure(self, hook, workspace):
         """At the manual-run cap (20s) a timeout is a genuine regression."""
         er = _eval_runner_module()
-        fake = _FakeEval(lambda c, t: {"status": "failed",
+        fake = _FakeEval(lambda c, t: {"status": "timeout",
                                        "notes": f"Command timed out ({t}s)"})
         with patch.object(er, "evaluate_case", fake):
             hook._run_daily_canary(workspace, [_canary_case("GS_HUNG")], _deadline=0.0)
         st = _daily_state(workspace)
         assert fake.calls == [("GS_HUNG", 20)]
-        assert st["failed"] == 1 and st["complete"] is True
-        assert st["failures"][0]["id"] == "GS_HUNG"
+        assert st["timeout"] == 1 and st["failed"] == 0 and st["complete"] is True
+        assert st["timeouts"][0]["id"] == "GS_HUNG"   # a hang stays listed
 
     def test_no_budget_left_defers_without_running(self, hook, workspace):
         import time as _time
@@ -1292,7 +1292,7 @@ class TestDailyEvalCanary:
 
         def outcome(c, t):
             if c["id"] == "GS_SLOW":
-                return {"status": "failed", "notes": f"Command timed out ({t}s)"}
+                return {"status": "timeout", "notes": f"Command timed out ({t}s)"}
             return {"status": "passed", "notes": "ok"}
 
         orders = []
@@ -1304,7 +1304,7 @@ class TestDailyEvalCanary:
         assert orders[0] == ["GS_SLOW", "GS_OK"]
         assert orders[1] == ["GS_SLOW"]  # GS_OK already done
         st = _daily_state(workspace)
-        assert st["results"]["GS_SLOW"]["status"] == "failed"
+        assert st["results"]["GS_SLOW"]["status"] == "timeout"
         assert "3 times" in st["results"]["GS_SLOW"]["notes"]
         assert st["complete"] is True
 
@@ -1348,10 +1348,10 @@ class TestDailyEvalCanary:
         assert _daily_state(workspace)["deferred"] == ["GS_RH"]
 
         assert hook._is_budget_timeout(
-            {"status": "failed", "notes": "runtime_health command timed out (20s)"},
+            {"status": "timeout", "notes": "runtime_health command timed out (20s)"},
             20, 30) is True
         assert hook._is_budget_timeout(
-            {"status": "failed", "notes": "runtime_health command timed out (30s)"},
+            {"status": "timeout", "notes": "runtime_health command timed out (30s)"},
             30, 30) is False
 
     def test_new_day_restarts_tier(self, hook, workspace):
