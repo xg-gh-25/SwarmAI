@@ -2536,7 +2536,12 @@ async fn copy_to_clipboard(text: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         use std::io::Write;
+        // pbcopy decodes stdin with the process locale. An app started from
+        // Finder/launchd has no LANG, so pbcopy reads the UTF-8 bytes as
+        // MacRoman and non-ASCII text (Chinese, emoji, arrows) is garbled.
         let mut child = std::process::Command::new("pbcopy")
+            .env("LANG", "en_US.UTF-8")
+            .env("LC_ALL", "en_US.UTF-8")
             .stdin(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to spawn pbcopy: {}", e))?;
