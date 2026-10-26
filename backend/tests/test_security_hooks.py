@@ -513,10 +513,12 @@ class TestGovernanceFileGate:
         assert "CONSTITUTIONAL" in result["additionalContext"]
 
     @pytest.mark.asyncio
-    async def test_gate_reminder_cites_current_principle_range_and_cap(self):
-        """The advisory must cite the CURRENT principle range (P1-P7) and cap (12),
-        not a stale range. Guards against lying-comment / legibility decay (R16b):
-        the gate text must track the SOUL/AGENT principle taxonomy as it grows."""
+    async def test_gate_reminder_cites_intake_gate_not_frozen_caps(self):
+        """The advisory points at AGENT.md's Intake Gate and carries no frozen
+        principle range or rule-count cap: AGENT.md has no count cap, and a cap
+        copied into the reminder drifts (it said P1-P7 / ≤12 after SOUL reached
+        P10 and the caps were removed)."""
+        import re
         from core.security_hooks import create_governance_file_gate
         gate = create_governance_file_gate()
         result = await gate(
@@ -524,12 +526,10 @@ class TestGovernanceFileGate:
             None, None
         )
         ctx = result.get("additionalContext", "")
-        # Parent range must be P1-P7 (7 principles after 认知防线 elevated to P7)
-        assert "P1-P7" in ctx, f"stale principle range in gate reminder: {ctx!r}"
-        assert "P1-P4" not in ctx and "P1-P5" not in ctx, "stale P-range leaked"
-        # Cap must be 12 (smoke-test ceiling), not the old 5
-        assert "≤12 principles" in ctx, f"stale principle cap in gate reminder: {ctx!r}"
-        assert "≤5 principles" not in ctx, "stale ≤5 cap leaked"
+        assert "Intake Gate" in ctx, ctx
+        assert "Overlap" in ctx and "replace" in ctx, ctx
+        assert not re.search(r"P1-P\d", ctx), f"frozen principle range: {ctx!r}"
+        assert not re.search(r"≤\s*\d+", ctx), f"frozen count cap: {ctx!r}"
 
     @pytest.mark.asyncio
     async def test_gate_advises_on_tier2_write(self):

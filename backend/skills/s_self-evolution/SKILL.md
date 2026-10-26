@@ -13,7 +13,7 @@ Read INSTRUCTIONS.md for the full protocol.
 
 | Operation | Trigger | What It Does |
 |-----------|---------|-------------|
-| **CLASSIFY** | Any governance change proposed | Classify layer, parent principle, check conflict/budget |
+| **CLASSIFY** | Any governance change proposed | Classify layer, parent principle, check overlap and size delta |
 | **CAPTURE** | User correction detected | Write C-entry with bias tag (A/B/C/D) |
 | **PROMOTE** | Pattern seen 3x OR user approves | Elevate from EVOLUTION → AGENT/STEERING (absorbs steeringify) |
 | **REFINE** | Principle not precise enough | Sharpen existing principle/rule wording |
@@ -39,24 +39,28 @@ Read INSTRUCTIONS.md for the full protocol.
 | **C** | Productivity over quality | Rush output, shallow analysis |
 | **D** | Surrender on obstacle | Give up, ask user to compensate |
 
-## Governance Budget (enforced on PROMOTE/REFINE)
+## Admission, not a count budget (enforced on PROMOTE/REFINE)
 
-- SOUL.md principles: ≤12
-- AGENT.md rules: ≤25
-- STEERING.md standing rules: ≤15
-
-At cap → COMPRESS or RETIRE existing before adding.
+There is no count cap (AGENT.md § Intake Gate): the real risk is attention dilution, which no
+count measures. Every new rule passes three questions — a NO blocks it: (1) a genuinely new
+axis? overlap → fold into the existing rule; (2) load-bearing — can I name the failure it
+prevents? (3) belongs here — principle → SOUL, one-off → EVOLUTION, better as a mechanism →
+SOUL P7. Before drafting, ask whether a clearer skill, a better tool result, a mechanism or an
+edit to an existing rule fixes it: a new sentence in the prompt is the last resort. An addition
+that would dilute the set must REPLACE an existing rule or not land.
 
 ## Intake Classification (on every governance change)
 
 Before writing to SOUL/AGENT/STEERING:
-1. **Layer:** principle / rule / gate?
-2. **Parent:** P1-P7?
-3. **Conflict:** duplicates/contradicts existing?
-4. **Budget:** current count vs cap
+1. **Layer:** principle / rule / gate / knowledge?
+2. **Parent:** which SOUL principle?
+3. **Overlap:** `context_recall_cli.py --file <F> --query "<proposed text>"` over SOUL / AGENT /
+   STEERING / SELF; list the top matches and say fold-into or new-axis.
+4. **Delta:** what the change removes, and the file's size before → after.
 5. **Source:** user / correction / pipeline / self-detect
 
-Output brief → user confirms (user source) or auto-apply (3x agent evidence).
+Output brief → the user approves. Governance is never auto-written; 3× evidence only makes a
+proposal eligible.
 
 ## Config
 
@@ -64,7 +68,7 @@ Output brief → user confirms (user source) or auto-apply (3x agent evidence).
 |-----|---------|--------|
 | `enabled` | `true` | Kill switch |
 | `max_triggers_per_session` | `3` | Per-session cap |
-| `promotion_threshold` | `3` | Same-class corrections needed for auto-promote |
+| `promotion_threshold` | `3` | Same-class corrections needed before a proposal is surfaced |
 | `deprecation_days` | `30` | Days idle before retirement candidate |
 
 ## Writing to EVOLUTION.md
@@ -76,5 +80,5 @@ JSONL changelog append after every mutation (mandatory).
 
 - [ ] **Correction captured with bias tag** — C-entry has [Bias A/B/C/D]
 - [ ] **Classification brief output** — before any governance file write
-- [ ] **Budget respected** — count verified before PROMOTE
+- [ ] **Admission passed** — overlap listed, fold-or-new-axis stated, size delta shown
 - [ ] **JSONL changelog updated** — after every EVOLUTION.md mutation

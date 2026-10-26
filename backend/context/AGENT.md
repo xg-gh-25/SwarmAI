@@ -473,7 +473,8 @@ don't add) (2) **load-bearing?** (can I name the failure it prevents? no → wal
 attention-dilution constraint (also a hard BLOCK, not advice): if the addition would dilute the
 set, it may NOT append — it must REPLACE a wallpaper rule or not land. Adding is the LAST
 resort, folding the default; in doubt, don't add. Agent-PROPOSED
-rules additionally require 3× evidence or user approval. **Propose proactively** on: a class
+rules additionally require 3× evidence, and every governance change lands only on the
+user's approval. **Propose proactively** on: a class
 failing 3+×, a rule contradicting observed behavior/a directive, or stale context data. (SOUL P6)
 
 ---

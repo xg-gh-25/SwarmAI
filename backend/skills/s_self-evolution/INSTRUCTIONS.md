@@ -43,14 +43,16 @@ Layer 3 — GATES (PreToolUse hooks, pipeline validator, locked_write)
 
 1. Identify the proposed change text
 2. Determine tier:
-   - Tier 1 (Constitutional): SOUL.md, AGENT.md → hard budget, intake mandatory
-   - Tier 2 (Statutory): STEERING.md, pipeline stage docs → soft budget, advisory
+   - Tier 1 (Constitutional): SOUL.md, AGENT.md → intake mandatory
+   - Tier 2 (Statutory): STEERING.md, pipeline stage docs → intake advisory
    - Tier 3 (Regulatory): skill INSTRUCTIONS.md, MEMORY Key Decisions → check on touch
 3. Classify layer: `principle` / `rule` / `gate`
-4. Link to parent principle: P1 (Verify Don't Infer) / P2 (Done = Tried to Break) / P3 (Understanding Before Output) / P4 (Solve Don't Report)
-5. Check conflicts with existing rules (grep AGENT.md for overlapping keywords)
-6. Check duplicates (is this already covered by an existing rule?)
-7. Budget check: count current items, compare to cap
+4. Link to its parent principle in SOUL.md (read the live list; don't copy a range here)
+5. Overlap: `context_recall_cli.py --file <F> --query "<proposed text>"` over SOUL / AGENT /
+   STEERING / SELF — conflicts and duplicates; an overlap means fold, not add
+6. Fix type: would a clearer skill, a better tool result, a mechanism or an edit to an
+   existing rule fix it? A new sentence is the last resort (AGENT.md § Intake Gate)
+7. Delta: what the change removes, and the target file's size before → after
 
 **Output format (show in chat before writing):**
 
@@ -62,13 +64,14 @@ INTAKE CLASSIFICATION:
   Parent: P2 (Done = Tried to Break It)
   Conflicts: None
   Duplicates: R3 partially covers this
-  Budget: 23/25 rules — room available
-  Recommendation: ADD as R24 | MERGE into R3 | DEFER (insufficient evidence)
+  Overlap: R3 (fold) | none (new axis)
+  Delta: removes <X>; AGENT.md <before> → <after> chars
+  Recommendation: FOLD into R3 | REPLACE R7 | ADD (new axis) | DEFER (insufficient evidence)
 ```
 
 **Authority:**
 - User source → surface brief → user decides
-- Agent source with 3x evidence → auto-promote with brief
+- Agent source with 3x evidence → surface brief → user decides (never auto-written)
 - Agent source with <3x → queue in EVOLUTION.md "Candidates" section
 - Automation source → propose only, surface in session briefing
 
@@ -120,19 +123,16 @@ If count ≥ 3 for any bias class → invoke PROMOTE operation.
 1. Identify the recurring pattern (from EVOLUTION.md corrections or user request)
 2. Run CLASSIFY on the proposed governance change
 3. Draft the rule text (concise, actionable, linked to parent principle)
-4. Check budget — if at cap, identify RETIRE candidate first
+4. Run the admission questions (SKILL.md) — prefer FOLD / REPLACE over ADD
 5. Present to user with classification brief
 6. On approval:
    - Write rule to AGENT.md (or STEERING.md if user-scope override)
-   - Tag with parent principle (P1-P7)
+   - Tag with its parent SOUL principle
    - Update EVOLUTION.md: mark source corrections as `status: promoted`
    - Append JSONL changelog: `{"action":"promote","id":"C0XX→R24"}`
 
-**Auto-promote (3x threshold, no user needed):**
-- Only if ALL corrections in the class have the SAME root pattern
-- Only if budget allows without retirement
-- Still outputs classification brief (for session record)
-- If budget at cap → surface in session briefing, don't auto-write
+**No auto-promote.** 3x evidence makes a pattern eligible for a proposal; the user approves
+every governance write.
 
 ### 7. Close the loop — verify the rule actually FIRES (optional, high-value)
 
@@ -235,7 +235,7 @@ These cases are committed to `golden_set.yaml` (workspace), not the codebase.
    - Remove redundant rules
    - Update all references in EVOLUTION.md
 
-**Budget relief:** COMPRESS is the primary tool when at budget cap.
+**Dilution relief:** COMPRESS is the primary tool when a new rule would dilute the set.
 
 ---
 
@@ -295,8 +295,8 @@ Max 3 attempts. Verify against original task. Register on success.
 2. **Verify before registering** — test against original task
 3. **Always record failures** — F-entry in EVOLUTION.md
 4. **Classification before governance writes** — no unclassified changes
-5. **Budget is structural** — at cap, COMPRESS or RETIRE first
-6. **3x evidence for auto-promote** — less = Candidate queue
+5. **Admission is structural** — fold or replace before adding; no count cap
+6. **3x evidence makes a proposal eligible** — less = Candidate queue; the user approves every write
 7. **Bias tag every correction** — A/B/C/D mandatory
 8. **JSONL changelog** — no silent mutations
 9. **User approval for Tier 1 changes** — principles never auto-write

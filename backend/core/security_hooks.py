@@ -5995,11 +5995,12 @@ def create_governance_file_gate() -> Callable[..., Any]:
         tier_label = "CONSTITUTIONAL (Tier 1)" if tier == 1 else "STATUTORY (Tier 2)"
         reminder = (
             f"⚠️ GOVERNANCE GATE [{tier_label}]: Modifying governance file.\n"
-            f"Before proceeding, ensure:\n"
-            f"  1. Classify: Principle / Rule / Gate?\n"
-            f"  2. Parent: P1-P7?\n"
-            f"  3. Conflict/Duplicate check done?\n"
-            f"  4. Budget: SOUL ≤12 principles, AGENT ≤25 rules, STEERING ≤15"
+            f"Before proceeding (AGENT.md § Intake Gate):\n"
+            f"  1. Classify: principle / rule / gate / knowledge, and name its parent SOUL principle.\n"
+            f"  2. Overlap: search the governed files for an existing rule this folds into.\n"
+            f"  3. Prefer a clearer skill, a better tool result or editing an existing rule\n"
+            f"     over a new sentence; an addition that dilutes the set must replace one.\n"
+            f"  4. Contradiction: re-read the whole file after the edit."
         )
 
         logger.info(
