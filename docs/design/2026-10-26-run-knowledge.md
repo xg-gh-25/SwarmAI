@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: DRAFT r1 — 待 XG 定 §7
+status: DRAFT r2 — 加步骤 0（全系统统一条目边界和截断）；待 XG 定 §7
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -67,6 +67,63 @@ Pipeline 的核心是 DDD 驱动的自主交付（two-ends 设计 §0）。但�
 
 ## 3. 设计
 
+### 3.0 召回的条目边界和截断：全系统一套规则（步骤 0，r2）
+
+这一步改的是平台召回本身。聊天注入、repo_guidance 和 pipeline 都用同一套规则，pipeline 不另写。
+
+**实测问题（SwarmAI 的 DDD，2900 个条目）**
+
+1. **条目边界切错了。** `recall_multi._ddd_entry_hits` 用 `re.split(r"(?m)^(?=- )")` 切条目，
+   一个 bullet 会把后面所有不以 `- ` 开头的内容都吞进来，包括 `###` 小节、表格和段落。最长的
+   一个"条目"有 16981 字符（TECH.md#Key Subsystems：83 行正文、19 行表格、2 个 `###`）。
+   命中可能落在被吞进来的无关正文上，展示出来的却是那个 bullet。
+   平台其实已经有一个读条目的函数：`ddd_entry_lifecycle._scan_entry`。按设计
+   2026-10-25-memory-write-entry-dedup §3.1，它是"一个条目怎么读"的唯一定义，写入、去重和衰减
+   都在用，只有召回没用。用它重新切：
+
+   | 切法 | 中位数 | p90 | p99 | 最长 | >900 字符 | >2500 字符 |
+   |---|---|---|---|---|---|---|
+   | 现在的正则 | 388 | 799 | 3887 | 16981 | 252 | 52 |
+   | `_scan_entry` | 370 | 654 | 2135 | 5479 | 180 | 10 |
+
+   另外还有两处各自切条目，规则不一样：`recall_multi._memory_outside_prompt`（MEMORY 条目）
+   和 `repo_guidance._entries`（pipeline-lessons）。
+
+2. **截断会切在句子中间，而且不告诉读者原文在哪。** `recall_filter._truncate` 在字符上限处硬截，
+   只有最后一个换行落在上限的 60% 以后才退到换行，然后加一个 `…`，不带出处。
+   `_budget_one` 把排在后面的命中截到剩余预算，所以后面的条目常常只剩半句。
+
+3. **（pipeline 设计 r1 自己的问题）** "放不下就跳过，后面的继续放"会让排名倒挂：实测排第 3 的
+   条目（1364 字符）被跳过，排第 4、第 5 的放了进去；超过上限的条目永远出不来。
+
+**统一规则**
+
+- **R1 条目边界：只有一个读法。** 所有召回切条目都调 `_scan_entry`：`_ddd_entry_hits`、
+  `_memory_outside_prompt`、`repo_guidance._entries`。条目就是 bullet 行、它的续行、
+  嵌套的子条目和元数据行，遇到标题、column-0 的 `- `、空行就结束。refines 追加的子条目
+  属于父条目。结构测试：召回代码里不许再出现按 `^- ` 切条目的正则。
+- **R2 截断：截在句末，并带上出处。** `recall_filter` 只留一个 `clip(text, cap, pointer)`，
+  `_truncate` 删掉。超过上限时，从开头截到上限内最后一个句末（`。！？.!?` 后接空白或行尾），
+  没有句末就退到行末，两者都没有才截到最后一个空白。后面补
+  `…（全文 N 字符：<出处>）`。出处：DDD 是 `doc#section`，Library 是源文件路径，
+  session 是会话 id。DDD 条目通常第一句就是规则，截到句末不会丢掉这句。
+- **R3 预算：按排名，不跳过。** 按排名依次放。下一条放不下完整内容时，用 R2 截到剩余预算；
+  剩余预算连一句都放不下（少于 120 字符）时就停，不再跳过它去放后面的条目。
+- **R4 单条上限和总上限是两件事。** 单条用 `HIT_CHAR_CAP`（900），总量用 `DOMAIN_CHAR_CAPS`
+  等现有的值；pipeline 只是另一组总量上限，规则相同。中文一个字大约是一个 token，英文大约 4 个
+  字符一个 token，所以字符上限只是粗略预算；先不做 token 计数。
+
+**对聊天的影响**
+
+- 注入的字数上限不变。内容会变：同样的预算里，以前的半句加 `…` 变成截到句末加出处，
+  被错误合并的整节变成真正的条目。
+- 开销：`_scan_entry` 是逐行扫描，和现在的正则同一量级。合入前用 `recall_suite`（固定语料）
+  分别测 `recall_all` 的 ddd 那一路和 context_files 那一路，耗时变化要在 ±10% 以内。
+- 召回质量：用 `recall_suite` 的 recall@K、MRR，加上 recall-precision-and-coverage 设计 §1 的
+  回放样本，对比改动前后，不能变差。
+- 这一步和 `2026-10-26-recall-precision-and-coverage.md`（r5，今天刚实施）改的是同两个文件。
+  D1–D4 的过滤规则不动，本步只改条目边界和截断。动手前 rebase 到最新的 main。
+
 ### 3.1 一个 workspace 解析函数（步骤 1）
 
 `config.get_swarmws()` 是唯一来源，优先级：`SWARM_WORKSPACE` → `SWARMWS` → `get_app_data_dir() / "SwarmWS"`。
@@ -99,7 +156,9 @@ create 时由 CLI 算一次，写进 run 的 artifacts（在 SwarmWS 里，**不
 
 - 查询：需求原文经 `_extract_query_keywords`。
 - `has_ddd`：DDD 条目最多 6 条 + Library 最多 3 条 + pipeline-lessons 文件里最新的条目；否则 Library + pipeline-lessons。
-- 总长上限 6000 字符；放不下的条目**整条**丢掉，并写明丢了几条、完整来源在哪。
+- 截断和预算按 §3.0 的 R1–R4，和聊天召回同一套函数。pipeline 只是另一组总量上限：DDD 3000、
+  Library 2000、pipeline-lessons 1000 字符，单条仍是 `HIT_CHAR_CAP`。截过的条目带"全文 N 字符：出处"，
+  主 agent 需要时按出处读全文。
 - 每条带出处（`doc#section` 或 Library 路径）和一个 8 位条目 hash。
 - 外部来源（Signals 等）单独成块，标 UNTRUSTED；所有召回文本包在 `<recalled>` 数据标签里，
   条目里的同名标签先删掉（旧 `project_knowledge` 的做法）。
@@ -119,7 +178,8 @@ create 事件记下的列表里，否则 `stage-complete` 拒绝（和测试引�
   去掉 `src`、`tests` 这类结构词，沿用旧 `project_knowledge.derive_query`）+ 需求关键词。
 - 只召回 DDD（`recall_ddd_entries`），**不给 Library**：个人笔记和外部内容和审这段代码关系不大，
   还多一个注入入口。
-- 最多 5 条、2500 字符，整条截断，数据标签，三种状态，嵌在 handout 里（不占专家 24 次调用）。
+- 最多 5 条、总量 2500 字符，截断按 §3.0 的 R1–R4；数据标签，三种状态，嵌在 handout 里。不占专家
+  24 次调用的任何一次；专家要看某条全文时，按出处读，多用 1 次调用。
 - handout 事件记下条目 hash。expert finding 可以带 `knowledge_ref`；不在这个 handout 列表里的引用
   按无效处理（不影响 finding 本身）。
 - 增量审查和 R2 用同一份块（按当次 diff 重算）。
@@ -138,7 +198,7 @@ create 事件记下的列表里，否则 `stage-complete` 拒绝（和测试引�
 ## 4. 不做的
 
 - 不在 THINK、PLAN、BUILD 再召回。agent 在 SwarmAI 里本来就有按需检索的工具，native 优先。
-- 不改聊天的召回和发送路径。
+- 除 §3.0 外不改聊天的召回；不改发送路径。§3.0 的字数上限不变，只改切法和截法。
 - 不给 security 专家加块；不给专家 Library。
 - DDD 的 Gates 节和 `review.md` 是两个质量来源，本设计不合并，只记录问题。
 - 不清理已有 run 的记录。
@@ -155,6 +215,7 @@ S5 加两个数，按 run 统计：
 
 | 步骤 | 内容 | 验收 |
 |---|---|---|
+| 0 | 召回统一用 `_scan_entry` 切条目；`clip` 截到句末带出处；预算按排名不跳过 | 结构测试：召回代码里没有按 `^- ` 切条目的正则、没有 `_truncate`；fixture 里吞了 `###` 小节的条目只剩 bullet 本身；超长条目截在句末且带出处；排第 3 的长条目不会被第 4、5 条挤掉；`recall_suite` recall@K / MRR 不下降、ddd 和 context_files 两路耗时变化在 ±10% 内 |
 | 1 | workspace 解析统一 | 结构测试 KNOWN 为空；rig 设 `SWARM_WORKSPACE` 后召回读的是临时 workspace（在 main 上是红的）；不设任何变量时解析结果不变 |
 | 2 | create 按绑定确定项目，`has_ddd` 进 contract | 名字不一致被拒；未绑定仓库照常；REFLECT 按 contract 路由 |
 | 3 | `knowledge.md` + `knowledge_refs` | 有 DDD / 无 DDD / 召回出错三种 fixture 各自状态正确；无效引用被拒；Signals 标 UNTRUSTED；REPORT 不含召回内容 |
@@ -165,5 +226,13 @@ S5 加两个数，按 run 统计：
 ## 7. 要 XG 定的
 
 1. §3.1 的优先级：`SWARM_WORKSPACE` 高于 `SWARMWS`。
-2. §3.3 和 §3.4 的条数和字数上限（6 + 3 条 / 6000 字符；专家 5 条 / 2500 字符）。
+2. §3.3 和 §3.4 的总量上限（pipeline 前端：DDD 3000 / Library 2000 / lessons 1000 字符；专家 5 条 / 2500 字符）。
 3. §5 的"30 天几乎没有引用就删"。
+4. §3.0 R2 的截法：截到句末加"全文 N 字符：出处"（备选：只给出处不给正文，会丢掉第一句规则）。
+
+## 修订
+
+- r1（2026-10-26）：初稿，四步。
+- r2（2026-10-26）：XG 审查指出按字数截会截断语义。实测发现两层问题：条目边界切错（平台召回的
+  bug），以及截断在句子中间、预算会让排名倒挂。新增步骤 0，并按 XG 的要求让系统级召回（聊天注入、
+  repo_guidance）和 pipeline 用同一套 R1–R4；§3.3、§3.4 不再自定截断规则。
