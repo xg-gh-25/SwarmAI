@@ -410,15 +410,28 @@ class SessionRecall:
                      exclude_session_id: str | None = None) -> str:
         """Search + format as readable text for system prompt injection.
 
-        Returns empty string if no matches found.  Distributes the character
-        budget across sessions, prioritizing user and assistant messages that
-        contain the search terms.  Truncates individual messages at sentence
-        boundaries when possible to preserve readability.
+        Returns empty string if no matches found. The text of
+        ``recall_about_hits`` joined, one block per session.
+        """
+        hits = self.recall_about_hits(topic, max_sessions=max_sessions,
+                                      budget_chars=budget_chars,
+                                      exclude_session_id=exclude_session_id)
+        return "\n\n".join(h["text"] for h in hits)
+
+    def recall_about_hits(self, topic: str, max_sessions: int = 3, budget_chars: int = 3000,
+                          exclude_session_id: str | None = None) -> list[dict]:
+        """One ``{"session_id", "date", "text"}`` per matched session.
+
+        ``date`` is the YYYY-MM-DD of the session's best match, kept as a field
+        so the relevance filter can judge age without parsing the text. The
+        character budget is distributed across sessions, prioritizing user and
+        assistant messages that contain the search terms; individual messages
+        are truncated at sentence boundaries when possible.
         """
         result = self.search(topic, max_sessions=max_sessions,
                              exclude_session_id=exclude_session_id)
         if not result.sessions:
-            return ""
+            return []
 
         # Rank a session's messages by how many query terms they contain. The
         # old ranking matched the WHOLE query as one phrase (which a multi-term
@@ -431,7 +444,7 @@ class SessionRecall:
 
         per_session = max(budget_chars // max(len(result.sessions), 1), 400)
 
-        lines: list[str] = []
+        out: list[dict] = []
 
         for sess in result.sessions:
             chars_used = 0
@@ -441,7 +454,7 @@ class SessionRecall:
             )
             if not ranked:
                 continue
-            lines.append(f"**{sess.date} · session {sess.session_id[:8]}**")
+            lines = [f"**{sess.date} · session {sess.session_id[:8]}**"]
             for msg in ranked:
                 if chars_used >= per_session:
                     break
@@ -452,9 +465,10 @@ class SessionRecall:
                     content = self._truncate_at_sentence(content, remaining)
                 lines.append(f"- {role}: {content}")
                 chars_used += len(content)
-            lines.append("")
+            out.append({"session_id": sess.session_id, "date": sess.date,
+                        "text": "\n".join(lines).strip()})
 
-        return "\n".join(lines).strip()
+        return out
 
     @staticmethod
     def _truncate_at_sentence(text: str, max_chars: int) -> str:

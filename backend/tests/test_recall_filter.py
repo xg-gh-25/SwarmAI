@@ -50,7 +50,8 @@ def test_single_plain_word_recalls_nothing_but_code_term_does():
 
 
 def test_code_symbols_only_for_code_like_terms():
-    sym = [{"id": "core.session_router.build", "name": "build"}]
+    sym = [{"id": "core/session_router.py::build", "name": "build",
+            "file_path": "core/session_router.py"}]
     assert filter_recall(_result("build 重启", codeintel=sym)).buckets["codeintel"] == []
     assert filter_recall(_result("session_router build", codeintel=sym)).buckets["codeintel"]
 
@@ -167,13 +168,43 @@ async def test_followup_recall_runs_on_a_new_topic_only(monkeypatch):
     assert await sr._maybe_followup_recall("deploy hive ami 镜像", o, u, False) is None
 
 
-async def test_followup_recall_is_capped(monkeypatch):
+async def test_followup_recall_stops_at_the_session_budget(monkeypatch):
+    """D2: the cost bound is what the session injected, not a follow-up count."""
     import core.session_router as sr
     from unittest.mock import MagicMock
-    monkeypatch.setattr(sr, "_unified_recall_body", lambda *a: ("x" * 50, []))
+    calls = []
+    monkeypatch.setattr(sr, "_unified_recall_body", lambda *a: calls.append(a) or ("x" * 50, []))
     u, o = _fu_unit(), MagicMock(); o.system_prompt = ""
-    u._recall_followups = sr._RECALL_MAX_FOLLOWUPS
+    u._recall_chars = sr._RECALL_SESSION_CHARS
     assert await sr._maybe_followup_recall("pipeline worktree 隔离", o, u, False) is None
+    assert calls == []                      # spent budget: recall does not even run
+
+
+
+async def test_followup_recall_over_budget_is_not_injected(monkeypatch):
+    import core.session_router as sr
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(sr, "_unified_recall_body", lambda *a: ("y" * 500, []))
+    u, o = _fu_unit(), MagicMock(); o.system_prompt = ""
+    u._recall_chars = sr._RECALL_SESSION_CHARS - 100
+    assert await sr._maybe_followup_recall("pipeline worktree 隔离", o, u, False) is not None
+    assert u._recall_query_block is None
+    assert u._recall_chars == sr._RECALL_SESSION_CHARS     # and no more follow-ups
+
+
+
+async def test_followup_recall_has_no_count_cap(monkeypatch):
+    """The old cap of 6 follow-ups is gone: a 7th new topic still recalls."""
+    import core.session_router as sr
+    from unittest.mock import MagicMock
+    monkeypatch.setattr(sr, "_unified_recall_body", lambda *a: ("z" * 50, []))
+    u, o = _fu_unit(), MagicMock(); o.system_prompt = ""
+    u._recall_followups = 6
+    u._recall_chars = 0
+    assert await sr._maybe_followup_recall("pipeline worktree 隔离", o, u, False) is not None
+    assert u._recall_query_block and "z" * 50 in u._recall_query_block
+    # The budget counts the whole delivered block (header + hint), not the body.
+    assert u._recall_chars == len(u._recall_query_block) + 2
 
 
 def test_ddd_leg_injects_only_relevant_sections(tmp_path, monkeypatch):

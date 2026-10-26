@@ -31,7 +31,7 @@ State is per session (``_STATE``), bounded (``MAX_REPOS_PER_SESSION``), and drop
 ``forget(session_id)`` from LifecycleManager._release_session_state. The filesystem work
 runs on the ``gate`` executor; any error fails open (no context, no deny).
 
-Public: ``create_repo_guidance_hook``, ``forget``, ``GUIDANCE_FILES``.
+Public: ``create_repo_guidance_hook``, ``forget``, ``session_bound_project``, ``GUIDANCE_FILES``.
 """
 from __future__ import annotations
 
@@ -67,6 +67,14 @@ _bound_cache: list = [0.0, {}]
 
 def forget(session_id: str) -> None:
     _STATE.pop(session_id, None)
+
+
+def session_bound_project(session_id: str) -> "str | None":
+    """The project bound (``bindings.yaml``) to the repo this session last worked
+    in, or None. Read-only view of the state the hooks keep; recall uses it to
+    find the session's DDD (design 2026-10-26 D3)."""
+    state = _STATE.get(session_id or "")
+    return state.get("bound_project") if state else None
 
 
 def _repo_root(path: str) -> "str | None":
@@ -363,6 +371,8 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
         main = _main_checkout(root)
         bound = _bound_projects()
         project = bound.get(root) or bound.get(main)
+        if project:
+            state["bound_project"] = project     # the last bound repo touched
         extras = []
         got = _lessons(main)
         if got is not None:

@@ -372,6 +372,7 @@ def recall_all(
     policy_excluded_files: frozenset[str] = frozenset(),
     exclude_session_id: Optional[str] = None,
     deadline: Optional[float] = None,
+    prompt_text: Optional[str] = None,
 ) -> BucketedRecall:
     """Fan ``query`` across all (or the requested) READ recall domains.
 
@@ -398,6 +399,9 @@ def recall_all(
             enforces (run_4358cc95 Gate-2).
         exclude_session_id: the asking session, left out of the ``session``
             domain (its own just-persisted message would be the best match).
+        prompt_text: the asking session's prompt (plus what it already recalled).
+            Given, the context_files leg scores only MEMORY entries outside it
+            (``_memory_outside_prompt``); ``None`` keeps whole-file scoring.
         deadline: ``time.monotonic()`` value after which the remaining legs are
             skipped (``hit_layers[leg] = "skipped_deadline"``). The runtime caller
             gives up waiting at its timeout, but a worker thread cannot be
@@ -446,7 +450,7 @@ def recall_all(
     if _go("context_files"):
         result.buckets["context_files"], result.hit_layers["context_files"] = \
             _recall_context_files(query, allow_embed, max_sections,
-                                  policy_excluded_files)
+                                  policy_excluded_files, prompt_text)
 
     if _go("ddd"):
         result.buckets["ddd"], result.hit_layers["ddd"] = \
@@ -702,14 +706,66 @@ def _render_domain_hits(domain: str, hits: list) -> str:
     return "\n".join(lines)
 
 
+def _memory_outside_prompt(content: str, prompt_text: str) -> str:
+    """The entries of ``content`` (MEMORY.md) that are NOT in ``prompt_text``,
+    regrouped under their ``## section`` headings.
+
+    A session prompt carries live MEMORY's active entries; what recall can add
+    from the live file is only what the prompt lacks: dormant/archived entries
+    the loader filters out, and entries another session wrote after this prompt
+    was built. Scoring the whole file instead let in-prompt sections take every
+    top slot, then the duplicate filter emptied them (931 raw -> 6 kept), so the
+    out-of-prompt entries could never surface (design 2026-10-26 D4). Entry =
+    a column-0 ``- `` bullet with its following non-heading lines.
+    """
+    from core.recall_filter import _norm, in_prompt_text
+
+    prompt_norm = _norm(prompt_text)
+    out: list[str] = []
+    heading = ""
+    heading_emitted = False
+    entry: list[str] = []
+
+    def _present(text: str) -> bool:
+        n = _norm(text)
+        return n in prompt_norm if len(n) < 40 else in_prompt_text(text, prompt_norm)
+
+    def _flush():
+        nonlocal heading_emitted
+        if entry and not _present("\n".join(entry)):
+            if heading and not heading_emitted:
+                out.append(heading)
+                heading_emitted = True
+            out.extend(entry)
+        entry.clear()
+
+    for line in content.splitlines():
+        if line.startswith("## "):
+            _flush()
+            heading, heading_emitted = line, False
+        elif line.startswith("- "):
+            _flush()
+            entry.append(line)
+        elif entry:
+            entry.append(line)
+    _flush()
+    return "\n".join(out)
+
+
 def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
                           policy_excluded_files: frozenset[str] = frozenset(),
+                          prompt_text: Optional[str] = None,
                           ) -> tuple[list, str]:
     """Recall over the 11 context files via the existing recall_context verb.
 
     Reads the live MEMORY.md (the highest-value excluded-section domain). Other
     context files are policy/budget-excluded per session; MEMORY is the canonical
     one a recall query targets. Keyword-only when allow_embed=False.
+
+    ``prompt_text`` (session recall): score only the MEMORY entries that prompt
+    lacks (``_memory_outside_prompt``); none -> ``([], "in_prompt")`` without
+    scoring. ``None`` (the CLI, which recalls policy/budget-excluded sections)
+    keeps the whole-file behaviour.
 
     Privacy: ``policy_excluded_files`` is passed to ``recall_context``, which
     HARD-DENIES (returns allowed=False, empty) when MEMORY.md is policy-excluded
@@ -729,6 +785,10 @@ def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
         content = mem_path.read_text(encoding="utf-8")
     except OSError:
         return hits, layer
+    if prompt_text is not None:
+        content = _memory_outside_prompt(content, prompt_text)
+        if not content.strip():
+            return hits, "in_prompt"
     res = recall_context("MEMORY.md", query, memory_content=content,
                          policy_excluded_files=policy_excluded_files,
                          max_sections=max_sections, allow_embed=allow_embed)
@@ -1157,16 +1217,20 @@ def detect_active_project(
     editor_file_path: Optional[str] = None,
     query: Optional[str] = None,
     candidates: Optional[list[str]] = None,
+    session_bound_project: Optional[str] = None,
 ) -> tuple[Optional[str], str]:
     """Detect the active project for runtime DDD recall. FAIL-CLOSED.
 
-    Two signals, first hit wins (spec run_4a5a5cab §3.1; signal-2 project_id is
-    vaporware — no session→thread wiring — so it is NOT implemented here):
+    Three signals, first hit wins:
 
       signal-1 (DETERMINISTIC): editor_file_path points into `Projects/<X>/` or
         `backend/skills/s_<x>-*` whose owning project is unambiguous.
-      signal-3 (PROBABILISTIC): query keywords match EXACTLY ONE project's
-        name/alias tokens. Ambiguous (≥2) or zero match → give up.
+      signal-2 (DETERMINISTIC): the project whose ``bindings.yaml`` binds the repo
+        this session last worked in (``repo_guidance.session_bound_project``,
+        passed in by the caller). 79 of 100 replayed sessions had one, while the
+        message text named the project in 4 (design 2026-10-26 D3).
+      signal-3 (PROBABILISTIC): the message names EXACTLY ONE project by its whole
+        name or an alias. Ambiguous (≥2) or zero match → give up.
 
     Returns (project, signal_name) on a confident hit, else (None, reason).
     Ambiguity → (None, "ambiguous") so the caller injects NOTHING — a wrong
@@ -1195,6 +1259,10 @@ def detect_active_project(
                 pref = _project_skill_prefix(proj)
                 if pref and skill.startswith(pref):
                     return proj, "signal1_skill_path"
+
+    # ── signal-2: the repo this session works in is bound to a project ──
+    if session_bound_project and session_bound_project in candidates:
+        return session_bound_project, "signal2_bound_repo"
 
     # ── signal-3: keyword disambiguation (probabilistic, fail-closed) ──
     if query:
@@ -1227,21 +1295,47 @@ def _project_skill_prefix(project_name: str) -> Optional[str]:
 
 
 def _project_matches_query(project_name: str, query_lower: str) -> bool:
-    """True if the query mentions this project by a distinctive WHOLE-WORD token.
+    """True if the query names this project by its WHOLE name (or an alias).
 
-    Tokenizes the project name on separators (CMHK_SalesIntel →
-    {cmhk, salesintel}); a token matches only as a WHOLE WORD in the query
-    (\\b boundary), never a substring — so "aidlctastic" does NOT match AIDLC
-    (Gate-2 M2: raw substring gave false single-project resolutions). ≥3-char
-    tokens only. Deliberately strict — a false match pollutes recall, so this
-    keeps the fail-closed bias.
+    The name's separators are free: ``Agent-DLC`` matches ``agent-dlc``,
+    ``agent_dlc``, ``agentdlc`` and ``agent dlc``. Single tokens of a name never
+    match on their own: matching ``agent`` / ``repo`` / ``github`` alone sent 55
+    of 1771 replayed messages to Agent-DLC just for saying "agent" (design
+    2026-10-26 D3). A project lists extra names in ``aim.json`` ``aliases``.
+    The boundary is "not next to an ASCII letter or digit", not ``\\b``: Python's
+    ``\\b`` treats CJK as word characters, so "SwarmAI看下" never matched.
     """
     import re
 
-    tokens = [t for t in re.split(r"[_\-\s]+", project_name.lower()) if len(t) >= 3]
-    return any(
-        re.search(rf"\b{re.escape(t)}\b", query_lower) for t in tokens
-    )
+    for form in _project_name_forms(project_name):
+        if re.search(rf"(?<![a-z0-9]){re.escape(form)}(?![a-z0-9])", query_lower):
+            return True
+    return False
+
+
+def _project_name_forms(project_name: str) -> set[str]:
+    """Lower-case spellings that name ``project_name``: separator variants of the
+    name, plus each ``aliases`` entry of its ``aim.json``. Forms under 3 chars
+    are dropped (too short to be a deliberate mention)."""
+    import re
+
+    names = [project_name]
+    try:
+        from core.project_registry import get_projects_dir
+        manifest = get_projects_dir() / project_name / "aim.json"
+        if manifest.is_file():
+            aliases = json.loads(manifest.read_text(encoding="utf-8")).get("aliases") or []
+            names += [a for a in aliases if isinstance(a, str)]
+    except Exception as exc:  # noqa: BLE001 — a bad manifest only loses its aliases
+        logger.debug("project aliases unavailable for %r: %s", project_name, exc)
+    forms: set[str] = set()
+    for name in names:
+        toks = [t for t in re.split(r"[_\-\s]+", name.lower()) if t]
+        for sep in ("", "-", "_", " "):
+            form = sep.join(toks)
+            if len(form) >= 3:
+                forms.add(form)
+    return forms
 
 
 def _recall_library(query: str, allow_embed: bool = False) -> tuple[list, str]:
@@ -1296,15 +1390,13 @@ def _recall_session(query: str,
         return [], "none"
     try:
         recall = _get_session_recall(DB_PATH)
-        text = recall.recall_about(query, max_sessions=3, budget_chars=2400,
-                                   exclude_session_id=exclude_session_id)
+        hits = recall.recall_about_hits(query, max_sessions=3, budget_chars=2400,
+                                        exclude_session_id=exclude_session_id)
     except Exception as exc:  # noqa: BLE001
         logger.debug("session recall failed: %s", exc)
         return [], "none"
 
-    if not text:
+    if not hits:
         return [], "none"
-    # recall_about separates sessions with a blank line before each bold header.
-    hits = [{"text": part.strip()} for part in re.split(r"\n(?=\*\*\d{4}-)", text)
-            if part.strip()]
+    # {text, date, session_id}: the date lets recall_filter judge the hit's age.
     return hits, "fts"

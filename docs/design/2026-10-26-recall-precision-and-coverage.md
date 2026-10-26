@@ -3,7 +3,7 @@ title: Recall 实测评估与改进 — 精度、follow-up 覆盖、DDD 项目�
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r1 — 设计，待评审
+status: r3 — 已实施（D1–D4）；D2 未达标，见 §8
 ---
 
 # Recall 实测评估与改进
@@ -15,7 +15,8 @@ status: r1 — 设计，待评审
 **D1** 注入内容有一半以上不是有用的（库命中排名靠后的、过去会话里一周前的，基本是噪音）；
 **D2** follow-up 的"每会话 6 次"上限把长会话后半段的 recall 全挡掉；
 **D3** DDD 项目识别几乎总是失败（100 次里 4 次识别成功），因为名字匹配用了通用词、并且没用"会话碰过哪个绑定仓库"这个现成事实；
-**D4** context_files 这一路在会话路径上永远只返回已在 prompt 里的 MEMORY，是空转。
+**D4** context_files 这一路在整个 live MEMORY 上检索，前几名总是已在 prompt 里的条目，被去重后为空；
+真正在 prompt 外的条目（dormant、会话中途新写入的）排不上来。改成只在 prompt 外的条目上检索。
 
 每条改动都有回放数据支撑；验收用一份**没参与调参**的新样本重测（§5）。
 
@@ -92,11 +93,22 @@ status: r1 — 设计，待评审
    `repo_guidance` 已经有（`_STATE[session]["repos"]` + `bindings.yaml` 的 `worktree`），
    recall 没用。79 个会话碰过绑定仓库，但项目识别只在首消息之前做。
 
-**G4 context_files。** `_recall_context_files` 只读 live `MEMORY.md`。MEMORY 从 2026-08-14 起总是
-整份注入，`recall_filter` 的"已在 prompt 里"检查于是把它的命中全部丢掉。这一路设计时是为了取回
-**被排除**的 section（channel 隐私排除、预算排除），而能拿到 recall 的会话（桌面 tab、owner 私聊）
-恰好什么都不排除。MEMORY 的归档（`.context/Archives/`）和较早的 DailyActivity 都已经在 Library 索引里，
-由库那一路覆盖。会话路径上这一路没有可能返回新东西。
+**G4 context_files。** 先分清 Memory 的三层，它们走不同的路：
+
+| 层 | 大小（2026-10-26） | 进 prompt？ | 谁负责 recall |
+|---|---|---|---|
+| live `MEMORY.md` 的活跃条目 | 约 73K 字符 | 进，整份（`_filter_dormant_entries` 去掉 dormant/archived 条目后） | 不需要 |
+| live `MEMORY.md` 里 `decay:dormant` / `decay:archived` 的条目 | 现在 0 + 1 条 | 不进 | context_files 这一路（只有它读 live 文件） |
+| 别的会话在本会话开始**之后**写进 MEMORY 的条目 | 视情况 | 不进（本会话的 prompt 是开始时组的） | context_files 这一路（follow-up 时） |
+| `MEMORY-archive-*.md`（8 个月份）和 EVOLUTION 归档 | MEMORY 归档约 535K，切成 1184 个条目级 chunk | 不进 | 库那一路，来源前缀 `.context/Archives/` |
+
+所以"更大的 Memory 范围"主要靠库那一路查归档，context_files 只负责"live 文件里不在 prompt 的那一小部分"。
+它空转的原因不是没有这部分内容，而是**它在整个 live MEMORY.md 上做 BM25**，返回排名前 3 的 section，
+而这 3 个几乎总是已经在 prompt 里的活跃内容，接着被 `recall_filter` 当作重复丢掉。真正在 prompt 外的条目
+即使和问题相关，也排不进前 3，永远出不来。931 个原始命中只剩 6 个就是这个原因。
+
+另外，失败时的回退路径 `_recall_for_query` 里的 `MemoryRecallStore` 查的是 `memory_entries` 表，
+这张表在当前数据库里**不存在**，所以那一路一直是空的，只是没报错。
 
 **G5 首消息的"不需要"。** 不需要 recall 的 17 条里，大部分是"看下这个 <URL/路径>"、"测一下这个 ‘<一大段粘贴>’"、
 "Reply with exactly the word pong"这类。关键词从粘贴内容或 URL 旁边的几个词里抽出来，跟过去的东西碰巧重合。
@@ -115,6 +127,7 @@ D1–D4 同一优先级，一起做、一起验收。D5 是实验项。
 在 `recall_filter.filter_recall` 里，现有的覆盖门槛保持不变，再加三条规则：
 
 1. **库命中每次最多保留前 3 个**（按 `recall_all` 已经给出的顺序）。排名第 5 以后的命中有用率只有 15%。
+   MEMORY/EVOLUTION 归档（`.context/Archives/`）不计入这 3 个，另外最多保留 2 个，原因见 D4。
 2. **Signals（包括 `Archives/Signals`）和 DailyBriefs 这两类来源不进会话 recall**。实测有用率是 0。
    Signals 本来就是标为 UNTRUSTED 的抓取内容（4fc9315a0），DailyBriefs 是从 Signals 生成的。
    MEMORY 的归档（`.context/Archives/`）不在此列，它的有用率是 26%，保留。
@@ -184,17 +197,23 @@ D1 用 4% 的覆盖换掉了 36% 的注入量，省下来的量在 D2 里用掉�
 回放：全名匹配让首消息误判从 6 次降到 0 次，SwarmAI 的首消息识别从 4 次升到 10 次。signal-2 在 79 个
 会话里能给出项目，其中 74 个从第二条用户消息开始就有。
 
-### D4 context_files：从会话路径上拿掉
+### D4 context_files：只在"prompt 外的 MEMORY 条目"上检索
 
-- `_unified_recall_body` 的 domain 列表里去掉 `context_files`，`_maybe_inject_recall_inner` 记 metrics 时
-  的 `_sp_domains` 也同步去掉。
-- 失败时的回退路径 `_recall_for_query` 里的 `MemoryRecallStore` 也是同样的空转，一并去掉。
-- `recall_all` 本身**保留** `context_files` 这个 domain：`context_recall_cli.py`（agent 按需取被排除的
-  section，并对隐私排除做硬拒绝）和 `recall_suite.py` 基准还在用它，它们的场景是真的有内容被排除。
-- 以后如果能拿到 recall 的会话开始排除 MEMORY 的 section，再把它加回来。加回来的条件写进
-  `_unified_recall_body` 的注释，不写成一个开关。
+不删这一路（删掉会丢掉 dormant 条目和会话中途新写入的条目），而是把它的检索范围改对：
 
-每次 recall 省掉一次 MEMORY.md 读取和 BM25（约 13ms），注入内容不变（过滤后本来就是 0）。
+- 会话路径上，`_recall_context_files` 先把 live `MEMORY.md` 拆成条目（`- ` 开头的 bullet 连同续行和元数据行，
+  和 `_filter_dormant_entries` 用同一套条目边界），**只留下不在本会话 prompt 里的条目**，按原来的 `## section`
+  重新拼成一份小 markdown，再在这份小文档上跑 `recall_context`。"在不在 prompt 里"用 `recall_filter._in_prompt`
+  同一个判断，不另写一套。
+- prompt 外一个条目都没有时，直接跳过（`hit_layer = "in_prompt"`），不读 BM25。按现在的数据这是常态。
+- `recall_context` 的 CLI 用法（agent 按需取 channel 隐私/预算排除的 section，隐私排除硬拒绝）不变：
+  只有会话路径传入 `prompt_text`，CLI 不传，行为和现在一样。
+- 回退路径 `_recall_for_query` 里的 `MemoryRecallStore` 删掉（它查的表不存在，一直返回空）。
+
+和 D1 的关系：MEMORY 归档走库那一路，D1 的"库命中只留前 3"会把它挤掉（回放里归档命中有 35% 排在第 4 名及以后）。
+所以 D1 里 `.context/Archives/` **单独占名额**：不计入库的前 3，另外最多保留 2 个过了相关性门槛的归档命中，
+受库那一路的字符上限约束。250 条样本里归档命中只有 31 个（有用 26%，噪音 29%，和库的平均水平相当），
+数量太少，不能据此给它更多或更少的名额；验收时单独统计这一类。
 
 ### D5（实验，验收通过才合入）：粘贴和链接不抽关键词
 
@@ -219,7 +238,7 @@ D1 用 4% 的覆盖换掉了 36% 的注入量，省下来的量在 D2 里用掉�
 - D1：在内存里过滤已经取回的命中，增加的时间可以忽略。
 - D2：多出的 recall 每次中位 125ms，跑在 `io` 线程池上，只发生在"判为新话题"的消息上。
 - D3：每条消息多一次 dict 读取，项目被识别出来后不再读。
-- D4：每次 recall 少约 13ms。
+- D4：prompt 外没有 MEMORY 条目时（常态）跳过 BM25，每次少约 13ms；拆条目和包含判断是内存里的字符串操作。
 
 所有改动都不碰事件循环，也不碰 chat 路径等待的线程池。
 
@@ -242,7 +261,9 @@ D1 用 4% 的覆盖换掉了 36% 的注入量，省下来的量在 D2 里用掉�
    - 7 天前的会话命中只匹配 2 个词时被丢掉；
    - 项目名里的 "agent" 不再命中 Agent-DLC，"SwarmAI看下" 能命中；
    - 首消息之后才碰绑定仓库的会话，下一条消息能注入 DDD section；
-   - 会话 recall 的结果里不再有 `context_files`，CLI 的 `recall_all(domains=("context_files",))` 照常工作；
+   - live MEMORY 里一条 dormant 条目和问题相关、同 section 其他条目都在 prompt 里时，会话 recall 能取到它（现在取不到）；
+   - prompt 外没有条目时 context_files 这一路不跑 BM25；CLI 不传 `prompt_text` 时行为和现在一样；
+   - 库那一路有 3 个以上普通命中时，过了门槛的归档命中仍然保留；
    - 预算到了就停。
 
 ## 6. 不做
@@ -260,18 +281,71 @@ D1 用 4% 的覆盖换掉了 36% 的注入量，省下来的量在 D2 里用掉�
 都在自己的 worktree 里做，每一步一个 ff-merge 的 commit，不 push，不 rebuild：
 
 1. 把回放工具放进仓库（§5.1）。先在"现在"的代码上跑一遍新样本，得到基线。
-2. D4（只删东西，最简单）。
+2. D4（context_files 只检索 prompt 外的条目；删掉回退路径里查不存在的表的 `MemoryRecallStore`）。
 3. D1，包括 `SessionRecall` 返回结构化日期。
 4. D2，依赖 D1 先把每次的注入量降下来。
 5. D3：`repo_guidance.session_bound_project`、全名匹配、触发时机。
 6. 跑新样本验收（§5.3），结果写回本文 §8。
 7. D5 单独验证，通过了才合入。
 
-## 8. 验收结果
+## 8. 验收结果（2026-10-26）
 
-（实施后填写。）
+新样本：活跃时间排第 101–200 的 100 个会话，3101 条用户消息，和调参用的那批不重叠。
+`recall_replay.py replay --skip 100 --count 100`；判定：main 和新代码对同一批 200 条消息
+（100 首消息 + 100 后续消息）各出一份，打乱后盲评，判定者不知道哪份是哪个版本；
+另抽 50 条"新代码因预算没跑、但会有命中"的消息单独判定。
 
-## 待确认
+**相关性（盲评，450 条记录）**
 
-- 回放工具要读 `data.db`（只读）。同意把它放进仓库、每次手动运行吗？还是只放在 scratch、每次临时用？
-- 会话预算 24K：按现在的回放，会让 p90 会话的累计注入从 16K 涨到约 24K。可以接受吗？
+| | main | 新代码 |
+|---|---|---|
+| 命中数 | 1125 | 849 |
+| 有用 | 38.4% | 44.6% |
+| 噪音 | 32.9% | 26.6% |
+| 库命中 有用 / 噪音 | 40% / 32% | 52% / 20% |
+| 首消息：需要且拿到有用命中 | 77 / 83 | 75 / 82 |
+| 后续消息：需要且拿到有用命中 | 60 / 91 | 61 / 95 |
+| 同一消息一对一比较 | 9 条 main 更好 | 7 条新代码更好（184 条相同） |
+
+盲评后又修了一处：代码符号那一路的噪音率是 75%，原因是把整个文件路径拿去匹配
+（`s_autonomous-pipeline` 命中了这个目录下所有 symbol），并且 `SwarmAI` 这种项目名
+被当成代码词。改成只匹配 symbol 名加文件名，项目名不算代码词。上表是修之前的数字。
+
+**机械指标（3101 条消息）**
+
+| | main | 新代码（24K） | 新代码（48K，对照） |
+|---|---|---|---|
+| 实际跑了 recall 的消息 | 442 | 474 | 743 |
+| 会命中但没跑的消息 | 1804 | 1726 | 1490 |
+| 单次注入中位 / p90 | 4.8K / 5.1K | 3.8K / 4.7K | 3.7K / 4.7K |
+| 会话累计 p90 / 最大 | 31.6K / 36.0K | 23.5K / 24.0K | 46.6K / 47.7K |
+| 所有会话注入总量（约 token） | 430K | 341K | 553K |
+| 识别出项目的会话 | 21 | 65 | 65 |
+| 注入了 DDD 的消息 | 20 | 48 | 48 |
+| Signals / DailyBriefs 注入 | 82 | 0 | 0 |
+| recall 中位 / p90 耗时（跑了的消息） | 85 / 220ms | 121 / 285ms | 114 / 263ms |
+
+**对照 §5.3 的通过条件**
+
+- 噪音降低至少 8 个百分点：盲评 −6.3 个点；代码符号修好后，按它的 21 个噪音命中算约 −8 个点。勉强达到。
+- 有用提高至少 6 个百分点：+6.2 个点。达到。
+- 需要 recall 且拿到有用命中的数量下降不超过 5%：基本持平（137 → 136）。达到。
+- 被上限或预算挡掉、但本可拿到有用命中的消息减少一半：**没达到**。24K 下 1804 → 1726。
+  设计时按命中文本估算会话累计量，真实注入还带标题、来源和提示，单次 3.8–4.7K，24K 只够约 5 次。
+  被挡掉的 50 条里 38 条本来能拿到有用命中，挡掉的确实有价值。
+- DDD 误判为 0：首次靠名字识别出项目的 24 个会话，逐条看过，消息里都写了项目全名（如"继续 Agent-DLC"、"沉淀进 AIDLC 的 TECH.md"）；
+  识别出项目的会话从 21 个到 65 个，41 个靠绑定仓库。达到。
+- 会话累计不超过 24K、首消息单次不超过 4.9K：最大 24.0K / 首消息 p90 4.7K。达到。
+- recall p90 不变差：220 → 285ms（所有跑了 recall 的消息）。**变差 65ms**，来自 DDD 那一路在后续消息上也会跑、
+  以及 context_files 的条目拆分；仍远低于 8 秒的灾难上限，跑在 `io` 线程池上。
+
+**结论**：精度、DDD、Memory 范围、注入总量（−21%）四项达到；"长会话后半段拿不到 recall"
+在 24K 预算下没有解决。把预算提到 48K 可以多跑 57% 的 recall，代价是注入总量比现在的 main 多 29%。
+预算是一个常量（`_RECALL_SESSION_CHARS`），按 24K 合入，是否提高由 Gawan 决定。
+
+## 已确认（2026-10-26）
+
+- 回放工具进仓库（`backend/scripts/recall_replay.py`），只读，手动运行，每次运行前征得同意。
+- 会话预算 24K。
+- Memory recall 的取舍：prompt 里注入的是 live MEMORY 的活跃条目，recall 要覆盖的是更大的范围（live 文件里
+  不在 prompt 的条目 + 归档）。D4 由"从会话路径上拿掉"改为"只在 prompt 外的条目上检索"，D1 给归档单独名额。

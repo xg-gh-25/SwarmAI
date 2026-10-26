@@ -196,13 +196,13 @@ class TestW4MemoryHealthSupersede:
 
 
 class TestW5RecallFallbackStores:
-    """The legacy fallback recall passes additional stores, but no transcript."""
+    """The legacy fallback recall reads the library only: no transcript store, and
+    no MemoryRecallStore (it read a memory_entries table nothing writes; design
+    2026-10-26 D4 -- live MEMORY is the unified path's context_files leg)."""
 
-    def test_recall_for_query_uses_additional_stores(self):
-        """_recall_for_query must create RecallEngine with additional_stores."""
+    def test_recall_for_query_has_no_dead_stores(self):
         import inspect
         from core.session_router import _recall_for_query
         source = inspect.getsource(_recall_for_query)
-        assert "additional_stores" in source, \
-            "_recall_for_query must pass additional_stores to RecallEngine"
         assert "TranscriptStore" not in source and "transcript_indexer" not in source
+        assert "memory_recall_store" not in source

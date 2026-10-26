@@ -437,7 +437,7 @@ class TestDetectActiveProject:
     def test_signal3_keyword_unique_match(self):
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            query="show me the acme weekly numbers", candidates=self.CANDS,
+            query="show me the acme_salesintel weekly numbers", candidates=self.CANDS,
         )
         assert proj == "Acme_SalesIntel" and sig == "signal3_keyword"
 
@@ -445,7 +445,7 @@ class TestDetectActiveProject:
         """≥2 project keyword matches → None (never guess, never pollute)."""
         from core.recall_multi import detect_active_project
         proj, sig = detect_active_project(
-            query="compare acme and widgets community", candidates=self.CANDS,
+            query="compare acme-salesintel and widgets community", candidates=self.CANDS,
         )
         assert proj is None and sig == "ambiguous"
 

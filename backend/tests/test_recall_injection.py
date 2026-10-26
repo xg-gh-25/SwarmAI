@@ -392,58 +392,36 @@ class TestMaybeInjectRecall:
 # The embed leg is a DELAYED STUB simulating Bedrock latency. Non-creds-dependent.
 
 import contextlib
-import hashlib
-import json
 import sqlite3
 import tempfile
 from pathlib import Path
 
 
-def _seed_memory_db(db_path: Path) -> None:
-    """Create a real memory_entries DB with one keyword-matchable entry, so the
-    keyword leg through MemoryRecallStore has data to find.
-
-    NEW ARCHITECTURE (2026-08-14): the vector leg (memory_vec / sqlite-vec) was
-    removed — recall is pure FTS5+BM25 keyword. This seeds ONLY memory_entries
-    (the LIKE-scan table MemoryRecallStore reads), no embedding, no vec table.
-    """
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS memory_entries (
-                key TEXT PRIMARY KEY,
-                section TEXT NOT NULL,
-                title TEXT NOT NULL,
-                full_text TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                keywords TEXT,
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )
-        """)
-        full_text = "exit code -9 cascading SIGKILL OOM crash recovery resume"
-        conn.execute(
-            "INSERT INTO memory_entries (key, section, title, full_text, content_hash, keywords) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                "COE05", "COE Registry",
-                "exit code -9 cascading SIGKILL failure",
-                full_text,
-                hashlib.sha256(full_text.encode()).hexdigest(),
-                json.dumps(["sigkill", "oom", "crash", "recovery", "resume"]),
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+_MEMORY_MD = """## COE Registry
+- [COE05] **exit code -9 cascading SIGKILL failure** — OOM crash, recovery by resume.
+  <!-- ref:0 | last:2026-01-01 | decay:dormant -->
+- [COE06] An unrelated active entry about the frontend build cache.
+  <!-- ref:3 | last:2026-10-01 | decay:active -->
+"""
 
 
 @contextlib.contextmanager
 def _seeded_db():
+    """A hermetic workspace: live MEMORY.md holds a DORMANT entry (filtered out of
+    the session prompt, so only recall can bring it back) and the DBs are empty.
+
+    Replaces the old memory_entries seed: MemoryRecallStore read a table nothing
+    in production writes (design 2026-10-26 D4); the live-MEMORY recall path is
+    the context_files leg scoped to entries outside the prompt.
+    """
     with tempfile.TemporaryDirectory() as d:
-        db = Path(d) / "mem.db"
-        _seed_memory_db(db)
-        # _recall_for_query opens via open_vec_db() → jobs.paths.DB_PATH.
-        with patch("jobs.paths.DB_PATH", db), \
+        ws = Path(d) / "SwarmWS"
+        (ws / ".context").mkdir(parents=True)
+        (ws / ".context" / "MEMORY.md").write_text(_MEMORY_MD, encoding="utf-8")
+        db = Path(d) / "empty.db"
+        sqlite3.connect(str(db)).close()
+        with patch("core.project_registry.get_swarmws", return_value=ws), \
+                patch("jobs.paths.DB_PATH", db), \
                 patch("core.vec_db._DEFAULT_DB_PATH", db):
             yield db
 
@@ -474,7 +452,7 @@ class TestRealRecallPathBudget:
         """PURE-FILESYSTEM (design §3.3/§5.2/§5.4, 2026-06-28): the recall path is
         KEYWORD-ONLY — the Bedrock VECTOR leg was removed entirely (there is no
         embed function left to spy on). Recall still LANDS through the keyword
-        floor (MemoryRecallStore), just without embedding.
+        floor (the context_files leg over MEMORY entries outside the prompt).
         """
         from core import session_router as sr
 
@@ -490,8 +468,8 @@ class TestRealRecallPathBudget:
 
     @pytest.mark.asyncio
     async def test_memory_entry_recallable_by_keyword(self, mock_unit, mock_options):
-        """AC4: a MEMORY entry is recallable by keyword through the real path
-        (MemoryRecallStore keyword leg). Proves Memory is wired, not cosmetic."""
+        """AC4: a MEMORY entry outside the prompt (dormant) is recallable by keyword
+        through the real path. Proves Memory is wired, not cosmetic."""
         from core import session_router as sr
 
         with _seeded_db():

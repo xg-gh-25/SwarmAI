@@ -38,7 +38,8 @@ class TestUnifiedRecallCfull:
         monkeypatch.setattr(
             _rm, "_codeintel_recall",
             lambda q, project=None, limit=8: [
-                {"id": "core.session_router._unified_recall_body", "name": "_unified_recall_body"}
+                {"id": "core.session_router._unified_recall_body", "name": "_unified_recall_body",
+                 "file_path": "backend/core/session_router.py"}
             ],
         )
         from core.session_router import _unified_recall_body, _resolve_active_project
@@ -195,12 +196,11 @@ class TestDddRuntimeInjection:
         )
         _ddd_inject_count.clear()
         o = _FakeOpts()
-        # Mentions a distinctive whole-word token of BOTH synthetic projects
-        # (acme + beacon) → 2 matches → fail-closed at detection.
+        # Names BOTH synthetic projects by their whole names → 2 matches →
+        # fail-closed at detection.
         from core.session_router import _resolve_active_project
-        _inject_ddd_for_active_project(
-            o, "compare acme and beacon rollout",
-            _resolve_active_project(None, "compare acme and beacon rollout"))
+        q = "compare acme salesintel and beacon_community rollout"
+        _inject_ddd_for_active_project(o, q, _resolve_active_project(None, q))
         assert "[DDD:" not in o.system_prompt
         assert _ddd_inject_count.get("declined:ambiguous", 0) == 1, \
             f"expected fail-closed on ambiguity; got {dict(_ddd_inject_count)}"

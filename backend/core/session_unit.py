@@ -702,11 +702,13 @@ class SessionUnit:
         # = fresh detection). (project, signal) tuple or None.
         self._active_project: Optional[tuple[Optional[str], str]] = None
         # Follow-up recall on a topic change (session_router._maybe_followup_recall):
-        # the query terms of the last recall, how many follow-ups ran, and the
-        # text already recalled this session (so a follow-up never repeats it).
+        # the query terms of the last recall, how many follow-ups ran, the text
+        # already recalled this session (so a follow-up never repeats it), and
+        # how many recalled characters were injected (the session budget).
         self._recall_terms: Optional[frozenset] = None
         self._recall_followups: int = 0
         self._recall_history: str = ""
+        self._recall_chars: int = 0
         # NOTE: the M2 background-vector-task fields (run_e9b15722) were removed in
         # run_4d06640b — recall now runs both legs synchronously to completion, so
         # there is no background task / pending-result / teardown-cancel to track.
@@ -5382,6 +5384,7 @@ class SessionUnit:
         self._recall_terms = None
         self._recall_followups = 0
         self._recall_history = ""
+        self._recall_chars = 0
         # Release canary ownership if this session held it (Fix #1: canary leak)
         release_canary(self.session_id)
 

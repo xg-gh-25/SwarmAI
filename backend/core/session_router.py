@@ -29,7 +29,7 @@ from contextlib import aclosing
 from datetime import datetime, timedelta
 from pathlib import Path
 import re
-from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from typing import Any, AsyncIterator, Callable, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 from . import session_events
@@ -298,11 +298,16 @@ _RECALL_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
     "empty_with_keywords", "unified_empty_fallback_legacy",
     # the failure itself is already counted as unified_exception:*
     "unified_failed_fallback_legacy",
+    # the session's recall budget (_RECALL_SESSION_CHARS) is spent: a resource cap
+    "budget_stopped",
 })
 _DDD_KNOWN_INFORMATIONAL: frozenset[str] = frozenset({
     "injected", "declined:no_ddd_hits", "injected_pointer_only",
     # dynamic "declined:<signal>" from detect_active_project — by-design declines:
     "declined:no_projects", "declined:ambiguous", "declined:no_signal",
+    # project found via the bound repo, no section matched: repo_guidance already
+    # gave the agent the DDD documents (design 2026-10-26 D3)
+    "pointer_from_repo_guidance",
 })
 # NOTE: deliberately NOT a blanket "declined:" prefix — a future "declined:db_broke"
 # should surface as UNCLASSIFIED (visible), not be swallowed as by-design.
@@ -909,19 +914,12 @@ def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) ->
 
             # No transcript leg: transcript_chunks was dropped in schema v13.
             # Past conversations are recalled from messages_fts by the unified
-            # path's `session` domain.
-            additional_stores = []
-            # Include MemoryRecallStore so the user's real query also recalls
-            # MEMORY.md entries. Memory had NO keyword leg before this adapter
-            # (memory has no fts table); the adapter provides a real one.
-            try:
-                from .memory_recall_store import MemoryRecallStore
-                additional_stores.append(MemoryRecallStore(conn))
-            except Exception:
-                logger.debug("_recall_for_query: suppressed exception on a fail-safe path", exc_info=True)
-                pass  # Memory recall unavailable — other domains still work
-
-            engine = RecallEngine(store, additional_stores=additional_stores)
+            # path's `session` domain. No memory leg either: MemoryRecallStore
+            # read a `memory_entries` table nothing has written since the vector
+            # subsystem was removed, so it always returned nothing (design
+            # 2026-10-26 D4); live MEMORY is recalled by the unified path's
+            # context_files leg, its archives by the library index.
+            engine = RecallEngine(store)
 
             recalled = engine.recall_knowledge(query, max_tokens=max_tokens)
 
@@ -1088,13 +1086,14 @@ def _unified_recall_body(
         # re-detects (was: a second blocking iterdir with a DIFFERENT query =
         # extracted keywords, which could disagree with the DDD leg's project).
         project = active_project[0] if active_project else None
-        from .recall_filter import is_code_like
+        from .recall_filter import code_like_terms
         # The code-symbol leg (~0.1 s) only ever survives the relevance gate for a
         # code-like term, so do not run it otherwise.
-        non_ddd = tuple(d for d in DOMAINS if d != "ddd"
-                        and (d != "codeintel" or any(is_code_like(t) for t in query.split())))
+        _code = bool(code_like_terms(query.split()))
+        non_ddd = tuple(d for d in DOMAINS if d != "ddd" and (d != "codeintel" or _code))
         result = recall_all(query, project=project, domains=non_ddd, allow_embed=False,
-                            exclude_session_id=exclude_session_id, deadline=deadline)
+                            exclude_session_id=exclude_session_id, deadline=deadline,
+                            prompt_text=prompt_text)
         # Relevance gate + "not already in the prompt" + size budget
         # (core/recall_filter.py): ranking alone never says "nothing relevant".
         from .recall_filter import filter_recall
@@ -1163,6 +1162,7 @@ def _graph_enrich_recall(query: str) -> str:
 
 def _resolve_active_project(
     editor_file_path: Optional[str], user_message: str,
+    session_bound_project: Optional[str] = None,
 ) -> tuple[Optional[str], str]:
     """Detect the active project ONCE, using the FULL user_message (strongest signal).
 
@@ -1179,19 +1179,101 @@ def _resolve_active_project(
     ``unit._active_project``.
     """
     from .recall_multi import detect_active_project
-    return detect_active_project(editor_file_path=editor_file_path, query=user_message)
+    return detect_active_project(editor_file_path=editor_file_path, query=user_message,
+                                 session_bound_project=session_bound_project)
+
+
+def _deliver_block(options: Any, unit: Any, block: str, should_mutate_system_prompt: bool) -> None:
+    """Put an injected block where this turn's model will see it: the system
+    prompt on a cold spawn, else the per-turn query-prefix stash (a reused
+    subprocess discards system_prompt). Appends, so a DDD block and a recall
+    block on the same turn both arrive. Every recall-side injection goes through
+    here, so this is where the session's injected size (the budget) is counted."""
+    unit._recall_chars = _recall_chars_used(unit) + len(block)
+    if should_mutate_system_prompt:
+        options.system_prompt = (options.system_prompt or "") + block
+    else:
+        prev = getattr(unit, "_recall_query_block", None)
+        prev = prev if isinstance(prev, str) else ""
+        unit._recall_query_block = (prev + "\n\n" + block.strip()) if prev else block.strip()
+
+
+async def _maybe_inject_ddd(
+    user_message: str, options: Any, unit: Any, editor_context: Optional[dict],
+    should_mutate_system_prompt: bool,
+) -> None:
+    """Resolve the session's project and, once one is known, run the DDD leg once.
+
+    Until a project is found ``unit._ddd_injected`` stays False, so each later
+    message tries again: signal-2 (the bound repo the session touched,
+    ``repo_guidance.session_bound_project``) usually only exists after the
+    agent's first tool calls. Never raises; DISASTER-capped like the other legs.
+    """
+    from core import executors, repo_guidance
+
+    editor_fp = editor_context.get("file_path") if editor_context else None
+    bound = repo_guidance.session_bound_project(getattr(unit, "_sdk_session_id", None) or "")
+    try:
+        project = await asyncio.wait_for(
+            executors.run_in("io", _resolve_active_project, editor_fp, user_message, bound),
+            timeout=_RECALL_DISASTER_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _record_ddd_inject("declined:disaster_timeout")
+        logger.error("active-project detection DISASTER TIMEOUT (>%.0fs) — no project",
+                     _RECALL_DISASTER_TIMEOUT_S)
+        project = (None, "detect_timeout")
+    except Exception as exc:  # noqa: BLE001 — detection must never break recall
+        logger.warning("active-project detection failed (proceeding, no project): %s: %s",
+                       type(exc).__name__, exc)
+        project = (None, "detect_error")
+    if project[0] is None and getattr(unit, "_active_project", None):
+        return              # keep an earlier result; nothing new to inject
+    unit._active_project = project
+    if project[0] is None:
+        if not unit._recall_injected:
+            _record_ddd_inject(f"declined:{project[1]}")
+        return
+    try:
+        await asyncio.wait_for(
+            executors.run_in(
+                "io", _inject_ddd_for_active_project, options, user_message, project,
+                lambda block: _deliver_block(options, unit, block, should_mutate_system_prompt)),
+            timeout=_RECALL_DISASTER_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _record_ddd_inject("declined:disaster_timeout")
+        logger.error("DDD inject DISASTER TIMEOUT (>%.0fs) — proceeding without DDD",
+                     _RECALL_DISASTER_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 — additive leg must never break recall
+        _record_ddd_inject(f"declined:exception:{type(exc).__name__}")
+        logger.warning("DDD inject failed (proceeding without DDD): %s: %s",
+                       type(exc).__name__, exc)
+    finally:
+        unit._ddd_injected = True
 
 
 # Follow-up recall on a topic change. Recall used to run once per session (the
 # first keyword-bearing message), so a session that moved on to another subject
 # never recalled anything for it. A later message whose query terms overlap the
 # last recall's by less than this (Jaccard) is a new topic and recalls again,
-# at most _RECALL_MAX_FOLLOWUPS times per session, never repeating text already
-# recalled in it, and never injecting the "no match" nudge (the agent already
-# has it from the first recall).
+# never repeating text already recalled in it, and never injecting the "no
+# match" nudge (the agent already has it from the first recall).
+#
+# Cost is bounded by what is INJECTED, not by how often recall runs: a fixed
+# count of 6 follow-ups skipped 1066 of 1771 replayed messages, 693 of which
+# would have injected (design 2026-10-26 D2). A follow-up that finds nothing
+# relevant injects nothing; the whole session injects at most
+# _RECALL_SESSION_CHARS of recalled text (first recall included).
 _RECALL_TOPIC_OVERLAP = 0.2
-_RECALL_MAX_FOLLOWUPS = 6
+_RECALL_SESSION_CHARS = 24_000
 _RECALL_HISTORY_CHARS = 60_000
+
+
+def _recall_chars_used(unit: Any) -> int:
+    """Recalled characters this session has injected so far (0 if never set)."""
+    used = getattr(unit, "_recall_chars", 0)
+    return used if isinstance(used, int) else 0
 
 
 def _remember_recall(unit: Any, keywords: str, recalled: str) -> None:
@@ -1239,7 +1321,8 @@ async def _maybe_followup_recall(
     try:
         if getattr(unit, "is_channel_session", False):
             return None
-        if (getattr(unit, "_recall_followups", 0) or 0) >= _RECALL_MAX_FOLLOWUPS:
+        used = _recall_chars_used(unit)
+        if used >= _RECALL_SESSION_CHARS:
             return None
         keywords = _extract_query_keywords(user_message)
         if not keywords:
@@ -1261,6 +1344,17 @@ async def _maybe_followup_recall(
             timeout=_RECALL_DISASTER_TIMEOUT_S,
         )
         ms = (time.perf_counter() - t0) * 1000.0
+        from .injected_blocks import RECALL_HEADER, RECALL_HINT, RECALL_PROVENANCE
+        block = f"{RECALL_HEADER}\n{RECALL_PROVENANCE}{body}{RECALL_HINT}"
+        if body and used + len(block) + 2 > _RECALL_SESSION_CHARS:
+            # Resource cap, not a relevance judgment: these hits are not injected,
+            # and the session stops follow-up recall from here on (no more runs).
+            unit._recall_chars = _RECALL_SESSION_CHARS
+            _record_recall_degraded("budget_stopped")
+            logger.info("follow-up recall over the session budget (%d + %d > %d chars); "
+                        "not injected | keywords=%s", used, len(block),
+                        _RECALL_SESSION_CHARS, keywords[:80])
+            return ms
         unit._recall_followups = (getattr(unit, "_recall_followups", 0) or 0) + 1
         _remember_recall(unit, keywords, body or "")
         try:
@@ -1274,12 +1368,7 @@ async def _maybe_followup_recall(
             logger.info("follow-up recall (new topic) matched nothing | keywords=%s | %.0fms",
                         keywords[:80], ms)
             return ms
-        from .injected_blocks import RECALL_HEADER, RECALL_HINT, RECALL_PROVENANCE
-        block = f"{RECALL_HEADER}\n{RECALL_PROVENANCE}{body}{RECALL_HINT}"
-        if should_mutate_system_prompt:
-            options.system_prompt = (options.system_prompt or "") + f"\n\n{block}"
-        else:
-            unit._recall_query_block = block
+        _deliver_block(options, unit, f"\n\n{block}", should_mutate_system_prompt)
         logger.info("follow-up recall (new topic #%d) injected: +%d chars into %s | "
                     "keywords=%s | %.0fms", unit._recall_followups, len(body),
                     "system prompt" if should_mutate_system_prompt else "query (warm-reuse)",
@@ -1401,12 +1490,6 @@ async def _maybe_inject_recall_inner(
     # (Gate-1: attributing turn-1 recall to a later turn corrupts the residual math).
     if not _channel_recall_allowed(channel_context):
         return None              # G4: not the owner's private chat; nothing latched
-    if unit._recall_injected:
-        # The first recall already ran; a later message on a NEW topic gets a
-        # bounded follow-up recall (see _maybe_followup_recall).
-        return await _maybe_followup_recall(
-            user_message, options, unit, should_mutate_system_prompt)
-
     # Channel sessions: skip recall, set flag
     if unit.is_channel_session:
         unit._recall_injected = True
@@ -1417,73 +1500,21 @@ async def _maybe_inject_recall_inner(
     # multi-session burst cannot starve the readiness sampler → false offline.
     from core import executors
 
-    _editor_fp = editor_context.get("file_path") if editor_context else None
-
-    # ── Shared active-project detection (B, run_6ebf6479) — resolve ONCE ──────────
-    # Both recall legs need the active project. Historically each detected it
-    # SEPARATELY and with DIFFERENT inputs (DDD leg: full user_message; unified leg:
-    # extracted keywords) → two blocking iterdirs per turn that could resolve
-    # DIFFERENT projects. Resolve it ONCE here (full user_message = strongest
-    # signal), off the event loop, and cache on unit._active_project so both legs
-    # read the SAME (project, signal). Reset with the other recall guards in
-    # SessionUnit._cleanup_internal. Fail-soft: on any detection error, fall back to
-    # (None, "detect_error") — recall degrades to no-project, never crashes.
-    try:
-        _active_project = await asyncio.wait_for(
-            executors.run_in("io", _resolve_active_project, _editor_fp, user_message),
-            timeout=_RECALL_DISASTER_TIMEOUT_S,
-        )
-    except asyncio.TimeoutError:
-        _record_ddd_inject("declined:disaster_timeout")
-        logger.error("active-project detection DISASTER TIMEOUT (>%.0fs) — no project",
-                     _RECALL_DISASTER_TIMEOUT_S)
-        _active_project = (None, "detect_timeout")
-    except Exception as exc:  # noqa: BLE001 — detection must never break recall
-        logger.warning("active-project detection failed (proceeding, no project): %s: %s",
-                        type(exc).__name__, exc)
-        _active_project = (None, "detect_error")
-    try:
-        unit._active_project = _active_project
-    except Exception:  # noqa: BLE001 — cache write must never break recall
-        logger.debug("_maybe_inject_recall_inner: suppressed exception on a fail-safe path", exc_info=True)
-        pass
-
-    # ── DDD runtime injection (run_91bc0651 M2) — runs BEFORE the keyword gate ──
-    # signal-1 (editor file path) is DETERMINISTIC and needs NO query keywords, so
-    # it must NOT be gated behind the keyword-miss early-return below (Gate-2 HIGH:
-    # a user editing Projects/<X>/ who opens with "继续"/"hi" yields no keywords →
-    # the old placement skipped DDD entirely, defeating the headline use case).
-    # Own once-guard (_ddd_injected) so a sub-cap keyword-miss doesn't re-run it.
-    # It consumes the SHARED detection above (no re-detect) — trigger TIMING is
-    # unchanged (still pre-keyword-gate); only the redundant detect CALL is removed.
+    # ── Project + DDD leg: on every message until a project is found (D3) ──
+    # Runs BEFORE the keyword gate: signal-1 (editor path) and signal-2 (bound
+    # repo) need no query keywords, so a user who opens with "继续" still gets the
+    # project. Until a project is found the leg re-checks each message — signal-2
+    # usually appears after the agent's first tool calls, not before message 1.
     if not getattr(unit, "_ddd_injected", False):
-        try:
-            await asyncio.wait_for(
-                # Dedicated 'io' pool, NOT the default one (run_c8ad52f8): DDD
-                # injection is a fs-scan + FTS5 read on the session-init hot path
-                # — the SAME instant briefing runs. On the shared default pool a
-                # multi-session burst starves the readiness sampler's own default-
-                # pool needs; the dedicated pool insulates it. (The missed half of
-                # the July hot-path increment — briefing was migrated, this wasn't.)
-                executors.run_in(
-                    "io",
-                    _inject_ddd_for_active_project,
-                    options,
-                    user_message,
-                    _active_project,
-                ),
-                timeout=_RECALL_DISASTER_TIMEOUT_S,
-            )
-        except asyncio.TimeoutError:
-            _record_ddd_inject("declined:disaster_timeout")
-            logger.error("DDD inject DISASTER TIMEOUT (>%.0fs) — proceeding without DDD",
-                         _RECALL_DISASTER_TIMEOUT_S)
-        except Exception as exc:  # noqa: BLE001 — additive leg must never break recall
-            _record_ddd_inject(f"declined:exception:{type(exc).__name__}")
-            logger.warning("DDD inject failed (proceeding without DDD): %s: %s",
-                            type(exc).__name__, exc)
-        finally:
-            unit._ddd_injected = True
+        await _maybe_inject_ddd(user_message, options, unit, editor_context,
+                                should_mutate_system_prompt)
+    _active_project = getattr(unit, "_active_project", None) or (None, "no_signal")
+
+    if unit._recall_injected:
+        # The first recall already ran; a later message on a NEW topic gets a
+        # bounded follow-up recall (see _maybe_followup_recall).
+        return await _maybe_followup_recall(
+            user_message, options, unit, should_mutate_system_prompt)
 
     # Extract keywords — skip if message too short/generic.
     #
@@ -1590,15 +1621,10 @@ async def _maybe_inject_recall_inner(
             _recall_block = (
                 f"{RECALL_HEADER}\n{_provenance}{recalled}{_agentic_hint}"
             )
-            if should_mutate_system_prompt:
-                # COLD-spawn: system_prompt carries it (the spawn delivers it).
-                options.system_prompt = (
-                    options.system_prompt + f"\n\n{_recall_block}"
-                )
-            else:
-                # WARM-reuse: system_prompt is discarded by the reused subprocess —
-                # stash the block for the caller to prefix onto query_content (阶段二).
-                unit._recall_query_block = _recall_block
+            # COLD-spawn: system_prompt carries it; WARM-reuse: the reused
+            # subprocess discards system_prompt, so it goes to the query-prefix
+            # stash (阶段二), after any DDD block this turn already put there.
+            _deliver_block(options, unit, f"\n\n{_recall_block}", should_mutate_system_prompt)
             _remember_recall(unit, keywords, recalled)
             # Observability (loud-on-success counterpart to loud-on-degradation):
             # recall succeeds SILENTLY otherwise, so "0 recall lines in the log"
@@ -1664,12 +1690,7 @@ async def _maybe_inject_recall_inner(
             # recall (the keyword-only blind spot).
             from .injected_blocks import RECALL_MISS as _miss_block
             _remember_recall(unit, keywords, "")
-            if should_mutate_system_prompt:
-                options.system_prompt = (
-                    options.system_prompt + f"\n\n{_miss_block}"
-                )
-            else:
-                unit._recall_query_block = _miss_block
+            _deliver_block(options, unit, f"\n\n{_miss_block}", should_mutate_system_prompt)
             # Stash a snapshot for the TSCC panel on THIS branch too. Recall ran
             # — it just matched nothing. Without a snapshot the endpoint returns
             # its default (ran=False) and the panel says "no recall this session",
@@ -1839,6 +1860,7 @@ def _inject_ddd_for_active_project(
     options: Any,
     user_message: str,
     active_project: Optional[tuple[Optional[str], str]],
+    deliver: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Inject the active project's top DDD sections. FAIL-CLOSED.
 
@@ -1850,7 +1872,14 @@ def _inject_ddd_for_active_project(
     reads). On a non-confident detection, records a declined-reason and injects
     NOTHING (Gate-2 L1: the counter distinguishes 'correctly declined' from 'detector
     broken').
+
+    ``deliver(block)`` places the block (default: append to
+    ``options.system_prompt``). A warm-reuse turn must pass one that writes the
+    query-prefix stash instead: the reused subprocess discards system_prompt.
     """
+    if deliver is None:
+        def deliver(block: str) -> None:
+            options.system_prompt = (options.system_prompt or "") + block
     from .recall_multi import (_load_ddd_docs_text, _parse_docs_sections, recall_all)
     from .recall_filter import _coverage, _required, query_terms
 
@@ -1899,14 +1928,19 @@ def _inject_ddd_for_active_project(
         logger.debug("_inject_ddd_for_active_project: suppressed exception on a fail-safe path", exc_info=True)
         pass
     if not ddd_hits:
+        if signal == "signal2_bound_repo":
+            # repo_guidance already told the agent this repo's DDD documents when
+            # it touched the repo; a second pointer adds nothing.
+            _record_ddd_inject("pointer_from_repo_guidance")
+            return
         # The project is known (the user is in it) but no section is about this
         # message: say where its brain is, nothing more (~250 chars).
-        options.system_prompt = (options.system_prompt or "") + (
+        deliver((
             f"\n\n## Project DDD — [DDD:{project}]\n"
             f"> **[DDD:{project}]** You are working in project {project} "
             f"(detected via {signal}). Its domain docs are under "
             f"`Projects/{project}/` (PRODUCT / TECH / IMPROVEMENT / PROJECT); read the "
-            f"relevant one before acting on project-specific decisions.\n")
+            f"relevant one before acting on project-specific decisions.\n"))
         _record_ddd_inject("injected_pointer_only")
         logger.info("DDD detected project=%s (%s): no section matched the message "
                     "-- injected the project pointer only", project, signal)
@@ -1925,7 +1959,7 @@ def _inject_ddd_for_active_project(
         f"project context before acting.\n\n"
         + "\n".join(lines)
     )
-    options.system_prompt = (options.system_prompt or "") + block
+    deliver(block)
     _record_ddd_inject("injected")
     logger.info("DDD injected: project=%s signal=%s sections=%d",
                 project, signal, len(ddd_hits))

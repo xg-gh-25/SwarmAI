@@ -86,7 +86,7 @@ class TestSharedActiveProjectDetection:
 
         seen_queries = []
 
-        def _detect(editor_file_path=None, query=None, candidates=None):
+        def _detect(editor_file_path=None, query=None, candidates=None, session_bound_project=None):
             seen_queries.append(query)
             return ("SwarmAI", "signal3_keyword")
 
@@ -233,7 +233,7 @@ class TestTriggerTimingPreserved:
         unit = _make_unit()
         injected = {"ddd": False}
 
-        def _fake_ddd(options, user_message, editor_file_path):
+        def _fake_ddd(options, user_message, active_project, deliver=None):
             injected["ddd"] = True
 
         with patch("core.session_router._inject_ddd_for_active_project", side_effect=_fake_ddd), \
