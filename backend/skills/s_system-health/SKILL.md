@@ -2,7 +2,7 @@
 name: system-health
 description: "System health report: machine overview, worst offenders, SwarmAI resource use and suggestions. TRIGGER: \"system health\", \"mac health\", \"linux health\", \"battery check\". NOT FOR: cloud service logs."
 tier: lazy
-platform: macos
+platform: all
 ---
 # system-health
 

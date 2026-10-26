@@ -2,7 +2,7 @@
 name: golden-case
 description: "Add, validate, retire or propose eval golden cases: your own cases in the workspace, or a product case shipped with SwarmAI. TRIGGER: \"add golden case\", \"new eval case\", \"retire a case\", \"add a product eval probe\". NOT FOR: running eval."
 tier: lazy
-platform: desktop
+platform: all
 ---
 
 # Golden Case
