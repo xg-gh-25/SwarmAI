@@ -9,7 +9,7 @@ Design: `docs/design/2026-10-26-eval-as-product.md` (§3.1–3.3, §3.8). Mechan
 | Set | File | Who changes it | Runs on |
 |---|---|---|---|
 | Product | `backend/templates/eval/golden_set.yaml` (ships with the backend) | a code change in the SwarmAI repo | a temporary workspace, data folder and HOME (never your data) |
-| Yours | `<workspace>/Eval/golden_set.private.yaml` | you, through the dashboard or this skill | your own workspace |
+| Yours | `<workspace>/Eval/golden_set.private.yaml` | you, through the Eval overlay (Golden Cases) or this skill | your own workspace |
 
 Both load together. A case of yours with the same id as a product case is skipped
 and listed in Suggested follow-up. The product set holds at most `PRODUCT_CAP`
@@ -38,8 +38,9 @@ Online scoring has no cases: it checks your real sessions (`jobs/handlers/sessio
 2. A quick-check case needs `verification.negative_command` and
    `negative_expected_contains`: a command that breaks the thing on purpose and must
    print its FAIL token. A case that cannot fail is refused.
-3. Validate, then add it with **+ Add Case** on the dashboard (it runs the same
-   gates and stamps it), or append it to the private file and re-stamp:
+3. Validate, then add it with **Add a case** in the Eval overlay's Golden Cases tab
+   ("Try it first" runs every admission check without saving; saving runs them again
+   and stamps it), or append it to the private file and re-stamp:
    ```bash
    echo '<case-json>' > /tmp/case.json
    "$SWARM_BACKEND_BIN" py -m scripts.golden_case_validator --case-file /tmp/case.json
@@ -65,8 +66,9 @@ A product case must work on any install: no reference to your projects, your
   `tests/test_eval_product_set.py` and `tests/test_eval_fresh_install.py`.
 
 ### RETIRE
-Archive the case (dashboard archive button): it stays on disk, out of every run, and
-can be restored. Product cases are retired by a code change. One invariant, one case:
+Delete it (Golden Cases → the case → Delete, two clicks): it is removed from the
+private file, not archived; add it again if you need it. Product cases are retired
+by a code change. One invariant, one case:
 when a product case covers what one of yours checks, retire yours.
 
 ### VALIDATE / AUDIT
