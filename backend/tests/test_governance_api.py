@@ -1,12 +1,7 @@
-"""Tests for Evolution Pipeline v3 Phase 3: governance review API + service.
-
-Covers the accept/reject/defer loop on .evolution_proposals.json (filtered to
-target=='governance'). DoD negatives:
-  accept / reject -> item removed (nothing else recorded); defer -> kept.
-  AC7: accept/reject/defer NEVER write SOUL/AGENT/STEERING.
-  Gate-1 Check-3: a mixed file (skill-opt + governance rows) only surfaces
-       governance rows, and skill-opt rows survive a rewrite untouched.
-"""
+"""Governance review API + service: only GC proposals surface; accept / reject
+write the verdict into the GC row (so it is not mined again) and remove the
+proposal; defer keeps it; nothing ever writes SOUL/AGENT/STEERING
+(docs/design/2026-10-26-evolution-loop-admission.md §3.2, §5)."""
 
 from __future__ import annotations
 
@@ -15,143 +10,94 @@ import json
 import pytest
 
 from core.eval_service import EvalService
+from core.evolution import governance_miner as gm
+
+CHECKED = "checked against: R27 — new because it names the grep step"
 
 
 @pytest.fixture
 def svc(tmp_path):
-    """EvalService rooted at a tmp workspace, with a seeded mixed proposals file."""
     ctx = tmp_path / ".context"
     ctx.mkdir(parents=True)
+    (ctx / "EVOLUTION.md").write_text(
+        "## Governance Candidates\n\n"
+        "| ID | Proposed Rule | Evidence | Count | Since | Checked |\n"
+        "|----|---|---|---|---|---|\n"
+        f'| GC14 | "rule fourteen" | C1, C2, C3 | 3/3 | 2026-10-01 | {CHECKED} |\n'
+        f'| GC15 | "rule fifteen" | C1, C2, C3 | 3/3 | 2026-10-01 | {CHECKED} |\n',
+        encoding="utf-8",
+    )
     proposals = [
-        # skill-optimization row (NOT governance) — must be ignored + preserved
-        {"skill_name": "save-activity", "confidence": 0.6, "changes": []},
-        # governance rule proposal
-        {"target": "governance", "proposal_kind": "rule", "source_class": "CLASS_B",
-         "occurrence_count": 5, "proposed_rule": "rule text", "evidence": [], "confidence": 0.6},
-        # governance gate proposal
-        {"target": "governance", "proposal_kind": "gate", "source_class": "CLASS_A",
-         "occurrence_count": 12, "proposed_rule": "gate text", "evidence": [], "confidence": 0.8},
+        {"skill_name": "save-activity", "confidence": 0.6, "changes": []},           # old skill row
+        {"target": "governance", "proposal_kind": "gate", "source_class": "CLASS_C",  # old bucket row
+         "occurrence_count": 18, "proposed_rule": "escalate to a CODE GATE", "confidence": 0.8},
+        {"target": "governance", "gc_id": "GC14", "proposed_rule": "rule fourteen"},
+        {"target": "governance", "gc_id": "GC15", "proposed_rule": "rule fifteen"},
     ]
     (ctx / ".evolution_proposals.json").write_text(json.dumps(proposals), encoding="utf-8")
     return EvalService(workspace_root=tmp_path)
 
 
-# --- AC5: list pending (governance only, with ids) ---
-
-def test_get_pending_filters_to_governance_with_ids(svc):
-    res = svc.get_pending_governance()
-    assert res["total"] == 2  # skill-opt row excluded
-    ids = {p["id"] for p in res["proposals"]}
-    assert ids == {"CLASS_B:rule", "CLASS_A:gate"}
+def _ids(svc):
+    return [p["id"] for p in svc.get_pending_governance()["proposals"]]
 
 
-# --- Bug3a (run_685db747): accept-side axis guard against STALE non-cognitive proposals ---
-# A pre-guard (pre-2026-06-25) code version could write an OPERATIONAL/UNCLASSIFIED
-# governance proposal. Producers are now guarded (escalation_ladder:111) but the
-# CONSUMER was not — so a stale non-cognitive row stayed visible + acceptable, which
-# is how OPERATIONAL got a spurious active_rule. Fail closed at consumption.
-
-@pytest.fixture
-def svc_with_stale_operational(tmp_path):
-    ctx = tmp_path / ".context"
-    ctx.mkdir(parents=True)
-    proposals = [
-        {"target": "governance", "proposal_kind": "rule", "source_class": "CLASS_B",
-         "occurrence_count": 5, "proposed_rule": "cognitive rule", "evidence": [], "confidence": 0.6},
-        # STALE non-cognitive row (would be written only by pre-guard code)
-        {"target": "governance", "proposal_kind": "rule", "source_class": "OPERATIONAL",
-         "occurrence_count": 32, "proposed_rule": "Recurring OPERATIONAL pattern (32x)", "evidence": [], "confidence": 0.9},
-    ]
-    (ctx / ".evolution_proposals.json").write_text(json.dumps(proposals), encoding="utf-8")
-    return EvalService(workspace_root=tmp_path)
+def test_only_gc_rows_surface(svc):
+    assert _ids(svc) == ["GC14", "GC15"]
 
 
-def test_pending_excludes_stale_non_cognitive(svc_with_stale_operational):
-    res = svc_with_stale_operational.get_pending_governance()
-    ids = {p["id"] for p in res["proposals"]}
-    assert "OPERATIONAL:rule" not in ids  # non-cognitive must not be offered
-    assert "CLASS_B:rule" in ids          # cognitive still offered
+@pytest.mark.parametrize("decision,status,mark", [
+    ("accept", "accepted", gm.PROMOTED), ("reject", "rejected", gm.REJECTED)])
+def test_decision_marks_row_removes_proposal_and_is_not_mined_again(svc, tmp_path, decision, status, mark):
+    res = svc.decide_governance("GC14", decision)
+    assert (res["status"], res["action_taken"]) == (status, "marked+removed")
+    assert _ids(svc) == ["GC15"]
+    evo = tmp_path / ".context" / "EVOLUTION.md"
+    assert f"| GC14 | \"rule fourteen\" | C1, C2, C3 | {mark} " in evo.read_text(encoding="utf-8")
+    assert [p.gc_id for p in gm.generate_governance_proposals(evo)] == ["GC15"]
 
 
-def test_accept_stale_non_cognitive_is_refused(svc_with_stale_operational):
-    res = svc_with_stale_operational.decide_governance("OPERATIONAL:rule", "accept")
-    assert res["status"] == "not_found"
+def test_defer_keeps_proposal_and_row(svc, tmp_path):
+    before = (tmp_path / ".context" / "EVOLUTION.md").read_text(encoding="utf-8")
+    assert svc.decide_governance("GC14", "defer")["status"] == "deferred"
+    assert _ids(svc) == ["GC14", "GC15"]
+    assert (tmp_path / ".context" / "EVOLUTION.md").read_text(encoding="utf-8") == before
 
 
-# --- accept / reject: both remove the proposal, nothing else is recorded ---
-
-@pytest.mark.parametrize("decision,status", [("accept", "accepted"), ("reject", "rejected")])
-def test_decision_removes_the_proposal(svc, decision, status):
-    res = svc.decide_governance("CLASS_B:rule", decision)
-    assert res["status"] == status
-    assert res["action_taken"] == "removed"
-    assert "CLASS_B:rule" not in {p["id"] for p in svc.get_pending_governance()["proposals"]}
+def test_old_rows_survive_a_decision_untouched(svc):
+    svc.decide_governance("GC14", "reject")
+    raw = json.loads(svc._proposals_path().read_text())
+    assert any(r.get("skill_name") == "save-activity" for r in raw)
+    assert any(r.get("source_class") == "CLASS_C" for r in raw)
 
 
-# --- AC6: defer -> kept ---
-
-def test_defer_keeps_proposal(svc):
-    res = svc.decide_governance("CLASS_B:rule", "defer")
-    assert res["status"] == "deferred"
-    assert "CLASS_B:rule" in {p["id"] for p in svc.get_pending_governance()["proposals"]}
+def test_old_bucket_row_cannot_be_decided(svc):
+    assert svc.decide_governance("CLASS_C:gate", "accept")["status"] == "not_found"
 
 
-# --- Gate-1 Check-3: skill-opt rows survive a governance rewrite ---
-
-def test_skill_opt_rows_preserved_after_decision(svc):
-    svc.decide_governance("CLASS_B:rule", "reject")
-    raw = json.loads((svc._proposals_path()).read_text())
-    skill_rows = [r for r in raw if "skill_name" in r]
-    assert len(skill_rows) == 1
-    assert skill_rows[0]["skill_name"] == "save-activity"
-
-
-# --- AC7 (NEGATIVE): never writes SOUL/AGENT/STEERING ---
-
-def test_ac7_never_writes_governance_files(svc, tmp_path):
-    gov = {}
+def test_never_writes_governance_files(svc, tmp_path):
     for name in ("SOUL.md", "AGENT.md", "STEERING.md"):
-        f = tmp_path / ".context" / name
-        f.write_text("ORIGINAL\n")
-        gov[name] = f.read_text()
-    svc.decide_governance("CLASS_A:gate", "accept")
-    svc.decide_governance("CLASS_B:rule", "reject")
-    for name, original in gov.items():
-        assert (tmp_path / ".context" / name).read_text() == original, f"{name} mutated!"
+        (tmp_path / ".context" / name).write_text("ORIGINAL\n")
+    svc.decide_governance("GC14", "accept")
+    svc.decide_governance("GC15", "reject")
+    for name in ("SOUL.md", "AGENT.md", "STEERING.md"):
+        assert (tmp_path / ".context" / name).read_text() == "ORIGINAL\n", name
 
 
-# --- not-found + invalid decision ---
+def test_unknown_id_and_invalid_decision(svc):
+    assert svc.decide_governance("NOPE", "accept")["status"] == "not_found"
+    assert svc.decide_governance("GC14", "frobnicate")["status"] == "error"
 
-def test_unknown_id_returns_not_found(svc):
-    assert svc.decide_governance("NOPE:rule", "accept")["status"] == "not_found"
-
-
-def test_invalid_decision_errors(svc):
-    assert svc.decide_governance("CLASS_B:rule", "frobnicate")["status"] == "error"
-
-
-# === Adversarial Gate-2 HIGH/LOW fixes ===
 
 def test_remove_governance_proposal_is_flock_safe_single(tmp_path):
-    """HIGH-1/LOW-2: remove_governance_proposal removes exactly ONE matching id,
-    under flock, preserving non-governance + other governance rows."""
     from core.evolution.governance_router import remove_governance_proposal
     p = tmp_path / "props.json"
     p.write_text(json.dumps([
-        {"skill_name": "x"},  # non-gov preserved
-        {"target": "governance", "source_class": "CLASS_A", "proposal_kind": "rule", "id": "CLASS_A:rule"},
-        {"target": "governance", "source_class": "CLASS_B", "proposal_kind": "gate", "id": "CLASS_B:gate"},
+        {"skill_name": "x"},
+        {"target": "governance", "gc_id": "GC1", "id": "GC1"},
+        {"target": "governance", "gc_id": "GC2", "id": "GC2"},
     ]))
-    assert remove_governance_proposal("CLASS_A:rule", p) is True
+    assert remove_governance_proposal("GC1", p) is True
     rows = json.loads(p.read_text())
-    ids = [r.get("id") for r in rows if r.get("target") == "governance"]
-    assert ids == ["CLASS_B:gate"]  # only CLASS_A:rule removed
-    assert any("skill_name" in r for r in rows)  # skill-opt row preserved
-
-
-def test_remove_governance_proposal_missing_returns_false(tmp_path):
-    from core.evolution.governance_router import remove_governance_proposal
-    p = tmp_path / "props.json"
-    p.write_text(json.dumps([{"target": "governance", "source_class": "CLASS_A", "proposal_kind": "rule", "id": "CLASS_A:rule"}]))
-    assert remove_governance_proposal("NOPE:rule", p) is False
-    assert len(json.loads(p.read_text())) == 1  # nothing removed
+    assert [r.get("id") for r in rows if r.get("target") == "governance"] == ["GC2"]
+    assert any("skill_name" in r for r in rows)

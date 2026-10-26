@@ -1393,12 +1393,9 @@ def _run_evolution_cycle_locked(
         # evals_dir = ~/.swarm-ai/SwarmWS/.context/SkillEvals → parent = .context/
         ctx_dir = evals_dir.parent
         evolution_md_path = ctx_dir / "EVOLUTION.md"
-        steering_md_path = ctx_dir / "STEERING.md"
 
         if evolution_md_path.exists():
-            gov_proposals = generate_governance_proposals(
-                evolution_md_path, steering_md_path, threshold=3
-            )
+            gov_proposals = generate_governance_proposals(evolution_md_path, threshold=3)
             if gov_proposals:
                 # Write governance proposals to the same proposals file
                 proposals_path = ctx_dir / ".evolution_proposals.json"
@@ -1407,7 +1404,7 @@ def _run_evolution_cycle_locked(
                 # The optimizer (evolution cycle) and the dashboard's remove path write
                 # the SAME file; a plain write_text races the flocked writer and clobbers
                 # appended proposals. _append_proposal does flock + tmp+atomic-replace +
-                # kind-aware (gc_id OR source_class+kind) dedup — one source of truth.
+                # gc_id dedup — one source of truth.
                 from core.evolution.governance_router import _append_proposal
 
                 for gp in gov_proposals:

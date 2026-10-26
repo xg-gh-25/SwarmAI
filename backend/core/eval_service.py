@@ -1351,11 +1351,12 @@ class EvalService:
         return self._workspace_root / ".context" / ".evolution_proposals.json"
 
     def _read_governance_proposals(self) -> list[dict]:
-        """Read .evolution_proposals.json, filtered to target=='governance' ONLY.
+        """Read .evolution_proposals.json: GC proposals only.
 
-        The file is MIXED (skill-optimization rows + governance rows) — Gate-1
-        Check-3. We must filter, mirroring proactive_intelligence's briefing filter,
-        or a skill-opt row would surface as an acceptable governance rule.
+        A GC proposal (gc_id) is the only kind the miner produces now. Rows an
+        older version left on disk — skill-optimization rows and bucket-count
+        rule/gate rows (source_class, no gc_id) — are never surfaced: they carry
+        no text a human can act on (design 2026-10-26-evolution-loop-admission §3.2).
         """
         p = self._proposals_path()
         if not p.exists():
@@ -1366,22 +1367,10 @@ class EvalService:
             return []
         if not isinstance(data, list):
             return []
-        from core.evolution.class_key import canonical_class_key, is_cognitive_class
-
         out = []
         for item in data:
-            if isinstance(item, dict) and item.get("target") == "governance":
-                # Axis guard at the CONSUMER: a stale OPERATIONAL/UNCLASSIFIED row
-                # left on disk by an older producer must not surface. GC candidates
-                # (gc_id, no source_class) are exempt: they are table-sourced.
-                src = item.get("source_class")
-                if src and not is_cognitive_class(canonical_class_key(src)):
-                    continue
-                # Defensive id backfill for any pre-id proposal on disk.
-                if not item.get("id"):
-                    item["id"] = item.get("gc_id") or (
-                        f"{item.get('source_class')}:{item.get('proposal_kind', 'rule')}"
-                    )
+            if isinstance(item, dict) and item.get("target") == "governance" and item.get("gc_id"):
+                item["id"] = item.get("id") or item["gc_id"]
                 out.append(item)
         return out
 
@@ -1393,7 +1382,8 @@ class EvalService:
     def decide_governance(self, proposal_id: str, decision: str) -> dict:
         """Accept / reject / defer a governance proposal.
 
-        accept / reject: remove the proposal from the file. Writing the rule into a
+        accept / reject: write ✅ PROMOTED / ✖ REJECTED into the GC row (so it is
+                not mined again), then remove the proposal. Writing the rule into a
                 governance file is the s_self-evolution path, on the user's approval.
         defer:  leave the proposal in place (no-op on the file).
 
@@ -1410,12 +1400,18 @@ class EvalService:
         if decision == "defer":
             return {"status": "deferred", "proposal_id": proposal_id}
 
-        action_taken = "removed"
-        # reject + accept both remove the proposal — via the SHARED flock writer,
-        # so it cannot race the miner's flocked append.
+        # Write the verdict into the GC row first, so the next mining cycle does
+        # not bring the same candidate back; then remove the proposal through the
+        # SHARED flock writer, so it cannot race the miner's flocked append.
+        from core.evolution.governance_miner import mark_gc_decision
         from core.evolution.governance_router import remove_governance_proposal
 
+        marked = mark_gc_decision(
+            self._workspace_root / ".context" / "EVOLUTION.md",
+            target["gc_id"], accepted=(decision == "accept"),
+        )
         remove_governance_proposal(proposal_id, self._proposals_path())
+        action_taken = "marked+removed" if marked else "removed"
         return {"status": "rejected" if decision == "reject" else "accepted",
                 "proposal_id": proposal_id, "action_taken": action_taken}
 

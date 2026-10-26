@@ -745,13 +745,15 @@ export function GoldenSetTab() {
 
 // ─── Governance Tab (v3 Phase 3) ───────────────────────────────────────────────
 
+// A Governance Candidate (EVOLUTION.md GC row) that reached 3× evidence and whose
+// Checked column says what it was checked against — the only kind of proposal.
 interface GovProposal {
   id: string;
-  source_class: string;
-  proposal_kind: 'rule' | 'gate';
+  gc_id: string;
+  title?: string;
   occurrence_count: number;
   proposed_rule: string;
-  confidence: number;
+  checked?: string;
   evidence?: string[];
 }
 
@@ -798,17 +800,15 @@ export function GovernanceProposalCard({
   return (
     <div className="border border-[var(--color-border)] rounded-lg p-3">
       <div className="flex items-center gap-2 mb-1.5">
-        <span className={`px-1.5 py-0.5 text-meta font-semibold rounded ${
-          p.proposal_kind === 'gate'
-            ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)] text-[var(--color-status-error)]'
-            : 'bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] text-[var(--color-primary)]'
-        }`}>
-          {p.proposal_kind.toUpperCase()}
+        <span className="px-1.5 py-0.5 text-meta font-semibold rounded bg-[color-mix(in_srgb,var(--color-primary)_10%,transparent)] text-[var(--color-primary)]">
+          {p.gc_id}
         </span>
-        <span className="text-body text-[var(--color-text)]">{p.source_class}</span>
         <span className="text-meta text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
       </div>
       <p className="text-small text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
+      {p.checked && (
+        <p className="text-meta text-[var(--color-text-muted)] mb-2">{p.checked}</p>
+      )}
 
       {/* Evidence — the actual correction excerpts behind the count. Without this
           the cards are indistinguishable and cannot be judged (Bug1 root cause). */}
@@ -873,9 +873,10 @@ function GovernanceTab() {
           Governance Proposals
         </h2>
         <p className="text-small text-[var(--color-text-muted)] mt-1">
-          Recurring judgment patterns the system flagged. Accept a <b>rule</b> to record it
-          (a class that recurs after a rule escalates to a <b>gate</b>). Accept never edits
-          SOUL/AGENT/STEERING — it only records the decision in the tracker.
+          Governance Candidates that reached 3× evidence and were checked against the
+          existing rules. Accept or reject records your verdict in the candidate's row so it
+          does not come back; accept never edits SOUL/AGENT/STEERING — write the rule with
+          s_self-evolution.
         </p>
       </div>
 
@@ -885,8 +886,8 @@ function GovernanceTab() {
 
       {!isLoading && !isError && proposals.length === 0 && (
         <div className="text-body text-[var(--color-text-muted)] border border-dashed border-[var(--color-border)] rounded-lg p-6 text-center">
-          No pending governance proposals. The escalation ladder surfaces them here when a
-          correction class recurs ≥3× without a structural fix.
+          No pending governance proposals. A Governance Candidate appears here once it has
+          3× evidence and its Checked column is filled.
         </div>
       )}
 

@@ -246,13 +246,17 @@ Sub-threshold proposals (1-2x evidence, not yet 3x) live in EVOLUTION.md "Candid
 ```markdown
 ## Governance Candidates
 
-| ID | Proposed | Evidence | Bias | Count | Date |
-|----|----------|----------|------|-------|------|
-| <GC-id> | "Read target API before coding against it" | <correction-ref> | A | 1/3 | 2026-05-19 |
-| <GC-id> | "Never skip review for 'small' changes" | <correction-ref> | A | 2/3 | 2026-05-19 |
+| ID | Proposed Rule | Evidence | Count | Since | Checked |
+|----|---------------|----------|-------|-------|---------|
+| <GC-id> | "Read target API before coding against it" | <correction-ref> | 1/3 | 2026-05-19 | |
+| <GC-id> | "Never skip review for 'small' changes" | <correction-ref>, <ref> | 2/3 | 2026-05-19 | checked against: R2 — new because … |
 ```
 
-When count reaches threshold → auto-trigger PROMOTE.
+The column order is what the governance miner parses. When you add evidence, bump Count and
+fill **Checked**: which existing rules you compared it with, and why it is a new axis. A row
+reaches the dashboard only with Count at 3/3 AND Checked filled; the user's accept / reject
+replaces Count with `✅ PROMOTED <date>` / `✖ REJECTED <date>`, and the row is never proposed
+again. Accepting does not write the rule: run PROMOTE with the user.
 
 ---
 

@@ -125,7 +125,7 @@ const QUEUE_META: Record<'review' | 'approve', { label: string; conf_meaning: st
   approve: {
     label: 'Governance',
     conf_meaning: 'recurrence confidence',
-    explainer: 'Proposed rules/gates to govern how the agent behaves. Here “conf” = recurrence confidence (how sure a real, repeating pattern warrants a rule). Low-confidence items are still emerging — demoted below.',
+    explainer: 'Proposed rules for how the agent behaves: Governance Candidates with 3× evidence, already checked against the existing rules.',
   },
 };
 

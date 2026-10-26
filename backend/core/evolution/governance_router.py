@@ -145,7 +145,8 @@ def remove_governance_proposal(proposal_id: str, proposals_path: Path | None = N
                 not dropped
                 and isinstance(r, dict)
                 and r.get("target") == "governance"
-                and (r.get("id") or f"{r.get('source_class')}:{r.get('proposal_kind', 'rule')}") == proposal_id
+                and (r.get("id") or r.get("gc_id")
+                     or f"{r.get('source_class')}:{r.get('proposal_kind', 'rule')}") == proposal_id
             ):
                 dropped = True
                 removed = True

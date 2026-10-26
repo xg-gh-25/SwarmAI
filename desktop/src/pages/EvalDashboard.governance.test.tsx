@@ -9,12 +9,11 @@ import { render, screen } from '@testing-library/react';
 import { GovernanceProposalCard } from './EvalDashboard';
 
 const baseProposal = {
-  id: 'CLASS_A:rule',
-  proposal_kind: 'rule' as const,
-  source_class: 'CLASS_A',
-  occurrence_count: 7,
-  proposed_rule: 'Recurring CLASS_A pattern (7x) with no structural fix',
-  confidence: 0.6,
+  id: 'GC14',
+  gc_id: 'GC14',
+  occurrence_count: 3,
+  proposed_rule: 'Code constant change → grep MEMORY/KNOWLEDGE for the old value',
+  checked: 'checked against: R30 — new because it names the grep step',
 };
 
 const noop = () => {};
@@ -36,21 +35,27 @@ describe('GovernanceProposalCard — Bug1 evidence render', () => {
       <GovernanceProposalCard proposal={{ ...baseProposal, evidence: [] }} onAct={noop} pending={false} />,
     );
     // still shows the proposal, does not throw
-    expect(screen.getByText(/Recurring CLASS_A pattern/)).toBeTruthy();
+    expect(screen.getByText(/Code constant change/)).toBeTruthy();
     expect(container).toBeTruthy();
   });
 
   it('renders gracefully when evidence field is missing entirely', () => {
-    const { id, proposal_kind, source_class, occurrence_count, proposed_rule, confidence } = baseProposal;
-    const noEvidence = { id, proposal_kind, source_class, occurrence_count, proposed_rule, confidence };
+    const { id, gc_id, occurrence_count, proposed_rule } = baseProposal;
+    const noEvidence = { id, gc_id, occurrence_count, proposed_rule };
     render(<GovernanceProposalCard proposal={noEvidence} onAct={noop} pending={false} />);
-    expect(screen.getByText(/Recurring CLASS_A pattern/)).toBeTruthy();
+    expect(screen.getByText(/Code constant change/)).toBeTruthy();
+  });
+
+  it('shows the GC id and what it was checked against', () => {
+    render(<GovernanceProposalCard proposal={baseProposal} onAct={noop} pending={false} />);
+    expect(screen.getByText('GC14')).toBeTruthy();
+    expect(screen.getByText(/checked against: R30/)).toBeTruthy();
   });
 
   it('accept button fires onAct with this proposal id (identity-safe)', () => {
     const onAct = vi.fn();
     render(<GovernanceProposalCard proposal={baseProposal} onAct={onAct} pending={false} />);
     screen.getByRole('button', { name: /accept/i }).click();
-    expect(onAct).toHaveBeenCalledWith('CLASS_A:rule', 'accept');
+    expect(onAct).toHaveBeenCalledWith('GC14', 'accept');
   });
 });

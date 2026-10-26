@@ -595,7 +595,7 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     expect(explainer.textContent).toMatch(/extract/i);
   });
 
-  it('Approve (governance) list shows an intent-bearing heading + a recurrence-conf explainer', async () => {
+  it('Approve (governance) list shows an intent-bearing heading + an admission explainer', async () => {
     mockHealth({}, { governancePending: 2 });
     renderOverlay();
     openOverlay();
@@ -606,8 +606,9 @@ describe('CMBrainOverlay — redesign: queue semantics + humanization + demotion
     const explainer = await screen.findByTestId('cm-needs-explainer');
     // governs rules/gates …
     expect(explainer.textContent).toMatch(/rule|gate|govern/i);
-    // … conf here = recurrence confidence
-    expect(explainer.textContent).toMatch(/recurr/i);
+    // … and says what admits a proposal: 3× evidence, checked against existing rules
+    expect(explainer.textContent).toMatch(/3× evidence/);
+    expect(explainer.textContent).toMatch(/checked against/i);
   });
 
   // AC2: source_class rendered as a human phrase, not the raw CLASS_x token as the subject.

@@ -3,5 +3,4 @@
 Modules:
     governance_miner  — turns mature GC candidates (EVOLUTION.md) into proposals
     governance_router — the flock-safe proposal file (append / remove)
-    class_key         — the one class-key normalizer
 """

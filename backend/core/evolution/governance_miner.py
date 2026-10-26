@@ -1,315 +1,183 @@
-"""Governance pattern miner — L1 evolution that detects recurring judgment failures.
+"""Governance miner — turns mature GC candidates into proposals, and nothing else.
 
-Parses EVOLUTION.md correction classes and Governance Candidates table to identify
-patterns meeting the promotion threshold (3+ occurrences). Generates proposals
-that surface in session briefing via .evolution_proposals.json.
+Reads the Governance Candidates table in EVOLUTION.md:
 
-SAFETY INVARIANT: This module NEVER writes to SOUL/AGENT/STEERING files.
-It only produces proposal data structures. Human gate is non-negotiable.
+    | ID | Proposed Rule | Evidence | Count | Since | Checked |
 
-Key public symbols:
-    mine_correction_classes — parse CLASS sections from EVOLUTION.md
-    mine_gc_candidates — parse GC table for mature candidates
-    generate_governance_proposals — full pipeline: mine + filter + propose
+A row becomes a proposal only when ALL of these hold (宁缺毋滥 — an empty or
+unchecked proposal is worse than none; docs/design/2026-10-26-evolution-loop-admission.md §3.2):
+
+  - Count reaches the threshold ("3/3"),
+  - the Checked cell says what the rule was checked against and why it is new
+    ("checked against: R27, P1 — new because …"). The agent writes it when it
+    bumps the count; it has every governance file in its prompt, so the semantic
+    check happens there. The miner only tests that the cell is filled,
+  - the row carries no verdict yet (✅ PROMOTED / ✖ REJECTED in the Count cell).
+
+``mark_gc_decision`` writes the human's verdict back into the row, so a decided
+candidate is never mined again.
+
+SAFETY INVARIANT: this module NEVER writes SOUL/AGENT/STEERING. It produces
+proposal data, and edits only the Count cell of one GC row in EVOLUTION.md.
 """
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
+PROMOTED = "✅ PROMOTED"
+REJECTED = "✖ REJECTED"
 
-@dataclass
-class CorrectionClass:
-    """A parsed correction class from EVOLUTION.md."""
+# A Checked cell that is present but says nothing is treated as empty.
+_EMPTY_CHECKED = {"", "-", "—", "–", "n/a", "na", "none", "tbd"}
 
-    name: str
-    occurrence_count: int
-    pattern: str = ""
-    structural_fix: str = ""
-    evidence_chain: list[str] = field(default_factory=list)
+_GC_ROW = re.compile(r"^\|\s*(GC\d+)\s*\|", re.MULTILINE)
 
 
 @dataclass
 class GCCandidate:
-    """A parsed Governance Candidate from the GC table."""
+    """A parsed row of the Governance Candidates table."""
 
     gc_id: str
     proposed_rule: str
     evidence: list[str]
     evidence_count: int
     since: str = ""
+    checked: str = ""
 
 
 @dataclass
 class GovernanceProposal:
-    """A governance rule proposal — output of the mining pipeline."""
+    """A governance proposal — the miner's only output."""
 
-    target: str = "governance"
-    source_class: str = ""
-    gc_id: str = ""
-    occurrence_count: int = 0
-    proposed_rule: str = ""
+    gc_id: str
+    proposed_rule: str
     evidence: list[str] = field(default_factory=list)
-    confidence: float = 0.0
-    # v3 Phase 2: distinguishes a rule proposal from a gate proposal so the
-    # rule->gate escalation for the SAME class does not dedup-collide (the
-    # dedup identity must include kind — see evolution_optimizer dedup).
-    proposal_kind: str = "rule"
+    occurrence_count: int = 0
+    checked: str = ""
+
+    @property
+    def title(self) -> str:
+        """First sentence of the rule, for a card title."""
+        text = self.proposed_rule.strip()
+        for sep in ("。", ". ", " — ", "\n"):
+            if sep in text:
+                text = text.split(sep, 1)[0]
+        return text[:120]
 
     def to_proposal_dict(self) -> dict:
         """Serialize to the format expected by .evolution_proposals.json."""
         return {
-            "target": self.target,
-            "source_class": self.source_class,
+            "target": "governance",
             "gc_id": self.gc_id,
-            "occurrence_count": self.occurrence_count,
+            "title": self.title,
             "proposed_rule": self.proposed_rule,
             "evidence": self.evidence,
-            "confidence": self.confidence,
-            "proposal_kind": self.proposal_kind,
+            "occurrence_count": self.occurrence_count,
+            "checked": self.checked,
         }
 
 
-# --- Mining Functions ---
-
-
-def mine_correction_classes(evolution_md: Path) -> list[CorrectionClass]:
-    """Parse EVOLUTION.md for correction classes with occurrence counts.
-
-    Looks for headers like:
-        ### CLASS A: Confidence -> Skip Process [12 occurrences, ...]
-    Extracts the class name, count, pattern description, and structural fix.
-    Skips 'Standalone' and 'Resolved' sections.
-    """
-    if not evolution_md.exists():
-        return []
-
-    text = evolution_md.read_text(encoding="utf-8")
-    results: list[CorrectionClass] = []
-
-    # Match CLASS headers: ### CLASS X: Description [N occurrences/entries...]
-    class_pattern = re.compile(
-        r"^###\s+(CLASS\s+\w+:\s*[^\[]+)\[(\d+)\s+(?:occurrences|entries)",
-        re.MULTILINE,
-    )
-
-    for match in class_pattern.finditer(text):
-        name = match.group(1).strip()
-        count = int(match.group(2))
-
-        # Skip standalone/resolved
-        if "standalone" in name.lower() or "resolved" in name.lower():
-            continue
-
-        # Extract the section content (until next ### or ## header)
-        section_start = match.end()
-        next_header = re.search(r"^#{2,3}\s+", text[section_start:], re.MULTILINE)
-        section_end = section_start + next_header.start() if next_header else len(text)
-        section_text = text[section_start:section_end]
-
-        # Extract pattern (line starting with **Pattern**:)
-        pattern_match = re.search(
-            r"\*\*Pattern\*\*:\s*(.+?)(?:\n|$)", section_text
-        )
-        pattern_str = pattern_match.group(1).strip().strip('"') if pattern_match else ""
-
-        # Extract structural fix
-        fix_match = re.search(
-            r"\*\*Structural fix\*\*:\s*(.+?)(?:\n|$)", section_text
-        )
-        fix_str = fix_match.group(1).strip() if fix_match else ""
-
-        # Extract chain entries as evidence
-        chain_match = re.search(r"\*\*Chain\*\*:\s*(.+?)(?:\n|$)", section_text)
-        evidence = []
-        if chain_match:
-            evidence = [e.strip() for e in chain_match.group(1).split("→")]
-        else:
-            # Fallback: extract individual correction IDs (e.g. **C034** (05-29))
-            correction_ids = re.findall(r"\*\*(C\d+)\*\*\s*\([^)]+\)", section_text)
-            evidence = correction_ids
-
-        results.append(
-            CorrectionClass(
-                name=name,
-                occurrence_count=count,
-                pattern=pattern_str,
-                structural_fix=fix_str,
-                evidence_chain=evidence,
-            )
-        )
-
-    return results
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
 def mine_gc_candidates(evolution_md: Path) -> list[GCCandidate]:
-    """Parse GC table for candidates with evidence meeting promotion threshold.
-
-    Filters:
-    - Skips already PROMOTED entries (✅ PROMOTED in Count column)
-    - Only returns candidates with evidence_count >= 3
-    """
+    """Parse every GC row that has no verdict yet (any count)."""
     if not evolution_md.exists():
         return []
-
-    text = evolution_md.read_text(encoding="utf-8")
     results: list[GCCandidate] = []
-
-    # Find the GC table rows: | GC05 | "rule text" | evidence | 1/3 | date |
-    # Also matches: | GC12 | "rule text" | evidence | ✅ PROMOTED | date |
-    row_pattern = re.compile(
-        r"^\|\s*(GC\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|",
-        re.MULTILINE,
-    )
-
-    for match in row_pattern.finditer(text):
-        gc_id = match.group(1).strip()
-        rule = match.group(2).strip().strip('"')
-        evidence_str = match.group(3).strip()
-        count_str = match.group(4).strip()
-        since = match.group(5).strip()
-
-        # Skip promoted
-        if "PROMOTED" in count_str.upper():
+    for line in evolution_md.read_text(encoding="utf-8").splitlines():
+        if not _GC_ROW.match(line):
             continue
-
-        # Parse evidence count: "1/3" → 1, "3/3" → 3
+        cells = _cells(line)
+        if len(cells) < 5:
+            continue
+        gc_id, rule, evidence_str, count_str, since = cells[:5]
+        checked = cells[5] if len(cells) > 5 else ""
+        # A verdict (✅ PROMOTED / ✖ REJECTED) replaces the "N/M" count, so a
+        # decided row fails this match and is never mined again.
         count_match = re.match(r"(\d+)/\d+", count_str)
         if not count_match:
             continue
-        evidence_count = int(count_match.group(1))
-
-        # Only include if meets threshold (3+)
-        if evidence_count < 3:
-            continue
-
-        evidence_list = [e.strip() for e in evidence_str.split(",")]
-
         results.append(
             GCCandidate(
                 gc_id=gc_id,
-                proposed_rule=rule,
-                evidence=evidence_list,
-                evidence_count=evidence_count,
+                proposed_rule=rule.strip('"'),
+                evidence=[e.strip() for e in evidence_str.split(",") if e.strip()],
+                evidence_count=int(count_match.group(1)),
                 since=since,
+                checked=checked,
             )
         )
-
     return results
 
 
-def generate_governance_proposals(
-    evolution_md: Path,
-    steering_md: Path,
-    threshold: int = 3,
-) -> list[GovernanceProposal]:
-    """Generate governance proposals from mature patterns.
+def generate_governance_proposals(evolution_md: Path, threshold: int = 3) -> list[GovernanceProposal]:
+    """Proposals for GC rows at the threshold with a filled Checked cell.
 
-    Pipeline:
-    1. Mine correction classes from EVOLUTION.md
-    2. Mine GC candidates from EVOLUTION.md
-    3. Filter out classes that already have STEERING/AGENT rules
-    4. Generate proposals for qualifying patterns
-
-    SAFETY: Never writes to any file. Returns data only.
+    SAFETY: never writes any file. Returns data only.
     """
-    proposals: list[GovernanceProposal] = []
-
-    # Read steering to check for existing rules
-    steering_text = ""
-    if steering_md.exists():
-        steering_text = steering_md.read_text(encoding="utf-8").lower()
-
-    # --- Mine correction classes ---
-    classes = mine_correction_classes(evolution_md)
-    for cls in classes:
-        if cls.occurrence_count < threshold:
-            continue
-
-        # Check if already ruled: look for STEERING reference in structural_fix
-        if _has_existing_rule(cls, steering_text):
-            continue
-
-        # Calculate confidence based on occurrence count and evidence
-        confidence = min(0.9, 0.5 + (cls.occurrence_count - threshold) * 0.05)
-
-        # Canonical key so a miner proposal ("CLASS A: ...") and a tracker-ladder
-        # proposal ("CLASS_A") for the SAME logical class dedup together, not twice
-        # (adversarial HIGH). The human-readable name is preserved in proposed_rule.
-        from core.evolution.class_key import canonical_class_key, is_cognitive_class
-
-        ckey = canonical_class_key(cls.name)
-        # Defense-in-depth axis guard (run_685db747 Gate-2 MED): today the header
-        # regex only matches "CLASS X" (all cognitive by construction), so this is
-        # unreachable — but if that regex is ever loosened, a non-cognitive class
-        # must NOT reach the governance queue. Mirrors escalation_ladder:111 and the
-        # eval_service consumer guard so all three layers agree.
-        if not is_cognitive_class(ckey):
-            continue
-
-        # Admission root-fix (run_97519f7c): a class with NO real rule text (empty
-        # pattern) must NOT surface a contentless "Address recurring X pattern"
-        # meta-instruction — that is not an approvable rule, just queue noise a human
-        # can't action. Skip it; it re-surfaces only once a real structural_fix/pattern
-        # is extracted. (The escalation ladder handles bare recurrence separately.)
-        if not (cls.pattern or "").strip():
-            continue
-
-        proposals.append(
-            GovernanceProposal(
-                target="governance",
-                source_class=ckey,
-                occurrence_count=cls.occurrence_count,
-                proposed_rule=cls.pattern,
-                evidence=cls.evidence_chain[:5],  # Cap at 5
-                confidence=confidence,
-            )
+    return [
+        GovernanceProposal(
+            gc_id=gc.gc_id,
+            proposed_rule=gc.proposed_rule,
+            evidence=gc.evidence[:5],
+            occurrence_count=gc.evidence_count,
+            checked=gc.checked,
         )
-
-    # --- Mine GC candidates ---
-    gc_candidates = mine_gc_candidates(evolution_md)
-    for gc in gc_candidates:
-        if gc.evidence_count < threshold:
-            continue
-
-        confidence = min(0.85, 0.6 + (gc.evidence_count - threshold) * 0.1)
-
-        proposals.append(
-            GovernanceProposal(
-                target="governance",
-                gc_id=gc.gc_id,
-                occurrence_count=gc.evidence_count,
-                proposed_rule=gc.proposed_rule,
-                evidence=gc.evidence,
-                confidence=confidence,
-            )
-        )
-
-    return proposals
+        for gc in mine_gc_candidates(evolution_md)
+        if gc.evidence_count >= threshold and gc.checked.lower() not in _EMPTY_CHECKED
+    ]
 
 
-def _has_existing_rule(cls: CorrectionClass, steering_text: str) -> bool:
-    """Check if a correction class already has a STEERING/AGENT rule.
+def mark_gc_decision(evolution_md: Path, gc_id: str, accepted: bool, today: date | None = None) -> bool:
+    """Write the human's verdict into the GC row's Count cell, under EVOLUTION.md's lock.
 
-    Two checks:
-    1. structural_fix field mentions "STEERING R" or "STEERING #" → already ruled
-    2. steering_text contains key phrases from the class pattern → already addressed
+    Returns True when the row was found and rewritten. Only that one cell of that
+    one row changes; every other byte of the file is kept.
     """
-    fix_lower = cls.structural_fix.lower()
+    if not evolution_md.exists():
+        return False
+    from utils.file_lock import flock_exclusive, flock_unlock
 
-    # Direct mentions of existing rules in the structural_fix field
-    if re.search(r"steering\s+r\d+", fix_lower):
-        return True
-    if re.search(r"steering\s+#\d+", fix_lower):
-        return True
-
-    # Check if STEERING.md already addresses this pattern's core concept
-    # Extract the key phrase after the colon (e.g., "Confidence → Skip Process")
-    if cls.name and ":" in cls.name:
-        pattern_key = cls.name.split(":", 1)[-1].strip().lower()[:40]
-        # Only match if substantial phrase (>10 chars to avoid false positives)
-        if len(pattern_key) > 10 and pattern_key in steering_text:
+    verdict = f"{PROMOTED if accepted else REJECTED} {(today or date.today()).isoformat()}"
+    lock_path = evolution_md.with_suffix(evolution_md.suffix + ".lock")
+    with open(lock_path, "w") as fd:
+        flock_exclusive(fd)
+        try:
+            text = evolution_md.read_text(encoding="utf-8")
+            lines = text.split("\n")
+            changed = False
+            for i, line in enumerate(lines):
+                m = _GC_ROW.match(line)
+                if not m or m.group(1) != gc_id:
+                    continue
+                parts = line.split("|")
+                # parts: ['', ' GC14 ', rule, evidence, count, since, ...]
+                if len(parts) < 6:
+                    return False
+                parts[4] = f" {verdict} "
+                lines[i] = "|".join(parts)
+                changed = True
+                break
+            if not changed:
+                return False
+            tmp = tempfile.NamedTemporaryFile(
+                "w", dir=evolution_md.parent, suffix=".tmp", delete=False, encoding="utf-8"
+            )
+            try:
+                tmp.write("\n".join(lines))
+                tmp.close()
+                os.replace(tmp.name, evolution_md)
+            except Exception:
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
             return True
-
-    return False
+        finally:
+            flock_unlock(fd)
