@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from core.run_protocol import trace as trace_protocol
-from core.run_protocol.findings import push_effect
+from core.run_protocol.findings import is_closed, push_effect
 
 
 class AuditError(ValueError):
@@ -361,12 +361,11 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     passed = sum(1 for name in expected
                  if (test_events.get(name) or {}).get("payload", {}).get("n_pass", 0) > 0
                  and not test_events[name]["payload"].get("n_fail"))
-    # a finding closed by a reported test counts as closed only when R2 judged the test
-    # ADEQUATE (S6-4d): before that it is the agent's claim, not a review's
-    closed_states = {"closed_asserted", "refuted", "accepted"}
+    # "closed" is findings.is_closed (the closure table): a finding closed by a reported
+    # test counts only once R2 judged the test ADEQUATE, a reviewed-only HIGH never
     confirmed = sum(row.get("status") == "closed_proven" and row.get("r2_status") == "ADEQUATE"
                     for row in findings)
-    closed = confirmed + sum(row.get("status") in closed_states for row in findings)
+    closed = sum(is_closed(row) for row in findings)
     landing = projection.get("landing")
     reason = _reason(projection, event_rows)
     from core.run_protocol.lifecycle import QUALITY_BLOCK_REASONS   # one list

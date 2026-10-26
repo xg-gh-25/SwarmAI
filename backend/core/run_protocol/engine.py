@@ -1231,9 +1231,11 @@ class RunEngine:
                                   "current code has that command passing; run it and "
                                   "record the report with report-tests --artifact -")
             event, report = found
+            changed = report.get("tests_changed")
             derived = {"evidence_type": "reported_test", "code_tree": trees[name],
                        "result": "proven", "repo": name,
-                       "report_event_id": event["event_id"], "command": proof["command"]}
+                       "report_event_id": event["event_id"], "command": proof["command"],
+                       "n_tests_changed": len(changed) if isinstance(changed, list) else 0}
             tested[finding_id] = derived
             out_items.append({**item, "proof": {
                 **derived, "tests_changed": report.get("tests_changed", [])[:20],

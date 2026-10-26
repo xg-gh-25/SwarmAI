@@ -2,7 +2,10 @@
 
 Public symbols:
 - ``fold`` — derive canonical findings only from validated finding/proof/auth events.
-- ``push_effect`` — severity-based RV-2 effect for projected state.
+- ``CLOSURE`` / ``r2_allowed`` / ``is_closed`` — the closure table: which evidence
+  closes each finding kind, the R2 words a state may get, and what counts as closed
+  (design 2026-10-26-pipeline-review-closure-and-visibility §2.3).
+- ``push_effect`` — RV-2 effect: HIGH / CRITICAL and not closed.
 - ``cluster_findings`` / ``r2_experts`` — deterministic repair grouping/routing.
 
 No public API accepts ``authorized=True``, old/new test strings or diff booleans as
@@ -22,6 +25,43 @@ STATUSES = frozenset({"open", "closed_proven", "closed_asserted", "closed_unprov
 R2_OPEN = frozenset({"RESOLVED", "OPEN", "REFUTED"})
 R2_PROVEN = frozenset({"ADEQUATE", "TEST_INADEQUATE"})
 _SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+
+# The closure table (design 2026-10-26-pipeline-review-closure-and-visibility §2.3): for
+# each finding kind, the evidence the agent submits to close it and the state it leaves.
+# ``reported_test``: a passing command of a validation report on the proof's tree (an
+# absence finding also needs that report to have changed tests); R2 then judges the test
+# (ADEQUATE / TEST_INADEQUATE). ``diff_assertion``: after R2 judged the fix RESOLVED.
+# The ledger, the answer recorder, RV-2, the audit and ``findings`` all read this table.
+CLOSURE: dict[str, dict[str, str]] = {
+    "behavior": {"evidence": "reported_test", "state": "closed_proven"},
+    "contract": {"evidence": "reported_test", "state": "closed_proven"},
+    "absence": {"evidence": "reported_test", "state": "closed_proven"},
+    "docs": {"evidence": "diff_assertion", "state": "closed_asserted"},
+    "design": {"evidence": "diff_assertion", "state": "closed_unproven"},
+    "security_policy": {"evidence": "diff_assertion", "state": "closed_unproven"},
+}
+assert set(CLOSURE) == KINDS
+
+
+def r2_allowed(finding_status: str) -> frozenset[str]:
+    """The R2 words a finding in *finding_status* may get: ADEQUATE / TEST_INADEQUATE
+    judge the test that closed a ``closed_proven`` finding; RESOLVED / OPEN / REFUTED
+    judge any other."""
+    return R2_PROVEN if finding_status == "closed_proven" else R2_OPEN
+
+
+def is_closed(row: Mapping[str, Any]) -> bool:
+    """Whether a projected finding counts as closed (one answer for the audit, RV-2,
+    ``next`` and ``findings``): asserted, refuted, accepted; ``closed_proven`` only after
+    R2 judged its test ADEQUATE; ``closed_unproven`` (reviewed, no test) only below HIGH."""
+    status = row.get("status")
+    if status in ("closed_asserted", "refuted", "accepted"):
+        return True
+    if status == "closed_proven":
+        return row.get("r2_status") == "ADEQUATE"
+    if status == "closed_unproven":
+        return normalize_severity(str(row.get("severity") or "")) not in ("HIGH", "CRITICAL")
+    return False
 
 
 # An answer whose lines parsed; ``partial`` is an R2 answer missing some status lines
@@ -142,11 +182,9 @@ def _reclassify(row: dict[str, Any], event: Mapping[str, Any]) -> None:
 
 
 def r2_status_allowed(finding_status: str, status: str) -> bool:
-    """Whether an R2 status line may apply to a finding in *finding_status*: ADEQUATE /
-    TEST_INADEQUATE judge the test that closed a ``closed_proven`` finding; RESOLVED /
-    OPEN / REFUTED judge any other. The ledger and the answer recorder both ask this."""
-    allowed = R2_PROVEN if finding_status == "closed_proven" else R2_OPEN
-    return str(status).upper() in allowed
+    """Whether an R2 status line may apply to a finding in *finding_status*
+    (``r2_allowed``). The ledger and the answer recorder both ask this."""
+    return str(status).upper() in r2_allowed(finding_status)
 
 
 def _status(row: dict[str, Any], event: Mapping[str, Any]) -> None:
@@ -177,26 +215,35 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
         raise FindingError(f"{etype} proof must come from cli")
     if row["status"] not in ("open", "invalid_test"):
         raise FindingError("proof cannot replace a terminal finding state")
+    rule = CLOSURE[row["kind"]]
+    if etype in ("reported_test", "diff_assertion") and rule["evidence"] != etype:
+        raise FindingError(f"a {row['kind']} finding is closed by {rule['evidence']}, "
+                           f"not {etype}")
     if etype == "reported_test":
         # S6-2: a test the agent ran and reported passing on this tree; R2 judges
         # whether it shows the fix (ADEQUATE keeps it closed, TEST_INADEQUATE reopens)
         report = reports.get(payload.get("report_event_id"))
-        if event["producer"] != "cli" or row["kind"] not in ("behavior", "contract") \
+        if row["kind"] == "absence" and not (
+                isinstance(payload.get("n_tests_changed"), int)
+                and not isinstance(payload.get("n_tests_changed"), bool)
+                and payload["n_tests_changed"] > 0):
+            raise FindingError("an absence finding is closed by a reported_test whose "
+                               "report lists changed tests (tests_changed is empty)")
+        if event["producer"] != "cli" \
                 or result != "proven" or report is None \
                 or report["payload"].get("code_tree") != payload["code_tree"] \
                 or report["payload"].get("repo") != payload.get("repo") \
                 or not isinstance(payload.get("command"), str) or not payload["command"]:
             raise FindingError("reported_test proof needs a passing command of a "
                                "validation report on the proof's tree")
-        row["status"] = "closed_proven"
+        row["status"] = rule["state"]
     elif etype == "diff_assertion":
-        if row["kind"] not in ("docs", "design", "security_policy") \
-                or row["r2_status"] != "RESOLVED" or result != "asserted" \
+        if row["r2_status"] != "RESOLVED" or result != "asserted" \
                 or payload.get("touches_finding") is not True:
             raise FindingError("diff assertion lacks matching R2 and hunk")
         if row["kind"] == "docs" and payload.get("touches_executable") is not False:
             raise FindingError("docs diff assertion touches or did not classify executable lines")
-        row["status"] = "closed_asserted" if row["kind"] == "docs" else "closed_unproven"
+        row["status"] = rule["state"]
     elif etype == "refuted":
         refs = payload.get("refs")
         if row["r2_status"] != "REFUTED" or result != "refuted" \
@@ -333,13 +380,12 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
 
 
 def push_effect(finding: Mapping[str, Any]) -> bool:
+    """RV-2: a HIGH / CRITICAL finding that is not closed (``is_closed``) blocks. A
+    ``closed_proven`` one blocks until R2 judged its test ADEQUATE."""
     severity = normalize_severity(finding.get("severity"))
-    status = finding.get("status")
-    if status not in STATUSES:
+    if finding.get("status") not in STATUSES:
         raise FindingError("finding has no valid status")
-    return severity in ("HIGH", "CRITICAL") and status in (
-        "open", "closed_unproven", "invalid_test",
-    )
+    return severity in ("HIGH", "CRITICAL") and not is_closed(finding)
 
 
 def cluster_findings(findings: list[Mapping[str, Any]], *, distance: int = 10) -> list[dict[str, Any]]:

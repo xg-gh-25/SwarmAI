@@ -246,14 +246,18 @@ def test_cli_diff_assertion_closes_docs_but_design_remains_unproven():
 @pytest.mark.parametrize("severity,status,effect", [
     ("HIGH", "open", True), ("CRITICAL", "invalid_test", True),
     ("HIGH", "closed_unproven", True), ("MEDIUM", "open", False),
-    ("LOW", "invalid_test", False), ("HIGH", "closed_proven", False),
+    ("LOW", "invalid_test", False), ("HIGH", "closed_proven", True),
     ("HIGH", "closed_asserted", False), ("HIGH", "refuted", False),
     ("HIGH", "accepted", False),
 ])
 def test_push_effect_table(severity, status, effect):
+    """A HIGH closed_proven blocks until R2 judged its test ADEQUATE (closure table)."""
     _, _, row = one(severity=severity)
     row["status"] = status
     assert fd.push_effect(row) is effect
+    if status == "closed_proven":
+        row["r2_status"] = "ADEQUATE"
+        assert fd.push_effect(row) is False
 
 
 def _accept(stream, finding, bound_state_hash=None):

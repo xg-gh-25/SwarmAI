@@ -149,8 +149,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                    "evidence_type": str, "code_tree": str, "result": str},
                    {"touches_finding": bool, "touches_executable": bool,
                     "refs": list, "repo": str,
-                    # reported_test (S6-2): the report event and the passing command
-                    "report_event_id": str, "command": str}),
+                    # reported_test (S6-2): the report event and the passing command;
+                    # n_tests_changed: that report's tests_changed count (an absence
+                    # finding needs it above zero; the fold does not read report blobs)
+                    "report_event_id": str, "command": str, "n_tests_changed": int}),
     # the agent's own test report for one repo (S6-1, design usable-by-anyone §3.3.3):
     # code_tree is computed by the engine at submission, the report itself is a blob
     "validation_report": _spec("cli", ("ordinal",), "payload.repo",
