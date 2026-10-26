@@ -225,7 +225,7 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 | 13 | 基线按本机已落地 run 算；判断顺序与 N/A；`cache_read_tokens` 指标；删 `baselines.json` 和脚本；改 `transcript_usage` 注释；仪表板汇总句 | 4 个已落地 run → N/A；5 个 → 有参考线，`baseline_runs`=5；只测到部分调用且无基线 → 仍是 WARN；一次没测到 → BLOCK；缓存读不影响 verdict；cap 触发仍 BLOCK；N/A 时汇总句不说"在警戒线内" | 无基线改回 WARN；N/A 排到 WARN 之前；Token 改回含缓存读 | correctness |
 | 14 | 说明：build/test（可编辑安装）、INSTRUCTIONS（stdout）、evaluate（拆 run） | `scripts/lint_skills.py` 通过 | — | — |
 
-**旧 run**：新字段都是可选的。旧日志里没有 `allowed_status` 的 R2 handout 按今天的规则判定；没有 `n_status_ignored` 的答复按今天的完整性判定；已在日志里的 `accept_finding` 用旧的 hash 规则校验，新规则只用于新请求。第 3、6 步各加一条"旧日志照样能 fold"的测试。
+**旧 run**：新字段都是可选的。旧日志里没有 `allowed_status` 的 R2 handout，按答复时 finding 的状态算出允许的词（用错词同样记 `UNANSWERED` 或按 `TEST_INADEQUATE` 处理，只会更严）；没有 `n_status_ignored` 的答复按今天的完整性判定；已在日志里的 `accept_finding` 用旧的 hash 规则校验，新规则只用于新请求。第 3、6 步各加一条"旧日志照样能 fold"的测试。
 
 **最终验证（整套做完后跑一次，在这里定好，不在最后扩大）**：
 - 本文新增的测试文件；
@@ -236,7 +236,7 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 **必须成立的不变量**：
 1. 被拒的 `review-address`（任何一步失败）不改变事件日志。
 2. 一条 HIGH/CRITICAL 只有在关闭口径下关闭后才不挡 RV-2；用错状态词、R2 不答都不会让它被算作关闭。
-3. 没有任何路径把 `closed_proven` 改回 `open`；只有 `TEST_INADEQUATE`（含按它处理的 `OPEN`）让它变 `invalid_test`，只有 tree 变化让它失效。
+3. 没有任何路径把 `closed_proven` 改回 `open`：R2 沉默时它保持 `closed_proven`、`r2_status` 为空（等 R2），由 `push_effect` 挡；只有 `TEST_INADEQUATE`（含按它处理的 `OPEN`）让它变 `invalid_test`。（实施时改：r4 的第 3 点写的是"沉默规则对真正没收到状态行的 finding 照旧生效"，那会让每条刚证明的 finding 在等 R2 时显示成 `open`，与本条矛盾；按本条实施。）
 4. `findings`、`next`、审计、R2 handout 对同一条 finding 给出的"关没关、能怎么关"相同（同一个函数）。
 5. 最新 TEST 报告里有 `not_run` 时，审计 Quality 不是 PASS，REPORT 列出每条命令和理由。
 6. REVIEW 完成时，每条有 address 的 finding 都已进过某一次 R2 handout，与 address 怎么分批无关。
@@ -277,3 +277,11 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 - r3（2026-10-27）：当时 §8（今 §10）三条由 XG 决定，全部按 r2 的写法实施；补上 absence 检查需要的 `proof.tests_changed` 字段。
 - r4（2026-10-27）：并入 `run_85e81059` 的问题：A8（R2 名单从账本算）；§5 问题 D（只改文档时引擎完成增量审查、`base_moved` 计数、heredoc 拒绝信息写清通路、重复提示合并、三处说明）；§6 问题 E（基线按安装算，修好从未打包的 `baselines.json`；无基线为 N/A；Token 不含缓存读）。核实后不改的：stdout 本来只有 JSON（两次都是调用方合并了 stderr）；知识召回由另一个 session 处理。
   - 对新增部分做了一轮零上下文审查（2 HIGH、6 MEDIUM、4 LOW），按原因一次并入：D3 不再放松拒绝，改为说清候选和通路（HIGH 1，`main_dirty_scan` 不扫别的 run 的 worktree、不报 ignore 文件、扫描会跳过，MEDIUM 8）；D1 不再动 LG-1，改为"只改文档时引擎自己完成增量审查"，`stale_closures` 用同一判断，审计列出没送审的文档类文件（HIGH 2、MEDIUM 3、4）；D2 写清 fold 怎么计数（detail 前缀、单独常量、新原因和 cap 名、Quality BLOCK、"报告在同步前是新的"条件、记下同步前的 base）（MEDIUM 5）；Token 新增 `cache_read_tokens` 指标，改错误的注释（MEDIUM 6）；N/A 排在 BLOCK 和不完整 WARN 之后，仪表板汇总句一起改（MEDIUM 7）；A8 补上空 items 派 R2 和 REVIEW 完成检查，hunk 取自各自的 address（LOW 9）；基线的数据源、"已落地"、`baseline_runs`、读取上限（LOW 10）；§6.1 措辞（LOW 11）；§8 补上审查列出的测试和变异（LOW 12）。
+- r5（2026-10-27，实施后）：按 §8 实施完 14 步，与本文的出入如下（均已在代码和测试里）：
+  - 不变量 3 按上面改后的写法实施（R2 沉默不把 `closed_proven` 改回 `open`）；旧 handout 的判定按上面改后的写法。
+  - R2 账本（`review.r2_ledger`）是 `review-address`、`next`、RV-5 共用的一个函数：同一位专家写新 R2 handout 时带上它没答复的那份里的 finding；被新 handout 取代、永远不会有答复的那份里的 finding 算"未覆盖"；`UNANSWERED` 按每条 finding 判断能否重派（不再按专家只看最新答复）；已 accept 或 refute 的 finding 不再送 R2；`review-address` 在读完日志后日志又变了时拒绝写入。（第 1–3、9 步专家审查的发现。）
+  - 第 5 步：同一个文件既有代码修改又有文档修改时，docs 类 finding 按文件判断永远关不掉；改为这种情况以 `closed_unproven` 关闭（MEDIUM/LOW 算关闭，HIGH 仍挡）。proof 事件记 `basis: "file"`。
+  - 第 6 步：`stale_closures` 不按 patch id，而按 proof 判断过的文件的 blob（diff_assertion 看 finding 的文件，refuted 看每个 path 引用）判断；`closed_proven` 不放进来：它的证据是通过的测试，落地 tree 上的 TEST 报告（LG-1）会重新确立，之后的代码改动走增量审查（RV-4），而且 `closed_proven` 无法再证明，放进来只会让它永久挡住 RV-2。
+  - 第 10 步：引擎自己完成 REVIEW 后，用同一次调用里已交的 TEST 报告继续完成 TEST（报告本来就在当前 tree 上），不再要求重交。
+  - 第 7 步的命令是 `pipeline-v1 findings`；`next` 在 REVIEW 里的 `findings` 字段与它同源（`review.closure_view`）。
+  - 顺带修了 `scripts/mutation_check.py`：按 AGENT 的写法用 `perl -e 'alarm N; exec …'` 限时，它收到 SIGALRM 时不恢复被改的源文件；现在 SIGALRM、SIGHUP 和 SIGTERM 一样恢复。
