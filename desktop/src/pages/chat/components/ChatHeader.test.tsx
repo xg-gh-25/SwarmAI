@@ -129,6 +129,7 @@ describe('ChatHeader — pinned Swarm Out tab', () => {
           onTabSelect={onTabSelect}
           onTabClose={vi.fn()}
           onNewSession={vi.fn()}
+          outputCount={1}
         />
       </HealthContext.Provider>,
     );
@@ -143,11 +144,25 @@ describe('ChatHeader — pinned Swarm Out tab', () => {
     expect(strip.textContent).not.toContain('Swarm Out');
   });
 
-  it('renders Swarm Out apart at the right end, with no close button', () => {
+  it('renders Swarm Out apart from the strip, with no close button', () => {
     renderWithSwarmOut('tab-0');
     const pinned = screen.getByRole('tablist', { name: 'Swarm Out' });
     expect(pinned.textContent).toContain('Swarm Out');
     expect(screen.queryByLabelText('Close Swarm Out')).toBeNull();
+  });
+
+  it('places Swarm Out right after the "+", behind a divider, before the right cluster', () => {
+    renderWithSwarmOut('tab-0');
+    const plus = screen.getByLabelText('New Session');
+    const divider = screen.getByTestId('swarm-out-divider');
+    const pinned = screen.getByRole('tablist', { name: 'Swarm Out' });
+    const follows = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(plus, divider)).toBe(true);
+    expect(follows(divider, pinned)).toBe(true);
+    // The right cluster (outputs pill / health) comes after it, not before.
+    expect(follows(pinned, screen.getByTestId('chat-header-outputs-pill'))).toBe(true);
+    // Not inside the scrolling strip, so it never scrolls away.
+    expect(plus.closest('.session-tab-bar')!.contains(pinned)).toBe(false);
   });
 
   it('selecting it goes through onTabSelect like any tab', () => {

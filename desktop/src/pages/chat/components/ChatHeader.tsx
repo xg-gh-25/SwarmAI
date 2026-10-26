@@ -40,14 +40,16 @@ interface ChatHeaderProps {
  *
  * Layout:
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ [Tab1][Tab2][Tab3]...[+]←scroll→          │ [health warn] [Swarm Out] │
- * │ ◄─── SessionTabBar (flex-1, "+" at tail) ──►  ◄─ right cluster ──────► │
+ * │ [Tab1][Tab2][Tab3]...[+]←scroll→ │ [Swarm Out]        [health warn] │
+ * │ ◄ SessionTabBar ("+" at tail) ►  ◄ pinned ►   ◄─ right cluster ──► │
  * └──────────────────────────────────────────────────────────────────────┘
  *
  * The new-session "+" lives at the TAIL of the tab strip (inside SessionTabBar).
- * The right cluster holds the health warning (shown when not connected) and, at the
- * far right, the pinned Swarm Out tab (pages/chat/swarmOut.ts) — apart from the
- * strip, which holds the user's own chat tabs only.
+ * The strip only takes the width its tabs need (it shrinks and scrolls when they
+ * overflow), so the pinned Swarm Out tab (pages/chat/swarmOut.ts) follows the "+"
+ * after a gap and a divider, outside the scrolling strip, which holds the user's
+ * own chat tabs only. The right cluster holds the health warning (shown when not
+ * connected) and the outputs pill.
  * The 🔔 Alerts "Needs You" pill was MOVED to the left-sidebar top slot
  * (run_2bdc68ad) — a global attention signal belongs on the fixed-width left
  * chrome, not on the Canvas-shifting tab row; ChatPage portals it there.
@@ -74,13 +76,13 @@ export function ChatHeader({
   // NEW output pushes outputCount above what was last seen. (Was `outputCount > 0`, which
   // nagged for the whole session.)
   const showOutputsPill = outputCount > lastSeenOutputCount && !canvasOpen;
-  // The strip holds the user's own chat tabs; the pinned Swarm Out tab sits apart at
-  // the right end of the row (pages/chat/swarmOut.ts).
+  // The strip holds the user's own chat tabs; the pinned Swarm Out tab follows the
+  // strip's "+" behind a divider (pages/chat/swarmOut.ts).
   const userTabs = normalTabs(openTabs);
   const swarmOutTab = openTabs.find((tab) => isSwarmOutTab(tab.id));
 
   return (
-    <div className="h-10 px-4 flex items-center justify-between flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)] shadow-[inset_0_-1px_0_var(--color-border)]">
+    <div className="h-10 px-4 flex items-center flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)] shadow-[inset_0_-1px_0_var(--color-border)]">
       {/* Left Section: Session Tab Bar (the "+" new-session button lives at the
           tail of the strip, inside SessionTabBar). */}
       <SessionTabBar
@@ -93,8 +95,31 @@ export function ChatHeader({
         isNewTabDisabled={isNewTabDisabled}
       />
 
-      {/* Right Section: Outputs pill + Health Warning + Header Actions */}
-      <div className="flex items-center gap-1 flex-shrink-0">
+      {/* Pinned Swarm Out tab: right after the strip's "+", set apart by a gap and a
+          divider so it reads as its own place, not one more chat tab. Outside the
+          scrolling strip, so it never scrolls away. */}
+      {swarmOutTab && (
+        <div className="flex items-center gap-3 flex-shrink-0 self-stretch">
+          <span
+            aria-hidden="true"
+            className="self-center w-px h-5 bg-[var(--color-text-muted)] opacity-40"
+            data-testid="swarm-out-divider"
+          />
+          <div role="tablist" aria-label="Swarm Out" className="flex items-center self-stretch">
+            <SessionTab
+              tab={swarmOutTab}
+              isActive={swarmOutTab.id === activeTabId}
+              onSelect={onTabSelect}
+              onClose={() => {}}
+              status={tabStatuses?.[swarmOutTab.id]}
+              variant="swarm-out"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Right Section: Outputs pill + Health Warning (pushed to the far right) */}
+      <div className="flex items-center gap-1 flex-shrink-0 ml-auto">
         {/* Canvas outputs pill (run_9e42c066) — shown ONLY when the active tab has
             outputs AND Canvas is closed, so a run's deliverables are never invisible.
             Click opens Canvas in the current tab (in-band, mirrors the AlertsPill
@@ -147,18 +172,6 @@ export function ChatHeader({
           >
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
             {health.issue?.short ?? t('health.degraded', 'Reconnecting…')}
-          </div>
-        )}
-        {swarmOutTab && (
-          <div role="tablist" aria-label="Swarm Out" className="flex items-center self-stretch">
-            <SessionTab
-              tab={swarmOutTab}
-              isActive={swarmOutTab.id === activeTabId}
-              onSelect={onTabSelect}
-              onClose={() => {}}
-              status={tabStatuses?.[swarmOutTab.id]}
-              variant="swarm-out"
-            />
           </div>
         )}
       </div>

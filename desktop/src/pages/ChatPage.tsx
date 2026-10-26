@@ -78,6 +78,7 @@ import { type ResumeTabInfo } from './chat/resumeTarget';
 import { classifyWorkLanding, type LandingVerdict } from './chat/landPromptInTab';
 import { SWARM_OUT_TAB_ID, isSwarmOutTab, normalChatMax, normalTabs } from './chat/swarmOut';
 import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
+import { useSwarmOutChatWidth, chatColumnStyle } from '../components/swarm-out/SwarmOutChatResize';
 import { dispatchInjectChatInput, injectDispatchedPrompt } from './chat/injectChatInput';
 import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { planDispatchBackfill } from './chat/dispatchBackfill';
@@ -1265,6 +1266,9 @@ export default function ChatPage() {
       id: t.id, sessionId: t.sessionId, status: t.status, isStreaming: t.isStreaming || t.localSending,
     })), [tabMapRef]);
 
+  // Swarm Out chat column width (drag its left edge to widen it to the left).
+  const swarmOutChat = useSwarmOutChatWidth();
+
   const landingToast = useCallback((v: Extract<LandingVerdict, { kind: 'blocked' }>, verb: string): void => {
     let message: string;
     if (v.reason === 'draft') {
@@ -1801,7 +1805,7 @@ export default function ChatPage() {
         e.preventDefault();
         const idx = parseInt(e.key) - 1;
         // Numbers follow the tab strip, which holds the user's tabs only (the pinned
-        // Swarm Out tab sits apart at the right end).
+        // Swarm Out tab sits apart, after the strip's "+").
         const tabs = normalTabs(openTabsRef.current);
         if (tabs[idx]) {
           handleTabSelect(tabs[idx].id);
@@ -2653,9 +2657,11 @@ export default function ChatPage() {
         />
 
         {/* Swarm Out (pages/chat/swarmOut.ts): when its pinned tab is active, its
-            dashboard takes the left of the row and the chat column below narrows to
-            a fixed width on its right. The chat column itself is the same one every
-            tab uses, so the Swarm Out conversation is a real chat session. */}
+            dashboard takes the left of the row and the chat column below sits on its
+            right at a width the user drags (SwarmOutChatResize). The chat column itself
+            is the same one every tab uses, so the Swarm Out conversation is a real chat
+            session. The dashboard must stay the column's previous sibling: the drag
+            ceiling measures it there. */}
         {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch. */}
         <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} />
 
@@ -2675,13 +2681,13 @@ export default function ChatPage() {
             `contain:layout` (NOT size) needs no explicit dimensions.
             `chat-panel`: the chat-column container (index.css explains why it is safe). */}
         <div className="chat-panel flex-1 flex flex-col min-w-0 overflow-hidden [contain:layout]"
-          // Swarm Out active: the column takes 460px beside its dashboard and may shrink
-          // to 360px when the Canvas is wide (the dashboard narrows first, min-width 0).
-          style={activeTabId === SWARM_OUT_TAB_ID
-            ? { flex: '0 1 460px', minWidth: 360, borderLeft: '1px solid var(--color-border)' }
-            : undefined}
+          // Swarm Out active: the column takes the user's width (default 560px, drag
+          // its left edge to widen) beside its dashboard, never below 360px and never
+          // so wide the dashboard drops under 420px (SwarmOutChatResize).
+          style={activeTabId === SWARM_OUT_TAB_ID ? chatColumnStyle(swarmOutChat.width) : undefined}
           data-testid="chat-panel"
         >
+          {activeTabId === SWARM_OUT_TAB_ID && swarmOutChat.seam}
           <ErrorBoundary variant="tab">
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">

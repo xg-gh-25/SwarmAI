@@ -11,9 +11,9 @@
  *   user's own chat tabs are capped at `normalChatMax(chatMax)`. The floor
  *   (backend `ResourceMonitor._MIN_TABS_FLOOR` = 1 chat + Swarm Out + 1 channel) keeps
  *   that at least 1.
- * - **Lifecycle.** It cannot be closed, keeps its title, sits at the right end of the
- *   tab row (not in the scrolling strip) and is never chosen as the tab a ToDo, job
- *   prompt or history session lands in.
+ * - **Lifecycle.** It cannot be closed, keeps its title, sits right after the strip's
+ *   "+" behind a divider (not in the scrolling strip) and is never chosen as the tab a
+ *   ToDo, job prompt or history session lands in.
  */
 
 export const SWARM_OUT_TAB_ID = 'swarm-out';

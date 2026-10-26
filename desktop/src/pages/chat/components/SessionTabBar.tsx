@@ -108,7 +108,7 @@ export function SessionTabBar({
     // keeps tablist children tabs-only), but lives inside the SAME horizontal
     // scroll container so it trails the last tab and scrolls with the strip.
     <div
-      className="session-tab-bar flex items-center gap-1 flex-1 min-w-0 self-stretch overflow-x-auto"
+      className="session-tab-bar flex items-center gap-1 flex-initial min-w-0 self-stretch overflow-x-auto"
       style={{
         scrollBehavior: 'smooth',
         scrollbarWidth: 'thin',
