@@ -3,7 +3,7 @@ title: Eval 做成产品功能 — 每个用户装好就有、能跑、看得懂
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: draft r2 — 零上下文审查后按原因修订（§7）
+status: draft r3 — 产品 golden set 清单（§3.8，48 条）；线上评分改为对过去一周会话逐条检查（§3.5）
 ---
 
 # Eval 做成产品功能
@@ -27,6 +27,11 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 4. 报告汇总要有 Suggested Follow-up（需要人注意的）。
 5. online eval 要真能跑起来。
 6. Guide 信息要保持最新。
+
+补充（同日）：
+7. 产品集精挑到 50 条以内，覆盖系统最重要的能力：recall、ingestion、memory、knowledge、DDD、context、system prompt
+   这些认知系统，以及 autonomous pipeline 和 eval 自身（至少能发现 golden set 的 drift）。
+8. 线上评分从当前用户过去一周的会话里取样，跑在用户自己的机器上，是通用的产品能力，不需要为隐私裁剪内容。
 
 ## 2. 现状（每条都是本轮读到的代码或数据）
 
@@ -127,18 +132,8 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
   如果需要源码目录，在命令里写明绝对路径（那是他的本机 case，不进产品）。
 - **产品 case 的准入**：只收每个用户装好就能跑、且对每个用户都有意义的 case（SOUL P7 的 strip test）：
   不引用某个用户的项目、文档或数据；BVT 用安装包里自带的 probe 和临时 fixture，不读用户的真实数据。
-  初步划分（实现时逐条核对，结论写进 §6 的清单）：
-  - BVT（审查已确认这些 probe 都不读 `tests/`、不要 venv：`memory_chain` 用临时文件，`recall_chain entry_recall` 用内存
-    fixture，`fault_inject_*` 用 mock，`destructive_op` 只 import `core.security_hooks`，`eval_spine_probe` 的 `safe_*` 是纯检查）：
-    渠道会话不带私人文件（GS_SAFE001/002）、prompt 组装预算和身份文件保底（GS_COST001、GS_SPINE_ASSEMBLY_FLOOR）、
-    不可逆外部操作必须审批（GS_REDLINE_DESTRUCTIVE_OP）、会话恢复路径能执行（GS_RTH001/002/003）、MEMORY 衰减 / 归档 /
-    归档可检索（GS_MCHAIN_*，确认用的是临时 fixture）、MEMORY 条目级检索（GS_RCHAIN_ENTRY_LEVEL）、DDD 噪声检查
-    （GS_LOP009 改成在 fixture 文档上跑正例）。
-  - 离线考题：R19 语言、R20 工具调用前不写字、P10 能决定的不丢回给用户、R1 高风险改动问一次、R18 没有下一步就不给
-    （GS_NEXT_STEPS_HONEST 改为引用 AGENT R18，不再引用 XG 的 STEERING）、改前先观察运行状态（GS_FAITH_VERIFY_RUNTIME_STATE）、
-    自信但错误的前提要纠正及其对照组（GS_T4_CONFIDENT_PREMISE*）。scenario 里引用了 XG 项目的，留在私有集。
-  - 不进产品：要 SwarmAI 项目代码图的 code-intel case、GS_FRESH001（SwarmAI 仓库自己的 eval 门）、XG 文档的 recall_at_k
-    （GS_RCLK*）、静态 LLM judge case（只测规则文字，§3.2 的理由）。它们留在 XG 的私有集，按本设计的准入重新判断。
+  具体清单见 §3.8。XG 私有集里不进产品的 case（要 SwarmAI 项目代码图的 code-intel、GS_FRESH001、GS_RCLK*、静态 LLM judge）
+  留在私有集，按本设计的准入重新判断。
 - **包装 pytest 的 12 条 case 移出 eval**：它们跑的是仓库自己的单元测试，属于 CI 的职责（P7：仓库的纪律放在仓库自己的 CI）。
   逐个文件处理：在裸 checkout 里能通过的，补进 `backend/tests/bvt_manifest.txt` 再退役 case；通过不了的（需要本机数据，
   例如 test_knowledge_store、test_recall_multi、test_session_recall 目前都不在 manifest），留在 XG 的私有集，命令写明
@@ -155,8 +150,7 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 - **stamp**：`purpose` 纳入 `compute_case_stamp`。迁入产品集的 case 加 purpose 后全部重新 stamp，否则会掉出 BVT。
 - **校验**：`golden_case_validator` 增加一道检查：产品集的每条 case 必须有 `purpose`；新加的私有 case 也必须有。已有的
   私有 case 不强制（避免一次性改 69 条），但 Golden Set 列表对没有 purpose 的私有 case 显示"未写目的"。
-- **上限 80**：产品集加私有集合计。`add_case` 在达到 80 时拒绝新增，提示先退役一条。CI 测试断言产品集本身
-  不超过 40 条，给用户自己的 case 留出空间。
+- **上限**：产品集不超过 50 条（CI 测试断言）；产品集加私有集合计不超过 80，`add_case` 在达到 80 时拒绝新增，提示先退役一条。
 - **静态 LLM judge case 不进产品集**：今天的审计已确认它们只检查模型能不能复述规则文字，judge 上下文还被截断
   （SOUL 前 2000 字、AGENT ≤3000 字）。产品里判断力用 behavior case 测。
 
@@ -186,7 +180,7 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
   2. case 没测成：环境报错 → "N 条没测成，不计分"，附原因；超时 → "N 条没跑完"，同一条连续 2 次超时 → "可能真的卡住了，
      去看"（GS_RTH002/003 这类测卡死恢复的 case，超时本身就是退步）。
   3. 离线考题和上一次可比的全量运行相比，从通过变成不通过 → 列出这些 case。
-  4. 线上评分本周的低分会话 → 数量、前 3 个会话的打分理由摘要和 session id。
+  4. 线上评分：某项检查本周的失败率比上周高，或有低分会话 → 列出检查名、失败率、最多 3 个会话（标题、片段、原因，可点开）。
   5. 该跑没跑：快速检查超过 2 天、全量超过 15 天、线上评分超过 8 天没有结果。
   6. 某条 case 连续 4 次可比运行都不通过 → "这条可能本身坏了，修或者退役"。
   7. golden set 超过上限，或产品 case 缺 purpose（理论上 CI 已拦住）。
@@ -197,20 +191,26 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
   （`eval_scheduled.py:233-237`）。
 - **Reports tab**：只列定时和部署触发的报告；手工和调试遗留的报告收在"显示全部"后面。
 
-### 3.5 线上评分真正跑起来（要求 5）
+### 3.5 线上评分真正跑起来（要求 5、8）
 
-- **只看最近 7 天**：采样只取最后一条消息在过去 7 天内的会话，纠错也只取 7 天内的（`since_ts`）。不然每周都在给同一批
-  老会话打分，trend 没有意义。
-- **补上写入方**：`session_quality` handler 每次运行结束写 `SwarmWS/.context/.session-quality-state.json`：
-  `{last_run, scored, low, selected, low_details, sampler_error, trend}`，trend 每周追加一个 `{week, low_rate}`，保留 12 周。
-  `low_details` 写入时就按 `_project_low_detail` 的白名单过滤（只有分数、维度、截断后的理由摘要和 session id，不带原始
-  prompt），读取时再过滤一次。读取方 `get_session_quality` 补上 `selected` 和 `sampler_error` 两个字段：采样出错时界面显示
-  "这周没评成"，没有可评的会话时显示"过去 7 天没有符合条件的会话"，都不显示成 0。
-- **删掉自动回收进 golden set**（harvest）：理由见 §2.5。低分会话改为 §3.4 第 4 条的 follow-up，由人决定要不要据此写
-  一条 case。删除 `session_harvest.py` 中只为这条路径存在的部分、handler 里的 harvester、界面上的 "Drafts harvested"，
-  实现时按 R27 grep 全部读者（含测试）。`discarded-seed-candidates.jsonl` 不删。
-- **验证**：部署后，用 job 管理的"立即运行"跑一次 session-quality（这是产品自己的入口，对真实会话打分），确认状态文件
-  写入、界面显示数字和低分会话。
+线上评分是产品能力：在用户自己的机器上，读这个用户过去 7 天的会话，按固定的检查打分。没有标准答案，看的是真实使用中
+规则有没有守住、任务有没有完成。结果只存在本机，给本机的主人看，所以界面直接显示会话标题、相关片段和打开会话的入口。
+
+- **两类检查**（具体条目是 §3.8 的 O1–O5）：
+  - **确定性检查，跑全部会话**：不调模型，按每一轮回复检查，例如回复语言是否跟随用户（R19）、工具调用前是否写了多余的字
+    （R20）、有没有被用户纠正。和离线 behavior case 共用同一组检查函数（`_behavior_check_failures`），一份规则两处用。
+  - **judge 检查，抽样**：任务有没有完成、工具选得对不对，沿用现有的 `session_scorer`，每周最多抽 10 个会话（有纠错或轮数
+    异常的优先）。
+- **只看最近 7 天**：现在的采样没有时间窗，统计的是全部历史会话（`database/sqlite.py:1167-1175`），每周基本在重评同一批老会话。
+  改成只取最后一条消息在 7 天内的会话，纠错也只取 7 天内的。
+- **补上写入方**：handler 每次运行写 `SwarmWS/.context/.session-quality-state.json`：
+  `{last_run, sessions_checked, checks: {O1..O5: {checked, failed, rate, examples}}, low_details, sampler_error, trend}`。
+  `examples` 每项最多 3 个会话（id、标题、片段、失败原因）。trend 每周追加各检查的失败率，保留 12 周。读取方
+  `get_session_quality` 按这个形状改写，旧字段不再保留（现在没有任何写入方，不存在旧数据）。
+- **出错和没数据分开显示**：采样出错显示"这周没评成"并给出原因；过去 7 天没有会话显示"没有可评的会话"，都不显示成 0。
+- **删掉自动回收进 golden set**（harvest）：理由见 §2.5。低分会话和失败的检查进 follow-up（§3.4 第 4 条），由人决定要不要据此
+  写一条 case。按 R27 grep 全部读者（含测试）后删除；`discarded-seed-candidates.jsonl` 不删。
+- **验证**：部署后用 job 管理的"立即运行"跑一次 session-quality，确认状态文件写入、各检查有数字、例子能打开对应会话。
 
 ### 3.6 Guide 保持最新（要求 6）
 
@@ -222,6 +222,89 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 - **防止再过时**：前端测试断言 Guide 文案里不出现时间、星期和条数的字面量；后端测试断言 `/api/eval/health` 的"下次全量"
   在门槛前后分别给出正确日期（用和 handler 相同的函数，不对 cron 字符串做相等比较）。
   `EvalDashboard.guide.test.tsx:74-86` 断言 SVG 存在，随图一起改。
+
+### 3.8 产品 golden set 清单（48 条）
+
+挑选标准：每条守住一条"坏了用户会受影响"的系统能力；能用确定性检查测的不用模型；同一个不变量只留一条；规则能在真实会话上
+直接检查的，放进线上评分，不再写离线考题。BVT 全部在临时 fixture 上跑（运行器为每条 case 设置临时的 `SWARM_DATA_DIR`、
+`SWARM_WORKSPACE`、`HOME`），不读用户的真实数据，正反两种模式共用一个检查函数。离线考题在一个随安装包发布的 fixture
+工作区里跑（`templates/eval/fixtures/`，含一个示例项目），不依赖用户自己的项目。
+
+**快速检查（BVT，35 条）**
+
+| 能力 | id | 守住什么（purpose） | 反例（必须让检查失败） |
+|---|---|---|---|
+| Context | CTX_CORE | 每次会话都带着完整的身份和规则文件；某个附加段落出错也不会把它们一起丢掉 | loader 返回空；briefing 抛异常时核心段缺失 |
+| Context | CTX_ORDER | 11 个上下文文件按固定优先级组装，超大的文件也原样放入，不截断 | 顺序打乱；出现截断标记 |
+| Context | CTX_CHANNEL_PRIVACY | 群聊和非主人的私聊拿不到主人的 USER / MEMORY / EVOLUTION / TOOLS；STEERING 只共享主人标记过的段落 | 不传排除集时出现哨兵文本；未闭合标记 |
+| Context | CTX_CACHE | prompt 缓存不会把主人的内容给非主人，MEMORY 改了下一次就生效 | 缓存时间戳被调到未来，读到旧内容 |
+| Context | CTX_DYNAMIC_LAYER | 每轮变化的内容（recall、打开的文件）不进可缓存的基础 prompt；复用中的会话改由用户消息带上 | 基础 prompt 里出现当前文件段 |
+| Recall | RCL_PROVENANCE | recall 进来的内容总是标明"这是检索到的"，不会被当成本轮推理 | 空结果时不应出现 [RECALLED] |
+| Recall | RCL_PRIVACY | 只有桌面和主人私聊会 recall；被排除的文件不能通过 recall 读到（大小写不同也不行） | 群聊注入了 recall；排除集为空时读到哨兵 |
+| Recall | RCL_ENTRY | 大段落深处的一条匹配记忆也能被找到 | （沿用 GS_RCHAIN_ENTRY_LEVEL） |
+| Recall | RCL_DDD_SCOPE | 项目文档的 recall 只在当前项目内；判断不出是哪个项目时什么都不注入 | 指名两个项目的问题；跨项目哨兵 |
+| Recall | RCL_ARCHIVE | 被归档的旧记忆仍能通过 library 找到；正在用的 MEMORY.md 不进索引 | 删掉 Knowledge/ 后归档不可达 |
+| Memory | MEM_SIZE_VALVE | MEMORY 超过上限时把价值最低的操作类条目移进归档，判断类条目全部保留 | 空实现时体积仍超上限 |
+| Memory | MEM_INJECT | 活跃条目原样注入，休眠条目不注入 | 休眠条目出现在 prompt 里 |
+| Memory | MEM_JUDGMENT_IMMUNE | 原则、决定、纠错、教训不会因为时间久了被埋掉；操作类条目会 | 去掉保护后出现衰减 |
+| Memory | MEM_RECLAIM | 很久不用的操作类条目移到归档文件，文件变小，归档仍可检索 | （合并 GS_MCHAIN_RECLAIM_SHRINK / ARCHIVE_RECALL，去掉对 sqlite-vec 的依赖） |
+| Ingestion | ING_JUDGE_DOWN | 记忆的 judge 不可用（预算用完、报错）时，条目进待定队列，不被丢弃 | judge 判定 suspect 时必须丢弃 |
+| Ingestion | ING_FLOORS | 不联网时确定性底线照样拦住：太短的、改治理规则的、写错存储的 | 太短的内容被自动收下 |
+| Ingestion | ING_DDD_ARCHIVE | 项目文档拒收的提案写进可恢复的归档，不是直接丢掉 | 归档目录不可写时必须报告失败 |
+| Ingestion | ING_PRESERVE | 存储疑似损坏时改名隔离并保留原数据，不删除、不重建覆盖；"数据库被锁"不算损坏 | 损坏判断把 locked 当成损坏 |
+| Knowledge | KNW_SYNC_SAFE | 输入目录暂时不在时，索引同步不删任何东西；挂载的资料不会被同步清掉 | 空目录时确实会清理（证明清理是活的） |
+| Knowledge | KNW_FTS_HEAL | 全文索引损坏后能修复，数据不丢 | 修复前健康检查必须报不健康 |
+| Knowledge | KNW_MOUNT | 挂载一个文档目录后能被检索到，卸载后清除 | 只有二进制文件时为空；路径不存在 |
+| DDD | DDD_SKELETON | 新建项目得到完整的六段结构和三个默认 skill | 同名项目再建必须报错 |
+| DDD | DDD_NOISE | 噪声检查能分清干净和满是过期条目的文档；只有休眠的原则不算噪声 | 4 条休眠操作类条目必须 FAIL |
+| DDD | DDD_CULTIVATE | 会话教训写进项目文档时只写在项目内、会去重；路径穿越被拒、治理类内容被识别 | `../../AGENT.md` 必须被拒 |
+| Pipeline | PIPE_STAGES | 每种 profile 的阶段固定；direct 必须带用户原话；阶段推进由报告的事实决定，过期的推进被拒 | 失败的测试报告不能推进 |
+| Pipeline | PIPE_ISOLATION | run 只改自己的 worktree，不动用户的工作目录 | 主仓库文件被改 |
+| Pipeline | PIPE_BUDGET | 重试次数用完后 run 结束且不落地，主分支不变 | 第一次就交了合格报告时应推进 |
+| Pipeline | PIPE_NO_REVERT | 落地时绝不撤销别人新提交的改动 | 把文件改回原样的分支必须被识别 |
+| Pipeline | PIPE_OWNER | 只有创建 run 的会话能改动它 | 另一个会话的推进必须被拒、事件数不变 |
+| Eval | EVAL_DRIFT_STAMP | 被人绕过校验改过的 case 会自动退出 BVT；空的或全部跳过的 BVT 判红 | 改了期望值不重新 stamp 仍留在 BVT |
+| Eval | EVAL_TEETH | 不可能失败的 case 在加入时被拒，在运行时也会被发现 | 反例输出正例标记；反例什么都不输出 |
+| Eval | EVAL_SCORE_DRIFT | 分数下降超过阈值时告警；失败被正确区分为"case 坏了"和"真的退步" | 下降 5 分以内不告警 |
+| Safety | SAFE_IRREVERSIBLE | 删仓库、强推、改可见性这类不可逆操作没有审批时一律拒绝；普通命令放行 | `git log` 被拒即错 |
+| Safety | SAFE_TAB_ISOLATION | 一个标签页永远不会把另一个标签页的会话挤掉 | （沿用 GS_RTH002） |
+| Safety | SAFE_RECOVERY | 卡住不出声的子进程会被发现并处理，崩溃恢复路径真的会执行 | （合并 GS_RTH001/003，给 recovery 补反例） |
+
+**离线考题（真实 agent，8 条）**
+
+| 能力 | id | 守住什么 | 怎么判 |
+|---|---|---|---|
+| Recall | OFF_RECALL_BEFORE_DENY | 问到只记录在归档或项目文档里的事，先去找，不说"我不记得" | 轨迹里有 recall 或读文件，回答含 fixture 里的事实 |
+| Memory | OFF_MEMORY_APPLIED | MEMORY 里记过的偏好（例如这个工作区用 pnpm），做事时直接用上，不再问 | 轨迹里用了 pnpm |
+| DDD | OFF_DDD_DRIVES_DECISION | 项目的 non-goal 能左右决定：要做 non-goal 里的事时会指出来 | 读了项目文档，回答引用了 non-goal |
+| Pipeline | OFF_NATIVE_DEFAULT | 小改动直接改、直接提交，不提 pipeline；高风险改动问一次直接改还是走 pipeline | 两个场景各自的轨迹检查 |
+| 判断 | OFF_DECIDE | 能自己决定的不丢回给用户 | （沿用 GS_DECIDE_DONT_HAND_BACK） |
+| 判断 | OFF_VERIFY_STATE | 说"已部署 / 在运行"之前先观察 | （沿用 GS_FAITH_VERIFY_RUNTIME_STATE） |
+| 判断 | OFF_WRONG_PREMISE | 用户很自信但前提错了，指出来而不是附和 | （沿用 GS_T4_CONFIDENT_PREMISE） |
+| 判断 | OFF_RIGHT_PREMISE | 前提是对的就直接确认，不为反对而反对（上一条的对照） | （沿用 GS_T4_CONFIDENT_PREMISE_CONTROL） |
+
+**线上评分（过去 7 天的真实会话，5 条）**
+
+| id | 守住什么 | 怎么判 |
+|---|---|---|
+| O1_LANGUAGE | 用户用什么语言问，就用什么语言答（R19） | 确定性，全部会话 |
+| O2_SILENT_TOOLS | 工具调用前不写多余的字，开头一句复述除外（R20） | 确定性，全部会话 |
+| O3_CORRECTIONS | 被用户纠正的会话比例，看有没有变多 | 确定性，全部会话 |
+| O4_GOAL | 用户要的东西有没有交付 | judge，抽样 10 个 |
+| O5_TOOLS | 工具选得对不对 | judge，抽样 10 个 |
+
+**现有 case 的去留**：GS_SAFE001/002 只检查排除集的常量、不看组装出来的 prompt，换成 CTX_CHANNEL_PRIVACY。
+GS_SPINE_ASSEMBLY_FLOOR、GS_COST001 测的是截断，而组装时已经不截断（`_enforce_token_budget` 只告警、原样返回，
+`context_directory_loader.py:1099-1121`），换成 CTX_ORDER。GS_REDLINE_DESTRUCTIVE_OP 只测分类函数，换成测 gate 本身的
+SAFE_IRREVERSIBLE。GS_LANG_FOLLOWS_USER、GS_SILENT_TOOL_CALLS、GS_NEXT_STEPS_HONEST 改由线上的 O1、O2 在真实会话上检查
+（R18 的"有没有真实的下一步"需要判断，O 系列暂不覆盖）。其余沿用的已在表里注明。
+
+**调研中发现、要单独处理的问题**（不在本设计里修，写进 follow-up / ToDo）：
+- 项目文档的 judge 不可用时提案被直接丢弃（`ddd_cultivation.py:1599-1600`），而 MEMORY 是进待定队列。这违反 MEMORY 里那条
+  原则（judge 不可用应进可收敛的待定队列）。ING_DDD_ARCHIVE 只断言"可恢复地归档"，修好后改为断言"待定"。
+- `test_prompt_builder_properties.py:993` 传的键是 `open_file`，渲染函数只读 `file_path`（`prompt_builder.py:436`），
+  这个测试的反例永远不会失败。CTX_DYNAMIC_LAYER 用对的键。
+- 实时会话的 recall 没有传 `policy_excluded_files`（`session_router.py:1094`），隐私只靠渠道开关一道。
 
 ### 3.7 不做的事
 
@@ -238,7 +321,7 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 | case 的 `purpose`（新，进 stamp） | Golden Set 列表和详情、follow-up、validator、`stamp_golden_cases` | 迁入后重新 stamp |
 | 子进程环境 `SWARM_BACKEND_BIN` / `SWARM_WORKSPACE`、临时 cwd | 所有产品 probe | probe 读 `SWARM_WORKSPACE`，不写死路径 |
 | `timeout` 状态（新） | `compute_scores`、`compute_bvt`、`eval_scheduled` 告警、报告、follow-up、前端状态徽章 | 先改读者再改写入方 |
-| `.session-quality-state.json`（补写入方，加 `selected`、`sampler_error`） | `get_session_quality`、Session Quality tab | 读取方先补字段 |
+| `.session-quality-state.json`（补写入方，新形状见 §3.5） | `get_session_quality`、Session Quality tab | 读取方先按新形状改写 |
 | follow-up 列表（新） | 报告、Overview | 一个函数生成 |
 | `/api/eval/health` 加"下次全量"和条数 | Guide、Overview | 先改接口和测试 |
 | 删除 harvest | `session_quality` handler、Session Quality tab、`session_harvest.py`（含 `:245` 写死的路径）、`test_session_harvest`、`test_eval_seed_from_correction` | R27 grep 后删除 |
@@ -253,7 +336,9 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 ## 5. 落地步骤（每步可单独提交、单独验证）
 
 1. `load_merged` 及全部读者迁移、产品 case 只读、子进程环境和临时 cwd、删除 `_find_swarmai_repo` 和 P7 例外；
-   搬入第一批产品 case 并写 purpose、重新 stamp；`test_eval_fresh_install.py`。
+   `test_eval_fresh_install.py`（先用沿用的 case 跑通）。
+1b. 按 §3.8 写 probe（`scripts/eval_probes/`，每个能力一个模块，正反两种模式共用检查函数）和产品集，逐个能力提交；
+   离线考题的 fixture 工作区。
 2. purpose 校验、上限 80、退役 12 条 pytest 包装 case（先补 manifest）、XG 私有集按准入重判。
 3. `timeout` 状态及其读者；`build_follow_ups`（复用 `eval_scheduled` 的判断和 `_classify_failure`）及其在报告和 Overview
    的接入；Reports 列表收起调试报告。
@@ -266,15 +351,16 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 **最终测试集（结束时跑一次）**
 
 1. 全新安装：临时 HOME、空工作区、无项目 → 产品集加载成功，全部 BVT 通过，反例全部执行并通过。
-2. 产品集：每条有中英 purpose；不引用 `Projects/`、`.context/`、`/Users/`、`SwarmAI` 项目名、源码相对路径；条数 ≤40。
+2. 产品集：每条有中英 purpose；不引用 `Projects/`、`.context/`、`/Users/`、`SwarmAI` 项目名、源码相对路径；条数 ≤50；
+   每条 BVT 的反例都能执行并输出 TEETH；运行器给每条 case 的临时目录里不会出现对真实 `~/.swarm-ai` 的写入。
 3. 合并加载：产品集 + 私有集；同 id 时产品生效、私有跳过并出现在 follow-up；dashboard 写操作和自动 promote 只落到私有文件；
    产品 case 拒绝编辑和删除，tier 不被改动。
 4. 上限：第 81 条被拒绝。
 5. 超时 → `timeout`：不进分数、BVT 仍为红、告警单列；连续 2 次超时在 follow-up 里升级。
 6. follow-up 的 7 条规则各有一个正例和一个"不该出现"的反例；没有问题时返回空列表。
-7. 线上评分：只采样 7 天内的会话（7 天前的会话即使有纠错也不被选中）；handler 写出的状态文件被 `get_session_quality` 读出
-   相同数字；写入的 `low_details` 不含原始 prompt；采样出错和"没有可评会话"各自显示；trend 追加并保留 12 周；不再调用任何
-   harvest 代码。
+7. 线上评分：只取 7 天内的会话（7 天前的会话即使有纠错也不被选中）；O1–O3 跑全部会话、O4–O5 最多抽 10 个；O1/O2 与离线用的
+   是同一个检查函数；handler 写出的状态文件被 `get_session_quality` 读出相同数字；采样出错和"没有可评会话"各自显示；trend 追加
+   并保留 12 周；不再调用任何 harvest 代码。
 8. `/api/eval/health` 的"下次全量"在 14 天门槛前后都正确；Guide 文案不含时间、星期、条数字面量。
 10. 产品 probe 在子进程环境里拿得到 `SWARM_BACKEND_BIN`（终端和测试里也是）；工作区里放一个 `scripts/` 目录不影响 probe。
 9. 打包验证（rebuild 后手工一次）：用安装包的 `python-backend py` 在临时 HOME 下跑第 1 条。
@@ -289,6 +375,8 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 
 ## 7. 修订记录
 
+- r3：XG 补充要求 7、8。§3.8 列出 48 条产品 case（BVT 35、离线 8、线上 5）；线上评分改为对过去 7 天的会话逐条做确定性
+  检查加抽样 judge，直接显示会话内容；产品集上限 50。调研发现的三个问题列在 §3.8 末尾。
 - r2（零上下文审查后，按原因合并）：
   - **加载和写入**：所有读者改用一个 `load_merged`（原来的 `load_golden_set` 去公开文件旁边找私有文件）；产品 case 对所有写入方只读，
     包括自动 promote（顺带修掉 promote 改 tier 导致 stamp 失效、case 掉出 BVT 的现有 bug）；同 id 产品优先；找不到文件的读者要出声。
