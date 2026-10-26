@@ -24,6 +24,11 @@ STATUSES = frozenset({"open", "closed_proven", "closed_asserted", "closed_unprov
                       "refuted", "accepted", "invalid_test"})
 R2_OPEN = frozenset({"RESOLVED", "OPEN", "REFUTED"})
 R2_PROVEN = frozenset({"ADEQUATE", "TEST_INADEQUATE"})
+# written by the answer recorder, never by an expert: the line used a word the finding's
+# state does not take (RESOLVED for closed_proven). The state stays; the finding counts as
+# answered, so the R2 silence rule does not reopen it; is_closed / push_effect are unchanged
+# by it (a closed_proven HIGH still blocks until ADEQUATE). One re-dispatch asks again.
+R2_UNANSWERED = "UNANSWERED"
 _SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
 
 # The closure table (design 2026-10-26-pipeline-review-closure-and-visibility §2.3): for
@@ -190,6 +195,9 @@ def r2_status_allowed(finding_status: str, status: str) -> bool:
 def _status(row: dict[str, Any], event: Mapping[str, Any]) -> None:
     payload = event["payload"]
     status = payload["status"].upper()
+    if status == R2_UNANSWERED:
+        row["r2_status"] = status
+        return
     if not r2_status_allowed(row["status"], status):
         raise FindingError(f"R2 status {status!r} is invalid for {row['status']}")
     row["r2_status"] = status

@@ -29,6 +29,34 @@ Do not emit a VERDICT line for REVIEW experts."""
 
 
 
+def r2_redispatch_targets(events: Sequence[Mapping[str, Any]]
+                          ) -> dict[str, tuple[str, dict[str, str]]]:
+    """{expert: (the R2 answer, {finding id: the word it used that was not allowed})}
+    for each expert whose latest R2 answer has UNANSWERED lines and who has not been
+    re-dispatched yet: one re-dispatch per expert (design 2026-10-26-pipeline-review-
+    closure §2.3 point 3). Read by ``review-address`` (an empty pass) and ``next``."""
+    handouts = {e["event_id"]: e for e in events if e.get("kind") == "handout"
+                and e.get("stage") == "review" and e.get("round") == 2}
+    redone = {h["payload"]["expert_id"] for h in handouts.values()
+              if h["payload"].get("redispatch_of")}
+    latest: dict[str, Mapping[str, Any]] = {}
+    for event in events:
+        if event.get("kind") == "answer" and event["payload"].get("round") == 2 \
+                and event["payload"].get("handout_event_id") in handouts:
+            latest[event["payload"]["expert_id"]] = event
+    out: dict[str, tuple[str, dict[str, str]]] = {}
+    for expert, answer in latest.items():
+        if expert in redone:
+            continue
+        wrong = {event["payload"]["canonical_id"]: str(event["payload"].get("said") or "?")
+                 for event in events if event.get("kind") == "finding_status"
+                 and event["payload"].get("answer_event_id") == answer["event_id"]
+                 and str(event["payload"].get("status")).upper() == "UNANSWERED"}
+        if wrong:
+            out[expert] = (answer["event_id"], wrong)
+    return out
+
+
 class ReviewError(ValueError):
     """REVIEW input, event stream, fixing spec, or handout is inconsistent."""
 
@@ -267,7 +295,9 @@ class ReviewOrchestrator:
                      finding_ids: Sequence[str] = (),
                      code_trees: Mapping[str, Any] | None = None,
                      incremental_from: Mapping[str, Any] | None = None,
-                     knowledge_items: Sequence[str] = ()
+                     knowledge_items: Sequence[str] = (),
+                     allowed_status: Mapping[str, Sequence[str]] | None = None,
+                     redispatch_of: str | None = None,
                      ) -> tuple[dict[str, Any], dict[str, Any]]:
         """The handout event spec (for ``store.append_batch`` / ``append_new``) and what
         ``handout_written`` needs once it is on disk. Writes nothing: a prompt that fails
@@ -298,6 +328,11 @@ class ReviewOrchestrator:
             if not finding_ids:
                 raise ReviewError("R2 needs a finding roster")
             payload["finding_ids"] = list(finding_ids)
+            if allowed_status is not None:
+                payload["allowed_status"] = {cid: sorted(words)
+                                             for cid, words in allowed_status.items()}
+            if redispatch_of:
+                payload["redispatch_of"] = redispatch_of
         if code_trees:          # what the expert sees: RV-4 / LG-1 bind to it (S6-2)
             payload["code_trees"] = dict(code_trees)
         if incremental_from:
@@ -485,9 +520,13 @@ class ReviewOrchestrator:
     def r2_input(self, expert: str, finding_ids: Sequence[str], *,
                  hunks: Mapping[str, str], proofs: Mapping[str, str],
                  reclassifications: Mapping[str, Mapping[str, Any]],
-                 states: Mapping[str, str] | None = None) -> str:
+                 states: Mapping[str, str] | None = None,
+                 allowed: Mapping[str, Sequence[str]] | None = None,
+                 wrong: Mapping[str, str] | None = None) -> str:
         """The R2 input for *expert*. *states*: the state a finding has once the pass
-        being built is written (its proof is in the same batch as this handout)."""
+        being built is written (its proof is in the same batch as this handout);
+        *allowed*: the R2 words each finding takes; *wrong*: for a re-dispatch, the word
+        the previous answer used that was not allowed."""
         rows = {row["canonical_id"]: row for row in self.findings()}
         payload = []
         for finding_id in finding_ids:
@@ -496,12 +535,25 @@ class ReviewOrchestrator:
                 raise ReviewError("R2 roster does not match expert findings")
             if states and finding_id in states:
                 row = {**row, "status": states[finding_id]}
-            payload.append({"canonical_id": finding_id, "finding": row,
-                            "fix_hunk": hunks.get(finding_id),
-                            "proof": proofs.get(finding_id),
-                            "reclassification": reclassifications.get(finding_id)})
-        return "R2 ONLY — review these addressed findings, not the whole diff:\n" + json.dumps(
-            payload, ensure_ascii=False, sort_keys=True, indent=2)
+            entry = {"canonical_id": finding_id, "finding": row,
+                     "fix_hunk": hunks.get(finding_id),
+                     "proof": proofs.get(finding_id),
+                     "reclassification": reclassifications.get(finding_id)}
+            if allowed is not None and finding_id in allowed:
+                entry["allowed_status"] = sorted(allowed[finding_id])
+            if wrong and finding_id in wrong:
+                entry["previous_status_not_allowed"] = wrong[finding_id]
+            payload.append(entry)
+        head = "R2 ONLY — review these addressed findings, not the whole diff:\n"
+        if allowed is not None:
+            head += ("Each finding's R2 status line uses one word of its allowed_status "
+                     "(ADEQUATE / TEST_INADEQUATE judge the test that closed a "
+                     "closed_proven finding; RESOLVED / OPEN / REFUTED judge the fix).\n")
+        if wrong:
+            head += ("RE-DISPATCH: your previous R2 answer used a word that was not allowed "
+                     "for the findings marked previous_status_not_allowed; answer them "
+                     "again with an allowed word.\n")
+        return head + json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
 
     def render_review(self, events: list[dict[str, Any]] | None = None) -> str:
         """REVIEW.md, from events only (design §E2, conformance F20): each dispatch with

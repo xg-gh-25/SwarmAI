@@ -94,7 +94,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      # spawn_prompt / spawn_sha: the four lines the expert is spawned
                      # with (PROMPT-FILE = the prompt blob); absent on older handouts
                      # knowledge_items: ids of the DDD entries in the prompt (run-knowledge §3.4)
+                     # allowed_status: R2 only, {finding id: the words its state takes};
+                     # redispatch_of: R2 only, the answer whose wrong words this re-asks
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
+                      "allowed_status": dict, "redispatch_of": str,
                       "code_trees": dict, "incremental_from": dict, "nonce": str,
                       "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list}),
     # a host hook saw an expert spawned with exactly a handout's spawn prompt
@@ -135,7 +138,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
     "finding_status": _spec(("hook", "cli"), ("payload.answer_event_id", "ordinal"),
                             "payload.canonical_id", {"answer_event_id": str,
                             "canonical_id": str, "status": str},
-                            {"kind_confirm": (str, type(None))}),
+                            # said: for an UNANSWERED line, the word the expert used
+                            {"kind_confirm": (str, type(None)), "said": str}),
     "reclassify": _spec("cli", ("payload.canonical_id", "payload.pass", "attempt"),
                         "payload.canonical_id", {"canonical_id": str, "from": str,
                         "to": str, "reason": str, "pass": int}),

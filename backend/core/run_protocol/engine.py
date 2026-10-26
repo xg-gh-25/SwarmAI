@@ -1176,12 +1176,29 @@ class RunEngine:
                                       **proof}})
             after[finding_id] = finding_protocol.CLOSURE[rows[finding_id]["kind"]]["state"]
         roster = orchestrator.r2_roster(set(handoff["addressed"]))
+        redispatch: dict[str, tuple[str, dict[str, str]]] = {}
+        if not handoff["addressed"]:
+            # an empty pass re-asks the R2 lines that used a word not allowed (once per
+            # expert, design §2.3 point 3)
+            for expert, (answer_id, wrong) in self.r2_redispatch_targets(events).items():
+                roster[expert] = sorted(wrong)
+                redispatch[expert] = (answer_id, wrong)
+        if not specs and not roster:
+            raise EngineError("review-address has nothing to record: no items, and no R2 "
+                              "line to re-dispatch")
         trees = self._current_code(list(self.contract["expected_repos"]))[1]
         prepared = []
         for expert, ids in roster.items():
+            allowed = {cid: sorted(finding_protocol.r2_allowed(after.get(cid, rows[cid]["status"])))
+                       for cid in ids}
+            answer_id, wrong = redispatch.get(expert, (None, {}))
+            hunks, proofs = handoff["hunks"], handoff["proofs"]
+            if redispatch.get(expert):
+                hunks, proofs = self._addressed_text(events, ids)
             review_input = orchestrator.r2_input(
-                expert, ids, hunks=handoff["hunks"], proofs=handoff["proofs"],
-                reclassifications=handoff["reclassifications"], states=after)
+                expert, ids, hunks=hunks, proofs=proofs,
+                reclassifications=handoff["reclassifications"], states=after,
+                allowed=allowed, wrong=wrong)
             # an R2 per address pass: after a reopen the expert rechecks again (S6-2)
             earlier = [e for e in events if e.get("kind") == "handout"
                        and e.get("stage") == "review" and e.get("round") == 2
@@ -1189,7 +1206,8 @@ class RunEngine:
             spec, ready = orchestrator.handout_spec(
                 expert_id=expert, stage="review", round=2, attempt=len(earlier) + 2,
                 at=at, expert_instructions=review.expert_prompt(expert),
-                review_input=review_input, finding_ids=ids, code_trees=trees)
+                review_input=review_input, finding_ids=ids, code_trees=trees,
+                allowed_status=allowed, redispatch_of=answer_id)
             specs.append(spec)
             prepared.append(ready)
         try:
@@ -1201,6 +1219,24 @@ class RunEngine:
                     zip([e for e in written if e["kind"] == "handout"], prepared)]
         self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
+
+    def r2_redispatch_targets(self, events: Sequence[Mapping[str, Any]]
+                              ) -> dict[str, tuple[str, dict[str, str]]]:
+        return review.r2_redispatch_targets(events)
+
+    def _addressed_text(self, events: Sequence[Mapping[str, Any]], ids: Sequence[str]
+                        ) -> tuple[dict[str, str], dict[str, str]]:
+        """(hunk, proof) of each finding's latest address event."""
+        text = review.ReviewOrchestrator(self.store, self.run_dir)._text
+        hunks: dict[str, str] = {}
+        proofs: dict[str, str] = {}
+        for event in events:
+            payload = event.get("payload") or {}
+            if event.get("kind") == "address" and payload.get("canonical_id") in ids:
+                hunks[payload["canonical_id"]] = text(payload.get("hunk")) or ""
+                if payload.get("proof"):
+                    proofs[payload["canonical_id"]] = text(payload["proof"]) or ""
+        return hunks, proofs
 
     def _handoff_problems(self, orchestrator, artifact: Any,
                           events: Sequence[Mapping[str, Any]]) -> list[str]:

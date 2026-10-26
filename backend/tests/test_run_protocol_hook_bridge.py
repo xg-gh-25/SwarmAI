@@ -167,15 +167,16 @@ def test_an_invalid_r2_status_line_is_ignored_and_the_rest_of_the_answer_counts(
     assert result is not None
     kinds = _kinds(store)
     assert kinds.count("answer") == 2
-    assert [r["payload"]["canonical_id"] for r in store.read_events()
-            if r["kind"] == "finding_status"] == [second]
+    # the wrong line is recorded as UNANSWERED (design 2026-10-26-pipeline-review-
+    # closure §2.3 point 3): the answer stays complete, the state does not change
+    assert [(r["payload"]["canonical_id"], r["payload"]["status"]) for r in store.read_events()
+            if r["kind"] == "finding_status"] == [(first, "UNANSWERED"), (second, "RESOLVED")]
     notes = [r for r in store.read_events() if r["kind"] == "integrity"]
     assert [n["payload"]["conflict_type"] for n in notes] == ["invalid_r2_status"]
     rows = {row["canonical_id"]: row for row in findings.fold(store.read_events(),
                                                                store.authority)}
     assert rows[second]["r2_status"] == "RESOLVED"
-    # the ignored line counts as a missing one: the finding stays open (§A3.2)
-    assert rows[first]["status"] == "open" and rows[first]["r2_status"] == "OPEN"
+    assert rows[first]["status"] == "open" and rows[first]["r2_status"] == "UNANSWERED"
 
 
 def test_a_record_failure_leaves_an_answer_rejected_instead_of_nothing(tmp_path,

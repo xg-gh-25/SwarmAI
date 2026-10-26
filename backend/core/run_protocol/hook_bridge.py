@@ -242,7 +242,7 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
     # a status line the ledger cannot apply to its finding's current state (ADEQUATE on
     # an open finding) is dropped and noted, so the rest of the answer still counts
     # instead of the whole write being refused (ced6caa3)
-    statuses, notes = _applicable_statuses(store, parsed)
+    statuses, notes = _applicable_statuses(store, parsed, payload.get("allowed_status"))
 
     def children(answer: dict[str, Any]) -> list[dict[str, Any]]:
         if parsed.state not in ("parsed", "partial"):
@@ -265,10 +265,14 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
         rows += [{**common, "kind": "finding_status", "ordinal": ordinal, "payload": {
                     "answer_event_id": answer["event_id"],
                     "canonical_id": status["finding_id"], "status": status["status"],
-                    "kind_confirm": status.get("kind_confirm")}}
+                    "kind_confirm": status.get("kind_confirm"),
+                    **({"said": status["said"]} if status.get("said") else {})}}
                  for ordinal, status in enumerate(statuses, 1)]
         for ordinal, (note, conflict) in enumerate(notes, 1):
-            digest_note = hashlib.sha256(note.encode("utf-8")).hexdigest()
+            # bound to this answer: a re-dispatch answered with the same wrong word
+            # writes its own note, not a duplicate event
+            digest_note = hashlib.sha256(
+                (answer["event_id"] + "\n" + note).encode("utf-8")).hexdigest()
             rows.append({**common, "kind": "integrity", "ordinal": ordinal, "payload": {
                 "conflict_id": digest_note, "conflict_type": conflict,
                 "first_hash": hashlib.sha256(b"ignored").hexdigest(),
@@ -290,10 +294,20 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
     return {"answer": answer, "parsed": parsed}
 
 
-def _applicable_statuses(store: AuditStore, parsed) -> "tuple[list, list]":
-    """(*parsed*'s R2 status rows the finding ledger can apply, integrity notes as
+def _applicable_statuses(store: AuditStore, parsed,
+                         allowed_status: "Mapping[str, Any] | None" = None
+                         ) -> "tuple[list, list]":
+    """(*parsed*'s R2 status rows as the ledger records them, integrity notes as
     ``(text, conflict_type)``). A row naming a finding the ledger does not hold is kept:
-    the ledger's own refusal of it is unchanged."""
+    the ledger's own refusal of it is unchanged.
+
+    Which words a finding takes comes from its R2 handout's ``allowed_status`` (the
+    state when the handout was written), else from its current state (a handout written
+    before that field existed). A word it does not take: ``OPEN`` for a test-proven
+    finding is recorded as TEST_INADEQUATE (stricter, never a release); any other is
+    recorded as UNANSWERED (the state stays, the finding counts as answered, ``next``
+    re-dispatches once) with an integrity note (design 2026-10-26-pipeline-review-
+    closure §2.3 point 3)."""
     notes = [(note, "foreign_r2_status") for note in parsed.integrity]
     if not parsed.statuses:
         return [], notes
@@ -310,12 +324,29 @@ def _applicable_statuses(store: AuditStore, parsed) -> "tuple[list, list]":
         current = {}
     kept = []
     for status in parsed.statuses:
-        held = current.get(status["finding_id"])
-        if held is not None and not findings.r2_status_allowed(held, status["status"]):
-            notes.append((f"invalid R2 status ignored: {status['finding_id']} "
-                          f"{status['status']} for {held}", "invalid_r2_status"))
-        else:
+        finding_id = status["finding_id"]
+        held = current.get(finding_id)
+        allowed = set(findings.r2_allowed(held)) if held is not None else None
+        if isinstance(allowed_status, Mapping) and isinstance(allowed_status.get(finding_id), list):
+            # the handout's judgement; a state that moved on since (an accept) narrows it
+            handed = {str(word).upper() for word in allowed_status[finding_id]}
+            allowed = handed if allowed is None else handed & allowed
+        if allowed is None:
             kept.append(status)
+            continue
+        word = str(status["status"]).upper()
+        if word in allowed:
+            kept.append(status)
+        elif word == "OPEN" and "TEST_INADEQUATE" in allowed:
+            notes.append((f"R2 status OPEN for the test-proven {finding_id} recorded as "
+                          "TEST_INADEQUATE", "invalid_r2_status"))
+            kept.append({**status, "status": "TEST_INADEQUATE"})
+        else:
+            notes.append((f"R2 status {word} is not allowed for {finding_id} "
+                          f"(allowed: {', '.join(sorted(allowed))}); recorded as "
+                          f"{findings.R2_UNANSWERED}", "invalid_r2_status"))
+            kept.append({**status, "status": findings.R2_UNANSWERED, "kind_confirm": None,
+                         "said": word})
     return kept, notes
 
 

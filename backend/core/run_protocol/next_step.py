@@ -111,6 +111,18 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
                 f"spawn the {dispatched} handout(s) in this response in one parallel message"
         return "wait", "", (f"{len(waiting)} dispatched expert(s) have not answered yet: "
                             + waiting_summary(events, waiting))
+    # an R2 line used a word its finding does not take (design §2.3 point 3): one
+    # re-dispatch per expert, before the stage can complete
+    from core.run_protocol import review as review_protocol
+    redo = review_protocol.r2_redispatch_targets(events)
+    if redo:
+        named = "; ".join(f"{expert}: " + ", ".join(f"{cid} said {word}" for cid, word
+                                                    in sorted(wrong.items()))
+                          for expert, (_answer, wrong) in sorted(redo.items()))
+        return "run", _cmd(engine, "review-address --artifact -"), \
+            ("re-dispatch R2 once for the lines that used a word not allowed (" + named
+             + "): review-address with {\"pass\": <this pass>, \"items\": []} writes the "
+             "new R2 handout, then spawn it")
     if any(row.get("check") == "RV-4" for row in blocking):
         # S6-2: the code changed since a review saw it (TEST sent the run back, or an
         # edit after R2): only the change since then is reviewed
