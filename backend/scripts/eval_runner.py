@@ -1391,6 +1391,38 @@ Respond in this exact JSON format:
         return {"status": "error", "notes": f"decision judge call failed: {str(e)[:120]}"}
 
 
+_RECORD_STEPS = 30
+_STEP_MAX_CHARS = 240
+_FINAL_TEXT_MAX = 4000
+# The per-case fields a run record keeps beyond status / notes: an offline case's
+# trajectory, expected steps, tool steps and final answer (the drill-down).
+_RECORD_DETAIL = ("observed_trajectory", "expected_check", "steps", "final_text")
+
+
+def _clip_step(step: str) -> str:
+    return step if len(step) <= _STEP_MAX_CHARS else step[:_STEP_MAX_CHARS - 1] + "…"
+
+
+def _tool_of(step: str) -> str:
+    return step.strip().split(None, 1)[0].lower() if step.strip() else ""
+
+
+def _expected_check(case: dict, actual: list[str]) -> list[dict]:
+    """Each expected step and whether the run has it (``A|B tool`` = either tool),
+    matched the way _eval_trajectory_tool_strict matches: the step's tool name heads
+    an actual step, then the argument matcher. Order is not checked here; the case
+    verdict does that."""
+    out = []
+    for step in case.get("expected_trajectory") or []:
+        head, _, rest = str(step).strip().partition(" ")
+        found = any(
+            eval_trajectory({"expected_trajectory": [f"{tool} {rest}".strip()], "trajectory_match": "any_order"},
+                            actual_trajectory=[a for a in actual if _tool_of(a) == tool.lower()])["status"] == "passed"
+            for tool in head.split("|") if tool)
+        out.append({"step": str(step)[:_STEP_MAX_CHARS], "found": found})
+    return out
+
+
 def _eval_trajectory_tool_strict(case: dict, actual: list[str]) -> dict:
     """Tool-name-anchored trajectory match for behavior cases.
 
@@ -1414,9 +1446,6 @@ def _eval_trajectory_tool_strict(case: dict, actual: list[str]) -> dict:
     # Filter actual steps so only those headed by the expected tool name survive,
     # THEN run the normal matcher. An expected step "Read X" with no actual Read
     # step → no surviving candidate → matcher fails (correct: behavior absent).
-    def _tool_of(step: str) -> str:
-        return step.strip().split(None, 1)[0].lower() if step.strip() else ""
-
     # A step's head may name alternatives ("Grep|Read archive"): any one of those
     # tools with the rest of the step satisfies it (any_order only).
     if any("|" in e.strip().split(None, 1)[0] for e in expected if e.strip()) \
@@ -1495,10 +1524,10 @@ def eval_trajectory_capture(case: dict) -> dict:
     timeout = case.get("scenario_timeout", 240)
 
     try:
-        from scripts.scenario_runner import run_scenario_raw, parse_pre_tool_text, ScenarioInfraError
+        from scripts.scenario_runner import run_scenario_raw, parse_pre_tool_text, parse_steps, ScenarioInfraError
     except ImportError:
         try:
-            from scenario_runner import run_scenario_raw, parse_pre_tool_text, ScenarioInfraError  # type: ignore
+            from scenario_runner import run_scenario_raw, parse_pre_tool_text, parse_steps, ScenarioInfraError  # type: ignore
         except ImportError:
             return {"status": "error", "notes": "scenario_runner unavailable"}
 
@@ -1528,7 +1557,11 @@ def eval_trajectory_capture(case: dict) -> dict:
     # step's leading tool name to head an actual step before delegating to the
     # substring/token matcher for the argument match.
     result = _eval_trajectory_tool_strict(case, actual)
-    result["observed_trajectory"] = actual
+    # The drill-down (session → trajectory → step) reads these from the run record.
+    result["observed_trajectory"] = [_clip_step(a) for a in actual[:_RECORD_STEPS]]
+    result["expected_check"] = _expected_check(case, actual)
+    result["steps"] = parse_steps(stdout)
+    result["final_text"] = (final_text or "")[:_FINAL_TEXT_MAX]
 
     # Decision-class gate (adversarial Gate-2, run_75b656c1): for cases whose
     # point is "the read content DROVE the decision" — not merely "a Read
@@ -1946,6 +1979,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
                 "eval_method": r.get("eval_method", "programmatic"),
                 "duration_ms": r.get("duration_ms", 0),
                 "notes": r.get("notes", ""),
+                **{k: r[k] for k in _RECORD_DETAIL if k in r},
             }
             for r in results
         ],

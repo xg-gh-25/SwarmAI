@@ -374,6 +374,34 @@ SAFE_IRREVERSIBLE。GS_LANG_FOLLOWS_USER、GS_SILENT_TOOL_CALLS、GS_NEXT_STEPS_
 - 代码：第 1、4 步各一个 correctness 专家（重点：读者是否全部迁移、删除的东西是否还有读者）；第 3 步加一个 security 视角
   （follow-up 和线上评分里出现真实会话内容，确认只走白名单字段）。UI 按 `s_frontend-design/data/design-judgment.md` 自查。
 
+## 8. Overlay 重设计（native 实现，2026-10-27）
+
+界面按 mock `Knowledge/Mockups/2026-10-26-eval-overlay-redesign.html`：Overview / Golden Cases / Online Eval /
+Offline Eval / LLM Judges / Guide 六个 tab；Context Health 和 Governance 不再放在 Eval 里（C&M 已经有），Runs 和
+Reports 并入 Offline Eval 的放行记录。下面每一项写清写入方和读取方。
+
+| # | 写入方 | 新形状 | 读取方 |
+|---|---|---|---|
+| 1 | `eval_runner.evaluate_case`（behavior） | case 记录加 `final_text`（≤4000 字）、`observed_trajectory`（≤30 步）、`steps`（每步工具、输入、输出摘要、是否出错，≤30 步、每段 ≤240 字）、`expected_check`（每个期望步骤是否找到） | `run_eval` 写运行记录时保留这四个字段；`get_run`；Offline Eval 三层下钻 |
+| 2 | `core/eval_followups` | 每项加 `kind`：`eval`（评测本身：快速检查失败、没测成、新题首跑失败、该跑没跑、case 本身坏了、golden set 超限、sampler / judge 出错）或 `evolution`（agent 行为信号：线上检查比上周差或失败率 ≥10%、本周有纠正、低分会话、离线考题从通过变成不通过） | `/api/eval/health` 拆成 `follow_ups` 和 `evolution`；HTML 报告两节；Overview |
+| 3 | `EvalService.add_case / update_case / delete_case` | 新增和修改都跑 `validate_case` 全部检查（另加上限、purpose）；快速检查类保存前实际执行反例，必须输出反例标记；修改后重新盖章；删除私有 case 是硬删除 | Golden Cases 表单；`POST /golden-set/try` 试跑不保存 |
+| 4 | `jobs/handlers/session_quality` | judge 理由用提问的语言；状态加 `judge_prompt_sha`；`metrics: {turns, turn_p50_s, cost_p50_usd}`；trend 每周带 `metrics`；trend 缺的历史周第一次从数据库补算（O1/O2/成本/耗时，不补 judge 和纠正） | Overview 五维趋势、Online Eval |
+| 5 | `POST /api/eval/calibration` | `.context/.judge-calibration.jsonl` 一行一条：`{at, session_id, judge_prompt_sha, judge: low, human: agree/disagree}`；状态里没有 `judge_prompt_sha` 的那批不收 | `GET /api/eval/judges` 算一致率（只用当前 prompt 的标注） |
+| 6 | `GET /api/eval/judges` | 两个 judge 的模型、被测 agent 模型、prompt 原文、温度、输出上限、用 judge 的 case 数、校准一致率 | LLM Judges；判决 prompt 从 f-string 抽成模块常量，运行和展示读同一份 |
+| 7 | 每日 canary（`context_health_hook`） | canary 状态加 `days`：最近 30 天每天 `{date, passed, total, not_run}` | Offline Eval 的每日格子 |
+| 8 | `get_history` | 每条加 `release_checks` 和 `report`（同名 HTML 报告存在时的文件名） | Offline Eval 放行记录 |
+
+**验证计划**（现在定）
+
+- 每一项先写会失败的测试，修完做变异检查（`scripts.mutation_check`）。
+- 最终测试集：`test_eval_release`、`test_eval_followups`、`test_eval_crud`、`test_eval_case_admission`、
+  `test_session_quality_handler`、`test_session_scorer`、`test_eval_lines`、`test_eval_report_render`、
+  `test_eval_timeout_status`、`eval_runner_test`、`ci_eval_gate_test`，加本次新增的测试文件；前端全部
+  `EvalDashboard*.test.tsx` 和 tsc。
+- 审查：后端做完一次 correctness + security（新接口接收用户输入、会话内容进状态文件和接口）；前端做完一次
+  correctness，UI 按 `design-judgment.md` 自查。
+- 端到端：在临时工作区跑一次带离线考题的真实运行，确认运行记录里有轨迹和最终回答（rebuild 后由 XG 在界面上看）。
+
 ## 7. 修订记录
 
 - 实现记录（第 1、2 步）：第 1 步 `884f6987b`；XG 本机数据分两段迁移（私有命令改为源码目录绝对路径、6 条只属于本机的

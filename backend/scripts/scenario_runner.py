@@ -162,6 +162,65 @@ def parse_final_text(stdout: str) -> str:
     return "\n".join(block_texts)
 
 
+STEP_MAX = 30
+STEP_TEXT_MAX = 240
+
+
+def _clip(text: str, limit: int = STEP_TEXT_MAX) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content
+                        if isinstance(b, dict) and isinstance(b.get("text"), str))
+    return ""
+
+
+def parse_steps(stdout: str) -> list[dict]:
+    """Each tool call of a stream-json run with what came back, in order:
+    ``{tool, input, output, is_error}`` (input and output clipped to
+    STEP_TEXT_MAX, at most STEP_MAX steps). The step level of the offline drill-down:
+    the trajectory says which tools ran, this says what each one was given and got.
+    A call with no result in the stream (the run ended first) has ``output`` None."""
+    steps: list[dict] = []
+    by_id: dict[str, dict] = {}
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and len(steps) < STEP_MAX:
+                try:
+                    shown = json.dumps(block.get("input", {}), ensure_ascii=False)
+                except (TypeError, ValueError):
+                    shown = str(block.get("input"))
+                step = {"tool": str(block.get("name", ""))[:60], "input": _clip(shown),
+                        "output": None, "is_error": False}
+                steps.append(step)
+                if block.get("id"):
+                    by_id[str(block["id"])] = step
+            elif block.get("type") == "tool_result":
+                step = by_id.get(str(block.get("tool_use_id")))
+                if step is not None and step["output"] is None:
+                    step["output"] = _clip(_result_text(block.get("content")))
+                    step["is_error"] = bool(block.get("is_error"))
+    return steps
+
+
 def parse_pre_tool_text(stdout: str) -> list[int]:
     """Length of the assistant text emitted before each tool_use, in order.
 
