@@ -99,6 +99,21 @@ def test_a_backend_module_change_selects_the_source_scan_suites(repo):
     assert scan not in _select(repo, ["backend/tests/test_x.py"])
 
 
+def test_a_file_an_app_declares_selects_the_app_index_freshness_test(repo):
+    """A frontend file an App hashes has no importer, yet it can stale the index."""
+    suite = st._APP_INDEX_SUITES[0]
+    _write(repo, {
+        suite: "def test_fresh():\n    assert True\n",
+        "backend/apps/demo/app.json": json.dumps({"resources": [
+            {"source": "desktop/src/Demo.tsx"}, {"source": "backend/skills/s_demo"}]}),
+    })
+    assert suite in _select(repo, ["desktop/src/Demo.tsx"])
+    assert suite in _select(repo, ["backend/skills/s_demo/SKILL.md"])
+    assert suite in _select(repo, ["backend/generated/apps_index.json"])
+    assert suite not in _select(repo, ["desktop/src/Other.tsx"])
+    assert suite not in _select(repo, ["backend/skills/s_demo_other/SKILL.md"])
+
+
 def test_source_scan_suites_cover_every_test_that_globs_python_files():
     """Every test file that globs *.py is listed or exempted; every listed file exists."""
     pat = re.compile(r"""\.r?glob\(\s*['"](\*\*/)?\*\.py['"]""")

@@ -21,6 +21,7 @@ Public symbols:
 - ``select_backend`` -- ``(selected, [], changed_module_names)``
 - ``transitive_unselected`` -- tests reaching a change only through other modules
 - ``validations_for`` -- the ``validations.json`` entries a change needs
+- ``touches_app_index`` -- whether a change can leave the generated App index stale
 - ``main``           -- the CLI
 """
 from __future__ import annotations
@@ -349,6 +350,33 @@ _SOURCE_SCAN_SUITES = (
 # Glob *.py but not over backend source (a tmp_path or a generated tree).
 # globs *.py of the skills, not of backend modules (selected with _DOC_LINT_SUITES)
 _NOT_SOURCE_SCANS = ("backend/tests/test_skill_python.py",)
+# The generated App index hashes every file an App declares (backend/apps/*/app.json
+# "source"), frontend files included: a change to one leaves the index stale and the
+# packaged build fails on it (af8274c5e edited PollinateOverlay.tsx, 10-27). No import
+# edge reaches the freshness test, so select it by path.
+_APP_INDEX_SUITES = ("backend/tests/test_app_registry.py",)
+
+
+def _app_sources(repo: Path) -> list[str]:
+    """Every ``source`` path declared by a ``backend/apps/*/app.json``."""
+    out: list[str] = []
+    for manifest in sorted((repo / "backend" / "apps").glob("*/app.json")):
+        data = _read_json(manifest)
+        for res in (data or {}).get("resources", []) if isinstance(data, dict) else []:
+            src = res.get("source") if isinstance(res, dict) else None
+            if isinstance(src, str) and src:
+                out.append(src.rstrip("/"))
+    return out
+
+
+def touches_app_index(repo: Path, changed: list[str]) -> bool:
+    """True when a changed path is an App manifest, a generated App file, or a
+    file an App declares as a source (the file itself or under a declared dir)."""
+    if any(f.startswith(("backend/apps/", "backend/generated/", "desktop/src/generated/"))
+           for f in changed):
+        return True
+    sources = _app_sources(repo)
+    return any(f == s or f.startswith(s + "/") for f in changed for s in sources)
 
 
 def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
@@ -377,6 +405,9 @@ def select_backend(repo: Path, changed: list[str], graph: dict[str, list[str]],
                           if t not in changed_tests and (repo / t).is_file()]
     if any(module_of(f) and not _is_backend_test(f) for f in changed):
         changed_tests += [t for t in _SOURCE_SCAN_SUITES
+                          if t not in changed_tests and (repo / t).is_file()]
+    if touches_app_index(repo, changed):
+        changed_tests += [t for t in _APP_INDEX_SUITES
                           if t not in changed_tests and (repo / t).is_file()]
     mfiles = _changed_module_files(repo, changed, include_deleted=True)
     mods = [(m, pkg) for _, m, pkg in mfiles]
