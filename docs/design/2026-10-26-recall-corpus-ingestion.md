@@ -3,7 +3,7 @@ title: Recall 语料的写入与准入 — Memory、DDD、Knowledge 三块统一
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r3 — 设计，待评审（r1 只覆盖 Knowledge；r3 在 r2 基础上加入质量、去向、准入三张答题卡）
+status: r4 — 定稿，待评审（r1 只覆盖 Knowledge；r3 加入三张答题卡；r4 规定 context 提案的写入位置）
 ---
 
 # Recall 语料的写入与准入
@@ -146,7 +146,7 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 | EVOLUTION | 关于 agent 自己的能力或纠正（不是关于某个项目） | 自动 |
 | 某个项目的 DDD（并指明哪份文档：PRODUCT / TECH / IMPROVEMENT / PROJECT） | 只影响这个项目的判断；项目由会话碰过的绑定仓库（`repo_guidance.session_bound_project`）或 run 所在仓库确定，确定不了就不写 | 自动 |
 | Knowledge Library（Notes / Library / Learned） | 离开原会话也能独立读懂的参考材料，不是规则 | 自动（backflow）或人工 |
-| context 文件（AGENT / STEERING / SOUL / USER / TOOLS） | 改的是"怎么判断"而不是"知道什么"（AGENTS.md 里的 OS 层） | **只生成提案，必须人工批准**，自动写入一律不允许 |
+| 用户的 context 文件（USER / STEERING / TOOLS） | 改的是这个用户"怎么判断"，而不是"知道什么" | **只生成提案，必须人工批准**；目标是用户的 `.context/`，不是源码仓库（§4.6） |
 | DailyActivity | 只是这次会话发生了什么 | 不过三张卡，它是日志（见下） |
 | 不写 | 以上都不是 | — |
 
@@ -238,12 +238,42 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
   - DDD 的 TECH 也进入复审范围（现在它没有任何退出路径）。
 - **版本族**：Designs、Library 里 `-v2`/`final` 并存的文件，复审时提议把旧版移进 `Archives/`。不自动移动。
 
+### 4.6 context 文件：提案写到用户的 `.context/`，不写源码仓库
+
+context 文件有两份，位置不同，而且很容易混：
+
+| | 位置 | 谁的 |
+|---|---|---|
+| 模板 | `backend/context/*.md`，代码里叫 `templates_dir`，由 `Path(__file__)` 推出（`prompt_builder.py:1244`、`initialization_manager.py:438`） | 产品的。dev 模式和 worktree 里运行时，它**就在源码仓库里** |
+| 用户的 live 文件 | `<workspace>/.context/*.md`，workspace 来自 `swarm_workspace_manager.get_workspace_path()` | 当前用户的。prompt 读的是它 |
+
+卡 2 选了"context 文件"时，规则是：
+
+1. **只能写用户自己的文件。** 能接受提案的只有 `user_customized=True` 的三个文件：USER、STEERING、TOOLS
+   （`context_directory_loader.CONTEXT_FILES`）。这个集合直接从 `CONTEXT_FILES` 读，不另外写一份名单。
+   - SWARMAI、IDENTITY、SOUL、AGENT 是产品文件（`user_customized=False`），每次会话开始都会从模板覆盖回来，
+     权限还是只读（0o444）。写进用户的 `.context/` 下次就没了，写进模板就是改了产品。所以它们**不是**卡 2 的去向：
+     针对这个用户的判断规则，一律改投 STEERING（用户的覆盖层）。
+   - SELF 归运行时所有，KNOWLEDGE 是自动生成的，MEMORY 和 EVOLUTION 有各自的去向。这几个都不走 context 提案。
+2. **目标路径在提案生成时就定下来**，存进提案记录：`get_workspace_path()/.context/<文件名>` resolve 之后的绝对路径，
+   加上当时文件内容的哈希。批准和执行都只用这个路径，绝不在执行时根据当前目录、`templates_dir` 或某个仓库重新推算。
+3. **执行前再校验一次**：路径 resolve 之后必须仍在 live `.context/` 目录下，文件名在第 1 条的集合里；
+   路径落在 `templates_dir` 下，或落在任何 git 仓库里，就拒绝执行。文件哈希变了（用户在这期间改过），
+   就不执行，按当前内容重新生成提案。
+4. **写入**：加锁，原子写入，权限保持 0o644。写入前把旧内容归档（和 §4.5 一样，归档优先）。
+5. **源码仓库的模板**只在开发时、由人明确指定要改时，用普通的代码修改流程去改（worktree、commit），
+   不经过 `admit()`，任何自动或提案路径都碰不到它。
+
+验收：单测覆盖三种情况，分别是在 worktree 里运行（`templates_dir` 在仓库里）、提案目标是 SOUL、
+提案生成之后用户改了 STEERING。断言前两种拒绝执行、第三种重新出提案，并且任何情况下 `backend/context/` 都没被写过。
+
 ## 5. 每个事实在哪、谁写谁读
 
 | 事实 | 唯一来源 | 写 | 读 |
 |---|---|---|---|
 | 一个存储的准入问题、路由、身份、去重范围、退出 | `store_contracts` | 人改表 | `ingestion_gate.admit`、复审 job |
 | 一类来源进不进索引、能不能自动注入、走不走时间规则 | `store_contracts`（来源策略部分） | 人改表 | `knowledge_store` 同步、`recall_filter` |
+| context 提案的目标文件 | 提案记录里的绝对路径 + 内容哈希（生成时定下） | 提案生成 | 批准执行（执行前再校验） |
 | 会话属于哪个项目 | `repo_guidance` 的会话状态 + `bindings.yaml` | repo_guidance hook | `admit` 路由、DDD 注入 |
 | 一个条目有没有送达过模型 | `.ddd-usage.json` | recall / DDD 注入（只在正文送达时） | 复审 job |
 | 一个 Note 来自哪条消息 | 文件名里的消息 id + frontmatter `source_message` | backflow | backflow |
@@ -277,6 +307,7 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 4. `ingestion_gate.admit` + 三张答题卡；fail-closed；`admission_log.jsonl`。
 5. 改走 `admit`：REFLECT、人工批准、自动蒸馏（含项目路由）、即时纠正、DailyActivity → DDD 的项目归属、
    三个 skill；删除 `s_memory-distill`；编辑接口加锁和形状检查；writeback 先看丢弃日志再定去留。
+   context 提案按 §4.6 定目标路径和执行前校验。
 6. backflow 身份去重 + 契约判官；checkpoint 随会话结束条目一起替换；已删除会话不写；DailyActivity 块断言。
 - 验收：
   - 用今天审计里已经分好类的样本当夹具：MEMORY 的 97 条、DDD 抽的 40 条、backflow 抽的 15 篇。
@@ -306,7 +337,7 @@ Memory、DDD、Knowledge 三块的每个写入者都按"宁缺毋滥"审了一�
 
 1. 第一次契约复审只出提案、你看过再执行；之后每周自动执行（归档优先、每次有上限、有日志）。这样可以吗？
 2. 删除 `s_memory-distill` 这个 skill（它和生产代码矛盾，做的事由蒸馏 hook 完成）。可以吗？
-3. context 文件（AGENT / STEERING / SOUL 等）只接受提案、必须人工批准，自动写入一律不允许。可以吗？
+3. context 提案只针对用户自己的 USER / STEERING / TOOLS，写到用户的 `.context/`；SOUL / AGENT 这些产品文件不接受提案（§4.6）。可以吗？
 4. 阶段 1 不改任何语料，可以先做；阶段 2、3 依次做，每个阶段验收通过再进下一个。
 
 ## 10. 验收结果
