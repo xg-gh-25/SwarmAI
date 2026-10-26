@@ -94,10 +94,9 @@ class HardDeleteRequest(BaseModel):
 
 @router.get("/health")
 async def get_eval_health():
-    """Current OS Health Score + per-dimension breakdown + Intelligence Velocity."""
+    """Current OS Health Score + per-dimension breakdown, follow-ups and the three lines."""
     svc = get_eval_service()
     health = svc.get_health()
-    health["intelligence_velocity"] = svc.compute_intelligence_velocity(detail=True)
     health["follow_ups"] = svc.get_follow_ups()
     health["lines"] = svc.get_lines()
     return health

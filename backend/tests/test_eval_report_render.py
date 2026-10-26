@@ -242,3 +242,27 @@ def test_follow_up_text_is_escaped_in_the_report():
     html = _render_follow_ups([{"severity": "high", "rule": 1, "what": {"en": "<script>x</script>", "zh": "<b>"},
                                 "why": "<img onerror=1>", "action": {"en": "a&b", "zh": ""}, "case_ids": []}])
     assert "<script>" not in html and "<img" not in html and "&lt;script&gt;" in html
+
+
+def test_the_report_says_all_passed_only_when_nothing_failed(tmp_path):
+    """A run with a failure must not be summarised as clean, and the report no
+    longer describes the deleted correction → case flywheel."""
+    from scripts.golden_case_validator import compute_case_stamp
+
+    case = {"id": "P1", "category": "recall", "dimension": "capability", "tier": "stable",
+            "_origin": "product", "evaluators": ["canary_pass"], "eval_method": "programmatic",
+            "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}
+    case["validated_by_4gate"] = compute_case_stamp(case)
+
+    def render(status, sub):
+        run = {"run_id": "r1", "triggered_by": "canary", "triggered_at": "2026-10-26T00:00:00+00:00",
+               "overall_score": 0.0, "dimensions": {}, "total_cases": 1, "scored_count": 1,
+               "cases_passed": int(status == "passed"), "cases_failed": int(status == "failed"),
+               "cases_skipped": 0, "cases_error": 0, "duration_seconds": 1,
+               "cases": [{"id": "P1", "status": status, "eval_method": "programmatic", "notes": ""}]}
+        return Path(generate_html_report(run, {"cases": [case]}, tmp_path / sub)).read_text()
+
+    failed, passed = render("failed", "f"), render("passed", "p")
+    assert "本次 1 条未通过" in failed and "本次全部通过" not in failed
+    assert "本次全部通过" in passed
+    assert "Flywheel" not in passed and "correction → case" not in passed

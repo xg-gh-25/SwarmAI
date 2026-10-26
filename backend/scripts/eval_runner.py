@@ -548,8 +548,7 @@ def _validate_canary_command(command: str) -> str | None:
 
     Policy: canary commands come from the golden set (trusted local data),
     but we add a structural guard against accidental injection if the file
-    ever becomes writable by less-trusted automation (e.g. auto-seed from
-    corrections, MCP-driven edits).
+    ever becomes writable by less-trusted automation (e.g. MCP-driven edits).
 
     Blocked patterns:
     - Network access (curl, wget, nc outbound, ssh)
@@ -1451,19 +1450,12 @@ def eval_trajectory_capture(case: dict) -> dict:
     Never raises — a spawn failure yields an empty trajectory → fails the
     assertion cleanly (the run did not demonstrate the behavior).
     """
-    # Draft skeletons (auto-seeded from corrections, M5 Part 2) are UNREFINED
-    # to-dos, not finished tests: their generic "read the doc, don't repeat"
-    # rubric is a tautology a competent agent trivially passes. They self-mark as
-    # placeholders in prose, but prose the runner never reads is not a guard — so
-    # enforce it in CODE here. A draft must NEVER be graded, even on an explicit
-    # behavior_trajectory run (which bypasses the eval_method=behavior filter in
-    # run_eval). This makes the "refine before relying on this" warning
-    # self-enforcing and keeps unrefined skeletons out of every score path.
-    # (Adversarial Gate-2 HIGH, run_0305426d.)
+    # A draft (tier=draft) is a case its author has not finished; it is never
+    # graded, even on an explicit behavior_trajectory run (evaluate_case skips it
+    # too, for every evaluator path).
     if case.get("tier") == "draft":
         return {"status": "skipped",
-                "notes": "unrefined auto-seed skeleton (tier=draft) — refine into a real "
-                         "pressure case before it is graded"}
+                "notes": "tier=draft: an unfinished case, finish it before it is graded"}
 
     scenario = case.get("scenario", {})
     prompt = scenario.get("prompt") or (
@@ -1753,15 +1745,8 @@ def evaluate_case(case: dict, root: Path, *,
 
     start = time.time()
 
-    # UNIVERSAL draft skip (AC8, run_1bfd3cf9): a tier=draft case must NEVER be
-    # graded on ANY evaluator path. The behavior path had this guard inside
-    # eval_trajectory_capture (only the trajectory_capture path), but the LLM
-    # path (eval_llm_judge) and the programmatic path had NO tier filter — so a
-    # GS_HARVEST_ (eval_method=llm, tier=draft) draft reaching run_eval WOULD be
-    # judged and WOULD count toward the headline `overall` (compute_scores counts
-    # any passed/failed). Moving the skip to the evaluate_case ENTRY makes it
-    # cover every path uniformly. A draft is a refine-me to-do, not a graded test.
-    # (Gate-0 skeptic score-pollution finding; supersedes the per-path guard.)
+    # A tier=draft case (one its author has not finished) is never graded on any
+    # evaluator path: skipping at the entry keeps it out of every score.
     if case.get("tier") == "draft":
         return {
             "status": "skipped",
@@ -2610,8 +2595,8 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     total_cases = golden_size  # kept name for downstream refs; == len(golden ids)
     stable_cases = [c for c in cases if c.get("tier") == "stable"]
     active_cases = [c for c in cases if c.get("tier") == "active"]
-    draft_cases = [c for c in cases if c.get("tier") == "draft"]
-    other_cases = [c for c in cases if c.get("tier") not in ("stable", "active", "draft")]
+    offline_cases = [c for c in cases if c.get("tier") == "behavior"]
+    other_cases = [c for c in cases if c.get("tier") not in ("stable", "active", "behavior")]
 
     # Find cases that flipped from fail→pass across COMPARABLE runs only
     # (a canary that skips 89 cases would fake "fixes"). comparable_history was
@@ -2626,10 +2611,19 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     first_run_cases = comparable_history[0].get("total_cases", 0) if comparable_history else 0
     growth_delta = total_cases - first_run_cases if first_run_cases > 0 else 0
 
+    # "No regressions" only when nothing failed in THIS run; a failure the
+    # previous run also had is not a fix and not clean either.
+    failed_now = [c["id"] for c in run_result.get("cases", []) if c.get("status") == "failed"]
+    if recently_fixed:
+        _fixed_html = f'<div class="growth-fixed"><strong>最近修复:</strong> {html_mod.escape(", ".join(recently_fixed))}</div>'
+    elif not failed_now:
+        _fixed_html = '<div class="growth-fixed"><span class="growth-clean">本次全部通过</span></div>'
+    else:
+        _fixed_html = f'<div class="growth-fixed">本次 {len(failed_now)} 条未通过，见各维度里的明细</div>'
     _other_card = (f'''<div class="growth-card">
                 <div class="growth-value">{len(other_cases)}</div>
                 <div class="growth-label">Other</div>
-                <div class="growth-sub">behavior / canary tier</div>
+                <div class="growth-sub">draft / live / archived</div>
             </div>''' if other_cases else "")
     growth_html = f'''<div class="growth-section">
         <h3>Growth Intelligence — 越来越好的证据</h3>
@@ -2650,14 +2644,14 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
                 <div class="growth-sub">活跃监测中</div>
             </div>
             <div class="growth-card">
-                <div class="growth-value">{len(draft_cases)}</div>
-                <div class="growth-label">Draft</div>
-                <div class="growth-sub">Flywheel 产出（correction → case）</div>
+                <div class="growth-value">{len(offline_cases)}</div>
+                <div class="growth-label">Offline</div>
+                <div class="growth-sub">离线考题（真 agent 在样例工作区里跑）</div>
             </div>
             {_other_card}
         </div>
-        <div class="growth-reconcile">Stable {len(stable_cases)} + Active {len(active_cases)} + Draft {len(draft_cases)}{f" + Other {len(other_cases)}" if other_cases else ""} = {golden_size} · 本次运行 {executed} + 待运行 {pending} = {golden_size}{f" · {orphans} orphan (run 中已退役 case)" if orphans else ""}</div>
-        {f'<div class="growth-fixed"><strong>最近修复:</strong> {", ".join(recently_fixed)}</div>' if recently_fixed else '<div class="growth-fixed"><span class="growth-clean">无退化 — 所有 case 保持 pass</span></div>'}
+        <div class="growth-reconcile">Stable {len(stable_cases)} + Active {len(active_cases)} + Offline {len(offline_cases)}{f" + Other {len(other_cases)}" if other_cases else ""} = {golden_size} · 本次运行 {executed} + 待运行 {pending} = {golden_size}{f" · {orphans} orphan (run 中已退役 case)" if orphans else ""}</div>
+        {_fixed_html}
     </div>'''
 
     # Delta section HTML
@@ -2751,17 +2745,13 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             </div>
             <div class="method-card">
                 <h4>📋 Golden Set</h4>
-                <p><strong>{golden_size} behavioral contracts</strong> crystallized from past failures (corrections, COEs, decisions). Each case = "in this situation, I must do X."</p>
+                <p><strong>{golden_size} cases.</strong> The product cases ship with SwarmAI and are the same for every user; your own cases live in your workspace. Each case says why it exists and what it checks. Cases are written by a person, never generated: an empty slot is better than a weak case.</p>
             </div>
             <div class="method-card">
-                <h4>⚡ Three Evaluation Tiers</h4>
-                <p><strong>Programmatic:</strong> grep/import checks, 0 cost, every session — <em>configuration present</em>.<br>
-                <strong>LLM Judge:</strong> scenarios judged by pinned model — <em>configuration would comply</em> (static: judge is given the rules + asked "would a compliant agent do X").<br>
-                <strong>Behavior (trajectory):</strong> a REAL agent is spawned on the scenario and its actual tool calls are observed — <em>behavior observed</em>. The only tier that proves the agent USES its memory/knowledge/DDD, not just that the docs exist.</p>
-            </div>
-            <div class="method-card">
-                <h4>🔄 Flywheel</h4>
-                <p>Every correction → new golden set case → next eval catches if the fix stuck. The set grows from failures, not from test planning.</p>
+                <h4>⚡ Three Lines</h4>
+                <p><strong>Quick check:</strong> deterministic probes on a temporary workspace, at the first session of each day and on demand.<br>
+                <strong>Offline tests:</strong> a real agent works on a shipped sample workspace and its tool calls and answer are checked, in the full run.<br>
+                <strong>Online scoring:</strong> your own sessions from the past week, weekly, with no expected answer: did the rules hold and did the task get done.</p>
             </div>
         </div>
     </div>

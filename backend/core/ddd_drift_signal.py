@@ -11,8 +11,8 @@ each finding to the golden cases at risk (the cases whose `affected_by` cites th
 DDD doc — so a drifted doc flags the cases whose judgment depends on it). It invents NO
 scoring: drift influences eval through the EXISTING `affected_by`/gate_refs chain
 (a case pointed at a drifted doc is at risk of stale-context failure), not by
-subtracting from any score, and it seeds NO draft cases (that would inflate
-intelligence_velocity's growth_score — drift would perversely raise the health number).
+subtracting from any score, and it seeds NO cases (a case is written by a person,
+never generated from a signal).
 
 DESIGN INVARIANTS (Gate-0/Gate-1 verified):
 - READ-ONLY. No file writes, no persisted drift count (R30#4: a dynamic decision-inert

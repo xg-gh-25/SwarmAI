@@ -16,19 +16,6 @@ import { computeBreakdowns, type Breakdowns, type BreakdownEntry } from './eval-
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface IntelligenceVelocity {
-  score: number;
-  components: {
-    pass_rate: number;
-    stability_ratio: number;
-    golden_set_size: number;
-    golden_set_size_score: number;
-    growth_score: number;
-    draft_count: number;
-    stable_count: number;
-  };
-}
-
 interface EvalHealth {
   overall_score: number | null;
   dimensions: Record<string, number>;
@@ -42,7 +29,6 @@ interface EvalHealth {
   } | null;
   total_cases: number;
   trend: { delta: number; direction: string } | null;
-  intelligence_velocity?: IntelligenceVelocity;
   follow_ups?: FollowUp[];
   lines?: EvalLinesData;
 }
