@@ -1050,6 +1050,15 @@ class ContextDirectoryLoader:
                                 "non-owner prompt", spec.filename,
                                 CHANNEL_SECTION_MARKER, CHANNEL_SECTION_END)
 
+            # ── Lifecycle filter: skip dormant/archived entries ──────────
+            # Entries with decay:dormant or decay:archived are not injected.
+            # They're still in the file (recoverable) but don't consume tokens.
+            # Same Darwinian logic as DDD docs — unused knowledge fades from active context.
+            # Runs on the RAW text: the decay metadata is an HTML comment, which
+            # _clean_content strips (filtering after it never dropped anything).
+            if spec.filename == "MEMORY.md":
+                content = _filter_dormant_entries(content)
+
             content = self._clean_content(content, spec.section_name)
             if not content:
                 continue
@@ -1061,12 +1070,7 @@ class ContextDirectoryLoader:
                 logger.debug("Skipping empty template: %s", spec.filename)
                 continue
 
-            # ── Lifecycle filter: skip dormant/archived entries ──────────
-            # Entries with decay:dormant or decay:archived are not injected.
-            # They're still in the file (recoverable) but don't consume tokens.
-            # Same Darwinian logic as DDD docs — unused knowledge fades from active context.
             if spec.filename == "MEMORY.md":
-                content = _filter_dormant_entries(content)
                 # MEMORY.md is ALWAYS full-injected (2026-08-14 rewrite). There is NO
                 # selective mode / keyword-section-scoring / embedding — recall is pure
                 # FTS5+BM25 (PRI11). The former `select_memory_sections` selective
