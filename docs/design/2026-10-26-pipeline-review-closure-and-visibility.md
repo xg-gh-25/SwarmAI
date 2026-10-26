@@ -57,7 +57,7 @@ A2 → A3 → A4 是一条链：一个用错的状态词，让一条已证明的
 | finding 类型 | 关闭证据（agent 提交） | 提交后 | R2 允许的词 | R2 之后 |
 |---|---|---|---|---|
 | behavior、contract | `reported_test`：当前 tree 上验证报告里一条通过的命令 | `closed_proven` | `ADEQUATE` / `TEST_INADEQUATE` | ADEQUATE → 关闭；TEST_INADEQUATE → `invalid_test`（可再修再证） |
-| **absence** | `reported_test`，且该报告的 `tests_changed` 非空 | `closed_proven` | 同上 | 同上 |
+| **absence** | `reported_test`，且该报告的 `tests_changed` 非空（`fold` 不读报告 blob，所以 engine 在写 `proof` 事件时记下 `tests_changed` 的个数，新的可选字段；`events.py:146-152`） | `closed_proven` | 同上 | 同上 |
 | behavior、contract、absence（没给测试） | 无 | `open` | `RESOLVED` / `OPEN` / `REFUTED` | RESOLVED 不关闭（行为类必须有测试）；REFUTED 后可提交 `refuted` |
 | docs | `diff_assertion`（R2 判 RESOLVED 之后，见第 4 点） | — | `RESOLVED` / `OPEN` / `REFUTED` | `closed_asserted` |
 | design、security_policy | 同上 | — | 同上 | `closed_unproven` |
@@ -144,7 +144,7 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 
 | 步 | 内容 | 新测试（先红后绿） | 变异 | 审查 |
 |---|---|---|---|---|
-| 1 | `findings.CLOSURE`；`r2_status_allowed`/`_proof`/`_status`/`push_effect` 读表；absence 进 `reported_test`（要求 `tests_changed`）；"关闭"口径函数 | 表驱动：类型 × 状态 × 证据 × R2 词 → 结果；HIGH `closed_proven` 未 ADEQUATE 时 `push_effect` 为真；HIGH `closed_unproven` 不算关闭 | 去掉 absence 一行；`push_effect` 不挡 awaiting R2；`closed_unproven` 不分严重度 | correctness |
+| 1 | `findings.CLOSURE`；`r2_status_allowed`/`_proof`/`_status`/`push_effect` 读表；absence 进 `reported_test`（`proof` 事件新增可选 `tests_changed` 计数，absence 要求非零）；"关闭"口径函数 | 表驱动：类型 × 状态 × 证据 × R2 词 → 结果；HIGH `closed_proven` 未 ADEQUATE 时 `push_effect` 为真；HIGH `closed_unproven` 不算关闭 | 去掉 absence 一行；`push_effect` 不挡 awaiting R2；`closed_unproven` 不分严重度 | correctness |
 | 2 | `review-address` 先算完再一次 `append_batch`（address、proof、reclassify、R2 handout） | 第 3 项不合法：日志不变，报错列出所有不合法项；在 R2 handout 生成处注入失败：日志不变 | 改回逐条写；handout 放到 batch 之后 | correctness、state-machine |
 | 3 | R2 handout 存 `allowed_status`；答复按它判定；`OPEN`→`TEST_INADEQUATE`、`RESOLVED`→`UNANSWERED`；`n_status_ignored`；`conflict_id` 带答复 id；一次重派；沉默规则只管真没收到的 | HIGH `closed_proven` 分别在：R2 没答、答复没解析、漏了这条、答 `OPEN`、答 `RESOLVED` → 各自的结果；重派后同一个错词：不出现重复 id，答复照常记录；RV-1a 计数 | 恢复"沉默改 open 覆盖证明"；RV-1a 不扣 ignored；`OPEN` 不收紧 | correctness、state-machine |
 | 4 | 续跑场景测试（rig）：R1 报 behavior、absence、docs、security_policy 各一条，按 `next` 走完 | 端到端：审计 `findings closed` 等于总数；中间一次 R2 用错词 → 重派后关闭 | — | — |
@@ -190,4 +190,4 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
   - `closed_unproven` 只在 MEDIUM/LOW 时算关闭（MEDIUM 7）；`stale_closures` 加两种状态（LOW 13）；`accept-finding` 两侧 hash 一致（MEDIUM 10）；absence 要求 `tests_changed`（LOW 11）；
   - C 的 baseline 机制撤掉，改为照实写（HIGH 2、MEDIUM 6、LOW 14、15）；
   - §2.2 根因改写（LOW 16）；§6 的"重放本次 run"改成续跑场景测试（MEDIUM 9），补上审查列出的缺失测试。
-- r3（2026-10-27）：§8 三条由 XG 决定，全部按 r2 的写法实施。
+- r3（2026-10-27）：§8 三条由 XG 决定，全部按 r2 的写法实施；补上 absence 检查需要的 `proof.tests_changed` 字段。
