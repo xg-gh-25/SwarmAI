@@ -225,11 +225,18 @@ def _record(store, prompt_text, final_text, *, completed_at, exact, tool_use_id,
             return []   # an unparsed answer is no usable output (§A3.2)
         common = {"at": completed_at, "stage": stage, "round": review_round,
                   "attempt": attempt}
-        rows = [{**common, "kind": "finding_occ", "ordinal": ordinal, "payload": {
-                    "answer_event_id": answer["event_id"], "expert": expert,
-                    "severity": finding["severity"], "finding_kind": finding["kind"],
-                    "file": finding["file"], "line": finding["line"],
-                    "claim": finding["claim"], "fix": finding["fix"]}}
+        carried = set(payload.get("knowledge_items") or ())
+
+        def _occ(finding: Mapping[str, Any]) -> dict[str, Any]:
+            row = {"answer_event_id": answer["event_id"], "expert": expert,
+                   "severity": finding["severity"], "finding_kind": finding["kind"],
+                   "file": finding["file"], "line": finding["line"],
+                   "claim": finding["claim"], "fix": finding["fix"]}
+            # a citation counts only for an entry this handout carried (§3.4)
+            if finding.get("knowledge_ref") in carried:
+                row["knowledge_ref"] = finding["knowledge_ref"]
+            return row
+        rows = [{**common, "kind": "finding_occ", "ordinal": ordinal, "payload": _occ(finding)}
                 for ordinal, finding in enumerate(parsed.findings, 1)]
         rows += [{**common, "kind": "finding_status", "ordinal": ordinal, "payload": {
                     "answer_event_id": answer["event_id"],

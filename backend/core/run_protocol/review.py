@@ -240,7 +240,8 @@ class ReviewOrchestrator:
                 at: str, expert_instructions: str, review_input: str,
                 finding_ids: Sequence[str] = (),
                 code_trees: Mapping[str, Any] | None = None,
-                incremental_from: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                incremental_from: Mapping[str, Any] | None = None,
+                knowledge_items: Sequence[str] = ()) -> dict[str, Any]:
         if round not in (1, 2) or not expert_id:
             raise ReviewError("invalid review handout identity")
         from core.run_protocol import hook_bridge
@@ -271,6 +272,8 @@ class ReviewOrchestrator:
             payload["code_trees"] = dict(code_trees)
         if incremental_from:
             payload["incremental_from"] = dict(incremental_from)
+        if knowledge_items:     # the PROJECT KNOWLEDGE entries this prompt carries (§3.4)
+            payload["knowledge_items"] = list(knowledge_items)
         event, _ = self.store.append_new(
             writer=self.store.authority.writer("cli"), kind="handout", at=at,
             stage=stage, round=round, attempt=attempt, payload=payload,

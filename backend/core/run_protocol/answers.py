@@ -83,7 +83,7 @@ def _finding(row: Mapping[str, Any], number: int) -> dict[str, Any] | None:
     keys = {"severity", "kind", "file", "line", "claim", "fix"}
     if not ({"severity", "kind", "file", "line", "claim"} & set(row)):
         return None
-    unknown = set(row) - keys
+    unknown = set(row) - keys - {"knowledge_ref"}       # optional (run-knowledge §3.4)
     missing = keys - set(row)
     if unknown or missing:
         raise AnswerError(
@@ -103,7 +103,13 @@ def _finding(row: Mapping[str, Any], number: int) -> dict[str, Any] | None:
         raise AnswerError(f"line {number}: finding claim is required")
     if not isinstance(row["fix"], str) or not row["fix"].strip():
         raise AnswerError(f"line {number}: finding fix is required")
-    return {**row, "severity": severity.upper()}
+    ref = row.get("knowledge_ref")
+    if ref is not None and (not isinstance(ref, str) or not re.fullmatch(r"[0-9a-f]{8}", ref)):
+        ref = None          # a malformed citation is dropped, the finding itself counts
+    out = {k: v for k, v in row.items() if k != "knowledge_ref"}
+    if ref:
+        out["knowledge_ref"] = ref
+    return {**out, "severity": severity.upper()}
 
 
 def _status(row: Mapping[str, Any], number: int) -> dict[str, Any] | None:

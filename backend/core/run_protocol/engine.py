@@ -2152,11 +2152,16 @@ class RunEngine:
                  and e.get("round") == 1]
         answers = {e["payload"]["handout_event_id"]: e for e in events
                    if e.get("kind") == "answer" and e.get("stage") == "review"}
+        knowledge = self._expert_knowledge(changed)
         for item in roster:
             instructions = review.expert_prompt(item["id"])
             review_input = "\n\n".join(diffs)
+            items: list[str] = []
             if item["id"] == "correctness":
                 review_input = review.patterns_block(patterns) + "\n\n" + review_input
+                if knowledge[0]:
+                    review_input = knowledge[0] + "\n\n" + review_input
+                    items = knowledge[1]
             if item.get("high_risk"):
                 review_input = review.high_risk_notice(item["reason"]) + review_input
             mine = [h for h in prior if h["payload"]["expert_id"] == item["id"]]
@@ -2176,10 +2181,19 @@ class RunEngine:
             handouts.append(orchestrator.handout(
                 expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
                 at=_now(), expert_instructions=instructions,
-                review_input=review_input, code_trees=trees))
+                review_input=review_input, code_trees=trees, knowledge_items=items))
         if not handouts:
             self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
+
+    def _expert_knowledge(self, changed: Sequence[Mapping[str, Any]]) -> tuple[str, list[str], str]:
+        """The correctness expert's PROJECT KNOWLEDGE section for *changed* (run-knowledge
+        §3.4): the project's DDD only, for the changed paths and the request. A run
+        created before step 2 has no ``has_ddd`` and gets none."""
+        from core.run_protocol import run_knowledge
+        return run_knowledge.expert_block(
+            project=self.project, has_ddd=bool(self.contract.get("has_ddd")),
+            paths=[row["path"] for row in changed], requirement=self.contract.get("requirement"))
 
     def _repo_guidance(self, per_repo: Mapping[str, Mapping[str, Any]]) -> dict[str, dict]:
         """Each repo's ``.swarmai/review.md`` at the run's base (§3.5.2: a run cannot
@@ -2247,6 +2261,7 @@ class RunEngine:
         answered = {e["payload"]["handout_event_id"] for e in events
                     if e.get("kind") == "answer"}
         handouts = []
+        knowledge = self._expert_knowledge(changed)
         for expert in roster:
             mine = [e for e in r1 if e["payload"]["expert_id"] == expert]
             pending = [e for e in mine if e["event_id"] not in answered
@@ -2259,14 +2274,17 @@ class RunEngine:
                                          attempt=int(mine[-1]["attempt"]))
                 continue
             attempt = max((int(e["attempt"]) for e in mine), default=0) + 1
+            block = knowledge[0] if expert == "correctness" and knowledge[0] else ""
             handouts.append(orchestrator.handout(
                 expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
                 expert_instructions=review.expert_prompt(expert),
                 review_input=(review.high_risk_notice(picked_rows[expert]["reason"])
                               if picked_rows.get(expert, {}).get("high_risk") else "")
+                             + (block + "\n\n" if block else "")
                              + "INCREMENTAL REVIEW: only the change since the last review.\n\n"
                              + "\n\n".join(diffs),
-                code_trees=trees, incremental_from={k: last[k] for k in trees if k in last}))
+                code_trees=trees, incremental_from={k: last[k] for k in trees if k in last},
+                knowledge_items=knowledge[1] if block else ()))
         return {"reviewers": [{"id": e, "reason": "incremental review"} for e in roster],
                 "handouts": handouts, "incremental": True}
 

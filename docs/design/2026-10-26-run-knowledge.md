@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r6 — 步骤 0–3 已实施（§3.0.1、§3.1.1、§3.2.1、§3.3.1）；步骤 4 和 §3.5 待做
+status: r7 — 步骤 0–4 已实施（§3.0.1、§3.1.1、§3.2.1、§3.3.1、§3.4.1）；§3.5 待做
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -310,6 +310,28 @@ create 事件记下的列表里，否则 `stage-complete` 拒绝（和测试引�
 这改掉了 knowledge-delivery-gaps 里 G3 "等 S5 有数据再看"的结论：不给专家，就永远量不到。
 留不留由 §5 的数据决定。
 
+### 3.4.1 步骤 4 的实施（r7）
+
+- `run_knowledge.expert_block(project, has_ddd, paths, requirement)`：只召回 DDD，查询词 = 改动文件的
+  路径词（`path_terms`，沿用旧 `project_knowledge.derive_query` 的规则和结构词表）+ 需求关键词。
+  最多 5 条、共 2500 字符，按 §3.0 截断；和前端 `knowledge.md` 共用 `_ddd_rows`。
+  三种状态都写进块里：recalled（带 id 的条目）、none（"DDD 里没有这些文件的条目"）、unavailable
+  （"召回失败，不带它审"）。项目没有 DDD 时整块不出现。
+- 只给 correctness 专家：第一轮审查和增量审查都加；R2 不加（R2 判断的是"修复是否被证明"，DDD 条目
+  帮不上）。块放在 review.md 模式之前。
+- handout 事件新增可选字段 `knowledge_items`（块里条目的 id）。finding 行可以带 `"knowledge_ref":"<id>"`：
+  解析器接受它（格式不对就丢掉这个引用，finding 照样算），hook 只在 id 属于该 handout 的
+  `knowledge_items` 时把它写进 `finding_occ`。OUTPUT CONTRACT 不变，说明写在块里，没有 DDD 的专家
+  prompt 一个字不变。
+- 删了 `scripts/project_knowledge.py`、`scripts/spawn_prompt.py` 和它们的两个测试文件（其中
+  `test_spawn_prompt_emitter` 在 main 上本来就是红的），`spawn_budget.py` 里只为它们服务的
+  `KNOWLEDGE_SLOT` / `requires_knowledge` 也删了。`data/gate-prompts/` 还在，Gate-0 在用。
+- 实测（真实 SwarmAI DDD，只读）：三组改动 43–127 ms，召回 4–5 条，块 2.7–3.1K 字符。
+- 测试 `tests/test_pipeline_v1_expert_knowledge.py`（7 个，含真实 CLI 走到 REVIEW）。五处变异（不加块、
+  任何引用都收、解析器拒收引用字段、无视 has_ddd、不清栅栏）各自让测试变红。没有 DDD 的测试第一版只查
+  `knowledge_items`，无视 has_ddd 的变异测不出来（块里写的是"没有条目"，不带 id）；已改成同时检查
+  prompt 里没有这个块。
+
 ### 3.5 REPORT 和 REFLECT
 
 - REPORT 只加一行：`Knowledge: <状态> · N items · cited M`（M = 需求、设计、finding 引用到的条目数）。
@@ -362,3 +384,4 @@ S5 加两个数，按 run 统计：
 - r4（2026-10-26）：步骤 1 实施（§3.1.1）。
 - r5（2026-10-26）：步骤 2 实施（§3.2.1）。
 - r6（2026-10-26）：步骤 3 实施（§3.3.1）。
+- r7（2026-10-26）：步骤 4 实施（§3.4.1）。

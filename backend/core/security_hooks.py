@@ -5895,7 +5895,7 @@ GOVERNANCE_TIER2_PATTERNS: list[str] = [
     # Pipeline v1 keeps executable stage guidance in the nine top-level cards;
     # detailed rules and checks live in core/run_protocol/.
     "*/s_autonomous-pipeline/stages/*.md",
-    # Whole-file prompts emitted by scripts/spawn_prompt.py remain governed.
+    # The whole-file gate prompts (data/gate-prompts/) remain governed.
     "*/s_autonomous-pipeline/data/gate-prompts/*.md",
 ]
 

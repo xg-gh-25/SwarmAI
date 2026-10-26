@@ -92,9 +92,10 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      # nonce: the spawn identity in the prompt's PIPELINE-HANDOUT line
                      # spawn_prompt / spawn_sha: the four lines the expert is spawned
                      # with (PROMPT-FILE = the prompt blob); absent on older handouts
+                     # knowledge_items: ids of the DDD entries in the prompt (run-knowledge §3.4)
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
                       "code_trees": dict, "incremental_from": dict, "nonce": str,
-                      "spawn_prompt": str, "spawn_sha": str}),
+                      "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list}),
     # a host hook saw an expert spawned with exactly a handout's spawn prompt
     # (standalone §4.3, handout-by-file design §3.2)
     "spawn": _spec("hook", ("payload.tool_use_id",), None,
@@ -125,7 +126,8 @@ EVENT_SPECS: dict[str, EventSpec] = {
                          "event_id:canonical", {"answer_event_id": str,
                          "expert": str, "severity": str,
                          "finding_kind": str, "file": str, "line": int, "claim": str},
-                         {"fix": (str, type(None))}),
+                         # knowledge_ref: a DDD entry the handout carried (§3.4)
+                         {"fix": (str, type(None)), "knowledge_ref": (str, type(None))}),
     "finding_status": _spec("hook", ("payload.answer_event_id", "ordinal"),
                             "payload.canonical_id", {"answer_event_id": str,
                             "canonical_id": str, "status": str},
