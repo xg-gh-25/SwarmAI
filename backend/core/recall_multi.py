@@ -841,7 +841,11 @@ def _load_ddd_docs_text(project: Optional[str]):
             continue
         try:
             docs_text[doc] = p.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError) as exc:
+            # one unreadable doc is absent ALONE; the other docs still answer
+            # (run-knowledge §3.6.5 H1: a non-UTF-8 doc used to take every doc down)
+            logger.warning("DDD doc %s of project %s skipped: %s: %s",
+                           doc, project, type(exc).__name__, exc)
             continue
     return base, docs_text
 
