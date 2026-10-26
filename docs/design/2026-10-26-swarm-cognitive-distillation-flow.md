@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r14.2 — 设计，已吸收 r13b 两份独立评审；r14.1 定名；r14.2 独立 ingestion.db（修订记录见 §18）
+status: r15 — 设计，已吸收 r14.2 两份独立评审（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -34,11 +34,11 @@ r13 改成**提取和 ingestion 解耦**：
 ```
 
 - **source** 只做两件事：按自己定制的格式提取，然后入队。入队是一次插库操作，毫秒级完成，不会打断会话、run 或 chat。
-- **Ingestion** 是唯一的写入者，在后台按自己的节奏和要求处理：整理、分类、打分、执行目的地规则、和已有内容比对、routing、写入。
+- **Ingestion** worker 是唯一的自主写入者（用户编辑走 `governed_edit`，两者共用同一个落盘接口，§3.2），在后台按自己的节奏和要求处理：整理、分类、打分、执行目的地规则、和已有内容比对、routing、写入。
 - **Inbox** 只保留 30 天，更早的行先汇总成统计数据，再删除（§4）。
 - **dashboard** 放在 Need You overlay 里：这条流程是认知系统的核心，不再另开一个页面（§10）。
 
-r13 起取代 r12，r14 补上了"唯一写入者"的保证机制。r12 里大部分复杂机制，起因都是"多个写入者各自当场写"：准备→提交、租约、多写入者版本冲突、跨进程配额计数、受控写入的三层强制。解耦之后这些都不需要了。
+r13 起取代 r12。r14 和 r15 补上了"唯一写入者"的保证机制和恢复协议。r12 里大部分复杂机制，起因都是"多个写入者各自当场写"：准备→提交、租约、多写入者之间的版本冲突、多 worker 的分布式配额计数、受控写入的三层强制。解耦之后这些都不需要了。配额只保留 DB 里的持久计量（§12）。
 r12 里经过评审、而且仍然成立的结论都保留下来：答题卡的维度、路由表、卡 3 的纯函数、来源与污染、已沉淀内容不动、注入预算。
 
 ## 1. 怎么评估的
@@ -127,53 +127,84 @@ r12 里经过评审、而且仍然成立的结论都保留下来：答题卡的�
 | **Writer**（worker 内部） | 唯一能写受控存储的代码：写入日志、加锁、版本检查、先归档后移除、原子写入、维护关系 | — |
 | **Dashboard** | 在 Need You overlay 里展示 Cognitive Distillation Flow（§10） | 不提供审批按钮 |
 
-### 3.1 唯一 owner：一个数据目录只有一个 worker
+### 3.1 唯一 owner：一个数据目录只有一个自主写入者
 
-daemon 和 dev/subprocess 的 backend 可以同时运行（`main.py:1474-1482`：发现别的实例时，只是不写 `backend.json`，进程照样启动），而且默认共用同一个 app 数据目录（`config.py:47-67`）。所以"只有一个 worker"必须由机制来保证：
+daemon 和 dev/subprocess 两种 backend 可以同时运行（见 `main.py:1474-1482`：检测到已有实例时，只是不写 `backend.json`，进程照常启动），并且默认使用同一个 app 数据目录（`config.py:47-67`）。所以"只有一个 worker"不能靠约定，必须由机制来保证：
 
-- **owner 锁**：worker 启动前，用 `utils.file_lock` 对 `<app data>/state/ingestion_owner.lock` 加非阻塞的独占锁，并在 worker 运行期间一直持有。锁跟着进程走，进程崩溃后操作系统会自动释放。
-- **owner epoch**：拿到锁后，在 DB 的 `ingestion_owner` 表里把 epoch 加 1，并记下 pid 和启动时间。之后每一次状态推进都写成 `UPDATE … WHERE id=? AND state=? AND owner_epoch=?`，然后检查影响行数，不是 1 就放弃这一步。旧 owner 恢复过来时手里还是旧 epoch，它的写入不会生效。
-- **拿不到锁的进程**：只能入队、读取 dashboard，不启动 worker。
-- **只能由谁当 owner**：worker 只能在完整的 HTTP backend 的 FastAPI lifespan 里启动，也就是 daemon、subprocess、hive、dev 四种模式。`py`、`pipeline-v1`、`hook`、`ingest` 这些短命的子命令只能入队和读取。
-- **接管**：owner 退出后锁自然释放，下一个启动的完整 backend 拿到锁后，先做恢复（§4.3），再开始处理。
+- **owner 锁**：worker 启动前，用 `utils.file_lock` 对 `<app data>/state/ingestion_owner.lock` 加非阻塞的独占锁，worker 存活期间一直持有。进程崩溃时，操作系统会释放这把锁。
+- **owner epoch**：拿到锁之后，把 `ingestion_owner.epoch` 加 1，同时记下 pid 和启动时间。之后每一次状态推进都写成 `UPDATE … WHERE id=? AND state=? AND owner_epoch=?`，并检查影响行数；影响行数不是 1，就放弃这一步。
+- **文件写入也受 epoch 约束**：writer 每做一步文件操作（归档、替换、写基线），都在语料锁内先执行一次 `UPDATE ingestion_writes SET step_owner=? WHERE id=? AND step=? AND owner_epoch=(当前 epoch)`，影响行数为 1 才执行这一步，否则立刻退出。这样，一个已经被新 epoch 取代的旧 owner，即使手里有算好的输出，也执行不了 `os.replace`。
+- **释放锁之前先停稳**：正常退出时，先停止接新任务，等 worker 任务、writer 和它用到的 executor 全部 join 完，再释放 owner 锁。新 owner 拿到锁之前，不做恢复。
+- **接管遗留任务**：新 owner 拿到锁后，在一个事务里把所有还没结束的单元和写入计划的 `owner_epoch` 改成自己的 epoch，然后才开始恢复（§4.3）。新入队的行 `owner_epoch` 为 NULL，worker 领取时再写成当前 epoch。
+- **拿不到锁的进程**：只能入队、读 dashboard，不启动 worker。
+- **谁能当 owner**：只有完整的 HTTP backend（daemon、subprocess、hive、dev 四种模式）能在 FastAPI lifespan 里启动 worker。`py`、`pipeline-v1`、`hook`、`ingest` 这些短命子命令只能入队和读取。
+- 故障注入测试要覆盖这个场景：writer 卡在"比较版本"和"替换文件"之间时，发生 shutdown 或 owner 交接。
 
-### 3.2 并发边界
+### 3.2 并发边界和 materializer
 
-worker 内部是串行的。受控存储剩下的并发来源只有两个，各自的处理方式如下：
+**术语**：
+- **唯一的自主写入者**是 ingestion worker。
+- **唯一的落盘接口**是 `core/corpus_materializer.py`，writer 和 `governed_edit` 共用它。
 
-1. **应用内的用户编辑**：两个编辑器接口（`workspace_api.py:1758-1807`、`workspace.py:714-777`），以及 create / delete / trash / rename，修改受控路径时都改成走 `governed_edit` 适配层。读取时返回 `revision`，即内容的 SHA-256；保存时必须带上 `expected_revision`，对不上就返回 409。适配层和 writer 共用同一把语料锁和同一套写入日志。
-2. **外部编辑器和其他程序**（不经过我们的锁）：只能做到尽力而为，文档如实写明这一点。writer 在锁内替换文件前，先保存当前文件的快照；`os.replace` 之后立刻重新读一次源文件的 mtime 和哈希，如果在比较版本和替换之间有外部写入，就用快照恢复用户的版本，并把这条候选标为 `DEFER user_race`。maintenance 每天把文件和"基线 + writer 写过的版本"做比对，发现的偏差记一行 `writer=unknown`（§8）。
+受控语料的所有文件操作（写、追加、替换、归档、删除、移动、复制）都只能经过 materializer。materializer 在运行时判断路径是否受控：只要解析后的真实路径落在受控根目录下，就必须带上写入计划或编辑操作的 id，否则拒绝执行。
 
-"版本检查"在本文里一律指"在锁内比较 `expected_hash`"，不代表跨平台的原子 compare-and-swap。
+worker 内部是串行处理的。除了 worker 之外，受控语料只剩两类并发来源：
 
-受控路径的写函数只存在于 writer 和 `governed_edit` 里。静态检查（§8）保证其他生产代码不会写这些路径。PreToolUse 的 `governed_corpus_gate` 会拦截 agent 直接写这些路径，并提示改用 `ingest submit`；这道 gate 只起提醒作用，不是安全边界。
+1. **应用内的用户编辑**。下面这些接口修改受控路径时，一律走 `governed_edit`：
+   - 两个编辑器接口（`workspace_api.py:1759-1807`、`workspace.py:715-777`）；
+   - 文件的 create、delete、trash、rename 和上传；
+   - Library 的清理和 Inbox 复制；
+   - 项目的 rename 和 delete（§8）。
+
+   读取时返回 `revision`（内容的 SHA-256），保存时必须带上 `expected_revision`，不一致就返回 409。用户编辑和 worker 共用同一把语料锁、同一套写入日志（§4.3）。
+
+   首版**不允许对包含受控文件的目录做目录级的 delete、trash、rename**，返回 409 并提示逐个文件操作。项目 rename 和 delete 是例外，走专门的树级操作：先把目录下所有受控文件的清单（相对路径、哈希）记进写入日志，再执行移动，崩溃后按日志继续做完。
+2. **外部编辑器和其他程序**（不经过我们的锁）只能做到尽力而为，下面这段时间窗口在文档里明确列为已知限制：
+   - writer 在锁内先保存原文件和预期输出，替换前紧接着再比一次 `expected_hash`，然后执行 `os.replace`。
+   - 替换后立刻重读文件。内容等于预期输出，才算成功。不等于预期输出，说明这期间有外部写入：**保留磁盘上的现状，不用快照回写**，候选记为 `DEFER user_race`，原文件和预期输出都留作恢复副本，在 Need You 里提示。
+   - 外部写入如果正好落在"最后一次比较版本"和 `os.replace` 之间，会被覆盖，而且这种情况检测不出来。只有从原文件备份里才能找回内容。需要强保证的编辑必须走 `governed_edit`。
+   - maintenance 每天把文件内容和"基线 + 已写入的版本"做一次比对，对不上的部分记一行 `writer=unknown`（§8）。
+
+本文所说的"版本检查"，指的都是在锁内比较 `expected_hash`，不是跨平台的原子 compare-and-swap。
+
+**静态检查**（§8）的作用是保证 materializer 以外的生产代码不直接调用写文件的函数，包括 `write_text`、`open(…, "w")`、`os.replace`、`shutil.*`、`unlink`、`rename`。路径是否受控由 materializer 在运行时判断，静态检查只负责拦住绕过它的调用。PreToolUse 的 `governed_corpus_gate` 拦截 agent 直接写受控路径，并提示改用 `ingest submit`；这道 gate 只起提醒作用，不是安全边界。
 
 ## 4. Inbox：存储、状态、恢复、清理
 
-CDF 的所有表都放在一个独立的 SQLite 文件里：`<app data>/ingestion.db`。这个文件每个用户各一份，路径从 app 数据目录取，不写死。chat 用的 `data.db` 不放这些表。
+CDF 的所有表放在一个独立的 SQLite 文件里：`<app data>/ingestion.db`。每个用户一份，路径从 app 数据目录取，不写死。chat 用的 `data.db` 里不放这些表。
 
-**为什么单独放一个库**：
-- SQLite 同一时刻只允许一个写事务。CDF 和 chat 分开用两个库，CDF 的入队、清理和恢复就不会和 chat 写消息争同一把锁，也不会被 `data.db` 的迁移、备份以及它 1.5 GB 的体量牵连（本机实测 `data.db` 为 1.5 GB，过去 24 小时写入了 7,307 条消息）。
-- 新库从建表那一刻起就能开启 `auto_vacuum=INCREMENTAL`，所以 30 天清理之后磁盘空间能真正回收。
-- 迁移版本线自己管理，不占用 `data.db` 的版本号。
-- 不需要跨库 join。和消息绑定的 `session_inputs`（§9）留在 `data.db`，由消息入口在同一个事务里写入；CDF 只按事件 id 只读地查询它。
+**为什么单独建库**：
+- SQLite 同一时刻只允许一个写事务。CDF 用自己的库，入队、清理和恢复就不会和 chat 写消息抢同一把锁，也不会受 `data.db` 的迁移、备份和体量拖累（本机实测 `data.db` 有 1.5 GB，过去 24 小时写入 7,307 条消息）。
+- 新库从建表起就能开启 `auto_vacuum=INCREMENTAL`。
+- 迁移版本号自己管理，和 `data.db` 互不影响。
+- 不需要跨库 join。和消息绑定的 `session_inputs` 仍放在 `data.db`（§9），CDF 只按事件 id 去只读查询。SQLite 不是瓶颈，基准数据见附录 A。
 
-**实测**：在 WAL 模式下模拟负载，同时有三路写入：chat 每秒写 20 条 4 KB 的消息、每 0.5 秒一个 500 行的批量事务、2,000 次 2 KB 的入队。入队延迟 p50 = 0.05 ms，p90 = 0.09 ms，p99 = 0.22 ms，最大 8.4 ms（2026-10-26，scratch 基准）。即使这三路写入在同一个库里，SQLite 也不是瓶颈；分库只是为了隔离锁和生命周期，不是为了提高吞吐。
+**建库**：
+1. 打开空文件，此时还没有开启任何事务。依次设置 `PRAGMA auto_vacuum=INCREMENTAL`、`PRAGMA journal_mode=WAL`、`PRAGMA synchronous=NORMAL`，每设一项都读回来确认生效。
+2. 在一个显式事务里建好全部表和索引，并把 `user_version` 设为 1。
+3. 任何一步失败，就删掉这个半成品文件，下次启动重新建。
 
-**建库和迁移**：
-- 不存在 `ingestion.db` 时，在一个事务里依次执行：`PRAGMA auto_vacuum=INCREMENTAL` → `journal_mode=WAL` → 建全部表 → `user_version=1`。
-- 以后升级 schema，按 `user_version` 逐级做幂等迁移。
-- 连接参数和 `data.db` 保持一致：WAL，`synchronous=NORMAL`，入队连接的 busy timeout 为 500 ms，worker 连接为 5 s。
-- 文件损坏时，改名为 `ingestion.db.corrupt-<ts>` 再新建，同时在 Need You 里出一条提示。受控语料不受影响：已经写进文件的单元都带 `cand:<unit_id>`，可以从文件反查出来；只有还没处理完的候选会丢失。
+以后升级 schema 时，按 `user_version` 逐级做幂等迁移。连接参数：WAL；`synchronous=NORMAL`（`data.db` 用的是默认值，这一项两个库不一样）；入队连接的 busy timeout 为 500 ms，worker 连接为 5 s。
+
+**备份和恢复：`ingestion.db` 属于不可替代的状态**。理由是 30 天审计是这套设计里唯一的事后监督。具体做法：
+- `backup_manager` 增加第二个 store，用 SQLite 的 online backup API 生成一份和 WAL 一致的快照，导出和恢复都与 `data.db` 走同一个流程。
+- `data_safety` 把 `ingestion.db` 列为不可替代的数据。
+- 恢复之后，owner 先跑一遍 §4.3 的恢复流程。备份时间点之后才写入的 `cand:` 单元，在库里找不到对应记录，就在审计里补一行 `writer=restored_orphan`，文件本身不动。
+- 文件损坏时，先改名为 `ingestion.db.corrupt-<ts>`，再从最近一份备份恢复；没有备份就新建一个空库，并在 Need You 里提示。
+
+**表**：
 
 | 表 | 内容 |
 |---|---|
-| `ingestion_inbox`（候选） | `id`、`idem_key`（UNIQUE）、`source`、`source_ref`、`lane`、`payload`、`payload_schema`、`envelope`、`project_snapshot`、`state`、`attempts`、`next_attempt_at`、`error_class`、`error_fingerprint`、`owner_epoch`、`versions`、`created_at`（UTC） |
-| `ingestion_units`（单元） | `unit_id = candidate_id + "." + 稳定槽位`、`claim_group`、每张卡的答案和理由、目的地规则的结果、去向、动作、`state`、`attempts` |
-| `ingestion_writes`（写入日志） | 每个单元一行写入计划：目标文件、`expected_hash`、新单元的 `cand:<unit_id>`、要归档的旧单元、要写的关系、每一步的幂等键、`step`（`planned → file_applied → archived → relation_applied → done`） |
+| `ingestion_inbox`（候选） | `id`、`idem_key`（UNIQUE）、`source`、`source_ref`、`lane`、`payload`、`payload_schema`、`envelope`、`project_snapshot`、`project_candidates`、`state`、`owner_epoch`、`versions`、`created_at`（UTC） |
+| `ingestion_units`（单元） | `unit_id = candidate_id + "." + 稳定槽位`、`claim_group`、每张卡的答案和理由、目的地规则的结果、去向、`project`、动作、`state`、`attempts`、`next_attempt_at`、`error_class`、`error_fingerprint`、`owner_epoch`、`merged_into` |
+| `ingestion_writes`（写入日志） | 一行对应一次写操作，见 §4.3 |
+| `ingestion_relations` | 只记 `supersedes` 一种关系（§7.3） |
+| `ingestion_quota` | 配额预留和扣减的流水（§12） |
 | `ingestion_lanes` | 每个 lane 的 `next_due_at`、`last_started_at`、`last_completed_at`（UTC） |
 | `ingestion_owner` | `epoch`、`pid`、`started_at` |
 | `ingestion_daily_stats` | 30 天之前的汇总数据（§4.4） |
+| `ingestion_access_log` | Flow 视图的详情访问记录（§10）。只由 worker 异步写入，只读接口从不写库。同样保留 30 天 |
 
 ### 4.1 入队和幂等
 
@@ -183,38 +214,73 @@ CDF 的所有表都放在一个独立的 SQLite 文件里：`<app data>/ingestio
 
 ### 4.2 状态
 
-**单元**的状态：`queued → judged → writing → written`，或者终止于以下几种：
-- `rejected`：判断后决定不写。拿不准时也归入这里，原因码 `uncertain`。
-- `deferred`：这次没能判断，基础设施类错误，按指数退避重试，最多 5 次。
-- `failed_poison`：同一个确定性错误（`error_fingerprint` 相同）连续出现 3 次。
-- `expired_unprocessed`：到 30 天还没处理完。
+**单元的状态转移表**。每一次转移都写成 `UPDATE … WHERE unit_id=? AND state=<from> AND owner_epoch=<当前 epoch>`，并要求影响行数等于 1：
 
-**候选**的状态是它所有单元状态的确定性聚合：
-- 全部单元都到了终态，候选才算终态；
-- 只要有一个单元是 `deferred`，候选就是 `partial_deferred`；
-- 重试时只处理还没到终态的单元，已经写入的单元不会再写一次。
+| 从 | 到 | 条件 |
+|---|---|---|
+| `queued` | `merged` | 整理时发现，同一批里有另一个单元和它完全相同，或者可以合并进去。合并到哪个单元记在 `merged_into` |
+| `queued` | `judged` | 卡 0 到卡 3 全部算完，结果是要写入 |
+| `queued` | `rejected` | 某一张卡或某一条规则拒绝。拿不准时也走这里，原因码 `uncertain` |
+| `queued` | `deferred` | 基础设施类错误，比如 LLM、检索、DB busy、版本冲突、项目有歧义 |
+| `queued` | `failed_poison` | 同一个 `error_fingerprint` 连续出现 3 次 |
+| `judged` | `writing` | 已经生成写入计划（§4.3） |
+| `writing` | `written` | 写入计划进行到 `done` |
+| `writing` | `deferred` | 写入计划过期，或者遇到 `user_race` |
+| `deferred` | `queued` | 到了 `next_attempt_at`。总共最多 5 次，超过就转为 `failed_poison`，原因码 `retries_exhausted` |
+| 任何非终态 | `expired_unprocessed` | 30 天清理执行时（§4.4） |
+
+终态有五种：`merged`、`written`、`rejected`、`failed_poison`、`expired_unprocessed`。`deferred` 不是终态。
+
+**候选的状态由它所有单元的状态聚合得出**，规则是确定的，按顺序判断：
+1. 只要有一个单元是 `writing` 或 `judged`，候选就是 `in_progress`；
+2. 否则，只要有一个单元是 `queued` 或 `deferred`，候选就是 `partial_pending`；
+3. 否则全部单元都已终态，候选就是 `done`，并附上各终态的单元数。
+
+重试时只处理还没到终态的单元。统计和比率一律按单元计算。
 
 **错误边界**：
-- payload 不符合 schema 或解析失败：`REJECT malformed_payload` / `unsupported_schema`，不重试；
-- LLM、检索、DB busy、版本冲突：`DEFER`；
-- 其余代码异常：记录 `error_fingerprint`，达到 3 次后转为 `failed_poison`，同时在 Need You 里出一条提示，附上样本和栈指纹。
-
-一批候选里每个候选各用一个 savepoint，一个候选失败不会回滚其他候选。
+- payload 不符合 schema 或解析失败：直接 `REJECT malformed_payload` / `unsupported_schema`，不重试；
+- 其余代码异常：记下 `error_fingerprint`，同一个指纹连续出现 3 次就转为 `failed_poison`，在 Need You 里提示，附上样本和栈指纹；
+- 同一批里每个候选各用一个 savepoint，一个候选出错不影响同批的其他候选。
 
 ### 4.3 写入日志和重启恢复
 
-单个写入者也需要能在崩溃后恢复，因为一次写入会跨越 SQLite、受控文件、归档文件和关系表。
+每一次写操作都有一份**不可变的计划**。worker 写入一个单元是一次操作，用户的一次编辑也是一次操作。计划在第一个副作用发生之前就提交进 `ingestion_writes`。
 
-1. **先记录计划**：写文件之前，先把写入计划和 `step=planned` 提交进 `ingestion_writes`。
-2. **每一步都可以重放**：
-   - 写文件：先在锁内检查目标文件里有没有 `cand:<unit_id>`。有就说明这一步做过了，跳过；没有就检查 `expected_hash`，然后原子写入。
-   - 归档：用"归档文件已存在，并且哈希一致"来判断是否已经完成。
-   - 关系：按 `(subject, predicate, object)` upsert。
+| 字段 | 内容 |
+|---|---|
+| `op_id`、`op_kind` | `op_kind` 取值：`ingestion_unit`、`user_edit`、`user_tree_move` |
+| `target_path`、`before_hash` | 目标文件，以及计划生成时它的哈希 |
+| `intended_bytes`、`after_hash` | 目标文件写完之后的完整内容和哈希 |
+| `archive_path`、`archive_hash` | 需要归档时，归档文件的位置和内容哈希 |
+| `anchors_present`、`anchors_absent` | 写完之后必须存在的锚点、必须消失的锚点 |
+| `relations` | 要写的 `supersedes` 关系集合 |
+| `baseline_patch` | 只有 `user_edit` 才有：基线清单要做的修改，以及要设为失效的关系 |
+| `step`、`step_owner`、`owner_epoch` | 进行到哪一步，由哪个 owner 执行 |
 
-   每做完一步，就推进 `step`；全部完成后，单元标为 `written`。
-3. **启动时恢复**：owner 拿到锁后，先扫描所有 `step != done` 的写入计划，按文件、归档和关系的实际状态继续往前做完，不会盲目重试。`expected_hash` 对不上，并且新单元也不在文件里，说明计划已经过时：放弃这份计划，单元改回 `deferred`。
-4. 停留在 `judged` 状态的单元，没有写入计划，恢复时直接改回 `queued`。
-5. **故障注入测试**：在每一个 fsync、rename、DB commit 的边界都杀一次进程，恢复之后的结果必须和没出故障时一致。
+**步骤按固定顺序执行**，用不到的步骤跳过：
+
+`planned → archive_applied → target_applied → relations_applied → baseline_applied → done`
+
+先归档，后替换。每一步执行前都在语料锁里抢占这一步的执行权（§3.1），执行完才把 `step` 往前推一格。
+
+**每一步怎么判断已经完成**：
+
+| 步骤 | 完成的判定 |
+|---|---|
+| `archive_applied` | 归档文件存在，并且哈希等于 `archive_hash` |
+| `target_applied` | 目标文件哈希等于 `after_hash`，并且 `anchors_present` 全部存在、`anchors_absent` 全部不在。只看到 `cand:` 标记不算完成 |
+| `relations_applied` | 关系表里已经有 `relations` 里的每一条 |
+| `baseline_applied` | 基线清单里已经包含 `baseline_patch` 的修改 |
+
+**启动时恢复**：owner 先接管所有还没完成的计划（§3.1），再逐份检查：
+
+- 某一步已经满足完成判定：直接推进 `step`，不再执行一次。
+- 某一步没完成，目标文件哈希仍等于 `before_hash`：照着计划执行这一步。
+- 目标文件哈希既不是 `before_hash`，也不是 `after_hash`：说明中间被别的写入改过。不覆盖，这份计划作废；单元转为 `deferred`，原因码 `stale_plan`。如果是用户编辑，就保留现场，在 Need You 里提示。
+- 停在 `judged`、还没生成计划的单元，回到 `queued`。
+
+**故障注入测试**：在每一个 fsync、rename、DB commit 的边界杀掉进程，再加上 owner 交接的场景，恢复之后的结果必须和没出故障时一致。
 
 ### 4.4 清理：只保留 30 天
 
@@ -222,7 +288,7 @@ CDF 的所有表都放在一个独立的 SQLite 文件里：`<app data>/ingestio
 - **删除前先汇总**：把要删的行汇总进 `ingestion_daily_stats`，主键是（UTC 日期、source、lane、目的地、状态、原因码、规则版本摘要），空值统一记成 `-`；同时记下候选数、单元数、写入字节数、LLM 调用次数和 token 数。汇总用累加式 upsert（`count = count + excluded.count`），并且和删除放在同一个事务里。事务一旦回滚，就不会多算；成功删掉的行也不会再被统计第二次。
 - **没处理完的候选也一样删**：到期时还没处理完的候选，在删除之前先把状态记为 `expired_unprocessed`，再计入汇总。它们并没有做完 5 次重试，dashboard 也不会这样显示。
 - **清理一定会执行**：清理不调 LLM，也不受资源门控。它属于 maintenance lane 的保底时隙（§6.2），backend 启动后会第一个执行。
-- **磁盘空间**：`ingestion.db` 建库时就开启了 `auto_vacuum=INCREMENTAL`，每次清理后执行 `incremental_vacuum`，库的大小保持在 30 天数据左右。
+- **磁盘空间**：`ingestion.db` 建库时就开启了 `auto_vacuum=INCREMENTAL`。每次清理后，先读 `freelist_count`，按这个页数分块执行 `incremental_vacuum(N)`，每块最多 1000 页；跑完再做一次 `wal_checkpoint(TRUNCATE)`。验收时主文件和 WAL 文件的大小分开测量。
 - **Inbox 只存提取结果**：source 自己的原始数据（会话 transcript、DailyActivity、run 记录）仍然归 source 自己管。Inbox 只存提取出来的内容和来源 id。
 - 超过 30 天的数据，dashboard 只显示汇总统计（§10）。
 
@@ -263,7 +329,7 @@ worker 用这个格式解析 payload；各 source 可以给出不同的提示，
 ### 6.1 触发点
 
 - **会话结束**：在 `session_hooks` 的注册顺序里，最后加一个 `IngestionSessionKickHook`。它排在所有提取 hook 之后，所以执行时这个会话的提取已经全部入队。它负责封存这个会话的批次，然后唤醒 worker。`lifecycle_manager` 的 120 秒 idle 回调本身不当作批次已就绪的信号（`session_hooks.py:275-298` 只是把 hook 排进队列，真正执行要晚一些）。
-- **唤醒 worker**：同一进程内用 `asyncio.Event`。跨进程时（CLI、hook 子进程），先读 `backend.json`，再调用 owner 的 loopback 接口 `POST /api/ingestion/wake`。这个接口只绑定 127.0.0.1，并且要求 backend 现有的本机 token；它不传任何数据，只是让 worker 去检查一次。调用失败也没关系，worker 每 60 秒还会轮询一次 `next_due_at` 和 `immediate` 队列。
+- **唤醒 worker**：同一进程内用 `asyncio.Event`。跨进程时（CLI、hook 子进程），先读 `backend.json` 拿到端口，再调用 owner 的 `POST /api/ingestion/wake`。这个接口有两层保护：一是专用凭证，backend 每次启动时随机生成，写进权限为 0600 的 `<app data>/state/ingestion_wake.key`，不写进 `backend.json`；调用方在 `X-Swarm-Wake` header 里带上它，backend 用常数时间比较来校验。二是来源地址必须是 loopback，否则返回 403。凭证文件只有本机同一用户的进程能读。hive 模式下 Caddy 有自己的 Basic auth，这个接口不依赖它。接口不接收任何数据，作用只是让 worker 去检查一次。四种运行模式下都要测：远端调用被拒，凭证错误被拒。调用失败也没关系，worker 每 60 秒还会轮询一次 `next_due_at` 和 `immediate` 队列。
 - **backend 启动时**：按顺序执行：恢复（§4.3）→ 已逾期的 maintenance 清理 → 按优先级逐个处理积压的 lane。
 - **四种运行模式都能跑**：上面这些触发点在四种完整的 HTTP backend 模式里都存在。daemon / hive 的调度器只是让 `scheduled` 和 `maintenance` 更准时，不是必需的。
 
@@ -302,9 +368,9 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 一批候选按下面的顺序处理，每一步的结果都写进 `ingestion_units`。
 
-1. **整理**（批内处理，不调 LLM）：解析 payload，去掉会话 id、scratch 路径、PID、哈希这类噪音；批内内容完全相同的候选标为 `merged`。输出是若干 **claim-group**：一个结论，加上与它绑定的 why、how、依据和适用条件。拆分只在 claim-group 之间进行，同一个 group 内部的内容永远不拆开；没把握该怎么拆时，整条候选作为一个 group 交给卡 1。DailyActivity 这类 source 的 `{text, why}` 在提取时就是一个 group。
+1. **整理**（批内处理，不调 LLM）：根据信封和项目快照，用确定性规则算出 `project_candidates`，规则见本节末尾。然后解析 payload，去掉会话 id、scratch 路径、PID、哈希这类噪音；批内内容完全相同的候选标为 `merged`。输出是若干 **claim-group**：一个结论，加上与它绑定的 why、how、依据和适用条件。拆分只在 claim-group 之间进行，同一个 group 内部的内容永远不拆开；没把握该怎么拆时，整条候选作为一个 group 交给卡 1。DailyActivity 这类 source 的 `{text, why}` 在提取时就是一个 group。
 2. **卡 0：规则**（不调 LLM）：检查污染、注入扫描、噪音、长度、内容指纹完全相同、会话已删除、配额。
-3. **卡 1：内容本身**：调 1 次 LLM，一批候选可以打包成一次调用。输出 7 种形状之一，外加 `content_form ∈ {rule, reference}`；还要回答质量题，rule 和 reference 各有一套。
+3. **卡 1：内容本身**：调 1 次 LLM，一批候选可以打包成一次调用。输出是 7 种形状之一，再加上 `content_form ∈ {rule, reference}` 和一个可选的 `reroute_to`（只能取契约允许的形状），并回答 rule 或 reference 对应的那组质量题。
 4. **污染约束**（确定性，在卡 2 之前）：被污染的 `rule` 记 `REJECT tainted_rule`。被污染的 `reference` 只有 `Reference` 这一种形状是合法的；如果卡 1 给的是别的形状，记 `REJECT invalid_shape_for_trust`，不会改投到别处。这条约束由代码执行，不依赖 prompt。
 5. **卡 2：路由表**（确定性）：每种形状只对应一个去向。写入前会解析目标段是否存在。
 6. **目的地规则**（§7.2）：规则不通过时 `REJECT`，原因码标明是哪条规则。
@@ -312,10 +378,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 8. **卡 3：和已有内容比对**：在目的地里检索。有命中时调 1 次 LLM，再由 `relation_for_hit` 和 `aggregate_hits` 两个纯函数算出动作。
 9. **写入**：由 writer 按写入日志（§4.3）完成。新单元带 `cand:<unit_id>` 和类型；需要的话，先归档旧单元再移除；最后写关系。
 
-第 7 步之后，`project` 由确定性规则决定，按下面的顺序取第一个能确定的：
-1. source 给出的显式绑定；
-2. source 所在的 repo 对应的 DDD；
-3. 项目快照里唯一涉及的那个 repo。
+**项目怎么定**：在整理阶段，按下面三条的顺序收集 `project_candidates`：source 给的显式绑定；source 所在 repo 对应的 DDD；项目快照里唯一涉及的那个 repo。卡 1 只能从这个列表里选项目。到了卡 2 之前，再由确定性的 resolver 核对一遍：候选列表为空，或者卡 1 选的项目不在列表里，就记 `DEFER ambiguous_project`。改投时，项目只能换成同一个列表里的另一个。
 
 三者都确定不了，就 `DEFER ambiguous_project`。卡 1 只能从项目快照里选项目，不能自己编造。
 
@@ -385,10 +448,10 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 |---|---|---|---|---|
 | decision | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions |
 | product | `PRODUCT.md` § Vision（principle）/ § What Makes … Different（model） | `PRODUCT.md` § Strategic Priorities | `PRODUCT.md` § Success Criteria | `PRODUCT.md` § Non-Goals |
-| architecture | `TECH.md` § Architecture（principle）/ § Key Subsystems（model） | `TECH.md` § Architecture | `TECH.md` § Conventions | `TECH.md` § Runtime Traps |
+| architecture | `TECH.md` § Architecture（principle）/ § Key Subsystems (architecture shape)（model） | `TECH.md` § Architecture | `TECH.md` § Conventions | `TECH.md` § Runtime Traps |
 | lesson | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Failed |
 
-- 这张矩阵的唯一真实来源是契约，文档里的版本由契约生成。DDD 模板也只保留一个来源 `backend/templates/ddd/*.md`：`swarm_workspace_manager.py:379-467` 里内嵌的那份 `DDD_TEMPLATES` 改成从这些文件读取。测试检查矩阵里的每个段在模板里都存在。
+- 这张矩阵的唯一真实来源是契约，文档里这一份是从契约生成的。测试要求矩阵里每个段名都和模板里的标题**逐字相同**（只做空白归一化），模板标题一旦改动，测试就会变红。DDD 模板也只保留一个来源 `backend/templates/ddd/*.md`：`swarm_workspace_manager.py:379-467` 里内嵌的那份 `DDD_TEMPLATES` 改成从这些文件读取。测试检查矩阵里的每个段在模板里都存在。
 - 写入前解析目标文件里实际存在的标题。找不到目标段就 `DEFER missing_section`，不会自己新建段。用户的项目如果删过段，这条候选会留在审计里，看得见。
 - 层由 `layer_for(target_section, type)` 唯一决定（§7.3）。
 
@@ -425,8 +488,8 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 3. 有两个或以上 `replace` → `REJECT incompatible_hits`
 4. 恰好一个 `replace` → 替换那一条
 5. 有 `duplicate` → `REJECT already_exists`
-6. 有 `exception` → 新加，作为例外，加 `extends` 边
-7. 有一个或多个 `refine` → 选分数最高的那一条，分数相同时取锚点字典序最小的。它是 `cand:` 单元就补充它；是基线单元就新加一条，加 `extends`
+6. 有 `exception` → 新加，作为例外。和被命中的单元之间的关系只记在审计里，首版不写关系表
+7. 有一个或多个 `refine` → 选分数最高的那一条，分数相同时取锚点字典序最小的那条。不管它是 `cand:` 单元还是基线单元，都**不原地修改**，按下面的"替换"流程生成一个新的有效单元（完整保留旧单元的全部主张；如果是 DDD 内容，保留 what、how、why），然后加一条 `supersedes`
 8. 其余 → 新加
 
 改投不在这两个函数里处理，它是 pipeline 的第 7 步。
@@ -436,7 +499,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 **替换**：
 - 旧单元是 `cand:`：先归档再移除，写入新单元，加 `supersedes` 边。
 - 旧单元是基线单元，分三步：
-  1. **列出旧单元的全部主张**：第二次判官调用，为旧单元生成一份主张清单，每条带原文句子的位置。条数不设上限。
+  1. **列出旧单元的全部主张**：这一步叫卡 3b，是一次单独的判官调用，成本单独统计。为旧单元生成一份主张清单，每条带原文句子的位置。条数不设上限。
   2. **生成有效单元**：同一次调用里，对清单上每一条旧主张标明 `preserve` / `refute` / `refine`，然后写出新的有效单元。
   3. **校验**：每条 `preserve` 和 `refine` 的旧主张，在有效单元里都要能找到对应的句子；每条 `refute` 都要有候选里的一条 claim 支持。有效单元必须重新通过卡 1。任何一条旧主张没有对上，就 `REJECT conflict_unresolved`。
 - 通过之后新加有效单元，加 `新 —supersedes→ 旧`。旧单元的文件不改。
@@ -483,14 +546,14 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 ### 7.3 单元、层、关系
 
-- **统一的单元解析器** `parse_units(path) -> [Unit]`。每个 Unit 带这几个字段：`path`（工作区相对路径）、`section`、`byte_start`、`byte_end`、`identity`、`byte_hash`。
+- **统一的单元解析器** `parse_units(path) -> [Unit]`。每个 Unit 带这几个字段：`path`（工作区相对路径）、`section`、`byte_start`、`byte_end`、`identity`、`byte_hash`。`byte_start` 和 `byte_end` 只表示这一次解析时的位置，同一个文件里任何地方插入内容都会让它们整体漂移，所以不能当作持久身份；能持久引用的只有 `identity` 和 `byte_hash`。
   - bullet 形式的单元（MEMORY、DDD）和 `###` 块形式的单元（EVOLUTION），都由它来解析。
   - 基线生成、卡 3 语料、MEMORY 组装、DDD 段语料和渲染，都只用这一个解析器。`context_directory_loader.py:256-302` 和 `recall_multi.py:100-220` 改为调用它。
   - `byte_hash` 是原始字节的哈希。`identity` 对 `cand:` 单元取 `cand:<unit_id>`，对基线单元取基线清单里记下的 `byte_hash`。
 - **单元锚点**：`<path>#<section>#<identity>`。
 - **层**：由 `layer_for(target_section, type)` 决定。所有合法组合列在一张表里，表里没有的组合直接拒绝。
 - **关系**（首版只做最小的一套，不做通用图 v2）：
-  - **存储**：放在 SQLite 的 `ingestion_relations` 表，字段为 `subject_anchor`、`predicate ∈ {supersedes, extends}`、`object_anchor`、`created`、`inactive`。主键是 `(subject, predicate, object)`，写入用 upsert。`.knowledge-graph.yaml` 和 `knowledge_graph.py` 现有的边不迁移，读取侧继续照旧使用它们。
+  - **存储**：放在 SQLite 的 `ingestion_relations` 表，字段为 `subject_anchor`、`predicate = supersedes`（首版只有这一种）、`object_anchor`、`created`、`inactive`。主键是 `(subject, predicate, object)`，写入用 upsert。`.knowledge-graph.yaml` 和 `knowledge_graph.py` 现有的边不迁移，读取侧继续照旧使用它们。
   - **约束**（在锁内校验，不满足就 `REJECT incompatible_hits`）：
     - 不能有环；
     - 每个锚点最多有一个生效中的取代者，第二次取代同一个旧单元时，改为取代当前的链头；
@@ -503,9 +566,9 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 - **Library 文件**：frontmatter 里写 `ontology_types:`，可以为空。
 - **跨项目**：首版不做跨项目边。一个单元只写进一个项目，另一个相关项目只记在审计的 `secondary_projects` 字段里。
 
-## 8. 写入者迁移：source 只入队，worker 是唯一写入者
+## 8. 写入者迁移：source 只入队，worker 是唯一的自主写入者
 
-| 现在的写入路径 | r14 |
+| 现在的写入路径 | r15 |
 |---|---|
 | 第 5 节表里所有 source 的直接写入 | 改成 `enqueue()`，原来的写入代码删掉 |
 | `ingestion_gate()`、`admission_band()` | 并进 worker 的卡 1 和 DDD 规则，不再是公开入口 |
@@ -513,15 +576,23 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | session 结束的 writeback（置信度 0.5 永远过不了 0.7） | 先看过去 30 天它丢弃了哪些候选，再决定是删掉还是改成一个 source |
 | `s_memory-distill` | 改成手动触发入口：立即运行一次 `session` 和 `maintenance` lane，然后汇总这次审计 |
 | 两个编辑器接口、create / delete / trash / rename、上传（`workspace_api.py:1758-1807`、`1876`、`1937-1939`、`2019`、`2076`；`workspace.py:692`、`714-777`） | 涉及受控路径时，一律改走 `governed_edit`（带 `expected_revision`，§3.2），记为 `writer=user_edit`，并修订基线（§13） |
+| 项目的 rename / delete（`swarm_workspace_manager.py:3073`、`3142-3195`，HTTP 入口 `routers/projects.py:143-197`） | 改走 `governed_edit` 的树级操作 `user_tree_move`（§3.2、§4.3） |
+| Library 的清理（`library_health.py:191-244`，入口 `library_api.py:426-447`）、Library Inbox 复制（`library_inbox.py:69-103`，入口 `library_api.py:384-392`） | 改走 `governed_edit`，算用户编辑。Inbox 复制进 `Knowledge/Inbox` 也一样 |
+| eval governance 改写 EVOLUTION（`evolution/governance_miner.py:120-163`，调用方 `eval_service.py:1287-1289`） | 改成 source：判定结果入队，由 worker 写入 |
+| 随 DDD 下发的 `s_ddd-persist` skill（`templates/ddd-skills/s_ddd-persist/SKILL.md:91-113`、`scripts/locked_write.py:554`） | 改成调用 `ingest submit`，删掉直接写入的模式。模板和已经下发到各 DDD 的副本，都要被扫描规则覆盖 |
 | loops-health 的自动修复（`s_loops-health/scripts/loops_health_check.py:786`、`858`、`877`、`999`） | 只保留诊断，删除修改部分 |
 | `artifact_cli ddd-retire --apply`（`artifact_cli.py:526-529`） | 删除 `--apply`，只保留报告 |
 | 迁移脚本 `migrate_memory_lifecycle.py:185`、`migrate_cultivated_titles.py:135` | 已经跑完的一次性迁移，删除 |
 | workspace 初始化、codebase scan 创建 DDD 文档（`swarm_workspace_manager.py:1264`、`1450`、`1920`） | 允许"文件不存在时才创建"，这类写入作为显式豁免；已经存在的文件不覆盖 |
-| 每周 Memory Health 的修改阶段（`memory_health.py:584`、`796`、`867`、`1005`、`1056`）、EVOLUTION prune 和维护（`evolution_maintenance_hook.py:422`、`866`、`950`）、context health 里的修改（`context_health_hook.py:1278`、`1535`、`1597`、`1663`、`1847`、`3217`）、DDD 矛盾剥离、size valve 驱逐基线单元、`locked_write` 清理旧索引 | 这些都会改动已沉淀的内容，和 §13 冲突，**在第 1 步全部关成只读**，不再保留到第 3 步，只留下只读统计。size 控制改成只作用于 `cand:` 单元，并放进读取侧的注入预算（§12） |
-| `ddd_orchestrator` 的机械替换、`ddd_maturity` 的成熟度注释 | 走 writer 的结构写函数，只能改 `cand:` 单元和段头注释 |
+| 每周 Memory Health 的修改阶段（`memory_health.py:584`、`796`、`867`、`1005`、`1056`）、EVOLUTION prune 和维护（`evolution_maintenance_hook.py:422`、`866`、`950`）、context health 里的修改（`context_health_hook.py` 中写 MEMORY、EVOLUTION、KNOWLEDGE、DDD 的各处，行号由扫描器生成）、DDD 矛盾剥离、size valve 驱逐基线单元、`locked_write` 清理旧索引 | 这些都会改动已沉淀的内容，和 §13 冲突，**在第 1 步全部关成只读**，不再保留到第 3 步，只留下只读统计。size 控制改成只作用于 `cand:` 单元，并放进读取侧的注入预算（§12） |
+| `ddd_orchestrator` 的机械替换、`ddd_maturity` 的成熟度注释 | 首版改成只读，不再写入 |
 | DailyActivity、checkpoint、JobResults、Signals、Reports | 它们是日志，不进 Inbox。新的 checkpoint 写到恢复文件，不再写进 DailyActivity |
 
-**写入者清单由代码扫描生成**：用 AST 和调用图扫描生产 Python 代码、随产品发布的 skill 脚本和 CLI 脚本，找出所有写受控路径的地方，而不是靠手工维护一份 grep 清单。清单只允许 writer、`governed_edit`、"不存在时才创建"这三类豁免，出现其他写入点测试就变红。测试夹具里保留上面每一个已知的写入点，用来证明扫描确实能把它们找出来。
+**写入者的边界靠 materializer 保证**（§3.2）。AST 扫描证明不了"所有写入点都找到了"，因为路径是在运行时拼出来的。所以分两层来做：
+- **静态检查**：materializer 以外的生产代码，不能调用任何写文件的函数，例如 `write_text`、`open('w'|'a')`、`os.replace` / `rename` / `unlink`、`shutil.*`。随产品发布的非 Python 脚本单独扫描。
+- **运行时判断**：由 materializer 判断路径是否受控。
+
+AST 夹具只用来做回归，保证上表列出的每一个写入点都能被检出。上表里的行号是扫描器生成的证据，不是规范的一部分。豁免只有三类：writer、`governed_edit`、"文件不存在时才创建"。
 
 **切换时的不变量**：只要有任何一个 source 开始用 Inbox，就不能再有任何非 writer 的自动写入在运行。所以第 1 步上线时，上表所有旧的修改路径都会被关闭。
 
@@ -533,6 +604,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 **信任从哪里来**：后端没法知道一段文字是用户亲手打的，还是粘贴进来的。所以不声称能区分这两种情况。所有信任判断都基于"这段内容来自哪个输入事件"。
 
+- **唯一入口**：`record_session_input()` 是写入输入事件的唯一函数。必须调用它的地方有：dashboard 发送消息、已授权的 channel 消息、引用和附件（拆成单独的事件）、工具结果落库、会话压缩、会话恢复、REFLECT 的 run 证据。每一处都要有端到端测试。还没接上这个函数的 source，它的候选一律按"被污染"处理（见下面的兜底规则）。
 - **输入事件**：每次有内容进入会话，都记一条事件，带不可变的 `event_id` 和 `trust`。会话里所有事件 id 都记进会话的**输入账本**（`session_inputs` 表）。账本随会话持久化，压缩和恢复会话之后仍然保留，`HookContext` 和 run 记录都会带上它。
 
 | 输入事件 | trust |
@@ -580,7 +652,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 写了哪些关系边。
 - **口径**：除非另外说明，所有比率都按单元计算。写入率 = `written` ÷（单元总数 − `merged`）；拒绝率的分母和写入率相同；`deferred` 和 `failed_poison` 单独计数，不计入分母。
 - **历史趋势**（30 天以前）：只读 `ingestion_daily_stats`，按周或按月显示每个 source 的入队量、写入率、拒绝的原因码分布、各目的地的写入量和 LLM 成本。不显示任何原始内容。
-- **健康区**：各 lane 的积压和最老一条的等待时间、熔断记录、每天的 LLM 调用次数和 token、判官与关键词分类器不一致的次数、Inbox 大小和上次清理时间、MEMORY 与 EVOLUTION 的大小及注入时省略的单元数。
+- **健康区**：各 lane 的积压和最老一条的等待时间、熔断记录、每天的 LLM 调用次数和 token、Inbox 大小和上次清理时间、MEMORY 与 EVOLUTION 的大小及注入时省略的单元数。
 
 **第一版的范围**：只做审计闭环，包括两个 tab、候选列表和详情、Need You 里的 ingestion 异常、各 lane 积压、上次清理时间、按天的统计。流程节点之间的联动筛选、周和月的切换、预取，这些放到下一版。
 
@@ -591,10 +663,10 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - 写入 Inbox 之前，先用现有的密钥扫描规则做脱敏；返回给前端时再扫一遍。
 - 所有文本都作为数据渲染（转义），从不返回存好的 HTML。
 - "打开原会话"和"打开文件"会先校验路径确实在工作区根目录下。
-- 每次访问详情都在审计里记一行。
+- 每次访问详情都记一行访问日志：只读接口把这条记录交给 worker 的一个有界队列，由 worker 异步写进 `ingestion_access_log`，所以只读连接本身从不写库。
 
-**实现**：后端在 `attention_authority.collect()` 里加 `_collect_ingestion()`；新增只读接口 `GET /api/ingestion/flow`（总览）、`/api/ingestion/items`（列表）、`/api/ingestion/items/{id}`（详情）、`/api/ingestion/stats`（历史趋势，读汇总表）。四个接口都跑在 `executors.run_nav` 上，做同步、参数化的 SQLite 只读查询，并且只读当前实例自己的 `data.db`。
-另外新增 `POST /api/ingestion/wake`：只绑定 loopback，要求本机 token，不带任何数据（§6.1）。前端改动：`NeedYouOverlay` 加 Tabs；新增 `CognitiveDistillationFlow` 视图；`AttentionEntry.source` 加 `ingestion`，`ATTENTION_SOURCE_LABEL` 加对应标签；每个 tab 用独立的 query key，徽标计数仍沿用现有的 attention 轮询；补中英文 i18n；遵守 Nav visual system，并通过 nav visual 测试和相等性测试。
+**实现**：后端在 `attention_authority.collect()` 里加 `_collect_ingestion()`；新增只读接口 `GET /api/ingestion/flow`（总览）、`/api/ingestion/items`（列表）、`/api/ingestion/items/{id}`（详情）、`/api/ingestion/stats`（历史趋势，读汇总表）。四个接口都跑在 `executors.run_nav` 上，做同步、参数化的 SQLite 只读查询，主要读当前实例自己的 `ingestion.db`；需要追溯来源时，另开一个只读连接，按事件 id 点查 `data.db` 里的 `session_inputs`。两个库不 ATTACH，也不假设两者之间有事务一致性。
+另外新增 `POST /api/ingestion/wake`：要求专用凭证，并且只接受 loopback 来源；请求不带任何数据（§6.1）。前端改动：`NeedYouOverlay` 加 Tabs；新增 `CognitiveDistillationFlow` 视图；`AttentionEntry.source` 加 `ingestion`，`ATTENTION_SOURCE_LABEL` 加对应标签；每个 tab 用独立的 query key，徽标计数仍沿用现有的 attention 轮询；补中英文 i18n；遵守 Nav visual system，并通过 nav visual 测试和相等性测试。
 
 **不提供审批按钮**：dashboard 只用来看。判断有误就去改契约、规则或 prompt，然后把版本号加一。可以对 Inbox 离线重放，验证修改的效果（§14）。
 
@@ -626,7 +698,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 实施时同步改 AGENTS.md 的 Context and Memory System 一节和 `context_directory_loader` 的文档，L1 缓存的预算头也跟着改。
 - **DDD 注入不改**：仍然注入 section 指针，带上整段的 what、how、why。r12 计划改成只注入几条正文，2026-10-26 的成对盲评里 8 对输了 7 对，已经撤回。唯一的改动是：被 supersedes 的条目，命中时转交给它的链头（§7.3）。
 - **Library 过滤不做**：多取后补足、过滤 frontmatter 和短正文，这几项在盲评里和基线持平，所以没有合并。等写入侧干净之后再评估。被污染的 Library 内容放进不可信数据边界里渲染。
-- **写入容量**：每个每轮注入的文件，`cand:` 单元每天新增不超过 4 KB、总量不超过 40 KB；每个项目的 DDD 每天新增不超过 20 KB；Library 每天新增不超过 50 个文件或 5 MB。超出时 `REJECT quota`。配额按 UTC 日计算，计量的是最终新增的 UTF-8 字节数：replace 只算新单元的字节，归档不算。卡 0 先预留配额，writer 写成功后再正式扣减；重试时用 `unit_id` 防止重复扣减。
+- **写入容量**：每个每轮注入的文件，`cand:` 单元每天新增不超过 4 KB、总量不超过 40 KB；每个项目的 DDD 每天新增不超过 20 KB；Library 每天新增不超过 50 个文件或 5 MB。超出时 `REJECT quota`。配额按 UTC 日计算，计量的是最终新增的 UTF-8 字节数：replace 只算新单元的字节，归档不算。卡 0 先在 `ingestion_quota` 里写一条预留，writer 写成功后，在同一个事务里把这条预留转成扣减。预留 1 小时后自动失效；重启时，没有对应写入计划的预留会被回收。同一个 `unit_id` 只能扣减一次。
 - **熔断**：同一个 source 1 小时内至少处理 20 条，且基础设施类的 `DEFER` 超过 50%，就暂停这个 source 1 小时，同时在 Need You 里出一条提示。内容被拒绝不计入熔断。
 - **索引排除依赖目录**：`node_modules`、`.venv`、`dist`、`build`。
 - 不重切 chunk，不重建索引。
@@ -635,7 +707,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 
 - **基线**：上线后 backend 第一次启动时，对每个受控文件跑一遍 `parse_units()`，把每个单元的锚点和 `byte_hash` 记进 `baseline.json`。这一步只读不写。
 - **系统不动**：基线单元不会被任何系统路径修改、移动、删除或打标记。这包括新功能、所有维护机制（§8 的退役清单），以及插入原语，后者只往段末追加字节。
-- **用户可以改**：用户通过编辑器或上传修改受控文件时，`governed_edit` 按写入日志（§4.3）依次完成下面三件事，崩溃后可以接着做完：
+- **用户可以改**：用户通过编辑器或上传修改受控文件时，`governed_edit` 生成一份 `op_kind=user_edit` 的写入计划（§4.3），其中带上 `baseline_patch`，然后依次完成下面三件事。中途崩溃的话，按同一个 `op_id` 继续往前做完：
   1. 对修改后的文件重跑 `parse_units()`；
   2. 更新 `baseline.json` 里这个文件的单元表。被删的单元移出基线；被改过的单元换成新的 `byte_hash`；新出现、但没有 `cand:` 的单元也算作基线，因为它们是用户亲手写的；
   3. 关系图里指向已消失单元的边设为失效。
@@ -643,7 +715,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   这次修订在审计里记一行 `writer=user_edit`，附 diff。
 - **带外修改**：绕过适配器的改动，由 maintenance 的比对检测出来，记作 `writer=unknown`（§8），只作为一次观察结果记录下来。基线**不会**因此自动修订，包括启动时也不会，否则来历不明的内容会被静默认定为用户写的。只有用户下一次在编辑器里保存这个文件时，基线才会随之修订。
 - **基线文件本身**：`baseline.json` 带版本号，用原子写入。损坏时从上一份备份恢复，并在 Need You 里出一条提示。文件被重命名时，基线按内容哈希重新对应到新文件。
-- **新旧共存**：卡 3 检索到的基线单元只用于判断。补充时新加一条，加 `extends` 边；替换时新加一个完整的有效单元，加 `supersedes` 边，读取侧把命中转发给链头（§7.1、§7.3）。
+- **新旧共存**：卡 3 检索到的基线单元只用于判断。补充和替换都新加一个完整的有效单元，并加一条 `supersedes`，读取侧把命中转发给链头（§7.1、§7.3）。
 - **不在不变范围内的**：DailyActivity、会话、Reports、Signals、checkpoint、派生索引。它们是持续追加或会被 upsert 的日志和派生数据，不属于基线。验收时只检查切换前已有的记录仍然存在、内容不变，粒度到记录或块。
 - **预算**：MEMORY 不再按大小驱逐基线单元，文件会变大，但每轮注入有确定性的上限（§12），所以 prompt 大小有界。`cand:` 单元的增长另有配额（§12）。
 
@@ -664,28 +736,35 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 1. 实现 worker 的纯逻辑：整理、卡 0、卡 1 的 prompt、污染约束、卡 2、目的地规则、改投、卡 3 的检索和两个纯函数。全部放在 `core/ingestion/`，不接任何 source，也不写任何受控文件。
 2. 实现离线工具 `scripts/ingestion_replay.py`。它把候选灌进一个**临时** Inbox，在只读的语料副本上运行，输出每个单元的决定。回放有两种模式：
    - **A，录制模式**：卡 1 和卡 3 的结构化输出用事先录好的，只测卡 2、规则、改投和聚合这些部分，结果必须完全确定。
-   - **B，在线模式**：固定模型 id、prompt 哈希、temperature 0 和批内顺序，同一份数据跑 3 次，同时报告结果和三次之间的一致率。
-3. **数据分成两份，彼此不重叠**：
-   - **dev**：审计里用过的样本（MEMORY 97、DDD 40、backflow 15）加上合成夹具。prompt 和规则只能在这一份上调。
-   - **holdout**：从会话历史、DDD 文档、backflow Note 里另外抽样，排除 dev 里已有的条目，用种子固定的随机抽样。由 3 个互不知道彼此结果的盲评 subagent 独立标注，标注规则和卡 1、卡 3、DDD 规则的定义一致；按多数票定标签，三票都不一样的样本丢掉，并记下数量。holdout 冻结后带上版本号，不能拿来调参，只在判定 go/no-go 时跑一次。
-   - **holdout 的最小样本量**：各项门槛都用 95% 单侧 Clopper–Pearson 下界来判，分母和需要的样本量如下表。抽样时，按审计看到的分布反推需要抽多少条，直到每个分母都够数为止。
+   - **B，在线模式**：固定版本向量（见第 4 条）和批内顺序，同一份数据跑 3 次，报告结果和稳定率。
+3. **数据分两份，互不重叠**：
+   - **dev**：审计里用过的样本（MEMORY 97 条、DDD 40 条、backflow 15 篇）加上合成夹具。prompt 和规则只能在 dev 上反复调。
+   - **holdout**：从会话历史、DDD 文档、backflow Note 里另外抽样，并排除 dev 里已有的条目。抽样前先冻结 parser、claim-group 的划分规则和"重复对"的构造方法，否则代码一改，分母也会跟着变。
+     - **抽样单位是簇**：同一个会话、同一份文档或同一个 run 算一簇，按簇抽取，用固定的随机种子。置信区间用 cluster bootstrap 复核：如果它比 Clopper–Pearson 更严，以 bootstrap 的结果为准。
+     - **标注**：由 3 个互相看不到对方结果的盲评 subagent 独立标注，标注规则和卡 1、卡 3、DDD 规则的定义一致，按多数票定标签。三票全不一致的样本标为 `unresolved`，**交给 Gawan 裁定**，不得丢弃。
+     - **分层抽检，必做**：按 source、指标、"三票一致 / 二比一"三个维度分层，共抽 60 条，也由 Gawan 裁定。60 条里至少 54 条和多数票一致（单侧 95% 下界 ≥ 80%），这份 holdout 才有效；否则作废，修订标注规则后重新标注。按以往的分歧比例估计，Gawan 总共要看 60 条抽检，外加 20 到 40 条 `unresolved`。
+     - **只用一次**：holdout 冻结后带上版本号，只在最终判定 go/no-go 时跑一次。没通过就回到 dev 上修改，最多再换 1 份新的 holdout。换新 holdout 时预注册 α 分配：两次判定各用单侧 α = 0.025。
+   - **holdout 的预注册分母和门槛**：统一用 95% 单侧 Clopper–Pearson 下界判定。用了第二份 holdout 时改为 97.5%，对应的分母按同一个脚本重新计算。
 
-     | 指标 | 单位 | 分母 | 门槛（下界） | 最少分母 | 至少要对几个 |
+     | 指标 | 单位 | 分母 | 门槛（下界） | 预注册分母 | 需要对的数 |
      |---|---|---|---|---|---|
      | 写入精确率 | 单元 | 判为写入的单元 | ≥ 93% | 210 | 202 |
      | 该写的召回率 | 单元 | 标签为该写的单元 | ≥ 75% | 180 | 145 |
-     | 项目专属内容送对 DDD | 单元 | 标签为项目专属的单元 | ≥ 80% | 150 | 129 |
+     | 项目专属内容送到正确的 DDD | 单元 | 标签为项目专属的单元 | ≥ 80% | 150 | 129 |
      | D1 拦住缺 why 的条目 | 单元 | 标签为缺 why 的决定类条目 | ≥ 90% | 130 | 123 |
-     | 已知重复判为"不变" | 对 | 标签为重复的对 | ≥ 90% | 90 | 86 |
-     | 被污染的 rule 进入每轮注入文件 | 单元 | 被污染的 rule | = 0 | 30（合成） | 30 |
+     | 已知重复被判为"不变" | 对 | 标签为重复的对 | ≥ 90% | 90 | 86 |
 
-     最少分母的算法：假设真实准确率比门槛高 4 到 8 个点（精确率按 97%，召回率按 83%，路由按 88%，D1 按 96%，重复按 97%），这时通过的概率至少要有 80%。计算脚本放在 `scripts/ingestion_holdout_size.py`。作为对照，如果样本全部判对，证明 93% 最少需要 42 个，证明 90% 最少需要 29 个。现在的 backflow 样本只有 15 篇，即使全对，下界也只有约 82%。缺 why 和重复这两类真实样本可能凑不够，凑不够时可以用改写真实条目的方法补足，但合成样本不能超过分母的一半，并且要单独报告。
-
-   - **人工复核**：盲评给出的标签里，Gawan 可以随机抽 20 条复核。复核和多数票的一致率低于 85% 时，这份 holdout 作废，重新标注。
-4. **通过的条件**：每项指标都达到门槛，并且在线模式下三次运行的一致率不低于 95%。报告里列出每项的分子、分母、点估计和下界，被判为 `DEFER` 或 `uncertain` 的单元单独计数。**没通过**时，只回到 dev 上改 prompt 和规则，然后用一份新版本的 holdout 再判一次，不进入第 1 步。
+     预注册分母是保守取值：在真实准确率比门槛高 4 到 8 个点的前提下（精确率 97%、召回率 83%、路由 88%、D1 96%、重复 97%），通过的概率约为 82%、84%、81%、85%、87%。满足同样功效的最小分母更小一些，约为 185、167、135、116、76。计算脚本是 `scripts/ingestion_holdout_size.py`，它的输出由测试固定下来。作为参照：全对时，要证明 93% 至少需要 42 个样本，证明 90% 至少需要 29 个；现有的 15 篇 backflow 即使全对，下界也只有约 82%。缺 why 的条目和重复对这两类，真实样本不够时，可以通过改写真实条目来补，但补的部分不能超过分母的一半，并且单独报告。
+   - **"被污染的 rule 不会进入每轮注入的文件"不做抽样统计**，因为有限样本证明不了"等于 0"。这一条改成安全不变量来保证：对形状、信任级别和去向的全部组合做全枚举测试和属性测试，并做 mutation 检查，要求零违规。
+4. **通过条件**：
+   - 每项指标都达到门槛。
+   - 在线模式的**稳定率** ≥ 95%。稳定率指同一个单元跑 3 次，最终动作（写入、拒绝、DEFER，以及去向）完全相同的单元所占的比例。另外单独报告每张卡各字段的一致率。
+   - 录制模式要求结果完全确定，这是另一道独立的门，和稳定率不使用同一套置信表述。
+   - 报告列出每项的分子、分母、点估计和下界；`DEFER` 和 `uncertain` 单独计数。
+   - 每次运行都记录完整的版本向量：模型 id 和 provider 版本、temperature、top-p、seed（模型支持时才有）、prompt 哈希、normalizer / 规则 / 契约的版本、检索语料摘要、运行时版本。
 
 **第 1 步：Inbox、worker、writer、dashboard，加第一个 source**
-5. 建 `ingestion.db`（§4 的全部表），`data.db` 加 `session_inputs`（v16 迁移，只加这一张表）、owner 锁和 epoch（§3.1）、`enqueue()`、`ingest` CLI 和唤醒接口、lane 调度、公平性、负载感知、清理、写入日志和恢复（§4.3）、writer、`governed_edit` 和两个编辑器接口的 revision。**同时把 §8 表里所有旧的修改路径关成只读**。
+5. 建 `ingestion.db`（§4 的全部表），`data.db` 加 `session_inputs`（v16 迁移，只加这一张表）、owner 锁和 epoch（§3.1）、`enqueue()`、`ingest` CLI 和唤醒接口、lane 调度、公平性、负载感知、清理、写入日志和恢复（§4.3）、writer、materializer、`governed_edit`（包括编辑器 revision、树级操作，以及目录操作的限制）、wake 凭证、`ingestion.db` 的备份和恢复、`record_session_input()`。**同时把 §8 表里所有旧的修改路径关成只读，或者改走新路径**。
 6. Need You 的 Cognitive Distillation Flow 页（第一版范围），以及 `AttentionAuthority` 的 `ingestion` source。
 7. 第一个 source：backflow。它当前质量最差（15 条里 9 条只在原会话里有意义），而且只写 Library，风险最小。
 - 验收：
@@ -693,7 +772,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 同一条消息只产出一份；
   - 被拒的原因码合理；
   - 在 chat、CLI、清理、dashboard 同时运行时，实测入队延迟 p99 < 200 ms；chat 首 token 的 p90 和基线相比，差值在误差范围内；
-  - 故障注入：在每个写入步骤的边界杀进程，恢复后结果一致；两个完整 backend 同时启动，只有一个 worker 在跑。
+  - 故障注入：在每个写入步骤的边界杀进程，恢复后结果一致；两个完整 backend 同时启动，只有一个 worker 在跑；旧 owner 被新 epoch 取代之后，没能写成任何文件；外部编辑器在替换前后各写入一次，两种时机都不会被系统自动回写；备份恢复之后，审计记录完整，恢复流程能补齐中断的写入。
 
 **第 2 步：依次迁移其余 source**
 顺序：REFLECT → DailyActivity 决策和纠正 → 会话结束蒸馏 → 即时纠正和"记住" → cultivation → 其余。每迁移一个，就删掉它原来的写入路径，在 Flow 视图里观察一天再继续。
@@ -706,7 +785,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 元认知层完整保留。
 
 **所有步骤都要满足**
-- 安全类的不变量（§7.2 末尾）都做 mutation 检查：撤掉修复，对应的测试必须变红。其余规则用表驱动测试和 Hypothesis 属性测试；
+- 安全类的不变量（§7.2 末尾，以及"被污染的 rule 不会进入每轮注入的文件"）都做 mutation 检查：撤掉修复，对应的测试必须变红。其余规则用表驱动测试和 Hypothesis 属性测试；
 - `swarm_select_tests.py` 选出的测试全部通过；
 - Windows CI 通过；
 - 四种完整的 HTTP backend 模式下，lane 都能被触发；CLI 和 hook 子进程从不处理候选；
@@ -719,10 +798,10 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - **不做人工审批和提案**：答题卡就是最终决定，人通过审计来看结果。
 - **不让 source 自己判断或写入**：source 只负责提取。
 - **不做影子模式和切换日**：每个 source 迁移时直接生效。
-- **不做 OS 层的写入隔离**：用"唯一写入者 + 提示性的 gate + 带外修改检测"代替。
+- **不做 OS 层的写入隔离**：用"唯一的自主写入者 + materializer + 提示性的 gate + 带外修改检测"代替。
 - **不引入向量库**：换了说法的重复只靠卡 3 的 BM25，漏掉的先接受，并在 holdout 里计数。
 - **首版不做 maintenance 语义复审**：maintenance 只做清理、恢复、带外修改检测和统计。
-- **首版不做通用关系图 v2 和跨项目边**，也不做 `classify_entry_type` 对照，不做插件化的 source 注册。
+- **首版不做 `extends` 关系**（例外和补充的关系只记在审计里），不做通用关系图 v2 和跨项目边，`ddd_orchestrator` 首版只读，也不做 `classify_entry_type` 对照，不做插件化的 source 注册。
 - **不改 DDD 的注入方式。**
 - **系统不整理已经沉淀的内容。**
 - **不重切 chunk，不重建索引。**
@@ -734,13 +813,17 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 | source 的登记信息（lane、payload 格式、提示） | `store_contracts` | 人改 | `enqueue()`、worker |
 | 标准答题卡、路由表、DDD 段矩阵、配额、注入预算、Inbox 保留期 | `store_contracts` | 人改 | worker、读取侧 |
 | 目的地规则 | `core/ingestion_rules/*.py` | 人改 | worker |
-| 候选的原始内容、状态、每张卡的结果、去向、理由（最近 30 天） | `ingestion.db` 的 `ingestion_inbox` | `enqueue()`、worker | worker、dashboard |
+| 候选的原始内容和信封（最近 30 天） | `ingestion.db` 的 `ingestion_inbox` | `enqueue()` | worker、dashboard |
+| 单元的每张卡结果、去向、理由、状态（最近 30 天） | `ingestion.db` 的 `ingestion_units` | worker | worker、dashboard |
 | 30 天以前的统计 | `ingestion_daily_stats` | maintenance lane，在删除前汇总 | dashboard 的历史趋势 |
 | 输入事件和它的 trust | `data.db` 的 `session_inputs` | 消息入口、工具结果入口 | `enqueue()`、dashboard |
 | 每个 lane 的到期时间 | `ingestion_lanes` 表 | worker | 触发点、调度 |
 | 谁是 worker | owner 锁 + `ingestion_owner.epoch` | 完整的 backend 启动时 | 每一次状态推进 |
 | 写入进行到哪一步 | `ingestion_writes` | writer、`governed_edit` | 启动时的恢复 |
-| supersedes / extends 关系 | `ingestion_relations` | writer | 读取侧、卡 3 |
+| supersedes 关系 | `ingestion_relations` | writer | 读取侧、卡 3 |
+| 配额的预留和扣减 | `ingestion_quota` | 卡 0、writer | 卡 0、dashboard |
+| 详情访问日志 | `ingestion_access_log` | worker（异步） | 审计 |
+| 唤醒凭证 | `<app data>/state/ingestion_wake.key`（权限 0600） | owner 启动时 | CLI、hook 子进程 |
 | 基线 | `<app data>/state/baseline.json` | 上线时生成一次，用户编辑时修订 | writer、比对、验收 |
 | 单元、层 | `parse_units()`、`layer_for()` | — | writer、读取侧、dashboard |
 | 需要人看的异常 | `AttentionAuthority` 的 `ingestion` source | 根据 Inbox 计算 | Need You |
@@ -756,54 +839,45 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 4. 提取和 ingestion 解耦。Inbox 只保留 30 天，更早的只留统计。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里，叫 Cognitive Distillation Flow（Flow 视图）。按时效性分 lane 触发（r13）。
 5. DDD 的注入方式不改；所有 DDD 规则都以保住 what、how、why 为前提（r13）。
 6. 先做第 0 步（离线 go/no-go），通过之后再接入真实的 source。
-7. holdout 由 3 个盲评 subagent 独立标注，按多数票定标签；Gawan 可以随机复核 20 条（r14）。
-8. 首版的删减：最小关系表、不做语义复审、mutation 检查只覆盖安全类不变量、dashboard 只做审计闭环、不做类型对照、source 用静态类型注册（r14）。
+7. holdout 由 3 个盲评 subagent 独立标注，按多数票定标签（r14）；三票都不同的标为 `unresolved` 交给 Gawan 裁定，另做 60 条必做的分层抽检（r15）。
+8. 首版的删减（r15 扩充）：首版不做 `extends`，`ddd_orchestrator` 只读；最小关系表、不做语义复审、mutation 检查只覆盖安全类不变量、dashboard 只做审计闭环、不做类型对照、source 用静态类型注册（r14）。
 9. 整个设计定名为 **Swarm Cognitive Distillation Flow**：它是 SwarmAI 认知系统的核心引擎，也是对所有用户可用的产品级能力（r14.1）。
+10. `ingestion.db` 是不可替代的状态，纳入备份和恢复；holdout 里标为 `unresolved` 的样本和分层抽检由 Gawan 裁定（r15）。
 
 ## 18. 修订记录（非规范，仅供追溯，不按这里的旧说法实现）
 
-- r1：只覆盖 Knowledge，含重切 chunk 的 S3（已撤回）。
-- r2：Memory、DDD、Knowledge 三块统一成一份存储契约。
-- r3：引入三张答题卡（质量、去向、准入）。
-- r4：规定 context 写入的位置（用户的 `.context/`，不写源码仓库）。
-- r5：吸收两轮独立评审（代码事实 3 BLOCKER + 9 MAJOR，设计 5 BLOCKER + 8 MAJOR）。当时引入的人工批准、影子模式、WAL 文件，在 r6 中已删除。
-- r6：Gawan 决定改为全自动，不设切换期，审计做成产品功能，对每个用户都可用。
-- r7：已经沉淀的内容一律不动。
-- r8：ontology 标签（七类 + 关系）并入流程。
-- r9：写清每张卡的维度，加卡 0，卡 2 改为路由表。
-- r10：部分冲突只做标注，三处直接删除改为先归档。**这两条在 r11 都已作废。**
-- **r11：吸收第三轮独立评审**（代码可行性 5 BLOCKER + 4 MAJOR + 1 MINOR，设计 4 BLOCKER + 9 MAJOR + 1 MINOR）：
-  - 唯一写入口改为三层强制：适配器、`governed_corpus_gate`、静态测试；Memory Health 的修改阶段并入退役清单。
-  - 卡 2 改为先看 `form` 再分支；补齐 `user_kind`、`agent_kind`、`project_topic`、`reference_kind`；EVOLUTION 用真实段名；目标段写入前校验存在。
-  - 卡 1 按 rule / reference 分支提问，新增 `not_global`。
-  - 层只由 `layer_for()` 一处决定。
-  - 卡 3 改为逐个命中、逐条主张判定；动作由规则算出；新增"窄例外"；部分冲突改为"完整有效单元 + 确定性跳过"，取代 r10 的标注方案。
-  - 关系图 schema v2（带 `scope`），`superseded_anchors` 接入三个读取点，改用 `utils.file_lock`。
-  - 来源信封由受信入口生成，污染随派生传递；被污染的内容永远进不了每轮注入的文件。
-  - 候选表成为唯一的状态机，采用"准备 → 提交"协议并支持恢复；SQLite 迁移 v16。
-  - 上线即带硬配额和熔断。
-  - 基线清单；会改动已沉淀内容的维护路径退役；追加式插入原语；验收改为按单元哈希 + 子序列核对。
-  - 触发时机改为"启动 + idle + 定时"三处，状态只有一份。
-  - 候选里存工作区相对路径。
-  - 审计接口补上隔离、转义、打码、分页上限。
-  - 验收改用可提交进仓库的合成夹具；门槛改为以写入精确率为主；增加模型行为测试和全平台矩阵。
+- **r1 到 r12（已被 r13 取代，只留摘要）**：
+  - r1 到 r3：从只管 Knowledge，扩展到 Memory、DDD、Knowledge 三块共用一份契约，并引入答题卡。
+  - r4 到 r8：只写用户的 `.context/`；全自动，加上审计；已经沉淀的内容一律不动；ontology 标签。
+  - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
+  - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（`99bcc4ea3` 之前的版本）。
 
-- **r12：吸收第三轮独立评审**（代码可行性 6 个 BLOCKER + 7 个 MAJOR，设计 5 个 BLOCKER + 4 个 MAJOR），并按 Gawan 的三条决定修改：
-  - 写入口改成"拦截 + 检测"，带外修改记为 `writer=unknown`；`ingest submit` 改从 stdin 读入；写入者清单改为从调用点扫描生成，补上 ContextHealth、两处成熟度写入和 `annotate_entry`。
-  - 卡 1 改成 7 种形状的判别联合，去掉 `status`；卡 2 每种形状对应一行，补上 DDD 段矩阵；DDD 模板只保留一个来源。
-  - 卡 3 改为逐个命中输出，动作由 `relation_for_hit` 和 `aggregate_hits` 两个纯函数计算，证据强弱是全序；替换前先列出旧单元的完整主张清单，逐条映射。
-  - 统一的单元解析器；关系图 v2 的两端都用锚点；supersedes 的图约束；读取侧不再先剔除旧单元，而是把命中转发给链头。
-  - 来源改为基于输入事件和输入账本；工具输出默认 `external`；不再声称能区分"亲手打的"和"粘贴的"；被污染的 rule 一律拒绝。
-  - 提交协议先存旧版本快照，恢复时做三态 CAS，不覆盖他人的写入；新增租约和 `id_collision`。
-  - 熔断只看系统故障，并设最小样本量；所有未结束状态和每轮注入文件都有硬上限；计数器跨进程共享。
-  - 每轮注入文件改为确定性的预算选取（修改 AGENTS.md 里"永不截断"的规定）；用户编辑算基线修订；日志类文件不纳入字节不变的检查范围。
-  - 验收改成同一查询成对回放；夹具分层，分 train/dev/test，并事先估算样本量；门槛取置信区间下界；模型行为测试从真实检索入口开始；对需要按新不变量重写的现有测试列出清单。
-
+- **r15：吸收 r14.2 的两份独立评审**（`review_r142_code.md`、`review_r142_design.md`），并按 Gawan 的两项决定修改：`ingestion.db` 是不可替代的状态，要纳入备份和恢复；holdout 中标为 `unresolved` 的样本和分层抽检由 Gawan 裁定。具体改动：
+  - 文件副作用也受 owner epoch 约束：每一步执行前先抢占这一步；旧 owner 停下并 join 完成之后，才释放锁；新 owner 先接管遗留任务，再开始处理。
+  - 删除"检测到外部编辑后自动恢复用户版本"的做法，改成：保留现状，标记 `DEFER user_race`，保留恢复副本；同时明确写出检测不到的那段时间窗口。
+  - 新增 materializer，作为唯一的落盘接口，运行时判断路径是否受控；静态检查只禁止绕过它直接调用写函数。
+  - 首版禁止目录级操作；项目 rename 和 delete 改走树级写入计划。
+  - 写入日志的顺序改为先归档、再写目标、再写关系、最后更新基线；计划里保存预期的字节和哈希，以及必须存在、必须不存在的锚点；恢复时检查所有后置条件，不能只看 `cand:` 标记；用户编辑也走同一套日志。
+  - 补全状态转移表（加上 `merged`、owner 接管）；明确候选状态如何聚合。
+  - 唤醒改用专用的 0600 凭证，并且只接受 loopback 来源。
+  - `ingestion.db` 的 PRAGMA 在事务之外设置；明确 `synchronous=NORMAL` 和 `data.db` 不一致；`incremental_vacuum` 按 `freelist_count` 执行。
+  - 补上漏掉的写入者：项目 CRUD、Library 清理和 Inbox、eval governance、`s_ddd-persist`。
+  - 修正 DDD 段名，改为和模板逐字比对。
+  - `project_candidates` 在卡 1 之前算好；`reroute_to` 写进卡 1 的 schema。
+  - refine 不再原地修改单元，改为新的有效单元加 `supersedes`；首版去掉 `extends`。
+  - `record_session_input()` 成为唯一入口。
+  - 配额预留单独建流水表；访问日志改为异步写入。
+  - holdout 按簇抽样，`unresolved` 交给人裁定，分层抽检 60 条且必做，最多换一次 holdout 并预先分配 α；"预注册分母"附上实测功效；污染零容忍改由测试保证；明确稳定率的定义和完整的版本向量。
+  - 删减：`ddd_orchestrator` 只读；去掉分类器不一致的统计；基准数据挪到附录 A；修订记录压缩成摘要。
 - **r14.2**（Gawan）：CDF 的表改放在独立的 `ingestion.db`，`session_inputs` 留在 `data.db`。理由是和 chat 的写锁隔离，并且新库可以开启 `auto_vacuum`，这样代码评审 B4 不再成立。附上实测的入队延迟。受控语料仍然是文件系统。
 - **r14.1**（Gawan）：整个设计定名为 Swarm Cognitive Distillation Flow（CDF），定位为 SwarmAI 认知系统的核心引擎、产品级能力；文件从 `2026-10-26-recall-corpus-ingestion.md` 改名为 `2026-10-26-swarm-cognitive-distillation-flow.md`；明确了 CDF、ingestion、Flow 视图三个术语的边界。内容不变。
 - **r14：吸收 r13b 的两份独立评审**（`review_r13b_code.md`、`review_r13b_design.md`）。新增：唯一 owner 锁和 epoch；写入日志和重启恢复（单写入者也需要）；`governed_edit` 和编辑器 revision；外部编辑只做到尽力而为（前后快照，检测到冲突就恢复用户版本）；`ingest` CLI 分支和 loopback 唤醒；idle 触发移到 hook 链的最后；公平调度和 maintenance 保底时隙；负载状态沿用代码的 `warning`；单元级状态、`failed_poison`、稳定的 `idem_key` 和 UNIQUE 约束；清理按整天切、累加汇总；`auto_vacuum` 只对新库生效；整理阶段改为 claim-group，DDD 的 why 不会被拆开；改投从 `aggregate_hits` 里移出，作为独立的一步；污染约束在卡 2 之前硬性执行；"更新"只认证据事件时间；写入者清单改为扫描生成，补上 6 处遗漏，旧修改路径在第 1 步全部关闭；基线不会因为 unknown 修改自动修订；审计接口的隔离、脱敏和上限写进正文；第 0 步改为 dev / holdout 分离，按 95% 单侧 Clopper–Pearson 预先定好分母和门槛，holdout 由盲评 subagent 标注。删减：最小关系表代替图 v2，不做语义复审，不做跨项目边。
 - **r13b**（Gawan）：Inbox 清理简化为只保留 30 天，删除前汇总进 `ingestion_daily_stats`；dashboard 对超过 30 天的数据只显示统计；dashboard 定名为 Cognitive Distillation Flow（认知蒸馏流）。
 - **r13：提取与 ingestion 解耦**（Gawan 提出）。source 只负责提取和入队，Inbox 有保留期并定期清理，ingestion worker 是唯一写入者；标准答题卡之外，每类目的地有定制规则（DDD 必须保住 what、how、why）；source 可以有定制的提取格式；按时效性分 lane 触发；统一 dashboard 放在 Need You overlay（「认知蒸馏流」页，加上 `AttentionAuthority` 的 ingestion 异常）。r12 里为多写入者并发设计的准备→提交、租约、跨进程配额、三层强制全部删除。DDD 注入方式和 Library 过滤不改（依据第 1 步的盲评结果）。新增第 0 步：先做离线 go/no-go。
+
+## 附录 A. SQLite 基准（r14.2，2026-10-26，scratch）
+
+在 WAL 模式下同时跑三路写入：chat 每秒写 20 条 4 KB 的消息；每 0.5 秒提交一个 500 行的批量事务；做 2,000 次 2 KB 的入队。测得入队延迟 p50 = 0.05 ms、p90 = 0.09 ms、p99 = 0.22 ms，最大 8.4 ms。三路写在同一个库里，SQLite 也不是瓶颈。分库是为了隔离锁和生命周期，不是为了吞吐。
 
 ## 19. 验收结果
 
