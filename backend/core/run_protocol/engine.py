@@ -100,6 +100,24 @@ def _blob(root: str, tree: str, file: str) -> tuple[str, bytes | None] | None:
         return None
 
 
+def _blob_id(root: str | None, tree: str, path: Any) -> str | None:
+    """The blob id of *path* in *tree*: ``"absent"`` when the tree has none, None when
+    it cannot be read (stale_closures fails closed on None)."""
+    if not root or not isinstance(path, str) or not path:
+        return None
+    try:
+        listed = subprocess.run(["git", "-C", str(root), "ls-tree", "-z", tree, "--",
+                                 f":(literal){path}"], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listed.returncode != 0:
+        return None
+    if not listed.stdout:
+        return "absent"
+    meta = listed.stdout.rstrip(b"\0").partition(b"\t")[0].decode("ascii", "replace").split()
+    return meta[2] if len(meta) == 3 else None
+
+
 def _repo_of_finding(file: str, r1_trees: Mapping[str, Any], now_trees: Mapping[str, Any],
                      has_path) -> str:
     """The repo a finding's *file* belongs to (design 2026-10-26-pipeline-review-closure
@@ -840,7 +858,8 @@ class RunEngine:
                "code_trees": code_trees, "run_bases": bases, "changed_paths": flat_changed,
                **self._review_facts(events, repos, code_trees, bases),
                "stale_closures": sorted(facts.stale_closures(
-                   finding_protocol.fold(list(events), self.authority), events, code_trees)),
+                   finding_protocol.fold(list(events), self.authority), events, code_trees,
+                   blob_of=lambda repo, tree, path: _blob_id(repos.get(repo), tree, path))),
                "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", []),
                "agent_after_cap": _agent_after_cap(requirements, design)}
         return checks.make_context(
@@ -1944,8 +1963,10 @@ class RunEngine:
         request_id = request_id or "auth_" + secrets.token_hex(8)
         metadata: dict[str, Any] = {}
         if action == "accept_finding":
+            # the state the ledger checks the grant against: before the end-of-chain
+            # R2 silence rule (design 2026-10-26-pipeline-review-closure §2.3 point 6)
             rows = {row["canonical_id"]: row for row in
-                    findings.fold(self.store.read_events(), self.authority)}
+                    findings.fold(self.store.read_events(), self.authority, r2_silence=False)}
             row = rows.get(target)
             if row is None:
                 raise EngineError("accept-finding references an unknown canonical finding")
@@ -1989,7 +2010,7 @@ class RunEngine:
         if action == "accept_finding":
             normalized = bindings if isinstance(bindings, Mapping) else {}
             rows = {row["canonical_id"]: row for row in
-                    findings.fold(self.store.read_events(), self.authority)}
+                    findings.fold(self.store.read_events(), self.authority, r2_silence=False)}
             canonical_id = normalized.get("canonical_id")
             row = rows.get(canonical_id)
             if row is None or findings.state_hash(row) != normalized.get("state_hash"):

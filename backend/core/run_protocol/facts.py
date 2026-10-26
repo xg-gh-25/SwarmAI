@@ -10,8 +10,8 @@ question is answered in exactly one place:
 - ``resolve_refs`` — a refutation's refs, each resolved against the code tree or the
   run's verified events; a ref that does not resolve is refused.
 - ``decision_values`` — each decision exactly as its validated event recorded it.
-- ``stale_closures`` — findings closed by a refutation or diff assertion that was
-  judged on a code tree the run no longer has: the closure does not hold now.
+- ``stale_closures`` — findings closed by a refutation or diff assertion whose judged
+  files are no longer what the proof saw: the closure does not hold now.
 """
 from __future__ import annotations
 
@@ -107,21 +107,43 @@ def decision_values(events: Sequence[Mapping[str, Any]], blobs: Path) -> dict[st
 
 
 def stale_closures(rows: Sequence[Mapping[str, Any]], events: Sequence[Mapping[str, Any]],
-                   code_trees: Mapping[str, str | None]) -> set[str]:
-    """Canonical ids whose closing CLI proof (refuted / diff_assertion) was judged on
-    a code tree that is not ITS repo's current tree (tree ids can coincide across
-    repos, so the proof's repo decides). A proof recorded without a repo binds only
-    in a one-repo run. Test proofs are not here: a later final re-runs the tests on
-    the tree that lands."""
+                   code_trees: Mapping[str, str | None], blob_of=None) -> set[str]:
+    """Canonical ids whose closing CLI proof (refuted / diff_assertion: ``refuted``,
+    ``closed_asserted``, ``closed_unproven``) no longer holds on the current code
+    (design 2026-10-26-pipeline-review-closure §2.3 point 5). Fresh when the proof's
+    tree is ITS repo's current tree (tree ids can coincide across repos, so the proof's
+    repo decides; a proof without a repo binds only in a one-repo run), or, with
+    *blob_of(repo, tree, path)* (a blob id, ``"absent"`` or None when unreadable), when
+    every path the proof judged is the same blob now: the finding's file for a
+    diff_assertion, each ``path`` ref for a refutation. So a clean rebase that leaves
+    those files alone keeps the closure; any doubt (unreadable) is stale.
+
+    ``closed_proven`` is not here: its evidence is a passing test, which the TEST report
+    on the landing tree re-establishes (LG-1), and code changed after it goes through
+    an incremental review (RV-4)."""
     by_id = {event.get("event_id"): event for event in events}
     only = next(iter(code_trees)) if len(code_trees) == 1 else None
     out: set[str] = set()
     for row in rows:
-        if row.get("status") not in ("refuted", "closed_asserted"):
+        if row.get("status") not in ("refuted", "closed_asserted", "closed_unproven"):
             continue
         payload = (by_id.get(row.get("evidence_event_id")) or {}).get("payload", {})
         repo = payload.get("repo") or only
         tree = payload.get("code_tree")
-        if not repo or not tree or code_trees.get(repo) != tree:
+        now = code_trees.get(repo) if repo else None
+        if not repo or not tree or not now:
+            out.add(str(row.get("canonical_id")))
+            continue
+        if now == tree:
+            continue
+        if blob_of is None:
+            out.add(str(row.get("canonical_id")))
+            continue
+        if payload.get("evidence_type") == "refuted":
+            judged = [(ref.get("path"), ref.get("blob")) for ref in payload.get("refs") or ()
+                      if isinstance(ref, Mapping) and ref.get("kind") == "path"]
+        else:
+            judged = [(row.get("file"), blob_of(repo, tree, row.get("file")))]
+        if not all(path and then and then == blob_of(repo, now, path) for path, then in judged):
             out.add(str(row.get("canonical_id")))
     return out
