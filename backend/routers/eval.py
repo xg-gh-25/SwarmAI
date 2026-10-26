@@ -97,10 +97,14 @@ class HardDeleteRequest(BaseModel):
 
 @router.get("/health")
 async def get_eval_health():
-    """Current OS Health Score + per-dimension breakdown, follow-ups and the three lines."""
+    """The latest release decision and five-dimension summary, the two follow-up
+    lists (``follow_ups``: problems with the evaluation itself; ``evolution``: signals
+    about the agent's behaviour, core.eval_followups) and the three lines."""
     svc = get_eval_service()
     health = svc.get_health()
-    health["follow_ups"] = svc.get_follow_ups()
+    items = svc.get_follow_ups()
+    health["follow_ups"] = [i for i in items if i.get("kind") != "evolution"]
+    health["evolution"] = [i for i in items if i.get("kind") == "evolution"]
     health["lines"] = svc.get_lines()
     return health
 

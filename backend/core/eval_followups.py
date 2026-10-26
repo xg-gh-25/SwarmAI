@@ -5,9 +5,14 @@ One function, ``build_follow_ups``, used by the HTML report's first section and 
 dashboard's Overview, so the two never disagree. Every rule is deterministic: it
 reads run records, the golden set and the online-scoring state, never a model.
 
-Each item is ``{severity, rule, what: {en, zh}, why, action: {en, zh}, case_ids}``;
+Each item is ``{kind, severity, rule, what: {en, zh}, why, action: {en, zh}, case_ids}``;
 ``severity`` is high / medium / low, and the list is sorted by it. An empty list
-means nothing needs handling.
+means nothing needs handling. ``kind`` splits the list in two (design §8 item 2):
+``eval`` is a problem with the evaluation itself (a check broke, a run did not
+measure, a case looks wrong, a line is overdue) and goes under "Needs you";
+``evolution`` is a signal about the agent's behaviour (it got worse, the user
+corrected it, a judge scored a session low) and goes under Evolution Suggestion,
+the input of the improve loop. Nothing here changes a rule or writes a case.
 
 Rules (numbered as in the design):
   1. a quick check (BVT) failed in the latest run that ran it
@@ -22,6 +27,9 @@ Rules (numbered as in the design):
      be broken)
   7. the golden set is over its limits, a product case has no purpose, or a private
      case is hidden by a product case with the same id
+  8. (evolution) an online check is kept in fewer than 90% of turns or sessions, or
+     the user corrected the agent in any session this week; a check already listed
+     by rule 4 as worse than last week is not listed twice
 
 Inputs: the run records (EvalHistory), the daily canary state (the per-session
 quick check, which writes no run record) and the online-scoring state. From the
@@ -74,8 +82,25 @@ def _label(case: Mapping[str, Any] | None, cid: str, lang: str) -> str:
     return str((case or {}).get("title") or cid)
 
 
-def _item(severity, rule, what_en, what_zh, why, action_en, action_zh, case_ids=()):
-    return {"severity": severity, "rule": rule, "what": {"en": what_en, "zh": what_zh},
+EVAL, EVOLUTION = "eval", "evolution"
+_STANDING_RATE = 0.10  # rule 8: a check that fails in at least this share is a signal
+# Plain names of the online checks (jobs/handlers/session_quality.CHECKS).
+ONLINE_CHECK_NAMES = {
+    "O1_LANGUAGE": ("Answers in the language you asked in", "用你提问的语言回答"),
+    "O2_SILENT_TOOLS": ("No extra text before a tool call", "调工具前不写多余的话"),
+    "O3_CORRECTIONS": ("Sessions you did not have to correct", "没被你纠正过的会话"),
+    "O4_GOAL": ("Delivered what you asked (judge)", "交付了你要的东西（judge）"),
+    "O5_TOOLS": ("Chose reasonable tools (judge)", "工具选得合理（judge）"),
+}
+
+
+def _check_name(cid: str, lang: str) -> str:
+    names = ONLINE_CHECK_NAMES.get(cid)
+    return names[0 if lang == "en" else 1] if names else cid
+
+
+def _item(severity, rule, what_en, what_zh, why, action_en, action_zh, case_ids=(), kind=EVAL):
+    return {"kind": kind, "severity": severity, "rule": rule, "what": {"en": what_en, "zh": what_zh},
             "why": why, "action": {"en": action_en, "zh": action_zh},
             "case_ids": list(case_ids)[:_MAX_IDS]}
 
@@ -173,7 +198,7 @@ def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[
                          f"{len(flipped)} 条离线考题上次通过、这次不通过：{names(flipped, 'zh', '；')}",
                          _first_line(now[flipped[0]].get("notes")),
                          "Read the agent's answer in the run detail; find which rule it no longer follows.",
-                         "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped))
+                         "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped, kind=EVOLUTION))
     if new:
         out.append(_item("medium", 3, f"{len(new)} new offline case(s) fail on their first run: "
                                       f"{names(new, 'en', '; ')}",
@@ -223,26 +248,56 @@ def _online(state: Mapping[str, Any] | None, include_session_text: bool) -> list
     previous = (trend[-2].get("rates") or {}) if len(trend) >= 2 and _consecutive_weeks(
         trend[-2].get("week"), trend[-1].get("week")) else {}
     checks = state.get("checks") if isinstance(state.get("checks"), Mapping) else {}
+    worse = set()
     for cid, check in sorted(checks.items()):
         if not isinstance(check, Mapping) or not _ONLINE_CHECK_ID.match(str(cid)):
             continue
         rate, last = check.get("rate"), previous.get(cid)
         if not isinstance(rate, (int, float)) or not isinstance(last, (int, float)) or rate <= last:
             continue
+        worse.add(cid)
         sessions = [_session_label(e) for e in (check.get("examples") or [])[:3]] \
             if include_session_text else []
-        out.append(_item("medium", 4, f"Online check {cid} fails more often: {last:.0%} → {rate:.0%}",
-                         f"线上检查 {cid} 失败变多：{last:.0%} → {rate:.0%}",
+        out.append(_item("medium", 4, f"{_check_name(cid, 'en')} fails more often: {last:.0%} → {rate:.0%}",
+                         f"「{_check_name(cid, 'zh')}」失败变多：{last:.0%} → {rate:.0%}",
                          "; ".join(s for s in sessions if s),
                          "Open the example sessions and see which rule was not kept.",
-                         "打开例子里的会话，看哪条规则没守住。"))
+                         "打开例子里的会话，看哪条规则没守住。", kind=EVOLUTION))
+    out += _standing(checks, worse, include_session_text)
     low = [d for d in state.get("low_details") or [] if isinstance(d, Mapping)]
     if low:
-        out.append(_item("low", 4, f"{len(low)} low-scoring session(s) this week",
-                         f"本周有 {len(low)} 个低分会话",
+        out.append(_item("low", 4, f"{len(low)} session(s) the judge scored low this week",
+                         f"本周有 {len(low)} 个会话被 judge 打了低分",
                          "; ".join(_session_label(d) for d in low[:3]) if include_session_text else "",
-                         "Open them; decide whether one deserves a case.",
-                         "打开看看，决定要不要据此写一条 case。"))
+                         "Open them; decide whether one deserves a case or a rule change.",
+                         "打开看看，决定要不要据此写一条 case 或改规则。", kind=EVOLUTION))
+    return out
+
+
+def _standing(checks: Mapping[str, Any], worse: set, include_session_text: bool) -> list[dict]:
+    """Rule 8: this week's online signals worth a look even when not worse than last
+    week. Corrections are the user's own words, so any one counts."""
+    out = []
+    for cid, check in sorted(checks.items()):
+        if cid in worse or not isinstance(check, Mapping) or not _ONLINE_CHECK_ID.match(str(cid)):
+            continue
+        rate, failed, checked = check.get("rate"), check.get("failed"), check.get("checked")
+        if not isinstance(rate, (int, float)) or not isinstance(failed, int) or not isinstance(checked, int):
+            continue
+        sessions = "; ".join(s for s in (_session_label(e) for e in (check.get("examples") or [])[:3]) if s) \
+            if include_session_text else ""
+        if cid == "O3_CORRECTIONS":
+            if failed > 0:
+                out.append(_item("medium", 8, f"You corrected the agent in {failed} of {checked} session(s) this week",
+                                 f"本周 {checked} 个会话里，你在 {failed} 个纠正过它", sessions,
+                                 "Each correction is where you said it was wrong: decide whether it needs a rule or a case.",
+                                 "每次纠正都是你说过“不对”的地方：决定要改规则，还是加一条 case。",
+                                 kind=EVOLUTION))
+        elif cid in ("O1_LANGUAGE", "O2_SILENT_TOOLS") and rate >= _STANDING_RATE:
+            out.append(_item("low", 8, f"“{_check_name(cid, 'en')}” is kept in {1 - rate:.0%} ({checked - failed}/{checked})",
+                             f"「{_check_name(cid, 'zh')}」只有 {1 - rate:.0%} 做到（{checked - failed}/{checked}）",
+                             sessions, "The rule exists but is not a habit yet: look at the examples.",
+                             "规则有了，但还没变成习惯：看看例子。", kind=EVOLUTION))
     return out
 
 

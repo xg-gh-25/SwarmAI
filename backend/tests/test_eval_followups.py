@@ -158,7 +158,7 @@ def test_the_service_reads_the_online_state_and_the_health_route_carries_the_lis
     from routers import eval as eval_router
     monkeypatch.setattr(eval_router, "get_eval_service", lambda: svc)
     health = asyncio.run(eval_router.get_eval_health())
-    assert health["follow_ups"] == items
+    assert health["follow_ups"] == [i for i in items if i["kind"] == "eval"]
 
 
 def test_reports_are_marked_routine_only_for_scheduled_and_deploy(tmp_path, monkeypatch):
@@ -243,3 +243,79 @@ def test_online_compares_only_with_the_week_right_before_and_reports_a_judge_fai
     assert _rules(build_follow_ups(_clean_history(), CASES, adjacent, NOW)) == [4]
     judged = dict(ONLINE, judge_error="10/10 judged sessions failed: ThrottlingException")
     assert "judge" in build_follow_ups(_clean_history(), CASES, judged, NOW)[0]["what"]["en"]
+
+
+# ── kind: the evaluation itself vs the agent's behaviour (design §8 item 2) ──────
+
+def _kinds(items):
+    return {(i["rule"], i["kind"]) for i in items}
+
+
+def test_every_item_has_a_kind_and_behaviour_signals_are_evolution():
+    flipped = [_run("canary", 0, {"P1": "passed"}, full=False),
+               _run("scheduled", 1, {"P1": "passed", "B1": "failed"}),
+               _run("scheduled", 15, {"P1": "passed", "B1": "passed"})]
+    assert _kinds(build_follow_ups(flipped, CASES, ONLINE, NOW)) == {(3, "evolution")}
+    new = [_run("canary", 0, {"P1": "passed"}, full=False), _run("scheduled", 1, {"P1": "passed", "B1": "failed"}),
+           _run("scheduled", 15, {"P1": "passed"})]
+    assert _kinds(build_follow_ups(new, CASES, ONLINE, NOW)) == {(3, "eval")}
+    broken = [_run("canary", 0, {"P1": "failed"}, full=False), _run("scheduled", 3, {"P1": "passed", "B1": "passed"})]
+    assert _kinds(build_follow_ups(broken, CASES, ONLINE, NOW)) == {(1, "eval")}
+    worse = dict(ONLINE, checks={"O1_LANGUAGE": {"rate": 0.3}},
+                 trend=[{"week": "2026-W42", "rates": {"O1_LANGUAGE": 0.1}}, {"week": "2026-W43", "rates": {}}])
+    assert _kinds(build_follow_ups(_clean_history(), CASES, worse, NOW)) == {(4, "evolution")}
+    assert _kinds(build_follow_ups(_clean_history(), CASES, dict(ONLINE, low_details=[{"title": "x"}]), NOW)) \
+        == {(4, "evolution")}
+    assert _kinds(build_follow_ups(_clean_history(), CASES, dict(ONLINE, sampler_error="x"), NOW)) == {(4, "eval")}
+
+
+def test_rule8_standing_online_signals():
+    def state(**checks):
+        return dict(ONLINE, checks=checks)
+    corrected = state(O3_CORRECTIONS={"rate": 0.05, "checked": 40, "failed": 2, "examples": [{"title": "Chat D"}]})
+    items = build_follow_ups(_clean_history(), CASES, corrected, NOW)
+    assert _kinds(items) == {(8, "evolution")} and "2 of 40" in items[0]["what"]["en"] and "Chat D" in items[0]["why"]
+    assert build_follow_ups(_clean_history(), CASES, state(O3_CORRECTIONS={"rate": 0.0, "checked": 40, "failed": 0}),
+                            NOW) == []
+    habit = state(O2_SILENT_TOOLS={"rate": 0.5, "checked": 200, "failed": 100})
+    items = build_follow_ups(_clean_history(), CASES, habit, NOW)
+    assert _kinds(items) == {(8, "evolution")} and "50%" in items[0]["what"]["zh"]
+    # under the threshold: not a signal
+    assert build_follow_ups(_clean_history(), CASES, state(O2_SILENT_TOOLS={"rate": 0.09, "checked": 100,
+                                                                          "failed": 9}), NOW) == []
+    # already listed as worse than last week: not twice
+    worse = dict(habit, trend=[{"week": "2026-W42", "rates": {"O2_SILENT_TOOLS": 0.2}},
+                               {"week": "2026-W43", "rates": {}}])
+    assert [i["rule"] for i in build_follow_ups(_clean_history(), CASES, worse, NOW)] == [4]
+    on_disk = build_follow_ups(_clean_history(), CASES, corrected, NOW, include_session_text=False)
+    assert "Chat D" not in repr(on_disk)
+
+
+def test_health_splits_the_two_lists(tmp_path, monkeypatch):
+    import asyncio
+    import json
+
+    from core.eval_service import EvalService
+    from routers import eval as eval_router
+    from tests._eval_golden_fixture import install_golden_fixture
+
+    (tmp_path / "Eval" / "EvalHistory").mkdir(parents=True)
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    (tmp_path / ".context").mkdir()
+    (tmp_path / ".context" / ".session-quality-state.json").write_text(json.dumps(
+        {"last_run": NOW.isoformat(), "judge_error": "x", "low_details": [{"title": "Chat E"}]}))
+    svc = EvalService(workspace_root=tmp_path)
+    monkeypatch.setattr(eval_router, "get_eval_service", lambda: svc)
+    health = asyncio.run(eval_router.get_eval_health())
+    assert health["follow_ups"] and all(i["kind"] == "eval" for i in health["follow_ups"])
+    assert [i["rule"] for i in health["evolution"]] == [4]
+    assert len(health["follow_ups"]) + len(health["evolution"]) == len(svc.get_follow_ups())
+
+
+def test_the_report_shows_evolution_in_its_own_section():
+    from scripts.eval_runner import _render_follow_ups
+
+    item = {"severity": "low", "rule": 4, "what": {"en": "Low <i>", "zh": "低"}, "why": "", "action": {"en": "a"}}
+    html = _render_follow_ups([dict(item, kind="evolution")])
+    assert "Evolution suggestion" in html and "Nothing needs handling" in html and "Low &lt;i&gt;" in html
+    assert "Evolution suggestion" not in _render_follow_ups([dict(item, kind="eval")])

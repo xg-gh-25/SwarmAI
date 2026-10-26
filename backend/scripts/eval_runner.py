@@ -2302,18 +2302,27 @@ def _report_follow_ups(run_result: dict, history: list, golden_set: dict, root: 
 
 
 def _render_follow_ups(items: list) -> str:
+    """Two sections from one list (core.eval_followups ``kind``): what needs the
+    user's attention about the evaluation, then the agent-behaviour signals."""
     esc = html_mod.escape
-    if not items:
-        return ('<div class="follow-ups"><h2>Suggested follow-up · 需要你注意的事</h2>'
-                '<p class="fu-none">Nothing needs handling · 没有需要处理的事</p></div>')
-    rows = []
-    for i in items:
-        sub = " · ".join(p for p in (i.get("why") or "", i["action"]["en"]) if p)
-        rows.append(f'<div class="fu fu-{esc(i["severity"])}"><div class="fu-what">{esc(i["what"]["en"])}'
-                    f' <span class="fu-sub">{esc(i["what"]["zh"])}</span></div>'
-                    f'<div class="fu-sub">{esc(sub)}</div></div>')
-    return ('<div class="follow-ups"><h2>Suggested follow-up · 需要你注意的事</h2>'
-            + "".join(rows) + "</div>")
+
+    def rows(group):
+        out = []
+        for i in group:
+            sub = " · ".join(p for p in (i.get("why") or "", i["action"]["en"]) if p)
+            out.append(f'<div class="fu fu-{esc(i["severity"])}"><div class="fu-what">{esc(i["what"]["en"])}'
+                       f' <span class="fu-sub">{esc(i["what"]["zh"])}</span></div>'
+                       f'<div class="fu-sub">{esc(sub)}</div></div>')
+        return "".join(out)
+    needs = [i for i in items if i.get("kind") != "evolution"]
+    evolution = [i for i in items if i.get("kind") == "evolution"]
+    html = ('<div class="follow-ups"><h2>Suggested follow-up · 需要你注意的事</h2>'
+            + (rows(needs) or '<p class="fu-none">Nothing needs handling · 没有需要处理的事</p>') + "</div>")
+    if evolution:
+        html += ('<div class="follow-ups"><h2>Evolution suggestion · 进化建议</h2>'
+                 '<p class="fu-sub">Signals about the agent\'s behaviour; nothing is changed automatically · '
+                 'agent 行为信号，不会自动改任何东西</p>' + rows(evolution) + "</div>")
+    return html
 
 
 def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path:
