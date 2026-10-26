@@ -63,7 +63,7 @@ describe('one ItemRow / ItemBox for product rows (tests 1-2)', () => {
     const product = screen.getByTestId('deliverable');
     expect(product.hasAttribute('data-item-row')).toBe(true);
     const box = product.closest('[data-item-box]') as HTMLElement;
-    expect(box.className).toContain('w-full');
+    expect(box.className).toMatch(/(^|\s)w-full(\s|$)/);
   });
 
   it('a long file name is whole on one line; only the folder truncates', () => {
