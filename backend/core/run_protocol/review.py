@@ -242,6 +242,36 @@ class ReviewOrchestrator:
                 code_trees: Mapping[str, Any] | None = None,
                 incremental_from: Mapping[str, Any] | None = None,
                 knowledge_items: Sequence[str] = ()) -> dict[str, Any]:
+        spec, prepared = self.handout_spec(
+            expert_id=expert_id, stage=stage, round=round, attempt=attempt, at=at,
+            expert_instructions=expert_instructions, review_input=review_input,
+            finding_ids=finding_ids, code_trees=code_trees,
+            incremental_from=incremental_from, knowledge_items=knowledge_items)
+        spec = dict(spec)
+        event, _ = self.store.append_new(writer=self.store.authority.writer("cli"),
+                                         kind=spec.pop("kind"), at=spec.pop("at"),
+                                         payload=spec.pop("payload"), **spec)
+        return self.handout_written(event, prepared)
+
+    def handout_written(self, event: Mapping[str, Any],
+                        prepared: Mapping[str, Any]) -> dict[str, Any]:
+        """After a handout event is on disk: the copy of its prompt for people reading
+        the run (the expert reads PROMPT-FILE, not this) and the spawn to dispatch."""
+        self._atomic(self.run_dir / "evidence" / "prompts" / prepared["name"],
+                     prepared["full"])
+        return {"event": dict(event), "prompt": prepared["prompt"],
+                "path": prepared["path"], "sha": prepared["sha"]}
+
+    def handout_spec(self, *, expert_id: str, stage: str, round: int, attempt: int,
+                     at: str, expert_instructions: str, review_input: str,
+                     finding_ids: Sequence[str] = (),
+                     code_trees: Mapping[str, Any] | None = None,
+                     incremental_from: Mapping[str, Any] | None = None,
+                     knowledge_items: Sequence[str] = ()
+                     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """The handout event spec (for ``store.append_batch`` / ``append_new``) and what
+        ``handout_written`` needs once it is on disk. Writes nothing: a prompt that fails
+        its lint raises here, before any event of the pass is written."""
         if round not in (1, 2) or not expert_id:
             raise ReviewError("invalid review handout identity")
         from core.run_protocol import hook_bridge
@@ -274,14 +304,10 @@ class ReviewOrchestrator:
             payload["incremental_from"] = dict(incremental_from)
         if knowledge_items:     # the PROJECT KNOWLEDGE entries this prompt carries (§3.4)
             payload["knowledge_items"] = list(knowledge_items)
-        event, _ = self.store.append_new(
-            writer=self.store.authority.writer("cli"), kind="handout", at=at,
-            stage=stage, round=round, attempt=attempt, payload=payload,
-        )
-        # a copy for people reading the run; the expert reads PROMPT-FILE, not this
-        name = f"{expert_id}-r{round}-a{attempt}.md"
-        self._atomic(self.run_dir / "evidence" / "prompts" / name, prompt)
-        return {"event": event, "prompt": spawn, "path": prompt_file, "sha": digest}
+        spec = {"kind": "handout", "at": at, "stage": stage, "round": round,
+                "attempt": attempt, "payload": payload}
+        return spec, {"name": f"{expert_id}-r{round}-a{attempt}.md", "full": prompt,
+                      "prompt": spawn, "path": prompt_file, "sha": digest}
 
     def findings(self, events: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         return fold_findings(self.store.read_events() if events is None else events,
@@ -303,7 +329,21 @@ class ReviewOrchestrator:
 
     def record_fix_handoff(self, value: Mapping[str, Any], *, at: str,
                            attempt: int) -> dict[str, Any]:
-        """Record one fixing pass and return immutable inputs for minimal R2."""
+        """Record one fixing pass and return immutable inputs for minimal R2 (the
+        events one by one; ``review-address`` writes ``plan_fix_handoff``'s specs in one
+        batch with its proofs and R2 handouts instead)."""
+        result, specs = self.plan_fix_handoff(value, at=at, attempt=attempt)
+        for spec in specs:
+            spec = dict(spec)
+            self.store.append_new(writer=self.store.authority.writer("cli"),
+                                  kind=spec.pop("kind"), at=spec.pop("at"),
+                                  payload=spec.pop("payload"), **spec)
+        return result
+
+    def plan_fix_handoff(self, value: Mapping[str, Any], *, at: str,
+                         attempt: int) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Check one fixing pass and return (the inputs for minimal R2, the reclassify
+        and address event specs). Writes nothing."""
         if not isinstance(value, Mapping) or set(value) != {"pass", "items"}:
             raise ReviewError("review handoff must contain exactly pass and items")
         pass_number, items = value["pass"], value["items"]
@@ -378,16 +418,16 @@ class ReviewOrchestrator:
                     raise ReviewError(f"handoff item {index} evidence_plan must be "
                                       f"{{type: {sorted(EVIDENCE_TYPES)}, ref?: text}}")
                 plans[finding_id] = json.dumps(dict(plan), ensure_ascii=False, sort_keys=True)
-        # every item is valid: only now record the pass (no partial pass in the log)
+        # every item is valid: only now build the pass (no partial pass in the log)
+        specs: list[dict[str, Any]] = []
         for finding_id in addressed:
             proposal = reclassifications.get(finding_id)
             if proposal is not None:
-                self.store.append_new(
-                    writer=self.store.authority.writer("cli"), kind="reclassify", at=at,
-                    stage="review", attempt=attempt,
-                    payload={"canonical_id": finding_id, "pass": pass_number,
-                             "from": proposal["from"], "to": proposal["to"],
-                             "reason": proposal["reason"]})
+                specs.append({"kind": "reclassify", "at": at, "stage": "review",
+                              "attempt": attempt,
+                              "payload": {"canonical_id": finding_id, "pass": pass_number,
+                                          "from": proposal["from"], "to": proposal["to"],
+                                          "reason": proposal["reason"]}})
             payload = {"canonical_id": finding_id, "pass": pass_number,
                        "hunk": hunks[finding_id]}
             if finding_id in causes:
@@ -398,13 +438,12 @@ class ReviewOrchestrator:
                 payload["solution"] = solutions[finding_id]
             if finding_id in plans:
                 payload["evidence_plan"] = plans[finding_id]
-            self.store.append_new(
-                writer=self.store.authority.writer("cli"), kind="address", at=at,
-                stage="review", attempt=attempt, payload=payload)
+            specs.append({"kind": "address", "at": at, "stage": "review",
+                          "attempt": attempt, "payload": payload})
         # the pass lives only in its logged address events (K4, F21): no side file
-        return {"pass": pass_number, "addressed": sorted(addressed),
-                "hunks": hunks, "proofs": proofs, "causes": causes,
-                "reclassifications": reclassifications}
+        return ({"pass": pass_number, "addressed": sorted(addressed),
+                 "hunks": hunks, "proofs": proofs, "causes": causes,
+                 "reclassifications": reclassifications}, specs)
 
     def _text(self, value: Any) -> str | None:
         """An event payload string, read from its audit blob when it was moved there. A
@@ -445,13 +484,18 @@ class ReviewOrchestrator:
 
     def r2_input(self, expert: str, finding_ids: Sequence[str], *,
                  hunks: Mapping[str, str], proofs: Mapping[str, str],
-                 reclassifications: Mapping[str, Mapping[str, Any]]) -> str:
+                 reclassifications: Mapping[str, Mapping[str, Any]],
+                 states: Mapping[str, str] | None = None) -> str:
+        """The R2 input for *expert*. *states*: the state a finding has once the pass
+        being built is written (its proof is in the same batch as this handout)."""
         rows = {row["canonical_id"]: row for row in self.findings()}
         payload = []
         for finding_id in finding_ids:
             row = rows.get(finding_id)
             if row is None or row["expert"] != expert:
                 raise ReviewError("R2 roster does not match expert findings")
+            if states and finding_id in states:
+                row = {**row, "status": states[finding_id]}
             payload.append({"canonical_id": finding_id, "finding": row,
                             "fix_hunk": hunks.get(finding_id),
                             "proof": proofs.get(finding_id),

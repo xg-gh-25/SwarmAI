@@ -25,6 +25,7 @@ from typing import Any, Mapping, Sequence
 
 from core import run_worktree
 from core.run_protocol import checks, git_tree, lifecycle, review, validation_report
+from core.run_protocol import findings as finding_protocol
 from core.run_protocol.infra import InfrastructureError
 from core.run_protocol.documents import DocumentStore, complete_stage
 from core.run_protocol.events import EventAuthority
@@ -1148,37 +1149,105 @@ class RunEngine:
 
     @_one_operation
     def review_address(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
+        """Record one fixing pass: its address (and reclassify) events, the reported_test
+        proofs and the R2 handouts, in ONE ``append_batch`` (design 2026-10-26-pipeline-
+        review-closure-and-visibility §2.3 point 1). Everything is checked and built
+        first; a refused item, a refused proof or an R2 prompt that fails its lint
+        leaves the log unchanged, and the error names every invalid item."""
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "review":
             raise EngineError("review-address requires active REVIEW")
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
-        prior = [event for event in self.store.read_events() if event.get("kind") == "address"]
-        artifact, tested = self._resolve_reported_tests(orchestrator, artifact)
-        handoff = orchestrator.record_fix_handoff(artifact, at=_now(), attempt=len(prior) + 1)
-        for finding_id, proof in tested.items():   # after the pass: no partial pass (F-9)
-            self.store.append_new(
-                writer=self.authority.writer("cli"), kind="proof", at=_now(),
-                stage="review", attempt=len(prior) + 1,
-                payload={"canonical_id": finding_id, "pass": handoff["pass"], **proof})
-        roster = orchestrator.r2_roster(set(handoff["addressed"]))
-        handouts = []
-        trees = self._current_code(list(self.contract["expected_repos"]))[1]
         events = self.store.read_events()
+        attempt = sum(1 for event in events if event.get("kind") == "address") + 1
+        problems = self._handoff_problems(orchestrator, artifact, events)
+        artifact, tested, unresolved = self._resolve_reported_tests(orchestrator, artifact)
+        problems += [line for line in unresolved if line not in problems]
+        if problems:
+            raise EngineError("review-address wrote nothing; every item below needs "
+                              "fixing:\n- " + "\n- ".join(problems))
+        at = _now()
+        handoff, specs = orchestrator.plan_fix_handoff(artifact, at=at, attempt=attempt)
+        rows = {row["canonical_id"]: row for row in orchestrator.findings(events)}
+        after: dict[str, str] = {}
+        for finding_id, proof in tested.items():
+            specs.append({"kind": "proof", "at": at, "stage": "review", "attempt": attempt,
+                          "payload": {"canonical_id": finding_id, "pass": handoff["pass"],
+                                      **proof}})
+            after[finding_id] = finding_protocol.CLOSURE[rows[finding_id]["kind"]]["state"]
+        roster = orchestrator.r2_roster(set(handoff["addressed"]))
+        trees = self._current_code(list(self.contract["expected_repos"]))[1]
+        prepared = []
         for expert, ids in roster.items():
             review_input = orchestrator.r2_input(
                 expert, ids, hunks=handoff["hunks"], proofs=handoff["proofs"],
-                reclassifications=handoff["reclassifications"])
+                reclassifications=handoff["reclassifications"], states=after)
             # an R2 per address pass: after a reopen the expert rechecks again (S6-2)
             earlier = [e for e in events if e.get("kind") == "handout"
                        and e.get("stage") == "review" and e.get("round") == 2
                        and e["payload"].get("expert_id") == expert]
-            handouts.append(orchestrator.handout(
+            spec, ready = orchestrator.handout_spec(
                 expert_id=expert, stage="review", round=2, attempt=len(earlier) + 2,
-                at=_now(),
-                expert_instructions=review.expert_prompt(expert),
-                review_input=review_input, finding_ids=ids, code_trees=trees))
+                at=at, expert_instructions=review.expert_prompt(expert),
+                review_input=review_input, finding_ids=ids, code_trees=trees)
+            specs.append(spec)
+            prepared.append(ready)
+        try:
+            written = self.store.append_batch(writer=self.authority.writer("cli"),
+                                              first=specs[0], children=lambda _head: specs[1:])
+        except StoreError as exc:
+            raise EngineError(f"review-address wrote nothing: {exc}") from exc
+        handouts = [orchestrator.handout_written(event, ready) for event, ready in
+                    zip([e for e in written if e["kind"] == "handout"], prepared)]
         self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
+
+    def _handoff_problems(self, orchestrator, artifact: Any,
+                          events: Sequence[Mapping[str, Any]]) -> list[str]:
+        """Every item of a fixing pass the closure table refuses, one line each: the
+        finding, its kind and state, what is wrong and how it closes. Checked before
+        anything is written, so one refusal names all of them (``review_address``)."""
+        items = artifact.get("items") if isinstance(artifact, Mapping) else None
+        if not isinstance(items, list):
+            return []
+        rows = {row["canonical_id"]: row for row in orchestrator.findings(list(events))}
+        answered = {e["payload"].get("handout_event_id") for e in events
+                    if e.get("kind") == "answer"}
+        awaiting = {cid for e in events if e.get("kind") == "handout" and e.get("round") == 2
+                    and e["event_id"] not in answered
+                    for cid in e["payload"].get("finding_ids") or ()}
+        problems = []
+        for index, item in enumerate(items, 1):
+            if not isinstance(item, Mapping):
+                problems.append(f"item {index}: must be an object")
+                continue
+            finding_id = item.get("finding_id")
+            row = rows.get(finding_id)
+            if row is None:
+                problems.append(f"item {index}: {finding_id!r} is not a finding of this run")
+                continue
+            where = f"{finding_id} ({row['kind']}, {row['status']})"
+            rule = finding_protocol.CLOSURE[row["kind"]]
+            how = (f"close it with a {rule['evidence']} proof"
+                   + (" whose report lists tests_changed" if row["kind"] == "absence" else "")
+                   if rule["evidence"] == "reported_test" else
+                   "address it without a proof; after R2 judges it RESOLVED, close it with "
+                   "review-proof diff_assertion")
+            if row["status"] not in ("open", "invalid_test", "closed_proven"):
+                problems.append(f"{where}: is already {row['status']}; it cannot be addressed")
+                continue
+            if finding_id in awaiting:
+                problems.append(f"{where}: its R2 handout is not answered yet; dispatch that "
+                                "R2 before addressing it again")
+            proof = item.get("proof")
+            etype = proof.get("evidence_type") if isinstance(proof, Mapping) else None
+            if etype in ("reported_test", "diff_assertion") and etype != rule["evidence"]:
+                problems.append(f"{where}: a {row['kind']} finding is not closed by "
+                                f"{etype}; {how}")
+            elif etype == "reported_test" and row["status"] == "closed_proven":
+                problems.append(f"{where}: already has a reported_test proof; R2 judges it "
+                                "(ADEQUATE / TEST_INADEQUATE)")
+        return problems
 
     def _finding_repo(self, file: str) -> tuple[str, str]:
         """The one run repo that holds *file* (a finding's path)."""
@@ -1200,14 +1269,15 @@ class RunEngine:
         report; the engine finds that command passing in a report of the finding's
         repo on its CURRENT tree (``report-tests`` records one in REVIEW) and derives
         the proof from the report. The agent supplies only the command text. Returns
-        (artifact with the derived proof for R2, {finding_id: proof payload})."""
+        (artifact with the derived proof for R2, {finding_id: proof payload}, the
+        problems found: one line per item that cannot be resolved)."""
         items = artifact.get("items") if isinstance(artifact, Mapping) else None
         if not isinstance(items, list):
-            return artifact, {}
+            return artifact, {}, []
         findings = {row["canonical_id"]: row for row in orchestrator.findings()}
         events = self.store.read_events()
         trees = self._current_code(list(self.contract["expected_repos"]))[1]
-        out_items, tested = [], {}
+        out_items, tested, problems = [], {}, []
         for item in items:
             proof = item.get("proof") if isinstance(item, Mapping) else None
             if not isinstance(proof, Mapping) or proof.get("evidence_type") != "reported_test":
@@ -1216,22 +1286,34 @@ class RunEngine:
             finding_id = item.get("finding_id")
             row = findings.get(finding_id)
             if row is None:
-                raise EngineError(f"{finding_id}: unknown finding")
+                out_items.append(item)          # _handoff_problems names it
+                continue
             if set(proof) != {"evidence_type", "command"} \
                     or not isinstance(proof.get("command"), str) or not proof["command"]:
-                raise EngineError(f"{finding_id}: a reported_test proof is exactly "
-                                  '{"evidence_type": "reported_test", "command": "<the '
-                                  'command as written in your report>"}')
-            name, _root = self._finding_repo(row["file"])
+                problems.append(f"{finding_id}: a reported_test proof is exactly "
+                                '{"evidence_type": "reported_test", "command": "<the '
+                                'command as written in your report>"}')
+                continue
+            try:
+                name, _root = self._finding_repo(row["file"])
+            except EngineError as exc:
+                problems.append(f"{finding_id}: {exc}")
+                continue
             found = validation_report.find_command(
                 self.store, events, repo=name, code_tree=trees.get(name) or "",
                 command=proof["command"])
             if found is None:
-                raise EngineError(f"{finding_id}: no validation report of {name} on the "
-                                  "current code has that command passing; run it and "
-                                  "record the report with report-tests --artifact -")
+                problems.append(f"{finding_id}: no validation report of {name} on the "
+                                "current code has that command passing; run it and "
+                                "record the report with report-tests --artifact -")
+                continue
             event, report = found
             changed = report.get("tests_changed")
+            if row["kind"] == "absence" and not (isinstance(changed, list) and changed):
+                problems.append(f"{finding_id} (absence): the report with that command "
+                                "lists no tests_changed; an absence finding closes by a "
+                                "reported_test whose report changed tests")
+                continue
             derived = {"evidence_type": "reported_test", "code_tree": trees[name],
                        "result": "proven", "repo": name,
                        "report_event_id": event["event_id"], "command": proof["command"],
@@ -1240,7 +1322,7 @@ class RunEngine:
             out_items.append({**item, "proof": {
                 **derived, "tests_changed": report.get("tests_changed", [])[:20],
                 "rationale": str(report.get("rationale", ""))[:1500]}})
-        return {**artifact, "items": out_items}, tested
+        return {**artifact, "items": out_items}, tested, problems
 
     @_one_operation
     def review_proof(self, artifact: Mapping[str, Any]) -> dict[str, Any]:
