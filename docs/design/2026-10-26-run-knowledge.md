@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r12 — 步骤 0–7、§3.5、§3.6.9 已实施；步骤 8（聊天）回放后不合入（§3.6.10）；§5 的度量待 S5
+status: r13 — 步骤 0–7、§3.5、§3.6.9 已实施；聊天召回试了三种做法都不合入（§3.6.10、§3.6.11）；§5 的度量待 S5
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -605,6 +605,39 @@ spec 块）保持不变，然后照旧做覆盖率过滤，注入小节指针。
 要再做的话，先解决覆盖率过滤和小单位不匹配的问题（比如按小节聚合各单位再过滤），并用回放加人工判读
 一起看质量，不只看字数和耗时。
 
+#### 3.6.11 聊天召回重做：先按小节聚合再过滤（r13，未合入）
+
+在 §3.6.10 的基础上试了两种"先聚合到小节、再做覆盖率过滤"的做法。两种都一样：4 份 canonical 文档由
+`recall_ddd(purpose="chat")` 给出候选单位，按所属小节聚合；ddd 桶里其他来源照旧；每轮最多 3 个小节
+（和 `recall_all` 的 `max_sections` 一致）。区别在覆盖率按什么文字算：
+
+- **A. 按整节文字算**（和 main 一样），候选小节按覆盖率、再按单位得分排序。
+- **B. 按召回到的那些单位拼起来算**，候选按单位得分排序；每份文档的名额从 2 提到 4。
+
+同一批 519 条真实消息（30 个会话，data.db 只读）：
+
+| | main | §3.6.10 | A | B |
+|---|---|---|---|---|
+| 有小节的消息 | 21 | 13 | 21 | 14 |
+| 只有项目指针 | 0 | 5 | 0 | 4 |
+| 每块最多 / 平均小节数 | 3 / 1.57 | 7 / 2.54 | 3 / 2.90 | 3 / 2.36 |
+| 小节来自 | TECH 16 · PROJECT 7 · PRODUCT 4 · IMPROVEMENT 4 | TECH 9 · PRODUCT 9 · IMPROVEMENT 8 · PROJECT 5 | IMPROVEMENT 22 · TECH 19 · PROJECT 10 · PRODUCT 8 | IMPROVEMENT 10 · TECH 9 · PRODUCT 9 · PROJECT 3 |
+| DDD 块合计字符 | 5431 | 5284 | 6433 | 5182 |
+| 召回耗时中位数 / p90 | 167 / 445 ms | 146 / 427 ms | 198 / 557 ms | 184 / 602 ms |
+
+逐条看 A：有小节的消息数回到了 21，但新增的指针大多是几个又大又泛的小节——IMPROVEMENT 的 What Failed、
+TECH 的 Key Subsystems、PROJECT 的 Recent Decisions，几乎每条消息都带上（"你 dive deep 下我现在感觉我们很慢"
+从 TECH 的 Output Format Protocol 变成 Key Subsystems + What Failed + Recent Decisions）。原因：按整节算覆盖率，
+几十万字的小节对任何消息都能过线，每份文档单独排名又让它们各自都有名额。B 回到了 §3.6.10 的问题：单位
+小，覆盖的词少，过线的少。两种耗时都上升超过 10%（A +19%，B +10% 中位数、+35% p90）。
+
+结论：两种都不合入，聊天保持 main 的做法。
+
+根因判断：聊天注入的是**小节指针**（`- **TECH.md** § Key Subsystems`），不是内容。在 SwarmAI 这种单份文档
+几十万字、小节很大的 DDD 里，一个小节指针本身信息很少，读的人不可能去读整个 What Failed。所以怎么排小节、
+怎么过滤，都改变不了"注入的东西有没有用"。真正的杠杆是让聊天注入**条目内容**（和 pipeline 一样，带出处、
+有字数上限），但这改变了聊天每轮的注入内容和成本，是另一份设计，需要 XG 决定要不要做。
+
 ## 4. 不做的
 
 - BUILD 不再召回。THINK / PLAN 只读 EVALUATE 之后算好的 knowledge_design.md，阶段中途不再召回；agent 在
@@ -666,3 +699,4 @@ S5 加两个数，按 run 统计：
 - r10（2026-10-26）：步骤 5、6 实施（§3.6.7）：加载器只跳过坏的那一份；`recall_ddd` + 配置表 + 样例集脚本，16 条样例上 requirement 4/7 → 7/7、design 7/11 → 8/11、review 2/2 不变，耗时下降。
 - r11（2026-10-26）：步骤 7 实施（§3.6.8）：knowledge.md 按 requirement、EVALUATE 之后 knowledge_design.md 按 design（`knowledge_recalled` 事件）、专家块按 review、REFLECT 候选取两处；删掉 `recall_ddd_entries`。
 - r12（2026-10-27）：PRODUCT 按段落召回（§3.6.9，`split_blocks` + `block` mode），样例集改为按读者看得到的文本计分；步骤 8 回放 519 条真实消息，成本标准满足但质量好坏参半（有小节的消息 21 → 13），不合入（§3.6.10）。
+- r13（2026-10-27）：聊天召回按小节聚合再过滤，两种做法回放 519 条真实消息都不合入（§3.6.11）：按整节算覆盖率会让几个大而泛的小节几乎每轮都出现，按单位算又过线太少，耗时都上升超过 10%。根因是聊天注入的是小节指针，不是内容。
