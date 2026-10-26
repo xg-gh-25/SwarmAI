@@ -30,6 +30,9 @@ Public symbols:
 - ``recall_all``      — the unified multi-domain fan-out
 - ``recall_ddd_entries`` — up to N content-bearing DDD entries (for callers whose
   reader cannot follow a section pointer, e.g. pipeline review sub-agents)
+- ``recall_ddd`` / ``DDD_PURPOSES`` — DDD recall by PURPOSE (run-knowledge §3.6.2):
+  each doc ranked on its own with its own quota and char budget, ``- [x]`` done items
+  skipped, typed entries soft-weighted, template sections pinned
 - ``DOMAINS``         — the canonical domain key tuple
 """
 from __future__ import annotations
@@ -871,6 +874,154 @@ def recall_ddd_entries(query: str, project: Optional[str], top_n: int = 8) -> li
     sections_by_doc = _parse_docs_sections(docs_text)
     return _ddd_entry_hits(query, docs_text, max(1, int(top_n)),
                            sections_by_doc=sections_by_doc)
+
+
+# ── DDD recall by purpose (run-knowledge §3.6.2) ─────────────────────────────
+# What each reader of a project's DDD needs, as DATA: per doc, how to recall it
+# ("entry" = ``- `` entries, "section" = whole ``## `` sections), how many, and how
+# many characters that doc may use. Docs are ranked ONE AT A TIME -- never in one
+# shared corpus, where TECH + IMPROVEMENT (~89% of SwarmAI's entries) out-numbered
+# PRODUCT / PROJECT whatever the query (run_85e81059). A doc's unused quota is not
+# handed to another doc. ``weight`` multiplies the score of entries tagged with one of
+# ``weighted``; ``pinned`` sections (DDD template names) come whatever the query, and
+# ``pointers`` are named with their source only. Missing docs/sections are skipped.
+TYPE_WEIGHT = 1.5          # §3.6.6: best of 1.0 / 1.2 / 1.5 on the case set (design 8/11 vs 7/11)
+DDD_PURPOSES: dict[str, dict] = {
+    "requirement": {
+        "docs": {"PRODUCT.md": ("section", 2, 1800), "PROJECT.md": ("entry", 4, 1200)},
+        "weighted": ("decision", "principle"),
+        "pinned": {"PRODUCT.md": ("Vision", "Success Criteria", "Target Users")},
+        "pointers": {"PRODUCT.md": ("Non-Goals",)},
+    },
+    "design": {
+        "docs": {"TECH.md": ("entry", 4, 1800), "IMPROVEMENT.md": ("entry", 3, 1200)},
+        "weighted": ("guideline", "pitfall", "risk", "decision"),
+    },
+    "review": {
+        "docs": {"TECH.md": ("entry", 4, 1500), "IMPROVEMENT.md": ("entry", 2, 1000)},
+        "weighted": ("pitfall", "decision", "guideline"),
+    },
+    "chat": {
+        "docs": {"PRODUCT.md": ("entry", 2, 600), "TECH.md": ("entry", 2, 600),
+                 "IMPROVEMENT.md": ("entry", 2, 600), "PROJECT.md": ("entry", 2, 600)},
+        "weighted": (),
+    },
+}
+PINNED_CAP = 450           # one pinned section, inside its doc's budget
+_DONE_RE = re.compile(r"^-\s*\[[xX]\]")
+_TYPE_RE = re.compile(r"^-\s*\[(\w+)\]")
+_META_RE = re.compile(r"[ \t]*<!--.*?-->[ \t]*\n?", re.S)
+
+
+def _readable(text: str) -> str:
+    """*text* without its metadata comments (maturity / ref markers): what a reader
+    needs, so the budget is spent on content. ``content`` keeps the original."""
+    return _META_RE.sub("", text).strip()
+
+
+def _entry_type(text: str) -> str:
+    m = _TYPE_RE.match(text.lstrip())
+    return m.group(1).lower() if m else ""
+
+
+def _doc_entries(query: str, doc: str, text: str, sections: dict, quota: int,
+                 weighted: tuple, weight: float) -> list[dict]:
+    hits = _ddd_entry_hits(query, {doc: text}, quota * 4 + 8,
+                           sections_by_doc={doc: sections})
+    out = []
+    for h in hits:
+        if _DONE_RE.match(h["content"].lstrip()):
+            continue                     # a done item is not judgment
+        score = h["score"] * (weight if _entry_type(h["content"]) in weighted else 1.0)
+        out.append({**h, "score": score, "kind": "entry"})
+    out.sort(key=lambda h: h["score"], reverse=True)
+    return out[:quota]
+
+
+def _doc_sections(query: str, doc: str, sections: dict, quota: int,
+                  skip: set) -> list[dict]:
+    from core import memory_index
+    pool = {k: v for k, v in sections.items() if k not in skip and v.strip()}
+    if not pool:
+        return []
+    raw = memory_index._bm25_scores(query, pool)
+    if not raw:
+        return []
+    norm = memory_index._normalize_bm25_scores(raw)
+    ranked = sorted(norm, key=lambda k: norm[k], reverse=True)[:quota]
+    return [{"doc": doc, "section": k, "score": norm[k], "kind": "section",
+             "content": f"## {k}\n{pool[k].strip()}"} for k in ranked if norm[k] > 0]
+
+
+def _section_named(sections: dict, name: str) -> Optional[str]:
+    """The section whose heading starts with *name* (a template heading may carry a
+    suffix, e.g. ``Competitive Positioning (2026-05-28)``)."""
+    for k in sections:
+        if k == name or k.startswith(name + " ") or k.startswith(name + "("):
+            return k
+    return None
+
+
+def recall_ddd(query: str, project: Optional[str], purpose: str,
+               weight: Optional[float] = None) -> list[dict]:
+    """A project's DDD recalled for *purpose* (a key of ``DDD_PURPOSES``).
+
+    Returns hits in config order (pinned first, then each doc's ranked hits), each
+    ``{"doc", "section", "kind", "score", "content", "clipped"}``: ``content`` is the
+    whole entry/section (ids are taken from it), ``clipped`` is it cut by the §3.0
+    rules to the doc's budget, by rank, never skipping. ``kind`` is entry / section /
+    pinned / pointer. A doc that is missing or unreadable is simply absent; one that
+    fails to parse is skipped alone (§3.6.5 H1-H3). READ-only, keyword-only.
+    Raises ``KeyError`` only for an unknown *purpose* (a caller bug)."""
+    from core import recall_filter
+    cfg = DDD_PURPOSES[purpose]
+    _base, docs_text = _load_ddd_docs_text(project)
+    if not docs_text:
+        return []
+    w = TYPE_WEIGHT if weight is None else float(weight)
+    has_query = bool((query or "").strip())
+    out: list[dict] = []
+    for doc, (mode, quota, cap) in cfg["docs"].items():
+        text = docs_text.get(doc)
+        if not text:
+            continue
+        try:
+            sections = _parse_docs_sections({doc: text}).get(doc) or {}
+            group: list[dict] = []
+            pinned = [_section_named(sections, n) for n in cfg.get("pinned", {}).get(doc, ())]
+            pointers = [_section_named(sections, n) for n in cfg.get("pointers", {}).get(doc, ())]
+            for name in (p for p in pinned if p):
+                group.append({"doc": doc, "section": name, "kind": "pinned", "score": 1.0,
+                              "content": f"## {name}\n{sections[name].strip()}"})
+            for name in (p for p in pointers if p):
+                group.append({"doc": doc, "section": name, "kind": "pointer", "score": 1.0,
+                              "content": f"## {name} (not shown: read {doc}#{name})"})
+            if has_query:
+                if mode == "section":
+                    group += _doc_sections(query, doc, sections, quota,
+                                           {p for p in pinned + pointers if p})
+                else:
+                    group += _doc_entries(query, doc, text, sections, quota,
+                                          tuple(cfg.get("weighted", ())), w)
+        except Exception:  # noqa: BLE001 -- one doc that fails to parse is skipped alone
+            logger.warning("recall_ddd: %s of project %s skipped", doc, project, exc_info=True)
+            continue
+        # pinned sections first, each to PINNED_CAP; the rest by rank inside the doc's
+        # budget (§3.0 R3: clipped, never skipped for a later one)
+        for h in group:
+            if h["kind"] == "pinned":
+                h["clipped"] = recall_filter.clip(_readable(h["content"]), PINNED_CAP,
+                                                  f"{doc}#{h['section']}")
+        used = sum(len(h["clipped"]) for h in group if h["kind"] == "pinned")
+        rest = [h for h in group if h["kind"] != "pinned"]
+        room = cap - used
+        cut = (recall_filter._budget_one("ddd", [{**h, "content": _readable(h["content"])}
+                                                 for h in rest], {"ddd": room})
+               if rest and room >= recall_filter.MIN_CLIP_ROOM else [])
+        for h, c in zip(rest, cut):
+            h["clipped"] = c["content"]
+        out += [h for h in group if "clipped" in h]
+    return out
 
 
 def _recall_ddd(query: str, project: Optional[str],

@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r9 — 步骤 0–4 和 §3.5 已实施；§3.6（DDD 按用途召回，步骤 5–8）待实施；§5 的度量待 S5
+status: r10 — 步骤 0–6 和 §3.5 已实施；步骤 7、8 待实施；§5 的度量待 S5
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -482,6 +482,45 @@ data.db）量三个数：注入条目里 PRODUCT / PROJECT 的占比、注入字
 
    类型加权的系数在这组样例上从 1.0 / 1.2 / 1.5 里选命中最好的；分不出差别就取 1.0，也就是不加权。
 
+#### 3.6.7 步骤 5、6 的实施和实测（r10）
+
+**步骤 5**（`b88de6020`）：`_load_ddd_docs_text` 跳过读不了的那一份（`OSError`、`UnicodeDecodeError`），
+记一行 warning。矩阵 `tests/test_ddd_absent_or_broken.py` 38 个测试：在 main 上只有非 UTF-8 那一种状态的
+7 个红；把捕获改回只有 `OSError`，同样 7 个变红。
+
+**步骤 6**：`recall_multi.recall_ddd` + `DDD_PURPOSES`，`tests/test_recall_ddd_purpose.py`（9 个），
+`scripts/ddd_recall_eval.py`，样例集 `Projects/SwarmAI/.artifacts/ddd_recall_cases.json`（16 条：7 个真实
+run 的需求 + 9 条常见任务）。
+
+和 §3.6.2 不同的地方：
+
+- **小节匹配按前缀**：模板的小节名后面常带后缀（`Design Philosophy — When Beliefs ...`），按"名字开头"匹配。
+- **`clipped` 去掉元数据注释**（`<!-- maturity ... -->`、`<!-- ref:0 ... -->`）再算预算；`content` 保留原文，
+  id 仍然取自原文。实测 PRODUCT 的固定小节原来一半预算花在注释上。
+- **review 名额 TECH 从 3 改成 4，加权类型加上 decision、guideline**：样例集里 `nav-pool-review` 的期望
+  条目在 TECH 里单独排第 4，名额 3 时漏掉；改了以后两条都命中。
+- **`TYPE_WEIGHT` 取 1.5**：design 那一组 1.0 / 1.2 是 7/11，1.5 是 8/11；其余两组三个系数一样。
+
+样例集结果（只读 SwarmAI 的真实 DDD；before = 原来 4 份混排的 `recall_ddd_entries`，top 6，review top 5）：
+
+| purpose | before | after（1.5） |
+|---|---|---|
+| requirement（全部是 PRODUCT / PROJECT 的期望条目） | 4/7 | 7/7 |
+| design | 7/11 | 8/11 |
+| review | 2/2 | 2/2 |
+| 召回耗时中位数 | 46.8 ms | 38.8 ms |
+
+§3.6.6 的三条合入标准都满足：没有一组变差；requirement 里 PRODUCT / PROJECT 的期望条目从 0 提高到全部
+命中（run_85e81059 那条 live-tier 决定也在里面）；耗时下降。
+
+要说清楚的：
+
+- **样例只有 16 条，而且名额和系数是在同一组样例上调的**，有过拟合的风险。以后每多一个真实 run，就把它
+  的需求补进样例集再跑一次，数字变差就回来调。
+- design 还有 3 条漏掉：`run_3fad89b4` 的两条（需求是英文，DDD 条目是中英混写的 "run-commit git-adds"，
+  关键词对不上）和 `approve-into-void`（在 IMPROVEMENT 里单独排第 10，名额 3）。这是关键词召回的限制，
+  名额加大会把噪音也带进来，这一步不改。
+
 ## 4. 不做的
 
 - BUILD 不再召回。THINK / PLAN 只读 EVALUATE 之后算好的 knowledge_design.md，阶段中途不再召回；agent 在
@@ -540,3 +579,4 @@ S5 加两个数，按 run 统计：
 - r7（2026-10-26）：步骤 4 实施（§3.4.1）。
 - r8（2026-10-26）：§3.5 实施（§3.5.1），并修了 REFLECT 候选带 bullet 导致 reinforces / refines 永远落空的 bug。
 - r9（2026-10-26）：XG 指出 EVALUATE 只召回了 TECH / IMPROVEMENT，需求分析该看 PRODUCT / PROJECT，THINK / PLAN 该看 TECH / IMPROVEMENT。实测 run_85e81059 确认是 4 份文档混排、数量压倒相关性。新增 §3.6：平台 `recall_ddd` 按用途分配置，pipeline 分阶段接入，聊天单独一步回放验证；加上没有 DDD / DDD 不完整或损坏时都不能 crash 的硬性要求和测试矩阵（实测发现一份非 UTF-8 文档会让整个项目的 DDD 召回失效）。步骤 5–8 待实施。
+- r10（2026-10-26）：步骤 5、6 实施（§3.6.7）：加载器只跳过坏的那一份；`recall_ddd` + 配置表 + 样例集脚本，16 条样例上 requirement 4/7 → 7/7、design 7/11 → 8/11、review 2/2 不变，耗时下降。
