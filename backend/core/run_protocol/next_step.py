@@ -114,6 +114,12 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
     # an R2 line used a word its finding does not take (design §2.3 point 3): one
     # re-dispatch per expert, before the stage can complete
     from core.run_protocol import review as review_protocol
+    uncovered = review_protocol.uncovered_addresses(events)
+    if uncovered:
+        return "run", _cmd(engine, "review-address --artifact -"), \
+            ("addressed without an R2 handout: " + ", ".join(uncovered) + "; review-address "
+             "with {\"pass\": <this pass>, \"items\": []} (or your next pass) dispatches "
+             "their R2, then spawn it")
     redo = review_protocol.r2_redispatch_targets(events)
     if redo:
         named = "; ".join(f"{expert}: " + ", ".join(f"{cid} said {word}" for cid, word

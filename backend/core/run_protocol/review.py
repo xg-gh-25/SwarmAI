@@ -29,6 +29,23 @@ Do not emit a VERDICT line for REVIEW experts."""
 
 
 
+def uncovered_addresses(events: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Findings whose latest address event no later R2 handout lists (design 2026-10-26-
+    pipeline-review-closure §2.3 point 7): an address written without its R2 (a pass
+    that failed half way before passes were one batch). The next ``review-address``
+    covers them; RV-5 keeps REVIEW open until one does."""
+    last_address: dict[str, int] = {}
+    last_r2: dict[str, int] = {}
+    for index, event in enumerate(events):
+        payload = event.get("payload") or {}
+        if event.get("kind") == "address" and payload.get("canonical_id"):
+            last_address[payload["canonical_id"]] = index
+        elif event.get("kind") == "handout" and event.get("round") == 2:
+            for cid in payload.get("finding_ids") or ():
+                last_r2[cid] = index
+    return sorted(cid for cid, index in last_address.items() if last_r2.get(cid, -1) < index)
+
+
 def r2_redispatch_targets(events: Sequence[Mapping[str, Any]]
                           ) -> dict[str, tuple[str, dict[str, str]]]:
     """{expert: (the R2 answer, {finding id: the word it used that was not allowed})}

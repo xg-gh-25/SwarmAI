@@ -144,6 +144,8 @@ _SPECS = [
     _c("RV-2", "review", "audit", "review", "review", CODE),
     # S6-2: REVIEW completes only on code a review round saw
     _c("RV-4", "review", "stage", "review", "review", CODE),
+    # every addressed finding went to an R2 handout (review-closure §2.3 point 7)
+    _c("RV-5", "review", "stage", "review", "review", CODE),
     _c("FX-1", "fixing_spec", "", "review", "review", CODE),
 ]
 _SPECS += [
@@ -403,6 +405,12 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         )
         return _result(ok, "Gate-0 handouts have parsed answers" if ok
                        else "Gate-0 handout lacks parsed answer")
+    if check_id == "RV-5":
+        from core.run_protocol.review import uncovered_addresses
+        missing = uncovered_addresses(list(context.events))
+        return _result(not missing, "every addressed finding went to R2" if not missing
+                       else "addressed without an R2 handout (review-address with no items "
+                            f"dispatches it): {missing}")
     if check_id == "RV-4":
         unreviewed = context.run.get("unreviewed") or {}
         if not isinstance(unreviewed, Mapping):

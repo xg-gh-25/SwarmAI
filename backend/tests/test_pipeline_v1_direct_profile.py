@@ -35,6 +35,7 @@ def test_direct_registers_no_document_or_decision_check():
 def test_trivial_keeps_its_stages_and_document_checks():
     """S6-1 removed the runner's checks (DS-2b/4b/9b, BX-1/2, TS-2, LG-2/5, QX-1/2, MD-2)
     and added BX-3; S6-2 added RV-4; S6-4c removed RQ-3 / RQ-8b; TS-4 was added after it;
+    RV-5 (every addressed finding went to R2) came with the review-closure design;
     2026-10-26 removed MD-1 / MD-3 and renamed the "push" effect "audit" (no push
     verdict); every other trivial check is as the frozen snapshot recorded it."""
     snap = json.loads(SNAPSHOT.read_text())
@@ -44,7 +45,7 @@ def test_trivial_keeps_its_stages_and_document_checks():
                "MD-1", "MD-3"}        # 2026-10-26: no push verdict
     assert list(lifecycle.PROFILE_STAGES["trivial"]) == snap["stages"]
     now = {s.check_id: s for s in checks._for("trivial")}
-    assert set(now) == (set(snap["checks"]) - removed) | {"BX-3", "RV-4", "TS-4"}
+    assert set(now) == (set(snap["checks"]) - removed) | {"BX-3", "RV-4", "RV-5", "TS-4"}
     for cid, row in snap["checks"].items():
         if cid in removed or cid == "TS-1":
             continue

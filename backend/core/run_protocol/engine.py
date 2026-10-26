@@ -1175,24 +1175,28 @@ class RunEngine:
                           "payload": {"canonical_id": finding_id, "pass": handoff["pass"],
                                       **proof}})
             after[finding_id] = finding_protocol.CLOSURE[rows[finding_id]["kind"]]["state"]
-        roster = orchestrator.r2_roster(set(handoff["addressed"]))
+        # every addressed finding no R2 covered yet, not only this call's (§2.3 point 7)
+        earlier = set(review.uncovered_addresses(events)) - set(handoff["addressed"])
+        roster = orchestrator.r2_roster(set(handoff["addressed"]) | earlier)
+        old_hunks, old_proofs = self._addressed_text(events, sorted(earlier))
         redispatch: dict[str, tuple[str, dict[str, str]]] = {}
-        if not handoff["addressed"]:
+        if not handoff["addressed"] and not earlier:
             # an empty pass re-asks the R2 lines that used a word not allowed (once per
             # expert, design §2.3 point 3)
             for expert, (answer_id, wrong) in self.r2_redispatch_targets(events).items():
                 roster[expert] = sorted(wrong)
                 redispatch[expert] = (answer_id, wrong)
         if not specs and not roster:
-            raise EngineError("review-address has nothing to record: no items, and no R2 "
-                              "line to re-dispatch")
+            raise EngineError("review-address has nothing to record: no items, no "
+                              "address without its R2, and no R2 line to re-dispatch")
         trees = self._current_code(list(self.contract["expected_repos"]))[1]
         prepared = []
         for expert, ids in roster.items():
             allowed = {cid: sorted(finding_protocol.r2_allowed(after.get(cid, rows[cid]["status"])))
                        for cid in ids}
             answer_id, wrong = redispatch.get(expert, (None, {}))
-            hunks, proofs = handoff["hunks"], handoff["proofs"]
+            hunks = {**old_hunks, **handoff["hunks"]}
+            proofs = {**old_proofs, **handoff["proofs"]}
             if redispatch.get(expert):
                 hunks, proofs = self._addressed_text(events, ids)
             review_input = orchestrator.r2_input(
