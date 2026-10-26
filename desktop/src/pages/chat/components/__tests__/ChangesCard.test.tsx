@@ -3,7 +3,8 @@
  *
  * What is tested (real AssistantMessageView + turnView, leaf contexts mocked):
  * - the header counts files (with the not-listed ones) and totals +/- once
- * - one row per file: folder dimmed + name, `new` / `deleted`, +a −d, the bar
+ * - one row per file (the shared ItemRow): name, folder dimmed, `added` / `deleted`,
+ *   +a −d (2026-10-26: the five-square bar is gone, design turn-cards-unified §2)
  * - opening a diffable row fetches its diff on demand and shows the lines (file
  *   header dropped); a pruned diff says so; an oversized row says "File only" and
  *   the card says why; a binary row says "binary"
@@ -13,13 +14,11 @@
  * - a file that is also a product shows in the deliverables section only
  * - it waits for the turn to end; changes and deliverables are two sections of ONE
  *   output card, changes first
- * - diffBar: share of adds/deletes, grey under five lines
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import { FOLD_DELAY_MS } from '../../../../hooks/useLinger';
 import { AssistantMessageView } from '../AssistantMessageView';
-import { diffBar } from '../ChangesCard';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { OPEN_FILE_EVENT } from '../../../../components/common/MarkdownRenderer';
 import type { Message, ContentBlock } from '../../../../types';
@@ -68,20 +67,20 @@ describe('ChangesCard', () => {
     renderView([...WORK, CHANGES, tx('Done.')]);
     const card = screen.getByTestId('turn-changes');
     expect(within(card).getByText('5 files changed')).toBeTruthy();
-    const header = card.querySelector('header')!;
+    const header = within(card).getByTestId('item-box-title');
     expect(header.textContent).toContain('+9001');
     expect(header.textContent).toContain('−4');
     expect(within(card).getByText('1 more files are not listed.')).toBeTruthy();
   });
 
-  it('rows: folder dimmed, status tags, counts, bar', () => {
+  it('rows: name, folder dimmed, status tags, counts', () => {
     renderView([...WORK, CHANGES, tx('Done.')]);
     const a = row('src/a.ts');
-    expect(a.textContent).toContain('src/');
-    expect(a.textContent).toContain('a.ts');
+    expect(a.querySelector('[data-item-name]')!.textContent).toBe('a.ts');
+    expect(a.textContent).toContain('/r/src');
     expect(a.textContent).toContain('+1');
     expect(a.textContent).toContain('−1');
-    expect(within(row('src/big.ts')).getByText('new')).toBeTruthy();
+    expect(within(row('src/big.ts')).getByText('added')).toBeTruthy();
     expect(within(row('old.py')).getByText('deleted')).toBeTruthy();
     expect(within(row('logo.png')).getByText('binary')).toBeTruthy();
   });
@@ -126,10 +125,10 @@ describe('ChangesCard', () => {
     const on = (e: Event) => seen.push((e as CustomEvent).detail.path);
     document.addEventListener(OPEN_FILE_EVENT, on);
     renderView([...WORK, CHANGES, tx('Done.')]);
-    fireEvent.click(within(row('src/a.ts')).getByTitle('/r/src/a.ts'));
+    fireEvent.click(row('src/a.ts').querySelector('[data-item-name]')!);
     document.removeEventListener(OPEN_FILE_EVENT, on);
     expect(seen).toEqual(['/r/src/a.ts']);
-    expect(within(row('old.py')).getByTitle('/r/old.py').tagName).not.toBe('BUTTON');
+    expect(row('old.py').querySelector('[data-item-name]')!.closest('button')).toBeNull();
   });
 
   it('no tool-derived "This turn changed" chips, with or without turn_changes', () => {
@@ -167,14 +166,5 @@ describe('ChangesCard', () => {
     expect(ids.indexOf('turn-changes')).toBeLessThan(ids.indexOf('output-deliverables'));
     expect(container.contains(card)).toBe(true);
     vi.useRealTimers();
-  });
-});
-
-describe('diffBar', () => {
-  it('splits five squares by share and greys the rest under five lines', () => {
-    expect(diffBar(10, 0)).toEqual(['add', 'add', 'add', 'add', 'add']);
-    expect(diffBar(4, 6)).toEqual(['add', 'add', 'del', 'del', 'del']);
-    expect(diffBar(1, 1)).toEqual(['add', 'del', 'none', 'none', 'none']);
-    expect(diffBar(0, 0)).toEqual(['none', 'none', 'none', 'none', 'none']);
   });
 });

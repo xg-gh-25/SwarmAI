@@ -27,6 +27,9 @@ import { tf } from '../tf';
 import { docMeta } from '../runDocMeta';
 import { ReadOnlyContext } from '../readOnlyContext';
 import { ChangesCard } from './ChangesCard';
+import { ItemBox, ItemRow, ITEM_ACTION, shortFolder } from './ItemRows';
+
+export { shortFolder };
 
 
 /** A verdict that blocks is red; anything else that needs a look stays amber. */
@@ -150,34 +153,10 @@ export function middleEllipsis(name: string, max = 28): string {
 
 type RemoteProduct = Extract<TurnProductContent, { product: 'remote' }>;
 
-/** A path's folder, home shown as ~. */
-function folderOf(abs: string): string {
-  const dir = abs.replace(/\/[^/]*$/, '') || '/';
-  return dir.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
-}
-
-/** A folder cut in the MIDDLE, keeping its root and where it ends
- *  ("~/.swarm-ai/…/2-understanding"); the end says which folder it is. */
-export function shortFolder(dirPath: string): string {
-  const dir = folderOf(`${dirPath.replace(/\/+$/, '')}/x`);
-  const segs = dir.split('/').filter(Boolean);
-  const keep = segs[0] === '~' ? 2 : 1;          // "~/<first>" or "/<first>"
-  if (segs.length - keep - 1 < 2) return dir;    // nothing worth cutting
-  const head = `${dir.startsWith('/') ? '/' : ''}${segs.slice(0, keep).join('/')}`;
-  return `${head}/…/${segs[segs.length - 1]}`;
-}
-
-/** THE product list (v3, 2026-10-26, Gawan), one look in the turn and on the output
- *  card: one bordered box that hugs its widest row, a file per line; the full name as a
- *  link (never shortened), its folder after it, Copy right after that. The whole row
- *  opens the file in the Canvas, so there is no separate Open button. */
-const TILE_BOX = 'w-fit max-w-full rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden';
-const TILE_LIST = 'flex flex-col divide-y divide-[var(--color-border)]';
-const CARD_TILE = 'group flex items-center gap-2.5 min-w-0 px-3 py-1.5 transition-colors';
-const CARD_TILE_ACT = 'cursor-pointer hover:bg-[var(--color-hover)]';
-const ROW_NAME = 'break-all text-[13px] text-primary';
-const ROW_DIR = 'min-w-[3ch] shrink-[100] truncate font-mono text-[11.5px] text-[var(--color-text-dim)]';
-const ROW_BTN = 'icon-btn shrink-0 -ml-1 text-[var(--color-text-dim)] group-hover:text-[var(--color-text-secondary)]';
+/** THE product list (2026-10-26, Gawan), one look in the turn and on the output card:
+ *  the shared ItemBox / ItemRow (./ItemRows). The full name as a link (never cut, never
+ *  wrapped), its folder after it, Copy right after that. The whole row opens the file
+ *  in the Canvas, so there is no separate Open button. */
 const DELIV_TITLE = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-dim)]';
 
 /** One file the turn produced: its type badge, the name as a link, its folder;
@@ -195,26 +174,18 @@ function DeliverableCardTile({ file }: { file: TurnDeliverable }) {
       setTimeout(() => setCopied(false), 1500);
     }
   };
-  const Head = readOnly ? 'div' : 'button';
-  const headProps = readOnly ? {} : { type: 'button' as const, onClick: (e: MouseEvent) => { e.stopPropagation(); open(); } };
   const copyLabel = copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path');
   return (
-    <li data-testid="deliverable" data-path={file.absolutePath} onClick={readOnly ? undefined : open}
-      className={`${CARD_TILE} ${readOnly ? '' : CARD_TILE_ACT}`}>
-      <Head {...headProps} title={file.absolutePath} className="min-w-0 flex items-center gap-2.5 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
-        <FileTypeIcon name={name} size="sm" />
-        {/* the name, then its folder in grey on the same line; hover: the full path */}
-        <span className="min-w-0 flex items-baseline gap-2">
-          <span data-testid="deliverable-name" className={`${ROW_NAME} ${readOnly ? '' : 'group-hover:underline'}`}>{name}</span>
-          <span data-testid="deliverable-dir" title={file.absolutePath} className={ROW_DIR}>{shortFolder(file.absolutePath.replace(/\/[^/]*$/, '') || '/')}</span>
-        </span>
-      </Head>
-      {!readOnly && (
-        <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className={ROW_BTN}>
+    <ItemRow testId="deliverable" data={{ path: file.absolutePath }}
+      badge={<FileTypeIcon name={name} size="sm" />} name={name} nameTestId="deliverable-name" link
+      folder={shortFolder(file.absolutePath.replace(/\/[^/]*$/, '') || '/')} folderTitle={file.absolutePath}
+      folderTestId="deliverable-dir" openTitle={file.absolutePath}
+      onOpen={readOnly ? undefined : open} rowOpens
+      actions={!readOnly && (
+        <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className={ITEM_ACTION}>
           <span aria-hidden="true" className="material-symbols-outlined icon-sm">{copied ? 'check' : 'content_copy'}</span>
         </button>
-      )}
-    </li>
+      )} />
   );
 }
 
@@ -227,19 +198,15 @@ function RemoteProductCardTile({ product }: { product: RemoteProduct }) {
   const go = () => void openExternal(product.url!);
   const label = tf(t, 'chat.turn.deliverables.openLink', 'Open link');
   return (
-    <li data-testid="remote-product" data-tool={product.tool} onClick={act ? go : undefined}
-      className={`${CARD_TILE} ${act ? CARD_TILE_ACT : ''}`}>
-      <span aria-hidden="true" className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">send</span>
-      <span className="min-w-0 flex items-baseline gap-2">
-        <span className="break-words text-[13px] text-[var(--color-text)]">{product.action}</span>
-        {product.target && <span className={ROW_DIR} title={product.target}>{product.target}</span>}
-      </span>
-      {act && (
-        <button type="button" onClick={(e) => { e.stopPropagation(); go(); }} aria-label={label} title={product.url} className={ROW_BTN}>
+    <ItemRow testId="remote-product" data={{ tool: product.tool }}
+      badge={<span aria-hidden="true" className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">send</span>}
+      name={product.action} folder={product.target || undefined} folderTitle={product.target || undefined}
+      onOpen={act ? go : undefined} rowOpens openTitle={product.url}
+      actions={act && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); go(); }} aria-label={label} title={product.url} className={ITEM_ACTION}>
           <span aria-hidden="true" className="material-symbols-outlined icon-sm">open_in_new</span>
         </button>
-      )}
-    </li>
+      )} />
   );
 }
 
@@ -259,7 +226,7 @@ export function ProductList({ blocks }: { blocks: TurnProductContent[] }) {
       rows.push(<RemoteProductCardTile key={`r-${b.toolUseId}`} product={b} />);
     }
   }
-  return <div data-testid="product-box" className={TILE_BOX}><ul data-testid="product-list" className={TILE_LIST}>{rows}</ul></div>;
+  return <div data-testid="product-list"><ItemBox testId="product-box">{rows}</ItemBox></div>;
 }
 
 /** The turn's remote products (top-level and sub-agent), in order: the output card
@@ -396,13 +363,10 @@ export function OutputCard({ changes, deliverables, summary, remote = [] }: {
       {(deliverables.length > 0 || remote.length > 0 || docs.length > 0) && (
         <div data-testid="output-deliverables">
           {(deliverables.length > 0 || remote.length > 0) ? (
-            <div data-testid="product-box" className={TILE_BOX}>
-              <div className={`px-3 py-1.5 border-b border-[var(--color-border)] ${DELIV_TITLE}`}>{title}</div>
-              <ul className={TILE_LIST}>
-                {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
-                {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
-              </ul>
-            </div>
+            <ItemBox testId="product-box" title={title}>
+              {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
+              {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
+            </ItemBox>
           ) : (
             <div className={`mb-2 ${DELIV_TITLE}`}>{title}</div>
           )}
