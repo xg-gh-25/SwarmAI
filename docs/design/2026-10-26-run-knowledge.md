@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: DRAFT r2 — 加步骤 0（全系统统一条目边界和截断）；待 XG 定 §7
+status: r3 — 步骤 0 已实施（§3.0.1 是实测结果）；步骤 1–4 待 XG 定
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -124,6 +124,37 @@ Pipeline 的核心是 DDD 驱动的自主交付（two-ends 设计 §0）。但�
 - 这一步和 `2026-10-26-recall-precision-and-coverage.md`（r5，今天刚实施）改的是同两个文件。
   D1–D4 的过滤规则不动，本步只改条目边界和截断。动手前 rebase 到最新的 main。
 
+### 3.0.1 步骤 0 的实施和实测（r3）
+
+**和 §3.0 不一样的地方**
+- R2 的回退顺序加了一级：句末 → 行末 → **分句号**（，；、：,;:）→ 空格。每一级都要保留至少一半的
+  可用长度才采用。原因是中文没有空格，只按空格回退会截在词中间。
+- R3 的停止线是 120 字符（`recall_filter.MIN_CLIP_ROOM`）：剩余预算不到 120 字符，而且下一条放不下
+  完整内容时，这一路就停。
+- R1 的实现是 `ddd_entry_lifecycle.split_entries(body)`，内部用 `_scan_entry`。召回、
+  `_memory_outside_prompt`、`repo_guidance._entries` 都调它。
+- pipeline-lessons 的预算也按 R3 走：最新一条放不下时截断它，并给"更早的经验没显示"那句提示留出位置。
+
+**实测**：固定语料是 SwarmAI DDD 和 MEMORY.md 的一份拷贝；查询是 41 个，`recall_suite` 的 33 个
+种子加 8 个日常问题。只测了 ddd 和 context_files 两路，没有碰 data.db，所以没测 Library 和 session。
+
+| 指标 | 改前 | 改后 |
+|---|---|---|
+| `recall_suite` recall@5 / MRR（小节排名） | 0.485 / 0.379 | 0.485 / 0.379 |
+| 条目命中数（前 5，41 个查询） | 199 | 197 |
+| 条目命中里含 `#` 标题或表格（吞进来的内容） | 6 | 0 |
+| 条目命中正文长度中位数 / 最长 | 344 / 6378 | 308 / 2239 |
+| 注入块里被截断的命中：截在句子中间（`…` 结尾） | 35 | 0 |
+| 注入块里被截断的命中：截在句末 / 分句号 / 行末，带出处 | 0 | 36 |
+| ddd 那一路耗时中位数 | 64 ms | 53 ms |
+| context_files 那一路耗时中位数 | 3.1 ms | 3.0 ms |
+
+小节排名不受影响，这也符合预期：本步不改小节打分。条目层面，吞进来的内容没有了；截断全部落在句末、
+分句号或行末，而且都带出处。耗时没有变慢，ddd 那一路快了约 17%，因为每个条目变短了。
+
+**还没测的**：用真实消息回放（`scripts/recall_replay.py`）。它要读 `~/.swarm-ai/data.db`，按
+recall-precision 设计需要 XG 同意后手动跑；Library 和 session 两路的截断效果要靠它来验证。
+
 ### 3.1 一个 workspace 解析函数（步骤 1）
 
 `config.get_swarmws()` 是唯一来源，优先级：`SWARM_WORKSPACE` → `SWARMWS` → `get_app_data_dir() / "SwarmWS"`。
@@ -236,3 +267,4 @@ S5 加两个数，按 run 统计：
 - r2（2026-10-26）：XG 审查指出按字数截会截断语义。实测发现两层问题：条目边界切错（平台召回的
   bug），以及截断在句子中间、预算会让排名倒挂。新增步骤 0，并按 XG 的要求让系统级召回（聊天注入、
   repo_guidance）和 pipeline 用同一套 R1–R4；§3.3、§3.4 不再自定截断规则。
+- r3（2026-10-26）：步骤 0 实施；记录和设计不同的三处，以及改前改后的实测（§3.0.1）。
