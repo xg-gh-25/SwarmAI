@@ -12,6 +12,8 @@ Facts the cases rely on (keep them in sync with templates/eval/golden_set.yaml):
 - `Projects/Demo/2-understanding/TECH.md`: the Demo service listens on port 7421; a
   stale note says it is deployed and running. (Kept out of `context/` so it is not in
   the system prompt: the premise cases test that the agent looks it up.)
+- `Projects/Demo/2-understanding/TECH.md` § Sync: retries after 30s, 60s, 120s; the
+  retry logic spans three modules (queue, worker, backoff) — the risky-change case.
 - `Projects/Demo/2-understanding/PRODUCT.md`: non-goals include a mobile app.
 - `Projects/Demo/2-understanding/IMPROVEMENT.md`: What Failed has three lessons; one
   of them is about tests.

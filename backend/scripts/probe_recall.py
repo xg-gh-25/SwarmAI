@@ -11,6 +11,8 @@ eval runner gives a product case. Subcommands:
   ddd_scope   project-doc recall stays inside the active project, and a question
               that names two projects resolves to none
   archive     an archived memory shard is findable through library recall
+  ranking     the right section ranks near the top: a project-doc section for an
+              English question, and memory sections for Chinese questions
 """
 from __future__ import annotations
 
@@ -186,6 +188,70 @@ def archive(negative: bool) -> int:
                    lambda: _archive_holds(False))
 
 
+# ── ranking ───────────────────────────────────────────────────────────────────
+
+_TECH = """# Demo — Tech
+
+## Storage
+Tickets are stored in Postgres with a nightly vacuum; attachments live in object storage.
+
+## Architecture
+The autonomous pipeline runs in stages: evaluate the requirement, build the change,
+review it, test it, then deliver it. Each stage hands a report to the next.
+
+## Deploy
+Releases go out through a blue-green deploy behind the load balancer.
+"""
+_PRODUCT = """# Demo — Product
+
+## Strategic Positioning
+A dashboard for support teams; the pipeline of tickets is shown by age.
+"""
+_MEMORY = """# Memory
+
+## Decisions
+- [decision] **用 pnpm 管理依赖** 不混用包管理器。
+
+## Open Threads
+- 多个标签页同时运行时的 session 资源仲裁：每个 tab 必须隔离，不能抢占别的标签页的会话。
+
+## Pitfalls
+- [pitfall] **restore 超时导致死锁窗口** 恢复会话时等待超时，锁没有释放，修复方法是缩短窗口并在超时后释放锁。
+
+## Guidelines
+- [guideline] **提交前先跑受影响的测试** 不跑全量。
+"""
+_QUERIES = (("ddd", "how does the autonomous pipeline work — its stages", ("TECH.md", "Architecture")),
+            ("memory", "多个标签页之间怎么做资源仲裁", "Open Threads"),
+            ("memory", "恢复超时导致的死锁怎么修", "Pitfalls"))
+
+
+def _ranking_holds(k: int = 2) -> tuple[bool, str]:
+    from scripts.recall_suite import _rank_of_gold_context_files, _rank_of_gold_ddd
+
+    for domain, query, gold in _QUERIES:
+        rank = (_rank_of_gold_ddd(query, {"TECH.md": _TECH, "PRODUCT.md": _PRODUCT}, gold[0], gold[1], k)
+                if domain == "ddd" else _rank_of_gold_context_files(query, _MEMORY, gold, k))
+        if not rank:
+            return False, f"{query!r}: {gold} is not in the top {k}"
+    return True, ""
+
+
+def ranking(negative: bool) -> int:
+    import re
+
+    from core import memory_index
+
+    def ascii_only(text):  # a tokenizer that has lost its Chinese handling
+        return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+    def broken():
+        with mock.patch.object(memory_index, "_bm25_tokenize", ascii_only), \
+                mock.patch.object(memory_index, "_bm25_tokenize_doc", ascii_only):
+            return _ranking_holds()
+    return verdict("RCL_RANKING", negative, _ranking_holds, broken)
+
+
 if __name__ == "__main__":
     raise SystemExit(run({"provenance": provenance, "privacy": privacy,
-                          "ddd_scope": ddd_scope, "archive": archive}))
+                          "ddd_scope": ddd_scope, "archive": archive, "ranking": ranking}))

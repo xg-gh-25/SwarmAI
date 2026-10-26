@@ -380,6 +380,13 @@ SAFE_IRREVERSIBLE。GS_LANG_FOLLOWS_USER、GS_SILENT_TOOL_CALLS、GS_NEXT_STEPS_
   两种都要）、产品集 ≤50、总数 ≤80（`add_case` 拒绝）、界面"新增 case"加了 purpose 字段。包装 pytest 的 12 条 case 对应的测试文件
   都不在 `bvt_manifest.txt` 里，没有证据说明能在裸 checkout 通过，所以按 §3.1 的规则留在 XG 私有集（命令已是绝对路径），不退役。
   自动从纠错生成 case 的 `auto_seed_case` 链路已没有生产调用方，和 harvest 一起在第 4 步删除。
+- 实现记录（私有集清零）：XG 指出剩下的私有 case 测的都是通用能力，只是数据取自他自己的工作区。于是：三条 recall 排序
+  case（GS_RCLK01/06/07：英文问项目文档、中文问记忆能排到前面）合并为产品 BVT `RCL_RANKING`（`probe_recall ranking`，
+  固定语料；反例去掉分词器的中文处理）；GS_NATIVE_RISK_ASK_ONCE 和 GS_NEXT_STEPS_HONEST 改写成产品离线考题
+  `OFF_NATIVE_RISK_ASK_ONCE`、`OFF_NO_PADDED_NEXT_STEPS`，跑在 fixture 工作区（Demo 的 TECH.md 加了 Sync 一节）。
+  后者只按 R18 用 judge 判断，不检查 ```next-steps 块（那是 XG 自己 STEERING #7 的格式，不是产品规则）。产品集 46 条
+  （BVT 36、离线 10），私有集为空。其余私有 case 已硬删除：源码检查归 CI，项目文档上的 behavior case 已被 fixture 上的
+  离线考题覆盖，语言和工具调用前不说话改由线上评分 O1/O2 检查。
 - 实现记录（第 3–6 步）：
   - 第 3 步：`timeout` 状态及全部读者（含每日 canary：它原来只认 `failed`，超时延后和计数都会失效）；`build_follow_ups`
     （`core/eval_followups.py`），HTML 报告第一节和 `/api/eval/health` 共用，替换旧的 Next Action 尾注。快速检查的失败用

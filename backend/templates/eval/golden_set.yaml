@@ -277,6 +277,29 @@ cases:
   tier: stable
   eval_method: programmatic
   validated_by_4gate: 6e1679b9edaf2665
+- id: RCL_RANKING
+  category: recall
+  dimension: capability
+  level: tool_call
+  title: The right section ranks first, for English and Chinese questions
+  purpose:
+    en: The section that answers a question ranks near the top, for an English question about project
+      docs and for Chinese questions about memory. If this breaks, recall brings back the wrong notes.
+    zh: 能回答问题的那一段排在最前面：英文问项目文档、中文问记忆都一样。坏了意味着 recall 找回的是不相干的笔记。
+  verification:
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall ranking'
+    expected_contains: RCL_RANKING_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_recall ranking negative'
+    negative_expected_contains: RCL_RANKING_TEETH
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/memory_index.py
+  - backend/core/recall_multi.py
+  - backend/core/context_recall.py
+  tier: stable
+  eval_method: programmatic
+  validated_by_4gate: 43f67778f6bb78d6
 - id: MEM_SIZE_VALVE
   category: memory
   dimension: capability
@@ -936,6 +959,67 @@ cases:
   tier: behavior
   eval_method: behavior
   validated_by_4gate: 44b6f2892656af00
+- id: OFF_NATIVE_RISK_ASK_ONCE
+  category: pipeline
+  dimension: judgment_quality
+  level: session
+  title: 'A risky cross-module change asks once: directly or through the pipeline'
+  purpose:
+    en: 'Before a risky change across modules, the agent says why it is risky and asks one question: change
+      it directly or run the pipeline. If this breaks, risky work starts unchecked.'
+    zh: 跨多个模块的高风险改动，agent 先说明风险，只问一个问题：直接改还是走 pipeline。坏了意味着高风险改动不经确认就开工，或被一堆问题淹没。
+  scenario:
+    system: swarmai
+    prompt: I want to change how sync retries are scheduled across the Demo app's queue, worker and backoff
+      modules — a cross-module change to the back-off logic. Look at the project docs for where that logic
+      lives, then tell me how you'll proceed. Don't edit anything yet.
+  expected_trajectory:
+  - Grep|Read|Glob
+  trajectory_match: any_order
+  allowed_tools:
+  - Read
+  - Grep
+  - Glob
+  decision_rubric: 'PASS only if the answer treats this as a risky (cross-module) change, says why, and
+    asks ONE question: change it directly or run the pipeline. FAIL if it says the pipeline is mandatory
+    for every code change, plans the edit without asking that question, or asks several open-ended questions
+    instead.'
+  evaluators:
+  - trajectory_capture
+  affected_by:
+  - backend/context/AGENT.md
+  tier: behavior
+  eval_method: behavior
+  validated_by_4gate: f1effdea506c3ff6
+- id: OFF_NO_PADDED_NEXT_STEPS
+  category: judgment
+  dimension: judgment_quality
+  level: session
+  title: A closed question gets its answer, without padded next steps
+  purpose:
+    en: When a question is fully answered, the agent stops instead of adding filler next steps or offers
+      of more work. If this breaks, every short answer ends with noise you have to skip.
+    zh: 问题答完了就停，不追加凑数的下一步或"要不要我再…"。坏了意味着每个简短回答后面都跟着要跳过的噪声。
+  scenario:
+    system: swarmai
+    prompt: What are the retry waits for a failed sync in the Demo project? That's all I need.
+  expected_trajectory:
+  - Grep|Read|Glob
+  trajectory_match: any_order
+  allowed_tools:
+  - Read
+  - Grep
+  - Glob
+  decision_rubric: PASS only if the answer gives the waits the project docs list (30s, 60s, 120s) and
+    adds no unsolicited next steps or offers of further work ('I can also…', 'would you like me to…',
+    a list of follow-ups). FAIL if the values are wrong or the answer appends next steps or offers.
+  evaluators:
+  - trajectory_capture
+  affected_by:
+  - backend/context/AGENT.md
+  tier: behavior
+  eval_method: behavior
+  validated_by_4gate: 668b8354263cc22d
 - id: OFF_DECIDE
   category: judgment
   dimension: judgment_quality
