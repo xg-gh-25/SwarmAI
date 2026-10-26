@@ -223,3 +223,16 @@ def test_language_is_judged_on_the_answer_and_a_pasted_log_keeps_a_chinese_quest
     }
     result, _, _ = _run(tmp_path, sessions)
     assert result["checks"]["O1_LANGUAGE"] == {"checked": 2, "failed": 0, "rate": 0.0, "examples": []}
+
+
+
+def test_the_apps_own_wrapper_lines_are_not_the_users_language(tmp_path):
+    sessions = {
+        "att": {"title": "t", "messages": [_msg("user", "[Attached terminal output]"),
+                                           _msg("assistant", [_text("这是构建失败的原因。")])]},
+        "review": {"title": "r", "messages": [
+            _msg("user", "[File Review: `docs/a.md`]\n\nSelected text:\n```\nsome english text\n```\n这段改短一点"),
+            _msg("assistant", [_text("改好了，现在只有两句。")])]},
+    }
+    result, _, _ = _run(tmp_path, sessions)
+    assert result["checks"]["O1_LANGUAGE"] == {"checked": 1, "failed": 0, "rate": 0.0, "examples": []}

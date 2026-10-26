@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -95,9 +96,10 @@ def _as_blocks(content) -> list:
     if isinstance(content, str) and content.strip().startswith("["):
         try:
             parsed = json.loads(content)
-            return parsed if isinstance(parsed, list) else []
         except json.JSONDecodeError:
-            return []
+            parsed = None    # plain text that happens to start with "[", e.g. "[Attached …]"
+        if isinstance(parsed, list):
+            return parsed
     return [{"type": "text", "text": content}] if isinstance(content, str) and content else []
 
 
@@ -130,13 +132,19 @@ def _final_text(blocks: list) -> str:
     return texts[-1] if texts else ""
 
 
+# Lines the app itself wraps around what the user sent ("[Attached terminal output]",
+# "[File Review: `path`]", "Selected text:"): not the user's words, so not their language.
+_WRAPPER_LINE = re.compile(r"^\s*(\[[^\]\n]{1,300}\]|Selected text:)\s*$", re.M)
+
+
 def _asked_in(text: str) -> str | None:
     """The user's language. A Chinese question that pastes an English log is still a
     Chinese question (R19: CJK in, CJK out), so two CJK characters outside code make
-    it Chinese; otherwise English words make it English."""
+    it Chinese; otherwise English words make it English. The app's own wrapper lines
+    are left out; a message that is only wrappers has no language."""
     from scripts.eval_runner import prose_counts
 
-    cjk, latin = prose_counts(text)
+    cjk, latin = prose_counts(_WRAPPER_LINE.sub(" ", text or ""))
     if cjk >= 2:
         return "cjk"
     return "latin" if latin else None
