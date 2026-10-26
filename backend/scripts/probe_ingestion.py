@@ -35,8 +35,17 @@ def _judge_down_holds(judge_up_refusing: bool) -> tuple[bool, str]:
              mock.patch.object(ig, "_judge_budget_available", return_value=True):
             v = ig.admit_memory_lesson(_LESSON)[0]
         return (v == "pending"), f"a refused lesson gave {v!r}"
-    with mock.patch.dict(os.environ, {"SWARM_JUDGE_BUDGET_MAX": "0"}):
+    # The budget is read from SWARM_JUDGE_BUDGET_MAX once, when ingestion_gate is
+    # imported, so setting the variable here changes nothing: patch the value itself.
+    # A spent budget must not reach the judge at all, so the check also counts judge
+    # calls: an erroring judge yields pending too, and where credentials work (a Hive's
+    # instance role) a real judge would run and admit the lesson.
+    with mock.patch.object(ig, "_JUDGE_BUDGET_MAX", 0), \
+         mock.patch.object(ig, "_judge_client",
+                           side_effect=RuntimeError("judge called with no budget")) as judge:
         budget = ig.admit_memory_lesson(_LESSON)
+    if judge.called:
+        return False, "budget spent: the judge was still called"
     with mock.patch.object(ig, "_judge_client", side_effect=RuntimeError("bedrock down")), \
          mock.patch.object(ig, "_judge_budget_available", return_value=True):
         erroring = ig.admit_memory_lesson(_LESSON)
