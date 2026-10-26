@@ -91,12 +91,8 @@ class PipelineRunSummary(BaseModel):
     checkpoint_reason: Optional[str] = None
     owner_session_id: Optional[str] = Field(
         None, description="Pipeline v1: the chat session that drives the run now")
-    verified: Optional[bool] = Field(
-        None,
-        description=("completed runs only: True when DELIVER was push-ready (every gate and "
-                     "the test evidence held on the final code), False when it completed "
-                     "unverified; None when not applicable (the run's push_ready)."),
-    )
+    not_landed: bool = Field(
+        False, description="a completed run whose change did not land (it is not on main)")
     report_path: Optional[str] = Field(
         None,
         description=(

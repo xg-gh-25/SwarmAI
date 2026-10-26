@@ -96,7 +96,7 @@ def test_build_report_is_recorded_on_the_engines_tree(build_run):
     assert (p["n_pass"], p["n_fail"], p["n_not_run"]) == (1, 0, 1)
     assert vr.read(engine.store, event)["tests_changed"] == ["src/x.test.ts"]
     lines = vr.report_lines(engine.store.read_events())
-    assert any("build · repo @ " + tree[:12] in line and "1 通过" in line for line in lines)
+    assert any("build · repo @ " + tree[:12] in line and "1 pass" in line for line in lines)
 
 
 def test_invalid_report_records_nothing(build_run):

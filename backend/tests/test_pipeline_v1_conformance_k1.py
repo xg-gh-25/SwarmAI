@@ -146,9 +146,9 @@ def test_a_refutation_does_not_survive_the_tree_it_was_judged_on(rig):
     assert ok is False and finding_id in detail, detail
 
 
-def test_a_person_landed_run_stays_not_push_ready_after_completion(rig):
-    """Review round 2: MD-3 follows the folded landing, so the COMPLETED recompute
-    of a human_override run keeps push_ready false."""
+def test_a_person_landed_run_is_quality_warn_after_completion(rig):
+    """A human_override run stays Quality WARN on the COMPLETED recompute (MD-3 is
+    gone: a person's landing is a fact the REPORT states, not an open check)."""
     from tests.test_pipeline_v1_real_e2e import _prepare, _request
     r = rig()
     r.create()
@@ -157,5 +157,6 @@ def test_a_person_landed_run_stays_not_push_ready_after_completion(rig):
     assert _request(r, _prepare(r)).get("ok") is True
     engine = r.engine()
     assert engine.projection()["landing"] == "human_override"
-    push = engine.push_status()
-    assert push["push_ready"] is False and "MD-3" in push["reasons"], push
+    assert "MD-3" not in engine.open_checks()["checks"]
+    assert engine.build_audit(through="COMPLETED", persist=False)["summary"]["quality"][
+        "verdict"] == "WARN"

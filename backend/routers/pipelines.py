@@ -331,8 +331,7 @@ def _summary(raw: dict, project: str) -> PipelineRunSummary:
         needs_you=pm.needs_you(status, kind, raw.get("reason")),
         checkpoint_reason=raw.get("reason"),
         owner_session_id=raw.get("session_id"),
-        verified=(raw.get("push_ready") if status == "completed"
-                  and isinstance(raw.get("push_ready"), bool) else None),
+        not_landed=status == "completed" and raw.get("landing") == "not_landed",
         report_path=(f"Projects/{project}/.artifacts/runs/{raw.get('id')}/REPORT.md"
                      if report.is_file() else None),
         audit_card=raw.get("audit_card"),

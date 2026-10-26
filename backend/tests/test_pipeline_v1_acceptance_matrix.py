@@ -134,8 +134,7 @@ def test_a_node_run_lands_with_no_daemon(tmp_path, monkeypatch, profile):
         kinds = [e["kind"] for e in r.events()]
         if profile == "full":            # the full path really ran: its documents and review
             assert {"stage_complete", "handout", "answer"} <= set(kinds), sorted(set(kinds))
-        push = r.engine().push_status()
-        assert push["push_ready"] is True, push
+        assert r.engine().open_checks()["open"] == {}, r.engine().open_checks()
     finally:
         r.close()
 

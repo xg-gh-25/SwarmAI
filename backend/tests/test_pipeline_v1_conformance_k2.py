@@ -159,7 +159,7 @@ def test_the_partial_land_event_and_report_name_what_landed(tmp_path, monkeypatc
         events=[{"kind": "run_create", "at": "2026-10-23T00:00:00+00:00", "payload": {}}],
         findings=[], repos_isolated=2,
         contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a", "b"]},
-        push={"push_ready": False, "reasons": {}}, audit_through="DELIVER",
+        open_checks={}, audit_through="DELIVER",
         commits={"a": "c" * 40})
     report = audit.render(value, fmt="report")
     assert "landed: a @ cccccccccccc" in report and "not landed: b" in report
@@ -258,7 +258,7 @@ def test_a_later_manual_partial_land_is_the_audits_outcome():
                                     "human_decisions": 0},
         events=events, findings=[], repos_isolated=2,
         contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a", "b"]},
-        push={"push_ready": False, "reasons": {}}, audit_through="COMPLETED",
+        open_checks={}, audit_through="COMPLETED",
         commits={"a": "c" * 40})
     assert value["outcome"]["reason"] == "partial_land"
     assert "not landed: b" in audit.render(value, fmt="report")

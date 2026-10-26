@@ -279,7 +279,7 @@
       "result": "结果",
       "attention": {
         "title": "待你确认",
-        "notPushReady": "还不能 push",
+        "notLanded": "没有落地",
         "more": "其余 {{count}} 项见 run 报告",
         "reason": "理由：{{text}}",
         "reasonCode": {
@@ -308,8 +308,7 @@
         "openLink": "打开链接"
       },
       "summary": {
-        "ready": "已完成 · 可以 push",
-        "notReady": "已完成 · 还不能 push",
+        "notLanded": "已完成 · 没有落地",
         "done": "已完成",
         "missing": "未生成",
         "reviewStat": "{{experts}} 位专家 · {{findings}} 条发现 · {{settled}} 已处置",

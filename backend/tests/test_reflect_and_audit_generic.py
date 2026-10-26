@@ -66,7 +66,7 @@ def _audit(**kw):
                "payload": {"stage": "test", "repo": "repo", "code_tree": "1" * 40,
                            "n_pass": 1, "n_fail": 1, "n_not_run": 0}}]
     return build(run_id="run_x", projection=projection, events=events, repos_isolated=1,
-                 contract=contract, push={"push_ready": True, "reasons": {}},
+                 contract=contract, open_checks={},
                  audit_through="COMPLETED", commits={"repo": "a" * 40}, **kw)
 
 

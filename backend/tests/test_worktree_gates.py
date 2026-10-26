@@ -240,7 +240,7 @@ def test_steering_env_on_a_pipeline_command_is_denied(env):
 
 
 def test_read_only_command_untouched(env):
-    for sub in ("status", "push-status", "events"):
+    for sub in ("status", "events"):
         c = _cmd(sub)
         assert _passes(og._decide("s2", c, {"command": c})), sub
     assert json.loads(env["runs"][RID].read_text())["session_id"] == "s1"

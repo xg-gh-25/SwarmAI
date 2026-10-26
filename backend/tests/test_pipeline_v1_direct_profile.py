@@ -34,11 +34,14 @@ def test_direct_registers_no_document_or_decision_check():
 
 def test_trivial_keeps_its_stages_and_document_checks():
     """S6-1 removed the runner's checks (DS-2b/4b/9b, BX-1/2, TS-2, LG-2/5, QX-1/2, MD-2)
-    and added BX-3; S6-2 added RV-4; S6-4c removed RQ-3 / RQ-8b; TS-4 was added after it; every other trivial check is as the frozen snapshot recorded it."""
+    and added BX-3; S6-2 added RV-4; S6-4c removed RQ-3 / RQ-8b; TS-4 was added after it;
+    2026-10-26 removed MD-1 / MD-3 and renamed the "push" effect "audit" (no push
+    verdict); every other trivial check is as the frozen snapshot recorded it."""
     snap = json.loads(SNAPSHOT.read_text())
     removed = {"DS-2b", "DS-4b", "DS-9b", "BX-1", "BX-2", "TS-2", "LG-2", "LG-5",
                "QX-1", "QX-2", "MD-2",
-               "RQ-3", "RQ-8b"}       # S6-4c: wording is judged by Gate-0, no word list
+               "RQ-3", "RQ-8b",       # S6-4c: wording is judged by Gate-0, no word list
+               "MD-1", "MD-3"}        # 2026-10-26: no push verdict
     assert list(lifecycle.PROFILE_STAGES["trivial"]) == snap["stages"]
     now = {s.check_id: s for s in checks._for("trivial")}
     assert set(now) == (set(snap["checks"]) - removed) | {"BX-3", "RV-4", "TS-4"}
@@ -46,6 +49,7 @@ def test_trivial_keeps_its_stages_and_document_checks():
         if cid in removed or cid == "TS-1":
             continue
         spec = now[cid]
+        row = {**row, "effects": sorted("audit" if e == "push" else e for e in row["effects"])}
         assert {"document": spec.document, "effects": sorted(spec.effects),
                 "stages": list(checks._stages_for(spec, "trivial")),
                 "variants": sorted(spec.variants)} == row, cid

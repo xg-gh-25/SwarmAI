@@ -134,7 +134,7 @@ necessary, the pipeline's own stages once it runs) — not choosing native for a
 waits for models to agree has no guaranteed end. Skeptics, reviewers and experts raise quality
 and surface risk: they find, they do not decide. Neither whether a review ran nor what it
 said stops the local landing: a review that did not run, or a finding not yet turned into a
-check, sets push_ready false and goes to the human, who decides the push. What a review said
+check, is noted in the run's audit for the human, who decides the push. What a review said
 may block only once it is a deterministic check (a test that fails, for the stated reason, on
 the defect and passes on the fix). A gate
 decides from a parsed command, a diff or path set, a marker, a count or hash, an exit code or

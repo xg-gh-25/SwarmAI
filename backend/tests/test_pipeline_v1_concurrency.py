@@ -104,7 +104,7 @@ def test_a_mutating_cli_call_waits_for_the_run_and_status_does_not(rig):
     assert r.v1("status").get("ok") is True                 # read-only: not blocked
     assert time.monotonic() - started < 5
     started = time.monotonic()
-    out = r.v1("push-status")                                # read-only too: not blocked
+    out = r.v1("events")                                     # read-only too: not blocked
     assert time.monotonic() - started < 5, out
     threading.Timer(1.5, release.set).start()
     started = time.monotonic()

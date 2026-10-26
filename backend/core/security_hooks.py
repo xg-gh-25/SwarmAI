@@ -459,7 +459,6 @@ def v1_land_card(command: str) -> "str | None":
             lines.append(f"{name}: code {row['code_tree'][:12]} → delivery "
                          f"{row['delivery_tree'][:12]}")
         lines.append("skip tests: " + ("yes" if request.get("skip_tests") else "no"))
-        lines.append(f"push reasons: {int(payload.get('push_reasons') or 0)}")
     else:
         lines.append("binds: " + ", ".join(f"{k}={str(v)[:16]}" for k, v in
                                            sorted((request.get("bindings") or {}).items())))

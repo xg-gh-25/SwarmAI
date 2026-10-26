@@ -126,7 +126,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--transcript-id", action="append", default=[])
     create.add_argument("--requirement",
                         help="the user's request, verbatim (required for --profile direct)")
-    for command in ("status", "review-start", "push-status", "land",
+    for command in ("status", "review-start", "land",
                     "events", "resume", "restore"):
         item = sub.add_parser(command)
         item.add_argument("--project", required=True)
@@ -263,7 +263,7 @@ def execute(args) -> dict[str, Any]:
 
 
 # read the run, never write it: no operation lock (r6 §2.2)
-_READ_ONLY = frozenset({"status", "push-status", "events"})
+_READ_ONLY = frozenset({"status", "events"})
 
 
 def _missing_worktrees(engine: RunEngine) -> bool:
@@ -297,7 +297,7 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
     if args.command == "status":
         return {"ok": True, "state": engine.projection(), "owner": engine.owner_session(),
                 "decision": engine.pending_decision(),
-                "push": engine.push_status(), "run_file": str(engine.run_dir / "run.json")}
+                "run_file": str(engine.run_dir / "run.json")}
     if args.command == "gate0-start":
         return {"ok": True, **engine.gate0_start(
             _json_arg(args.artifact) if args.artifact else None)}
@@ -312,8 +312,6 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         return engine.report_tests(_json_arg(args.artifact))
     if args.command == "review-proof":
         return {"ok": True, **engine.review_proof(_json_arg(args.artifact))}
-    if args.command == "push-status":
-        return {"ok": True, **engine.push_status()}
     if args.command == "land":
         return {"ok": True, **engine.normal_land(message=args.message)}
     if args.command == "resume":

@@ -143,11 +143,19 @@ describe('pipeline_attention — what needs the user', () => {
     expect(screen.queryByTestId('turn-attention')).toBeNull();
   });
 
-  it('not ready to push is amber, one reason per line, with where the details are', () => {
-    const item = { kind: 'not_push_ready', reasons: ['No smoke test ran the changed code', 'Tests failed'], detail: 'Details: REPORT §10' };
+  it('an older not_push_ready item shows its reasons with no push verdict', () => {
+    const item = { kind: 'not_push_ready', reasons: ['Tests failed'] };
     renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [item] } as ContentBlock, tx('done')]);
     const card = screen.getByTestId('turn-attention');
-    const label = within(card).getByText('Not ready to push');
+    expect(card.textContent).toContain('Tests failed');
+    expect(card.textContent).not.toMatch(/push/i);
+  });
+
+  it('not landed is amber, one reason per line, with where the details are', () => {
+    const item = { kind: 'not_landed', reasons: ['No smoke test ran the changed code', 'Tests failed'], detail: 'Details: REPORT §10' };
+    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [item] } as ContentBlock, tx('done')]);
+    const card = screen.getByTestId('turn-attention');
+    const label = within(card).getByText('Not landed');
     expect(label.className).toContain('text-amber');
     expect(label.className).not.toContain('text-red');
     expect(within(within(card).getByTestId('not-ready-reasons')).getAllByRole('listitem').map((e) => e.textContent))

@@ -37,7 +37,7 @@ import { BrainHubHome } from './BrainHubHome';
 const run = (id: string, o: Record<string, unknown> = {}) => ({
   id, requirement: `Req ${id}`, status: 'completed', profile: 'bugfix', progress: '8/8', cycleTimeMin: 10,
   tokensActual: null, createdAt: '', updatedAt: '2026-10-20', pauseKind: null, needsYou: false,
-  checkpointReason: null, ownerSessionId: null, verified: true, reportPath: null, auditCard: null, ...o,
+  checkpointReason: null, ownerSessionId: null, notLanded: false, reportPath: null, auditCard: null, ...o,
 });
 
 beforeEach(() => {

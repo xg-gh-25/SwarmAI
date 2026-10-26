@@ -186,7 +186,6 @@ def read_stage_state(run_id: object) -> Optional[dict]:
         commits = [c for c in data.get("commits") or [] if isinstance(c, dict)]
         status = {"active": "running", "reflecting": "running",
                   "awaiting_human": "paused"}.get(data.get("status"), data.get("status"))
-        push = data.get("push_ready")
         return {"profile": contract.get("profile"), "stages": stages,
                 "status": status if isinstance(status, str) else None,
                 "current_stage": _text(data.get("stage")),
@@ -200,7 +199,6 @@ def read_stage_state(run_id: object) -> Optional[dict]:
                 "landed": any(c.get("landed") for c in commits),
                 "landed_shas": [str(c["sha"]) for c in commits
                                 if c.get("landed") and isinstance(c.get("sha"), str)],
-                "push_ready": push if isinstance(push, bool) else None,
                 "audit_card": _text(data.get("audit_card")),
                 "run_dir": str(run_dir)}
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
@@ -298,17 +296,15 @@ def attention_due(before: Optional[dict], after: Optional[dict], deliver_row_end
 
 
 def attention_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[str, Any]]:
-    """What in this run needs a person: a change that did not land, or one that is
-    not push-ready (its audit card names why). None when nothing does."""
+    """What in this run needs a person: a change that did not land (it is not on main).
+    None when nothing does; open audit checks are not shown here (XG 2026-10-26: no
+    push verdict, they are one line in the REPORT's Quality cell)."""
     if not state:
         return None
     items: list[dict] = []
     if state.get("landing") == "not_landed":
         reason = _clip(state.get("reason"), 120) or "not landed"
-        items.append({"kind": "not_push_ready", "reasons": [f"Not landed: {reason}"],
-                      "reasonCodes": [None], "detail": "Details: REPORT.md"})
-    elif state.get("push_ready") is False:
-        items.append({"kind": "not_push_ready", "reasons": ["Not push-ready"],
+        items.append({"kind": "not_landed", "reasons": [reason],
                       "reasonCodes": [None], "detail": "Details: REPORT.md"})
     if not items:
         return None
@@ -454,9 +450,7 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
     return {"type": SUMMARY_BLOCK_TYPE, "runId": run_id, "profile": state.get("profile"),
             "intent": _clip(state.get("requirement"), 200), "solved": None,
             "landedSha": str(landed[-1])[:12] if landed else None,
-            "status": state.get("status"), "pushReady": state.get("push_ready"),
-            "pushReason": _clip(state.get("reason"), 200) if not_landed else None,
-            "pushReasons": ([{"code": None, "text": f"Not landed: {_clip(state.get('reason'), 120)}"}]
-                            if not_landed else []),
+            "status": state.get("status"), "landing": state.get("landing"),
+            "notLandedReason": _clip(state.get("reason"), 200) if not_landed else None,
             "stagesDone": sum(1 for s in order if _status(state, s) == "completed"),
             "docs": docs, "at": at, "auditCard": state.get("audit_card")}

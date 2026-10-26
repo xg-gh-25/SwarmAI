@@ -57,7 +57,7 @@ def _audit(**over):
               report, {"kind": "land", "at": "2026-10-22T00:00:30+00:00", "payload": {}}]
     data = audit.build(run_id="run_x", projection=projection, events=events,
                        repos_isolated=1, findings=[], contract=contract,
-                       push={"push_ready": True, "reasons": {}},
+                       open_checks={},
                        audit_through="COMPLETED", commits={"repo": "a" * 40})
     data = dict(data)
     for key, value in over.items():
@@ -80,16 +80,15 @@ def test_every_branch_renders_in_english():
                                for i in range(12)]},
         "library_lessons": [{"id": "L1", "statement": "s", "path": "/p.md"}],
         "kept_lessons": [{"id": "L2", "statement": "s"}],
-        "push_reasons": {f"k{i}": "d" for i in range(7)},
-        "high_security_policy": ["CF-1"],
+        "open_checks": {f"k{i}": "d" for i in range(7)},
         "commits": {"a": "b" * 40}, "expected_repos": ["a", "b"],
         "unsettled_checkouts": ["a"],
         "manual": {"request_id": "q1", "note": "n"},
         "retained": [{"ledger": "/ledger"}],
     }
-    for outcome in ({"status": "completed", "landing": "not_landed", "push_ready": False,
+    for outcome in ({"status": "completed", "landing": "not_landed",
                      "reason": "partial_land"},
-                    {"status": "completed", "landing": "human_override", "push_ready": False}):
+                    {"status": "completed", "landing": "human_override"}):
         text = audit.render(_audit(outcome=outcome, details=details), fmt="report")
         assert not CJK.search(text), text
     text = audit.render(_audit(audit_through="DELIVER", outcome={"landing": None},

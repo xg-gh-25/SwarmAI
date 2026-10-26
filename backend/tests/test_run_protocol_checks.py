@@ -18,7 +18,7 @@ EXPECTED = {
     "DS-7", "DS-9a", "BX-3", "RV-1a", "RV-1b", "RV-1c",
     "DC-1", "DC-2", "RV-2", "RV-4", "FX-1", "TS-1", "TS-3", "TS-4", "DV-1",
     "LG-1", "LG-3", "LG-4",
-    "MD-1", "MD-3", "RF-1", "RF-2", "RF-3", "RF-4", "RF-5",
+    "RF-1", "RF-2", "RF-3", "RF-4", "RF-5",
 }
 
 
@@ -31,7 +31,7 @@ def test_registry_is_the_complete_v13_table():
     # v13's 46 + BX-2, minus the runner's checks, plus BX-3 (S6-1), plus RV-4 (S6-2),
     # minus the word-list checks RQ-3 / RQ-8b (S6-4c: Gate-0 judges wording),
     # plus TS-4 (every DESIGN_SPEC test reference names a file of the tested code)
-    assert len(checks.CHECKS) == 37
+    assert len(checks.CHECKS) == 35
     assert checks.coverage_errors() == []
 
 
@@ -47,8 +47,8 @@ def test_every_profile_check_pair_applies_xor_has_an_explicit_exemption():
 
 def test_effects_are_independent_not_one_block_advise_flag():
     assert checks.CHECKS["LG-1"].effects == {"land"}
-    assert checks.CHECKS["TS-1"].effects == {"stage", "push"}
-    assert checks.CHECKS["DS-1"].effects == {"push"}
+    assert checks.CHECKS["TS-1"].effects == {"stage", "audit"}
+    assert checks.CHECKS["DS-1"].effects == {"audit"}
     assert checks.CHECKS["DS-3"].effects == set()
     assert checks.CHECKS["DV-1"].effects == {"stage"}
 
@@ -67,8 +67,8 @@ def test_land_effect_never_appears_in_any_stage_complete_guard():
 def test_land_and_push_queries_route_only_their_effect():
     assert ids(checks.land_checks("full")) == {"LG-1", "LG-3", "LG-4"}
     assert not checks.land_checks("research")
-    assert {"TS-1", "RV-1a", "RV-2", "DS-1"} <= ids(checks.push_checks("full"))
-    assert all("push" in spec.effects for spec in checks.push_checks("direct"))
+    assert {"TS-1", "RV-1a", "RV-2", "DS-1"} <= ids(checks.audit_checks("full"))
+    assert all("audit" in spec.effects for spec in checks.audit_checks("direct"))
 
 
 def test_requirements_run_at_evaluate_and_direct_has_none():
@@ -120,7 +120,7 @@ def test_named_exemptions_match_the_design_table():
     assert "Gate-0" in checks.EXEMPTIONS[("direct", "RV-1b")]
     assert "Gate-0" in checks.EXEMPTIONS[("trivial", "RV-1b")]
     research_exempt = {cid for profile, cid in checks.EXEMPTIONS if profile == "research"}
-    assert {"DS-1", "BX-3", "RV-1a", "RV-2", "TS-1", "LG-1", "MD-1"} <= research_exempt
+    assert {"DS-1", "BX-3", "RV-1a", "RV-2", "TS-1", "LG-1"} <= research_exempt
 
 
 def _context(requirements=None, design=None, **kwargs):
@@ -172,7 +172,7 @@ def test_unknown_profile_stage_and_effect_are_rejected():
 
 def test_missing_risk_and_mode_provenance_fails_closed():
     ctx = _context()
-    for check_id in ("MD-1", "MD-3", "BX-3", "TS-1", "LG-1", "LG-4"):
+    for check_id in ("BX-3", "TS-1", "LG-1", "LG-4"):
         assert checks.evaluate(check_id, ctx)[0] is False, check_id
 
 

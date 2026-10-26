@@ -25,7 +25,7 @@ tier: lazy
 
 > One requirement in → a landed, audited delivery out, through the event-sourced Pipeline v1
 > protocol (`"$SWARM_BACKEND_BIN" pipeline-v1`). Deterministic checks own every stage exit,
-> the landing and push readiness; the model proposes, the checks dispose.
+> and the landing; the model proposes, the checks dispose. Pushing is the user's call.
 
 > This skill loads full instructions on activation. Read INSTRUCTIONS.md before proceeding.
 
@@ -53,5 +53,4 @@ Before reporting the run, show evidence for each:
       with `landing` (landed, or not_landed and its reason)
 - [ ] **REPORT rendered by the engine** — `.artifacts/runs/<R>/REPORT.md` (never hand-edited)
 - [ ] **Run Audit** — the five dimensions in `run_audit.json`; every BLOCK named with its reason
-- [ ] **Push readiness** — `"$SWARM_BACKEND_BIN" pipeline-v1 push-status`: the fold of push-effect checks, not a model field
 - [ ] **Tests reported** — REPORT's test section lists your BUILD and TEST reports on the landed tree

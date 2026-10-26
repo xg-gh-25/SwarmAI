@@ -508,7 +508,7 @@ class ReviewOrchestrator:
                   f"{'PASS' if row['payload']['passed'] else 'FAIL'} — {row['payload']['detail']}"
                   f" (event {row['event_id'][:12]})"
                   for row in events if row["kind"] == "check"]
-        effect_text = {"stage": "blocks the stage", "land": "blocks landing", "push": "blocks push",
+        effect_text = {"stage": "blocks the stage", "land": "blocks landing", "audit": "noted in the audit",
                        "": "recorded only"}
         lines += ["", "## Decision rules", ""]
         for spec in check_registry.CHECKS.values():

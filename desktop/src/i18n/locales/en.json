@@ -279,7 +279,7 @@
       "result": "Result",
       "attention": {
         "title": "For you to check",
-        "notPushReady": "Not ready to push",
+        "notLanded": "Not landed",
         "more": "+{{count}} more in the run report",
         "reason": "Why: {{text}}",
         "reasonCode": {
@@ -308,8 +308,7 @@
         "openLink": "Open link"
       },
       "summary": {
-        "ready": "Done · ready to push",
-        "notReady": "Done · not ready to push",
+        "notLanded": "Done · not landed",
         "done": "Done",
         "missing": "not produced",
         "reviewStat": "{{experts}} experts · {{findings}} findings · {{settled}} settled",

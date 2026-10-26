@@ -32,7 +32,7 @@ def _facts(events=None, landing="landed", push=True):
     return build(run_id="run_x", projection=projection, events=events, 
                  repos_isolated=1,
                  findings=[], contract=contract,
-                 push={"push_ready": push, "reasons": {} if push else {"RV-2": "open"}},
+                 open_checks={} if push else {"RV-2": "open"},
                  audit_through="COMPLETED", commits={"repo": "a" * 40})
 
 
@@ -44,7 +44,7 @@ def test_five_dimensions_and_completed_card_share_numbers():
     report = render(audit, fmt="report")
     for name in ("Run Isolation", "Speed", "Quality", "Autonomy", "Token Cost"):
         assert name in card and name in report
-    assert "PUSH READY" in card and "deploy" not in report.lower()
+    assert "PUSH" not in card and "deploy" not in report.lower()
 
 
 def test_token_calls_without_measurement_block_and_manual_landing_warns():
@@ -59,7 +59,9 @@ def test_contamination_is_isolation_block_and_push_reason_renders():
                "payload": {"conflict_type": "cross_run_cache"}}]
     audit = _facts(events=events, push=False)
     assert audit["summary"]["isolation"]["verdict"] == "BLOCK"
-    assert "RV-2: open" in render(audit, fmt="report")
+    row = next(line for line in render(audit, fmt="report").splitlines()
+               if line.startswith("| Quality |"))
+    assert "1 HIGH finding open" in row, row
 
 
 def test_measured_review_tokens_are_accounted_and_pass_budget():
@@ -133,7 +135,7 @@ def test_missing_time_is_null_and_quality_na_shows_the_reason():
                   "reason": "framing_rejected", "human_decisions": 0}
     contract = {"run_id": "run_x", "mode": "isolated", "expected_repos": ["repo"]}
     audit = build(run_id="run_x", projection=projection, events=[], findings=[],
-                  contract=contract, push={"push_ready": False, "reasons": {}},
+                  contract=contract, open_checks={},
                   audit_through="COMPLETED", repos_isolated=None,
                   retained=[{"repo_name": "repo", "ledger": "/l/run_x/repo"}])
     assert audit["summary"]["speed"]["wall_seconds"] is None
@@ -143,7 +145,7 @@ def test_missing_time_is_null_and_quality_na_shows_the_reason():
     assert "Not landed:" in report and "/l/run_x/repo" in report and "time incomplete" in report
 
 
-def test_a_high_security_policy_finding_is_listed_first():
+def test_an_open_high_finding_is_one_line_in_the_quality_cell():
     finding = {"canonical_id": "CF-aaaaaaaa", "kind": "security_policy", "severity": "HIGH",
                "status": "open", "file": "a.py", "line": 1, "claim": "c", "expert": "security"}
     projection = {"run_id": "run_x", "status": "completed", "landing": "landed",
@@ -151,11 +153,12 @@ def test_a_high_security_policy_finding_is_listed_first():
     contract = {"run_id": "run_x", "mode": "isolated", "expected_repos": ["repo"]}
     audit = build(run_id="run_x", projection=projection, events=[], 
                   findings=[finding], contract=contract,
-                  push={"push_ready": False, "reasons": {"MD-1": "a", "RV-2": "b"}},
+                  open_checks={"RV-2": "b", "DC-2": "c"},
                   audit_through="DELIVER", repos_isolated=1)
     report = render(audit, fmt="report")
-    section = report.split("## Look at these before you push")[1]
-    assert section.strip().startswith("- CF-aaaaaaaa"), section
+    row = next(line for line in report.splitlines() if line.startswith("| Quality |"))
+    assert "1 HIGH finding open · +1 more" in row, row
+    assert "before you push" not in report
 
 
 def test_quality_counts_the_agents_test_reports_and_reports_them():

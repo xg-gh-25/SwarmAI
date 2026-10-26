@@ -48,7 +48,7 @@ def _audit(events, **kw):
     return audit_protocol.build(
         run_id="run_k4", projection={"run_id": "run_k4", "status": "active"}, events=events,
         findings=[], contract=_contract(),
-        push={"push_ready": False}, audit_through="DELIVER", **kw)
+        open_checks={}, audit_through="DELIVER", **kw)
 
 
 def test_f22_details_carry_critical_path_experts_waits_and_trace_matrix():
@@ -155,7 +155,7 @@ def test_f20_review_md_carries_prompt_sha_r2_evidence_and_decision_rules(rig):
     assert handout["payload"]["prompt_sha"][:12] in text
     for column in ("R2", "Reclassified", "Evidence"):
         assert f"| {column} |" in text
-    assert "## Decision rules" in text and "RV-1a" in text and "blocks push" in text
+    assert "## Decision rules" in text and "RV-1a" in text and "noted in the audit" in text
 
 
 def test_f23_a_failed_markdown_render_is_recorded_and_the_write_still_succeeds(rig, monkeypatch):

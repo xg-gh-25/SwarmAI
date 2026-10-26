@@ -932,7 +932,6 @@ class RunEngine:
         if isinstance(audit_value, Mapping):
             value["audit_card"] = audit_value.get("card")
             value["audit_summary"] = audit_value.get("summary")
-            value["push_ready"] = (audit_value.get("outcome") or {}).get("push_ready")
         retention = self._read_json(self._retention_path(), {})
         if isinstance(retention, Mapping) and retention.get("worktrees"):
             value["retention"] = retention["worktrees"]
@@ -1559,7 +1558,7 @@ class RunEngine:
                     "then --prepare again; or --skip-tests to land untested")
         self._record_usage("deliver")           # the REPORT rendered below: tokens so far
         context = self.check_context()
-        push = self.push_status(manual_landing=True)
+        open_checks = self.open_checks()["open"]
         def render(_request_id, _results):
             events = self.store.read_events()
             cutoff = next(index for index, event in enumerate(events)
@@ -1572,7 +1571,7 @@ class RunEngine:
                 projection=lifecycle.fold(prior, self.authority), events=prior,
                 findings=finding_protocol.fold(prior, self.authority),
                 test_reports=self._test_reports(prior),
-                contract=self.contract, push=push, audit_through="DELIVER")
+                contract=self.contract, open_checks=open_checks, audit_through="DELIVER")
             guards = ("LG-3", "LG-4") if action == "land_skip_tests" else (
                 "LG-1", "LG-3", "LG-4")
             return self._commit_report(audit_value, guards=guards,
@@ -1581,13 +1580,13 @@ class RunEngine:
             self.store, run_id=self.run_id, session_id=self.owner_session(),
             action=action, repos=self.effective_repos(), context=context, at=_now(),
             render_report=render, note=note, request_id=request_id,
-            push_reasons=len(push.get("reasons") or []),
+            push_reasons=len(open_checks),    # event field kept for old logs: open checks
             integration_roots=self.contract["repo_roots"])
         # display copy only: execution reads the logged land_request event (C1)
         path = self.run_dir / "artifacts" / "land-requests" / f"{request_id}.json"
         _atomic_json(path, prepared)
         self.write_projection()
-        return {"prepared": prepared, "path": str(path), "push": push}
+        return {"prepared": prepared, "path": str(path)}
 
     @_one_operation
     def execute_land_request(self, request_id: str, *, message: str) -> dict[str, Any]:
@@ -1646,7 +1645,7 @@ class RunEngine:
             self.store.read_events(), self.authority)["auth_grants"].items()
             if row["request_id"] == request_id)
         return {"auth_event_id": auth_event_id, "commits": commits,
-                "state": self.projection(), "push": self.push_status(manual_landing=True)}
+                "state": self.projection()}
 
     def _ledger_of(self, repo_name: str) -> Path:
         """Where run_worktree keeps this run's snapshot of *repo_name* (never from JSON)."""
@@ -2303,7 +2302,7 @@ class RunEngine:
     def build_audit(self, *, through: str, commits: Mapping[str, str] | None = None,
                     persist: bool = True,
                     event_rows: Sequence[Mapping[str, Any]] | None = None,
-                    push: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                    open_checks: Mapping[str, str] | None = None) -> dict[str, Any]:
         from core.run_protocol import audit as audit_protocol
         from core.run_protocol import findings as finding_protocol
         rows = list(event_rows) if event_rows is not None else self.store.read_events()
@@ -2314,24 +2313,19 @@ class RunEngine:
             events=rows, findings=projected_findings,
             test_reports=self._test_reports(rows), lessons=self._reflected_lessons(),
             contract={**self.contract, "requirement": self._delivered_summary()},
-            push=dict(push or self.push_status()), audit_through=through,
+            open_checks=dict(open_checks if open_checks is not None
+                             else self.open_checks()["open"]), audit_through=through,
             commits=commits)
         if persist:
             audit_protocol.write(self.run_dir / "run_audit.json", value)
         return value
 
-    def push_status(self, *, manual_landing: bool = False) -> dict[str, Any]:
-        import dataclasses
-        # a run a person landed stays a manual landing on every later recompute
-        manual_landing = manual_landing or self.projection().get("landing") == "human_override"
+    def open_checks(self) -> dict[str, Any]:
+        """The audit-effect checks that do not pass: one line in the audit's Quality
+        cell (XG 2026-10-26: no push verdict). Never read by landing."""
         context = self.check_context()
-        if manual_landing:
-            context = dataclasses.replace(
-                context, run={**dict(context.run), "landing": "human_override"})
         results = {}
-        for spec in checks.push_checks(self.contract["profile"]):
-            if spec.check_id == "MD-3" and not manual_landing:
-                continue  # normal land evaluates no manual-landing penalty
+        for spec in checks.audit_checks(self.contract["profile"]):
             try:
                 results[spec.check_id] = checks.evaluate(spec.check_id, context)
             except InfrastructureError:
@@ -2339,7 +2333,7 @@ class RunEngine:
             except Exception as exc:
                 results[spec.check_id] = (False, f"{type(exc).__name__}: {exc}")
         failed = {key: detail for key, (passed, detail) in results.items() if not passed}
-        return {"push_ready": not failed, "reasons": failed, "checks": results}
+        return {"open": failed, "checks": results}
 
     @_one_operation
     def prepare_reflect(self, lessons: Sequence[Mapping[str, Any]],
@@ -2456,7 +2450,7 @@ class RunEngine:
         if render_event is not None:
             self._copy_report(render_event["payload"]["blob_sha"])
         self._settle(); self.write_projection()
-        return {"commits": commits, "push": self.push_status(), "state": self.projection(),
+        return {"commits": commits, "state": self.projection(),
                 "resumed": True}
 
     def _sync_moved_bases(self) -> None:
@@ -2585,14 +2579,15 @@ class RunEngine:
                 close("an earlier landing guard failed")
                 return self._land_failed(results)
             self._record_usage("deliver")       # the REPORT's tokens: up to this landing
-            push = self.push_status()
+            open_checks = self.open_checks()["open"]
             report_events = self.store.read_events()
             self.store.append_new(
                 writer=self.authority.writer("cli"), kind="land_intent", at=_now(),
                 stage="deliver", attempt=attempt,
                 payload={"stage_attempt_event_id": opened["event_id"]})
             audit_value = self.build_audit(
-                through="DELIVER", persist=True, event_rows=report_events, push=push)
+                through="DELIVER", persist=True, event_rows=report_events,
+                open_checks=open_checks)
             report = self._commit_report(
                 audit_value, guards=("LG-1", "LG-3", "LG-4", "DV-1"))
             report_sha = self.store.put_blob(report)
@@ -2633,7 +2628,7 @@ class RunEngine:
             raise
         self._copy_report(text=report.decode("utf-8"))
         self._settle(); self.write_projection()
-        return {"ok": True, "commits": commits, "push": push, "state": self.projection()}
+        return {"ok": True, "commits": commits, "state": self.projection()}
 
     def _commit_normal(self, *, bases: Mapping[str, str], bindings: Mapping[str, Any],
                        message: str, attempt: int, attempt_event_id: str

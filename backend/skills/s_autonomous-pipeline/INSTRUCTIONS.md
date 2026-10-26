@@ -55,7 +55,7 @@ Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`.
 - R1 reviews the full diff. Collect the whole round, cluster by cause, fix once, then call `review-address --artifact <handoff.json>`; its returned handouts are the complete R2 roster.
 - A behavior/contract finding's fix is proven by a test you ran: record its report with `"$SWARM_BACKEND_BIN" pipeline-v1 report-tests --project <P> --run-id <R> --artifact -`, then give the item `"proof": {"evidence_type": "reported_test", "command": "<the command as in that report>"}`. The command must pass on the current code; R2 judges whether it shows the fix (ADEQUATE / TEST_INADEQUATE). Refuted findings and structural fixes go through `review-proof`. Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
 - R2 only rechecks addressed R1 findings for experts that reported them. There is no third round or secondary review layer; the only other dispatch is the incremental review of code changed after a review saw it (RV-4; TEST that changes code goes back to REVIEW).
-- Only unresolved HIGH/CRITICAL findings affect push readiness. MEDIUM/LOW remain residual risks.
+- An unresolved HIGH/CRITICAL finding is noted in the audit's Quality cell (RV-2); it does not block landing. MEDIUM/LOW remain residual risks.
 
 ## Tests
 
@@ -67,7 +67,7 @@ One report per repo; `fail` and `not_run` need a reason; `risk` is optional (onl
 
 ## Landing and completion
 
-Normal delivery: `"$SWARM_BACKEND_BIN" pipeline-v1 land --project <P> --run-id <R> --message <message>`. The engine computes code_tree, push effects, land_intent, renderer-owned REPORT, delivery_tree, LG checks and commit-tree in the frozen order. It never pushes.
+Normal delivery: `"$SWARM_BACKEND_BIN" pipeline-v1 land --project <P> --run-id <R> --message <message>`. The engine computes code_tree, the open audit checks, land_intent, renderer-owned REPORT, delivery_tree, LG checks and commit-tree in the frozen order. It never pushes.
 
 Human run-land is executable and always two-step: `run-land --prepare [--skip-tests] [--note ...]`, then `run-land --request <id> --message <message>`. The request command asks the person; their approval is recorded once, bound to session/run/request; the landing rechecks every tree and persists each repo commit. A failed action consumes the authorization; prepare and approve a new request. Snapshot deletion and finding acceptance use the same exact one-use authorization model. Abandoned/not-landed work keeps its `run/<id>` branch, bundle and diff indefinitely.
 

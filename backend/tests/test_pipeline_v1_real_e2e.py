@@ -294,7 +294,7 @@ def test_code_changed_after_prepare_cannot_land_even_with_edited_json(rig):
 
 # ── invariant: whatever the command order, the log folds ────────────────────
 
-_STEPS = ("push-status", "complete-current", "stage-complete-empty", "report", "report-fail",
+_STEPS = ("events", "complete-current", "stage-complete-empty", "report", "report-fail",
           "review-start", "land", "decision", "answer", "stop", "resume", "status")
 
 

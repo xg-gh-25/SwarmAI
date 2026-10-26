@@ -403,22 +403,22 @@ export interface PipelineSummaryDoc {
 }
 
 /** A run's execution summary — written by the BACKEND once, when run.json reaches an
- *  end status (a direct run too): how it ended, push-readiness, the run's documents. */
+ *  end status (a direct run too): how it ended, whether it landed, the run's documents. */
 export interface PipelineSummaryContent {
   type: 'pipeline_summary';
   runId: string;
   profile: string | null;
   /** How the run ended: completed, abandoned, cancelled or failed (older blocks: absent). */
   status?: string | null;
-  pushReady: boolean | null;
-  /** Raw, model-facing: not shown (the attention card says it in plain words). */
-  pushReason: string | null;
+  /** How the run's change landed: landed, human_override, not_landed, no_code (older
+   *  blocks: absent). The pipeline gives no push verdict (XG 2026-10-26). */
+  landing?: string | null;
+  /** Why the change did not land (landing not_landed only). */
+  notLandedReason?: string | null;
   /** What was asked (the run's requirement), what changed, where it landed. */
   intent?: string | null;
   solved?: { before: string; now: string } | null;
   landedSha?: string | null;
-  /** Why not ready to push, in plain words (code: chat.turn.attention.reasonCode.*). */
-  pushReasons?: { code: string | null; text: string }[];
   stagesDone: number;
   docs: PipelineSummaryDoc[];
   at: string;
@@ -451,8 +451,10 @@ export type PipelineAttentionItem =
   | { kind: 'self_answered'; id: string | null; question: string | null; answer: string | null; reason: string | null }
   | { kind: 'assumption'; id: string | null; statement: string | null }
   | { kind: 'gate'; name: string; verdict: string; detail: string | null }
-  /** `reasonCodes[i]` names the cause of `reasons[i]` (null: no known cause) — the
-   *  chat says it in the UI language; older blocks have none. */
+  /** The run's change is not on main. `reasons`: the not-landed reason. */
+  | { kind: 'not_landed'; reasons: string[]; reasonCodes?: (string | null)[]; detail?: string }
+  /** Older blocks only (before 2026-10-26, when the pipeline still gave a push verdict):
+   *  rendered as its reasons, with no verdict heading. */
   | { kind: 'not_push_ready'; reasons: string[]; reasonCodes?: (string | null)[]; detail?: string };
 
 /** What in a run needs the user — written by the BACKEND with the DELIVER row

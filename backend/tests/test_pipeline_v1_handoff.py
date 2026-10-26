@@ -189,7 +189,7 @@ def test_unmetered_experts_still_block_token_cost():
                                         "landing": "landed", "human_decisions": 0},
             events=events, findings=[], repos_isolated=1,
             contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a"]},
-            push={"push_ready": False, "reasons": {}},
+            open_checks={},
             audit_through="COMPLETED")["summary"]["token_cost"]["verdict"]
     assert verdict(base) == "WARN"                     # only the main agent is unknown
     assert verdict([*base, handout]) == "BLOCK"        # an expert ran and nothing counts it

@@ -118,9 +118,8 @@ export interface PipelineRunSummary {
   checkpointReason: string | null;
   /** v1: the chat session that drives the run now. */
   ownerSessionId: string | null;
-  /** Completed runs only: false = completed but DELIVER was not push-ready (a gate or the
-   *  test evidence did not hold on the final code); null = not applicable. */
-  verified: boolean | null;
+  /** A completed run whose change did not land (it is not on main). */
+  notLanded: boolean;
   /** Workspace-relative REPORT.md path if the run has a report, else null. The row's
    *  report button dispatches swarm:open-file{path} to render it in Canvas. Presence
    *  IS "has a report" — no separate bool (run_929024a8). */
@@ -210,7 +209,7 @@ function runSummaryToCamel(r: Record<string, unknown>): PipelineRunSummary {
     needsYou: r.needs_you === true,
     checkpointReason: (r.checkpoint_reason as string | null) ?? null,
     ownerSessionId: (r.owner_session_id as string | null) ?? null,
-    verified: typeof r.verified === 'boolean' ? r.verified : null,
+    notLanded: r.not_landed === true,
     reportPath: (r.report_path as string | null) ?? null,
     auditCard: (r.audit_card as string | null) ?? null,
   };

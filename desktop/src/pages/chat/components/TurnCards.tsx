@@ -64,9 +64,11 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
   } else {
     line = (
       <>
-        {/* Amber, not red: push_ready=false is a normal outcome (the change is
-            committed locally; only the push waits for a look). */}
-        <span className="text-amber-600 dark:text-amber-400">{tf(t, 'chat.turn.attention.notPushReady', 'Not ready to push')}</span>
+        {/* not_landed: the change is not on main. A legacy not_push_ready item
+            (before 2026-10-26) shows only its reasons: no push verdict. */}
+        {item.kind === 'not_landed' && (
+          <span className="text-amber-600 dark:text-amber-400">{tf(t, 'chat.turn.attention.notLanded', 'Not landed')}</span>
+        )}
         {item.reasons.length > 0 && (
           <ul data-testid="not-ready-reasons" className={`${DIM} list-disc pl-5`}>
             {item.reasons.map((r, i) => {
@@ -301,8 +303,7 @@ export function runVerdict(t: Parameters<typeof tf>[0], summary: PipelineSummary
   const ended = summary.status;
   if (ended === 'abandoned' || ended === 'cancelled') return { text: tf(t, 'chat.turn.summary.abandoned', 'Closed without landing'), tone: 'muted' };
   if (ended === 'failed') return { text: tf(t, 'chat.turn.summary.failed', 'Failed'), tone: 'warn' };
-  if (summary.pushReady === true) return { text: tf(t, 'chat.turn.summary.ready', 'Done · ready to push'), tone: 'ok' };
-  if (summary.pushReady === false) return { text: tf(t, 'chat.turn.summary.notReady', 'Done · not ready to push'), tone: 'warn' };
+  if (summary.landing === 'not_landed') return { text: tf(t, 'chat.turn.summary.notLanded', 'Done · not landed'), tone: 'warn' };
   return { text: tf(t, 'chat.turn.summary.done', 'Done'), tone: 'muted' };
 }
 
@@ -363,11 +364,9 @@ export function RunResult({ summary, showReasons = false, collapseDetails = fals
           {summary.auditCard}
         </pre>
       )}
-      {showReasons && summary.pushReady === false && (summary.pushReasons?.length ?? 0) > 0 && (
+      {showReasons && summary.landing === 'not_landed' && summary.notLandedReason && (
         <ul data-testid="run-reasons" className={`${DIM} list-disc pl-5`}>
-          {summary.pushReasons!.map((r, i) => (
-            <li key={i}>{r.code ? tf(t, `chat.turn.attention.reasonCode.${r.code}`, r.text) : r.text}</li>
-          ))}
+          <li>{summary.notLandedReason}</li>
         </ul>
       )}
     </section>

@@ -3,7 +3,8 @@
 Public symbols:
 - ``CHECKS`` — every v13 check with document, effects, stages, variants and profiles.
 - ``EXEMPTIONS`` — every non-applicable profile/check pair with a reason.
-- ``stage_checks`` / ``land_checks`` / ``push_checks`` — effect-specific routing.
+- ``stage_checks`` / ``land_checks`` / ``audit_checks`` — effect-specific routing
+  (``audit``: a failed result is one line in the audit's Quality cell, never a block).
 - ``coverage_errors`` — prove each profile/check pair applies or is exempt.
 - ``evaluate`` — run a check's pure callable against supplied facts.
 """
@@ -15,7 +16,7 @@ from typing import Any, Callable, Mapping
 
 from core.run_protocol.lifecycle import PROFILE_STAGES, caps as lifecycle_caps, profiles_where
 
-EFFECTS = frozenset({"stage", "land", "push"})
+EFFECTS = frozenset({"stage", "land", "audit"})
 PROFILES = frozenset(PROFILE_STAGES)
 Result = tuple[bool, str]
 
@@ -124,7 +125,7 @@ _SPECS = [
     _c("RQ-6", "requirements", "stage", "evaluate", "full", FULL_REQ),
     _c("RQ-8", "requirements", "stage", "evaluate plan", "full lite", DOCS),
 
-    _c("DS-1", "design_spec", "push", "plan", "full lite", DESIGN),
+    _c("DS-1", "design_spec", "audit", "plan", "full lite", DESIGN),
     _c("DS-2a", "design_spec", "stage", "plan", "full lite", DESIGN),
     _c("DS-3", "design_spec", "", "plan", "full lite", DESIGN),
     _c("DS-4a", "design_spec", "stage", "plan", "full", profiles_where(lambda c: c.triad)),
@@ -135,18 +136,18 @@ _SPECS = [
     # S6-1: BUILD ends with the agent's validation report on the current code tree
     _c("BX-3", "validation_report", "stage", "build", "run", CODE),
 
-    _c("RV-1a", "review", "push", "review", "review", CODE),
+    _c("RV-1a", "review", "audit", "review", "review", CODE),
     _c("RV-1b", "review", "", "evaluate", "review", profiles_where(lambda c: c.gate0 != "never")),
     _c("RV-1c", "review", "", "review", "review", CODE),
     _c("DC-1", "decision", "", "evaluate think plan", "decision", DOCS),
-    _c("DC-2", "decision", "push", "evaluate think plan", "decision", DOCS),
-    _c("RV-2", "review", "push", "review", "review", CODE),
+    _c("DC-2", "decision", "audit", "evaluate think plan", "decision", DOCS),
+    _c("RV-2", "review", "audit", "review", "review", CODE),
     # S6-2: REVIEW completes only on code a review round saw
     _c("RV-4", "review", "stage", "review", "review", CODE),
     _c("FX-1", "fixing_spec", "", "review", "review", CODE),
 ]
 _SPECS += [
-    _c("TS-1", "validation_report", "stage push", "test", "test", CODE),
+    _c("TS-1", "validation_report", "stage audit", "test", "test", CODE),
     _c("TS-3", "test_report", "", "test", "test", DESIGN),
     # every DESIGN_SPEC test reference names a file of the tested code (DS-2a also
     # accepted a file the plan said it would create; nothing checked it was)
@@ -155,8 +156,6 @@ _SPECS += [
     _c("LG-1", "final", "land", "land run_land", "final", CODE),
     _c("LG-3", "report", "land", "land run_land", "report", CODE),
     _c("LG-4", "final", "land", "land run_land", "final", CODE),
-    _c("MD-1", "run", "push", "deliver", "run", CODE),
-    _c("MD-3", "authorization", "push", "run_land", "authorization", CODE),
     _c("RF-1", "reflect", "stage", "deliver", "reflect", ALL),
     _c("RF-2", "reflect", "stage", "deliver", "reflect", ALL),
     _c("RF-3", "reflect", "stage", "deliver", "reflect", ALL),
@@ -228,9 +227,9 @@ def land_checks(profile: str) -> tuple[CheckSpec, ...]:
     return tuple(_for(profile, "land"))
 
 
-def push_checks(profile: str) -> tuple[CheckSpec, ...]:
-    """Checks whose failed result lowers push_ready."""
-    return tuple(_for(profile, "push"))
+def audit_checks(profile: str) -> tuple[CheckSpec, ...]:
+    """Checks whose failed result is noted in the audit (Quality), never a block."""
+    return tuple(_for(profile, "audit"))
 
 
 def evaluate(check_id: str, context: CheckContext) -> Result:
@@ -442,8 +441,8 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
             blocking = [row["canonical_id"] for row in projected if findings.push_effect(row)
                         or (row["canonical_id"] in stale and findings.normalize_severity(
                             row.get("severity")) in ("HIGH", "CRITICAL"))]
-            return _result(not blocking, "no push-effect finding" if not blocking
-                           else f"push-effect findings: {blocking}")
+            return _result(not blocking, "no open HIGH finding" if not blocking
+                           else f"open HIGH findings: {blocking}")
         clustered = {cid for cluster in findings.cluster_findings(projected)
                      for cid in cluster["findings"]}
         expected = {row["canonical_id"] for row in projected if row["status"] != "refuted"}
@@ -497,15 +496,6 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
                     and landing_bases[n] == run_bases[n] for n in context.expected_repos)
         return _result(ok, "main is still at the run's base" if ok else
                        "main moved since the run's base; sync and test again first")
-    if check_id == "MD-1":
-        mode = context.run.get("mode")
-        return _result(mode == "isolated", "isolated" if mode == "isolated"
-                       else "mode missing or shared")
-    if check_id == "MD-3":
-        landing = context.run.get("landing")
-        return _result(landing is not None and landing != "human_override",
-                       "normal landing" if landing is not None and landing != "human_override"
-                       else "landing missing or human override")
     if check_id.startswith("RF-"):
         lessons = context.run.get("lessons")
         if check_id == "RF-5":

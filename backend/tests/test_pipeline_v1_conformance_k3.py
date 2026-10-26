@@ -99,7 +99,7 @@ def test_f18_a_dispatch_cap_blocks_token_too():
                                     "human_decisions": 0},
         events=events, findings=[], repos_isolated=1,
         contract={"run_id": "run_x", "mode": "isolated", "expected_repos": ["a"]},
-        push={"push_ready": False, "reasons": {}}, audit_through="DELIVER")
+        open_checks={}, audit_through="DELIVER")
     assert value["summary"]["speed"]["verdict"] == "BLOCK"
     assert value["summary"]["token_cost"]["verdict"] == "BLOCK"
 
@@ -139,7 +139,7 @@ def test_f13_a_persons_answer_is_written_into_its_requirements(rig):
     assert "swap" in (r.engine().run_dir / "REQUIREMENTS.md").read_text()
 
 
-def test_f12_after_the_cap_the_agent_chooses_from_evidence_and_dc2_fails_push(rig):
+def test_f12_after_the_cap_the_agent_chooses_from_evidence_and_dc2_is_open(rig):
     r = rig("full")
     r.create()
     r.drive(until="think")
@@ -156,8 +156,7 @@ def test_f12_after_the_cap_the_agent_chooses_from_evidence_and_dc2_fails_push(ri
     row = next(row for row in _requirements(r)["clarifications"] if row["qid"] == "qcap")
     assert row == {"qid": "qcap", "question": "Swap or rewrite (qcap)?", "answer": "rewrite",
                    "answered_by": "evidence", "decided_by": "agent_after_cap"}
-    push = r.engine().push_status()
-    assert push["push_ready"] is False and "DC-2" in push["reasons"], push
+    assert "DC-2" in r.engine().open_checks()["open"]
 
 
 # ── F11 ──────────────────────────────────────────────────────────────────────
@@ -292,7 +291,7 @@ def test_r1_a_git_object_failure_while_collecting_facts_fails_the_run(rig, monke
     with pytest.raises(git_tree.GitObjectWriteError):
         engine.check_context()
     with pytest.raises(git_tree.GitObjectWriteError):
-        engine.push_status()
+        engine.open_checks()
     # this process is the daemon: teardown's status needs git back
     monkeypatch.setattr(git_tree, "write_tree", real)
 

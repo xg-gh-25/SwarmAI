@@ -114,7 +114,7 @@ def test_pipeline_v1_commands_are_watched():
     assert not pse.is_run_create(
         "python-backend pipeline-v1 status --project P --run-id run_v1")
     for command in ("status", "gate0-start", "stage-complete", "review-start",
-                    "push-status", "land", "review-address", "reflect-prepare",
+                    "land", "review-address", "reflect-prepare",
                     "events"):
         cmd = f"python-backend pipeline-v1 {command} --project P --run-id run_v1"
         assert pse.parse_watched_run_id(cmd) == "run_v1", command

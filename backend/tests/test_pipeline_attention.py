@@ -40,15 +40,15 @@ def test_run_block_is_the_alignment():
     assert pse.run_block("run_a1", {"stages": {}, "requirement": "  "}, "T") is None
 
 
-def test_attention_names_a_change_that_did_not_land_or_is_not_push_ready():
-    """v1: from the projection's landing / push_ready only (no artifact is read)."""
+def test_attention_names_only_a_change_that_did_not_land():
+    """v1: from the projection's landing only (no artifact is read). There is no push
+    verdict (XG 2026-10-26): open audit checks are not a "needs you" item."""
     not_landed = pse.attention_block("run_a1", {"landing": "not_landed",
                                                 "reason": "tests_red"}, "T")
     assert [(i["kind"], i["reasons"]) for i in not_landed["items"]] == [
-        ("not_push_ready", ["Not landed: tests_red"])]
-    blocked = pse.attention_block("run_a1", {"landing": "landed", "push_ready": False}, "T")
-    assert [i["kind"] for i in blocked["items"]] == ["not_push_ready"]
-    assert pse.attention_block("run_a1", {"landing": "landed", "push_ready": True}, "T") is None
+        ("not_landed", ["tests_red"])]
+    assert pse.attention_block("run_a1", {"landing": "landed", "push_ready": False}, "T") is None
+    assert pse.attention_block("run_a1", {"landing": "landed"}, "T") is None
     assert pse.attention_block("run_a1", None, "T") is None
 
 
@@ -61,7 +61,7 @@ from tests.test_pipeline_stage_events import (  # noqa: E402 — shared stream h
 _S1 = {"profile": "full", "status": "running", "requirement": "Do X",
        "stages": {"evaluate": {"stage": "evaluate", "status": "completed"}}}
 _S2 = {**_S1, "stages": {**_S1["stages"], "think": {"stage": "think", "status": "completed"}}}
-_S3 = {**_S2, "push_ready": False, "stages": {**_S2["stages"], "deliver": {
+_S3 = {**_S2, "landing": "not_landed", "reason": "tests_red", "stages": {**_S2["stages"], "deliver": {
     "stage": "deliver", "status": "completed"}}}
 
 
@@ -96,7 +96,7 @@ def test_orchestrator_announces_the_run_once_and_attention_rides_deliver(monkeyp
     # the same turn calling the CLI again: no second announce
     later = _turn(orch, monkeypatch, _ScriptedReader(_S3), "tu2")
     assert [(b["type"], b.get("stage")) for b in later] == [("pipeline_stage", "deliver"), ("pipeline_attention", None)]
-    assert [i["kind"] for i in later[1]["items"]] == ["not_push_ready"]   # waited for DELIVER
+    assert [i["kind"] for i in later[1]["items"]] == ["not_landed"]   # waited for DELIVER
 
 
 @pytest.mark.usefixtures("_isolated_queue")

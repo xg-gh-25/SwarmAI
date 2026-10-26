@@ -9,7 +9,7 @@ event log, its sealed finals and git. Covered:
 - §D4 items 1, 4, 5, 6 on two real isolated runs of one repo, asserting finals, not
   only trees (F9);
 - the §D4 end-to-end scenarios: TEST red -> not_landed(tests_red) and
-  push_ready false, the circuit breaker, a person's run-land (human_override), a
+  open audit checks, the circuit breaker, a person's run-land (human_override), a
   decision with awaiting_human, abandon/restore;
 - a person's run-land after a partial_land keeps the landed repo and lands the rest.
 """
@@ -199,13 +199,13 @@ def test_d4_4_a_persons_answer_reaches_only_the_run_that_asked(rig):
 # ── §D4 end-to-end scenarios ─────────────────────────────────────────────────
 
 
-def test_tests_red_ends_not_landed_and_never_push_ready(rig):
+def test_tests_red_ends_not_landed_with_ts1_open(rig):
     from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red
     r = rig("trivial")
     base = _git(r.repo, "rev-parse", "main")
     _not_landed_tests_red(r)
     assert _git(r.repo, "rev-parse", "main") == base
-    assert r.engine().push_status()["push_ready"] is False
+    assert "TS-1" in r.engine().open_checks()["open"]
 
 
 def test_a_persons_run_land_lands_as_human_override(rig):

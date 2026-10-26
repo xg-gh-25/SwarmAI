@@ -14,7 +14,7 @@ const run = (o: Partial<PipelineRunSummary>): PipelineRunSummary => ({
   id: 'run_a', requirement: 'Fix it', status: 'completed', profile: 'bugfix', progress: '8/8',
   cycleTimeMin: 20, tokensActual: 1000, createdAt: '', updatedAt: '2026-10-20T00:00:00Z',
   pauseKind: null, needsYou: false, checkpointReason: null, ownerSessionId: null,
-  verified: true, reportPath: null, auditCard: null, ...o,
+  notLanded: false, reportPath: null, auditCard: null, ...o,
 });
 const analytics = (runs: PipelineRunSummary[], project = 'P'): PipelineAnalytics => ({
   window: '30d',
@@ -55,11 +55,11 @@ describe('brainMapModel', () => {
     expect(projectRuns(analytics([]), 'Missing')).toEqual([]);
   });
 
-  it('runTone: needs-you wins, an unverified completion is not "landed"', () => {
+  it('runTone: needs-you wins, a completion that did not land is not "landed"', () => {
     expect(runTone(run({ status: 'running', needsYou: true }))).toBe('needs');
     expect(runTone(run({ status: 'running' }))).toBe('running');
     expect(runTone(run({ status: 'completed' }))).toBe('landed');
-    expect(runTone(run({ status: 'completed', verified: false }))).toBe('failed');
+    expect(runTone(run({ status: 'completed', notLanded: true }))).toBe('failed');
     expect(runTone(run({ status: 'paused' }))).toBe('stopped');
   });
 
@@ -107,7 +107,7 @@ describe('brainMapModel', () => {
       brain('C'),
     ];
     const a = an({
-      A: [run({ needsYou: true, status: 'running' }), run({ id: 'r2' }), run({ id: 'r3', verified: false })],
+      A: [run({ needsYou: true, status: 'running' }), run({ id: 'r2' }), run({ id: 'r3', notLanded: true })],
       Gone: [run({ id: 'x', needsYou: true })],  // not a known brain: not counted
     });
     expect(hubSummary(brains, a)).toEqual({

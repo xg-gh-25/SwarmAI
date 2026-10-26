@@ -215,7 +215,7 @@ def _reports_reviewed(event_rows) -> bool:
 
 def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
           findings: Sequence[Mapping[str, Any]],
-          contract: Mapping[str, Any], push: Mapping[str, Any], audit_through: str,
+          contract: Mapping[str, Any], open_checks: Mapping[str, Any], audit_through: str,
           commits: Mapping[str, str] | None = None,
           repos_isolated: int | None = None,
           retained: Sequence[Mapping[str, Any]] = (),
@@ -226,7 +226,9 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
           lessons: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
     """*test_reports*: repo -> the latest TEST validation report (its commands are
     listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
-    the run because their project has no DDD are listed in the REPORT)."""
+    the run because their project has no DDD are listed in the REPORT); *open_checks*:
+    check id -> detail of each audit-effect check that does not pass (one line in the
+    Quality cell; no push verdict, XG 2026-10-26)."""
     if audit_through not in {"DELIVER", "COMPLETED"}:
         raise AuditError("audit_through must be DELIVER or COMPLETED")
     if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
@@ -309,13 +311,15 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     elif landing in {"no_code", "not_landed"}:
         quality_verdict = "N/A"
     elif landing == "human_override" or passed < required or closed < len(findings) \
-            or not push.get("push_ready", False):
+            or open_checks:
         quality_verdict = "WARN"
     else:
         quality_verdict = "PASS"
     quality = {"verdict": quality_verdict, "verification_passed": passed,
                "verification_required": required, "findings_closed": closed,
-               "findings_confirmed": confirmed, "findings_total": len(findings)}
+               "findings_confirmed": confirmed, "findings_total": len(findings),
+               "open": _open_lines(open_checks, [row["canonical_id"] for row in findings
+                                                 if push_effect(row)])}
 
     # answered decisions + run-land (both in the projection) + accept_finding (§E9.3, D4)
     human_decisions = int(projection.get("human_decisions") or 0) + sum(
@@ -372,15 +376,11 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
              "not_available": None if measured else unavailable}
 
     commit_map = dict(commits or {})
-    high_policy = [row["canonical_id"] for row in findings if push_effect(row)
-                   and row.get("kind") == "security_policy"
-                   and str(row.get("severity")).upper() in ("HIGH", "CRITICAL")]
     outcome = {"status": projection.get("status"), "landing": landing,
                "reason": _reason(projection, event_rows),
-               "push_ready": bool(push.get("push_ready", False)),
                "commit": next(iter(commit_map.values()), None)}
     details = {"events": [row.get("event_id") for row in event_rows],
-               "push_reasons": dict(push.get("reasons") or {}),
+               "open_checks": dict(open_checks),
                "findings": [dict(row) for row in findings],
                "commits": commit_map,
                "expected_repos": list(contract.get("expected_repos") or []),
@@ -388,7 +388,6 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "unclosed_high": [row["canonical_id"] for row in findings if push_effect(row)],
                # direct: the user's words are the requirement (no REQUIREMENTS doc)
                "requirement": contract.get("requirement"),
-               "high_security_policy": high_policy,
                "retained": [dict(row) for row in retained],
                "manual": dict(manual) if manual else None,
                "title": title or run_id,
@@ -472,9 +471,30 @@ def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:
     if quality.get("verdict") == "N/A":
         return str(reason or "no code")
     confirmed = quality.get("findings_confirmed")
+    opened = [str(line) for line in quality.get("open") or []]
     return (f"{quality['verification_passed']}/{quality['verification_required']} verification · "
             f"{quality['findings_closed']}/{quality['findings_total']} findings closed"
-            + (f" ({confirmed} test-closed, confirmed by review)" if confirmed else ""))
+            + (f" ({confirmed} test-closed, confirmed by review)" if confirmed else "")
+            + (f" · {opened[0]}" if opened else "")
+            + (f" · +{len(opened) - 1} more" if len(opened) > 1 else ""))
+
+
+# one short sentence per open audit check, for the Quality cell (XG 2026-10-26)
+OPEN_TEXT = {"RV-1a": "correctness review not answered",
+             "TS-1": "test report not on the final code",
+             "DS-1": "a requirement not covered by the design",
+             "DC-2": "agent chose after the decision cap"}
+
+
+def _open_lines(open_checks: Mapping[str, Any], unclosed_high: Sequence[str]) -> list[str]:
+    lines = []
+    for check_id in sorted(open_checks, key=lambda cid: (cid != "RV-2", cid)):
+        if check_id == "RV-2":
+            n = len(unclosed_high) or 1
+            lines.append(f"{n} HIGH finding{'s' if n != 1 else ''} open")
+        else:
+            lines.append(OPEN_TEXT.get(check_id, f"{check_id} open"))
+    return lines
 
 
 def _isolation_text(row: Mapping[str, Any]) -> str:
@@ -528,8 +548,7 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
          + ("s" if summary['autonomy']['required_approvals'] != 1 else "")),
         ("Token Cost", summary["token_cost"], _token_text(summary["token_cost"])),
     ]
-    state = f"{str(outcome.get('status') or '').upper()} · {str(outcome.get('landing') or '').upper()} · " \
-            + ("PUSH READY" if outcome.get("push_ready") else "NOT PUSH READY")
+    state = f"{str(outcome.get('status') or '').upper()} · {str(outcome.get('landing') or '').upper()}"
     if outcome.get("commit"):
         state += " · " + str(outcome["commit"])[:8]
     if fmt == "card":
@@ -571,15 +590,6 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
                   "lessons are kept in this run's record only:", ""]
         lines += [f"- {_text(row.get('id'), 20)}: {_text(row.get('statement'), 400)}"
                   for row in kept]
-    if not outcome.get("push_ready"):
-        reasons = dict(details.get("push_reasons") or {})
-        high = [f"- {cid}: HIGH security_policy finding still has push effect"
-                for cid in details.get("high_security_policy") or []]
-        items = [f"- {_text(key, 80)}: {_text(detail)}" for key, detail in reasons.items()]
-        if high or items:
-            lines += ["", "## Look at these before you push"] + high + items[:5]
-            if len(items) > 5:
-                lines.append(f"- {len(items) - 5} more in run_audit.json")
     if outcome.get("reason") == "partial_land":
         landed = dict(details.get("commits") or {})
         expected = [str(name) for name in details.get("expected_repos") or []]
@@ -587,8 +597,8 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         lines += ["", "## Only part of the change landed", ""]
         lines += [f"- landed: {name} @ {str(sha)[:12]}" for name, sha in sorted(landed.items())]
         lines += [f"- not landed: {name}" for name in missing]
-        lines.append("- main now holds only part of this change: deal with the repos that did "
-                     "not land before you push.")
+        lines.append("- main now holds only part of this change: the repos above marked "
+                     "not landed are not in it.")
     for name in details.get("unsettled_checkouts") or []:
         lines.append(f"- {name}: landed on the branch, but the checkout's index / REPORT was not "
                      "settled; `git status` may show differences from HEAD. No file was lost.")

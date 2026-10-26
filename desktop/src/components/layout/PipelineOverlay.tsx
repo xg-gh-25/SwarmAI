@@ -366,14 +366,14 @@ function Stat({ label, value, sub, accent, onClick, active, testid }: {
 /** Status → pill {label, dot color, text color}. "Needs you" is DERIVED, not a raw
  *  status: abandoned OR a v1 pause kind → needs you; else the raw status. Kept
  *  consistent with statusDot's colors so the pill and any dot never disagree. */
-function statusPill(s: string, pauseKind: PipelinePauseKind, verified: boolean | null = null): { label: string; tone: Tone } {
+function statusPill(s: string, pauseKind: PipelinePauseKind, notLanded = false): { label: string; tone: Tone } {
   if (pauseKind === 'decision') return { label: 'needs your decision', tone: 'error' };
   if (pauseKind === 'stopped') return { label: 'stopped', tone: 'warning' };
   if (pauseKind === 'worktree') return { label: 'worktree unavailable', tone: 'warning' };
   if (pauseKind === 'idle') return { label: 'idle', tone: 'warning' };
   if (s === 'abandoned') return { label: 'needs you', tone: 'error' };
-  // completed ≠ verified: DELIVER was not push-ready on the final code (backend _completion_verdict)
-  if (s === 'completed' && verified === false) return { label: 'unverified', tone: 'warning' };
+  // completed but its change is not on main (the pipeline gives no push verdict)
+  if (s === 'completed' && notLanded) return { label: 'not landed', tone: 'warning' };
   if (s === 'completed') return { label: 'completed', tone: 'success' };
   if (s === 'running') return { label: 'running', tone: 'primary' };
   if (s === 'paused') return { label: 'paused', tone: 'warning' };
@@ -386,7 +386,7 @@ function statusPill(s: string, pauseKind: PipelinePauseKind, verified: boolean |
 function RunRow({ r, onOpenRun, close, showProject }: {
   r: PipelineRunSummary; onOpenRun: (id: string) => void; close: () => void; showProject?: string;
 }) {
-  const pill = statusPill(r.status, r.pauseKind, r.verified);
+  const pill = statusPill(r.status, r.pauseKind, r.notLanded);
   return (
     <div
       data-testid={`pipeline-run-${r.id}`}

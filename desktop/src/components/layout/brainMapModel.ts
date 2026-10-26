@@ -53,7 +53,7 @@ export type RunTone = 'running' | 'needs' | 'landed' | 'failed' | 'stopped';
 export function runTone(r: PipelineRunSummary): RunTone {
   if (r.needsYou) return 'needs';
   if (r.status === 'running') return 'running';
-  if (r.status === 'completed') return r.verified === false ? 'failed' : 'landed';
+  if (r.status === 'completed') return r.notLanded ? 'failed' : 'landed';
   if (r.status === 'failed' || r.status === 'abandoned') return 'failed';
   return 'stopped';
 }
@@ -106,7 +106,7 @@ export interface BrainEval {
 export function brainEval(
   runs: PipelineRunSummary[], detail: BrainDetail | null, review: ReviewData | null,
 ): BrainEval {
-  const landed = runs.filter((r) => r.status === 'completed' && r.verified !== false);
+  const landed = runs.filter((r) => r.status === 'completed' && !r.notLanded);
   const done = runs.filter((r) => r.status !== 'running');
   const cyc = runs.map((r) => r.cycleTimeMin).filter((x): x is number => typeof x === 'number');
   const tok = runs.map((r) => r.tokensActual);
@@ -222,7 +222,7 @@ export function hubSummary(brains: BrainSummary[], a?: PipelineAnalytics | null)
     learned: reported.length ? reported.reduce((s, b) => s + (b.recentActivity ?? 0), 0) : null,
     learnedBrains: reported.filter((b) => (b.recentActivity ?? 0) > 0).length,
     sinking: brains.reduce((s, b) => s + (b.health.sinking ?? 0), 0),
-    landed: runs.filter((r) => r.status === 'completed' && r.verified !== false).length,
+    landed: runs.filter((r) => r.status === 'completed' && !r.notLanded).length,
     finished: runs.filter((r) => r.status !== 'running').length,
     liveRuns: runs.filter((r) => r.status === 'running').length,
   };

@@ -395,14 +395,14 @@ describe('PipelineOverlay', () => {
     expect(within(grp.getByTestId('pipeline-run-run_done1')).getByText('completed')).toBeInTheDocument();
   });
 
-  it('a completed run whose DELIVER was not push-ready shows "unverified", not "completed"', async () => {
+  it('a completed run whose change did not land shows "not landed", not "completed"', async () => {
     const unverified = structuredClone(ANALYTICS);
-    unverified.byProject[0].runs[0] = { ...unverified.byProject[0].runs[0], verified: false };
+    unverified.byProject[0].runs[0] = { ...unverified.byProject[0].runs[0], notLanded: true };
     fetchAnalytics.mockResolvedValue(unverified);
     renderAndOpen();
     await waitFor(() => expect(screen.getByTestId('pipeline-project-SwarmAI')).toBeInTheDocument());
     const row = within(within(screen.getByTestId('pipeline-project-SwarmAI')).getByTestId('pipeline-run-run_done1'));
-    expect(row.getByText('unverified')).toBeInTheDocument();
+    expect(row.getByText('not landed')).toBeInTheDocument();
     expect(row.queryByText('completed')).toBeNull();
   });
 });
