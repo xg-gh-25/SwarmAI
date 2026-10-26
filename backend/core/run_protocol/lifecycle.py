@@ -27,21 +27,31 @@ LANDINGS = frozenset({"landed", "not_landed", "human_override", "no_code"})
 NOT_LANDED_REASONS = frozenset({
     "final_stale", "report_mismatch", "checks_exhausted", "framing_rejected",
     "already_satisfied", "land_conflict", "partial_land",
+    # main kept moving past the run's base: BASE_MOVED_CAP landing attempts each failed
+    # only because the sync moved the tree (design 2026-10-26-pipeline-review-closure
+    # §5.2 point 2)
+    "base_kept_moving",
 })
 QUALITY_BLOCK_REASONS = frozenset({
     "final_stale", "report_mismatch",
     # half a multi-repo change is on main: what landed no longer is the reviewed change
     "partial_land",
+    "base_kept_moving",
 })
 # count caps a run can hit (conformance F18); DISPATCH_CAPS bound model sessions
 CAPS = frozenset({"stage_attempt", "land_attempt", "gate0_round", "dispatch",
-                  "review_reopen"})
+                  "review_reopen", "base_moved"})
+# landing attempts that failed only because main moved (an LG-1 detail starting with
+# BASE_MOVED_PREFIX) count apart from the run's own 3, up to this many
+BASE_MOVED_CAP = 10
+BASE_MOVED_PREFIX = "base_moved:"
 # how often TEST may send the run back to REVIEW (S6-2)
 REVIEW_REOPEN_CAP = 2
 DISPATCH_CAPS = frozenset({"dispatch", "gate0_round"})
 # the not-landed reasons that ARE a count cap being hit
 REASON_CAPS = {"checks_exhausted": "stage_attempt", "land_conflict": "land_attempt",
-               "final_stale": "land_attempt", "framing_rejected": "gate0_round"}
+               "final_stale": "land_attempt", "framing_rejected": "gate0_round",
+               "base_kept_moving": "base_moved"}
 
 
 def cap_already_recorded(chain: Sequence[Mapping[str, Any]], cap: str, stage: str,
@@ -203,6 +213,7 @@ def _initial(event: Mapping[str, Any]) -> dict[str, Any]:
         "last_land_intent": None, "last_report_render": None,
         "land_requests": {}, "auth_grants": {},
         "auth_consumed": {}, "expected_transition": None, "review_reopens": 0,
+        "base_moved_failures": 0,
     }
 
 
@@ -305,8 +316,13 @@ def _failed_stage(run: dict[str, Any], event: Mapping[str, Any], failed: set[str
         run["last_land_intent"], run["last_report_render"] = None, None
         if failed & {"LG-3", "DV-1"}:
             _set_pending(run, "report_mismatch")
+        elif failed == {"LG-1"} and str(details.get("LG-1", "")).startswith(BASE_MOVED_PREFIX):
+            # failed only because the sync moved the tree: counts apart (§5.2 point 2)
+            run["base_moved_failures"] = run.get("base_moved_failures", 0) + 1
+            if run["base_moved_failures"] >= BASE_MOVED_CAP:
+                _set_pending(run, "base_kept_moving")
         elif failed & {"LG-1", "LG-4"}:
-            if number >= 3:
+            if number - run.get("base_moved_failures", 0) >= 3:
                 conflict = str(details.get("LG-4", "")).startswith("merge_conflict")
                 _set_pending(run, "land_conflict" if conflict else "final_stale")
         return

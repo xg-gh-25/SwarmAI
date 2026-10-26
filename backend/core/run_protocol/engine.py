@@ -2993,6 +2993,64 @@ class RunEngine:
                     "patch_changed", f"{name}: rebasing onto the moved main changed the run's "
                     "own patch; that code was not reviewed")
 
+    def _before_sync(self) -> dict[str, dict[str, Any]]:
+        """Per repo, before a landing's sync: the run base, the code tree and the tree of
+        the latest TEST report (what ``_base_moved_note`` compares after it)."""
+        expected = list(self.contract["expected_repos"])
+        trees = self._current_code(expected)[1]
+        reports = validation_report.latest(self.store.read_events(), "test")
+        out: dict[str, dict[str, Any]] = {}
+        for name, root in self.effective_repos().items():
+            try:
+                base = self._fork_base(name, root)
+            except EngineError:
+                base = None
+            out[name] = {"base": base, "tree": trees.get(name),
+                         "report_tree": ((reports.get(name) or {}).get("payload") or {})
+                         .get("code_tree")}
+        return out
+
+    def _base_moved_note(self, before: Mapping[str, Mapping[str, Any]]) -> str | None:
+        """When LG-1 failed only because the sync moved main under a fresh TEST report:
+        what moved, the last TEST commands to run again and the run's files main also
+        changed (information; it releases nothing). None otherwise: no base moved, or a
+        repo's TEST report was not on its tree before the sync (design 2026-10-26-
+        pipeline-review-closure §5.2 point 2). A sync conflict or a changed patch never
+        gets here (LG-4 fails with it)."""
+        moved: list[str] = []
+        overlap: list[str] = []
+        for name, root in self.effective_repos().items():
+            then = before.get(name) or {}
+            if not then.get("tree") or then.get("report_tree") != then.get("tree"):
+                return None
+            try:
+                now = self._fork_base(name, root)
+            except EngineError:
+                return None
+            if not then.get("base") or now == then["base"]:
+                continue
+            moved.append(f"{name} {str(then['base'])[:12]}->{str(now)[:12]}")
+            try:
+                main_paths = set(_git(root, "diff", "--name-only", "--no-renames",
+                                      then["base"], now).splitlines())
+                own = set(_git(root, "diff", "--name-only", "--no-renames", now,
+                               git_tree.write_tree(root, (f".aidlc/deliverables/{self.run_id}/",),
+                                                   {})).splitlines())
+            except EngineError:
+                continue
+            overlap += [f"{name}:{path}" for path in sorted(main_paths & own) if path]
+        if not moved:
+            return None
+        commands = []
+        for repo, report in sorted(self._test_reports(self.store.read_events()).items()):
+            for cmd in (report or {}).get("commands") or ():
+                if isinstance(cmd, Mapping) and cmd.get("command"):
+                    commands.append(f"{repo}: `{cmd['command']}` (cwd {cmd.get('cwd') or '.'})")
+        return ("main moved (" + ", ".join(moved) + "); test again with the last TEST "
+                "commands: " + ("; ".join(commands[:8]) or "none recorded")
+                + ("; main's new commits also changed the run's " + ", ".join(overlap[:20])
+                   if overlap else ""))
+
     def _landing_lock(self):
         """One landing of this run at a time (fixing spec C4): land / run-land hold it
         from the guards to the land event, so two processes cannot interleave a
@@ -3067,6 +3125,7 @@ class RunEngine:
 
         try:
             carry_error: IntegrationRequired | None = None
+            before_sync = self._before_sync()
             try:
                 self._sync_moved_bases()
             except IntegrationRequired as exc:
@@ -3080,7 +3139,12 @@ class RunEngine:
                                            for name, root in self.contract["repo_roots"].items()}}
             context = dataclasses.replace(context, run=run_facts,
                                           events=tuple(self.store.read_events()))
-            record("LG-1", *checks.evaluate("LG-1", context))
+            lg1_passed, lg1_detail = checks.evaluate("LG-1", context)
+            if not lg1_passed and carry_error is None:
+                moved = self._base_moved_note(before_sync)
+                if moved:
+                    lg1_detail = f"{lifecycle.BASE_MOVED_PREFIX} {moved} | {lg1_detail}"[:1500]
+            record("LG-1", lg1_passed, lg1_detail)
             if carry_error is not None:
                 prefix = "merge_conflict: " if carry_error.code == "merge_conflict" else ""
                 record("LG-4", False, prefix + str(carry_error))
