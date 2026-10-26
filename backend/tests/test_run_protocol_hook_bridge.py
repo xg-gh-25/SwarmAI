@@ -125,8 +125,10 @@ def test_usage_metrics_are_recorded_by_the_hook(tmp_path):
     hb.record_usage(store, {"input_tokens": 3, "cache_read_tokens": 4,
                             "output_tokens": 2, "responses": 1}, completed_at=AT)
     metrics = store.read_events()
-    assert [row["producer"] for row in metrics] == ["hook", "hook", "hook"]
-    assert [row["payload"]["value"] for row in metrics] == [7, 2, 1]
+    assert [row["producer"] for row in metrics] == ["hook"] * 4
+    # cache reads apart from input (review-closure §6.2 point 3)
+    assert {row["payload"]["name"]: row["payload"]["value"] for row in metrics} == {
+        "input_tokens": 3, "output_tokens": 2, "cache_read_tokens": 4, "accounted_calls": 1}
 
 
 # ── ced6caa3: one invalid R2 status line must not drop the whole answer ──────────

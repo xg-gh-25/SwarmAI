@@ -18,13 +18,23 @@ export function judgeSummary(judge: RunJudge): string {
   const flagged = judge.verdicts
     .map((v, i) => [v, i] as const)
     .filter(([v]) => v === 'WARN' || v === 'BLOCK');
+  // N/A: no reference line on this install yet (Speed / Token) or nothing to judge; a
+  // sentence never says such a dimension is within its line
+  const na = judge.verdicts
+    .map((v, i) => [v, i] as const)
+    .filter(([v]) => v === 'NA')
+    .map(([, i]) => DIMENSIONS[i]);
+  const naNote = na.length ? `${na.join('、')} 暂无参考线（N/A）。` : '';
   if (flagged.length === 0) {
-    return judge.verdicts.includes('PENDING')
-      ? '到目前为止各维度都正常；Quality 要到验证阶段才有结论。'
+    if (judge.verdicts.includes('PENDING')) {
+      return '到目前为止各维度都正常；Quality 要到验证阶段才有结论。';
+    }
+    return na.length
+      ? `没有 WARN 或 BLOCK 的维度；${naNote}`
       : '五个维度都 PASS：隔离干净、验证和 finding 全过、没有人类决策和救援、在时间和 Token 警戒线内。';
   }
   const parts = flagged.map(([v, i]) => `${DIMENSIONS[i]} ${v}：${judge.numbers[i]}`).join('；');
   return judge.verdicts.includes('BLOCK')
-    ? `${parts}。有 BLOCK 的维度，这个 run 不算合格交付。`
-    : `${parts}。其余维度 PASS。`;
+    ? `${parts}。有 BLOCK 的维度，这个 run 不算合格交付。${naNote}`
+    : `${parts}。${na.length ? `${naNote}其余维度 PASS。` : '其余维度 PASS。'}`;
 }

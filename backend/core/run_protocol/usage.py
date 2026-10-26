@@ -33,10 +33,13 @@ def measure(store: AuditStore, *, transcript_ids: Sequence[str], created_at: str
                                               include_subagents=True)
     if value is None:
         raise UsageError("no measured response in the run window")
-    combined_input = (value["input_tokens"] + value["cache_read_tokens"]
-                      + value["cache_creation_tokens"])
+    # cache reads apart: how many a call reads depends on how long the host session
+    # already was, so runs compare on input + cache creation + output (design 2026-10-26-
+    # pipeline-review-closure §6.2 point 3)
+    combined_input = value["input_tokens"] + value["cache_creation_tokens"]
     metrics = {"input_tokens": combined_input,
                "output_tokens": value["output_tokens"],
+               "cache_read_tokens": value["cache_read_tokens"],
                "accounted_calls": value["responses"]}
     existing = store.read_events()
     for name, number in metrics.items():
@@ -48,5 +51,5 @@ def measure(store: AuditStore, *, transcript_ids: Sequence[str], created_at: str
                          stage=stage, attempt=attempt,
                          payload={"name": name, "value": number})
         existing = store.read_events()
-    return {**value, "input_tokens_with_cache": combined_input,
+    return {**value, "input_tokens_with_cache_creation": combined_input,
             "transcripts": len(paths)}

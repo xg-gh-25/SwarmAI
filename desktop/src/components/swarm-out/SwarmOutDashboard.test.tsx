@@ -43,6 +43,14 @@ describe('judgeSummary', () => {
     expect(s).toContain('Quality WARN：q');
     expect(s).not.toContain('Run Isolation');
   });
+
+  it('never says Speed / Token are within their line when they are N/A', () => {
+    const s = judgeSummary(judge(['PASS', 'PASS', 'PASS', 'NA', 'NA']));
+    expect(s).not.toContain('警戒线内');
+    expect(s).toContain('Speed、Token Cost 暂无参考线');
+    const w = judgeSummary(judge(['PASS', 'WARN', 'PASS', 'NA', 'PASS']));
+    expect(w).toContain('Speed 暂无参考线');
+  });
 });
 
 describe('JudgeTag', () => {

@@ -201,20 +201,16 @@ def _comment_only_diff(file: str, diff: str, *,
                                  for text in changed)
 
 
-def _budgets(profile: str) -> dict[str, Any]:
-    """The profile's speed / token reference lines from baselines.json (design §E9.3,
-    built by scripts/pipeline_baseline.py). A missing file or profile gives null, and
-    the audit says "no baseline" instead of inventing a number."""
+def _budgets(runs_root: Path, profile: str) -> dict[str, Any]:
+    """The speed / token reference lines of a new *profile* run: from this install's
+    own landed runs (``baselines.compute``); null when there are not enough yet, and the
+    audit then says N/A instead of inventing a number. Never fails the create."""
+    from core.run_protocol import baselines
     try:
-        rows = json.loads((Path(__file__).parent / "baselines.json").read_text(encoding="utf-8"))
-        row = rows["profiles"][profile]
-    except (OSError, ValueError, KeyError, TypeError):
-        row = {}
-    out = {}
-    for key in ("budget_seconds", "budget_tokens"):
-        value = row.get(key) if isinstance(row, Mapping) else None
-        out[key] = value if isinstance(value, (int, float)) and value > 0 else None
-    return out
+        return baselines.compute(runs_root, profile)
+    except Exception:  # noqa: BLE001 — a reference line is optional; the run is not
+        logger.warning("run baselines unreadable for %s", profile, exc_info=True)
+        return {"budget_seconds": None, "budget_tokens": None, "baseline_runs": 0}
 
 
 def _git(root: str | Path, *args: str) -> str:
@@ -522,8 +518,9 @@ class RunEngine:
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
-                        # reference lines, never limits: the profile's p95 (D2); null = none
-                        **_budgets(profile)}
+                        # reference lines, never limits: the p95 of this install's own
+                        # landed runs of the profile (review-closure §6.2); null = none yet
+                        **_budgets(audit_root / "runs", profile)}
             if requirement:
                 contract["requirement"] = requirement
             engine.contract = contract

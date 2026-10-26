@@ -283,33 +283,12 @@ def _reports_reviewed(event_rows) -> bool:
     return reports_reviewed(event_rows)
 
 
-def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
-          findings: Sequence[Mapping[str, Any]],
-          contract: Mapping[str, Any], open_checks: Mapping[str, Any], audit_through: str,
-          commits: Mapping[str, str] | None = None,
-          repos_isolated: int | None = None,
-          retained: Sequence[Mapping[str, Any]] = (),
-          manual: Mapping[str, Any] | None = None,
-          title: str | None = None,
-          design: Mapping[str, Any] | None = None,
-          test_reports: Mapping[str, Mapping[str, Any]] | None = None,
-          lessons: Sequence[Mapping[str, Any]] = (),
-          knowledge: Mapping[str, Any] | None = None,
-          untracked: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """*test_reports*: repo -> the latest TEST validation report (its commands are
-    listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
-    the run because their project has no DDD are listed in the REPORT); *open_checks*:
-    check id -> detail of each audit-effect check that does not pass (one line in the
-    Quality cell; no push verdict, XG 2026-10-26); *knowledge*: ``{status, entries,
-    cited}`` of the run's knowledge.md (run-knowledge §3.5), None for a run created
-    before it -- REPORT gets one line, never the recalled text; *untracked*: the
-    landing's untracked files from ``select_untracked`` (REPORT lists them; no verdict
-    reads them)."""
-    if audit_through not in {"DELIVER", "COMPLETED"}:
-        raise AuditError("audit_through must be DELIVER or COMPLETED")
-    if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
-        raise AuditError("audit inputs belong to another run")
-    event_rows = list(events)
+def active_seconds(event_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """The run's time from its events: ``wall`` (first to last timed event, None with
+    fewer than two), ``waiting`` (open decisions and approvals), ``waits`` and
+    ``active`` (wall minus waiting). One rule for the audit and the per-install
+    baselines (design 2026-10-26-pipeline-review-closure §6.2)."""
+    event_rows = list(event_rows)
     event_times = [value for value in (_time(row.get("at")) for row in event_rows)
                    if value is not None]
     # too few timed events: the time is unknown (null), not zero (§E9.2)
@@ -337,6 +316,39 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "closed_at": None, "seconds": None}
               for (kind, request_id), (_, opened_at) in opens.items()]
     active = max(0.0, wall - waiting) if wall is not None else None
+    return {"wall": wall, "waiting": waiting, "waits": waits, "active": active}
+
+
+def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mapping[str, Any]],
+          findings: Sequence[Mapping[str, Any]],
+          contract: Mapping[str, Any], open_checks: Mapping[str, Any], audit_through: str,
+          commits: Mapping[str, str] | None = None,
+          repos_isolated: int | None = None,
+          retained: Sequence[Mapping[str, Any]] = (),
+          manual: Mapping[str, Any] | None = None,
+          title: str | None = None,
+          design: Mapping[str, Any] | None = None,
+          test_reports: Mapping[str, Mapping[str, Any]] | None = None,
+          lessons: Sequence[Mapping[str, Any]] = (),
+          knowledge: Mapping[str, Any] | None = None,
+          untracked: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """*test_reports*: repo -> the latest TEST validation report (its commands are
+    listed, never re-judged); *lessons*: the processed REFLECT lessons (those kept in
+    the run because their project has no DDD are listed in the REPORT); *open_checks*:
+    check id -> detail of each audit-effect check that does not pass (one line in the
+    Quality cell; no push verdict, XG 2026-10-26); *knowledge*: ``{status, entries,
+    cited}`` of the run's knowledge.md (run-knowledge §3.5), None for a run created
+    before it -- REPORT gets one line, never the recalled text; *untracked*: the
+    landing's untracked files from ``select_untracked`` (REPORT lists them; no verdict
+    reads them)."""
+    if audit_through not in {"DELIVER", "COMPLETED"}:
+        raise AuditError("audit_through must be DELIVER or COMPLETED")
+    if projection.get("run_id") != run_id or contract.get("run_id") != run_id:
+        raise AuditError("audit inputs belong to another run")
+    event_rows = list(events)
+    timing = active_seconds(event_rows)
+    wall, waiting, waits, active = (timing["wall"], timing["waiting"], timing["waits"],
+                                    timing["active"])
     budget_seconds = contract.get("budget_seconds")
     speed_complete = isinstance(budget_seconds, (int, float)) and budget_seconds > 0
     # a count cap that was hit is unbounded / non-converging work: BLOCK without any
@@ -344,9 +356,12 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
     caps_hit = sorted({str(event["payload"].get("cap")) for event in event_rows
                        if event.get("kind") == "metric"
                        and str(event.get("payload", {}).get("name", "")).startswith("cap_exceeded.")})
-    speed = {"verdict": ("BLOCK" if caps_hit else
-                         "PASS" if speed_complete and active is not None
-                         and active <= budget_seconds else "WARN"),
+    # cap hit → BLOCK; the time incomplete → WARN; no reference line yet → N/A (not a
+    # WARN on every run of a new install); else against the line (review-closure §6.2)
+    speed = {"verdict": ("BLOCK" if caps_hit else "WARN" if active is None
+                         else "N/A" if not speed_complete
+                         else "PASS" if active <= budget_seconds else "WARN"),
+             "baseline_runs": contract.get("baseline_runs"),
              "caps_exceeded": caps_hit,
              "wall_seconds": round(wall, 3) if wall is not None else None,
              "active_seconds": round(active, 3) if active is not None else None,
@@ -443,12 +458,15 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
         # the main transcript is not available, and no expert was metered either:
         # sub-agent tokens cannot be counted (v13 §E5 BLOCK)
         token_verdict = "BLOCK"
-    elif accounted < total_calls or total_tokens is None \
-            or not isinstance(budget_tokens, (int, float)):
+    elif accounted < total_calls or total_tokens is None:
         token_verdict = "WARN"
+    elif not isinstance(budget_tokens, (int, float)):
+        token_verdict = "N/A"                          # no reference line on this install yet
     else:
         token_verdict = "PASS" if total_tokens <= budget_tokens else "WARN"
+    cache_reads = (measured or experts).get("cache_read_tokens")
     token = {"verdict": token_verdict, "total_tokens": total_tokens,
+             "cache_read_tokens": cache_reads, "baseline_runs": contract.get("baseline_runs"),
              "input_tokens": input_tokens, "output_tokens": output_tokens,
              "budget_tokens": budget_tokens if isinstance(budget_tokens, (int, float)) else None,
              "accounted_calls": accounted, "total_calls": total_calls,
@@ -544,7 +562,14 @@ def _speed_text(speed: Mapping[str, Any]) -> str:
     budget = speed.get("budget_seconds")
     if isinstance(budget, (int, float)) and budget > 0 and isinstance(speed.get("active_seconds"), (int, float)):
         return text + f" · {100 * speed['active_seconds'] / budget:.1f}% budget"
-    return text + " · no baseline"
+    return text + _no_baseline(speed)
+
+
+def _no_baseline(cell: Mapping[str, Any]) -> str:
+    from core.run_protocol.baselines import MIN_RUNS
+    runs = cell.get("baseline_runs")
+    return (f" · no baseline yet ({min(int(runs), MIN_RUNS)}/{MIN_RUNS} runs)"
+            if isinstance(runs, int) else " · no baseline yet")
 
 
 def _token_text(token: Mapping[str, Any]) -> str:
@@ -558,8 +583,11 @@ def _token_text(token: Mapping[str, Any]) -> str:
         return f"{_k(total)} observed · {shown} calls accounted"
     text = f"{_k(total)} total · {_k(token.get('input_tokens'))} input · {_k(token.get('output_tokens'))} output"
     budget = token.get("budget_tokens")
+    reads = token.get("cache_read_tokens")
+    text += (f" · {_k(reads)} cache reads, not counted" if isinstance(reads, (int, float))
+             else "") + " · host-session responses in the run window"
     return text + (f" · {100 * total / budget:.1f}% budget"
-                   if isinstance(budget, (int, float)) and budget > 0 else " · no baseline")
+                   if isinstance(budget, (int, float)) and budget > 0 else _no_baseline(token))
 
 
 def _quality_text(quality: Mapping[str, Any], reason: Any) -> str:

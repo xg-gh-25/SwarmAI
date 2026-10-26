@@ -352,10 +352,11 @@ def _applicable_statuses(store: AuditStore, parsed,
 
 def record_usage(store: AuditStore, usage: Mapping[str, Any], *, completed_at: str) -> None:
     values = {
+        # cache reads apart (as usage.measure): runs compare without them
         "input_tokens": int(usage.get("input_tokens") or 0)
-            + int(usage.get("cache_read_tokens") or 0)
             + int(usage.get("cache_creation_tokens") or 0),
         "output_tokens": int(usage.get("output_tokens") or 0),
+        "cache_read_tokens": int(usage.get("cache_read_tokens") or 0),
         "accounted_calls": int(usage.get("responses") or 0),
     }
     existing = store.read_events()

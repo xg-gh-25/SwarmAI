@@ -54,15 +54,16 @@ def r2_ledger(events: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
                          "superseded": False, "status": None, "status_answer": None,
                          "from_redispatch": False, "terminal": False, "handout": None}
         elif kind == "handout" and event.get("round") == 2 and event.get("stage") == "review":
-            handouts[event["event_id"]] = event
-            latest_of_expert[payload.get("expert_id")] = event["event_id"]
+            handouts[event.get("event_id")] = event
+            latest_of_expert[payload.get("expert_id")] = event.get("event_id")
             for finding_id in payload.get("finding_ids") or ():
                 if finding_id in rows:
                     rows[finding_id].update(expert=payload.get("expert_id"), covered=True,
-                                            handout=event["event_id"])
+                                            handout=event.get("event_id"))
         elif kind == "answer" and payload.get("handout_event_id"):
             answered.add(payload["handout_event_id"])
-            answer_handout[event["event_id"]] = payload["handout_event_id"]
+            if event.get("event_id"):
+                answer_handout[event["event_id"]] = payload["handout_event_id"]
         elif kind == "finding_status" and cid in rows:
             handout = handouts.get(answer_handout.get(payload.get("answer_event_id")), {})
             rows[cid].update(status=str(payload.get("status", "")).upper(),
@@ -116,7 +117,7 @@ def r2_redispatch_targets(events: Sequence[Mapping[str, Any]]
             for event in events if event.get("kind") == "finding_status"
             and event["payload"].get("canonical_id")
             and isinstance(event["payload"].get("answer_event_id"), str)}
-    order = {event["event_id"]: index for index, event in enumerate(events)}
+    order = {event.get("event_id"): index for index, event in enumerate(events)}
     out: dict[str, tuple[str, dict[str, str]]] = {}
     for cid, row in sorted(r2_ledger(events).items()):
         if row["status"] != "UNANSWERED" or row["from_redispatch"] or row["terminal"] \
