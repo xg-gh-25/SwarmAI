@@ -159,7 +159,7 @@ describe('the run line\'s details, expanded by default (test 3a)', () => {
   it('the not-landed reason only when it did not land', () => {
     renderView(TURN(SUMMARY('not_landed')));
     expect(screen.getByTestId('run-not-landed').textContent).toContain('live test not run');
-    renderView(TURN(SUMMARY('landed')));
+    renderView(TURN(SUMMARY('landed', { notLandedReason: 'stale reason' })));
     expect(screen.getAllByTestId('run-details')[1].querySelector('[data-testid="run-not-landed"]')).toBeNull();
   });
 
