@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 from core.expert_manager import ExpertManager
-from core.run_protocol.review import reviewers
+from core.run_protocol.review import expert_prompt, reviewers
 
 BACKEND = Path(__file__).resolve().parents[1]
 EXPERTS = BACKEND / "experts"
@@ -38,10 +38,10 @@ def test_reviewers_never_dispatch_red_team():
     risky = [{"path": "backend/core/security_hooks.py", "insertions": 80, "deletions": 0}]
     assert _ids(reviewers(profile="full", changed=risky, security=["declared"])) == [
         "correctness", "security"]
+    # an old run's recorded retired id reads the prompt of the expert that took its job
     for retired in sorted(RETIRED):
-        got = _ids(reviewers(profile="full", changed=[], required=[retired]))
-        assert "red-team" not in got and retired not in got, (retired, got)
-    assert _ids(reviewers(profile="full", changed=[], required=["red-team"])) == ["security"]
+        assert expert_prompt(retired) in (expert_prompt("security"), expert_prompt("correctness"))
+    assert expert_prompt("red-team") == expert_prompt("security")
 
 
 def test_security_has_a_high_risk_section_that_confirms_protections():

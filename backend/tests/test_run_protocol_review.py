@@ -34,8 +34,7 @@ def test_roster_is_lightweight_and_security_is_risk_triggered():
     small_risk = [{"path": "backend/auth.py", "insertions": 15, "deletions": 0}]
     assert [row["id"] for row in reviewers(profile="direct", changed=small_risk,
                                            security=["declared"])] == ["security"]
-    assert reviewers(profile="full", changed=plain, small_change=True) == []
-    assert [row["id"] for row in reviewers(profile="full", changed=[], required=["integration"])] == ["correctness"]
+    assert reviewers(profile="full", changed=[], security=[]) == []
 
 
 def test_handout_has_exact_contract_and_is_hash_bound(tmp_path):
@@ -106,9 +105,9 @@ def test_review_document_is_generated_from_events(tmp_path):
 
 def test_triggered_review_patterns_dispatch_correctness_even_for_a_small_change():
     small = [{"path": "backend/core/a.py", "insertions": 2, "deletions": 0}]
-    got = reviewers(profile="direct", changed=small, small_change=True, patterns=["RP1", "RP13"])
+    got = reviewers(profile="direct", changed=small, patterns=["RP1", "RP13"])
     assert [r["id"] for r in got] == ["correctness"] and "RP1, RP13" in got[0]["reason"]
-    assert reviewers(profile="direct", changed=small, small_change=True, patterns=[]) == []
+    assert reviewers(profile="direct", changed=small, patterns=[]) == []
 
 
 _TABLE = ("| # | Pattern | Trigger | Verify | Example |\n|---|---|---|---|---|\n"

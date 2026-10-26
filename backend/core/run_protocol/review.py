@@ -173,7 +173,6 @@ def expert_prompt(expert_id: str) -> str:
 
 
 def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
-              required: Sequence[str] = (), small_change: bool = False,
               patterns: Sequence[str] = (),
               security: Sequence[str] = ()) -> list[dict[str, str]]:
     """P3a E1 roster: default correctness; security only on clear risk. A >=50-line
@@ -181,20 +180,15 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
     into security), not a second reviewer.
 
     *patterns*: rows of the repo's own review.md the change triggers by path or diff
-    (review_patterns). Any of them dispatches correctness, also for a small change.
+    (review_patterns). Any of them dispatches correctness, whatever the change's size.
     *security*: why security review was declared for this change (review.md's
     ``security:`` line, the BUILD report's ``risk``, the design's security
-    boundaries; §3.5.2). The product has no built-in path or API rule.
-
-    *required*: an id from the roster is kept; a retired id maps to the expert that
-    took its job (``_RETIRED``); anything else falls back to correctness."""
+    boundaries; §3.5.2). The product has no built-in path or API rule."""
     picked: dict[str, str] = {}
     high_risk = False
     if patterns:
         shown = ", ".join(patterns[:6]) + (f" +{len(patterns) - 6}" if len(patterns) > 6 else "")
         picked["correctness"] = f"repository review patterns triggered: {shown}"
-    if small_change:
-        return [{"id": expert, "reason": reason} for expert, reason in picked.items()]
     source = [row for row in changed if row.get("is_test") is not True
               and not str(row.get("path") or "").endswith((".md", ".txt", ".rst"))]
     total = sum(int(row.get("insertions") or 0) + int(row.get("deletions") or 0)
@@ -207,11 +201,6 @@ def reviewers(*, profile: str, changed: Sequence[Mapping[str, Any]],
             high_risk = True
     elif risk:
         picked["security"] = risk
-    allowed = {"correctness", "security"}
-    for expert in required:
-        if isinstance(expert, str) and expert:
-            target = expert if expert in allowed else _RETIRED.get(expert, "correctness")
-            picked.setdefault(target, f"required expert {expert}")
     return [{"id": expert, "reason": reason,
              **({"high_risk": True} if expert == "security" and high_risk else {})}
             for expert, reason in picked.items()]
