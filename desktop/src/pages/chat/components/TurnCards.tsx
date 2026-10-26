@@ -13,13 +13,13 @@
  * @exports AttentionCard, AssumptionsDisclosure, isVerificationAttentionItem,
  *          OutputCard, ProductList, remoteProducts, middleEllipsis
  */
-import { useContext, useState, type ReactNode } from 'react';
+import { useContext, useState, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable, TurnChangesContent,
   TurnProductContent,
 } from '../../../types';
-import { OPEN_FILE_EVENT, resolveImageSrc } from '../../../components/common/MarkdownRenderer';
+import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
 import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { openExternal } from '../../../utils/openExternal';
@@ -132,7 +132,6 @@ export function AssumptionsDisclosure({ block }: { block: PipelineAttentionConte
   );
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
 const baseName = (p: string) => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
 
 /** Shorten a file name in the MIDDLE, keeping its extension ("very-lo…ng.pptx"). */
@@ -155,77 +154,87 @@ function folderOf(abs: string): string {
   return dir.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~');
 }
 
-/** THE product tile (2026-10-26, Gawan), one look in the turn and on the output card:
- *  a bordered card that hugs its content, one per line; the full name as a link (never
- *  shortened, it wraps if it must), the folder after it, the actions right beside it. */
-const TILE_LIST = 'flex flex-col items-start gap-1.5';
-const CARD_TILE = 'group flex w-fit max-w-full items-center gap-3 min-w-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-2.5 transition-colors hover:border-primary/50';
+/** A folder cut in the MIDDLE, keeping its root and where it ends
+ *  ("~/.swarm-ai/…/2-understanding"); the end says which folder it is. */
+export function shortFolder(dirPath: string): string {
+  const dir = folderOf(`${dirPath.replace(/\/+$/, '')}/x`);
+  const segs = dir.split('/').filter(Boolean);
+  const keep = segs[0] === '~' ? 2 : 1;          // "~/<first>" or "/<first>"
+  if (segs.length - keep - 1 < 2) return dir;    // nothing worth cutting
+  const head = `${dir.startsWith('/') ? '/' : ''}${segs.slice(0, keep).join('/')}`;
+  return `${head}/…/${segs[segs.length - 1]}`;
+}
 
-/** One file the turn produced, on the output card: type icon (or the image itself),
- *  the name as a link that opens it in the Canvas, its folder below; Open in Canvas and
- *  Copy path right next to it. */
+/** THE product list (v3, 2026-10-26, Gawan), one look in the turn and on the output
+ *  card: one bordered box that hugs its widest row, a file per line; the full name as a
+ *  link (never shortened), its folder after it, Copy right after that. The whole row
+ *  opens the file in the Canvas, so there is no separate Open button. */
+const TILE_BOX = 'w-fit max-w-full rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden';
+const TILE_LIST = 'flex flex-col divide-y divide-[var(--color-border)]';
+const CARD_TILE = 'group flex items-center gap-2.5 min-w-0 px-3 py-1.5 transition-colors';
+const CARD_TILE_ACT = 'cursor-pointer hover:bg-[var(--color-hover)]';
+const ROW_NAME = 'break-all text-[13px] text-primary';
+const ROW_DIR = 'min-w-[3ch] shrink-[100] truncate font-mono text-[11.5px] text-[var(--color-text-dim)]';
+const ROW_BTN = 'icon-btn shrink-0 -ml-1 text-[var(--color-text-dim)] group-hover:text-[var(--color-text-secondary)]';
+const DELIV_TITLE = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-dim)]';
+
+/** One file the turn produced: its type badge, the name as a link, its folder;
+ *  Copy path right after it. */
 function DeliverableCardTile({ file }: { file: TurnDeliverable }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  const [thumbFailed, setThumbFailed] = useState(false);
   const readOnly = useContext(ReadOnlyContext);
   const name = baseName(file.path || file.absolutePath);
-  const thumb = IMAGE_EXT.test(name) && !thumbFailed ? resolveImageSrc(file.absolutePath) : undefined;
   const open = () => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: file.absolutePath } }));
-  const copy = async () => {
+  const copy = async (e: MouseEvent) => {
+    e.stopPropagation();
     if (await copyToClipboard(file.absolutePath)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     }
   };
   const Head = readOnly ? 'div' : 'button';
-  const headProps = readOnly ? {} : { type: 'button' as const, onClick: open };
+  const headProps = readOnly ? {} : { type: 'button' as const, onClick: (e: MouseEvent) => { e.stopPropagation(); open(); } };
   const copyLabel = copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path');
   return (
-    <li data-testid="deliverable" data-path={file.absolutePath} className={CARD_TILE}>
-      <Head {...headProps} title={file.absolutePath} className="min-w-0 flex-1 flex items-center gap-3 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
-        {thumb ? (
-          <img src={thumb} alt="" onError={() => setThumbFailed(true)} className="w-9 h-9 rounded-md object-cover shrink-0 border border-[var(--color-border)]" />
-        ) : (
-          <span className="w-9 h-9 shrink-0 rounded-md flex items-center justify-center bg-[var(--color-hover)]">
-            <FileTypeIcon name={name} size="md" />
-          </span>
-        )}
+    <li data-testid="deliverable" data-path={file.absolutePath} onClick={readOnly ? undefined : open}
+      className={`${CARD_TILE} ${readOnly ? '' : CARD_TILE_ACT}`}>
+      <Head {...headProps} title={file.absolutePath} className="min-w-0 flex items-center gap-2.5 text-left rounded focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+        <FileTypeIcon name={name} size="sm" />
         {/* the name, then its folder in grey on the same line; hover: the full path */}
         <span className="min-w-0 flex items-baseline gap-2">
-          <span data-testid="deliverable-name" className={`break-all text-[13.5px] font-semibold text-primary ${readOnly ? '' : 'group-hover:underline'}`}>{name}</span>
-          <span data-testid="deliverable-dir" title={file.absolutePath} className="min-w-[3ch] shrink-[100] truncate font-mono text-[11.5px] text-[var(--color-text-dim)]">{folderOf(file.absolutePath)}</span>
+          <span data-testid="deliverable-name" className={`${ROW_NAME} ${readOnly ? '' : 'group-hover:underline'}`}>{name}</span>
+          <span data-testid="deliverable-dir" title={file.absolutePath} className={ROW_DIR}>{shortFolder(file.absolutePath.replace(/\/[^/]*$/, '') || '/')}</span>
         </span>
       </Head>
       {!readOnly && (
-        <div className="shrink-0 flex items-center gap-1">
-          <button type="button" onClick={open} className="btn-sm btn-secondary">{tf(t, 'chat.turn.deliverables.open', 'Open in Canvas')}</button>
-          <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className="icon-btn">
-            <span aria-hidden="true" className="material-symbols-outlined icon-sm">{copied ? 'check' : 'content_copy'}</span>
-          </button>
-        </div>
+        <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className={ROW_BTN}>
+          <span aria-hidden="true" className="material-symbols-outlined icon-sm">{copied ? 'check' : 'content_copy'}</span>
+        </button>
       )}
     </li>
   );
 }
 
-/** A remote action on the output card, in the same tile: what was done and on what;
- *  a link only when the backend found one in the tool's own output. */
+/** A remote action in the same row: what was done and on what; the row opens the
+ *  link only when the backend found one in the tool's own output. */
 function RemoteProductCardTile({ product }: { product: RemoteProduct }) {
   const { t } = useTranslation();
   const readOnly = useContext(ReadOnlyContext);
+  const act = !!product.url && !readOnly;
+  const go = () => void openExternal(product.url!);
+  const label = tf(t, 'chat.turn.deliverables.openLink', 'Open link');
   return (
-    <li data-testid="remote-product" data-tool={product.tool} className={CARD_TILE}>
-      <span className="w-9 h-9 shrink-0 rounded-md flex items-center justify-center bg-[var(--color-hover)]">
-        <span aria-hidden="true" className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">send</span>
+    <li data-testid="remote-product" data-tool={product.tool} onClick={act ? go : undefined}
+      className={`${CARD_TILE} ${act ? CARD_TILE_ACT : ''}`}>
+      <span aria-hidden="true" className="material-symbols-outlined icon-sm shrink-0 text-[var(--color-text-muted)]">send</span>
+      <span className="min-w-0 flex items-baseline gap-2">
+        <span className="break-words text-[13px] text-[var(--color-text)]">{product.action}</span>
+        {product.target && <span className={ROW_DIR} title={product.target}>{product.target}</span>}
       </span>
-      <span className="min-w-0 flex-1 flex items-baseline gap-2">
-        <span className="break-words text-[13.5px] font-semibold text-[var(--color-text)]">{product.action}</span>
-        {product.target && <span className="truncate font-mono text-[11.5px] text-[var(--color-text-dim)]" title={product.target}>{product.target}</span>}
-      </span>
-      {product.url && !readOnly && (
-        <button type="button" onClick={() => void openExternal(product.url!)} className="shrink-0 btn-sm btn-secondary" title={product.url}>
-          {tf(t, 'chat.turn.deliverables.openLink', 'Open link')}
+      {act && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); go(); }} aria-label={label} title={product.url} className={ROW_BTN}>
+          <span aria-hidden="true" className="material-symbols-outlined icon-sm">open_in_new</span>
         </button>
       )}
     </li>
@@ -248,7 +257,7 @@ export function ProductList({ blocks }: { blocks: TurnProductContent[] }) {
       rows.push(<RemoteProductCardTile key={`r-${b.toolUseId}`} product={b} />);
     }
   }
-  return <ul data-testid="product-list" className={TILE_LIST}>{rows}</ul>;
+  return <div data-testid="product-box" className={TILE_BOX}><ul data-testid="product-list" className={TILE_LIST}>{rows}</ul></div>;
 }
 
 /** The turn's remote products (top-level and sub-agent), in order: the output card
@@ -381,19 +390,22 @@ export function OutputCard({ changes, deliverables, summary, remote = [] }: {
   const docs = summary?.docs ?? [];
   const nDeliv = deliverables.length + remote.length + docs.filter((d) => !!d.absolutePath).length;
   if (!changes && !deliverables.length && !remote.length && !docs.length) return null;
+  const title = nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv });
   return (
     <section data-testid="output-card" className="space-y-3">
       {changes && <ChangesCard block={changes} />}
       {(deliverables.length > 0 || remote.length > 0 || docs.length > 0) && (
         <div data-testid="output-deliverables">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-dim)]">
-            {nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv })}
-          </div>
-          {(deliverables.length > 0 || remote.length > 0) && (
-            <ul className={TILE_LIST}>
-              {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
-              {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
-            </ul>
+          {(deliverables.length > 0 || remote.length > 0) ? (
+            <div data-testid="product-box" className={TILE_BOX}>
+              <div className={`px-3 py-1.5 border-b border-[var(--color-border)] ${DELIV_TITLE}`}>{title}</div>
+              <ul className={TILE_LIST}>
+                {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
+                {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
+              </ul>
+            </div>
+          ) : (
+            <div className={`mb-2 ${DELIV_TITLE}`}>{title}</div>
           )}
           {docs.length > 0 && <ul className={deliverables.length || remote.length ? 'mt-2' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
         </div>

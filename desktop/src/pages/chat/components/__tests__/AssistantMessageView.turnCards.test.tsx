@@ -13,7 +13,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { AssistantMessageView } from '../AssistantMessageView';
-import { middleEllipsis } from '../TurnCards';
+import { middleEllipsis, shortFolder } from '../TurnCards';
 import { deriveTurnView } from '../../turnView';
 import { ToastProvider } from '../../../../contexts/ToastContext';
 import { OPEN_FILE_EVENT } from '../../../../components/common/MarkdownRenderer';
@@ -169,42 +169,66 @@ describe('turn_deliverables — what the turn produced', () => {
     const rows = within(card).getAllByTestId('deliverable');
     expect(rows.map((e) => e.getAttribute('data-path')))
       .toEqual(['/ws/docs/report.md', '/ws/out/deck.pptx']);
-    expect(rows.every((row) => /\bborder\b/.test(row.className) && /rounded-lg/.test(row.className))).toBe(true);
-    // one file per line (2026-10-26, Gawan): a column, never a grid
+    // v3 (2026-10-26, Gawan): ONE bordered box holds every file, its title inside it;
+    // a row is a line in that box, not a card of its own
+    const box = within(card).getByTestId('product-box');
+    expect(box.className).toMatch(/\bborder\b/);
+    expect(box.className).toMatch(/rounded/);
+    expect(box.className).toContain('w-fit');
+    expect(box.textContent).toContain('2 deliverables');
+    expect(rows.every((row) => box.contains(row) && !/\bborder\b|rounded/.test(row.className))).toBe(true);
+    // one file per line: a column, never a grid
     expect(rows[0].parentElement!.className).toContain('flex-col');
     expect(rows[0].parentElement!.className).not.toContain('grid');
     const name = within(rows[1]).getByTestId('deliverable-name');
     expect(name.textContent).toBe('deck.pptx');
     expect(name.className).toContain('text-primary');
+    expect(name.className).not.toMatch(/font-semibold|font-bold/);
     const dir = within(rows[1]).getByTestId('deliverable-dir');
     expect(dir.textContent).toBe('/ws/out');
     expect(dir.getAttribute('title')).toBe('/ws/out/deck.pptx');
-    expect(dir.parentElement).toBe(name.parentElement);   // same line, right after the name
-    expect(name.nextElementSibling).toBe(dir);
+    expect(name.nextElementSibling).toBe(dir);              // same line, right after the name
+    // the only action is Copy, right after the folder (not pushed to the far edge)
+    const copyBtn = within(rows[1]).getByLabelText('Copy path');
+    expect(copyBtn.previousElementSibling!.contains(dir)).toBe(true);
+    expect(copyBtn.previousElementSibling!.className).not.toContain('flex-1');
+    expect(within(card).queryByText('Open in Canvas')).toBeNull();
     const result = screen.getByTestId('turn-result');
     expect(result.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('Open dispatches OPEN_FILE_EVENT with the absolute path; Copy copies it', async () => {
+  it('the name, or anywhere on the row, opens the file once; Copy copies and does not open', async () => {
     const seen: unknown[] = [];
     const on = (e: Event) => seen.push((e as CustomEvent).detail);
     document.addEventListener(OPEN_FILE_EVENT, on);
     renderView([tu('a', 'Bash'), tr('a'), tx('done'), deliv('out/deck.pptx')]);
-    fireEvent.click(screen.getByText('Open in Canvas'));
-    document.removeEventListener(OPEN_FILE_EVENT, on);
+    fireEvent.click(screen.getByTestId('deliverable-name'));
     expect(seen).toEqual([{ path: '/ws/out/deck.pptx' }]);
+    fireEvent.click(screen.getByTestId('deliverable'));
+    expect(seen).toHaveLength(2);
     fireEvent.click(screen.getByLabelText('Copy path'));
+    document.removeEventListener(OPEN_FILE_EVENT, on);
+    expect(seen).toHaveLength(2);
     expect(copySpy).toHaveBeenCalledWith('/ws/out/deck.pptx');
     expect(await screen.findByLabelText('Copied')).toBeTruthy();
   });
 
-  it('an image gets a thumbnail; other files a type icon', () => {
-    const { container } = renderView([tu('a', 'Bash'), tr('a'), tx('done'), deliv('out/chart.png', 'out/a.md')]);
-    const [img, md] = screen.getAllByTestId('deliverable');
-    expect(img.querySelector('img')?.getAttribute('src')).toContain(encodeURIComponent('/ws/out/chart.png'));
-    expect(md.querySelector('img')).toBeNull();
-    expect(md.querySelector('.file-badge')).toBeTruthy();
-    expect(container).toBeTruthy();
+  it('every file, image included, gets the one type badge', () => {
+    renderView([tu('a', 'Bash'), tr('a'), tx('done'), deliv('out/chart.png', 'out/a.md')]);
+    for (const row of screen.getAllByTestId('deliverable')) {
+      expect(row.querySelector('img')).toBeNull();
+      expect(row.querySelector('.file-badge')).toBeTruthy();
+    }
+  });
+
+  it('a long folder is cut in the middle, keeping where it ends', () => {
+    expect(shortFolder('/ws/out')).toBe('/ws/out');
+    expect(shortFolder('/Users/gawan/.swarm-ai/SwarmWS/Projects/SwarmAI/2-understanding')).toBe('~/.swarm-ai/…/2-understanding');
+    expect(shortFolder('/Users/gawan/Desktop/Q3')).toBe('~/Desktop/Q3');
+    renderView([tu('a', 'Bash'), tr('a'), tx('done'), deliv('a/b/c/d/e/TECH.md')]);
+    const dir = screen.getByTestId('deliverable-dir');
+    expect(dir.textContent).toBe('/ws/…/e');
+    expect(dir.getAttribute('title')).toBe('/ws/a/b/c/d/e/TECH.md');
   });
 
   it('a product is not listed again as a changed file; no "This turn changed" chips', () => {
