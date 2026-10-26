@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["is_canvas_surfaceable", "CanvasSurface", "CanvasKind"]
 
-CanvasKind = Literal["external-diff", "external-nodiff"]
+CanvasKind = Literal["external-diff", "external-nodiff", "source", "knowledge"]
 
 _GIT_TIMEOUT_S = 5.0
 
@@ -87,14 +87,18 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
+def _sw_root_path() -> str:
+    from scripts.session_worktree import root as _sw_root
+    return str(_sw_root())
+
+
 def _session_worktree_rel(p: Path) -> Optional[str]:
     """The path inside its session worktree when *p* is under the session-worktree
     root (``scripts.session_worktree.root``, the one definition of where they live):
     ``<root>/<name>/<repo>/<rel>`` → ``<rel>``; a path directly under the root or a
     name dir → ``""`` (not a worktree file); outside the root → None."""
     try:
-        from scripts.session_worktree import root as _sw_root
-        base = Path(os.path.realpath(_sw_root()))
+        base = Path(os.path.realpath(_sw_root_path()))
     except Exception:  # noqa: BLE001 — no root known: nothing is a session worktree
         logger.debug("canvas_surface: session-worktree root unavailable", exc_info=True)
         return None
@@ -204,6 +208,18 @@ def is_canvas_surfaceable(
 
         # Not ignored → surface with a per-file diff baseline. base_ref = HEAD^ for
         # the file's last commit if resolvable, else HEAD (uncommitted → diff vs HEAD).
+        if in_session_wt:
+            # A session worktree is a checkout of a bound repo: its file gets the kind
+            # the same file gets in the main checkout (Gawan 2026-10-26: repo code had
+            # shown under Canvas Artifacts). Code and repo docs are ``source`` (the
+            # turn's changes card and Canvas Changes, never Artifacts / deliverables);
+            # a DDD doc is ``knowledge``.
+            from core.needs_human_review import _classify_kind
+            sw_kind = _classify_kind(sw_rel, repo=p.relative_to(
+                Path(os.path.realpath(_sw_root_path()))).parts[1])
+            if sw_kind == "process":
+                return CanvasSurface(False)
+            return CanvasSurface(True, sw_kind)
         base_ref = "HEAD"
         log = _git(file_dir, "log", "-1", "--format=%H", "--", str(p))
         if log and log.returncode == 0:

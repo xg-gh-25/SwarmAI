@@ -3,7 +3,10 @@
 A native session's own worktree lives under ``<app data>/session-worktrees/<name>/<repo>``,
 inside ``~/.swarm-ai``, which ``canvas_noise`` treats as app plumbing. Tested here:
 
-- a tracked or new non-ignored file in such a worktree surfaces as ``external-diff``;
+- a file in such a worktree gets the kind the same file gets in its main checkout
+  (``needs_human_review._classify_kind`` with the repo): code and repo docs are
+  ``source`` (Canvas Changes, never Artifacts / deliverables), a DDD doc is
+  ``knowledge`` (Gawan 2026-10-26: repo code changes had shown under Artifacts);
 - the tree-relative dot-segment rule (``needs_human_review._has_dot_segment``) declines
   ``.env``, ``.github/...``, ``.git/...`` inside it;
 - a gitignored file and a noise shape (``node_modules``, ``.pyc``) decline;
@@ -60,16 +63,24 @@ def _write(p: Path, text: str = "x\n") -> str:
     return str(p)
 
 
-def test_new_doc_in_session_worktree_surfaces_with_diff(wt: Path, tmp_path: Path):
-    v = is_canvas_surfaceable(_write(wt / "docs" / "design" / "plan.md"), swarmws_root=tmp_path / "ws")
-    assert v.surfaceable is True
-    assert v.kind == "external-diff"
-    assert v.base_ref
+@pytest.mark.parametrize("rel", ["backend/core/golden_set_store.py", "docs/design/plan.md", "README.md"])
+def test_a_repo_file_in_a_session_worktree_is_source(wt: Path, tmp_path: Path, rel: str):
+    """The same answer as in the main checkout: a change, not an artifact."""
+    v = is_canvas_surfaceable(_write(wt / rel, "changed\n"), swarmws_root=tmp_path / "ws")
+    assert (v.surfaceable, v.kind) == (True, "source")
 
 
-def test_tracked_file_in_session_worktree_surfaces(wt: Path, tmp_path: Path):
-    v = is_canvas_surfaceable(_write(wt / "README.md", "changed\n"), swarmws_root=tmp_path / "ws")
-    assert (v.surfaceable, v.kind) == (True, "external-diff")
+def test_a_ddd_doc_in_a_session_worktree_is_knowledge(wt: Path, tmp_path: Path):
+    v = is_canvas_surfaceable(_write(wt / "Projects" / "P" / "2-understanding" / "TECH.md"),
+                              swarmws_root=tmp_path / "ws")
+    assert (v.surfaceable, v.kind) == (True, "knowledge")
+
+
+def test_a_source_kind_is_not_an_artifact_or_a_product():
+    from core import session_outputs
+    from core.turn_products import PRODUCT_FILE_KINDS
+    assert "source" not in session_outputs.RAIL_KINDS
+    assert "source" not in PRODUCT_FILE_KINDS
 
 
 @pytest.mark.parametrize("rel", [".env", ".github/workflows/ci.yml", "config/.secrets/key.md"])
