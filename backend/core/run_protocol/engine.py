@@ -931,6 +931,7 @@ class RunEngine:
         audit_value = self._read_json(self.run_dir / "run_audit.json", {})
         if isinstance(audit_value, Mapping):
             value["audit_card"] = audit_value.get("card")
+            value["audit_rows"] = audit_value.get("card_rows")
             value["audit_summary"] = audit_value.get("summary")
         retention = self._read_json(self._retention_path(), {})
         if isinstance(retention, Mapping) and retention.get("worktrees"):

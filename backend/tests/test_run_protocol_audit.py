@@ -169,3 +169,16 @@ def test_quality_counts_the_agents_test_reports_and_reports_them():
     # no review expert answered in these events: the reports are the agent's word alone
     assert "reported by the agent only" in report and "2 pass, 0 fail" in report
 
+
+
+def test_3b_card_rows_are_the_rows_the_card_prints():
+    """Design 2026-10-26-turn-cards-unified.md §5.1: the chat shows the audit as rows;
+    they are the card's own five rows, handed over before they are joined into text."""
+    from core.run_protocol.audit import card_rows
+    for audit in (_facts(events=list(MEASURED)), _facts(events=[])):
+        rows = audit["card_rows"]
+        assert rows == card_rows(audit)
+        assert [r["dim"] for r in rows] == ["Run Isolation", "Speed", "Quality", "Autonomy",
+                                            "Token Cost"]
+        printed = audit["card"].splitlines()[3:8]
+        assert printed == [f"{r['dim']:<14} {r['verdict']} · {r['detail']}" for r in rows]

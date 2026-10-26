@@ -723,3 +723,16 @@ def test_12_a_run_landing_two_repos_lists_both_commits(tmp_path, monkeypatch):
     sb = pse.summary_block("run_two", state, "now")
     assert sb["commits"] == [{"repo": "a", "sha": "a" * 40}, {"repo": "b", "sha": "b" * 40}]
     assert sb["landedSha"] == ("b" * 40)[:12]
+
+
+def test_3b_the_summary_carries_the_audit_rows(tmp_path, monkeypatch):
+    """The projection's audit rows reach pipeline_summary.audit unchanged; a run
+    without them (older) keeps only auditCard."""
+    monkeypatch.setattr(pse, "get_swarmws", lambda: str(tmp_path))
+    rows = [{"dim": "Speed", "verdict": "PASS", "detail": "42 min"}]
+    _write_run(tmp_path, "run_aud", {"status": "completed", "stages": {}, "audit_card": "C",
+                                     "audit_rows": rows})
+    sb = pse.summary_block("run_aud", pse.read_stage_state("run_aud"), "now")
+    assert sb["audit"] == rows and sb["auditCard"] == "C"
+    _write_run(tmp_path, "run_old", {"status": "completed", "stages": {}, "audit_card": "C"})
+    assert pse.summary_block("run_old", pse.read_stage_state("run_old"), "now")["audit"] is None

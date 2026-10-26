@@ -12,11 +12,21 @@
  *   a file name); only the grey folder truncates, with the full path on hover.
  * - `ItemSection`: a title line between groups of rows in one box (COMMITS).
  *
+ * - `FileItemRow`: a file as that row — the name a link, the row opens it in the
+ *   Canvas, Copy path right after the folder (products, run documents).
  * - `shortFolder`: a folder cut in the middle ("~/.swarm-ai/…/2-understanding").
  *
- * @exports ItemBox, ItemRow, ItemSection, ITEM_ACTION, shortFolder
+ * @exports ItemBox, ItemRow, ItemSection, FileItemRow, ITEM_ACTION, shortFolder
  */
-import type { MouseEvent, ReactNode } from 'react';
+import { useContext, useState, type MouseEvent, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
+import { tf } from '../tf';
+import { ReadOnlyContext } from '../readOnlyContext';
+
+/** MarkdownRenderer.OPEN_FILE_EVENT (the Canvas listens to it); not imported from
+ *  there: StageDocs uses this module and the test setup imports it before mocks. */
+const OPEN_FILE = 'swarm:open-file';
 
 const BOX = 'w-fit max-w-full overflow-x-auto rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)]';
 const LIST = 'flex flex-col divide-y divide-[var(--color-border)]';
@@ -119,4 +129,40 @@ export function shortFolder(dirPath: string): string {
   if (segs.length - keep - 1 < 2) return dir;    // nothing worth cutting
   const head = `${dir.startsWith('/') ? '/' : ''}${segs.slice(0, keep).join('/')}`;
   return `${head}/…/${segs[segs.length - 1]}`;
+}
+
+const baseName = (p: string) => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
+
+/** A file as the shared row: its type badge, the name as a link, its folder; the
+ *  whole row opens it in the Canvas; Copy path right after the folder. */
+export function FileItemRow({ file, testId, data }: {
+  file: { path?: string | null; absolutePath: string }; testId: string; data?: Record<string, string>;
+}) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const readOnly = useContext(ReadOnlyContext);
+  const name = baseName(file.path || file.absolutePath);
+  const open = () => document.dispatchEvent(new CustomEvent(OPEN_FILE, { detail: { path: file.absolutePath } }));
+  const copy = async (e: MouseEvent) => {
+    e.stopPropagation();
+    // loaded on use: the test setup imports this module (StageDocs) before its mocks
+    const { copyToClipboard } = await import('../../../utils/clipboard');
+    if (await copyToClipboard(file.absolutePath)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+  const copyLabel = copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path');
+  return (
+    <ItemRow testId={testId} data={{ path: file.absolutePath, ...data }}
+      badge={<FileTypeIcon name={name} size="sm" />} name={name} nameTestId="deliverable-name" link
+      folder={shortFolder(file.absolutePath.replace(/\/[^/]*$/, '') || '/')} folderTitle={file.absolutePath}
+      folderTestId="deliverable-dir" openTitle={file.absolutePath}
+      onOpen={readOnly ? undefined : open} rowOpens
+      actions={!readOnly && (
+        <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className={ITEM_ACTION}>
+          <span aria-hidden="true" className="material-symbols-outlined icon-sm">{copied ? 'check' : 'content_copy'}</span>
+        </button>
+      )} />
+  );
 }

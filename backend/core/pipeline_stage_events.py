@@ -204,10 +204,21 @@ def read_stage_state(run_id: object) -> Optional[dict]:
                                    for c in commits
                                    if c.get("landed") and isinstance(c.get("sha"), str)],
                 "audit_card": _text(data.get("audit_card")),
+                "audit_rows": _audit_rows(data.get("audit_rows")),
                 "run_dir": str(run_dir)}
     except Exception:  # noqa: BLE001 — a display aid must never break the stream
         logger.debug("read_stage_state: unreadable v1 run %r", run_id, exc_info=True)
         return None
+
+
+def _audit_rows(raw: Any) -> Optional[list[dict[str, str]]]:
+    """The run audit's five card rows (run_protocol.audit.card_rows), or None."""
+    if not isinstance(raw, list):
+        return None
+    rows = [{"dim": _clip(r.get("dim"), 40) or "", "verdict": _clip(r.get("verdict"), 20) or "",
+             "detail": _clip(r.get("detail"), 300) or ""}
+            for r in raw[:10] if isinstance(r, dict)]
+    return rows or None
 
 
 def _status(state: Optional[dict], stage: str) -> Optional[str]:
@@ -458,4 +469,5 @@ def summary_block(run_id: str, state: Optional[dict], at: str) -> Optional[dict[
             "status": state.get("status"), "landing": state.get("landing"),
             "notLandedReason": _clip(state.get("reason"), 200) if not_landed else None,
             "stagesDone": sum(1 for s in order if _status(state, s) == "completed"),
-            "docs": docs, "at": at, "auditCard": state.get("audit_card")}
+            "docs": docs, "at": at, "auditCard": state.get("audit_card"),
+            "audit": state.get("audit_rows")}

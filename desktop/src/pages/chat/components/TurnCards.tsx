@@ -2,38 +2,34 @@
  * TurnCards — the backend-written cards of a turn (chat turn spec v6).
  *
  * Each has a fixed place in the turn, set by AssistantMessageView:
- * - AttentionCard — unresolved gates / not-push-ready causes that require action,
- *                   immediately after the machine run status.
+ * - RunLine — how a pipeline run ended: one grey line, its details expanded under it
+ *             (design 2026-10-26-turn-cards-unified.md §5.1). No run-result or
+ *             attention card (Gawan 2026-10-26: the agent says it in its answer).
  * - AssumptionsDisclosure — self-answered decisions and still-open assumptions,
  *                           folded after Output and directly before Next steps.
  * - OutputCard — the turn's code changes and deliverables (files and remote actions).
  * - ProductList — a products zone's rows in the turn (session-products design §3.1).
  * All text in these blocks is model-written: rendered plain, never as markdown.
  *
- * @exports AttentionCard, AssumptionsDisclosure, isVerificationAttentionItem,
- *          OutputCard, ProductList, remoteProducts, middleEllipsis
+ * @exports RunLine, AssumptionsDisclosure, isVerificationAttentionItem,
+ *          OutputCard, ProductList, remoteProducts, middleEllipsis, shortFolder
  */
-import { useContext, useState, type MouseEvent, type ReactNode } from 'react';
+import { useContext, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
-  PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, PipelineSummaryDoc, TurnDeliverable, TurnChangesContent,
+  PipelineAttentionContent, PipelineAttentionItem, PipelineSummaryContent, TurnDeliverable, TurnChangesContent,
   TurnProductContent,
 } from '../../../types';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
-import { FileTypeIcon } from '../../../components/common/FileTypeIcon';
-import { copyToClipboard } from '../../../utils/clipboard';
 import { openExternal } from '../../../utils/openExternal';
 import { tf } from '../tf';
-import { docMeta } from '../runDocMeta';
 import { ReadOnlyContext } from '../readOnlyContext';
 import { ChangesCard } from './ChangesCard';
-import { ItemBox, ItemRow, ITEM_ACTION, shortFolder } from './ItemRows';
+import { FileItemRow, ItemBox, ItemRow, ITEM_ACTION, shortFolder } from './ItemRows';
 
 export { shortFolder };
 
 
-/** A verdict that blocks is red; anything else that needs a look stays amber. */
-const isBlocking = (v: string) => /BLOCK|FAIL|REJECT/i.test(v);
 /** Secondary audit context, not an action blocker. */
 export const isVerificationAttentionItem = (i: PipelineAttentionItem) =>
   i.kind === 'self_answered' || i.kind === 'assumption';
@@ -61,55 +57,14 @@ function AttentionRow({ item }: { item: PipelineAttentionItem }) {
         {item.statement}
       </>
     );
-  } else if (item.kind === 'gate') {
-    line = <>{item.name} · <span className={isBlocking(item.verdict) ? 'text-red-500' : ''}>{item.verdict}</span></>;
-    note = item.detail;
   } else {
-    line = (
-      <>
-        {/* not_landed: the change is not on main. A legacy not_push_ready item
-            (before 2026-10-26) shows only its reasons: no push verdict. */}
-        {item.kind === 'not_landed' && (
-          <span className="text-amber-600 dark:text-amber-400">{tf(t, 'chat.turn.attention.notLanded', 'Not landed')}</span>
-        )}
-        {item.reasons.length > 0 && (
-          <ul data-testid="not-ready-reasons" className={`${DIM} list-disc pl-5`}>
-            {item.reasons.map((r, i) => {
-              const code = item.reasonCodes?.[i];
-              return <li key={i}>{code ? tf(t, `chat.turn.attention.reasonCode.${code}`, r) : r}</li>;
-            })}
-          </ul>
-        )}
-      </>
-    );
-    note = item.detail;
+    return null;      // gates / not landed: not shown in the chat (the run line has them)
   }
   return (
     <li data-testid="attention-item" data-kind={item.kind} className="py-0.5 text-[13.5px] text-[var(--color-text)] break-words">
       <div>{line}</div>
       {note && <div className={DIM}>{note}</div>}
     </li>
-  );
-}
-
-/** Immediate action only. Verification context has its own later disclosure. */
-export function AttentionCard({ block }: { block: PipelineAttentionContent }) {
-  const { t } = useTranslation();
-  const action = block.items.filter((item) => !isVerificationAttentionItem(item));
-  if (action.length === 0) return null;
-  return (
-    <section
-      data-testid="turn-attention"
-      aria-label={tf(t, 'chat.turn.attention.title', 'For you to check')}
-      className="border-l-2 border-amber-500/70 bg-amber-500/[0.06] rounded-r-md pl-3 pr-2 py-2"
-    >
-      <div className="text-[12px] font-medium text-amber-600 dark:text-amber-400">
-        {tf(t, 'chat.turn.attention.title', 'For you to check')}
-      </div>
-      <ul className="mt-1">
-        {action.map((item, i) => <AttentionRow key={`a-${i}`} item={item} />)}
-      </ul>
-    </section>
   );
 }
 
@@ -137,8 +92,6 @@ export function AssumptionsDisclosure({ block }: { block: PipelineAttentionConte
   );
 }
 
-const baseName = (p: string) => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p;
-
 /** Shorten a file name in the MIDDLE, keeping its extension ("very-lo…ng.pptx"). */
 export function middleEllipsis(name: string, max = 28): string {
   if (name.length <= max) return name;
@@ -157,37 +110,6 @@ type RemoteProduct = Extract<TurnProductContent, { product: 'remote' }>;
  *  the shared ItemBox / ItemRow (./ItemRows). The full name as a link (never cut, never
  *  wrapped), its folder after it, Copy right after that. The whole row opens the file
  *  in the Canvas, so there is no separate Open button. */
-const DELIV_TITLE = 'text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-dim)]';
-
-/** One file the turn produced: its type badge, the name as a link, its folder;
- *  Copy path right after it. */
-function DeliverableCardTile({ file }: { file: TurnDeliverable }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const readOnly = useContext(ReadOnlyContext);
-  const name = baseName(file.path || file.absolutePath);
-  const open = () => document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: file.absolutePath } }));
-  const copy = async (e: MouseEvent) => {
-    e.stopPropagation();
-    if (await copyToClipboard(file.absolutePath)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    }
-  };
-  const copyLabel = copied ? tf(t, 'chat.turn.deliverables.copied', 'Copied') : tf(t, 'chat.turn.deliverables.copyPath', 'Copy path');
-  return (
-    <ItemRow testId="deliverable" data={{ path: file.absolutePath }}
-      badge={<FileTypeIcon name={name} size="sm" />} name={name} nameTestId="deliverable-name" link
-      folder={shortFolder(file.absolutePath.replace(/\/[^/]*$/, '') || '/')} folderTitle={file.absolutePath}
-      folderTestId="deliverable-dir" openTitle={file.absolutePath}
-      onOpen={readOnly ? undefined : open} rowOpens
-      actions={!readOnly && (
-        <button type="button" onClick={copy} aria-label={copyLabel} title={copyLabel} className={ITEM_ACTION}>
-          <span aria-hidden="true" className="material-symbols-outlined icon-sm">{copied ? 'check' : 'content_copy'}</span>
-        </button>
-      )} />
-  );
-}
 
 /** A remote action in the same row: what was done and on what; the row opens the
  *  link only when the backend found one in the tool's own output. */
@@ -221,7 +143,7 @@ export function ProductList({ blocks }: { blocks: TurnProductContent[] }) {
       if (seen.has(b.absolutePath)) continue;
       seen.add(b.absolutePath);
       const file: TurnDeliverable = { path: b.path, absolutePath: b.absolutePath, kind: b.fileKind, operation: 'written' };
-      rows.push(<DeliverableCardTile key={`f-${b.absolutePath}`} file={file} />);
+      rows.push(<FileItemRow key={`f-${b.absolutePath}`} testId="deliverable" file={file} />);
     } else {
       rows.push(<RemoteProductCardTile key={`r-${b.toolUseId}`} product={b} />);
     }
@@ -235,106 +157,97 @@ export function remoteProducts(products: TurnProductContent[]): RemoteProduct[] 
   return products.filter((p): p is RemoteProduct => p.product === 'remote');
 }
 
-function SummaryDocRow({ doc }: { doc: PipelineSummaryDoc }) {
-  const { t } = useTranslation();
-  const readOnly = useContext(ReadOnlyContext);
-  const meta = docMeta(t, doc.name, doc.purpose);
-  const purpose = meta.purpose;
-  const there = !!doc.absolutePath;
-  const stat = doc.stat
-    ? tf(t, 'chat.turn.summary.reviewStat', '{{experts}} experts · {{findings}} findings · {{settled}} settled', doc.stat)
-    : null;
-  const open = () => there && document.dispatchEvent(new CustomEvent(OPEN_FILE_EVENT, { detail: { path: doc.absolutePath } }));
-  const Row = there && !readOnly ? 'button' : 'div';
-  return (
-    <li data-testid="summary-doc" data-name={doc.name} data-present={there ? 'true' : 'false'}>
-      <Row
-        {...(Row === 'button' ? { type: 'button' as const, onClick: open, title: doc.absolutePath ?? undefined } : {})}
-        className={`w-full flex items-baseline gap-2 py-1 text-left min-w-0 ${Row === 'button' ? 'rounded hover:bg-[var(--color-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50' : ''}`}
-      >
-        <span aria-hidden="true" className={`material-symbols-outlined icon-sm leading-none self-center shrink-0 ${there ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}>
-          {meta.icon}
-        </span>
-        <span className={`shrink-0 font-mono text-[12.5px] ${there ? 'text-[var(--color-text)]' : 'text-[var(--color-text-dim)]'}`}>{doc.name}</span>
-        <span className={`min-w-0 truncate text-[12.5px] ${there ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-dim)]'}`}>
-          {there ? purpose : (doc.reason ?? tf(t, 'chat.turn.summary.missing', 'not produced'))}
-        </span>
-        {there && stat && <span data-testid="summary-review-stat" className="ml-auto pl-2 shrink-0 text-[12px] text-[var(--color-text-muted)] tabular-nums">{stat}</span>}
-      </Row>
-    </li>
-  );
-}
-
-/** How a run ended, in one line: the one thing the summary makes stand out. */
-export function runVerdict(t: Parameters<typeof tf>[0], summary: PipelineSummaryContent): { text: string; tone: 'ok' | 'warn' | 'muted' } {
-  const ended = summary.status;
-  if (ended === 'abandoned' || ended === 'cancelled') return { text: tf(t, 'chat.turn.summary.abandoned', 'Closed without landing'), tone: 'muted' };
-  if (ended === 'failed') return { text: tf(t, 'chat.turn.summary.failed', 'Failed'), tone: 'warn' };
-  if (summary.landing === 'not_landed') return { text: tf(t, 'chat.turn.summary.notLanded', 'Done · not landed'), tone: 'warn' };
-  return { text: tf(t, 'chat.turn.summary.done', 'Done'), tone: 'muted' };
-}
+const VERDICT_TONE: Record<string, string> = {
+  BLOCK: 'text-[var(--color-status-error)]', FAIL: 'text-[var(--color-status-error)]',
+  WARN: 'text-[var(--color-status-warning)]',
+};
 
 /**
- * A finished run's result, verdict first (XG 2026-10-20: one summary, from code): how
- * it ended and where it landed, then what was asked and what changed (before → now).
- * What to check is the attention card right below; when the turn has none (a landing
- * that was refused never sends it), the reasons it would show are listed here
- * (`showReasons`). The documents are in the output card. Model-written text (intent,
- * outcome): rendered plain.
+ * How a pipeline run ended, as ONE grey line (design 2026-10-26-turn-cards-unified.md
+ * §5, §5.1): `<run id> · <status> · landed <sha> | not landed · N documents`, no
+ * frame, no colour. Its details sit right under it, expanded by default (Gawan
+ * 2026-10-26); clicking the line folds them (per message, not kept): what was asked,
+ * why it did not land (only then), the five audit rows (only WARN / BLOCK coloured, on
+ * the verdict word), the REQUIRED documents the run did not write, and REPORT.md.
+ * An older block without audit rows shows the backend's audit card text. The run's
+ * documents themselves are rows on the output card. Model-written text: plain.
  */
-export function RunResult({ summary, showReasons = false, collapseDetails = false }: {
-  summary: PipelineSummaryContent; showReasons?: boolean; collapseDetails?: boolean;
-}) {
+export function RunLine({ summary }: { summary: PipelineSummaryContent }) {
   const { t } = useTranslation();
-  const v = runVerdict(t, summary);
-  const tone = v.tone === 'warn' ? 'text-amber-600 dark:text-amber-400' : v.tone === 'ok' ? 'text-[var(--color-text)]' : 'text-[var(--color-text-secondary)]';
-  const label = 'shrink-0 w-12 text-[12px] text-[var(--color-text-muted)]';
-  const hasDetails = !!summary.intent || !!summary.solved;
-  const detailRows = hasDetails ? (
-    <div className="space-y-1">
-      {summary.intent && (
-        <div data-testid="run-intent" className="flex gap-2 text-[13px] text-[var(--color-text-secondary)] min-w-0">
-          <span className={label}>{tf(t, 'chat.turn.runResult.asked', 'Asked')}</span>
-          <span className="min-w-0 break-words">{summary.intent}</span>
-        </div>
-      )}
-      {summary.solved && (
-        <div data-testid="run-solved" className="space-y-0.5 text-[13px] text-[var(--color-text-secondary)]">
-          <div className="flex gap-2 min-w-0"><span className={label}>{tf(t, 'chat.turn.runResult.before', 'Before')}</span><span className="min-w-0 break-words">{summary.solved.before}</span></div>
-          <div className="flex gap-2 min-w-0"><span className={label}>{tf(t, 'chat.turn.runResult.now', 'Now')}</span><span className="min-w-0 break-words text-[var(--color-text)]">{summary.solved.now}</span></div>
-        </div>
-      )}
-    </div>
-  ) : null;
+  const readOnly = useContext(ReadOnlyContext);
+  const [open, setOpen] = useState(true);
+  const docs = summary.docs ?? [];
+  const present = docs.filter((d) => !!d.absolutePath);
+  const missing = docs.filter((d) => d.required && !d.absolutePath);
+  const report = present.find((d) => d.name === 'REPORT.md');
+  const status = summary.status ? tf(t, `chat.turn.run.status.${summary.status}`, summary.status) : null;
+  const landing = summary.landing === 'landed' || summary.landing === 'human_override'
+    ? (summary.landedSha
+      ? tf(t, 'chat.turn.run.landedSha', 'landed {{sha}}', { sha: summary.landedSha.slice(0, 8) })
+      : tf(t, 'chat.turn.run.landed', 'landed'))
+    : summary.landing === 'not_landed' ? tf(t, 'chat.turn.run.notLanded', 'not landed') : null;
+  const ndocs = present.length === 1 ? tf(t, 'chat.turn.run.docOne', '1 document')
+    : present.length ? tf(t, 'chat.turn.run.docs', '{{count}} documents', { count: present.length }) : null;
+  const line = [summary.runId, status, landing, ndocs].filter(Boolean).join(' · ');
+  const K = 'shrink-0 w-20 text-[12px] text-[var(--color-text-dim)]';
+  const V = 'min-w-0 text-[12.5px] text-[var(--color-text-secondary)] break-words';
+  const openReport = () => report && document.dispatchEvent(
+    new CustomEvent(OPEN_FILE_EVENT, { detail: { path: report.absolutePath } }));
   return (
-    <section data-testid="run-result" aria-label={tf(t, 'chat.turn.runResult.title', 'Run result')} className="space-y-1">
-      <div data-testid="summary-verdict" className={`text-[14px] font-medium ${tone}`}>
-        {v.text}
-        {summary.landedSha && (
-          <span className="ml-2 font-mono text-[12.5px] font-normal text-[var(--color-text-muted)]">
-            {tf(t, 'chat.turn.runResult.landed', 'on main · {{sha}}', { sha: summary.landedSha.slice(0, 8) })}
-          </span>
-        )}
-      </div>
-      {collapseDetails && detailRows ? (
-        <details data-testid="run-details" className="group/run-details text-[12.5px] text-[var(--color-text-muted)]">
-          <summary className="flex w-fit cursor-pointer list-none items-center gap-1 rounded py-0.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
-            <span aria-hidden="true" className="material-symbols-outlined icon-sm transition-transform group-open/run-details:rotate-90">chevron_right</span>
-            <span>{tf(t, 'chat.turn.runResult.details', 'Run details')}</span>
-          </summary>
-          <div className="mt-1 ml-[19px]">{detailRows}</div>
-        </details>
-      ) : detailRows}
-      {summary.auditCard && (
-        <pre data-testid="run-audit-card" aria-label={tf(t, 'chat.turn.runResult.audit', 'Run audit')}
-          className="overflow-x-auto whitespace-pre rounded bg-[var(--color-bg-chrome)] p-2 font-mono text-[12px] leading-snug text-[var(--color-text-secondary)]">
-          {summary.auditCard}
-        </pre>
-      )}
-      {showReasons && summary.landing === 'not_landed' && summary.notLandedReason && (
-        <ul data-testid="run-reasons" className={`${DIM} list-disc pl-5`}>
-          <li>{summary.notLandedReason}</li>
-        </ul>
+    <section data-testid="run-summary" aria-label={tf(t, 'chat.turn.run.title', 'Pipeline run')}>
+      <button type="button" data-testid="run-line" aria-expanded={open} onClick={() => setOpen(!open)}
+        className="flex items-center gap-1 text-left text-[12.5px] text-[var(--color-text-dim)] hover:text-[var(--color-text-secondary)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50">
+        <span aria-hidden="true" className={`material-symbols-outlined icon-sm transition-transform ${open ? 'rotate-90' : ''}`}>chevron_right</span>
+        <span className="font-mono">{line}</span>
+      </button>
+      {open && (
+        <div data-testid="run-details" className="mt-1 ml-[19px] space-y-1">
+          {summary.intent && (
+            <div data-testid="run-intent" className="flex gap-3">
+              <span className={K}>{tf(t, 'chat.turn.run.asked', 'Asked')}</span><span className={V}>{summary.intent}</span>
+            </div>
+          )}
+          {summary.landing === 'not_landed' && summary.notLandedReason && (
+            <div data-testid="run-not-landed" className="flex gap-3">
+              <span className={K}>{tf(t, 'chat.turn.run.notLandedLabel', 'Not landed')}</span><span className={V}>{summary.notLandedReason}</span>
+            </div>
+          )}
+          {(summary.audit?.length || summary.auditCard) && (
+            <div className="flex gap-3">
+              <span className={K}>{tf(t, 'chat.turn.run.audit', 'Audit')}</span>
+              {summary.audit?.length ? (
+                <div className="min-w-0 grid grid-cols-[auto_auto_minmax(0,1fr)] gap-x-2.5 gap-y-0.5 text-[12px]">
+                  {summary.audit.map((r) => (
+                    <div key={r.dim} data-testid="run-audit-row" data-dim={r.dim} className="contents">
+                      <span className="whitespace-nowrap text-[var(--color-text-secondary)]">{r.dim}</span>
+                      <span data-testid="run-audit-verdict"
+                        className={`whitespace-nowrap font-mono text-[10.5px] font-semibold tracking-[0.04em] ${VERDICT_TONE[r.verdict] ?? 'text-[var(--color-text-dim)]'}`}>{r.verdict}</span>
+                      <span title={r.detail} className="min-w-0 truncate text-[var(--color-text-dim)]">{r.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <pre data-testid="run-audit-card"
+                  className="min-w-0 overflow-x-auto whitespace-pre font-mono text-[12px] leading-snug text-[var(--color-text-secondary)]">{summary.auditCard}</pre>
+              )}
+            </div>
+          )}
+          {missing.length > 0 && (
+            <div data-testid="run-missing" className="flex gap-3">
+              <span className={K}>{tf(t, 'chat.turn.run.missing', 'Missing')}</span>
+              <span className={V}>{missing.map((d) => d.name).join(', ')} · {tf(t, 'chat.turn.run.notWritten', 'not written by this run')}</span>
+            </div>
+          )}
+          {report && (
+            <div className="flex gap-3">
+              <span className={K}>{tf(t, 'chat.turn.run.report', 'Full report')}</span>
+              {readOnly ? <span className={V}>REPORT.md</span> : (
+                <button type="button" data-testid="run-report-link" onClick={openReport} title={report.absolutePath ?? undefined}
+                  className="text-[12.5px] text-primary hover:underline">REPORT.md</button>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </section>
   );
@@ -353,24 +266,23 @@ export function OutputCard({ changes, deliverables, summary, remote = [] }: {
   remote?: RemoteProduct[];
 }) {
   const { t } = useTranslation();
-  const docs = summary?.docs ?? [];
-  const nDeliv = deliverables.length + remote.length + docs.filter((d) => !!d.absolutePath).length;
-  if (!changes && !deliverables.length && !remote.length && !docs.length) return null;
+  // the run's documents it wrote; one it did not write is not a deliverable (the run
+  // line names a missing required one)
+  const runDocs = (summary?.docs ?? []).filter((d) => !!d.absolutePath);
+  const nDeliv = deliverables.length + remote.length + runDocs.length;
+  if (!changes && !nDeliv) return null;
   const title = nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv });
   return (
     <section data-testid="output-card" className="space-y-3">
       {changes && <ChangesCard block={changes} />}
-      {(deliverables.length > 0 || remote.length > 0 || docs.length > 0) && (
+      {nDeliv > 0 && (
         <div data-testid="output-deliverables">
-          {(deliverables.length > 0 || remote.length > 0) ? (
-            <ItemBox testId="product-box" title={title}>
-              {deliverables.map((f) => <DeliverableCardTile key={f.absolutePath} file={f} />)}
-              {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
-            </ItemBox>
-          ) : (
-            <div className={`mb-2 ${DELIV_TITLE}`}>{title}</div>
-          )}
-          {docs.length > 0 && <ul className={deliverables.length || remote.length ? 'mt-2' : ''}>{docs.map((d) => <SummaryDocRow key={d.name} doc={d} />)}</ul>}
+          <ItemBox testId="product-box" title={title}>
+            {runDocs.map((d) => <FileItemRow key={d.absolutePath} testId="deliverable" data={{ name: d.name }}
+              file={{ path: d.name, absolutePath: d.absolutePath! }} />)}
+            {deliverables.map((f) => <FileItemRow key={f.absolutePath} testId="deliverable" file={f} />)}
+            {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
+          </ItemBox>
         </div>
       )}
     </section>

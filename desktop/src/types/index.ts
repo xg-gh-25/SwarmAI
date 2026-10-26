@@ -422,8 +422,14 @@ export interface PipelineSummaryContent {
   stagesDone: number;
   docs: PipelineSummaryDoc[];
   at: string;
-  /** Pipeline v1: the run's five-line audit card, rendered by the backend — shown as is. */
+  /** Pipeline v1: the run's five-line audit card, rendered by the backend — shown as is
+   *  when the block has no `audit` rows (older blocks). */
   auditCard?: string | null;
+  /** The card's five rows as data (run_protocol.audit.card_rows; design
+   *  2026-10-26-turn-cards-unified.md §5.1). */
+  audit?: Array<{ dim: string; verdict: string; detail: string }> | null;
+  /** Every repo's landed commit (a run can land several; landedSha is the last). */
+  commits?: Array<{ repo: string; sha: string }> | null;
 }
 
 /**

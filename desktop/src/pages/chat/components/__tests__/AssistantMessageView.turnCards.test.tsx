@@ -3,15 +3,16 @@
  *
  * What is tested (real AssistantMessageView + turnView, only leaf contexts mocked):
  * - pipeline_run: never rendered as text (no requirement card, no "Intent" label)
- * - pipeline_attention: immediate action before Output; self-answered decisions and
- *   assumptions in a folded disclosure after Output, beside Next steps
+ * - pipeline_attention: no action card (gates / not landed are the run line's, design
+ *   2026-10-26-turn-cards-unified.md §5); self-answered decisions and assumptions in a
+ *   folded disclosure after Output, beside Next steps
  * - turn_deliverables: the output section after the answer, one compact row per
  *   file (deduped across rows), middle-ellipsis names keep the extension, Open dispatches OPEN_FILE_EVENT with the absolute path, Copy copies it; a product
  *   is not listed again as a changed file (turn_changes)
  * - none of the three splits a process segment or hides an unrecovered failure
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { middleEllipsis, shortFolder } from '../TurnCards';
 import { deriveTurnView } from '../../turnView';
@@ -82,85 +83,48 @@ describe('pipeline_run — never rendered as text (chat display v8)', () => {
   });
 });
 
-describe('pipeline_attention — what needs the user', () => {
-  it('puts action before Output and folded assumptions immediately before proposed next steps', () => {
+describe('pipeline_attention — never an action card (design turn-cards-unified §5)', () => {
+  it('gates, not-landed and old not-push-ready items are not shown; assumptions fold before next steps', () => {
     const withNext = PIPELINE.map((block) => block.type === 'text' && block.text.startsWith('Shipped:')
       ? tx(`${block.text}\n\n\`\`\`next-steps\nVerify the assumption\n\`\`\``)
       : block);
-    const { container } = renderView(withNext);
-    const result = screen.getByTestId('turn-result');
-    const action = screen.getByTestId('turn-attention');
-    const assumptions = screen.getByTestId('turn-assumptions');
-    expect(within(result).queryByTestId('turn-attention')).toBeNull();
-    expect(within(action).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
-      .toEqual(['gate', 'not_push_ready']);
-    expect(action.textContent).toContain('For you to check');
-    expect(action.textContent).not.toContain('For you to check ·');
-    expect(within(action).getByText('BLOCK').className).toContain('text-red-500');
+    const withLanded = [...withNext, { ...ATTN, items: [
+      ...(ATTN as unknown as { items: unknown[] }).items,
+      { kind: 'not_landed', reasons: ['No smoke test ran the changed code'], detail: 'REPORT §10' }] } as ContentBlock];
+    const { container } = renderView(withLanded);
+    expect(screen.queryByTestId('turn-attention')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/For you to check|GATE 1|tests: 1 failed|No smoke test/);
+    const assumptions = screen.getAllByTestId('turn-assumptions')[0];
     expect(assumptions.getAttribute('open')).toBeNull();
     expect(within(assumptions).getAllByTestId('attention-item').map((e) => e.getAttribute('data-kind')))
       .toEqual(['self_answered', 'assumption']);
-    expect(assumptions.textContent).toContain('Assumptions to verify');
     expect(assumptions.textContent).toContain('→ prompt_builder');
     expect(assumptions.textContent).not.toContain('Q1');
-    expect(assumptions.textContent).not.toContain('FR-3');
-    expect(order(container, 'turn-attention', 'output-card', 'turn-assumptions', 'next-steps'))
-      .toEqual([expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number)]);
-    const positions = order(container, 'turn-attention', 'output-card', 'turn-assumptions', 'next-steps');
+    const positions = order(container, 'output-card', 'turn-assumptions', 'next-steps');
     expect(positions[0]).toBeLessThan(positions[1]);
     expect(positions[1]).toBeLessThan(positions[2]);
-    expect(positions[2]).toBeLessThan(positions[3]);
   });
 
-  it('while streaming it shows action after the work so far, and defers assumptions to their final slot', () => {
-    const live = [...PIPELINE.slice(0, 12), tu('d', 'Bash')];
-    renderView(live, true);
-    const card = screen.getByTestId('turn-attention');
+  it('while streaming there is no action card and assumptions wait for their final slot', () => {
+    renderView([...PIPELINE.slice(0, 12), tu('d', 'Bash')], true);
+    expect(screen.queryByTestId('turn-attention')).toBeNull();
     expect(screen.queryByTestId('turn-assumptions')).toBeNull();
-    expect(screen.queryByTestId('turn-result')).toBeNull();
-    const stages = screen.getAllByTestId('zone-stage');
-    expect(stages[stages.length - 1].compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('verification-only attention creates no action card', () => {
+  it('verification-only attention shows the folded assumptions', () => {
     const verificationOnly = { ...ATTN, items: [
       { kind: 'self_answered', id: 'Q1', question: 'Where?', answer: 'prompt_builder', reason: 'covers stored configs' },
       { kind: 'assumption', id: 'FR-3', statement: 'eval later' },
     ] } as ContentBlock;
     renderView([tu('a', 'Bash'), tr('a'), verificationOnly, tx('done')]);
-    expect(screen.queryByTestId('turn-attention')).toBeNull();
     expect(screen.getByTestId('turn-assumptions')).toBeTruthy();
   });
 
-  it('no name line when Swarm settled nothing', () => {
-    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [ATTN_GATE] } as ContentBlock, tx('done')]);
-    expect(screen.getByTestId('turn-attention').textContent).not.toContain('Swarm');
-    expect(screen.queryByTestId('attention-decided')).toBeNull();
-  });
-
-  it('an empty item list renders nothing', () => {
+  it('an empty item list, or only a gate, renders nothing', () => {
     renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [] } as ContentBlock, tx('done')]);
+    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [ATTN_GATE] } as ContentBlock, tx('done')]);
     expect(screen.queryByTestId('turn-attention')).toBeNull();
-  });
-
-  it('an older not_push_ready item shows its reasons with no push verdict', () => {
-    const item = { kind: 'not_push_ready', reasons: ['Tests failed'] };
-    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [item] } as ContentBlock, tx('done')]);
-    const card = screen.getByTestId('turn-attention');
-    expect(card.textContent).toContain('Tests failed');
-    expect(card.textContent).not.toMatch(/push/i);
-  });
-
-  it('not landed is amber, one reason per line, with where the details are', () => {
-    const item = { kind: 'not_landed', reasons: ['No smoke test ran the changed code', 'Tests failed'], detail: 'Details: REPORT §10' };
-    renderView([tu('a', 'Bash'), tr('a'), { ...ATTN, items: [item] } as ContentBlock, tx('done')]);
-    const card = screen.getByTestId('turn-attention');
-    const label = within(card).getByText('Not landed');
-    expect(label.className).toContain('text-amber');
-    expect(label.className).not.toContain('text-red');
-    expect(within(within(card).getByTestId('not-ready-reasons')).getAllByRole('listitem').map((e) => e.textContent))
-      .toEqual(['No smoke test ran the changed code', 'Tests failed']);
-    expect(card.textContent).toContain('Details: REPORT §10');
+    expect(screen.queryByTestId('turn-assumptions')).toBeNull();
   });
 });
 
@@ -217,7 +181,8 @@ describe('turn_deliverables — what the turn produced', () => {
     fireEvent.click(screen.getByLabelText('Copy path'));
     document.removeEventListener(OPEN_FILE_EVENT, on);
     expect(seen).toHaveLength(2);
-    expect(copySpy).toHaveBeenCalledWith('/ws/out/deck.pptx');
+    // Copy loads the clipboard helper on use (ItemRows), so it lands a tick later
+    await waitFor(() => expect(copySpy).toHaveBeenCalledWith('/ws/out/deck.pptx'));
     expect(await screen.findByLabelText('Copied')).toBeTruthy();
   });
 

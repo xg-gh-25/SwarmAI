@@ -3,6 +3,7 @@
 Public symbols:
 - ``build`` — derive run_audit.json from events, findings, contract and the TEST reports.
 - ``render`` — render the same summary as REPORT or completed chat card.
+- ``card_rows`` — the card's five rows as data, for the chat's run details.
 - ``write`` — atomically persist the machine-readable audit.
 """
 from __future__ import annotations
@@ -418,6 +419,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
              "details": details}
     if audit_through == "COMPLETED":
         audit["card"] = render(audit, fmt="card")
+        audit["card_rows"] = card_rows(audit)
     return audit
 
 
@@ -533,21 +535,31 @@ def _conclusion(audit: Mapping[str, Any]) -> str:
     return f"Not landed: {what}. Reason: {outcome.get('reason') or landing or 'unknown'}."
 
 
-def render(audit: Mapping[str, Any], *, fmt: str) -> str:
-    """One renderer for REPORT and the chat card (§B8, §E9.5): the same five numbers."""
-    if fmt not in {"report", "card"}:
-        raise AuditError("format must be report or card")
+def card_rows(audit: Mapping[str, Any]) -> list[dict[str, str]]:
+    """The five dimension rows REPORT and the card print: ``{dim, verdict, detail}``.
+    The chat shows them as rows (design 2026-10-26-turn-cards-unified.md §5.1)."""
     outcome, summary = audit["outcome"], audit["summary"]
-    details = audit.get("details") or {}
+    approvals = summary["autonomy"]["required_approvals"]
     rows = [
         ("Run Isolation", summary["isolation"], _isolation_text(summary["isolation"])),
         ("Speed", summary["speed"], _speed_text(summary["speed"])),
         ("Quality", summary["quality"], _quality_text(summary["quality"], outcome.get("reason"))),
         ("Autonomy", summary["autonomy"],
-         f"{summary['autonomy']['human_decisions']} decisions · rescues not measured · {summary['autonomy']['required_approvals']} required approval"
-         + ("s" if summary['autonomy']['required_approvals'] != 1 else "")),
+         f"{summary['autonomy']['human_decisions']} decisions · rescues not measured · "
+         f"{approvals} required approval" + ("s" if approvals != 1 else "")),
         ("Token Cost", summary["token_cost"], _token_text(summary["token_cost"])),
     ]
+    return [{"dim": name, "verdict": str(row["verdict"]), "detail": detail}
+            for name, row, detail in rows]
+
+
+def render(audit: Mapping[str, Any], *, fmt: str) -> str:
+    """One renderer for REPORT and the chat card (§B8, §E9.5): the same five numbers."""
+    if fmt not in {"report", "card"}:
+        raise AuditError("format must be report or card")
+    outcome = audit["outcome"]
+    details = audit.get("details") or {}
+    rows = [(r["dim"], {"verdict": r["verdict"]}, r["detail"]) for r in card_rows(audit)]
     state = f"{str(outcome.get('status') or '').upper()} · {str(outcome.get('landing') or '').upper()}"
     if outcome.get("commit"):
         state += " · " + str(outcome["commit"])[:8]

@@ -39,7 +39,7 @@ import type { Message, ContentBlock } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { ChatErrorMessage } from '../../../components/chat';
-import { AssumptionsDisclosure, AttentionCard, isVerificationAttentionItem, OutputCard, ProductList, remoteProducts, RunResult } from './TurnCards';
+import { AssumptionsDisclosure, isVerificationAttentionItem, OutputCard, ProductList, remoteProducts, RunLine } from './TurnCards';
 import { NextSteps } from './NextSteps';
 import { TurnZoneList, ZONE_GAP } from './TurnZones';
 import type { ZoneContext } from './TurnZones';
@@ -481,7 +481,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     return hasTurnChanges(next) ? next : undefined;
   }, [view, ending, summaryDocs]);
   const attention = !continued && view.attention && view.attention.items.length > 0 ? view.attention : undefined;
-  const hasActionAttention = !!attention?.items.some((item) => !isVerificationAttentionItem(item));
   const hasVerificationAttention = !!attention
     && (attention.items.some(isVerificationAttentionItem) || (attention.more ?? 0) > 0);
   const hasResult = zones.some((z) => z.kind === 'text' && z.result);
@@ -497,19 +496,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     );
   }
   contentBlocks.push(<TurnZoneList key="zones" zones={zones} ctx={ctx} hasOpenQuestionIn={(z) => hasOpenQuestion(z.body)} />);
-  // Completion hierarchy: model Result, machine status, immediate action, produced
-  // output, then optional assumptions beside the proposed next steps.
+  // Completion hierarchy: model Result, the run's grey line (no run-result and no
+  // attention card: design 2026-10-26-turn-cards-unified.md §5), produced output,
+  // then optional assumptions beside the proposed next steps.
   if (summary) {
     contentBlocks.push(
       <div key="result" className={zones.length ? ZONE_GAP : ''}>
-        <RunResult summary={summary} showReasons={!hasActionAttention} collapseDetails={hasResult} />
-      </div>,
-    );
-  }
-  if (attention && hasActionAttention) {
-    contentBlocks.push(
-      <div key="attention" className={zones.length || summary ? ZONE_GAP : ''}>
-        <AttentionCard block={attention} />
+        <RunLine summary={summary} />
       </div>,
     );
   }
