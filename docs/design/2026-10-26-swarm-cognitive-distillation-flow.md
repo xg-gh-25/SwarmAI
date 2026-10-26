@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r15 — 设计，已吸收 r14.2 两份独立评审（修订记录见 §18）
+status: r15.1 — 设计，已吸收 r14.2 两份独立评审；执行计划合并为三个阶段（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -584,7 +584,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | `artifact_cli ddd-retire --apply`（`artifact_cli.py:526-529`） | 删除 `--apply`，只保留报告 |
 | 迁移脚本 `migrate_memory_lifecycle.py:185`、`migrate_cultivated_titles.py:135` | 已经跑完的一次性迁移，删除 |
 | workspace 初始化、codebase scan 创建 DDD 文档（`swarm_workspace_manager.py:1264`、`1450`、`1920`） | 允许"文件不存在时才创建"，这类写入作为显式豁免；已经存在的文件不覆盖 |
-| 每周 Memory Health 的修改阶段（`memory_health.py:584`、`796`、`867`、`1005`、`1056`）、EVOLUTION prune 和维护（`evolution_maintenance_hook.py:422`、`866`、`950`）、context health 里的修改（`context_health_hook.py` 中写 MEMORY、EVOLUTION、KNOWLEDGE、DDD 的各处，行号由扫描器生成）、DDD 矛盾剥离、size valve 驱逐基线单元、`locked_write` 清理旧索引 | 这些都会改动已沉淀的内容，和 §13 冲突，**在第 1 步全部关成只读**，不再保留到第 3 步，只留下只读统计。size 控制改成只作用于 `cand:` 单元，并放进读取侧的注入预算（§12） |
+| 每周 Memory Health 的修改阶段（`memory_health.py:584`、`796`、`867`、`1005`、`1056`）、EVOLUTION prune 和维护（`evolution_maintenance_hook.py:422`、`866`、`950`）、context health 里的修改（`context_health_hook.py` 中写 MEMORY、EVOLUTION、KNOWLEDGE、DDD 的各处，行号由扫描器生成）、DDD 矛盾剥离、size valve 驱逐基线单元、`locked_write` 清理旧索引 | 这些都会改动已沉淀的内容，和 §13 冲突，**在阶段 B 全部关成只读**，只留下只读统计。size 控制改成只作用于 `cand:` 单元，并放进读取侧的注入预算（§12） |
 | `ddd_orchestrator` 的机械替换、`ddd_maturity` 的成熟度注释 | 首版改成只读，不再写入 |
 | DailyActivity、checkpoint、JobResults、Signals、Reports | 它们是日志，不进 Inbox。新的 checkpoint 写到恢复文件，不再写进 DailyActivity |
 
@@ -594,11 +594,11 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 AST 夹具只用来做回归，保证上表列出的每一个写入点都能被检出。上表里的行号是扫描器生成的证据，不是规范的一部分。豁免只有三类：writer、`governed_edit`、"文件不存在时才创建"。
 
-**切换时的不变量**：只要有任何一个 source 开始用 Inbox，就不能再有任何非 writer 的自动写入在运行。所以第 1 步上线时，上表所有旧的修改路径都会被关闭。
+**切换时的不变量**：只要有任何一个 source 开始用 Inbox，就不能再有任何非 writer 的自动写入在运行。所以阶段 B 上线时，上表所有旧的修改路径都会同时关闭。
 
 **带外修改检测**：maintenance lane 每天把各受控文件的单元集合和"基线 + writer 写过的版本"做比对，对不上的部分在审计里记一行 `writer=unknown` 并附上 diff，同时在 Need You 里出现一条记录（§10）。
 
-**迁移顺序**：一次改一个 source。改完后观察到这个 source 至少有 30 个候选、或者已经满 7 天（以先到者为准），确认以下几项再改下一个：重复率 < 2%，`deferred` 最老的不超过 24 小时，入队 p90 < 50 ms，抽查 20 条写入里错的不超过 1 条。不做影子模式：每个 source 改完就直接生效，旧的写入路径同时删掉。如果需要回滚，就退回到这个 source 改成入队之前的版本，不做双写。
+**切换方式**：所有 source 在阶段 B 一次切换（§14），旧的写入路径同时删掉，不做影子模式，也不做双写。上线后，按 source 分别统计观察指标；哪个 source 不达标，就单独修那个 source 的提取或规则。确实需要回滚时，回退的是整个阶段 B 的版本。
 
 ## 9. 来源和污染（沿用 r12，入口改为 `enqueue()`）
 
@@ -730,9 +730,9 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 
 ## 14. 实施和验收
 
-每一步都在 worktree 里做，ff-merge 成一个 commit；不 push，也不 rebuild。
+实施只分三个阶段。每个阶段在 worktree 里做完，ff-merge 进本地 main；不 push，也不 rebuild。每个阶段末尾只有一道验收门，过了再进下一阶段。
 
-**第 0 步：go/no-go（离线，不改生产代码）**
+**阶段 A：离线 go/no-go（不改生产代码）**
 1. 实现 worker 的纯逻辑：整理、卡 0、卡 1 的 prompt、污染约束、卡 2、目的地规则、改投、卡 3 的检索和两个纯函数。全部放在 `core/ingestion/`，不接任何 source，也不写任何受控文件。
 2. 实现离线工具 `scripts/ingestion_replay.py`。它把候选灌进一个**临时** Inbox，在只读的语料副本上运行，输出每个单元的决定。回放有两种模式：
    - **A，录制模式**：卡 1 和卡 3 的结构化输出用事先录好的，只测卡 2、规则、改投和聚合这些部分，结果必须完全确定。
@@ -763,28 +763,51 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
    - 报告列出每项的分子、分母、点估计和下界；`DEFER` 和 `uncertain` 单独计数。
    - 每次运行都记录完整的版本向量：模型 id 和 provider 版本、temperature、top-p、seed（模型支持时才有）、prompt 哈希、normalizer / 规则 / 契约的版本、检索语料摘要、运行时版本。
 
-**第 1 步：Inbox、worker、writer、dashboard，加第一个 source**
-5. 建 `ingestion.db`（§4 的全部表），`data.db` 加 `session_inputs`（v16 迁移，只加这一张表）、owner 锁和 epoch（§3.1）、`enqueue()`、`ingest` CLI 和唤醒接口、lane 调度、公平性、负载感知、清理、写入日志和恢复（§4.3）、writer、materializer、`governed_edit`（包括编辑器 revision、树级操作，以及目录操作的限制）、wake 凭证、`ingestion.db` 的备份和恢复、`record_session_input()`。**同时把 §8 表里所有旧的修改路径关成只读，或者改走新路径**。
-6. Need You 的 Cognitive Distillation Flow 页（第一版范围），以及 `AttentionAuthority` 的 `ingestion` source。
-7. 第一个 source：backflow。它当前质量最差（15 条里 9 条只在原会话里有意义），而且只写 Library，风险最小。
-- 验收：
-  - 一天的真实流量里，backflow 每个候选在 Flow 视图里都能看到完整的处理过程；
-  - 同一条消息只产出一份；
-  - 被拒的原因码合理；
-  - 在 chat、CLI、清理、dashboard 同时运行时，实测入队延迟 p99 < 200 ms；chat 首 token 的 p90 和基线相比，差值在误差范围内；
-  - 故障注入：在每个写入步骤的边界杀进程，恢复后结果一致；两个完整 backend 同时启动，只有一个 worker 在跑；旧 owner 被新 epoch 取代之后，没能写成任何文件；外部编辑器在替换前后各写入一次，两种时机都不会被系统自动回写；备份恢复之后，审计记录完整，恢复流程能补齐中断的写入。
+**阶段 B：引擎上线，所有 source 一次切换**
 
-**第 2 步：依次迁移其余 source**
-顺序：REFLECT → DailyActivity 决策和纠正 → 会话结束蒸馏 → 即时纠正和"记住" → cultivation → 其余。每迁移一个，就删掉它原来的写入路径，在 Flow 视图里观察一天再继续。
-- 每个 source 的验收：它的候选在 Flow 视图里能完整走完；它原来的写入路径已经删除（静态测试会因为直接写入而变红）；没有出现带外修改。
+这一阶段一次性交付下面这些内容：
 
-**第 3 步：注入预算和最终验收**（旧维护路径已经在第 1 步关掉）
-- 验收：
+- **存储和引擎**：
+  - 新建 `ingestion.db`，包含 §4 的全部表；`data.db` 只加一张 `session_inputs`（v16 迁移）。
+  - owner 锁和 epoch（§3.1），`enqueue()`。
+  - `ingest` CLI 和 wake 凭证。
+  - lane 调度、公平性、负载感知、清理（§6、§4.4）。
+  - 写入日志和恢复（§4.3），writer，materializer。
+  - `governed_edit`：包括编辑器 revision、树级操作，以及对目录操作的限制。
+  - `ingestion.db` 的备份和恢复，`record_session_input()`。
+- **全部 source 一次切换**：§5 表里的每个 source 都改成入队，原来的写入代码删掉。§8 表里的每条旧修改路径，要么关成只读，要么改走新路径。必须同时切换，因为 §8 要求"只要有一个 source 开始用 Inbox，就不能再有任何非 writer 的自动写入"；如果逐个迁移，还没迁的 source 仍在直接写，正好违反这条不变量。
+- **Flow 视图**：Need You 里的 Cognitive Distillation Flow 页（第一版范围），以及 `AttentionAuthority` 的 `ingestion` source。
+
+**验收门**（一次性检查，全部通过才算完成）：
+
+- **自动化测试**：
+  - 故障注入：在每个写入步骤的边界杀进程，恢复后结果一致；
+  - 两个完整的 backend 同时启动，只有一个 worker 在运行；
+  - 被新 epoch 取代的旧 owner 写不成任何文件；
+  - 外部编辑器在替换前、替换后各写入一次，两种时机都不会被系统自动回写；
+  - 备份恢复之后，审计记录完整，恢复流程能补齐中断的写入；
   - 只含基线内容的夹具跑完所有 lane 后，基线单元的字节哈希完全不变；
-  - MEMORY 超出预算时，选取结果是确定的；
-  - 元认知层完整保留。
+  - 静态检查确认：materializer 以外没有任何直接写文件的调用。
+- **性能**：chat、CLI、清理、dashboard 同时运行时，实测入队延迟 p99 < 200 ms；chat 首 token 的 p90 和基线相比，差异在误差范围内。
+- **真实流量观察**：上线后观察 7 天，或者等每个 source 至少产生 30 个候选（哪个先满足以哪个为准），然后每个 source 都要满足下面这些条件：
+  - 每个候选在 Flow 视图里都能看到完整的处理过程；
+  - 重复率 < 2%；
+  - 最老的 `deferred` 不超过 24 小时；
+  - 抽查 20 条写入，错的不超过 1 条；
+  - 没有出现带外修改。
 
-**所有步骤都要满足**
+  某个 source 不达标时，只修这个 source 的提取或规则，然后重新观察这一个 source，不回退整个阶段。
+
+**阶段 C：注入预算（读取侧）**
+
+MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按惯例要单独做成对回放和盲评，所以单独列为一个阶段。
+
+**验收门**：
+- MEMORY 超出预算时，选取结果是确定的；
+- 元认知层完整保留；
+- 成对回放加盲评：useful 和 noise 两项都不比基线差。
+
+**每个阶段都要满足**
 - 安全类的不变量（§7.2 末尾，以及"被污染的 rule 不会进入每轮注入的文件"）都做 mutation 检查：撤掉修复，对应的测试必须变红。其余规则用表驱动测试和 Hypothesis 属性测试；
 - `swarm_select_tests.py` 选出的测试全部通过；
 - Windows CI 通过；
@@ -838,7 +861,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 3. 每轮注入的文件有确定性的预算，源文件不变（r12）。
 4. 提取和 ingestion 解耦。Inbox 只保留 30 天，更早的只留统计。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里，叫 Cognitive Distillation Flow（Flow 视图）。按时效性分 lane 触发（r13）。
 5. DDD 的注入方式不改；所有 DDD 规则都以保住 what、how、why 为前提（r13）。
-6. 先做第 0 步（离线 go/no-go），通过之后再接入真实的 source。
+6. 实施分三个阶段：A 离线 go/no-go → B 引擎上线，所有 source 一次切换 → C 注入预算。每个阶段只有一道验收门（r15.1）。
 7. holdout 由 3 个盲评 subagent 独立标注，按多数票定标签（r14）；三票都不同的标为 `unresolved` 交给 Gawan 裁定，另做 60 条必做的分层抽检（r15）。
 8. 首版的删减（r15 扩充）：首版不做 `extends`，`ddd_orchestrator` 只读；最小关系表、不做语义复审、mutation 检查只覆盖安全类不变量、dashboard 只做审计闭环、不做类型对照、source 用静态类型注册（r14）。
 9. 整个设计定名为 **Swarm Cognitive Distillation Flow**：它是 SwarmAI 认知系统的核心引擎，也是对所有用户可用的产品级能力（r14.1）。
@@ -852,6 +875,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
   - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（`99bcc4ea3` 之前的版本）。
 
+- **r15.1**（Gawan：执行计划不要拆得太碎）：§14 合并为三个阶段：A 离线 go/no-go；B 引擎上线，所有 source 一次切换，观察 7 天后统一验收；C 注入预算。逐个迁移 source 的计划同时作废，原因是它和"只要有一个 source 上了 Inbox，就不能再有非 writer 的自动写入"这条不变量冲突。
 - **r15：吸收 r14.2 的两份独立评审**（`review_r142_code.md`、`review_r142_design.md`），并按 Gawan 的两项决定修改：`ingestion.db` 是不可替代的状态，要纳入备份和恢复；holdout 中标为 `unresolved` 的样本和分层抽检由 Gawan 裁定。具体改动：
   - 文件副作用也受 owner epoch 约束：每一步执行前先抢占这一步；旧 owner 停下并 join 完成之后，才释放锁；新 owner 先接管遗留任务，再开始处理。
   - 删除"检测到外部编辑后自动恢复用户版本"的做法，改成：保留现状，标记 `DEFER user_race`，保留恢复副本；同时明确写出检测不到的那段时间窗口。
