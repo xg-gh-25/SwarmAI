@@ -199,7 +199,8 @@ def _status(row: dict[str, Any], event: Mapping[str, Any]) -> None:
         row["r2_status"] = status
         return
     if not r2_status_allowed(row["status"], status):
-        raise FindingError(f"R2 status {status!r} is invalid for {row['status']}")
+        raise FindingError(f"{row['canonical_id']}: R2 status {status!r} is invalid for "
+                           f"{row['status']} (allowed: {', '.join(sorted(r2_allowed(row['status'])))})")
     row["r2_status"] = status
     if row["status"] == "closed_proven" and status == "TEST_INADEQUATE":
         row["status"] = "invalid_test"
@@ -222,7 +223,9 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
     if etype in ("diff_assertion", "refuted") and event["producer"] != "cli":
         raise FindingError(f"{etype} proof must come from cli")
     if row["status"] not in ("open", "invalid_test"):
-        raise FindingError("proof cannot replace a terminal finding state")
+        raise FindingError(f"proof cannot replace a terminal finding state: "
+                           f"{row['canonical_id']} is {row['status']} (a proof closes only "
+                           "open / invalid_test findings)")
     rule = CLOSURE[row["kind"]]
     if etype in ("reported_test", "diff_assertion") and rule["evidence"] != etype:
         raise FindingError(f"a {row['kind']} finding is closed by {rule['evidence']}, "
@@ -248,7 +251,10 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
     elif etype == "diff_assertion":
         if row["r2_status"] != "RESOLVED" or result != "asserted" \
                 or payload.get("touches_finding") is not True:
-            raise FindingError("diff assertion lacks matching R2 and hunk")
+            raise FindingError(f"diff assertion lacks matching R2 and hunk: "
+                               f"{row['canonical_id']} has R2 status {row['r2_status']} (needs "
+                               "RESOLVED) and touches_finding "
+                               f"{payload.get('touches_finding')} (needs true)")
         executable = payload.get("touches_executable") is not False
         if row["kind"] == "docs" and executable and payload.get("basis") == "file":
             # judged on the file (R2 saw its whole diff since R1): the same file also
@@ -263,7 +269,9 @@ def _proof(row: dict[str, Any], event: Mapping[str, Any],
         refs = payload.get("refs")
         if row["r2_status"] != "REFUTED" or result != "refuted" \
                 or not isinstance(refs, list) or not refs or not all(_resolved_ref(ref) for ref in refs):
-            raise FindingError("refutation lacks R2 REFUTED and resolved refs")
+            raise FindingError(f"refutation lacks R2 REFUTED and resolved refs: "
+                               f"{row['canonical_id']} has R2 status {row['r2_status']} (needs "
+                               "REFUTED) and needs at least one path:line or event:<id> ref")
         row["status"] = "refuted"
     else:
         raise FindingError(f"unknown proof evidence type {etype!r}")

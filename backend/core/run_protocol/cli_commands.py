@@ -130,7 +130,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--requirement",
                         help="the user's request, verbatim (required for --profile direct)")
     for command in ("status", "review-start", "land",
-                    "events", "resume", "restore"):
+                    "events", "findings", "resume", "restore"):
         item = sub.add_parser(command)
         item.add_argument("--project", required=True)
         item.add_argument("--run-id", required=True)
@@ -304,7 +304,7 @@ def execute(args) -> dict[str, Any]:
 
 
 # read the run, never write it: no operation lock (r6 §2.2)
-_READ_ONLY = frozenset({"status", "events"})
+_READ_ONLY = frozenset({"status", "events", "findings"})
 
 
 def _missing_worktrees(engine: RunEngine) -> bool:
@@ -403,6 +403,11 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         artifact = _json_arg(args.artifact)
         # dedup candidates are computed here, not supplied (RF-4, D1)
         return {"ok": True, "reflect": engine.prepare_reflect(artifact.get("lessons", []))}
+    if args.command == "findings":    # read-only: every finding and what closes it (§3.2)
+        from core.run_protocol import review as review_protocol
+        events = engine.store.read_events()
+        rows = review_protocol.ReviewOrchestrator(engine.store, engine.run_dir).findings(events)
+        return {"ok": True, "findings": review_protocol.closure_view(rows, events)}
     if args.command == "events":      # read-only: the ids a lesson may cite (RF-2, D1)
         return {"ok": True, "events": [
             {"event_id": e["event_id"], "kind": e["kind"], "stage": e.get("stage"),

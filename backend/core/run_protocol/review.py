@@ -131,6 +131,59 @@ def r2_redispatch_targets(events: Sequence[Mapping[str, Any]]
     return out
 
 
+def close_with(row: Mapping[str, Any], ledger: Mapping[str, Any] | None, *,
+               uncovered: bool, redispatch: bool) -> str:
+    """What closes *row* now, from the closure table and the R2 ledger (design 2026-10-
+    26-pipeline-review-closure §3.2). ``""`` when it is closed."""
+    from core.run_protocol import findings as fd
+    if fd.is_closed(row):
+        return ""
+    status, r2 = row.get("status"), row.get("r2_status")
+    if ledger and ledger.get("pending"):
+        return "awaiting R2: spawn its R2 handout (status next lists it)"
+    if uncovered:
+        return "dispatch its R2: review-address with no items"
+    if redispatch:
+        return (f"re-dispatch R2 (it said {r2}, a word this finding does not take): "
+                "review-address with no items")
+    rule = fd.CLOSURE[row["kind"]]
+    if status == "closed_proven":
+        return ("R2 has not judged the test ADEQUATE: address it again without a proof "
+                "so R2 answers ADEQUATE or TEST_INADEQUATE")
+    if status == "closed_unproven":
+        return "a HIGH reviewed without a test: a person decides (accept-finding)"
+    if r2 == "REFUTED":
+        return "review-proof refuted, with path:line or event:<id> refs"
+    if rule["evidence"] == "reported_test":
+        return ("fix it, report-tests, then review-address with proof reported_test (a "
+                "command of that report)" + (" whose report lists tests_changed"
+                                             if row["kind"] == "absence" else ""))
+    if r2 == "RESOLVED":
+        return "review-proof diff_assertion"
+    return ("fix it, then review-address without a proof; after R2 judges it RESOLVED, "
+            "review-proof diff_assertion")
+
+
+def closure_view(rows: Sequence[Mapping[str, Any]],
+                 events: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One line per finding for ``findings`` and REVIEW's ``next``: the same is_closed
+    and close_with every reader uses (design 2026-10-26-pipeline-review-closure §3.2)."""
+    from core.run_protocol import findings as fd
+    ledger = r2_ledger(events)
+    uncovered = set(uncovered_addresses(events))
+    redo = {cid for _answer, wrong in r2_redispatch_targets(events).values() for cid in wrong}
+    out = []
+    for row in rows:
+        cid = row["canonical_id"]
+        out.append({"id": cid, "expert": row.get("expert"), "severity": row.get("severity"),
+                    "kind": row.get("kind"), "file": row.get("file"), "line": row.get("line"),
+                    "status": row.get("status"), "r2_status": row.get("r2_status"),
+                    "closed": fd.is_closed(row),
+                    "close_with": close_with(row, ledger.get(cid), uncovered=cid in uncovered,
+                                             redispatch=cid in redo)})
+    return out
+
+
 class ReviewError(ValueError):
     """REVIEW input, event stream, fixing spec, or handout is inconsistent."""
 

@@ -24,6 +24,24 @@ _MULTILINE = re.compile(r"[\r\n\u2028\u2029\x0b\x0c\x85]")
 _VOLATILE = re.compile(r"\brun_[A-Za-z0-9_-]+\b|/(?:Users|home)/[^/]+/|\b(?:running|pending|done)\b", re.I)
 
 
+_MAX_TEXT = 400
+
+
+def _statement_problem(statement: Any) -> str | None:
+    """Why a lesson statement is refused, with the rule it broke, or None."""
+    if not isinstance(statement, str) or not statement.strip():
+        return "it is empty"
+    if len(statement) > _MAX_TEXT:
+        return f"{len(statement)} characters, at most {_MAX_TEXT}"
+    if _MULTILINE.search(statement):
+        return "it has a line break (one line of text)"
+    hit = _VOLATILE.search(statement)
+    if hit:
+        return (f"it names {hit.group(0)!r}: no run ids, home paths or status words "
+                "(running / pending / done)")
+    return None
+
+
 class ReflectError(ValueError):
     """A lesson cannot safely enter background cultivation."""
 
@@ -71,25 +89,37 @@ def prepare(lessons: Sequence[Mapping[str, Any]], *, event_ids: set[str],
     for index, raw in enumerate(lessons):
         required = {"id", "type", "scope", "statement", "tell", "evidence", "relation"}
         if not isinstance(raw, Mapping) or set(raw) - {"repo"} != required:
-            raise ReflectError(f"lesson {index} has wrong fields")
+            have = set(raw) if isinstance(raw, Mapping) else set()
+            raise ReflectError(
+                f"lesson {index} has wrong fields: missing {sorted(required - have)}, "
+                f"unknown {sorted(have - required - {'repo'})} (fields: {sorted(required)}, "
+                "optional repo)")
         if "repo" in raw and raw["repo"] not in (repos or set()):
             raise ReflectError(f"lesson {index} repo is not one of this run's repos")
         lesson_id, lesson_type = raw["id"], raw["type"]
         if not isinstance(lesson_id, str) or not re.fullmatch(r"L[1-9][0-9]*", lesson_id) \
                 or lesson_id in ids or lesson_type not in TYPES:
-            raise ReflectError(f"lesson {index} has invalid id/type")
+            raise ReflectError(f"lesson {index} has invalid id/type: id {lesson_id!r} (L1, "
+                               f"L2, ... each once), type {lesson_type!r} (one of "
+                               f"{', '.join(sorted(TYPES))})")
         ids.add(lesson_id)
         statement = raw["statement"]
-        if not isinstance(statement, str) or not statement.strip() or len(statement) > 400 \
-                or _VOLATILE.search(statement) or _MULTILINE.search(statement):
-            raise ReflectError(f"lesson {lesson_id} statement is volatile or invalid")
+        why = _statement_problem(statement)
+        if why:
+            raise ReflectError(f"lesson {lesson_id} statement is volatile or invalid: {why}")
         tell = raw["tell"]
-        if not isinstance(tell, str) or not tell.strip() or len(tell) > 400 \
+        if not isinstance(tell, str) or not tell.strip() or len(tell) > _MAX_TEXT \
                 or _MULTILINE.search(tell):
-            raise ReflectError(f"lesson {lesson_id} tell must be one line of text")
+            raise ReflectError(f"lesson {lesson_id} tell must be one line of text, at most "
+                               f"{_MAX_TEXT} characters (it has "
+                               f"{len(tell) if isinstance(tell, str) else 0})")
         evidence = raw["evidence"]
         if not isinstance(evidence, list) or not evidence or not set(evidence) <= event_ids:
-            raise ReflectError(f"lesson {lesson_id} evidence is not from this run")
+            unknown = sorted(str(item) for item in evidence or () if item not in event_ids) \
+                if isinstance(evidence, list) else []
+            raise ReflectError(f"lesson {lesson_id} evidence is not from this run: give at "
+                               "least one event id of this run (pipeline-v1 events lists "
+                               f"them); not in this run: {unknown}")
         relation = raw["relation"]
         if not isinstance(relation, Mapping) or set(relation) != {"kind", "entry"} \
                 or relation.get("kind") not in RELATIONS:

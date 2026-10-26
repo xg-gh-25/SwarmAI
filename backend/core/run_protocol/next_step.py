@@ -258,6 +258,12 @@ def next_step(engine, *, previous_stage: str | None = None,
         events = engine.store.read_events()
         action, command, why = _review_action(engine, events, state, blocking, dispatched)
         out.update(action=action, command=command, why=why)
+        # the findings still open and what closes each: the lines `findings` gives
+        from core.run_protocol import review as review_protocol
+        rows = review_protocol.ReviewOrchestrator(engine.store, engine.run_dir).findings(events)
+        still = [row for row in review_protocol.closure_view(rows, events) if not row["closed"]]
+        if still:
+            out["findings"] = still
         if action == "wait":
             out["handouts"] = waiting_handouts(events, "review")
         return out

@@ -8,4 +8,6 @@ A behavior/contract fix is proven by a test you ran: record it with `"$SWARM_BAC
 
 RV-4: REVIEW completes only on code a review round saw. RV-5: every addressed finding went to an R2 handout; `review-address` with `"items": []` dispatches the R2 of earlier addresses that have none, and re-asks (once per expert) R2 lines that used a word their finding does not take. If the code changed since (after R2, or TEST sent the run back), `review-start` hands out an incremental review of that change only. Push checks: RV-1a, RV-2. RV-1c is recorded only. Do not invent extra experts or a third round.
 
+`"$SWARM_BACKEND_BIN" pipeline-v1 findings --project <P> --run-id <R>` lists every finding with its id, status, whether it is closed and `close_with` (what closes it now); `next` in REVIEW lists the open ones the same way.
+
 Complete with `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R>` and continue.
