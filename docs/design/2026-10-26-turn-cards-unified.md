@@ -177,13 +177,46 @@ abandoned | failed> · landed c063b99 | not landed · N documents`. History unch
 `pipeline_summary` only gains `commits` (§3.5). (Commit `d1ebb11b5`, another session,
 already removed the push verdict from pipeline output.)
 
-Gawan's decision, kept against review 4 (M4): the audit card, intent/solved, missing-
-document reasons and REVIEW stats are not shown in the chat; a run's documents open in
-the Canvas from their rows, and REPORT.md holds the rest.
+### 5.1 Run details under the line (review 4 M4, Gawan 2026-10-26)
+
+What the backend really carries (checked in `pipeline_stage_events.summary_block`):
+
+| Item | Source | Shown |
+|---|---|---|
+| intent | `state.requirement`, clipped to 200 | yes: "Asked" |
+| not-landed reason | `notLandedReason` | yes, only when not landed |
+| five-dimension audit | `audit.render(fmt="card")` text | yes, as rows (below) |
+| missing required docs | `docs[].absolutePath == null` and `required` | yes: names + "not written by this run" (the backend has no finer reason; none is invented) |
+| solved (before/now) | hard-coded `None` | no: never produced; the frontend branch is dead and is deleted |
+| REVIEW stats (`stat`) | not produced by the backend (fixtures only) | no: dead, deleted |
+
+**Shape.** Under the grey run line, a two-column detail list (no frame, no card):
+Asked · Not landed (if any) · Audit · Missing documents (if any) · Full report
+(`REPORT.md`, a link that opens it in the Canvas). The line has a chevron and
+toggles the list.
+
+**Expanded by default** (Gawan, 2026-10-26: "我建议默认展开"), every run, every
+outcome. The user can collapse it; that choice is per message, in memory, not
+persisted. Nothing is moved or recoloured when it collapses, so the stream-order and
+liveReload properties are unaffected (the list is part of the same row).
+
+**Audit rows.** One row per dimension: name, verdict word, one-line detail (the name
+and verdict never truncate; the detail truncates with the full text on hover). PASS
+and "—" (not measured) are dim; WARN uses `--color-status-warning`, BLOCK
+`--color-status-error`, on the verdict word only. A dimension the audit could not
+measure shows "—" and the audit's own detail, never a made-up 0.
+
+**Backend change (zero cost).** `summary_block` gains `audit: [{dim, verdict,
+detail}]`: the five rows `audit.render` already builds, handed over before they are
+joined into text (`state.audit_rows`, written beside `audit_card`). No recomputation.
+A block without `audit` (old runs) shows its `auditCard` text as before; history is
+not touched.
 
 ## 6. Removed
 
-Frontend: `RunResult`, `AttentionCard`, `SummaryDocRow`, `DocCard` excerpt and buttons,
+Frontend: `RunResult` (its verdict, intent and audit move to the run line's detail
+list, §5.1; its dead `solved` branch is deleted), `AttentionCard`, `SummaryDocRow`
+(and its dead REVIEW `stat`), `DocCard` excerpt and buttons,
 the amber styles, the separate answered/decided cards. Backend: the first-segment
 `VAR=` prefix for session_worktree, `_turn_lands`, `read_session(turn_id=, expect=)`
 in `TurnChanges` (Canvas and ToDo keep `read_session` without a turn). Tests rewritten
@@ -197,6 +230,13 @@ Frontend
 2. Those rows and the commit row share one `ItemRow`.
 3. `pipeline_summary` + `pipeline_attention` → no run-result / attention card; one grey
    run line; present docs are rows in the DELIVERABLES box.
+3a. The run line's detail list is expanded on first render for landed, not-landed and
+   abandoned runs; it shows Asked, the not-landed reason only when not landed, five
+   audit rows from `audit` (WARN/BLOCK coloured on the verdict word, PASS dim),
+   missing required docs, and a REPORT.md link; no solved and no REVIEW stat. A block
+   without `audit` shows the `auditCard` text. Clicking the line collapses it.
+3b. Backend: `summary_block.audit` equals the rows `audit.render(fmt="card")` prints,
+   in order, for a measured run and for one with unmeasured dimensions.
 4. AskUserQuestion / permission / escalation: one frame; header says Swarm. Answered →
    one grey line that still carries the decision: each question with its selected
    value (multi-select and custom answers too), the command with Approved / Denied /
@@ -229,7 +269,7 @@ Each fix gets a mutation check.
 
 1. Backend §3 + tests 5-12 (incl. 9a, 9b; `pipeline_summary.commits`).
 2. `ItemBox` / `ItemRow`; product rows and changes card (A, E); tests 1-2.
-3. Pipeline (B, C, §5); test 3.
+3. Pipeline (B, C, §5, §5.1, `summary_block.audit`); tests 3, 3a, 3b.
 4. Act cards (D); test 4.
 5. Gawan checks light and dark; then spec v6 §8 and `2026-10-25-turn-result-card.md`
    §3.2 are synced.
