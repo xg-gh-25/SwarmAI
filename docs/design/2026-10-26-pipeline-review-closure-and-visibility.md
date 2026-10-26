@@ -1,9 +1,9 @@
 ---
-title: Pipeline 审核收口 — finding 关闭协议、run 可观察性、没跑过或说是 base 上就红的测试
+title: Pipeline 审核收口 — finding 关闭协议、run 可观察性、没跑过的测试、落地摩擦、度量
 created: 2026-10-26
-updated: 2026-10-26
+updated: 2026-10-27
 project: SwarmAI
-status: r3 — XG 已定 §8 三条（2026-10-27）；实施中
+status: r4 — 并入第二个 run（run_85e81059）的问题，审查一轮已并入；未实施
 ---
 
 # Pipeline 审核收口
@@ -26,7 +26,15 @@ run `run_b34bf691`（trivial，改 `core/run_protocol/` 五个文件，2026-10-2
 - agent 为了拿到 finding 的 ID，只能直接读 `events.jsonl` 再调 Python fold；`review-address` 失败两次，第一次失败已经写进了一半事件。
 - TEST 遇到一个 base 上本来就红的测试（别的会话留下的），只能标成 `not_run` 并手写理由；审计里看不出来。
 
-审计是人决定要不要 push 的依据。它在这次 run 上的 Quality 结论是错的，而人从 REPORT 里看不出来。这是本文要先解决的。
+run `run_85e81059`（full，eval 发布判定，2026-10-26）又遇到同一类问题，外加几条新的（每条都对照过它的事件日志或代码）：
+
+- `review-address` 第一次调用失败，但已经写进去 8 条 address；重交又写了 8 条后被拒；第三次只交 1 条才成功，而 R2 handout 只发给了这 1 条（`finding_ids=["CF-c8dad894"]`）。其余已修的 finding 从没进 R2，审计写 `0/9 findings closed`。
+- TEST 里改了一行 CI 清单（`.txt`），run 被退回 REVIEW；增量审查没有派出任何专家，但 agent 还是要走一遍 review-start、两次 stage-complete，再重交 TEST 报告。
+- 落地时 main 被别的会话推进了两次，每次都要在同步后的 tree 上重跑测试；第 3 次落地才成功。LG-1 失败第 3 次时 run 会被判为不落地。
+- worktree 门禁把一个往 `/tmp` 写 JSON 的 python heredoc 拦了，只因为 JSON 里有 `backend/tests/...` 这样的字符串。
+- Speed 和 Token 都显示 `WARN · no baseline`；Token 记了 1.03 亿输入，绝大部分是缓存读。
+
+审计是人决定要不要 push 的依据。它在这两次 run 上的 Quality 结论都是错的，而人从 REPORT 里看不出来。这是本文要先解决的；落地摩擦和度量放在后面（§5、§6）。
 
 ## 2. 问题 A：finding 的关闭协议
 
@@ -41,6 +49,7 @@ run `run_b34bf691`（trivial，改 `core/run_protocol/` 五个文件，2026-10-2
 | A5 | `absence`（缺测试、缺检查）没有关闭路径：`reported_test` 只收 behavior/contract，`diff_assertion` 只收 docs/design/security_policy | `findings.py:184,193` |
 | A6 | `diff_assertion` 的 `touches_finding` 看专家报的行号是否落在 base→当前 tree 的 hunk 里；专家报的是 handout 文件里的行号（本次 `git_tree.py:412`，文件在审查 tree 上只有 167 行），对不上；R2 看到的"修复"是 agent 自己写的 `hunk` 文字，不是 git 的 diff | `engine.py:1298-1314`，`review.py:364,456` |
 | A7 | 审计只把 `closed_asserted`、`refuted`、`accepted` 和 R2 确认 ADEQUATE 的 `closed_proven` 算作关闭；`closed_unproven` 不算 | `audit.py:366-369` |
+| A8 | R2 的名单只取**这一次** `review-address` 里的 finding（`orchestrator.r2_roster(set(handoff["addressed"]))`）。之前那次失败时已写进日志的 address，对应的 finding 不会进任何 R2 handout，于是按"R2 沉默"被改回 open（`run_85e81059` 的 0/9） | `engine.py:1162` |
 
 A2 → A3 → A4 是一条链：一个用错的状态词，让一条已证明的 HIGH 变回 open、RV-1a 失败，审计出两条错误结论。"R2 状态词不合法"10-26 已出现过一次（`ebb1ba864` 修了"整份答复被丢"，没修后面这两步）。
 
@@ -87,8 +96,9 @@ A2 → A3 → A4 是一条链：一个用错的状态词，让一条已证明的
    R2 的输入里附上这个文件 R1 tree → 当前 tree 的 git diff，不只用 agent 写的 `hunk` 文字。旧 run 的 handout 没有 `code_trees` 时，退回今天按行号判断的规则。R1 答复格式写明"line 是该文件在审查 tree 里的行号"。
 5. **树改了，关闭要重新算（审查者 LOW 13）。** `stale_closures`（`facts.py:120`）今天不含 `closed_proven`、`closed_unproven`；把两者加进去，和其他关闭一样，tree 变了（main 移动后不干净的 rebase、REVIEW 之后再改）就不再算关闭。干净的 rebase 按 patch id 判断，沿用 LG-1 的规则。
 6. **`accept-finding` 的 state hash（审查者 MEDIUM 10）。** 请求和校验两边都对"沉默规则之后"的状态算 hash（今天请求一侧在之后、`_accept` 一侧在之前，`engine.py:1693-1698`，`findings.py:217-219`）。
+7. **R2 名单从账本算，不从这一次调用算（A8）。** R2 的目标是"最近一次 address 之后还没有被任何 R2 handout 覆盖的 finding"，从事件里算（和 `findings.fold` 同一份账）；每条的 hunk、proof 从它自己那次 address 事件读，不从这次调用读（今天 `r2_input` 用的是这次的 `handoff["hunks"]`，`engine.py:1167-1169`）。第 1 点让半写不再发生，这一条让"哪些 finding 要 R2"不依赖调用怎么分批。旧 run 里已有没进 R2 的 address 时，agent 不一定还会再调 address，所以：`review-address` 接受空的 items（只派 R2），`next` 在有未覆盖的 address 时让 agent 这样调一次；REVIEW 完成的检查在还有未覆盖 address 时不通过，并列出它们。
 
-按新规则，本次 run 会走成：2 条 `closed_proven` 等 R2，第一次答 `RESOLVED` → `UNANSWERED` → 重派一次答 `ADEQUATE` → 关闭；absence 那条用带 `tests_changed` 的 `reported_test` 关闭；docs、security_policy 两条 R2 判 RESOLVED，文件在那之后没再改 → `diff_assertion` 关闭 → `5/5 findings closed`。（这是推演；本次 run 的日志里没有这些事件，测试要按 §6 第 4 步造一个续跑场景，不能直接重放。）
+按新规则，本次 run 会走成：2 条 `closed_proven` 等 R2，第一次答 `RESOLVED` → `UNANSWERED` → 重派一次答 `ADEQUATE` → 关闭；absence 那条用带 `tests_changed` 的 `reported_test` 关闭；docs、security_policy 两条 R2 判 RESOLVED，文件在那之后没再改 → `diff_assertion` 关闭 → `5/5 findings closed`。（这是推演；本次 run 的日志里没有这些事件，测试要按 §8 第 4 步造一个续跑场景，不能直接重放。）
 
 ## 3. 问题 B：agent 看不清 run 里的审查状态
 
@@ -130,15 +140,71 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 - 不加新的结果类型。"base 上就红"就是 `not_run` 的一种理由，写在 `reason` 里，REPORT 原样列出；人看到就能决定要不要先修 main。
 - 不做：pipeline 自己在 base 上跑测试；按测试框架解析测试名；`red_at_base` 结果类型。
 
-## 5. 四个问题（two-ends §0.1）
+## 5. 问题 D：run 的环境和落地摩擦
+
+### 5.1 现状（对照过代码和 `run_85e81059` 的日志）
+
+| # | 现象 | 代码 |
+|---|---|---|
+| D1 | 两个"这次改动审过没有"的判断规则不同：TEST 完成时的退回、LG-1 用 patch id（任何改动都算没审，`checks.py:341-352`，`engine.py:874-876,1879-1891`）；增量审查和 RV-4 用"上次审查的 tree 到现在、去掉 `.md/.txt/.rst` 后的文件"（`engine.py:55,855-869`，`checks.py:406-414`）。于是只改了文档类文件也会退回 REVIEW，而 REVIEW 里没有东西可审 | 同左 |
+| D2 | 落地时 main 动了：同步后 tree 变了，LG-1 要求在新 tree 上有 TEST 报告；LG-1/LG-4 第 3 次失败就判为不落地（`final_stale`），不分是 run 自己的问题还是 main 在动 | `lifecycle.py:307-310`，`engine.py:2689-2706` |
+| D3 | worktree 门禁把 interpreter heredoc 里**每一个**像路径的字符串都当作"可能写入"的目标，命中 main checkout 就拒绝（解析器分不清数据和路径）。拒绝信息不说是哪个字符串、也不说怎么绕过，agent 只能猜 | `file_change_classifier.py:190-234`，`worktree_write_gate.py:474-496` |
+| D4 | `main_dirty_scan` 按 `[status, size, mtime]` 判断"新变化"；别的会话一直在改的同一个文件，每次 mtime 变都会被完整地再报一次 | `main_dirty_scan.py:52-57,150-163` |
+| D5 | worktree 里跑的可能是 main 的代码：可编辑安装（这里是 `backend/.venv` 里的 `_editable_impl_swarmai_backend.pth`，指向 main checkout 的 `backend`）让脚本方式运行时 `import core` 拿到 main 的模块。pipeline 不跑测试，也没有跨语言的办法发现这一点 | repo 的环境，不是 pipeline 代码 |
+| D6 | 两个 session 都把 CLI 的 stderr 合进了 stdout（`> f 2>&1`），stderr 上的一行警告让 JSON 解析失败。stdout 本身只有 JSON（`cli_main.py:117`）。说明里没写"不要合并 stderr" | `INSTRUCTIONS.md` |
+| D7 | goal profile 删掉后，"大任务拆成几个 run"只有 `INSTRUCTIONS.md:37` 半句话，EVALUATE 的说明里没有 | `stages/evaluate.md` |
+
+### 5.2 设计
+
+1. **TEST 里只改了文档类文件：引擎自己完成那次增量审查（D1）。** 判断"要不要退回 REVIEW"改用增量审查同一份事实 `unreviewed`（`engine.py:855-869`，去掉 `_DOC_SUFFIXES` 后的文件）：
+   - 不为空 → 照旧退回 REVIEW，agent 跑 review-start。
+   - 为空（只改了 `.md/.txt/.rst`）→ 在同一次调用里写 `review_reopen`，再用已有的 `complete_stage` 完成 REVIEW（检查不变，RV-4 此时通过），记下新的 patch id，回到 TEST。返回值告诉 agent：tree 变了，在新 tree 上重交 TEST 报告（TS-1 不变）。`review_reopens` 照常计数。
+   
+   LG-1 不改，仍按 patch id 判断，所以 DELIVER 里改文档照旧挡落地。这一步只省掉"没有东西可审却要走一遍"的那几条命令，不扩大不审的范围。审计和 REPORT 列出"上次审查之后改过、按文档类后缀没送审的文件"（照实写）。`_DOC_SUFFIXES` 也盖住了 `requirements.txt`、`CMakeLists.txt` 这类会改变行为的文件，这是今天就有的问题，本文不改它的范围，记为另一个 ToDo。
+   
+   同一个判断用于 `stale_closures`（§2.3 第 5 点）：上次证明之后 tree 的变化只在文档类文件里时，代码类 finding 的关闭不失效；docs 类用 `diff_assertion` 关闭的 finding，看它自己的文件有没有再改。否则一次只改文档的 TEST 修改会让已关闭的 HIGH 变成"未关闭"，又回到本文要修的那类错误结论。
+2. **main 在动，不耗 run 自己的落地次数（D2）。** 今天落地上限就是 land 的 attempt 序号（`lifecycle.py:308` 的 `number >= 3`），没有单独的计数器。改法：
+   - 一次落地尝试满足以下全部条件时，LG-1 的 detail 写成 `base_moved: …`（和 LG-4 的 `merge_conflict:` 前缀同一种做法）：这次同步把至少一个仓库的 base 往前移了；同步前后 run 自己的 patch id 不变；没有合并冲突，其他守卫都通过；每个仓库最新 TEST 报告的 tree 等于同步前的 tree（同步前报告是新的，失败只因为同步）。
+   - fold 只把**不带**这个前缀的 LG-1/LG-4 失败计入 3 次上限；带前缀的另计，上限 `BASE_MOVED_CAP = 10`（lifecycle 里一个常量），到了就以新原因 `base_kept_moving` 结束（不落地），`REASON_CAPS` 里映射到新的 cap 名 `base_moved`（`CAPS` 加这个名字）。这个原因进 `QUALITY_BLOCK_REASONS`，和其他不落地原因一样 Quality 为 BLOCK，REPORT 写明"main 一直在动"。
+   - detail 里记下同步前的 base（同步会覆盖记录），`next` 和这次返回据此列出：上一份 TEST 报告的命令原文和 cwd；新进来的 main commit 里改到了这次 run 改过的文件的那些。后者只是信息，不放行任何东西。
+3. **heredoc 拒绝时说清楚怎么过（D3）。** 拒绝照旧：heredoc 候选命中 main checkout 或任何 run 的 worktree 都拒绝。改的是拒绝信息：写出哪几个字符串被当成了可能的写入目标、为什么（这段 heredoc 交给了一个解释器，正文里有写入调用），以及两条通路：把脚本写进文件再运行（`python3 /tmp/x.py` 不经过 heredoc 解析）；或者先 `cd` 到 checkout 之外，让相对路径不再落进 checkout。不放松的原因：`main_dirty_scan` 只扫本会话 run 的 main checkout（`main_dirty_scan.py:134-145`），不扫别的 run 的 worktree，不报被 ignore 的文件，扫描忙时会跳过，所以它兜不住被放行的那部分写入。
+4. **同一个文件不重复报（D4）。** 在 `main_dirty_scan` 的状态文件里另存一份"已报过的路径"（今天的 seen 只是每次整份替换的快照，`main_dirty_scan.py:153-155`；worktree 创建时记下的 baseline 路径算作已报过，因为它们在创建时已经报给 agent）。已报过的路径之后再变化，只在报告末尾汇成一行，写出文件名（"仍在变化、之前报过：a, b"）；新路径照旧完整报告。
+5. **环境写进说明，不做机制（D5、D6、D7）。** 改三处说明，都是对所有仓库成立的话，不按语言分支：
+   - `stages/build.md`、`stages/test.md`：依赖如果以可编辑方式装在 main checkout（例如 Python 的 editable install、npm/yarn link），在 worktree 里运行可能用到 main 的代码；从 worktree 的源码目录启动测试，或在 worktree 里装一份环境，并在报告的 `cwd` 写明。
+   - `INSTRUCTIONS.md`：每条 `pipeline-v1` 命令的 stdout 是一个 JSON 对象，日志在 stderr，不要合并（不要 `2>&1`）。
+   - `stages/evaluate.md`：需求里有几块能各自提交、各自验证的部分时，每块一个 run，按顺序做；不要在一个 run 里做完再拆。
+   
+   SwarmAI 自己的 `.pth` 是这个仓库的事，按 P7 写进它的 AGENTS.md，不写进产品。
+
+## 6. 问题 E：Speed 和 Token 的度量
+
+### 6.1 现状
+
+- **基线从来没生效过**：create 时从 `core/run_protocol/baselines.json` 读每个 profile 的参考线（`engine.py:153-166,474`），但打包脚本没有把这个文件放进 daemon（`desktop/scripts/build-backend.sh:210-260` 的 `datas` 里没有它），装好的 daemon 读不到，本机 7 个 v1 run 的 `contract.json` 里 `budget_seconds`、`budget_tokens` 全是 null。即使打包了，文件里的 `budget_tokens` 也全是 null，`budget_seconds` 是旧 run 的总时长（created→updated），不是 active 时间。
+- **这份文件本身违反 P7**：它是 `scripts/pipeline_baseline.py` 从这台机器的 run 算出来的，却随产品发给每个用户。
+- **没有基线时给 WARN**：Speed "预算内 → PASS，否则 WARN"（`audit.py:335-337`），没有预算就落在 WARN；每个 run 都 WARN，这一格就没有信息。
+- **Token 数没法跨 run 比**：`usage.measure` 把宿主会话在 run 时间窗内的所有回复加起来，输入里包含缓存读（`usage.py:31-39`）。宿主会话在 run 开始前已经有多长的上下文，每次调用就要读多少缓存，所以同样的工作在不同会话里差几倍。时间窗内宿主会话做的别的事也会被算进来。
+
+### 6.2 设计
+
+1. **基线按安装算，不随产品发。** create 时从本机审计区（`state/pipeline_agent_audit/runs/<id>/` 的 `contract.json` 和 `events.jsonl`）取同 profile、已落地的最近 20 个 run，至少 5 个才给参考线：Speed 用审计自己的函数从事件重算 active 秒数，取 p95；Token 取下面第 3 点那个数的 p95，只用记了 `cache_read_tokens` 的 run。参考线和用到的 run 数一起写进 contract（`baseline_runs`）。按目录修改时间只看最近 200 个 run 的 contract，读取量不随历史增长。删掉 `baselines.json` 和 `scripts/pipeline_baseline.py`。参考线仍然只是参考，不是上限（STEERING #2）。
+2. **没有基线就是 N/A，排在其他判断之后。** 顺序：cap 被触发 → BLOCK；Token 一次都没测到 → BLOCK；时间不完整或只测到部分调用 → WARN（照旧）；以上都不是、但没有参考线 → `N/A`，文字写"no baseline yet (n/5 runs)"；有参考线 → PASS/WARN。Swarm Out 仪表板的汇总句（`desktop/src/components/swarm-out/judge.ts`）在 N/A 时不能写"在时间和 Token 警戒线内"，一起改。
+3. **Token 用不含缓存读的数比较。** 两个写 Token 的地方（`usage.measure` 和专家答复的 `hook_bridge.record_usage`，`usage.py:35-40`、`hook_bridge.py:320-326`）今天都把缓存读并进了 `input_tokens`，没有单独记。新增一个 `metric`（`cache_read_tokens`，同一种事件），参考线和 verdict 用 `input + cache_creation + output`，缓存读单独列出。文字写明"host-session responses in the run window"。`transcript_usage.py` 头注释说 `measure` 已经不含缓存读，这是错的，同一个 commit 改掉。
+
+## 7. 四个问题（two-ends §0.1）
 
 | 设计 | 在前端或后端？ | 规定了怎么写、怎么测吗？ | 用了原生 / 最轻的吗？ | 判定是确定性的吗？ |
 |---|---|---|---|---|
 | A 关闭表 | 后端（审查） | 没有 | 复用 `append_batch`、R2 handout、完整性事件；只加两个可选字段（handout 的 `allowed_status`、答复的 `n_status_ignored`），不加事件类型 | 是：类型、状态、文件内容、命令文本 |
 | B `findings` / `next` / 拒绝信息 | 后端（审查、报告） | 没有 | 只读命令，信息由表生成 | 不涉及判定 |
 | C not_run 照实写 | 后端（报告） | 没有 | 只改 REPORT 和 Quality 的文字与 verdict | 是：报告里有没有 `not_run` |
+| D1 只改文档时引擎完成增量审查 | 后端（审查） | 没有 | 复用 `review_reopen`、`complete_stage`、`unreviewed`；LG-1 不变 | 是：文件路径后缀 |
+| D2 `base_moved` | 后端（落地） | 没有 | check detail 前缀（LG-4 已有先例）、一个常量、一个原因 | 是：同步前后的 base、patch id、报告的 tree |
+| D3、D4 门禁和提示 | 会话层的门禁 | 没有 | 只改信息和提示的去重，不少拒绝 | 是：拒绝条件不变 |
+| D5–D7 说明 | 前端（agent 的说明） | 只写对所有仓库成立的事实 | 不加机制 | 不涉及判定 |
+| E 度量 | 后端（报告） | 没有 | 删一个文件和一个脚本 | 是：本机已完成 run 的记录 |
 
-## 6. 实施步骤和验证计划
+## 8. 实施步骤和验证计划
 
 每步一个 commit，测试先行，变异验证（`scripts/mutation_check`）。
 
@@ -152,12 +218,19 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 | 6 | `stale_closures` 加 `closed_proven`、`closed_unproven`；`accept-finding` 两侧 hash 同一状态 | rebase 不干净后两种关闭失效；对 awaiting R2 的 finding 做 accept，之后 fold 不报 stale | 去掉新加的两种状态；hash 改回沉默规则之前 | correctness、state-machine |
 | 7 | `findings` 命令；`next` 列 `close_with`；拒绝信息带规则 | 命令字段；`next` 与 `findings` 一致；关闭类拒绝含 `allowed`；reflect 拒绝含上限 | `close_with` 改成常量 | correctness |
 | 8 | REPORT 列出 `not_run` 命令和理由；有 `not_run` 时 Quality 不为 PASS | REPORT 内容；Quality verdict；`fail` 仍挡落地 | `not_run` 不影响 verdict | correctness |
+| 9 | R2 名单从账本算（§2.3 第 7 点）；空 items 的 `review-address` 只派 R2；REVIEW 完成在有未覆盖 address 时不通过 | 旧日志里有一批没进 R2 的 address：空 items 调用派出的 R2 包含它们，且 R2 输入里是它们自己的 hunk；分两次 address：两次的 finding 都进 R2；有未覆盖 address 时 REVIEW 不能完成 | 改回只取这次调用的 finding；hunk 改回取这次调用的；去掉 REVIEW 完成的检查 | correctness、state-machine |
+| 10 | TEST 只改文档类文件时引擎完成增量审查；`stale_closures` 用同一判断；审计列出没送审的文档类文件 | TEST 只改 `.txt`：一次调用回到 TEST，新 patch id 已记录，TEST 仍要重交报告，LG-1 通过；改了代码文件：照旧退回；DELIVER 里改 `.md`：LG-1 照旧失败；只改文档后，已关闭的 HIGH（代码类）仍算关闭，docs 类 finding 自己的文件改了则失效 | 判断改回只看 patch id；`stale_closures` 不用新判断 | correctness、state-machine |
+| 11 | `base_moved:` 前缀、`BASE_MOVED_CAP`、`base_kept_moving`；返回和 `next` 列出上次 TEST 命令与重叠文件 | main 连动 3 次（patch 不变、报告在同步前是新的）：不判 `final_stale`，第 4 次落地成功；run 自己改了代码后 LG-1 失败 3 次：照旧 `final_stale`；同一次尝试里有合并冲突：不带前缀，计入 3 次；报告在同步前就已过期：不带前缀；到 10 次：`base_kept_moving`、Quality BLOCK、cap 名 `base_moved` | 带前缀的失败也计入 3 次；去掉"报告在同步前是新的"条件；去掉 10 次上限 | correctness、state-machine |
+| 12 | heredoc 拒绝信息写出候选和两条通路；`main_dirty_scan` 存"已报过"并汇总 | 拒绝信息含被当成目标的字符串和两条通路；照通路改写后的命令被放行；同一路径第二次变化只在汇总行且写出文件名；新路径完整报告 | 拒绝信息去掉候选；去掉"已报过"集合 | correctness |
+| 13 | 基线按本机已落地 run 算；判断顺序与 N/A；`cache_read_tokens` 指标；删 `baselines.json` 和脚本；改 `transcript_usage` 注释；仪表板汇总句 | 4 个已落地 run → N/A；5 个 → 有参考线，`baseline_runs`=5；只测到部分调用且无基线 → 仍是 WARN；一次没测到 → BLOCK；缓存读不影响 verdict；cap 触发仍 BLOCK；N/A 时汇总句不说"在警戒线内" | 无基线改回 WARN；N/A 排到 WARN 之前；Token 改回含缓存读 | correctness |
+| 14 | 说明：build/test（可编辑安装）、INSTRUCTIONS（stdout）、evaluate（拆 run） | `scripts/lint_skills.py` 通过 | — | — |
 
 **旧 run**：新字段都是可选的。旧日志里没有 `allowed_status` 的 R2 handout 按今天的规则判定；没有 `n_status_ignored` 的答复按今天的完整性判定；已在日志里的 `accept_finding` 用旧的 hash 规则校验，新规则只用于新请求。第 3、6 步各加一条"旧日志照样能 fold"的测试。
 
 **最终验证（整套做完后跑一次，在这里定好，不在最后扩大）**：
 - 本文新增的测试文件；
-- `test_run_protocol_findings`、`_audit`、`_checks`、`_events`、`_landing`、`_git_tree`、`_review`（存在的那些），`test_pipeline_v1_review_tree`、`_human_loop`、`_direct_e2e`、`_knowledge_report`、`_untracked_report`、`_follow_next`，`test_reflect_in_cli`、`test_no_push_verdict`、`test_report_language`；
+- `test_run_protocol_findings`、`_audit`、`_checks`、`_events`、`_landing`、`_git_tree`、`_review`、`_lifecycle`（存在的那些），`test_pipeline_v1_review_tree`、`_human_loop`、`_direct_e2e`、`_knowledge_report`、`_untracked_report`、`_follow_next`，`test_reflect_in_cli`、`test_no_push_verdict`、`test_report_language`；
+- worktree 门禁和 `main_dirty_scan` 自己的测试文件（第 12 步）；`scripts/lint_skills.py`（第 14 步）；
 - 第 4 步的端到端续跑。
 
 **必须成立的不变量**：
@@ -166,19 +239,30 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 3. 没有任何路径把 `closed_proven` 改回 `open`；只有 `TEST_INADEQUATE`（含按它处理的 `OPEN`）让它变 `invalid_test`，只有 tree 变化让它失效。
 4. `findings`、`next`、审计、R2 handout 对同一条 finding 给出的"关没关、能怎么关"相同（同一个函数）。
 5. 最新 TEST 报告里有 `not_run` 时，审计 Quality 不是 PASS，REPORT 列出每条命令和理由。
+6. REVIEW 完成时，每条有 address 的 finding 都已进过某一次 R2 handout，与 address 怎么分批无关。
+7. TEST 退回、增量审查、`stale_closures` 对"上次审查之后有没有要送审的改动"用同一个函数；LG-1 仍按 patch id。
+8. 落地的 tree 上一定有通过的 TEST 报告，且它的 patch id 是某次 REVIEW 完成时记下的（LG-1 不放松）；main 移动只换计数器，不放行，且计数有上限。
+9. worktree 门禁的拒绝条件不变。
 
-## 7. 不做的
+## 9. 不做的
 
 - 不让 pipeline 自己跑测试或在 base 上重跑（推翻 r7，需另议）；因此不做 `red_at_base`（§4.2）。
 - 不把 `RESOLVED` 映射成 `ADEQUATE`：两个词判断的东西不同（修没修好 / 测试够不够），映射等于替专家放行。（`OPEN` → `TEST_INADEQUATE` 只会更严，所以做。）
 - 不加第三轮审查；R2 重派每位专家最多一次。
 - 不新增事件类型；不按语言、框架、测试运行器解析测试名或结果。
+- 落地不放松 LG-1：不做"main 新进来的 commit 和这次改动没有文件交集就沿用旧 TEST 报告"。不重叠的改动照样能让测试变红，落地的组合就没被验证过；main 动得比测试快的仓库需要的是合并队列，那是 CI 的事。
+- pipeline 不在同步后自己重跑测试（§0）。
+- 不按需求条数或改动行数提示拆 run：这些数字只是代理指标（P6），说明里写判断标准。
+- 不检测可编辑安装：没有不按语言分支的办法（P7）。
+- 不放松 heredoc 候选的拒绝：事后检出兜不住（§5.2 第 3 点）。
+- 不在本文改 `_DOC_SUFFIXES` 的范围（另记 ToDo）。
 
-## 8. XG 的决定（2026-10-27）
+## 10. XG 的决定（2026-10-27）
 
 1. absence 用 `reported_test` 关闭，要求报告里有改动过的测试（§2.3 表）；不走人工 accept。原话："我们要 Autonomous，不要人介入"。
 2. R2 用错词时重派一次，算在 R2 内、不算第三轮（§2.3 第 3 点）：同意。
 3. C 只做"照实写、`not_run` 时 Quality 不为 PASS"，不做 base 上的证明机制（§4）：同意。
+4. 第二个 run 的问题并进本文（§5、§6）；知识召回不在本文，另一个 session 在做。
 
 ## 修订记录
 
@@ -189,5 +273,7 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
   - `diff_assertion` 的条件收紧为"R2 之后未改且相对 R1 改过"，R2 附 git diff，按 handout `code_trees` 解析仓库（MEDIUM 8）；`allowed_status` 存进 handout（LOW 12）；
   - `closed_unproven` 只在 MEDIUM/LOW 时算关闭（MEDIUM 7）；`stale_closures` 加两种状态（LOW 13）；`accept-finding` 两侧 hash 一致（MEDIUM 10）；absence 要求 `tests_changed`（LOW 11）；
   - C 的 baseline 机制撤掉，改为照实写（HIGH 2、MEDIUM 6、LOW 14、15）；
-  - §2.2 根因改写（LOW 16）；§6 的"重放本次 run"改成续跑场景测试（MEDIUM 9），补上审查列出的缺失测试。
-- r3（2026-10-27）：§8 三条由 XG 决定，全部按 r2 的写法实施；补上 absence 检查需要的 `proof.tests_changed` 字段。
+  - §2.2 根因改写（LOW 16）；当时 §6（今 §8）的"重放本次 run"改成续跑场景测试（MEDIUM 9），补上审查列出的缺失测试。
+- r3（2026-10-27）：当时 §8（今 §10）三条由 XG 决定，全部按 r2 的写法实施；补上 absence 检查需要的 `proof.tests_changed` 字段。
+- r4（2026-10-27）：并入 `run_85e81059` 的问题：A8（R2 名单从账本算）；§5 问题 D（只改文档时引擎完成增量审查、`base_moved` 计数、heredoc 拒绝信息写清通路、重复提示合并、三处说明）；§6 问题 E（基线按安装算，修好从未打包的 `baselines.json`；无基线为 N/A；Token 不含缓存读）。核实后不改的：stdout 本来只有 JSON（两次都是调用方合并了 stderr）；知识召回由另一个 session 处理。
+  - 对新增部分做了一轮零上下文审查（2 HIGH、6 MEDIUM、4 LOW），按原因一次并入：D3 不再放松拒绝，改为说清候选和通路（HIGH 1，`main_dirty_scan` 不扫别的 run 的 worktree、不报 ignore 文件、扫描会跳过，MEDIUM 8）；D1 不再动 LG-1，改为"只改文档时引擎自己完成增量审查"，`stale_closures` 用同一判断，审计列出没送审的文档类文件（HIGH 2、MEDIUM 3、4）；D2 写清 fold 怎么计数（detail 前缀、单独常量、新原因和 cap 名、Quality BLOCK、"报告在同步前是新的"条件、记下同步前的 base）（MEDIUM 5）；Token 新增 `cache_read_tokens` 指标，改错误的注释（MEDIUM 6）；N/A 排在 BLOCK 和不完整 WARN 之后，仪表板汇总句一起改（MEDIUM 7）；A8 补上空 items 派 R2 和 REVIEW 完成检查，hunk 取自各自的 address（LOW 9）；基线的数据源、"已落地"、`baseline_runs`、读取上限（LOW 10）；§6.1 措辞（LOW 11）；§8 补上审查列出的测试和变异（LOW 12）。
