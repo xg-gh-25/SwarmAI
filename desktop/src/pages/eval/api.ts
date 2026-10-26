@@ -8,6 +8,7 @@
  * @exports types for health / history / golden set / run / online / judges, and the
  *          query + mutation hooks of the six tabs
  */
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 
@@ -76,6 +77,9 @@ export interface EvalHealth {
 
 export interface EvalRun {
   run_id: string;
+  /** full = a comparable full run, quick = a quick check, probe = a hand-run subset
+   *  (core/eval_followups.run_line). Only quick and full runs count for a release. */
+  line?: 'full' | 'quick' | 'probe';
   triggered_by: string;
   triggered_at: string;
   release: ReleaseVerdict | null;
@@ -157,9 +161,10 @@ export interface CaseInput {
   evaluators: string[];
   eval_method: 'programmatic' | 'behavior';
   verification?: CaseDetail['verification'];
-  scenario?: { prompt: string; system?: string };
+  scenario?: { prompt: string; system?: string; [k: string]: unknown };
   expected_trajectory?: string[];
   trajectory_match?: string;
+  allowed_tools?: string[];
   decision_rubric?: string;
 }
 /** POST /golden-set/try: every admission check (a rejected save is a 400 whose detail names the failing checks). */
@@ -264,13 +269,31 @@ export function useDeleteCase() {
   const refresh = useInvalidateEval();
   return useMutation({ mutationFn: async (id: string) => (await api.delete(`/eval/golden-set/${encodeURIComponent(id)}`)).data, onSuccess: refresh });
 }
+/** How long a started run is watched: a run killed mid-flight leaves its in-flight
+ *  marker (status running) behind and would otherwise be polled forever. */
+const WATCH_MS = 30 * 60_000;
+
+/** Watch a started run (GET /runs/{id} answers status running from its in-flight
+ *  marker) and refresh everything once it is recorded. True while it runs. */
+export function useRunProgress(runId: string | null | undefined): boolean {
+  const refresh = useInvalidateEval();
+  const since = useRef(0);
+  useEffect(() => { since.current = Date.now(); }, [runId]);
+  const q = useQuery<RunDetail>({
+    queryKey: ['eval-run-progress', runId], queryFn: () => get(`/eval/runs/${encodeURIComponent(runId ?? '')}`),
+    enabled: !!runId, retry: false,
+    refetchInterval: (query) => (query.state.data?.status !== 'running' && query.state.data) || Date.now() - since.current > WATCH_MS ? false : 5000,
+  });
+  const done = !!q.data && q.data.status !== 'running';
+  useEffect(() => { if (runId && done) refresh(); }, [runId, done]);  // eslint-disable-line react-hooks/exhaustive-deps
+  return !!runId && !done && Date.now() - since.current <= WATCH_MS;
+}
+
 /** Run a set of cases now (offline cases spawn a real agent, so they opt in). */
 export function useRunCases() {
-  const refresh = useInvalidateEval();
   return useMutation({
     mutationFn: async ({ ids, behavior }: { ids: string[]; behavior: boolean }) =>
-      (await api.post('/eval/run-cases', { trigger: 'manual', case_ids: ids, include_behavior: behavior })).data,
-    onSuccess: () => setTimeout(refresh, 3000),
+      (await api.post<{ run_id: string }>('/eval/run-cases', { trigger: 'manual', case_ids: ids, include_behavior: behavior })).data,
   });
 }
 export function useRunQuick() {
@@ -278,17 +301,18 @@ export function useRunQuick() {
   return useMutation({ mutationFn: async () => (await api.post('/eval/canary', {})).data, onSuccess: refresh });
 }
 export function useRunFull() {
-  const refresh = useInvalidateEval();
   return useMutation({
-    mutationFn: async () => (await api.post('/eval/run', { trigger: 'manual', include_behavior: true })).data,
-    onSuccess: () => setTimeout(refresh, 3000),
+    mutationFn: async () => (await api.post<{ run_id: string }>('/eval/run', { trigger: 'manual', include_behavior: true })).data,
   });
 }
 export function useRunOnline() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => (await api.post('/jobs/run', { job_id: 'session-quality' })).data,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['eval-session-quality'] }),  // the job runs inside the request
+    onSuccess: () => {  // the job runs inside the request; health carries its follow-ups and line
+      qc.invalidateQueries({ queryKey: ['eval-session-quality'] });
+      qc.invalidateQueries({ queryKey: ['eval-health'] });
+    },
   });
 }
 export function useCalibrate() {

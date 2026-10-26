@@ -44,12 +44,13 @@ export function tierCounts(summary: DimensionSummary | undefined, dim: string, t
 export const GATING = ['red', 'gate'];
 export const WATCH = ['watch'];
 
-/** One point per week: the pass share of the newest run of that week with a
- *  dimension summary (runs are newest first). */
+/** One point per week: the pass share of the newest quick or full run of that week
+ *  with a dimension summary (runs are newest first). A probe covers only the cases
+ *  it ran, so it is no point on a trend. */
 export function runSeries(runs: EvalRun[], dim: string, tiers: string[]): Record<string, number> {
   const out: Record<string, number> = {};
   for (const r of runs) {
-    if (!r.dimension_summary || !r.triggered_at) continue;
+    if (!r.dimension_summary || !r.triggered_at || r.line === 'probe') continue;
     const wk = isoWeek(new Date(r.triggered_at));
     if (wk in out) continue;
     const c = tierCounts(r.dimension_summary, dim, tiers);

@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { getApiBaseUrl } from '../../services/tauri';
 import { openExternal } from '../../utils/openExternal';
 import {
-  errorDetail, useEvalHealth, useEvalHistory, useGoldenSet, useRunDetail, useRunFull, useRunQuick,
+  errorDetail, useEvalHealth, useEvalHistory, useGoldenSet, useRunDetail, useRunFull, useRunProgress, useRunQuick,
   type EvalRun, type GoldenCase, type RunCaseResult,
 } from './api';
 import { checkById } from './derive';
@@ -18,8 +18,6 @@ import {
   useEvalActions, useLang, when,
 } from './ui';
 
-const FULL_TRIGGERS = new Set(['scheduled', 'deploy', 'manual', 'ci']);
-
 export function OfflineTab() {
   const { t } = useLang();
   const health = useEvalHealth();
@@ -27,6 +25,7 @@ export function OfflineTab() {
   const gs = useGoldenSet();
   const runQuick = useRunQuick();
   const runFull = useRunFull();
+  const fullRunning = useRunProgress(runFull.data?.run_id);
   if (health.isError || gs.isError) return <ErrorState />;
   if (health.isLoading || gs.isLoading) return <Loading />;
   const cases = (gs.data?.cases ?? []).filter((c) => c.tier !== 'archived');
@@ -34,7 +33,7 @@ export function OfflineTab() {
   const offCases = cases.filter((c) => !isQuick(c));
   const lines = health.data?.lines;
   const runs = history.data ?? [];
-  const fullRun = runs.find((r) => r.triggered_at === lines?.full.last_run) ?? runs.find((r) => r.release && FULL_TRIGGERS.has(r.triggered_by));
+  const fullRun = runs.find((r) => r.line === 'full');
 
   return (
     <div className="max-w-[900px] mx-auto px-7 pt-10 pb-24" data-testid="eval-offline">
@@ -59,7 +58,7 @@ export function OfflineTab() {
       </Zone>
 
       <Zone id="exam" title={t('Offline cases', '离线考题')} sub={t('trajectory L1 + answer L2 judge · watch tier', '轨迹 L1 + 回答 L2 judge · 观测档')}
-            right={<Btn onClick={() => runFull.mutate()} disabled={runFull.isPending} testId="run-full">{runFull.isSuccess ? t('Started', '已开始') : t('Run the full set now', '现在跑全量')}</Btn>}>
+            right={<Btn onClick={() => runFull.mutate()} disabled={runFull.isPending || fullRunning} testId="run-full">{fullRunning ? t('Running…', '运行中…') : t('Run the full set now', '现在跑全量')}</Btn>}>
         <div className="text-small text-[var(--color-text-muted)]">
           {fullRun ? `${when(fullRun.triggered_at)} · ${fullRun.triggered_by}` : t('no full run yet', '还没有全量运行')} · {t('next', '下次')} {when(lines?.full.next_run)}
           {' · '}{t('a real agent answers in the sample workspace that ships with SwarmAI; calls the model', '真实 agent 在随包发布的样例工作区里答题，会调用模型')}
@@ -69,7 +68,7 @@ export function OfflineTab() {
       </Zone>
 
       <Zone id="release-record" title={t('Release record', '放行记录')} sub={t('each full run’s four checks and the reason it passed or not', '每次全量的四道关结果和放行理由')}>
-        <ReleaseRecord runs={runs.filter((r) => FULL_TRIGGERS.has(r.triggered_by))} />
+        <ReleaseRecord runs={runs.filter((r) => r.line === 'full')} />
       </Zone>
       
     </div>

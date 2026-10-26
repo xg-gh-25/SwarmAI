@@ -816,7 +816,8 @@ class TestInflightMarker:
         assert all(r.get("status") != "running" for r in svc._runs)
         # get_health latest must remain the pre-existing completed run
         health = svc.get_health()
-        assert health["last_run"]["run_id"] != "eval_20260707_120000_abc123_manual", health
+        # (the fixture's runs are small hand-run probes, which health skips: None is fine)
+        assert (health["last_run"] or {}).get("run_id") != "eval_20260707_120000_abc123_manual", health
 
         # ci_eval_gate._reports_by_mtime — non-recursive glob, marker invisible
         import importlib

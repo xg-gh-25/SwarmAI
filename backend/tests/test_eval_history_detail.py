@@ -109,3 +109,36 @@ def test_the_latest_run_is_the_newest_by_time_not_by_file_name(tmp_path, monkeyp
     svc = EvalService(workspace_root=tmp_path)
     assert svc.get_health()["last_run"]["triggered_by"] == "canary"
     assert [r["run_id"] for r in svc.get_history()][0] == "2026-10-26_174210_canary"
+
+
+def test_a_probe_run_never_stands_for_the_release(tmp_path, monkeypatch):
+    """Re-running one case records a run whose denominator is that one case: health
+    must keep the last quick check's verdict, and history marks each run's line."""
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    hist = tmp_path / "Eval" / "EvalHistory"
+    hist.mkdir(parents=True)
+    _run(tmp_path, "2026-10-25_full", "2026-10-25T03:00:00+00:00", "scheduled",
+         {"verdict": "release", "reason": "ok", "checks": []})
+    full = json.loads((hist / "2026-10-25_full.json").read_text())
+    full.update(total_cases=40, scored_count=40)
+    (hist / "2026-10-25_full.json").write_text(json.dumps(full))
+    _run(tmp_path, "2026-10-26_canary", "2026-10-26T01:00:00+00:00", "canary",
+         {"verdict": "blocked", "reason": "red line", "checks": []})
+    _run(tmp_path, "2026-10-26_manual", "2026-10-26T09:00:00+00:00", "manual",
+         {"verdict": "release", "reason": "1/1", "checks": []})
+    svc = EvalService(workspace_root=tmp_path)
+    health = svc.get_health()
+    assert health["release"]["verdict"] == "blocked"
+    assert health["last_run"]["run_id"] == "2026-10-26_canary"
+    assert {r["run_id"]: r["line"] for r in svc.get_history()} == {
+        "2026-10-26_manual": "probe", "2026-10-26_canary": "quick", "2026-10-25_full": "full"}
+    assert svc.get_lines()["full"]["release"] == "release"
+
+
+def test_only_probe_runs_means_no_verdict_yet(tmp_path, monkeypatch):
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    (tmp_path / "Eval" / "EvalHistory").mkdir(parents=True)
+    _run(tmp_path, "2026-10-26_manual", "2026-10-26T09:00:00+00:00", "manual",
+         {"verdict": "release", "reason": "1/1", "checks": []})
+    health = EvalService(workspace_root=tmp_path).get_health()
+    assert health["release"] is None and health["last_run"] is None

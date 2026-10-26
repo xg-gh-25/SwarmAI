@@ -47,7 +47,7 @@ export function OverviewTab() {
       </div>
       <div className="text-display leading-tight font-semibold mt-1.5 text-[var(--color-text)]" data-testid="overview-verdict">
         {v ? <span style={{ color: v.color }}>{v[lang]}</span>
-          : <span className="text-[var(--color-text-muted)]">{t('A record from before release decisions. ', '旧记录，没有放行结论。')}</span>}
+          : <span className="text-[var(--color-text-muted)]">{h.last_run ? t('A record from before release decisions. ', '旧记录，没有放行结论。') : t('No run yet. ', '还没有运行。')}</span>}
         {counts}
       </div>
       {h.release && <div className="text-body text-[var(--color-text-muted)] mt-2" title={h.release.reason}>{releaseLede(h.release.checks, lang)}</div>}
@@ -104,11 +104,12 @@ export function releaseLede(checks: ReleaseCheck[], lang: Lang): string {
   const den = checkById(checks, 'denominator');
   const known = checkById(checks, 'record')?.known_issues?.length ?? 0;
   const parts: string[] = [];
-  parts.push(red?.passed ? (zh ? '红线没破' : 'No red line broken')
+  const absent = zh ? '没有检查' : 'not checked';
+  parts.push(!red ? `${zh ? '红线' : 'red line'} ${absent}` : red.passed ? (zh ? '红线没破' : 'No red line broken')
     : (zh ? `${red?.cases?.length ?? 0} 条红线没守住` : `${red?.cases?.length ?? 0} red line(s) broken`));
-  parts.push(dims?.passed ? (zh ? '门禁全过' : 'every gate passed')
+  parts.push(!dims ? `${zh ? '门禁' : 'gates'} ${absent}` : dims.passed ? (zh ? '门禁全过' : 'every gate passed')
     : (zh ? `${dims?.cases?.length ?? 0} 条门禁没过` : `${dims?.cases?.length ?? 0} gate case(s) failed`));
-  parts.push(den?.passed ? (zh ? '该跑的都跑了' : 'everything that had to run ran')
+  parts.push(!den ? `${zh ? '分母' : 'denominator'} ${absent}` : den.passed ? (zh ? '该跑的都跑了' : 'everything that had to run ran')
     : (zh ? `${den?.cases?.length ?? 0} 条没有结果` : `${den?.cases?.length ?? 0} without a result`));
   const tail = known ? (zh ? `观测档有 ${known} 条没过，不拦。` : `${known} watch case(s) not passing; they do not block.`) : '';
   return `${parts.join(zh ? '，' : ', ')}${zh ? '。' : '. '}${tail}`;

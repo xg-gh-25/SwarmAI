@@ -8,7 +8,7 @@
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import {
-  CASE_DIMENSIONS, errorDetail, useCaseDetail, useDeleteCase, useGoldenSet, useRunCases, useSaveCase,
+  CASE_DIMENSIONS, errorDetail, useCaseDetail, useDeleteCase, useGoldenSet, useRunCases, useRunProgress, useSaveCase,
   useTryCase, type AdmissionResult, type CaseDetail, type CaseInput, type GoldenCase, type ReleaseTier,
 } from './api';
 import {
@@ -162,6 +162,7 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
   const { askSwarm } = useEvalActions();
   const detail = useCaseDetail(id);
   const rerun = useRunCases();
+  const rerunning = useRunProgress(rerun.data?.run_id);
   const del = useDeleteCase();
   const [confirm, setConfirm] = useState(false);
   if (detail.isLoading) return <Loading />;
@@ -236,8 +237,8 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
       <H4>ID</H4><Code>{c.id}</Code>
 
       <div className="flex flex-wrap gap-2 mt-7">
-        <Btn onClick={() => rerun.mutate({ ids: [c.id], behavior: !quick })} disabled={rerun.isPending} testId="case-rerun">
-          {rerun.isSuccess ? t('Started', '已开始') : t('Re-run this case', '重跑这条')}
+        <Btn onClick={() => rerun.mutate({ ids: [c.id], behavior: !quick })} disabled={rerun.isPending || rerunning} testId="case-rerun">
+          {rerunning ? t('Running…', '运行中…') : t('Re-run this case', '重跑这条')}
         </Btn>
         {mineCase ? (
           <>
@@ -296,25 +297,38 @@ function CaseForm({ type, from, editing, total, onType, onDone }: {
     negative: from?.verification?.negative_command ?? '', negExpected: from?.verification?.negative_expected_contains ?? '',
     prompt: from?.scenario?.prompt ?? '', steps: (from?.expected_trajectory ?? []).join(' '), rubric: from?.decision_rubric ?? '',
   });
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
+    setF({ ...f, [k]: e.target.value });
+    setResult(null);  // an old trial says nothing about the edited case
+    tryIt.reset();
+    save.reset();
+  };
   const tryIt = useTryCase();
   const save = useSaveCase();
   const [result, setResult] = useState<AdmissionResult | null>(null);
 
+  // A save replaces purpose / verification / scenario whole (the backend merges one
+  // level deep), so what the form does not show is carried over from the case it
+  // started from: the other language of an unchanged purpose, scenario.system,
+  // the trajectory order and the allowed tools.
   const payload = (): CaseInput => {
     const purpose = [f.head.trim(), f.rest.trim()].filter(Boolean).join(' ');
+    const unchanged = !!from && purpose === [head0, rest0].filter(Boolean).join(' ');
     const base = {
       id: f.id.trim(), category: f.category, dimension: f.dimension, title: f.head.trim(),
-      purpose: { [lang]: purpose }, affected_by: f.affected.split(/\s+/).filter(Boolean),
+      purpose: unchanged ? { ...(from!.purpose ?? {}) } : { [lang]: purpose },
+      affected_by: f.affected.split(/\s+/).filter(Boolean),
     };
     return quick
       ? { ...base, eval_method: 'programmatic', evaluators: ['canary_pass'],
-          verification: { command: f.command, expected_contains: f.expected, negative_command: f.negative, negative_expected_contains: f.negExpected } }
-      : { ...base, eval_method: 'behavior', evaluators: ['trajectory_capture'], scenario: { prompt: f.prompt },
-          expected_trajectory: f.steps.split(/\s+/).filter(Boolean), trajectory_match: 'any_order', decision_rubric: f.rubric };
+          verification: { ...(from?.verification ?? {}), command: f.command, expected_contains: f.expected,
+                          negative_command: f.negative, negative_expected_contains: f.negExpected } }
+      : { ...base, eval_method: 'behavior', evaluators: ['trajectory_capture'], scenario: { ...(from?.scenario ?? {}), prompt: f.prompt },
+          expected_trajectory: f.steps.split(/\s+/).filter(Boolean), trajectory_match: from?.trajectory_match ?? 'any_order',
+          ...(from?.allowed_tools ? { allowed_tools: from.allowed_tools } : {}), decision_rubric: f.rubric };
   };
-  const doTry = () => tryIt.mutate(payload(), { onSuccess: setResult, onError: () => setResult(null) });
-  const doSave = () => save.mutate({ c: payload(), editing }, { onSuccess: onDone });
+  const doTry = () => { save.reset(); tryIt.mutate(payload(), { onSuccess: setResult, onError: () => setResult(null) }); };
+  const doSave = () => { tryIt.reset(); save.mutate({ c: payload(), editing }, { onSuccess: onDone }); };
 
   const field = (label: string, hint: string, input: ReactNode) => (
     <label className="block mt-4">

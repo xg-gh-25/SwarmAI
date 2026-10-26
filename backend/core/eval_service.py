@@ -234,18 +234,20 @@ class EvalService:
     # ─── Public API ───────────────────────────────────────────────────────
 
     def get_health(self) -> dict:
-        """The latest run's release decision and five-dimension summary
-        (core/eval_release). A run recorded before the release decision existed has
-        release None: the dashboard shows it as legacy, never as a score."""
-        if not self._runs:
+        """The release decision and five-dimension summary of the latest quick check
+        or full run (core/eval_release). A probe (a hand-run subset such as "re-run
+        this case") is skipped: its verdict covers only the cases it ran
+        (eval_followups.run_line). A run recorded before the release decision
+        existed has release None: the dashboard shows it as legacy, never as a score."""
+        from core.eval_followups import run_line
+        latest = next((r for r in self._runs if run_line(r) != "probe"), None)  # sorted desc
+        if latest is None:
             return {
                 "release": None,
                 "dimension_summary": {},
                 "last_run": None,
                 "total_cases": len(self._cases),
             }
-
-        latest = self._runs[0]  # sorted desc
 
         return {
             "release": latest.get("release"),
@@ -286,12 +288,16 @@ class EvalService:
         return [names[i] for i in range(len(runs))]
 
     def get_history(self, limit: int = 20) -> list[dict]:
-        """List eval runs sorted by date (newest first)."""
+        """List eval runs sorted by date (newest first). ``line`` says which line a
+        run belongs to (eval_followups.run_line): only quick and full runs count
+        for a release or a trend."""
+        from core.eval_followups import run_line
         return [
             {
                 "run_id": r.get("run_id"),
                 "triggered_by": r.get("triggered_by"),
                 "triggered_at": r.get("triggered_at"),
+                "line": run_line(r),
                 "release": (r.get("release") or {}).get("verdict"),
                 "release_reason": (r.get("release") or {}).get("reason"),
                 "release_checks": [
@@ -347,17 +353,16 @@ class EvalService:
         The full run's cron fires every week and a 14-day gate decides whether it
         really runs, so the next full run is the first fire the gate lets through
         (eval_scheduled._should_run_biweekly), not simply the next fire."""
-        from core.eval_followups import QUICK_TRIGGERS
+        from core.eval_followups import run_line
         from core.golden_set_store import PRODUCT_CAP, TOTAL_CAP, is_product_case
-        from scripts.eval_runner import _run_is_comparable
 
         now = now or datetime.now(timezone.utc)
         with self._data_lock:
             runs, cases = list(self._runs), list(self._cases)
         canary = self._context_state(".eval-canary-daily.json") or {}
         online = self._context_state(".session-quality-state.json") or {}
-        quick_run = next((r for r in runs if r.get("triggered_by") in QUICK_TRIGGERS), None)
-        full_run = next((r for r in runs if _run_is_comparable(r)), None)
+        quick_run = next((r for r in runs if run_line(r) == "quick"), None)
+        full_run = next((r for r in runs if run_line(r) == "full"), None)
         quick = {"last_run": None, "passed": None, "total": None}
         if canary.get("updated_at"):
             quick = {"last_run": canary["updated_at"], "passed": canary.get("passed"),

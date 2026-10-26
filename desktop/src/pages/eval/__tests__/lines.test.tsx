@@ -61,12 +61,14 @@ describe('Offline Eval', () => {
       golden_set: { product: 1, private: 1, total: 2, product_cap: 60, total_cap: 80 } } };
     routes['GET /eval/golden-set'] = { total_cases: 2, cases: [offCase('OFF_A', 'product'), offCase('MY_B', 'private')] };
     routes['GET /eval/history'] = [
-      { run_id: 'canary1', triggered_by: 'canary', triggered_at: '2026-10-26T09:00:00+00:00', release: 'release', total_cases: 36, cases_passed: 36, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
-      { run_id: 'full1', triggered_by: 'scheduled', triggered_at: '2026-10-20T03:00:00+00:00', release: 'blocked', release_reason: 'gate failed: Q_X',
+      { run_id: 'probe1', line: 'probe', triggered_by: 'manual', triggered_at: '2026-10-26T12:00:00+00:00', release: 'release', release_reason: '1/1', total_cases: 1, cases_passed: 1, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
+      { run_id: 'canary1', line: 'quick', triggered_by: 'canary', triggered_at: '2026-10-26T09:00:00+00:00', release: 'release', total_cases: 36, cases_passed: 36, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
+      { run_id: 'full1', line: 'full', triggered_by: 'scheduled', triggered_at: '2026-10-20T03:00:00+00:00', release: 'blocked', release_reason: 'gate failed: Q_X',
         release_checks: [check('redline', true), check('dimensions', false, { cases: [{ id: 'Q_X' }] }), check('denominator', true, { selected: 36, with_result: 36 }), check('record', true)],
         report: '2026-10-20.html', total_cases: 46, cases_passed: 44, cases_failed: 2, cases_skipped: 0, duration_seconds: 900 },
-      { run_id: 'old1', triggered_by: 'scheduled', triggered_at: '2026-09-01T03:00:00+00:00', release: null, total_cases: 158, cases_passed: 150, cases_failed: 8, cases_skipped: 0, duration_seconds: 900 },
+      { run_id: 'old1', line: 'full', triggered_by: 'scheduled', triggered_at: '2026-09-01T03:00:00+00:00', release: null, total_cases: 158, cases_passed: 150, cases_failed: 8, cases_skipped: 0, duration_seconds: 900 },
     ];
+    routes['GET /eval/runs/probe1'] = { run_id: 'probe1', cases: [{ id: 'OFF_A', status: 'passed' }] };
     routes['GET /eval/runs/full1'] = { run_id: 'full1', cases: [
       { id: 'OFF_A', status: 'failed', notes: 'trajectory: Read missing', observed_trajectory: ['Grep foo', 'Bash ls'],
         expected_check: [{ step: 'Grep', found: true }, { step: 'Read', found: false }],
@@ -75,7 +77,7 @@ describe('Offline Eval', () => {
     ] };
   });
 
-  it('drills a failing case down to session, trajectory and step, from the latest full run (not the newer quick check)', async () => {
+  it('drills a failing case down to session, trajectory and step, from the latest full run (not a newer quick check or probe)', async () => {
     show(<OfflineTab />);
     const a = await screen.findByTestId('failing-OFF_A');
     const dd = within(a).getByTestId('drilldown');
@@ -84,6 +86,7 @@ describe('Offline Eval', () => {
     expect(dd.textContent).toContain('2. Bash ls → boom');
     expect(dd.textContent).toContain('The agent’s final answer');
     expect(calls.some((c) => c.url === '/eval/runs/full1')).toBe(true);
+    expect(calls.some((c) => c.url === '/eval/runs/probe1')).toBe(false);
     const b = within(screen.getByTestId('failing-MY_B')).getByTestId('drilldown');
     expect(b.textContent).toContain('Your own cases keep only tool names');
   });
@@ -97,6 +100,7 @@ describe('Offline Eval', () => {
     expect(rows[0].textContent).toContain('36/36');
     expect(rows[0].textContent).toContain('gate failed: Q_X');
     expect(rec.textContent).not.toContain('canary');
+    expect(rec.textContent).not.toContain('1/1');
     fireEvent.click(screen.getByText('Show'));
     expect(screen.getByTestId('release-record').querySelectorAll('tbody tr')).toHaveLength(2);
   });
@@ -109,6 +113,30 @@ const judges = (agentModel: string, temperature = 0) => ({
     { id: 'online_session', line: 'online', prompt: 'P2', system: 'S2', temperature: 0, max_tokens: 500, prompt_sha: 'abc',
       calibration: { prompt_sha: 'abc', labels: 4, agree: 3, agreement: 0.75 } },
   ],
+});
+
+describe('a started full run', () => {
+  it('is watched until it is recorded, then everything refreshes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
+      routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
+      routes['GET /eval/history'] = [];
+      routes['POST /eval/run'] = { status: 'started', run_id: 'new1' };
+      let n = 0;
+      routes['GET /eval/runs/new1'] = () => (++n < 2 ? { run_id: 'new1', status: 'running' } : { run_id: 'new1', cases: [] });
+      show(<OfflineTab />);
+      fireEvent.click(await screen.findByTestId('run-full'));
+      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Running…'));
+      expect((screen.getByTestId('run-full') as HTMLButtonElement).disabled).toBe(true);
+      const before = calls.filter((c) => c.url.startsWith('/eval/history')).length;
+      await vi.advanceTimersByTimeAsync(5500);
+      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Run the full set now'));
+      await waitFor(() => expect(calls.filter((c) => c.url.startsWith('/eval/history')).length).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('LLM Judges', () => {

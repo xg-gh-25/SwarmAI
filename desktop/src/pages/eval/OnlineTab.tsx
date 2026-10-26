@@ -33,7 +33,7 @@ export function OnlineTab() {
     const judged = id === 'O4_GOAL' || id === 'O5_TOOLS';
     const ok = k.checked != null && k.failed != null ? k.checked - k.failed : null;
     const head = judged ? (ok != null ? t(`${ok}/${k.checked} done well`, `${ok}/${k.checked} 个做好`) : '—') : pct(k.rate == null ? null : 1 - k.rate);
-    const sub = id === 'O3_CORRECTIONS' ? t(`${ok}/${k.checked} sessions`, `${ok}/${k.checked} 个会话`) : judged ? t('sampled', '抽查') : t(`${ok}/${k.checked} turns`, `${ok}/${k.checked} 轮`);
+    const sub = ok == null ? '—' : id === 'O3_CORRECTIONS' ? t(`${ok}/${k.checked} sessions`, `${ok}/${k.checked} 个会话`) : judged ? t('sampled', '抽查') : t(`${ok}/${k.checked} turns`, `${ok}/${k.checked} 轮`);
     return <CheckRow key={id} id={id} head={head} sub={sub} check={k} weeks={weeks} points={onlineSeries(on, id)} dim={DIM_OF[id]?.[lang] ?? ''} />;
   };
 

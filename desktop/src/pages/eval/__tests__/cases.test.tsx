@@ -101,6 +101,29 @@ describe('Golden Cases', () => {
     expect(body).not.toHaveProperty('verification');
   });
 
+  it('editing an offline case keeps what the form does not show; a changed field clears the old trial', async () => {
+    routes['GET /eval/golden-set/MINE_2'] = { ...gc('MINE_2', { _origin: 'private', release_tier: 'watch', eval_method: 'behavior',
+      purpose: { en: 'The agent asks once. Else it nags.', zh: '只问一次。否则烦人。' },
+      scenario: { prompt: 'Change it', system: 'swarmai' }, expected_trajectory: ['Read'], trajectory_match: 'in_order',
+      allowed_tools: ['Read', 'Grep'], decision_rubric: 'PASS only if one question' }), history: [] };
+    routes['GET /eval/golden-set'] = { total_cases: 1, cases: [gc('MINE_2', { _origin: 'private', release_tier: 'watch', eval_method: 'behavior' })] };
+    routes['POST /eval/golden-set/try'] = { ok: true, trial: null, checks: [{ name: 'schema', ok: true, errors: [] }] };
+    routes['PUT /eval/golden-set/MINE_2'] = { status: 'updated' };
+    show(<GoldenCasesTab />);
+    fireEvent.click(await screen.findByTestId('case-row-MINE_2'));
+    fireEvent.click(await screen.findByTestId('case-edit'));
+    fireEvent.click(screen.getByTestId('form-try'));
+    await waitFor(() => expect(screen.getByTestId('form-check-schema').getAttribute('data-state')).toBe('ok'));
+    fireEvent.change(screen.getByTestId('form-prompt'), { target: { value: 'Change it now' } });
+    expect(screen.getByTestId('form-check-schema').getAttribute('data-state')).toBe('pending');
+    fireEvent.click(screen.getByTestId('form-save'));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true));
+    expect(calls.find((c) => c.method === 'PUT')!.body).toMatchObject({
+      purpose: { en: 'The agent asks once. Else it nags.', zh: '只问一次。否则烦人。' },
+      scenario: { prompt: 'Change it now', system: 'swarmai' }, trajectory_match: 'in_order', allowed_tools: ['Read', 'Grep'],
+    });
+  });
+
   it('editing my case PUTs it without an id in the body, and a rejected save shows the backend reason', async () => {
     routes['GET /eval/golden-set/MINE_1'] = { ...gc('MINE_1', { _origin: 'private', release_tier: 'watch',
       verification: { command: 'echo ok', expected_contains: 'ok', negative_command: 'echo no', negative_expected_contains: 'no' } }), history: [] };

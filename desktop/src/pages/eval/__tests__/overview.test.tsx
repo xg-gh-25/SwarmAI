@@ -44,6 +44,12 @@ describe('Overview', () => {
     expect(v.textContent).not.toContain('Can be released');
   });
 
+  it('with no quick check or full run yet it says so', async () => {
+    routes['GET /eval/health'] = { ...health(null), last_run: null };
+    show(<OverviewTab />);
+    expect((await screen.findByTestId('overview-verdict')).textContent).toContain('No run yet.');
+  });
+
   it('shows the four checks in order, each with its own state', async () => {
     routes['GET /eval/health'] = health({ verdict: 'incomplete', reason: 'x', checks: checks({
       denominator: { passed: false, with_result: 35, cases: [{ id: 'Q_SLOW', status: 'timeout' }] },

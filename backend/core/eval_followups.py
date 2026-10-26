@@ -110,6 +110,17 @@ def _is_full(run: Mapping[str, Any]) -> bool:
     return _run_is_comparable(dict(run))
 
 
+def run_line(run: Mapping[str, Any]) -> str:
+    """Which line a run belongs to: ``full`` (a comparable full run), ``quick`` (a
+    quick check) or ``probe`` (a hand-run subset, e.g. "re-run this case"). Only
+    quick and full runs say anything about a release: a probe's denominator is the
+    few cases it ran, so its verdict must never stand for the version. The one
+    predicate every reader uses (health, history, follow-ups)."""
+    if _is_full(run):
+        return "full"
+    return "quick" if run.get("triggered_by") in QUICK_TRIGGERS else "probe"
+
+
 def _statuses(run: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     return {c["id"]: c for c in run.get("cases") or [] if isinstance(c, Mapping) and c.get("id")}
 
@@ -383,10 +394,10 @@ def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mappi
     oldest = datetime.min.replace(tzinfo=timezone.utc)
     runs.sort(key=lambda r: _ts(r.get("triggered_at")) or oldest, reverse=True)
     by_id = {c.get("id"): c for c in cases if isinstance(c, Mapping)}
-    full_runs = [r for r in runs if _is_full(r)]
+    full_runs = [r for r in runs if run_line(r) == "full"]
     # The lines a user sees: quick checks and full runs. A hand-run probe of one
     # case is neither, and must not hide what the last real run found.
-    measured = [r for r in runs if r.get("triggered_by") in QUICK_TRIGGERS or _is_full(r)]
+    measured = [r for r in runs if run_line(r) != "probe"]
     bvt_run = next((r for r in measured if (r.get("bvt") or {}).get("total")), None)
     items = (_bvt_failures(bvt_run, by_id) + _not_measured(measured, by_id)
              + _offline_regressions(full_runs, by_id) + _online(online_state, include_session_text)
@@ -395,4 +406,4 @@ def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mappi
     return sorted(items, key=lambda i: (_SEVERITY[i["severity"]], i["rule"]))
 
 
-__all__ = ["QUICK_TRIGGERS", "build_follow_ups"]
+__all__ = ["QUICK_TRIGGERS", "build_follow_ups", "run_line"]
