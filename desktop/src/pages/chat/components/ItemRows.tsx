@@ -1,9 +1,10 @@
 /**
  * ItemRows — the ONE row and box every turn card lists things with (design
- * docs/design/2026-10-26-turn-cards-unified.md §2): products, changed files and
- * commits look the same.
+ * docs/design/2026-10-26-turn-cards-unified.md §2): products and run documents look
+ * the same. The code-changes card is NOT one of them: it keeps its KiroCrew look
+ * (ChangesCard; Gawan 2026-10-26: what changed in code is a different question).
  *
- * - `ItemBox`: a bordered box that hugs its widest row (`w-fit max-w-full`), an
+ * - `ItemBox`: a bordered box the width of the content column (`w-full`), an
  *   optional title line inside it, rows separated by a hairline. When one name alone
  *   is wider than the column the box scrolls sideways; the name is never cut.
  * - `ItemRow`: [lead] · badge · name · grey folder · [tail] · [actions], then an
@@ -28,7 +29,7 @@ import { ReadOnlyContext } from '../readOnlyContext';
  *  there: StageDocs uses this module and the test setup imports it before mocks. */
 const OPEN_FILE = 'swarm:open-file';
 
-const BOX = 'w-fit max-w-full overflow-x-auto rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)]';
+const BOX = 'w-full overflow-x-auto rounded-[10px] border border-[var(--color-border)] bg-[var(--color-card)]';
 const LIST = 'flex flex-col divide-y divide-[var(--color-border)]';
 const TITLE = 'flex items-baseline gap-2 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-dim)]';
 /** An icon button that sits right after the folder, dim until the row is hovered. */

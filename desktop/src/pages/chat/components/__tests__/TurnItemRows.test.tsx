@@ -3,14 +3,13 @@
  * §2, acceptance tests 1-2).
  *
  * What is tested (real AssistantMessageView, leaf contexts mocked):
- * - product rows, changed-file rows and commit rows are all the one ItemRow
- *   (`data-item-row`) inside the one ItemBox (`data-item-box`);
- * - a long file name is whole and never wraps or shrinks (product and changed file);
- *   only the grey folder truncates, with the full path on hover; the box scrolls
- *   sideways instead of cutting the name;
- * - the code-changes box: title "N files changed" with the turn's +/- inside the box,
- *   rows with added / deleted / binary and +N −M, then a COMMITS section: short sha,
- *   subject, "→ main" or "not on <dest>", "+N more" past the listed subjects.
+ * - a product row is the one ItemRow (`data-item-row`) inside the one ItemBox
+ *   (`data-item-box`), which is the content column's width (`w-full`);
+ * - a long file name is whole and never wraps or shrinks; only the grey folder
+ *   truncates, with the full path on hover; the box scrolls sideways instead of
+ *   cutting the name;
+ * - the code-changes card is NOT an ItemBox: it keeps its KiroCrew look (its own
+ *   tests: ChangesCard.test / ChangesCard.landings.test).
  */
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -58,63 +57,33 @@ function renderView(content: ContentBlock[]) {
   return render(<ToastProvider><AssistantMessageView message={message} isStreaming={false} /></ToastProvider>);
 }
 
-describe('one ItemRow / ItemBox for every list (tests 1-2)', () => {
-  it('products, changed files and commits are the same row in the same box', () => {
-    renderView([tx('Done.'), CHANGES, DELIV]);
+describe('one ItemRow / ItemBox for product rows (tests 1-2)', () => {
+  it('a product row is the shared ItemRow in the full-width ItemBox', () => {
+    renderView([tx('Done.'), DELIV]);
     const product = screen.getByTestId('deliverable');
-    const change = screen.getAllByTestId('change-row')[0];
-    const commit = screen.getAllByTestId('commit-row')[0];
-    for (const row of [product, change, commit]) {
-      expect(row.hasAttribute('data-item-row')).toBe(true);
-      expect(row.closest('[data-item-box]')).toBeTruthy();
-    }
+    expect(product.hasAttribute('data-item-row')).toBe(true);
+    const box = product.closest('[data-item-box]') as HTMLElement;
+    expect(box.className).toContain('w-full');
   });
 
   it('a long file name is whole on one line; only the folder truncates', () => {
+    renderView([tx('Done.'), DELIV]);
+    const name = within(screen.getByTestId('deliverable')).getByTestId('deliverable-name');
+    expect(name.textContent).toBe(LONG);
+    expect(name.className).toContain('whitespace-nowrap');
+    expect(name.className).toContain('shrink-0');
+    expect(name.className).not.toMatch(/truncate|break-all|break-words/);
+    const folder = name.nextElementSibling as HTMLElement;
+    expect(folder.className).toContain('truncate');
+    expect(folder.getAttribute('title')).toMatch(new RegExp(`${LONG}$`));
+    expect(name.closest('[data-item-box]')!.className).toContain('overflow-x-auto');
+  });
+
+  it('the changes card is not an ItemBox: it keeps its KiroCrew look', () => {
     renderView([tx('Done.'), CHANGES, DELIV]);
-    const names = [
-      within(screen.getByTestId('deliverable')).getByTestId('deliverable-name'),
-      screen.getAllByTestId('change-row').map((r) => r.querySelector('[data-item-name]')!)
-        .find((n) => n.textContent === LONG)!,
-    ];
-    for (const name of names) {
-      expect(name.textContent).toBe(LONG);
-      expect(name.className).toContain('whitespace-nowrap');
-      expect(name.className).toContain('shrink-0');
-      expect(name.className).not.toMatch(/truncate|break-all|break-words/);
-      const row = name.closest('[data-item-row]')!;
-      const folder = name.nextElementSibling as HTMLElement;
-      expect(folder.className).toContain('truncate');
-      expect(folder.getAttribute('title')).toMatch(new RegExp(`${LONG}$`));
-      expect(row.closest('[data-item-box]')!.className).toContain('overflow-x-auto');
-    }
-  });
-
-  it('the changes box: title and totals inside it, file tails, a COMMITS section', () => {
-    renderView([tx('Done.'), CHANGES]);
     const card = screen.getByTestId('turn-changes');
-    const title = within(card).getAllByTestId('item-box-title')[0];
-    expect(title.textContent).toContain('4 files changed');
-    expect(title.textContent).toContain('+11');
-    expect(title.textContent).toContain('−1');
-    const row = (p: string) => screen.getAllByTestId('change-row').find((r) => r.getAttribute('data-path') === p)!;
-    expect(within(row('new.py')).getByText('added')).toBeTruthy();
-    expect(within(row('logo.png')).getByText('binary')).toBeTruthy();
-    expect(row('src/fix.py').textContent).toContain('+4');
-    expect(within(card).getByTestId('commits-title').textContent).toContain('Commits · 3');
-    const commits = within(card).getAllByTestId('commit-row');
-    expect(commits.map((c) => c.textContent)).toEqual([
-      expect.stringContaining('d1d1d1d'), expect.stringContaining('e2e2e2e')]);
-    expect(commits[0].textContent).toContain('fix the thing');
-    expect(commits[0].textContent).toContain('→ main');
-    expect(within(card).getByText('+1 more')).toBeTruthy();
-  });
-
-  it('a commit no longer on its branch says so', () => {
-    const off = { ...(CHANGES as unknown as Record<string, unknown>) };
-    off.landed = [{ ...(CHANGES as unknown as { landed: Record<string, unknown>[] }).landed[0], state: 'off', dest: 'trunk', count: 2 }];
-    renderView([tx('x'), off as unknown as ContentBlock]);
-    expect(screen.getAllByTestId('commit-row')[0].textContent).toContain('not on trunk');
-    expect(screen.queryByText(/more$/)).toBeNull();
+    expect(card.closest('[data-item-box]')).toBeNull();
+    expect(card.querySelector('[data-item-row]')).toBeNull();
+    expect(card.className).toContain('rounded-lg');
   });
 });

@@ -3,11 +3,10 @@
  * (design docs/design/2026-10-25-turn-result-card.md §5.1-§5.2, v9).
  *
  * What is tested (real AssistantMessageView + turnView, leaf contexts mocked):
- * - a turn that only landed (no in-place file) still shows the card: its file rows
- *   (their diff opens through the turn diff), then COMMITS with each subject and
- *   "→ <dest>" / "not on <dest>" (2026-10-26, design turn-cards-unified §2: the
- *   session branch name and the "N commits landed" title are gone);
- * - in-place rows and landings together: landed files first, then in-place ones;
+ * - a turn that only landed (no in-place file) still shows the card, titled
+ *   "N commits landed", with `<branch> → <dest>`, its commit subjects, the
+ *   on/not-on chip and its file rows (their diff opens through the turn diff);
+ * - in-place rows and landings together: "N files changed · M commits landed";
  * - unknown / truncated / unverified are said, and a block with only those is kept;
  * - an old block (files only) renders as before;
  * - the history mapper turns `turn_id` / `landed_truncated` into camelCase.
@@ -58,12 +57,13 @@ describe('ChangesCard landings', () => {
     getTurnDiff.mockResolvedValueOnce('@@ -1 +1 @@\n-a\n+b\n');
     renderView([tx('Landed.'), block({ landed: [LANDING] })]);
     const card = screen.getByTestId('turn-changes');
-    expect(within(card).getByText('1 file changed')).toBeTruthy();
-    expect(within(card).getByTestId('commits-title').textContent).toContain('Commits · 2');
-    const commits = within(card).getAllByTestId('commit-row');
-    expect(commits[0].textContent).toContain('fix the thing');
-    expect(within(commits[0]).getByTestId('landing-state').textContent).toBe('→ main');
-    const row = within(card).getAllByTestId('change-row')[0];
+    expect(within(card).getByText('2 commits landed')).toBeTruthy();
+    const land = within(card).getByTestId('turn-landing');
+    expect(land.textContent).toContain('session/abc-fix');
+    expect(land.textContent).toContain('main');
+    expect(land.textContent).toContain('fix the thing');
+    expect(within(land).getByTestId('landing-state').textContent).toContain('on main');
+    const row = within(land).getAllByTestId('change-row')[0];
     expect(row.getAttribute('data-path')).toBe('src/fix.py');
     fireEvent.click(within(row).getByRole('button', { name: 'Show diff' }));
     expect(getTurnDiff).toHaveBeenCalledWith({ gitRoot: '/r', start: T.start, end: T.end, path: 'src/fix.py' });
@@ -71,13 +71,13 @@ describe('ChangesCard landings', () => {
 
   it('a landing no longer on its branch says so', () => {
     renderView([tx('x'), block({ landed: [{ ...LANDING, state: 'off', count: 1, dest: 'trunk' }] })]);
-    expect(screen.getByTestId('commits-title').textContent).toContain('Commits · 1');
-    expect(screen.getAllByTestId('landing-state')[0].textContent).toContain('not on trunk');
+    expect(screen.getByText('1 commit landed')).toBeTruthy();
+    expect(screen.getByTestId('landing-state').textContent).toContain('not on trunk');
   });
 
   it('in-place rows and landings together', () => {
     renderView([tx('x'), block({ files: [file('a.py')], landed: [LANDING] })]);
-    expect(screen.getByText('2 files changed')).toBeTruthy();
+    expect(screen.getByText('1 file changed · 2 commits landed')).toBeTruthy();
     expect(screen.getAllByTestId('change-row').map((r) => r.getAttribute('data-path')))
       .toEqual(['src/fix.py', 'a.py']);
   });
@@ -95,7 +95,7 @@ describe('ChangesCard landings', () => {
   it('an old block renders as before and an empty one is not shown', () => {
     renderView([tx('x'), block({ files: [file('a.py')] })]);
     expect(screen.getByText('1 file changed')).toBeTruthy();
-    expect(screen.queryByTestId('commit-row')).toBeNull();
+    expect(screen.queryByTestId('turn-landing')).toBeNull();
   });
 });
 

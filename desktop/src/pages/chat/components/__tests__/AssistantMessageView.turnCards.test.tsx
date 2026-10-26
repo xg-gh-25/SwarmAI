@@ -146,7 +146,9 @@ describe('turn_deliverables — what the turn produced', () => {
     const box = within(card).getByTestId('product-box');
     expect(box.className).toMatch(/\bborder\b/);
     expect(box.className).toMatch(/rounded/);
-    expect(box.className).toContain('w-fit');
+    // the content column's width (2026-10-26, Gawan: not shrunk to the rows)
+    expect(box.className).toContain('w-full');
+    expect(box.className).not.toContain('w-fit');
     expect(box.textContent).toContain('2 deliverables');
     expect(rows.every((row) => box.contains(row) && !/\bborder\b|rounded/.test(row.className))).toBe(true);
     // one file per line: a column, never a grid
