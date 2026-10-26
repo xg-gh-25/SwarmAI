@@ -20,15 +20,28 @@ def ws(tmp_path, monkeypatch):
     # ci_eval_gate imported the symbol directly — patch there too
     import scripts.ci_eval_gate as gate
     monkeypatch.setattr(gate, "compute_code_digest", lambda root: "DIGEST_NOW")
+    # the golden set the gate recomputes the release over; empty unless a test sets one
+    monkeypatch.setattr(eval_runner, "load_merged_golden_set", lambda root: _GOLDEN)
+    _GOLDEN["cases"] = []
     return tmp_path, proj / "EvalHistory"
 
 
+_GOLDEN: dict = {"cases": []}
+
+
+_RELEASE = {"verdict": "release", "reason": "all 5 red-line and gate case(s) passed",
+            "checks": [{"id": "redline", "passed": True}, {"id": "dimensions", "passed": True},
+                       {"id": "denominator", "passed": True}, {"id": "record", "passed": True}]}
+
+
 def _report(hist: Path, name: str, digest: str, bvt: dict, score: float | None = None,
-            mtime: int | None = None, redline: dict | None = None):
+            mtime: int | None = None, redline: dict | None = None, release=_RELEASE):
     payload = {
         "run_id": name, "triggered_at": "2026-06-26T00:00:00Z",
         "code_digest": digest, "bvt": bvt,
     }
+    if release is not None:
+        payload["release"] = release
     if score is not None:
         payload["overall_score"] = score
     if redline is not None:
@@ -78,83 +91,99 @@ def test_pre_gate_report_cannot_verify(ws):
     assert code == 2
 
 
-# ── score-drift hard gate (run_95d9acbc) ────────────────────────────────────
-# The gate blocks a push when the latest report's overall_score dropped more
-# than SCORE_DRIFT_EPSILON below the most-recent DIFFERENT-code baseline.
-# Comparing against a same-code re-run is NOT drift (LLM-judge noise) — proven
-# on real data: 100.0→91.7 on identical code_digest 526db7a385.
+# ── the release decision (core/eval_release) ─────────────────────────────────
 _GREEN = {"total": 5, "passed": 5, "failed": 0, "error": 0, "green": True}
 
 
-def test_score_drift_beyond_epsilon_blocks(ws):
-    """latest 90 vs different-code baseline 95 → 5.0 drop > 2.0 → exit 1 blocked."""
+def _blocked(check, verdict="blocked"):
+    checks = [{"id": c, "passed": c != check} for c in ("redline", "dimensions", "denominator", "record")]
+    return {"verdict": verdict, "reason": f"{check} failed: G1", "checks": checks}
+
+
+def test_a_blocked_release_blocks_naming_the_check(ws):
     root, hist = ws
-    _report(hist, "2026-06-25_base.json", "OLD_DIGEST", _GREEN, score=95.0, mtime=1000)
-    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN, score=90.0, mtime=2000)
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN, release=_blocked("dimensions"))
     code, msg = check_gate(root)
-    assert code == 1, msg
-    assert "drift" in msg.lower() or "regress" in msg.lower(), msg
+    assert code == 1 and "dimensions" in msg and "G1" in msg, msg
 
 
-def test_score_within_epsilon_passes(ws):
-    """latest 93.5 vs baseline 95 → 1.5 drop < 2.0 → pass (green+fresh)."""
+def test_an_incomplete_release_blocks(ws):
     root, hist = ws
-    _report(hist, "2026-06-25_base.json", "OLD_DIGEST", _GREEN, score=95.0, mtime=1000)
-    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN, score=93.5, mtime=2000)
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN, release=_blocked("denominator", "incomplete"))
+    code, msg = check_gate(root)
+    assert code == 1 and "incomplete" in msg and "denominator" in msg, msg
+
+
+def test_a_report_without_a_release_block_cannot_verify(ws):
+    root, hist = ws
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN, score=100.0, release=None)
+    code, msg = check_gate(root)
+    assert code == 2 and "release" in msg, msg
+
+
+def _gate_case(cid):
+    from scripts.golden_case_validator import compute_case_stamp
+
+    c = {"id": cid, "gating": "gate", "tier": "stable", "eval_method": "programmatic",
+         "evaluators": ["canary_pass"], "dimension": "cognition"}
+    c["validated_by_4gate"] = compute_case_stamp(c)
+    return c
+
+
+def test_a_run_limited_to_some_cases_cannot_stand_in_for_the_rest(ws):
+    """The stored verdict of a --cases run says release, but the gate recomputes
+    over every gate case of the golden set: the case it did not run is missing."""
+    root, hist = ws
+    _GOLDEN["cases"] = [_gate_case("A"), _gate_case("B")]
+    path = hist / "now.json"
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN)
+    d = json.loads(path.read_text())
+    d["filtered"] = True
+    d["cases"] = [{"id": "A", "status": "passed"}]
+    path.write_text(json.dumps(d))
+    code, msg = check_gate(root)
+    assert code == 1 and "denominator" in msg and "B" in msg, msg
+
+
+def test_a_full_report_passes_the_recomputed_release(ws):
+    root, hist = ws
+    _GOLDEN["cases"] = [_gate_case("A"), _gate_case("B")]
+    path = hist / "now.json"
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN)
+    d = json.loads(path.read_text())
+    d["cases"] = [{"id": "A", "status": "passed"}, {"id": "B", "status": "passed"}]
+    path.write_text(json.dumps(d))
     code, msg = check_gate(root)
     assert code == 0, msg
 
 
-def test_score_improved_passes(ws):
+def test_a_red_line_blocks_even_without_a_release_block(ws):
+    """The missing-release check comes after the red-line veto, so a violated red
+    line exits 1, never the soft-passed 2."""
     root, hist = ws
-    _report(hist, "2026-06-25_base.json", "OLD_DIGEST", _GREEN, score=90.0, mtime=1000)
-    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN, score=96.0, mtime=2000)
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN, release=None,
+            redline={"violated": True, "total": 1, "violations": [{"id": "X", "status": "failed"}],
+                     "skipped": []})
+    code, msg = check_gate(root)
+    assert code == 1 and "RED-LINE" in msg, msg
+
+
+def test_the_release_logic_is_in_the_freshness_digest():
+    from scripts.eval_runner import _GATE_CODE_PATHS
+
+    assert "backend/core/eval_release.py" in _GATE_CODE_PATHS
+    assert "backend/scripts/golden_case_validator.py" in _GATE_CODE_PATHS
+
+
+def test_no_score_comparison_between_reports(ws):
+    """A big score difference against an older report no longer blocks anything."""
+    root, hist = ws
+    _report(hist, "old.json", "OTHER", _GREEN, score=100.0, mtime=1_000_000)
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN, score=10.0, mtime=2_000_000)
     code, msg = check_gate(root)
     assert code == 0, msg
 
 
-def test_drift_baseline_skips_same_code_rerun(ws):
-    """The gate must compare against a DIFFERENT-code baseline, not a same-code
-    re-run. Newest-by-mtime baseline shares latest's digest (a re-run, 8pt noise);
-    the real different-code baseline is 91 → latest 90 = 1.0 drop < 2.0 → pass.
-    Without digest-awareness this would false-block on the 98→90 same-code delta."""
-    root, hist = ws
-    _report(hist, "2026-06-24_realbase.json", "OLD_DIGEST", _GREEN, score=91.0, mtime=1000)
-    _report(hist, "2026-06-25_rerun.json", "DIGEST_NOW", _GREEN, score=98.0, mtime=2000)
-    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN, score=90.0, mtime=3000)
-    code, msg = check_gate(root)
-    assert code == 0, msg
-
-
-def test_single_report_fails_open_no_drift(ws):
-    """Only one report (no baseline) → drift check skipped, green+fresh passes."""
-    root, hist = ws
-    _report(hist, "2026-06-26_now.json", "DIGEST_NOW", _GREEN, score=90.0, mtime=2000)
-    code, msg = check_gate(root)
-    assert code == 0, msg
-
-
-def test_drift_latest_picked_by_mtime_not_filename(ws):
-    """latest = newest by MTIME, not filename sort. The mtime-newest report
-    (alphabetically EARLIER name) is the one gated. Here the real latest (by
-    mtime) regressed 95→90 vs different-code baseline → block. A filename sort
-    would pick the wrong 'latest'."""
-    root, hist = ws
-    _report(hist, "2026-06-20_base.json", "OLD_DIGEST", _GREEN, score=95.0, mtime=1000)
-    # filename sorts LAST but is OLDER by mtime — must NOT be treated as latest
-    _report(hist, "2026-06-99_decoy.json", "OLD_DIGEST", _GREEN, score=95.0, mtime=1500)
-    # alphabetically earliest, but NEWEST mtime → the true latest
-    _report(hist, "2026-06-01_now.json", "DIGEST_NOW", _GREEN, score=90.0, mtime=3000)
-    code, msg = check_gate(root)
-    assert code == 1, msg
-    assert "drift" in msg.lower() or "regress" in msg.lower(), msg
-
-
-# ── red-line veto gate (run_21490939) ───────────────────────────────────────
-# A violated red-line blocks the push with a DISTINCT message, independent of the
-# bvt.green result (a red-line can be an eval_method='llm' case that bvt never
-# even sees). The redline block is checked AFTER freshness (a stale report can't
-# be trusted to assert anything) and BEFORE the bvt/score checks.
 _GREEN_BVT = {"total": 5, "passed": 5, "failed": 0, "error": 0, "green": True}
 
 

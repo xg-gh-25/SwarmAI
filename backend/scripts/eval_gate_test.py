@@ -93,7 +93,7 @@ def _cases_results(specs):
     cases, results = [], []
     for i, (method, evs, status) in enumerate(specs):
         cid = f"C{i}"
-        c = {"id": cid, "eval_method": method, "evaluators": evs, "tier": "active"}
+        c = {"id": cid, "eval_method": method, "evaluators": evs, "tier": "active", "gating": "gate"}
         c["validated_by_4gate"] = compute_case_stamp(c)
         cases.append(c)
         results.append({"id": cid, "status": status})

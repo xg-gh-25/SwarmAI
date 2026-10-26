@@ -7,9 +7,11 @@ Contract: scripts/_probe_kit.py. Subcommands:
   teeth        a gate-eligible case with no negative check is refused when added;
                at run time a negative that still prints the positive marker, or
                prints nothing, fails the case
-  score_drift  a score drop beyond the tolerance raises an alert and a small dip does
-               not; a failure is told apart as "the case is broken" or "a real
-               regression"
+  release_order  a run is decided by four checks in order: a red-line failure blocks,
+               then a gate failure blocks, then a red or gate case with no result
+               makes the verdict incomplete; a watch failure never blocks; the
+               scheduled alert fires on a blocked verdict and not on a watch failure;
+               a failure is told apart as "the case is broken" or "a real regression"
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from scripts._probe_kit import run, tempdir, verdict
 
 def _case(cid="EVAL_PROBE_CASE", expected="PROBE_OK", negative=None, neg_expected=None):
     c = {"id": cid, "name": cid, "category": "probe", "prompt": "probe", "tier": "active",
-         "eval_method": "programmatic", "evaluators": ["canary_pass"],
+         "gating": "gate", "eval_method": "programmatic", "evaluators": ["canary_pass"],
          "verification": {"command": "echo PROBE_OK", "expected_contains": expected}}
     if negative is not None:
         c["verification"]["negative_command"] = negative
@@ -94,29 +96,56 @@ def teeth(negative: bool) -> int:
     return verdict("EVAL_TEETH", negative, _teeth_holds, broken)
 
 
-# ── score_drift ───────────────────────────────────────────────────────────────
+# ── release_order ─────────────────────────────────────────────────────────────
 
-def _scheduled(base: float, now: float) -> dict:
+_QUICK = {"tier": "stable", "eval_method": "programmatic", "evaluators": ["canary_pass"]}
+_RED = _stamped({"id": "R", "redline": True, "gating": "gate", "dimension": "responsibility", **_QUICK})
+_GATE = _stamped({"id": "G", "gating": "gate", "dimension": "cognition", **_QUICK})
+_WATCH = {"id": "W", "gating": "watch", "dimension": "quality", "eval_method": "behavior"}
+
+
+def _decide(r, g, w):
+    from core.eval_release import decide_release, failing_check
+
+    res = [{"id": i, "status": s} for i, s in (("R", r), ("G", g), ("W", w)) if s is not None]
+    rel = decide_release([_RED, _GATE, _WATCH], res)
+    ck = failing_check(rel)
+    return rel["verdict"], (ck or {}).get("id"), rel
+
+
+def _scheduled(release: dict) -> dict:
     from jobs.handlers import eval_scheduled as es
 
-    cases = [{"id": f"c{i}", "eval_method": "programmatic",
-              "status": "passed" if i < now else "failed"} for i in range(100)]
-    out = {"this": {"bvt": {"green": True}, "cases": cases},
-           "baseline": {"overall_score": base}}
+    out = {"this": {"release": release, "cases": []}, "baseline": {}}
     with mock.patch.object(es, "_should_run_biweekly", return_value=True), \
             mock.patch.object(es, "_write_biweekly_last_run"):
         return es.run_eval_scheduled(dry_run=True, runner=lambda root: out, root=Path("."))
 
 
-def _score_holds() -> tuple[bool, str]:
+def _release_holds() -> tuple[bool, str]:
     from scripts.eval_runner import _classify_failure
 
-    drop = _scheduled(90, 80)
-    if drop["status"] != "regression" or not any("drift" in r for r in drop["reasons"]):
-        return False, f"a 10-point drop raised no alert ({drop['reasons']})"
-    dip = _scheduled(90, 87)
-    if dip["status"] != "healthy":
-        return False, f"a 3-point dip raised an alert ({dip['reasons']})"
+    table = [
+        (("failed", "failed", "passed"), ("blocked", "redline"), "a red-line failure did not decide the verdict"),
+        (("passed", "failed", "passed"), ("blocked", "dimensions"), "a gate failure did not block"),
+        (("passed", "timeout", "passed"), ("incomplete", "denominator"), "a timed-out gate case was not counted as missing"),
+        (("passed", None, "passed"), ("incomplete", "denominator"), "a gate case with no result was left out"),
+        (("passed", "passed", "failed"), ("release", None), "a watch failure blocked the release"),
+    ]
+    for (r, g, w), want, why in table:
+        verdict, check, _ = _decide(r, g, w)
+        if (verdict, check) != want:
+            return False, f"{why} (got {verdict} / {check})"
+    _, _, watch_only = _decide("passed", "passed", "failed")
+    known = next(c for c in watch_only["checks"] if c["id"] == "record")["known_issues"]
+    if [k["id"] for k in known] != ["W"]:
+        return False, f"a watch failure is not carried as a known issue ({known})"
+    blocked = _scheduled(_decide("passed", "failed", "passed")[2])
+    if blocked["status"] != "regression":
+        return False, f"a blocked verdict raised no alert ({blocked['reasons']})"
+    released = _scheduled(watch_only)
+    if released["status"] != "healthy":
+        return False, f"a watch failure raised an alert ({released['reasons']})"
     if _classify_failure("the cited rule is not present in the loaded context") != "case-broken":
         return False, "a missing-reference failure was not marked as a broken case"
     if _classify_failure("the answer handed the decision back to the user") != "regressed":
@@ -124,13 +153,13 @@ def _score_holds() -> tuple[bool, str]:
     return True, ""
 
 
-def score_drift(negative: bool) -> int:
-    def broken():  # a tolerance so wide nothing ever alerts
-        with mock.patch("jobs.handlers.eval_scheduled._DRIFT_TOLERANCE", 1000.0):
-            return _score_holds()
-    return verdict("EVAL_SCORE_DRIFT", negative, _score_holds, broken)
+def release_order(negative: bool) -> int:
+    def broken():  # a check that did not finish counts as done: the denominator is skipped
+        with mock.patch("core.eval_release._NOT_RUN", ()):
+            return _release_holds()
+    return verdict("EVAL_RELEASE_ORDER", negative, _release_holds, broken)
 
 
 if __name__ == "__main__":
     raise SystemExit(run({"drift_stamp": drift_stamp, "teeth": teeth,
-                          "score_drift": score_drift}))
+                          "release_order": release_order}))

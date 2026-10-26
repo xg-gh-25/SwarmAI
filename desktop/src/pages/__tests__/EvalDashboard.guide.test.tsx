@@ -39,7 +39,7 @@ describe('GuideTab', () => {
 
   it('shows the next runs from the health endpoint', async () => {
     health = { lines: { quick: { last_run: null, passed: null, total: null },
-      full: { last_run: null, score: null, next_run: '2026-11-09T10:30:00+00:00' },
+      full: { last_run: null, release: null, next_run: '2026-11-09T10:30:00+00:00' },
       online: { last_run: null, sessions_checked: null, next_run: '2026-10-30T08:00:00+00:00' },
       golden_set: { product: 1, private: 0, total: 1, product_cap: 1, total_cap: 1 } } };
     show();

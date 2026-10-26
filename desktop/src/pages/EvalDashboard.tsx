@@ -16,9 +16,19 @@ import { computeBreakdowns, type Breakdowns, type BreakdownEntry } from './eval-
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/** A run's release decision (backend core/eval_release.decide_release). */
+export type ReleaseVerdict = 'release' | 'blocked' | 'incomplete';
+
+export interface ReleaseBlock {
+  verdict: ReleaseVerdict;
+  reason: string;
+  checks: { id: string; passed: boolean }[];
+}
+
 interface EvalHealth {
-  overall_score: number | null;
-  dimensions: Record<string, number>;
+  /** null for a run recorded before the release decision existed (legacy). */
+  release: ReleaseBlock | null;
+  dimension_summary: Record<string, Record<string, { passed: number; failed: number; not_run: number }>>;
   last_run: {
     run_id: string;
     triggered_by: string;
@@ -28,7 +38,6 @@ interface EvalHealth {
     cases_skipped: number;
   } | null;
   total_cases: number;
-  trend: { delta: number; direction: string } | null;
   follow_ups?: FollowUp[];
   lines?: EvalLinesData;
 }
@@ -36,7 +45,7 @@ interface EvalHealth {
 /** /api/eval/health ``lines`` (backend EvalService.get_lines). */
 export interface EvalLinesData {
   quick: { last_run: string | null; passed: number | null; total: number | null };
-  full: { last_run: string | null; score: number | null; next_run: string | null };
+  full: { last_run: string | null; release: ReleaseVerdict | null; next_run: string | null };
   online: { last_run: string | null; sessions_checked: number | null; next_run: string | null };
   golden_set: { product: number; private: number; total: number; product_cap: number; total_cap: number };
 }
@@ -55,13 +64,43 @@ interface EvalRun {
   run_id: string;
   triggered_by: string;
   triggered_at: string;
-  overall_score: number;
+  /** null for a run recorded before the release decision existed (legacy). */
+  release: ReleaseVerdict | null;
+  release_reason?: string | null;
   total_cases: number;
   cases_passed: number;
   cases_failed: number;
   cases_skipped: number;
   duration_seconds: number;
-  dimensions: Record<string, number>;
+}
+
+const RELEASE_LABEL: Record<ReleaseVerdict, { en: string; zh: string }> = {
+  release: { en: 'Release', zh: '可以放行' },
+  blocked: { en: 'Blocked', zh: '不放行' },
+  incomplete: { en: 'Incomplete', zh: '结论不完整' },
+};
+
+/** The release verdict where a score used to be shown; a legacy run says so. */
+export function ReleaseBadge({ verdict, reason }: { verdict: ReleaseVerdict | null | undefined; reason?: string | null }) {
+  const { i18n } = useTranslation();
+  const lang: 'en' | 'zh' = i18n?.language?.startsWith('zh') ? 'zh' : 'en';
+  const tone = verdict === 'release' ? 'success' : verdict === 'blocked' ? 'error' : 'warning';
+  // own keys only: 'toString' / 'constructor' are not verdicts
+  const isKnown = !!verdict && Object.prototype.hasOwnProperty.call(RELEASE_LABEL, verdict);
+  // an unknown value (a hand-edited or future record) reads as legacy, never throws
+  const known = isKnown ? RELEASE_LABEL[verdict as ReleaseVerdict] : undefined;
+  const label = known?.[lang] ?? (lang === 'zh' ? '旧记录' : 'Legacy');
+  return (
+    <span
+      data-testid="release-badge"
+      title={reason ?? undefined}
+      className={`inline-block px-1.5 py-0.5 rounded text-meta font-semibold ${isKnown
+        ? `bg-[color-mix(in_srgb,var(--color-status-${tone})_10%,transparent)] text-[var(--color-status-${tone})]`
+        : 'text-[var(--color-text-muted)]'}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 export interface GoldenSetCase {
@@ -215,8 +254,7 @@ interface RunDetailData {
   run_id: string;
   triggered_by?: string;
   triggered_at?: string;
-  overall_score?: number | null;
-  dimensions?: Record<string, number>;
+  release?: ReleaseBlock | null;
   total_cases?: number;
   cases_passed?: number;
   cases_failed?: number;
@@ -244,7 +282,7 @@ const TABS = [
   { id: 'session-quality', label: 'Online', icon: 'reviews' },
   { id: 'context', label: 'Context Health', icon: 'sync' },
   { id: 'governance', label: 'Governance', icon: 'gavel' },
-  { id: 'trends', label: 'Trends', icon: 'trending_up' },
+  { id: 'trends', label: 'Runs', icon: 'history' },
   { id: 'reports', label: 'Reports', icon: 'description' },
   { id: 'guide', label: 'Guide', icon: 'menu_book' },
 ] as const;
@@ -287,7 +325,7 @@ export default function EvalDashboard() {
         {activeTab === 'session-quality' && <SessionQualityTab />}
         {activeTab === 'context' && <ContextHealthTab />}
         {activeTab === 'governance' && <GovernanceTab />}
-        {activeTab === 'trends' && <TrendsTab />}
+        {activeTab === 'trends' && <RunsTab />}
         {activeTab === 'reports' && <ReportsTab />}
         {activeTab === 'guide' && <GuideTab />}
       </div>
@@ -329,7 +367,7 @@ function OverviewTab() {
       {(triggerRun.isSuccess || runCanary.isSuccess) && (
         <div className="mb-3 p-2 rounded border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)] text-small text-[var(--color-status-success)]">
           {triggerRun.isSuccess && `✓ Eval started: ${(triggerRun.data as { run_id?: string })?.run_id || 'running'}`}
-          {runCanary.isSuccess && `✓ Canary complete: ${(runCanary.data as { overall_score?: number })?.overall_score}%`}
+          {runCanary.isSuccess && `✓ Canary complete: ${(runCanary.data as { release?: { verdict?: string } })?.release?.verdict ?? '—'}`}
         </div>
       )}
 
@@ -345,7 +383,7 @@ function OverviewTab() {
             <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
               <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Date</th>
               <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Trigger</th>
-              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Score</th>
+              <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Release</th>
               <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Pass/Fail/Skip</th>
               <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">Duration</th>
             </tr>
@@ -356,11 +394,7 @@ function OverviewTab() {
                 <td className="px-3 py-2 tabular-nums">{run.triggered_at?.slice(0, 10)}</td>
                 <td className="px-3 py-2">{run.triggered_by}</td>
                 <td className="px-3 py-2">
-                  <span className={`inline-block px-1.5 py-0.5 rounded text-meta font-semibold ${
-                    run.overall_score >= 80 ? 'bg-[color-mix(in_srgb,var(--color-status-success)_10%,transparent)] text-[var(--color-status-success)]' : 'bg-[color-mix(in_srgb,var(--color-status-warning)_10%,transparent)] text-[var(--color-status-warning)]'
-                  }`}>
-                    {run.overall_score}%
-                  </span>
+                  <ReleaseBadge verdict={run.release} reason={run.release_reason} />
                 </td>
                 <td className="px-3 py-2 tabular-nums">
                   <span className="text-[var(--color-status-success)]">{run.cases_passed}</span>
@@ -849,9 +883,11 @@ function GovernanceTab() {
   );
 }
 
-// ─── Trends Tab ───────────────────────────────────────────────────────────────
+// ─── Runs Tab ─────────────────────────────────────────────────────────────────
+// Recent runs and their per-case detail. There is no score trend: a run is decided
+// by its release verdict (backend core/eval_release), never a weighted percentage.
 
-export function TrendsTab() {
+export function RunsTab() {
   const { data: history, isError } = useEvalHistory();
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
@@ -859,15 +895,11 @@ export function TrendsTab() {
   if (!history || history.length === 0) {
     return (
       <div className="max-w-5xl mx-auto p-6">
-        <p className="text-body text-[var(--color-text-muted)]">
-          Trends require at least 2 eval runs. Run more evaluations to see historical data.
-        </p>
+        <p className="text-body text-[var(--color-text-muted)]">No eval runs yet.</p>
       </div>
     );
   }
 
-  const runs = [...history].reverse().slice(-10); // oldest→newest, max 10
-  const allDims = Object.keys(history[0]?.dimensions || {});
   const recent = history.slice(0, 3); // newest-first, top 3 for visualized detail
 
   return (
@@ -875,61 +907,24 @@ export function TrendsTab() {
       {/* Recent runs — click to visualize per-case results */}
       <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Recent Runs</h3>
       <div className="grid grid-cols-3 gap-3 mb-8" data-testid="recent-runs">
-        {recent.map((r) => {
-          const score = r.overall_score ?? 0;
-          const sc = score >= 80 ? 'var(--color-status-success)' : score >= 60 ? 'var(--color-status-warning)' : 'var(--color-status-error)';
-          return (
-            <button
-              key={r.run_id}
-              onClick={() => setDetailRunId(r.run_id)}
-              className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-primary)] transition-colors text-left"
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-meta tabular-nums text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
-                <span className="text-body tabular-nums font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
-              </div>
-              <div className="text-meta text-[var(--color-text-muted)]">{r.triggered_by}</div>
-              <div className="flex gap-2 mt-1 text-meta">
-                <span className="text-[var(--color-status-success)]">{r.cases_passed ?? 0}✓</span>
-                <span className="text-[var(--color-status-error)]">{r.cases_failed ?? 0}✗</span>
-                <span className="text-[var(--color-text-muted)]">{r.cases_skipped ?? 0}skip</span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Overall Score Trend</h3>
-      <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-8">
-        <Sparkline
-          values={runs.map(r => r.overall_score ?? 0)}
-          dates={runs.map(r => r.triggered_at?.slice(0, 10) ?? '')}
-          axis
-          height={48}
-          color="var(--color-primary)"
-        />
-        <div className="flex justify-between text-meta text-[var(--color-text-muted)] mt-1 tabular-nums">
-          <span>{runs[0]?.triggered_at?.slice(0, 10)}</span>
-          <span>{runs[runs.length - 1]?.triggered_at?.slice(0, 10)}</span>
-        </div>
-      </div>
-
-      <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Per-Dimension Sparklines</h3>
-      <div className="grid grid-cols-2 gap-4">
-        {allDims.map((dim) => {
-          const scores = runs.map(r => r.dimensions?.[dim] ?? 0);
-          const latest = scores[scores.length - 1] ?? 0;
-          const color = latest >= 80 ? 'var(--color-status-success)' : latest >= 60 ? 'var(--color-status-warning)' : 'var(--color-status-error)';
-          return (
-            <div key={dim} className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-small text-[var(--color-text-muted)]">{dim.replace(/_/g, ' ')}</div>
-                <div className="text-body font-mono font-semibold" style={{ color }}>{latest}%</div>
-              </div>
-              <Sparkline values={scores} height={32} color={color} />
+        {recent.map((r) => (
+          <button
+            key={r.run_id}
+            onClick={() => setDetailRunId(r.run_id)}
+            className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-primary)] transition-colors text-left"
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-meta tabular-nums text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
+              <ReleaseBadge verdict={r.release} reason={r.release_reason} />
             </div>
-          );
-        })}
+            <div className="text-meta text-[var(--color-text-muted)]">{r.triggered_by}</div>
+            <div className="flex gap-2 mt-1 text-meta">
+              <span className="text-[var(--color-status-success)]">{r.cases_passed ?? 0}✓</span>
+              <span className="text-[var(--color-status-error)]">{r.cases_failed ?? 0}✗</span>
+              <span className="text-[var(--color-text-muted)]">{r.cases_skipped ?? 0}skip</span>
+            </div>
+          </button>
+        ))}
       </div>
 
       {/* Per-run detail drawer — visualizes per-case pass/fail for a chosen run */}
@@ -978,7 +973,7 @@ function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void
           <div className="p-4">
             {/* Run summary */}
             <div className="flex gap-3 mb-4 text-small">
-              <span className="tabular-nums font-semibold" style={{ color: (run.overall_score ?? 0) >= 80 ? 'var(--color-status-success)' : 'var(--color-status-warning)' }}>{Math.round(run.overall_score ?? 0)}%</span>
+              <ReleaseBadge verdict={run.release?.verdict} reason={run.release?.reason} />
               <span className="text-[var(--color-status-success)]">{run.cases_passed ?? 0} passed</span>
               <span className="text-[var(--color-status-error)]">{run.cases_failed ?? 0} failed</span>
               <span className="text-[var(--color-text-muted)]">{run.cases_skipped ?? 0} skipped</span>
@@ -1261,7 +1256,7 @@ export function EvalLines({ lines }: { lines?: EvalLinesData }) {
   const never = zh ? '还没运行过' : 'not run yet';
   const result = {
     quick: lines.quick.total ? `${lines.quick.passed ?? 0}/${lines.quick.total} ${zh ? '通过' : 'passed'}` : '—',
-    full: lines.full.score != null ? `${lines.full.score}%` : '—',
+    full: RELEASE_LABEL[lines.full.release as ReleaseVerdict]?.[lang] ?? '—',
     online: lines.online.sessions_checked != null ? `${lines.online.sessions_checked} ${zh ? '个会话' : 'sessions'}` : '—',
   };
   const next = { quick: null, full: lines.full.next_run, online: lines.online.next_run };
@@ -1721,61 +1716,6 @@ function ErrorState({ message }: { message: string }) {
   return (
     <div className="flex items-center justify-center flex-1 min-h-[10rem] text-body text-[var(--color-status-error)]">
       {message}
-    </div>
-  );
-}
-
-// ─── Sparkline SVG ──────────────────────────────────────────────────────────
-
-function Sparkline({ values, height = 32, color = 'var(--color-primary)', dates, axis = false }: { values: number[]; height?: number; color?: string; dates?: string[]; axis?: boolean }) {
-  if (values.length < 2) return null;
-
-  const width = 200;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-
-  const coords = values.map((v, i) => ({
-    x: (i / (values.length - 1)) * width,
-    y: height - ((v - min) / range) * (height - 4) - 2,
-    v,
-    // dates is optional + may not line up 1:1 with values — guard the lookup.
-    d: dates && dates.length === values.length ? dates[i] : undefined,
-  }));
-  const points = coords.map((p) => `${p.x},${p.y}`);
-
-  return (
-    <div className={axis ? 'flex items-stretch gap-1.5' : ''}>
-      {/* Optional y-axis min/max labels (only when axis requested) */}
-      {axis && (
-        <div className="flex flex-col justify-between text-meta text-[var(--color-text-muted)] tabular-nums py-0.5 shrink-0" style={{ height }}>
-          <span>{Math.round(max)}</span>
-          <span>{Math.round(min)}</span>
-        </div>
-      )}
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }} preserveAspectRatio="none">
-        <polyline
-          points={points.join(' ')}
-          fill="none"
-          stroke={color}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        {/* Fill area under the line */}
-        <polygon
-          points={`0,${height} ${points.join(' ')} ${width},${height}`}
-          fill={color}
-          opacity="0.1"
-        />
-        {/* Data points with hover tooltip (date + score). Non-scaling radius via
-            vector-effect so points stay round despite preserveAspectRatio=none. */}
-        {coords.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={2.5} fill={color} vectorEffect="non-scaling-stroke" style={{ transformBox: 'fill-box' }}>
-            <title>{p.d ? `${p.d}: ${Math.round(p.v)}` : `${Math.round(p.v)}`}</title>
-          </circle>
-        ))}
-      </svg>
     </div>
   );
 }

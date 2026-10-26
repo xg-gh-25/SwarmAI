@@ -3,7 +3,7 @@
 Covers the four pure helpers extracted from `generate_html_report`:
   - _classify_failure(note)          — case-broken vs agent-regressed triage (C044)
   - _comparable_full_runs(history)   — trend-line comparability filter (Gate-1 fix)
-  - _dim_snapshot_key(dim_id)        — DIMENSIONS id -> snapshot dimensions{} key map
+  - DIMENSIONS                       — the five dimensions (core/eval_release.FIVE_DIMENSIONS)
   - _report_populations(golden, run) — single-source count populations (golden/executed/pending)
 
 Plus a render-from-snapshot smoke test that regenerates the HTML from an EXISTING
@@ -24,7 +24,6 @@ from scripts.eval_runner import (
     _classify_failure,
     _comparable_full_runs,
     _compute_delta,
-    _dim_snapshot_key,
     _report_populations,
     generate_html_report,
     load_merged_golden_set,
@@ -151,24 +150,48 @@ def test_comparable_full_runs_empty_history():
     assert kept == [] and excluded == 0
 
 
-# ─── _dim_snapshot_key (taxonomy map) ────────────────────────────────────────
-def test_dim_snapshot_key_all_six_resolve_against_real_snapshot(snapshot):
-    snap_keys = set(snapshot["dimensions"].keys())
-    assert len(snap_keys) == 6
-    for dim in DIMENSIONS:
-        key = _dim_snapshot_key(dim["id"])
-        assert key in snap_keys, f"DIMENSIONS id {dim['id']!r} -> {key!r} not in snapshot dims {snap_keys}"
+# ─── the five dimensions ─────────────────────────────────────────────────────
+def test_report_dimensions_are_the_five():
+    from core.eval_release import FIVE_DIMENSIONS
+
+    assert [d["id"] for d in DIMENSIONS] == list(FIVE_DIMENSIONS)
 
 
-def test_dim_snapshot_key_covers_the_three_that_differ():
-    # The 3 that do NOT collide by string must be mapped explicitly.
-    assert _dim_snapshot_key("factual") == "factual_accuracy"
-    assert _dim_snapshot_key("judgment") == "judgment_quality"
-    assert _dim_snapshot_key("utility") == "context_utility"
-    # The 3 that do collide map to themselves.
-    assert _dim_snapshot_key("capability") == "capability"
-    assert _dim_snapshot_key("compliance") == "compliance"
-    assert _dim_snapshot_key("recovery") == "recovery"
+def _run(status, release=True):
+    from core.eval_release import decide_release, summarize_dimensions
+
+    case = {"id": "P1", "category": "recall", "dimension": "cognition", "tier": "stable", "gating": "gate",
+            "_origin": "product", "evaluators": ["canary_pass"], "eval_method": "programmatic",
+            "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}
+    from scripts.golden_case_validator import compute_case_stamp
+    case["validated_by_4gate"] = compute_case_stamp(case)
+    res = [{"id": "P1", "status": status, "eval_method": "programmatic", "notes": ""}]
+    run = {"run_id": "r1", "triggered_by": "canary", "triggered_at": "2026-10-26T00:00:00+00:00",
+           "total_cases": 1, "scored_count": 1, "cases_passed": int(status == "passed"),
+           "cases_failed": int(status == "failed"), "cases_skipped": 0, "cases_error": 0,
+           "duration_seconds": 1, "cases": res}
+    if release:
+        run["release"] = decide_release([case], res)
+        run["dimension_summary"] = summarize_dimensions([case], res)
+    return run, {"cases": [case]}
+
+
+def test_the_report_headline_is_the_release_verdict_not_a_score(tmp_path):
+    run, golden = _run("failed")
+    html = Path(generate_html_report(run, golden, tmp_path / "a")).read_text()
+    assert "verdict-blocked" in html and "不放行" in html
+    assert "分维过线" in html and "分母核对" in html          # the four checks are listed
+    assert 'class="score-ring verdict-blocked"' in html
+    import re
+    ring = re.search(r'class="score-ring[^"]*">([^<]*)<', html).group(1)
+    assert "%" not in ring
+    assert "Five dimensions by tier" in html
+
+
+def test_a_record_without_a_release_block_reads_as_legacy(tmp_path):
+    run, golden = _run("passed", release=False)
+    html = Path(generate_html_report(run, golden, tmp_path / "b")).read_text()
+    assert "旧记录" in html
 
 
 # ─── _report_populations (single-source counts) ──────────────────────────────
@@ -205,23 +228,21 @@ def test_generate_report_from_snapshot_has_new_sections(snapshot, golden, tmp_pa
     assert ("matrix" in html.lower()) or ("eval_method" in html.lower()) or ("分类" in html)
     # AC8: renders without crashing, produces a real file
     assert Path(out).exists() and len(html) > 1000
-    # AC7 wiring: per-dimension trend section is actually rendered (not just the
-    # map defined-but-unused) — proves _dim_snapshot_key feeds the render path.
-    assert "各维度趋势" in html or "Per-dimension trend" in html
-    assert "mini-spark" in html
+    # the five-dimension section renders for a record written before it existed
+    assert "Five dimensions by tier" in html
 
 
 def test_the_report_opens_with_the_follow_up_list(tmp_path):
     """The first section is build_follow_ups' list (design eval-as-product §3.4)."""
     from scripts.golden_case_validator import compute_case_stamp
 
-    case = {"id": "P1", "category": "recall", "dimension": "capability", "tier": "stable",
+    case = {"id": "P1", "category": "recall", "dimension": "cognition", "tier": "stable", "gating": "gate",
             "_origin": "product", "evaluators": ["canary_pass"], "eval_method": "programmatic",
             "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}
     case["validated_by_4gate"] = compute_case_stamp(case)
     golden = {"cases": [case]}
     run = {"run_id": "r1", "triggered_by": "canary", "triggered_at": "2026-10-26T00:00:00+00:00",
-           "overall_score": 0.0, "dimensions": {}, "total_cases": 1, "cases_passed": 0,
+           "total_cases": 1, "cases_passed": 0,
            "cases_failed": 1, "cases_skipped": 0, "cases_error": 0, "scored_count": 1,
            "duration_seconds": 1, "bvt": {"total": 1, "green": False},
            "cases": [{"id": "P1", "status": "failed", "eval_method": "programmatic",
@@ -256,7 +277,7 @@ def test_the_report_says_all_passed_only_when_nothing_failed(tmp_path):
 
     def render(status, sub):
         run = {"run_id": "r1", "triggered_by": "canary", "triggered_at": "2026-10-26T00:00:00+00:00",
-               "overall_score": 0.0, "dimensions": {}, "total_cases": 1, "scored_count": 1,
+               "total_cases": 1, "scored_count": 1,
                "cases_passed": int(status == "passed"), "cases_failed": int(status == "failed"),
                "cases_skipped": 0, "cases_error": 0, "duration_seconds": 1,
                "cases": [{"id": "P1", "status": status, "eval_method": "programmatic", "notes": ""}]}

@@ -112,6 +112,9 @@ _GATE_CODE_PATHS = [
     "backend/scripts/scenario_runner.py",
     "backend/core/eval_service.py",
     "backend/core/golden_set_store.py",
+    # the release decision and the tier rules it reads (run_85e81059 security review)
+    "backend/core/eval_release.py",
+    "backend/scripts/golden_case_validator.py",
 ]
 
 # Fast-deterministic evaluators eligible for the BVT gate. Excludes runtime_health
@@ -238,9 +241,14 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
 
 def bvt_member(c: dict) -> bool:
     """True when a case counts in the BVT (compute_bvt, and the follow-ups that
-    report BVT failures): a gate-eligible evaluator, not llm, a gating tier, and a
-    current stamp."""
+    report BVT failures): its release tier is red or gate (core/eval_release.tier_of;
+    a watch case is shown, never gating), a gate-eligible evaluator, not llm, a
+    gating tier, and a current stamp."""
+    from core.eval_release import tier_of
     from scripts.golden_case_validator import compute_case_stamp
+
+    if tier_of(c) not in ("red", "gate"):
+        return False
 
     if c.get("eval_method") == "llm":
         return False
@@ -1834,42 +1842,12 @@ def evaluate_case(case: dict, root: Path, *,
 # ─── Score Computation ────────────────────────────────────────────────────────
 
 def compute_scores(cases: list, results: list[dict]) -> dict:
-    """Compute overall score and per-dimension scores."""
-    # Only count cases with definitive results (passed/failed).
-    # "skipped" = evaluator can't determine; "error" = misconfiguration;
-    # "timeout" = the check did not finish (often a loaded machine). None of them
-    # counts toward the pass/fail score; compute_bvt still treats error and
-    # timeout as red.
-    scored = [(c, r) for c, r in zip(cases, results)
-              if r["status"] not in ("skipped", "error", "timeout")]
-
-    if not scored:
-        return {"overall": 0.0, "dimensions": {}, "scored_count": 0, "skipped_count": len(results)}
-
-    passed = sum(1 for _, r in scored if r["status"] == "passed")
-    overall = round(passed / len(scored) * 100, 1) if scored else 0.0
-
-    # Per-dimension
-    dim_scores = {}
-    for case, result in scored:
-        dim = case.get("dimension", "unknown")
-        if dim not in dim_scores:
-            dim_scores[dim] = {"passed": 0, "total": 0}
-        dim_scores[dim]["total"] += 1
-        if result["status"] == "passed":
-            dim_scores[dim]["passed"] += 1
-
-    dimensions = {
-        dim: round(s["passed"] / s["total"] * 100, 1) if s["total"] > 0 else 0.0
-        for dim, s in dim_scores.items()
-    }
-
-    return {
-        "overall": overall,
-        "dimensions": dimensions,
-        "scored_count": len(scored),
-        "skipped_count": len(results) - len(scored),
-    }
+    """How many results are definite (passed / failed). There is no score: whether a
+    run can be released is core/eval_release.decide_release, by tier and dimension,
+    never a weighted percentage. skipped / error / timeout are not definite; the
+    release decision's denominator check lists the red and gate cases among them."""
+    scored = sum(1 for r in results if r["status"] not in ("skipped", "error", "timeout"))
+    return {"scored_count": scored, "skipped_count": len(results) - scored}
 
 
 # ─── Run Orchestration ────────────────────────────────────────────────────────
@@ -1946,6 +1924,8 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         result["eval_method"] = case.get("eval_method", "programmatic")
         results.append(result)
 
+    from core.eval_release import decide_release, summarize_dimensions
+
     scores = compute_scores(cases, results)
     now = datetime.now(timezone.utc)
 
@@ -1954,8 +1934,10 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         "triggered_by": trigger,
         "triggered_at": now.isoformat(),
         "status": "completed",
-        "overall_score": scores["overall"],
-        "dimensions": scores["dimensions"],
+        # The release decision (four checks in order) and the five-dimension
+        # summary per tier: core/eval_release. No weighted score is recorded.
+        "release": decide_release(cases, results),
+        "dimension_summary": summarize_dimensions(cases, results),
         "cases": [
             {
                 "id": r["id"],
@@ -2010,61 +1992,22 @@ def write_run(run_result: dict, root: Path) -> Path:
 
 # ─── HTML Report ─────────────────────────────────────────────────────────────
 
-# The 6 cognitive dimensions that organize the report.
-# Each maps to categories in golden_set.yaml and answers a human question.
+# The five dimensions (core/eval_release.FIVE_DIMENSIONS), each one question. A case
+# belongs to the dimension its own `dimension` field names.
 DIMENSIONS = [
-    {
-        "id": "factual",
-        "question": "我记得的东西还对吗？",
-        "subtitle": "MEMORY claims vs code reality",
-        "when": "Every session (grep, <0.1s)",
-        "purpose": "Detect memory-code drift — catch when MEMORY.md says X but code says Y",
-        "categories": ["recall"],
-        "eval_method": "programmatic",
-    },
-    {
-        "id": "capability",
-        "question": "我的器官还活着吗？",
-        "subtitle": "Subsystem imports, DDD engine, pipeline",
-        "when": "Daily (python import canary, ~14s)",
-        "purpose": "Catch broken dependencies before they surface as user-facing errors",
-        "categories": ["loop_active", "code_aware", "cultivation", "memory"],
-    },
-    {
-        "id": "compliance",
-        "question": "我的规则还在生效吗？",
-        "subtitle": "STEERING/AGENT rule compliance",
-        "when": "Monthly (LLM judge, ~$0.05)",
-        "purpose": "Detect rule drift — rules that stop firing due to attention decay",
-        "categories": ["compliance", "quality", "safety"],
-        "eval_method": "llm",
-    },
-    {
-        "id": "judgment",
-        "question": "同一个问题我会给同样答案吗？",
-        "subtitle": "Judgment consistency on canonical decisions",
-        "when": "After SOUL/AGENT edit + quarterly (LLM judge)",
-        "purpose": "Catch behavioral inversions — same question, different answer",
-        "categories": ["decision", "refusal"],
-        "eval_method": "llm",
-    },
-    {
-        "id": "utility",
-        "question": "知识在帮我做事吗？",
-        "subtitle": "Knowledge retrieval, DDD consultation, proactive action",
-        "when": "Monthly (LLM judge) + session (file checks)",
-        "purpose": "Verify the learning loop is spinning — knowledge grows and gets used",
-        "categories": ["knowledge", "ddd_informed", "action"],
-    },
-    {
-        "id": "recovery",
-        "question": "崩溃/中断后我能正确恢复吗？",
-        "subtitle": "Self-healing, resume, crash-to-cold recovery paths",
-        "when": "Biweekly (runtime_health fault-injection harness)",
-        "purpose": "Verify recovery paths execute — a passed recovery case must score into "
-                   "its own dimension, not vanish (else it inflates confidence without moving health)",
-        "categories": ["runtime_health", "recovery"],
-    },
+    {"id": "cognition", "question": "它真的懂你的工作吗？", "subtitle": "Cognition — memory, recall, project docs, knowledge",
+     "when": "Quick check daily; offline cases every two weeks",
+     "purpose": "Catch the agent losing or misusing what it knows about your work"},
+    {"id": "quality", "question": "对不对、有没有交付？", "subtitle": "Quality — correct, complete, not agreeing with a wrong premise",
+     "when": "Offline cases every two weeks",
+     "purpose": "Catch answers that are wrong, unfounded, or not what was asked"},
+    {"id": "responsibility", "question": "守不守边界和规矩？", "subtitle": "Responsibility — privacy, irreversible actions, isolation, your rules",
+     "when": "Quick check daily; offline cases every two weeks",
+     "purpose": "Catch the agent crossing a boundary or ignoring how you asked it to work"},
+    {"id": "cost", "question": "每轮花多少？", "subtitle": "Cost — no golden case; read from usage records online",
+     "when": "Online scoring", "purpose": "Watch spend per turn"},
+    {"id": "performance", "question": "要等多久？", "subtitle": "Performance — no golden case; read from turn timings online",
+     "when": "Online scoring", "purpose": "Watch time per turn"},
 ]
 
 
@@ -2082,18 +2025,6 @@ def _dim_color(passed: int, total: int) -> str:
 
 
 # ─── Report classification helpers (run_0e29db9a) ──────────────────────────────
-# DIMENSIONS[].id differs from the per-run snapshot's dimensions{} keys and from
-# compute_scores' output keys. Only capability/compliance/recovery collide by
-# string; factual/judgment/utility do NOT. An explicit map is REQUIRED — a
-# key-equality join silently drops 3 of 6 dimensions (Gate-1 trap c).
-_DIM_TO_SNAPSHOT_KEY = {
-    "factual": "factual_accuracy",
-    "capability": "capability",
-    "compliance": "compliance",
-    "judgment": "judgment_quality",
-    "utility": "context_utility",
-    "recovery": "recovery",
-}
 
 # Judge-note signatures that mean "the case is broken" (references a rule/memory
 # entry that is ABSENT from the loaded context or points at the WRONG entry) —
@@ -2155,13 +2086,6 @@ def _classify_failure(note) -> str:
     if _re.search(_CITE_IS_ABOUT_NOT, note):
         return "case-broken"
     return "regressed"
-
-
-def _dim_snapshot_key(dim_id: str) -> str:
-    """Map a DIMENSIONS[].id to its key in a run/snapshot dimensions{} map.
-    Falls back to the id itself (identity) for any unmapped id — total, never raises.
-    """
-    return _DIM_TO_SNAPSHOT_KEY.get(dim_id, dim_id)
 
 
 def _mini_sparkline(values: list, color: str = "#6366f1", w: int = 90, h: int = 22) -> str:
@@ -2251,7 +2175,9 @@ def _load_history(root: Path) -> list[dict]:
     for f in sorted(hist_dir.glob("*.json")):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            if "overall_score" in data:
+            # a run record (with or without the pre-release-decision overall_score);
+            # other JSON in the folder (state files) is not
+            if isinstance(data, dict) and "cases" in data and "run_id" in data:
                 runs.append(data)
         except (json.JSONDecodeError, OSError):
             pass
@@ -2357,11 +2283,12 @@ def _render_follow_ups(items: list) -> str:
 
 
 def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path:
-    """Generate purpose-driven HTML report organized by 6 cognitive dimensions.
+    """Generate the HTML report: the release verdict and its four checks first,
+    then the five dimensions by tier (core/eval_release).
 
     Enhancements over basic report:
     - Delta section: what changed since last run
-    - Trend: streak count + history sparkline
+    - Trend: streak count; per-dimension pass share of red-line and gate cases
     - Expandable case details per dimension
     - Staleness warning for LLM dimensions
     - First section: Suggested follow-up (core.eval_followups.build_follow_ups)
@@ -2407,7 +2334,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     # Build per-dimension stats
     dim_stats = []
     for dim in DIMENSIONS:
-        dim_cases = [c for c in cases if c.get("category") in dim["categories"]]
+        dim_cases = [c for c in cases if c.get("dimension") == dim["id"]]
         passed = 0
         failed = 0
         skipped = 0
@@ -2455,8 +2382,8 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             "all_cases": all_case_details,
         })
 
-    # Overall
-    overall = run_result["overall_score"]
+    # Release decision (core/eval_release): the headline instead of a score
+    release = run_result.get("release") or {}
     total_passed = run_result["cases_passed"]
     total_failed = run_result["cases_failed"]
     total_skipped = run_result["cases_skipped"]
@@ -2476,7 +2403,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     _method_of = {c.get("id"): c.get("eval_method", "?") for c in cases}
     # matrix[dim_id][method] = {"passed","total"} from the CURRENT run join.
     matrix = {dim["id"]: {m: {"passed": 0, "total": 0} for m in _METHOD_ORDER} for dim in DIMENSIONS}
-    _cat_to_dim = {cat: dim["id"] for dim in DIMENSIONS for cat in dim["categories"]}
+    _dim_ids = {dim["id"] for dim in DIMENSIONS}
     # "other" bucket catches an executed case with a missing/typo'd eval_method so
     # the two-track numbers reconcile with `executed` instead of silently dropping
     # it (LOW fix run_0e29db9a).
@@ -2494,7 +2421,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         executed_by_method[bucket]["total"] += 1
         if status == "passed":
             executed_by_method[bucket]["passed"] += 1
-        dim_id = _cat_to_dim.get(c.get("category"))
+        dim_id = c.get("dimension") if c.get("dimension") in _dim_ids else None
         if dim_id and method in matrix.get(dim_id, {}):
             matrix[dim_id][method]["total"] += 1
             if status == "passed":
@@ -2526,59 +2453,62 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
                 col = _dim_color(cell["passed"], cell["total"])
                 cells += f'<td class="mx-cell" style="color:{col}">{cell["passed"]}/{cell["total"]}</td>'
         _mrow += f'<tr><td class="mx-dim">{html_mod.escape(dim["question"])}</td>{cells}</tr>'
-    # Per-dimension trend: one sparkline per cognitive dimension from the
-    # COMPARABLE runs' aggregate dimensions{} map (history stores no per-case
-    # dims — only the 6 aggregate floats). Uses the EXPLICIT id→snapshot-key map
-    # (AC7) so factual/judgment/utility don't silently drop.
-    _trend_runs = comparable_history[-12:] + [run_result]
+    # Per-dimension rows: this run's counts per tier, and a trend of the gate cases'
+    # pass share over comparable runs that carry a dimension_summary (records written
+    # before the release decision have none and are left out, never guessed).
+    _trend_runs = [r for r in comparable_history[-12:] if isinstance(r.get("dimension_summary"), dict)] + [run_result]
+    _this_summary = run_result.get("dimension_summary") or {}
+
+    def _gate_share(run: dict, dim_id: str):
+        row = (run.get("dimension_summary") or {}).get(dim_id) or {}
+        g = [row.get(t) or {} for t in ("red", "gate")]
+        done = sum(x.get("passed", 0) + x.get("failed", 0) for x in g)
+        return round(100 * sum(x.get("passed", 0) for x in g) / done) if done else None
+
+    def _tier_cell(dim_id: str, tier: str) -> str:
+        row = ((_this_summary.get(dim_id) or {}).get(tier) or {})
+        n = row.get("passed", 0) + row.get("failed", 0) + row.get("not_run", 0)
+        if not n:
+            return "—"
+        extra = (f" · {row['not_run']} not run" if row.get("not_run") else "")
+        return f"{row.get('passed', 0)}/{n}{extra}"
+
     _dim_trend_rows = ""
     for dim in DIMENSIONS:
-        skey = _dim_snapshot_key(dim["id"])
-        series = [r.get("dimensions", {}).get(skey) for r in _trend_runs]
-        series = [v for v in series if isinstance(v, (int, float))]
+        series = [v for v in (_gate_share(r, dim["id"]) for r in _trend_runs) if v is not None]
         latest = series[-1] if series else None
-        # round (not int-floor) + clamp to [0,100] so 89.6 doesn't cliff-flip and
-        # an out-of-scale value can't break the colorer (LOW fix run_0e29db9a).
-        col = _dim_color(round(max(0.0, min(100.0, latest))), 100) if latest is not None else "#6b7280"
+        col = _dim_color(latest, 100) if latest is not None else "#6b7280"
         spark = _mini_sparkline(series, color=col)
-        latest_txt = f"{latest:.0f}" if latest is not None else "—"
         _dim_trend_rows += (f'<tr><td class="mx-dim">{html_mod.escape(dim["question"])}</td>'
-                            f'<td class="dt-spark">{spark}</td>'
-                            f'<td class="dt-latest" style="color:{col}">{latest_txt}</td></tr>')
+                            f'<td class="mx-cell">{_tier_cell(dim["id"], "red")}</td><td class="mx-cell">{_tier_cell(dim["id"], "gate")}</td>'
+                            f'<td class="mx-cell">{_tier_cell(dim["id"], "watch")}</td><td class="dt-spark">{spark}</td></tr>')
 
     matrix_html = f'''<div class="matrix-section">
         <h3>分类矩阵 — Classification: cognitive dimension × proof strength (eval_method)</h3>
         <p class="matrix-sub">每格 = 本次运行的 passed/total。空格 = 该类无 case 或未运行（如 behavior 层 pending）。</p>
         <table class="matrix"><thead><tr><th></th>{"".join(f"<th>{_METHOD_LABEL[m]}</th>" for m in _METHOD_ORDER)}</tr></thead>
         <tbody>{_mrow}</tbody></table>
-        <h3 style="margin-top:1.25rem;">各维度趋势 — Per-dimension trend (comparable runs)</h3>
-        <p class="matrix-sub">聚合分数走势，看哪个"器官"在退化。数据源 = 可比 full run 的 dimensions{{}} 聚合分。</p>
-        <table class="matrix"><thead><tr><th></th><th>Trend</th><th>Latest</th></tr></thead>
+        <h3 style="margin-top:1.25rem;">五个维度 · 按档位 — Five dimensions by tier</h3>
+        <p class="matrix-sub">每格 = 本次 通过/总数。红线、门禁决定能否放行；观测只看不拦。趋势 = 可比全量里红线和门禁项的通过比例，不做加权总分。</p>
+        <table class="matrix"><thead><tr><th></th><th>红线</th><th>门禁</th><th>观测</th><th>Trend</th></tr></thead>
         <tbody>{_dim_trend_rows}</tbody></table>
     </div>'''
 
-    # SVG sparkline from COMPARABLE full runs only (AC6 — never mix canary/partial)
-    sparkline_svg = ""
-    if len(comparable_history) >= 2:
-        scores = [h.get("overall_score", 0) for h in comparable_history[-12:]] + [overall]
-        max_score = max(scores) if scores else 100
-        min_score = min(scores) if scores else 0
-        score_range = max(max_score - min_score, 10)  # avoid division by zero
-        w, h = 200, 40
-        points = []
-        for i, s in enumerate(scores):
-            x = i * w / max(len(scores) - 1, 1)
-            y = h - ((s - min_score) / score_range) * h
-            points.append(f"{x:.1f},{y:.1f}")
-        polyline = " ".join(points)
-        color = _dim_color(total_passed, total_passed + total_failed) if total_passed + total_failed > 0 else "#6b7280"
-        sparkline_svg = f'''<div class="sparkline-container">
-            <svg viewBox="0 0 {w} {h}" class="sparkline-svg">
-                <polyline points="{polyline}" fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                <circle cx="{points[-1].split(',')[0]}" cy="{points[-1].split(',')[1]}" r="3" fill="{color}"/>
-            </svg>
-            <span class="sparkline-label">{len(scores)} runs</span>
-        </div>'''
+    # The release checks in order (core/eval_release): the headline's evidence.
+    _CHECK_LABEL = {"redline": "红线 · 一票否决", "dimensions": "分维过线 · 不做总分加权",
+                    "denominator": "分母核对 · 没跑的不能排除", "record": "口径留痕 · 这一版为什么放行"}
+    _checks_li = ""
+    for ck in release.get("checks") or []:
+        mark = "✅" if ck.get("passed") else "❌"
+        ids = ", ".join(str(x.get("id")) for x in (ck.get("cases") or ck.get("known_issues") or [])[:6])
+        extra = ""
+        if ck.get("id") == "denominator":
+            extra = f" — {ck.get('with_result', 0)}/{ck.get('selected', 0)} with a result"
+        elif ck.get("id") == "record":
+            extra = f" — {html_mod.escape(str(ck.get('reason', '')))}"
+        _checks_li += (f"<li>{mark} {_CHECK_LABEL.get(ck.get('id'), ck.get('id'))}{extra}"
+                       f"{(' · ' + html_mod.escape(ids)) if ids else ''}</li>")
+    sparkline_svg = f'<ol class="release-checks">{_checks_li}</ol>' if _checks_li else ""
 
     # ── Single-source populations (Gate-1 fix: never hardcode counts) ──
     # golden_size = cases the golden set defines; executed = cases this run ran;
@@ -2780,9 +2710,13 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 .header {{ text-align: center; margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border); }}
 .header h1 {{ font-size: 1.6rem; margin-bottom: 0.25rem; }}
 .header .subtitle {{ color: var(--muted); font-size: 0.9rem; }}
-.score-ring {{ display: inline-flex; align-items: center; justify-content: center; width: 90px; height: 90px; border-radius: 50%;
-    border: 5px solid {_dim_color(total_passed, total_passed + total_failed) if total_passed + total_failed > 0 else '#6b7280'};
-    font-size: 1.5rem; font-weight: 700; margin: 1rem 0; }}
+.score-ring {{ display: inline-flex; align-items: center; justify-content: center; padding: 0.5rem 1.4rem; border-radius: 999px;
+    border: 3px solid #6b7280; font-size: 1.4rem; font-weight: 700; margin: 1rem 0; }}
+.verdict-release {{ border-color: #22c55e; color: #22c55e; }}
+.verdict-blocked {{ border-color: #ef4444; color: #ef4444; }}
+.verdict-incomplete {{ border-color: #f59e0b; color: #f59e0b; }}
+.release-checks {{ text-align: left; display: table; margin: 0.75rem auto; font-size: 0.85rem; }}
+.release-checks li {{ margin: 0.2rem 0; }}
 .meta-row {{ display: flex; gap: 1.5rem; justify-content: center; flex-wrap: wrap; color: var(--muted); font-size: 0.82rem; margin-top: 0.5rem; }}
 .streak {{ background: var(--card); display: inline-block; padding: 0.3rem 0.8rem; border-radius: 20px; font-size: 0.8rem; margin-top: 0.75rem; border: 1px solid var(--border); }}
 .streak-good {{ border-color: var(--green); color: var(--green); }}
@@ -2893,8 +2827,9 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
     <div class="header">
         <h1>OS Eval — "我还是我吗？还好吗？"</h1>
         <p class="subtitle">SwarmAI Proprioception System — Continuous Self-Evaluation</p>
-        <div class="score-ring">{overall:.0f}%{' ⚠️' if total_error else ''}</div>
-        {f'<div class="error-banner" style="background:#ef4444;color:#fff;padding:8px 12px;border-radius:6px;margin:8px 0;font-weight:600;">🔴 {total_error} case(s) ERRORED — judge infra failed. This {overall:.0f}% EXCLUDES them and is NOT a clean pass.</div>' if total_error else ''}
+        <div class="score-ring verdict-{html_mod.escape(str(release.get("verdict", "legacy")))}">{ {"release": "可以放行", "blocked": "不放行", "incomplete": "结论不完整"}.get(release.get("verdict"), "旧记录") }</div>
+        <p class="subtitle">{html_mod.escape(str(release.get("reason", "")))}</p>
+        {f'<div class="error-banner" style="background:#ef4444;color:#fff;padding:8px 12px;border-radius:6px;margin:8px 0;font-weight:600;">🔴 {total_error} case(s) ERRORED — judge infra failed; they count as not run.</div>' if total_error else ''}
         <div class="meta-row">
             <span>Trigger: <strong>{html_mod.escape(trigger)}</strong></span>
             <span>Passed: <strong>{total_passed}</strong></span>
@@ -2983,9 +2918,10 @@ def cmd_run(args):
 
     print(f"\n{'='*60}")
     _n_err = run_result.get('cases_error', 0)
-    print(f"  OS Health Score: {run_result['overall_score']}%" + (f"  🔴 ({_n_err} ERRORED — judge infra failed, score excludes them)" if _n_err else ""))
+    _rel = run_result.get("release") or {}
+    print(f"  Release: {_rel.get('verdict', '?')} — {_rel.get('reason', '')}")
     print(f"  Passed: {run_result['cases_passed']} | Failed: {run_result['cases_failed']} | Errored: {_n_err} | Skipped: {run_result['cases_skipped']}")
-    print(f"  Dimensions: {json.dumps(run_result['dimensions'], indent=None)}")
+    print(f"  Dimensions: {json.dumps(run_result.get('dimension_summary', {}), indent=None)}")
     print(f"  Duration: {run_result['duration_seconds']}s")
     print(f"  JSON:  {out_path}")
     if html_path:

@@ -1,4 +1,5 @@
-"""Tests for the scheduled eval drift-alert handler (run_5edf2cc0 C6, gap G7)."""
+"""Tests for the scheduled eval handler: it alerts on the release verdict
+(core/eval_release) and on judge-infra coverage collapse, never on a score."""
 import sys
 from pathlib import Path
 
@@ -6,7 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest  # noqa: E402
 
-from jobs.handlers.eval_scheduled import run_eval_scheduled, _DRIFT_TOLERANCE  # noqa: E402
+from jobs.handlers.eval_scheduled import run_eval_scheduled, summary_line  # noqa: E402
+from core.eval_release import decide_release  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -22,8 +24,24 @@ def _isolate_alert_state(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_BIWEEKLY_STATE", tmp_path / ".eval-biweekly-last-run.json")
 
 
-def _runner(this, baseline=None):
-    return lambda root: {"this": this, "baseline": baseline}
+def _runner(this):
+    return lambda root: {"this": this}
+
+
+from scripts.golden_case_validator import compute_case_stamp  # noqa: E402
+
+_GATE = {"id": "G", "gating": "gate", "dimension": "cognition", "eval_method": "programmatic",
+         "tier": "stable", "evaluators": ["canary_pass"]}
+_GATE["validated_by_4gate"] = compute_case_stamp(_GATE)
+_WATCH = {"id": "W", "gating": "watch", "dimension": "quality", "eval_method": "behavior"}
+
+
+def _release(g="passed", w="passed"):
+    res = [{"id": i, "status": s} for i, s in (("G", g), ("W", w)) if s is not None]
+    return decide_release([_GATE, _WATCH], res)
+
+
+OK = _release()
 
 
 class _Spy:
@@ -37,46 +55,51 @@ class _Spy:
 
 def test_clean_run_no_alert(tmp_path):
     spy = _Spy()
-    r = run_eval_scheduled(
-        runner=_runner({"overall_score": 98, "bvt": {"green": True, "total": 55, "passed": 54}},
-                       {"overall_score": 97}),
-        notifier=spy, root=tmp_path)
-    assert r["status"] == "healthy"
-    assert spy.calls == []  # green + no drift → silent
+    r = run_eval_scheduled(runner=_runner({"release": OK}), notifier=spy, root=tmp_path)
+    assert r["status"] == "healthy" and r["release"] == "release"
+    assert spy.calls == []
 
 
-def test_bvt_red_alerts(tmp_path):
+def test_blocked_release_alerts_naming_the_check(tmp_path):
     spy = _Spy()
-    r = run_eval_scheduled(
-        runner=_runner({"overall_score": 98,
-                        "bvt": {"green": False, "total": 55, "passed": 53, "failed": 2, "error": 0}},
-                       {"overall_score": 98}),
-        notifier=spy, root=tmp_path)
+    r = run_eval_scheduled(runner=_runner({"release": _release(g="failed")}),
+                           notifier=spy, root=tmp_path)
     assert r["status"] == "regression"
-    assert any("BVT RED" in r2 for r2 in r["reasons"])
+    assert any("blocked at check dimensions" in x and "G" in x for x in r["reasons"])
     assert len(spy.calls) == 1 and spy.calls[0]["channels"] == ["slack"]
 
 
-def test_score_drift_alerts(tmp_path):
+def test_incomplete_release_alerts(tmp_path):
     spy = _Spy()
-    r = run_eval_scheduled(
-        runner=_runner({"overall_score": 80, "bvt": {"green": True, "total": 55, "passed": 55}},
-                       {"overall_score": 95}),  # 15-pt drop > tolerance
-        notifier=spy, root=tmp_path)
+    r = run_eval_scheduled(runner=_runner({"release": _release(g="timeout")}),
+                           notifier=spy, root=tmp_path)
     assert r["status"] == "regression"
-    assert any("drift" in r2 for r2 in r["reasons"])
-    assert len(spy.calls) == 1
+    assert any("incomplete at check denominator" in x for x in r["reasons"])
 
 
-def test_drift_within_tolerance_no_alert(tmp_path):
+def test_a_watch_failure_does_not_alert(tmp_path):
+    """Offline cases are watch tier: a failure is a known issue, not an alert."""
     spy = _Spy()
-    r = run_eval_scheduled(
-        runner=_runner({"overall_score": 95 - _DRIFT_TOLERANCE + 0.1,
-                        "bvt": {"green": True, "total": 55, "passed": 55}},
-                       {"overall_score": 95}),
-        notifier=spy, root=tmp_path)
+    r = run_eval_scheduled(runner=_runner({"release": _release(w="failed")}),
+                           notifier=spy, root=tmp_path)
+    assert r["status"] == "healthy" and spy.calls == []
+
+
+def test_no_score_comparison_between_runs(tmp_path):
+    """A run record that still carries a score is not compared against anything:
+    with a releasable verdict it is healthy whatever the number says."""
+    spy = _Spy()
+    r = run_eval_scheduled(runner=_runner({"release": OK, "overall_score": 10}),
+                           notifier=spy, root=tmp_path)
     assert r["status"] == "healthy"
-    assert spy.calls == []
+    assert not any("drift" in x or "score" in x for x in r["reasons"])
+    assert "overall_score" not in r and "baseline_score" not in r
+
+
+def test_a_record_without_a_release_block_alerts(tmp_path):
+    r = run_eval_scheduled(runner=_runner({"overall_score": 99}), notifier=_Spy(), root=tmp_path)
+    assert r["status"] == "regression"
+    assert any("release decision missing" in x for x in r["reasons"])
 
 
 def test_dedup_no_repeat_alert(tmp_path, monkeypatch):
@@ -84,23 +107,26 @@ def test_dedup_no_repeat_alert(tmp_path, monkeypatch):
     import jobs.handlers.eval_scheduled as mod
     monkeypatch.setattr(mod, "_ALERT_STATE", tmp_path / ".alert.json")
     spy = _Spy()
-    red = _runner({"overall_score": 98,
-                   "bvt": {"green": False, "total": 55, "passed": 53, "failed": 2, "error": 0}},
-                  {"overall_score": 98})
+    red = _runner({"release": _release(g="failed")})
     run_eval_scheduled(runner=red, notifier=spy, root=tmp_path)
     run_eval_scheduled(runner=red, notifier=spy, root=tmp_path)
     assert len(spy.calls) == 1  # second run deduped
 
 
-def test_no_baseline_no_drift_alert(tmp_path):
-    """First-ever run (no baseline) must not false-alert on drift."""
+def test_recovery_message_carries_no_score(tmp_path, monkeypatch):
+    import jobs.handlers.eval_scheduled as mod
+    monkeypatch.setattr(mod, "_ALERT_STATE", tmp_path / ".alert.json")
+    monkeypatch.setattr(mod, "_should_run_biweekly", lambda last, now: True)
     spy = _Spy()
-    r = run_eval_scheduled(
-        runner=_runner({"overall_score": 50, "bvt": {"green": True, "total": 55, "passed": 55}},
-                       None),
-        notifier=spy, root=tmp_path)
-    assert r["status"] == "healthy"
-    assert spy.calls == []
+    run_eval_scheduled(runner=_runner({"release": _release(g="failed")}), notifier=spy, root=tmp_path)
+    run_eval_scheduled(runner=_runner({"release": OK}), notifier=spy, root=tmp_path)
+    assert len(spy.calls) == 2 and "recovered" in spy.calls[1]["message"]
+    assert "%" not in spy.calls[1]["message"] and "score" not in spy.calls[1]["message"]
+
+
+def test_summary_line_names_the_verdict_and_no_score():
+    line = summary_line({"status": "regression", "release": "blocked", "reasons": ["release blocked at check redline: R"]})
+    assert "release=blocked" in line and "redline" in line and "score" not in line
 
 
 def test_judge_infra_collapse_alerts(tmp_path):
@@ -112,9 +138,7 @@ def test_judge_infra_collapse_alerts(tmp_path):
     This test REDs without the coverage-collapse alert (it produces no reason)."""
     spy = _Spy()
     r = run_eval_scheduled(
-        runner=_runner({"overall_score": 100, "scored_count": 56, "cases_error": 90,
-                        "bvt": {"green": True, "total": 55, "passed": 55}},
-                       {"overall_score": 95}),  # score UP, not down → no drift
+        runner=_runner({"release": OK, "scored_count": 56, "cases_error": 90}),
         notifier=spy, root=tmp_path)
     assert r["status"] == "regression"
     assert any("coverage" in r2.lower() or "infra" in r2.lower() for r2 in r["reasons"])
@@ -126,27 +150,23 @@ def test_coverage_above_threshold_no_alert(tmp_path):
     1.4% error ratio, far below the 20% trigger → coverage healthy, silent."""
     spy = _Spy()
     r = run_eval_scheduled(
-        runner=_runner({"overall_score": 96, "scored_count": 144, "cases_error": 2,
-                        "bvt": {"green": True, "total": 55, "passed": 55}},
-                       {"overall_score": 95}),
+        runner=_runner({"release": OK, "scored_count": 144, "cases_error": 2}),
         notifier=spy, root=tmp_path)
     assert r["status"] == "healthy"
     assert spy.calls == []
 
 
-def test_coverage_reason_separate_from_drift(tmp_path):
-    """A night that is BOTH drifted AND low-coverage must produce TWO distinct
-    reasons (P6: infra-failure ≠ agent-quality-regression, never conflated)."""
+def test_coverage_reason_separate_from_the_release_reason(tmp_path):
+    """A night that is BOTH blocked AND low-coverage gives TWO distinct reasons
+    (infra failure is not agent quality), sent as one notification."""
     spy = _Spy()
     r = run_eval_scheduled(
-        runner=_runner({"overall_score": 70, "scored_count": 56, "cases_error": 90,
-                        "bvt": {"green": True, "total": 55, "passed": 55}},
-                       {"overall_score": 95}),  # 25-pt drop = drift AND low coverage
+        runner=_runner({"release": _release(g="failed"), "scored_count": 56, "cases_error": 90}),
         notifier=spy, root=tmp_path)
     assert r["status"] == "regression"
-    assert any("drift" in r2 for r2 in r["reasons"])
-    assert any("coverage" in r2.lower() or "infra" in r2.lower() for r2 in r["reasons"])
-    assert len(spy.calls) == 1  # combined into ONE notify (no double-send)
+    assert any("release blocked" in x for x in r["reasons"])
+    assert any("coverage" in x.lower() or "infra" in x.lower() for x in r["reasons"])
+    assert len(spy.calls) == 1
 
 
 def test_fully_skipped_run_no_crash(tmp_path):
@@ -154,9 +174,7 @@ def test_fully_skipped_run_no_crash(tmp_path):
     must NOT ZeroDivisionError — coverage guards intended>0 (eval_service parity)."""
     spy = _Spy()
     r = run_eval_scheduled(
-        runner=_runner({"overall_score": 0, "scored_count": 0, "cases_error": 0,
-                        "bvt": {"green": True, "total": 55, "passed": 55}},
-                       {"overall_score": 0}),
+        runner=_runner({"release": OK, "scored_count": 0, "cases_error": 0}),
         notifier=spy, root=tmp_path)
     assert r["status"] == "healthy"  # no division crash, no false coverage alarm
 
@@ -251,7 +269,7 @@ class TestBiweeklyGuard:
 
         def _runner(root):
             called["ran"] = True
-            return {"this": {"overall_score": 99, "bvt": {"green": True}}, "baseline": None}
+            return {"this": {"release": OK}}
 
         r = run_eval_scheduled(runner=_runner, notifier=_Spy(), root=tmp_path)
         assert called["ran"] is False, "guard must skip the heavy runner within 14d"
@@ -267,14 +285,13 @@ class TestBehaviorRedSegregation:
     def _run_with_behavior_fail(self, tmp_path, spy):
         # run_result whose ONLY failure is a behavior-method case
         this = {
-            "overall_score": 96, "scored_count": 55, "cases_error": 0,
-            "bvt": {"green": True, "total": 55, "passed": 55},
+            "release": _release(w="failed"), "scored_count": 55, "cases_error": 0,
             "cases": [
                 {"id": "GS_NORM", "status": "passed", "eval_method": "programmatic"},
                 {"id": "GS_TRAJ", "status": "failed", "eval_method": "behavior"},
             ],
         }
-        return run_eval_scheduled(runner=_runner(this, {"overall_score": 96}),
+        return run_eval_scheduled(runner=_runner(this),
                                   notifier=spy, root=tmp_path)
 
     def test_behavior_only_failure_not_hard_regression(self, tmp_path):
@@ -294,27 +311,16 @@ class TestBehaviorRedSegregation:
             "behavior note must NOT enter the deterministic hard-alert reasons"
 
     def test_deterministic_failure_still_hard_alerts(self, tmp_path):
-        # a deterministic (programmatic/llm) failure still triggers the hard path.
-        # det score = 0/1 passed = 0% vs baseline 95% → drift fires.
-        this = {
-            "overall_score": 80, "scored_count": 1, "cases_error": 0,
-            "bvt": {"green": True, "total": 55, "passed": 55},
-            "cases": [{"id": "GS_NORM", "status": "failed", "eval_method": "programmatic"}],
-        }
-        spy = _Spy()
-        r = run_eval_scheduled(runner=_runner(this, {"overall_score": 95}),
-                               notifier=spy, root=tmp_path)
-        assert r["status"] == "regression"  # deterministic drift → hard alert intact
+        # a gate (deterministic) failure blocks the release → hard alert intact
+        this = {"release": _release(g="failed"), "scored_count": 1, "cases_error": 0,
+                "cases": [{"id": "G", "status": "failed", "eval_method": "programmatic"}]}
+        r = run_eval_scheduled(runner=_runner(this), notifier=_Spy(), root=tmp_path)
+        assert r["status"] == "regression"
 
-    def test_behavior_fail_does_not_trip_drift(self, tmp_path):
-        # Gate-2 HIGH fix: behavior failures must NOT drag the drift score. All
-        # deterministic cases pass (100%); only behavior fails. run-wide
-        # overall_score is dragged to 60 but the DETERMINISTIC score is 100 →
-        # NO drift alert (baseline 98).
+    def test_behavior_fail_does_not_block(self, tmp_path):
+        # behavior cases are watch tier: their failure stays a known issue
         this = {
-            "overall_score": 60,  # run-wide (behavior-dragged) — must NOT be used for drift
-            "scored_count": 4, "cases_error": 0,
-            "bvt": {"green": True, "total": 3, "passed": 3},
+            "release": _release(w="failed"), "scored_count": 4, "cases_error": 0,
             "cases": [
                 {"id": "P1", "status": "passed", "eval_method": "programmatic"},
                 {"id": "P2", "status": "passed", "eval_method": "llm"},
@@ -323,10 +329,9 @@ class TestBehaviorRedSegregation:
             ],
         }
         spy = _Spy()
-        r = run_eval_scheduled(runner=_runner(this, {"overall_score": 98}),
-                               notifier=spy, root=tmp_path)
-        assert r["status"] != "regression", "behavior-dragged score must not fire drift"
-        assert spy.calls == [], "no hard Slack alert from behavior non-determinism"
+        r = run_eval_scheduled(runner=_runner(this), notifier=spy, root=tmp_path)
+        assert r["status"] != "regression"
+        assert spy.calls == []
         assert "B1" in r["behavior_failed"]
 
     def test_behavior_errors_do_not_trip_coverage_collapse(self, tmp_path):
@@ -335,8 +340,7 @@ class TestBehaviorRedSegregation:
         # run-wide error ratio = 3/5 = 60% (>20% → would false-alarm); but
         # DETERMINISTIC error ratio = 0/2 = 0% → NO coverage alert.
         this = {
-            "overall_score": 96, "scored_count": 2, "cases_error": 3,
-            "bvt": {"green": True, "total": 2, "passed": 2},
+            "release": OK, "scored_count": 2, "cases_error": 3,
             "cases": [
                 {"id": "P1", "status": "passed", "eval_method": "programmatic"},
                 {"id": "P2", "status": "passed", "eval_method": "llm"},
@@ -346,7 +350,7 @@ class TestBehaviorRedSegregation:
             ],
         }
         spy = _Spy()
-        r = run_eval_scheduled(runner=_runner(this, {"overall_score": 96}),
+        r = run_eval_scheduled(runner=_runner(this),
                                notifier=spy, root=tmp_path)
         assert r["status"] != "regression", "behavior spawn-errors must not fire coverage collapse"
         assert not any("infra degraded" in x for x in r.get("reasons", []))
@@ -356,14 +360,13 @@ class TestBehaviorRedSegregation:
         # Guard the fix didn't over-correct: a DETERMINISTIC coverage collapse
         # (llm cases erroring = real Bedrock/creds failure) still fires.
         this = {
-            "overall_score": 100, "scored_count": 2, "cases_error": 8,
-            "bvt": {"green": True, "total": 2, "passed": 2},
+            "release": OK, "scored_count": 2, "cases_error": 8,
             "cases": [{"id": "P1", "status": "passed", "eval_method": "programmatic"}]
                      + [{"id": f"L{i}", "status": "error", "eval_method": "llm"} for i in range(8)]
                      + [{"id": "P2", "status": "passed", "eval_method": "programmatic"}],
         }
         spy = _Spy()
-        r = run_eval_scheduled(runner=_runner(this, {"overall_score": 100}),
+        r = run_eval_scheduled(runner=_runner(this),
                                notifier=spy, root=tmp_path)
         assert r["status"] == "regression"
         assert any("infra degraded" in x for x in r["reasons"]), "real deterministic collapse must alert"
@@ -378,7 +381,6 @@ def test_default_runner_writes_the_html_report(tmp_path, monkeypatch):
     result = {"run_id": "r", "cases": []}
     written = []
     monkeypatch.setattr(er, "load_merged_golden_set", lambda root: {"cases": []})
-    monkeypatch.setattr(er, "_load_history", lambda root: [])
     monkeypatch.setattr(er, "run_eval", lambda *a, **k: result)
     monkeypatch.setattr(er, "write_run", lambda r, root: None)
     monkeypatch.setattr(er, "generate_html_report", lambda r, gs, root: written.append(r))

@@ -19,7 +19,7 @@ def _hang(*a, **k):
 
 def _case(cid="C", **v):
     c = {"id": cid, "category": "recall", "dimension": "capability", "eval_method": "programmatic",
-         "evaluators": ["canary_pass"], "tier": "stable", "affected_by": [],
+         "evaluators": ["canary_pass"], "tier": "stable", "gating": "gate", "affected_by": [],
          "verification": {"command": "probe", "expected_contains": "OK", **v}}
     c["validated_by_4gate"] = compute_case_stamp(c)
     return c
@@ -38,7 +38,7 @@ def test_a_timeout_is_not_scored_but_keeps_the_bvt_and_a_red_line_red():
     a, b = _case("A"), dict(_case("B"), redline=True)
     b["validated_by_4gate"] = compute_case_stamp(b)
     results = [{"id": "A", "status": "passed"}, {"id": "B", "status": "timeout"}]
-    assert er.compute_scores([a, b], results)["overall"] == 100.0
+    assert er.compute_scores([a, b], results)["scored_count"] == 1   # the timeout is not definite
     bvt = er.compute_bvt([a, b], results)
     assert bvt["timeout"] == 1 and bvt["green"] is False
     assert er.compute_redline([a, b], results)["violated"] is True
@@ -50,12 +50,12 @@ def test_the_scheduled_alert_lists_timeouts_apart_from_judge_infra():
     cases = ([{"id": f"p{i}", "eval_method": "programmatic", "status": "passed"} for i in range(8)]
              + [{"id": "slow1", "eval_method": "programmatic", "status": "timeout"},
                 {"id": "slow2", "eval_method": "programmatic", "status": "timeout"}])
-    out = {"this": {"bvt": {"green": False, "passed": 8, "total": 10, "timeout": 2}, "cases": cases},
-           "baseline": {"overall_score": 100.0}}
+    out = {"this": {"bvt": {"green": False, "passed": 8, "total": 10, "timeout": 2}, "cases": cases,
+                    "release": {"verdict": "release", "reason": "", "checks": []}}}
     with mock.patch.object(es, "_should_run_biweekly", return_value=True), \
             mock.patch.object(es, "_write_biweekly_last_run"):
         got = es.run_eval_scheduled(dry_run=True, runner=lambda root: out, root=Path("."))
     assert "slow1" in got["timeout_note"]
     assert not any("timed out" in r for r in got["reasons"]), got["reasons"]   # not in the fingerprint
     assert not any("judge infra" in r for r in got["reasons"]), got["reasons"]
-    assert not any("drift" in r for r in got["reasons"]), got["reasons"]   # 8/8 scored passed
+    assert got["reasons"] == [], got["reasons"]

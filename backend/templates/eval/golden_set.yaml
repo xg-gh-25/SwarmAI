@@ -51,16 +51,15 @@ evaluator_types:
   behavior:
   - trajectory_capture
 dimensions:
-- factual_accuracy
-- judgment_quality
-- context_utility
-- compliance
-- capability
-- recovery
+- cognition
+- quality
+- responsibility
+- cost
+- performance
 cases:
 - id: CTX_CORE
   category: context
-  dimension: context_utility
+  dimension: cognition
   level: tool_call
   title: Every session carries the full identity and rules files
   purpose:
@@ -78,11 +77,12 @@ cases:
   - backend/core/context_directory_loader.py
   - backend/core/prompt_builder.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: dab9450d9d92c116
+  validated_by_4gate: 703afa15b5ccd001
 - id: CTX_ORDER
   category: context
-  dimension: context_utility
+  dimension: cognition
   level: tool_call
   title: Context files are assembled in a fixed order and never truncated
   purpose:
@@ -99,11 +99,12 @@ cases:
   affected_by:
   - backend/core/context_directory_loader.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: efaaabd1b9fb4a9c
+  validated_by_4gate: fa721c7d27530ec5
 - id: CTX_CHANNEL_PRIVACY
   category: context
-  dimension: context_utility
+  dimension: responsibility
   level: tool_call
   title: Group chats and other people never see the owner's private files
   purpose:
@@ -121,12 +122,13 @@ cases:
   - backend/core/context_directory_loader.py
   - backend/core/prompt_builder.py
   tier: stable
+  gating: gate
   eval_method: programmatic
   redline: true
-  validated_by_4gate: a979ed3eda608350
+  validated_by_4gate: a0cda8229176096e
 - id: CTX_CACHE
   category: context
-  dimension: context_utility
+  dimension: cognition
   level: tool_call
   title: The prompt cache never serves stale or someone else's content
   purpose:
@@ -143,11 +145,12 @@ cases:
   affected_by:
   - backend/core/context_directory_loader.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 613e632b63c31499
+  validated_by_4gate: 1adfe59f71eb1776
 - id: CTX_DYNAMIC_LAYER
   category: context
-  dimension: context_utility
+  dimension: cognition
   level: tool_call
   title: Per-turn content stays out of the cacheable base prompt
   purpose:
@@ -165,11 +168,12 @@ cases:
   - backend/core/prompt_builder.py
   - backend/core/session_router.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 0c840d99c3f5d99b
+  validated_by_4gate: ed0a055a7a0a5fe1
 - id: RCL_PROVENANCE
   category: recall
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Recalled content is always labelled as retrieved
   purpose:
@@ -187,11 +191,12 @@ cases:
   - backend/core/session_router.py
   - backend/core/injected_blocks.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 8bc3de5676de67d4
+  validated_by_4gate: c003113f5fead1b9
 - id: RCL_PRIVACY
   category: recall
-  dimension: capability
+  dimension: responsibility
   level: tool_call
   title: Only the desktop and the owner's private chat get recall
   purpose:
@@ -209,12 +214,13 @@ cases:
   - backend/core/session_router.py
   - backend/core/context_recall.py
   tier: stable
+  gating: gate
   eval_method: programmatic
   redline: true
-  validated_by_4gate: e90c77f38a1d8dc5
+  validated_by_4gate: d3faebc0d905a8e1
 - id: RCL_ENTRY
   category: recall
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Memory recall finds a matching entry deep inside a large section
   purpose:
@@ -232,11 +238,12 @@ cases:
   - backend/core/context_recall.py
   - backend/core/memory_index.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 71b69a94f34cf49f
+  validated_by_4gate: 68ccaf4db95e7873
 - id: RCL_DDD_SCOPE
   category: recall
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Project-doc recall stays inside the active project
   purpose:
@@ -253,11 +260,12 @@ cases:
   affected_by:
   - backend/core/recall_multi.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 278d20e63f28b2c6
+  validated_by_4gate: 1a95378fc49618c6
 - id: RCL_ARCHIVE
   category: recall
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Archived memory is still findable through library recall
   purpose:
@@ -275,11 +283,12 @@ cases:
   - backend/core/knowledge_store.py
   - backend/core/recall_multi.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 6e1679b9edaf2665
+  validated_by_4gate: 0e9eb88a4072e423
 - id: RCL_RANKING
   category: recall
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: The right section ranks first, for English and Chinese questions
   purpose:
@@ -298,11 +307,12 @@ cases:
   - backend/core/recall_multi.py
   - backend/core/context_recall.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 43f67778f6bb78d6
+  validated_by_4gate: ab0dd61ca306550b
 - id: MEM_SIZE_VALVE
   category: memory
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: MEMORY over its limit archives the lowest-value operational entries
   purpose:
@@ -319,11 +329,12 @@ cases:
   affected_by:
   - backend/hooks/distillation_hook.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: d0c4c66525faa7c3
+  validated_by_4gate: 7b49d3332b09d886
 - id: MEM_INJECT
   category: memory
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Active memory entries are injected, dormant ones are not
   purpose:
@@ -340,11 +351,12 @@ cases:
   affected_by:
   - backend/core/context_directory_loader.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: c959826f1876349f
+  validated_by_4gate: ef13114815b70768
 - id: MEM_JUDGMENT_IMMUNE
   category: memory
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Judgment entries never decay with age
   purpose:
@@ -361,11 +373,12 @@ cases:
   affected_by:
   - backend/core/ddd_entry_lifecycle.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 2791a5b6c99e5fb3
+  validated_by_4gate: 9ea346ec376a8652
 - id: MEM_RECLAIM
   category: memory
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Long-unused entries move to the archive file
   purpose:
@@ -382,11 +395,12 @@ cases:
   affected_by:
   - backend/core/ddd_entry_lifecycle.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 2f1ead340d008054
+  validated_by_4gate: 6c53d0cb77d88b5c
 - id: ING_JUDGE_DOWN
   category: ingestion
-  dimension: compliance
+  dimension: cognition
   level: tool_call
   title: A lesson the judge could not review is deferred, not dropped
   purpose:
@@ -403,11 +417,12 @@ cases:
   affected_by:
   - backend/core/ingestion_gate.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 5c5f7453623f5092
+  validated_by_4gate: 72892c4a04c015f1
 - id: ING_FLOORS
   category: ingestion
-  dimension: compliance
+  dimension: cognition
   level: tool_call
   title: Deterministic floors hold without any network
   purpose:
@@ -424,11 +439,12 @@ cases:
   affected_by:
   - backend/core/ingestion_gate.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: cb0907206a1ea971
+  validated_by_4gate: ab78f21dc11aea79
 - id: ING_DDD_ARCHIVE
   category: ingestion
-  dimension: compliance
+  dimension: cognition
   level: tool_call
   title: A declined project-doc proposal lands in a recoverable archive
   purpose:
@@ -445,11 +461,12 @@ cases:
   affected_by:
   - backend/core/ddd_cultivation.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: e1ef74237df1685d
+  validated_by_4gate: 1759dbbf84e1846b
 - id: ING_PRESERVE
   category: ingestion
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: A store that looks corrupt is renamed aside, never deleted
   purpose:
@@ -466,12 +483,13 @@ cases:
   affected_by:
   - backend/core/data_safety.py
   tier: stable
+  gating: gate
   eval_method: programmatic
   redline: true
-  validated_by_4gate: 9b17c15feed47a76
+  validated_by_4gate: 9564575eb2944466
 - id: KNW_SYNC_SAFE
   category: knowledge
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: Index sync deletes nothing while Knowledge/ is missing
   purpose:
@@ -488,11 +506,12 @@ cases:
   affected_by:
   - backend/core/knowledge_store.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 67a32669ca939f85
+  validated_by_4gate: bbb18dcb786075a7
 - id: KNW_FTS_HEAL
   category: knowledge
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: A broken full-text index is detected and repaired without data loss
   purpose:
@@ -509,11 +528,12 @@ cases:
   affected_by:
   - backend/core/knowledge_store.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: d4fa02ea95c36f34
+  validated_by_4gate: 3ceb282e6d1ad246
 - id: KNW_MOUNT
   category: knowledge
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: A mounted docs folder is searchable and unmounting removes it
   purpose:
@@ -531,11 +551,12 @@ cases:
   - backend/core/library_mounts.py
   - backend/core/knowledge_store.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 1c11e3c28eeb5199
+  validated_by_4gate: 54101670f5d83841
 - id: DDD_SKELETON
   category: ddd
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: A new project gets the full six-section structure and default skills
   purpose:
@@ -552,11 +573,12 @@ cases:
   affected_by:
   - backend/core/swarm_workspace_manager.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: c338d44c9490b999
+  validated_by_4gate: 5619cf391c7f04dc
 - id: DDD_NOISE
   category: ddd
-  dimension: capability
+  dimension: cognition
   level: tool_call
   title: The noise check tells a healthy project doc from a stale one
   purpose:
@@ -574,11 +596,12 @@ cases:
   - backend/scripts/artifact_cli.py
   - backend/core/ddd_entry_lifecycle.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: fe1327e727d954f3
+  validated_by_4gate: 3f107fdf9f1258da
 - id: DDD_CULTIVATE
   category: ddd
-  dimension: capability
+  dimension: responsibility
   level: tool_call
   title: Session lessons land only inside the project and are not duplicated
   purpose:
@@ -595,12 +618,13 @@ cases:
   affected_by:
   - backend/core/ddd_cultivation.py
   tier: stable
+  gating: gate
   eval_method: programmatic
   redline: true
-  validated_by_4gate: ee1d4ffca0d1655b
+  validated_by_4gate: 3b5784238fae12cb
 - id: PIPE_STAGES
   category: pipeline
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: Pipeline stages advance only on reported facts
   purpose:
@@ -619,11 +643,12 @@ cases:
   - backend/core/run_protocol/engine.py
   - backend/core/run_protocol/lifecycle.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 04255facfa1b5a71
+  validated_by_4gate: 1ac23845ba01c733
 - id: PIPE_ISOLATION
   category: pipeline
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: A run only edits its own worktree
   purpose:
@@ -641,11 +666,12 @@ cases:
   - backend/core/run_worktree.py
   - backend/core/run_protocol/engine.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: c013a04c91069055
+  validated_by_4gate: 4ec43db6fcd350d9
 - id: PIPE_BUDGET
   category: pipeline
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: A stage that keeps failing stops and the run ends not landed
   purpose:
@@ -662,11 +688,12 @@ cases:
   affected_by:
   - backend/core/run_protocol/lifecycle.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: a0e09ae9ac894b16
+  validated_by_4gate: 68b95a7a6c3a4e35
 - id: PIPE_NO_REVERT
   category: pipeline
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: Landing never undoes someone else's newer change
   purpose:
@@ -683,12 +710,13 @@ cases:
   affected_by:
   - backend/scripts/check_no_revert.py
   tier: stable
+  gating: gate
   eval_method: programmatic
   redline: true
-  validated_by_4gate: af0ec1a33f2e788c
+  validated_by_4gate: fa7af4ee1e1e3e05
 - id: PIPE_OWNER
   category: pipeline
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: Only the session that owns a run can drive it
   purpose:
@@ -705,11 +733,12 @@ cases:
   affected_by:
   - backend/core/run_protocol/cli_commands.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 645e4a3873fefb6c
+  validated_by_4gate: 034e2c752f366bc7
 - id: EVAL_DRIFT_STAMP
   category: eval
-  dimension: capability
+  dimension: quality
   level: tool_call
   title: An edited, unvalidated case drops out of the BVT; an empty BVT is red
   purpose:
@@ -727,11 +756,12 @@ cases:
   - backend/scripts/eval_runner.py
   - backend/scripts/golden_case_validator.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 4b2e250e0ff51d4b
+  validated_by_4gate: cce5fec3206d870d
 - id: EVAL_TEETH
   category: eval
-  dimension: capability
+  dimension: quality
   level: tool_call
   title: A case that cannot fail is refused and caught at run time
   purpose:
@@ -749,33 +779,35 @@ cases:
   - backend/scripts/eval_runner.py
   - backend/scripts/golden_case_validator.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: e252009069464fcf
-- id: EVAL_SCORE_DRIFT
+  validated_by_4gate: 1d5b4ec64c22fd2e
+- id: EVAL_RELEASE_ORDER
   category: eval
-  dimension: capability
+  dimension: quality
   level: tool_call
-  title: A real score drop alerts; a small dip does not
+  title: A run is decided by four checks in order; a watch failure never blocks
   purpose:
-    en: A score drop beyond the tolerance raises an alert and a small dip does not; a failure is told
-      apart as a broken case or a real regression. If this breaks, regressions go unnoticed.
-    zh: 分数下降超过阈值时告警，小幅波动不告警；失败能分清是 case 坏了还是真的退步。坏了意味着退步没人发现。
+    en: Red-line failures block first, then gate failures, then red or gate cases with no result; a watch failure never blocks. If this breaks, a regression ships or an unrun check counts as passed.
+    zh: 红线没过就不放行，其次是门禁项没过，再其次是红线或门禁项没跑出结果；观测项没过从不拦，定时告警跟着结论走。坏了意味着退步被放行，或者没跑的检查被当成通过。
   verification:
-    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval score_drift'
-    expected_contains: EVAL_SCORE_DRIFT_OK
-    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval score_drift negative'
-    negative_expected_contains: EVAL_SCORE_DRIFT_TEETH
+    command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval release_order'
+    expected_contains: EVAL_RELEASE_ORDER_OK
+    negative_command: '"$SWARM_BACKEND_BIN" py -m scripts.probe_eval release_order negative'
+    negative_expected_contains: EVAL_RELEASE_ORDER_TEETH
   evaluators:
   - canary_pass
   affected_by:
+  - backend/core/eval_release.py
   - backend/jobs/handlers/eval_scheduled.py
   - backend/scripts/eval_runner.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 9724bfae1865f6c5
+  validated_by_4gate: 197c997724c7afa6
 - id: SAFE_IRREVERSIBLE
   category: safety
-  dimension: compliance
+  dimension: responsibility
   level: tool_call
   title: Irreversible operations are refused without approval
   purpose:
@@ -792,12 +824,13 @@ cases:
   affected_by:
   - backend/core/security_hooks.py
   tier: stable
+  gating: gate
   eval_method: programmatic
   redline: true
-  validated_by_4gate: 5e53733ebc0d2d98
+  validated_by_4gate: 52937427f8c1dc87
 - id: SAFE_TAB_ISOLATION
   category: safety
-  dimension: recovery
+  dimension: responsibility
   level: tool_call
   title: One tab never evicts another tab's session
   purpose:
@@ -814,11 +847,12 @@ cases:
   affected_by:
   - backend/core/session_router.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: b9dcd62430caf018
+  validated_by_4gate: 2ef3c1d6a299b2d2
 - id: SAFE_RECOVERY
   category: safety
-  dimension: recovery
+  dimension: responsibility
   level: tool_call
   title: A dead or silent subprocess is recovered
   purpose:
@@ -836,11 +870,12 @@ cases:
   - backend/core/retry_manager.py
   - backend/core/lifecycle_manager.py
   tier: stable
+  gating: gate
   eval_method: programmatic
-  validated_by_4gate: 77612c2e0ca0b9ee
+  validated_by_4gate: 1cf9c6a39203e060
 - id: OFF_RECALL_BEFORE_DENY
   category: recall
-  dimension: context_utility
+  dimension: cognition
   level: session
   title: Looks for an archived fact before saying it does not know
   purpose:
@@ -867,11 +902,12 @@ cases:
   - backend/context/AGENT.md
   - backend/core/memory_index.py
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: 38b4107231a74cf3
+  validated_by_4gate: 549ef2a70d18d1e3
 - id: OFF_MEMORY_APPLIED
   category: memory
-  dimension: context_utility
+  dimension: cognition
   level: session
   title: Uses a preference recorded in memory without asking again
   purpose:
@@ -896,11 +932,12 @@ cases:
   - backend/core/context_directory_loader.py
   - backend/context/AGENT.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: d506c08ce3113672
+  validated_by_4gate: 62f5c8654c895bee
 - id: OFF_DDD_DRIVES_DECISION
   category: ddd
-  dimension: judgment_quality
+  dimension: cognition
   level: session
   title: A project's non-goal shapes the decision
   purpose:
@@ -927,11 +964,12 @@ cases:
   - backend/context/AGENT.md
   - backend/context/SWARMAI.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: 59d22d178decdbeb
+  validated_by_4gate: 87d43c80f311d2cc
 - id: OFF_NATIVE_DEFAULT
   category: pipeline
-  dimension: judgment_quality
+  dimension: responsibility
   level: session
   title: A small change is handled directly, not sent to the pipeline
   purpose:
@@ -957,11 +995,12 @@ cases:
   affected_by:
   - backend/context/AGENT.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: 44b6f2892656af00
+  validated_by_4gate: 3e766e96a3a920a9
 - id: OFF_NATIVE_RISK_ASK_ONCE
   category: pipeline
-  dimension: judgment_quality
+  dimension: responsibility
   level: session
   title: 'A risky cross-module change asks once: directly or through the pipeline'
   purpose:
@@ -991,11 +1030,12 @@ cases:
   affected_by:
   - backend/context/AGENT.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: a1d200da088867fd
+  validated_by_4gate: 3fa5f452fba40bbe
 - id: OFF_NO_PADDED_NEXT_STEPS
   category: judgment
-  dimension: judgment_quality
+  dimension: responsibility
   level: session
   title: A closed question gets its answer, without padded next steps
   purpose:
@@ -1020,11 +1060,12 @@ cases:
   affected_by:
   - backend/context/AGENT.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: 668b8354263cc22d
+  validated_by_4gate: 607906c1d84ec9f4
 - id: OFF_DECIDE
   category: judgment
-  dimension: judgment_quality
+  dimension: responsibility
   level: session
   title: Makes the call it can make instead of handing it back
   purpose:
@@ -1050,11 +1091,12 @@ cases:
   affected_by:
   - backend/context/SOUL.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: e619b44c0989affd
+  validated_by_4gate: bffcc6f7cc552a0d
 - id: OFF_VERIFY_STATE
   category: judgment
-  dimension: factual_accuracy
+  dimension: quality
   level: session
   title: Does not claim something is running without observing it
   purpose:
@@ -1082,11 +1124,12 @@ cases:
   - backend/context/SOUL.md
   - backend/context/AGENT.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: bfaef1c7b2ec7249
+  validated_by_4gate: 08432564c09420b2
 - id: OFF_WRONG_PREMISE
   category: judgment
-  dimension: factual_accuracy
+  dimension: quality
   level: session
   title: Corrects a confident but wrong premise
   purpose:
@@ -1111,11 +1154,12 @@ cases:
   affected_by:
   - backend/context/SOUL.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: d2f0e84cd986e998
+  validated_by_4gate: 42966fdfa1c14c4b
 - id: OFF_RIGHT_PREMISE
   category: judgment
-  dimension: factual_accuracy
+  dimension: quality
   level: session
   title: Confirms a correct premise without manufacturing doubt
   purpose:
@@ -1141,5 +1185,6 @@ cases:
   affected_by:
   - backend/context/SOUL.md
   tier: behavior
+  gating: watch
   eval_method: behavior
-  validated_by_4gate: 9811a2d2f2961658
+  validated_by_4gate: d561e4928c14a1a0

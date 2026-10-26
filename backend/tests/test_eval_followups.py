@@ -20,7 +20,7 @@ def _stamped(c):
     return c
 
 
-CASES = [_stamped({"id": "P1", "tier": "stable", "_origin": PRODUCT_ORIGIN, "evaluators": ["canary_pass"],
+CASES = [_stamped({"id": "P1", "tier": "stable", "gating": "gate", "_origin": PRODUCT_ORIGIN, "evaluators": ["canary_pass"],
                    "eval_method": "programmatic",
                    "purpose": {"en": "Recall finds memory", "zh": "能找到记忆"}}),
          {"id": "B1", "tier": "behavior", "_origin": PRODUCT_ORIGIN, "eval_method": "behavior",
@@ -180,12 +180,14 @@ def test_reports_are_marked_routine_only_for_scheduled_and_deploy(tmp_path, monk
 
 def test_rule1_only_bvt_members_and_private_ones_are_not_called_product():
     h = _clean_history()
-    h[0] = _run("canary", 0, {"P1": "failed", "D1": "failed", "M1": "failed"}, full=False)
-    cases = CASES + [_stamped({"id": "D1", "tier": "draft", "evaluators": ["canary_pass"]}),
-                     _stamped({"id": "M1", "tier": "active", "evaluators": ["canary_pass"],
-                               "title": "my own check"})]
+    h[0] = _run("canary", 0, {"P1": "failed", "D1": "failed", "M1": "failed", "W1": "failed"}, full=False)
+    cases = CASES + [_stamped({"id": "D1", "tier": "draft", "gating": "gate", "evaluators": ["canary_pass"]}),
+                     _stamped({"id": "M1", "tier": "active", "gating": "gate", "evaluators": ["canary_pass"],
+                               "title": "my own check"}),
+                     _stamped({"id": "W1", "tier": "active", "evaluators": ["canary_pass"]})]   # no gating: watch
     items = [i for i in build_follow_ups(h, cases, ONLINE, NOW) if i["rule"] == 1]
-    assert sorted(i["case_ids"][0] for i in items) == ["M1", "P1"]          # the draft is not in the BVT
+    # the draft and the watch case are not in the BVT
+    assert sorted(i["case_ids"][0] for i in items) == ["M1", "P1"]
     mine = next(i for i in items if i["case_ids"] == ["M1"])
     assert mine["what"]["en"].startswith("A quick check failed")
 

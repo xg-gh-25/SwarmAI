@@ -61,7 +61,7 @@ describe('EvalLines (Overview)', () => {
   it('shows each line with when it last ran, the next full run and the golden set size', () => {
     render(<EvalLines lines={{
       quick: { last_run: '2026-10-26T09:00:00+00:00', passed: 33, total: 35 },
-      full: { last_run: null, score: null, next_run: '2026-11-09T10:30:00+00:00' },
+      full: { last_run: null, release: null, next_run: '2026-11-09T10:30:00+00:00' },
       online: { last_run: '2026-10-24T08:00:00+00:00', sessions_checked: 12, next_run: '2026-10-31T08:00:00+00:00' },
       golden_set: { product: 43, private: 56, total: 99, product_cap: 50, total_cap: 80 },
     }} />);

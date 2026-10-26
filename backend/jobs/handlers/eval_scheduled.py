@@ -1,16 +1,20 @@
-"""eval_scheduled — scheduled full eval run + drift-vs-baseline alert (run_5edf2cc0 C6, gap G7; renamed run_95d9acbc).
+"""eval_scheduled — scheduled full eval run + release-verdict alert.
 
 Runs the FULL golden set (programmatic + LLM judge + behavior-tier via
-include_behavior=True — Bedrock cost is fine on this cadence, never gates) and
-compares the overall score against the previous run.
+include_behavior=True — Bedrock cost is fine on this cadence, never gates) and acts
+on the run's release decision (core/eval_release.decide_release): four checks in
+order, no weighted score.
 Cron fires every Monday 18:30 ICT (10:30 UTC), but a 14-day gate (_should_run_biweekly, own
 timestamp file — NOT JobState.last_run, which a skip would reset → deadlock) makes
 a REAL run happen only once per 2 WEEKS (run_6980cb35). Behavior-tier cases spawn
 real headless agents (slow/costly); their failures are segregated from the
 deterministic hard alert (non-deterministic — verify before alarm).
 Alerts Slack on:
-  - BVT RED (a gate-eligible regression — the spine broke), OR
-  - capability DRIFT below baseline beyond a tolerance band.
+  - a release verdict other than release (a red-line case did not pass, a gate case
+    failed, or a red-line / gate case has no result), OR
+  - judge-infra coverage collapse (too many deterministic cases errored).
+A watch-tier result (offline cases, judged by a model) never alerts: it is carried
+as a known issue in the release block.
 
 Mirrors session_health_probe's notify discipline: dedup via an alert-state file
 (no alarm storm), test seams for the runner + notifier. The gate
@@ -25,9 +29,6 @@ from config import get_swarmws
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
-
-# Score may dip this much run-to-run without alerting (LLM-judge noise band).
-_DRIFT_TOLERANCE = 5.0
 
 # Coverage-collapse alarm: fraction of intended-scorable cases that errored.
 # When error/(scored+error) >= this, the judge infra (Bedrock/creds) is degraded
@@ -116,16 +117,13 @@ def _default_notifier(**kwargs) -> dict:
 
 
 def _default_runner(root: Path) -> dict:
-    """Run the full eval and return (this_report, baseline_report)."""
+    """Run the full eval and return {"this": its run record}."""
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from scripts.eval_runner import (
         generate_html_report, load_merged_golden_set, run_eval, write_run,
-        _load_history as load_history,
     )
     gs = load_merged_golden_set(root)
-    history = load_history(root)  # prior runs, newest last
-    baseline = history[-1] if history else None
     # include_behavior=True: this biweekly sweep is the intended full-coverage
     # run — it spawns real behavior-tier agents (run_6980cb35). The raw run_eval
     # default stays False (safe); only this caller + CLI --include-behavior opt in.
@@ -144,7 +142,7 @@ def _default_runner(root: Path) -> dict:
                                data=b"", timeout=5).read()
     except Exception as e:
         logger.warning("eval-scheduled GUI reload failed (non-fatal): %s", e)
-    return {"this": result, "baseline": baseline}
+    return {"this": result}
 
 
 def run_eval_scheduled(
@@ -154,7 +152,7 @@ def run_eval_scheduled(
     runner: Optional[Callable[[Path], dict]] = None,
     root: Optional[Path] = None,
 ) -> dict:
-    """Run scheduled eval; alert Slack on BVT-red or score-drift. Returns a result dict.
+    """Run scheduled eval; alert Slack when the release verdict is not release or judge infra collapsed. Returns a result dict.
 
     dry_run: never send a notification (still returns the verdict).
     notifier / runner / root: injected test seams.
@@ -186,18 +184,11 @@ def run_eval_scheduled(
     _write_biweekly_last_run(now)
 
     this = out.get("this") or {}
-    baseline = out.get("baseline") or {}
-    bvt = this.get("bvt") or {}
-    base_score = baseline.get("overall_score")
+    release = this.get("release") or {}
+    verdict = release.get("verdict")
 
-    # Behavior-tier is FULLY SEGREGATED from the deterministic hard alert
-    # (run_6980cb35 decision B + Gate-2 HIGH×2): behavior cases spawn real agents
-    # and are non-deterministic — a flaky spawn must NOT fire the deterministic
-    # drift OR coverage-collapse alarm. It is NOT enough to keep behavior out of
-    # reasons[]: behavior pass/fail feeds overall_score (→ drift) and behavior
-    # spawn-errors feed cases_error (→ coverage). So we recompute BOTH the drift
-    # score AND the coverage error/scored counts over DETERMINISTIC cases only
-    # (programmatic + llm), from this["cases"] (eval_method rides there — Gate-1 E).
+    # Behavior cases spawn real agents and are watch tier (core/eval_release.tier_of):
+    # their results never change the verdict, so a flaky spawn cannot fire the alert.
     cases = this.get("cases") or []
     behavior_failed = [c.get("id") for c in cases
                        if c.get("eval_method") == "behavior"
@@ -205,29 +196,18 @@ def run_eval_scheduled(
     det_cases = [c for c in cases if c.get("eval_method") != "behavior"]
     det_scored = sum(1 for c in det_cases if c.get("status") in ("passed", "failed"))
     det_error = sum(1 for c in det_cases if c.get("status") == "error")
-    det_passed = sum(1 for c in det_cases if c.get("status") == "passed")
-    # Deterministic-only score for the DRIFT axis. Fall back to the run-wide
-    # overall_score only when the per-case list is unavailable (legacy run) — in
-    # that case behavior can't be separated and we accept the old behaviour.
-    if det_scored > 0:
-        score = round(det_passed / det_scored * 100, 1)
-    else:
-        score = this.get("overall_score")
-
-    bvt_red = bool(bvt) and not bvt.get("green", False)
-    drift = (base_score is not None and score is not None
-             and (base_score - score) > _DRIFT_TOLERANCE)
 
     reasons = []
-    if bvt_red:
-        reasons.append(f"BVT RED: {bvt.get('passed')}/{bvt.get('total')} "
-                       f"(failed={bvt.get('failed')}, error={bvt.get('error')}, timeout={bvt.get('timeout', 0)})")
-    if drift:
-        reasons.append(f"score drift: {base_score}% → {score}% (>{_DRIFT_TOLERANCE} drop)")
-    # A check that did not finish is listed on its own: not scored, not a judge-infra
-    # collapse (it is usually a loaded machine). A timed-out BVT case already turns
-    # the BVT red above, so a real hang is not hidden; the note itself stays out of
-    # the alert fingerprint (the ids change run to run on a loaded machine).
+    if not release:
+        reasons.append("release decision missing from the run record")
+    elif verdict != "release":
+        from core.eval_release import failing_check
+
+        ck = failing_check(release) or {}
+        reasons.append(f"release {verdict} at check {ck.get('id', '?')}: {release.get('reason', '')}")
+    # A check that did not finish is listed on its own: it is already in the release
+    # decision's denominator when it is a red-line or gate case; the note itself stays
+    # out of the alert fingerprint (the ids change run to run on a loaded machine).
     timed_out = [c.get("id") for c in det_cases if c.get("status") == "timeout"]
     timeout_note = (f"⏱️ {len(timed_out)} case(s) timed out (not scored): "
                     f"{', '.join(timed_out[:5])}" if timed_out else "")
@@ -262,7 +242,7 @@ def run_eval_scheduled(
             send = notifier or _default_notifier
             try:
                 send(message="\n".join(f"- {r}" for r in reasons + ([timeout_note] if timeout_note else [])),
-                     title="🔴 SwarmAI scheduled eval — regression/drift",
+                     title="🔴 SwarmAI scheduled eval — release blocked",
                      channels=["slack"])
                 notified = True
             except Exception as e:
@@ -270,7 +250,7 @@ def run_eval_scheduled(
         elif not reasons and prev:
             send = notifier or _default_notifier
             try:
-                send(message=f"✅ scheduled eval recovered (score {score}%)",
+                send(message="✅ scheduled eval recovered: the release verdict is release again",
                      title="SwarmAI scheduled eval", channels=["slack"])
                 notified = True
             except Exception as e:
@@ -279,15 +259,21 @@ def run_eval_scheduled(
 
     return {
         "status": "regression" if reasons else "healthy",
-        "overall_score": score,
-        "baseline_score": base_score,
-        "bvt_green": bvt.get("green"),
+        "release": verdict,
+        "release_reason": release.get("reason"),
         "reasons": reasons,
         "behavior_note": behavior_note,  # non-deterministic layer, segregated from hard alert
         "timeout_note": timeout_note,
         "behavior_failed": behavior_failed,
         "notified": notified,
     }
+
+
+def summary_line(eval_result: dict) -> str:
+    """The jobs summary of one scheduled run: status, release verdict and reasons."""
+    reasons = eval_result.get("reasons") or []
+    return (f"scheduled eval: {eval_result.get('status')}, release={eval_result.get('release')}"
+            + (f" — {'; '.join(reasons)}" if reasons else ""))
 
 
 def handle_eval_scheduled(job, state) -> dict:

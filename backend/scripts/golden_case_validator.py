@@ -32,6 +32,10 @@ import re
 import sys
 from pathlib import Path
 
+# Run as a file (`python scripts/golden_case_validator.py`), the backend package root is
+# not on sys.path; gate_gating reads core/eval_release. Same insert as ci_eval_gate.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 _REQUIRED = ("id", "category", "dimension", "eval_method", "affected_by", "evaluators")
 
 # Allowlist of valid tier values (fail-closed). A PRESENT tier must be one of
@@ -258,6 +262,36 @@ def gate_redline(case: dict) -> tuple[bool, list[str]]:
     return True, []
 
 
+def gate_gating(case: dict) -> tuple[bool, list[str]]:
+    """The case's tier marker (core/eval_release.tier_of) must be a known value, and a
+    case a model judges cannot gate a release before its judge is calibrated.
+
+    ``gating`` absent → the case is watch (the default for a new case), nothing to
+    check. ``gating: gate`` on a case with a ``decision_rubric`` or an llm / behavior
+    eval method is refused: an uncalibrated judge's verdict may be shown, never used
+    to block (Agent-DLC: uncalibrated scores are observation-only)."""
+    from core.eval_release import GATE_TIERS, GATING_VALUES, model_judged
+
+    if "gating" not in case:
+        return True, []
+    value = case.get("gating")
+    if value not in GATING_VALUES:
+        return False, [f"gating: must be one of {sorted(GATING_VALUES)} (got {value!r})"]
+    if value != "gate":
+        return True, []
+    if model_judged(case):
+        return False, ["gating: a case judged by a model (decision_rubric, or eval_method "
+                       "llm / behavior) can only be 'watch' until its judge is calibrated"]
+    if case.get("tier", "active") not in GATE_TIERS:
+        return False, [f"gating: a {case.get('tier')!r}-tier case cannot gate a release "
+                       f"(only {sorted(GATE_TIERS)}): a draft never runs, a live case "
+                       "depends on runtime state"]
+    if not _is_gate_eligible(case):
+        return False, ["gating: only a fast deterministic evaluator can gate a release "
+                       f"(one of {sorted(_GATE_ELIGIBLE_EVALUATORS)})"]
+    return True, []
+
+
 def privacy_scan(case: dict) -> tuple[bool, list[str]]:
     blob = json.dumps(case, ensure_ascii=False)
     hits = []
@@ -372,7 +406,8 @@ def validate_case(case: dict, existing: list[dict], for_public: bool,
     # so a legacy case without `redline` passes vacuously — but if any case (new or
     # old) IS marked redline, the marker must be valid + enforceable.
     g_rl = gate_redline(case); report["redline"] = g_rl
-    gates = [g1, g2, g3, g4, g_rl]
+    g_gt = gate_gating(case); report["gating"] = g_gt
+    gates = [g1, g2, g3, g4, g_rl, g_gt]
     if not grandfathered:
         g5 = gate_refs(case); report["refs"] = g5
         gates.append(g5)

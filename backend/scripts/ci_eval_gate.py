@@ -3,8 +3,12 @@
 
 A PURE CHECK: it does NOT run eval. It verifies the latest committed eval report
 is (a) FRESH — its code_digest matches the current eval-relevant code+golden_set,
-and (b) GREEN — its bvt block passed. Exit 0 = pass (safe to push/build), exit 1
-= blocked (stale or red), exit 2 = no report / cannot verify.
+and (b) RELEASABLE — its release decision (core/eval_release: red line, then gate
+cases per dimension, then the denominator) says release, and its bvt block is green.
+Exit 0 = pass (safe to push/build), exit 1 = blocked (stale, a failing check, or
+red), exit 2 = no report / cannot verify (also a report written before the release
+decision existed). There is no score and no score drift: a regression in a gate case
+already fails the release decision, and a watch case never blocks.
 
 Mounts:
 - locally / CI: `python backend/scripts/ci_eval_gate.py` before push
@@ -37,16 +41,6 @@ from scripts.eval_runner import (  # noqa: E402
     compute_code_digest,
 )
 
-# Score-drift gate band (run_95d9acbc). A push is BLOCKED when the latest report's
-# overall_score dropped MORE than this below the most-recent DIFFERENT-code baseline.
-# Strict: a drop of exactly EPSILON passes; only > EPSILON blocks.
-# NOTE the deliberate asymmetry with the scheduled job's alert band
-# (eval_scheduled.py _DRIFT_TOLERANCE = 5.0): the ALERT is a noisy-band monitor
-# (don't Slack-spam on judge noise); this GATE is the strict push-blocker (2.0).
-# Different jobs, different jobs-to-be-done — the divergence is intentional.
-SCORE_DRIFT_EPSILON = 2.0
-
-
 def _reports_by_mtime(root: Path) -> list[dict]:
     """All parseable reports, NEWEST FIRST by mtime — the SAME ordering key as
     _latest_report (NOT eval_runner._load_history's filename sort, which can
@@ -65,43 +59,6 @@ def _reports_by_mtime(root: Path) -> list[dict]:
 def _latest_report(root: Path) -> dict | None:
     reports = _reports_by_mtime(root)
     return reports[0] if reports else None
-
-
-def _num(v) -> float | None:
-    """A score is usable only if it's a real number — a malformed report with a
-    string/None score must fail-OPEN (skip), never crash the gate (Gate-2 NIT#1)."""
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-
-
-def _score_drift(reports: list[dict]) -> tuple[bool, str]:
-    """(blocked, message). `reports` is _reports_by_mtime() (newest-first); reports[0]
-    is the latest (the gated report — same object check_gate validated, no re-read /
-    no implicit [0]==latest coupling, Gate-2 NIT#7 + REVIEW LOW). Compare latest's
-    score against the most-recent report with a DIFFERENT code_digest (a same-code
-    re-run is judge noise, not drift — proven on real data: 100.0→91.7 on identical
-    digest). Fail-OPEN (never block) when: <2 reports, latest has no numeric score,
-    or no different-code baseline with a numeric score. Only a real, different-code
-    regression beyond EPSILON blocks."""
-    if len(reports) < 2:
-        return False, ""  # no baseline — fail-open
-    latest = reports[0]
-    latest_score = _num(latest.get("overall_score"))
-    if latest_score is None:
-        return False, ""  # pre-score / malformed latest — can't judge, fail-open
-    latest_digest = latest.get("code_digest", "")
-    for rpt in reports[1:]:
-        if rpt.get("code_digest", "") == latest_digest:
-            continue  # same-code re-run — not a drift baseline
-        base_score = _num(rpt.get("overall_score"))
-        if base_score is None:
-            continue
-        if (base_score - latest_score) > SCORE_DRIFT_EPSILON:
-            return True, (f"GATE BLOCKED (score drift): {base_score} → {latest_score} "
-                          f"(drop {base_score - latest_score:.1f} > {SCORE_DRIFT_EPSILON} "
-                          f"vs different-code baseline) — capability regressed, "
-                          f"investigate before push.")
-        return False, ""  # found a real baseline, within band → pass
-    return False, ""  # no different-code baseline → fail-open
 
 
 def check_gate(root: Path) -> tuple[int, str]:
@@ -136,7 +93,7 @@ def check_gate(root: Path) -> tuple[int, str]:
         ids = ", ".join(v.get("id", "?") for v in redline.get("violations", []))
         return 1, (f"GATE BLOCKED (RED-LINE): {len(redline.get('violations', []))} "
                    f"zero-tolerance case(s) failed [{ids}] — a red-line failure is "
-                   f"NO-GO independent of the {report.get('overall_score', '?')}% score. "
+                   f"NO-GO whatever the other cases do. "
                    f"Fix before push/build; red-line cases cannot be waived.")
 
     # Green: bvt must be a non-empty, all-pass set.
@@ -145,12 +102,32 @@ def check_gate(root: Path) -> tuple[int, str]:
                    f"passed={bvt.get('passed')} failed={bvt.get('failed')} "
                    f"error={bvt.get('error')} — fix failing cases before push/build.")
 
-    # Score drift: capability regressed vs the most-recent different-code baseline.
-    drifted, drift_msg = _score_drift(reports)
-    if drifted:
-        return 1, drift_msg
+    # A report written before the release decision existed cannot be read for one.
+    # Checked after the red-line veto and the BVT, so a red line or a red BVT still
+    # blocks (exit 1) whatever else the report lacks.
+    release = report.get("release")
+    if not isinstance(release, dict) or not release.get("verdict"):
+        return 2, ("GATE: latest report predates the release gate (no release block) — "
+                   "re-run eval to produce a report with a release decision.")
+
+    # The release decision, recomputed over EVERY red-line and gate case of the
+    # current golden set against this report's results: a run limited to some cases
+    # (--cases / --tags) cannot stand in for the rest, because a case it did not run
+    # counts as missing in the denominator. The first failing check blocks and is
+    # named. (Freshness above guarantees the golden set is the one the report ran.)
+    from core.eval_release import decide_release, failing_check, tier_of
+    from scripts.eval_runner import load_merged_golden_set
+
+    gating = [c for c in load_merged_golden_set(root).get("cases", [])
+              if tier_of(c) in ("red", "gate")]
+    release = decide_release(gating, report.get("cases") or []) if gating else release
+    if release.get("verdict") != "release":
+        ck = failing_check(release) or {}
+        return 1, (f"GATE BLOCKED (release {release.get('verdict')} at check "
+                   f"{ck.get('id', '?')}): {release.get('reason', '')}")
 
     return 0, (f"GATE PASS (eval = push-gate #3/3): fresh (digest={report_digest}) "
+               f"+ release ({release.get('reason', '')}) "
                f"+ green (bvt {bvt.get('passed')}/{bvt.get('total')}). "
                f"Confirm Build + Tests green too before `git push origin main`.")
 

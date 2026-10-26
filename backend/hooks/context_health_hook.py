@@ -442,7 +442,7 @@ class ContextHealthHook:
             "passed": result["cases_passed"],
             "failed": result["cases_failed"],
             "error": cases_error,
-            "score": result["overall_score"],
+            "verdict": (result.get("release") or {}).get("verdict"),
             "duration_s": result["duration_seconds"],
         }
 
@@ -453,8 +453,8 @@ class ContextHealthHook:
                 for c in result["cases"] if c["status"] == "failed"
             ]
             logger.warning(
-                "context_health: eval canary FAILED %d/%d cases (score=%.1f%%)",
-                result["cases_failed"], result["total_cases"], result["overall_score"],
+                "context_health: eval canary FAILED %d/%d cases (release=%s)",
+                result["cases_failed"], result["total_cases"], canary_data["verdict"],
             )
         elif cases_error > 0:
             # Config errors: surface as info, not warning (not a regression)
@@ -615,8 +615,8 @@ class ContextHealthHook:
         summary = self._write_daily_canary_state(state_path, state, cases)
         if summary.get("complete") and (summary.get("failed") or summary.get("timeout")):
             logger.warning(
-                "context_health: daily eval canary FAILED %d/%d cases, %d timed out (score=%s%%)",
-                summary["failed"], summary["total"], summary.get("timeout", 0), summary.get("score"),
+                "context_health: daily eval canary FAILED %d/%d cases, %d timed out (release=%s)",
+                summary["failed"], summary["total"], summary.get("timeout", 0), summary.get("verdict"),
             )
         else:
             logger.info(
@@ -644,16 +644,19 @@ class ContextHealthHook:
         """Recompute the summary over TODAY's case list and write atomically.
 
         Only cases in ``cases`` count (a case removed from the golden set mid-day
-        drops out). ``score`` = passed / (passed + failed) like
-        eval_runner.compute_scores; skipped/error/timeout/pending never count. A
-        timeout is still listed (``timeouts``): a hang must not disappear.
+        drops out). ``verdict`` is the release decision over today's cases
+        (core/eval_release.decide_release): a case not run yet today counts as having
+        no result, so the verdict is incomplete until every case has run. A timeout is
+        still listed (``timeouts``): a hang must not disappear.
         """
         ids = [c["id"] for c in cases]
         results = state.get("results", {})
         done = [results[i] for i in ids if i in results]
         n = {s: sum(1 for r in done if r.get("status") == s)
              for s in ("passed", "failed", "error", "skipped", "timeout")}
-        scored = n["passed"] + n["failed"]
+        from core.eval_release import decide_release
+
+        state.pop("score", None)  # written before the release decision replaced it
         state.update({
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "total": len(ids),
@@ -661,7 +664,8 @@ class ContextHealthHook:
             "pending": len(ids) - len(done),
             "complete": len(done) == len(ids),
             **n,
-            "score": round(n["passed"] / scored * 100, 1) if scored else None,
+            "verdict": decide_release(cases, [{"id": i, **r} for i, r in results.items()
+                                              if i in set(ids)])["verdict"],
             "failures": [
                 {"id": i, "notes": results[i].get("notes", "")}
                 for i in ids if results.get(i, {}).get("status") == "failed"

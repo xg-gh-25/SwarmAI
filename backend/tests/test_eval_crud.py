@@ -131,6 +131,21 @@ class TestAddCase:
         with pytest.raises(ValueError, match="already exists"):
             svc.add_case(duplicate)
 
+    @pytest.mark.parametrize("extra", [
+        {"gating": "bogus"},
+        {"gating": "gate", "eval_method": "llm"},
+        {"gating": "gate", "decision_rubric": "PASS only if x"},
+    ])
+    def test_add_case_refuses_an_invalid_gating(self, svc, extra):
+        case = {"id": "GS_GT", "purpose": {"en": "gating check"}, "category": "compliance",
+                "dimension": "quality", "title": "t", "affected_by": ["SOUL.md"],
+                "evaluators": ["file_contains"],
+                "verification": {"file": "x.py", "grep": "y", "negative_command": "false"}, **extra}
+        before = svc.case_count
+        with pytest.raises(ValueError, match="gating"):
+            svc.add_case(case)
+        assert svc.case_count == before and svc.get_case_detail("GS_GT") is None
+
     def test_add_case_missing_required_field(self, svc):
         incomplete = {"id": "GS099", "title": "No evaluators"}
         with pytest.raises(ValueError, match="required"):
@@ -211,6 +226,13 @@ class TestUpdateCase:
     def test_update_case_cannot_change_id(self, svc):
         with pytest.raises(ValueError, match="Cannot change"):
             svc.update_case("GS001", {"id": "GS_NEW"})
+
+    def test_update_case_refuses_an_invalid_gating(self, svc):
+        before = dict(svc.get_case_detail("GS001"))
+        with pytest.raises(ValueError, match="gating"):
+            svc.update_case("GS001", {"gating": "bogus"})
+        after = svc.get_case_detail("GS001")
+        assert after.get("gating") == before.get("gating")
 
     def test_update_case_persists(self, svc, eval_workspace):
         svc.update_case("GS001", {"title": "Persisted update"})
@@ -632,7 +654,8 @@ class TestCanaryRun:
     def test_canary_runs_synchronously(self, svc):
         """Canary runs only programmatic cases and returns immediately."""
         result = svc.run_canary()
-        assert "overall_score" in result
+        assert result["release"]["verdict"] in ("release", "blocked", "incomplete")
+        assert "overall_score" not in result
         assert result["triggered_by"] == "canary"
         # Should be fast (<5s)
         assert result["duration_seconds"] < 5.0
@@ -764,7 +787,7 @@ class TestInflightMarker:
         data = json.loads(marker.read_text())
         assert data["status"] == "running"
         assert data["run_id"] == run_id
-        assert data["overall_score"] is None
+        assert data["release"] is None and "overall_score" not in data
 
     def test_get_run_returns_running_marker(self, svc, eval_workspace):
         """AC2: get_run falls back to the marker when run_id isn't a completed run."""
@@ -789,9 +812,9 @@ class TestInflightMarker:
         svc._load_history()
         assert len(svc._runs) == baseline_count, "marker leaked into _load_history"
         assert all(r.get("status") != "running" for r in svc._runs)
-        # get_health latest must remain the pre-existing completed run (100.0)
+        # get_health latest must remain the pre-existing completed run
         health = svc.get_health()
-        assert health.get("overall_score") in (100.0, 100), health
+        assert health["last_run"]["run_id"] != "eval_20260707_120000_abc123_manual", health
 
         # ci_eval_gate._reports_by_mtime — non-recursive glob, marker invisible
         import importlib

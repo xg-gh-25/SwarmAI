@@ -83,37 +83,18 @@ class TestLoadGoldenSet:
 
 
 class TestComputeScores:
-    """Test score computation logic."""
+    """compute_scores counts definite results; there is no score (the release
+    decision is core/eval_release, tested in tests/test_eval_release.py)."""
 
-    def test_all_passed(self):
-        cases = [{"dimension": "capability"}, {"dimension": "capability"}]
-        results = [{"status": "passed"}, {"status": "passed"}]
+    def test_counts_definite_results_only(self):
+        cases = [{"dimension": "cognition"}] * 4
+        results = [{"status": "passed"}, {"status": "failed"}, {"status": "skipped"}, {"status": "timeout"}]
         scores = compute_scores(cases, results)
-        assert scores["overall"] == 100.0
-        assert scores["dimensions"]["capability"] == 100.0
+        assert scores == {"scored_count": 2, "skipped_count": 2}
 
-    def test_mixed_results(self):
-        cases = [{"dimension": "capability"}, {"dimension": "factual_accuracy"}]
-        results = [{"status": "passed"}, {"status": "failed"}]
-        scores = compute_scores(cases, results)
-        assert scores["overall"] == 50.0
-        assert scores["dimensions"]["capability"] == 100.0
-        assert scores["dimensions"]["factual_accuracy"] == 0.0
-
-    def test_skipped_excluded(self):
-        cases = [{"dimension": "capability"}, {"dimension": "compliance"}]
-        results = [{"status": "passed"}, {"status": "skipped"}]
-        scores = compute_scores(cases, results)
-        assert scores["overall"] == 100.0  # Only scored cases count
-        assert scores["scored_count"] == 1
-        assert scores["skipped_count"] == 1
-
-    def test_all_skipped(self):
-        cases = [{"dimension": "capability"}]
-        results = [{"status": "skipped"}]
-        scores = compute_scores(cases, results)
-        assert scores["overall"] == 0.0
-        assert scores["scored_count"] == 0
+    def test_no_percentage_is_returned(self):
+        scores = compute_scores([{"dimension": "cognition"}], [{"status": "passed"}])
+        assert "overall" not in scores and "dimensions" not in scores
 
 
 class TestPathResolution:
@@ -617,9 +598,8 @@ class TestJudgeFailureIsErrorNotSkip:
         results = [{"id": "A", "status": "passed"}, {"id": "B", "status": "error"}]
         s = compute_scores(cases, results)
         assert s["scored_count"] == 1  # only the pass counts
-        assert s["overall"] == 100.0   # of the 1 SCORED case
-        # The red-light lives in cases_error surfacing, not the % — verified
-        # in run_eval/get_health/briefing wiring (separate integration path).
+        # The error is not hidden: it is a not-run case in the release decision's
+        # denominator (tests/test_eval_release.py).
 
     def test_all_error_does_not_count_as_passed(self):
         cases = [{"id": "A", "dimension": "d"}]

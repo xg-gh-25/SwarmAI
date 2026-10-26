@@ -266,7 +266,7 @@ golden set；case 的目的写成人能看懂的一句话；快速检查 / 离�
 | Pipeline | PIPE_OWNER | 只有创建 run 的会话能改动它 | 另一个会话的推进必须被拒、事件数不变 |
 | Eval | EVAL_DRIFT_STAMP | 被人绕过校验改过的 case 会自动退出 BVT；空的或全部跳过的 BVT 判红 | 改了期望值不重新 stamp 仍留在 BVT |
 | Eval | EVAL_TEETH | 不可能失败的 case 在加入时被拒，在运行时也会被发现 | 反例输出正例标记；反例什么都不输出 |
-| Eval | EVAL_SCORE_DRIFT | 分数下降超过阈值时告警；失败被正确区分为"case 坏了"和"真的退步" | 下降 5 分以内不告警 |
+| Eval | EVAL_RELEASE_ORDER | 四道关依序判定：红线没过不放行，其次门禁项没过，再其次红线或门禁项没跑出结果；观测项没过从不拦；失败被正确区分为"case 坏了"和"真的退步" | 把没跑完的检查当成通过 |
 | Safety | SAFE_IRREVERSIBLE | 删仓库、强推、改可见性这类不可逆操作没有审批时一律拒绝；普通命令放行 | `git log` 被拒即错 |
 | Safety | SAFE_TAB_ISOLATION | 一个标签页永远不会把另一个标签页的会话挤掉 | （沿用 GS_RTH002） |
 | Safety | SAFE_RECOVERY | 卡住不出声的子进程会被发现并处理，崩溃恢复路径真的会执行 | （合并 GS_RTH001/003，给 recovery 补反例） |
@@ -381,6 +381,7 @@ SAFE_IRREVERSIBLE。GS_LANG_FOLLOWS_USER、GS_SILENT_TOOL_CALLS、GS_NEXT_STEPS_
   两种都要）、产品集 ≤50、总数 ≤80（`add_case` 拒绝）、界面"新增 case"加了 purpose 字段。包装 pytest 的 12 条 case 对应的测试文件
   都不在 `bvt_manifest.txt` 里，没有证据说明能在裸 checkout 通过，所以按 §3.1 的规则留在 XG 私有集（命令已是绝对路径），不退役。
   自动从纠错生成 case 的 `auto_seed_case` 链路已没有生产调用方，和 harvest 一起在第 4 步删除。
+- 实现记录（放行判定，run_85e81059）：按 Agent-DLC 的"三档 + 四道关"，删掉加权总分 `overall_score`。每条 case 有档位（红线 = `redline: true`，门禁 = `gating: gate`，观测 = `gating: watch` 或没写，新 case 默认观测；judge 判的 case 只能观测）；每次运行写 `release`（红线 → 分维过线 → 分母核对 → 口径留痕，第一道没过的关决定结论）和五维 `dimension_summary`（认知 / 质量 / 责任 / 成本 / 性能，按档位计数，不算百分比）。push 门禁、定时告警、每日快速检查状态、health / history / lines、HTML 报告和 dashboard 都改读放行结论；EVAL_SCORE_DRIFT 换成 EVAL_RELEASE_ORDER。旧记录没有 release，读作"旧记录"，push 门禁对它返回"无法验证"。
 - 实现记录（私有集清零）：XG 指出剩下的私有 case 测的都是通用能力，只是数据取自他自己的工作区。于是：三条 recall 排序
   case（GS_RCLK01/06/07：英文问项目文档、中文问记忆能排到前面）合并为产品 BVT `RCL_RANKING`（`probe_recall ranking`，
   固定语料；反例去掉分词器的中文处理）；GS_NATIVE_RISK_ASK_ONCE 和 GS_NEXT_STEPS_HONEST 改写成产品离线考题

@@ -30,6 +30,11 @@ Online scoring has no cases: it checks your real sessions (`jobs/handlers/sessio
    `decision_rubric` (offline test), and
    `purpose: {en: "...", zh: "..."}`: what it protects and what breaks for you if it
    fails (at least one language, ≤200 characters each, no run ids or module names).
+   `dimension` is one of `cognition`, `quality`, `responsibility`, `cost`,
+   `performance`. `gating` decides the case's power over a release: absent or `watch`
+   (the default: shown, never blocks), `gate` (must pass to release; only a quick check
+   no model judges can gate), or the existing `redline: true` (any failure vetoes).
+   Start a new case as watch and raise it to gate once it has proven itself.
 2. A quick-check case needs `verification.negative_command` and
    `negative_expected_contains`: a command that breaks the thing on purpose and must
    print its FAIL token. A case that cannot fail is refused.

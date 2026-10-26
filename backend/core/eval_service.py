@@ -142,10 +142,11 @@ class EvalService:
         still loads (PIT118: fail-loud != fail-hard) — but a WARNING names the
         offending value + case id so the drift is visible immediately.
 
-        Why: compute_scores (eval_runner) aggregates raw ``dimension`` tags with no
-        validation, so an off-canonical dimension silently leaks into
-        /api/eval/health while /api/eval/golden-set shows only the yaml-declared
-        canonical set — the exact divergence this guard surfaces at load time.
+        Why: the five-dimension summary (core/eval_release.summarize_dimensions)
+        counts an off-canonical dimension under ``other``, so the case still counts
+        but under no named dimension on /api/eval/health while /api/eval/golden-set
+        shows only the yaml-declared set — the divergence this guard surfaces at
+        load time.
         Skipped when the metadata list is absent (nothing to validate against →
         no false-alarm storm). (run_8c44b7bf)
         """
@@ -166,7 +167,7 @@ class EvalService:
         if bad_dims:
             logger.warning(
                 "eval_service: %d case(s) with off-canonical dimension (not in %s) "
-                "— these leak into /health per-dimension scores: %s",
+                "— they are summarised under 'other', not a named dimension: %s",
                 len(bad_dims), sorted(canonical_dims), ", ".join(bad_dims),
             )
         if bad_cats:
@@ -218,22 +219,22 @@ class EvalService:
     # ─── Public API ───────────────────────────────────────────────────────
 
     def get_health(self) -> dict:
-        """Current OS Health Score + per-dimension scores from latest run."""
+        """The latest run's release decision and five-dimension summary
+        (core/eval_release). A run recorded before the release decision existed has
+        release None: the dashboard shows it as legacy, never as a score."""
         if not self._runs:
             return {
-                "overall_score": None,
-                "dimensions": {},
+                "release": None,
+                "dimension_summary": {},
                 "last_run": None,
                 "total_cases": len(self._cases),
-                "trend": None,
             }
 
         latest = self._runs[0]  # sorted desc
-        trend = self._compute_trend()
 
         return {
-            "overall_score": latest.get("overall_score"),
-            "dimensions": latest.get("dimensions", {}),
+            "release": latest.get("release"),
+            "dimension_summary": latest.get("dimension_summary") or {},
             "last_run": {
                 "run_id": latest.get("run_id"),
                 "triggered_by": latest.get("triggered_by"),
@@ -245,7 +246,6 @@ class EvalService:
                 "cases_timeout": latest.get("cases_timeout", 0),
             },
             "total_cases": len(self._cases),
-            "trend": trend,
         }
 
     def get_history(self, limit: int = 20) -> list[dict]:
@@ -255,7 +255,8 @@ class EvalService:
                 "run_id": r.get("run_id"),
                 "triggered_by": r.get("triggered_by"),
                 "triggered_at": r.get("triggered_at"),
-                "overall_score": r.get("overall_score"),
+                "release": (r.get("release") or {}).get("verdict"),
+                "release_reason": (r.get("release") or {}).get("reason"),
                 "total_cases": r.get("total_cases"),
                 "cases_passed": r.get("cases_passed"),
                 "cases_failed": r.get("cases_failed"),
@@ -263,7 +264,6 @@ class EvalService:
                 "cases_error": r.get("cases_error", 0),
                 "cases_timeout": r.get("cases_timeout", 0),
                 "duration_seconds": r.get("duration_seconds"),
-                "dimensions": r.get("dimensions", {}),
             }
             for r in self._runs[:limit]
         ]
@@ -323,7 +323,7 @@ class EvalService:
         return {
             "quick": quick,
             "full": {"last_run": (full_run or {}).get("triggered_at"),
-                     "score": (full_run or {}).get("overall_score"),
+                     "release": ((full_run or {}).get("release") or {}).get("verdict"),
                      "next_run": self._next_full_run(now)},
             "online": {"last_run": online.get("last_run"),
                        "sessions_checked": online.get("sessions_checked"),
@@ -514,7 +514,8 @@ class EvalService:
 
         from core.golden_set_store import TOTAL_CAP
         from scripts.golden_case_validator import (
-            _is_gate_eligible, gate_teeth, gate_refs, gate_purpose, compute_case_stamp,
+            _is_gate_eligible, gate_teeth, gate_refs, gate_purpose, gate_gating,
+            compute_case_stamp,
         )
         # Anti-drift (C044 BLOCKER 2): every dotted ref (MEMORY./STEERING./AGENT./
         # SOUL./EVOLUTION.) MUST resolve to non-empty content, else the case silently
@@ -525,6 +526,9 @@ class EvalService:
         if not ok:
             raise ValueError(f"Case rejected (refs drift): {'; '.join(errs)}")
         ok, errs = gate_purpose(case_data)
+        if not ok:
+            raise ValueError(f"Case rejected: {'; '.join(errs)}")
+        ok, errs = gate_gating(case_data)
         if not ok:
             raise ValueError(f"Case rejected: {'; '.join(errs)}")
         if _is_gate_eligible(case_data):
@@ -555,7 +559,7 @@ class EvalService:
         if "id" in updates and updates["id"] != case_id:
             raise ValueError("Cannot change case ID via update")
 
-        from scripts.golden_case_validator import gate_refs
+        from scripts.golden_case_validator import gate_gating, gate_refs
         with self._data_lock:
             case = next((c for c in self._cases if c.get("id") == case_id), None)
             if case is None:
@@ -569,6 +573,9 @@ class EvalService:
             ok, errs = gate_refs(merged, root=self._workspace_root)
             if not ok:
                 raise ValueError(f"Update rejected (refs drift): {'; '.join(errs)}")
+            ok, errs = gate_gating(merged)
+            if not ok:
+                raise ValueError(f"Update rejected: {'; '.join(errs)}")
 
             case.update(updates)
             self._persist_golden_set()
@@ -993,8 +1000,7 @@ class EvalService:
             "triggered_by": trigger,
             "triggered_at": triggered_at,
             "status": "running",
-            "overall_score": None,
-            "dimensions": {},
+            "release": None,
             "cases": [],
             "total_cases": 0,
             # Shape parity with completed/failure records so a get_run consumer
@@ -1085,8 +1091,7 @@ class EvalService:
                 "triggered_at": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
                 "error": str(e),
-                "overall_score": 0,
-                "dimensions": {},
+                "release": None,
                 "cases": [],
                 "total_cases": 0,
                 "cases_passed": 0,
@@ -1150,20 +1155,6 @@ class EvalService:
                     })
                     break
         return history
-
-    def _compute_trend(self) -> Optional[dict]:
-        """Compare latest score to previous run."""
-        if len(self._runs) < 2:
-            return None
-
-        latest_score = self._runs[0].get("overall_score") or 0
-        prev_score = self._runs[1].get("overall_score") or 0
-        delta = round(latest_score - prev_score, 1)
-
-        return {
-            "delta": delta,
-            "direction": "up" if delta > 0 else ("down" if delta < 0 else "stable"),
-        }
 
     # --- v3 Phase 3: governance proposal review (accept / reject / defer) ---
 

@@ -54,6 +54,8 @@ class CreateCaseRequest(BaseModel):
     verification: dict = Field(default_factory=dict)
     expected_trajectory: list[str] = Field(default_factory=list)
     assertions: list[str] = Field(default_factory=list)
+    # gate | watch (core/eval_release.tier_of); absent = watch, the default for a new case
+    gating: Optional[str] = None
 
 
 class UpdateCaseRequest(BaseModel):
@@ -69,6 +71,7 @@ class UpdateCaseRequest(BaseModel):
     verification: Optional[dict] = None
     expected_trajectory: Optional[list[str]] = None
     assertions: Optional[list[str]] = None
+    gating: Optional[str] = None
     tier: Optional[str] = None
 
 

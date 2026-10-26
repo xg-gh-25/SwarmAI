@@ -1,3 +1,4 @@
+import pytest
 """Tests for golden_case_validator — the 4-gate quality check + privacy scan."""
 import sys
 from pathlib import Path
@@ -378,3 +379,40 @@ def test_validate_corpus_dup_id_fails_loud(tmp_path):
     assert "GS_DUP" in r.stdout
     assert r.returncode == 2, f"dup-id must exit 2; got {r.returncode}"
     assert "Traceback" not in r.stderr
+
+
+
+# ── gate_gating (run_85e81059) ───────────────────────────────────────────────
+def _gq(**kw):
+    c = {"id": "GQ", "tier": "stable", "eval_method": "programmatic", "evaluators": ["canary_pass"]}
+    c.update(kw)
+    return c
+
+
+@pytest.mark.parametrize("case, ok", [
+    (_gq(), True),                                            # no gating: watch
+    (_gq(gating="watch"), True),
+    (_gq(gating="gate"), True),
+    (_gq(gating="bogus"), False),
+    (_gq(gating="gate", eval_method="behavior"), False),
+    (_gq(gating="gate", eval_method="llm"), False),
+    (_gq(gating="gate", decision_rubric="PASS only if x"), False),
+    (_gq(gating="gate", tier="draft"), False),
+    (_gq(gating="gate", tier="live"), False),
+    (_gq(gating="gate", evaluators=["runtime_health"]), False),
+    (_gq(gating="watch", eval_method="behavior"), True),
+])
+def test_gate_gating(case, ok):
+    from scripts.golden_case_validator import gate_gating
+
+    got, errs = gate_gating(case)
+    assert got is ok, errs
+    assert bool(errs) is (not ok)
+
+
+def test_validate_case_runs_gate_gating():
+    from scripts.golden_case_validator import validate_case
+
+    ok, report = validate_case(_gq(gating="gate", eval_method="llm"), [], for_public=False,
+                               grandfathered=True)
+    assert ok is False and report["gating"][0] is False

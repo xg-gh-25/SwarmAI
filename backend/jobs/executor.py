@@ -450,7 +450,7 @@ def execute_job(
             )
 
         elif job.type == "eval_scheduled":
-            from .handlers.eval_scheduled import run_eval_scheduled
+            from .handlers.eval_scheduled import run_eval_scheduled, summary_line
             eval_result = run_eval_scheduled(
                 dry_run=bool(job.config.get("dry_run", False)) if job.config else False,
             )
@@ -467,10 +467,7 @@ def execute_job(
                 status=_monitor_result_status(
                     e_status, ok={"healthy", "regression"}, benign={"skipped"},
                 ),
-                summary=(f"scheduled eval: {e_status}, score={eval_result.get('overall_score')}%, "
-                         f"bvt_green={eval_result.get('bvt_green')}"
-                         + (f" — {'; '.join(eval_result.get('reasons', []))}"
-                            if eval_result.get('reasons') else "")),
+                summary=summary_line(eval_result),
                 duration_seconds=duration,
             )
 
