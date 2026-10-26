@@ -3,7 +3,7 @@ title: One look for every turn card, and the code-changes card after native codi
 date: 2026-10-26
 created: 2026-10-26
 updated: 2026-10-26
-status: v4.2 implemented (steps 1-4: 446c0c526, f4c9fc3d0, 1104a6aa6, f45cc31c7, 1c5c2f082, d1afcb8ad, 8a133c475; step 6 residuals: 148b30c96); awaiting Gawan's visual check
+status: v4.2 implemented (steps 1-4: 446c0c526, f4c9fc3d0, 1104a6aa6, f45cc31c7, 1c5c2f082, d1afcb8ad, 8a133c475; step 6 residuals: 3df346e60); awaiting Gawan's visual check
 owner: Gawan
 ---
 
