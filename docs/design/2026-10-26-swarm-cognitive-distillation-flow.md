@@ -1,12 +1,21 @@
 ---
-title: Recall 语料的写入与准入 — 提取与 ingestion 解耦，Memory、DDD、Knowledge 统一的 Inbox、答题卡、写入与 Cognitive Distillation Flow dashboard
+title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎：提取与 ingestion 解耦，Memory、DDD、Knowledge 统一的 Inbox、答题卡、写入与 Flow 视图
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r14 — 设计，已吸收 r13b 两份独立评审（修订记录见 §18）
+status: r14 — 设计，已吸收 r13b 两份独立评审（修订记录见 §18）；r14.1 定名
 ---
 
-# Recall 语料的写入与准入
+# Swarm Cognitive Distillation Flow
+
+**Swarm Cognitive Distillation Flow（简称 CDF，认知蒸馏流）是 SwarmAI 认知系统的核心引擎。** 这是一项产品级能力，对每个 SwarmAI 用户都可用，在每种平台和运行模式下都能工作。它把会话、run、用户纠正和外部资料中值得长期保留的东西，按统一的标准蒸馏成 Memory、EVOLUTION、各项目的 DDD、Knowledge Library 和用户 context 文件。蒸馏全程自动完成，每一步都可审计。
+
+AGENTS.md 说"认知和知识分开、模型提议、OS 决定、价值跨会话复利"，CDF 就是让这几句话在写入侧落地的那个机制。
+
+**术语**：
+- **CDF** 指整条流程：source 提取 → Inbox → ingestion（整理、答题卡、目的地规则、和已有内容比对、写入）→ 各目的地。
+- **ingestion** 只指其中由 worker 完成的那一段。代码标识沿用 `ingestion_*`，比如表名、模块 `core/ingestion/`、CLI `ingest`。
+- **Flow 视图** 指 Need You overlay 里的 dashboard（§10）。
 
 ## 0. 一句话
 
@@ -21,7 +30,7 @@ r13 改成**提取和 ingestion 解耦**：
  backflow、DailyActivity、     只保留 30 天           → 检索已有内容 → routing → 写入
  cultivation、skill、"记住"）                                    │
                                                                 ▼
-                                     Need You overlay 的 Cognitive Distillation Flow（统一 dashboard）
+                                     Need You overlay 的 Flow 视图（CDF 的统一 dashboard）
 ```
 
 - **source** 只做两件事：按自己定制的格式提取，然后入队。入队是一次插库操作，毫秒级完成，不会打断会话、run 或 chat。
@@ -543,7 +552,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 每个条目附一句可以直接发进 chat 的 prompt（沿用现有的 dispatch 机制），例如"看下 ingestion 为什么积压"。
 不会因为某个候选被拒就产生条目：被拒是正常结果，在第 2 页查看。
 
-**第 2 页「Cognitive Distillation Flow / 认知蒸馏流」**（新增）
+**第 2 页「Cognitive Distillation Flow」**（新增，即 Flow 视图）
 - **流程总览**：source → Inbox → 整理 → 卡 0/1/2 → 目的地规则 → 卡 3 → 写入，每一段显示最近 24 小时、7 天、30 天的数量，按 lane 着色。点任意一段，下面的列表就按这一段筛选。
 - **候选列表**：时间、source、lane、内容开头、状态、去向、原因码。可以按 source、目的地、状态、原因码、关键词、时间筛选，分页显示。只列最近 30 天的候选。
 - **候选详情**：
@@ -598,8 +607,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
     3. 认知层和操作层各自按本轮查询的 BM25 分数排序，再按单元在文件里的顺序排序，依次装入，装满为止。
     4. 输出时按单元原来的顺序拼接。
   - 没装进去的单元仍然能被检索到：recall 的 `context_files` 那一路（读取侧设计 `2026-10-26-recall-precision-and-coverage.md` D4：只检索 MEMORY 里不在 prompt 中的条目）照常能召回它们。
-  - STEERING、USER、TOOLS 由用户自己管，不设上限，只在超过 8K tokens 时在认知蒸馏流里提示。
-  - `over_budget` 警告保留，额外记录被省略的单元数，显示在认知蒸馏流的健康区。
+  - STEERING、USER、TOOLS 由用户自己管，不设上限，只在超过 8K tokens 时在 Flow 视图里提示。
+  - `over_budget` 警告保留，额外记录被省略的单元数，显示在Flow 视图的健康区。
   - 实施时同步改 AGENTS.md 的 Context and Memory System 一节和 `context_directory_loader` 的文档，L1 缓存的预算头也跟着改。
 - **DDD 注入不改**：仍然注入 section 指针，带上整段的 what、how、why。r12 计划改成只注入几条正文，2026-10-26 的成对盲评里 8 对输了 7 对，已经撤回。唯一的改动是：被 supersedes 的条目，命中时转交给它的链头（§7.3）。
 - **Library 过滤不做**：多取后补足、过滤 frontmatter 和短正文，这几项在盲评里和基线持平，所以没有合并。等写入侧干净之后再评估。被污染的 Library 内容放进不可信数据边界里渲染。
@@ -666,15 +675,15 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 6. Need You 的 Cognitive Distillation Flow 页（第一版范围），以及 `AttentionAuthority` 的 `ingestion` source。
 7. 第一个 source：backflow。它当前质量最差（15 条里 9 条只在原会话里有意义），而且只写 Library，风险最小。
 - 验收：
-  - 一天的真实流量里，backflow 每个候选在认知蒸馏流里都能看到完整的处理过程；
+  - 一天的真实流量里，backflow 每个候选在 Flow 视图里都能看到完整的处理过程；
   - 同一条消息只产出一份；
   - 被拒的原因码合理；
   - 在 chat、CLI、清理、dashboard 同时运行时，实测入队延迟 p99 < 200 ms；chat 首 token 的 p90 和基线相比，差值在误差范围内；
   - 故障注入：在每个写入步骤的边界杀进程，恢复后结果一致；两个完整 backend 同时启动，只有一个 worker 在跑。
 
 **第 2 步：依次迁移其余 source**
-顺序：REFLECT → DailyActivity 决策和纠正 → 会话结束蒸馏 → 即时纠正和"记住" → cultivation → 其余。每迁移一个，就删掉它原来的写入路径，在认知蒸馏流里观察一天再继续。
-- 每个 source 的验收：它的候选在认知蒸馏流里能完整走完；它原来的写入路径已经删除（静态测试会因为直接写入而变红）；没有出现带外修改。
+顺序：REFLECT → DailyActivity 决策和纠正 → 会话结束蒸馏 → 即时纠正和"记住" → cultivation → 其余。每迁移一个，就删掉它原来的写入路径，在 Flow 视图里观察一天再继续。
+- 每个 source 的验收：它的候选在 Flow 视图里能完整走完；它原来的写入路径已经删除（静态测试会因为直接写入而变红）；没有出现带外修改。
 
 **第 3 步：注入预算和最终验收**（旧维护路径已经在第 1 步关掉）
 - 验收：
@@ -730,11 +739,12 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 1. 全自动：答题卡就是最终决定，人看审计（r6）。
 2. 已经沉淀的内容系统不动（r7）。用户自己编辑时，修订基线（r12）。
 3. 每轮注入的文件有确定性的预算，源文件不变（r12）。
-4. 提取和 ingestion 解耦。Inbox 只保留 30 天，更早的只留统计。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里，叫 Cognitive Distillation Flow（认知蒸馏流）。按时效性分 lane 触发（r13）。
+4. 提取和 ingestion 解耦。Inbox 只保留 30 天，更早的只留统计。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里，叫 Cognitive Distillation Flow（Flow 视图）。按时效性分 lane 触发（r13）。
 5. DDD 的注入方式不改；所有 DDD 规则都以保住 what、how、why 为前提（r13）。
 6. 先做第 0 步（离线 go/no-go），通过之后再接入真实的 source。
 7. holdout 由 3 个盲评 subagent 独立标注，按多数票定标签；Gawan 可以随机复核 20 条（r14）。
 8. 首版的删减：最小关系表、不做语义复审、mutation 检查只覆盖安全类不变量、dashboard 只做审计闭环、不做类型对照、source 用静态类型注册（r14）。
+9. 整个设计定名为 **Swarm Cognitive Distillation Flow**：它是 SwarmAI 认知系统的核心引擎，也是对所有用户可用的产品级能力（r14.1）。
 
 ## 18. 修订记录（非规范，仅供追溯，不按这里的旧说法实现）
 
@@ -775,6 +785,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 每轮注入文件改为确定性的预算选取（修改 AGENTS.md 里"永不截断"的规定）；用户编辑算基线修订；日志类文件不纳入字节不变的检查范围。
   - 验收改成同一查询成对回放；夹具分层，分 train/dev/test，并事先估算样本量；门槛取置信区间下界；模型行为测试从真实检索入口开始；对需要按新不变量重写的现有测试列出清单。
 
+- **r14.1**（Gawan）：整个设计定名为 Swarm Cognitive Distillation Flow（CDF），定位为 SwarmAI 认知系统的核心引擎、产品级能力；文件从 `2026-10-26-recall-corpus-ingestion.md` 改名为 `2026-10-26-swarm-cognitive-distillation-flow.md`；明确了 CDF、ingestion、Flow 视图三个术语的边界。内容不变。
 - **r14：吸收 r13b 的两份独立评审**（`review_r13b_code.md`、`review_r13b_design.md`）。新增：唯一 owner 锁和 epoch；写入日志和重启恢复（单写入者也需要）；`governed_edit` 和编辑器 revision；外部编辑只做到尽力而为（前后快照，检测到冲突就恢复用户版本）；`ingest` CLI 分支和 loopback 唤醒；idle 触发移到 hook 链的最后；公平调度和 maintenance 保底时隙；负载状态沿用代码的 `warning`；单元级状态、`failed_poison`、稳定的 `idem_key` 和 UNIQUE 约束；清理按整天切、累加汇总；`auto_vacuum` 只对新库生效；整理阶段改为 claim-group，DDD 的 why 不会被拆开；改投从 `aggregate_hits` 里移出，作为独立的一步；污染约束在卡 2 之前硬性执行；"更新"只认证据事件时间；写入者清单改为扫描生成，补上 6 处遗漏，旧修改路径在第 1 步全部关闭；基线不会因为 unknown 修改自动修订；审计接口的隔离、脱敏和上限写进正文；第 0 步改为 dev / holdout 分离，按 95% 单侧 Clopper–Pearson 预先定好分母和门槛，holdout 由盲评 subagent 标注。删减：最小关系表代替图 v2，不做语义复审，不做跨项目边。
 - **r13b**（Gawan）：Inbox 清理简化为只保留 30 天，删除前汇总进 `ingestion_daily_stats`；dashboard 对超过 30 天的数据只显示统计；dashboard 定名为 Cognitive Distillation Flow（认知蒸馏流）。
 - **r13：提取与 ingestion 解耦**（Gawan 提出）。source 只负责提取和入队，Inbox 有保留期并定期清理，ingestion worker 是唯一写入者；标准答题卡之外，每类目的地有定制规则（DDD 必须保住 what、how、why）；source 可以有定制的提取格式；按时效性分 lane 触发；统一 dashboard 放在 Need You overlay（「认知蒸馏流」页，加上 `AttentionAuthority` 的 ingestion 异常）。r12 里为多写入者并发设计的准备→提交、租约、跨进程配额、三层强制全部删除。DDD 注入方式和 Library 过滤不改（依据第 1 步的盲评结果）。新增第 0 步：先做离线 go/no-go。
