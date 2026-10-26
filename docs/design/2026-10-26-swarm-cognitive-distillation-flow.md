@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r14 — 设计，已吸收 r13b 两份独立评审（修订记录见 §18）；r14.1 定名
+status: r14.2 — 设计，已吸收 r13b 两份独立评审；r14.1 定名；r14.2 独立 ingestion.db（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -25,7 +25,7 @@ AGENTS.md 说"认知和知识分开、模型提议、OS 决定、价值跨会话
 r13 改成**提取和 ingestion 解耦**：
 
 ```
-各 source  ──只负责提取──▶  Inbox（data.db）  ──按各自的节奏──▶  Ingestion worker  ──▶  MEMORY / EVOLUTION / DDD / Library / 用户 context
+各 source  ──只负责提取──▶  Inbox（ingestion.db）──按各自的节奏──▶  Ingestion worker  ──▶  MEMORY / EVOLUTION / DDD / Library / 用户 context
 （蒸馏、纠正、REFLECT、         候选、状态、审计        整理 → 答题卡 → 目的地规则         唯一写入者
  backflow、DailyActivity、     只保留 30 天           → 检索已有内容 → routing → 写入
  cultivation、skill、"记住"）                                    │
@@ -150,7 +150,21 @@ worker 内部是串行的。受控存储剩下的并发来源只有两个，各�
 
 ## 4. Inbox：存储、状态、恢复、清理
 
-所有表都放在每个用户自己的 `data.db` 里。全新的库直接按 `SQLiteDatabase.SCHEMA` 建表；已有的库通过一次幂等的 `<16` 迁移加表，迁移成功后才把 `user_version` 改成 16。现在的版本号是 15（`sqlite.py:2103`）。
+CDF 的所有表都放在一个独立的 SQLite 文件里：`<app data>/ingestion.db`。这个文件每个用户各一份，路径从 app 数据目录取，不写死。chat 用的 `data.db` 不放这些表。
+
+**为什么单独放一个库**：
+- SQLite 同一时刻只允许一个写事务。CDF 和 chat 分开用两个库，CDF 的入队、清理和恢复就不会和 chat 写消息争同一把锁，也不会被 `data.db` 的迁移、备份以及它 1.5 GB 的体量牵连（本机实测 `data.db` 为 1.5 GB，过去 24 小时写入了 7,307 条消息）。
+- 新库从建表那一刻起就能开启 `auto_vacuum=INCREMENTAL`，所以 30 天清理之后磁盘空间能真正回收。
+- 迁移版本线自己管理，不占用 `data.db` 的版本号。
+- 不需要跨库 join。和消息绑定的 `session_inputs`（§9）留在 `data.db`，由消息入口在同一个事务里写入；CDF 只按事件 id 只读地查询它。
+
+**实测**：在 WAL 模式下模拟负载，同时有三路写入：chat 每秒写 20 条 4 KB 的消息、每 0.5 秒一个 500 行的批量事务、2,000 次 2 KB 的入队。入队延迟 p50 = 0.05 ms，p90 = 0.09 ms，p99 = 0.22 ms，最大 8.4 ms（2026-10-26，scratch 基准）。即使这三路写入在同一个库里，SQLite 也不是瓶颈；分库只是为了隔离锁和生命周期，不是为了提高吞吐。
+
+**建库和迁移**：
+- 不存在 `ingestion.db` 时，在一个事务里依次执行：`PRAGMA auto_vacuum=INCREMENTAL` → `journal_mode=WAL` → 建全部表 → `user_version=1`。
+- 以后升级 schema，按 `user_version` 逐级做幂等迁移。
+- 连接参数和 `data.db` 保持一致：WAL，`synchronous=NORMAL`，入队连接的 busy timeout 为 500 ms，worker 连接为 5 s。
+- 文件损坏时，改名为 `ingestion.db.corrupt-<ts>` 再新建，同时在 Need You 里出一条提示。受控语料不受影响：已经写进文件的单元都带 `cand:<unit_id>`，可以从文件反查出来；只有还没处理完的候选会丢失。
 
 | 表 | 内容 |
 |---|---|
@@ -208,7 +222,7 @@ worker 内部是串行的。受控存储剩下的并发来源只有两个，各�
 - **删除前先汇总**：把要删的行汇总进 `ingestion_daily_stats`，主键是（UTC 日期、source、lane、目的地、状态、原因码、规则版本摘要），空值统一记成 `-`；同时记下候选数、单元数、写入字节数、LLM 调用次数和 token 数。汇总用累加式 upsert（`count = count + excluded.count`），并且和删除放在同一个事务里。事务一旦回滚，就不会多算；成功删掉的行也不会再被统计第二次。
 - **没处理完的候选也一样删**：到期时还没处理完的候选，在删除之前先把状态记为 `expired_unprocessed`，再计入汇总。它们并没有做完 5 次重试，dashboard 也不会这样显示。
 - **清理一定会执行**：清理不调 LLM，也不受资源门控。它属于 maintenance lane 的保底时隙（§6.2），backend 启动后会第一个执行。
-- **磁盘空间**：新建的库和 seed 在建第一张表之前设置 `PRAGMA auto_vacuum=INCREMENTAL`，每次清理后执行 `incremental_vacuum`。已有的库无法在不跑全量 `VACUUM` 的情况下切换这个设置，所以只依赖 SQLite 复用空闲页：库的大小会稳定在约 30 天数据的量，不会再缩小。这一点在验收里分别对新库、seed 复制出来的库和升级上来的库验证。
+- **磁盘空间**：`ingestion.db` 建库时就开启了 `auto_vacuum=INCREMENTAL`，每次清理后执行 `incremental_vacuum`，库的大小保持在 30 天数据左右。
 - **Inbox 只存提取结果**：source 自己的原始数据（会话 transcript、DailyActivity、run 记录）仍然归 source 自己管。Inbox 只存提取出来的内容和来源 id。
 - 超过 30 天的数据，dashboard 只显示汇总统计（§10）。
 
@@ -572,7 +586,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 
 **安全和上限**（正文规定，不只写在修订记录里）：
 - 查询连接以 SQLite 的 `mode=ro` 打开，并设置 `query_only`。
-- 只读当前实例自己的 `data.db`。
+- 只读当前实例自己的 `ingestion.db`。需要来源信息时，再只读地查 `data.db` 的 `session_inputs`。
 - 列表每页最多 50 条，时间窗最长 30 天；详情接口里的 payload 和理由字段，单个最多 16 KB。
 - 写入 Inbox 之前，先用现有的密钥扫描规则做脱敏；返回给前端时再扫一遍。
 - 所有文本都作为数据渲染（转义），从不返回存好的 HTML。
@@ -671,7 +685,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 4. **通过的条件**：每项指标都达到门槛，并且在线模式下三次运行的一致率不低于 95%。报告里列出每项的分子、分母、点估计和下界，被判为 `DEFER` 或 `uncertain` 的单元单独计数。**没通过**时，只回到 dev 上改 prompt 和规则，然后用一份新版本的 holdout 再判一次，不进入第 1 步。
 
 **第 1 步：Inbox、worker、writer、dashboard，加第一个 source**
-5. v16 迁移（§4 的全部表，加上 `session_inputs`）、owner 锁和 epoch（§3.1）、`enqueue()`、`ingest` CLI 和唤醒接口、lane 调度、公平性、负载感知、清理、写入日志和恢复（§4.3）、writer、`governed_edit` 和两个编辑器接口的 revision。**同时把 §8 表里所有旧的修改路径关成只读**。
+5. 建 `ingestion.db`（§4 的全部表），`data.db` 加 `session_inputs`（v16 迁移，只加这一张表）、owner 锁和 epoch（§3.1）、`enqueue()`、`ingest` CLI 和唤醒接口、lane 调度、公平性、负载感知、清理、写入日志和恢复（§4.3）、writer、`governed_edit` 和两个编辑器接口的 revision。**同时把 §8 表里所有旧的修改路径关成只读**。
 6. Need You 的 Cognitive Distillation Flow 页（第一版范围），以及 `AttentionAuthority` 的 `ingestion` source。
 7. 第一个 source：backflow。它当前质量最差（15 条里 9 条只在原会话里有意义），而且只写 Library，风险最小。
 - 验收：
@@ -696,7 +710,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - `swarm_select_tests.py` 选出的测试全部通过；
 - Windows CI 通过；
 - 四种完整的 HTTP backend 模式下，lane 都能被触发；CLI 和 hook 子进程从不处理候选；
-- Inbox 只保留 30 天。删掉的行在汇总表里的计数和删除前一致；连续两次跨越午夜的清理、以及事务回滚，都不会多算或漏算；新库、seed 复制的库、升级上来的库，都检查一遍 `PRAGMA auto_vacuum` 的值。
+- Inbox 只保留 30 天。删掉的行在汇总表里的计数和删除前一致；连续两次跨越午夜的清理、以及事务回滚，都不会多算或漏算；新建的 `ingestion.db` 上 `PRAGMA auto_vacuum` 为 INCREMENTAL；清理之后文件确实变小；文件损坏时能重建，并发出提示。
 
 上线后：每次改 prompt 或规则，都要（1）用 holdout 的当前版本跑一次在线模式，各项门槛不能退化；（2）对 Inbox 里现有的 30 天真实数据跑一次录制模式，列出决定前后的差异。30 天内某个 source 的样本太少时，以 holdout 为准。30 天以前的数据只剩统计数字，不能回放。
 
@@ -720,9 +734,9 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 | source 的登记信息（lane、payload 格式、提示） | `store_contracts` | 人改 | `enqueue()`、worker |
 | 标准答题卡、路由表、DDD 段矩阵、配额、注入预算、Inbox 保留期 | `store_contracts` | 人改 | worker、读取侧 |
 | 目的地规则 | `core/ingestion_rules/*.py` | 人改 | worker |
-| 候选的原始内容、状态、每张卡的结果、去向、理由（最近 30 天） | `ingestion_inbox` | `enqueue()`、worker | worker、dashboard |
+| 候选的原始内容、状态、每张卡的结果、去向、理由（最近 30 天） | `ingestion.db` 的 `ingestion_inbox` | `enqueue()`、worker | worker、dashboard |
 | 30 天以前的统计 | `ingestion_daily_stats` | maintenance lane，在删除前汇总 | dashboard 的历史趋势 |
-| 输入事件和它的 trust | `session_inputs` | 消息入口、工具结果入口 | `enqueue()`、dashboard |
+| 输入事件和它的 trust | `data.db` 的 `session_inputs` | 消息入口、工具结果入口 | `enqueue()`、dashboard |
 | 每个 lane 的到期时间 | `ingestion_lanes` 表 | worker | 触发点、调度 |
 | 谁是 worker | owner 锁 + `ingestion_owner.epoch` | 完整的 backend 启动时 | 每一次状态推进 |
 | 写入进行到哪一步 | `ingestion_writes` | writer、`governed_edit` | 启动时的恢复 |
@@ -785,6 +799,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 每轮注入文件改为确定性的预算选取（修改 AGENTS.md 里"永不截断"的规定）；用户编辑算基线修订；日志类文件不纳入字节不变的检查范围。
   - 验收改成同一查询成对回放；夹具分层，分 train/dev/test，并事先估算样本量；门槛取置信区间下界；模型行为测试从真实检索入口开始；对需要按新不变量重写的现有测试列出清单。
 
+- **r14.2**（Gawan）：CDF 的表改放在独立的 `ingestion.db`，`session_inputs` 留在 `data.db`。理由是和 chat 的写锁隔离，并且新库可以开启 `auto_vacuum`，这样代码评审 B4 不再成立。附上实测的入队延迟。受控语料仍然是文件系统。
 - **r14.1**（Gawan）：整个设计定名为 Swarm Cognitive Distillation Flow（CDF），定位为 SwarmAI 认知系统的核心引擎、产品级能力；文件从 `2026-10-26-recall-corpus-ingestion.md` 改名为 `2026-10-26-swarm-cognitive-distillation-flow.md`；明确了 CDF、ingestion、Flow 视图三个术语的边界。内容不变。
 - **r14：吸收 r13b 的两份独立评审**（`review_r13b_code.md`、`review_r13b_design.md`）。新增：唯一 owner 锁和 epoch；写入日志和重启恢复（单写入者也需要）；`governed_edit` 和编辑器 revision；外部编辑只做到尽力而为（前后快照，检测到冲突就恢复用户版本）；`ingest` CLI 分支和 loopback 唤醒；idle 触发移到 hook 链的最后；公平调度和 maintenance 保底时隙；负载状态沿用代码的 `warning`；单元级状态、`failed_poison`、稳定的 `idem_key` 和 UNIQUE 约束；清理按整天切、累加汇总；`auto_vacuum` 只对新库生效；整理阶段改为 claim-group，DDD 的 why 不会被拆开；改投从 `aggregate_hits` 里移出，作为独立的一步；污染约束在卡 2 之前硬性执行；"更新"只认证据事件时间；写入者清单改为扫描生成，补上 6 处遗漏，旧修改路径在第 1 步全部关闭；基线不会因为 unknown 修改自动修订；审计接口的隔离、脱敏和上限写进正文；第 0 步改为 dev / holdout 分离，按 95% 单侧 Clopper–Pearson 预先定好分母和门槛，holdout 由盲评 subagent 标注。删减：最小关系表代替图 v2，不做语义复审，不做跨项目边。
 - **r13b**（Gawan）：Inbox 清理简化为只保留 30 天，删除前汇总进 `ingestion_daily_stats`；dashboard 对超过 30 天的数据只显示统计；dashboard 定名为 Cognitive Distillation Flow（认知蒸馏流）。
