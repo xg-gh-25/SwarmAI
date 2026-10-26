@@ -2181,6 +2181,47 @@ def _compute_delta(current_results: dict, history: list[dict]) -> list[dict]:
     return changes
 
 
+def select_by_affected_by(cases: list[dict], tokens: list[str]) -> list[str]:
+    """IDs of the cases whose ``affected_by`` names any token (substring match),
+    e.g. ``AGENT`` or ``SOUL.P1`` or ``backend/core/prompt_builder.py``."""
+    out = []
+    for c in cases:
+        refs = [str(a) for a in (c.get("affected_by") or [])]
+        if any(t and t in r for t in tokens for r in refs):
+            out.append(c["id"])
+    return out
+
+
+def compare_repeats(history: list[dict], runs: list[dict]) -> dict:
+    """Which cases flipped, judged per case, not by the total score.
+
+    The baseline for a case is its latest status in ``history`` (runs before this
+    change). ``pass_to_fail`` = passed at baseline, failed in ANY repeat (a break may
+    show up in one run out of two); ``fail_to_pass`` = failed at baseline, passed in
+    every repeat; ``unstable`` = the repeats disagree with each other.
+    """
+    baseline: dict[str, str] = {}
+    for run in history:
+        for c in run.get("cases", []):
+            if c.get("id") and c.get("status") not in (None, "skipped"):
+                baseline[c["id"]] = c["status"]
+    seen: dict[str, list[str]] = {}
+    for run in runs:
+        for c in run.get("cases", []):
+            if c.get("id") and c.get("status") not in (None, "skipped"):
+                seen.setdefault(c["id"], []).append(c["status"])
+    out = {"pass_to_fail": [], "fail_to_pass": [], "unstable": []}
+    for cid, statuses in sorted(seen.items()):
+        if len(set(statuses)) > 1:
+            out["unstable"].append(cid)
+        base = baseline.get(cid)
+        if base == "passed" and "failed" in statuses:
+            out["pass_to_fail"].append(cid)
+        elif base == "failed" and all(s == "passed" for s in statuses):
+            out["fail_to_pass"].append(cid)
+    return out
+
+
 def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path:
     """Generate purpose-driven HTML report organized by 6 cognitive dimensions.
 
@@ -2783,13 +2824,30 @@ def cmd_run(args):
     print(f"Loaded {len(golden_set['cases'])} cases from {gs_path.name}")
 
     case_filter = args.cases.split(",") if args.cases else None
+    affected = getattr(args, "affected_by", None)
+    if affected:
+        picked = select_by_affected_by(golden_set["cases"], affected.split(","))
+        case_filter = [c for c in picked if case_filter is None or c in case_filter]
+        print(f"  --affected-by {affected}: {len(case_filter)} case(s)")
+        if not case_filter:
+            # An empty filter would mean "run everything" to run_eval.
+            print("  No case names those files — nothing to run.")
+            return
     tags = args.tags.split(",") if args.tags else None
-    run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags,
-                          programmatic_only=getattr(args, "programmatic_only", False),
-                          include_behavior=getattr(args, "include_behavior", False),
-                          verify_teeth=getattr(args, "verify_teeth", False))
-
-    out_path = write_run(run_result, root)
+    repeat = max(1, int(getattr(args, "repeat", 1) or 1))
+    history = _load_history(root) if repeat > 1 else []
+    runs = []
+    for _ in range(repeat):
+        run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags,
+                              programmatic_only=getattr(args, "programmatic_only", False),
+                              include_behavior=getattr(args, "include_behavior", False),
+                              verify_teeth=getattr(args, "verify_teeth", False))
+        out_path = write_run(run_result, root)
+        runs.append(run_result)
+    if repeat > 1:
+        flips = compare_repeats(history, runs)
+        print(f"  Repeats: {repeat} | pass→fail: {flips['pass_to_fail'] or 'none'} | "
+              f"fail→pass: {flips['fail_to_pass'] or 'none'} | unstable: {flips['unstable'] or 'none'}")
 
     try:
         html_path = generate_html_report(run_result, golden_set, root)
@@ -2855,6 +2913,12 @@ def main():
                             "per-session health hook leaves it OFF (deadline-bound).")
     run_p.add_argument("--no-verify-teeth", dest="verify_teeth", action="store_false",
                        help="Disable canary teeth (skip the negative-variant execution).")
+    run_p.add_argument("--affected-by", dest="affected_by",
+                       help="Comma-separated tokens; run only cases whose affected_by names one "
+                            "(e.g. AGENT,SOUL.P1,STEERING) — the cases a governance edit can move.")
+    run_p.add_argument("--repeat", type=int, default=1,
+                       help="Run the selected cases N times and list the cases that flipped vs "
+                            "their previous status (LLM-judged cases are not deterministic).")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
     sub.add_parser("validate", help="Validate golden_set.yaml schema")
