@@ -38,9 +38,8 @@ logger = logging.getLogger(__name__)
 # The judge PROMPT teaches SHORTHAND dimension tokens (factual/judgment/utility) —
 # short words score better with the LLM. But the golden-set CANONICAL dimensions are
 # the long forms. This map NORMALIZES the judge's emission → canonical so the scorer
-# ONLY EVER returns a canonical dimension. Without normalization, session_harvest
-# writes the shorthand verbatim into golden_set drafts and they leak into /health as
-# an off-canonical bucket (run_2b73a16e / C044: the 11 GS_HARVEST_* 'judgment' cases).
+# ONLY EVER returns a canonical dimension (the Online tab and low-session details
+# show it next to the golden set's own dimensions).
 # Every canonical value maps to ITSELF (identity) so an already-canonical emission and
 # the no-divergence dims (capability/compliance/recovery) pass through unchanged and
 # never fall into the unknown→capability default. An out-of-vocab token → 'capability'

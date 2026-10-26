@@ -95,9 +95,8 @@ def test_score_session_judge_receives_real_output():
 # but the golden-set canonical dimensions are the long forms
 # (factual_accuracy/judgment_quality/context_utility). session_scorer must NORMALIZE
 # the judge's shorthand → canonical so it ONLY ever emits a canonical dimension —
-# otherwise session_harvest writes shorthand into golden_set drafts and they leak
-# into /health per-dimension scores as an off-canonical bucket (the 11 GS_HARVEST_*
-# 'judgment' cases). Root fix at the emission point, one place.
+# otherwise an off-canonical dimension reaches the Online tab. Root fix at the
+# emission point, one place.
 
 def _judge_emitting(dimension: str):
     import json

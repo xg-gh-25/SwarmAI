@@ -170,8 +170,7 @@ def parse_pre_tool_text(stdout: str) -> list[int]:
     (AGENT R20: a response that makes a tool call carries no text before it,
     except the one restatement sentence that opens a task).
     """
-    lengths: list[int] = []
-    pending = 0
+    blocks: list = []
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
@@ -184,16 +183,25 @@ def parse_pre_tool_text(stdout: str) -> list[int]:
         if not isinstance(message, dict) or message.get("role") not in (None, "assistant"):
             continue
         content = message.get("content")
-        if not isinstance(content, list):
+        if isinstance(content, list):
+            blocks.extend(content)
+    return pre_tool_text_lengths(blocks)
+
+
+def pre_tool_text_lengths(blocks) -> list[int]:
+    """Length of the text before each tool_use in a sequence of assistant content
+    blocks, in order (``no_pre_tool_text``). Shared by the offline run (stream-json
+    events) and the online scoring of real sessions (stored message blocks)."""
+    lengths: list[int] = []
+    pending = 0
+    for block in blocks:
+        if not isinstance(block, dict):
             continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "text" and isinstance(block.get("text"), str):
-                pending += len(block["text"].strip())
-            elif block.get("type") == "tool_use":
-                lengths.append(pending)
-                pending = 0
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            pending += len(block["text"].strip())
+        elif block.get("type") == "tool_use":
+            lengths.append(pending)
+            pending = 0
     return lengths
 
 

@@ -118,10 +118,8 @@ async def get_golden_set(category: Optional[str] = Query(default=None)):
 
 @router.get("/session-quality")
 async def get_session_quality():
-    """Layer③ overview for the Session Quality tab: latest run summary (scored/
-    low), weekly low-rate trend (drift radar), and low-score session detail.
-    (The Layer② pending-draft queue was removed with option D — harvest now
-    auto-gates via the teeth gate, no human-ratification queue.)"""
+    """The Online tab: the last online-scoring run (checks O1–O5 over the owner's
+    sessions from the last 7 days, low-scoring sessions, weekly trend)."""
     svc = get_eval_service()
     return svc.get_session_quality()
 

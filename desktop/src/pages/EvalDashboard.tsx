@@ -245,7 +245,7 @@ function useRunDetail(runId: string | null) {
 const TABS = [
   { id: 'overview', label: 'Overview', icon: 'monitoring' },
   { id: 'golden-set', label: 'Golden Set', icon: 'checklist' },
-  { id: 'session-quality', label: 'Session Quality', icon: 'reviews' },
+  { id: 'session-quality', label: 'Online', icon: 'reviews' },
   { id: 'context', label: 'Context Health', icon: 'sync' },
   { id: 'governance', label: 'Governance', icon: 'gavel' },
   { id: 'trends', label: 'Trends', icon: 'trending_up' },
@@ -1438,105 +1438,133 @@ export function ReportsTab() {
 }
 
 
-// ─── Session Quality Tab (Layer ②③) ────────────────────────────────────────────
-// Surfaces the weekly real-session quality loop: Layer③ scores real sessions
-// (goal + tool-selection judges) and shows low-score attribution. Layer② harvest
-// no longer produces a human-ratification queue — it auto-gates each harvested
-// case through the teeth gate (option D): pass → lands tier=active, fail → discarded
-// to the recoverable archive. There is NO pending-draft queue / Promote / Discard.
-// Backend: GET /eval/session-quality (overview + trend + low detail).
+// ─── Online Tab ───────────────────────────────────────────────────────────────
+// Online scoring (backend jobs/handlers/session_quality.py, GET /eval/session-quality):
+// every week, the owner's sessions from the last 7 days are checked against the
+// rules (O1–O3, every session) and judged (O4–O5, a sample). There is no expected
+// answer. The decision here: which rule is slipping in real use, and in which
+// sessions. So one row per check, its failure rate against last week, and the
+// example sessions under it; everything else stays out.
 
-interface SessionQualityLowDetail {
+interface OnlineExample {
   session_id?: string;
+  title?: string;
+  snippet?: string;
+  reason?: string;
+}
+interface OnlineCheck {
+  checked?: number;
+  failed?: number;
+  rate?: number | null;
+  examples?: OnlineExample[];
+}
+interface OnlineLowDetail {
+  session_id?: string;
+  title?: string;
   goal_score?: number;
   tool_score?: number;
   dimension?: string;
   reason?: string;
 }
-interface SessionQualityOverview {
-  scored: number;
-  low: number;
-  drafts: number;
+export interface OnlineScoring {
   last_run: string | null;
-  trend: number[];
-  low_details?: SessionQualityLowDetail[];
+  window_days?: number | null;
+  sessions_checked?: number;
+  checks?: Record<string, OnlineCheck>;
+  low_details?: OnlineLowDetail[];
+  sampler_error?: string | null;
+  trend?: { week?: string; rates?: Record<string, number> }[];
 }
 
 function useSessionQuality() {
-  return useQuery<SessionQualityOverview>({
+  return useQuery<OnlineScoring>({
     queryKey: ['eval-session-quality'],
-    queryFn: async () => (await api.get<SessionQualityOverview>('/eval/session-quality')).data,
+    queryFn: async () => (await api.get<OnlineScoring>('/eval/session-quality')).data,
     staleTime: 60_000,
   });
 }
 
-// Weekly low-rate trend uses the shared Sparkline (defined below) — do NOT
-// redefine it here (R27: reuse the existing symbol, don't duplicate).
+const ONLINE_CHECKS: { id: string; en: string; zh: string }[] = [
+  { id: 'O1_LANGUAGE', en: 'Replies in the language you asked in', zh: '用你提问的语言回答' },
+  { id: 'O2_SILENT_TOOLS', en: 'No chatter before tool calls', zh: '工具调用前不写多余的字' },
+  { id: 'O3_CORRECTIONS', en: 'Sessions where you corrected it', zh: '被你纠正过的会话' },
+  { id: 'O4_GOAL', en: 'Delivered what you asked for (judged, sample)', zh: '交付了你要的东西（judge 抽样）' },
+  { id: 'O5_TOOLS', en: 'Chose sensible tools (judged, sample)', zh: '工具选得合理（judge 抽样）' },
+];
+
+const pct = (r?: number | null) => (r == null ? '—' : `${Math.round(r * 100)}%`);
 
 export function SessionQualityTab() {
-  const { data: overview, isLoading, isError: overviewErr } = useSessionQuality();
+  const { data: online, isLoading, isError } = useSessionQuality();
+  const { i18n } = useTranslation();
+  const lang: 'en' | 'zh' = i18n?.language?.startsWith('zh') ? 'zh' : 'en';
+  const zh = lang === 'zh';
 
-  if (overviewErr) return <ErrorState message="Failed to load session quality data. Is the backend running?" />;
+  if (isError) return <ErrorState message="Failed to load online scoring. Is the backend running?" />;
   if (isLoading) return <Loading />;
 
-  const lowDetails = overview?.low_details ?? [];
+  const trend = online?.trend ?? [];
+  const lastWeek = trend.length >= 2 ? trend[trend.length - 2].rates ?? {} : {};
+  const low = online?.low_details ?? [];
+  let status: string | null = null;
+  if (!online?.last_run) status = zh ? '还没有运行过。它每周运行一次，也可以在 Jobs & Runs 里手动运行。' : 'Not run yet. It runs weekly; you can also run it from Jobs & Runs.';
+  else if (online.sampler_error) status = (zh ? '这周没评成：' : 'This week did not run: ') + online.sampler_error;
+  else if (!online.sessions_checked) status = zh ? '过去 7 天没有可评的会话。' : 'No sessions to check in the last 7 days.';
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-6">
-      {/* Overview stat cards + drift sparkline */}
-      <div>
-        <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
-          Session Quality — Real-Session Loop (Layer ②③)
-        </h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {[
-            { label: 'Scored (last run)', value: overview?.scored ?? 0 },
-            { label: 'Low-score', value: overview?.low ?? 0 },
-            { label: 'Drafts harvested', value: overview?.drafts ?? 0 },
-          ].map((s) => (
-            <div key={s.label} className="border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-card)]">
-              <div className="text-display font-semibold">{s.value}</div>
-              <div className="text-small text-[var(--color-text-muted)] mt-1">{s.label}</div>
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-3 mt-3 text-small text-[var(--color-text-muted)]">
-          <span>Weekly low-rate trend</span>
-          <div className="w-[120px]"><Sparkline values={overview?.trend ?? []} height={28} /></div>
-          {overview?.last_run && <span className="ml-auto tabular-nums">last run: {overview.last_run}</span>}
-        </div>
-      </div>
-
-      {/* Low-score session detail (attribution) */}
-      {lowDetails.length > 0 && (
-        <div>
-          <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">
-            Low-Score Sessions ({lowDetails.length})
-          </h3>
-          <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-            <table className="w-full text-small">
-              <thead>
-                <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                  <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Session</th>
-                  <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Dimension</th>
-                  <th className="text-right px-4 py-2.5 text-[var(--color-text-muted)]">Goal</th>
-                  <th className="text-right px-4 py-2.5 text-[var(--color-text-muted)]">Tool</th>
-                  <th className="text-left px-4 py-2.5 text-[var(--color-text-muted)]">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lowDetails.map((l, i) => (
-                  <tr key={l.session_id || i} className="border-b border-[var(--color-border)] last:border-0">
-                    <td className="px-4 py-2.5 font-mono truncate max-w-[140px]">{l.session_id || '—'}</td>
-                    <td className="px-4 py-2.5">{l.dimension || '—'}</td>
-                    <td className="px-4 py-2.5 text-right">{l.goal_score?.toFixed(2) ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-right">{l.tool_score?.toFixed(2) ?? '—'}</td>
-                    <td className="px-4 py-2.5 text-[var(--color-text-muted)]">{l.reason || '—'}</td>
-                  </tr>
+    <div className="max-w-5xl mx-auto p-6" data-testid="online-tab">
+      <h3 className="text-small font-semibold mb-1">{zh ? '线上评分' : 'Online'}</h3>
+      <p className="text-meta text-[var(--color-text-muted)] mb-5">
+        {zh ? '每周检查你过去 7 天的真实会话，没有标准答案，看规则有没有守住、事情有没有办成。'
+            : 'Every week, checks your real sessions from the last 7 days. There is no expected answer: it looks at whether rules held and tasks got done.'}
+        {online?.last_run && !online.sampler_error && (
+          <span className="tabular-nums"> {zh ? '上次' : 'Last run'}: {online.last_run.slice(0, 16).replace('T', ' ')} · {online.sessions_checked ?? 0} {zh ? '个会话' : 'sessions'}</span>
+        )}
+      </p>
+      {status ? (
+        <p className="text-small text-[var(--color-text-muted)]" data-testid="online-status">{status}</p>
+      ) : (
+        <ul className="space-y-4">
+          {ONLINE_CHECKS.map((c) => {
+            const check = online?.checks?.[c.id] ?? {};
+            const before = lastWeek[c.id];
+            const worse = check.rate != null && before != null && check.rate > before;
+            return (
+              <li key={c.id} data-testid={`online-check-${c.id}`}>
+                <div className="flex items-baseline gap-3 text-small">
+                  <span className={worse ? 'font-semibold text-[var(--color-status-error)]' : ''}>{c[lang]}</span>
+                  <span className="ml-auto tabular-nums">{pct(check.rate)}</span>
+                  <span className="text-meta text-[var(--color-text-muted)] tabular-nums w-28 text-right">
+                    {check.checked ? `${check.failed ?? 0}/${check.checked}` : (zh ? '无数据' : 'no data')}
+                    {before != null && ` · ${zh ? '上周' : 'last'} ${pct(before)}`}
+                  </span>
+                </div>
+                {(check.examples ?? []).map((e, i) => (
+                  <div key={`${e.session_id}-${i}`} className="text-meta text-[var(--color-text-muted)] mt-1 pl-3">
+                    <span className="text-[var(--color-text)]">{e.title || e.session_id}</span>
+                    {e.snippet && <> — “{e.snippet}”</>}
+                    {e.reason && <> — {e.reason}</>}
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {!status && low.length > 0 && (
+        <div className="mt-8">
+          <h4 className="text-small font-semibold mb-2">{zh ? '低分会话' : 'Low-scoring sessions'}</h4>
+          <ul className="space-y-2">
+            {low.map((l, i) => (
+              <li key={l.session_id || i} className="text-small">
+                <span>{l.title || l.session_id || '—'}</span>
+                <span className="text-meta text-[var(--color-text-muted)] tabular-nums">
+                  {' '}· {zh ? '目标' : 'goal'} {l.goal_score?.toFixed(2) ?? '—'} · {zh ? '工具' : 'tools'} {l.tool_score?.toFixed(2) ?? '—'}
+                </span>
+                {l.reason && <div className="text-meta text-[var(--color-text-muted)]">{l.reason}</div>}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

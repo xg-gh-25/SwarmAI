@@ -1,169 +1,201 @@
-"""Tests for the session-quality job handler — layer②③ weekly orchestration.
-
-The handler wires: sample sessions → score (layer③) → low-score record +
-harvest draft (layer②) → weekly report. All external boundaries are injected
-seams (no Bedrock, no real DB, no disk) — same discipline as eval_scheduled.
-
-The VALUE-BEARING logic tested here is `select_sessions` (the sampling 口径,
-XG-fixed): a session qualifies if it HAS a correction OR is turn-anomalous
-(turns > 20, or turns == 1 with a correction), capped at N=10 (fixed).
-"""
+"""Online eval scoring (jobs/handlers/session_quality.py; design
+2026-10-26-eval-as-product §3.5, final test 7): only the last 7 days, the
+deterministic checks over every session, the judge on at most 10, a state file the
+dashboard reads back with the same numbers, and sampler errors kept apart from an
+empty week. All boundaries injected: no Bedrock, no real DB."""
 from __future__ import annotations
 
 import asyncio
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from jobs.handlers.session_quality import (
-    select_sessions,
-    _enumerate_sessions,
-    run_session_quality,
-)
+import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from jobs.handlers import session_quality as sq  # noqa: E402
 
-def _sessions(**turns_by_id):
-    """{session_id: turn_count} → the shape select_sessions consumes."""
-    return dict(turns_by_id)
-
-
-def test_select_with_correction_qualifies():
-    sel = select_sessions(
-        session_turns={"a": 3, "b": 5},
-        correction_session_ids={"a"},
-    )
-    assert "a" in sel and "b" not in sel  # a has a correction; b is normal
+NOW = datetime(2026, 10, 26, 12, tzinfo=timezone.utc)
+RECENT = (NOW - timedelta(days=1)).astimezone().replace(tzinfo=None).isoformat()
+OLD = (NOW - timedelta(days=9)).astimezone().replace(tzinfo=None).isoformat()
 
 
-def test_select_turn_anomaly_long_qualifies():
-    sel = select_sessions(
-        session_turns={"long": 25, "normal": 4},
-        correction_session_ids=set(),
-    )
-    assert "long" in sel and "normal" not in sel  # >20 turns is anomalous
+def _msg(role, content, at=RECENT):
+    return {"role": role, "content": json.dumps(content) if isinstance(content, list) else content,
+            "created_at": at}
 
 
-def test_select_single_turn_needs_correction():
-    # turns==1 alone is NOT anomalous; only turns==1 WITH a correction qualifies
-    sel = select_sessions(
-        session_turns={"one_nocorr": 1, "one_corr": 1},
-        correction_session_ids={"one_corr"},
-    )
-    assert "one_corr" in sel
-    assert "one_nocorr" not in sel
+def _text(t):
+    return {"type": "text", "text": t}
 
 
-def test_select_caps_at_ten():
-    # 15 correction sessions → capped at 10 (fixed N, not configurable)
-    turns = {f"s{i}": 5 for i in range(15)}
-    corr = {f"s{i}" for i in range(15)}
-    sel = select_sessions(session_turns=turns, correction_session_ids=corr)
-    assert len(sel) == 10
+def _tool(name="Read"):
+    return {"type": "tool_use", "name": name, "input": {}}
 
 
-def test_select_empty_returns_empty():
-    assert select_sessions(session_turns={}, correction_session_ids=set()) == []
+def _good(title="Good chat"):
+    return {"title": title, "messages": [_msg("user", "端口是多少？"),
+                                          _msg("assistant", [_tool()]),
+                                          _msg("assistant", [_text("端口是 7421。")])]}
 
 
-def test_select_dedups_correction_and_anomaly():
-    # a session that BOTH has a correction AND is long → counted once
-    sel = select_sessions(
-        session_turns={"both": 30},
-        correction_session_ids={"both"},
-    )
-    assert sel.count("both") == 1
+def _english_answer_to_chinese():
+    return {"title": "Wrong language", "messages": [
+        _msg("user", "这个函数是做什么的？"),
+        _msg("assistant", [_text("It parses the config file and returns a dict of settings.")])]}
 
 
-# ── DAO-contract + N+1-efficiency regression ──
-# History: _enumerate_sessions once called db.sessions.list_all() (nonexistent) →
-# swallowed → inert. Then the N+1 fix: it now (1) gets turn counts from ONE indexed
-# aggregate db.messages.role_counts_by_session("user"), then (2) hydrates messages
-# ONLY for the ≤N sessions select_sessions picks — NOT all sessions. These pin BOTH
-# the count-source contract AND the "only hydrate selected" efficiency invariant.
-
-class _FakeMessages:
-    def __init__(self, counts):
-        self._counts = counts
-        self.hydrated: list[str] = []          # spy: which sids got list_by_session
-    async def role_counts_by_session(self, role):
-        assert role == "user"                  # the sampler counts USER turns
-        return dict(self._counts)
-    async def list_by_session(self, sid):
-        self.hydrated.append(sid)              # record every hydration
-        return [
-            {"role": "user", "content": "fix the bug in X"},
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "done"},
-                {"type": "tool_use", "name": "Edit"},
-            ]},
-        ]
-
-class _FakeDB:
-    def __init__(self, counts):
-        self.messages = _FakeMessages(counts)
+def _chatty_tools():
+    return {"title": "Chatty", "messages": [
+        _msg("user", "fix the typo in the readme please"),
+        _msg("assistant", [_text("Sure."), _tool(), _text("Now let me also check another file."), _tool()]),
+        _msg("assistant", [_text("Done, fixed the typo.")])]}
 
 
-def test_enumerate_counts_via_aggregate_not_per_session_loop():
-    """Turn counts must come from ONE role_counts_by_session aggregate — NOT a
-    per-session list_by_session loop. If reverted to the loop, _FakeMessages has no
-    such attr → AttributeError → RED (non-vacuous)."""
-    # 3 sessions; only 'anom' (turns>20) qualifies for sampling
-    db = _FakeDB({"anom": 30, "normal": 5, "tiny": 2})
-    out = asyncio.run(_enumerate_sessions(db, correction_session_ids=set()))
-    assert out["session_turns"] == {"anom": 30, "normal": 5, "tiny": 2}
-    # hydrated ONLY the selected (turns>20) session — not all 3 (the N+1 fix)
-    assert db.messages.hydrated == ["anom"]
-    assert out["sessions"]["anom"]["tool_names"] == ["Edit"]
-    # non-selected sessions are counted but NOT hydrated
-    assert "normal" not in out["sessions"]
+def _scorer(goal=1.0, tool=1.0, calls=None):
+    def score(prompt, response, tools):
+        if calls is not None:
+            calls.append(prompt)
+        return {"goal_score": goal, "tool_score": tool, "dimension": "capability", "reason": "judge said so"}
+    return score
 
 
-def test_enumerate_hydrates_only_selected_scales_with_N_not_total():
-    """The efficiency invariant: message reads == len(selected), independent of how
-    many sessions exist. 100 sessions, 2 anomalous → exactly 2 hydrations."""
-    counts = {f"s{i}": 3 for i in range(100)}   # 100 normal (won't select)
-    counts["big1"] = 25; counts["big2"] = 40    # 2 anomalous (turns>20)
-    db = _FakeDB(counts)
-    out = asyncio.run(_enumerate_sessions(db, correction_session_ids=set()))
-    assert sorted(db.messages.hydrated) == ["big1", "big2"]   # 2 reads, not 102
-    assert set(out["sessions"]) == {"big1", "big2"}
+def _run(tmp_path, sessions, *, corrections=(), scorer=None, sampler_error=None, state=None):
+    cpath = tmp_path / "corrections.jsonl"
+    cpath.write_text("".join(json.dumps(c) + "\n" for c in corrections))
+    spath = tmp_path / ".context" / ".session-quality-state.json"
+    if state is not None:
+        spath.parent.mkdir(parents=True, exist_ok=True)
+        spath.write_text(json.dumps(state))
+    seen = {}
+
+    def sampler(since):
+        seen["since"] = since
+        out = {"sessions": sessions}
+        if sampler_error:
+            out = {"sessions": {}, "sampler_error": sampler_error}
+        return out
+    result = sq.run_session_quality(sampler=sampler, scorer=scorer or _scorer(), corrections_path=cpath,
+                                    state_path=spath, now=NOW)
+    return result, spath, seen
 
 
-def test_sampler_failure_is_loud_not_silent_empty():
-    """A broken sampler must surface status=degraded + sampler_error, NOT masquerade
-    as a clean 0-session success (GC19: the exact mask that hid list_all())."""
-    def _boom_sampler():
-        return {"session_turns": {}, "sessions": {},
-                "sampler_error": "AttributeError: 'SQLiteTable' object has no attribute 'list_all'"}
-    res = run_session_quality(
-        dry_run=True, sampler=_boom_sampler,
-        scorer=lambda p, r, t: {"status": "success", "goal_score": 1.0, "tool_score": 1.0},
-        harvester=lambda **k: None,
-    )
-    assert res["status"] == "degraded"
-    assert "sampler_error" in res
+def test_the_window_is_seven_days_for_sessions_turns_and_corrections(tmp_path):
+    old_turn = {"title": "Old", "messages": [_msg("user", "这个函数是做什么的？", at=OLD),
+                                             _msg("assistant", [_text("It parses config.")], at=OLD)]}
+    corrections = [{"type": "user_correction", "session_id": "a", "ts": (NOW - timedelta(days=9)).timestamp()},
+                   {"type": "tool_failure", "session_id": "a", "ts": NOW.timestamp()}]
+    result, _, seen = _run(tmp_path, {"a": _good(), "old": old_turn}, corrections=corrections)
+    assert seen["since"] == (NOW - timedelta(days=7)).astimezone().replace(tzinfo=None).isoformat()
+    assert result["sessions_checked"] == 1                       # the old turn is outside the window
+    assert result["checks"]["O3_CORRECTIONS"]["failed"] == 0     # old correction, and a tool failure
+
+
+def test_deterministic_checks_cover_every_session_and_name_examples(tmp_path):
+    sessions = {"a": _good(), "b": _english_answer_to_chinese(), "c": _chatty_tools()}
+    corrections = [{"type": "user_correction", "session_id": "c", "ts": NOW.timestamp()}]
+    result, _, _ = _run(tmp_path, sessions, corrections=corrections)
+    o1, o2, o3 = (result["checks"][k] for k in ("O1_LANGUAGE", "O2_SILENT_TOOLS", "O3_CORRECTIONS"))
+    assert (o1["checked"], o1["failed"]) == (3, 1) and o1["examples"][0]["title"] == "Wrong language"
+    assert o1["examples"][0]["snippet"] == "这个函数是做什么的？"
+    assert (o2["checked"], o2["failed"]) == (2, 1) and o2["examples"][0]["session_id"] == "c"
+    assert (o3["checked"], o3["failed"], o3["rate"]) == (3, 1, 0.333)
+
+
+def test_the_judge_sees_at_most_ten_sessions_corrected_first(tmp_path):
+    sessions = {f"s{i:02d}": _good() for i in range(25)}
+    for sid in ("s20", "s21"):
+        sessions[sid]["messages"] = [m for _ in range(11) for m in _good()["messages"]] * 2
+    corrections = [{"type": "user_correction", "session_id": "s24", "ts": NOW.timestamp()}]
+    calls = []
+    result, _, _ = _run(tmp_path, sessions, corrections=corrections, scorer=_scorer(goal=0.2, calls=calls))
+    assert result["checks"]["O4_GOAL"]["checked"] == 3           # only corrected / long sessions qualify
+    assert result["checks"]["O1_LANGUAGE"]["checked"] > 25       # deterministic: every turn of every session
+    assert [d["session_id"] for d in result["low_details"]] == ["s24", "s20", "s21"]
+    many = {f"x{i:02d}": _good() for i in range(15)}
+    corr = [{"type": "user_correction", "session_id": s, "ts": NOW.timestamp()} for s in many]
+    capped, _, _ = _run(tmp_path, many, corrections=corr)
+    assert capped["checks"]["O4_GOAL"]["checked"] == 10
+
+
+def test_the_state_file_is_written_and_the_dashboard_reads_the_same_numbers(tmp_path, monkeypatch):
+    from core.eval_service import EvalService
+    from tests._eval_golden_fixture import install_golden_fixture
+
+    result, spath, _ = _run(tmp_path, {"a": _good(), "b": _english_answer_to_chinese()})
+    on_disk = json.loads(spath.read_text())
+    assert on_disk["checks"]["O1_LANGUAGE"] == result["checks"]["O1_LANGUAGE"]
+    (tmp_path / "Eval" / "EvalHistory").mkdir(parents=True)
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    shown = EvalService(workspace_root=tmp_path).get_session_quality()
+    assert shown["sessions_checked"] == 2
+    assert shown["checks"]["O1_LANGUAGE"]["rate"] == result["checks"]["O1_LANGUAGE"]["rate"]
+    assert shown["checks"]["O1_LANGUAGE"]["examples"][0]["title"] == "Wrong language"
+
+
+def test_a_sampler_error_and_an_empty_week_are_different(tmp_path):
+    broken, _, _ = _run(tmp_path, {}, sampler_error="OperationalError: database is locked")
+    empty, _, _ = _run(tmp_path, {})
+    assert broken["sampler_error"] and broken["sessions_checked"] == 0
+    assert empty["sampler_error"] is None and empty["sessions_checked"] == 0
+    assert all(c["rate"] is None for c in empty["checks"].values())   # not shown as 0%
+
+
+def test_the_trend_gets_one_entry_per_week_and_keeps_twelve(tmp_path):
+    prior = {"trend": [{"week": f"2026-W{w:02d}", "rates": {"O1_LANGUAGE": 0.1}} for w in range(30, 44)]
+             + [{"week": "2026-W44", "rates": {"O1_LANGUAGE": 0.9}}]}
+    result, _, _ = _run(tmp_path, {"a": _good()}, state=prior)
+    weeks = [t["week"] for t in result["trend"]]
+    assert len(weeks) == 12 and weeks[-1] == "2026-W44" and weeks.count("2026-W44") == 1
+    assert result["trend"][-1]["rates"]["O1_LANGUAGE"] == 0.0     # this run replaced this week's entry
+    broken, _, _ = _run(tmp_path, {}, sampler_error="X: y", state=prior)
+    assert broken["trend"] == prior["trend"]                       # a failed week adds no point
+
+
+def test_the_default_sampler_asks_the_database_for_the_window_only(monkeypatch):
+    seen = {}
+
+    class _Messages:
+        async def role_counts_by_session(self, role, since=None):
+            seen["since"] = since
+            return {"s1": 2}
+
+        async def list_by_session(self, sid):
+            return [_msg("user", "hi")]
+
+    class _Sessions:
+        async def get(self, sid):
+            return {"title": "T1"}
+
+    class _DB:
+        messages, sessions = _Messages(), _Sessions()
+    monkeypatch.setattr("database.get_database", lambda: _DB())
+    out = sq._default_sampler("2026-10-19T12:00:00")
+    assert seen["since"] == "2026-10-19T12:00:00" and out["sessions"]["s1"]["title"] == "T1"
+
+
+def test_the_database_window_counts_only_recent_messages(tmp_path):
+    from database.sqlite import SQLiteDatabase
+
+    db = SQLiteDatabase(str(tmp_path / "t.db"))
+    asyncio.run(db.initialize())
+    for sid, at in (("old", "2026-10-01T10:00:00"), ("new", "2026-10-25T10:00:00")):
+        asyncio.run(db.sessions.put({"id": sid, "title": sid, "created_at": at, "updated_at": at}))
+        asyncio.run(db.messages.put({"id": f"m-{sid}", "session_id": sid, "role": "user", "content": "x",
+                                     "created_at": at, "updated_at": at}))
+    assert asyncio.run(db.messages.role_counts_by_session("user", since="2026-10-19T00:00:00")) == {"new": 1}
+    assert set(asyncio.run(db.messages.role_counts_by_session("user"))) == {"old", "new"}
 
 
 def test_degraded_maps_to_valid_JobResult_literal():
-    """The handler's internal 'degraded' MUST map to a valid JobResult.status
-    Literal at the executor boundary — passing 'degraded' raw would ValidationError
-    → swallowed → misreported as 'failed' with sampler_error lost (adversarial catch).
-    This closes the coverage gap: the handler-only test never built a JobResult."""
+    """The executor maps a sampler fault to JobResult status 'partial' ('degraded' is
+    not a valid status)."""
     from jobs.models import JobResult
-    from datetime import datetime, timezone
 
-    # simulate the executor branch's mapping (executor.py session_quality branch)
-    sq_result = {"status": "degraded", "scored": 0, "low": 0, "drafts": 0,
-                 "sampler_error": "AttributeError: no attribute 'list_all'"}
-    sq_err = sq_result.get("sampler_error")
-    # This construction MUST NOT raise — "degraded" is NOT a valid Literal, "partial" is.
-    jr = JobResult(
-        job_id="session-quality", timestamp=datetime.now(timezone.utc),
-        status="partial" if sq_err else "success",
-        summary=f"session-quality: 0 scored — SAMPLER FAULT: {sq_err}",
-        duration_seconds=0.0,
-    )
+    jr = JobResult(job_id="session-quality", timestamp=datetime.now(timezone.utc), status="partial",
+                   summary="session-quality: 0 session(s) checked — SAMPLER FAULT: x", duration_seconds=0.0)
     assert jr.status == "partial"
-    assert "SAMPLER FAULT" in jr.summary
-    # guard the invariant: 'degraded' is genuinely NOT constructable (proves the map is needed)
-    import pytest
     with pytest.raises(Exception):
-        JobResult(job_id="x", timestamp=datetime.now(timezone.utc),
-                  status="degraded", summary="", duration_seconds=0.0)
+        JobResult(job_id="x", timestamp=datetime.now(timezone.utc), status="degraded", summary="",
+                  duration_seconds=0.0)

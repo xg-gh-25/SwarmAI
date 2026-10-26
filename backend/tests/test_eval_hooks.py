@@ -83,41 +83,6 @@ def svc(eval_workspace):
     return EvalService(workspace_root=eval_workspace)
 
 
-# ─── Auto-Seed Case from Correction ─────────────────────────────────────────
-
-
-class TestAutoSeedCase:
-    def test_seed_creates_draft_case(self, svc):
-        """Correction auto-seeds a golden set case with tier=draft."""
-        result = svc.auto_seed_case(
-            correction_id="C037",
-            correction_text="Skipped adversarial review on trivial fix",
-            class_name="CLASS_A",
-        )
-        assert result is not None
-        assert result["id"].startswith("GS_C037")
-        assert result["tier"] == "draft"
-        assert result["source"] == "C037"
-        # M5 Part 2: seeded skeleton is a trajectory_capture behavior draft
-        # (excluded from score), NOT the old goal_success+does-not-repeat shape.
-        assert result["evaluators"] == ["trajectory_capture"]
-        assert result["eval_method"] == "behavior"
-        assert result["expected_trajectory"], "skeleton needs a non-empty trajectory"
-
-    def test_seed_does_not_duplicate(self, svc):
-        """Same correction_id doesn't create duplicate case."""
-        svc.auto_seed_case("C037", "text", "CLASS_A")
-        result2 = svc.auto_seed_case("C037", "text again", "CLASS_A")
-        assert result2 is None  # Already exists
-
-    def test_seed_persists_to_disk(self, svc, eval_workspace):
-        svc.auto_seed_case("C038", "Some correction", "CLASS_B")
-        svc2 = EvalService(workspace_root=eval_workspace)
-        case = svc2.get_case_detail("GS_C038")
-        assert case is not None
-        assert case["tier"] == "draft"
-
-
 # ─── Change-Triggered Eval ───────────────────────────────────────────────────
 
 

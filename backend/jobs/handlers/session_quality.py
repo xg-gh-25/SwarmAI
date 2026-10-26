@@ -1,246 +1,92 @@
-"""session_quality — weekly layer②③ orchestration.
+"""session_quality — online eval scoring of the owner's real sessions (design
+docs/design/2026-10-26-eval-as-product.md §3.5, the checks O1–O5 in §3.8).
 
-The closed loop, once per week (Sunday, offset from Monday's eval-scheduled):
-  sample real sessions → score each (layer③, session_scorer) → for each LOW
-  score: harvest a golden draft (layer②, session_harvest) → write a weekly
-  report.
+Runs weekly on the user's own machine and reads only that user's sessions from the
+last ``WINDOW_DAYS`` days. There is no expected answer: it checks whether rules held
+and tasks got done in real use.
 
-SAMPLING 口径 (XG-fixed, NOT configurable — select_sessions):
-  a session qualifies if it HAS a correction OR is turn-anomalous
-  (turns > 20, or turns == 1 AND has a correction), capped at N=10/week.
-  "has a correction" = its session_id appears in corrections.jsonl (which carries
-  a session_id field per line — verified). Fixed thresholds, no self-tuning.
+- Deterministic checks over every turn of every session in the window, with the
+  same check functions the offline behavior cases use:
+  - O1_LANGUAGE: the reply is in the user's language (R19; ``reply_cjk`` /
+    ``eval_runner.prose_language``);
+  - O2_SILENT_TOOLS: no text before a tool call except the opening restatement (R20;
+    ``no_pre_tool_text`` over ``scenario_runner.pre_tool_text_lengths``);
+  - O3_CORRECTIONS: the share of sessions in which the user corrected the agent.
+- Judge checks on a sample of at most ``_SAMPLE_CAP`` sessions (ones with a user
+  correction or an unusual number of turns first), via ``session_scorer``:
+  - O4_GOAL: was what the user asked for delivered;
+  - O5_TOOLS: were the tools chosen sensibly.
 
-All external boundaries are INJECTED seams (scorer/harvester/notifier/db reader)
-so the handler is unit-testable with zero Bedrock / DB / disk — same discipline
-as eval_scheduled. The value-bearing pure logic is `select_sessions`.
+The result is written to ``<workspace>/.context/.session-quality-state.json``
+(gitignored: it holds session titles, snippets and reasons for the owner):
+``{version, last_run, window_days, sessions_checked, checks: {id: {checked, failed,
+rate, examples}}, low_details, sampler_error, trend}``. ``trend`` gets this week's
+rates appended before the file is written (one entry per ISO week, last 12 kept), so
+``trend[-2]`` is the week before (core.eval_followups reads it that way).
+Readers: EvalService.get_session_quality (the Online tab) and eval_followups.
 
-NEVER auto-promotes (harvest_draft lands tier=draft only). Judge calls carry the
-eval read-timeout — this is a weekly batch job, NOT an interactive path (avoids
-the R9 judge-hang surface).
+A broken sampler is recorded as ``sampler_error`` and is not shown as zero; an empty
+window gives ``sessions_checked: 0``. All boundaries are injected for tests.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
-# XG-fixed constants — deliberately NOT configurable (no self-tuning, no env knob).
-_SAMPLE_CAP = 10          # N=10/week
-_TURN_ANOMALY_HIGH = 20   # turns > 20 is anomalous
-_LOW_SCORE_THRESHOLD = 0.6  # min(goal, tool) < 0.6 → harvest candidate
+WINDOW_DAYS = 7
+_SAMPLE_CAP = 10          # sessions sent to the judge per run
+_TURN_ANOMALY_HIGH = 20   # more user turns than this is unusual
+_LOW_SCORE_THRESHOLD = 0.6
+_TREND_WEEKS = 12
+_EXAMPLES = 3
+_TITLE_MAX, _SNIPPET_MAX, _REASON_MAX = 80, 160, 240
+CHECKS = ("O1_LANGUAGE", "O2_SILENT_TOOLS", "O3_CORRECTIONS", "O4_GOAL", "O5_TOOLS")
 
 
-def select_sessions(
-    *,
-    session_turns: dict[str, int],
-    correction_session_ids: set[str],
-) -> list[str]:
-    """The sampling 口径 (pure). Returns session_ids to score, capped at N=10.
+# ── sampling ──────────────────────────────────────────────────────────────────
 
-    A session qualifies if EITHER:
-      - it has a correction (session_id ∈ corrections.jsonl), OR
-      - it is turn-anomalous: turns > 20, OR (turns == 1 AND has a correction).
-
-    Note turns==1 alone is NOT anomalous (a one-shot Q&A is normal); it only
-    qualifies WITH a correction — which the correction branch already covers, so
-    the turns==1 rule adds nothing beyond it, kept explicit for the design's
-    stated 口径. Dedup is inherent (a set of ids). Deterministic order (sorted)
-    so a run is reproducible.
-    """
-    qualified: set[str] = set()
-    for sid, turns in session_turns.items():
-        has_corr = sid in correction_session_ids
-        long_anom = turns > _TURN_ANOMALY_HIGH
-        single_with_corr = (turns == 1 and has_corr)
-        if has_corr or long_anom or single_with_corr:
-            qualified.add(sid)
-    return sorted(qualified)[:_SAMPLE_CAP]
+def select_sessions(*, session_turns: dict[str, int], correction_session_ids: set[str]) -> list[str]:
+    """The judge sample: sessions with a user correction, then those with more than
+    ``_TURN_ANOMALY_HIGH`` user turns, capped at ``_SAMPLE_CAP``. Deterministic order
+    so a run is reproducible."""
+    corrected = sorted(s for s in session_turns if s in correction_session_ids)
+    long = sorted(s for s, n in session_turns.items()
+                  if n > _TURN_ANOMALY_HIGH and s not in correction_session_ids)
+    return (corrected + long)[:_SAMPLE_CAP]
 
 
-def _read_correction_session_ids(corrections_path: Path, since_ts: Optional[str] = None) -> set[str]:
-    """Read distinct session_ids from corrections.jsonl (each line carries a
-    session_id — verified). Fail-open: a missing/garbage file → empty set (a
-    corrections read must never crash the weekly job)."""
+def _read_correction_session_ids(path: Path, since_epoch: float) -> set[str]:
+    """Sessions in which the USER corrected the agent (type user_correction) at or
+    after ``since_epoch``. corrections.jsonl also logs tool failures, which are not a
+    correction. A missing or garbled file reads as none."""
     ids: set[str] = set()
     try:
-        if not corrections_path.exists():
-            return ids
-        for line in corrections_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            sid = entry.get("session_id")
-            if sid and (since_ts is None or str(entry.get("ts", "")) >= since_ts):
-                ids.add(sid)
-    except OSError as exc:
-        logger.warning("session_quality: corrections read failed (%s) — 0 corrections", exc)
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ids
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "user_correction":
+            continue
+        try:
+            ts = float(entry.get("ts"))
+        except (TypeError, ValueError):
+            continue
+        if ts >= since_epoch and entry.get("session_id"):
+            ids.add(entry["session_id"])
     return ids
 
 
-def run_session_quality(
-    config: Optional[dict] = None,
-    *,
-    dry_run: bool = False,
-    sampler: Optional[Callable[[], dict]] = None,
-    scorer: Optional[Callable[..., dict]] = None,
-    harvester: Optional[Callable[..., object]] = None,
-    corrections_path: Optional[Path] = None,
-) -> dict:
-    """Weekly orchestration. All boundaries injected for tests.
-
-    sampler() → {"session_turns": {sid: turns}, "sessions": {sid: {prompt, response, tool_names}}}
-    scorer(prompt, response, tool_names) → session_scorer.score_session output
-    harvester(session_id, prompt, score) → session_harvest.harvest_draft output
-
-    Returns a result dict {status, scored, low, drafts}.
-    """
-    corrections_path = corrections_path or (
-        Path.home() / ".swarm-ai" / "state" / "corrections.jsonl"
-    )
-
-    # Wire production defaults lazily (kept out of the test path).
-    if sampler is None:
-        sampler = _default_sampler
-    if scorer is None:
-        from core.session_scorer import score_session, default_judge_fn
-
-        def scorer(prompt, response, tool_names):  # noqa: E306
-            return score_session(prompt=prompt, response=response,
-                                 tool_names=tool_names, judge_fn=default_judge_fn)
-    if harvester is None:
-        from core.session_harvest import harvest_draft, default_invoke_fn
-        from core.eval_service import get_eval_service
-
-        def harvester(session_id, prompt, score):  # noqa: E306
-            svc = get_eval_service()
-            return harvest_draft(session_id=session_id, prompt=prompt, score=score,
-                                 invoke_fn=default_invoke_fn, add_case_fn=svc.add_case)
-    sample = sampler()
-    session_turns = sample.get("session_turns", {})
-    sessions = sample.get("sessions", {})
-    sampler_error = sample.get("sampler_error")  # loud-propagate a broken sampler
-    corr_ids = _read_correction_session_ids(corrections_path)
-
-    selected = select_sessions(session_turns=session_turns, correction_session_ids=corr_ids)
-
-    scored = low = drafts = 0
-    low_details: list[dict] = []
-    for sid in selected:
-        s = sessions.get(sid) or {}
-        result = scorer(s.get("prompt", ""), s.get("response", ""), s.get("tool_names", []))
-        if result.get("status") in ("skipped", "error"):
-            continue
-        scored += 1
-        worst = min(result.get("goal_score", 1.0), result.get("tool_score", 1.0))
-        if worst < _LOW_SCORE_THRESHOLD:
-            low += 1
-            low_details.append({"session_id": sid, **result})
-            if not dry_run:
-                if harvester(session_id=sid, prompt=s.get("prompt", ""), score=result) is not None:
-                    drafts += 1
-
-    return {"status": "degraded" if sampler_error else "success",
-            "scored": scored, "low": low, "drafts": drafts,
-            "low_details": low_details, "selected": len(selected),
-            **({"sampler_error": sampler_error} if sampler_error else {})}
-
-
-def _default_sampler(corrections_path: Optional[Path] = None) -> dict:
-    """Production sampler: 1 indexed aggregate for turn counts + hydrate ONLY the
-    ≤N selected sessions (see _enumerate_sessions). Kept out of the test path
-    (tests inject a sampler). Async DB is bridged via asyncio.run since the weekly
-    job runs in a plain worker thread.
-
-    Reads corrections itself so hydration can be scoped to the SELECTED sessions —
-    select_sessions needs the correction ids to decide the single-turn + anomaly
-    口径, and hydration must happen after select to avoid the old N+1."""
-    import asyncio
-    from database import get_database
-
-    corr_ids = _read_correction_session_ids(
-        corrections_path or (Path.home() / ".swarm-ai" / "state" / "corrections.jsonl")
-    )
-
-    async def _gather():
-        db = get_database()
-        return await _enumerate_sessions(db, corr_ids)
-
-    try:
-        return asyncio.run(_gather())
-    except Exception as exc:  # noqa: BLE001 — sampler is best-effort; never crash the job
-        # LOUD, not silent (GC19): a broken sampler must not masquerade as
-        # "0 low-quality sessions, all healthy". Log at ERROR with the exception
-        # TYPE (an AttributeError here = a DAO-contract break, not an empty DB)
-        # and flag the sample so the caller can tell "sampler broke" from
-        # "genuinely no sessions" — the exact bug that let list_all() ship inert.
-        logger.error(
-            "session_quality: sampler FAILED (%s: %s) — returning empty sample; "
-            "layer②③ scored NOTHING this run (this is a fault, not a clean pass)",
-            type(exc).__name__, exc,
-        )
-        return {"session_turns": {}, "sessions": {}, "sampler_error": f"{type(exc).__name__}: {exc}"}
-
-
-async def _enumerate_sessions(db, correction_session_ids: set[str]) -> dict:
-    """Turn counts (ALL sessions, 1 aggregate) + hydrated (prompt, response,
-    tool_names) for ONLY the sessions that select_sessions picks (≤N).
-
-    Was an N+1 pattern: list() all ~1500 sessions, then list_by_session per session
-    (200 full-message reads/week) just to count turns + grab first/last message.
-    Now: ONE indexed GROUP BY for counts (role_counts_by_session, backed by
-    idx_messages_role_session), then list_by_session for only the ≤10 SELECTED —
-    message reads drop from ~200 to ≤10, and the 1500-row sessions.list() scan is
-    gone entirely (the aggregate already yields the session_ids).
-
-    `select` is applied here (with the SAME 口径 run_session_quality uses) purely to
-    decide WHAT to hydrate; run_session_quality re-selects as the scoring authority.
-    """
-    # 1 indexed aggregate → {sid: user_turn_count} for every session (sent-filtered
-    # to match list_by_session, so counts don't drift the sampling gates).
-    session_turns: dict[str, int] = await db.messages.role_counts_by_session("user")
-
-    # Hydrate ONLY the sessions that will be sampled (≤N), not all of them.
-    selected = select_sessions(session_turns=session_turns,
-                               correction_session_ids=correction_session_ids)
-    sessions: dict[str, dict] = {}
-    for sid in selected:
-        msgs = await db.messages.list_by_session(sid)
-        user_msgs = [m for m in msgs if m.get("role") == "user"]
-        first_prompt = user_msgs[0].get("content", "") if user_msgs else ""
-        asst = [m for m in msgs if m.get("role") == "assistant"]
-        last_resp, tool_names = _extract_response_and_tools(asst)
-        sessions[sid] = {"prompt": _as_text(first_prompt), "response": last_resp,
-                         "tool_names": tool_names}
-    return {"session_turns": session_turns, "sessions": sessions}
-
-
-def _extract_response_and_tools(assistant_msgs: list[dict]) -> tuple[str, list[str]]:
-    """From assistant messages, get the last text response + the ordered tool
-    names actually called. Tool trajectory lives in content JSON blocks
-    (type=tool_use) — parsed here (content_accumulator is a live serializer, not
-    a deserializer, so we json.loads ourselves)."""
-    tool_names: list[str] = []
-    last_text = ""
-    for m in assistant_msgs:
-        content = m.get("content", "")
-        blocks = _as_blocks(content)
-        for b in blocks:
-            if not isinstance(b, dict):
-                continue
-            if b.get("type") == "tool_use" and b.get("name"):
-                tool_names.append(b["name"])
-            elif b.get("type") == "text" and b.get("text"):
-                last_text = b["text"]
-    return last_text, tool_names
-
+# ── turns and checks ──────────────────────────────────────────────────────────
 
 def _as_blocks(content) -> list:
     if isinstance(content, list):
@@ -251,14 +97,211 @@ def _as_blocks(content) -> list:
             return parsed if isinstance(parsed, list) else []
         except json.JSONDecodeError:
             return []
-    return []
+    return [{"type": "text", "text": content}] if isinstance(content, str) and content else []
 
 
-def _as_text(content) -> str:
-    """A user message content may be a plain string or a blocks list."""
-    if isinstance(content, str) and not content.strip().startswith("["):
-        return content
-    for b in _as_blocks(content):
-        if isinstance(b, dict) and b.get("type") == "text":
-            return b.get("text", "")
-    return content if isinstance(content, str) else ""
+def _text_of(blocks: list) -> str:
+    return "\n".join(b.get("text", "") for b in blocks
+                     if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))
+
+
+def split_turns(messages: list[dict], since: str) -> list[dict]:
+    """``[{user, blocks}]``: each user message created at or after ``since`` with the
+    assistant blocks that follow it, up to the next user message."""
+    turns: list[dict] = []
+    current: dict | None = None
+    for m in messages:
+        role = m.get("role")
+        if role == "user":
+            current = None
+            if str(m.get("created_at") or "") >= since:
+                current = {"user": _text_of(_as_blocks(m.get("content"))), "blocks": []}
+                turns.append(current)
+        elif role == "assistant" and current is not None:
+            current["blocks"].extend(_as_blocks(m.get("content")))
+    return turns
+
+
+def check_language(turn: dict) -> tuple[bool, str]:
+    """(applies, failure reason or ""). R19: the reply follows the user's language."""
+    from scripts.eval_runner import _behavior_check_failures, prose_language
+
+    asked, reply = prose_language(turn["user"]), _text_of(turn["blocks"])
+    if asked is None or not reply.strip():
+        return False, ""
+    if asked == "cjk":
+        failed = _behavior_check_failures(["reply_cjk"], reply, [])
+        return True, ("asked in Chinese, answered otherwise" if failed else "")
+    return True, ("asked in English, answered in Chinese" if prose_language(reply) == "cjk" else "")
+
+
+def check_silent_tools(turn: dict) -> tuple[bool, str]:
+    """(applies, failure reason or ""). R20: no text before a tool call except the
+    opening restatement."""
+    from scripts.eval_runner import _behavior_check_failures
+    from scripts.scenario_runner import pre_tool_text_lengths
+
+    lengths = pre_tool_text_lengths(turn["blocks"])
+    if not lengths:
+        return False, ""
+    failed = _behavior_check_failures(["no_pre_tool_text"], "", lengths)
+    return True, (f"text before tool calls: {lengths}" if failed else "")
+
+
+# ── scoring ───────────────────────────────────────────────────────────────────
+
+class _Tally:
+    def __init__(self):
+        self.checked = self.failed = 0
+        self.examples: list[dict] = []
+
+    def add(self, failed: bool, sid: str, session: dict, snippet: str, reason: str):
+        self.checked += 1
+        if not failed:
+            return
+        self.failed += 1
+        if len(self.examples) < _EXAMPLES and all(e["session_id"] != sid for e in self.examples):
+            self.examples.append({"session_id": sid, "title": (session.get("title") or "")[:_TITLE_MAX],
+                                  "snippet": (snippet or "")[:_SNIPPET_MAX], "reason": reason[:_REASON_MAX]})
+
+    def out(self) -> dict:
+        return {"checked": self.checked, "failed": self.failed,
+                "rate": round(self.failed / self.checked, 3) if self.checked else None,
+                "examples": self.examples}
+
+
+def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str],
+                 scorer: Callable[..., dict]) -> dict:
+    """``sessions``: ``{sid: {title, messages}}`` for the window. Returns the
+    ``sessions_checked``, ``checks`` and ``low_details`` parts of the state."""
+    tallies = {cid: _Tally() for cid in CHECKS}
+    turn_counts: dict[str, int] = {}
+    for sid in sorted(sessions):
+        session = sessions[sid]
+        turns = split_turns(session.get("messages") or [], since)
+        if not turns:
+            continue
+        turn_counts[sid] = len(turns)
+        for turn in turns:
+            for cid, check in (("O1_LANGUAGE", check_language), ("O2_SILENT_TOOLS", check_silent_tools)):
+                applies, reason = check(turn)
+                if applies:
+                    tallies[cid].add(bool(reason), sid, session, turn["user"], reason)
+        corrected = sid in correction_ids
+        tallies["O3_CORRECTIONS"].add(corrected, sid, session, turns[0]["user"],
+                                      "the user corrected the agent" if corrected else "")
+    low: list[dict] = []
+    for sid in select_sessions(session_turns=turn_counts, correction_session_ids=correction_ids):
+        session = sessions[sid]
+        turns = split_turns(session.get("messages") or [], since)
+        blocks = [b for t in turns for b in t["blocks"]]
+        tools = [b.get("name") for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
+        replies = [t for t in (_text_of([b]) for b in blocks if isinstance(b, dict)) if t.strip()]
+        result = scorer(turns[0]["user"], replies[-1] if replies else "", tools)
+        if result.get("status") in ("skipped", "error"):
+            continue
+        goal, tool = result.get("goal_score", 1.0), result.get("tool_score", 1.0)
+        reason = str(result.get("reason") or "")
+        tallies["O4_GOAL"].add(goal < _LOW_SCORE_THRESHOLD, sid, session, turns[0]["user"], reason)
+        tallies["O5_TOOLS"].add(tool < _LOW_SCORE_THRESHOLD, sid, session, turns[0]["user"], reason)
+        if min(goal, tool) < _LOW_SCORE_THRESHOLD:
+            low.append({"session_id": sid, "title": (session.get("title") or "")[:_TITLE_MAX],
+                        "goal_score": goal, "tool_score": tool, "dimension": result.get("dimension"),
+                        "reason": reason[:_REASON_MAX]})
+    return {"sessions_checked": len(turn_counts),
+            "checks": {cid: t.out() for cid, t in tallies.items()}, "low_details": low}
+
+
+def _with_trend(previous: dict | None, checks: dict, now: datetime) -> list[dict]:
+    year, week, _ = now.isocalendar()
+    label = f"{year}-W{week:02d}"
+    trend = [t for t in (previous or {}).get("trend") or [] if isinstance(t, dict) and t.get("week") != label]
+    trend.append({"week": label, "at": now.isoformat(),
+                  "rates": {cid: c["rate"] for cid, c in checks.items() if c["rate"] is not None}})
+    return trend[-_TREND_WEEKS:]
+
+
+def _write_state(path: Path, state: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_state(path: Path) -> dict | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def run_session_quality(
+    config: Optional[dict] = None,
+    *,
+    dry_run: bool = False,
+    sampler: Optional[Callable[[str], dict]] = None,
+    scorer: Optional[Callable[..., dict]] = None,
+    corrections_path: Optional[Path] = None,
+    state_path: Optional[Path] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    """One weekly run. ``sampler(since)`` → ``{"sessions": {sid: {title, messages}}}``
+    (or ``{"sampler_error": ...}``); ``scorer(prompt, response, tool_names)`` →
+    session_scorer output. Writes the state file unless ``dry_run``; returns it."""
+    from config import get_app_data_dir, get_swarmws
+
+    now = now or datetime.now(timezone.utc)
+    start = now - timedelta(days=WINDOW_DAYS)
+    # messages.created_at is local time without a zone; corrections carry epoch seconds
+    since = start.astimezone().replace(tzinfo=None).isoformat()
+    corrections_path = corrections_path or (get_app_data_dir() / "state" / "corrections.jsonl")
+    state_path = state_path or (get_swarmws() / ".context" / ".session-quality-state.json")
+    sampler = sampler or _default_sampler
+    if scorer is None:
+        from core.session_scorer import default_judge_fn, score_session
+
+        def scorer(prompt, response, tool_names):  # noqa: E306
+            return score_session(prompt=prompt, response=response,
+                                 tool_names=tool_names, judge_fn=default_judge_fn)
+
+    sample = sampler(since)
+    sampler_error = sample.get("sampler_error")
+    scored = score_window(sample.get("sessions") or {}, since,
+                          _read_correction_session_ids(corrections_path, start.timestamp()), scorer)
+    state = {"version": 2, "last_run": now.isoformat(), "window_days": WINDOW_DAYS, **scored,
+             "sampler_error": sampler_error}
+    state["trend"] = (_read_state(state_path) or {}).get("trend", []) if sampler_error \
+        else _with_trend(_read_state(state_path), scored["checks"], now)
+    if not dry_run:
+        try:
+            _write_state(state_path, state)
+        except OSError as exc:
+            logger.error("session_quality: state write failed: %s", exc)
+            state["sampler_error"] = sampler_error or f"state write failed: {type(exc).__name__}"
+    return state
+
+
+def _default_sampler(since: str) -> dict:
+    """The sessions with a user message at or after ``since``: one indexed aggregate,
+    then each session's messages and title. A failure is returned as
+    ``sampler_error``, never as an empty week."""
+    import asyncio
+
+    from database import get_database
+
+    async def _gather():
+        db = get_database()
+        ids = await db.messages.role_counts_by_session("user", since=since)
+        sessions = {}
+        for sid in ids:
+            row = await db.sessions.get(sid) or {}
+            sessions[sid] = {"title": row.get("title") or "",
+                             "messages": await db.messages.list_by_session(sid)}
+        return {"sessions": sessions}
+
+    try:
+        return asyncio.run(_gather())
+    except Exception as exc:  # noqa: BLE001 — recorded, shown as "did not run"
+        logger.error("session_quality: sampler FAILED (%s: %s)", type(exc).__name__, exc)
+        return {"sessions": {}, "sampler_error": f"{type(exc).__name__}: {exc}"}

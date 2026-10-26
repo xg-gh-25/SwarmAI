@@ -191,10 +191,6 @@ class TestUserCorrectionDetector:
         MEMORY [pitfall] — a redirect is steering, not a recorded mistake. Only
         explicit-error (EN) corrections seed those persistent side-effects.
         (Adversarial MED, run_e681a61d — same anti-noise discipline as the tracker fix.)"""
-        import core.eval_hooks as eh
-        seeded = []
-        monkeypatch.setattr(eh, "seed_from_correction",
-                            lambda *a, **k: seeded.append(a))
         # point MEMORY at a tmp file so we can assert no pitfall append
         mem = tmp_path / ".context" / "MEMORY.md"
         mem.parent.mkdir(parents=True)
@@ -211,8 +207,6 @@ class TestUserCorrectionDetector:
         assert corrections_file.exists()
         line = json.loads(corrections_file.read_text().strip().splitlines()[-1])
         assert line["type"] == "user_correction"
-        # ...but NOT seeded as a golden case (redirect != pitfall)
-        assert seeded == [], "META-only redirect must not auto-seed a golden_set pitfall case"
 
     @pytest.mark.asyncio
     async def test_explicit_error_correction_logs_not_synchronously_seeds(
@@ -226,10 +220,6 @@ class TestUserCorrectionDetector:
         (run_0305426d). This replaces the old 'still seeds' regression guard,
         which asserted the very blind-seed behavior we removed."""
         import json
-        import core.eval_hooks as eh
-        seeded = []
-        # If seed_from_correction were still called here it would append; assert it ISN'T.
-        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: seeded.append(a))
         from core.runtime_hooks import create_user_correction_detector
         hook = create_user_correction_detector(str(corrections_file), session_context)
         await hook({"prompt": "that's wrong, use async instead"}, None, MagicMock())
@@ -238,8 +228,6 @@ class TestUserCorrectionDetector:
         assert corrections_file.exists()
         line = json.loads(corrections_file.read_text().strip().splitlines()[-1])
         assert line["type"] == "user_correction"
-        # But NOT synchronously seeded from the hot path (noise gate moved downstream).
-        assert seeded == [], "explicit-error must NOT blind-seed from the hot path (M5 Part 2)"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("prompt", [
@@ -1771,8 +1759,6 @@ class TestMemoryWorthyCorrectionGate:
     ):
         """AC1 end-to-end: an explicit-error correction that is pure-signal is LOGGED
         to corrections.jsonl but does NOT append a [pitfall] to MEMORY.md."""
-        import core.eval_hooks as eh
-        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
         mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
         mem.parent.mkdir(parents=True)
         mem.write_text("## Pitfalls\n")
@@ -1801,9 +1787,7 @@ class TestMemoryWorthyCorrectionGate:
         written. This asserts the judge-PASS path writes; a separate test covers
         judge-DISCARD dropping the write.
         """
-        import core.eval_hooks as eh
         import core.ingestion_gate as ig
-        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
         monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
         mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
         mem.parent.mkdir(parents=True)
@@ -1834,9 +1818,7 @@ class TestMemoryWorthyCorrectionGate:
         JUDGE-GATED (run_04fd397c): judge mocked to pass so the correction reaches
         the write.
         """
-        import core.eval_hooks as eh
         import core.ingestion_gate as ig
-        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
         monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
         mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
         mem.parent.mkdir(parents=True)
@@ -1871,9 +1853,7 @@ class TestMemoryWorthyCorrectionGate:
         fires on every correction prompt, so on the loop thread it stalled /health
         before the turn even started. It must run in a worker thread."""
         import threading
-        import core.eval_hooks as eh
         import core.ingestion_gate as ig
-        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: None)
         loop_thread = threading.get_ident()
         seen: list[int] = []
 

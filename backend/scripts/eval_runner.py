@@ -1580,6 +1580,22 @@ _CODE = _re.compile(r"```.*?```|`[^`]*`", _re.S)
 _OPENING_RESTATEMENT_MAX = 300
 
 
+def prose_counts(text: str) -> tuple[int, int]:
+    """(CJK characters, English words) outside code spans: a Chinese answer keeps
+    English technical terms (R19), and a CJK character is roughly a word."""
+    prose = _CODE.sub(" ", text or "")
+    return len(_CJK.findall(prose)), len(_LATIN_WORD.findall(prose))
+
+
+def prose_language(text: str) -> str | None:
+    """'cjk' when CJK characters are at least as many as English words, 'latin'
+    when there are English words and fewer CJK characters, None for neither."""
+    cjk, latin = prose_counts(text)
+    if cjk and cjk >= latin:
+        return "cjk"
+    return "latin" if latin else None
+
+
 def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[int]) -> list[str]:
     """Deterministic checks a behavior case can declare in ``checks``.
 
@@ -1594,12 +1610,8 @@ def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[
     out: list[str] = []
     for name in checks:
         if name == "reply_cjk":
-            # Compare CJK characters with English WORDS outside code spans: a
-            # Chinese answer keeps English technical terms (R19), a CJK character
-            # is roughly a word.
-            prose = _CODE.sub(" ", final_text)
-            cjk, latin = len(_CJK.findall(prose)), len(_LATIN_WORD.findall(prose))
-            if cjk == 0 or cjk < latin:
+            cjk, latin = prose_counts(final_text)
+            if prose_language(final_text) != "cjk":
                 out.append(f"reply_cjk (cjk={cjk}, latin={latin})")
         elif name == "no_pre_tool_text":
             if not pre_tool_text:

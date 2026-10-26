@@ -490,9 +490,8 @@ def execute_job(
             result = JobResult(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
                 status="partial" if sq_err else "success",
-                summary=(f"session-quality: {sq_result.get('scored', 0)} scored, "
-                         f"{sq_result.get('low', 0)} low, "
-                         f"{sq_result.get('drafts', 0)} draft(s) harvested"
+                summary=(f"session-quality: {sq_result.get('sessions_checked', 0)} session(s) "
+                         f"checked, {len(sq_result.get('low_details') or [])} low"
                          + (f" — SAMPLER FAULT: {sq_err}" if sq_err else "")),
                 duration_seconds=duration,
             )

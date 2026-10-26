@@ -268,14 +268,6 @@ class EvalService:
             for r in self._runs[:limit]
         ]
 
-    # NOTE: the Layer② pending-draft queue (get_session_quality_drafts) was
-    # REMOVED (option D, run_1bfd3cf9). Harvest no longer lands tier=draft —
-    # it generates a full case + negative_example, routes through the
-    # gate_by_knockout teeth gate, and either lands tier=active or discards to
-    # the recoverable archive. There is no human-ratification middle state, so
-    # the pending-draft queue (which surfaced draft cases for Promote/Discard)
-    # no longer has any producer and was deleted along with its endpoint + UI.
-
     @staticmethod
     def _project_low_detail(d: dict) -> dict:
         """Allowlist-project one low-score session detail (Gate-2 F4). Session-
@@ -322,40 +314,40 @@ class EvalService:
         return data if isinstance(data, dict) else None
 
     def get_session_quality(self) -> dict:
-        """Layer③ overview: the latest session-quality run summary + weekly
-        low-rate trend. Reads the handler's state file (best-effort — absent file
-        → empty overview, never crashes). Trend is the last N weekly low-rates
-        (the drift radar sparkline)."""
-        import json as _json
+        """The Online tab: the last online-scoring run (jobs/handlers/session_quality),
+        read from its state file and projected field by field (session-derived text
+        is the owner's, shown on the owner's machine, but only these fields and each
+        bounded). No file yet → ``last_run: None``; a sampler fault → ``sampler_error``
+        (shown as "did not run", never as zero)."""
+        data = self._context_state(".session-quality-state.json") or {}
 
-        state_path = (
-            self._workspace_root / ".context" / ".session-quality-state.json"
-            if self._workspace_root else None
-        )
-        overview = {"scored": 0, "low": 0, "drafts": 0, "last_run": None, "trend": []}
-        if state_path and state_path.exists():
-            try:
-                data = _json.loads(state_path.read_text(encoding="utf-8"))
-                overview.update({
-                    "scored": data.get("scored", 0),
-                    "low": data.get("low", 0),
-                    "drafts": data.get("drafts", 0),
-                    "last_run": data.get("last_run"),
-                    "trend": data.get("trend", [])[-12:],  # last 12 weeks
-                    # Gate-2 F4: low_details derives from REAL sessions — apply the
-                    # same allowlist posture the rest of this subsystem uses for
-                    # session-derived data (drafts / private-case detail). Only
-                    # numeric scores + dimension enum + a BOUNDED reason summary
-                    # (the judge's free-text can echo the real prompt) + session_id
-                    # (opaque uuid, for human lookup). Never pass the raw dict.
-                    "low_details": [
-                        self._project_low_detail(d)
-                        for d in (data.get("low_details") or [])
-                    ],
-                })
-            except (OSError, ValueError):
-                pass
-        return overview
+        def _example(e) -> dict:
+            if not isinstance(e, dict):
+                return {}
+            return {"session_id": e.get("session_id"),
+                    "title": str(e.get("title") or "")[:80],
+                    "snippet": str(e.get("snippet") or "")[:160],
+                    "reason": str(e.get("reason") or "")[:240]}
+
+        checks = {}
+        for cid, c in (data.get("checks") or {}).items():
+            if not isinstance(c, dict):
+                continue
+            checks[str(cid)[:40]] = {"checked": c.get("checked"), "failed": c.get("failed"),
+                                     "rate": c.get("rate"),
+                                     "examples": [_example(e) for e in (c.get("examples") or [])[:3]]}
+        sampler_error = data.get("sampler_error")
+        return {
+            "last_run": data.get("last_run"),
+            "window_days": data.get("window_days"),
+            "sessions_checked": data.get("sessions_checked", 0),
+            "checks": checks,
+            "low_details": [{**self._project_low_detail(d),
+                             "title": str((d or {}).get("title") or "")[:80] if isinstance(d, dict) else ""}
+                            for d in (data.get("low_details") or [])],
+            "sampler_error": str(sampler_error)[:300] if sampler_error else None,
+            "trend": [t for t in (data.get("trend") or []) if isinstance(t, dict)][-12:],
+        }
 
     def get_golden_set(self, category: Optional[str] = None) -> dict:
         """Return golden set metadata + cases (optionally filtered)."""
@@ -586,9 +578,9 @@ class EvalService:
         Raises RuntimeError if a run is already in progress.
 
         ``include_behavior`` (default False) is the opt-in for the behavior tier
-        (real agent spawns + Bedrock cost). Default-False keeps the auto-seed hook
-        path (eval_hooks.py) and any caller that omits it safe — only an explicit
-        opt-in (the HTTP API's TriggerRunRequest.include_behavior) runs behavior.
+        (real agent spawns + Bedrock cost). Default-False keeps any caller that
+        omits it safe — only an explicit opt-in (the HTTP API's
+        TriggerRunRequest.include_behavior) runs behavior.
         """
         with self._run_lock:
             if self._running:
@@ -655,207 +647,6 @@ class EvalService:
         return self._running
 
     # ─── P4: Auto-Growth Methods ─────────────────────────────────────────
-
-    def auto_seed_case(
-        self, correction_id: str, correction_text: str, class_name: str = "UNCLASSIFIED",
-        persist: bool = True,
-    ) -> Optional[dict]:
-        """Auto-seed a DRAFT trajectory skeleton from a classified correction.
-
-        This is the auto-growth half of the self-evolution loop (M5 Part 2). The
-        DECAY half is ``reclaim_stale_skeletons`` — an unrefined skeleton this
-        method seeds is TTL-reclaimed if no human refines it (run_9f5944b4).
-        It does NOT fabricate a finished pressure-trap test — a raw correction
-        carries the failure CLASS but not the crafted "efficient-but-wrong"
-        scenario that makes a GS_T4 case discriminating, and auto-generating a
-        generic "read the doc, don't repeat" case is a tautology a competent
-        agent trivially passes (Gate-1, run_0305426d). So the machine seeds the
-        SKELETON — which governance doc the class points to, observed via a real
-        Read — and a human (or a Part-1-style pipeline) refines it into a true
-        pressure case. Machine finds WHAT to test; human designs HOW.
-
-        Shape: a ``trajectory_capture`` behavior DRAFT. It is excluded from the
-        normal eval score (eval_runner filters ``eval_method=behavior`` unless
-        the ``behavior_trajectory`` tag is explicitly requested), so an
-        unrefined skeleton never pollutes the health number — it is a to-do, not
-        a graded test. The briefing surfaces the draft count as a refine-me
-        breadcrumb.
-
-        Returns the new case dict, or None if a case for this id already exists
-        (idempotent — safe to call repeatedly from the post-session classifier).
-
-        gate_refs invariant (C044/run_b1efcb5b): this path deliberately does NOT call
-        gate_refs and appends directly to self._cases (it must NEVER raise — it runs in
-        a post-session background thread). That is SAFE because its only ref is
-        `_class_to_affected_by(class_name)` → a bare governance FILENAME (AGENT.md /
-        STEERING.md), which is out-of-scope for gate_refs (not a dotted entry/rule id).
-        If a human later refines the draft and adds a dotted ref, that edit goes through
-        update_case → which DOES run gate_refs. So the drift gate covers the human-edit
-        path; the machine-seed path is gate-free by-construction, not by oversight.
-        """
-        case_id = f"GS_{correction_id}"
-        governing_doc = _class_to_affected_by(class_name)
-        summary = correction_text[:100].replace("\n", " ").strip()
-
-        with self._data_lock:
-            if any(c.get("id") == case_id for c in self._cases):
-                return None  # Already seeded
-
-            case = {
-                "id": case_id,
-                "category": "compliance",
-                "dimension": "compliance",
-                "level": "session",
-                "title": f"[Auto-draft · refine into a pressure case] {summary[:60]}",
-                "source": correction_id,
-                "affected_by": [governing_doc],
-                "evaluators": ["trajectory_capture"],
-                "eval_method": "behavior",
-                "tier": "draft",
-                "tags": ["behavior_trajectory", "auto_seed_skeleton"],
-                # The skeleton's prompt names WHERE the governing rule lives (no
-                # protective instruction) — the ambient-cue shape from Part 1.
-                # A human refines this into a real efficient-but-wrong scenario.
-                "scenario": {
-                    "prompt": (
-                        f"[AUTO-SEEDED DRAFT — needs human refinement into a real "
-                        f"pressure scenario] A {class_name} failure recurred: "
-                        f"\"{summary}\". The governing rule lives in {governing_doc} "
-                        f"under .context/ and Projects/SwarmAI/. Given a realistic "
-                        f"task where that failure is tempting, what is your final call?"
-                    )
-                },
-                "expected_trajectory": [f"Read {governing_doc}"],
-                "trajectory_match": "any_order",
-                "allowed_tools": ["Read", "Grep"],
-                "decision_rubric": (
-                    f"SKELETON RUBRIC (refine before relying on this): PASS only if "
-                    f"the agent consults {governing_doc} and its final decision "
-                    f"applies the {class_name} governing rule rather than repeating "
-                    f"the failure \"{summary}\". This generic rubric is a placeholder "
-                    f"— a human must replace it with a specific cite-the-rule "
-                    f"criterion for a concrete pressure scenario."
-                ),
-            }
-            self._cases.append(case)
-            # persist=False lets a batch caller (seeding M corrections in one
-            # loop) defer the full
-            # golden_set.yaml rewrite to a single flush after the loop, instead
-            # of M serial O(cases) rewrites + M flock cycles (adversarial Gate-2
-            # MED, run_0305426d). The caller MUST call flush_golden_set() after.
-            if persist:
-                self._persist_golden_set()
-
-        logger.info(
-            "eval_service: auto-seeded DRAFT skeleton %s from %s correction %s "
-            "(excluded from score; awaiting human refinement)",
-            case_id, class_name, correction_id,
-        )
-        return case
-
-    def flush_golden_set(self) -> None:
-        """Persist in-memory cases to disk once (for batch auto_seed_case callers).
-
-        Pairs with auto_seed_case(persist=False): seed many in a loop, flush once.
-        Idempotent and safe to call even if nothing changed.
-        """
-        with self._data_lock:
-            self._persist_golden_set()
-
-    # Placeholder markers auto_seed_case:648 writes into every skeleton it seeds.
-    # A skeleton STILL bearing either marker is unrefined; a human who refines the
-    # draft in place replaces both (the prompt + the rubric), so their ABSENCE ==
-    # refined == immune from reclaim.
-    _SKELETON_PROMPT_MARKER = "AUTO-SEEDED"
-    _SKELETON_RUBRIC_MARKER = "SKELETON RUBRIC"
-
-    def _skeleton_is_unrefined(self, case: dict) -> bool:
-        """True if a case still carries an auto_seed placeholder marker.
-
-        Robust against ``scenario: None`` — 66 real cases store scenario as None
-        (key present, value None), so ``case.get("scenario", {})`` returns None,
-        NOT the {} default. ``(x or {})`` / ``(x or "")`` is the correct guard.
-        (Gate-1 retry, run_9f5944b4 — a naive .get(...,{}).get() crashes here and
-        the hook's swallowing except would silently disable reclaim forever.)
-        """
-        scenario = case.get("scenario") or {}
-        prompt = scenario.get("prompt", "") if isinstance(scenario, dict) else ""
-        rubric = case.get("decision_rubric") or ""
-        return (self._SKELETON_PROMPT_MARKER in prompt
-                or self._SKELETON_RUBRIC_MARKER in rubric)
-
-    def reclaim_stale_skeletons(self, ttl_days: int = 30, now: float | None = None) -> list[str]:
-        """Darwinian TTL reclaim for auto_seed skeleton drafts (the missing end
-        of auto_seed_case's lifecycle).
-
-        auto_seed_case (:648) appends a tier=draft ``auto_seed_skeleton`` case per
-        classified correction with an idempotency guard but NO expiry — so an
-        unrefined skeleton a human never refines accumulates forever. This is the
-        reclaim pass, run from context_health_hook alongside the analogous
-        ddd_cultivation._expire_stale_proposals.
-
-        Reclaims a case iff ALL of:
-          • ``auto_seed_skeleton`` in its tags, AND
-          • it still bears a placeholder marker (``_skeleton_is_unrefined``) — a
-            human-refined draft is immune, AND
-          • its age (from the Unix epoch embedded in ``source`` as ``<epoch>:<id>``)
-            exceeds ``ttl_days``. An undecodable epoch → KEEP (fail-safe, never
-            reclaim on doubt).
-
-        Tier-agnostic ON PURPOSE: a stale placeholder already at tier=archived is
-        also swept (soft-archived junk → physical delete = graveyard cleanup).
-
-        LOCK-FREE COLLECT, then DELEGATE: the id scan takes NO lock (a read; the
-        only concurrent mutator, auto_seed_case, only appends → at worst a
-        missed/extra id, benign, next run catches it). Deletion is delegated to
-        the existing ``hard_delete_cases`` which does its OWN _data_lock +
-        disk-truth _load + removed_ids (defeating the merge-preserve re-append).
-        Reclaim MUST NOT hold _data_lock across that call — _data_lock is a plain
-        Lock and hard_delete_cases re-acquires it → self-deadlock (Gate-1,
-        run_9f5944b4). Returns the ids actually deleted.
-        """
-        cutoff = (time.time() if now is None else now) - ttl_days * 86400.0
-        # Re-validate the predicate against DISK TRUTH, not a possibly-stale
-        # in-memory snapshot: this is a long-lived daemon, and a skeleton may be
-        # refined out-of-band (a direct golden_set.private.yaml edit, or a second
-        # process's update_case) after this process last loaded. Without it, the
-        # stale in-memory copy would still show the placeholder markers and we
-        # would collect an id whose on-disk case is already refined — then
-        # hard_delete_cases (which only re-checks id PRESENCE, not the predicate)
-        # would delete the freshly-refined real case. Refreshing first shrinks the
-        # TOCTOU window to the same read-modify-write span hard_delete_cases's own
-        # flock already serializes. (Gate-2 security MED, run_9f5944b4.)
-        #
-        # Reload ONLY the golden set, NOT EvalHistory: reclaim scans self._cases,
-        # never history — and this runs in context_health_hook._light_refresh EVERY
-        # session, so a full self.reload() would re-parse the unbounded multi-MB
-        # EvalHistory corpus it never reads, every cycle (meta-review MED, same run).
-        # _load_golden_set under the lock gives identical predicate freshness at a
-        # fraction of the cost.
-        with self._data_lock:
-            self._load_golden_set()
-        stale: list[str] = []
-        for case in list(self._cases):  # snapshot ref; lock-free read scan
-            if "auto_seed_skeleton" not in (case.get("tags") or []):
-                continue
-            if not self._skeleton_is_unrefined(case):
-                continue  # human-refined → immune
-            try:
-                epoch = float(str(case.get("source", "")).split(":")[0])
-            except (ValueError, TypeError):
-                continue  # undecodable epoch → fail-safe keep
-            if epoch < cutoff:
-                cid = case.get("id")
-                if cid:
-                    stale.append(cid)
-        if not stale:
-            return []
-        result = self.hard_delete_cases(stale)  # own lock + disk-truth reload
-        deleted = result.get("deleted", [])
-        if deleted:
-            logger.info("eval_service: reclaimed %d stale auto_seed skeleton(s) "
-                        "(>%dd unrefined): %s", len(deleted), ttl_days, ", ".join(deleted))
-        return deleted
 
     def get_affected_cases(self, changed_files: list[str]) -> list[dict]:
         """Return cases whose affected_by intersects with changed files.
@@ -1033,7 +824,7 @@ class EvalService:
           Without this, they would be silently dropped (the 2026-06-25 data-loss bug,
           Radar b40b9545). Safe because delete_case is a soft delete — see the
           INVARIANT comment at the disk-only append below.
-        - New in-memory cases (add_case/auto_seed_case) are written as-is.
+        - New in-memory cases (add_case) are written as-is.
 
         Concurrency: in-process writers serialize on ``self._data_lock``; CROSS-process
         writers serialize on an OS-level exclusive lock (a sidecar ``.lock`` file via
@@ -1440,81 +1231,10 @@ def _class_to_affected_by(class_name: str) -> str:
     return mapping.get(class_name, "AGENT.md")
 
 
-# ── Teeth gate: knockout self-test (option-D 命门, run_1bfd3cf9) ──────────────
-#
-# An auto-generated golden case may enter the set ONLY if it has TEETH — proven
-# by feeding its OWN `negative_example` (an answer that SHOULD fail) to the
-# pinned judge. This replaces the old "seed a tier=draft skeleton and wait for a
-# human to refine it" loop (which never closed — the human step never happened),
-# per the 2026-08-17 source-governance design.
-#
-#   judge FAILs the negative → the case discriminates → ADMIT
-#   judge PASSes the negative → tautology (any answer passes) → DISCARD
-#   judge ERRORs / no negative → verdict unusable → DISCARD (fail-closed)
-#
-# Anti-self-deception (design § 7): the verdict comes from the PINNED judge
-# (eval_runner's _get_judge_model — a different stance from whatever LLM
-# generated the case), NEVER from the generator judging itself.
-
-def _knockout_judge(case: dict, negative_example: str) -> dict:
-    """Route the negative example to the pinned judge for the case's eval_method.
-
-    Returns the judge's standard verdict dict ({status: passed/failed/error/...}).
-    Separated from gate_by_knockout so tests mock THIS boundary (the pinned-judge
-    call) and assert the gate's routing logic without touching Bedrock.
-
-    - behavior (decision_rubric): _judge_decision_direction judges whether the
-      negative answer satisfies the rubric (a teethed rubric → failed).
-    - llm (assertions): eval_llm_judge would judge a HYPOTHETICAL; instead we
-      judge the negative answer directly against the assertions via the same
-      decision-direction judge, treating the assertions as the rubric. This keeps
-      ONE knockout mechanism (the real produced answer judged), not the circular
-      "would a compliant agent" path.
-    """
-    from scripts.eval_runner import _judge_decision_direction
-
-    # Build a rubric the direction-judge can score the negative answer against.
-    if case.get("decision_rubric"):
-        rubric = case["decision_rubric"]
-    else:
-        assertions = case.get("assertions", []) or []
-        rubric = "PASS only if ALL hold: " + " AND ".join(assertions)
-    probe_case = {"decision_rubric": rubric}
-    return _judge_decision_direction(probe_case, negative_example)
-
-
-def gate_by_knockout(case: dict) -> tuple[bool, str]:
-    """The teeth gate. Returns (admit, reason).
-
-    admit=True  → the case discriminates (negative correctly failed) → land it.
-    admit=False → tautology / judge-error / no negative → discard (fail-closed).
-
-    NEVER raises — a background seeding path calls this; any unexpected error is
-    treated as fail-closed (discard), never an admit.
-    """
-    negative = (case.get("negative_example") or "").strip()
-    if not negative:
-        return (False, "no negative_example — cannot knockout-test (fail-closed; "
-                       "the generator must produce a negative answer)")
-    try:
-        verdict = _knockout_judge(case, negative)
-    except Exception as exc:  # noqa: BLE001 — background path; fail-closed on any error
-        return (False, f"knockout judge raised ({type(exc).__name__}: {exc}) — fail-closed")
-
-    status = verdict.get("status")
-    if status == "failed":
-        # The judge correctly REJECTED the wrong answer → the case has teeth.
-        return (True, "teeth: negative correctly failed by pinned judge")
-    if status == "passed":
-        # The wrong answer PASSED → the case cannot discriminate → tautology.
-        return (False, "tautology: negative_example also PASSED the judge — no teeth")
-    # error / skipped / anything else → unusable verdict → fail-closed.
-    return (False, f"knockout verdict unusable (status={status!r}) — fail-closed")
-
-
 # Module-level singleton (initialized lazily, thread-safe)
 _eval_service: Optional[EvalService] = None
 _eval_service_lock = threading.Lock()
+
 
 def get_eval_service() -> EvalService:
     """Get or create the EvalService singleton (thread-safe)."""

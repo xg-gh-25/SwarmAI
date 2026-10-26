@@ -77,3 +77,4 @@ test_eval_case_admission.py  # eval-as-product: purpose and the case caps are en
 test_eval_offline_fixture.py  # eval-as-product: offline product cases run in the shipped fixture workspace
 test_eval_followups.py  # eval-as-product: follow-up rules, health route, routine reports
 test_eval_timeout_status.py  # eval-as-product: a timeout is not scored but keeps the BVT red
+test_session_quality_handler.py  # eval-as-product: online scoring over the last 7 days, state file read back

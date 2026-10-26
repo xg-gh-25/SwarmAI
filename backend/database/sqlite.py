@@ -1154,7 +1154,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-    async def role_counts_by_session(self, role: str) -> dict[str, int]:
+    async def role_counts_by_session(self, role: str, since: str | None = None) -> dict[str, int]:
         """ONE aggregate GROUP BY → {session_id: count} for messages of `role`,
         across ALL sessions. Replaces the session-quality sampler's N+1 pattern
         (was: list() all sessions, then list_by_session per session just to count).
@@ -1162,14 +1162,17 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         Excludes pending/unsent rows via the SAME filter list_by_session applies
         (_PENDING_EXCLUDE_SQL) — so counts here MATCH what list_by_session would
         yield (no sampling-semantics drift). Backed by idx_messages_role_session
-        (role, session_id): index-only SEARCH, not a full scan.
+        (role, session_id): index-only SEARCH, not a full scan. ``since`` (an ISO
+        timestamp in the column's own format) counts only messages created at or
+        after it, so sessions with none in that window are absent.
         """
+        since_clause, params = ("", (role,)) if since is None else (" AND created_at >= ?", (role, since))
         async with self._get_connection() as conn:
             cursor = await conn.execute(
                 f"SELECT session_id, COUNT(*) FROM {self.table_name} "
-                f"WHERE role = ? AND {self._PENDING_EXCLUDE_SQL} "
+                f"WHERE role = ? AND {self._PENDING_EXCLUDE_SQL}{since_clause} "
                 "GROUP BY session_id",
-                (role,),
+                params,
             )
             rows = await cursor.fetchall()
             return {r[0]: r[1] for r in rows if r[0]}
