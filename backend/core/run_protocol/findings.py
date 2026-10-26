@@ -380,9 +380,15 @@ def fold(events: list[Mapping[str, Any]], authority: ev.EventAuthority, *,
                 raise FindingError("R2 handout roster does not match this expert's findings")
             r2_targets.update(ids)
     # R2 silence never closes: only exact canonical IDs listed in the handout become OPEN.
+    # A closed_proven finding keeps its state and waits for R2 (r2_status None): is_closed
+    # / push_effect already hold it open until ADEQUATE, and its proof and R2 handout are
+    # written together, so turning it open here would show every proven finding as open
+    # (design 2026-10-26-pipeline-review-closure invariant 3).
     for canonical_id in sorted(r2_targets - answered) if r2_silence else ():
         row = findings[canonical_id]
-        if row["status"] not in ("accepted", "refuted"):
+        if row["status"] == "closed_proven":
+            row["r2_status"] = None
+        elif row["status"] not in ("accepted", "refuted"):
             row["status"], row["r2_status"] = "open", "OPEN"
     return [copy.deepcopy(findings[key]) for key in sorted(findings)]
 

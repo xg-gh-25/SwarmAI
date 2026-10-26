@@ -8,7 +8,8 @@ incomplete.
 
 What is tested, through real runs (``tests/pipeline_v1_rig.py``) and the ledger:
 - the R2 handout stores each finding's ``allowed_status``; the expert's input lists it;
-- for a HIGH ``closed_proven``: no line (silence) → open; ``OPEN`` → read as
+- for a HIGH ``closed_proven``: no line (silence) → still ``closed_proven``,
+  waiting for R2 and blocking RV-2; ``OPEN`` → read as
   TEST_INADEQUATE → ``invalid_test``; ``RESOLVED`` → ``UNANSWERED``, the state stays
   ``closed_proven`` and the finding still blocks RV-2; ``ADEQUATE`` → closed;
 - an UNANSWERED line still makes the answer complete (RV-1a's count);
@@ -87,7 +88,7 @@ def test_the_r2_handout_stores_and_shows_the_allowed_words(rig):
 
 
 @pytest.mark.parametrize("word,status,r2", [
-    (None, "open", "OPEN"),                       # silence: the protection stays
+    (None, "closed_proven", None),                # silence: waits for R2, still blocks
     ("OPEN", "invalid_test", "TEST_INADEQUATE"),  # stricter, never a release
     ("RESOLVED", "closed_proven", "UNANSWERED"),  # the wrong word changes nothing
     ("ADEQUATE", "closed_proven", "ADEQUATE"),

@@ -166,7 +166,9 @@ def test_reported_test_needs_a_passing_command_on_the_current_code(rig):
     assert out.get("ok") is True, out
     proof = next(e for e in r.events() if e["kind"] == "proof")["payload"]
     assert proof["evidence_type"] == "reported_test" and proof["command"] == TEST_CMD
-    assert _status(r, finding_id) == "open"      # until R2 judges the test (below)
+    # proven, waiting for R2 to judge the test (below); not closed until ADEQUATE
+    # (review-closure invariant 3: waiting never shows it as open)
+    assert _status(r, finding_id) == "closed_proven"
     (handout,) = out["handouts"]
     full = __import__("pathlib").Path(handout["path"]).read_text(encoding="utf-8")
     assert TEST_CMD in full and "test_x fails before" in full

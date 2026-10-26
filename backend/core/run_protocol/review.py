@@ -23,54 +23,111 @@ from core.run_protocol.store import AuditStore
 OUTPUT_CONTRACT = """OUTPUT CONTRACT (exact; prose may precede rows):
 Gate-0 only: first non-empty line is VERDICT: SUPPORTED | SUPPORTED-WITH-CHANGES | UNSUPPORTED | WRONG-FRAME | ALREADY-SATISFIED
 R2 status: {\"finding_id\":\"CF-1234abcd\",\"status\":\"RESOLVED|OPEN|REFUTED|ADEQUATE|TEST_INADEQUATE\",\"kind_confirm\":null,\"note\":\"...\"}
-New finding: {\"severity\":\"HIGH|MEDIUM|LOW\",\"kind\":\"behavior|contract|absence|docs|design|security_policy\",\"file\":\"path\",\"line\":1,\"claim\":\"...\",\"fix\":\"...\"}
+New finding: {\"severity\":\"HIGH|MEDIUM|LOW\",\"kind\":\"behavior|contract|absence|docs|design|security_policy\",\"file\":\"path\",\"line\":1,\"claim\":\"...\",\"fix\":\"...\"} (line: the line in the file as it is in the tree you review)
 When there are no new findings, include a separate line: NO FINDINGS
 Do not emit a VERDICT line for REVIEW experts."""
 
 
 
+def r2_ledger(events: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Each addressed finding's R2 position, read from the event log (design 2026-10-26-
+    pipeline-review-closure §2.3 points 3 and 7). One function, so ``review-address``,
+    ``next`` and RV-5 agree about which finding is waiting, uncovered or re-askable.
+
+    Per finding id: ``expert``; ``covered`` (an R2 handout written after its latest
+    address lists it); ``pending`` (that handout is the expert's latest R2 handout and
+    no answer is bound to it yet); ``superseded`` (that handout went unanswered and the
+    expert has a newer one: no answer to it will come through ``next``); ``status``
+    (the latest R2 status line, upper case) and ``status_answer`` / ``from_redispatch``
+    (the answer that wrote it, and whether its handout was a re-dispatch); ``terminal``
+    (accepted, or a refuted proof, after the latest address: never sent to R2 again)."""
+    handouts: dict[str, Mapping[str, Any]] = {}
+    latest_of_expert: dict[str, str] = {}
+    answered: set[str] = set()
+    answer_handout: dict[str, str] = {}
+    rows: dict[str, dict[str, Any]] = {}
+    for event in events:
+        kind, payload = event.get("kind"), event.get("payload") or {}
+        cid = payload.get("canonical_id")
+        if kind == "address" and cid:
+            rows[cid] = {"expert": None, "covered": False, "pending": False,
+                         "superseded": False, "status": None, "status_answer": None,
+                         "from_redispatch": False, "terminal": False, "handout": None}
+        elif kind == "handout" and event.get("round") == 2 and event.get("stage") == "review":
+            handouts[event["event_id"]] = event
+            latest_of_expert[payload.get("expert_id")] = event["event_id"]
+            for finding_id in payload.get("finding_ids") or ():
+                if finding_id in rows:
+                    rows[finding_id].update(expert=payload.get("expert_id"), covered=True,
+                                            handout=event["event_id"])
+        elif kind == "answer" and payload.get("handout_event_id"):
+            answered.add(payload["handout_event_id"])
+            answer_handout[event["event_id"]] = payload["handout_event_id"]
+        elif kind == "finding_status" and cid in rows:
+            handout = handouts.get(answer_handout.get(payload.get("answer_event_id")), {})
+            rows[cid].update(status=str(payload.get("status", "")).upper(),
+                             status_answer=payload.get("answer_event_id"),
+                             from_redispatch=bool((handout.get("payload") or {})
+                                                  .get("redispatch_of")))
+        elif kind == "proof" and cid in rows and payload.get("evidence_type") == "refuted":
+            rows[cid]["terminal"] = True
+        elif kind == "auth_consumed" and cid in rows and payload.get("action") == "accept_finding":
+            rows[cid]["terminal"] = True
+    for row in rows.values():
+        handout = row.pop("handout")
+        if handout is None or handout in answered:
+            continue
+        if latest_of_expert.get(row["expert"]) == handout:
+            row["pending"] = True
+        else:
+            row["superseded"] = True
+    return rows
+
+
 def uncovered_addresses(events: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Findings whose latest address event no later R2 handout lists (design 2026-10-26-
-    pipeline-review-closure §2.3 point 7): an address written without its R2 (a pass
-    that failed half way before passes were one batch). The next ``review-address``
-    covers them; RV-5 keeps REVIEW open until one does."""
-    last_address: dict[str, int] = {}
-    last_r2: dict[str, int] = {}
-    for index, event in enumerate(events):
-        payload = event.get("payload") or {}
-        if event.get("kind") == "address" and payload.get("canonical_id"):
-            last_address[payload["canonical_id"]] = index
-        elif event.get("kind") == "handout" and event.get("round") == 2:
-            for cid in payload.get("finding_ids") or ():
-                last_r2[cid] = index
-    return sorted(cid for cid, index in last_address.items() if last_r2.get(cid, -1) < index)
+    """Findings whose latest address no R2 will answer (§2.3 point 7): no R2 handout
+    lists it since (an address written without its R2, a pass that failed half way
+    before passes were one batch), or the one that does went unanswered and the expert
+    has a newer handout. Accepted / refuted findings are left out. The next
+    ``review-address`` sends them to R2; RV-5 keeps REVIEW open until one does."""
+    return sorted(cid for cid, row in r2_ledger(events).items()
+                  if not row["terminal"] and (not row["covered"] or row["superseded"]))
+
+
+def pending_r2(events: Sequence[Mapping[str, Any]]) -> dict[str, list[str]]:
+    """{expert: finding ids} in that expert's latest R2 handout, not answered yet."""
+    out: dict[str, list[str]] = {}
+    for cid, row in sorted(r2_ledger(events).items()):
+        if row["pending"] and not row["terminal"]:
+            out.setdefault(row["expert"], []).append(cid)
+    return out
 
 
 def r2_redispatch_targets(events: Sequence[Mapping[str, Any]]
                           ) -> dict[str, tuple[str, dict[str, str]]]:
-    """{expert: (the R2 answer, {finding id: the word it used that was not allowed})}
-    for each expert whose latest R2 answer has UNANSWERED lines and who has not been
-    re-dispatched yet: one re-dispatch per expert (design 2026-10-26-pipeline-review-
-    closure §2.3 point 3). Read by ``review-address`` (an empty pass) and ``next``."""
-    handouts = {e["event_id"]: e for e in events if e.get("kind") == "handout"
-                and e.get("stage") == "review" and e.get("round") == 2}
-    redone = {h["payload"]["expert_id"] for h in handouts.values()
-              if h["payload"].get("redispatch_of")}
-    latest: dict[str, Mapping[str, Any]] = {}
-    for event in events:
-        if event.get("kind") == "answer" and event["payload"].get("round") == 2 \
-                and event["payload"].get("handout_event_id") in handouts:
-            latest[event["payload"]["expert_id"]] = event
+    """{expert: (its latest answer among them, {finding id: the word it used that was not
+    allowed})}: findings whose latest R2 line is UNANSWERED, written by an answer to a
+    handout that was not itself a re-dispatch, with no address since and not accepted /
+    refuted. So each such line is asked again once, whatever pass or answer it came
+    from (design 2026-10-26-pipeline-review-closure §2.3 point 3). Read by
+    ``review-address`` (an empty pass) and ``next``."""
+    said = {event["payload"].get("answer_event_id") + "/" + event["payload"]["canonical_id"]:
+            str(event["payload"].get("said") or "?")
+            for event in events if event.get("kind") == "finding_status"
+            and event["payload"].get("canonical_id")
+            and isinstance(event["payload"].get("answer_event_id"), str)}
+    order = {event["event_id"]: index for index, event in enumerate(events)}
     out: dict[str, tuple[str, dict[str, str]]] = {}
-    for expert, answer in latest.items():
-        if expert in redone:
+    for cid, row in sorted(r2_ledger(events).items()):
+        if row["status"] != "UNANSWERED" or row["from_redispatch"] or row["terminal"] \
+                or row["pending"] or row["superseded"] or not row["covered"]:
             continue
-        wrong = {event["payload"]["canonical_id"]: str(event["payload"].get("said") or "?")
-                 for event in events if event.get("kind") == "finding_status"
-                 and event["payload"].get("answer_event_id") == answer["event_id"]
-                 and str(event["payload"].get("status")).upper() == "UNANSWERED"}
-        if wrong:
-            out[expert] = (answer["event_id"], wrong)
+        answer = row["status_answer"]
+        latest, wrong = out.get(row["expert"], (answer, {}))
+        if order.get(answer, -1) > order.get(latest, -1):
+            latest = answer
+        wrong[cid] = said.get(f"{answer}/{cid}", "?")
+        out[row["expert"]] = (latest, wrong)
     return out
 
 
@@ -539,11 +596,13 @@ class ReviewOrchestrator:
                  reclassifications: Mapping[str, Mapping[str, Any]],
                  states: Mapping[str, str] | None = None,
                  allowed: Mapping[str, Sequence[str]] | None = None,
-                 wrong: Mapping[str, str] | None = None) -> str:
+                 wrong: Mapping[str, str] | None = None,
+                 diffs: Mapping[str, str] | None = None) -> str:
         """The R2 input for *expert*. *states*: the state a finding has once the pass
         being built is written (its proof is in the same batch as this handout);
         *allowed*: the R2 words each finding takes; *wrong*: for a re-dispatch, the word
-        the previous answer used that was not allowed."""
+        the previous answer used that was not allowed; *diffs*: for a finding closed by a
+        diff_assertion, its file's git diff from the tree R1 reviewed to now."""
         rows = {row["canonical_id"]: row for row in self.findings()}
         payload = []
         for finding_id in finding_ids:
@@ -558,6 +617,8 @@ class ReviewOrchestrator:
                      "reclassification": reclassifications.get(finding_id)}
             if allowed is not None and finding_id in allowed:
                 entry["allowed_status"] = sorted(allowed[finding_id])
+            if diffs and diffs.get(finding_id):
+                entry["file_diff_since_r1"] = diffs[finding_id]
             if wrong and finding_id in wrong:
                 entry["previous_status_not_allowed"] = wrong[finding_id]
             payload.append(entry)

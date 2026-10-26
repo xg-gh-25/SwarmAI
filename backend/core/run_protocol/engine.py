@@ -100,6 +100,38 @@ def _blob(root: str, tree: str, file: str) -> tuple[str, bytes | None] | None:
         return None
 
 
+def _repo_of_finding(file: str, r1_trees: Mapping[str, Any], now_trees: Mapping[str, Any],
+                     has_path) -> str:
+    """The repo a finding's *file* belongs to (design 2026-10-26-pipeline-review-closure
+    §2.3 point 4): the repo whose tree in the R1 handout held it; else (a file the fix
+    added) the repo whose current tree holds it; else the only repo the R1 handout
+    reviewed. *has_path(repo, tree, file)* reads a tree. Never more than one."""
+    named = [name for name, tree in r1_trees.items() if tree and has_path(name, tree, file)]
+    if not named:
+        named = [name for name, tree in now_trees.items()
+                 if tree and has_path(name, tree, file)]
+    if not named and len([t for t in r1_trees.values() if t]) == 1:
+        named = [name for name, tree in r1_trees.items() if tree]
+    if len(named) != 1:
+        raise EngineError(f"{file}: the finding's file resolves to {len(named)} repos "
+                          f"({', '.join(sorted(named)) or 'none'}) in the R1 handout's trees")
+    return named[0]
+
+
+def _file_assertion_problem(r1: Any, r2: Any, now: Any) -> str | None:
+    """Why a diff_assertion does not hold, or None (§2.3 point 4): the file must be the
+    same as in the tree of the R2 that judged it RESOLVED, and differ from the tree R1
+    reviewed. Each side is a ``_blob`` result; None means unreadable."""
+    if r1 is None or r2 is None or now is None:
+        return "the file cannot be read in one of the R1, R2 and current trees"
+    if r2 != now:
+        return ("the file changed after the R2 that judged it RESOLVED: re-address the "
+                "finding so R2 sees the new change")
+    if r1 == now:
+        return "the file is not changed since R1 reviewed it: nothing was fixed in it"
+    return None
+
+
 def _python_ast(source: bytes) -> str | None:
     """What a Python file executes, as a canonical AST dump: comments and layout are
     gone. Every string stays, docstrings included: a docstring is data another file
@@ -1178,6 +1210,11 @@ class RunEngine:
         # every addressed finding no R2 covered yet, not only this call's (§2.3 point 7)
         earlier = set(review.uncovered_addresses(events)) - set(handoff["addressed"])
         roster = orchestrator.r2_roster(set(handoff["addressed"]) | earlier)
+        # a new R2 handout for an expert replaces its unanswered one: carry those ids
+        for expert, waiting in review.pending_r2(events).items():
+            if expert in roster:
+                roster[expert] = sorted(set(roster[expert]) | set(waiting))
+                earlier |= set(waiting)
         old_hunks, old_proofs = self._addressed_text(events, sorted(earlier))
         redispatch: dict[str, tuple[str, dict[str, str]]] = {}
         if not handoff["addressed"] and not earlier:
@@ -1202,27 +1239,116 @@ class RunEngine:
             review_input = orchestrator.r2_input(
                 expert, ids, hunks=hunks, proofs=proofs,
                 reclassifications=handoff["reclassifications"], states=after,
-                allowed=allowed, wrong=wrong)
+                allowed=allowed, wrong=wrong, diffs=self._fix_diffs(events, rows, ids, trees))
             # an R2 per address pass: after a reopen the expert rechecks again (S6-2)
-            earlier = [e for e in events if e.get("kind") == "handout"
-                       and e.get("stage") == "review" and e.get("round") == 2
-                       and e["payload"].get("expert_id") == expert]
+            previous_r2 = [e for e in events if e.get("kind") == "handout"
+                           and e.get("stage") == "review" and e.get("round") == 2
+                           and e["payload"].get("expert_id") == expert]
             spec, ready = orchestrator.handout_spec(
-                expert_id=expert, stage="review", round=2, attempt=len(earlier) + 2,
+                expert_id=expert, stage="review", round=2, attempt=len(previous_r2) + 2,
                 at=at, expert_instructions=review.expert_prompt(expert),
                 review_input=review_input, finding_ids=ids, code_trees=trees,
                 allowed_status=allowed, redispatch_of=answer_id)
             specs.append(spec)
             prepared.append(ready)
+        read = len(events)
         try:
-            written = self.store.append_batch(writer=self.authority.writer("cli"),
-                                              first=specs[0], children=lambda _head: specs[1:])
-        except StoreError as exc:
+            # everything above was decided on the log as read: refuse if it moved since
+            written = self.store.append_batch(
+                writer=self.authority.writer("cli"), first=specs[0],
+                children=lambda _head: specs[1:],
+                refuse=lambda chain: None if len(chain) == read else
+                "the run's log changed while this pass was prepared; run it again")
+        except (StoreError, finding_protocol.FindingError, review.ReviewError) as exc:
             raise EngineError(f"review-address wrote nothing: {exc}") from exc
         handouts = [orchestrator.handout_written(event, ready) for event, ready in
                     zip([e for e in written if e["kind"] == "handout"], prepared)]
         self._write_review_documents()
         return {"handoff": handoff, "reviewers": sorted(roster), "handouts": handouts}
+
+    @staticmethod
+    def _finding_trees(events: Sequence[Mapping[str, Any]], row: Mapping[str, Any]
+                       ) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
+        """(code_trees of the handout R1 answered, code_trees of the handout whose
+        answer gave this finding's latest R2 status, or None when that status is not
+        RESOLVED). None when the R1 handout recorded no trees (a run from before S6-2:
+        the line rule applies)."""
+        by_id = {event["event_id"]: event for event in events}
+
+        def trees_of(answer_id: Any) -> dict[str, Any] | None:
+            answer = by_id.get(answer_id)
+            handout = by_id.get((answer or {}).get("payload", {}).get("handout_event_id"))
+            value = (handout or {}).get("payload", {}).get("code_trees")
+            return dict(value) if isinstance(value, Mapping) else None
+
+        r1 = trees_of(row.get("answer_event_id"))
+        if not r1:
+            return None
+        r2: dict[str, Any] | None = None
+        for event in events:
+            payload = event.get("payload") or {}
+            if event.get("kind") == "finding_status" \
+                    and payload.get("canonical_id") == row["canonical_id"]:
+                r2 = (trees_of(payload.get("answer_event_id"))
+                      if str(payload.get("status", "")).upper() == "RESOLVED" else None)
+        return r1, r2
+
+    def _file_assertion(self, row: Mapping[str, Any], repos: Mapping[str, str],
+                        r1_trees: Mapping[str, Any], r2_trees: Mapping[str, Any] | None
+                        ) -> dict[str, Any]:
+        """The derived diff_assertion proof of *row*, judged on its file (§2.3 point 4).
+        Raises EngineError, before anything is written, when it does not hold."""
+        finding_id, file = row["canonical_id"], row["file"]
+        if row.get("r2_status") != "RESOLVED" or r2_trees is None:
+            raise EngineError(f"{finding_id}: a diff_assertion needs an R2 that judged the "
+                              f"finding RESOLVED (its R2 status is {row.get('r2_status')})")
+        reserved = (f".aidlc/deliverables/{self.run_id}/",)
+        now = {name: git_tree.write_tree(root, reserved, {}) for name, root in repos.items()}
+        name = _repo_of_finding(
+            file, r1_trees, now,
+            lambda repo, tree, path: repo in repos
+            and (_blob(repos[repo], tree, path) or ("absent",))[0] != "absent")
+        root, r1_tree, r2_tree = repos.get(name), r1_trees.get(name), r2_trees.get(name)
+        if root is None or not r1_tree or not r2_tree:
+            raise EngineError(f"{finding_id}: repo {name} has no tree in the R1 or R2 handout")
+        old, judged, new = (_blob(root, r1_tree, file), _blob(root, r2_tree, file),
+                            _blob(root, now[name], file))
+        problem = _file_assertion_problem(old, judged, new)
+        if problem:
+            raise EngineError(f"{finding_id} ({file}): {problem}")
+        diff = _git(root, "diff", "--unified=0", "--no-renames", r1_tree, now[name], "--", file)
+        return {"finding_id": finding_id, "evidence_type": "diff_assertion", "repo": name,
+                "code_tree": now[name], "result": "asserted", "touches_finding": True,
+                "touches_executable": not _comment_only_diff(file, diff, old=old, new=new),
+                "basis": "file"}
+
+    def _fix_diffs(self, events: Sequence[Mapping[str, Any]],
+                   rows: Mapping[str, Mapping[str, Any]], ids: Sequence[str],
+                   now_trees: Mapping[str, Any]) -> dict[str, str]:
+        """For each finding closed by a diff_assertion: its file's git diff from the
+        tree R1 reviewed to *now_trees* (the R2 input, §2.3 point 4). A finding whose
+        repo cannot be resolved gets none (the hunk text still goes)."""
+        repos = self.effective_repos()
+        out: dict[str, str] = {}
+        for finding_id in ids:
+            row = rows.get(finding_id)
+            if row is None or finding_protocol.CLOSURE[row["kind"]]["evidence"] != "diff_assertion":
+                continue
+            anchors = self._finding_trees(events, row)
+            if anchors is None:
+                continue
+            r1_trees = anchors[0]
+            try:
+                name = _repo_of_finding(
+                    row["file"], r1_trees, now_trees,
+                    lambda repo, tree, path: repo in repos
+                    and (_blob(repos[repo], tree, path) or ("absent",))[0] != "absent")
+                if r1_trees.get(name) and now_trees.get(name):
+                    out[finding_id] = _git(repos[name], "diff", "--no-renames",
+                                           r1_trees[name], now_trees[name], "--", row["file"])
+            except EngineError:
+                continue
+        return out
 
     def r2_redispatch_targets(self, events: Sequence[Mapping[str, Any]]
                               ) -> dict[str, tuple[str, dict[str, str]]]:
@@ -1251,11 +1377,8 @@ class RunEngine:
         if not isinstance(items, list):
             return []
         rows = {row["canonical_id"]: row for row in orchestrator.findings(list(events))}
-        answered = {e["payload"].get("handout_event_id") for e in events
-                    if e.get("kind") == "answer"}
-        awaiting = {cid for e in events if e.get("kind") == "handout" and e.get("round") == 2
-                    and e["event_id"] not in answered
-                    for cid in e["payload"].get("finding_ids") or ()}
+        # the same "waiting for R2" next reports: the expert's latest R2 handout, unanswered
+        awaiting = {cid for ids in review.pending_r2(events).values() for cid in ids}
         problems = []
         for index, item in enumerate(items, 1):
             if not isinstance(item, Mapping):
@@ -1375,6 +1498,7 @@ class RunEngine:
         orchestrator = review.ReviewOrchestrator(self.store, self.run_dir)
         findings = {row["canonical_id"]: row for row in orchestrator.findings()}
         repos = self.effective_repos()
+        all_events = self.store.read_events()
         import re
         hunk_re = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
         derived = []
@@ -1391,6 +1515,11 @@ class RunEngine:
             if set(supplied) != allowed:
                 raise EngineError(f"review proof {index} contains caller-derived fields")
             file = row["file"]
+            anchors = (self._finding_trees(all_events, row)
+                       if evidence_type == "diff_assertion" else None)
+            if anchors is not None:
+                derived.append(self._file_assertion(row, repos, *anchors))
+                continue
             candidates = []
             for name, root in repos.items():
                 try:

@@ -156,7 +156,11 @@ EVENT_SPECS: dict[str, EventSpec] = {
                     # reported_test (S6-2): the report event and the passing command;
                     # n_tests_changed: that report's tests_changed count (an absence
                     # finding needs it above zero; the fold does not read report blobs)
-                    "report_event_id": str, "command": str, "n_tests_changed": int}),
+                    "report_event_id": str, "command": str, "n_tests_changed": int,
+                    # basis: "file" when a diff_assertion was judged on the file (the R1
+                    # and R2 handout trees, design 2026-10-26-pipeline-review-closure §2.3
+                    # point 4); absent: the reported line was touched (older runs)
+                    "basis": str}),
     # the agent's own test report for one repo (S6-1, design usable-by-anyone §3.3.3):
     # code_tree is computed by the engine at submission, the report itself is a blob
     "validation_report": _spec("cli", ("ordinal",), "payload.repo",

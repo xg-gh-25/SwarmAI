@@ -111,8 +111,9 @@ def _review_action(engine, events: list[dict[str, Any]], state: dict[str, Any],
                 f"spawn the {dispatched} handout(s) in this response in one parallel message"
         return "wait", "", (f"{len(waiting)} dispatched expert(s) have not answered yet: "
                             + waiting_summary(events, waiting))
-    # an R2 line used a word its finding does not take (design §2.3 point 3): one
-    # re-dispatch per expert, before the stage can complete
+    # an address no R2 will answer, then an R2 line that used a word its finding does
+    # not take (design §2.3 points 3 and 7). RV-5 holds the stage for the first; the
+    # second is advice (a HIGH it leaves unconfirmed still blocks landing through RV-2)
     from core.run_protocol import review as review_protocol
     uncovered = review_protocol.uncovered_addresses(events)
     if uncovered:
