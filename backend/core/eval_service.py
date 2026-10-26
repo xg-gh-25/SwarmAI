@@ -38,6 +38,16 @@ from core.project_registry import DEFAULT_PROJECT_NAME
 logger = logging.getLogger(__name__)
 
 
+def _run_time(run) -> float:
+    """A run record's ``triggered_at`` as epoch seconds (a naive value is UTC);
+    an unreadable one sorts last."""
+    try:
+        d = datetime.fromisoformat(str(run.get("triggered_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError, AttributeError):
+        return float("-inf")
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
+
+
 class EvalService:
     """In-memory cache of golden set cases and eval run history."""
 
@@ -190,6 +200,10 @@ class EvalService:
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("eval_service: skipping %s: %s", json_file.name, e)
 
+        # Newest first by when the run happened. File names cannot order them: this
+        # service names records in UTC and the eval_runner CLI in local time, so a
+        # run that just finished could sort below an older one.
+        self._runs.sort(key=_run_time, reverse=True)
         logger.info("eval_service: loaded %d eval runs", len(self._runs))
 
     def reload(self) -> None:

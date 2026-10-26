@@ -96,3 +96,16 @@ def test_the_newest_run_by_time_owns_the_report_whatever_the_file_name(tmp_path,
     by_id = {r["run_id"]: r for r in EvalService(workspace_root=tmp_path).get_history()}
     assert by_id["2026-10-20_050000_scheduled"]["report"] == f"{_local_day(late)}_scheduled.html"
     assert by_id["2026-10-20_scheduled"]["report"] is None
+
+
+def test_the_latest_run_is_the_newest_by_time_not_by_file_name(tmp_path, monkeypatch):
+    """The service names records in UTC, the CLI in local time: a canary that just ran
+    (UTC 17:42) must count as newer than a scheduled run of 19:04 local (11:04 UTC)."""
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    (tmp_path / "Eval" / "EvalHistory").mkdir(parents=True)
+    _run(tmp_path, "2026-10-26_190458_scheduled", "2026-10-26T11:04:58+00:00", "scheduled", None)
+    _run(tmp_path, "2026-10-26_174210_canary", "2026-10-26T17:42:10+00:00", "canary",
+         {"verdict": "release", "reason": "ok", "checks": []})
+    svc = EvalService(workspace_root=tmp_path)
+    assert svc.get_health()["last_run"]["triggered_by"] == "canary"
+    assert [r["run_id"] for r in svc.get_history()][0] == "2026-10-26_174210_canary"
