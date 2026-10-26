@@ -3,7 +3,7 @@ title: Pipeline 审核收口 — finding 关闭协议、run 可观察性、没�
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r2 — 已过一次零上下文审查（3 HIGH、7 MEDIUM、6 LOW，全部按原因并入），待 XG 确认；未实施
+status: r3 — XG 已定 §8 三条（2026-10-27）；实施中
 ---
 
 # Pipeline 审核收口
@@ -174,11 +174,11 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
 - 不加第三轮审查；R2 重派每位专家最多一次。
 - 不新增事件类型；不按语言、框架、测试运行器解析测试名或结果。
 
-## 8. 待 XG 确认
+## 8. XG 的决定（2026-10-27）
 
-1. absence 用 `reported_test` 关闭，并要求报告里有改动过的测试（§2.3 表）：同意吗？另一种是 absence 只能靠人工 accept。
-2. R2 用错词时重派一次，算在 R2 内、不算第三轮（§2.3 第 3 点）：同意吗？
-3. C 只做"照实写、`not_run` 时 Quality 不为 PASS"，不做 base 上的证明机制（§4）：同意吗？
+1. absence 用 `reported_test` 关闭，要求报告里有改动过的测试（§2.3 表）；不走人工 accept。原话："我们要 Autonomous，不要人介入"。
+2. R2 用错词时重派一次，算在 R2 内、不算第三轮（§2.3 第 3 点）：同意。
+3. C 只做"照实写、`not_run` 时 Quality 不为 PASS"，不做 base 上的证明机制（§4）：同意。
 
 ## 修订记录
 
@@ -190,3 +190,4 @@ r1 设计了 base 报告（`report-tests --baseline`）加"同一条命令在 ba
   - `closed_unproven` 只在 MEDIUM/LOW 时算关闭（MEDIUM 7）；`stale_closures` 加两种状态（LOW 13）；`accept-finding` 两侧 hash 一致（MEDIUM 10）；absence 要求 `tests_changed`（LOW 11）；
   - C 的 baseline 机制撤掉，改为照实写（HIGH 2、MEDIUM 6、LOW 14、15）；
   - §2.2 根因改写（LOW 16）；§6 的"重放本次 run"改成续跑场景测试（MEDIUM 9），补上审查列出的缺失测试。
+- r3（2026-10-27）：§8 三条由 XG 决定，全部按 r2 的写法实施。
