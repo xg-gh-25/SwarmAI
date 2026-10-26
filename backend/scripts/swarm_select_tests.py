@@ -341,15 +341,19 @@ _SOURCE_SCAN_SUITES = (
     "backend/tests/test_pipeline_command.py",
     "backend/tests/test_pipeline_v1_cards.py",
     "backend/tests/test_pipeline_v1_cutover.py",
+    "backend/tests/test_pipeline_v1_profile_table.py",
     "backend/tests/test_r6a_ceiling_decouple.py",
     "backend/tests/test_router_async_blocking.py",
     "backend/tests/test_silent_except_baseline.py",
+    "backend/tests/test_swarmws_resolver.py",
     "backend/tests/test_transcript_event_schema.py",
     "backend/tests/test_turn_writer.py",
 )
 # Glob *.py but not over backend source (a tmp_path or a generated tree).
-# globs *.py of the skills, not of backend modules (selected with _DOC_LINT_SUITES)
-_NOT_SOURCE_SCANS = ("backend/tests/test_skill_python.py",)
+# globs *.py of the skills, not of backend modules (selected with _DOC_LINT_SUITES);
+# the acceptance matrix globs its own tmp_path repo.
+_NOT_SOURCE_SCANS = ("backend/tests/test_skill_python.py",
+                     "backend/tests/test_pipeline_v1_acceptance_matrix.py")
 # The generated App index hashes every file an App declares (backend/apps/*/app.json
 # "source"), frontend files included: a change to one leaves the index stale and the
 # packaged build fails on it (af8274c5e edited PollinateOverlay.tsx, 10-27). No import
