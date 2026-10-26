@@ -28,8 +28,10 @@ Nothing is removed from any corpus; this only decides which hits of this
 query are worth the model's attention.
 
 Public:
+- ``extract_query_keywords(message)`` -- the search terms of a message (chat and pipeline)
+- ``clip(text, cap, pointer)`` -- the one truncation of every recall leg
 - ``query_terms(query)``
-- ``filter_recall(result, prompt_text="", followup=False)`` -> BucketedRecall
+- ``filter_recall(result, prompt_text="", followup=False, caps=None, slots=None)`` -> BucketedRecall
 - ``in_prompt_text(text, prompt_norm)``
 - ``DOMAIN_CHAR_CAPS``, ``FOLLOWUP_CHAR_CAPS``, ``FOLLOWUP_SLOTS``, ``LIBRARY_TOP``, ``ARCHIVE_SLOTS``, ``NO_INJECT_PREFIXES``
 """
@@ -89,6 +91,113 @@ SESSION_STALE_MIN_TERMS = 3
 # within 2 days, 42% at 3-7 days, 13% at 8-30 days, 9% older. Its date is the
 # file name (``DailyActivity/YYYY-MM-DD.md``).
 _DAILY_RE = re.compile(r"(?:^|/)DailyActivity/(\d{4}-\d{2}-\d{2})")
+
+
+_STOP_WORDS: frozenset[str] = frozenset({
+    "the", "this", "that", "with", "from", "what", "when", "where",
+    "which", "about", "into", "than", "then", "them", "they", "been",
+    "being", "have", "has", "had", "does", "did", "doing", "done",
+    "will", "would", "could", "should", "shall", "might",
+    "can", "may", "also", "just", "more", "most", "some", "any", "please",
+    "help", "tell", "want", "need", "know", "like", "look", "show", "check",
+    "all", "each", "every", "both", "few", "many", "much", "such",
+    "very", "too", "quite", "rather", "only", "even", "still",
+    "how", "why", "who", "you", "its", "our", "your", "their", "his", "her",
+    "and", "but", "for", "nor", "not", "yet", "are", "was", "were",
+    "let", "got", "get", "put", "see", "say", "said", "make", "made",
+    # conversational turn-control words: alone they say nothing about a topic
+    "continue", "okay", "yes", "now", "again", "here", "there", "thing",
+})
+
+# Chinese function words and conversational filler. A CJK run is cut at every
+# occurrence (longest first), and the remaining pieces of 2+ characters are the
+# content words. Without this a whole clause ("的看下我们现在的") became ONE
+# search term whose every bigram had to match -- it matched nothing, while
+# filler-only messages matched everything that shared a filler.
+_CJK_STOP_WORDS: tuple[str, ...] = tuple(sorted({
+    "我们", "你们", "他们", "咱们", "自己", "现在", "目前", "刚才", "之前", "以后",
+    "一下", "看下", "看看", "看一下", "查下", "查一下", "帮我", "给我", "你给我",
+    "什么", "怎么", "怎么样", "为什么", "为啥", "有没有", "是不是", "能不能",
+    "要不要", "可以", "可能", "应该", "需要", "这个", "那个", "这些", "那些",
+    "这样", "那样", "一个", "一些", "还有", "然后", "因为", "所以", "如果",
+    "但是", "不过", "而且", "或者", "已经", "就是", "还是", "只是", "其实",
+    "东西", "情况", "问题", "事情", "地方", "时候", "一点", "有点", "一样",
+    "正好", "继续", "好好", "一次性", "到底", "真的", "直接", "马上", "确定",
+    "上次", "感觉", "总是", "似的", "好像", "明白", "一直", "所有", "整个",
+    "我", "你", "他", "她", "它", "的", "了", "吗", "呢", "吧", "啊", "呀",
+    "嘛", "哦", "噢", "在", "是", "有", "和", "跟", "与", "把", "被", "给",
+    "让", "去", "来", "下", "也", "都", "就", "还", "又", "再", "很", "太",
+    "不", "没", "要", "会", "能", "好", "对", "说", "做", "搞", "帮", "请",
+    "这", "那", "哪", "谁", "个", "们", "着", "过", "得", "地", "从", "向",
+}, key=len, reverse=True))
+_CJK_STOP_RE = re.compile("|".join(re.escape(w) for w in _CJK_STOP_WORDS))
+_CJK_RUN_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+")
+# Longest CJK content piece kept as one term; longer pieces are split, because
+# a term's bigrams are AND-ed and a long piece rarely recurs verbatim.
+_CJK_MAX_TERM = 4
+
+
+def _cjk_terms(text: str) -> list[str]:
+    """Content words from the CJK runs of ``text``, in order, de-duplicated."""
+    out: list[str] = []
+    for run in _CJK_RUN_RE.findall(text):
+        for piece in _CJK_STOP_RE.split(run):
+            if len(piece) < 2:
+                continue
+            for i in range(0, len(piece), _CJK_MAX_TERM):
+                part = piece[i:i + _CJK_MAX_TERM]
+                if len(part) >= 2 and part not in out:
+                    out.append(part)
+    return out
+
+
+def extract_query_keywords(message: str) -> str:
+    """Extract searchable keywords from user message.  Pure NLP, no LLM.
+
+    Returns a space-separated string of up to 18 terms suitable for
+    FTS5+BM25 keyword recall (the vector leg was removed 2026-08-14).
+    Returns empty string for messages too short to produce meaningful recall.
+    """
+    if not message or len(message.strip()) < 3:
+        return ""
+
+    text = message.strip()
+
+    # Strip common conversational filler
+    text = re.sub(
+        r"^(hey|hi|hello|please|can you|could you|help me|help|swarm)\s+",
+        "", text, flags=re.IGNORECASE,
+    )
+
+    if not text:
+        return ""
+
+    # Strip URLs and file paths before word extraction
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"(?:^|\s)[~/]\S+", " ", text)
+
+    # Hyphenated compounds first — preserve "session-router", "pre-tool-use"
+    # as single terms. ASCII-only classes throughout: Python's \w also matches
+    # CJK, so "看下recall机制" used to come out as one "English word".
+    compounds = re.findall(
+        r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]+(?:-[A-Za-z][A-Za-z0-9_]+)+)", text)
+    # Strip matched compounds from text to avoid double-counting
+    text_stripped = text
+    for c in compounds:
+        text_stripped = text_stripped.replace(c, " ")
+
+    # English words: substantive terms (>2 chars, not stop words), de-duplicated.
+    words: list[str] = []
+    for w in re.findall(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]{2,})(?![A-Za-z0-9_])",
+                        text_stripped):
+        if w.lower() not in _STOP_WORDS and w not in words:
+            words.append(w)
+
+    # CJK + Kana + Hangul: content words only (function words cut out)
+    cjk = _cjk_terms(text)
+
+    combined = compounds[:3] + words[:10] + cjk[:8]
+    return " ".join(combined) if combined else ""
 
 
 def _today() -> str:
@@ -244,13 +353,19 @@ def _keep(domain: str, text: str, terms: list[str], prompt_norm: str,
     return not _in_prompt(text, prompt_norm)
 
 
-def filter_recall(result: Any, prompt_text: str = "", followup: bool = False) -> Any:
+def filter_recall(result: Any, prompt_text: str = "", followup: bool = False,
+                  caps: "dict[str, int] | None" = None,
+                  slots: "dict[str, int] | None" = None) -> Any:
     """Return a copy of ``result`` holding only relevant, new, budgeted hits.
 
     ``followup``: a later message's recall; uses ``FOLLOWUP_CHAR_CAPS`` and
-    ``FOLLOWUP_SLOTS`` instead of the first-message sizes."""
-    caps = FOLLOWUP_CHAR_CAPS if followup else DOMAIN_CHAR_CAPS
-    slots = FOLLOWUP_SLOTS if followup else {}
+    ``FOLLOWUP_SLOTS`` instead of the first-message sizes. ``caps`` / ``slots``: a
+    caller with its own budget (a pipeline run's knowledge.md) passes them; the
+    relevance rules are the same."""
+    if caps is None:
+        caps = FOLLOWUP_CHAR_CAPS if followup else DOMAIN_CHAR_CAPS
+    if slots is None:
+        slots = FOLLOWUP_SLOTS if followup else {}
     from core.recall_multi import BucketedRecall
 
     raw_terms = (result.query or "").split()

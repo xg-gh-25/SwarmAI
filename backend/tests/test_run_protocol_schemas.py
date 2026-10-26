@@ -28,7 +28,7 @@ def full_requirements(profile="full"):
                             "answered_by": "evidence"}],
         "understanding": {"claim": "serve locally", "readings": ["one reading"],
                           "evidence": ["existing server"], "root_cause": None},
-        "prior_knowledge": [{"entry": "local only", "store": "project"}],
+        "knowledge_refs": ["0a1b2c3d"],
     }
     if profile == "bugfix":
         doc["bugfix"] = {

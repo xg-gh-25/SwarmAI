@@ -45,7 +45,7 @@ def _requirements(readings=None, resolution="rewritten"):
         "clarifications": [],
         "understanding": {"claim": "implement result", "readings": readings or ["one"],
                           "evidence": ["a.py:1"], "root_cause": None},
-        "prior_knowledge": [],
+        "knowledge_refs": [],
     }
 
 

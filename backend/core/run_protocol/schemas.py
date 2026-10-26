@@ -305,7 +305,7 @@ def validate_requirements(document: Any, *, variant: str, profile: str) -> list[
         return [SchemaIssue("RQ-1", "$", f"unknown requirements variant {variant!r}")]
     allowed = {"requirements"}
     if variant == "full":
-        allowed |= {"bugfix", "analysis", "clarifications", "understanding", "prior_knowledge"}
+        allowed |= {"bugfix", "analysis", "clarifications", "understanding", "knowledge_refs"}
     _strict(obj, allowed, out, "RQ-1", "$")
     _requirements(obj.get("requirements"), out, variant)
     if variant == "lite":
@@ -317,15 +317,23 @@ def validate_requirements(document: Any, *, variant: str, profile: str) -> list[
     _analysis(obj.get("analysis"), out)
     _clarifications(obj.get("clarifications"), out)
     _understanding(obj.get("understanding"), out)
-    prior = _list(obj.get("prior_knowledge"), out, "RQ-5", "prior_knowledge") or []
-    for i, value in enumerate(prior):
-        path = f"prior_knowledge[{i}]"
-        row = _object(value, out, "RQ-5", path)
-        if row is not None:
-            _strict(row, {"entry", "store"}, out, "RQ-5", path)
-            _text(row, "entry", out, "RQ-5", path)
-            _text(row, "store", out, "RQ-5", path)
+    _knowledge_refs(obj, out, "RQ-5")
     return out
+
+
+_KNOWLEDGE_ID = re.compile(r"[0-9a-f]{8}")
+
+
+def _knowledge_refs(obj: Mapping[str, Any], out: list[SchemaIssue], check: str) -> None:
+    """Optional ``knowledge_refs``: ids of knowledge.md entries the document relied on
+    (run-knowledge §3.3). That each id was recalled for this run is the engine's check;
+    here only the shape."""
+    if "knowledge_refs" not in obj:
+        return
+    refs = _list(obj.get("knowledge_refs"), out, check, "knowledge_refs") or []
+    for i, value in enumerate(refs):
+        if not isinstance(value, str) or not _KNOWLEDGE_ID.fullmatch(value):
+            _issue(out, check, f"knowledge_refs[{i}]", "must be an 8-character entry id from knowledge.md")
 
 
 def _id_rows(value: Any, out: list[SchemaIssue], *, check: str, path: str,
@@ -483,9 +491,10 @@ def validate_design_spec(document: Any, *, variant: str,
     if variant not in ("full", "lite"):
         return [SchemaIssue("DS-5", "$", f"unknown design variant {variant!r}")]
     common = {"properties", "failure_modes", "tasks", "exit_criteria", "consumers",
-              "no_contract_change_reason", "security_boundaries"}
+              "no_contract_change_reason", "security_boundaries", "knowledge_refs"}
     allowed = common | ({"alternatives", "chosen", "design"} if variant == "full" else set())
     _strict(obj, allowed, out, "DS-5", "$")
+    _knowledge_refs(obj, out, "DS-5")
     if not isinstance(requirement_ids, set) or any(not isinstance(x, str) for x in requirement_ids):
         _issue(out, "DS-5", "requirement_ids", "must be a set of requirement IDs")
         requirement_ids = set()

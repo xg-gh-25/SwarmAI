@@ -214,14 +214,22 @@ def execute(args) -> dict[str, Any]:
         from core.run_protocol import project_binding
         repos = _repos(args.repo)
         binding = project_binding.resolve(args.project, repos)   # run-knowledge §3.2
+        from core.run_protocol import run_knowledge                # run-knowledge §3.3
+        knowledge = run_knowledge.build(
+            args.requirement, project=binding.project, has_ddd=binding.has_ddd,
+            workspace=_workspace(), repo_roots=repos)
         engine = RunEngine.create(
             data_dir=get_app_data_dir(), workspace=_workspace(), project=binding.project,
             profile=args.profile, session_id=args.session_id, repos=repos,
             run_id=args.run_id, transcript_ids=[*args.transcript_id, *_this_transcript()],
             requirement=args.requirement, has_ddd=binding.has_ddd,
-            bound_repos=binding.bound_repos)
+            bound_repos=binding.bound_repos,
+            knowledge={"status": knowledge.status, "items": [i["id"] for i in knowledge.items]})
+        knowledge_file = engine.write_knowledge(knowledge.markdown)
         result = {"ok": True, "pipeline_id": engine.run_id, "project": binding.project,
-                  "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json")}
+                  "has_ddd": binding.has_ddd, "run_file": str(engine.run_dir / "run.json"),
+                  "knowledge": {"file": str(knowledge_file), "status": knowledge.status,
+                                "entries": len(knowledge.items)}}
         if binding.notes:
             result["notes"] = binding.notes
         return _with_next(engine, result, previous_stage="", mutating=True)

@@ -36,7 +36,7 @@ def _requirements(profile):
            "analysis":[{"kind":"missing_edge","refs":["R1.1"],"note":"empty","resolution":"rewritten"}],
            "clarifications":[{"qid":"Q1","question":"Which?","answer":"existing","answered_by":"evidence"}],
            "understanding":{"claim":"change value","readings":["one"],"evidence":["repo"],"root_cause":None},
-           "prior_knowledge":[]}
+           "knowledge_refs":[]}
     if profile=="bugfix": value["bugfix"]={"current":[_ac("C1")],"expected":[_ac("E1")],"unchanged":[_ac("U1")]}
     return value
 

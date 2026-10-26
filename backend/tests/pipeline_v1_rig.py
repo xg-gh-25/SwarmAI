@@ -87,7 +87,7 @@ def documents(profile: str) -> dict[str, Any]:
                             "answered_by": "evidence"}],
         "understanding": {"claim": "swap the operands", "readings": ["one"],
                           "evidence": ["backend/core/mod.py"], "root_cause": None},
-        "prior_knowledge": []}
+        "knowledge_refs": []}
     if profile == "bugfix":
         requirements["bugfix"] = {"current": [_ac("C1")], "expected": [_ac("E1")],
                                   "unchanged": [_ac("U1")]}

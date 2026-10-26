@@ -3,7 +3,7 @@ title: Pipeline run 怎么用上 DDD 和通用 Knowledge
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r5 — 步骤 0–2 已实施（§3.0.1、§3.1.1、§3.2.1）；步骤 3–4 待做
+status: r6 — 步骤 0–3 已实施（§3.0.1、§3.1.1、§3.2.1、§3.3.1）；步骤 4 和 §3.5 待做
 ---
 
 相关设计：`2026-10-26-pipeline-two-ends.md`、`2026-10-25-knowledge-delivery-gaps.md`、
@@ -259,6 +259,39 @@ requirements 和 DESIGN_SPEC 加**可选**字段 `knowledge_refs`（条目 hash 
 create 事件记下的列表里，否则 `stage-complete` 拒绝（和测试引用一样是确定性检查）。不强制写：
 强制会逼出凑数的引用。
 
+### 3.3.1 步骤 3 的实施（r6）
+
+- 新模块 `core/run_protocol/run_knowledge.py`。create 时先由 `project_binding` 定项目，再调
+  `build(--requirement 原文, …)` 召回一次：
+  - `has_ddd` 时 `recall_ddd_entries`（最多 6 条，DDD 总量 3000）；
+  - Library 走 `recall_all(domains=("library",))` 和聊天同一个 `filter_recall`（给 `filter_recall` 加了
+    `caps` / `slots` 参数：Library 2000、最多 3 条，MEMORY 归档 600、最多 1 条）；
+  - 这个仓库的 pipeline-lessons 文件直接读（"经验"一节，从新到旧，1000 字符）。
+  三路都按 §3.0 的 `clip` 和预算规则截。每条带 8 位 id（全文去空白后的 sha256 前 8 位）。
+- 状态和 id 列表写进 **contract**（`knowledge: {status, items}`），不是事件：contract 是 create 时写一次、
+  agent 改不了的记录，用来核对 `knowledge_refs` 正合适，省掉一种新事件。`artifacts/knowledge.md` 是给人和
+  agent 读的副本。create 的输出带 `knowledge: {file, status, entries}`。
+- `knowledge_refs`：REQUIREMENTS（full）和 DESIGN_SPEC（两种都可）的可选字段，8 位 id 列表。schema 只查
+  形状；engine 在 EVALUATE / PLAN 的 `stage-complete` 和 `gate0-start` 写文档之前，核对每个 id 都在 contract
+  里，否则按 RQ-5 / DS-5 拒绝。
+- **删了 `prior_knowledge`。** REQUIREMENTS 里原来有一个 `prior_knowledge: [{entry, store}]` 字段，自由文本、
+  不核对、卡片和产品代码都没提过，只有测试 fixture 传空列表。它和 `knowledge_refs` 是同一件事，留着就是两个
+  来源，所以由 `knowledge_refs` 取代。
+- 关键词提取 `extract_query_keywords` 从 `session_router` 挪到 `recall_filter`（连同停用词表），聊天和
+  pipeline 共用；`session_router` 保留原来的名字，转引用这一份。
+- 和 §3.3 不一样的地方：
+  - 外部抓取内容（Signals、DailyBriefs）不是"单独成块标 UNTRUSTED"，而是和聊天一样**直接不收**
+    （`filter_recall` 的 `NO_INJECT_PREFIXES`）。渲染时仍会把 `is_external_source` 的条目单独成块，作为第二道。
+  - 没有 data.db 时 Library 这一路直接跳过：召回会打开、也就会创建一个空的数据库。
+  - INSTRUCTIONS 改为每个 profile 都传 `--requirement`；没传时状态是 `none`，原因写进文件。
+- 实测（真实 SwarmAI DDD 和 Library，只读）：三个查询 152–180 ms，召回 6 条 DDD 加 0–3 条 Library，
+  knowledge.md 3–5.5K 字符。create 是 CLI 里的一次性调用，不在聊天路径上。
+- 测试 `tests/test_pipeline_v1_run_knowledge.py`（9 个）：三种状态、没有 DDD 时不调 DDD、栅栏不能被
+  召回文本提前关闭、长条目截断带出处、真实 CLI 写出 knowledge.md 和 contract、`knowledge_refs` 的核对。
+  五处变异（不核对 refs、无视 has_ddd、出错算 none、不清栅栏、不判断 data.db）各自让测试变红。判断 data.db
+  的那一处，端到端测试测不出来（rig 的 CLI 子进程不会建库），改成直接测 `_library_leg`。
+- INSTRUCTIONS 有 10000 字符上限（`lint_skills`），步骤 2、3 加的说明一起压缩到上限以内。
+
 ### 3.4 后端：correctness 专家的 DDD 块（步骤 4）
 
 只在 `has_ddd` 时有，只给 correctness 专家（security 有自己的声明来源，先不加）。
@@ -328,3 +361,4 @@ S5 加两个数，按 run 统计：
 - r3（2026-10-26）：步骤 0 实施；记录和设计不同的三处，以及改前改后的实测（§3.0.1），含真实消息回放。
 - r4（2026-10-26）：步骤 1 实施（§3.1.1）。
 - r5（2026-10-26）：步骤 2 实施（§3.2.1）。
+- r6（2026-10-26）：步骤 3 实施（§3.3.1）。

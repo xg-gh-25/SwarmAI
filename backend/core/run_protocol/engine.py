@@ -391,11 +391,14 @@ class RunEngine:
                run_id: str | None = None,
                transcript_ids: Sequence[str] = (),
                requirement: str | None = None, has_ddd: bool = False,
-               bound_repos: Sequence[str] = ()) -> "RunEngine":
+               bound_repos: Sequence[str] = (),
+               knowledge: Mapping[str, Any] | None = None) -> "RunEngine":
         """Create a run. Every run's code is in its own git worktree per repo (S6-5: the
         shared mode, where a run edited the main checkout, is gone). *has_ddd* and
         *bound_repos* come from the repos' bindings (project_binding.resolve,
-        run-knowledge §3.2) and are fixed in the contract."""
+        run-knowledge §3.2) and are fixed in the contract; so is *knowledge* (the status
+        and entry ids of artifacts/knowledge.md, §3.3), which knowledge_refs are checked
+        against."""
         repos = repos or {}
         if profile not in lifecycle.PROFILE_STAGES:
             raise EngineError(lifecycle.REMOVED_PROFILES.get(profile, "unknown profile"))
@@ -453,6 +456,8 @@ class RunEngine:
                         "repo_roots": {name: str(Path(root).resolve()) for name, root in repos.items()},
                         "decision_cap": decision_cap,
                         "has_ddd": bool(has_ddd), "bound_repos": sorted(bound_repos),
+                        "knowledge": {"status": str((knowledge or {}).get("status") or "none"),
+                                      "items": [str(i) for i in (knowledge or {}).get("items") or []]},
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
@@ -1034,6 +1039,11 @@ class RunEngine:
             raise EngineError("Gate-0 requires active EVALUATE on a profile that runs Gate-0")
         docs = DocumentStore(self.run_dir, on_render_failed=self._render_failed)
         if requirements is not None:
+            from core.run_protocol.documents import DocumentError
+            try:
+                self._check_knowledge_refs(requirements, "RQ-5")
+            except DocumentError as exc:
+                raise EngineError(str(exc)) from exc
             docs.write_requirements(requirements, variant="full", profile=state["profile"])
         value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         readings = ((value.get("understanding") or {}).get("readings")
@@ -1810,12 +1820,14 @@ class RunEngine:
         try:
             if stage == "evaluate":
                 artifact = self._with_decisions("REQUIREMENTS", artifact)
+                self._check_knowledge_refs(artifact, "RQ-5")
                 docs.write_requirements(artifact, variant="full", profile=profile,
                                         blocking=roster)
             elif stage == "plan":
                 requirements = self._read_json(
                     self.run_dir / "artifacts" / "requirements.json", {})
                 artifact = self._with_decisions("DESIGN_SPEC", artifact)
+                self._check_knowledge_refs(artifact, "DS-5")
                 docs.write_design(artifact, variant=lifecycle.caps(profile).design,
                                   profile=profile, requirements=requirements,
                                   requirement_variant="full",
@@ -1925,6 +1937,28 @@ class RunEngine:
                 writer=self.authority.writer("cli"), kind="validation_report", at=_now(),
                 ordinal=NEXT, payload=validation_report.event_payload(
                     stage, report, code_trees[report["repo"]]))
+
+    def write_knowledge(self, markdown: str) -> Path:
+        """artifacts/knowledge.md, what the run recalled at create (run-knowledge §3.3).
+        Its entry ids are in the contract; this file is the readable copy."""
+        path = self.run_dir / "artifacts" / "knowledge.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        DocumentStore._atomic(path, markdown)
+        return path
+
+    def _check_knowledge_refs(self, document: Mapping[str, Any] | None, check_id: str) -> None:
+        """Every id in *document*'s ``knowledge_refs`` names an entry recalled at create
+        (the contract's list, which the agent cannot edit). Raises DocumentError."""
+        from core.run_protocol.documents import DocumentError
+        refs = (document or {}).get("knowledge_refs") if isinstance(document, Mapping) else None
+        if not isinstance(refs, list):
+            return                      # absent, or a shape error the schema reports
+        known = set(((self.contract.get("knowledge") or {}).get("items")) or [])
+        unknown = sorted({str(r) for r in refs} - known)
+        if unknown:
+            message = (f"knowledge_refs {', '.join(unknown)} are not entries of this run's "
+                       "knowledge.md (artifacts/knowledge.md lists each entry's id)")
+            raise DocumentError(f"{check_id} knowledge_refs: {message}", {check_id: message})
 
     def _render_failed(self, document: str, exc: Exception) -> None:
         """A Markdown projection failed (K4, F23): one ``render_failed`` event; the

@@ -412,62 +412,12 @@ def ddd_inject_true_failure_total(snapshot: "dict[str, int] | None" = None) -> i
     snap = get_ddd_inject_snapshot() if snapshot is None else snapshot
     return sum(n for r, n in snap.items() if _is_ddd_true_failure(r))
 
-_STOP_WORDS: frozenset[str] = frozenset({
-    "the", "this", "that", "with", "from", "what", "when", "where",
-    "which", "about", "into", "than", "then", "them", "they", "been",
-    "being", "have", "has", "had", "does", "did", "doing", "done",
-    "will", "would", "could", "should", "shall", "might",
-    "can", "may", "also", "just", "more", "most", "some", "any", "please",
-    "help", "tell", "want", "need", "know", "like", "look", "show", "check",
-    "all", "each", "every", "both", "few", "many", "much", "such",
-    "very", "too", "quite", "rather", "only", "even", "still",
-    "how", "why", "who", "you", "its", "our", "your", "their", "his", "her",
-    "and", "but", "for", "nor", "not", "yet", "are", "was", "were",
-    "let", "got", "get", "put", "see", "say", "said", "make", "made",
-    # conversational turn-control words: alone they say nothing about a topic
-    "continue", "okay", "yes", "now", "again", "here", "there", "thing",
-})
-
-# Chinese function words and conversational filler. A CJK run is cut at every
-# occurrence (longest first), and the remaining pieces of 2+ characters are the
-# content words. Without this a whole clause ("的看下我们现在的") became ONE
-# search term whose every bigram had to match -- it matched nothing, while
-# filler-only messages matched everything that shared a filler.
-_CJK_STOP_WORDS: tuple[str, ...] = tuple(sorted({
-    "我们", "你们", "他们", "咱们", "自己", "现在", "目前", "刚才", "之前", "以后",
-    "一下", "看下", "看看", "看一下", "查下", "查一下", "帮我", "给我", "你给我",
-    "什么", "怎么", "怎么样", "为什么", "为啥", "有没有", "是不是", "能不能",
-    "要不要", "可以", "可能", "应该", "需要", "这个", "那个", "这些", "那些",
-    "这样", "那样", "一个", "一些", "还有", "然后", "因为", "所以", "如果",
-    "但是", "不过", "而且", "或者", "已经", "就是", "还是", "只是", "其实",
-    "东西", "情况", "问题", "事情", "地方", "时候", "一点", "有点", "一样",
-    "正好", "继续", "好好", "一次性", "到底", "真的", "直接", "马上", "确定",
-    "上次", "感觉", "总是", "似的", "好像", "明白", "一直", "所有", "整个",
-    "我", "你", "他", "她", "它", "的", "了", "吗", "呢", "吧", "啊", "呀",
-    "嘛", "哦", "噢", "在", "是", "有", "和", "跟", "与", "把", "被", "给",
-    "让", "去", "来", "下", "也", "都", "就", "还", "又", "再", "很", "太",
-    "不", "没", "要", "会", "能", "好", "对", "说", "做", "搞", "帮", "请",
-    "这", "那", "哪", "谁", "个", "们", "着", "过", "得", "地", "从", "向",
-}, key=len, reverse=True))
-_CJK_STOP_RE = re.compile("|".join(re.escape(w) for w in _CJK_STOP_WORDS))
-_CJK_RUN_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+")
-# Longest CJK content piece kept as one term; longer pieces are split, because
-# a term's bigrams are AND-ed and a long piece rarely recurs verbatim.
-_CJK_MAX_TERM = 4
-
-
-def _cjk_terms(text: str) -> list[str]:
-    """Content words from the CJK runs of ``text``, in order, de-duplicated."""
-    out: list[str] = []
-    for run in _CJK_RUN_RE.findall(text):
-        for piece in _CJK_STOP_RE.split(run):
-            if len(piece) < 2:
-                continue
-            for i in range(0, len(piece), _CJK_MAX_TERM):
-                part = piece[i:i + _CJK_MAX_TERM]
-                if len(part) >= 2 and part not in out:
-                    out.append(part)
-    return out
+# Keyword extraction lives in recall_filter (one copy for chat and pipeline recall,
+# run-knowledge §2); the names are kept here for existing callers and tests.
+from .recall_filter import (  # noqa: E402,F401
+    _CJK_MAX_TERM, _CJK_RUN_RE, _CJK_STOP_RE, _CJK_STOP_WORDS, _STOP_WORDS, _cjk_terms,
+    extract_query_keywords as _extract_query_keywords,
+)
 
 
 def _prepend_ui_state_to_query(
@@ -826,55 +776,6 @@ def _is_warm_reuse(unit: Any) -> bool:
             or getattr(unit, "_adopted_prewarm_fresh", False)
         )
     )
-
-
-def _extract_query_keywords(message: str) -> str:
-    """Extract searchable keywords from user message.  Pure NLP, no LLM.
-
-    Returns a space-separated string of up to 18 terms suitable for
-    FTS5+BM25 keyword recall (the vector leg was removed 2026-08-14).
-    Returns empty string for messages too short to produce meaningful recall.
-    """
-    if not message or len(message.strip()) < 3:
-        return ""
-
-    text = message.strip()
-
-    # Strip common conversational filler
-    text = re.sub(
-        r"^(hey|hi|hello|please|can you|could you|help me|help|swarm)\s+",
-        "", text, flags=re.IGNORECASE,
-    )
-
-    if not text:
-        return ""
-
-    # Strip URLs and file paths before word extraction
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"(?:^|\s)[~/]\S+", " ", text)
-
-    # Hyphenated compounds first — preserve "session-router", "pre-tool-use"
-    # as single terms. ASCII-only classes throughout: Python's \w also matches
-    # CJK, so "看下recall机制" used to come out as one "English word".
-    compounds = re.findall(
-        r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]+(?:-[A-Za-z][A-Za-z0-9_]+)+)", text)
-    # Strip matched compounds from text to avoid double-counting
-    text_stripped = text
-    for c in compounds:
-        text_stripped = text_stripped.replace(c, " ")
-
-    # English words: substantive terms (>2 chars, not stop words), de-duplicated.
-    words: list[str] = []
-    for w in re.findall(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]{2,})(?![A-Za-z0-9_])",
-                        text_stripped):
-        if w.lower() not in _STOP_WORDS and w not in words:
-            words.append(w)
-
-    # CJK + Kana + Hangul: content words only (function words cut out)
-    cjk = _cjk_terms(text)
-
-    combined = compounds[:3] + words[:10] + cjk[:8]
-    return " ".join(combined) if combined else ""
 
 
 def _recall_for_query(query: str, max_tokens: int, allow_embed: bool = False) -> str:

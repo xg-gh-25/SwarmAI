@@ -6,11 +6,11 @@ You are the orchestrator. One user intent becomes one auditable Agent Delivery U
 
 Create one run:
 
-`"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile <profile> --repo <name>=<absolute-main-repo>`
+`"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile <profile> --requirement "<the user's request>" --repo <name>=<absolute-main-repo>`
 
-For `direct`, also pass the user's words: `"$SWARM_BACKEND_BIN" pipeline-v1 create --project <P> --profile direct --requirement "<the user's request>" --repo <name>=<absolute-main-repo>`.
+Pass the user's words as `--requirement` for every profile: create recalls what the project DDD, the Library and this repo's lessons know for them into `artifacts/knowledge.md`.
 
-`<P>` is the project the repo is bound to (its `Projects/<P>/bindings.yaml`); create refuses another name and says which. For a repo bound to no project, name one; create's `notes` say so and `has_ddd` says whether that project has a DDD.
+`<P>` is the project the repo is bound to (`Projects/<P>/bindings.yaml`); create refuses another name. For an unbound repo name one; `has_ddd` says if it has a DDD.
 
 Every run's code is in its own git worktree per repo; there is no other mode. Worktree creation failure pauses the run.
 
