@@ -10,15 +10,15 @@
  *
  * Responsive: the panel measures its own width (it shares the row with the chat
  * column, whose width the user drags, and the Canvas), not the window. Below
- * COMPACT_BELOW px it switches to a compact layout: the run tables become stacked rows,
- * the KPI tiles go 2×2, and type and spacing step down one size, so a narrow dashboard
- * stays readable instead of truncating every title to a few characters.
+ * COMPACT_BELOW px type and spacing step down one size, and below KPI_ROW_MIN the KPI
+ * tiles go 2×2. Runs are cards in a grid that fits as many columns as the width
+ * allows (RUN_CARD_MIN), so no width squeezes a run's title into a few characters.
  *
  * Data is STATIC for now (./mockData.ts) — the conductor, record layer and cross-run
  * audit aggregate it will read do not exist yet. A banner says so, so a sample number
  * is never read as a live one.
  */
-import { createContext, Fragment, useContext, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import { JudgeTag } from './JudgeTag';
 import { TraceTags } from './TraceTags';
 import {
@@ -62,123 +62,88 @@ function Dot({ state }: { state: RunRow['state'] }) {
 
 /** Start → end · duration · tokens. A run still going has no end yet: it shows the
  *  start, how long it has run and how long it is expected to take, never a "—"
- *  pretending to be a value. (The estimate lives here, with the other times, rather
- *  than in its own column: the row's first line has no room for it on a narrow
- *  dashboard.) */
+ *  pretending to be a value. It may wrap inside a narrow card. */
 function TraceMeta({ trace, eta }: { trace: RunTrace; eta?: string }) {
   const span = trace.startedAt ? (trace.endedAt ? `${trace.startedAt} → ${trace.endedAt}` : `${trace.startedAt} 开始`) : null;
   return (
-    <span className={`text-[11.5px] whitespace-nowrap tabular-nums ${muted}`} data-testid="trace-meta">
+    <span className={`text-[11.5px] tabular-nums ${muted}`} data-testid="trace-meta">
       {[span, trace.duration, eta, `${trace.tokens} tokens`].filter(Boolean).join(' · ')}
     </span>
   );
 }
 
-/** Columns are decided once per table and every row renders every one of them, so
- *  cells line up; `table-fixed` + a title column that takes the rest makes the
- *  title and sub lines truncate instead of widening the table past its card.
- *  A run with a trace gets a second line spanning every column after the dot: the
- *  trace tags (what was prepared, what came back) on the left, time and tokens on
- *  the right. Scheduled runs have not been prepared yet, so they have no second line. */
-function RunTable({ rows, empty }: { rows: RunRow[]; empty: string }) {
+/** Minimum width of a run card: the grid fits as many as the panel allows (one on a
+ *  very narrow panel, two at ~700px, three or more when wide) and stretches them to
+ *  share the row, so cards in a row line up like a hand of cards. */
+const RUN_CARD_MIN = 300;
+
+/** One run as a card. Top: dot, title (two lines at most), worker / time. Then the
+ *  sub line; then what the run asks or where it is (flag, stage, action) with its
+ *  Autonomy Judge; the trace (what was prepared, what came back) and time / tokens sit
+ *  at the bottom, pinned there so the footers of a row line up. Scheduled runs have
+ *  not been prepared yet, so they have no trace. */
+function RunCard({ r }: { r: RunRow }) {
   const compact = useContext(Compact);
-  if (rows.length === 0) return <div className={`px-3 py-3 text-[12.5px] ${muted}`}>{empty}</div>;
-  if (compact) return <RunList rows={rows} />;
-  const has = {
-    stage: rows.some((r) => r.stage),
-    flag: rows.some((r) => r.flag),
-    action: rows.some((r) => r.action),
-    judge: rows.some((r) => r.judge),
-  };
-  // the trace line spans every column after the dot
-  const span = 2 + Number(has.stage) + Number(has.flag) + Number(has.action) + Number(has.judge);
-  // a row followed by its trace line keeps its top padding and hands the bottom to the trace line
-  const pad = (r: RunRow) => (r.trace ? 'pt-2.5 pb-1' : 'py-2.5');
   return (
-    <table className="w-full border-collapse table-fixed">
-      <colgroup>
-        <col style={{ width: 22 }} />
-        <col />
-        {has.stage && <col style={{ width: 136 }} />}
-        {has.flag && <col style={{ width: 84 }} />}
-        {has.action && <col style={{ width: 52 }} />}
-        {has.judge && <col style={{ width: 196 }} />}
-        <col style={{ width: 96 }} />
-      </colgroup>
-      <tbody>
-        {rows.map((r, i) => (
-          <Fragment key={r.id}>
-          <tr className={i > 0 ? 'border-t border-[var(--color-border)]' : ''} data-testid="run-row">
-            <td className={`pl-2 pr-1 align-middle ${pad(r)}`}><Dot state={r.state} /></td>
-            <td className={`px-2 overflow-hidden ${pad(r)}`}>
-              <div className="font-medium truncate" title={r.title}>{r.title}</div>
-              <div className={`text-[12px] ${muted} truncate`} title={r.sub}>{r.sub}</div>
-            </td>
-            {has.stage && (
-              <td className={`px-2 text-[12px] whitespace-nowrap overflow-hidden text-[var(--color-text-secondary)] ${pad(r)}`}>
-                {r.stage && <><b className="font-semibold">{r.stage.now}</b>{' '}<span className="text-[var(--color-text-dim)]">→ {r.stage.next}</span></>}
-              </td>
-            )}
-            {has.flag && <td className={`px-2 text-[12px] font-semibold whitespace-nowrap text-[var(--color-status-warning)] ${pad(r)}`}>{r.flag}</td>}
-            {/* Not wired yet: shown as plain text, not a link that does nothing. */}
-            {has.action && <td className={`px-2 text-[12.5px] whitespace-nowrap ${muted} ${pad(r)}`}>{r.action}</td>}
-            {has.judge && <td className={`px-2 whitespace-nowrap ${pad(r)}`}>{r.judge && <JudgeTag judge={r.judge} title={r.title} />}</td>}
-            <td className={`pl-2 pr-3 text-[12px] whitespace-nowrap text-right tabular-nums ${muted} ${pad(r)}`}>{r.worker ?? r.when}</td>
-          </tr>
-          {r.trace && (
-            <tr data-testid="run-trace-row">
-              <td />
-              <td colSpan={span} className="pl-1 pr-3 pb-2.5 pt-0.5">
-                {/* narrow dashboard: time and tokens wrap under the tags, still right-aligned */}
-                <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 min-w-0">
-                  <TraceTags trace={r.trace} />
-                  <span className="ml-auto"><TraceMeta trace={r.trace} eta={r.eta?.text} /></span>
-                </div>
-              </td>
-            </tr>
+    <div
+      className={`${card} flex flex-col min-w-0 ${compact ? 'px-3 py-2.5' : 'px-3.5 py-3'}`}
+      data-testid="run-row"
+    >
+      <div className="flex items-start gap-2 min-w-0">
+        <span className="mt-[6px]"><Dot state={r.state} /></span>
+        <span className="font-medium min-w-0 flex-1 line-clamp-2 leading-snug" title={r.title}>{r.title}</span>
+        <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 mt-[2px] ${muted}`}>{r.worker ?? r.when}</span>
+      </div>
+      <div className={`text-[11.5px] ${muted} truncate mt-0.5 pl-[15px]`} title={r.sub}>{r.sub}</div>
+      {(r.flag || r.stage || r.action || r.judge) && (
+        <div className="flex items-center flex-wrap gap-x-2.5 gap-y-1 pl-[15px] mt-2 text-[12px]">
+          {r.flag && <span className="font-semibold whitespace-nowrap text-[var(--color-status-warning)]">{r.flag}</span>}
+          {r.stage && (
+            <span className="whitespace-nowrap text-[var(--color-text-secondary)]">
+              <b className="font-semibold">{r.stage.now}</b>{' '}<span className="text-[var(--color-text-dim)]">→ {r.stage.next}</span>
+            </span>
           )}
-          </Fragment>
-        ))}
-      </tbody>
-    </table>
+          {/* Not wired yet: shown as plain text, not a link that does nothing. */}
+          {r.action && <span className={`whitespace-nowrap ${muted}`}>{r.action}</span>}
+          {r.judge && <JudgeTag judge={r.judge} title={r.title} />}
+        </div>
+      )}
+      {r.trace && (
+        <div className="mt-auto pt-2.5" data-testid="run-trace-row">
+          <div className="pt-2 border-t border-[var(--color-border)] flex flex-col gap-1 min-w-0">
+            <TraceTags trace={r.trace} />
+            <TraceMeta trace={r.trace} eta={r.eta?.text} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
-/** Compact layout of a run table: one stacked block per run. The title gets the
- *  whole first line (worker / time on its right); the flag, stage and Autonomy Judge
- *  move to a line of their own, then the trace line, so nothing squeezes the title. */
-function RunList({ rows }: { rows: RunRow[] }) {
+/** A group of runs (等你 / 在跑 / …): a heading and a grid of run cards, no outer box
+ *  (the cards are the boxes). */
+function RunGroup({ title, count, aside, rows, empty }: { title: string; count?: number; aside?: string; rows: RunRow[]; empty: string }) {
+  const compact = useContext(Compact);
   return (
-    <div>
-      {rows.map((r, i) => (
-        <div key={r.id} className={`px-2 py-2 ${i > 0 ? 'border-t border-[var(--color-border)]' : ''}`} data-testid="run-row">
-          <div className="flex items-center gap-2 min-w-0">
-            <Dot state={r.state} />
-            <span className="font-medium truncate min-w-0 flex-1" title={r.title}>{r.title}</span>
-            <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{r.worker ?? r.when}</span>
-          </div>
-          <div className={`text-[11.5px] ${muted} truncate pl-[15px]`} title={r.sub}>{r.sub}</div>
-          {(r.flag || r.stage || r.action || r.judge) && (
-            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 pl-[15px] mt-1 text-[11.5px]">
-              {r.flag && <span className="font-semibold whitespace-nowrap text-[var(--color-status-warning)]">{r.flag}</span>}
-              {r.stage && (
-                <span className="whitespace-nowrap text-[var(--color-text-secondary)]">
-                  <b className="font-semibold">{r.stage.now}</b>{' '}<span className="text-[var(--color-text-dim)]">→ {r.stage.next}</span>
-                </span>
-              )}
-              {r.action && <span className={`whitespace-nowrap ${muted}`}>{r.action}</span>}
-              {r.judge && <JudgeTag judge={r.judge} title={r.title} />}
-            </div>
-          )}
-          {r.trace && (
-            <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 pl-[15px] mt-1 min-w-0" data-testid="run-trace-row">
-              <TraceTags trace={r.trace} />
-              <span className="ml-auto"><TraceMeta trace={r.trace} eta={r.eta?.text} /></span>
-            </div>
-          )}
+    <section className={compact ? 'mt-4' : 'mt-5'}>
+      <div className="flex items-baseline gap-2 mb-2 px-0.5">
+        <h3 className="m-0 text-[13px] font-semibold">{title}</h3>
+        {count != null && <span className="text-[12px] text-[var(--color-text-dim)]">{count}</span>}
+        {aside && <span className={`ml-auto text-[12px] ${muted}`}>{aside}</span>}
+      </div>
+      {rows.length === 0 ? (
+        <div className={`px-0.5 text-[12.5px] ${muted}`}>{empty}</div>
+      ) : (
+        <div
+          className={`grid ${compact ? 'gap-2' : 'gap-3'}`}
+          style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${RUN_CARD_MIN}px), 1fr))` }}
+          data-testid="run-grid"
+          data-card-min={RUN_CARD_MIN}
+        >
+          {rows.map((r) => <RunCard key={r.id} r={r} />)}
         </div>
-      ))}
-    </div>
+      )}
+    </section>
   );
 }
 
@@ -241,10 +206,10 @@ function Overview({ width }: { width: number }) {
       </section>
 
       {/* The counts of 等你 / 在跑 / 24 小时内结束 are the KPI tiles above; not repeated here. */}
-      <Section title="等你"><RunTable rows={WAITING} empty="没有在等你的 run" /></Section>
-      <Section title="在跑"><RunTable rows={RUNNING} empty="没有在跑的 run" /></Section>
-      <Section title="已安排" count={SCHEDULED.length}><RunTable rows={SCHEDULED} empty="没有安排的 run" /></Section>
-      <Section title="24 小时内结束" aside="更早的在「历史」"><RunTable rows={ENDED} empty="24 小时内没有结束的 run" /></Section>
+      <RunGroup title="等你" rows={WAITING} empty="没有在等你的 run" />
+      <RunGroup title="在跑" rows={RUNNING} empty="没有在跑的 run" />
+      <RunGroup title="已安排" count={SCHEDULED.length} rows={SCHEDULED} empty="没有安排的 run" />
+      <RunGroup title="24 小时内结束" aside="更早的在「历史」" rows={ENDED} empty="24 小时内没有结束的 run" />
     </div>
   );
 }

@@ -162,22 +162,26 @@ describe('SwarmOutDashboard on a narrow panel', () => {
     try { fn(); } finally { globalThis.ResizeObserver = orig; }
   }
 
-  it('wide: the table layout, four KPI tiles in a row', () => {
+  it('wide: run cards in an auto-fill grid, four KPI tiles in a row', () => {
     withPanelWidth(1100, () => {
       render(<SwarmOutDashboard />);
       expect(screen.getByTestId('swarm-out-dashboard').dataset.compact).toBeUndefined();
       expect(screen.getByTestId('kpi-grid').style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))');
-      expect(screen.getAllByTestId('run-row')[0].tagName).toBe('TR');
+      // runs are cards in a grid that fits as many columns as the width allows
+      const grid = screen.getAllByTestId('run-grid')[0];
+      // (jsdom drops min() from inline styles, so the card minimum is read from the grid's attribute)
+      expect(grid.dataset.cardMin).toBe('300');
+      expect(grid.querySelector('table')).toBeNull();
+      expect(grid.querySelectorAll('[data-testid="run-row"]').length).toBeGreaterThan(0);
     });
   });
 
-  it('narrow: stacked run rows with the same runs and traces, KPI tiles 2×2', () => {
+  it('narrow: the same run cards and traces, KPI tiles 2×2', () => {
     withPanelWidth(500, () => {
       render(<SwarmOutDashboard />);
       expect(screen.getByTestId('swarm-out-dashboard').dataset.compact).toBe('true');
       expect(screen.getByTestId('kpi-grid').style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
       const rows = screen.getAllByTestId('run-row');
-      expect(rows[0].tagName).toBe('DIV');
       expect(rows).toHaveLength(10);
       expect(screen.getAllByTestId('run-trace-row')).toHaveLength(8);
       // the Autonomy Judge tag is still on every judged run
