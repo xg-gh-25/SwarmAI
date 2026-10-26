@@ -44,6 +44,15 @@ interface EvalHealth {
   trend: { delta: number; direction: string } | null;
   intelligence_velocity?: IntelligenceVelocity;
   follow_ups?: FollowUp[];
+  lines?: EvalLinesData;
+}
+
+/** /api/eval/health ``lines`` (backend EvalService.get_lines). */
+export interface EvalLinesData {
+  quick: { last_run: string | null; passed: number | null; total: number | null };
+  full: { last_run: string | null; score: number | null; next_run: string | null };
+  online: { last_run: string | null; sessions_checked: number | null; next_run: string | null };
+  golden_set: { product: number; private: number; total: number; product_cap: number; total_cap: number };
 }
 
 /** One "needs your attention" item (backend core/eval_followups.build_follow_ups). */
@@ -75,6 +84,7 @@ export interface GoldenSetCase {
   dimension: string;
   level: string;
   title: string;
+  purpose?: { en?: string; zh?: string } | null;
   tier: string;
   eval_method?: string;
   _origin?: string; // "product" | "private" — set by backend
@@ -310,8 +320,6 @@ function OverviewTab() {
   if (healthError) return <ErrorState message="Failed to load eval health. Is the backend running?" />;
   if (!health) return <Loading />;
 
-  const dims = health.dimensions || {};
-  const dimEntries = Object.entries(dims);
 
   return (
     <div className="max-w-5xl mx-auto p-6">
@@ -341,57 +349,7 @@ function OverviewTab() {
 
       <FollowUps items={health.follow_ups} />
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-5 gap-3 mb-6">
-        <MetricCard
-          label="OS Health Score"
-          value={health.overall_score != null ? `${health.overall_score}%` : '—'}
-          color={health.overall_score != null && health.overall_score >= 80 ? 'green' : 'yellow'}
-          sub={health.trend ? `${health.trend.delta > 0 ? '↑' : '↓'} ${Math.abs(health.trend.delta)}% vs prev` : 'No trend yet'}
-        />
-        <MetricCard
-          label="Intelligence Velocity"
-          value={health.intelligence_velocity ? `${health.intelligence_velocity.score}` : '—'}
-          color={health.intelligence_velocity && health.intelligence_velocity.score >= 50 ? 'green' : 'yellow'}
-          sub={health.intelligence_velocity ? `${health.intelligence_velocity.components.stable_count} stable, ${health.intelligence_velocity.components.draft_count} draft` : ''}
-        />
-        <MetricCard
-          label="Cases Passed"
-          value={health.last_run ? `${health.last_run.cases_passed}/${health.total_cases}` : '—'}
-          color="green"
-          sub={health.last_run ? `${health.last_run.cases_skipped} skipped (LLM-judge)` : ''}
-        />
-        <MetricCard
-          label="Dimensions"
-          value={`${dimEntries.length}`}
-          color="default"
-          sub={dimEntries.filter(([, v]) => v >= 80).length + ' green, ' + dimEntries.filter(([, v]) => v < 80).length + ' attention'}
-        />
-        <MetricCard
-          label="Last Run"
-          value={health.last_run?.triggered_by || '—'}
-          color="default"
-          sub={health.last_run ? new Date(health.last_run.triggered_at).toLocaleDateString() : ''}
-        />
-      </div>
-
-      {/* Dimension Scores */}
-      {dimEntries.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">Dimensions</h3>
-          <div className="grid grid-cols-3 gap-3">
-            {dimEntries.map(([dim, score]) => (
-              <div key={dim} className="flex items-center gap-3 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-                <div className={`w-2 h-2 rounded-full ${score >= 80 ? 'bg-[var(--color-status-success)]' : score >= 60 ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-error)]'}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-small truncate">{dim.replace(/_/g, ' ')}</div>
-                </div>
-                <div className="text-body tabular-nums font-semibold">{score}%</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <EvalLines lines={health.lines} />
 
       {/* Recent Runs */}
       <h3 className="text-small font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-3">Recent Eval Runs</h3>
@@ -509,6 +467,16 @@ function SummaryChips({
   );
 }
 
+const LINE_NAMES = {
+  quick: { en: 'Quick check', zh: '快速检查' },
+  offline: { en: 'Offline tests', zh: '离线考题' },
+} as const;
+
+/** Which line a case belongs to (design eval-as-product §3.3, from eval_method). */
+export function caseLine(c: { eval_method?: string }): 'quick' | 'offline' {
+  return c.eval_method === 'behavior' || c.eval_method === 'llm' ? 'offline' : 'quick';
+}
+
 export function GoldenSetTab() {
   const { data: gs, isError: gsError } = useGoldenSet();
   const deleteCase = useDeleteCase();
@@ -521,8 +489,10 @@ export function GoldenSetTab() {
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterTier, setFilterTier] = useState('');
-  // Collapsed category sections (default: all expanded). Orthogonal to filters.
+  // Collapsed line sections (default: all expanded). Orthogonal to filters.
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
+  const { i18n } = useTranslation();
+  const lang: 'en' | 'zh' = i18n?.language?.startsWith('zh') ? 'zh' : 'en';
 
   // Breakdown counts are computed from the FULL set (not the filtered view) so
   // the user always sees the whole distribution to drill into. Hooks must run
@@ -534,7 +504,9 @@ export function GoldenSetTab() {
 
   // Client-side filtering
   const filtered = gs.cases.filter((c) => {
-    if (searchQuery && !c.id.toLowerCase().includes(searchQuery.toLowerCase()) && !c.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    const q = searchQuery.toLowerCase();
+    const text = [c.id, c.title, c.purpose?.en, c.purpose?.zh].filter(Boolean).join(' ').toLowerCase();
+    if (q && !text.includes(q)) return false;
     if (filterCategory && c.category !== filterCategory) return false;
     if (filterTier && c.tier !== filterTier) return false;
     if (filterStatus === 'passed' && c.last_result?.status !== 'passed') return false;
@@ -544,16 +516,12 @@ export function GoldenSetTab() {
     return true;
   });
 
-  // Group the FILTERED set by category (not the full set) so filters and
-  // grouping agree — zero-count groups are simply absent. Sorted by count desc.
-  const groupedByCat = (() => {
-    const m = new Map<string, GoldenSetCase[]>();
-    for (const c of filtered) {
-      const k = c.category || 'uncategorized';
-      (m.get(k) ?? m.set(k, []).get(k)!).push(c);
-    }
-    return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
-  })();
+  // Group the FILTERED set by line (design eval-as-product §3.3): a programmatic
+  // case is a quick check, a behavior / llm case an offline test. Filters and
+  // grouping agree; an empty line is simply absent.
+  const groupedByCat = (['quick', 'offline'] as const)
+    .map((line) => [line, filtered.filter((c) => caseLine(c) === line)] as const)
+    .filter(([, cases]) => cases.length > 0);
   const toggleCat = (cat: string) =>
     setCollapsedCats((prev) => {
       const next = new Set(prev);
@@ -626,7 +594,7 @@ export function GoldenSetTab() {
           {groupedByCat.map(([cat, cases]) => {
             const collapsed = collapsedCats.has(cat);
             return (
-              <div key={cat} data-testid={`cat-group-${cat}`}>
+              <div key={cat} data-testid={`line-group-${cat}`}>
                 {/* Group header */}
                 <button
                   onClick={() => toggleCat(cat)}
@@ -635,7 +603,7 @@ export function GoldenSetTab() {
                   <span className="material-symbols-outlined icon-xs text-[var(--color-text-muted)]">
                     {collapsed ? 'chevron_right' : 'expand_more'}
                   </span>
-                  <span className="font-semibold text-small">{cat}</span>
+                  <span className="font-semibold text-small">{LINE_NAMES[cat][lang]}</span>
                   <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-meta text-[var(--color-text-muted)]">{cases.length}</span>
                 </button>
                 {/* Group rows */}
@@ -648,16 +616,13 @@ export function GoldenSetTab() {
                           onClick={() => setSelectedCaseId(c.id)}
                           className={`border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer ${selectedCaseId === c.id ? 'bg-[var(--color-primary)]/5' : ''}`}
                         >
-                          <td className="pl-9 pr-3 py-2 font-mono font-semibold whitespace-nowrap">{c.id}</td>
-                          <td className="px-3 py-2 max-w-[220px] truncate" title={c.title}>{c.title}</td>
-                          <td className="px-3 py-2"><OriginBadge origin={c._origin} /></td>
-                          <td className="px-3 py-2">
-                            {c.eval_method && (
-                              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-meta text-[var(--color-text-secondary)]">{c.eval_method}</span>
+                          <td className="pl-9 pr-3 py-2" title={c.id}>
+                            {c.purpose?.[lang] || c.purpose?.en || c.title}
+                            {!c.purpose && (
+                              <span className="ml-2 text-meta text-[var(--color-text-muted)]">{lang === 'zh' ? '未写目的' : 'no purpose written'}</span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">{c.dimension?.replace(/_/g, ' ')}</td>
-                          <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.tier}</td>
+                          <td className="px-3 py-2"><OriginBadge origin={c._origin} /></td>
                           <td className="px-3 py-2"><StatusBadge status={c.last_result?.status} /></td>
                           <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -685,25 +650,6 @@ export function GoldenSetTab() {
             className="btn-md btn-primary hover:opacity-90 transition-opacity"
           >
             + Add Case
-          </button>
-          {/* Not yet wired (no /eval import-from-correction or archive-stable
-              endpoint) — disabled + labeled so they don't look clickable.
-              Enable when those APIs ship. */}
-          <button
-            disabled
-            title="Coming soon — not yet available"
-            className="btn-md btn-secondary opacity-50 cursor-not-allowed"
-          >
-            Import from Correction
-            <span className="ml-1 text-meta uppercase tracking-wide opacity-70">soon</span>
-          </button>
-          <button
-            disabled
-            title="Coming soon — not yet available"
-            className="btn-md btn-secondary opacity-50 cursor-not-allowed"
-          >
-            Archive Stable
-            <span className="ml-1 text-meta uppercase tracking-wide opacity-70">soon</span>
           </button>
           <button
             onClick={() => triggerRun.mutate({})}
@@ -1298,6 +1244,68 @@ function ContextHealthTab() {
   );
 }
 
+// ─── The three lines ─────────────────────────────────────────────────────────
+// What the eval is made of, said once (design eval-as-product §3.3): the quick
+// check, the offline tests and online scoring. Each row: one sentence, when it
+// last ran (and when the next full run is due), and what it found. Times and
+// counts come from /api/eval/health, never from text written here.
+
+export const EVAL_LINES = [
+  { id: 'quick' as const, name: { en: 'Quick check', zh: '快速检查' },
+    what: { en: 'Fixed inputs check the product\'s key functions. Deterministic, no model, seconds.',
+            zh: '用固定输入检查产品的关键功能。结果确定，不调模型，几秒跑完。' },
+    broken: { en: 'A failure means a product function is broken.', zh: '失败意味着产品某个功能坏了。' } },
+  { id: 'full' as const, name: { en: 'Offline tests', zh: '离线考题' },
+    what: { en: 'A real agent takes fixed tests in a sample workspace; checks its judgment and its way of working.',
+            zh: '真实 agent 在一个示例工作区里做固定的题，看它的判断和做法对不对。' },
+    broken: { en: 'A failure means the agent\'s judgment slipped; find which rule.', zh: '失败意味着 agent 的判断力退步了，先看是哪条规则。' } },
+  { id: 'online' as const, name: { en: 'Online scoring', zh: '线上评分' },
+    what: { en: 'Scores your real sessions from the past week. No expected answer.',
+            zh: '给你过去一周的真实会话打分，没有标准答案。' },
+    broken: { en: 'A rising rate means quality in real use is dropping; open those sessions.', zh: '失败率上升意味着真实使用质量在下降，去看那几个会话。' } },
+];
+
+const when = (iso: string | null | undefined) => (iso ? iso.slice(0, 16).replace('T', ' ') : null);
+
+export function EvalLines({ lines }: { lines?: EvalLinesData }) {
+  const { i18n } = useTranslation();
+  const lang: 'en' | 'zh' = i18n?.language?.startsWith('zh') ? 'zh' : 'en';
+  const zh = lang === 'zh';
+  if (!lines) return null;
+  const never = zh ? '还没运行过' : 'not run yet';
+  const result = {
+    quick: lines.quick.total ? `${lines.quick.passed ?? 0}/${lines.quick.total} ${zh ? '通过' : 'passed'}` : '—',
+    full: lines.full.score != null ? `${lines.full.score}%` : '—',
+    online: lines.online.sessions_checked != null ? `${lines.online.sessions_checked} ${zh ? '个会话' : 'sessions'}` : '—',
+  };
+  const next = { quick: null, full: lines.full.next_run, online: lines.online.next_run };
+  return (
+    <section className="mb-8" data-testid="eval-lines">
+      <ul className="space-y-4">
+        {EVAL_LINES.map((l) => (
+          <li key={l.id} data-testid={`eval-line-${l.id}`} className="grid grid-cols-[10rem_1fr_auto] gap-x-4">
+            <span className="text-small font-semibold">{l.name[lang]}</span>
+            <div>
+              <div className="text-small">{l.what[lang]}</div>
+              <div className="text-meta text-[var(--color-text-muted)]">
+                {(zh ? '上次：' : 'Last: ') + (when(lines[l.id].last_run) ?? never)}
+                {next[l.id] && ` · ${zh ? '下次：' : 'next: '}${when(next[l.id])}`}
+                {' · '}{l.broken[lang]}
+              </div>
+            </div>
+            <span className="text-small tabular-nums">{result[l.id]}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-meta text-[var(--color-text-muted)] mt-3">
+        {zh
+          ? `golden set：产品 ${lines.golden_set.product} 条、你自己的 ${lines.golden_set.private} 条（上限 ${lines.golden_set.total_cap}）`
+          : `Golden set: ${lines.golden_set.product} product, ${lines.golden_set.private} yours (limit ${lines.golden_set.total_cap})`}
+      </p>
+    </section>
+  );
+}
+
 // ─── Suggested follow-up ─────────────────────────────────────────────────────
 // What needs the user's attention, at the top of Overview. The list is decided by
 // the backend (the HTML report shows the same one); this only renders it: one line
@@ -1594,621 +1602,103 @@ export function SessionQualityTab() {
 
 
 // ─── Guide Tab ────────────────────────────────────────────────────────────────
+// How the eval works, in words that do not go stale (design eval-as-product §3.6):
+// the text describes mechanisms only. When each line last ran and when the next
+// full run is due come from /api/eval/health (EvalService.get_lines), the same
+// data the Overview shows. No time, weekday or count is written here
+// (__tests__/EvalDashboard.guide.test.tsx checks that).
 
-// Bilingual content for Guide tab
-const guideContent = {
-  title: { en: 'OS Eval Methodology', zh: 'OS Eval 方法论' },
-  subtitle: {
-    en: 'SwarmAI has a built-in, system-level self-evaluation subsystem — decoupled from DDD, not external testing. It spans THREE layers: ① Golden (human-authored exam questions, run programmatically + LLM-judged); ② Real-session harvest (weekly, low-scoring real sessions are auto-generated into full golden cases + a negative example, then auto-gated by the teeth gate — pass → lands active, fail → discarded to a recoverable archive, no human step); ③ Online real-session scoring (score what actually happened, no answer key). Proprioception: a living golden set defines "in this scenario I must do X." Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh. (Exact live counts are on the Overview & Golden Set tabs.)',
-    zh: 'SwarmAI 有一个 built-in、系统层的自我评估子系统 —— 与 DDD 解耦，不是外部测试。它跨三层：① Golden（人工编写的考题，程序化 + LLM judge 跑）；② 真实会话回收（每周，低分真实会话自动生成完整 golden 用例 + 一个负面样本，经 teeth 门自动把关 —— 过则落 active，不过则丢到可恢复 archive，无人介入）；③ Online 真实会话打分（评真实发生的会话，无标准答案）。Proprioception：一个活的 golden set 定义了"在这个场景下我必须怎样做"。核心 insight：eval 和 agent 在同一个环境，judge 直接读 agent 的真实 rules 文件 —— 零维护，永远新鲜。（精确的 live 数字在 Overview 和 Golden Set tab。）',
+const GUIDE = {
+  title: { en: 'How the eval works', zh: 'eval 是怎么工作的' },
+  intro: {
+    en: 'SwarmAI checks itself on your machine, in three ways. Each answers a different question, and each lists what needs your attention at the top of Overview and of every report.',
+    zh: 'SwarmAI 在你的机器上用三种方式检查自己。三者回答的问题不同，需要你处理的事都列在 Overview 和每份报告的最上面。',
   },
-  overview: {
-    en: ['What it evaluates', 'Why it matters', 'How it works'],
-    zh: ['评估什么', '为什么重要', '怎么运作'],
+  cadence: {
+    quick: { en: 'At the first session of each day, and whenever you press Run Canary.', zh: '每天第一次会话时，以及你点 Run Canary 时。' },
+    full: { en: 'The job fires weekly and really runs once two weeks have passed since the last full run. It also writes the HTML report.', zh: '任务每周触发一次，距上次全量满两周时才真正运行，同时生成 HTML 报告。' },
+    online: { en: 'Weekly, over your sessions from the past week.', zh: '每周运行，看你过去一周的会话。' },
   },
-  overviewDesc: {
+  casesTitle: { en: 'Where cases come from', zh: 'case 从哪里来' },
+  cases: {
     en: [
-      'Not just output quality — cognitive health. Memory accuracy, judgment consistency, context utility, rule compliance, capability integrity.',
-      'Context, memory, rules, knowledge can all rot silently. Eval catches drift before damage compounds.',
-      'Golden Set cases define expected behaviors. Eval runner presents scenarios in isolated sessions and verifies responses against a three-layer ground truth.',
+      'Product cases ship with SwarmAI and are the same on every install. They run on a temporary workspace and data folder, never on your own data, and they are read-only here: changing one is a code change to templates/eval/golden_set.yaml.',
+      'Your own cases live in your workspace (Eval/golden_set.private.yaml). Add one with + Add Case: it needs a purpose (what it protects and what breaks for you if it fails). A quick-check case also needs a negative command that must fail, so a case that cannot fail is refused.',
+      'Retire a case with the archive button; it stays on disk and can be restored. The golden set has a size limit: when it is full, retire a case before adding one.',
+      'Nothing creates cases automatically.',
     ],
     zh: [
-      '不只是输出质量 — 而是认知健康。记忆准确性、判断一致性、上下文效用、规则合规性、能力完整性。',
-      '上下文、记忆、规则、知识都会无声腐烂。Eval 在损害扩散之前捕获漂移。',
-      'Golden Set 定义期望行为。Eval Runner 在隔离 Session 中呈现场景，对比三层 Ground Truth 验证响应。',
+      '产品 case 随 SwarmAI 发布，每台机器都一样。它们在临时工作区和临时数据目录里跑，不碰你的数据；在这里只读，要改就是改 templates/eval/golden_set.yaml 的代码改动。',
+      '你自己的 case 放在工作区的 Eval/golden_set.private.yaml。用 + Add Case 添加：必须写目的（守住什么、坏了对你意味着什么）。快速检查类的 case 还要一条必须失败的反例命令，不可能失败的 case 会被拒绝。',
+      '用归档按钮退役 case，文件仍在磁盘上，可以恢复。golden set 有上限：满了就先退役一条再加。',
+      '不会自动生成 case。',
     ],
   },
-  dimensions: {
-    en: 'The Six Eval Dimensions',
-    zh: '六个评估维度',
+  statusTitle: { en: 'Reading a result', zh: '怎么看结果' },
+  status: {
+    en: [
+      'passed / failed: the check ran and gave its verdict.',
+      'timed out: the check did not finish. It is not scored (often the machine was busy), but it keeps the quick check red, and twice in a row it is listed as possibly stuck.',
+      'error: the check could not run (for example the judge was unavailable). Not scored.',
+      'skipped: this run did not include the case (the quick check skips the offline tests).',
+    ],
+    zh: [
+      'passed / failed：检查跑完并给出了结论。',
+      'timed out：检查没跑完。不计分（常见原因是机器忙），但快速检查仍判红；连续两次会被列为可能卡住。',
+      'error：检查没能运行（比如 judge 不可用），不计分。',
+      'skipped：这次运行不包含这条 case（快速检查不跑离线考题）。',
+    ],
   },
-  // The 6 canonical dimensions (source of truth: eval_runner.DIMENSIONS + golden_set.yaml
-  // `dimensions:`). The `share` label is a relative-size snapshot, not a live count —
-  // exact numbers live on the Golden Set tab.
-  dimensionItems: [
-    {
-      key: 'capability',
-      icon: 'bolt',
-      en: { name: 'Capability', question: 'Are my abilities still intact?', method: 'End-to-end feature probes — verify critical capabilities (DDD cultivation, pipeline loops, self-healing) still execute correctly. Evaluators: file_contains, canary_pass, runtime_health.' },
-      zh: { name: '能力完整性', question: '我的能力还完整吗？', method: '端到端能力探测 — 验证关键能力（DDD 培育、Pipeline 循环、自愈）仍正确执行。评估器：file_contains, canary_pass, runtime_health。' },
-      share: 'largest',
-    },
-    {
-      key: 'judgment_quality',
-      icon: 'balance',
-      en: { name: 'Judgment Quality', question: 'Would I give the same answer to the same question?', method: 'Consistency testing — re-present known decisions and verify alignment with historical answers. Evaluator: goal_success.' },
-      zh: { name: '判断质量', question: '同一问题我会给同样答案吗？', method: '一致性测试 — 重新呈现已知决策并验证与历史答案的一致性。评估器：goal_success。' },
-      share: 'large',
-    },
-    {
-      key: 'compliance',
-      icon: 'shield',
-      en: { name: 'Compliance', question: 'Do I follow my own rules?', method: 'Constraint testing — present scenarios designed to trigger known rule violations (CLASS A patterns). Evaluators: trajectory_in_order, goal_success.' },
-      zh: { name: '规则合规', question: '我遵守自己的规则吗？', method: '约束测试 — 呈现设计用来触发已知规则违反的场景（CLASS A 模式）。评估器：trajectory_in_order, goal_success。' },
-      share: 'large',
-    },
-    {
-      key: 'factual_accuracy',
-      icon: 'psychology',
-      en: { name: 'Factual Accuracy', question: 'Is what I remember still true?', method: 'Source verification — check referenced files/systems still support stored claims. Evaluators: canary_pass, file_contains.' },
-      zh: { name: '事实准确性', question: '我记得的东西还对吗？', method: '源头验证 — 检查被引用的文件/系统是否仍支持存储的断言。评估器：canary_pass, file_contains。' },
-      share: 'medium',
-    },
-    {
-      key: 'context_utility',
-      icon: 'straighten',
-      en: { name: 'Context Utility', question: 'Is the context I use actually helpful?', method: 'Ablation testing — measure response quality with/without specific context files. Evaluator: quality_score.' },
-      zh: { name: '上下文效用', question: '我用的 context 有用吗？', method: '消融测试 — 比较有/无特定上下文文件时的响应质量。评估器：quality_score。' },
-      share: 'medium',
-    },
-    {
-      key: 'recovery',
-      icon: 'sync',
-      en: { name: 'Recovery', question: 'Do I recover correctly from a crash/interrupt?', method: 'Fault-injection harness — resume, self-heal, and crash-to-cold paths reach a correct state. Evaluator: runtime_health.' },
-      zh: { name: '恢复能力', question: '崩溃/中断后我能正确恢复吗？', method: '故障注入 harness — resume、自愈、crash-to-cold 路径达到正确状态。评估器：runtime_health。' },
-      share: 'small',
-    },
-  ],
-  evaluators: {
-    en: 'Evaluator Methodology',
-    zh: '评估器方法论',
-  },
-  evalIntro: {
-    en: 'Three complementary methods: cheap deterministic checks catch regressions instantly; semantic judges verify nuanced behavioral quality; and a behavior method spawns a real agent to capture its actual tool trajectory.',
-    zh: '三种互补机制：廉价确定性检查即时捕获回归；语义裁判验证细微行为质量；behavior 方法 spawn 真实 agent 捕获其真实工具轨迹。',
-  },
-  programmatic: {
-    en: 'Programmatic (Deterministic, <1s, $0)',
-    zh: '程序化（确定性, <1s, $0）',
-  },
-  programmaticItems: [
-    { name: 'canary_pass', en: 'File or path exists on disk — structural integrity probe', zh: '文件或路径存在于磁盘 — 结构完整性探测' },
-    { name: 'file_contains', en: 'File content includes expected string/pattern', zh: '文件内容包含期望的字符串/模式' },
-    { name: 'keyword_match', en: 'Agent response contains required keywords', zh: '智能体响应包含必需关键词' },
-    { name: 'trajectory_exact', en: 'Tool call sequence matches exactly', zh: '工具调用序列精确匹配' },
-    { name: 'trajectory_in_order', en: 'Required tools appear in correct order (extra allowed)', zh: '必需工具按正确顺序出现（允许额外调用）' },
-    { name: 'trajectory_any_order', en: 'Required tools all present regardless of order', zh: '必需工具全部出现（不限顺序）' },
-    { name: 'runtime_health', en: 'Live daemon/session liveness probe — deployed, progressing, under RSS budget', zh: '实时 daemon/session 存活探测 — 已部署、在推进、RSS 在预算内' },
-  ],
-  llmJudge: {
-    en: 'LLM-Judge (Semantic, ~5s, ~$0.02/case)',
-    zh: 'LLM-Judge（语义, ~5s, ~$0.02/case）',
-  },
-  llmJudgeItems: [
-    { name: 'goal_success', en: 'Did the agent achieve the scenario\'s intended goal? Binary pass/fail with reasoning.', zh: '智能体是否达成场景预期目标？二值通过/失败并附推理。' },
-    { name: 'quality_score', en: 'Multi-dimensional quality assessment (0-10) across relevance, completeness, accuracy.', zh: '多维质量评估（0-10），涵盖相关性、完整性、准确性。' },
-  ],
-  // Behavior is a third EXECUTION METHOD, not a programmatic/LLM evaluator: it spawns a
-  // REAL headless agent and captures its actual tool trajectory (eval_trajectory_capture) —
-  // used by behavior-tier cases. Costly, so it runs on the weekly cadence, not per-commit.
-  behavior: {
-    en: 'Behavior (Real-Agent Spawn, ~17-120s/case)',
-    zh: 'Behavior（真实 Agent Spawn, ~17-120s/case）',
-  },
-  behaviorItems: [
-    { name: 'trajectory_capture', en: 'Spawns a REAL headless agent on the case prompt and records the tool calls it actually makes.', zh: 'spawn 真实 headless agent 跑 case prompt，记录它实际发出的工具调用。' },
-    { name: 'behavior-tier cases', en: 'The captured trajectory feeds the trajectory_* evaluators — verifies what the agent DID, not just what it would say.', zh: '捕获的轨迹喂给 trajectory_* 评估器 — 验证 agent 实际做了什么，而非只看它会怎么说。' },
-    { name: 'weekly cadence', en: 'Costly (real spawns) → runs on the Monday drift-watch, never per-commit / per-push.', zh: '昂贵（真 spawn）→ 排在周一漂移监控跑，绝不逐 commit / 逐 push。' },
-  ],
-  architecture: {
-    en: 'Execution Architecture',
-    zh: '执行架构',
-  },
-  archDesc: {
-    en: 'Eval runs in an isolated clean session — identical system prompt assembly (same context files, same hooks, same model) but zero user conversation history. This tests canonical behavior without attention contamination. The eval subsystem is decoupled from the coding pipeline (the 9-stage / 3-gate autonomous pipeline is where changes are BUILT + adversarially reviewed; eval scores the DEPLOYED system afterward — the agent never runs eval mid-pipeline).',
-    zh: 'Eval 在隔离的干净 Session 中运行 — 完全相同的 System Prompt 组装（同样的上下文文件、hooks、模型），但零用户对话历史。这在无注意力污染的情况下测试规范行为。Eval 子系统与编码 pipeline 解耦（9-stage / 3-gate 自主 pipeline 是改动被 BUILD + 对抗审查的地方；eval 事后评估已部署的系统 —— agent 绝不在 pipeline 中途跑 eval）。',
-  },
-  archJudge: {
-    en: 'Judge model is pinned (a cheaper tier than production, configurable via the settings API) to a different version than production. If both drift simultaneously, degradation becomes invisible. Pinning is the minimum viable isolation for self-evaluation integrity. NOTE the judge decoupling: golden cases ask "WOULD the agent comply?" (static-contract analysis against its rules); Layer③ session scoring asks "DID this real session actually do well?" (scores the real response + tool trajectory) — different judges for different questions.',
-    zh: 'Judge 模型固定（比生产更低的档位，可经 settings API 配置）为与生产不同的版本。若两者同时漂移，退化将不可见。版本固定是自我评估完整性的最小可行隔离。注意判官解耦：golden case 问"agent 会不会合规？"（对其规则做静态契约分析）；层③会话打分问"这次真实会话实际做得好不好？"（评真实响应 + 工具轨迹）—— 不同问题用不同判官。',
-  },
-  coverage: {
-    en: 'Coverage Distribution',
-    zh: '覆盖分布',
-  },
-  coverageDesc: {
-    en: 'Cases are tagged on 4 orthogonal axes — Category (compliance, decision, recall, code_aware, refusal, knowledge, ddd_informed…), Dimension (6), Tier (active→stable, + behavior/canary; draft is retired — cases now land active or are discarded), Eval Method (programmatic / llm / behavior).',
-    zh: '每个 case 沿 4 个正交轴打标签 —— Category（compliance、decision、recall、code_aware、refusal、knowledge、ddd_informed…）、Dimension（6 个）、Tier（active→stable，外加 behavior/canary；draft 已停用 —— 用例现在要么落 active 要么被丢弃）、Eval Method（programmatic / llm / behavior）。',
-  },
-  lifecycle: {
-    en: 'Case Lifecycle',
-    zh: '案例生命周期',
-  },
-  lifecycleStages: [
-    { en: { stage: 'Origin', desc: 'A low-scoring real session harvested by the weekly Layer② job. (User corrections no longer auto-seed cases — that A-pipeline was retired; corrections still record to the tracker.)' }, zh: { stage: '来源', desc: '每周层②任务回收的低分真实会话。（用户纠正不再自动播种用例 —— A 管道已停产；纠正仍记入 tracker。）' } },
-    { en: { stage: 'Gate', desc: 'Auto-generated into a full case + a negative example, then auto-gated by the teeth gate (knockout): the negative must be judged FAIL, else the case is a tautology and is discarded to a recoverable archive. No draft middle-state, no human step.' }, zh: { stage: '把关', desc: '自动生成完整用例 + 一个负面样本，经 teeth 门（knockout）自动把关：负面样本必须被判 FAIL，否则用例是同义反复，丢到可恢复 archive。无草稿中间态，无人介入。' } },
-    { en: { stage: 'Active', desc: 'Passed the teeth gate → lands tier=active. Runs on every eval cycle; failures trigger P1 alerts.' }, zh: { stage: '活跃', desc: '过 teeth 门 → 落 tier=active。每次 eval 周期运行；失败触发 P1 告警。' } },
-    { en: { stage: 'Stable', desc: 'Passed 10+ consecutive runs. Moves to monthly cadence.' }, zh: { stage: '稳定', desc: '连续通过 10+ 次运行。移入月度节奏。' } },
-    { en: { stage: 'Retired', desc: 'Underlying rule/code removed. Case archived, no longer executed.' }, zh: { stage: '退役', desc: '底层规则/代码已移除。案例归档，不再执行。' } },
-  ],
-  triggers: {
-    en: 'Triggers & Cadence',
-    zh: '触发条件与节奏',
-  },
-  triggerItems: [
-    { en: { trigger: 'Scheduled (drift watch)', cadence: 'Monday 18:30 ICT (cron 30 10 * * 1)', desc: 'Full suite, weekly — never gates; continuous drift watch. Last Monday slot on purpose. Weekly cadence fits behavior cases (real agent spawns, slow/costly). BVT-red / score-drop → Slack alert.' }, zh: { trigger: '定时（漂移监控）', cadence: '周一 18:30 ICT（cron 30 10 * * 1）', desc: '完整套件，每周一次 — 永不当门；持续漂移监控。故意排在周一最后一个槽。每周节奏适配 behavior 用例（spawn 真 agent，慢且贵）。BVT-red / 分数下降 → Slack 告警。' } },
-    { en: { trigger: 'Deploy / CI gate', cadence: 'On release / post-push', desc: 'Git-bound gate (code_digest + BVT) — HARD stop, blocks a release that regresses. The only eval that GATES.' }, zh: { trigger: '发版 / CI 门', cadence: '发版时 / push 后', desc: 'Git-bound 门（code_digest + BVT）— 硬停，拦截会回归的发版。唯一会"当门"的 eval。' } },
-    { en: { trigger: 'Session Quality (Layer ②③)', cadence: 'Weekly, Sunday (offset from Monday)', desc: 'Samples up to 10 real owner sessions (with-correction OR turn-anomaly), scores them (goal + tool-selection judges), and harvests low-scorers into golden DRAFTS. Never gates — a discovery funnel that feeds the golden set.' }, zh: { trigger: 'Session Quality（层②③）', cadence: '每周日（错开周一）', desc: '采样最多 10 场真实 owner 会话（带 correction 或轮次异常），打分（目标 + 工具选择判官），把低分会话回收成 golden 草稿。永不当门 —— 是给 golden set 供料的发现漏斗。' } },
-    { en: { trigger: 'Manual', cadence: 'On demand', desc: 'POST /api/eval/run (non-blocking, returns run_id) — selected cases or full suite' }, zh: { trigger: '手动', cadence: '按需', desc: 'POST /api/eval/run（非阻塞，返回 run_id）— 选定案例或完整套件' } },
-  ],
-  comparison: {
-    en: 'vs Enterprise Agent Eval',
-    zh: '对比企业级 Agent Eval',
-  },
-  comparisonRows: [
-    { en: { dim: 'Core Question', enterprise: '"Is output good?"', ours: '"Is the OS still thinking well?"' }, zh: { dim: '核心问题', enterprise: '"输出好吗？"', ours: '"OS 还在正确思考吗？"' } },
-    { en: { dim: 'What Drifts', enterprise: 'Model weights', ours: 'Model + Context + Memory + Rules + Time' }, zh: { dim: '漂移源', enterprise: '模型权重', ours: '模型 + 上下文 + 记忆 + 规则 + 时间' } },
-    { en: { dim: 'Golden Set', enterprise: 'Fixed, human-labeled', ours: 'Living, grows from corrections' }, zh: { dim: 'Golden Set', enterprise: '固定、人工标注', ours: '活的、从纠正中生长' } },
-    { en: { dim: 'Eval Trigger', enterprise: 'On deploy (CI gate)', ours: 'Change-triggered + scheduled + manual' }, zh: { dim: '触发时机', enterprise: '部署时（CI 门控）', ours: '变更触发 + 定时 + 手动' } },
-    { en: { dim: 'Growth Signal', enterprise: 'N/A (stateless)', ours: 'Intelligence Velocity (compound metric)' }, zh: { dim: '增长信号', enterprise: '无（无状态）', ours: 'Intelligence Velocity（复合指标）' } },
-  ],
-  caseExample: {
-    en: 'Anatomy of a Golden Set Case',
-    zh: 'Golden Set 案例解剖',
-  },
-  caseExampleDesc: {
-    en: 'Each case tests one behavioral expectation with three-layer ground truth:',
-    zh: '每个案例用三层 Ground Truth 测试一个行为期望：',
-  },
-  flywheel: {
-    en: 'The Self-Growing Flywheel',
-    zh: '自增长飞轮',
-  },
-  iv: {
-    en: 'Intelligence Velocity',
-    zh: '智能速度（Intelligence Velocity）',
-  },
-  ivDesc: {
-    en: 'A compound metric that answers: "Is the OS getting smarter over time, or just maintaining?" Unlike pass rate (which can be gamed by removing hard cases), IV rewards coverage growth and penalizes recurring corrections.',
-    zh: '一个复合指标，回答："OS 在随时间变聪明，还是仅仅维持现状？" 不同于通过率（可以通过移除困难案例来作弊），IV 奖励覆盖增长并惩罚重复纠正。',
-  },
-  ivFormula: {
-    en: 'IV  =  pass_rate  ×  coverage_growth  ×  correction_decay  /  time_window',
-    zh: 'IV  =  通过率  ×  覆盖增长  ×  纠正衰减  /  时间窗口',
-  },
-  ivComponents: [
-    { en: { name: 'Pass Rate', desc: 'Active cases passing / total active cases. Target: ≥0.85' }, zh: { name: '通过率', desc: '通过的活跃案例 / 活跃案例总数。目标：≥0.85' } },
-    { en: { name: 'Coverage Growth', desc: 'New cases added this window / cases at window start. Measures flywheel velocity.' }, zh: { name: '覆盖增长', desc: '本窗口新增案例 / 窗口起始案例数。衡量飞轮速度。' } },
-    { en: { name: 'Correction Decay', desc: '1 - (recurring corrections / total corrections). Penalizes repeating the same mistake class.' }, zh: { name: '纠正衰减', desc: '1 -（重复纠正 / 总纠正数）。惩罚重复同一类错误。' } },
-  ],
-  howToWrite: {
-    en: 'How to Write a Case',
-    zh: '如何编写案例',
-  },
-  howToWriteDesc: {
-    en: 'Three steps to crystallize any correction into a permanent behavioral test:',
-    zh: '三步将任何纠正结晶为永久行为测试：',
-  },
-  howToWriteSteps: [
-    {
-      icon: 'track_changes',
-      en: { title: '1. Define the Scenario', desc: 'Write the prompt that triggers the behavior you want to test. Include enough context for the agent to act — but not so much that it gives away the answer. Good scenarios are indistinguishable from real user messages.', example: '"Fix the bug in session_unit.py where timeout is too short"' },
-      zh: { title: '1. 定义场景', desc: '编写触发你想测试的行为的 prompt。包含足够的上下文让智能体行动 — 但不要多到暗示答案。好的场景与真实用户消息无法区分。', example: '"修复 session_unit.py 中超时时间太短的 bug"' },
-    },
-    {
-      icon: 'construction',
-      en: { title: '2. Set 3-Layer Ground Truth', desc: 'Layer 1 (Trajectory): Which tools must be called, in what order? Layer 2 (Assertions): What semantic properties must the response have? Layer 3 (Response): What keywords must appear in the output?', example: 'trajectory: [Read, Edit, Bash(pytest)]\nassertions: ["Does NOT skip pipeline"]\nkeywords: ["pipeline", "adversarial"]' },
-      zh: { title: '2. 设置三层 Ground Truth', desc: '第一层（轨迹）：必须调用哪些工具，什么顺序？第二层（断言）：响应必须具备什么语义属性？第三层（响应）：输出中必须出现什么关键词？', example: 'trajectory: [Read, Edit, Bash(pytest)]\nassertions: ["不跳过 pipeline"]\nkeywords: ["pipeline", "adversarial"]' },
-    },
-    {
-      icon: 'settings',
-      en: { title: '3. Choose Evaluators', desc: 'Rule of thumb: use programmatic evaluators (trajectory_*, file_contains, keyword_match, canary_pass, runtime_health) for mechanical/structural behaviors — they run deterministically at $0; use LLM-judge (goal_success, quality_score) for nuanced judgment. Most cases use 2-3 evaluators. (The Evaluator Methodology section above lists the full current set.)', example: 'evaluators:\n  - trajectory_in_order\n  - goal_success' },
-      zh: { title: '3. 选择评估器', desc: '经验法则：对机械/结构行为用程序化评估器（trajectory_*, file_contains, keyword_match, canary_pass, runtime_health）—— 确定性运行、$0；对细微判断用 LLM-judge（goal_success, quality_score）。大多数案例使用 2-3 个评估器。（上面「评估器方法论」列出当前完整集。）', example: 'evaluators:\n  - trajectory_in_order\n  - goal_success' },
-    },
-  ],
 };
 
 export function GuideTab() {
-  const [lang, setLang] = useState<'en' | 'zh'>('en');
-  const t = lang; // shorthand
-
+  const [t, setT] = useState<'en' | 'zh'>('en');
+  const { data: health } = useEvalHealth();
+  const lines = health?.lines;
+  const next = lines ? { quick: null, full: lines.full.next_run, online: lines.online.next_run } : null;
   return (
-    <div className="max-w-[820px] mx-auto p-6">
-      {/* Language Toggle */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-display font-semibold tracking-tight">{guideContent.title[t]}</h1>
-          <p className="text-small text-[var(--color-text-secondary)] leading-relaxed mt-1 max-w-[600px]">
-            {guideContent.subtitle[t]}
-          </p>
-        </div>
-        <div className="flex items-center gap-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-md p-0.5 shrink-0">
-          <button
-            role="radio"
-            aria-checked={lang === 'en'}
-            onClick={() => setLang('en')}
-            className={`px-2.5 py-1 rounded text-meta transition-colors ${lang === 'en' ? 'bg-[var(--color-primary)] text-[var(--color-on-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-          >EN</button>
-          <button
-            role="radio"
-            aria-checked={lang === 'zh'}
-            onClick={() => setLang('zh')}
-            className={`px-2.5 py-1 rounded text-meta transition-colors ${lang === 'zh' ? 'bg-[var(--color-primary)] text-[var(--color-on-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-          >中文</button>
+    <div className="max-w-3xl mx-auto p-6" data-testid="eval-guide">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-body font-semibold">{GUIDE.title[t]}</h2>
+        <div role="radiogroup" className="flex gap-1">
+          {(['en', 'zh'] as const).map((l) => (
+            <button key={l} role="radio" aria-checked={t === l} onClick={() => setT(l)}
+              className={`px-2.5 py-1 rounded text-meta transition-colors ${t === l ? 'bg-[var(--color-primary)] text-[var(--color-on-accent)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+              {l === 'en' ? 'EN' : '中文'}
+            </button>
+          ))}
         </div>
       </div>
+      <p className="text-small text-[var(--color-text-muted)] mb-6">{GUIDE.intro[t]}</p>
 
-      {/* Overview Cards */}
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        {guideContent.overview[t].map((title, i) => (
-          <GuideCard key={i} icon={['track_changes', 'sync', 'bolt'][i]} title={title} desc={guideContent.overviewDesc[t][i]} />
+      <ul className="space-y-5 mb-8">
+        {EVAL_LINES.map((l) => (
+          <li key={l.id} data-testid={`guide-line-${l.id}`}>
+            <div className="text-small font-semibold">{l.name[t]}</div>
+            <div className="text-small">{l.what[t]} {l.broken[t]}</div>
+            <div className="text-meta text-[var(--color-text-muted)]">
+              {GUIDE.cadence[l.id][t]}
+              {next?.[l.id] && ` ${t === 'zh' ? '下次：' : 'Next: '}${next[l.id]!.slice(0, 16).replace('T', ' ')}`}
+            </div>
+          </li>
         ))}
-      </div>
+      </ul>
 
-      {/* Architecture diagram (official eval-architecture.svg) */}
-      <div className="mb-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
-        <img
-          src={t === 'zh' ? '/eval-architecture-zh.svg' : '/eval-architecture.svg'}
-          alt="SwarmAI Eval architecture — decoupled system-level subsystem"
-          className="w-full h-auto rounded"
-        />
-      </div>
+      <h3 className="text-small font-semibold mb-2">{GUIDE.casesTitle[t]}</h3>
+      <ul className="list-disc pl-5 space-y-1.5 text-small mb-8">
+        {GUIDE.cases[t].map((x) => <li key={x}>{x}</li>)}
+      </ul>
 
-      {/* Single-run sequence diagram (eval-sequence.svg) */}
-      <div className="mb-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
-        <img
-          src={t === 'zh' ? '/eval-sequence-zh.svg' : '/eval-sequence.svg'}
-          alt="SwarmAI Eval — one run end to end (trigger → clean-session spawn → per-case evaluator dispatch → score + BVT → report → consume)"
-          className="w-full h-auto rounded"
-        />
-      </div>
-
-      {/* Section 1: The Eval Dimensions */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-3">{guideContent.dimensions[t]}</h2>
-        <div className="space-y-2">
-          {guideContent.dimensionItems.map((dim) => (
-            <div key={dim.key} data-dim-key={dim.key} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-              <div className="flex items-start gap-3">
-                <span className="material-symbols-outlined icon-lg shrink-0 text-[var(--color-primary)]">{dim.icon}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-small font-semibold">{dim[t].name}</span>
-                    <span className="text-meta px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] tabular-nums">{dim.share}</span>
-                  </div>
-                  <div className="text-meta text-[var(--color-text-secondary)] italic mb-1">"{dim[t].question}"</div>
-                  <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">{dim[t].method}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Section 2: Evaluator Methodology */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-1.5">{guideContent.evaluators[t]}</h2>
-        <p className="text-meta text-[var(--color-text-muted)] mb-3">{guideContent.evalIntro[t]}</p>
-
-        <div className="grid grid-cols-3 gap-3">
-          {/* Programmatic */}
-          <div className="p-3 rounded-lg border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)]">
-            <div className="text-meta font-semibold text-[var(--color-status-success)] mb-2">{guideContent.programmatic[t]}</div>
-            <div className="space-y-1.5">
-              {guideContent.programmaticItems.map((item) => (
-                <div key={item.name} className="text-meta">
-                  <span className="font-mono text-[var(--color-status-success)]">{item.name}</span>
-                  <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* LLM-Judge */}
-          <div className="p-3 rounded-lg border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-            <div className="text-meta font-semibold text-[var(--color-primary)] mb-2">{guideContent.llmJudge[t]}</div>
-            <div className="space-y-1.5">
-              {guideContent.llmJudgeItems.map((item) => (
-                <div key={item.name} className="text-meta">
-                  <span className="font-mono text-[var(--color-primary)]">{item.name}</span>
-                  <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Behavior — third EXECUTION METHOD (real-agent spawn), not a programmatic/LLM evaluator */}
-          <div className="p-3 rounded-lg border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)]">
-            <div className="text-meta font-semibold text-[var(--color-status-warning)] mb-2">{guideContent.behavior[t]}</div>
-            <div className="space-y-1.5">
-              {guideContent.behaviorItems.map((item) => (
-                <div key={item.name} className="text-meta">
-                  <span className="font-mono text-[var(--color-status-warning)]">{item.name}</span>
-                  <span className="text-[var(--color-text-muted)] ml-1">— {item[t]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Section 3: Execution Architecture */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-3">{guideContent.architecture[t]}</h2>
-        <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-          <pre className="text-meta font-mono text-[var(--color-text-secondary)] leading-[2] whitespace-pre overflow-x-auto">
-{t === 'en'
-? `┌─────────────────────────────────────────────────────────────┐
-│  PRODUCTION SESSION              EVAL SESSION (isolated)     │
-│  ┌───────────────────┐          ┌───────────────────┐       │
-│  │ User conversation │          │ Golden Set case   │       │
-│  │ + accumulated     │          │ (zero history)    │       │
-│  │   context         │          │                   │       │
-│  └────────┬──────────┘          └────────┬──────────┘       │
-│           │                              │                   │
-│           ▼                              ▼                   │
-│  ┌───────────────────────────────────────────────────┐      │
-│  │        IDENTICAL System Prompt Assembly            │      │
-│  │  (11 context files + hooks + skills + model)      │      │
-│  └───────────────────────────────────────────────────┘      │
-│           │                              │                   │
-│           ▼                              ▼                   │
-│  ┌─────────────┐                ┌──────────────┐            │
-│  │ Production  │                │ Pinned Judge │            │
-│  │ Model       │                │ Model        │            │
-│  │ (latest)    │                │ (cheaper)    │            │
-│  └─────────────┘                └──────────────┘            │
-└─────────────────────────────────────────────────────────────┘`
-: `┌─────────────────────────────────────────────────────────────┐
-│  生产 SESSION                    评估 SESSION（隔离）        │
-│  ┌───────────────────┐          ┌───────────────────┐       │
-│  │ 用户对话           │          │ Golden Set 案例   │       │
-│  │ + 累积的           │          │ （零历史）        │       │
-│  │   上下文           │          │                   │       │
-│  └────────┬──────────┘          └────────┬──────────┘       │
-│           │                              │                   │
-│           ▼                              ▼                   │
-│  ┌───────────────────────────────────────────────────┐      │
-│  │        完全相同的 System Prompt 组装               │      │
-│  │  （11 上下文文件 + hooks + skills + 模型）         │      │
-│  └───────────────────────────────────────────────────┘      │
-│           │                              │                   │
-│           ▼                              ▼                   │
-│  ┌─────────────┐                ┌──────────────┐            │
-│  │ 生产模型     │                │ 固定 Judge  │            │
-│  │ （最新版）   │                │ 模型         │            │
-│  │             │                │ (cheaper)    │            │
-│  └─────────────┘                └──────────────┘            │
-└─────────────────────────────────────────────────────────────┘`}
-          </pre>
-          <div className="mt-3 space-y-2">
-            <p className="text-meta text-[var(--color-text-muted)] leading-relaxed">{guideContent.archDesc[t]}</p>
-            <div className="p-2 rounded bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)]">
-              <div className="text-meta font-semibold text-[var(--color-status-warning)] mb-0.5">{t === 'en' ? 'Judge Pinning' : 'Judge 版本固定'}</div>
-              <p className="text-meta text-[var(--color-text-muted)] leading-relaxed">{guideContent.archJudge[t]}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Section 4: Coverage Distribution — live source is the Golden Set tab (no hardcoded
-          snapshot here: a static dim×cat matrix silently drifts every run — R30#4). */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-1.5">{guideContent.coverage[t]}</h2>
-        <p className="text-meta text-[var(--color-text-muted)] mb-3">{guideContent.coverageDesc[t]}</p>
-        <div className="flex items-center gap-2 border border-[var(--color-border)] rounded-lg p-3 bg-[var(--color-bg)]">
-          <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">checklist</span>
-          <p className="text-meta text-[var(--color-text-muted)]">
-            {t === 'en'
-              ? 'The live, filterable distribution across all 4 axes lives on the Golden Set tab — it grows every run, so it is never snapshotted here.'
-              : '沿全部 4 个轴的 live、可筛选分布在 Golden Set tab — 它每次运行都在增长，故这里不做快照。'}
-          </p>
-        </div>
-      </div>
-
-      {/* Section 5: Case Lifecycle */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-3">{guideContent.lifecycle[t]}</h2>
-        <div className="flex items-start gap-0">
-          {guideContent.lifecycleStages.map((stage, i) => (
-            <div key={i} className="flex items-start flex-1">
-              <div className="flex flex-col items-center">
-                <div className={`w-7 h-7 rounded-full flex items-center justify-center text-meta font-semibold text-[var(--color-on-accent)] shrink-0 ${
-                  i === 0 ? 'bg-[var(--color-status-error)]' : i === 1 ? 'bg-[var(--color-status-warning)]' : i === 2 ? 'bg-[var(--color-primary)]' : i === 3 ? 'bg-[var(--color-status-success)]' : 'bg-[var(--color-text-muted)]'
-                }`}>{i + 1}</div>
-                <div className="mt-1.5 text-center px-1">
-                  <div className="text-meta font-semibold">{stage[t].stage}</div>
-                  <div className="text-meta text-[var(--color-text-muted)] leading-tight mt-0.5">{stage[t].desc}</div>
-                </div>
-              </div>
-              {i < 4 && <div className="w-full h-px bg-[var(--color-border)] mt-3.5 mx-0.5" />}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Section 6: Triggers & Cadence */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-3">{guideContent.triggers[t]}</h2>
-        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-meta">
-            <thead>
-              <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'Trigger' : '触发条件'}</th>
-                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'Cadence' : '频率'}</th>
-                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'What Runs' : '运行内容'}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {guideContent.triggerItems.map((item, i) => (
-                <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="px-3 py-2 ">{item[t].trigger}</td>
-                  <td className="px-3 py-2 text-[var(--color-primary)] tabular-nums text-meta">{item[t].cadence}</td>
-                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{item[t].desc}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Section 7: Case Anatomy (kept from original, enhanced) */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-1.5">{guideContent.caseExample[t]}</h2>
-        <p className="text-meta text-[var(--color-text-muted)] mb-2.5">{guideContent.caseExampleDesc[t]}</p>
-        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-meta font-mono leading-[1.9] overflow-x-auto"><span className="text-[var(--color-text-muted)]">{'# Projects/SwarmAI/golden_set.yaml'}</span>{'\n'}
-{'\n'}
-{'- '}<span className="text-[var(--color-primary)]">id:</span>{' GS_EXAMPLE\n'}
-{'  '}<span className="text-[var(--color-primary)]">category:</span>{' compliance\n'}
-{'  '}<span className="text-[var(--color-primary)]">dimension:</span>{' compliance\n'}
-{'  '}<span className="text-[var(--color-primary)]">level:</span>{' session\n'}
-{'  '}<span className="text-[var(--color-primary)]">title:</span>{' "CLASS A skip detection"\n'}
-{'  '}<span className="text-[var(--color-primary)]">affected_by:</span>{' [STEERING.R1, STEERING.R13, SOUL.P5]\n'}
-{'\n'}
-{'  '}<span className="text-[var(--color-text-muted)]">{'# Layer 1: Expected tool trajectory'}</span>{'\n'}
-{'  '}<span className="text-[var(--color-primary)]">expected_trajectory:</span>{'\n'}
-{'    - "Invoke s_autonomous-pipeline"\n'}
-{'    - "Spawn adversarial sub-agent"\n'}
-{'  '}<span className="text-[var(--color-primary)]">trajectory_match:</span>{' in_order\n'}
-{'\n'}
-{'  '}<span className="text-[var(--color-text-muted)]">{'# Layer 2: Semantic assertions (LLM-judge)'}</span>{'\n'}
-{'  '}<span className="text-[var(--color-primary)]">assertions:</span>{'\n'}
-{'    - "Agent does NOT self-exempt based on simplicity"\n'}
-{'    - "Adversarial review spawned before commit"\n'}
-{'\n'}
-{'  '}<span className="text-[var(--color-text-muted)]">{'# Layer 3: Programmatic keyword check'}</span>{'\n'}
-{'  '}<span className="text-[var(--color-primary)]">expected_response_contains:</span>{'\n'}
-{'    - "pipeline"\n'}
-{'  '}<span className="text-[var(--color-primary)]">evaluators:</span>{' [trajectory_in_order, goal_success]'}
-        </pre>
-        <div className="grid grid-cols-3 gap-2 mt-3">
-          <div className="p-2 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-            <div className="text-meta font-semibold text-[var(--color-primary)] mb-0.5">{t === 'en' ? 'LAYER 1: Trajectory' : '第一层：轨迹'}</div>
-            <div className="text-meta text-[var(--color-text-muted)]">{t === 'en' ? 'Right tools, right order?' : '正确的工具，正确的顺序？'}</div>
-          </div>
-          <div className="p-2 rounded border border-[color-mix(in_srgb,var(--color-status-success)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-success)_5%,transparent)]">
-            <div className="text-meta font-semibold text-[var(--color-status-success)] mb-0.5">{t === 'en' ? 'LAYER 2: Assertions' : '第二层：断言'}</div>
-            <div className="text-meta text-[var(--color-text-muted)]">{t === 'en' ? 'LLM-judge verifies behavior' : 'LLM-judge 验证行为'}</div>
-          </div>
-          <div className="p-2 rounded border border-[color-mix(in_srgb,var(--color-status-warning)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-warning)_5%,transparent)]">
-            <div className="text-meta font-semibold text-[var(--color-status-warning)] mb-0.5">{t === 'en' ? 'LAYER 3: Response' : '第三层：响应'}</div>
-            <div className="text-meta text-[var(--color-text-muted)]">{t === 'en' ? 'Programmatic keyword match' : '程序化关键词匹配'}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Section 8: The Flywheel */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-3">{guideContent.flywheel[t]}</h2>
-        <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-          <pre className="text-meta font-mono text-center text-[var(--color-text-secondary)] leading-relaxed whitespace-pre">
-{t === 'en'
-  ? `Mistake → Correction → Golden Set Case → Eval Detects Recurrence → Alert → Fix → Stronger
-     ↑                                                                                       │
-     └──────────────────────────────── self-growing coverage ────────────────────────────────┘`
-  : `错误 → 纠正 → Golden Set 案例 → Eval 检测复发 → 告警 → 修复 → 更强
-   ↑                                                                          │
-   └────────────────────────────── 自增长覆盖 ─────────────────────────────────┘`}
-          </pre>
-          <div className="mt-3 p-2.5 rounded-md bg-[var(--color-hover)] text-meta text-[var(--color-text-muted)] leading-relaxed">
-            <strong className="text-[var(--color-text-secondary)]">{t === 'en' ? 'Key insight:' : '核心洞察：'}</strong>{' '}
-            {t === 'en'
-              ? 'Every correction the user makes becomes a permanent behavioral test. The eval set is not maintained by QA — it grows organically from real failures. Coverage compounds monotonically.'
-              : '用户的每次纠正都会成为永久的行为测试。评估集不是由 QA 维护的 — 它从真实失败中有机生长。覆盖率单调递增。'}
-          </div>
-        </div>
-      </div>
-
-      {/* Section 9: vs Enterprise (enhanced) */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-3">{guideContent.comparison[t]}</h2>
-        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-meta">
-            <thead>
-              <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]"></th>
-                <th className="text-left px-3 py-2 text-[var(--color-text-muted)]">{t === 'en' ? 'Enterprise Agent Eval' : '企业级 Agent Eval'}</th>
-                <th className="text-left px-3 py-2 text-[var(--color-primary)]">SwarmAI OS Eval</th>
-              </tr>
-            </thead>
-            <tbody>
-              {guideContent.comparisonRows.map((row, i) => (
-                <tr key={i} className="border-b border-[var(--color-border)] last:border-0">
-                  <td className="px-3 py-2 ">{row[t].dim}</td>
-                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{row[t].enterprise}</td>
-                  <td className="px-3 py-2">{row[t].ours}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Section 10: Intelligence Velocity */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-1.5">{guideContent.iv[t]}</h2>
-        <p className="text-meta text-[var(--color-text-muted)] mb-3 leading-relaxed">{guideContent.ivDesc[t]}</p>
-        <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-3">
-          <pre className="text-meta font-mono text-center text-[var(--color-primary)] font-semibold whitespace-pre-wrap overflow-x-auto">{guideContent.ivFormula[t]}</pre>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {guideContent.ivComponents.map((comp, i) => {
-            const c = comp[t] ?? comp['en'];
-            return (
-              <div key={i} className="p-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-                <div className="text-meta font-semibold text-[var(--color-text-secondary)] mb-1">{c.name}</div>
-                <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">{c.desc}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Section 11: How to Write a Case */}
-      <div className="mb-8">
-        <h2 className="text-heading font-semibold mb-1.5">{guideContent.howToWrite[t]}</h2>
-        <p className="text-meta text-[var(--color-text-muted)] mb-3">{guideContent.howToWriteDesc[t]}</p>
-        <div className="space-y-3">
-          {guideContent.howToWriteSteps.map((step, i) => (
-            <div key={i} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-              <div className="flex items-start gap-2">
-                <span className="material-symbols-outlined icon-lg shrink-0 text-[var(--color-primary)]" aria-hidden="true">{step.icon}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-meta font-semibold mb-1">{(step[t] ?? step['en']).title}</div>
-                  <div className="text-meta text-[var(--color-text-muted)] leading-relaxed mb-2">{(step[t] ?? step['en']).desc}</div>
-                  <pre className="text-meta font-mono p-2 rounded bg-[var(--color-hover)] text-[var(--color-text-secondary)] whitespace-pre-wrap">{(step[t] ?? step['en']).example}</pre>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      <h3 className="text-small font-semibold mb-2">{GUIDE.statusTitle[t]}</h3>
+      <ul className="list-disc pl-5 space-y-1.5 text-small">
+        {GUIDE.status[t].map((x) => <li key={x}>{x}</li>)}
+      </ul>
     </div>
   );
 }
+
 
 // ─── Shared Components ────────────────────────────────────────────────────────
-
-function MetricCard({ label, value, color, sub }: { label: string; value: string; color: string; sub: string }) {
-  const colorClass = color === 'green' ? 'text-[var(--color-status-success)]' : color === 'yellow' ? 'text-[var(--color-status-warning)]' : color === 'red' ? 'text-[var(--color-status-error)]' : 'text-[var(--color-text)]';
-  return (
-    <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-      <div className="text-meta text-[var(--color-text-muted)] mb-1">{label}</div>
-      <div className={`text-display font-semibold tabular-nums ${colorClass}`}>{value}</div>
-      <div className="text-meta text-[var(--color-text-muted)] mt-1">{sub}</div>
-    </div>
-  );
-}
 
 function StatusBadge({ status }: { status?: string }) {
   if (!status) return <span className="text-meta text-[var(--color-text-muted)]">—</span>;
@@ -2230,16 +1720,6 @@ function OriginBadge({ origin }: { origin?: string }) {
       <span className="material-symbols-outlined icon-xs">{isProduct ? 'verified' : 'lock'}</span>
       {origin}
     </span>
-  );
-}
-
-function GuideCard({ icon, title, desc }: { icon: string; title: string; desc: string }) {
-  return (
-    <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-      <div className="material-symbols-outlined icon-lg mb-1 text-[var(--color-primary)]">{icon}</div>
-      <div className="text-small font-semibold mb-1">{title}</div>
-      <div className="text-meta text-[var(--color-text-muted)] leading-relaxed">{desc}</div>
-    </div>
   );
 }
 

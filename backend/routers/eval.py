@@ -99,6 +99,7 @@ async def get_eval_health():
     health = svc.get_health()
     health["intelligence_velocity"] = svc.compute_intelligence_velocity(detail=True)
     health["follow_ups"] = svc.get_follow_ups()
+    health["lines"] = svc.get_lines()
     return health
 
 

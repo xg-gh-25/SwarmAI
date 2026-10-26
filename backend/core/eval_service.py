@@ -289,6 +289,81 @@ class EvalService:
             "reason": reason,
         }
 
+    def get_lines(self, now: datetime | None = None) -> dict:
+        """The three lines the dashboard explains (design eval-as-product §3.3, §3.6):
+        when each last ran, what it found, and when the next full run is due, plus the
+        golden set's size and limits. Computed from the run records, the daily canary
+        and online state files, and the jobs' own schedules (jobs.scheduler.load_jobs,
+        the same source as /api/jobs), so no time or count is written anywhere by hand.
+
+        The full run's cron fires every week and a 14-day gate decides whether it
+        really runs, so the next full run is the first fire the gate lets through
+        (eval_scheduled._should_run_biweekly), not simply the next fire."""
+        from core.eval_followups import QUICK_TRIGGERS
+        from core.golden_set_store import PRODUCT_CAP, TOTAL_CAP, is_product_case
+        from scripts.eval_runner import _run_is_comparable
+
+        now = now or datetime.now(timezone.utc)
+        with self._data_lock:
+            runs, cases = list(self._runs), list(self._cases)
+        canary = self._context_state(".eval-canary-daily.json") or {}
+        online = self._context_state(".session-quality-state.json") or {}
+        quick_run = next((r for r in runs if r.get("triggered_by") in QUICK_TRIGGERS), None)
+        full_run = next((r for r in runs if _run_is_comparable(r)), None)
+        quick = {"last_run": None, "passed": None, "total": None}
+        if canary.get("updated_at"):
+            quick = {"last_run": canary["updated_at"], "passed": canary.get("passed"),
+                     "total": canary.get("total")}
+        if quick_run and (quick["last_run"] or "") < (quick_run.get("triggered_at") or ""):
+            bvt = quick_run.get("bvt") or {}
+            quick = {"last_run": quick_run.get("triggered_at"), "passed": bvt.get("passed"),
+                     "total": bvt.get("total")}
+        live = [c for c in cases if c.get("tier") != "archived"]
+        product = sum(1 for c in live if is_product_case(c))
+        return {
+            "quick": quick,
+            "full": {"last_run": (full_run or {}).get("triggered_at"),
+                     "score": (full_run or {}).get("overall_score"),
+                     "next_run": self._next_full_run(now)},
+            "online": {"last_run": online.get("last_run"),
+                       "sessions_checked": online.get("sessions_checked"),
+                       "next_run": self._next_job_fire("session-quality", now)},
+            "golden_set": {"product": product, "private": len(live) - product, "total": len(live),
+                           "product_cap": PRODUCT_CAP, "total_cap": TOTAL_CAP},
+        }
+
+    @staticmethod
+    def _job(job_id: str):
+        try:
+            from jobs.scheduler import load_jobs
+            return next((j for j in load_jobs() if j.id == job_id and j.enabled), None)
+        except Exception:  # noqa: BLE001 — no scheduler config: no next run to show
+            return None
+
+    def _next_job_fire(self, job_id: str, now: datetime) -> str | None:
+        from jobs.cron_utils import next_fire
+
+        job = self._job(job_id)
+        fire = next_fire(job.schedule, now) if job else None
+        return fire.isoformat() if fire else None
+
+    def _next_full_run(self, now: datetime) -> str | None:
+        from jobs.cron_utils import next_fire
+        from jobs.handlers.eval_scheduled import _read_biweekly_last_run, _should_run_biweekly
+
+        job = self._job("eval-scheduled")
+        if job is None:
+            return None
+        last, cursor = _read_biweekly_last_run(), now
+        for _ in range(8):   # weekly fires: the gate lets one through within 3
+            fire = next_fire(job.schedule, cursor)
+            if fire is None:
+                return None
+            if _should_run_biweekly(last, fire):
+                return fire.isoformat()
+            cursor = fire
+        return None
+
     def get_follow_ups(self) -> list[dict]:
         """What needs the user's attention (core.eval_followups.build_follow_ups):
         the same list the HTML report's first section shows."""
@@ -369,6 +444,8 @@ class EvalService:
                     "dimension": c.get("dimension"),
                     "level": c.get("level"),
                     "title": c.get("title"),
+                    # what the case protects, in plain words (shown in the list)
+                    "purpose": c.get("purpose") if isinstance(c.get("purpose"), dict) else None,
                     # `source` (e.g. "STEERING R1 + C011") is instance-identifying
                     # governance state — expose only for product cases (Gate-2 leak).
                     "source": c.get("source") if c.get("_origin") != "private" else None,

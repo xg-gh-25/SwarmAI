@@ -78,3 +78,4 @@ test_eval_offline_fixture.py  # eval-as-product: offline product cases run in th
 test_eval_followups.py  # eval-as-product: follow-up rules, health route, routine reports
 test_eval_timeout_status.py  # eval-as-product: a timeout is not scored but keeps the BVT red
 test_session_quality_handler.py  # eval-as-product: online scoring over the last 7 days, state file read back
+test_eval_lines.py  # eval-as-product: last / next runs per line from records and the jobs schedule

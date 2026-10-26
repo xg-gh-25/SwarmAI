@@ -116,3 +116,28 @@ def _matches_single(spec: str, value: int, min_val: int, max_val: int, is_dow: b
         return value == target
     except ValueError:
         return False
+
+
+def next_fire(cron_expr: str, after: datetime, horizon_days: int = 62) -> datetime | None:
+    """The first minute strictly after ``after`` that ``cron_expr`` matches, or None
+    within ``horizon_days``. Same field rules as is_cron_due; UTC when naive."""
+    if after.tzinfo is None:
+        after = after.replace(tzinfo=timezone.utc)
+    parts = cron_expr.strip().split()
+    if len(parts) != 5:
+        raise ValueError(f"Invalid cron expression (expected 5 fields): {cron_expr}")
+    minute_spec, hour_spec, dom_spec, month_spec, dow_spec = parts
+    check = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    end = after + timedelta(days=horizon_days)
+    while check <= end:
+        day_ok = (_matches(dom_spec, check.day, 1, 31) and _matches(month_spec, check.month, 1, 12)
+                  and _matches(dow_spec, check.weekday(), 0, 6, is_dow=True))
+        if not day_ok:
+            check = (check + timedelta(days=1)).replace(hour=0, minute=0)
+        elif not _matches(hour_spec, check.hour, 0, 23):
+            check = (check + timedelta(hours=1)).replace(minute=0)
+        elif _matches(minute_spec, check.minute, 0, 59):
+            return check
+        else:
+            check += timedelta(minutes=1)
+    return None

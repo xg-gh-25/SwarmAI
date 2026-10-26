@@ -102,46 +102,49 @@ describe('GoldenSetTab summary + filters', () => {
   });
 });
 
-describe('GoldenSetTab grouping + origin badge (run_1f588e53)', () => {
-  it('groups cases into collapsible category sections', async () => {
+describe('GoldenSetTab grouping by line + origin badge', () => {
+  it('groups cases by line: programmatic is a quick check, behavior / llm an offline test', async () => {
     renderTab();
     await screen.findByTestId('golden-set-groups');
-    // 3 category groups present (compliance, decision, recall)
-    expect(screen.getByTestId('cat-group-compliance')).toBeInTheDocument();
-    expect(screen.getByTestId('cat-group-decision')).toBeInTheDocument();
-    expect(screen.getByTestId('cat-group-recall')).toBeInTheDocument();
+    const quick = screen.getByTestId('line-group-quick');
+    const offline = screen.getByTestId('line-group-offline');
+    expect(within(quick).getByText('Comp B')).toBeInTheDocument();
+    expect(within(quick).getByText('Rec D')).toBeInTheDocument();      // no eval_method: quick
+    expect(within(offline).getByText('Comp A')).toBeInTheDocument();
+    expect(within(offline).getByText('Dec C')).toBeInTheDocument();
   });
 
-  it('collapsing a category group hides its rows but keeps the header', async () => {
+  it('a row shows the purpose, or says none was written', async () => {
+    mockGet.mockImplementation((url: string) => (url.startsWith('/eval/golden-set')
+      ? Promise.resolve({ data: { ...GS_RESPONSE, cases: [
+        { ...CASES[1], purpose: { en: 'Recall finds memory', zh: '能找到记忆' } }, CASES[2]] } })
+      : Promise.resolve({ data: {} })));
+    renderTab();
+    expect(await screen.findByText('Recall finds memory')).toBeInTheDocument();
+    expect(screen.getByText('no purpose written')).toBeInTheDocument();
+  });
+
+  it('collapsing a line hides its rows but keeps the header', async () => {
     renderTab();
     await screen.findByTestId('golden-set-groups');
-    expect(screen.getByText('Comp A')).toBeInTheDocument();
-    // click the compliance group header button (first button in the group = header;
-    // subsequent buttons are per-row archive actions)
-    const group = screen.getByTestId('cat-group-compliance');
+    const group = screen.getByTestId('line-group-offline');
     fireEvent.click(within(group).getAllByRole('button')[0]);
-    // rows gone, header button (with count) stays
     expect(screen.queryByText('Comp A')).not.toBeInTheDocument();
-    expect(within(group).getAllByRole('button')[0]).toBeInTheDocument();
-    // other groups unaffected
-    expect(screen.getByText('Dec C')).toBeInTheDocument();
+    expect(screen.getByText('Comp B')).toBeInTheDocument();          // the other line is unaffected
   });
 
-  it('renders public/private origin badges distinguishing curated vs instance', async () => {
+  it('renders product/private origin badges', async () => {
     renderTab();
     await screen.findByTestId('golden-set-groups');
-    // public + private both appear as badge text (Comp A=public, Comp B=private)
     expect(screen.getAllByText('product').length).toBeGreaterThan(0);
     expect(screen.getAllByText('private').length).toBeGreaterThan(0);
   });
 
-  it('filtering to a category shows only that group (grouping agrees with filter)', async () => {
+  it('a filter that leaves one line hides the other', async () => {
     renderTab();
     const summary = await screen.findByTestId('golden-summary');
     fireEvent.click(within(summary).getByTestId('chip-category-decision'));
-    // only the decision group remains — compliance/recall groups absent (zero-count hidden)
-    expect(screen.getByTestId('cat-group-decision')).toBeInTheDocument();
-    expect(screen.queryByTestId('cat-group-compliance')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('cat-group-recall')).not.toBeInTheDocument();
+    expect(screen.getByTestId('line-group-offline')).toBeInTheDocument();
+    expect(screen.queryByTestId('line-group-quick')).not.toBeInTheDocument();
   });
 });
