@@ -1,9 +1,9 @@
 ---
 title: Session landings read from git's own stamped record
-status: implemented v9 (2026-10-25; commits 562b28830, 0f70c5231, 979d7ac22, 38d3702de, 770c92563, 8e4eb3d94, a15ec88cc, acefc5cbb)
+status: implemented v9 (2026-10-25; commits 562b28830, 0f70c5231, 979d7ac22, 38d3702de, 770c92563, 8e4eb3d94, a15ec88cc, acefc5cbb); §3.2, §4-§6 synced 2026-10-26 to 446c0c526 (export hand-off, exact turn read)
 date: 2026-10-25
 created: 2026-10-25
-updated: 2026-10-25
+updated: 2026-10-26
 owner: Gawan
 ---
 
@@ -77,38 +77,34 @@ that in its JSON (`"landed": false`).
 
 ### 3.2 The turn id
 
+(Synced 2026-10-26 to what was built. The first-segment prefix and the land count of
+`acefc5cbb` were replaced by 446c0c526, design `2026-10-26-turn-cards-unified.md` §3.2-3.3.)
+
 - `SessionUnit._reset_turn_state()` (run at every turn admission: `send()` and
   `begin_injected_turn`) sets `_hook_session_context["_turn_id"] = uuid4().hex`. A
   question or permission continuation is the same turn and keeps it. The
   `turn_changes` block carries it as `turn_id`.
-- `run_owner_gate`, the one Bash hook allowed to return `updatedInput`, gains a
-  separate, strict rewriter for `session_worktree` calls. It does not use
-  `_token_binding` or `_with_session` (those accept a heredoc head before a pipeline
-  call) and leaves the pipeline path unchanged. It rewrites only when the line's first
-  segment is exactly `"$SWARM_BACKEND_BIN" py -m scripts.session_worktree
-  <create|land|remove> ...` (the form `shared_checkout.py` prints) or
-  `python|python3 -m scripts.session_worktree ...`, with no heredoc, no substitution and
-  no wrapper in front. It prefixes `SWARM_APP_SESSION_ID=<id>` and, **only for a call
-  from the main agent**, `SWARM_TURN_ID=<turn id>`. A call whose hook input carries an
-  `agent_id` (a sub-agent, which can outlive the turn that started it) gets no turn
-  id, so its landing can never be stamped with a later turn (v8 review B1). The
-  rewriter never denies. `pipeline_command.mentions / is_create / is_land` do not
-  change; the cheap prefilter gains one substring (`scripts.session_worktree`).
-- `session_worktree` validates both: the session id with the existing app-session
-  grammar `[A-Za-z0-9_.:-]{1,128}` (today duplicated in `RunEngine._create` and
-  `run_owner_gate`; moved into one new helper, not `core.session_ids`, whose grammar is
-  for SDK ids), the turn id as 32 lowercase hex chars. An invalid or missing value
-  becomes `none` and the JSON says so (`"attribution": {"session": ..., "turn": ...}`).
+- `run_owner_gate` (the one Bash hook allowed to return `updatedInput`): any Bash line
+  that names `scripts.session_worktree` (substring, no parsing) gets
+  `export SWARM_APP_SESSION_ID=<id> SWARM_TURN_ID=<turn id>; ` in front of the **whole**
+  line. `export` reaches every later segment and subshell, so `cd <wt> && … land`,
+  `W=$(…); … land $W`, `bash -c '… land'` and heredoc-led lines all stamp the turn. A
+  call whose hook input carries an `agent_id` (a sub-agent, which can outlive the turn)
+  gets only the session id. A line that sets either variable itself is left as it is.
+  When the pipeline rewrite applies to the same line, both go into one `updatedInput`.
+  The rewriter never denies; the pipeline path is unchanged.
+- `session_worktree` validates both: the session id with the app-session grammar
+  `[A-Za-z0-9_.:-]{1,128}` (`core/app_session_id`), the turn id as 32 lowercase hex
+  chars. An invalid or missing value becomes `none` and the JSON says so
+  (`"attribution": {"session": ..., "turn": ...}`).
+- When the gate handed a main-agent call over, it sets `_hook_session_context["_turn_sw"]
+  = True`; `TurnChanges` reads landings at the turn's end only then (no git otherwise),
+  by an exact search for the turn id (§4, `session_landings.read_turn`). The land
+  counter `_turn_lands` and `expect` are removed.
 
-A call that is not the first command of its line (`cd x && ... land`), or that comes
-from a sub-agent, gets no turn id: its landing is on Canvas, not on a turn card.
-`land` reports `"turn": "none"`, so the agent sees it.
-
-**Counting (built, `acefc5cbb`).** For each `land` it hands the turn id, the rewriter
-adds 1 to `_hook_session_context["_turn_lands"]` (reset to 0 with the turn id; the
-verb comes from the parsed first segment). `TurnChanges` reads landings only when that
-count is above 0, so a turn with no land runs no git at its end, and passes it as
-`expect` (§4).
+A wrapper script whose outer command does not name the module (`./land.sh`) lands with
+`turn=none` and is on Canvas only; AGENT.md says to call the tool directly (measured
+2026-10-26: no `turn=none` land since 446c0c526).
 
 ## 4. The reader: `backend/core/session_landings.py`
 
@@ -145,24 +141,31 @@ That is 3 calls per repo plus 7 per landing. `code_roots`, `_worktree_roots` and
 
 `<cap>`: the turn card reads 200 entries; Canvas reads 2000. When the read returns
 exactly `<cap>` entries, the result is `truncated` whether or not something matched:
-completeness is proved only when the reflog ended before the cap (v8 review), or, for
-a turn, when it found `expect` stamps (the lands the gate handed this turn's id, §3.2).
-Measured on a clone of this repo: main's reflog has ~1700 entries, so without
-`expect` every turn read hit the cap and every card said "more landings may exist".
+completeness is proved only when the reflog ended before the cap (v8 review).
 Canvas's 30-day cutoff uses the reflog date in the selector (`%gd` with
 `--date=unix`), never a commit date, judged on every entry (not only this session's);
 reaching 30 days before the cap is complete. A turn reads at most `MAX_LANDINGS` (4);
-a fifth is `truncated`. The limit and `expect` are the session's, not each repo's:
-every bound checkout is scanned (one reflog read each), the stamps are merged newest
-first by reflog date, and only the ones shown are expanded (the 7 calls). The turn end
-has one `FINISH_BUDGET_S` deadline for its rows and its landings together.
+a fifth is `truncated`. The limit is the session's, not each repo's: the stamps of
+every bound checkout are merged newest first by reflog date, and only the ones shown
+are expanded (the 7 calls). The turn end has one `FINISH_BUDGET_S` deadline for its rows
+and its landings together.
+
+**A turn's read (synced 2026-10-26, 446c0c526).** The turn card does not use the
+capped branch read above: `read_turn(session, turn_id)` runs, per bound checkout, one
+`git log -g --all --date=unix --format=%H%x00%gs%x00%gD --fixed-strings
+--grep-reflog="turn=<id> "`: an exact search by the turn id over every reflog, no entry
+cap, any destination branch. A land writes its branch's reflog and the checkout's
+`HEAD` reflog; only the `refs/heads/<dest>@{n}` hit is kept, so one land is one
+candidate. Each stamp is then checked as above (step 4). The `expect` count of v9 and
+its cap-based completeness for a turn are removed.
 
 ## 5. Where it is shown
 
 ### 5.1 Turn card
 
 At `finish()` (the existing call on `result` and on Stop), `TurnChanges` calls
-`landings(session, turn_id, expect)` on the `turn_changes` pool inside
+`read_turn(session, turn_id)` (§4), only when `run_owner_gate` handed this turn a
+session_worktree call (`_turn_sw`, §3.2), on the `turn_changes` pool inside
 `FINISH_BUDGET_S`, at most `MAX_LANDINGS` (4) expanded. The block gains
 `turn_id`, `landed: [{repo, gitRoot, dest, branch, turn, onto, new, count, subjects,
 state, files, omitted}]`, `landed_truncated`, `unverified`,
@@ -229,16 +232,17 @@ renders the same `unknown` / truncated / unverified lines as the card.
 | each streamed token | none | — |
 | each Bash call | `run_owner_gate` cheap prefilter: one more substring (`scripts.session_worktree`); no git | already in the hook |
 | `session_worktree land` | 1 (`reflog exists` after the merge); the stamp is one env var and one `-c` on the existing merge | the agent's own command |
-| turn end, no land handed the turn id | none | — |
-| turn end, with lands | 3 per bound repo (`symbolic-ref`, `reflog exists`, one reflog read of ≤ 200 entries), until `expect` stamps are found | `turn_changes` pool, `FINISH_BUDGET_S` |
+| turn end, no session_worktree call handed the turn id | none | — |
+| turn end, with such a call | 1 per bound repo (`log -g --all --grep-reflog=turn=<id>`) | `turn_changes` pool, `FINISH_BUDGET_S` |
 | turn end, per landing (≤ 4) | 7 | same |
 | Canvas | 3 per bound repo + 7 per landing (≤ 20); cached per session while the bound checkouts' branch tips stay put, at most 60 s | `canvas_changes` pool |
 
 Measured 2026-10-25 on a shallow clone of this repo plus 300 extra commits (median of
 5 reads; `scratch/measure_landings.py`): a turn with 1 landing 155 ms, with 4
 landings 510 ms (budget 10 s); Canvas with 20 landings and the 2000-entry cap 2.5 s,
-off the chat path. A 2000-entry reflog read alone is ~230 ms. Before `expect`, every
-turn read also paid the full 200-entry scan.
+off the chat path. A 2000-entry reflog read alone is ~230 ms. (These figures are for
+the v9 capped read; the exact turn search of 446c0c526 measured ~60-140 ms per bound
+repo, design 2026-10-26-turn-cards-unified.md §4.)
 
 Tests: `tests/conftest.py` pins `session_landings._bound_checkouts` to `[]` for every
 test (in tests `get_swarmws()` is the live workspace; a card or Canvas read must never
@@ -321,14 +325,13 @@ Each fix is mutation-checked (revert it, its test goes red).
   range to this session. Display only.
 - **R3** A swallowed DB failure still loses that turn's card (as it loses today's file
   card); Canvas still shows the landing. Ordering at Stop is fixed (`562b28830`).
-- **R4** A `land` handed the turn id that lands nothing (refused, or up to date) is
-  counted, so the read finds fewer stamps than `expect`; on a reflog longer than the
-  cap the card then says more landings *may* exist. Never a false landing.
+- **R4** (closed 2026-10-26: the turn read is an exact search with no cap, §4; a land
+  that lands nothing writes no stamp and is simply not found.)
 - **R5** Canvas's landing cache keys on the checkouts' loose ref files; a packed ref
   reads as unknown, so that repo's landings are re-read after at most 60 s.
-- **Left out (v4-v7 found no git record to read):** unlanded session-worktree work,
-  other updates of main and in-place commits, a turn window over the reflog. In-place
-  file rows stay as today.
+- **Left out (v4-v7 found no git record to read):** other updates of main and in-place
+  commits, a turn window over the reflog. Unlanded session-worktree work has in-place
+  rows since 2026-10-26 (design `2026-10-26-turn-cards-unified.md` §3.4, §3.6).
 
 ## 10. What the check confirmed (review 9, then implementation)
 
