@@ -236,3 +236,17 @@ def test_the_apps_own_wrapper_lines_are_not_the_users_language(tmp_path):
     }
     result, _, _ = _run(tmp_path, sessions)
     assert result["checks"]["O1_LANGUAGE"] == {"checked": 1, "failed": 0, "rate": 0.0, "examples": []}
+
+
+def test_the_judge_sees_one_question_with_its_own_answer(tmp_path):
+    session = {"title": "Two asks", "messages": [
+        _msg("user", "端口是多少？"), _msg("assistant", [_tool("Grep"), _text("端口是 7421。")]),
+        _msg("user", "再把服务名改成 api"), _msg("assistant", [_tool("Edit"), _text("改好了。")])]}
+    calls = []
+
+    def scorer(prompt, response, tools):
+        calls.append((prompt, response, tools))
+        return {"goal_score": 1.0, "tool_score": 1.0, "reason": ""}
+    corr = [{"type": "user_correction", "session_id": "a", "ts": NOW.timestamp()}]
+    _run(tmp_path, {"a": session}, corrections=corr, scorer=scorer)
+    assert calls == [("端口是多少？", "端口是 7421。", ["Grep"])]

@@ -13,7 +13,9 @@ and tasks got done in real use.
     ``no_pre_tool_text`` over ``scenario_runner.pre_tool_text_lengths``);
   - O3_CORRECTIONS: the share of sessions in which the user corrected the agent.
 - Judge checks on a sample of at most ``_SAMPLE_CAP`` sessions (ones with a user
-  correction or an unusual number of turns first), via ``session_scorer``:
+  correction or an unusual number of turns first), via ``session_scorer``, each on
+  one exchange (the first answered question in the window, with its own answer and
+  tools):
   - O4_GOAL: was what the user asked for delivered;
   - O5_TOOLS: were the tools chosen sensibly.
 
@@ -224,9 +226,12 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
     for sid in sample:
         session = sessions[sid]
         turns = split_turns(session.get("messages") or [], since)
-        blocks = [b for t in turns for b in t["blocks"]]
-        tools = [b.get("name") for b in blocks if isinstance(b, dict) and b.get("type") == "tool_use"]
-        result = scorer(turns[0]["user"], _final_text(blocks), tools)
+        # The judge sees ONE exchange: a question with its own answer and tools. The
+        # first question paired with the session's last answer reads as "delivered
+        # something else" in any multi-turn session.
+        turn = next((t for t in turns if t["user"].strip() and _final_text(t["blocks"]).strip()), turns[0])
+        tools = [b.get("name") for b in turn["blocks"] if isinstance(b, dict) and b.get("type") == "tool_use"]
+        result = scorer(turn["user"], _final_text(turn["blocks"]), tools)
         if result.get("status") == "error":
             judge_errors.append(str(result.get("notes") or "judge error"))
             continue
@@ -234,8 +239,8 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
             continue
         goal, tool = result.get("goal_score", 1.0), result.get("tool_score", 1.0)
         reason = str(result.get("reason") or "")
-        tallies["O4_GOAL"].add(goal < _LOW_SCORE_THRESHOLD, sid, session, turns[0]["user"], reason)
-        tallies["O5_TOOLS"].add(tool < _LOW_SCORE_THRESHOLD, sid, session, turns[0]["user"], reason)
+        tallies["O4_GOAL"].add(goal < _LOW_SCORE_THRESHOLD, sid, session, turn["user"], reason)
+        tallies["O5_TOOLS"].add(tool < _LOW_SCORE_THRESHOLD, sid, session, turn["user"], reason)
         if min(goal, tool) < _LOW_SCORE_THRESHOLD:
             low.append({"session_id": sid, "title": (session.get("title") or "")[:_TITLE_MAX],
                         "goal_score": goal, "tool_score": tool, "dimension": result.get("dimension"),
