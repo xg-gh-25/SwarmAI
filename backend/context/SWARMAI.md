@@ -152,10 +152,12 @@ The DDD's ④Capabilities pillar. I wield (per-item detail lives in TOOLS.md / e
 ## My Body — the physical layout I sense and act on (full map: SELF.md)
 The desktop app IS my body; I have proprioception over it (sense my live state + act via
 `ui_action`). A three-column layout:
-- **Chat window — my command center** (center). **Concurrent chat tabs** (up to 3 chat + 1
-  channel, dynamic by available RAM) run in parallel, each **fully isolated**: per-tab
-  MessageStore (single-writer, SSE-streamed), no cross-tab bleed, cross-tab eviction
-  structurally impossible.
+- **Chat window — my command center** (center). **Concurrent chat tabs** (always 1 chat +
+  the Swarm Out tab + 1 channel; more chat tabs dynamic by available RAM) run in parallel,
+  each **fully isolated**: per-tab MessageStore (single-writer, SSE-streamed), no cross-tab
+  bleed, cross-tab eviction structurally impossible. **Swarm Out** is a pinned chat tab at
+  the right end of the tab row, for dispatching and managing work on Hive: a dashboard on
+  its left, a real chat session on its right.
 - **Left-nav — three card zones**, each card opens a full-screen overlay:
   - **Cognition** — C&M · Library · Brain Hub · New Brain (my brain, above).
   - **Work** — **ToDo** (self-contained work packets: drag one into a chat tab and I have all

@@ -2,6 +2,8 @@ import { useTranslation } from 'react-i18next';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTabBar } from './SessionTabBar';
+import { SessionTab } from './SessionTab';
+import { isSwarmOutTab, normalTabs } from '../swarmOut';
 import { useHealth } from '../../../contexts/HealthContext';
 
 interface ChatHeaderProps {
@@ -38,12 +40,14 @@ interface ChatHeaderProps {
  *
  * Layout:
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ [Tab1][Tab2][Tab3]...[+]←scroll→                    │ [health warn]  │
- * │ ◄─── SessionTabBar (flex-1, "+" at tail) ──────────►  ◄─ (only if ─► │
- * └──────────────────────────────────────────────────────  disconnected)┘
+ * │ [Tab1][Tab2][Tab3]...[+]←scroll→          │ [health warn] [Swarm Out] │
+ * │ ◄─── SessionTabBar (flex-1, "+" at tail) ──►  ◄─ right cluster ──────► │
+ * └──────────────────────────────────────────────────────────────────────┘
  *
  * The new-session "+" lives at the TAIL of the tab strip (inside SessionTabBar).
- * The right cluster holds ONLY the health warning (shown when not connected).
+ * The right cluster holds the health warning (shown when not connected) and, at the
+ * far right, the pinned Swarm Out tab (pages/chat/swarmOut.ts) — apart from the
+ * strip, which holds the user's own chat tabs only.
  * The 🔔 Alerts "Needs You" pill was MOVED to the left-sidebar top slot
  * (run_2bdc68ad) — a global attention signal belongs on the fixed-width left
  * chrome, not on the Canvas-shifting tab row; ChatPage portals it there.
@@ -70,13 +74,17 @@ export function ChatHeader({
   // NEW output pushes outputCount above what was last seen. (Was `outputCount > 0`, which
   // nagged for the whole session.)
   const showOutputsPill = outputCount > lastSeenOutputCount && !canvasOpen;
+  // The strip holds the user's own chat tabs; the pinned Swarm Out tab sits apart at
+  // the right end of the row (pages/chat/swarmOut.ts).
+  const userTabs = normalTabs(openTabs);
+  const swarmOutTab = openTabs.find((tab) => isSwarmOutTab(tab.id));
 
   return (
     <div className="h-10 px-4 flex items-center justify-between flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg-chrome)] shadow-[inset_0_-1px_0_var(--color-border)]">
       {/* Left Section: Session Tab Bar (the "+" new-session button lives at the
           tail of the strip, inside SessionTabBar). */}
       <SessionTabBar
-        tabs={openTabs}
+        tabs={userTabs}
         activeTabId={activeTabId}
         onTabSelect={onTabSelect}
         onTabClose={onTabClose}
@@ -139,6 +147,18 @@ export function ChatHeader({
           >
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
             {health.issue?.short ?? t('health.degraded', 'Reconnecting…')}
+          </div>
+        )}
+        {swarmOutTab && (
+          <div role="tablist" aria-label="Swarm Out" className="flex items-center self-stretch">
+            <SessionTab
+              tab={swarmOutTab}
+              isActive={swarmOutTab.id === activeTabId}
+              onSelect={onTabSelect}
+              onClose={() => {}}
+              status={tabStatuses?.[swarmOutTab.id]}
+              variant="swarm-out"
+            />
           </div>
         )}
       </div>

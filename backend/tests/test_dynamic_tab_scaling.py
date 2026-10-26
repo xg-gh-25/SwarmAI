@@ -35,16 +35,17 @@ def _reference_formula(available_mb: float) -> int:
     Mirrors ``ResourceMonitor.compute_max_tabs()``:
     headroom = total_mb * 0.90 - used_mb
     raw = floor(headroom / cost)
-    result = max(2, min(raw, 4))
+    result = max(3, min(raw, 5))
 
     Cost: 1200MB per session (_DEFAULT_SPAWN_COST_MB — no adaptive samples).
-    Ceiling: 4 (3 chat + 1 channel). Dynamic formula auto-gates on smaller machines.
+    Floor: 3 (1 chat + 1 Swarm Out + 1 channel). Ceiling: 5 (3 chat + 1 Swarm Out
+    + 1 channel). Dynamic formula auto-gates on smaller machines.
     _make_system_memory sets total=16GB, so headroom = 16384*0.90 - (16384 - available_mb).
     Simplified: headroom = available_mb - 16384*0.10 = available_mb - 1638.4
     """
     headroom_mb = available_mb - 16384 * 0.10  # 16GB * 10% overhead
     raw = int(headroom_mb / 1200)
-    return max(2, min(raw, 4))
+    return max(3, min(raw, 5))
 
 
 def _make_system_memory(available_mb: float) -> SystemMemory:
@@ -72,7 +73,7 @@ class TestComputeMaxTabsFormulaCorrectness:
 
     *For any* non-negative available RAM value in megabytes,
     ``compute_max_tabs()`` should return the same integer as the reference
-    formula ``max(2, min(floor(headroom_to_90pct / 500), 4))``.
+    formula ``max(3, min(floor(headroom_to_90pct / cost), 5))``.
 
     **Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.6**
     """
@@ -114,20 +115,21 @@ class TestComputeMaxTabsBoundaryValues:
         "available_mb, expected_tabs",
         [
             # headroom = available_mb - 16384 * 0.10 = available_mb - 1638.4
-            # raw = floor(headroom / 1200), result = max(2, min(raw, 4))
-            (512, 2),      # headroom=-1126.4 → raw=-1 → max(2,...)=2
-            (1024, 2),     # headroom=-614.4 → raw=-1 → 2
-            (1639, 2),     # headroom=0.6 → raw=0 → 2
-            (2839, 2),     # headroom=1200.6 → raw=1 → 2
-            (4039, 2),     # headroom=2400.6 → raw=2 → 2
+            # raw = floor(headroom / 1200), result = max(3, min(raw, 5))
+            (512, 3),      # headroom=-1126.4 → raw=-1 → floor 3
+            (1024, 3),     # headroom=-614.4 → raw=-1 → 3
+            (1639, 3),     # headroom=0.6 → raw=0 → 3
+            (2839, 3),     # headroom=1200.6 → raw=1 → 3
+            (4039, 3),     # headroom=2400.6 → raw=2 → 3
             (5239, 3),     # headroom=3600.6 → raw=3 → 3
             (6439, 4),     # headroom=4800.6 → raw=4 → 4
-            (8192, 4),     # headroom=6553.6 → raw=5 → min(...,4)=4
-            (16384, 4),    # headroom=14745.6 → raw=12 → min(...,4)=4
+            (7639, 5),     # headroom=6000.6 → raw=5 → 5
+            (8192, 5),     # headroom=6553.6 → raw=5 → 5
+            (16384, 5),    # headroom=14745.6 → raw=12 → min(...,5)=5
         ],
         ids=[
-            "512MB→2", "1024MB→2", "1639MB→2",
-            "2839MB→2", "4039MB→2", "5239MB→3", "6439MB→4", "8192MB→4", "16384MB→4",
+            "512MB→3", "1024MB→3", "1639MB→3", "2839MB→3", "4039MB→3",
+            "5239MB→3", "6439MB→4", "7639MB→5", "8192MB→5", "16384MB→5",
         ],
     )
     def test_compute_max_tabs_boundary_values(
@@ -155,15 +157,16 @@ class TestComputeMaxTabsPessimisticFallback:
 
     When system_memory() fails, it returns a pessimistic fallback with
     total=16GB, used=14.4GB. Headroom = 16384*0.90 - 14745.6 = 0.0MB.
-    raw = floor(0.0/1500) = 0. Result = max(2, 0) = 2.
+    raw = 0. Result = max(3, 0) = 3.
 
-    Even under pessimistic fallback, min_tabs=2 guarantees 1 chat + 1 channel.
+    Even under pessimistic fallback, the floor of 3 guarantees 1 chat + 1 Swarm Out
+    + 1 channel.
 
     **Validates: Requirement 1.6**
     """
 
     def test_compute_max_tabs_pessimistic_fallback(self):
-        """system_memory() failure → compute_max_tabs() = 2 (min guarantee)."""
+        """system_memory() failure → compute_max_tabs() = 3 (the floor)."""
         monitor = ResourceMonitor()
 
         # Force system_memory() to raise, triggering the pessimistic fallback
@@ -174,8 +177,8 @@ class TestComputeMaxTabsPessimisticFallback:
             monitor.invalidate_cache()
             result = monitor.compute_max_tabs()
 
-        assert result == 2, (
-            f"Expected 2 from pessimistic fallback (min guarantee: 1 chat + 1 channel), got {result}"
+        assert result == 3, (
+            f"Expected 3 from pessimistic fallback (floor: 1 chat + 1 Swarm Out + 1 channel), got {result}"
         )
 
 
@@ -428,15 +431,15 @@ class TestMaxTabsEndpointFallback:
     """Unit test for endpoint fallback when system_memory() raises.
 
     When ``resource_monitor.system_memory()`` raises an exception inside
-    the ``get_max_tabs()`` endpoint handler, the endpoint should return
-    ``max_tabs=1`` and ``memory_pressure="critical"`` as a safe fallback.
+    the ``get_max_tabs()`` endpoint handler, the endpoint should return the floor
+    (1 chat + 1 Swarm Out + 1 channel) with ``memory_pressure="critical"``.
 
     **Validates: Requirements 3.4**
     """
 
     @pytest.mark.asyncio
     async def test_endpoint_returns_fallback_on_failure(self):
-        """get_max_tabs() returns max_tabs=1, memory_pressure='critical' on error."""
+        """get_max_tabs() returns the floor with memory_pressure='critical' on error."""
         from routers.system import get_max_tabs
 
         with patch(
@@ -447,13 +450,33 @@ class TestMaxTabsEndpointFallback:
 
             response = await get_max_tabs()
 
-        assert response.max_tabs == 1, (
-            f"Expected max_tabs=1 on failure, got {response.max_tabs}"
-        )
-        assert response.chat_max == 1, (
-            f"Expected chat_max=1 on failure, got {response.chat_max}"
-        )
+        assert response.max_tabs == ResourceMonitor._MIN_TABS_FLOOR == 3
+        assert response.chat_max == 2  # 1 chat + the Swarm Out tab
         assert response.memory_pressure == "critical", (
             f"Expected memory_pressure='critical' on failure, "
             f"got {response.memory_pressure}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The concurrent-stream cap follows the tab ceiling
+# ---------------------------------------------------------------------------
+
+class TestStreamCapFollowsTabCeiling:
+    """Every chat tab the UI lets the user open can stream at once.
+
+    The tab ceiling and the stream cap once drifted (ceiling 6, stream cap 3): a tab
+    past the stream cap waited silently on the 120s stream-admit wait. The stream
+    cap now defaults to the number of chat tabs (ceiling - 1 channel slot).
+    """
+
+    def test_stream_cap_default_is_ceiling_minus_channel_slot(self):
+        import os
+
+        if os.environ.get("SWARMAI_MAX_CONCURRENT_STREAMS"):
+            pytest.skip("stream cap overridden by SWARMAI_MAX_CONCURRENT_STREAMS")
+        assert SessionUnit.MAX_CONCURRENT_STREAMS == ResourceMonitor._MAX_TABS_CEILING - 1
+
+    def test_floor_holds_one_chat_one_swarm_out_one_channel(self):
+        assert ResourceMonitor._MIN_TABS_FLOOR == 3
+        assert ResourceMonitor._MAX_TABS_CEILING >= ResourceMonitor._MIN_TABS_FLOOR

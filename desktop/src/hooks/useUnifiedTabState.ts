@@ -36,6 +36,7 @@ import {
 import api from '../services/api';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import { tabNoticeStore } from '../stores/tabNoticeStore';
+import { SWARM_OUT_TAB_ID, SWARM_OUT_TITLE, isSwarmOutTab, normalChatMax, normalTabs } from '../pages/chat/swarmOut';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -43,16 +44,18 @@ import { tabNoticeStore } from '../stores/tabNoticeStore';
 
 /**
  * Hard ceiling for tab restore — all saved tabs up to this count are restored
- * from open_tabs.json regardless of current system resources.
+ * from open_tabs.json regardless of current system resources. Mirrors the backend
+ * ResourceMonitor._MAX_TABS_CEILING (3 chat + the Swarm Out tab + 1 channel).
  */
-export const MAX_TABS_HARD_CEILING = 4;
+export const MAX_TABS_HARD_CEILING = 5;
 
 /**
- * Fallback max tabs value used when the `GET /api/system/max-tabs` call fails.
- * Conservative default to prevent unbounded tab creation when the backend is
- * unreachable.
+ * Fallback max tabs value used when the `GET /api/system/max-tabs` call fails:
+ * the floor (1 chat + the Swarm Out tab + 1 channel, backend
+ * ResourceMonitor._MIN_TABS_FLOOR). Conservative, so tab creation stays bounded
+ * while the backend is unreachable.
  */
-export const MAX_OPEN_TABS_FALLBACK = 2;
+export const MAX_OPEN_TABS_FALLBACK = 3;
 
 /**
  * @deprecated Use `MAX_TABS_HARD_CEILING` for restore limits or the dynamic
@@ -68,7 +71,8 @@ export const MAX_OPEN_TABS = MAX_TABS_HARD_CEILING;
 /** Response shape from `GET /api/system/max-tabs`. */
 export interface MaxTabsInfo {
   maxTabs: number;
-  /** Max chat tabs allowed (maxTabs - 1, reserving 1 slot for channels). */
+  /** Chat slots (maxTabs - 1, reserving 1 slot for channels). One of them is the
+   *  Swarm Out tab, so the user's own chat tabs are capped at normalChatMax(chatMax). */
   chatMax: number;
   memoryPressure: 'ok' | 'warning' | 'critical';
 }
@@ -454,6 +458,22 @@ function createDefaultTab(agentId: string): UnifiedTab {
   };
 }
 
+/** The pinned Swarm Out tab (pages/chat/swarmOut.ts): a default tab with the reserved id. */
+function createSwarmOutTab(agentId: string): UnifiedTab {
+  return { ...createDefaultTab(agentId), id: SWARM_OUT_TAB_ID, title: SWARM_OUT_TITLE };
+}
+
+/** Puts the Swarm Out tab in the map when it is missing and pins its title. The map is
+ *  keyed by tab id, so this can never create a second one. */
+function ensureSwarmOutTab(map: Map<string, UnifiedTab>, agentId: string): void {
+  const existing = map.get(SWARM_OUT_TAB_ID);
+  if (existing) {
+    existing.title = SWARM_OUT_TITLE;
+    return;
+  }
+  map.set(SWARM_OUT_TAB_ID, createSwarmOutTab(agentId));
+}
+
 /** Extracts the serializable subset from a UnifiedTab. */
 function toSerializable(tab: UnifiedTab): PersistedTab {
   return {
@@ -527,6 +547,7 @@ export function useUnifiedTabState(
     const map = tabMapRef.current;
     const defaultTab = createDefaultTab(defaultAgentId);
     map.set(defaultTab.id, defaultTab);
+    ensureSwarmOutTab(map, defaultAgentId);
     activeTabIdRef.current = defaultTab.id;
     setActiveTabId(defaultTab.id);
     console.log('[useUnifiedTabState] Init with default tab, awaiting file restore');
@@ -613,8 +634,8 @@ export function useUnifiedTabState(
   const addTab = useCallback(
     (agentId: string): OpenTab | undefined => {
       const map = tabMapRef.current;
-      const chatMax = maxTabsRef.current.chatMax;
-      if (map.size >= chatMax) return undefined;
+      // The Swarm Out tab holds one chat slot of its own; count only the user's tabs.
+      if (normalTabs(map.values()).length >= normalChatMax(maxTabsRef.current.chatMax)) return undefined;
 
       const newTab = createDefaultTab(agentId);
       map.set(newTab.id, newTab);
@@ -637,6 +658,8 @@ export function useUnifiedTabState(
       const map = tabMapRef.current;
       const tab = map.get(tabId);
       if (!tab) return;
+      // The Swarm Out tab is pinned: it cannot be closed.
+      if (isSwarmOutTab(tabId)) return;
 
       // Abort streaming if active
       if (tab.abortController) {
@@ -655,21 +678,23 @@ export function useUnifiedTabState(
       // SessionUnits — only the TTL reaps those, which is why R6b adds the
       // explicit on-close release.
 
-      // Capture ordered keys before removal for reselection
-      const keys = [...map.keys()];
+      // Capture the user's ordered tabs before removal for reselection (the pinned
+      // Swarm Out tab is not one of them).
+      const keys = normalTabs([...map.values()]).map((t) => t.id);
       const closedIndex = keys.indexOf(tabId);
       map.delete(tabId);
       // In-tab notices and their timers die with the tab.
       tabNoticeStore.clearTab(tabId);
 
-      if (map.size === 0) {
-        // Auto-create a new tab when closing the last one
+      const remaining = normalTabs([...map.values()]).map((t) => t.id);
+      if (remaining.length === 0) {
+        // Auto-create a new tab when closing the user's last one. Focus moves to it
+        // only when the closed tab was the active one (the user may be on Swarm Out).
         const newTab = createDefaultTab(defaultAgentId);
         map.set(newTab.id, newTab);
-        setActiveTabIdBoth(newTab.id);
+        if (activeTabIdRef.current === tabId) setActiveTabIdBoth(newTab.id);
       } else if (activeTabIdRef.current === tabId) {
-        // Reselect adjacent tab (clamped to bounds)
-        const remaining = [...map.keys()];
+        // Reselect the adjacent tab of the user's own (clamped to bounds)
         const newIdx = Math.min(closedIndex, remaining.length - 1);
         setActiveTabIdBoth(remaining[newIdx]);
       }
@@ -695,6 +720,7 @@ export function useUnifiedTabState(
     (tabId: string, title: string) => {
       const tab = tabMapRef.current.get(tabId);
       if (!tab) return;
+      if (isSwarmOutTab(tabId)) return; // its title is fixed
       tab.title = title;
       bump();
     },
@@ -805,6 +831,7 @@ export function useUnifiedTabState(
     (tabId: string) => {
       const tab = tabMapRef.current.get(tabId);
       if (!tab) return;
+      if (isSwarmOutTab(tabId)) return; // pinned: never removed from the map
 
       // Abort streaming if active
       if (tab.abortController) {
@@ -854,21 +881,33 @@ export function useUnifiedTabState(
 
       const map = tabMapRef.current;
 
-      // Race condition guard: if user already started a conversation
+      // Race condition guard: the user already started a conversation (in the
+      // default tab or the Swarm Out tab) before the file arrived.
       const tabs = [...map.values()];
-      if (tabs.length === 1 && tabs[0].sessionId !== undefined) {
+      if (tabs.some((t) => t.sessionId !== undefined)) {
         console.log('[useUnifiedTabState] File restore skipped: user already started a conversation');
         return false;
       }
 
-      // Clear default tab and hydrate from file
+      // Clear default tab and hydrate from file. The user's tabs are restored up to the
+      // hard ceiling as before; the saved Swarm Out tab is taken apart from them, so
+      // that cap can never cut it (and its session) off.
       map.clear();
-      for (const saved of data.tabs.slice(0, MAX_TABS_HARD_CEILING)) {
+      const savedSwarmOut = data.tabs.find((t) => isSwarmOutTab(t.id));
+      for (const saved of normalTabs(data.tabs).slice(0, MAX_TABS_HARD_CEILING)) {
         map.set(saved.id, hydrateTab(saved));
+      }
+      if (savedSwarmOut) map.set(savedSwarmOut.id, hydrateTab(savedSwarmOut));
+      // A file from before Swarm Out (or one that only holds it) still yields the
+      // pinned tab plus at least one tab of the user's own.
+      ensureSwarmOutTab(map, defaultAgentId);
+      if (normalTabs(map.values()).length === 0) {
+        const tab = createDefaultTab(defaultAgentId);
+        map.set(tab.id, tab);
       }
 
       // Restore activeTabId — validate it exists in the map
-      const firstTabId = map.keys().next().value as string;
+      const firstTabId = normalTabs(map.values())[0].id;
       if (data.activeTabId && map.has(data.activeTabId)) {
         setActiveTabIdBoth(data.activeTabId);
       } else {
@@ -881,7 +920,7 @@ export function useUnifiedTabState(
 
       return true;
     },
-    [bump, setActiveTabIdBoth],
+    [bump, defaultAgentId, setActiveTabIdBoth],
   );
 
   // ---- Cleanup ------------------------------------------------------------
@@ -895,7 +934,7 @@ export function useUnifiedTabState(
         if (tab.sessionId && !validSessionIds.has(tab.sessionId)) {
           tab.sessionId = undefined;
           tab.isNew = true;
-          tab.title = 'New Session';
+          tab.title = isSwarmOutTab(tab.id) ? SWARM_OUT_TITLE : 'New Session';
           changed = true;
         }
       }

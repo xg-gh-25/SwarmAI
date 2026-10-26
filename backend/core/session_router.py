@@ -3182,7 +3182,7 @@ class SessionRouter:
         Grace period (chat only, not channel):
         - Sessions idle < EVICTION_GRACE_SECONDS are protected from eviction
           unless *force* is True. This prevents ping-pong eviction when all
-          3 chat slots are occupied by recently-active tabs.
+          chat slots are occupied by recently-active tabs.
         - *force=True* bypasses the grace period — used after queue timeout
           as a last resort.
         - Channel eviction (channel_only=True) always ignores grace period

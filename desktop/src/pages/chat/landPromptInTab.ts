@@ -21,7 +21,8 @@
  *
  * @exports classifyLanding, LandingVerdict, LandingGuardOpts
  */
-import { resolveResumeTarget, type ResumeTabInfo } from './resumeTarget';
+import { isReusableIdle, resolveResumeTarget, type ResumeTabInfo } from './resumeTarget';
+import { isSwarmOutTab, normalChatMax, normalTabs } from './swarmOut';
 
 /** The side-effect-free landing decision. `focus` carries the already-open tab id;
  *  `reuse` carries the active idle tab id; `newtab` needs no id (caller adds one).
@@ -96,4 +97,39 @@ export function classifyLanding(
       return { kind: 'blocked', reason: 'cap' };
     }
   }
+}
+
+/**
+ * classifyLanding for work that lands from outside a tab (a ToDo, a job prompt, a
+ * history session), with the pinned Swarm Out tab (./swarmOut) taken out of play:
+ * classifyLanding only sees the user's tabs, so Swarm Out is never reused (a reuse
+ * would clear its conversation) and never counted against the user's cap (it has its
+ * own slot). Resuming Swarm Out's own session focuses it, like any open session.
+ *
+ * While Swarm Out is the active tab, the user's tabs have no "active tab" to reuse, so
+ * at their cap every landing would be blocked — at the floor (one user tab) even when
+ * that tab is empty. In that case the landing may reuse a user tab that is idle, holds
+ * no session and no unsent draft: clearing it loses nothing. A user tab holding a
+ * conversation is still never cleared from the background (the rule classifyLanding
+ * keeps for every non-active tab).
+ */
+export function classifyWorkLanding(
+  key: string,
+  tabs: ResumeTabInfo[],
+  chatMax: number,
+  activeTabId: string | undefined,
+  guard: LandingGuardOpts,
+  tabHasDraft: (tabId: string) => boolean = () => false,
+): LandingVerdict {
+  const pinned = tabs.find((t) => isSwarmOutTab(t.id));
+  if (pinned?.sessionId && pinned.sessionId === key) {
+    return { kind: 'land', mode: 'focus', tabId: pinned.id };
+  }
+  const userTabs = normalTabs(tabs);
+  const verdict = classifyLanding(key, userTabs, normalChatMax(chatMax), activeTabId, guard);
+  if (verdict.kind === 'blocked' && isSwarmOutTab(activeTabId)) {
+    const empty = userTabs.find((t) => isReusableIdle(t) && !t.sessionId && !tabHasDraft(t.id));
+    if (empty) return { kind: 'land', mode: 'reuse', tabId: empty.id };
+  }
+  return verdict;
 }

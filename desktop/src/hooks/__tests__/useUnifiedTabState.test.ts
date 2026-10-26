@@ -21,6 +21,7 @@ import {
   MAX_OPEN_TABS,
 } from '../useUnifiedTabState';
 import type { TabStatus } from '../useUnifiedTabState';
+import { normalTabs } from '../../pages/chat/swarmOut';
 
 // ---------------------------------------------------------------------------
 // API mock — provide a default /system/max-tabs response so the hook's
@@ -226,7 +227,7 @@ describe('Property-Based Tests', () => {
           // Add a second tab so we have at least 2
           act(() => { result.current.addTab('agent-b'); });
 
-          const tabs = result.current.openTabs;
+          const tabs = normalTabs(result.current.openTabs);
           expect(tabs.length).toBeGreaterThanOrEqual(2);
 
           const tabA = tabs[0];
@@ -276,11 +277,11 @@ describe('Property-Based Tests', () => {
           mockStorage.clear();
           const { result } = await renderWithMaxTabs();
 
-          expect(result.current.openTabs.length).toBe(1);
+          expect(normalTabs(result.current.openTabs).length).toBe(1);
           act(() => { result.current.addTab(agentId); });
 
           // A new tab was added
-          const tabs = result.current.openTabs;
+          const tabs = normalTabs(result.current.openTabs);
           expect(tabs.length).toBe(2);
 
           // The new tab is the last one (addTab appends)
@@ -325,7 +326,7 @@ describe('Property-Based Tests', () => {
             act(() => { result.current.addTab(`agent-${i}`); });
           }
 
-          const tabsBefore = result.current.openTabs;
+          const tabsBefore = normalTabs(result.current.openTabs);
           const countBefore = tabsBefore.length;
           expect(countBefore).toBeGreaterThanOrEqual(2);
 
@@ -345,14 +346,14 @@ describe('Property-Based Tests', () => {
           act(() => { result.current.closeTab(targetId); });
 
           // Tab is removed
-          expect(result.current.openTabs.find((t) => t.id === targetId)).toBeUndefined();
-          expect(result.current.openTabs.length).toBe(countBefore - 1);
+          expect(normalTabs(result.current.openTabs).find((t) => t.id === targetId)).toBeUndefined();
+          expect(normalTabs(result.current.openTabs).length).toBe(countBefore - 1);
 
           // abort was called
           expect(abortSpy).toHaveBeenCalled();
 
           // activeTabId still valid
-          expect(result.current.openTabs.some((t) => t.id === result.current.activeTabId)).toBe(true);
+          expect(normalTabs(result.current.openTabs).some((t) => t.id === result.current.activeTabId)).toBe(true);
         },
       ),
       { numRuns: 100 },
@@ -372,7 +373,7 @@ describe('Property-Based Tests', () => {
 
           // Add a second tab
           act(() => { result.current.addTab('agent-2'); });
-          const tabs = result.current.openTabs;
+          const tabs = normalTabs(result.current.openTabs);
           const target = tabs[0];
           const other = tabs[1];
 
@@ -399,13 +400,13 @@ describe('Property-Based Tests', () => {
           expect(o.isNew).toBe(otherBefore.isNew);
 
           // Non-existent tabId is a no-op (no throw)
-          const countBefore = result.current.openTabs.length;
+          const countBefore = normalTabs(result.current.openTabs).length;
           act(() => {
             result.current.updateTabTitle('nonexistent', 'x');
             result.current.updateTabSessionId('nonexistent', 'x');
             result.current.setTabIsNew('nonexistent', true);
           });
-          expect(result.current.openTabs.length).toBe(countBefore);
+          expect(normalTabs(result.current.openTabs).length).toBe(countBefore);
         },
       ),
       { numRuns: 100 },
@@ -437,7 +438,7 @@ describe('Property-Based Tests', () => {
           }
 
           // Update titles and sessionIds
-          const tabs = result.current.openTabs;
+          const tabs = normalTabs(result.current.openTabs);
           for (let i = 0; i < Math.min(tabConfigs.length, tabs.length); i++) {
             const cfg = tabConfigs[i];
             act(() => {
@@ -449,7 +450,7 @@ describe('Property-Based Tests', () => {
           }
 
           // Verify openTabs (the serializable view) has correct shape
-          for (const tab of result.current.openTabs) {
+          for (const tab of normalTabs(result.current.openTabs)) {
             expect(typeof tab.id).toBe('string');
             expect(typeof tab.title).toBe('string');
             expect(typeof tab.agentId).toBe('string');
@@ -482,7 +483,7 @@ describe('Property-Based Tests', () => {
             act(() => { result.current.addTab(`agent-${i}`); });
           }
 
-          const tabs = result.current.openTabs;
+          const tabs = normalTabs(result.current.openTabs);
           for (let i = 0; i < Math.min(sessionIds.length, tabs.length); i++) {
             const sid = sessionIds[i];
             if (sid) {
@@ -495,7 +496,7 @@ describe('Property-Based Tests', () => {
           const validSet = new Set(assigned.slice(0, Math.floor(assigned.length / 2)));
 
           // Snapshot tabs before
-          const before = result.current.openTabs.map((t) => ({
+          const before = normalTabs(result.current.openTabs).map((t) => ({
             id: t.id,
             sessionId: t.sessionId,
             title: t.title,
@@ -539,33 +540,35 @@ describe('Unit Tests — Edge Cases', () => {
   // The mock returns chatMax=3, so we can add up to 3 chat tabs.
   it('addTab at dynamic limit returns undefined', async () => {
     const MOCK_CHAT_MAX = 3;
+    // One chat slot is the Swarm Out tab's; the user's own tabs get the rest.
+    const USER_MAX = MOCK_CHAT_MAX - 1;
     const { result } = await renderWithMaxTabs();
 
-    // Fill to chatMax (starts with 1 default tab)
-    for (let i = 1; i < MOCK_CHAT_MAX; i++) {
+    // Fill to the user's limit (starts with 1 default tab)
+    for (let i = 1; i < USER_MAX; i++) {
       act(() => { result.current.addTab(`agent-${i}`); });
     }
-    expect(result.current.openTabs.length).toBe(MOCK_CHAT_MAX);
+    expect(normalTabs(result.current.openTabs).length).toBe(USER_MAX);
 
     // Next addTab should return undefined
     let overflow: ReturnType<typeof result.current.addTab>;
     act(() => { overflow = result.current.addTab('overflow'); });
     expect(overflow!).toBeUndefined();
-    expect(result.current.openTabs.length).toBe(MOCK_CHAT_MAX);
+    expect(normalTabs(result.current.openTabs).length).toBe(USER_MAX);
   });
 
   // Validates: Requirement 2.7
   it('closeTab on last tab auto-creates new tab', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
-    expect(result.current.openTabs.length).toBe(1);
-    const onlyTabId = result.current.openTabs[0].id;
+    expect(normalTabs(result.current.openTabs).length).toBe(1);
+    const onlyTabId = normalTabs(result.current.openTabs)[0].id;
 
     act(() => { result.current.closeTab(onlyTabId); });
 
-    expect(result.current.openTabs.length).toBe(1);
-    expect(result.current.openTabs[0].id).not.toBe(onlyTabId);
-    expect(result.current.activeTabId).toBe(result.current.openTabs[0].id);
+    expect(normalTabs(result.current.openTabs).length).toBe(1);
+    expect(normalTabs(result.current.openTabs)[0].id).not.toBe(onlyTabId);
+    expect(result.current.activeTabId).toBe(normalTabs(result.current.openTabs)[0].id);
   });
 
   // Validates: Requirements 6.2, 6.3
@@ -573,10 +576,10 @@ describe('Unit Tests — Edge Cases', () => {
     // localStorage is empty (fresh mockStorage)
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
-    expect(result.current.openTabs.length).toBe(1);
-    expect(result.current.openTabs[0].title).toBe('New Session');
-    expect(result.current.openTabs[0].agentId).toBe(DEFAULT_AGENT);
-    expect(result.current.activeTabId).toBe(result.current.openTabs[0].id);
+    expect(normalTabs(result.current.openTabs).length).toBe(1);
+    expect(normalTabs(result.current.openTabs)[0].title).toBe('New Session');
+    expect(normalTabs(result.current.openTabs)[0].agentId).toBe(DEFAULT_AGENT);
+    expect(result.current.activeTabId).toBe(normalTabs(result.current.openTabs)[0].id);
   });
 
   // Validates: Requirement 6.5
@@ -586,23 +589,23 @@ describe('Unit Tests — Edge Cases', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
     // Always starts with exactly 1 default tab
-    expect(result.current.openTabs.length).toBe(1);
-    expect(result.current.openTabs[0].title).toBe('New Session');
-    expect(result.current.activeTabId).toBe(result.current.openTabs[0].id);
+    expect(normalTabs(result.current.openTabs).length).toBe(1);
+    expect(normalTabs(result.current.openTabs)[0].title).toBe('New Session');
+    expect(result.current.activeTabId).toBe(normalTabs(result.current.openTabs)[0].id);
   });
 
   // Validates: Requirement 4.4
   it('updateTabState with non-existent tabId is a no-op', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
-    const tabsBefore = result.current.openTabs.map((t) => t.id);
+    const tabsBefore = normalTabs(result.current.openTabs).map((t) => t.id);
 
     act(() => {
       result.current.updateTabState('nonexistent', { isStreaming: true });
     });
 
     // Nothing changed
-    const tabsAfter = result.current.openTabs.map((t) => t.id);
+    const tabsAfter = normalTabs(result.current.openTabs).map((t) => t.id);
     expect(tabsAfter).toEqual(tabsBefore);
   });
 
@@ -611,17 +614,17 @@ describe('Unit Tests — Edge Cases', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
     // Give the tab a sessionId that will be in the valid set
-    const tabId = result.current.openTabs[0].id;
+    const tabId = normalTabs(result.current.openTabs)[0].id;
     act(() => { result.current.updateTabSessionId(tabId, 'valid-session'); });
 
-    const titleBefore = result.current.openTabs[0].title;
+    const titleBefore = normalTabs(result.current.openTabs)[0].title;
 
     act(() => {
       result.current.removeInvalidTabs(new Set(['valid-session']));
     });
 
     // Tab should be completely unchanged
-    expect(result.current.openTabs[0].title).toBe(titleBefore);
+    expect(normalTabs(result.current.openTabs)[0].title).toBe(titleBefore);
     expect(result.current.getTabState(tabId)!.sessionId).toBe('valid-session');
   });
 
@@ -632,7 +635,7 @@ describe('Unit Tests — Edge Cases', () => {
     // Add a second tab so closing doesn't auto-create
     act(() => { result.current.addTab('agent-2'); });
 
-    const tabId = result.current.openTabs[0].id;
+    const tabId = normalTabs(result.current.openTabs)[0].id;
     const abortSpy = vi.fn();
     const mockCtrl = { abort: abortSpy, signal: new AbortController().signal } as unknown as AbortController;
 
@@ -651,7 +654,7 @@ describe('Unit Tests — Edge Cases', () => {
 
     act(() => { result.current.addTab('agent-2'); });
 
-    const tabs = result.current.openTabs;
+    const tabs = normalTabs(result.current.openTabs);
     const firstId = tabs[0].id;
     const secondId = tabs[1].id;
 
@@ -670,7 +673,7 @@ describe('Unit Tests — Edge Cases', () => {
   it('openTabs view excludes runtime fields', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
-    const tabId = result.current.openTabs[0].id;
+    const tabId = normalTabs(result.current.openTabs)[0].id;
 
     // Set runtime state
     act(() => {
@@ -682,7 +685,7 @@ describe('Unit Tests — Edge Cases', () => {
     });
 
     // openTabs should only have serializable fields
-    for (const tab of result.current.openTabs) {
+    for (const tab of normalTabs(result.current.openTabs)) {
       const raw = tab as Record<string, unknown>;
       expect(raw.messages).toBeUndefined();
       expect(raw.pendingQuestion).toBeUndefined();

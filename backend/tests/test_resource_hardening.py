@@ -165,8 +165,8 @@ class TestComputeMaxTabsLogLevel:
         from core.resource_monitor import ResourceMonitor
 
         rm = ResourceMonitor()
-        # Seed with known state
-        rm._last_max_tabs_result = 4
+        # Seed with known state: the ceiling, which this ample memory yields again
+        rm._last_max_tabs_result = ResourceMonitor._MAX_TABS_CEILING
 
         mock_mem = MagicMock(
             total=36 * 1024**3,
@@ -182,7 +182,7 @@ class TestComputeMaxTabsLogLevel:
         with caplog.at_level(logging.DEBUG, logger="core.resource_monitor"):
             result = rm.compute_max_tabs()
 
-        assert result == 4
+        assert result == ResourceMonitor._MAX_TABS_CEILING
         # Should be DEBUG, not INFO
         info_msgs = [r for r in caplog.records if r.levelno == logging.INFO
                      and "compute_max_tabs" in r.message]
@@ -210,8 +210,8 @@ class TestComputeMaxTabsLogLevel:
         with caplog.at_level(logging.DEBUG, logger="core.resource_monitor"):
             result = rm.compute_max_tabs()
 
-        # Result should be 2 (min) since headroom is negative
-        assert result == 2
+        # Result is the floor since headroom is negative
+        assert result == ResourceMonitor._MIN_TABS_FLOOR
         # Should emit INFO because result changed
         info_msgs = [r for r in caplog.records if r.levelno == logging.INFO
                      and "compute_max_tabs" in r.message]

@@ -22,6 +22,7 @@ import {
   useUnifiedTabState,
   MAX_OPEN_TABS,
 } from '../useUnifiedTabState';
+import { normalTabs } from '../../pages/chat/swarmOut';
 import { tabPersistenceService } from '../../services/tabPersistence';
 import type { OpenTabsFileData, PersistedTab } from '../../services/tabPersistence';
 
@@ -94,12 +95,12 @@ describe('File Restore — Property 1: Tab Restoration', () => {
       });
 
       expect(restored).toBe(true);
-      expect(result.current.openTabs.length).toBe(tabs.length);
+      expect(normalTabs(result.current.openTabs).length).toBe(tabs.length);
 
       for (let i = 0; i < tabs.length; i++) {
-        expect(result.current.openTabs[i].id).toBe(tabs[i].id);
-        expect(result.current.openTabs[i].title).toBe(tabs[i].title);
-        expect(result.current.openTabs[i].sessionId).toBe(tabs[i].sessionId);
+        expect(normalTabs(result.current.openTabs)[i].id).toBe(tabs[i].id);
+        expect(normalTabs(result.current.openTabs)[i].title).toBe(tabs[i].title);
+        expect(normalTabs(result.current.openTabs)[i].sessionId).toBe(tabs[i].sessionId);
       }
 
       expect(result.current.activeTabId).toBe(tabs[0].id);
@@ -123,8 +124,8 @@ describe('File Restore — Property 1: Tab Restoration', () => {
     });
 
     expect(restored).toBe(false);
-    expect(result.current.openTabs.length).toBe(1);
-    expect(result.current.openTabs[0].title).toBe('New Session');
+    expect(normalTabs(result.current.openTabs).length).toBe(1);
+    expect(normalTabs(result.current.openTabs)[0].title).toBe('New Session');
     unmount();
   });
 });

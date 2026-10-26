@@ -29,6 +29,7 @@ import {
   useUnifiedTabState,
   MAX_OPEN_TABS,
 } from '../useUnifiedTabState';
+import { normalTabs } from '../../pages/chat/swarmOut';
 
 // Mock the tabPersistence service (file-based persistence is async)
 vi.mock('../../services/tabPersistence', () => ({
@@ -110,13 +111,13 @@ describe('Preservation Property Tests — Property 2', () => {
       useUnifiedTabState(DEFAULT_AGENT),
     );
 
-    expect(result.current.openTabs.length).toBe(1);
-    expect(result.current.openTabs[0].title).toBe('New Session');
-    expect(result.current.openTabs[0].agentId).toBe(DEFAULT_AGENT);
-    expect(result.current.openTabs[0].isNew).toBe(true);
-    expect(result.current.openTabs[0].sessionId).toBeUndefined();
+    expect(normalTabs(result.current.openTabs).length).toBe(1);
+    expect(normalTabs(result.current.openTabs)[0].title).toBe('New Session');
+    expect(normalTabs(result.current.openTabs)[0].agentId).toBe(DEFAULT_AGENT);
+    expect(normalTabs(result.current.openTabs)[0].isNew).toBe(true);
+    expect(normalTabs(result.current.openTabs)[0].sessionId).toBeUndefined();
     expect(result.current.activeTabId).toBe(
-      result.current.openTabs[0].id,
+      normalTabs(result.current.openTabs)[0].id,
     );
   });
 
@@ -144,7 +145,7 @@ describe('Preservation Property Tests — Property 2', () => {
           }
 
           // addTab at MAX returns undefined
-          if (result.current.openTabs.length >= MAX_OPEN_TABS) {
+          if (normalTabs(result.current.openTabs).length >= MAX_OPEN_TABS) {
             let overflow: ReturnType<typeof result.current.addTab>;
             act(() => {
               overflow = result.current.addTab(DEFAULT_AGENT);
@@ -175,7 +176,7 @@ describe('Preservation Property Tests — Property 2', () => {
             useUnifiedTabState(DEFAULT_AGENT),
           );
 
-          const targetId = result.current.openTabs[0].id;
+          const targetId = normalTabs(result.current.openTabs)[0].id;
 
           act(() => {
             result.current.updateTabTitle(targetId, newTitle);
@@ -185,7 +186,7 @@ describe('Preservation Property Tests — Property 2', () => {
           });
 
           // Verify openTabs reflects the updates
-          const tab = result.current.openTabs.find(
+          const tab = normalTabs(result.current.openTabs).find(
             (t) => t.id === targetId,
           );
           expect(tab).toBeDefined();
@@ -193,7 +194,7 @@ describe('Preservation Property Tests — Property 2', () => {
           expect(tab!.sessionId).toBe(newSessionId);
 
           // Verify no runtime fields in openTabs
-          for (const entry of result.current.openTabs) {
+          for (const entry of normalTabs(result.current.openTabs)) {
             const raw = entry as Record<string, unknown>;
             expect(raw.messages).toBeUndefined();
             expect(raw.pendingQuestion).toBeUndefined();

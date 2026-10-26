@@ -331,9 +331,9 @@ class TestP2FallbackFailurePreservation:
 # ---------------------------------------------------------------------------
 
 class TestP3ComputeMaxTabsFormulaPreservation:
-    """P3: compute_max_tabs uses 90% rule: max(2, min(floor(headroom_to_90pct / 1200), 4)).
+    """P3: compute_max_tabs uses 90% rule: max(floor, min(floor(headroom_to_90pct / 1200), ceiling)).
 
-    Min=2 guarantees 1 chat slot + 1 channel slot.
+    The floor (3) guarantees 1 chat slot + the Swarm Out tab + 1 channel slot.
     Uses Hypothesis to verify the formula across random used_pct values.
 
     **Validates: Requirements 3.3**
@@ -350,9 +350,12 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_mb = total_mb * (used_pct / 100.0)
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
-        # 90% threshold, 1200MB cost, ceiling 4 (matches resource_monitor.py)
+        # 90% threshold, 1200MB cost, floor and ceiling read from resource_monitor.py
         headroom_mb = total_mb * 0.90 - used_mb
-        expected = max(2, min(int(headroom_mb / 1200), 4))
+        expected = max(
+            ResourceMonitor._MIN_TABS_FLOOR,
+            min(int(headroom_mb / 1200), ResourceMonitor._MAX_TABS_CEILING),
+        )
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(
@@ -372,7 +375,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
 
 
 class TestCeilingAutoDegradeOnLowMemory:
-    """The _MAX_TABS_CEILING (4) must NOT be the thing that protects small machines.
+    """The _MAX_TABS_CEILING (5) must NOT be the thing that protects small machines.
 
     Safety on low-memory machines lives in the RAM formula
     (headroom / cost_mb), NOT the ceiling: on a memory-tight 16GB machine
@@ -388,7 +391,7 @@ class TestCeilingAutoDegradeOnLowMemory:
         total_bytes = 16 * 1024**3  # 16GB machine
         # Memory-tight: available ≈ 6000MB → effective_used = total - available
         # ≈ 10384MB. headroom_to_90% = 16384*0.9 - 10384 ≈ 4361MB.
-        # raw = floor(4361 / 1200) = 3 → min(3, ceiling=4) = 3 < 4.
+        # raw = floor(4361 / 1200) = 3 → max(3, min(3, ceiling=5)) = 3 < 5.
         # (effective_used = total - available drives the formula, not
         # percent_used — see SystemMemory.effective_used.)
         total_mb = total_bytes / (1024 * 1024)
@@ -410,15 +413,15 @@ class TestCeilingAutoDegradeOnLowMemory:
             f"tight 16GB machine must auto-degrade below the ceiling "
             f"({monitor._MAX_TABS_CEILING}), got {max_tabs}"
         )
-        # Concretely: RAM formula caps at 3 here, never the ceiling of 4.
+        # Concretely: RAM formula caps at 3 here, never the ceiling of 5.
         assert max_tabs == 3, f"expected RAM-gated 3 on tight 16GB, got {max_tabs}"
 
-    def test_severe_pressure_floors_at_two(self):
-        """The min-2 floor still holds under near-critical pressure."""
+    def test_severe_pressure_floors_at_three(self):
+        """The floor (1 chat + Swarm Out + 1 channel) still holds under near-critical pressure."""
         from core.resource_monitor import ResourceMonitor, SystemMemory
 
         total_bytes = 16 * 1024**3
-        used_pct = 89.0  # near-critical: headroom ≈ 160MB → raw 0 → floored to 2
+        used_pct = 89.0  # near-critical: headroom ≈ 160MB → raw 0 → floored to 3
         used_bytes = int(total_bytes * (used_pct / 100.0))
 
         monitor = ResourceMonitor()
@@ -430,7 +433,7 @@ class TestCeilingAutoDegradeOnLowMemory:
         )
         monitor._cache_time = __import__("time").time()
 
-        assert monitor.compute_max_tabs() == 2
+        assert monitor.compute_max_tabs() == ResourceMonitor._MIN_TABS_FLOOR == 3
 
 
 # ---------------------------------------------------------------------------

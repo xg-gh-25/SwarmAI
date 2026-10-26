@@ -46,6 +46,7 @@ from config import get_swarmws as _get_swarmws
 from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
+from .resource_monitor import ResourceMonitor
 from .compaction_guard import EscalationLevel
 from .retry_manager import RetryManager
 from .turn_notice import turn_notice_event
@@ -4797,8 +4798,17 @@ class SessionUnit:
     # (not module-level) so tests can patch.object(SessionUnit, ...) and the
     # _await_streaming_slot helper reads them via self. See the module-level
     # _streaming_count / _get_streaming_count for the daemon-wide counter.
+    # Default = the number of chat tabs (tab ceiling - 1 channel slot), so every
+    # chat tab the UI lets the user open can stream at once (resource_monitor
+    # explains the 2026-08-02 drift this prevents). The count is daemon-wide: the
+    # channel session shares it, so a channel turn can still wait while every chat
+    # tab streams — the same ratio as before (3 chat + channel on a cap of 3).
+    # Env-tunable.
     MAX_CONCURRENT_STREAMS: int = int(
-        os.environ.get("SWARMAI_MAX_CONCURRENT_STREAMS", "3")
+        os.environ.get(
+            "SWARMAI_MAX_CONCURRENT_STREAMS",
+            str(ResourceMonitor._MAX_TABS_CEILING - 1),
+        )
     )
     _STREAM_ADMIT_POLL_INTERVAL: float = 0.1   # seconds between cap re-checks
     _STREAM_ADMIT_TIMEOUT: float = 120.0       # max wait for a streaming slot

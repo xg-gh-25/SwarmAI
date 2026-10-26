@@ -113,3 +113,46 @@ describe('ChatHeader — pill respects lastSeenOutputCount (run_9dd59523, no nag
     expect(screen.getByTestId('chat-header-outputs-pill')).toBeInTheDocument();
   });
 });
+
+describe('ChatHeader — pinned Swarm Out tab', () => {
+  function renderWithSwarmOut(activeTabId: string, onTabSelect = vi.fn()) {
+    const tabs: OpenTab[] = [
+      { id: 'tab-0', title: 'One', agentId: 'a1', isNew: false },
+      { id: 'swarm-out', title: 'Swarm Out', agentId: 'a1', isNew: true },
+      { id: 'tab-1', title: 'Two', agentId: 'a1', isNew: false },
+    ];
+    render(
+      <HealthContext.Provider value={makeHealth('connected')}>
+        <ChatHeader
+          openTabs={tabs}
+          activeTabId={activeTabId}
+          onTabSelect={onTabSelect}
+          onTabClose={vi.fn()}
+          onNewSession={vi.fn()}
+        />
+      </HealthContext.Provider>,
+    );
+    return onTabSelect;
+  }
+
+  it('keeps Swarm Out out of the strip: the strip holds the user tabs only', () => {
+    renderWithSwarmOut('tab-0');
+    const strip = screen.getByRole('tablist', { name: 'Session tabs' });
+    expect(strip.textContent).toContain('One');
+    expect(strip.textContent).toContain('Two');
+    expect(strip.textContent).not.toContain('Swarm Out');
+  });
+
+  it('renders Swarm Out apart at the right end, with no close button', () => {
+    renderWithSwarmOut('tab-0');
+    const pinned = screen.getByRole('tablist', { name: 'Swarm Out' });
+    expect(pinned.textContent).toContain('Swarm Out');
+    expect(screen.queryByLabelText('Close Swarm Out')).toBeNull();
+  });
+
+  it('selecting it goes through onTabSelect like any tab', () => {
+    const onTabSelect = renderWithSwarmOut('tab-0');
+    screen.getByRole('tablist', { name: 'Swarm Out' }).querySelector('[role="tab"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onTabSelect).toHaveBeenCalledWith('swarm-out');
+  });
+});

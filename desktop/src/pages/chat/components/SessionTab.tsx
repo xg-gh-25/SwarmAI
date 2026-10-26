@@ -17,6 +17,9 @@ interface SessionTabProps {
   status?: TabStatus;
   maxTitleLength?: number;
   onKeyDown?: (e: React.KeyboardEvent) => void;
+  /** 'swarm-out': the pinned Swarm Out tab (pages/chat/swarmOut.ts) — its own colour
+   *  and icon, no close button, no shortcut hint. */
+  variant?: 'swarm-out';
 }
 
 /**
@@ -49,15 +52,17 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
     status,
     maxTitleLength = 25,
     onKeyDown,
+    variant,
   },
   ref
 ) {
+  const pinned = variant === 'swarm-out';
   const { t } = useTranslation();
   const displayTitle = truncateTitle(tab.title, maxTitleLength);
   const isUnread = !isActive && status === 'complete_unread';
   // Show shortcut hint for first 9 tabs (Cmd/Ctrl+1 through Cmd/Ctrl+9)
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
-  const shortcutLabel = index != null && index < 9 ? `${isMac ? '\u2318' : 'Ctrl+'}${index + 1}` : null;
+  const shortcutLabel = !pinned && index != null && index < 9 ? `${isMac ? '\u2318' : 'Ctrl+'}${index + 1}` : null;
 
   const handleClick = () => {
     if (!isActive) {
@@ -96,6 +101,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         // border, so selecting a tab never shifts the strip (GUI12).
         'session-tab group/tab flex items-center gap-1.5 h-[30px] px-2.5 cursor-pointer border',
         'min-w-0 max-w-[220px] flex-shrink-0',
+        pinned && 'session-tab--swarm-out',
         isActive
           ? 'session-tab--active text-[var(--color-text)] font-medium'
           : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
@@ -114,7 +120,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
 
       {/* Chat icon */}
       <span className="material-symbols-outlined icon-xs flex-shrink-0">
-        chat_bubble
+        {pinned ? 'hive' : 'chat_bubble'}
       </span>
 
       {/* Tab status indicator (streaming, error, etc.) — skip for unread since we show dot */}
@@ -137,7 +143,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
 
       {/* Close button — hidden by default, fades in on tab hover (also visible
           when the tab is active so the current tab is always closable). */}
-      <button
+      {!pinned && <button
         onClick={handleClose}
         aria-label={`Close ${tab.title}`}
         className={clsx(
@@ -148,7 +154,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         )}
       >
         <span className="material-symbols-outlined icon-xs">close</span>
-      </button>
+      </button>}
     </div>
   );
 }

@@ -75,7 +75,9 @@ import { prefetchNav } from '../components/layout/overlayQueries';
 // all migrated to the OverlayHost registry (overlaySurfaces.tsx); dispatch reaches
 // them via the ctx bridge (setOverlayCtxBridge below).
 import { type ResumeTabInfo } from './chat/resumeTarget';
-import { classifyLanding, type LandingVerdict } from './chat/landPromptInTab';
+import { classifyWorkLanding, type LandingVerdict } from './chat/landPromptInTab';
+import { SWARM_OUT_TAB_ID, isSwarmOutTab, normalChatMax, normalTabs } from './chat/swarmOut';
+import { SwarmOutDashboard } from '../components/swarm-out/SwarmOutDashboard';
 import { dispatchInjectChatInput, injectDispatchedPrompt } from './chat/injectChatInput';
 import { canBindSessionToActiveTab } from './chat/sessionBinding';
 import { planDispatchBackfill } from './chat/dispatchBackfill';
@@ -963,7 +965,8 @@ export default function ChatPage() {
   // Fix 7: Guard against exceeding dynamic max tabs limit
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
-    if (tabMapRef.current.size >= maxTabsInfo.chatMax) {
+    // The pinned Swarm Out tab has its own slot; only the user's tabs count.
+    if (normalTabs(tabMapRef.current.values()).length >= normalChatMax(maxTabsInfo.chatMax)) {
       systemToasts.tabLimitReached();
       return;
     }
@@ -1219,6 +1222,7 @@ export default function ChatPage() {
   // R6b: ANY close releases the backend slot. Idle tab → release silently.
   // Streaming tab → confirm first (avoid silently discarding a live response).
   const handleTabClose = useCallback((tabId: string) => {
+    if (isSwarmOutTab(tabId)) return; // pinned: cannot be closed
     const tab = tabMapRef.current.get(tabId);
     const tabSessionId = tab?.sessionId;
     const isStreaming = tab?.isStreaming || tab?.localSending || pendingStreamTabs.has(tabId);
@@ -1270,9 +1274,9 @@ export default function ChatPage() {
       // won't wipe. User must free a slot rather than lose that history. For a
       // single-tab user (chatMax===1) "close a tab" sounds like a dead end — tell
       // them closing their only tab is safe (closeTab auto-respawns an empty one).
-      message = maxTabsInfo.chatMax === 1
+      message = normalChatMax(maxTabsInfo.chatMax) === 1
         ? `This tab holds a conversation — closing it starts a fresh one (a new empty tab opens automatically). Close it, then ${verb}.`
-        : `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab, then ${verb}.`;
+        : `All ${normalChatMax(maxTabsInfo.chatMax)} tab(s) are busy — close a tab, then ${verb}.`;
     } else if (v.reason === 'busy') {
       // Never leak the raw machine status token (e.g. "permission_needed") to the
       // user. Map to a human phrase + the right action. A completed/errored tab is
@@ -1297,7 +1301,7 @@ export default function ChatPage() {
           message = `The current tab is busy — finish or close it (or open a new tab), then ${verb}.`;
       }
     } else { // cap
-      message = `All ${maxTabsInfo.chatMax} tab(s) are busy — close a tab (or wait for one to finish), then ${verb}.`;
+      message = `All ${normalChatMax(maxTabsInfo.chatMax)} tab(s) are busy — close a tab (or wait for one to finish), then ${verb}.`;
     }
     systemToasts.promptCannotLand(message);
   }, [systemToasts, maxTabsInfo.chatMax]);
@@ -1305,6 +1309,11 @@ export default function ChatPage() {
   const activeTabHasDraft = useCallback((): boolean =>
     inputValueRef.current.trim().length > 0 || attachmentsRef.current.length > 0,
     [inputValueRef, attachmentsRef]);
+
+  // A background tab's unsent draft lives in inputValueMapRef (saved on tab switch).
+  const tabHasDraft = useCallback((tabId: string): boolean =>
+    (inputValueMapRef.current.get(tabId) ?? '').trim().length > 0,
+    [inputValueMapRef]);
 
   // Dispatch a todo into a chat tab: land via the shared resolver (newtab /
   // reuse-current / needs-close — never focus, a todo is new work), inject its
@@ -1320,6 +1329,22 @@ export default function ChatPage() {
     (verdict: Extract<LandingVerdict, { kind: 'land' }>): string | null => {
       if (verdict.mode === 'reuse') {
         const targetTabId = verdict.tabId;
+        // Reuse of a NON-active tab happens only from the Swarm Out tab, into an empty
+        // idle user tab (classifyWorkLanding). Save the outgoing tab's React state the
+        // way handleTabSelect does, then make the target active, so the mirror resets
+        // below apply to the target and not to the Swarm Out conversation.
+        const currentTabId = activeTabIdRef.current;
+        if (currentTabId && currentTabId !== targetTabId && tabMapRef.current.has(currentTabId)) {
+          const currentTab = tabMapRef.current.get(currentTabId)!;
+          updateTabState(currentTabId, {
+            ...(!currentTab.isStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
+            pendingQuestion,
+            pendingPermissionRequestId,
+            isExpanded: isExpandedRef.current,
+          });
+          inputValueMapRef.current.set(currentTabId, inputValueRef.current);
+          selectTab(targetTabId);
+        }
         initTabState(targetTabId, []);
         updateTabState(targetTabId, { sessionId: undefined });
         setSessionId(undefined);
@@ -1335,23 +1360,26 @@ export default function ChatPage() {
       initTabState(newTab.id, []);
       return newTab.id;
     },
-    [initTabState, updateTabState, setSessionId, setMessages, addTab, selectedAgentId, systemToasts],
+    [initTabState, updateTabState, setSessionId, setMessages, addTab, selectedAgentId, systemToasts,
+      activeTabIdRef, tabMapRef, pendingQuestion, pendingPermissionRequestId, selectTab],
   );
 
   const handleDispatchTodo = useCallback((todo: ToDo): boolean => {
     // Sentinel key never matches an open session → focus branch unreachable (a todo
     // is new work). Dispatch opts INTO the draft guard (reuse would clobber a draft).
-    const verdict = classifyLanding(
+    const verdict = classifyWorkLanding(
       `__dispatch__${todo.id}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
       { hasDraft: activeTabHasDraft(), applyDraftGuard: true, allowReuseCurrent: false },
+      tabHasDraft,
     );
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
 
     const targetTabId = setupDispatchTarget(verdict);
     if (targetTabId == null) return false;
 
-    const tabIdx = openTabsRef.current.findIndex((t) => t.id === targetTabId);
-    const tabLabel = `Tab ${tabIdx >= 0 ? tabIdx + 1 : openTabsRef.current.length}`;
+    const userTabs = normalTabs(openTabsRef.current);
+    const tabIdx = userTabs.findIndex((t) => t.id === targetTabId);
+    const tabLabel = `Tab ${tabIdx >= 0 ? tabIdx + 1 : userTabs.length}`;
     const existingSid = tabMapRef.current.get(targetTabId)?.sessionId;
     // Build the FULL work packet as the injected prompt (B6 fix, run_937f5cc9):
     // dispatching used to inject only todo.title, silently dropping the files /
@@ -1370,7 +1398,7 @@ export default function ChatPage() {
       dispatchPendingRef.current.push({ tabId: targetTabId, todoId: todo.id, tabLabel });
     }
     return true;
-  }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, landingToast, setupDispatchTarget]);
+  }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, tabHasDraft, landingToast, setupDispatchTarget]);
 
   // Land an arbitrary prompt into a chat tab (Jobs & Runs overlay: create/pause/
   // edit/delete → chat, since s_job-manager owns user-jobs.yaml integrity).
@@ -1380,9 +1408,10 @@ export default function ChatPage() {
   // So we resolve+activate a tab FIRST, THEN inject. Returns true if it landed.
   const handleDispatchJobPrompt = useCallback((prompt: string, opts?: { autoSend?: boolean }): boolean => {
     // Same fresh-work landing as todo (sentinel key, opt into the draft guard).
-    const verdict = classifyLanding(
+    const verdict = classifyWorkLanding(
       `__jobprompt__${prompt.slice(0, 24)}`, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
       { hasDraft: activeTabHasDraft(), applyDraftGuard: true, allowReuseCurrent: false },
+      tabHasDraft,
     );
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Dispatch'); return false; }
 
@@ -1391,7 +1420,7 @@ export default function ChatPage() {
     // caller passes autoSend (a person's explicit "send now" click, e.g. Need You ↑).
     injectDispatchedPrompt(prompt, opts);
     return true;
-  }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, landingToast, setupDispatchTarget]);
+  }, [tabsSnapshot, maxTabsInfo.chatMax, activeTabIdRef, activeTabHasDraft, tabHasDraft, landingToast, setupDispatchTarget]);
 
   // Resume a session from the History overlay into a chat tab (方案 B).
   // Pure decision (resolveResumeTarget) + real execution via handleTabSelect —
@@ -1401,9 +1430,10 @@ export default function ChatPage() {
   const handleResumeSession = useCallback((session: ChatSession): boolean => {
     // Resume passes the REAL session id (can hit focus) and does NOT opt into the
     // draft guard — it never had one, and adding it would change behavior (Gate-1).
-    const verdict = classifyLanding(
+    const verdict = classifyWorkLanding(
       session.id, tabsSnapshot(), maxTabsInfo.chatMax, activeTabIdRef.current ?? undefined,
       { hasDraft: false, applyDraftGuard: false, allowReuseCurrent: true },
+      tabHasDraft,
     );
     if (verdict.kind === 'blocked') { landingToast(verdict, 'Resume'); return false; }
 
@@ -1478,7 +1508,7 @@ export default function ChatPage() {
       selectTab(targetTabId); // activeTabId change → sync effect loads the session
     }
     return true;
-  }, [tabsSnapshot, tabMapRef, maxTabsInfo.chatMax, landingToast, systemToasts, handleTabSelect, updateTabSessionId,
+  }, [tabsSnapshot, tabHasDraft, tabMapRef, maxTabsInfo.chatMax, landingToast, systemToasts, handleTabSelect, updateTabSessionId,
       addTab, initTabState, selectTab, updateTabState, activeTabIdRef, messagesRef, sessionIdRef, pendingQuestion,
       selectedAgentId, loadSessionMessages]);
 
@@ -1770,7 +1800,9 @@ export default function ChatPage() {
       if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '9') {
         e.preventDefault();
         const idx = parseInt(e.key) - 1;
-        const tabs = openTabsRef.current;
+        // Numbers follow the tab strip, which holds the user's tabs only (the pinned
+        // Swarm Out tab sits apart at the right end).
+        const tabs = normalTabs(openTabsRef.current);
         if (tabs[idx]) {
           handleTabSelect(tabs[idx].id);
         }
@@ -2566,7 +2598,7 @@ export default function ChatPage() {
         onTabClose={handleTabClose}
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
-        isNewTabDisabled={openTabs.length >= maxTabsInfo.chatMax}
+        isNewTabDisabled={normalTabs(openTabs).length >= normalChatMax(maxTabsInfo.chatMax)}
         outputCount={canvas.outputCount}
         lastSeenOutputCount={canvas.lastSeenOutputCount}
         canvasOpen={canvas.isOpen}
@@ -2620,6 +2652,13 @@ export default function ChatPage() {
           onClose={() => setCloseConfirmTab(null)}
         />
 
+        {/* Swarm Out (pages/chat/swarmOut.ts): when its pinned tab is active, its
+            dashboard takes the left of the row and the chat column below narrows to
+            a fixed width on its right. The chat column itself is the same one every
+            tab uses, so the Swarm Out conversation is a real chat session. */}
+        {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch. */}
+        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} />
+
         {/* Main Chat Area.
             `contain:layout` (run_26172836) SEVERS the layout coupling between this
             column and the Canvas (FileViewerPanel) — its sibling in the parent flex
@@ -2635,7 +2674,14 @@ export default function ChatPage() {
             overflow-hidden, so its size is imposed by the row, not by content — plain
             `contain:layout` (NOT size) needs no explicit dimensions.
             `chat-panel`: the chat-column container (index.css explains why it is safe). */}
-        <div className="chat-panel flex-1 flex flex-col min-w-0 overflow-hidden [contain:layout]">
+        <div className="chat-panel flex-1 flex flex-col min-w-0 overflow-hidden [contain:layout]"
+          // Swarm Out active: the column takes 460px beside its dashboard and may shrink
+          // to 360px when the Canvas is wide (the dashboard narrows first, min-width 0).
+          style={activeTabId === SWARM_OUT_TAB_ID
+            ? { flex: '0 1 460px', minWidth: 360, borderLeft: '1px solid var(--color-border)' }
+            : undefined}
+          data-testid="chat-panel"
+        >
           <ErrorBoundary variant="tab">
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">

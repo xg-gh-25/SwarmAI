@@ -9,7 +9,8 @@ Public symbols:
 
 - ``resource_monitor`` — Module-level singleton instance.
 - ``ResourceMonitor``  — Class (rarely used directly; prefer the singleton).
-- ``ResourceMonitor.compute_max_tabs`` — Dynamic tab limit from available RAM.
+- ``ResourceMonitor.compute_max_tabs`` — Dynamic tab limit from available RAM
+  (floor 3 = 1 chat + 1 Swarm Out + 1 channel, ceiling 5).
 - ``SystemMemory``     — Frozen dataclass for system RAM state.
 - ``ProcessMetrics``   — Frozen dataclass for per-subprocess metrics.
 - ``SpawnBudget``      — Frozen dataclass for can-spawn decision + reasoning.
@@ -160,15 +161,20 @@ class ResourceMonitor:
     _MIN_SPAWN_COST_MB: float = 600.0
 
     # ── Dynamic tab limit constants ─────────────────────────────
-    # Ceiling: 4 = 3 chat + 1 channel.  Reverted 6→4 (2026-08-02): the
-    # 6-ceiling raised the *tab* count but NOT throughput — MAX_CONCURRENT_STREAMS
-    # stayed at 3, so a 4th/5th concurrent stream blocked silently on the
-    # 120s stream-admit wait ("静默没 response"). 4 keeps the openable chat
-    # count (3) at/below the concurrent-stream cap, so more tabs never
-    # outrun throughput. On smaller machines the dynamic RAM formula
-    # (headroom / cost_mb) gates BELOW this ceiling anyway — e.g. a 16GB
-    # machine caps at 2-3 depending on load (a near-full 16GB box floors at 2).
-    _MAX_TABS_CEILING: int = 4
+    # Ceiling: 5 = 3 chat + 1 Swarm Out + 1 channel. Floor: 3 = 1 chat + 1 Swarm Out
+    # + 1 channel — the slots every machine gets, whatever its free RAM; the other
+    # chat tabs are allocated by the RAM formula below, up to the ceiling. Both are UX
+    # counts: backend admission is gated by spawn_budget (real RAM, R6a), not here.
+    #
+    # The ceiling and SessionUnit.MAX_CONCURRENT_STREAMS move together: the stream
+    # cap defaults to (ceiling - 1), the number of chat tabs. They once drifted (the
+    # ceiling went to 6 while the stream cap stayed at 3, 2026-08-02), and a tab past
+    # the stream cap waited silently on the 120s stream-admit wait. Deriving one from
+    # the other keeps the openable chat tabs at or below the concurrent-stream cap.
+    # On smaller machines the RAM formula gates below the ceiling anyway (a 16GB
+    # machine caps at 3-4 depending on load).
+    _MAX_TABS_CEILING: int = 5
+    _MIN_TABS_FLOOR: int = 3
     _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
     # Concurrent penalty: each alive session inflates the estimated spawn
     # cost to account for simultaneous peak memory spikes.  On a 16GB
@@ -399,7 +405,8 @@ class ResourceMonitor:
         available (75th percentile of actual tree RSS, floored at
         ``_MIN_SPAWN_COST_MB``), falls back to ``_DEFAULT_SPAWN_COST_MB``.
 
-        Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).
+        Returns [_MIN_TABS_FLOOR, _MAX_TABS_CEILING] = [3, 5]. Always allows at
+        least 3 (1 chat + 1 Swarm Out + 1 channel).
         """
         mem = self.system_memory()
         total_mb = mem.total / (1024 * 1024)
@@ -409,9 +416,9 @@ class ResourceMonitor:
         # Use adaptive estimate when available — learned from real RSS data.
         cost_mb = self._estimated_spawn_cost_mb()
         raw = int(headroom_mb / cost_mb)
-        # Minimum 2: guarantees 1 chat slot + 1 dedicated channel slot.
-        # Without this, channel messages could starve when memory is tight.
-        result = max(2, min(raw, self._MAX_TABS_CEILING))
+        # Floor: 1 chat + 1 Swarm Out + 1 dedicated channel slot, whatever the RAM.
+        # Without it, channel messages could starve when memory is tight.
+        result = max(self._MIN_TABS_FLOOR, min(raw, self._MAX_TABS_CEILING))
         # Log at INFO only when result changes or headroom is low (<3GB).
         # Avoids 3000+ INFO lines/day when system is stable.
         _LOW_HEADROOM_MB = 3072.0

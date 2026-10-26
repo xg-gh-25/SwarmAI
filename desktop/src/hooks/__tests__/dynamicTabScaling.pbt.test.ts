@@ -25,6 +25,7 @@ import {
   useUnifiedTabState,
   MAX_TABS_HARD_CEILING,
 } from '../useUnifiedTabState';
+import { normalChatMax, normalTabs } from '../../pages/chat/swarmOut';
 import type { OpenTab } from '../../pages/chat/types';
 
 // ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
             });
           }
 
-          const tabCountBeforeTransitions = result.current.openTabs.length;
+          const tabCountBeforeTransitions = normalTabs(result.current.openTabs).length;
           expect(tabCountBeforeTransitions).toBe(initialTabCount);
 
           // Step 3: Apply each pressure transition via fetchMaxTabs()
@@ -125,7 +126,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
 
             // Key invariant: tab count must remain exactly the same
             // No tabs are auto-closed by pressure or shrinkage
-            expect(result.current.openTabs.length).toBe(initialTabCount);
+            expect(normalTabs(result.current.openTabs).length).toBe(initialTabCount);
           }
 
           unmount();
@@ -179,7 +180,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
           }
 
           // The hook enforces ≥1 tab invariant, so for tabCount=0 we still have 1 tab.
-          const actualTabCount = result.current.openTabs.length;
+          const actualTabCount = normalTabs(result.current.openTabs).length;
 
           // Step 3: Set the real max_tabs limit
           // chat_max = max(1, maxTabs - 1) — 1 slot reserved for channels
@@ -197,9 +198,10 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
             addResult = result.current.addTab(DEFAULT_AGENT);
           });
 
-          const countAfterAdd = result.current.openTabs.length;
+          const countAfterAdd = normalTabs(result.current.openTabs).length;
 
-          if (actualTabCount >= chatMax) {
+          // The Swarm Out tab holds one chat slot; the user's tabs get the rest.
+          if (actualTabCount >= normalChatMax(chatMax)) {
             // Should be rejected: addTab returns undefined, count unchanged
             expect(addResult).toBeUndefined();
             expect(countAfterAdd).toBe(actualTabCount);
@@ -274,7 +276,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
           });
 
           // Verify all saved tabs were restored regardless of chatMax
-          expect(result.current.openTabs.length).toBe(savedTabCount);
+          expect(normalTabs(result.current.openTabs).length).toBe(savedTabCount);
 
           // Step 2: Fetch the dynamic max tabs limit
           await act(async () => {
@@ -282,7 +284,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
           });
 
           // Tab count should still be S after fetching the limit
-          expect(result.current.openTabs.length).toBe(savedTabCount);
+          expect(normalTabs(result.current.openTabs).length).toBe(savedTabCount);
 
           // Step 3: Try addTab — should be rejected when S >= chatMax, accepted when S < chatMax
           let addResult: OpenTab | undefined;
@@ -290,15 +292,16 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
             addResult = result.current.addTab(DEFAULT_AGENT);
           });
 
-          if (savedTabCount >= chatMax) {
+          // The Swarm Out tab holds one chat slot; the user's tabs get the rest.
+          if (savedTabCount >= normalChatMax(chatMax)) {
             // Rejected: too many tabs open relative to dynamic limit
             expect(addResult).toBeUndefined();
-            expect(result.current.openTabs.length).toBe(savedTabCount);
+            expect(normalTabs(result.current.openTabs).length).toBe(savedTabCount);
           } else {
             // Accepted: room for one more tab under the dynamic limit
             expect(addResult).toBeDefined();
             expect(addResult!.id).toBeTruthy();
-            expect(result.current.openTabs.length).toBe(savedTabCount + 1);
+            expect(normalTabs(result.current.openTabs).length).toBe(savedTabCount + 1);
           }
 
           unmount();

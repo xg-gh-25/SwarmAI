@@ -181,3 +181,62 @@ describe('classifyLanding', () => {
       .toEqual({ kind: 'land', mode: 'reuse', tabId: 't3' });
   });
 });
+
+// ---------------------------------------------------------------------------
+// classifyWorkLanding — work landing with the pinned Swarm Out tab out of play
+// ---------------------------------------------------------------------------
+import { classifyWorkLanding } from '../landPromptInTab';
+import { SWARM_OUT_TAB_ID } from '../swarmOut';
+
+describe('classifyWorkLanding (Swarm Out never reused, never counted)', () => {
+  const so = (opts: Partial<ResumeTabInfo> = {}) => tab(SWARM_OUT_TAB_ID, opts);
+
+  it('Swarm Out does not count against the user: 1 user tab + Swarm Out, chat_max 3 → newtab', () => {
+    const tabs = [tab('t1', { sessionId: 'A' }), so({ sessionId: 'S' })];
+    expect(classifyWorkLanding('__k__', tabs, 3, 't1', DISPATCH_GUARD)).toEqual({ kind: 'land', mode: 'newtab' });
+  });
+
+  it('user tabs at their cap (chat_max - 1) → no newtab', () => {
+    const tabs = [tab('t1', { sessionId: 'A' }), tab('t2', { sessionId: 'B' }), so()];
+    expect(classifyWorkLanding('__k__', tabs, 3, 't2', NO_GUARD)).toEqual({ kind: 'land', mode: 'reuse', tabId: 't2' });
+  });
+
+  it('Swarm Out active and idle at the cap → never reused (blocked instead)', () => {
+    const tabs = [tab('t1', { sessionId: 'A' }), tab('t2', { sessionId: 'B' }), so({ status: 'idle' })];
+    expect(classifyWorkLanding('__k__', tabs, 3, SWARM_OUT_TAB_ID, NO_GUARD)).toEqual({ kind: 'blocked', reason: 'cap' });
+  });
+
+  it("resuming Swarm Out's own session focuses it", () => {
+    const tabs = [tab('t1', { sessionId: 'A' }), so({ sessionId: 'S' })];
+    expect(classifyWorkLanding('S', tabs, 3, 't1', NO_GUARD)).toEqual({ kind: 'land', mode: 'focus', tabId: SWARM_OUT_TAB_ID });
+  });
+
+  it('a user session already open is still focused', () => {
+    const tabs = [tab('t1', { sessionId: 'A' }), so({ sessionId: 'S' })];
+    expect(classifyWorkLanding('A', tabs, 3, SWARM_OUT_TAB_ID, NO_GUARD)).toEqual({ kind: 'land', mode: 'focus', tabId: 't1' });
+  });
+});
+
+describe('classifyWorkLanding from the Swarm Out tab at the floor (one user tab)', () => {
+  const so = () => tab(SWARM_OUT_TAB_ID, { sessionId: 'S' });
+
+  it('reuses the empty idle user tab instead of blocking', () => {
+    const tabs = [tab('t1'), so()];
+    expect(classifyWorkLanding('__k__', tabs, 2, SWARM_OUT_TAB_ID, DISPATCH_GUARD)).toEqual({ kind: 'land', mode: 'reuse', tabId: 't1' });
+  });
+
+  it('never clears a user tab that holds a conversation', () => {
+    const tabs = [tab('t1', { sessionId: 'A' }), so()];
+    expect(classifyWorkLanding('__k__', tabs, 2, SWARM_OUT_TAB_ID, NO_GUARD).kind).toBe('blocked');
+  });
+
+  it('never clears a user tab with an unsent draft', () => {
+    const tabs = [tab('t1'), so()];
+    expect(classifyWorkLanding('__k__', tabs, 2, SWARM_OUT_TAB_ID, DISPATCH_GUARD, (id) => id === 't1').kind).toBe('blocked');
+  });
+
+  it('never clears a busy user tab', () => {
+    const tabs = [tab('t1', { status: 'streaming', isStreaming: true }), so()];
+    expect(classifyWorkLanding('__k__', tabs, 2, SWARM_OUT_TAB_ID, DISPATCH_GUARD).kind).toBe('blocked');
+  });
+});

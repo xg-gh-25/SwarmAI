@@ -133,7 +133,7 @@ class SpawnBudgetResponse(BaseModel):
 class MaxTabsResponse(BaseModel):
     """Dynamic tab limit and memory pressure level."""
     max_tabs: int
-    chat_max: int  # max_tabs - 1 (1 slot reserved for channel)
+    chat_max: int  # max_tabs - 1 (1 slot reserved for channel); includes the Swarm Out tab
     memory_pressure: str  # ok | warning | critical
 
 
@@ -978,9 +978,10 @@ async def get_max_tabs() -> MaxTabsResponse:
 
     Invalidates the memory cache first so the response reflects
     up-to-date system conditions.  On failure, returns a safe
-    fallback of 1 tab with critical pressure.
+    fallback of the floor (1 chat + 1 Swarm Out + 1 channel) with critical
+    pressure.
     """
-    from core.resource_monitor import resource_monitor
+    from core.resource_monitor import ResourceMonitor, resource_monitor
     try:
         resource_monitor.invalidate_cache()
         mem = resource_monitor.system_memory()
@@ -992,7 +993,8 @@ async def get_max_tabs() -> MaxTabsResponse:
         )
     except Exception:
         logger.exception("Failed to compute max tabs")
-        return MaxTabsResponse(max_tabs=1, chat_max=1, memory_pressure="critical")
+        floor = ResourceMonitor._MIN_TABS_FLOOR
+        return MaxTabsResponse(max_tabs=floor, chat_max=floor - 1, memory_pressure="critical")
 
 
 @router.get("/engine-metrics")

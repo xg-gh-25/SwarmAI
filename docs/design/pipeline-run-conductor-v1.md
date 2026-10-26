@@ -473,7 +473,7 @@ person can see a slow Run and cancel or take it over; whether a stage-level noti
 worth adding is decided later from usable §6's measures.
 
 **Interactive capacity is reserved.** The daemon caps concurrent streams at
-`SessionUnit.MAX_CONCURRENT_STREAMS` (default 3). Today's admission
+`SessionUnit.MAX_CONCURRENT_STREAMS` (default = tab ceiling - 1, i.e. 4). Today's admission
 (`_await_streaming_slot`) is a soft poll that lets a stream through after 120 s anyway, so
 it cannot reserve anything. Phase 2b replaces it with one atomic admission counter with
 two classes:

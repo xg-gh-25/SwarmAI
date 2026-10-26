@@ -39,8 +39,8 @@ terrain.
      capability roster AND a body-layout roster) → Body draws PHYSICAL layout only; function
      lives in Capabilities / Brain. Never both.
 - ❌ Any drifting, decision-inert NUMBER (LOC / counts / sizes / %) — store the reproducible
-     METHOD, never the frozen value. A dynamic cap → describe it ("up to 3 chat + 1 channel,
-     dynamic by RAM"),
+     METHOD, never the frozen value. A dynamic cap → describe it ("1 chat + Swarm Out + 1 channel,
+     more chat tabs dynamic by RAM"),
      don't freeze one machine's value. (R30#4)
 - ❌ Session-local provenance / run-ids / "directive same day" notes → MEMORY / EVOLUTION.
 - ❌ CJK prose in the body (system-file convention: English prose).

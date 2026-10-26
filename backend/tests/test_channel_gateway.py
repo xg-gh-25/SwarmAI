@@ -1,7 +1,7 @@
 """Tests for channel gateway: slot isolation, per-channel sessions, sender identity, permissions.
 
 Covers acceptance criteria:
-  AC1: compute_max_tabs min 2, channel slot dedicated
+  AC1: compute_max_tabs floor 3 (1 chat + 1 Swarm Out + 1 channel), channel slot dedicated
   AC2: Channel never evicts/queues chat tabs
   AC3: Per-channel session isolation + idle TTL
   AC5: Gateway tests >= 15 cases
@@ -49,18 +49,18 @@ def mock_db(monkeypatch):
 
 
 # ===================================================================
-# AC1: compute_max_tabs min 2, channel slot dedicated
+# AC1: compute_max_tabs floor 3, channel slot dedicated
 # ===================================================================
 
 class TestSlotIsolation:
-    """Slot isolation: min_tabs=2, dedicated channel slot."""
+    """Slot isolation: floor of 3 tabs, dedicated channel slot."""
 
-    def test_compute_max_tabs_minimum_is_2(self):
-        """compute_max_tabs never returns less than 2 (1 chat + 1 channel)."""
+    def test_compute_max_tabs_minimum_is_3(self):
+        """compute_max_tabs never returns less than 3 (1 chat + 1 Swarm Out + 1 channel)."""
         from core.resource_monitor import ResourceMonitor
 
         rm = ResourceMonitor()
-        # Even under extreme memory pressure, min must be 2
+        # Even under extreme memory pressure, the floor holds
         with patch.object(rm, "system_memory") as mock_mem:
             mock_mem.return_value = MagicMock(
                 total=8 * 1024 * 1024 * 1024,  # 8GB
@@ -69,10 +69,10 @@ class TestSlotIsolation:
                 pressure_level="critical",
             )
             result = rm.compute_max_tabs()
-            assert result >= 2, f"compute_max_tabs returned {result}, expected >= 2"
+            assert result >= 3, f"compute_max_tabs returned {result}, expected >= 3"
 
     def test_compute_max_tabs_normal_memory(self):
-        """Normal memory: compute_max_tabs returns expected range [2, 4]."""
+        """Normal memory: compute_max_tabs returns expected range [3, 5]."""
         from core.resource_monitor import ResourceMonitor
 
         rm = ResourceMonitor()
@@ -84,7 +84,7 @@ class TestSlotIsolation:
                 pressure_level="nominal",
             )
             result = rm.compute_max_tabs()
-            assert 2 <= result <= 4
+            assert 3 <= result <= 5
 
     def test_session_unit_has_is_channel_session_flag(self):
         """SessionUnit must have is_channel_session attribute."""
