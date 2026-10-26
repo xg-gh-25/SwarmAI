@@ -5,7 +5,7 @@
  *  setting from the backend. */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { routes, reset, show, calls, check, fakeApi } from './harness';
+import { routes, reset, show, calls, check, failNext, fakeApi } from './harness';
 
 vi.mock('../../../services/api', () => fakeApi());
 vi.mock('../../../utils/openExternal', () => ({ openExternal: vi.fn() }));
@@ -127,6 +127,9 @@ describe('a started full run', () => {
       routes['GET /eval/runs/new1'] = () => (++n < 2 ? { run_id: 'new1', status: 'running' } : { run_id: 'new1', cases: [] });
       show(<OfflineTab />);
       fireEvent.click(await screen.findByTestId('run-full'));
+      await waitFor(() => expect(calls.some((c) => c.url === '/eval/run')).toBe(true));
+      // disabled from the moment the run id arrives, before the first poll answers
+      await waitFor(() => expect((screen.getByTestId('run-full') as HTMLButtonElement).disabled).toBe(true));
       await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Running…'));
       expect((screen.getByTestId('run-full') as HTMLButtonElement).disabled).toBe(true);
       const before = calls.filter((c) => c.url.startsWith('/eval/history')).length;
@@ -136,6 +139,65 @@ describe('a started full run', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('a run watch that cannot end on its own', () => {
+  const base = () => {
+    routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
+    routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
+    routes['GET /eval/history'] = [];
+    routes['POST /eval/run'] = { status: 'started', run_id: 'stuck1' };
+  };
+  it('stops at an unknown run instead of polling it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      base();
+      failNext['GET /eval/runs/stuck1'] = { status: 404, detail: 'Run not found' };
+      show(<OfflineTab />);
+      fireEvent.click(await screen.findByTestId('run-full'));
+      await waitFor(() => expect(calls.some((c) => c.url === '/eval/runs/stuck1')).toBe(true));
+      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Run the full set now'));
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(calls.filter((c) => c.url === '/eval/runs/stuck1')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('gives up after 30 minutes on a run killed mid-flight (its marker says running forever)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      base();
+      routes['GET /eval/runs/stuck1'] = { run_id: 'stuck1', status: 'running' };
+      show(<OfflineTab />);
+      fireEvent.click(await screen.findByTestId('run-full'));
+      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Running…'));
+      await vi.advanceTimersByTimeAsync(30 * 60_000 + 1000);
+      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Run the full set now'));
+      const polls = calls.filter((c) => c.url === '/eval/runs/stuck1').length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(calls.filter((c) => c.url === '/eval/runs/stuck1').length).toBe(polls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('a started run that crashes', () => {
+  it('says it did not finish, and the release record keeps the crash in view', async () => {
+    routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
+    routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
+    routes['GET /eval/history'] = [{ run_id: 'crash1', line: 'full', status: 'failed', error: 'model backend down',
+      triggered_by: 'manual', triggered_at: '2026-10-26T03:00:00+00:00', release: null, total_cases: 0,
+      cases_passed: 0, cases_failed: 0, cases_skipped: 0, duration_seconds: 0 }];
+    routes['POST /eval/run'] = { status: 'started', run_id: 'new2' };
+    routes['GET /eval/runs/new2'] = { run_id: 'new2', status: 'failed', error: 'model backend down', cases: [] };
+    show(<OfflineTab />);
+    const rec = await screen.findByTestId('release-record');
+    expect(rec.textContent).toContain('did not finish');
+    expect(rec.textContent).toContain('model backend down');
+    fireEvent.click(screen.getByTestId('run-full'));
+    expect((await screen.findByTestId('run-full-failed')).textContent).toContain('model backend down');
   });
 });
 

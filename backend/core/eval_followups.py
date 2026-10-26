@@ -111,14 +111,23 @@ def _is_full(run: Mapping[str, Any]) -> bool:
 
 
 def run_line(run: Mapping[str, Any]) -> str:
-    """Which line a run belongs to: ``full`` (a comparable full run), ``quick`` (a
-    quick check) or ``probe`` (a hand-run subset, e.g. "re-run this case"). Only
-    quick and full runs say anything about a release: a probe's denominator is the
-    few cases it ran, so its verdict must never stand for the version. The one
-    predicate every reader uses (health, history, follow-ups)."""
-    if _is_full(run):
+    """Which line a run belongs to: ``quick`` (a quick check), ``probe`` (a hand-run
+    subset, e.g. "re-run this case") or ``full``. Only quick and full runs say
+    anything about a release: a probe's denominator is the few cases it ran, so its
+    verdict must never stand for the version. What makes a probe is its SCOPE (run
+    limited by case ids / tags, or a pre-flag record under 20 cases), never its
+    results: a full run where many cases errored is still the full run, and its
+    blocked or incomplete verdict must show. A crashed full run (``status: failed``,
+    no cases) is full too. Whether a full run is comparable on a trend or for
+    regressions is a separate question (``_is_full``). Health, history, the lines
+    and the follow-ups' "measured" set all use this one predicate."""
+    if run.get("triggered_by") in QUICK_TRIGGERS:
+        return "quick"
+    if run.get("filtered"):
+        return "probe"
+    if run.get("status") == "failed":
         return "full"
-    return "quick" if run.get("triggered_by") in QUICK_TRIGGERS else "probe"
+    return "full" if (run.get("total_cases") or 0) >= 20 else "probe"
 
 
 def _statuses(run: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -314,7 +323,7 @@ def _standing(checks: Mapping[str, Any], worse: set, include_session_text: bool)
 
 def _overdue(runs, full_runs, state, now: datetime) -> list[dict]:
     out = []
-    quick = next((_ts(r.get("triggered_at")) for r in runs if r.get("triggered_by") in QUICK_TRIGGERS), None)
+    quick = next((_ts(r.get("triggered_at")) for r in runs if run_line(r) == "quick"), None)
     full = next((_ts(r.get("triggered_at")) for r in full_runs), None)
     online = _ts((state or {}).get("last_run"))
     for when, limit, en, zh in ((quick, _QUICK_MAX_AGE, "The quick check", "快速检查"),
@@ -394,7 +403,7 @@ def build_follow_ups(history: Sequence[Mapping[str, Any]], cases: Sequence[Mappi
     oldest = datetime.min.replace(tzinfo=timezone.utc)
     runs.sort(key=lambda r: _ts(r.get("triggered_at")) or oldest, reverse=True)
     by_id = {c.get("id"): c for c in cases if isinstance(c, Mapping)}
-    full_runs = [r for r in runs if run_line(r) == "full"]
+    full_runs = [r for r in runs if _is_full(r)]  # comparable: regressions and the always-failing rule
     # The lines a user sees: quick checks and full runs. A hand-run probe of one
     # case is neither, and must not hide what the last real run found.
     measured = [r for r in runs if run_line(r) != "probe"]

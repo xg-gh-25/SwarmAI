@@ -162,7 +162,7 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
   const { askSwarm } = useEvalActions();
   const detail = useCaseDetail(id);
   const rerun = useRunCases();
-  const rerunning = useRunProgress(rerun.data?.run_id);
+  const { running: rerunning, failed: rerunFailed } = useRunProgress(rerun.data?.run_id);
   const del = useDeleteCase();
   const [confirm, setConfirm] = useState(false);
   if (detail.isLoading) return <Loading />;
@@ -254,6 +254,7 @@ function CaseDetailView({ id, onForm, onClosed }: { id: string; onForm: (p: Pane
           `看一下 golden case ${c.id}：它守住的东西现在还对吗，检查方式有没有漏洞`))}>{t('Ask Swarm to review it', '让 Swarm 审这条')}</Btn>
       </div>
       {rerun.isError && <div className="text-small text-[var(--color-status-error)] mt-2">{errorDetail(rerun.error)}</div>}
+      {rerunFailed && <div className="text-small text-[var(--color-status-error)] mt-2">{t('The run did not finish: ', '这次运行没跑完：')}{rerunFailed}</div>}
       {del.isError && <div className="text-small text-[var(--color-status-error)] mt-2">{errorDetail(del.error)}</div>}
       <div className="text-small text-[var(--color-text-dim)] mt-4">
         {mineCase ? t('Delete removes it from the file; nothing is archived. Add it again if you need it.', '删除就是从文件里删掉，不归档；需要时再加。')
@@ -321,7 +322,8 @@ function CaseForm({ type, from, editing, total, onType, onDone }: {
     };
     return quick
       ? { ...base, eval_method: 'programmatic', evaluators: ['canary_pass'],
-          verification: { ...(from?.verification ?? {}), command: f.command, expected_contains: f.expected,
+          verification: { ...(editing ? from?.verification ?? {} : from?.verification?.timeout != null ? { timeout: from.verification.timeout } : {}),
+                          command: f.command, expected_contains: f.expected,
                           negative_command: f.negative, negative_expected_contains: f.negExpected } }
       : { ...base, eval_method: 'behavior', evaluators: ['trajectory_capture'], scenario: { ...(from?.scenario ?? {}), prompt: f.prompt },
           expected_trajectory: f.steps.split(/\s+/).filter(Boolean), trajectory_match: from?.trajectory_match ?? 'any_order',

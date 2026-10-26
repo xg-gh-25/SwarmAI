@@ -8,7 +8,7 @@
  * @exports types for health / history / golden set / run / online / judges, and the
  *          query + mutation hooks of the six tabs
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import api from '../../services/api';
 
@@ -64,6 +64,8 @@ export interface EvalHealth {
   dimension_summary: DimensionSummary;
   last_run: {
     run_id: string; triggered_by: string; triggered_at: string;
+    /** "failed" = the run crashed before it had a result */
+    status?: string | null; error?: string | null;
     cases_passed: number; cases_failed: number; cases_skipped: number;
     cases_error?: number; cases_timeout?: number;
   } | null;
@@ -80,6 +82,9 @@ export interface EvalRun {
   /** full = a comparable full run, quick = a quick check, probe = a hand-run subset
    *  (core/eval_followups.run_line). Only quick and full runs count for a release. */
   line?: 'full' | 'quick' | 'probe';
+  /** "failed" = the run crashed before it had a result */
+  status?: string | null;
+  error?: string | null;
   triggered_by: string;
   triggered_at: string;
   release: ReleaseVerdict | null;
@@ -275,18 +280,26 @@ const WATCH_MS = 30 * 60_000;
 
 /** Watch a started run (GET /runs/{id} answers status running from its in-flight
  *  marker) and refresh everything once it is recorded. True while it runs. */
-export function useRunProgress(runId: string | null | undefined): boolean {
+export function useRunProgress(runId: string | null | undefined): { running: boolean; failed: string | null } {
   const refresh = useInvalidateEval();
-  const since = useRef(0);
-  useEffect(() => { since.current = Date.now(); }, [runId]);
-  const q = useQuery<RunDetail>({
+  // the watch ends WATCH_MS after the run id arrives (disabling the query stops the polling)
+  const [expired, setExpired] = useState(false);
+  useEffect(() => {
+    setExpired(false);
+    if (!runId) return;
+    const timer = setTimeout(() => setExpired(true), WATCH_MS);
+    return () => clearTimeout(timer);
+  }, [runId]);
+  const q = useQuery<RunDetail & { error?: string }>({
     queryKey: ['eval-run-progress', runId], queryFn: () => get(`/eval/runs/${encodeURIComponent(runId ?? '')}`),
-    enabled: !!runId, retry: false,
-    refetchInterval: (query) => (query.state.data?.status !== 'running' && query.state.data) || Date.now() - since.current > WATCH_MS ? false : 5000,
+    enabled: !!runId && !expired, retry: false,
+    refetchInterval: (query) => (query.state.status === 'error' || (query.state.data && query.state.data.status !== 'running') ? false : 5000),
   });
   const done = !!q.data && q.data.status !== 'running';
   useEffect(() => { if (runId && done) refresh(); }, [runId, done]);  // eslint-disable-line react-hooks/exhaustive-deps
-  return !!runId && !done && Date.now() - since.current <= WATCH_MS;
+  const running = !!runId && !done && !q.isError && !expired;
+  const failed = done && q.data?.status === 'failed' ? (q.data.error || 'failed') : null;
+  return { running, failed };
 }
 
 /** Run a set of cases now (offline cases spawn a real agent, so they opt in). */

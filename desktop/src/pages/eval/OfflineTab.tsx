@@ -25,7 +25,7 @@ export function OfflineTab() {
   const gs = useGoldenSet();
   const runQuick = useRunQuick();
   const runFull = useRunFull();
-  const fullRunning = useRunProgress(runFull.data?.run_id);
+  const { running: fullRunning, failed: fullFailed } = useRunProgress(runFull.data?.run_id);
   if (health.isError || gs.isError) return <ErrorState />;
   if (health.isLoading || gs.isLoading) return <Loading />;
   const cases = (gs.data?.cases ?? []).filter((c) => c.tier !== 'archived');
@@ -64,6 +64,7 @@ export function OfflineTab() {
           {' · '}{t('a real agent answers in the sample workspace that ships with SwarmAI; calls the model', '真实 agent 在随包发布的样例工作区里答题，会调用模型')}
         </div>
         {runFull.isError && <div className="text-small text-[var(--color-status-error)] mt-1">{errorDetail(runFull.error)}</div>}
+        {fullFailed && <div className="text-small text-[var(--color-status-error)] mt-1" data-testid="run-full-failed">{t('The run did not finish: ', '这次运行没跑完：')}{fullFailed}</div>}
         <OfflineResults runId={fullRun?.run_id ?? null} cases={offCases} />
       </Zone>
 
@@ -199,7 +200,7 @@ function FailingCase({ c, r }: { c: GoldenCase; r?: RunCaseResult }) {
 function ReleaseRecord({ runs }: { runs: EvalRun[] }) {
   const { t } = useLang();
   const [showOld, setShowOld] = useState(false);
-  const decided = runs.filter((r) => r.release);
+  const decided = runs.filter((r) => r.release || r.status === 'failed');  // a crash is shown, not hidden as old
   const old = runs.length - decided.length;
   const openReport = (f: string) => void openExternal(`${getApiBaseUrl()}/api/eval/reports/${encodeURIComponent(f)}`);
   const shown = showOld ? runs : decided;
@@ -228,8 +229,10 @@ function ReleaseRecord({ runs }: { runs: EvalRun[] }) {
           {shown.map((r) => (
             <tr key={r.run_id} className="border-b border-[var(--color-border)] align-top">
               <td className="py-2 whitespace-nowrap text-[var(--color-text)]">{when(r.triggered_at)} · {r.triggered_by}</td>
-              {r.release ? <>{cell(r, 'redline')}{cell(r, 'dimensions')}{cell(r, 'denominator')}</> : <td colSpan={3} className="py-2 text-[var(--color-text-dim)]">{t('old golden set, not comparable', '旧 golden set，不能比')}</td>}
-              <td className="py-2 text-[var(--color-text-muted)] break-words">{r.release_reason ?? '—'}</td>
+              {r.release ? <>{cell(r, 'redline')}{cell(r, 'dimensions')}{cell(r, 'denominator')}</>
+                : r.status === 'failed' ? <td colSpan={3} className="py-2 text-[var(--color-status-error)]">{t('did not finish', '没跑完')}</td>
+                  : <td colSpan={3} className="py-2 text-[var(--color-text-dim)]">{t('old golden set, not comparable', '旧 golden set，不能比')}</td>}
+              <td className="py-2 text-[var(--color-text-muted)] break-words">{r.release_reason ?? r.error ?? '—'}</td>
               <td className="py-2 text-right">{r.report && <a className="cursor-pointer text-[var(--color-primary)] hover:underline" onClick={() => openReport(r.report!)}>{t('Report', '报告')}</a>}</td>
             </tr>
           ))}

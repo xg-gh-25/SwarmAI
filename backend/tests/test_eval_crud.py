@@ -805,6 +805,10 @@ class TestInflightMarker:
         because every one uses non-recursive glob('*.json'). This is the whole
         payoff of Method B (no per-reader status filter needed)."""
         history_dir = eval_workspace / "Eval" / "EvalHistory"
+        # one quick check, so health has a run to show and the assertion below can fail
+        (history_dir / "zz_canary.json").write_text(json.dumps({
+            "run_id": "zz_canary", "triggered_by": "canary", "triggered_at": "2026-07-01T00:00:00+00:00",
+            "cases": [], "release": {"verdict": "release", "reason": "ok", "checks": []}}))
         svc.reload()
         baseline_count = len(svc._runs)
 
@@ -816,8 +820,7 @@ class TestInflightMarker:
         assert all(r.get("status") != "running" for r in svc._runs)
         # get_health latest must remain the pre-existing completed run
         health = svc.get_health()
-        # (the fixture's runs are small hand-run probes, which health skips: None is fine)
-        assert (health["last_run"] or {}).get("run_id") != "eval_20260707_120000_abc123_manual", health
+        assert health["last_run"]["run_id"] == "zz_canary", health
 
         # ci_eval_gate._reports_by_mtime — non-recursive glob, marker invisible
         import importlib

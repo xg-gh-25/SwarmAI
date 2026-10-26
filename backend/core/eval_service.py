@@ -256,6 +256,8 @@ class EvalService:
                 "run_id": latest.get("run_id"),
                 "triggered_by": latest.get("triggered_by"),
                 "triggered_at": latest.get("triggered_at"),
+                "status": latest.get("status"),  # "failed" = the run crashed
+                "error": str(latest.get("error") or "")[:300] or None,
                 "cases_passed": latest.get("cases_passed", 0),
                 "cases_failed": latest.get("cases_failed", 0),
                 "cases_skipped": latest.get("cases_skipped", 0),
@@ -298,6 +300,8 @@ class EvalService:
                 "triggered_by": r.get("triggered_by"),
                 "triggered_at": r.get("triggered_at"),
                 "line": run_line(r),
+                "status": r.get("status"),  # "failed" = the run crashed before a result
+                "error": str(r.get("error") or "")[:300] or None,
                 "release": (r.get("release") or {}).get("verdict"),
                 "release_reason": (r.get("release") or {}).get("reason"),
                 "release_checks": [
@@ -1340,6 +1344,8 @@ class EvalService:
                 "triggered_at": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",
                 "error": str(e),
+                # a crashed re-run of a few cases is a probe, a crashed full run is not
+                "filtered": bool(case_ids),
                 "release": None,
                 "cases": [],
                 "total_cases": 0,

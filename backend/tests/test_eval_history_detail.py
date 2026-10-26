@@ -142,3 +142,29 @@ def test_only_probe_runs_means_no_verdict_yet(tmp_path, monkeypatch):
          {"verdict": "release", "reason": "1/1", "checks": []})
     health = EvalService(workspace_root=tmp_path).get_health()
     assert health["release"] is None and health["last_run"] is None
+
+
+def test_a_full_run_where_many_cases_errored_still_decides(tmp_path, monkeypatch):
+    """Scope makes a probe, never results: a 40-case run where 10 errored is not
+    comparable on a trend, but its blocked verdict is the one health shows. A crashed
+    full run is shown too; a crashed re-run of a few cases is a probe."""
+    install_golden_fixture(monkeypatch, tmp_path, {"version": 2, "cases": []})
+    hist = tmp_path / "Eval" / "EvalHistory"
+    hist.mkdir(parents=True)
+    _run(tmp_path, "2026-10-25_canary", "2026-10-25T01:00:00+00:00", "canary",
+         {"verdict": "release", "reason": "ok", "checks": []})
+    _run(tmp_path, "2026-10-26_full", "2026-10-26T03:00:00+00:00", "manual",
+         {"verdict": "incomplete", "reason": "10 errored", "checks": []})
+    rec = json.loads((hist / "2026-10-26_full.json").read_text())
+    rec.update(total_cases=40, scored_count=30, cases_error=10)
+    (hist / "2026-10-26_full.json").write_text(json.dumps(rec))
+    svc = EvalService(workspace_root=tmp_path)
+    assert svc.get_health()["release"]["verdict"] == "incomplete"
+    assert svc.get_lines()["full"]["release"] == "incomplete"
+
+    from core.eval_followups import run_line
+    assert run_line({"triggered_by": "manual", "status": "failed", "total_cases": 0, "filtered": False}) == "full"
+    assert run_line({"triggered_by": "manual", "status": "failed", "total_cases": 0, "filtered": True}) == "probe"
+    assert run_line({"triggered_by": "canary", "filtered": True, "total_cases": 36}) == "quick"
+    assert run_line({"triggered_by": "manual", "filtered": True, "total_cases": 46}) == "probe"
+    assert run_line({"triggered_by": "manual", "total_cases": 3}) == "probe"   # a record from before the flag

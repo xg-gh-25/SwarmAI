@@ -49,7 +49,9 @@ describe('Golden Cases', () => {
   });
 
   it('a product case can be copied, not edited or deleted', async () => {
-    routes['GET /eval/golden-set/RED_1'] = { ...gc('RED_1', { release_tier: 'red' }), history: [] };
+    routes['GET /eval/golden-set/RED_1'] = { ...gc('RED_1', { release_tier: 'red',
+      verification: { command: 'probe x', expected_contains: 'X_OK', negative_command: 'probe x negative',
+                      negative_expected_contains: 'X_TEETH', timeout: 30, grep: '', corpus: 'docs' } }), history: [] };
     show(<GoldenCasesTab />);
     fireEvent.click(await screen.findByTestId('case-row-RED_1'));
     await screen.findByTestId('case-detail');
@@ -58,6 +60,12 @@ describe('Golden Cases', () => {
     expect(screen.queryByTestId('case-delete')).toBeNull();
     fireEvent.click(screen.getByTestId('case-copy'));
     expect((screen.getByTestId('form-id') as HTMLInputElement).value).toBe('RED_1_MINE');
+    // a copy takes only the verification keys a quick check reads
+    routes['POST /eval/golden-set/try'] = { ok: true, trial: null, checks: [] };
+    fireEvent.click(screen.getByTestId('form-try'));
+    await waitFor(() => expect(calls.some((c) => c.url === '/eval/golden-set/try')).toBe(true));
+    const v = (calls.find((c) => c.url === '/eval/golden-set/try')!.body as { verification: Record<string, unknown> }).verification;
+    expect(Object.keys(v).sort()).toEqual(['command', 'expected_contains', 'negative_command', 'negative_expected_contains', 'timeout']);
   });
 
   it('deleting my case takes a second click and calls DELETE on it', async () => {

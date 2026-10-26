@@ -47,7 +47,8 @@ export function OverviewTab() {
       </div>
       <div className="text-display leading-tight font-semibold mt-1.5 text-[var(--color-text)]" data-testid="overview-verdict">
         {v ? <span style={{ color: v.color }}>{v[lang]}</span>
-          : <span className="text-[var(--color-text-muted)]">{h.last_run ? t('A record from before release decisions. ', '旧记录，没有放行结论。') : t('No run yet. ', '还没有运行。')}</span>}
+          : h.last_run?.status === 'failed' ? <span style={{ color: 'var(--color-status-error)' }}>{t('The last run did not finish. ', '上次运行没跑完。')}</span>
+            : <span className="text-[var(--color-text-muted)]">{h.last_run ? t('A record from before release decisions. ', '旧记录，没有放行结论。') : t('No run yet. ', '还没有运行。')}</span>}
         {counts}
       </div>
       {h.release && <div className="text-body text-[var(--color-text-muted)] mt-2" title={h.release.reason}>{releaseLede(h.release.checks, lang)}</div>}
