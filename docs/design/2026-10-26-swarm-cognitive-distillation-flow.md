@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-27
 project: SwarmAI
-status: r16.1 — 设计（source 与提取重写，吸收两份独立评审，Gawan 已确认），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
+status: r16.2 — 设计（source 与提取重写，吸收两份独立评审，Gawan 已确认），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -623,7 +623,7 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 
 | 类别 | 文件夹 | 谁写 | 是否经过 CDF |
 |---|---|---|---|
-| 认知参考与公共 DDD（受管） | `Learned`（另含没有专属 DDD 的认知文件 `Learned/<repo 或领域>.md`，§5.10）、`Reports`、`Designs`、`Library`、`Notes`、`Inbox` | 只有 CDF 的 writer；用户自己通过 `governed_edit` 编辑 | 是 |
+| 认知参考与公共 DDD（受管） | `Learned`（另含没有专属 DDD 的认知文件 `Learned/<repo 或领域>.md`，§5.10）、`Reports`、`Designs`、`Library`（含外部链接目录 `Library/Links/`）、`Notes`、`Inbox` | 只有 CDF 的 writer；用户自己通过 `governed_edit` 编辑 | 是 |
 | 日志和产物（不受管） | `DailyActivity`、`DailyBriefs`、`Signals`、`JobResults`、`Handoffs`、`Meetings`、`Pollinate`、`Mockups`、`assets`、`Archives` | 各自的系统任务、skill 或用户 | 否。它们是日志或产物，不是认知；需要从中提炼认知时，由对应的 source 去提取 |
 
 `Knowledge/` 原来就由 skill 写入的认知参考（`s_learn-content` 写 Learned，`s_library` 写 Library），改成调用 `ingest submit`：用户主动要求时走 S1；内容来自网页或外部文档时，信任是 `external`，按 S6 处理，只能写成 Reference。`is_governed()` 的受管列表和这张表保持一致（§3.2）。
@@ -640,7 +640,7 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 |---|---|
 | `title` | 标题 |
 | `summary` | 一句话摘要，生成器直接写成完整的一句，不截断 |
-| `reference_kind` | `learned` / `analysis` / `design` / `spec` / `note` |
+| `reference_kind` | `learned` / `analysis` / `design` / `spec` / `note` / `link` |
 | `ontology_types` | 文中涉及的七类，可以为空 |
 | `source` | S1–S6，加上 session id 或 run id |
 | `ingestion_candidate` | 写入它的单元 id |
@@ -649,6 +649,27 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 | `created` | 写入时间 |
 
 - recall 的结果展示 `title`、`summary`、`reference_kind`，以及被污染的标记。
+
+**外部链接（r16.2）**：外部网站和互联网上的参考资料链接本身就是一种需要长期保存的知识，即使没有抓取正文，也要能留下来、查得到。
+
+- **单元**：`ReferenceUnit(reference_kind="link")`。必填字段：
+  - `source_url`：只接受 `https`，必须带主机名，不能带用户名或密码；
+  - `title`；
+  - `summary`：一句完整的话，说明这个链接讲什么；
+  - `body`：为什么值得留、覆盖了什么、什么时候该看。
+
+  可选字段：`retrieved_at` 和 `content_hash`，抓取过正文时才填。抓取过正文的其他 Reference（learned / spec 等）也必须带 `source_url`，用来记录内容从哪里来。
+- **来源**：
+  - S1：用户说"记住这个链接"，或者把链接发给 `s_library` / `s_learn-content`；
+  - S2：会话里用户或 agent 真正用到、并且下结论时引用过的链接；
+  - S6：外部信号。
+
+  只在会话里一闪而过的链接不收。
+- **去向**：`Knowledge/Library/Links/`，按域名或主题分文件。每个链接是一个单元，格式和 DDD 条目一样：`- [link] **title** <url>`，再加一行 meta，带 `cand:`、`summary`、`retrieved_at`、`taint: external`。每个单元都可以被 `parse_units()` 解析、被 recall 检索到。
+- **去重**：URL 规范化之后作为证据根（`root_kind=web_document`）。规范化包括：scheme 和主机名转小写、去掉 fragment、去掉 `utm_*` 这类追踪参数、去掉末尾的 `/`。同一个 URL 只保存一条，之后再出现只登记 `claim_support`。同一个链接的新说明（比如它现在覆盖了更多内容）按 refine 处理：写一条新单元，再加一条 `supersedes`，原文不改。
+- **信任**：链接和它的说明都算 `external`，只能当参考资料用，永远不会变成规则，召回时放在不可信数据边界里渲染。
+- **写入时不访问链接**：CDF 写入链接时**不发起任何网络请求**，所以不存在 SSRF 风险。需要正文的时候，由 agent 按 `security-coding-baseline` A2 的规则去抓取：只接受 https，解析出的 IP 不能是内网、回环或链路本地地址，每次重定向都重新校验，所有出站请求都记日志。
+- **失效检查**：`maintenance` lane 每周对链接做一次 HEAD 请求（同样遵守 A2，有超时和并发上限），把结果记在 DB 的链接状态表里（`url_root_id`、`last_checked`、`status`），**不改文件**。链接失效后，在 Flow 视图里标为"失效"，召回结果里也会注明。失效的链接不删除。
 
 **审计层**：哪个单元写进了哪个文件，记录在 `ingestion.db`，Flow 视图可查，保留 30 天。之后只能靠文件 frontmatter 里的 `ingestion_candidate` 和 `source` 长期追溯。
 
@@ -1286,6 +1307,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
   - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（`99bcc4ea3` 之前的版本）。
 
+- **r16.2**：外部和互联网参考链接的保存机制（§5.12 外部链接）：`reference_kind=link`，写入时不发网络请求，按规范化 URL 去重，每周检查是否失效，失效只标记、不删除。
 - **r16.1**（吸收两份独立评审 `r16_review_A/B`）：单元契约 v2（Cognition / Event / Gap / Reference 判别联合，七类机器枚举，层由类型唯一决定）；提取尝试表和两层 holdout（测提取召回）；证据归属与按证据根去重；强化改为 `evidence_roots` + `claim_support`，防回声，支持反证，分数有上限；§9 改为服务端推导证据血统，删除 `observed`，绑定仓库也算 `external`，按目的地设信任下限；Knowledge 作为公共 DDD，无专属 DDD 的认知不降级；TIMELINE 和 DailyActivity 的摘要改为追加写，由新的 `summary` lane 生成；Next 带稳定 id；DailyActivity 预算按实测回放确定；run 收尾协议（专用执行器，新 run 不等待，不更新就 fail-open 并打标记）；第一准则的代码违规清单；§12 如实描述 DDD 指针注入；Pipeline run 不兼容、CDF 没有存量；关闭状态构建 v2、离线验证、原子切换。
 - **r16**（阶段 B E2E 之后的重设计）：§5.9 目的地反推和时效分档；§5.10 参考资料两层索引，Knowledge 文件夹分为受管和不受管，`reference_kind` 扩为五种并与实际文件夹对齐；§5 重写（三层记忆、6 个 source、认知单元、各 source 提取规范、S3 五段报告、TIMELINE、DailyActivity 一周注入、强化）；§9 新增 `observed`，删除整会话污染兜底；§7.3 关系扩为三种；§4.2 新增终态 `reinforced`；§14 阶段 B 增加 source 重写、holdout 重做、逐 source 真实链路 E2E 和 daemon 冒烟。
 - **r15.3**（Gawan：先 E2E 后调优）：新增 §14.1 调优待办 T1–T7；go/no-go 改为 rebuild 上线前的门槛，不再作为阶段 B 开工的前提。
