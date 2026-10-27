@@ -9,7 +9,7 @@ substring of each entry). For every case this compares:
   ``recall_ddd_entries`` did;
 - ``after``: ``recall_ddd(query, project, purpose)`` at each ``--weights`` value.
 
-An expected entry counts only when it is in the text the reader is SHOWN (``clipped``
+An expected entry counts only when it is in the text the reader is SHOWN (``shown``
 after; before, each entry cut to one hit's cap as knowledge.md did): a match deep in a
 whole section that is cut away before anyone reads it is not a hit (§3.6.9).
 Prints hits per purpose, the PRODUCT / PROJECT hits of the requirement cases, and
@@ -36,8 +36,9 @@ BEFORE_TOP = {"review": 5}
 
 def _found(expect: list[str], hits: list[dict]) -> list[str]:
     from core.recall_filter import HIT_CHAR_CAP, clip
-    texts = [str(h["clipped"]) if "clipped" in h else clip(str(h.get("content") or ""), HIT_CHAR_CAP)
-             for h in hits]
+    # a row that only NAMES entries (omitted / pointer) shows none of their text
+    texts = [str(h["shown"]) if "shown" in h else clip(str(h.get("content") or ""), HIT_CHAR_CAP)
+             for h in hits if h.get("kind") not in ("omitted", "pointer")]
     return [e for e in expect if any(e in t for t in texts)]
 
 

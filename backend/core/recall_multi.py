@@ -29,8 +29,9 @@ Public symbols:
 - ``BucketedRecall``  — per-domain hits + per-domain hit_layer
 - ``recall_all``      — the unified multi-domain fan-out
 - ``recall_ddd`` / ``DDD_PURPOSES`` — DDD recall by PURPOSE (run-knowledge §3.6.2):
-  each doc ranked on its own with its own quota and char budget, ``- [x]`` done items
-  skipped, typed entries soft-weighted, template sections pinned
+  each doc ranked on its own with its own quota and char budget, every unit taken
+  whole or named as omitted (never cut), ``- [x]`` done items skipped, typed entries
+  soft-weighted, template sections pinned; REFLECT ranks all docs together
 - ``DOMAINS``         — the canonical domain key tuple
 """
 from __future__ import annotations
@@ -890,51 +891,69 @@ def _load_ddd_docs_text(project: Optional[str]):
     return base, docs_text
 
 
-# ── DDD recall by purpose (run-knowledge §3.6.2) ─────────────────────────────
+# ── DDD recall by purpose (run-knowledge §3.6.2, §3.6.12) ────────────────────
 # What each reader of a project's DDD needs, as DATA: per doc, how to recall it
 # ("entry" = ``- `` entries, "block" = entries plus the paragraphs / tables between
-# them, for prose docs; §3.6.9), how many, and how
-# many characters that doc may use. Docs are ranked ONE AT A TIME -- never in one
-# shared corpus, where TECH + IMPROVEMENT (~89% of SwarmAI's entries) out-numbered
-# PRODUCT / PROJECT whatever the query (run_85e81059). A doc's unused quota is not
-# handed to another doc. ``weight`` multiplies the score of entries tagged with one of
-# ``weighted``; ``pinned`` sections (DDD template names) come whatever the query, and
-# ``pointers`` are named with their source only. Missing docs/sections are skipped.
+# them, for prose docs; §3.6.9), how many, and how many characters that doc may use.
+# Docs are ranked ONE AT A TIME -- never in one shared corpus, where TECH + IMPROVEMENT
+# (~89% of SwarmAI's entries) out-numbered PRODUCT / PROJECT whatever the query
+# (run_85e81059). A doc's unused quota is not handed to another doc. ``weight``
+# multiplies the score of entries tagged with one of ``weighted``; ``pinned`` sections
+# (DDD template names) come whatever the query, and ``pointers`` are named with their
+# source only. Missing docs/sections are skipped.
+#
+# Units are taken WHOLE or not at all (CDF first principle, design
+# 2026-10-26-swarm-cognitive-distillation-flow §5): by rank, while the next unit fits
+# the doc's budget; the first one that does not fit ends the doc, and it and every
+# ranked unit after it are listed in one "omitted" row (location, title, length), so
+# nothing is cut in half and a lower-ranked unit never displaces a higher one. The
+# budgets are sized so a typical entry (p99 ~2.1K characters) fits whole.
+#
+# ``pooled`` purposes rank the listed docs' entries in ONE shared corpus instead: REFLECT
+# asks "is this lesson already somewhere in the DDD?", which needs the best matches
+# overall, not the best one of each doc (a per-doc top-1 missed a real duplicate that
+# ranked third in TECH.md).
 TYPE_WEIGHT = 1.5          # §3.6.6: best of 1.0 / 1.2 / 1.5 on the case set (design 8/11 vs 7/11)
 DDD_PURPOSES: dict[str, dict] = {
     "requirement": {
-        "docs": {"PRODUCT.md": ("block", 3, 1800), "PROJECT.md": ("entry", 4, 1200)},
+        "docs": {"PRODUCT.md": ("block", 3, 4000), "PROJECT.md": ("entry", 4, 3000)},
         "weighted": ("decision", "principle"),
         "pinned": {"PRODUCT.md": ("Vision", "Success Criteria", "Target Users")},
         "pointers": {"PRODUCT.md": ("Non-Goals",)},
     },
     "design": {
-        "docs": {"TECH.md": ("entry", 4, 1800), "IMPROVEMENT.md": ("entry", 3, 1200)},
+        "docs": {"TECH.md": ("entry", 4, 4500), "IMPROVEMENT.md": ("entry", 3, 3000)},
         "weighted": ("guideline", "pitfall", "risk", "decision"),
     },
     "review": {
-        "docs": {"TECH.md": ("entry", 4, 1500), "IMPROVEMENT.md": ("entry", 2, 1000)},
+        "docs": {"TECH.md": ("entry", 4, 3500), "IMPROVEMENT.md": ("entry", 2, 2500)},
         "weighted": ("pitfall", "decision", "guideline"),
     },
-    # REFLECT's dedup candidates: one entry per doc a lesson could have come from
+    # REFLECT's dedup candidates: the closest entries across every doc a lesson could
+    # have come from, ranked together (only each entry's location and first line are
+    # used, so there is no character budget)
     "reflect": {
-        "docs": {"PRODUCT.md": ("entry", 1, 900), "TECH.md": ("entry", 1, 900),
-                 "IMPROVEMENT.md": ("entry", 1, 900), "PROJECT.md": ("entry", 1, 900)},
+        "pooled": 6,
+        "docs": {"PRODUCT.md": None, "TECH.md": None, "IMPROVEMENT.md": None,
+                 "PROJECT.md": None},
         "weighted": (),
     },
     "chat": {
         # NOT wired into chat: replayed and not merged (run-knowledge §3.6.10)
-        "docs": {"PRODUCT.md": ("block", 2, 600), "TECH.md": ("block", 2, 600),
-                 "IMPROVEMENT.md": ("block", 2, 600), "PROJECT.md": ("block", 2, 600)},
+        "docs": {"PRODUCT.md": ("block", 2, 1500), "TECH.md": ("block", 2, 1500),
+                 "IMPROVEMENT.md": ("block", 2, 1500), "PROJECT.md": ("block", 2, 1500)},
         "weighted": (),
     },
 }
-PINNED_CAP = 450           # one pinned section, inside its doc's budget
+PINNED_MAX = 1500          # a pinned section longer than this is named, not shown;
+                           # pinned sections do not spend the doc's ranked budget
 _DONE_RE = re.compile(r"^-\s*\[[xX]\]")
 _TYPE_RE = re.compile(r"^-\s*\[(\w+)\]")
 # the bi-temporal supersession marker (same rule as _ddd_entry_hits)
 _SUPERSEDED_RE = re.compile(r"<!--[^>]*\|\s*superseded_by:(?!null\b)[^|]+?-->")
 _META_RE = re.compile(r"[ \t]*<!--.*?-->[ \t]*\n?", re.S)
+# a one-line block that only introduces what follows it ("Three beliefs:") is not a unit
+_LEAD_IN_RE = re.compile(r"[:：]\s*$")
 
 
 def _readable(text: str) -> str:
@@ -968,11 +987,19 @@ def _bare(text: str) -> bool:
                for line in _readable(text).splitlines())
 
 
+def _lead_in(text: str) -> bool:
+    """A one-line block under 200 characters ending in a colon ("Three beliefs:"): it
+    only introduces what follows, says nothing alone, and is not a recall unit. The
+    units it introduces stand on their own."""
+    t = _readable(text)
+    return "\n" not in t and len(t) < 200 and bool(_LEAD_IN_RE.search(t))
+
+
 def _doc_blocks(query: str, doc: str, sections: dict, quota: int, skip: set,
                 weighted: tuple, weight: float) -> list[dict]:
     """The doc's best *quota* units -- entries and the prose blocks between them
-    (``split_blocks``) -- ranked in one corpus per doc. Done items, superseded entries
-    and blocks that are only headings / comments are not candidates."""
+    (``split_blocks``) -- ranked in one corpus per doc. Done items, superseded entries,
+    blocks that are only headings / comments and one-line lead-ins are not candidates."""
     from core import memory_index
     from core.ddd_entry_lifecycle import split_blocks
     units: dict[str, tuple[str, str, str]] = {}      # key -> (section, kind, text)
@@ -982,7 +1009,7 @@ def _doc_blocks(query: str, doc: str, sections: dict, quota: int, skip: set,
         for kind, text in split_blocks(body):
             if kind == "entry" and (_DONE_RE.match(text) or _SUPERSEDED_RE.search(text)):
                 continue
-            if _bare(text):
+            if _bare(text) or (kind == "block" and _lead_in(text)):
                 continue
             units[str(len(units))] = (section, kind, text)
     if not units:
@@ -1013,22 +1040,117 @@ def _section_named(sections: dict, name: str) -> Optional[str]:
     return None
 
 
+def _take_whole(doc: str, group: list[dict], cap: int) -> list[dict]:
+    """*group* (pinned, pointers, then ranked units) with ``shown`` set: each unit whole.
+
+    Pinned sections first, whole, or named when longer than ``PINNED_MAX`` (they are
+    bounded by ``PINNED_MAX`` each and do not spend *cap*, so the query's own units always
+    have the whole budget); then the ranked units by rank while the next one fits *cap*. The first that does not fit
+    ends the doc: it and the ranked units after it become one ``omitted`` row listing
+    each one's location, its own bold title when it has one (whole) and its length, so
+    the reader knows where to read on."""
+    out: list[dict] = []
+    used = 0
+    ranked: list[dict] = []
+    for h in group:
+        if h["kind"] == "pinned":
+            text = _readable(h["content"])
+            if len(text) > PINNED_MAX:
+                text = (f"## {h['section']} (not shown: {len(text)} characters; "
+                        f"read {doc}#{h['section']})")
+                h["kind"] = "pointer"
+            h["shown"] = text
+        elif h["kind"] == "pointer":
+            h["shown"] = h["content"]
+        else:
+            ranked.append(h)
+            continue
+        out.append(h)
+    omitted: list[dict] = []
+    for h in ranked:
+        text = _readable(h["content"])
+        if omitted or used + len(text) > cap:
+            omitted.append(h)
+            continue
+        h["shown"] = text
+        used += len(text)
+        out.append(h)
+    if omitted:
+        n = len(omitted)
+        lines = [f"{doc}: {n} more matching {'entry' if n == 1 else 'entries'} not shown "
+                 f"here, so that each one shown stays whole. Read "
+                 f"{'it' if n == 1 else 'them'} in {doc}:"]
+        for h in omitted:
+            title = _title(h["content"])
+            where = f"{doc}#{h['section']}" if h["section"] else doc
+            lines.append(f"- {where}" + (f": {title}" if title else "")
+                         + f" ({len(_readable(h['content']))} characters)")
+        note = "\n".join(lines)
+        out.append({"doc": doc, "section": "", "kind": "omitted", "score": 0.0,
+                    "content": note, "shown": note})
+    return out
+
+
+_TITLE_RE = re.compile(r"^-\s*(?:\[\w+\]\s*)?\*\*(.+?)\*\*")
+TITLE_MAX = 200
+
+
+def _title(text: str) -> str:
+    """The entry's own bold title (``- [type] **title** ...``), whole, or "" when it has
+    none or it is longer than ``TITLE_MAX``: a locator for an omitted entry, never a
+    cut-down copy of its text."""
+    m = _TITLE_RE.match(text.lstrip())
+    title = m.group(1).strip() if m else ""
+    return title if len(title) <= TITLE_MAX else ""
+
+
+def _pooled(query: str, docs_text: dict, cfg: dict, project: Optional[str]) -> list[dict]:
+    """The listed docs' entries ranked in ONE corpus, the best ``cfg['pooled']``,
+    done items left out. A doc that fails to parse is left out alone."""
+    if not (query or "").strip():
+        return []
+    texts: dict[str, str] = {}
+    sections_by_doc: dict[str, dict] = {}
+    for doc in cfg["docs"]:
+        text = docs_text.get(doc)
+        if not text:
+            continue
+        try:
+            sections_by_doc[doc] = _parse_docs_sections({doc: text}).get(doc) or {}
+            texts[doc] = text
+        except Exception:  # noqa: BLE001 -- one doc that fails to parse is skipped alone
+            logger.warning("recall_ddd: %s of project %s skipped", doc, project, exc_info=True)
+    if not texts:
+        return []
+    top = int(cfg["pooled"])
+    hits = _ddd_entry_hits(query, texts, top * 4 + 8, sections_by_doc=sections_by_doc)
+    out = []
+    for h in hits:
+        if _DONE_RE.match(h["content"].lstrip()):
+            continue
+        out.append({**h, "kind": "entry", "shown": _readable(h["content"])})
+    return out[:top]
+
+
 def recall_ddd(query: str, project: Optional[str], purpose: str,
                weight: Optional[float] = None) -> list[dict]:
     """A project's DDD recalled for *purpose* (a key of ``DDD_PURPOSES``).
 
-    Returns hits in config order (pinned first, then each doc's ranked hits), each
-    ``{"doc", "section", "kind", "score", "content", "clipped"}``: ``content`` is the
-    whole entry/section (ids are taken from it), ``clipped`` is it cut by the §3.0
-    rules to the doc's budget, by rank, never skipping. ``kind`` is entry / block /
-    block / pinned / pointer. A doc that is missing or unreadable is simply absent; one that
+    Returns hits in config order (per doc: pinned, pointers, ranked units, then at most
+    one ``omitted`` row), each ``{"doc", "section", "kind", "score", "content",
+    "shown"}``. ``content`` is the unit's original text (ids are taken from it);
+    ``shown`` is what a reader gets: the same unit, whole, without its metadata
+    comments -- never a part of it (``_take_whole``). ``kind`` is entry / block /
+    pinned / pointer / omitted. A ``pooled`` purpose returns entries only, ranked
+    across its docs. A doc that is missing or unreadable is simply absent; one that
     fails to parse is skipped alone (§3.6.5 H1-H3). READ-only, keyword-only.
     Raises ``KeyError`` only for an unknown *purpose* (a caller bug)."""
-    from core import recall_filter
     cfg = DDD_PURPOSES[purpose]
     _base, docs_text = _load_ddd_docs_text(project)
     if not docs_text:
         return []
+    if cfg.get("pooled"):
+        return _pooled(query, docs_text, cfg, project)
     w = TYPE_WEIGHT if weight is None else float(weight)
     has_query = bool((query or "").strip())
     out: list[dict] = []
@@ -1055,24 +1177,10 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
                 else:
                     group += _doc_entries(query, doc, text, sections, quota,
                                           tuple(cfg.get("weighted", ())), w)
-        except Exception:  # noqa: BLE001 -- one doc that fails to parse is skipped alone
+            out += _take_whole(doc, group, cap)
+        except Exception:  # noqa: BLE001 -- one doc that fails is skipped alone
             logger.warning("recall_ddd: %s of project %s skipped", doc, project, exc_info=True)
             continue
-        # pinned sections first, each to PINNED_CAP; the rest by rank inside the doc's
-        # budget (§3.0 R3: clipped, never skipped for a later one)
-        for h in group:
-            if h["kind"] == "pinned":
-                h["clipped"] = recall_filter.clip(_readable(h["content"]), PINNED_CAP,
-                                                  f"{doc}#{h['section']}")
-        used = sum(len(h["clipped"]) for h in group if h["kind"] == "pinned")
-        rest = [h for h in group if h["kind"] != "pinned"]
-        room = cap - used
-        cut = (recall_filter._budget_one("ddd", [{**h, "content": _readable(h["content"])}
-                                                 for h in rest], {"ddd": room})
-               if rest and room >= recall_filter.MIN_CLIP_ROOM else [])
-        for h, c in zip(rest, cut):
-            h["clipped"] = c["content"]
-        out += [h for h in group if "clipped" in h]
     return out
 
 

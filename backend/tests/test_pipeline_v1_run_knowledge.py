@@ -4,7 +4,7 @@ What is tested:
 - ``run_knowledge.build``: a project with a DDD gets DDD + Library + lessons; without
   a DDD the DDD leg is never called; a failing leg gives ``unavailable`` with the error
   in the file (never shown as "no knowledge"); no request gives ``none`` with the
-  reason; long entries are clipped with their source; recalled text cannot close the
+  reason; DDD entries are shown whole (or named when too long); recalled text cannot close the
   data fence; entry ids are stable.
 - Through the real ``pipeline-v1 create`` CLI (red on main): a bound project writes
   artifacts/knowledge.md with its DDD entry and records status and ids in the
@@ -86,15 +86,41 @@ def test_recalled_text_cannot_close_the_fence(tmp_path):
     assert k.markdown.count("</recalled>") == 1
 
 
-def test_real_ddd_leg_clips_long_entries_with_their_source(tmp_path, monkeypatch):
+def test_real_ddd_leg_shows_long_entries_whole(tmp_path, monkeypatch):
+    """CDF first principle: a long entry is shown whole; one larger than its doc's whole
+    budget is named in an omitted row with its doc, never cut."""
     doc = tmp_path / "Projects" / "P" / "2-understanding" / "TECH.md"
     doc.parent.mkdir(parents=True)
     long = "- **Quokka feeder**: " + "Never feed the quokka after midnight. " * 60
     doc.write_text("# TECH\n\n## Traps\n\n" + long + "\n", encoding="utf-8")
     monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path))
     rows = rk._ddd_leg("quokka feeder midnight", "P", "design")
-    assert rows and "全文" in rows[0]["text"] and "TECH.md#Traps" in rows[0]["text"]
+    assert rows and rows[0]["text"] == long.strip() and rows[0]["source"] == "TECH.md#Traps"
     assert rows[0]["id"] == rk.item_id(long.strip())
+    huge = "- **Quokka feeder**: " + "Never feed the quokka after midnight. " * 200
+    doc.write_text("# TECH\n\n## Traps\n\n" + huge + "\n", encoding="utf-8")
+    rows = rk._ddd_leg("quokka feeder midnight", "P", "design")
+    assert len(rows) == 1 and rows[0]["source"] == "TECH.md" and rows[0]["id"] is None
+    assert "1 more matching entry" in rows[0]["text"] and "midnight" not in rows[0]["text"]
+
+
+def test_the_not_shown_note_has_no_id_and_is_not_counted(tmp_path, monkeypatch):
+    """The omitted note lists entries; it is not one: no id in the contract, the handout
+    or the entry count, so nothing can cite it."""
+    note = {"kind": "ddd", "source": "TECH.md", "id": None,
+            "text": "TECH.md: 1 more matching entry not shown here ..."}
+    entry = {"kind": "ddd", "source": "TECH.md#Traps", "id": "abcd1234", "text": "- rule",
+             "head": "rule"}
+    k = rk.build("quokka rule", project="P", has_ddd=True, workspace=tmp_path, repo_roots={},
+                 purpose="design", ddd=lambda *a: [entry, note, dict(note)],
+                 lessons=lambda w, r: [])
+    assert [i["id"] for i in k.items] == ["abcd1234"]
+    assert rk.contract_record(k)["items"] == ["abcd1234"]
+    assert "1 entries" in k.markdown and k.markdown.count("- not shown · TECH.md") == 2
+    text, ids, status = rk.expert_block(project="P", has_ddd=True, paths=["core/quokka.py"],
+                                        requirement="quokka rule",
+                                        ddd=lambda *a: [entry, note])
+    assert ids == ["abcd1234"] and "- not shown · TECH.md" in text and status == "recalled"
 
 
 def test_library_leg_never_creates_an_index(tmp_path, monkeypatch):
