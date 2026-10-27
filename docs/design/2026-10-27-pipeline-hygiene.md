@@ -157,10 +157,13 @@ with `swarmai_guardian.sh` and copied standalone to the guardian dir;
 following `SWARM_DATA_DIR`. Red on main (3); a home path, a `${HOME}` string and an
 expanduser each turn it red.
 
-**Not done.** `app_config_manager`'s default `sandbox_additional_write_paths` is the
-setting text `"~/.swarm-ai/"`, which `prompt_builder` expands; with a non-default
-`SWARM_DATA_DIR` the sandbox does not cover the data dir. Changing it changes a
-permission default, so it is left for a decision.
+**Then (r4).** `core/prompt_builder.additional_dirs` builds the CLI `add_dirs`: the app
+data dir from `get_app_data_dir()`, always first, then the `sandbox_additional_write_paths`
+setting, `~` expanded, each path once. The setting's default `"~/.swarm-ai/"` stays (an
+install's saved copy only repeats the data dir), so no config migration; with
+`SWARM_DATA_DIR` set the data dir is now the one passed. `test_sandbox_defaults` used to
+re-implement the expansion; it now calls the function and checks `build_options` calls it.
+Red on main (5); dropping the data dir, the dedup or the call each turn it red.
 
 ## Out of scope
 

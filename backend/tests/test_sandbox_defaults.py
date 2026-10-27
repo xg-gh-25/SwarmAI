@@ -92,53 +92,49 @@ class TestExcludedCommands:
 # ---------------------------------------------------------------------------
 
 class TestPathExpansion:
-    """Acceptance criterion 3: tilde paths are expanded to absolute paths."""
+    """Acceptance criterion 3: add_dirs are absolute, the app data dir always first.
+
+    These call prompt_builder.additional_dirs, the code build_sdk_options uses (they
+    used to re-implement the expansion inline, so they could not catch a change to it).
+    """
 
     def test_tilde_expanded_in_add_dirs(self):
-        """add_dirs built by prompt_builder must have ~ expanded to home dir."""
-        # Test the actual code path in prompt_builder
-        builder = _make_builder({
-            "sandbox_additional_write_paths": "~/.swarm-ai/,~/Desktop/test",
-        })
-        # Access the private _config to simulate what build_sdk_options does
-        raw = builder._config.get("sandbox_additional_write_paths", "")
-        add_dirs = [
-            os.path.expanduser(p.strip()) for p in raw.split(",")
-            if p.strip()
-        ]
-        home = os.path.expanduser("~")
-        for d in add_dirs:
-            assert not d.startswith("~"), f"Tilde not expanded: {d}"
-            assert d.startswith(home) or d.startswith("/"), (
-                f"Path not absolute after expansion: {d}"
-            )
+        from core.prompt_builder import additional_dirs
+        dirs = additional_dirs({"sandbox_additional_write_paths": "~/.swarm-ai/,~/Desktop/test"})
+        assert dirs and all(d.startswith("/") for d in dirs), dirs
+        assert os.path.join(os.path.expanduser("~"), "Desktop/test") in dirs
 
-    def test_default_write_paths_expand_correctly(self):
-        """The DEFAULT_CONFIG write paths expand to real absolute paths."""
-        raw = DEFAULT_CONFIG["sandbox_additional_write_paths"]
-        add_dirs = [
-            os.path.expanduser(p.strip()) for p in raw.split(",")
-            if p.strip()
-        ]
-        home = os.path.expanduser("~")
-        assert len(add_dirs) >= 1
-        for d in add_dirs:
-            assert d.startswith("/"), f"Path not absolute after expansion: {d}"
-            assert not d.startswith("~"), f"Tilde not expanded: {d}"
-        # Specifically check ~/.swarm-ai/ resolves
-        assert any(d == os.path.join(home, ".swarm-ai/") or d == os.path.join(home, ".swarm-ai") for d in add_dirs)
+    def test_app_data_dir_always_first_and_follows_swarm_data_dir(self, monkeypatch, tmp_path):
+        from core.prompt_builder import additional_dirs
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
+        for cfg in ({}, None, {"sandbox_additional_write_paths": ""},
+                    {"sandbox_additional_write_paths": "/tmp/x"}):
+            assert additional_dirs(cfg)[0] == str(tmp_path / "data"), cfg
+
+    def test_default_write_paths_only_repeat_the_data_dir(self, monkeypatch):
+        """An install's saved default "~/.swarm-ai/" adds no second directory."""
+        from core.prompt_builder import additional_dirs
+        monkeypatch.delenv("SWARM_DATA_DIR", raising=False)
+        cfg = {"sandbox_additional_write_paths": DEFAULT_CONFIG["sandbox_additional_write_paths"]}
+        assert additional_dirs(cfg) == [os.path.join(os.path.expanduser("~"), ".swarm-ai")]
 
     def test_absolute_paths_unchanged(self):
-        """Absolute paths pass through without modification."""
-        builder = _make_builder({
-            "sandbox_additional_write_paths": "/tmp/test,/var/data",
-        })
-        raw = builder._config.get("sandbox_additional_write_paths", "")
-        add_dirs = [
-            os.path.expanduser(p.strip()) for p in raw.split(",")
-            if p.strip()
-        ]
-        assert add_dirs == ["/tmp/test", "/var/data"]
+        from core.prompt_builder import additional_dirs
+        dirs = additional_dirs({"sandbox_additional_write_paths": "/tmp/test, /var/data,/tmp/test"})
+        assert dirs[1:] == ["/tmp/test", "/var/data"]
+
+    def test_build_options_passes_additional_dirs(self):
+        """The call site uses the function above, not its own expansion."""
+        import ast
+        import inspect
+        from core.prompt_builder import PromptBuilder
+        # a method's source is indented; wrapping it in a class makes it parse
+        tree = ast.parse("class _C:\n" + inspect.getsource(PromptBuilder.build_options))
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", None) == "additional_dirs"]
+        reads = [n for n in ast.walk(tree) if isinstance(n, ast.Constant)
+                 and n.value == "sandbox_additional_write_paths"]
+        assert len(calls) == 1 and not reads
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ Key public symbols:
 - ``merge_user_local_mcp_servers()`` — Merge user-local MCP servers (deprecated, no-op)
 - ``inject_channel_mcp()``       — Channel-specific MCP injection
 - ``build_sandbox_config()``     — Sandbox settings from config.json
+- ``additional_dirs()``          — CLI add_dirs: the app data dir + configured paths
 - ``compute_watchdog_timeout()`` — Dynamic timeout from session metrics
 - ``build_context_warning()``    — Context window warning event
 - ``get_model_context_window()`` — Context window size for a model
@@ -56,6 +57,27 @@ if TYPE_CHECKING:
     from .app_config_manager import AppConfigManager
 
 logger = logging.getLogger(__name__)
+
+
+def additional_dirs(config) -> list[str]:
+    """The directories passed to the CLI as ``add_dirs``: the app data dir
+    (``config.get_app_data_dir()``), always, then each path in the
+    ``sandbox_additional_write_paths`` setting, ``~`` expanded (the CLI needs absolute
+    paths). The data dir comes from code, not the setting, so it follows
+    SWARM_DATA_DIR and an existing install's saved ``"~/.swarm-ai/"`` only repeats it;
+    a path listed twice is passed once."""
+    from config import get_app_data_dir
+
+    raw = config.get("sandbox_additional_write_paths", "") if config else ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in [str(get_app_data_dir())] + [os.path.expanduser(s.strip())
+                                         for s in (raw or "").split(",") if s.strip()]:
+        key = os.path.normpath(p)
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
 
 
 def _pipeline_expert_agents():
@@ -2432,15 +2454,8 @@ class PromptBuilder:
         permission_mode = agent_config.get("permission_mode", "bypassPermissions")
         max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
-        # Build add_dirs from sandbox_additional_write_paths config.
-        # Expand ~ to actual home directory — the SDK CLI needs absolute paths.
-        add_dirs: list[str] = []
-        raw_write_paths = self._config.get("sandbox_additional_write_paths", "") if self._config else ""
-        if raw_write_paths:
-            add_dirs = [
-                os.path.expanduser(p.strip()) for p in raw_write_paths.split(",")
-                if p.strip()
-            ]
+        # Build add_dirs: the app data dir, always, then sandbox_additional_write_paths.
+        add_dirs = additional_dirs(self._config)
 
         # Build extra CLI args for features not yet in ClaudeAgentOptions.
         extra_args: dict[str, str | None] = {}
