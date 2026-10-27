@@ -271,14 +271,16 @@ def _normalize_hit_source(domain: str, source: str) -> str:
       ``Knowledge/mount:<id>/…`` that resolves to nothing (run_3f837bdd Gate-2). Leave
       it untouched; a mount hit is resolved to its live source via mount_path
       separately.
+    - a project's repo-document hits carry ``bind:<project>/<repo>/<rel>`` (indexed
+      in place, brain_bootstrap.doc_index) — also virtual, also left untouched.
     So: only prefix a plain Knowledge/-relative library key — non-empty, NOT already
-    Knowledge/-prefixed, NOT absolute, and NOT a mount: virtual key.
+    Knowledge/-prefixed, NOT absolute, and NOT a mount: / bind: virtual key.
     """
     if (
         domain == "library"
         and source
         and not source.startswith("Knowledge/")
-        and not source.startswith("mount:")
+        and not source.startswith(("mount:", "bind:"))
         and not os.path.isabs(source)
     ):
         return f"Knowledge/{source}"

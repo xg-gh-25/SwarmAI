@@ -285,15 +285,12 @@ def _risk_areas(top_connected: list[dict]) -> list[dict]:
 
 def _packages(repo_root: str | None) -> list[dict] | None:
     """Package boundaries of a monorepo ([{name, root: "."}] for a single package),
-    from the s_repo-to-ddd helper that detects them. None when it cannot run."""
+    from ``core.brain_bootstrap.packages``. None when it cannot run."""
     if not repo_root:
         return None
     try:
-        from importlib import import_module
-        scripts = str(Path(__file__).resolve().parents[2] / "skills" / "s_repo-to-ddd" / "scripts")
-        if scripts not in sys.path:
-            sys.path.insert(0, scripts)
-        return import_module("ai_ready_helpers").build_packages_partition(repo_root)
+        from core.brain_bootstrap.packages import detect_packages
+        return detect_packages(repo_root)
     except Exception as exc:  # noqa: BLE001 — navigation metadata, never fatal
         logger.debug("packages partition skipped: %s: %s", type(exc).__name__, exc)
         return None

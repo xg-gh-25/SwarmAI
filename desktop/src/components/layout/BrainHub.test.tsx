@@ -38,6 +38,8 @@ const mockApproveProposal = vi.fn();
 const mockRejectProposal = vi.fn();
 const mockGetDistribution = vi.fn();
 const mockBrainRecall = vi.fn();
+const mockGetSpecs = vi.fn();
+const mockGetSpecDoc = vi.fn();
 // BrainHub now consumes React Query HOOKS (run_cfb460ac), not raw fetchers. We mock
 // the hooks at the boundary with a tiny useState+useEffect wrapper over the same
 // mock fns — this keeps every existing fixture/assertion working AND exercises the
@@ -78,6 +80,10 @@ vi.mock('../../services/ddd', async () => {
     approveProposal: (...a: unknown[]) => mockApproveProposal(...a),
     rejectProposal: (...a: unknown[]) => mockRejectProposal(...a),
     brainRecall: (...a: unknown[]) => mockBrainRecall(...a),
+    useBrainSpecs: (name: string, enabled: boolean) =>
+      useAsync(() => (enabled ? mockGetSpecs(name) : Promise.resolve(undefined)), `${name}:${enabled}`),
+    useBrainSpecDoc: (name: string, repo: string, path: string) =>
+      useAsync(() => mockGetSpecDoc(name, repo, path), `${name}:${repo}:${path}`),
     // pure aggregation helper — real impl (no spy needed; contract-new export, R27)
     aggregateTypeCounts: (sections: { entries: { entryType: string }[] }[]) => {
       const c: Record<string, number> = {
@@ -463,6 +469,37 @@ describe('BrainHub — Brain detail: fixed [Overview | Browse] sub-tabs (run_6c6
     expect(mockCodeGraph).toHaveBeenCalledWith(expect.objectContaining({ project: 'SwarmAI', inline: true }));
     // Tree stays visible alongside the graph (not swapped out).
     expect(screen.getByTestId('library-tree-mock')).toBeTruthy();
+  });
+
+  it('hasSpecs → Repo documents is a collapsed disclosure; opening it lists tier 1 first and fetches a document on click', async () => {
+    mockGetBrainDetail.mockResolvedValue({ ...DETAIL, hasSpecs: true });
+    mockGetSpecs.mockResolvedValue({ available: true, repos: [{
+      repo: 'acme', head: 'abc', api_contracts: [],
+      docs: [
+        { path: 'README.md', tier: 1, signals: ['root-readme'] },
+        { path: 'docs/adr/0001.md', tier: 2, signals: ['numbered-adr'] },
+        { path: 'ARCH.md', tier: 1, signals: ['architecture-doc'], flags: ['prompt_injection:x'] },
+      ] }] });
+    mockGetSpecDoc.mockResolvedValue('# Acme readme');
+    await openBrowse();
+    await screen.findByTestId('brainhub-specs-disclosure');
+    expect(mockGetSpecs).not.toHaveBeenCalled();             // nothing fetched while collapsed
+    fireEvent.click(screen.getByTestId('specs-toggle'));
+    await waitFor(() => expect(screen.getAllByTestId('spec-doc').length).toBe(3));
+    expect(screen.getByTestId('specs-toggle').textContent).toContain('2 to read first');
+    const tier2 = screen.getByTestId('spec-tier-2');
+    expect(tier2.hasAttribute('open')).toBe(false);           // design records wait behind disclosure
+    expect(screen.getAllByLabelText('flagged').length).toBe(1);
+    fireEvent.click(screen.getAllByTestId('spec-doc')[0]);
+    await waitFor(() => expect(screen.getByTestId('spec-doc-view').textContent).toContain('# Acme readme'));
+    expect(mockGetSpecDoc).toHaveBeenCalledWith('SwarmAI', 'acme', 'README.md');
+  });
+
+  it('a brain without a survey shows no Repo documents disclosure', async () => {
+    mockGetBrainDetail.mockResolvedValue({ ...DETAIL, hasSpecs: false });
+    await openBrowse();
+    await screen.findByTestId('library-tree-mock');
+    expect(screen.queryByTestId('brainhub-specs-disclosure')).toBeNull();
   });
 
   it('a brain with NO code_intel shows the tree only in Browse — no disclosure, no graph', async () => {

@@ -616,17 +616,12 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
         store.check_health(mount_id)  # persists 'missing'
         return {"status": "source_missing"}
 
-    from core.knowledge_store import KnowledgeStore, chunk_markdown
+    from core.knowledge_store import MOUNT_KEY_PREFIX, KnowledgeStore, index_text_items
     from core.vec_db import open_vec_db
 
-    key_prefix = f"mount:{mount_id}/"
-    total_chunks = 0
-    seen_keys: set[str] = set()
-    with open_vec_db() as conn:
-        if conn is None:
-            return {"status": "indexed_empty", "chunks": 0}
-        kstore = KnowledgeStore(conn)
-        kstore.ensure_tables()
+    key_prefix = f"{MOUNT_KEY_PREFIX}{mount_id}/"
+
+    def _items():
         walked = 0
         for p in sorted(src.rglob("*")):
             if any(part in _DOCS_SKIP_DIRS for part in p.relative_to(src).parts):
@@ -642,35 +637,19 @@ def index_docs_mount(store: "LibraryMounts", mount_id: str) -> dict:
                 content = p.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue  # binary or unreadable → skip (content-decodability is the gate)
-            rel = p.relative_to(src).as_posix()
-            source_file = f"{key_prefix}{rel}"
-            chunks = chunk_markdown(content, source_file)
-            if not chunks:
-                continue  # empty/whitespace-only file → produces NO recallable content
-            # Only content-bearing files count as "seen" — a whitespace-only file must
-            # not make the mount read as indexed (honesty, run_139d7652 badge invariant).
-            seen_keys.add(source_file)
-            existing = kstore.get_existing_hashes(source_file)
-            new_indexes: set[int] = set()
-            for chunk in chunks:
-                idx = chunk["chunk_index"]
-                new_indexes.add(idx)
-                if existing.get(idx) == chunk["content_hash"]:
-                    continue
-                kstore.upsert_chunk(
-                    source_file=source_file,
-                    chunk_index=idx,
-                    heading=chunk.get("heading"),
-                    content=chunk["content"],
-                    content_hash=chunk["content_hash"],
-                )
-                total_chunks += 1
-            kstore.remove_stale_chunks(source_file, new_indexes)
-        # Prune chunks of files that vanished since the last index (delta at the
-        # FILE level): any existing mount:<id>/ key not seen this pass is stale.
-        for old_key in kstore.get_indexed_files():
-            if old_key.startswith(key_prefix) and old_key not in seen_keys:
-                kstore.remove_file_entries(old_key)
+            yield p.relative_to(src).as_posix(), content
+
+    with open_vec_db() as conn:
+        if conn is None:
+            return {"status": "indexed_empty", "chunks": 0}
+        kstore = KnowledgeStore(conn)
+        kstore.ensure_tables()
+        # Shared delta-sync (knowledge_store.index_text_items): only content-bearing
+        # files count as seen — a whitespace-only file must not make the mount read
+        # as indexed (honesty, run_139d7652 badge invariant) — and keys of files that
+        # vanished since the last index are pruned.
+        stats = index_text_items(kstore, key_prefix, _items())
+    total_chunks, seen_keys = stats["written"], stats["files"]
 
     if total_chunks > 0 or seen_keys:
         # Content-bearing files exist (seen_keys) — even if a delta re-index added 0

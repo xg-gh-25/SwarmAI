@@ -502,7 +502,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 1 | G1 解析器和归属、G2 增量单路径、G7 不销毁、G8 clone 加固 | 无 | **已完成**（7e3ea786；correctness、concurrency、security 两轮） |
 | 1b | §5.9 code-intel.json 和 spec-details 退出（先于第 3 步做，避免 survey 和 Brain Hub 再接上旧文件） | 1（G1 提供替代的读取方） | **已完成**（28efb116、18ce2cc9、d5f2ac2b；analysis 能力经 correctness、api-contract 评审） |
 | 2 | §5.1 骨架、§5.7 P6 门、§5.10 对齐命令、条目语法加 `taint`；CDF 分支上的 C1–C4 | 无 | **main 部分已完成**（f348be4e；api-contract、correctness 评审）；C1–C4 交 CDF 分支 |
-| 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 Specs 面板、G5 | 1、1b | security（不可信文件）、performance（大 repo） |
+| 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 Specs 面板、G5 | 1、1b | **已完成**（security、performance 一轮；skill 侧迁移移到第 4 步，见 r6） |
 | 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | correctness、ux |
 | 5 | G3 import 表、G4 语言修正、G6 | 1 | correctness |
 | 6 | §5.11 C5–C11（阶段二）；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
@@ -591,3 +591,32 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 
 **交 CDF 分支（C1–C4）**：C1 矩阵段名通用化；C2 `validate_ddd_matrix` 模板根改为 `templates/ddd-skeleton/`，并更正 CDF 正文里"唯一模板源是 `templates/ddd/*.md`、`DDD_TEMPLATES` 从那里读"的说法（两者均已不存在）；C3 writer 的 DDD 分支调用 `core.ddd_entry_lifecycle.render_ddd_unit(entry, date_str=..., source=..., taint="external" | None)`；C4 基线生成读 `EntryMetadata.taint`。
 
+**r6（2026-10-27）**：第 3 步实施。
+- 盘点在 `core/brain_bootstrap/`（`repo_read`、`packages`、`docs`、`commands`、`survey`、`doc_index`）。入口只有一个，`doc_index.sync_project`：给项目拥有的每个 repo 原地索引文档、清掉已不再拥有的 repo 的索引，然后写 `survey.json`。调用方有三个：`artifact_cli bind`（bind 成功后）、`artifact_cli survey`，以及 reindex job（HEAD 前进后只重排文档部分）。
+- 命名空间：`mount:` 和 `bind:` 统一记作 `knowledge_store.FOREIGN_KEY_PREFIXES`，Knowledge/ 同步时不清理这两类。原先只豁免了 `mount:`，`bind:` 条目会在下一次 session 同步时被全部删掉。两种 mount 共用一个索引器 `index_text_items`。
+- recall：`fts5_search` 在 SQL 里过滤，不传项目名时看不到任何 `bind:` 内容，用 `substr` 而不是 `LIKE`，因为项目名可能带 `_`。library 域对当前项目单独多检索一次，最多 4 条，不占 Library 原有的 8 个名额；结果渲染在 "Repo Documents — UNTRUSTED" 区块里。
+- 同一个项目拥有的两个 repo 名字相同时，名字按 `-2`、`-3` 去重，否则两者的索引键会互相覆盖、互相清理。
+- workspace glob 只在已跟踪的文件路径上匹配，不访问文件系统。
+- 热点只认代码文件：fix 提交里一起改的文档不算热点。fix 的识别改为在标题任意位置按整词匹配。
+- 约定配置除了根目录，也读各 package 根目录下的配置。
+- Brain Hub 新增 Repo documents 折叠面板，展开后才请求数据。tier 1 直接列出，其余各层放在各自的折叠项里。原文端点按当前的归属关系重新限制路径，只允许读文档和 API 契约。
+- **`ai_ready_helpers` 的 skill 侧迁移移到第 4 步**：新版 skill 会直接读 `survey.json`，重叠的函数（repo 信息收集、fix 历史、monorepo 识别）届时随旧流程一起删掉。现在先改 import，只会多改一遍。
+- 评审（security、performance 各一轮），已修：
+  - repo 内指向 `.env` 或 `.git/config` 的符号链接会被读进索引（HIGH）：现在对链接解析后的实际路径也检查密钥规则，不允许落进 `.git/`，并拒绝硬链接。
+  - Markdown 链接正则在大量 `[` 时耗时成平方增长（HIGH）：改为线性扫描。修的过程中还发现，旧的 CHANGELOG 标题正则是立方级的，一行 4000 个空格要约 70 秒，已一并改掉。
+  - YAML 别名炸弹：repo 文件里的 YAML 一律拒绝别名。
+  - `**` glob 指数爆炸：连续的 `**` 合并，匹配加缓存。
+  - 文档原文全部驻留内存：改为逐篇读取，tier 1 需要内联时再读一遍。
+  - 原地索引没有文档数上限：加了上限。
+  - reindex 每次 commit 都重做文档同步：commit 没改到任何文档时直接跳过。
+  - recall 对没有 repo 文档的项目也做一次全索引检索：先查一下有没有，没有就不检索。
+  - recall 区块里的每条 repo 文档命中放进各自的 `<repo-doc>` 元素。
+  - 索引时逐篇做 MemoryGuard 扫描：疑似注入的文档不进索引，密钥打码。
+  - survey 里文档以外的 repo 文本（命令、commit 标题、CHANGELOG、API 摘要）同样扫描；扫描失败时丢弃这些内容，不放行未扫描的文本。
+  - `cd` 拼接的路径加 `shlex.quote`。
+  - Library 浮层不再给 `bind:` 键加 `Knowledge/` 前缀；recall CLI 给 bind 命中标 `untrusted`。
+- 记为已知问题：
+  - bound 目录里的 `.git` 是指向别处的文件时，git 元数据描述的是另一个本地 repo，但文件读取仍限制在本目录内。git worktree 本身就是这种结构，所以不能按"git 目录必须在 repo 根下"来判。
+  - `upsert_chunk` 每个块提交一次：首次索引 6820 次写事务，WAL 模式下不阻塞读。
+  - 原有的 External Signals 区块同样没有逐条框定，这是本次改动之前就有的问题。
+  - recall CLI 的 `--project` 由调用方指定。

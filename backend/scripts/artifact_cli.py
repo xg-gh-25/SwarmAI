@@ -470,7 +470,17 @@ def cmd_bind(args, reg) -> None:
          "worktree": o.worktree, "code_intel_db": o.code_intel_db, "node_count": o.node_count}
         for o in outcomes
     ]
-    print(json.dumps({"project": args.project, "bindings": payload,
+    # A bound repo is learned right away: its documents indexed in place and the
+    # project surveyed (design 2026-10-27 §5.2–§5.3). Deterministic; a failure here
+    # is reported, never undoes the bind.
+    learned = None
+    if any(o.status == "bound" for o in outcomes):
+        from core.brain_bootstrap.doc_index import sync_project
+        try:
+            learned = _summarize_learned(sync_project(_get_workspace() / "Projects" / args.project))
+        except Exception as e:  # noqa: BLE001
+            learned = {"error": f"{type(e).__name__}: {e}"}
+    print(json.dumps({"project": args.project, "bindings": payload, "learned": learned,
                       "counts": {
                           "bound": sum(1 for o in outcomes if o.status == "bound"),
                           "deferred": sum(1 for o in outcomes if o.status == "deferred"),
@@ -478,6 +488,57 @@ def cmd_bind(args, reg) -> None:
                       }}, indent=2, default=str))
     # Run-level failure ONLY when there were bindings and every one failed.
     if outcomes and all(o.status == "failed" for o in outcomes):
+        sys.exit(1)
+
+
+def _summarize_learned(sync: dict) -> dict:
+    """The CLI's view of ``doc_index.sync_project``: per repo, what was indexed and
+    what the survey found — counts and paths, never the survey's text."""
+    from core.brain_bootstrap.survey import read_survey
+    out: dict = {"index": sync.get("repos"), "pruned": sync.get("pruned"),
+                 "survey": sync.get("survey")}
+    if sync.get("survey_error"):
+        out["survey_error"] = sync["survey_error"]
+    data = read_survey(Path(sync["survey"]).parents[2]) if sync.get("survey") else None
+    if data:
+        out["repos"] = [{
+            "repo": r.get("repo"), "head": (r.get("identity") or {}).get("head"),
+            "docs_by_tier": {str(t): sum(1 for d in r.get("docs", []) if d.get("tier") == t)
+                             for t in (1, 2, 3, 4)},
+            "inlined": sum(1 for d in r.get("docs", []) if d.get("included")),
+            "flagged": [d["path"] for d in r.get("docs", []) if d.get("flags")],
+            "api_contracts": len(r.get("api_contracts", [])),
+            "commands": len(r.get("commands", [])),
+            "hotspots": len((r.get("history") or {}).get("hotspots", [])),
+            "code_shape": "unavailable" if "unavailable" in (r.get("code_shape") or {}) else "ok",
+            "errors": r.get("errors"),
+        } for r in data.get("repos", [])]
+    return out
+
+
+def cmd_survey(args, reg) -> None:
+    """Survey every repo a project owns and index its documents in place.
+
+    Design 2026-10-27-new-brain-initial-ddd §5.2–§5.3. Writes
+    ``Projects/<p>/.artifacts/bootstrap/survey.json`` and syncs the repo documents into
+    recall under ``bind:<project>/<repo>/``. No LLM, no network, nothing in a repo runs.
+    Prints a summary (counts and paths); the agent reads survey.json itself. A project
+    with no repo gets an empty survey. Exit 1 when a repo part failed.
+    """
+    if "/" in args.project or "\\" in args.project or args.project in ("", ".", ".."):
+        print(json.dumps({"error": f"invalid project name '{args.project}'"}), file=sys.stderr)
+        sys.exit(2)
+    project_dir = _get_workspace() / "Projects" / args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project '{args.project}' not found"}), file=sys.stderr)
+        sys.exit(2)
+    from core.brain_bootstrap.doc_index import sync_project
+    summary = _summarize_learned(sync_project(project_dir))
+    print(json.dumps({"project": args.project, **summary}, indent=2, default=str))
+    failed = (summary.get("survey_error")
+              or any(isinstance(v, dict) and v.get("error") for v in (summary.get("index") or {}).values())
+              or any(r.get("errors") for r in summary.get("repos") or []))
+    if failed:
         sys.exit(1)
 
 
@@ -693,6 +754,10 @@ def main() -> None:
     p_bind = sub.add_parser("bind", help="PULL: clone + code-intel every binding in a project's bindings.yaml")
     p_bind.add_argument("--project", required=True, help="Project whose bindings.yaml to PULL")
 
+    # survey (design 2026-10-27 §5.2-§5.3: inventory the owned repos, index their docs in place)
+    p_survey = sub.add_parser("survey", help="Survey a project's repos into survey.json and index their docs for recall")
+    p_survey.add_argument("--project", required=True)
+
     # ddd-skeleton-align (design 2026-10-27 §5.10: give an existing brain the skeleton's sections)
     p_align = sub.add_parser("ddd-skeleton-align", help="List (or --apply: append) the skeleton sections a brain's 4 docs lack")
     p_align.add_argument("--project", required=True)
@@ -736,6 +801,7 @@ def main() -> None:
         "learn": cmd_learn,
         "projects": cmd_projects,
         "bind": cmd_bind,
+        "survey": cmd_survey,
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-health": cmd_ddd_health,
         "ddd-retire": cmd_ddd_retire,

@@ -104,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
         r = recall_all(args.query, project=args.project, domains=sel,
                        allow_embed=False, max_sections=args.max_sections,
                        policy_excluded_files=policy_excluded)
+        # Repo documents and fetched signals are untrusted text: say so on each hit,
+        # as the session prompt's own rendering does (recall_multi.render_recall_body).
+        from core.recall_multi import is_external_source, is_repo_doc_source
+        for h in r.buckets.get("library") or []:
+            if isinstance(h, dict) and (is_repo_doc_source(h.get("source"))
+                                        or is_external_source(h.get("source"))):
+                h["untrusted"] = True
         print(json.dumps({
             "allowed": True,
             "query": r.query,

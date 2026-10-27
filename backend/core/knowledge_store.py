@@ -14,6 +14,16 @@ Public symbols:
 - ``KnowledgeStore``          — SQLite store for chunks + FTS5 (keyword index)
 - ``chunk_markdown``          — Split markdown by heading into chunks
 - ``sync_knowledge_index``    — Top-level: scan dir, chunk, delta-sync
+- ``index_text_items``        — delta-sync (path, text) pairs under one key prefix
+                                (library docs mounts, a bound repo's docs)
+
+Namespaces. Knowledge/ files are keyed by their relative path. Two other writers share
+the store under their own prefixes (``FOREIGN_KEY_PREFIXES``), each owning its keys:
+``mount:<id>/`` (a Library docs mount, ``library_mounts.index_docs_mount``) and
+``bind:<project>/<repo>/`` (a repo a project owns, indexed in place,
+``brain_bootstrap.doc_index``). The Knowledge/ sync never prunes them. ``bind:`` chunks
+are returned only to a search scoped to that project (``fts5_search(bind_project=)``);
+every other search excludes them.
 """
 
 import hashlib
@@ -28,6 +38,20 @@ from typing import Optional
 from .cjk_index import _CJK_RE, expand_cjk, expand_cjk_query
 
 logger = logging.getLogger(__name__)
+
+MOUNT_KEY_PREFIX = "mount:"
+BIND_KEY_PREFIX = "bind:"
+FOREIGN_KEY_PREFIXES: tuple[str, ...] = (MOUNT_KEY_PREFIX, BIND_KEY_PREFIX)
+
+
+def bind_key_prefix(project: str, repo: str | None = None) -> str:
+    """``bind:<project>/`` or ``bind:<project>/<repo>/`` — the keys of a project's
+    repo documents. Names are used verbatim; a ``/`` in either is refused so one
+    project's prefix can never be a prefix of another's."""
+    for name in (project, repo):
+        if name is not None and (not name or "/" in name):
+            raise ValueError(f"invalid name for a bind key: {name!r}")
+    return f"{BIND_KEY_PREFIX}{project}/" + (f"{repo}/" if repo else "")
 
 # Directories to skip when scanning Knowledge/
 # Archives is NO LONGER skipped (pure-filesystem recall design §3.2/§5.8,
@@ -637,12 +661,43 @@ class KnowledgeStore:
             self._conn.rollback()
             raise
 
+    @staticmethod
+    def _scope_clause(bind_project: Optional[str]) -> tuple[str, tuple]:
+        """The SQL filter that keeps ``bind:`` chunks to their own project.
+
+        ``bind_project=None`` (every caller that does not name a project) excludes all
+        ``bind:`` chunks; a project name returns ONLY that project's. Applied in SQL,
+        before ``LIMIT``, so excluded chunks never take a result slot. ``substr`` rather
+        than ``LIKE``: a project name may contain ``_`` or ``%``.
+        """
+        if bind_project is None:
+            n = len(BIND_KEY_PREFIX)
+            return f"AND substr(kc.source_file, 1, {n}) != ? ", (BIND_KEY_PREFIX,)
+        prefix = bind_key_prefix(bind_project)
+        return "AND substr(kc.source_file, 1, ?) = ? ", (len(prefix), prefix)
+
+    def has_bind_chunks(self, project: str) -> bool:
+        """Whether *project* has any repo document indexed — a range query on the
+        source_file index (well under a millisecond), so recall can skip a scoped
+        full-text search for the projects that have none."""
+        prefix = bind_key_prefix(project)
+        upper = prefix[:-1] + chr(ord("/") + 1)
+        row = self._conn.execute(
+            "SELECT 1 FROM knowledge_chunks WHERE source_file >= ? AND source_file < ? LIMIT 1",
+            (prefix, upper)).fetchone()
+        return row is not None
+
     def fts5_search(
         self,
         query: str,
         limit: int = 20,
+        bind_project: Optional[str] = None,
     ) -> list[dict]:
-        """Full-text search via FTS5. Returns chunks ranked by relevance."""
+        """Full-text search via FTS5. Returns chunks ranked by relevance.
+
+        Without *bind_project* the result never holds a ``bind:`` chunk; with it, the
+        result holds only that project's repo documents (``_scope_clause``).
+        """
         if not query or not query.strip():
             return []
 
@@ -673,6 +728,7 @@ class KnowledgeStore:
         if not clean_query:
             return []
 
+        scope_sql, scope_args = self._scope_clause(bind_project)
         try:
             rows = self._conn.execute(
                 "SELECT kc.id, kc.source_file, kc.chunk_index, kc.heading, kc.content, "
@@ -680,14 +736,15 @@ class KnowledgeStore:
                 "FROM knowledge_fts fts "
                 "JOIN knowledge_chunks kc ON kc.id = fts.rowid "
                 "WHERE knowledge_fts MATCH ? "
+                + scope_sql +
                 "ORDER BY rank "
                 "LIMIT ?",
-                (clean_query, limit),
+                (clean_query, *scope_args, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             # FTS5 query syntax error — fall back to simpler query
             logger.debug("FTS5 query failed for '%s', trying individual terms", query)
-            return self._fts5_fallback_search(query, limit)
+            return self._fts5_fallback_search(query, limit, bind_project)
 
         return [
             {
@@ -701,7 +758,8 @@ class KnowledgeStore:
             for row in rows
         ]
 
-    def _fts5_fallback_search(self, query: str, limit: int) -> list[dict]:
+    def _fts5_fallback_search(self, query: str, limit: int,
+                              bind_project: Optional[str] = None) -> list[dict]:
         """Fallback: search each word with OR."""
         # len>2 would drop every 2-char CJK word (the most common Chinese word
         # length), so keep any term that survives CJK-aware tokenization.
@@ -712,6 +770,7 @@ class KnowledgeStore:
         or_query = expand_cjk_query(" ".join(words))
         if not or_query:
             return []
+        scope_sql, scope_args = self._scope_clause(bind_project)
         try:
             rows = self._conn.execute(
                 "SELECT kc.id, kc.source_file, kc.chunk_index, kc.heading, kc.content, "
@@ -719,9 +778,10 @@ class KnowledgeStore:
                 "FROM knowledge_fts fts "
                 "JOIN knowledge_chunks kc ON kc.id = fts.rowid "
                 "WHERE knowledge_fts MATCH ? "
+                + scope_sql +
                 "ORDER BY rank "
                 "LIMIT ?",
-                (or_query, limit),
+                (or_query, *scope_args, limit),
             ).fetchall()
             return [
                 {
@@ -743,6 +803,52 @@ class KnowledgeStore:
             "SELECT DISTINCT source_file FROM knowledge_chunks"
         ).fetchall()
         return {row[0] for row in rows}
+
+
+# ── Shared delta-sync under a key prefix ─────────────────────────────
+
+
+def index_text_items(store: "KnowledgeStore", key_prefix: str, items) -> dict:
+    """Delta-sync ``(rel, text)`` pairs into *store* under ``key_prefix + rel``.
+
+    The one indexer for every namespace that is not Knowledge/ (a Library docs mount,
+    a project's repo documents). Per file: chunk with ``chunk_markdown``, write only
+    the chunks whose hash changed, drop chunk indexes that no longer exist. Then every
+    key under *key_prefix* not seen this pass is removed (the file is gone). A file
+    whose text yields no chunk is not "seen", so its old chunks are removed too.
+
+    *items* may be a generator: one file's text is held at a time. Returns
+    ``{"written": chunks written, "files": content-bearing files, "removed": files
+    pruned}``.
+    """
+    if not key_prefix or not key_prefix.endswith("/"):
+        raise ValueError(f"key_prefix must end with '/': {key_prefix!r}")
+    written = 0
+    seen: set[str] = set()
+    for rel, content in items:
+        source_file = f"{key_prefix}{rel}"
+        chunks = chunk_markdown(content or "", source_file)
+        if not chunks:
+            continue
+        seen.add(source_file)
+        existing = store.get_existing_hashes(source_file)
+        keep: set[int] = set()
+        for chunk in chunks:
+            idx = chunk["chunk_index"]
+            keep.add(idx)
+            if existing.get(idx) == chunk["content_hash"]:
+                continue
+            store.upsert_chunk(source_file=source_file, chunk_index=idx,
+                               heading=chunk.get("heading"), content=chunk["content"],
+                               content_hash=chunk["content_hash"])
+            written += 1
+        store.remove_stale_chunks(source_file, keep)
+    removed = 0
+    for old_key in store.get_indexed_files():
+        if old_key.startswith(key_prefix) and old_key not in seen:
+            store.remove_file_entries(old_key)
+            removed += 1
+    return {"written": written, "files": len(seen), "removed": removed}
 
 
 # ── Top-level sync ────────────────────────────────────────────────────
@@ -841,8 +947,10 @@ def sync_knowledge_index(
     # deleted file and wipe it on every session's health-hook sync, silently killing
     # recall for all mounted docs dirs. Mount keys are owned by index_docs_mount /
     # delete_mount (their own delta-sync + unmount cleanup); this Knowledge/ sync must
-    # NOT touch them. Scope the prune to non-mount keys.
-    indexed_files = {f for f in store.get_indexed_files() if not f.startswith("mount:")}
+    # NOT touch them. The same holds for a project's repo documents under 'bind:'
+    # (brain_bootstrap.doc_index). Scope the prune to Knowledge/ keys.
+    indexed_files = {f for f in store.get_indexed_files()
+                     if not f.startswith(FOREIGN_KEY_PREFIXES)}
     for old_file in indexed_files - set(current_files.keys()):
         store.remove_file_entries(old_file)
         stats["files_removed"] += 1

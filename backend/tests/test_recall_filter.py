@@ -80,7 +80,7 @@ def test_recall_all_skips_legs_after_deadline(monkeypatch):
     import core.recall_multi as rm
 
     calls = []
-    monkeypatch.setattr(rm, "_recall_library", lambda q, a=False: (calls.append("library"), ([], "none"))[1])
+    monkeypatch.setattr(rm, "_recall_library", lambda q, a=False, project=None: (calls.append("library"), ([], "none"))[1])
     monkeypatch.setattr(rm, "_recall_session", lambda q, e=None: (calls.append("session"), ([], "none"))[1])
     r = rm.recall_all("x y", domains=("library", "session"), deadline=time.monotonic() - 1)
     assert calls == []

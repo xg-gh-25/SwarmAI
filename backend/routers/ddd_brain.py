@@ -956,6 +956,10 @@ def _brain_detail(project_dir: Path) -> dict:
     # on `kind` (all DDDs resolve to kind='knowledge'). One stat, per-brain-on-open.
     from core.code_intel import code_intel_db_for
     state["hasCodeIntel"] = code_intel_db_for(project_dir) is not None
+    # hasSpecs = a survey.json exists (design 2026-10-27 §5.3): the Specs disclosure
+    # renders only then, and fetches the list only when expanded.
+    from core.brain_bootstrap.survey import survey_path
+    state["hasSpecs"] = survey_path(project_dir).is_file()
     # projectAgent = the ⑤ Project Agent definition (project-agent.yaml), parsed and
     # validated; None when the Brain has none yet. One small file read, on open only.
     state["projectAgent"] = load_project_agent(project_dir)
@@ -1675,6 +1679,45 @@ async def get_distribution(name: str) -> dict:
     result = await executors.run_nav(_work)
     if result is None:
         raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+    return result
+
+
+@router.get("/brains/{name}/specs")
+async def get_specs(name: str) -> dict:
+    """The repo documents of one brain, by tier, from its survey.json (design
+    2026-10-27-new-brain-initial-ddd §5.3). No text; ``available: false`` before the
+    first survey."""
+
+    def _work() -> Optional[dict]:
+        project_dir = _resolve_brain_dir(name)   # containment-checked (Run 2 guard)
+        if project_dir is None:
+            return None
+        from core.brain_bootstrap.survey import specs_view
+        return specs_view(project_dir)
+
+    result = await executors.run_nav(_work)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+    return result
+
+
+@router.get("/brains/{name}/specs/doc")
+async def get_spec_doc(name: str, repo: str = "", path: str = "") -> dict:
+    """One repo document's text. The path is confined again to the repo the brain
+    owns now; survey.json is never trusted for where to read (§5.3, §8)."""
+
+    def _work():
+        project_dir = _resolve_brain_dir(name)
+        if project_dir is None:
+            return "no-brain"
+        from core.brain_bootstrap.survey import read_spec
+        return read_spec(project_dir, repo, path)
+
+    result = await executors.run_nav(_work)
+    if result == "no-brain":
+        raise HTTPException(status_code=404, detail=f"No such DDD brain: {name}")
+    if result is None:
+        raise HTTPException(status_code=404, detail="No such document")
     return result
 
 

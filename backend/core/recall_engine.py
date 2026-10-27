@@ -60,6 +60,7 @@ class RecallEngine:
         embed_fn=None,  # DEAD param kept for signature compat — recall is FTS5-only
         top_k: int = 20,
         threshold: float = RECALL_THRESHOLD,
+        bind_project: str | None = None,
     ) -> list[dict]:
         """Pure FTS5+BM25 keyword search across all stores, merged and ranked.
 
@@ -73,6 +74,9 @@ class RecallEngine:
             embed_fn: IGNORED (dead — see above).
             top_k: Max results per store.
             threshold: Minimum recall score to include.
+            bind_project: None searches the knowledge namespaces and never returns a
+                project's repo documents; a project name searches ONLY that project's
+                repo documents (``KnowledgeStore.fts5_search``).
 
         Returns:
             List of result dicts with keys: id, source_file, heading,
@@ -94,7 +98,7 @@ class RecallEngine:
         for store_idx, store in enumerate(all_stores):
             prefix = f"s{store_idx}:"
             try:
-                fts_results = store.fts5_search(query, limit=top_k)
+                fts_results = store.fts5_search(query, limit=top_k, bind_project=bind_project)
             except Exception as exc:  # noqa: BLE001 — surfaced via last_search_errors
                 fts_results = []
                 self.last_search_errors.append(f"fts[{store_idx}]:{type(exc).__name__}")

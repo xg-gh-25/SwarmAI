@@ -355,6 +355,26 @@ def reindex_projects(full: bool = False) -> dict:
                 "grades": {g: grades.count(g) for g in set(grades)},
             })
 
+        # The repo moved past its last index (or was rebuilt in full): its documents
+        # follow — re-indexed in place for recall and re-ranked in survey.json
+        # (design 2026-10-27 §5.3). Deterministic, no LLM; a failure here is logged
+        # and never fails the code reindex.
+        try:
+            from core.brain_bootstrap.doc_index import sync_repo_after_head_move
+            # The commit range's changed files let a commit that touched no document
+            # skip the sync; a full rebuild does not know the range (None → sync).
+            changed = (None if full or freshness.suggest_full_rebuild
+                       else list(freshness.changed_files))
+            doc_sync = sync_repo_after_head_move(project_dir, repo_root, changed)
+            if doc_sync is not None:
+                results[-1]["docs"] = {k: doc_sync.get(k) for k in
+                                       ("skipped", "files", "written", "removed",
+                                        "survey_refreshed")}
+            mark = _phase(project_name, "repo_docs", mark)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("code_intel %s: repo document sync failed: %s: %s",
+                           project_name, type(exc).__name__, exc)
+
     return {"status": "success", "projects": results}
 
 

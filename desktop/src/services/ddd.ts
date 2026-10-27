@@ -160,6 +160,10 @@ export interface BrainDetail {
    *  OPTIONAL by design (daemon skew): an old daemon omits it — consumers MUST
    *  treat `undefined` as false (`detail.hasCodeIntel === true` / `?? false`). */
   hasCodeIntel?: boolean;
+  /** hasSpecs — true iff the brain has a survey.json (its repos were surveyed). The
+   *  Repo documents disclosure renders only then. OPTIONAL (daemon skew): treat
+   *  `undefined` as false. */
+  hasSpecs?: boolean;
   /** DETAIL-view health metrics (design 2026-08-04, run-1 backend). OPTIONAL by
    *  design (daemon skew): a pre-deploy daemon omits it — consumers MUST guard
    *  (`detail.health` undefined → render nothing), same as hasCodeIntel. */
@@ -262,6 +266,45 @@ export async function getBrainsWithPinned(): Promise<{ brains: BrainSummary[]; p
 export async function getBrainDetail(name: string): Promise<BrainDetail> {
   const resp = await api.get<BrainDetail>(`/ddd/brains/${encodeURIComponent(name)}`);
   return resp.data;
+}
+
+/** One repo document in a brain's survey (design 2026-10-27 §5.3). Tier 1 = read
+ *  first (README, architecture, docs the README links to); 2 = design records and
+ *  ADRs; 3 = contributing / security / changelog and much-linked docs; 4 = the rest.
+ *  `flags` is set when the document reads like a prompt injection or holds a secret
+ *  pattern: show it, it is still repo content to treat as data. */
+export interface SpecDoc {
+  path: string;
+  tier: 1 | 2 | 3 | 4;
+  signals: string[];
+  flags?: string[] | null;
+}
+
+export interface SpecRepo {
+  repo: string;
+  head: string | null;
+  docs: SpecDoc[];
+  api_contracts: { path: string; format: string; items: number }[];
+}
+
+export interface BrainSpecs {
+  available: boolean;
+  generated_at?: string;
+  repos: SpecRepo[];
+}
+
+/** GET /api/ddd/brains/{name}/specs — the brain's repo documents by tier (no text). */
+export async function getBrainSpecs(name: string): Promise<BrainSpecs> {
+  const resp = await api.get<BrainSpecs>(`/ddd/brains/${encodeURIComponent(name)}/specs`);
+  return resp.data;
+}
+
+/** GET /api/ddd/brains/{name}/specs/doc — one repo document's text. The backend
+ *  re-confines the path to the repo the brain owns; never pass it anything else. */
+export async function getBrainSpecDoc(name: string, repo: string, path: string): Promise<string> {
+  const resp = await api.get<{ text: string }>(
+    `/ddd/brains/${encodeURIComponent(name)}/specs/doc`, { params: { repo, path } });
+  return resp.data.text ?? '';
 }
 
 /** One recall hit from the Brain Hub search box (mirrors the backend hit shape
@@ -384,6 +427,26 @@ export function useBrainDetail(name: string | null) {
     queryKey: ['brain-detail', name],
     queryFn: () => getBrainDetail(name as string),
     enabled: !!name,
+    staleTime: BRAIN_STALE_MS,
+  });
+}
+
+/** Cached GET /ddd/brains/{name}/specs — fetched only when `enabled` (the
+ *  disclosure is open). */
+export function useBrainSpecs(name: string, enabled: boolean) {
+  return useQuery<BrainSpecs>({
+    queryKey: ['brain-specs', name],
+    queryFn: () => getBrainSpecs(name),
+    enabled: enabled && !!name,
+    staleTime: BRAIN_STALE_MS,
+  });
+}
+
+/** Cached GET /ddd/brains/{name}/specs/doc — one repo document's text. */
+export function useBrainSpecDoc(name: string, repo: string, path: string) {
+  return useQuery<string>({
+    queryKey: ['brain-spec-doc', name, repo, path],
+    queryFn: () => getBrainSpecDoc(name, repo, path),
     staleTime: BRAIN_STALE_MS,
   });
 }

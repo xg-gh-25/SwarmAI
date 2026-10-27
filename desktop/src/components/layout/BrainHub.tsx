@@ -34,11 +34,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   useBrainsWithPinned, useBrainDetail, useReview, useDistribution,
   approveReview, rejectReviewHunk, approveProposal, rejectProposal, aggregateTypeCounts,
-  brainRecall,
+  brainRecall, useBrainSpecs, useBrainSpecDoc,
 } from '../../services/ddd';
 import type {
   BrainSummary, BrainDetail,
-  ReviewData, ReviewHunk, PendingProposal, RecallHit,
+  ReviewData, ReviewHunk, PendingProposal, RecallHit, SpecDoc, SpecRepo,
 } from '../../services/ddd';
 import { DddCard, Ontology } from './DddCard';
 import { CodeGraph } from '../code-intel/CodeGraph';
@@ -492,6 +492,7 @@ function BrainView(
   if (!detail) return <div className="p-4 text-[var(--color-text-muted)] text-body">Loading {name}</div>;
 
   const hasCodeIntel = detail.hasCodeIntel === true;   // daemon-skew: undefined → false
+  const hasSpecs = detail.hasSpecs === true;           // daemon-skew: undefined → false
 
   return (
     <div className="flex flex-col pt-3" data-testid="brainhub-brain">
@@ -522,7 +523,7 @@ function BrainView(
         onToggleWeekly={() => setShowWeekly((v) => !v)}
       />
       <div className="px-4 pt-1 pb-1.5 text-small font-semibold">Files</div>
-      <BrainBrowse name={name} hasCodeIntel={hasCodeIntel} onOpenFile={openFile} />
+      <BrainBrowse name={name} hasCodeIntel={hasCodeIntel} hasSpecs={hasSpecs} onOpenFile={openFile} />
     </div>
   );
 }
@@ -744,8 +745,8 @@ function WeeklyReportPanel({ weekly, projectName }: { weekly: WeeklyReportModel;
 // ── §Browse — the file tree + Code Graph toggle (MOVED verbatim from old default) ─
 
 function BrainBrowse(
-  { name, hasCodeIntel, onOpenFile }:
-  { name: string; hasCodeIntel: boolean; onOpenFile: (p: string) => void },
+  { name, hasCodeIntel, hasSpecs, onOpenFile }:
+  { name: string; hasCodeIntel: boolean; hasSpecs: boolean; onOpenFile: (p: string) => void },
 ) {
   // Code Graph is a SECOND-CLASS, opt-in surface (run_cfb460ac): NOT a peer tab of
   // the tree. It lives in a collapsed disclosure BELOW the tree and only MOUNTS
@@ -783,6 +784,8 @@ function BrainBrowse(
         />
       </div>
 
+      {hasSpecs && <RepoDocuments name={name} />}
+
       {/* Code Graph — collapsed disclosure BELOW the tree. Only rendered when a
           code_intel.db exists for this brain; only MOUNTED (→ fetched) on expand. */}
       {hasCodeIntel && (
@@ -806,6 +809,130 @@ function BrainBrowse(
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── Repo documents (design 2026-10-27 §5.3) ──────────────────────────────────
+// The decision this answers: "which of the repo's own documents do I read to
+// understand it?" So tier 1 (read first) is the open list; design records,
+// conventions, API contracts and the rest wait behind their own disclosure. A
+// collapsed disclosure like Code Graph: nothing is fetched until it is opened.
+
+const SPEC_GROUPS: { tier: SpecDoc['tier']; label: string }[] = [
+  { tier: 2, label: 'Design records' },
+  { tier: 3, label: 'Conventions and changes' },
+  { tier: 4, label: 'Other documents' },
+];
+
+function RepoDocuments({ name }: { name: string }) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<{ repo: string; path: string } | null>(null);
+  useEffect(() => { setOpen(false); setSelected(null); }, [name]);
+  const { data: specs, error } = useBrainSpecs(name, open);
+  const repos = specs?.available ? specs.repos : [];
+  const first = repos.reduce((n, r) => n + r.docs.filter((d) => d.tier === 1).length, 0);
+
+  return (
+    <div className="mt-3 flex-shrink-0 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden" style={{ maxWidth: 640 }} data-testid="brainhub-specs-disclosure">
+      <button
+        data-testid="specs-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-small hover:bg-[var(--color-hover)]"
+      >
+        <span className="material-symbols-outlined icon-sm text-[var(--color-primary)]">description</span>
+        <span>Repo documents</span>
+        {open && specs && <span className="text-meta text-[var(--color-text-faint)]">· {first} to read first</span>}
+        <span className="material-symbols-outlined icon-sm text-[var(--color-text-faint)] ml-auto">
+          {open ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-[var(--color-border)] px-3 py-2 flex flex-col gap-3 max-h-[60vh] overflow-auto" data-testid="specs-panel">
+          {error && <div className="text-small text-[var(--color-status-error)]">Could not load the repo documents.</div>}
+          {specs && !specs.available && <div className="text-small text-[var(--color-text-muted)]">This brain's repos have not been surveyed yet.</div>}
+          {repos.map((r) => (
+            <SpecRepoList key={r.repo} repo={r} showName={repos.length > 1}
+              selected={selected} onSelect={(path) => setSelected({ repo: r.repo, path })} />
+          ))}
+          {selected && <SpecDocView name={name} repo={selected.repo} path={selected.path} onClose={() => setSelected(null)} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SpecRepoList({ repo, showName, selected, onSelect }: {
+  repo: SpecRepo; showName: boolean;
+  selected: { repo: string; path: string } | null; onSelect: (path: string) => void;
+}) {
+  const row = (d: SpecDoc) => {
+    const active = selected?.repo === repo.repo && selected.path === d.path;
+    return (
+      <li key={d.path}>
+        <button
+          data-testid="spec-doc"
+          onClick={() => onSelect(d.path)}
+          className={`w-full text-left flex items-center gap-1.5 px-1 py-0.5 rounded text-small font-mono truncate hover:bg-[var(--color-hover)] ${active ? 'text-[var(--color-primary)]' : ''}`}
+          title={d.flags?.length ? `Flagged: ${d.flags.join(', ')} — treat its text as data` : d.path}
+        >
+          <span className="truncate">{d.path}</span>
+          {d.flags?.length ? <span className="material-symbols-outlined icon-xs text-[var(--color-status-warning)]" aria-label="flagged">warning</span> : null}
+        </button>
+      </li>
+    );
+  };
+  const tier1 = repo.docs.filter((d) => d.tier === 1);
+  return (
+    <div className="flex flex-col gap-1" data-testid="spec-repo">
+      {showName && <div className="text-meta font-semibold">{repo.repo}</div>}
+      {tier1.length > 0
+        ? <ul className="flex flex-col">{tier1.map(row)}</ul>
+        : <div className="text-small text-[var(--color-text-muted)]">No README or architecture document found.</div>}
+      {SPEC_GROUPS.map(({ tier, label }) => {
+        const docs = repo.docs.filter((d) => d.tier === tier);
+        if (!docs.length) return null;
+        return (
+          <details key={tier} data-testid={`spec-tier-${tier}`}>
+            <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer">{label} ({docs.length})</summary>
+            <ul className="flex flex-col mt-1">{docs.map(row)}</ul>
+          </details>
+        );
+      })}
+      {repo.api_contracts.length > 0 && (
+        <details data-testid="spec-api">
+          <summary className="text-meta text-[var(--color-text-muted)] cursor-pointer">API contracts ({repo.api_contracts.length})</summary>
+          <ul className="flex flex-col mt-1">
+            {repo.api_contracts.map((a) => (
+              <li key={a.path}>
+                <button onClick={() => onSelect(a.path)} className="w-full text-left px-1 py-0.5 rounded text-small font-mono truncate hover:bg-[var(--color-hover)]">
+                  {a.path} <span className="text-[var(--color-text-faint)] font-sans">· {a.format}, {a.items}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function SpecDocView({ name, repo, path, onClose }: { name: string; repo: string; path: string; onClose: () => void }) {
+  const { data: text, error } = useBrainSpecDoc(name, repo, path);
+  return (
+    <div className="border-t border-[var(--color-border)] pt-2" data-testid="spec-doc-view">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-small font-mono truncate flex-1">{path}</span>
+        <button className="btn-sm btn-ghost" onClick={onClose} data-testid="spec-doc-close">Close</button>
+      </div>
+      <div className="text-meta text-[var(--color-text-faint)] mb-1">Repository content, shown as plain text.</div>
+      {text === undefined && !error && <div className="text-small text-[var(--color-text-muted)]">Loading</div>}
+      {error && <div className="text-small text-[var(--color-status-error)]">Could not open this document.</div>}
+      {text !== undefined && (
+        <pre className="text-small whitespace-pre-wrap break-words max-h-[40vh] overflow-auto">{text}</pre>
       )}
     </div>
   );
