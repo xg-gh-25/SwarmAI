@@ -27,6 +27,7 @@ from routers.jobs import router as jobs_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.hive_auth import HiveAuthMiddleware
+from middleware.loopback_host import LoopbackHostMiddleware
 from middleware.rate_limit import limiter
 from database import initialize_database
 
@@ -1770,6 +1771,10 @@ app.add_middleware(
     ],
     max_age=600,  # Cache preflight requests for 10 minutes
 )
+
+# Outermost: a loopback connection whose Host is not a loopback name is a DNS-rebinding
+# page, refused before CORS or any route sees it (middleware/loopback_host.py). Off on a Hive.
+app.add_middleware(LoopbackHostMiddleware)
 
 # Setup error handlers
 setup_error_handlers(app)
