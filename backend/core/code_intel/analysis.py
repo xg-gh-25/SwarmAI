@@ -8,9 +8,8 @@ decomposition (``graph_clusters``) and the per-domain business-rule manifest
 (``domain_rules``, the on-box analogue of AWS Transform's business-rules extraction).
 
 It is computed from ``code_intel.db`` every time it is asked for and never stored, so
-it cannot go stale. (It used to be written into a per-project ``code-intel.json`` on
-each reindex; that file left the product — design 2026-10-27-new-brain-initial-ddd.md
-§5.9 — because a stored copy drifts from the graph and nothing at runtime read it.)
+it cannot go stale (a stored copy drifts from the graph — design
+2026-10-27-new-brain-initial-ddd.md §5.9).
 
 Entry points (one function behind each):
     analyze_graph_store(graph, layers=None) → dict      the library call

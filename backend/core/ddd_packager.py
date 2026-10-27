@@ -1310,7 +1310,7 @@ def _copy_deliverables(ddd_dir: Path, out_dir: Path) -> list[str]:
     ``out_dir/deliverables/`` as human-facing artifacts. Absent → no-op, returns [].
 
     Payload boundary (run_eb45c28d): copy ONLY ``deliverables/`` — never sweep in
-    ``.artifacts/`` / ``code-intel.json`` / decay-archives (live-tree noise). This
+    ``.artifacts/`` / derived projections / decay-archives (live-tree noise). This
     function is scoped to the one dir on purpose; it does not walk the DDD root.
 
     Exfil guard (Gate-2 run_6e4bced6): ``copytree`` defaults to dereferencing symlinks

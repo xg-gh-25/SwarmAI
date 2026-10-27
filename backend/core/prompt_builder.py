@@ -2643,8 +2643,8 @@ class PromptBuilder:
 
     # Canonical DDD doc set — single source: project_registry.DDD_CANONICAL_DOCS (Run 0).
     # Only these four docs are ever shared to a non-owner — never CONTEXT.md,
-    # never .artifacts/, never archives, NEVER spec-details/ (a derived projection,
-    # deliberately excluded from the canonical set → never in the shared lane).
+    # never .artifacts/, never archives, never a derived projection (none is in
+    # the canonical set → never in the shared lane).
     from core.project_registry import DDD_CANONICAL_DOCS as _SHAREABLE_DDD_DOCS
 
     async def _collect_shareable_ddd_paths(self) -> list[str]:

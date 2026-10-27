@@ -344,8 +344,7 @@ class TestReindexJobStoresNothingButTheGraph:
 
 def test_no_product_code_reads_or_writes_the_retired_files():
     """I11 (design 2026-10-27 §10): code-intel.json and spec-details left the product.
-    Only these mentions may remain: history / exclusion comments, and the file-tree
-    filter that hides an old file still on a user's disk until they archive it."""
+    No product code, comment or rule names them any more."""
     import subprocess
     repo = Path(__file__).resolve().parents[2]
     out = subprocess.run(
@@ -353,10 +352,4 @@ def test_no_product_code_reads_or_writes_the_retired_files():
          "backend", "desktop/src", ":!**/tests/**", ":!**/test_*", ":!**/*.test.*", ":!*.md",
          ":!*.tmpl"],
         capture_output=True, text=True).stdout.split()
-    allowed = {
-        "backend/core/code_intel/analysis.py",       # docstring: where the analysis used to live
-        "backend/core/ddd_packager.py",              # comment: never sweeps it into a package
-        "backend/core/prompt_builder.py",            # comment: never shared
-        "desktop/src/components/layout/LibraryTree.tsx",  # hides a leftover file until archived
-    }
-    assert sorted(set(out) - allowed) == []
+    assert out == []

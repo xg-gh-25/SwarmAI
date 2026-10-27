@@ -51,7 +51,6 @@ function isNoiseNode(name: string): boolean {
   if (name === '__pycache__' || name === 'node_modules') return true;
   // suffix junk: *.lock (incl *.md.lock), sqlite db + WAL/SHM sidecars, big generated blobs
   if (/\.(lock|db|db-shm|db-wal)$/.test(name)) return true;
-  if (name === 'code-intel.json') return true;         // 3.3MB generated graph dump
   if (/-archive\.md$/.test(name)) return true;         // IMPROVEMENT-archive.md etc. (multi-MB, not browsable)
   return false;
 }

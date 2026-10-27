@@ -7,7 +7,7 @@
  *  2. NESTED rootPath ('Projects/<name>') = expandDirectory(rootPath, 2) for the
  *     initial children (the backend tree endpoint has no per-subtree root).
  *  3. NOISE FILTER: infra junk (.artifacts, *.db, *.lock, *-archive.md, __pycache__,
- *     dotfiles, code-intel.json) never renders — a project root shows only real
+ *     dotfiles) never renders — a project root shows only real
  *     browsable content, not a 74MB code_intel.db.
  *
  * react-window is real; workspaceService is mocked at the boundary.
@@ -35,13 +35,12 @@ const KNOWLEDGE_TREE: TreeNode[] = [
 // A Projects/<name> subtree WITH noise mixed in (the real-world shape).
 const PROJECT_CHILDREN: TreeNode[] = [
   { name: '2-understanding', path: 'Projects/SwarmAI/2-understanding', type: 'directory', children: null },
-  { name: 'spec-details', path: 'Projects/SwarmAI/spec-details', type: 'directory', children: null },
+  { name: '3-gates', path: 'Projects/SwarmAI/3-gates', type: 'directory', children: null },
   { name: 'AGENTS.md', path: 'Projects/SwarmAI/AGENTS.md', type: 'file' },
   // ── noise that MUST be filtered ──
   { name: '.artifacts', path: 'Projects/SwarmAI/.artifacts', type: 'directory', children: null },
   { name: 'code_intel.db', path: 'Projects/SwarmAI/code_intel.db', type: 'file' },
   { name: 'code_intel.db-wal', path: 'Projects/SwarmAI/code_intel.db-wal', type: 'file' },
-  { name: 'code-intel.json', path: 'Projects/SwarmAI/code-intel.json', type: 'file' },
   { name: 'IMPROVEMENT-archive.md', path: 'Projects/SwarmAI/IMPROVEMENT-archive.md', type: 'file' },
   { name: '.project.json', path: 'Projects/SwarmAI/.project.json', type: 'file' },
   { name: 'TECH.md.lock', path: 'Projects/SwarmAI/TECH.md.lock', type: 'file' },
@@ -66,17 +65,16 @@ describe('LibraryTree — rootPath + noise filter', () => {
     render(<LibraryTree rootPath="Projects/SwarmAI" />);
     await waitFor(() => expect(screen.getByText('2-understanding')).toBeInTheDocument());
     expect(expandDirectory).toHaveBeenCalledWith('Projects/SwarmAI', expect.any(Number));
-    expect(screen.getByText('spec-details')).toBeInTheDocument();
+    expect(screen.getByText('3-gates')).toBeInTheDocument();
     expect(screen.getByText('AGENTS.md')).toBeInTheDocument();
   });
 
-  it('NOISE FILTER: .artifacts / *.db / *.db-wal / code-intel.json / *-archive.md / dotfiles / *.lock never render', async () => {
+  it('NOISE FILTER: .artifacts / *.db / *.db-wal / *-archive.md / dotfiles / *.lock never render', async () => {
     render(<LibraryTree rootPath="Projects/SwarmAI" />);
     await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
     expect(screen.queryByText('.artifacts')).toBeNull();
     expect(screen.queryByText('code_intel.db')).toBeNull();
     expect(screen.queryByText('code_intel.db-wal')).toBeNull();
-    expect(screen.queryByText('code-intel.json')).toBeNull();
     expect(screen.queryByText('IMPROVEMENT-archive.md')).toBeNull();
     expect(screen.queryByText('.project.json')).toBeNull();
     expect(screen.queryByText('TECH.md.lock')).toBeNull();
@@ -97,7 +95,6 @@ describe('LibraryTree — rootPath + noise filter', () => {
     // Every previously-hidden infra file is now VISIBLE (nothing hidden — user's ask).
     expect(screen.getByText('code_intel.db')).toBeInTheDocument();
     expect(screen.getByText('code_intel.db-wal')).toBeInTheDocument();
-    expect(screen.getByText('code-intel.json')).toBeInTheDocument();
     expect(screen.getByText('IMPROVEMENT-archive.md')).toBeInTheDocument();
     expect(screen.getByText('.project.json')).toBeInTheDocument();
     expect(screen.getByText('TECH.md.lock')).toBeInTheDocument();
@@ -141,7 +138,7 @@ describe('LibraryTree — rootPath + noise filter', () => {
   // ── run_4de3103f: hugContent (short tree hugs its rows) + responsive width ──
 
   it('hugContent: List height = content height (rows×32) when SHORT — so a sibling below hugs the tree', async () => {
-    // 3 visible rows (2-understanding, spec-details, AGENTS.md; noise filtered).
+    // 3 visible rows (2-understanding, 3-gates, AGENTS.md; noise filtered).
     // jsdom clientHeight=0 → measure fallback 400; content = 3×32 = 96 → min(400,96)=96.
     render(<LibraryTree rootPath="Projects/SwarmAI" hugContent />);
     await waitFor(() => expect(screen.getByText('AGENTS.md')).toBeInTheDocument());
