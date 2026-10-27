@@ -122,25 +122,6 @@ def _canonical_doc_path(project_dir: "Path", doc: str) -> "Path":
         cand_new = _P(project_dir) / "2-understanding" / doc
         return cand_new if cand_new.exists() else _P(project_dir) / doc
 
-# Placeholder markers left by the s_project-manager CREATE scaffold. A doc whose
-# body is (almost) only these = not yet written = FAIL.
-_PLACEHOLDER_MARKERS = (
-    "_What is this",
-    "_e.g.",
-    "_Priority",
-    "_How do you",
-    "_What are you",
-    "_System overview",
-    "_Absolute path",
-    "_Naming, file",
-    "Patterns that succeeded. Will grow",
-    "Patterns that failed",
-    "Recurring problems to watch",
-    "_What are you working on",
-    "_Active work item",
-    "Nothing currently blocking",
-)
-
 STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"
 STATUS_PENDING = "PENDING"  # governed a code-repo but projection not built yet — not a failure
@@ -174,6 +155,17 @@ def _governed_assets(raw: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(ga, list):
         return []
     return [a for a in ga if isinstance(a, dict)]
+
+
+def _code_repo_assets(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """The brain's code repos for ⑥: ``governed_assets`` entries of kind code-repo,
+    plus each ``bindings:`` repo (a bound repo IS a code-repo asset)."""
+    out = [a for a in _governed_assets(raw) if a.get("kind") == "code-repo"]
+    named = {a.get("name") for a in out}
+    for b in raw.get("bindings") or []:
+        if isinstance(b, dict) and b.get("repo") and b.get("repo") not in named:
+            out.append({"kind": "code-repo", "name": b["repo"]})
+    return out
 
 
 def _has_code_repo_asset(assets: list[dict[str, Any]]) -> bool:
@@ -211,48 +203,113 @@ def _check_identity(d: Path) -> tuple[str, str, str]:
     return ("① Identity/Manifest", STATUS_PASS, "manifests present, aim.json valid")
 
 
-def _doc_is_placeholder(text: str) -> bool:
-    """A doc is a placeholder if, after stripping headers/markers, little real prose remains.
+import re as _re
 
-    Measures real CONTENT VOLUME (chars), not line count — a single substantive
-    paragraph on one line is NOT a stub (Gate-2 C1: `< 2 lines` false-FAILed a
-    concise doc). Markers are matched at LINE START, not as a substring, so prose
-    that merely mentions a marker phrase (`see _e.g. below`) is not miscounted
-    (Gate-2 C2: substring match false-positived real prose).
+# An entry line with an explicit type: "- [<type>] **<title>**".
+_TYPED_ENTRY_RE = _re.compile(r"^- \[(\w+)\] \*\*(.+?)\*\*")
+
+
+def _typed_entries(text: str, parse_entries, valid_types) -> list:
+    """Entries whose bullet carries an explicit, known ``[type]`` (an untyped
+    ``- **Bold** …`` bullet is prose, not an entry)."""
+    out = []
+    for e in parse_entries(text):
+        m = _TYPED_ENTRY_RE.match(e.raw_text.split("\n", 1)[0])
+        if m and m.group(1) in valid_types:
+            out.append(e)
+    return out
+
+
+def _gap_covers(section: str, watch_titles: list[str], starts_with) -> bool:
+    """A What to Watch For entry whose title begins with *section* as whole words
+    records it as a gap ("Vision: no evidence yet"). Gap entries are ordinary
+    guidelines: if decay archives one, its section reads as unexplained again."""
+    return any(starts_with(t, section) for t in watch_titles)
+
+
+def _portable_knowledge(texts: dict[str, str]) -> list[tuple[str, str, str]]:
+    """② structure + content without the SwarmAI backend: structure cannot be
+    compared to the skeleton (PENDING); content still requires one typed entry line in
+    PRODUCT, TECH and IMPROVEMENT, so an untouched skeleton never passes."""
+    empty = [doc for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md")
+             if not any(_TYPED_ENTRY_RE.match(ln) for ln in texts[doc].splitlines())]
+    content = ((STATUS_FAIL, "no typed entry (- [type] **title**) in: " + ", ".join(empty))
+               if empty else (STATUS_PASS, "typed entries present (portable check)"))
+    return [("② Knowledge/structure", STATUS_PENDING,
+             "the skeleton comparison needs the SwarmAI backend (portable run)"),
+            ("② Knowledge/content", *content)]
+
+
+def _check_knowledge(d: Path) -> list[tuple[str, str, str]]:
+    """② KNOWLEDGE — three deterministic checks against the skeleton (core.ddd_skeleton).
+
+    - presence: the four canonical docs exist;
+    - structure: each doc has every skeleton section (headings compared by words,
+      case-insensitively; an existing brain adds missing ones with
+      ``artifact_cli ddd-skeleton-align``);
+    - content: PRODUCT, TECH and IMPROVEMENT each hold at least one typed entry
+      (``- [type] **title**``; the untouched skeleton has none); every PRODUCT
+      section either holds an entry or has a gap entry in IMPROVEMENT § What to Watch
+      For whose title starts with the section name. PROJECT may stay empty (its live
+      sections are the user's).
+    Off a SwarmAI host (no core on the path) only presence is checked; the rest is
+    PENDING.
     """
-    lines = [ln.strip() for ln in text.splitlines()]
-    body = [ln for ln in lines if ln and not ln.startswith("#") and not ln.startswith(">")]
-    if not body:
-        return True
-
-    def _is_marker(ln: str) -> bool:
-        # Scaffold placeholders are emitted as whole italic/bullet lines — anchor to
-        # the line start (after stripping list/emphasis punctuation), never substring.
-        stripped = ln.lstrip("*-_ ").rstrip("_")
-        return any(ln.startswith(m) or stripped.startswith(m.strip("_")) for m in _PLACEHOLDER_MARKERS)
-
-    real = [ln for ln in body if not _is_marker(ln)]
-    # Placeholder if the real (non-marker) prose is thin — measured by total chars,
-    # so ONE substantive paragraph passes but an empty/near-empty body does not.
-    real_chars = sum(len(ln) for ln in real)
-    return real_chars < 40
-
-
-def _check_knowledge(d: Path) -> tuple[str, str, str]:
-    """② KNOWLEDGE: all 4 canonical docs present AND non-placeholder + Knowledge/ dir."""
+    name = "② Knowledge"
     missing = [doc for doc in CANONICAL_DOCS if not _canonical_doc_path(d, doc).exists()]
     if missing:
-        return ("② Knowledge", STATUS_FAIL, f"missing doc(s): {', '.join(missing)}")
-    placeholders = []
+        return [(name, STATUS_FAIL, f"missing doc(s): {', '.join(missing)}")]
+    texts: dict[str, str] = {}
     for doc in CANONICAL_DOCS:
         try:
-            if _doc_is_placeholder(_canonical_doc_path(d, doc).read_text(encoding="utf-8")):
-                placeholders.append(doc)
-        except Exception as e:
-            placeholders.append(f"{doc}(unreadable: {type(e).__name__})")
-    if placeholders:
-        return ("② Knowledge", STATUS_FAIL, f"placeholder/empty doc(s): {', '.join(placeholders)}")
-    return ("② Knowledge", STATUS_PASS, "4 docs present + substantive")
+            texts[doc] = _canonical_doc_path(d, doc).read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            return [(name, STATUS_FAIL, f"{doc} unreadable: {type(e).__name__}")]
+    out = [(name, STATUS_PASS, "4 docs present")]
+    try:
+        from core import ddd_skeleton as sk
+        from core.ddd_entry_lifecycle import VALID_TYPES, parse_entries
+        sk.load_skeleton()
+    except (ImportError, OSError):
+        return out + _portable_knowledge(texts)
+
+    gaps = {doc: sk.missing_sections(doc, t) for doc, t in texts.items()}
+    gaps = {doc: m for doc, m in gaps.items() if m}
+    if gaps:
+        parts = []
+        for doc, missing in gaps.items():
+            renames = sk.near_matches(doc, texts[doc])
+            parts.append(f"{doc}: " + ", ".join(
+                f"{m} (rename heading '{renames[m]}' to '{m}')" if m in renames else m
+                for m in missing))
+        out.append((f"{name}/structure", STATUS_FAIL,
+                    "missing section(s): " + "; ".join(parts)
+                    + " — add them with artifact_cli ddd-skeleton-align --apply"))
+    else:
+        out.append((f"{name}/structure", STATUS_PASS, "every skeleton section present"))
+
+    problems: list[str] = []
+    # A doc that is still the skeleton holds no entry, so this also catches it.
+    # PROJECT.md may stay empty: its live sections are the user's to fill.
+    entries = {doc: _typed_entries(t, parse_entries, VALID_TYPES) for doc, t in texts.items()}
+    empty_docs = [doc for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md") if not entries[doc]]
+    for doc in empty_docs:
+        problems.append(f"{doc} holds no typed entry (- [type] **title**)")
+    watch = [e.title for e in entries["IMPROVEMENT.md"]
+             if " ".join(e.section.split()).casefold() == "what to watch for"]
+    filled = {" ".join(e.section.split()).casefold() for e in entries["PRODUCT.md"]}
+    unexplained = [s for s in sk.skeleton_sections("PRODUCT.md")
+                   if " ".join(s.split()).casefold() not in filled
+                   and not _gap_covers(s, watch, sk.starts_with_section)]
+    if unexplained and "PRODUCT.md" not in empty_docs:
+        problems.append("PRODUCT section(s) empty with no gap in IMPROVEMENT § What to Watch "
+                        f"For: {', '.join(unexplained)}")
+    if problems:
+        out.append((f"{name}/content", STATUS_FAIL, "; ".join(problems)))
+    else:
+        out.append((f"{name}/content", STATUS_PASS,
+                    "typed entries present; empty PRODUCT sections are recorded as gaps"))
+    return out
 
 
 def _check_gates(d: Path) -> tuple[str, str, str]:
@@ -325,22 +382,45 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     """⑥ REFRESHER / code-intel — THE asset-aware check.
 
     - No code-repo governed asset → N/A (data-agent / pure-knowledge — NEVER FAIL).
-    - Has a code-repo asset + a code graph found → PASS.
-    - Has a code-repo asset + NO code graph → PENDING (repo not bound/pulled
-      yet) — a signal, NEVER a FAIL.
+    - Has a code-repo asset (a governed_assets entry or a bindings: repo) + a code
+      graph that opens, has indexed files and was built from a repo the brain owns
+      → PASS.
+    - Otherwise (no graph yet, empty, unopenable, foreign repo) → PENDING with what
+      to do — a projection is a signal, NEVER a FAIL of the brain.
     """
     if not _has_code_repo_asset(assets):
         return ("⑥ Refresher/code-intel", STATUS_NA,
                 "no code-repo asset — code-intel not applicable to this brain")
     ci = _find_code_intel(d)
-    if ci is not None:
+    if ci is None:
+        return ("⑥ Refresher/code-intel", STATUS_PENDING,
+                "governs a code-repo but no code graph built yet — bind the repo to build it (not a failure)")
+    try:
+        from core.code_intel import repo_root_is_owned
+    except ImportError:  # portable run: presence is all that can be seen
+        return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph present at {ci.name}")
+    try:
+        # Read-only: a check must not create WAL files, migrate the schema or take the
+        # write lock a live indexer needs.
+        import sqlite3
+        conn = sqlite3.connect(f"{ci.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
         try:
-            rel = ci.relative_to(d)
-        except ValueError:
-            rel = ci
-        return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph present at {rel}")
-    return ("⑥ Refresher/code-intel", STATUS_PENDING,
-            "governs a code-repo but no code graph built yet — bind the repo to build it (not a failure)")
+            nodes = conn.execute("SELECT COUNT(DISTINCT file_path) FROM code_nodes").fetchone()[0]
+            row = conn.execute("SELECT value FROM graph_meta WHERE key = 'repo_root'").fetchone()
+            root = row[0] if row else None
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001 — a projection never FAILs the brain
+        return ("⑥ Refresher/code-intel", STATUS_PENDING,
+                f"code graph {ci.name} cannot be opened ({type(e).__name__}) — reindex it")
+    if not nodes:
+        return ("⑥ Refresher/code-intel", STATUS_PENDING,
+                f"code graph {ci.name} is empty — re-bind or reindex the repo")
+    if not repo_root_is_owned(d, root):
+        return ("⑥ Refresher/code-intel", STATUS_PENDING,
+                f"code graph {ci.name} was built from a repo this brain does not own "
+                f"({root}) — re-bind the brain's own repo")
+    return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph {ci.name}: {nodes} files indexed")
 
 
 # The pipeline profiles a Project Agent may name. Guarded single-source import, the
@@ -408,12 +488,12 @@ def verify_project(project_dir: str | Path) -> dict[str, Any]:
 
     checks = [
         _check_identity(d),
-        _check_knowledge(d),
+        *_check_knowledge(d),
         _check_gates(d),
         _check_capabilities(d, aim),
         _check_delivery(d, assets),
         _check_project_agent(d),
-        _check_refresher_code_intel(d, assets),
+        _check_refresher_code_intel(d, _code_repo_assets(raw)),
     ]
     check_dicts = [{"name": n, "status": s, "detail": t} for (n, s, t) in checks]
     counts = {STATUS_PASS: 0, STATUS_FAIL: 0, STATUS_PENDING: 0, STATUS_NA: 0}
@@ -433,13 +513,25 @@ _ICON = {STATUS_PASS: "✓", STATUS_FAIL: "✗", STATUS_PENDING: "…", STATUS_N
 
 
 def record_setup_state(project_dir: Path, report: dict[str, Any]) -> None:
-    """Write .artifacts/setup.json from a P6 report: ready on PASS, else setting-up.
+    """Write .artifacts/setup.json from a P6 report: ready on PASS; a FAIL is recorded
+    only while the Brain is still setting up (never downgrades a ready Brain).
 
     Uses core.ddd_setup_state on a SwarmAI host; off-host (a distributed DDD) it
     writes the same two-field shape itself. Never raises: recording is a side note
     of the gate, not part of its verdict.
     """
     state = "ready" if report.get("overall") == STATUS_PASS else "setting-up"
+    if state == "setting-up":
+        # A FAIL only keeps a Brain that is being born in setup. A Brain that is
+        # already ready, or that predates setup state, is never sent back to being
+        # born by a later check (e.g. the add-knowledge flow re-running P6).
+        try:
+            current = json.loads((project_dir / ".artifacts" / "setup.json")
+                                 .read_text(encoding="utf-8")).get("state")
+        except (OSError, ValueError, AttributeError):
+            current = None
+        if current != "setting-up":
+            return
     try:
         from core.ddd_setup_state import write_setup_state  # noqa: PLC0415
         write_setup_state(project_dir, state, report.get("counts"))

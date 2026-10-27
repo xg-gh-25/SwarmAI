@@ -46,6 +46,7 @@ def test_malformed_reads_none(tmp_path):
 
 def test_gate_record_ready_on_pass_setting_up_on_fail(tmp_path):
     mod = _verify_mod()
+    write_setup_state(tmp_path, "setting-up")  # create_project
     mod.record_setup_state(tmp_path, {"overall": mod.STATUS_FAIL, "counts": {"FAIL": 1}})
     assert read_setup_state(tmp_path) == "setting-up"
     mod.record_setup_state(tmp_path, {"overall": mod.STATUS_PASS, "counts": {"PASS": 7}})
@@ -56,6 +57,9 @@ def test_gate_cli_record_flag(tmp_path):
     mod = _verify_mod()
     assert mod.main(["--project-dir", str(tmp_path)]) == 1          # empty dir fails
     assert read_setup_state(tmp_path) is None                       # no --record: nothing written
+    mod.main(["--project-dir", str(tmp_path), "--record"])
+    assert read_setup_state(tmp_path) is None                       # a FAIL never starts a birth
+    write_setup_state(tmp_path, "setting-up")                       # create_project
     mod.main(["--project-dir", str(tmp_path), "--record"])
     assert read_setup_state(tmp_path) == "setting-up"
 

@@ -308,7 +308,10 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
 # Optional: "  <!-- ref:N | last:YYYY-MM-DD | decay:state | source:auto -->"
 # Bi-temporal supersession (run_24299917): two more OPTIONAL trailing segments:
 #   "... | valid_until:YYYY-MM-DD | superseded_by:<anchor>"
-# All three trailing groups (source, valid_until, superseded_by) are independent
+# Provenance taint (design 2026-10-27-new-brain-initial-ddd §5.5): one more OPTIONAL
+# segment right after source, "... | source:bootstrap | taint:external", marking an
+# entry whose content was read from a repo or another outside file (CDF §9 trust).
+# All four trailing groups (source, taint, valid_until, superseded_by) are independent
 # and optional — the leading space of each lives INSIDE its own group so a comment
 # carrying only a later field (e.g. superseded_by, no source) still matches, and a
 # legacy comment with none of them is byte-identical to the pre-supersession form.
@@ -321,6 +324,7 @@ def _match_entry_line(line: str, *, include_prose: bool = False):
 _META_RE = re.compile(
     r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+)"
     r"(?:\s*\|\s*source:(\w+))?"
+    r"(?:\s*\|\s*taint:(\w+))?"
     r"(?:\s*\|\s*valid_until:([\w\-]+))?"
     r"(?:\s*\|\s*superseded_by:([^|]+?))?"
     r"\s*-->$"
@@ -414,6 +418,73 @@ def canonical_entry_from_text(
     return f"{lead}\n{meta}"
 
 
+TAINTS = ("external",)
+
+
+def render_ddd_unit(entry: dict, *, date_str: str, source: str = "bootstrap",
+                    taint: "str | None" = None) -> str:
+    """THE one renderer of a DDD knowledge entry (entry line + metadata line).
+
+    Shared by every writer of DDD entries (design 2026-10-27-new-brain-initial-ddd
+    §5.5: the New Brain bootstrap now, CDF's writer next), so what is written is
+    exactly what ``parse_entries`` reads back. Shape:
+
+        - [<type>] **<title>** <what> **How:** … **Why:** … **Rejected:** …
+          **Applies when:** … (sources: a; b)
+          <!-- ref:0 | last:<date> | decay:active | source:<source>[ | taint:external] -->
+
+    ``entry``: ``type`` (one of VALID_TYPES, or ``gap`` — written as ``guideline``,
+    since a gap is not an ontology type), ``title``, ``what``; optional ``how``,
+    ``why``, ``rejected``, ``applicability``, ``sources`` (list). The title is never
+    truncated. ``taint`` is None or ``"external"`` (content read from a repo or
+    another outside file). Raises ValueError for what the parser could not read back
+    or what would break the doc: an empty title or ``what``; a title with ``**``, a
+    line break or ``|`` (a title is also a supersession anchor); ``<!--`` / ``-->``
+    anywhere.
+
+    Metadata contract (``_META_RE``): the optional segments after ``decay:`` appear in
+    this fixed order — ``source``, ``taint``, ``valid_until``, ``superseded_by`` — and
+    ``source`` / ``taint`` values are single words. A comment that breaks the order is
+    not read as metadata. (``format_memory_entry`` and ``canonical_entry_from_text``
+    are MEMORY.md's renderers; they write no taint.)
+    """
+    etype = str(entry.get("type", "")).strip()
+    if etype == "gap":
+        etype = "guideline"
+    if etype not in VALID_TYPES:
+        raise ValueError(f"unknown entry type {entry.get('type')!r}")
+    title = str(entry.get("title", "")).strip()
+    if not title or any(bad in title for bad in ("**", "\n", "\r", "|")):
+        raise ValueError("entry title must be one non-empty line without '**' or '|'")
+    if not str(entry.get("what", "")).strip():
+        raise ValueError("entry 'what' must not be empty")
+    for key in ("title", "what", "how", "why", "rejected", "applicability", "sources"):
+        if any(c in str(entry.get(key, "")) for c in ("<!--", "-->")):
+            raise ValueError(f"entry {key} must not contain an HTML comment marker")
+    if taint is not None and taint not in TAINTS:
+        raise ValueError(f"unknown taint {taint!r} (known: {', '.join(TAINTS)})")
+    if not re.fullmatch(r"\w+", source):
+        raise ValueError(f"source must be a single word, got {source!r}")
+
+    def _one_line(v) -> str:
+        return " ".join(str(v).split())
+
+    parts = [_one_line(entry.get("what", ""))]
+    for key, label in (("how", "How"), ("why", "Why"), ("rejected", "Rejected"),
+                       ("applicability", "Applies when")):
+        if entry.get(key):
+            parts.append(f"**{label}:** {_one_line(entry[key])}")
+    sources = [s for s in (entry.get("sources") or []) if str(s).strip()]
+    if sources:
+        parts.append("(sources: " + "; ".join(_one_line(s) for s in sources) + ")")
+    body = " ".join(p for p in parts if p)
+    meta = EntryMetadata(title=title, entry_type=etype, source=source,
+                         taint=taint or "",
+                         last_referenced=date.fromisoformat(date_str))
+    line = f"- [{etype}] **{title}** {body}".rstrip()
+    return f"{line}\n{meta.to_comment()}"
+
+
 # ── Dataclasses ───────────────────────────────────────────────────────────────
 
 
@@ -430,6 +501,9 @@ class EntryMetadata:
     line_number: int = 0  # Line in the file (for injection)
     raw_text: str = ""  # Full bullet text (for archival)
     source: str = ""  # "auto" | "manual" | "" (legacy entries without tag)
+    # "external" when the content came from a repo or another outside file (CDF §9);
+    # "" otherwise. Kept verbatim through to_comment / inject_entry_metadata.
+    taint: str = ""
     # Bi-temporal supersession (run_24299917). When superseded_by is set, this
     # entry has been REPLACED by a newer entry (anchor = the superseding entry's
     # title): it is FILTERED from default recall + SKIPPED by age-decay + NEVER
@@ -458,6 +532,8 @@ class EntryMetadata:
         base = f"  <!-- ref:{self.ref_count} | last:{last_str} | decay:{self.decay_state}"
         if self.source:
             base += f" | source:{self.source}"
+        if self.taint:
+            base += f" | taint:{self.taint}"
         # Supersession segments emitted ONLY when set → a live entry's comment is
         # byte-identical to the pre-supersession format (backward-compat guarantee).
         if self.valid_until:
@@ -742,6 +818,7 @@ def parse_entries(content: str, *, include_prose: bool = False,
             superseded_by = None
 
             source = ""
+            taint = ""
             if meta_idx is not None:
                 meta_match = _META_RE.match(lines[meta_idx])
                 if meta_match:
@@ -754,13 +831,14 @@ def parse_entries(content: str, *, include_prose: bool = False,
                             last_referenced = None
                     decay_state = meta_match.group(3)
                     source = meta_match.group(4) or ""
-                    vu_str = meta_match.group(5)
+                    taint = meta_match.group(5) or ""
+                    vu_str = meta_match.group(6)
                     if vu_str:
                         try:
                             valid_until = date.fromisoformat(vu_str)
                         except ValueError:
                             valid_until = None
-                    sup_raw = meta_match.group(6)
+                    sup_raw = meta_match.group(7)
                     superseded_by = sup_raw.strip() if sup_raw else None
                     # `null` sentinel (memory_index idiom) means not-superseded
                     if superseded_by == "null":
@@ -781,6 +859,7 @@ def parse_entries(content: str, *, include_prose: bool = False,
                 line_number=i,
                 raw_text=raw_text,
                 source=source,
+                taint=taint,
                 valid_until=valid_until,
                 superseded_by=superseded_by,
                 end_line=span_end - 1,

@@ -481,6 +481,29 @@ def cmd_bind(args, reg) -> None:
         sys.exit(1)
 
 
+def cmd_ddd_skeleton_align(args, reg) -> None:
+    """List (default) or add (--apply) the skeleton sections an existing brain lacks.
+
+    Design 2026-10-27-new-brain-initial-ddd §5.10. A heading that only resembles a
+    missing section (e.g. "Key Subsystems (architecture shape)") is reported under
+    `rename` and never gets an empty twin; existing bytes are never changed. Exit 1
+    when a doc is missing or a rename remains, 0 otherwise.
+    """
+    if "/" in args.project or "\\" in args.project or args.project in ("", ".", ".."):
+        print(json.dumps({"error": f"invalid project name '{args.project}'"}), file=sys.stderr)
+        sys.exit(2)
+    project_dir = _get_workspace() / "Projects" / args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project '{args.project}' not found"}), file=sys.stderr)
+        sys.exit(2)
+    from core.ddd_skeleton import align_project
+    report = align_project(project_dir, apply=args.apply)
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    if report["unresolved"]:
+        # A missing doc or a heading to rename is left for the person: say so by exit code.
+        sys.exit(1)
+
+
 def cmd_ddd_health(args, reg) -> None:
     """5-dimensional DDD health scoring per section."""
     project_dir = _get_workspace() / "Projects" / args.project
@@ -670,6 +693,11 @@ def main() -> None:
     p_bind = sub.add_parser("bind", help="PULL: clone + code-intel every binding in a project's bindings.yaml")
     p_bind.add_argument("--project", required=True, help="Project whose bindings.yaml to PULL")
 
+    # ddd-skeleton-align (design 2026-10-27 §5.10: give an existing brain the skeleton's sections)
+    p_align = sub.add_parser("ddd-skeleton-align", help="List (or --apply: append) the skeleton sections a brain's 4 docs lack")
+    p_align.add_argument("--project", required=True)
+    p_align.add_argument("--apply", action="store_true", help="Append the missing sections (default: dry-run report)")
+
     # ddd-health
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
@@ -708,6 +736,7 @@ def main() -> None:
         "learn": cmd_learn,
         "projects": cmd_projects,
         "bind": cmd_bind,
+        "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-health": cmd_ddd_health,
         "ddd-retire": cmd_ddd_retire,
         "ddd-noise": cmd_ddd_noise,

@@ -26,6 +26,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
 # Import the gate under test (same dir).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,6 +36,22 @@ import verify_ddd_complete as gate  # noqa: E402
 # ── Synthetic DDD factory ────────────────────────────────────────────────────
 
 CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+
+
+def _filled_doc(doc: str, name: str, *, skip: tuple[str, ...] = ()) -> str:
+    """The skeleton of *doc* with one typed entry under every section not in *skip*."""
+    from core.ddd_entry_lifecycle import render_ddd_unit
+    from core.ddd_skeleton import render_skeleton
+    out = []
+    for line in render_skeleton(doc, name).splitlines():
+        out.append(line)
+        if line.startswith("## ") and line[3:].strip() not in skip:
+            section = line[3:].strip()
+            out.append(render_ddd_unit(
+                {"type": "model", "title": f"{section} of {name}",
+                 "what": f"What {name} records under {section}.", "sources": ["README.md"]},
+                date_str="2026-10-27", taint="external"))
+    return "\n".join(out) + "\n"
 
 
 def _make_ddd(
@@ -64,13 +81,11 @@ def _make_ddd(
     if docs:
         doc_dir.mkdir(parents=True, exist_ok=True)
         for doc in CANONICAL_DOCS:
-            if doc_placeholder:
-                (doc_dir / doc).write_text(f"# {name} — {doc}\n\n_What is this?_\n")
+            if doc_placeholder:  # a fresh brain: the untouched skeleton
+                from core.ddd_skeleton import render_skeleton
+                (doc_dir / doc).write_text(render_skeleton(doc, name))
             else:
-                (doc_dir / doc).write_text(
-                    f"# {name} — {doc}\n\nReal content line one describing the domain.\n"
-                    "A second substantive paragraph so it is not a placeholder stub.\n"
-                )
+                (doc_dir / doc).write_text(_filled_doc(doc, name))
     # ① IDENTITY manifests
     (d / ".project.json").write_text(json.dumps({"name": name, "id": "x", "ddd_spec_version": "1.0"}))
     (d / "AGENTS.md").write_text(f"# {name} — DDD Agent Guide\n\nreal readme content.\n")
@@ -90,9 +105,20 @@ def _make_ddd(
     # ⑤ DELIVERY CONTRACT
     if bindings_yaml is not None:
         (d / "bindings.yaml").write_text(bindings_yaml)
-    # ⑥ the derived code graph
+    # ⑥ the derived code graph: a real one, built from a repo TECH.md declares
     if code_intel:
-        (d / "code_intel.db").write_bytes(b"")
+        from core.code_intel.graph_store import GraphStore
+        repo = d / "repo"
+        repo.mkdir(exist_ok=True)
+        (repo / "m.py").write_text("def f():\n    return 1\n")
+        tech = (doc_dir / "TECH.md") if docs else None
+        if tech is not None and tech.exists():
+            tech.write_text(tech.read_text() + f"\nLocal repo: **Local:** `{repo}`\n")
+        graph = GraphStore(d / "code_intel.db")
+        graph.upsert_nodes([{"id": "m.py::f", "file_path": "m.py", "node_type": "function",
+                             "name": "f", "line_start": 1, "line_end": 2, "language": "python"}])
+        graph.set_meta("repo_root", str(repo))
+        graph.close()
     return d
 
 
@@ -245,7 +271,7 @@ def test_missing_doc_fails_naming_it(tmp_path):
 def test_placeholder_doc_fails(tmp_path):
     d = _make_ddd(tmp_path, "Placeholder", doc_placeholder=True)
     report = gate.verify_project(d)
-    assert _status_of(report, "knowledge") == "FAIL"
+    assert _status_of(report, "knowledge/content") == "FAIL"
     assert report["overall"] == "FAIL"
 
 
@@ -281,7 +307,7 @@ def test_numbered_layout_placeholder_doc_fails(tmp_path):
     """A placeholder doc under 2-understanding/ still FAILs (no false-green on new layout)."""
     d = _make_ddd(tmp_path, "NumberedPlaceholder", numbered_layout=True, doc_placeholder=True)
     report = gate.verify_project(d)
-    assert _status_of(report, "knowledge") == "FAIL"
+    assert _status_of(report, "knowledge/content") == "FAIL"
     assert report["overall"] == "FAIL"
 
 
@@ -361,45 +387,94 @@ def test_domain_skills_as_string_does_not_iterate_chars(tmp_path):
     assert ", _, " not in cap["detail"] and "s, _, f" not in cap["detail"]
 
 
-def test_concise_one_paragraph_doc_is_not_placeholder(tmp_path):
-    """Gate-2 C1 (HIGH): a substantive doc with ONE prose line must PASS, not FAIL.
+# ── ② against the skeleton (design 2026-10-27 §5.7, invariant I2) ────────────
 
-    Before the fix, `< 2 real lines` false-FAILed a concise doc. Now content VOLUME
-    (chars) decides, so one dense paragraph passes.
-    """
-    d = _make_ddd(tmp_path, "ConciseDocs")
-    one_liner = (
-        "# ConciseDocs — {doc}\n\n"
-        "This project governs the widget pipeline and its three downstream consumers, "
-        "documented here in a single dense paragraph that is unmistakably real content.\n"
-    )
+def test_fresh_skeleton_fails_content_for_product_tech_improvement(tmp_path):
+    """I2: the untouched skeleton passes structure but never passes content (the old
+    marker heuristic called a fresh PRODUCT and TECH 'filled')."""
+    d = _make_ddd(tmp_path, "Fresh", doc_placeholder=True)
+    report = gate.verify_project(d)
+    assert _status_of(report, "knowledge/structure") == "PASS"
+    assert _status_of(report, "knowledge/content") == "FAIL"
+    detail = _detail_of(report, "knowledge/content")
+    for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md"):
+        assert doc in detail
+    assert "PROJECT.md" not in detail, "PROJECT may stay as the skeleton"
+
+
+def test_prose_without_typed_entries_fails_content(tmp_path):
+    d = _make_ddd(tmp_path, "Prose")
     for doc in CANONICAL_DOCS:
-        (d / doc).write_text(one_liner.format(doc=doc))
+        from core.ddd_skeleton import render_skeleton
+        (d / doc).write_text(render_skeleton(doc, "Prose") + "\nA long paragraph of real prose "
+                             "that describes the domain in concrete terms but is no entry.\n")
     report = gate.verify_project(d)
-    assert _status_of(report, "knowledge") == "PASS", report
+    assert _status_of(report, "knowledge/content") == "FAIL"
+    assert "no typed entry" in _detail_of(report, "knowledge/content")
 
 
-def test_prose_mentioning_marker_phrase_is_not_placeholder(tmp_path):
-    """Gate-2 C2 (MEDIUM): real prose that merely mentions a marker phrase mid-line
-    must NOT be counted as a placeholder line (markers anchor to line start)."""
-    d = _make_ddd(tmp_path, "MarkerProse")
-    body = (
-        "# MarkerProse — {doc}\n\n"
-        "The naming convention (see _e.g. the examples below) is enforced across all "
-        "modules, and recurring problems to watch for are tracked in the audit log.\n"
-        "A second real line describing the domain in concrete, substantive terms.\n"
-    )
-    for doc in CANONICAL_DOCS:
-        (d / doc).write_text(body.format(doc=doc))
+def test_missing_skeleton_section_fails_structure_naming_it(tmp_path):
+    d = _make_ddd(tmp_path, "Gappy")
+    tech = d / "TECH.md"
+    tech.write_text(tech.read_text().replace("## Runtime Traps", "## Something Else"))
     report = gate.verify_project(d)
-    assert _status_of(report, "knowledge") == "PASS", report
+    assert _status_of(report, "knowledge/structure") == "FAIL"
+    detail = _detail_of(report, "knowledge/structure")
+    assert "TECH.md: Runtime Traps" in detail and "ddd-skeleton-align" in detail
 
 
-def test_genuine_stub_still_fails(tmp_path):
-    """Guard against over-correction: a genuine scaffold stub must STILL FAIL."""
-    d = _make_ddd(tmp_path, "RealStub", doc_placeholder=True)
+def test_heading_compare_ignores_case_and_spacing(tmp_path):
+    d = _make_ddd(tmp_path, "Spacing")
+    tech = d / "TECH.md"
+    tech.write_text(tech.read_text().replace("## Key Subsystems", "## key   subsystems"))
+    assert _status_of(gate.verify_project(d), "knowledge/structure") == "PASS"
+
+
+def test_empty_product_section_needs_a_gap(tmp_path):
+    from core.ddd_entry_lifecycle import render_ddd_unit
+    d = _make_ddd(tmp_path, "Honest")
+    (d / "PRODUCT.md").write_text(_filled_doc("PRODUCT.md", "Honest", skip=("Non-Goals",)))
     report = gate.verify_project(d)
-    assert _status_of(report, "knowledge") == "FAIL", report
+    assert _status_of(report, "knowledge/content") == "FAIL"
+    assert "Non-Goals" in _detail_of(report, "knowledge/content")
+    imp = d / "IMPROVEMENT.md"
+    imp.write_text(imp.read_text().rstrip() + "\n" + render_ddd_unit(
+        {"type": "gap", "title": "Non-Goals: no evidence yet",
+         "what": "The repo and the person's answers say nothing about non-goals."},
+        date_str="2026-10-27") + "\n")
+    assert _status_of(gate.verify_project(d), "knowledge/content") == "PASS"
+
+
+def test_empty_code_graph_is_pending(tmp_path):
+    from core.code_intel.graph_store import GraphStore
+    bindings = "governed_assets:\n  - kind: code-repo\n    name: svc\n"
+    d = _make_ddd(tmp_path, "EmptyGraph", bindings_yaml=bindings)
+    GraphStore(d / "code_intel.db").close()
+    report = gate.verify_project(d)
+    assert _status_of(report, "code-intel") == "PENDING"
+    assert "empty" in _detail_of(report, "code-intel")
+
+
+def test_foreign_code_graph_is_pending(tmp_path):
+    bindings = "governed_assets:\n  - kind: code-repo\n    name: svc\n"
+    from core.code_intel.graph_store import GraphStore
+    d = _make_ddd(tmp_path, "Foreign", bindings_yaml=bindings, code_intel=True)
+    other = tmp_path / "someone_elses_repo"
+    other.mkdir()
+    graph = GraphStore(d / "code_intel.db")
+    graph.set_meta("repo_root", str(other))
+    graph.close()
+    report = gate.verify_project(d)
+    assert _status_of(report, "code-intel") == "PENDING"
+    assert "does not own" in _detail_of(report, "code-intel")
+
+
+def test_a_bound_repo_counts_as_a_code_repo_asset(tmp_path):
+    bindings = ("bindings:\n  - repo: lib\n    kind: external\n    clone: https://x/y.git\n"
+                "    delivery_contract:\n      remote_kind: github-pr\n      branch: main\n"
+                "      review_path: pr\n      auto_send: manual\n")
+    d = _make_ddd(tmp_path, "Bound", bindings_yaml=bindings)
+    assert _status_of(gate.verify_project(d), "code-intel") == "PENDING"
 
 
 # ── Real-project dog-food (environment-robust) ───────────────────────────────
@@ -452,3 +527,75 @@ def test_dogfood_real_project_code_intel_consistent(project_dir):
         assert ci in (gate.STATUS_PASS, gate.STATUS_PENDING), report
     else:
         assert ci == gate.STATUS_NA, report
+
+
+def test_untyped_bold_bullet_is_not_an_entry(tmp_path):
+    """A leftover '- **Language:** _e.g._' line from the old inline template is prose."""
+    from core.ddd_skeleton import render_skeleton
+    d = _make_ddd(tmp_path, "OldTech")
+    (d / "TECH.md").write_text(render_skeleton("TECH.md", "OldTech")
+                               + "\n- **Language:** _e.g., Python 3.12_\n")
+    report = gate.verify_project(d)
+    assert "TECH.md holds no typed entry" in _detail_of(report, "knowledge/content")
+
+
+def test_structure_detail_names_the_heading_to_rename(tmp_path):
+    d = _make_ddd(tmp_path, "Rename")
+    tech = d / "TECH.md"
+    tech.write_text(tech.read_text().replace("## Key Subsystems", "## Key Subsystems (shape)"))
+    detail = _detail_of(gate.verify_project(d), "knowledge/structure")
+    assert "rename heading 'Key Subsystems (shape)' to 'Key Subsystems'" in detail
+
+
+def test_portable_run_keeps_both_check_names_and_catches_a_stub(tmp_path, monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def no_core(name, *a, **k):
+        if name == "core" or name.startswith("core."):
+            raise ImportError(name)
+        return real_import(name, *a, **k)
+
+    stub = _make_ddd(tmp_path, "Stub", doc_placeholder=True)
+    good = _make_ddd(tmp_path, "Good")
+    monkeypatch.setattr(builtins, "__import__", no_core)
+    r_stub, r_good = gate.verify_project(stub), gate.verify_project(good)
+    monkeypatch.setattr(builtins, "__import__", real_import)
+    assert _status_of(r_stub, "knowledge/structure") == "PENDING"
+    assert _status_of(r_stub, "knowledge/content") == "FAIL"
+    assert _status_of(r_good, "knowledge/content") == "PASS"
+
+
+def test_code_graph_check_is_read_only(tmp_path):
+    bindings = "governed_assets:\n  - kind: code-repo\n    name: svc\n"
+    d = _make_ddd(tmp_path, "RO", bindings_yaml=bindings, code_intel=True)
+    db = d / "code_intel.db"
+    before = db.read_bytes()
+    with patch("core.code_intel.graph_store.GraphStore",
+               side_effect=AssertionError("opened read-write")):
+        assert _status_of(gate.verify_project(d), "code-intel") == "PASS"
+    assert db.read_bytes() == before
+
+
+@pytest.mark.parametrize("current,report_overall,expected", [
+    ("setting-up", "FAIL", "setting-up"),
+    ("setting-up", "PASS", "ready"),
+    ("ready", "FAIL", "ready"),        # a later check never un-births a Brain
+    (None, "FAIL", None),              # a Brain made before setup state stays without one
+])
+def test_record_never_downgrades_a_ready_brain(tmp_path, current, report_overall, expected):
+    sj = tmp_path / ".artifacts" / "setup.json"
+    if current:
+        sj.parent.mkdir(parents=True)
+        sj.write_text(json.dumps({"state": current}))
+    gate.record_setup_state(tmp_path, {"overall": report_overall, "counts": {}})
+    got = json.loads(sj.read_text())["state"] if sj.exists() else None
+    assert got == expected
+
+
+def test_bindings_repo_does_not_change_the_delivery_detail(tmp_path):
+    bindings = ("bindings:\n  - repo: lib\n    kind: external\n    clone: https://x/y.git\n"
+                "    delivery_contract:\n      remote_kind: github-pr\n      branch: main\n"
+                "      review_path: pr\n      auto_send: manual\n")
+    d = _make_ddd(tmp_path, "Deliv", bindings_yaml=bindings)
+    assert "governed asset(s)" not in _detail_of(gate.verify_project(d), "delivery")

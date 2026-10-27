@@ -378,95 +378,6 @@ user_context:
   recent_topics: []
 """
 
-# DDD document templates for new projects.  Each key is a filename, each
-# value is the template content with ``{project_name}`` placeholders.
-DDD_TEMPLATES: dict[str, str] = {
-    "PRODUCT.md": """# {project_name} -- Product Context
-
-## Vision
-
-_What is this project and why does it exist? One paragraph._
-
-## Strategic Priorities
-
-1. _Priority 1_
-2. _Priority 2_
-3. _Priority 3_
-
-## Success Criteria
-
-- _How do you know this project is succeeding?_
-
-## Non-Goals
-
-- _What are you explicitly NOT doing?_
-""",
-    "TECH.md": """# {project_name} -- Technical Context
-
-## Architecture
-
-_System overview, key components, data flow._
-
-## Stack
-
-- **Language:** _e.g., Python 3.12, TypeScript 5_
-- **Framework:** _e.g., FastAPI, Next.js_
-- **Database:** _e.g., SQLite, PostgreSQL_
-- **Testing:** _e.g., pytest, vitest_
-
-## Codebase Location
-
-_Absolute path or repo URL to the project's source code._
-
-## Dev Commands
-
-- **Start:** _e.g., npm run dev, ./dev.sh_
-- **Test:** _e.g., pytest, npm test_
-- **Build:** _e.g., npm run build_
-
-## Conventions
-
-_Naming, file structure, commit message format._
-
-## Key Files
-
-| Domain | Files |
-|--------|-------|
-| _..._ | _..._ |
-""",
-    "IMPROVEMENT.md": """# {project_name} -- Lessons & Patterns
-
-## What Worked
-
-_Patterns that succeeded. Will grow through usage._
-
-## What Failed
-
-_Patterns that failed, root causes, what to do instead. Will grow through usage._
-
-## Known Issues
-
-_Recurring problems to watch for._
-""",
-    "PROJECT.md": """# {project_name} -- Current Context
-
-## Current Focus
-
-_What are you working on right now?_
-
-## Open Items
-
-- [ ] _Active work item_
-
-## Recent Decisions
-
-- _YYYY-MM-DD: Decision and rationale_
-
-## Blocked By
-
-_Nothing currently blocking._
-""",
-}
 
 # Canonical six-section DDD structure — SKELETON materialized at CREATE
 # (option A, XG decision 2026-07-12; refined 2026-07-12 to remove over-build).
@@ -492,7 +403,7 @@ _Nothing currently blocking._
 #   D2: ONE unified AGENTS.md README, NOT five per-section README stubs.
 #   D3: aim.json.plugins declares the default DDD-native skills.
 #
-# ② KNOWLEDGE (4 DDD_TEMPLATES docs + Knowledge/) is handled by the workspace;
+# ② KNOWLEDGE (the 4 skeleton docs, core.ddd_skeleton, + Knowledge/) is handled by the workspace;
 # ⑤ DELIVERY CONTRACT (bindings.yaml) is provisioned by BIND, not CREATE.
 # The aim.json description a new Brain starts with. It says nothing about the Brain,
 # so readers that show a briefing (the Brain Hub card) treat it as "no description".
@@ -769,13 +680,13 @@ DDD_NATIVE_SKILL_TEMPLATES: dict[str, dict[str, str]] = _load_ddd_native_skill_t
 # Default SwarmAI project DDD content (richer than templates, serves as
 # example for users).
 def _load_swarmai_ddd_templates() -> dict[str, str]:
-    """Load SwarmAI default project DDD templates from backend/templates/ddd/.
+    """Load SwarmAI default project DDD seed from backend/templates/swarmai-seed/.
 
     Templates are maintained as standalone markdown files for readability,
     diffability, and ease of editing. Falls back to minimal inline content
     if template files are missing (e.g. PyInstaller bundle without templates).
     """
-    templates_dir = Path(__file__).parent.parent / "templates" / "ddd"
+    templates_dir = Path(__file__).parent.parent / "templates" / "swarmai-seed"
     ddd_files = list(DDD_CANONICAL_DOCS)
     result: dict[str, str] = {}
 
@@ -1442,12 +1353,14 @@ class SwarmWorkspaceManager:
             # redesign 2026-07-21). ddd_write_path resolves the NEW location and
             # creates the parent dir; strangler READs still find an un-migrated
             # doc at root via ddd_path.
-            for filename, template in DDD_TEMPLATES.items():
+            # The one skeleton every brain starts from (core.ddd_skeleton).
+            from core.ddd_skeleton import DOCS as _SKELETON_DOCS, render_skeleton
+            for filename in _SKELETON_DOCS:
                 filepath = ddd_path(project_dir, filename)  # strangler: existing-or-new
                 if not filepath.exists():
                     filepath = ddd_write_path(project_dir, filename)  # write → new
                     filepath.write_text(
-                        template.replace("{project_name}", project_name),
+                        render_skeleton(filename, project_name),
                         encoding="utf-8",
                     )
                     created.append(str(filepath.relative_to(project_dir)))

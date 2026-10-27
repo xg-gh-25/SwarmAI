@@ -83,7 +83,7 @@ cd backend && pytest
 cd desktop && npm run build:all
 ```
 
-## Key Subsystems (architecture shape)
+## Key Subsystems
 
 ### Session System
 

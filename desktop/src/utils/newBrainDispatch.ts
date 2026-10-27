@@ -167,9 +167,10 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
 
   lines.push(
     'Set it up with me: run the s_project-manager setup (P0 confirm the governed assets → ' +
-      'P1 create → P2 read & distill the material into PRODUCT/TECH/IMPROVEMENT/PROJECT → ' +
+      'P1 create → P2 read & distill the material into typed entries in PRODUCT/TECH/IMPROVEMENT/PROJECT, ' +
+      'recording each PRODUCT section the material cannot support as a gap → ' +
       'P3 bind any repo → P3b generate the Project Agent (project-agent.yaml) from this knowledge, ' +
-      'using only the pipeline profiles, and show it to me to confirm or change → P4 code-intel ' +
+      'using only the pipeline profiles, and show it to me to confirm or change → P4 code graph ' +
       'for a repo → P5 skills → P6 verify). Surface anything you cannot reach (login-walled links, ' +
       'missing paths) or any conflicts between sources for me to resolve. If the name is taken ' +
       '(create returns 409), stop and ask me for another name. Run P6 with --record. When it passes, ' +
@@ -202,7 +203,7 @@ function materialLines(items: StarterItem[], notes: Record<StarterRole, string>)
 export function buildAddKnowledgePrompt(name: string, items: StarterItem[]): string {
   const lines = [`Add knowledge to the "${name.trim()}" Brain (s_project-manager: Add knowledge to an existing Brain).`, '', 'Material:'];
   lines.push(...materialLines(items, {
-    GOVERN: 'GOVERN (a new asset: bind it in bindings.yaml, build code-intel for a repo)',
+    GOVERN: 'GOVERN (a new asset: bind it in bindings.yaml, build the code graph for a repo)',
     DISTILL: 'DISTILL (read it, then sediment what is worth keeping into PRODUCT/TECH/IMPROVEMENT/PROJECT)',
     SHELF: 'SHELF (mount for reference in the Library; do not copy it into the docs)',
   }));
@@ -226,7 +227,7 @@ export function buildResumeSetupPrompt(name: string): string {
     '',
     'Run the P6 check first (s_project-manager verify_ddd_complete.py --project ' +
       `"${name.trim()}") to see which phases are missing, then finish only those, in order: ` +
-      'P2 knowledge, P3 bind, P3b the Project Agent (show it to me to confirm), P4 code-intel, ' +
+      'P2 knowledge, P3 bind, P3b the Project Agent (show it to me to confirm), P4 code graph, ' +
       'P5 skills. Do not redo or overwrite what is already written. Finish with P6 --record, ' +
       'then open Brain Hub for me and tell me it is ready.',
   ].join('\n');

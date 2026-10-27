@@ -128,18 +128,24 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 | Phase | Do | Exit-gate (must pass to proceed) |
 |-------|----|----------------------------------|
 | **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
-| **P1 — CREATE** | `create_project` scaffolds the six-section skeleton + copies the 3 native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
-| **P2 — KNOWLEDGE (the moat)** | Fill PRODUCT / TECH / IMPROVEMENT / PROJECT.md from the source (spec, code, conversation). This is where domain judgment is born. | All 4 docs substantive — **no placeholders** (P6 ② check FAILs on a stub). |
+| **P1 — CREATE** | `create_project` scaffolds the six-section skeleton (the four docs come from the one skeleton, `backend/templates/ddd-skeleton/`) + copies the native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
+| **P2 — KNOWLEDGE (the moat)** | Fill PRODUCT / TECH / IMPROVEMENT / PROJECT.md from the source (spec, code, conversation). This is where domain judgment is born. Write **typed entries** under the skeleton's sections — `- [type] **Title** what … (sources: …)` plus the metadata line, rendered by `core.ddd_entry_lifecycle.render_ddd_unit` (types: guideline, pitfall, decision, model, process, principle, correction; content read from a repo or another file gets `taint="external"`). A PRODUCT section the material says nothing about stays empty and gets a **gap** in IMPROVEMENT § What to Watch For whose title starts with the section name ("Non-Goals: no evidence yet"). Never invent content to fill a section. | P6 ②: every skeleton section present (structure); PRODUCT, TECH and IMPROVEMENT each hold a typed entry, and every empty PRODUCT section has its gap (content). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets.** Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
 | **P3b — PROJECT AGENT** ⭐ | **Every brain.** Generate `project-agent.yaml` (next to `bindings.yaml`, section ⑤) from what this brain now knows — see "Generating the Project Agent" below. Show it to the person as a short table and ask them to confirm or change it. They review and revise; they never fill it in. Set `status: reviewed` and `reviewed_at` only after they confirm. | P6 ⑤ Project Agent check: present with only supported profiles and placements → PASS; missing → PENDING. |
-| **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph; the reindex job keeps it current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + code graph present → PASS; code-repo asset not yet bound → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
+| **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph; the reindex job keeps it current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
 | **P5 — CAPABILITIES** | Add/port the DDD's domain skills into `skills/s_<name>/` and register them in `aim.json` `domain_skills` (served `source_tier=ddd`). | Every `aim.json` domain skill has a dir + `SKILL.md` on disk (P6 ④ check). |
 | **P6 — VERIFY** ⭐ | Run the completeness gate. It is **asset-aware**: it never fails a data-agent / pure-knowledge brain for a missing code-intel. | `"$SWARM_BACKEND_BIN" py {SKILL_DIR}/scripts/verify_ddd_complete.py --project <NAME> --record` exits **0** (no `FAIL`; `PENDING`/`N/A` are fine). |
 
 **Progress while it is being born.** After each phase from P2 on, run the same P6
 command with `--record`. It keeps the Brain `setting-up` until everything passes and
-records how many checks pass, which Brain Hub shows on the card ("Being born · 4 of 7
-checks"). A FAIL at that point is expected and is not a reason to stop.
+records how many checks pass, which Brain Hub shows on the card ("Being born · 5 of 9
+checks"). A FAIL at that point is expected and is not a reason to stop. A FAIL never
+sends a Brain that is already ready back to being born.
+
+**An existing Brain made before the skeleton** may lack some sections: run
+`artifact_cli ddd-skeleton-align --project <NAME>` (dry-run), then `--apply` to append
+the missing headings. A heading that only resembles a section is listed under `rename`
+for the person to rename; the command never changes existing text.
 
 ### Generating the Project Agent (P3b)
 

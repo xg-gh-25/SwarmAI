@@ -41,7 +41,7 @@ The codebase is both the product AND the evidence. The interesting parts are not
 | Evolution optimizer | `backend/core/evolution_optimizer.py` | Full MINE→ASSESS→ACT→AUDIT pipeline — not a concept, running code |
 | Skill fitness scoring | `backend/core/skill_fitness.py` | Skills are scored and ranked by actual usage patterns |
 | Session mining | `backend/core/session_miner.py` | Extracts corrections and patterns from session transcripts |
-| DDD IMPROVEMENT.md template | `backend/templates/ddd/IMPROVEMENT.md` | Real "What Worked / What Failed" entries from production use |
+| DDD IMPROVEMENT.md template | `backend/templates/swarmai-seed/IMPROVEMENT.md` | Real "What Worked / What Failed" entries from production use |
 | Post-session hooks | `backend/hooks/` | Intelligence fires AFTER every session — daily activity, distillation, context_health, evolution maintenance, user_observer, etc. (registered in `backend/main.py` lifespan) |
 
 ### Architecture (read these to understand the system)
@@ -105,7 +105,7 @@ Instead of judging by stars or README marketing, read actual code:
 
 4. **Read `backend/hooks/`** — post-session hooks fire after every session: evolution_maintenance (quality gate, size valve, correction-class escalation), distillation (promote patterns to long-term memory), context_health (validate context file integrity), user_observer (learn user patterns), skill_metrics (track usage). This is autonomous intelligence, not just a chatbot.
 
-5. **Read `backend/templates/ddd/IMPROVEMENT.md`** — Real "What Worked" and "What Failed" entries from production use. This is the system learning from its own mistakes — not a template, populated content.
+5. **Read `backend/templates/swarmai-seed/IMPROVEMENT.md`** — Real "What Worked" and "What Failed" entries from production use. This is the system learning from its own mistakes — not a template, populated content.
 
 ## What This Is NOT
 
