@@ -499,8 +499,8 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 步 | 内容 | 依赖 | 评审专家 |
 |---|---|---|---|
 | 0 | Q1 段名改通用：live 标题和 main 上的三处引用 | 无 | **已完成**（c3c629ceb） |
-| 1 | G1 解析器和归属、G2 增量单路径、G7 不销毁、G8 clone 加固 | 无 | correctness、concurrency（watcher 线程）、security |
-| 1b | §5.9 code-intel.json 和 spec-details 退出（先于第 3 步做，避免 survey 和 Brain Hub 再接上旧文件） | 1（G1 提供替代的读取方） | correctness（R27 读取方清单）、integration（recall、Brain Hub） |
+| 1 | G1 解析器和归属、G2 增量单路径、G7 不销毁、G8 clone 加固 | 无 | **已完成**（7e3ea786；correctness、concurrency、security 两轮） |
+| 1b | §5.9 code-intel.json 和 spec-details 退出（先于第 3 步做，避免 survey 和 Brain Hub 再接上旧文件） | 1（G1 提供替代的读取方） | **已完成**（28efb116、18ce2cc9、d5f2ac2b；analysis 能力经 correctness、api-contract 评审） |
 | 2 | §5.1 骨架、§5.7 P6 门、§5.10 对齐命令、条目语法加 `taint`；CDF 分支上的 C1–C4 | 无 | api-contract（条目语法、CDF 矩阵）、correctness |
 | 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 Specs 面板、G5 | 1、1b | security（不可信文件）、performance（大 repo） |
 | 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | correctness、ux |
@@ -579,3 +579,6 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - **Q1**：段名改通用。live 的 SwarmAI PRODUCT.md 和 main 上的三处引用已经改完（c3c629ceb）；其中 `signal_ddd_bridge.py:200` 是 r2 没发现的产品代码写死点。
 - **Q2**：CDF 怎么改由本设计负责，新增 §5.11 作为唯一清单（C1–C11）。其中 C6 记录了一个 CDF 实现缺口：不在 run 里的 `commit:` 锚点无法解析。§5.1 和 §5.5 原来零散的改动请求都改为引用 §5.11。
 - **Q3**：code-intel.json 和 spec-details 不是产品能力，退出。§5.9 写明了判定依据（运行时没有读取方、新用户生成不出来、打包时被排除、14 份 `[human]` 区全是占位符）、删除清单和已有数据的归档方式。r2 计划新增的 `spec-index.json` 并进 `survey.json`，不再新造派生文件。§9 加入第 0、1b、8 步，§10 加入 I11、I12。
+
+**r4（2026-10-27）**：第 1、1b 步落地。1b 实施时发现 code-intel.json 还承载一块确定性分析（结构、结构聚类、拓扑分析、`domain_rules` 业务规则提取），读取方是 `s_repo-to-ddd`。用户选择保留并做成产品能力：`core/code_intel/analysis.py`，从 `code_intel.db` 按需计算、不存盘，入口为库调用、`GET /api/code-intel/{project}/analysis` 和 `"$SWARM_BACKEND_BIN" py -m core.code_intel.analysis`，结果带 `schema` + `version`。surprising connections 改按结构社区划分；`hot_zones` 改名 `central_symbols`（与 G5 一致）；解析覆盖缺口记在图的 meta 里。新 DDD 不再默认拷入 `s_repo-to-ddd`。
+
