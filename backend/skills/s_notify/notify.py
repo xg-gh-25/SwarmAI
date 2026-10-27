@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import html
+import os
 import json
 import logging
 import smtplib
@@ -31,22 +32,13 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # Default config location
-def _get_app_data_dir() -> Path:
-    """Resolve the app data dir, honoring the SAME escape hatch as backend config.
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
 
-    ``SWARM_DATA_DIR`` is the single authority (config.get_app_data_dir reads it);
-    a standalone skill script cannot import backend ``config``, so it re-implements
-    the same precedence rather than introducing a second name. ``SWARM_APP_DATA_DIR``
-    stays as a deprecated fallback for anything still exporting the old name.
-    """
-    import os as _os
-    return Path(
-        _os.environ.get("SWARM_DATA_DIR")
-        or _os.environ.get("SWARM_APP_DATA_DIR")  # deprecated alias
-        or Path.home() / ".swarm-ai"
-    )
 
-DEFAULT_CONFIG_PATH = str(_get_app_data_dir() / "notify-channels.yaml")
+DEFAULT_CONFIG_PATH = str(_app_data_dir() / "notify-channels.yaml")
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────

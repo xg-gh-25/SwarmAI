@@ -74,8 +74,9 @@ class CodeIntelWatcher:
             current = load_project_graph(self._project_name)
             if current is not None and current._db_path == self._started_graph._db_path:
                 return current
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001 -- keep the graph we started with
+            logger.debug("CodeIntelWatcher %s: current graph lookup failed: %s",
+                         self._project_name, exc)
         return self._started_graph
 
     async def start(self):

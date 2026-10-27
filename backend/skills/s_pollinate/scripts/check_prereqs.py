@@ -12,6 +12,13 @@ Usage:
 import os
 import shutil
 import sys
+from pathlib import Path
+
+
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
 
 # Backend -> required env vars
 BACKEND_ENV = {
@@ -51,7 +58,7 @@ def check():
             missing.append(var)
 
     # I5: Check for pollinate-accounts.yaml (optional, for publish metadata)
-    accounts_path = os.path.expanduser("~/.swarm-ai/pollinate-accounts.yaml")
+    accounts_path = str(_app_data_dir() / "pollinate-accounts.yaml")
     has_accounts = os.path.isfile(accounts_path)
 
     if missing:

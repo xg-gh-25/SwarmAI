@@ -156,8 +156,9 @@ def test_ac5_dumb_spawn_harness_non_vacuous():
 
 def test_ac6_rth_cases_score_into_recovery_dimension():
     """Gate-2 LOW: a passed case that maps to no scored dimension inflates
-    confidence without moving the health score. Assert the recovery cases actually
-    produce a 'recovery' dimension in a real run_eval output."""
+    confidence without moving the release decision. Assert the recovery cases are
+    counted, as passed gate cases, in a real run_eval's dimension_summary (since
+    db0fbadbd there is no weighted score; recovery cases live in 'responsibility')."""
     from pathlib import Path as _P
     import tempfile
     from scripts.eval_runner import load_merged_golden_set, run_eval
@@ -165,5 +166,7 @@ def test_ac6_rth_cases_score_into_recovery_dimension():
     result = run_eval(gs, trigger="manual",
                       case_filter=["SAFE_RECOVERY", "SAFE_TAB_ISOLATION"],
                       root=_REPO, programmatic_only=True)
-    assert "recovery" in result.get("dimensions", {}), \
-        f"recovery cases did not score into 'recovery': {result.get('dimensions')}"
+    row = result.get("dimension_summary", {}).get("responsibility", {})
+    assert row.get("gate", {}).get("passed") == 2, \
+        f"recovery cases did not count as passed gate cases: {result.get('dimension_summary')}"
+    assert "other" not in result["dimension_summary"], "a recovery case mapped to no dimension"

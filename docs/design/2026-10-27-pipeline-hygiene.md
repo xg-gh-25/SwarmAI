@@ -112,6 +112,29 @@ a literal path, a reordered skill resolver and an odd variable each turn it red.
 **Accept.** Structural test green over all four trees; a mutation that re-adds one
 literal path turns it red.
 
+## 5. Skill scripts resolve the app data dir on their own (r2, 2026-10-27)
+
+**Now.** notify, library and radar-todo's `todo_db` each re-implement
+`config.get_app_data_dir` with a deprecated `SWARM_APP_DATA_DIR` fallback nothing
+sets; five Pollinate scripts (`brand_config`, `check_prereqs`, `log_publish`,
+`publish_meta`, `topic_backlog`) and `publish_to_pages`' clone default spell
+`~/.swarm-ai/...` and ignore `SWARM_DATA_DIR`, so a sandboxed run writes the live
+files. Same class as §4, one directory up.
+
+**Rule.** As §4: a skill script carries one `_app_data_dir()`, AST-identical to
+`SKILL_RESOLVER` in `tests/test_skill_data_dir_resolver.py` (`$SWARM_DATA_DIR`, then
+`~/.swarm-ai`), checked equal to `get_app_data_dir()`. Outside it and `_swarmws()`,
+no skill script builds `Path.home() / ".swarm-ai"`, expands `"~/.swarm-ai..."`, or
+reads `SWARM_DATA_DIR` / `SWARM_APP_DATA_DIR`. Help text naming `~/.swarm-ai` stays.
+
+**Built.** Nine skill scripts; `SWARM_APP_DATA_DIR` is gone. `test_pollinate_brand`
+pinned the clone default to the live home path; it now expects the app data dir.
+`apps_index.json` regenerated (Pollinate digest). Red on main (3); putting the alias
+back, a literal Pollinate path, or `todo_db` ignoring the variable each turn it red.
+Not covered: product modules outside `skills/` that still build `~/.swarm-ai` paths
+(`core/permission_manager`, `daemon_guard`, …; `scripts/lint_hardcoded_paths.py`
+already lists that class).
+
 ## Out of scope
 
 Behaviour of any script beyond where it finds the workspace. Historical data.

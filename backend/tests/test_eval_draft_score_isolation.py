@@ -64,11 +64,13 @@ def test_draft_excluded_from_headline_score_end_to_end():
     cases = [active_case, draft_case]
     results = [{"id": "active1", "status": "passed"}, draft_result]
     scores = compute_scores(cases, results)
-    # Only the active case counts → draft neither helps nor hurts the headline.
+    # Only the active case counts → draft neither helps nor hurts the release
+    # decision (there is no headline score since db0fbadbd: the draft is simply
+    # not a definite result).
     assert scores["scored_count"] == 1, (
         f"draft leaked into scored set: scored_count={scores['scored_count']}"
     )
-    assert scores["overall"] == 100.0
+    assert scores["skipped_count"] == 1
 
 
 def test_behavior_draft_still_skipped():

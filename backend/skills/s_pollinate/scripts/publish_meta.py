@@ -15,6 +15,13 @@ import json
 import os
 import re
 from datetime import datetime
+from pathlib import Path
+
+
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
 
 try:
     import yaml
@@ -22,7 +29,7 @@ except ImportError:
     yaml = None
 
 
-ACCOUNTS_PATH = os.path.expanduser("~/.swarm-ai/pollinate-accounts.yaml")
+ACCOUNTS_PATH = str(_app_data_dir() / "pollinate-accounts.yaml")
 
 
 def load_accounts() -> dict:

@@ -105,7 +105,10 @@ def test_pages_target_needs_an_enabled_repo(tmp_path):
     t = publish_to_pages.pages_target({"github_pages": {"repo": "me/site"}})
     assert t["repo_url"] == "https://github.com/me/site.git"
     assert t["pages_url"] == "https://me.github.io/site"
-    assert t["clone_dir"] == Path("~/.swarm-ai/pollinate-pages/site").expanduser()
+    # the default clone lives under the app data dir (SWARM_DATA_DIR in tests), not ~
+    assert t["clone_dir"] == publish_to_pages._app_data_dir() / "pollinate-pages" / "site"
+    t = publish_to_pages.pages_target({"github_pages": {"repo": "me/site", "clone_dir": "~/x"}})
+    assert t["clone_dir"] == Path("~/x").expanduser()
 
 
 def test_publish_without_target_clones_and_pushes_nothing(monkeypatch, capsys):

@@ -53,6 +53,12 @@ def _swarmws() -> Path:
             return Path(os.path.expanduser(value))
     return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
 
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
+
+
 POLLINATE_DIR = _swarmws() / "Knowledge" / "Pollinate"
 _REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
@@ -79,7 +85,8 @@ def pages_target(accounts: dict | None = None) -> dict | None:
         raise ValueError(f"github_pages.repo must be owner/name, got {repo!r}")
     owner, name = repo.split("/", 1)
     url = str(entry.get("url") or f"https://{owner}.github.io/{name}").rstrip("/")
-    clone = Path(str(entry.get("clone_dir") or f"~/.swarm-ai/pollinate-pages/{name}")).expanduser()
+    clone = (Path(str(entry["clone_dir"])).expanduser() if entry.get("clone_dir")
+             else _app_data_dir() / "pollinate-pages" / name)
     return {"repo": repo, "repo_url": f"https://github.com/{repo}.git", "pages_url": url,
             "clone_dir": clone}
 

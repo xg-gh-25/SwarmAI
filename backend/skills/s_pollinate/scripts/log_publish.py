@@ -10,6 +10,13 @@ import argparse
 import json
 import os
 from datetime import datetime, timezone
+from pathlib import Path
+
+
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
 
 
 def build_parser():
@@ -34,7 +41,7 @@ def build_parser():
 def log_publish(topic, channel, format_type, url=None, log_path=None):
     """Append a publish event to the log file."""
     if log_path is None:
-        log_path = os.path.expanduser('~/.swarm-ai/pollinate-publish-log.jsonl')
+        log_path = str(_app_data_dir() / "pollinate-publish-log.jsonl")
 
     # Create directory if it doesn't exist
     log_dir = os.path.dirname(log_path)

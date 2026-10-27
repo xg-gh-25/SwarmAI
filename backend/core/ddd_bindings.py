@@ -492,7 +492,8 @@ def bind_in_progress(worktree: str | Path) -> bool:
                 return True
             fcntl.flock(fh, fcntl.LOCK_UN)
             return False
-    except Exception:  # noqa: BLE001 — a probe that cannot decide must not block indexing
+    except Exception as exc:  # noqa: BLE001 — a probe that cannot decide must not block indexing
+        logger.debug("bind_in_progress: %s undecidable, treated as not binding: %s", worktree, exc)
         return False
 
 

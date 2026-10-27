@@ -52,18 +52,9 @@ def _bootstrap_backend() -> None:
 
 
 def _app_data_dir() -> Path:
-    """Resolve the app data dir, honoring the SAME escape hatch as backend config.
-
-    ``SWARM_DATA_DIR`` is the single authority (config.get_app_data_dir reads it);
-    a standalone skill script cannot import backend ``config``, so it re-implements
-    the same precedence rather than introducing a second name. ``SWARM_APP_DATA_DIR``
-    stays as a deprecated fallback for anything still exporting the old name.
-    """
-    return Path(
-        os.environ.get("SWARM_DATA_DIR")
-        or os.environ.get("SWARM_APP_DATA_DIR")  # deprecated alias
-        or Path.home() / ".swarm-ai"
-    )
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
 
 
 def _open_store():

@@ -34,7 +34,13 @@ import yaml
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 SHIPPED_BRAND = SKILL_DIR / "brand" / "identity.yaml"
-DEFAULT_USER_BRAND = Path.home() / ".swarm-ai" / "pollinate-brand.yaml"
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
+
+
+DEFAULT_USER_BRAND = _app_data_dir() / "pollinate-brand.yaml"
 
 
 def user_brand_path() -> Path:

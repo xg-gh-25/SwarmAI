@@ -24,31 +24,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-def _get_app_data_dir() -> Path:
-    """Resolve the app data dir, honoring the SAME escape hatch as backend config.
+# This module writes DIRECTLY to data.db: it must honor SWARM_DATA_DIR, or a
+# sandboxed/test run mutates the production store.
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
 
-    ``SWARM_DATA_DIR`` is the single authority (config.get_app_data_dir reads it);
-    this script cannot import backend ``config`` (it runs standalone under the skill
-    sandbox), so it re-implements the same precedence instead of a second name.
-    ``SWARM_APP_DATA_DIR`` is kept as a deprecated fallback so anything still
-    exporting the old name keeps working. Getting this wrong is not cosmetic: this
-    module writes DIRECTLY to the live ``data.db``, so reading a name the sandbox
-    does NOT set means a sandboxed/test run mutates the production store.
-    """
-    import os as _os
-    return Path(
-        _os.environ.get("SWARM_DATA_DIR")
-        or _os.environ.get("SWARM_APP_DATA_DIR")  # deprecated alias
-        or Path.home() / ".swarm-ai"
-    )
 
-DB_PATH = _get_app_data_dir() / "data.db"
+DB_PATH = _app_data_dir() / "data.db"
 WORKSPACE_ID = "swarmws"
 
 VALID_STATUSES = ("pending", "overdue", "in_discussion", "handled", "cancelled", "deleted")

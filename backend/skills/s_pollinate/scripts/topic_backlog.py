@@ -15,10 +15,17 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Dict, Any
 
 
-DEFAULT_BACKLOG_PATH = os.path.expanduser('~/.swarm-ai/pollinate-backlog.json')
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
+
+
+DEFAULT_BACKLOG_PATH = str(_app_data_dir() / "pollinate-backlog.json")
 
 
 def load_backlog(path: str) -> List[Dict[str, Any]]:
