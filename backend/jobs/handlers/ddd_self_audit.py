@@ -279,18 +279,18 @@ def _resolve_findings(findings: list, project_name: str, project_dir: Path, src:
 
     reports = SWARMWS / "Knowledge" / "JobResults"
     out: list[dict] = []
-    for f in findings:
+    for index, f in enumerate(findings):
         if not isinstance(f, dict):
             continue
         title = str(f.get("title") or "")
         fix = parse_fix(f)
-        row = {"title": title, "doc": (fix or {}).get("doc")}
+        row = {"index": index, "title": title, "doc": (fix or {}).get("doc")}
         if fix is None:
             row.update(outcome="open", reason="no certain fix: the right content needs your judgement")
             needle = _first_quote(str(f.get("description") or ""))
         else:
             try:
-                res = apply_fix(fix, project_dir, SWARMWS, src, run_id=run_id,
+                res = apply_fix(fix, project_dir, src, run_id=run_id,
                                 finding_title=title, dry_run=dry_run)
             except Exception as e:  # noqa: BLE001 — one bad fix must not stop the audit
                 logger.warning("ddd_self_audit: fix for %r failed: %s", title, e)
@@ -450,9 +450,12 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
                 open_lines.append(_open_line(project_name, o))
         header = f"## {project_name} ({kind}) — {n_findings} finding(s)"
         report_lines.append(header)
-        report_lines.append(result_text.strip() or "_(no output)_")
+        # the agent's own text must not carry an outcomes block (it could mark open drift
+        # fixed); ours comes last and cannot be cut short by a "-->" inside a title
+        report_lines.append((result_text.strip() or "_(no output)_").replace("DRIFT_OUTCOMES", "DRIFT-OUTCOMES"))
         if outcomes:
-            report_lines.append(f"<!-- DRIFT_OUTCOMES {json.dumps(outcomes, ensure_ascii=False)} -->")
+            blob = json.dumps(outcomes, ensure_ascii=False).replace("-->", "--\\u003e")
+            report_lines.append(f"<!-- DRIFT_OUTCOMES {blob} -->")
         report_lines.append("")
 
     fixed_word = "would fix" if dry_run else "fixed"
@@ -460,7 +463,11 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
                 f" · reviewed {reviewed}/{len(projects)} projects")
     summary_block = [headline, ""]
     if fixed_lines:
-        summary_block += [f"**{'Would fix (dry run, nothing written)' if dry_run else 'Fixed automatically'}**", *fixed_lines, ""]
+        summary_block += [f"**{'Would fix (dry run, nothing written)' if dry_run else 'Fixed automatically'}**", *fixed_lines]
+        if not dry_run:
+            summary_block.append("Each fix is recorded with the text it replaced; to put one back: "
+                                 "`py -m scripts.ddd_drift_fix_cli list <project>`, then `undo <project> <index>`.")
+        summary_block.append("")
     if open_lines:
         summary_block += ["**Needs you**", *open_lines, ""]
     report_lines[2:2] = summary_block

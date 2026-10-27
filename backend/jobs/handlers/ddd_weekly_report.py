@@ -97,7 +97,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
         applied = _read_changelog(project_dir, cutoff)
         all_applied.extend([(project_name, e) for e in applied])
         # drift corrections the self-audit applied (their own log: not lessons, not counted as applied)
-        all_drift_fixes.extend([(project_name, e) for e in _read_changelog(project_dir, cutoff, name="ddd-drift-fixes.jsonl")])
+        all_drift_fixes.extend([(project_name, e) for e in _read_drift_fixes(project_dir, cutoff)])
 
         # Read pending escalations
         escalations = _read_escalations(project_dir)
@@ -144,10 +144,9 @@ def _discover_projects() -> list[tuple[str, Path]]:
     return projects
 
 
-def _read_changelog(project_dir: Path, cutoff: datetime, name: str = "ddd-changelog.jsonl") -> list[dict]:
-    """Read entries newer than cutoff from a project's ``.artifacts/<name>`` JSONL log
-    (the cultivation changelog, or the self-audit's drift-fix log)."""
-    changelog_path = project_dir / ".artifacts" / name
+def _read_changelog(project_dir: Path, cutoff: datetime) -> list[dict]:
+    """Read changelog entries newer than cutoff."""
+    changelog_path = project_dir / ".artifacts" / "ddd-changelog.jsonl"
     if not changelog_path.exists():
         return []
 
@@ -165,6 +164,23 @@ def _read_changelog(project_dir: Path, cutoff: datetime, name: str = "ddd-change
         except (json.JSONDecodeError, ValueError, TypeError):
             continue
     return entries
+
+
+def _read_drift_fixes(project_dir: Path, cutoff: datetime) -> list[dict]:
+    """Drift fixes the self-audit applied since cutoff (core.ddd_drift_fix.past_fixes:
+    failed writes dropped, undone ones marked)."""
+    from core.ddd_drift_fix import past_fixes
+    out = []
+    for row in past_fixes(project_dir):
+        try:
+            ts = datetime.fromisoformat(str(row.get("timestamp", "")))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts >= cutoff:
+            out.append(row)
+    return out
 
 
 def _read_escalations(project_dir: Path) -> list[dict]:
@@ -412,7 +428,8 @@ def _generate_report(
         lines.append("|---|---------|-----|-----|-----|----------|")
         for i, (proj, e) in enumerate(sorted(drift_fixes, key=lambda x: x[1].get("timestamp", ""), reverse=True), 1):
             ev = ", ".join(f"{x.get('kind')}: {x.get('file')}" for x in (e.get("evidence") or []) if isinstance(x, dict))
-            lines.append(f"| {i} | {_md_cell(proj)} | {_md_cell(e.get('target_doc', '?'))} | "
+            undone = " (undone)" if e.get("undone") else ""
+            lines.append(f"| {i} | {_md_cell(proj)} | {_md_cell(e.get('target_doc', '?'))}{undone} | "
                          f"{_md_cell(str(e.get('old', ''))[:80])} | {_md_cell(str(e.get('new', ''))[:80])} | {_md_cell(ev)} |")
         lines.append("")
 

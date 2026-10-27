@@ -55,15 +55,19 @@ _SECTION_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 _OUTCOMES_RE = re.compile(r"<!--\s*DRIFT_OUTCOMES\s*(\[.*?\])\s*-->", re.DOTALL)
 
 
-def _fixed_titles(block: str) -> set[str]:
-    m = _OUTCOMES_RE.search(block)
-    if not m:
+def _fixed_indexes(block: str) -> set[int]:
+    """Positions (in the section's RADAR_TODOS list) of the findings the audit fixed.
+    The LAST outcomes block is the handler's own (the agent's text is neutralized and
+    comes first); matched by position, since model-written titles need not be unique."""
+    found = _OUTCOMES_RE.findall(block)
+    if not found:
         return set()
     try:
-        rows = json.loads(m.group(1))
+        rows = json.loads(found[-1])
     except (json.JSONDecodeError, TypeError):
         return set()
-    return {str(r.get("title")) for r in rows if isinstance(r, dict) and r.get("outcome") == "fixed"}
+    return {r["index"] for r in rows
+            if isinstance(r, dict) and r.get("outcome") == "fixed" and isinstance(r.get("index"), int)}
 
 
 def _latest_report(root: Path) -> Path | None:
@@ -133,13 +137,13 @@ def get_semantic_drift(root: Path | str) -> dict:
         # Section header project: "PhysicalAI (non-code) — 1 finding(s)" → "PhysicalAI".
         section_project = sec.group(1).split("(")[0].split("—")[0].split(" - ")[0].strip()
 
-        fixed = _fixed_titles(block)
-        for f in _count_parseable_findings(block):  # [] for failed/timed-out/0-finding
+        fixed = _fixed_indexes(block)
+        for index, f in enumerate(_count_parseable_findings(block)):  # [] for failed/timed-out/0-finding
             if not isinstance(f, dict):
                 continue
-            title = f.get("title", "") or ""
-            if title in fixed:
+            if index in fixed:
                 continue  # fixed by the audit itself: no longer drift
+            title = f.get("title", "") or ""
             tag_project, docs = _parse_doc_targets(title)
             findings.append({
                 "project": tag_project,  # None when the LLM title lacked a [proj/doc] tag
