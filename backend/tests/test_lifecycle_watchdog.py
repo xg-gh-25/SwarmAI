@@ -619,8 +619,8 @@ class TestStreamingRssRoutesCoordinator:
 
     @pytest.mark.asyncio
     async def test_system_pressure_kill_is_fleet_arbitration_not_coordinated(self):
-        """BOUNDARY INVARIANT (design §9): Trigger 2 (system-pressure > 90% →
-        kill heaviest) is FLEET ARBITRATION, deliberately NOT routed through the
+        """BOUNDARY INVARIANT (design §9): the system-pressure last-resort kill
+        (> 90%, no IDLE left, in _check_memory_pressure → kill heaviest) is FLEET ARBITRATION, deliberately NOT routed through the
         coordinator and deliberately IGNORING the user_stopped guard. At >90%
         system memory a user-Stop does not free the leaked RSS, so the heaviest
         STREAMING session must still be killed to avoid machine-wide OOM (COE05).
@@ -650,10 +650,12 @@ class TestStreamingRssRoutesCoordinator:
             rm.system_memory.return_value = SimpleNamespace(percent_used=95.0)
             rm.process_tree_rss.return_value = under_7gb
             await mgr._streaming_rss_check()
+            unit.kill.assert_not_awaited()  # the fleet kill runs after IDLE eviction
+            await mgr._check_memory_pressure()
 
         # Trigger 1 never reached PROCEED_KILL territory (under threshold), so
-        # decide_bare may be skipped entirely; the fleet-pressure kill fires
-        # regardless of user_stopped.
+        # decide_bare may be skipped entirely; the fleet-pressure kill (in the
+        # memory-pressure pass, no IDLE unit left) fires regardless of user_stopped.
         unit.kill.assert_awaited_once()
 
 

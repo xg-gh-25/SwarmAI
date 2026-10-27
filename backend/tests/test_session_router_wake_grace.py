@@ -258,3 +258,113 @@ class TestWakeGraceProtection:
 
         assert evicted is True, "stale (>grace) idle must be evictable on wake"
         stale_tab.kill.assert_called_once()
+
+
+class TestWakeEvictsAtMostOnce:
+    """Fixing spec 2026-10-28 F2: the wake path re-checks the budget after an
+    eviction and evicts at most once per wait. When memory pressure comes from
+    outside SwarmAI an eviction frees little; evicting on every wake would empty the
+    IDLE tabs one by one and then grant anyway."""
+
+    @pytest.mark.asyncio
+    async def test_budget_still_short_after_one_eviction_keeps_waiting(self, router):
+        stale_a = _make_unit("stale-a", SessionState.IDLE, idle_seconds=3600, rss_bytes=900_000_000)
+        stale_b = _make_unit("stale-b", SessionState.IDLE, idle_seconds=3600, rss_bytes=800_000_000)
+        waker = _make_unit("waker", SessionState.COLD)
+        router._units = {"stale-a": stale_a, "stale-b": stale_b, "waker": waker}
+        router.QUEUE_TIMEOUT = 10.0
+
+        denied = MagicMock(can_spawn=False, reason="low_memory", available_mb=100,
+                           estimated_cost_mb=1500, headroom_mb=0)
+        mock_resource = MagicMock()
+        mock_resource.spawn_budget.return_value = denied
+        mock_resource.invalidate_cache = MagicMock()
+
+        with patch("core.resource_monitor.resource_monitor", mock_resource):
+            with patch.object(type(router), "_chat_alive_count",
+                              new_callable=lambda: property(lambda self: 3)):
+                with patch.object(type(router), "alive_count",
+                                  new_callable=lambda: property(lambda self: 3)):
+                    task = asyncio.ensure_future(router._acquire_chat_slot(waker))
+                    for _ in range(3):              # three wakes
+                        await asyncio.sleep(0.05)
+                        router._slot_available.set()
+                    await asyncio.sleep(0.1)
+                    done = task.done()
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+        kills = stale_a.kill.await_count + stale_b.kill.await_count
+        assert kills == 1, f"evicted {kills} sessions for one wait"
+        assert not done, "granted although the budget was still short after the eviction"
+
+    @pytest.mark.asyncio
+    async def test_wake_path_eviction_rechecks_the_budget(self, router):
+        """The eviction happens on a wake (the first attempt, before queueing, found
+        nothing stale): the budget is re-checked after it, and only once."""
+        waker = _make_unit("waker2", SessionState.COLD)
+        router._units = {"waker2": waker}
+        router.QUEUE_TIMEOUT = 10.0
+        evict = AsyncMock(side_effect=[False, True, True, True, True])
+        router._evict_idle = evict
+
+        denied = MagicMock(can_spawn=False, reason="low_memory", available_mb=100,
+                           estimated_cost_mb=1500, headroom_mb=0)
+        mock_resource = MagicMock()
+        mock_resource.spawn_budget.return_value = denied
+        mock_resource.invalidate_cache = MagicMock()
+
+        with patch("core.resource_monitor.resource_monitor", mock_resource), \
+                patch.object(type(router), "_user_chat_alive_count",
+                             new_callable=lambda: property(lambda self: 3)):
+            with patch.object(type(router), "_chat_alive_count",
+                              new_callable=lambda: property(lambda self: 3)):
+                with patch.object(type(router), "alive_count",
+                                  new_callable=lambda: property(lambda self: 3)):
+                    task = asyncio.ensure_future(router._acquire_chat_slot(waker))
+                    for _ in range(3):
+                        await asyncio.sleep(0.05)
+                        router._slot_available.set()
+                    await asyncio.sleep(0.1)
+                    done = task.done()
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+        assert evict.await_count == 2, "first attempt + exactly one wake eviction"
+        assert not done, "granted although the budget was still short after the eviction"
+
+
+    @pytest.mark.asyncio
+    async def test_a_waiter_that_spent_its_eviction_is_granted_at_timeout(self, router):
+        """Its own wake eviction took the last stale IDLE unit, the budget stayed short:
+        at the queue timeout force=True finds nothing, and the waiter is still granted."""
+        waker = _make_unit("waker3", SessionState.COLD)
+        router._units = {"waker3": waker}
+        router.QUEUE_TIMEOUT = 0.4
+        router._evict_idle = AsyncMock(side_effect=[False, True, False, False])
+
+        denied = MagicMock(can_spawn=False, reason="low_memory", available_mb=100,
+                           estimated_cost_mb=1500, headroom_mb=0)
+        mock_resource = MagicMock()
+        mock_resource.spawn_budget.return_value = denied
+        mock_resource.invalidate_cache = MagicMock()
+
+        with patch("core.resource_monitor.resource_monitor", mock_resource), \
+                patch.object(type(router), "_user_chat_alive_count",
+                             new_callable=lambda: property(lambda self: 3)):
+            with patch.object(type(router), "_chat_alive_count",
+                              new_callable=lambda: property(lambda self: 3)):
+                with patch.object(type(router), "alive_count",
+                                  new_callable=lambda: property(lambda self: 3)):
+                    task = asyncio.ensure_future(router._acquire_chat_slot(waker))
+                    await asyncio.sleep(0.05)
+                    router._slot_available.set()
+                    result = await asyncio.wait_for(task, timeout=5)
+
+        assert result == "queued"

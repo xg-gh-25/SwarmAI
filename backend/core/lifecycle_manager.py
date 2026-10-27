@@ -83,7 +83,9 @@ class LifecycleManager:
 
     # Memory pressure thresholds (configurable via env vars).
     # SWARMAI_MEMORY_EVICT_PCT: % used → start evicting IDLE sessions
-    # SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT: % used → kill heaviest STREAMING session
+    # SWARMAI_MEMORY_EVICT_PCT is also where, once no IDLE unit is left to evict,
+    # the heaviest STREAMING session is killed (_check_memory_pressure).
+    # SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT: % used → log memory as critical
     MEMORY_EVICT_PCT: float = float(os.environ.get("SWARMAI_MEMORY_EVICT_PCT", "90"))
     MEMORY_CIRCUIT_BREAKER_PCT: float = float(
         os.environ.get("SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT", "95")
@@ -99,6 +101,9 @@ class LifecycleManager:
         self._loop_task: Optional[asyncio.Task] = None
         self._started = False
         self._tracked_child_pids: set[int] = set()
+        # Set by Trigger 1 of _streaming_rss_check, read by the system-pressure
+        # streaming kill in _check_memory_pressure: one STREAMING kill per cycle.
+        self._streaming_killed_this_cycle = False
 
     # ── Startup / Shutdown ────────────────────────────────────────
 
@@ -281,6 +286,9 @@ class LifecycleManager:
             while True:
                 await asyncio.sleep(self.LOOP_INTERVAL)
                 cycle += 1
+                # one STREAMING kill per cycle: Trigger 1 of _streaming_rss_check
+                # and the memory-pressure last resort share this flag
+                self._streaming_killed_this_cycle = False
                 try:
                     await self._health_check_all()
                     await self._sample_process_memory()
@@ -534,21 +542,36 @@ class LifecycleManager:
         except Exception as exc:
             logger.debug("_proactive_rss_restart failed (non-fatal): %s", exc)
 
+    async def _streaming_tree_rss(self, units: list) -> dict:
+        """``{unit: tree RSS bytes}`` for STREAMING units, gathered CONCURRENTLY on
+        _rss_executor (run_409392d4: a serial await loop suspended the maintenance
+        loop for SUM(N x 107ms) → SSE stalls). Units whose read failed or read 0 are
+        left out."""
+        from .resource_monitor import resource_monitor
+
+        loop = asyncio.get_running_loop()
+        results = await asyncio.gather(
+            *(loop.run_in_executor(_rss_executor, resource_monitor.process_tree_rss, u.pid)
+              for u in units),
+            return_exceptions=True,
+        )
+        return {u: r for u, r in zip(units, results)
+                if not isinstance(r, BaseException) and r > 0}
+
     async def _streaming_rss_check(self) -> None:
-        """Kill STREAMING sessions with dangerously high RSS or under system pressure.
+        """Kill a STREAMING session whose own RSS is dangerously high.
 
         Closes the blind spot where adaptive timeout (up to 900s) lets a
         bloating STREAMING subprocess grow unchecked — proactive_rss_restart
         only touches IDLE sessions.
 
-        Two triggers (either one fires):
-        - Per-session: tree RSS > STREAMING_RSS_KILL_THRESHOLD (7GB)
-        - System-wide: memory pressure > MEMORY_EVICT_PCT (90%) → kill heaviest STREAMING session
+        Trigger 1 (per session): tree RSS > STREAMING_RSS_KILL_THRESHOLD (7GB).
+        The system-wide kill of the heaviest STREAMING session is not here: it runs
+        in _check_memory_pressure, after the IDLE sessions were evicted.
 
         Non-fatal — failures logged and skipped.
         """
         try:
-            from .resource_monitor import resource_monitor
             from .session_unit import SessionUnit
 
             streaming_units = [
@@ -557,31 +580,7 @@ class LifecycleManager:
             ]
             if not streaming_units:
                 return
-
-            mem = resource_monitor.system_memory()
-            loop = asyncio.get_running_loop()
-
-            # Collect RSS for each streaming session — gathered CONCURRENTLY on
-            # _rss_executor (run_409392d4: was a serial await loop suspending the
-            # maintenance loop for SUM(N x 107ms) → SSE stalls; now ~1x). The
-            # kill logic below (Trigger 1/2) already runs after collection, so
-            # only this read loop needed parallelizing.
-            rss_results = await asyncio.gather(
-                *(
-                    loop.run_in_executor(
-                        _rss_executor,
-                        resource_monitor.process_tree_rss, unit.pid,
-                    )
-                    for unit in streaming_units
-                ),
-                return_exceptions=True,
-            )
-            rss_map: dict = {}  # unit → rss_bytes
-            for unit, tree_rss in zip(streaming_units, rss_results):
-                if isinstance(tree_rss, BaseException):
-                    continue
-                if tree_rss > 0:
-                    rss_map[unit] = tree_rss
+            rss_map = await self._streaming_tree_rss(streaming_units)
 
             # Trigger 1: Per-session threshold (7GB, STREAMING_RSS_KILL_THRESHOLD)
             for unit, rss in rss_map.items():
@@ -612,39 +611,10 @@ class LifecycleManager:
                         rss // (1024 * 1024),
                         SessionUnit.STREAMING_RSS_KILL_THRESHOLD // (1024 * 1024),
                     )
+                    self._streaming_killed_this_cycle = True  # before the await: a raise still counts
                     await unit._arm_recovery_checkpoint("rss_streaming")
                     await unit.kill()
                     return  # One kill per cycle to avoid cascade
-
-            # Trigger 2: System pressure > MEMORY_EVICT_PCT → kill heaviest
-            # Only fires AFTER IDLE eviction threshold (90% default).
-            # This ensures IDLE sessions are evicted first; STREAMING kill
-            # is the LAST resort when IDLE eviction wasn't enough.
-            #
-            # DELIBERATELY NOT routed through the RecoveryCoordinator (design
-            # §9 membership analysis): this is FLEET ARBITRATION (max()-over-N
-            # picks a victim under system-wide OOM pressure), NOT single-unit
-            # recovery. It fails the coordinator's membership test (it sacrifices
-            # one of N, not "recover THIS unit"). Crucially it must IGNORE the
-            # user_stopped guard that Trigger 1 honors: at >90% system memory a
-            # user-Stop does not free the leaked RSS, so refusing to kill the
-            # heaviest would let the whole machine OOM (COE05). The boundary is
-            # intentional — the per-session 7GB leak (Trigger 1) is recovery and
-            # is coordinated; the system-pressure last-resort kill is arbitration
-            # and is not. See design §9.2 + §9 "RSS-streaming fleet-pressure → OUT".
-            if mem.percent_used > self.MEMORY_EVICT_PCT and rss_map:
-                heaviest = max(rss_map, key=rss_map.get)
-                logger.warning(
-                    "lifecycle.streaming_pressure_kill session=%s "
-                    "system_used=%.1f%% > evict_pct=%.0f%% rss=%dMB "
-                    "— killing heaviest STREAMING session (last resort)",
-                    heaviest.session_id[:8],
-                    mem.percent_used,
-                    self.MEMORY_EVICT_PCT,
-                    rss_map[heaviest] // (1024 * 1024),
-                )
-                await heaviest._arm_recovery_checkpoint("rss_streaming")
-                await heaviest.kill()
 
         except Exception as exc:
             # GC19: surface the failure type, not a bare swallow. This block now
@@ -1666,11 +1636,10 @@ class LifecycleManager:
             # Non-fatal: persistence is best-effort, never blocks maintenance
             logger.debug("Session state persistence skipped: %s", exc)
 
-    # Two-tier memory thresholds (defaults from MEMORY_EVICT_PCT / MEMORY_CIRCUIT_BREAKER_PCT):
-    #  tier 1 → evict IDLE only (gentle — session can resume cheaply)
-    #  tier 2 → LOG ONLY at critical pressure (the old "kill heaviest STREAMING"
-    #            circuit breaker was removed — killing STREAMING caused data loss;
-    #            L1 spawn-settle + L3 continuation + macOS jetsam handle recovery)
+    # Memory thresholds (defaults from MEMORY_EVICT_PCT / MEMORY_CIRCUIT_BREAKER_PCT):
+    #  tier 1 → evict IDLE (gentle — session can resume cheaply); once none is
+    #            left, kill the heaviest STREAMING session (last resort, see below)
+    #  tier 2 → log critical pressure
 
     async def _check_memory_pressure(self) -> None:
         """Two-tier memory pressure relief.
@@ -1678,12 +1647,16 @@ class LifecycleManager:
         Tier 1 (>90%): Evict ALL IDLE units (heaviest first) until memory
           drops below threshold or no IDLE units remain.  Previous behavior
           evicted only one per 60s cycle — too slow when memory spikes.
-        Tier 2 (>95%): LOG ONLY — all IDLE evicted but memory still critical.
-          Does NOT kill STREAMING sessions (the old circuit breaker that killed
-          the heaviest STREAMING session was removed — it caused data loss,
-          context truncation, and broken responses). Recovery is delegated to
-          L1 (spawn-settle window), L3 (session_unit continuation hint), and
-          macOS jetsam as the last resort.
+        Last resort (>90%, no IDLE unit was left to evict this cycle): kill the
+          heaviest STREAMING session (one per cycle, none if Trigger 1 of
+          _streaming_rss_check already killed one). It arms the recovery
+          checkpoint and keeps the session id, so the next message resumes.
+          It is fleet arbitration, not single-unit recovery, so it does not go
+          through the RecoveryCoordinator and ignores a user Stop: at that
+          pressure a stopped turn does not free memory, and refusing would let
+          the whole machine OOM (COE05). An IDLE eviction in the same cycle
+          defers it to the next cycle, so freed memory is seen first.
+        Tier 2 (>95%): log memory as critical.
 
         Non-fatal — failures are logged and skipped.
         """
@@ -1752,16 +1725,43 @@ class LifecycleManager:
                     return
 
             if evicted > 0:
-                return  # Evicted everything we could
+                return  # IDLE first: the next cycle sees the freed memory
 
-            # ── Tier 2: LOG ONLY — never kill STREAMING sessions ────
-            # Previous design had a circuit breaker that killed the heaviest
-            # STREAMING session at 92%.  Removed: killing STREAMING causes
-            # data loss, context truncation, and broken responses.  If we
-            # reach this point, all IDLE units are evicted and memory is
-            # still high.  Let macOS jetsam decide — our L3 continuation
-            # hint in session_unit handles the recovery.  The spawn settle
-            # window (L1) prevents over-commitment in the first place.
+            # ── Last resort: kill the heaviest STREAMING session ────
+            if not self._streaming_killed_this_cycle:
+                streaming = [u for u in self._router.list_units()
+                             if u.state == SessionState.STREAMING and u.pid]
+                rss_map = await self._streaming_tree_rss(streaming) if streaming else {}
+                # Re-read memory uncached: IDLE kills earlier in this cycle (TTL,
+                # orphan, proactive RSS restart) or a router eviction during the RSS
+                # read may already have freed enough; system_memory() caches for 5s.
+                resource_monitor.invalidate_cache()
+                mem = resource_monitor.system_memory()
+                if rss_map and mem.percent_used >= self.MEMORY_EVICT_PCT:
+                    heaviest = max(rss_map, key=rss_map.get)
+                    pid, gen = heaviest.pid, getattr(heaviest, "_send_generation", None)
+                    if heaviest.state == SessionState.STREAMING:  # TOCTOU across the read
+                        logger.warning(
+                            "lifecycle.streaming_pressure_kill session=%s "
+                            "system_used=%.1f%% > evict_pct=%.0f%% rss=%dMB "
+                            "— no IDLE left, killing heaviest STREAMING session (last resort)",
+                            heaviest.session_id[:8], mem.percent_used,
+                            self.MEMORY_EVICT_PCT, rss_map[heaviest] // (1024 * 1024),
+                        )
+                        self._streaming_killed_this_cycle = True
+                        had_checkpoint = getattr(heaviest, "_heal_checkpoint", None) is not None
+                        await heaviest._arm_recovery_checkpoint("rss_streaming")
+                        # the turn may have ended (or a new one started on the same
+                        # subprocess) during the checkpoint's await: kill only the
+                        # turn that was measured, else drop the checkpoint this armed.
+                        if (heaviest.state == SessionState.STREAMING and heaviest.pid == pid
+                                and getattr(heaviest, "_send_generation", None) == gen):
+                            await heaviest.kill()
+                        elif had_checkpoint is False:
+                            heaviest._heal_checkpoint = None
+                        return
+
+            # ── Tier 2: log critical memory ────
             if mem.percent_used >= self.MEMORY_CIRCUIT_BREAKER_PCT:
                 streaming_count = sum(
                     1 for u in self._router.list_units()
@@ -1769,7 +1769,7 @@ class LifecycleManager:
                 )
                 logger.warning(
                     "lifecycle.memory_critical: %.1f%% > %.0f%% with "
-                    "%d STREAMING sessions — NOT killing (L1/L3 handles). "
+                    "%d STREAMING/WAITING sessions, no last-resort kill this cycle. "
                     "If jetsam kills a subprocess, retry+continuation will recover.",
                     mem.percent_used,
                     self.MEMORY_CIRCUIT_BREAKER_PCT,

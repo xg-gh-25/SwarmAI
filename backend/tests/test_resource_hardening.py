@@ -90,43 +90,126 @@ class TestStreamingRSSKill:
 
         unit.kill.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_system_pressure_above_evict_pct_kills_heaviest_streaming(self):
-        """AC2: System memory > MEMORY_EVICT_PCT (90%) kills heaviest STREAMING."""
+    @staticmethod
+    def _pressure_manager(units, rss_by_pid, percent):
+        """A LifecycleManager over ``units`` with resource_monitor swapped for a mock
+        reporting ``percent`` system memory and per-pid tree RSS."""
         import core.resource_monitor as rm_mod
         from core.lifecycle_manager import LifecycleManager
 
+        router = MagicMock()
+        router.list_units.return_value = units
+        mgr = LifecycleManager(router=router)
+        mock_rm = MagicMock()
+        mock_rm.process_tree_rss.side_effect = lambda pid: rss_by_pid.get(pid, 0)
+        mock_rm.system_memory.return_value = MagicMock(percent_used=percent)
+        return mgr, mock_rm, rm_mod
+
+    @pytest.mark.asyncio
+    async def test_system_pressure_kills_heaviest_streaming_once_no_idle_is_left(self):
+        """AC2: > MEMORY_EVICT_PCT with no IDLE unit left → the heaviest STREAMING
+        session is killed (last resort), in the memory-pressure pass."""
         unit1 = _make_unit("small-stream")
         _set_streaming_with_pid(unit1, pid=11111)
         unit1.kill = AsyncMock()
-
         unit2 = _make_unit("big-stream")
         _set_streaming_with_pid(unit2, pid=22222)
         unit2.kill = AsyncMock()
+        unit2._arm_recovery_checkpoint = AsyncMock()
+        mgr, mock_rm, rm_mod = self._pressure_manager(
+            [unit1, unit2], {11111: int(1.0 * 1024**3), 22222: int(2.0 * 1024**3)}, 92.0)
+        orig = rm_mod.resource_monitor
+        rm_mod.resource_monitor = mock_rm
+        try:
+            await mgr._streaming_rss_check()   # Trigger 1 only: nobody above 7 GB
+            unit2.kill.assert_not_called()
+            await mgr._check_memory_pressure()
+        finally:
+            rm_mod.resource_monitor = orig
+        unit2.kill.assert_called_once()
+        unit2._arm_recovery_checkpoint.assert_awaited_once_with("rss_streaming")
+        unit1.kill.assert_not_called()
 
-        router = MagicMock()
-        router.list_units.return_value = [unit1, unit2]
+    @pytest.mark.asyncio
+    async def test_idle_is_evicted_before_any_streaming_kill(self):
+        """IDLE first: evicting an IDLE unit defers the STREAMING kill to the next cycle."""
+        idle = _make_unit("idle")
+        idle.state = SessionState.IDLE
+        idle.kill = AsyncMock()
+        idle._hooks_enqueued = True
+        stream = _make_unit("stream")
+        _set_streaming_with_pid(stream, pid=33333)
+        stream.kill = AsyncMock()
+        mgr, mock_rm, rm_mod = self._pressure_manager([idle, stream], {33333: int(3 * 1024**3)}, 93.0)
+        orig = rm_mod.resource_monitor
+        rm_mod.resource_monitor = mock_rm
+        try:
+            await mgr._check_memory_pressure()
+        finally:
+            rm_mod.resource_monitor = orig
+        idle.kill.assert_called_once()
+        stream.kill.assert_not_called()
 
-        mgr = LifecycleManager(router=router)
-
-        rss_by_pid = {11111: int(1.0 * 1024**3), 22222: int(2.0 * 1024**3)}
-
-        mock_rm = MagicMock()
-        mock_rm.process_tree_rss.side_effect = lambda pid: rss_by_pid.get(pid, 0)
-        mock_rm.system_memory.return_value = MagicMock(percent_used=92.0)  # > MEMORY_EVICT_PCT (90%)
-
-        # Direct module attribute swap — ensures from-import inside method
-        # resolves to our mock regardless of thread context.
+    @pytest.mark.asyncio
+    async def test_one_streaming_kill_per_cycle(self):
+        """Trigger 1 killed a session this cycle → the pressure pass kills no other."""
+        bloated = _make_unit("bloated")
+        _set_streaming_with_pid(bloated, pid=44444)
+        bloated.kill = AsyncMock()
+        bloated._arm_recovery_checkpoint = AsyncMock()
+        other = _make_unit("other")
+        _set_streaming_with_pid(other, pid=55555)
+        other.kill = AsyncMock()
+        mgr, mock_rm, rm_mod = self._pressure_manager(
+            [bloated, other], {44444: int(7.5 * 1024**3), 55555: int(6 * 1024**3)}, 95.0)
         orig = rm_mod.resource_monitor
         rm_mod.resource_monitor = mock_rm
         try:
             await mgr._streaming_rss_check()
+            await mgr._check_memory_pressure()
         finally:
             rm_mod.resource_monitor = orig
+        bloated.kill.assert_called_once()
+        other.kill.assert_not_called()
 
-        # Only the heaviest should be killed
-        unit2.kill.assert_called_once()
-        unit1.kill.assert_not_called()
+    @pytest.mark.asyncio
+    async def test_no_last_resort_kill_once_fresh_memory_is_below_threshold(self):
+        """IDLE kills earlier in the cycle freed memory: the uncached re-read sees it."""
+        stream = _make_unit("stream-fresh")
+        _set_streaming_with_pid(stream, pid=66666)
+        stream.kill = AsyncMock()
+        mgr, mock_rm, rm_mod = self._pressure_manager([stream], {66666: int(3 * 1024**3)}, 92.0)
+        mock_rm.system_memory.side_effect = [MagicMock(percent_used=92.0), MagicMock(percent_used=80.0)]
+        orig = rm_mod.resource_monitor
+        rm_mod.resource_monitor = mock_rm
+        try:
+            await mgr._check_memory_pressure()
+        finally:
+            rm_mod.resource_monitor = orig
+        stream.kill.assert_not_called()
+        mock_rm.invalidate_cache.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_turn_that_ends_during_the_checkpoint_is_not_killed(self):
+        stream = _make_unit("stream-ends")
+        _set_streaming_with_pid(stream, pid=77777)
+        stream.kill = AsyncMock()
+
+        stream._heal_checkpoint = None
+
+        async def _arm(trigger):
+            stream._heal_checkpoint = "armed"
+            stream._send_generation += 1  # a new turn started on the same subprocess
+        stream._arm_recovery_checkpoint = _arm
+        mgr, mock_rm, rm_mod = self._pressure_manager([stream], {77777: int(3 * 1024**3)}, 93.0)
+        orig = rm_mod.resource_monitor
+        rm_mod.resource_monitor = mock_rm
+        try:
+            await mgr._check_memory_pressure()
+        finally:
+            rm_mod.resource_monitor = orig
+        stream.kill.assert_not_called()
+        assert stream._heal_checkpoint is None  # the stale checkpoint is dropped
 
     @pytest.mark.asyncio
     async def test_idle_sessions_not_affected_by_streaming_rss_check(self):

@@ -3025,6 +3025,7 @@ class SessionRouter:
         from .resource_monitor import resource_monitor
 
         _needs_queue = False
+        evicted_for_this_wait = False  # at most one eviction per wait (below)
         async with self._slot_lock:
             # R6a (§9.5): backend admission is gated SOLELY by spawn_budget
             # (real RAM), NOT by compute_max_tabs (a frontend UX constant).
@@ -3060,10 +3061,12 @@ class SessionRouter:
                         )
                 return "ready"
 
-            # spawn_budget is the UNCONDITIONAL gate. There is no budget-free
-            # spawn path: every "evict → ready" branch re-checks budget after
-            # eviction (Gate-1 WARN, run_6ea35431 — the old chat_max-full
-            # fall-through returned 'ready' without re-validating budget).
+            # spawn_budget is the gate. Every eviction that leads to a grant
+            # re-checks the budget after it (here and on the queue's wake path).
+            # Two grants ignore a denied budget, both logged: the user's first chat
+            # tab (above), and the queue timeout below, the sole anti-starvation
+            # guarantee, which grants after a force-evict, or without one when this
+            # wait already evicted and nothing is left to evict.
             budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
             if budget.can_spawn:
                 return "ready"
@@ -3078,6 +3081,7 @@ class SessionRouter:
             # here (force=False); the queue+timeout path below is the only
             # escalation to force=True.
             if await self._evict_idle(exclude=requesting_unit):
+                evicted_for_this_wait = True
                 resource_monitor.invalidate_cache()
                 budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                 if budget.can_spawn:
@@ -3130,24 +3134,40 @@ class SessionRouter:
             # waker still progresses by evicting any STALE (>grace) idle, or via
             # the timeout last-resort below. Eviction cost (warm context lost +
             # cold resume) >> a bounded wait.
+            # At most ONE eviction per wait, and the budget is re-checked after
+            # it: when the memory pressure comes from outside SwarmAI an eviction
+            # frees little, and evicting on every wake would empty the IDLE tabs
+            # one by one and then grant anyway.
             async with self._slot_lock:
                 # R6a: budget is the sole gate (no compute_max_tabs ceiling).
                 budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                 if budget.can_spawn:
                     return "queued"
-                if await self._evict_idle(exclude=requesting_unit, force=False):
-                    return "queued"
-            # Slot claimed by another coroutine — loop back to wait
+                if not evicted_for_this_wait and await self._evict_idle(
+                        exclude=requesting_unit, force=False):
+                    evicted_for_this_wait = True
+                    resource_monitor.invalidate_cache()
+                    budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
+                    if budget.can_spawn:
+                        return "queued"
+            # Slot claimed by another coroutine, or still short — loop back to wait
 
         # Queue timed out — last resort: force-evict the longest-idle session
         # even if within grace period. Better than failing the user request.
         # MUST stay force=True — this is the SOLE anti-starvation guarantee once
         # the per-wake path (above) was made grace-respecting. Do not soften.
         async with self._slot_lock:
-            if await self._evict_idle(exclude=requesting_unit, force=True):
+            # A waiter whose own eviction (above) took the last stale IDLE unit
+            # still gets its grant: force=True may find nothing left, and the
+            # eviction was paid for. The fresh force-evict is tried first.
+            if await self._evict_idle(exclude=requesting_unit, force=True) \
+                    or evicted_for_this_wait:
+                resource_monitor.invalidate_cache()
+                budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                 logger.info(
-                    "session_router: queue timeout force-evict succeeded for %s",
-                    requesting_unit.session_id,
+                    "session_router: queue timeout force-evict succeeded for %s "
+                    "(granted as last resort; budget can_spawn=%s reason=%s)",
+                    requesting_unit.session_id, budget.can_spawn, budget.reason,
                 )
                 return "queued"
 
