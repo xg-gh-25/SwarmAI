@@ -48,6 +48,8 @@ MANAGED_VARS = [
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
     "AWS_BEARER_TOKEN_BEDROCK",
+    "ENABLE_PROMPT_CACHING_1H",
+    "ENABLE_PROMPT_CACHING_1H_BEDROCK",
 ]
 
 
@@ -268,3 +270,27 @@ class TestZeroIO:
         assert not inspect.iscoroutinefunction(_configure_claude_environment), (
             "_configure_claude_environment should be synchronous (zero IO)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Prompt cache: the one-hour tier
+# ---------------------------------------------------------------------------
+class TestPromptCacheOneHour:
+    """A turn after a pause of 5-60 minutes re-wrote the whole cached prefix (a few
+    hundred thousand tokens) because every cache write was the five-minute tier; the
+    one-hour tier keeps it readable across a normal pause."""
+
+    @pytest.mark.parametrize("bedrock,key", [(True, "sk-x"), (False, "sk-x")])
+    def test_both_modes_ask_for_the_one_hour_tier(self, bedrock, key):
+        for k in ("ENABLE_PROMPT_CACHING_1H", "ENABLE_PROMPT_CACHING_1H_BEDROCK"):
+            os.environ.pop(k, None)
+        _configure_claude_environment(_make_config({"use_bedrock": bedrock, "anthropic_api_key": key}))
+        assert os.environ["ENABLE_PROMPT_CACHING_1H_BEDROCK"] == "1"
+        assert os.environ["ENABLE_PROMPT_CACHING_1H"] == "1"
+
+    def test_an_explicit_setting_is_kept(self):
+        os.environ["ENABLE_PROMPT_CACHING_1H_BEDROCK"] = "0"
+        os.environ["ENABLE_PROMPT_CACHING_1H"] = "0"
+        _configure_claude_environment(_make_config())
+        assert os.environ["ENABLE_PROMPT_CACHING_1H_BEDROCK"] == "0"
+        assert os.environ["ENABLE_PROMPT_CACHING_1H"] == "0"

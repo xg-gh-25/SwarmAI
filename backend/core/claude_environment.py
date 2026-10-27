@@ -195,6 +195,8 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     - ``ANTHROPIC_BASE_URL`` — optional custom endpoint from cached config
     - ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` — always ``"1"``; SwarmAI owns its
       memory pipeline (DailyActivity → distillation → MEMORY.md)
+    - ``ENABLE_PROMPT_CACHING_1H_BEDROCK`` / ``ENABLE_PROMPT_CACHING_1H`` — ``"1"``
+      unless already set: prompt-cache writes go to the one-hour tier
     - ``ANTHROPIC_API_KEY`` — injected in Anthropic-direct (apikey) mode from
       the persisted secret; cleared in Bedrock mode if WE injected it
     - ``AWS_BEARER_TOKEN_BEDROCK`` — injected in Bedrock API-key
@@ -276,6 +278,17 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # (DailyActivity → distillation → MEMORY.md). CLI auto-memory would
     # create conflicting writes and duplicate context injection.
     os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+
+    # 3b. Prompt cache on the one-hour tier. The CLI writes the five-minute tier by
+    # default, so a turn after a normal pause (reading the answer, a meeting) re-writes
+    # the whole cached prefix — a few hundred thousand tokens in a long session — and
+    # its first token waits for that prefill. The one-hour tier costs more per written
+    # token (2x base input vs 1.25x) but a pause under an hour reads the prefix instead
+    # of re-writing it. The CLI reads ENABLE_PROMPT_CACHING_1H_BEDROCK on Bedrock and
+    # ENABLE_PROMPT_CACHING_1H otherwise; both are set so a mode switch needs nothing.
+    # setdefault: an explicit export (e.g. "0") wins.
+    os.environ.setdefault("ENABLE_PROMPT_CACHING_1H_BEDROCK", "1")
+    os.environ.setdefault("ENABLE_PROMPT_CACHING_1H", "1")
 
     # 4. Ownership tag — all child processes inherit this so the orphan
     # reaper can identify which backend instance spawned them.  This is
