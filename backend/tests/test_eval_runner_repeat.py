@@ -174,3 +174,16 @@ def test_cli_accepts_with_behavior(monkeypatch):
                                       "--affected-by", "AGENT", "--with-behavior", "--repeat", "2"])
     er.main()
     assert seen["with_behavior"] is True
+
+
+def test_history_is_oldest_first_by_time_not_by_file_name(monkeypatch, tmp_path):
+    """The service names records in UTC, the CLI in local time: a run of 17:42 UTC is
+    newer than one named 19:04 (local, 11:04 UTC), so it must come last."""
+    import json
+    monkeypatch.setattr(er, "_eval_history_dir", lambda root: tmp_path)
+    for name, at in (("2026-10-26_190458_scheduled", "2026-10-26T11:04:58+00:00"),
+                     ("2026-10-26_174210_canary", "2026-10-26T17:42:10+00:00")):
+        (tmp_path / f"{name}.json").write_text(json.dumps(
+            {"run_id": name, "triggered_at": at, "cases": []}), encoding="utf-8")
+    assert [r["run_id"] for r in er._load_history(tmp_path)] == [
+        "2026-10-26_190458_scheduled", "2026-10-26_174210_canary"]

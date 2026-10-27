@@ -2224,7 +2224,11 @@ def _report_populations(golden_set: dict, run_result: dict) -> dict:
 
 
 def _load_history(root: Path) -> list[dict]:
-    """Load all previous eval runs from EvalHistory/ for trend/delta analysis."""
+    """Load all previous eval runs from EvalHistory/ for trend/delta analysis,
+    oldest first by ``triggered_at``. File names cannot order them: the service names
+    records in UTC and this CLI in local time, so the newest run is not always last."""
+    from core.eval_service import _run_time
+
     hist_dir = _eval_history_dir(root)
     runs = []
     for f in sorted(hist_dir.glob("*.json")):
@@ -2236,6 +2240,7 @@ def _load_history(root: Path) -> list[dict]:
                 runs.append(data)
         except (json.JSONDecodeError, OSError):
             pass
+    runs.sort(key=_run_time)
     return runs
 
 
