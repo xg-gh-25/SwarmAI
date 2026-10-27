@@ -79,7 +79,7 @@ export function JudgesTab() {
         [t('Judges', '判什么'), t('one exchange of a real session: delivered (goal) and sensible tools (tool), 0–1 each', '一个真实会话里的一问一答：交付了没有（goal）、工具选得对不对（tool），各 0–1 分')],
         [t('Sees', '拿到什么'), t('your question, that turn’s final answer and the tools it called; no expected answer', '你的问题 + 这一轮的最终回答 + 这一轮调用的工具名；没有标准答案')],
         [t('Returns', '给出什么'), t(`two scores, the dimension of the main weakness, a reason in your language; below ${online.low_threshold ?? 0.6} counts as done badly`, `两个分数 + 主要问题归到哪一维 + 一句用你的语言写的理由；低于 ${online.low_threshold ?? 0.6} 记为没做好`)],
-        [t('Called', '什么时候调'), t(`weekly, on up to ${online.sample_cap ?? 10} sessions, corrected or unusually long ones first`, `每周一次，最多 ${online.sample_cap ?? 10} 个会话，优先你纠正过的或特别长的`)],
+        [t('Called', '什么时候调'), t(`at each online scoring run, on up to ${online.sample_cap ?? 10} sessions, corrected or unusually long ones first`, `每次线上评分时，最多 ${online.sample_cap ?? 10} 个会话，优先你纠正过的或特别长的`)],
         [t('Prompt version', 'prompt 版本'), online.prompt_sha ?? '—'],
       ]} />}
 

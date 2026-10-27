@@ -9,7 +9,8 @@
  * - reconcile() and replace() are NO-OP during streaming (queued for later)
  * - append() and updateLast() always succeed (hot path, no gate)
  * - Notifications are rAF-gated (max 1 React render per frame)
- * - Watchdog timer forces endStreaming() after 45s of no updates
+ * - Watchdog timer after DEFAULT_WATCHDOG_MS (90s) of no updates: force-ends streaming,
+ *   unless an isBackendLive verdict says the backend is still working
  *
  * Design reference: Knowledge/Designs/2026-06-17-message-store-refactor-design.md
  *
@@ -31,7 +32,7 @@ export type StorePhase = 'idle' | 'streaming';
 export interface MessageStoreOptions {
   /** Session ID for DB fetches during reconcile */
   sessionId?: string;
-  /** Watchdog timeout in ms (default: 45000) */
+  /** Watchdog timeout in ms (default: DEFAULT_WATCHDOG_MS, 90s) */
   watchdogTimeoutMs?: number;
   /** Fetch function for reconcile thunk (injected for testability) */
   fetchMessages?: (sessionId: string) => Promise<ChatMessage[]>;

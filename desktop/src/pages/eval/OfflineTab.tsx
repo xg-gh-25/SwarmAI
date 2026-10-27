@@ -1,7 +1,8 @@
 /**
  * Offline Eval — the checks before a release: fixed input, an expected answer,
- * "did this change break something". The quick check runs daily (code only), the
- * offline cases every two weeks (a real agent in the shipped sample workspace).
+ * "did this change break something". The quick check runs after a session ends (code
+ * only); the offline cases run on the full-run schedule, whose next time comes from
+ * /api/eval/health (a real agent in the shipped sample workspace).
  * A failing offline case drills down: session → trajectory → step. The release
  * record lists every full run's four checks and its report.
  */
@@ -38,8 +39,8 @@ export function OfflineTab() {
   return (
     <div className="max-w-[900px] mx-auto px-7 pt-10 pb-24" data-testid="eval-offline">
       <p className="text-body text-[var(--color-text-muted)]">
-        {t('Checks before a release: the input is fixed and there is an expected answer, so they answer "did this change break something". The fast ones run every day, the slow ones every two weeks.',
-          '上线前的检查：输入固定、有标准答案，回答"这次改动弄坏了什么吗"。快的每天跑，慢的每两周跑。')}
+        {t('Checks before a release: the input is fixed and there is an expected answer, so they answer "did this change break something". The fast ones run after a session ends, the slow ones on a schedule (the next run is shown below).',
+          '上线前的检查：输入固定、有标准答案，回答"这次改动弄坏了什么吗"。快的在会话结束后跑，慢的按计划跑（下次时间见下方）。')}
       </p>
 
       <Zone first id="quick" title={t('Quick check', '快速检查')} sub={t('L1 code checks · no model call · red line + gate', 'L1 确定性 · 不调模型 · 红线 + 门禁')}
@@ -49,8 +50,8 @@ export function OfflineTab() {
           <small className="text-body font-normal text-[var(--color-text-muted)] ml-2">{t('passed', '通过')}</small>
         </div>
         <div className="text-small text-[var(--color-text-muted)]">
-          {when(lines?.quick.last_run)} · {t('runs at the first session of each day, in a temporary workspace that never touches your data',
-            '每天第一次会话时自动跑，在临时工作区，不碰你的数据')}
+          {when(lines?.quick.last_run)} · {t('runs after a session ends, in a temporary workspace that never touches your data',
+            '会话结束后自动跑，在临时工作区，不碰你的数据')}
         </div>
         {runQuick.isError && <div className="text-small text-[var(--color-status-error)] mt-1">{errorDetail(runQuick.error)}</div>}
         <Days days={lines?.quick.days ?? []} />

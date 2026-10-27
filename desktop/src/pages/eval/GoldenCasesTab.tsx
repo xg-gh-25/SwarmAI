@@ -83,9 +83,9 @@ export function GoldenCasesTab() {
                className="ml-auto w-64 px-2.5 py-1 rounded-md border border-[var(--color-border)] bg-transparent text-small text-[var(--color-text)]" />
       </div>
 
-      <CaseBlock title={t('Quick checks', '快速检查')} what={t('deterministic probes, every day, no model call', '确定性探针，每天跑，不调模型')}
+      <CaseBlock title={t('Quick checks', '快速检查')} what={t('deterministic probes, after a session ends, no model call', '确定性探针，会话结束后跑，不调模型')}
                  cases={product.filter((c) => isQuick(c) && match(c))} onOpen={open} />
-      <CaseBlock title={t('Offline cases', '离线考题')} what={t('a real agent answers in the sample workspace, every two weeks', '真实 agent 在样例工作区答题，每两周')}
+      <CaseBlock title={t('Offline cases', '离线考题')} what={t('a real agent answers in the sample workspace, on the full-run schedule', '真实 agent 在样例工作区答题，按全量运行的计划')}
                  cases={product.filter((c) => !isQuick(c) && match(c))} onOpen={open} />
 
       <div className="flex items-baseline gap-3 mt-12 mb-2 pb-2 border-b border-[var(--color-border)]">

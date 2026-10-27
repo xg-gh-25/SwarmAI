@@ -18,12 +18,11 @@
  * - `thought`   — a thinking passage, in its place in the stream (never promoted
  *                 out of the work: there is no intent thought, chat display v8);
  *                 adjacent thinking blocks are one passage.
- * - `note`      — text the agent wrote BETWEEN tool calls; a first-level zone between
- *                 two WORKED groups (turnZones).
+ * - `note`      — text the agent wrote BETWEEN tool calls; it stays in its WORKED phase,
+ *                 where it was written, and does not close it (turnZones).
  * - `landmark`  — a pipeline landmark / gate verdict line. Splits the process into
- *                 segments; like a note it is a first-level text zone that closes the
- *                 phase before it (turnZones). `blocks` marks a gate BLOCK verdict
- *                 (isGateBlock).
+ *                 segments; like a note it stays in the open phase as text (turnZones).
+ *                 `blocks` marks a gate BLOCK verdict (isGateBlock).
  * - `stage`     — a `pipeline_stage` block: a stage the BACKEND saw start or finish
  *                 in run.json (not model text). Splits the process; `turnZones`
  *                 (turnZones.ts) makes one stage zone per started stage.

@@ -49,8 +49,8 @@ export function OnlineTab() {
             {on.sessions_checked}<small className="text-body font-normal text-[var(--color-text-muted)] ml-2">{t(`sessions · last ${on.window_days ?? 7} days`, `个会话 · 过去 ${on.window_days ?? 7} 天`)}</small>
           </div>
           <div className="text-small text-[var(--color-text-muted)] mt-1">
-            {on.last_run ? when(on.last_run) : t('not run yet', '还没跑过')} · {t('weekly · no expected answer · only on your machine · every online measure is watch-only, never blocks a release',
-              '每周一次 · 没有标准答案 · 只在你的机器上 · 线上项全部在观测档，从不拦上线')}
+            {on.last_run ? when(on.last_run) : t('not run yet', '还没跑过')} · {t('on a schedule · no expected answer · only on your machine · every online measure is watch-only, never blocks a release',
+              '按计划跑 · 没有标准答案 · 只在你的机器上 · 线上项全部在观测档，从不拦上线')}
           </div>
         </div>
         <Btn onClick={() => run.mutate()} disabled={run.isPending} testId="online-run">{run.isPending ? t('Scoring…', '评分中…') : t('Score now', '现在评一次')}</Btn>
@@ -121,7 +121,7 @@ function CheckRow({ id, head, sub, check, weeks, points, dim }: {
       <button type="button" onClick={() => setOpen((o) => !o)} className="w-full grid grid-cols-[1fr_200px_130px_14px] gap-4 items-center py-3.5 text-left">
         <span className="text-body text-[var(--color-text)]">{onlineLabel[id]?.[lang] ?? id}
           <small className="flex gap-1.5 items-center text-small text-[var(--color-text-dim)] mt-0.5">{dim} · <TierTag tier="watch" /></small></span>
-        <Spark weeks={weeks} series={[{ points }]} width={200} height={32} empty={t('weekly points start with the next runs', '每周一个点，从接下来的运行开始')} />
+        <Spark weeks={weeks} series={[{ points }]} width={200} height={32} empty={t('weekly points start with the next runs', '按周出点，从接下来的运行开始')} />
         <span className="text-right"><span className="text-body font-semibold tabular-nums text-[var(--color-text)]">{head}</span>
           <small className="block text-meta text-[var(--color-text-dim)]">{sub}</small></span>
         <span className={`text-[var(--color-text-dim)] transition-transform ${open ? 'rotate-90' : ''}`}>›</span>

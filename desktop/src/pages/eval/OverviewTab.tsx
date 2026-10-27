@@ -203,8 +203,8 @@ const ONLINE_LABEL: Record<string, { en: string; zh: string; per: { en: string; 
   O1_LANGUAGE: { en: 'Answers in the language you asked in', zh: '用你提问的语言回答', per: { en: 'online, every turn', zh: '线上，每一轮' } },
   O2_SILENT_TOOLS: { en: 'No extra text before tool calls', zh: '调工具前不写多余的话', per: { en: 'online, every turn', zh: '线上，每一轮' } },
   O3_CORRECTIONS: { en: 'Sessions you did not correct', zh: '没被你纠正的会话', per: { en: 'online, per session', zh: '线上，按会话' } },
-  O4_GOAL: { en: 'Judge sample: delivered', zh: 'judge 抽查：交付了没有', per: { en: 'online, a weekly sample', zh: '线上，每周抽查' } },
-  O5_TOOLS: { en: 'Judge sample: sensible tools', zh: 'judge 抽查：工具选得合理', per: { en: 'online, a weekly sample', zh: '线上，每周抽查' } },
+  O4_GOAL: { en: 'Judge sample: delivered', zh: 'judge 抽查：交付了没有', per: { en: 'online, a sample per run', zh: '线上，每次运行抽查' } },
+  O5_TOOLS: { en: 'Judge sample: sensible tools', zh: 'judge 抽查：工具选得合理', per: { en: 'online, a sample per run', zh: '线上，每次运行抽查' } },
 };
 export const onlineLabel = ONLINE_LABEL;
 
