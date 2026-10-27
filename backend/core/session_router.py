@@ -5316,13 +5316,12 @@ class SessionRouter:
                 # durably saved and THEN the SESSION_RECOVERING frame is delivered
                 # to the user. Convert the already-persisted user row to pending
                 # (sent=0) — not left sent=1, which the drain worker skips → the
-                # message would be stranded. On the user's NEXT send the unit
-                # spawns COLD→IDLE (a true cold resume that re-injects DB history)
-                # and the drain worker — which fires on the transition INTO IDLE —
-                # coalesces this pending row into that turn. ⚠️ NOT autonomous:
-                # the unit is left COLD, nothing drives COLD→IDLE on its own, so
-                # delivery is next-interaction, not immediate. Same save mechanism
-                # as the SessionBusyError path below.
+                # message would be stranded. queued_while_busy below notes it as a
+                # waiter, so this turn's end kicks the drain, which takes a COLD unit
+                # (drain_pending) and sends the row on a cold resume that re-injects
+                # DB history: delivery is automatic when this turn ends, not on the
+                # user's next interaction (test_turn_liveness_p1, history_dropped).
+                # Same save mechanism as the SessionBusyError path below.
                 if (
                     event.get("history_dropped")
                     and user_content

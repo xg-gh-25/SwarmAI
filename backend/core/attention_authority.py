@@ -542,7 +542,7 @@ def _collect_db_recovery() -> list[AttentionItem]:
     items: list[AttentionItem] = []
     try:
         from pathlib import Path as _Path
-        from core.data_safety import read_recovery_marker, clear_recovery_marker
+        from core.data_safety import read_recovery_marker
         app_dir = get_app_data_dir()
         marker = read_recovery_marker(app_dir)
         if not marker:
@@ -552,11 +552,10 @@ def _collect_db_recovery() -> list[AttentionItem]:
         # each surfaced, never orphaned). SELF-LIMITING (not a nag loop): an entry
         # surfaces WHILE its decision is pending and drops WHEN resolved — RECOVER
         # moves the isolated file back to data.db, DISCARD deletes it, so a recorded
-        # isolated path that no longer exists == the user decided. When EVERY entry
-        # is resolved, clear the whole marker. Keyed on observable state, not agent
-        # discipline (which MEMORY warns does not hold).
+        # isolated path that no longer exists == the user decided. Keyed on observable
+        # state, not agent discipline. This reader never writes: resolved entries are
+        # pruned by write_recovery_marker on its next write (collect() is read-only).
         pending = marker.get("pending") or [marker]  # legacy flat marker → single entry
-        any_live = False
         seen_ids: set[str] = set()  # one item per store even if the marker repeats it
         for entry in pending:
             isolated = entry.get("isolated_path", "")
@@ -581,7 +580,6 @@ def _collect_db_recovery() -> list[AttentionItem]:
                 if f"db_recovery:{isolated}" in seen_ids:
                     continue
                 seen_ids.add(f"db_recovery:{isolated}")
-                any_live = True
                 consequence = (
                     "saving API keys is refused" if store_name == "secrets.json"
                     else "settings changes are refused and the app is running on default "
@@ -607,7 +605,6 @@ def _collect_db_recovery() -> list[AttentionItem]:
                     },
                 ))
                 continue
-            any_live = True
             if not store_name.startswith("data.db"):
                 # A non-DB store (config.json / secrets.json via AppConfigManager)
                 # shares the marker but NOT the DB recovery steps: there is no
@@ -664,9 +661,6 @@ def _collect_db_recovery() -> list[AttentionItem]:
                     "context": {"kind": "db_recovery", "isolated_path": isolated},
                 },
             ))
-        if not any_live:
-            # All pending isolates resolved → stop surfacing, clear the marker.
-            clear_recovery_marker(app_dir)
     except Exception as exc:
         logger.warning("attention: db_recovery source failed: %s", exc)
     return items

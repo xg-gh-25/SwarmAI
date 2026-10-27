@@ -122,7 +122,8 @@ describe('DddCard — compact (gallery, verdict-first two-zone)', () => {
     expect(screen.queryByTestId('dddcard-cheap-sinking')).toBeNull();
     expect(screen.queryByTestId('presence-SwarmAI-knowledge')).toBeNull();
     // CHEAP = { sinking:2, pending:1, liveRun:true } → all three surfaced
-    expect(card.textContent).toContain('proposals awaiting review');
+    expect(card.textContent).toContain('need you');
+    expect(card.textContent).not.toContain('proposals awaiting review');
     expect(card.textContent).toContain('sinking');
     expect(card.textContent).toContain('run in progress');
     fireEvent.click(screen.getByTestId('dddcard-SwarmAI'));
@@ -225,7 +226,7 @@ describe('DddCard — full: needs-you block', () => {
     render(<DddCard density="full" name="S" kind="knowledge" metrics={METRICS} health={CHEAP} />);
     const n = screen.getByTestId('ddd-needs-you');
     expect(n.textContent).toContain('3');  // escalationPending
-    expect(n.textContent?.toLowerCase()).toMatch(/review|裁决|proposal/i);
+    expect(n.textContent?.toLowerCase()).toContain('need you');  // every source, not only proposals
   });
 
   it('clean brain → "nothing needs you" (0 pending, 0 reclaimable, 0 sinking)', () => {

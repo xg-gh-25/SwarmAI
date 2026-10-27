@@ -745,6 +745,14 @@ describe('AC9 — one signal; a stopped turn says so', () => {
     expect(container.querySelector('[data-zone="failure"]')).not.toBeNull();
   });
 
+  it('a failure card is "know": labelled Failed in the muted colour, never "Needs you" (fixing spec H1)', () => {
+    const { container } = render(view([tx('go'), bash('a', 'make'), tr('a', true), receipt([])], false));
+    const label = screen.getByTestId('needs-failure-label');
+    expect(label.textContent).toBe('Failed');
+    expect(label.className).not.toContain('orange');
+    expect(container.textContent).not.toContain('Needs you');
+  });
+
   it('a receipt with nothing running is just Stopped by you', () => {
     render(view([tx('go'), bash('a', 'make'), tr('a'), tx('partial'), receipt([])], false));
     expect(screen.getByTestId('turn-stopped').textContent).toBe('Stopped by you');

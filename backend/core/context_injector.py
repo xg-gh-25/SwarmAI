@@ -1239,17 +1239,19 @@ async def build_resume_context(
 ) -> str:
     """Load recent messages and build enriched resume context for system prompt.
 
-    Five-layer approach (from shape to substance):
+    Six layers (from shape to substance):
     1. **Structured checkpoint** (~5-10K) — task state, files, git activity,
        user directives, crash checkpoint merge.
     2. **Uncommitted state** (~500) — ``git status --short`` + diff stat.
     3. **Assistant conclusions** (~5-8K) — last 5 assistant text blocks.
     4. **Key tool results** (~5-15K) — truncated output from Read/Grep/Bash.
     5. **Recent conversation** (~20-60K) — last 30 turn pairs × 4K chars.
+    6. **Compaction summary** (~3-4K) — the record of the span before a compaction.
 
     Budget is model-aware and generous (150K for 1M models).
-    Trimming priority: tool_results → recent_turns → conclusions.
-    Checkpoint + uncommitted state are never trimmed.
+    Trimming priority: tool_results → recent_turns → uncommitted → conclusions →
+    compaction_summary (see ``trim_order``). Only the checkpoint is never trimmed;
+    a final hard clamp bounds the assembled total.
 
     Falls back to legacy raw-history injection if the structured path
     produces nothing.

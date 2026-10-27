@@ -148,7 +148,9 @@ function VerdictDot({ pending }: { pending: number }) {
  *  All from the cheap BrainSummary — no fetch. */
 function NeedsActionable({ health }: { health: BrainHealth }) {
   const items: { key: string; n: string; label: string }[] = [];
-  if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: 'proposals awaiting review' });
+  // this brain's Need You items, every source (escalations, paused runs), not only
+  // proposals: the same word as the left nav (fixing spec H2)
+  if (health.pending > 0) items.push({ key: 'pending', n: String(health.pending), label: 'need you' });
   if (health.sinking > 0) items.push({ key: 'sinking', n: String(health.sinking), label: 'entries sinking (decaying)' });
   if (health.liveRun) items.push({ key: 'liveRun', n: '•', label: 'run in progress' });
   return (
@@ -319,7 +321,7 @@ function FullBody(
 
   // needs-you: only non-zero actionable items
   const needs: { n: number; label: string }[] = [];
-  if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: 'proposals awaiting review' });
+  if (metrics.escalationPending > 0) needs.push({ n: metrics.escalationPending, label: 'need you' });
   if (metrics.noise.reclaimable > 0) needs.push({ n: metrics.noise.reclaimable, label: 'reclaimable (run reclaim)' });
   if (health && health.sinking > 0) needs.push({ n: health.sinking, label: 'entries sinking (decaying)' });
 

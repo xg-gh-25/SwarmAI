@@ -439,3 +439,30 @@ async def test_a_push_left_on_a_closed_loop_does_not_hold_back_the_next(monkeypa
     session_state.publish(router, "s-stale")
     await asyncio.sleep(0.05)
     assert reads == ["s-stale"]
+
+
+# ── fixing spec 2026-10-28 G2: a message stranded by a lost transcript is ────────
+# delivered when the turn ends, by the drain (not "on the next interaction")
+
+@pytest.mark.asyncio
+async def test_a_history_dropped_turn_kicks_the_drain_when_it_ends(hub):
+    r = _router()
+    sid = "s-hist-dropped"
+    unit = r.get_or_create_unit(sid, "default")
+    unit._transition(SessionState.IDLE)
+
+    async def send(**kwargs):
+        yield {"type": "error", "code": "SESSION_RECOVERING", "history_dropped": True,
+               "message": "the conversation history could not be restored"}
+        yield {"type": "result", "sessionId": sid, "durationMs": 1}
+
+    kicked: list[str] = []
+    real_kick = r.kick
+    r.kick = lambda s: (kicked.append(s), real_kick(s))[1]
+    a, b = _patched(send)
+    with a, b, patch("core.session_pending.mark_pending_by_id",
+                     new_callable=AsyncMock, return_value=1) as marked:
+        _ = [ev async for ev in r.run_conversation(
+            agent_id="default", user_message="keep me", session_id=sid, client_id="local-hd")]
+    assert marked.await_count == 1, "the persisted message was not turned pending"
+    assert await _wait(lambda: sid in kicked), "the drain was never kicked for the stranded message"

@@ -367,6 +367,7 @@
         "commands_other": "{{count}} commands",
         "done": "{{count}} done",
         "failedCall": "This call failed and the turn ended there:",
+        "failed": "Failed",
         "needsYou": "Needs you",
         "next": "next:",
         "pipelineStarted": "Pipeline started",

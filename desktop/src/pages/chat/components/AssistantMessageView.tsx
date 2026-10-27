@@ -435,7 +435,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     const v = stripView(z.step.block);
     return (
       <section data-testid="needs-failure" className="rounded-lg border border-[var(--color-border)] px-3 py-2">
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-orange-500">{tf(t, 'chat.turn.zone.needsYou', 'Needs you')}</div>
+        {/* attention 'know' (attention.ts): nothing to act on here, so no act colour
+            and no "Needs you" (fixing spec H1) */}
+        <div data-testid="needs-failure-label" className="mb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">{tf(t, 'chat.turn.zone.failed', 'Failed')}</div>
         <div className="text-[14px] text-[var(--color-text-secondary)]">
           {tf(t, 'chat.turn.zone.failedCall', 'This call failed and the turn ended there:')}{' '}
           <span className="font-mono text-[12.5px]">{v.tool} {v.object}</span>

@@ -185,16 +185,19 @@ def test_db_recovery_surfaces_while_isolated_file_exists(tmp_path, monkeypatch):
     assert read_recovery_marker(tmp_path) is not None, "marker kept while pending"
 
 
-def test_db_recovery_self_clears_when_decision_resolved(tmp_path, monkeypatch):
-    """Anti-nag (MEDIUM review finding): once the user resolves (isolated file gone
-    — recovered back into place OR discarded), the collector auto-clears the marker
-    and stops surfacing. Keyed on observable state, not agent discipline."""
-    from core.data_safety import write_recovery_marker, read_recovery_marker
+def test_db_recovery_stops_surfacing_when_resolved_and_never_writes(tmp_path, monkeypatch):
+    """Anti-nag: once the user resolves (isolated file gone — recovered back into place
+    OR discarded) the item stops surfacing, keyed on observable state. collect() is
+    read-only (fixing spec G1): it leaves the marker as it is; write_recovery_marker
+    prunes resolved entries on its next write."""
+    from core.data_safety import RECOVERY_MARKER_NAME, write_recovery_marker
     isolated = tmp_path / "data.db.corrupt-x"  # NOTE: never created → "resolved"
     write_recovery_marker(tmp_path, isolated_path=isolated, reason="corrupt at boot")
+    marker = tmp_path / RECOVERY_MARKER_NAME
+    before = (marker.read_bytes(), marker.stat().st_mtime_ns)
     monkeypatch.setattr(aa, "get_app_data_dir", lambda: tmp_path)
     assert aa._collect_db_recovery() == [], "resolved → no longer surfaces"
-    assert read_recovery_marker(tmp_path) is None, "marker auto-cleared on resolution"
+    assert marker.exists() and (marker.read_bytes(), marker.stat().st_mtime_ns) == before
 
 
 def test_db_recovery_collector_failsoft(monkeypatch):

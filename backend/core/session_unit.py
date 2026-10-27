@@ -5562,11 +5562,15 @@ class SessionUnit:
     ) -> None:
         """Arm the rich recovery checkpoint before an INVOLUNTARY keep-resume kill.
 
-        Mirrors the voluntary self-heal checkpoint so that ANY ``kill → COLD``
-        path which preserves ``_sdk_session_id`` (RSS proactive restart,
-        streaming RSS kill, stuck-STREAMING / stuck-WAITING_INPUT recovery,
-        watchdog death) gives the next ``send()`` the same structured
-        "where I left off" context the gated self-heal already builds. This
+        Mirrors the voluntary self-heal checkpoint so that an involuntary kill
+        of a session with work in flight or just finished (RSS proactive
+        restart, streaming RSS kill, stuck-STREAMING / stuck-WAITING_INPUT
+        recovery, watchdog death, the interrupt / poison-guard / glitch
+        recycles) gives the next ``send()`` the same structured "where I left
+        off" context the gated self-heal already builds. Kills of a unit with
+        nothing in flight do not call it: TTL and IDLE evictions (the next
+        message resumes the full transcript) and the zombie kill (its turn
+        produced nothing and retries at once). This
         adds NO new kill — it only enriches recovery on kills that already
         happen, so any respawn (not just gated self-heal) resumes with context.
 
