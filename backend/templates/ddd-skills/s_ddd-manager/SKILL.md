@@ -21,11 +21,11 @@ backend**.
 ├── .project.json / aim.json / AGENTS.md / .crux_template.md   # ① Identity & manifest
 ├── PRODUCT/TECH/IMPROVEMENT/PROJECT.md + Knowledge/            # ② Knowledge
 ├── gates/ (+ context/includes/)                               # ③ Gates (accrete)
-├── skills/  ← the 3 DDD-native skills live here                # ④ Capabilities
+├── skills/  ← the DDD-native skills live here                  # ④ Capabilities
 ├── bindings.yaml                                              # ⑤ Delivery contract (on BIND)
-└── REFRESHER.md                                              # ⑥ Code-intel refresher
+└── REFRESHER.md                                              # ⑥ Refresher
 ```
-The 3 ④ skills: `s_ddd-manager` `s_ddd-persist` `s_repo-to-ddd` — copied in at CREATE.
+The ④ skills: `s_ddd-manager` `s_ddd-persist` — copied in at CREATE.
 Do NOT scaffold `agents/`/`agent-sops/` (AIM-export form, generated at export, not native).
 
 ## Lifecycle: CREATE → BIND → PULL → DEVELOP → SYNC-BACK
@@ -128,9 +128,11 @@ bindings:
   #    provision(internal=True) only when internal). On Kiro/no-SwarmAI: skip — an internal
   #    DDD there already carries its skills from a prior SwarmAI provision or the export.
   ```
-- **PULL + index:** clone the repo into a worktree OUTSIDE the DDD tree, then run the ⑥
-  refresher (`s_repo-to-ddd`) to build `code-intel.json`. Idempotent. `code_intel` is NOT a
-  binding member — it's a DERIVED projection (§3.6), regenerated locally, gitignored.
+- **PULL + index:** clone the repo into a worktree OUTSIDE the DDD tree and build its code
+  graph. On SwarmAI one command does both (`artifact_cli bind <project>`); without SwarmAI,
+  clone only (the code graph and its on-demand analysis are SwarmAI capabilities).
+  Idempotent. The graph is NOT a binding member — it's a DERIVED projection (§3.6), rebuilt
+  locally, never committed.
 - **DEVELOP:** read the project's class (`classify_project`) + the binding's `remote_kind` +
   `build_system` and route — never assume a specific enterprise toolchain. The agent never
   `git push`es an internal CR remote (the host's auto-merge owns it).

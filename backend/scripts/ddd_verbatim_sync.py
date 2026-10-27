@@ -54,8 +54,8 @@ _TINY_BYTES = 30
 # Generated + verified by `discover` (2026-07-15). Keep sorted for stable diffs.
 # EMPTY by design (2026-08-24): the only DDD-native skills that carried verbatim
 # copies of a SwarmAI-native source were s_ddd-pipeline (← s_autonomous-pipeline)
-# and s_ddd-pollinate (← s_pollinate), both REMOVED from the DDD-native set. The 3
-# retained skills (s_ddd-manager, s_ddd-persist, s_repo-to-ddd) are adapted forks
+# and s_ddd-pollinate (← s_pollinate), both REMOVED from the DDD-native set. The
+# retained skills (s_ddd-manager, s_ddd-persist) are adapted forks
 # that DELIBERATELY differ from their sources (they strip the ~/.swarm-ai paths so a
 # DDD runs standalone) — so there is nothing to keep byte-identical. If a future
 # native skill ever ships a verbatim runtime copy, re-populate this manifest.

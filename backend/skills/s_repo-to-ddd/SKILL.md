@@ -1,6 +1,6 @@
 ---
 name: repo-to-ddd
-description: "Generate AI-ready context for any codebase, any language: AGENTS.md, PRODUCT/TECH/IMPROVEMENT/PROJECT.md and code-intel.json. TRIGGER: \"make AI-ready\", \"generate DDD for repo\", \"analyze codebase\". NOT FOR: code review."
+description: "Generate AI-ready context for any codebase, any language: AGENTS.md and PRODUCT/TECH/IMPROVEMENT/PROJECT.md. TRIGGER: \"make AI-ready\", \"generate DDD for repo\", \"analyze codebase\". NOT FOR: code review."
 tier: lazy
 python-deps: [yaml]
 platform: all

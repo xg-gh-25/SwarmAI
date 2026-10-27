@@ -47,7 +47,6 @@ Making {repo_name} genuinely understood by AI agents.
     .ai-context/TECH.md      ← How: architecture, conventions
     .ai-context/IMPROVEMENT.md ← Learned: gotchas, failures, patterns
     .ai-context/PROJECT.md   ← Now: priorities, decisions, blockers
-    .ai-context/code-intel.json ← Graph: modules, deps, entry points
     .ai-context/REVIEW-REPORT.md ← For humans: score, gaps, assignments
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -79,7 +78,6 @@ Making {repo_name} genuinely understood by AI agents.
   ├── .ai-context/TECH.md
   ├── .ai-context/IMPROVEMENT.md ({N} gotchas)
   ├── .ai-context/PROJECT.md
-  ├── .ai-context/code-intel.json ({N} modules, {M} edges)
   ├── .ai-context/ai-ready.json
   └── .ai-context/REVIEW-REPORT.md
 ```
@@ -98,7 +96,6 @@ Making {repo_name} genuinely understood by AI agents.
 Helper script: `backend/skills/s_repo-to-ddd/scripts/ai_ready_helpers.py`
 - `gather_repo_info(path)` — git stats, file tree, tech stack detection
 - `extract_import_graph(path)` — REAL dependency graph from import statements (not guessed)
-- `validate_code_intel_json(doc)` — v2 schema enforcement
 - `parse_git_gotchas(path)` — evidence-grounded gotchas from git history
 - `render_agents_md(data)` — template rendering (≤150 lines guaranteed)
 - `build_ai_ready_meta(score, name)` — ai-ready.json metadata
@@ -327,8 +324,8 @@ graph = extract_import_graph(Path(repo_path))
 ```
 
 This scans ALL source files and extracts EVERY import statement with file:line citation.
-The `depends_on` and `depended_by` fields in code-intel.json MUST come from
-this output — never from guessing.
+Every module dependency the docs state (TECH.md `depends_on` / `depended_by`) MUST
+come from this output — never from guessing.
 
 If `edges_found == 0` for a repo with code, something is wrong. Check the language detection.
 
@@ -569,146 +566,22 @@ Generate from recent git activity + user signals. Sections:
 
 End with: `<!-- user: Your additions below — refresh preserves this section -->`
 
-#### 4.6: code-intel.json
+#### 4.6: Code graph analysis (read, never written)
 
-Build the v2 document from UNDERSTAND phase analysis:
+The skill writes no graph file. When the repo is a SwarmAI project's code graph
+(bound with `artifact_cli bind`, or the project's own `code_intel.db`), read its
+analysis, computed from the graph on demand:
 
-```python
-from ai_ready_helpers import validate_code_intel_json, build_packages_partition
-
-doc = {
-    "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
-    "version": "2.0",
-    "generated_at": "...",
-    "repo": { "name": "...", "languages": {...}, "total_symbols": N, "total_edges": M },
-    "modules": [...],
-    "edges": [...],
-    "entry_points": [...],
-    "routes": [...],
-    "hot_zones": [...],
-    "risk_areas": [...],
-    "dead_code": [],
-    "dependencies": {...},
-    # packages[] — monorepo boundary partition (additive; parity with the core
-    # reindex producer json_exporter, so BOTH producers of code-intel.json carry it).
-    # Single-package repo → [{name, root: "."}]; monorepo → one entry per package.
-    "packages": build_packages_partition(repo_root),
-}
-
-# MANDATORY: validate before writing
-errors = validate_code_intel_json(doc)
-if errors:
-    # Fix errors before writing — never write invalid JSON
-    raise ValueError(f"code-intel.json validation failed: {errors}")
+```bash
+# any directory
+"$SWARM_BACKEND_BIN" py -m core.code_intel.analysis <project> --layers structure          # modules, routes, entry points, module edges, central symbols, risk areas, dead code, packages, coverage
+"$SWARM_BACKEND_BIN" py -m core.code_intel.analysis <project> --layers graph_clusters,domain_rules   # structural domains + business-rule manifest
 ```
 
-Write as formatted JSON (indent=2).
-
-#### 4.6.5: code-intel v3 domain layer (OPTIONAL — business-flow spec understanding)
-
-**When to run:** the user wants human-signable business-flow specs (the "legacy
-code nobody dares touch" use case), not just the machine graph. Skip for a plain
-AI-ready pass — v2 is complete without it. This produces `domains[]/flows[]/steps[]`
-that Run-3 recall + spec-details generation consume.
-
-**The anti-hallucination contract (§1.1/§1.5): the LLM classifies REAL entry
-points into business flows — it never invents an entry point.** The deterministic
-scaffold produces a constrained anchor menu; the LLM may only reference those ids.
-
-```python
-from ai_ready_helpers import (
-    backfill_route_ids, extract_entry_anchors, finalize_v3)
-
-# 1. Backfill stable §1.4 join keys onto v2 routes/entry_points (idempotent).
-doc = backfill_route_ids(doc)
-
-# 2. Project the ANCHOR MENU — the ONLY entry ids a flow may reference.
-anchors = extract_entry_anchors(doc)
-# anchors = [{id, method, path, file_path, line_number, kind}, ...]
-```
-
-**3. LLM classification (this is the agent's judgment step — NOT a helper):**
-Read the anchor menu + the UNDERSTAND-phase module/hot-zone analysis.
-
-> **🚨 COVERAGE IS MANDATORY — account for EVERY anchor, do NOT cherry-pick a subset.**
-> This is the difference between "we understand this codebase" and "we understand
-> the 5% we felt like classifying". On a bank/enterprise legacy codebase, reporting
-> "done" while silently leaving 95% of entry points unclassified is a **fatal
-> delivery**. Every anchor in the menu MUST be ACCOUNTED for — one of two ways:
-> 1. **Classified** — referenced by a `flow.entry_ref` (it belongs to a business flow), OR
-> 2. **Explicitly unclassified** — listed in a top-level `unclassified: [{id, reason}]`
->    array, where `reason` is a **substantive** explanation of why it has no business
->    flow (e.g. "unauthenticated health probe, no business semantics" / "static asset
->    route" / "dead code, 0 callers"). A blank or junk reason (`"."`, `"n/a"`, `"todo"`)
->    is REJECTED — it must genuinely explain the absence.
->
-> `finalize_v3` is **fail-closed on accounting** (`check_anchor_accounting`): if ANY
-> anchor is neither classified nor reasoned-unclassified, it RAISES with the list of
-> unaccounted ids. Silent omission is structurally impossible to ship. The honest
-> `classified_ratio` (real business-flow coverage) is REPORTED, never gated — so you
-> are never rewarded for padding trivial routes into fake flows just to hit a number.
-
-Group the REAL anchors into business domains and flows. For each:
-- `domain`: id (`domain:<kebab>`), name, summary, entities, complexity, optional
-  `business_rules`/`issues`/`gaps`/`diagram` (mermaid).
-- `flow`: id (`flow:<kebab>`), `domain_id` (a real domain id), `entry_ref`
-  (**MUST be an id from the anchor menu** — a hallucinated ref is rejected in step 4),
-  `entry_type`, optional `diagram`.
-- `step`: id, `flow_id` (a real flow id), `order`, `name`, `file_path`, `line_range`,
-  optional `io`/`contract`/`rules`/`preconditions`/`exceptions`.
-- **§1.5 assertion rule (fail-closed):** every rule/precondition/exception is a
-  dict with an explicit bool `verified`. `verified:true` REQUIRES a non-blank
-  `anchor` (code file:line). `verified:false` REQUIRES `absence_evidence` (a
-  `grep`-returned-0 proof) — a "rule doesn't exist" claim is unreliable unless
-  proven absent. A bare-string rule or a missing `verified` is rejected.
-
-```python
-# 4. Assemble + FAIL-CLOSED validate. Raises ValueError if ANY flow.entry_ref is
-#    dangling, any verified:true lacks an anchor (spurious), any verified:false
-#    lacks absence_evidence, OR ANY anchor is UNACCOUNTED (not in a flow and not in
-#    a reasoned unclassified bucket — the coverage guarantee). A rejected layer is
-#    NEVER written — fix and re-run.
-#    Put every not-a-business-flow anchor in doc["unclassified"] with a real reason:
-doc["unclassified"] = [
-    {"id": "route:get-health-...", "reason": "unauthenticated liveness probe, no business semantics"},
-    # ... every anchor not classified into a flow MUST appear here with a substantive reason
-]
-doc = finalize_v3(doc, domains, flows, steps)  # doc["version"] now "3.0"
-
-errors = validate_code_intel_json(doc)  # redundant belt-and-suspenders; must be []
-assert not errors
-
-# Coverage report (honest signal — NOT a gate): how much is real business flow?
-acc = compute_anchor_accounting(doc)
-print(f"accounted {acc['accounted_ratio']:.0%} (MUST be 100% — fail-closed), "
-      f"of which real flows {acc['classified_ratio']:.0%}, "
-      f"{acc['unclassified_count']} explicitly-unclassified")
-```
-
-Then re-write `code-intel.json` with the v3 doc. Downstream: Run-3 recall surfaces
-these domains on any recall query; each domain also gets a
-`spec-details/<domain>.spec.md` for human enrichment.
-
-**⚠️ Writing a `.spec.md` — ALWAYS route through the preserving path (irreversible
-data-loss risk):** §5 of a spec holds human-authored `[human]` business rules that
-a banking reviewer has signed off on. Regenerating a spec MUST NOT destroy them.
-
-```python
-from ai_ready_helpers import regenerate_spec_preserving_human
-# domain['id'] is "domain:<name>"; the spec filename is the bare <name>.
-spec_name = domain["id"].split(":", 1)[-1]
-spec_path = spec_dir / f"{spec_name}.spec.md"
-existing = spec_path.read_text(encoding="utf-8") if spec_path.exists() else ""
-spec_md = regenerate_spec_preserving_human(existing, domain, flows, steps)  # splices §5 [human] blocks back in; plain skeleton on first gen
-spec_path.write_text(spec_md, encoding="utf-8")
-```
-
-`regenerate_spec_preserving_human` auto-detects `[human]` blocks in `existing` and
-re-injects them verbatim (idempotent; a first generation where `existing==""` yields
-a plain skeleton). **NEVER call `project_domain_skeleton(...)` directly to WRITE a
-spec file that may already exist** — it renders only the raw skeleton with an empty
-§5 stub, so writing it over an enriched spec DESTROYS the human rules. Use
-`project_domain_skeleton` only for an in-memory preview of a brand-new domain.
+(Also `GET /api/code-intel/<project>/analysis?layers=...`.) Use it to check the module,
+route and entry-point claims the docs make, and as the input of the Business-Rules
+Extraction score (below). Exit code 1 = the project has no code graph: rely on
+`extract_import_graph` (Phase 3) alone.
 
 #### 4.7: ai-ready.json (metadata)
 
@@ -725,41 +598,6 @@ Generate a human-readable report covering:
 - Review assignments (who should verify which file)
 - Improvement recommendations (prioritized)
 - Known gaps (what the engine couldn't determine)
-
-#### 4.8.5: BLIND-SPOTS.md (reverse-coverage — code→doc direction)
-
-Write a **per-package** `{output_path}/.ai-context/BLIND-SPOTS.md` — the Spec Studio-style
-reverse-coverage check: risky code spans (high fan-in / flagged risk) that the DDD domain
-layer does NOT document. This is the human-facing consumer for `blind_spot_scan`; it runs
-off the SAME `code-intel.json` doc built in §4.6/§4.6.5 (needs `risk_areas`/`hot_zones` +
-`steps`/`business_rules`).
-
-```python
-import json
-from pathlib import Path
-from ai_ready_helpers import blind_spot_scan, render_blind_spots_md
-
-doc = json.loads((Path(output_path) / ".ai-context" / "code-intel.json").read_text())
-scan = blind_spot_scan(doc)                       # {total_risky, documented, blind, clean, blind_spots}
-# TITLE ARG = the name of THIS unit. Single-repo path → project_name. In the §4.9
-# monorepo fan-out → package.name (NOT project_name — else every package's doc
-# is titled with the repo name; adversarial review, MEDIUM). The FILE is already per-package
-# because output_path is the per-package dir inside the fan-out loop.
-md = render_blind_spots_md(scan, unit_name)        # unit_name = project_name | package.name
-(Path(output_path) / ".ai-context" / "BLIND-SPOTS.md").write_text(md)
-# carry scan["blind"] into the Phase-6 DELIVER summary line for THIS package
-```
-
-Rules (load-bearing):
-- **PER-PACKAGE, never shared.** Blind spots are that repo's own — one `BLIND-SPOTS.md`
-  per package `.ai-context/` dir. In the §4.9 monorepo fan-out, each package writes its own
-  (inside its per-package dir); there is NO global/merged BLIND-SPOTS.md.
-- **REPORT-ONLY, never a gate.** `blind_spot_scan` is deterministic (keys off real
-  risk_areas/hot_zones, not an LLM negative assertion) and explicitly NOT fail-closed
-  (the gate version was deferred as over-reach). Do NOT BLOCK generation on blind spots — they
-  are SME-documentation candidates, surfaced honestly.
-- **Zero blind spots is a valid, STATED outcome** — `render_blind_spots_md` emits an
-  explicit "no reverse-coverage blind spots" doc, never an empty file.
 
 #### 4.9: MONOREPO FAN-OUT (only when Step 1.1b detected ≥2 packages)
 
@@ -779,16 +617,14 @@ mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-context" 
 
 **Fan-out loop — for EACH package in `mp["packages"]`:**
 1. Run UNDERSTAND (Phase 3) scoped to `package.path` (its subtree only).
-2. GENERATE §4.1–§4.6 **+ §4.8.5 (per-package BLIND-SPOTS.md — pass `unit_name=package.name`, NOT project_name, or every package's doc is mistitled with the repo name)** into a **per-package dir keyed on a UNIQUE segment** — use
+2. GENERATE §4.1–§4.5 into a **per-package dir keyed on a UNIQUE segment** — use
    `package.name` (already disambiguated by `run_multi_package`: a root/member name
    collision is path-suffixed, e.g. `sub/core` → dir `sub__core`) OR, safest, key the
    dir on `package.root` (always unique). Do NOT key on a raw repo-dir name — two
    packages can share it (a repo dir `x` + a nested member `x`), and keying on the raw
    name would make the second clobber the first, silently violating coverage below.
-   Each package's `code-intel.json` carries its own `packages: [{name, root:"."}]`
-   (it is a self-contained unit from its own root).
 3. **Coverage is mandatory** — account for EVERY detected package, never a subset
-   (same discipline as §4.6.5 entry-point coverage). Verify N distinct output dirs
+   Verify N distinct output dirs
    for N packages (a collision that dropped one = coverage violated). Silently
    skipping packages = "we understand the repo" being false.
 
@@ -797,8 +633,6 @@ mp = run_multi_package(repo_root, output_base=Path(output_path) / ".ai-context" 
 - Shared dependencies (`mp["cross_package"]["shared_deps"]`) — libs used by ≥2 packages.
 - Dependency order (`mp["cross_package"]["dep_order"]`) — which package imports which
   (the build/change-blast-radius order).
-- Root-level `code-intel.json` keeps the full `packages[]` partition so a top-level
-  agent sees all boundaries at once.
 
 The single-repo GENERATE path (§4.1–§4.8) is unchanged; this section is purely additive.
 
@@ -827,7 +661,6 @@ ddd_content = {
     "AGENTS.md": Path(output_path / "AGENTS.md").read_text(),
     "TECH.md": Path(output_path / ".ai-context/TECH.md").read_text(),
     "IMPROVEMENT.md": Path(output_path / ".ai-context/IMPROVEMENT.md").read_text(),
-    "code-intel.json": Path(output_path / ".ai-context/code-intel.json").read_text(),
 }
 
 prompt = build_verification_prompt(ddd_content, tasks)
@@ -887,20 +720,14 @@ Output: {output_path}/
 │   ├── TECH.md
 │   ├── IMPROVEMENT.md
 │   ├── PROJECT.md
-│   ├── code-intel.json (N modules, M routes)
 │   ├── ai-ready.json
-│   ├── REVIEW-REPORT.md
-│   └── BLIND-SPOTS.md ({blind} reverse-coverage blind spots)
+│   └── REVIEW-REPORT.md
 
 Next steps:
 1. Review REVIEW-REPORT.md for confidence levels and gaps
-2. Review BLIND-SPOTS.md — {blind} risky code span(s) the docs don't cover (SME queue)
-3. Have PM review PRODUCT.md, engineer review TECH.md
-4. Install to your IDE: copy to project root
+2. Have PM review PRODUCT.md, engineer review TECH.md
+3. Install to your IDE: copy to project root
 ```
-
-> The `{blind}` count comes from §4.8.5's `scan["blind"]`. For a monorepo, name each
-> package's own BLIND-SPOTS.md + its count (per-package, not merged).
 
 ## Scoring (10 Dimensions)
 
@@ -915,7 +742,7 @@ Next steps:
 | Route Coverage | Routes detected / total endpoint references |
 | Test Safety | Test files found + CI config present |
 | Ops Context | Deploy info + monitoring + runbook references |
-| Business-Rules Extraction | domain_rules coverage × traceability pass-rate — **N/A (excluded from overall)** if no domain_rules layer (non-legacy/non-SQL repo). Compute MECHANICALLY via `compute_business_rules_dimension(doc, specs=...)` in `ai_ready_helpers.py`; never eyeball it. |
+| Business-Rules Extraction | domain_rules coverage × traceability pass-rate — **N/A (excluded from overall)** if no domain_rules layer (non-legacy/non-SQL repo). Compute MECHANICALLY via `compute_business_rules_dimension(analysis, specs=...)` in `ai_ready_helpers.py`, where `analysis` is the §4.6 `--layers domain_rules` output; never eyeball it. |
 
 Score each 0-10. **Overall = average of the APPLICABLE dimensions only** — a dimension
 returning N/A (score=None, e.g. Business-Rules Extraction on a repo with no
@@ -938,23 +765,21 @@ Before entering GENERATE, self-check:
 | Coverage declared | REVIEW-REPORT.md states honest coverage % and per-scenario confidence | Add coverage section |
 
 **If you didn't Read the code, you have NOTHING to generate.**
-README + git log alone is NEVER sufficient for TECH.md or code-intel.json.
+README + git log alone is NEVER sufficient for TECH.md.
 
 ## Boundaries
 
 ### Always
 - AGENTS.md ≤ 150 lines
-- code-intel.json passes validate_code_intel_json() before writing
 - IMPROVEMENT.md gotchas have commit evidence (WHEN/RISK/BECAUSE grammar)
 - All DDD files end with `<!-- user -->` preservation marker
 - Works on ANY repo — no SwarmAI-specific paths
 - **TECH.md conventions cite source files (2+ per convention)**
-- **code-intel.json edges come from verified import statements**
+- **Dependency edges in the docs come from verified import statements**
 - **Read ≥8 source files before generating output**
 
 ### Never
 - Never generate gotchas without commit hash evidence
-- Never write invalid code-intel.json (validate first)
 - Never exceed 150 lines in AGENTS.md
 - Never overwrite existing AGENTS.md without asking
 - Never assume specific IDE or framework
