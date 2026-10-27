@@ -8,7 +8,7 @@ Design docs/design/2026-10-24-swarmai-usable-by-anyone.md §3.3.6, P7. What is t
   LandingError naming the fix;
 - commit_repos lands a repo with no declaration as the repo's own user with no trailer,
   and a repo declaring swarm + trailer as Swarm with that trailer.
-- the SwarmAI repo's own file declares Swarm, its trailer and the node_modules link.
+- the SwarmAI repo's own file declares Swarm, its trailer and the node_modules and backend venv links.
 """
 import subprocess
 from pathlib import Path
@@ -121,4 +121,4 @@ def test_the_swarmai_repo_declares_its_own_conventions():
     cfg = rpc.parse((root / ".swarmai" / "pipeline.toml").read_text())
     assert cfg.author == "swarm"
     assert cfg.trailer == "Co-Authored-By: Swarm <swarm@swarmai.dev>"
-    assert cfg.links == ("desktop/node_modules",)
+    assert cfg.links == ("desktop/node_modules", "backend/.venv")

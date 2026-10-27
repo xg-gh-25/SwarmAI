@@ -6,4 +6,7 @@ author = "swarm"
 trailer = "Co-Authored-By: Swarm <swarm@swarmai.dev>"
 
 [worktree]
-link = ["desktop/node_modules"]
+# backend/.venv: the dev shim (backend/bin/python-backend) and the tests need the backend's
+# interpreter. The link is shared, so installing packages inside a worktree changes the main
+# checkout's venv: install in the main checkout.
+link = ["desktop/node_modules", "backend/.venv"]
