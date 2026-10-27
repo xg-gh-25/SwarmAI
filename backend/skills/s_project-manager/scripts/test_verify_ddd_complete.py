@@ -3,7 +3,7 @@
 Methodology: each test drives the REAL gate (verify_project) against a synthetic
 DDD built in tmp_path (or a real project on disk), asserting the per-check status
 AND the overall exit semantics. The load-bearing invariant — a data-agent /
-pure-knowledge brain must NOT be failed for a missing code-intel.json — is pinned
+pure-knowledge brain must NOT be failed for a missing code graph — is pinned
 by test_data_agent_passes_without_code_intel + test_pure_knowledge_passes, and is
 mutation-provable: forcing code-intel to be required unconditionally turns those
 green tests RED.
@@ -12,9 +12,9 @@ Key properties tested:
 - six-section skeleton + 4 non-placeholder docs = PASS
 - governed_assets parsed WITHOUT core.ddd_bindings.load_bindings (which raises on
   the governed_assets-only bindings.yaml shape)
-- code-intel.json required ONLY when a kind=code-repo governed asset exists; absent
+- code graph required ONLY when a kind=code-repo governed asset exists; absent
   code-repo asset → N/A (never FAIL) — the asset-aware constraint
-- a code-repo asset with no code-intel.json → PENDING, never FAIL (Gate-1 refinement)
+- a code-repo asset with no code graph → PENDING, never FAIL (Gate-1 refinement)
 - missing DDD doc / placeholder doc → FAIL naming the doc
 - broken bindings.yaml → fail-open (classifies no-repo, never crashes)
 """

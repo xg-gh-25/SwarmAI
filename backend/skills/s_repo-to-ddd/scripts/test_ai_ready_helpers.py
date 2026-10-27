@@ -1915,62 +1915,6 @@ class TestFinalizeV3:
         assert base["version"] == "2.0" and "domains" not in base
 
 
-class TestGenerationWriteReadLoop:
-    """E2E: generate a real domains[] from a v2 doc via backfill→anchor→finalize,
-    prove it passes all guards AND is recallable via the Run 3 recall domain leg.
-    Closes the write→read loop — what a wiring test exists to prove."""
-
-    def test_generate_then_recall_domain(self, tmp_path, monkeypatch):
-        import json
-        from scripts.ai_ready_helpers import (
-            backfill_route_ids, extract_entry_anchors, finalize_v3)
-
-        # 1. Start from a realistic v2 doc (routes, no ids — like SwarmAI's real one)
-        v2 = {
-            "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
-            "version": "2.0",
-            "repo": {"name": "demo", "languages": {"python": 1.0}, "total_symbols": 2, "total_edges": 0},
-            "modules": [], "edges": [], "entry_points": [],
-            "routes": [{"method": "POST", "path": "/api/orders", "handler": "orders.py::create",
-                        "framework": "fastapi", "file_path": "backend/api/orders.py",
-                        "line_number": 40, "middleware": None}],
-        }
-        # 2. backfill ids → anchor menu (the LLM's constrained choice set)
-        v2 = backfill_route_ids(v2)
-        anchors = extract_entry_anchors(v2)
-        assert len(anchors) == 1
-        anchor_id = anchors[0]["id"]
-
-        # 3. "LLM classification" (simulated) → a domain anchored to a REAL anchor id
-        domains = [{"id": "domain:orders", "name": "Order Management",
-                    "summary": "zGENSENTINEL77 order lifecycle create-to-fulfill",
-                    "business_rules": [{"rule": "stock must suffice before commit",
-                                        "anchor": "backend/api/orders.py:47", "verified": True}]}]
-        flows = [{"id": "flow:create-order", "domain_id": "domain:orders",
-                  "entry_ref": anchor_id, "entry_type": "http",
-                  "summary": "client submits order to persistence"}]
-        steps = [{"id": "step:validate", "flow_id": "flow:create-order",
-                  "order": 1, "name": "Validate", "explicit": True}]
-
-        # 4. finalize (fail-closed gate) — proves the generated layer is consistent
-        v3 = finalize_v3(v2, domains, flows, steps)
-        assert v3["version"] == "3.0"
-
-        # 5. Write to a real project dir and RECALL via the Run 3 domain leg
-        proj = tmp_path / "Demo"
-        proj.mkdir()
-        (proj / "PRODUCT.md").write_text("## Vision\nunrelated\n", encoding="utf-8")
-        (proj / "code-intel.json").write_text(json.dumps(v3), encoding="utf-8")
-        import core.project_registry as pr
-        monkeypatch.setattr(pr, "get_projects_dir", lambda: tmp_path)
-
-        from core.recall_multi import _recall_ddd
-        hits, layer = _recall_ddd("zGENSENTINEL77 order lifecycle", "Demo", 5)
-        docs = [h.get("doc", "") for h in hits]
-        assert any("code-intel.json" in d for d in docs), \
-            f"generated domain MUST be recallable (write→read loop closed), got {docs}"
-
-
 class TestRun15Gate2Fixes:
     """Gate-2 findings: collision-message clarity, loud-empty-menu,
     finalize type-guard."""
@@ -2070,42 +2014,6 @@ class TestRegenerateSpecPreservingHuman:
         assert out.count("机器规则") == 0
 
 
-class TestSpecDetailsIndexRow:
-    """Run 4 feature A: ddd_bindings index line surfaces spec-details/(N specs)."""
-
-    def test_index_row_shows_spec_count(self, tmp_path):
-        from core.ddd_bindings import describe_project_ddd_line
-        proj = tmp_path / "Demo"
-        proj.mkdir()
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            (proj / doc).write_text("# x\n", encoding="utf-8")
-        sd = proj / "spec-details"
-        sd.mkdir()
-        (sd / "orders.spec.md").write_text("# 规格\n", encoding="utf-8")
-        (sd / "payment.spec.md").write_text("# 规格\n", encoding="utf-8")
-        line = describe_project_ddd_line(proj)
-        assert "spec-details/(2 specs)" in line
-
-    def test_no_spec_dir_no_row(self, tmp_path):
-        from core.ddd_bindings import describe_project_ddd_line
-        proj = tmp_path / "Demo2"
-        proj.mkdir()
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            (proj / doc).write_text("# x\n", encoding="utf-8")
-        line = describe_project_ddd_line(proj)
-        assert "spec-details" not in line
-
-    def test_empty_spec_dir_no_row(self, tmp_path):
-        from core.ddd_bindings import describe_project_ddd_line
-        proj = tmp_path / "Demo3"
-        proj.mkdir()
-        for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            (proj / doc).write_text("# x\n", encoding="utf-8")
-        (proj / "spec-details").mkdir()  # dir exists but no .spec.md
-        line = describe_project_ddd_line(proj)
-        assert "spec-details" not in line
-
-
 class TestRun4Gate2Fixes:
     """Gate-2 CRITICAL: multiline [human] rules + inline comments must survive verbatim."""
 
@@ -2159,57 +2067,6 @@ class TestRun4Gate2Fixes:
                "- **real** `[human]` — anchor `a.py:1`\n")
         blocks = extract_human_spec_blocks(txt)
         assert len(blocks) == 1 and "real" in blocks[0]
-
-
-class TestValidatorMatchesRealExporter:
-    """Regression: the validator MUST accept what the REAL exporter
-    (core/code_intel/json_exporter.py) emits. Previously the validator was written
-    against a hand-built FIXTURE schema and rejected every real exporter output
-    (SwarmAI's own code-intel.json = 43 errors), blocking v3 generation on real
-    data (validator never tested against real producer output)."""
-
-    def _exporter_shaped_doc(self):
-        """A doc built from the exporter's ACTUAL builder functions, so this test
-        breaks if validator ↔ exporter diverge again — not a hand-written schema."""
-        import sys, os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "core"))
-        # Build modules/entry_points via the real exporter builders (ground truth).
-        from code_intel.json_exporter import _build_modules, _build_entry_points, _build_dependencies
-        module_map = {"core": [
-            {"file_path": "backend/core/a.py", "node_type": "function", "is_entry_point": True, "name": "main"},
-            {"file_path": "backend/core/a.py", "node_type": "class", "is_entry_point": False, "name": "Foo"},
-        ]}
-        return {
-            "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
-            "version": "2.0",
-            "repo": {"name": "t", "languages": {"python": 2}, "total_symbols": 2, "total_edges": 0},
-            "modules": _build_modules(module_map, {}),
-            "entry_points": _build_entry_points(module_map),
-            "routes": [], "hot_zones": [], "risk_areas": [], "dead_code": [],
-            "dependencies": _build_dependencies({"python": 2}),
-        }
-
-    def test_real_exporter_output_validates_clean(self):
-        from scripts.ai_ready_helpers import validate_code_intel_json
-        doc = self._exporter_shaped_doc()
-        errors = validate_code_intel_json(doc)
-        assert errors == [], f"validator must accept real exporter output, got: {errors}"
-
-    def test_exporter_module_has_symbol_count_not_path(self):
-        """Pin the exact divergence that caused the bug: exporter modules carry
-        symbol_count, NOT path/responsibility."""
-        doc = self._exporter_shaped_doc()
-        mod = doc["modules"][0]
-        assert "symbol_count" in mod
-        assert "path" not in mod and "responsibility" not in mod
-
-    def test_exporter_entry_point_uses_file_path(self):
-        """Pin the latent 3rd divergence: entry_points use file_path, not path."""
-        doc = self._exporter_shaped_doc()
-        ep = doc["entry_points"][0]
-        assert "file_path" in ep and "path" not in ep
-        from scripts.ai_ready_helpers import validate_code_intel_json
-        assert validate_code_intel_json(doc) == []
 
 
 class TestMergeExportedDocSafety:

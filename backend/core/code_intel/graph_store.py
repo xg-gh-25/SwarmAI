@@ -64,7 +64,7 @@ def _query_wants_tests(query: str) -> bool:
 def _is_test_symbol_path(file_path: str) -> bool:
     """True if a symbol's file is a TEST file — segment-anchored, NOT a bare 'test'
     substring (which false-matches attestation.py / latest_run.py; the same lesson
-    as json_exporter._is_test_path, run_4344d341)."""
+    as analysis.is_test_path, run_4344d341)."""
     fp = (file_path or "").lower()
     segments = fp.split("/")
     if "tests" in segments or "test" in segments or "__tests__" in segments:
@@ -929,9 +929,7 @@ class GraphStore:
     def get_module_edges(self) -> list[dict]:
         """Aggregate code_edges up to 2-level module-prefix pairs — the compact
         ARCHITECTURAL SKELETON (which module calls which), NOT a raw per-symbol
-        edge dump. run_4344d341: code-intel.json emitted edges=0 because no
-        module-level aggregation existed and a raw dump (~25K edges) would bloat
-        the readable JSON 10x. Cross-module only (intra-module edges excluded —
+        edge dump (~25K edges would bury the architecture in a readable report). Cross-module only (intra-module edges excluded —
         they're implementation detail, not architecture).
 
         Confidence-aware (run_2392a203, ported from graphify): each code_edge

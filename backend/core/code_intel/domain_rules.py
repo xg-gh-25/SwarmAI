@@ -25,7 +25,7 @@ Design (run_28a8f99d, Gate-1 hardened — all against real HLR source):
     monolith often has a superseded engine (``*_OLD`` name, or a strict SUBSET of
     another symbol's write-target set). We FLAG it ``suspected_deprecated`` but
     still emit its rules — silently dropping a live banking rule is the exact
-    false-100% failure the exporter's red-line guards forbid.
+    false-100% failure the coverage red-line guards forbid.
   • **Anchors are graph-derived** (the write edge's ``line_number``) — correct by
     construction, no hand-typed line (the C-probe's hand anchors were all wrong).
   • **Dynamic/unresolved targets stay honest**: a write whose table name is a
@@ -133,7 +133,8 @@ def _detect_deprecated(symbol_writes: dict[str, set[str]]) -> set[str]:
     return deprecated
 
 
-def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph=None) -> dict:
+def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph=None,
+                         clusters=None) -> dict:
     """Extract per-domain business rules from the shared graph.
 
     Args:
@@ -144,10 +145,12 @@ def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph
         ``repo_root``; without ``repo_root`` the relative path would fail to open
         and every disposition would be silently null (dog-food bug, run_28a8f99d).
       repo_root: base dir the relative node file_paths resolve against (the
-        exporter passes it; the graph stores paths relative to it).
+        analysis passes it; the graph stores paths relative to it).
       _graph: optional pre-materialized ``get_full_graph()`` result, so the
-        exporter can share ONE materialization with ``compute_graph_clusters``
+        analysis can share ONE materialization with ``compute_graph_clusters``
         (Gate-1 M1 — avoid a second full-graph load + no per-rule disk I/O).
+      clusters: optional ``compute_graph_clusters`` result for the same graph, so a
+        caller that already computed the clusters does not compute them twice.
 
     Returns ``{domains: [...], rules: [...]}``. Each rule:
       ``{rule_id, domain_id, source_symbol, operation, target_data_object,
@@ -155,8 +158,9 @@ def compute_domain_rules(graph_store, source_reader=None, repo_root=None, _graph
          suspected_deprecated}``.
     """
     graph = _graph if _graph is not None else graph_store.get_full_graph()
-    clusters = compute_graph_clusters(graph_store, _graph=graph) \
-        if _accepts_graph_kw(compute_graph_clusters) else compute_graph_clusters(graph_store)
+    if clusters is None:
+        clusters = compute_graph_clusters(graph_store, _graph=graph) \
+            if _accepts_graph_kw(compute_graph_clusters) else compute_graph_clusters(graph_store)
     # A rule-BEARING domain is any community, NOT only a decomposition
     # extraction_candidate (run_482289eb decoupling): the candidate floor answers
     # "is this chunk big enough to REWRITE as a unit?" — a size-relative,

@@ -1946,7 +1946,7 @@ def parse_repo(repo_root: Path, languages: list[str] | None = None) -> list[Pars
     and test_parser.py depend on (they destructure the return as a bare list). It is
     a thin wrapper over ``parse_repo_with_coverage`` that discards the coverage
     ledger. Any caller that needs the "never silently under-report" coverage-holes
-    (the reindex path that writes code-intel.json) must call
+    (the reindex job's full rebuild, which records them in graph meta) must call
     ``parse_repo_with_coverage`` directly. DO NOT change this signature.
     """
     return parse_repo_with_coverage(repo_root, languages).results

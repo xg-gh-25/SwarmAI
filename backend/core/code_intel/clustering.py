@@ -6,9 +6,8 @@ the structural sibling of ``graph_analysis`` (topology metrics) and is entirely
 LANGUAGE-AGNOSTIC: it operates on the shared edge set (calls/references/extends/
 dynamic_sql_write), so py/ts/js/java/go/sql all cluster with the same algorithm.
 
-⚠️ This is NOT the LLM ``domains[]`` concept in code-intel.json (spec-details /
-flows[].domain_id — business-semantic domains). These are STRUCTURAL communities
-read from graph topology. The output key is ``graph_clusters`` (distinct).
+These are STRUCTURAL communities read from graph topology (no LLM, no business
+semantics). The analysis layer key is ``graph_clusters`` (core/code_intel/analysis.py).
 
 Algorithm (run_93e78bcd, Gate-1 hardened):
   • WEIGHTED, async label-propagation — no networkx, no random. DETERMINISTIC
@@ -79,9 +78,9 @@ def compute_graph_clusters(graph_store, _graph=None) -> dict:
     skipped?: reason}``. Each cluster: ``{cluster_id, kind, size, member_ids,
     entry_points, intra_edges, inter_edges, cohesion, languages, files}``.
 
-    ``_graph``: optional pre-materialized ``get_full_graph()`` result. The exporter
+    ``_graph``: optional pre-materialized ``get_full_graph()`` result. The analysis
     passes ONE materialization shared with ``compute_domain_rules`` so a single
-    export does not load the whole graph twice (run_28a8f99d Gate-1 M1). When
+    analysis does not load the whole graph twice (run_28a8f99d Gate-1 M1). When
     supplied, the edge-count pre-check is skipped (the caller already materialized).
     """
     # Edge-count pre-check BEFORE materializing the whole graph — on a pathological

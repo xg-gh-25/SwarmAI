@@ -7,8 +7,7 @@ integration test wiring a real GraphStore:
   - god_nodes: symbol-level degree centrality, file-level hubs excluded
     (Gate-1: MUST be symbol-level, NOT module_edges — that was a category error).
   - surprising_connections: symbol edges whose two endpoint FILES map to
-    DIFFERENT business domains, with an HONEST coverage stat (Gate-1: module-level
-    is 2%-mappable = dead; file-level via the derived map is the honest scope).
+    DIFFERENT structural domains (graph_clusters), with an HONEST coverage stat.
   - suggested_questions: DOMAIN-INDEPENDENT — from low-confidence (AMBIGUOUS/
     INFERRED) edges + risk_areas (Gate-1: must not depend on domains, which are
     often absent).
@@ -18,7 +17,7 @@ from core.code_intel.graph_analysis import (
     _god_nodes,
     _surprising_connections,
     _suggested_questions,
-    _build_file_domain_map,
+    _symbol_cluster_map,
     analyze_graph,
 )
 
@@ -44,34 +43,29 @@ class TestGodNodes:
         assert len(got) == 10, "god-nodes must be bounded top-N, not a full dump"
 
 
-class TestFileDomainMap:
-    def test_derives_from_nested_business_rules_issues_and_steps(self):
-        doc = {
-            "domains": [
-                {"id": "domain:chat", "business_rules": [{"anchor": "backend/core/session.py"}],
-                 "issues": [{"file": "backend/core/healing.py:42"}]},
-                {"id": "domain:eval", "business_rules": [{"anchor": "backend/core/eval.py:329"}]},
-            ],
-            "flows": [{"id": "flow:1", "domain_id": "domain:chat"}],
-            "steps": [{"flow_id": "flow:1", "file_path": "backend/core/router.py"}],
-        }
-        fld = _build_file_domain_map(doc)
-        assert fld["backend/core/session.py"] == "domain:chat"
-        assert fld["backend/core/healing.py"] == "domain:chat", "issue file:line must be split to bare file"
-        assert fld["backend/core/eval.py"] == "domain:eval", "anchor file:line must be split"
-        assert fld["backend/core/router.py"] == "domain:chat", "step→flow→domain mapping"
+class TestSymbolClusterMap:
+    def test_maps_community_members_only(self):
+        clusters = {"clusters": [
+            {"cluster_id": "c:chat", "kind": "community",
+             "member_ids": ["backend/core/session.py::f", "backend/core/healing.py::g"]},
+            {"cluster_id": "c:eval", "kind": "community", "member_ids": ["backend/core/eval.py::h"]},
+            {"cluster_id": "s:1", "kind": "singleton", "member_ids": ["x.py::lonely"]},
+            {"cluster_id": "FILE:y.py", "kind": "file_bucket", "member_ids": ["y.py::a"]}]}
+        assert _symbol_cluster_map(clusters) == {
+            "backend/core/session.py::f": "c:chat",
+            "backend/core/healing.py::g": "c:chat",
+            "backend/core/eval.py::h": "c:eval"}
 
-    def test_business_rule_wins_over_step_for_same_file(self):
-        """Gate-2: precedence is business_rules > issues > steps (first-writer-wins
-        via setdefault). A file cited by BOTH a business_rule (domain A) and a step
-        (domain B) maps to A, not B — else a step silently overrides the rule."""
-        doc = {
-            "domains": [{"id": "domain:A", "business_rules": [{"anchor": "shared.py"}]}],
-            "flows": [{"id": "flow:1", "domain_id": "domain:B"}],
-            "steps": [{"flow_id": "flow:1", "file_path": "shared.py"}],
-        }
-        fld = _build_file_domain_map(doc)
-        assert fld["shared.py"] == "domain:A", "business_rule must win over step (precedence)"
+    def test_one_file_in_two_communities_is_judged_per_symbol(self):
+        """An edge between two symbols of the same community is not surprising, even
+        when their file also holds symbols of another community."""
+        clusters = {"clusters": [
+            {"cluster_id": "c:A", "kind": "community", "member_ids": ["shared.py::a", "o.py::x"]},
+            {"cluster_id": "c:B", "kind": "community", "member_ids": ["shared.py::b"]}]}
+        out = _surprising_connections([("o.py::x", "shared.py::a", 1.0),
+                                       ("o.py::x", "shared.py::b", 1.0)],
+                                      _symbol_cluster_map(clusters))
+        assert [(e["from"], e["to"]) for e in out["edges"]] == [("o.py::x", "shared.py::b")]
 
     def test_sort_tolerates_none_confidence(self):
         """Gate-2: code_edges.confidence has no NOT NULL constraint — a NULL among
@@ -80,7 +74,7 @@ class TestFileDomainMap:
             ("a.py::f", "b.py::g", None),   # cross-domain, NULL confidence
             ("a.py::h", "b.py::i", 0.6),
         ]
-        fld = {"a.py": "domain:A", "b.py": "domain:B"}
+        fld = {"a.py::f": "c:A", "a.py::h": "c:A", "b.py::g": "c:B", "b.py::i": "c:B"}
         result = _surprising_connections(edges, fld, top_n=10)  # must not raise
         assert len(result["edges"]) == 2
 
@@ -94,20 +88,19 @@ class TestSurprisingConnections:
             ("backend/x/unmapped.py::a", "backend/y/other.py::b", 1.0),        # neither mapped
         ]
         fld = {
-            "backend/core/session.py": "domain:chat",
-            "backend/core/healing.py": "domain:chat",
-            "backend/core/eval.py": "domain:eval",
+            "backend/core/session.py::f": "c:chat",
+            "backend/core/healing.py::h": "c:chat",
+            "backend/core/eval.py::g": "c:eval",
         }
         result = _surprising_connections(edges, fld, top_n=10)
-        # distinct endpoint FILES: session.py (repeats), eval.py, healing.py,
-        # unmapped.py, other.py = 5 (endpoints counted per-file, deduped)
+        # distinct endpoint SYMBOLS: f (repeats), g, h, a, b = 5
         assert result["coverage"]["total_endpoints"] == 5
-        assert result["coverage"]["mapped_endpoints"] == 3  # session, eval, healing
+        assert result["coverage"]["mapped_endpoints"] == 3  # f, g, h
         # the surprising edge list holds only the cross-domain one
         surprising = result["edges"]
         assert len(surprising) == 1
         s = surprising[0]
-        assert {s["from_domain"], s["to_domain"]} == {"domain:chat", "domain:eval"}
+        assert {s["from_cluster"], s["to_cluster"]} == {"c:chat", "c:eval"}
 
     def test_no_domains_yields_empty_but_honest(self):
         edges = [("a.py::x", "b.py::y", 1.0)]
@@ -152,14 +145,10 @@ class TestAnalyzeGraphIntegration:
             {"source_id": "backend/core/session.py::f", "target_id": "bare_unresolved",
              "edge_type": "calls", "confidence": 0.5, "line_number": 2},
         ])
-        doc = {
-            "domains": [
-                {"id": "domain:chat", "business_rules": [{"anchor": "backend/core/session.py"}]},
-                {"id": "domain:eval", "business_rules": [{"anchor": "backend/core/eval.py"}]},
-            ],
-            "flows": [], "steps": [], "risk_areas": [],
-        }
-        out = analyze_graph(doc, gs)
+        clusters = {"clusters": [
+            {"cluster_id": "c:chat", "kind": "community", "member_ids": ["backend/core/session.py::f"]},
+            {"cluster_id": "c:eval", "kind": "community", "member_ids": ["backend/core/eval.py::g"]}]}
+        out = analyze_graph(gs, clusters=clusters, risk_areas=[])
         assert "god_nodes" in out and "surprising_connections" in out and "suggested_questions" in out
         # f calls both → highest degree god-node
         assert out["god_nodes"], "non-empty god-nodes on a real store"

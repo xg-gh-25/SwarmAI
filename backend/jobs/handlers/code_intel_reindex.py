@@ -19,6 +19,7 @@ Key symbols: ``reindex_projects``, ``main``, ``_dump_after_seconds``.
 from __future__ import annotations
 
 import faulthandler
+import json
 import logging
 import os
 import sys
@@ -142,8 +143,9 @@ def reindex_projects(full: bool = False) -> dict:
         if full or freshness.suggest_full_rebuild:
             # Full reindex: clear + re-parse entire repo. Use the coverage-aware
             # parse so files the parser could not read (unknown ext, unreadable,
-            # parse failure) are ACCOUNTED for in code-intel.json, never silently
-            # dropped (Run AB — the "never report-done-but-not-understood" guarantee).
+            # parse failure) are ACCOUNTED for in the graph's meta (coverage_holes,
+            # parse_status — the analysis structure layer reports them), never
+            # silently dropped (the "never report-done-but-not-understood" guarantee).
             from core.code_intel.parser import parse_repo_with_coverage, LANGUAGE_MAP
             from core.code_intel import extract_and_store_routes
             parse_out = parse_repo_with_coverage(repo_root)
@@ -168,6 +170,10 @@ def reindex_projects(full: bool = False) -> dict:
                     graph.set_meta("last_indexed_commit", freshness.current_head)
                 # Preserve repo_root metadata
                 graph.set_meta("repo_root", str(repo_root))
+                graph.set_meta("parse_status", parse_status)
+                graph.set_meta("coverage_holes", json.dumps(coverage_holes))
+                if freshness.current_head:
+                    graph.set_meta("coverage_commit", freshness.current_head)
                 # Extract routes from all parsed files
                 for pr in parse_results:
                     fp = pr.file_path if hasattr(pr, "file_path") else pr.get("file_path", "")
@@ -185,11 +191,6 @@ def reindex_projects(full: bool = False) -> dict:
                 _resolve_prefixes(graph, repo_root)
                 mark = _phase(project_name, "resolve_prefixes", mark)
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
-            # Export code-intel.json after full reindex — preserving the v3 layer
-            # and carrying the coverage ledger + status stamp.
-            _export_json(graph, project_name, project_dir,
-                         coverage_holes=coverage_holes, parse_status=parse_status)
-            mark = _phase(project_name, "export_json", mark)
             results.append({
                 "project": project_name,
                 "status": "full_reindex",
@@ -367,20 +368,6 @@ def _resolve_prefixes(graph, repo_root: Path) -> None:
     from core.code_intel import resolve_router_prefixes
 
     resolve_router_prefixes(graph, repo_root)
-
-
-def _export_json(graph, project_name: str, project_dir: Path,
-                 coverage_holes: list[dict] | None = None,
-                 parse_status: str = "complete") -> None:
-    """Export code-intel.json after reindex (preserves v3 layer + carries coverage
-    ledger). Non-fatal on failure."""
-    try:
-        from core.code_intel.json_exporter import export_code_intel_json
-        output_path = project_dir / "code-intel.json"
-        export_code_intel_json(graph, project_name, output_path,
-                               coverage_holes=coverage_holes, parse_status=parse_status)
-    except Exception as e:
-        logger.warning(f"JSON export failed for {project_name}: {e}")
 
 
 def main(argv: list[str] | None = None) -> dict:

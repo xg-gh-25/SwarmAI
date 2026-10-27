@@ -1,17 +1,19 @@
 """Code Intelligence API — project-scoped codebase health and reindex.
 
 Endpoints:
-    GET  /api/code-intel/{project}/summary  — codebase stats + freshness
-    POST /api/code-intel/{project}/reindex  — trigger background re-index
+    GET  /api/code-intel/{project}/summary   — codebase stats + freshness
+    GET  /api/code-intel/{project}/analysis  — codebase analysis, computed on demand
+    POST /api/code-intel/{project}/reindex   — trigger background re-index
 """
 
 import asyncio
+import json
 import logging
 import re
 import time
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Response
 from pydantic import BaseModel
 
 from core.code_intel import (
@@ -64,6 +66,36 @@ class ReindexResponse(BaseModel):
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
+
+@router.get("/{project}/analysis")
+async def get_code_intel_analysis(project: str, layers: str = ""):
+    """The codebase analysis of a project's graph, computed now (never stored).
+
+    Shape and versioning: ``core.code_intel.analysis`` (``schema`` + ``version``).
+
+    ``layers``: comma-separated subset of ``core.code_intel.analysis.LAYERS``
+    (structure, graph_clusters, graph_analysis, domain_rules); empty = all. 400 on an
+    unknown layer or project name, 404 when the project has no code graph. A layer
+    that fails is listed under ``errors`` and the rest are returned.
+    """
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    from core.code_intel.analysis import analyze_project, resolve_layers
+    try:
+        names = resolve_layers(layers.split(",") if layers else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    def _run() -> str | None:
+        result = analyze_project(project, names)
+        # Serialize here too: a large repo's analysis is megabytes of JSON, and
+        # encoding it on the event loop would stall every other request.
+        return None if result is None else json.dumps(result, ensure_ascii=False)
+
+    body = await asyncio.to_thread(_run)
+    if body is None:
+        raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
+    return Response(content=body, media_type="application/json")
+
 
 @router.get("/{project}/summary", response_model=CodeIntelSummary)
 async def get_code_intel_summary(project: str):
