@@ -10,7 +10,13 @@ What is tested:
 - Structure: no product module resolves the workspace itself -- no ``"SwarmWS"`` path
   join, no ``~/.swarm-ai/SwarmWS`` string used as a path, no read of SWARMWS /
   SWARM_WORKSPACE -- outside ``config.get_swarmws``. ALLOWED lists the strings that are
-  not resolvers; KNOWN lists dev scripts left as they are and may only shrink.
+  not resolvers.
+- The same scan covers ``backend/scripts/`` and every skill's scripts (design
+  2026-10-27-pipeline-hygiene §4). A skill script cannot import backend ``config``, so
+  its one allowed form is ``_swarmws()``, AST-identical to ``SKILL_RESOLVER`` below,
+  which is checked to agree with ``config.get_swarmws`` under every variable setting.
+  Test files are not scanned: setting the variables is how a test points code at a
+  sandbox.
 """
 import ast
 from pathlib import Path
@@ -19,8 +25,9 @@ import pytest
 
 BACKEND = Path(__file__).resolve().parents[1]
 PRODUCT = ("core", "jobs", "routers", "hooks", "channels", "database", "middleware",
-           "utils", "main.py", "scripts/artifact_cli.py")
-ENV_NAMES = {"SWARMWS", "SWARM_WORKSPACE"}
+           "utils", "main.py", "scripts")
+# every variable name a workspace was ever read from; only config reads them
+ENV_NAMES = {"SWARMWS", "SWARM_WORKSPACE", "SWARMWS_DIR", "SWARM_WS", "SWARMAI_WORKSPACE"}
 
 # (file, why the string is not a workspace resolver)
 ALLOWED = {
@@ -29,9 +36,24 @@ ALLOWED = {
     "core/backup_manager.py": "a backup's layout under an explicit swarm_dir argument",
     "database/sqlite.py": "legacy cleanup also keeps the default <app data>/SwarmWS",
     "scripts/artifact_cli.py": "asks whether SWARM_WORKSPACE is explicitly set (a test workspace)",
+    "scripts/eval_runner.py": "sets SWARM_WORKSPACE/SWARMWS for a check's subprocess",
+    "scripts/probe_pipeline.py": "sets SWARM_WORKSPACE/SWARMWS for a sandbox run",
+    "skills/s_repo-to-ddd/scripts/ai_ready_helpers.py":
+        "asks whether SWARM_WORKSPACE is explicitly set (collect output there)",
 }
-# dev and maintenance scripts run by hand; may only shrink
-KNOWN: set[str] = set()
+
+SKILL_RESOLVER = '''
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
+'''
+_SKILL_RESOLVER_DUMP = ast.dump(ast.parse(SKILL_RESOLVER).body[0])
 
 
 def test_order_and_default(monkeypatch, tmp_path):
@@ -64,8 +86,25 @@ def test_recall_and_pipeline_read_the_same_workspace(monkeypatch, tmp_path):
     assert hits and "Quokka rule" in hits[0]["content"]
 
 
+def _is_test(path: Path) -> bool:
+    return path.name.startswith("test_") or path.name.endswith("_test.py") \
+        or "tests" in path.parts or path.name == "conftest.py"
+
+
+def _skill_scripts():
+    for p in sorted((BACKEND / "skills").rglob("*.py")):
+        if not _is_test(p):
+            yield p
+
+
 def _resolver_uses(path: Path) -> list[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in list(ast.walk(tree)):   # the one allowed skill form is not a use
+        body = getattr(node, "body", None)
+        for i, child in enumerate(body if isinstance(body, list) else []):
+            if isinstance(child, ast.FunctionDef) and child.name == "_swarmws" \
+                    and ast.dump(child) == _SKILL_RESOLVER_DUMP:
+                node.body[i] = ast.Pass()
     docstrings = {id(n.body[0].value) for n in ast.walk(tree)
                   if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
                   and n.body and isinstance(n.body[0], ast.Expr)
@@ -94,12 +133,50 @@ def test_no_second_workspace_resolver():
     found = {}
     for path in _product_files():
         rel = str(path.relative_to(BACKEND))
-        if "/tests/" in f"/{rel}" or rel == "config.py" or rel in ALLOWED or rel in KNOWN:
+        if _is_test(path) or rel == "config.py" or rel in ALLOWED:
             continue
         uses = _resolver_uses(path)
         if uses:
             found[rel] = uses
     assert not found, found
+
+
+def test_no_skill_script_resolves_the_workspace_itself():
+    found = {}
+    for path in _skill_scripts():
+        rel = str(path.relative_to(BACKEND))
+        if rel in ALLOWED:
+            continue
+        uses = _resolver_uses(path)
+        if uses:
+            found[rel] = uses
+    assert not found, (found, "use _swarmws() exactly as SKILL_RESOLVER")
+
+
+def test_skill_resolver_agrees_with_config(monkeypatch, tmp_path):
+    import os
+    from config import get_swarmws
+    ns = {"os": os, "Path": Path}
+    exec(SKILL_RESOLVER, ns)
+    names = ("SWARM_WORKSPACE", "SWARMWS", "SWARM_DATA_DIR")
+    for mask in range(8):
+        for i, var in enumerate(names):
+            if mask & (1 << i):
+                monkeypatch.setenv(var, str(tmp_path / var.lower()))
+            else:
+                monkeypatch.delenv(var, raising=False)
+        assert ns["_swarmws"]() == get_swarmws(), mask
+    monkeypatch.setenv("SWARM_WORKSPACE", "  ")    # blank is unset in both
+    assert ns["_swarmws"]() == get_swarmws()
+
+
+def test_skill_scripts_using_the_resolver_carry_it_verbatim():
+    users = [p for p in _skill_scripts() if "_swarmws(" in p.read_text(encoding="utf-8")]
+    assert users, "the scan above never saw the skill form"
+    for p in users:
+        defs = [n for n in ast.walk(ast.parse(p.read_text(encoding="utf-8")))
+                if isinstance(n, ast.FunctionDef) and n.name == "_swarmws"]
+        assert len(defs) == 1 and ast.dump(defs[0]) == _SKILL_RESOLVER_DUMP, p
 
 
 @pytest.mark.parametrize("rel", sorted(ALLOWED))

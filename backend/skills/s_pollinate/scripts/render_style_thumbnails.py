@@ -14,8 +14,19 @@ Idempotent: re-run overwrites the same 34 files deterministically.
 import re, glob, os, sys, colorsys
 from pathlib import Path
 
+
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
+
 CARDS = Path(__file__).resolve().parent.parent.parent / "s_frontend-design" / "data" / "slide_bold_previews"
-OUT = Path(os.environ.get("SWARMWS_DIR", os.path.expanduser("~/.swarm-ai/SwarmWS"))) / "Knowledge" / "assets" / "deck-styles"
+OUT = _swarmws() / "Knowledge" / "assets" / "deck-styles"
 GF_KNOWN = {  # families we can load from Google Fonts (Latin display/body)
     "Barlow","IBM Plex Mono","Cormorant Garamond","DM Sans","Courier Prime","Inter",
     "Space Grotesk","Playfair Display","Bricolage Grotesque","Fraunces","Jost","DM Mono",

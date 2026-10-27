@@ -33,6 +33,18 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
 
 
 
@@ -590,7 +602,7 @@ def main():
 
     # Generate assets
     print(f"\nGenerating short assets...")
-    studio_dir = os.path.expanduser("~/.swarm-ai/SwarmWS/Services/pollinate-studio")
+    studio_dir = str(_swarmws() / "Services" / "pollinate-studio")
 
     for short in shorts:
         names = [s["name"] for s in short["sections"]]

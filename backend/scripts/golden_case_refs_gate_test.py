@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import eval_runner  # noqa: E402
 import golden_case_validator as gcv  # noqa: E402
 
-ROOT = Path.home() / ".swarm-ai" / "SwarmWS"
+from config import get_swarmws  # noqa: E402
+ROOT = get_swarmws()
 
 
 # ─── EVOLUTION. resolver support (eval_runner._resolve_reference) ───────────────

@@ -24,6 +24,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/, for config
+from config import get_swarmws  # noqa: E402
 
 # Allow running as a script: ensure backend/ is importable.
 _BACKEND = Path(__file__).resolve().parents[1]
@@ -49,7 +51,7 @@ _POLICY_EXCLUSIONS = {
 }
 
 # Default context directory (workspace .context/).
-_DEFAULT_CONTEXT_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / ".context"
+_DEFAULT_CONTEXT_DIR = get_swarmws() / ".context"
 
 
 def main(argv: list[str] | None = None) -> int:

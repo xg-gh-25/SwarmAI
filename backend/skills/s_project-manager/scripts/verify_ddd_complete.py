@@ -54,8 +54,20 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
 from typing import Any
+
+
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
 
 # The 4 canonical ② KNOWLEDGE docs. Single-source guarded import: on SwarmAI the
 # constant comes from core.project_registry (SSOT, enforced by
@@ -458,7 +470,7 @@ def _resolve_project_dir(args: argparse.Namespace) -> Path:
     if args.project_dir:
         return Path(args.project_dir).expanduser().resolve()
     # default workspace Projects/ root
-    base = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects"
+    base = _swarmws() / "Projects"
     return (base / args.project).resolve()
 
 

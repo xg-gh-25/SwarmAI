@@ -34,6 +34,8 @@ import argparse
 import re
 import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/, for config
+from config import get_swarmws  # noqa: E402
 
 _ENTRY_RE = re.compile(r"^## \d{1,2}:\d{2} \| (?P<sid>[^|]+?) \| (?P<title>.*)$")
 _MARKER_RE = re.compile(r"^<!-- da:(?P<kind>[a-z]+):(?P<sid>[^ ]+) -->$")
@@ -208,7 +210,7 @@ def clean_text(text: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--dir", type=Path,
-                    default=Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "DailyActivity")
+                    default=get_swarmws() / "Knowledge" / "DailyActivity")
     ap.add_argument("--apply", action="store_true")
     args = ap.parse_args(argv)
 

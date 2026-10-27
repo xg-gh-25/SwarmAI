@@ -125,7 +125,8 @@ def prompt_budget(negative: bool) -> int:
     = silent truncation = degraded cognition)."""
     from core.context_directory_loader import ContextDirectoryLoader
     name = "PROMPT_BUDGET"
-    loader = ContextDirectoryLoader(Path.home() / ".swarm-ai" / "SwarmWS" / ".context")
+    from config import get_swarmws
+    loader = ContextDirectoryLoader(get_swarmws() / ".context")
     window = 1_000_000
 
     def _within(w: int) -> bool:
@@ -217,7 +218,8 @@ def assembly_floor(negative: bool) -> int:
 
     from core.context_directory_loader import ContextDirectoryLoader
     name = "ASSEMBLY_FLOOR"
-    loader = ContextDirectoryLoader(_P.home() / ".swarm-ai" / "SwarmWS" / ".context")
+    from config import get_swarmws
+    loader = ContextDirectoryLoader(get_swarmws() / ".context")
     sections = _floor_fixture()
     # Budget deliberately FAR below the fixture total (~6950 tok) so the old code
     # WOULD have truncated hard. The no-truncate contract requires every section

@@ -42,7 +42,8 @@ from core.ddd_cultivation import (
 )
 from core.ddd_entry_lifecycle import classify_entry_type, _ENTRY_RE
 
-WORKSPACE = Path.home() / ".swarm-ai" / "SwarmWS"
+from config import get_swarmws  # noqa: E402
+WORKSPACE = get_swarmws()
 PROJECTS_DIR = WORKSPACE / "Projects"
 
 # A bullet line (may have leading whitespace for continuation-safety we don't touch).

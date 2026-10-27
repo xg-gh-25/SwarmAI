@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.ddd_entry_lifecycle import classify_entry_type
 
 # Path to MEMORY.md (SwarmWS workspace, not swarmai repo)
-MEMORY_PATH = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
+from config import get_swarmws  # noqa: E402
+MEMORY_PATH = get_swarmws() / ".context" / "MEMORY.md"
 
 # Regex: captures "- YYYY-MM-DD: **Title** — rest" or "- YYYY-MM-DD: **Title** rest"
 # Also handles entries that already have [type] prefix

@@ -31,6 +31,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/, for config
+from config import get_swarmws  # noqa: E402
 
 try:
     import yaml
@@ -51,8 +53,8 @@ ENGINES_YAML = Path(__file__).resolve().parent / "engines.yaml"
 
 # Code Intelligence DB locations (checked in order)
 CODE_INTEL_DB_PATHS = [
-    Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "code_intel.db",
-    Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / ".code_intel" / "code_intel.db",
+    get_swarmws() / "Projects" / "SwarmAI" / "code_intel.db",
+    get_swarmws() / "Projects" / "SwarmAI" / ".code_intel" / "code_intel.db",
 ]
 
 # Prose staleness checks — patterns expected in AGENTS.md prose.

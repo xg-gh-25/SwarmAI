@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from config import get_app_data_dir
+from config import get_swarmws
 
 
 def parse_corrections(evolution_text: str) -> list[dict]:
@@ -160,7 +160,7 @@ def main() -> int:
     parser.add_argument(
         "--evolution-path",
         type=Path,
-        default=get_app_data_dir() / "SwarmWS" / ".context" / "EVOLUTION.md",
+        default=get_swarmws() / ".context" / "EVOLUTION.md",
         help="Path to EVOLUTION.md",
     )
     parser.add_argument(

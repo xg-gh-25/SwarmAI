@@ -16,13 +16,15 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/, for config
+from config import get_swarmws  # noqa: E402
 
 # Project root (script lives in backend/scripts/)
 ROOT = Path(__file__).parent.parent.parent
 CONVERGENCE = ROOT / "docs" / "CONVERGENCE.md"
 
 # Runtime EVOLUTION.md (has real corrections, not sanitized template)
-_SWARMWS = Path.home() / ".swarm-ai" / "SwarmWS"
+_SWARMWS = get_swarmws()
 EVOLUTION_RUNTIME = _SWARMWS / ".context" / "EVOLUTION.md"
 # Fallback: codebase template (for CI or fresh installs)
 EVOLUTION_TEMPLATE = ROOT / "backend" / "context" / "EVOLUTION.md"

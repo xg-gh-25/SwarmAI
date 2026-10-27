@@ -55,8 +55,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/, for config
+from config import get_swarmws  # noqa: E402
 
 # Interventions that subtract autonomy (design §4): a human judgment decision,
 # or a human code-fix. unblock/approval are logged but non-disqualifying.
@@ -64,11 +66,8 @@ _DISQUALIFYING_KINDS = frozenset({"judgment", "codefix"})
 
 
 def _workspace_root() -> Path:
-    """Resolve the SwarmWS workspace root (where Projects/ lives)."""
-    env = os.environ.get("SWARM_WS") or os.environ.get("SWARMAI_WORKSPACE")
-    if env:
-        return Path(env).expanduser()
-    return Path.home() / ".swarm-ai" / "SwarmWS"
+    """The SwarmWS workspace root (where Projects/ lives): config.get_swarmws."""
+    return get_swarmws()
 
 
 def _iter_run_files(runs_root: Path):

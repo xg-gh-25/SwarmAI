@@ -247,8 +247,9 @@ def _load_corpora(project: str = "SwarmAI") -> tuple[dict, dict]:
     import os
     from pathlib import Path
     from core.ddd_paths import ddd_path  # 2-understanding/ post-ad7f6623
-    base = Path(os.path.expanduser(f"~/.swarm-ai/SwarmWS/Projects/{project}"))
-    ctx = Path(os.path.expanduser("~/.swarm-ai/SwarmWS/.context"))
+    from config import get_swarmws
+    base = get_swarmws() / "Projects" / project
+    ctx = get_swarmws() / ".context"
     ddd = {d: ddd_path(base, d).read_text() for d in _DDD_DOCS if ddd_path(base, d).exists()}
     cf = {d: (ctx / d).read_text() for d in _CONTEXT_DOCS if (ctx / d).exists()}
     return ddd, cf

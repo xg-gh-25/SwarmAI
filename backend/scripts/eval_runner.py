@@ -1723,7 +1723,8 @@ def _get_judge_model() -> str:
     default_judge = FALLBACK_JUDGE_MODEL
     short_name = default_judge
     model_map: dict = {}
-    config_path = Path.home() / ".swarm-ai" / "SwarmWS" / "config.json"
+    from config import get_swarmws
+    config_path = get_swarmws() / "config.json"
     try:
         if config_path.exists():
             import json as _json

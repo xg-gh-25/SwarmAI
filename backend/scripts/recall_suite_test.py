@@ -83,7 +83,8 @@ class TestRealCorpus:
         frontend bug (the reconcile race is tracked as OT01, an open thread)."""
         import os
         from pathlib import Path
-        mem = Path(os.path.expanduser("~/.swarm-ai/SwarmWS/.context/MEMORY.md"))
+        from config import get_swarmws
+        mem = get_swarmws() / ".context" / "MEMORY.md"
         if not mem.exists():
             pytest.skip("no real MEMORY.md in this env")
         content = mem.read_text()
@@ -246,7 +247,8 @@ class TestQueryClasses:
         echo the ranker. (Skips honestly if no live MEMORY.md.)"""
         import os
         from pathlib import Path
-        mem = Path(os.path.expanduser("~/.swarm-ai/SwarmWS/.context/MEMORY.md"))
+        from config import get_swarmws
+        mem = get_swarmws() / ".context" / "MEMORY.md"
         if not mem.exists():
             pytest.skip("no real MEMORY.md in this env")
         content = mem.read_text()

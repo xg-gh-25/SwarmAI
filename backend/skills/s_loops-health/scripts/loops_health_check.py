@@ -25,21 +25,17 @@ from pathlib import Path
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 
-def _get_app_data_dir() -> Path:
-    """Resolve the app data dir, honoring the SAME escape hatch as backend config.
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
 
-    ``SWARM_DATA_DIR`` is the single authority (config.get_app_data_dir reads it);
-    a standalone skill script cannot import backend ``config``, so it re-implements
-    the same precedence rather than introducing a second name. ``SWARM_APP_DATA_DIR``
-    stays as a deprecated fallback for anything still exporting the old name.
-    """
-    return Path(
-        os.environ.get("SWARM_DATA_DIR")
-        or os.environ.get("SWARM_APP_DATA_DIR")  # deprecated alias
-        or Path.home() / ".swarm-ai"
-    )
-
-WORKSPACE = Path(os.environ.get("SWARM_WORKSPACE", _get_app_data_dir() / "SwarmWS"))
+WORKSPACE = _swarmws()
 CONTEXT_DIR = WORKSPACE / ".context"
 KNOWLEDGE_DIR = WORKSPACE / "Knowledge"
 PROJECTS_DIR = WORKSPACE / "Projects"

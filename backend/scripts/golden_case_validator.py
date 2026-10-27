@@ -419,7 +419,8 @@ def gate_refs(case: dict, root: Path | None = None) -> tuple[bool, list[str]]:
     (channel/hive deploy, or a test tmp workspace), so the gate cannot judge drift and
     must not false-reject. Drift validation only applies where the context files exist."""
     if root is None:
-        root = Path.home() / ".swarm-ai" / "SwarmWS"
+        from config import get_swarmws
+        root = get_swarmws()
     if not (root / ".context").is_dir():
         return (True, [])  # no context to resolve against → cannot validate, fail-open
     errs = []

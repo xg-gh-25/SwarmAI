@@ -34,6 +34,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -41,7 +42,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from brand_config import load_brand, signature  # noqa: E402
 from publish_meta import load_accounts  # noqa: E402
 
-POLLINATE_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "Pollinate"
+
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
+
+POLLINATE_DIR = _swarmws() / "Knowledge" / "Pollinate"
 _REPO_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 # Set by configure() from the user's github_pages entry before anything runs.

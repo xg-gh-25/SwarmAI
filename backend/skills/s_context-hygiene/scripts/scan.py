@@ -51,7 +51,19 @@ import argparse
 import json
 import re
 import sys
+import os
 from pathlib import Path
+
+
+def _swarmws() -> Path:
+    """The SwarmWS root, resolved exactly as backend config.get_swarmws (a skill script
+    cannot import backend config): SWARM_WORKSPACE, then SWARMWS, then
+    $SWARM_DATA_DIR/SwarmWS, then ~/.swarm-ai/SwarmWS."""
+    for var in ("SWARM_WORKSPACE", "SWARMWS"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return Path(os.path.expanduser(value))
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai") / "SwarmWS"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Source-routing: DERIVED LIVE from the loader's CONTEXT_FILES (no frozen table).
@@ -200,7 +212,7 @@ def scan_file(path: Path, detectors: list[str]) -> list[dict]:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Read-only context-file hygiene scanner (surfaces candidates; never fixes).")
-    default_root = Path.home() / ".swarm-ai" / "SwarmWS" / ".context"
+    default_root = _swarmws() / ".context"
     ap.add_argument("--root", default=str(default_root), help="dir holding the .md context files")
     ap.add_argument("--file", default=None, help="restrict to one file (e.g. MEMORY.md)")
     ap.add_argument("--detector", default="echoed-title,drift-number,dated-pointer",
