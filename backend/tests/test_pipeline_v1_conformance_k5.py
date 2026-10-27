@@ -154,7 +154,7 @@ def test_d4_1_two_isolated_runs_on_one_file_have_their_own_tree_and_final(rig):
 
 
 def test_d4_4_test_auth_abandon_restore_never_cross_runs(rig):
-    from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red, _prepare
+    from tests.pipeline_v1_e2e_common import _not_landed_tests_red, _prepare
     a = rig("trivial")
     b = _second_run(a)
     b.profile = "direct"
@@ -181,7 +181,7 @@ def test_d4_4_test_auth_abandon_restore_never_cross_runs(rig):
 
 
 def test_d4_4_a_persons_answer_reaches_only_the_run_that_asked(rig):
-    from tests.test_pipeline_v1_real_e2e import _decision
+    from tests.pipeline_v1_e2e_common import _decision
     a = rig("bugfix")
     b = _second_run(a)
     b.profile = "direct"
@@ -200,7 +200,7 @@ def test_d4_4_a_persons_answer_reaches_only_the_run_that_asked(rig):
 
 
 def test_tests_red_ends_not_landed_with_ts1_open(rig):
-    from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red
+    from tests.pipeline_v1_e2e_common import _not_landed_tests_red
     r = rig("trivial")
     base = _git(r.repo, "rev-parse", "main")
     _not_landed_tests_red(r)
@@ -209,7 +209,7 @@ def test_tests_red_ends_not_landed_with_ts1_open(rig):
 
 
 def test_a_persons_run_land_lands_as_human_override(rig):
-    from tests.test_pipeline_v1_real_e2e import _not_landed_tests_red, _prepare, _request
+    from tests.pipeline_v1_e2e_common import _not_landed_tests_red, _prepare, _request
     r = rig("trivial")
     _not_landed_tests_red(r)
     base = _git(r.repo, "rev-parse", "main")
@@ -225,7 +225,7 @@ def test_a_persons_run_land_lands_as_human_override(rig):
 
 
 def test_a_decision_waits_for_the_person_then_continues(rig):
-    from tests.test_pipeline_v1_real_e2e import _decision
+    from tests.pipeline_v1_e2e_common import _decision
     from tests.pipeline_v1_rig import documents
     r = rig("bugfix")
     r.create()

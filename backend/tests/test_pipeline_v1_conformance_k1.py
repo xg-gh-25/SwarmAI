@@ -149,7 +149,7 @@ def test_a_refutation_does_not_survive_the_tree_it_was_judged_on(rig):
 def test_a_person_landed_run_is_quality_warn_after_completion(rig):
     """A human_override run stays Quality WARN on the COMPLETED recompute (MD-3 is
     gone: a person's landing is a fact the REPORT states, not an open check)."""
-    from tests.test_pipeline_v1_real_e2e import _prepare, _request
+    from tests.pipeline_v1_e2e_common import _prepare, _request
     r = rig()
     r.create()
     r.edit(Rig.CHANGE)
