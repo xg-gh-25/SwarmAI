@@ -6,18 +6,21 @@ fixes; it never writes the new text — this module computes it from the documen
 evidence, and only when a fixed grammar matches:
 
 ``drop_condition``   {"doc", "line", "span", "done"}
-    Delete a waiting condition — "once `X` exists|lands|ships|is built…", "after `X` …",
-    "等/待 `X` 完成后 …" — from one line, when ``done`` is a ticked ``- [x]`` line of this
-    project's DDD docs that names `X` (exactly, or as the skill ``s_X``, or qualified by a
-    ``/`` or ``.`` prefix) and says nothing about removing it. The words around the span
-    may not negate or limit it, and nothing but plain text may touch it.
+    Delete a waiting condition — "once `X` exists|lands|ships|is built…", "等/待 `X`
+    完成后 …" — from one line, when ``done`` is a ticked ``- [x]`` line of this project's
+    DDD docs that says `X` was made (built / shipped / ported …), names it (exactly, as the
+    skill ``s_X``, or qualified by a ``/`` or ``.`` prefix that is not a test or demo
+    path), and whose item says nothing about removing or postponing it. The words around
+    the span may not negate, limit or join it to another condition, and nothing but plain
+    text may touch it.
 ``swap_superseded_path``   {"doc", "path_old", "path_new"}
     Replace the one occurrence of a path with the FIRST path named on the SUPERSEDED line
     (or the ``superseded_by:`` key) of that file's own header; ``path_old`` must resolve
     in exactly one root, and ``path_new`` in the same one.
 ``swap_code_value``   {"doc", "line", "identifier", "value_old", "value_new", "code_file"}
     Replace the value the line states for ``identifier`` (it follows the identifier) with
-    the value the committed (HEAD) source file declares for it — exactly one declaration.
+    the value the committed (HEAD) source file declares for it — exactly one top-level
+    declaration (a call argument, docstring or block comment does not count).
 
 Every fix also stays inside one plain line of a canonical DDD doc (not front matter, a
 heading, a code block, metadata or a dated lifecycle entry; the doc has no unusual
@@ -29,7 +32,9 @@ document: free-text fixes could not be made safe by checks.
 replaces the line only if the file is unchanged since the re-check; ``undo_drift_fix``
 validates the logged row against the run's backup, records the undo first, then puts
 the line back. Projects other than SwarmAI are not in git: the log
-(``.artifacts/ddd-drift-fixes.jsonl``) and the backups are the only way back.
+(``.artifacts/ddd-drift-fixes.jsonl``) and the backups are the only way back. The log is
+not signed: whoever can write ``.artifacts`` can write the DDD docs beside it, and the
+audit agent can write neither.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ import re
 import subprocess
 import tempfile
 import unicodedata
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,20 +67,35 @@ _MIN_LINE = 12
 _MAX_BYTES = 2_000_000
 _HEADER_LINES = 10
 
-# once / after only: "until" is the opposite wait, "when" is usually a trigger
+# once only: "until" is the opposite wait, "when" is usually a trigger, and "after" is
+# also a time anchor ("two weeks after `X` ships") whose limit would be lost
 _DONE_VERB = r"(?:exists|lands|ships|is\s+(?:built|done|ready|available|implemented|shipped|merged))"
 _CONDITION = re.compile(
-    rf"(?:once|after)\s+`(?P<x>[^`\s]{{3,120}})`\s+{_DONE_VERB}"
+    rf"once\s+`(?P<x>[^`\s]{{3,120}})`\s+{_DONE_VERB}"
     rf"|(?:等|待)\s*`(?P<y>[^`\s]{{3,120}})`\s*(?:存在|上线|完成|就绪|落地|建好)(?:之?后)?",
     re.IGNORECASE)
 _NEGATION_BEFORE = re.compile(
     r"(?:\b(?:not|no|never|only|even|but|unless|don't|doesn't|won't|cannot|can't|except)\b|[不勿别未没非仅只])"
     r"[^.;:!?。；：！？]{0,24}$", re.IGNORECASE)
 _CONJ_AFTER = re.compile(r"^\s*(?:and|or|but|nor|then)\b|^\s*[且和或并]", re.IGNORECASE)
+_CONJ_BEFORE = re.compile(r"(?:\b(?:and|or|nor|but|then|either)\b,?|[且和或并及])\s*$", re.IGNORECASE)
+_SEP_END = ",;:—–-(（，；："
+_SEP_START = ",.;:—–-)），。；："
 _DONE_LINE = re.compile(r"^\s*[-*]\s+\[[xX]\]\s")
 _REMOVED_WORDS = re.compile(
-    r"\b(?:remov|delet|drop|abandon|cancel|revert|deprecat|retir|won't|will not|not)\w*|删除|删掉|放弃|不做|取消|废弃|下线",
+    r"\b(?:remov(?:e|ed|es|ing|al)|delet(?:e|ed|es|ing|ion)|drop(?:s|ped|ping)?|abandon(?:s|ed|ing)?"
+    r"|cancel(?:s|led|ed|ling|ing)?|revert(?:s|ed|ing)?|deprecat(?:e|ed|es|ing)|retir(?:e|ed|es|ing)"
+    r"|postpon(?:e|ed|es|ing)|defer(?:s|red|ring)?|won't|will not|not)\b"
+    r"|删除|删掉|放弃|不做|取消|废弃|下线|推迟|延后|暂缓",
     re.IGNORECASE)
+# the ticked line must say the thing was made: an allowlist, a denylist alone fails open
+_MADE_WORDS = re.compile(
+    r"\b(?:built|shipped|landed|implemented|merged|added|ported|created|released|deployed|wired|registered|wrote|written"
+    r"|integrated|completed|finished|exists|live)\b|完成|上线|落地|建好|已建|已实现|实现了|合入|已加",
+    re.IGNORECASE)
+_NOT_REAL = {"mock", "mocks", "demo", "demos", "stub", "stubs", "example", "examples", "sample", "samples", "fake"}
+_FENCE = re.compile(r"^(?P<ind>\s*)(?P<f>`{3,}|~{3,})")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
 _SUPERSEDED_HEAD = re.compile(
     r"^[\s>*_#]*(?:⚠️?\s*)?(?:\*\*)?\s*(?:superseded\b|status\s*:\s*\**\s*superseded\b|已被取代|已取代|已废弃)",
     re.IGNORECASE)
@@ -120,7 +141,7 @@ def _read(path: Path | None) -> str | None:
         st = path.stat()
         if st.st_size > _MAX_BYTES or st.st_nlink != 1:
             return None
-        return path.read_text(encoding="utf-8")
+        return path.read_bytes().decode("utf-8")  # bytes: read_text would turn CRLF into LF
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -155,6 +176,52 @@ def _under(root: Path, rel: str) -> Path | None:
 
 # ─── which lines may be edited or cited ────────────────────────────────────
 
+def _hidden_lines(lines: list[str]) -> dict[int, str]:
+    """Lines that do not render as plain text, with why: inside a fenced block (closed only
+    by the same character, at least as long, CommonMark-style), inside or on an HTML comment
+    (tracked across lines), or an indented code block (4+ spaces after a blank line, not
+    inside a list item)."""
+    hidden: dict[int, str] = {}
+    fence = None  # (char, length, indent)
+    in_comment = False
+    last = None  # kind of the last non-blank plain line: "list", "text", "code"
+    blank_before = True
+    for i, ln in enumerate(lines):
+        m = _FENCE.match(ln)
+        if fence:
+            hidden[i] = "the line is inside a code block"
+            if m and m.group("f")[0] == fence[0] and len(m.group("f")) >= fence[1] \
+                    and len(m.group("ind")) <= fence[2] + 3 and not ln.strip().strip(fence[0]):
+                fence, last = None, "text"
+            continue
+        if m:
+            fence = (m.group("f")[0], len(m.group("f")), len(m.group("ind")))
+            hidden[i] = "the line is inside a code block"
+            continue
+        if in_comment or "<!--" in ln or "-->" in ln:
+            hidden[i] = "the line carries entry metadata"
+            o, c = ln.rfind("<!--"), ln.rfind("-->")
+            if o > c:
+                in_comment = True
+            elif c > o:
+                in_comment = False
+            continue
+        if not ln.strip():
+            blank_before = True
+            continue
+        if ln.startswith(("    ", "\t")):
+            if not blank_before:
+                kind = last or "code"
+            else:
+                kind = "list" if last == "list" else "code"
+        else:
+            kind = "list" if _LIST_ITEM.match(ln) else "text"
+        if kind == "code":
+            hidden[i] = "the line is an indented code block"
+        last, blank_before = kind, False
+    return hidden
+
+
 def _plain_line(text: str, idx: int, *, entries: bool = True) -> str | None:
     """None when line ``idx`` is plain text, else why it is not: front matter, a heading
     (ATX or setext), inside a code block (fenced or indented), metadata, and — for a line
@@ -169,13 +236,9 @@ def _plain_line(text: str, idx: int, *, entries: bool = True) -> str | None:
     nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
     if line.lstrip().startswith("#") or (line.strip() and re.fullmatch(r"\s*(=+|-+)\s*", nxt)):
         return "the line is a heading"
-    if sum(1 for ln in lines[:idx] if ln.lstrip().startswith(("```", "~~~"))) % 2 == 1:
-        return "the line is inside a code block"
-    prev = lines[idx - 1] if idx else ""
-    if line.startswith(("    ", "\t")) and not prev.strip() and not line.lstrip().startswith(("-", "*", "+")):
-        return "the line is an indented code block"
-    if "<!--" in line or "-->" in line:
-        return "the line carries entry metadata"
+    why = _hidden_lines(lines).get(idx)
+    if why:
+        return why
     if entries:
         for e in parse_entries(text):
             if e.line_number <= idx <= max(e.end_line, e.line_number):
@@ -206,7 +269,12 @@ def _names_same(x: str, y: str) -> bool:
     short, long_ = sorted((x, y), key=len)
     if len(short) < 4:
         return False
-    return long_ == f"s_{short}" or long_.endswith("/" + short) or long_.endswith("." + short)
+    if long_ == f"s_{short}":
+        return True
+    if not (long_.endswith("/" + short) or long_.endswith("." + short)):
+        return False
+    qualifier = {p.casefold() for p in re.split(r"[/.]", long_[:-len(short) - 1])}
+    return not qualifier & (_TEST_PARTS | _NOT_REAL)
 
 
 def _cjk(c: str) -> bool:
@@ -219,7 +287,9 @@ def _check_drop_condition(fix: dict, text: str, project_dir: Path) -> tuple[str,
     hit = _target_line(text, fix["line"])
     if isinstance(hit, Outcome):
         return hit
-    _idx, line = hit
+    _idx, full = hit
+    cr = "\r" if full.endswith("\r") else ""
+    line = full[:-1] if cr else full
     span = fix["span"]
     m = _CONDITION.fullmatch(span)
     if not m:
@@ -228,7 +298,7 @@ def _check_drop_condition(fix: dict, text: str, project_dir: Path) -> tuple[str,
         return _open("the span is not in the quoted line exactly once")
     i = line.index(span)
     before, after = line[:i], line[i + len(span):]
-    prefix = re.match(r"^\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*)?", line).group(0)
+    prefix = re.match(r"^\s*(?:>\s*)*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?", line).group(0)
     if len(before) <= len(prefix):
         return _open("the condition starts the sentence; removing it needs rewording")
     if not (before[-1:].isspace() or _cjk(before[-1:])):
@@ -237,11 +307,13 @@ def _check_drop_condition(fix: dict, text: str, project_dir: Path) -> tuple[str,
         return _open("the condition is joined to other markup or a word")
     if _NEGATION_BEFORE.search(before):
         return _open("a negation or limit comes before the condition; removing it would change the meaning")
-    if _CONJ_AFTER.match(after):
+    if _CONJ_AFTER.match(after) or _CONJ_BEFORE.search(before):
         return _open("the condition is joined to another one; removing it needs rewording")
+    if len(_CONDITION.findall(line)) != 1:
+        return _open("the line has more than one waiting condition; removing one needs rewording")
     x = m.group("x") or m.group("y")
 
-    done_line = None
+    done_line, rest = None, []
     if "\n" not in fix["done"]:
         for name in DDD_CANONICAL_DOCS:
             body = _read(_confined_doc_path(project_dir, name))
@@ -251,23 +323,33 @@ def _check_drop_condition(fix: dict, text: str, project_dir: Path) -> tuple[str,
             cand = body.split("\n")[didx]
             if _DONE_LINE.match(cand) and _plain_line(body, didx, entries=False) is None:
                 done_line = cand
+                indent = len(cand) - len(cand.lstrip())
+                for nxt in body.split("\n")[didx + 1:]:  # the item's continuation lines
+                    if not nxt.strip() or len(nxt) - len(nxt.lstrip()) <= indent:
+                        break
+                    rest.append(nxt)
                 break
     if done_line is None:
         return _open("the 'done' quote is not a ticked plain line of this project's DDD docs")
     if done_line.strip() == line.strip():
         return _open("a line cannot be its own evidence")
-    if _REMOVED_WORDS.search(done_line):
-        return _open("the ticked line speaks of removing or not doing it")
+    # a word inside a hyphenated term ("authz-in-backend-not-prose") is not a statement
+    if any(_REMOVED_WORDS.search(re.sub(r"(?<=\w-)[A-Za-z']+(?=-\w)", "", t)) for t in [done_line, *rest]):
+        return _open("the ticked item speaks of removing, postponing or not doing it")
+    if not _MADE_WORDS.search(done_line):
+        return _open("the ticked line does not say it was built, shipped or added")
     if not any(_names_same(x, y) for y in re.findall(r"`([^`\s]+)`", done_line)):
         return _open(f"the ticked line does not name `{x}`")
 
     left = before.rstrip(" \t")
     right = after.lstrip(" \t")
+    if left[-1:] in _SEP_END and (not right or right[:1] in _SEP_START):
+        return _open("removing the condition would leave its punctuation dangling; needs rewording")
     if not right or right[:1] in ",.;:)，。；：）" or _cjk(left[-1:]) or _cjk(right[:1]):
         joined = left + right
     else:
         joined = left + " " + right
-    return line, joined
+    return full, joined + cr
 
 
 def _check_swap_path(fix: dict, text: str, project_dir: Path, workspace: Path,
@@ -338,13 +420,23 @@ def _check_swap_value(fix: dict, text: str, repo: Path | None) -> tuple[str, str
     body = _git_head_text(repo, file)
     if body is None:
         return _open(f"{file} is not a committed file of the bound repo")
+    kw = r"(?:const|let|var|final|static|public|private|protected|readonly|val|internal)"
     decl = re.compile(
-        rf"^\s*(?:export\s+)?(?:(?:const|let|var|final|static|public|private|protected|readonly|val)\s+)*"
+        rf"^(?:(?:export\s+)?(?:{kw}\s+)*|[ \t]+(?:export\s+)?(?:{kw}\s+)+)"
         rf"(?:[A-Za-z_][\w<>\[\]]*\s+)?{re.escape(ident)}\s*(?::\s*[\w\[\]<>.]+\s*)?=\s*"
-        rf"[\"']?(?P<v>v?\d+(?:\.\d+){{0,3}})[\"']?\s*(?:[;,]|#|//|$)", re.MULTILINE)
-    # a comment line or a call argument cannot match: the identifier must open the line
-    # (after declaration keywords), and a comment marker is not one of them
-    values = [mm.group("v") for mm in decl.finditer(body)]
+        rf"[\"']?(?P<v>v?\d+(?:\.\d+){{0,3}})[\"']?\s*(?:;|#|//|$)", re.MULTILINE)
+    # A declaration opens a line at top level, or indented only after a declaration keyword
+    # (a class constant); "," does not end one. A keyword argument of a call split across
+    # lines (the line before ends in "(" or ","), a docstring and a block comment never count.
+    quoted = [mm.span() for mm in re.finditer(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|/\*[\s\S]*?\*/', body)]
+    values = []
+    for mm in decl.finditer(body):
+        if any(a <= mm.start() < b for a, b in quoted):
+            continue
+        prev = next((ln for ln in reversed(body[:mm.start()].split("\n")[:-1]) if ln.strip()), "")
+        if prev.rstrip().endswith(("(", ",")):
+            continue
+        values.append(mm.group("v"))
     if len(values) != 1:
         return _open(f"{file} does not declare {ident} exactly once with a number")
     if values[0].lstrip("v") != vnew.lstrip("v"):
@@ -395,21 +487,26 @@ def _log_rows(project_dir: Path) -> list[dict]:
     return out
 
 
+def _rid(row: dict) -> object:
+    """Which applied row a row is about: its ``seq`` (each applied row has its own)."""
+    return row.get("seq") or row.get("fix_id")
+
+
 def past_fixes(project_dir: Path) -> list[dict]:
     """Every fix that was written (a ``failed`` write is dropped), in log order, each with
     ``index`` (its stable position among applied rows) and ``undone`` (an undo was
     recorded and not followed by a failed undo)."""
     rows = _log_rows(project_dir)
-    failed = {r.get("fix_id") for r in rows if r.get("status") == "failed"}
+    failed = {_rid(r) for r in rows if r.get("status") == "failed"}
     undone: set = set()
     for r in rows:
         if r.get("status") == "undone":
-            undone.add(r.get("fix_id"))
+            undone.add(_rid(r))
         elif r.get("status") == "undo_failed":
-            undone.discard(r.get("fix_id"))
+            undone.discard(_rid(r))
     applied = [r for r in rows if r.get("status") == "applied"]
-    return [{**r, "index": i, "undone": r.get("fix_id") in undone}
-            for i, r in enumerate(applied) if r.get("fix_id") not in failed]
+    return [{**r, "index": i, "undone": _rid(r) in undone}
+            for i, r in enumerate(applied) if _rid(r) not in failed]
 
 
 def _ws(s: str) -> str:
@@ -534,10 +631,15 @@ def apply_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path |
         if not again.get("ok"):
             return again
         old_line, new_line = again["old_line"], again["new_line"]
+        if any(r.get("run") == run_id and r.get("target_doc") == fix["doc"] and not r["undone"]
+               and r.get("new_line") == old_line for r in past_fixes(project_dir)):
+            # the run's backup holds the line before the first fix, so this one could not be undone
+            return _open("another fix changed this line in this run; the next run will look at it again")
         fix_id = _fix_id(run_id, fix["doc"], old_line, new_line)
+        seq = uuid.uuid4().hex[:16]
         try:
             _backup(project_dir, doc, run_id)
-            _append_log(project_dir, {"fix_id": fix_id, "status": "applied", "type": fix["type"], "run": run_id,
+            _append_log(project_dir, {"fix_id": fix_id, "seq": seq, "status": "applied", "type": fix["type"], "run": run_id,
                                       "key": again["key"], "target_doc": fix["doc"], "old_line": old_line,
                                       "new_line": new_line,
                                       "evidence": {k: _clean(v) for k, v in fix.items() if k not in ("type", "doc")},
@@ -546,14 +648,15 @@ def apply_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path |
             return _open(f"could not back up or record the fix ({e.__class__.__name__}); nothing changed")
         try:
             st = doc.stat()
-            lines = doc.read_text(encoding="utf-8").split("\n")
+            lines = doc.read_bytes().decode("utf-8").split("\n")
             if (st.st_mtime_ns, st.st_size) != (again["mtime_ns"], again["size"]) or lines.count(old_line) != 1:
                 raise RuntimeError("the document changed while the fix was being written")
             lines[lines.index(old_line)] = new_line
             _atomic_write(doc, "\n".join(lines))
-        except (OSError, RuntimeError) as e:
+        except (OSError, RuntimeError, UnicodeDecodeError) as e:
             try:
-                _append_log(project_dir, {"fix_id": fix_id, "status": "failed", "reason": _clean(e), "timestamp": _now()})
+                _append_log(project_dir, {"fix_id": fix_id, "seq": seq, "status": "failed", "reason": _clean(e),
+                                          "timestamp": _now()})
             except OSError:
                 pass
             return _open(f"the fix was not written: {str(e)[:120]}; nothing changed")
@@ -585,13 +688,14 @@ def undo_drift_fix(project_dir: Path, index: int) -> Outcome:
         return _open("the document is gone")
     with md_lock(doc, blocking=True):
         try:
-            lines = doc.read_text(encoding="utf-8").split("\n")
-        except OSError:
+            lines = doc.read_bytes().decode("utf-8").split("\n")
+        except (OSError, UnicodeDecodeError):
             return _open("the document could not be read")
         if not new or lines.count(new) != 1:
             return _open("the fixed line was edited since; not undone")
         try:
-            _append_log(project_dir, {"fix_id": row.get("fix_id"), "status": "undone", "timestamp": _now()})
+            _append_log(project_dir, {"fix_id": row.get("fix_id"), "seq": row.get("seq"), "status": "undone",
+                                      "timestamp": _now()})
         except OSError as e:
             return _open(f"could not record the undo ({e.__class__.__name__}); nothing changed")
         try:
@@ -599,7 +703,8 @@ def undo_drift_fix(project_dir: Path, index: int) -> Outcome:
             _atomic_write(doc, "\n".join(lines))
         except OSError as e:
             try:
-                _append_log(project_dir, {"fix_id": row.get("fix_id"), "status": "undo_failed", "timestamp": _now()})
+                _append_log(project_dir, {"fix_id": row.get("fix_id"), "seq": row.get("seq"), "status": "undo_failed",
+                                          "timestamp": _now()})
             except OSError:
                 pass
             return _open(f"the undo was not written ({e.__class__.__name__})")

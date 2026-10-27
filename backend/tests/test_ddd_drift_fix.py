@@ -488,3 +488,138 @@ class TestLogIntegrity:
         doc(proj).write_text(doc(proj).read_text().replace("grades the reviewer.", "grades the reviewer weekly."))
         f = {**DROP, "line": "expectedTools:{required}) once `s_security-cr-review` exists — grades the reviewer weekly."}
         assert "undid" in check(proj, f)["reason"]
+
+
+def with_done(proj, extra, done):
+    """Append ``extra`` to the doc and point DROP's evidence at the ticked line ``done``."""
+    doc(proj).write_text(PROJECT_MD + "\n" + extra + "\n")
+    return {**DROP, "done": done}
+
+
+class TestR6Sentence:
+    """Round-2 reviews of r5: removals that left a sentence wrong or broken."""
+
+    @pytest.mark.parametrize("text", [
+        "Enable the flag for users, once `security-cr-review` exists, for all regions.",
+        "Enable the flag — once `security-cr-review` exists — for all regions.",
+        "Enable the flag for every user, once `security-cr-review` exists",
+    ])
+    def test_punctuation_would_dangle(self, proj, text):
+        assert "dangling" in check(proj, line_fix(proj, text, "once `security-cr-review` exists"))["reason"]
+
+    def test_after_is_not_a_waiting_condition(self, proj):
+        """"two weeks after X ships" is a time limit on a destructive step, not a wait."""
+        f = line_fix(proj, "Drop the old table two weeks after `security-cr-review` ships, not before.",
+                     "after `security-cr-review` ships")
+        assert "not a waiting condition" in check(proj, f)["reason"]
+
+    def test_the_second_of_two_or_conditions_is_kept(self, proj):
+        f = line_fix(proj, "Enable the cache once `cache_srv` lands or once `security-cr-review` lands.",
+                     "once `security-cr-review` lands")
+        assert "joined to another" in check(proj, f)["reason"]
+
+    def test_two_conditions_on_one_line_block(self, proj):
+        f = line_fix(proj, "Turn on A once `cache_srv` lands; turn on B once `security-cr-review` lands.",
+                     "once `security-cr-review` lands")
+        assert "more than one waiting condition" in check(proj, f)["reason"]
+
+    def test_a_quoted_list_item_starting_with_it_blocks(self, proj):
+        f = line_fix(proj, "> - once `security-cr-review` exists, do the rollout", "once `security-cr-review` exists")
+        assert "starts the sentence" in check(proj, f)["reason"]
+
+    def test_crlf_doc_keeps_its_line_endings(self, proj):
+        body = (PROJECT_MD + "\nRun the benchmark weekly once `security-cr-review` exists\n").replace("\n", "\r\n")
+        doc(proj).write_bytes(body.encode())
+        f = {**DROP, "line": "Run the benchmark weekly once `security-cr-review` exists",
+             "span": "once `security-cr-review` exists"}
+        assert df.apply_fix(f, proj, ws(proj), None, run_id="R1")["ok"] is True
+        raw = doc(proj).read_bytes()
+        assert b"Run the benchmark weekly\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+
+
+class TestR6Evidence:
+    """Evidence that does not render, or does not say the thing was made."""
+
+    @pytest.mark.parametrize("extra", [
+        "```\n~~~\n- [x] Built `security-cr-review`\n```",              # a ~~~ line inside a ``` block
+        "Example checklist:\n\n    - [x] Built `security-cr-review`",    # indented code, not a list
+        "Example:\n\n    first line\n    - [x] Built `security-cr-review`",  # second line of indented code
+        "<!--\n- [x] Built `security-cr-review`\n-->",                   # inside a multi-line comment
+        "````\n```\n- [x] Built `security-cr-review`\n````",          # a shorter fence does not close
+    ])
+    def test_a_ticked_line_that_does_not_render_is_not_evidence(self, proj, extra):
+        f = with_done(proj, extra, "- [x] Built `security-cr-review`")
+        assert "not a ticked plain line" in check(proj, f)["reason"]
+
+    def test_a_ticked_line_after_a_closed_fence_is_evidence(self, proj):
+        f = with_done(proj, "```\ncode\n```\n\n- [x] Built `security-cr-review`", "- [x] Built `security-cr-review`")
+        assert check(proj, f)["ok"] is True
+
+    def test_the_item_continuation_is_read_for_removal(self, proj):
+        f = with_done(proj, "- [x] **API** — `security-cr-review` shipped in v1\n      then rolled back; not live.",
+                      "- [x] **API** — `security-cr-review` shipped in v1")
+        assert "removing, postponing" in check(proj, f)["reason"]
+
+    @pytest.mark.parametrize("done,why", [
+        ("- [x] Filed a ticket to postpone `security-cr-review` to Q3", "removing, postponing"),
+        ("- [x] Asked about `security-cr-review` in standup", "does not say it was built"),
+        ("- [x] Built `tests/security-cr-review` for the demo", "does not name"),
+        ("- [x] Built `demo.security-cr-review` for the offsite", "does not name"),
+    ])
+    def test_the_ticked_line_must_say_it_was_made(self, proj, done, why):
+        text = "Run the benchmark weekly once `security-cr-review` exists — then report."
+        doc(proj).write_text(PROJECT_MD + "\n" + text + "\n" + done + "\n")
+        f = {**DROP, "line": text, "span": "once `security-cr-review` exists", "done": done}
+        assert why in check(proj, f)["reason"]
+        ok = "- [x] Built `pkg/security-cr-review` for the fleet"
+        doc(proj).write_text(PROJECT_MD + "\n" + text + "\n" + ok + "\n")
+        assert check(proj, {**f, "done": ok})["ok"] is True
+
+    def test_whole_words_only_for_removal(self, proj):
+        done = "- [x] Ported the cancellation API into `security-cr-review` (see notes, authz-not-prose)"
+        assert check(proj, with_done(proj, done, done))["ok"] is True
+        for edge in ("not-done-yet", "shipped-not"):  # a hyphen on one side only still counts
+            bad = done.replace("authz-not-prose", edge)
+            assert "removing" in check(proj, with_done(proj, bad, bad))["reason"]
+
+
+class TestR6Value:
+    def test_a_keyword_argument_of_a_split_call_is_not_a_declaration(self, proj, repo):
+        commit(repo, "src/limits.py", "MAX_ROUTES = 57\nclient = Client(\n    url,\n    MAX_ROUTES=30,\n)\n")
+        assert check(proj, VALUE, repo)["ok"] is True
+        commit(repo, "src/limits.py", "client = Client(\nMAX_ROUTES=57\n)\n")
+        assert "exactly once" in check(proj, VALUE, repo)["reason"]
+
+    def test_an_indented_assignment_without_a_keyword_is_not_a_declaration(self, proj, repo):
+        commit(repo, "src/limits.py", "def f():\n    MAX_ROUTES = 57\n")
+        assert "exactly once" in check(proj, VALUE, repo)["reason"]
+
+    def test_a_docstring_or_block_comment_example_does_not_count(self, proj, repo):
+        commit(repo, "src/limits.py", '"""Usage:\nMAX_ROUTES = 9\n"""\nMAX_ROUTES = 57\n')
+        assert check(proj, VALUE, repo)["ok"] is True
+        commit(repo, "src/Limits.java", "/*\nMAX_ROUTES = 9;\n*/\nclass L {\n    static final int MAX_ROUTES = 57;\n}\n")
+        assert check(proj, {**VALUE, "code_file": "src/Limits.java"}, repo)["ok"] is True
+
+
+class TestR6Log:
+    def test_a_second_fix_on_the_same_line_in_one_run_waits(self, proj):
+        doc(proj).write_text(PROJECT_MD.replace(
+            "Design doc: `assets/old-design.md` for the engine.",
+            "Read `assets/old-design.md` first once `security-cr-review` exists — then build it."))
+        drop = {**DROP, "line": "Read `assets/old-design.md` first once `security-cr-review` exists — then build it.",
+                "span": "once `security-cr-review` exists"}
+        assert df.apply_fix(drop, proj, ws(proj), None, run_id="R1")["ok"] is True
+        assert "in this run" in df.apply_fix(SWAP, proj, ws(proj), None, run_id="R1")["reason"]
+        assert df.apply_fix(SWAP, proj, ws(proj), None, run_id="R2")["ok"] is True
+        assert df.undo_drift_fix(proj, 1)["ok"] is True and df.undo_drift_fix(proj, 0)["ok"] is True
+        assert doc(proj).read_text() == PROJECT_MD.replace(
+            "Design doc: `assets/old-design.md` for the engine.",
+            "Read `assets/old-design.md` first once `security-cr-review` exists — then build it.")
+
+    def test_a_failed_write_hides_only_its_own_row(self, proj):
+        (proj / ".artifacts").mkdir()
+        rows = [{"fix_id": "R:PROJECT.md:abc", "seq": "a", "status": "applied", "target_doc": "PROJECT.md"},
+                {"fix_id": "R:PROJECT.md:abc", "seq": "a", "status": "failed"},
+                {"fix_id": "R:PROJECT.md:abc", "seq": "b", "status": "applied", "target_doc": "PROJECT.md"}]
+        (proj / ".artifacts" / df.FIX_LOG).write_text("".join(json.dumps(r) + "\n" for r in rows))
+        assert [r["seq"] for r in df.past_fixes(proj)] == ["b"]

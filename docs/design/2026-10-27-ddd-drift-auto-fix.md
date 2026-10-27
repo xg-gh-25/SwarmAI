@@ -2,7 +2,7 @@
 title: "DDD 漂移：确定的自动修"
 created: 2026-10-27
 updated: 2026-10-27
-status: r5
+status: r6
 ---
 
 # DDD 漂移：确定的自动修，报告写"发现了什么、修好了什么"
@@ -37,7 +37,7 @@ r3 允许"任意删一段，或者把一段换成证据里出现过的整词"。
 
 | 修法 | agent 给的字段 | OS 核对 | OS 算出的新行 |
 |---|---|---|---|
-| `drop_condition` 删掉等待条件 | `line`（这一行里的一段原文）、`span`、`done` | `span` 整个匹配固定语法：once / after / until / when `` `X` `` exists / lands / ships / is built / done / ready / available / implemented / shipped / merged，或 等 / 待 `` `X` `` 存在 / 上线 / 完成 / 就绪 / 落地 / 建好（后）；`done` 是本项目 DDD 文档里一行 `- [x]`，且用反引号点名同一个 `X`（相等，或一方是另一方加前缀，如 `s_x` / `pkg/x`，名字至少 6 个字符）；这一行不能是它自己的证据 | 原行删掉 `span`，整理空格和标点 |
+| `drop_condition` 删掉等待条件 | `line`（这一行里的一段原文）、`span`、`done` | （r4 原表；r5、r6 的收紧见下）`span` 整个匹配固定语法：once / after / until / when `` `X` `` exists / lands / ships / is built / done / ready / available / implemented / shipped / merged，或 等 / 待 `` `X` `` 存在 / 上线 / 完成 / 就绪 / 落地 / 建好（后）；`done` 是本项目 DDD 文档里一行 `- [x]`，且用反引号点名同一个 `X`（相等，或一方是另一方加前缀，如 `s_x` / `pkg/x`，名字至少 6 个字符）；这一行不能是它自己的证据 | 原行删掉 `span`，整理空格和标点 |
 | `swap_superseded_path` 换成取代它的文件 | `path_old`、`path_new` | 两个都是路径；`path_old` 在文档里按整词只出现一次；`path_old` 指向的文件（本项目、工作区或绑定仓库内，不在 `.artifacts`）前 10 行里有一行以 SUPERSEDED / status: superseded / 已被取代 开头，且这一行里写着 `path_new`；`path_new` 存在 | 原行把 `path_old` 换成 `path_new` |
 | `swap_code_value` 换成代码里的值 | `line`、`identifier`、`value_old`、`value_new`、`code_file` | 两个值都是数字或版本号；`code_file` 是绑定仓库里被 git 跟踪的源码文件（按扩展名；不在 test / fixture / vendor / node_modules / dist / build / .venv 下，不是 `test_*`、`*_test.*`）；它里面有 `identifier = value_new`（或 `:`）这样的赋值；文档这一行点名了 `identifier`，`value_old` 在这一行恰好出现一次 | 原行把 `value_old` 换成 `value_new` |
 
@@ -46,6 +46,13 @@ r5（r4 的 correctness + security 审查后，同一套三种修法收紧）：
 - **换路径**：`path_old` 必须只在项目、工作区、绑定仓库中的一处存在（同名文件出现在两处就不改，防止在工作区放一个同名文件冒充）；新路径必须**等于**那一行里的第一个路径（反引号或链接里的），并且和旧文件在同一处；也认 `superseded_by:` 字段；句末带句号的路径照常识别。
 - **换数值**：读的是已提交（HEAD）的文件内容，只暂存没提交的不算；文件里对这个名字的声明必须恰好一处（行首、可带 const / let / final 等关键字和类型标注；函数调用的参数、注释都不算）；文档里的旧值必须紧跟在这个名字后面（`名字 = 值`、`名字 is 值` 这类），日期、千分位数字里的同样数字不算。
 - **日志**：撤回前核对这一行确实是本系统写的（`fix_id` 由旧行和新行算出、那次运行的备份里有旧行），伪造的行不撤回；"你撤回过的不再重做"按修法本身（类型 + 文档 + 条件 / 路径对 / 名字和值）判断，那一行别处改了几个字也认得出。
+
+r6（r5 的第二轮 correctness + security 审查，无 HIGH，按原因一次修完；之后不再加轮次）：
+- **删除条件**：`after` 也去掉，只剩 once 和 等 / 待（"两周后 after `X` 上线再删表"里 after 是时间限制，删掉就丢了限制）；条件前面是 and / or / 或 / 和 这类连词、这一行有不止一个等待条件、删掉后会留下两个标点挨着或一个悬空的逗号（`A, once X exists, B` → `A,, B`）都不改；引用块里的列表项（`> - once …`）也认作句首；CRLF 文档整份保持 CRLF（原来读写都走 `read_text`，会把整份文档的换行改成 LF，这是这轮发现的真 bug）。
+- **证据**：勾掉的那一行必须说它做成了（built / shipped / ported / added / wrote / 完成 / 上线 … 白名单；只靠"不能说删除"的黑名单会放过"提了个单子推迟 `X`"）；整条（含缩进的续行）都不能说删除、推迟、not；这些词按整词算（"notes"、"cancellation" 不算），连字符复合词中间的词也不算（"authz-in-backend-not-prose"）；`/`、`.` 限定的名字如果限定部分是 test / mock / demo / stub / example，不算同一个；哪些行"不渲染成普通文本"改成按 CommonMark 逐行算：围栏只被同一字符、不短于开头的围栏关闭，HTML 注释跨行跟踪，缩进 4 格的行只有在列表项里才算正文。
+- **换数值**：声明要在行首（顶层），缩进的只认带 const / final / static 等关键字的（类常量）；`,` 不再算声明结束；上一行以 `(` 或 `,` 结尾的（跨行调用的关键字参数）、三引号字符串和 `/* */` 注释里的都不算。
+- **日志**：每条 applied 有自己的 `seq`，failed / undone / undo_failed 都指向它（同一修复失败后重试成功，不会被那条 failed 藏掉）；同一次运行里改过的那一行，同一次运行不再改第二次（那次运行的备份只有第一次之前的原文，第二次修复会撤不回），下次运行再看。
+- **不做，已知**：日志没有签名。能写 `.artifacts` 的人也能直接写旁边的 DDD 文档，审查 agent 两者都写不了，所以签名不挡住任何多出来的东西。
 
 三种都还要满足：
 - **只改一行**：文档是四份 DDD 规范文档之一，经 `_confined_doc_path` 解析在项目内；那一行不在 front matter、标题（含 setext，`=` 或 `-` 下划线）、代码块（```` ``` ```` 或 `~~~`）里，不带 `<!-- -->` 元数据，不在带日期的生命周期条目里。

@@ -212,17 +212,19 @@ kinds of fix, and only after checking them itself. Name one in a finding's `fix`
 
 1. "drop_condition" — a line waits on something a ticked `- [x]` line of this project's DDD
    docs shows is done. `line` = a verbatim piece of that line (unique in the doc); `span` = the
-   waiting condition, exactly one of: once / after / until / when `X` exists|lands|ships|is
-   built|is done|is ready|is available|is implemented|is shipped|is merged, or 等/待 `X`
+   waiting condition, exactly one of: once `X` exists|lands|ships|is built|is done|is
+   ready|is available|is implemented|is shipped|is merged, or 等/待 `X`
    存在|上线|完成|就绪|落地|建好(后); `X` in backticks as in the doc; `done` = the ticked line,
-   verbatim, naming the same `X` in backticks — or the same name with or without a prefix
-   (`s_x` and `x`, `pkg/x` and `x` count as the same).
+   verbatim, saying `X` was built / shipped / ported / added (or 完成 / 上线 …) and naming
+   the same `X` in backticks — or the same name with or without a prefix (`s_x` and `x`,
+   `pkg/x` and `x` count as the same).
 2. "swap_superseded_path" — the doc cites a file whose own header says it is SUPERSEDED and
    names the current file. Open every file the docs cite and read its first lines to find
    these. `path_old` = the cited path as written; `path_new` = the path the header names, as
    written there.
 3. "swap_code_value" — the doc states a number or version for a code identifier and a
-   tracked source file of the bound repo assigns a different one (`IDENT = value`). `line` =
+   committed source file of the bound repo declares a different one at top level
+   (`IDENT = value`, or with const / final / static …). `line` =
    a verbatim piece of the doc line; `identifier`, `value_old`, `value_new`; `code_file` = the
    source file path inside the repo (not tests, vendored or built code).
 
