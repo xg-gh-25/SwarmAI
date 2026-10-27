@@ -143,7 +143,7 @@ class TestRecallKeywordFirst:
 # ===========================================================================
 # Follow-up F1: BM25 normalization — degenerate set must NOT over-promote to 1.0
 # (run_aba4f77a, Gate-2 MEDIUM). Saturation s/(s+K1) on RAW bm25, applied at the
-# scorer-output layer; _minmax_normalize stays a generic [0,1] normalizer.
+# scorer-output layer.
 # ===========================================================================
 
 class TestBM25Normalization:
@@ -182,15 +182,16 @@ class TestBM25Normalization:
         assert out["B"] == pytest.approx(expected, abs=0.001)
         assert out["A"] < 1.0
 
-    def test_multi_candidate_spread_minmax_normalizes(self):
-        """A real spread (hi>lo) still min-max normalizes: top→1.0, bottom→0.0."""
+    def test_multi_candidate_spread_scales_by_the_best(self):
+        """A real spread (hi>lo) is scaled by the best: top→1.0, and the weakest real
+        match keeps a score above 0 (readers drop 0 as "no match"; min-max sent it to 0)."""
         from core.memory_index import _normalize_bm25_scores
 
         raw = {"A": 5.0, "B": 1.0, "C": 3.0}
         out = _normalize_bm25_scores(raw)
         assert out["A"] == pytest.approx(1.0, abs=0.001)
-        assert out["B"] == pytest.approx(0.0, abs=0.001)
-        assert out["C"] == pytest.approx(0.5, abs=0.001)
+        assert out["B"] == pytest.approx(0.2, abs=0.001)
+        assert out["C"] == pytest.approx(0.6, abs=0.001)
 
     def test_empty_returns_empty(self):
         from core.memory_index import _normalize_bm25_scores

@@ -397,7 +397,7 @@ def upsert_session_block(
         appended = span is None
         if span is not None:
             # MOVE, not in place: the prompt injects the file's tail as "newest", so a
-            # session's latest write must be last (prompt_builder._truncate_daily_content).
+            # session's latest write must be last (prompt_builder._daily_within_budget).
             before = content[:span[0]].rstrip("\n")
             after = content[span[1]:].lstrip("\n")
             content = before + ("\n\n" + after if after.strip() else "")

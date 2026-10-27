@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import re
 import time
 from core.awake_clock import awake_time  # liveness durations exclude sleep
 from datetime import datetime
@@ -175,7 +176,11 @@ def strip_sensitive_mcps(mcp_servers: dict) -> dict:
 # TOKEN_CAP_PER_DAILY_FILE is imported from context_directory_loader (the budget
 # SoT) — re-exported here so existing `from core.prompt_builder import
 # TOKEN_CAP_PER_DAILY_FILE` importers keep working (run_72ca2a97).
-TRUNCATION_MARKER = "[Truncated: kept newest ~2000 tokens]"
+# A DailyActivity file over its cap shows its newest entries WHOLE and names how many
+# earlier ones are not shown (CDF first principle): an entry is a session block
+# (``<!-- da:… -->`` … ``<!-- /da -->``) or a ``## `` section.
+_DA_OPEN, _DA_CLOSE = "<!-- da:", "<!-- /da -->"
+_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.S)
 
 # ── Autocompact trigger threshold (NOT a cost cap — STEERING #2) ──────────────
 # The CLI fires autocompact (summarize earlier context + CONTINUE the turn; it
@@ -218,43 +223,60 @@ def _compute_autocompact_window_setting(trigger_tokens: int, context_window: int
     return min(context_window, trigger_tokens + AUTOCOMPACT_CLI_BUFFER)
 
 
-def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -> str:
-    """Truncate DailyActivity content to fit within a token budget.
+def _daily_entries(content: str) -> list[str]:
+    """The entries of a DailyActivity file in file order (oldest first), frontmatter
+    left out: each session block whole, and the ``## `` sections between blocks."""
+    from .recall_filter import split_sections
+    body = _FRONTMATTER_RE.sub("", content, count=1)
+    units: list[str] = []
+    pos = 0
+    while True:      # linear scan (str.find): a regex over unclosed openers is quadratic
+        start = body.find(_DA_OPEN, pos)
+        end = body.find(_DA_CLOSE, start) if start >= 0 else -1
+        if end < 0:
+            units += split_sections(body[pos:])
+            break
+        units += split_sections(body[pos:start])
+        units.append(body[start:end + len(_DA_CLOSE)])
+        pos = end + len(_DA_CLOSE)
+    return [u.strip() for u in units if u.strip()]
 
-    Uses word-based truncation, keeping the *tail* (newest entries) since
-    DailyActivity files are newest-last: blocks are appended, and a session's
-    rewritten block moves to the end (daily_activity_writer.upsert_session_block).  The number of words to keep is
-    ``cap / LATIN_TOKENS_PER_WORD`` — the inverse of the calibrated
-    token-estimation coefficient used by
-    ``ContextDirectoryLoader.estimate_tokens``.  Derived from the SAME
-    constant as the forward estimate (Gate-1 finding A, run_3f25a73a): a
-    hardcoded inverse (the old ``* 3 / 4``) silently broke when the
-    coefficient was recalibrated, leaving the truncated file ~65% over cap.
 
-    When truncation occurs the ``TRUNCATION_MARKER`` is prepended so the
-    agent (and the user, via the TSCC viewer) can see that content was
-    trimmed.
+def _daily_within_budget(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE,
+                         day: str = "") -> str:
+    """*content* unchanged when it fits *cap* tokens; else its newest entries, each
+    whole and in file order, while they fit, under a line naming how many earlier
+    entries are not shown and where they are. An entry is never cut (CDF first
+    principle): when even the newest one does not fit, none is shown and the line
+    says so. DailyActivity is newest-last (``daily_activity_writer`` appends, and a
+    rewritten session block moves to the end), so the kept entries are the newest.
 
-    Args:
-        content: Raw DailyActivity file content (already stripped).
-        cap: Maximum token budget for this file.
+    Token counts come from ``ContextDirectoryLoader.estimate_tokens``; the result is
+    within *cap*."""
+    from .context_directory_loader import ContextDirectoryLoader
+    from .recall_filter import take_whole
 
-    Returns:
-        The original *content* unchanged when it fits within *cap*,
-        otherwise the truncated tail prefixed with the marker.
-    """
-    from .context_directory_loader import (
-        ContextDirectoryLoader,
-        LATIN_TOKENS_PER_WORD,
-    )
-
-    token_count = ContextDirectoryLoader.estimate_tokens(content)
-    if token_count <= cap:
+    est = ContextDirectoryLoader.estimate_tokens
+    if est(content) <= cap:
         return content
-    words = content.split()
-    words_to_keep = max(1, int(cap / LATIN_TOKENS_PER_WORD))
-    truncated = " ".join(words[-words_to_keep:])
-    return f"{TRUNCATION_MARKER}\n\n{truncated}"
+    entries = _daily_entries(content)
+    where = f"Knowledge/DailyActivity/{day}.md" if day else "this day's DailyActivity file"
+    if not entries:          # over the cap, yet no entry: name the file, show nothing
+        return f"[this day's DailyActivity is not shown; read {where}]"
+
+    def note(n: int) -> str:
+        return (f"[{n} earlier {'entry' if n == 1 else 'entries'} of this day not shown, so "
+                f"that each one shown stays whole; read {where}]")
+
+    # estimate_tokens floors two terms (Latin words, CJK characters) per text, each
+    # losing under 1 token, and the joins add no words: the joined text estimates
+    # at most est(note) + sum(est(entry) + 2), so charging est + 2 per entry keeps
+    # the result within cap.
+    room = cap - est(note(len(entries)))
+    newest_first, _ = take_whole(list(reversed(entries)), room, lambda e: est(e) + 2)
+    shown = list(reversed(newest_first))
+    omitted = len(entries) - len(shown)
+    return "\n\n".join([note(omitted), *shown]) if omitted else "\n\n".join(shown)
 
 
 # Human-readable labels for the fullscreen nav overlays (swarm:show-* event ids).
@@ -1441,8 +1463,8 @@ class PromptBuilder:
                 for _day_stem, _daily_content in _daily_files:
                     token_count = ContextDirectoryLoader.estimate_tokens(_daily_content)
                     if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                        _daily_content = _truncate_daily_content(
-                            _daily_content, TOKEN_CAP_PER_DAILY_FILE
+                        _daily_content = _daily_within_budget(
+                            _daily_content, TOKEN_CAP_PER_DAILY_FILE, _day_stem
                         )
                     ephemeral_text += f"\n\n## Daily Activity ({_day_stem})\n{_daily_content}"
 

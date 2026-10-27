@@ -50,6 +50,12 @@ GUIDANCE_FILES = ("AGENTS.md", "CLAUDE.md", ".swarmai/review.md")
 # repo touched by one call — stays under it, so nothing is cut by the CLI unannounced.
 MAX_FILE_CHARS = 3_500
 MAX_BLOCK_CHARS = 7_500
+CLI_LIMIT = 8_000
+# A guidance file is shown by whole ``## `` sections (CDF first principle): the sections
+# that fit MAX_FILE_CHARS, in file order, then a line naming the rest. The file is read
+# whole, up to this many bytes, so the names of its later sections are known.
+MAX_READ_BYTES = 1_000_000
+NOTE_MAX = 600              # the "sections not shown" line, outside the sections' cap
 MAX_REPOS_PER_SESSION = 64
 LESSONS_READ_CHARS = 200_000
 _BOUND_TTL = 60.0
@@ -230,21 +236,14 @@ def _lessons_block(path: str, text: str, budget: int) -> str:
                  "person reviews them.")
     tail = f"\n--- END pipeline lessons ---"
     room = budget - len(head) - len(tail) - 120
-    from core.recall_filter import MIN_CLIP_ROOM, clip
-    shown, cut = [], False
-    for entry in reversed(lessons):       # newest first; by rank, never skipped (R3)
-        if len(entry) + 1 > room:
-            cut = True
-            # the clipped entry shares the room with the "older lessons" note below
-            left = room - 1 - len(f"\n[... {len(lessons)} older lessons not shown; read {path}]")
-            if left >= MIN_CLIP_ROOM:
-                shown.append(clip(entry, left, path))
-            break
-        shown.append(entry)
-        room -= len(entry) + 1
+    from core.recall_filter import take_whole
+    # newest first, each whole; the first that does not fit ends the list (CDF first
+    # principle: a lesson is never cut, and an older one never takes a newer one's place)
+    shown, rest = take_whole(list(reversed(lessons)), room, lambda e: len(e) + 1)
     body = "\n" + "\n".join(shown) if shown else ""
-    if cut or (lessons and not shown):
-        body += f"\n[... {len(lessons) - len(shown)} older lessons not shown; read {path}]"
+    if rest:
+        body += (f"\n[... {len(rest)} older lesson{'' if len(rest) == 1 else 's'} not shown, "
+                 f"so that each one shown stays whole; read {path}]")
     return head + body + tail
 
 
@@ -297,10 +296,40 @@ def _read(root: str, rel: str) -> "str | None":
         if os.path.islink(path) and not os.path.realpath(path).startswith(root + os.sep):
             return None          # a link out of the repo is not the repo's guidance
         with open(path, "rb") as fh:
-            raw = fh.read(MAX_FILE_CHARS * 4 + 1)
+            raw = fh.read(MAX_READ_BYTES + 1)
     except OSError:
         return None
     return raw.decode("utf-8", "replace")
+
+
+def _file_body(text: str, cap: int, full: str) -> str:
+    """*text* whole when it fits *cap*; else its leading ``## `` sections that fit *cap*,
+    in file order, and one line (at most ``NOTE_MAX`` characters) naming the sections
+    not shown (heading and length) and the file to read. A section is never cut. A file
+    read only up to ``MAX_READ_BYTES`` has an incomplete last section: it is never shown."""
+    from core.recall_filter import split_sections, take_whole, unit_title
+    if len(text) <= cap and len(text.encode("utf-8", "replace")) <= MAX_READ_BYTES:
+        return text
+    sections = split_sections(text)
+    tail: list = []
+    if len(text.encode("utf-8", "replace")) > MAX_READ_BYTES and sections:
+        tail = [sections.pop()]          # read only in part: named, never shown
+
+    def note(rest: list) -> str:
+        head = (f"[{len(rest)} more section{'' if len(rest) == 1 else 's'} not shown, so that "
+                f"each one shown stays whole. Read {full} for: ")
+        names: list[str] = []
+        for sec in rest:
+            name = f"{unit_title(sec) or '(untitled)'} ({len(sec)} chars)"
+            if len(head) + len("; ".join(names + [name])) + 20 > NOTE_MAX:
+                break
+            names.append(name)
+        more = len(rest) - len(names)
+        return head + "; ".join(names + ([f"and {more} more"] if more else [])) + "]"
+
+    shown, rest = take_whole(sections, cap, lambda sec: len(sec) + 1)
+    rest += tail
+    return "\n".join(shown + ([note(rest)] if rest else []))
 
 
 def _render(root: str, files: "list[tuple[str, str]]", bound: bool, extras=()) -> str:
@@ -326,12 +355,14 @@ def _render(root: str, files: "list[tuple[str, str]]", bound: bool, extras=()) -
     parts, budget = [head], MAX_BLOCK_CHARS - len(head)
     for rel, text in files:
         full = os.path.join(root, rel)
-        cap = min(MAX_FILE_CHARS, max(budget - 200, 0))
-        body = text if len(text) <= cap else (
-            text[:cap] + f"\n[... cut at {cap} characters; read {full} for the rest]")
-        if cap <= 0:
+        frame = len(f"\n--- BEGIN {full} ---\n\n--- END {full} ---")
+        cap = min(MAX_FILE_CHARS, budget - frame - NOTE_MAX)
+        body = _file_body(text, cap, full) if cap > 0 else ""
+        if not body.strip():
             body = f"[not shown: block size limit; read {full}]"
         block = f"\n--- BEGIN {full} ---\n{body}\n--- END {full} ---"
+        if len(block) > budget:          # not even the pointer fits: stop here
+            break
         parts.append(block)
         budget -= len(block)
     for extra in extras:
@@ -358,6 +389,7 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
         if seen is None and len(state["repos"]) >= MAX_REPOS_PER_SESSION:
             continue
         seen = state["repos"].setdefault(root, {})
+        before = dict(seen)      # restored when this repo's block is not shown this call
         fresh = []
         for rel in GUIDANCE_FILES:
             full = os.path.join(root, rel)
@@ -390,13 +422,30 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
                 seen["@ddd"] = key
                 extras.append(lambda b, p=project, d=docs: _ddd_block(p, d))
         if fresh or extras:
-            out.append(_render(root, fresh, bool(project), extras))
+            out.append((root, _render(root, fresh, bool(project), extras), before))
     if written is not None:
         state["written"].add(written)     # after judging: a first write still gets guidance
-    text = "\n\n".join(out)
-    if len(text) > MAX_BLOCK_CHARS:       # several repos in one call
-        text = text[:MAX_BLOCK_CHARS - 120] + ("\n[... repository guidance cut at the size "
-                                              "limit; read the AGENTS.md files named above]")
+    # Several repos in one call: each repo's block whole while they fit MAX_BLOCK_CHARS
+    # (one block never exceeds it, so the first is always shown); a repo not shown
+    # gets its injection state back, so its guidance comes on its next touch. The
+    # line naming them is bounded by the CLI's 8000-character limit.
+    from core.recall_filter import take_whole
+    shown, rest = take_whole(out, MAX_BLOCK_CHARS, lambda rb: len(rb[1]) + 2)
+    text = "\n\n".join(b for _, b, _ in shown)
+    if rest:
+        for root, _b, before in rest:
+            state["repos"][root] = before
+        head = (f"\n\n[Repository guidance for {len(rest)} more repositor"
+                f"{'y' if len(rest) == 1 else 'ies'} not shown, so that each one shown stays "
+                "whole; it comes with the next tool call there. Repositories: ")
+        names: list[str] = []
+        for root, _b, _ in rest:
+            name = root.replace("\n", " ").replace("\r", " ")
+            if len(head) + len(", ".join(names + [name])) + 20 > CLI_LIMIT - MAX_BLOCK_CHARS:
+                break
+            names.append(name)
+        more = len(rest) - len(names)
+        text += head + ", ".join(names + ([f"and {more} more"] if more else [])) + "]"
     return text or None
 
 

@@ -410,8 +410,8 @@ def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
 
     IDF is computed over ``docs`` (the candidate set), so common terms are
     down-weighted relative to THIS corpus — the property the old token-overlap
-    leg lacked. Returns raw BM25 scores (>= 0); the caller min-max normalizes
-    them to make the leg commensurable with the absolute vector leg (§3.6).
+    leg lacked. Returns raw BM25 scores, only those > 0 (a doc with no query term is
+    left out); ``_normalize_bm25_scores`` puts them on (0, 1].
 
     Args:
         query: The user/recall query.
@@ -469,34 +469,19 @@ def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
     return scores
 
 
-def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
-    """Min-max normalize scores to [0, 1] over the candidate set.
-
-    Makes an unbounded leg (BM25) commensurable with the absolute [0,1] vector
-    leg (§3.6). A single-candidate or all-equal set maps to 1.0 (it is the only
-    / a co-best option, so it deserves full weight, not 0).
-    """
-    if not scores:
-        return {}
-    vals = list(scores.values())
-    lo, hi = min(vals), max(vals)
-    if hi <= lo:
-        return {k: 1.0 for k in scores}
-    span = hi - lo
-    return {k: (v - lo) / span for k, v in scores.items()}
-
-
 def _normalize_bm25_scores(raw: dict[str, float]) -> dict[str, float]:
-    """Make raw Okapi-BM25 scores commensurable with the absolute [0,1] vector
-    leg (§3.6), without over-promoting a degenerate candidate set.
+    """Raw Okapi-BM25 scores of one candidate set on (0, 1], so legs and docs can be
+    ranked together, without over-promoting a degenerate candidate set.
 
-    - Spread set (hi > lo): min-max to [0, 1].
+    - Spread set (hi > lo): scaled by the best, ``s/hi``, so the best is 1.0 and every
+      candidate stays above 0. The raw set holds only real matches (``_bm25_scores``
+      keeps ``score > 0``), and readers drop a score of 0 as "no match": min-max sent
+      the weakest real match to 0, so it was dropped whenever there were two or more.
     - Degenerate set (single candidate or all-equal): saturation ``s/(s+K1)``
       of the RAW score. A lone WEAK match gets a small score; a lone STRONG
       match approaches 1. This fixes the prior ``→ 1.0`` blanket, which gave a
       weak single candidate full keyword weight (run_aba4f77a F1). K1 is the
-      same TF-saturation constant BM25 already uses, so this BM25-aware
-      transform lives here — ``_minmax_normalize`` stays a generic normalizer.
+      same TF-saturation constant BM25 already uses.
     """
     if not raw:
         return {}
@@ -504,7 +489,7 @@ def _normalize_bm25_scores(raw: dict[str, float]) -> dict[str, float]:
     lo, hi = min(vals), max(vals)
     if hi <= lo:
         return {k: v / (v + BM25_K1) for k, v in raw.items()}
-    return _minmax_normalize(raw)
+    return {k: v / hi for k, v in raw.items()}
 
 
 # ── Section Selection ─────────────────────────────────────────────────

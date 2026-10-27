@@ -29,7 +29,9 @@ query are worth the model's attention.
 
 Public:
 - ``extract_query_keywords(message)`` -- the search terms of a message (chat and pipeline)
-- ``clip(text, cap, pointer)`` -- the one truncation of every recall leg
+- ``take_whole(units, cap, size)`` / ``not_shown_note(items, ...)`` / ``unit_title(text)``
+  / ``split_sections(text)``
+  -- the one rule of every read path: a unit is shown whole or named, never cut
 - ``query_terms(query)``
 - ``filter_recall(result, prompt_text="", followup=False, caps=None, slots=None)`` -> BucketedRecall
 - ``in_prompt_text(text, prompt_norm)``
@@ -40,21 +42,22 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-# Max characters each domain may contribute to the injected block, and the max
-# characters of any single hit. ~6.5K characters total, about 2-2.5K tokens.
+# Max characters each domain may contribute to the injected block. A hit is shown
+# whole or named (``take_whole``), so the library cap fits a p90 Knowledge Library
+# section (3.9K characters; p50 0.8K, p99 11K, measured over Knowledge/Library) --
+# a longer one is listed by its location, never cut.
 DOMAIN_CHAR_CAPS: dict[str, int] = {
     "context_files": 1500,
     "ddd": 2000,
-    "library": 2800,
+    "library": 4500,
     "session": 1800,
     "codeintel": 500,
     "memory_archive": 1200,   # the library leg's archive slots (D4), own budget
 }
-HIT_CHAR_CAP = 900
 
 # Follow-up recall (a later message on a new topic) gets a smaller block: the
 # whole session shares one budget (session_router._RECALL_SESSION_CHARS), and
@@ -64,7 +67,7 @@ HIT_CHAR_CAP = 900
 FOLLOWUP_CHAR_CAPS: dict[str, int] = {
     "context_files": 700,
     "ddd": 1000,
-    "library": 1400,
+    "library": 2400,
     "session": 900,
     "codeintel": 300,
     "memory_archive": 600,
@@ -276,45 +279,70 @@ def in_prompt_text(text: str, prompt_norm: str) -> bool:
     return all(p in prompt_norm for p in probes)
 
 
-# A sentence ends at one of these followed by whitespace or the end of the text.
-_SENTENCE_END = re.compile(r"[。！？!?.](?=\s|$)")
-# Then a clause end: CJK text often has no space, so a space fallback alone would
-# cut a Chinese clause mid-word.
-_CLAUSE_END = re.compile(r"[，；、：,;:]")
-# A hit too short to carry a sentence is left out rather than shown as a stub (R3).
-MIN_CLIP_ROOM = 120
+# ── Whole units (CDF first principle) ─────────────────────────────────────────
+# Design 2026-10-26-swarm-cognitive-distillation-flow §5: injection and recall take or
+# leave a unit WHOLE -- an entry, a section, a session message, a DailyActivity block,
+# a lesson -- and every unit left out is named so the reader can fetch it. Nothing on
+# the read path cuts a unit, and every reader uses these two functions, so there is
+# one rule (run-knowledge §3.0) instead of one per caller.
+TITLE_MAX = 200
+NOTE_ITEMS = 5      # units a "not shown" line names one by one; the rest are counted
+_BOLD_TITLE_RE = re.compile(r"^-\s*(?:\[\w+\]\s*)?\*\*(.+?)\*\*")
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.+)")
 
 
-def clip(text: str, cap: int, pointer: str = "") -> str:
-    """*text* in at most *cap* characters, cut where meaning survives (design
-    2026-10-26-run-knowledge §3.0 R2): at the last sentence end, else the last line
-    end, else the last clause mark (，；、：,;:), else the last space -- each used only when it keeps at least half the room,
-    so a cut never lands mid-word. A cut text ends with ``…（全文 N 字符：<pointer>）``
-    so the reader knows it is partial and where the whole entry is. The ONE truncation
-    of every recall leg; *pointer* names the source (``doc#section``, a Library path,
-    a session id)."""
-    if len(text) <= cap:
-        return text
-    tail = f" …（全文 {len(text)} 字符" + (f"：{pointer}）" if pointer else "）")
-    room = max(cap - len(tail), 0)
-    window = text[:room]
-    cut = 0
-    for end in _SENTENCE_END.finditer(window):
-        cut = end.end()
-    if cut < room * 0.5:
-        nl = window.rfind("\n")
-        cut = nl if nl >= room * 0.5 else 0
-    if cut < room * 0.5:
-        for end in _CLAUSE_END.finditer(window):
-            cut = end.end()
-    if cut < room * 0.5:
-        sp = window.rfind(" ")
-        cut = sp if sp > 0 else room
-    return window[:cut].rstrip() + tail
+def take_whole(units: list, cap: int, size: Callable[[Any], int] = len) -> tuple[list, list]:
+    """*units* in rank order, split into (shown, omitted): each unit is shown whole while
+    it fits what is left of *cap*; the first one that does not fit ends the walk, and it
+    and every unit after it are omitted. A lower-ranked unit never takes the place of a
+    higher one, and no unit is ever shown in part."""
+    shown: list = []
+    omitted: list = []
+    used = 0
+    for u in units:
+        n = size(u)
+        if omitted or used + n > cap:
+            omitted.append(u)
+            continue
+        shown.append(u)
+        used += n
+    return shown, omitted
+
+
+def unit_title(text: str) -> str:
+    """A unit's own title, whole: its bold entry title (``- [type] **title** ...``) or
+    its heading line; "" when it has none or the title is longer than ``TITLE_MAX``.
+    A locator for a unit that is not shown, never a cut-down copy of its text."""
+    first = str(text or "").lstrip()
+    m = _BOLD_TITLE_RE.match(first) or _HEADING_RE.match(first.split("\n", 1)[0])
+    title = m.group(1).strip() if m else ""
+    return title if len(title) <= TITLE_MAX else ""
+
+
+def not_shown_note(items: list[tuple[str, str, int]], noun: str = "entry",
+                   nouns: str = "entries", where: str = "",
+                   max_items: "int | None" = None) -> str:
+    """The one line naming units left out whole: how many, and for each its location,
+    its own title when it has one and its length, so a person or an agent knows the
+    unit exists and where to read it. *items*: ``(location, title, length)``, in rank
+    order; with *max_items*, the first ones are listed and the rest counted. A
+    location or title from untrusted text must not be passed here outside its fence."""
+    n = len(items)
+    what = noun if n == 1 else nouns
+    head = (f"{where}: " if where else "") + (
+        f"{n} more matching {what} not shown here, so that each one shown stays whole. "
+        f"Read {'it' if n == 1 else 'them'} " + (f"in {where}:" if where else "at:"))
+    lines = [head]
+    listed = items if max_items is None else items[:max_items]
+    for loc, title, length in listed:
+        lines.append(f"- {loc}" + (f": {title}" if title else "") + f" ({length} characters)")
+    if len(listed) < n:
+        lines.append(f"- and {n - len(listed)} more")
+    return "\n".join(lines)
 
 
 def _pointer(domain: str, hit: dict) -> str:
-    """Where the whole text of *hit* is, for ``clip``'s tail."""
+    """Where the whole text of *hit* is: the locator of a hit that is not shown."""
     if domain == "session":
         return f"session {hit.get('session_id') or ''}".strip()
     if domain == "context_files":
@@ -324,14 +352,28 @@ def _pointer(domain: str, hit: dict) -> str:
     return f"{src}#{sec}" if src and sec and not sec.startswith("(") else src
 
 
-def _split_sections(content: str) -> list[str]:
-    parts = re.split(r"\n(?=## )", content.strip())
-    return [p for p in parts if p.strip()]
+def split_sections(content: str) -> list[str]:
+    """*content* split before each ``## `` heading line, never inside a fenced code
+    block (a ``## `` line in a fence is code, and splitting there would show half a
+    block). The text before the first heading is the first part."""
+    parts: list[list[str]] = [[]]
+    fence = ""
+    for line in content.strip().split("\n"):
+        mark = line.lstrip()[:3]
+        if mark in ("```", "~~~"):
+            fence = "" if fence == mark else (fence or mark)
+        if not fence and line.startswith("## ") and any(x.strip() for x in parts[-1]):
+            parts.append([])
+        parts[-1].append(line)
+    return [p for p in ("\n".join(x) for x in parts) if p.strip()]
+
 
 
 def _hit_text(domain: str, hit: dict) -> str:
     if domain == "session":
-        return hit.get("text") or ""
+        # every matched message, whole (``matched``), so a session is judged by what
+        # it said even when a message is too long to show in the budget
+        return hit.get("matched") or hit.get("text") or ""
     if domain == "codeintel":
         # The symbol name plus its FILE's stem: a term naming a file
         # (``session_router``) names that file's code, but a directory term
@@ -385,7 +427,7 @@ def filter_recall(result: Any, prompt_text: str = "", followup: bool = False,
         if domain == "context_files":
             # One hit carries every matched section in `content`; gate per section.
             content = (hits[0].get("content") or "") if hits else ""
-            sections = [s for s in _split_sections(content)
+            sections = [s for s in split_sections(content)
                         if _keep(domain, s, terms, prompt_norm, code_terms)]
             if sections:
                 names = [s.splitlines()[0].lstrip("# ").strip() for s in sections]
@@ -457,37 +499,108 @@ def _daily_fresh_or_strong(hit: dict, terms: list[str]) -> bool:
 def _budget(domain: str, hits: list[dict], caps: dict[str, int] = DOMAIN_CHAR_CAPS) -> list[dict]:
     if domain == "library":
         # Archive slots carry their own budget, so ordinary hits ranked above
-        # them cannot use it up (D4); original order is kept.
+        # them cannot use it up (D4); original order is kept, notes last.
         tagged = [{**h, "_i": i} for i, h in enumerate(hits)]
         is_arch = [str(h.get("source") or "").startswith(ARCHIVE_PREFIX) for h in tagged]
         kept = (_budget_one("library", [h for h, a in zip(tagged, is_arch) if not a], caps)
                 + _budget_one("memory_archive", [h for h, a in zip(tagged, is_arch) if a], caps))
-        kept.sort(key=lambda h: h["_i"])
+        kept.sort(key=lambda h: h.get("_i", len(hits)))
         return [{k: v for k, v in h.items() if k != "_i"} for h in kept]
     return _budget_one(domain, hits, caps)
 
 
+def _text_key(domain: str) -> str:
+    return "text" if domain == "session" else "content"
+
+
+def _hit_size(domain: str, hit: dict) -> int:
+    text = hit.get(_text_key(domain))
+    return len(text) if isinstance(text, str) and text else 80   # a pointer-only hit
+
+
 def _budget_one(domain: str, hits: list[dict],
                 caps: dict[str, int] = DOMAIN_CHAR_CAPS) -> list[dict]:
+    """The hits that fit the domain's budget, each WHOLE, by rank (``take_whole``), and
+    one ``omitted`` row naming the rest (no id, no score: it is not a hit)."""
     cap = caps.get(domain, 1500)
-    used = 0
-    out: list[dict] = []
-    for h in hits:
-        key = "text" if domain == "session" else "content"
-        text = h.get(key)
-        if isinstance(text, str) and text:
-            per_hit = cap if domain == "context_files" else HIT_CHAR_CAP
-            room = min(per_hit, cap - used)
-            # by rank (R3): a hit that does not fit whole is clipped, never skipped
-            # for a later one; past MIN_CLIP_ROOM there is no room for a sentence
-            if used and room < MIN_CLIP_ROOM and len(text) > room:
-                break
-            text = clip(text, room, _pointer(domain, h))
-            h = {**h, key: text}
-            used += len(text)
-        else:
-            used += 80
-        out.append(h)
-        if used >= cap:
-            break
+    if domain == "context_files":
+        return _budget_sections(hits, cap)
+    shown, omitted = take_whole(hits, cap, lambda h: _hit_size(domain, h))
+    return shown + _omitted_rows(domain, omitted)
+
+
+def _budget_sections(hits: list[dict], cap: int) -> list[dict]:
+    """context_files carries every kept ``## section`` in its first hit's content:
+    whole sections by rank while they fit, the rest named (``MEMORY.md#<section>``)."""
+    content = (hits[0].get("content") or "") if hits else ""
+    sections = split_sections(content)
+    shown, omitted = take_whole(sections, cap, lambda s: len(s) + 2)
+    names = [s.splitlines()[0].lstrip("# ").strip() for s in shown]
+    out = [{"section": n} for n in names]
+    note = ""
+    if omitted:
+        note = not_shown_note(
+            [(f"MEMORY.md#{s.splitlines()[0].lstrip('# ').strip()}", "", len(s))
+             for s in omitted], "section", "sections", max_items=NOTE_ITEMS)
+    if out:
+        out[0]["content"] = "\n\n".join(shown + ([note] if note else []))
+    elif note:
+        out = [{"section": "", "kind": "omitted", "content": note}]
     return out
+
+
+def _trust(hit: dict) -> str:
+    """Which block a library hit renders in: a note naming an untrusted source must sit
+    inside that source's fence, so its location never reads as trusted text."""
+    from core.recall_multi import is_external_source, is_repo_doc_source
+    src = str(hit.get("source") or "")
+    return "repo" if is_repo_doc_source(src) else ("external" if is_external_source(src) else "")
+
+
+def _bind_prefix() -> str:
+    from core.knowledge_store import BIND_KEY_PREFIX
+    return BIND_KEY_PREFIX
+
+
+def _external_prefix() -> str:
+    from core.recall_multi import EXTERNAL_SOURCE_PREFIXES
+    return EXTERNAL_SOURCE_PREFIXES[0]
+
+
+# the neutral label of a note naming several untrusted sources: still routed to the fence
+_TRUST_PREFIX = {"repo": _bind_prefix, "external": _external_prefix}
+
+
+def _omitted_rows(domain: str, omitted: list[dict]) -> list[dict]:
+    if not omitted:
+        return []
+    key = _text_key(domain)
+    groups: dict[str, list[dict]] = {}
+    for h in omitted:
+        groups.setdefault(_trust(h) if domain in ("library", "memory_archive") else "",
+                          []).append(h)
+    rows = []
+    for trust, group in groups.items():
+        items = []
+        for h in group:
+            if domain == "session":
+                loc = f"session {h.get('session_id') or ''} ({h.get('date') or ''})"
+            elif domain == "codeintel":
+                loc = str(h.get("id") or h.get("name") or "?")
+            elif trust:
+                loc = str(h.get("source") or "")       # untrusted: its location only
+            else:
+                loc = _pointer(domain, h)
+            title = unit_title(h.get(key) or "") if domain == "ddd" else ""
+            items.append((loc, title, _hit_size(domain, h)))
+        noun, nouns = {"session": ("past session", "past sessions"),
+                       "codeintel": ("symbol", "symbols")}.get(domain, ("entry", "entries"))
+        row = {"kind": "omitted", key: not_shown_note(items, noun, nouns, max_items=NOTE_ITEMS)}
+        if domain in ("library", "memory_archive"):
+            # an untrusted note carries its sources' location, so it renders in their
+            # fence; a trusted one has none
+            srcs = {str(h.get("source") or "") for h in group}
+            row["source"] = ("" if not trust else srcs.pop() if len(srcs) == 1
+                             else _TRUST_PREFIX[trust]())
+        rows.append(row)
+    return rows

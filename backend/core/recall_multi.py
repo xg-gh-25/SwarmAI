@@ -716,10 +716,16 @@ def render_recall_body(
 
 def _render_domain_hits(domain: str, hits: list) -> str:
     """Render one domain's hit list. Text domains emit content; codeintel emits
-    symbol references; a hit missing content falls back to its pointer fields."""
+    symbol references; a hit missing content falls back to its pointer fields; a
+    "not shown" row (``kind == "omitted"``) emits its note."""
     lines: list[str] = []
     for h in hits:
-        if domain == "codeintel":
+        if h.get("kind") == "omitted":
+            # the line naming units not shown (recall_filter._omitted_rows), any domain
+            note = str(h.get("content") or h.get("text") or "").strip()
+            if note:
+                lines.append(note)
+        elif domain == "codeintel":
             ref = h.get("id") or h.get("name", "?")
             callers = h.get("callers") or []
             stale = " ⚠️STALE" if h.get("graph_stale") else ""
@@ -1050,7 +1056,6 @@ def _take_whole(doc: str, group: list[dict], cap: int) -> list[dict]:
     each one's location, its own bold title when it has one (whole) and its length, so
     the reader knows where to read on."""
     out: list[dict] = []
-    used = 0
     ranked: list[dict] = []
     for h in group:
         if h["kind"] == "pinned":
@@ -1066,42 +1071,18 @@ def _take_whole(doc: str, group: list[dict], cap: int) -> list[dict]:
             ranked.append(h)
             continue
         out.append(h)
-    omitted: list[dict] = []
-    for h in ranked:
-        text = _readable(h["content"])
-        if omitted or used + len(text) > cap:
-            omitted.append(h)
-            continue
-        h["shown"] = text
-        used += len(text)
+    from core.recall_filter import not_shown_note, take_whole, unit_title
+    shown, omitted = take_whole(ranked, cap, lambda h: len(_readable(h["content"])))
+    for h in shown:
+        h["shown"] = _readable(h["content"])
         out.append(h)
     if omitted:
-        n = len(omitted)
-        lines = [f"{doc}: {n} more matching {'entry' if n == 1 else 'entries'} not shown "
-                 f"here, so that each one shown stays whole. Read "
-                 f"{'it' if n == 1 else 'them'} in {doc}:"]
-        for h in omitted:
-            title = _title(h["content"])
-            where = f"{doc}#{h['section']}" if h["section"] else doc
-            lines.append(f"- {where}" + (f": {title}" if title else "")
-                         + f" ({len(_readable(h['content']))} characters)")
-        note = "\n".join(lines)
+        note = not_shown_note(
+            [(f"{doc}#{h['section']}" if h["section"] else doc, unit_title(h["content"]),
+              len(_readable(h["content"]))) for h in omitted], where=doc)
         out.append({"doc": doc, "section": "", "kind": "omitted", "score": 0.0,
                     "content": note, "shown": note})
     return out
-
-
-_TITLE_RE = re.compile(r"^-\s*(?:\[\w+\]\s*)?\*\*(.+?)\*\*")
-TITLE_MAX = 200
-
-
-def _title(text: str) -> str:
-    """The entry's own bold title (``- [type] **title** ...``), whole, or "" when it has
-    none or it is longer than ``TITLE_MAX``: a locator for an omitted entry, never a
-    cut-down copy of its text."""
-    m = _TITLE_RE.match(text.lstrip())
-    title = m.group(1).strip() if m else ""
-    return title if len(title) <= TITLE_MAX else ""
 
 
 def _pooled(query: str, docs_text: dict, cfg: dict, project: Optional[str]) -> list[dict]:
@@ -1520,8 +1501,14 @@ def _recall_session(query: str,
         return [], "none"
     try:
         recall = _get_session_recall(DB_PATH)
-        hits = recall.recall_about_hits(query, max_sessions=3, budget_chars=2400,
-                                        exclude_session_id=exclude_session_id)
+        # sized to the session leg's budget (recall_filter), so a session hit fits it
+        # whole: a first message's three sessions share DOMAIN_CHAR_CAPS, and a
+        # follow-up's one session fits FOLLOWUP_CHAR_CAPS
+        from core.recall_filter import DOMAIN_CHAR_CAPS, FOLLOWUP_CHAR_CAPS
+        hits = recall.recall_about_hits(query, max_sessions=3,
+                                        budget_chars=DOMAIN_CHAR_CAPS["session"],
+                                        exclude_session_id=exclude_session_id,
+                                        max_per_session=FOLLOWUP_CHAR_CAPS["session"])
     except Exception as exc:  # noqa: BLE001
         logger.debug("session recall failed: %s", exc)
         return [], "none"

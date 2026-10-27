@@ -63,69 +63,7 @@ def _basename_key(name: str) -> str:
     return base.casefold()
 
 
-def _truncate_at_sentence(text: str, budget_tokens: int, *, mark: bool = False) -> str:
-    """Bounded truncation that degrades at a SENTENCE boundary, never mid-word.
-
-    The ONLY truncation on the recall read path (run_03fc3441). It fires only on
-    pathological over-budget content (a single giant entry, or a free-form section
-    with no entry boundaries) — normal-sized entries are moved WHOLE. It keeps as
-    many WHOLE sentences as fit the budget, so semantics degrade gracefully (never
-    a half-word / mid-clause cut, honoring "别切断语义" as far as bounding allows).
-    ``mark`` appends a visible ``[…truncated]`` so the reader knows more exists.
-    """
-    if ContextDirectoryLoader.estimate_tokens(text) <= budget_tokens:
-        return text
-    suffix = " […truncated]" if mark else ""
-    budget_for_body = budget_tokens  # suffix accounted per-candidate below
-
-    def _fits(s: str) -> bool:
-        return ContextDirectoryLoader.estimate_tokens(s + suffix) <= budget_for_body
-
-    # Sentence terminators: ASCII AND full-width CJK (。！？；…) + newline. Gate-2
-    # (run_03fc3441): an ASCII-only class silently DROPPED all Chinese prose (no
-    # match → whitespace fallback → space-less CJK → empty), losing a first-class
-    # content type on the read path.
-    _TERM = ".!?\n。！？；…"
-    sentences = re.findall(rf"[^{re.escape(_TERM)}]*[{re.escape(_TERM)}]+|\S[^{re.escape(_TERM)}]*$", text)
-    kept: list[str] = []
-    for s in sentences:
-        if not _fits("".join(kept) + s):
-            break
-        kept.append(s)
-    out = "".join(kept).rstrip()
-    if out:
-        return out + suffix
-
-    # Even the first sentence overflows. Prefer a whole-word cut (never mid-word);
-    # for a space-less run (CJK / one giant token) fall back to a CHARACTER cut so
-    # we still return SOMETHING bounded and non-empty. Binary search on length
-    # (Gate-2: the old one-unit-at-a-time shrink was O(n²) → multi-second stalls on
-    # large punctuation-free sections).
-    units = text.split()
-    if len(units) > 1:
-        # word granularity
-        lo, hi, best = 0, len(units), 0
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if _fits(" ".join(units[:mid])):
-                best = mid; lo = mid + 1
-            else:
-                hi = mid - 1
-        out = " ".join(units[:best])
-    else:
-        # character granularity (space-less CJK / single giant token)
-        lo, hi, best = 0, len(text), 0
-        while lo <= hi:
-            mid = (lo + hi) // 2
-            if _fits(text[:mid]):
-                best = mid; lo = mid + 1
-            else:
-                hi = mid - 1
-        out = text[:best].rstrip()
-    return (out + suffix) if out else ""
-
-
-def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
+def _slice_section_entries(body: str, query: str, budget_tokens: int, where: str = "") -> str:
     """Return the top query-relevant ENTRIES of a section body, within budget.
 
     The section body is a list of ``- [type] **title** — …`` entries (each may
@@ -138,13 +76,11 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
     regardless of its position. Works purely on the live string (no DB / embed),
     which is why it also revives the ``allow_embed=False`` path.
 
-    Returns the joined top entries as WHOLE blocks — the normal path never
-    truncates an entry (P2, run_03fc3441): entries accumulate highest-rank-first
-    until the budget, and a matching entry moves whole. The ONLY truncation left is
-    the pathological single-giant-entry / free-form-section case, which stays
-    BOUNDED (recall must not dump 30K into a prompt) but degrades at a SENTENCE
-    boundary via ``_truncate_at_sentence`` — never a mid-word cut (honors
-    "别切断语义" as far as bounding physically allows; O030/P6).
+    Returns the top entries, each WHOLE, in on-disk order, then one line naming the
+    matching entries that did not fit (title, length, *where*): an entry is shown
+    whole or named, never cut (CDF first principle). A section with no entries is
+    ranked by paragraph the same way. When even the best unit does not fit, only the
+    line naming it is returned, so the reader still learns it exists and where.
     """
     import re as _re
 
@@ -178,17 +114,13 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
         return bool(_re.match(rf"^{_entry_lead}", chunk.strip()))
 
     entries = [c.strip() for c in chunks if _is_entry(c)]
-
+    noun, nouns = "entry", "entries"
     if not entries:
-        # No discrete entries (free-form section). Recall MUST stay bounded (never
-        # dump a whole 30K+ section into the prompt — that starves every other
-        # recall), but P2 (run_03fc3441) also forbids severing semantics mid-word.
-        # Reconciliation: truncate at a SENTENCE boundary, not a word count, and
-        # mark it — so what surfaces is whole sentences, never a half-word, and the
-        # reader knows more exists. (A free-form section has no entry boundaries to
-        # move as blocks, so bounded sentence-truncation is the best integrity
-        # available here; discrete entries below are moved WHOLE.)
-        return _truncate_at_sentence(body.strip(), budget_tokens)
+        # A free-form section: its units are what the platform's one entry reader
+        # (ddd_entry_lifecycle.split_blocks) reads -- bullets, paragraphs, whole code
+        # blocks -- never cut either.
+        from core.ddd_entry_lifecycle import split_blocks
+        entries, noun, nouns = [t for _k, t in split_blocks(body.strip())], "block", "blocks"
 
     # Rank entries by BM25 against the query (same scorer as the FTS5 recall leg).
     docs = {str(i): e for i, e in enumerate(entries)}
@@ -206,34 +138,30 @@ def _slice_section_entries(body: str, query: str, budget_tokens: int) -> str:
         return ""
     order = sorted(docs, key=lambda k: scores.get(k, 0.0), reverse=True)
 
-    # Walk entries highest-rank-first, accumulating whole entries until budget.
-    # Measure the ACTUAL joined-output token count each step (estimate_tokens is
-    # not additive across the '\n' joins, so a per-entry sum undershoots).
+    # Walk entries highest-rank-first, each WHOLE, until the first that does not fit
+    # (take_whole's rule), measuring the ACTUAL joined output each step
+    # (estimate_tokens is not additive across the joins). The line naming the rest
+    # is a locator, listed up to NOTE_ITEMS units, and is not charged to the budget.
+    from core.recall_filter import NOTE_ITEMS, not_shown_note, unit_title
+
+    def text_for(keys: list[str]) -> str:
+        chosen = set(keys)
+        return "\n".join(docs[k] for k in docs if k in chosen)      # on-disk order
+
+    matching = [k for k in order if scores.get(k, 0.0) > 0]
     chosen_keys: list[str] = []
-    for k in order:
-        candidate_keys = chosen_keys + [k]
-        cand_set = set(candidate_keys)
-        cand_text = "\n".join(docs[ck] for ck in docs if ck in cand_set)
-        if ContextDirectoryLoader.estimate_tokens(cand_text) >= budget_tokens:
-            if not chosen_keys:
-                # The single top-ranked entry alone exceeds budget. Two duties
-                # collide: recall must stay BOUNDED (never inject a 30K entry that
-                # starves other recall) AND P2 (run_03fc3441) forbids severing an
-                # entry mid-word. A single entry this large is itself a DATA
-                # pathology (distillation + the size-valve bound real entries to a
-                # few hundred tokens) — so bounding wins, but we degrade gracefully:
-                # truncate at a SENTENCE boundary (whole sentences, never a half-
-                # word) and mark it, rather than a raw word-count cut. This is the
-                # ONLY truncation left on the read path and it fires only on the
-                # pathological single-giant-entry case; every normal-sized entry is
-                # returned WHOLE by the accumulation loop above.
-                return _truncate_at_sentence(docs[k], budget_tokens, mark=True)
+    rest: list[str] = []
+    for i, k in enumerate(matching):
+        if ContextDirectoryLoader.estimate_tokens(text_for(chosen_keys + [k])) >= budget_tokens:
+            rest = matching[i:]
             break
         chosen_keys.append(k)
-
-    # Display in original on-disk order (ranking chose WHICH entries, not order).
-    chosen = set(chosen_keys)
-    return "\n".join(docs[k] for k in docs if k in chosen)
+    shown = text_for(chosen_keys)
+    if not rest:
+        return shown
+    note = not_shown_note([(where or "this section", unit_title(docs[k]), len(docs[k]))
+                           for k in rest], noun, nouns, max_items=NOTE_ITEMS)
+    return f"{shown}\n{note}" if shown else note
 
 
 @dataclass
@@ -385,7 +313,8 @@ def recall_context(
         entry_budget = remaining - header_tokens
         if entry_budget <= 50:
             break
-        sliced = _slice_section_entries(body.strip(), query, entry_budget)
+        sliced = _slice_section_entries(body.strip(), query, entry_budget,
+                                        where=f"{file}#{sec_name}")
         if not sliced.strip():
             continue
         block = header + sliced

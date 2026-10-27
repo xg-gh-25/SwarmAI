@@ -110,10 +110,12 @@ def test_bash_cd_and_git_C_find_the_repo(tmp_path):
     assert "x.sh" in _call("PostToolUse", "Bash", command=f"git -C {repo} status", cwd="/")
 
 
-def test_oversize_file_is_cut_with_its_path(tmp_path):
-    repo = _repo(tmp_path / "proj", agents="y" * (rg.MAX_FILE_CHARS + 500))
+def test_oversize_file_shows_whole_sections_and_names_the_rest(tmp_path):
+    agents = "# A\nintro\n## Keep\n" + "k" * 1000 + "\n## Big\n" + "y" * (rg.MAX_FILE_CHARS + 500)
+    repo = _repo(tmp_path / "proj", agents=agents)
     text = _call("PostToolUse", "Read", file_path=str(repo / "src.py"))
-    assert "cut at" in text and str(repo.resolve() / "AGENTS.md") in text
+    assert "## Keep\n" + "k" * 1000 in text and "y" * 50 not in text
+    assert "1 more section not shown" in text and str(repo.resolve() / "AGENTS.md") in text
     assert len(text) <= rg.MAX_BLOCK_CHARS < 8000   # the CLI cuts at 8000 per hook result
 
 

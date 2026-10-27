@@ -139,7 +139,8 @@ def test_a_unit_that_does_not_fit_is_not_displaced_by_a_lower_one():
 
 
 def test_an_omitted_entry_is_located_by_its_whole_title():
-    long_title = "a" * (rm.TITLE_MAX + 1)
+    from core.recall_filter import TITLE_MAX
+    long_title = "a" * (TITLE_MAX + 1)
     group = [{"doc": "TECH.md", "section": "Arch", "kind": "entry", "score": 1.0,
               "content": "- [decision] **Eval policy — a case must WORK** body " + "y " * 900},
              {"doc": "TECH.md", "section": "Arch", "kind": "entry", "score": 0.9,

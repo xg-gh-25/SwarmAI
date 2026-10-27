@@ -111,6 +111,11 @@ def main(argv: list[str] | None = None) -> int:
             if isinstance(h, dict) and (is_repo_doc_source(h.get("source"))
                                         or is_external_source(h.get("source"))):
                 h["untrusted"] = True
+        # a session hit's ``matched`` (every matched message, for the relevance gate)
+        # duplicates its text: not part of the output
+        for h in r.buckets.get("session") or []:
+            if isinstance(h, dict):
+                h.pop("matched", None)
         print(json.dumps({
             "allowed": True,
             "query": r.query,

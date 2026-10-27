@@ -57,6 +57,10 @@ class RecallResult:
     total_matches: int = 0
 
 
+# the "N more matching messages ... not shown" line of a session hit, at most
+_REST_LINE_MAX = 110
+
+
 class SessionRecall:
     """FTS5-based session search and recall engine."""
 
@@ -419,14 +423,17 @@ class SessionRecall:
         return "\n\n".join(h["text"] for h in hits)
 
     def recall_about_hits(self, topic: str, max_sessions: int = 3, budget_chars: int = 3000,
-                          exclude_session_id: str | None = None) -> list[dict]:
-        """One ``{"session_id", "date", "text"}`` per matched session.
+                          exclude_session_id: str | None = None,
+                          max_per_session: int | None = None) -> list[dict]:
+        """One ``{"session_id", "date", "text", "matched"}`` per matched session.
 
         ``date`` is the YYYY-MM-DD of the session's best match, kept as a field
         so the relevance filter can judge age without parsing the text. The
-        character budget is distributed across sessions, prioritizing user and
-        assistant messages that contain the search terms; individual messages
-        are truncated at sentence boundaries when possible.
+        character budget is split across sessions (each at most *max_per_session*),
+        and each session's ``text`` stays within its share: its matched messages
+        WHOLE, best first, while they fit, then one line counting the rest -- a
+        message is never cut (CDF first principle). ``matched`` holds every matched
+        message whole, for the relevance gate only; it is never rendered.
         """
         result = self.search(topic, max_sessions=max_sessions,
                              exclude_session_id=exclude_session_id)
@@ -443,46 +450,36 @@ class SessionRecall:
             return sum(1 for t in terms if t in low)
 
         per_session = max(budget_chars // max(len(result.sessions), 1), 400)
+        if max_per_session is not None:
+            per_session = min(per_session, max_per_session)
 
         out: list[dict] = []
 
         for sess in result.sessions:
-            chars_used = 0
             ranked = sorted(
                 (m for m in sess.key_messages if _term_hits(m.get("content", ""))),
                 key=lambda m: (-_term_hits(m.get("content", "")), len(m.get("content", ""))),
             )
             if not ranked:
                 continue
+            # Each matched message WHOLE, best first, while they fit; the rest are
+            # counted (CDF first principle: a message is never cut). ``matched`` is
+            # every matched message's text, for the relevance gate, so a session
+            # whose best message is too long to show is judged by what it said.
+            from core.recall_filter import take_whole
+
+            def _line(m: dict) -> str:
+                return f"- {m.get('role', 'unknown').capitalize()}: {m.get('content', '')}"
             lines = [f"**{sess.date} · session {sess.session_id[:8]}**"]
-            for msg in ranked:
-                if chars_used >= per_session:
-                    break
-                role = msg.get("role", "unknown").capitalize()
-                content = msg.get("content", "")
-                remaining = per_session - chars_used
-                if len(content) > remaining:
-                    content = self._truncate_at_sentence(content, remaining)
-                lines.append(f"- {role}: {content}")
-                chars_used += len(content)
+            room = per_session - len(lines[0]) - _REST_LINE_MAX
+            shown, rest = take_whole(ranked, room, lambda m: len(_line(m)) + 1)
+            lines += [_line(m) for m in shown]
+            if rest:
+                lines.append(f"- ({len(rest)} more matching message"
+                             f"{'' if len(rest) == 1 else 's'} in this session not shown, so "
+                             f"that each one shown stays whole)")
             out.append({"session_id": sess.session_id, "date": sess.date,
-                        "text": "\n".join(lines).strip()})
+                        "text": "\n".join(lines).strip(),
+                        "matched": "\n".join(m.get("content", "") for m in ranked)})
 
         return out
-
-    @staticmethod
-    def _truncate_at_sentence(text: str, max_chars: int) -> str:
-        """Truncate text at the nearest sentence boundary within max_chars."""
-        if len(text) <= max_chars:
-            return text
-        # Find last sentence-ending punctuation before max_chars
-        truncated = text[:max_chars]
-        for end_marker in (". ", ".\n", "! ", "? "):
-            pos = truncated.rfind(end_marker)
-            if pos > max_chars // 3:  # Don't cut too early
-                return truncated[: pos + 1]
-        # No good sentence boundary — cut at last space
-        space_pos = truncated.rfind(" ")
-        if space_pos > max_chars // 3:
-            return truncated[:space_pos] + "…"
-        return truncated + "…"

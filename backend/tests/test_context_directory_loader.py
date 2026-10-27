@@ -1412,18 +1412,17 @@ class TestInverseTruncationCoherence:
     LATIN_TOKENS_PER_WORD, so a truncated section actually fits its token cap.
     A hardcoded inverse (old `* 3 / 4`) over-shot by ~65% after recalibration."""
 
-    def test_daily_truncation_fits_cap(self):
-        from core.prompt_builder import _truncate_daily_content, TOKEN_CAP_PER_DAILY_FILE
+    def test_daily_within_budget_fits_cap(self):
+        from core.prompt_builder import _daily_within_budget, TOKEN_CAP_PER_DAILY_FILE
         from core.context_directory_loader import ContextDirectoryLoader
-        # Build content well over the cap (pure latin, ~5000 words)
-        big = " ".join(f"word{i}" for i in range(5000))
+        # Content well over the cap, as whole ``## `` entries
+        big = "\n\n".join(f"## 1{i}:00 | s{i}\n" + " ".join(f"word{j}" for j in range(200))
+                           for i in range(25))
         assert ContextDirectoryLoader.estimate_tokens(big) > TOKEN_CAP_PER_DAILY_FILE
-        out = _truncate_daily_content(big)
-        # Strip the marker line before re-estimating the kept content
-        kept = out.split("\n\n", 1)[1]
-        est = ContextDirectoryLoader.estimate_tokens(kept)
-        # Must fit under cap (with small headroom for the inverse rounding)
-        assert est <= TOKEN_CAP_PER_DAILY_FILE, f"truncated content {est} > cap {TOKEN_CAP_PER_DAILY_FILE}"
+        out = _daily_within_budget(big)
+        est = ContextDirectoryLoader.estimate_tokens(out)
+        assert est <= TOKEN_CAP_PER_DAILY_FILE, f"kept content {est} > cap {TOKEN_CAP_PER_DAILY_FILE}"
+        assert out.split("\n\n", 1)[1] in big          # whole entries, as written
 
     # test_section_truncation_fits_target DELETED 2026-08-14: it exercised the
     # dead read-line `_truncate_section` (removed — read-line no longer truncates).

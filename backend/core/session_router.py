@@ -858,9 +858,10 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
     """Flatten a BucketedRecall into TSCC's structured per-hit list — the REAL
     hits that were recalled this turn (source + score + domain), NOT a re-run.
 
-    Shape per hit: {domain, source, score, method, text}. Size-bounded by the
-    recall caps already in recall_multi (max_sections=3/domain, content truncated),
-    so this is a few KB. Best-effort: a per-hit shape surprise is skipped and a
+    Shape per hit: {domain, source, score, method, text}; the "not shown" notes the
+    budget adds (``kind == "omitted"``) are not hits and are left out. Size-bounded by
+    the recall caps (max_sections=3/domain) and the 400-character text preview, so
+    this is a few KB. Best-effort: a per-hit shape surprise is skipped and a
     structural failure returns the partial list — it never raises, because a
     panel-observability helper must not break the recall leg. It does LOG and
     count that degradation, so a silently shortened list is still visible."""
@@ -906,8 +907,8 @@ def _flatten_recall_hits(result: Any) -> list[dict]:
         for domain, bucket in buckets.items():
             method = layers.get(domain, "")
             for h in (bucket or []):
-                if not isinstance(h, dict):
-                    continue
+                if not isinstance(h, dict) or h.get("kind") == "omitted":
+                    continue        # a "not shown" note names hits; it is not one
                 text = (h.get("text") or h.get("content") or h.get("body")
                         or h.get("heading") or "")
                 score = _score_for(h)

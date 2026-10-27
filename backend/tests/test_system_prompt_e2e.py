@@ -246,9 +246,9 @@ def _simulate_build(
                     # copy of the cap*3/4 inverse drifted from the calibrated
                     # coefficient (Gate-1 finding A). Import the real function so
                     # this e2e exercises the production path, not a stale copy.
-                    from core.prompt_builder import _truncate_daily_content
-                    daily_content = _truncate_daily_content(
-                        daily_content, TOKEN_CAP_PER_DAILY_FILE
+                    from core.prompt_builder import _daily_within_budget
+                    daily_content = _daily_within_budget(
+                        daily_content, TOKEN_CAP_PER_DAILY_FILE, daily_file.stem
                     )
                 context_text += f"\n\n## Daily Activity ({daily_file.stem})\n{daily_content}"
 

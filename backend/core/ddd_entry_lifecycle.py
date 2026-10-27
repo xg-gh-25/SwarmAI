@@ -730,10 +730,12 @@ def split_blocks(body: str) -> "list[tuple[str, str]]":
     at blank lines into ``("block", text)`` -- a paragraph, a table, a ``###`` heading with
     the lines under it. For docs written as prose (PRODUCT): a whole ``## `` section is
     too coarse to rank (one 40K-character section matches any query), a paragraph is not.
-    run-knowledge §3.6.9."""
+    run-knowledge §3.6.9. A fenced code block is one block: a blank line or a ``- `` line
+    inside a fence is code, and cutting there would show half of it."""
     lines = body.splitlines()
     out: list[tuple[str, str]] = []
     buf: list[str] = []
+    fence = ""
 
     def flush() -> None:
         text = "\n".join(buf).strip()
@@ -742,6 +744,16 @@ def split_blocks(body: str) -> "list[tuple[str, str]]":
         buf.clear()
     i = 0
     while i < len(lines):
+        mark = lines[i].lstrip()[:3]
+        if mark in ("```", "~~~") and (not fence or fence == mark):
+            fence = "" if fence else mark
+            buf.append(lines[i])
+            i += 1
+            continue
+        if fence:
+            buf.append(lines[i])
+            i += 1
+            continue
         if lines[i].startswith("- "):
             flush()
             _text_end, _meta, end = _scan_entry(lines, i)

@@ -35,9 +35,9 @@ BEFORE_TOP = {"review": 5}
 
 
 def _found(expect: list[str], hits: list[dict]) -> list[str]:
-    from core.recall_filter import HIT_CHAR_CAP, clip
-    # a row that only NAMES entries (omitted / pointer) shows none of their text
-    texts = [str(h["shown"]) if "shown" in h else clip(str(h.get("content") or ""), HIT_CHAR_CAP)
+    # a row that only NAMES entries (omitted / pointer) shows none of their text; the
+    # "before" rows (plain top-N entries) are counted whole, as every reader shows them
+    texts = [str(h["shown"]) if "shown" in h else str(h.get("content") or "")
              for h in hits if h.get("kind") not in ("omitted", "pointer")]
     return [e for e in expect if any(e in t for t in texts)]
 

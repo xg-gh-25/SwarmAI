@@ -51,7 +51,7 @@ def _large_memory() -> str:
     )
     sections = []
     for name, body in [
-        ("COE Registry", "COE05 exit code -9 cascading SIGKILL OOM\n" + pad * 40),
+        ("COE Registry", "COE05 exit code -9 cascading SIGKILL OOM\n\n" + pad * 40),
         ("Lessons Learned", "streaming render lesson\n" + pad * 40),
         ("Key Decisions", "caching prefix decision\n" + pad * 40),
         ("Open Threads", "- one open thread\n"),
@@ -122,8 +122,8 @@ def test_bare_date_query_surfaces_date_entry():
     pad = ("lorem ipsum dolor sit amet " * 80 + "\n")
     # No index block at all — recall is index-free now (STEP5a).
     mem = "\n\n".join([
-        "## COE Registry\n- 2026-03-17: **COE05 exit code -9** — sigkill oom\n" + pad * 40,
-        "## Decisions\n- 2026-05-01: **caching decision** — prefix cache\n" + pad * 40,
+        "## COE Registry\n- 2026-03-17: **COE05 exit code -9** — sigkill oom\n\n" + pad * 40,
+        "## Decisions\n- 2026-05-01: **caching decision** — prefix cache\n\n" + pad * 40,
         "## Open Threads\n- one open thread\n",
     ])
 
@@ -460,7 +460,7 @@ def test_p2_cjk_content_not_dropped():
 def test_p2_normal_entries_moved_whole_no_midword_cut():
     """P2 (normal path): entries that FIT are returned WHOLE — never mid-entry or
     mid-word cut. Several small entries, budget fits ~2 of them: each surfaced entry
-    is byte-for-byte intact (no partial entry, no `[…truncated]` on the normal path)."""
+    is byte-for-byte intact, and the rest are named, not quoted."""
     from core import context_recall
 
     entries = [
@@ -471,22 +471,17 @@ def test_p2_normal_entries_moved_whole_no_midword_cut():
     sliced = context_recall._slice_section_entries(
         body, "complete self-contained lesson entry", budget_tokens=120,
     )
-    assert "[…truncated]" not in sliced, "normal-path entry was truncated (must move whole)"
-    # Every surfaced entry must appear byte-for-byte (whole block), none partial.
     surfaced = [e for e in entries if e in sliced]
     assert surfaced, "no entry surfaced"
-    # No partial fragment of any entry may appear without its whole form.
     for e in entries:
         head = e[:40]
         if head in sliced:
             assert e in sliced, f"entry surfaced PARTIALLY (severed mid-entry): {head!r}"
 
 
-def test_p2_single_over_budget_entry_bounded_at_sentence_no_midword():
-    """P2 (pathological single-giant-entry): stays BOUNDED (recall must not dump a
-    30K entry) but truncates at a SENTENCE boundary with a marker — never mid-word.
-    The whole-entry ideal yields to bounding here (a single giant entry is a data
-    pathology), but semantics still degrade gracefully at sentence granularity."""
+def test_p2_single_over_budget_entry_is_named_not_cut():
+    """P2 (single giant entry): recall stays bounded and shows NO part of it (CDF first
+    principle): the entry is named by its title and length, so the reader can read it."""
     from core import context_recall
     from core.context_directory_loader import ContextDirectoryLoader as C
 
@@ -496,30 +491,25 @@ def test_p2_single_over_budget_entry_bounded_at_sentence_no_midword():
         + "Final trailing sentence.\n"
     )
     sliced = context_recall._slice_section_entries(
-        body, "giant pitfall sentence detail", budget_tokens=200,
+        body, "giant pitfall sentence detail", budget_tokens=200, where="MEMORY.md#Pitfalls",
     )
-    # BOUNDED: must not exceed budget (with small whole-sentence granularity slack).
-    assert C.estimate_tokens(sliced) <= 200 * 1.1, f"not bounded: {C.estimate_tokens(sliced)}"
-    # MARKED so the reader knows more exists.
-    assert "[…truncated]" in sliced
-    # NO mid-word cut: the text before the marker ends at a sentence terminator.
-    core_text = sliced.replace(" […truncated]", "").rstrip()
-    assert core_text[-1] in ".!?", f"truncated mid-clause, not at a sentence boundary: {core_text[-30:]!r}"
+    assert C.estimate_tokens(sliced) <= 200
+    assert "Second sentence" not in sliced
+    assert f"MEMORY.md#Pitfalls: giant ({len(body.strip())} characters)" in sliced
 
 
-def test_p2_freeform_section_bounded_at_sentence():
-    """P2 (free-form section, no parseable entries): stays BOUNDED but truncates at
-    a sentence boundary — never a raw word-count cut mid-thought."""
+def test_p2_freeform_section_is_named_when_its_block_does_not_fit():
+    """P2 (free-form section, one giant paragraph): bounded, and the paragraph is named,
+    not cut at a sentence."""
     from core import context_recall
     from core.context_directory_loader import ContextDirectoryLoader as C
 
     body = "This is a long free-form note. " + ("Detail sentence here. " * 400) + "Final."
     sliced = context_recall._slice_section_entries(
-        body, "free-form note detail", budget_tokens=200,
+        body, "free-form note detail", budget_tokens=200, where="F.md#S",
     )
-    assert C.estimate_tokens(sliced) <= 200 * 1.1, f"not bounded: {C.estimate_tokens(sliced)}"
-    core_text = sliced.replace(" […truncated]", "").rstrip()
-    assert core_text[-1] in ".!?", f"free-form truncated mid-clause: {core_text[-30:]!r}"
+    assert C.estimate_tokens(sliced) <= 200
+    assert "Detail sentence" not in sliced and f"F.md#S ({len(body)} characters)" in sliced
 
 
 # ── STEP5a: recall read-path is INDEX-FREE (body-BM25, unified retrieval) ───
