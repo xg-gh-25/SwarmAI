@@ -426,6 +426,44 @@ S2 和 DailyActivity 是同一份对话记录的两个并列产物。**S2 不从
 - **权重**：用户的判断和取舍、度量证据，高于 agent 推断。
 - **读取侧**：注入预算（§12）的排序和褪色，在层级生命周期的基础上，再乘上独立证据的次数。元认知不褪色，操作层褪得最快；被反复独立证实的条目排在前面。这一步放在阶段 C 实施。
 
+### 5.9 从目的地反推：什么进哪里，多快生效
+
+去向由卡 1 的形态和 scope 决定（`route_for`），source 只给提示。
+
+| 目的地 | 放什么 | 卡 1 形态 | 主要来源 | 要求多快生效 | 读取方式 |
+|---|---|---|---|---|---|
+| `STEERING` | 用户希望 agent 怎么工作：偏好、品味、工作规则（例如"先出 mockup"） | UserCross / preference | S1、S2 | **下一轮**（S1 立即；S2 在 session 结束后） | 每轮注入 |
+| `USER` | 用户是谁：角色、背景、长期目标 | UserCross / profile | S1、S2 | 下一个 session | 每轮注入 |
+| `TOOLS` | 用户的环境：机器、账号、工具、路径约定 | UserCross / environment | S1、S2 | 下一个 session | 每轮注入 |
+| `EVOLUTION` | agent 自身的纠错和能力，跨项目通用 | Agent | S1（纠正）、S2、S3 第 3 段、S5 | 纠正类**下一轮**；能力类按天 | 每轮注入 |
+| `MEMORY` | 跨项目都成立的认知：原则、决定、经验、坑、心智模型 | WorldCrossGlobal（`global_relevance=true`） | S2、S3（跨项目的结论）、S1 | 下一个 session | 每轮注入（阶段 C 按预算选取） |
+| `TIMELINE` | 关键事件 | `kind=event` | S1、S2、S3 第 1 段、S4 | 下一个 session | 注入最近 10 条和当月摘要，其余走 recall |
+| `DDD`（PROJECT / PRODUCT / TECH / IMPROVEMENT） | 只属于某个项目的决定、产品取舍、架构、约定、陷阱、经验、改进点 | ProjectSingle、UserSingle、WorldSingle，以及 `gap` | S3（主要）、S2、S4 | **同一项目的下一个 run 之前** | 按项目注入 section 指针（不变） |
+| `Knowledge/Learned` | 可复用的技术知识（某个库怎么用、某类问题怎么查） | Reference / learned | S2、S6 | 按天 | 只走 recall，不注入 |
+| `Knowledge/Notes` | 调研和分析的结论文档（原 backflow） | Reference / analysis | S2 | 按天 | 只走 recall |
+| `Knowledge/Library` | 规格、外部文档；所有被污染的 Reference | Reference / spec | S6、S2 | 按天 | 只走 recall，放在不可信数据边界内渲染 |
+
+**通用 Knowledge 只放 Reference**，也就是"查得到就够"的资料，不放规则类认知。规则类认知只能进上面每轮注入的文件或 DDD。
+
+**run 没有绑定 DDD 时**（只有仓库，没有对应项目）：
+- 跨项目成立的结论照常进 MEMORY 或 EVOLUTION；
+- 只属于这个仓库的决定、经验、陷阱，**不进 MEMORY**（避免项目内容污染全局，§2.1 实测 57% 是项目专属），也不进通用 Knowledge 当规则用。它们写成 Reference 放进 `Knowledge/Learned/<repo>/`，frontmatter 标 `project_hint: <repo>`，只走 recall；
+- 同一个仓库累计到 3 条以上时，Need You 出一条提示："这个仓库已经积累了 N 条经验，要不要建一个 DDD"；
+- 建好 DDD 之后，系统不搬已有文件（§13，已写内容不动）。之后的 run 直接写进 DDD；DDD 规则在召回时可以引用 `project_hint` 相同的 Reference。
+- `gap`（改进点）没有项目可去时，只留在 run 的记录和 REPORT 里。
+
+**时效分档**（和 §6 的 lane 对应）：
+
+| 档 | lane | 目标 | 例子 |
+|---|---|---|---|
+| 下一轮 | `immediate` | 秒级 | 用户纠正、"记住"、偏好 |
+| 下一个 session | `session` | session 结束后 30 分钟内 | 会话中的决定、经验、事件 |
+| 下一个 run | `run` | run 结束后 30 分钟内，同一项目的下一个 run 开始前必须完成 | REFLECT 五段报告 |
+| 按天 | `scheduled` | 12 小时内 | 代码变更、系统度量、外部信号 |
+| 按月 / 按天汇总 | `maintenance` | 36 小时内 | TIMELINE 月度摘要、DailyActivity 日汇总 |
+
+同一项目的下一个 run 启动时，如果该项目还有没处理完的 `run` lane 候选，worker 先处理它们，再允许新 run 读取 DDD。
+
 ### 5.8 长度上限
 
 source 不把整段会话原样塞进 payload。payload 有长度上限，但遵守第一准则：
