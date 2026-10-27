@@ -258,7 +258,7 @@ CDF 的所有表放在一个独立的 SQLite 文件里：`<app data>/ingestion.d
 
 | 字段 | 内容 |
 |---|---|
-| `op_id`、`op_kind` | `op_kind` 取值：`ingestion_unit`、`user_edit`、`user_tree_move` |
+| `op_id`、`op_kind` | `op_kind` 取值：`ingestion_unit`、`user_edit`、`user_tree_move`、`user_redact`（§13） |
 | `target_path`、`before_hash` | 目标文件，以及计划生成时它的哈希 |
 | `intended_bytes`、`after_hash` | 目标文件写完之后的完整内容和哈希 |
 | `archive_path`、`archive_hash` | 需要归档时，归档文件的位置和内容哈希 |
@@ -353,7 +353,7 @@ flowchart TB
 | **S3 Run** | REFLECT | 和这个 run 关联的一切：需求、design/plan、review finding、人工回答、validation、**这个 run 落地的 commit** | `run`（专用通道，§5.9） | 五段知识报告（§5.5） |
 | **S4 代码变更** | `ddd_refresh`、`code_change_feed` 的技术漂移检测 | 不由任何 run 落地的 commit（人手动提交的、外部合并进来的） | `scheduled` | 架构形状、约定（多数是 Reference，§9）、事件 |
 | **S5 系统度量** | `evolution_optimizer`、eval governance | **跨 run 的聚合指标**。单个 run 的统计归 S3 | `scheduled` | agent 能力相关的纠错和经验、改进点 |
-| **S6 外部信号** | `signal_ddd_bridge`、Library inbox、`s_learn-content` / `s_library` 抓取的外部内容 | 证据根是 `external` 的内容。决定它归 S6 的是证据根本身，不看它是从哪个会话里产生的 | `scheduled` | 只产出 Reference |
+| **S6 外部信号** | `signal_ddd_bridge`、Library inbox、`s_learn-content` / `s_library` 在会话之外抓取的外部内容 | 不属于任何会话或 run 的外部内容。会话里出现的工具结果、网页等 `external` 根归 S2，run 里的归 S3；同一个根经由多个 source 出现时，`evidence_roots` 里只有一个 root，按 §5.8 去重 | `scheduled` | 只产出 Reference |
 
 **去重键**改为"规范证据根 + 语义 claim 哈希"，不再包含 source（§4.1）。claim 哈希依赖 LLM 生成的文本，所以只有文本完全相同时才由键合并；其余情况靠卡 3，跨 source 的重复在 holdout 里单独统计。
 
@@ -384,9 +384,9 @@ flowchart TB
 | 单元类型 | 语义字段（不得截断） | 必填 | 条件必填 | 去向 |
 |---|---|---|---|---|
 | **CognitionUnit** | `title`、`what`、`how`、`why`、`applicability`、`rejected_alternatives` | `type`、`scope`、`title`、`what`、`evidence` | `decision` 必须有 `why` 和 `rejected_alternatives`（没有被否掉的方案就写"无"）；`pitfall` 必须有触发条件（写在 `applicability`）；`process` 必须有 `how`；写进 DDD 时 what/how/why 三项齐全（§7.2）；其余字段如实留空，**不允许编造** | 按 scope 和形态路由（§5.10） |
-| **EventUnit** | `title`、`what`、`impact`、`outcome`、`follow_up` | `when`、`title`、`what`、`evidence` | `impact` 或 `outcome` 至少一项 | TIMELINE |
+| **EventUnit** | `title`、`what`、`impact`、`outcome`、`follow_up` | `event_kind`（`event` / `month_summary` / `month_supplement`，默认 `event`）、`when`、`title`、`what`、`evidence` | `impact` 或 `outcome` 至少一项 | TIMELINE |
 | **GapUnit** | `title`、`what`、`why`、`proposed_next` | `title`、`what`、`evidence`、`gap_kind`（`debt` / `risk` / `deferred_finding` / `process_issue` / `follow_up`） | — | DDD IMPROVEMENT / PROJECT，或公共 DDD（§5.10） |
-| **ReferenceUnit** | `title`、`summary`、`body` | `reference_kind`（`learned` / `analysis` / `design` / `spec` / `note`）、`title`、`summary`、`body`、`evidence` | `summary` 必须是一句完整、能独立读懂的话 | `Knowledge/` 中与 `reference_kind` 对应的文件夹（§5.12） |
+| **ReferenceUnit** | `title`、`summary`、`body` | `reference_kind`（`learned` / `analysis` / `design` / `spec` / `note` / `link`）、`title`、`summary`、`body`、`evidence`；`link` 另须 `source_url`（§5.12） | `summary` 必须是一句完整、能独立读懂的话 | `Knowledge/` 中与 `reference_kind` 对应的文件夹（§5.12） |
 
 所有单元还有这些字段：`scope`（`user` / `agent` / `project:<name>` / `world`，Reference 和 Event 的 scope 可选）、`evidence`（证据锚点列表，§9）、`relation_hint`（可选）。
 
@@ -461,7 +461,7 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
     - **首版的实际产出接近零**：现在的 `human_answer` 只有 `{request_id, option_id}`，决定卡只能选已声明的选项，没有附言。被选中的选项文字是 agent 写的，按 §9 属于 agent 生成的文档，取父根里最差的一级，不算人工文本。所以首版这一遍只在决定卡带人工文本时才有输入；只选了一个选项（例如"选 B"）的，这一遍没有输入，这类决定由五段报告写进 DDD。给决定卡加附言不在本设计范围内。
   - **主提取**：上面的五段报告。它读代码和 review 文本，产出带 `external` 根；目的地是注入文件时按 §9.1 改投。
 - 旧的 `reflect-prepare` 格式不兼容。旧 run 和切换时正在运行的 run 进入 REFLECT 后允许失败，失败记录在 run 自己的记录里，不重试。
-- Gap 不参与强化。之后被某个 run 解决时，用一条 `supersedes`（GapUnit → resolution）标为已解决，原文不改。
+- Gap 不参与强化。之后被某个 run 解决时，用一条 `supersedes`（resolution —supersedes→ GapUnit，新指向旧）标为已解决，原文不改。
 - PROJECT 的 Current Focus 和 Blocked By 是实时状态，S3 不写，由 Projects 页面渲染。
 
 **S4 代码变更**：只处理 S3 没有认领的 commit。diff 和 commit message 都是 `external` 证据根，和 S3 读代码的处境一样，所以按同一条信任下限处理（§9）：
@@ -478,7 +478,7 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
 ### 5.6 TIMELINE：长期的关键事件
 
 - **文件**：`.context/TIMELINE.md`，属于受管文件。按月分节（`## 2026-10`），每个事件是一个带 `cand:` 标记的块。`parse_units()` 要支持这种块格式。
-- **EventUnit 的稳定身份**：`event_key = hash(规范证据根 + when 的日期 + 规范化的 title)`。`event_key` 同样依赖生成的标题：文本完全相同时由键合并，其余由卡 3 对 TIMELINE 里同一日期附近的事件判 same。合并时各自的证据都登记到 `claim_support`（§5.8）。
+- **EventUnit 的稳定身份**：`event_key = hash(规范证据根 + when 的日期 + 规范化的 title)`。`event_key` 同样依赖生成的标题：文本完全相同时由键合并，其余由卡 3 对 TIMELINE 里同一日期附近的事件判 same。后到的那条记为 `already_exists`，它的证据根记在审计里；Event 不参与强化，不写 `claim_support`（§5.8）。
 - **重要性判断**（卡 1 的 Event 题）：满足以下任意一条才收录：
   - 改变了方向（产品方向或技术路线）；
   - 造成了损失或返工：用户纠正了已交付的结果、出了事故、run 失败后重来；
@@ -487,7 +487,7 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
   - 用户明确说"记住这件事"。
 
   日常操作不收录。
-- **只追加**：月度摘要也是追加的。每个月结束后，由 `summary` lane（§6）为上个月追加一个 `EventUnit(kind=month_summary)`，放在该月节的**末尾**，内容引用被汇总的事件锚点，原有事件不改。晚到的事件（月份已经汇总过之后才进来）照样追加，并追加一条"补充摘要"，不重写原摘要。
+- **只追加**：月度摘要也是追加的。每个月结束后，由 `summary` lane（§6）为上个月追加一个 `EventUnit(event_kind=month_summary)`，放在该月节的**末尾**，内容引用被汇总的事件锚点，原有事件不改。晚到的事件（月份已经汇总过之后才进来）照样追加，并追加一条"补充摘要"（`event_kind=month_supplement`），不重写原摘要。
 - **注入**：以整个单元为单位，先放当月和上月的摘要，再按时间倒序放最近的事件，直到预算用完（默认 1.5K tokens，按实测分布调整）。单个事件超过预算时整条不注入，只能通过 recall 找到。被省略的条数显示在 Flow 视图的健康区。被污染的事件不注入，只能通过 recall 找到，并放在不可信数据边界里。
 - **Retro**：Cognition 可以带 `derived_from → <event anchor>`。Retro 时按时间范围列出事件，再顺着关系找到从中提炼出的认知，以及每条认知后来被独立证实的次数。
 
@@ -707,7 +707,7 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 
   只在会话里一闪而过的链接不收。
 - **去向**：`Knowledge/Library/Links/<规范化的主机名>.md`。按主机名分文件，不按主题，这样卡 2 是确定性的。每个链接是一个单元，格式和 DDD 条目一样：`- [link] **title** <url>`，再加一行 meta，带 `cand:`、`summary`、`retrieved_at`、`taint: external`。
-- **一个文件多个单元**（`Library/Links/*.md`、`Learned/domains|repos|_common/*.md`）：文件 frontmatter 的 `ingestion_candidate` 写 `n/a (multi-unit)`，每个单元的 id 只记在单元自己的 meta 行里。`sync_knowledge_index` 对这类文件**按单元切块**（一个单元块是一个 chunk，块边界由 `parse_units()` 给出），所以每个单元都能被 recall 单独检索到、并且返回完整的单元。这是阶段 B 的改动。
+- **一个文件多个单元**（`Library/Links/*.md`、`Learned/domains|repos|_common/*.md`）：文件 frontmatter 的 `ingestion_candidate` 和 `source` 都写 `n/a (multi-unit)`，每个单元的 id 和 source 只记在单元自己的 meta 行里。`sync_knowledge_index` 对这类文件**按单元切块**（一个单元块是一个 chunk，块边界由 `parse_units()` 给出），所以每个单元都能被 recall 单独检索到、并且返回完整的单元。这是阶段 B 的改动。
 - **去重**：URL 规范化之后作为证据根（`root_kind=web_document`）。规范化包括：scheme 和主机名转小写、去掉 fragment、去掉 `utm_*` 这类追踪参数、去掉末尾的 `/`。同一个 URL 只保存一条。规范化后的 URL 就是证据根，所以之后再出现属于"证据根相同的完全重复"，在卡 0 `REJECT already_exists`；链接和其他 Reference 一样不参与强化（§5.8）。同一个链接的新说明（比如它现在覆盖了更多内容）按 refine 处理：写一条新单元，再加一条 `supersedes`，原文不改。
 - **信任**：链接和它的说明都算 `external`，只能当参考资料用，永远不会变成规则，召回时放在不可信数据边界里渲染。
 - **写入时不访问链接**：CDF 写入链接时**不发起任何网络请求**，所以不存在 SSRF 风险。需要正文的时候，由 agent 按 `security-coding-baseline` A2 的规则去抓取：只接受 https，解析出的 IP 不能是内网、回环或链路本地地址，每次重定向都重新校验，所有出站请求都记日志。
@@ -748,7 +748,7 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 
 ### 6.2 调度：有优先级，也要公平
 
-- **按权重轮转**：权重为 immediate 8、session 4、run 4、scheduled 2、maintenance 1。每个 lane 都有最长等待时间：session 和 run 是 30 分钟，scheduled 是 12 小时，maintenance 是 36 小时。超过这个时间，这个 lane 就插到队首。连续处理 immediate 不能超过 10 条，之后必须让给别的 lane。
+- **按权重轮转**：权重为 immediate 8、session 4、run 4、scheduled 2、summary 2、maintenance 1。每个 lane 都有最长等待时间：session 和 run 是 30 分钟，scheduled 是 12 小时，summary 和 maintenance 是 36 小时。超过这个时间，这个 lane 就插到队首。连续处理 immediate 不能超过 10 条，之后必须让给别的 lane。
 - **maintenance 的保底时隙**：清理和恢复只做 DB 操作和文件 I/O，不调 LLM。它们不受资源门控限制，只在 chat 流式输出时让路，最长让 10 分钟。
 
 ### 6.3 负载感知
@@ -782,16 +782,16 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 一批候选按下面的顺序处理，每一步的结果都写进 `ingestion_units`。
 
 1. **整理**（批内处理，不调 LLM）：根据信封和项目快照，用确定性规则算出 `project_candidates`，规则见本节末尾。然后解析 payload，只在信封和非语义字段上去掉会话 id、scratch 路径、PID、哈希这类噪音，语义字段原样保留（§5 第一准则）；批内内容完全相同的候选标为 `merged`。输出是若干 **claim-group**：一个结论，加上与它绑定的 why、how、依据和适用条件。拆分只在 claim-group 之间进行，同一个 group 内部的内容永远不拆开；没把握该怎么拆时，整条候选作为一个 group 交给卡 1。r16 起每个 source 都按 §5.3 的认知单元提取，一个认知单元就是一个 group。
-2. **卡 0：规则**（不调 LLM）：检查污染、注入扫描、噪音、长度、内容指纹完全相同、会话已删除、配额。
+2. **卡 0：规则**（不调 LLM）：注入扫描、噪音、长度、内容指纹完全相同、会话已删除、配额。污染在第 4 步处理，因为要先知道去向。
 3. **卡 1：复核**：调 1 次 LLM，一批候选可以打包成一次调用。输入是 source 提交的 v2 单元（§5.3），卡 1 复核它的类型、scope 和质量。输出 schema 是：**v2 单元类型 + 复核结论（成立 / 不成立，以及该类型对应的质量题答案）+ 可选的 `reroute_to`**（只能取契约允许的改投）。
-4. **污染约束**（确定性，在卡 2 之后、写入之前）：按 §9 的"目的地信任下限"表执行。目的地是每轮注入的文件时，被污染的 Cognition 按 §9.1 的表改投 `Knowledge/Learned/_common/user|agent|world.md`，不写进注入文件；目的地是项目 DDD 或 Knowledge 时，允许写入，但要标 `taint: external`。这条约束由代码执行，不依赖 prompt。
+4. **污染约束**（确定性）：先按卡 2 的规则算出**暂定去向**，再执行本步，然后才进入第 5 步的正式路由。按 §9 的"目的地信任下限"表执行。目的地是每轮注入的文件时，被污染的 Cognition 按 §9.1 的表改投 `Knowledge/Learned/_common/user|agent|world.md`，不写进注入文件；目的地是项目 DDD 或 Knowledge 时，允许写入，但要标 `taint: external`。这条约束由代码执行，不依赖 prompt。
 5. **卡 2：路由表**（确定性）：每种形状只对应一个去向。写入前会解析目标段是否存在。
 6. **目的地规则**（§7.2）：规则不通过时 `REJECT`，原因码标明是哪条规则。
 7. **改投**（可选，最多 1 次）：卡 1 可以给出 `reroute_to`，目的地规则 D2 也可能判定去向不对，这两种情况会触发改投。改投后的去向必须在契约允许的"形状 → 形状"映射表里，例如 `UserSingle ↔ ProjectSingle`、`WorldSingle → WorldCrossGlobal`（还需要 `global_relevance` 为真）。改投后从第 5 步重新走一遍：路由、目的地规则、卡 3。第二次再需要改投，或者映射表里没有合法目标，就记 `REJECT destination_mismatch`。
 8. **卡 3：和已有内容比对**：在目的地里检索。有命中时调 1 次 LLM，再由 `relation_for_hit` 和 `aggregate_hits` 两个纯函数算出动作。
 9. **写入**：由 writer 按写入日志（§4.3）完成。新单元带 `cand:<unit_id>` 和类型；需要的话，先归档旧单元再移除；最后写关系。
 
-**项目怎么定**：在整理阶段，按下面三条的顺序收集 `project_candidates`：source 给的显式绑定；source 所在 repo 对应的 DDD；项目快照里唯一涉及的那个 repo。卡 1 只能从这个列表里选项目。到了卡 2 之前，再由确定性的 resolver 核对一遍：候选列表为空，或者卡 1 选的项目不在列表里，就记 `DEFER ambiguous_project`。改投时，项目只能换成同一个列表里的另一个。
+**项目怎么定**：在整理阶段，按下面三条的顺序收集 `project_candidates`：source 给的显式绑定；source 所在 repo 对应的 DDD；项目快照里唯一涉及的那个 repo。卡 1 只能从这个列表里选项目，可以选多个（§7.2 D6）：选了 N 个项目时，worker 在卡 2 之前把单元确定性地展开成 N 个，`unit_id` 的槽位加上项目名，每个各走一遍后续流程、各是一次写操作，共用同一组证据根。到了卡 2 之前，再由确定性的 resolver 核对一遍：候选列表为空，或者卡 1 选的项目不在列表里，就记 `DEFER ambiguous_project`。改投时，项目只能换成同一个列表里的另一个。
 
 三者都确定不了，就 `DEFER ambiguous_project`。卡 1 只能从项目快照里选项目，不能自己编造。
 
@@ -801,10 +801,9 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 | 检查 | 不通过 |
 |---|---|
-| 被污染（§9），并且去向是每轮注入的文件 | Cognition 改投公共 DDD，带 taint（§9.1）；Event 写进 TIMELINE 的不注入区 |
 | `MemoryGuard` 扫描（附加检测，不是安全边界） | `REJECT unsafe` |
 | 噪音规则：会话 id、scratch 路径、PID、提交哈希、"N 个测试通过"之类，**只检查信封和非语义字段**；语义字段里的这些内容原样保留（§5 第一准则；S3 的证据锚点本来就有 `commit:`），易变数字由 D4 处理 | `REJECT noisy` |
-| 长度：rule 超过 600 字；reference 超过契约上限 | `REJECT not_atomic` / `too_large` |
+| 长度：rule 超过 600 字；reference 超过契约上限 | `REJECT not_atomic` / `too_large_incomplete` |
 | 内容指纹和某个受控单元完全相同，**并且证据根集合也相同** | `REJECT already_exists`。证据根不同的完全重复交给卡 3 和 §5.8 的强化判定 |
 | 会话已被删除 | `REJECT session_gone` |
 | 配额（§12） | `REJECT quota` |
@@ -874,7 +873,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 #### 卡 3：和已有内容的关系
 
-**检索语料**：一个专用的单元语料，范围是卡 2 选定的去向，加上每轮都会注入的 MEMORY、EVOLUTION、STEERING、USER、TOOLS、SOUL、AGENT；去向是 DDD 时，再加上该项目的另外三份文档。语料由**统一的单元解析器**生成（§7.3），用 `memory_index._bm25_scores` 打分。召回取三路结果的并集：内容指纹、标题或锚点、BM25 前 8 个。被取代的单元**不剔除**，它们的命中按 §7.3 转交给当前生效的那一条。
+**检索语料**：一个专用的单元语料，范围是卡 2 选定的去向，加上每轮都会注入的 MEMORY、EVOLUTION、STEERING、USER、TOOLS、SOUL、AGENT；去向是 DDD 时，再加上该项目的另外三份文档，以及 `Knowledge/Learned/repos/` 里 `project_hint` 相同的单元；同类单元还要加上 `Knowledge/Learned/domains/`、`repos/` 里的全部同类单元（§5.10）；去向是 `_common/` 的改投文件时，加上它的原目的地；去向是每轮注入的文件时，**不包含** `_common/`（§9.1）。语料由**统一的单元解析器**生成（§7.3），用 `memory_index._bm25_scores` 打分。召回取三路结果的并集：内容指纹、标题或锚点、BM25 前 8 个。被取代的单元**不剔除**，它们的命中按 §7.3 转交给当前生效的那一条。
 
 **检索结果带类型**：`OK_EMPTY` 直接新加，不调 LLM；`OK_HITS` 继续往下走；`UNAVAILABLE` 和 `STALE` 一律 `DEFER`。语料摘要由受控文件的单元哈希直接算出；只有当这个摘要和写入计划里的目标版本对不上时，才判为 `STALE`，下一次处理时重建语料。批内维护一个增量的内存索引：writer 每成功写入一条，就把它加进去，所以同一批里后面的候选能检索到刚写进去的内容。
 
@@ -887,7 +886,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | `claim_verdicts` | 候选的每条 claim 一个结论：`agrees` / `refines`（更细或更准）/ `refutes` / `independent`，并指出旧单元里对应的那一句 |
 | `scope_relation` | `equal` / `narrower`（候选更窄）/ `wider` / `disjoint` |
 
-**证据强弱**由来源信封决定（§9），是全序：`user_explicit` > `measured` > `review` > `run_lesson` > `inferred`。
+**证据强弱**由来源信封决定（§9），是全序：`user_explicit` > `measured` > `run_lesson` > `inferred`，全部由 §9 的服务端规则推导。
 
 **动作由两个纯函数算出**，判官只负责给出上面那张表：
 
@@ -904,7 +903,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 2. 有 `replace` 或 `exception`，同时又有 `duplicate` → `REJECT incompatible_hits`（同一批里既重复又冲突，说明已有内容自相矛盾，这时不再往里写）
 3. 有两个或以上 `replace` → `REJECT incompatible_hits`
 4. 恰好一个 `replace` → 替换那一条
-5. 有 `duplicate` → `REJECT already_exists`
+5. 有 `duplicate`：候选是 Cognition、被命中的单元是合格的 Cognition，并且候选带来 §5.8 定义的新独立证据根 → `reinforced`（写一条 `claim_support`）；否则 `REJECT already_exists`。Event、Gap、Reference 一律 `already_exists`
 6. 有 `exception` → 新加，作为例外。和被命中的单元之间的关系只记在审计里，首版不写关系表
 7. 有一个或多个 `refine` → 选分数最高的那一条，分数相同时取锚点字典序最小的那条。不管它是 `cand:` 单元还是基线单元，都**不原地修改**，按下面的"替换"流程生成一个新的有效单元（完整保留旧单元的全部主张；如果是 DDD 内容，保留 what、how、why），然后加一条 `supersedes`
 8. 其余 → 新加
@@ -1146,7 +1145,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 **安全和上限**（正文规定，不只写在修订记录里）：
 - 查询连接以 SQLite 的 `mode=ro` 打开，并设置 `query_only`。
 - 只读当前实例自己的 `ingestion.db`。需要来源信息时，再只读地查 `data.db` 的 `session_inputs`。
-- 列表每页最多 50 条，时间窗最长 30 天；详情接口里的 payload 和理由字段，单个最多 16 KB。
+- 列表每页最多 50 条，时间窗最长 30 天；详情接口每次响应里的 payload 和理由字段，单个最多 16 KB；更长的字段分块返回（带 `offset`），Flow 视图提供"加载更多"，能看到完整原文，不截断（§5 第一准则）。
 - 写入 Inbox 之前，先用现有的密钥扫描规则做脱敏；返回给前端时再扫一遍。
 - 所有文本都作为数据渲染（转义），从不返回存好的 HTML。
 - "打开原会话"和"打开文件"会先校验路径确实在工作区根目录下。
@@ -1229,7 +1228,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 
 ## 14. 实施和验收
 
-实施只分三个阶段。每个阶段在 worktree 里做完，ff-merge 进本地 main；不 push，也不 rebuild。每个阶段末尾只有一道验收门，过了再进下一阶段。
+实施只分三个阶段，每个阶段在 worktree 里做完。**阶段顺序约束的是上线，不是开工**：阶段 B 的实施和 E2E 可以在阶段 A 的 go/no-go 之前进行（§14.1）。关闭状态的 v2 提交可以合进本地 main；rebuild、切换提交的合入和生产切换，必须等 go/no-go 和阶段 B 的全量预演都通过。不 push。
 
 **阶段 A：离线 go/no-go（不改生产代码）**
 1. 实现 worker 的纯逻辑：整理、卡 0、卡 1 的 prompt、污染约束、卡 2、目的地规则、改投、卡 3 的检索和两个纯函数。全部放在 `core/ingestion/`，不接任何 source，也不写任何受控文件。
@@ -1251,7 +1250,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
      | 该写的召回率 | 单元 | 标签为该写的单元 | ≥ 75% | 180 | 145 |
      | 项目专属内容送到正确的 DDD | 单元 | 标签为项目专属的单元 | ≥ 80% | 150 | 129 |
      | D1 拦住缺 why 的条目 | 单元 | 标签为缺 why 的决定类条目 | ≥ 90% | 130 | 123 |
-     | 已知重复被判为"不变" | 对 | 标签为重复的对 | ≥ 90% | 90 | 86 |
+     | 重复且证据根相同 → `already_exists` | 对 | 标签为重复、证据根相同的对 | ≥ 90% | 90 | 86 |
+     | 重复但有新的独立证据根 → `reinforced` | 对 | 标签为重复、带新独立根的对 | ≥ 90% | 90 | 86 |
 
      预注册分母是保守取值：在真实准确率比门槛高 4 到 8 个点的前提下（精确率 97%、召回率 83%、路由 88%、D1 96%、重复 97%），通过的概率约为 82%、84%、81%、85%、87%。满足同样功效的最小分母更小一些，约为 185、167、135、116、76。计算脚本是 `scripts/ingestion_holdout_size.py`，它的输出由测试固定下来。作为参照：全对时，要证明 93% 至少需要 42 个样本，证明 90% 至少需要 29 个；现有的 15 篇 backflow 即使全对，下界也只有约 82%。缺 why 的条目和重复对这两类，真实样本不够时，可以通过改写真实条目来补，但补的部分不能超过分母的一半，并且单独报告。
    - **"被污染的 rule 不会进入每轮注入的文件"不做抽样统计**，因为有限样本证明不了"等于 0"。这一条改成安全不变量来保证：对形状、信任级别和去向的全部组合做全枚举测试和属性测试，并做 mutation 检查，要求零违规。
@@ -1371,8 +1371,8 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 
 | 事实 | 唯一来源 | 写 | 读 |
 |---|---|---|---|
-| source 的登记信息（lane、payload 格式、提示） | `store_contracts` | 人改 | `enqueue()`、worker |
-| 标准答题卡、路由表、DDD 段矩阵、配额、注入预算、Inbox 保留期 | `store_contracts` | 人改 | worker、读取侧 |
+| source 的登记信息（lane、单元类型、提示）、卡 1 的答案 schema、路由表、DDD 段矩阵 | `core/ingestion/contracts_v2.py` | 人改 | `enqueue()`、worker、本文表格的生成 |
+| 配额、注入预算、Inbox 保留期、目的地规则的版本 | `store_contracts` | 人改 | worker、读取侧 |
 | 目的地规则 | `core/ingestion_rules/*.py` | 人改 | worker |
 | 候选的原始内容和信封（最近 30 天） | `ingestion.db` 的 `ingestion_inbox` | `enqueue()` | worker、dashboard |
 | 单元的每张卡结果、去向、理由、状态（最近 30 天） | `ingestion.db` 的 `ingestion_units` | worker | worker、dashboard |
@@ -1388,8 +1388,8 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 | 墓碑 | `redactions` | 用户触发的 redaction（§13） | writer、读取侧 |
 | URL 凭证参数列表 | `contracts_v2.URL_CREDENTIAL_PARAMS` | 人改 | 入队校验 |
 | 单元契约 v2（类型、路由、ontology） | `core/ingestion/contracts_v2.py` | 人改 | 所有 source、卡 1/2、数据库约束、本文表格的生成 |
-| 关键事件 | `.context/TIMELINE.md` | writer（`event` 单元）、maintenance（月度摘要） | 注入、recall、Retro |
-| 一周工作记忆 | `Knowledge/DailyActivity/<date>.md` | DailyActivity 生成器（session 结束、日终汇总） | 注入（§5.7）、人 |
+| 关键事件 | `.context/TIMELINE.md` | writer（`event` 单元；月度摘要由 `summary` lane 生成，也经 writer 写入） | 注入、recall、Retro |
+| 一周工作记忆 | `Knowledge/DailyActivity/<date>.md` | DailyActivity 生成器（session 结束）；日终汇总由 `summary` lane 追加 | 注入（§5.7）、人 |
 | 配额的预留和扣减 | `ingestion_quota` | 卡 0、writer | 卡 0、dashboard |
 | 详情访问日志 | `ingestion_access_log` | worker（异步） | 审计 |
 | 唤醒凭证 | `<app data>/state/ingestion_wake.key`（权限 0600） | owner 启动时 | CLI、hook 子进程 |
@@ -1428,6 +1428,24 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - §5.10：新领域由用户用 `governed_edit` 在 `domains/` 下新建文件；`unknown_domain` 挂起，不消耗重试，不进 `failed_poison`，文件出现后重新排队，超过 30 天按 §4.4 清理；§14 的 deferred 时长验收不算它。
   - §5.8、§9.1：`root_kind` 加 `human_answer`（`trust=user`）；服务端校验接受本会话的 `user_message` 根或本 run 的 `human_answer` 根；写明 `ask_question_manager` 只在 `answered_by=person` 时记录 `human_answer`。
   - §5.5 S2（代码前提核实）：`session_inputs` 只存哈希，用户原话提取要从消息库读回原文、用同一个切分函数切出用户写的部分并核对哈希；写明没加标记的粘贴文本算作用户原话。
+  - 通读一致性修正（独立 reviewer 全文通读，17 处 blocker、3 处 minor；其中跨批次 supersedes 和 S3 证据根两处已由上面的条目解决）：
+    - §5.3：`reference_kind` 补上 `link`；EventUnit 加 `event_kind`（`event` / `month_summary` / `month_supplement`）。
+    - §4.3：`op_kind` 补上 `user_redact`。
+    - §5.2：S6 只拥有会话和 run 之外的外部内容，会话里的归 S2、run 里的归 S3。
+    - §7：污染约束放在卡 2 算出暂定去向之后，卡 0 不再检查污染。
+    - §7.1 `aggregate_hits`：`duplicate` 带新独立根时得 `reinforced`。
+    - §7.1 卡 3 语料补上 `domains/`、`repos/`、`_common/` 的规则。
+    - §5.6：Event 合并不写 `claim_support`。
+    - §7：卡 1 可选多个项目，worker 确定性展开成多个单元（D6）。
+    - §6.2：`summary` lane 加入轮转和最长等待；§16 的月度摘要和日终汇总归 `summary` lane。
+    - §16：卡 1 schema、路由表和段矩阵的唯一来源改为 `contracts_v2`。
+    - §5.5：Gap 的 `supersedes` 改为 resolution 指向 Gap。
+    - §7.1：证据强度去掉无法推导的 `review`。
+    - §14：写明阶段顺序约束上线、不约束开工。
+    - §14 holdout：重复对按证据根是否相同分成两项指标。
+    - §10：详情接口分块返回、不截断。
+    - §7.1：原因码统一为 `too_large_incomplete`。
+    - §5.12：多单元文件的 `source` 也写 `n/a (multi-unit)`。
   - §5.5 S3（代码前提核实）：`human_answer` 只有 `option_id`，选项文字是 agent 写的，不算人工文本；首版人工回答提取的实际产出接近零，如实写明。
 - **r16.4**（再一轮独立评审意见）：
   - §9.2、§5.5 S1："记住这个"这类不表达主张的消息，S1 单元判 `not_entailed` 后不丢弃，按 S2 主提取的规则处理，被污染就带 taint 进公共 DDD；回显写明去向，只进公共 DDD 时提示用户直接说出规则。
