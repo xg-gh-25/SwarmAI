@@ -35,18 +35,20 @@ class TestDetectOnlyInvariant:
             assert forbidden not in _AUDIT_TOOLS, f"{forbidden} would break detect-only"
         assert set(_AUDIT_TOOLS) <= {"Read", "Grep", "Glob"}
 
-    def test_the_command_limits_which_tools_exist_not_only_which_are_approved(self, monkeypatch):
-        """Under bypassPermissions, --allowedTools only auto-approves: without --tools
-        the agent still has Bash / Write / Edit. Both must name the read-only set."""
+    def test_the_command_gives_the_agent_nothing_but_confined_reads(self, monkeypatch):
+        """--allowedTools only auto-approves: --tools must name the read-only set; no MCP
+        server may load (Slack / mail would be a way out); --restricted confines Read to
+        the workspace and the bound repo and refuses bypassPermissions."""
         import jobs.handlers.ddd_self_audit as mod
         monkeypatch.setattr(mod, "_resolve_job_model", lambda: "m")
-        cmd = _build_review_cmd("claude", False, None, "P", None, "x")
-        assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob"
-        assert cmd[cmd.index("--allowedTools") + 1] == "Read,Grep,Glob"
-        assert "--strict-mcp-config" in cmd and "--mcp-config" not in cmd
-        with_mcp = _build_review_cmd("claude", True, "/tmp/m.json", "P", Path("/src"), "x")
-        assert with_mcp[with_mcp.index("--mcp-config") + 1] == "/tmp/m.json"
-        assert with_mcp.count("--add-dir") == 2 and "--bare" in with_mcp
+        for cmd in (_build_review_cmd("claude", False, "P", None, "x"),
+                    _build_review_cmd("claude", True, "P", Path("/src"), "x")):
+            assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob"
+            assert cmd[cmd.index("--allowedTools") + 1] == "Read,Grep,Glob"
+            assert "--strict-mcp-config" in cmd and "--mcp-config" not in cmd
+            assert "--restricted" in cmd and cmd[cmd.index("--permission-mode") + 1] == "dontAsk"
+            assert "bypassPermissions" not in cmd
+        assert cmd.count("--add-dir") == 2 and "--bare" in cmd
 
 
 class TestDomainAwarePrompt:

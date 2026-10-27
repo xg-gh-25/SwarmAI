@@ -219,15 +219,19 @@ evidence (it becomes the todo body — the whole point); `context` makes it acti
 At most 5 findings, highest-confidence first. If the DDD is accurate, say so in one line and emit no block."""
 
 
-def _build_review_cmd(claude_path: str, use_bare: bool, mcp_file: str | None,
-                      project_name: str, src: Path | None, prompt: str) -> list[str]:
+def _build_review_cmd(claude_path: str, use_bare: bool, project_name: str,
+                      src: Path | None, prompt: str) -> list[str]:
     """The review subprocess's command line. Pure, so the read-only guarantee is testable.
 
-    READ-ONLY needs BOTH flags: ``--tools`` is the set of tools that EXIST for the
-    agent, ``--allowedTools`` only auto-approves; under bypassPermissions,
-    ``--allowedTools`` alone leaves Bash / Write / Edit usable (the same lesson
-    scripts/scenario_runner.py records). Without ``--tools`` the "detect-only"
-    guarantee this handler relies on does not hold."""
+    The agent reads documents that may carry untrusted text, so it gets nothing else:
+    - ``--tools Read,Grep,Glob``: the tools that EXIST (``--allowedTools`` only
+      auto-approves; under bypassPermissions it left Bash / Write / Edit usable — the
+      lesson scripts/scenario_runner.py records);
+    - no MCP servers (``--strict-mcp-config`` with no ``--mcp-config``): an MCP tool
+      (Slack, mail) would be a way to send what it read off the machine;
+    - ``--restricted`` with ``dontAsk``: file tools confined to the workspace and the
+      bound repo (measured: a Read outside them is denied), anything unapproved denied
+      (restricted mode refuses bypassPermissions)."""
     cmd = [
         claude_path, "--print",
         *(["--bare"] if use_bare else []),
@@ -236,11 +240,10 @@ def _build_review_cmd(claude_path: str, use_bare: bool, mcp_file: str | None,
         # Same SSOT as every other job CLI (_resolve_job_model): a bare family
         # alias carries no `[1m]` suffix, which caps the context window and 400s.
         "--model", _resolve_job_model(),
-        "--permission-mode", "bypassPermissions",
+        "--restricted",
+        "--permission-mode", "dontAsk",
+        "--strict-mcp-config",
     ]
-    if mcp_file:
-        cmd += ["--mcp-config", mcp_file]
-    cmd.append("--strict-mcp-config")
     cmd += ["--tools", ",".join(_AUDIT_TOOLS), "--allowedTools", ",".join(_AUDIT_TOOLS)]
     cmd += ["--add-dir", str(SWARMWS)]
     if src:
@@ -258,11 +261,11 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     # Import executor primitives lazily (avoid import cycle: executor imports handlers).
     from ..executor import (
         _resolve_claude_cli, _check_claude_auth, _get_aws_credentials,
-        _cli_supports_bare, _cli_version, _load_mcp_config, _build_cli_env, _parse_cli_output,
+        _cli_supports_bare, _cli_version, _build_cli_env, _parse_cli_output,
         _write_job_result,
     )
     from ..models import Job, JobSafety, JobType
-    import subprocess, tempfile
+    import subprocess
 
     start = datetime.now(timezone.utc)
     config = config or {}
@@ -312,7 +315,6 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
 
     aws_creds = _get_aws_credentials()
     use_bare = _cli_supports_bare(claude_path, cli_version)
-    mcp_config = _load_mcp_config()
     env = _build_cli_env(aws_creds)
 
     report_lines = [f"# DDD Self-Audit — {start.strftime('%Y-%m-%d')}", ""]
@@ -324,15 +326,9 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         code_backed = _is_code_backed(project_dir)
         prompt = _build_audit_prompt(project_name, project_dir, code_backed)
 
-        mcp_file = None
-        if mcp_config:
-            mcp_file = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", prefix="swarm-audit-mcp-", delete=False)
-            json.dump(mcp_config, mcp_file); mcp_file.close()
         # Code-backed project: also grant read of the live SOURCE repo it describes.
         src = _source_repo_for(project_name) if code_backed else None
-        cmd = _build_review_cmd(claude_path, use_bare, mcp_file.name if mcp_file else None,
-                                project_name, src, prompt)
+        cmd = _build_review_cmd(claude_path, use_bare, project_name, src, prompt)
 
         try:
             proc = subprocess.run(
@@ -343,12 +339,6 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
             report_lines.append(f"## {project_name} — ⏱ timed out ({_PER_PROJECT_TIMEOUT_S}s), skipped")
             first_failure = first_failure or f"timeout: review timed out after {_PER_PROJECT_TIMEOUT_S}s"
             continue
-        finally:
-            if mcp_file:
-                try:
-                    Path(mcp_file.name).unlink(missing_ok=True)
-                except OSError:
-                    pass
 
         # Parse stdout regardless of exit code — purely for OBSERVABILITY, so a
         # genuine failure surfaces its REAL cause instead of an opaque "exit N".
