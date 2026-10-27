@@ -62,6 +62,38 @@ def test_dev_shim_runs_the_same_entry_point():
     assert '"$here/desktop_main.py" "$@"' in text
 
 
+def _shim_copy(tmp_path, venv: bool) -> Path:
+    """A backend dir with the real shim, a desktop_main.py that reports which python ran it,
+    and (optionally) a fake .venv python."""
+    import shutil
+    b = tmp_path / "backend"
+    (b / "bin").mkdir(parents=True)
+    shutil.copy2(SHIM, b / "bin" / "python-backend")
+    (b / "desktop_main.py").write_text("print('ran')\n")
+    if venv:
+        vpy = b / ".venv" / "bin" / "python"
+        vpy.parent.mkdir(parents=True)
+        vpy.write_text('#!/bin/sh\necho "venv $*"\n')
+        vpy.chmod(0o755)
+    return b / "bin" / "python-backend"
+
+
+def test_dev_shim_uses_the_checkout_venv(tmp_path):
+    shim = _shim_copy(tmp_path, venv=True)
+    r = subprocess.run([str(shim), "py", "-c", "x"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0
+    assert r.stdout.strip() == f"venv {shim.parents[1] / 'desktop_main.py'} py -c x"
+
+
+def test_dev_shim_without_a_venv_stops_instead_of_using_another_python(tmp_path):
+    # python3 is on PATH here; the shim must still refuse rather than run with it
+    shim = _shim_copy(tmp_path, venv=False)
+    r = subprocess.run([str(shim), "py", "-c", "x"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 127
+    assert "ran" not in r.stdout
+    assert ".venv" in r.stderr and "uv venv" in r.stderr
+
+
 def test_backend_bin_packaged_and_dev(monkeypatch, tmp_path):
     from utils import backend_bin as bb
     assert bb.python_argv() == [sys.executable]

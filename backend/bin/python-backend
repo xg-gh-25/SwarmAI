@@ -2,7 +2,12 @@
 # Dev shim for the backend program (design 2026-10-24-swarmai-usable-by-anyone §3.2): runs
 # backend/desktop_main.py with this checkout's venv, so a dev build and a packaged build take
 # the same commands — "$SWARM_BACKEND_BIN" daemon | pipeline-v1 ... | py <script> ...
+# No venv → stop. Any other python3 on PATH lacks the backend's dependencies, and running
+# with it fails later and far from here (an eval probe reporting a missing module).
 here="$(cd "$(dirname "$0")/.." && pwd)"
 py="$here/.venv/bin/python"
-[ -x "$py" ] || py="$(command -v python3)"
+if [ ! -x "$py" ]; then
+  echo "python-backend: no virtualenv at $here/.venv. Create it: cd \"$here\" && uv venv .venv && uv pip install -e '.[dev]' (a worktree can symlink the main checkout's backend/.venv)." >&2
+  exit 127
+fi
 exec "$py" "$here/desktop_main.py" "$@"
