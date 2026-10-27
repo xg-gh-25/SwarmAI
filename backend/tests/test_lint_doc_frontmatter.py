@@ -97,3 +97,23 @@ def test_unknown_base_fails_closed(tmp_path):
 def test_diff_without_base_is_a_usage_error(tmp_path):
     repo, _ = _repo(tmp_path)
     assert _lint(repo, "--diff").returncode == 2
+
+
+def test_hook_run_scripts_import_on_python_3_9():
+    """The repo-local pre-commit runs these with a bare ``python3``; on macOS that can be
+    the system Python 3.9, where a PEP 604 annotation (``str | None``) is evaluated when
+    the function is defined and the script dies before checking anything. Such an
+    annotation needs ``from __future__ import annotations``."""
+    import ast
+    for name in ("lint_doc_frontmatter.py", "sync_discussions.py"):
+        tree = ast.parse((LINT.parent / name).read_text(encoding="utf-8"), feature_version=(3, 9))
+        lazy = any(isinstance(n, ast.ImportFrom) and n.module == "__future__"
+                   and any(a.name == "annotations" for a in n.names) for n in tree.body)
+        notes = [a for n in ast.walk(tree)
+                 for a in ([n.returns] + [x.annotation for x in n.args.args + n.args.kwonlyargs]
+                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                           else [n.annotation] if isinstance(n, ast.AnnAssign) else [])
+                 if a is not None]
+        pep604 = [a for a in notes if any(isinstance(b, ast.BinOp) and isinstance(b.op, ast.BitOr)
+                                          for b in ast.walk(a))]
+        assert lazy or not pep604, (name, [ast.unparse(a) for a in pep604])

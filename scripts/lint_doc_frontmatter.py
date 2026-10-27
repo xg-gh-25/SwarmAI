@@ -17,7 +17,11 @@ adds or modifies, so an old doc is checked only when someone touches it.
 Exit codes:
     0 = all pass
     1 = violations found (prints details to stderr)
+
+The repo-local pre-commit runs this with a bare ``python3``, which on macOS can be the
+system Python 3.9: keep it stdlib-only and importable there (annotations stay lazy).
 """
+from __future__ import annotations
 
 import re
 import subprocess
