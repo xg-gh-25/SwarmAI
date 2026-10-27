@@ -6,9 +6,9 @@
  *  - 运行: what can be sent out now (idle workers), the fleet, then the runs by what
  *    they ask of the user — 等你 → 在跑 → 已安排 → 24 小时内结束.
  *  - 历史: one verdict sentence, the five audit dimensions side by side (no composite
- *    score), the runs themselves grouped by brain (DDD) or by Project Agent (runs with
- *    neither in a group of their own, last), runs per day, worker occupancy, and a
- *    breakdown by run type.
+ *    score), runs per day, worker occupancy, a breakdown by run type, and last the
+ *    runs themselves grouped by brain (DDD) or by Project Agent (runs with neither in
+ *    a group of their own, last).
  *
  * Responsive: the panel measures its own width (it shares the row with the chat
  * column, whose width the user drags, and the Canvas), not the window. Below
@@ -380,7 +380,6 @@ function History() {
           );
         })}
       </div>
-      <RunHistory />
       <div className="grid gap-x-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         <section className={`${card} mt-4`}><div className={cardHead}><h3 className="m-0 text-[13px] font-semibold">每天完成的 run</h3><span className="text-[12px] text-[var(--color-text-dim)]">近 14 天</span></div><DailyBars /></section>
         <section className={`${card} mt-4`}><div className={cardHead}><h3 className="m-0 text-[13px] font-semibold">工蜂占用</h3><span className="text-[12px] text-[var(--color-text-dim)]">近 7 天 · 每小时同时在跑几个</span></div><Occupancy /></section>
@@ -408,6 +407,7 @@ function History() {
         </table>
         </div>
       </Section>
+      <RunHistory />
     </div>
   );
 }

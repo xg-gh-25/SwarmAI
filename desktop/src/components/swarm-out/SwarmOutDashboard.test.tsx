@@ -315,6 +315,11 @@ describe('Run history by brain / Project Agent', () => {
     expect(groups.at(-1)?.textContent).toContain('大脑 SwarmAI');
   });
 
+  it('Run 记录 is the last section of the history view', () => {
+    openHistory();
+    expect(screen.getByTestId('swarm-out-history').lastElementChild).toBe(screen.getByTestId('run-history'));
+  });
+
   it('a group shows 5 runs and opens the rest', () => {
     openHistory();
     const big = groupsOf()[0];
