@@ -5,16 +5,22 @@ Single source of truth for CI smoke import on both Linux and Windows.
 Catches: missing deps, syntax errors, circular imports, Unix-only
 top-level imports (fcntl, resource, grp).
 
-Must be run from the backend/ directory:
-    cd backend && python ../scripts/smoke_import.py
+Finds backend/ from this file's own location, so it gives the same result from
+any cwd (CI runs it from backend/, validations.json from the repo root):
+    python scripts/smoke_import.py
 
-Exit code 0 = all modules imported, 1 = at least one failure.
+Exit code 0 = all modules imported, 1 = at least one failure, or no module was
+found at all (a walk of the wrong directory must not pass as "all imported").
 """
 from __future__ import annotations
 
 import importlib
+import os
 import pkgutil
 import sys
+from pathlib import Path
+
+BACKEND = Path(__file__).resolve().parent.parent / "backend"
 
 # Packages that need runtime context (AWS creds, DB, MCP servers, etc.)
 SKIP_PREFIXES = ("tests.", "skills.", "jobs.handlers.", "channels.")
@@ -23,9 +29,11 @@ SKIP_PREFIXES = ("tests.", "skills.", "jobs.handlers.", "channels.")
 def main() -> int:
     failures: list[tuple[str, str]] = []
     ok = 0
+    os.chdir(BACKEND)  # modules that read files relative to backend/ at import
+    sys.path.insert(0, str(BACKEND))
 
     for _finder, mod_name, _is_pkg in pkgutil.walk_packages(
-        path=["."], onerror=lambda name: None
+        path=[str(BACKEND)], onerror=lambda name: None
     ):
         if any(mod_name.startswith(p) for p in SKIP_PREFIXES):
             continue
@@ -46,6 +54,10 @@ def main() -> int:
             ok += 1
 
     platform = "Windows" if sys.platform == "win32" else "Linux"
+
+    if ok == 0:
+        print(f"No module found under {BACKEND}: nothing was checked")
+        return 1
 
     if failures:
         print(f"\n{len(failures)} module(s) failed to import on {platform}:")
