@@ -2,6 +2,7 @@
 title: "DDD 漂移：确定的自动修"
 created: 2026-10-27
 updated: 2026-10-27
+status: r2
 ---
 
 # DDD 漂移：确定的自动修，报告写"发现了什么、修好了什么"
@@ -24,84 +25,106 @@ XG 2026-10-27："确定的都自动修，而不是报出来；报告应该是发
 - 报告和任务摘要第一句是"发现 N · 自动修好 M · 需要你 K"。
 - 修改可以完整撤回。
 
-## 3. 设计
+## 3. 设计（r2：零上下文审查后重写）
 
-### 3.1 谁来改：agent 只提议，OS 决定和写入
+### 3.0 先修的前提：审查 agent 原来并不只读
 
-审查 agent 继续只读（`_AUDIT_TOOLS` 不加 Write/Edit/Bash）。它在每条发现里多给一个修法：
+命令只给了 `--allowedTools Read,Grep,Glob`。在 bypassPermissions 下它只决定"哪些工具自动放行"，不决定"哪些工具存在"，agent 其实一直能用 Bash / Write / Edit（`scripts/scenario_runner.py` 记过同一个教训）。已修：命令改由纯函数 `_build_review_cmd` 生成，同时给 `--tools Read,Grep,Glob`，测试钉住两个参数（`dbb6ac272`）。下面的设计都建立在"agent 真的只读"上。
+
+### 3.1 谁来改：agent 只提议，OS 核对后写入
+
+agent 在每条发现里可以多给一个修法：
 
 ```json
-{"title": "...", "description": "...",
- "fix": {"doc": "TECH.md",
-         "old": "<文档里要换掉的原文，逐字>",
-         "new": "<换成什么>",
-         "evidence": [{"file": "<相对路径>", "quote": "<证明 new 正确的原文，逐字>"}]}}
+"fix": {"doc": "PROJECT.md",
+        "old": "<文档里要换掉的一行里的原文，逐字>",
+        "new": "<换成什么>",
+        "evidence": [{"kind": "done|superseded|exists|code", "file": "<相对路径>", "quote": "<原文，逐字>"}]}
 ```
 
-正确文字不能完全由证据决定时（比如"当前阶段"该写什么只有主人知道），agent 不给 `fix`。Python 判断能不能修、负责写入。这样"模型不能直接改文件"的结构保证还在，决定权在确定性检查上（SOUL P5）。
+正确内容不能由证据完全决定时不给 `fix`。Python 核对、写入；模型从头到尾碰不到文件（SOUL P5）。
 
-### 3.2 "确定的" = 下面每一条都过
+### 3.2 "确定的"：证据本身决定答案
 
-| 检查 | 规则 | 不过时 |
+"文档里两段话互相矛盾"本身不能说明哪段是对的：证据那一段也可能才是过时的（抽查里 AIDLC 的 Gate 0 就分不清）。所以"确定"的标准不是"找到一段相反的话"，而是**证据属于下面四类之一，且 OS 能逐字核对**：
+
+| kind | 证据是什么 | OS 核对 |
 |---|---|---|
-| 位置 | `doc` 经 `ddd_cultivation._confined_doc_path` 解析在项目目录内，是普通文件 | 需要你：位置不合法 |
-| 原文 | `old` 至少 12 个字符，在该文档里**恰好出现一次** | 需要你：原文找不到 / 出现多次 |
-| 证据 | 每条 `quote` 逐字出现在它的 `file` 里；`file` 限定在本项目目录、`Knowledge/`、或项目 bindings 声明的源码仓库内；至少一条证据 | 需要你：证据找不到 |
-| 改动形状 | `new` 非空、不同于 `old`；是一段（无空行）、不含标题行、不含 `<!--` / `-->`（条目元数据）；长度 ≤ max(2×len(old), len(old)+300) | 需要你：改动太大或会破坏结构 |
-| 准入 | `ingestion_gate.self_adversarial_judge(new, 段落标题, 证据原文)` 返回 pass | 需要你：judge 未通过（附理由） |
+| `done` | 同一项目里该事项已勾掉 | quote 逐字在 file 里，且是一行 `- [x]` 清单 |
+| `superseded` | 被引用的文档自己写着已被取代 | quote 逐字在 file 里，且含 `SUPERSEDED` / `superseded by` / `已被取代` |
+| `exists` | `new` 里换上的路径真实存在 | 该路径在工作区或绑定仓库里是文件 |
+| `code` | 代码与文档不符（只限有源码仓库的项目） | quote 逐字在绑定仓库的文件里，且该文件不在 test / fixture 目录 |
 
-第五条是 P8：所有写进大脑的门共用 `self_adversarial_judge` 这一个关口（cultivation 的每条自动写入都过它），漂移修复也走它，不另起一套标准。前四条是这扇门比 cultivation 多出来的：一条修复带着可以逐字核对的原文和证据，核对比 judge 更硬，所以先查。
+再加上下面全部：
 
-没给 `fix` 的发现：需要你，理由写"正确内容只有你知道"。
+- **证据来源**：只能来自本项目的 DDD 文档、绑定的源码仓库、工作区里的普通文件；不能来自 `Knowledge/JobResults/`（以前的审查报告）、任何 `.artifacts/`（日志、备份）。
+- **新内容有出处**：`new` 里每个不在 `old` 里的词（数字、名称、路径、版本）都必须逐字出现在某条证据里。只删不加的修改天然满足。这一条挡住"42 → 57"这种证据里没有的数字。
+- **只改一行里的一段**：`doc` 必须是 `DDD_CANONICAL_DOCS` 之一（经 `_confined_doc_path` 解析在项目内）；`old` 至少 12 个字符、不含换行、在文档里恰好出现一次，不在标题行、代码块、`<!-- -->` 元数据里；`new` 不含换行、`<!--`、`-->`，不以 `#` 或 `- ` 开头，长度 ≤ max(2×len(old), len(old)+300)。
+- **不改带日期的记录**：`old` 落在一条生命周期条目里（`ddd_entry_lifecycle.parse_entries` 能解析出的 `- **标题** …` 条目）就不改。这种条目是"当时为真"的历史记录，抽查里唯一的误报（CMHK）就是这类；以后要改用已有但还没人调用的 `mark_superseded`（保留原条目、标记被取代），不在这次范围。
+- **不来回改**：本文档以前的自动修复里有 `old == 这次的 new` 或 `new == 这次的 old`，就不改。
 
-### 3.3 写入：先留底，再改
+任何一条不过：进"需要你"，理由写出来（"证据只是另一段说法，分不出哪边对""正确内容只有你知道""这是一条带日期的记录"……）。
 
-- 用所有 DDD 写入方共用的锁 `utils.file_lock.md_lock`（`<doc>.md.lock`，非阻塞；拿不到锁这条记为"需要你：文档正被写入，下次再试"）。
-- 写之前：把整份文档复制到 `Projects/<p>/.artifacts/drift-fix-backups/<doc>.<时间戳>.md`，并在 `Projects/<p>/.artifacts/ddd-changelog.jsonl` 追加一行 `{"action": "drift-fix", "target_doc", "old"(全文), "new", "evidence", "report", "timestamp"}`。备份或日志写不成功就不改。
-- 写入时在锁内重读文档，`old` 仍只出现一次才替换（防止两条修复撞在同一处）。
-- DDD 周报（`s_ddd-weekly-report`）本来就读 `ddd-changelog.jsonl`，自动修复会出现在那里，不用改它。
+**不用 `self_adversarial_judge`。** 它的 prompt 写明自己是"噪音过滤器，不是事实核查"，看不到 `old`，会放过任何具体、自信的句子。漂移修复这扇门的准入是上面的逐字核对，比 judge 硬；cultivation 的门之所以用 judge，是因为一条经验没有可以逐字核对的证据（P8：两扇门因为证据形态不同而不同，写明原因）。
+
+按这个标准，抽查的 9 条真问题里大约 3 条能自动修（SecDLC 的"等它存在"、ai_ready_repo 的 M1、指向已被取代的设计文档），其余进"需要你"。少修是对的：宁可不修，不能改错。
+
+### 3.3 写入和撤回
+
+- 加锁 `utils.file_lock.md_lock`（cultivation、orchestrator、retire 共用；s_persist 和人手改不加锁，所以锁内要重读）。拿不到锁：需要你，"文档正被写入，下次再试"。
+- 锁内重读文档，`old` 仍恰好一次、文件 mtime 和大小与核对时相同，才写；写法是同目录临时文件 + `os.replace`。
+- 写之前追加一行到 `Projects/<p>/.artifacts/ddd-drift-fixes.jsonl`：`{run, target_doc, old, new, evidence, finding, timestamp}`，写不成就不改。**单独一个文件，不进 `ddd-changelog.jsonl`**：那份日志有好几个读者（周报的"已应用"计数、Brain Hub 的 sediments、maturity、health）都按"追加了一条经验"来数，修复不是经验。
+- 每次运行、每份文档在第一次修改前整份备份一次到 `.artifacts/drift-fix-backups/<doc>.<运行id>.md`，每份文档只留最近 10 个。这只是灾难备份。
+- **撤回单条**：`undo_drift_fix(project, line)` 把 `new` 换回 `old`，要求 `new` 当前恰好出现一次，否则拒绝（之后又被人改过）。不用整份备份回滚：那会冲掉之后所有别的写入。
+- 说明：除 SwarmAI 外的项目目录不在 git 里（SwarmWS `.gitignore` 的 `Projects/*`），git 不是恢复途径，撤回只靠上面这份记录。
 
 ### 3.4 报告
 
 ```
 # DDD Self-Audit — 2026-11-02
-发现 31 · 自动修好 24 · 需要你 7（9 个项目，全部审完）
+发现 31 · 自动修好 3 · 需要你 28 · 审完 9/9 个项目
 
-## 自动修好
-- [IVTHub/TECH.md] "All 42 mapped" → "..."  证据：TECH.md "grown well past the old 42"
-## 需要你
-- [PhysicalAI/PROJECT.md] 当前重点还是 5–6 月  · 没自动修：正确内容只有你知道 · 首次出现 2026-09-21
-## 各项目原始审查
-...
+**自动修好**
+- [SecDLC/PROJECT.md] "once `s_security-cr-review` exists" → "now that `s_security-cr-review` exists"（证据 done：PROJECT.md "- [x] **P5 (REVIEW)** …"）
+**需要你**
+- [PhysicalAI/PROJECT.md] 当前重点还是 5–6 月 · 正确内容只有你知道 · 首次出现 2026-09-21
+
+## PhysicalAI (non-code) — 3 finding(s)
+...（各项目原始审查，和现在一样）
+<!-- DRIFT_OUTCOMES [{"title": "...", "doc": "...", "outcome": "fixed|open", "reason": "..."}] -->
 ```
 
-- "首次出现"：在以往报告里逐字搜这条的 `old` 原文（没有 `old` 时搜描述里引号内的原文），取最早的日期。不新增存储，报告本身就是记录。
-- 每个项目段落末尾写一个机器可读块 `<!-- DRIFT_OUTCOMES [...] -->`（每条：title、doc、结果 fixed/open、理由）。`ddd_drift_signal` 改为只把 open 的算作漂移；读旧报告（没有这个块）时行为不变。
-- 任务摘要（Jobs & Runs 里看到的）= 第一行。
+- 摘要部分用加粗标签，不用 `##`：`ddd_drift_signal._SECTION_RE` 按每个 `##` 切项目，摘要用 `##` 会变成假项目。各项目段落保持 `## <项目> (kind) — N finding(s)`。
+- "首次出现"：在以往报告（不含试运行报告）里逐字搜 `old`，没有 `old` 时搜描述里第一段引号内的原文，取最早的日期。
+- `ddd_drift_signal` 改为只把 `open` 的算作漂移；没有 `DRIFT_OUTCOMES` 的旧报告照旧全算。
+- 任务摘要 = 报告第二行。
 
 ### 3.5 试运行
 
-`config: {"dry_run": true}`：照常审查、照常检查，只写报告不改文档，报告标题标"试运行"。第一次上线先跑一次试运行，看清会改什么再正式跑。
+`config: {"dry_run": true}`：照常审查、照常核对，不写文档、不写修复记录。报告文件名用 `ddd-self-audit-dryrun`（不被 `*-ddd-self-audit.md` 匹配，所以不会盖掉当天的正式报告，也不会被漂移信号读到），结果写 `would-fix`。
 
 ## 4. 数据形状变更与读者
 
 | 写入方 | 新形状 | 读者 |
 |---|---|---|
-| 审查 prompt | 发现带 `fix` | `_parse_fix`（新）；旧格式没有 `fix` → 需要你 |
-| 报告 | 首行摘要、两节、`DRIFT_OUTCOMES` 块 | `ddd_drift_signal`（只数 open）；人 |
-| `ddd-changelog.jsonl` | `action: drift-fix` | `s_ddd-weekly-report`（已读该文件）|
+| 审查 prompt | 发现可带 `fix` | `_parse_fix`（新）；没有 `fix` → 需要你 |
+| 报告 | 摘要两段（加粗标签）、`DRIFT_OUTCOMES` 块 | `ddd_drift_signal`（只数 open）；首次出现的查找（读以往报告）；人 |
+| `ddd-drift-fixes.jsonl`（新） | 每次修复一行 | `undo_drift_fix`；"不来回改"的检查；`s_ddd-weekly-report`（加一节"自动修复"，读它） |
+| `ddd-changelog.jsonl` | 不变 | 不受影响 |
 
 ## 5. 不做
 
-- 界面（Brain Hub 显示"需要你"的条目）：下一步单独做。
-- ToDo：不写（run_50db230a 的决定不变）。
-- 修代码：只改 DDD 文档，代码不对的情况只报告。
+- 界面（Brain Hub 显示"需要你"）：下一步单独做。
+- 带日期条目的修正（`mark_superseded`）、代码不对的修正：只报告。
+- ToDo：不写（run_50db230a 不变）。
+- 已知、不在范围：`scripts/artifact_cli.py` 的 `ddd-retire` 提示还说"写了 .bak"，其实已经不写。
 
 ## 6. 验证计划（现在定）
 
-- 每条检查一个会失败的测试，修完做变异检查。
-- 写入：备份和日志先于修改；备份失败不改；锁内 `old` 变成两次时不改；撤回（用备份还原）后文档逐字节一致。
-- 报告：摘要行的计数、两节内容、`DRIFT_OUTCOMES` 块；`ddd_drift_signal` 新旧报告都能读。
-- 最终测试集：`test_ddd_self_audit*`、`test_ddd_drift_signal*`、`test_ddd_cultivation` 里锁和路径相关的测试，加本次新增测试。
-- 审查：correctness + security（模型输出决定写哪个文件、写什么；文档内容可能含提示注入）。
-- 端到端：本机跑一次试运行，看报告；再正式跑一次，抽查改动和备份。
+- 每条检查一个测试（过和不过各一），做变异检查。
+- 写入：记录先于修改，记录写不成不改；锁内 `old` 变两次 / 文件被改过时不改；撤回后逐字还原，`new` 已被人改过时撤回拒绝；备份每份文档每次运行一个、只留 10 个。
+- 报告：计数、两段、`DRIFT_OUTCOMES`；`ddd_drift_signal` 读新旧报告，摘要不被当成项目；试运行文件名不被漂移信号读到。
+- 周报：自动修复一节读到新文件，已应用计数不变。
+- 最终测试集：`test_ddd_self_audit`、`test_ddd_drift_signal`、`test_ddd_weekly_report`（或其所在文件），加本次新增测试。
+- 审查：correctness + security。
+- 端到端：本机试运行一次看报告，再正式跑一次，逐条核对改动和撤回记录。
