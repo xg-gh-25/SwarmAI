@@ -166,8 +166,7 @@ def reindex_projects(full: bool = False) -> dict:
                 # ThreadPool timeout, repo-not-yet-on-disk) must NOT advance the
                 # marker over a stale/empty graph, else check_freshness would
                 # report fresh forever (Gate-2 HIGH, run_9a23dd4a).
-                if freshness.current_head:
-                    graph.set_meta("last_indexed_commit", freshness.current_head)
+                graph.mark_indexed(full=True, head=freshness.current_head)
                 # Preserve repo_root metadata
                 graph.set_meta("repo_root", str(repo_root))
                 graph.set_meta("parse_status", parse_status)
@@ -290,13 +289,18 @@ def reindex_projects(full: bool = False) -> dict:
 
                     if grading.is_skippable(grade):
                         # NONE/COSMETIC: leave stored nodes UNTOUCHED (never remove).
-                        pass
+                        # A changed import line with no change to the symbols grades
+                        # COSMETIC, so the file's imports are refreshed on their own.
+                        if byte_changed:
+                            graph.replace_imports(rel_path, result.imports)
+                            restored.append(rel_path)
                     elif result.nodes:
                         # STRUCTURAL with symbols: re-store via the existing
                         # atomic-replace path (also re-derives routes for the file).
                         file_hash = new_hash or ""
                         graph.store_file_nodes_edges(
-                            rel_path, result.nodes, result.edges, file_hash
+                            rel_path, result.nodes, result.edges, file_hash,
+                            imports=result.imports,
                         )
                         restored.append(rel_path)
                         content = full_path.read_text(encoding="utf-8", errors="replace")
@@ -338,10 +342,12 @@ def reindex_projects(full: bool = False) -> dict:
                 _resolve_prefixes(graph, repo_root)
                 graph.rebuild_fts()
                 mark = _phase(project_name, "resolve_and_prune+prefixes+rebuild_fts", mark)
+            elif restored:
+                # Only imports changed (cosmetic for the symbols): resolve them, scoped.
+                graph.resolve_and_prune(files=restored)
             # Always advance the freshness marker (we DID process this commit range,
             # even if the verdict was SKIP — otherwise we'd re-grade forever).
-            if freshness.current_head:
-                graph.set_meta("last_indexed_commit", freshness.current_head)
+            graph.mark_indexed(full=False, head=freshness.current_head)
             # Reclaim WAL disk space after the batch (store_file_nodes_edges +
             # rebuild_fts bypass incremental_update, so checkpoint here — Gate-2 finding E).
             graph.checkpoint_truncate()

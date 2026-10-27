@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,6 +17,20 @@ if TYPE_CHECKING:
     from .graph_store import GraphStore
 
 logger = logging.getLogger(__name__)
+
+# A git-path result depends only on (repo, HEAD, last indexed commit): recall checks
+# freshness every turn, so the merge-base / diff / rev-list work is done once per
+# such triple. Only final answers are kept (a git error is not cached). Bounded by
+# clearing when full.
+_DIFF_CACHE: dict[tuple[str, str, str], "FreshnessResult"] = {}
+_DIFF_CACHE_MAX = 256
+
+
+def _remember(key: tuple[str, str, str], result: "FreshnessResult") -> "FreshnessResult":
+    if len(_DIFF_CACHE) >= _DIFF_CACHE_MAX:
+        _DIFF_CACHE.clear()
+    _DIFF_CACHE[key] = result
+    return replace(result, changed_files=list(result.changed_files))
 
 
 class GitError(Exception):
@@ -89,6 +103,11 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
         # `if freshness.current_head:` writer (Gate-2 MED, run_9a23dd4a).
         return FreshnessResult(stale=False, current_head=current_head)
 
+    key = (str(repo_root), current_head, last_commit)
+    cached = _DIFF_CACHE.get(key)
+    if cached is not None:
+        return replace(cached, changed_files=list(cached.changed_files))
+
     # Edge case: force push / rebase removed our baseline commit
     try:
         ancestor_check = subprocess.run(
@@ -96,13 +115,13 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
             cwd=repo_root, capture_output=True, timeout=5
         )
         if ancestor_check.returncode != 0:
-            return FreshnessResult(
+            return _remember(key, FreshnessResult(
                 stale=True,
                 suggest_full_rebuild=True,
                 current_head=current_head,
                 last_indexed=last_commit,
                 reason=f"Base commit {last_commit[:8]} rebased away — incremental impossible"
-            )
+            ))
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return FreshnessResult(
             stale=True,
@@ -132,14 +151,14 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
             reason=f"git error: {e}"
         )
 
-    return FreshnessResult(
+    return _remember(key, FreshnessResult(
         stale=True,
         changed_files=changed_files,
         commits_behind=commit_count,
         last_indexed=last_commit,
         current_head=current_head,
         suggest_full_rebuild=(len(changed_files) > 100 or commit_count > 50),
-    )
+    ))
 
 
 def _git(cwd: Path, args: list[str], timeout: int = 5) -> str:
@@ -178,8 +197,10 @@ def _mtime_freshness(graph_store: GraphStore, repo_root: Path) -> FreshnessResul
     """
     from .parser import LANGUAGE_MAP
 
-    last_indexed_str = graph_store.get_meta("last_full_index")
-    last_indexed_ts = float(last_indexed_str) if last_indexed_str else 0.0
+    # The last FULL index only: an incremental batch may cover part of the changed
+    # files (the reindex job takes the first 200), so its stamp would hide the rest.
+    from .graph_store import parse_index_time
+    last_indexed_ts = parse_index_time(graph_store.get_meta("last_full_index")) or 0.0
 
     changed = []
     file_count = 0

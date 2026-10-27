@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 # Module-level caches (guarded by _cache_lock for thread safety)
 _cache_lock = threading.Lock()
 _graph_cache: dict[str, GraphStore] = {}
+# db path → (open graph, (st_dev, st_ino) of the file it was opened on)
+_db_graph_cache: dict[str, tuple[GraphStore, tuple[int, int]]] = {}
 _project_path_cache: dict[str, str] = {}  # repo_path → project_name
 _cache_initialized = False
 
@@ -142,6 +144,50 @@ def load_project_graph(project_name: str) -> GraphStore | None:
         return None
 
 
+def load_project_graphs(project_name: str) -> list[tuple[CodeIntelDb, GraphStore]]:
+    """Every code graph the project has (``code_intel_dbs`` order), opened once per db
+    path and cached. The multi-repo counterpart of ``load_project_graph`` (which
+    returns the first only): a project that binds several repos is searched in all
+    of them. A db that cannot be opened is skipped."""
+    from jobs.paths import PROJECTS_DIR
+    out: list[tuple[CodeIntelDb, GraphStore]] = []
+    for ref in code_intel_dbs(PROJECTS_DIR / project_name):
+        key = str(ref.db_path)
+        try:
+            st = ref.db_path.stat()
+            ident = (st.st_dev, st.st_ino)
+        except OSError:
+            continue
+        with _cache_lock:
+            cached = _db_graph_cache.get(key)
+            if cached is not None and cached[1] != ident:
+                # the file was deleted and re-created (a re-bind): the old handle
+                # still reads the old graph
+                _db_graph_cache.pop(key, None)
+                try:
+                    cached[0].close()
+                except Exception:  # noqa: BLE001
+                    pass
+                cached = None
+        if cached is not None:
+            graph = cached[0]
+        else:
+            try:
+                from .graph_store import GraphStore
+                graph = GraphStore(ref.db_path)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to open code graph %s: %s", ref.db_path, e)
+                continue
+            with _cache_lock:
+                if key in _db_graph_cache:
+                    graph.close()
+                    graph = _db_graph_cache[key][0]
+                else:
+                    _db_graph_cache[key] = (graph, ident)
+        out.append((ref, graph))
+    return out
+
+
 def detect_project_from_path(file_path: str) -> str | None:
     """
     Match a file path to a project by checking TECH.md repo_path fields.
@@ -175,16 +221,29 @@ def invalidate_cache(project_name: str | None = None):
                     old.close()
                 except Exception:
                     pass
+            try:
+                from jobs.paths import PROJECTS_DIR
+                paths = [str(r.db_path) for r in code_intel_dbs(PROJECTS_DIR / project_name)]
+            except Exception:  # noqa: BLE001
+                paths = []
+            for key in paths:
+                entry = _db_graph_cache.pop(key, None)
+                if entry:
+                    try:
+                        entry[0].close()
+                    except Exception:
+                        pass
             to_remove = [k for k, v in _project_path_cache.items() if v == project_name]
             for k in to_remove:
                 del _project_path_cache[k]
         else:
-            for g in _graph_cache.values():
+            for g in list(_graph_cache.values()) + [e[0] for e in _db_graph_cache.values()]:
                 try:
                     g.close()
                 except Exception:
                     pass
             _graph_cache.clear()
+            _db_graph_cache.clear()
             _project_path_cache.clear()
             _cache_initialized = False
 

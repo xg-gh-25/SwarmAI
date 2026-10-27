@@ -537,11 +537,23 @@ class CodeEdge:
 
 
 @dataclass
+class ImportRef:
+    """One imported name: ``name`` as the file uses it, the ``module`` text as written
+    (``pkg.mod``, ``.mod``, ``./util``, ``com.x.Y``, ``github.com/o/r/p``) and the line.
+    Resolved to a repo file by ``GraphStore.resolve_imports``."""
+    name: str
+    module: str
+    line: int
+    whole_module: bool = False   # ``import a.b``: the name is the module itself
+
+
+@dataclass
 class ParseResult:
     nodes: list[CodeNode] = field(default_factory=list)
     edges: list[CodeEdge] = field(default_factory=list)
     language: str = "unknown"
     file_path: str = ""
+    imports: list[ImportRef] = field(default_factory=list)
 
 
 @dataclass
@@ -784,64 +796,121 @@ def _is_exported(name: str, language: str, node_text: str = "") -> bool:
 
 # ── Layer 1: Per-file Resolution ────────────────────────────────────────
 
+_PY_FROM_RE = re.compile(r"^[ \t]*from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n]+)", re.MULTILINE)
+_PY_IMPORT_RE = re.compile(r"^[ \t]*import[ \t]+([\w.]+(?:[ \t]*,[ \t]*[\w.]+)*)", re.MULTILINE)
+_TS_FROM_RE = re.compile(
+    r"\b(?:import|export)\s+(?:type\s+)?(\{[^}]*\}|\*\s+as\s+\w+|\w+(?:\s*,\s*\{[^}]*\})?)\s+from\s+['\"]([^'\"]+)['\"]")
+_JAVA_IMPORT_RE = re.compile(r"^[ \t]*import[ \t]+(static[ \t]+)?([\w.]+?)(\.\*)?[ \t]*;", re.MULTILINE)
+_GO_IMPORT_RE = re.compile(r'^[ \t]*import[ \t]+(?:(\w+|\.)[ \t]+)?"([^"]+)"', re.MULTILINE)
+_GO_GROUP_RE = re.compile(r"^[ \t]*import[ \t]*\(([^)]*)\)", re.MULTILINE)
+_GO_SPEC_RE = re.compile(r'^[ \t]*(?:(\w+|\.)[ \t]+)?"([^"]+)"', re.MULTILINE)
+
+
+def _line_at(content: str, pos: int) -> int:
+    return content.count("\n", 0, pos) + 1
+
+
+def scan_imports(content: str, language: str) -> list[ImportRef]:
+    """Every imported name of a file, with the module as written and its line.
+
+    Python ``from m import a, b as c`` (parenthesised over several lines too, comments
+    dropped) and ``import a.b``; TS/JS ``import {a, b as c} from 'm'``, ``import X from``,
+    ``import * as ns from``, ``export … from``; Java ``import a.b.C;`` (and static); Go
+    ``import "p"`` and grouped imports. Other languages: none. Regex over the text —
+    nothing is executed — and the one source of import facts: the call resolver's
+    import map (``_build_file_scope_regex``) and the graph's import table both come
+    from here.
+    """
+    out: list[ImportRef] = []
+    if language == "python":
+        for m in _PY_FROM_RE.finditer(content):
+            body = re.sub(r"#[^\n]*", "", m.group(2)).strip().strip("()")
+            for part in body.split(","):
+                name = part.strip().split(" as ")[-1].strip()
+                if name and name.isidentifier():
+                    out.append(ImportRef(name, m.group(1), _line_at(content, m.start())))
+        for m in _PY_IMPORT_RE.finditer(content):
+            for mod in re.split(r"\s*,\s*", m.group(1)):
+                parts = mod.split(".")
+                out.append(ImportRef(parts[-1], mod, _line_at(content, m.start()), True))
+    elif language in ("typescript", "javascript"):
+        for m in _TS_FROM_RE.finditer(content):
+            spec, module, line = m.group(1), m.group(2), _line_at(content, m.start())
+            braces = re.findall(r"\{([^}]*)\}", spec)
+            for group in braces:
+                for part in group.split(","):
+                    name = part.strip().split(" as ")[-1].strip()
+                    if name.startswith("type "):
+                        name = name[5:].strip()
+                    if name and name.isidentifier():
+                        out.append(ImportRef(name, module, line))
+            head = re.sub(r"\{[^}]*\}", "", spec).strip().rstrip(",").strip()
+            if head.startswith("*"):
+                head = head.split("as", 1)[-1].strip()
+            if head and head.isidentifier():
+                out.append(ImportRef(head, module, line))
+    elif language == "java":
+        for m in _JAVA_IMPORT_RE.finditer(content):
+            if m.group(3):          # a.b.* — a package, no one name to record
+                continue
+            parts = m.group(2).split(".")
+            # import static a.b.C.m: the name is m, the class (file) is a.b.C
+            module = ".".join(parts[:-1]) if m.group(1) and len(parts) > 1 else m.group(2)
+            out.append(ImportRef(parts[-1], module, _line_at(content, m.start())))
+    elif language == "go":
+        specs = [(m.group(1), m.group(2), m.start()) for m in _GO_IMPORT_RE.finditer(content)]
+        for g in _GO_GROUP_RE.finditer(content):
+            for m in _GO_SPEC_RE.finditer(g.group(1)):
+                specs.append((m.group(1), m.group(2), g.start(1) + m.start()))
+        for alias, path, pos in specs:
+            name = alias if alias and alias != "." else path.rsplit("/", 1)[-1]
+            out.append(ImportRef(name, path, _line_at(content, pos)))
+    return out
+
+
 def _build_file_scope_regex(content: str, language: str) -> tuple[dict[str, str], set[str]]:
     """
     Pre-scan file content with regex.
-    Returns: (import_map, defined_names)
+    Returns: (import_map, defined_names). The import map is built from
+    ``scan_imports`` (name → module path, ``.`` as ``/``, as the call resolver
+    qualifies targets with it).
     """
     import_map: dict[str, str] = {}
     defined_names: set[str] = set()
+    for ref in scan_imports(content, language):
+        if language == "python":
+            if ref.whole_module:
+                parts = ref.module.split(".")
+                import_map[ref.name] = "/".join(parts[:-1]) if len(parts) > 1 else parts[0]
+            else:
+                import_map[ref.name] = ref.module.replace(".", "/")
+        elif language == "java":
+            mod = ref.module.split(".")
+            import_map[ref.name] = "/".join(mod[:-1] if mod[-1] == ref.name else mod)
+        else:
+            import_map[ref.name] = ref.module
 
     if language == "python":
-        # from X.Y import A, B
-        for m in re.finditer(r'from\s+([\w.]+)\s+import\s+(.+?)(?:\n|$)', content):
-            module = m.group(1).replace(".", "/")
-            for name in re.split(r'\s*,\s*', m.group(2)):
-                name = name.strip().split(" as ")[-1].strip()
-                if name and name.isidentifier():
-                    import_map[name] = module
-        # import X
-        for m in re.finditer(r'^import\s+([\w.]+)', content, re.MULTILINE):
-            parts = m.group(1).split(".")
-            import_map[parts[-1]] = "/".join(parts[:-1]) if len(parts) > 1 else parts[0]
-
-        # Definitions
         for m in re.finditer(r'^(?:def|class)\s+(\w+)', content, re.MULTILINE):
             defined_names.add(m.group(1))
-
     elif language in ("typescript", "javascript"):
-        for m in re.finditer(r"import\s+\{([^}]+)\}\s+from\s+['\"]([^'\"]+)['\"]", content):
-            module = m.group(2)
-            for name in re.split(r'\s*,\s*', m.group(1)):
-                name = name.strip().split(" as ")[-1].strip()
-                if name and name.isidentifier():
-                    import_map[name] = module
-        for m in re.finditer(r"import\s+(\w+)\s+from\s+['\"]([^'\"]+)['\"]", content):
-            import_map[m.group(1)] = m.group(2)
         for m in re.finditer(r'(?:function|class|const|let|var)\s+(\w+)', content):
             defined_names.add(m.group(1))
-
     elif language == "java":
-        for m in re.finditer(r'import\s+([\w.]+);', content):
-            parts = m.group(1).split(".")
-            import_map[parts[-1]] = "/".join(parts[:-1])
         for m in re.finditer(r'(?:class|interface|enum)\s+(\w+)', content):
             defined_names.add(m.group(1))
         for m in re.finditer(
             r'(?:public|private|protected|static|\s)+\s+\w+\s+(\w+)\s*\(', content
         ):
             defined_names.add(m.group(1))
-
     elif language == "go":
-        for m in re.finditer(r'import\s+"([^"]+)"', content):
-            pkg = m.group(1).split("/")[-1]
-            import_map[pkg] = m.group(1)
         for m in re.finditer(r'func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)', content):
             defined_names.add(m.group(1))
         for m in re.finditer(r'type\s+(\w+)', content):
             defined_names.add(m.group(1))
 
     return import_map, defined_names
+
 
 
 def _resolve_call_target(
@@ -1176,6 +1245,13 @@ def _extract_from_tree(tree, path_str: str, language: str,
                     line_number=None,
                 ))
 
+        # Rust `impl S { fn … }`: no symbol of its own; its functions are S's methods.
+        if ntype == "impl_item":
+            owner = _type_name(node.child_by_field_name("type"))
+            for child in node.children:
+                _walk(child, enclosing_func=enclosing_func, enclosing_class=owner or enclosing_class)
+            return
+
         # Definitions
         if ntype in def_types:
             name = _get_name(node, language)
@@ -1183,11 +1259,17 @@ def _extract_from_tree(tree, path_str: str, language: str,
                 name = _sanitize_name(name)
                 # "struct" covers C/C++ struct_specifier (a record TYPE, not a
                 # function — run_88512360: a C struct was mislabeled node_type=function
-                # because struct_specifier matched none of the type keywords).
+                # because struct_specifier matched none of the type keywords). A rust
+                # trait and a go `type` declaration are types too.
                 is_class = ("class" in ntype or "interface" in ntype
-                            or "enum" in ntype or "struct" in ntype)
-                node_type = "class" if is_class else "method" if enclosing_class else "function"
-                qn = _qualify(name, path_str, enclosing_class)
+                            or "enum" in ntype or "struct" in ntype or "trait" in ntype
+                            or ntype == "type_declaration")
+                owner = enclosing_class
+                if ntype == "method_declaration" and language == "go":
+                    # func (f *F) Flush(): a method of F
+                    owner = _type_name(node.child_by_field_name("receiver")) or owner
+                node_type = "class" if is_class else "method" if owner else "function"
+                qn = _qualify(name, path_str, owner)
                 code_node = CodeNode(
                     id=qn, file_path=path_str, node_type=node_type,
                     name=name, line_start=node.start_point[0] + 1,
@@ -1215,7 +1297,7 @@ def _extract_from_tree(tree, path_str: str, language: str,
                             line_number=node.start_point[0] + 1,
                         ))
 
-                new_class = name if is_class else enclosing_class
+                new_class = name if is_class else owner
                 new_func = qn if not is_class else enclosing_func
                 for child in node.children:
                     _walk(child, enclosing_func=new_func, enclosing_class=new_class)
@@ -1226,16 +1308,22 @@ def _extract_from_tree(tree, path_str: str, language: str,
         # callee still gets an incoming edge (dead-code FP #3). Before, module-level
         # calls produced NO edge, so a module-level-only callee looked dead.
         if ntype in call_types and (enclosing_func or _EMIT_MODULE_LEVEL_CALL_EDGES):
-            call_name = _get_call_name(node, language)
+            call_name, receiver = _call_parts(node)
             if call_name:
                 call_name = _sanitize_name(call_name)
-                target = _resolve_call_target(call_name, path_str, import_map,
-                                             defined_names, enclosing_class)
                 source = enclosing_func or _qualify(_MODULE_SENTINEL, path_str, None)
+                if receiver not in (None, "self") and receiver not in import_map:
+                    # A method of a value: bare and method-only (MEMBER_CALL_CONFIDENCE),
+                    # never this file's same-named function.
+                    target, conf = call_name, MEMBER_CALL_CONFIDENCE
+                else:
+                    target = _resolve_call_target(call_name, path_str, import_map,
+                                                 defined_names, enclosing_class)
+                    conf = 1.0 if QUALIFIED_SEPARATOR in target else 0.5
                 edges.append(CodeEdge(
                     source_id=source, target_id=target,
                     edge_type="calls",
-                    confidence=1.0 if QUALIFIED_SEPARATOR in target else 0.5,
+                    confidence=conf,
                     line_number=node.start_point[0] + 1,
                 ))
 
@@ -1325,6 +1413,19 @@ def _c_family_declarator_name(node) -> str | None:
     return None
 
 
+def _type_name(node) -> str | None:
+    """The first type name inside *node* (``*F`` → ``F``, ``Vec<T>`` → ``Vec``, a go
+    receiver list ``(f *F)`` → ``F``); None when there is none."""
+    queue = [node] if node is not None else []
+    while queue:
+        n = queue.pop(0)
+        if n.type == "type_identifier":
+            return n.text.decode("utf-8", errors="replace")
+        if n.type != "type_arguments":          # Vec<T>: the T is not the owner
+            queue.extend(n.children)
+    return None
+
+
 def _get_name(node, language: str) -> str | None:
     """Extract the name identifier from a definition node (per-language name types).
 
@@ -1337,6 +1438,29 @@ def _get_name(node, language: str) -> str | None:
         if nested is not None:
             return nested
         # fall through: struct_specifier/class_specifier name is a direct child
+    if node.type == "arrow_function":
+        # An arrow function has no name of its own: it takes the name of what holds
+        # it (``const h = () => …``, a class field ``h = () => …``). A bare callback
+        # (``xs.map(x => …)``) is no symbol — never named after its parameter.
+        parent = node.parent
+        if parent is not None and parent.type in ("variable_declarator", "public_field_definition",
+                                                  "field_definition"):
+            holder = parent.child_by_field_name("name") or parent.child_by_field_name("property")
+            if holder is not None and parent.child_by_field_name("value") == node:
+                return holder.text.decode("utf-8", errors="replace")
+        return None
+    if node.type == "type_declaration":      # go: type F struct{…} → its type_spec's name
+        for child in node.children:
+            if child.type in ("type_spec", "type_alias"):
+                nm = child.child_by_field_name("name")
+                if nm is not None:
+                    return nm.text.decode("utf-8", errors="replace")
+        return None
+    # The grammar's own name field first (go methods are field_identifiers, ruby
+    # classes constants — kinds the per-language list below does not hold).
+    nm = node.child_by_field_name("name")
+    if nm is not None and nm.type in _CALLEE_LEAF_TYPES:
+        return nm.text.decode("utf-8", errors="replace")
     name_types = NAME_NODE_TYPES.get(language, _DEFAULT_NAME_NODE_TYPES)
     for child in node.children:
         if child.type in name_types:
@@ -1344,26 +1468,102 @@ def _get_name(node, language: str) -> str | None:
     return None
 
 
-def _get_call_name(node, language: str) -> str | None:
-    """Extract the function name from a call node."""
-    func_node = node.children[0] if node.children else None
-    if not func_node:
-        return None
+_CALLEE_LEAF_TYPES = frozenset({
+    "identifier", "property_identifier", "field_identifier", "simple_identifier",
+    "type_identifier", "constant", "name",
+})
+# The field holding the called member's name, per member/scoped expression:
+# python attribute.attribute, js/ts member_expression.property, go
+# selector_expression.field, rust/c++ field_expression.field, rust scoped_identifier
+# and c++ qualified_identifier .name.
+_CALLEE_NAME_FIELDS = ("attribute", "property", "field", "name")
 
-    # self.method() → extract "method"
-    if func_node.type in ("attribute", "member_expression"):
-        parts = []
-        for child in func_node.children:
-            if child.type in ("identifier", "property_identifier"):
-                parts.append(child.text.decode("utf-8", errors="replace"))
-        if len(parts) >= 2 and parts[0] in ("self", "this"):
-            return parts[-1]
-        return parts[-1] if parts else None
 
-    if func_node.type in ("identifier", "property_identifier"):
-        return func_node.text.decode("utf-8", errors="replace")
+# The field holding the receiver of a member expression: python attribute.object,
+# js/ts member_expression.object, go selector_expression.operand, rust
+# field_expression.value, c++ field_expression.argument, java method_invocation.object,
+# ruby call.receiver (kotlin navigation_expression: its first child).
+_RECEIVER_FIELDS = ("object", "operand", "value", "argument", "receiver")
+_SELF_TYPES = frozenset({"self", "this", "this_expression"})
+# A call on a value (``f.Close()``, ``v.iter()``) names a METHOD: its edge is stored
+# with this confidence, below the bare 0.5, so resolve_bare_targets links it only to
+# a method and module edges leave it out. A call through a module or package
+# (``utils.helper()``, ``pkg.Fn()``) or a type path (``Foo::new``) keeps 0.5.
+MEMBER_CALL_CONFIDENCE = 0.45
 
+
+def _callee_name(fn) -> str | None:
+    """The called name inside a call's function part: the last member of
+    ``a.b.c`` / ``p->f`` / ``ns::f``, never the receiver (a rust ``f::<T>`` is
+    unwrapped by ``_call_parts`` first)."""
+    if fn.type in _CALLEE_LEAF_TYPES:
+        return fn.text.decode("utf-8", errors="replace")
+    for field_name in _CALLEE_NAME_FIELDS:
+        child = fn.child_by_field_name(field_name)
+        if child is not None:
+            return _callee_name(child)
+    if fn.type == "navigation_expression":   # kotlin: a.b → navigation_suffix(.b)
+        for child in reversed(fn.children):
+            if child.type == "navigation_suffix":
+                for leaf in child.children:
+                    if leaf.type in _CALLEE_LEAF_TYPES:
+                        return leaf.text.decode("utf-8", errors="replace")
     return None
+
+
+def _receiver_of(node):
+    """The receiver node of a member expression (or call), None for a plain name."""
+    for f in _RECEIVER_FIELDS:
+        r = node.child_by_field_name(f)
+        if r is not None:
+            return r
+    if node.type == "navigation_expression" and node.children:
+        return node.children[0]
+    return None
+
+
+def _receiver_root(receiver) -> str:
+    """The leftmost name of a receiver chain (``os`` of ``os.path``), ``self`` for
+    self/this, "" when it is an expression (``a().b``)."""
+    r = receiver
+    for _ in range(32):
+        if r.type in _SELF_TYPES or (r.type in _CALLEE_LEAF_TYPES
+                                     and r.text in (b"self", b"this")):
+            return "self"
+        if r.type in _CALLEE_LEAF_TYPES:
+            return r.text.decode("utf-8", errors="replace")
+        nxt = _receiver_of(r)
+        if nxt is None:
+            return ""
+        r = nxt
+    return ""
+
+
+def _call_parts(node) -> tuple[str | None, str | None]:
+    """``(called name, receiver)`` of a call node. *receiver* is None for a plain or
+    path-qualified call (``f()``, ``ns::f()``, ``Foo::new()``), ``"self"`` for
+    self/this, else the receiver chain's leftmost name ("" for an expression).
+
+    Java's ``method_invocation`` and Ruby's ``call`` put the receiver first and the
+    name in a field (``name`` / ``method``); everywhere else the first child is the
+    function part (python, js/ts, go, rust, c/c++, kotlin)."""
+    if node.type == "method_invocation" or node.child_by_field_name("method") is not None:
+        name = node.child_by_field_name("name") or node.child_by_field_name("method")
+        recv = _receiver_of(node)
+        return (_callee_name(name) if name is not None else None,
+                _receiver_root(recv) if recv is not None else None)
+    fn = node.children[0] if node.children else None
+    if fn is None or fn.type in ("new", "("):
+        return None, None
+    if fn.type == "generic_function":
+        fn = fn.child_by_field_name("function") or fn
+    recv = _receiver_of(fn)
+    return _callee_name(fn), (_receiver_root(recv) if recv is not None else None)
+
+
+def _get_call_name(node, language: str) -> str | None:
+    """The called name of a call node (``obj.method()`` → ``method``)."""
+    return _call_parts(node)[0]
 
 
 # ── Regex Fallback ──────────────────────────────────────────────────────
@@ -1879,6 +2079,7 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
 
     content = raw_bytes.decode("utf-8", errors="replace")
     sha = hashlib.sha256(raw_bytes).hexdigest()
+    imports = scan_imports(content, lang)
 
     # Try tree-sitter first — but ONLY when the AST path is actually LIVE. Gate-2 F4
     # (run AB adversarial, CRITICAL): in some environments the tree-sitter binding
@@ -1914,13 +2115,15 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
                 # such bare targets out anyway — nodes carry the durable value.
                 if nodes:
                     logger.debug(f"Tree-sitter partial-error on {path} → degraded (salvaged {len(nodes)} symbols)")
-                    return ParseResult(nodes=nodes, edges=[], language=lang, file_path=rel_path), "degraded"
+                    return ParseResult(nodes=nodes, edges=[], language=lang, file_path=rel_path,
+                                       imports=imports), "degraded"
                 # nothing salvageable → genuine failure (unchanged)
                 logger.debug(f"Tree-sitter parse has errors on {path}, no salvageable symbols → failed")
                 return ParseResult(file_path=rel_path, language=lang), "failed"
             # Clean parse — "ok" EVEN IF 0 nodes (comment-only/__init__.py is
             # legitimately empty; Gate-1 Check-3: absence of nodes ≠ failure).
-            return ParseResult(nodes=nodes, edges=edges, language=lang, file_path=rel_path), "ok"
+            return ParseResult(nodes=nodes, edges=edges, language=lang, file_path=rel_path,
+                               imports=imports), "ok"
         except Exception as e:
             # A LIVE tree-sitter that throws on THIS file (not the dead-binding case,
             # which _tree_sitter_live already filtered) is a genuine per-file failure.
@@ -1928,13 +2131,16 @@ def parse_file_with_status(path: Path, repo_root: Path) -> tuple[ParseResult, st
             fallback = _regex_fallback(path, repo_root)
             if not fallback.nodes and not fallback.edges and content.strip():
                 return ParseResult(file_path=rel_path, language=lang), "failed"
+            fallback.imports = imports
             return fallback, "ok"
 
     # Regex fallback (best-effort) — reached when tree-sitter is not live for this
     # language. Absence of nodes here is NOT a per-file failure (regex legitimately
     # finds nothing in comment-only/config files); the DEGRADED-FIDELITY fact is
     # surfaced once at the repo level by parse_repo_with_coverage's liveness hole.
-    return _regex_fallback(path, repo_root), "ok"
+    fallback = _regex_fallback(path, repo_root)
+    fallback.imports = imports
+    return fallback, "ok"
 
 
 def parse_repo(repo_root: Path, languages: list[str] | None = None) -> list[ParseResult]:

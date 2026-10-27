@@ -562,6 +562,16 @@ def _bind_locked(binding: Binding, worktree: Path, db_path: Path) -> BindResult:
         graph.clear()  # Gate-1 blocker 3: bulk_insert is additive; clear first for a clean rebuild.
         if parse_results:
             graph.bulk_insert(parse_results, repo_root=worktree)
+        else:
+            graph.set_meta("repo_root", str(Path(worktree).resolve()))
+        # When and at which commit: without these the freshness check reads the
+        # graph as never indexed and the analysis reports indexed_commit null. Only
+        # a parse that produced something is stamped: an empty graph marked at HEAD
+        # would read fresh until the next commit (the reindex job's same rule).
+        if parse_results:
+            from core.brain_bootstrap.repo_read import git as _git
+            head = (_git(Path(worktree), "rev-parse", "HEAD") or "").strip() or None
+            graph.mark_indexed(full=True, head=head)
         node_count = int(graph.get_codebase_summary().get("total_nodes", 0))
     finally:
         graph.close()

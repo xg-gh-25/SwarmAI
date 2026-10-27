@@ -138,15 +138,16 @@ class TestDDDSharedCorpusScorer:
 # ===========================================================================
 
 class TestCodeIntelRecall:
-    """AC2: _codeintel_recall wraps load_project_graph().search_symbols +
-    find_callers into a bucket. Unavailable project → empty bucket, not crash."""
+    """AC2: _codeintel_recall wraps every project graph's search_symbols (via
+    load_project_graphs) + find_callers into a bucket. Unavailable project → empty
+    bucket, not crash."""
 
     def test_codeintel_unavailable_returns_empty_bucket(self, monkeypatch):
         """When the project has no code graph, return an empty bucket (None-safe),
         NOT an auto-created empty DB."""
         from core import recall_multi
 
-        monkeypatch.setattr(recall_multi, "load_project_graph", lambda p: None)
+        monkeypatch.setattr("core.code_intel.load_project_graphs", lambda p: [])
         bucket = recall_multi._codeintel_recall("session spawn", project="SwarmAI")
         assert bucket == []  # empty, no crash
 
@@ -162,7 +163,16 @@ class TestCodeIntelRecall:
             def find_callers(self, node_id, depth=1):
                 return [("session_router.py::route", 1)]
 
-        monkeypatch.setattr(recall_multi, "load_project_graph", lambda p: _FakeGraph())
+            def get_meta(self, key):
+                return None
+
+            def node_lines(self, ids):
+                return {}
+
+        from pathlib import Path
+        from core.code_intel import CodeIntelDb
+        monkeypatch.setattr("core.code_intel.load_project_graphs",
+                            lambda p: [(CodeIntelDb(db_path=Path("g.db")), _FakeGraph())])
         bucket = recall_multi._codeintel_recall("spawn", project="SwarmAI")
         assert len(bucket) >= 1
         assert bucket[0]["name"] == "spawn_session"

@@ -16,6 +16,7 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -135,7 +136,52 @@ CREATE TABLE IF NOT EXISTS graph_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Imports, kept apart from code_edges: the graph has no file nodes, so a file→file
+-- edge would be dropped at once by the orphan cleanup. One row per imported name;
+-- dst_file is the repo file (or, for Go, the package directory with a trailing "/")
+-- it resolves to, NULL for an outside module (resolve_imports).
+CREATE TABLE IF NOT EXISTS code_imports (
+    src_file TEXT NOT NULL,
+    name TEXT NOT NULL,
+    module TEXT NOT NULL,
+    line INTEGER,
+    dst_file TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_imports_src ON code_imports(src_file);
+CREATE INDEX IF NOT EXISTS idx_imports_dst ON code_imports(dst_file);
 """
+
+
+# Languages whose parser types every method as node_type "method" (a class body, a
+# go receiver, a rust impl): only there may a value's method call be restricted to
+# methods (resolve_bare_targets).
+_METHOD_TYPED_LANGS = frozenset({"python", "typescript", "javascript", "java", "kotlin",
+                                 "go", "rust", "ruby", "csharp"})
+
+
+# ── When a graph was indexed ───────────────────────────────────────────────
+# One format for the two markers (``last_full_index`` after a whole-repo build,
+# ``last_incremental_update`` after a batch): ISO 8601 in UTC, written only by
+# GraphStore.mark_indexed. Graphs written before held an epoch float in one and ISO
+# in the other, and each reader parsed one format; parse_index_time reads both.
+
+def parse_index_time(value) -> float | None:
+    """A marker value as a POSIX timestamp: ISO 8601 (the format written now) or an
+    epoch number (older graphs). None when absent or unreadable."""
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        pass
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 # ── Thread-safe connection wrapper ─────────────────────────────────────────
@@ -635,8 +681,11 @@ class GraphStore:
         nodes: list,
         edges: list,
         file_hash: str,
+        imports: list | None = None,
     ) -> None:
-        """Atomically replace all nodes/edges for *file_path*.
+        """Atomically replace all nodes/edges (and, when given, the imports) for
+        *file_path*. *imports* is the file's ``ImportRef`` list; None leaves its
+        stored imports as they are (a caller that did not scan them).
 
         Deletes old data and inserts new data inside a single
         ``BEGIN IMMEDIATE`` transaction so readers never see a partial state.
@@ -758,12 +807,165 @@ class GraphStore:
                     ph = ",".join("?" * len(batch))
                     self._conn.execute(tmpl.replace("{placeholders}", ph), batch)
 
+            if imports is not None:
+                self._replace_imports(file_path, imports)
+
             if not in_txn:
                 self._conn.commit()
         except Exception:
             if not in_txn:
                 self._conn.rollback()
             raise
+
+    # ── imports (design 2026-10-27 §5.8 G3) ──────────────────────────────
+
+    def _replace_imports(self, file_path: str, imports: list) -> None:
+        """The file's import rows replaced (inside the caller's transaction);
+        dst_file is left NULL for ``resolve_imports``."""
+        self._conn.execute("DELETE FROM code_imports WHERE src_file = ?", (file_path,))
+        rows = []
+        for ref in imports or []:
+            d = ref if isinstance(ref, dict) else ref.__dict__
+            rows.append((file_path, d["name"], d["module"], d.get("line")))
+        if rows:
+            self._conn.executemany(
+                "INSERT INTO code_imports (src_file, name, module, line) VALUES (?, ?, ?, ?)", rows)
+
+    @_write_locked
+    def replace_imports(self, file_path: str, imports: list) -> None:
+        """Replace one file's import rows on their own (a re-store that keeps the
+        file's symbols, e.g. only an import line changed)."""
+        self._replace_imports(file_path, imports)
+        self._conn.commit()
+
+    def resolve_imports(self, files: list[str] | None = None) -> int:
+        """Point import rows at the repo file (Go: package directory) they import.
+
+        Resolves the rows of *files* only (an incremental re-store), or every row (None:
+        a full rebuild). Scoped like ``resolve_bare_targets``: another connection may be
+        part-way through a rebuild, and a suffix that looks unique there could be
+        recorded for good; the full rebuild's own pass re-resolves every row, so a
+        file that appears later, or a second file with the same name, is accounted for
+        there. The rule per language, against the paths the graph knows (``code_nodes``
+        plus every importing file):
+        - Python: ``from a.b import c`` → ``a/b.py``, ``a/b/__init__.py`` or (``c`` a
+          submodule) ``a/b/c.py``; leading dots are relative to the importing file;
+        - TS/JS: a relative module (``./x``, ``../x``) → ``x.ts``/``.tsx``/``.js``/…
+          or ``x/index.*``; a package name stays outside;
+        - Java: ``a.b.C`` → a file ending ``a/b/C.java``;
+        - Go: the import path → the repo directory it ends with.
+        A path matched only by its suffix must be unique; anything else stays NULL
+        (an outside module, or ambiguous). Returns the number of rows resolved.
+        """
+        import posixpath
+        known = {r[0] for r in self._conn.execute(
+            "SELECT DISTINCT file_path FROM code_nodes UNION SELECT DISTINCT src_file FROM code_imports")}
+        by_name: dict[str, list[str]] = {}     # basename → paths (suffix matches)
+        dirs: set[str] = set()
+        for f in known:
+            by_name.setdefault(f.rsplit("/", 1)[-1], []).append(f)
+            parts = f.split("/")[:-1]
+            for i in range(1, len(parts) + 1):
+                dirs.add("/".join(parts[:i]))
+
+        def unique(cands: list[str], pool) -> str | None:
+            for c in cands:
+                if c in pool:
+                    return c
+            for c in cands:
+                hits = [f for f in by_name.get(c.rsplit("/", 1)[-1], ()) if f.endswith("/" + c)]
+                if len(hits) == 1:
+                    return hits[0]
+            return None
+
+        def resolve(src: str, name: str, module: str) -> str | None:
+            ext = posixpath.splitext(src)[1].lower()
+            here = posixpath.dirname(src)
+            if ext in (".py", ".pyi"):
+                dots = len(module) - len(module.lstrip("."))
+                path = module.lstrip(".").replace(".", "/")
+                if dots:
+                    base = here
+                    for _ in range(dots - 1):
+                        base = posixpath.dirname(base)
+                    path = posixpath.join(base, path) if path else base
+                    pool = known
+                    cands = ([f"{path}/{name}.py", f"{path}.py", f"{path}/__init__.py"]
+                             if path else [f"{name}.py"])
+                    return next((c for c in cands if c in pool), None)
+                cands = [f"{path}/{name}.py", f"{path}.py", f"{path}/__init__.py"]
+                return unique(cands, known)
+            if ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+                if not module.startswith("."):
+                    return None
+                path = posixpath.normpath(posixpath.join(here, module))
+                cands = [path] + [path + e for e in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")] + \
+                        [f"{path}/index{e}" for e in (".ts", ".tsx", ".js", ".jsx")]
+                return next((c for c in cands if c in known), None)
+            if ext == ".java":
+                return unique([module.replace(".", "/") + ".java"], known)
+            if ext == ".go":
+                hits = [d for d in dirs if module == d or module.endswith("/" + d)]
+                if not hits:
+                    return None
+                best = max(hits, key=len)
+                if sum(1 for d in hits if len(d) == len(best)) > 1:
+                    return None
+                return best + "/"
+            return None
+
+        cols = "SELECT rowid, src_file, name, module, dst_file FROM code_imports"
+        if files is None:
+            rows = list(self._conn.execute(cols))
+        else:
+            rows = []
+            for start in range(0, len(files), _BATCH_SIZE):
+                batch = list(files[start: start + _BATCH_SIZE])
+                ph = ",".join("?" * len(batch))
+                rows += list(self._conn.execute(f"{cols} WHERE src_file IN ({ph})", batch))
+        done = 0
+        for rowid, src, name, module, old in rows:
+            dst = resolve(src, name, module)
+            if dst == src:
+                dst = None
+            if dst != old:
+                self._conn.execute("UPDATE code_imports SET dst_file = ? WHERE rowid = ?", (dst, rowid))
+            done += dst is not None
+        return done
+
+    def node_lines(self, ids: list[str]) -> dict[str, int]:
+        """``{node id: line_start}`` for *ids* (absent ids omitted)."""
+        out: dict[str, int] = {}
+        for start in range(0, len(ids), _BATCH_SIZE):
+            batch = list(ids[start: start + _BATCH_SIZE])
+            ph = ",".join("?" * len(batch))
+            for node_id, line in self._conn.execute(
+                    f"SELECT id, line_start FROM code_nodes WHERE id IN ({ph})", batch):
+                if line:
+                    out[node_id] = int(line)
+        return out
+
+    def mark_indexed(self, *, full: bool, head: str | None = None) -> None:
+        """Stamp when the graph was indexed (and, given *head*, at which commit) — the
+        one writer of the time markers (see ``parse_index_time``)."""
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self.set_meta("last_full_index" if full else "last_incremental_update", stamp)
+        if head:
+            self.set_meta("last_indexed_commit", head)
+
+    def indexed_at(self) -> float | None:
+        """When the graph was last indexed (the newer of the two markers), as a POSIX
+        timestamp; None when never stamped."""
+        times = [parse_index_time(self.get_meta(k))
+                 for k in ("last_full_index", "last_incremental_update")]
+        times = [t for t in times if t is not None]
+        return max(times) if times else None
+
+    def imported_files(self, src_file: str) -> set[str]:
+        """The repo files (Go: ``dir/``) *src_file* imports."""
+        return {r[0] for r in self._conn.execute(
+            "SELECT DISTINCT dst_file FROM code_imports WHERE src_file = ? AND dst_file IS NOT NULL",
+            (src_file,))}
 
     # ── FTS rebuild ──────────────────────────────────────────────────────
 
@@ -1032,8 +1234,10 @@ class GraphStore:
         ).fetchall()
         top_connected = [{"name": r[0], "file_path": r[1], "callers": r[2]} for r in top_rows]
 
-        # Last indexed timestamp
-        last_indexed = self.get_meta("last_full_index") or self.get_meta("last_incremental_update")
+        # Last indexed (ISO 8601, UTC) — the newer of the two markers, either format.
+        ts = self.indexed_at()
+        last_indexed = (datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
+                        if ts is not None else None)
 
         # Routes (for session-start briefing)
         try:
@@ -1409,6 +1613,7 @@ class GraphStore:
         """Delete all nodes, edges, FTS data, and metadata."""
         self._conn.execute("DELETE FROM code_edges")
         self._conn.execute("DELETE FROM code_nodes")
+        self._conn.execute("DELETE FROM code_imports")
         self._conn.execute(
             "INSERT INTO code_fts(code_fts) VALUES('delete-all')"
         )
@@ -1494,6 +1699,11 @@ class GraphStore:
             d = pr if isinstance(pr, dict) else pr.__dict__
             self.upsert_nodes(d["nodes"])
             self.upsert_edges(d["edges"])
+            # Imports of a file with symbols only — the incremental path keeps the
+            # same rule (a file with no symbols has no call to disambiguate).
+            if d.get("imports") and d.get("file_path") and d.get("nodes"):
+                self._replace_imports(d["file_path"], d["imports"])
+        self._conn.commit()
         self.rebuild_fts()
         self.resolve_and_prune()
 
@@ -1575,7 +1785,8 @@ class GraphStore:
                 continue
             try:
                 if result.nodes:
-                    self.store_file_nodes_edges(fpath, result.nodes, result.edges, content_hash)
+                    self.store_file_nodes_edges(fpath, result.nodes, result.edges, content_hash,
+                                                imports=result.imports)
                     updated.append(fpath)
                 elif existing:
                     # Edited down to no symbols: its old nodes are stale.
@@ -1605,7 +1816,7 @@ class GraphStore:
         if not failed and index_ok:
             # Only a batch that fully landed marks the graph fresh: a failed file is
             # still stale, and freshness readers trust this stamp.
-            self.set_meta("last_incremental_update", str(time.time()))
+            self.mark_indexed(full=False)
 
         # Reclaim WAL disk space after the batch of writes (non-fatal if a reader
         # holds the WAL — retried on the next update).
@@ -1681,18 +1892,28 @@ class GraphStore:
           - N candidates: prefer the one whose file is imported by the caller
           - 0 or ambiguous: leave unresolved (orphan-cleanup drops it)
 
-        Covers edge_type IN (calls, extends, references) — extends/references were
+        Imports are resolved first (``resolve_imports``; the import table is kept apart
+        from the edges). Covers edge_type IN (calls, extends, references) — extends/references were
         added by the dead-code false-positive fixes (run_8e023234). *files* limits
         the edges resolved to those whose source is in those files (incremental
         callers); None resolves the whole graph (a full rebuild). Returns count
         of resolved edges.
         """
+        # Imports first, whether or not any target is unresolved: the table is read
+        # by this resolution and by imported_files().
+        self.resolve_imports(files)
         all_nodes = self._conn.execute(
-            "SELECT id, name FROM code_nodes"
+            "SELECT id, name, node_type, language FROM code_nodes"
         ).fetchall()
         name_to_ids: dict[str, list[str]] = {}
-        for node_id, name in all_nodes:
+        # A value's method call may land on: a method, or any definition of a
+        # language whose parser does not tell methods apart (c/c++ members defined
+        # outside their class, php, swift, …).
+        member_ok: set[str] = set()
+        for node_id, name, node_type, language in all_nodes:
             name_to_ids.setdefault(name, []).append(node_id)
+            if node_type == "method" or language not in _METHOD_TYPED_LANGS:
+                member_ok.add(node_id)
 
         # Resolve targets for calls AND the two edge types added by the dead-code
         # FP fixes (run_8e023234): `extends` (Sub->Base) and `references`. TWO
@@ -1718,7 +1939,7 @@ class GraphStore:
         # `NOT IN (…, NULL)` never-true and silently disable ALL resolution — Gate-2
         # red-team LOW) and a friendly anti-join plan. Returns ONLY unresolved rows.
         bare_sql = (
-            "SELECT rowid, source_id, target_id FROM code_edges e "
+            "SELECT rowid, source_id, target_id, confidence FROM code_edges e "
             "WHERE e.edge_type IN ('calls', 'extends', 'references') "
             "AND NOT EXISTS (SELECT 1 FROM code_nodes n WHERE n.id = e.target_id)"
         )
@@ -1739,17 +1960,24 @@ class GraphStore:
         if not bare_edges:
             return 0
 
+        # What each caller file imports (code_imports, resolved at the top): picks
+        # between same-named definitions. The parser never produced 'imports' edges,
+        # so this branch used to have nothing to read.
         file_imports: dict[str, set[str]] = {}
-        import_edges = self._conn.execute(
-            "SELECT source_id, target_id FROM code_edges WHERE edge_type = 'imports'"
-        ).fetchall()
-        for src, tgt in import_edges:
-            src_file = src.split(qualified_separator)[0] if qualified_separator in src else src
-            tgt_file = tgt.split(qualified_separator)[0] if qualified_separator in tgt else tgt
-            file_imports.setdefault(src_file, set()).add(tgt_file)
+        for src_file, dst in self._conn.execute(
+                "SELECT src_file, dst_file FROM code_imports WHERE dst_file IS NOT NULL"):
+            file_imports.setdefault(src_file, set()).add(dst)
 
+        def _imported(cand_file: str, imported: set[str]) -> bool:
+            if cand_file in imported:
+                return True
+            # a Go import names a package directory ("dir/"): its files, not deeper
+            return any(d.endswith("/") and cand_file.startswith(d) and "/" not in cand_file[len(d):]
+                       for d in imported)
+
+        from .parser import MEMBER_CALL_CONFIDENCE
         resolved_count = 0
-        for rowid, source_id, target_id in bare_edges:
+        for rowid, source_id, target_id, confidence in bare_edges:
             # bare name = last separator-segment (handles bare `Animal` and dangling
             # `base::Animal` → `Animal`). CodeNode.name for a method is the bare
             # method name (id is `file::Cls.method`, name is `method`), so if the
@@ -1759,6 +1987,9 @@ class GraphStore:
             candidates = name_to_ids.get(target_name, [])
             if not candidates and "." in target_name:
                 candidates = name_to_ids.get(target_name.rsplit(".", 1)[-1], [])
+            if confidence is not None and confidence <= MEMBER_CALL_CONFIDENCE:
+                # a call on a value (f.Close()) names a method, never a free function
+                candidates = [c for c in candidates if c in member_ok]
 
             if len(candidates) == 1:
                 self._conn.execute(
@@ -1770,7 +2001,7 @@ class GraphStore:
                 caller_file = source_id.split(qualified_separator)[0]
                 imported_files = file_imports.get(caller_file, set())
                 matching = [c for c in candidates
-                           if c.split(qualified_separator)[0] in imported_files]
+                            if _imported(c.split(qualified_separator)[0], imported_files)]
                 if len(matching) == 1:
                     self._conn.execute(
                         "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
@@ -1820,6 +2051,9 @@ class GraphStore:
         self._conn.execute(
             "DELETE FROM code_nodes WHERE file_path = ?", (file_path,)
         )
+        # 4. Its own imports go; imports of it no longer resolve.
+        self._conn.execute("DELETE FROM code_imports WHERE src_file = ?", (file_path,))
+        self._conn.execute("UPDATE code_imports SET dst_file = NULL WHERE dst_file = ?", (file_path,))
         # A failure part-way is rolled back by _write_locked.
         self._conn.commit()
 

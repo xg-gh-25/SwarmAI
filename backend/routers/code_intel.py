@@ -227,17 +227,12 @@ async def trigger_reindex(project: str, background_tasks: BackgroundTasks):
 
 def _compute_freshness(last_indexed: str | None) -> str:
     """Determine freshness status from last_indexed timestamp."""
-    if not last_indexed:
+    from core.code_intel.graph_store import parse_index_time
+    ts = parse_index_time(last_indexed)
+    if ts is None:
         return "unknown"
-    try:
-        # Parse ISO format — handle both timezone-aware and naive
-        indexed_dt = datetime.fromisoformat(last_indexed.replace("Z", "+00:00"))
-        if indexed_dt.tzinfo is None:
-            indexed_dt = indexed_dt.replace(tzinfo=timezone.utc)
-        age = datetime.now(timezone.utc) - indexed_dt
-        return "stale" if age > timedelta(days=_STALE_THRESHOLD_DAYS) else "fresh"
-    except (ValueError, TypeError):
-        return "unknown"
+    age = datetime.now(timezone.utc) - datetime.fromtimestamp(ts, timezone.utc)
+    return "stale" if age > timedelta(days=_STALE_THRESHOLD_DAYS) else "fresh"
 
 
 def _run_reindex(project: str) -> None:
@@ -310,11 +305,9 @@ def _run_reindex(project: str) -> None:
                         graph.bulk_insert(parse_results, repo_root=repo_path)
                     else:
                         graph.set_meta("repo_root", str(_Path(repo_path).resolve()))
-                    graph.set_meta("last_full_index", datetime.now(timezone.utc).isoformat())
-                    # clear() dropped the freshness marker; re-stamp it, or every
+                    # clear() dropped the freshness markers; re-stamp them, or every
                     # freshness check would read "never indexed".
-                    if head:
-                        graph.set_meta("last_indexed_commit", head)
+                    graph.mark_indexed(full=True, head=head)
         except BindInProgress as exc:
             logger.warning(f"Cannot reindex {project} now: {exc}")
             return

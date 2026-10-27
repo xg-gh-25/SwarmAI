@@ -506,7 +506,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 2 | §5.1 骨架、§5.7 P6 门、§5.10 对齐命令、条目语法加 `taint`；CDF 分支上的 C1–C4 | 无 | **main 部分已完成**（f348be4e；api-contract、correctness 评审）；C1–C4 交 CDF 分支 |
 | 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 Specs 面板、G5 | 1、1b | **已完成**（security、performance 一轮；skill 侧迁移移到第 4 步，见 r6） |
 | 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | **已完成**（correctness、ux 一轮，见 r7） |
-| 5 | G3 import 表、G4 语言修正、G6 | 1 | correctness |
+| 5 | G3 import 表、G4 语言修正、G6 | 1 | **已完成**（correctness 一轮，见 r8） |
 | 6 | §5.11 C5–C11（阶段二）；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
 | 7 | §6 eval golden case 和 fixture repo | 4 | — |
 | 8 | 用户确认后，归档 SwarmAI 的旧 `code-intel.json` 和 `spec-details/`（移动，不删除）；随后删除 §5.9 表里标为"保留到归档为止"的规则 | 1b | — |
@@ -659,4 +659,39 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
     - 被拒绝的文档改为直接问用户要不要加。
   - **卡片**：改为先写下一步动作，例如"Being born · next: write the first knowledge (4/9)"。
 - 记为已知问题：卡片上的"next"只在 P6 `--record` 时更新，中间可能滞后。
+
+**r8（2026-10-28）**：第 5 步实施（G3、G4、G6）。
+- **G4 四条线索**：先写失败测试，四条都是红的，修好后转绿。
+  - **方法调用名**：Go、Rust、C++ 的 `obj.method()` 原来不出边；Java 记成了接收者；Kotlin 连普通调用都没有边。现在统一按方法名记，Ruby 的同类问题一并修了（方法名在 `method` 字段里）。
+  - **TS/JS 箭头函数**：取持有它的变量名或类字段名；作为回调传入的箭头函数不建节点。原来参数不加括号时，会以参数名建节点。
+  - **多行 import**：Python 括号包起来的多行 import 不再丢名字。import 解析只有一处（`scan_imports`），调用解析和 import 表都从它取数据。
+  - **索引时间标记**：统一用 ISO 格式，写入只经过 `mark_indexed`，读取两种旧格式都认，已有的图不用迁移。bind 现在也记录时间和 HEAD（原先 analysis 的 `indexed_commit` 为 null）。
+- **G3 import 关系**：
+  - 存进 `code_imports` 表，`resolve_bare_targets` 按 import 在同名定义之间消歧；
+  - 解析规则覆盖 Python 绝对和相对导入、TS/JS 相对导入、Java、Go 包目录；
+  - 只改了 import 行的 COSMETIC 改动也会刷新这张表；
+  - **`module_edges` 不从 import 派生**：它的含义是"哪个模块调用哪个模块"，而且没有读取方需要 import 版本。
+- **G6 recall**：
+  - 代码命中带 `文件:行号` 和定义的首行；
+  - 新鲜度在 git 路径上的结论按 (repo, HEAD, 上次索引的 commit) 缓存；
+  - 项目有多张图时逐张检索、轮流合并，命中标明来自哪个 repo。第 1 步留下的"recall 只读第一张图"一并解决。
+- 评审（correctness 一轮：1 个 HIGH、5 个 MEDIUM、4 个 LOW），已修：
+  - **import 解析太慢**：每次增量都重扫全图所有未解析的行，在本 repo 上约 5 秒。现在增量只解析本批文件，全量重建时全部重新解析，配错的后缀匹配在那时纠正；用按文件名查的索引代替逐个比对；值没变就不写库。
+  - **bind 空图**：解析不出任何东西时，不打"已索引"标记。
+  - **非 git repo 的新鲜度**：只认全量索引时间。只处理了部分文件的增量批次不能把其余改动掩盖掉。
+  - **值上的方法调用**（`f.Close()`）：存成低置信度的纯名字，解析时只连到方法，不连到同文件的同名函数；通过模块或包的调用（`utils.helper()`、`pkg.Fn()`）照常按函数解析。
+  - **同时修好的方法节点类型**：
+    - Go 的 `type` 声明和方法原来根本不建节点，现在方法挂在接收者类型下；
+    - Rust 的 `impl` 里的函数归到对应类型下；
+    - Ruby 的类和方法按 `name` 字段识别。
+    - "只连到方法"这条限制只用在能正确区分方法的语言上，C、C++ 等维持按唯一名字解析。
+  - **其他**：
+    - 图缓存按项目淘汰，取缓存时核对文件身份；
+    - Java 的通配 import 和静态 import 改对；
+    - Rust 带泛型参数的调用能取到方法名；
+    - 签名里的反引号做了转义，签名只为保留下来的命中读取；
+    - 全量重建和增量更新都只为有符号的文件保存 import。
+- 记为已知问题：
+  - C++ 类外定义的成员函数仍然记成 `function`，值上的调用会按唯一名字连过去，可能误连，和 Python 原来的情况一样；
+  - 增量批次里新出现的文件，要等下一次全量重建，别的文件指向它的 import 才会解析出来。
 

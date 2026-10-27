@@ -116,10 +116,10 @@ def _format_briefing(project_name: str, summary: dict) -> str | None:
     lines.append(f"Stats: {', '.join(stats)}")
 
     # Last indexed
-    last_indexed_str = summary.get("last_indexed")
-    if last_indexed_str:
+    from core.code_intel.graph_store import parse_index_time
+    last_ts = parse_index_time(summary.get("last_indexed"))
+    if last_ts is not None:
         try:
-            last_ts = float(last_indexed_str)
             age_s = time.time() - last_ts
             if age_s < 120:
                 age_str = f"{int(age_s)}s ago"

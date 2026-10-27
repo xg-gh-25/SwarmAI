@@ -15,7 +15,7 @@ scattered sites with no unified fan-out. This module closes that gap (READ-only)
   remains as a standalone unit (still directly tested). DDD docs are not MEMORY-keyed,
   so the MEMORY index scorer no-ops on them; this scores sections by BM25 over the
   section body text. Pure keyword — never embeds.
-- ``_codeintel_recall``    — buckets ``load_project_graph().search_symbols`` +
+- ``_codeintel_recall``    — buckets every project graph's ``search_symbols`` +
   ``find_callers`` into a code-intel hit list. None-safe (no graph → empty bucket).
 - ``recall_all``           — fans a query across all 5 domains into one
   ``BucketedRecall``. ``allow_embed=False`` by default → zero Bedrock embeds, zero
@@ -39,16 +39,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-# Lazy import at call sites for code_intel to keep import cost low + None-safe.
-try:
-    from core.code_intel import load_project_graph
-except Exception:  # pragma: no cover - import guard
-    load_project_graph = None  # type: ignore
 
 DOMAINS = ("context_files", "ddd", "library", "session", "codeintel")
 
@@ -244,7 +239,8 @@ def _codeintel_recall(query: str, project: Optional[str] = None,
     """Bucket code-graph search hits for ``query`` in ``project``.
 
     Combines TWO sources (Library Cycle 4): the project's own code graph
-    (``load_project_graph(project)``) AND any enabled code-dir MOUNTS registered
+    (every graph ``load_project_graphs(project)`` returns, one per bound repo) AND
+    any enabled code-dir MOUNTS registered
     under ``project`` (``library_mounts.recall_mounts`` — an additive pass, so a
     mount-only project with no code_intel.db still surfaces mount symbols). Each
     hit is a symbol dict ({name, id, file_path, rank, callers?}); mount hits carry
@@ -303,16 +299,61 @@ def _mount_codeintel_recall(query: str, project: Optional[str], limit: int) -> l
 
 def _project_codeintel_recall(query: str, project: Optional[str] = None,
                               limit: int = 8) -> list[dict]:
-    """The project's own code graph hits (the original _codeintel_recall body)."""
-    if not project or load_project_graph is None:
+    """The project's own code graph hits, from every graph it has (one per bound repo).
+
+    BM25 ranks are relative to one graph's index, so the per-graph lists are merged by
+    taking one hit from each in turn, not by sorting on rank. Each hit names its
+    ``repo`` and carries ``line`` and ``signature`` (the first line of the definition,
+    read from the repo) for the reader to find it without a search.
+    """
+    if not project:
         return []
     try:
-        graph = load_project_graph(project)
+        from core.code_intel import load_project_graphs
+        graphs = load_project_graphs(project)
     except Exception as exc:  # noqa: BLE001 — best-effort domain
-        logger.debug("codeintel recall: load_project_graph failed: %s", exc)
+        logger.debug("codeintel recall: load_project_graphs failed: %s", exc)
         return []
-    if graph is None:
-        return []  # project has no code_intel.db — unavailable, not empty-create
+    per_graph = [[(i, h) for h in _graph_codeintel_hits(query, ref, graph, limit)]
+                 for i, (ref, graph) in enumerate(graphs)]
+    merged: list[tuple[int, dict]] = []
+    while len(merged) < limit and any(per_graph):
+        for hits in per_graph:
+            if hits and len(merged) < limit:
+                merged.append(hits.pop(0))
+    if not merged:
+        return []
+    # The definition's first line, for the kept hits only (one file read each).
+    merged = [(i, {**h, "signature": _signature_line(graphs[i][1].get_meta("repo_root"),
+                                                     h.get("file_path", ""), h.get("line"))})
+              for i, h in merged]
+    # Enrich the top hit with direct callers (1 hop) from its own graph.
+    i, top = merged[0]
+    try:
+        callers = graphs[i][1].find_callers(top["id"], depth=1)
+        merged[0] = (i, {**top, "callers": [c[0] for c in callers[:5]]})
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("codeintel recall: find_callers failed: %s", exc)
+    return [h for _, h in merged]
+
+
+def _signature_line(repo_root: Optional[str], file_path: str, line: Optional[int]) -> str:
+    """The definition's first line, read from the repo (inside it, no secrets), cut to
+    160 characters; "" when it cannot be read."""
+    if not repo_root or not file_path or not line:
+        return ""
+    try:
+        from core.brain_bootstrap.repo_read import safe_read_text
+        text = safe_read_text(Path(repo_root), file_path)
+        lines = (text or "").splitlines()
+        sig = lines[line - 1].strip()[:160] if 0 < line <= len(lines) else ""
+        return sig.replace("`", "'")      # it is shown inside a code span
+    except Exception:  # noqa: BLE001 — navigation detail, never fatal
+        return ""
+
+
+def _graph_codeintel_hits(query: str, ref, graph, limit: int) -> list[dict]:
+    """One graph's hits, freshness-stamped, each with repo, line and signature."""
 
     # Freshness guard (pure-filesystem recall design §3.x/DoD5, 2026-06-28):
     # grep is always live; the AST graph can DRIFT (teammate rebase, a missed
@@ -325,6 +366,8 @@ def _project_codeintel_recall(query: str, project: Optional[str] = None,
     # stale-comment-fooled-me class the MEMORY line keeps hitting (R16b).
     stale_flag = False
     stale_reason = None
+    repo_root = graph.get_meta("repo_root")
+    repo = ref.repo or (Path(repo_root).name if repo_root else None)
     try:
         from .code_intel.freshness import check_freshness
         fr = check_freshness(graph)
@@ -345,13 +388,8 @@ def _project_codeintel_recall(query: str, project: Optional[str] = None,
         logger.debug("codeintel recall: search_symbols failed: %s", exc)
         return []
 
-    # Enrich the top hit with direct callers (1 hop) for navigation context.
-    if hits:
-        try:
-            callers = graph.find_callers(hits[0]["id"], depth=1)
-            hits[0] = {**hits[0], "callers": [c[0] for c in callers[:5]]}
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("codeintel recall: find_callers failed: %s", exc)
+    lines = graph.node_lines([h["id"] for h in hits]) if hits else {}
+    hits = [{**h, "repo": repo, "line": lines.get(h["id"])} for h in hits]
 
     # Stamp freshness on every hit (DoD5) — cheap, lets the agent discount stale edges.
     if stale_flag:
@@ -727,9 +765,16 @@ def _render_domain_hits(domain: str, hits: list) -> str:
                 lines.append(note)
         elif domain == "codeintel":
             ref = h.get("id") or h.get("name", "?")
+            if h.get("file_path") and h.get("line"):
+                ref = f"{h['file_path']}:{h['line']}"
             callers = h.get("callers") or []
             stale = " ⚠️STALE" if h.get("graph_stale") else ""
-            line = f"- `{ref}`{stale}"
+            line = f"- `{ref}`"
+            if h.get("signature"):
+                line += f" `{h['signature']}`"
+            if h.get("repo"):
+                line += f" ({h['repo']})"
+            line += stale
             if callers:
                 line += f" (callers: {', '.join(str(c) for c in callers[:5])})"
             lines.append(line)
