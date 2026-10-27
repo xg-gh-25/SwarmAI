@@ -90,9 +90,10 @@ function RunCard({ r }: { r: RunRow }) {
       data-testid="run-row"
     >
       <div className="flex items-start gap-2 min-w-0">
-        <span className="mt-[6px]"><Dot state={r.state} /></span>
-        <span className="font-medium min-w-0 flex-1 line-clamp-2 leading-snug" title={r.title}>{r.title}</span>
-        <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 mt-[2px] ${muted}`}>{r.worker ?? r.when}</span>
+        {/* dot and worker / time are centred on the title's FIRST line (18px tall) */}
+        <span className="h-[18px] flex items-center flex-shrink-0"><Dot state={r.state} /></span>
+        <span className="font-medium min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
+        <span className={`h-[18px] flex items-center text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{r.worker ?? r.when}</span>
       </div>
       <div className={`text-[11.5px] ${muted} truncate mt-0.5 pl-[15px]`} title={r.sub}>{r.sub}</div>
       {(r.flag || r.stage || r.action || r.judge) && (
