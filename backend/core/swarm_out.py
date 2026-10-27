@@ -250,7 +250,8 @@ def _open_asks(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
         try:
             body = s3.get_object(Bucket=bucket, Key=base + "ask/" + rel)["Body"].read(64 * 1024)
             rec = json.loads(body)
-        except Exception:
+        except Exception as e:   # one unreadable ask must not hide the others
+            logger.warning("swarm_out: skipped an unreadable ask from %s (%s)", hive, type(e).__name__)
             continue
         clean = _clean_ask(rec, hive)
         if clean is not None and not _too_old(clean["asked_at"], time.time()):
