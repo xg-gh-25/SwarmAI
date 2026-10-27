@@ -84,6 +84,11 @@ def test_release_refuses_live_ddd_in_ci_and_unknown_options():
     assert r.returncode == 2 and "unknown option" in r.stderr
 
 
+def test_the_default_package_does_not_seed_the_live_ddd():
+    # flipping this default is the one edit no CI check before verify --public would see
+    assert re.search(r"^WITH_LIVE_DDD=0$", RELEASE.read_text(), re.M)
+
+
 def test_workspace_reads_are_inside_the_live_ddd_branch():
     text = RELEASE.read_text()
     start = text.index('if [ "${WITH_LIVE_DDD}" = "1" ]; then\necho')

@@ -130,14 +130,15 @@ echo "[release] Copying pre-built frontend..."
 mkdir -p "${STAGING}/desktop/dist"
 rsync -a "${PROJECT_ROOT}/desktop/dist/" "${STAGING}/desktop/dist/"
 
-# Only the tracked files of hive/, minus the packaging scripts: an ignored hive/.env or a
-# leftover hive/seed/ in this checkout must not ride along (the seed is built below).
-echo "[release] Copying hive config (the tracked files)..."
+# The files of hive/ the repo ships (same rule as the backend above, so an ignored hive/.env
+# stays out and a source tarball still works), minus the packaging scripts and any
+# leftover hive/seed/ in this checkout: the seed is built below.
+echo "[release] Copying hive config (the files the repo ships)..."
 HIVE_LIST="${STAGING}.hive-files"
-(cd "${PROJECT_ROOT}" && git ls-files -- hive) \
+(cd "${PROJECT_ROOT}" && python3 backend/scripts/shipped_skills.py hive) \
     | grep -v -E '^hive/(release\.sh|update-hive\.sh)$|^hive/seed/' > "${HIVE_LIST}" || true
 if ! grep -qx 'hive/swarmai-hive.sh' "${HIVE_LIST}"; then
-    echo "[release] ERROR: hive file list has no hive/swarmai-hive.sh (git ls-files failed?) — aborting" >&2
+    echo "[release] ERROR: hive file list has no hive/swarmai-hive.sh — aborting" >&2
     exit 1
 fi
 rsync -a --files-from="${HIVE_LIST}" "${PROJECT_ROOT}/" "${STAGING}/"
