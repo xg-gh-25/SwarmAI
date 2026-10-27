@@ -3,7 +3,7 @@ title: New Brain 初始 DDD 系统化设计 — Asset Survey、Spec 发现、确
 created: 2026-10-27
 updated: 2026-10-27
 project: SwarmAI
-status: r2 — 设计，已过一轮零上下文前提评审（修订见 §13），待用户审
+status: r3 — 设计。已过一轮零上下文前提评审（§13）；用户 2026-10-27 拍板三项：Q1 段名改通用（已完成，c3c629ceb）、Q2 CDF 改造由本设计负责（§5.11）、Q3 code-intel.json 不是产品能力，退出（§5.9）
 related:
   - docs/design/2026-10-26-swarm-cognitive-distillation-flow.md   # CDF r16.6
   - docs/design/2026-10-24-swarmai-usable-by-anyone.md
@@ -95,7 +95,7 @@ NewBrainOverlay (名字 + starter material，按类型规则分成 GOVERN / DIST
 **非目标**
 - 不改 DDD 的注入方式（CDF §12、§15）。
 - 不动已有 brain 的已写内容（CDF §13），只给它们补缺失的空段标题，而且要用户确认（§5.10）。
-- 不把 code-intel.json 的业务层（domains、flows、steps）扩到新 brain，它的去留另议（§11 Q3）。
+- 不保留 code-intel.json 和 spec-details：它们不是产品能力，退出（§5.9）。
 - 不做向量检索，不引入新的存储引擎。
 
 ## 3. 设计原则
@@ -127,7 +127,7 @@ flowchart TB
   S7 -->|enqueue_unit| W["CDF worker → writer"] --> DDD
   Q -.->|"阶段二：user 消息"| S12["CDF S1/S2 用户原话提取"] --> W
   DDD --> P6["P6 完整性门（确定性）"]
-  SV --> SI[("spec-index.json<br/>派生区")] --> HUB["Brain Hub：Specs / Code Graph"]
+  SV -->|文档清单| HUB["Brain Hub：Specs / Code Graph"]
   CG --> HUB
 ```
 
@@ -157,8 +157,8 @@ flowchart TB
   这样阶段二里每一段都有合法的写入者（CDF writer），不存在 CDF 管不到的"导航段"。
 - 已有 brain 的这些段原样保留（§13 不动已写内容）。
 
-**对 CDF 的改动（需要 CDF 设计接受）：**
-1. 矩阵和 `layer_for` 里的 `What Makes SwarmAI Different` → `What Makes It Different`；`Key Subsystems (architecture shape)` → `Key Subsystems`（和 SwarmAI live 的标题一致）。SwarmAI 自己要改的只剩 PRODUCT.md 的一个标题（§11 Q1）。
+**对 CDF 的改动**（正式清单见 §5.11 C1、C2）：
+1. 矩阵和 `layer_for` 里的 `What Makes SwarmAI Different` → `What Makes It Different`；`Key Subsystems (architecture shape)` → `Key Subsystems`（和 SwarmAI live 的标题一致）。SwarmAI 自己要改的只有 PRODUCT.md 的一个标题，已于 2026-10-27 完成（c3c629ceb：live 标题、`signal_ddd_bridge.py:200`、`recall_suite.py:183`、`templates/ddd/PRODUCT.md`）。CDF 分支里的矩阵和 `layer_for` 由 §5.11 C1 修改。
 2. `validate_ddd_matrix` 的模板根改为 `templates/ddd-skeleton/`。CDF §7.1 原计划让 `DDD_TEMPLATES` 从 `templates/ddd/*.md` 读取，而那些是 SwarmAI 的产品内容。
 
 ### 5.2 Asset Survey：确定性盘点
@@ -218,10 +218,11 @@ API 契约不读原文：survey 放结构化摘要（端点或 RPC 列表，每�
 - 不复制文件，所以不会和 repo 漂移。
 - recall 的 `library` 域：`bind:` 键只对 active project 返回，渲染时一律放进不可信数据边界。按键前缀判定，是确定性的；这符合 CDF §9"读入的文件属于 external"。
 
-**派生区的 spec 索引**：`Projects/X/spec-index.json` 是 survey 文档部分的投影，和 `code-intel.json` 同属"不是 DDD 成员"的派生区，不进 CDF。
-- Brain Hub 的 Specs 面板读它，按层展示真实 spec；
-- 打开原文走一个端点，**该端点重新把路径限制在 worktree 内**，不信任 json 里的路径；
-- `spec-details/*.spec.md` 另列为"由代码生成的投影"。
+**Brain Hub 的 Specs 面板**：
+- 直接读 `survey.json` 的文档部分，按层展示 repo 里真实的 spec。不另起派生文件（§5.9）；survey 在 `.artifacts/` 下，属于"不是 DDD 成员"的派生区，不进 CDF。
+- 打开原文走一个端点，**该端点重新把路径限制在 worktree 内**，不信任 json 里的路径。
+- HEAD 变化时，reindex job 在同步 `bind:` 索引的同时重跑 survey 的文档部分（确定性、不调 LLM）。
+- `spec-details/` 退出产品（§5.9）。
 
 ### 5.4 阶段一的提取：逐段清单，agent 只做判断
 
@@ -297,7 +298,7 @@ CDF §9 要求 DDD 条目的 meta 标 `taint: external`，但两个 CDF 分支�
 3. **按段追加**；条目一律带 `source:bootstrap`。来源是 repo 或外部文件的，加 `taint:external`；来源只有用户回答的，不加。
 4. **被拒绝的条目**原样写进 `.artifacts/bootstrap/rejected.json`，附原因；agent 修正后重跑。幂等键是条目内容哈希。
 
-阶段一不违反 CDF：CDF 还没上线；上线时，`bootstrap-apply` 的写入代码按 CDF §8"一次切换"列入要删除的旧写入路径。阶段一写下的条目会进入 CDF 基线，**它们的 `taint:external` 必须被 CDF 的基线生成读出来，记成被污染的 corpus unit**（对 CDF 的改动请求，§5.5 末尾第 (d) 项）。
+阶段一不违反 CDF：CDF 还没上线；上线时，`bootstrap-apply` 的写入代码按 CDF §8"一次切换"列入要删除的旧写入路径。阶段一写下的条目会进入 CDF 基线，**它们的 `taint:external` 必须被 CDF 的基线生成读出来，记成被污染的 corpus unit**（§5.11 C4）。
 
 **阶段二（CDF 阶段 B 的切换提交里一起切换）：**
 - **S7 `asset_bootstrap`**：拥有"新 bind 的资产在 bind 时刻的 HEAD 快照"。它在会话之外运行，是一个后端 job，由 bind 成功后触发：
@@ -309,11 +310,7 @@ CDF §9 要求 DDD 条目的 meta 标 `taint: external`，但两个 CDF 分支�
 - **历史归 S4**：`parse_git_gotchas` 用到的 commit 是"不由 run 落地的 commit"，按 CDF §5.2 归 S4。bind 时触发一次 S4 回补，窗口是最近 12 个月。S7 不引用 commit。
 - **用户回答归 S1/S2**：§5.6 的回答是本会话的 user 消息，由 S2 的用户原话提取在会话结束时处理（trust=user），卡 1 把它们路由到 PRODUCT。S7 不认领它们。
 - **完整性门的时序**：S7 和 S4 的候选到达终态之前，P6 的内容检查报 `PENDING (bootstrap 处理中，N/M)`，不报 FAIL。Brain Hub 显示进度。
-- **对 CDF 的改动请求**：
-  - (a) SOURCES_V2 加 S7；
-  - (b) S7 用 `bootstrap` lane，执行器和 run lane 同类（专用、有界、并发 1、不受流式暂停影响），但**队列独立**，不排在 REFLECT 前面；
-  - (c) 配额：CDF §12 规定每个项目的 DDD 每天新增不超过 20 KB，一次 bootstrap 会超。S7 和 S4 回补共用"每次 bind 一次、上限 200 KB"的配额，幂等键是（项目，repo，HEAD）；
-  - (d) 基线生成读取 meta 里的 `taint:`。
+- **对 CDF 的改动**：S7、S4 回补和 commit 锚点修复、`bootstrap` lane、一次性配额、基线读 taint，见 §5.11 C4–C8。
 - **卡 1 的风险**：CDF §14.1 T2 记录了冒烟测试里 4/5 被判"推测"。S7 的条目必须引用文件原文（`doc:` 根），不能只引用图的 id。按 CDF T6 单独统计 S7 的"该写"比例，低于 5% 就改提取方式。
 
 ### 5.6 证据缺口时提问
@@ -373,7 +370,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 
 **G4 语言修正**：§1.2 末尾的四条线索，各写一个语言夹具的失败测试，红了才修；用 tree-sitter 的字段名（`function` / `name`），不用"第一个子节点"。
 
-**G5 热点**：export 的 `hot_zones` 改为来自 `parse_git_gotchas`（fix 历史集中的文件）；原来的高扇入改名为 `central_symbols`，不再冒充热点。
+**G5 热点**：code-intel.json 的导出退出之后（§5.9），`hot_zones` 不再存在。热点只出现在 survey 里，来自 `parse_git_gotchas`（fix 历史集中的文件）。高扇入的符号在 survey 里叫 `central_symbols`，不冒充热点。
 
 **G6 recall 渲染**：每个命中带 `file:line` 和签名首行；`check_freshness` 按 HEAD 缓存。
 
@@ -383,22 +380,75 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - `git_sync_engine.py:319` 的 `git clone` 加 `--`，只接受 https / ssh / 本地路径三种协议；
 - 本地路径过 `is_protected_system_path`（mount 已在用）。
 
-### 5.9 code-intel.json 收敛
+### 5.9 code-intel.json 和 spec-details 退出产品
 
-- **唯一生成方**：`core/code_intel/json_exporter`，从 `code_intel.db` 导出，路径固定为 `Projects/X/code-intel.json`。
-- skill 里手写 JSON 的步骤删掉；DDD 自带的 portable refresher 保留（脱离 SwarmAI 也要能用），但输出同一个 schema 的子集，由同一个 schema 校验。
-- 业务层（domains、flows、steps）是 LLM 写的认知，却放在 CDF 管不到的地方（P8：一扇没人看守的门）。不扩到新 brain，新 brain 的同类知识写成 Key Subsystems 的 model 条目。它在 SwarmAI 里的去留另议（§11 Q3）。
+**结论：两者都不是产品能力，退出。**（用户 2026-10-27："是产品级别的就留，不是就拿掉，我们不搞特殊"。）
+
+**判定依据**（P7 strip test：换一个陌生用户的新安装，看它还起不起作用；2026-10-27 读源码、实测）：
+- **确定性的那一半，运行时没有读取方。** code-intel.json 里的模块、入口点、热点等投影，没有任何运行时代码读：recall、Brain Hub、watcher 都直接读 `code_intel.db`。除此之外的读取只有两种：
+  - 存在性检查：`verify_ddd_complete` 的 ⑥ 和 `ddd_self_audit.py:138`；
+  - 一句 prompt 提示：`ddd_self_audit.py:175`。
+- **对新用户根本生成不出来。** core exporter 只在 `Projects/<p>/code_intel.db` 存在时由 reindex job 调用，而 bind 从来不建这个文件（P-8）。新 brain 能拿到的只有 skill 手写的、或 DDD 自带 refresher 写的 schema 2 文件（itsdangerous 就是这种），而这两种都没有任何读取方。
+- **内容读取方只认 LLM 业务层。** `recall_multi._score_domains`（`:1333-1365`）只读 `domains`、`flows`、`steps`，而 9 个项目里只有 SwarmAI 有这一层（实测：SwarmAI 有 14 个 domains、31 个 flows；itsdangerous 是 0）。
+- **"可移植"的初衷落空了。** `ddd_packager.py:1313` 把它当成 live-tree 噪音排除在包外；skill 的输出又写在 repo 旁边的目录（`ai_ready_helpers.py:2554-2592`），repo 里的外部 agent 也看不到它。
+- **spec-details 和它绑在一起**：生成依赖 domains，过期检测依赖 domains 的 `spec_hash`（`freshness.py:219-250`、`context_health_hook.py:821-860`）。recall 只读其中的 `[human]` 区（`recall_multi.py:1246-1264`），而 SwarmAI 14 份 spec-details 的 `[human]` 区**全部只有占位符**，没有一条是人写的（实测）。
+- **业务层是 CDF 管不到的认知**：LLM 写的业务规则放在 CDF 之外，正是 P8 说的"一扇没人看守的门"。这类知识的正确去处是 DDD（TECH § Key Subsystems 的 model 条目），由 CDF 写入。
+
+**删除清单**（实现时以 grep 为准，R27 包括读路径）：
+
+| 类别 | 位置 | 处理 |
+|---|---|---|
+| 生成 | `core/code_intel/json_exporter.py` 的 code-intel.json 导出；`code_intel_reindex.py:186`、`:366-370` 的调用；`graph_analysis.py:97-113` 只为 domains 服务的部分 | 删除。图分析里有别处在用的函数保留 |
+| 生成 | `s_repo-to-ddd` 里生成 code-intel.json、domains、spec-details 的步骤和函数（`INSTRUCTIONS.md:579-711`、`regenerate_spec_preserving_human`、`templates/domain-spec.md.tmpl`） | 删除；skill 其余功能（AGENTS.md 等 AI-ready 产出）不动 |
+| 生成 | `templates/ddd-skills/s_repo-to-ddd/scripts/refresh_code_intel.py` | 删除；⑥ Refresher 对 code-repo 的含义改为"重建 `code_intel.db` 和 `bind:` 文档索引"，入口是现有的 `artifact_cli bind`（加上 §5.3 的文档索引）和 `on:git_commit` reindex job |
+| 读取 | `recall_multi.py` 的 domains 一路（`:1130-1145`、`:1333-1365`）和 spec-details `[human]` 一路（`:1145-1150`、`:1246-1264`） | 删除 |
+| 读取 | `freshness.detect_spec_details_staleness`、`context_health_hook._signal_stale_spec_details` | 删除 |
+| 读取 | `verify_ddd_complete` 的 code-intel.json 查找（`:171-185`、`:318-333`） | 改为 `code_intel_dbs`（§5.7） |
+| 读取 | `ddd_self_audit.py:138`、`:175` | 改为 `code_intel_dbs`；prompt 提示改为"用 recall 的 codeintel 域（`context_recall_cli.py --domains codeintel --project X`）" |
+| 展示 | `ddd_bindings.py:666-675` 的 spec-details 计数；`ddd_brain.py:955-985` 的 `specs`；`desktop/src/services/ddd.ts:157-162` | 改为 survey 的真实文档清单（§5.3） |
+| 文案 | `swarm_workspace_manager.py:556`、`:567`、`:572`、`:604` 的 AGENTS.md / REFRESHER 骨架 | 改写 ⑥ 和"不是 DDD 成员"两段 |
+| 常量 | `project_registry.SPEC_DETAILS_DIR`；`prompt_builder.py:2646` 的 spec-details 排除 | 已有 brain 的目录还在盘上，所以排除规则保留到用户归档那个目录为止，常量随之删除 |
+| 前端 | `LibraryTree.tsx:54` 隐藏 code-intel.json 的规则 | 保留到已有文件被归档为止，然后删除 |
+
+**已有数据不由代码删除**（SOUL P4 / STEERING #20）：SwarmAI 的 `code-intel.json`（399 KB，SwarmWS 里有 git 跟踪）和 `spec-details/`（14 份）是用户工作区里的文件。代码退出之后，这两样不再被读写。归档由用户确认后执行：移到 `Projects/SwarmAI/.artifacts/archive/` 下，不删除。业务层里有价值的内容，以后经 CDF 的 S2/S3 写成 DDD 条目，不做一次性迁移（CDF §13：系统不整理已沉淀的内容）。
+
+**失去什么**：只有 SwarmAI 失去 domains 这一路 recall。SwarmAI 的 TECH.md 本身已有大量 Key Subsystems 内容，由 DDD 那一路覆盖。其他 brain 什么都不失去。
+
+**spec-index 也不另起文件**：§5.3 原计划新增的 `spec-index.json` 并进 `survey.json` 的文档部分，Brain Hub 直接读 survey，不再新造一个派生 json。
 
 ### 5.10 前端与已有 brain
 
 - **GOVERN 判定**：manifest 里的 folder 项由 agent 在 P0 调用 `artifact_cli classify-starter <path>` 判定。它复用 `judge_mount_kind`：有 repo 标记就是 GOVERN（以本地路径为 clone 源，过 G8），否则是 SHELF（修 P-16）。用户仍然可以改。
 - **"出生"进度**：Brain Hub 卡片显示 P6 的分项（结构、内容、图；阶段二另有 bootstrap 处理进度）。
-- **Specs 面板**读 `spec-index.json`；**Code Graph 面板**读 `code_intel_dbs`。
+- **Specs 面板**读 `survey.json` 的文档部分；**Code Graph 面板**读 `code_intel_dbs`。
 - **已有 brain 的段对齐**：`artifact_cli ddd-skeleton-align --project X`。
   - 默认 dry-run，列出缺的段。
   - 和已有标题近似时（按归一化后的前缀匹配，例如已有 `## Key Subsystems` 对应 `Key Subsystems`，已有 `## Known Issues / Pitfalls`），只报告、不追加，避免在一个几百行的段旁边再造一个空的同名段。
   - 用户确认后，只把真正缺的 `## 段名` 追加到文件末尾，不改任何已有字节。
   - 在 CDF 基线生成之前跑完。CDF 上线之后，`missing_section` 的 deferral 在 Need You 里附一句可以直接发进 chat 的 prompt，做法和 CDF 对 `unknown_domain` 的处理相同。
+
+### 5.11 CDF 改造清单（本设计负责）
+
+用户 2026-10-27 决定：CDF 要怎么改，由本设计写清楚。下表是唯一的清单。
+- CDF 正文（`docs/design/2026-10-26-swarm-cognitive-distillation-flow.md`）下一次修订时，引用本节并按本节改它的表格，不另写一份。
+- 代码位置以 2026-10-27 的 CDF 分支为准（`kiro/cdf-stage-b`、`kiro/cdfv2-*`），合并时以合并后的位置为准。
+- C1–C4 不依赖阶段 B，可以随 CDF 的"关闭状态"提交先合进 main。C5–C11 随阶段 B 的切换提交一起上线。
+
+| # | CDF 章节 | 改什么 | 代码 | 证明它的测试 |
+|---|---|---|---|---|
+| C1 | §7.1 卡 2 的 DDD 段矩阵 | 段名通用化：product×model → `What Makes It Different`；architecture×model → `Key Subsystems`（去掉 `(architecture shape)`） | `contracts.py` 的 `_DDD_MATRIX`；`units.py` 的 `layer_for` 里的 `ddd_sections` | `validate_ddd_matrix(骨架根)` 通过；新增 P7 测试：矩阵的段名集合 ⊆ 骨架标题集合，并且没有任何段名包含项目名 |
+| C2 | §7.1"DDD 模板只保留一个来源" | 唯一来源从 `backend/templates/ddd/*.md` 改为 `backend/templates/ddd-skeleton/*.md`；`templates/ddd/` 改为 SwarmAI 默认项目的种子 | `validate_ddd_matrix` 的默认 `template_root`；`swarm_workspace_manager.provision_project_ddd` | 骨架变了而矩阵没跟着变时，测试变红 |
+| C3 | §7.2 D5、§9（DDD 条目标 `taint: external`） | writer 写 DDD 条目时调用唯一的 `render_ddd_unit`；被污染的条目带 `taint:external`；有显式 title 时一字不截 | `writer._render_block` 的 DDD 分支（现在是 `writer.py:173`，只写 `source:ingestion`） | I3（和阶段一共用）；被污染的单元写入后，`parse_entries` 读出 `taint == "external"` |
+| C4 | §13 基线、§9 corpus_unit 的 trust | 基线生成读条目 meta 里的 `taint:`，带它的基线单元，trust 记为 `external`；`unit:` 锚点引用它时，`resolve_evidence` 判为被污染 | `writer.ensure_baseline`（`writer.py:880`）、provenance 的 `unit:` 分支 | 夹具：一个带 `taint:external` 的基线条目 → 引用它的新单元 `tainted is True`；去掉读取逻辑后变红 |
+| C5 | §5.2 source 表、§5.5 提取规范 | 新增 **S7 `asset_bootstrap`**。证据归属：新 bind 的资产在 bind 时刻的 HEAD 快照，即 `root_kind=file_revision`、locator 为 `repo:<project>/<repo>/<path>@<bind_sha>` 的根。在会话之外运行，只产出 Cognition 和 Gap。其他 source 遇到 sha 等于 bind_sha 的 file_revision 根就跳过（S4 的漂移修正引用的是 bind 之后的版本，两者不重叠） | `contracts_v2.SourceId`、`SOURCES_V2`；新增 `sources/s7_bootstrap.py`，复用 `common.extract_and_enqueue` 和 §5.4 的逐段清单做提取 prompt | S7 的 E2E：fixture repo bind → 单元入队 → worker → 写进骨架，带 taint；归属测试：同一个根经 S4 出现时被跳过 |
+| C6 | §5.5 S4 | ① bind 时触发一次 S4 历史回补：最近 12 个月、不由 run 落地的 commit；② **修实现缺口**：今天不在 run 里的 `commit:` 锚点无法解析（`provenance.py:153-155`：`if not run_id: return None`），S4 的证据会被判 `missing_evidence`。改为 S4 用 locator `repo:<repo>:<sha>` 登记 commit 根，解析时按 locator 查 | `sources/s4_code.py`、`provenance.py` 的 `commit:` 分支 | 一个引用非 run commit 的 S4 单元能解析出证据（今天是红的） |
+| C7 | §5.9 时效表、§6 lane | 新增 `bootstrap` lane：执行器和 run lane 同类（专用、有界、并发 1、流式期间不暂停），**队列独立**；由 `artifact_cli bind` 成功后触发 S7 和 S4 回补；目标是 bind 后 30 分钟内完成，超时进 Need You | lane 表、调度器、`artifact_cli bind` | 模拟流式期间 bootstrap 仍然推进；一个 run 的 REFLECT 不排在 bootstrap 队列后面 |
+| C8 | §12 写入容量 | S7 和 S4 回补共用一次性配额：每个（项目，repo，bind_sha）上限 200 KB，不占每天 20 KB 的 DDD 配额；同一个 bind_sha 重绑不再给配额 | `ingestion_quota`、卡 0 的配额检查 | 超过 200 KB → `REJECT quota` 并计数；同一个 sha 重绑 → 不新增配额 |
+| C9 | §8 写入者迁移表 | 加三行：① `bootstrap-apply` 的直接写入，在切换提交里删除；② `ddd-skeleton-align` 必须在基线生成之前跑完，切换后改走 `governed_edit`（`op_kind=user_edit`）；③ code-intel.json 和 spec-details 的生成方已退出（§5.9），不再是写入者 | §8 静态检查的 AST 夹具 | 切换提交里 `bootstrap-apply` 的写文件调用仍在 → 静态检查变红 |
+| C10 | §10 Flow 视图、对 P6 暴露的查询 | 提供只读查询：某项目的 S7 / S4 回补候选的终态和总数，供 P6 报 `PENDING (N/M)` 和 Brain Hub 显示进度 | `queries.py` | P6 在候选未到终态时报 PENDING，不报 FAIL |
+| C11 | §7.1"找不到目标段就 DEFER missing_section" | `missing_section`（`pipeline_v2.py:470`）不消耗重试；Need You 里附一句可以直接发进 chat 的 prompt（"在 <文件> 加 `## <段>`"）；标题出现后重新排队。做法和 `unknown_domain` 相同（`requeue_parked`） | `worker.py`、`AttentionAuthority` 的 ingestion source | 缺段 → deferred 并出现提示；补上标题 → 重新排队并写入 |
+
+**不改的 CDF 规则**：DDD 注入方式、卡 1 的质量题、卡 3 的比对、§13 的"系统不动已写内容"、§9 的信任下限。S7 的单元和其他 source 一样过全部的卡。S7 的"该写"比例按 CDF §14.1 T6 单独统计，低于 5% 就改提取方式。
 
 ## 6. 质量标准：什么叫高质量的初始 DDD
 
@@ -428,7 +478,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | C 等 CDF | 只做 A，提取直接等 S7 | 中，排在 CDF 后面 | 在那之前新建的 brain 都是散文基线 | 少一次过渡，代价是空窗期 |
 | D 后台 job | 现在就不经 chat，后端跑提取 | 中 | 阶段一没有 CDF 的卡做质量把关；用户看不到过程，也没法提问 | 阶段二的 S7 本质上就是这个，但它在 CDF 的卡下面跑 |
 
-推荐 B。DELETION 视角：B 删掉内联 `DDD_TEMPLATES`、`_doc_is_placeholder`、四条增量路径中的三条、`code_change_feed` 的只增路径、skill 里手写 code-intel.json 的步骤、`ai_ready_helpers` 的第二份副本、P-1 的 `head` 读法；阶段二再删掉 `bootstrap-apply` 的写入代码。
+推荐 B。DELETION 视角：B 删掉内联 `DDD_TEMPLATES`、`_doc_is_placeholder`、四条增量路径中的三条、`code_change_feed` 的只增路径、code-intel.json 和 spec-details 的全部生成与读取（§5.9）、`ai_ready_helpers` 的第二份副本、P-1 的 `head` 读法；阶段二再删掉 `bootstrap-apply` 的写入代码。
 
 ## 8. 安全
 
@@ -448,20 +498,23 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 
 | 步 | 内容 | 依赖 | 评审专家 |
 |---|---|---|---|
+| 0 | Q1 段名改通用：live 标题和 main 上的三处引用 | 无 | **已完成**（c3c629ceb） |
 | 1 | G1 解析器和归属、G2 增量单路径、G7 不销毁、G8 clone 加固 | 无 | correctness、concurrency（watcher 线程）、security |
-| 2 | §5.1 骨架、§5.7 P6 门、§5.10 对齐命令、条目语法加 `taint`；CDF 矩阵改名（和 CDF 协调） | 无 | api-contract（条目语法、CDF 矩阵）、correctness |
-| 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 spec-index、G5 | 1 | security（不可信文件）、performance（大 repo） |
+| 1b | §5.9 code-intel.json 和 spec-details 退出（先于第 3 步做，避免 survey 和 Brain Hub 再接上旧文件） | 1（G1 提供替代的读取方） | correctness（R27 读取方清单）、integration（recall、Brain Hub） |
+| 2 | §5.1 骨架、§5.7 P6 门、§5.10 对齐命令、条目语法加 `taint`；CDF 分支上的 C1–C4 | 无 | api-contract（条目语法、CDF 矩阵）、correctness |
+| 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 Specs 面板、G5 | 1、1b | security（不可信文件）、performance（大 repo） |
 | 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | correctness、ux |
 | 5 | G3 import 表、G4 语言修正、G6 | 1 | correctness |
-| 6 | §5.5 阶段二：S7、S4 回补、配额、lane、P6 PENDING；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
+| 6 | §5.11 C5–C11（阶段二）；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
 | 7 | §6 eval golden case 和 fixture repo | 4 | — |
+| 8 | 用户确认后，归档 SwarmAI 的旧 `code-intel.json` 和 `spec-details/`（移动，不删除）；随后删除 §5.9 表里标为"保留到归档为止"的规则 | 1b | — |
 
 ## 10. 验证计划
 
 **读取方先于写入方设计**（R3 第 7 条）：
 - `render_ddd_unit` 的读取方是 `parse_entries`、`inject_entry_metadata`、CDF 的 `parse_units`：第 2 步先写语法往返测试，再写渲染。
 - `bind:` 索引的读取方是 recall 的 `library` 域：第 3 步先定过滤和渲染规则。
-- `spec-index.json` 的读取方是 Brain Hub：先定 schema。
+- `survey.json` 的读取方是 agent（P2b）、Brain Hub 的 Specs 面板和阶段二的 S7：先定 schema。
 - 各 db 的读取方：第 1 步按 §5.8 G1 的清单一次性改全。
 
 **最终测试集**（设计时定下，收尾时只跑这一组；安全类和语法类的每条都做 mutation 检查，撤掉修复必须变红）：
@@ -478,16 +531,18 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | I8 | `bind:` 的 chunk 只对本项目 recall，渲染在不可信边界内 | 新增 |
 | I9 | 重新 bind 时，有未提交改动的 worktree 被隔离，没有被删除 | 今天是红的（P-15） |
 | I10 | E2E（确定性）：fixture repo → survey → **固定的** `bootstrap-entries.json` 夹具 → apply → P6 通过，并且 §6 的确定性部分全部满足。LLM 提取的质量由 §6 的 eval 衡量，不进这条测试 | 新增 |
+| I11 | 静态检查：`backend/` 和 `desktop/src` 里，除 §5.9 表里标为"保留到归档为止"的规则之外，没有任何生产代码读写 `code-intel.json` 或 `spec-details` | 今天是红的 |
+| I12 | P7：CDF 矩阵和 `layer_for` 里没有任何段名包含项目名；矩阵段名 ⊆ 骨架标题（§5.11 C1） | 在 CDF 分支上是红的 |
 
 **评审**：每一步按 §9 表里的专家跑 `s_expert-review`，最多两轮。eval golden case 在 CI 或定时任务里跑。
 
 **收尾报告**：逐行列出 I1–I10 是否存在、是否为绿，以及每一步实际跑了哪些评审、发现了什么。
 
-## 11. 待决问题
+## 11. 已确认（用户 2026-10-27）
 
-- **Q1**：SwarmAI 自己的 PRODUCT.md 的 `## What Makes SwarmAI Different` 改为 `## What Makes It Different`？这是用户自己的文件，改了 CDF 矩阵才能通用。不改的话，矩阵要支持"每个项目一个可选别名"。
-- **Q2**：§5.1 和 §5.5 对 CDF 的改动（矩阵改名、模板根、S7、lane、配额、基线读 taint），是并进 CDF r16.x 的正文，还是由本设计单独维护一份 CDF 补丁说明？
-- **Q3**：`code-intel.json` 的业务层（目前只有 SwarmAI 有）在 CDF 上线时怎么处理：迁成 DDD 单元、保留为派生区的 LLM 投影，还是删掉？
+- **Q1 段名改通用**：SwarmAI 的 PRODUCT.md 改为 `## What Makes It Different`。已完成：live 标题，加上 main 上的 `signal_ddd_bridge.py`、`recall_suite.py`、`templates/ddd/PRODUCT.md`（c3c629ceb；`test_signal_ddd_bridge` 12 条通过）。CDF 分支上的矩阵由 §5.11 C1 修改。
+- **Q2 CDF 怎么改由本设计负责**：§5.11 是唯一清单，CDF 正文下一次修订时引用它。
+- **Q3 不是产品能力就拿掉，不搞特殊**：code-intel.json 和 spec-details 都退出（§5.9）。已有文件由用户确认后归档（§9 第 8 步）。
 
 ## 12. 不做
 
@@ -519,3 +574,8 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
   - 安全上补了秘密文件清单、git hook 禁用、按文档扫描、clone 加固（G8）和打开原文的路径限制；
   - I10 改用固定夹具，保证确定性；
   - §1.3 的表述改准确：用户仍可通过 `governed_edit` 修改，代价在于整份取代。
+
+**r3（2026-10-27）**：用户拍板三项。
+- **Q1**：段名改通用。live 的 SwarmAI PRODUCT.md 和 main 上的三处引用已经改完（c3c629ceb）；其中 `signal_ddd_bridge.py:200` 是 r2 没发现的产品代码写死点。
+- **Q2**：CDF 怎么改由本设计负责，新增 §5.11 作为唯一清单（C1–C11）。其中 C6 记录了一个 CDF 实现缺口：不在 run 里的 `commit:` 锚点无法解析。§5.1 和 §5.5 原来零散的改动请求都改为引用 §5.11。
+- **Q3**：code-intel.json 和 spec-details 不是产品能力，退出。§5.9 写明了判定依据（运行时没有读取方、新用户生成不出来、打包时被排除、14 份 `[human]` 区全是占位符）、删除清单和已有数据的归档方式。r2 计划新增的 `spec-index.json` 并进 `survey.json`，不再新造派生文件。§9 加入第 0、1b、8 步，§10 加入 I11、I12。
