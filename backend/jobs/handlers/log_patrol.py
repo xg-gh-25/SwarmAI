@@ -31,11 +31,8 @@ MAX_LISTED = 12
 
 
 def _log_dir() -> Path:
-    try:
-        from config import get_log_file_path
-        return get_log_file_path().parent
-    except Exception:  # noqa: BLE001
-        return Path.home() / ".swarm-ai" / "logs"
+    from config import get_log_file_path
+    return get_log_file_path().parent
 
 
 def _new_lines(path: Path, prev: Optional[list]) -> tuple[list[str], list]:

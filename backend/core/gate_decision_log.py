@@ -42,7 +42,8 @@ def log_path() -> Path:
     override = os.environ.get("SWARM_GATE_LOG")
     if override:
         return Path(override)
-    return Path.home() / ".swarm-ai" / "logs" / "gate_decisions.jsonl"
+    from config import get_app_data_dir
+    return get_app_data_dir() / "logs" / "gate_decisions.jsonl"
 
 
 def _tool_input_text(tool_name: str, tool_input: Any) -> str:

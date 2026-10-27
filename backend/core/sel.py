@@ -77,12 +77,8 @@ except ImportError:  # pragma: no cover - Windows desktop subprocess mode
 def _app_data_dir() -> Path:
     """App-data root (~/.swarm-ai). Indirected through config so a test can
     monkeypatch it to a tmp dir, and so SEL shares the daemon's data home."""
-    try:
-        from config import get_app_data_dir
-        return get_app_data_dir()
-    except Exception:  # pragma: no cover - config import guard
-        logger.debug("_app_data_dir: suppressed exception on a fail-safe path", exc_info=True)
-        return Path.home() / ".swarm-ai"
+    from config import get_app_data_dir
+    return get_app_data_dir()
 
 
 def sel_log_path() -> Path:

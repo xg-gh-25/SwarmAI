@@ -131,9 +131,36 @@ reads `SWARM_DATA_DIR` / `SWARM_APP_DATA_DIR`. Help text naming `~/.swarm-ai` st
 pinned the clone default to the live home path; it now expects the app data dir.
 `apps_index.json` regenerated (Pollinate digest). Red on main (3); putting the alias
 back, a literal Pollinate path, or `todo_db` ignoring the variable each turn it red.
-Not covered: product modules outside `skills/` that still build `~/.swarm-ai` paths
-(`core/permission_manager`, `daemon_guard`, …; `scripts/lint_hardcoded_paths.py`
-already lists that class).
+Product code outside `skills/`: §6.
+
+## 6. Product code resolves the app data dir on its own (r3, 2026-10-27)
+
+**Now.** About 15 sites in product code and `backend/scripts` build
+`Path.home() / ".swarm-ai"` or expand `"~/.swarm-ai..."`. Five do it as a fallback
+when `from config import get_app_data_dir` fails (kill_audit, tool_risk, sel,
+runtime_paths, run_worktree, two job handlers); that import cannot fail in the
+backend (config imports only the standard library and model_registry, ~25 ms).
+The others (gate_decision_log, permission_manager, backup_manager's token and
+default root, session_health_probe's alert state, the workspace browser's start,
+three scripts, system jobs' `"${HOME}/.swarm-ai"` cwd) ignore `SWARM_DATA_DIR`
+outright. `scripts/lint_hardcoded_paths.py` was meant to stop this but nothing ran it.
+
+**Rule.** Product code calls `config.get_app_data_dir()` (logs via
+`get_log_file_path()`); no fallback. A script that cannot import config (the
+uninstall tool) carries the verbatim `_app_data_dir()` of §5. System script jobs set
+no cwd; the executor's default is `get_app_data_dir()`, the one source.
+
+**Built.** `tests/test_app_data_dir_single_source.py` replaces the lint: an AST scan
+of product code and `backend/scripts`, ALLOWED with reasons (`daemon_guard`: shared
+with `swarmai_guardian.sh` and copied standalone to the guardian dir;
+`verify_build`: sets `SWARM_DATA_DIR` for its probe HOME), plus the moved readers
+following `SWARM_DATA_DIR`. Red on main (3); a home path, a `${HOME}` string and an
+expanduser each turn it red.
+
+**Not done.** `app_config_manager`'s default `sandbox_additional_write_paths` is the
+setting text `"~/.swarm-ai/"`, which `prompt_builder` expands; with a non-default
+`SWARM_DATA_DIR` the sandbox does not cover the data dir. Changing it changes a
+permission default, so it is left for a decision.
 
 ## Out of scope
 

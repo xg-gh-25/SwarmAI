@@ -21,11 +21,8 @@ _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$")
 
 
 def _app_data() -> Path:
-    try:
-        from config import get_app_data_dir
-        return Path(get_app_data_dir())
-    except Exception:  # noqa: BLE001 — very early import
-        return Path.home() / ".swarm-ai"
+    from config import get_app_data_dir
+    return get_app_data_dir()
 
 
 def runtime_root() -> Path:

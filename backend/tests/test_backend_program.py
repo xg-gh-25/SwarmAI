@@ -140,7 +140,8 @@ def test_system_script_jobs_need_no_system_python_or_checkout():
         assert "backend/" not in cmd.replace(str(BACKEND), ""), (j.id, cmd)
     for j in py_jobs:
         assert j.config["command"].startswith(backend_bin()), j.id
-        assert j.config["cwd"] == "${HOME}/.swarm-ai", j.id
+        # no cwd: the executor runs it in config.get_app_data_dir(), the one source
+        assert "cwd" not in j.config, j.id
 
 
 def test_no_product_code_looks_for_a_system_python():

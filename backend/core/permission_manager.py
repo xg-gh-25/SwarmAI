@@ -37,12 +37,10 @@ logger = logging.getLogger(__name__)
 
 
 def _default_persist_path() -> Path:
-    """Canonical daemon-persistent location for pending approvals.
-
-    Mirrors config.get_data_dir() (Path.home()/'.swarm-ai') without importing the
-    FastAPI config module (keeps PermissionManager import-light for tests/CLI).
-    """
-    return Path.home() / ".swarm-ai" / "pending_approvals.json"
+    """Canonical daemon-persistent location for pending approvals: the app data dir
+    (config imports only the standard library and model_registry, ~25 ms)."""
+    from config import get_app_data_dir
+    return get_app_data_dir() / "pending_approvals.json"
 
 # How long a surfaced dangerous-command approval prompt waits for the user's
 # decision before auto-denying ("审批超时"). Set to 4h to match

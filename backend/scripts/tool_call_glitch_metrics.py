@@ -42,6 +42,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/
 # One definition of the prefix shape, shared with the runtime strip/restart.
+from config import get_app_data_dir  # noqa: E402
 from core.session_utils import detect_glitch_prefix  # noqa: E402
 
 _LEAK_LINE_RE = re.compile(r"(?m)^[ \t]*<invoke\s+name=")
@@ -123,7 +124,7 @@ def daily_metrics(days: int) -> dict[str, collections.Counter]:
                 c["pre_text"] += pre_text
                 c["prefix"] += prefix
                 c["leaks_tx"] += leaked
-    logs = glob.glob(str(Path.home() / ".swarm-ai" / "logs" / "backend-daemon.log*"))
+    logs = glob.glob(str(get_app_data_dir() / "logs" / "backend-daemon.log*"))
     for log in logs:
         try:
             with open(log, encoding="utf-8", errors="ignore") as fh:

@@ -77,12 +77,8 @@ def _home() -> Path:
 def _data_dir() -> Path:
     """The app data dir (``~/.swarm-ai``; $SWARM_DATA_DIR in tests and other installs),
     so a test or a second install never sees this install's worktrees."""
-    try:
-        from config import get_app_data_dir
-        return Path(os.path.realpath(str(get_app_data_dir())))
-    except Exception as exc:  # noqa: BLE001 — standalone use without the backend config
-        logger.debug("app data dir unavailable (%s); using ~/.swarm-ai", exc)
-        return _home() / ".swarm-ai"
+    from config import get_app_data_dir
+    return Path(os.path.realpath(str(get_app_data_dir())))
 
 
 def wt_root() -> Path:

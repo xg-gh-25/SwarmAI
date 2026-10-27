@@ -116,7 +116,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_DB = Path.home() / ".swarm-ai" / "data.db"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # backend/
+from config import get_app_data_dir  # noqa: E402
+
+DEFAULT_DB = get_app_data_dir() / "data.db"
 
 # Columns known to be written through the shared serializer with JSON payloads.
 # A table absent from the DB is skipped silently (a fresh/partial DB is normal).

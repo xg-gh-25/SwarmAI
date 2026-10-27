@@ -467,7 +467,7 @@ class TestFileTokenPermissions:
     """
 
     def test_token_file_is_0600_on_create(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / ".swarm-ai"))  # the token follows the app data dir
         from core.backup_manager import _file_set_token
 
         assert _file_set_token("ghp_secret") is True
@@ -477,7 +477,7 @@ class TestFileTokenPermissions:
 
     def test_preexisting_loose_perms_are_tightened(self, tmp_path, monkeypatch):
         """O_CREAT keeps an existing file's mode, so the explicit chmod must still run."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / ".swarm-ai"))  # the token follows the app data dir
         from core.backup_manager import _file_get_token, _file_set_token
 
         assert _file_set_token("first") is True
@@ -493,7 +493,7 @@ class TestFileTokenPermissions:
     def test_write_failure_is_reported_and_logged(self, tmp_path, monkeypatch, caplog):
         """The last-resort writer failing means the token is stored NOWHERE — the
         reason must reach the log, not just a bare False (Degrade-OBSERVABLE)."""
-        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / ".swarm-ai"))  # the token follows the app data dir
         from core.backup_manager import _file_set_token
 
         with patch("core.backup_manager.os.open", side_effect=OSError("disk full")):

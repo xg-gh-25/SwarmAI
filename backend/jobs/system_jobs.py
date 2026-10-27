@@ -27,8 +27,8 @@ def _py(*args: str) -> str:
     return shlex.join(py_command(*args))
 
 
-# the product's Python script jobs need no source checkout; they run from the app data dir
-_JOB_CWD = "${HOME}/.swarm-ai"
+# the product's Python script jobs need no source checkout and set no cwd: the executor
+# runs a script job without one in config.get_app_data_dir() (jobs/executor.py)
 
 # All times in UTC
 SYSTEM_JOBS: list[Job] = [
@@ -352,7 +352,6 @@ SYSTEM_JOBS: list[Job] = [
         safety=JobSafety(max_budget_usd=0, timeout_seconds=1800),
         config={
             "command": _py("-m", "jobs.run_evolution"),
-            "cwd": _JOB_CWD,
         },
     ),
 
@@ -376,7 +375,6 @@ SYSTEM_JOBS: list[Job] = [
                 "--auto-fix", "--alert-threshold", "70",
                 "--output-dir", str(get_swarmws() / "Knowledge" / "JobResults"),
             ),
-            "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
@@ -398,7 +396,6 @@ SYSTEM_JOBS: list[Job] = [
         category="system",
         config={
             "command": _py("-m", "scripts.judge_telemetry_report", "--days", "7", "--write"),
-            "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
     ),
@@ -416,7 +413,6 @@ SYSTEM_JOBS: list[Job] = [
         category="system",
         config={
             "command": _py("-m", "jobs.handlers.code_intel_reindex"),
-            "cwd": _JOB_CWD,
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
     ),
@@ -433,7 +429,6 @@ SYSTEM_JOBS: list[Job] = [
         category="system",
         config={
             "command": _py("-m", "jobs.handlers.code_intel_reindex", "--full"),
-            "cwd": _JOB_CWD,
         },
         # 300s (was 120): the AGGREGATE full-reindex (fans out over ALL projects
         # in SwarmWS/Projects/ — parse+clear+insert+export each) measured 81-114.5s

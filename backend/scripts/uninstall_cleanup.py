@@ -23,7 +23,13 @@ from pathlib import Path
 LABEL = "com.swarmai.scheduler"
 LAUNCH_AGENTS = Path.home() / "Library" / "LaunchAgents"
 PLIST_PATH = LAUNCH_AGENTS / f"{LABEL}.plist"
-DATA_DIR = Path.home() / ".swarm-ai"
+def _app_data_dir() -> Path:
+    """The app data dir, resolved exactly as backend config.get_app_data_dir (a skill
+    script cannot import backend config): $SWARM_DATA_DIR, then ~/.swarm-ai."""
+    return Path(os.environ.get("SWARM_DATA_DIR") or Path.home() / ".swarm-ai")
+
+
+DATA_DIR = _app_data_dir()
 PORT_FILE = DATA_DIR / "backend.port"
 
 # Legacy labels from older SwarmAI versions

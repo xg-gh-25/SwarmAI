@@ -161,8 +161,9 @@ def _keychain_set_token(token: str) -> bool:
 
 
 def _file_get_token() -> str | None:
-    """Read token from ~/.swarm-ai/.backup-token (Linux/Hive fallback)."""
-    path = Path(os.path.expanduser("~/.swarm-ai/.backup-token"))
+    """Read token from <app data>/.backup-token (Linux/Hive fallback)."""
+    from config import get_app_data_dir
+    path = get_app_data_dir() / ".backup-token"
     if path.exists():
         try:
             return path.read_text().strip()
@@ -172,8 +173,9 @@ def _file_get_token() -> str | None:
 
 
 def _file_set_token(token: str) -> bool:
-    """Write token to ~/.swarm-ai/.backup-token with chmod 600."""
-    path = Path(os.path.expanduser("~/.swarm-ai/.backup-token"))
+    """Write token to <app data>/.backup-token with chmod 600."""
+    from config import get_app_data_dir
+    path = get_app_data_dir() / ".backup-token"
     try:
         # Create with 0600 ALREADY SET, before the secret is written. The previous
         # write_text()-then-chmod() order left the token on disk at the default umask
@@ -227,7 +229,8 @@ class BackupManager:
         swarm_dir: Path | None = None,
         db_path: Path | None = None,
     ):
-        self.swarm_dir = Path(swarm_dir or os.path.expanduser("~/.swarm-ai"))
+        from config import get_app_data_dir
+        self.swarm_dir = Path(swarm_dir or get_app_data_dir())
         # Ensure swarm_dir exists — restore may be the FIRST op on a fresh machine,
         # and the in-progress marker below is written here (run_037a02af).
         self.swarm_dir.mkdir(parents=True, exist_ok=True)

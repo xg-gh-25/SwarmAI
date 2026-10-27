@@ -29,11 +29,8 @@ def _resolve_log_path() -> Path:
     always returned "" → no_unrecovered_events scanned nothing (silent
     fail-safe). Fail-safe fallback to backend-daemon.log if the import fails.
     """
-    try:
-        from config import get_log_file_path
-        return get_log_file_path()
-    except Exception:
-        return Path.home() / ".swarm-ai" / "logs" / "backend-daemon.log"
+    from config import get_log_file_path
+    return get_log_file_path()
 
 
 _LOG_PATH = _resolve_log_path()
@@ -244,7 +241,7 @@ def run_session_health_probe(
     }
 
 
-_ALERT_STATE = Path.home() / ".swarm-ai" / "logs" / ".session_health_alert"
+_ALERT_STATE = _LOG_PATH.parent / ".session_health_alert"
 
 
 def _read_alert_state() -> str:

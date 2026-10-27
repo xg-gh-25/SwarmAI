@@ -155,12 +155,8 @@ def _metadata_says_external(metadata: Any) -> bool:
 
 
 def _overrides_path() -> Path:
-    try:
-        from config import get_app_data_dir
-        return Path(get_app_data_dir()) / "tool_risk_overrides.json"
-    except Exception:  # noqa: BLE001 — very early import
-        logger.debug("tool_risk: app data dir unavailable, using ~/.swarm-ai", exc_info=True)
-        return Path.home() / ".swarm-ai" / "tool_risk_overrides.json"
+    from config import get_app_data_dir
+    return get_app_data_dir() / "tool_risk_overrides.json"
 
 
 _OVERRIDE_CACHE: dict = {}

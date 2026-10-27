@@ -41,6 +41,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from config import get_app_data_dir  # noqa: E402
 from core.message_attachments import attachments_dir, externalize_attachments  # noqa: E402
 from core.message_search_text import message_content_seg  # noqa: E402
 
@@ -105,7 +106,7 @@ def _backup(db: Path) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--db", type=Path, default=Path.home() / ".swarm-ai" / "data.db")
+    ap.add_argument("--db", type=Path, default=get_app_data_dir() / "data.db")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--chunk", type=int, default=300)
     ap.add_argument("--pause", type=float, default=0.1)

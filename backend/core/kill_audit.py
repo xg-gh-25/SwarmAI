@@ -38,13 +38,8 @@ _recent_reasons: "deque[tuple[float, str]]" = deque(maxlen=256)
 
 
 def _path() -> Path:
-    try:
-        from config import get_app_data_dir
-        base = Path(get_app_data_dir())
-    except Exception as exc:  # noqa: BLE001 — fall back to the default location
-        logger.debug("kill_audit: app data dir unavailable, using ~/.swarm-ai: %s", exc)
-        base = Path.home() / ".swarm-ai"
-    return base / "state" / "kills.jsonl"
+    from config import get_app_data_dir
+    return get_app_data_dir() / "state" / "kills.jsonl"
 
 
 def _caller(depth: int = 3) -> str:
