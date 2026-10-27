@@ -5,9 +5,15 @@ Methodology: scan only the nine v1 cards; every named check and command must exi
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 from core.run_protocol.checks import CHECKS
+
+_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+import lint_skills  # noqa: E402  -- the one card size limit (SIZE_LIMIT_STAGE_CARD)
 
 ROOT = Path(__file__).resolve().parents[1] / "skills" / "s_autonomous-pipeline" / "stages"
 EXPECTED = {"evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"}
@@ -17,7 +23,7 @@ def test_v1_cards_are_complete_small_and_reference_real_checks():
     cards = {name: ROOT / f"{name}.md" for name in EXPECTED}
     for name, path in cards.items():
         text = path.read_text(encoding="utf-8")
-        assert len(text) < 2000, name
+        assert len(text) <= lint_skills.SIZE_LIMIT_STAGE_CARD, name
         for check_id in re.findall(r"\b(?:RQ|DS|BX|RV|DC|FX|TS|DV|LG|QX|MD|RF)-\d+[a-z]?\b", text):
             assert check_id in CHECKS, (name, check_id)
         assert "pipeline-v1" in text or name in {"build"}, name
@@ -142,3 +148,31 @@ def test_the_stop_hook_stays_passive():
     assert '"block"' not in body and "continue_" not in body
     reg = src[src.index('registry.register("Stop"', idx):][:200]
     assert "block" not in reg.lower()
+
+
+# ── one home per stage rule (design 2026-10-27-pipeline-hygiene §1) ──────────
+# INSTRUCTIONS is read for the whole run; a stage's procedure lives in its card,
+# which `next` delivers on entering that stage. A rule in both places is the
+# drift (and the INSTRUCTIONS growth) the split removes.
+_STAGE_ONLY = {
+    "review": ("security only when the change is declared security-relevant",
+               "HIGH-RISK CHANGE", "R2 only rechecks the addressed findings",
+               "ADEQUATE / TEST_INADEQUATE", "does not block landing"),
+    "deliver": ("never pushes", "A failed action consumes the authorization",
+                "Snapshot deletion and finding acceptance", "`run/<id>` branch, bundle and diff"),
+    "reflect": ("removes the run's worktree and branch",),
+}
+
+
+def test_stage_rules_live_in_their_card_only():
+    instructions = (SKILL_DIR / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+    for card, phrases in _STAGE_ONLY.items():
+        text = (ROOT / f"{card}.md").read_text(encoding="utf-8")
+        for phrase in phrases:
+            assert phrase in text, (card, phrase)
+            assert phrase not in instructions, ("INSTRUCTIONS restates", card, phrase)
+
+
+def test_instructions_keeps_room_under_its_limit():
+    size = len((SKILL_DIR / "INSTRUCTIONS.md").read_text(encoding="utf-8"))
+    assert size <= lint_skills.SIZE_LIMIT_INSTRUCTIONS - 3000, size

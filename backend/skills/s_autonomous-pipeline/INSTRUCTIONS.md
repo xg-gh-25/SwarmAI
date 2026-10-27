@@ -31,7 +31,7 @@ Every `"$SWARM_BACKEND_BIN" pipeline-v1` response ends with `next`: what to do n
 For every stage:
 
 1. Read `next.card_text` and execute the card.
-2. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST end with your validation report as the artifact (see Tests).
+2. `"$SWARM_BACKEND_BIN" pipeline-v1 stage-complete --project <P> --run-id <R> --artifact -` with the artifact JSON on stdin when the card requires one; omit `--artifact` otherwise. BUILD and TEST end with your validation report as the artifact.
 3. Continue immediately with the returned `next`. Stop only for a DC-1 human decision, user stop, or terminal state.
 
 Token usage is measured from the run's transcripts before the DELIVER REPORT and again when REFLECT ends; there is no measuring command.
@@ -48,34 +48,13 @@ direct is for a small, unambiguous change: `create --profile direct --requiremen
 - `stage`, `land`, and `push` effects are independent. A land-only check never blocks stage completion.
 - Mechanical failure is fixed autonomously or reaches a bounded not-landed terminal state. It never becomes a user question.
 
-## REVIEW
+## Expert handouts
 
-Call `"$SWARM_BACKEND_BIN" pipeline-v1 review-start --project <P> --run-id <R>`. Dispatch exactly the returned handouts in one parallel message, foreground, each `prompt` unchanged. A `prompt` is four lines: its `PIPELINE-HANDOUT` line binds the expert's answer to the run, and the expert reads its full instructions and the diff from `PROMPT-FILE`. An answer counts only from an expert spawned with exactly those lines that read the file; when a spawn or answer is rejected, `next` (or the Gate-0 `stage-complete` output) lists each waiting handout with its state, reason and `spawn_prompt` to dispatch again.
+REVIEW and Gate-0 return handouts. Dispatch exactly the returned handouts in one parallel message, foreground, each `prompt` unchanged. A `prompt` is four lines: its `PIPELINE-HANDOUT` line binds the expert's answer to the run, and the expert reads its full instructions and the diff from `PROMPT-FILE`. An answer counts only from an expert spawned with exactly those lines that read the file; when a spawn or answer is rejected, `next` (or the Gate-0 `stage-complete` output) lists each waiting handout with its state, reason and `spawn_prompt`. Who is dispatched, R1/R2 and proofs: the REVIEW card.
 
-- Default: correctness only for >=50 source lines.
-- Security is added only when the change is declared security-relevant: the repo's `.swarmai/review.md` has a `security:` line that matches, your BUILD report says `"risk": ["security"]`, or the design names security boundaries. There is no built-in path or API rule, so declare `risk` whenever the change touches authentication, permissions, input validation, credentials, network, file paths or shell commands. At >=50 lines its handout starts with a HIGH-RISK CHANGE line, which makes it do its "High-risk change" section (there is no second security reviewer).
-- Correctness also gets the rows of each repo's `.swarmai/review.md` pattern table that the change triggers (read at the run's base; a run cannot change its own review).
-- Small changes and docs-only changes dispatch nobody unless explicitly required.
-- R1 reviews the full diff. Collect the whole round, cluster by cause, fix once, then call `review-address --artifact <handoff.json>`; its returned handouts are the complete R2 roster.
-- A behavior/contract finding's fix is proven by a test you ran: record its report with `"$SWARM_BACKEND_BIN" pipeline-v1 report-tests --project <P> --run-id <R> --artifact -`, then give the item `"proof": {"evidence_type": "reported_test", "command": "<the command as in that report>"}`. The command must pass on the current code; R2 judges whether it shows the fix (ADEQUATE / TEST_INADEQUATE). Refuted findings and structural fixes go through `review-proof`. Structural/refutation evidence goes through `"$SWARM_BACKEND_BIN" pipeline-v1 review-proof --project <P> --run-id <R> --artifact <proof.json>` with exactly `{"pass": <n>, "proofs": [{"finding_id": "CF-…", "evidence_type": "diff_assertion"}, {"finding_id": "CF-…", "evidence_type": "refuted", "refs": ["path:line"]}]}` (`pass` = 1-based proof pass number); tree, hunk and result fields are derived, never supplied by the agent.
-- R2 only rechecks addressed R1 findings for experts that reported them. There is no third round or secondary review layer; the only other dispatch is the incremental review of code changed after a review saw it (RV-4; TEST that changes code goes back to REVIEW).
-- An unresolved HIGH/CRITICAL finding is noted in the audit's Quality cell (RV-2); it does not block landing. MEDIUM/LOW remain residual risks.
+## Tests and landing
 
-## Tests
-
-The pipeline does not run or watch tests (design usable-by-anyone §3.3.3). Test the way you would without it, with the repo's own commands, in the run's worktree. BUILD and TEST each end with a validation report as the `stage-complete --artifact -` JSON:
-
-`{"reports": [{"repo": "<name>", "commands": [{"command": "...", "cwd": "...", "result": "pass|fail|not_run", "reason": "..."}], "tests_changed": ["..."], "rationale": "why these tests show the change is right", "risk": ["security"]}]}`
-
-One report per repo; `fail` and `not_run` need a reason; `risk` is optional (only `security`) and dispatches the security review. The engine records each on the tree it computes for that worktree, never a tree you give. A failed command in TEST keeps the run in TEST. Review judges whether the tests are enough. After main moves in DELIVER, test the synced tree again and send `report-tests --artifact -`. Eval and production build/deploy remain outside the run.
-
-## Landing and completion
-
-Normal delivery: `"$SWARM_BACKEND_BIN" pipeline-v1 land --project <P> --run-id <R> --message <message>`. The engine computes code_tree, the open audit checks, land_intent, renderer-owned REPORT, delivery_tree, LG checks and commit-tree in the frozen order. It never pushes.
-
-Human run-land is executable and always two-step: `run-land --prepare [--skip-tests] [--note ...]`, then `run-land --request <id> --message <message>`. The request command asks the person; their approval is recorded once, bound to session/run/request; the landing rechecks every tree and persists each repo commit. A failed action consumes the authorization; prepare and approve a new request. Snapshot deletion and finding acceptance use the same exact one-use authorization model. Abandoned/not-landed work keeps its `run/<id>` branch, bundle and diff indefinitely.
-
-REFLECT processing cannot change landing. The `land` command itself (or the command that ended the run not landed) does it before it returns: it judges and routes each lesson, records its outcome, completes REFLECT (`degraded` at its cap) and removes the run's worktree and branch. You have no command for it. If that command stopped before REFLECT finished, `next` says `resume`, which finishes it.
+The pipeline does not run or watch tests: test with the repo's own commands in the run's worktree. BUILD and TEST each end with a validation report (shape: the BUILD card); the engine records it on the tree it computes for that worktree, never a tree you give. Eval and production build/deploy stay outside the run. Landing, human `run-land` and recovery: the DELIVER card. REFLECT completion: the REFLECT card.
 
 ## Human boundary
 
