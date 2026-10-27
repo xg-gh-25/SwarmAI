@@ -160,6 +160,7 @@ def _put_hive_role_policy(iam, role_name: str) -> None:
 # trailing newline.
 VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*")
 UPDATE_STALE_S = 15 * 60
+DELETING_STALE_S = 60 * 60
 
 class HiveProvisioner:
     """Manages AWS resources for Hive instances.
@@ -981,6 +982,8 @@ class HiveProvisioner:
                     await self._cleanup_resources(
                         session, region, created_resources,
                     )
+                    await self._forget_terminated_instance(
+                        session, region, instance_id, created_resources.get("ec2_instance"))
                 except Exception as cleanup_err:
                     logger.error("Cleanup on health timeout also failed: %s", cleanup_err)
                 return
@@ -1016,12 +1019,16 @@ class HiveProvisioner:
                 try:
                     instance = await self._get_instance(instance_id)
                     account = await self._get_account(instance["account_ref"])
+                    cleanup_session = self._get_session(account, instance["region"])
                     await self._cleanup_resources(
-                        self._get_session(account, instance["region"]),
+                        cleanup_session,
                         instance["region"],
                         created_resources,
                     )
                     cleanup_status = "cleaned"
+                    await self._forget_terminated_instance(
+                        cleanup_session, instance["region"], instance_id,
+                        created_resources.get("ec2_instance"))
                 except Exception as cleanup_err:
                     logger.error("Cleanup also failed: %s", cleanup_err)
                     cleanup_status = f"partial_cleanup_failed: {str(cleanup_err)[:100]}"
@@ -1107,14 +1114,20 @@ class HiveProvisioner:
         await self._update_instance(instance_id, status="stopped")
 
     async def start(self, instance_id: str) -> None:
-        """Start a stopped Hive (EC2 start + wait healthy + enable CloudFront)."""
+        """Start a stopped Hive (EC2 start + wait healthy + enable CloudFront).
+
+        Also the non-destructive recovery for an errored Hive whose instance still exists
+        (a failed stop/start/health check): start_instances on a running instance is a
+        no-op, then the same health check and CloudFront re-enable run."""
         # H1: Atomic status gate — prevents concurrent start calls
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 3000")
             await conn.execute("PRAGMA foreign_keys = ON")
             cursor = await conn.execute(
-                "UPDATE hive_instances SET status = 'starting', updated_at = datetime('now') "
-                "WHERE id = ? AND status = 'stopped'",
+                "UPDATE hive_instances SET status = 'starting', error_message = NULL, "
+                "updated_at = datetime('now') "
+                "WHERE id = ? AND (status = 'stopped' OR (status = 'error' "
+                "AND ec2_instance_id IS NOT NULL AND ec2_instance_id != ''))",
                 (instance_id,),
             )
             await conn.commit()
@@ -1162,11 +1175,16 @@ class HiveProvisioner:
         else:
             await self._update_instance(instance_id, status="running")
 
-    async def release_stale_updates(self, max_age_s: int = UPDATE_STALE_S) -> int:
-        """End 'updating' rows no update can still be working on (SwarmAI quit or crashed
-        mid-update): back to 'running' with a message, so the card offers its actions
-        again. An update takes at most about 12 minutes (S3 sync, the SSM command's
-        300 s, our 300 s poll, the 60 s health check). Returns how many rows changed."""
+    async def release_stale_updates(self, max_age_s: int = UPDATE_STALE_S,
+                                    deleting_max_age_s: int = DELETING_STALE_S) -> int:
+        """End rows no background work can still be on (SwarmAI quit or crashed in the
+        middle), so the card offers its actions again. Returns how many rows changed.
+
+        - 'updating' older than *max_age_s* → 'running' (an update takes at most about 12
+          minutes: S3 sync, the SSM command's 300 s, our 300 s poll, the 60 s health check);
+        - 'deleting' older than *deleting_max_age_s* → 'error', keeping the last step the
+          retry recorded (snapshots up to 40 minutes, then the cleanup), so the person
+          knows how far it got; the next Retry checks the instance again."""
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 3000")
             cursor = await conn.execute(
@@ -1176,8 +1194,16 @@ class HiveProvisioner:
                 ("Update interrupted (SwarmAI stopped during it); the Hive's version is "
                  "unknown, check it before updating again.", f"-{int(max_age_s)} seconds"),
             )
+            n = cursor.rowcount
+            cursor = await conn.execute(
+                "UPDATE hive_instances SET status = 'error', error_message = "
+                "'Interrupted (SwarmAI stopped during it). Last step: ' || "
+                "COALESCE(error_message, 'not recorded'), updated_at = datetime('now') "
+                "WHERE status = 'deleting' AND updated_at < datetime('now', ?)",
+                (f"-{int(deleting_max_age_s)} seconds",),
+            )
             await conn.commit()
-            return cursor.rowcount
+            return n + cursor.rowcount
 
     async def claim_update(self, instance_id: str) -> None:
         """G6: atomic status gate running → updating; raises RuntimeError when the Hive is
@@ -1680,6 +1706,82 @@ fi
         logger.info("Hive %s Caddyfile updated", instance["name"])
 
     # ── Cleanup ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _ec2_present(session, region: str, ec2_id: str) -> bool:
+        """Whether EC2 instance *ec2_id* still exists (blocking; run in a thread). Gone only
+        on NotFound or an explicit terminated / shutting-down state: any lookup failure or
+        empty answer counts as present, so a caller protects the data instead of assuming
+        there is none."""
+        ec2 = session.client("ec2", region_name=region)
+        try:
+            res = ec2.describe_instances(InstanceIds=[ec2_id])
+        except Exception as e:
+            if "InvalidInstanceID.NotFound" in str(e):
+                return False
+            logger.warning("Instance %s: lookup failed (%s); treating it as present", ec2_id, e)
+            return True
+        states = [i["State"]["Name"] for r in res.get("Reservations", []) for i in r.get("Instances", [])]
+        if not states:
+            return True
+        return any(s not in ("terminated", "shutting-down") for s in states)
+
+    async def instance_exists(self, instance_id: str) -> bool:
+        """Whether the Hive's EC2 instance still exists (its disks hold the Hive's data)."""
+        instance = await self._get_instance(instance_id)
+        ec2_id = instance.get("ec2_instance_id")
+        if not ec2_id:
+            return False
+        account = await self._get_account(instance["account_ref"])
+        session = self._get_session(account, instance["region"])
+        return await asyncio.to_thread(self._ec2_present, session, instance["region"], ec2_id)
+
+    async def _forget_terminated_instance(self, session, region: str, instance_id: str,
+                                          ec2_id: Optional[str]) -> None:
+        """After a failed deploy cleaned up, drop the instance id once EC2 confirms the
+        instance is gone, so the card does not offer Start (or warn about data) for it."""
+        if ec2_id and not await asyncio.to_thread(self._ec2_present, session, region, ec2_id):
+            await self._update_instance(instance_id, ec2_instance_id=None, ec2_public_ip=None)
+
+    async def snapshot_volumes(self, instance_id: str, purpose: str) -> list[str]:
+        """Snapshot every EBS volume of the Hive's instance and wait until each snapshot
+        is complete, so the volumes can be deleted afterwards. Raises when any snapshot
+        cannot be made or does not complete: the caller then deletes nothing."""
+        instance = await self._get_instance(instance_id)
+        account = await self._get_account(instance["account_ref"])
+        session = self._get_session(account, instance["region"])
+        ec2_id = instance.get("ec2_instance_id")
+        name = instance["name"]
+        if not ec2_id:
+            return []
+
+        def _snap() -> list[str]:
+            ec2 = session.client("ec2", region_name=instance["region"])
+            res = ec2.describe_instances(InstanceIds=[ec2_id])
+            volumes = [m["Ebs"]["VolumeId"]
+                       for r in res.get("Reservations", []) for i in r.get("Instances", [])
+                       for m in i.get("BlockDeviceMappings", []) if m.get("Ebs", {}).get("VolumeId")]
+            if not volumes:
+                raise RuntimeError(f"no EBS volume found on {ec2_id}")
+            stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+            ids = []
+            for vol in volumes:
+                snap = ec2.create_snapshot(
+                    VolumeId=vol,
+                    Description=f"SwarmAI Hive {name}: {purpose} ({stamp})",
+                    TagSpecifications=[{"ResourceType": "snapshot", "Tags": [
+                        {"Key": "Name", "Value": f"SwarmAI-Hive-{name} {purpose} {stamp}"},
+                        {"Key": "HiveName", "Value": name},
+                    ]}],
+                )
+                ids.append(snap["SnapshotId"])
+            ec2.get_waiter("snapshot_completed").wait(
+                SnapshotIds=ids, WaiterConfig={"Delay": 15, "MaxAttempts": 160})  # up to 40 min
+            return ids
+
+        snapshots = await asyncio.to_thread(_snap)
+        logger.info("Hive %s: saved %s as %s", name, purpose, snapshots)
+        return snapshots
 
     async def cleanup(self, instance_id: str) -> None:
         """Delete all AWS resources for a Hive instance."""

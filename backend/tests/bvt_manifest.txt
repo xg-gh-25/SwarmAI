@@ -80,3 +80,4 @@ test_eval_lines.py  # eval-as-product: last / next runs per line from records an
 test_eval_release.py  # release decision: tiers, five dimensions, the four checks in order, run record shape
 test_hive_package_publish.py  # the Hive package published with a release carries no workspace content
 test_hive_update.py  # Hive update from the desktop: failures end running with the reason, background update, stale updates released
+test_hive_retry.py  # Retry on an errored Hive: confirmation and disk snapshots before anything holding data is deleted

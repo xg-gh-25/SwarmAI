@@ -1486,13 +1486,33 @@ class TestH1AtomicStopStart:
         assert "status = 'stopping'" in source
         assert "AND status = 'running'" in source
 
-    def test_start_has_atomic_gate(self):
-        """start() must use UPDATE WHERE status='stopped' for CAS."""
-        import inspect
+    @pytest.mark.asyncio
+    async def test_start_has_atomic_gate(self):
+        """start() claims stopped -> starting atomically; an errored Hive whose instance
+        still exists may be started too (the non-destructive recovery), nothing else."""
+        import aiosqlite
         from hive.provisioner import HiveProvisioner
-        source = inspect.getsource(HiveProvisioner.start)
-        assert "status = 'starting'" in source
-        assert "AND status = 'stopped'" in source
+        db = Path(tempfile.mkdtemp()) / "h.db"
+        async with aiosqlite.connect(db) as c:
+            await c.execute("CREATE TABLE hive_instances (id TEXT, status TEXT, ec2_instance_id TEXT, "
+                            "error_message TEXT, updated_at TEXT)")
+            await c.execute("INSERT INTO hive_instances VALUES "
+                            "('stopped', 'stopped', 'i-1', NULL, ''), ('err', 'error', 'i-2', 'Start failed', ''), "
+                            "('err-no-ec2', 'error', NULL, 'x', ''), ('run', 'running', 'i-3', NULL, '')")
+            await c.commit()
+        p = HiveProvisioner(db)
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, side_effect=ValueError("stop here")):
+            for ok in ("stopped", "err"):
+                with pytest.raises(ValueError, match="stop here"):
+                    await p.start(ok)  # claimed, then stops at the instance lookup
+            for refused in ("err-no-ec2", "run", "stopped"):
+                with pytest.raises(RuntimeError, match="not in 'stopped' state"):
+                    await p.start(refused)
+        async with aiosqlite.connect(db) as c:
+            rows = {r[0]: (r[1], r[2]) for r in await (await c.execute(
+                "SELECT id, status, error_message FROM hive_instances")).fetchall()}
+        assert rows["stopped"] == ("starting", None) and rows["err"] == ("starting", None)
+        assert rows["err-no-ec2"] == ("error", "x") and rows["run"] == ("running", None)
 
 
 class TestH5CleanupTerminalStatus:

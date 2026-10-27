@@ -14,6 +14,9 @@ const listAccounts = vi.fn();
 const stopInstance = vi.fn();
 const updateInstance = vi.fn();
 const latestVersion = vi.fn();
+const retryInstance = vi.fn();
+const startInstance = vi.fn();
+const deleteInstance = vi.fn();
 vi.mock('../../services/hive', async () => {
   const actual = await vi.importActual<typeof import('../../services/hive')>('../../services/hive');
   return {
@@ -24,6 +27,9 @@ vi.mock('../../services/hive', async () => {
       stopInstance: (id: string) => stopInstance(id),
       updateInstance: (id: string, v: string) => updateInstance(id, v),
       latestVersion: () => latestVersion(),
+      retryInstance: (id: string, c?: boolean) => retryInstance(id, c),
+      startInstance: (id: string) => startInstance(id),
+      deleteInstance: (id: string) => deleteInstance(id),
     },
   };
 });
@@ -220,5 +226,45 @@ describe('Hive update to the latest release', () => {
     // transitional: no Delete (or Stop) while the update runs, and the list keeps polling
     expect(screen.queryByRole('button', { name: /^Delete$/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Stop$/ })).toBeNull();
+  });
+});
+
+describe('Retry and Delete protect a Hive that holds data', () => {
+  it('an errored Hive whose instance exists offers Start, and Retry warns before deleting', async () => {
+    listInstances.mockResolvedValue([mkInst({ id: 'i1', name: 'xg-hive', status: 'error', ec2InstanceId: 'i-0abc' })]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByText('xg-hive')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /^Start$/ })).toBeInTheDocument();
+    const retry = screen.getByRole('button', { name: /^Retry$/ });
+    fireEvent.click(retry);
+    expect(retryInstance).not.toHaveBeenCalled();
+    expect(confirm.mock.calls[0][0]).toContain('snapshots');
+    expect(confirm.mock.calls[0][0]).toContain('use Start instead');
+    fireEvent.click(retry);
+    await waitFor(() => expect(retryInstance).toHaveBeenCalledWith('i1', true));
+    confirm.mockRestore();
+  });
+
+  it('an errored Hive with no instance left offers only Retry, without the data warning', async () => {
+    listInstances.mockResolvedValue([mkInst({ id: 'i1', name: 'xg-hive', status: 'error', ec2InstanceId: null })]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByText('xg-hive')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: /^Start$/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^Retry$/ }));
+    await waitFor(() => expect(retryInstance).toHaveBeenCalledWith('i1', false));
+    expect(confirm.mock.calls[0][0]).not.toContain('snapshots');
+    confirm.mockRestore();
+  });
+
+  it('Delete says the data goes with it', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByText('xg-hive')).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole('button', { name: /^Delete$/ })[0]);
+    expect(confirm.mock.calls[0][0]).toContain('cannot be undone');
+    expect(deleteInstance).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 });

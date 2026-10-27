@@ -183,6 +183,9 @@ class HiveRetryRequest(BaseModel):
     # Optional target version: when provided, retry redeploys THIS version
     # instead of the instance's stale recorded one. None -> keep recorded.
     version: Optional[str] = None
+    # Required when the Hive's instance still exists: Retry then deletes it and everything
+    # on it (after saving its disks as snapshots).
+    confirm_data_loss: bool = False
 
     @field_validator("version")
     @classmethod
@@ -415,7 +418,7 @@ async def verify_account(account_id: str):
 
 @router.get("/instances", response_model=list[HiveInstanceResponse])
 async def list_instances():
-    """List all Hive instances (first ending any update SwarmAI was stopped in the middle of)."""
+    """List all Hive instances (first ending any update or retry SwarmAI was stopped in the middle of)."""
     try:
         await _get_provisioner().release_stale_updates()
     except Exception as e:
@@ -709,6 +712,12 @@ async def retry_instance(instance_id: str, body: Optional[HiveRetryRequest] = No
 
     Optional body {"version": "x.y.z"} redeploys that version instead of the
     instance's stale recorded one. Bodyless POST keeps the recorded version.
+
+    When the Hive's EC2 instance still exists (it was running and then a stop, start or
+    health check failed), Retry would delete it and everything on it: the request must
+    say {"confirm_data_loss": true}, and every disk is saved as an EBS snapshot first.
+    If a snapshot fails, nothing is deleted. Start is the non-destructive way back.
+    The work runs in the background (status 'deleting', then the deploy's own states).
     """
     _require_desktop()
     async with _conn() as c:
@@ -720,11 +729,77 @@ async def retry_instance(instance_id: str, body: Optional[HiveRetryRequest] = No
             raise HTTPException(status_code=400, detail="Only errored instances can be retried")
 
     provisioner = _get_provisioner()
+    exists = await provisioner.instance_exists(instance_id)
+    if exists and not (body is not None and body.confirm_data_loss):
+        raise HTTPException(status_code=409, detail=(
+            "This Hive's instance still exists: Retry deletes it and everything on it. "
+            "Try Start first; to rebuild anyway, confirm, and its disks are saved as "
+            "snapshots in your AWS account before anything is deleted."))
+    async with _conn() as c:
+        cursor = await c.execute(
+            "UPDATE hive_instances SET status='deleting', error_message=?, updated_at=? "
+            "WHERE id=? AND status='error'",
+            ("Saving the Hive's disks as snapshots before deleting it..." if exists
+             else "Cleaning up the failed deploy...", _now(), instance_id))
+        await c.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=409, detail="The Hive changed state; refresh and try again")
+    version = body.version if body is not None else None
+    _keep(asyncio.create_task(_retry(provisioner, instance_id, version, exists),
+                              name=f"hive-retry-{instance_id[:8]}"))
+    return {"status": "retrying"}
+
+
+async def _set_retry_state(instance_id: str, status: str, message: str) -> None:
+    async with _conn() as c:
+        await c.execute(
+            "UPDATE hive_instances SET status=?, error_message=?, updated_at=? WHERE id=?",
+            (status, message, _now(), instance_id))
+        await c.commit()
+
+
+async def _retry(provisioner: HiveProvisioner, instance_id: str, version: Optional[str],
+                 back_up: bool) -> None:
+    """The background half of a Retry. Each step records itself in error_message, so a
+    run SwarmAI stops in the middle of ends (release_stale_updates) saying how far it got."""
+    try:
+        await _retry_steps(provisioner, instance_id, version, back_up)
+    except Exception as e:
+        logger.exception("Hive retry failed for %s", instance_id)
+        await _set_retry_state(instance_id, "error",
+                               f"Retry failed: {type(e).__name__}: {str(e)[:300]}")
+
+
+async def _retry_steps(provisioner: HiveProvisioner, instance_id: str, version: Optional[str],
+                       back_up: bool) -> None:
+    snapshots: list[str] = []
+    if back_up:
+        try:
+            snapshots = await provisioner.snapshot_volumes(instance_id, "before retry")
+        except Exception as e:
+            logger.error("Hive retry stopped, disk snapshot failed for %s: %s", instance_id, e)
+            await _set_retry_state(
+                instance_id, "error",
+                f"Retry stopped: saving the Hive's disks failed ({type(e).__name__}: "
+                f"{str(e)[:200]}); nothing was deleted.")
+            return
+        await _set_retry_state(
+            instance_id, "deleting",
+            f"Disks saved as snapshots {', '.join(snapshots)}; deleting the old instance...")
+
     # Cleanup any partial resources first
     try:
         await provisioner.cleanup(instance_id)
     except Exception as e:
         logger.warning("Retry cleanup had errors (continuing): %s", e)
+    # cleanup() only logs a failed terminate: check before forgetting the instance, or it
+    # keeps running (and billing) untracked
+    if back_up and await provisioner.instance_exists(instance_id):
+        await _set_retry_state(
+            instance_id, "error",
+            "Retry stopped: the old instance could not be deleted (it is still running in "
+            f"your AWS account). Its disks were saved as snapshots {', '.join(snapshots)}.")
+        return
 
     # Reset instance state
     async with _conn() as c:
@@ -741,14 +816,12 @@ async def retry_instance(instance_id: str, body: Optional[HiveRetryRequest] = No
         # Optional version override: write the target version so deploy's
         # _resolve_version(instance['version']) picks it up (deploy re-resolves
         # bucket + everything else, so the version column is the only write).
-        if body is not None and body.version:
+        if version:
             await c.execute(
                 "UPDATE hive_instances SET version=? WHERE id=?",
-                (body.version, instance_id),
+                (version, instance_id),
             )
         await c.commit()
 
     # Redeploy
-    task = asyncio.create_task(provisioner.deploy(instance_id), name=f"hive-retry-{instance_id[:8]}")
-    task.add_done_callback(_log_task_failure)
-    return {"status": "retrying"}
+    await provisioner.deploy(instance_id)

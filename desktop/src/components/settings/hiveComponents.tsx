@@ -140,6 +140,18 @@ export function useLatestHiveVersion(): string | null {
   return latest;
 }
 
+/** What Retry will do, asked before it runs. A Hive whose instance still exists holds the
+ *  person's data: Retry deletes it (after saving its disks as snapshots), so say so and
+ *  point to Start. Without an instance it only cleans up a failed deploy. */
+export function retryPrompt(inst: HiveInstance): string {
+  if (inst.ec2InstanceId) {
+    return `Retry deletes ${inst.name}'s instance and everything on it (workspace, memory, chat history), then deploys a new Hive.\n\n`
+      + 'Its disks are first saved as EBS snapshots in your AWS account (named "SwarmAI-Hive-'
+      + `${inst.name} before retry"); if that fails, nothing is deleted.\n\nTo keep this Hive, cancel and use Start instead.`;
+  }
+  return `Retry cleans up what the failed deploy of ${inst.name} left and deploys it again.`;
+}
+
 // ── Instance Card ─────────────────────────────────────────────────
 
 export function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; onAction: () => void }) {
@@ -209,7 +221,7 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
               Stop
             </button>
           )}
-          {inst.status === 'stopped' && (
+          {(inst.status === 'stopped' || (inst.status === 'error' && !!inst.ec2InstanceId)) && (
             <button
               onClick={() => doAction(() => hiveService.startInstance(inst.id))}
               disabled={acting}
@@ -220,7 +232,10 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
           )}
           {inst.status === 'error' && (
             <button
-              onClick={() => doAction(() => hiveService.retryInstance(inst.id))}
+              onClick={() => {
+                if (!confirm(retryPrompt(inst))) return;
+                doAction(() => hiveService.retryInstance(inst.id, !!inst.ec2InstanceId));
+              }}
               disabled={acting}
               className="btn-sm btn-secondary disabled:opacity-50"
             >
@@ -229,7 +244,11 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
           )}
           {!isTransitional && (
             <button
-              onClick={() => { if (confirm(`Delete ${inst.name}?`)) doAction(() => hiveService.deleteInstance(inst.id)); }}
+              onClick={() => {
+                if (confirm(`Delete ${inst.name}? Its instance and everything on it (workspace, memory, chat history) are deleted. This cannot be undone.`)) {
+                  doAction(() => hiveService.deleteInstance(inst.id));
+                }
+              }}
               disabled={acting}
               className="btn-sm btn-danger disabled:opacity-50"
             >
@@ -454,7 +473,7 @@ export function AccountCard({ account: acc, onDelete }: { account: HiveAccount; 
   };
 
   const handleDelete = async () => {
-    if (!confirm('Delete account + all its Hives?')) return;
+    if (!confirm('Delete this account and all its Hives? Each Hive\'s instance and everything on it (workspace, memory, chat history) are deleted. This cannot be undone.')) return;
     setDeleting(true);
     setError(null);
     try {

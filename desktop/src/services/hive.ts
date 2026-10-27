@@ -183,7 +183,9 @@ export const hiveService = {
     return toCamel(data) as { authUser: string | null; authPassword: string | null };
   },
 
-  async retryInstance(id: string): Promise<void> {
-    await api.post(`/hive/instances/${id}/retry`);
+  /** Redeploys an errored Hive. When its instance still exists the backend refuses unless
+   *  confirmDataLoss is set, and then saves every disk as a snapshot before deleting. */
+  async retryInstance(id: string, confirmDataLoss = false): Promise<void> {
+    await api.post(`/hive/instances/${id}/retry`, confirmDataLoss ? { confirm_data_loss: true } : undefined);
   },
 };
