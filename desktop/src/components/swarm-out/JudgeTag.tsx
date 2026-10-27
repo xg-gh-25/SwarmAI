@@ -72,8 +72,10 @@ export function JudgeTag({ judge, title }: { judge: RunJudge; title: string }) {
               ))}
             </tbody>
           </table>
-          <div className="mt-2 text-[11.5px] text-[var(--color-text-dim)]">
-            由代码从 run 事件生成（run_audit.json），不做综合分；任一硬约束 BLOCK 整体 BLOCK。
+          {/* every judge shown today is sample data (mockData): the popover must not
+              claim a source it does not have yet (fixing spec J4) */}
+          <div className="mt-2 text-[11.5px] text-[var(--color-text-dim)]" data-testid="judge-source">
+            示例数据，还没正式上线。上线后由代码从 run 事件生成，不做综合分，任一硬约束 BLOCK 整体 BLOCK。
           </div>
         </div>,
         document.body,

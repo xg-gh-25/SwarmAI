@@ -154,11 +154,63 @@ APPROVAL = json.dumps({"kind": "approval", "session_id": "sess-1", "request_id":
                        "asked_at": NOW, "command": "rm -rf /tmp/x"}).encode()
 
 
+SHOWN = swarm_out.approval_digest("", "rm -rf /tmp/x")   # what the card shows for APPROVAL
+
+
 def test_answer_is_written_under_the_hives_answer_prefix(monkeypatch):
     s3 = _answer_env(monkeypatch, {ASK: APPROVAL})
-    asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="approve"))
+    asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="approve", shown_sha256=SHOWN))
     body = json.loads(s3.objects[ANS])
     assert body["request_id"] == "req-1" and body["decision"] == "approve"
+    assert body["shown_sha256"] == SHOWN
+
+
+def test_an_approval_of_a_changed_ask_is_refused(monkeypatch):
+    """The ask was rewritten after the card was shown (fixing spec B3)."""
+    s3 = _answer_env(monkeypatch, {ASK: APPROVAL})
+    with pytest.raises(swarm_out.SwarmOutError, match="changed"):
+        asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="approve",
+                                     shown_sha256=swarm_out.approval_digest("", "ls")))
+    assert ANS not in s3.objects
+
+
+def test_a_truncated_command_cannot_be_approved_but_can_be_denied(monkeypatch):
+    long = json.dumps({"kind": "approval", "session_id": "sess-1", "request_id": "req-1",
+                       "asked_at": NOW, "tool_name": "Bash", "truncated": True,
+                       "command": "echo " + "x" * 3000}).encode()
+    s3 = _answer_env(monkeypatch, {ASK: long})
+    rec = swarm_out._clean_ask(json.loads(long), "worker-1")
+    assert rec["truncated"] is True and len(rec["command"]) == swarm_out.MAX_COMMAND_CHARS
+    with pytest.raises(swarm_out.SwarmOutError, match="too long"):
+        asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="approve",
+                                     shown_sha256=rec["shown_sha256"]))
+    asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="deny",
+                                 shown_sha256=rec["shown_sha256"]))
+    assert json.loads(s3.objects[ANS])["decision"] == "deny"
+
+
+def test_dropped_questions_and_options_are_counted():
+    rec = {"kind": "question", "session_id": "s", "request_id": "r", "asked_at": NOW,
+           "questions": [{"question": "", "options": []}]
+           + [{"question": f"q{i}", "options": [{"label": "a"}, {"label": ""}] + [{"label": f"o{j}"} for j in range(12)]}
+              for i in range(22)]}
+    out = swarm_out._clean_ask(rec, "worker-1")
+    # 23 asked: 20 kept slots, one of them empty → 19 shown. Each shown question has 14
+    # options: the first ten minus the empty label leave 9, so 5 are not listed
+    assert len(out["questions"]) == 19
+    assert out["omitted"] == {"questions": 4, "options": 19 * 5}
+
+
+def test_a_dispatch_that_timed_out_is_recorded_without_a_session(patched, monkeypatch):
+    async def never(client, message):
+        await asyncio.sleep(10)
+    monkeypatch.setattr(swarm_out, "_start_session", never)
+    monkeypatch.setattr(swarm_out, "SESSION_ID_WAIT_S", 0.05)
+    _use(monkeypatch, _fake_hive())
+    with pytest.raises(swarm_out.SwarmOutError, match="may be running"):
+        asyncio.run(swarm_out.dispatch("worker-1", "Fix it", "do X"))
+    rows = [json.loads(ln) for ln in (patched / "dispatches.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["session_id"] is None and rows[0]["title"] == "Fix it"
 
 
 @pytest.mark.parametrize("extra", ["bridge/worker-1/closed/sess-1/req-1.json", ANS])
@@ -222,9 +274,9 @@ def test_two_answers_at_once_the_second_is_refused(monkeypatch):
     # both callers pass the "already answered?" check before either writes
     monkeypatch.setattr(s3, "get_object", lambda Bucket, Key: real_get(Bucket, Key) if "/answer/" not in Key
                         else (_ for _ in ()).throw(s3.exceptions.NoSuchKey()))
-    asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="approve"))
+    asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="approve", shown_sha256=SHOWN))
     with pytest.raises(swarm_out.SwarmOutError, match="already answered"):
-        asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="deny"))
+        asyncio.run(swarm_out.answer("h1", "sess-1", "req-1", decision="deny", shown_sha256=SHOWN))
     assert json.loads(s3.objects[ANS])["decision"] == "approve"
 
 

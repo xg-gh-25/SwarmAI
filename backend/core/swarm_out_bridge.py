@@ -9,10 +9,14 @@ does on a desktop. This module does not add a second way to wait. It only:
   ``s3://<bucket>/bridge/<hive>/ask/<session>/<key>.json``;
 - writes ``bridge/<hive>/closed/<session>/<key>.json`` once a mirrored prompt is no
   longer open (answered on the Hive's own web page, expired, or the session ended),
-  so the Host stops showing it;
+  so the Host stops showing it, or with ``why: answer_refused`` when an answer does
+  not match the prompt still waiting (the Host then shows it as not delivered);
 - reads ``bridge/<hive>/answer/<session>/<key>.json`` (written only by the Host,
   which holds the account credentials; the Hive role can read but not write there)
-  and delivers a valid answer the way the web page does: through the session
+  and delivers a valid answer the way the web page does. An approval must name what
+  the person was shown (``shown_sha256``, ``approval_digest``) and must not be for a
+  command too long to show whole; a deny is always delivered; a question's answer must
+  answer the questions still waiting. Delivery goes through the session
   router's ``continue_with_answer`` / ``continue_with_cmd_permission``, which unblock
   the waiting hook AND read the rest of the turn (the unit stopped reading when it
   went WAITING_INPUT); on start, asks left from before a restart are marked closed.
@@ -36,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -132,29 +137,65 @@ def identity_from(role: str, bucket: str, region: str) -> Optional[tuple[str, st
     return name, bucket, region
 
 
+def approval_digest(tool_name: str, command: str, reason: str = "") -> str:
+    """What a person approved: the tool and the command text exactly as shown. The Host
+    computes it over what it put on the card, the bridge over the request still waiting
+    on the board; an approval is delivered only when the two agree (so a rewritten ask
+    cannot carry an approval to a different command, or under a different reason).
+    ``surrogatepass``: a lone surrogate in Hive-written text must hash, not raise."""
+    blob = json.dumps([tool_name, command, reason], ensure_ascii=False).encode("utf-8", "surrogatepass")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def approval_view(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """The text a person approves for a gated tool call. Bash: its command, and a line
+    naming dangerouslyDisableSandbox when set (it changes what the command can reach).
+    Any other tool: its whole input as sorted JSON, so no field the card did not show
+    can ride along with the approval."""
+    if tool_name == "Bash" and isinstance(tool_input.get("command"), str):
+        view = tool_input["command"]
+        if tool_input.get("dangerouslyDisableSandbox"):
+            view += "\n# dangerouslyDisableSandbox: true"
+        return view
+    return json.dumps(tool_input, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def _ask_record(hive: str, session_id: str, key: str, item: dict[str, Any]) -> dict[str, Any]:
     base = {"hive": hive, "session_id": session_id, "request_id": key,
             "asked_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     if item.get("kind") == "ask_user_question":
         questions = []
-        for q in (item.get("questions") or [])[:MAX_ANSWERS]:
-            if not isinstance(q, dict):
+        all_qs = item.get("questions") if isinstance(item.get("questions"), list) else []
+        omitted_q, omitted_o = max(0, len(all_qs) - MAX_ANSWERS), 0
+        for q in all_qs[:MAX_ANSWERS]:
+            # a question with no text cannot be answered: dropped and counted, as the
+            # Host does, so both sides agree on which questions an answer must cover
+            if not isinstance(q, dict) or not str(q.get("question", "")).strip():
+                omitted_q += 1
                 continue
+            opts = q.get("options") if isinstance(q.get("options"), list) else []
+            kept = [{"label": str(o.get("label", ""))[:500],
+                     "description": str(o.get("description", ""))[:1000]}
+                    for o in opts[:10] if isinstance(o, dict)]
+            omitted_o += len(opts) - len(kept)
             questions.append({
                 "question": str(q.get("question", ""))[:MAX_ANSWER_CHARS],
                 "header": str(q.get("header", ""))[:200],
                 "multiSelect": bool(q.get("multiSelect")),
-                "options": [{"label": str(o.get("label", ""))[:500],
-                             "description": str(o.get("description", ""))[:1000]}
-                            for o in (q.get("options") or [])[:10] if isinstance(o, dict)],
+                "options": kept,
             })
-        return {**base, "kind": "question", "questions": questions}
+        rec = {**base, "kind": "question", "questions": questions}
+        if omitted_q or omitted_o:   # the Host adds its own and shows the total
+            rec["omitted"] = {"questions": omitted_q, "options": omitted_o}
+        return rec
     tool_input = item.get("toolInput") if isinstance(item.get("toolInput"), dict) else {}
-    # A Bash approval shows its command; any other gated tool shows its input.
-    command = tool_input.get("command") if isinstance(tool_input.get("command"), str) \
-        else json.dumps(tool_input, ensure_ascii=False, default=str)
-    return {**base, "kind": "approval", "tool_name": str(item.get("toolName", ""))[:100],
+    tool_name = str(item.get("toolName", ""))[:100]
+    command = approval_view(tool_name, tool_input)
+    return {**base, "kind": "approval", "tool_name": tool_name,
             "command": command[:MAX_COMMAND_CHARS],
+            # the card shows the first MAX_COMMAND_CHARS; a longer command cannot be
+            # approved from the panel (the person never saw the rest)
+            "truncated": len(command) > MAX_COMMAND_CHARS,
             "reason": str(item.get("reason", ""))[:1000], "options": sorted(DECISIONS)}
 
 
@@ -189,6 +230,7 @@ class Bridge:
         self.prefix = f"bridge/{hive}/"
         self._mirrored: dict[str, _Mirrored] = {}
         self._delivered: set[str] = set()
+        self._refused: set[str] = set()   # an answer that does not match what is waiting
         self._tasks: set[asyncio.Task] = set()
 
     @property
@@ -213,7 +255,12 @@ class Bridge:
                     out[key] = (sid, item)
         return out
 
-    def _valid(self, key: str, mirrored: _Mirrored, raw: bytes) -> Optional[dict[str, Any]]:
+    def _valid(self, key: str, mirrored: _Mirrored, raw: bytes,
+               waiting: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+        """The answer to deliver, or None. ``waiting`` is the ask record of the request
+        still on the board: an approve must name it (``shown_sha256``) and must not be for
+        a command too long to have been shown whole; a deny needs no check; a question's
+        answer must cover exactly the questions waiting."""
         try:
             ans = json.loads(raw)
         except ValueError:
@@ -227,9 +274,28 @@ class Bridge:
                   and all(isinstance(k, str) and isinstance(v, str)
                           and len(k) <= MAX_ANSWER_CHARS and len(v) <= MAX_ANSWER_CHARS
                           for k, v in answers.items()))
+            # it answers the questions still waiting, not a rewritten mirror of them
+            asked = {q.get("question") for q in (waiting or {}).get("questions") or []}
+            if ok and waiting is not None and set(answers) != asked:
+                logger.warning("swarm_out_bridge: answer for %s does not match the waiting "
+                               "questions; not delivered", key)
+                ok = False
             return {"answers": answers} if ok else None
         decision = ans.get("decision")
-        return {"decision": decision} if decision in DECISIONS else None
+        if decision not in DECISIONS:
+            return None
+        if decision == "deny":   # always safe: no content check (an older Host sends none)
+            return {"decision": decision}
+        if waiting is None or ans.get("shown_sha256") != approval_digest(
+                waiting.get("tool_name", ""), waiting.get("command", ""), waiting.get("reason", "")):
+            logger.warning("swarm_out_bridge: approval for %s does not match the waiting "
+                           "request; not delivered", key)
+            return None
+        if decision == "approve" and waiting.get("truncated"):
+            logger.warning("swarm_out_bridge: approval for %s refused: the command was too "
+                           "long to be shown whole", key)
+            return None
+        return {"decision": decision}
 
     def _deliver(self, key: str, mirrored: _Mirrored, answer: dict[str, Any]) -> None:
         if mirrored.kind == "question":
@@ -287,18 +353,28 @@ class Bridge:
         for key, (sid, item) in open_now.items():
             if key in self._mirrored:
                 continue
-            rec = _ask_record(self.hive, sid, key, item)
-            body = json.dumps(rec, ensure_ascii=False).encode()
-            await asyncio.to_thread(self.store.put, f"{self.prefix}ask/{sid}/{key}.json", body)
+            try:
+                rec = _ask_record(self.hive, sid, key, item)
+                # ASCII escapes: a lone surrogate in model text writes, and reads back
+                # as the same string on the Host (the digest still matches)
+                body = json.dumps(rec, ensure_ascii=True).encode()
+                await asyncio.to_thread(self.store.put, f"{self.prefix}ask/{sid}/{key}.json", body)
+            except Exception as e:   # one prompt must not stop the pass for the others
+                logger.warning("swarm_out_bridge: mirroring %s failed (%s)", key, type(e).__name__)
+                continue
             self._mirrored[key] = _Mirrored(sid, rec["kind"])
         # 2. close the ones that left the board
         for key in [k for k in self._mirrored if k not in open_now]:
             m = self._mirrored.pop(key)
             self._delivered.discard(key)
+            # a refused one is closed again plainly: it is settled now (answered on the
+            # Hive's page, expired, or the session ended), no longer "not delivered"
+            self._refused.discard(key)
             body = json.dumps({"request_id": key, "closed_at": time.time()}).encode()
             await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{m.session_id}/{key}.json", body)
         # 3. deliver answers for the ones still open, once each
-        waiting = {k: m for k, m in self._mirrored.items() if k not in self._delivered}
+        waiting = {k: m for k, m in self._mirrored.items()
+                   if k not in self._delivered and k not in self._refused}
         if not waiting:
             return
         listed = set(await asyncio.to_thread(self.store.list_keys, f"{self.prefix}answer/"))
@@ -307,9 +383,19 @@ class Bridge:
             if akey not in listed:
                 continue
             raw = await asyncio.to_thread(self.store.get, akey)
-            answer = self._valid(key, m, raw) if raw is not None else None
+            if raw is None:
+                continue
+            sid, item = open_now[key]
+            answer = self._valid(key, m, raw, _ask_record(self.hive, sid, key, item))
             if answer is not None:
                 self._deliver(key, m, answer)
+            else:
+                # not delivered, and the Host is told why; the request stays on the
+                # board for the Hive's own page (or expires)
+                self._refused.add(key)
+                body = json.dumps({"request_id": key, "closed_at": time.time(),
+                                   "why": "answer_refused"}).encode()
+                await asyncio.to_thread(self.store.put, f"{self.prefix}closed/{m.session_id}/{key}.json", body)
 
 
 async def run_bridge_loop() -> None:

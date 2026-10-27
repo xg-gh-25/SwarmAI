@@ -68,4 +68,73 @@ describe('LiveDispatches', () => {
     expect(await screen.findByText('Fix login')).toBeTruthy();
     expect(screen.getByTestId('swarm-out-run').textContent).toContain('在等你');
   });
+
+  it('names the tool and the dispatch, and refuses to offer approve for a cut-off command (fixing spec B)', async () => {
+    runs.mockResolvedValue({ runs: [], asks: [{ ...approval, tool_name: 'Bash', truncated: true, dispatch_title: 'Fix login' }], errors: [] });
+    render(<LiveDispatches />);
+    expect((await screen.findByTestId('swarm-out-ask-tool')).textContent).toBe('Bash');
+    expect(screen.getByTestId('swarm-out-ask-source').textContent).toBe('Fix login');
+    expect(screen.getByTestId('swarm-out-ask-truncated')).toBeTruthy();
+    expect(screen.queryByText('批准')).toBeNull();
+    expect(screen.getByText('拒绝')).toBeTruthy();
+  });
+
+  it('says when an ask is from a session this Host did not send', async () => {
+    runs.mockResolvedValue({ runs: [], asks: [{ ...approval, dispatch_title: null }], errors: [] });
+    render(<LiveDispatches />);
+    expect((await screen.findByTestId('swarm-out-ask-source')).textContent).toContain('不是这里派出的');
+  });
+
+  it('a multi-select question takes several picks, joined like the chat does (J3)', async () => {
+    const multi = { ...question, questions: [{ question: 'Which?', header: 'W', multiSelect: true,
+      options: [{ label: 'a', description: '' }, { label: 'b', description: '' }] }] };
+    runs.mockResolvedValue({ runs: [], asks: [multi], errors: [] });
+    render(<LiveDispatches />);
+    fireEvent.click(await screen.findByText('a'));
+    fireEvent.click(screen.getByText('b'));
+    fireEvent.click(screen.getByText('提交回答'));
+    await waitFor(() => expect(answer).toHaveBeenCalledWith(multi, { answers: { 'Which?': 'a, b' } }));
+  });
+
+  it('says how many questions or options were not shown (D4)', async () => {
+    runs.mockResolvedValue({ runs: [], asks: [{ ...question, omitted: { questions: 2, options: 1 } }], errors: [] });
+    render(<LiveDispatches />);
+    expect((await screen.findByTestId('swarm-out-ask-omitted')).textContent).toContain('3');
+  });
+
+  it('a refused answer is shown as not delivered, with no controls (fixing spec B)', async () => {
+    runs.mockResolvedValue({ runs: [], asks: [{ ...approval, refused: true }], errors: [] });
+    render(<LiveDispatches />);
+    expect(await screen.findByTestId('swarm-out-ask-refused')).toBeTruthy();
+    expect(screen.queryByText('批准')).toBeNull();
+    expect(screen.queryByText('拒绝')).toBeNull();
+  });
+
+  it('a multi-select label with a comma stays one pick', async () => {
+    const multi = { ...question, questions: [{ question: 'How?', header: 'H', multiSelect: true,
+      options: [{ label: 'Yes, with tests', description: '' }, { label: 'Yes', description: '' }] }] };
+    runs.mockResolvedValue({ runs: [], asks: [multi], errors: [] });
+    render(<LiveDispatches />);
+    const withTests = await screen.findByText('Yes, with tests');
+    fireEvent.click(withTests);
+    expect(withTests.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText('Yes').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(withTests);                       // deselects
+    expect(withTests.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(screen.getByText('Yes'));
+    fireEvent.click(withTests);
+    fireEvent.click(screen.getByText('提交回答'));
+    // option order, not click order
+    await waitFor(() => expect(answer).toHaveBeenCalledWith(multi, { answers: { 'How?': 'Yes, with tests, Yes' } }));
+  });
+
+  it('names a possible owner and marks a dispatch whose session was never named (J1)', async () => {
+    runs.mockResolvedValue({
+      runs: [{ dispatch_id: 'd9', hive_id: 'h1', hive: 'worker-1', session_id: null, title: 'Timed out',
+               origin: 'swarm-out', sent_at: '2026-10-27T02:00:00Z', waiting: false, session_unknown: true }],
+      asks: [{ ...approval, dispatch_title: null, possible_dispatch_title: 'Timed out' }], errors: [] });
+    render(<LiveDispatches />);
+    expect((await screen.findByTestId('swarm-out-ask-source')).textContent).toBe('可能属于：Timed out');
+    expect(screen.getByTestId('swarm-out-run-unknown')).toBeTruthy();
+  });
 });

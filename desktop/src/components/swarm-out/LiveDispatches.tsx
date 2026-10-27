@@ -11,7 +11,7 @@
  * Design: docs/design/2026-10-27-swarm-out-v0-dispatch.md §3.4.
  */
 import { useCallback, useEffect, useState } from 'react';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutRuns } from '../../services/swarmOut';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutQuestion, type SwarmOutRuns } from '../../services/swarmOut';
 
 const POLL_MS = 30_000;
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
@@ -30,7 +30,9 @@ function errText(e: unknown): string {
 }
 
 function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
+  // single-select / typed answers: the text; multi-select: the picked labels
   const [picks, setPicks] = useState<Record<string, string>>({});
+  const [multi, setMulti] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -48,18 +50,46 @@ function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
   };
 
   const questions = ask.questions ?? [];
-  const complete = questions.length > 0 && questions.every((q) => (picks[q.question] ?? '').trim());
+  const isMulti = (q: SwarmOutQuestion) => q.multiSelect && q.options.length > 0;
+  // a multi-select answer is its picks joined with ", " in option order (as the chat's
+  // AskUserQuestion); kept as a list until sent, so a label with a comma stays whole
+  const answerOf = (q: SwarmOutQuestion) => (isMulti(q)
+    ? q.options.map((o) => o.label).filter((l) => (multi[q.question] ?? []).includes(l)).join(', ')
+    : (picks[q.question] ?? ''));
+  const complete = questions.length > 0 && questions.every((q) => answerOf(q).trim());
+  const toggle = (q: SwarmOutQuestion, label: string) => {
+    if (!isMulti(q)) { setPicks((p) => ({ ...p, [q.question]: label })); return; }
+    setMulti((m) => {
+      const cur = m[q.question] ?? [];
+      return { ...m, [q.question]: cur.includes(label) ? cur.filter((x) => x !== label) : [...cur, label] };
+    });
+  };
+  const picked = (q: SwarmOutQuestion, label: string) =>
+    isMulti(q) ? (multi[q.question] ?? []).includes(label) : picks[q.question] === label;
+  const omitted = (ask.omitted?.questions ?? 0) + (ask.omitted?.options ?? 0);
 
   return (
     <div className={`${card} px-4 py-3`} data-testid="swarm-out-ask">
-      <div className={`text-[12px] ${muted}`}>{ask.hive} · {when(ask.asked_at)} · 在等你</div>
-      {ask.kind === 'approval' ? (
+      <div className={`text-[12px] ${muted}`}>
+        {ask.hive} · <span data-testid="swarm-out-ask-source">{ask.dispatch_title
+          ?? (ask.possible_dispatch_title ? `可能属于：${ask.possible_dispatch_title}` : 'Hive 上的其他会话（不是这里派出的）')}</span> · {when(ask.asked_at)} · {ask.refused ? '没有送达' : '在等你'}
+      </div>
+      {ask.refused ? (
+        <div className="mt-1 text-[12.5px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-refused">
+          Hive 拒收了这次回答：它和正在等待的内容对不上（问题在显示之后被改过，或者这台 Hive 的版本更新）。回答没有送达，请到这台 Hive 自己的页面上处理。
+        </div>
+      ) : ask.kind === 'approval' ? (
         <>
-          <div className="mt-1 font-medium">要执行一条需要批准的命令</div>
+          <div className="mt-1 font-medium">要执行一条需要批准的命令{ask.tool_name && <span className={`ml-1.5 font-mono text-[12px] ${muted}`} data-testid="swarm-out-ask-tool">{ask.tool_name}</span>}</div>
           {ask.reason && <div className={`mt-0.5 text-[12.5px] ${muted}`}>{ask.reason}</div>}
           <pre className="mt-2 mb-0 p-2 rounded-md bg-[var(--color-hover)] text-[12px] whitespace-pre-wrap break-all font-mono">{ask.command}</pre>
+          {ask.truncated && (
+            <div className="mt-1 text-[12px] text-[var(--color-status-warning)]" data-testid="swarm-out-ask-truncated">
+              命令超过 2000 字，没有完整显示。不能在这里批准：去这台 Hive 自己的页面看全文再决定，或者在这里拒绝。
+            </div>
+          )}
           <div className="mt-2 flex gap-2">
-            <button type="button" className={btn} disabled={busy} onClick={() => send({ decision: 'approve' })}>批准</button>
+            {!ask.truncated && <button type="button" className={btn} disabled={busy} onClick={() => send({ decision: 'approve' })}>批准</button>}
             <button type="button" className={btn} disabled={busy} onClick={() => send({ decision: 'deny' })}>拒绝</button>
           </div>
         </>
@@ -75,24 +105,33 @@ function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
                       key={o.label}
                       type="button"
                       title={o.description || undefined}
-                      aria-pressed={picks[q.question] === o.label}
-                      className={`${btn} ${picks[q.question] === o.label ? 'bg-[var(--color-hover)] font-medium' : ''}`}
-                      onClick={() => setPicks((p) => ({ ...p, [q.question]: o.label }))}
+                      aria-pressed={picked(q, o.label)}
+                      className={`${btn} ${picked(q, o.label) ? 'bg-[var(--color-hover)] font-medium' : ''}`}
+                      onClick={() => toggle(q, o.label)}
                     >{o.label}</button>
                   ))}
                 </div>
               )}
-              <input
-                aria-label={`回答：${q.question}`}
-                className="mt-1.5 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[12.5px]"
-                placeholder={q.options.length ? '或者写你自己的回答' : '你的回答'}
-                value={q.options.some((o) => o.label === picks[q.question]) ? '' : (picks[q.question] ?? '')}
-                onChange={(e) => setPicks((p) => ({ ...p, [q.question]: e.target.value }))}
-              />
+              {/* a multi-select question with options is answered by its picks only */}
+              {!(q.multiSelect && q.options.length > 0) && (
+                <input
+                  aria-label={`回答：${q.question}`}
+                  className="mt-1.5 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-[12.5px]"
+                  placeholder={q.options.length ? '或者写你自己的回答' : '你的回答'}
+                  value={q.options.some((o) => o.label === picks[q.question]) ? '' : (picks[q.question] ?? '')}
+                  onChange={(e) => setPicks((p) => ({ ...p, [q.question]: e.target.value }))}
+                />
+              )}
             </div>
           ))}
+          {omitted > 0 && (
+            <div className={`mt-1.5 text-[12px] ${muted}`} data-testid="swarm-out-ask-omitted">
+              还有 {omitted} 个问题或选项没有显示（太多或为空），完整内容在这台 Hive 自己的页面上。
+            </div>
+          )}
           <div className="mt-2">
-            <button type="button" className={btn} disabled={busy || !complete} onClick={() => send({ answers: picks })}>提交回答</button>
+            <button type="button" className={btn} disabled={busy || !complete}
+              onClick={() => send({ answers: Object.fromEntries(questions.map((q) => [q.question, answerOf(q)])) })}>提交回答</button>
           </div>
         </>
       )}
@@ -143,6 +182,7 @@ export function LiveDispatches({ hidden = false }: { hidden?: boolean }) {
             <div key={r.dispatch_id} className="px-4 py-2 flex items-baseline gap-2 min-w-0" data-testid="swarm-out-run">
               <span className="font-medium truncate min-w-0" title={r.title}>{r.title}</span>
               {r.waiting && <span className="text-[12px] text-[var(--color-status-warning)] flex-shrink-0">在等你</span>}
+              {r.session_unknown && <span className={`text-[12px] flex-shrink-0 ${muted}`} data-testid="swarm-out-run-unknown">会话未确认，可能在跑</span>}
               <span className={`ml-auto text-[12px] flex-shrink-0 ${muted}`}>{r.hive} · {when(r.sent_at)}</span>
             </div>
           ))}
