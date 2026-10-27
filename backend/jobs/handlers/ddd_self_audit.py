@@ -213,6 +213,10 @@ say. Give one only with evidence of one of these kinds (quote verbatim, one line
 - "superseded": a line saying a document is superseded (its file is the evidence file);
 - "exists": the replacement points at a path that exists (`file` = that path);
 - "code": a line of the project's source code (not a test or fixture) that shows the truth.
+Typical certain fixes — propose these whenever they apply, the system re-checks every one:
+delete the "once X exists" / "not yet" / "pending" words a ticked `- [x]` line shows are done
+(also inside a plan: the plan stays, only the stale condition goes); swap a path for the one
+a superseded header names; swap a number or name for the one the code shows.
 Another doc merely saying something different is NOT enough (it may be the stale one): give
 no fix then. Never give a fix for a dated record (a `- **Title** …` entry: it was true when
 written), for plans / current focus / dates only the owner knows, or that adds any number,
