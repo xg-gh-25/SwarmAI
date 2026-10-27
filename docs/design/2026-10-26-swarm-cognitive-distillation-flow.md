@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-27
 project: SwarmAI
-status: r16.5 — 设计（source 与提取重写；吸收多轮独立评审，待用户审），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
+status: r16.6 — 设计（source 与提取重写；吸收多轮独立评审，待用户审），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -210,6 +210,7 @@ CDF 的所有表放在一个独立的 SQLite 文件里：`<app data>/ingestion.d
 | `ingestion_lanes` | 每个 lane 的 `next_due_at`、`last_started_at`、`last_completed_at`（UTC） |
 | `ingestion_owner` | `epoch`、`pid`、`started_at` |
 | `ingestion_daily_stats` | 30 天之前的汇总数据（§4.4） |
+| `injection_selection` | MEMORY / EVOLUTION 注入选取的结果（§12）：文件、文件哈希、选中的锚点列表、分数快照版本、重算时间。只在文件哈希变化或每天一次时由 worker 重算 |
 | `ingestion_access_log` | Flow 视图的详情访问记录（§10）。只由 worker 异步写入，只读接口从不写库。同样保留 30 天 |
 
 ### 4.1 入队和幂等
@@ -1181,12 +1182,17 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 
 - **每轮注入文件的确定性预算**（本次改变 AGENTS.md 里"读取侧永不截断"的规则）：
   - MEMORY、EVOLUTION 各有一个注入上限，默认 MEMORY 24K tokens、EVOLUTION 8K tokens，可配置。源文件一个字节都不改。
+  - **选取不看任何查询**（r16.6）：MEMORY 和 EVOLUTION 在 system prompt 的固定层里（`prompt_builder` 里 `include_ephemeral=False` 的那一半，也就是 `build_default_system_prompt` 返回的内容）。固定层和用户输入无关，原因有两个：要命中模型的 prompt 前缀缓存；预热会话要在用户开口之前就组装好。所以选取既不看本轮查询，也不看会话的第一条消息。
   - 文件超过上限时，按单元选取，规则固定：
     1. 先剔除被取代的单元。
     2. 元认知层整层保留。
-    3. 认知层和操作层各自按本轮查询的 BM25 分数排序，再按单元在文件里的顺序排序，依次装入，装满为止。
-    4. 输出时按单元原来的顺序拼接。
-  - 没装进去的单元仍然能被检索到：recall 的 `context_files` 那一路（读取侧设计 `2026-10-26-recall-precision-and-coverage.md` D4：只检索 MEMORY 里不在 prompt 中的条目）照常能召回它们。
+    3. 认知层和操作层各自按读取侧分数排序（§5.8 的 `score`）；分数相同时，依次按证据强度、证据时间（`observed_at`，新的在前）、锚点字典序排。
+    4. 按这个顺序依次装入，装满为止。
+    5. 输出时按单元在文件里原来的顺序拼接。
+
+    输入只有文件内容和 `ingestion.db` 里的分数，所以同样的输入一定得到同样的字节。选取函数的签名里没有 query 参数。
+  - **什么时候重算**：只在两种情况下重算：文件内容的哈希变了；或者每天一次（UTC 日界，因为分数里的 `decay` 和 `last_used` 会随时间变）。两次重算之间，注入的字节完全不变，固定层的缓存因此保持稳定。重算结果（选中的锚点列表、文件哈希、分数快照的版本、重算时间）记在 `ingestion.db` 的 `injection_selection` 表，Flow 视图可查。
+  - **分工**：固定层负责"一直重要的"，动态层的召回负责"和这一轮相关的"。和当前问题相关、但没被选进 prompt 的条目，由 recall 的 `context_files` 那一路兜住（读取侧设计 `2026-10-26-recall-precision-and-coverage.md` D4：只检索 MEMORY 里不在 prompt 中的条目）。这里不新增任何机制。
   - STEERING、USER、TOOLS 由用户自己管，不设上限，只在超过 8K tokens 时在 Flow 视图里提示。
   - `over_budget` 警告保留，额外记录被省略的单元数，显示在Flow 视图的健康区。
   - 实施时同步改 AGENTS.md 的 Context and Memory System 一节和 `context_directory_loader` 的文档，L1 缓存的预算头也跟着改。
@@ -1330,6 +1336,9 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 **验收门**：
 - MEMORY 超出预算时，选取结果是确定的；
 - 元认知层完整保留；
+- **字节稳定**：同一份文件、同一组分数，跨会话、跨轮次的选取结果字节相同；预热会话和普通会话的固定层字节也相同；
+- **结构性测试**：选取函数的签名里没有 query 参数（或任何来自用户输入的参数），用一条检查函数签名的测试固定下来；mutation 检查：把 query 参数加回去，这条测试必须变红；
+- **兜底的召回**：MEMORY 超出预算时，用回放统计 `context_files` 这一路对"被省略、但和问题相关"的条目的召回率和有用率，据此决定预算要不要调；
 - 成对回放加盲评：useful 和 noise 两项都不比基线差。
 
 **每个阶段都要满足**
@@ -1393,6 +1402,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 | 一周工作记忆 | `Knowledge/DailyActivity/<date>.md` | DailyActivity 生成器（session 结束）；日终汇总由 `summary` lane 追加 | 注入（§5.7）、人 |
 | 配额的预留和扣减 | `ingestion_quota` | 卡 0、writer | 卡 0、dashboard |
 | 详情访问日志 | `ingestion_access_log` | worker（异步） | 审计 |
+| MEMORY / EVOLUTION 的注入选取 | `injection_selection` | worker（文件哈希变化或每天一次） | prompt 固定层、Flow |
 | 唤醒凭证 | `<app data>/state/ingestion_wake.key`（权限 0600） | owner 启动时 | CLI、hook 子进程 |
 | 基线 | `<app data>/state/baseline.json` | 上线时生成一次，用户编辑时修订 | writer、比对、验收 |
 | 单元、层 | `parse_units()`、`layer_for()` | — | writer、读取侧、dashboard |
@@ -1423,6 +1433,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
   - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（r13 之前的版本）。
 
+- **r16.6**：§12 的 MEMORY / EVOLUTION 注入选取改为不看任何查询：按读取侧分数排序，分数相同依次按证据强度、证据时间、锚点字典序；只在文件哈希变化或每天一次时重算，结果记在 `injection_selection`；写明固定层和召回的分工；阶段 C 验收加字节稳定、签名无 query 的结构性测试和 mutation 检查、`context_files` 兜底召回的回放统计。原因：这两份文件在固定层，按查询选取会让前缀缓存失效、预热会话组装不出来。
 - **r16.5**（最后一轮评审意见，之后直接实施）：
   - §5.2、§8（用户决定）：main 新加的 DDD 漂移自动修正改走 CDF，归入 S4，修正作为 refine 单元入队（新单元 supersedes 原条目，原文不改），删除直接替换、备份和 `undo_drift_fix`。
   - §9.1 第 3 条做减法：删掉跨批次的 supersedes；目的地是注入文件时卡 3 不检索 `_common/` 里的改投副本，允许 recall 里多一份只读副本，Flow 单独计数；补一条测试。
