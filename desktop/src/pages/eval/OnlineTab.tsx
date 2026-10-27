@@ -32,7 +32,11 @@ export function OnlineTab() {
     if (!k) return null;
     const judged = id === 'O4_GOAL' || id === 'O5_TOOLS';
     const ok = k.checked != null && k.failed != null ? k.checked - k.failed : null;
-    const head = judged ? (ok != null ? t(`${ok}/${k.checked} done well`, `${ok}/${k.checked} 个做好`) : '—') : pct(k.rate == null ? null : 1 - k.rate);
+    // nothing to score is a reason, never "0/0 done well" or "0%"
+    const empty = !k.checked
+      ? (judged && (on.judge_failed || on.judge_error) ? t('judge failed', 'judge 失败') : t('nothing to score', '没有可评的'))
+      : null;
+    const head = empty ?? (judged ? (ok != null ? t(`${ok}/${k.checked} done well`, `${ok}/${k.checked} 个做好`) : '—') : pct(k.rate == null ? null : 1 - k.rate));
     const sub = ok == null ? '—' : id === 'O3_CORRECTIONS' ? t(`${ok}/${k.checked} sessions`, `${ok}/${k.checked} 个会话`) : judged ? t('sampled', '抽查') : t(`${ok}/${k.checked} turns`, `${ok}/${k.checked} 轮`);
     return <CheckRow key={id} id={id} head={head} sub={sub} check={k} weeks={weeks} points={onlineSeries(on, id)} dim={DIM_OF[id]?.[lang] ?? ''} />;
   };
@@ -64,6 +68,12 @@ export function OnlineTab() {
             '优先抽你纠正过的、或特别长的会话，所以没做好的比例偏高，不代表整体。judge 不知道标准答案，只看问题、回答和调了哪些工具。')}
         </p>
         {on.judge_error && <p className="text-small text-[var(--color-status-error)] mb-3">{t('The judge failed on every sampled session: ', 'judge 在所有抽查会话上都失败了：')}{on.judge_error}</p>}
+        {!on.judge_error && !!on.judge_failed && (
+          <p className="text-small text-[var(--color-status-warning)] mb-3" data-testid="online-judge-partial">
+            {t(`The judge failed on ${on.judge_failed} of ${on.judge_sampled ?? '?'} sampled sessions; they are not in the counts below.`,
+              `judge 在 ${on.judge_sampled ?? '?'} 个抽查会话里有 ${on.judge_failed} 个失败，下面的计数不含它们。`)}
+          </p>
+        )}
         <div>{['O4_GOAL', 'O5_TOOLS'].map(row)}</div>
       </Zone>
 

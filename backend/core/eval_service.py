@@ -483,6 +483,10 @@ class EvalService:
                             for d in (data.get("low_details") or [])],
             "sampler_error": str(sampler_error)[:300] if sampler_error else None,
             "judge_error": str(data["judge_error"])[:300] if data.get("judge_error") else None,
+            # sampled sessions whose judge call failed (not in O4/O5); None in a state
+            # written before judge_sampled existed
+            "judge_sampled": data.get("judge_sampled") if isinstance(data.get("judge_sampled"), int) else None,
+            "judge_failed": data.get("judge_failed") if isinstance(data.get("judge_failed"), int) else None,
             "metrics": self._project_metrics(data.get("metrics")),
             "trend": [{"week": str(t.get("week") or "")[:10], "at": t.get("at"),
                        "rates": {str(k)[:40]: v for k, v in (t.get("rates") or {}).items()

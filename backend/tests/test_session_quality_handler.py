@@ -212,6 +212,22 @@ def test_a_judge_that_fails_on_every_session_is_reported_not_shown_as_no_data(tm
     assert ok["judge_error"] is None
 
 
+def test_a_partial_judge_failure_is_counted_not_dropped(tmp_path):
+    """One of two sampled sessions has a failing judge call: O4/O5 count only the
+    other, and the state says one judged session failed (fixing spec D2)."""
+    def flaky(prompt, response, tools):
+        if "b-question" in prompt:
+            return {"status": "error", "notes": "judge call failed: ThrottlingException"}
+        return {"status": "passed", "goal_score": 0.9, "tool_score": 0.9, "reason": "ok"}
+    b = _good("B")
+    b["messages"][0] = _msg("user", "b-question 端口是多少？")
+    corr = [{"type": "user_correction", "session_id": sid, "ts": NOW.timestamp()} for sid in ("a", "b")]
+    result, _, _ = _run(tmp_path, {"a": _good(), "b": b}, corrections=corr, scorer=flaky)
+    assert result["judge_sampled"] == 2 and result["judge_failed"] == 1
+    assert result["checks"]["O4_GOAL"]["checked"] == 1
+    assert result["judge_error"] is None  # not every session failed
+
+
 def test_language_is_judged_on_the_answer_and_a_pasted_log_keeps_a_chinese_question_chinese(tmp_path):
     log = "Traceback (most recent call last): File app.py line 3 in main ValueError invalid literal for int"
     sessions = {

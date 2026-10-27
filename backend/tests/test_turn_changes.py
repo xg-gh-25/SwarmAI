@@ -597,3 +597,14 @@ async def test_rows_and_landings_share_one_finish_budget(repo, monkeypatch):
     t.note_tool({"type": "tool_use", "name": "Write", "input": {"file_path": str(repo / "a.py")}})
     await t.finish()
     assert seen["left"] < 0.15, seen
+
+
+
+def test_deliverables_block_counts_what_it_does_not_list():
+    """Fixing spec D3: the end card keeps the first 12 deliverables and says "+N"."""
+    from core.session_router import MAX_TURN_DELIVERABLES, _deliverables_block
+
+    files = [{"path": f"f{i}.md"} for i in range(MAX_TURN_DELIVERABLES + 3)]
+    block = _deliverables_block(files)
+    assert len(block["files"]) == MAX_TURN_DELIVERABLES and block["omitted"] == 3
+    assert "omitted" not in _deliverables_block(files[:2])

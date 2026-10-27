@@ -33,10 +33,10 @@ def _run(at=None, **statuses):
 
 
 GROUPS = ("definite_regression", "possible_regression", "baseline_unstable",
-          "fail_to_pass", "baseline_short")
+          "fail_to_pass", "possible_fix", "baseline_short", "not_tested")
 
 
-def test_compare_repeats_reports_the_five_groups():
+def test_compare_repeats_reports_the_seven_groups():
     assert set(er.compare_repeats([], [])) == set(GROUPS)
 
 
@@ -77,8 +77,32 @@ def test_the_baseline_is_the_two_newest_runs_by_time_not_by_list_order():
 
 def test_skipped_error_and_timeout_are_not_baseline_or_result():
     history = [_run(A="passed"), _run(A="timeout"), _run(A="passed"), _run(A="skipped")]
-    runs = [_run(A="failed"), _run(A="error"), _run(A="failed")]
+    runs = [_run(A="failed"), _run(A="failed")]
     assert er.compare_repeats(history, runs)["definite_regression"] == ["A"]
+
+
+def test_an_errored_repeat_makes_a_regression_possible_not_definite():
+    """§3.6: definite = failed in every repeat. An error is not a failure, so one error
+    and one failure is one real failure."""
+    history = [_run(A="passed"), _run(A="passed")]
+    runs = [_run(A="failed"), _run(A="error")]
+    flips = er.compare_repeats(history, runs)
+    assert flips["definite_regression"] == [] and flips["possible_regression"] == ["A"]
+
+
+def test_a_fix_with_an_errored_repeat_is_a_possible_fix():
+    history = [_run(A="failed"), _run(A="failed")]
+    runs = [_run(A="passed"), _run(A="error")]
+    flips = er.compare_repeats(history, runs)
+    assert flips["possible_fix"] == ["A"] and flips["fail_to_pass"] == []
+
+
+def test_a_case_with_no_definite_repeat_is_listed_as_not_tested():
+    history = [_run(A="passed", B="passed"), _run(A="passed", B="passed")]
+    runs = [_run(A="error", B="passed"), _run(A="timeout", B="passed")]
+    flips = er.compare_repeats(history, runs)
+    assert flips["not_tested"] == ["A"]
+    assert "A" not in sum((flips[g] for g in GROUPS if g != "not_tested"), [])
 
 
 def test_fail_to_pass_needs_two_failed_baselines_and_every_repeat_passing():
@@ -86,7 +110,7 @@ def test_fail_to_pass_needs_two_failed_baselines_and_every_repeat_passing():
     runs = [_run(A="passed", B="passed"), _run(A="passed", B="failed")]
     flips = er.compare_repeats(history, runs)
     assert flips["fail_to_pass"] == ["A"]
-    assert "B" not in sum((flips[g] for g in GROUPS), [])
+    assert flips["possible_fix"] == ["B"]  # passed once, failed once: listed, not dropped
 
 
 def test_a_case_without_two_baseline_runs_is_listed_not_judged():

@@ -184,6 +184,8 @@ export interface TurnView {
   summary?: PipelineSummaryContent;
   /** The turn's products (`turn_deliverables`), by absolute path, first-seen order. */
   deliverables: TurnDeliverable[];
+  /** Deliverables the backend did not list (`turn_deliverables.omitted`), summed. */
+  deliverablesOmitted: number;
   /** Every `turn_product` block of the turn, in order (top-level and sub-agent). */
   products: TurnProductContent[];
   /** The turn's code changes (the latest `turn_changes`), if the backend sent them. */
@@ -412,6 +414,7 @@ export function deriveTurnView(
   let attention: PipelineAttentionContent | undefined;
   let summary: PipelineSummaryContent | undefined;
   const deliverables: TurnDeliverable[] = [];
+  let deliverablesOmitted = 0;
   const products: TurnProductContent[] = [];
   /** Files that already have an in-turn product row (one row per file per turn). */
   const shownFiles = new Set<string>();
@@ -540,6 +543,7 @@ export function deriveTurnView(
       return;
     }
     if (block.type === 'turn_deliverables') {
+      if (typeof block.omitted === 'number' && block.omitted > 0) deliverablesOmitted += block.omitted;
       for (const f of block.files ?? []) {
         if (f?.absolutePath && !deliverables.some((d) => d.absolutePath === f.absolutePath)) deliverables.push(f);
       }
@@ -682,7 +686,7 @@ export function deriveTurnView(
     .filter((u): u is Extract<TurnUnit, { kind: 'outcome' }> => u.kind === 'outcome')
     .map((u) => u.text)
     .join('\n\n');
-  return { units, nextSteps, copyText, run, attention, summary, deliverables, products, changes, liveStage, midWork, pipelineStart,
+  return { units, nextSteps, copyText, run, attention, summary, deliverables, deliverablesOmitted, products, changes, liveStage, midWork, pipelineStart,
     // a receipt for background agents only (no turn ran) does not stop this turn
     stoppedMarker: stoppedMarker || (!!stopReceipt && stopReceipt.turn !== false),
     ...(stopReceipt ? { stopReceipt } : {}), notice, backgroundFinished };

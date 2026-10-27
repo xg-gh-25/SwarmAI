@@ -116,6 +116,34 @@ _GATE_CODE_PATHS = [
     "backend/core/eval_release.py",
     "backend/scripts/golden_case_validator.py",
 ]
+# Eval's own inputs beyond the machinery above: the probes the cases run (a weakened
+# probe must make the report stale) and the shipped fixture workspace the offline
+# cases run in. Globs, so a new probe or fixture file is covered without editing this.
+_GATE_INPUT_GLOBS = ("backend/scripts/*probe*.py", "backend/templates/eval/fixtures/**/*")
+# the same set as git pathspecs (git's default pathspec: a directory takes all under it)
+_GATE_INPUT_PATHSPECS = ("backend/scripts/*probe*.py", "backend/templates/eval/fixtures/")
+
+
+def _gate_input_files(code_root: Path) -> list[str]:
+    """Every path compute_code_digest hashes, repo-relative, sorted and unique.
+
+    The globs take git-tracked files only: an untracked file there (a Finder
+    ``.DS_Store``, an editor swap file, a scratch probe) would change the digest
+    between the eval run and the gate and leave every report stale. Outside a git
+    checkout, the glob without dot-files and ``__pycache__``."""
+    rels = set(_GATE_CODE_PATHS)
+    try:
+        out = subprocess.run(["git", "-C", str(code_root), "ls-files", "-z", "--",
+                              *_GATE_INPUT_PATHSPECS], capture_output=True, timeout=10, check=True)
+        rels.update(r for r in out.stdout.decode("utf-8", "replace").split("\0") if r)
+    except (OSError, subprocess.SubprocessError):
+        for pattern in _GATE_INPUT_GLOBS:
+            for p in code_root.glob(pattern):
+                parts = p.relative_to(code_root).parts
+                if p.is_file() and "__pycache__" not in parts and not any(
+                        x.startswith(".") for x in parts):
+                    rels.add(str(p.relative_to(code_root)))
+    return sorted(rels)
 
 # Fast-deterministic evaluators eligible for the BVT gate. Excludes runtime_health
 # (subprocess, ~30s, load-flaky) and all LLM evaluators (non-deterministic, read
@@ -180,7 +208,7 @@ def compute_code_digest(root: Path, code_root: Path | None = None) -> str:
         code_root = _THIS_CHECKOUT
 
     parts: list[str] = []
-    for rel in _GATE_CODE_PATHS:
+    for rel in _gate_input_files(code_root):
         p = code_root / rel
         try:
             parts.append(f"{rel}:{hashlib.sha256(p.read_bytes()).hexdigest()}")
@@ -558,17 +586,18 @@ def _validate_canary_command(command: str) -> str | None:
     but we add a structural guard against accidental injection if the file
     ever becomes writable by less-trusted automation (e.g. MCP-driven edits).
 
-    Blocked patterns:
-    - Network access (curl, wget, nc outbound, ssh)
-    - Destructive (rm -rf, drop, truncate)
+    Blocked patterns (a best-effort name filter, not a sandbox):
+    - Network access by name (curl, wget, nc outbound, ssh, scp)
+    - Destructive (rm -rf /, drop table, truncate table)
     - Privilege escalation (sudo, doas)
-    - Data exfiltration (base64 | curl, > /dev/tcp)
+    - Exfiltration through a socket file (> /dev/tcp/...) or a fifo
+    The path patterns carry no word boundary: ``\b`` never matches beside ``/``.
     """
     import re
     BLOCKED_PATTERNS = re.compile(
         r"\b(curl|wget|ssh|scp|nc\s+-[^z]|sudo|doas|"
-        r"rm\s+-rf\s+/|drop\s+table|truncate\s+table|"
-        r"/dev/tcp|mkfifo)\b",
+        r"drop\s+table|truncate\s+table|mkfifo)\b"
+        r"""|\brm\s+-rf\s+/(?=[*\s;&|"')]|$)|/dev/(tcp|udp)/""",  # the root, not /tmp/x
         re.IGNORECASE,
     )
     if BLOCKED_PATTERNS.search(command):
@@ -1414,8 +1443,14 @@ _RECORD_TEXT_DETAIL = ("steps", "final_text")
 
 
 def _record_detail(r: dict, product: bool) -> dict:
-    return {k: r[k] for k in _RECORD_DETAIL
-            if k in r and (product or k not in _RECORD_TEXT_DETAIL)}
+    out = {k: r[k] for k in _RECORD_DETAIL
+           if k in r and (product or k not in _RECORD_TEXT_DETAIL)}
+    # a user's case: each step's tool name only, never its input (real paths, search
+    # terms from their workspace) in the git-tracked record
+    if not product and isinstance(out.get("observed_trajectory"), list):
+        out["observed_trajectory"] = [(str(s).strip().split(None, 1) or [""])[0]
+                                      for s in out["observed_trajectory"]]
+    return out
 
 
 def _clip_step(step: str) -> str:
@@ -2297,12 +2332,17 @@ def compare_repeats(history: list[dict], runs: list[dict]) -> dict:
     skipped / error / timeout are not definite and count neither as baseline nor as
     a result. Groups:
 
-    - ``definite_regression``: passed in both baseline runs, failed in every repeat.
+    - ``definite_regression``: passed in both baseline runs, failed in every repeat
+      (every repeat gave a definite result: an errored repeat is not a failure).
     - ``possible_regression``: passed in both baseline runs, failed in some repeats.
     - ``baseline_unstable``: the two baseline runs disagree; the repeats judge nothing.
     - ``fail_to_pass``: failed in both baseline runs, passed in every repeat.
     - ``baseline_short``: fewer than two baseline runs (a new case, or the first
       evaluation); run ``--repeat 2`` before the change to give it a baseline.
+    - ``possible_fix``: failed in both baseline runs, passed in some repeats but not
+      every repeat (an errored or failed one); a person decides whether to run again.
+    - ``not_tested``: no repeat gave a definite result (every one errored, timed out
+      or was skipped); listed so it is never silently dropped.
 
     A report is decided by ``definite_regression``; ``possible_regression`` is for a
     person to decide whether to run again.
@@ -2320,23 +2360,33 @@ def compare_repeats(history: list[dict], runs: list[dict]) -> dict:
             if len(baseline.setdefault(cid, [])) < 2:
                 baseline[cid].append(status)
     seen: dict[str, list[str]] = {}
+    ran: dict[str, int] = {}          # repeats the case appeared in, any status
     for run in runs:
+        for c in run.get("cases", []):
+            if c.get("id"):
+                ran[c["id"]] = ran.get(c["id"], 0) + 1
         for cid, status in _definite(run):
             seen.setdefault(cid, []).append(status)
     out = {"definite_regression": [], "possible_regression": [], "baseline_unstable": [],
-           "fail_to_pass": [], "baseline_short": []}
-    for cid, statuses in sorted(seen.items()):
+           "fail_to_pass": [], "possible_fix": [], "baseline_short": [], "not_tested": []}
+    for cid in sorted(ran):
+        statuses = seen.get(cid, [])
+        every_repeat = len(statuses) == ran[cid]
         base = baseline.get(cid, [])
-        if len(base) < 2:
+        if not statuses:
+            out["not_tested"].append(cid)
+        elif len(base) < 2:
             out["baseline_short"].append(cid)
         elif base[0] != base[1]:
             out["baseline_unstable"].append(cid)
-        elif base[0] == "passed" and all(s == "failed" for s in statuses):
+        elif base[0] == "passed" and every_repeat and all(s == "failed" for s in statuses):
             out["definite_regression"].append(cid)
         elif base[0] == "passed" and "failed" in statuses:
             out["possible_regression"].append(cid)
-        elif base[0] == "failed" and all(s == "passed" for s in statuses):
+        elif base[0] == "failed" and every_repeat and all(s == "passed" for s in statuses):
             out["fail_to_pass"].append(cid)
+        elif base[0] == "failed" and "passed" in statuses:
+            out["possible_fix"].append(cid)
     return out
 
 
@@ -3019,11 +3069,15 @@ def cmd_run(args):
         flips = compare_repeats(history, runs)
         print(f"  Repeats: {repeat} | definite regression: {flips['definite_regression'] or 'none'}")
         print(f"  possible regression: {flips['possible_regression'] or 'none'} | "
-              f"fail→pass: {flips['fail_to_pass'] or 'none'}")
+              f"fail→pass: {flips['fail_to_pass'] or 'none'} | "
+              f"possible fix: {flips['possible_fix'] or 'none'}")
         print(f"  baseline unstable (not judged): {flips['baseline_unstable'] or 'none'}")
         if flips["baseline_short"]:
             print(f"  fewer than two baseline runs (not judged; run --repeat 2 before the "
                   f"change): {flips['baseline_short']}")
+        if flips["not_tested"]:
+            print(f"  no definite result in any repeat (not tested this round): "
+                  f"{flips['not_tested']}")
 
     try:
         html_path = generate_html_report(run_result, golden_set, root)

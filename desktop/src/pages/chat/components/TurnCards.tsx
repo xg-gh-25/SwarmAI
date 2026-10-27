@@ -260,16 +260,18 @@ export function RunLine({ summary }: { summary: PipelineSummaryContent }) {
  * neither → no card. A file is in one section only (the caller drops deliverables
  * from the changes rows).
  */
-export function OutputCard({ changes, deliverables, summary, remote = [] }: {
+export function OutputCard({ changes, deliverables, summary, remote = [], omitted = 0 }: {
   changes?: TurnChangesContent; deliverables: TurnDeliverable[]; summary?: PipelineSummaryContent;
   /** The turn's remote products (turn_product blocks), in order. */
   remote?: RemoteProduct[];
+  /** Deliverable files the backend did not list (it keeps the first 12). */
+  omitted?: number;
 }) {
   const { t } = useTranslation();
   // the run's documents it wrote; one it did not write is not a deliverable (the run
   // line names a missing required one)
   const runDocs = (summary?.docs ?? []).filter((d) => !!d.absolutePath);
-  const nDeliv = deliverables.length + remote.length + runDocs.length;
+  const nDeliv = deliverables.length + remote.length + runDocs.length + omitted;
   if (!changes && !nDeliv) return null;
   const title = nDeliv === 1 ? tf(t, 'chat.turn.output.deliverableOne', '1 deliverable') : tf(t, 'chat.turn.output.deliverables', '{{count}} deliverables', { count: nDeliv });
   return (
@@ -282,6 +284,11 @@ export function OutputCard({ changes, deliverables, summary, remote = [] }: {
               file={{ path: d.name, absolutePath: d.absolutePath! }} />)}
             {deliverables.map((f) => <FileItemRow key={f.absolutePath} testId="deliverable" file={f} />)}
             {remote.map((r) => <RemoteProductCardTile key={`r-${r.toolUseId}`} product={r} />)}
+            {omitted > 0 && (
+              <div data-testid="deliverables-omitted" className="text-small text-[var(--color-text-muted)] px-3 py-1">
+                {tf(t, 'chat.turn.changes.omitted', '{{n}} more files are not listed.', { n: omitted })}
+              </div>
+            )}
           </ItemBox>
         </div>
       )}

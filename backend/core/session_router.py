@@ -48,6 +48,16 @@ logger = logging.getLogger(__name__)
 # A turn lists at most this many products (a bulk export should not flood the chat).
 MAX_TURN_DELIVERABLES = 12
 
+
+def _deliverables_block(files: list) -> dict:
+    """The turn's ``turn_deliverables`` block: the first MAX_TURN_DELIVERABLES files and,
+    when there were more, how many are not listed (``omitted``), so the end card says
+    "+N" instead of reading as the whole list (turn_changes does the same)."""
+    block = {"type": "turn_deliverables", "files": files[:MAX_TURN_DELIVERABLES]}
+    if len(files) > MAX_TURN_DELIVERABLES:
+        block["omitted"] = len(files) - MAX_TURN_DELIVERABLES
+    return block
+
 # ── SDK multimodal support flag ────────────────────────────────────
 # False = always convert image/document blocks to path hints.
 # Claude Code CLI does not currently support image/document content blocks
@@ -2520,7 +2530,7 @@ class SessionRouter:
                 pending.append(cblock)
                 before.append({"type": "assistant", "content": [cblock], "model": None})
         if etype == "result" and files:
-            block = {"type": "turn_deliverables", "files": list(files.values())[:MAX_TURN_DELIVERABLES]}
+            block = _deliverables_block(list(files.values()))
             pending.append(block)
             before.append({"type": "assistant", "content": [block], "model": None})
             files.clear()
@@ -5595,8 +5605,7 @@ class SessionRouter:
                 logger.debug("turn_changes finish at stop failed: %s", exc)
         files = self._turn_files_of(unit)
         if files:
-            blocks.append({"type": "turn_deliverables",
-                           "files": list(files.values())[:MAX_TURN_DELIVERABLES]})
+            blocks.append(_deliverables_block(list(files.values())))
             files.clear()
         return blocks
 

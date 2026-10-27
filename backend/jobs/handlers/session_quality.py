@@ -23,8 +23,10 @@ The result is written to ``<workspace>/.context/.session-quality-state.json``
 (gitignored: it holds session titles, snippets and reasons for the owner):
 ``{version, last_run, window_days, sessions_checked, checks: {id: {checked, failed,
 rate, examples}}, metrics: {turns, turn_p50_s, cost_p50_usd}, low_details,
-judge_prompt_sha, sampler_error, judge_error, trend}``. ``judge_error`` is set when
-every judged session failed (O4/O5 then did not run); ``judge_prompt_sha`` names the
+judge_prompt_sha, sampler_error, judge_error, judge_sampled, judge_failed, trend}``.
+``judge_error`` is set when every judged session failed (O4/O5 then did not run);
+``judge_failed`` of ``judge_sampled`` counts the sampled sessions whose judge call
+failed, which O4/O5 leave out; ``judge_prompt_sha`` names the
 judge prompt that scored ``low_details`` (a calibration label counts only for it).
 ``trend`` is one entry per ISO week, sorted, last 12 kept: ``{week, at, rates,
 metrics}``; this run replaces this week's entry, so ``trend[-2]`` is the week before
@@ -264,7 +266,9 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
                  scorer: Callable[..., dict], costs: list[float] | None = None) -> dict:
     """``sessions``: ``{sid: {title, messages}}`` for the window; ``costs`` the
     per-turn costs in it. Returns the ``sessions_checked``, ``checks``, ``metrics``,
-    ``low_details`` and ``judge_error`` parts of the state."""
+    ``low_details``, ``judge_error``, ``judge_sampled`` and ``judge_failed`` parts of the
+    state. A sampled session whose judge call failed is not in O4/O5: it is counted in
+    ``judge_failed`` so the judged share is never read off a silently smaller sample."""
     det = _Deterministic(since, None, correction_ids)
     for sid in sorted(sessions):
         det.add(sid, sessions[sid])
@@ -301,7 +305,8 @@ def score_window(sessions: dict[str, dict], since: str, correction_ids: set[str]
     return {"sessions_checked": len(turn_counts),
             "checks": {cid: t.out() for cid, t in tallies.items()},
             "metrics": det.metrics(costs or []), "low_details": low,
-            "judge_error": judge_error}
+            "judge_error": judge_error,
+            "judge_sampled": len(sample), "judge_failed": len(judge_errors)}
 
 
 def _week_label(d: datetime) -> str:

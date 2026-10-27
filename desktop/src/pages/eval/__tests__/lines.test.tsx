@@ -46,6 +46,31 @@ describe('Online Eval', () => {
   });
 });
 
+describe('Online Eval: nothing to score is a reason, not a zero', () => {
+  it('says the judge failed on part of the sample', async () => {
+    routes['GET /eval/session-quality'] = { ...online(true), judge_sampled: 5, judge_failed: 2,
+      checks: { O4_GOAL: { checked: 3, failed: 1, rate: 0.33, examples: [] } } };
+    show(<OnlineTab />);
+    expect((await screen.findByTestId('online-judge-partial')).textContent).toContain('2 of 5');
+  });
+
+  it('shows why a judged check has no count instead of 0/0', async () => {
+    routes['GET /eval/session-quality'] = { ...online(true), judge_sampled: 3, judge_failed: 3,
+      judge_error: '3/3 judged sessions failed: judge call failed',
+      checks: { O4_GOAL: { checked: 0, failed: 0, rate: null, examples: [] } } };
+    show(<OnlineTab />);
+    expect(await screen.findByText('judge failed')).toBeTruthy();
+    expect(screen.queryByText('0/0 done well')).toBeNull();
+  });
+
+  it('shows "nothing to score" for an empty code check', async () => {
+    routes['GET /eval/session-quality'] = { ...online(true), sessions_checked: 0,
+      checks: { O1_LANGUAGE: { checked: 0, failed: 0, rate: null, examples: [] } } };
+    show(<OnlineTab />);
+    expect(await screen.findByText('nothing to score')).toBeTruthy();
+  });
+});
+
 const offCase = (id: string, origin: string) => ({
   id, category: 'decision', dimension: 'quality', tier: 'active', eval_method: 'behavior', release_tier: 'watch',
   _origin: origin, affected_by: [], evaluators: ['trajectory_capture'], purpose: { en: `${id} decides right.` },

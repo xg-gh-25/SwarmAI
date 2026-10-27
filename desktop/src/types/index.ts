@@ -500,6 +500,8 @@ export type TurnProductContent = {
 export interface TurnDeliverablesContent {
   type: 'turn_deliverables';
   files: TurnDeliverable[];
+  /** files the block does not list (the backend keeps the first 12) */
+  omitted?: number;
 }
 
 /** One file a turn changed in a code repo (core/turn_changes). */

@@ -128,6 +128,14 @@ describe('the ending card', () => {
     expect(card.textContent).toContain('3 deliverables');
   });
 
+  it('says how many deliverables the backend did not list (fixing spec D3)', () => {
+    const block = { ...(deliv('/u/Desktop/a.md') as object), omitted: 3 } as ContentBlock;
+    render(view([tx('Done.'), block], false));
+    const card = screen.getByTestId('output-card');
+    expect(screen.getByTestId('deliverables-omitted').textContent).toBe('3 more files are not listed.');
+    expect(card.textContent).toContain('4 deliverables');
+  });
+
   it('a turn whose only product is remote has a card', () => {
     render(view([bash('m1', 'post'), tr('m1'), remoteP('m1'), tx('Done.')], false));
     expect(screen.getByTestId('output-card').textContent).toContain('Posted to Slack');

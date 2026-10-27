@@ -194,6 +194,9 @@ export interface OnlineScoring {
   low_details: OnlineLow[];
   sampler_error: string | null;
   judge_error: string | null;
+  /** sampled sessions, and how many of them the judge failed on (not in O4/O5) */
+  judge_sampled?: number | null;
+  judge_failed?: number | null;
   metrics?: OnlineMetrics;
   trend: OnlineTrendWeek[];
   calibration?: { accepting: boolean; reason: string | null; labels: Record<string, 'agree' | 'disagree'> };

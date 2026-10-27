@@ -84,7 +84,9 @@ def test_capture_records_drilldown_and_run_record_keeps_it(monkeypatch, tmp_path
                       include_behavior=True)
     rec = run["cases"][0]
     assert "final_text" not in rec and "steps" not in rec
-    assert rec["observed_trajectory"] == result["observed_trajectory"]
+    # tool names only: no input (paths, search terms) from the user's workspace
+    assert rec["observed_trajectory"] == [s.split()[0] for s in result["observed_trajectory"]]
+    assert all(" " not in s for s in rec["observed_trajectory"])
     assert rec["expected_check"] == result["expected_check"]
 
 
