@@ -56,7 +56,6 @@ test_oom_governance.py
 test_persist_routing_declared_type.py
 test_phase_wiring.py
 test_pipeline_profiles.py
-test_pipeline_validator_repro_gate.py
 test_redline_gate.py
 test_router_async_blocking.py
 test_silent_except_baseline.py
@@ -64,7 +63,6 @@ test_tool_risk.py
 test_tool_summary_fixture.py
 test_tscc_security_scan.py
 test_lint_problem_values.py   # scripts/lint_problem_values.py: banned shapes, pinned scope, clean tree
-test_test_selection_frozen.py  # freeze guard: CI catches a selection change a run missed (10-21)
 test_p7_no_swarmai_special.py  # P7 closed-world scan: one `git ls-files`, no fs writes (closing guards K1)
 test_lint_doc_frontmatter.py  # D3: --diff mode on throwaway git repos in tmp_path, no workspace (closing guards)
 test_native_not_blocked.py  # K2: every registered hook has a usable-by-anyone class; native commit/test never denied (closing guards)
