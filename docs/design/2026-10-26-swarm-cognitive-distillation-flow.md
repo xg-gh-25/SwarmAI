@@ -439,9 +439,11 @@ S2 和 DailyActivity 是同一份对话记录的两个并列产物。**S2 不从
 | `MEMORY` | 跨项目都成立的认知：原则、决定、经验、坑、心智模型 | WorldCrossGlobal（`global_relevance=true`） | S2、S3（跨项目的结论）、S1 | 下一个 session | 每轮注入（阶段 C 按预算选取） |
 | `TIMELINE` | 关键事件 | `kind=event` | S1、S2、S3 第 1 段、S4 | 下一个 session | 注入最近 10 条和当月摘要，其余走 recall |
 | `DDD`（PROJECT / PRODUCT / TECH / IMPROVEMENT） | 只属于某个项目的决定、产品取舍、架构、约定、陷阱、经验、改进点 | ProjectSingle、UserSingle、WorldSingle，以及 `gap` | S3（主要）、S2、S4 | **同一项目的下一个 run 之前** | 按项目注入 section 指针（不变） |
-| `Knowledge/Learned` | 可复用的技术知识（某个库怎么用、某类问题怎么查） | Reference / learned | S2、S6 | 按天 | 只走 recall，不注入 |
-| `Knowledge/Notes` | 调研和分析的结论文档（原 backflow） | Reference / analysis | S2 | 按天 | 只走 recall |
-| `Knowledge/Library` | 规格、外部文档；所有被污染的 Reference | Reference / spec | S6、S2 | 按天 | 只走 recall，放在不可信数据边界内渲染 |
+| `Knowledge/Learned` | 可复用的技术知识和知识卡（某个库怎么用、某类问题怎么查、文章要点） | Reference / `learned` | S2、S6、S1（`s_learn-content`） | 按天 | 只走 recall，不注入 |
+| `Knowledge/Reports` | 调研和分析的结论报告（原 backflow 里能独立成篇的部分） | Reference / `analysis` | S2 | 按天 | 只走 recall |
+| `Knowledge/Designs` | 设计和架构方案文档 | Reference / `design` | S2、S3 | 按天 | 只走 recall |
+| `Knowledge/Library` | 长期参考：规格、标准、契约、外部文档；所有被污染的 Reference | Reference / `spec` | S6、S2、S1（`s_library`） | 按天 | 只走 recall，被污染的放在不可信数据边界内渲染 |
+| `Knowledge/Notes` | 其他能独立读懂、但不属于上面几类的短笔记 | Reference / `note` | S2 | 按天 | 只走 recall |
 
 **通用 Knowledge 只放 Reference**，也就是"查得到就够"的资料，不放规则类认知。规则类认知只能进上面每轮注入的文件或 DDD。
 
@@ -463,6 +465,41 @@ S2 和 DailyActivity 是同一份对话记录的两个并列产物。**S2 不从
 | 按月 / 按天汇总 | `maintenance` | 36 小时内 | TIMELINE 月度摘要、DailyActivity 日汇总 |
 
 同一项目的下一个 run 启动时，如果该项目还有没处理完的 `run` lane 候选，worker 先处理它们，再允许新 run 读取 DDD。
+
+### 5.10 参考资料的索引：两层，都不靠人工逐条维护
+
+`Knowledge/` 下的文件夹分两类：
+
+| 类别 | 文件夹 | 谁写 | 是否经过 CDF |
+|---|---|---|---|
+| 认知参考（受管） | `Learned`、`Reports`、`Designs`、`Library`、`Notes`、`Inbox` | 只有 CDF 的 writer；用户自己通过 `governed_edit` 编辑 | 是 |
+| 日志和产物（不受管） | `DailyActivity`、`DailyBriefs`、`Signals`、`JobResults`、`Handoffs`、`Meetings`、`Pollinate`、`Mockups`、`assets`、`Archives` | 各自的系统任务、skill 或用户 | 否。它们是日志或产物，不是认知；需要从中提炼认知时，由对应的 source 去提取 |
+
+`Knowledge/` 原来就由 skill 写入的认知参考（`s_learn-content` 写 Learned，`s_library` 写 Library），改成调用 `ingest submit`：用户主动要求时走 S1；内容来自网页或外部文档时，信任是 `external`，按 S6 处理，只能写成 Reference。`is_governed()` 的受管列表和这张表保持一致（§3.2）。
+
+**第一层：目录索引 `.context/KNOWLEDGE.md`**（P9，每轮注入，约 2 KB）
+- 只写"什么问题去哪里找"和"每个文件夹放什么、谁写"，不列具体文档。它描述的是结构，不是认知，所以**CDF 不写它**；它仍然是用户可编辑文件（复制一次，之后不覆盖）。
+- 模板随 r16 更新，与上表一致：DailyActivity 改为"一周工作记忆，不再作为提取来源"；Reports、Designs 标为 CDF 写入；Learned、Library 写明经由 `ingest submit`。已有用户的 `KNOWLEDGE.md` 不自动覆盖，在 Need You 里提示一次"目录索引和新结构不一致"，附上差异，由用户决定是否用 `governed_edit` 更新。
+
+**第二层：文档索引，从文件派生**
+- `knowledge_store.sync_knowledge_index()` 扫描整个 `Knowledge/`，按标题切块，增量写入 FTS5（recall 的 `library` 域）。**索引唯一的来源就是文件本身和它的 frontmatter**，不另外维护一份清单。CDF 新建的文件在下一次同步时进入索引；writer 写完一个 Knowledge 文件后，触发一次针对该文件的增量同步，不等定时任务。
+- CDF 写的每个 Knowledge 文件，frontmatter 必须完整（遵守第一准则，`summary` 是一句完整、能单独读懂的话，供 recall 结果展示）：
+
+| 字段 | 内容 |
+|---|---|
+| `title` | 标题 |
+| `summary` | 一句话摘要，生成器直接写成完整的一句，不截断 |
+| `reference_kind` | `learned` / `analysis` / `design` / `spec` / `note` |
+| `ontology_types` | 文中涉及的七类，可以为空 |
+| `source` | S1–S6，加上 session id 或 run id |
+| `ingestion_candidate` | 写入它的单元 id |
+| `project_hint` | 可选；无 DDD 的 run 产出时必填 |
+| `taint` | 只有被污染时才有，值为 `external` |
+| `created` | 写入时间 |
+
+- recall 的结果展示 `title`、`summary`、`reference_kind`，以及被污染的标记。
+
+**审计层**：哪个单元写进了哪个文件，记录在 `ingestion.db`，Flow 视图可查，保留 30 天。之后只能靠文件 frontmatter 里的 `ingestion_candidate` 和 `source` 长期追溯。
 
 ### 5.8 长度上限
 
@@ -1060,7 +1097,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
   - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（`99bcc4ea3` 之前的版本）。
 
-- **r16**（阶段 B E2E 之后的重设计）：§5 重写（三层记忆、6 个 source、认知单元、各 source 提取规范、S3 五段报告、TIMELINE、DailyActivity 一周注入、强化）；§9 新增 `observed`，删除整会话污染兜底；§7.3 关系扩为三种；§4.2 新增终态 `reinforced`；§14 阶段 B 增加 source 重写、holdout 重做、逐 source 真实链路 E2E 和 daemon 冒烟。
+- **r16**（阶段 B E2E 之后的重设计）：§5.9 目的地反推和时效分档；§5.10 参考资料两层索引，Knowledge 文件夹分为受管和不受管，`reference_kind` 扩为五种并与实际文件夹对齐；§5 重写（三层记忆、6 个 source、认知单元、各 source 提取规范、S3 五段报告、TIMELINE、DailyActivity 一周注入、强化）；§9 新增 `observed`，删除整会话污染兜底；§7.3 关系扩为三种；§4.2 新增终态 `reinforced`；§14 阶段 B 增加 source 重写、holdout 重做、逐 source 真实链路 E2E 和 daemon 冒烟。
 - **r15.3**（Gawan：先 E2E 后调优）：新增 §14.1 调优待办 T1–T7；go/no-go 改为 rebuild 上线前的门槛，不再作为阶段 B 开工的前提。
 - **r15.2**（阶段 A 执行中的发现）：§5 加入各 source 的实测该写比例，逐行切片的提取方式停用；§9 和阶段 B 明确 provenance 是切换的前置条件；卡 3 的证据强弱和 observed_at 改由 pipeline 按 anchor 填入；§14 补充 holdout 标注协议（排除自身来源、污染兜底不进 holdout、正例补抽的冻结规则、判官 prompt 的契约要求）。
 - **r15.1**（Gawan：执行计划不要拆得太碎）：§14 合并为三个阶段：A 离线 go/no-go；B 引擎上线，所有 source 一次切换，观察 7 天后统一验收；C 注入预算。逐个迁移 source 的计划同时作废，原因是它和"只要有一个 source 上了 Inbox，就不能再有非 writer 的自动写入"这条不变量冲突。
