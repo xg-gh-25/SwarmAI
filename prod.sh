@@ -858,6 +858,13 @@ cmd_release_hive() {
 
     local version
     version=$(tr -d '[:space:]' < "$PROJECT_ROOT/VERSION")
+    local a
+    for a in "$@"; do
+        case "$a" in
+            --*) ;;
+            *) _err "release-hive takes options only (the version comes from VERSION): $a"; return 1 ;;
+        esac
+    done
 
     # Eval gate — Hive is a shippable target; don't let `release-hive` bypass it.
     # (release-all already gates via cmd_release, but standalone release-hive must
@@ -866,9 +873,10 @@ cmd_release_hive() {
     set +e; _eval_gate; _eg_rc=$?; set -e
     [ "$_eg_rc" = "1" ] && return 1
 
-    # Step 1: Package
+    # Step 1: Package. Extra arguments go to hive/release.sh: --with-live-ddd seeds a fresh
+    # Hive with this machine's own DDD (private; never published).
     _log "Step 1/2: Building Hive tar.gz (v${version})..."
-    bash "$PROJECT_ROOT/hive/release.sh" "$version"
+    bash "$PROJECT_ROOT/hive/release.sh" "$@" "$version"
 
     # Step 2: Verify
     local archive="$PROJECT_ROOT/dist/swarmai-hive-v${version}-linux-arm64.tar.gz"
@@ -923,11 +931,10 @@ cmd_release_all() {
         cp "$dmg" "$PROJECT_ROOT/dist/"
     fi
 
-    # GitHub Release ships DESKTOP artifacts only. The Hive tar is local-only
-    # (direction A): Part 2's release.sh already uploaded it to the account-suffixed
-    # S3 bucket that provision/update read from — it must NOT go into the GitHub
-    # Release (putting it here is the exact "hive in GitHub" drift the S3 supply
-    # closure eliminated).
+    # This GitHub Release ships DESKTOP artifacts only. The Hive tar built here went to
+    # this account's S3 bucket (release.sh uploads it); the Hive package published on
+    # GitHub is built by .github/workflows/release.yml from a clean checkout, so a local
+    # package (which may carry this machine's DDD) is never attached.
     _log "Generating desktop checksums..."
     cd "$PROJECT_ROOT/dist"
     : > checksums.txt
@@ -943,7 +950,7 @@ cmd_release_all() {
     fi
     echo "    📋 checksums.txt"
     if [ -f "$hive_tar" ]; then
-        echo "    🐝 swarmai-hive-v${version}-linux-arm64.tar.gz ($(du -h "$hive_tar" | cut -f1)) → S3 (local-only, NOT GitHub)"
+        echo "    🐝 swarmai-hive-v${version}-linux-arm64.tar.gz ($(du -h "$hive_tar" | cut -f1)) → this account's S3 (the GitHub one comes from release.yml)"
     fi
     echo ""
 
@@ -997,7 +1004,7 @@ case "${1:-help}" in
     build)          cmd_build ;;
     release)        cmd_release ;;
     release-all)    cmd_release_all ;;
-    release-hive)   cmd_release_hive ;;
+    release-hive)   shift; cmd_release_hive "$@" ;;
     deploy)         shift; cmd_deploy "$@" ;;
     verify)         shift; cmd_verify "$@" ;;
     preflight)      cmd_preflight ;;

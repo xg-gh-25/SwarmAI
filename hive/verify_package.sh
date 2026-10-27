@@ -4,7 +4,12 @@
 # Validates a Hive tar.gz contains all required files and structure.
 # Used by prod.sh release-all and GitHub Actions to gate releases.
 #
-# Usage: ./hive/verify_package.sh dist/swarmai-hive-v1.8.5-linux-arm64.tar.gz
+# Usage: ./hive/verify_package.sh [--public] dist/swarmai-hive-v1.8.5-linux-arm64.tar.gz
+#
+# --public: the package is about to be published (a GitHub release), so its seed may hold
+# only what the repo ships: config-hive.json and the 5 public context files. Anything else
+# there fails (a --with-live-ddd package, with its hive/seed/Projects/, among them).
+# Private context files in the seed fail with or without --public.
 #
 # Exit codes:
 #   0 — all checks passed
@@ -12,12 +17,20 @@
 
 set -euo pipefail
 
-if [ -z "${1:-}" ]; then
-    echo "Usage: $0 <path-to-tar.gz>" >&2
+PUBLIC=0
+ARCHIVE=""
+for arg in "$@"; do
+    case "${arg}" in
+        --public) PUBLIC=1 ;;
+        -*) echo "Unknown option: ${arg}" >&2; exit 1 ;;
+        *) ARCHIVE="${arg}" ;;
+    esac
+done
+
+if [ -z "${ARCHIVE}" ]; then
+    echo "Usage: $0 [--public] <path-to-tar.gz>" >&2
     exit 1
 fi
-
-ARCHIVE="$1"
 
 if [ ! -f "$ARCHIVE" ]; then
     echo "❌ Archive not found: $ARCHIVE" >&2
@@ -112,6 +125,23 @@ check_absent "node_modules/"           "No node_modules (built on the packaging 
 check_absent "/skills/s_internal-"     "No s_internal-* skills"
 check_absent "/templates/ddd-gates/"   "No internal DDD gate templates"
 check_absent "MagicMock"               "No test-leak junk"
+# the seed's context whitelist is the 5 public files; the private six never ship
+for f in MEMORY USER EVOLUTION STEERING TOOLS KNOWLEDGE; do
+    check_absent "^hive/seed/context/${f}\.md$" "No private ${f}.md in the seed"
+done
+if [ "${PUBLIC}" = "1" ]; then
+    EXTRA=$(grep '^hive/seed/' "$CONTENTS_FILE" \
+        | grep -v -E '^hive/seed/(context/)?$|^hive/seed/config-hive\.json$|^hive/seed/context/(SWARMAI|IDENTITY|SOUL|AGENT|SELF)\.md$' \
+        || true)
+    if [ -z "$EXTRA" ]; then
+        echo "  ✅ Seed holds only config + public context (published package)"
+        PASS=$((PASS + 1))
+    else
+        echo "  ❌ Seed holds more than config + public context (published package):"
+        echo "$EXTRA" | head -5 | sed 's/^/       /'
+        FAIL=$((FAIL + 1))
+    fi
+fi
 
 # ── Summary ───────────────────────────────────────────────
 

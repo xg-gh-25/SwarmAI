@@ -1872,6 +1872,25 @@ class TestHiveSeed:
                 mgr._seed_hive_from_package(root, root / "Projects" / "SwarmAI")  # must not raise
             assert not (root / "config.json").exists()
 
+    def test_published_seed_without_a_ddd_seeds_config_and_context_only(self):
+        """The published package (hive/release.sh without --with-live-ddd) has no
+        Projects/ in its seed: config and public context are seeded, no DDD is copied,
+        so the caller's 4-doc scaffold applies as on a desktop install."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "SwarmWS"
+            project = root / "Projects" / "SwarmAI"
+            project.mkdir(parents=True)
+            seed = Path(tmp) / "seed"
+            self._build_seed(seed)
+            shutil.rmtree(seed / "Projects")
+            mgr = SwarmWorkspaceManager()
+            with patch.object(SwarmWorkspaceManager, "_hive_seed_dir", staticmethod(lambda: seed)):
+                mgr._seed_hive_from_package(root, project)
+            assert "SENTINEL-MODEL" in (root / "config.json").read_text()
+            for f in ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md", "SELF.md"]:
+                assert (root / ".context" / f).exists(), f"{f} not seeded"
+            assert list(project.iterdir()) == []
+
     def test_public_context_seed_whitelist_excludes_private(self):
         """The whitelist constant itself must never contain a private file."""
         from core.swarm_workspace_manager import _PUBLIC_CONTEXT_SEED, _PRIVATE_CONTEXT_FILES

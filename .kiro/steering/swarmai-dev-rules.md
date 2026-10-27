@@ -124,5 +124,8 @@ One `SessionUnit` per app session ID lives in `SessionRouter._units`; details in
   backend-windows, version-check, security.
 - Release: `commit → push → CI green → tag → release.yml` builds macOS arm64/x64, Windows x64
   and Linux x64 (AppImage), runs `scripts/verify_installer.sh` on each installer, and publishes a
-  draft only when every target built and passed. Hive packaging is local-only.
+  draft only when every target built and passed. It also builds the Hive package from the clean
+  checkout (`hive/release.sh`, no workspace content; `verify_package.sh --public`) and attaches it
+  with its `.sha256`. Hives can download it only after the draft is published.
+  `./hive/release.sh --with-live-ddd` adds this machine's DDD: local only, never published.
 - Never tag with red CI.

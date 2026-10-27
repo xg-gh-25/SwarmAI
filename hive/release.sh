@@ -9,8 +9,18 @@
 #   - Frontend already built: cd desktop && npm run build
 #   - Python backend source ready (no build step needed)
 #
-# Usage: ./hive/release.sh
-#        ./hive/release.sh v1.8.5    # override version
+# Usage: ./hive/release.sh                       # the package every user installs
+#        ./hive/release.sh v1.8.5                # override version
+#        ./hive/release.sh --with-live-ddd [v]   # also seed this machine's own DDD (never publish)
+#
+# Two kinds of package:
+#   - default: the package published with each release (CI) and the one every user's
+#     Hive installs. Its seed is only what the repo ships: config-hive.json and the 5
+#     public context files. It never reads this machine's workspace.
+#   - --with-live-ddd: additionally seeds a fresh Hive with this machine's own SwarmAI
+#     DDD (~/.swarm-ai/SwarmWS/Projects/SwarmAI), for the packager's own reference
+#     Hives. That DDD is private workspace content: such a package goes only to the
+#     packager's own S3 bucket, never to a GitHub release.
 #
 # Output: dist/swarmai-hive-v{VERSION}-linux-arm64.tar.gz
 #         dist/checksums.txt
@@ -26,8 +36,23 @@ VERSION_FILE="${PROJECT_ROOT}/VERSION"
 # Version
 # ---------------------------------------------------------------------------
 
-if [ -n "${1:-}" ]; then
-    VERSION="${1#v}"  # Strip leading 'v' if present
+WITH_LIVE_DDD=0
+VERSION_ARG=""
+for arg in "$@"; do
+    case "${arg}" in
+        --with-live-ddd) WITH_LIVE_DDD=1 ;;
+        -*) echo "[release] ERROR: unknown option ${arg}" >&2; exit 2 ;;
+        *) VERSION_ARG="${arg}" ;;
+    esac
+done
+
+if [ "${WITH_LIVE_DDD}" = "1" ] && [ -n "${CI:-}" ]; then
+    echo "[release] ERROR: --with-live-ddd packages this machine's private workspace; it never runs in CI" >&2
+    exit 2
+fi
+
+if [ -n "${VERSION_ARG}" ]; then
+    VERSION="${VERSION_ARG#v}"  # Strip leading 'v' if present
 else
     if [ -f "${VERSION_FILE}" ]; then
         VERSION="$(cat "${VERSION_FILE}" | tr -d '[:space:]')"
@@ -105,13 +130,18 @@ echo "[release] Copying pre-built frontend..."
 mkdir -p "${STAGING}/desktop/dist"
 rsync -a "${PROJECT_ROOT}/desktop/dist/" "${STAGING}/desktop/dist/"
 
-echo "[release] Copying hive config..."
-rsync -a \
-    --exclude='release.sh' \
-    --exclude='update-hive.sh' \
-    --exclude='__pycache__' \
-    --exclude='*.pyc' \
-    "${PROJECT_ROOT}/hive/" "${STAGING}/hive/"
+# Only the tracked files of hive/, minus the packaging scripts: an ignored hive/.env or a
+# leftover hive/seed/ in this checkout must not ride along (the seed is built below).
+echo "[release] Copying hive config (the tracked files)..."
+HIVE_LIST="${STAGING}.hive-files"
+(cd "${PROJECT_ROOT}" && git ls-files -- hive) \
+    | grep -v -E '^hive/(release\.sh|update-hive\.sh)$|^hive/seed/' > "${HIVE_LIST}" || true
+if ! grep -qx 'hive/swarmai-hive.sh' "${HIVE_LIST}"; then
+    echo "[release] ERROR: hive file list has no hive/swarmai-hive.sh (git ls-files failed?) — aborting" >&2
+    exit 1
+fi
+rsync -a --files-from="${HIVE_LIST}" "${PROJECT_ROOT}/" "${STAGING}/"
+rm -f "${HIVE_LIST}"
 
 # Write the version this package is built as (the argument, or the VERSION file when
 # none is given). The update step checks that /health reports exactly this string,
@@ -121,25 +151,19 @@ echo "[release] Writing VERSION (${VERSION})..."
 printf '%s\n' "${VERSION}" > "${STAGING}/VERSION"
 
 # ---------------------------------------------------------------------------
-# Hive seed material (run_ca7f92c1; source-swapped run_eb45c28d) — a fresh Hive
-# is a SHARED reference instance, so it ships the COMPLETE SwarmAI sample DDD +
-# a model-4-8 config + the 5 PUBLIC context files. SwarmWorkspaceManager.
-# _seed_hive_from_package reads this dir on first boot (SWARMAI_MODE=hive).
-# Runtime artifacts + the private context files are DELIBERATELY excluded (below).
-#
-# SOURCE = the SwarmWS LIVE DDD, the single true source (cultivation writes it).
-# The old source (${PROJECT_ROOT}/Projects/SwarmAI) was a manual mirror with NO
-# auto-sync that DRIFTED from the live DDD — that copy is gitignored (Projects/*),
-# lives only on disk, and is no longer read here. Because the live DDD lives in the
-# daemon workspace (~/.swarm-ai/SwarmWS), HIVE PACKAGING IS LOCAL-ONLY: it requires
-# a populated daemon workspace and cannot run on a bare CI checkout (the CI
-# build-hive job was removed for exactly this reason — see .github/workflows/
-# release.yml). Path is resolved via the same SWARM_DATA_DIR escape hatch as
-# backend/config.py get_app_data_dir(), so a sandbox/test can override it.
+# Hive seed material — read once by SwarmWorkspaceManager._seed_hive_from_package on a
+# Hive's first boot (SWARMAI_MODE=hive): config-hive.json + the 5 PUBLIC context files,
+# both from the repo. Private context files are never part of it (explicit whitelist
+# below). With --with-live-ddd only, it also carries this machine's live SwarmAI DDD.
+# Without a DDD in the seed, a fresh Hive gets the same 4-doc DDD scaffold a desktop
+# install gets.
 # ---------------------------------------------------------------------------
-echo "[release] Building hive seed (full DDD + config-4-8 + public context)..."
 SEED="${STAGING}/hive/seed"
-mkdir -p "${SEED}/Projects" "${SEED}/context"
+mkdir -p "${SEED}/context"
+
+if [ "${WITH_LIVE_DDD}" = "1" ]; then
+echo "[release] Building hive seed WITH this machine's live DDD (--with-live-ddd: do not publish)..."
+mkdir -p "${SEED}/Projects"
 
 # 1. Full SwarmAI DDD — sourced from the SwarmWS LIVE DDD, exclude runtime
 #    artifacts + the code-intel binary (same boundary as .gitignore: knowledge
@@ -160,9 +184,9 @@ LIVE_DDD="${SWARM_DATA_DIR:-${HOME}/.swarm-ai}/SwarmWS/Projects/SwarmAI"
 #       worth bricking a build over; the guard still enforces (a)+(b) everywhere).
 if [ ! -d "${LIVE_DDD}" ]; then
     echo "[release] ERROR: live SwarmAI DDD not found at ${LIVE_DDD}" >&2
-    echo "[release]        Hive packaging is LOCAL-ONLY — it sources the full DDD from the" >&2
-    echo "[release]        daemon workspace (SWARM_DATA_DIR / ~/.swarm-ai/SwarmWS). Run this on" >&2
-    echo "[release]        a machine with a populated SwarmAI daemon workspace. Aborting." >&2
+    echo "[release]        --with-live-ddd sources the DDD from this machine's daemon workspace" >&2
+    echo "[release]        (SWARM_DATA_DIR / ~/.swarm-ai/SwarmWS). Run it where that workspace" >&2
+    echo "[release]        exists, or drop the option for the published package. Aborting." >&2
     exit 1
 fi
 # Stub/torn-content floor across ALL 4 canonical docs (not just TECH.md) — a
@@ -204,6 +228,9 @@ rsync -a \
     --exclude='*.pyc' \
     "${LIVE_DDD}/" "${SEED}/Projects/SwarmAI/"
 echo "[release]   DDD files: $(find "${SEED}/Projects/SwarmAI" -type f | wc -l | tr -d ' ') (from live DDD: ${LIVE_DDD})"
+else
+    echo "[release] Building hive seed (config + public context; no workspace content)..."
+fi
 
 # 2. config-hive.json — GENERATED from backend/model_registry.py, never hand-written.
 #
@@ -360,6 +387,11 @@ echo ""
 echo "  Archive:  ${ARCHIVE}"
 echo "  Size:     ${ARCHIVE_SIZE}"
 echo "  Version:  ${VERSION}"
+if [ "${WITH_LIVE_DDD}" = "1" ]; then
+    echo "  Seed:     WITH this machine's live DDD (private: your own S3 only, never a GitHub release)"
+else
+    echo "  Seed:     config + public context only (safe to publish)"
+fi
 echo "  Checksum: $(cat checksums.txt)"
 echo ""
 if [ -n "${UPLOADED_TO}" ]; then

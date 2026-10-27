@@ -78,3 +78,4 @@ test_eval_timeout_status.py  # eval-as-product: a timeout is not scored but keep
 test_session_quality_handler.py  # eval-as-product: online scoring over the last 7 days, state file read back
 test_eval_lines.py  # eval-as-product: last / next runs per line from records and the jobs schedule
 test_eval_release.py  # release decision: tiers, five dimensions, the four checks in order, run record shape
+test_hive_package_publish.py  # the Hive package published with a release carries no workspace content

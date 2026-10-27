@@ -6,6 +6,12 @@ name: Release
 # bundles the backend via src-tauri/tauri.bundle.conf.json), then a separate job on a fresh
 # runner installs that installer the way a stranger would (scripts/verify_installer.sh, G1/G2).
 # Nothing is published unless every target built AND passed verification.
+#
+# The Hive package (build-hive) is built from this clean checkout, so it carries only what
+# the repo ships: hive/release.sh without --with-live-ddd, then verify_package.sh --public,
+# which fails if the seed holds anything beyond config + public context. Users' Hives
+# download it, with its .sha256, from the release (backend/hive/provisioner.py
+# _sync_release_to_s3): only once the draft below is published — a draft is not visible.
 
 on:
   push:
@@ -140,6 +146,51 @@ jobs:
           path: out/*
           if-no-files-found: error
 
+  build-hive:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./desktop
+        run: npm ci
+
+      - name: Update version
+        run: bash scripts/sync-version.sh "$VERSION"
+
+      - name: Build frontend
+        working-directory: ./desktop
+        run: npm run build
+
+      # No AWS credentials here, so release.sh skips its S3 upload; CI=true makes it
+      # refuse --with-live-ddd.
+      - name: Package the Hive
+        run: bash hive/release.sh "$VERSION"
+
+      - name: Verify it is safe to publish
+        run: bash hive/verify_package.sh --public "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz"
+
+      - name: Name the checksum after the package
+        run: mv dist/checksums.txt "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz.sha256"
+
+      - name: Upload the Hive package
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-package
+          path: |
+            dist/swarmai-hive-*.tar.gz
+            dist/swarmai-hive-*.tar.gz.sha256
+          if-no-files-found: error
+
   verify:
     # G1/G2 on a fresh runner: no checkout of the build job, no build tools on the PATH the
     # product sees (verify_installer.sh runs it under a test HOME with a stripped PATH).
@@ -187,7 +238,7 @@ jobs:
 
   publish:
     # Only when every target built and passed G1/G2: one release, nothing partial (§7 r14).
-    needs: [prepare, build, verify]
+    needs: [prepare, build, verify, build-hive]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (for the latest.json generator script)
@@ -199,10 +250,18 @@ jobs:
           pattern: installer-*
           path: artifacts
 
+      # Kept out of artifacts/: the updater manifest is generated from that directory only.
+      - name: Download the Hive package
+        uses: actions/download-artifact@v4
+        with:
+          name: hive-package
+          path: hive-package
+
       - name: Prepare release files
         run: |
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
+          find hive-package -type f -exec cp {} release/ \;
           ls -la release/
 
       # The Tauri updater manifest. Every platform must have its bundle and a non-empty

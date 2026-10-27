@@ -18,6 +18,7 @@ Key design decisions (from approved design doc):
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -306,7 +307,8 @@ class HiveProvisioner:
     async def _sync_release_to_s3(
         self, session, bucket: str, version: str, region: str
     ) -> None:
-        """Download hive package from GitHub Release and upload to S3."""
+        """Download the Hive package from the GitHub release, check it against the
+        release's ``.sha256``, and upload it to the account's S3 bucket."""
         s3_key = f"v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz"
 
         def _check_exists():
@@ -334,14 +336,25 @@ class HiveProvisioner:
                 raise RuntimeError(
                     f"Hive release v{version} is not available.\n"
                     f"  Missing from S3:  s3://{bucket}/{s3_key}\n"
-                    f"  GitHub fallback returned HTTP {resp.status_code} — the hive tar is "
-                    f"NO LONGER published to GitHub Releases (CI 'build-hive' was removed; "
-                    f"hive packaging is local-only).\n"
-                    f"  Fix: on the packaging host run `./hive/release.sh {version}` — it now "
-                    f"auto-uploads the tar to the correct account-suffixed bucket "
-                    f"({bucket}). Then re-run this provision/update."
+                    f"  GitHub Releases returned HTTP {resp.status_code}: no published release "
+                    f"v{version} carries a Hive package (releases before the Hive package was "
+                    f"published with each release do not, and a draft release is not visible).\n"
+                    f"  Fix: deploy or update to a published release that has one, or from a "
+                    f"source checkout run `./hive/release.sh {version}`, which uploads the "
+                    f"package to {bucket}. Then re-run this provision/update."
                 )
             data = resp.content
+            # Integrity: the release publishes <package>.sha256 next to the package (release.yml
+            # build-hive). Refuse a package without one or with a different hash: every Hive
+            # installs what lands in S3 under this key.
+            sums = await client.get(gh_url + ".sha256")
+            expected = sums.text.split()[0].lower() if sums.status_code == 200 and sums.text.split() else ""
+            actual = hashlib.sha256(data).hexdigest()
+            if expected != actual:
+                raise RuntimeError(
+                    f"Hive release v{version}: the downloaded package does not match its published "
+                    f"checksum (HTTP {sums.status_code} for {gh_url}.sha256). Not uploaded."
+                )
 
         # Upload to S3
         def _upload():
