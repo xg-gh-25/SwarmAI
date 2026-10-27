@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-27
 project: SwarmAI
-status: r16.1 — 设计（source 与提取重写，吸收两份独立评审，待 Gawan 审），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
+status: r16.1 — 设计（source 与提取重写，吸收两份独立评审，Gawan 已确认），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -980,7 +980,7 @@ AST 夹具只用来做回归，保证上表列出的每一个写入点都能被�
 | 项目 DDD | 允许 Cognition 和 Gap，但条目的 meta 要标 `taint: external`，并且读取时放在不可信数据边界里渲染 | S3 的技术决定和经验几乎都要读代码，代码是 `external`。如果一律拒绝，DDD 就写不进东西。DDD 只按项目注入 section 指针，影响范围限于这个项目，并且全程留审计 |
 | `Knowledge/`（公共 DDD） | 允许，规则同上 | 只能通过 recall 找到 |
 
-  **Gawan 需要确认这张表**：项目 DDD 允许写入被污染的条目，是安全和可用性之间的取舍。更严的做法是 DDD 也不接受被污染的规则，代价是 S3 的大部分技术经验写不进 DDD。
+  **已确认**（Gawan 2026-10-27）：项目 DDD 和 Knowledge 接受被污染的条目，但必须标注 `taint: external`；每轮注入的文件不接受被污染的内容。
 - **转述不能洗白**：agent 转述、REFLECT 总结、review 结论、design 文档，都通过 `parent_root_ids` 继承原始根的污染。
 - **召回**：被污染的内容一律放在不可信数据边界里渲染。
 - `MemoryGuard` 只是附加检测，不是安全边界。
