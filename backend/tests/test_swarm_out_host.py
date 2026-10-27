@@ -267,6 +267,7 @@ def test_routes_refuse_on_a_hive(monkeypatch):
     monkeypatch.setenv("SWARMAI_MODE", "hive")
     c = TestClient(app)
     assert c.get("/api/swarm-out/runs").status_code == 403
+    assert c.get("/api/swarm-out/hives").status_code == 403
     assert c.post("/api/swarm-out/dispatch", json={"hive": "h", "title": "t", "task": "x"}).status_code == 403
 
 
@@ -283,3 +284,37 @@ def test_an_unexpected_error_is_a_generic_500(monkeypatch):
     app.include_router(router, prefix="/api/swarm-out")
     r = TestClient(app).get("/api/swarm-out/runs")
     assert r.status_code == 500 and "secret" not in r.text
+
+
+# ── hives (the panel's "is there anywhere to dispatch to" and the agent's choice) ──
+
+def test_hives_lists_names_and_status_without_addresses_or_credentials(monkeypatch, tmp_path):
+    import sqlite3
+    db = tmp_path / "d.db"
+    with sqlite3.connect(db) as c:
+        c.execute("CREATE TABLE hive_instances (id, name, status, region, cloudfront_domain,"
+                  " auth_user, auth_password, account_ref, s3_bucket)")
+        c.execute("INSERT INTO hive_instances VALUES (?,?,?,?,?,?,?,?,?)",
+                  tuple(INST[k] for k in ("id", "name", "status", "region", "cloudfront_domain",
+                                          "auth_user", "auth_password", "account_ref", "s3_bucket")))
+        c.execute("INSERT INTO hive_instances VALUES ('h2','alpha','stopped','us-west-2',"
+                  "'x.cloudfront.net','u','p2','a1','b')")
+    monkeypatch.setattr(swarm_out, "_db_path", lambda: str(db))
+    out = asyncio.run(swarm_out.hives())
+    assert out == {"hives": [{"name": "alpha", "status": "stopped", "region": "us-west-2"},
+                             {"name": "worker-1", "status": "running", "region": "us-east-1"}],
+                   "running": 1}
+    text = json.dumps(out)
+    assert "s3cret-pass" not in text and "cloudfront" not in text
+
+
+def test_cli_lists_hives():
+    from scripts import swarm_out as cli
+    calls = []
+    orig = cli._call
+    cli._call = lambda method, path, body=None, timeout=120: calls.append((method, path)) or 0
+    try:
+        assert cli.main(["hives"]) == 0
+    finally:
+        cli._call = orig
+    assert calls == [("GET", "/hives")]

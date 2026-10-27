@@ -6,9 +6,12 @@
  * open the five-dimension matrix and Esc close it; does the dashboard say its data is
  * a sample and switch between its two views; does every prepared run carry its trace
  * (Brain → Agent → Context → Hive → Report + time and tokens), with a missing part
- * saying so (无 Brain, Report 生成中) instead of vanishing.
+ * saying so (无 Brain, Report 生成中) instead of vanishing; with no running Hive,
+ * does the run view show the setup guide in place of the live section, opening the Hive
+ * surface from its button, and does the header count only real Hives.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { swarmOutService } from '../../services/swarmOut';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { JudgeTag } from './JudgeTag';
 import { judgeState, judgeSummary } from './judge';
@@ -19,7 +22,11 @@ import type { RunJudge, RunTrace } from './mockData';
 // The dashboard's live section polls /api/swarm-out/runs; these tests cover the sample
 // parts, so the service answers with nothing (LiveDispatches.test.tsx covers the live part).
 vi.mock('../../services/swarmOut', () => ({
-  swarmOutService: { runs: vi.fn(async () => ({ runs: [], asks: [], errors: [] })), answer: vi.fn() },
+  swarmOutService: {
+    runs: vi.fn(async () => ({ runs: [], asks: [], errors: [] })),
+    answer: vi.fn(),
+    hives: vi.fn(async () => ({ hives: [{ name: 'w1', status: 'running', region: 'us-east-1' }], running: 1 })),
+  },
 }));
 
 const judge = (verdicts: RunJudge['verdicts']): RunJudge => ({
@@ -107,6 +114,68 @@ describe('SwarmOutDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: '历史' }));
     expect(screen.getByTestId('swarm-out-history')).toBeTruthy();
     expect(screen.queryByTestId('swarm-out-overview')).toBeNull();
+  });
+});
+
+describe('SwarmOutDashboard and the Hives it can dispatch to', () => {
+  const hivesAre = (hives: { name: string; status: string; region: string }[]) => {
+    vi.mocked(swarmOutService.hives).mockResolvedValue(
+      { hives, running: hives.filter((h) => h.status === 'running').length });
+  };
+
+  it('with no Hive: the guide replaces the live section and its button opens Hive', async () => {
+    hivesAre([]);
+    const onOpenHive = vi.fn();
+    render(<SwarmOutDashboard onOpenHive={onOpenHive} />);
+    const guide = await screen.findByTestId('swarm-out-hive-guide');
+    expect(guide.getAttribute('data-case')).toBe('no-hive');
+    expect(guide.textContent).toContain('Add Account');
+    expect(guide.textContent).toContain('Deploy Hive');
+    expect(screen.queryByTestId('swarm-out-live')).toBeNull();
+    expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('还没有 Hive');
+    fireEvent.click(screen.getByTestId('swarm-out-open-hive'));
+    expect(onOpenHive).toHaveBeenCalledTimes(1);
+  });
+
+  it('with Hives but none running: names them and says to start one', async () => {
+    hivesAre([{ name: 'w1', status: 'stopped', region: 'us-east-1' }]);
+    render(<SwarmOutDashboard />);
+    const guide = await screen.findByTestId('swarm-out-hive-guide');
+    expect(guide.getAttribute('data-case')).toBe('none-running');
+    expect(guide.textContent).toContain('w1（stopped）');
+    expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('1 台 Hive，都没在运行');
+  });
+
+  it('with a running Hive: the live section, no guide, the real count', async () => {
+    hivesAre([{ name: 'w1', status: 'running', region: 'us-east-1' }, { name: 'w2', status: 'stopped', region: 'us-east-1' }]);
+    render(<SwarmOutDashboard />);
+    expect((await screen.findByTestId('swarm-out-hive-count')).textContent).toContain('1 台 Hive 在运行');
+    expect(screen.getByTestId('swarm-out-live')).toBeTruthy();
+    expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
+  });
+
+  it('before the Hives are known, shows no guide and no count (an unreachable daemon is not "no Hive")', () => {
+    vi.mocked(swarmOutService.hives).mockReturnValue(new Promise(() => {}));
+    render(<SwarmOutDashboard />);
+    expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
+    expect(screen.queryByTestId('swarm-out-hive-count')).toBeNull();
+    expect(screen.getByTestId('swarm-out-live')).toBeTruthy();
+  });
+
+  it('a failed Hive lookup is not "no Hive": no guide', async () => {
+    vi.mocked(swarmOutService.hives).mockRejectedValue(new Error('daemon down'));
+    render(<SwarmOutDashboard />);
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
+    expect(screen.getByTestId('swarm-out-live')).toBeTruthy();
+  });
+
+  it('marks the sample data as not launched yet, in both views', () => {
+    render(<SwarmOutDashboard />);
+    expect(screen.getByTestId('swarm-out-sample-notice').textContent).toContain('还没正式上线，敬请期待');
+    fireEvent.click(screen.getByRole('button', { name: '历史' }));
+    expect(screen.getByTestId('swarm-out-sample-notice').textContent).toContain('敬请期待');
   });
 });
 

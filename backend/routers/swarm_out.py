@@ -1,4 +1,4 @@
-"""Swarm Out routes (Host only): dispatch a task to a Hive, list runs, answer questions.
+"""Swarm Out routes (Host only): list Hives, dispatch a task to one, list runs, answer questions.
 
 Thin layer over ``core/swarm_out.py``. Every route refuses on a Hive (a Hive must not
 dispatch to other Hives or read their credentials, same rule as ``routers/hive.py``).
@@ -53,6 +53,12 @@ async def _call(coro) -> Any:
 async def dispatch(body: DispatchBody) -> dict[str, Any]:
     _require_desktop()
     return await _call(swarm_out.dispatch(body.hive, body.title, body.task, body.origin))
+
+
+@router.get("/hives")
+async def hives() -> dict[str, Any]:
+    _require_desktop()
+    return await _call(swarm_out.hives())
 
 
 @router.get("/runs")

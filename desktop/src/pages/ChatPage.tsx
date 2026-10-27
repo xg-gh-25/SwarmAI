@@ -492,7 +492,7 @@ export default function ChatPage() {
   //     permanently null, which silently blanked BOTH the agent's SENSE payload
   //     (uiContext active_overlay) AND the AlertsPill/tab-switch BACK_TO_CHAT guard
   //     below. useOverlay() is the live source (ChatPage renders inside OverlayProvider).
-  const { activeOverlay, setAgentId: setOverlayAgentId } = useOverlay();
+  const { activeOverlay, setAgentId: setOverlayAgentId, openOverlay } = useOverlay();
   // Ref mirror for synchronous reads in handleTabSelect's overlay-close guard (avoids
   // dep-array churn on that hot path — same pattern as isExpandedRef).
   const activeOverlayRef = useRef(activeOverlay);
@@ -2663,7 +2663,7 @@ export default function ChatPage() {
             session. The dashboard must stay the column's previous sibling: the drag
             ceiling measures it there. */}
         {/* Kept mounted (hidden on other tabs) so its view choice survives a tab switch. */}
-        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} />
+        <SwarmOutDashboard hidden={activeTabId !== SWARM_OUT_TAB_ID} onOpenHive={() => openOverlay('hive')} />
 
         {/* Main Chat Area.
             `contain:layout` (run_26172836) SEVERS the layout coupling between this

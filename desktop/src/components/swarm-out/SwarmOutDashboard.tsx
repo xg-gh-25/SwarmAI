@@ -14,12 +14,16 @@
  * tiles go 2×2. Runs are cards in a grid that fits as many columns as the width
  * allows (RUN_CARD_MIN), so no width squeezes a run's title into a few characters.
  *
- * The 真实派发 section (LiveDispatches) is live: tasks dispatched to Hives and the
- * questions they wait on. Everything below it is STATIC (./mockData.ts) — the fleet,
- * run cards and cross-run audit it will read do not exist yet. A banner says which is
- * which, so a sample number is never read as a live one.
+ * Live parts: the Hive count in the header and, from /api/swarm-out/hives, either the
+ * 真实派发 section (LiveDispatches: tasks dispatched to Hives and the questions they
+ * wait on) or, with no running Hive, the setup guide (HiveGuide). Everything below is
+ * STATIC (./mockData.ts) — the fleet, run cards and cross-run audit it will read do not
+ * exist yet. A notice directly above it says it is a sample that has not launched, so
+ * a sample number is never read as a live one.
  */
-import { createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { swarmOutService, type SwarmOutHives } from '../../services/swarmOut';
+import { HiveGuide } from './HiveGuide';
 import { JudgeTag } from './JudgeTag';
 import { LiveDispatches } from './LiveDispatches';
 import { TraceTags } from './TraceTags';
@@ -325,12 +329,43 @@ function History() {
   );
 }
 
-export function SwarmOutDashboard({ hidden = false }: { hidden?: boolean }) {
+const HIVES_POLL_MS = 30_000;
+
+/** The Host's Hives (null until the first answer, and kept on a failed poll: an
+ *  unreachable daemon is not "no Hive"). Polls only while the dashboard is shown. */
+function useHives(hidden: boolean): SwarmOutHives | null {
+  const [state, setState] = useState<SwarmOutHives | null>(null);
+  useEffect(() => {
+    if (hidden) return undefined;
+    let alive = true;
+    const load = () => {
+      swarmOutService.hives().then((d) => { if (alive) setState(d); }).catch(() => { /* keep the last answer */ });
+    };
+    load();
+    const id = window.setInterval(load, HIVES_POLL_MS);
+    return () => { alive = false; window.clearInterval(id); };
+  }, [hidden]);
+  return state;
+}
+
+/** Placed directly above the sample sections. */
+function SampleNotice() {
+  return (
+    <div className="flex items-center gap-2 mt-2 mb-3 text-[12px] text-[var(--color-text-muted)]" data-testid="swarm-out-sample-notice">
+      <span className="px-1.5 py-[1px] rounded bg-[var(--color-hover)] font-medium flex-shrink-0">示例</span>
+      <span>以下是示例数据：机群、run 卡片和历史还没正式上线，敬请期待。</span>
+      <span className="flex-1 border-t border-[var(--color-border)]" />
+    </div>
+  );
+}
+
+export function SwarmOutDashboard({ hidden = false, onOpenHive }: { hidden?: boolean; onOpenHive?: () => void }) {
   const [view, setView] = useState<'run' | 'history'>('run');
   const rootRef = useRef<HTMLDivElement>(null);
   const width = usePanelWidth(rootRef);
   const compact = width > 0 && width < COMPACT_BELOW;
   const padX = compact ? 'px-4' : 'px-6';
+  const hives = useHives(hidden);
   const seg = (v: 'run' | 'history', label: string) => (
     <button
       type="button"
@@ -351,15 +386,22 @@ export function SwarmOutDashboard({ hidden = false }: { hidden?: boolean }) {
       <div className={`flex items-center gap-3 ${padX} ${compact ? 'pt-3' : 'pt-4'} flex-shrink-0 min-w-0`}>
         <h2 className={`m-0 ${compact ? 'text-[15px]' : 'text-[17px]'} font-semibold whitespace-nowrap`}>Swarm Out</h2>
         <div className="inline-flex rounded-lg p-[2px] bg-[var(--color-bg-chrome)] flex-shrink-0">{seg('run', '运行')}{seg('history', '历史')}</div>
-        <span className={`ml-auto text-[12px] truncate min-w-0 ${muted}`} title="2 台 Hive · 全部在云端，可以合上 Mac">
-          2 台 Hive · <span className="text-[var(--color-status-success)]">全部在云端，可以合上 Mac</span>
-        </span>
-      </div>
-      <div className={`${compact ? 'mx-4 mt-2' : 'mx-6 mt-3'} rounded-lg px-3 py-1.5 text-[12px] bg-[var(--color-hover)] text-[var(--color-text-muted)] flex-shrink-0`}>
-        「真实派发」一节是真的；它下面的机群、run 卡片和历史仍是示例数据。右边的对话是真的 chat session。
+        {hives !== null && (
+          <span className={`ml-auto text-[12px] truncate min-w-0 ${muted}`} data-testid="swarm-out-hive-count">
+            {hives.running > 0
+              ? <><span className="text-[var(--color-status-success)]">{hives.running} 台 Hive 在运行</span>，合上 Mac 也会继续</>
+              : hives.hives.length > 0 ? `${hives.hives.length} 台 Hive，都没在运行` : '还没有 Hive'}
+          </span>
+        )}
       </div>
       <div className={`flex-1 overflow-y-auto overflow-x-hidden ${padX} ${compact ? 'pt-3 pb-5' : 'pt-4 pb-6'}`}>
-        {view === 'run' ? <><LiveDispatches hidden={hidden} /><Overview width={width} /></> : <History />}
+        {view === 'run' ? (
+          <>
+            {hives !== null && hives.running === 0 ? <HiveGuide hives={hives.hives} onOpenHive={onOpenHive} /> : <LiveDispatches hidden={hidden} />}
+            <SampleNotice />
+            <Overview width={width} />
+          </>
+        ) : <><SampleNotice /><History /></>}
       </div>
     </div>
     </Compact.Provider>

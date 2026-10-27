@@ -73,11 +73,28 @@ def _log_path() -> Path:
     return _state_dir() / "dispatches.jsonl"
 
 
+def _db_path() -> str:
+    from database import db
+    return str(db.db_path)
+
+
+async def hives() -> dict[str, Any]:
+    """The Hives this Host knows, by name and status: what the Swarm Out panel needs to
+    say whether there is anywhere to dispatch to, and what an agent needs to pick one.
+    Never addresses or credentials."""
+    import aiosqlite
+    async with aiosqlite.connect(_db_path()) as conn:
+        await conn.execute("PRAGMA busy_timeout = 3000")
+        cur = await conn.execute(
+            "SELECT name, status, region FROM hive_instances ORDER BY name")
+        rows = [{"name": r[0], "status": r[1], "region": r[2]} for r in await cur.fetchall()]
+    return {"hives": rows, "running": sum(1 for r in rows if r["status"] == "running")}
+
+
 async def _instance(hive_ref: str) -> dict[str, Any]:
     """A running Hive by id or name, with its account row; validated fields only."""
     import aiosqlite
-    from database import db
-    async with aiosqlite.connect(str(db.db_path)) as conn:
+    async with aiosqlite.connect(_db_path()) as conn:
         conn.row_factory = aiosqlite.Row
         await conn.execute("PRAGMA busy_timeout = 3000")
         cur = await conn.execute(

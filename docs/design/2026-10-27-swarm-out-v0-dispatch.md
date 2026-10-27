@@ -143,3 +143,4 @@ XG 2026-10-27 定的范围：**把任务派发出去，在 Hive worker 上跑完
 - **Host 把 Hive 写的问题按已知字段重建**，`hive` 字段用 Host 自己记录的名字；回答用 S3 条件写（`IfNoneMatch`），两个回答同时到时第二个被拒绝。
 - **IAM**：发布包读权限收窄到 `v*`；bridge 读写按 `${aws:PrincipalTag/HiveName}` 限定；每次 update 都重写整份策略并补 `HiveName` tag。
 - **已知、不在 v0**：桌面 daemon 没有 Host 头校验（DNS rebinding，之前就有）；夜间备份到 `backups/` 没有写权限（之前就有）；`bridge/` 前缀没有 lifecycle 规则（改它会整体替换桶上已有的规则）。
+- **没有可用 Hive 时的引导**（之后补的）：`/api/swarm-out/hives`（CLI `hives`）只给 Hive 的名字、状态、region，不给地址和凭证。面板没有 running 的 Hive 时，用设置引导替换「真实派发」一节（没有 Hive：三步设置；有但都没在运行：列出状态，提示启动），按钮打开 Hive overlay；查询失败不当作"没有 Hive"。示例数据上方标明「还没正式上线，敬请期待」。chat 里的 agent 靠 `s_swarm-out` skill 知道怎么查 Hive、怎么在你确认后派发。

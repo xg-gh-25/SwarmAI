@@ -1,9 +1,10 @@
-"""Swarm Out command line: dispatch a task to a Hive, list runs, answer a question.
+"""Swarm Out command line: list Hives, dispatch a task to one, list runs.
 
 Calls the local daemon's /api/swarm-out routes on loopback; Hive credentials stay
 inside the daemon. Used by the Swarm Out chat agent after the person has agreed
 to send a task out.
 
+    "$SWARM_BACKEND_BIN" py -m scripts.swarm_out hives
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out dispatch --hive <name> --title <t> --task-file <f>
     "$SWARM_BACKEND_BIN" py -m scripts.swarm_out runs
 
@@ -60,11 +61,14 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--task-file")
     g.add_argument("--task")
     sub.add_parser("runs")
+    sub.add_parser("hives")
     args = p.parse_args(argv)
 
     if args.cmd == "dispatch":
         task = args.task if args.task is not None else open(args.task_file, encoding="utf-8").read()
         return _call("POST", "/dispatch", {"hive": args.hive, "title": args.title, "task": task})
+    if args.cmd == "hives":
+        return _call("GET", "/hives")
     return _call("GET", "/runs")
 
 

@@ -43,7 +43,24 @@ export interface SwarmOutRuns {
   errors: string[];
 }
 
+export interface SwarmOutHive {
+  name: string;
+  status: string;
+  region: string | null;
+}
+
+export interface SwarmOutHives {
+  hives: SwarmOutHive[];
+  running: number;
+}
+
 export const swarmOutService = {
+  /** Names and status only: the panel never sees a Hive's address or credentials. */
+  async hives(): Promise<SwarmOutHives> {
+    const { data } = await api.get('/swarm-out/hives');
+    return data as SwarmOutHives;
+  },
+
   async runs(): Promise<SwarmOutRuns> {
     const { data } = await api.get('/swarm-out/runs');
     return data as SwarmOutRuns;
