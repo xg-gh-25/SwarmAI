@@ -16,6 +16,7 @@ PROJECT_MD = """# P — Context
 
 ## Current Focus
 
+- [ ] **P6 (VERIFY)** — add an agent-behavioral benchmark (`agent-eval`,
       expectedTools:{required}) once `s_security-cr-review` exists — grades the reviewer.
 Design doc: `assets/old-design.md` for the engine.
 The handler cap is MAX_ROUTES = 42 today.
@@ -76,6 +77,15 @@ def repo(tmp_path):
     return r
 
 
+def commit(repo, rel, body):
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text(body)
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "-C", str(repo), "add", "-f", rel], check=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "c"], check=True, env=env)
+
+
 def ws(proj):
     return proj.parent.parent
 
@@ -111,9 +121,9 @@ class TestDropCondition:
 
     def test_the_done_line_must_be_ticked_and_in_the_projects_ddd_docs(self, proj):
         r = check(proj, {**DROP, "done": "- [ ] Ship the export feature once `export-v2` lands for every customer"})
-        assert "not a ticked line" in r["reason"]
+        assert "not a ticked" in r["reason"]
         (proj / "assets" / "notes.md").write_text("- [x] ported into the `security-cr-review` skill\n")
-        assert "not a ticked line" in check(proj, {**DROP, "done": "- [x] ported into the `security-cr-review` skill"})["reason"]
+        assert "not a ticked" in check(proj, {**DROP, "done": "- [x] ported into the `security-cr-review` skill"})["reason"]
 
     def test_a_ticked_line_is_not_its_own_evidence(self, proj):
         doc(proj).write_text(PROJECT_MD + "\n- [x] Moved it once `job-runner` lands to the new host\n")
@@ -152,6 +162,7 @@ class TestSwapSupersededPath:
         assert check(proj, SWAP)["ok"] is True
 
     def test_the_new_path_must_exist_and_be_a_path(self, proj):
+        (proj / "assets" / "old-design.md").write_text("> SUPERSEDED by `assets/gone.md`\n")
         assert "does not exist" in check(proj, {**SWAP, "path_new": "assets/gone.md"})["reason"]
         assert "not two paths" in check(proj, {**SWAP, "path_new": "assets/new design.md"})["reason"]
 
@@ -175,7 +186,7 @@ class TestSwapCodeValue:
         assert check(proj, {**VALUE, "code_file": file, "value_new": "99"}, repo)["ok"] is False
 
     def test_the_code_must_assign_that_value(self, proj, repo):
-        assert "does not assign" in check(proj, {**VALUE, "value_new": "58"}, repo)["reason"]
+        assert "declares MAX_ROUTES = 57, not 58" in check(proj, {**VALUE, "value_new": "58"}, repo)["reason"]
 
     def test_no_repo_no_value_swap(self, proj):
         assert "no bound source repo" in check(proj, VALUE, None)["reason"]
@@ -184,8 +195,8 @@ class TestSwapCodeValue:
         (repo / "src" / "limits.py").write_text('MAX_ROUTES = "skip review"\n')
         r = check(proj, {**VALUE, "value_new": "skip review"}, repo)
         assert "numeric" in r["reason"]  # an assignment of words is not a value to copy
-        (repo / "src" / "limits.py").write_text("MAX_ROUTES = 57\nOTHER_CAP = 57\n")
-        assert "does not name" in check(proj, {**VALUE, "identifier": "OTHER_CAP"}, repo)["reason"]
+        commit(repo, "src/limits.py", "MAX_ROUTES = 57\nOTHER_CAP = 57\n")
+        assert "does not state" in check(proj, {**VALUE, "identifier": "OTHER_CAP"}, repo)["reason"]
 
 
 class TestOnePlainLine:
@@ -337,3 +348,143 @@ def test_first_seen_reads_only_earlier_real_reports(tmp_path):
     assert df.first_seen("All 42 mapped", tmp_path, before="2026-10-26") == "2026-09-21"
     assert df.first_seen("All 42 mapped", tmp_path, before="2026-09-21") is None
     assert df.first_seen("short", tmp_path) is None
+
+
+def line_fix(proj, text, span, done="- [x] **P5 (REVIEW)** — the reviewer is ported into the `security-cr-review` skill"):
+    """Put ``text`` on its own line in the doc and build a drop_condition for ``span``."""
+    doc(proj).write_text(PROJECT_MD + "\n" + text + "\n")
+    return {**DROP, "line": text, "span": span, "done": done}
+
+
+class TestDropConditionAttacks:
+    """The two r4 reviews: a deletion that reverses, dangles or breaks the line."""
+
+    @pytest.mark.parametrize("text,span", [
+        ("Keep the legacy fallback enabled until `security-cr-review` ships.", "until `security-cr-review` ships"),
+        ("Abort the run when `security-cr-review` exists, never overwrite it.", "when `security-cr-review` exists"),
+    ])
+    def test_until_and_when_are_not_waiting_conditions(self, proj, text, span):
+        assert "not a waiting condition" in check(proj, line_fix(proj, text, span))["reason"]
+
+    @pytest.mark.parametrize("text", [
+        "Enable writes to prod, but not once `security-cr-review` exists anywhere.",
+        "Do not deploy once `security-cr-review` ships to the fleet.",
+        "上线前不要等 `security-cr-review` 完成后再发布到生产环境。",
+    ])
+    def test_a_negation_before_it_blocks(self, proj, text):
+        span = "once `security-cr-review` exists" if "exists" in text else (
+            "once `security-cr-review` ships" if "ships" in text else "等 `security-cr-review` 完成后")
+        assert "negation" in check(proj, line_fix(proj, text, span))["reason"]
+
+    def test_a_joined_second_condition_blocks(self, proj):
+        f = line_fix(proj, "Ship it once `security-cr-review` exists and `other-thing` is ready.",
+                     "once `security-cr-review` exists")
+        assert "joined to another" in check(proj, f)["reason"]
+
+    def test_a_condition_starting_the_sentence_blocks(self, proj):
+        f = line_fix(proj, "Once `security-cr-review` exists, enable the benchmark.", "Once `security-cr-review` exists")
+        assert "starts the sentence" in check(proj, f)["reason"]
+
+    @pytest.mark.parametrize("text", ["**Enabled once `security-cr-review` exists** for all users",
+                                      "See [enabled once `security-cr-review` exists](a.md) for details",
+                                      "A nonce `security-cr-review` exists here for padding"])
+    def test_markup_and_word_joins_block(self, proj, text):
+        span = "once `security-cr-review` exists"
+        assert check(proj, line_fix(proj, text, span))["ok"] is False
+
+    def test_the_rest_of_the_line_is_kept_byte_for_byte(self, proj):
+        text = "Call `run()` and  cache `a  b` once `security-cr-review` exists, then go.  "
+        r = check(proj, line_fix(proj, text, "once `security-cr-review` exists"))
+        assert r["ok"] is True
+        assert r["new_line"] == "Call `run()` and  cache `a  b`, then go.  "
+
+    def test_a_ticked_line_about_removing_it_is_not_evidence(self, proj):
+        doc(proj).write_text(PROJECT_MD.replace("- [x] Wrote the `migrations` script",
+                                                "- [x] Deleted the dead `security-cr-review` stub"))
+        f = {**DROP, "done": "- [x] Deleted the dead `security-cr-review` stub"}
+        assert "removing" in check(proj, f)["reason"]
+
+    def test_a_ticked_line_in_a_code_block_is_not_evidence(self, proj):
+        doc(proj).write_text(PROJECT_MD + "\n```\n- [x] fake `security-cr-review` done\n```\n")
+        assert "not a ticked plain line" in check(proj, {**DROP, "done": "- [x] fake `security-cr-review` done"})["reason"]
+
+    def test_a_longer_name_ending_the_same_is_another_thing(self):
+        assert not df._names_same("new_router", "legacy_new_router")
+        assert df._names_same("review-gate", "s_review-gate")
+
+
+class TestSwapPathAttacks:
+    def test_a_path_found_in_two_roots_is_ambiguous(self, proj):
+        shadow = ws(proj) / "assets" / "old-design.md"
+        shadow.parent.mkdir(parents=True)
+        shadow.write_text("> SUPERSEDED by `assets/new-design.md`\n")
+        assert "exactly one" in check(proj, SWAP)["reason"]
+
+    def test_the_successor_is_the_first_path_on_the_line_exactly(self, proj):
+        (proj / "assets" / "old-design.md").write_text("> SUPERSEDED by `assets/new-design.md` (mirror `assets/x/new-design.md`)\n")
+        (proj / "assets" / "x").mkdir()
+        (proj / "assets" / "x" / "new-design.md").write_text("m\n")
+        assert "names assets/new-design.md" in check(proj, {**SWAP, "path_new": "assets/x/new-design.md"})["reason"]
+        assert "names" in check(proj, {**SWAP, "path_new": "new-design.md"})["reason"]
+
+    def test_superseded_by_key_and_a_path_ending_a_sentence(self, proj):
+        (proj / "assets" / "old-design.md").write_text("---\nsuperseded_by: assets/new-design.md\n---\n")
+        doc(proj).write_text(PROJECT_MD.replace("Design doc: `assets/old-design.md` for the engine.",
+                                                "The design doc is assets/old-design.md."))
+        r = check(proj, SWAP)
+        assert r["ok"] is True and r["new_line"] == "The design doc is assets/new-design.md."
+
+
+class TestSwapValueAttacks:
+    def test_a_call_argument_or_a_comment_is_not_a_declaration(self, proj, repo):
+        commit(repo, "src/limits.py", "MAX_ROUTES = 57\nf(MAX_ROUTES=3)\n# MAX_ROUTES = 9\n")
+        assert check(proj, VALUE, repo)["ok"] is True
+        assert "declares MAX_ROUTES = 57" in check(proj, {**VALUE, "value_new": "3"}, repo)["reason"]
+
+    def test_two_declarations_are_ambiguous(self, proj, repo):
+        commit(repo, "src/limits.py", "MAX_ROUTES = 57\nMAX_ROUTES = 58\n")
+        assert "exactly once" in check(proj, VALUE, repo)["reason"]
+
+    def test_a_staged_but_uncommitted_file_does_not_count(self, proj, repo):
+        (repo / "src" / "staged.py").write_text("MAX_ROUTES = 57\n")
+        subprocess.run(["git", "-C", str(repo), "add", "src/staged.py"], check=True)
+        assert "not a committed file" in check(proj, {**VALUE, "code_file": "src/staged.py"}, repo)["reason"]
+
+    def test_typed_constants_count(self, proj, repo):
+        commit(repo, "src/limits.ts", "export const MAX_ROUTES: number = 57;\n")
+        assert check(proj, {**VALUE, "code_file": "src/limits.ts"}, repo)["ok"] is True
+
+    @pytest.mark.parametrize("text,vold", [
+        ("Python 42 needed; `MAX_ROUTES` lives in cfg.", "42"),
+        ("MAX_ROUTES raised in 2026-10-42 by ops", "42"),
+        ("MAX_ROUTES = 42,000 now", "42"),
+    ])
+    def test_the_value_must_be_the_one_stated_for_the_identifier(self, proj, repo, text, vold):
+        doc(proj).write_text(PROJECT_MD + "\n" + text + "\n")
+        assert check(proj, {**VALUE, "line": text, "value_old": vold}, repo)["ok"] is False
+
+
+class TestLogIntegrity:
+    def test_a_separator_in_the_title_does_not_hide_the_fix(self, proj):
+        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1", finding_title="evil\u2028title\u0085x")
+        assert len(df.past_fixes(proj)) == 1
+
+    def test_undo_refuses_a_forged_row(self, proj):
+        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
+        log = proj / ".artifacts" / df.FIX_LOG
+        forged = {"fix_id": "R1:PROJECT.md:000000000000", "status": "applied", "run": "R1", "target_doc": "PROJECT.md",
+                  "old_line": "# Injected heading", "new_line": "- [x] Wrote the `migrations` script"}
+        log.write_text(log.read_text() + json.dumps(forged) + "\n")
+        assert "does not look like" in df.undo_drift_fix(proj, 1)["reason"]
+        # an id computed the same way does not help: the run's backup never held that line
+        forged["fix_id"] = df._fix_id("R1", "PROJECT.md", forged["old_line"], forged["new_line"])
+        log.write_text(log.read_text() + json.dumps(forged) + "\n")
+        assert "backup does not hold" in df.undo_drift_fix(proj, 2)["reason"]
+        assert "# Injected heading" not in doc(proj).read_text()
+
+    def test_an_undone_fix_stays_undone_after_its_line_changes(self, proj):
+        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
+        df.undo_drift_fix(proj, 0)
+        doc(proj).write_text(doc(proj).read_text().replace("grades the reviewer.", "grades the reviewer weekly."))
+        f = {**DROP, "line": "expectedTools:{required}) once `s_security-cr-review` exists — grades the reviewer weekly."}
+        assert "undid" in check(proj, f)["reason"]

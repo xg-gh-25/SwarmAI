@@ -2,7 +2,7 @@
 title: "DDD 漂移：确定的自动修"
 created: 2026-10-27
 updated: 2026-10-27
-status: r4
+status: r5
 ---
 
 # DDD 漂移：确定的自动修，报告写"发现了什么、修好了什么"
@@ -40,6 +40,12 @@ r3 允许"任意删一段，或者把一段换成证据里出现过的整词"。
 | `drop_condition` 删掉等待条件 | `line`（这一行里的一段原文）、`span`、`done` | `span` 整个匹配固定语法：once / after / until / when `` `X` `` exists / lands / ships / is built / done / ready / available / implemented / shipped / merged，或 等 / 待 `` `X` `` 存在 / 上线 / 完成 / 就绪 / 落地 / 建好（后）；`done` 是本项目 DDD 文档里一行 `- [x]`，且用反引号点名同一个 `X`（相等，或一方是另一方加前缀，如 `s_x` / `pkg/x`，名字至少 6 个字符）；这一行不能是它自己的证据 | 原行删掉 `span`，整理空格和标点 |
 | `swap_superseded_path` 换成取代它的文件 | `path_old`、`path_new` | 两个都是路径；`path_old` 在文档里按整词只出现一次；`path_old` 指向的文件（本项目、工作区或绑定仓库内，不在 `.artifacts`）前 10 行里有一行以 SUPERSEDED / status: superseded / 已被取代 开头，且这一行里写着 `path_new`；`path_new` 存在 | 原行把 `path_old` 换成 `path_new` |
 | `swap_code_value` 换成代码里的值 | `line`、`identifier`、`value_old`、`value_new`、`code_file` | 两个值都是数字或版本号；`code_file` 是绑定仓库里被 git 跟踪的源码文件（按扩展名；不在 test / fixture / vendor / node_modules / dist / build / .venv 下，不是 `test_*`、`*_test.*`）；它里面有 `identifier = value_new`（或 `:`）这样的赋值；文档这一行点名了 `identifier`，`value_old` 在这一行恰好出现一次 | 原行把 `value_old` 换成 `value_new` |
+
+r5（r4 的 correctness + security 审查后，同一套三种修法收紧）：
+- **删除条件**：语法只剩 once / after 和 等 / 待（`until` 意思相反，`when` 多半是触发条件）；条件前 24 个字符内有否定或限定词（not / no / never / only / but / unless / 不 / 别 / 未 / 仅 …）、后面紧跟 and / or / 且 / 和、条件开头就是句首、条件和前后的字或 markup 粘在一起（`**`、`]`、反引号、单词内部），都不改；只在删除处拼接，行内其余字符逐字不动（含代码里的空格、结尾两个空格的硬换行）；勾掉的那一行要是普通文本行（不在代码块里），不能说"删除 / 放弃 / 不做 / removed / won't"；名字只认完全相同、加 `s_`（skill 命名）、或 `/`、`.` 限定的形式，`legacy_x` 不算 `x`。
+- **换路径**：`path_old` 必须只在项目、工作区、绑定仓库中的一处存在（同名文件出现在两处就不改，防止在工作区放一个同名文件冒充）；新路径必须**等于**那一行里的第一个路径（反引号或链接里的），并且和旧文件在同一处；也认 `superseded_by:` 字段；句末带句号的路径照常识别。
+- **换数值**：读的是已提交（HEAD）的文件内容，只暂存没提交的不算；文件里对这个名字的声明必须恰好一处（行首、可带 const / let / final 等关键字和类型标注；函数调用的参数、注释都不算）；文档里的旧值必须紧跟在这个名字后面（`名字 = 值`、`名字 is 值` 这类），日期、千分位数字里的同样数字不算。
+- **日志**：撤回前核对这一行确实是本系统写的（`fix_id` 由旧行和新行算出、那次运行的备份里有旧行），伪造的行不撤回；"你撤回过的不再重做"按修法本身（类型 + 文档 + 条件 / 路径对 / 名字和值）判断，那一行别处改了几个字也认得出。
 
 三种都还要满足：
 - **只改一行**：文档是四份 DDD 规范文档之一，经 `_confined_doc_path` 解析在项目内；那一行不在 front matter、标题（含 setext，`=` 或 `-` 下划线）、代码块（```` ``` ```` 或 `~~~`）里，不带 `<!-- -->` 元数据，不在带日期的生命周期条目里。
