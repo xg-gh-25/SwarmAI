@@ -72,7 +72,7 @@ from core.ddd_entry_lifecycle import (
 from core.ddd_paths import IDENTITY_FILE, ddd_path, section_dir
 from core.project_agent import PROJECT_AGENT_FILE, load_project_agent, project_agent_status
 from core.ddd_setup_state import read_setup_progress, read_setup_state
-from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR, get_pinned_projects
+from core.project_registry import DDD_CANONICAL_DOCS, get_pinned_projects
 
 logger = logging.getLogger(__name__)
 
@@ -952,10 +952,6 @@ def _brain_detail(project_dir: Path) -> dict:
 
     # Layer the per-open structural extras onto the single builder's state.
     state["sections"] = sections
-    # specs = spec-details/*.spec.md filenames (a DERIVED PROJECTION, NOT a
-    # _SECTIONS entry — six-section invariant untouched, R31). Cheap glob, safe
-    # HERE (per-brain, on open); never on the gallery projection (with_noise=False).
-    state["specs"] = _spec_files(project_dir)
     # hasCodeIntel = a live PRESENCE check of the on-disk code_intel.db, NOT gated
     # on `kind` (all DDDs resolve to kind='knowledge'). One stat, per-brain-on-open.
     from core.code_intel import code_intel_db_for
@@ -964,23 +960,6 @@ def _brain_detail(project_dir: Path) -> dict:
     # validated; None when the Brain has none yet. One small file read, on open only.
     state["projectAgent"] = load_project_agent(project_dir)
     return state
-
-
-def _spec_files(project_dir: Path) -> list[str]:
-    """spec-details/*.spec.md filenames for a brain (sorted); [] when absent.
-
-    Containment: project_dir is already resolved by _resolve_brain_dir
-    (parent==root guard), and .glob is scoped to the SPEC_DETAILS_DIR subdir —
-    no traversal. Filenames only (owner opens content via the existing file
-    preview), mirroring how section members[] are surfaced.
-    """
-    d = project_dir / SPEC_DETAILS_DIR
-    if not d.is_dir():
-        return []
-    # is_file() (not is_symlink()) — surface only regular files: a subdir or a
-    # symlink named *.spec.md must not appear as a spec (a dir would feed the file
-    # preview a directory path; a symlink could resolve outside spec-details).
-    return sorted(p.name for p in d.glob("*.spec.md") if p.is_file() and not p.is_symlink())
 
 
 def _knowledge_entries(

@@ -17,7 +17,7 @@ DESIGN INVARIANTS (Gate-0 run_835f82ff, all live-verified):
 - PER-PROJECT focused review (not one diluted 8-in-1 prompt) — one bounded ``claude
   --print`` subprocess per project, looped in-handler (JobSafety.timeout does not bound
   inner spawns; scheduled as a trailing weekly slot per the eval-scheduled precedent).
-- DOMAIN-AWARE prompt: a code-backed project (has code-intel.json / a source repo) is
+- DOMAIN-AWARE prompt: a code-backed project (has a code graph / a source repo) is
   reviewed for prose-vs-CODE drift; a non-code project (business/product/research) for
   prose-vs-PRODUCT-reality drift (internal contradiction, superseded claims, dead refs).
   A uniform "check against live code" prompt on non-code projects = noise.
@@ -134,8 +134,9 @@ def _discover_ddd_projects() -> list[tuple[str, Path]]:
 
 
 def _is_code_backed(project_dir: Path) -> bool:
-    """A project is code-backed if it carries a code-intel artifact (real source graph)."""
-    return (project_dir / "code-intel.json").exists() or (project_dir / "code_intel.db").exists()
+    """A project is code-backed if it has a code graph (its own or a bound repo's)."""
+    from core.code_intel import code_intel_db_for
+    return code_intel_db_for(project_dir) is not None
 
 
 def _source_repo_for(project_name: str) -> Path | None:
@@ -172,8 +173,7 @@ def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool)
         drift_def = (
             "SEMANTIC DRIFT = a DDD prose claim that no longer matches the LIVE CODE. "
             "Read the DDD docs, then verify load-bearing claims against the actual source "
-            "(prefer the project's code-intel.json for a fast symbol/route/module map; use "
-            "Grep/Read on the source for specifics). Flag a claim ONLY when the code "
+            "(Grep/Read on the source). Flag a claim ONLY when the code "
             "CONTRADICTS it — e.g. 'X not yet built' while X is implemented, a described "
             "mechanism that was removed, a wrong count/version/status."
         )

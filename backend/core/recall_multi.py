@@ -1127,51 +1127,17 @@ def _recall_ddd(query: str, project: Optional[str],
             for rel, score in memory_index._normalize_bm25_scores(raw_dc).items():
                 scored.append((rel, "(moat contract)", score * _DC_WEIGHT))
 
-    # ③ code-intel domains[] leg (Run 3, §8.1): the code-intel.json business
-    # semantic layer (domains/flows/steps) is a JSON EXPORT — the codeintel graph
-    # leg reads code_intel.db (SQLite symbols), NEVER this file, so domains[] was
-    # a recall orphan (verified SUPPORTED, run_6602eeab). Score it here, in the
-    # ddd bucket, so business-rule/issue/gap content surfaces. verified:false
-    # assertions are GATED (rendered as [llm-inferred, UNVERIFIED], not fact).
-    # Tracked separately (run_89e28075): the domain/spec legs are the SPECIALIZED
-    # business-semantic layer — at the default max_sections=3 they lose the flat
-    # ranking to whole-doc BM25 (which normalizes to ~1.0) and get crowded out
-    # ENTIRELY, defeating the DoD ("recall 命中其独有业务词"). So the single best
-    # domain/spec hit gets a RESERVED slot below (never crowded to zero).
-    domain_scored: list[tuple[str, str, float]] = []
-    for dh in _score_domains(query, base, max_sections):
-        domain_scored.append((dh["doc"], dh["section"], dh["score"]))
-
-    # ④ spec-details [human]-block leg (Run 3, §8.1): index ONLY human-authored
-    # blocks (backtick-fenced `[human]` list-items) — the [llm] skeleton is
-    # already covered by leg ③ (domain leg), so a section-BM25 would double-hit
-    # (r3 §8.1 correction). A [human] business rule that lives ONLY in a .spec.md
-    # was unrecallable → orphan (§8.9 sentinel red baseline).
-    for hh in _score_spec_details_human(query, base, max_sections):
-        domain_scored.append((hh["doc"], hh["section"], hh["score"]))
-
-    scored.extend(domain_scored)
     if not scored and not entry_hits:
         return hits, "none"
     scored.sort(key=lambda t: t[2], reverse=True)
     top = scored[:max_sections]
-    # RESERVED SLOT: if the specialized domain/spec layer produced a positive-scoring
-    # hit but the flat cut dropped ALL of them, graft the best one in (replacing the
-    # weakest doc hit) so a business-flow query always surfaces its domain. Mirrors
-    # leg ②'s anti-crowding intent, in the opposite direction. (run_89e28075 DoD.)
-    domain_best = max(domain_scored, key=lambda t: t[2], default=None)
-    if (max_sections >= 1 and domain_best is not None and domain_best[2] > 0
-            and domain_best not in top):
-        top = top[:max_sections - 1] + [domain_best]
-        top.sort(key=lambda t: t[2], reverse=True)  # keep hits score-descending post-graft
     hits = [{"doc": d, "section": s, "score": round(sc, 4)}
             for d, s, sc in top]
     # RESERVED SLOT for the best ENTRY-level hit (run_97a6b1db): entry hits carry the
     # entry TEXT as `content`, so a fresh cultivated lesson buried in a giant section
     # surfaces verbatim rather than as a diluted section pointer. Graft the single
     # best matching entry if it isn't already represented by a section hit for the
-    # same (doc, section) — mirrors the domain reserved-slot so it can't be crowded
-    # out at the default max_sections.
+    # same (doc, section), so it can't be crowded out at the default max_sections.
     entry_best = max(entry_hits, key=lambda h: h["score"], default=None)
     if max_sections >= 1 and entry_best is not None and entry_best["score"] > 0:
         already = any(h.get("content") == entry_best["content"] for h in hits)
@@ -1189,180 +1155,6 @@ def _recall_ddd(query: str, project: Optional[str],
             hits = (hits[:max_sections - 1] + [entry_hit]) if hits else [entry_hit]
             hits.sort(key=lambda h: h["score"], reverse=True)
     return hits, "keyword"
-
-
-# ── Run 3 §8.1: code-intel domains[] + spec-details [human] recall legs ──
-
-# A [human] block = a markdown LIST ITEM that carries a BACKTICK-FENCED `[human]`
-# marker. Two guards, both load-bearing (Gate-2 run_6602eeab):
-#   - the backtick fence: the .spec.md legend / HTML-comment guidance mention the
-#     bare word "[human]" WITHOUT backticks — indexing those is a false positive.
-#   - the LIST-BULLET requirement: prose that quotes "`[human]`" (e.g. a legend
-#     "the `[human]` marker denotes authorship") is NOT a rule — only a list item is.
-_HUMAN_MARKER_RE = re.compile(r"`\[human\]`")
-_LIST_BULLET_RE = re.compile(r"^(?:[-*+]\s|\d+\.\s)")
-_HTML_COMMENT_INLINE_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-
-
-def _extract_human_blocks(spec_text: str) -> list[str]:
-    """Return the human-authored lines of a .spec.md — ONLY markdown list items
-    whose text carries a backtick-fenced ```[human]``` marker.
-
-    Marker-aware, NOT section-based (§8.1 r3 correction): the [llm] skeleton is
-    covered by the domain leg, so a per-section BM25 would double-hit. We index
-    the [human] delta only.
-
-    Robust to inline/multiline HTML comments (Gate-2 fix): an INLINE `<!-- … -->`
-    is stripped from the line (so a real rule with a trailing comment still
-    indexes — the prior version dropped the whole line = false negative); only an
-    UNCLOSED `<!--` opens a multiline skip region. A bare/legend `[human]` (no
-    backticks) or a non-list prose mention (no bullet) is NOT a block.
-    """
-    blocks: list[str] = []
-    in_html_comment = False
-    for raw in spec_text.splitlines():
-        line = raw.strip()
-        if in_html_comment:
-            # Inside a multiline comment: it ends when a --> appears; residue
-            # after the --> is real content and re-enters normal processing.
-            if "-->" in line:
-                in_html_comment = False
-                line = line.split("-->", 1)[1].strip()
-            else:
-                continue
-        # Strip any fully-closed inline comment(s), then detect a dangling opener.
-        line = _HTML_COMMENT_INLINE_RE.sub("", line)
-        if "<!--" in line:
-            in_html_comment = True
-            line = line.split("<!--", 1)[0].strip()
-        if not line:
-            continue
-        # A real [human] rule is a LIST ITEM with a backtick-fenced marker.
-        if _LIST_BULLET_RE.match(line) and _HUMAN_MARKER_RE.search(line):
-            blocks.append(line)
-    return blocks
-
-
-def _score_spec_details_human(query: str, base, max_sections: int) -> list[dict]:
-    """BM25-score the [human] blocks of every ``spec-details/*.spec.md`` under a
-    project. Each block is its own tiny document keyed by ``<file>#<n>`` so a hit
-    points at the exact human rule. Returns [] when no spec-details dir / no
-    [human] blocks. Pure keyword — never embeds. BOUNDED like the Knowledge leg.
-    """
-    from core.project_registry import SPEC_DETAILS_DIR
-
-    sd = base / SPEC_DETAILS_DIR
-    if not sd.is_dir():
-        return []
-    from core import memory_index
-    _SD_MAX_FILES = 100
-    _SD_MAX_BYTES = 256 * 1024  # per-file clamp (hot path — same guard as Knowledge leg)
-    docs: dict[str, str] = {}
-    for sp in sorted(sd.rglob("*.spec.md"))[:_SD_MAX_FILES]:
-        try:
-            if sp.stat().st_size > _SD_MAX_BYTES:
-                text = sp.read_text(encoding="utf-8")[:_SD_MAX_BYTES]
-            else:
-                text = sp.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        rel = str(sp.relative_to(base))
-        for i, blk in enumerate(_extract_human_blocks(text)):
-            docs[f"{rel}#{i}"] = blk
-    if not docs:
-        return []
-    raw = memory_index._bm25_scores(query, docs)
-    _HUMAN_WEIGHT = 0.9  # human business rules are high-value; near-parity with docs
-    out = []
-    for key, score in memory_index._normalize_bm25_scores(raw).items():
-        fpath, _, idx = key.partition("#")
-        out.append({"doc": fpath, "section": f"[human] block {idx}",
-                    "score": score * _HUMAN_WEIGHT})
-    out.sort(key=lambda d: d["score"], reverse=True)
-    return out[:max_sections]
-
-
-def _domain_corpus(dom: dict, flows: list, steps: list) -> str:
-    """Flatten a domain + its flows/steps into one recall document string, with
-    EVERY LLM-sourced assertion honestly provenance-marked (§8.1 verified gating +
-    Run C semantic-boundary honesty) so no claim is ever surfaced as an established
-    code fact — the recall analogue of the [RECALLED] provenance boundary / CLASS A′
-    defense:
-    - verified:true  → '[llm-claim] label: txt (anchor: `x`)' — the LLM asserted it
-      AND gave a code POINTER, but the prose was NOT verified against the code (the
-      guard only checks the anchor STRING is present; see
-      ai_ready_helpers.check_llm_assertion_guards). NOT a machine-verified fact.
-    - verified:false / bare → '[llm-inferred, UNVERIFIED] label: txt'.
-    Mirrors _fmt_assertion_row so the recall corpus and the .spec.md render agree —
-    neither ever emits a verified:true assertion as bare fact (Gate-2 F1, run_3b2c85a7).
-    """
-    parts: list[str] = [str(dom.get("name", "")), str(dom.get("summary", ""))]
-
-    def _emit_assertions(items, label):
-        for a in items or []:
-            if isinstance(a, dict):
-                txt = a.get("rule") or a.get("cond") or a.get("case") or a.get("issue") \
-                    or a.get("note") or ""
-                if a.get("verified") is True:
-                    anc = str(a.get("anchor") or "").strip()
-                    parts.append(f"[llm-claim] {label}: {txt}"
-                                 + (f" (anchor: `{anc}`)" if anc else ""))
-                else:
-                    parts.append(f"[llm-inferred, UNVERIFIED] {label}: {txt}")
-            elif isinstance(a, str):
-                # bare-string rule (no verified flag) → treat as unadjudicated
-                parts.append(f"[llm-inferred, UNVERIFIED] {label}: {a}")
-
-    _emit_assertions(dom.get("business_rules"), "rule")
-    _emit_assertions(dom.get("issues"), "issue")
-    _emit_assertions(dom.get("gaps"), "gap")
-    did = dom.get("id")
-    for fl in flows:
-        if fl.get("domain_id") == did:
-            parts.append(str(fl.get("name", "")) + " " + str(fl.get("summary", "")))
-            fid = fl.get("id")
-            for st in steps:
-                if st.get("flow_id") == fid:
-                    parts.append(str(st.get("name", "")) + " " + str(st.get("summary", "")))
-                    _emit_assertions(st.get("rules"), "rule")
-                    _emit_assertions(st.get("preconditions"), "precond")
-                    _emit_assertions(st.get("exceptions"), "exception")
-    return "\n".join(p for p in parts if p.strip())
-
-
-def _score_domains(query: str, base, max_sections: int) -> list[dict]:
-    """BM25-score the domains[] of a project's ``code-intel.json`` (§8.1 domain
-    leg). Each domain is one document (its flows/steps folded in). Returns [] when
-    no code-intel.json / no domains[]. verified:false assertions are gated inside
-    _domain_corpus. Pure keyword — never embeds.
-    """
-    ci = base / "code-intel.json"
-    if not ci.is_file():
-        return []
-    try:
-        doc = json.loads(ci.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    domains = doc.get("domains") or []
-    if not domains:
-        return []
-    flows = doc.get("flows") or []
-    steps = doc.get("steps") or []
-    from core import memory_index
-    corpus = {}
-    for dom in domains:
-        if isinstance(dom, dict) and dom.get("id"):
-            corpus[dom["id"]] = _domain_corpus(dom, flows, steps)
-    if not corpus:
-        return []
-    raw = memory_index._bm25_scores(query, corpus)
-    _DOMAIN_WEIGHT = 0.85
-    out = []
-    for dom_id, score in memory_index._normalize_bm25_scores(raw).items():
-        out.append({"doc": "code-intel.json", "section": f"domain {dom_id}",
-                    "score": score * _DOMAIN_WEIGHT})
-    out.sort(key=lambda d: d["score"], reverse=True)
-    return out[:max_sections]
 
 
 def list_project_names() -> list[str]:

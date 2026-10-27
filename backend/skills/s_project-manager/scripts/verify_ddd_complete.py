@@ -9,7 +9,7 @@ complete for what it actually governs?*
 WHY ASSET-AWARE (the load-bearing design constraint):
     A DDD's ⑤ delivery + ⑥ refresher are ASSET-DERIVED (DDD-agent-brain paradigm,
     spec §3.6). A data-agent brain (governs a data-source + skill-set) and a
-    0-asset pure-knowledge brain have NO code-repo, so a `code-intel.json` is
+    0-asset pure-knowledge brain have NO code-repo, so a code graph is
     MEANINGLESS for them. This gate therefore requires code-intel ONLY when the
     DDD governs a `kind: code-repo` asset — and even then a MISSING projection is
     PENDING (the repo isn't bound/pulled yet), never FAIL. A knowledge-primary
@@ -169,20 +169,18 @@ def _has_code_repo_asset(assets: list[dict[str, Any]]) -> bool:
 
 
 def _find_code_intel(project_dir: Path) -> Path | None:
-    """Locate code-intel.json anywhere under the project (root or nested .artifacts/).
+    """The project's code graph db: its own, or a bind-managed repo's.
 
-    Location varies (SwarmAI: project root; ai_ready_repo: nested .ai-ready/) — glob
-    recursively (Gate-1 P4). Bounded: a project dir is small; first hit wins.
+    On a SwarmAI host this is ``core.code_intel.code_intel_db_for`` (the one answer
+    to where a project's graph lives). Run portable, off a SwarmAI host, only the
+    project's own ``code_intel.db`` can be seen.
     """
-    root = project_dir / "code-intel.json"
-    if root.exists():
-        return root
     try:
-        for hit in project_dir.glob("**/code-intel.json"):
-            return hit
-    except Exception:
-        pass
-    return None
+        from core.code_intel import code_intel_db_for
+        return code_intel_db_for(project_dir)
+    except Exception:  # noqa: BLE001 — portable run, no SwarmAI backend importable
+        own = project_dir / "code_intel.db"
+        return own if own.exists() else None
 
 
 # ── individual checks — each returns (name, status, detail) ──────────────────
@@ -315,8 +313,8 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
     """⑥ REFRESHER / code-intel — THE asset-aware check.
 
     - No code-repo governed asset → N/A (data-agent / pure-knowledge — NEVER FAIL).
-    - Has a code-repo asset + code-intel.json found → PASS.
-    - Has a code-repo asset + NO code-intel.json → PENDING (repo not bound/pulled
+    - Has a code-repo asset + a code graph found → PASS.
+    - Has a code-repo asset + NO code graph → PENDING (repo not bound/pulled
       yet) — a signal, NEVER a FAIL.
     """
     if not _has_code_repo_asset(assets):
@@ -328,9 +326,9 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
             rel = ci.relative_to(d)
         except ValueError:
             rel = ci
-        return ("⑥ Refresher/code-intel", STATUS_PASS, f"code-intel present at {rel}")
+        return ("⑥ Refresher/code-intel", STATUS_PASS, f"code graph present at {rel}")
     return ("⑥ Refresher/code-intel", STATUS_PENDING,
-            "governs a code-repo but code-intel.json not built yet — bind+refresh to generate (not a failure)")
+            "governs a code-repo but no code graph built yet — bind the repo to build it (not a failure)")
 
 
 # The pipeline profiles a Project Agent may name. Guarded single-source import, the

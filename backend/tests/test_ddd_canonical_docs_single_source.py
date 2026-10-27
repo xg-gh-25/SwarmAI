@@ -115,12 +115,9 @@ def test_constant_is_the_canonical_four():
     """The single source holds exactly the 4 canonical docs, in order."""
     import sys
     sys.path.insert(0, str(_BACKEND))
-    from core.project_registry import DDD_CANONICAL_DOCS, SPEC_DETAILS_DIR
+    from core.project_registry import DDD_CANONICAL_DOCS
 
     assert DDD_CANONICAL_DOCS == ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
-    # spec-details is a derived projection dir, NOT a 5th canonical doc.
-    assert SPEC_DETAILS_DIR == "spec-details"
-    assert f"{SPEC_DETAILS_DIR}.md" not in DDD_CANONICAL_DOCS
 
 
 def test_backward_compat_aliases_track_the_constant():

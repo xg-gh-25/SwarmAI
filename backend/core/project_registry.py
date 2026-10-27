@@ -29,12 +29,6 @@ from pathlib import Path
 # ~15 files were the GUI10/OT07 "add-a-doc → hunt-every-file" bug class.
 DDD_CANONICAL_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
 
-# spec-details/ is a DERIVED PROJECTION directory (not a 5th canonical doc) —
-# it is deliberately NOT part of DDD_CANONICAL_DOCS so the completeness gate
-# (context_health_hook DDD-INCOMPLETE) never false-flags a project that has it.
-# Wiring spec-details INTO recall/cultivation is Run 3/4, not this constant.
-SPEC_DETAILS_DIR = "spec-details"
-
 # Backward-compat alias (pre-Run-0 name). New code uses DDD_CANONICAL_DOCS.
 _DDD_FILES = DDD_CANONICAL_DOCS
 

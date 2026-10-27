@@ -87,7 +87,7 @@ class DeliveryContract(BaseModel):
     branch: str
     version_set: Optional[str] = None
     deploy_pipeline: Optional[str] = None  # ⑤ pointer: physical deploy pipeline ref/id (GOVERNed, never run here)
-    refresh_policy: Optional[str] = None   # ⑤ policy: when ⑥ regenerates the derived code-intel projection
+    refresh_policy: Optional[str] = None   # ⑤ policy: when ⑥ rebuilds the derived code graph
     review_path: str
     auto_send: str
 
@@ -95,12 +95,9 @@ class DeliveryContract(BaseModel):
 class Binding(BaseModel):
     """One DDD↔repo binding entry.
 
-    NOTE: there is deliberately NO ``code_intel`` field. Per the derived-projection
-    rule (DDD-agent-brain spec §3.6), ``code-intel.json`` is a machine-generated
-    projection of the code — NOT a DDD/binding member. It lives in a derived zone
-    (regenerated locally by the ⑥ refresher, gitignored, never PR-flows-back), so a
-    binding never records a projection path. ``bind_repo`` derives the local codeIntel
-    db path solely from the worktree. (A legacy bindings.yaml that still lists
+    NOTE: there is deliberately NO ``code_intel`` field. The code graph is derived
+    from the code, NOT a DDD/binding member, so a binding never records its path:
+    ``bind_repo`` derives the local codeIntel db path solely from the worktree. (A legacy bindings.yaml that still lists
     ``code_intel:`` loads fine — pydantic's default ``extra='ignore'`` drops it.)
     """
 
@@ -864,16 +861,6 @@ def describe_project_ddd_line(project_dir: str | Path, freshness: str | None = N
         extras.append("gates")
     if ddd_path(d, "knowledge").is_dir():
         extras.append("Knowledge/")
-    # code-intel v3 (run_b5993cdb A): surface the derived spec-details/ projection
-    # so the DDD index makes the system AWARE it exists (OT07 prevention — a
-    # generated domain layer that no index shows is a silent orphan). This is a
-    # DERIVED projection dir, NOT a 5th canonical doc (project_registry.py) — it
-    # rides in `extras`, never in the canonical `docs` list that gates completeness.
-    spec_dir = d / "spec-details"
-    if spec_dir.is_dir():
-        n_specs = sum(1 for s in spec_dir.glob("*.spec.md") if s.is_file())
-        if n_specs:
-            extras.append(f"spec-details/({n_specs} specs)")
     if (d / "bindings.yaml").is_file():
         extras.append("bindings")
 

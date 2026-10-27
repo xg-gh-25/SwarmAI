@@ -90,9 +90,9 @@ def _make_ddd(
     # ⑤ DELIVERY CONTRACT
     if bindings_yaml is not None:
         (d / "bindings.yaml").write_text(bindings_yaml)
-    # ⑥ derived projection
+    # ⑥ the derived code graph
     if code_intel:
-        (d / "code-intel.json").write_text(json.dumps({"modules": []}))
+        (d / "code_intel.db").write_bytes(b"")
     return d
 
 
@@ -169,7 +169,7 @@ jobs: []
 
 
 def test_code_repo_asset_with_code_intel_passes(tmp_path):
-    """A kind=code-repo asset WITH code-intel.json → PASS."""
+    """A kind=code-repo asset WITH a code graph → PASS."""
     bindings = """
 ddd_spec_version: "1.0"
 governed_assets:
@@ -218,15 +218,13 @@ governed_assets:
     assert "data-source" in detail and "data-source:" not in detail, detail
 
 
-def test_code_intel_found_recursively(tmp_path):
-    """code-intel.json nested under .artifacts/ still counts (location varies — Gate-1 P4)."""
+def test_code_intel_json_is_not_a_code_graph(tmp_path):
+    """code-intel.json left the product (design 2026-10-27 §5.9): it no longer counts."""
     bindings = 'governed_assets:\n  - kind: code-repo\n    name: svc\n'
-    d = _make_ddd(tmp_path, "NestedCI", bindings_yaml=bindings, code_intel=False)
-    nested = d / ".artifacts" / "ai-ready" / ".ai-ready"
-    nested.mkdir(parents=True)
-    (nested / "code-intel.json").write_text("{}")
+    d = _make_ddd(tmp_path, "OldJson", bindings_yaml=bindings, code_intel=False)
+    (d / "code-intel.json").write_text("{}")
     report = gate.verify_project(d)
-    assert _status_of(report, "code-intel") == "PASS", report
+    assert _status_of(report, "code-intel") == "PENDING", report
 
 
 # ── Structural checks (all DDDs) ─────────────────────────────────────────────

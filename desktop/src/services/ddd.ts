@@ -116,7 +116,7 @@ export interface SectionMember {
    *  "N ago" of the file's FILESYSTEM mtime (not git — works for gitignored
    *  projects), computed live. OPTIONAL by design: other sections omit it, and a
    *  pre-deploy daemon omits it everywhere — consumers MUST guard (undefined →
-   *  render nothing), same contract as BrainDetail.specs/health. */
+   *  render nothing), same contract as BrainDetail.health. */
   mtime?: string;
   /** ② knowledge members ONLY: this doc's own entry count (per-file, not the
    *  project total). OPTIONAL — same daemon-skew guard as mtime. */
@@ -154,12 +154,6 @@ export interface BrainDetail {
   name: string;
   kind: string;
   sections: BrainSection[];
-  /** spec-details/*.spec.md filenames — a DERIVED PROJECTION (NOT a section);
-   *  [] when the brain has no spec-details/ dir. Backend emits camelCase-safe
-   *  single-word key; getBrainDetail is a direct passthrough (no transform).
-   *  OPTIONAL by design: an old daemon (pre-deploy skew) omits it — consumers
-   *  MUST keep the `?? []` guard (meta-review: type must match wire reality). */
-  specs?: string[];
   /** hasCodeIntel — true iff a code_intel.db exists on disk for this brain (a
    *  live PRESENCE check, NOT gated on kind: all DDDs resolve to kind='knowledge').
    *  The CodeIntel nav entry + View-code-graph button gate on THIS, never on kind.
@@ -168,7 +162,7 @@ export interface BrainDetail {
   hasCodeIntel?: boolean;
   /** DETAIL-view health metrics (design 2026-08-04, run-1 backend). OPTIONAL by
    *  design (daemon skew): a pre-deploy daemon omits it — consumers MUST guard
-   *  (`detail.health` undefined → render nothing), same as specs/hasCodeIntel. */
+   *  (`detail.health` undefined → render nothing), same as hasCodeIntel. */
   health?: DetailHealth;
   /** ⑤ Project Agent definition (project-agent.yaml), generated at Brain creation
    *  from the DDD and reviewed by the person. null = none yet; undefined = an old
