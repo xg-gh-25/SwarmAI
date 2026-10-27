@@ -315,6 +315,15 @@ CDF 的所有表放在一个独立的 SQLite 文件里：`<app data>/ingestion.d
 | 情节记忆（长期） | `.context/TIMELINE.md` | 关键事件：事故、关键决定、里程碑、方向调整、重要交付 | CDF 的 `event` 单元（§5.5） | 只追加，按月汇总 | 间接：经验教训通过 `derived_from` 挂到事件上，供 Retro 使用 |
 | 语义记忆（认知） | MEMORY、EVOLUTION、DDD、USER、STEERING、TOOLS、Knowledge | 三层七类的认知单元 | CDF | 按层褪色，按证据强化（§5.7） | **产生** |
 
+```mermaid
+flowchart TB
+  T["对话记录 / run 记录 / 代码 / 外部资料"]
+  T -->|"DailyActivity 生成器（不经过 CDF）"| W["工作记忆：DailyActivity<br/>一周内做了什么、下一步<br/>负责衔接，不产生复利"]
+  T -->|"CDF：event 单元"| E["情节记忆：TIMELINE<br/>关键事件，只追加，按月汇总<br/>供 Retro"]
+  T -->|"CDF：cognition 单元"| C["语义记忆：MEMORY · EVOLUTION · DDD · context 文件 · Knowledge<br/>三层七类，按层褪色，按独立证据强化<br/>复利只在这一层"]
+  C -.->|derived_from| E
+```
+
 ### 5.2 Source 收拢：按证据从哪来划分，不按旧模块划分
 
 旧入口一共 13 个，同一份证据（一次会话）会被 distillation、memory_extractor、improvement_writeback、conversation→DDD、user_observer 各提一遍。r16 把它们收成 6 个：
@@ -429,6 +438,50 @@ S2 和 DailyActivity 是同一份对话记录的两个并列产物。**S2 不从
 ### 5.9 从目的地反推：什么进哪里，多快生效
 
 去向由卡 1 的形态和 scope 决定（`route_for`），source 只给提示。
+
+**流向图**（实线为经过 CDF 的路径，颜色表示时效档；虚线为不经过 CDF 的路径）：
+
+```mermaid
+flowchart LR
+  S1["S1 用户指令<br/>纠正 · 记住 · Save to Memory<br/>证据：user 原话"]
+  S2["S2 会话<br/>对话记录（带消息 id）<br/>决定 · 经验 · 坑 · taste · 事件"]
+  S3["S3 Run 五段报告<br/>做了什么 · 决定 · 纠正 · 经验 · 改进点"]
+  S4["S4 代码变更<br/>绑定仓库的 diff / commit"]
+  S5["S5 系统度量<br/>skill 适应度 · eval"]
+  S6["S6 外部信号<br/>网页 · RSS · 外部文档（external）"]
+
+  CDF["CDF（唯一写入者）<br/>Inbox 30 天 → 卡 0 规则/配额/污染<br/>→ 卡 1 复核分类与 scope → 卡 2 路由与目的地规则<br/>→ 卡 3 比对：新增 / 取代 / 强化 / 拒绝<br/>→ writer：写入日志 + 恢复<br/>第一准则：语义完整，不截断"]
+
+  CTX["STEERING · USER · TOOLS<br/>偏好与 taste · 用户画像 · 环境<br/>每轮注入"]
+  EVO["EVOLUTION<br/>agent 自身纠错和能力<br/>每轮注入"]
+  MEM["MEMORY<br/>跨项目通用的认知（七类）<br/>每轮注入"]
+  TL["TIMELINE<br/>关键事件，供 Retro<br/>注入最近 10 条 + 当月摘要"]
+  DDD["DDD（每个项目）<br/>PROJECT · PRODUCT · TECH · IMPROVEMENT<br/>按项目注入 section 指针"]
+  KN["Knowledge（只放 Reference）<br/>Learned · Reports · Designs · Library · Notes<br/>只走 recall"]
+  DA["DailyActivity（工作记忆）<br/>每个 session 一行 + 日汇总<br/>注入一周，约 2.7K tokens"]
+
+  S1 -->|"immediate · 下一轮"| CDF
+  S2 -->|"session · 下一个 session"| CDF
+  S3 -->|"run · 下一个 run 之前"| CDF
+  S4 -->|"scheduled · 按天"| CDF
+  S5 -->|"scheduled · 按天"| CDF
+  S6 -->|"scheduled · 按天"| CDF
+
+  CDF -->|UserCross| CTX
+  CDF -->|Agent| EVO
+  CDF -->|WorldCrossGlobal| MEM
+  CDF -->|event| TL
+  CDF -->|"ProjectSingle / UserSingle / WorldSingle / gap"| DDD
+  CDF -->|"Reference（含被污染内容；无 DDD 的 run → Learned/repo）"| KN
+
+  S2 -.->|"session 结束时并列生成，不经过 CDF"| DA
+
+  linkStyle 0 stroke:#e5484d,stroke-width:2px
+  linkStyle 1 stroke:#f5a524,stroke-width:2px
+  linkStyle 2 stroke:#30a46c,stroke-width:2px
+  linkStyle 3,4,5 stroke:#8e7cc3,stroke-width:2px
+```
+
 
 | 目的地 | 放什么 | 卡 1 形态 | 主要来源 | 要求多快生效 | 读取方式 |
 |---|---|---|---|---|---|
