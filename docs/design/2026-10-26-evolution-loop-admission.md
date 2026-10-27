@@ -3,7 +3,7 @@ title: 进化回路的准入 — 宁缺毋滥：没有具体可执行内容的�
 created: 2026-10-26
 updated: 2026-10-26
 project: SwarmAI
-status: r4 草案（§9，待用户确认）— r3 已定稿（§4 选 A：删除自动提案链路）；r1–r3 见 §8
+status: final r4 — 用户 2026-10-27 确认 §9 两处修订（GC 计数由纠错强化记录算出；治理评测加 behavior 用例、基线取两次）；r3 定稿 §4 选 A；r1–r4 见 §8
 ---
 
 # 进化回路的准入（宁缺毋滥）
@@ -117,6 +117,10 @@ SOUL / AGENT / STEERING / SELF / TOOLS：3 处矛盾、6 处重复、5 处为旧
   "拒绝 → 不再出现"。
 - 修 `s_self-evolution` 的 GC 表模板，让列顺序和 miner、和 EVOLUTION.md 现有表一致
   （ID | Proposed Rule | Evidence | Count | Since | Checked）。
+- **计数由纠错单元的强化记录算出（r4，§9.1）**：Evidence 列是纠错单元锚点的列表；Count 由 miner 读取时
+  算出，等于这些锚点在 CDF `claim_support` 里 `polarity=support`、根类型为 `user_message` 的不同证据根
+  的数量（同一个根只算一次），渲染成 `N/3`；miner 只读打开 `ingestion.db`。agent 只填锚点和 Checked，
+  不填计数。CDF 阶段 B 上线前、或者 Evidence 里没有锚点的旧行，保持手工 `N/M`，不迁移。
 
 ### 3.3 删掉 skill 优化器的提案输出（D3）
 
@@ -152,10 +156,14 @@ SOUL / AGENT / STEERING / SELF / TOOLS：3 处矛盾、6 处重复、5 处为旧
 - `s_context-hygiene` 增加 **audit** 模式（替代删掉的 §7）：读 SOUL / AGENT / STEERING / SELF / TOOLS，
   按"矛盾 / 重复 / 为旧模型或旧架构写的"三类出候选，每条带出处；删改提给用户批准。这是今天手工做的
   那一遍，写成步骤，不加打分脚本。
-- 治理改动的评估：系统文件改动 rebuild 并重启之后，由部署触发跑 `affected_by` 指向被改文件的私有
-  golden case，**跑两次**，和改动前的 EvalHistory 对比，列出从过变成不过的 case（不只看总分）。
-  这需要 `eval_runner` 支持按 `affected_by` 选 case 和重复次数，并输出翻转列表。eval 仍只在
-  CI / 部署 / 定时触发，不在编码过程中手动跑（AGENT § Eval）。
+- 治理改动的评估（r4，§9.2）：系统文件改动 rebuild 并重启之后，由部署触发跑 `affected_by` 指向被改文件的
+  私有 golden case，加上全部 `eval_method: behavior` 的用例，**跑两次**。基线是改动前最近两次评测里
+  每个用例的状态；翻转分三档：基线两次都过、改动后两次都失败 = 确定退化；改动后一次失败 = 可能退化；
+  基线两次不一致 = 基线不稳定，不用来判断这次改动。报告以确定退化为准（不只看总分）。改动前没有两次
+  历史时，部署前先用 `--repeat 2` 补跑基线。其余 LLM 判定类用例不在这一轮跑，作为残余风险写进报告。
+  这需要 `eval_runner` 的 `--affected-by` 之外加 `--with-behavior`，`compare_repeats` 改为两次基线、
+  四组输出（`definite_regression` / `possible_regression` / `baseline_unstable` / `fail_to_pass`）。
+  eval 仍只在 CI / 部署 / 定时触发，不在编码过程中手动跑（AGENT § Eval）。
 - 今天的 `ba9868915` / `b9d5cae5d` 是第一个用这套方法评估的改动。
 
 ### 3.7 不做的事
@@ -204,6 +212,8 @@ Threads 的 Evolution Pipeline 条）。
 
 1. miner：计数 ≥3 且 Checked 为空 → 不出提案；计数 ≥3 且 Checked 非空 → 出提案并带 title；
    PROMOTED / REJECTED 行 → 不出；`CLASS X:` 段 → 不出；按新模板写的行能被解析。
+   计数（r4）：两个锚点、`claim_support` 里共 3 个不同的 `user_message` 根 → `3/3`；同一个根支持两个锚点
+   → 只算一次；非 `user_message` 根 → 不计入；`ingestion.db` 不存在 → 退回手工 `N/M`，不报错。
 2. accept / reject 写回 GC 行状态，下一轮 miner 不再挖出同一 gc_id。
 3. session 收尾 hook 不调分类、不写任何治理提案或状态文件。
 4. 优化器高置信度路径不写 `.evolution_proposals.json`。
@@ -212,6 +222,9 @@ Threads 的 Evolution Pipeline 条）。
 6. 一次性清理：四个备份存在且可读之后才删；skill 行和阶梯行删除，GC 行保留。
 7. overlay：GC 行不置灰；Need-You 卡标题来自 title。
 8. eval_runner：按 `affected_by` 选 case、重复 N 次、输出翻转列表（用 fixture，不对部署系统跑）。
+   r4：基线两次过、改动后两次失败 → `definite_regression`；改动后一次失败 → `possible_regression`，
+   不进 `definite_regression`；基线一过一不过 → `baseline_unstable`，不进任何退化组；
+   `--affected-by AGENT --with-behavior` 选出 affected_by 命中 ∪ 全部 behavior 用例。
 
 每个修复写的时候做变异检查（`scripts.mutation_check`）。会断的现有测试（审查已列出）：
 `test_escalation_ladder.py`、`test_governance_router.py:322-397`、`test_correction_tracker.py`、
@@ -239,7 +252,7 @@ Threads 的 Evolution Pipeline 条）。
 
 ## 8. 修订记录
 
-- **r4 草案（2026-10-27）**：§9 两处修订，待用户确认：GC 计数由纠错单元的强化记录算出；治理改动的评测范围加上全部 behavior 用例，基线取最近两次并把翻转分三档。
+- **r4（2026-10-27，用户确认）**：§9 两处修订，已并入 §3.2、§3.6、§6：GC 计数由纠错单元的强化记录算出；治理改动的评测范围加上全部 behavior 用例，基线取最近两次并把翻转分三档。
 - **实现备注（2026-10-26，代码审查后）**：correctness 与 state-machine 两位专家指出，proposal 文件作为 GC 表的
   第二份副本会产生竞态（已裁决的提案被挖掘器重新追加）、过期（GC 行被改后提案仍在）和旧行残留。按原因一次修：
   删掉这份副本，GC 表成为唯一存储，读取方每次从 EVOLUTION.md 推导，裁决在原行写入；`governance_router` 和
@@ -260,9 +273,9 @@ Threads 的 Evolution Pipeline 条）。
     会断的测试和要同步的文档。
 - **r1**：初稿。
 
-## 9. r4 修订草案（2026-10-27，和 HLD 对齐，待用户确认）
+## 9. r4 修订说明（2026-10-27，和 HLD 对齐，用户已确认）
 
-《Agent 认知系统高层设计》（`Knowledge/Notes/2026-10-27-agent-cognitive-compounding-hld-v2.md` 第 18、20 节）把"一类被纠正过的错误是否停止复发"定为北极星指标，并对本设计提出两处修订。确认后按下面的文字替换 §3.2 和 §3.6 的对应条目，§6 的测试集同步增补。
+《Agent 认知系统高层设计》（`Knowledge/Notes/2026-10-27-agent-cognitive-compounding-hld-v2.md` 第 18、20 节）把"一类被纠正过的错误是否停止复发"定为北极星指标，并对本设计提出两处修订。两处修订已并入 §3.2、§3.6 和 §6，本节保留问题和理由。
 
 ### 9.1 修订一：GC 行的计数由纠错单元的强化记录算出（改 §3.2）
 
