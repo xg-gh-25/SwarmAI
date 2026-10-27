@@ -3,7 +3,8 @@
  * docs/design/2026-10-26-turn-cards-unified.md §1 D): AskUserQuestion, the permission
  * request and the escalation.
  *
- * - `ActFrame`: border, radius, a primary left bar; a header line (icon, title that
+ * - `ActFrame`: the chat column's width (no fixed width: it follows the window),
+ *   border, radius, a primary left bar; a header line (icon, title that
  *   names Swarm, grey meta on the right: a question's tag, a timeout, a severity),
  *   the body, and a footer whose buttons sit on the right.
  * - `ActOption`: the one selectable option box (recommended ones say so).
@@ -19,7 +20,7 @@ export function ActFrame({ icon, title, meta, children, footer, testId }: {
 }) {
   return (
     <section data-testid={testId} data-act-frame=""
-      className="my-2 max-w-[640px] overflow-hidden rounded-[10px] border border-[var(--color-border)] border-l-[3px] border-l-primary bg-[var(--color-card)]">
+      className="my-2 w-full min-w-0 overflow-hidden rounded-[10px] border border-[var(--color-border)] border-l-[3px] border-l-primary bg-[var(--color-card)]">
       <header data-testid="act-title" className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)] text-[12.5px] text-[var(--color-text-secondary)]">
         <span aria-hidden="true" className="material-symbols-outlined icon-sm text-[var(--color-text-muted)]">{icon}</span>
         <span className="font-semibold text-[var(--color-text)]">{title}</span>
