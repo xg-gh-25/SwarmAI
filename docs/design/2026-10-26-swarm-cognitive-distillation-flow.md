@@ -3,7 +3,7 @@ title: Swarm Cognitive Distillation Flow — SwarmAI 认知系统的核心引擎
 created: 2026-10-26
 updated: 2026-10-27
 project: SwarmAI
-status: r16.2 — 设计（source 与提取重写，吸收两份独立评审，Gawan 已确认），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
+status: r16.3 — 设计（source 与提取重写；吸收多轮独立评审，待用户审），已吸收 r14.2 两份独立评审；执行计划三阶段；r15.2 补入阶段 A 的实测发现（修订记录见 §18）
 ---
 
 # Swarm Cognitive Distillation Flow
@@ -39,6 +39,8 @@ r13 改成**提取和 ingestion 解耦**：
 - **dashboard** 放在 Need You overlay 里：这条流程是认知系统的核心，不再另开一个页面（§10）。
 
 r13 起取代 r12。r14 和 r15 补上了"唯一写入者"的保证机制和恢复协议。r12 里大部分复杂机制，起因都是"多个写入者各自当场写"：准备→提交、租约、多写入者之间的版本冲突、多 worker 的分布式配额计数、受控写入的三层强制。解耦之后这些都不需要了。配额只保留 DB 里的持久计量（§12）。
+**已经沉淀的内容不搬**：§2 审计里 MEMORY 的 57% 是项目专属内容，按 §13 "已写内容不改"，系统不会把它们移进 DDD。它们只能靠两种方式改善：阶段 C 的注入预算（按单元选取，不注入的仍可 recall），和用户自己编辑。CDF 只保证从切换起新写入的内容去向正确。
+
 r12 里经过评审、而且仍然成立的结论都保留下来：答题卡的维度、路由表、卡 3 的纯函数、来源与污染、已沉淀内容不动、注入预算。
 
 ## 1. 怎么评估的
@@ -211,7 +213,9 @@ CDF 的所有表放在一个独立的 SQLite 文件里：`<app data>/ingestion.d
 ### 4.1 入队和幂等
 
 - 入队是一条短事务：`INSERT … ON CONFLICT(idem_key) DO NOTHING RETURNING id`。冲突时返回已有那一行的 id 和状态；如果已有那一行的内容哈希不同，就另外记一条 `id_collision`，并在 Need You 里提示。
-- 每个 source 必须在契约里声明 `idem_key` 的算法，例如 `(source, event_id, schema 版本, 语义槽位)`。不能用数组下标做 key：一旦拆分数量变了，下标就会变。backflow 用 `message_id`，REFLECT 用 `(run_id, lesson 的哈希)`。
+- **两种键，分开写**：
+  - **入队幂等键 `idem_key`**：防止同一个 source 重复提交同一条。可以包含 source，例如 `(S2, session_id, extractor 版本, 单元的 claim 哈希)`、`(S3, run_id, 段号, claim 哈希)`、`(S1, user 事件 id, 序号)`。不能用数组下标：拆分数量一变，下标就变。
+  - **跨 source 去重键**：`(规范证据根集合, unit kind, claim 哈希)`，不包含 source。claim 哈希只对语义字段做空白归一化，所以**只有文本完全相同时**才能由键合并；同一件事被两个 source 用不同措辞提取出来时，靠卡 3 判 same / contained（§5.8）。holdout 里单独统计跨 source 的重复（§14）。
 - 入队的 busy timeout 是 500 ms，失败时最多重试 2 次；还是失败，就给 source 返回 `ENQUEUE_BUSY`，由 source 决定下次再提取。这样入队最多拖慢 source 约 1.5 秒，chat 路径永远不会等它（§6.4）。
 
 ### 4.2 状态
@@ -348,7 +352,7 @@ flowchart TB
 | **S5 系统度量** | `evolution_optimizer`、eval governance | **跨 run 的聚合指标**。单个 run 的统计归 S3 | `scheduled` | agent 能力相关的纠错和经验、改进点 |
 | **S6 外部信号** | `signal_ddd_bridge`、Library inbox、`s_learn-content` / `s_library` 抓取的外部内容 | 证据根是 `external` 的内容。决定它归 S6 的是证据根本身，不看它是从哪个会话里产生的 | `scheduled` | 只产出 Reference |
 
-**去重键**改为"规范证据根 + 语义 claim 哈希"，不再包含 source。同一个证据根经由两个 source 进来，只会产生一个单元（§4.1）。
+**去重键**改为"规范证据根 + 语义 claim 哈希"，不再包含 source（§4.1）。claim 哈希依赖 LLM 生成的文本，所以只有文本完全相同时才由键合并；其余情况靠卡 3，跨 source 的重复在 holdout 里单独统计。
 
 **停用**：
 - DailyActivity 不再作为 source。按行切片的提取方式删掉。
@@ -416,8 +420,9 @@ Flow 视图除了写入率，还要显示每个 source 的**提取覆盖率**：
 ### 5.5 各 source 的提取规范
 
 **S1 用户指令**：原话转成单元，不做推断。入口先调用 `record_session_input(..., trust="user")`，再把这个事件作为 `evidence`。
-- `s_persist` / `ingest submit` 必须传 `--evidence <event_id>`。服务端会校验这个事件属于当前会话、trust 是 `user`。校验不通过就拒绝，不再兜底成 `inferred`。
-- Save to Memory 按钮先记一条 `user` 事件（"用户要求保存本会话"），然后对整个会话运行 S2 的提取器。由此产出的单元证据同时包含这条事件和被引用的消息，信任级别按 §9 计算。
+- **S1 是注入通道，要收紧**（§9.2）：`s_persist` / `ingest submit` 的 `--evidence` **只接受触发当前回合的那条 user 消息**，服务端按本会话最新的 `user` 事件 id 校验，旧消息一律拒绝。每条 user 消息最多产出 `S1_MAX_UNITS_PER_MESSAGE`（契约常量，默认 3）个 S1 单元。没有用户消息的回合（cron、auto-nudge、注入的回合）不能用 S1。
+- **写入后回显**：S1 单元写进每轮注入的文件后，在当前 tab 回显写入的完整文本，并提供"撤回"按钮（§13 墓碑）。
+- Save to Memory 按钮记一条 `user` 事件（"用户要求保存本会话"），然后对整个会话运行 **S2** 的提取器。产出按 S2 的污染规则处理（§9），**不因为是按钮触发就获得 user 信任**；被污染的规则走 §9.1 的待背书路径。
 - 像"记住周五看牙医"这种只有 what 的单元，作为 Cognition 时会因为缺 why 而拒绝（如果用户这句话本身就是一个事件，则按 Event 提交）。不允许为了凑字段而编造 why。
 
 **S2 会话**：按页读取**完整**的对话记录，不设"最近 500 条"或"最近 2.5 万字符"之类的上限。每个单元都要引用它所依据的消息 id。重点提取：
@@ -447,9 +452,10 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
 - Gap 不参与强化。之后被某个 run 解决时，用一条 `supersedes`（GapUnit → resolution）标为已解决，原文不改。
 - PROJECT 的 Current Focus 和 Blocked By 是实时状态，S3 不写，由 Projects 页面渲染。
 
-**S4 代码变更**：只处理 S3 没有认领的 commit。diff 和 commit message 都是文本，按 §9 算作 `external` 证据根，所以 S4 不产出规则类 Cognition，只产出：
-- 架构形状和约定的 Reference，写进 `Knowledge/`（公共 DDD），frontmatter 带 `project_hint`；
-- "大版本合并"这类 Event。
+**S4 代码变更**：只处理 S3 没有认领的 commit。diff 和 commit message 都是 `external` 证据根，和 S3 读代码的处境一样，所以按同一条信任下限处理（§9）：
+- 架构形状、约定、陷阱可以作为 Cognition，带 `taint: external` 写进对应项目的 DDD；没有专属 DDD 时写进公共 DDD；
+- "大版本合并"这类 Event 写进 TIMELINE 的不注入区（被污染）；
+- 永远到不了每轮注入的文件，除非经过 §9.1 的用户背书升级。
 
 用户亲手写、亲手提交的 commit message，如果能证明作者就是用户本人（已认证的提交身份），可以作为 `user` 证据。这部分留到第二版再做，首版不做。
 
@@ -460,7 +466,7 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
 ### 5.6 TIMELINE：长期的关键事件
 
 - **文件**：`.context/TIMELINE.md`，属于受管文件。按月分节（`## 2026-10`），每个事件是一个带 `cand:` 标记的块。`parse_units()` 要支持这种块格式。
-- **EventUnit 的稳定身份**：`event_key = hash(规范证据根 + when 的日期 + 规范化的 title)`。同一事件经由不同 source 进入时，按 `event_key` 合并成一个，各自的证据合并到 `claim_support` 里（§5.8）。
+- **EventUnit 的稳定身份**：`event_key = hash(规范证据根 + when 的日期 + 规范化的 title)`。`event_key` 同样依赖生成的标题：文本完全相同时由键合并，其余由卡 3 对 TIMELINE 里同一日期附近的事件判 same。合并时各自的证据都登记到 `claim_support`（§5.8）。
 - **重要性判断**（卡 1 的 Event 题）：满足以下任意一条才收录：
   - 改变了方向（产品方向或技术路线）；
   - 造成了损失或返工：用户纠正了已交付的结果、出了事故、run 失败后重来；
@@ -529,7 +535,7 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
 
 | 档 | lane | 目标 | 生效保证 | 到期没处理完时 |
 |---|---|---|---|---|
-| 下一轮 | `immediate` | 秒级 | 拼装下一轮 prompt 之前，有界地等 `immediate` 处理完，最多等 2 秒（只等本会话的候选） | 不阻塞这一轮，照常拼装 prompt；这条候选在后续轮次生效，Flow 里标记"延迟生效" |
+| 下一轮 | `immediate` | 秒级 | 入队即唤醒，不阻塞拼装 prompt；纠正本来就在当前会话的上下文里可见 | 在处理完之后的第一个回合生效；Flow 里显示处理耗时 |
 | 下一个 session | `session` | session 结束后 30 分钟内 | 后台处理 | 下一个 session 照常开始；Flow 里显示积压，积压超过 24 小时进 Need You |
 | 下一个 run | `run`（**专用通道**） | run 落地后 10 分钟内 | 见下面的 run 收尾协议 | 新 run 用旧 DDD 启动，并标"DDD 未更新到上一个 run"（fail-open） |
 | 按天 | `scheduled` | 12 小时内 | 后台处理 | 积压超过 24 小时进 Need You |
@@ -543,7 +549,7 @@ agent 在 DELIVER 阶段按下面五段写报告，每条都引用 run 产物的
   - 还有没处理完的 → **不等待**，用当前的 DDD 启动，在 run 记录里标 `ddd_stale_since=<上一个 run id>`。REPORT 里写明这一点。超过 1 小时仍未处理完的进 Need You。
 - 任何情况下，新 run 的命令都**不等待** worker，不会形成环。
 
-**卡 0 到卡 3 处理 immediate 时**仍然调用 LLM。2 秒内处理不完是常态，所以"下一轮生效"的真实含义是：在下一个**能等到它**的轮次生效。对于用户纠正，CLI 会显示"已收到，正在处理"；纠正生效之前，当前会话仍然能在对话上下文里看到这次纠正。
+**卡 0 到卡 3 处理 immediate 时**仍然调用 LLM，通常要几秒到几十秒。"下一轮生效"的真实含义是：在处理完之后的第一个回合生效。对于用户纠正，CLI 会显示"已收到，正在处理"；纠正生效之前，当前会话仍然能在对话上下文里看到这次纠正。
 
 ### 5.10 从目的地反推：什么进哪里
 
@@ -565,7 +571,7 @@ flowchart LR
   MEM["MEMORY<br/>跨项目通用的认知<br/>每轮注入"]
   TL["TIMELINE<br/>关键事件<br/>注入近期 + 月摘要"]
   DDD["项目 DDD<br/>PROJECT · PRODUCT · TECH · IMPROVEMENT<br/>按项目注入 section 指针"]
-  KN["Knowledge = 公共 DDD<br/>Reference 文档 + 无专属 DDD 的认知与改进点<br/>只走 recall"]
+  KN["Knowledge = 公共 DDD<br/>Learned · Library · Notes：Reference、无专属 DDD 的认知与改进点、待背书的规则<br/>只走 recall"]
   DA["DailyActivity（working）<br/>注入一周"]
 
   S1 -->|"immediate · 下一轮"| CDF
@@ -580,7 +586,7 @@ flowchart LR
   CDF -->|"Cognition · scope=world 且跨项目"| MEM
   CDF -->|Event| TL
   CDF -->|"Cognition / Gap · scope=project 且有 DDD"| DDD
-  CDF -->|"Reference；Cognition / Gap 但没有专属 DDD"| KN
+  CDF -->|"Reference；无专属 DDD 的 Cognition / Gap；被污染、待背书的规则"| KN
 
   S2 -.->|"session 结束时并列生成，不经过 CDF"| DA
 
@@ -599,9 +605,14 @@ flowchart LR
 | `MEMORY` | 跨项目都成立的认知 | Cognition / world，`global_relevance=true` | S2、S3、S1 | 每轮注入（阶段 C 按预算选取） |
 | `TIMELINE` | 关键事件 | Event | S1、S2、S3 第 1 段、S4 | 注入近期事件和月摘要（§5.6） |
 | 项目 DDD | 只属于这个项目的决定、取舍、架构、约定、陷阱、经验、改进点 | Cognition / project:X（DDD 存在）、Gap | S3（主要）、S2 | 按项目注入 section 指针（不变，§12） |
-| `Knowledge/`（公共 DDD） | Reference 文档；**没有专属 DDD 的项目认知和改进点**；所有被污染的内容 | Reference；Cognition / project:X（DDD 不存在）；Gap（DDD 不存在） | S2、S3、S4、S6 | 只走 recall，被污染的内容放在不可信数据边界里 |
+| `Knowledge/`（公共 DDD） | Reference 文档；**没有专属 DDD 的项目认知和改进点**；属于某个领域的认知；被污染、等待用户背书的规则（§9.1） | Reference；Cognition / project:X（DDD 不存在）或 world 非全局；Gap（DDD 不存在） | S2、S3、S4、S6 | 只走 recall，被污染的内容放在不可信数据边界里 |
 
-**没有专属 DDD 时**（只有仓库，没有对应的项目，或者认知属于某个领域而不属于任何项目）：
+**没有项目归属的认知，分三种情况**：
+1. **项目确定，但没有 DDD** → 公共 DDD `Knowledge/Learned/<repo>.md`；
+2. **属于某个领域，不属于任何项目**（包括 world scope 但不是全局的内容，不再 `REJECT not_global`）→ `Knowledge/Learned/<领域>.md`；
+3. **项目有歧义**（候选列表里有多个、分不清）→ `DEFER ambiguous_project`，不猜。
+
+前两种的写法：
 - 认知**保持原来的类型、层级和关系**，作为 Cognition 单元写进 `Knowledge/Learned/<repo 或领域>.md`。格式和 DDD 的条目相同（`- [type] **title** …` 加 meta 行，带 `project_hint`），由 `parse_units()` 解析，照常参与卡 3 比对和强化。它不是 Reference，不会降级。
 - Gap 写进同一个文件的 `## Open Gaps` 段。
 - 不自动建 DDD，也不在 Need You 里请用户建 DDD。用户以后自己建了 DDD，已写的内容不搬（§13）；新单元直接写进新 DDD，卡 3 的检索范围同时包含这个 DDD 和 `project_hint` 相同的 Knowledge 单元，所以已有认知仍然能被强化或取代。
@@ -623,14 +634,17 @@ source 不把整段会话原样塞进 payload。payload 有长度上限，但必
 
 | 类别 | 文件夹 | 谁写 | 是否经过 CDF |
 |---|---|---|---|
-| 认知参考与公共 DDD（受管） | `Learned`（另含没有专属 DDD 的认知文件 `Learned/<repo 或领域>.md`，§5.10）、`Reports`、`Designs`、`Library`（含外部链接目录 `Library/Links/`）、`Notes`、`Inbox` | 只有 CDF 的 writer；用户自己通过 `governed_edit` 编辑 | 是 |
+| 认知参考与公共 DDD（受管） | `Learned`（另含公共 DDD 文件 `Learned/<repo 或领域>.md`，§5.10）、`Library`（含外部链接目录 `Library/Links/`）、`Notes`、`Inbox` | 只有 CDF 的 writer；用户自己通过 `governed_edit` 编辑 | 是 |
+| 交付物（不受管） | `Reports`、`Designs` | agent 按用户请求直接写 | 否。它们是用户要的交付物，不是认知；系统只给它们建索引。如果受管，每份报告要么过卡 0–3，要么被 maintenance 报成带外修改 |
 | 日志和产物（不受管） | `DailyActivity`、`DailyBriefs`、`Signals`、`JobResults`、`Handoffs`、`Meetings`、`Pollinate`、`Mockups`、`assets`、`Archives` | 各自的系统任务、skill 或用户 | 否。它们是日志或产物，不是认知；需要从中提炼认知时，由对应的 source 去提取 |
+
+**CDF 的 Reference 只写进 `Learned`、`Library`、`Notes` 三个文件夹**：`learned` → Learned；`spec`、`link` → Library（链接在 `Library/Links/`）；`analysis`、`design`、`note` → Notes。frontmatter 里保留 `reference_kind` 作区分。
 
 `Knowledge/` 原来就由 skill 写入的认知参考（`s_learn-content` 写 Learned，`s_library` 写 Library），改成调用 `ingest submit`：用户主动要求时走 S1；内容来自网页或外部文档时，信任是 `external`，按 S6 处理，只能写成 Reference。`is_governed()` 的受管列表和这张表保持一致（§3.2）。
 
 **第一层：目录索引 `.context/KNOWLEDGE.md`**（P9，每轮注入，约 2 KB）
 - 只写"什么问题去哪里找"和"每个文件夹放什么、谁写"，不列具体文档。它描述的是结构，不是认知，所以**CDF 不写它**；它仍然是用户可编辑文件（复制一次，之后不覆盖）。
-- 模板随 r16 更新，与上表一致：DailyActivity 改为"一周工作记忆，不再作为提取来源"；Reports、Designs 标为 CDF 写入；Learned、Library 写明经由 `ingest submit`。已有用户的 `KNOWLEDGE.md` 不自动覆盖，在 Need You 里提示一次"目录索引和新结构不一致"，附上差异，由用户决定是否用 `governed_edit` 更新。
+- 模板随 r16 更新，与上表一致：DailyActivity 改为"一周工作记忆，不再作为提取来源"；Reports、Designs 标为交付物、不由 CDF 写；Learned、Library 写明经由 `ingest submit`。已有用户的 `KNOWLEDGE.md` 不自动覆盖，在 Need You 里提示一次"目录索引和新结构不一致"，附上差异，由用户决定是否用 `governed_edit` 更新。
 
 **第二层：文档索引，从文件派生**
 - `knowledge_store.sync_knowledge_index()` 扫描整个 `Knowledge/`，按标题切块，增量写入 FTS5（recall 的 `library` 域）。**索引唯一的来源就是文件本身和它的 frontmatter**，不另外维护一份清单。writer 写完一个 Knowledge 文件后，调用新增的 `sync_knowledge_file(path)` 对这一个文件做事务性的增量同步，不等定时任务；整树扫描只用于定期对账。召回命中某个 section 时返回完整 section，附上级标题和文档 `summary`（第一准则）。
@@ -730,7 +744,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 1. **整理**（批内处理，不调 LLM）：根据信封和项目快照，用确定性规则算出 `project_candidates`，规则见本节末尾。然后解析 payload，只在信封和非语义字段上去掉会话 id、scratch 路径、PID、哈希这类噪音，语义字段原样保留（§5 第一准则）；批内内容完全相同的候选标为 `merged`。输出是若干 **claim-group**：一个结论，加上与它绑定的 why、how、依据和适用条件。拆分只在 claim-group 之间进行，同一个 group 内部的内容永远不拆开；没把握该怎么拆时，整条候选作为一个 group 交给卡 1。r16 起每个 source 都按 §5.3 的认知单元提取，一个认知单元就是一个 group。
 2. **卡 0：规则**（不调 LLM）：检查污染、注入扫描、噪音、长度、内容指纹完全相同、会话已删除、配额。
-3. **卡 1：内容本身**：调 1 次 LLM，一批候选可以打包成一次调用。输出是 7 种形状之一，再加上 `content_form ∈ {rule, reference}` 和一个可选的 `reroute_to`（只能取契约允许的形状），并回答 rule 或 reference 对应的那组质量题。
+3. **卡 1：复核**：调 1 次 LLM，一批候选可以打包成一次调用。输入是 source 提交的 v2 单元（§5.3），卡 1 复核它的类型、scope 和质量。输出 schema 是：**v2 单元类型 + 复核结论（成立 / 不成立，以及该类型对应的质量题答案）+ 可选的 `reroute_to`**（只能取契约允许的改投）。
 4. **污染约束**（确定性，在卡 2 之后、写入之前）：按 §9 的"目的地信任下限"表执行。目的地是每轮注入的文件时，被污染的 Cognition 记 `REJECT tainted_rule`；目的地是项目 DDD 或 Knowledge 时，允许写入，但要标 `taint: external`。这条约束由代码执行，不依赖 prompt。
 5. **卡 2：路由表**（确定性）：每种形状只对应一个去向。写入前会解析目标段是否存在。
 6. **目的地规则**（§7.2）：规则不通过时 `REJECT`，原因码标明是哪条规则。
@@ -757,13 +771,13 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | 配额（§12） | `REJECT quota` |
 | `candidate_id` 已存在，但内容哈希、来源信封或项目快照有任何一项不同 | `REJECT id_collision`，同时告警，审计里记下两边的哈希。完全一致时直接返回已有的状态 |
 
-#### 卡 1：内容本身（1 次 LLM）
+#### 卡 1：复核（1 次 LLM）
 
-**输出是一个判别联合类型**，只有下面 7 种合法形状。判官的输出不属于其中任何一种，就判 `REJECT untyped`。
+**r16.3 起，卡 1 的输出 schema 由 `contracts_v2.py` 生成**：对 Cognition 复核下面 7 种形状（scope × 形状），对 Event、Gap、Reference 分别回答 §5.3 列出的各自的题目。判官的输出不属于契约里的任何一种，就判 `REJECT untyped`。下表是 Cognition 的形状，和 scope 一一对应：
 
 | 形状 | 字段 |
 |---|---|
-| `Reference` | `reference_kind` ∈ {learned, analysis, spec}；可选 `project`（取自项目快照） |
+| `Reference`（即 `ReferenceUnit` 的复核） | `reference_kind` ∈ {learned, analysis, design, spec, note, link}；可选 `project`（取自项目快照） |
 | `UserCross` | `type`；`user_kind` ∈ {preference, profile, environment} |
 | `UserSingle` | `type`；`project`；`topic` ∈ {decision, product, architecture, lesson}（例如"在 X 仓库里用中文写 commit"属于 architecture） |
 | `Agent` | `type`；`agent_kind` ∈ {correction, competence} |
@@ -773,7 +787,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 - `type` 只能取 `VALID_TYPES` 里的值。`project` 只能从项目快照里选；有多个候选项目分不清时，`DEFER ambiguous_project`。
 - 不存在 `ProjectCross`：项目的内容不进 MEMORY。不存在 `status` 这个 topic：进度和状态是 DailyActivity 的事。
-- `WorldCross` 但 `global_relevance=false`：`REJECT not_global`。这种内容应该在 Library 里作为参考，或者等它和某个项目有关时再写。
+- `WorldCross` 但 `global_relevance=false`：不再拒绝，改去公共 DDD `Knowledge/Learned/<领域>.md`（§5.10）。
 - rule 类形状都要附带两样东西：`applicability`（一句话写清适用条件）和 `claims`（1 到 5 条原子主张）。
 
 **质量题**：按 reference 或 rule 分支，任何一题答"否"就 `REJECT`。
@@ -792,15 +806,19 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 
 #### 卡 2：路由表（确定性，不调 LLM）
 
-一种形状只对应一行，所以不存在一个候选同时命中两行的情况。
+**r16.3 起由 `contracts_v2.route_for_v2` 生成**，按"单元类型 × scope × 是否有 DDD × 是否被污染"确定唯一去向，全枚举测试证明每个合法组合恰好一个去向。下表是它的展开：
 
 | 形状 | 去向：文件 § 段 |
 |---|---|
-| `Reference` | `learned` → `Knowledge/Learned/`；`analysis` → `Knowledge/Notes/`；`spec` → `Knowledge/Library/` |
+| `Reference` | `learned` → `Knowledge/Learned/`；`spec` → `Knowledge/Library/`；`link` → `Knowledge/Library/Links/`；`analysis` / `design` / `note` → `Knowledge/Notes/` |
 | `UserCross` | `preference` → `STEERING.md`；`profile` → `USER.md`；`environment` → `TOOLS.md`。段取文件里已有的标题，取不到就用契约给的默认段 |
 | `Agent` | `EVOLUTION.md`：`correction` → `## Corrections Captured`；`competence` → `## Competence Learned` |
 | `UserSingle` / `ProjectSingle` / `WorldSingle` | 该项目的 DDD，按下面的 topic × type 矩阵定位 |
 | `WorldCrossGlobal` | `MEMORY.md` § `MEMORY_TYPE_TO_SECTION[type]` |
+| Event | `.context/TIMELINE.md`（被污染的进不注入区） |
+| Gap | 项目有 DDD → `IMPROVEMENT.md` § What to Watch For；明确的后续工作 → `PROJECT.md` § Open Items；没有 DDD → 公共 DDD § Open Gaps |
+| 没有专属 DDD 的 Cognition | `Knowledge/Learned/<repo 或领域>.md`，section 按下面的 DDD 段矩阵 |
+| 被污染、目的地是每轮注入文件的 Cognition | 公共 DDD，状态"待背书"（§9.1） |
 
 **DDD 段矩阵**：段名取自 `backend/templates/ddd/*.md`。
 
@@ -878,7 +896,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 - **D3 不拆散上下文**：条目必须能和它所在段的其他条目放在一起读懂。只有放进那一段才成立的补充，用"补充"动作挂到相关条目上，不新加一条孤立的条目。
 - **D4 稳定性**：带具体行号、文件大小、测试数量这类会变数字的内容，必须写成"截至某版本"，否则 `REJECT ddd_volatile`。
 - **D5 格式**：`- [type] **标题** 正文` 加元数据行，和 `parse_entries` 的解析格式一致。
-- **D6 只写一个项目**：内容同时关系到两个项目时，按 §7 的确定性规则选出主项目，只写进主项目；另一个项目记在审计的 `secondary_projects` 里（首版不做跨项目边，§7.3）。
+- **D6 跨项目**：内容同时关系到多个项目时，在每个相关项目的 DDD 里各写一条完整的单元，它们共用同一个证据根（§5.10）。
 - **读取侧不改**：DDD 注入保持现在的 section 指针方式。教训 2026-10-26：只注入排名最高的几条条目，在盲评里 8 对中输了 7 对，因为丢掉了整段的上下文。
 
 **MEMORY**
@@ -924,7 +942,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
     - 链损坏（端点解析不出来）时，按"无生效头"处理，同时在 Need You 里出一条提示。
 - **读取侧**：命中一个被取代的单元时，把分数和命中理由转给 `active_head`，同一个链头被命中多次时取最高分。被取代的单元本身不进入输出。所以查询只匹配旧措辞时，模型看到的是当前有效的那一条，不会同时看到新旧两种说法。
 - **Library 文件**：frontmatter 里写 `ontology_types:`，可以为空。
-- **跨项目**：首版不做跨项目边。一个单元只写进一个项目，另一个相关项目只记在审计的 `secondary_projects` 字段里。
+- **跨项目**：不建跨项目边。相关的每个项目各写一条完整单元，共用证据根；`claim_support` 和卡 3 把它们识别为同源（§5.10）。
 
 ## 8. 写入者迁移：source 只入队，worker 是唯一的自主写入者
 
@@ -958,7 +976,7 @@ AST 夹具只用来做回归，保证上表列出的每一个写入点都能被�
 
 **带外修改检测**：maintenance lane 每天把各受控文件的单元集合和"基线 + writer 写过的版本"做比对，对不上的部分在审计里记一行 `writer=unknown` 并附上 diff，同时在 Need You 里出现一条记录（§10）。
 
-**切换方式**：所有 source 在阶段 B 一次切换（§14），旧的写入路径同时删掉，不做影子模式，也不做双写。上线后，按 source 分别统计观察指标；哪个 source 不达标，就单独修那个 source 的提取或规则。确实需要回滚时，回退的是整个阶段 B 的版本。
+**切换方式**：所有 source 在阶段 B 一次切换（§14），旧的写入路径同时删掉，不做影子模式，也不做双写。上线后，按 source 分别统计观察指标；哪个 source 不达标，就单独修那个 source 的提取或规则。一次切换的安全保证放在切换之前：全量预演（§14 阶段 B）。
 
 ## 9. 来源和污染（r16.1：服务端推导证据血统）
 
@@ -979,7 +997,7 @@ AST 夹具只用来做回归，保证上表列出的每一个写入点都能被�
 | 人工回答 run 里的决定卡 | `user` |
 | 白名单里的结构化测量字段：exit code、测试通过/失败计数、耗时、`/health` 字段、run 的 review verdict 枚举和 validation 的结构化结果。只取字段值，不含任何文本 | `measured` |
 | 受管语料里的单元（CDF 写入的单元，或用户通过 `governed_edit` 编辑过的内容）。引用时必须指向具体的单元锚点，不能只指向文件 | 该单元记录的 trust |
-| agent 生成的文档 | 父根里最差的一级 |
+| agent 生成的文档；**assistant 消息**（agent 在会话里说的话） | 父根里最差的一级 |
 | 其他一切：工具和命令的文本输出、网页、MCP 返回、读入的文件（**包括绑定到 DDD 的仓库**，因为路径属于用户不等于内容可信）、commit message 和 diff、review 结论的文字部分、他人发的频道消息 | `external` |
 
 - **`enqueue()` 自己解析证据**：source 只提交证据锚点（事件 id、`finding:`、`event:`、`doc:`、`commit:`、单元锚点）。`enqueue()` 在同一个事务里完成以下几步：
@@ -998,10 +1016,10 @@ AST 夹具只用来做回归，保证上表列出的每一个写入点都能被�
 | 目的地 | 允许被污染的单元吗 | 理由 |
 |---|---|---|
 | STEERING、USER、TOOLS、EVOLUTION、MEMORY、TIMELINE 的注入部分 | **不允许**。被污染的 Cognition 直接 `REJECT tainted_rule`；被污染的 Event 只写进 TIMELINE 的"不注入"区，只能通过 recall 找到 | 这些文件每轮注入，污染了就等于拿到了全局控制权 |
-| 项目 DDD | 允许 Cognition 和 Gap，但条目的 meta 要标 `taint: external`，并且读取时放在不可信数据边界里渲染 | S3 的技术决定和经验几乎都要读代码，代码是 `external`。如果一律拒绝，DDD 就写不进东西。DDD 只按项目注入 section 指针，影响范围限于这个项目，并且全程留审计 |
+| 项目 DDD | 允许 Cognition 和 Gap，条目的 meta 标 `taint: external` | S3、S4 的技术决定和经验几乎都要读代码，代码是 `external`。如果一律拒绝，DDD 就写不进东西。**如实说明防护等级**：DDD 只注入 section 指针，正文由 agent 用 Read 直接读原文件，这条路径上**没有**不可信数据边界；被污染的 DDD 条目只带 taint 标记，防护等级和普通仓库文件相同。影响范围限于这个项目，全程留审计 |
 | `Knowledge/`（公共 DDD） | 允许，规则同上 | 只能通过 recall 找到 |
 
-  **已确认**（Gawan 2026-10-27）：项目 DDD 和 Knowledge 接受被污染的条目，但必须标注 `taint: external`；每轮注入的文件不接受被污染的内容。
+  **已确认**（用户 2026-10-27）：项目 DDD 和 Knowledge 接受被污染的条目，但必须标注 `taint: external`；每轮注入的文件不接受被污染的内容。
 - **转述不能洗白**：agent 转述、REFLECT 总结、review 结论、design 文档，都通过 `parent_root_ids` 继承原始根的污染。
 - **召回**：被污染的内容一律放在不可信数据边界里渲染。
 - `MemoryGuard` 只是附加检测，不是安全边界。
@@ -1013,6 +1031,36 @@ AST 夹具只用来做回归，保证上表列出的每一个写入点都能被�
   - 同一个外部根分别经过 S2 和 S4。
 
   每一种都必须证明：被污染的内容到不了每轮注入的文件。
+
+### 9.1 用户背书升级：被污染的规则怎么进每轮注入的文件
+
+**问题**：S2、S3 必须提交读过的全部证据根，而对话页里几乎总有工具结果（`external`），所以 S2、S3 产出的规则几乎都是被污染的。按信任下限，它们永远进不了 STEERING / USER / TOOLS / EVOLUTION / MEMORY / TIMELINE 注入区。用户在会话里流露的品味和偏好因此写不进 STEERING。
+
+**升级路径**：
+1. **先停在公共 DDD**：S2、S3 产出的被污染 Cognition，如果目的地是每轮注入的文件，不拒绝，改写进公共 DDD `Knowledge/Learned/<领域或 repo>.md`，状态标为**待背书**（`awaiting_endorsement`，原目的地记在 meta 里），带 taint，只走 recall，放在不可信数据边界里。
+2. **卡 3 能找到它**：目的地是每轮注入文件时，卡 3 的检索语料把公共 DDD 里待背书的单元也纳入。
+3. **升级条件**（三条同时满足）：
+   - 有新单元被卡 3 判为和它 `same` 或 `contained`；
+   - 新单元带来一个独立的证据根，`root_kind=user_message`、`trust=user`；
+   - **隔离蕴含检查通过**：另起一次判官调用，**只给它两样东西**——那条用户消息的原文、待升级主张的 what / how / why——不给会话里任何其他内容，由它判断"这条用户消息是否表达了这个主张"（typed 布尔值加一句理由）。这条用户消息本身是可信内容，判官看不到任何可能被污染的上下文，所以注入文本没法影响这一判断。只说"继续""好的""按你说的做"这类不表达主张的消息，一律判为不蕴含。
+4. **怎么升级**：在原目的地写一个新的有效单元，内容取用户背书的那一版（措辞以用户原话为准），加一条 `supersedes` 指向公共 DDD 里那条待背书的单元。原单元不改。升级后的单元按这个用户根计算信任下限；原始的污染血统保留在审计里，Flow 视图可查。
+5. **只看证据，不看置信度**：升级的依据是证据根的类型和蕴含检查的结果，不看判官对主张本身的置信度。
+6. **待背书的单元不注入，也不参与强化**，直到升级或被取代。
+
+### 9.2 S1 是注入通道：收紧和回显
+
+S1 单元的内容由 agent 组装，服务端原来只校验 `--evidence` 是本会话的一条 user 事件。注入文本可以诱导 agent 引用任意一条 user 消息（例如"继续"），把任意规则写进 STEERING 或 MEMORY。收紧如下：
+- `--evidence` 只接受**触发当前回合的那条 user 消息**（本会话最新的 `user` 事件 id），其他一律拒绝；
+- 每条 user 消息最多产出 `S1_MAX_UNITS_PER_MESSAGE` 个 S1 单元（契约常量，默认 3）；
+- S1 单元同样过 §9.1 第 3 条的**隔离蕴含检查**：主张必须被这条用户消息表达过，否则拒绝（`not_entailed`）；
+- 写进每轮注入的文件后，在当前 tab 回显完整文本，并提供撤回（§13 墓碑）；
+- 没有用户消息的回合不能用 S1；
+- Save to Memory 按钮按 S2 处理（§5.5）。
+
+**新增的对抗测试**（并进上面的对抗测试列表）：
+- 工具输出里的注入文本诱导 agent 产出一条规则：证明它进不了注入文件；在用户从没说过这个主张的情况下，也不能靠升级进去（蕴含检查拒绝）。
+- 工具输出诱导 agent 用一条旧的 user 消息做证据调用 `ingest submit`：必须被拒绝。
+- 工具输出诱导 agent 用当前回合的 user 消息（内容是"继续"）做证据写一条规则：蕴含检查拒绝。
 
 ## 10. 统一 dashboard：扩展 Need You overlay
 
@@ -1041,7 +1089,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - 卡 3 的每个命中和最终算出的动作；
   - 写到了哪个文件的哪一条，可以点开；替换或跳过了哪一条，归档在哪里；
   - 写了哪些关系边。
-- **口径**：除非另外说明，所有比率都按单元计算。写入率 = `written` ÷（单元总数 − `merged`）；拒绝率的分母和写入率相同；`deferred` 和 `failed_poison` 单独计数，不计入分母。
+- **口径**：所有比率都按单元计算，定义以 §5.8 为准：写入率 = written ÷（written + reinforced + rejected），强化率同分母；`merged`、`deferred`、`failed`、`expired` 单独计数，不进分母。待背书的单元单独计数。
 - **历史趋势**（30 天以前）：只读 `ingestion_daily_stats`，按周或按月显示每个 source 的入队量、写入率、拒绝的原因码分布、各目的地的写入量和 LLM 成本。不显示任何原始内容。
 - **健康区**：各 lane 的积压和最老一条的等待时间、熔断记录、每天的 LLM 调用次数和 token、Inbox 大小和上次清理时间、MEMORY 与 EVOLUTION 的大小及注入时省略的单元数。
 
@@ -1137,8 +1185,8 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
    - **dev**：审计里用过的样本（MEMORY 97 条、DDD 40 条、backflow 15 篇）加上合成夹具。prompt 和规则只能在 dev 上反复调。
    - **holdout**：从会话历史、DDD 文档、backflow Note 里另外抽样，并排除 dev 里已有的条目。抽样前先冻结 parser、claim-group 的划分规则和"重复对"的构造方法，否则代码一改，分母也会跟着变。
      - **抽样单位是簇**：同一个会话、同一份文档或同一个 run 算一簇，按簇抽取，用固定的随机种子。置信区间用 cluster bootstrap 复核：如果它比 Clopper–Pearson 更严，以 bootstrap 的结果为准。
-     - **标注**：由 3 个互相看不到对方结果的盲评 subagent 独立标注，标注规则和卡 1、卡 3、DDD 规则的定义一致，按多数票定标签。三票全不一致的样本标为 `unresolved`，**交给 Gawan 裁定**，不得丢弃。
-     - **分层抽检，必做**：按 source、指标、"三票一致 / 二比一"三个维度分层，共抽 60 条，也由 Gawan 裁定。60 条里至少 54 条和多数票一致（单侧 95% 下界 ≥ 80%），这份 holdout 才有效；否则作废，修订标注规则后重新标注。按以往的分歧比例估计，Gawan 总共要看 60 条抽检，外加 20 到 40 条 `unresolved`。
+     - **标注**：由 3 个互相看不到对方结果的盲评 subagent 独立标注，标注规则和卡 1、卡 3、DDD 规则的定义一致，按多数票定标签。三票全不一致的样本标为 `unresolved`，**交给 用户 裁定**，不得丢弃。
+     - **分层抽检，必做**：按 source、指标、"三票一致 / 二比一"三个维度分层，共抽 60 条，也由 用户 裁定。60 条里至少 54 条和多数票一致（单侧 95% 下界 ≥ 80%），这份 holdout 才有效；否则作废，修订标注规则后重新标注。按以往的分歧比例估计，用户 总共要看 60 条抽检，外加 20 到 40 条 `unresolved`。
      - **只用一次**：holdout 冻结后带上版本号，只在最终判定 go/no-go 时跑一次。没通过就回到 dev 上修改，最多再换 1 份新的 holdout。换新 holdout 时预注册 α 分配：两次判定各用单侧 α = 0.025。
    - **holdout 的预注册分母和门槛**：统一用 95% 单侧 Clopper–Pearson 下界判定。用了第二份 holdout 时改为 97.5%，对应的分母按同一个脚本重新计算。
 
@@ -1179,11 +1227,15 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 - **provenance 先于切换**：`record_session_input()` 和每个单元的依据 id 是切换的前置条件（§9），不是附带工作。
 - **r16 source 重写**：§5.3 的单元契约 v2；6 个 source 的提取器（§5.5）；提取尝试表（§5.4）；证据血统与目的地信任下限（§9）；TIMELINE 与 EventUnit；`claim_support` 强化；S3 五段报告和 run 收尾协议（§5.9）；DailyActivity 新格式和一周注入（§5.7）；公共 DDD（§5.10）。
 - **不做兼容，没有存量**：Pipeline run 不兼容，旧 run 和切换时正在运行的 run 进入 REFLECT 后允许失败。CDF 从未上线，所以没有 `ingestion.db` 存量，也没有 r15 的候选或写入计划需要迁移。旧的 `.artifacts/proposals/`、`discarded-writeback.jsonl` 原样留在磁盘上，CDF 不读。
-- **实施顺序**：先在**关闭状态**下建好 v2：（1）契约和数据库；（2）证据血统和各 source 提取器，写进关闭状态的 Inbox；（3）writer、关系、TIMELINE、读取侧；（4）重建 holdout，做逐 source 的 E2E。然后在离线副本上回放验证，最后一次性原子切换，同时关掉所有旧写入路径。"所有 source 一起切"约束的是启用时刻，不要求把全部改动塞进一次代码提交。
+- **前提**：所有 source 一次切换，不做影子模式、双写或分批切换，也不设回退开关。所以**安全保证只能放在切换之前**。
+- **实施顺序**：先在**关闭状态**下建好 v2：（1）契约和数据库；（2）证据血统和各 source 提取器，写进关闭状态的 Inbox；（3）writer、关系、TIMELINE、读取侧；（4）重建 holdout，做逐 source 的 E2E。
+- **全量预演（必须通过的门槛）**：用真实工作区的完整副本（临时数据目录），v2 全部打开，§8 列出的旧写入路径全部关闭；用**真实的 source 代码**回放最近 7 天的真实会话和 run，走完 source → Inbox → worker → writer。下面验收门的全部内容（故障注入、两个 backend 同时启动、基线哈希不变、静态检查、每个 source 的真实链路 E2E、§9 和 §9.1–9.2 的对抗测试、性能、读取侧盲评）都先在这份副本上通过，再切生产。预演会真实调用 Bedrock，调用次数和成本在预演报告里列出。
+- **启用是一个原子动作**：一个开关同时打开 v2；旧写入代码在**同一次提交**里删除。
 - **第一准则的已知违规点**，阶段 B 必须修掉：`summarization.py`（topic 截到 120、decision 截到 150、只读最新 2.5 万字符、700 词总长）、`distillation_hook.py`（截到 200 字）、`prompt_builder.py` 的 DailyActivity 尾部截断、`normalize.py` 删 hex / 路径并折叠换行、`writer.py` 标题截到 80 字、`daily_activity_hook.py` / `knowledge_backflow_hook.py` 只读 500 条消息、`knowledge_store` 召回只返回切片、`runtime_hooks` 的 `prompt[:1000]`。DDD 整文件回退截断见 §12，放在阶段 C。
 - **holdout 重做，分两层**（第一版已作废，见 §14.1 T1）：
   - **提取层**：从原始对话、run、diff、指标里按簇抽样，由标注者先标出"应该提取的单元"（gold），再和提取器的产出做语义匹配。报告提取精确率、**提取召回率**、可独立读懂率、ontology 分类准确率、流水账混入率。
-  - **ingestion 层**：在提取层的产出上，沿用 §14 阶段 A 的指标。
+  - **ingestion 层**：在提取层的产出上，沿用 §14 阶段 A 的指标，另外单独统计跨 source 的重复（§4.1）。
+  - **先算标签噪声**：重标之前，先在 `ingestion_holdout_size.py` 里加入标签噪声参数，算出在约 4.2% 的标签噪声下，93% 的精确率下界还能不能测出来。测不出来，就先改门槛或标注方式，再重标（§14.1 T5）。
   - dev 同样换成新提取器的产出。
 - **全部 source 一次切换**：§5 表里的每个 source 都改成入队，原来的写入代码删掉。§8 表里的每条旧修改路径，要么关成只读，要么改走新路径。必须同时切换，因为 §8 要求"只要有一个 source 开始用 Inbox，就不能再有任何非 writer 的自动写入"；如果逐个迁移，还没迁的 source 仍在直接写，正好违反这条不变量。
 - **Flow 视图**：Need You 里的 Cognitive Distillation Flow 页（第一版范围），以及 `AttentionAuthority` 的 `ingestion` source。
@@ -1201,6 +1253,7 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
   - **每个 source 一条真实链路 E2E**：造一个真实的会话账本或 run 记录（含 user、measured、external 根，以及 agent 生成的文档根），调用真实的 source 代码，经过 worker 和 writer 写入临时工作区，校验落盘内容、证据、污染判定和关系；所有目的地，加上 refine、supersedes、强化（`claim_support`）、反证、卡 3b、无专属 DDD 的公共 DDD 路径都要覆盖；§9 的五种对抗测试；卡 3b 要独立校验旧条目里每一条结论都被保留（不能只信判官自己列出的清单），对 what、how、why 和单条旧结论各做一次删除的 mutation；
   - **daemon 冒烟**：用预览 gateway（`pod_up`）指向临时数据目录，跑一个真实 session，确认 kick → worker → 写入 → Flow 视图自动完成。
 - **性能**：chat、CLI、清理、dashboard 同时运行时，实测入队延迟 p99 < 200 ms；chat 首 token 的 p90 和基线相比，差异在误差范围内。
+- **读取侧成对回放和盲评**：DailyActivity 一周注入（§5.7）和 TIMELINE 注入（§5.6）都是读取侧改动，按 §12 的规矩要做成对回放和盲评。因为一次切换，这两项并进阶段 B 的验收门：useful 和 noise 两项都不比基线差。
 - **真实流量观察**：上线后观察 7 天，或者等每个 source 至少产生 30 个候选（哪个先满足以哪个为准），然后每个 source 都要满足下面这些条件：
   - 每个候选在 Flow 视图里都能看到完整的处理过程；
   - 重复率 < 2%；
@@ -1228,17 +1281,17 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 
 上线后：每次改 prompt 或规则，都要（1）用 holdout 的当前版本跑一次在线模式，各项门槛不能退化；（2）对 Inbox 里现有的 30 天真实数据跑一次录制模式，列出决定前后的差异。30 天内某个 source 的样本太少时，以 holdout 为准。30 天以前的数据只剩统计数字，不能回放。
 
-### 14.1 调优待办（单独窗口做；Gawan 2026-10-27 决定先完成 E2E，接受跳过 go/no-go 的风险）
+### 14.1 调优待办（单独窗口做；用户 2026-10-27 决定先完成 E2E，接受跳过 go/no-go 的风险）
 
 阶段 A 的离线判定还没完成。E2E 先按当前 prompt v3 打通；在下面这些项目做完、go/no-go 通过之前，**不 rebuild 上线**。
 
 | # | 待办 | 现状 / 入口 |
 |---|---|---|
-| T1 | holdout 重标 | 第一版作废：人工确认的抽检一致 51/60，门槛 54。重标方案：标注规则 r6；约 305 条 2 比 1 的条目重标 should_write；141 条"缺 why"重标；再做一次新的 60 条分层抽检。人工裁定方式待定（Gawan 全裁，或 GPT-sol 初筛） |
-| T2 | 在 dev 上调 prompt | 基线：Gawan 终端跑的 2b（prompt v2）。当前 v3（`722758dc6`）给卡 1 加了来源上下文，并明确了"有依据"的定义。原因是冒烟测试里 4/5 被判成"推测" |
+| T1 | holdout 重标 | 第一版作废：人工确认的抽检一致 51/60，门槛 54。重标方案：标注规则 r6；约 305 条 2 比 1 的条目重标 should_write；141 条"缺 why"重标；再做一次新的 60 条分层抽检。人工裁定方式待定（用户全裁，或另一个模型初筛、用户只裁分歧） |
+| T2 | 在 dev 上调 prompt | 基线：用户在自己终端跑的 2b（prompt v2）。当前 v3给卡 1 加了来源上下文，并明确了"有依据"的定义。原因是冒烟测试里 4/5 被判成"推测" |
 | T3 | holdout 在线回放一次，打分 | `cdf_go_no_go.py`，按 §14 的门槛判定；评分脚本已经用合成数据验证过 |
-| T4 | 42 条 shape 分歧 | 暂时采用 GPT-sol 的裁定，标为模型裁定；重标时一并复核 |
-| T5 | 标签噪声和精确率门槛 | 多数票的 should_write 错误率约 4.2%，集中在 2 比 1 的条目。T1 后重新估计；如果仍超过 2%，就评估 93% 这个门槛能否测出来 |
+| T4 | 42 条 shape 分歧 | 暂时采用 另一个模型 的裁定，标为模型裁定；重标时一并复核 |
+| T5 | 标签噪声和精确率门槛 | 多数票的 should_write 错误率约 4.2%，集中在 2 比 1 的条目。**在 T1 之前**，先在 `ingestion_holdout_size.py` 加标签噪声参数，算出 4.2% 噪声下 93% 精确率下界能否测出；测不出就先改门槛或标注方式 |
 | T6 | 各 source 的"该写"比例 | E2E 上线后按 source 统计；低于 5% 的 source 要改提取方式 |
 | T7 | 卡 3 / 卡 3b 的真实判官质量 | dev 冒烟只走到卡 1，卡 3 和 3b 还没有真实回复 |
 
@@ -1246,7 +1299,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 
 - **不做人工审批和提案**：答题卡就是最终决定，人通过审计来看结果。
 - **不让 source 自己判断或写入**：source 只负责提取。
-- **不做影子模式和切换日**：每个 source 迁移时直接生效。
+- **不做影子模式和双写**：所有 source 在阶段 B 一次切换（§14）。
 - **不做 OS 层的写入隔离**：用"唯一的自主写入者 + materializer + 提示性的 gate + 带外修改检测"代替。
 - **不引入向量库**：换了说法的重复只靠卡 3 的 BM25，漏掉的先接受，并在 holdout 里计数。
 - **首版不做 maintenance 语义复审**：maintenance 只做清理、恢复、带外修改检测和统计。
@@ -1293,11 +1346,11 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 4. 提取和 ingestion 解耦。Inbox 只保留 30 天，更早的只留统计。目的地有定制规则，source 有定制格式。dashboard 放在 Need You 里，叫 Cognitive Distillation Flow（Flow 视图）。按时效性分 lane 触发（r13）。
 5. DDD 的注入方式不改；所有 DDD 规则都以保住 what、how、why 为前提（r13）。
 6. 实施分三个阶段：A 离线 go/no-go → B 引擎上线，所有 source 一次切换 → C 注入预算。每个阶段只有一道验收门（r15.1）。
-7. holdout 由 3 个盲评 subagent 独立标注，按多数票定标签（r14）；三票都不同的标为 `unresolved` 交给 Gawan 裁定，另做 60 条必做的分层抽检（r15）。
+7. holdout 由 3 个盲评 subagent 独立标注，按多数票定标签（r14）；三票都不同的标为 `unresolved` 交给 用户 裁定，另做 60 条必做的分层抽检（r15）。
 8. 首版的删减（r15 扩充）：首版不做 `extends`，`ddd_orchestrator` 只读；最小关系表、不做语义复审、mutation 检查只覆盖安全类不变量、dashboard 只做审计闭环、不做类型对照、source 用静态类型注册（r14）。
 9. 整个设计定名为 **Swarm Cognitive Distillation Flow**：它是 SwarmAI 认知系统的核心引擎，也是对所有用户可用的产品级能力（r14.1）。
-10. `ingestion.db` 是不可替代的状态，纳入备份和恢复；holdout 里标为 `unresolved` 的样本和分层抽检由 Gawan 裁定（r15）。
-11. r16（Gawan 2026-10-27）：**第一准则：提取的所有认知内容，人和 AI 都能读懂，任何环节不截断语义**（§5 开头）；source 收拢为 6 个，按证据来源划分；提取即按三层七类分类，带 what/how/why 和逐条证据；复利只累积有判断力、有 taste 的认知，重复改为独立证据强化（Flow 里显示"强化"）；三层记忆：DailyActivity 一周工作记忆、TIMELINE 单独成文件供 Retro、语义记忆；S3 是给 DDD 的五段知识报告，run 统计留在 run 里；以上问题解决前不合入 main。
+10. `ingestion.db` 是不可替代的状态，纳入备份和恢复；holdout 里标为 `unresolved` 的样本和分层抽检由 用户 裁定（r15）。
+11. r16（用户 2026-10-27）：**第一准则：提取的所有认知内容，人和 AI 都能读懂，任何环节不截断语义**（§5 开头）；source 收拢为 6 个，按证据来源划分；提取即按三层七类分类，带 what/how/why 和逐条证据；复利只累积有判断力、有 taste 的认知，重复改为独立证据强化（Flow 里显示"强化"）；三层记忆：DailyActivity 一周工作记忆、TIMELINE 单独成文件供 Retro、语义记忆；S3 是给 DDD 的五段知识报告，run 统计留在 run 里；以上问题解决前不合入 main。
 
 ## 18. 修订记录（非规范，仅供追溯，不按这里的旧说法实现）
 
@@ -1305,15 +1358,21 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - r1 到 r3：从只管 Knowledge，扩展到 Memory、DDD、Knowledge 三块共用一份契约，并引入答题卡。
   - r4 到 r8：只写用户的 `.context/`；全自动，加上审计；已经沉淀的内容一律不动；ontology 标签。
   - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
-  - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（`99bcc4ea3` 之前的版本）。
+  - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（r13 之前的版本）。
 
+- **r16.3**（又一轮独立评审意见）：
+  - §14 阶段 B：一次切换的安全保证放在切换之前——真实工作区副本上的全量预演是必须通过的门槛；启用是一个原子动作，旧写入代码在同一次提交里删除；§8 删掉"回退整个阶段 B"；§15 改为"不做影子模式和双写"；DailyActivity 和 TIMELINE 注入的成对回放和盲评并进阶段 B 验收门。
+  - §9.1 新增用户背书升级：被污染、目的地是注入文件的规则先进公共 DDD 待背书，有独立的用户消息根并通过**隔离蕴含检查**后才升级；§9 表补上 assistant 消息。
+  - §9.2：S1 只接受触发当前回合的用户消息、每条消息有单元上限、同样做蕴含检查、写入后回显并可撤回；Save to Memory 按 S2 处理；新增三条对抗测试。
+  - 同步 r16 改写后遗漏的段落：§7.2 D6 和 §7.3 跨项目改为每个相关 DDD 各写一条；§7.1 卡 1 改为复核、卡 1 和卡 2 由 `contracts_v2` 生成并补上 Event / Gap / 无 DDD 的去向；没有项目的认知分三种情况，world 非全局改去公共 DDD；Reference 五种（加 link）只写 Learned / Library / Notes；写入率统一为 §5.8 的定义；§4.1 分开入队幂等键和跨 source 去重键，并说明哈希只合并文本完全相同的情况。
+  - 其他：Reports 和 Designs 不受管；§9 如实写明 DDD 路径上没有不可信数据边界；删掉 immediate 的 2 秒等待；S4 和 S3 同样允许被污染的认知带 taint 写进 DDD；T1 之前先算标签噪声；§0 写明已沉淀的 MEMORY 不会被系统搬走；清理人名、评审文件名和 commit 号。
 - **r16.2**：外部和互联网参考链接的保存机制（§5.12 外部链接）：`reference_kind=link`，写入时不发网络请求，按规范化 URL 去重，每周检查是否失效，失效只标记、不删除。
-- **r16.1**（吸收两份独立评审 `r16_review_A/B`）：单元契约 v2（Cognition / Event / Gap / Reference 判别联合，七类机器枚举，层由类型唯一决定）；提取尝试表和两层 holdout（测提取召回）；证据归属与按证据根去重；强化改为 `evidence_roots` + `claim_support`，防回声，支持反证，分数有上限；§9 改为服务端推导证据血统，删除 `observed`，绑定仓库也算 `external`，按目的地设信任下限；Knowledge 作为公共 DDD，无专属 DDD 的认知不降级；TIMELINE 和 DailyActivity 的摘要改为追加写，由新的 `summary` lane 生成；Next 带稳定 id；DailyActivity 预算按实测回放确定；run 收尾协议（专用执行器，新 run 不等待，不更新就 fail-open 并打标记）；第一准则的代码违规清单；§12 如实描述 DDD 指针注入；Pipeline run 不兼容、CDF 没有存量；关闭状态构建 v2、离线验证、原子切换。
+- **r16.1**（吸收两份另一个模型的独立评审）：单元契约 v2（Cognition / Event / Gap / Reference 判别联合，七类机器枚举，层由类型唯一决定）；提取尝试表和两层 holdout（测提取召回）；证据归属与按证据根去重；强化改为 `evidence_roots` + `claim_support`，防回声，支持反证，分数有上限；§9 改为服务端推导证据血统，删除 `observed`，绑定仓库也算 `external`，按目的地设信任下限；Knowledge 作为公共 DDD，无专属 DDD 的认知不降级；TIMELINE 和 DailyActivity 的摘要改为追加写，由新的 `summary` lane 生成；Next 带稳定 id；DailyActivity 预算按实测回放确定；run 收尾协议（专用执行器，新 run 不等待，不更新就 fail-open 并打标记）；第一准则的代码违规清单；§12 如实描述 DDD 指针注入；Pipeline run 不兼容、CDF 没有存量；关闭状态构建 v2、离线验证、原子切换。
 - **r16**（阶段 B E2E 之后的重设计）：§5.9 目的地反推和时效分档；§5.10 参考资料两层索引，Knowledge 文件夹分为受管和不受管，`reference_kind` 扩为五种并与实际文件夹对齐；§5 重写（三层记忆、6 个 source、认知单元、各 source 提取规范、S3 五段报告、TIMELINE、DailyActivity 一周注入、强化）；§9 新增 `observed`，删除整会话污染兜底；§7.3 关系扩为三种；§4.2 新增终态 `reinforced`；§14 阶段 B 增加 source 重写、holdout 重做、逐 source 真实链路 E2E 和 daemon 冒烟。
-- **r15.3**（Gawan：先 E2E 后调优）：新增 §14.1 调优待办 T1–T7；go/no-go 改为 rebuild 上线前的门槛，不再作为阶段 B 开工的前提。
+- **r15.3**（用户：先 E2E 后调优）：新增 §14.1 调优待办 T1–T7；go/no-go 改为 rebuild 上线前的门槛，不再作为阶段 B 开工的前提。
 - **r15.2**（阶段 A 执行中的发现）：§5 加入各 source 的实测该写比例，逐行切片的提取方式停用；§9 和阶段 B 明确 provenance 是切换的前置条件；卡 3 的证据强弱和 observed_at 改由 pipeline 按 anchor 填入；§14 补充 holdout 标注协议（排除自身来源、污染兜底不进 holdout、正例补抽的冻结规则、判官 prompt 的契约要求）。
-- **r15.1**（Gawan：执行计划不要拆得太碎）：§14 合并为三个阶段：A 离线 go/no-go；B 引擎上线，所有 source 一次切换，观察 7 天后统一验收；C 注入预算。逐个迁移 source 的计划同时作废，原因是它和"只要有一个 source 上了 Inbox，就不能再有非 writer 的自动写入"这条不变量冲突。
-- **r15：吸收 r14.2 的两份独立评审**（`review_r142_code.md`、`review_r142_design.md`），并按 Gawan 的两项决定修改：`ingestion.db` 是不可替代的状态，要纳入备份和恢复；holdout 中标为 `unresolved` 的样本和分层抽检由 Gawan 裁定。具体改动：
+- **r15.1**（用户：执行计划不要拆得太碎）：§14 合并为三个阶段：A 离线 go/no-go；B 引擎上线，所有 source 一次切换，观察 7 天后统一验收；C 注入预算。逐个迁移 source 的计划同时作废，原因是它和"只要有一个 source 上了 Inbox，就不能再有非 writer 的自动写入"这条不变量冲突。
+- **r15：吸收 r14.2 的两份独立评审**（代码和设计各一份独立评审），并按 用户 的两项决定修改：`ingestion.db` 是不可替代的状态，要纳入备份和恢复；holdout 中标为 `unresolved` 的样本和分层抽检由 用户 裁定。具体改动：
   - 文件副作用也受 owner epoch 约束：每一步执行前先抢占这一步；旧 owner 停下并 join 完成之后，才释放锁；新 owner 先接管遗留任务，再开始处理。
   - 删除"检测到外部编辑后自动恢复用户版本"的做法，改成：保留现状，标记 `DEFER user_race`，保留恢复副本；同时明确写出检测不到的那段时间窗口。
   - 新增 materializer，作为唯一的落盘接口，运行时判断路径是否受控；静态检查只禁止绕过它直接调用写函数。
@@ -1330,11 +1389,11 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - 配额预留单独建流水表；访问日志改为异步写入。
   - holdout 按簇抽样，`unresolved` 交给人裁定，分层抽检 60 条且必做，最多换一次 holdout 并预先分配 α；"预注册分母"附上实测功效；污染零容忍改由测试保证；明确稳定率的定义和完整的版本向量。
   - 删减：`ddd_orchestrator` 只读；去掉分类器不一致的统计；基准数据挪到附录 A；修订记录压缩成摘要。
-- **r14.2**（Gawan）：CDF 的表改放在独立的 `ingestion.db`，`session_inputs` 留在 `data.db`。理由是和 chat 的写锁隔离，并且新库可以开启 `auto_vacuum`，这样代码评审 B4 不再成立。附上实测的入队延迟。受控语料仍然是文件系统。
-- **r14.1**（Gawan）：整个设计定名为 Swarm Cognitive Distillation Flow（CDF），定位为 SwarmAI 认知系统的核心引擎、产品级能力；文件从 `2026-10-26-recall-corpus-ingestion.md` 改名为 `2026-10-26-swarm-cognitive-distillation-flow.md`；明确了 CDF、ingestion、Flow 视图三个术语的边界。内容不变。
-- **r14：吸收 r13b 的两份独立评审**（`review_r13b_code.md`、`review_r13b_design.md`）。新增：唯一 owner 锁和 epoch；写入日志和重启恢复（单写入者也需要）；`governed_edit` 和编辑器 revision；外部编辑只做到尽力而为（前后快照，检测到冲突就恢复用户版本）；`ingest` CLI 分支和 loopback 唤醒；idle 触发移到 hook 链的最后；公平调度和 maintenance 保底时隙；负载状态沿用代码的 `warning`；单元级状态、`failed_poison`、稳定的 `idem_key` 和 UNIQUE 约束；清理按整天切、累加汇总；`auto_vacuum` 只对新库生效；整理阶段改为 claim-group，DDD 的 why 不会被拆开；改投从 `aggregate_hits` 里移出，作为独立的一步；污染约束在卡 2 之前硬性执行；"更新"只认证据事件时间；写入者清单改为扫描生成，补上 6 处遗漏，旧修改路径在第 1 步全部关闭；基线不会因为 unknown 修改自动修订；审计接口的隔离、脱敏和上限写进正文；第 0 步改为 dev / holdout 分离，按 95% 单侧 Clopper–Pearson 预先定好分母和门槛，holdout 由盲评 subagent 标注。删减：最小关系表代替图 v2，不做语义复审，不做跨项目边。
-- **r13b**（Gawan）：Inbox 清理简化为只保留 30 天，删除前汇总进 `ingestion_daily_stats`；dashboard 对超过 30 天的数据只显示统计；dashboard 定名为 Cognitive Distillation Flow（认知蒸馏流）。
-- **r13：提取与 ingestion 解耦**（Gawan 提出）。source 只负责提取和入队，Inbox 有保留期并定期清理，ingestion worker 是唯一写入者；标准答题卡之外，每类目的地有定制规则（DDD 必须保住 what、how、why）；source 可以有定制的提取格式；按时效性分 lane 触发；统一 dashboard 放在 Need You overlay（「认知蒸馏流」页，加上 `AttentionAuthority` 的 ingestion 异常）。r12 里为多写入者并发设计的准备→提交、租约、跨进程配额、三层强制全部删除。DDD 注入方式和 Library 过滤不改（依据第 1 步的盲评结果）。新增第 0 步：先做离线 go/no-go。
+- **r14.2**（用户）：CDF 的表改放在独立的 `ingestion.db`，`session_inputs` 留在 `data.db`。理由是和 chat 的写锁隔离，并且新库可以开启 `auto_vacuum`，这样代码评审 B4 不再成立。附上实测的入队延迟。受控语料仍然是文件系统。
+- **r14.1**（用户）：整个设计定名为 Swarm Cognitive Distillation Flow（CDF），定位为 SwarmAI 认知系统的核心引擎、产品级能力；文件从 `2026-10-26-recall-corpus-ingestion.md` 改名为 `2026-10-26-swarm-cognitive-distillation-flow.md`；明确了 CDF、ingestion、Flow 视图三个术语的边界。内容不变。
+- **r14：吸收 r13b 的两份独立评审**（代码和设计各一份独立评审）。新增：唯一 owner 锁和 epoch；写入日志和重启恢复（单写入者也需要）；`governed_edit` 和编辑器 revision；外部编辑只做到尽力而为（前后快照，检测到冲突就恢复用户版本）；`ingest` CLI 分支和 loopback 唤醒；idle 触发移到 hook 链的最后；公平调度和 maintenance 保底时隙；负载状态沿用代码的 `warning`；单元级状态、`failed_poison`、稳定的 `idem_key` 和 UNIQUE 约束；清理按整天切、累加汇总；`auto_vacuum` 只对新库生效；整理阶段改为 claim-group，DDD 的 why 不会被拆开；改投从 `aggregate_hits` 里移出，作为独立的一步；污染约束在卡 2 之前硬性执行；"更新"只认证据事件时间；写入者清单改为扫描生成，补上 6 处遗漏，旧修改路径在第 1 步全部关闭；基线不会因为 unknown 修改自动修订；审计接口的隔离、脱敏和上限写进正文；第 0 步改为 dev / holdout 分离，按 95% 单侧 Clopper–Pearson 预先定好分母和门槛，holdout 由盲评 subagent 标注。删减：最小关系表代替图 v2，不做语义复审，不做跨项目边。
+- **r13b**（用户）：Inbox 清理简化为只保留 30 天，删除前汇总进 `ingestion_daily_stats`；dashboard 对超过 30 天的数据只显示统计；dashboard 定名为 Cognitive Distillation Flow（认知蒸馏流）。
+- **r13：提取与 ingestion 解耦**（用户 提出）。source 只负责提取和入队，Inbox 有保留期并定期清理，ingestion worker 是唯一写入者；标准答题卡之外，每类目的地有定制规则（DDD 必须保住 what、how、why）；source 可以有定制的提取格式；按时效性分 lane 触发；统一 dashboard 放在 Need You overlay（「认知蒸馏流」页，加上 `AttentionAuthority` 的 ingestion 异常）。r12 里为多写入者并发设计的准备→提交、租约、跨进程配额、三层强制全部删除。DDD 注入方式和 Library 过滤不改（依据第 1 步的盲评结果）。新增第 0 步：先做离线 go/no-go。
 
 ## 附录 A. SQLite 基准（r14.2，2026-10-26，scratch）
 
