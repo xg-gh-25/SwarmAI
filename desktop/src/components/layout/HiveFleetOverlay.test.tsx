@@ -12,6 +12,8 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 const listInstances = vi.fn();
 const listAccounts = vi.fn();
 const stopInstance = vi.fn();
+const updateInstance = vi.fn();
+const latestVersion = vi.fn();
 vi.mock('../../services/hive', async () => {
   const actual = await vi.importActual<typeof import('../../services/hive')>('../../services/hive');
   return {
@@ -20,11 +22,15 @@ vi.mock('../../services/hive', async () => {
       listInstances: () => listInstances(),
       listAccounts: () => listAccounts(),
       stopInstance: (id: string) => stopInstance(id),
+      updateInstance: (id: string, v: string) => updateInstance(id, v),
+      latestVersion: () => latestVersion(),
     },
   };
 });
 
 import { HiveFleetContent } from './HiveFleetOverlay';
+import { resetLatestHiveVersion } from '../settings/hiveComponents';
+import { isNewerVersion } from '../../services/hive';
 import type { HiveInstance, HiveAccount } from '../../services/hive';
 import { QueryClient as __QC, QueryClientProvider as __QCP } from '@tanstack/react-query';
 import { render as __render } from '@testing-library/react';
@@ -55,6 +61,9 @@ beforeEach(() => {
     mkInst({ id: 'i2', name: 'teammate-hive', status: 'stopped', hiveType: 'shared', ownerName: 'Teammate' }),
   ]);
   stopInstance.mockResolvedValue(undefined);
+  updateInstance.mockResolvedValue(undefined);
+  latestVersion.mockResolvedValue('2.3.0');
+  resetLatestHiveVersion();
 });
 
 describe('HiveFleetOverlay', () => {
@@ -151,5 +160,65 @@ describe('HiveFleetOverlay', () => {
     fireEvent.click(screen.getByTestId('hive-view-accounts'));
     await waitFor(() => expect(screen.getByTestId('hive-view-accounts').getAttribute('aria-selected')).toBe('true'));
     expect(screen.getByTestId('hive-view-fleet').getAttribute('aria-selected')).toBe('false');
+  });
+});
+
+describe('Hive update to the latest release', () => {
+  it('isNewerVersion compares major.minor.patch and ignores a local suffix', () => {
+    expect(isNewerVersion('2.4.0', '2.3.0-hive1')).toBe(true);
+    expect(isNewerVersion('2.3.0', '2.3.0-hive1')).toBe(false);
+    expect(isNewerVersion('2.10.0', '2.9.9')).toBe(true);
+    expect(isNewerVersion('2.3.0', '2.4.0')).toBe(false);
+    expect(isNewerVersion(null, '2.3.0')).toBe(false);
+    expect(isNewerVersion('2.4.0', null)).toBe(false);
+  });
+
+  it('a running Hive behind the latest release offers Update, which asks first', async () => {
+    latestVersion.mockResolvedValue('2.4.0');
+    listInstances.mockResolvedValue([mkInst({ id: 'i1', name: 'xg-hive', status: 'running', version: '2.3.0-hive1' })]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    const btn = await screen.findByTestId('hive-update');
+    expect(btn.textContent).toBe('Update to v2.4.0');
+    fireEvent.click(btn);
+    expect(updateInstance).not.toHaveBeenCalled();
+    fireEvent.click(btn);
+    await waitFor(() => expect(updateInstance).toHaveBeenCalledWith('i1', '2.4.0'));
+    expect(confirm.mock.calls[0][0]).toContain('restarts');
+    // accepted: the button goes away until the list shows the update (no second request)
+    await waitFor(() => expect(screen.queryByTestId('hive-update')).toBeNull());
+    confirm.mockRestore();
+  });
+
+  it('no Update when the Hive is current, stopped, or the release is unknown', async () => {
+    latestVersion.mockResolvedValue('2.4.0');
+    listInstances.mockResolvedValue([
+      mkInst({ id: 'i1', name: 'current', status: 'running', version: '2.4.0' }),
+      mkInst({ id: 'i2', name: 'stopped', status: 'stopped', version: '2.3.0' }),
+    ]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(screen.getByText('current')).toBeInTheDocument());
+    await waitFor(() => expect(latestVersion).toHaveBeenCalled());
+    expect(screen.queryByTestId('hive-update')).toBeNull();
+  });
+
+  it('a failed release lookup is asked again on the next mount', async () => {
+    latestVersion.mockRejectedValueOnce(new Error('offline')).mockResolvedValue('2.4.0');
+    listInstances.mockResolvedValue([mkInst({ id: 'i1', name: 'xg-hive', status: 'running', version: '2.3.0' })]);
+    const first = renderQ(<HiveFleetContent close={() => {}} />);
+    await waitFor(() => expect(latestVersion).toHaveBeenCalledTimes(1));
+    first.unmount();
+    renderQ(<HiveFleetContent close={() => {}} />);
+    expect(await screen.findByTestId('hive-update')).toBeInTheDocument();
+  });
+
+  it('an updating Hive shows its own line, not the deploy steps', async () => {
+    listInstances.mockResolvedValue([mkInst({ id: 'i1', name: 'xg-hive', status: 'updating', version: '2.3.0' })]);
+    renderQ(<HiveFleetContent close={() => {}} />);
+    expect(await screen.findByTestId('hive-updating')).toBeInTheDocument();
+    expect(screen.queryByText('EC2 launched')).toBeNull();
+    // transitional: no Delete (or Stop) while the update runs, and the list keeps polling
+    expect(screen.queryByRole('button', { name: /^Delete$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Stop$/ })).toBeNull();
   });
 });

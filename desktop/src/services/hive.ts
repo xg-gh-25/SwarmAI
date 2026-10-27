@@ -43,7 +43,24 @@ export interface HiveInstance {
 }
 
 /** Transitional statuses that require polling */
-export const TRANSITIONAL_STATUSES = ['pending', 'provisioning', 'installing', 'deleting'];
+export const TRANSITIONAL_STATUSES = ['pending', 'provisioning', 'installing', 'deleting', 'updating'];
+
+/** True when release `latest` is newer than `current` by major.minor.patch. A suffix
+ *  (a local build such as 2.3.0-hive1) is ignored, so the same core is never "newer";
+ *  anything unparsable is not newer. */
+export function isNewerVersion(latest: string | null | undefined, current: string | null | undefined): boolean {
+  const core = (v: string | null | undefined) => {
+    const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(v ?? '');
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  };
+  const a = core(latest);
+  const b = core(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
 
 /** Deploy progress steps derived from field presence */
 export function getDeploySteps(inst: HiveInstance): { label: string; done: boolean }[] {
@@ -137,8 +154,16 @@ export const hiveService = {
     return toCamel(data) as unknown as HiveInstance;
   },
 
+  /** Starts the update and returns; the Hive shows 'updating' until it ends 'running'
+   *  (with the new version, or an errorMessage saying why not). */
   async updateInstance(id: string, version: string): Promise<void> {
     await api.post(`/hive/instances/${id}/update`, { version });
+  },
+
+  /** The latest published SwarmAI release (what a Hive can be updated to). */
+  async latestVersion(): Promise<string> {
+    const { data } = await api.get('/hive/latest-version');
+    return (data as { version: string }).version;
   },
 
   async stopInstance(id: string): Promise<void> {

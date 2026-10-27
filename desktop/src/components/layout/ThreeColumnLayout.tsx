@@ -54,7 +54,8 @@ export function deriveHiveStatusDot(instances: { status: string }[] | undefined)
     return { color: 'var(--color-status-error)', title: 'A Hive needs attention (error)' };
   }
   if (instances.some((i) => TRANSITIONAL_STATUSES.includes(i.status))) {
-    return { color: 'var(--color-primary)', pulse: true, title: 'A Hive is provisioning' };
+    const updating = instances.some((i) => i.status === 'updating');
+    return { color: 'var(--color-primary)', pulse: true, title: updating ? 'A Hive is updating' : 'A Hive is provisioning' };
   }
   if (instances.some((i) => i.status === 'running')) {
     const n = instances.filter((i) => i.status === 'running').length;

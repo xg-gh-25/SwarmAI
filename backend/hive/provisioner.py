@@ -155,6 +155,12 @@ def _put_hive_role_policy(iam, role_name: str) -> None:
     )
 
 
+# A release version as it appears in a tag, an S3 key and the update script: digits and
+# dots, optionally a suffix (2.3.0-hive1). fullmatch only: re.match with ^...$ accepts a
+# trailing newline.
+VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9]+)*")
+UPDATE_STALE_S = 15 * 60
+
 class HiveProvisioner:
     """Manages AWS resources for Hive instances.
 
@@ -1156,9 +1162,27 @@ class HiveProvisioner:
         else:
             await self._update_instance(instance_id, status="running")
 
-    async def update(self, instance_id: str, version: str) -> None:
-        """Update a Hive to a new version via SSM Run Command."""
-        # G6: Atomic status gate — prevents concurrent updates
+    async def release_stale_updates(self, max_age_s: int = UPDATE_STALE_S) -> int:
+        """End 'updating' rows no update can still be working on (SwarmAI quit or crashed
+        mid-update): back to 'running' with a message, so the card offers its actions
+        again. An update takes at most about 12 minutes (S3 sync, the SSM command's
+        300 s, our 300 s poll, the 60 s health check). Returns how many rows changed."""
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            cursor = await conn.execute(
+                "UPDATE hive_instances SET status = 'running', error_message = ?, "
+                "updated_at = datetime('now') WHERE status = 'updating' "
+                "AND updated_at < datetime('now', ?)",
+                ("Update interrupted (SwarmAI stopped during it); the Hive's version is "
+                 "unknown, check it before updating again.", f"-{int(max_age_s)} seconds"),
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+    async def claim_update(self, instance_id: str) -> None:
+        """G6: atomic status gate running → updating; raises RuntimeError when the Hive is
+        not running (or another update holds it). The update route claims first, then
+        runs update(claimed=True) in the background, so the UI sees 'updating' at once."""
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 3000")
             await conn.execute("PRAGMA foreign_keys = ON")
@@ -1173,9 +1197,18 @@ class HiveProvisioner:
                     f"Instance {instance_id} is not in 'running' state (concurrent update?)"
                 )
 
-        # P0-4: Wrap entire body in try/finally to prevent zombie 'updating' state.
-        # Same pattern as stop()/start() error rollback (U1/PE-3).
+    async def update(self, instance_id: str, version: str, claimed: bool = False) -> None:
+        """Update a Hive to a new version via SSM Run Command."""
+        if not claimed:
+            await self.claim_update(instance_id)
+
+        # P0-4: never leave a zombie 'updating' state. Every failure ends 'running' with the
+        # reason, never 'error': an errored Hive is offered Retry, which deletes and recreates
+        # it. A failure before the SSM command is sent never touched the Hive; after it is
+        # sent the outcome on the box is unknown (the script rolls back only on its own
+        # health check), so the message says which.
         _update_succeeded = False
+        _command_sent = [False]
         try:
             instance = await self._get_instance(instance_id)
             account = await self._get_account(instance["account_ref"])
@@ -1197,7 +1230,7 @@ class HiveProvisioner:
             if not ec2_id:
                 raise ValueError("No EC2 instance ID")
 
-            if not re.match(r'^[a-zA-Z0-9._\-]+$', version):
+            if not VERSION_RE.fullmatch(version):
                 raise ValueError(f"Invalid version string: {version!r}")
 
             # Ensure new version is in S3
@@ -1323,6 +1356,7 @@ echo "=== Update to v{version} verified ==="
 
             def _run_command():
                 ssm = session.client("ssm", region_name=region)
+                _command_sent[0] = True
                 resp = ssm.send_command(
                     InstanceIds=[ec2_id],
                     DocumentName="AWS-RunShellScript",
@@ -1349,7 +1383,8 @@ echo "=== Update to v{version} verified ==="
                     session, ec2_id, region, timeout=60
                 )
                 if healthy:
-                    await self._update_instance(instance_id, version=version, status="running")
+                    await self._update_instance(instance_id, version=version, status="running",
+                                                error_message=None)
                     _update_succeeded = True
                     logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
                 else:
@@ -1368,16 +1403,20 @@ echo "=== Update to v{version} verified ==="
                 )
                 _update_succeeded = True
                 raise RuntimeError(f"SSM update failed: {status}")
-        finally:
-            # P0-4: If update body threw without resetting status, reset to 'error'
+        except BaseException as e:
             if not _update_succeeded:
                 try:
+                    where = (f"the update command was sent, so the Hive may be on v{version} "
+                             f"or its previous version" if _command_sent[0]
+                             else "the Hive was not changed and still runs its previous version")
                     await self._update_instance(
-                        instance_id, status="error",
-                        error_message="Update failed with unexpected error",
+                        instance_id, status="running",
+                        error_message=f"Update to v{version} failed; {where}. "
+                                      f"{type(e).__name__}: {str(e)[:300]}",
                     )
                 except Exception:
                     logger.error("Failed to reset status after update error for %s", instance_id)
+            raise
 
     async def reset_password(self, instance_id: str) -> str:
         """Reset Hive auth password via SSM.  Returns the new passphrase.

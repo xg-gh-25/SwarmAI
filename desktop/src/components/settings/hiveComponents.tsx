@@ -21,7 +21,7 @@
  * the SAME dialog pins to the viewport as before — behavior there is unchanged.
  */
 import { useState, useEffect, useRef } from 'react';
-import { hiveService, HiveAccount, HiveInstance, VerifyResult, TRANSITIONAL_STATUSES, getDeploySteps } from '../../services/hive';
+import { hiveService, HiveAccount, HiveInstance, VerifyResult, TRANSITIONAL_STATUSES, getDeploySteps, isNewerVersion } from '../../services/hive';
 import { openExternal } from '../../utils/openExternal';
 import { copyToClipboard } from '../../utils/clipboard';
 import { isApiError } from '../../services/api';
@@ -41,6 +41,7 @@ export const STATUS_COLORS: Record<string, string> = {
   pending: 'text-blue-400',
   provisioning: 'text-blue-400',
   installing: 'text-blue-400',
+  updating: 'text-blue-400',
   error: 'text-red-400',
   deleting: 'text-red-400',
 };
@@ -51,6 +52,7 @@ export const STATUS_ICONS: Record<string, string> = {
   pending: '\u{1F535}',
   provisioning: '\u{1F535}',
   installing: '\u{1F535}',
+  updating: '\u{1F535}',
   error: '❌',
   deleting: '\u{1F534}',
 };
@@ -109,9 +111,43 @@ export function HiveSection({
   );
 }
 
+// ── Latest release (one lookup for every card, refreshed at most every 10 minutes) ──
+
+const LATEST_TTL_MS = 10 * 60_000;
+let latestCache: { at: number; value: Promise<string | null> } | null = null;
+
+/** Test hook: forget the cached release. */
+export function resetLatestHiveVersion(): void { latestCache = null; }
+
+export function useLatestHiveVersion(): string | null {
+  const [latest, setLatest] = useState<string | null>(null);
+  useEffect(() => {
+    if (!latestCache || Date.now() - latestCache.at > LATEST_TTL_MS) {
+      const entry = {
+        at: Date.now(),
+        // a failed lookup is not cached: the next card mount asks again
+        value: hiveService.latestVersion().catch(() => {
+          if (latestCache === entry) latestCache = null;
+          return null;
+        }),
+      };
+      latestCache = entry;
+    }
+    let alive = true;
+    void latestCache.value.then((v) => { if (alive) setLatest(v); });
+    return () => { alive = false; };
+  }, []);
+  return latest;
+}
+
 // ── Instance Card ─────────────────────────────────────────────────
 
 export function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; onAction: () => void }) {
+  const latest = useLatestHiveVersion();
+  // set once the update request is accepted, until the list shows the Hive 'updating'
+  const [updateSent, setUpdateSent] = useState(false);
+  useEffect(() => { if (inst.status !== 'running') setUpdateSent(false); }, [inst.status]);
+  const canUpdate = inst.status === 'running' && !updateSent && isNewerVersion(latest, inst.version);
   const [acting, setActing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const isTransitional = TRANSITIONAL_STATUSES.includes(inst.status);
@@ -149,6 +185,21 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
           >
             Open {'↗'}
           </button>
+          {canUpdate && latest && (
+            <button
+              onClick={() => {
+                if (confirm(`Update ${inst.name} from v${inst.version} to v${latest}? The Hive restarts: a task running on it stops.`)) {
+                  doAction(async () => { await hiveService.updateInstance(inst.id, latest); setUpdateSent(true); });
+                }
+              }}
+              disabled={acting}
+              title={`v${latest} is the latest release`}
+              className="btn-sm btn-primary disabled:opacity-50"
+              data-testid="hive-update"
+            >
+              Update to v{latest}
+            </button>
+          )}
           {inst.status === 'running' && (
             <button
               onClick={() => doAction(() => hiveService.stopInstance(inst.id))}
@@ -203,8 +254,12 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
         {inst.version && <span>v{inst.version}</span>}
       </div>
 
-      {/* Deploy progress for transitional states */}
-      {isTransitional && <DeployProgress instance={inst} />}
+      {/* Deploy progress for transitional states (an update has its own line) */}
+      {inst.status === 'updating' ? (
+        <p className="text-xs text-[var(--color-text-muted)] mt-2" data-testid="hive-updating">
+          Updating: installing the new version and checking its health (a few minutes).
+        </p>
+      ) : isTransitional && <DeployProgress instance={inst} />}
 
       {/* Auth display + share for running instances */}
       {inst.status === 'running' && inst.authUser && <AuthDisplay instance={inst} />}

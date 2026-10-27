@@ -9,7 +9,8 @@ Questions:
 - does every read of this machine's workspace in release.sh sit inside the
   --with-live-ddd branch;
 - does release.yml build the published package without --with-live-ddd, verify it
-  with --public before uploading it, and publish only after that job;
+  with --public and install-and-start it (smoke_package.sh) before uploading it, and
+  publish only after that job;
 - does the provisioner refuse a downloaded package whose .sha256 is missing or differs.
 """
 import os
@@ -110,8 +111,9 @@ def test_release_workflow_publishes_only_a_verified_public_package():
     package = [r for r in runs if "hive/release.sh" in r]
     assert package and all("--with-live-ddd" not in r for r in package)
     verify = next(i for i, r in enumerate(runs) if "verify_package.sh --public" in r)
+    smoke = next(i for i, r in enumerate(runs) if "hive/smoke_package.sh" in r)
     upload = next(i for i, s in enumerate(steps) if "upload-artifact" in s.get("uses", ""))
-    assert runs.index(package[0]) < verify < upload
+    assert runs.index(package[0]) < verify < smoke < upload
     assert "build-hive" in jobs["publish"]["needs"]
     pub = " ".join(s.get("run", "") for s in jobs["publish"]["steps"])
     assert "hive-package" in pub

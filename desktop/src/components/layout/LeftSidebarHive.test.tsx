@@ -57,6 +57,12 @@ describe('deriveHiveStatusDot — calm, signal-driven', () => {
     expect(dot?.pulse).toBe(true);
   });
 
+  it('an updating Hive pulses and says updating, not provisioning', () => {
+    const dot = deriveHiveStatusDot([inst('running'), inst('updating')]);
+    expect(dot?.pulse).toBe(true);
+    expect(dot?.title).toBe('A Hive is updating');
+  });
+
   it('red takes priority over everything when any instance errored', () => {
     const dot = deriveHiveStatusDot([inst('running'), inst('provisioning'), inst('error')]);
     expect(dot?.color).toBe('var(--color-status-error)');

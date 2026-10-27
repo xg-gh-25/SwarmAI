@@ -9,6 +9,8 @@ import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import tempfile
+
 import pytest
 
 
@@ -1171,9 +1173,21 @@ class TestG6AtomicUpdateLock:
         import inspect
         from hive.provisioner import HiveProvisioner
 
-        source = inspect.getsource(HiveProvisioner.update)
-        assert "status = 'updating'" in source
-        assert "AND status = 'running'" in source
+        import aiosqlite
+        db = Path(tempfile.mkdtemp()) / "h.db"
+        async with aiosqlite.connect(db) as c:
+            await c.execute("CREATE TABLE hive_instances (id TEXT, status TEXT, updated_at TEXT)")
+            await c.execute("INSERT INTO hive_instances VALUES ('i1', 'running', ''), ('i2', 'stopped', '')")
+            await c.commit()
+        p = HiveProvisioner(db)
+        await p.claim_update("i1")
+        with pytest.raises(RuntimeError, match="not in 'running' state"):
+            await p.claim_update("i1")  # a second update while the first holds it
+        with pytest.raises(RuntimeError, match="not in 'running' state"):
+            await p.claim_update("i2")
+        async with aiosqlite.connect(db) as c:
+            rows = dict(await (await c.execute("SELECT id, status FROM hive_instances")).fetchall())
+        assert rows == {"i1": "updating", "i2": "stopped"}
 
 
 class TestG7PreUpdateBackup:

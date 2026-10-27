@@ -136,7 +136,7 @@ rsync -a "${PROJECT_ROOT}/desktop/dist/" "${STAGING}/desktop/dist/"
 echo "[release] Copying hive config (the files the repo ships)..."
 HIVE_LIST="${STAGING}.hive-files"
 (cd "${PROJECT_ROOT}" && python3 backend/scripts/shipped_skills.py hive) \
-    | grep -v -E '^hive/(release\.sh|update-hive\.sh)$|^hive/seed/' > "${HIVE_LIST}" || true
+    | grep -v -E '^hive/(release\.sh|update-hive\.sh|smoke_package\.sh)$|^hive/seed/' > "${HIVE_LIST}" || true
 if ! grep -qx 'hive/swarmai-hive.sh' "${HIVE_LIST}"; then
     echo "[release] ERROR: hive file list has no hive/swarmai-hive.sh — aborting" >&2
     exit 1

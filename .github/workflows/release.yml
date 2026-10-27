@@ -9,7 +9,8 @@ name: Release
 #
 # The Hive package (build-hive) is built from this clean checkout, so it carries only what
 # the repo ships: hive/release.sh without --with-live-ddd, then verify_package.sh --public,
-# which fails if the seed holds anything beyond config + public context. Users' Hives
+# which fails if the seed holds anything beyond config + public context, then
+# smoke_package.sh installs and starts it as a Hive's first boot would. Users' Hives
 # download it, with its .sha256, from the release (backend/hive/provisioner.py
 # _sync_release_to_s3): only once the draft below is published — a draft is not visible.
 
@@ -148,7 +149,9 @@ jobs:
 
   build-hive:
     needs: prepare
-    runs-on: ubuntu-latest
+    # arm64, like every Hive (m7g instances): the smoke test then installs the same
+    # wheels a Hive will (an x86 runner would pass a dependency with no aarch64 wheel).
+    runs-on: ubuntu-24.04-arm
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
@@ -159,6 +162,11 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
+
+      # A Hive installs with python3.12 (backend/hive/user_data.py); the smoke test does too.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install frontend dependencies
         working-directory: ./desktop
@@ -178,6 +186,11 @@ jobs:
 
       - name: Verify it is safe to publish
         run: bash hive/verify_package.sh --public "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz"
+
+      # Install it the way a Hive's first boot does and start it: /health must report this
+      # version, the workspace must be seeded, and a non-public route must refuse (401).
+      - name: Install and start the package (smoke)
+        run: bash hive/smoke_package.sh "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz"
 
       - name: Name the checksum after the package
         run: mv dist/checksums.txt "dist/swarmai-hive-v${VERSION}-linux-arm64.tar.gz.sha256"

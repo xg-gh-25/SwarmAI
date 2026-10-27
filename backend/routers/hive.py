@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from database import db
-from hive.provisioner import ALLOWED_INSTANCE_TYPES, HiveProvisioner, HIVE_NAME_RE, AMI_ID_RE
+from hive.provisioner import ALLOWED_INSTANCE_TYPES, HiveProvisioner, HIVE_NAME_RE, AMI_ID_RE, VERSION_RE
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,18 @@ def _get_provisioner() -> HiveProvisioner:
     if _provisioner is None:
         _provisioner = HiveProvisioner(db.db_path)
     return _provisioner
+
+
+# Strong references to running background tasks: the event loop keeps only weak ones, so
+# an unreferenced task (an update holding a Hive in 'updating') could be collected mid-run.
+_BACKGROUND: set[asyncio.Task] = set()
+
+
+def _keep(task: asyncio.Task) -> asyncio.Task:
+    _BACKGROUND.add(task)
+    task.add_done_callback(_BACKGROUND.discard)
+    task.add_done_callback(_log_task_failure)
+    return task
 
 
 def _log_task_failure(task: asyncio.Task) -> None:
@@ -153,12 +165,14 @@ class HiveInstanceCreate(BaseModel):
 
 
 class HiveInstanceUpdate(BaseModel):
-    version: str
+    version: Optional[str] = None  # None: the latest published release
 
     @field_validator("version")
     @classmethod
-    def validate_version(cls, v: str) -> str:
-        if not re.match(r'^[a-zA-Z0-9._\-]+$', v):
+    def validate_version(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not VERSION_RE.fullmatch(v):
             raise ValueError(f"Invalid version string: {v!r}")
         if len(v) > 32:
             raise ValueError("Version string too long (max 32 chars)")
@@ -175,7 +189,7 @@ class HiveRetryRequest(BaseModel):
     def validate_version(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return v
-        if not re.match(r'^[a-zA-Z0-9._\-]+$', v):
+        if not VERSION_RE.fullmatch(v):
             raise ValueError(f"Invalid version string: {v!r}")
         if len(v) > 32:
             raise ValueError("Version string too long (max 32 chars)")
@@ -401,7 +415,11 @@ async def verify_account(account_id: str):
 
 @router.get("/instances", response_model=list[HiveInstanceResponse])
 async def list_instances():
-    """List all Hive instances."""
+    """List all Hive instances (first ending any update SwarmAI was stopped in the middle of)."""
+    try:
+        await _get_provisioner().release_stale_updates()
+    except Exception as e:
+        logger.warning("Could not release stale Hive updates: %s", e)
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances ORDER BY created_at DESC")
         rows = [dict(r) for r in await cursor.fetchall()]
@@ -524,9 +542,23 @@ async def start_instance(instance_id: str):
     return {"status": "running"}
 
 
+@router.get("/latest-version")
+async def latest_version():
+    """The latest published SwarmAI release: what a Hive can be updated to."""
+    _require_desktop()
+    try:
+        return {"version": await _get_provisioner()._resolve_version(None)}
+    except Exception as e:
+        logger.warning("latest Hive version lookup failed: %s", e)
+        raise HTTPException(status_code=502, detail="Cannot determine the latest SwarmAI release")
+
+
 @router.post("/instances/{instance_id}/update")
-async def update_instance(instance_id: str, body: HiveInstanceUpdate):
-    """Update a Hive to a new version via SSM Run Command."""
+async def update_instance(instance_id: str, body: Optional[HiveInstanceUpdate] = None):
+    """Update a running Hive to a release (default: the latest published one) via SSM.
+
+    Claims the Hive (running → updating) and returns; the update runs in the background
+    and ends 'running', with the new version or with error_message saying why not."""
     _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
@@ -538,15 +570,21 @@ async def update_instance(instance_id: str, body: HiveInstanceUpdate):
 
     provisioner = _get_provisioner()
     try:
-        await provisioner.update(instance_id, body.version)
-    except RuntimeError as e:
-        # G6: Concurrent update or invalid state → 409 Conflict
-        if "not in 'running' state" in str(e):
-            raise HTTPException(status_code=409, detail=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        version = await provisioner._resolve_version(body.version if body else None)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "updated", "version": body.version}
+        logger.warning("Hive update: version lookup failed: %s", e)
+        raise HTTPException(status_code=502, detail="Cannot determine the latest SwarmAI release")
+    if len(version) > 32 or not VERSION_RE.fullmatch(version):
+        raise HTTPException(status_code=400 if body and body.version else 502,
+                            detail="Unexpected release version")
+    try:
+        await provisioner.claim_update(instance_id)
+    except RuntimeError as e:
+        # G6: concurrent update or the Hive left 'running' → 409 Conflict
+        raise HTTPException(status_code=409, detail=str(e))
+    _keep(asyncio.create_task(provisioner.update(instance_id, version, claimed=True),
+                              name=f"hive-update-{instance_id[:8]}"))
+    return {"status": "updating", "version": version}
 
 
 @router.delete("/instances/{instance_id}")
