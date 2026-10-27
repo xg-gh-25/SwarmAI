@@ -215,10 +215,12 @@ kinds of fix, and only after checking them itself. Name one in a finding's `fix`
    waiting condition, exactly one of: once / after / until / when `X` exists|lands|ships|is
    built|is done|is ready|is available|is implemented|is shipped|is merged, or 等/待 `X`
    存在|上线|完成|就绪|落地|建好(后); `X` in backticks as in the doc; `done` = the ticked line,
-   verbatim, naming the same `X` in backticks.
+   verbatim, naming the same `X` in backticks — or the same name with or without a prefix
+   (`s_x` and `x`, `pkg/x` and `x` count as the same).
 2. "swap_superseded_path" — the doc cites a file whose own header says it is SUPERSEDED and
-   names the current file. `path_old` = the cited path as written; `path_new` = the path the
-   header names, as written there.
+   names the current file. Open every file the docs cite and read its first lines to find
+   these. `path_old` = the cited path as written; `path_new` = the path the header names, as
+   written there.
 3. "swap_code_value" — the doc states a number or version for a code identifier and a
    tracked source file of the bound repo assigns a different one (`IDENT = value`). `line` =
    a verbatim piece of the doc line; `identifier`, `value_old`, `value_new`; `code_file` = the
