@@ -14,7 +14,7 @@ self-evolving systems and compound knowledge.
 
 Human directs. AI delivers.
 
-## What Makes SwarmAI Different
+## What Makes It Different
 
 Most AI assistants are stateless -- every conversation starts from scratch. SwarmAI is
 built around **persistent context** and a **self-growing intelligence core**: value

@@ -197,5 +197,5 @@ def _classify_signal(title: str, summary: str) -> tuple[str, str]:
     else:
         # Strategic/competitive → PRODUCT.md
         if any(kw in text for kw in ("competitor", "market", "disruption")):
-            return "PRODUCT.md", "What Makes SwarmAI Different"
+            return "PRODUCT.md", "What Makes It Different"
         return "PRODUCT.md", "Vision"
