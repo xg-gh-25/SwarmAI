@@ -6,7 +6,9 @@
  *  - 运行: what can be sent out now (idle workers), the fleet, then the runs by what
  *    they ask of the user — 等你 → 在跑 → 已安排 → 24 小时内结束.
  *  - 历史: one verdict sentence, the five audit dimensions side by side (no composite
- *    score), runs per day, worker occupancy, and a breakdown by run type.
+ *    score), the runs themselves grouped by brain (DDD) or by Project Agent (runs with
+ *    neither in a group of their own, last), runs per day, worker occupancy, and a
+ *    breakdown by run type.
  *
  * Responsive: the panel measures its own width (it shares the row with the chat
  * column, whose width the user drags, and the Canvas), not the window. Below
@@ -24,12 +26,13 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { swarmOutService, type SwarmOutHives } from '../../services/swarmOut';
 import { HiveGuide } from './HiveGuide';
+import { groupHistory, isCodeRun, typeMix, type HistoryAxis, type HistoryGroup } from './history';
 import { JudgeTag } from './JudgeTag';
 import { LiveDispatches } from './LiveDispatches';
 import { TraceTags } from './TraceTags';
 import {
-  BY_TYPE, DAILY_COMPLETED, DAILY_LABELS, ENDED, FLEET, HISTORY_DIMENSIONS, HISTORY_VERDICT,
-  OCCUPANCY, OCCUPANCY_DAYS, RUNNING, SCHEDULED, WAITING, type RunRow, type RunTrace,
+  BY_TYPE, DAILY_COMPLETED, DAILY_LABELS, ENDED, FLEET, HISTORY_DIMENSIONS, HISTORY_RUNS, HISTORY_VERDICT,
+  OCCUPANCY, OCCUPANCY_DAYS, RUNNING, SCHEDULED, WAITING, type HistoryRun, type RunRow, type RunTrace,
 } from './mockData';
 
 /** Below this panel width (CSS px) the dashboard uses its compact layout. */
@@ -267,6 +270,85 @@ function Occupancy() {
   );
 }
 
+/** A group shows its newest runs up to this many; the rest open on demand. */
+const HISTORY_GROUP_SHOW = 5;
+const OUTCOME_DOT: Record<HistoryRun['outcome'], RunRow['state']> = { landed: 'done', done: 'done', not_landed: 'waiting', failed: 'failed' };
+
+/** One ended run: what it was asked to do, then its type, what came of it, time and
+ *  tokens; with `showBrain`, also the brain the run's context came from. */
+function HistoryRunRow({ r, showBrain }: { r: HistoryRun; showBrain: boolean }) {
+  const meta = [r.type, showBrain && r.brain ? `大脑 ${r.brain}` : null, r.result, r.duration, `${r.tokensK}k tokens`].filter(Boolean).join(' · ');
+  return (
+    <li className="px-2 py-2 border-t border-[var(--color-border)] first:border-t-0 min-w-0" data-testid="history-run">
+      <div className="flex items-start gap-2 min-w-0">
+        <span className="h-[18px] flex items-center flex-shrink-0"><Dot state={OUTCOME_DOT[r.outcome]} /></span>
+        <span className="min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
+        <span className={`h-[18px] flex items-center text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{r.when}</span>
+      </div>
+      <div className={`text-[11.5px] ${muted} mt-0.5 pl-[15px] break-words`}>{meta}</div>
+    </li>
+  );
+}
+
+/** One brain / agent: its name, how many runs it drove and of what kind, the share of
+ *  its code runs that landed, then the runs. By agent, the brain is named once in the
+ *  heading when all the group's runs share it, else on each run. */
+function HistoryGroupBlock({ g, axis }: { g: HistoryGroup; axis: HistoryAxis }) {
+  const compact = useContext(Compact);
+  const [all, setAll] = useState(false);
+  const code = g.runs.filter(isCodeRun);
+  const landed = code.filter((r) => r.outcome === 'landed').length;
+  const hiddenCount = g.runs.length - HISTORY_GROUP_SHOW;
+  const brains = new Set(g.runs.map((r) => r.brain));
+  const oneBrain = axis === 'agent' && !g.unassigned && brains.size === 1 ? g.runs[0].brain : undefined;
+  return (
+    <div className={compact ? 'mt-3' : 'mt-4'} data-testid="history-group" data-group={g.name} data-unassigned={g.unassigned || undefined}>
+      <div className="flex items-baseline flex-wrap gap-x-2 gap-y-0.5 px-0.5 mb-1.5 min-w-0">
+        <h4 className={`m-0 text-[13px] font-semibold ${g.unassigned ? muted : ''}`}>{g.name}</h4>
+        <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums" data-testid="history-group-count">{g.runs.length} 个 run</span>
+        <span className={`text-[12px] ${muted}`}>{oneBrain && `大脑 ${oneBrain} · `}{typeMix(g.runs)}</span>
+        {code.length > 0 && (
+          <span className={`ml-auto text-[12px] whitespace-nowrap ${muted}`}>
+            合格交付 <b className="font-semibold tabular-nums text-[var(--color-text)]">{landed}/{code.length}</b>
+          </span>
+        )}
+      </div>
+      <ul className={`${card} m-0 list-none px-1.5 py-0.5`}>
+        {(all ? g.runs : g.runs.slice(0, HISTORY_GROUP_SHOW)).map((r) => <HistoryRunRow key={r.id} r={r} showBrain={axis === 'agent' && !oneBrain} />)}
+      </ul>
+      {hiddenCount > 0 && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="mt-1 px-0.5 text-[12px] text-[var(--color-primary)] hover:underline">
+          {all ? '收起' : `再显示 ${hiddenCount} 个`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The runs of the period, by brain (DDD) or by Project Agent. */
+function RunHistory() {
+  const compact = useContext(Compact);
+  const [axis, setAxis] = useState<HistoryAxis>('brain');
+  const seg = (v: HistoryAxis, label: string) => (
+    <button
+      type="button"
+      onClick={() => setAxis(v)}
+      aria-pressed={axis === v}
+      className={`px-2.5 py-[2px] rounded-md text-[12px] whitespace-nowrap ${axis === v ? 'bg-[var(--color-card)] text-[var(--color-text)] font-medium shadow-sm' : muted}`}
+    >{label}</button>
+  );
+  return (
+    <section className={compact ? 'mt-5' : 'mt-6'} data-testid="run-history" data-axis={axis}>
+      <div className="flex items-center flex-wrap gap-x-2 gap-y-1.5 px-0.5">
+        <h3 className="m-0 text-[13px] font-semibold">Run 记录</h3>
+        <span className="text-[12px] text-[var(--color-text-dim)]">近 7 天</span>
+        <div className="ml-auto inline-flex rounded-lg p-[2px] bg-[var(--color-bg-chrome)]">{seg('brain', '按大脑')}{seg('agent', '按 Project Agent')}</div>
+      </div>
+      {groupHistory(HISTORY_RUNS, axis).map((g) => <HistoryGroupBlock key={`${axis}:${g.name}`} g={g} axis={axis} />)}
+    </section>
+  );
+}
+
 function History() {
   const compact = useContext(Compact);
   return (
@@ -298,6 +380,7 @@ function History() {
           );
         })}
       </div>
+      <RunHistory />
       <div className="grid gap-x-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
         <section className={`${card} mt-4`}><div className={cardHead}><h3 className="m-0 text-[13px] font-semibold">每天完成的 run</h3><span className="text-[12px] text-[var(--color-text-dim)]">近 14 天</span></div><DailyBars /></section>
         <section className={`${card} mt-4`}><div className={cardHead}><h3 className="m-0 text-[13px] font-semibold">工蜂占用</h3><span className="text-[12px] text-[var(--color-text-dim)]">近 7 天 · 每小时同时在跑几个</span></div><Occupancy /></section>

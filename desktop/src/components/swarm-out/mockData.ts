@@ -220,11 +220,68 @@ export const OCCUPANCY: number[][] = OCCUPANCY_DAYS.map((_, di) =>
   }),
 );
 
-export const BY_TYPE = [
-  { type: '代码 · pipeline bugfix', runs: 8, qualified: '5 / 8', active: '38 分', tokens: '520k', reason: 'Hive 上缺测试依赖（2 次）' },
-  { type: '代码 · pipeline trivial', runs: 6, qualified: '5 / 6', active: '14 分', tokens: '160k', reason: 'finding 没关（1 次）' },
-  { type: '调研', runs: 4, qualified: 'N/A', active: '26 分', tokens: '300k', reason: '资料源打不开（1 次）' },
-  { type: '定时任务', runs: 6, qualified: 'N/A', active: '4 分', tokens: '40k', reason: 'npm 源超时（1 次）' },
+/** A run's type, as the history groups it: a pipeline profile, or 调研 / 定时. */
+export type HistoryType = 'bugfix' | 'trivial' | '调研' | '定时';
+
+export const BY_TYPE: { key: HistoryType; type: string; runs: number; qualified: string; active: string; tokens: string; reason: string }[] = [
+  { key: 'bugfix', type: '代码 · pipeline bugfix', runs: 8, qualified: '5 / 8', active: '38 分', tokens: '520k', reason: 'Hive 上缺依赖（2 次）' },
+  { key: 'trivial', type: '代码 · pipeline trivial', runs: 6, qualified: '5 / 6', active: '14 分', tokens: '160k', reason: 'finding 没关（1 次）' },
+  { key: '调研', type: '调研', runs: 4, qualified: 'N/A', active: '26 分', tokens: '300k', reason: '资料源打不开（1 次）' },
+  { key: '定时', type: '定时任务', runs: 6, qualified: 'N/A', active: '4 分', tokens: '40k', reason: '源站超时（1 次）' },
+];
+
+/**
+ * One ended run in the history: what it was asked to do (the intent) and what came of
+ * it, with the brain (DDD) whose context it ran on and the Project Agent that ran it.
+ * Either may be absent: a scheduled job or an ad-hoc research task runs with no brain,
+ * and a brain's task can run as a plain session with no Project Agent. Code runs
+ * (bugfix / trivial) end LANDED or NOT_LANDED; other runs end done or failed.
+ */
+export interface HistoryRun {
+  id: string;
+  when: string;
+  title: string;
+  type: HistoryType;
+  brain?: string;
+  agent?: string;
+  outcome: 'landed' | 'not_landed' | 'done' | 'failed';
+  result: string;
+  duration: string;
+  tokensK: number;
+}
+
+const SA = 'SwarmAI';
+const SA_AGENT = 'SwarmAI Project Agent';
+const AR = 'ai-ready-repo';
+const AR_AGENT = 'ai-ready-repo Project Agent';
+const SC = 'swarm-content';
+
+/** The runs of the last 7 days, newest first (the 24 the verdict and 按类型 count). */
+export const HISTORY_RUNS: HistoryRun[] = [
+  { id: 'e2', when: '10/27 09:02', title: '每日 GitHub Trending', type: '定时', outcome: 'done', result: '已存进 Signals', duration: '4 分', tokensK: 38 },
+  { id: 'e3', when: '10/27 01:40', title: '调研：后台常驻会话的 3 种做法', type: '调研', brain: SA, outcome: 'done', result: '报告收进 Knowledge/Reports · 1 条判断回流 TECH.md', duration: '52 分', tokensK: 288 },
+  { id: 'e4', when: '10/26 23:10', title: '升级 Hive 上的 Node 依赖', type: 'bugfix', brain: SA, agent: SA_AGENT, outcome: 'not_landed', result: '没落地 · npm 源超时 3 次，进展保留', duration: '27 分', tokensK: 102 },
+  { id: 'e1', when: '10/26 22:58', title: '修 steer 回放时间戳错位', type: 'bugfix', brain: SA, agent: SA_AGENT, outcome: 'landed', result: '已落到 main 7d34ab1 · 1 条判断回流', duration: '38 分', tokensK: 519 },
+  { id: 'h05', when: '10/26 09:01', title: '每日 GitHub Trending', type: '定时', outcome: 'done', result: '已存进 Signals', duration: '3 分', tokensK: 35 },
+  { id: 'h06', when: '10/25 21:40', title: '修 Brain Hub 文件树在窄屏下被截断', type: 'bugfix', brain: SA, agent: SA_AGENT, outcome: 'landed', result: '已落到 main', duration: '33 分', tokensK: 460 },
+  { id: 'h07', when: '10/25 16:12', title: 'README 补 quick start 截图', type: 'trivial', brain: AR, agent: AR_AGENT, outcome: 'landed', result: '已落到 main', duration: '9 分', tokensK: 120 },
+  { id: 'h08', when: '10/25 09:00', title: '每日 GitHub Trending', type: '定时', outcome: 'failed', result: '没完成 · 源站超时', duration: '6 分', tokensK: 21 },
+  { id: 'h09', when: '10/24 23:30', title: '修 recall 漏掉归档分片', type: 'bugfix', brain: SA, agent: SA_AGENT, outcome: 'not_landed', result: '没落地 · Quality BLOCK：撤掉修复后新测试仍是绿的', duration: '44 分', tokensK: 610 },
+  { id: 'h10', when: '10/24 20:05', title: '统一 skill 文档的触发词写法', type: 'trivial', brain: SA, agent: SA_AGENT, outcome: 'landed', result: '已落到 main', duration: '15 分', tokensK: 170 },
+  { id: 'h11', when: '10/24 14:20', title: '调研：桌面端截图对比工具', type: '调研', brain: SA, outcome: 'done', result: '报告收进 Knowledge/Reports', duration: '24 分', tokensK: 260 },
+  { id: 'h12', when: '10/24 09:00', title: '每日 GitHub Trending', type: '定时', outcome: 'done', result: '已存进 Signals', duration: '4 分', tokensK: 40 },
+  { id: 'h13', when: '10/23 22:47', title: '修检查脚本在 Windows 路径上误报', type: 'bugfix', brain: AR, agent: AR_AGENT, outcome: 'landed', result: '已落到 main', duration: '29 分', tokensK: 380 },
+  { id: 'h14', when: '10/23 18:30', title: '整理本周内容选题', type: '调研', brain: SC, outcome: 'done', result: '选题清单 6 条', duration: '28 分', tokensK: 310 },
+  { id: 'h15', when: '10/23 11:02', title: '修 pipeline 报告里重复的 finding', type: 'bugfix', brain: SA, agent: SA_AGENT, outcome: 'not_landed', result: '没落地 · Hive 上缺测试依赖，进展保留', duration: '41 分', tokensK: 530 },
+  { id: 'h16', when: '10/23 09:00', title: '每日 GitHub Trending', type: '定时', outcome: 'done', result: '已存进 Signals', duration: '4 分', tokensK: 42 },
+  { id: 'h17', when: '10/22 23:15', title: 'TECH.md 改掉过时的端口说明', type: 'trivial', brain: SA, agent: SA_AGENT, outcome: 'landed', result: '已落到 main', duration: '11 分', tokensK: 140 },
+  { id: 'h18', when: '10/22 20:40', title: '修模板生成的 AGENTS.md 缺小节', type: 'bugfix', brain: AR, agent: AR_AGENT, outcome: 'landed', result: '已落到 main', duration: '36 分', tokensK: 520 },
+  { id: 'h19', when: '10/22 15:10', title: '海报文案改成中英双语', type: 'trivial', brain: SC, outcome: 'landed', result: '已落到 main', duration: '13 分', tokensK: 150 },
+  { id: 'h20', when: '10/22 10:20', title: 'SKILL.md 示例换成通用路径', type: 'trivial', brain: AR, agent: AR_AGENT, outcome: 'landed', result: '已落到 main', duration: '12 分', tokensK: 160 },
+  { id: 'h21', when: '10/21 22:05', title: '修切换 tab 后滚动位置丢失', type: 'bugfix', brain: SA, agent: SA_AGENT, outcome: 'landed', result: '已落到 main', duration: '39 分', tokensK: 540 },
+  { id: 'h22', when: '10/21 17:30', title: '修正 CONTRIBUTING 里的命令', type: 'trivial', brain: AR, agent: AR_AGENT, outcome: 'not_landed', result: '没落地 · 1 个 finding 没关', duration: '17 分', tokensK: 180 },
+  { id: 'h23', when: '10/21 13:00', title: '调研：开源 Agent 的 eval 做法', type: '调研', outcome: 'failed', result: '没完成 · 资料源打不开', duration: '19 分', tokensK: 150 },
+  { id: 'h24', when: '10/21 09:00', title: '每日 GitHub Trending', type: '定时', outcome: 'done', result: '已存进 Signals', duration: '4 分', tokensK: 37 },
 ];
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,8 @@ import { JudgeTag } from './JudgeTag';
 import { judgeState, judgeSummary } from './judge';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
 import { TraceTags } from './TraceTags';
-import type { RunJudge, RunTrace } from './mockData';
+import { BY_TYPE, HISTORY_RUNS, type HistoryRun, type RunJudge, type RunTrace } from './mockData';
+import { groupHistory, NO_AGENT, NO_BRAIN } from './history';
 
 // The dashboard's live section polls /api/swarm-out/runs; these tests cover the sample
 // parts, so the service answers with nothing (LiveDispatches.test.tsx covers the live part).
@@ -270,5 +271,65 @@ describe('SwarmOutDashboard on a narrow panel', () => {
       // the Autonomy Judge tag is still on every judged run
       expect(screen.getAllByTestId('judge-tag').length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('Run history by brain / Project Agent', () => {
+  // Questions: is every run in exactly one group, the brains that drove the most first and
+  // the runs with no brain (no agent) in their own group, last; does the agent view name
+  // each run's brain; does a group cap at 5 rows and open the rest; does the sample agree
+  // with 按类型 (one sample, not two that drift apart).
+  const groupsOf = () => screen.getAllByTestId('history-group');
+  const openHistory = () => {
+    render(<SwarmOutDashboard />);
+    fireEvent.click(screen.getByRole('button', { name: '历史' }));
+  };
+
+  it('pure grouping: unassigned last whatever its size, then by run count', () => {
+    const run = (id: string, brain?: string): HistoryRun => ({ id, when: '', title: id, type: '定时', brain, outcome: 'done', result: '', duration: '', tokensK: 1 });
+    const g = groupHistory([run('a'), run('b'), run('c'), run('d', 'X'), run('e', 'Y'), run('f', 'Y')], 'brain');
+    expect(g.map((x) => x.name)).toEqual(['Y', 'X', NO_BRAIN]);
+    expect(g[2].unassigned).toBe(true);
+    expect(groupHistory([run('a', 'X')], 'agent').map((x) => x.name)).toEqual([NO_AGENT]);
+  });
+
+  it('by brain: every run once, the no-brain group last', () => {
+    openHistory();
+    const groups = groupsOf();
+    expect(groups.at(-1)?.dataset.group).toBe(NO_BRAIN);
+    expect(groups.filter((x) => x.dataset.unassigned)).toHaveLength(1);
+    const counts = groups.map((x) => Number(x.querySelector('[data-testid="history-group-count"]')?.textContent?.split(' ')[0]));
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(HISTORY_RUNS.length);
+    expect(groups[0].dataset.group).toBe('SwarmAI');
+  });
+
+  it('by Project Agent: the no-agent group last; the brain named once per agent, per run without one', () => {
+    openHistory();
+    fireEvent.click(screen.getByRole('button', { name: '按 Project Agent' }));
+    const groups = groupsOf();
+    expect(groups.at(-1)?.dataset.group).toBe(NO_AGENT);
+    // an agent's brain is named once in its heading, not on every run
+    expect(groups[0].querySelector('h4')?.parentElement?.textContent).toContain('大脑 SwarmAI');
+    expect(groups[0].querySelector('[data-testid="history-run"]')?.textContent).not.toContain('大脑');
+    // runs with no agent come from different brains (or none): each run names its own
+    expect(groups.at(-1)?.textContent).toContain('大脑 SwarmAI');
+  });
+
+  it('a group shows 5 runs and opens the rest', () => {
+    openHistory();
+    const big = groupsOf()[0];
+    const total = HISTORY_RUNS.filter((r) => r.brain === 'SwarmAI').length;
+    expect(total).toBeGreaterThan(5);
+    expect(big.querySelectorAll('[data-testid="history-run"]')).toHaveLength(5);
+    fireEvent.click(screen.getByRole('button', { name: `再显示 ${total - 5} 个` }));
+    expect(groupsOf()[0].querySelectorAll('[data-testid="history-run"]')).toHaveLength(total);
+  });
+
+  it('the sample runs add up to 按类型', () => {
+    for (const t of BY_TYPE) expect(HISTORY_RUNS.filter((r) => r.type === t.key)).toHaveLength(t.runs);
+    for (const t of BY_TYPE.filter((x) => x.qualified !== 'N/A')) {
+      const rs = HISTORY_RUNS.filter((r) => r.type === t.key);
+      expect(`${rs.filter((r) => r.outcome === 'landed').length} / ${rs.length}`).toBe(t.qualified);
+    }
   });
 });
