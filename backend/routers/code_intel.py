@@ -17,10 +17,7 @@ from pydantic import BaseModel
 from core.code_intel import (
     load_project_graph,
     get_code_intel_db_path,
-    invalidate_cache,
-    extract_repo_path,
 )
-from core.ddd_paths import ddd_path
 
 logger = logging.getLogger(__name__)
 
@@ -212,49 +209,84 @@ def _compute_freshness(last_indexed: str | None) -> str:
 
 
 def _run_reindex(project: str) -> None:
-    """Run incremental re-index for a project. Called as background task.
+    """Run a full re-index for a project (clear + re-parse). Called as background task.
 
     Releases _reindex_in_progress guard on completion (success or failure).
     """
     try:
-        from core.code_intel.graph_store import GraphStore
         from core.code_intel.parser import parse_repo
 
-        db_path = get_code_intel_db_path(project)
-        if not db_path.exists():
+        from jobs.paths import PROJECTS_DIR
+        from core.code_intel import (
+            code_intel_dbs, repo_root_is_owned, resolve_owned_repo_root,
+        )
+        project_dir = PROJECTS_DIR / project
+        dbs = code_intel_dbs(project_dir)
+        if not dbs:
             logger.warning(f"Cannot reindex {project}: no code_intel.db")
             return
 
-        # Read repo path from TECH.md
-        projects_dir = db_path.parent
-        tech_md = ddd_path(projects_dir, "TECH.md")
-        if not tech_md.exists():
-            logger.warning(f"Cannot reindex {project}: no TECH.md with repo path")
+        # Rebuild through the project's cached graph (the one recall and the watcher
+        # use), holding its write lock for the whole rebuild: readers on it wait and
+        # then see the new graph, never an emptied one, and nothing closes the store
+        # the watcher holds.
+        graph = load_project_graph(project)
+        if graph is None:
+            logger.warning(f"Cannot reindex {project}: code_intel.db could not be opened")
             return
-
-        content = tech_md.read_text(encoding="utf-8")
-        # Multi-format parse via the shared helper (core/code_intel.extract_repo_path).
-        # The old inline single-format regex ('**Repo Path:**') matched ZERO of the
-        # real project TECH.md files (they use '**Local:**' / a bare '## Codebase
-        # Location' path line), so reindex was silently dead for every project.
-        raw_repo_path = extract_repo_path(content)
-        if not raw_repo_path:
-            logger.warning(f"Cannot reindex {project}: no repo_path in TECH.md")
+        # The repo to parse. A bind-managed db is ONLY ever its own clone; never fall
+        # back to another repo, which would mix two repos in one graph. The project's
+        # own db: the repo it records if the project owns it, else its owned repo.
+        primary = dbs[0]
+        if primary.repo_root is not None:
+            repo_path = str(primary.repo_root) if primary.repo_root.is_dir() else None
+        else:
+            stored = graph.get_meta("repo_root")
+            if stored and repo_root_is_owned(project_dir, stored):
+                repo_path = stored
+            else:
+                repo_path = resolve_owned_repo_root(project_dir)
+        if not repo_path:
+            logger.warning(f"Cannot reindex {project}: it owns no local repo "
+                           "(TECH.md / bindings.yaml)")
             return
-
-        from pathlib import Path as _Path
-        # Normalize (helper is pure — dir-validation/normalization is the caller's job).
-        repo_path = str(_Path(raw_repo_path.rstrip("/")).resolve())
         logger.info(f"Re-indexing {project} from {repo_path}")
+        import contextlib
+        from pathlib import Path as _Path
+        # A bind-managed clone may be mid-bind (cleared, re-cloning, rebuilt by the bind
+        # itself): take its bind lock, and skip rather than parse a half-cloned tree.
+        from core.ddd_bindings import BindInProgress
+        guard = contextlib.nullcontext()
+        if primary.repo_root is not None:
+            from core.ddd_bindings import _bind_lock
+            guard = _bind_lock(primary.repo_root, primary.repo or project)
+        try:
+            with guard:
+                # HEAD before the parse: a commit landing while it runs stays unindexed
+                # (the incremental path picks it up) instead of being stamped as done.
+                from core.code_intel.freshness import GitError, _git
+                try:
+                    head = _git(_Path(repo_path), ["rev-parse", "HEAD"]).strip() or None
+                except GitError:
+                    head = None
+                parse_results = parse_repo(_Path(repo_path))
+                with graph._conn_lock:
+                    # A full re-index REPLACES the graph: bulk_insert only adds rows,
+                    # so without clear() deleted files and removed symbols stayed.
+                    graph.clear()
+                    if parse_results:
+                        graph.bulk_insert(parse_results, repo_root=repo_path)
+                    else:
+                        graph.set_meta("repo_root", str(_Path(repo_path).resolve()))
+                    graph.set_meta("last_full_index", datetime.now(timezone.utc).isoformat())
+                    # clear() dropped the freshness marker; re-stamp it, or every
+                    # freshness check would read "never indexed".
+                    if head:
+                        graph.set_meta("last_indexed_commit", head)
+        except BindInProgress as exc:
+            logger.warning(f"Cannot reindex {project} now: {exc}")
+            return
 
-        graph = GraphStore(db_path)
-        parse_results = parse_repo(_Path(repo_path))
-        graph.bulk_insert(parse_results, repo_root=repo_path)
-        graph.set_meta("last_full_index", datetime.now(timezone.utc).isoformat())
-        graph.close()
-
-        # Invalidate cache so next read gets fresh data
-        invalidate_cache(project)
         logger.info(f"Re-index complete for {project}")
 
     except Exception as e:

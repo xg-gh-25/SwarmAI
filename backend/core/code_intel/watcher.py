@@ -58,9 +58,25 @@ class CodeIntelWatcher:
     def __init__(self, project_name: str, project_root: Path, graph_store: 'GraphStore'):
         self._project_name = project_name
         self._root = project_root
-        self._graph = graph_store
+        self._started_graph = graph_store
         self._task: asyncio.Task | None = None
         self._running = False
+
+    @property
+    def _graph(self) -> 'GraphStore':
+        """The project's CURRENT cached store for the same db, else the one started with.
+
+        ``invalidate_cache`` closes the cached store; a watcher holding the old object
+        would then fail on every batch until the daemon restarts.
+        """
+        try:
+            from . import load_project_graph
+            current = load_project_graph(self._project_name)
+            if current is not None and current._db_path == self._started_graph._db_path:
+                return current
+        except Exception:  # noqa: BLE001
+            pass
+        return self._started_graph
 
     async def start(self):
         """Start watching. Idempotent — calling twice is safe."""
@@ -158,6 +174,14 @@ class CodeIntelWatcher:
                     continue
 
             if not relative_files:
+                return
+
+            # A bind is clearing / re-cloning this checkout and rebuilds the whole graph
+            # itself: its deletes and creates are not edits to replay.
+            from core.ddd_bindings import bind_in_progress
+            if bind_in_progress(self._root):
+                logger.debug("CodeIntelWatcher: %s is being bound — batch skipped",
+                             self._project_name)
                 return
 
             # Phase 1: Single graph update (one FTS rebuild, not per-chunk)

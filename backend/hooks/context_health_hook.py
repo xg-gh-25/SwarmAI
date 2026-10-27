@@ -711,8 +711,8 @@ class ContextHealthHook:
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
                 continue
-            db_path = project_dir / "code_intel.db"
-            if not db_path.exists():
+            from core.code_intel import code_intel_db_for
+            if code_intel_db_for(project_dir) is None:
                 continue
 
             graph = load_project_graph(project_dir.name)
@@ -767,7 +767,6 @@ class ContextHealthHook:
                 continue  # don't block session start — background job handles it
 
             # Incremental update for small changes
-            from core.code_intel.parser import parse_file
             from pathlib import Path as P
 
             repo_root = P(graph.get_meta("repo_root") or "")
@@ -776,7 +775,7 @@ class ContextHealthHook:
 
             # OWNERSHIP GUARD (run_1950e67e): the THIRD index-trigger site (with the
             # startup watcher + reindex job). Never incrementally index a repo_root
-            # the project doesn't OWN (its own TECH.md must declare it) — else a
+            # the project doesn't OWN (its TECH.md or bindings.yaml must declare it) — else a
             # foreign/mis-seeded repo_root re-indexes another project's files into
             # this brain (the IVTHub-indexed-SwarmAI contamination). R27 all-consumers.
             from core.code_intel import repo_root_is_owned
@@ -787,30 +786,14 @@ class ContextHealthHook:
                     project_dir.name, repo_root)
                 continue
 
-            for rel_path in freshness.changed_files[:50]:  # cap at 50
-                full_path = repo_root / rel_path
-                if full_path.exists():
-                    # P1-7: Isolate per-file errors so one bad file doesn't skip the rest
-                    try:
-                        result = parse_file(full_path, repo_root)
-                        if result.nodes:
-                            file_hash = result.nodes[0].sha256 or ""
-                            graph.store_file_nodes_edges(
-                                rel_path, result.nodes, result.edges, file_hash
-                            )
-                    except Exception as file_err:
-                        logger.debug("code_intel: failed to parse %s: %s", rel_path, file_err)
-                else:
-                    # File was deleted — remove stale nodes/edges
-                    graph.remove_file(rel_path)
-
-            graph.rebuild_fts()
+            # One shared incremental path (GraphStore.incremental_update): re-stores
+            # changed files keeping callers' edges, purges deleted / emptied files and
+            # their routes, resolves cross-file targets, rebuilds FTS and checkpoints
+            # the WAL. The old inline loop skipped files that lost all symbols and
+            # never resolved the cross-file targets it stored.
+            graph.incremental_update(repo_root, freshness.changed_files[:50])  # cap at 50
             if freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
-            # Reclaim WAL disk space — this incremental path writes via
-            # store_file_nodes_edges + rebuild_fts (not incremental_update), so it
-            # must checkpoint too, else the -wal file re-bloats (Gate-2 finding E).
-            graph.checkpoint_truncate()
 
             logger.info(
                 "code_intel %s: incremental update — %d files refreshed",

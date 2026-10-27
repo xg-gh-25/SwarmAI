@@ -2175,7 +2175,7 @@ def parse_repo_with_coverage(
 
 # ── Layer 2: Cross-file Batch Resolution ────────────────────────────────
 
-def resolve_bare_targets(graph_store: GraphStore) -> int:
+def resolve_bare_targets(graph_store: GraphStore, files: list[str] | None = None) -> int:
     """
     Delegate to GraphStore.resolve_bare_targets() — all SQL stays in the store.
 
@@ -2184,6 +2184,7 @@ def resolve_bare_targets(graph_store: GraphStore) -> int:
       - 1 candidate -> resolve directly (confidence 0.8)
       - N candidates -> prefer the one whose file is imported by caller's file
       - 0 or ambiguous -> leave unresolved (orphan-cleanup drops it)
+    *files* limits it to edges whose source is in those files (None = all).
     Returns count of resolved edges.
     """
-    return graph_store.resolve_bare_targets(QUALIFIED_SEPARATOR)
+    return graph_store.resolve_bare_targets(QUALIFIED_SEPARATOR, files=files)

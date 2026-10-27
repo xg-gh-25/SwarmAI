@@ -23,27 +23,42 @@ class TestReindexChangedFiles:
         assert result == 0
 
     def test_reindexes_python_files(self, tmp_path):
-        """Parses and inserts changed .py files into graph."""
-        # Create a fake source file
+        """Changed .py files are re-stored in the real graph; a missing modified file is skipped."""
+        from core.code_intel.graph_store import GraphStore
+
         src = tmp_path / "backend" / "core" / "foo.py"
         src.parent.mkdir(parents=True)
         src.write_text("def hello(): pass\n")
+        graph = GraphStore(tmp_path / "g.db")
+        graph.set_meta("repo_root", str(tmp_path))  # the graph is built from this repo
+        try:
+            changed_files = [("A", "backend/core/foo.py"), ("M", "backend/core/bar.py")]
+            with patch("hooks.code_change_feed.load_project_graph", return_value=graph):
+                result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
+            assert result == 1
+            ids = [n["id"] for n in graph.get_nodes_by_file("backend/core/foo.py")]
+            assert "backend/core/foo.py::hello" in ids
+        finally:
+            graph.close()
 
-        changed_files = [("A", "backend/core/foo.py"), ("M", "backend/core/bar.py")]
+    def test_reindex_replaces_removed_symbols(self, tmp_path):
+        """A symbol removed from a file leaves the graph (the old path only ADDED rows)."""
+        from core.code_intel.graph_store import GraphStore
 
-        mock_graph = MagicMock()
-        mock_parse_result = MagicMock()
-        mock_parse_result.nodes = [MagicMock()]
-        mock_parse_result.edges = []
-
-        with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph), \
-             patch("hooks.code_change_feed.parse_file", return_value=mock_parse_result) as mock_parse:
-            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
-
-        # Should have attempted to parse foo.py (exists) but not bar.py (doesn't exist)
-        assert mock_parse.call_count == 1
-        mock_graph.bulk_insert.assert_called_once()
-        assert result == 1
+        src = tmp_path / "pkg" / "mod.py"
+        src.parent.mkdir(parents=True)
+        src.write_text("def old(): pass\n")
+        graph = GraphStore(tmp_path / "g.db")
+        graph.set_meta("repo_root", str(tmp_path))  # the graph is built from this repo
+        try:
+            with patch("hooks.code_change_feed.load_project_graph", return_value=graph):
+                _reindex_changed_files([("A", "pkg/mod.py")], str(tmp_path), "SwarmAI")
+                src.write_text("def new(): pass\n")
+                _reindex_changed_files([("M", "pkg/mod.py")], str(tmp_path), "SwarmAI")
+            ids = [n["id"] for n in graph.get_nodes_by_file("pkg/mod.py")]
+            assert ids == ["pkg/mod.py::new"]
+        finally:
+            graph.close()
 
     def test_skips_non_code_files(self, tmp_path):
         """Only .py and .ts/.tsx files are re-indexed."""
@@ -54,12 +69,13 @@ class TestReindexChangedFiles:
         ]
 
         mock_graph = MagicMock()
+        mock_graph.get_meta.return_value = str(tmp_path)  # built from this repo
         with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
             result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
 
-        # No code files → no parse calls
+        # No code files → the graph is never touched
         assert result == 0
-        mock_graph.bulk_insert.assert_not_called()
+        mock_graph.incremental_update.assert_not_called()
 
     def test_skips_test_files(self, tmp_path):
         """Test files are not indexed into the code graph."""
@@ -70,6 +86,7 @@ class TestReindexChangedFiles:
         changed_files = [("A", "tests/test_foo.py")]
 
         mock_graph = MagicMock()
+        mock_graph.get_meta.return_value = str(tmp_path)  # built from this repo
         with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
             result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
 
@@ -89,17 +106,49 @@ class TestReindexChangedFiles:
         assert result == 0
 
     def test_handles_deleted_files(self, tmp_path):
-        """Deleted files (status D) are skipped — can't parse what doesn't exist."""
-        changed_files = [("D", "backend/old_module.py")]
+        """A deleted file (status D) loses its nodes — the old path ignored deletions."""
+        from core.code_intel.graph_store import GraphStore
 
-        mock_graph = MagicMock()
-        with patch("hooks.code_change_feed.load_project_graph", return_value=mock_graph):
-            result = _reindex_changed_files(changed_files, str(tmp_path), "SwarmAI")
-
-        assert result == 0
+        src = tmp_path / "backend" / "old_module.py"
+        src.parent.mkdir(parents=True)
+        src.write_text("def gone(): pass\n")
+        graph = GraphStore(tmp_path / "g.db")
+        graph.set_meta("repo_root", str(tmp_path))  # the graph is built from this repo
+        try:
+            with patch("hooks.code_change_feed.load_project_graph", return_value=graph):
+                _reindex_changed_files([("A", "backend/old_module.py")], str(tmp_path), "SwarmAI")
+                assert graph.get_nodes_by_file("backend/old_module.py")
+                src.unlink()
+                result = _reindex_changed_files(
+                    [("D", "backend/old_module.py")], str(tmp_path), "SwarmAI")
+            assert result == 1
+            assert graph.get_nodes_by_file("backend/old_module.py") == []
+        finally:
+            graph.close()
 
     def test_skips_when_code_intel_unavailable(self, tmp_path):
         """Early return when code_intel module is not importable."""
         with patch("hooks.code_change_feed._CODE_INTEL_AVAILABLE", False):
             result = _reindex_changed_files([("A", "foo.py")], str(tmp_path), "SwarmAI")
         assert result == 0
+
+
+class TestFeedWritesOnlyItsOwnRepo:
+    def test_commit_in_another_repo_leaves_the_graph_alone(self, tmp_path):
+        """Two repos can share a relative path; the graph of repo A must not take B's file."""
+        from core.code_intel.graph_store import GraphStore
+
+        repo_a, repo_b = tmp_path / "a", tmp_path / "b"
+        for r, body in ((repo_a, "def in_a(): pass\n"), (repo_b, "def in_b(): pass\n")):
+            (r / "src").mkdir(parents=True)
+            (r / "src" / "main.py").write_text(body)
+        graph = GraphStore(tmp_path / "g.db")
+        try:
+            graph.set_meta("repo_root", str(repo_a))
+            with patch("hooks.code_change_feed.load_project_graph", return_value=graph):
+                assert _reindex_changed_files([("A", "src/main.py")], str(repo_a), "P") == 1
+                assert _reindex_changed_files([("M", "src/main.py")], str(repo_b), "P") == 0
+            ids = [n["id"] for n in graph.get_nodes_by_file("src/main.py")]
+            assert ids == ["src/main.py::in_a"]
+        finally:
+            graph.close()

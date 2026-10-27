@@ -79,8 +79,10 @@ def reindex_projects(full: bool = False) -> dict:
     for project_dir in projects_dir.iterdir():
         if not project_dir.is_dir():
             continue
-        db_path = project_dir / "code_intel.db"
-        if not db_path.exists():
+        # The project's own db OR a bind-managed one (code_intel_db_for) — a graph
+        # built by binding a repo was skipped here when only Projects/<p>/ was read.
+        from core.code_intel import code_intel_db_for
+        if code_intel_db_for(project_dir) is None:
             continue
 
         project_name = project_dir.name
@@ -102,7 +104,7 @@ def reindex_projects(full: bool = False) -> dict:
             results.append({"project": project_name, "status": "no_repo"})
             continue
         # OWNERSHIP GUARD (run_1950e67e): never re-index a repo_root the project
-        # doesn't OWN (its own TECH.md must declare it). A foreign/mis-seeded
+        # doesn't OWN (declared in its TECH.md or bindings.yaml — owned_repo_roots). A foreign/mis-seeded
         # repo_root would keep pulling another project's code into this brain (the
         # IVTHub-indexed-SwarmAI contamination). Defense at BOTH trigger sites
         # (this + the startup watcher, main.py) — R27 all-consumers.
@@ -225,6 +227,7 @@ def reindex_projects(full: bool = False) -> dict:
 
             refreshed = 0
             grades: list[str] = []
+            restored: list[str] = []  # files re-stored with symbols → scope of the prune
             for rel_path in freshness.changed_files[:200]:  # generous cap
                 full_path = repo_root / rel_path
                 # Scope guard: the graph only ever contains LANGUAGE_MAP files
@@ -294,6 +297,7 @@ def reindex_projects(full: bool = False) -> dict:
                         graph.store_file_nodes_edges(
                             rel_path, result.nodes, result.edges, file_hash
                         )
+                        restored.append(rel_path)
                         content = full_path.read_text(encoding="utf-8", errors="replace")
                         extract_and_store_routes(graph, rel_path, content, lang)
                         refreshed += 1
@@ -324,10 +328,15 @@ def reindex_projects(full: bool = False) -> dict:
             graph.set_meta("last_change_class", verdict)
 
             if verdict != grading.SKIP:
-                # Structural change stored → refresh derived state.
+                # Structural change stored → refresh derived state. Cross-file call
+                # targets the re-stored files emit resolve here exactly as in a full
+                # rebuild (resolve_and_prune), not only at the next full rebuild. The
+                # prune is scoped to the re-stored files: a graph-wide one could delete
+                # edges another writer has not finished resolving.
+                graph.resolve_and_prune(files=restored)
                 _resolve_prefixes(graph, repo_root)
                 graph.rebuild_fts()
-                mark = _phase(project_name, "resolve_prefixes+rebuild_fts", mark)
+                mark = _phase(project_name, "resolve_and_prune+prefixes+rebuild_fts", mark)
             # Always advance the freshness marker (we DID process this commit range,
             # even if the verdict was SKIP — otherwise we'd re-grade forever).
             if freshness.current_head:

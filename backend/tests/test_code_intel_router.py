@@ -153,9 +153,13 @@ class TestRunReindexRepoPathParsing:
         from unittest.mock import patch, MagicMock
         import routers.code_intel as mod
 
-        db_path = tmp_path / "code_intel.db"
+        project_dir = tmp_path / "FakeProj"
+        project_dir.mkdir()
+        db_path = project_dir / "code_intel.db"
         db_path.write_text("")  # exists() → True
-        (tmp_path / "TECH.md").write_text(tech_md_content, encoding="utf-8")
+        (project_dir / "TECH.md").write_text(tech_md_content, encoding="utf-8")
+        graph = MagicMock()
+        graph.get_meta.return_value = None  # no repo recorded yet → resolve from the project
 
         captured = {}
 
@@ -163,12 +167,11 @@ class TestRunReindexRepoPathParsing:
             captured["root"] = root
             return []
 
-        # GraphStore + parse_repo are imported function-locally inside _run_reindex,
-        # so patch them at their SOURCE modules (not on routers.code_intel).
-        with patch.object(mod, "get_code_intel_db_path", return_value=db_path), \
-             patch("core.code_intel.graph_store.GraphStore", return_value=MagicMock()), \
+        # parse_repo is imported function-locally inside _run_reindex, so patch it at
+        # its SOURCE module; the graph comes from the project's cached store.
+        with patch("jobs.paths.PROJECTS_DIR", tmp_path), \
+             patch.object(mod, "load_project_graph", return_value=graph), \
              patch("core.code_intel.parser.parse_repo", side_effect=fake_parse_repo), \
-             patch.object(mod, "invalidate_cache"), \
              patch.dict(mod._reindex_in_progress, {}, clear=True):
             mod._run_reindex("FakeProj")
         return captured

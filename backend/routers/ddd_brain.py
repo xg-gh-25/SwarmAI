@@ -958,7 +958,8 @@ def _brain_detail(project_dir: Path) -> dict:
     state["specs"] = _spec_files(project_dir)
     # hasCodeIntel = a live PRESENCE check of the on-disk code_intel.db, NOT gated
     # on `kind` (all DDDs resolve to kind='knowledge'). One stat, per-brain-on-open.
-    state["hasCodeIntel"] = (project_dir / "code_intel.db").exists()
+    from core.code_intel import code_intel_db_for
+    state["hasCodeIntel"] = code_intel_db_for(project_dir) is not None
     # projectAgent = the ⑤ Project Agent definition (project-agent.yaml), parsed and
     # validated; None when the Brain has none yet. One small file read, on open only.
     state["projectAgent"] = load_project_agent(project_dir)

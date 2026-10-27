@@ -876,8 +876,8 @@ async def _start_code_intel_watchers() -> None:
         for project_dir in PROJECTS_DIR.iterdir():
             if not project_dir.is_dir():
                 continue
-            db_path = project_dir / "code_intel.db"
-            if not db_path.exists():
+            from core.code_intel import code_intel_db_for
+            if code_intel_db_for(project_dir) is None:
                 continue
 
             project_name = project_dir.name
@@ -890,14 +890,14 @@ async def _start_code_intel_watchers() -> None:
                 continue
 
             # OWNERSHIP GUARD (run_1950e67e): only watch a repo_root the project
-            # actually OWNS (its own TECH.md declares it). A foreign/mis-seeded
+            # actually OWNS (its TECH.md or bindings.yaml declares it). A foreign/mis-seeded
             # repo_root (e.g. IVTHub's db pointing at the SwarmAI source tree) must
             # NOT be watched — else every save in that tree re-indexes foreign files
             # into this project's brain (self-perpetuating content contamination).
             if not repo_root_is_owned(project_dir, repo_root):
                 logger.warning(
                     "Code Intelligence: %s repo_root %r is NOT owned by the project "
-                    "(TECH.md declares no/different local repo) — skipping watcher to "
+                    "(TECH.md / bindings.yaml declare no/different local repo) — skipping watcher to "
                     "prevent cross-project contamination", project_name, repo_root)
                 continue
 

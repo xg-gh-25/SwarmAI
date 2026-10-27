@@ -268,6 +268,42 @@ class _LockingConnection:
 # ── GraphStore ───────────────────────────────────────────────────────────
 
 
+
+def _write_locked(method):
+    """Run a GraphStore write method with the connection lock held for its WHOLE body.
+
+    ``_LockingConnection`` locks one statement at a time. A write that spans several
+    statements (delete a file's rows, re-insert them, prune) would otherwise let
+    another thread on the same connection read the half-done state, commit it, or
+    roll it back. The lock is re-entrant, so these methods may nest; when the
+    outermost one raises, the open transaction is rolled back.
+    """
+    import functools
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._conn_lock:
+            depth = getattr(self, "_write_depth", 0)
+            self._write_depth = depth + 1
+            try:
+                return method(self, *args, **kwargs)
+            except BaseException:
+                # The outermost write that fails rolls back whatever transaction is
+                # open on the shared connection. Left open, the next write would see
+                # in_transaction, skip its own BEGIN/rollback, and the next commit
+                # anywhere would make this failed write's partial deletes permanent
+                # (while the open transaction held the database write lock).
+                if depth == 0 and self._conn.in_transaction:
+                    try:
+                        self._conn.rollback()
+                    except sqlite3.Error as exc:
+                        logger.warning("graph write rollback failed: %s", exc)
+                raise
+            finally:
+                self._write_depth = depth
+    return wrapper
+
+
 class GraphStore:
     """SQLite-backed graph of code symbols (nodes) and their relationships (edges).
 
@@ -592,6 +628,7 @@ class GraphStore:
 
     # ── atomic file replacement (CRG pattern) ────────────────────────────
 
+    @_write_locked
     def store_file_nodes_edges(
         self,
         file_path: str,
@@ -603,6 +640,14 @@ class GraphStore:
 
         Deletes old data and inserts new data inside a single
         ``BEGIN IMMEDIATE`` transaction so readers never see a partial state.
+
+        Edges: the file's OUTBOUND edges are replaced (the parser re-emits exactly
+        those). INBOUND edges from other files are kept when their target node still
+        exists after the replace — node ids are ``file::Qualified.name``, so an edit
+        that keeps a symbol keeps its id — and dropped only when the target symbol is
+        gone. Deleting every inbound edge (the old behaviour) emptied
+        ``find_callers`` for the file's symbols after any incremental re-store, since
+        nothing re-emits other files' edges until the next full rebuild.
         """
         # CRG pattern: avoid nested BEGIN if already in a transaction.
         in_txn = self._conn.in_transaction
@@ -629,7 +674,8 @@ class GraphStore:
                     ),
                 )
 
-            # Delete old nodes and their edges.
+            # Delete old nodes and their OUTBOUND edges. Inbound edges are settled
+            # after the new nodes are in (below): kept if their target survives.
             old_ids = [
                 r[0]
                 for r in self._conn.execute(
@@ -638,18 +684,11 @@ class GraphStore:
                 ).fetchall()
             ]
             if old_ids:
-                tmpl = (
-                    "DELETE FROM code_edges "
-                    "WHERE source_id IN ({placeholders}) "
-                    "OR target_id IN ({placeholders})"
-                )
+                tmpl = "DELETE FROM code_edges WHERE source_id IN ({placeholders})"
                 for start in range(0, len(old_ids), _BATCH_SIZE):
                     batch = old_ids[start : start + _BATCH_SIZE]
                     ph = ",".join("?" * len(batch))
-                    self._conn.execute(
-                        tmpl.replace("{placeholders}", ph),
-                        batch + batch,
-                    )
+                    self._conn.execute(tmpl.replace("{placeholders}", ph), batch)
             self._conn.execute(
                 "DELETE FROM code_nodes WHERE file_path = ?", (file_path,)
             )
@@ -707,6 +746,18 @@ class GraphStore:
                         (rowid[0], _sanitize_name(d["name"]), d["id"], d["file_path"]),
                     )
 
+            # Inbound edges whose target symbol no longer exists in this file.
+            new_ids = {
+                (n if isinstance(n, dict) else n.__dict__)["id"] for n in nodes
+            }
+            vanished = [i for i in old_ids if i not in new_ids]
+            if vanished:
+                tmpl = "DELETE FROM code_edges WHERE target_id IN ({placeholders})"
+                for start in range(0, len(vanished), _BATCH_SIZE):
+                    batch = vanished[start : start + _BATCH_SIZE]
+                    ph = ",".join("?" * len(batch))
+                    self._conn.execute(tmpl.replace("{placeholders}", ph), batch)
+
             if not in_txn:
                 self._conn.commit()
         except Exception:
@@ -716,6 +767,7 @@ class GraphStore:
 
     # ── FTS rebuild ──────────────────────────────────────────────────────
 
+    @_write_locked
     def rebuild_fts(self) -> None:
         """Full FTS5 rebuild — delete all FTS rows, re-insert from code_nodes.
 
@@ -1119,13 +1171,12 @@ class GraphStore:
         ``CodeEdge(source_id=enclosing_func, ...)`` — the source is always a def IN
         the file being parsed). The `code_edges` table has NO `file_path` column
         (edges are associated to a file only via node ids), and
-        `store_file_nodes_edges` DELETEs a *superset* (source OR target in the
-        file's nodes) — but that superset sweeps in INBOUND calls from OTHER files,
-        which the parser never re-emits for THIS file. Using the superset here
-        would make the OLD signature (superset) and the NEW signature (parser
-        outbound-only) permanently unequal → every file grades STRUCTURAL → the
-        grading optimization silently no-ops (Gate-1 #2, run_4602932d). So this
-        reader filters to OUTBOUND edges only, matching the parser exactly.
+        INBOUND calls from OTHER files are never re-emitted for THIS file, so
+        including them would make the OLD signature (superset) and the NEW
+        signature (parser outbound-only) permanently unequal → every file grades
+        STRUCTURAL → the grading optimization silently no-ops (Gate-1 #2,
+        run_4602932d). So this reader filters to OUTBOUND edges only, matching the
+        parser exactly (and matching what `store_file_nodes_edges` replaces).
         """
         rows = self._conn.execute(
             "SELECT e.source_id, e.target_id, e.edge_type, e.confidence, e.line_number "
@@ -1355,6 +1406,7 @@ class GraphStore:
 
     # ── bulk operations ──────────────────────────────────────────────────
 
+    @_write_locked
     def clear(self) -> None:
         """Delete all nodes, edges, FTS data, and metadata."""
         self._conn.execute("DELETE FROM code_edges")
@@ -1365,6 +1417,64 @@ class GraphStore:
         self._conn.execute("DELETE FROM graph_meta")
         self._conn.commit()
 
+    @_write_locked
+    def resolve_and_prune(self, files: list[str] | None = None) -> int:
+        """Resolve cross-file call targets, then drop edges that still point at nothing.
+
+        Shared by the full rebuild (``bulk_insert``) and every incremental re-store
+        (``incremental_update``, the reindex job, the health hook), so a cross-file
+        call stored incrementally resolves exactly as it would in a full rebuild:
+        before this, only ``bulk_insert`` ran it and incrementally stored
+        ``module::name`` targets dangled until the next full rebuild.
+
+        Orphans are calls to builtins/stdlib (or ambiguous names) that are not in the
+        graph; without the cleanup, blast_radius CTE traverses phantoms. *files*
+        limits the cleanup to edges whose source is in those files (the incremental
+        callers pass the files they re-stored); None means the whole graph, which only
+        a full rebuild of this graph may use. Returns the number of resolved edges.
+        Never raises.
+        """
+        resolved = 0
+        try:
+            from .parser import resolve_bare_targets
+            resolved = resolve_bare_targets(self, files=files)
+            if resolved:
+                logger.info("Cross-file resolution: %d bare targets resolved", resolved)
+        except Exception as e:
+            logger.debug("Cross-file resolution skipped: %s", e)
+        try:
+            # Scoped to the re-stored files' outbound edges when *files* is given:
+            # another connection (a full rebuild in the reindex job or bind_repo)
+            # commits file by file, so a graph-wide prune here could delete that
+            # rebuild's not-yet-resolvable edges.
+            base = "DELETE FROM code_edges WHERE target_id NOT IN (SELECT id FROM code_nodes)"
+            if files is None:
+                orphan_count = self._conn.execute(base).rowcount
+            else:
+                orphan_count = 0
+                for start in range(0, len(files), _BATCH_SIZE):
+                    batch = list(files[start : start + _BATCH_SIZE])
+                    ph = ",".join("?" * len(batch))
+                    orphan_count += self._conn.execute(
+                        base + " AND source_id IN (SELECT id FROM code_nodes "
+                        f"WHERE file_path IN ({ph}))", batch).rowcount
+            self._conn.commit()
+            if orphan_count > 0:
+                logger.info("Removed %d orphan edges (target not in nodes)", orphan_count)
+        except Exception as e:
+            logger.debug("Orphan edge cleanup skipped: %s", e)
+            self._rollback_open_txn()
+        return resolved
+
+    def _rollback_open_txn(self) -> None:
+        """Roll back a transaction a swallowed write error left open. Never raises."""
+        try:
+            if self._conn.in_transaction:
+                self._conn.rollback()
+        except sqlite3.Error as exc:
+            logger.warning("graph write rollback failed: %s", exc)
+
+    @_write_locked
     def bulk_insert(self, parse_results: list, repo_root: str | Path | None = None) -> None:
         """Insert all results from a full repo parse.
 
@@ -1387,33 +1497,7 @@ class GraphStore:
             self.upsert_nodes(d["nodes"])
             self.upsert_edges(d["edges"])
         self.rebuild_fts()
-
-        # Layer 2: resolve bare call targets across files
-        try:
-            from .parser import resolve_bare_targets
-            resolved = resolve_bare_targets(self)
-            if resolved:
-                logger.info("Cross-file resolution: %d bare targets resolved", resolved)
-        except Exception as e:
-            logger.debug("Cross-file resolution skipped: %s", e)
-
-        # Cleanup: remove orphan edges whose target doesn't exist as a node.
-        # These are calls to builtins/stdlib that regex captured but which are
-        # not in the graph. Without this, blast_radius CTE traverses phantoms.
-        try:
-            orphan_count = self._conn.execute(
-                "SELECT COUNT(*) FROM code_edges "
-                "WHERE target_id NOT IN (SELECT id FROM code_nodes)"
-            ).fetchone()[0]
-            if orphan_count:
-                self._conn.execute(
-                    "DELETE FROM code_edges "
-                    "WHERE target_id NOT IN (SELECT id FROM code_nodes)"
-                )
-                self._conn.commit()
-                logger.info("Removed %d orphan edges (target not in nodes)", orphan_count)
-        except Exception as e:
-            logger.debug("Orphan edge cleanup skipped: %s", e)
+        self.resolve_and_prune()
 
         # Full rebuild wrote the whole graph into the WAL — reclaim it now so the
         # -wal file doesn't stay multi-GB on disk (the 2.73GB-bloat root cause).
@@ -1432,34 +1516,51 @@ class GraphStore:
         repo_root: str | Path,
         changed_files: list[str],
     ) -> dict:
-        """Incremental graph update for *changed_files*.
+        """Re-store *changed_files* (repo-relative) so the graph matches the disk.
 
-        Steps:
-            1. Hash check — skip files whose content hash hasn't changed.
-            2. Atomic replace — ``store_file_nodes_edges`` per file.
-            3. Expand dependents — find files that reference changed symbols.
-            4. Re-parse — (caller is responsible for parsing; we just record).
-            5. FTS rebuild.
-            6. Update meta with timestamp.
+        Per file: a deleted file loses its nodes, edges and routes; an unchanged file
+        (same content hash as stored) is skipped; otherwise it is parsed and its nodes
+        and outbound edges replaced via ``store_file_nodes_edges`` (inbound edges whose
+        target survives are kept there). A file that parses to no symbols but had some
+        is purged. A file whose read, parse or store fails goes to ``failed`` (its
+        store is rolled back) and the rest of the batch goes on. Then the re-stored
+        files' cross-file targets are resolved and their orphan edges dropped
+        (``resolve_and_prune(files=...)``) and FTS is rebuilt; the update time is
+        recorded only when nothing failed.
 
-        Returns:
-            Dict with keys: ``updated``, ``skipped``, ``dependents``.
+        Before this, the method only hash-checked and recorded a timestamp — it never
+        parsed — so the file watcher made the graph look fresh while its symbols and
+        edges stayed as they were at the last full rebuild.
+
+        Returns a dict with ``updated``, ``skipped``, ``failed``, ``dependents``
+        (files with callers into the updated files, for callers that want them).
         """
+        from .parser import parse_file
+
         repo_root = Path(repo_root)
         updated: list[str] = []
         skipped: list[str] = []
+        failed: list[str] = []
 
         for fpath in changed_files:
             full = repo_root / fpath
             if not full.exists():
-                # File was deleted — remove its nodes/edges.
-                self.remove_file(fpath)
-                updated.append(fpath)
+                # File was deleted — remove its nodes/edges and any routes it had.
+                try:
+                    self.remove_file(fpath)
+                    self.delete_routes_for_file(fpath)
+                    updated.append(fpath)
+                except sqlite3.Error as exc:
+                    logger.warning("incremental_update: removing %s failed: %s", fpath, exc)
+                    failed.append(fpath)
                 continue
 
-            content_hash = hashlib.sha256(full.read_bytes()).hexdigest()
+            try:
+                content_hash = hashlib.sha256(full.read_bytes()).hexdigest()
+            except OSError:
+                failed.append(fpath)
+                continue
 
-            # Check if hash matches any existing node for this file.
             existing = self._conn.execute(
                 "SELECT file_hash FROM code_nodes WHERE file_path = ? LIMIT 1",
                 (fpath,),
@@ -1468,21 +1569,45 @@ class GraphStore:
                 skipped.append(fpath)
                 continue
 
-            updated.append(fpath)
+            try:
+                result = parse_file(full, repo_root)
+            except Exception as exc:  # noqa: BLE001 — one bad file must not stop the batch
+                logger.debug("incremental_update: parse failed for %s: %s", fpath, exc)
+                failed.append(fpath)
+                continue
+            try:
+                if result.nodes:
+                    self.store_file_nodes_edges(fpath, result.nodes, result.edges, content_hash)
+                    updated.append(fpath)
+                elif existing:
+                    # Edited down to no symbols: its old nodes are stale.
+                    self.remove_file(fpath)
+                    updated.append(fpath)
+                else:
+                    skipped.append(fpath)
+            except sqlite3.Error as exc:
+                # e.g. "database is locked" while another process rebuilds: this file
+                # stays as it was (the store is one transaction); the rest go on.
+                logger.warning("incremental_update: storing %s failed: %s", fpath, exc)
+                failed.append(fpath)
 
-        # Find dependent files (files that import from changed files).
-        dependent_files = set()
+        dependent_files: set[str] = set()
         for fpath in updated:
-            deps = self.find_dependents(fpath)
-            dependent_files.update(deps)
-        # Don't re-include files already being updated.
+            dependent_files.update(self.find_dependents(fpath))
         dependent_files -= set(updated)
 
-        # Rebuild FTS after all changes.
-        self.rebuild_fts()
-
-        # Record the update timestamp.
-        self.set_meta("last_incremental_update", str(time.time()))
+        index_ok = True
+        if updated:
+            self.resolve_and_prune(files=updated)  # never raises
+            try:
+                self.rebuild_fts()
+            except sqlite3.Error as exc:
+                logger.warning("incremental_update: FTS rebuild failed: %s", exc)
+                index_ok = False
+        if not failed and index_ok:
+            # Only a batch that fully landed marks the graph fresh: a failed file is
+            # still stale, and freshness readers trust this stamp.
+            self.set_meta("last_incremental_update", str(time.time()))
 
         # Reclaim WAL disk space after the batch of writes (non-fatal if a reader
         # holds the WAL — retried on the next update).
@@ -1491,6 +1616,7 @@ class GraphStore:
         return {
             "updated": updated,
             "skipped": skipped,
+            "failed": failed,
             "dependents": sorted(dependent_files),
         }
 
@@ -1544,7 +1670,8 @@ class GraphStore:
 
     # ── bare target resolution (Layer 2) ──────────────────────────────────
 
-    def resolve_bare_targets(self, qualified_separator: str) -> int:
+    def resolve_bare_targets(self, qualified_separator: str,
+                             files: list[str] | None = None) -> int:
         """Resolve unresolved calls/extends/references targets to real node ids.
 
         A target qualifies as unresolved if it does NOT match any code_node id —
@@ -1557,7 +1684,9 @@ class GraphStore:
           - 0 or ambiguous: leave unresolved (orphan-cleanup drops it)
 
         Covers edge_type IN (calls, extends, references) — extends/references were
-        added by the dead-code false-positive fixes (run_8e023234). Returns count
+        added by the dead-code false-positive fixes (run_8e023234). *files* limits
+        the edges resolved to those whose source is in those files (incremental
+        callers); None resolves the whole graph (a full rebuild). Returns count
         of resolved edges.
         """
         all_nodes = self._conn.execute(
@@ -1590,11 +1719,24 @@ class GraphStore:
         # NOT EXISTS (not NOT IN): NULL-safe (a NULL code_nodes.id would make
         # `NOT IN (…, NULL)` never-true and silently disable ALL resolution — Gate-2
         # red-team LOW) and a friendly anti-join plan. Returns ONLY unresolved rows.
-        bare_edges = self._conn.execute(
+        bare_sql = (
             "SELECT rowid, source_id, target_id FROM code_edges e "
             "WHERE e.edge_type IN ('calls', 'extends', 'references') "
             "AND NOT EXISTS (SELECT 1 FROM code_nodes n WHERE n.id = e.target_id)"
-        ).fetchall()
+        )
+        if files is None:
+            bare_edges = self._conn.execute(bare_sql).fetchall()
+        else:
+            # Only the re-stored files' edges: another connection may be part-way
+            # through a rebuild, and a name whose second definition has not landed
+            # yet would look unique there and resolve to the wrong node for good.
+            bare_edges = []
+            for start in range(0, len(files), _BATCH_SIZE):
+                batch = list(files[start : start + _BATCH_SIZE])
+                ph = ",".join("?" * len(batch))
+                bare_edges.extend(self._conn.execute(
+                    bare_sql + " AND e.source_id IN (SELECT id FROM code_nodes "
+                    f"WHERE file_path IN ({ph}))", batch).fetchall())
 
         if not bare_edges:
             return 0
@@ -1643,6 +1785,7 @@ class GraphStore:
 
     # ── internal helpers ─────────────────────────────────────────────────
 
+    @_write_locked
     def remove_file(self, file_path: str) -> None:
         """Remove all nodes, edges, and FTS entries for a deleted file."""
         # 1. Delete FTS entries (must happen before node deletion — needs rowid)
@@ -1679,6 +1822,7 @@ class GraphStore:
         self._conn.execute(
             "DELETE FROM code_nodes WHERE file_path = ?", (file_path,)
         )
+        # A failure part-way is rolled back by _write_locked.
         self._conn.commit()
 
     # ── route CRUD ──────────────────────────────────────────────────────────

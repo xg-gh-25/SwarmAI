@@ -26,7 +26,9 @@ Key public symbols: ``DeliveryContract``, ``Binding``, ``BindingsDoc``, ``BindRe
 from __future__ import annotations
 
 import logging
+import re
 import shutil
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -274,11 +276,236 @@ def classify_project(project_dir: str | Path) -> str:
 
 # ── PULL + codeIntel ─────────────────────────────────────────────────────────
 
+def binding_worktree(binding: Binding, worktree_root: str | Path | None = None) -> Path:
+    """Where ``bind_repo`` clones *binding*: confined under the bindings root.
+
+    The ONE reading of ``binding.worktree`` / ``binding.repo`` for bind-managed clones,
+    shared by ``bind_repo`` (which writes there) and every reader that has to find the
+    clone or its code-intel db again (``code_intel.code_intel_dbs``, the repo-ownership
+    oracle). ``binding.worktree`` is resolved relative to the root; the result must be
+    a directory directly under the root (an absolute value only if it is one). Raises
+    ``ValueError`` when ``binding.repo`` is not a bare name or the worktree is anywhere
+    else — e.g. a self-hosted binding whose worktree is the user's own checkout, which
+    bind_repo never clones or deletes.
+    """
+    root = (Path(worktree_root) if worktree_root is not None else _default_bindings_root()).resolve()
+    # binding.repo must ALWAYS be a bare name (no path separators / '..') — it is used
+    # BOTH as the default worktree dir AND to build the db path. Validating it only
+    # in the worktree-unset branch left the db path open to a '..' escape when
+    # binding.worktree was explicitly set (Gate-2 LOW, run_f8ef133b).
+    if "/" in binding.repo or "\\" in binding.repo or binding.repo in ("", ".", ".."):
+        raise ValueError(
+            f"invalid binding.repo '{binding.repo}': must be a bare name "
+            "(no path separators) — it names a directory / db file under the bindings root"
+        )
+    candidate = (root / (binding.worktree or binding.repo)).resolve()
+    # Exactly one level below the root: not the root itself (a re-bind would move every
+    # project's clones), and not nested inside another clone, whose committed files
+    # can then act as a git dir with its own config (core.fsmonitor runs a command).
+    # ...and not a name this module keeps beside the clones (lock, db, preserved copy).
+    if candidate.parent == root and (
+            candidate.name.endswith((".bind.lock", ".code_intel.db"))
+            or ".preserved-" in candidate.name):
+        raise ValueError(
+            f"binding worktree name '{candidate.name}' is reserved under the bindings root")
+    if candidate.parent != root:
+        raise ValueError(
+            f"binding worktree '{candidate}' escapes the bindings root '{root}' — "
+            "binding.worktree must name one directory directly under it "
+            "(refusing to clone, rmtree or rename anywhere else)"
+        )
+    return candidate
+
+
+def binding_db_path(binding: Binding, worktree_root: str | Path | None = None) -> Path:
+    """The code-intel db ``bind_repo`` builds for *binding*: beside its confined worktree.
+
+    Derived solely from the worktree (derived-projection rule, §3.6) — never a
+    binding-recorded path. Raises ``ValueError`` like ``binding_worktree``.
+    """
+    return binding_worktree(binding, worktree_root).parent / f"{binding.repo}.code_intel.db"
+
+
+def _worktree_has_unsaved_work(worktree: Path) -> bool:
+    """True when *worktree* may hold work that exists nowhere else.
+
+    Uncommitted, untracked or ignored files, or commits no remote has (on a branch, a
+    tag, the stash, a detached HEAD or only the reflog). Any doubt — not a checkout git
+    clone made, git failing, no remotes to compare against while local commits exist —
+    counts as unsaved: the caller then preserves the directory instead of deleting it
+    (STEERING #20, SOUL P4: recovery preserves, never destroys).
+    """
+    import os
+    import subprocess
+
+    # The repo is untrusted: never let its config run anything (fsmonitor, hooks), and
+    # never let git climb out of the worktree looking for another repo.
+    env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0",
+           "GIT_CEILING_DIRECTORIES": str(worktree.parent)}
+    hardening = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+
+    def _git(*args: str) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(["git", *hardening, "-C", str(worktree), *args],
+                                  capture_output=True, text=True, timeout=30, env=env)
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    def _non_empty() -> bool:
+        try:
+            return any(worktree.iterdir())
+        except OSError:
+            return True
+
+    git_dir = worktree / ".git"
+    if git_dir.is_symlink() or not git_dir.is_dir():
+        # Not a checkout that git clone made: we cannot tell what is in it, so keep
+        # it — unless it is genuinely empty.
+        return _non_empty()
+    top = _git("rev-parse", "--show-toplevel")
+    if top is None or top.returncode != 0 or Path(top.stdout.strip()).resolve() != worktree.resolve():
+        return _non_empty()
+    # Ignored files count: a fresh clone has none, and .gitignore is upstream's, so
+    # it can hide anything local (a .env, notes).
+    status = _git("status", "--porcelain", "--untracked-files=all", "--ignored=matching")
+    if status is None or status.returncode != 0 or status.stdout.strip():
+        return True
+    # Any commit no remote has, wherever it hangs: a branch, a tag, the stash, a
+    # detached HEAD, or only the reflog.
+    unpushed = _git("log", "--all", "--reflog", "--not", "--remotes", "--oneline", "-n", "1")
+    if unpushed is None or unpushed.returncode != 0 or unpushed.stdout.strip():
+        return True
+    return False
+
+
+def _clear_worktree_for_reclone(worktree: Path) -> Optional[Path]:
+    """Make room for a fresh clone at *worktree*; return the preserved path, if any.
+
+    A clean checkout (everything committed and on a remote) is deleted — the clone
+    recreates it. Anything else is renamed to ``<name>.preserved-<UTC ts>`` beside it,
+    never deleted, so a re-bind cannot destroy local work.
+    """
+    if not worktree.exists():
+        return None
+    if not _worktree_has_unsaved_work(worktree):
+        shutil.rmtree(worktree)
+        return None
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    preserved = worktree.with_name(f"{worktree.name}.preserved-{stamp}")
+    n = 1
+    while preserved.exists():
+        preserved = worktree.with_name(f"{worktree.name}.preserved-{stamp}-{n}")
+        n += 1
+    worktree.rename(preserved)
+    logger.warning(
+        "bind_repo: worktree %s held uncommitted or unpushed work — preserved as %s "
+        "before re-cloning (nothing deleted)", worktree, preserved)
+    return preserved
+
+
+_SCP_LIKE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:")
+
+
+class BindInProgress(RuntimeError):
+    """Another bind of the same worktree holds its bind lock."""
+
+
+def _validate_clone_source(binding: Binding) -> None:
+    """Refuse a clone source that is not https, ssh or a non-protected local path.
+
+    ``binding.clone`` comes from a bindings.yaml an agent may have written from repo
+    content. A local source (a plain path or ``file://``) must not be a protected
+    system location — the same exfiltration guard the Library mount and Inbox copy
+    use — or a crafted bindings.yaml could copy e.g. ~/.ssh into the bindings root and
+    index it. Every other scheme (``ext::``, ``fd::``, ``git://``, ``http://`` ...) is
+    refused here, before git; ``git_clone`` also limits git's own protocols.
+    """
+    clone = binding.clone.strip()
+    lowered = clone.lower()
+    if lowered.startswith(("https://", "ssh://")) or _SCP_LIKE.match(clone):
+        return
+    if lowered.startswith("file://"):
+        from urllib.parse import unquote
+        local = unquote(clone[len("file://"):])
+    elif "://" in clone or "::" in clone:
+        raise ValueError(
+            f"binding '{binding.repo}': clone source scheme not allowed "
+            "(https, ssh or a local path only) — refusing")
+    else:
+        local = clone
+    from core.library_mounts import is_protected_system_path
+    if not local or is_protected_system_path(local):
+        raise ValueError(
+            f"binding '{binding.repo}': clone source is a protected system path — refusing")
+
+
+def _open_lock(path: Path):
+    """Open (creating) a lock file without following a symlink planted at *path*."""
+    import os
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    return os.fdopen(fd, "r+")
+
+
+def bind_lock_path(worktree: str | Path) -> Path:
+    """The lock file a bind holds while it clears, clones and indexes *worktree*."""
+    worktree = Path(worktree)
+    return worktree.with_name(f"{worktree.name}.bind.lock")
+
+
+@contextmanager
+def _bind_lock(worktree: Path, repo: str):
+    """Hold *worktree*'s bind lock (exclusive, across processes) for one bind.
+
+    Two binds of the same worktree would clear and clone over each other, and the
+    file watcher would replay the clear and the clone as edits; the watcher skips
+    while this lock is held (``bind_in_progress``). Without ``fcntl`` (not POSIX) no
+    lock is taken.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover — non-POSIX
+        yield
+        return
+    fh = _open_lock(bind_lock_path(worktree))
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise BindInProgress(f"binding '{repo}': another bind of this repo is running")
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def bind_in_progress(worktree: str | Path) -> bool:
+    """True while some process holds *worktree*'s bind lock. Never raises."""
+    try:
+        import fcntl
+        lock = bind_lock_path(worktree)
+        if not lock.exists():
+            return False
+        with _open_lock(lock) as fh:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            return False
+    except Exception:  # noqa: BLE001 — a probe that cannot decide must not block indexing
+        return False
+
+
 def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> BindResult:
     """Clone a git-clonable binding into a worktree and build its codeIntel graph.
 
     Reuses the existing indexer (``parse_repo`` + ``GraphStore.bulk_insert``) — no new
-    indexer. Idempotent: an existing worktree is removed before re-clone (Gate-1 blocker 1).
+    indexer. Idempotent: an existing CLEAN worktree is removed before re-clone (Gate-1
+    blocker 1); one with uncommitted or unpushed work is renamed aside and kept
+    (``_clear_worktree_for_reclone``).
     A fresh ``GitSyncEngine`` is used per call (git_clone mutates ``self.workspace_dir`` —
     Gate-1 blocker 2). ``graph.clear()`` runs before ``bulk_insert`` (Gate-1 blocker 3).
 
@@ -286,11 +513,11 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
     pre-Run-2 Brazil/Midway spike (design §7.2.2) → raises ``NotImplementedError``
     (Run 1 binds git-clonable external targets only).
 
-    Security: ``bind_repo`` performs ``shutil.rmtree`` on the worktree for idempotency,
-    so the worktree MUST be confined under the bindings root — an absolute
-    ``binding.worktree`` or a ``../`` in ``binding.repo`` would otherwise let a crafted
-    bindings.yaml delete an arbitrary directory (Gate-2 HIGH, correctness+security
-    confirmed). Both are validated to stay inside ``root`` before any rmtree.
+    Security: re-binding may delete or rename the worktree, so the worktree MUST be
+    confined under the bindings root — an absolute ``binding.worktree`` outside it or a
+    ``../`` in ``binding.repo`` would otherwise let a crafted bindings.yaml touch an
+    arbitrary directory (Gate-2 HIGH, correctness+security confirmed).
+    ``binding_worktree`` validates both before anything on disk changes.
     """
     if binding.kind == "internal" or binding.delivery_contract.build_system == "brazil":
         raise NotImplementedError(
@@ -298,48 +525,22 @@ def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> Bind
             "deferred to the pre-Run-2 spike (design §7.2.2). Run 1 binds git-clonable targets only."
         )
 
-    root = (Path(worktree_root) if worktree_root is not None else _default_bindings_root()).resolve()
+    worktree = binding_worktree(binding, worktree_root)
+    db_path = binding_db_path(binding, worktree_root)
 
-    # binding.repo must ALWAYS be a bare name (no path separators / '..') — it is used
-    # BOTH as the default worktree dir AND to build db_path below. Validating it only
-    # in the worktree-unset branch left db_path (worktree.parent/<repo>.code_intel.db)
-    # open to a '..' escape when binding.worktree was explicitly set (Gate-2 LOW,
-    # run_f8ef133b). Check unconditionally so the invariant "binding.repo is bare" holds
-    # on every path — this is what makes the db_path derivation safe (comment below).
-    if "/" in binding.repo or "\\" in binding.repo or binding.repo in ("", ".", ".."):
-        raise ValueError(
-            f"invalid binding.repo '{binding.repo}': must be a bare name "
-            "(no path separators) — it names a directory / db file under the bindings root"
-        )
-
-    # Confine the worktree under root BEFORE any rmtree (Gate-2 HIGH: path-injection →
-    # arbitrary-dir deletion). An absolute binding.worktree is rejected — the destructive
-    # rmtree may only ever touch root/*.
-    if binding.worktree:
-        candidate = (root / binding.worktree).resolve()
-    else:
-        candidate = (root / binding.repo).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        raise ValueError(
-            f"binding worktree '{candidate}' escapes the bindings root '{root}' — "
-            "binding.worktree must be a relative path inside the root (refusing to rmtree outside it)"
-        )
-    worktree = candidate
-
-    # db_path is derived SOLELY from the confined worktree — the code-intel projection
-    # is a derived artifact, never a binding-recorded path (derived-projection rule,
-    # §3.6). It lands beside the confined worktree; binding.repo was already validated
-    # bare above, and worktree is already confined under root, so this stays inside root.
-    db_path = worktree.parent / f"{binding.repo}.code_intel.db"
+    _validate_clone_source(binding)
 
     worktree.parent.mkdir(parents=True, exist_ok=True)  # Gate-1 blocker 4
+    with _bind_lock(worktree, binding.repo):
+        return _bind_locked(binding, worktree, db_path)
 
-    # Idempotency: git clone fails (exit 128) into an existing non-empty dir → clean first.
-    # Confined to root/* by the validation above.
-    if worktree.exists():
-        shutil.rmtree(worktree)
+
+def _bind_locked(binding: Binding, worktree: Path, db_path: Path) -> BindResult:
+    """bind_repo's body, run while this worktree's bind lock is held."""
+
+    # Idempotency: git clone fails (exit 128) into an existing non-empty dir, so the
+    # old checkout has to go — deleted when clean, renamed aside when it holds work.
+    _clear_worktree_for_reclone(worktree)
 
     # Fresh engine per call — git_clone mutates self.workspace_dir (Gate-1 blocker 2).
     from core.git_sync_engine import GitSyncEngine

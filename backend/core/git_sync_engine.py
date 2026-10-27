@@ -312,12 +312,20 @@ class GitSyncEngine:
     # -- Git Clone ----------------------------------------------------------
 
     def git_clone(self, repo_url: str, target_dir: Path | None = None) -> bool:
-        """Clone a repo. Returns True on success."""
+        """Clone a repo. Returns True on success.
+
+        The clone source comes from a user's bindings.yaml, so it is untrusted input:
+        ``--`` ends option parsing (a source starting with ``-`` cannot become a git
+        option such as ``--upload-pack``), and ``GIT_ALLOW_PROTOCOL`` limits transports
+        to https, ssh and local paths — no ``ext::`` remote helpers that run commands,
+        no cleartext ``git://`` / ``http://``.
+        """
         target = str(target_dir or self.workspace_dir)
         try:
             result = subprocess.run(
-                ["git", "clone", repo_url, target],
+                ["git", "clone", "--", repo_url, target],
                 capture_output=True, text=True, timeout=120,
+                env={**os.environ, "GIT_ALLOW_PROTOCOL": "https:ssh:file"},
             )
             if result.returncode == 0:
                 self.workspace_dir = Path(target)

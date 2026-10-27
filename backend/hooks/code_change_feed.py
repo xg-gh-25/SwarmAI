@@ -31,8 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Lazy-safe imports for code_intel (may not be available in all environments)
 try:
-    from core.code_intel import load_project_graph
-    from core.code_intel.parser import parse_file
+    from core.code_intel import graph_holds_repo, load_project_graph
     _CODE_INTEL_AVAILABLE = True
 except ImportError:
     _CODE_INTEL_AVAILABLE = False
@@ -397,16 +396,19 @@ def _reindex_changed_files(
         graph = load_project_graph(project)
         if graph is None:
             return 0
+        # The project's graph is built from ONE repo; a commit in another repo the
+        # project governs must not land in it (same relative path, different file).
+        if not graph_holds_repo(graph, repo_root):
+            return 0
 
         root = Path(repo_root)
-        parse_results = []
+        targets: list[str] = []
 
         for status, rel_path in file_changes:
-            # Skip deletions (can't parse a deleted file)
-            # Note: renames (R) re-index at new path but don't clean old path nodes.
-            # Known limitation — old nodes become orphans until next full rebuild.
-            if status == "D":
-                continue
+            # Deletions are passed on too: incremental_update removes the file's
+            # nodes, edges and routes when it no longer exists on disk.
+            # Note: a rename (R) re-indexes at the new path; the old path's nodes
+            # stay until the next full rebuild (the old path is not in file_changes).
 
             # Skip non-code files
             if Path(rel_path).suffix not in _REINDEX_EXTENSIONS:
@@ -416,28 +418,21 @@ def _reindex_changed_files(
             if _skipped(rel_path):
                 continue
 
-            # File must exist on disk to parse
-            abs_path = root / rel_path
-            if not abs_path.is_file():
+            if status != "D" and not (root / rel_path).is_file():
                 continue
+            targets.append(rel_path)
 
-            # Parse the file
-            try:
-                result = parse_file(abs_path, root)
-                if result.nodes:
-                    parse_results.append(result)
-            except Exception as exc:
-                logger.debug("code_change_feed: reindex parse failed for %s: %s", rel_path, exc)
-                continue
-
-        if parse_results:
-            graph.bulk_insert(parse_results, repo_root=root)
-            logger.info(
-                "code_change_feed: re-indexed %d file(s) into code_intel",
-                len(parse_results),
-            )
-
-        return len(parse_results)
+        if not targets:
+            return 0
+        # The shared incremental path: replaces each file's nodes and outbound edges
+        # (keeping other files' calls into it), resolves cross-file targets and drops
+        # orphans. The old bulk_insert here only ADDED rows — removed symbols stayed
+        # in the graph forever and deletions were ignored.
+        result = graph.incremental_update(root, targets)
+        n = len(result.get("updated", []))
+        if n:
+            logger.info("code_change_feed: re-indexed %d file(s) into code_intel", n)
+        return n
 
     except Exception as exc:
         logger.debug("code_change_feed: reindex failed: %s", exc)
