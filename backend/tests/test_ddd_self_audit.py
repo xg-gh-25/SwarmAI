@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 from jobs.handlers.ddd_self_audit import (
     _AUDIT_TOOLS,
     _build_audit_prompt,
+    _build_review_cmd,
     _classify_review_result,
     _count_parseable_findings,
     _discover_ddd_projects,
@@ -33,6 +34,19 @@ class TestDetectOnlyInvariant:
         for forbidden in ("Write", "Edit", "MultiEdit", "Bash", "NotebookEdit"):
             assert forbidden not in _AUDIT_TOOLS, f"{forbidden} would break detect-only"
         assert set(_AUDIT_TOOLS) <= {"Read", "Grep", "Glob"}
+
+    def test_the_command_limits_which_tools_exist_not_only_which_are_approved(self, monkeypatch):
+        """Under bypassPermissions, --allowedTools only auto-approves: without --tools
+        the agent still has Bash / Write / Edit. Both must name the read-only set."""
+        import jobs.handlers.ddd_self_audit as mod
+        monkeypatch.setattr(mod, "_resolve_job_model", lambda: "m")
+        cmd = _build_review_cmd("claude", False, None, "P", None, "x")
+        assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob"
+        assert cmd[cmd.index("--allowedTools") + 1] == "Read,Grep,Glob"
+        assert "--strict-mcp-config" in cmd and "--mcp-config" not in cmd
+        with_mcp = _build_review_cmd("claude", True, "/tmp/m.json", "P", Path("/src"), "x")
+        assert with_mcp[with_mcp.index("--mcp-config") + 1] == "/tmp/m.json"
+        assert with_mcp.count("--add-dir") == 2 and "--bare" in with_mcp
 
 
 class TestDomainAwarePrompt:

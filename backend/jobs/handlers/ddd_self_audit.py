@@ -219,6 +219,39 @@ evidence (it becomes the todo body — the whole point); `context` makes it acti
 At most 5 findings, highest-confidence first. If the DDD is accurate, say so in one line and emit no block."""
 
 
+def _build_review_cmd(claude_path: str, use_bare: bool, mcp_file: str | None,
+                      project_name: str, src: Path | None, prompt: str) -> list[str]:
+    """The review subprocess's command line. Pure, so the read-only guarantee is testable.
+
+    READ-ONLY needs BOTH flags: ``--tools`` is the set of tools that EXIST for the
+    agent, ``--allowedTools`` only auto-approves; under bypassPermissions,
+    ``--allowedTools`` alone leaves Bash / Write / Edit usable (the same lesson
+    scripts/scenario_runner.py records). Without ``--tools`` the "detect-only"
+    guarantee this handler relies on does not hold."""
+    cmd = [
+        claude_path, "--print",
+        *(["--bare"] if use_bare else []),
+        "--output-format", "json",
+        "--no-session-persistence",
+        # Same SSOT as every other job CLI (_resolve_job_model): a bare family
+        # alias carries no `[1m]` suffix, which caps the context window and 400s.
+        "--model", _resolve_job_model(),
+        "--permission-mode", "bypassPermissions",
+    ]
+    if mcp_file:
+        cmd += ["--mcp-config", mcp_file]
+    cmd.append("--strict-mcp-config")
+    cmd += ["--tools", ",".join(_AUDIT_TOOLS), "--allowedTools", ",".join(_AUDIT_TOOLS)]
+    cmd += ["--add-dir", str(SWARMWS)]
+    if src:
+        cmd += ["--add-dir", str(src)]
+    cmd += ["--system-prompt",
+            f"You are SwarmAI running the scheduled DDD self-audit for {project_name}. "
+            f"Read-only review. Report drift; never edit."]
+    cmd += ["-p", prompt]
+    return cmd
+
+
 def run_ddd_self_audit(config: dict | None = None) -> dict:
     """Loop all DDD projects; per project, run a bounded read-only review subprocess;
     aggregate findings into a report + per-project Radar todos. Detect-only."""
@@ -291,38 +324,15 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         code_backed = _is_code_backed(project_dir)
         prompt = _build_audit_prompt(project_name, project_dir, code_backed)
 
-        cmd = [
-            claude_path, "--print",
-            *(["--bare"] if use_bare else []),
-            "--output-format", "json",
-            "--no-session-persistence",
-            # Same SSOT as every other job CLI (_resolve_job_model): a bare family
-            # alias carries no `[1m]` suffix, which caps the context window and
-            # 400s. This third call site was missed by the first pass because it
-            # lives in a handler, not executor.py — a same-shape defect in a
-            # different file, found by adversarial review, not by the tests.
-            "--model", _resolve_job_model(),
-            "--permission-mode", "bypassPermissions",
-        ]
         mcp_file = None
         if mcp_config:
             mcp_file = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".json", prefix="swarm-audit-mcp-", delete=False)
             json.dump(mcp_config, mcp_file); mcp_file.close()
-            cmd += ["--mcp-config", mcp_file.name, "--strict-mcp-config"]
-        else:
-            cmd.append("--strict-mcp-config")
-        # Read-only toolset = the structural detect-only guarantee.
-        cmd += ["--allowedTools", ",".join(_AUDIT_TOOLS)]
-        cmd += ["--add-dir", str(SWARMWS)]
         # Code-backed project: also grant read of the live SOURCE repo it describes.
         src = _source_repo_for(project_name) if code_backed else None
-        if src:
-            cmd += ["--add-dir", str(src)]
-        cmd += ["--system-prompt",
-                f"You are SwarmAI running the scheduled DDD self-audit for {project_name}. "
-                f"Read-only review. Report drift; never edit."]
-        cmd += ["-p", prompt]
+        cmd = _build_review_cmd(claude_path, use_bare, mcp_file.name if mcp_file else None,
+                                project_name, src, prompt)
 
         try:
             proc = subprocess.run(
