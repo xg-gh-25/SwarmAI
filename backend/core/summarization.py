@@ -184,7 +184,9 @@ one type label per lesson, using EXACTLY one of these 7 labels — \
 Also assess:
 - Was this a debugging/investigation session? If yes, set coe_signal.
 - coe_signal: "" if routine, "candidate" if investigating a bug/issue, "resolution" if root cause was found and fixed
-- coe_topic: the problem being investigated (e.g., "streaming not working", "context files silently dropped")
+- coe_topic: the problem being investigated (e.g., "streaming not working", "context files silently dropped"). \
+If it is the same problem as one of these open problems, copy that title exactly, character for \
+character, so the earlier report and this one are recognised as one problem: {open_problems}
 - Did the user correct the agent's behavior? Look for patterns like: "don't ask me, just do it", \
 "I already told you", "stop repeating", "that's wrong", "not what I asked", user re-explaining \
 after agent misunderstood, user expressing frustration with agent approach. Each correction \
@@ -318,12 +320,18 @@ class SummarizationPipeline:
 
     MAX_WORDS_PER_ENTRY = 700  # Increased from 500 to accommodate enriched fields
 
-    async def summarize(self, messages: list[dict]) -> StructuredSummary:
+    async def summarize(
+        self, messages: list[dict], *, open_problems: "list[str] | None" = None,
+    ) -> StructuredSummary:
         """Full summarization for conversations with 3+ messages.
 
         If the session has more than LLM_ENRICHMENT_THRESHOLD messages,
         attempts LLM enrichment for handoff-level detail. Falls back to
         rule-based summary on LLM failure.
+
+        ``open_problems``: titles of the problems still open (MEMORY.md Open Threads).
+        The enrichment is asked to copy one exactly when this session reports or
+        resolves the same problem, so the COE topic matches its thread by key.
         """
         topics = self._extract_topics(messages)
         decisions = self._extract_decisions(messages)
@@ -348,7 +356,8 @@ class SummarizationPipeline:
         # change, just with a slightly larger window.
         if len(messages) > LLM_ENRICHMENT_THRESHOLD:
             try:
-                summary = await self._enrich_with_llm(summary, messages)
+                summary = await self._enrich_with_llm(
+                    summary, messages, open_problems=open_problems or [])
             except Exception as exc:
                 logger.warning(
                     "LLM enrichment failed, using rule-based summary: %s", exc
@@ -703,7 +712,8 @@ class SummarizationPipeline:
         return summary
 
     async def _enrich_with_llm(
-        self, summary: StructuredSummary, messages: list[dict]
+        self, summary: StructuredSummary, messages: list[dict],
+        *, open_problems: "list[str] | None" = None,
     ) -> StructuredSummary:
         """Enrich a rule-based summary with LLM-extracted context.
 
@@ -720,6 +730,7 @@ class SummarizationPipeline:
             topics="; ".join(summary.topics[:10]) or "(none)",
             decisions="; ".join(summary.decisions[:5]) or "(none)",
             files="; ".join(summary.files_modified[:10]) or "(none)",
+            open_problems="; ".join(f'"{t}"' for t in (open_problems or [])) or "(none)",
         )
 
         # Dedicated 'llm' pool (run_c8ad52f8), not the default ThreadPoolExecutor:

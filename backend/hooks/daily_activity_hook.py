@@ -257,6 +257,20 @@ def _session_run_evidence(session_id: str, workspace: "Path | None" = None,
     return shas, ids
 
 
+def _open_problem_titles(workspace: "Path | None" = None) -> list[str]:
+    """Titles of MEMORY.md Open Threads, for the summariser to reuse verbatim when a
+    session reports or resolves one of them (the COE topic then matches its thread
+    by coe_key). Unreadable or absent → [] (the summary is written as before)."""
+    try:
+        from core.proactive_intelligence import _parse_open_threads
+        ws = workspace or SWARMWS
+        text = (Path(ws) / ".context" / "MEMORY.md").read_text(encoding="utf-8")
+        return [t["title"] for t in _parse_open_threads(text) if t.get("title")]
+    except Exception:  # noqa: BLE001 — a hint for the summariser, never a blocker
+        logger.debug("open problem titles unavailable", exc_info=True)
+        return []
+
+
 def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
     """Recover session data from an orphaned checkpoint file.
 
@@ -386,7 +400,8 @@ class DailyActivityExtractionHook:
         if len(messages) < 3:
             summary = self._pipeline.minimal_summary(messages)
         else:
-            summary = await self._pipeline.summarize(messages)
+            summary = await self._pipeline.summarize(
+                messages, open_problems=_open_problem_titles())
 
         # 2b. Capture git ground truth — actual commits during session
         # This prevents COE C005: DailyActivity text claims vs git reality diverging.

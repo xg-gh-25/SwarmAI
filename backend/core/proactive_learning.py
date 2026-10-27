@@ -322,6 +322,30 @@ def classify_work_type(text: str) -> str:
 # Deliverable extraction
 # ---------------------------------------------------------------------------
 
+def parse_delivered(text: str) -> list[str]:
+    """The deliverable lines of a DailyActivity file: the ``- `` items under every
+    session's ``**Delivered:**`` header (older files: ``**Deliverables:**`` or
+    ``### Deliverables``), up to the next bold label or heading.
+
+    The one reader of this format: the briefing, its effectiveness scoring and the
+    learning loop all call it, so a change in the writer's header is fixed here once.
+    """
+    out: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("**Delivered:**", "**Deliverables:**", "### Deliverables")):
+            inside = True
+            continue
+        if not inside:
+            continue
+        if stripped.startswith("- "):
+            out.append(stripped.removeprefix("- ").strip())
+        elif stripped.startswith(("**", "#")):
+            inside = False
+    return out
+
+
 def extract_deliverables(daily_dir: Path) -> list[str]:
     """Extract **Delivered:** lines from ALL sessions in the most recent DailyActivity file.
 
@@ -339,24 +363,11 @@ def extract_deliverables(daily_dir: Path) -> list[str]:
     if not da_files:
         return []
 
-    deliverables: list[str] = []
     try:
         content = da_files[0].read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return []
-
-    in_delivered = False
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("**Delivered:**"):
-            in_delivered = True
-            continue
-        if in_delivered:
-            if stripped.startswith("- "):
-                deliverables.append(stripped.removeprefix("- ").strip())
-            elif stripped.startswith("**") or stripped.startswith("##"):
-                in_delivered = False  # next section — will re-enter on next **Delivered:**
-    return deliverables
+    return parse_delivered(content)
 
 
 # ---------------------------------------------------------------------------

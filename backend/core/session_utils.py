@@ -9,7 +9,7 @@ Public symbols:
 - ``_is_retriable_error``                — Classify transient SDK errors for auto-retry.
 - ``_sanitize_sdk_error``                — Map raw SDK errors to user-friendly messages.
 - ``_build_error_event``                 — Build a sanitized SSE error event dict.
-- ``fuzzy_title_matches_deliverable``    — Fuzzy text matching (shared by proactive + distillation).
+- ``fuzzy_title_matches_deliverable``    — Fuzzy text matching (briefing hints and dismissed items).
 - ``read_owner_pid``                     — Read SWARMAI_OWNER_PID from a process's environment.
 - ``is_session_not_found_error``         — Detect stale --resume session ID failures.
 - ``detect_tool_call_leak`` / ``strip_tool_call_leak`` / ``find_stream_leak_onset``
@@ -891,7 +891,7 @@ def fuzzy_title_matches_deliverable(
 ) -> bool:
     """Check if a thread/item title fuzzy-matches any deliverable.
 
-    Matching heuristics (same as COE matching):
+    Matching heuristics:
     - Substring match in either direction
     - ≥50% word overlap between title words and deliverable words
 

@@ -226,14 +226,13 @@ def _write_memory_stripped(memory_path: Path, content: str) -> None:
     Why this exists (run_669fa92e — P8 single-door-vs-multi-door): the in-prompt
     Memory Index generation was retired 2026-08-14, but a ~9K orphan index block
     survived in live MEMORY.md. ``locked_write.py`` strips it on every write through
-    ITS chokepoint — but the 5 direct ``memory_path.write_text`` sites in this module
-    (``_update_open_threads``, ``_reconcile_open_threads_from_deliverables``,
-    ``_archive_stale_rc_entries``, ``_enforce_section_caps``, ``_enforce_size_valve``)
-    bypassed that chokepoint, so their read-modify-write re-carried the block forward
-    on every cycle. Routing all 5 through this helper makes index-strip a STRUCTURAL
+    ITS chokepoint — but the direct ``memory_path.write_text`` sites in this module
+    (``_update_open_threads``, ``_archive_stale_rc_entries``, ``_enforce_section_caps``,
+    ``_enforce_size_valve``) bypassed that chokepoint, so their read-modify-write
+    re-carried the block forward on every cycle. Routing all of them through this helper makes index-strip a STRUCTURAL
     property of every MEMORY write in this module, not a per-site discipline.
 
-    Contract (verified against the 5 call sites, run_669fa92e Gate-1):
+    Contract (verified against the call sites, run_669fa92e Gate-1):
     - Callers ALREADY hold their OWN exclusive flock around the read-modify-write.
       This helper does ONLY the pure string transform + write — it MUST NOT open a
       new flock (routing through ``locked_write`` would double-lock the same
@@ -482,28 +481,14 @@ class DistillationTriggerHook:
         if not last_suggested:
             return
 
-        # Extract deliverables from DailyActivity files
+        from core.proactive_learning import parse_delivered
+
         deliverables: list[str] = []
         for da_file in da_files:
             try:
-                content = da_file.read_text(encoding="utf-8")
+                deliverables.extend(parse_delivered(da_file.read_text(encoding="utf-8")))
             except (OSError, UnicodeDecodeError):
                 continue
-            in_deliverables = False
-            for line in content.splitlines():
-                stripped = line.strip()
-                if stripped == "**Deliverables:**" or stripped.startswith("### Deliverables"):
-                    in_deliverables = True
-                    continue
-                if in_deliverables and (
-                    stripped.startswith("**") and stripped.endswith(":**")
-                    or stripped.startswith("### ")
-                    or stripped.startswith("## ")
-                ):
-                    in_deliverables = False
-                    continue
-                if in_deliverables and stripped.startswith("- "):
-                    deliverables.append(stripped.lstrip("- ").strip())
 
         if deliverables:
             _update_effectiveness(state, last_suggested, deliverables)
@@ -851,15 +836,6 @@ class DistillationTriggerHook:
         # Auto-manage Open Threads from COE signals (code-enforced)
         if coe_entries:
             self._update_open_threads(memory_path, coe_entries)
-
-        # Auto-resolve Open Threads whose topics appear in deliverables.
-        # This closes the staleness gap: when work is done (captured in
-        # DailyActivity "Deliverables" section), the corresponding Open
-        # Thread is moved to "Resolved" automatically — no manual cleanup.
-        # See COE: memory pipeline temporal lag gap (2026-03-19).
-        self._reconcile_open_threads_from_deliverables(
-            memory_path, [f for f, _, _ in extracted_files]
-        )
 
         # Write corrections and competence to EVOLUTION.md — C6 (run_0d60e04e): gate the
         # auto-write path FIRST (finding D format-hole). _gate_evolution_entries routes
@@ -1941,10 +1917,8 @@ class DistillationTriggerHook:
     ) -> None:
         """Auto-manage Open Threads from COE signals (code-enforced).
 
-        For each COE topic:
-        - If a matching thread exists: increment report count
-        - If no match: create new P0 thread (COE candidates auto-promote)
-        - If signal is 'resolution': mark thread as resolved
+        A ``candidate`` opens a P0 thread (or counts on its existing one); a
+        ``resolution`` removes the thread. See ``_apply_open_thread_updates``.
 
         Uses locked read-modify-write for the entire Open Threads section.
         """
@@ -1975,248 +1949,107 @@ class DistillationTriggerHook:
         content: str,
         coe_entries: list[tuple[str, str, str]],
     ) -> str:
-        """Apply COE-driven updates to Open Threads section in MEMORY.md content.
+        """Open and close MEMORY.md Open Threads from this batch's COE signals.
 
-        Matching logic: case-insensitive substring match of COE topic
-        against existing thread titles.
+        A thread is the COE's thread when its bold title has the same ``coe_key`` as
+        the COE topic: the key the COE Registry uses, never shared words (word overlap
+        made unrelated topics bump or close each other's threads).
 
-        Report count format: ``(reported Nx: session1, session2)``
+        Per topic, over the whole batch:
+        - any ``resolution`` → the thread is removed, with its indented lines (the COE
+          Registry keeps the history). No thread → nothing; a resolution never opens one.
+        - else ``candidate`` → the thread's report count goes up by the number of
+          candidates, or a new P0 thread is opened.
+        Other signals change nothing.
+
+        Report count format: ``(reported Nx: date1, date2)``
         """
         lines = content.split("\n")
-        # Group COE entries by normalized topic
-        by_topic: dict[str, list[tuple[str, str]]] = {}
+
+        def _title(topic: str) -> str:
+            # The bold title is read back with a non-greedy ``**…**``: an inner
+            # ``**`` would cut it short and the thread could never be found again.
+            return topic.strip().strip("*").rstrip(".").strip().replace("**", "")
+
+        by_key: dict[str, list[tuple[str, str, str]]] = {}
         for file_date, signal, topic in coe_entries:
-            key = topic.lower().strip()
-            if key not in by_topic:
-                by_topic[key] = []
-            by_topic[key].append((file_date, signal))
+            by_key.setdefault(coe_key(_title(topic)), []).append((file_date, signal, topic))
 
-        matched_topics: set[str] = set()
+        def _section() -> tuple[int, int] | None:
+            start = next((i for i, line in enumerate(lines)
+                          if line.strip() == "## Open Threads"), None)
+            if start is None:
+                return None
+            end = next((i for i in range(start + 1, len(lines))
+                        if lines[i].startswith("## ")), len(lines))
+            return start, end
 
-        for topic_key, events in by_topic.items():
-            # Try to find a matching thread line
-            found = False
-            for i, line in enumerate(lines):
-                # Match thread lines: "- 🔴 **title**" or "- 🟡 **title**"
-                if not re.match(r"^- [🔴🟡🔵] \*\*", line):
+        def _find(key: str) -> int | None:
+            bounds = _section()
+            if bounds is None:
+                return None
+            for i in range(bounds[0] + 1, bounds[1]):
+                if not re.match(r"^- [🔴🟡🔵] \*\*", lines[i]):
                     continue
-                # Extract title between ** **
-                title_match = re.search(r"\*\*(.+?)\*\*", line)
-                if not title_match:
-                    continue
-                title = title_match.group(1).lower()
-                # Fuzzy match: any significant word overlap
-                topic_words = set(topic_key.split())
-                title_words = set(title.split())
-                overlap = topic_words & title_words
-                # Match if >50% of topic words appear in title, or substring match
-                if (len(overlap) >= max(1, len(topic_words) // 2)
-                        or topic_key in title
-                        or title in topic_key):
-                    # Found match — increment report count
-                    count_match = re.search(r"\(reported (\d+)x:", line)
-                    if count_match:
-                        old_count = int(count_match.group(1))
-                        new_count = old_count + len(events)
-                        lines[i] = line.replace(
-                            f"reported {old_count}x:",
-                            f"reported {new_count}x:",
-                        )
-                    # Check if resolution — update status line
-                    has_resolution = any(s == "resolution" for _, s in events)
-                    if has_resolution and i + 1 < len(lines):
-                        status_line = lines[i + 1]
-                        if "Status:" in status_line and "resolved" not in status_line.lower():
-                            lines[i + 1] = f"  Status: ~~{status_line.strip().removeprefix('Status:').strip()}~~ **RESOLVED**."
-                    found = True
-                    matched_topics.add(topic_key)
-                    break
+                m = re.search(r"\*\*(.+?)\*\*", lines[i])
+                if m and coe_key(m.group(1)) == key:
+                    return i
+            return None
 
-            if not found:
-                # Create new P0 thread
-                original_topic = next(
-                    t for _, _, t in coe_entries if t.lower().strip() == topic_key
-                )
-                dates = sorted(set(d for d, _ in events))
-                new_entry = (
-                    f"- 🔴 **{original_topic}** (reported {len(events)}x: {', '.join(dates)})\n"
-                    f"  Status: COE candidate — auto-promoted from DailyActivity."
-                )
-                # Find P0 section to insert
-                p0_idx = None
-                for i, line in enumerate(lines):
-                    if line.strip() == "### P0 — Blocking":
-                        p0_idx = i + 1
-                        break
-                if p0_idx is not None:
-                    lines.insert(p0_idx, new_entry)
-                else:
-                    # No P0 section — find Open Threads and add P0
-                    for i, line in enumerate(lines):
-                        if line.strip() == "## Open Threads":
-                            lines.insert(i + 1, f"\n### P0 — Blocking\n{new_entry}\n")
-                            break
-                matched_topics.add(topic_key)
-
-        return "\n".join(lines)
-
-    def _reconcile_open_threads_from_deliverables(
-        self,
-        memory_path: Path,
-        da_files: list[Path],
-    ) -> None:
-        """Auto-resolve Open Threads when deliverables confirm work is done.
-
-        Extracts deliverable lines from the DailyActivity files being
-        distilled, then checks each P0/P1/P2 Open Thread title against
-        them using fuzzy word overlap.  Matched threads are moved to the
-        "Resolved (archive)" section with today's date.
-
-        Uses the same lock pattern as ``_update_open_threads`` to prevent
-        concurrent MEMORY.md corruption.
-        """
-        # Extract deliverables from all DA files being distilled
-        deliverables: list[str] = []
-        for da_file in da_files:
-            try:
-                content = da_file.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            in_deliverables = False
-            for line in content.splitlines():
-                stripped = line.strip()
-                if stripped == "**Deliverables:**" or stripped.startswith("### Deliverables"):
-                    in_deliverables = True
-                    continue
-                if in_deliverables and (
-                    (stripped.startswith("**") and stripped.endswith(":**"))
-                    or stripped.startswith("### ")
-                    or stripped.startswith("## ")
-                ):
-                    in_deliverables = False
-                    continue
-                if in_deliverables and stripped.startswith("- "):
-                    deliverables.append(stripped.lstrip("- ").strip().lower())
-
-        if not deliverables:
-            return
-
-        from utils.file_lock import flock_exclusive, flock_unlock
-
-        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = None
-        try:
-            fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive(fd)
-            try:
-                content = memory_path.read_text(encoding="utf-8")
-                updated = self._apply_deliverable_reconciliation(content, deliverables)
-                if updated != content:
-                    _write_memory_stripped(memory_path, updated)
-                    logger.info("Reconciled Open Threads against %d deliverables", len(deliverables))
-            finally:
-                flock_unlock(fd)
-        except Exception as exc:
-            logger.warning("Failed to reconcile Open Threads from deliverables: %s", exc)
-        finally:
-            if fd is not None:
-                fd.close()
-
-    @staticmethod
-    def _apply_deliverable_reconciliation(
-        content: str,
-        deliverables: list[str],
-    ) -> str:
-        """Move Open Threads to Resolved when deliverables confirm completion.
-
-        Matching: for each thread title, tokenize into words and check
-        against each deliverable line.  A thread is considered resolved
-        when any deliverable has ≥50% word overlap with the title
-        (same heuristic as COE matching) OR when the title is a
-        substring of the deliverable (or vice versa).
-
-        Returns the modified content string (unchanged if no matches).
-        """
-        lines = content.split("\n")
-        today = date.today().isoformat().replace("-", "/")  # 2026/03/20
-        resolved_entries: list[str] = []
-        indices_to_remove: list[int] = []
-
-        # Build deliverable word sets once
-        deliv_word_sets = [set(d.split()) for d in deliverables]
-
-        from core.session_utils import fuzzy_title_matches_deliverable
-
-        for i, line in enumerate(lines):
-            # Match thread lines: "- 🔴 **title**" or "- 🟡 **title**" or "- 🔵 **title**"
-            if not re.match(r"^- [🔴🟡🔵] \*\*", line):
-                continue
-            title_match = re.search(r"\*\*(.+?)\*\*", line)
-            if not title_match:
-                continue
-            title = title_match.group(1)
-
-            # Check if any deliverable matches this thread
-            matched = fuzzy_title_matches_deliverable(
-                title, deliverables, deliv_word_sets,
-            )
-
-            if matched:
-                # Extract short title for resolved archive entry
-                resolved_entries.append(f"{title} ({today})")
-                indices_to_remove.append(i)
-
-        if not indices_to_remove:
-            return content
-
-        # Remove matched thread lines (reverse order to preserve indices)
-        for idx in reversed(indices_to_remove):
-            # Also remove trailing description/status lines that belong to this thread
-            # (indented lines or empty lines immediately after)
+        def _body_end(idx: int) -> int:
+            # A thread's body is its indented lines, blank lines included when the
+            # body continues after them; it ends at the next thread or heading.
             end = idx + 1
-            while end < len(lines) and (
-                lines[end].startswith("  ") or lines[end].strip() == ""
-            ):
-                # Don't eat into the next thread or section header
-                if end + 1 < len(lines) and re.match(r"^- [🔴🟡🔵] \*\*|^###|^##", lines[end + 1]):
-                    break
-                end += 1
-            # Check if removing this leaves an empty priority section
-            # with just "_(None — all clear)_" remaining
-            del lines[idx:end]
-
-        # Append to Resolved archive
-        resolved_section_idx = None
-        for i, line in enumerate(lines):
-            if line.strip().startswith("### Resolved"):
-                resolved_section_idx = i
+            while end < len(lines):
+                if lines[end].startswith("  "):
+                    end += 1
+                    continue
+                if lines[end].strip() == "":
+                    nxt = next((j for j in range(end, len(lines)) if lines[j].strip()), None)
+                    if nxt is not None and lines[nxt].startswith("  "):
+                        end = nxt
+                        continue
                 break
+            return end
 
-        if resolved_section_idx is not None:
-            # Find the "- ✅ ..." line in Resolved section and append
-            for i in range(resolved_section_idx + 1, min(resolved_section_idx + 5, len(lines))):
-                if lines[i].strip().startswith("- ✅"):
-                    # Append new resolved items to existing line
-                    existing = lines[i].strip()
-                    new_items = ", ".join(resolved_entries)
-                    lines[i] = f"{existing}, {new_items}"
-                    break
+        for key, events in by_key.items():
+            signals = {s for _, s, _ in events}
+            idx = _find(key)
+            if "resolution" in signals:
+                if idx is not None:
+                    del lines[idx:_body_end(idx)]
+                else:
+                    logger.info("COE resolution matched no open thread: %.100s", events[0][2])
+                continue
+            candidates = [e for e in events if e[1] == "candidate"]
+            if not candidates:
+                continue
+            dates = sorted({d for d, _, _ in candidates})
+            if idx is not None:
+                m = re.search(r"\(reported (\d+)x:([^)]*)\)", lines[idx])
+                if m:
+                    seen = [d.strip() for d in m.group(2).split(",") if d.strip()]
+                    merged = sorted(set(seen) | set(dates))
+                    lines[idx] = lines[idx].replace(
+                        m.group(0),
+                        f"(reported {int(m.group(1)) + len(candidates)}x: {', '.join(merged)})", 1)
+                continue
+            new_entry = (
+                f"- 🔴 **{_title(candidates[0][2])}** (reported {len(candidates)}x: {', '.join(dates)})\n"
+                f"  Status: COE candidate — auto-promoted from DailyActivity."
+            )
+            p0_idx = next((i + 1 for i, line in enumerate(lines)
+                           if line.strip() == "### P0 — Blocking"), None)
+            if p0_idx is not None:
+                lines.insert(p0_idx, new_entry)
+                continue
+            bounds = _section()
+            if bounds is not None:
+                lines.insert(bounds[0] + 1, f"\n### P0 — Blocking\n{new_entry}\n")
             else:
-                # No existing resolved line — create one
-                lines.insert(
-                    resolved_section_idx + 1,
-                    f"- ✅ {', '.join(resolved_entries)}",
-                )
+                logger.warning("No '## Open Threads' section in MEMORY.md; COE candidate "
+                               "not recorded as a thread: %.100s", candidates[0][2])
 
-        # Clean up empty priority sections: if a P section now has only
-        # "_(None — all clear)_" or is empty, leave it as-is (harmless).
-
-        logger.info(
-            "Auto-resolved %d Open Threads from deliverables: %s",
-            len(resolved_entries),
-            ", ".join(resolved_entries),
-        )
         return "\n".join(lines)
 
     @staticmethod

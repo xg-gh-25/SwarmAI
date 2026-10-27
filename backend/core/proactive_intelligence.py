@@ -256,12 +256,10 @@ def _parse_continue_hints(daily_dir: Path, max_files: int = 1) -> list[str]:
 
 
 def _extract_recent_deliverables(daily_dir: Path, max_files: int = 3) -> list[str]:
-    """Extract deliverable lines from recent DailyActivity files.
+    """Lowercased deliverable lines of the most recent DailyActivity files, read with
+    the shared parser (core.proactive_learning.parse_delivered)."""
+    from core.proactive_learning import parse_delivered
 
-    Returns lowercased deliverable strings for matching against thread
-    titles.  Reuses the same parsing logic as the distillation hook's
-    effectiveness scoring.
-    """
     deliverables: list[str] = []
     if not daily_dir.is_dir():
         return deliverables
@@ -277,64 +275,8 @@ def _extract_recent_deliverables(daily_dir: Path, max_files: int = 3) -> list[st
             content = da_file.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        in_deliverables = False
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped == "**Deliverables:**" or stripped.startswith("### Deliverables"):
-                in_deliverables = True
-                continue
-            if in_deliverables and (
-                (stripped.startswith("**") and stripped.endswith(":**"))
-                or stripped.startswith("### ")
-                or stripped.startswith("## ")
-            ):
-                in_deliverables = False
-                continue
-            if in_deliverables and stripped.startswith("- "):
-                deliverables.append(stripped.lstrip("- ").strip().lower())
-
+        deliverables.extend(d.lower() for d in parse_delivered(content))
     return deliverables
-
-
-def _filter_completed_threads(
-    threads: list[dict],
-    daily_dir: Path,
-    deliverables: list[str] | None = None,
-) -> list[dict]:
-    """Remove threads whose topics appear in recent deliverables.
-
-    Read-time safety net: even if distillation hasn't resolved the
-    thread yet, the briefing won't suggest work that's already done.
-    Uses >=50% word overlap matching (same heuristic as distillation).
-
-    ``deliverables`` may be pre-computed by the caller and passed in to avoid
-    re-reading the DailyActivity files (run_b1feca42 — build_session_briefing
-    calls this and _filter_completed_hints back-to-back with the same daily_dir).
-    When None, it is computed here so the function stays usable standalone.
-    """
-    if deliverables is None:
-        deliverables = _extract_recent_deliverables(daily_dir)
-    if not deliverables:
-        return threads
-
-    deliv_word_sets = [set(d.split()) for d in deliverables]
-    filtered: list[dict] = []
-
-    for t in threads:
-        title = t.get("title", "")
-
-        completed = fuzzy_title_matches_deliverable(
-            title, deliverables, deliv_word_sets,
-        )
-
-        if not completed:
-            filtered.append(t)
-        else:
-            logger.debug(
-                "Filtered completed thread from briefing: %s", title,
-            )
-
-    return filtered
 
 
 def _filter_completed_hints(
@@ -345,7 +287,7 @@ def _filter_completed_hints(
 ) -> list[str]:
     """Remove continue hints that match recent deliverables or dismissed items.
 
-    Same fuzzy-matching heuristic as _filter_completed_threads — ≥50% word
+    Fuzzy match (session_utils.fuzzy_title_matches_deliverable): ≥50% word
     overlap or substring match.  Also filters hints the user explicitly dismissed.
 
     ``deliverables`` may be pre-computed by the caller (run_b1feca42) to avoid a
@@ -749,15 +691,11 @@ def build_session_briefing(
         continue_hints = _parse_continue_hints(daily_dir)
         signals = _detect_patterns(threads, daily_dir, memory_text)
 
-        # -- Read-time staleness filter --
-        # Suppress threads whose topics appear in recent deliverables.
-        # This is the safety net for when distillation hasn't run yet
-        # (e.g. first session after a productive one).  See COE: memory
-        # pipeline temporal lag gap (2026-03-19).
-        # Compute deliverables ONCE (run_b1feca42) — both filters below consumed
-        # it and each re-read the same DailyActivity files before this hoist.
+        # Deliverables are read once and used to drop continue-hints that are
+        # already done. Open Threads are not filtered by them: matching a thread
+        # title against deliverable lines by word overlap hid real threads and
+        # closed none, so a thread closes only on its COE resolution (distillation).
         deliverables = _extract_recent_deliverables(daily_dir)
-        threads = _filter_completed_threads(threads, daily_dir, deliverables)
 
         # -- L3: Update learning state from previous session --
         learning_state = _load_learning_state(workspace)

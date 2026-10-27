@@ -476,7 +476,7 @@ class TestDeliverablesDedup:
         today = datetime.now().strftime("%Y-%m-%d")
         (da_dir / f"{today}.md").write_text(
             "## 10:00 | abc | Session\n"
-            "**Deliverables:**\n- shipped the mcp fix\n"
+            "**Delivered:**\n- shipped the mcp fix\n"
             "**Next:** Investigate MCP root cause.\n"
         )
 
@@ -504,12 +504,8 @@ class TestDeliverablesDedup:
         filter output to the None (self-compute) path — behavior preserved."""
         self._seed(tmp_path)
         da_dir = tmp_path / "Knowledge" / "DailyActivity"
-        threads = [{"title": "shipped the mcp fix"}, {"title": "unrelated task xyz"}]
         deliverables = _mod._extract_recent_deliverables(da_dir)
-
-        via_none = _mod._filter_completed_threads(list(threads), da_dir)
-        via_pre = _mod._filter_completed_threads(list(threads), da_dir, deliverables)
-        assert via_none == via_pre
+        assert deliverables == ["shipped the mcp fix"]
 
         hints = ["shipped the mcp fix", "brand new idea"]
         h_none = _mod._filter_completed_hints(list(hints), da_dir, set())
