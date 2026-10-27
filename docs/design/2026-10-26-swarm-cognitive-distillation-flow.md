@@ -351,7 +351,7 @@ flowchart TB
 | **S1 用户指令** | correction、remember / `s_persist` / `ingest submit`、Save to Memory 按钮 | 用户明确表达指令的那条消息（纠正、"记住"、点按钮），以 `user` 事件记账 | `immediate` | 纠错、原则、偏好、事件 |
 | **S2 会话** | distillation、memory_extractor、improvement_writeback、conversation→DDD cultivation、user_observer、backflow | 会话里其余的消息和工具结果。S1 已经认领的 user 事件，S2 不再重复提取 | `session` | 决定、经验、坑、心智模型、taste、事件、Reference 文档 |
 | **S3 Run** | REFLECT | 和这个 run 关联的一切：需求、design/plan、review finding、人工回答、validation、**这个 run 落地的 commit** | `run`（专用通道，§5.9） | 五段知识报告（§5.5） |
-| **S4 代码变更** | `ddd_refresh`、`code_change_feed` 的技术漂移检测 | 不由任何 run 落地的 commit（人手动提交的、外部合并进来的） | `scheduled` | 架构形状、约定（多数是 Reference，§9）、事件 |
+| **S4 代码变更** | `ddd_refresh`、`code_change_feed` 的技术漂移检测、DDD 漂移自动修正（`ddd_self_audit` + `ddd_drift_fix`） | 不由任何 run 落地的 commit（人手动提交的、外部合并进来的） | `scheduled` | 架构形状、约定（多数是 Reference，§9）、事件 |
 | **S5 系统度量** | `evolution_optimizer`、eval governance | **跨 run 的聚合指标**。单个 run 的统计归 S3 | `scheduled` | agent 能力相关的纠错和经验、改进点 |
 | **S6 外部信号** | `signal_ddd_bridge`、Library inbox、`s_learn-content` / `s_library` 在会话之外抓取的外部内容 | 不属于任何会话或 run 的外部内容。会话里出现的工具结果、网页等 `external` 根归 S2，run 里的归 S3；同一个根经由多个 source 出现时，`evidence_roots` 里只有一个 root，按 §5.8 去重 | `scheduled` | 只产出 Reference |
 
@@ -1003,6 +1003,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | workspace 初始化、codebase scan 创建 DDD 文档（`swarm_workspace_manager.py:1264`、`1450`、`1920`） | 允许"文件不存在时才创建"，这类写入作为显式豁免；已经存在的文件不覆盖 |
 | 每周 Memory Health 的修改阶段（`memory_health.py:584`、`796`、`867`、`1005`、`1056`）、EVOLUTION prune 和维护（`evolution_maintenance_hook.py:422`、`866`、`950`）、context health 里的修改（`context_health_hook.py` 中写 MEMORY、EVOLUTION、KNOWLEDGE、DDD 的各处，行号由扫描器生成）、DDD 矛盾剥离、size valve 驱逐基线单元、`locked_write` 清理旧索引 | 这些都会改动已沉淀的内容，和 §13 冲突，**在阶段 B 全部关成只读**，只留下只读统计。size 控制改成只作用于 `cand:` 单元，并放进读取侧的注入预算（§12） |
 | `ddd_orchestrator` 的机械替换、`ddd_maturity` 的成熟度注释 | 首版改成只读，不再写入 |
+| DDD 漂移自动修正（`ddd_drift_fix.apply_fix`，由每周的 `ddd_self_audit` 触发） | 改成 S4 的一部分，修正作为 **refine 单元**入队：`ddd_drift_fix` 仍然按三种固定语法（`drop_condition`、`swap_superseded_path`、`swap_code_value`）确定性地算出新文本，但不再改文件。新文本作为一条完整的新单元，`relation_hint` 为 `supersedes` 指向原条目的锚点；证据是被引用的完成条目、文件头的 SUPERSEDED 行或 HEAD 源文件的 `file_revision` / `commit` 根，因此通常带 taint，按 §9 写进项目 DDD。卡 3b 校验：旧条目的每条主张都要保留，只有修正类型声明的那一处（等待条件、旧路径、旧值）由证据判为 `refute`。原条目不改，读取侧沿 `supersedes` 看到新的那条。原来的直接替换、备份目录和 `undo_drift_fix` 删掉：用户要撤销，用 `governed_edit` 或墓碑；`.artifacts/ddd-drift-fixes.jsonl` 只作为"用户撤销过的修正不再提出"的去重依据保留 |
 | DailyActivity、checkpoint、JobResults、Signals、Reports | 它们是日志，不进 Inbox。新的 checkpoint 写到恢复文件，不再写进 DailyActivity |
 
 **写入者的边界靠 materializer 保证**（§3.2）。AST 扫描证明不了"所有写入点都找到了"，因为路径是在运行时拼出来的。所以分两层来做：
@@ -1423,6 +1424,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（r13 之前的版本）。
 
 - **r16.5**（最后一轮评审意见，之后直接实施）：
+  - §5.2、§8（用户决定）：main 新加的 DDD 漂移自动修正改走 CDF，归入 S4，修正作为 refine 单元入队（新单元 supersedes 原条目，原文不改），删除直接替换、备份和 `undo_drift_fix`。
   - §9.1 第 3 条做减法：删掉跨批次的 supersedes；目的地是注入文件时卡 3 不检索 `_common/` 里的改投副本，允许 recall 里多一份只读副本，Flow 单独计数；补一条测试。
   - §5.10、§5.12、§7.1、§9.1：公共 DDD 放进专门的子目录 `Learned/domains/`、`Learned/repos/`、`Learned/_common/`；领域封闭列表只取 `domains/` 的文件名，`Learned/` 根目录的知识卡片不算领域。
   - §5.10：新领域由用户用 `governed_edit` 在 `domains/` 下新建文件；`unknown_domain` 挂起，不消耗重试，不进 `failed_poison`，文件出现后重新排队，超过 30 天按 §4.4 清理；§14 的 deferred 时长验收不算它。
