@@ -437,25 +437,29 @@ class ContextHealthHook:
         canary_file = root / ".context" / _CANARY_STATE_FILE
         import json as _json
         cases_error = result.get("cases_error", 0)
+        # a case that timed out did not pass: counted with the failures, never as clean
+        cases_timeout = result.get("cases_timeout", 0)
         canary_data = {
             "timestamp": result["triggered_at"],
             "total": result["total_cases"],
             "passed": result["cases_passed"],
             "failed": result["cases_failed"],
             "error": cases_error,
+            "timeout": cases_timeout,
             "verdict": (result.get("release") or {}).get("verdict"),
             "duration_s": result["duration_seconds"],
         }
 
-        if result["cases_failed"] > 0:
-            # Include failure details for briefing (real regressions)
+        if result["cases_failed"] > 0 or cases_timeout > 0:
+            # Include failure details for briefing (real regressions, and hangs)
             canary_data["failures"] = [
-                {"id": c["id"], "notes": c["notes"]}
-                for c in result["cases"] if c["status"] == "failed"
+                {"id": c["id"], "status": c["status"], "notes": c["notes"]}
+                for c in result["cases"] if c["status"] in ("failed", "timeout")
             ]
             logger.warning(
-                "context_health: eval canary FAILED %d/%d cases (release=%s)",
-                result["cases_failed"], result["total_cases"], canary_data["verdict"],
+                "context_health: eval canary FAILED %d/%d cases, %d timed out (release=%s)",
+                result["cases_failed"], result["total_cases"], cases_timeout,
+                canary_data["verdict"],
             )
         elif cases_error > 0:
             # Config errors: surface as info, not warning (not a regression)

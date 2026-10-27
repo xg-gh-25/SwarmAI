@@ -80,7 +80,9 @@ def tier_of(case: Mapping[str, Any]) -> str:
 
 
 def _stamp_stale(case: Mapping[str, Any]) -> bool:
-    """A gate case edited outside the validator: its stamp does not match its body."""
+    """A red-line or gate case edited outside the validator: its stamp does not match its
+    body. Checked for both tiers: an edited red-line case must not keep deciding the
+    release (decide_release) while it silently leaves the BVT (eval_runner.bvt_member)."""
     from scripts.golden_case_validator import compute_case_stamp
 
     return case.get("validated_by_4gate") != compute_case_stamp(dict(case))
@@ -127,8 +129,9 @@ def decide_release(cases: Sequence[Mapping[str, Any]],
             red_violations.append({"id": cid, "status": st})
         if tier == "gate" and st == "failed":
             gate_failures.append({"id": cid, "dimension": c.get("dimension")})
-        if tier == "gate" and _stamp_stale(c):
-            missing.append({"id": cid, "status": "stale_stamp"})
+        if tier in ("red", "gate") and _stamp_stale(c):
+            missing.append({"id": cid, "status": "stale_stamp" if c.get("validated_by_4gate")
+                            else "unstamped"})
         elif tier in ("red", "gate") and (st is None or st in _NOT_RUN):
             # a red case that errored/timed out is already a red-line violation;
             # it is listed here too so the denominator is complete

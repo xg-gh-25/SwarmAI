@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """ci_eval_gate.py — the git-bound eval gate (run_69b1c644 Cycle 4).
 
-A PURE CHECK: it does NOT run eval. It verifies the latest committed eval report
-is (a) FRESH — its code_digest matches the current eval-relevant code+golden_set,
+A PURE CHECK: it does NOT run eval. It verifies the deciding eval report (the newest,
+by trigger time, whose probes' negative checks ran; a newer report on the same code
+can still veto with a red line or a red BVT) is (a) FRESH — its code_digest matches the current eval-relevant code+golden_set,
 and (b) RELEASABLE — its release decision (core/eval_release: red line, then gate
 cases per dimension, then the denominator) says release, and its bvt block is green.
 Exit 0 = pass (safe to push/build), exit 1 = blocked (stale, a failing check, or
@@ -41,40 +42,75 @@ from scripts.eval_runner import (  # noqa: E402
     compute_code_digest,
 )
 
-def _reports_by_mtime(root: Path) -> list[dict]:
-    """All parseable reports, NEWEST FIRST by mtime — the SAME ordering key as
-    _latest_report (NOT eval_runner._load_history's filename sort, which can
-    disagree when two filename formats coexist; Gate-1 run_95d9acbc). Returns the
-    parsed dicts so latest = result[0]."""
+def _trigger_time(report: dict) -> float:
+    """When the run was triggered (``triggered_at``), with the eval service's rules
+    (core.eval_service._run_time): a naive value is UTC, an unreadable or missing one
+    sorts last. Not the file's mtime: that moves on a copy or a touch."""
+    from datetime import datetime, timezone
+
+    try:
+        d = datetime.fromisoformat(str(report.get("triggered_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return float("-inf")
+    return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def _reports_newest_first(root: Path) -> list[dict]:
+    """All parseable reports, newest first by trigger time; latest = result[0]."""
     hist = _eval_history_dir(root)
-    out: list[dict] = []
-    for p in sorted(hist.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    reports: list[dict] = []
+    for p in hist.glob("*.json"):
         try:
-            out.append(json.loads(p.read_text()))
+            reports.append(json.loads(p.read_text()))
         except Exception:
             continue
-    return out
+    reports.sort(key=_trigger_time, reverse=True)
+    return reports
 
 
 def _latest_report(root: Path) -> dict | None:
-    reports = _reports_by_mtime(root)
+    reports = _reports_newest_first(root)
     return reports[0] if reports else None
 
 
 def check_gate(root: Path) -> tuple[int, str]:
     """Returns (exit_code, message). 0=pass, 1=blocked, 2=cannot-verify."""
-    reports = _reports_by_mtime(root)  # read history ONCE; reports[0] = latest
-    report = reports[0] if reports else None
-    if report is None:
+    reports = _reports_newest_first(root)  # read history ONCE; reports[0] = latest
+    if not reports:
         return 2, "GATE: no eval report found — run `eval_runner.py run` locally first."
+    current_digest = compute_code_digest(root)
+
+    # The gate decides on the newest report whose probes' negatives ran: only such a
+    # report shows each probe can fail (a probe that passes whatever the code does
+    # would pass here too). Run Canary and the post-deploy check skip negatives (the
+    # sync route is deadline-bound), so they never decide. A newer report on the
+    # same code still vetoes: a red line or a red BVT it saw blocks.
+    strong_at = next((i for i, r in enumerate(reports) if r.get("negatives_ran") is True), None)
+    for newer in reports[:strong_at]:
+        if newer.get("code_digest") != current_digest:
+            continue
+        if (newer.get("redline") or {}).get("violated"):
+            ids = ", ".join(v.get("id", "?") for v in newer["redline"].get("violations", []))
+            return 1, (f"GATE BLOCKED (RED-LINE): a newer run ({newer.get('triggered_by', '?')}) "
+                       f"saw zero-tolerance case(s) fail [{ids}] on this code.")
+        nb = newer.get("bvt")
+        if isinstance(nb, dict) and nb.get("green") is False:
+            return 1, (f"GATE BLOCKED (red): a newer run ({newer.get('triggered_by', '?')}) "
+                       f"on this code has a red BVT: passed={nb.get('passed')} "
+                       f"failed={nb.get('failed')} error={nb.get('error')} "
+                       f"timeout={nb.get('timeout')}.")
+    if strong_at is None:
+        return 2, ("GATE: no report ran the probes' negative checks (Run Canary and the "
+                   "post-deploy check skip them) — run `eval_runner.py run` (negatives on "
+                   "by default) or a full run.")
+    report = reports[strong_at]
 
     bvt = report.get("bvt")
     if not bvt:
-        return 2, ("GATE: latest report predates the gate (no bvt block) — "
+        return 2, ("GATE: the deciding report predates the gate (no bvt block) — "
                    "re-run eval to produce a gate-readable report.")
 
     # Freshness: does the report's digest match the CURRENT inputs?
-    current_digest = compute_code_digest(root)
     report_digest = report.get("code_digest", "")
     if report_digest != current_digest:
         return 1, (f"GATE BLOCKED (stale): report code_digest={report_digest or 'none'} "
@@ -107,7 +143,7 @@ def check_gate(root: Path) -> tuple[int, str]:
     # blocks (exit 1) whatever else the report lacks.
     release = report.get("release")
     if not isinstance(release, dict) or not release.get("verdict"):
-        return 2, ("GATE: latest report predates the release gate (no release block) — "
+        return 2, ("GATE: the deciding report predates the release gate (no release block) — "
                    "re-run eval to produce a report with a release decision.")
 
     # The release decision, recomputed over EVERY red-line and gate case of the

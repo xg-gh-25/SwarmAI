@@ -229,6 +229,19 @@ def run_eval_scheduled(
         reasons.append(f"🔴 judge infra degraded: {n_error}/{intended} cases errored "
                        f"(coverage {coverage:.0%})")
 
+    # Judge collapse on behavior cases: the product set's judge is the decision judge
+    # of its behavior cases, which the deterministic ratio above leaves out (llm cases
+    # are already in it). Only cases a judge was asked about count (``judged``, set by
+    # eval_runner): a behavior case whose agent never started never reached the judge.
+    # The ids go in a note, not the reason: the reason is the alert fingerprint.
+    judged = [c for c in cases if c.get("judged") and c.get("eval_method") == "behavior"]
+    judge_errors = [c for c in judged if c.get("status") == "error"]
+    judge_note = ""
+    if judged and len(judge_errors) / len(judged) >= _COVERAGE_ALERT_THRESHOLD:
+        reasons.append("🔴 judge unavailable: the decision judge errored on behavior cases")
+        judge_note = (f"judge errors {len(judge_errors)}/{len(judged)}: "
+                      f"{', '.join(str(c.get('id')) for c in judge_errors[:5])}")
+
     behavior_note = ""
     if behavior_failed:
         behavior_note = (f"⚠️ behavior (non-deterministic) {len(behavior_failed)} failed — "
@@ -241,7 +254,8 @@ def run_eval_scheduled(
         if reasons and fingerprint != prev:
             send = notifier or _default_notifier
             try:
-                send(message="\n".join(f"- {r}" for r in reasons + ([timeout_note] if timeout_note else [])),
+                notes = [n for n in (timeout_note, judge_note) if n]
+                send(message="\n".join(f"- {r}" for r in reasons + notes),
                      title="🔴 SwarmAI scheduled eval — release blocked",
                      channels=["slack"])
                 notified = True

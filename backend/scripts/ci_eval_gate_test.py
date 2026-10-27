@@ -35,10 +35,11 @@ _RELEASE = {"verdict": "release", "reason": "all 5 red-line and gate case(s) pas
 
 
 def _report(hist: Path, name: str, digest: str, bvt: dict, score: float | None = None,
-            mtime: int | None = None, redline: dict | None = None, release=_RELEASE):
+            triggered_at: str = "2026-06-26T00:00:00Z", redline: dict | None = None,
+            release=_RELEASE, negatives_ran: bool = True):
     payload = {
-        "run_id": name, "triggered_at": "2026-06-26T00:00:00Z",
-        "code_digest": digest, "bvt": bvt,
+        "run_id": name, "triggered_at": triggered_at,
+        "code_digest": digest, "bvt": bvt, "negatives_ran": negatives_ran,
     }
     if release is not None:
         payload["release"] = release
@@ -46,11 +47,7 @@ def _report(hist: Path, name: str, digest: str, bvt: dict, score: float | None =
         payload["overall_score"] = score
     if redline is not None:
         payload["redline"] = redline
-    p = hist / name
-    p.write_text(json.dumps(payload))
-    if mtime is not None:
-        import os
-        os.utime(p, (mtime, mtime))
+    (hist / name).write_text(json.dumps(payload))
 
 
 def test_fresh_green_passes(ws):
@@ -178,8 +175,8 @@ def test_the_release_logic_is_in_the_freshness_digest():
 def test_no_score_comparison_between_reports(ws):
     """A big score difference against an older report no longer blocks anything."""
     root, hist = ws
-    _report(hist, "old.json", "OTHER", _GREEN, score=100.0, mtime=1_000_000)
-    _report(hist, "now.json", "DIGEST_NOW", _GREEN, score=10.0, mtime=2_000_000)
+    _report(hist, "old.json", "OTHER", _GREEN, score=100.0, triggered_at="2026-06-25T00:00:00Z")
+    _report(hist, "now.json", "DIGEST_NOW", _GREEN, score=10.0, triggered_at="2026-06-26T00:00:00Z")
     code, msg = check_gate(root)
     assert code == 0, msg
 

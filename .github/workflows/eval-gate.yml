@@ -72,6 +72,7 @@ jobs:
             tests/test_golden_case_stamp.py \
             tests/test_bvt_admission.py \
             scripts/golden_case_validator_test.py \
+            scripts/ci_eval_gate_test.py \
             -q --timeout=60
 
       # ci_eval_gate against whatever report exists. On CI there is no workspace

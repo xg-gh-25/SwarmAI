@@ -1029,6 +1029,7 @@ class EvalService:
         from scripts.eval_runner import _NON_PROMOTABLE_TIERS
 
         from core.golden_set_store import is_product_case
+        from scripts.golden_case_validator import compute_case_stamp
 
         with self._data_lock:
             for case in self._cases:
@@ -1041,7 +1042,19 @@ class EvalService:
                 consecutive = self._count_consecutive_passes(case_id)
 
                 if consecutive >= min_consecutive_passes:
+                    # tier is part of the stamp, so promotion must not silently drop
+                    # a stamped case out of the BVT. The pass count does not look at
+                    # the stamp: re-stamping a case edited outside the validator would
+                    # re-approve the edit, so a stale stamp is not promoted. A case
+                    # never stamped is promoted and stays unstamped (out of the BVT,
+                    # as before); stamping it here would admit an unvalidated case.
+                    stamp = case.get("validated_by_4gate")
+                    if stamp and stamp != compute_case_stamp(case):
+                        logger.info("eval_service: not promoting %s: its stamp is stale", case_id)
+                        continue
                     case["tier"] = "stable"
+                    if stamp:
+                        case["validated_by_4gate"] = compute_case_stamp(case)
                     promoted.append(case_id)
 
             if promoted:
@@ -1222,7 +1235,7 @@ class EvalService:
 
         A subdir of EvalHistory/, deliberately NOT matched by the non-recursive
         ``glob("*.json")`` that every EvalHistory reader uses (eval_service
-        ._load_history, eval_runner._load_history, ci_eval_gate._reports_by_mtime,
+        ._load_history, eval_runner._load_history, ci_eval_gate._reports_newest_first,
         routers/eval.py). This namespace
         isolation is the whole point: a running marker here is INVISIBLE to those
         readers, so none of them can misread it as a scoreless completed run — no

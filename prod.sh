@@ -53,6 +53,33 @@ _build_time() {
 #   gate rc 1 = stale OR red   → return 1 (caller BLOCKS the release)
 #   gate rc 2 = no report      → interactive: ask (Y proceeds); non-TTY: return 1
 # Escape hatch: SWARMAI_SKIP_EVAL_GATE=1 (CI / emergency).
+# Post-deploy eval canary: warns, never blocks (the deploy has already happened).
+# `set -e` is active (top of file): curl -f and canary_check.py both exit non-zero
+# on exactly the failures this reports, which would abort the script at the
+# assignment before the warning prints, so both run under set +e. canary_check.py
+# passes only on a green BVT with no red-line violation; a missing field fails.
+_post_deploy_canary() {
+    _log "Running eval canary (semantic correctness check)..."
+    local canary_result canary_status canary_problem canary_rc
+    set +e
+    canary_result=$(curl -sf -X POST "http://127.0.0.1:18321/api/eval/canary" 2>/dev/null)
+    canary_status=$?
+    if [ $canary_status -ne 0 ]; then
+        canary_problem="request failed (curl exit $canary_status)"
+        canary_rc=1
+    else
+        canary_problem=$(echo "$canary_result" | python3 "$PROJECT_ROOT/backend/scripts/canary_check.py" 2>&1)
+        canary_rc=$?
+    fi
+    set -e
+    if [ $canary_rc -eq 0 ]; then
+        _ok "Eval canary passed ✓"
+    else
+        _warn "Eval canary FAILED (non-blocking): ${canary_problem:-canary check exited $canary_rc}"
+    fi
+    return 0
+}
+
 _eval_gate() {
     # Once-per-process: release-all calls cmd_release THEN cmd_release_hive — both
     # gate. Skip the redundant 2nd run (same git tree → same verdict; avoids a
@@ -78,10 +105,10 @@ _eval_gate() {
            # No TTY (CI / piped stdin): can't ask — fail closed with a clear message
            # instead of dying opaquely at `read` under set -e.
            if [ ! -t 0 ]; then
-               _err "No eval report and no TTY — run eval first, or set SWARMAI_SKIP_EVAL_GATE=1 to bypass (CI)."
+               _err "No eval report the gate can decide on, and no TTY — run eval first, or set SWARMAI_SKIP_EVAL_GATE=1 to bypass (CI)."
                return 1
            fi
-           echo -n "  No gate-readable eval report (run 'python backend/scripts/eval_runner.py run' first). Release anyway? [y/N] "
+           echo -n "  No eval report the gate can decide on (run 'python backend/scripts/eval_runner.py run' first). Release anyway? [y/N] "
            read -r answer
            if [[ ! "$answer" =~ ^[Yy] ]]; then
                _err "Aborted — run eval to produce a gate-readable report"
@@ -588,15 +615,7 @@ cmd_deploy() {
     fi
 
     # ── Post-deploy canary (Gap #14): run eval canary for semantic correctness ──
-    _log "Running eval canary (semantic correctness check)..."
-    local canary_result
-    canary_result=$(curl -s -X POST "http://127.0.0.1:18321/api/eval/canary" 2>/dev/null)
-    local canary_status=$?
-    if [ $canary_status -eq 0 ] && echo "$canary_result" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('passed',d.get('status'))!='failed' else 1)" 2>/dev/null; then
-        _ok "Eval canary passed ✓"
-    else
-        _warn "Eval canary failed or unavailable (non-blocking): $canary_result"
-    fi
+    _post_deploy_canary
 }
 
 # Uncommitted changes under the given paths, one porcelain line each (status +

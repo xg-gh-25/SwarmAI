@@ -822,10 +822,10 @@ class TestInflightMarker:
         health = svc.get_health()
         assert health["last_run"]["run_id"] == "zz_canary", health
 
-        # ci_eval_gate._reports_by_mtime — non-recursive glob, marker invisible
+        # ci_eval_gate._reports_newest_first — non-recursive glob, marker invisible
         import importlib
         cig = importlib.import_module("scripts.ci_eval_gate")
-        reports = cig._reports_by_mtime(eval_workspace)
+        reports = cig._reports_newest_first(eval_workspace)
         assert all(r.get("status") != "running" for r in reports), \
             "ci_eval_gate saw the .inflight marker"
 

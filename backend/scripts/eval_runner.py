@@ -1599,6 +1599,10 @@ def eval_trajectory_capture(case: dict) -> dict:
     # failed), so throttling can't lie the score (eval_llm_judge lesson).
     if result.get("status") == "passed" and case.get("decision_rubric"):
         dj = _judge_decision_direction(case, final_text or "")
+        # a judge was asked: its error is the judge's, never a spawn flake
+        # (eval_scheduled alerts on judged cases that errored)
+        if dj["status"] != "skipped":
+            result["judged"] = True
         if dj["status"] == "error":
             result["status"] = "error"
             result["notes"] = f"{dj['notes']} (trajectory passed but decision unjudgeable)"
@@ -1880,6 +1884,8 @@ def evaluate_case(case: dict, root: Path, *,
         for ev in evaluators:
             if ev in LLM_EVALUATORS:
                 result = eval_llm_judge(case, ev)
+                if result.get("status") != "skipped":  # a skip never reached the judge
+                    result["judged"] = True
                 result["evaluator"] = ev
                 result["duration_ms"] = int((time.time() - start) * 1000)
                 return result
@@ -2001,6 +2007,9 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
                 "eval_method": r.get("eval_method", "programmatic"),
                 "duration_ms": r.get("duration_ms", 0),
                 "notes": r.get("notes", ""),
+                # judged: a judge decided this case, so an error here is the judge's
+                # (eval_scheduled alerts on those, not on agents that never started)
+                **({"judged": True} if r.get("judged") else {}),
                 **_record_detail(r, r["id"] in product_ids),
             }
             for r in results
@@ -2014,6 +2023,9 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         # a run limited to some cases (or programmatic-only) is not a full run
         # (_run_is_comparable)
         "filtered": bool(case_filter or tags or programmatic_only),
+        # whether each case's negative variant ran (the canary-teeth check): the
+        # release gate only trusts a report whose probes were shown able to fail
+        "negatives_ran": bool(verify_teeth),
         "scored_count": scores["scored_count"],
         "duration_seconds": round(sum(r.get("duration_ms", 0) for r in results) / 1000, 2),
         # Git-bound gate fields (run_69b1c644 Cycle 4). code_digest binds the
