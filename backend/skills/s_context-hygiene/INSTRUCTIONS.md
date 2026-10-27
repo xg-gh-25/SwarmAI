@@ -179,9 +179,13 @@ skill, a better tool result or an edit to the rule that already covers it.
 4. Record the audit: `"$SWARM_BACKEND_BIN" py -m core.governance_audit mark` (clears the
    briefing hint until the default model changes again).
 5. System files are live only after rebuild + restart (needs the user's approval). After that,
-   the deploy-triggered eval runs the golden cases whose `affected_by` names a changed file, twice,
-   and lists the cases that flipped from pass to fail (`eval_runner run --affected-by <file> --repeat 2`).
-   Judge the change by the flipped cases, not the total score.
+   the deploy-triggered eval runs the golden cases whose `affected_by` names a changed file plus
+   every behavior case, twice (`eval_runner run --affected-by <file> --with-behavior --repeat 2`),
+   and compares each case with its two newest results before the change. Judge the change by
+   the **definite regressions** (passed twice before, failed twice after), not the total score;
+   a **possible regression** (one failure after) is for you to decide whether to run again, and a
+   case whose two baseline results disagree judges nothing. A case with fewer than two results
+   before the change is listed, not judged: run the same command once before the deploy.
 
 The red line (§4) applies unchanged: cut narration and duplication, never a principle kernel or a
 correction's pattern + tell.

@@ -2270,34 +2270,56 @@ def select_by_affected_by(cases: list[dict], tokens: list[str]) -> list[str]:
 
 
 def compare_repeats(history: list[dict], runs: list[dict]) -> dict:
-    """Which cases flipped, judged per case, not by the total score.
+    """Which cases flipped, judged per case, not by the total score (design
+    2026-10-26-evolution-loop-admission §3.6).
 
-    The baseline for a case is its latest status in ``history`` (runs before this
-    change). ``pass_to_fail`` = passed at baseline, failed in ANY repeat (a break may
-    show up in one run out of two); ``fail_to_pass`` = failed at baseline, passed in
-    every repeat; ``unstable`` = the repeats disagree with each other.
+    The baseline for a case is its two newest definite statuses (passed / failed) in
+    ``history``, the runs before this change, ordered by ``triggered_at``: file names
+    cannot order them (the service names records in UTC, this CLI in local time).
+    skipped / error / timeout are not definite and count neither as baseline nor as
+    a result. Groups:
+
+    - ``definite_regression``: passed in both baseline runs, failed in every repeat.
+    - ``possible_regression``: passed in both baseline runs, failed in some repeats.
+    - ``baseline_unstable``: the two baseline runs disagree; the repeats judge nothing.
+    - ``fail_to_pass``: failed in both baseline runs, passed in every repeat.
+    - ``baseline_short``: fewer than two baseline runs (a new case, or the first
+      evaluation); run ``--repeat 2`` before the change to give it a baseline.
+
+    A report is decided by ``definite_regression``; ``possible_regression`` is for a
+    person to decide whether to run again.
     """
-    baseline: dict[str, str] = {}
-    for run in history:
+    from core.eval_service import _run_time
+
+    def _definite(run):
         for c in run.get("cases", []):
-            if c.get("id") and c.get("status") not in (None, "skipped"):
-                baseline[c["id"]] = c["status"]
+            if c.get("id") and c.get("status") in ("passed", "failed"):
+                yield c["id"], c["status"]
+
+    baseline: dict[str, list[str]] = {}
+    for run in sorted(history, key=_run_time, reverse=True):     # newest first
+        for cid, status in _definite(run):
+            if len(baseline.setdefault(cid, [])) < 2:
+                baseline[cid].append(status)
     seen: dict[str, list[str]] = {}
     for run in runs:
-        for c in run.get("cases", []):
-            if c.get("id") and c.get("status") not in (None, "skipped"):
-                seen.setdefault(c["id"], []).append(c["status"])
-    out = {"pass_to_fail": [], "fail_to_pass": [], "unstable": []}
+        for cid, status in _definite(run):
+            seen.setdefault(cid, []).append(status)
+    out = {"definite_regression": [], "possible_regression": [], "baseline_unstable": [],
+           "fail_to_pass": [], "baseline_short": []}
     for cid, statuses in sorted(seen.items()):
-        if len(set(statuses)) > 1:
-            out["unstable"].append(cid)
-        base = baseline.get(cid)
-        if base == "passed" and "failed" in statuses:
-            out["pass_to_fail"].append(cid)
-        elif base == "failed" and all(s == "passed" for s in statuses):
+        base = baseline.get(cid, [])
+        if len(base) < 2:
+            out["baseline_short"].append(cid)
+        elif base[0] != base[1]:
+            out["baseline_unstable"].append(cid)
+        elif base[0] == "passed" and all(s == "failed" for s in statuses):
+            out["definite_regression"].append(cid)
+        elif base[0] == "passed" and "failed" in statuses:
+            out["possible_regression"].append(cid)
+        elif base[0] == "failed" and all(s == "passed" for s in statuses):
             out["fail_to_pass"].append(cid)
     return out
-
 
 
 def _report_follow_ups(run_result: dict, history: list, golden_set: dict, root: Path) -> list:
@@ -2945,10 +2967,16 @@ def cmd_run(args):
     affected = getattr(args, "affected_by", None)
     if affected:
         picked = select_by_affected_by(golden_set["cases"], affected.split(","))
-        if not getattr(args, "include_behavior", False):
+        behavior = [c["id"] for c in golden_set["cases"]
+                    if c.get("id") and c.get("eval_method") == "behavior"]
+        if getattr(args, "with_behavior", False):
+            # Principle and rule files are injected every turn, so a governance edit
+            # can move any behaviour: every behavior case joins the sweep (§3.6).
+            # Naming them is the consent run_eval asks for.
+            picked = picked + [c for c in behavior if c not in picked]
+        elif not getattr(args, "include_behavior", False):
             # A selected id counts as "named individually" in run_eval, which would
             # let behavior cases (each spawns a real agent) through without consent.
-            behavior = {c.get("id") for c in golden_set["cases"] if c.get("eval_method") == "behavior"}
             picked = [c for c in picked if c not in behavior]
         case_filter = [c for c in picked if case_filter is None or c in case_filter]
         print(f"  --affected-by {affected}: {len(case_filter)} case(s)")
@@ -2971,8 +2999,13 @@ def cmd_run(args):
         runs.append(run_result)
     if repeat > 1:
         flips = compare_repeats(history, runs)
-        print(f"  Repeats: {repeat} | pass→fail: {flips['pass_to_fail'] or 'none'} | "
-              f"fail→pass: {flips['fail_to_pass'] or 'none'} | unstable: {flips['unstable'] or 'none'}")
+        print(f"  Repeats: {repeat} | definite regression: {flips['definite_regression'] or 'none'}")
+        print(f"  possible regression: {flips['possible_regression'] or 'none'} | "
+              f"fail→pass: {flips['fail_to_pass'] or 'none'}")
+        print(f"  baseline unstable (not judged): {flips['baseline_unstable'] or 'none'}")
+        if flips["baseline_short"]:
+            print(f"  fewer than two baseline runs (not judged; run --repeat 2 before the "
+                  f"change): {flips['baseline_short']}")
 
     try:
         html_path = generate_html_report(run_result, golden_set, root)
@@ -3041,9 +3074,13 @@ def main():
     run_p.add_argument("--affected-by", dest="affected_by",
                        help="Comma-separated tokens; run only cases whose affected_by names one "
                             "(e.g. AGENT,SOUL.P1,STEERING) — the cases a governance edit can move.")
+    run_p.add_argument("--with-behavior", dest="with_behavior", action="store_true",
+                       help="With --affected-by: also run every behavior case (each spawns a real "
+                            "agent) — a governance edit can move any behaviour.")
     run_p.add_argument("--repeat", type=int, default=1,
                        help="Run the selected cases N times and list the cases that flipped vs "
-                            "their previous status (LLM-judged cases are not deterministic).")
+                            "their two previous definite statuses (LLM-judged cases are not "
+                            "deterministic).")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
     sub.add_parser("validate", help="Validate the golden set schema (product + private)")

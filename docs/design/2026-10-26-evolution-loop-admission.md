@@ -162,7 +162,9 @@ SOUL / AGENT / STEERING / SELF / TOOLS：3 处矛盾、6 处重复、5 处为旧
   基线两次不一致 = 基线不稳定，不用来判断这次改动。报告以确定退化为准（不只看总分）。改动前没有两次
   历史时，部署前先用 `--repeat 2` 补跑基线。其余 LLM 判定类用例不在这一轮跑，作为残余风险写进报告。
   这需要 `eval_runner` 的 `--affected-by` 之外加 `--with-behavior`，`compare_repeats` 改为两次基线、
-  四组输出（`definite_regression` / `possible_regression` / `baseline_unstable` / `fail_to_pass`）。
+  四组输出（`definite_regression` / `possible_regression` / `baseline_unstable` / `fail_to_pass`），
+  另列 `baseline_short`：改动前不足两次结果的用例，只列出、不判定（实现备注：没有它，这类用例会被静默丢掉）。
+  基线按 `triggered_at` 取最新两次，不按文件名（服务按 UTC、CLI 按本地时间命名记录）。
   eval 仍只在 CI / 部署 / 定时触发，不在编码过程中手动跑（AGENT § Eval）。
 - 今天的 `ba9868915` / `b9d5cae5d` 是第一个用这套方法评估的改动。
 
