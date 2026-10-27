@@ -22,6 +22,9 @@ def _stamped(**over):
         "eval_method": "programmatic",
         "evaluators": ["file_contains"],
         "tier": "active",
+        # A case is in the BVT only at release tier gate (core/eval_release.tier_of;
+        # a case with no ``gating`` is watch: shown, never gating).
+        "gating": "gate",
         "verification": {"file": "README.md", "expected_contains": "Swarm"},
     }
     c.update(over)
@@ -156,3 +159,12 @@ def test_failed_breaks_green_but_skip_does_not():
     bad = _stamped(id="B")
     bvt = compute_bvt([ok, bad], [_result("A", "passed"), _result("B", "failed")])
     assert not bvt["green"] and bvt["failed"] == 1
+
+
+def test_watch_case_is_not_counted():
+    """A case without gating (a new case starts at watch) is shown, never part of the BVT."""
+    c = _stamped(id="GS_WATCH")
+    c.pop("gating")
+    c["validated_by_4gate"] = compute_case_stamp(c)
+    bvt = compute_bvt([c], [_result("GS_WATCH")])
+    assert bvt["total"] == 0 and not bvt["green"]

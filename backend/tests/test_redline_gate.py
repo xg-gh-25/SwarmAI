@@ -106,6 +106,7 @@ def test_bvt_unchanged_by_presence_of_compute_redline():
     """compute_redline is additive: computing it does not alter what bvt sees."""
     cases = [_case("GS_A"), _case("GS_B")]
     for c in cases:
+        c["gating"] = "gate"           # BVT members are gate-tier cases (eval_release.tier_of)
         c["validated_by_4gate"] = compute_case_stamp(c)
     results = [_result("GS_A", "passed"), _result("GS_B", "passed")]
     before = compute_bvt(cases, results)

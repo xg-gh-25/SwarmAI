@@ -221,7 +221,9 @@ def test_frontmatter_checks_still_run_and_still_pass():
     errors: list[str] = []
     for skill_dir in lint_skills.SKILL_DIRS:
         root = skill_dir if skill_dir.is_absolute() else _REPO_ROOT / skill_dir
-        for skill_md in sorted(root.glob("s_*/SKILL.md")):
+        # The skills that ship, exactly as the CLI's pass 1 lists them: a gitignored
+        # local skill (a user's own) is not in it, so it cannot turn this red.
+        for skill_md in lint_skills.metadata_targets(root):
             errors.extend(lint_skills.lint_skill(skill_md))
     assert errors == [], f"frontmatter regressions: {errors[:10]}"
 

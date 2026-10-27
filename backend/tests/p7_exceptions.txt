@@ -11,4 +11,3 @@ backend/core/ddd_packager.py | SwarmAI-Workspace | 1 | the redaction pattern tha
 backend/core/swarm_workspace_manager.py | Projects/SwarmAI | 4 | the seeded default project every workspace has (usable-by-anyone §3.9 A')
 backend/hive/user_data.py | /home/swarm | 3 | the Hive EC2 instance's own service account, not a user's machine
 backend/scripts/newuser_smoke_e2e.sh | prod.sh | 1 | SwarmAI's own packaging smoke script, run inside a SwarmAI checkout
-backend/core/eval_service.py | Projects/SwarmAI | 1 | temporary: OS Eval generalization ToDo (closing guards D2)
