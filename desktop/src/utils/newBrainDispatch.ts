@@ -166,14 +166,18 @@ export function buildBrainManifest(name: string, items: StarterItem[]): string {
   }
 
   lines.push(
-    'Set it up with me: run the s_project-manager setup (P0 confirm the governed assets → ' +
-      'P1 create → P2 read & distill the material into typed entries in PRODUCT/TECH/IMPROVEMENT/PROJECT, ' +
-      'recording each PRODUCT section the material cannot support as a gap → ' +
-      'P3 bind any repo → P3b generate the Project Agent (project-agent.yaml) from this knowledge, ' +
+    'Set it up with me: run the s_project-manager setup (P0 confirm the governed assets, ' +
+      'artifact_cli classify-starter for a folder whose role is unclear → P1 create → P3 bind each repo ' +
+      'first, which also surveys it → P2 read the survey and the material whole, write the first typed ' +
+      'entries section by section into bootstrap-entries.json, write them with artifact_cli ' +
+      'bootstrap-apply (fix what it rejects), ask me only about the PRODUCT sections it reports without ' +
+      'evidence (with a "not sure yet" choice) and record the rest as gaps → ' +
+      'P3b generate the Project Agent (project-agent.yaml) from this knowledge, ' +
       'using only the pipeline profiles, and show it to me to confirm or change → P4 code graph ' +
       'for a repo → P5 skills → P6 verify). Surface anything you cannot reach (login-walled links, ' +
       'missing paths) or any conflicts between sources for me to resolve. If the name is taken ' +
-      '(create returns 409), stop and ask me for another name. Run P6 with --record. When it passes, ' +
+      '(create returns 409), stop and ask me for another name. Run P6 with --record. Whether or not it ' +
+      'passes, tell me what was written, which sections are gaps and what is still open; when it passes, ' +
       'open Brain Hub for me and tell me the brain is ready.',
   );
   return lines.join('\n');
@@ -227,7 +231,8 @@ export function buildResumeSetupPrompt(name: string): string {
     '',
     'Run the P6 check first (s_project-manager verify_ddd_complete.py --project ' +
       `"${name.trim()}") to see which phases are missing, then finish only those, in order: ` +
-      'P2 knowledge, P3 bind, P3b the Project Agent (show it to me to confirm), P4 code graph, ' +
+      'P2 knowledge (survey, entries, bootstrap-apply), P3 bind, P3b the Project Agent (show it to me ' +
+      'to confirm), P4 code graph, ' +
       'P5 skills. Do not redo or overwrite what is already written. Finish with P6 --record, ' +
       'then open Brain Hub for me and tell me it is ready.',
   ].join('\n');

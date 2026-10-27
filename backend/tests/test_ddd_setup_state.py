@@ -88,11 +88,27 @@ def test_setup_progress_reads_the_last_p6_counts(tmp_path):
     write_setup_state(tmp_path, "setting-up")                         # create_project
     assert read_setup_progress(tmp_path) is None                      # no P6 run yet
     write_setup_state(tmp_path, "setting-up", {"PASS": 3, "FAIL": 2, "PENDING": 1, "N/A": 1})
-    assert read_setup_progress(tmp_path) == {"done": 4, "total": 7}
-    assert m._brain_summary(tmp_path)["setupProgress"] == {"done": 4, "total": 7}
+    assert read_setup_progress(tmp_path) == {"done": 4, "total": 7, "next": None}
+    assert m._brain_summary(tmp_path)["setupProgress"] == {"done": 4, "total": 7, "next": None}
     write_setup_state(tmp_path, "ready", {"PASS": 6, "PENDING": 1})
     assert read_setup_progress(tmp_path) is None                      # finished
     (tmp_path / SETUP_FILE).write_text(json.dumps({"state": "setting-up", "counts": {"PASS": "x"}}))
     assert read_setup_progress(tmp_path) is None                      # garbage never raises
     (tmp_path / SETUP_FILE).write_text("[1, 2]")
     assert read_setup_state(tmp_path) is None and read_setup_progress(tmp_path) is None
+
+
+def test_the_first_open_check_is_recorded_fail_first(tmp_path):
+    """Brain Hub shows "next: <check>": P6 records the open checks, FAIL before
+    PENDING, and the progress reader returns the first."""
+    from core.ddd_setup_state import read_setup_progress
+    mod = _verify_mod()
+    write_setup_state(tmp_path, "setting-up")
+    mod.record_setup_state(tmp_path, {"overall": mod.STATUS_FAIL,
+                                      "counts": {"PASS": 5, "PENDING": 1, "FAIL": 1},
+                                      "checks": [{"name": "⑥ Refresher", "status": mod.STATUS_PENDING},
+                                                 {"name": "② Knowledge/content", "status": mod.STATUS_FAIL},
+                                                 {"name": "① Identity", "status": mod.STATUS_PASS}]})
+    body = json.loads((tmp_path / SETUP_FILE).read_text())
+    assert body["open"] == ["② Knowledge/content", "⑥ Refresher"]
+    assert read_setup_progress(tmp_path)["next"] == "② Knowledge/content"

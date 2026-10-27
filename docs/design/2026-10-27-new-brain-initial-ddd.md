@@ -241,10 +241,10 @@ API 契约不读原文：survey 放结构化摘要（端点或 RPC 列表，每�
 
 | 段 | 从什么提取 | 类型和必填 |
 |---|---|---|
-| PRODUCT Vision | README 的定位段、package 描述 | principle / model |
+| PRODUCT Vision | README 的定位段、package 描述 | principle |
 | PRODUCT What Makes It Different | README、docs 里和替代方案的比较 | model |
 | PRODUCT Strategic Priorities / Non-Goals / Success Criteria | 文档里明说的优先级、"不做"、成功标准；**没明说就留空** | decision（why + rejected）/ pitfall / guideline |
-| TECH Architecture | ARCHITECTURE / design 文档；survey 的入口点和聚类；技术栈一条 model | model / decision |
+| TECH Architecture | ARCHITECTURE / design 文档；survey 的入口点 | principle / decision |
 | TECH Key Subsystems | 每个聚类一条：职责、入口、依赖。`sources` 写这个聚类的源文件（不写图的 id，判官读不了 id） | model |
 | TECH Conventions | CONTRIBUTING、lint 配置；每条开发命令一条 process（how = 命令，`sources` = CI 文件） | guideline / process（how 必填） |
 | TECH Runtime Traps | `parse_git_gotchas` 的文件及对应提交说明；CHANGELOG 的 security / bugfix 条目；SECURITY.md | pitfall（applicability = 触发条件，必填） |
@@ -450,6 +450,8 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 
 **不改的 CDF 规则**：DDD 注入方式、卡 1 的质量题、卡 3 的比对、§13 的"系统不动已写内容"、§9 的信任下限。S7 的单元和其他 source 一样过全部的卡。S7 的"该写"比例按 CDF §14.1 T6 单独统计，低于 5% 就改提取方式。
 
+**C12（第 4 步加）**：段名矩阵只存一份。main 上的 `core/ddd_skeleton.SECTION_TYPES` 是 CDF `_DDD_MATRIX` 的反查表（段 → 允许的类型）。`bootstrap-apply` 按它校验，保证 bootstrap 写入的条目正好落在 CDF 会把同类条目路由到的段。CDF 分支请从这张表派生矩阵的段名校验，或者加一条测试锁定"矩阵反查 == `SECTION_TYPES`"。
+
 ## 6. 质量标准：什么叫高质量的初始 DDD
 
 **确定性部分**（P6、`bootstrap-apply` 和测试强制）：
@@ -503,7 +505,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 | 1b | §5.9 code-intel.json 和 spec-details 退出（先于第 3 步做，避免 survey 和 Brain Hub 再接上旧文件） | 1（G1 提供替代的读取方） | **已完成**（28efb116、18ce2cc9、d5f2ac2b；analysis 能力经 correctness、api-contract 评审） |
 | 2 | §5.1 骨架、§5.7 P6 门、§5.10 对齐命令、条目语法加 `taint`；CDF 分支上的 C1–C4 | 无 | **main 部分已完成**（f348be4e；api-contract、correctness 评审）；C1–C4 交 CDF 分支 |
 | 3 | §5.2 Survey（迁移 `ai_ready_helpers`）、§5.3 原地索引和 Specs 面板、G5 | 1、1b | **已完成**（security、performance 一轮；skill 侧迁移移到第 4 步，见 r6） |
-| 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | correctness、ux |
+| 4 | §5.4 skill v2、§5.5 阶段一 `bootstrap-apply` 和 `render_ddd_unit`、§5.6 提问、§5.10 前端 | 2、3 | **已完成**（correctness、ux 一轮，见 r7） |
 | 5 | G3 import 表、G4 语言修正、G6 | 1 | correctness |
 | 6 | §5.11 C5–C11（阶段二）；删除 `bootstrap-apply` 的写入代码 | CDF 阶段 B | security（taint）、state-machine |
 | 7 | §6 eval golden case 和 fixture repo | 4 | — |
@@ -620,3 +622,41 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
   - `upsert_chunk` 每个块提交一次：首次索引 6820 次写事务，WAL 模式下不阻塞读。
   - 原有的 External Signals 区块同样没有逐条框定，这是本次改动之前就有的问题。
   - recall CLI 的 `--project` 由调用方指定。
+
+**r7（2026-10-28）**：第 4 步实施，和 r6 之前的写法有几处不同：
+- **矩阵**：main 上没有 CDF 矩阵，反查表放在 `ddd_skeleton.SECTION_TYPES`，以 CDF 矩阵为准。§5.4 清单据此改了两处：Vision 只收 principle；Architecture 收 principle 和 decision，model 改放 Key Subsystems。What to Watch For 只收 gap；PROJECT 的 Current Focus、Open Items、Blocked By 不收任何条目（C12）。
+- **出处**：要求是 owned repo 里**被跟踪的文件**，而不是"出现在 survey 清单里"。Key Subsystems 引用聚类里的源文件，这些文件不在文档清单中；"被跟踪"同样是确定性证明证据存在的办法。另外接受三种：`file:`（DISTILL 文件）、`url:` 和 `user`。只有 `user` 不打 taint。
+- **写入条件**：原设计是"字节等于骨架，或等于 `applied.json` 记录的哈希"，改成"文档里只有骨架加本工具写过、而且没被改过的 `source:bootstrap` 条目"：每条的第一行都必须是 `applied.json` 记录过的写入行，把这些条目的两行去掉之后，剩下的必须正好是骨架。原因有三：
+  - 不用维护哈希；
+  - 写文档和记录哈希之间如果崩溃，原规则会把文档永久判为"被人改过"，新规则不会；
+  - 只追加、不改已有字节的保证不变。
+  `applied.json` 只作日志，记下每条的完整出处。
+- **长度**：CDF 分支上没有找到 rule 的长度上限。现在用标题 200 字符、字段 4000 字符作为读入规模的护栏，超出就拒绝，由 agent 拆分，不截断。
+- **"空段没有 gap"的规则只存一处**：从 P6 脚本移到 `ddd_skeleton.unexplained_product_sections`，P6 和 apply 共用。apply 报告里的 `ask`（Vision、Non-Goals、Success Criteria 三段）和 `need_gap` 都由它算出。
+- **不移植 `generate_enrich_questions`**：提问的候选项由 agent 从 survey 里提。
+- **`s_repo-to-ddd` 的重复 helper 不删，收回 r6 的说法**：helper 按设计不依赖 SwarmAI 后端，原话是"fully portable — no SwarmAI dependency"，而且服务的是另一个用途（生成 AGENTS.md），数据形状也不同。改成从 core 导入会破坏它的可移植性。
+- **"出生"进度**：P6 `--record` 记下还没通过的检查项（FAIL 在前），卡片和标题栏显示"Being born · 4 of 7 · next: Knowledge content"。
+- 新增 `artifact_cli classify-starter`（§5.10）。
+- 评审（correctness、ux 各一轮），已修：
+  - **流程顺序**：New Brain 的 prompt 和阶段表都把写知识排在 bind 之前，可盘点和 apply 只认已 bind 的 repo，结果是拿 README 已经回答的问题去问用户。现在先 bind 再写知识。
+  - **写入判定**：
+    - 用户改过的 bootstrap 条目会被再写一遍；
+    - 混进条目里的自写行认不出来；
+    - CRLF 文档写过一次之后就被永久拒绝。
+
+    现在改为按 `applied.json` 记录的写入行判定，先记录、再写文档，中途崩溃也能恢复。
+  - **换行与字节**：
+    - 标题里的 Unicode 换行由 `render_ddd_unit` 拒绝，所有写入方一起受保护；
+    - 插入改为按位置插入，保留原文件的每个字节。
+  - **其他修复**：
+    - `file:` 出处出错时转成拒绝原因，不再崩溃；
+    - refused 的运行也写 `rejected.json`；
+    - P6 的 import 放回 try 保护里；
+    - 去重限定在本段之内。
+  - **提问和沟通**：
+    - 提问写明为什么问，选项附出处，固定有"先记为缺口"一项；
+    - 收尾说明哪些条目没写进去、gap 在哪里；
+    - 被拒绝的文档改为直接问用户要不要加。
+  - **卡片**：改为先写下一步动作，例如"Being born · next: write the first knowledge (4/9)"。
+- 记为已知问题：卡片上的"next"只在 P6 `--record` 时更新，中间可能滞后。
+

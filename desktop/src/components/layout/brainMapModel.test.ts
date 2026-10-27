@@ -150,6 +150,12 @@ describe('brainMapModel', () => {
     expect(brainSignal(brain('D', { setupState: 'setting-up' }), a)).toMatchObject({ tone: 'warning', text: 'Being born' });
     expect(brainSignal(brain('D2', { setupState: 'setting-up', setupProgress: { done: 4, total: 7 } }), a).text)
       .toBe('Being born · 4 of 7 checks');
+    expect(brainSignal(brain('D3', { setupState: 'setting-up',
+      setupProgress: { done: 4, total: 9, next: '② Knowledge/content' } }), a).text)
+      .toBe('Being born · next: write the first knowledge (4/9)');
+    expect(brainSignal(brain('D4', { setupState: 'setting-up',
+      setupProgress: { done: 8, total: 9, next: '⑦ Something New' } }), a).text)
+      .toBe('Being born · next: Something New (8/9)');
     expect(brainSignal(brain('G', { projectAgentStatus: 'draft' }, { liveRun: true }), a))
       .toMatchObject({ tone: 'error', rank: 0, text: 'Project Agent to confirm' });
     expect(brainSignal(brain('H', { projectAgentStatus: 'invalid' }), a).text).toBe('Project Agent has problems');

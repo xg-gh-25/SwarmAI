@@ -145,3 +145,73 @@ def align_project(project_dir: str | Path, *, apply: bool = False) -> dict:
                      "to_add": to_add, "added": to_add if apply else []}
     unresolved = any(not v["exists"] or v.get("rename") for v in docs.values())
     return {"project": project_dir.name, "applied": apply, "unresolved": unresolved, "docs": docs}
+
+
+# ── what may be written where ────────────────────────────────────────────────
+#
+# The reverse of CDF's routing matrix (contracts._DDD_MATRIX: topic × type →
+# (doc, section)): for each section, the entry types CDF may route into it. A writer
+# that bypasses CDF (the New Brain bootstrap, design 2026-10-27 §5.5) checks against
+# this table so everything it writes is where CDF would have put it. One table: CDF
+# is asked to derive its matrix check from it (design §5.11 C12).
+# IMPROVEMENT § What to Watch For holds gaps (no evidence yet), written as guideline.
+# PROJECT's Current Focus / Open Items / Blocked By are live state, written by the
+# user, so no writer targets them.
+_ALL_TYPES = frozenset({"guideline", "pitfall", "decision", "model", "process",
+                        "principle", "correction"})
+SECTION_TYPES: dict[tuple[str, str], frozenset[str]] = {
+    ("PRODUCT.md", "Vision"): frozenset({"principle"}),
+    ("PRODUCT.md", "What Makes It Different"): frozenset({"model"}),
+    ("PRODUCT.md", "Strategic Priorities"): frozenset({"decision"}),
+    ("PRODUCT.md", "Success Criteria"): frozenset({"guideline", "process"}),
+    ("PRODUCT.md", "Non-Goals"): frozenset({"pitfall", "correction"}),
+    ("TECH.md", "Architecture"): frozenset({"principle", "decision"}),
+    ("TECH.md", "Key Subsystems"): frozenset({"model"}),
+    ("TECH.md", "Conventions"): frozenset({"guideline", "process"}),
+    ("TECH.md", "Runtime Traps"): frozenset({"pitfall", "correction"}),
+    ("IMPROVEMENT.md", "What Worked"): _ALL_TYPES - {"pitfall", "correction"},
+    ("IMPROVEMENT.md", "What Failed"): frozenset({"pitfall", "correction"}),
+    ("PROJECT.md", "Recent Decisions"): _ALL_TYPES,
+}
+GAP_SECTION = ("IMPROVEMENT.md", "What to Watch For")
+# The PRODUCT sections a person is asked about when no evidence covers them (§5.6).
+ASK_SECTIONS = ("Vision", "Non-Goals", "Success Criteria")
+
+
+def locate_section(section: str) -> tuple[str, str] | None:
+    """``(doc, canonical section name)`` for a skeleton section name (compared by
+    ``normalize_heading``), or None. Section names are unique across the four docs."""
+    key = normalize_heading(section)
+    for doc in DOCS:
+        for s in skeleton_sections(doc):
+            if normalize_heading(s) == key:
+                return doc, s
+    return None
+
+
+_TYPED_ENTRY_RE = re.compile(r"^- \[(\w+)\] \*\*(.+?)\*\*")
+
+
+def typed_entries(text: str) -> list:
+    """Entries whose bullet carries an explicit, known ``[type]`` (an untyped
+    ``- **Bold** …`` bullet is prose, not an entry)."""
+    from core.ddd_entry_lifecycle import VALID_TYPES, parse_entries
+    out = []
+    for e in parse_entries(text):
+        m = _TYPED_ENTRY_RE.match(e.raw_text.split("\n", 1)[0])
+        if m and m.group(1) in VALID_TYPES:
+            out.append(e)
+    return out
+
+
+def unexplained_product_sections(product_text: str, improvement_text: str) -> list[str]:
+    """PRODUCT sections that hold no typed entry and have no gap — a What to Watch For
+    entry whose title starts with the section name as whole words ("Vision: no
+    evidence yet"). The one rule shared by the P6 gate and the bootstrap writer. A gap
+    is an ordinary guideline: if decay archives it, its section is unexplained again."""
+    watch = [e.title for e in typed_entries(improvement_text)
+             if normalize_heading(e.section) == normalize_heading(GAP_SECTION[1])]
+    filled = {normalize_heading(e.section) for e in typed_entries(product_text)}
+    return [s for s in skeleton_sections("PRODUCT.md")
+            if normalize_heading(s) not in filled
+            and not any(starts_with_section(t, s) for t in watch)]

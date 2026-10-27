@@ -1,0 +1,326 @@
+"""bootstrap-apply: a newborn brain's first entries, checked before they are written.
+
+Design docs/design/2026-10-27-new-brain-initial-ddd.md §5.4–§5.6, invariants I4 and
+I10 (§10). The model decides what to write; this code decides whether it may be
+written, where, in what shape, and on what evidence.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from core import ddd_skeleton as sk
+from core.brain_bootstrap import apply as ap
+from core.brain_bootstrap import survey
+from core.ddd_entry_lifecycle import parse_entries
+from core.ddd_paths import ddd_path
+from core.ddd_setup_state import write_setup_state
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", "-C", str(root), *args],
+                   check=True, capture_output=True)
+
+
+@pytest.fixture
+def brain(tmp_path: Path, monkeypatch):
+    """A freshly provisioned brain (setting-up) owning one small repo."""
+    repo = tmp_path / "acme"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "README.md").write_text("# Acme\n\nSigns tokens.\n\n## Usage\n\nCall sign().\n", encoding="utf-8")
+    (repo / "docs" / "design.md").write_text("# Design\n\nHMAC with SHA-1 by default.\n", encoding="utf-8")
+    (repo / "src.py").write_text("def sign(): pass\n", encoding="utf-8")
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    from core.swarm_workspace_manager import SwarmWorkspaceManager
+    proj = tmp_path / "Projects" / "Acme"
+    proj.mkdir(parents=True)
+    asyncio.run(SwarmWorkspaceManager().provision_project_ddd("Acme", workspace_path=str(tmp_path)))
+    write_setup_state(proj, "setting-up")
+    monkeypatch.setattr(survey, "owned_repos",
+                        lambda d: [{"name": "acme", "root": str(repo.resolve()), "db_path": None}])
+    return proj
+
+
+def _run(proj: Path, entries: list, **kw) -> dict:
+    p = proj / ap.ENTRIES_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(entries), encoding="utf-8")
+    return ap.apply_entries(proj, **kw)
+
+
+GOOD = [
+    {"kind": "cognition", "type": "principle", "section": "Vision",
+     "title": "Acme signs data so it can be trusted later",
+     "what": "A library for signing payloads with a shared secret.", "sources": ["README.md#Acme"]},
+    {"kind": "cognition", "type": "pitfall", "section": "Runtime Traps",
+     "title": "Changing the default digest invalidates issued tokens",
+     "what": "The signer defaults to SHA-1; a different digest rejects every old signature.",
+     "applicability": "upgrading or configuring the digest", "sources": ["docs/design.md"]},
+    {"kind": "cognition", "type": "decision", "section": "Recent Decisions",
+     "title": "Keep HMAC as the signing primitive", "what": "Signatures are HMAC.",
+     "why": "symmetric keys, no PKI", "rejected_alternatives": "none", "sources": ["user"]},
+    {"kind": "cognition", "type": "process", "section": "Conventions",
+     "title": "Run the tests with pytest", "what": "The suite is pytest.",
+     "how": "pytest", "sources": ["src.py:1"]},
+    {"kind": "gap", "section": "What to Watch For",
+     "title": "Non-Goals: no evidence yet", "what": "Nothing in the repo says what Acme will not do.",
+     "proposed_next": "ask the maintainer"},
+]
+
+
+# ── I4: what is refused ──────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("entry, reason", [
+    ({"kind": "cognition", "type": "decision", "section": "Recent Decisions", "title": "t",
+      "what": "w", "rejected_alternatives": "x", "sources": ["user"]}, "needs why"),
+    ({"kind": "cognition", "type": "decision", "section": "Recent Decisions", "title": "t",
+      "what": "w", "why": "y", "sources": ["user"]}, "needs rejected_alternatives"),
+    ({"kind": "cognition", "type": "pitfall", "section": "Runtime Traps", "title": "t",
+      "what": "w", "sources": ["user"]}, "needs applicability"),
+    ({"kind": "cognition", "type": "process", "section": "Conventions", "title": "t",
+      "what": "w", "sources": ["user"]}, "needs how"),
+    ({"kind": "cognition", "type": "model", "section": "Vision", "title": "t",
+      "what": "w", "sources": ["user"]}, "does not belong"),
+    ({"kind": "cognition", "type": "guideline", "section": "Current Focus", "title": "t",
+      "what": "w", "sources": ["user"]}, "live state"),
+    ({"kind": "cognition", "type": "guideline", "section": "No Such", "title": "t",
+      "what": "w", "sources": ["user"]}, "not a skeleton section"),
+    ({"kind": "cognition", "type": "model", "section": "Key Subsystems", "title": "t",
+      "what": "w", "sources": ["nope.md"]}, "not a tracked file"),
+    ({"kind": "cognition", "type": "model", "section": "Key Subsystems", "title": "t",
+      "what": "w", "sources": []}, "at least one source"),
+    ({"kind": "cognition", "type": "model", "section": "Key Subsystems", "title": "t",
+      "what": "w", "sources": ["url:ftp://x"]}, "http(s)"),
+    ({"kind": "cognition", "type": "model", "section": "Key Subsystems", "title": "t" * 201,
+      "what": "w", "sources": ["user"]}, "split the entry"),
+    ({"kind": "cognition", "type": "model", "section": "Key Subsystems", "title": "t",
+      "what": "w", "sources": ["user"], "rejected": "x"}, "unknown field"),
+    ({"kind": "gap", "section": "Vision", "title": "t", "what": "w"}, "a gap goes to"),
+    ({"kind": "cognition", "type": "model", "section": "Key Subsystems", "title": "a | b",
+      "what": "w", "sources": ["user"]}, "title"),
+])
+def test_each_rule_refuses_with_its_reason(brain: Path, entry, reason) -> None:
+    report = _run(brain, [entry])
+    assert report["rejected"] and reason in report["rejected"][0]["reason"]
+    assert not report["written"]
+
+
+def test_only_a_newborn_brain_is_written(brain: Path) -> None:
+    write_setup_state(brain, "ready")
+    assert _run(brain, GOOD)["status"] == "refused"
+    assert sk.is_skeleton("PRODUCT.md", ddd_path(brain, "PRODUCT.md").read_text(), "Acme")
+
+
+def test_a_doc_someone_else_changed_is_left_alone(brain: Path) -> None:
+    p = ddd_path(brain, "TECH.md")
+    edited = p.read_text(encoding="utf-8") + "\nMy own notes.\n"
+    p.write_text(edited, encoding="utf-8")
+    report = _run(brain, GOOD)
+    assert "TECH.md" in report["refused_docs"]
+    assert p.read_text(encoding="utf-8") == edited
+    assert report["written"].get("PRODUCT.md") == 1      # the other docs still go in
+
+
+# ── what is written, and how it reads back ───────────────────────────────────
+
+def test_written_entries_parse_back_with_their_taint(brain: Path) -> None:
+    report = _run(brain, GOOD)
+    assert report["rejected"] == [] and report["refused_docs"] == {}
+    tech = parse_entries(ddd_path(brain, "TECH.md").read_text(encoding="utf-8"))
+    trap = next(e for e in tech if e.title.startswith("Changing the default digest"))
+    assert trap.entry_type == "pitfall" and trap.section == "Runtime Traps"
+    assert trap.source == "bootstrap" and trap.taint == "external"
+    proj = parse_entries(ddd_path(brain, "PROJECT.md").read_text(encoding="utf-8"))
+    dec = next(e for e in proj if e.section == "Recent Decisions")
+    assert dec.taint == ""                                # the person's own answer
+    imp = parse_entries(ddd_path(brain, "IMPROVEMENT.md").read_text(encoding="utf-8"))
+    gap = next(e for e in imp if e.section == "What to Watch For")
+    assert gap.entry_type == "guideline" and "ask the maintainer" in gap.raw_text
+    applied = json.loads((brain / ap.APPLIED_FILE).read_text())
+    assert {a["title"] for a in applied} >= {"Keep HMAC as the signing primitive"}
+    assert next(a for a in applied if a["section"] == "Conventions")["sources"] == ["src.py:1"]
+
+
+def _only_inserts(old: str, new: str) -> bool:
+    import difflib
+    ops = difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes()
+    return all(tag in ("equal", "insert") for tag, *_ in ops)
+
+
+def test_existing_bytes_never_change(brain: Path) -> None:
+    before = {d: ddd_path(brain, d).read_bytes() for d in sk.DOCS}
+    _run(brain, GOOD)
+    for d, old in before.items():
+        assert _only_inserts(old.decode(), ddd_path(brain, d).read_bytes().decode()), d
+
+
+def test_a_rerun_writes_nothing_twice_and_a_later_run_appends(brain: Path) -> None:
+    _run(brain, GOOD)
+    snap = ddd_path(brain, "TECH.md").read_text(encoding="utf-8")
+    again = _run(brain, GOOD)
+    assert again["written"] == {} and again["already_present"] == len(GOOD)
+    assert ddd_path(brain, "TECH.md").read_text(encoding="utf-8") == snap
+    more = [{"kind": "cognition", "type": "model", "section": "Key Subsystems",
+             "title": "The signer", "what": "sign() in src.py.", "sources": ["src.py"]}]
+    assert _run(brain, more)["written"] == {"TECH.md": 1}   # earlier entries do not block
+
+
+def test_entries_land_inside_their_section(brain: Path) -> None:
+    _run(brain, GOOD)
+    tech = ddd_path(brain, "TECH.md").read_text(encoding="utf-8")
+    conv = tech.split("## Conventions", 1)[1].split("## Runtime Traps", 1)[0]
+    assert "Run the tests with pytest" in conv
+    assert "Changing the default digest" in tech.split("## Runtime Traps", 1)[1]
+
+
+def test_dry_run_writes_nothing(brain: Path) -> None:
+    before = ddd_path(brain, "PRODUCT.md").read_text(encoding="utf-8")
+    report = _run(brain, GOOD, dry_run=True)
+    assert report["written"]["PRODUCT.md"] == 1
+    assert ddd_path(brain, "PRODUCT.md").read_text(encoding="utf-8") == before
+    assert not (brain / ap.REJECTED_FILE).exists()
+
+
+def test_the_report_names_what_to_ask_and_what_needs_a_gap(brain: Path) -> None:
+    report = _run(brain, GOOD)
+    # Vision has an entry, Non-Goals has a gap; Success Criteria has neither
+    assert report["ask"] == ["Success Criteria"]
+    assert set(report["need_gap"]) == {"What Makes It Different", "Strategic Priorities",
+                                       "Success Criteria"}
+
+
+def test_section_table_matches_the_skeleton() -> None:
+    for (doc, section) in [*sk.SECTION_TYPES, sk.GAP_SECTION]:
+        assert section in sk.skeleton_sections(doc), (doc, section)
+    for doc, live in sk.USER_ONLY_SECTIONS.items():
+        assert not any((doc, s) in sk.SECTION_TYPES for s in live)
+    assert all(sk.locate_section(s) is not None for s in sk.ASK_SECTIONS)
+
+
+# ── I10: fixture repo → survey → fixed entries → apply → P6 ─────────────────
+
+def test_end_to_end_a_fixed_entries_file_makes_p6_pass_knowledge(brain: Path) -> None:
+    survey.survey_project(brain)
+    assert (brain / survey.SURVEY_REL).is_file()
+    gaps = [{"kind": "gap", "section": "What to Watch For", "title": f"{s}: no evidence yet",
+             "what": "The repo says nothing about it."}
+            for s in ("What Makes It Different", "Strategic Priorities", "Success Criteria")]
+    report = _run(brain, GOOD + gaps)
+    assert report["rejected"] == [] and report["need_gap"] == []
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "s_project-manager" / "scripts"))
+    import verify_ddd_complete as v
+    checks = {c[0]: c[1] for c in v._check_knowledge(brain)}
+    assert checks["② Knowledge/structure"] == "PASS"
+    assert checks["② Knowledge/content"] == "PASS", checks
+
+
+def test_classify_starter(tmp_path: Path, capsys) -> None:
+    import scripts.artifact_cli as cli
+    (tmp_path / "r").mkdir()
+    (tmp_path / "r" / "pyproject.toml").write_text("[project]\nname='r'\n")
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "a.md").write_text("# a\n")
+    (tmp_path / "one.md").write_text("# one\n")
+
+    class A:
+        path = ""
+
+    roles = {}
+    for name in ("r", "notes", "one.md"):
+        A.path = str(tmp_path / name)
+        cli.cmd_classify_starter(A(), None)
+        roles[name] = json.loads(capsys.readouterr().out)["role"]
+    assert roles == {"r": "GOVERN", "notes": "SHELF", "one.md": "DISTILL"}
+
+
+
+# ── review round 1 (correctness, ux) ─────────────────────────────────────────
+
+def test_an_edited_bootstrap_entry_makes_the_doc_the_persons(brain: Path) -> None:
+    _run(brain, GOOD)
+    p = ddd_path(brain, "TECH.md")
+    p.write_text(p.read_text(encoding="utf-8").replace("Run the tests with pytest", "Run tests via tox"),
+                 encoding="utf-8")
+    report = _run(brain, GOOD)
+    assert "TECH.md" in report["refused_docs"]
+    assert p.read_text(encoding="utf-8").count("Run the tests with pytest") == 0
+
+
+def test_a_note_inside_an_entry_span_is_noticed(brain: Path) -> None:
+    _run(brain, GOOD)
+    p = ddd_path(brain, "TECH.md")
+    lines = p.read_text(encoding="utf-8").split("\n")
+    i = next(k for k, ln in enumerate(lines) if "source:bootstrap" in ln)
+    lines.insert(i + 1, "  my own private note")
+    p.write_text("\n".join(lines), encoding="utf-8")
+    more = [{"kind": "cognition", "type": "model", "section": "Key Subsystems",
+             "title": "The signer", "what": "sign() in src.py.", "sources": ["src.py"]}]
+    assert "TECH.md" in _run(brain, more)["refused_docs"]
+
+
+def test_crlf_docs_stay_writable_and_keep_their_endings(brain: Path) -> None:
+    p = ddd_path(brain, "TECH.md")
+    p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
+    assert _run(brain, GOOD)["written"].get("TECH.md") == 2
+    more = [{"kind": "cognition", "type": "model", "section": "Key Subsystems",
+             "title": "The signer", "what": "sign() in src.py.", "sources": ["src.py"]}]
+    assert _run(brain, more)["written"] == {"TECH.md": 1}
+    raw = p.read_bytes()
+    assert b"\n" not in raw.replace(b"\r\n", b"")
+
+
+def test_a_unicode_line_break_in_a_title_is_refused(brain: Path) -> None:
+    entry = dict(GOOD[0], title="Acme signs\u2028data")
+    assert "title" in _run(brain, [entry])["rejected"][0]["reason"]
+
+
+def test_a_broken_file_source_is_a_refusal_not_a_crash(brain: Path) -> None:
+    for src in ("file:~nosuchuser_zz/a.md", "file:/" + "a" * 5000):
+        entry = dict(GOOD[0], sources=[src])
+        assert "file:" in _run(brain, [entry])["rejected"][0]["reason"]
+
+
+def test_a_refused_run_says_why_in_rejected_json(brain: Path) -> None:
+    write_setup_state(brain, "ready")
+    _run(brain, GOOD)
+    assert json.loads((brain / ap.REJECTED_FILE).read_text())[0]["reason"].startswith("the brain is not")
+
+
+def test_the_same_line_meant_for_another_section_is_written(brain: Path) -> None:
+    # a guideline in What Worked and a gap in What to Watch For render the same line
+    a = {"kind": "cognition", "type": "guideline", "section": "What Worked", "title": "Same",
+         "what": "w", "sources": ["src.py"]}
+    b = {"kind": "gap", "section": "What to Watch For", "title": "Same", "what": "w",
+         "sources": ["src.py"]}
+    _run(brain, [a])
+    assert _run(brain, [b])["written"] == {"IMPROVEMENT.md": 1}
+    imp = ddd_path(brain, "IMPROVEMENT.md").read_text(encoding="utf-8")
+    assert "Same" in imp.split("## What to Watch For", 1)[1]
+
+
+def test_a_crash_between_log_and_doc_write_is_recovered(brain: Path, monkeypatch) -> None:
+    real = ap._write_atomic
+    calls = {"n": 0}
+
+    def boom(path, text):
+        # crash on the second write of the first doc's pair (log + doc): whichever of
+        # the two comes second is lost, which is the window that matters
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("crash")
+        return real(path, text)
+
+    monkeypatch.setattr(ap, "_write_atomic", boom)
+    with pytest.raises(RuntimeError):
+        _run(brain, GOOD)
+    monkeypatch.setattr(ap, "_write_atomic", real)
+    report = _run(brain, GOOD)
+    assert report["refused_docs"] == {} and report["rejected"] == []

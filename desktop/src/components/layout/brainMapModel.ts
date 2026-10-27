@@ -244,9 +244,31 @@ export function brainSignal(b: BrainSummary, a?: PipelineAnalytics | null): Brai
   if (b.projectAgentStatus === 'invalid') return { tone: 'error', rank: 0, text: 'Project Agent has problems' };
   if (b.health.liveRun) return { tone: 'primary', rank: 1, text: 'Run in progress' };
   if (b.setupState === 'setting-up') {
-    const p = b.setupProgress;
-    return { tone: 'warning', rank: 2, text: p ? `Being born · ${p.done} of ${p.total} checks` : 'Being born' };
+    return { tone: 'warning', rank: 2, text: bornText(b.setupProgress) };
   }
   const last = b.health.lastChangeRelative;
   return { tone: 'muted', rank: 3, text: last && last !== '--' ? `Last landed ${last}` : 'No landed change in 30 days' };
+}
+
+/** What each P6 check asks for, as the next thing to do (verify_ddd_complete.py names).
+ *  A check not listed falls back to its own name without the number. */
+const NEXT_STEP: Record<string, string> = {
+  'Identity/Manifest': 'repair the manifest',
+  'Knowledge': 'create the four docs',
+  'Knowledge/structure': 'add the missing sections',
+  'Knowledge/content': 'write the first knowledge',
+  'Gates': 'add the gates folder',
+  'Capabilities': 'add the skills',
+  'Delivery Contract': 'bind the repo',
+  'Project Agent': 'confirm the Project Agent',
+  'Refresher/code-intel': 'build the code graph',
+};
+
+/** "Being born · next: write the first knowledge (4/9)" — the next step first, so a
+ *  truncated card still shows it; the count is the P6 checks done of all. */
+export function bornText(p: { done: number; total: number; next?: string | null } | null | undefined): string {
+  if (!p) return 'Being born';
+  const key = p.next ? p.next.replace(/^[^A-Za-z]+/, '').trim() : '';
+  const step = key ? (NEXT_STEP[key] ?? key.replace(/\//g, ' ')) : '';
+  return step ? `Being born · next: ${step} (${p.done}/${p.total})` : `Being born · ${p.done} of ${p.total} checks`;
 }

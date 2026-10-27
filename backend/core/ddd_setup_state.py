@@ -2,7 +2,8 @@
 
 One small file per Brain, ``.artifacts/setup.json``:
 
-    {"state": "setting-up" | "ready", "updated_at": "<ISO>", "counts": {...}}
+    {"state": "setting-up" | "ready", "updated_at": "<ISO>", "counts": {...},
+     "open": ["<check name>", …]}   # the checks not passed yet: FAIL first, then PENDING
 
 Writers (exactly two, one per transition):
 - ``create_project`` writes ``setting-up`` when a NEW project is created (never on
@@ -11,8 +12,8 @@ Writers (exactly two, one per transition):
   keeps ``setting-up`` on FAIL.
 
 Reader: the Brain Hub gallery (``setupState``) shows "being born" while it is
-``setting-up``, with ``setupProgress`` (checks done of all, from the last P6 counts)
-when a P6 run recorded them. A Brain without the file (made before this existed) is
+``setting-up``, with ``setupProgress`` (checks done of all, from the last P6 counts, and
+``next`` — the first check still open) when a P6 run recorded them. A Brain without the file (made before this existed) is
 ``None`` and is never shown as being born.
 
 Key public symbols: ``SETUP_FILE``, ``STATES``, ``read_setup_state``,
@@ -55,8 +56,9 @@ def read_setup_state(project_dir: Path) -> Optional[str]:
 
 def read_setup_progress(project_dir: Path) -> Optional[dict[str, int]]:
     """How far an unfinished setup got, from the last P6 ``--record``:
-    ``{"done": PASS + N/A, "total": every check}``. None when the Brain is not
-    setting up, or no P6 run recorded counts yet (right after create_project)."""
+    ``{"done": PASS + N/A, "total": every check, "next": the first open check or
+    None}``. None when the Brain is not setting up, or no P6 run recorded counts yet
+    (right after create_project)."""
     body = _read_record(project_dir)
     if not body or body.get("state") != "setting-up":
         return None
@@ -70,10 +72,15 @@ def read_setup_progress(project_dir: Path) -> Optional[dict[str, int]]:
     total = sum(nums.values())
     if total <= 0:
         return None
-    return {"done": nums.get("PASS", 0) + nums.get("N/A", 0), "total": total}
+    open_checks = body.get("open")
+    nxt = (open_checks[0] if isinstance(open_checks, list) and open_checks
+           and isinstance(open_checks[0], str) else None)
+    return {"done": nums.get("PASS", 0) + nums.get("N/A", 0), "total": total,
+            "next": nxt[:80] if nxt else None}
 
 
-def write_setup_state(project_dir: Path, state: str, counts: Optional[dict[str, Any]] = None) -> None:
+def write_setup_state(project_dir: Path, state: str, counts: Optional[dict[str, Any]] = None,
+                      open_checks: Optional[list[str]] = None) -> None:
     """Atomically write the record (temp file + rename)."""
     if state not in STATES:
         raise ValueError(f"unknown setup state {state!r}")
@@ -82,6 +89,8 @@ def write_setup_state(project_dir: Path, state: str, counts: Optional[dict[str, 
     body = {"state": state, "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     if counts:
         body["counts"] = counts
+    if open_checks:
+        body["open"] = [str(c) for c in open_checks]
     fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".setup-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

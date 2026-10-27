@@ -454,7 +454,8 @@ def render_ddd_unit(entry: dict, *, date_str: str, source: str = "bootstrap",
     if etype not in VALID_TYPES:
         raise ValueError(f"unknown entry type {entry.get('type')!r}")
     title = str(entry.get("title", "")).strip()
-    if not title or any(bad in title for bad in ("**", "\n", "\r", "|")):
+    # splitlines(), not "\n": U+2028, \x85, \x0c … also end a line for the parser.
+    if not title or len(title.splitlines()) != 1 or any(bad in title for bad in ("**", "|")):
         raise ValueError("entry title must be one non-empty line without '**' or '|'")
     if not str(entry.get("what", "")).strip():
         raise ValueError("entry 'what' must not be empty")

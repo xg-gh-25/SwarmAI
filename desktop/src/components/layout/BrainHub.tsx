@@ -51,7 +51,7 @@ import {
   type BrainTab, type MapPanel,
 } from './BrainMapView';
 import { BrainHubHome, Flower } from './BrainHubHome';
-import { hubSummary } from './brainMapModel';
+import { bornText, hubSummary } from './brainMapModel';
 import { pipelinesService, type PipelineAnalytics } from '../../services/pipelines';
 import { buildResumeSetupPrompt } from '../../utils/newBrainDispatch';
 import { takeOverlayTarget } from '../../utils/overlayTarget';
@@ -318,7 +318,7 @@ function BrainHeader({ name, summary, brains, isSelf, needs, onBack, onSwitch, o
           {isSelf && <span className="text-meta font-semibold px-1.5 rounded-full text-[var(--color-status-success)] bg-[color-mix(in_srgb,var(--color-status-success)_14%,transparent)]">SELF</span>}
           <span className="flex items-center gap-1.5 text-small text-[var(--color-text-muted)]" data-testid="brainhub-status">
             <span className={`w-2 h-2 rounded-full ${born ? 'bg-[var(--color-status-warning)]' : 'bg-[var(--color-status-success)]'}`} />
-            {born ? (summary?.setupProgress ? `Being born · ${summary.setupProgress.done} of ${summary.setupProgress.total} checks` : 'Being born') : 'Ready'}
+            {born ? bornText(summary?.setupProgress) : 'Ready'}
             {last && last !== '--' && <span>· last landed {last}</span>}
             {needs > 0 && <span className="text-[var(--color-status-error)]">· {needs} need{needs === 1 ? 's' : ''} you</span>}
           </span>

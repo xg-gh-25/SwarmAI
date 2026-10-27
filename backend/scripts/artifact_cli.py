@@ -542,6 +542,51 @@ def cmd_survey(args, reg) -> None:
         sys.exit(1)
 
 
+def cmd_bootstrap_apply(args, reg) -> None:
+    """Write a newborn brain's first entries from its bootstrap-entries.json.
+
+    Design 2026-10-27-new-brain-initial-ddd §5.5: deterministic checks (section and
+    type, required fields, sources a tracked repo file / file: / url: / user), written
+    only while the brain is setting up and only into docs that hold nothing but the
+    skeleton and earlier bootstrap entries. Prints the report (written, rejected with
+    reasons, the PRODUCT sections still to ask about or record as gaps). Exit 1 when
+    an entry was rejected or a doc refused; 2 when nothing could run.
+    """
+    if "/" in args.project or "\\" in args.project or args.project in ("", ".", ".."):
+        print(json.dumps({"error": f"invalid project name '{args.project}'"}), file=sys.stderr)
+        sys.exit(2)
+    project_dir = _get_workspace() / "Projects" / args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project '{args.project}' not found"}), file=sys.stderr)
+        sys.exit(2)
+    from core.brain_bootstrap.apply import apply_entries
+    report = apply_entries(project_dir, args.entries, dry_run=args.dry_run)
+    print(json.dumps({"project": args.project, **report}, indent=2, ensure_ascii=False))
+    if report.get("status") == "refused":
+        sys.exit(2)
+    if report.get("rejected") or report.get("refused_docs"):
+        sys.exit(1)
+
+
+def cmd_classify_starter(args, reg) -> None:
+    """Which role a New Brain starter path takes: GOVERN (a repo: an asset to bind),
+    DISTILL (a single file: read it into entries) or SHELF (a folder of documents: mount
+    it for recall). Reuses library_mounts.judge_mount_kind (repo markers); the person
+    can still change the role. Design 2026-10-27 §5.10."""
+    from core.library_mounts import judge_mount_kind
+    path = Path(args.path).expanduser()
+    if path.is_file():
+        role, why = "DISTILL", "a single file"
+    elif not path.is_dir():
+        print(json.dumps({"error": f"no such file or folder: {args.path}"}), file=sys.stderr)
+        sys.exit(2)
+    elif judge_mount_kind(str(path)) == "code":
+        role, why = "GOVERN", "carries a repo marker (.git, package.json, pyproject.toml, …)"
+    else:
+        role, why = "SHELF", "a folder without a repo marker"
+    print(json.dumps({"path": str(path), "role": role, "why": why}))
+
+
 def cmd_ddd_skeleton_align(args, reg) -> None:
     """List (default) or add (--apply) the skeleton sections an existing brain lacks.
 
@@ -758,6 +803,16 @@ def main() -> None:
     p_survey = sub.add_parser("survey", help="Survey a project's repos into survey.json and index their docs for recall")
     p_survey.add_argument("--project", required=True)
 
+    # bootstrap-apply (design 2026-10-27 §5.5: a newborn brain's first entries, checked)
+    p_bapply = sub.add_parser("bootstrap-apply", help="Write a newborn brain's checked first entries from bootstrap-entries.json")
+    p_bapply.add_argument("--project", required=True)
+    p_bapply.add_argument("--entries", default=None, help="Entries file (default: .artifacts/bootstrap/bootstrap-entries.json)")
+    p_bapply.add_argument("--dry-run", action="store_true", help="Check and report; write nothing")
+
+    # classify-starter (design 2026-10-27 §5.10: GOVERN / DISTILL / SHELF for a starter path)
+    p_cls = sub.add_parser("classify-starter", help="GOVERN / DISTILL / SHELF for a New Brain starter path")
+    p_cls.add_argument("path")
+
     # ddd-skeleton-align (design 2026-10-27 §5.10: give an existing brain the skeleton's sections)
     p_align = sub.add_parser("ddd-skeleton-align", help="List (or --apply: append) the skeleton sections a brain's 4 docs lack")
     p_align.add_argument("--project", required=True)
@@ -802,6 +857,8 @@ def main() -> None:
         "projects": cmd_projects,
         "bind": cmd_bind,
         "survey": cmd_survey,
+        "bootstrap-apply": cmd_bootstrap_apply,
+        "classify-starter": cmd_classify_starter,
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-health": cmd_ddd_health,
         "ddd-retire": cmd_ddd_retire,

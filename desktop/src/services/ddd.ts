@@ -88,7 +88,7 @@ export interface BrainSummary {
   setupState?: 'setting-up' | 'ready' | null;
   /** While setting up: checks done (PASS + N/A) of all, from the last P6 --record.
    *  null/absent = no P6 run recorded yet, or not setting up. */
-  setupProgress?: { done: number; total: number } | null;
+  setupProgress?: { done: number; total: number; next?: string | null } | null;
   /** project-agent.yaml: 'draft' waits for the person to confirm; 'invalid' has
    *  problems; null/absent = no file (or an old daemon). */
   projectAgentStatus?: 'draft' | 'reviewed' | 'invalid' | null;

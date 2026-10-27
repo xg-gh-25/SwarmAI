@@ -209,24 +209,6 @@ import re as _re
 _TYPED_ENTRY_RE = _re.compile(r"^- \[(\w+)\] \*\*(.+?)\*\*")
 
 
-def _typed_entries(text: str, parse_entries, valid_types) -> list:
-    """Entries whose bullet carries an explicit, known ``[type]`` (an untyped
-    ``- **Bold** …`` bullet is prose, not an entry)."""
-    out = []
-    for e in parse_entries(text):
-        m = _TYPED_ENTRY_RE.match(e.raw_text.split("\n", 1)[0])
-        if m and m.group(1) in valid_types:
-            out.append(e)
-    return out
-
-
-def _gap_covers(section: str, watch_titles: list[str], starts_with) -> bool:
-    """A What to Watch For entry whose title begins with *section* as whole words
-    records it as a gap ("Vision: no evidence yet"). Gap entries are ordinary
-    guidelines: if decay archives one, its section reads as unexplained again."""
-    return any(starts_with(t, section) for t in watch_titles)
-
-
 def _portable_knowledge(texts: dict[str, str]) -> list[tuple[str, str, str]]:
     """② structure + content without the SwarmAI backend: structure cannot be
     compared to the skeleton (PENDING); content still requires one typed entry line in
@@ -268,7 +250,7 @@ def _check_knowledge(d: Path) -> list[tuple[str, str, str]]:
     out = [(name, STATUS_PASS, "4 docs present")]
     try:
         from core import ddd_skeleton as sk
-        from core.ddd_entry_lifecycle import VALID_TYPES, parse_entries
+        from core.ddd_entry_lifecycle import parse_entries  # noqa: F401 — sk.typed_entries needs it
         sk.load_skeleton()
     except (ImportError, OSError):
         return out + _portable_knowledge(texts)
@@ -291,16 +273,12 @@ def _check_knowledge(d: Path) -> list[tuple[str, str, str]]:
     problems: list[str] = []
     # A doc that is still the skeleton holds no entry, so this also catches it.
     # PROJECT.md may stay empty: its live sections are the user's to fill.
-    entries = {doc: _typed_entries(t, parse_entries, VALID_TYPES) for doc, t in texts.items()}
-    empty_docs = [doc for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md") if not entries[doc]]
+    empty_docs = [doc for doc in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md")
+                  if not sk.typed_entries(texts[doc])]
     for doc in empty_docs:
         problems.append(f"{doc} holds no typed entry (- [type] **title**)")
-    watch = [e.title for e in entries["IMPROVEMENT.md"]
-             if " ".join(e.section.split()).casefold() == "what to watch for"]
-    filled = {" ".join(e.section.split()).casefold() for e in entries["PRODUCT.md"]}
-    unexplained = [s for s in sk.skeleton_sections("PRODUCT.md")
-                   if " ".join(s.split()).casefold() not in filled
-                   and not _gap_covers(s, watch, sk.starts_with_section)]
+    # The same rule the bootstrap writer reports gaps by (core.ddd_skeleton).
+    unexplained = sk.unexplained_product_sections(texts["PRODUCT.md"], texts["IMPROVEMENT.md"])
     if unexplained and "PRODUCT.md" not in empty_docs:
         problems.append("PRODUCT section(s) empty with no gap in IMPROVEMENT § What to Watch "
                         f"For: {', '.join(unexplained)}")
@@ -532,9 +510,13 @@ def record_setup_state(project_dir: Path, report: dict[str, Any]) -> None:
             current = None
         if current != "setting-up":
             return
+    # The checks still open, FAIL first: Brain Hub shows the first as "next".
+    checks = report.get("checks") or []
+    open_checks = ([c["name"] for c in checks if c.get("status") == STATUS_FAIL]
+                   + [c["name"] for c in checks if c.get("status") == STATUS_PENDING])
     try:
         from core.ddd_setup_state import write_setup_state  # noqa: PLC0415
-        write_setup_state(project_dir, state, report.get("counts"))
+        write_setup_state(project_dir, state, report.get("counts"), open_checks)
     except ImportError:
         try:
             p = project_dir / ".artifacts" / "setup.json"
