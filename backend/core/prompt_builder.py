@@ -1223,7 +1223,7 @@ class PromptBuilder:
         True, not one byte of the assembled prompt changes (strangler-fig R26).
 
         After loading context files, metadata (file list, token counts,
-        truncation status, full prompt text) is stored on ``agent_config``
+        full prompt text) is stored on ``agent_config``
         under the ``_system_prompt_metadata`` key.  The metadata is later
         copied to the module-level ``_system_prompt_metadata`` dict keyed
         by session_id once the session is established.
@@ -1666,26 +1666,11 @@ class PromptBuilder:
                         if not file_content:
                             continue
                         tokens = ContextDirectoryLoader.estimate_tokens(file_content)
-
-                        # Detect truncation: find this section's block in the
-                        # assembled text and check for [Truncated: ... tokens]
-                        truncated = False
-                        if context_text and spec.section_name:
-                            section_header = f"## {spec.section_name}\n"
-                            header_pos = context_text.find(section_header)
-                            if header_pos != -1:
-                                next_header = context_text.find("\n## ", header_pos + len(section_header))
-                                section_block = (
-                                    context_text[header_pos:next_header]
-                                    if next_header != -1
-                                    else context_text[header_pos:]
-                                )
-                                truncated = "[Truncated:" in section_block and "tokens]" in section_block
-
+                        # no "truncated" flag: the loader never cuts a context file
+                        # (it only warns over budget), so there is nothing to report
                         out.append({
                             "filename": spec.filename,
                             "tokens": tokens,
-                            "truncated": truncated,
                             "user_customized": spec.user_customized,
                         })
                     except (OSError, UnicodeDecodeError):

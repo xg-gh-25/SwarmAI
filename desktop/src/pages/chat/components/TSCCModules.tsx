@@ -336,9 +336,6 @@ function FilesTab({ metadata }: { metadata: SystemPromptMetadata | null }) {
                   <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: o.color }} />
                   <span className="font-mono">{f.filename}</span>
                   <span className="text-[11px] px-1 rounded" style={{ background: `${o.color}22`, color: o.color }}>{o.label}</span>
-                  {f.truncated && (
-                    <span className="text-[11px] px-1 rounded bg-amber-500/20 text-amber-500" title="Marked truncated to fit budget — the read path is warn-only (context-file truncation was removed 2026-08-14), so this effectively never fires">trunc</span>
-                  )}
                 </span>
                 <span className="text-[11px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
                   {f.tokens.toLocaleString()} · {share}%

@@ -38,7 +38,7 @@ class TestSecurityScan:
         _seed(
             "sec-clean",
             "## SwarmAI\nJust some ordinary prose with no secrets here.\n",
-            files=[{"filename": "SWARMAI.md", "tokens": 50, "truncated": False}],
+            files=[{"filename": "SWARMAI.md", "tokens": 50}],
         )
         try:
             resp = client.get("/api/chat/sec-clean/security-scan")

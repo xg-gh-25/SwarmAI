@@ -28,7 +28,7 @@ vi.mock('../../../../services/tscc', () => ({
 }));
 
 const metadata: SystemPromptMetadata = {
-  files: [{ filename: 'SWARMAI.md', tokens: 100, truncated: false }],
+  files: [{ filename: 'SWARMAI.md', tokens: 100 }],
   totalTokens: 100,
   fullText: '# prompt',
 };

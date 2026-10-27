@@ -142,8 +142,8 @@ class TestGetSystemPrompt:
         from core import session_registry
         session_registry.system_prompt_metadata["session-123"] = {
             "files": [
-                {"filename": "SWARMAI.md", "tokens": 500, "truncated": False},
-                {"filename": "IDENTITY.md", "tokens": 300, "truncated": False},
+                {"filename": "SWARMAI.md", "tokens": 500},
+                {"filename": "IDENTITY.md", "tokens": 300},
             ],
             "total_tokens": 800,
             "full_text": "## SwarmAI\nHello\n\n## Identity\nWorld",
@@ -174,7 +174,7 @@ class TestGetSystemPrompt:
     def test_response_fields_are_snake_case(self, client: TestClient):
         from core import session_registry
         session_registry.system_prompt_metadata["session-sc"] = {
-            "files": [{"filename": "SOUL.md", "tokens": 100, "truncated": False}],
+            "files": [{"filename": "SOUL.md", "tokens": 100}],
             "total_tokens": 100,
             "full_text": "test",
         }

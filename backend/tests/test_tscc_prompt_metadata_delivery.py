@@ -107,7 +107,7 @@ async def test_spawn_publishes_the_delivered_prompt(spawnable, registry_clean):
 
     built = "# Core prompt\nIDENTITY"
     unit._pending_prompt_metadata = {
-        "files": [{"filename": "SWARMAI.md", "tokens": 10, "truncated": False}],
+        "files": [{"filename": "SWARMAI.md", "tokens": 10}],
         "total_tokens": 10,
         "full_text": built,  # pre-recall value captured at build time
     }

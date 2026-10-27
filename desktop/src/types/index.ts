@@ -1540,7 +1540,6 @@ export interface TSCCSnapshot {
 export interface SystemPromptFileInfo {
   filename: string;
   tokens: number;
-  truncated: boolean;
 }
 
 /** System prompt metadata returned by the system-prompt endpoint. */

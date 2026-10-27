@@ -127,7 +127,6 @@ class SystemPromptFileInfo(BaseModel):
 
     filename: str = Field(..., description="Context file name (e.g. SWARMAI.md)")
     tokens: int = Field(..., description="Estimated token count for this file")
-    truncated: bool = Field(False, description="Whether this file was truncated to fit budget")
 
 
 class SystemPromptMetadata(BaseModel):

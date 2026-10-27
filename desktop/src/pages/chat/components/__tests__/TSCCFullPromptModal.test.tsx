@@ -40,7 +40,7 @@ import {
 } from '../../../../services/tscc';
 
 const metadata: SystemPromptMetadata = {
-  files: [{ filename: 'SWARMAI.md', tokens: 500, truncated: false }],
+  files: [{ filename: 'SWARMAI.md', tokens: 500 }],
   totalTokens: 500,
   effectiveTokenBudget: 100000,
   fullText: 'THE FULL SYSTEM PROMPT TEXT',

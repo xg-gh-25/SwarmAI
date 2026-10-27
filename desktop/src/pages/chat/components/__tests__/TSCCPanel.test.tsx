@@ -54,9 +54,9 @@ const openFilesTab = () =>
 
 const sampleMetadata: SystemPromptMetadata = {
   files: [
-    { filename: 'SWARMAI.md', tokens: 500, truncated: false },
-    { filename: 'IDENTITY.md', tokens: 200, truncated: false },
-    { filename: 'KNOWLEDGE.md', tokens: 1200, truncated: true },
+    { filename: 'SWARMAI.md', tokens: 500 },
+    { filename: 'IDENTITY.md', tokens: 200 },
+    { filename: 'KNOWLEDGE.md', tokens: 1200 },
   ],
   totalTokens: 1900,
   fullText: '# System Prompt\nHello world',
@@ -174,20 +174,10 @@ describe('TSCCPanel', () => {
       expect(screen.getByText('KNOWLEDGE.md')).toBeInTheDocument();
     });
 
-    it('renders truncation indicator for truncated files', () => {
+    it('shows no truncation badge: a context file is never cut', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
       openFilesTab();
-      // The badge label is terse ("trunc"), so the tooltip has to carry the
-      // meaning — assert both, or a future rename could leave the badge
-      // unexplained. (Relabeled from the old "smart"/"Smart-selected" wording
-      // when selective MEMORY injection was removed 2026-08-14 — the field now
-      // means budget truncation, which only fires on sub-500K-window models.)
-      expect(screen.getByText('trunc')).toBeInTheDocument();
-      expect(
-        screen.getByTitle(
-          'Marked truncated to fit budget — the read path is warn-only (context-file truncation was removed 2026-08-14), so this effectively never fires',
-        ),
-      ).toBeInTheDocument();
+      expect(screen.queryByText('trunc')).not.toBeInTheDocument();
     });
 
     it('renders total token count', () => {
