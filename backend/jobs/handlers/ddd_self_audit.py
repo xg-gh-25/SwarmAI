@@ -10,8 +10,10 @@ DESIGN INVARIANTS (Gate-0 run_835f82ff, all live-verified):
 - THE AGENT ONLY READS, structurally: ``--tools Read,Grep,Glob`` (``_build_review_cmd``)
   — it CANNOT mutate a DDD doc. It emits findings, each optionally with a ``fix``; THIS
   Python handler decides whether a fix is certain and writes it (core/ddd_drift_fix,
-  design docs/design/2026-10-27-ddd-drift-auto-fix.md). Certain = the evidence settles
-  the answer, checked verbatim; everything else is reported as "needs you".
+  design docs/design/2026-10-27-ddd-drift-auto-fix.md). Only three fixes exist, each a
+  fixed grammar the OS checks and computes itself (drop a waiting condition a ticked line
+  shows is done; swap a path for the one its superseded header names; swap a value for the
+  one the code assigns); everything else is reported as "needs you".
 - PER-PROJECT focused review (not one diluted 8-in-1 prompt) — one bounded ``claude
   --print`` subprocess per project, looped in-handler (JobSafety.timeout does not bound
   inner spawns; scheduled as a trailing weekly slot per the eval-scheduled precedent).
@@ -204,25 +206,26 @@ def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool)
 
 Docs present: {docs}. Read them under {docs_rel}/.
 
-You have Read/Grep/Glob ONLY — you cannot edit any file. You PROPOSE; the system checks
-each proposed fix verbatim and applies only the certain ones.
+You have Read/Grep/Glob ONLY — you cannot edit any file. The system can apply exactly three
+kinds of fix, and only after checking them itself. Name one in a finding's `fix` when it applies
+(the system computes the new text; you never write it):
 
-A finding MAY carry a `fix` — only when the evidence itself settles what the text must
-say. Give one only with evidence of one of these kinds (quote verbatim, one line each):
-- "done": a ticked `- [x]` checklist line showing the thing is finished;
-- "superseded": a line saying a document is superseded (its file is the evidence file);
-- "exists": the replacement points at a path that exists (`file` = that path);
-- "code": a line of the project's source code (not a test or fixture) that shows the truth.
-Typical certain fixes — propose these whenever they apply, the system re-checks every one:
-delete the "once X exists" / "not yet" / "pending" words a ticked `- [x]` line shows are done
-(also inside a plan: the plan stays, only the stale condition goes); swap a path for the one
-a superseded header names; swap a number or name for the one the code shows.
-Another doc merely saying something different is NOT enough (it may be the stale one): give
-no fix then. Never give a fix for a dated record (a `- **Title** …` entry: it was true when
-written), for plans / current focus / dates only the owner knows, or that adds any number,
-name or path not present in your evidence quotes. `old` = the exact text on ONE line, unique
-in the doc; `new` = its replacement on one line. Prefer the smallest edit (delete the false
-part, or swap in the evidenced value).
+1. "drop_condition" — a line waits on something a ticked `- [x]` line of this project's DDD
+   docs shows is done. `line` = a verbatim piece of that line (unique in the doc); `span` = the
+   waiting condition, exactly one of: once / after / until / when `X` exists|lands|ships|is
+   built|is done|is ready|is available|is implemented|is shipped|is merged, or 等/待 `X`
+   存在|上线|完成|就绪|落地|建好(后); `X` in backticks as in the doc; `done` = the ticked line,
+   verbatim, naming the same `X` in backticks.
+2. "swap_superseded_path" — the doc cites a file whose own header says it is SUPERSEDED and
+   names the current file. `path_old` = the cited path as written; `path_new` = the path the
+   header names, as written there.
+3. "swap_code_value" — the doc states a number or version for a code identifier and a
+   tracked source file of the bound repo assigns a different one (`IDENT = value`). `line` =
+   a verbatim piece of the doc line; `identifier`, `value_old`, `value_new`; `code_file` = the
+   source file path inside the repo (not tests, vendored or built code).
+
+Anything else — rewording, a dated record (a `- **Title** …` entry), plans, current focus,
+which of two docs is right — gets no `fix`: the owner decides it.
 
 Output format — end your response with EXACTLY this block (omit entirely if you find
 NO real drift; do not invent findings to fill it):
@@ -231,13 +234,13 @@ NO real drift; do not invent findings to fill it):
 [
   {{"title": "DDD drift [{project_name}/DOC.md]: <one-line what's stale>",
     "description": "<the exact stale claim, verbatim> — why it's false: <reason> — evidence: <code location file:line OR the contradicting doc line>",
-    "fix": {{"doc": "DOC.md", "old": "<verbatim, one line>", "new": "<replacement, one line>",
-            "evidence": [{{"kind": "done", "file": "PROJECT.md", "quote": "<verbatim line>"}}]}}}}
+    "fix": {{"type": "drop_condition", "doc": "DOC.md", "line": "<verbatim piece of the line>",
+            "span": "once `X` exists", "done": "<the ticked line, verbatim>"}}}}
 ]
 -->
 
-`fix` is optional per finding: omit it when unsure. At most 5 findings, highest-confidence
-first. If the DDD is accurate, say so in one line and emit no block."""
+`fix` is optional per finding: omit it unless it is one of the three. At most 5 findings,
+highest-confidence first. If the DDD is accurate, say so in one line and emit no block."""
 
 
 def _build_review_cmd(claude_path: str, use_bare: bool, project_name: str,
@@ -294,18 +297,17 @@ def _resolve_findings(findings: list, project_name: str, project_dir: Path, src:
             needle = _first_quote(str(f.get("description") or ""))
         else:
             try:
-                res = apply_fix(fix, project_dir, src, run_id=run_id,
+                res = apply_fix(fix, project_dir, SWARMWS, src, run_id=run_id,
                                 finding_title=title, dry_run=dry_run)
             except Exception as e:  # noqa: BLE001 — one bad fix must not stop the audit
                 logger.warning("ddd_self_audit: fix for %r failed: %s", title, e)
                 res = {"ok": False, "reason": f"the fix failed to apply ({e.__class__.__name__}); nothing changed"}
             if res.get("ok"):
                 row.update(outcome="would-fix" if dry_run else "fixed", reason=res.get("reason"),
-                           old=fix["old"], new=fix["new"],
-                           evidence=[{"kind": e.get("kind"), "file": e.get("file")} for e in fix["evidence"]])
+                           type=fix["type"], old=res.get("old_line", ""), new=res.get("new_line", ""))
             else:
                 row.update(outcome="open", reason=res.get("reason"))
-            needle = fix["old"]
+            needle = fix.get("line") or fix.get("path_old") or ""
         if row["outcome"] == "open":
             row["first_seen"] = first_seen(needle, reports, before=today)
         out.append(row)
@@ -319,8 +321,8 @@ def _first_quote(text: str) -> str:
 
 
 def _fixed_line(project: str, o: dict) -> str:
-    ev = ", ".join(f"{e['kind']}: {e['file']}" for e in o.get("evidence") or [])
-    return f"- [{project}/{o.get('doc')}] \"{o.get('old', '')[:120]}\" → \"{o.get('new', '')[:120]}\" (evidence {ev})"
+    old, new = (o.get("old") or "").strip(), (o.get("new") or "").strip()
+    return f"- [{project}/{o.get('doc')}] ({o.get('type')}) \"{old[:140]}\" → \"{new[:140]}\""
 
 
 def _open_line(project: str, o: dict) -> str:
@@ -456,7 +458,10 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         report_lines.append(header)
         # the agent's own text must not carry an outcomes block (it could mark open drift
         # fixed); ours comes last and cannot be cut short by a "-->" inside a title
-        report_lines.append((result_text.strip() or "_(no output)_").replace("DRIFT_OUTCOMES", "DRIFT-OUTCOMES"))
+        # neither a forged outcomes block nor a "## " line (which would start a new section
+        # and detach our block from this project) may come from the agent's text
+        agent_text = (result_text.strip() or "_(no output)_").replace("DRIFT_OUTCOMES", "DRIFT-OUTCOMES")
+        report_lines.append(re.sub(r"(?m)^(#{1,6}\s)", r" \1", agent_text))
         if outcomes:
             blob = json.dumps(outcomes, ensure_ascii=False).replace("-->", "--\\u003e")
             report_lines.append(f"<!-- DRIFT_OUTCOMES {blob} -->")

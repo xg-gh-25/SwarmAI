@@ -3,7 +3,7 @@
     "$SWARM_BACKEND_BIN" py -m scripts.ddd_drift_fix_cli list <project>
     "$SWARM_BACKEND_BIN" py -m scripts.ddd_drift_fix_cli undo <project> <index>
 
-``list`` prints one line per fix still in force (index, doc, old → new). ``undo`` puts one
+``list`` prints every written fix (index, doc, old line → new line, undone). ``undo`` puts one
 fix back and records it, so the self-audit never applies the same fix again. Output is
 JSON; exit 0 on success, 1 when the undo was refused, 2 on bad use.
 """
@@ -20,12 +20,14 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[0] not in ("list", "undo") or (argv[0] == "undo" and len(argv) != 3):
         print(__doc__, file=sys.stderr)
         return 2
-    project = SWARMWS / "Projects" / argv[1]
-    if "/" in argv[1] or argv[1].startswith(".") or not project.is_dir():
+    name = argv[1]
+    project = SWARMWS / "Projects" / name
+    if (not name or "\x00" in name or "/" in name or "\\" in name or name.startswith(".")
+            or not project.is_dir() or project.is_symlink()):
         print(json.dumps({"ok": False, "reason": f"no project {argv[1]}"}))
         return 2
     if argv[0] == "list":
-        rows = [{k: r.get(k) for k in ("index", "target_doc", "old", "new", "run", "undone")}
+        rows = [{k: r.get(k) for k in ("index", "target_doc", "old_line", "new_line", "run", "undone")}
                 for r in past_fixes(project)]
         print(json.dumps(rows, ensure_ascii=False, indent=1))
         return 0

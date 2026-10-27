@@ -422,15 +422,17 @@ def _generate_report(
 
     # ─── Drift fixed by the self-audit (ddd-drift-fixes.jsonl) ───
     if drift_fixes:
-        lines.append(f"## Drift Fixed Automatically ({len(drift_fixes)})")
+        in_force = sum(1 for _, e in drift_fixes if not e.get("undone"))
+        undone_n = len(drift_fixes) - in_force
+        lines.append(f"## Drift Fixed Automatically ({in_force})" + (f" · {undone_n} undone" if undone_n else ""))
         lines.append("")
-        lines.append("| # | Project | Doc | Was | Now | Evidence |")
+        lines.append("| # | Project | Doc | Was | Now | Fix |")
         lines.append("|---|---------|-----|-----|-----|----------|")
         for i, (proj, e) in enumerate(sorted(drift_fixes, key=lambda x: x[1].get("timestamp", ""), reverse=True), 1):
-            ev = ", ".join(f"{x.get('kind')}: {x.get('file')}" for x in (e.get("evidence") or []) if isinstance(x, dict))
+            ev = str(e.get("type") or "")
             undone = " (undone)" if e.get("undone") else ""
             lines.append(f"| {i} | {_md_cell(proj)} | {_md_cell(e.get('target_doc', '?'))}{undone} | "
-                         f"{_md_cell(str(e.get('old', ''))[:80])} | {_md_cell(str(e.get('new', ''))[:80])} | {_md_cell(ev)} |")
+                         f"{_md_cell(str(e.get('old_line', '')).strip()[:80])} | {_md_cell(str(e.get('new_line', '')).strip()[:80])} | {_md_cell(ev)} |")
         lines.append("")
 
     # ─── What Changed (detailed log) ───

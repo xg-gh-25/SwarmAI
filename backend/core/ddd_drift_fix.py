@@ -1,52 +1,43 @@
-"""DDD drift auto-fix — the OS side of "a certain drift finding is fixed, not reported".
+"""DDD drift auto-fix — three narrow fixes the OS can prove, nothing else.
 
-Design: docs/design/2026-10-27-ddd-drift-auto-fix.md (r3). The weekly self-audit agent
-(jobs/handlers/ddd_self_audit.py) can only read; it may attach a ``fix`` to a finding:
+Design: docs/design/2026-10-27-ddd-drift-auto-fix.md (r4). The weekly self-audit agent
+(jobs/handlers/ddd_self_audit.py) can only read. For a finding it may name one of three
+fixes; it never writes the new text — this module computes it from the document and
+the evidence, and only when a fixed grammar matches:
 
-    {"doc": "PROJECT.md", "old": "<verbatim text on one line>", "new": "<replacement>",
-     "evidence": [{"kind": "done|superseded|exists|code", "file": "<path>", "quote": "<verbatim>"}]}
+``drop_condition``   {"doc", "line", "span", "done"}
+    Delete a waiting condition ("once `X` exists", "after `X` ships", "等 `X` 完成后" …,
+    a fixed grammar) from the one line that contains ``line``, when ``done`` is a ticked
+    ``- [x]`` line of this project's DDD docs that names the same `X`.
+``swap_superseded_path``   {"doc", "path_old", "path_new"}
+    Replace the one occurrence of a path with the path that the file at ``path_old``
+    declares in its header ("SUPERSEDED … `path_new`", "status: superseded …"), when
+    ``path_new`` exists.
+``swap_code_value``   {"doc", "line", "identifier", "value_old", "value_new", "code_file"}
+    Replace a number / version that the line states for ``identifier`` with the value a
+    git-tracked source file of the bound repo assigns to it (``identifier = value``).
 
-This module decides, by checks anyone can reproduce, whether the fix is CERTAIN, and
-writes it. Certain means the evidence settles the answer AND the edit can only say what
-the evidence says:
+Every fix also stays inside one plain line of a canonical DDD doc (not a heading, code
+block, front matter, metadata comment or dated lifecycle entry; the doc has no unusual
+line separators), never re-applies a fix the user undid, and never undoes an earlier
+fix. Anything else stays open with its reason. No free text from the model reaches a
+document: free-text fixes could not be made safe by checks (two review rounds found
+meaning-flipping deletions and borrowed words each time).
 
-- the edit is one of two shapes: delete one contiguous span of ``old``, or replace one
-  span with text that appears, token for token, in an evidence quote (a path, a number, a
-  name copied from the source of truth). No other word may be added;
-- each evidence item is about the claim (it shares a run of at least 8 characters with
-  ``old``) and is of a kind that settles it: a ticked ``- [x]`` line in this project's own
-  DDD docs (``done``); a line in a document that declares that document superseded, where
-  ``old`` names that document (``superseded``); a file the fix points to that exists
-  (``exists``); a line of source code in the project's bound repo (``code``). Evidence
-  comes only from the project directory and its bound repo, never from past reports,
-  ``.artifacts``, other projects or notes;
-- the edit stays inside one plain line of a canonical DDD doc: not a heading, code
-  block, metadata comment, front matter, table cell divider, checkbox or dated lifecycle
-  entry; no control or line-separator characters anywhere; the line keeps its markdown
-  prefix;
-- it never brings back text an earlier fix removed, and never re-applies a fix the
-  user undid.
-
-The model never decides and never writes. ``apply_fix`` re-checks under the shared DDD
-lock, backs the doc up, records the fix, then replaces the file atomically if it is
-unchanged since the check; ``undo_drift_fix`` puts one fix back and records that, so the
-next run does not re-apply it. Projects other than SwarmAI are not in git: the fix log
-(``.artifacts/ddd-drift-fixes.jsonl``) and the backups are the only way back.
-
-Not ``ingestion_gate.self_adversarial_judge``: that judge is a noise filter ("not a
-fact-checker", it never sees ``old``). A fix carries evidence that can be checked
-verbatim, which is a harder gate (design §3.2). What remains: someone who can already
-write this project's DDD docs can plant a ticked line; the fix still cannot say anything
-that line does not.
+``apply_fix`` re-checks under the shared DDD lock, backs the doc up, records the fix,
+then replaces the line only if the file is unchanged since the re-check;
+``undo_drift_fix`` records the undo first, then puts the line back. Projects other than
+SwarmAI are not in git: the log (``.artifacts/ddd-drift-fixes.jsonl``) and the backups are
+the only way back.
 """
 
 from __future__ import annotations
 
-import difflib
 import hashlib
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unicodedata
 from datetime import datetime, timezone
@@ -59,20 +50,37 @@ from core.project_registry import DDD_CANONICAL_DOCS
 FIX_LOG = "ddd-drift-fixes.jsonl"
 BACKUP_DIR = "drift-fix-backups"
 BACKUPS_KEPT = 10
-EVIDENCE_KINDS = ("done", "superseded", "exists", "code")
-_MIN_OLD = 12
-_MIN_SHARED = 8
-_MAX_EVIDENCE_BYTES = 2_000_000
-_SUPERSEDED = re.compile(r"\bsuperseded\s+by\b|^\W*superseded\b|已被取代|已取代", re.IGNORECASE)
-_TEST_PARTS = {"test", "tests", "__tests__", "fixture", "fixtures", "spec", "specs", "testdata", "mocks", "__mocks__"}
+FIX_TYPES = ("drop_condition", "swap_superseded_path", "swap_code_value")
+_FIELDS = {
+    "drop_condition": ("doc", "line", "span", "done"),
+    "swap_superseded_path": ("doc", "path_old", "path_new"),
+    "swap_code_value": ("doc", "line", "identifier", "value_old", "value_new", "code_file"),
+}
+_MIN_LINE = 12
+_MAX_BYTES = 2_000_000
+_HEADER_LINES = 10
+
+_IDENT = r"`(?P<x>[^`\s]{3,120})`"
+_IDENT2 = r"`(?P<y>[^`\s]{3,120})`"
+_DONE_VERB = r"(?:exists|lands|ships|is\s+(?:built|done|ready|available|implemented|shipped|merged))"
+_CONDITION = re.compile(
+    rf"(?:once|after|until|when)\s+{_IDENT}\s+{_DONE_VERB}"
+    rf"|(?:等|待)\s*{_IDENT2}\s*(?:存在|上线|完成|就绪|落地|建好)(?:之?后)?",
+    re.IGNORECASE)
+_DONE_LINE = re.compile(r"^\s*[-*]\s+\[[xX]\]\s")
+_SUPERSEDED_HEAD = re.compile(
+    r"^[\s>*_#]*(?:⚠️?\s*)?(?:\*\*)?\s*(?:superseded\b|status\s*:\s*\**\s*superseded\b|已被取代|已取代|已废弃)",
+    re.IGNORECASE)
+_PATH = re.compile(r"^[A-Za-z0-9_./\-]+$")
+_PATH_CHAR = r"A-Za-z0-9_./\-"
+_VALUE = re.compile(r"^v?\d+(?:\.\d+){0,3}$")
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{1,80}$")
+_TEST_PARTS = {"test", "tests", "__tests__", "fixture", "fixtures", "spec", "specs", "testdata", "mocks",
+               "__mocks__", "node_modules", "vendor", "dist", "build", ".venv", "venv", "site-packages",
+               "third_party", "external"}
 _TEST_NAME = re.compile(r"^test_|_test\.|\.test\.|\.spec\.", re.IGNORECASE)
 _CODE_EXT = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".java", ".kt", ".go", ".rs", ".rb", ".swift",
              ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".scala", ".php", ".smithy", ".sql", ".proto"}
-_DONE_LINE = re.compile(r"^\s*[-*]\s+\[[xX]\]\s")
-_LINE_PREFIX = re.compile(r"^\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+|>\s*|#{1,6}\s+)?")
-# a word (a trailing "." is punctuation, not part of it), a CJK character, or a single
-# other non-space character (backticks too, so `x` and x carry the same word)
-_TOKEN = re.compile(r"[A-Za-z0-9_./\-]*[A-Za-z0-9_/\-]|[㐀-鿿]|\S")
 
 
 class Outcome(dict):
@@ -84,132 +92,215 @@ def _open(reason: str, **extra) -> Outcome:
 
 
 def parse_fix(finding: object) -> dict | None:
-    """The ``fix`` of a finding when it has the expected shape, else None."""
-    if not isinstance(finding, dict):
+    """The ``fix`` of a finding when it is one of the three types with every field a
+    non-empty string, else None."""
+    if not isinstance(finding, dict) or not isinstance(finding.get("fix"), dict):
         return None
-    fix = finding.get("fix")
-    if not isinstance(fix, dict):
+    fix = finding["fix"]
+    kind = fix.get("type")
+    if kind not in _FIELDS or not all(isinstance(fix.get(k), str) and fix.get(k) for k in _FIELDS[kind]):
         return None
-    if not all(isinstance(fix.get(k), str) for k in ("doc", "old", "new")):
-        return None
-    ev = fix.get("evidence")
-    if not isinstance(ev, list) or not ev:
-        return None
-    items = [e for e in ev if isinstance(e, dict) and isinstance(e.get("kind"), str)
-             and isinstance(e.get("file"), str)]
-    if len(items) != len(ev):
-        return None
-    return {"doc": fix["doc"], "old": fix["old"], "new": fix["new"], "evidence": items}
+    return {"type": kind, **{k: fix[k] for k in _FIELDS[kind]}}
 
 
-def _norm(text: str) -> str:
-    return unicodedata.normalize("NFKC", text or "")
+# ─── reading ───────────────────────────────────────────────────────────────
 
-
-def _tokens(text: str) -> list[str]:
-    return _TOKEN.findall(_norm(text))
-
-
-def _bad_chars(text: str) -> bool:
-    """Control and line/paragraph separators (``str.splitlines`` splits on several of
-    them, so they can forge a new line), plus fence markers."""
-    if "```" in text or "~~~" in text:
-        return True
-    return any(unicodedata.category(c) in ("Cc", "Zl", "Zp") and c != "\t" for c in text)
-
-
-def _odd_separators(text: str) -> bool:
-    """A doc with a line break other than ``\n`` / ``\r\n``: line numbers would not agree
-    between this module and the markdown readers, so it is not edited automatically."""
-    body = text.replace("\r\n", "\n")
-    return any(c not in "\n\t" and unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in body)
-
-
-def _read(path: Path) -> str | None:
+def _read(path: Path | None) -> str | None:
     try:
-        if not path.is_file() or path.stat().st_size > _MAX_EVIDENCE_BYTES or path.stat().st_nlink != 1:
+        if path is None or not path.is_file():
+            return None
+        st = path.stat()
+        if st.st_size > _MAX_BYTES or st.st_nlink != 1:
             return None
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
 
-def _rel_inside(path: Path, root: Path) -> str | None:
-    """``path`` relative to ``root`` (both resolved), or None when it is outside."""
+def _odd_separators(text: str) -> bool:
+    """A line break other than ``\\n`` / ``\\r\\n``, or an invisible format character:
+    line numbers would not agree with the markdown readers, or the text would not read
+    as it looks. Such a doc is not edited automatically."""
+    body = text.replace("\r\n", "\n")
+    return any(c not in "\n\t" and unicodedata.category(c) in ("Cc", "Zl", "Zp", "Cf") for c in body)
+
+
+def _under(root: Path, rel: str) -> Path | None:
+    """``root / rel`` when it stays inside ``root`` (both resolved), is a file, and is not
+    under an ``.artifacts`` dir (logs, backups) — compared case-insensitively."""
+    if not rel or "\x00" in rel or Path(rel).is_absolute():
+        return None
+    if {p.casefold() for p in Path(rel).parts} & {"..", ".artifacts"}:
+        return None
     try:
-        return path.resolve().relative_to(root.resolve()).as_posix()
+        cand = (root / rel).resolve()
+        cand.relative_to(root.resolve())
     except (ValueError, OSError, RuntimeError):
         return None
+    return cand if cand.is_file() else None
 
 
-def _evidence_path(kind: str, file: str, project_dir: Path, source_repo: Path | None) -> Path | None:
-    """Where an evidence ``file`` points, or None when it is not an allowed source.
-    ``done``: this project's canonical DDD docs. ``code``: a source file of the bound
-    repo outside test dirs. ``superseded`` / ``exists``: anything in the project dir or the
-    bound repo except ``.artifacts`` (logs, backups) — compared case-insensitively,
-    because macOS paths are."""
-    if not file or "\x00" in file or Path(file).is_absolute():
-        return None
-    parts = {p.casefold() for p in Path(file).parts}
-    if ".." in parts or ".artifacts" in parts:
-        return None
-    if kind == "done":
-        if Path(file).name not in DDD_CANONICAL_DOCS:
-            return None
-        return _confined_doc_path(project_dir, Path(file).name)
-    if kind == "code":
-        if source_repo is None or parts & _TEST_PARTS or _TEST_NAME.search(Path(file).name):
-            return None
-        if Path(file).suffix.lower() not in _CODE_EXT:
-            return None
-        roots = [source_repo]
-    else:
-        roots = [project_dir] + ([source_repo] if source_repo else [])
+def _resolve_path(rel: str, roots: list[Path]) -> Path | None:
     for root in roots:
-        cand = root / file
-        rel = _rel_inside(cand, root)
-        if rel is None or ".artifacts" in {p.casefold() for p in Path(rel).parts}:
-            continue
-        if cand.is_file():
-            return cand
+        hit = _under(root, rel)
+        if hit is not None:
+            return hit
     return None
 
 
-def _shares_run(a: str, b: str) -> bool:
-    """Do ``a`` and ``b`` share a run of at least _MIN_SHARED characters with five or more
-    letters or digits in it (the evidence is about this claim, not merely nearby)?"""
-    a, b = _norm(a).casefold(), _norm(b).casefold()
-    m = difflib.SequenceMatcher(None, a, b, autojunk=False).find_longest_match(0, len(a), 0, len(b))
-    run = a[m.a:m.a + m.size]
-    return m.size >= _MIN_SHARED and sum(ch.isalnum() for ch in run) >= 5
+# ─── the line being edited ─────────────────────────────────────────────────
+
+def _target_line(text: str, needle: str) -> tuple[int, str] | Outcome:
+    """The index and text of the one line containing ``needle`` (which must occur once
+    in the whole doc), when that line may be edited."""
+    if len(needle) < _MIN_LINE or "\n" in needle:
+        return _open("the quoted line is shorter than a phrase or spans lines")
+    if text.count(needle) != 1:
+        return _open(f"the quoted text appears {text.count(needle)} times in the document")
+    lines = text.split("\n")
+    idx = text.count("\n", 0, text.index(needle))
+    line = lines[idx]
+    if lines and lines[0].strip() == "---":
+        closing = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), len(lines))
+        if idx <= closing:
+            return _open("the line is in the front matter")
+    nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
+    if line.lstrip().startswith("#") or (line.strip() and re.fullmatch(r"\s*(=+|-+)\s*", nxt)):
+        return _open("the line is a heading")
+    if sum(1 for ln in lines[:idx] if ln.lstrip().startswith(("```", "~~~"))) % 2 == 1:
+        return _open("the line is inside a code block")
+    if "<!--" in line or "-->" in line:
+        return _open("the line carries entry metadata")
+    for e in parse_entries(text):
+        if e.line_number <= idx <= max(e.end_line, e.line_number):
+            return _open("this is a dated record, true when written; not rewritten")
+    return idx, line
 
 
-def _edit_shape(old: str, new: str, quotes: list[str]) -> str | None:
-    """None when ``new`` is ``old`` with one span deleted, or one span replaced by text
-    that appears token for token in a quote; else the reason it is not."""
-    a, b = _tokens(old), _tokens(new)
-    ops = [op for op in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes() if op[0] != "equal"]
-    if not ops:
-        return "the replacement is the same text"
-    if len(ops) > 1:
-        return "the fix changes more than one place in the line"
-    tag, _i1, _i2, j1, j2 = ops[0]
-    if tag == "delete":
-        return None
-    inserted = b[j1:j2]
-    for q in quotes:
-        qt = _tokens(q)
-        n = len(inserted)
-        if any(qt[k:k + n] == inserted for k in range(len(qt) - n + 1)):
-            return None
-    return f"the fix adds words the evidence does not contain: {' '.join(inserted)[:80]}"
+def _tidy(line: str) -> str:
+    """Spacing after a deletion: no doubled spaces, no space before punctuation, no
+    empty parentheses — the line keeps its leading indentation."""
+    lead = line[: len(line) - len(line.lstrip())]
+    body = line[len(lead):]
+    body = re.sub(r"\(\s*\)|（\s*）", "", body)
+    body = re.sub(r"[ \t]{2,}", " ", body)
+    body = re.sub(r"\s+([,.;:)，。；：）])", r"\1", body)
+    return lead + body.rstrip()
 
+
+def _names_same(x: str, y: str) -> bool:
+    """Do two identifiers name the same thing: equal, or one is the other qualified by a
+    prefix (``pkg/x`` · ``s_x`` · ``a.x`` — the separator is ``/ _ - . :``)?"""
+    if x == y:
+        return True
+    short, long_ = sorted((x, y), key=len)
+    return len(short) >= 6 and long_.endswith(short) and long_[-len(short) - 1] in "/_-.:"
+
+
+# ─── the three fixes ───────────────────────────────────────────────────────
+
+def _check_drop_condition(fix: dict, text: str, project_dir: Path) -> tuple[str, str] | Outcome:
+    hit = _target_line(text, fix["line"])
+    if isinstance(hit, Outcome):
+        return hit
+    _idx, line = hit
+    span = fix["span"]
+    m = _CONDITION.fullmatch(span.strip())
+    if not m:
+        return _open("the span is not a waiting condition the system knows (once / after / until / 等 `X` …)")
+    if line.count(span) != 1:
+        return _open("the span is not in the quoted line exactly once")
+    x = m.group("x") or m.group("y") or ""
+    done_line = None
+    if "\n" not in fix["done"]:
+        for name in DDD_CANONICAL_DOCS:
+            body = _read(_confined_doc_path(project_dir, name))
+            if body is None or fix["done"] not in body:
+                continue
+            cand = body.split("\n")[body.count("\n", 0, body.index(fix["done"]))]
+            if _DONE_LINE.match(cand):
+                done_line = cand
+                break
+    if done_line is None:
+        return _open("the 'done' quote is not a ticked line of this project's DDD docs")
+    if done_line.strip() == line.strip():
+        return _open("a line cannot be its own evidence")
+    if not any(_names_same(x, y) for y in re.findall(r"`([^`\s]+)`", done_line)):
+        return _open(f"the ticked line does not name `{x}`")
+    return line, _tidy(line.replace(span, "", 1))
+
+
+def _check_swap_path(fix: dict, text: str, project_dir: Path, workspace: Path,
+                     repo: Path | None) -> tuple[str, str] | Outcome:
+    old, new = fix["path_old"], fix["path_new"]
+    if not (_PATH.match(old) and _PATH.match(new)) or old == new or ("/" not in new and "." not in new):
+        return _open("not two paths")
+    bounded = re.compile(rf"(?<![{_PATH_CHAR}]){re.escape(old)}(?![{_PATH_CHAR}])")
+    found = bounded.findall(text)
+    if len(found) != 1:
+        return _open(f"the path appears {len(found)} times in the document")
+    lines = text.split("\n")
+    line_with = next(ln for ln in lines if bounded.search(ln))
+    hit = _target_line(text, line_with if len(line_with) >= _MIN_LINE else old)
+    if isinstance(hit, Outcome):
+        return hit
+    _idx, line = hit
+    roots = [project_dir, workspace] + ([repo] if repo else [])
+    head = _read(_resolve_path(old, roots))
+    if head is None:
+        return _open(f"{old} is not a readable file in the project, the workspace or the repo")
+    if _resolve_path(new, roots) is None:
+        return _open(f"{new} does not exist")
+    if not any(_SUPERSEDED_HEAD.match(ln) and new in ln for ln in head.split("\n")[:_HEADER_LINES]):
+        return _open(f"{old} does not declare itself superseded by {new} in its header")
+    return line, bounded.sub(new, line, count=1)
+
+
+def _git_tracked(repo: Path, rel: str) -> bool:
+    try:
+        r = subprocess.run(["git", "-C", str(repo), "ls-files", "--error-unmatch", "--", rel],
+                           capture_output=True, text=True, timeout=20)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _check_swap_value(fix: dict, text: str, repo: Path | None) -> tuple[str, str] | Outcome:
+    ident, vold, vnew, file = fix["identifier"], fix["value_old"], fix["value_new"], fix["code_file"]
+    if not _IDENTIFIER.match(ident) or not _VALUE.match(vold) or not _VALUE.match(vnew) or vold == vnew:
+        return _open("not an identifier with two numeric values")
+    if repo is None:
+        return _open("the project has no bound source repo")
+    parts = {p.casefold() for p in Path(file).parts}
+    if parts & _TEST_PARTS or _TEST_NAME.search(Path(file).name) or Path(file).suffix.lower() not in _CODE_EXT:
+        return _open(f"{file} is not a source file (tests, vendored and built files do not count)")
+    src = _under(repo, file)
+    if src is None or not _git_tracked(repo, file):
+        return _open(f"{file} is not a tracked file of the bound repo")
+    bare = vnew[1:] if vnew.startswith("v") else vnew
+    assign = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(ident)}(?![A-Za-z0-9_])\s*[:=]\s*[\"']?v?"
+                        rf"{re.escape(bare)}[\"']?(?![0-9.])")
+    if not assign.search(_read(src) or ""):
+        return _open(f"{file} does not assign {vnew} to {ident}")
+    hit = _target_line(text, fix["line"])
+    if isinstance(hit, Outcome):
+        return hit
+    _idx, line = hit
+    if not re.search(rf"(?<![A-Za-z0-9_]){re.escape(ident)}(?![A-Za-z0-9_])", line):
+        return _open(f"the line does not name {ident}")
+    val = re.compile(rf"(?<![A-Za-z0-9_.]){re.escape(vold)}(?![0-9]|\.[0-9])")
+    if len(val.findall(line)) != 1:
+        return _open(f"{vold} is not in the line exactly once")
+    shown = ("v" + bare) if vold.startswith("v") else bare
+    return line, val.sub(shown, line, count=1)
+
+
+# ─── the log ───────────────────────────────────────────────────────────────
 
 def _log_rows(project_dir: Path) -> list[dict]:
-    log = project_dir / ".artifacts" / FIX_LOG
     out = []
     try:
-        for line in log.read_text(encoding="utf-8").splitlines():
+        for line in (project_dir / ".artifacts" / FIX_LOG).read_text(encoding="utf-8").splitlines():
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
@@ -222,117 +313,70 @@ def _log_rows(project_dir: Path) -> list[dict]:
 
 
 def past_fixes(project_dir: Path) -> list[dict]:
-    """Applied fixes still in force: an ``undone`` row cancels its fix, a ``failed`` row
-    never counted. Each carries ``index``, its position among applied rows."""
+    """Every fix that was written (a ``failed`` write is dropped), in log order, each
+    with ``index`` (its stable position among applied rows) and ``undone`` (an undo was
+    recorded and not followed by a failed undo)."""
     rows = _log_rows(project_dir)
-    undone = {r.get("fix_id") for r in rows if r.get("status") == "undone"}
-    applied = [r for r in rows if r.get("status", "applied") == "applied"]
     failed = {r.get("fix_id") for r in rows if r.get("status") == "failed"}
-    out = []
-    for i, r in enumerate(applied):
-        if r.get("fix_id") in failed:
-            continue
-        out.append({**r, "index": i, "undone": r.get("fix_id") in undone})
-    return out
+    undone: set = set()
+    for r in rows:
+        if r.get("status") == "undone":
+            undone.add(r.get("fix_id"))
+        elif r.get("status") == "undo_failed":
+            undone.discard(r.get("fix_id"))
+    applied = [r for r in rows if r.get("status") == "applied"]
+    return [{**r, "index": i, "undone": r.get("fix_id") in undone}
+            for i, r in enumerate(applied) if r.get("fix_id") not in failed]
 
 
-def check_fix(fix: dict, project_dir: Path, source_repo: Path | None) -> Outcome:
-    """Is this fix certain? Pure over the files it reads; never writes."""
-    doc_name, old, new = fix["doc"], fix["old"], fix["new"]
-    if doc_name not in DDD_CANONICAL_DOCS:
-        return _open(f"not a DDD document: {doc_name}")
-    doc = _confined_doc_path(project_dir, doc_name)
+def _ws(s: str) -> str:
+    return " ".join((s or "").split())
+
+
+def check_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path | None) -> Outcome:
+    """Is this fix one of the three provable fixes? Pure over what it reads; never
+    writes. On success carries the line as it is and as it will be."""
+    if fix.get("type") not in FIX_TYPES:
+        return _open("not one of the three fixes the system can prove")
+    if fix["doc"] not in DDD_CANONICAL_DOCS:
+        return _open(f"not a DDD document: {fix['doc']}")
+    doc = _confined_doc_path(project_dir, fix["doc"])
     if doc is None:
-        return _open(f"{doc_name} not found in the project")
+        return _open(f"{fix['doc']} not found in the project")
+    try:
+        st = doc.stat()  # before the read, so any later change is caught by apply_fix
+    except OSError:
+        return _open(f"{fix['doc']} could not be read")
     text = _read(doc)
     if text is None:
-        return _open(f"{doc_name} could not be read")
+        return _open(f"{fix['doc']} could not be read")
     if _odd_separators(text):
-        return _open(f"{doc_name} has unusual line separators; not edited automatically")
+        return _open(f"{fix['doc']} has unusual line separators or invisible characters; not edited automatically")
 
-    # one plain line
-    if len(old) < _MIN_OLD or "\n" in old or _bad_chars(old):
-        return _open("the text to replace is shorter than a phrase, spans lines or has control characters")
-    if text.count(old) != 1:
-        return _open(f"the text to replace appears {text.count(old)} times in {doc_name}")
-    if not new.strip() or not any(c.isalnum() for c in new) or "\n" in new or _bad_chars(new):
-        return _open("the replacement is empty or would change the document's structure")
-    if "<!--" in new or "-->" in new or "<!--" in old or "-->" in old:
-        return _open("the fix touches entry metadata")
-    boxes = lambda t: [b.lower() for b in re.findall(r"\[([ xX])\]", t)]  # noqa: E731
-    if new.count("|") != old.count("|") or boxes(new) != boxes(old):
-        return _open("the fix changes a table or a checkbox")
-    if len(new) > max(2 * len(old), len(old) + 300):
-        return _open("the replacement is much longer than what it replaces")
-    pos = text.index(old)
-    lines = text.split("\n")
-    line_no = text.count("\n", 0, pos)
-    line = lines[line_no]
-    col = pos - (text.rfind("\n", 0, pos) + 1)
-    if lines and lines[0].strip() == "---":
-        closing = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), len(lines))
-        if line_no <= closing:
-            return _open("the text to replace is in the front matter")
-    if line.lstrip().startswith("#") or (line_no + 1 < len(lines) and re.fullmatch(r"\s*(=+|-{3,})\s*", lines[line_no + 1])):
-        return _open("the text to replace is a heading")
-    if col <= len(_LINE_PREFIX.match(line).group(0)) and _LINE_PREFIX.match(old).group(0) != _LINE_PREFIX.match(new).group(0):
-        return _open("the fix changes the line's markdown marker")
-    fences = sum(1 for ln in lines[:line_no] if ln.lstrip().startswith(("```", "~~~")))
-    if fences % 2 == 1:
-        return _open("the text to replace is inside a code block")
-    for m in re.finditer(r"<!--.*?(?:-->|$)", line):
-        if m.start() <= col < m.end():
-            return _open("the text to replace is inside entry metadata")
-    for e in parse_entries(text):
-        if e.line_number <= line_no <= max(e.end_line, e.line_number):
-            return _open("this is a dated record, true when written: correct it by superseding, not by rewriting")
+    if fix["type"] == "drop_condition":
+        res = _check_drop_condition(fix, text, project_dir)
+    elif fix["type"] == "swap_superseded_path":
+        res = _check_swap_path(fix, text, project_dir, workspace, source_repo)
+    else:
+        res = _check_swap_value(fix, text, source_repo)
+    if isinstance(res, Outcome):
+        return res
+    old_line, new_line = res
+    if _ws(old_line) == _ws(new_line) or not new_line.strip():
+        return _open("the fix would leave the line empty or unchanged")
 
-    # never bring back what an earlier fix removed, never redo an undone fix
-    after = text.replace(old, new, 1)
     for row in past_fixes(project_dir):
-        if row.get("target_doc") != doc_name:
+        if row.get("target_doc") != fix["doc"]:
             continue
-        if row["undone"] and row.get("old") == old and row.get("new") == new:
+        if row["undone"] and _ws(row.get("old_line", "")) == _ws(old_line) and _ws(row.get("new_line", "")) == _ws(new_line):
             return _open("you undid this fix before; not applied again")
-        if not row["undone"] and row.get("old") and row["old"] in after and row["old"] not in text:
+        if not row["undone"] and _ws(row.get("old_line", "")) == _ws(new_line):
             return _open("this would undo an earlier automatic fix")
+    return Outcome(ok=True, reason="certain", doc_path=str(doc), mtime_ns=st.st_mtime_ns, size=st.st_size,
+                   old_line=old_line, new_line=new_line)
 
-    # the evidence settles it
-    quotes: list[str] = []
-    for ev in fix["evidence"]:
-        kind, file, quote = ev.get("kind"), ev.get("file", ""), ev.get("quote") or ""
-        if kind not in EVIDENCE_KINDS:
-            return _open("the evidence is another statement, not one that settles it (done / superseded / exists / code)")
-        path = _evidence_path(kind, file, project_dir, source_repo)
-        if kind == "exists":
-            if path is None or _norm(file) not in _norm(new) or _norm(file) in _norm(old):
-                return _open(f"the path {file} does not exist in the project or its repo, or is not what the fix puts in")
-            if doc is not None and path.resolve() == doc.resolve():
-                return _open("a document cannot be its own evidence")
-            quotes.append(file)
-            continue
-        body = _read(path) if path else None
-        if body is None:
-            return _open(f"evidence file {file} is not an allowed source for '{kind}' or does not exist")
-        if not quote or "\n" in quote or quote not in body:
-            return _open(f"the evidence quote is not in {file}")
-        if not _shares_run(quote, old) and not (kind == "superseded" and Path(file).name in old):
-            return _open("the evidence is not about the claim being fixed")
-        if kind == "done":
-            qline = body.split("\n")[body.count("\n", 0, body.index(quote))]
-            if not _DONE_LINE.match(qline):
-                return _open("the 'done' evidence is not a ticked checklist line")
-        if kind == "superseded":
-            if not _SUPERSEDED.search(quote) or (Path(file).name not in old and Path(file).stem not in old):
-                return _open("the 'superseded' evidence does not declare the document named in the text superseded")
-        quotes.append(quote)
 
-    why = _edit_shape(old, new, quotes)
-    if why:
-        return _open(why)
-    st = doc.stat()
-    return Outcome(ok=True, reason="certain", doc_path=str(doc), mtime_ns=st.st_mtime_ns, size=st.st_size)
-
+# ─── writing ───────────────────────────────────────────────────────────────
 
 def _backup(project_dir: Path, doc: Path, run_id: str) -> None:
     """One whole-doc copy per doc per run. Keeps the oldest (before any auto-fix) and the
@@ -373,59 +417,64 @@ def _append_log(project_dir: Path, row: dict) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def apply_fix(fix: dict, project_dir: Path, source_repo: Path | None,
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def apply_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path | None,
               *, run_id: str, finding_title: str = "", dry_run: bool = False) -> Outcome:
     """Check and, when certain, write the fix. Under the lock: re-check, back up, log,
-    then replace atomically only if the file is unchanged since the re-check. A failure
+    then replace the line only if the file is unchanged since the re-check. A failure
     before the replace changes nothing; a failed replace is logged as failed."""
     from utils.file_lock import md_lock
 
-    first = check_fix(fix, project_dir, source_repo)
+    first = check_fix(fix, project_dir, workspace, source_repo)
     if not first.get("ok"):
         return first
     if dry_run:
-        return Outcome(ok=True, reason="would fix (dry run)", dry_run=True)
+        return Outcome(ok=True, reason="would fix (dry run)", dry_run=True,
+                       old_line=first["old_line"], new_line=first["new_line"])
     doc = Path(first["doc_path"])
     with md_lock(doc, blocking=False) as got:
         if not got:
             return _open("the document is being written; next run will retry")
-        again = check_fix(fix, project_dir, source_repo)
+        again = check_fix(fix, project_dir, workspace, source_repo)
         if not again.get("ok"):
             return again
-        text = doc.read_text(encoding="utf-8")
-        digest = hashlib.sha1(f"{fix['old']}\x00{fix['new']}".encode("utf-8")).hexdigest()[:12]
+        old_line, new_line = again["old_line"], again["new_line"]
+        digest = hashlib.sha1(f"{old_line}\x00{new_line}".encode("utf-8")).hexdigest()[:12]
         fix_id = f"{run_id}:{fix['doc']}:{digest}"
-        row = {"fix_id": fix_id, "status": "applied", "run": run_id, "target_doc": fix["doc"],
-               "old": fix["old"], "new": fix["new"], "evidence": fix["evidence"], "finding": finding_title,
-               "timestamp": datetime.now(timezone.utc).isoformat()}
         try:
             _backup(project_dir, doc, run_id)
-            _append_log(project_dir, row)
+            _append_log(project_dir, {"fix_id": fix_id, "status": "applied", "type": fix["type"], "run": run_id,
+                                      "target_doc": fix["doc"], "old_line": old_line, "new_line": new_line,
+                                      "evidence": {k: v for k, v in fix.items() if k not in ("type", "doc")},
+                                      "finding": finding_title, "timestamp": _now()})
         except OSError as e:
             return _open(f"could not back up or record the fix ({e.__class__.__name__}); nothing changed")
         try:
             st = doc.stat()
-            if (st.st_mtime_ns, st.st_size) != (again["mtime_ns"], again["size"]):
+            lines = doc.read_text(encoding="utf-8").split("\n")
+            if (st.st_mtime_ns, st.st_size) != (again["mtime_ns"], again["size"]) or lines.count(old_line) != 1:
                 raise RuntimeError("the document changed while the fix was being written")
-            _atomic_write(doc, text.replace(fix["old"], fix["new"], 1))
+            lines[lines.index(old_line)] = new_line
+            _atomic_write(doc, "\n".join(lines))
         except (OSError, RuntimeError) as e:
             try:
-                _append_log(project_dir, {"fix_id": fix_id, "status": "failed", "reason": str(e)[:200],
-                                          "timestamp": datetime.now(timezone.utc).isoformat()})
+                _append_log(project_dir, {"fix_id": fix_id, "status": "failed", "reason": str(e)[:200], "timestamp": _now()})
             except OSError:
                 pass
             return _open(f"the fix was not written: {str(e)[:120]}; nothing changed")
-    return Outcome(ok=True, reason="fixed", fix_id=fix_id)
+    return Outcome(ok=True, reason="fixed", fix_id=fix_id, old_line=old_line, new_line=new_line)
 
 
 def undo_drift_fix(project_dir: Path, index: int) -> Outcome:
-    """Put one fix back (``index`` as listed by ``past_fixes``): ``new`` → ``old``, only
-    when ``new`` still appears exactly once (a later edit means a person owns that text
-    now). The undo is logged, so the same fix is never applied again."""
+    """Put one fix back (``index`` as listed by ``past_fixes``), only when its new line
+    is still in the doc exactly once (a later edit means a person owns that line now).
+    The undo is recorded BEFORE the doc changes, so the self-audit never redoes it."""
     from utils.file_lock import md_lock
 
-    rows = {r["index"]: r for r in past_fixes(project_dir)}
-    row = rows.get(index)
+    row = {r["index"]: r for r in past_fixes(project_dir)}.get(index)
     if row is None:
         return _open("no such fix")
     if row["undone"]:
@@ -434,13 +483,26 @@ def undo_drift_fix(project_dir: Path, index: int) -> Outcome:
     if doc is None:
         return _open("the document is gone")
     with md_lock(doc, blocking=True):
-        text = doc.read_text(encoding="utf-8")
-        new, old = str(row.get("new", "")), str(row.get("old", ""))
-        if not new or text.count(new) != 1:
-            return _open("the fixed text was edited since; not undone")
-        _atomic_write(doc, text.replace(new, old, 1))
-        _append_log(project_dir, {"fix_id": row.get("fix_id"), "status": "undone",
-                                  "timestamp": datetime.now(timezone.utc).isoformat()})
+        try:
+            lines = doc.read_text(encoding="utf-8").split("\n")
+        except OSError:
+            return _open("the document could not be read")
+        new, old = str(row.get("new_line", "")), str(row.get("old_line", ""))
+        if not new or lines.count(new) != 1:
+            return _open("the fixed line was edited since; not undone")
+        try:
+            _append_log(project_dir, {"fix_id": row.get("fix_id"), "status": "undone", "timestamp": _now()})
+        except OSError as e:
+            return _open(f"could not record the undo ({e.__class__.__name__}); nothing changed")
+        try:
+            lines[lines.index(new)] = old
+            _atomic_write(doc, "\n".join(lines))
+        except OSError as e:
+            try:
+                _append_log(project_dir, {"fix_id": row.get("fix_id"), "status": "undo_failed", "timestamp": _now()})
+            except OSError:
+                pass
+            return _open(f"the undo was not written ({e.__class__.__name__})")
     return Outcome(ok=True, reason="undone")
 
 
@@ -453,11 +515,14 @@ def first_seen(needle: str, reports_dir: Path, *, before: str | None = None) -> 
         date = path.name[:10]
         if before and date >= before:
             continue
-        body = _read(path)
-        if body and needle in body:
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if needle in body:
             return date
     return None
 
 
-__all__ = ["EVIDENCE_KINDS", "FIX_LOG", "Outcome", "apply_fix", "check_fix", "first_seen",
-           "parse_fix", "past_fixes", "undo_drift_fix"]
+__all__ = ["FIX_LOG", "FIX_TYPES", "Outcome", "apply_fix", "check_fix", "first_seen", "parse_fix",
+           "past_fixes", "undo_drift_fix"]

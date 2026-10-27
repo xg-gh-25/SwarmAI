@@ -26,10 +26,10 @@ Phase: deliverable execution (mid-May to mid-June 2026).
 FINDINGS = [
     {"title": "DDD drift [P/PROJECT.md]: waits for s_review, which exists",
      "description": "\"once `s_review` exists\" — why it's false: it exists",
-     "fix": {"doc": "PROJECT.md", "old": "Next: add a behavioural benchmark once `s_review` exists, graded per dimension.",
-             "new": "Next: add a behavioural benchmark, graded per dimension.",
-             "evidence": [{"kind": "done", "file": "PROJECT.md",
-                           "quote": "- [x] P5 (REVIEW) — the reviewer is ported into the `s_review` skill"}]}},
+     "fix": {"type": "drop_condition", "doc": "PROJECT.md",
+             "line": "Next: add a behavioural benchmark once `s_review` exists, graded per dimension.",
+             "span": "once `s_review` exists",
+             "done": "- [x] P5 (REVIEW) — the reviewer is ported into the `s_review` skill"}},
     {"title": "DDD drift [P/PROJECT.md]: current focus is months old",
      "description": "\"deliverable execution (mid-May to mid-June 2026)\" — why it's false: it is October"},
 ]

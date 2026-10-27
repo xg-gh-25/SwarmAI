@@ -70,7 +70,7 @@ class TestDomainAwarePrompt:
         """Findings must route to a RADAR_TODOS block (the in-band forcing function)."""
         prompt = _build_audit_prompt("X", tmp_path, code_backed=True)
         assert "RADAR_TODOS" in prompt
-        assert "\"fix\"" in prompt and "settles" in prompt  # a fix only when the evidence settles it
+        assert "\"fix\"" in prompt and all(t in prompt for t in ("drop_condition", "swap_superseded_path", "swap_code_value"))
 
     def test_prompt_emits_description_not_note(self, tmp_path):
         """Gate-2 MED fix: the todo parser reads 'description', not 'note'. If the prompt
