@@ -56,8 +56,8 @@ class TestDomainAwarePrompt:
         prompt = _build_audit_prompt("SwarmAI", tmp_path, code_backed=True)
         assert "LIVE CODE" in prompt
         assert "not yet built" in prompt  # the canonical code-drift example
-        # never invites edits
-        assert "MUST NOT edit" in prompt
+        # the agent proposes; it is told it cannot edit
+        assert "cannot edit any file" in prompt
 
     def test_non_code_prompt_checks_internal_consistency(self, tmp_path):
         prompt = _build_audit_prompt("CMHK_SalesIntel", tmp_path, code_backed=False)
@@ -70,7 +70,7 @@ class TestDomainAwarePrompt:
         """Findings must route to a RADAR_TODOS block (the in-band forcing function)."""
         prompt = _build_audit_prompt("X", tmp_path, code_backed=True)
         assert "RADAR_TODOS" in prompt
-        assert "s_persist" in prompt  # each finding names the human fix path
+        assert "\"fix\"" in prompt and "settles" in prompt  # a fix only when the evidence settles it
 
     def test_prompt_emits_description_not_note(self, tmp_path):
         """Gate-2 MED fix: the todo parser reads 'description', not 'note'. If the prompt
@@ -221,13 +221,9 @@ class TestDiscoveryBlindnessIsFailLoud:
 
 class TestNoMutation:
     def test_report_persist_path_never_touches_ddd_docs(self, tmp_path):
-        """DoD-B: the handler's OUTPUT is a report + todos — it must never write a DDD doc.
-        The agent has no Write tool (TestDetectOnlyInvariant); this asserts the Python
-        side writes only to JobResults, not into Projects/*/{PRODUCT,TECH,...}.md.
-
-        We prove it structurally: the handler imports no DDD-doc writer and the only
-        persist call is _write_job_result (→ Knowledge/JobResults/). A snapshot-hash guard
-        on a fake Projects tree confirms the docs are untouched by the pure helpers."""
+        """Building the prompt and probing a project never touch a DDD doc. Since
+        2026-10-27 the run does change docs, but only through core.ddd_drift_fix.apply_fix
+        for a certain fix (tests/test_ddd_self_audit_fix.py, tests/test_ddd_drift_fix.py)."""
         projects = tmp_path / "Projects"
         (projects / "SwarmAI").mkdir(parents=True)
         doc = projects / "SwarmAI" / "TECH.md"

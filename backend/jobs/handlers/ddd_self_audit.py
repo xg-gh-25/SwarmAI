@@ -7,9 +7,11 @@ this is a periodic LLM REVIEW, generalizing the 4-subagent SwarmAI audit to ALL 
 projects under SwarmWS/Projects/.
 
 DESIGN INVARIANTS (Gate-0 run_835f82ff, all live-verified):
-- DETECT-ONLY, structurally: the review agent gets ``Read,Grep`` ONLY (no Write/Edit,
-  no Bash) — it CANNOT mutate a DDD doc. It emits findings as text; THIS Python handler
-  writes the report. The fix stays human via s_persist (the run_b2e85d61 NO-GO invariant).
+- THE AGENT ONLY READS, structurally: ``--tools Read,Grep,Glob`` (``_build_review_cmd``)
+  — it CANNOT mutate a DDD doc. It emits findings, each optionally with a ``fix``; THIS
+  Python handler decides whether a fix is certain and writes it (core/ddd_drift_fix,
+  design docs/design/2026-10-27-ddd-drift-auto-fix.md). Certain = the evidence settles
+  the answer, checked verbatim; everything else is reported as "needs you".
 - PER-PROJECT focused review (not one diluted 8-in-1 prompt) — one bounded ``claude
   --print`` subprocess per project, looped in-handler (JobSafety.timeout does not bound
   inner spawns; scheduled as a trailing weekly slot per the eval-scheduled precedent).
@@ -17,10 +19,12 @@ DESIGN INVARIANTS (Gate-0 run_835f82ff, all live-verified):
   reviewed for prose-vs-CODE drift; a non-code project (business/product/research) for
   prose-vs-PRODUCT-reality drift (internal contradiction, superseded claims, dead refs).
   A uniform "check against live code" prompt on non-code projects = noise.
-- SURFACE: findings → a report (archive) at Knowledge/JobResults/*-ddd-self-audit.md.
-  The report is read as a semantic-drift signal by ddd_drift_signal.get_semantic_drift
-  (eval/dashboard). No Radar todo is written (run_50db230a): the ToDo card is a pure
-  user-planning surface — system self-audit findings keep their own home (the report).
+- SURFACE: a report at Knowledge/JobResults/*-ddd-self-audit.md that opens with "found N ·
+  fixed M · needs you K", lists what was fixed and what needs you, then each project's
+  review with a DRIFT_OUTCOMES block. ddd_drift_signal counts only the open findings.
+  ``config.dry_run`` checks everything, writes nothing, and names its report
+  *-ddd-self-audit-dryrun.md so no reader takes it for the real one. No Radar todo is
+  written (run_50db230a).
 
 Reuses (does NOT reimplement): the executor CLI primitives + _discover_projects +
 _write_job_result.
@@ -49,7 +53,7 @@ logger = logging.getLogger("swarm.jobs.ddd_self_audit")
 
 PROJECTS_DIR = SWARMWS / "Projects"
 
-# Read-only toolset — the structural detect-only guarantee. NEVER add Write/Edit/Bash.
+# Read-only toolset: the agent proposes, the OS writes (core/ddd_drift_fix). NEVER add Write/Edit/Bash.
 _AUDIT_TOOLS = ["Read", "Grep", "Glob"]
 
 # Per-project HANG guard (seconds) — the ONLY per-call bound this handler imposes.
@@ -142,8 +146,8 @@ def _source_repo_for(project_name: str) -> Path | None:
 
 
 def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool) -> str:
-    """Domain-aware review prompt. Instructs the agent to emit a RADAR_TODOS block so
-    findings become in-band todos; agent has Read/Grep ONLY, so it cannot fix — only report."""
+    """Domain-aware review prompt. The agent emits a RADAR_TODOS block of findings, each
+    optionally with a ``fix`` that core/ddd_drift_fix checks; it has read-only tools."""
     # ddd_path (strangler-aware): name the docs at their real location so the prompt
     # doesn't tell the agent to "Read the DDD docs" while listing none (migrated docs
     # live under 2-understanding/, not the project root).
@@ -200,23 +204,36 @@ def _build_audit_prompt(project_name: str, project_dir: Path, code_backed: bool)
 
 Docs present: {docs}. Read them under {docs_rel}/.
 
-You have Read/Grep/Glob ONLY — you CANNOT and MUST NOT edit any file. Your job is to
-REPORT drift, not fix it (the human fixes via s_persist).
+You have Read/Grep/Glob ONLY — you cannot edit any file. You PROPOSE; the system checks
+each proposed fix verbatim and applies only the certain ones.
+
+A finding MAY carry a `fix` — only when the evidence itself settles what the text must
+say. Give one only with evidence of one of these kinds (quote verbatim, one line each):
+- "done": a ticked `- [x]` checklist line showing the thing is finished;
+- "superseded": a line saying a document is superseded (its file is the evidence file);
+- "exists": the replacement points at a path that exists (`file` = that path);
+- "code": a line of the project's source code (not a test or fixture) that shows the truth.
+Another doc merely saying something different is NOT enough (it may be the stale one): give
+no fix then. Never give a fix for a dated record (a `- **Title** …` entry: it was true when
+written), for plans / current focus / dates only the owner knows, or that adds any number,
+name or path not present in your evidence quotes. `old` = the exact text on ONE line, unique
+in the doc; `new` = its replacement on one line. Prefer the smallest edit (delete the false
+part, or swap in the evidenced value).
 
 Output format — end your response with EXACTLY this block (omit entirely if you find
-NO real drift; do not invent findings to fill it). The `description` carries the
-evidence (it becomes the todo body — the whole point); `context` makes it actionable:
+NO real drift; do not invent findings to fill it):
 
 <!-- RADAR_TODOS
 [
   {{"title": "DDD drift [{project_name}/DOC.md]: <one-line what's stale>",
-    "description": "<the exact stale claim, verbatim> — why it's false: <reason> — evidence: <code location file:line OR the contradicting doc line>. Fix via s_persist.",
-    "priority": "medium",
-    "context": {{"detection_reason": "DDD self-audit semantic-drift review", "next_step": "correct the claim in {project_name}/DOC.md via s_persist"}}}}
+    "description": "<the exact stale claim, verbatim> — why it's false: <reason> — evidence: <code location file:line OR the contradicting doc line>",
+    "fix": {{"doc": "DOC.md", "old": "<verbatim, one line>", "new": "<replacement, one line>",
+            "evidence": [{{"kind": "done", "file": "PROJECT.md", "quote": "<verbatim line>"}}]}}}}
 ]
 -->
 
-At most 5 findings, highest-confidence first. If the DDD is accurate, say so in one line and emit no block."""
+`fix` is optional per finding: omit it when unsure. At most 5 findings, highest-confidence
+first. If the DDD is accurate, say so in one line and emit no block."""
 
 
 def _build_review_cmd(claude_path: str, use_bare: bool, project_name: str,
@@ -255,9 +272,61 @@ def _build_review_cmd(claude_path: str, use_bare: bool, project_name: str,
     return cmd
 
 
+def _resolve_findings(findings: list, project_name: str, project_dir: Path, src: Path | None,
+                      *, run_id: str, dry_run: bool, today: str) -> list[dict]:
+    """Each finding → fixed / would-fix / open, with the reason (core/ddd_drift_fix)."""
+    from core.ddd_drift_fix import apply_fix, first_seen, parse_fix
+
+    reports = SWARMWS / "Knowledge" / "JobResults"
+    out: list[dict] = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        title = str(f.get("title") or "")
+        fix = parse_fix(f)
+        row = {"title": title, "doc": (fix or {}).get("doc")}
+        if fix is None:
+            row.update(outcome="open", reason="no certain fix: the right content needs your judgement")
+            needle = _first_quote(str(f.get("description") or ""))
+        else:
+            try:
+                res = apply_fix(fix, project_dir, SWARMWS, src, run_id=run_id,
+                                finding_title=title, dry_run=dry_run)
+            except Exception as e:  # noqa: BLE001 — one bad fix must not stop the audit
+                logger.warning("ddd_self_audit: fix for %r failed: %s", title, e)
+                res = {"ok": False, "reason": f"the fix failed to apply ({e.__class__.__name__}); nothing changed"}
+            if res.get("ok"):
+                row.update(outcome="would-fix" if dry_run else "fixed", reason=res.get("reason"),
+                           old=fix["old"], new=fix["new"],
+                           evidence=[{"kind": e.get("kind"), "file": e.get("file")} for e in fix["evidence"]])
+            else:
+                row.update(outcome="open", reason=res.get("reason"))
+            needle = fix["old"]
+        if row["outcome"] == "open":
+            row["first_seen"] = first_seen(needle, reports, before=today)
+        out.append(row)
+    return out
+
+
+def _first_quote(text: str) -> str:
+    """The first quoted span of a finding's description (its verbatim stale claim)."""
+    m = re.search(r'"([^"]{8,200})"|“([^”]{8,200})”', text)
+    return (m.group(1) or m.group(2)) if m else ""
+
+
+def _fixed_line(project: str, o: dict) -> str:
+    ev = ", ".join(f"{e['kind']}: {e['file']}" for e in o.get("evidence") or [])
+    return f"- [{project}/{o.get('doc')}] \"{o.get('old', '')[:120]}\" → \"{o.get('new', '')[:120]}\" (evidence {ev})"
+
+
+def _open_line(project: str, o: dict) -> str:
+    seen = f" · first seen {o['first_seen']}" if o.get("first_seen") else ""
+    return f"- {o.get('title') or project} · {o.get('reason')}{seen}"
+
+
 def run_ddd_self_audit(config: dict | None = None) -> dict:
-    """Loop all DDD projects; per project, run a bounded read-only review subprocess;
-    aggregate findings into a report + per-project Radar todos. Detect-only."""
+    """Loop all DDD projects; per project, run a bounded read-only review subprocess,
+    apply the certain fixes (core/ddd_drift_fix) and write the report. ``config.dry_run``: check every fix, change no doc, write only a dry-run report."""
     # Import executor primitives lazily (avoid import cycle: executor imports handlers).
     from ..executor import (
         _resolve_claude_cli, _check_claude_auth, _get_aws_credentials,
@@ -269,6 +338,8 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
 
     start = datetime.now(timezone.utc)
     config = config or {}
+    dry_run = bool(config.get("dry_run"))
+    run_id = start.strftime("%Y%m%dT%H%M%SZ")
 
     projects = _discover_ddd_projects()
     if not projects:
@@ -317,7 +388,10 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
     use_bare = _cli_supports_bare(claude_path, cli_version)
     env = _build_cli_env(aws_creds)
 
-    report_lines = [f"# DDD Self-Audit — {start.strftime('%Y-%m-%d')}", ""]
+    report_lines = [f"# DDD Self-Audit — {start.strftime('%Y-%m-%d')}" + (" (dry run)" if dry_run else ""), ""]
+    fixed_lines: list[str] = []
+    open_lines: list[str] = []
+    n_fixed = 0
     total_findings = 0
     reviewed = 0
     first_failure: str | None = None  # the cause shown when NOTHING could be reviewed
@@ -363,22 +437,42 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         # Count ACTUAL parseable findings, not raw '"title"' substrings — a truncated
         # RADAR_TODOS block yields 0 todos downstream (_parse_structured_todos returns
         # [] on JSONDecodeError); counting substrings would over-report.
-        n_findings = len(_count_parseable_findings(result_text))
+        findings = _count_parseable_findings(result_text)
+        n_findings = len(findings)
         total_findings += n_findings
+        outcomes = _resolve_findings(findings, project_name, project_dir, src,
+                                     run_id=run_id, dry_run=dry_run, today=start.strftime("%Y-%m-%d"))
+        for o in outcomes:
+            if o["outcome"] in ("fixed", "would-fix"):
+                n_fixed += 1
+                fixed_lines.append(_fixed_line(project_name, o))
+            else:
+                open_lines.append(_open_line(project_name, o))
         header = f"## {project_name} ({kind}) — {n_findings} finding(s)"
         report_lines.append(header)
         report_lines.append(result_text.strip() or "_(no output)_")
+        if outcomes:
+            report_lines.append(f"<!-- DRIFT_OUTCOMES {json.dumps(outcomes, ensure_ascii=False)} -->")
         report_lines.append("")
 
-    report_lines.insert(2, f"Reviewed {reviewed}/{len(projects)} projects · {total_findings} drift finding(s). "
-                           f"Findings surface as a semantic-drift signal (ddd_drift_signal); "
-                           f"fix via s_persist (detect-only, no auto-edit).")
+    fixed_word = "would fix" if dry_run else "fixed"
+    headline = (f"Found {total_findings} · {fixed_word} {n_fixed} · needs you {total_findings - n_fixed}"
+                f" · reviewed {reviewed}/{len(projects)} projects")
+    summary_block = [headline, ""]
+    if fixed_lines:
+        summary_block += [f"**{'Would fix (dry run, nothing written)' if dry_run else 'Fixed automatically'}**", *fixed_lines, ""]
+    if open_lines:
+        summary_block += ["**Needs you**", *open_lines, ""]
+    report_lines[2:2] = summary_block
     report_text = "\n".join(report_lines)
     duration = (datetime.now(timezone.utc) - start).total_seconds()
 
     # Persist the report (Python writes it — the agent never had Write).
     synthetic_job = Job(
-        id="ddd-self-audit", name="DDD Self-Audit", type=JobType.DDD_SELF_AUDIT,
+        # a dry run gets its own file: it must not replace the day's real report, and
+        # ddd_drift_signal (``*-ddd-self-audit.md``) must never read its would-fix rows
+        id="ddd-self-audit-dryrun" if dry_run else "ddd-self-audit", name="DDD Self-Audit",
+        type=JobType.DDD_SELF_AUDIT,
         schedule="", config={},
         safety=JobSafety(),
     )
@@ -388,12 +482,11 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
 
     # Findings live in the report (Knowledge/JobResults/*-ddd-self-audit.md) and are
     # surfaced as a semantic-drift signal via ddd_drift_signal.get_semantic_drift
-    # (read by eval/dashboard). No Radar todo write (run_50db230a): the ToDo card is
+    # (open findings only). No Radar todo write (run_50db230a): the ToDo card is
     # a pure user-planning surface — system self-audit findings keep their own home
     # (the report), never an auto-written todo.
 
-    summary = (f"Audited {reviewed}/{len(projects)} DDD projects · {total_findings} drift finding(s) "
-               f"· report → Knowledge/JobResults/")
+    summary = f"{headline} · report → Knowledge/JobResults/"
     logger.info("ddd_self_audit complete: %s", summary)
     # Not a success if NOTHING was reviewed — every project's review failed (e.g.
     # every CLI run came back as an API error). The report still records why.
@@ -405,6 +498,8 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         "error": first_failure if status == "failed" else None,
         "projects_reviewed": reviewed,
         "findings": total_findings,
+        "fixed": n_fixed,
+        "dry_run": dry_run,
         "summary": summary,
         "output_path": str(output_path) if output_path else None,
     }

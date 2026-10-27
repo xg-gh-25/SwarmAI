@@ -1,4 +1,4 @@
-"""DDD semantic-drift signal — the read-only bridge from ddd-self-audit → eval/dashboard.
+"""DDD semantic-drift signal — the read-only reader of the ddd-self-audit report (open findings).
 
 Closes the DDD-drift → eval feedback loop (option B-minimal, run_562f45c7). The weekly
 `ddd_self_audit` job produces a per-project SEMANTIC-drift report (internal
@@ -31,6 +31,7 @@ RADAR_TODOS JSON parser the producer uses, so read and write stay in lock-step.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -48,6 +49,21 @@ _DOC_RE = re.compile(r"[A-Za-z_]+\.md")
 # or "## AIDLC — ⚠️ review failed". We split on these to attribute each RADAR_TODOS
 # block to the project section that precedes it.
 _SECTION_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
+# Since 2026-10-27 the self-audit fixes the certain findings itself and records each
+# finding's outcome per project (jobs/handlers/ddd_self_audit). A fixed one is no
+# longer drift; a report without the block (older) counts every finding.
+_OUTCOMES_RE = re.compile(r"<!--\s*DRIFT_OUTCOMES\s*(\[.*?\])\s*-->", re.DOTALL)
+
+
+def _fixed_titles(block: str) -> set[str]:
+    m = _OUTCOMES_RE.search(block)
+    if not m:
+        return set()
+    try:
+        rows = json.loads(m.group(1))
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    return {str(r.get("title")) for r in rows if isinstance(r, dict) and r.get("outcome") == "fixed"}
 
 
 def _latest_report(root: Path) -> Path | None:
@@ -117,10 +133,13 @@ def get_semantic_drift(root: Path | str) -> dict:
         # Section header project: "PhysicalAI (non-code) — 1 finding(s)" → "PhysicalAI".
         section_project = sec.group(1).split("(")[0].split("—")[0].split(" - ")[0].strip()
 
+        fixed = _fixed_titles(block)
         for f in _count_parseable_findings(block):  # [] for failed/timed-out/0-finding
             if not isinstance(f, dict):
                 continue
             title = f.get("title", "") or ""
+            if title in fixed:
+                continue  # fixed by the audit itself: no longer drift
             tag_project, docs = _parse_doc_targets(title)
             findings.append({
                 "project": tag_project,  # None when the LLM title lacked a [proj/doc] tag

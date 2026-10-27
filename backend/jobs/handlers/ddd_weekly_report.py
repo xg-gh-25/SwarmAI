@@ -88,6 +88,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
 
     # Gather data per project
     all_applied = []
+    all_drift_fixes = []
     all_escalations = []
     project_health = {}
 
@@ -95,6 +96,8 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
         # Read changelog
         applied = _read_changelog(project_dir, cutoff)
         all_applied.extend([(project_name, e) for e in applied])
+        # drift corrections the self-audit applied (their own log: not lessons, not counted as applied)
+        all_drift_fixes.extend([(project_name, e) for e in _read_changelog(project_dir, cutoff, name="ddd-drift-fixes.jsonl")])
 
         # Read pending escalations
         escalations = _read_escalations(project_dir)
@@ -106,7 +109,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
 
     # Generate report
     report = _generate_report(
-        all_applied, all_escalations, project_health, window_days
+        all_applied, all_escalations, project_health, window_days, drift_fixes=all_drift_fixes
     )
 
     # Write output
@@ -117,7 +120,7 @@ def run_ddd_weekly_report(config: dict | None = None) -> dict:
     output_path.write_text(report, encoding="utf-8")
 
     summary = (
-        f"{len(all_applied)} applied, {len(all_escalations)} escalations, "
+        f"{len(all_applied)} applied, {len(all_drift_fixes)} drift fixes, {len(all_escalations)} escalations, "
         f"{len(projects)} projects scanned"
     )
     logger.info("DDD weekly report: %s → %s", summary, output_path)
@@ -141,9 +144,10 @@ def _discover_projects() -> list[tuple[str, Path]]:
     return projects
 
 
-def _read_changelog(project_dir: Path, cutoff: datetime) -> list[dict]:
-    """Read changelog entries newer than cutoff."""
-    changelog_path = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+def _read_changelog(project_dir: Path, cutoff: datetime, name: str = "ddd-changelog.jsonl") -> list[dict]:
+    """Read entries newer than cutoff from a project's ``.artifacts/<name>`` JSONL log
+    (the cultivation changelog, or the self-audit's drift-fix log)."""
+    changelog_path = project_dir / ".artifacts" / name
     if not changelog_path.exists():
         return []
 
@@ -209,6 +213,7 @@ def _generate_report(
     escalations: list[tuple[str, dict]],
     health: dict[str, dict],
     window_days: int,
+    drift_fixes: "list[tuple[str, dict]] | tuple" = (),
 ) -> str:
     """Generate an MBR-style weekly DDD report with narrative + judgment.
 
@@ -397,6 +402,18 @@ def _generate_report(
             lines.append(
                 f"- `{_md_cell(proj)}` — {_md_cell(doc)} § **{_md_cell(section)}**"
             )
+        lines.append("")
+
+    # ─── Drift fixed by the self-audit (ddd-drift-fixes.jsonl) ───
+    if drift_fixes:
+        lines.append(f"## Drift Fixed Automatically ({len(drift_fixes)})")
+        lines.append("")
+        lines.append("| # | Project | Doc | Was | Now | Evidence |")
+        lines.append("|---|---------|-----|-----|-----|----------|")
+        for i, (proj, e) in enumerate(sorted(drift_fixes, key=lambda x: x[1].get("timestamp", ""), reverse=True), 1):
+            ev = ", ".join(f"{x.get('kind')}: {x.get('file')}" for x in (e.get("evidence") or []) if isinstance(x, dict))
+            lines.append(f"| {i} | {_md_cell(proj)} | {_md_cell(e.get('target_doc', '?'))} | "
+                         f"{_md_cell(str(e.get('old', ''))[:80])} | {_md_cell(str(e.get('new', ''))[:80])} | {_md_cell(ev)} |")
         lines.append("")
 
     # ─── What Changed (detailed log) ───
