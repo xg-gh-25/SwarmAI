@@ -131,25 +131,43 @@ def _lessons_leg(workspace: Path, repo_roots: Mapping[str, str]) -> list[dict]:
     return out
 
 
-_SKIP_KEYS = frozenset({"id", "knowledge_refs", "refs", "requirement_ids", "status"})
+# The free-text fields of the REQUIREMENTS schema (schemas.validate_requirements).
+# An allowlist, not a denylist of enum keys: a field the schema adds later stays out
+# of the query until it is named here. ``root_cause`` is a free-form object, so every
+# string inside it is prose.
+_PROSE_KEYS = frozenset({"story", "condition", "response", "text", "note",
+                         "question", "answer", "claim", "readings", "evidence"})
+_FREE_FORM_KEYS = frozenset({"root_cause"})
 
 
 def requirements_text(value: Any, limit: int = 4000) -> str:
-    """The prose of a REQUIREMENTS document (every string value, ids and refs left
-    out), for the design recall's query."""
+    """The prose of a REQUIREMENTS document for the design recall's query: the
+    schema's free-text fields only, so enum values (EARS pattern, analysis kind,
+    resolution, answered_by), ids and refs never become search words."""
     out: list[str] = []
 
-    def walk(v: Any, key: str = "") -> None:
-        if key in _SKIP_KEYS:
-            return
+    def strings(v: Any) -> None:
         if isinstance(v, str):
             out.append(v)
         elif isinstance(v, Mapping):
-            for k, w in v.items():
-                walk(w, str(k))
+            for w in v.values():
+                strings(w)
         elif isinstance(v, (list, tuple)):
             for w in v:
-                walk(w, key)
+                strings(w)
+
+    def walk(v: Any) -> None:
+        if isinstance(v, Mapping):
+            for k, w in v.items():
+                if k in _FREE_FORM_KEYS:
+                    strings(w)
+                elif k in _PROSE_KEYS and not isinstance(w, Mapping):
+                    strings(w)
+                else:
+                    walk(w)
+        elif isinstance(v, (list, tuple)):
+            for w in v:
+                walk(w)
     walk(value)
     return " ".join(out)[:limit]
 
