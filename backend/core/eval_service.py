@@ -587,10 +587,11 @@ class EvalService:
     # ─── LLM judges (design §8 item 6) ─────────────────────────────────────
 
     def get_judges(self) -> dict:
-        """The two judges as they run: model, prompt text, settings, which cases
-        use them and how the online judge agrees with the owner. The prompts are
-        the module constants the runs format (eval_runner.DECISION_JUDGE_PROMPT,
-        session_scorer.JUDGE_PROMPT), so this page cannot drift from the run."""
+        """The two judges as they run: model, prompt text, answer schema, settings,
+        which cases use them and how the online judge agrees with the owner. The
+        prompts and schemas are the module constants the runs use
+        (eval_runner.DECISION_JUDGE_PROMPT / _SCHEMA, session_scorer.JUDGE_PROMPT /
+        JUDGE_SCHEMA), so this page cannot drift from the run."""
         from core import session_scorer as ss
         from core.app_config_manager import AppConfigManager
         from core.eval_release import tier_of
@@ -616,12 +617,14 @@ class EvalService:
             "judges": [
                 {"id": "offline_decision", "line": "offline",
                  "prompt": _shown(er.DECISION_JUDGE_PROMPT), "system": er.DECISION_JUDGE_SYSTEM,
+                 "schema": er.DECISION_JUDGE_SCHEMA,
                  "temperature": er.DECISION_JUDGE_TEMPERATURE,
                  "max_tokens": er.DECISION_JUDGE_MAX_TOKENS,
                  "case_ids": sorted(c["id"] for c in judged if c.get("decision_rubric")),
                  "calibration": None},
                 {"id": "online_session", "line": "online",
                  "prompt": _shown(ss.JUDGE_PROMPT), "system": ss.JUDGE_SYSTEM,
+                 "schema": ss.JUDGE_SCHEMA,
                  "temperature": ss.JUDGE_TEMPERATURE, "max_tokens": ss.JUDGE_MAX_TOKENS,
                  "sample_cap": sq._SAMPLE_CAP, "low_threshold": sq._LOW_SCORE_THRESHOLD,
                  "prompt_sha": ss.JUDGE_PROMPT_SHA,

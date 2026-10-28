@@ -402,8 +402,8 @@ def test_the_default_judge_is_asked_for_the_reason_in_the_users_language(tmp_pat
     import core.session_scorer as ss
 
     prompts = []
-    monkeypatch.setattr(ss, "default_judge_fn", lambda p: (prompts.append(p), json.dumps(
-        {"goal_score": 0.2, "tool_score": 0.2, "dimension": "quality", "reason": "没交付"}))[1])
+    monkeypatch.setattr(ss, "default_judge_fn", lambda p: (prompts.append(p),
+        {"goal_score": 0.2, "tool_score": 0.2, "dimension": "quality", "reason": "没交付"})[1])
     corr = [{"type": "user_correction", "session_id": "a", "ts": (NOW - timedelta(days=1)).timestamp()}]
     cpath = tmp_path / "c.jsonl"
     cpath.write_text(json.dumps(corr[0]) + "\n")

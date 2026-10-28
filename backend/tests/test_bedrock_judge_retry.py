@@ -33,6 +33,12 @@ def _valid_converse_response(text='{"verdict": "passed", "confidence": 0.9, "not
     return {"output": {"message": {"content": [{"text": text}]}}}
 
 
+def _verdict_tool_response(answer):
+    """A converse() reply whose answer is a call to the judges' forced "verdict" tool."""
+    return {"stopReason": "tool_use", "output": {"message": {"content": [
+        {"toolUse": {"toolUseId": "t", "name": "verdict", "input": answer}}]}}}
+
+
 def _auth_error():
     # Mirrors the real nightly failure string (account-assume failure).
     return Exception(
@@ -166,7 +172,7 @@ def test_eval_llm_judge_self_heals_on_transient_auth_error():
     # auth error on first converse, valid judge verdict on retry
     client.converse.side_effect = [
         _auth_error(),
-        _valid_converse_response('{"verdict": "passed", "assertion_results": [], "confidence": 0.95, "notes": "self-healed"}'),
+        _verdict_tool_response({"verdict": "passed", "assertion_results": [], "confidence": 0.95, "notes": "self-healed"}),
     ]
 
     case = {
@@ -326,7 +332,7 @@ def test_build_timeout_client_config_and_no_cache_mutation():
 
 
 def test_eval_llm_judge_uses_failfast_timeout_and_keeps_throttle_retry():
-    """The REAL judge passes read_timeout=30 (anti-hang) AND max_attempts=2
+    """The REAL judge passes read_timeout=60 (anti-hang) AND max_attempts=2
     (Gate-2: keep boto throttle-retry) to the throwaway client."""
     import importlib.util
 
@@ -341,7 +347,7 @@ def test_eval_llm_judge_uses_failfast_timeout_and_keeps_throttle_retry():
 
     def _capturing_converse(**kwargs):
         captured.update(kwargs)
-        return _valid_converse_response('{"verdict": "passed", "assertion_results": [], "confidence": 0.9, "notes": "ok"}')
+        return _verdict_tool_response({"verdict": "passed", "assertion_results": [], "confidence": 0.9, "notes": "ok"})
 
     case = {
         "id": "GS_TEST_FFCFG",
@@ -354,5 +360,5 @@ def test_eval_llm_judge_uses_failfast_timeout_and_keeps_throttle_retry():
         result = eval_runner.eval_llm_judge(case, "goal_success")
 
     assert result["status"] == "passed"
-    assert captured.get("read_timeout") == 30, "judge must use the 30s fail-fast read timeout"
+    assert captured.get("read_timeout") == 60, "judge must use the 60s fail-fast read timeout"
     assert captured.get("max_attempts") == 2, "judge must keep boto throttle-retry (Gate-2 MEDIUM)"

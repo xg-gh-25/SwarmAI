@@ -1261,86 +1261,38 @@ INSTRUCTIONS:
 - Be generous: if the context exists and reasonably covers the assertion, it passes.
 - Knowledge files listed in affected_by ARE accessible to the agent via Read tool.
 
-Respond in this exact JSON format:
-{{
-  "verdict": "passed" or "failed",
-  "assertion_results": [
-    {{"assertion": "...", "result": "pass" or "fail", "reasoning": "brief why"}}
-  ],
-  "confidence": 0.0 to 1.0,
-  "notes": "one-line summary"
-}}"""
+Record your verdict with the verdict tool: first each assertion with pass or fail and a brief why, then the verdict, your confidence from 0.0 to 1.0, and a one-line summary in notes."""
 
     try:
-        judge_model = _get_judge_model()
-
-        # Credential-resilient judge call: converse_with_retry evicts the cached
-        # client + retries once on a transient credential/auth error, so a stale
-        # cred moment self-heals instead of zeroing every LLM-judged case (the
-        # 2026-06-28 nightly errored 90/147, all "unable to assume credentials").
-        # Region: preserve the judge's prior env-first precedence (AWS_REGION /
-        # AWS_DEFAULT_REGION else us-east-1) — do NOT silently switch to the
-        # AppConfigManager region get_client defaults to (Gate-1 mitigation).
-        # (backend/ is already on sys.path — inserted at module import for
-        # model_registry; see the top of this file.)
-        from jobs.bedrock import converse_with_retry
-
-        _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
-
-        response = converse_with_retry(
-            messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
-            system=[{"text": "You are a precise eval judge. Respond only with the requested JSON."}],
-            inference_config={"maxTokens": 1000, "temperature": 0.0},
-            model_id=judge_model,
-            region=_judge_region,
-            read_timeout=_JUDGE_READ_TIMEOUT,  # fail-fast: throwaway client, one hung judge can't blow the wall
-            max_attempts=_JUDGE_MAX_ATTEMPTS,
-        )
-
-        # Extract text response
-        output = response.get("output", {})
-        message = output.get("message", {})
-        content_blocks = message.get("content", [])
-        response_text = ""
-        for block in content_blocks:
-            if "text" in block:
-                response_text = block["text"]
-                break
-
-        if not response_text:
-            # Infra failure, NOT a legit skip — surface as error (red light).
-            return {"status": "error", "notes": "Judge returned empty response"}
-
-        # Parse JSON from response (handle markdown code blocks)
-        json_text = response_text.strip()
-        if json_text.startswith("```"):
-            # Strip markdown fences
-            lines = json_text.split("\n")
-            json_text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-        judge_result = json.loads(json_text)
-        verdict = judge_result.get("verdict", "failed")
-        confidence = _coerce_conf(judge_result.get("confidence", 0.0))
-        notes = judge_result.get("notes", "")
-
-        return {
-            "status": "passed" if verdict == "passed" else "failed",
-            "notes": f"[confidence={confidence:.2f}] {notes}",
-            "judge_detail": judge_result,
-        }
-
+        from jobs.bedrock import StructuredOutputError, structured
     except ImportError:
         # Judge infra unavailable = misconfiguration, not a legit skip. Red light.
         return {"status": "error", "notes": "Bedrock client not available (missing boto3 or core module)"}
-    except json.JSONDecodeError as e:
-        return {"status": "error", "notes": f"Judge response not valid JSON: {str(e)[:100]}"}
+    try:
+        # Credential-resilient judge call: converse_with_retry (inside structured())
+        # evicts the cached client + retries once on a transient credential/auth error,
+        # so a stale cred moment self-heals instead of zeroing every LLM-judged case
+        # (the 2026-06-28 nightly errored 90/147, all "unable to assume credentials").
+        judge_result = structured(
+            judge_prompt, schema=RUBRIC_JUDGE_SCHEMA, system=RUBRIC_JUDGE_SYSTEM,
+            model_id=_get_judge_model(), max_tokens=RUBRIC_JUDGE_MAX_TOKENS,
+            temperature=0.0, name="verdict", description="Record the verdict on the case.",
+            region=_judge_region(), read_timeout=_JUDGE_READ_TIMEOUT,
+            max_attempts=_JUDGE_MAX_ATTEMPTS,
+        )
+    except StructuredOutputError as e:
+        return {"status": "error", "notes": _unusable_reply_note("Judge", e)}
     except Exception as e:
-        error_msg = str(e)[:200]
         # Auth errors, throttling, invalid model ID, etc. These previously
         # returned "skipped" → silently dropped by compute_scores → a clean
         # 100/100 while every LLM-judge case never actually ran. Surface as
         # error so the briefing/canary turn red instead of lying green.
-        return {"status": "error", "notes": f"Judge call failed: {error_msg}"}
+        return {"status": "error", "notes": f"Judge call failed: {str(e)[:200]}"}
+    return {
+        "status": "passed" if judge_result["verdict"] == "passed" else "failed",
+        "notes": f"[confidence={judge_result['confidence']:.2f}] {judge_result['notes']}",
+        "judge_detail": judge_result,
+    }
 
 
 # ─── Case Dispatch ────────────────────────────────────────────────────────────
@@ -1353,11 +1305,11 @@ LLM_EVALUATORS = {"goal_success", "quality_score"}
 # Fail-fast read timeout (seconds) for the LLM judge's Bedrock call. The shared
 # cached client uses 120s (skill proposals need 60-90s), but the judge runs in a
 # SERIAL sweep of ~89 cases — a single hung judge on the 120s client blows the
-# per-case tail. 30s is ample for a judgment call (temperature=0, ≤1000 tokens)
-# and bounds the tail (read_timeout is the anti-hang lever, NOT retry count).
-# Wired via converse_with_retry(read_timeout=…), which uses a THROWAWAY client so
-# the shared 120s client is untouched (run_9fdb8ad5).
-_JUDGE_READ_TIMEOUT = 30
+# per-case tail. 60s covers a judgment call writing its reasoning (temperature=0,
+# ≤DECISION_JUDGE_MAX_TOKENS output) and bounds the tail (read_timeout is the
+# anti-hang lever, NOT retry count). Wired via converse_with_retry(read_timeout=…),
+# which uses a THROWAWAY client so the shared 120s client is untouched.
+_JUDGE_READ_TIMEOUT = 60
 # Keep boto's throttle-absorbing retry (max_attempts=2) on the throwaway client —
 # read_timeout bounds the hang; max_attempts guards ThrottlingException. Gate-2
 # MEDIUM: max_attempts=1 would red a judge on a transient Bedrock-side throttle
@@ -1369,16 +1321,16 @@ _JUDGE_MAX_ATTEMPTS = 2
 BEHAVIOR_EVALUATORS = {"trajectory_capture"}
 
 
-def _coerce_conf(v) -> float:
-    """Coerce an LLM-judge confidence to float for :.2f formatting. Judges
-    occasionally return it as a string ("0.92") or a non-numeric token; a bare
-    float() would raise into the swallowing except and mis-report a clean verdict
-    as 'error' (run_e6921209 / 2026-07-01 GS_TRAJ_DECISION_NEGATIVE_CONTROL).
-    Non-numeric → 0.0: confidence is display-only, never used in scoring."""
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return 0.0
+def _judge_region() -> str:
+    """The judges' region: AWS_REGION, then AWS_DEFAULT_REGION, else us-east-1."""
+    return os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+
+
+def _unusable_reply_note(who: str, e) -> str:
+    """The notes of a case whose judge reply was not a usable answer: which kind
+    (truncated / missing / invalid), why, and how the reply started."""
+    start = " ".join((e.raw or "").split())[:200]
+    return f"{who} reply {e.kind}: {e.detail}" + (f"; reply starts: {start}" if start else "")
 
 
 # The offline decision judge: its prompt and settings are module constants so a run
@@ -1395,11 +1347,44 @@ AGENT'S ACTUAL FINAL ANSWER:
 
 Judge the DIRECTION/STANCE of the recommendation, not whether keywords appear. An answer that NAMES an option while recommending AGAINST it does NOT recommend that option.
 
-Respond in this exact JSON format:
-{{"verdict": "passed" or "failed", "confidence": 0.0 to 1.0, "notes": "one-line: what did it actually recommend"}}"""
-DECISION_JUDGE_SYSTEM = "You are a precise eval judge. Respond only with the requested JSON."
+Record your verdict with the verdict tool: first your reasoning (check the answer against each condition of the rubric), then the verdict, your confidence from 0.0 to 1.0, and one line of notes on what the answer actually did."""
+DECISION_JUDGE_SYSTEM = "You are a precise eval judge. Answer only through the verdict tool."
 DECISION_JUDGE_TEMPERATURE = 0.0
-DECISION_JUDGE_MAX_TOKENS = 400
+# Room for reasoning over a long rubric and a 12-entry answer: at 400 the judge was cut
+# before its verdict. A reply that still reaches the limit is reported as truncated.
+DECISION_JUDGE_MAX_TOKENS = 2000
+# The judges answer through jobs.bedrock.structured() (design
+# docs/design/2026-10-28-structured-model-output.md). reasoning comes first so the
+# analysis is part of the answer instead of crowding it out.
+DECISION_JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["passed", "failed"]},
+        "confidence": {"type": "number"},
+        "notes": {"type": "string"},
+    },
+    "required": ["reasoning", "verdict", "confidence", "notes"],
+}
+# The rubric judge (eval_llm_judge): its own settings, so a change to the decision
+# judge's never changes it too. Each assertion first, then the verdict.
+RUBRIC_JUDGE_SYSTEM = "You are a precise eval judge. Answer only through the verdict tool."
+RUBRIC_JUDGE_MAX_TOKENS = 2000
+RUBRIC_JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "assertion_results": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"assertion": {"type": "string"},
+                           "result": {"type": "string", "enum": ["pass", "fail"]},
+                           "reasoning": {"type": "string"}},
+            "required": ["assertion", "result", "reasoning"]}},
+        "verdict": {"type": "string", "enum": ["passed", "failed"]},
+        "confidence": {"type": "number"},
+        "notes": {"type": "string"},
+    },
+    "required": ["assertion_results", "verdict", "confidence", "notes"],
+}
 
 
 # How much of the agent's answer the decision judge reads. A New Brain case answers with
@@ -1434,44 +1419,30 @@ def _judge_decision_direction(case: dict, final_text: str) -> dict:
     judge_prompt = DECISION_JUDGE_PROMPT.format(rubric=rubric, final_text=final_text[:_JUDGE_TEXT_MAX])
 
     try:
-        judge_model = _get_judge_model()
-        # Credential-resilient judge call (see eval_llm_judge for rationale):
-        # evict+retry-once on transient auth error; env-first region preserved.
         # (backend/ is already on sys.path — inserted at module import for
         # model_registry; see the top of this file.)
-        from jobs.bedrock import converse_with_retry
-        _judge_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
-        response = converse_with_retry(
-            messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
-            system=[{"text": DECISION_JUDGE_SYSTEM}],
-            inference_config={"maxTokens": DECISION_JUDGE_MAX_TOKENS,
-                              "temperature": DECISION_JUDGE_TEMPERATURE},
-            model_id=judge_model,
-            region=_judge_region,
-            read_timeout=_JUDGE_READ_TIMEOUT,  # fail-fast: throwaway client, one hung judge can't blow the wall
-            max_attempts=_JUDGE_MAX_ATTEMPTS,
-        )
-        blocks = response.get("output", {}).get("message", {}).get("content", [])
-        response_text = next((b["text"] for b in blocks if "text" in b), "")
-        if not response_text:
-            return {"status": "error", "notes": "decision judge returned empty response"}
-        jt = response_text.strip()
-        if jt.startswith("```"):
-            ls = jt.split("\n")
-            jt = "\n".join(ls[1:-1] if ls[-1].strip() == "```" else ls[1:])
-        jr = json.loads(jt)
-        verdict = jr.get("verdict", "failed")
-        return {
-            "status": "passed" if verdict == "passed" else "failed",
-            "notes": f"[decision-judge conf={_coerce_conf(jr.get('confidence', 0.0)):.2f}] {jr.get('notes', '')}",
-            "judge_detail": jr,
-        }
+        from jobs.bedrock import StructuredOutputError, structured
     except ImportError:
         return {"status": "error", "notes": "decision judge: Bedrock client unavailable"}
-    except json.JSONDecodeError as e:
-        return {"status": "error", "notes": f"decision judge: bad JSON: {str(e)[:80]}"}
+    try:
+        # Credential-resilient, fail-fast (see eval_llm_judge); env-first region.
+        jr = structured(
+            judge_prompt, schema=DECISION_JUDGE_SCHEMA, system=DECISION_JUDGE_SYSTEM,
+            model_id=_get_judge_model(), max_tokens=DECISION_JUDGE_MAX_TOKENS,
+            temperature=DECISION_JUDGE_TEMPERATURE, name="verdict",
+            description="Record the verdict on the agent's answer.",
+            region=_judge_region(), read_timeout=_JUDGE_READ_TIMEOUT,
+            max_attempts=_JUDGE_MAX_ATTEMPTS,
+        )
+    except StructuredOutputError as e:
+        return {"status": "error", "notes": _unusable_reply_note("decision judge", e)}
     except Exception as e:
         return {"status": "error", "notes": f"decision judge call failed: {str(e)[:120]}"}
+    return {
+        "status": "passed" if jr["verdict"] == "passed" else "failed",
+        "notes": f"[decision-judge conf={jr['confidence']:.2f}] {jr['notes']}",
+        "judge_detail": jr,
+    }
 
 
 _RECORD_STEPS = 30

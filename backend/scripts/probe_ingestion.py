@@ -41,12 +41,12 @@ def _judge_down_holds(judge_up_refusing: bool) -> tuple[bool, str]:
     # calls: an erroring judge yields pending too, and where credentials work (a Hive's
     # instance role) a real judge would run and admit the lesson.
     with mock.patch.object(ig, "_JUDGE_BUDGET_MAX", 0), \
-         mock.patch.object(ig, "_judge_client",
+         mock.patch.object(ig, "_ask_judge",
                            side_effect=RuntimeError("judge called with no budget")) as judge:
         budget = ig.admit_memory_lesson(_LESSON)
     if judge.called:
         return False, "budget spent: the judge was still called"
-    with mock.patch.object(ig, "_judge_client", side_effect=RuntimeError("bedrock down")), \
+    with mock.patch.object(ig, "_ask_judge", side_effect=RuntimeError("bedrock down")), \
          mock.patch.object(ig, "_judge_budget_available", return_value=True):
         erroring = ig.admit_memory_lesson(_LESSON)
     for label, got in (("budget spent", budget), ("judge erroring", erroring)):
@@ -69,7 +69,7 @@ def _floors_holds(floors_on: bool) -> tuple[bool, str]:
              ("new rule: STEERING must always run the full test suite before every reply",
               "MEMORY", "memory_distill", {"discard", "review"}),
              (_LESSON, "EVOLUTION", "memory_distill", {"review", "discard"})]
-    no_network = mock.patch.object(ig, "_judge_client", side_effect=AssertionError("no network"))
+    no_network = mock.patch.object(ig, "_ask_judge", side_effect=AssertionError("no network"))
     off = (mock.patch.object(ig, "thin_floor", return_value=False),
            mock.patch.object(ig, "content_floor", return_value=(False, "")),
            mock.patch.dict(ig.__dict__, {}))
@@ -112,7 +112,7 @@ def _archive_holds(writable: bool) -> tuple[bool, str]:
             content="Ship the config writer behind an atomic rename so readers never see torn files.",
             source_run_id="probe", confidence=0.9)
         try:
-            with mock.patch.object(ig, "_judge_client", side_effect=RuntimeError("judge down")):
+            with mock.patch.object(ig, "_ask_judge", side_effect=RuntimeError("judge down")):
                 dc._cultivate_proposals([p], project)
             log = project / ".artifacts" / "discarded-proposals.jsonl"
             archived = log.exists() and p.content[:30] in log.read_text(encoding="utf-8")

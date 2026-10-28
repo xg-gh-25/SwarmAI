@@ -187,3 +187,39 @@ def test_the_error_kinds_are_closed() -> None:
     with pytest.raises(ValueError):
         b.StructuredOutputError("weird")
     assert len(b.StructuredOutputError("invalid", "x" * 5000).raw) == b._RAW_KEEP
+
+
+@pytest.mark.parametrize("bad", ["NaN", "nan", "Infinity", "-inf", "1e400", float("nan"), float("inf"), "0x10", "1_0"])
+def test_a_number_must_be_finite_decimal(client, bad) -> None:
+    # A NaN score would read as a perfect one (min(1.0, nan) is 1.0).
+    client(_tool_reply({**GOOD, "confidence": bad}))
+    with pytest.raises(b.StructuredOutputError) as e:
+        b.structured("p", schema=VERDICT, model_id="m", max_tokens=9)
+    assert e.value.kind == "invalid" and "$.confidence" in e.value.detail
+
+
+@pytest.mark.parametrize("given, want", [("7", 7), (" 7 ", 7), (7.0, 7), (7, 7)])
+def test_an_integer_may_be_written_as_text_or_a_whole_float(client, given, want) -> None:
+    schema = {"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}}
+    client(_tool_reply({"n": given}))
+    got = b.structured("p", schema=schema, model_id="m", max_tokens=9)["n"]
+    assert got == want and type(got) is int
+
+
+@pytest.mark.parametrize("given", ["7.5", "1_000", 7.5, True])
+def test_a_non_integer_is_refused(client, given) -> None:
+    schema = {"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}}
+    client(_tool_reply({"n": given}))
+    with pytest.raises(b.StructuredOutputError):
+        b.structured("p", schema=schema, model_id="m", max_tokens=9)
+
+
+@pytest.mark.parametrize("schema", [
+    {"type": ["string", "null"]},
+    {"type": "object", "required": "ab"},
+    {"type": "object", "properties": [{"type": "string"}]},
+    {"type": "string", "enum": "ab"},
+])
+def test_a_malformed_schema_is_a_value_error(schema) -> None:
+    with pytest.raises(ValueError):
+        b._check_schema(schema)

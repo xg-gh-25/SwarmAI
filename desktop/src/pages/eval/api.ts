@@ -213,6 +213,8 @@ export interface JudgeInfo {
   system: string;
   temperature: number;
   max_tokens: number;
+  /** The JSON schema of the judge's answer (the API returns an object of this shape). */
+  schema?: Record<string, unknown>;
   case_ids?: string[];
   sample_cap?: number;
   low_threshold?: number;

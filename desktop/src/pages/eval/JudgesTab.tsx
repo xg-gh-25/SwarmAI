@@ -71,7 +71,7 @@ export function JudgesTab() {
       {offline && <JudgeCard j={offline} model={J.judge_model} title={t('Offline decision judge', '离线判决 judge')} where={t('step two of an offline case', '离线考题的第二步')} rows={[
         [t('Judges', '判什么'), t('whether the agent’s final answer in the sample workspace meets the case’s rubric', 'agent 在样例工作区里的最终回答，是否满足这条 case 的判定标准')],
         [t('Sees', '拿到什么'), t('the rubric and the final answer (first 12000 characters); no tool record, no rule files', '判定标准 + agent 的最终回答（前 12000 字）；不给工具记录，不给规则文件')],
-        [t('Returns', '给出什么'), t('pass / fail, a confidence, one line on what it actually recommended', '通过 / 不通过 + 置信度 + 一句话说明它实际推荐了什么')],
+        [t('Returns', '给出什么'), t('its reasoning against each condition of the rubric, pass / fail, a confidence, one line on what the answer actually did', '逐条对照判定标准的分析 + 通过 / 不通过 + 置信度 + 一句话说明回答实际做了什么')],
         [t('Called', '什么时候调'), t('only after the trajectory check passes', '只在轨迹检查通过之后；轨迹没过直接判不通过')],
         [t('Used by', '用在'), (offline.case_ids ?? []).join(', ') || '—'],
       ]} />}
@@ -121,8 +121,12 @@ function JudgeCard({ j, model, title, where, rows }: { j: JudgeInfo; model: stri
       <div className="flex items-baseline gap-3 mb-3"><b className="text-heading text-[var(--color-text)]">{title}</b><span className="text-small text-[var(--color-text-dim)]">{where}</span></div>
       <KV rows={[...rows, [t('Settings', '设置'), `${model} · temperature ${j.temperature} · ${t('max output', '最多输出')} ${j.max_tokens} tokens`]]} />
       <details className="mt-3">
-        <summary className="cursor-pointer text-small text-[var(--color-text-muted)]">{t('The full prompt (every call uses this one; changing it changes the scoring)', '看完整 prompt（每次调用都用这一份，改它就是改评分标准）')}</summary>
+        <summary className="cursor-pointer text-small text-[var(--color-text-muted)]">{t('The full prompt and answer format (every call uses these; changing them changes the scoring)', '看完整 prompt 和回答格式（每次调用都用这一份，改它就是改评分标准）')}</summary>
         <pre className="mt-2 text-meta whitespace-pre-wrap bg-[var(--color-hover)] rounded p-3 text-[var(--color-text)]">{j.system}{'\n\n'}{j.prompt}</pre>
+        {j.schema && <>
+          <div className="mt-3 text-small text-[var(--color-text-muted)]">{t('Answer format: the judge must answer with an object of this shape (enforced by the API, not asked in the prompt)', '回答格式：judge 必须按这个结构回答（由 API 强制，不是在 prompt 里要求）')}</div>
+          <pre data-testid={`judge-schema-${j.id}`} className="mt-1 text-meta whitespace-pre-wrap bg-[var(--color-hover)] rounded p-3 text-[var(--color-text)]">{JSON.stringify(j.schema, null, 2)}</pre>
+        </>}
       </details>
     </div>
   );

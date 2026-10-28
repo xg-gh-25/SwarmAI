@@ -37,6 +37,12 @@ class TestAnalyze:
         # only the two infra-failure suspects count as fail-closed
         assert s["fail_closed"] == 2
 
+    def test_an_unusable_reply_counts_as_fail_closed(self):
+        # judge_output:<truncated|missing|invalid> means no judgment was made, like an
+        # infra error; it must not be counted as a real suspect verdict.
+        rows = [_row("suspect", reason=f"judge_output:{k}") for k in ("truncated", "missing", "invalid")]
+        assert analyze(rows + [_row("suspect", reason="too vague")])["fail_closed"] == 3
+
     def test_discarded_collects_suspect_and_noise(self):
         rows = [_row("pass"), _row("suspect"), _row("noise")]
         s = analyze(rows)

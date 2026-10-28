@@ -7,27 +7,29 @@ dimension. Unlike eval_llm_judge (static contract analysis: "would the agent's
 rules produce X"), this judges the ACTUAL output that already happened.
 
 Key invariants tested:
-- judge_fn is injected → no Bedrock call in tests
+- judge_fn is injected → no Bedrock call in tests; it returns the judge's answer
+  (a dict shaped by JUDGE_SCHEMA, see default_judge_fn) or raises
+  StructuredOutputError for an unusable reply
 - returns {goal_score, tool_score, dimension, reason} with scores in [0,1]
-- malformed judge output fails closed (never fabricates a passing score)
+- an unusable judge reply fails closed (never fabricates a passing score)
 - empty session (no prompt) is skipped, not scored
 """
 from __future__ import annotations
 
-import json
+import pytest
 
 from core.session_scorer import score_session
+from jobs.bedrock import StructuredOutputError
 
 
-def _fake_judge(payload: dict):
-    """A fake judge_fn: returns a canned JSON verdict. Signature mirrors the
-    real converse-style boundary (takes a prompt str, returns text str)."""
-    return json.dumps({
+def _fake_judge(payload: str) -> dict:
+    """A fake judge_fn: returns a canned answer (the shape default_judge_fn returns)."""
+    return {
         "goal_score": 0.4,
         "tool_score": 0.3,
-        "dimension": "capability",
+        "dimension": "quality",
         "reason": "agent selected Grep when Read was needed; goal not met",
-    })
+    }
 
 
 def test_score_session_returns_two_axis_scores():
@@ -40,7 +42,7 @@ def test_score_session_returns_two_axis_scores():
     assert set(r.keys()) >= {"goal_score", "tool_score", "dimension", "reason"}
     assert 0.0 <= r["goal_score"] <= 1.0
     assert 0.0 <= r["tool_score"] <= 1.0
-    assert r["dimension"] == "quality"   # "capability" is an older token for quality
+    assert r["dimension"] == "quality"
     assert r["reason"]  # non-empty
 
 
@@ -57,16 +59,15 @@ def test_score_session_empty_prompt_skipped():
     assert r.get("status") == "skipped"
 
 
-def test_score_session_malformed_judge_fails_closed():
-    """A judge that returns non-JSON garbage must NOT produce a fabricated
-    passing score — it fails closed (status=error, no goal/tool score trusted)."""
-    r = score_session(
-        prompt="x", response="y", tool_names=[],
-        judge_fn=lambda p: "not json at all {{{",
-    )
-    assert r.get("status") == "error"
-    # must NOT silently claim a pass
-    assert r.get("goal_score") is None or r.get("goal_score") == 0.0
+@pytest.mark.parametrize("kind", StructuredOutputError.KINDS)
+def test_score_session_unusable_judge_reply_fails_closed(kind):
+    """An unusable judge reply must NOT produce a fabricated passing score — it
+    fails closed (status=error, no goal/tool score trusted) and says which kind."""
+    def judge(_p):
+        raise StructuredOutputError(kind, "raw", "why")
+    r = score_session(prompt="x", response="y", tool_names=[], judge_fn=judge)
+    assert r.get("status") == "error" and r.get("goal_score") is None
+    assert f"judge reply {kind}" in r["notes"]
 
 
 def test_score_session_judge_receives_real_output():
@@ -76,8 +77,7 @@ def test_score_session_judge_receives_real_output():
 
     def spy_judge(payload: str):
         captured["prompt"] = payload
-        return json.dumps({"goal_score": 0.9, "tool_score": 0.9,
-                           "dimension": "judgment", "reason": "ok"})
+        return {"goal_score": 0.9, "tool_score": 0.9, "dimension": "quality", "reason": "ok"}
 
     score_session(
         prompt="What is the fixed port?",
@@ -90,27 +90,21 @@ def test_score_session_judge_receives_real_output():
     assert "Read" in p and "Grep" in p  # real tool trajectory present
 
 
-# ── Dimension normalization ──────────────────────────────────────────────────
+# ── Dimension ────────────────────────────────────────────────────────────────
 # The judge names one of the three judged dimensions of the five-dimension model
-# (cognition / quality / responsibility). Older tokens map onto them, and an
-# unknown token is quality, so the Online tab never shows a dimension outside them.
+# (cognition / quality / responsibility); its schema allows only those. An injected
+# judge that names something else is read as quality, so the Online tab never shows
+# a dimension outside them.
 
 def _judge_emitting(dimension: str):
-    import json
-    def _j(_prompt: str) -> str:
-        return json.dumps({"goal_score": 0.4, "tool_score": 0.5,
-                           "dimension": dimension, "reason": "x"})
+    def _j(_prompt: str) -> dict:
+        return {"goal_score": 0.4, "tool_score": 0.5, "dimension": dimension, "reason": "x"}
     return _j
 
 
-import pytest
-
 @pytest.mark.parametrize("token,dimension", [
     ("cognition", "cognition"), ("quality", "quality"), ("responsibility", "responsibility"),
-    ("factual", "cognition"), ("utility", "cognition"), ("context_utility", "cognition"),
-    ("judgment", "quality"), ("capability", "quality"), ("recovery", "quality"),
-    ("compliance", "responsibility"),
-    ("totally_bogus", "quality"), ("", "quality"),
+    ("capability", "quality"), ("totally_bogus", "quality"), ("", "quality"),
 ])
 def test_score_session_names_one_of_the_three_dimensions(token, dimension):
     r = score_session(prompt="x", response="y", tool_names=[],
@@ -136,3 +130,48 @@ def test_the_prompt_sha_names_the_prompt_text():
     from core import session_scorer as ss
     assert len(ss.JUDGE_PROMPT_SHA) == 12
     assert ss.JUDGE_PROMPT_SHA != hashlib.sha256(b"").hexdigest()[:12]
+
+
+def test_the_prompt_sha_also_names_the_answer_schema():
+    # A calibration label counts only for the judge version that produced the score;
+    # a changed schema is a changed judge.
+    import hashlib
+    import json
+    from core import session_scorer as ss
+    parts = [ss.JUDGE_PROMPT, ss.JUDGE_SYSTEM, json.dumps(ss.JUDGE_SCHEMA, sort_keys=True),
+             ss.JUDGE_TOOL_NAME, ss.JUDGE_TOOL_DESCRIPTION, *sorted(ss._REASON_LANGUAGE.values())]
+    assert ss.JUDGE_PROMPT_SHA == hashlib.sha256("\n".join(parts).encode()).hexdigest()[:12]
+
+
+def test_the_default_judge_forces_the_score_tool(monkeypatch):
+    import jobs.bedrock
+    from core import session_scorer as ss
+    seen = {}
+
+    def fake(**kw):
+        seen.update(kw)
+        return {"stopReason": "tool_use", "output": {"message": {"content": [{"toolUse": {
+            "name": "score", "input": {"goal_score": "0.5", "tool_score": 1, "dimension": "quality",
+                                       "reason": "r"}}}]}}}
+    monkeypatch.setattr(jobs.bedrock, "converse_with_retry", fake)
+    got = ss.default_judge_fn("judge this")
+    assert got["goal_score"] == 0.5
+    assert seen["tool_config"]["toolChoice"] == {"tool": {"name": "score"}}
+    assert seen["tool_config"]["tools"][0]["toolSpec"]["inputSchema"]["json"] is ss.JUDGE_SCHEMA
+    assert seen["inference_config"]["maxTokens"] == ss.JUDGE_MAX_TOKENS
+    assert seen["read_timeout"] == ss.JUDGE_READ_TIMEOUT == 30
+    assert seen["tool_config"]["tools"][0]["toolSpec"]["description"] == ss.JUDGE_TOOL_DESCRIPTION
+
+
+@pytest.mark.parametrize("answer", ['{"goal_score": 1, "tool_score": 1}', None, ["x"]])
+def test_an_answer_that_is_not_an_object_fails_closed(answer):
+    r = score_session(prompt="x", response="y", tool_names=[], judge_fn=lambda p: answer)
+    assert r["status"] == "error" and r["goal_score"] is None
+
+
+@pytest.mark.parametrize("v", [float("nan"), float("inf"), "nan"])
+def test_a_non_finite_score_fails_closed(v):
+    r = score_session(prompt="x", response="y", tool_names=[],
+                      judge_fn=lambda p: {"goal_score": v, "tool_score": 0.5,
+                                          "dimension": "quality", "reason": "r"})
+    assert r["status"] == "error" and r["goal_score"] is None

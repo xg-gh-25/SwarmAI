@@ -14,40 +14,33 @@ spans rather than golden answers. So this cannot reuse eval_llm_judge — it nee
 its own thin judge call over the real output.
 
 DESIGN: a PURE function with the judge boundary INJECTED (`judge_fn`). Tests pass
-a fake judge (no Bedrock). Production passes a thin wrapper over
-`jobs.bedrock.converse_with_retry` (see `default_judge_fn`). This mirrors
-conversation_extract.extract_candidates' injectable `invoke_fn` boundary.
+a fake judge (no Bedrock). Production passes `default_judge_fn`, which asks the
+judge through `jobs.bedrock.structured()` (design
+docs/design/2026-10-28-structured-model-output.md): the answer is an object the API
+shapes after JUDGE_SCHEMA, so no text is parsed.
 
-FAIL-CLOSED: a malformed judge response never fabricates a passing score — it
-returns status="error" with no trusted score (P2: done = tried to break it).
+FAIL-CLOSED: an unusable judge reply (truncated / missing / invalid) never
+fabricates a passing score — it returns status="error" with no trusted score.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-import re
+import math
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
 # The judge names the dimension of a low score in the five-dimension model
 # (core/eval_release.FIVE_DIMENSIONS); a session has no cost or performance verdict
-# from the judge (those are measured), so it is one of the three below. Older
-# shorthand tokens a judge may still emit map onto them; anything else is
-# ``quality`` (never trust an unrecognized token).
-_CANONICAL_DIMENSION = {
-    "cognition": "cognition", "quality": "quality", "responsibility": "responsibility",
-    "factual": "cognition", "factual_accuracy": "cognition",
-    "utility": "cognition", "context_utility": "cognition",
-    "judgment": "quality", "judgment_quality": "quality",
-    "capability": "quality", "recovery": "quality",
-    "compliance": "responsibility",
-}
+# from the judge (those are measured), so it is one of these three.
+DIMENSIONS = ("cognition", "quality", "responsibility")
 
-# JudgeFn: takes a fully-rendered judge prompt (str), returns the model's raw
-# text (str). This is the ONLY external boundary — everything else is pure.
-JudgeFn = Callable[[str], str]
+# JudgeFn: takes a fully-rendered judge prompt (str), returns the judge's answer
+# (a dict shaped by JUDGE_SCHEMA), raising jobs.bedrock.StructuredOutputError for an
+# unusable reply. This is the ONLY external boundary — everything else is pure.
+JudgeFn = Callable[[str], dict]
 
 # The judge prompt, its settings and the language line are module constants so
 # the run and the LLM Judges page (GET /api/eval/judges) read the same text, and
@@ -84,46 +77,42 @@ task, or a tool used badly), responsibility (broke a rule, unsafe, or did not as
 when it should have).
 
 {language}
-Respond ONLY with this JSON:
-{{"goal_score": 0.0, "tool_score": 0.0, "dimension": "quality", "reason": "one line"}}"""
-JUDGE_SYSTEM = "You are a precise session-quality judge. Respond only with the requested JSON."
+Record your scores with the score tool."""
+JUDGE_SYSTEM = "You are a precise session-quality judge. Answer only through the score tool."
 JUDGE_TEMPERATURE = 0.0
-JUDGE_MAX_TOKENS = 500
+JUDGE_MAX_TOKENS = 1000
+# The judge's fail-fast read timeout: its answer is four short fields, so a reply
+# still unread after this is a hang (the eval judges, writing reasoning, wait 60s).
+JUDGE_READ_TIMEOUT = 30
+JUDGE_TOOL_NAME = "score"
+JUDGE_TOOL_DESCRIPTION = "Record the scores of the session."
+JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "goal_score": {"type": "number", "description": "0.0 to 1.0"},
+        "tool_score": {"type": "number", "description": "0.0 to 1.0"},
+        "dimension": {"type": "string", "enum": list(DIMENSIONS)},
+        "reason": {"type": "string", "description": "one line"},
+    },
+    "required": ["goal_score", "tool_score", "dimension", "reason"],
+}
 _REASON_LANGUAGE = {
     "cjk": "Write the reason in Chinese (the language the user asked in).",
     "latin": "Write the reason in English (the language the user asked in).",
 }
 JUDGE_PROMPT_SHA = hashlib.sha256(
-    "\n".join([JUDGE_PROMPT, JUDGE_SYSTEM, *sorted(_REASON_LANGUAGE.values())]).encode("utf-8")
+    "\n".join([JUDGE_PROMPT, JUDGE_SYSTEM, json.dumps(JUDGE_SCHEMA, sort_keys=True),
+               JUDGE_TOOL_NAME, JUDGE_TOOL_DESCRIPTION,
+               *sorted(_REASON_LANGUAGE.values())]).encode("utf-8")
 ).hexdigest()[:12]
-
-
-def _extract_json(text: str) -> Optional[dict]:
-    """Pull the first JSON object out of the judge's text. Fail-closed: return
-    None on anything unparseable (never guess a score)."""
-    if not text:
-        return None
-    # direct parse first
-    try:
-        obj = json.loads(text)
-        return obj if isinstance(obj, dict) else None
-    except (json.JSONDecodeError, TypeError):
-        pass
-    # fallback: first {...} block (judges sometimes wrap in prose/```)
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if not m:
-        return None
-    try:
-        obj = json.loads(m.group(0))
-        return obj if isinstance(obj, dict) else None
-    except (json.JSONDecodeError, TypeError):
-        return None
 
 
 def _clamp01(v) -> Optional[float]:
     try:
         f = float(v)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):  # min(1.0, nan) is 1.0: a NaN would read as a perfect score
         return None
     return max(0.0, min(1.0, f))
 
@@ -157,28 +146,28 @@ def score_session(
         language=_REASON_LANGUAGE.get(reason_language or "", ""),
     )
 
+    from jobs.bedrock import StructuredOutputError
+
     try:
-        raw = judge_fn(judge_prompt)
+        obj = judge_fn(judge_prompt)
+    except StructuredOutputError as exc:
+        logger.warning("session_scorer: judge reply %s (%s) — fail-closed", exc.kind, exc.detail)
+        return {"status": "error", "notes": f"judge reply {exc.kind}: {exc.detail}",
+                "goal_score": None}
     except Exception as exc:  # noqa: BLE001 — judge boundary; fail-closed
         logger.warning("session_scorer: judge_fn raised (%s) — fail-closed", exc)
         return {"status": "error", "notes": f"judge call failed: {exc}",
                 "goal_score": None}
 
-    obj = _extract_json(raw)
-    if obj is None:
-        logger.warning("session_scorer: judge returned unparseable output — fail-closed")
-        return {"status": "error", "notes": "judge output not parseable as JSON",
+    if not isinstance(obj, dict):
+        return {"status": "error", "notes": f"judge answer is {type(obj).__name__}, not an object",
                 "goal_score": None}
-
     goal = _clamp01(obj.get("goal_score"))
     tool = _clamp01(obj.get("tool_score"))
     if goal is None or tool is None:
         return {"status": "error", "notes": "judge output missing/invalid scores",
                 "goal_score": None}
-
-    # Normalize the judge's dimension token; unknown → quality (fail-closed). The
-    # scorer never emits a dimension outside the three.
-    dim = _CANONICAL_DIMENSION.get(str(obj.get("dimension") or ""), "quality")
+    dim = obj.get("dimension") if obj.get("dimension") in DIMENSIONS else "quality"
 
     return {
         "goal_score": goal,
@@ -188,30 +177,21 @@ def score_session(
     }
 
 
-def default_judge_fn(judge_prompt: str) -> str:
-    """Production judge boundary — thin wrapper over converse_with_retry using
-    the pinned eval judge model. Kept OUT of score_session so tests never touch
-    Bedrock. Region + model resolution mirror eval_runner.eval_llm_judge."""
-    import os
+def default_judge_fn(judge_prompt: str) -> dict:
+    """Production judge boundary: the pinned eval judge model, asked through
+    jobs.bedrock.structured(). Kept OUT of score_session so tests never touch
+    Bedrock. Region, model and retry are the eval judges'; the read timeout is
+    JUDGE_READ_TIMEOUT."""
     import sys
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from jobs.bedrock import converse_with_retry
-    from scripts.eval_runner import _get_judge_model, _JUDGE_READ_TIMEOUT, _JUDGE_MAX_ATTEMPTS
+    from jobs.bedrock import structured
+    from scripts.eval_runner import _JUDGE_MAX_ATTEMPTS, _get_judge_model, _judge_region
 
-    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
-    resp = converse_with_retry(
-        messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
-        system=[{"text": JUDGE_SYSTEM}],
-        inference_config={"maxTokens": JUDGE_MAX_TOKENS, "temperature": JUDGE_TEMPERATURE},
-        model_id=_get_judge_model(),
-        region=region,
-        read_timeout=_JUDGE_READ_TIMEOUT,
-        max_attempts=_JUDGE_MAX_ATTEMPTS,
+    return structured(
+        judge_prompt, schema=JUDGE_SCHEMA, system=JUDGE_SYSTEM, model_id=_get_judge_model(),
+        max_tokens=JUDGE_MAX_TOKENS, temperature=JUDGE_TEMPERATURE, name=JUDGE_TOOL_NAME,
+        description=JUDGE_TOOL_DESCRIPTION, region=_judge_region(),
+        read_timeout=JUDGE_READ_TIMEOUT, max_attempts=_JUDGE_MAX_ATTEMPTS,
     )
-    # converse() response shape: output.message.content[0].text
-    try:
-        return resp["output"]["message"]["content"][0]["text"]
-    except (KeyError, IndexError, TypeError):
-        return ""

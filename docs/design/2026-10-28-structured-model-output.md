@@ -146,3 +146,44 @@ structured(prompt, *, schema: dict, system: str, model_id: str, max_tokens: int,
 - **mutation 检查**：每个迁移点去掉截断判断、去掉 schema 校验，测试都必须变红。
 - **评审**：correctness 和 api-contract 两位专家看 `structured()` 和入库判官（它管着四个认知存储的入口），各一轮。
 - **线上确认**：rebuild 之后重跑 `OFF_BRAIN_FIRST_ENTRIES_LIB`；之后看一次定时 eval 里 rubric 判官的 error 数，以及入库判官 telemetry 里 `judge_error:*` 的分布。
+
+## 10. 实施记录
+
+**第 1 步**（`structured()` / `text()`）：
+- schema 校验用 `jobs/bedrock.py` 里的子集实现，见 §5.1。
+- 改过的地方只有一处：`converse_with_retry` 增加 `tool_config` 参数，并且 system 为空时不传。
+- token 用量只在调用方传了 `record_usage` 时才记，和各处现在的做法一致。
+- mutation 11 处，全部抓到。
+
+**第 2 步**（四个判官）：
+- **入库判官不加 `reasoning` 字段**，是对 §5.2 的例外。它的 prompt 本来就要求"默默思考"，四个认知存储的入库判断都由它决定；这一步只换传输方式，不改它的判断分布。schema 只有 `verdict` 和 `reason`。
+- **入库判官失败原因的命名**：§5.4 原写 `judge_error:truncated`，实际用 `judge_output:<kind>`。原因：`judge_error:` 这个前缀在 `admit_memory_lesson` 里会被当作判官故障，送进 pending 重判；而 pending 每次都被完整取出重判，没有次数上限。截断、没调 tool、不符合 schema 这三种失败，重判时输入不变，结果也不变，进 pending 会每个周期都重判一次，永远收不了尾。所以它们按拒绝处理（discard），和改动前的 `unparseable_or_empty` 一样，只是原因能单独统计。周报把 `judge_output` 算作"判官没给出判断"。
+- **`_distill_entry` 提前到这一步**，因为它和入库判官共用同一个客户端。截断的改写不会返回，调用方保留原文。
+- **删掉的东西**：
+  - `_JUDGE_VERDICT_RE`；
+  - VERDICT 先行的 prompt 约定；
+  - `_neutralize_untrusted` 里破坏伪造 `VERDICT:` 行的那一步（解析器没了，伪造的 VERDICT 行骗不了任何东西；去掉 fence 标记那部分保留）；
+  - eval 两个判官剥 ``` 围栏的代码；
+  - `_coerce_conf`（schema 已经保证 confidence 是数字）；
+  - `session_scorer._extract_json`；
+  - 旧维度词到新维度词的映射（schema 用 enum 限定了三个维度，判官给不出旧词）。
+- **参数**：
+  - 判决类判官上限 2000，读超时 30 → 60 秒，因为输出变长了；
+  - session_scorer 的上限 1000；
+  - 入库判官的上限 1000。
+- **其他**：
+  - `JUDGE_PROMPT_SHA` 现在也包含 schema：schema 变了就是另一个判官，旧的校准标签不再计入。本机没有校准标签，没有数据受影响。
+  - OS Eval 的判官页显示每个判官的回答 schema。
+- mutation 13 处，全部抓到。
+- **评审**：correctness 和 api-contract 各一轮，没有 HIGH，问题已一次修完：
+  - **MEDIUM（两位都提了）**：数字字段会接受 `"NaN"` 和 `"Infinity"`，而 `_clamp01(nan)` 返回 1.0，判官可以不打分就拿满分。现在数字必须是有限的十进制值，`_clamp01` 遇到非有限值返回 None。
+  - **LOW**：
+    - integer 接受 `"7"` 和 `7.0`，拒绝 `"7.5"` 和 `"1_000"`；
+    - `_check_schema` 检查 `type`、`required`、`enum`、`properties` 本身的类型；
+    - `score_session` 收到不是 dict 的回答时 fail-closed；
+    - `JUDGE_PROMPT_SHA` 把 tool 的名字和描述也算进去；
+    - rubric 判官有了自己的 system 和上限常量；
+    - session_scorer 的读超时单独设为 30 秒，回到改动前的水平；
+    - 入库判官的三处文档改为新的失败原因。
+  - 修复本身做了 mutation 8 处，全部抓到；其中一条测试原来两边常量值相同、区分不出用的是哪个，已改为能区分。
+  - **没修的**：rubric 判官没有出现在判官页上，这是改动前就有的问题。

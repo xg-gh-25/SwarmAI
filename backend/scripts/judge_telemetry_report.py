@@ -72,12 +72,14 @@ def analyze(rows: list[dict]) -> dict:
     total = len(rows)
     verdicts = Counter(r.get("verdict", "?") for r in rows)
     by_section = Counter(r.get("section", "?") for r in rows)
-    # fail-closed count: verdict==suspect with an error/unparseable reason
+    # fail-closed count: verdict==suspect because no judgment was made — an infra error,
+    # an unusable reply (judge_output:truncated/missing/invalid; older rows say
+    # unparseable_or_empty), a timeout or a spent budget
     fail_closed = sum(
         1 for r in rows
         if r.get("verdict") == "suspect"
         and any(k in (r.get("reason", "").lower())
-                for k in ("error", "unparseable", "empty", "timeout", "budget"))
+                for k in ("error", "judge_output", "unparseable", "empty", "timeout", "budget"))
     )
     passed = verdicts.get("pass", 0)
     discarded = [r for r in rows if r.get("verdict") in ("suspect", "noise")]

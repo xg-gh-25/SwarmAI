@@ -45,6 +45,12 @@ def _load_fixture(tmp_path_factory=None):
     return load_merged_golden_set(Path(tempfile.mkdtemp()), product_path=FIXTURE_PATH)
 
 
+
+def _verdict_reply(answer: dict) -> dict:
+    """A Converse reply whose answer is a call to the forced "verdict" tool."""
+    return {"stopReason": "tool_use", "output": {"message": {"content": [
+        {"toolUse": {"toolUseId": "t", "name": "verdict", "input": answer}}]}}}
+
 class TestLoadGoldenSet:
     """Test golden_set.yaml loading and validation (uses fixture for CI-safety)."""
 
@@ -874,13 +880,11 @@ class TestDecisionJudgeUnit:
     _CASE = {"id": "X", "decision_rubric": "PASS if incremental, FAIL if big-bang"}
 
     def _mock_response(self, verdict, notes="x", conf=0.9):
-        # _judge_decision_direction calls jobs.bedrock.converse_with_retry, which
-        # returns the response DICT directly (not a client). Mock must match that
-        # shape, and the patch target must be the source symbol the call-time
-        # `from jobs.bedrock import converse_with_retry` (eval_runner.py:1163) resolves.
-        return {"output": {"message": {"content": [
-            {"text": json.dumps({"verdict": verdict, "confidence": conf, "notes": notes})}
-        ]}}}
+        # The judges answer through jobs.bedrock.structured(), which calls
+        # jobs.bedrock.converse_with_retry: the fake is the Converse reply dict, the
+        # answer a call to the forced "verdict" tool.
+        return _verdict_reply({"reasoning": "r", "verdict": verdict, "confidence": conf,
+                               "notes": notes})
 
     def test_passed_verdict(self):
         from backend.scripts import eval_runner as er
@@ -947,45 +951,68 @@ class TestBehaviorSpawnTimeoutFallback:
         assert captured["timeout"] == 90
 
 
-class TestJudgeConfidenceCoercion:
-    """Both LLM judges format confidence with :.2f. A judge that returns
-    confidence as a STRING ("0.92") or a non-numeric value must NOT crash into
-    a swallowed 'error' (run_e6921209 / 2026-07-01: 'Unknown format code f for
-    object of type str' at GS_TRAJ_DECISION_NEGATIVE_CONTROL)."""
+class TestJudgeReplyShapes:
+    """Both judges answer through jobs.bedrock.structured() (design
+    docs/design/2026-10-28-structured-model-output.md). A confidence given as a numeric
+    string is a number; a reply cut at max_tokens, or with no answer, is an error that
+    says which, never a parse error (the decision judge was cut at 400 tokens before its
+    verdict on a long rubric)."""
 
-    def test_coerce_conf_helper(self):
-        from backend.scripts import eval_runner as er
-        assert er._coerce_conf(0.92) == 0.92
-        assert er._coerce_conf("0.92") == 0.92      # str numeric → float
-        assert er._coerce_conf("high") == 0.0        # non-numeric → 0.0 fallback
-        assert er._coerce_conf(None) == 0.0          # None → 0.0
-        assert er._coerce_conf({"x": 1}) == 0.0      # wrong type → 0.0
+    _DECISION = {"id": "GS_D", "decision_rubric": "PASS if incremental"}
+    _RUBRIC = {"id": "GS_Q", "scenario": {"turns": [{"input": "do X"}]},
+               "assertions": ["did X"], "title": "quality case"}
 
-    def test_decision_judge_str_confidence_no_crash(self):
-        # The decision judge returns confidence as a string — must format
-        # cleanly (status passed/failed), NOT swallow into 'error'.
-        # converse_with_retry is `from jobs.bedrock import` inside the function;
-        # patch it at its source module + return the real nested response shape.
+    def test_decision_judge_str_confidence_is_a_number(self):
         from backend.scripts import eval_runner as er
-        case = {"id": "GS_D", "decision_rubric": "PASS if incremental"}
-        verdict_json = '{"verdict":"passed","confidence":"0.92","notes":"recommended incremental"}'
-        fake_response = {"output": {"message": {"content": [{"text": verdict_json}]}}}
-        with patch("jobs.bedrock.converse_with_retry", return_value=fake_response):
-            r = er._judge_decision_direction(case, "use incremental strangler-fig")
-        assert r["status"] == "passed", f"got {r}"
-        assert r["status"] != "error"
-        assert "0.92" in r["notes"]
+        reply = _verdict_reply({"reasoning": "r", "verdict": "passed", "confidence": "0.92",
+                                "notes": "recommended incremental"})
+        with patch("jobs.bedrock.converse_with_retry", return_value=reply):
+            r = er._judge_decision_direction(self._DECISION, "use incremental strangler-fig")
+        assert r["status"] == "passed" and "conf=0.92" in r["notes"], r
 
-    def test_goal_quality_judge_str_confidence_no_crash(self):
-        # Gate-2 LOW#1: SITE-1 (eval_llm_judge goal/quality judge) is the OTHER
-        # :.2f-on-confidence site — symmetric coverage so a future regression
-        # reverting site-1 to raw confidence is caught, not just the helper unit.
+    def test_rubric_judge_str_confidence_is_a_number(self):
         from backend.scripts import eval_runner as er
-        case = {"id": "GS_Q", "scenario": {"turns": [{"input": "do X"}]},
-                "assertions": ["did X"], "title": "quality case"}
-        verdict_json = '{"verdict":"passed","confidence":"0.88","notes":"looks compliant"}'
-        fake_response = {"output": {"message": {"content": [{"text": verdict_json}]}}}
-        with patch("jobs.bedrock.converse_with_retry", return_value=fake_response):
-            r = er.eval_llm_judge(case, "goal_success")
-        assert r["status"] != "error", f"got {r}"
-        assert "0.88" in r["notes"]
+        reply = _verdict_reply({"assertion_results": [{"assertion": "did X", "result": "pass",
+                                                       "reasoning": "it did"}],
+                                "verdict": "passed", "confidence": "0.88", "notes": "compliant"})
+        with patch("jobs.bedrock.converse_with_retry", return_value=reply):
+            r = er.eval_llm_judge(self._RUBRIC, "goal_success")
+        assert r["status"] == "passed" and "0.88" in r["notes"], r
+
+    @pytest.mark.parametrize("judge", ["decision", "rubric"])
+    @pytest.mark.parametrize("reply, kind", [
+        ({"stopReason": "max_tokens", "output": {"message": {"content": [
+            {"toolUse": {"name": "verdict", "input": {}}}]}}}, "truncated"),
+        ({"stopReason": "end_turn", "output": {"message": {"content": [
+            {"text": "I'll analyze the answer against the rubric..."}]}}}, "missing"),
+        (_verdict_reply({"reasoning": "r", "verdict": "maybe", "confidence": 1, "notes": "n"}),
+         "invalid"),
+    ])
+    def test_an_unusable_reply_is_an_error_that_names_its_kind(self, judge, reply, kind):
+        from backend.scripts import eval_runner as er
+        with patch("jobs.bedrock.converse_with_retry", return_value=reply):
+            r = (er._judge_decision_direction(self._DECISION, "an answer") if judge == "decision"
+                 else er.eval_llm_judge(self._RUBRIC, "goal_success"))
+        assert r["status"] == "error" and f"reply {kind}" in r["notes"], r
+
+    def test_both_judges_force_the_verdict_tool_with_their_schema(self):
+        from backend.scripts import eval_runner as er
+        seen = []
+
+        def fake(**kw):
+            seen.append(kw)
+            return _verdict_reply({"reasoning": "r", "assertion_results": [], "verdict": "failed",
+                                   "confidence": 0.5, "notes": "n"})
+        # distinct values, so a judge reading the other judge's settings is seen
+        with patch("jobs.bedrock.converse_with_retry", side_effect=fake), \
+             patch.object(er, "RUBRIC_JUDGE_MAX_TOKENS", 1234), \
+             patch.object(er, "RUBRIC_JUDGE_SYSTEM", "rubric system"):
+            er._judge_decision_direction(self._DECISION, "an answer")
+            er.eval_llm_judge(self._RUBRIC, "goal_success")
+        schemas = [kw["tool_config"]["tools"][0]["toolSpec"]["inputSchema"]["json"] for kw in seen]
+        assert schemas == [er.DECISION_JUDGE_SCHEMA, er.RUBRIC_JUDGE_SCHEMA]
+        assert all(kw["tool_config"]["toolChoice"] == {"tool": {"name": "verdict"}} for kw in seen)
+        assert [kw["inference_config"]["maxTokens"] for kw in seen] == [
+            er.DECISION_JUDGE_MAX_TOKENS, 1234]
+        assert [kw["system"] for kw in seen] == [[{"text": er.DECISION_JUDGE_SYSTEM}],
+                                                 [{"text": "rubric system"}]]

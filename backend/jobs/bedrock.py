@@ -22,6 +22,8 @@ Usage::
 from __future__ import annotations
 
 import logging
+import math
+import re
 from typing import Any
 
 logger = logging.getLogger("swarm.jobs.bedrock")
@@ -539,33 +541,46 @@ def _check_schema(schema: dict, path: str = "$") -> None:
     if extra:
         raise ValueError(f"{path}: unsupported schema keywords {sorted(extra)}")
     t = schema.get("type")
-    if t not in _SCHEMA_TYPES:
+    if not isinstance(t, str) or t not in _SCHEMA_TYPES:
         raise ValueError(f"{path}: type must be one of {sorted(_SCHEMA_TYPES)}")
+    for key, kind in (("properties", dict), ("required", list), ("enum", list)):
+        if key in schema and not isinstance(schema[key], kind):
+            raise ValueError(f"{path}: {key} must be a {kind.__name__}")
     for name, sub in (schema.get("properties") or {}).items():
         _check_schema(sub, f"{path}.{name}")
     if "items" in schema:
         _check_schema(schema["items"], f"{path}[]")
 
 
+_INT_TEXT = re.compile(r"[+-]?\d+")
+_NUMBER_TEXT = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?")
+
+
 def _validate(value: Any, schema: dict, path: str = "$") -> Any:
-    """*value* checked against *schema* (the subset above); a number or integer
-    given as a numeric string is converted. Raises ValueError naming the path."""
+    """*value* checked against *schema* (the subset above). A number written as
+    decimal text ("0.95") is converted, and an integer may be written "3" or 3.0; a
+    number must be finite, so NaN, Infinity and an overflowing "1e400" are refused
+    (a NaN score would read as a perfect one). Raises ValueError naming the path."""
     t = schema["type"]
     if t in ("number", "integer") and isinstance(value, str):
-        try:
-            value = float(value) if t == "number" else int(value)
-        except ValueError:
-            raise ValueError(f"{path}: expected {t}, got {value[:40]!r}") from None
+        text = value.strip()
+        if not (_INT_TEXT if t == "integer" else _NUMBER_TEXT).fullmatch(text):
+            raise ValueError(f"{path}: expected {t}, got {value[:40]!r}")
+        value = int(text) if t == "integer" else float(text)
+    if t == "integer" and isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        value = int(value)
     ok = {
         "object": isinstance(value, dict),
         "array": isinstance(value, list),
         "string": isinstance(value, str),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool)
+                  and math.isfinite(value),
         "integer": isinstance(value, int) and not isinstance(value, bool),
         "boolean": isinstance(value, bool),
     }[t]
     if not ok:
-        raise ValueError(f"{path}: expected {t}, got {type(value).__name__}")
+        raise ValueError(f"{path}: expected a finite {t}, got {value!r:.40}"
+                         if t == "number" else f"{path}: expected {t}, got {type(value).__name__}")
     if "enum" in schema and value not in schema["enum"]:
         raise ValueError(f"{path}: {value!r} is not one of {schema['enum']}")
     if t == "object":
