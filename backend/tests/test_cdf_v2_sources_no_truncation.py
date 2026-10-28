@@ -61,8 +61,6 @@ def test_correction_path_keeps_the_whole_user_prompt():
 # them, whatever the variable is called -- the field-name scan above cannot see
 # ``entry[:200]`` or ``prompt[:500]``. A slice of an id or a hash is a locator, allowed.
 PRODUCERS = {
-    "hooks/distillation_hook.py": {"_extract_decisions", "_extract_lessons",
-                                   "_extract_corrections", "_extract_competence"},
     "core/summarization.py": {"_extract_topics", "_extract_first_sentence",
                               "_extract_decisions", "_extract_open_questions"},
     "hooks/knowledge_backflow_hook.py": {"_extract_title"},
