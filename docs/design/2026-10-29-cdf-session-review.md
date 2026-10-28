@@ -242,3 +242,16 @@ CDF 现在靠 S2 主提取沉淀会话里的判断：会话结束后，另一个
 | `fork_session` 不改原会话的记录 | 改用只读副本恢复 |
 | 一次复盘的成本不高于同一个会话的 S2 主提取 | 复盘时用 `resume_session_at` 只加载水位之后的部分（会丢掉前面的上下文，需要权衡） |
 | 10 分钟的空闲是"任务结束"的合理信号 | 按实测的复盘产出调整空闲时长 |
+
+## 16. 实现说明（2026-10-29，实现时定下的细节，覆盖上文的对应说法）
+
+- **信号不在聊天路径上计数**（取代 §5.1）：复盘任务开始时，从消息库里读水位之后的记录现算：用户消息数、工具调用数（assistant 消息里的 `tool_use` 块）、写过的文件（`Write`、`Edit`、`MultiEdit`、`NotebookEdit` 调用）、用户立规矩或纠正（用现有检测器的同一组正则重新匹配用户消息）。聊天路径上一行代码都不加。
+- **空闲 10 分钟**（实现 §5.2）：现有的 `LifecycleManager._fire_idle_hooks` 在会话空闲 120 秒后触发会话结束 hook，每次空闲只触发一次。hook 把任务的 `next_attempt_at` 设为"现在 + 8 分钟"；用户又说话、再次空闲时，再往后推。执行线程只认领到点的任务。按钮立刻到点。
+- **SDK 会话 id**：`HookContext` 增加 `sdk_session_id`，由 `_build_hook_context` 从 `SessionUnit._sdk_session_id` 填入，排任务时存进任务行。按钮从 router 取（活着的会话取 unit 上的，否则取持久化的那份）。没有 id 的任务直接退回 S2 主提取。
+- **恢复的工作目录**：从 CLI 自己的会话记录里读。`leak_transcript.find_transcript` 定位文件，取记录里的 `cwd` 字段；找不到就当作恢复不了。
+- **运行方式**：在执行线程里用 `asyncio.run` 调 SDK 的 `query()`，参数为 `resume`、`fork_session=True`、`tools=[]`（`--tools ""`，真正不给工具；`allowed_tools=[]` 在这个 SDK 里等于全部允许）、`output_format`、`cwd`、`max_turns=1`、`strict_mcp_config=True`、`setting_sources=[]`。CLI 路径和环境变量复用后台任务的 `jobs.executor._resolve_claude_cli` 和 `_build_cli_env`。超时 300 秒。
+- **证据索引**（补上 §6.4 的缺口）：分叉里的聊天记录看不到证据编号。复盘提示末尾附一份索引：水位之后每条用户消息的锚点和开头 120 个字，以及每个 measured 根的锚点、字段名和值。证据清单 = 索引里的锚点。复盘的读取集 = 这个会话的全部用户根，加上水位之后所有窗口登记的根（`window_roots`）。
+- **每次任务做什么**：先跑 S2 用户原话那一遍（每个会话都跑）；再复盘；恢复不了就跑 S2 主提取；会话 id 哈希落在 10% 里，再额外跑一遍 S2 主提取（测量用）。
+- **§9 新规则的实现**：在 `pipeline_v2` 里，路由之前判断。S7、`scope=agent`、类型属于 correction、pitfall、guideline、process、model 的 Cognition：如果它引用的根里至少有一个 `user` 或 `measured` 根，就用现有的蕴含判断卡，拿这些根的原文（用户写的字、measured 字段的值）去判断；判为蕴含，这个单元按不污染路由；否则照旧按污染处理。判断卡不可用时推迟（和 S1 一致）。
+- **度量**：每次复盘的 attempt 在 `evidence_range` 里记会话类型（有代码改动 / 写过非代码文件 / 只有对话）、是否抽样、各项信号的数值，token 记在 `ingestion_llm_usage` 的 S7 行。漏记率的计算和 Flow 里的展示放到第一次批量评测时做。
+- **第 0 步**要真的调模型，沙箱里没有 AWS 凭证。代码里的运行方式可以注入；第 0 步由用户在 dev backend 上执行（命令见交付说明）。
