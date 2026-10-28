@@ -3,7 +3,7 @@ title: 知识寻址（Knowledge Addressing）—— "什么知识在哪、怎么
 date: 2026-10-28
 created: 2026-10-28
 updated: 2026-10-28
-status: final (r4) — XG approved 2026-10-28
+status: implemented (r5) — XG approved 2026-10-28; implemented 2026-10-29
 project: SwarmAI
 supersedes-scope-of: docs/design/2026-10-28-ddd-map-and-on-demand-knowledge.md
 ---
@@ -316,6 +316,39 @@ run 2 部署后：跑一个真实 trivial run 和一个 full run，确认 knowle
 | BM25 归一化丢掉最弱匹配（10-27 记录） | 已在 `_normalize_bm25_scores` 修复（memory_index.py:472），无需再做 |
 | 本对话之外的 P0（streaming 卡顿、Interrupted） | 与本设计无关，不在范围 |
 
+## 8. 实施记录（2026-10-29，native，goal-driven）
+
+**落地内容**（session worktree，按 run 1 → 3 分提交）：`memory_index.section_spans` + `parse_memory_sections` 同名合并；
+`ddd_entry_lifecycle.unit_id` + `split_blocks_at`；`ddd_paths.data_contract_dir` / `stale_layout_refs`；`core/addressing.py`；
+`core/knowledge_cli.py` + `desktop_main` 的 `knowledge` 子命令；SWARMAI.md § My Workspace / SELF.md + 一致性测试；pipeline
+knowledge 文件地图与绝对路径、引用扩展、`knowledge_checked`、专家 handout 地图与 `knowledge_project`、引用回馈衰减、REPORT 计数；
+聊天条目级指针；repo_guidance 一行 DDD + 只标记已展示；native expert-review 带精简地图；技能文字、linter 两条规则、
+`scripts/knowledge_usage_report.py`。
+
+**实施中改变的决定**（都经专家审查后定，对源码核实）：
+- **受限会话**：原设计"非 owner 渠道只放行 shareable 项目"被 security 审查推翻——在 shell 命令上用正则做 allowlist 守不住
+  （引号、变量、argparse 缩写），且 shareable 项目会多暴露归档和语料（共享通道只给 4 份文档）。改为 `knowledge` 在非 owner
+  渠道一律不可用：CLI 见 daemon 设的 `SWARM_KNOWLEDGE_RESTRICTED` 即拒绝，Bash handler 去掉引号后见到就拒绝。两者是可用性防线，
+  不是保密边界——**已有问题（不在本次范围）**：受限会话的 Bash 路径检查不看相对路径、也不看引号内路径（`py -c "open('/x')"`）。
+- **代码块（fence）**：第一轮为 0 例的不一致加了 fence 感知切分，第二轮发现它在真实 DDD 上藏掉整节（条目写入时被截断，fence 常不闭合）。
+  按"第二轮仍有 HIGH 就问该不该存在"删掉，回到原来不认 fence 的切分；与 main 对比真实 DDD 无任何小节或条目丢失。
+  **已知小缺口**：闭合 fence 内的 `- ` 行，recall 的条目腿视为条目、单元表视为块的一部分。
+- **同名小节**：`parse_memory_sections` 原来会覆盖同名（去后缀后）小节——SwarmAI IMPROVEMENT 的 "What Worked"（38%）对所有 recall 不可见。
+  修后 "What Worked" 9 → 608 条可召回。
+- **Swarm Out 不改**：任务派到的 Hive 有自己的 SwarmWS 与 DDD，本机地图路径在那里是错的；Hive 自己的 SWARMAI.md 与 `knowledge` 命令覆盖。
+- **Brain Hub 不改**：搜索结果本来就能点开整份文件，400 字只是列表预览。
+- **`s_internal-crux-cr` 不改**：它是本机工作区安装的技能，不随产品发布。
+- **单元行号**：`_locator` 按单元前几行序列在其所属小节内匹配；SwarmAI 4133 个文档单元中剩 6 个同节完全重复的单元可能指向另一份相同内容。
+
+**审查**：run 1 — correctness / security / api-contract 两轮；run 2 — correctness / api-contract / state-machine 两轮；run 3 — correctness 一轮。
+每个修复都做了变异检查（撤掉修复，测试变红）。
+
+**上线前基线**（`knowledge_usage_report.py`，近 14 天，SwarmWS 会话）：78 个会话读过 DDD 文件（539 次），`[DDD:]` 提示 25 次、
+14 次之后读了 DDD；pipeline run 7 个、引用知识 0、按需检索 0。§5 的判定以此为基线。
+
+**已有问题，本次未处理**：`test_repo_guidance_lessons.py::test_too_many_lessons_are_cut_newest_first_with_the_path` 与
+`test_pipeline_v1_review_tree.py`（引用一个不存在的模块）在 main 上同样失败；`test_ddd_absent_or_broken.py` 整体超过 110 秒（分段全绿）。
+
 ## 修订
 
 - r1（2026-10-28）：初稿：库登记表 + 单元模型 + 四操作 + 五种传输 + 6 个 run。
@@ -326,3 +359,4 @@ run 2 部署后：跑一个真实 trivial run 和一个 full run，确认 knowle
   不新增 system prompt 生成段，改为改正 SWARMAI.md § My Workspace 并用测试钉在布局常量上（增删 DDD 不影响）；补验证计划（读者、最终测试集、审查、端到端、判定标准）。
   定稿后逐条核对已知问题（§7），补 4 处遗漏：`find` 的范围改为与引用同一单元表（含归档、语料、data-contract）、单元带行号、
   `knowledge_checked` 落在 DESIGN_SPEC、地图补治理资产。
+- r5（2026-10-29）：实施完成，记录见 §8。
