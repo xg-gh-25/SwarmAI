@@ -8,7 +8,6 @@ core/backup_manager.py:_file_set_token  # exempt: backup token file (0600) under
 core/backup_manager.py:_sqlite_backup_store  # writes sqlite backup copies under the backup dir, never a governed corpus file
 core/brain_bootstrap/apply.py:_write_atomic  # pending: New Brain C9 (bootstrap entries move to CDF in New Brain stage two)
 core/brain_size_series.py:append_snapshot  # exempt: brain size series JSONL
-core/code_intel_feed.py:detect_tech_drift  # exempt: code_drift_health.json
 core/context_directory_loader.py:_atomic_write_bytes  # exempt: template seeding; governed context files are written only when absent (first run)
 core/data_safety.py:clear_recovery_marker  # exempt: recovery marker in the app data dir
 core/data_safety.py:isolate_store  # exempt: moves a damaged database aside
@@ -162,7 +161,6 @@ routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only;
 scripts/artifact_cli.py:cmd_bind  # exempt: via doc_index.sync_project: knowledge index DB and survey.json under .artifacts/
 scripts/artifact_cli.py:cmd_release_gate  # exempt: release gate marker
 scripts/artifact_cli.py:cmd_survey  # exempt: via doc_index.sync_project: knowledge index DB and survey.json under .artifacts/
-scripts/bvt_probe.py:main.broken  # exempt: probe writes into its own temp workspace
 scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
 scripts/ddd_verbatim_sync.py:sync  # exempt: dev tool; re-copies product template files inside the repo
 scripts/eval_runner.py:eval_trajectory_capture  # exempt: via fixture_workspace: a temp fixture workspace
