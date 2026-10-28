@@ -424,6 +424,18 @@ source 不允许在审计之外悄悄丢掉东西。每一次提取都在 `inges
 
 Flow 视图除了写入率，还要显示每个 source 的**提取覆盖率**：有证据但产出为零的尝试占多少，无效单元占多少。
 
+**提取器的回复格式**（r16.14，2026-10-28 第一次全量预演发现）：
+- **问题**：所有 source 共用的提取器只在提示词里贴上单元 schema、要求"只返回 JSON 列表"，再自己 `json.loads` 回复文本。预演里 S6 的 3 条有 1 条回复根本不是 JSON（整次提取失败，单元全丢），另外 2 条的单元用了这个 source 不允许的 kind（S6 只允许 `reference`，模型写成 `cognition`）。S2 的窗口大得多，同样的问题只会更多。另外提取器沿用卡片的 `max_tokens=4096`、`read_timeout=25`：S2 一个 15 万字符的窗口，产出超过 4096 token 就被截断，生成时间也会超过 25 秒。
+- **修法**：提取器改走 main 的 `jobs.bedrock.structured()`：模型被要求调用一个工具，回复是对象而不是要解析的文本，和其他后台任务的统一入口一致。
+  - **schema 从 `contracts_v2` 推导，不另写一份**。`structured()` 只支持扁平子集（无 `oneOf`、`$ref`、`anyOf`），所以按本次允许的 kind 把判别联合压成一个扁平单元：`kind` 是允许值的 enum；字段取这些 kind 字段的并集，`X | null` 写成可选的 X，`const` 写成单值 enum，enum 保留；单元级必填只取所有允许 kind 都必填的字段，各 kind 自己的必填写进字段说明。同名字段类型不一致时构建就报错（不猜）。
+  - **schema 表达不了的校验规则写成文字**：scope 的取值和各 kind 的条件规则（例如 decision 必须有 why 和 rejected_alternatives，link 必须有 source_url）是 pydantic 的校验器，JSON schema 带不过去。它们以文字放在 `contracts_v2`（`SCOPE_RULE`、`UNIT_RULES`，紧挨校验器，改一处必须同时改另一处），进 schema 的字段说明。旧提示词里一条也没有，模型只能撞上了才被拒。
+  - **严格校验不变**：回复里每个单元先去掉不属于它那个 kind 的字段和空值，再交给原来的 `SOURCE_UNIT` 校验；不合格的照旧记进 `invalid_units`，原因可查。
+  - **截断和格式错误**：`structured()` 报 truncated / missing / invalid 时转成 `UntypedOutput`，这次 attempt 记 `failed` 并带原因，不重试（同样的输入会得到同样的结果）。
+  - **预算**：提取器单独设 `max_tokens=16000`、`read_timeout=300`，卡片的预算不变。
+  - 提示词里不再贴 schema 全文，也不再说"返回 JSON 列表"，改为"把单元记进 `record_units`"。`EXTRACTOR_VERSION` 升一版，旧记录可区分。
+  - 可注入的 `llm`（测试和回放用）接口不变：仍是 `extract(prompt)`，返回单元列表。
+- **不改**：卡 1、卡 3 等判断卡的格式（§14.1 第 4 项，上线后按数据再做）。
+
 ### 5.5 各 source 的提取规范
 
 **S1 用户指令**：原话转成单元，不做推断。入口先调用 `record_session_input(..., trust="user")`，再把这个事件作为 `evidence`。
@@ -1522,6 +1534,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 - **r16.11**（用户）：离线 go/no-go 不再是上线前提，改为上线后批量评测（§14.2）。判官阶段的结果 30 天后移入 `ingestion_eval_log` 保留 180 天，`extraction_attempts` 同样 180 天；新增 `ingest eval-export`。
 - **r16.12**（全量预演）：S2 分窗（§12）。CDF 的判官和提取器改走 `jobs.bedrock.text()`（main 的统一入口，`docs/design/2026-10-28-structured-model-output.md`），回复被截断或为空时报 `untyped`，不重试；卡片仍由各自的严格解析器定类型，改成 `structured()` 的 schema 是后续工作。批量评测的标注者走 `structured()`。快照脚本作为脚本运行时找不到 `core` 的问题已修。
 - **r16.13**（用户同意先修 A、B）：S2 主提取登记窗口内的助手和工具内容为证据根；S2 改为后台任务（`ingestion_s2_jobs`）；窗口重叠；删除 `memory_extractor.py`；Save to Memory 返回 queued（§12）。
+- **r16.14**（第一次全量预演后，用户同意）：提取器改走 `structured()`，扁平 schema 从 `contracts_v2` 推导，单独的输出和超时预算；预演回放先迁移副本的 data.db；`ingestion_s2_jobs` 改为 schema v7（§5.4）。
 - **r16.8**（用户）：r16.7 合 main：COE Open Threads 按方案 B 移出 MEMORY，开着的 COE 由 COE Registry 基线加未蒸馏的 DailyActivity 信号在读取时算出（§8 新增一行）；按新 brain 设计 §5.11 做 C1-C4：段名通用化，`validate_ddd_matrix` 默认读 `templates/ddd-skeleton/`（§7.1 那句更正），writer 的 DDD 分支调用 `ddd_entry_lifecycle.render_ddd_unit`，基线读 `EntryMetadata.taint`。
 - **r16.7**（对齐 Agent 认知系统高层设计 HLD）：
   - §7.2 C3、§11 第 6 条：CDF 写进 STEERING / USER / TOOLS 的条目只进单独的"系统追加（自动提取）"段，prompt 组装时标明来源并声明优先级低于产品规则；SWARMAI 等产品文件里描述优先级的地方同步改。

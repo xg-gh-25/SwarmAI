@@ -67,6 +67,24 @@ ReferenceKind = Literal["learned", "analysis", "design", "spec", "note", "link"]
 GapKind = Literal["debt", "risk", "deferred_finding", "process_issue", "follow_up"]
 
 
+# What _valid_scope accepts, in words: shown to the extractor (extract_llm.flat_unit_schema),
+# which cannot see this validator. Change both together.
+SCOPE_RULE = 'one of "user", "agent", "world", or "project:<project name>"'
+# The model validators below, in words, per kind (same contract: change both together).
+UNIT_RULES: dict[str, tuple[str, ...]] = {
+    "cognition": (
+        "type=decision needs why and rejected_alternatives (write 'none' if none)",
+        "type=pitfall needs its trigger condition in applicability",
+        "type=process needs how",
+        "scope=user needs user_kind; user_kind only for scope=user",
+    ),
+    "event": ("needs impact or outcome", "when is an ISO date or timestamp (at least 10 characters)"),
+    "gap": (),
+    "reference": ("source_url, when given, is https with a host and no credentials",
+                  "reference_kind=link needs source_url"),
+}
+
+
 def _valid_scope(value: str | None) -> bool:
     return value is None or value in {"user", "agent", "world"} or (
         value.startswith("project:") and len(value) > len("project:"))

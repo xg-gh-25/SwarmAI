@@ -473,6 +473,9 @@ def test_s6_library_inbox_and_link_rejections(cdf_env, monkeypatch) -> None:
         encoding="utf-8")
 
     class LibraryExtractor:
+        def __init__(self, *args, **kwargs):  # built as BedrockExtractor(allowed_kinds)
+            pass
+
         def extract(self, prompt):
             allowed = next(line for line in prompt.splitlines()
                            if "Allowed evidence: " in line)
