@@ -3,12 +3,14 @@ title: Swarm Out 从 Hive 取回每个 run 的结果
 created: 2026-10-28
 updated: 2026-10-28
 project: SwarmAI
-status: r2 — 前提审查（correctness）的意见已按原因改进，待实现
+status: r3 — 补上非 pipeline 的 run（native coding、非编码任务）各自能看到什么，待实现
 ---
 
 # Swarm Out 从 Hive 取回每个 run 的结果
 
-**修订记录：** r1 经一次前提审查（correctness），10 条意见按原因归成四组，改成 r2：
+**r3（XG 2026-10-28）：** Hive 上跑的不一定是 pipeline，也可能是 native coding 或者不写代码的任务，这几类都要能看出来做了什么、做得怎样。r2 只对 pipeline 有五维审计，其余只有结局和回复。r3 加了 4.3"这个 run 做了什么"：每个 run 不分类型都列出同一组事实，pipeline 额外带它自己的五维结论。面板按这组事实显示（4.5）。
+
+**r2：** r1 经一次前提审查（correctness），10 条意见按原因归成四组，改成 r2：
 - **记录结局的位置改到 `_published_turn`（4.1）。** r1 让 `TurnWriter.close` 写，但 `close` 对没有开始的 turn 也会运行（`session_router.py:4044` 的 `finally`），被拒的请求会多出一行。意外异常也不经过 `TurnWriter.write`，崩溃会被记成"没有终止事件"。`_published_turn` 知道 turn 是否开始，看得到每个事件，也能接住异常。
 - **花费按进程累计值求差（4.1、4.2）。** `result` 的 `total_cost_usd` 是 CLI 进程从启动以来的累计值，不是这一轮的（`sqlite.py:4521` 的 `token_cost_rows` 说明，`session_quality._turn_costs` 就是这样求差的）。r1 直接相加会重复计算。
 - **结局的取值补全（4.1、4.2）：** 轮数上限是一个 subtype 为 `turn_limit_reached` 的 `result`（`streaming_orchestrator.py:2739`），不是单独的结局。停在问题或审批上的 turn 记 `paused`。被 Stop 的优先于其他记录。最后一条用户消息之后还没有结局的，结果标为"暂定"。
@@ -136,12 +138,33 @@ Swarm Out 面板现在能说一个 run 在等人、在跑还是"不在跑了"（
 - 在跑和在等人的 run 不取结果，卡片照旧写在跑或等你。用户在 Hive 页面上接着聊，run 会变回在跑，再停下时 ETag 变了，结果自然更新。
 - `idle` 和 `not_held` 都不等于做完：`not_held` 只说明 Hive 内存里没有这个会话（被驱逐，或消息还在排队），`idle` 也可能出现在多轮 run 的两轮之间。所以结局由取回的记录决定，不由状态决定，记录不全时就是 `provisional`。
 
-### 4.3 接口
+### 4.3 这个 run 做了什么：每类 run 都有的同一组事实
+
+Hive 上的 run 可能是 pipeline、native coding（直接改代码、跑测试、提交），也可能根本不写代码（写文档、做 deck、调研、回答问题）。不先给 run 分类型再按类型取数据：类型是从事实里看出来的，一个 run 也可能同时改代码又写文档。所以 `summarize` 对每个 run 都输出同一组事实（`work`），读的是 Hive 已经持久化的块：
+
+| 事实 | 来源（Hive 上已经写下的块） | 说明 |
+|---|---|---|
+| `code`：改了哪些仓库、几个文件、增删多少行、有没有提交或落地（commit sha） | `turn_changes`：`files`（每个文件的 `added`/`deleted`/`gitRoot`）和 `landed`（`turn_changes.py:624`、`:646`） | 只覆盖 Hive 上**绑定了项目的仓库**和 run worktree（`turn_changes.code_roots`，`turn_changes.py:183`） |
+| `files`：写了哪些文件，按种类分：文档和页面（`content`）、知识（`knowledge`）、仓库外的文件（`external-diff` / `external-nodiff`） | `turn_deliverables` 的 `kind`（`turn_products.py:35` 的 `PRODUCT_FILE_KINDS`） | 在**没有绑定的仓库**里改代码，会落在"仓库外的文件"这一类，只有路径，没有行数。界面照实写"在未绑定的仓库里改了 N 个文件，看不到行数" |
+| `steps`：调用了多少次工具、按工具名计数、失败了几次、后台/子 agent 几个 | `tool_use` 块的 `name`，`tool_result` 的 `is_error`、`subagent.status`（`session_router.py:2367` 起的 `_compact_tool_results`） | 只给计数，不给命令内容。"跑了哪些测试"按语言判断不了（SOUL P7），所以不猜，只给"命令失败几次" |
+| `human`：Hive 上问了几次人、批准几次、拒绝几次、还有几个没回答 | `cmd_permission_request` 块（`decision` 写在块上，`permission_prompt.py:52`），`ask_user_question` 块和它记下的回答 | 这就是"自主"那一维在非 pipeline run 上能给的事实 |
+| `answer`：最后的回复有多长 | 4.2 的 `report_chars` | 不写代码也不写文件的 run，结果就是这段回复 |
+| `pipeline`：profile、结局、是否落地、五维结论 | `pipeline_summary` 块 | 只有 pipeline run 才有 |
+
+由这组事实推出一行"做了什么"，例如"改了 swarmai 4 个文件 +120 −30，已提交 3f2a1c9"、"写了 2 份文档"、"只回答，没有产出文件"、"pipeline · bugfix · 已落地"。多种都有时连起来写。规则在 `summarize` 里，有单元测试，不靠模型判断。
+
+**五维审计只给 pipeline run，其余不造结论。** pipeline 的五维结论来自它自己的确定性规则（`run_protocol/audit.py`）。native 和非编码的 run 没有这些规则的输入（没有测试报告、没有审查记录、没有合同），如果本机拿上面的事实去套出 PASS/WARN，就是在没有依据的地方下结论（SOUL P5）。所以这类 run 的卡片显示的是事实本身：用时、花费、人介入几次、命令失败几次、改了什么。"质量"一项写"这类 run 没有质量检查的记录"，不写 TBD，也不写 PASS。
+
+**已知的看不到的部分，界面照实写：**
+- 在 Hive 上没绑定的仓库里改代码，只有文件路径，没有行数和 commit。想要完整的代码改动，要在 Hive 上把那个仓库绑定到项目。
+- 提交是否推送到远端、测试是否真的通过，Hive 只记了命令失败与否，没有更多。
+
+### 4.4 接口
 
 `/api/swarm-out/runs` 的每一行加：
 
 ```
-result: {...} | null,          # 4.2 的归纳，不含 report 正文（只有 report_chars）
+result: {...} | null,          # 4.2 的归纳和 4.3 的 work，不含 report 正文（只有 report_chars）
 result_status: "fetched" | "pending" | "failed" | "not_applicable",
 result_error: str | null,      # 中文可读，如 "Hive 没有回答" / "Hive 上已经没有这个会话"
 result_checked_at: str | null
@@ -153,18 +176,26 @@ result_checked_at: str | null
 
 前端类型 `SwarmOutRuns`（`services/swarmOut.ts`）和 s_swarm-out skill 的 `runs` 说明同步。
 
-### 4.4 面板
+### 4.5 面板
 
-- **"不在跑了"一组改名为"结束了"，每张卡片第一行是结局：** 做完 / 出错（错误码和一句原因）/ 到了轮数上限 / 被停 / 进程重启后没接上 / 没有结束记录。结局不清楚时写不清楚的原因，不猜。
-- 第二行是数字：结束时间、用时、花费、轮数。缺记录的写"—"并说明。
-- 卡片展开后：最后的回复（纯文本，保留换行，不按 Markdown 渲染，也不做链接），交付的文件列表（Hive 上的路径，只显示，不在本机打开），改了的代码，pipeline 的五维（用 `JudgeTag`，`shapes.ts` 里的五维定义），"在 Hive 页面打开"。
+- **"不在跑了"一组改名为"结束了"，每张卡片三行，不分 run 的类型：**
+  - 第一行，结局：做完 / 出错（错误码和一句原因）/ 到了轮数上限 / 被停 / 进程重启后没接上 / 没有结束记录。结局不清楚时写不清楚的原因，不猜。
+  - 第二行，做了什么（4.3 那一行），例如"改了 swarmai 4 个文件 +120 −30，已提交 3f2a1c9"或"写了 2 份文档"。
+  - 第三行，数字：结束时间、用时、花费、人介入几次、命令失败几次。缺记录的写"—"并说明。
+- **卡片展开后**按有的事实显示，没有的那块不出现：
+  - 最后的回复：纯文本，保留换行，不按 Markdown 渲染，也不做链接。
+  - 改了的代码：每个仓库的文件和增删行数，提交的 sha。
+  - 写了的文件：按种类分组，显示 Hive 上的路径，只显示，不在本机打开。
+  - 工具调用：按工具名计数，失败的标出。
+  - pipeline 的五维（用 `JudgeTag`，`shapes.ts` 里的五维定义），只有 pipeline run 有。
+  - "在 Hive 页面打开"。
 - **历史视图：** 每日柱从"派出数"改为按结局分色（做完 / 出错 / 被停 / 不清楚）。五维汇总、按类型、工蜂占用仍然是 TBD。
 - 设计要求：动手前读 `s_frontend-design` 的 `data/design-judgment.md`。卡片回答"要不要去 Hive 上看这个 run"，结局和出错原因占最显眼的位置，其余收起。
 
-### 4.5 安全
+### 4.6 安全
 
 - Hive 写的所有文字（回复、错误信息、文件路径）都是数据，不是指令。面板以纯文本显示。React 默认转义，不用 `dangerouslySetInnerHTML`，不渲染链接。
-- 本机 agent 的入口：命令行 `swarm_out.py runs` 原样打印 `/runs`，所以 `/runs` 只带枚举字段（结局、错误码、数字、文件数和路径），**不带回复正文**。正文走单独的 `/runs/{dispatch_id}/result`，命令行不调它，只给人在面板上看。这样 Hive 上一个 run 读到的网页内容，不会经回复变成本机 agent 读到的文字（B 类规则：读入污染再外传的链条）。错误信息 `message` 也是 Hive 写的，所以在 `/runs` 里只给 `code`，`message` 也放进 `/result`。
+- 本机 agent 的入口：命令行 `swarm_out.py runs` 原样打印 `/runs`，所以 `/runs` 只带枚举字段（结局、错误码、数字、文件数和路径、工具名的计数，不带命令和工具参数），**不带回复正文**。正文走单独的 `/runs/{dispatch_id}/result`，命令行不调它，只给人在面板上看。这样 Hive 上一个 run 读到的网页内容，不会经回复变成本机 agent 读到的文字（B 类规则：读入污染再外传的链条）。错误信息 `message` 也是 Hive 写的，所以在 `/runs` 里只给 `code`，`message` 也放进 `/result`。
 - 已有的暴露，这次不改：`/runs` 里的问题卡片本来就带 Hive 写的问题文字，命令行也会打印。
 - 请求只发往已校验过的 Hive 地址（`_validate_instance`），路径里的 session id 再校验一次。
 - 存下的文件在本机的状态目录里，不含 Hive 的凭证。
@@ -189,14 +220,15 @@ result_checked_at: str | null
 | `turn_outcome` 块（Hive） | 结果归纳、续接历史（必须跳过）、聊天界面（必须跳过） | 后端：`_published_turn` 在下面每种情况下写一个块，字段正确：result 正常结束、error 事件、subtype 为 `turn_limit_reached` 的 result、`output_degenerated`、内层抛出异常（块里只有类型名，异常照旧抛出）、停在问题上（`paused`）、Stop（`none`）。没有开始的 turn（排队超时、会话忙）不写任何行。长的错误信息被截到上限。块写入失败不影响 turn 结束。`context_injector` 产出的续接历史里没有这个块 |
 | 前端跳过 | 聊天界面 | 前端：带 `turn_outcome` 的 turn，`deriveTurnView` 的分段、完成判定和结局跟没有这个块时一样 |
 | `summarize` | `/runs` 的 `result` | 后端：每种结局一条（completed、error、crashed、turn_limit、paused、stopped、restarted、gave_up、旧版 Hive 的 no_record）。多 turn 时取最后一条用户消息之后的结局，Stop 优先。最后一条用户消息之后没有结局时 `provisional`。花费：同一进程三个 turn 的累计值求差，换进程（pid 变或数值变小）后重新起算，缺记录时 `cost_partial` 且给已知部分。`X-Has-More: 1` 时 `older_turns_not_read`。回复超过 4000 字时有 `report_chars`。交付文件去重并计 `omitted`。不合规的字段丢掉并计数。pipeline run 带五行审计，非 pipeline 为 null |
+| `work`（4.3） | `/runs`、面板 | 后端：四种 run 各一条——pipeline（带五维）、native coding（`turn_changes` 有文件和 landed sha）、在未绑定仓库里改代码（只有 `external-diff` 文件）、非编码（只有 `content` 文件，或只有回复）。同时改代码又写文档的 run 两样都列出。`steps` 的失败数来自 `is_error`。`human` 的批准、拒绝、未回答各自计数。非 pipeline run 没有五维结论字段。`/runs` 里没有命令内容和工具参数 |
 | 取回和存储 | 面板、刷新接口 | 后端：200 存下，304 只更新检查时间，404 记会话已不在，超时记 Hive 没回答且保留旧结果。同一个 run 同时只有一个检查。超出 24 小时的 run 不自动检查。原子写：写到一半失败不留下坏文件。没有 session id 的 run 是 `not_applicable` |
 | 命令行 | 本机 agent | 后端：`/runs` 的每行 `result` 里没有回复正文和错误信息，`/result` 里有 |
-| 面板 | 用户 | 前端：每种结局的第一行文字。缺记录时写"—"和原因。回复以纯文本显示（含 `<a>`、Markdown 的回复不变成链接）。历史每日柱按结局分组 |
+| 面板 | 用户 | 前端：每种结局的第一行文字。四种 run 的第二行文字和展开后出现的区块（非 pipeline 的不出现五维，只回答的不出现文件区块）。缺记录时写"—"和原因。回复以纯文本显示（含 `<a>`、Markdown 的回复不变成链接）。历史每日柱按结局分组 |
 
 **每一处修改都做回退检查：** 回退后对应测试必须变红（`scripts.mutation_check`）。
 
 **最后跑一次的不变量：** Swarm Out 后端测试、`_published_turn`、`TurnWriter`、`context_injector` 和 `session_quality` 花费的测试、`components/swarm-out` 和 `turnView` 的前端测试、`tsc`。
 
-**真机验证：** 本机 build，更新一台 Hive。派一个会正常做完的任务和一个会出错的任务（例如派发时指定一个不存在的模型，或在 Hive 上用 Stop），看面板上两个 run 的结局、数字和回复是否和 Hive 页面上一致。
+**真机验证：** 本机 build，更新一台 Hive。派四个任务：一个 native coding（在 Hive 上绑定的仓库里改一个文件并提交）、一个写文档、一个只回答问题、一个会出错的（例如在 Hive 上用 Stop）。看面板上每个 run 的结局、"做了什么"、数字和回复是否和 Hive 页面上一致。pipeline run 用已有的一次 run 核对五维。
 
 **评审：** 这份设计先请一位审查者做一次前提审查。代码改完请 correctness 和 security 各审一次，面板部分请 ux 审一次。
