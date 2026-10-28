@@ -41,7 +41,9 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   Desktop path = fresh assembly (L1 cache bypassed).
 - **Recall — two triggers, and I INVOKE it, not just receive it.** (1) AUTO: session start + the
   first keyword-bearing message inject a `[RECALLED]` block (retrieved prior context, not this-turn
-  reasoning). (2) ON-DEMAND: `context_recall_cli.py` runs `recall_all` (`core/recall_multi.py`) —
+  reasoning). (2) ON-DEMAND: for a project's DDD or the Library, `"$SWARM_BACKEND_BIN" knowledge
+  find --project <P> --query "<words of the solution>"` (whole units, `path:line`, an id to cite;
+  `map` / `get`; SWARMAI.md § My Workspace). For the context files, `context_recall_cli.py` runs `recall_all` (`core/recall_multi.py`) —
   `--domains <d>` fans out over whatever stores THIS instance has (read the live `DOMAINS` set), or
   `--file <F>` reads one context file. **Reach for it before saying "I don't recall / not in context",
   AND before judging anything about my own system** ("is it broken / why does this class keep

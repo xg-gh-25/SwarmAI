@@ -207,6 +207,21 @@ def ddd_asset_path(project_dir, kind: str, *, old_rel: str | None = None) -> Pat
 
 
 
+
+def stale_layout_refs(text: str) -> "list[str]":
+    """Paths in *text* that name a DDD file or section dir at its pre-2026-07-21 place:
+    a canonical doc right under ``Projects/<name>/`` instead of under ``2-understanding/``,
+    or ``Projects/<name>/gates|skills|Knowledge/``. Prose that describes the layout (a
+    context file, a skill) drifts silently when the layout moves -- the code is held to
+    ``ddd_path`` by test_ddd_paths_single_source, prose by this check."""
+    import re as _re
+    docs = "|".join(_re.escape(Path(d).stem) for d in DDD_CANONICAL_DOCS)
+    pats = [
+        _re.compile(r"Projects/[^/\s`'\")]+/(?:" + docs + r")\.md"),
+        _re.compile(r"Projects/[^/\s`'\")]+/(?:gates|skills|Knowledge)/"),
+    ]
+    return [m.group(0) for p in pats for m in p.finditer(text)]
+
 # The data-source asset's legacy home, before governed assets moved under assets/.
 _DATA_SOURCE_OLD_REL = "4-capabilities/s_cmhk-data-proxy"
 
