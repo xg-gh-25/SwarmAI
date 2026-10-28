@@ -113,7 +113,7 @@ def test_map_lists_layout_lines_and_subsections(ws):
 
 def test_map_budget_takes_whole_lines_and_says_where_the_rest_is(ws):
     m = a.ddd_map("P", budget=900)
-    assert len(m) <= 900 + 200
+    assert len(m) <= 900
     assert "more lines not shown" in m and "knowledge map --project P" in m
 
 
@@ -161,3 +161,97 @@ def test_heading_is_never_part_of_a_unit_and_recall_ids_are_in_the_table(ws):
         for h in recall_ddd("wallaby quokkas wombats platypus", "P", purpose):
             if h["kind"] in ("entry", "block"):
                 assert item_id(h["content"]) in ids, (purpose, h["content"][:60])
+
+
+def test_get_heading_line_gives_that_sections_first_unit_and_gaps_give_none(ws):
+    _tmp, root = ws
+    tech = (root / "2-understanding" / "TECH.md").read_text(encoding="utf-8").splitlines()
+    h = next(i + 1 for i, l in enumerate(tech) if l == "## Runtime Traps")
+    u = a.get("P", f"TECH.md:{h}")
+    assert u is not None and u.section == "Runtime Traps" and u.line > h
+    blank = next(i + 1 for i, l in enumerate(tech) if i > 3 and not l.strip())
+    assert a.get("P", f"TECH.md:{blank}") is None
+
+
+def test_bare_doc_name_resolves_through_the_layout(ws):
+    u = a.find("P", "quokkas midnight").units[0]
+    assert a.get("P", f"TECH.md:{u.line}").id == u.id
+
+
+def test_shared_id_prefers_the_live_doc_over_its_archive(ws):
+    _tmp, root = ws
+    entry = "- [pitfall] **Quokka rule** — never feed quokkas after midnight."
+    arch = root / "2-understanding" / "TECH-archive.md"
+    arch.write_text(arch.read_text(encoding="utf-8") + "\n" + entry + "\n", encoding="utf-8")
+    found = a.matches("P", a.find("P", "quokkas midnight").units[0].id)
+    assert len(found) == 2 and found[0].store == "doc" and found[1].store == "archive"
+
+
+def test_symlinked_files_hidden_dirs_and_symlinked_projects_are_not_read(ws):
+    tmp, root = ws
+    k = root / "2-understanding" / "knowledge"
+    (k / ".private").mkdir()
+    (k / ".private" / "notes.md").write_text("- **hidden dir** kangaroo\n", encoding="utf-8")
+    import os
+    os.symlink(root / ".artifacts" / "secret.md", k / "inside_link.md")
+    assert "kangaroo" not in "\n".join(u.text for u in a.ddd_units("P").units)
+    os.symlink(tmp / "Projects" / "P", tmp / "Projects" / "Alias")
+    assert a.project_root("Alias") is None
+
+
+def test_section_names_match_recall(ws):
+    _tmp, root = ws
+    (root / "2-understanding" / "PROJECT.md").write_text(
+        "# P\n\n## What Worked — Major Deliveries\n\n- **Wallaby** — delivered.\n", encoding="utf-8")
+    u = a.find("P", "wallaby delivered").units[0]
+    assert u.section == "What Worked"
+
+
+def test_map_budget_holds_with_a_long_project_name(ws):
+    tmp, root = ws
+    long = "P" + "x" * 60
+    os_root = tmp / "Projects" / long
+    import shutil
+    shutil.copytree(root, os_root, symlinks=True)
+    fixed = len(a.ddd_map(long, budget=1))       # header + trailer + how-to only
+    assert "more lines not shown" in a.ddd_map(long, budget=1)
+    for budget in (fixed, fixed + 50, fixed + 400):
+        assert len(a.ddd_map(long, budget=budget)) <= budget
+
+
+def test_pointer_rows_have_no_id(ws):
+    _tmp, root = ws
+    (root / "2-understanding" / "PRODUCT.md").write_text(
+        "# PRODUCT\n\n## Vision\n\nA platypus.\n\n## Non-Goals\n\n- not wombats\n", encoding="utf-8")
+    from core.run_protocol.run_knowledge import _ddd_rows
+    rows = _ddd_rows("platypus", "P", "requirement")
+    pointers = [r for r in rows if "not shown: read" in r["text"]]
+    assert pointers and all(r["id"] is None for r in pointers)
+
+
+def test_a_symlink_to_a_file_inside_the_project_is_not_read_either(ws):
+    _tmp, root = ws
+    k = root / "2-understanding" / "knowledge"
+    (k / "real.md").write_text("- **koala note** — eucalyptus only.\n", encoding="utf-8")
+    import os
+    os.symlink(k / "real.md", k / "alias.md")
+    rels = {u.rel for u in a.ddd_units("P").units if "koala" in u.text}
+    assert rels == {"2-understanding/knowledge/real.md"}
+
+
+def test_fenced_heading_and_bullet_keep_recall_and_the_table_in_step(ws):
+    _tmp, root = ws
+    (root / "2-understanding" / "PROJECT.md").write_text(
+        "# P\n\n## Notes\n\n- **Real wombat entry** — outside the fence.\n\n"
+        "```md\n## Heading in a fence\n- not an entry wombat\n```\n", encoding="utf-8")
+    ids = {u.id for u in a.ddd_units("P").units}
+    from core.recall_multi import recall_ddd, _ddd_entry_hits, _load_ddd_docs_text
+    from core.run_protocol.run_knowledge import item_id
+    _base, docs = _load_ddd_docs_text("P")
+    for h in _ddd_entry_hits("wombat", docs, 20):
+        assert item_id(h["content"]) in ids, h["content"][:60]
+        assert not h["content"].startswith("- not an entry")
+    for purpose in ("requirement", "design"):
+        for h in recall_ddd("wombat", "P", purpose):
+            if h["kind"] in ("entry", "block"):
+                assert item_id(h["content"]) in ids, h["content"][:60]

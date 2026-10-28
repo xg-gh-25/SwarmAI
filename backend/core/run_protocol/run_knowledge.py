@@ -87,13 +87,15 @@ def item_id(text: str) -> str:
 def _ddd_rows(query: str, project: str, purpose: str) -> list[dict]:
     """The project's DDD for *purpose* (``recall_multi.recall_ddd``): the text is the
     whole unit as shown, the id is the unit's original text's. The note that lists the
-    units left out (``omitted``) has no id: it is not an entry, so it cannot be cited or
-    counted as one. Only entries carry a ``head`` (what REFLECT finds an entry again by);
+    units left out (``omitted``) and a pointer to a section not shown (``pointer``) have no
+    id: neither is an entry, so neither can be cited or counted as one. A pinned section
+    keeps its id (cited through this recall); ``knowledge get`` cannot fetch it, since a
+    whole section is not one unit. Only entries carry a ``head`` (what REFLECT finds an entry again by);
     a section is not an entry."""
     from core.recall_multi import recall_ddd
     return [{"kind": "ddd",
              "source": f"{h['doc']}#{h['section']}" if h["section"] else h["doc"],
-             "id": None if h["kind"] == "omitted" else item_id(h["content"]),
+             "id": None if h["kind"] in ("omitted", "pointer") else item_id(h["content"]),
              "text": h["shown"],
              **({"head": entry_head(h["content"])[:120]} if h["kind"] == "entry" else {})}
             for h in recall_ddd(query, project, purpose) if h.get("shown")]

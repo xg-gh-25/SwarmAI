@@ -29,8 +29,17 @@ def test_find_prints_whole_unit_with_location_and_id(ws, capsys):
     out = capsys.readouterr().out
     from core.addressing import find
     u = find("P", "quokkas midnight").units[0]
-    assert f"`{u.id}` · {u.path}:{u.line} § Traps" in out
-    assert "never feed quokkas after midnight." in out and "<recalled>" in out
+    assert f"- `{u.id}` · {u.path}:{u.line}\n<recalled>\n§ Traps\n" in out
+    assert "never feed quokkas after midnight." in out and out.rstrip().endswith("</recalled>")
+
+
+def test_json_has_one_envelope_for_ddd_and_library(ws, capsys):
+    assert knowledge_cli.main(["find", "--project", "P", "--query", "quokkas", "--json"]) == 0
+    import json
+    d = json.loads(capsys.readouterr().out)
+    assert set(d) == {"units", "omitted", "skipped"} and d["units"][0]["line"] >= 1
+    assert knowledge_cli.main(["find", "--in", "library", "--query", "quokkas", "--json"]) == 0
+    assert set(json.loads(capsys.readouterr().out)) == {"units", "omitted", "skipped"}
 
 
 def test_get_by_id_and_unknown(ws, capsys):

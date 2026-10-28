@@ -715,20 +715,12 @@ def _h3_span_lines(lines: "list[str]") -> "set[int]":
 def split_entries(body: str) -> "list[str]":
     """Every column-0 ``- `` entry of *body*, read by ``_scan_entry``: the lead bullet,
     its continuation lines and sub-bullets, and its metadata tail. What lies between
-    entries (a ``###`` subsection, a table, a paragraph) belongs to none of them.
-    Recall's one entry splitter (design 2026-10-26-run-knowledge §3.0 R1), so what
-    recall shows as an entry is what parse_entries, decay and dedup treat as one."""
-    lines = body.splitlines()
-    out: list[str] = []
-    i = 0
-    while i < len(lines):
-        if lines[i].startswith("- "):
-            _text_end, _meta, end = _scan_entry(lines, i)
-            out.append("\n".join(lines[i:end]).strip())
-            i = max(end, i + 1)
-        else:
-            i += 1
-    return out
+    entries (a ``###`` subsection, a table, a paragraph) belongs to none of them, and a
+    ``- `` line inside a code fence is code, not an entry. Recall's one entry splitter
+    (design 2026-10-26-run-knowledge §3.0 R1), so what recall shows as an entry is what
+    parse_entries, decay and dedup treat as one -- and the entries of ``split_blocks_at``,
+    so a recalled entry's id is in the knowledge unit table."""
+    return [text for kind, text, _line in split_blocks_at(body) if kind == "entry"]
 
 
 def split_blocks(body: str) -> "list[tuple[str, str]]":

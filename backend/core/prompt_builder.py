@@ -2337,11 +2337,10 @@ class PromptBuilder:
             # corrupted (both were adversarial-found leaks in the dir-grant
             # design that this replaces).
             shared_ddd_files = await self._collect_shareable_ddd_paths()
-            from core.security_hooks import shared_project_names
             file_access_handler = create_file_access_permission_handler(
                 [_channel_sender_dir],
                 readonly_files=shared_ddd_files,
-                knowledge_projects=shared_project_names(shared_ddd_files),
+                deny_knowledge=True,
             )
             logger.info(
                 "Non-owner channel: file_access scoped to [%s] + %d shared DDD "
@@ -2517,6 +2516,11 @@ class PromptBuilder:
         # (hooked to the unit's context, which adoption rewrites to the real id) puts
         # the real id before each pipeline call.
         session_env = with_app_session_id(session_env, session_context)
+        if _channel_sender_dir:
+            # The knowledge command is the owner's (knowledge addressing §2.4): it
+            # refuses in a non-owner channel session; the Bash handler denies it too.
+            from core.knowledge_cli import RESTRICTED_ENV
+            session_env = {**(session_env or {}), RESTRICTED_ENV: "1"}
 
         # ── Max turns: per-message API roundtrip limit ─────────────
         #

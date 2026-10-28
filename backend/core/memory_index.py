@@ -193,38 +193,60 @@ _REF_PREFIX_TO_SECTION: dict[str, str] = {
 # ── Index Generation ──────────────────────────────────────────────────
 
 
+_SECTION_HEAD_RE = re.compile(r"^##\s+(.+)$")
+
+
+def section_name(heading: str) -> str:
+    """A ``## `` heading's section name: a " — suffix" is dropped ("What Worked — Major
+    Deliveries" -> "What Worked")."""
+    return re.sub(r"\s*[—–-]\s+.*$", "", heading.strip())
+
+
+def section_spans(text: str) -> list[tuple[str, int, int]]:
+    """``(name, first body line, end)`` for each ``## `` section of *text* (0-based line
+    indices into ``text.splitlines()``, end exclusive), in file order, the text before
+    the first heading left out. A ``## `` line inside a code fence is code, not a
+    heading. The one section split of recall and the knowledge unit table, so both cut
+    a document the same way."""
+    lines = text.splitlines()
+    spans: list[tuple[str, int, int]] = []
+    current, first, fence = None, 0, ""
+    for i, line in enumerate(lines):
+        mark = line.lstrip()[:3]
+        if mark in ("```", "~~~") and (not fence or fence == mark):
+            fence = "" if fence else mark
+            continue
+        m = None if fence else _SECTION_HEAD_RE.match(line)
+        if m:
+            if current is not None:
+                spans.append((current, first, i))
+            current, first = section_name(m.group(1)), i + 1
+    if current is not None:
+        spans.append((current, first, len(lines)))
+    return spans
+
+
 def parse_memory_sections(content: str) -> dict[str, str]:
     """Split MEMORY.md content into named sections.
 
     Returns dict mapping section name (e.g. "Recent Context") to its content.
-    Strips the index block if present. A " — suffix" is dropped from each heading, so
-    two headings can reduce to the same name (``## What Worked`` and ``## What Worked —
-    Major Deliveries``): their bodies are joined in file order under that name, never
-    overwritten -- a dict keyed by the name used to keep only the last one, which hid
-    about 38% of SwarmAI's IMPROVEMENT.md from every DDD recall.
+    Strips the index block if present. Sections are cut by ``section_spans`` (a ``## ``
+    inside a code fence is not a heading). A " — suffix" is dropped from each heading,
+    so two headings can reduce to the same name (``## What Worked`` and ``## What
+    Worked — Major Deliveries``): their bodies are joined in file order under that name,
+    never overwritten -- a dict keyed by the name used to keep only the last one, which
+    hid about 38% of SwarmAI's IMPROVEMENT.md from every DDD recall.
     """
-    # Remove existing index block
     body = extract_body_without_index(content)
-
+    lines = body.splitlines()
     sections: dict[str, str] = {}
-    # Split on ## headers
-    parts = re.split(r"^(##\s+.+)$", body, flags=re.MULTILINE)
-
-    current_name = None
-    for part in parts:
-        header_match = re.match(r"^##\s+(.+)$", part.strip())
-        if header_match:
-            current_name = header_match.group(1).strip()
-            # Strip common suffixes like " — What I Remember"
-            current_name = re.sub(r"\s*[—–-]\s+.*$", "", current_name)
-        elif current_name:
-            body_part = part.strip()
-            if current_name in sections and sections[current_name]:
-                sections[current_name] = (f"{sections[current_name]}\n\n{body_part}"
-                                          if body_part else sections[current_name])
-            else:
-                sections[current_name] = body_part
-
+    for name, first, end in section_spans(body):
+        body_part = "\n".join(lines[first:end]).strip()
+        if name in sections and sections[name]:
+            if body_part:
+                sections[name] = f"{sections[name]}\n\n{body_part}"
+        else:
+            sections[name] = body_part
     return sections
 
 

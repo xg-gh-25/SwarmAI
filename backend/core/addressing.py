@@ -57,10 +57,14 @@ class Unit:
     text: str
     id: str
 
+    @staticmethod
+    def first_line(text: str) -> str:
+        first = _COMMENT_RE.sub("", text or "").strip().splitlines()
+        return first[0][:160] if first else ""
+
     @property
     def title(self) -> str:
-        first = _COMMENT_RE.sub("", self.text).strip().splitlines()
-        return first[0][:160] if first else ""
+        return self.first_line(self.text)
 
     @property
     def live(self) -> bool:
@@ -81,8 +85,16 @@ def project_root(project: str) -> Optional[Path]:
     from core.project_registry import get_projects_dir
     if not project or "/" in project or "\\" in project or project.startswith("."):
         return None
-    base = get_projects_dir() / project
-    return base if base.is_dir() else None
+    projects_dir = get_projects_dir()
+    base = projects_dir / project
+    if not base.is_dir() or base.is_symlink():
+        return None
+    try:
+        if base.resolve().parent != projects_dir.resolve():
+            return None
+    except OSError:
+        return None
+    return base
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -93,10 +105,16 @@ def _inside(path: Path, root: Path) -> bool:
 
 
 def _readable_file(path: Path, root: Path) -> bool:
-    name = path.name
-    if name.startswith(".") or name.endswith(".lock") or ".artifacts" in path.parts:
+    """A regular ``.md`` file inside *root*, not a symlink, with no hidden part (``.x``,
+    ``.artifacts``) in its path relative to *root* after resolving -- the same rule as
+    the shared lane, which refuses symlinked docs."""
+    if path.suffix != ".md" or path.name.endswith(".lock") or path.is_symlink() or not path.is_file():
         return False
-    return path.suffix == ".md" and path.is_file() and _inside(path, root)
+    try:
+        rel = path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return not any(part.startswith(".") for part in rel.parts)
 
 
 def _doc_files(root: Path) -> list[tuple[str, str, Path]]:
@@ -144,23 +162,26 @@ def _all_files(root: Path, skipped: list[str]) -> list[tuple[str, str, Path]]:
             + _tree_files(root, data_contract_dir(root), "data-contract", skipped))
 
 
+_H2_RE = re.compile(r"^##\s+(.+)$")
+
+
+def section_name(heading: str) -> str:
+    """A ``## `` heading's name as recall reports it (``memory_index.section_name``)."""
+    from core.memory_index import section_name as _name
+    return _name(heading)
+
+
 def _file_units(store: str, doc: str, path: Path, root: Path, text: str) -> list[Unit]:
-    """The units of one file, section by section, as recall splits them."""
+    """The units of one file, section by section, split exactly as recall splits them:
+    sections by ``memory_index.section_spans`` (the text before the first heading is a
+    section named ""), each body by ``split_blocks_at``."""
     from core.ddd_entry_lifecycle import split_blocks_at, unit_id
+    from core.memory_index import section_spans
     lines = text.splitlines()
     rel = str(path.relative_to(root))
     out: list[Unit] = []
-    section, start, fence = "", 0, ""
-    bounds: list[tuple[str, int, int]] = []          # (section, first body line, end)
-    for i, ln in enumerate(lines):
-        mark = ln.lstrip()[:3]
-        if mark in ("```", "~~~") and (not fence or fence == mark):
-            fence = "" if fence else mark
-            continue
-        if not fence and ln.startswith("## "):
-            bounds.append((section, start, i))
-            section, start = ln[3:].strip(), i + 1
-    bounds.append((section, start, len(lines)))
+    spans = section_spans(text)
+    bounds = [("", 0, spans[0][1] - 1 if spans else len(lines))] + spans
     for sec, first, end in bounds:
         body = "\n".join(lines[first:end])
         for kind, unit_text, local in split_blocks_at(body):
@@ -194,7 +215,8 @@ def ddd_units(project: str) -> UnitTable:
 
 def unit_ids(project: str) -> set[str]:
     """The ids of every unit that exists in *project*'s DDD now (archives included):
-    what a citation may name besides the units recalled for it."""
+    what a citation may name besides the units recalled for it (the run engine's and the
+    hook bridge's known set, knowledge addressing §2.5)."""
     return {u.id for u in ddd_units(project).units}
 
 
@@ -249,6 +271,8 @@ def ddd_map(project: str, size: str = "full", budget: Optional[int] = None) -> s
     governed assets, gates, capabilities. ``brief``: the root, each doc's path and
     size, and how to read it. Whole lines within *budget* (default ``MAP_FULL_BUDGET``
     for full, none for brief); the lines left out are counted with where to get them.
+    The first line, the how-to lines and that count are always shown, so a budget
+    smaller than they are yields just them.
     Empty string for a project with no dir. Never raises."""
     root = project_root(project)
     if root is None:
@@ -314,16 +338,20 @@ def _map(project: str, root: Path, size: str, budget: Optional[int]) -> str:
     limit = budget if budget is not None else (MAP_FULL_BUDGET if size == "full" else None)
     if limit is None:
         return "\n".join(head + rows + tail)
-    used = sum(len(x) + 1 for x in head + tail) + 120
+    def trailer(n: int) -> str:
+        return (f"... {n} more lines not shown; the whole map: "
+                f'"$SWARM_BACKEND_BIN" knowledge map --project {project}')
+    fixed = sum(len(x) + 1 for x in head + tail)
+    if fixed + sum(len(r) + 1 for r in rows) <= limit:
+        return "\n".join(head + rows + tail)
     shown: list[str] = []
+    used = fixed + len(trailer(len(rows))) + 1
     for r in rows:
         if used + len(r) + 1 > limit:
             break
         shown.append(r)
         used += len(r) + 1
-    if len(shown) < len(rows):
-        shown.append(f"... {len(rows) - len(shown)} more lines not shown; the whole map: "
-                     f'"$SWARM_BACKEND_BIN" knowledge map --project {project}')
+    shown.append(trailer(len(rows) - len(shown)))
     return "\n".join(head + shown + tail)
 
 
@@ -365,30 +393,57 @@ def find(project: str, query: str, *, doc: Optional[str] = None, top: int = FIND
 
 
 _LOC_RE = re.compile(r"^(?P<path>.+):(?P<line>\d+)$")
+_STORE_RANK = {"doc": 0, "corpus": 1, "data-contract": 2, "archive": 3}
 
 
-def get(project: str, ref: str) -> Optional[Unit]:
-    """One unit of *project*'s DDD by its id or by ``path:line`` (absolute or relative to
-    the project dir; any line inside the unit). None when nothing matches."""
+def _ranked(units: list[Unit]) -> list[Unit]:
+    """Live units before done / superseded ones, docs before corpus, data contract and archive."""
+    return sorted(units, key=lambda u: (not u.live, _STORE_RANK.get(u.store, 9), u.rel, u.line))
+
+
+def matches(project: str, ref: str) -> list[Unit]:
+    """Every unit *ref* names, best first. An id can name several units: the same lesson
+    written twice, or an entry and its archived copy (``unit_id`` reduces both to the same
+    text). A ``path:line`` (absolute, relative to the project dir, or a bare canonical doc
+    name such as ``TECH.md:12``) names the unit whose lines include that line; a ``## ``
+    heading line names the first unit of its section; a line between units names none."""
     table = ddd_units(project)
     ref = (ref or "").strip()
     if re.fullmatch(r"[0-9a-f]{8}", ref):
-        return next((u for u in table.units if u.id == ref), None)
+        return _ranked([u for u in table.units if u.id == ref])
     m = _LOC_RE.match(ref)
     if not m or table.root is None:
-        return None
+        return []
     raw = Path(m.group("path")).expanduser()
-    path = raw if raw.is_absolute() else table.root / raw
+    if raw.is_absolute():
+        path = raw
+    else:
+        from core.ddd_paths import ddd_path
+        from core.project_registry import DDD_CANONICAL_DOCS
+        path = ddd_path(table.root, raw.name) if str(raw) in DDD_CANONICAL_DOCS else table.root / raw
     try:
         path = path.resolve()
     except OSError:
-        return None
+        return []
     line = int(m.group("line"))
-    mine = [u for u in table.units if Path(u.path).resolve() == path and u.line <= line]
-    if not mine:
-        return None
-    u = max(mine, key=lambda x: x.line)
-    return u if line < u.line + len(u.text.splitlines()) + 3 else None
+    mine = sorted((u for u in table.units if Path(u.path).resolve() == path), key=lambda u: u.line)
+    for u in mine:
+        if u.line <= line < u.line + len(u.text.splitlines()):
+            return [u]
+    try:
+        text_line = path.read_text(encoding="utf-8").splitlines()[line - 1]
+    except (OSError, UnicodeDecodeError, IndexError):
+        return []
+    if _H2_RE.match(text_line):
+        after = [u for u in mine if u.line > line]
+        return after[:1]
+    return []
+
+
+def get(project: str, ref: str) -> Optional[Unit]:
+    """The best unit *ref* names (see ``matches``), or None."""
+    found = matches(project, ref)
+    return found[0] if found else None
 
 
 def projects() -> list[tuple[str, Optional[Path], bool]]:
@@ -405,8 +460,16 @@ def projects() -> list[tuple[str, Optional[Path], bool]]:
     return out
 
 
-def render_unit(u: Unit) -> str:
-    """One unit as an agent reads it: where it is, its id, its whole text in a fence."""
-    text = re.sub(r"</?\s*recalled\s*>", "", u.text, flags=re.I).strip()
-    sec = f" § {u.section}" if u.section else ""
-    return f"- `{u.id}` · {u.path}:{u.line}{sec}\n<recalled>\n{text}\n</recalled>"
+def fence(text: str) -> str:
+    """*text* as recalled data: any fence marker inside it removed, then fenced. Every
+    piece of DDD or Library text the knowledge command prints goes through here."""
+    body = re.sub(r"</?\s*recalled\s*>", "", text or "", flags=re.I).strip()
+    return f"<recalled>\n{body}\n</recalled>"
+
+
+def render_unit(u: Unit, others: int = 0) -> str:
+    """One unit as an agent reads it: its id and location, then its section and whole
+    text inside the fence (a heading is DDD text too)."""
+    sec = f"§ {u.section}\n" if u.section else ""
+    more = f" (+{others} more with this id: `knowledge get` lists them)" if others else ""
+    return f"- `{u.id}` · {u.path}:{u.line}{more}\n" + fence(sec + u.text)
