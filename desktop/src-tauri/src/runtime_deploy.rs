@@ -10,6 +10,7 @@
 //!   <version>/                python-backend[.exe], _internal/, resources/, .version, .deployed
 //!   current                   text file: the version the daemon starts
 //!   previous                  text file: the one rollback version
+//!   failed                    text file: the marker of the last build rolled back from
 //! ```
 //!
 //! - `deploy` copies `<resource_dir>/python-backend` (and the resource files the backend
@@ -18,7 +19,10 @@
 //!   dir whose `.deployed` marker names the same manifest is reused as is.
 //! - `switch_current` writes `current` atomically (tmp + rename), moves the old value to
 //!   `previous`, and prunes every other version dir.
-//! - `rollback` points `current` back at `previous`.
+//! - `rollback` points `current` back at `previous` and records the build it left in
+//!   `failed`, which is then not deployed again by itself (`bundle_failed_before`).
+//! - `bundle_needs_deploy` is the cold-start decision; `bundled_build_differs` the
+//!   same-version half of the upgrade decision.
 //!
 //! Pointer files, not symlinks: the same on Windows (no symlink privilege needed) and
 //! readable from the launchd wrapper with one `cat`.
@@ -29,7 +33,8 @@
 //!   so a failed upgrade still has a copy to roll back to.
 //!
 //! Public: `runtime_root`, `exe_name`, `deploy`, `switch_current`, `rollback`,
-//! `current_version`, `current_exe`, `bundled_build_differs`, `RuntimeError`.
+//! `current_version`, `current_exe`, `bundled_build_differs`, `bundle_needs_deploy`,
+//! `bundle_failed_before`, `clear_failed`, `RuntimeError`.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -237,33 +242,82 @@ pub fn deploy(resource_dir: &Path, root: &Path, version: &str) -> Result<PathBuf
     Ok(dest)
 }
 
+fn marker_of(root: &Path, version: &str) -> Option<String> {
+    fs::read_to_string(root.join(version).join(".deployed")).ok().map(|m| m.trim().to_string())
+}
+
+fn bundle_marker(resource_dir: &Path) -> Option<String> {
+    match manifest(resource_dir) {
+        Ok(Some((digest, _))) => Some(format!("manifest {}", digest)),
+        _ => None,
+    }
+}
+
+/// Whether this bundle is the build a rollback moved away from (`rollback` records its
+/// marker in `failed`). Such a build is not deployed again by itself: retrying it on
+/// every launch would restart a working daemon each time. A different bundle (a fix,
+/// a downgrade) is not affected; reinstalling that same build on purpose needs the
+/// `failed` file removed.
+pub fn bundle_failed_before(resource_dir: &Path, root: &Path) -> bool {
+    match (bundle_marker(resource_dir), fs::read_to_string(root.join("failed"))) {
+        (Some(want), Ok(failed)) => failed.trim() == want,
+        _ => false,
+    }
+}
+
+/// Forget the failed build `rollback` recorded (the rolled-back-to build does not start
+/// either, so the failure was not that build's).
+pub fn clear_failed(root: &Path) {
+    let _ = fs::remove_file(root.join("failed"));
+}
+
 /// Whether this app's bundled backend should replace the one `current` runs even
 /// though the versions match: a rebuilt app of the same version carries a new build,
 /// and comparing versions alone never deploys it. True only when the bundle has a
 /// manifest AND the runtime was deployed by an app (its `.deployed` names a manifest)
-/// AND the two differ AND the bundle is not the build a rollback just left (`previous`
-/// carries its marker; so reinstalling that earlier build on purpose does not redeploy
-/// it either). A runtime with no marker came from dev tooling (`prod.sh`,
-/// whose rsync does not carry one) and is left alone, so an installed app never puts
-/// its bundle over a newer dev deploy; a bundle without a manifest (a local dev build
-/// of the app) never redeploys.
+/// AND the two differ AND the bundle did not fail before (`bundle_failed_before`).
+/// A runtime with no marker came from dev tooling (`prod.sh`, whose rsync does not
+/// carry one) and is left alone, so an installed app never puts its bundle over a
+/// newer dev deploy; a bundle without a manifest (a local dev build of the app) never
+/// redeploys.
 pub fn bundled_build_differs(resource_dir: &Path, root: &Path) -> bool {
-    let Ok(Some((digest, _))) = manifest(resource_dir) else { return false };
+    let Some(want) = bundle_marker(resource_dir) else { return false };
     let Some(version) = current_version(root) else { return false };
-    let want = format!("manifest {}", digest);
-    let marker_of = |v: &str| fs::read_to_string(root.join(v).join(".deployed"))
-        .map(|m| m.trim().to_string()).ok();
-    // this build already ran and was rolled back from (it is `previous`): retrying it
-    // on every launch would restart a working daemon each time
-    if read_pointer(&root.join("previous")).and_then(|p| marker_of(&p)).as_deref()
-        == Some(want.as_str())
-    {
+    if bundle_failed_before(resource_dir, root) {
         return false;
     }
-    match marker_of(&version) {
+    match marker_of(root, &version) {
         Some(m) => m.starts_with("manifest ") && m != want,
         None => false,
     }
+}
+
+/// The decision at a cold start (no daemon answering): does the bundled backend for
+/// `version` have to be deployed before the daemon starts? Nothing runnable is current
+/// → yes. A bundle that failed before → no. Another version is current → yes (the
+/// app's version wins, as on the upgrade path). The same version → only a new build
+/// (`bundled_build_differs`), or a bundle without a manifest (a dev build of the app,
+/// which always redeploys).
+pub fn bundle_needs_deploy(resource_dir: &Path, root: &Path, version: &str) -> bool {
+    if current_exe(root).is_none() {
+        return true;
+    }
+    if bundle_failed_before(resource_dir, root) {
+        return false;
+    }
+    let current = current_version(root);
+    let same = current.as_deref() == Some(version)
+        || current.as_deref() == Some(format!("{}.app-prev", version).as_str());
+    if !same {
+        return true;
+    }
+    if bundle_marker(resource_dir).is_none() {
+        return true;
+    }
+    if current.as_deref() != Some(version) {
+        return true;     // running the rollback copy and this bundle is not the failed one
+    }
+    bundled_build_differs(resource_dir, root)
 }
 
 pub fn current_version(root: &Path) -> Option<String> {
@@ -299,7 +353,8 @@ pub fn switch_current(root: &Path, version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Point `current` back at `previous`; returns the version now current.
+/// Point `current` back at `previous`; returns the version now current. The build
+/// rolled back from is recorded in `failed` (`bundle_failed_before`).
 pub fn rollback(root: &Path) -> Result<String> {
     let prev = read_pointer(&root.join("previous"))
         .ok_or_else(|| RuntimeError("no previous runtime to roll back to".into()))?;
@@ -307,6 +362,9 @@ pub fn rollback(root: &Path) -> Result<String> {
         return Err(RuntimeError(format!("previous runtime {} is gone", prev)));
     }
     if let Some(cur) = current_version(root) {
+        if let Some(m) = marker_of(root, &cur).filter(|m| m.starts_with("manifest ")) {
+            write_atomic(&root.join("failed"), &m)?;
+        }
         write_atomic(&root.join("previous"), &cur)?;
     }
     write_atomic(&root.join("current"), &prev)?;
@@ -401,6 +459,54 @@ mod tests {
         assert!(!bundled_build_differs(&res, &root));
         bundle(&res, b"v1", true);
         assert!(!bundled_build_differs(&res, &base.join("no-runtime")));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_cold_start_deploys_only_what_is_missing_new_or_not_failed() {
+        let base = tmp("cold");
+        let (res, root) = (base.join("res"), base.join("runtime"));
+        bundle(&res, b"v1", true);
+        // nothing deployed yet
+        assert!(bundle_needs_deploy(&res, &root, "1.0.0"));
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        // this exact build runs
+        assert!(!bundle_needs_deploy(&res, &root, "1.0.0"));
+        // another version is current: the app's version wins
+        assert!(bundle_needs_deploy(&res, &root, "2.0.0"));
+        // a rebuild of the same version
+        bundle(&res, b"v1-rebuilt", true);
+        assert!(bundle_needs_deploy(&res, &root, "1.0.0"));
+        deploy(&res, &root, "1.0.0").unwrap();
+        switch_current(&root, "1.0.0").unwrap();
+        // it fails verification and is rolled back: not deployed again, not even cold
+        assert_eq!(rollback(&root).unwrap(), "1.0.0.app-prev");
+        assert!(bundle_failed_before(&res, &root));
+        assert!(!bundle_needs_deploy(&res, &root, "1.0.0"));
+        assert!(!bundled_build_differs(&res, &root));
+        // cleared when the rollback target does not start either: retried again
+        clear_failed(&root);
+        assert!(bundle_needs_deploy(&res, &root, "1.0.0"));
+        fs::write(root.join("failed"), marker_of(&root, "1.0.0").unwrap()).unwrap();
+        assert!(!bundle_needs_deploy(&res, &root, "1.0.0"));
+        // a fixed build of the same version replaces the rollback copy
+        bundle(&res, b"v1-fixed", true);
+        assert!(!bundle_failed_before(&res, &root));
+        assert!(bundle_needs_deploy(&res, &root, "1.0.0"));
+        // a downgrade (another version, not the failed build) is deployed
+        assert!(bundle_needs_deploy(&res, &root, "0.9.0"));
+        // a dev deploy of the same version (no marker) is left alone
+        switch_current(&root, "1.0.0").unwrap();
+        fs::remove_file(root.join("1.0.0/.deployed")).unwrap();
+        assert!(!bundle_needs_deploy(&res, &root, "1.0.0"));
+        // a dev build of the app (no manifest) redeploys, as it always did
+        fs::remove_file(res.join("install-manifest.json")).unwrap();
+        assert!(bundle_needs_deploy(&res, &root, "1.0.0"));
+        // the current dir lost its executable: repair
+        bundle(&res, b"v1-fixed", true);
+        fs::remove_file(root.join("1.0.0").join(exe_name())).unwrap();
+        assert!(bundle_needs_deploy(&res, &root, "1.0.0"));
         let _ = fs::remove_dir_all(&base);
     }
 

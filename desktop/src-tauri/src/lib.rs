@@ -1515,6 +1515,14 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     let _ = std::process::Command::new("launchctl")
         .args(["bootstrap", &gui_target, &plist_path])
         .output();
+    // `rollback` marked the new build as failed. If the previous one does not come up
+    // either, the cause is not that build: drop the mark so the next launch retries it.
+    if rolled.is_ok() && previous_current.is_some()
+        && probe_daemon_health_adaptive(Some(app)).await.is_none()
+    {
+        println!("[Tauri] The previous backend does not start either — not blaming the new build");
+        runtime_deploy::clear_failed(&runtime_root);
+    }
 
     Err("Daemon upgrade failed — daemon not responding after restart. Rolled back to previous version.".to_string())
 }
@@ -1564,17 +1572,21 @@ fn deployed_backend_exe() -> Option<std::path::PathBuf> {
 
 /// Whether the daemon should get this app's bundled backend: its version differs, or
 /// it is the same version from another build (a rebuilt app;
-/// `runtime_deploy::bundled_build_differs`). Comparing versions alone never deploys a
-/// same-version rebuild. The one decision both upgrade functions use.
+/// `runtime_deploy::bundled_build_differs`), and it is not a build that already failed
+/// and was rolled back. Comparing versions alone never deploys a same-version rebuild.
+/// The one decision both upgrade functions use; the cold start uses
+/// `runtime_deploy::bundle_needs_deploy`, the same rules without a running daemon.
 #[cfg(target_os = "macos")]
 fn backend_upgrade_needed(app: &tauri::AppHandle, daemon_version: &str, app_version: &str) -> bool {
-    if daemon_version != app_version {
-        return true;
+    let (Ok(res), Ok(root)) = (app.path().resource_dir(), runtime_deploy::runtime_root()) else {
+        return daemon_version != app_version;
+    };
+    // a build that already failed and was rolled back is not retried by itself: each
+    // retry restarts a working daemon (runtime_deploy::bundle_failed_before)
+    if runtime_deploy::bundle_failed_before(&res, &root) {
+        return false;
     }
-    match (app.path().resource_dir(), runtime_deploy::runtime_root()) {
-        (Ok(res), Ok(root)) => runtime_deploy::bundled_build_differs(&res, &root),
-        _ => false,
-    }
+    daemon_version != app_version || runtime_deploy::bundled_build_differs(&res, &root)
 }
 
 /// Background wrapper around `sync_daemon_version`.
@@ -1702,18 +1714,26 @@ fn write_daemon_plist_from_bundle(bundle_base: &std::path::Path, home: &str) -> 
 
 /// Auto-install the daemon: deploy binary + wrapper + plist, then bootstrap.
 ///
-/// This runs on EVERY app launch (idempotent). On first launch it provisions
-/// everything from scratch. On subsequent launches it updates the binary if
-/// the app bundle has a newer version, and ensures launchd has it loaded.
+/// This runs at a launch where no daemon answers (`start_backend` step 2). On a first
+/// launch it provisions everything from scratch; later it deploys the bundled backend
+/// only when the runtime needs it, and ensures launchd has the daemon loaded.
 ///
 /// Steps:
-/// 1. Copy `python-backend` binary from app bundle to `~/.swarm-ai/daemon/`
+/// 1. Deploy the bundled backend into `~/.swarm-ai/runtime/<version>/` when needed
 /// 2. Copy `swarmai_backend.sh` wrapper from app resources to `~/.swarm-ai/`
 /// 3. Generate plist from template (substitute HOME, LOG_DIR, WRAPPER_PATH)
 /// 4. Write plist to `~/Library/LaunchAgents/com.swarmai.backend.plist`
 /// 5. `launchctl bootstrap gui/<uid> <plist_path>`
 ///
 /// Idempotent — safe to call on every launch.
+///
+/// The bundled backend is deployed only when `runtime_deploy::bundle_needs_deploy`
+/// says so, and never while a daemon process may be alive (it is only slow to
+/// answer: replacing the dir it loaded from corrupts it); the caller reconciles once
+/// a daemon answers. There is no rollback here: no daemon answered, so the build
+/// already deployed was never shown to work either. macOS-only: its sole caller is
+/// the macOS cold start.
+#[cfg(target_os = "macos")]
 fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     let home = std::env::var("HOME").unwrap_or_default();
     if home.is_empty() {
@@ -1736,7 +1756,17 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     let bundle_base = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
     if bundle_base.join("python-backend").join(runtime_deploy::exe_name()).exists() {
-        deploy_bundled_runtime(app)?;
+        let root = runtime_deploy::runtime_root().map_err(|e| e.to_string())?;
+        let version = app.config().version.clone().unwrap_or_default();
+        // Unknown (launchctl did not answer) counts as alive: never guess "gone" here
+        let maybe_alive = !matches!(daemon_liveness(&current_uid()), DaemonLiveness::Gone);
+        if maybe_alive && runtime_deploy::current_exe(&root).is_some() {
+            println!("[Tauri] A daemon process may be starting — not deploying under it");
+        } else if runtime_deploy::bundle_needs_deploy(&bundle_base, &root, &version) {
+            deploy_bundled_runtime(app)?;
+        } else {
+            println!("[Tauri] The runtime already has this build (or rejected it) — keeping it");
+        }
     } else if let Some(exe) = deployed_backend_exe() {
         println!("[Tauri] No bundled backend — using the deployed one at {:?}", exe);
     } else {
@@ -1806,6 +1836,7 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     // Step 5: Bootstrap via launchctl
     bootstrap_daemon(&home)
 }
+
 
 /// Install the C034 guardian watchdog launchd agent (macOS, NON-FATAL).
 ///
@@ -2486,6 +2517,16 @@ async fn start_backend(
         // COLD_START_CEILING_SECS); fail fast only if the process is truly gone.
         if let Some(_port) = probe_daemon_health_adaptive(Some(&app)).await {
             println!("[Tauri] Daemon installed and healthy on port {}", DAEMON_PORT);
+            // the same reconciliation as when a daemon answers at once: it covers a
+            // daemon that was only slow (nothing deployed under it) and checks what
+            // answers; a no-op when this build already runs
+            let app_version = app.config().version.clone().unwrap_or_default();
+            if !app_version.is_empty() {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    sync_daemon_version_background(app_handle, app_version).await;
+                });
+            }
             let port = connect_daemon(&state, &app).await;
             return Ok(port);
         }
