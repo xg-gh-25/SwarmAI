@@ -406,17 +406,21 @@ def _check_refresher_code_intel(d: Path, assets: list[dict[str, Any]]) -> tuple[
 # portable, off a SwarmAI host.
 try:
     from core.project_agent import PLACEMENTS as _PLACEMENTS, PROFILES as _PROFILES
+    from core.project_agent import validate as _validate_project_agent
 except ImportError:
     _PROFILES = frozenset({"full", "bugfix", "trivial", "direct", "research"})  # profile-fallback
     _PLACEMENTS = frozenset({"chat-tab", "local-worker", "hive"})
+    _validate_project_agent = None
 
 
 def _check_project_agent(d: Path) -> tuple[str, str, str]:
-    """⑤ PROJECT AGENT: project-agent.yaml, generated at P3 from the Brain's knowledge.
+    """⑤ PROJECT AGENT: project-agent.yaml, generated at P3b from the Brain's knowledge.
 
     Missing → PENDING (a Brain made before the Project Agent existed is not broken;
-    generate one). Present but naming a profile or placement the pipeline does not
-    support → FAIL. Present and valid → PASS (draft or reviewed).
+    generate one). Present with any problem ``core.project_agent.validate`` reports
+    for this Brain (either schema; names checked against the Brain on disk) → FAIL.
+    Present and valid → PASS (draft or reviewed). Off a SwarmAI host the validator is
+    not importable and the v1 profile/placement checks below run instead.
     """
     name = "⑤ Project Agent"
     p = d / "project-agent.yaml"
@@ -429,6 +433,14 @@ def _check_project_agent(d: Path) -> tuple[str, str, str]:
         return (name, STATUS_FAIL, f"project-agent.yaml could not be parsed: {type(exc).__name__}")
     if not isinstance(doc, dict):
         return (name, STATUS_FAIL, "project-agent.yaml is not a mapping")
+    if _validate_project_agent is not None:
+        problems = _validate_project_agent(doc, d)
+        if problems:
+            return (name, STATUS_FAIL, "; ".join(problems[:5]))
+        modes = doc.get("modes") if doc.get("schema") == 2 else None
+        detail = (f"{len(modes)} modes, default {doc.get('default_mode')}" if isinstance(modes, list)
+                  else f"default profile {doc.get('default_profile')}")
+        return (name, STATUS_PASS, f"{doc.get('status', 'draft')} · {detail}")
     bad: list[str] = []
     if doc.get("default_profile") not in _PROFILES:
         bad.append(f"default_profile {doc.get('default_profile')!r}")
