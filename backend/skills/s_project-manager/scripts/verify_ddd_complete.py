@@ -41,9 +41,9 @@ FAIL-OPEN: every YAML/parse/IO error degrades gracefully (a broken bindings.yaml
     — a completeness gate must never itself become a source of failure.
 
 Usage:
-    python verify_ddd_complete.py --project IVTHub
-    python verify_ddd_complete.py --project-dir /abs/path/to/Projects/IVTHub
-    python verify_ddd_complete.py --project IVTHub --json   # machine-readable report
+    python verify_ddd_complete.py --project <P>
+    python verify_ddd_complete.py --project-dir /abs/path/to/Projects/<P>
+    python verify_ddd_complete.py --project <P> --json   # machine-readable report
 
 Exit code: 0 if no check FAILs (PASS/PENDING/N/A all ok); 1 if any check FAILs;
     2 on a usage error (project not found).

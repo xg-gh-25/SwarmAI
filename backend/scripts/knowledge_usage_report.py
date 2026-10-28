@@ -5,7 +5,7 @@ sources, both read-only:
 
 - Agent transcripts (JSONL, one tool call per ``tool_use`` item; Claude Code writes them
   under ``~/.claude/projects/<cwd>/``): per session, how many ``knowledge find|get|map``
-  calls, how many Read / Grep / Bash calls touched a DDD file (``Projects/<P>/2-understanding/``
+  calls, how many Read / Grep / Glob calls or non-writing Bash calls touched a DDD file (``Projects/<P>/2-understanding/``
   or a ``*-archive*.md``), and how many ``[DDD:<project>]`` hint blocks were followed by a
   DDD read within the next 15 tool calls.
 - Pipeline runs (``Projects/*/.artifacts/runs/run_*/artifacts/``): per run, the ids in
@@ -30,9 +30,12 @@ from pathlib import Path
 
 _DDD_PATH = re.compile(r"/Projects/[^/\s\"']+/(?:2-understanding/|[^/\s\"']*-archive[^/\s\"']*\.md)")
 _KNOWLEDGE_CMD = re.compile(r"\bknowledge\s+(find|get|map)\b")
-# the hint block's heading; matched without its dash, which a transcript may store
-# escaped (\u2014)
+# the hint block's heading (session_router); a transcript may store its dash escaped
 _HINT_PARTS = ("## Project DDD", "[DDD:")
+_HINT_RE = re.compile(r"## Project DDD \S+ \[DDD:")
+# a Bash command that writes (s_persist's locked_write, a redirect, an in-place edit)
+_WRITE_CMD = re.compile(r"locked_write|>\s*\S|\btee\b|\bsed\s+-i|\bmv\b|\bcp\b|\brm\b")
+_READ_TOOLS = frozenset({"Read", "Grep", "Glob"})
 FOLLOW_WINDOW = 15
 
 
@@ -43,30 +46,72 @@ def _tool_uses(obj: dict):
             yield c
 
 
+def _hint_text(obj: dict) -> "str | None":
+    """The text a hint block was delivered in, or None. A hint reaches the agent in the
+    user's message (a warm turn) or in the system prompt, recorded as a
+    ``prompt_snapshot`` attachment (a cold spawn). A tool_result that merely contains
+    the heading (reading session_router.py, this design) is not a hint."""
+    if obj.get("type") == "user":
+        content = (obj.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(c.get("text", "") for c in content
+                             if isinstance(c, dict) and c.get("type") == "text")
+    if obj.get("type") == "attachment":
+        att = obj.get("attachment") or {}
+        if isinstance(att, dict) and att.get("type") == "prompt_snapshot":
+            return str(att.get("systemPrompt") or "")
+    return None
+
+
+def _is_ddd_read(call: dict, text: str) -> bool:
+    """A Read / Grep / Glob, or a Bash that does not write, naming a DDD file."""
+    if not _DDD_PATH.search(text):
+        return False
+    name = call.get("name")
+    if name in _READ_TOOLS:
+        return True
+    if name == "Bash":
+        return not _WRITE_CMD.search(str((call.get("input") or {}).get("command") or ""))
+    return name is None                       # an older record without the tool name
+
+
 def scan_transcript(path: Path) -> dict:
-    """Counts for one transcript (see the module docstring). Never raises on a bad line."""
+    """Counts for one transcript (see the module docstring). Never raises on a bad line.
+    A call is a knowledge call or a DDD read, never both; one system prompt recorded
+    twice (the CLI snapshots it with and without its tools) is one hint."""
     out = {"knowledge_calls": 0, "ddd_reads": 0, "hints": 0, "hints_followed": 0}
     pending: list[int] = []                      # tool calls left in each open hint window
+    prompts: set = set()
     try:
         fh = path.open(encoding="utf-8", errors="replace")
     except OSError:
         return out
     with fh:
         for line in fh:
-            if all(p in line for p in _HINT_PARTS) and '"type":"user"' in line.replace(" ", ""):
-                out["hints"] += 1
-                pending.append(FOLLOW_WINDOW)
-                continue
-            if '"tool_use"' not in line:
+            hinted = all(p in line for p in _HINT_PARTS)
+            if not hinted and '"tool_use"' not in line:
                 continue
             try:
                 obj = json.loads(line)
             except ValueError:
                 continue
+            if hinted:
+                text = _hint_text(obj)
+                if text is not None and _HINT_RE.search(text):
+                    if obj.get("type") == "attachment":
+                        key = hash(text)
+                        if key in prompts:
+                            continue
+                        prompts.add(key)
+                    out["hints"] += 1
+                    pending.append(FOLLOW_WINDOW)
+                    continue
             for call in _tool_uses(obj):
                 text = json.dumps(call.get("input") or {}, ensure_ascii=False)
                 is_cmd = bool(_KNOWLEDGE_CMD.search(text))
-                is_read = bool(_DDD_PATH.search(text))
+                is_read = not is_cmd and _is_ddd_read(call, text)
                 out["knowledge_calls"] += is_cmd
                 out["ddd_reads"] += is_read
                 still = []
@@ -123,18 +168,20 @@ def main(argv: "list[str] | None" = None) -> int:
         except OSError:
             continue
         counts = scan_transcript(path)
-        if any(counts.values()):
+        if counts["knowledge_calls"] or counts["ddd_reads"] or counts["hints"]:
             sessions.append({"transcript": path.name, **counts})
     runs = scan_runs(Path(args.workspace), since)
     total = {k: sum(s[k] for s in sessions) for k in ("knowledge_calls", "ddd_reads", "hints", "hints_followed")}
-    report = {"days": args.days, "sessions_with_activity": len(sessions), **total,
+    using = sum(1 for s in sessions if s["knowledge_calls"] or s["ddd_reads"])
+    report = {"days": args.days, "sessions_using_ddd": using, "sessions_hinted":
+              sum(1 for s in sessions if s["hints"]), **total,
               "runs": len(runs), "runs_citing": sum(1 for r in runs if r["cited"]),
               "runs_searching": sum(1 for r in runs if r["searches"]), "run_rows": runs}
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     print(f"Last {args.days:g} days")
-    print(f"  sessions using the DDD: {len(sessions)} · knowledge calls {total['knowledge_calls']} · "
+    print(f"  sessions using the DDD: {using} · knowledge calls {total['knowledge_calls']} · "
           f"DDD file reads {total['ddd_reads']}")
     print(f"  [DDD:] hints {total['hints']} · followed by a DDD read within {FOLLOW_WINDOW} tool calls "
           f"{total['hints_followed']}")

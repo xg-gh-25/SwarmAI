@@ -196,3 +196,26 @@ def test_report_counts_a_cited_block_entry_as_handed_out_not_on_demand(tmp_path,
         {"kind": "finding_occ", "payload": {"knowledge_ref": "0dd0dd00"}}]
     summary = eng._knowledge_summary(rows)
     assert "b10cb10c" in summary["cited"] and summary["cited_on_demand"] == ["0dd0dd00"]
+
+
+def test_an_unreadable_ddd_is_named_in_the_refusal(tmp_path, monkeypatch):
+    """A DDD that could not be read is not reported as "not units of the DDD": the agent
+    is told to retry, and the next check reads again (not cached)."""
+    r = Rig(tmp_path, monkeypatch, profile="full")
+    _with_ddd(r)
+    r.create()
+    eng = r.engine()
+    other = addressing.find(PROJECT, "quokkas midnight").units[0].id
+
+    real, broken = addressing.unit_ids, [True]
+
+    def flaky(project):
+        if broken[0]:
+            raise OSError("disk gone")
+        return real(project)
+    monkeypatch.setattr(addressing, "unit_ids", flaky)
+    with pytest.raises(DocumentError) as exc:
+        eng._check_knowledge_refs({"knowledge_refs": [other]}, "RQ-5")
+    assert "could not be read" in str(exc.value)
+    broken[0] = False
+    eng._check_knowledge_refs({"knowledge_refs": [other]}, "RQ-5")

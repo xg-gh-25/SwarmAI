@@ -2349,11 +2349,11 @@ class RunEngine:
         knowledge_recalled event, which the agent cannot edit)."""
         return {str(i) for r in self._knowledge_records() for i in r.get("items") or ()}
 
-    def _ddd_unit_ids(self) -> set[str]:
+    def _ddd_unit_ids(self) -> "set[str] | None":
         """Ids of every unit in the run's project DDD now, archives included (knowledge
         addressing §2.5): what the agent may cite after finding it with ``knowledge
         find`` / ``get``. Empty for a run whose project has no DDD (the contract's
-        has_ddd). Read once per engine."""
+        has_ddd); None when the DDD could not be read. Read once per engine."""
         if not self.contract.get("has_ddd"):
             return set()
         cached = getattr(self, "_unit_ids_cache", None)
@@ -2363,7 +2363,7 @@ class RunEngine:
                 cached = addressing.unit_ids(self.project)
             except Exception:  # noqa: BLE001 -- an unreadable DDD leaves the recalled ids
                 logger.warning("run %s: DDD unit ids unavailable", self.run_id, exc_info=True)
-                return set()                  # not cached: the next check reads again
+                return None                   # not cached: the next check reads again
             self._unit_ids_cache = cached
         return cached
 
@@ -2375,8 +2375,16 @@ class RunEngine:
         if not isinstance(refs, list):
             return                      # absent, or a shape error the schema reports
         unknown = sorted({str(r) for r in refs} - self._recalled_ids())
+        unreadable = False
         if unknown and self.contract.get("has_ddd"):
-            unknown = sorted(set(unknown) - self._ddd_unit_ids())
+            units = self._ddd_unit_ids()
+            unreadable = units is None
+            unknown = sorted(set(unknown) - (units or set()))
+        if unknown and unreadable:
+            message = (f"knowledge_refs {', '.join(unknown)} are not entries of this run's "
+                       "knowledge files, and the project's DDD could not be read to check "
+                       "them against its units (see the daemon log); retry the write")
+            raise DocumentError(f"{check_id} knowledge_refs: {message}", {check_id: message})
         if unknown:
             message = (f"knowledge_refs {', '.join(unknown)} are not entries of this run's "
                        "knowledge files (artifacts/knowledge.md and, after EVALUATE, "

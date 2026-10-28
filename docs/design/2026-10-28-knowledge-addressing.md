@@ -340,14 +340,16 @@ knowledge 文件地图与绝对路径、引用扩展、`knowledge_checked`、专
 - **`s_internal-crux-cr` 不改**：它是本机工作区安装的技能，不随产品发布。
 - **单元行号**：`_locator` 按单元前几行序列在其所属小节内匹配；SwarmAI 4133 个文档单元中剩 6 个同节完全重复的单元可能指向另一份相同内容。
 
-**审查**：run 1 — correctness / security / api-contract 两轮；run 2 — correctness / api-contract / state-machine 两轮；run 3 — correctness 一轮。
+**审查**：run 1 — correctness / security / api-contract 两轮；run 2 — correctness / api-contract / state-machine 两轮；run 3 — correctness 一轮。第二轮另修：repo_guidance 的 lessons 块在路径较长时超出预算、又因未标记而每次触碰重试（只注入空标题）——提示行按最长长度预留，什么都没展示时不注入；linter 的旧路径规则扩到 `$dir/`、`<ddd>/`、`{root}/` 后直接跟文档名的写法（s_project-manager 的 List Projects 因此把所有迁移后的 DDD 判成 "no DDD"）。
 每个修复都做了变异检查（撤掉修复，测试变红）。
 
-**上线前基线**（`knowledge_usage_report.py`，近 14 天，SwarmWS 会话）：78 个会话读过 DDD 文件（539 次），`[DDD:]` 提示 25 次、
-14 次之后读了 DDD；pipeline run 7 个、引用知识 0、按需检索 0。§5 的判定以此为基线。
+**上线前基线**（`knowledge_usage_report.py`，近 14 天，SwarmWS 会话）：60 个会话读过 DDD 文件（非写入的 Read/Grep/Glob/Bash，226 次），
+`[DDD:]` 提示实际送达 41 次（用户消息里或冷启动系统提示快照里，同一快照只算一次）、其中 5 次之后 15 个工具调用内读了 DDD；pipeline run 7 个、
+引用知识 0、按需检索 0。§5 的判定以此为基线。（第一版统计把读源码时 tool_result 里出现的提示标题也算成提示、把 s_persist 写入算成读取，
+得出 25 次提示 / 14 次跟进，偏高；第二轮 correctness 审查指出后修正。）
 
-**已有问题，本次未处理**：`test_repo_guidance_lessons.py::test_too_many_lessons_are_cut_newest_first_with_the_path` 与
-`test_pipeline_v1_review_tree.py`（引用一个不存在的模块）在 main 上同样失败；`test_ddd_absent_or_broken.py` 整体超过 110 秒（分段全绿）。
+**已有问题，本次未处理**：`test_pipeline_v1_review_tree.py`（引用一个不存在的模块）在 main 上同样失败；
+`test_repo_guidance_lessons.py::test_too_many_lessons_are_cut_newest_first_with_the_path` 在 main 上失败的原因正是上面的 lessons 预算溢出，本次已转绿；`test_ddd_absent_or_broken.py` 整体超过 110 秒（分段全绿）。
 
 ## 修订
 

@@ -1119,7 +1119,10 @@ def _locator(doc: str, path: Optional[Path], text: str):
         # a unit is a contiguous run of the doc's lines: match its first lines as a
         # sequence (one line alone repeats -- a fence, a table header)
         want = [ln.strip() for ln in (unit or "").strip().splitlines()][:6]
-        ranges = spans.get(section) or ([(0, len(lines))] if not section else [])
+        # a unit before the first heading (section "") is searched from the top: an
+        # empty-name heading later in the doc also has section "", but the preamble
+        # comes first
+        ranges = [(0, len(lines))] if not section else spans.get(section, [])
         if want and any(w and not _COMMENT_LINE_RE.match(w) for w in want):
             n = len(want)
             line = next((i + 1 for a, b in ranges for i in range(a, max(a, b - n + 1))

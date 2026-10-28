@@ -244,3 +244,12 @@ def test_case_set_script_compares_before_and_after(ddd):
     out = mod.evaluate([{"id": "c1", "purpose": "requirement", "request": "quokka",
                          "expect": ["quokka tier"]}], P, [1.0])
     assert out["summary"]["requirement"] == {"expect": 1, "before": 0, "after@1.0": 1}
+
+
+def test_a_preamble_unit_is_located_even_with_an_empty_name_heading(tmp_path):
+    """A unit before the first heading has section ""; a later ``##`` heading with no
+    name also has section "", and its span used to be the only one searched."""
+    from core.recall_multi import _locator
+    text = "intro line one\nintro line two\n\n## Real\n\n- entry\n\n##  \n\nstray body\n"
+    locate = _locator("TECH", tmp_path / "TECH.md", text)
+    assert locate("", "intro line one\nintro line two") == f"{tmp_path / 'TECH.md'}:1"

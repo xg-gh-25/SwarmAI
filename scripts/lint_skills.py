@@ -153,8 +153,9 @@ OWNER_PATH_RE = re.compile(r"/(?:Users|home)/[A-Za-z][A-Za-z0-9_.-]*")
 
 # A path to one concrete project's DDD (``Projects/AIDLC/...``) in a skill resolves only
 # on the machine that has that project; a skill names a project by placeholder.
-NAMED_PROJECT_RE = re.compile(r"Projects/(?![<{$*])([A-Za-z][\w.-]*)/")
-_PLACEHOLDER_PROJECTS = frozenset({"X", "P", "Name", "name", "Project", "ProjectName", "MyProject"})
+NAMED_PROJECT_RE = re.compile(r"(?<![\w])Projects/(?![<{$*])([A-Za-z][\w.-]*)(?![\w.-])")
+_PLACEHOLDER_PROJECTS = frozenset({"X", "P", "Name", "name", "Project", "ProjectName", "MyProject",
+                                  "NAME", "NewName", "OldName"})
 # a line that shows an old-layout path on purpose (to say it is wrong) carries this marker
 LAYOUT_EXAMPLE_MARK = "layout-example"
 
@@ -411,7 +412,11 @@ def lint_body(path: Path) -> list[str]:
     allowed = BODY_ALLOWLIST.get(_allow_key(path), frozenset())
     findings: list[str] = []
     from core.ddd_paths import stale_layout_refs   # the layout's own rule (one source)
-    in_skill = "skills" in path.parts or "ddd-skills" in path.parts
+    try:                     # the repo-relative parts: a checkout under a "skills" dir is not a skill
+        parts = path.resolve().relative_to(_REPO_ROOT).parts
+    except ValueError:
+        parts = path.parts
+    in_skill = "skills" in parts or "ddd-skills" in parts
 
     for lineno, line in enumerate(text.splitlines(), 1):
         for m in RUNID_RE.finditer(line):

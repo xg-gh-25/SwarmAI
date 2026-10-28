@@ -153,7 +153,7 @@ def test_the_ddd_line_is_not_marked_seen_when_it_did_not_fit(tmp_path, monkeypat
     _bind(monkeypatch, ws, repo)
     monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 620)  # the header fits, the DDD line not
     first = _read(repo / "src.py")
-    assert "Repository guidance" in first and "[Project DDD]" not in first
+    assert first == ""          # nothing fits under the header: nothing is injected
     monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 7_500)
     (repo / "src.py").write_text("x = 2\n")
     second = _read(repo / "src.py")
@@ -226,3 +226,29 @@ def test_a_guidance_file_that_did_not_fit_comes_back(tmp_path, monkeypatch, _iso
     monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 7_500)
     second = _read(repo / "src.py", sid="s11")
     assert "the claude entry point." in second
+
+
+def test_the_lessons_block_never_exceeds_its_budget(tmp_path, _iso):
+    """The note naming the lessons left out used to get a fixed 120 characters; with a
+    long lessons path it ran over, the block was dropped and, unmarked, retried on every
+    touch (state-machine review, round 2)."""
+    ws = _iso["ws"]
+    repo = _repo(tmp_path / ("p" * 60))
+    for n in range(40):
+        _lesson(ws, repo, n, f"lesson {n:02d} " + "y" * (100 + 7 * n), run=f"run_{n}")
+    path = str(reflect_library.find(ws, str(repo.resolve())))
+    text = open(path, encoding="utf-8").read()
+    over = [b for b in range(1500, 7200, 7) if len(rg._lessons_block(path, text, b)) > b]
+    assert over == []
+
+
+def test_a_repo_with_nothing_shown_injects_no_header(tmp_path, monkeypatch, _iso):
+    """When nothing of a repo's block fits, nothing is injected: a header alone, on every
+    touch, told the agent nothing."""
+    ws = _iso["ws"]
+    repo = _repo(tmp_path / "proj")
+    _lesson(ws, repo, 1, "always run the migration check " + "z" * 600)
+    monkeypatch.setattr(rg, "MAX_BLOCK_CHARS", 900)       # header fits, the lesson does not
+    monkeypatch.setattr(rg, "_lessons_block", lambda p, t, b: "x" * (b + 1))
+    assert _read(repo / "src.py") == ""
+    assert _read(repo / "src.py") == ""

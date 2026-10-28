@@ -238,15 +238,21 @@ def _lessons_block(path: str, text: str, budget: int) -> str:
                  "\"待审\" change the agent's own rules and are NOT in force until a "
                  "person reviews them.")
     tail = f"\n--- END pipeline lessons ---"
-    room = budget - len(head) - len(tail) - 120
+
+    def note(n: int) -> str:
+        return (f"\n[... {n} older lesson{'' if n == 1 else 's'} not shown, "
+                f"so that each one shown stays whole; read {path}]")
+    # room for the note at its longest (every lesson left out), so the block never
+    # exceeds *budget* when its header and note fit -- a block over budget is not shown
+    # and, its key unmarked, would be retried on every touch
+    room = budget - len(head) - len(tail) - len(note(len(lessons)))
     from core.recall_filter import take_whole
     # newest first, each whole; the first that does not fit ends the list (CDF first
     # principle: a lesson is never cut, and an older one never takes a newer one's place)
     shown, rest = take_whole(list(reversed(lessons)), room, lambda e: len(e) + 1)
     body = "\n" + "\n".join(shown) if shown else ""
     if rest:
-        body += (f"\n[... {len(rest)} older lesson{'' if len(rest) == 1 else 's'} not shown, "
-                 f"so that each one shown stays whole; read {path}]")
+        body += note(len(rest))
     return head + body + tail
 
 
@@ -447,7 +453,8 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
             rendered, shown_keys = _render(root, fresh, bool(project), extras)
             for k in shown_keys:
                 seen[k] = pending[k]             # marked only once the agent saw it
-            out.append((root, rendered, before))
+            if shown_keys:                       # never a header with nothing under it
+                out.append((root, rendered, before))
     if written is not None:
         state["written"].add(written)     # after judging: a first write still gets guidance
     # Several repos in one call: each repo's block whole while they fit MAX_BLOCK_CHARS

@@ -48,3 +48,18 @@ def test_the_shipped_skills_are_clean():
     findings = [f for p in corpus_files() for f in lint_skills.lint_body(p)
                 if "numbered layout" in f or "one machine's project" in f]
     assert findings == []
+
+
+def test_a_doc_right_under_a_placeholder_dir_is_red(tmp_path):
+    """``$dir/PRODUCT.md`` in a shell loop over Projects/* reported every migrated DDD as
+    "no DDD" (correctness review, round 2); the literal-only rule could not see it."""
+    for line in ('if [ -f "$dir/PRODUCT.md" ]', "--file <ddd>/IMPROVEMENT.md", "{root}/TECH.md",
+                 "${DDD}/PROJECT.md"):
+        assert any("numbered layout" in f for f in _lint(tmp_path, line + "\n")), line
+    assert _lint(tmp_path, 'if [ -f "$dir/2-understanding/PRODUCT.md" ]\n') == []
+
+
+def test_project_name_rule_boundaries(tmp_path):
+    assert any("one machine's project" in f
+               for f in _lint(tmp_path, "--project-dir /abs/path/to/Projects/IVTHub\n"))
+    assert _lint(tmp_path, "see SideProjects/foo/bar.md\n") == []

@@ -628,7 +628,7 @@ User says: "List my projects", "What projects do I have?", "Show projects"
 ```bash
 ls -d Projects/*/  2>/dev/null | while read dir; do
   name=$(basename "$dir")
-  if [ -f "$dir/PRODUCT.md" ]; then ddd="DDD"; else ddd="no DDD"; fi
+  if [ -f "$dir/2-understanding/PRODUCT.md" ]; then ddd="DDD"; else ddd="no DDD"; fi
   if [ -f "$dir/.artifacts/manifest.json" ]; then
     state=$("$SWARM_BACKEND_BIN" py -c "import json; print(json.load(open('$dir/.artifacts/manifest.json'))['pipeline_state'])" 2>/dev/null || echo "unknown")
   else

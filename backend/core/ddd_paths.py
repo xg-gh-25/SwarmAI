@@ -211,7 +211,8 @@ def ddd_asset_path(project_dir, kind: str, *, old_rel: str | None = None) -> Pat
 def stale_layout_refs(text: str) -> "list[str]":
     """Paths in *text* that name a DDD file or section dir at its pre-2026-07-21 place:
     a canonical doc right under ``Projects/<name>/`` instead of under ``2-understanding/``,
-    or ``Projects/<name>/gates|skills|Knowledge/``. Prose that describes the layout (a
+    or ``Projects/<name>/gates|skills|Knowledge/``; also a doc right under a placeholder
+    (``$dir/``, ``<ddd>/``, ``{root}/``), which in shipped text stands for a project dir. Prose that describes the layout (a
     context file, a skill) drifts silently when the layout moves -- the code is held to
     ``ddd_path`` by test_ddd_paths_single_source, prose by this check."""
     import re as _re
@@ -219,6 +220,7 @@ def stale_layout_refs(text: str) -> "list[str]":
     pats = [
         _re.compile(r"Projects/[^/\s`'\")]+/(?:" + docs + r")\.md"),
         _re.compile(r"Projects/[^/\s`'\")]+/(?:gates|skills|Knowledge)/"),
+        _re.compile(r"(?<!Projects/)(?:\$\{?\w+\}?|<[\w-]+>|\{[\w-]+\})/(?:" + docs + r")\.md"),
     ]
     return [m.group(0) for p in pats for m in p.finditer(text)]
 
