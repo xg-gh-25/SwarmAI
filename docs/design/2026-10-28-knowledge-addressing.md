@@ -3,7 +3,7 @@ title: 知识寻址（Knowledge Addressing）—— "什么知识在哪、怎么
 date: 2026-10-28
 created: 2026-10-28
 updated: 2026-10-28
-status: proposed (r2)
+status: proposed (r3)
 project: SwarmAI
 supersedes-scope-of: docs/design/2026-10-28-ddd-map-and-on-demand-knowledge.md
 ---
@@ -80,14 +80,17 @@ pipeline 的 `item_id` 是对单元原文取哈希，而 `split_blocks` 把条�
 
 | 产出 | 内容 | 给谁 |
 |---|---|---|
-| **寻址段**（system prompt 可缓存基段） | SwarmWS 布局；DDD 六段结构；路由表（产品意图/非目标 → PRODUCT，架构/约定/陷阱 → TECH，教训/踩坑 → IMPROVEMENT，当前焦点/决定 → PROJECT，深度参考 → `2-understanding/knowledge/`，跨项目 → Library，仓库经验 → `pipeline-lessons/<repo>.md`）；怎么取、怎么引用；项目表（名字 + DDD 根 + 绑定仓库）。**无大小、行号、条目数、摘要**（R30#4；也不破缓存） | 每个主会话 |
+| **寻址段**（system prompt 可缓存基段） | SwarmWS 布局；DDD 六段结构；路由表（产品意图/非目标 → PRODUCT，架构/约定/陷阱 → TECH，教训/踩坑 → IMPROVEMENT，当前焦点/决定 → PROJECT，深度参考 → `2-understanding/knowledge/`，跨项目 → Library，仓库经验 → `pipeline-lessons/<repo>.md`）；怎么取、怎么引用。**只有结构，没有任何项目、文件、条目的清单，没有大小、行号、摘要**（R30#4；08-14 活/冷总纲：零 in-prompt index；也不破缓存） | 每个主会话 |
 | `map(project, full)` | 每份文档和归档的绝对路径、大小、`##` 行号，超过 20K 的 `##` 列 `###`；`knowledge/` 文件清单；gates / capabilities 名；整行取舍，预算 8000 字符 | pipeline knowledge 文件、correctness 专家 |
 | `map(project, brief)` | 根 + 每份文档路径和大小 + 怎么取，约 600 字符 | 其他专家、native expert-review、Swarm Out 任务包、repo_guidance |
 
 - 寻址段在自己的 try 里，失败只丢这一段并 ERROR，核心文件不连坐。
-- 和 08-14 删 PROJECTS.md 的关系：那是内容索引（摘要，会过期），理由"可经 recall + Glob 发现"已被 0/4 的实测推翻；
-  这里只放结构和地址，内容永远现取。
-- 隐私：群聊**和非 owner 私信**只给结构不给项目表；非 owner 渠道能看到的 DDD 只按 `_collect_shareable_ddd_paths` 的规则。
+- **和 08-14 活/冷总纲的边界**（TECH.md「活/冷二分」+ `Knowledge/Designs/2026-08-14-unified-retrieval-no-index.md`）：总纲禁止的是
+  in-prompt index——从内容派生、要和正文同步维护、拿来做关键词匹配面的东西（当年的 MEMORY index 占 15K、41 处写点、造成跨语言漏召）。
+  寻址段是**常量生成的结构说明**，不从内容派生、不需要同步、不做匹配面，属于同一份设计 §98 明确保留的"告诉我还有哪里可取"那一类。
+  r2 里的**项目表删掉**：它是随项目数线性增长的清单，最接近总纲禁止的"给非归档内容建 in-prompt 指针"，而且多数回合用不上；
+  当前项目的 DDD 根由已有的每回合 DDD 块给出（短暂段，不在基段），要看全部项目用 `knowledge map --projects`。
+- 隐私：寻址段不含任何项目信息，所有会话类型相同；非 owner 渠道能看到的 DDD 只按 `_collect_shareable_ddd_paths` 的规则。
 
 ### 2.3 按需入口：`"$SWARM_BACKEND_BIN" knowledge map | find | get`
 
@@ -109,11 +112,41 @@ pipeline 的 `item_id` 是对单元原文取哈希，而 `split_blocks` 把条�
 - 被引用的单元调 `ddd_usage.record_ddd_hit`（anchor 仍由 `entry_anchor_text` 算，`.ddd-usage.json` 形状不变，不迁移）。
   聊天门改为**只在内容真的展示给 Agent 时**才记用量。
 
+### 2.5 触发：知道去哪找，不等于会去找
+
+地址只是必要条件。实测（§1、§7.1）：有起步包的 run 只读了 knowledge.md 的前 400 字符；我自己写这份设计时，AGENT 规则
+（设计决定前先读 PRODUCT / IMPROVEMENT）就在 prompt 里，路径也知道，仍然没有去查，直到被问"对你有没有用"才查，
+一查就找到了一条推翻 r2 一部分的总纲。所以缺的是**在决定点触发**，而不是更多指针：
+
+- pipeline：THINK 和 PLAN 的产物各加一个**可选**字段 `knowledge_checked: [{query, result_ids}]`——Agent 在定方案前用自己从
+  设计里得出的词跑 2–3 次 `knowledge find`，记下查了什么、用了哪些；空就写 `[]`。stage 文档在"Read knowledge_design.md first"
+  后面加一句做法。**不设 gate**（P5：不判定该不该读）；REPORT 和 §5 只统计它是否为空。
+- 聊天和 native 工作：不加机制；寻址段里"怎么取"那几行写明**用方案里的词查，不是用请求的词查**（§7.1 的实测原因）。
+
+### 2.6 构建时机、实效性和延迟
+
+| 层 | 何时构建 | 怎么保证不过期 | 延迟（2026-10-28 实测，SwarmAI） |
+|---|---|---|---|
+| 寻址段 | 每次冷启动组装基段时（和 11 个 context 文件同一时机；prewarm 也走这里） | 只读代码常量，按构造就是新的；常量一变测试跟着红；产品升级才变，基段的 prompt 缓存不受影响 | 无 I/O，可忽略 |
+| `map` | 在使用点：run create、EVALUATE 完成、发 handout 时 | 当场读磁盘；行号写明"本 run 开始时的，对不上就 grep 标题"；`get <unit_id>` 按身份找当前位置，不依赖行号 | 50–80ms（含 Python 启动） |
+| `find` / `get` | Agent 每次调用 | 每次现读 | `recall_ddd` 37–110ms，`recall_all(ddd)` 73–205ms（首次较慢） |
+| `unit_id` | 现算 | 不受衰减改写元数据影响；同一条经验换写法身份不变 | 与切分同时完成 |
+
+### 2.7 通用 Knowledge（`SwarmWS/Knowledge/`）
+
+同一套原则，但不同的形状：
+
+- **寻址段覆盖它**：每个子目录装什么（Library 参考、Designs 设计、Reports 报告、Notes 笔记、Learned 知识卡、DailyActivity 原始日志、
+  Signals 外部抓取=不可信、Archives 墓碑不召回），这部分已在 `KNOWLEDGE.md` 种子里写成散文，改为从目录常量生成后，种子只留"用户自己的注释"。
+- **取用**：`knowledge find --in library` 包现有的 FTS5 library 域（已经覆盖 `Knowledge/`），同样返回整条 + 路径 + 身份。
+- **不出 map**：Knowledge 是约 1100 个文件、150MB、每天新增的集合，没有固定结构，文件清单既长又天天变，正是总纲禁止的那种清单。
+- 本机现状：`KNOWLEDGE.md` 是我手写的"去哪找"表，生成后它回到用户的注释用途。
+
 ## 3. 各扇门接法
 
 | 门 | 改动 |
 |---|---|
-| 聊天 | 命中小节附 `绝对路径:行号`；无命中时不再单独注入指针（寻址段有项目表）；用量只记展示过的 |
+| 聊天 | 命中改为**条目级**：给命中条目的标题行 + `绝对路径:行号`（今天给的是 `**TECH.md** § Architecture`，那个小节 112K，真正相关的条目在它的第 105 行）；无命中时的项目指针带 DDD 根绝对路径；用量只记展示过的 |
 | pipeline | knowledge 文件 = 起步包 + `map(full)`；not-shown / pinned / pointer 行改为绝对路径 + 行号；引用走 §2.4；stage 文档改写"读 knowledge 文件"那句 |
 | 专家 | correctness：起步包 + `map(full)`；其他专家：`map(brief)`，handout 写明"只在 finding 需要时查"（按需读会花专家调用预算） |
 | native `s_expert-review` | 专家提示带 `map(brief)` |
@@ -142,10 +175,20 @@ pipeline 的 `item_id` 是对单元原文取哈希，而 `split_blocks` 把条�
 
 ## 6. 要 XG 定的
 
-1. 寻址段常驻 system prompt 可缓存基段（约 3K 字符）。我倾向进。
+1. 寻址段常驻 system prompt 可缓存基段（约 2K 字符，只有结构）。我对 08-14 总纲的理解是它属于允许的一类（§2.2），这条需要你确认。
 2. 实施走 pipeline（下面 3 个 run），还是直接改。跨 prompt_builder / run_protocol / recall / CLI 分派，我倾向 pipeline。
 
 ## 7. 实施（3 个 run，每个独立可验证）
+
+### 7.1 实测：起步包和按需查各找到什么
+
+同一个 DDD（SwarmAI），同一个 `recall_ddd(purpose="design")`，两次查询：
+
+- 用请求原话"DDD 地图 按需 recall pipeline knowledge 目录 on-demand"：7 条，**没有**活/冷总纲；
+- 用写设计时才出现的词"system prompt 寻址 项目表 in-prompt index"：命中活/冷总纲。
+
+能决定这个设计的那条知识，要用方案的词才找得到，而这些词在 run create 时还不存在。所以一次性起步包无论多大，
+都替代不了 Agent 在想清楚之后自己查。
 
 | run | 内容 | 关键验收（每条先在 main 上红，做变异检查） |
 |---|---|---|
@@ -158,6 +201,9 @@ pipeline 的 `item_id` 是对单元原文取哈希，而 `split_blocks` 把条�
 ## 修订
 
 - r1（2026-10-28）：初稿：库登记表 + 单元模型 + 四操作 + 五种传输 + 6 个 run。
+- r3（2026-10-28）：XG 问构建时机、实效、延迟、通用 Knowledge 和方向。现场按需查 SwarmAI DDD，找到 08-14 活/冷总纲（零 in-prompt index）：
+  删掉寻址段里的项目表；补 §2.5 触发（定方案时用方案里的词查，并在 THINK/PLAN 产物里记下）、§2.6 构建时机/实效/延迟（实测）、
+  §2.7 通用 Knowledge；聊天命中改为条目级。实测：用请求原话召回，起步包里没有这条总纲；用设计里得出的词再查一次就命中（§7.1）。
 - r2（2026-10-28）：零上下文审查（已逐条对源码核实）：
   - 生产者赋 id 会被 `_META_RE` / `to_comment()` 丢掉、覆盖不到大部分条目、要动 8 处以上写入方 → 改为归一化内容哈希 `unit_id`，不改文件；
     同时发现现行 `item_id` 把元数据注释算进去，衰减一改写就变（1481/1712 条）。
