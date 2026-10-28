@@ -19,7 +19,6 @@ Key symbols: ``reindex_projects``, ``main``, ``_dump_after_seconds``.
 from __future__ import annotations
 
 import faulthandler
-import json
 import logging
 import os
 import sys
@@ -146,56 +145,20 @@ def reindex_projects(full: bool = False) -> dict:
             # parse failure) are ACCOUNTED for in the graph's meta (coverage_holes,
             # parse_status — the analysis structure layer reports them), never
             # silently dropped (the "never report-done-but-not-understood" guarantee).
-            from core.code_intel.parser import parse_repo_with_coverage, LANGUAGE_MAP
-            from core.code_intel import extract_and_store_routes
-            parse_out = parse_repo_with_coverage(repo_root)
-            mark = _phase(project_name, "parse_repo", mark)
-            parse_results = parse_out.results
-            coverage_holes = parse_out.coverage_holes
-            parse_status = parse_out.status
-            if parse_results:
-                graph.clear()
-                graph.bulk_insert(parse_results, repo_root=repo_root)
-                mark = _phase(project_name, "clear+bulk_insert", mark)
-                # bulk_insert already rebuilds FTS + resolves cross-file
-                # Persist the freshness marker ONLY after a genuine rebuild.
-                # freshness.current_head is now populated even on the
-                # never-indexed path (freshness.py), so this breaks the
-                # perpetual-full-rebuild loop (run_9a23dd4a). MUST stay INSIDE
-                # `if parse_results:` — a transient empty parse (pyo3 teardown,
-                # ThreadPool timeout, repo-not-yet-on-disk) must NOT advance the
-                # marker over a stale/empty graph, else check_freshness would
-                # report fresh forever (Gate-2 HIGH, run_9a23dd4a).
-                graph.mark_indexed(full=True, head=freshness.current_head)
-                # Preserve repo_root metadata
-                graph.set_meta("repo_root", str(repo_root))
-                graph.set_meta("parse_status", parse_status)
-                graph.set_meta("coverage_holes", json.dumps(coverage_holes))
-                if freshness.current_head:
-                    graph.set_meta("coverage_commit", freshness.current_head)
-                # Extract routes from all parsed files
-                for pr in parse_results:
-                    fp = pr.file_path if hasattr(pr, "file_path") else pr.get("file_path", "")
-                    if fp:
-                        full_fp = repo_root / fp
-                        if full_fp.exists():
-                            try:
-                                lang = LANGUAGE_MAP.get(full_fp.suffix, "unknown")
-                                content = full_fp.read_text(encoding="utf-8", errors="replace")
-                                extract_and_store_routes(graph, fp, content, lang)
-                            except Exception:
-                                pass
-                mark = _phase(project_name, "extract_routes", mark)
-                # Apply router prefix resolution (FastAPI include_router)
-                _resolve_prefixes(graph, repo_root)
-                mark = _phase(project_name, "resolve_prefixes", mark)
-            total_nodes = sum(len(pr.nodes) for pr in parse_results)
+            # The one full rebuild (core.code_intel.build.rebuild): coverage holes,
+            # routes and prefixes stored; an empty parse leaves the graph and its
+            # freshness marker untouched (a transient empty parse must not make an
+            # empty graph read fresh forever). freshness.current_head was read
+            # before the parse, so a commit landing meanwhile stays unindexed.
+            from core.code_intel.build import rebuild
+            built = rebuild(graph, repo_root, head=freshness.current_head)
+            mark = _phase(project_name, "rebuild", mark)
             results.append({
                 "project": project_name,
                 "status": "full_reindex",
-                "nodes": total_nodes,
-                "coverage_holes": len(coverage_holes),
-                "parse_status": parse_status,
+                "nodes": built.nodes,
+                "coverage_holes": len(built.coverage_holes),
+                "parse_status": built.parse_status,
             })
         else:
             # Incremental: only changed files, GRADED (run_4602932d).
@@ -222,7 +185,7 @@ def reindex_projects(full: bool = False) -> dict:
             # it to decide domain-layer staleness, design §7.4) — it is persisted for
             # that, not consumed by this function's own control flow.
             from core.code_intel.parser import parse_file, LANGUAGE_MAP, _tree_sitter_live, grammar_for
-            from core.code_intel import extract_and_store_routes
+            from core.code_intel.build import routes_for
             from core.code_intel import grading
 
             refreshed = 0
@@ -280,7 +243,6 @@ def reindex_projects(full: bool = False) -> dict:
                         if old_nodes else None
                     )
                     byte_changed = (content_hash is None) or (content_hash != old_hash)
-                    lang = LANGUAGE_MAP.get(full_path.suffix, "unknown")
                     grammar = grammar_for(full_path.suffix)
                     is_supported = grammar is not None and _tree_sitter_live(grammar)
 
@@ -304,8 +266,7 @@ def reindex_projects(full: bool = False) -> dict:
                             imports=result.imports,
                         )
                         restored.append(rel_path)
-                        content = full_path.read_text(encoding="utf-8", errors="replace")
-                        extract_and_store_routes(graph, rel_path, content, lang)
+                        routes_for(graph, repo_root, [rel_path], prefixes=False)
                         refreshed += 1
                     elif old_nodes:
                         # STRUCTURAL but the file lost ALL symbols (edited down to
@@ -340,7 +301,8 @@ def reindex_projects(full: bool = False) -> dict:
                 # prune is scoped to the re-stored files: a graph-wide one could delete
                 # edges another writer has not finished resolving.
                 graph.resolve_and_prune(files=restored)
-                _resolve_prefixes(graph, repo_root)
+                from core.code_intel import resolve_router_prefixes
+                resolve_router_prefixes(graph, repo_root)
                 graph.rebuild_fts()
                 mark = _phase(project_name, "resolve_and_prune+prefixes+rebuild_fts", mark)
             elif restored:
@@ -383,18 +345,6 @@ def reindex_projects(full: bool = False) -> dict:
                            project_name, type(exc).__name__, exc)
 
     return {"status": "success", "projects": results}
-
-
-def _resolve_prefixes(graph, repo_root: Path) -> None:
-    """Apply FastAPI include_router prefix resolution to stored routes.
-
-    Thin delegate to the shared ``core.code_intel.resolve_router_prefixes`` —
-    the FS watcher calls the same function after its route re-extraction, so
-    both route-storing paths produce identical (prefixed) paths.
-    """
-    from core.code_intel import resolve_router_prefixes
-
-    resolve_router_prefixes(graph, repo_root)
 
 
 def main(argv: list[str] | None = None) -> dict:

@@ -12,8 +12,8 @@ Two responsibilities, deliberately separable:
      validates + raises a field-specific ValueError.
   2. PULL+INDEX (IO, smoke-testable) — ``bind_repo(binding, worktree_root)`` clones a
      git-clonable target into a worktree OUTSIDE the git-tracked SwarmWS workspace and
-     builds a codeIntel graph by REUSING the existing indexer (``parse_repo`` +
-     ``GraphStore.bulk_insert``) — zero new indexer.
+     builds a codeIntel graph with the one full rebuild
+     (``core.code_intel.build.rebuild``) — zero new indexer.
 
 Scope boundary (Run 1): only git-clonable targets are PULLed here. An ``internal`` /
 ``brazil``-build binding (e.g. GCRAIDLCPreset via ``brazil ws create``) needs Midway +
@@ -500,12 +500,12 @@ def bind_in_progress(worktree: str | Path) -> bool:
 def bind_repo(binding: Binding, worktree_root: str | Path | None = None) -> BindResult:
     """Clone a git-clonable binding into a worktree and build its codeIntel graph.
 
-    Reuses the existing indexer (``parse_repo`` + ``GraphStore.bulk_insert``) — no new
-    indexer. Idempotent: an existing CLEAN worktree is removed before re-clone (Gate-1
+    Builds the graph with the one full rebuild (``core.code_intel.build.rebuild``).
+    Idempotent: an existing CLEAN worktree is removed before re-clone (Gate-1
     blocker 1); one with uncommitted or unpushed work is renamed aside and kept
     (``_clear_worktree_for_reclone``).
     A fresh ``GitSyncEngine`` is used per call (git_clone mutates ``self.workspace_dir`` —
-    Gate-1 blocker 2). ``graph.clear()`` runs before ``bulk_insert`` (Gate-1 blocker 3).
+    Gate-1 blocker 2).
 
     Any ``internal`` binding OR any ``brazil`` build_system is DEFERRED to the
     pre-Run-2 Brazil/Midway spike (design §7.2.2) → raises ``NotImplementedError``
@@ -552,26 +552,16 @@ def _bind_locked(binding: Binding, worktree: Path, db_path: Path) -> BindResult:
             "clone source omitted from this message in case it carries credentials)"
         )
 
-    # Index by reusing the existing whole-repo indexer — zero new indexer.
+    # The one full rebuild (core.code_intel.build.rebuild): routes, coverage, and
+    # an empty parse leaves the graph unstamped. HEAD is read before the parse.
+    from core.brain_bootstrap.repo_read import git as _git
+    from core.code_intel.build import rebuild
     from core.code_intel.graph_store import GraphStore
-    from core.code_intel.parser import parse_repo
 
-    parse_results = parse_repo(worktree)
+    head = (_git(Path(worktree), "rev-parse", "HEAD") or "").strip() or None
     graph = GraphStore(db_path)
     try:
-        graph.clear()  # Gate-1 blocker 3: bulk_insert is additive; clear first for a clean rebuild.
-        if parse_results:
-            graph.bulk_insert(parse_results, repo_root=worktree)
-        else:
-            graph.set_meta("repo_root", str(Path(worktree).resolve()))
-        # When and at which commit: without these the freshness check reads the
-        # graph as never indexed and the analysis reports indexed_commit null. Only
-        # a parse that produced something is stamped: an empty graph marked at HEAD
-        # would read fresh until the next commit (the reindex job's same rule).
-        if parse_results:
-            from core.brain_bootstrap.repo_read import git as _git
-            head = (_git(Path(worktree), "rev-parse", "HEAD") or "").strip() or None
-            graph.mark_indexed(full=True, head=head)
+        rebuild(graph, worktree, head=head)
         node_count = int(graph.get_codebase_summary().get("total_nodes", 0))
     finally:
         graph.close()

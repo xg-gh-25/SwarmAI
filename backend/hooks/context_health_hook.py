@@ -790,18 +790,20 @@ class ContextHealthHook:
                     project_dir.name, repo_root)
                 continue
 
-            # One shared incremental path (GraphStore.incremental_update): re-stores
-            # changed files keeping callers' edges, purges deleted / emptied files and
-            # their routes, resolves cross-file targets, rebuilds FTS and checkpoints
-            # the WAL. The old inline loop skipped files that lost all symbols and
-            # never resolved the cross-file targets it stored.
-            graph.incremental_update(repo_root, freshness.changed_files[:50])  # cap at 50
-            if freshness.current_head:
+            # The one incremental update (core.code_intel.build.update_files): every
+            # changed file (a full rebuild was already delegated above for more than
+            # FULL_REBUILD_FILES), with routes. The commit marker moves only when
+            # every file landed: it used to move after the first 50, so files 51+
+            # of a 51-100 file change were never indexed until a full rebuild.
+            from core.code_intel.build import update_files
+            upd = update_files(graph, repo_root, freshness.changed_files)
+            if upd.complete and freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
 
             logger.info(
-                "code_intel %s: incremental update — %d files refreshed",
-                project_dir.name, len(freshness.changed_files),
+                "code_intel %s: incremental update — %d updated, %d failed%s",
+                project_dir.name, len(upd.updated), len(upd.failed),
+                "" if upd.complete else " (commit marker not moved)",
             )
 
     # ------------------------------------------------------------------

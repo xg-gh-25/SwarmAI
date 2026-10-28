@@ -164,14 +164,16 @@ class TestRunReindexRepoPathParsing:
         captured = {}
 
         def fake_parse_repo(root):
+            from core.code_intel.parser import ParseRepoResult
             captured["root"] = root
-            return []
+            return ParseRepoResult(results=[], coverage_holes=[], status="complete")
 
-        # parse_repo is imported function-locally inside _run_reindex, so patch it at
-        # its SOURCE module; the graph comes from the project's cached store.
+        # The rebuild imports the parser function-locally, so patch it at its SOURCE
+        # module; the graph comes from the project's cached store.
         with patch("jobs.paths.PROJECTS_DIR", tmp_path), \
              patch.object(mod, "load_project_graph", return_value=graph), \
-             patch("core.code_intel.parser.parse_repo", side_effect=fake_parse_repo), \
+             patch("core.code_intel.parser.parse_repo_with_coverage",
+                   side_effect=fake_parse_repo), \
              patch.dict(mod._reindex_in_progress, {}, clear=True):
             mod._run_reindex("FakeProj")
         return captured

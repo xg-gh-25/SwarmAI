@@ -13,6 +13,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .build import FULL_REBUILD_FILES
+
 if TYPE_CHECKING:
     from .graph_store import GraphStore
 
@@ -157,7 +159,7 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
         commits_behind=commit_count,
         last_indexed=last_commit,
         current_head=current_head,
-        suggest_full_rebuild=(len(changed_files) > 100 or commit_count > 50),
+        suggest_full_rebuild=(len(changed_files) > FULL_REBUILD_FILES or commit_count > 50),
     ))
 
 

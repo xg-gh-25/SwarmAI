@@ -288,26 +288,11 @@ class TestWatcherRoutePrefixes:
         finally:
             graph.close()
 
-    def test_reindex_wrapper_delegates_to_shared_resolver(self, tmp_path):
-        """The reindex job's _resolve_prefixes and the watcher share ONE resolver."""
-        from core.code_intel import extract_and_store_routes
-        from core.code_intel.graph_store import GraphStore
-        from jobs.handlers.code_intel_reindex import _resolve_prefixes
-
-        repo, chat = self._repo(tmp_path)
-        graph = GraphStore(tmp_path / "ci.db")
-        try:
-            extract_and_store_routes(graph, "backend/routers/chat.py", self._CHAT, "python")
-            assert [r["path"] for r in graph.get_routes()] == ["/sessions"]
-            _resolve_prefixes(graph, repo)
-            assert [r["path"] for r in graph.get_routes()] == ["/api/chat/sessions"]
-        finally:
-            graph.close()
-
     def test_prefix_collision_drops_bare_duplicate_and_commits(self, tmp_path):
         """A bare row whose prefixed id already exists used to raise IntegrityError
         mid-transaction (rest of the batch unapplied, txn left open)."""
-        from core.code_intel import extract_and_store_routes, resolve_router_prefixes
+        from core.code_intel import resolve_router_prefixes
+        from core.code_intel.build import routes_for
         from core.code_intel.graph_store import GraphStore
         from core.code_intel.route_parser import _make_route_id
 
@@ -315,7 +300,7 @@ class TestWatcherRoutePrefixes:
         graph = GraphStore(tmp_path / "ci.db")
         try:
             fp = "backend/routers/chat.py"
-            extract_and_store_routes(graph, fp, self._CHAT, "python")
+            routes_for(graph, repo, [fp], prefixes=False)
             resolve_router_prefixes(graph, repo)
             # Re-create the stale bare twin of the already-prefixed route.
             graph._conn.execute(

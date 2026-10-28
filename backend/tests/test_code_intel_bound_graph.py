@@ -751,7 +751,7 @@ class TestRouterReindexTiming:
     def test_head_is_read_before_the_parse(self, bound_project):
         import routers.code_intel as mod
         from core.code_intel import invalidate_cache
-        from core.code_intel.parser import parse_repo as real_parse
+        from core.code_intel.parser import parse_repo_with_coverage as real_parse
         project_dir, clone, db = bound_project
         head_before = self._commit(clone, "keep.py")
 
@@ -762,7 +762,8 @@ class TestRouterReindexTiming:
 
         invalidate_cache("Demo")
         try:
-            with patch("core.code_intel.parser.parse_repo", side_effect=parse_then_commit):
+            with patch("core.code_intel.parser.parse_repo_with_coverage",
+                       side_effect=parse_then_commit):
                 mod._run_reindex("Demo")
         finally:
             invalidate_cache("Demo")

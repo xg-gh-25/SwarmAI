@@ -544,21 +544,22 @@ def index_code_mount(store: "LibraryMounts", mount_id: str) -> dict:
         store.check_health(mount_id)  # persists 'missing'
         return {"status": "source_missing"}
 
-    from core.code_intel.parser import parse_repo_with_coverage
+    from core.code_intel.build import rebuild
     from core.code_intel.graph_store import GraphStore
 
-    parse_out = parse_repo_with_coverage(src)
     _invalidate_mount_graph(mount_id)  # drop any cached handle before rewrite
     db_path = _mount_db_path(mount_id)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     graph = GraphStore(db_path)
+    # The one full rebuild, without routes (a library's routes have no reader) and
+    # without the indexed stamp (a mount's freshness is its own last_synced). An
+    # empty parse leaves a previous graph as it was.
+    built = rebuild(graph, src, head=None, routes=False, stamp=False)
     total = 0
-    if parse_out.results:
-        graph.clear()
-        graph.bulk_insert(parse_out.results, repo_root=str(src))
-        graph.set_meta("repo_root", str(src))  # points at the EXTERNAL source
+    if not built.empty:
+        graph.set_meta("repo_root", str(src))  # points at the EXTERNAL source, as given
         graph.set_meta("mount_id", mount_id)
-        total = sum(len(pr.nodes) for pr in parse_out.results)
+        total = built.nodes
     with _mount_cache_lock:
         _mount_graph_cache[mount_id] = graph
     if total > 0:

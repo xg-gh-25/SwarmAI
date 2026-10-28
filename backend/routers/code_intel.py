@@ -241,8 +241,6 @@ def _run_reindex(project: str) -> None:
     Releases _reindex_in_progress guard on completion (success or failure).
     """
     try:
-        from core.code_intel.parser import parse_repo
-
         from jobs.paths import PROJECTS_DIR
         from core.code_intel import (
             code_intel_dbs, repo_root_is_owned, resolve_owned_repo_root,
@@ -296,18 +294,15 @@ def _run_reindex(project: str) -> None:
                     head = _git(_Path(repo_path), ["rev-parse", "HEAD"]).strip() or None
                 except GitError:
                     head = None
-                parse_results = parse_repo(_Path(repo_path))
-                with graph._conn_lock:
-                    # A full re-index REPLACES the graph: bulk_insert only adds rows,
-                    # so without clear() deleted files and removed symbols stayed.
-                    graph.clear()
-                    if parse_results:
-                        graph.bulk_insert(parse_results, repo_root=repo_path)
-                    else:
-                        graph.set_meta("repo_root", str(_Path(repo_path).resolve()))
-                    # clear() dropped the freshness markers; re-stamp them, or every
-                    # freshness check would read "never indexed".
-                    graph.mark_indexed(full=True, head=head)
+                # The one full rebuild: it replaces the graph under the store's
+                # write lock (readers see the old graph or the new one), stores
+                # routes and coverage, and leaves an empty parse unstamped (it used
+                # to clear the graph and mark the empty result fresh).
+                from core.code_intel.build import rebuild
+                built = rebuild(graph, repo_path, head=head)
+                if built.empty:
+                    logger.warning(f"Re-index of {project}: the parse produced nothing; "
+                                   "the graph was left as it was")
         except BindInProgress as exc:
             logger.warning(f"Cannot reindex {project} now: {exc}")
             return

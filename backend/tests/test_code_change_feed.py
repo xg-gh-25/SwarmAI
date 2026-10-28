@@ -24,7 +24,7 @@ class TestParseNameStatus:
     def test_parses_renamed_file(self):
         feed = CodeChangeFeed()
         result = feed._parse_name_status(["R100\told/path.py\tnew/path.py"])
-        assert result == [("R", "new/path.py")]
+        assert result == [("D", "old/path.py"), ("R", "new/path.py")]
 
     def test_skips_empty_lines(self):
         feed = CodeChangeFeed()

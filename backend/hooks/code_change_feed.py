@@ -162,7 +162,10 @@ class CodeChangeFeed:
     def _parse_name_status(self, lines: list[str]) -> list[tuple[str, str]]:
         """Parse git name-status output into (status, path) tuples.
 
-        Status codes: A=added, M=modified, D=deleted, R=renamed (Rxx path1 path2)
+        Status codes: A=added, M=modified, D=deleted, R=renamed (Rxx path1 path2).
+        A rename yields the old path as deleted, then the new path as renamed: the
+        graph update must remove the old path's nodes (they used to stay until a full
+        rebuild), and architecture detection does not count a deletion.
         """
         changes: list[tuple[str, str]] = []
         for line in lines:
@@ -172,6 +175,8 @@ class CodeChangeFeed:
             parts = line.split("\t")
             if len(parts) >= 2:
                 status = parts[0][0] if parts[0] else ""  # First char (A/M/D/R)
+                if status == "R" and len(parts) >= 3:
+                    changes.append(("D", parts[1]))
                 path = parts[-1]  # Last element (for renames, this is the new path)
                 changes.append((status, path))
         return changes
@@ -406,10 +411,9 @@ def _reindex_changed_files(
         targets: list[str] = []
 
         for status, rel_path in file_changes:
-            # Deletions are passed on too: incremental_update removes the file's
-            # nodes, edges and routes when it no longer exists on disk.
-            # Note: a rename (R) re-indexes at the new path; the old path's nodes
-            # stay until the next full rebuild (the old path is not in file_changes).
+            # Deletions are passed on too: the update removes the file's nodes,
+            # edges and routes when it no longer exists on disk. A rename arrives as
+            # the old path deleted plus the new path (_parse_name_status).
 
             # Only files the graph holds — every language it parses, test files
             # included (a full rebuild indexes them; skipping them here left their
@@ -423,12 +427,13 @@ def _reindex_changed_files(
 
         if not targets:
             return 0
-        # The shared incremental path: replaces each file's nodes and outbound edges
-        # (keeping other files' calls into it), resolves cross-file targets and drops
-        # orphans. The old bulk_insert here only ADDED rows — removed symbols stayed
-        # in the graph forever and deletions were ignored.
-        result = graph.incremental_update(root, targets)
-        n = len(result.get("updated", []))
+        # The one incremental update (core.code_intel.build.update_files): replaces
+        # each file's nodes, outbound edges and routes (keeping other files' calls
+        # into it), removes deleted files, resolves cross-file targets. A commit too
+        # large for it is left to the reindex job (its freshness check sees it).
+        from core.code_intel.build import update_files
+        result = update_files(graph, root, targets)
+        n = len(result.updated)
         if n:
             logger.info("code_change_feed: re-indexed %d file(s) into code_intel", n)
         return n

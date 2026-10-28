@@ -213,34 +213,18 @@ class CodeIntelWatcher:
             logger.warning(f"CodeIntelWatcher incremental reindex failed: {e}")
 
     def _extract_routes_only(self, relative_files: list[str], abs_files: list[Path]):
-        """Extract routes for changed files (runs in thread, chunked).
+        """Re-store the routes of one chunk of changed files (runs in a thread).
 
-        Separated from graph update so that graph update (single FTS rebuild)
-        runs once, while route extraction (memory-heavy tree-sitter) is chunked.
+        Separated from the graph update so that the update (one FTS rebuild) runs
+        once while route extraction (memory-heavy tree-sitter) is chunked. Uses the
+        same route store as every other writer (build.routes_for), which re-applies
+        the include_router prefixes, or a route query after a watcher batch would
+        resolve to the wrong handler.
         """
-        from . import extract_and_store_routes, resolve_router_prefixes
-        from .parser import LANGUAGE_MAP
-
-        processed = 0
-        for abs_path, rel_path in zip(abs_files, relative_files):
-            if abs_path.suffix in LANGUAGE_MAP and abs_path.exists():
-                try:
-                    content = abs_path.read_text(errors="replace")
-                    language = LANGUAGE_MAP[abs_path.suffix]
-                    extract_and_store_routes(self._graph, rel_path, content, language)
-                    processed += 1
-                except Exception:
-                    pass  # Route extraction is best-effort
-
-        # extract_and_store_routes re-stores BARE decorator paths (`/sessions`);
-        # re-apply the include_router mount prefixes (`/api/chat/sessions`) exactly
-        # like the reindex job does, or a route query after a watcher batch resolves
-        # to the wrong handler (GS_COD010 flake). Idempotent on prefixed paths.
-        if processed:
-            try:
-                resolve_router_prefixes(self._graph, self._root)
-            except Exception as e:
-                logger.warning(f"CodeIntelWatcher: router prefix resolution failed: {e}")
+        from .build import routes_for
+        existing = [rel for rel, p in zip(relative_files, abs_files) if p.exists()]
+        if existing:
+            routes_for(self._graph, self._root, existing)
 
 
 def _drop_git_ignored(root: Path, files: list[Path]) -> list[Path]:

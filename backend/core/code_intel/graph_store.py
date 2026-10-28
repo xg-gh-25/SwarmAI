@@ -1610,7 +1610,9 @@ class GraphStore:
 
     @_write_locked
     def clear(self) -> None:
-        """Delete all nodes, edges, FTS data, and metadata."""
+        """Delete all nodes, edges, routes, imports, FTS data, and metadata. (Routes
+        used to survive, so a rebuild kept the routes of deleted handlers.)"""
+        self._conn.execute("DELETE FROM code_routes")
         self._conn.execute("DELETE FROM code_edges")
         self._conn.execute("DELETE FROM code_nodes")
         self._conn.execute("DELETE FROM code_imports")
