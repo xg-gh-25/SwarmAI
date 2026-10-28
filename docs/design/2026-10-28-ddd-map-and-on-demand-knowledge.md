@@ -3,7 +3,7 @@ title: 标准寻址 —— 让 SwarmAI 知道"什么信息在哪、怎么取"，
 date: 2026-10-28
 created: 2026-10-28
 updated: 2026-10-28
-status: proposed (r2)
+status: proposed (r2) — folded into docs/design/2026-10-28-knowledge-addressing.md as its pipeline door; id scheme there (unit_id) replaces item_id
 project: SwarmAI
 extends: docs/design/2026-10-26-run-knowledge.md
 ---
@@ -211,6 +211,7 @@ api-contract：已知集合和全部读者）。
 ## 修订
 
 - r1（2026-10-28）：初稿，只覆盖 pipeline 的 DDD 地图 + 按需读 + 位置引用。
+- r3（2026-10-28）：上升为产品能力，见 `2026-10-28-knowledge-addressing.md`；本文的 pipeline 部分作为那份设计的"pipeline 门"，引用身份改用那里的 `unit_id`（现行 `item_id` 含元数据注释，衰减一改写就变）。
 - r2（2026-10-28）：零上下文审查确认 2 个 HIGH、4 个 MED（均已对源码核实）：
   H1 位置引用在 answers.py:107 / hook_bridge.py:260 被静默丢弃，读者远多于 r1 列的三处 → 改为 id + 扩已知集合，契约形状不变；
   H2 `py -m` 按需命令受 cwd 影响 → 改为顶层 `knowledge` 子命令；
