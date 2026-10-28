@@ -66,7 +66,9 @@ def brain_dir(workspace: Path, brain: str) -> Path:
         raise PinError(f"not a Brain name: {brain!r}")
     root = (Path(workspace) / "Projects").resolve()
     d = (root / brain).resolve()
-    if d.parent != root or not d.is_dir():
+    if d.parent != root or not d.is_dir() or brain not in os.listdir(root):
+        # on a case-insensitive disk "swarmai" resolves to SwarmAI: the name must be
+        # the one on disk, or a Hive (case-sensitive) gets a second copy
         raise PinError(f"no Brain named {brain}")
     return d
 

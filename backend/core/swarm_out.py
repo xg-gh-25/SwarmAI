@@ -173,12 +173,17 @@ def _s3(inst: dict[str, Any]):
 
 
 def _log_row(inst: dict[str, Any], session_id: Optional[str], title: str, origin: str,
-             repos: Optional[list] = None) -> dict[str, Any]:
-    """One dispatch log row; ``session_id`` None when the Hive never named the session."""
-    return {"dispatch_id": f"so_{uuid.uuid4().hex[:12]}", "hive_id": inst["id"],
-            "hive": inst["name"], "session_id": session_id, "title": title,
-            "origin": origin, "sent_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "repos": repos or []}
+             repos: Optional[list] = None, agent: Optional[dict] = None) -> dict[str, Any]:
+    """One dispatch log row; ``session_id`` None when the Hive never named the session.
+    ``agent``: the Project Agent the task went under (brain, mode, revision, profile,
+    delivery, acceptance), from the host's own Task Spec."""
+    row = {"dispatch_id": f"so_{uuid.uuid4().hex[:12]}", "hive_id": inst["id"],
+           "hive": inst["name"], "session_id": session_id, "title": title,
+           "origin": origin, "sent_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "repos": repos or []}
+    if agent:
+        row["project_agent"] = agent
+    return row
 
 
 def task_message(task: str, repos: list) -> str:
@@ -189,9 +194,12 @@ def task_message(task: str, repos: list) -> str:
 
 
 async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-out",
-                   repos: Optional[list] = None) -> dict[str, Any]:
+                   repos: Optional[list] = None, *, segment: str = "",
+                   agent: Optional[dict] = None) -> dict[str, Any]:
     """Start the task on the Hive; return {dispatch_id, hive, session_id, title, sent_at,
-    repos}. ``repos``: ``[{url, ref}]`` the task works on (core/task_repos)."""
+    repos}. ``repos``: ``[{url, ref}]`` the task works on (core/task_repos).
+    ``segment`` + ``agent``: the project section put before the task and the Project
+    Agent the Hive pins the session to (``dispatch_spec``)."""
     from core import task_repos
     title = " ".join((title or "").split())[:MAX_TITLE_CHARS]
     task = (task or "").strip()
@@ -212,12 +220,13 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
             raise SwarmOutError(f"Hive {inst['name']} is busy; try again later")
         try:
             session_id = await asyncio.wait_for(
-                _start_session(client, task_message(task, declared), declared), SESSION_ID_WAIT_S)
+                _start_session(client, task_message(segment + task, declared), declared,
+                               _pin_request(agent)), SESSION_ID_WAIT_S)
         except (asyncio.TimeoutError, httpx.ReadTimeout):
             # The task may have been sent and taken: the Hive may be running it. Record
             # the dispatch without a session so this Hive's questions are still listed,
             # and say so instead of a generic failure (fixing spec J1).
-            row = _log_row(inst, None, title, origin, declared)
+            row = _log_row(inst, None, title, origin, declared, agent)
             await asyncio.to_thread(_append, json.dumps(row, ensure_ascii=False) + "\n")
             raise SwarmOutError(
                 f"Hive {inst['name']} did not name the session within {SESSION_ID_WAIT_S}s; "
@@ -225,7 +234,7 @@ async def dispatch(hive_ref: str, title: str, task: str, origin: str = "swarm-ou
                 "it again.") from None
     if not session_id or not KEY_RE.match(session_id):
         raise SwarmOutError("the Hive did not name a session")
-    row = _log_row(inst, session_id, title, origin, declared)
+    row = _log_row(inst, session_id, title, origin, declared, agent)
     line = json.dumps(row, ensure_ascii=False) + "\n"
     await asyncio.to_thread(_append, line)
     logger.info("swarm_out: dispatched %s to %s (session %s)", row["dispatch_id"], inst["name"], session_id)
@@ -237,8 +246,68 @@ def _append(line: str) -> None:
         f.write(line)
 
 
+def _pin_request(agent: Optional[dict]) -> Optional[dict]:
+    """What the Hive pins the session to (routers/chat.py ``project_agent``): it
+    recomputes the revision from its own copy and refuses the task when it differs."""
+    if not agent:
+        return None
+    return {"brain": agent["brain"], "mode": agent["mode"], "revision": agent["revision"]}
+
+
+async def dispatch_spec(hive_ref: str, title: str, brain: str, task: str, acceptance: str,
+                        mode: Optional[str] = None, profile: Optional[str] = None,
+                        origin: str = "swarm-out", *, seen_revision: str) -> dict[str, Any]:
+    """Dispatch under *brain*'s Project Agent (design 2026-10-28-project-agent-flow §7):
+    the host builds the Task Spec from the definition (``core.task_spec``), refuses it
+    when the definition is not the revision the person was shown (``seen_revision``,
+    from ``/spec``) or admission fails (naming the rule), syncs the Brain when the
+    Hive's copy differs, then dispatches with the project section and the pin. The row
+    records the spec; the result says what the sync did (``brain_sync``)."""
+    from core import brain_sync_host, task_spec
+    from core.project_registry import get_swarmws
+    ws = get_swarmws()
+    try:
+        spec = await asyncio.to_thread(task_spec.build, ws, brain, task, acceptance, mode, profile, "hive")
+    except task_spec.SpecError as e:
+        raise SwarmOutError(str(e)) from None
+    if not seen_revision or spec["revision"] != seen_revision:
+        raise SwarmOutError(f"{brain}'s Project Agent changed since it was shown; show the spec again")
+    reasons = task_spec.admit(spec)
+    if reasons:
+        raise SwarmOutError(f"{brain} cannot be sent to a Hive: " + "; ".join(reasons))
+    inst = await _instance(hive_ref)
+    try:
+        remote = await brain_sync_host.hive_brains(inst)
+        if not remote["supported"]:
+            raise SwarmOutError(f"Hive {inst['name']}'s version cannot receive Brains; update it once")
+        local = await asyncio.to_thread(brain_sync_host.local_brain, ws, brain)
+        if local["digest"] is None:
+            raise SwarmOutError(f"{brain} cannot be packaged: {local['error']}")
+        have = remote["brains"].get(brain) or {}
+        synced = "up to date"
+        if have.get("digest") != local["digest"]:
+            await brain_sync_host.sync(inst, brain, ws)
+            synced = "synced"
+        elif have.get("current_digest") != local["digest"]:
+            # the Hive's copy was changed there: the host is the only writer, so it is restored
+            await brain_sync_host.sync(inst, brain, ws)
+            n = have.get("changed_files")
+            synced = f"restored {n} file(s) the Hive had changed" if isinstance(n, int) else "restored"
+    except brain_sync_host.SyncRefused as e:
+        raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: {e}; nothing was sent") from None
+    except httpx.HTTPError as e:
+        raise SwarmOutError(f"{brain} could not be synced to {inst['name']}: the Hive did not answer "
+                            f"({type(e).__name__}); nothing was sent") from None
+    agent = {k: spec[k] for k in ("brain", "mode", "revision", "profile", "delivery", "acceptance")}
+    row = await dispatch(hive_ref, title, spec["task"], origin,
+                         [{"url": r["url"], "ref": r["ref"]} for r in spec["repos"]],
+                         segment=task_spec.segment(spec), agent=agent)
+    return {**row, "brain_sync": synced}
+
+
 async def _start_session(client: httpx.AsyncClient, message: str,
-                         repos: Optional[list] = None) -> Optional[str]:
+                         repos: Optional[list] = None,
+                         project_agent: Optional[dict] = None) -> Optional[str]:
     """POST the message and read SSE only until the Hive names the session, then drop
     the connection: the Hive keeps running the turn (it detaches a gone client). The
     task's repositories go as ``task_repos`` (a Hive older than that field ignores it;
@@ -246,9 +315,16 @@ async def _start_session(client: httpx.AsyncClient, message: str,
     body: dict[str, Any] = {"agent_id": "default", "message": message}
     if repos:
         body["task_repos"] = [{"url": r["url"], "ref": r["ref"]} for r in repos]
+    if project_agent:
+        body["project_agent"] = project_agent
     async with client.stream("POST", "/api/chat/stream", json=body,
                              timeout=httpx.Timeout(HTTP_TIMEOUT_S, read=SESSION_ID_WAIT_S)) as r:
         if r.status_code != 200:
+            if project_agent and r.status_code in (400, 422):
+                # routers/chat.py refuses a pin it cannot make (the Hive's copy is not
+                # this revision): the Hive's own text is never shown
+                raise SwarmOutError("the Hive refused the Project Agent pin (its copy of the Brain "
+                                    "is not the revision sent); send it again")
             raise SwarmOutError(f"the Hive refused the task (HTTP {r.status_code})")
         async for line in r.aiter_lines():
             if not line.startswith("data:"):

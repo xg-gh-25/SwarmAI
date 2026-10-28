@@ -366,7 +366,9 @@ flowchart TB
 - 验收不为空。
 - 目标 Hive 能同步 Brain。
 
-**④ 确认：** 列出 Brain、mode 和 profile（以及各自命中的规则）、验收、仓库、在哪跑、交付方式、定义版本，人点了才派。沿用 s_swarm-out 已有的"派出前确认"这一步，用 AskUserQuestion 的形式。
+**④ 确认：** 列出 Brain、mode 和 profile（以及各自命中的规则）、验收、仓库、在哪跑、交付方式、定义版本，人点了才派。沿用 s_swarm-out 已有的"派出前确认"这一步，用 AskUserQuestion 的形式。派发必须带上确认时看到的 revision（`swarm_out spec` 给出），定义在确认之后又变了就拒绝派发。确认这一步本身由 skill 执行，按 P5 本机 agent 不在防范范围内，代码能保证的是"派出去的就是给人看过的那个版本"。
+
+**实现（第 7 步）：** `core/task_spec.py`（route / build / admit / segment），`swarm_out route | spec | dispatch` 三个命令。仓库只从定义里取，调用方不能再传 `--repo`。准入除了上面几条，还拒绝 schema 1 的定义（它的仓库不在 mode 里）、没有 revision 的定义、来源检查发现命令没有出处的定义。派发结果带 `brain_sync`：同步了、已是最新、或还原了 Hive 上改过的文件。Hive 收到不带 revision 的 pin 一律拒绝。
 
 **⑤ 同步：** 见 §6。
 

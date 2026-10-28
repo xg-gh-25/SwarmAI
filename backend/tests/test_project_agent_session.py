@@ -390,13 +390,20 @@ async def test_a_chat_request_is_pinned_before_the_turn(async_client, tmp_path, 
             yield {"type": "result", "sessionId": "s-stub"}
 
     monkeypatch.setattr(chat_router, "_get_router", lambda: _Router())
+    from core.project_agent import revision
+    rev = revision(ws / "Projects" / "Lib")
+    # a pin that names no revision would skip the host-vs-Hive comparison: refused
     r = await async_client.post("/api/chat/stream", json={
         "agent_id": "default", "message": "hi", "project_agent": {"brain": "Lib", "mode": "release"}})
+    assert r.status_code in (400, 422) and not seen
+    r = await async_client.post("/api/chat/stream", json={
+        "agent_id": "default", "message": "hi",
+        "project_agent": {"brain": "Lib", "mode": "release", "revision": rev}})
     assert r.status_code == 200
     assert seen["project_agent"]["mode"] == "release" and seen["project_agent"]["gates"] == ["block_rm", "slow"]
     seen.clear()
     r = await async_client.post("/api/chat/stream", json={
-        "agent_id": "default", "message": "hi", "project_agent": {"brain": "Lib", "mode": "nope"}})
+        "agent_id": "default", "message": "hi", "project_agent": {"brain": "Lib", "mode": "nope", "revision": rev}})
     assert r.status_code in (400, 422) and not seen
     r = await async_client.post("/api/chat/stream", json={"agent_id": "default", "message": "hi"})
     assert r.status_code == 200 and seen["project_agent"] is None

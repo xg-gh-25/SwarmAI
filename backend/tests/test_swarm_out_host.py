@@ -211,7 +211,7 @@ def test_dropped_questions_and_options_are_counted():
 
 
 def test_a_dispatch_that_timed_out_is_recorded_without_a_session(patched, monkeypatch):
-    async def never(client, message, repos=None):
+    async def never(client, message, repos=None, project_agent=None):
         await asyncio.sleep(10)
     monkeypatch.setattr(swarm_out, "_start_session", never)
     monkeypatch.setattr(swarm_out, "SESSION_ID_WAIT_S", 0.05)

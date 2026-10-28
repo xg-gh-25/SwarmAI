@@ -192,12 +192,19 @@ def gate_files(project_dir: Path) -> dict[str, Path]:
     out: dict[str, Path] = {}
     for p in sorted(root.iterdir()):
         if (p.is_file() and not p.is_symlink() and p.suffix == ".py" and not p.name.startswith("test_")
-                and whitelisted(f"3-gates/{p.name}", False)):
+                and whitelisted(f"3-gates/{p.name}", _is_general_dir(project_dir))):
             out[p.stem] = p
     return out
 
 
-def _tree_files(root: Path, prefix: str) -> list[Path]:
+def _is_general_dir(project_dir: Path) -> bool:
+    """True for the General Brain's directory (``Knowledge/Library``), which travels
+    under the General whitelist (its Markdown only)."""
+    p = Path(project_dir)
+    return p.name == "Library" and p.parent.name == "Knowledge"
+
+
+def _tree_files(root: Path, prefix: str, general: bool = False) -> list[Path]:
     """The files under *root* that travel to a Hive (``core.brain_sync.whitelisted`` of
     ``<prefix>/<rel>``): the revision and the gates digest cover exactly what a Hive
     receives, so a Hive recomputes the same values from its copy."""
@@ -209,7 +216,7 @@ def _tree_files(root: Path, prefix: str) -> list[Path]:
         rel = p.relative_to(root)
         if any(part in _GATE_SKIP_PARTS for part in rel.parts) or p.suffix == ".pyc":
             continue
-        if p.is_file() and not p.is_symlink() and whitelisted(f"{prefix}/{rel.as_posix()}", False):
+        if p.is_file() and not p.is_symlink() and whitelisted(f"{prefix}/{rel.as_posix()}", general):
             files.append(p)
     return files
 
@@ -232,7 +239,7 @@ def gates_snapshot(project_dir: Path) -> tuple[str, dict[str, bytes]]:
     root = _gates_dir(project_dir)
     h = hashlib.sha256()
     files: dict[str, bytes] = {}
-    for f in _tree_files(root, "3-gates"):
+    for f in _tree_files(root, "3-gates", _is_general_dir(project_dir)):
         rel = str(f.relative_to(root))
         data = f.read_bytes()
         _hash_one(h, rel, data)
@@ -441,7 +448,7 @@ def revision(project_dir: Path) -> Optional[str]:
             d = caps / s
             if d.is_dir() and not d.is_symlink():
                 h.update(b"skill:" + s.encode("utf-8") + b"\0")
-                _hash_files(h, caps, _tree_files(d, f"4-capabilities/{s}"))
+                _hash_files(h, caps, _tree_files(d, f"4-capabilities/{s}", _is_general_dir(project_dir)))
     h.update(b"gates:" + gates_digest(project_dir).encode("ascii"))
     return h.hexdigest()
 

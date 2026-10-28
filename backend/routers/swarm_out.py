@@ -30,8 +30,32 @@ class DispatchBody(BaseModel):
     title: str = Field(min_length=1, max_length=swarm_out.MAX_TITLE_CHARS * 2)
     task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
     origin: str = Field(default="swarm-out", max_length=40)
-    # [{url, ref}] the task works on (core/task_repos validates them)
-    repos: Optional[list[dict[str, Any]]] = Field(default=None, max_length=20)
+    # the Brain whose Project Agent the task goes under ("General" = the Runner Agent),
+    # the mode and profile chosen from its definition, and what done looks like. The
+    # repositories come from the definition (core/task_spec), not from the caller.
+    brain: Optional[str] = Field(default=None, max_length=80)
+    mode: Optional[str] = Field(default=None, max_length=80)
+    profile: Optional[str] = Field(default=None, max_length=20)
+    acceptance: Optional[str] = Field(default=None, max_length=4000)
+    # the revision /spec showed the person: a definition changed since is refused
+    revision: Optional[str] = Field(default=None, max_length=64)
+
+
+class RouteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
+    brain: Optional[str] = Field(default=None, max_length=80)
+    # the deterministic signals of detect_active_project: an open file, the project
+    # whose bound repository the calling session works in
+    editor_file_path: Optional[str] = Field(default=None, max_length=1000)
+    session_bound_project: Optional[str] = Field(default=None, max_length=80)
+
+
+class SpecBody(BaseModel):
+    brain: str = Field(min_length=1, max_length=80)
+    task: str = Field(min_length=1, max_length=swarm_out.MAX_TASK_CHARS)
+    acceptance: str = Field(default="", max_length=4000)
+    mode: Optional[str] = Field(default=None, max_length=80)
+    profile: Optional[str] = Field(default=None, max_length=20)
 
 
 class AnswerBody(BaseModel):
@@ -56,7 +80,46 @@ async def _call(coro) -> Any:
 @router.post("/dispatch")
 async def dispatch(body: DispatchBody) -> dict[str, Any]:
     _require_desktop()
-    return await _call(swarm_out.dispatch(body.hive, body.title, body.task, body.origin, body.repos))
+    if not body.brain:
+        raise HTTPException(status_code=400, detail=(
+            "say which Brain the task belongs to (route it first); General sends it to the "
+            "Runner Agent"))
+    if not body.revision:
+        raise HTTPException(status_code=400, detail="pass the revision the spec showed (run spec first)")
+    return await _call(swarm_out.dispatch_spec(body.hive, body.title, body.brain, body.task,
+                                               body.acceptance or "", body.mode, body.profile,
+                                               body.origin, seen_revision=body.revision))
+
+
+@router.post("/route")
+async def route(body: RouteBody) -> dict[str, Any]:
+    """Which Brain a task belongs to (core.task_spec.route)."""
+    _require_desktop()
+    import asyncio
+    from core import task_spec
+    from core.project_registry import get_swarmws
+    try:
+        return await asyncio.to_thread(task_spec.route, get_swarmws(), body.text, body.brain,
+                                       body.editor_file_path, body.session_bound_project)
+    except task_spec.SpecError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/spec")
+async def spec(body: SpecBody) -> dict[str, Any]:
+    """The Task Spec the dispatch would send, its admission and the project section:
+    what the confirmation shows. Nothing is sent."""
+    _require_desktop()
+    import asyncio
+    from core import task_spec
+    from core.project_registry import get_swarmws
+    try:
+        s = await asyncio.to_thread(task_spec.build, get_swarmws(), body.brain, body.task,
+                                    body.acceptance, body.mode, body.profile, "hive")
+    except task_spec.SpecError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"spec": {k: v for k, v in s.items() if k != "task"},
+            "refusals": task_spec.admit(s), "segment": task_spec.segment(s)}
 
 
 @router.get("/hives")

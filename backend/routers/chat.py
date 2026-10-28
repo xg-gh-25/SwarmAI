@@ -426,6 +426,10 @@ async def chat_stream(request: Request):
         from core.project_agent_session import PinError, make_pin
         from core.project_registry import get_swarmws
         pa = chat_request.project_agent
+        if not isinstance(pa.get("revision"), str) or not pa.get("revision"):
+            # a pin without the revision the host dispatched would skip the comparison
+            raise ValidationException(message="Invalid Project Agent",
+                                      detail="the request names no revision of the Project Agent")
         try:
             project_agent_pin = await asyncio.to_thread(
                 make_pin, get_swarmws(), str(pa.get("brain") or ""),
