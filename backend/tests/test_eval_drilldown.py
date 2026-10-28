@@ -91,10 +91,11 @@ def test_capture_records_drilldown_and_run_record_keeps_it(monkeypatch, tmp_path
 
 
 def test_final_text_is_bounded(monkeypatch):
-    long_answer = "答" * 9000
+    long_answer = "答" * (er._JUDGE_TEXT_MAX + 5000)
     stdout = _stream().rsplit("\n", 1)[0] + "\n" + json.dumps({"type": "result", "result": long_answer})
 
     def _raw(prompt, allowed_tools=None, timeout=240, system="bare", workspace=None):
         return sr.parse_trajectory(stdout), long_answer, stdout
     monkeypatch.setattr("scripts.scenario_runner.run_scenario_raw", _raw)
-    assert len(er.eval_trajectory_capture(_case())["final_text"]) == er._FINAL_TEXT_MAX
+    # the record keeps what the decision judge read
+    assert len(er.eval_trajectory_capture(_case())["final_text"]) == er._JUDGE_TEXT_MAX

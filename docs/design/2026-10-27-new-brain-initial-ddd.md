@@ -463,7 +463,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - 空段都有对应的 gap。
 
 **判断部分**（OS Eval 的 golden case，只在 CI、部署或定时运行，不在 coding pipeline 里跑）：
-- 在 `backend/templates/eval/fixtures/workspace/repos/` 放两个自编的小 repo（不拷公开 repo：license 和内容都不可控）：Python 签名库 `tokensign`、带 ADR 的 Go 服务 `ledgerd`，各附 4 条 must-have 主张，写在 case 的 rubric 和 `fixtures/README.md` 里。例如"默认摘要算法改了会让已签发 token 全部失效"必须出现，并且出处可查。每个 repo 还埋了陷阱：一句写给 AI 的指令、一份状态流水账、一条被否决的 ADR。
+- 在 `backend/templates/eval/fixtures/workspace/repos/` 放两个自编的小 repo（不拷公开 repo：license 和内容都不可控）：Python 签名库 `tokensign`、带 ADR 的 Go 服务 `ledgerd`，各附 4 条 must-have 主张，写在 case 的 rubric 和 `fixtures/README.md` 里。例如"默认摘要算法改了会让已签发 token 全部失效"必须出现，并且出处可查。每个 repo 还埋了陷阱：一句写给 AI 的指令、一份状态流水账、一条被否决的 ADR。和真实流程一样，agent 从预先生成的 `survey.json` 出发（r10）。
 - 指标：
   - must-have 覆盖率；
   - **忠实率**：零上下文判官逐条核对"主张是否被出处原文支持"；
@@ -701,9 +701,22 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
   - 离线测试 `OFF_BRAIN_FIRST_ENTRIES_LIB`（tokensign）和 `OFF_BRAIN_FIRST_ENTRIES_ADR`（ledgerd），`gating: watch`。判官按 rubric 判 4 条 must-have、编造（含埋的指令和被否的 ADR）、流水账，并在 notes 里给出覆盖、无出处主张、流水账三个计数，作为定门槛的基线。
 - **判官只看答案，看不到 repo**：
   - rubric 里列出 repo 说过的全部事实，列表之外的主张算无出处。
-  - 出处是否真实存在交给新的确定性检查 `bootstrap_entries:<repo>`。它调用 `apply.check_entry`，用 `bootstrap-apply` 自己的规则校验，出处对照随产品发布的夹具 repo。它比 `bootstrap-apply` 严两处：只认 repo 文件，不认 `user`、`url:`、`file:`；整个列表必须落在判官读得到的前 4000 字符里。
+  - 出处是否真实存在交给新的确定性检查 `bootstrap_entries:<repo>`。它调用 `apply.check_entry`，用 `bootstrap-apply` 自己的规则校验，出处对照随产品发布的夹具 repo。它比 `bootstrap-apply` 严两处：只认 repo 文件，不认 `user`、`url:`、`file:`；整个列表必须落在判官读得到的窗口里（r9 时是 4000 字符，r10 放宽到 12000）。
 - **和原设计的差别**：
   - 两个 repo，不是三个，TS 服务没做，产品 golden set 现在 49/50；
-  - 不预先放 survey.json，因为它带绝对路径和 git 历史，夹具 repo 也不是 git 仓库，agent 直接读 repo；
+  - ~~不预先放 survey.json，agent 直接读 repo~~：r10 改回预先放，见下；
   - skill 的 P2b 契约写在 prompt 里，SKILL.md 改了 prompt 要同步。
 - **记为已知问题**：`scripts/eval_runner_test.py::TestEvalHistoryOutput::test_output_schema_valid` 读本机 live workspace 的 EvalHistory，最新文件没有 `overall_score`，在本次改动之前就红，不在本步范围。
+
+**r10（2026-10-28）**：第 7 步的离线测试第一次运行后修正。
+- **第一次运行的结果**：两条都在轨迹检查上失败，判官没有跑。agent 只用了 Read，按猜测的文件名去读，tokensign 没读到 `docs/design.md`，ledgerd 一个 ADR 都没读到。原因在 r9 的偏离：真实流程里 agent 先读 survey，survey 已经把文档排好级、第 1 级全文内联；拿掉 survey，这两条测的就成了"没有地图能不能自己摸清 repo"，不是产品要 agent 做的事。
+- **改法**：
+  - `scripts/eval_fixture_surveys.py` 用真实的 survey 代码给两个夹具 repo 生成 `Projects/<Brain>/.artifacts/bootstrap/survey.json`，`root` 改为相对路径，`generated_at` 固定；测试重新生成后比对，夹具 repo 或 survey 代码一变就红。
+  - prompt 改为先读 survey，再完整读它列出、但没有内联的文档；轨迹要求读 survey，ledgerd 还要读 ADR 0001 和 RUNBOOK（它们不内联）。
+  - rubric 补上代码里的事实（例如 `hmac.compare_digest`、按 id 升序加锁），从代码里写出的真条目不再被判成无出处。
+  - 判官窗口和运行记录里保存的答案长度都放宽到 12000：12 条正常长度的条目会超过 4000。
+- **顺带修的问题**：
+  - **夹具串扰**：ledgerd 原来用 8080 端口，正是 `OFF_WRONG_PREMISE` 里用户的错误前提，agent grep `8080` 会碰到它。改为 9180，并加测试：夹具 repo 里不得出现 8080 和 7421。
+  - **survey 读到外层 repo 的 git**：被调查的目录不是 git 顶层时（夹具 repo 位于 SwarmAI 仓库里），survey 原来会写进外层仓库的 HEAD、remote 和提交历史，热点也是从外层仓库算出来的。现在 `identity` 和提交历史只在目录本身是 repo 顶层时才读，规则和 `list_files` 一致。
+  - **`test_no_case_depends_on_one_machine_or_checkout`**：原来一律禁止出现 `Projects/`。现在放行夹具工作区里真实存在、且不含 `..` 的路径。
+- **mutation 检查**：8 处，全部被抓到。

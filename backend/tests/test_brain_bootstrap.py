@@ -566,3 +566,14 @@ def test_recall_cli_marks_repo_doc_hits_untrusted(repo: Path, kdb, capsys) -> No
     hits = json.loads(capsys.readouterr().out)["buckets"]["library"]
     bind = [h for h in hits if h["source"].startswith("bind:")]
     assert bind and all(h.get("untrusted") is True for h in bind)
+
+
+def test_a_folder_inside_another_repo_gets_none_of_its_git_facts(repo: Path) -> None:
+    # src/ sits inside acme's repo but is not its top level: acme's HEAD and its fix
+    # commits on src/a.py are not src/'s history (list_files already walks it as a tree).
+    whole = survey.survey_repo("acme", repo)
+    assert whole["identity"]["head"] and whole["history"]["hotspots"]
+    inner = survey.survey_repo("src", repo / "src")
+    assert inner["identity"]["head"] is None and inner["identity"]["default_branch"] is None
+    assert inner["history"]["hotspots"] == []
+    assert repo_read.log_commits(repo / "src") == []

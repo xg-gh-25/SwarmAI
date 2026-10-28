@@ -70,7 +70,7 @@ export function JudgesTab() {
 
       {offline && <JudgeCard j={offline} model={J.judge_model} title={t('Offline decision judge', '离线判决 judge')} where={t('step two of an offline case', '离线考题的第二步')} rows={[
         [t('Judges', '判什么'), t('whether the agent’s final answer in the sample workspace meets the case’s rubric', 'agent 在样例工作区里的最终回答，是否满足这条 case 的判定标准')],
-        [t('Sees', '拿到什么'), t('the rubric and the final answer (first 4000 characters); no tool record, no rule files', '判定标准 + agent 的最终回答（前 4000 字）；不给工具记录，不给规则文件')],
+        [t('Sees', '拿到什么'), t('the rubric and the final answer (first 12000 characters); no tool record, no rule files', '判定标准 + agent 的最终回答（前 12000 字）；不给工具记录，不给规则文件')],
         [t('Returns', '给出什么'), t('pass / fail, a confidence, one line on what it actually recommended', '通过 / 不通过 + 置信度 + 一句话说明它实际推荐了什么')],
         [t('Called', '什么时候调'), t('only after the trajectory check passes', '只在轨迹检查通过之后；轨迹没过直接判不通过')],
         [t('Used by', '用在'), (offline.case_ids ?? []).join(', ') || '—'],

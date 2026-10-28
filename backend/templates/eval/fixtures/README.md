@@ -39,6 +39,16 @@ Facts the cases rely on (keep them in sync with templates/eval/golden_set.yaml):
   Rejected and must not become the plan; `notes/sprint-14.md` is a status log.
 - The two repos are not git repositories (a nested `.git` cannot ship): their sources are
   checked against the walked file tree. `tests/test_eval_bootstrap_entries.py` pins the
-  sentences the rubrics rely on; change both together.
+  sentences the rubrics rely on; change both together. Each rubric also lists what the
+  code says, so a true entry taken from the code is not judged unsupported.
+- `Projects/Tokensign/` and `Projects/Ledgerd/` hold only
+  `.artifacts/bootstrap/survey.json`, which the cases start from, as the real flow does
+  after a bind. They are written by the real survey code with `root` made relative and a
+  fixed `generated_at`: after changing a fixture repo or the survey code, run
+  `"$SWARM_BACKEND_BIN" py -m scripts.eval_fixture_surveys --write` (the test fails until
+  you do). The surveys carry no git facts and no code graph.
+- No fixture repo may contain `8080` or `7421`: OFF_WRONG_PREMISE and OFF_RIGHT_PREMISE
+  ask for the Demo port, and a Grep hit in another repo is a false lead (ledgerd uses
+  9180).
 
 This README sits outside `workspace/` so the agent under test cannot read the answers.

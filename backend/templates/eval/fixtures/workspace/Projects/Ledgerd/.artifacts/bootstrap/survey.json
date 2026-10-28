@@ -1,0 +1,154 @@
+{
+ "schema": "swarmai.brain-survey",
+ "version": 1,
+ "generated_at": "fixture",
+ "project": "Ledgerd",
+ "repos": [
+  {
+   "repo": "ledgerd",
+   "root": "repos/ledgerd",
+   "identity": {
+    "remote": null,
+    "head": null,
+    "default_branch": null,
+    "license": null
+   },
+   "packages": [
+    {
+     "name": "ledgerd",
+     "root": ".",
+     "language_mix": {
+      "go": 4
+     },
+     "detected_by": "root"
+    }
+   ],
+   "docs": [
+    {
+     "path": "README.md",
+     "ref": "README.md",
+     "kind": "doc",
+     "tier": 1,
+     "signals": [
+      "root-readme"
+     ],
+     "bytes": 330,
+     "last_commit": null,
+     "included": true,
+     "reason": "inlined whole",
+     "text": "# ledgerd\n\nledgerd records money transfers between accounts as a double-entry ledger: every\ntransfer is two postings that sum to zero, and an account's balance is the sum of its\npostings. It serves an HTTP+JSON API on port 9180 and keeps everything in Postgres.\n\n## Running\n\n    make run        # needs DATABASE_URL\n    make test\n"
+    },
+    {
+     "path": "docs/ARCHITECTURE.md",
+     "ref": "docs/ARCHITECTURE.md",
+     "kind": "doc",
+     "tier": 1,
+     "signals": [
+      "architecture-doc"
+     ],
+     "bytes": 616,
+     "last_commit": null,
+     "included": true,
+     "reason": "inlined whole",
+     "text": "# Architecture\n\n`cmd/ledgerd` starts the HTTP server (`internal/api`), which calls `internal/ledger` for\nthe transfer rules; `internal/store` is the only package that talks to Postgres.\n\n## Money\n\nAmounts are `int64` minor units (cents). Never use `float64` for an amount: rounding\nmakes the two postings of a transfer stop summing to zero, and the ledger refuses to\ncommit it.\n\n## Locks\n\nA transfer locks both accounts before reading their balances (ADR 0001). Always lock the\nlower account id first. Locking in request order deadlocks two concurrent transfers in\nopposite directions between the same two accounts.\n"
+    },
+    {
+     "path": "docs/adr/0001-postgres-advisory-locks.md",
+     "ref": "docs/adr/0001-postgres-advisory-locks.md",
+     "kind": "doc",
+     "tier": 2,
+     "signals": [
+      "design-record-dir",
+      "numbered-adr"
+     ],
+     "bytes": 770,
+     "last_commit": null,
+     "included": false,
+     "reason": "listed: read it in full when writing the section that needs it"
+    },
+    {
+     "path": "docs/adr/0002-idempotency-keys.md",
+     "ref": "docs/adr/0002-idempotency-keys.md",
+     "kind": "doc",
+     "tier": 2,
+     "signals": [
+      "design-record-dir",
+      "numbered-adr"
+     ],
+     "bytes": 527,
+     "last_commit": null,
+     "included": false,
+     "reason": "listed: read it in full when writing the section that needs it"
+    },
+    {
+     "path": "docs/RUNBOOK.md",
+     "ref": "docs/RUNBOOK.md",
+     "kind": "doc",
+     "tier": 4,
+     "signals": [],
+     "bytes": 300,
+     "last_commit": null,
+     "included": false,
+     "reason": "listed: read it in full when writing the section that needs it"
+    },
+    {
+     "path": "docs/adr/0003-grpc-api.md",
+     "ref": "docs/adr/0003-grpc-api.md",
+     "kind": "doc",
+     "tier": 4,
+     "signals": [
+      "superseded-or-rejected"
+     ],
+     "bytes": 256,
+     "last_commit": null,
+     "included": false,
+     "reason": "listed: read it in full when writing the section that needs it"
+    },
+    {
+     "path": "notes/sprint-14.md",
+     "ref": "notes/sprint-14.md",
+     "kind": "doc",
+     "tier": 4,
+     "signals": [],
+     "bytes": 129,
+     "last_commit": null,
+     "included": false,
+     "reason": "listed: read it in full when writing the section that needs it"
+    }
+   ],
+   "api_contracts": [],
+   "commands": [
+    {
+     "source": "Makefile",
+     "kind": "make",
+     "name": "run",
+     "command": "make run"
+    },
+    {
+     "source": "Makefile",
+     "kind": "make",
+     "name": "test",
+     "command": "make test"
+    },
+    {
+     "source": "Makefile",
+     "kind": "make",
+     "name": "lint",
+     "command": "make lint"
+    }
+   ],
+   "commands_note": "Declared by the repo (CI steps, Makefile, package.json, tox, nox); not verified. Read a command before running it.",
+   "code_shape": {
+    "unavailable": "no code graph for this repo yet (bind or reindex builds it)"
+   },
+   "history": {
+    "hotspots": [],
+    "changelog": null
+   },
+   "conventions": {
+    "configs": [],
+    "guides": []
+   }
+  }
+ ]
+}

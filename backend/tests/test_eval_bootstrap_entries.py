@@ -76,6 +76,12 @@ FACTS = [
     ("repos/ledgerd/docs/ARCHITECTURE.md", "lower account id first"),
     ("repos/ledgerd/docs/RUNBOOK.md", "old binary"),
     ("repos/ledgerd/notes/sprint-14.md", "on call"),
+    # code facts the rubrics list, so a true entry taken from the code is not "unsupported"
+    ("repos/tokensign/src/tokensign/signer.py", "hmac.compare_digest"),
+    ("repos/tokensign/src/tokensign/timed.py", "age < 0"),
+    ("repos/ledgerd/internal/store/locks.go", "ids[i] < ids[j]"),
+    ("repos/ledgerd/internal/api/transfers.go", "StatusBadRequest"),
+    ("repos/ledgerd/cmd/ledgerd/main.go", ":9180"),
 ]
 
 
@@ -120,3 +126,64 @@ def test_a_list_the_judge_cannot_see_whole_fails() -> None:
 ])
 def test_the_last_json_block_is_read_however_it_is_fenced(text) -> None:
     assert er._behavior_check_failures(["bootstrap_entries:repos/tokensign"], text, [0]) == []
+
+
+# ── the survey each offline case starts from ─────────────────────────────────
+
+def _offline_cases() -> dict:
+    import yaml
+    cases = yaml.safe_load((BACKEND / "templates/eval/golden_set.yaml").read_text())["cases"]
+    return {c["id"]: c for c in cases if c["id"].startswith("OFF_BRAIN_FIRST_ENTRIES")}
+
+
+def test_the_shipped_surveys_are_what_the_survey_code_writes_now() -> None:
+    # Fails after a change to a fixture repo or to the survey code until
+    # `py -m scripts.eval_fixture_surveys --write` regenerates them.
+    from scripts import eval_fixture_surveys as efs
+    assert efs.drift() == []
+
+
+def test_a_fixture_edit_puts_the_survey_out_of_date(tmp_path) -> None:
+    import shutil
+    from scripts import eval_fixture_surveys as efs
+    ws = tmp_path / "ws"
+    shutil.copytree(FIXTURE, ws)
+    assert efs.drift(ws) == []
+    readme = ws / "repos/tokensign/README.md"
+    readme.write_text(readme.read_text() + "\nOne more line.\n")
+    assert efs.drift(ws) == ["Projects/Tokensign/.artifacts/bootstrap/survey.json"]
+
+
+def test_each_offline_case_starts_from_its_own_survey() -> None:
+    from core.brain_bootstrap import survey
+    for c in _offline_cases().values():
+        repo = c["checks"][0].split(":", 1)[1]
+        prompt = c["scenario"]["prompt"]
+        (brain,) = [b for b in ("Tokensign", "Ledgerd") if f"brain named {b} " in prompt]
+        rel = f"Projects/{brain}/{survey.SURVEY_REL.as_posix()}"
+        assert f"`{rel}`" in prompt and "Read survey.json" in c["expected_trajectory"]
+        data = json.loads((FIXTURE / rel).read_text())
+        assert data["schema"] == survey.SCHEMA and data["project"] == brain
+        (r,) = data["repos"]
+        assert r["root"] == repo and "errors" not in r
+        assert any(d["tier"] == 1 and d.get("text") for d in r["docs"])
+
+
+def test_no_fixture_repo_names_a_port_another_case_asks_about() -> None:
+    # OFF_WRONG_PREMISE / OFF_RIGHT_PREMISE ask for the Demo port (7421) against a
+    # wrong 8080; a fixture repo holding either number is a false lead for a Grep.
+    for f in (FIXTURE / "repos").rglob("*"):
+        if f.is_file():
+            text = f.read_text(encoding="utf-8")
+            assert "8080" not in text and "7421" not in text, f
+
+
+def test_a_full_twelve_entry_answer_fits_the_judge_window() -> None:
+    # The prompt allows 12 entries; with ordinary one-sentence fields that is past 4000
+    # characters, the old window, and the whole list must still reach the judge.
+    sentence = "One ordinary sentence of about a hundred characters that says what the entry is about here. "
+    entries = [dict(e, title=f"{e['title']} ({i})", what=sentence * 3)
+               for i, e in enumerate((_GOOD * 2)[:12])]
+    answer = _answer(entries)
+    assert 4000 < len(answer) < er._JUDGE_TEXT_MAX
+    assert _fail(entries) == []

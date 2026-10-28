@@ -234,7 +234,12 @@ def license_name(root: Path, files: list[str]) -> str | None:
 
 
 def identity(root: Path, files: list[str]) -> dict:
-    """``{remote, head, default_branch, license}`` — each None when unknown."""
+    """``{remote, head, default_branch, license}`` — each None when unknown. The git
+    fields come only from a repo whose top level is *root* (``is_git_repo``): a folder
+    inside another repo would otherwise report that repo's remote and HEAD."""
+    if not is_git_repo(root):
+        return {"remote": None, "head": None, "default_branch": None,
+                "license": license_name(root, files)}
     head = (git(root, "rev-parse", "HEAD") or "").strip() or None
     remote = redact_remote(git(root, "config", "--get", "remote.origin.url"))
     branch = (git(root, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
@@ -260,7 +265,11 @@ _HISTORY_COMMITS = 500
 
 
 def _log_commits(root: Path, n: int) -> list[dict]:
-    """``[{hash, date, subject, files}]`` of the last *n* commits (newest first)."""
+    """``[{hash, date, subject, files}]`` of the last *n* commits (newest first); none
+    unless *root* is a repo's top level (``is_git_repo``), so a folder inside another
+    repo never gets that repo's history — the same rule ``list_files`` follows."""
+    if not is_git_repo(root):
+        return []
     out = git(root, "log", "--no-ext-diff", "--no-color", f"-n{n}",
               "--pretty=format:%x1e%H%x1f%ad%x1f%s", "--date=short", "--name-only")
     commits: list[dict] = []

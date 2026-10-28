@@ -1362,8 +1362,9 @@ DECISION_JUDGE_TEMPERATURE = 0.0
 DECISION_JUDGE_MAX_TOKENS = 400
 
 
-# How much of the agent's answer the decision judge reads.
-_JUDGE_TEXT_MAX = 4000
+# How much of the agent's answer the decision judge reads. A New Brain case answers with
+# up to 12 JSON entries (about 4-8K characters), so the window holds a whole list.
+_JUDGE_TEXT_MAX = 12000
 
 
 def _judge_decision_direction(case: dict, final_text: str) -> dict:
@@ -1435,7 +1436,7 @@ def _judge_decision_direction(case: dict, final_text: str) -> dict:
 
 _RECORD_STEPS = 30
 _STEP_MAX_CHARS = 240
-_FINAL_TEXT_MAX = 4000
+_FINAL_TEXT_MAX = _JUDGE_TEXT_MAX  # the record keeps what the judge read
 # The per-case fields a run record keeps beyond status / notes: an offline case's
 # trajectory, expected steps, tool steps and final answer (the drill-down).
 _RECORD_DETAIL = ("observed_trajectory", "expected_check", "steps", "final_text")
