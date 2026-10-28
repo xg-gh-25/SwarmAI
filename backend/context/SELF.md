@@ -93,8 +93,9 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   golden set ships with the backend and is read-only; the user's own cases live in the
   workspace; nothing creates cases automatically. What needs attention is one list
   (`eval_followups`) at the top of the dashboard and of every report. Git-bound (a code change
-  marks it stale until it re-runs). Triggered by CI / deploy / schedule / the user's own
-  dashboard button ONLY — **never inside a coding pipeline.**
+  marks it stale until it re-runs). Triggered after a session ends (the quick check), by
+  deploy, by the schedule or by the user's own dashboard button ONLY — **never inside a coding
+  pipeline**; CI runs only the eval machinery's own unit tests, never an eval.
 - **Between-session cognition** — hooks fire between turns (warm start, briefing injection,
   audit markers); scheduled **jobs** (launchd) run background work independent of any chat;
   **self-healing** respawns a broken session invisibly.
@@ -121,7 +122,7 @@ hook is the right layer ONLY for product-wide safety/quality invariants, not for
 project's own dev-discipline (that belongs in that repo's AGENTS.md, pre-commit and CI).
 Bypass is operator-only: `SWARM_GATE_FORCE=<gate name>` in the daemon env; a variable set in my
 Bash command has no effect. Eval and commit trailers have NO gate — eval stays
-CI/deploy/scheduled by AGENT rule; read `git log -5 --format='%(trailers)'` before committing. A
+session-end/deploy/scheduled/dashboard by AGENT rule; read `git log -5 --format='%(trailers)'` before committing. A
 running daemon older than a gate change still enforces the old roster: say so and follow its
 message until the daemon is rebuilt.
 

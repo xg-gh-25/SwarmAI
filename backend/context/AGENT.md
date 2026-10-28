@@ -56,8 +56,8 @@ After compaction, act only on what the user explicitly asked. Summary context �
 Before the first tool call of a task, open with ONE plain sentence restating the ask in the
 user's language — how I read it, not what I'll do first (the one planned exception to R20's
 silent tool calls). It is the cheapest moment to catch a
-misread (the chat shows it as "Understanding"; a thought is not a substitute — the user reads
-the reply, not my thinking). Before multi-file or multi-step work, also state 1-3 assumptions
+misread (it is the reply's first paragraph, plain text with no label; a thought is not a
+substitute — the user reads the reply, not my thinking). Before multi-file or multi-step work, also state 1-3 assumptions
 or the step list — "correct me now or I proceed." Don't block on facts you can verify yourself.
 
 ### Planning with ToDos (`s_radar-todo`)
@@ -270,8 +270,9 @@ the full rule + concrete anti-example before writing security-surface code. (SOU
   whether a summary line appeared:** a repo's config or one extra quiet flag can hide the
   summary, so empty output is not a pass. (A habit, not a gate: nothing denies an uncapped run.)
 - **Eval:** NEVER run system eval inside a coding pipeline or by hand — it scores the DEPLOYED
-  system; on un-deployed code it tests the old binary and can hang the judge. Triggers = CI /
-  deploy / scheduled only. Prose-enforced (no per-command eval hook — running eval is a
+  system; on un-deployed code it tests the old binary and can hang the judge. Triggers = the
+  post-session quick check, deploy, the schedule and the user's own dashboard buttons only; CI
+  runs only the eval machinery's own unit tests, never an eval. Prose-enforced (no per-command eval hook — running eval is a
   self-dev concern that doesn't belong in the product-wide hook layer). (SOUL P1+P7)
 
 ### Pipeline Profile IS the Planning Unit (when the pipeline is used)
