@@ -486,45 +486,6 @@ class TestHITLMatcherTimeout:
             assert by_matcher["Read"].timeout is None
 
 
-class TestCodeIntelHookNotRegistered:
-    """Regression: the code_intel PreToolUse hook was REMOVED from the hook chain
-    (its per-Read/Grep synchronous SQLite blast_radius query occupied the default
-    thread pool). build_hooks() must NOT register it.
-
-    Behavioral assertion (Gate-1): build_sdk_hooks() strips the registration NAME,
-    so a string search for 'code_intel_context' in the output is vacuous (never
-    RED). Instead we assert build_hooks() never CONSTRUCTS the hook — patch
-    create_code_intel_hook and assert it is not called. Reverting the removal makes
-    build_hooks call it → this test goes RED.
-    """
-
-    def test_build_hooks_does_not_register_code_intel(self):
-        from unittest.mock import patch
-        from core.hook_builder import build_hooks
-        from core.permission_manager import permission_manager
-
-        # If build_hooks still registers code_intel, it calls create_code_intel_hook()
-        # (hook_builder.py old line 583). Patch it so any call is observable.
-        with patch(
-            "core.code_intel.code_intel_hook.create_code_intel_hook"
-        ) as mock_factory:
-            asyncio.run(
-                build_hooks(
-                    agent_config={"id": "default", "code_intel_enabled": True},
-                    enable_skills=False,
-                    enable_mcp=False,
-                    resume_session_id="test-sess",
-                    session_context={"sdk_session_id": "test-sess"},
-                    permission_manager=permission_manager,
-                )
-            )
-        assert not mock_factory.called, (
-            "code_intel hook must NOT be registered — build_hooks called "
-            "create_code_intel_hook(), meaning the removed registration block "
-            "was reintroduced (see hook_builder.py)"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Phase-1 EQUIVALENCE (back-to-back): the Verdict-based _build_chain must
 # produce byte-identical SDK output to the legacy hand-merge, for every

@@ -3,7 +3,6 @@ Code Intelligence Platform — project-scoped code graph for pipeline & agent.
 
 Public API:
     load_project_graph(project_name) → GraphStore | None
-    detect_project_from_path(file_path) → str | None
     code_intel_dbs(project_dir) → list[CodeIntelDb]   (project db + bind-managed dbs)
     code_intel_db_for(project_dir) → Path | None      (the primary one)
     get_code_intel_db_path(project_name) → Path
@@ -32,8 +31,6 @@ _cache_lock = threading.Lock()
 _graph_cache: dict[str, GraphStore] = {}
 # db path → (open graph, (st_dev, st_ino) of the file it was opened on)
 _db_graph_cache: dict[str, tuple[GraphStore, tuple[int, int]]] = {}
-_project_path_cache: dict[str, str] = {}  # repo_path → project_name
-_cache_initialized = False
 
 
 @dataclass(frozen=True)
@@ -187,31 +184,8 @@ def load_project_graphs(project_name: str) -> list[tuple[CodeIntelDb, GraphStore
     return out
 
 
-def detect_project_from_path(file_path: str) -> str | None:
-    """
-    Match a file path to a project by checking TECH.md repo_path fields.
-
-    Performance: repo_path→project mapping built ONCE, cached at module level.
-    Invalidated only on project create/delete.
-    """
-    global _cache_initialized
-    with _cache_lock:
-        if not _cache_initialized:
-            _build_project_path_cache()
-            _cache_initialized = True
-        # Snapshot the cache under the lock for iteration safety.
-        path_cache_snapshot = dict(_project_path_cache)
-
-    resolved = str(Path(file_path).resolve())
-    for repo_path, project_name in path_cache_snapshot.items():
-        if resolved.startswith(repo_path):
-            return project_name
-    return None
-
-
 def invalidate_cache(project_name: str | None = None):
     """Invalidate caches. Called on project create/delete. Closes evicted GraphStores."""
-    global _cache_initialized
     with _cache_lock:
         if project_name:
             old = _graph_cache.pop(project_name, None)
@@ -233,9 +207,6 @@ def invalidate_cache(project_name: str | None = None):
                         entry[0].close()
                     except Exception as exc:  # noqa: BLE001 — the entry is evicted anyway
                         logger.debug("code_intel: closing evicted graph %s failed: %s", key, exc)
-            to_remove = [k for k, v in _project_path_cache.items() if v == project_name]
-            for k in to_remove:
-                del _project_path_cache[k]
         else:
             for g in list(_graph_cache.values()) + [e[0] for e in _db_graph_cache.values()]:
                 try:
@@ -244,8 +215,6 @@ def invalidate_cache(project_name: str | None = None):
                     pass
             _graph_cache.clear()
             _db_graph_cache.clear()
-            _project_path_cache.clear()
-            _cache_initialized = False
 
 
 # Entrypoint files scanned (in order) for FastAPI include_router() prefixes.
@@ -506,22 +475,3 @@ def repo_root_is_owned(project_dir, stored_repo_root: str | None) -> bool:
         logger.warning("ownership check failed for %s vs stored %r, denying: %s",
                        project_dir, stored_repo_root, exc)
         return False
-
-
-def _build_project_path_cache():
-    """Map every repo a project OWNS (``owned_repo_roots``) to that project.
-
-    The same ownership answer the watcher and reindex job use: the TECH.md path
-    (legacy) plus each bind-managed clone. Reading TECH.md alone left a bound repo
-    with no project, so an edit inside it got no code context.
-    """
-    from jobs.paths import PROJECTS_DIR
-    projects_dir = PROJECTS_DIR
-    if not projects_dir.is_dir():
-        return
-
-    for project_dir in sorted(projects_dir.iterdir()):  # sorted: a stable owner on a tie
-        if not project_dir.is_dir():
-            continue
-        for root in owned_repo_roots(project_dir):  # never raises
-            _project_path_cache.setdefault(root, project_dir.name)

@@ -187,17 +187,6 @@ class TestBoundGraphVisible:
         assert repo_root_is_owned(project_dir, str(clone))
         assert not repo_root_is_owned(project_dir, str(clone.parent))
 
-    def test_edit_inside_a_bound_clone_maps_to_the_project(self, bound_project):
-        """The edit hook's repo→project map knows the bound clone (no TECH.md path)."""
-        import core.code_intel as ci
-        _project_dir, clone, _db = bound_project
-        (clone / "m.py").write_text("x = 1\n", encoding="utf-8")
-        ci.invalidate_cache()
-        try:
-            assert ci.detect_project_from_path(str(clone / "m.py")) == "Demo"
-        finally:
-            ci.invalidate_cache()
-
     def test_internal_binding_contributes_nothing(self, tmp_path, monkeypatch):
         from core.code_intel import code_intel_dbs, owned_repo_roots
         bindings_root = tmp_path / "bindings"
