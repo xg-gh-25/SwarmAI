@@ -1414,9 +1414,15 @@ class EvalService:
         return None
 
     def _get_case_history(self, case_id: str, limit: int = 10) -> list[dict]:
-        """Get this case's results across recent runs."""
+        """This case's ``limit`` most recent results, newest first (``self._runs`` is
+        newest first). Every run is scanned, not only the newest ``limit``: quick checks
+        and single-case runs come often, so a case's last full-run result is usually
+        older than ten runs, and stopping there made the case page say "not run yet"
+        for a case that ``_get_case_last_result`` (which scans every run) shows."""
         history = []
-        for run in self._runs[:limit]:
+        for run in self._runs:
+            if len(history) >= limit:
+                break
             for case_result in run.get("cases", []):
                 if case_result.get("id") == case_id:
                     history.append({

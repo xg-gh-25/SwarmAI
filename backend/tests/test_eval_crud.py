@@ -902,3 +902,18 @@ class TestInflightMarker:
         # no leftover .tmp files in the dir
         tmps = list(marker.parent.glob("*.tmp"))
         assert tmps == [], f"leftover temp files: {tmps}"
+
+
+def test_case_history_reaches_past_ten_runs_without_the_case(svc):
+    """The case page's latest result is history[0]. Quick checks and single-case runs
+    come often, so a case's last result is usually older than the ten newest runs:
+    history must still find it, the same run the list's last_result names."""
+    svc._runs = [{"run_id": f"q{i}", "triggered_at": f"2026-10-28T0{i % 10}:00:00Z",
+                  "cases": [{"id": "OTHER", "status": "passed"}]} for i in range(12)]
+    svc._runs.append({"run_id": "full1", "triggered_at": "2026-10-26T00:00:00Z",
+                      "cases": [{"id": "GS001", "status": "failed", "notes": "x"}]})
+    hist = svc._get_case_history("GS001")
+    assert [h["run_id"] for h in hist] == ["full1"]
+    assert svc._get_case_last_result("GS001")["run_id"] == hist[0]["run_id"]
+    svc._runs = [{"run_id": f"r{i}", "cases": [{"id": "GS001", "status": "passed"}]} for i in range(15)]
+    assert [h["run_id"] for h in svc._get_case_history("GS001")] == [f"r{i}" for i in range(10)]
