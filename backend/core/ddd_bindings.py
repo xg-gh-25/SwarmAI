@@ -561,8 +561,15 @@ def _bind_locked(binding: Binding, worktree: Path, db_path: Path) -> BindResult:
     head = (_git(Path(worktree), "rev-parse", "HEAD") or "").strip() or None
     graph = GraphStore(db_path)
     try:
-        rebuild(graph, worktree, head=head)
-        node_count = int(graph.get_codebase_summary().get("total_nodes", 0))
+        built = rebuild(graph, worktree, head=head)
+        if built.empty:
+            # The parse found no code: the graph (a previous clone's, on a re-bind)
+            # was left as it was, so its nodes are not what was just bound.
+            logger.warning("bind_repo: '%s' parsed to no code files; graph left as it was",
+                           binding.repo)
+            node_count = 0
+        else:
+            node_count = int(graph.get_codebase_summary().get("total_nodes", 0))
     finally:
         graph.close()
 

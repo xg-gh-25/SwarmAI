@@ -1729,7 +1729,8 @@ class GraphStore:
         """Re-store *changed_files* (repo-relative) so the graph matches the disk.
 
         Per file: a deleted file loses its nodes, edges and routes; an unchanged file
-        (same content hash as stored) is skipped; otherwise it is parsed and its nodes
+        (same content hash as stored) or a path that is not a regular file (a submodule
+        bump) is skipped; otherwise it is parsed and its nodes
         and outbound edges replaced via ``store_file_nodes_edges`` (inbound edges whose
         target survives are kept there). A file that parses to no symbols but had some
         is purged. A file whose read, parse or store fails goes to ``failed`` (its
@@ -1765,6 +1766,11 @@ class GraphStore:
                     failed.append(fpath)
                 continue
 
+            if not full.is_file():
+                # A submodule bump or other non-regular path: nothing to parse. Not a
+                # failure, or the caller's commit marker would never move past it.
+                skipped.append(fpath)
+                continue
             try:
                 content_hash = hashlib.sha256(full.read_bytes()).hexdigest()
             except OSError:

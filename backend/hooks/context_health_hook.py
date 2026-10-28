@@ -749,7 +749,7 @@ class ContextHealthHook:
                 )
                 continue
 
-            if freshness.suggest_full_rebuild:
+            def _schedule_full_rebuild() -> None:
                 logger.info(
                     "code_intel %s: %d commits behind, %d files — triggering background rebuild",
                     project_dir.name, freshness.commits_behind,
@@ -768,6 +768,9 @@ class ContextHealthHook:
                     })
                 except Exception as emit_err:
                     logger.debug("code_intel: failed to emit reindex event: %s", emit_err)
+
+            if freshness.suggest_full_rebuild:
+                _schedule_full_rebuild()
                 continue  # don't block session start — background job handles it
 
             # Incremental update for small changes
@@ -797,6 +800,10 @@ class ContextHealthHook:
             # of a 51-100 file change were never indexed until a full rebuild.
             from core.code_intel.build import update_files
             upd = update_files(graph, repo_root, freshness.changed_files)
+            if upd.needs_full:
+                # update_files stored nothing (more files than one update covers).
+                _schedule_full_rebuild()
+                continue
             if upd.complete and freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
 

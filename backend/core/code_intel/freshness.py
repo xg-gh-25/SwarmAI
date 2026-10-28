@@ -135,7 +135,10 @@ def check_freshness(graph_store: GraphStore) -> FreshnessResult:
     # Normal case: what files changed?
     try:
         changed_output = _git(repo_root, [
-            "diff", "--name-only", f"{last_commit}..{current_head}"
+            # --no-renames: a rename is listed as its old path (deleted, so its nodes
+            # are removed) plus its new path; with rename detection only the new
+            # path appears and the old path's nodes would stay in the graph.
+            "diff", "--name-only", "--no-renames", f"{last_commit}..{current_head}"
         ])
         changed_files = [f for f in changed_output.strip().split("\n") if f]
 

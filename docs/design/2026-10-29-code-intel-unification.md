@@ -166,7 +166,7 @@ Five commits, each landed on its own:
 New tests, each red before its fix and mutation-checked:
 - an empty parse leaves the graph and its freshness stamp untouched, from all four rebuild entry points (B7);
 - `clear()` empties routes, and a rebuild from each entry point yields the same routes (B3);
-- with 51–100 changed files, `last_indexed_commit` does not move and a full rebuild is scheduled (B8);
+- with 51–100 changed files every file is indexed and `last_indexed_commit` moves only when none failed; above `FULL_REBUILD_FILES` nothing is stored and a full rebuild is scheduled (B8);
 - a rename removes the old path's nodes (B9);
 - a second bound repo is watched and re-indexed after a file change, and a re-bind is seen by every in-process reader (B2);
 - a degraded file keeps the edges outside its error ranges and drops the ones inside (B4);

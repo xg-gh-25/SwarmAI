@@ -16,7 +16,7 @@ What every rebuild now does the same way:
   first bind of an empty repo still knows where it points.
 - Coverage holes and parse status are stored (the analysis reports them).
 - Routes (and router prefixes) are extracted, unless the caller says routes have no
-  reader (a library mount).
+  reader (a library mount). A prefix failure is logged and never fails the write.
 - ``head`` is the commit the CALLER read before the parse: a commit that lands while
   the parse runs stays unindexed and the next incremental update takes it.
 - The write runs under the graph's write lock, so a reader on the same store sees the
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -82,6 +83,17 @@ def _file_routes(repo_root: Path, rel_path: str) -> list:
         return []
 
 
+def _apply_prefixes(graph: GraphStore, root: Path) -> None:
+    """Re-apply router prefixes. A refinement of stored routes, never fatal: a failure
+    (e.g. "database is locked" while another process writes) leaves the routes
+    unprefixed and must not fail the rebuild or the update that stored them."""
+    from . import resolve_router_prefixes
+    try:
+        resolve_router_prefixes(graph, root)
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        logger.warning("router prefix resolution failed for %s: %s", root, exc)
+
+
 def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
             routes: bool = True, stamp: bool = True) -> RebuildResult:
     """Replace *graph* with a fresh parse of *repo_root* (rules in the module doc).
@@ -89,7 +101,6 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
     *stamp*: mark the graph fully indexed at *head*. A library mount passes False —
     its freshness is the mount's own ``last_synced``.
     """
-    from . import resolve_router_prefixes
     from .parser import parse_repo_with_coverage
 
     root = Path(repo_root).resolve()
@@ -110,7 +121,7 @@ def rebuild(graph: GraphStore, repo_root: str | Path, *, head: str | None,
             graph.set_meta("coverage_commit", head)
         if found:
             graph.insert_routes(found)
-            resolve_router_prefixes(graph, root)
+            _apply_prefixes(graph, root)
         if stamp:
             graph.mark_indexed(full=True, head=head)
     return RebuildResult(empty=False, nodes=sum(len(p.nodes) for p in results),
@@ -122,19 +133,19 @@ def routes_for(graph: GraphStore, repo_root: str | Path, files: list[str], *,
                prefixes: bool = True) -> int:
     """Re-store the routes of *files* (repo-relative; a missing file loses its routes),
     then re-apply the router prefixes. Returns the number of routes stored."""
-    from . import resolve_router_prefixes
     root = Path(repo_root)
     n = 0
     for rel in files:
         found = _file_routes(root, rel)
-        graph.delete_routes_for_file(rel)
-        if found:
-            n += graph.insert_routes(found)
-    if prefixes and files:
         try:
-            resolve_router_prefixes(graph, root)
-        except Exception as exc:  # noqa: BLE001 — prefixes are a refinement, never fatal
-            logger.warning("router prefix resolution failed for %s: %s", root, exc)
+            graph.delete_routes_for_file(rel)
+            if found:
+                n += graph.insert_routes(found)
+        except sqlite3.Error as exc:
+            # One file's store error must not leave every later file's routes stale.
+            logger.warning("storing routes for %s failed: %s", rel, exc)
+    if prefixes and files:
+        _apply_prefixes(graph, root)
     return n
 
 

@@ -315,3 +315,129 @@ def test_the_commit_hook_drops_a_renamed_files_old_path(tmp_path):
         assert g.get_nodes_by_file("new/mod.py")
     finally:
         g.close()
+
+
+# ── review round 1 (correctness) ─────────────────────────────────────────────
+
+def test_freshness_lists_a_renamed_files_old_path(tmp_path):
+    """The health hook and the job take their files from check_freshness: with rename
+    detection the old path was missing, so its nodes outlived the marker."""
+    from core.code_intel.freshness import check_freshness
+    repo = _repo(tmp_path / "r", {"old/mod.py": "def f():\n    return 1\n"})
+    g = GraphStore(tmp_path / "g.db")
+    try:
+        g.set_meta("repo_root", str(repo.resolve()))
+        g.set_meta("last_indexed_commit", _git(repo, "rev-parse", "HEAD").strip())
+        (repo / "new").mkdir()
+        _git(repo, "mv", "old/mod.py", "new/mod.py")
+        _git(repo, "commit", "-q", "-m", "mv")
+        changed = check_freshness(g).changed_files
+        assert "old/mod.py" in changed and "new/mod.py" in changed
+    finally:
+        g.close()
+
+
+def test_a_prefix_failure_does_not_fail_the_rebuild(tmp_path):
+    from core.code_intel.build import rebuild
+    repo = _repo(tmp_path / "r", {"api/items.py": _ROUTER})
+    g = GraphStore(tmp_path / "g.db")
+    try:
+        with patch("core.code_intel.resolve_router_prefixes",
+                   side_effect=__import__("sqlite3").OperationalError("database is locked")):
+            out = rebuild(g, repo, head="h")
+        assert not out.empty
+        assert ("/items", "api/items.py") in _route_paths(g)
+        assert g.get_meta("last_indexed_commit") == "h"
+    finally:
+        g.close()
+
+
+def test_one_files_route_store_error_does_not_stop_the_others(tmp_path):
+    import sqlite3
+    from core.code_intel.build import routes_for
+    repo = _repo(tmp_path / "r", {"a.py": _ROUTER, "b.py": _ROUTER.replace("/items", "/other")})
+    g = GraphStore(tmp_path / "g.db")
+    try:
+        real = g.delete_routes_for_file
+
+        def delete(rel):
+            if rel == "a.py":
+                raise sqlite3.OperationalError("database is locked")
+            return real(rel)
+        with patch.object(g, "delete_routes_for_file", side_effect=delete):
+            routes_for(g, repo, ["a.py", "b.py"])
+        assert ("/other", "b.py") in _route_paths(g)
+    finally:
+        g.close()
+
+
+def test_a_directory_path_is_skipped_not_failed(tmp_path):
+    """A submodule bump lists a directory: as a failure it kept the marker forever."""
+    from core.code_intel.build import update_files
+    repo = _repo(tmp_path / "r", {"a.py": "def a():\n    return 1\n"})
+    (repo / "sub").mkdir()
+    g = GraphStore(tmp_path / "g.db")
+    try:
+        out = update_files(g, repo, ["sub", "a.py"])
+        assert out.complete and "sub" in out.skipped
+    finally:
+        g.close()
+
+
+def test_the_health_hook_schedules_a_rebuild_when_an_update_is_too_big(tmp_path, monkeypatch):
+    from core.code_intel.build import FULL_REBUILD_FILES
+    events = []
+    monkeypatch.setattr("jobs.scheduler.emit_event_atomic",
+                        lambda name, data=None: events.append(name))
+    changed = [f"m{i}.py" for i in range(FULL_REBUILD_FILES + 1)]
+    g = _health_hook_run(tmp_path, monkeypatch, changed)
+    try:
+        assert events == ["code_intel_full_reindex"]
+        assert g.get_meta("last_indexed_commit") == "old"
+    finally:
+        g.close()
+
+
+def test_a_rebind_with_an_empty_parse_reports_no_nodes(tmp_path):
+    from core.ddd_bindings import Binding, DeliveryContract, bind_repo
+    src = _repo(tmp_path / "src", {"a.py": "def a():\n    return 1\n"})
+    binding = Binding(repo="svc", kind="external", clone=str(src),
+                      delivery_contract=DeliveryContract(
+                          remote_kind="github-pr", branch="main",
+                          review_path="s_internal-crux-review", auto_send="on-clean-review"))
+    assert bind_repo(binding, tmp_path / "bindings").node_count > 0
+    with _empty_parse():
+        assert bind_repo(binding, tmp_path / "bindings").node_count == 0
+
+
+def _run_job(tmp_path, monkeypatch, full=True):
+    from jobs.handlers.code_intel_reindex import reindex_projects
+    monkeypatch.setattr("config.get_swarmws", lambda: tmp_path)
+    return reindex_projects(full=full)
+
+
+def test_the_job_leaves_an_empty_parse_unstamped(local_project, tmp_path, monkeypatch):
+    proj, _repo_dir = local_project
+    with _empty_parse():
+        out = _run_job(tmp_path, monkeypatch)
+    assert [r["status"] for r in out["projects"] if r["project"] == "P"] == ["full_reindex"], out
+    g = _reopen(proj)
+    try:
+        assert g.count_files() > 0 and g.get_meta("last_indexed_commit") == "first"
+    finally:
+        g.close()
+
+
+def test_the_job_rebuild_stores_routes(local_project, tmp_path, monkeypatch):
+    proj, _repo_dir = local_project
+    g = _reopen(proj)
+    g._conn.execute("DELETE FROM code_routes")
+    g._conn.commit()
+    g.close()
+    out = _run_job(tmp_path, monkeypatch)
+    assert [r["status"] for r in out["projects"] if r["project"] == "P"] == ["full_reindex"], out
+    g = _reopen(proj)
+    try:
+        assert ("/items", "api/items.py") in _route_paths(g)
+    finally:
+        g.close()
