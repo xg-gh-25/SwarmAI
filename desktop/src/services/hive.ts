@@ -83,6 +83,52 @@ export interface VerifyResult {
   error?: string;
 }
 
+/** One local Brain against one Hive (GET /hive/instances/{id}/brains). Only digests,
+ *  times and counts come from the Hive; the reasons are the host's own text. */
+export interface HiveBrainRow {
+  brain: string;
+  agent: 'reviewed' | 'draft' | 'invalid' | null;
+  localDigest: string | null;
+  localError: string | null;
+  hiveDigest: string | null;
+  installedAt: string | null;
+  synced: boolean;
+  hiveChangedFiles: number | null;
+  running: number | null;
+  dispatchable: boolean;
+  reasons: string[];
+  syncable: boolean;
+  /** SwarmAI and General: synced to every Hive by default. */
+  isDefault: boolean;
+}
+
+export interface HiveBrainStatus {
+  hive: string;
+  /** False when the Hive's version has no Brains endpoint (update it once). */
+  supported: boolean;
+  brains: HiveBrainRow[];
+}
+
+function brainRow(r: Record<string, unknown>): HiveBrainRow {
+  const str = (v: unknown) => (typeof v === 'string' ? v : null);
+  const num = (v: unknown) => (typeof v === 'number' ? v : null);
+  return {
+    brain: String(r.brain ?? ''),
+    agent: (['reviewed', 'draft', 'invalid'] as const).find((a) => a === r.agent) ?? null,
+    localDigest: str(r.local_digest),
+    localError: str(r.local_error),
+    hiveDigest: str(r.hive_digest),
+    installedAt: str(r.installed_at),
+    synced: r.synced === true,
+    hiveChangedFiles: num(r.hive_changed_files),
+    running: num(r.running),
+    dispatchable: r.dispatchable === true,
+    reasons: Array.isArray(r.reasons) ? r.reasons.filter((x): x is string => typeof x === 'string') : [],
+    syncable: r.syncable === true,
+    isDefault: r.default === true,
+  };
+}
+
 // ── snake_case → camelCase helper ──────────────────────────────────
 
 function toCamel(obj: Record<string, unknown>): Record<string, unknown> {
@@ -164,6 +210,25 @@ export const hiveService = {
   async latestVersion(): Promise<string> {
     const { data } = await api.get('/hive/latest-version');
     return (data as { version: string }).version;
+  },
+
+  // Brains on a Hive (design 2026-10-28-project-agent-flow §6)
+  async brainStatus(id: string): Promise<HiveBrainStatus> {
+    const { data } = await api.get(`/hive/instances/${id}/brains`);
+    const d = data as { hive?: unknown; supported?: unknown; brains?: unknown };
+    return {
+      hive: String(d.hive ?? ''),
+      supported: d.supported === true,
+      brains: Array.isArray(d.brains) ? d.brains.map((r) => brainRow(r as Record<string, unknown>)) : [],
+    };
+  },
+
+  async syncBrain(id: string, brain: string): Promise<void> {
+    await api.post(`/hive/instances/${id}/brains/${encodeURIComponent(brain)}/sync`);
+  },
+
+  async syncDefaultBrains(id: string): Promise<void> {
+    await api.post(`/hive/instances/${id}/brains/sync-defaults`);
   },
 
   async stopInstance(id: string): Promise<void> {

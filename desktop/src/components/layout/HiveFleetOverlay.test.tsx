@@ -30,6 +30,10 @@ vi.mock('../../services/hive', async () => {
       retryInstance: (id: string, c?: boolean) => retryInstance(id, c),
       startInstance: (id: string) => startInstance(id),
       deleteInstance: (id: string) => deleteInstance(id),
+      // the Brains line of a running card (HiveBrains): covered by its own tests
+      brainStatus: () => Promise.resolve({ hive: 'x', supported: true, brains: [] }),
+      syncBrain: () => Promise.resolve(),
+      syncDefaultBrains: () => Promise.resolve(),
     },
   };
 });

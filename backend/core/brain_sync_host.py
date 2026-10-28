@@ -195,6 +195,7 @@ def _row(local: dict[str, Any], remote: Optional[dict[str, Any]], supported: boo
             "synced": synced, "hive_changed_files": modified,
             "running": remote.get("running") if remote else None,
             "dispatchable": not reasons, "reasons": reasons,
+            "default": local["brain"] in DEFAULT_BRAINS,
             "syncable": supported and (local["brain"] in DEFAULT_BRAINS
                                        or (local["status"] == "reviewed" and local["hive"]))}
 

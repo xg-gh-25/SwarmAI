@@ -363,6 +363,8 @@ def test_console_rows_say_why_a_brain_cannot_be_sent():
     assert row["reasons"] == ["its Project Agent does not allow the Hive"] and row["synced"]
     row = host._row({**local, "status": "reviewed"}, None, False)
     assert "this Hive's version is too old to receive Brains" in row["reasons"] and not row["syncable"]
+    assert not row["default"] and host._row({**local, "brain": "SwarmAI"}, None, True)["default"]
+    assert host._row({**local, "brain": "General"}, None, True)["default"]
     assert host._clean_remote({"brain": "Lib", "digest": "<script>", "changed_files": -1}) == {
         "brain": "Lib", "digest": None, "current_digest": None, "installed_at": None,
         "changed_files": None, "running": None}

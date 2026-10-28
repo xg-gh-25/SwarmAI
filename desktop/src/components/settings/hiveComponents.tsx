@@ -26,6 +26,7 @@ import { openExternal } from '../../utils/openExternal';
 import { copyToClipboard } from '../../utils/clipboard';
 import { isApiError } from '../../services/api';
 import { useDialogLayer } from '../../hooks/useLayer';
+import { HiveBrains } from './HiveBrains';
 
 /** Extract the most useful message from an API error. */
 export function friendlyError(e: unknown): string {
@@ -283,6 +284,9 @@ export function InstanceCard({ instance: inst, onAction }: { instance: HiveInsta
 
       {/* Auth display + share for running instances */}
       {inst.status === 'running' && inst.authUser && <AuthDisplay instance={inst} />}
+
+      {/* Which Brains this Hive has and which can be sent here (project-agent-flow §6) */}
+      {inst.status === 'running' && <HiveBrains instanceId={inst.id} />}
 
       {/* Action error */}
       {actionError && (
