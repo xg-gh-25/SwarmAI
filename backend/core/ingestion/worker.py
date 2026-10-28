@@ -788,6 +788,29 @@ class RunLaneExecutor:
             raise RuntimeError("CDF run-lane executor did not stop")
 
 
+def run_session_job(conn: sqlite3.Connection, job: dict[str, Any], *,
+                    runner: Any = None) -> dict[str, Any]:
+    """One session job (2026-10-29-cdf-session-review.md §16): the S2 user-utterance pass,
+    then the review in a fork of the session; the S2 main pass when the session cannot
+    be resumed, and for the measuring sample."""
+    from . import s2_jobs
+    from .sources import s2_session, s7_review
+    session_id = job["session_id"]
+    s2_session.extract_session_sync(session_id, passes=("user_utterance",))
+    outcome = s7_review.review_session(
+        session_id, sdk_session_id=job.get("sdk_session_id"), watermark=job.get("reviewed_to"),
+        force=job.get("reason") == "save_button", runner=runner)
+    main = outcome["status"] == "unresumable" or (
+        outcome["status"] == "reviewed" and s7_review.sampled(session_id))
+    if main:
+        s2_session.extract_session_sync(session_id, passes=("main",))
+    if outcome["status"] == "reviewed":
+        s2_jobs.set_watermark(conn, session_id, outcome["reviewed_to"])
+    outcome["s2_main"] = main
+    logger.info("CDF session job %s: %s", session_id, outcome)
+    return outcome
+
+
 class S2JobExecutor:
     """One thread that runs queued S2 extractions in order (design §12 r16.13).
 
@@ -834,10 +857,10 @@ class S2JobExecutor:
             if job is None:
                 break
             try:
-                extract = self._extract
-                if extract is None:
-                    from .sources.s2_session import extract_session_sync as extract
-                extract(job["session_id"])
+                if self._extract is not None:
+                    self._extract(job["session_id"])
+                else:
+                    run_session_job(conn, job)
             except Exception as exc:  # recorded on the job, retried up to MAX_ATTEMPTS
                 logger.warning("CDF S2 job %s failed: %s", job["session_id"], exc, exc_info=True)
                 s2_jobs.finish(conn, job["session_id"], error=f"{type(exc).__name__}: {exc}"[:500])

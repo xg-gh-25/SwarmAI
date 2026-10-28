@@ -349,28 +349,11 @@ def create_user_correction_detector(
             # count carried no text a human could act on (design
             # 2026-10-26-evolution-loop-admission §3.1).
 
-            # Persistent side-effects (MEMORY pitfall) fire ONLY for explicit-error
-            # corrections — a recorded mistake. META-only redirects are steering,
-            # not pitfalls; recording them would pollute MEMORY with non-pitfalls.
-            if is_explicit_error:
-                try:
-                    from core.ingestion.sources import s1_user
-                    from core.session_inputs import latest_user_event_id
-                    event_id = latest_user_event_id(sid)
-                    if not event_id:
-                        raise ValueError("current turn has no authenticated user event")
-                    s1_user.submit_units([{
-                        "kind": "cognition",
-                        "type": "correction",
-                        "scope": "agent",
-                        "title": "User correction to the agent's prior response",
-                        "what": prompt.strip(),
-                        "applicability": "When the same situation occurs again.",
-                        "evidence": [f"event:{event_id}"],
-                    }], session_id=sid, evidence=f"event:{event_id}", turn_kind="user",
-                       source_ref=event_id, project_snapshot={})
-                except Exception:
-                    logger.debug("correction enqueue failed", exc_info=True)
+            # Nothing is submitted from here: the raw prompt alone is not a unit a reader
+            # outside the session understands. The after-session review sees this
+            # message (it re-matches these patterns) and writes the correction with its
+            # context; the S2 user-utterance pass reads the user's words as well
+            # (2026-10-29-cdf-session-review.md §5.1).
 
 
         return {}

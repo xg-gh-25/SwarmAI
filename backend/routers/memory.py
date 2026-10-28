@@ -173,7 +173,9 @@ async def save_session_to_memory(req: SaveSessionRequest):
         await asyncio.to_thread(
             record_session_input, req.session_id, "user_message", "user",
             "用户要求保存本会话", ref="save-to-memory")
-        await asyncio.to_thread(s2_jobs.request, req.session_id, "save_button")
+        from core.ingestion.sources.s7_review import current_sdk_session_id
+        await asyncio.to_thread(s2_jobs.request, req.session_id, "save_button",
+                                sdk_session_id=current_sdk_session_id(req.session_id))
     except Exception as exc:
         logger.error("Save to Memory could not queue session %s: %s",
                      req.session_id, exc, exc_info=True)

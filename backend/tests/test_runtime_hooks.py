@@ -1776,18 +1776,15 @@ class TestMemoryWorthyCorrectionGate:
             "pure correction-signal must NOT be written to MEMORY"
 
     @pytest.mark.asyncio
-    async def test_hook_enqueues_real_correction_without_writing_memory(
+    async def test_hook_logs_a_correction_but_submits_nothing(
         self, corrections_file, session_context, tmp_path, monkeypatch
     ):
-        from types import SimpleNamespace
+        """The after-session review writes corrections with context (session review
+        §5.1); the hook only logs the signal and never submits the raw prompt."""
         calls = []
         monkeypatch.setattr(
-            "core.session_inputs.latest_user_event_id",
-            lambda *a, **k: "input-user-correction",
-        )
-        monkeypatch.setattr(
             "core.ingestion.sources.s1_user.submit_units",
-            lambda *a, **k: calls.append((a, k)) or [SimpleNamespace(status="queued")],
+            lambda *a, **k: calls.append((a, k)) or [],
         )
         mem = tmp_path / "MEMORY.md"
         mem.write_text("## Pitfalls\n")
@@ -1796,13 +1793,8 @@ class TestMemoryWorthyCorrectionGate:
         from core.runtime_hooks import create_user_correction_detector
         hook = create_user_correction_detector(str(corrections_file), session_context)
         await hook({"prompt": real}, None, MagicMock())
-        args, kwargs = calls[0]
-        units = args[0]
-        assert units[0]["kind"] == "cognition"
-        assert units[0]["type"] == "correction"
-        assert kwargs["session_id"] == session_context["sdk_session_id"]
-        assert kwargs["evidence"] == "event:input-user-correction"
-        assert kwargs["turn_kind"] == "user"
+        assert calls == []
+        assert corrections_file.exists()
         assert mem.read_text() == "## Pitfalls\n"
 
 

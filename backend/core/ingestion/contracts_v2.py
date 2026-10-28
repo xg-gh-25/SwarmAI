@@ -427,7 +427,7 @@ EvidenceRootKind = Literal[
 ]
 
 # ── sources (§5.2) ────────────────────────────────────────────────────────────
-SourceId = Literal["S0", "S1", "S2", "S3", "S4", "S5", "S6"]  # S0 = system summaries (summary lane)
+SourceId = Literal["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]  # S0 = system summaries (summary lane)
 SOURCES_V2: dict[str, dict] = {
     "S0": {"name": "system_summary", "lane": "summary"},  # TIMELINE month summaries only
     "S1": {"name": "user_directive", "lane": "immediate"},
@@ -436,6 +436,8 @@ SOURCES_V2: dict[str, dict] = {
     "S4": {"name": "code_change", "lane": "scheduled"},
     "S5": {"name": "metrics", "lane": "scheduled"},
     "S6": {"name": "external", "lane": "scheduled"},
+    # S7: the after-session review in a fork of the same session (2026-10-29-cdf-session-review.md)
+    "S7": {"name": "session_review", "lane": "session"},
 }
 
 # ── trusted passes, S1, entailment (§9.1, §9.2) ───────────────────────────────

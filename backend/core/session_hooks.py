@@ -64,6 +64,9 @@ class HookContext:
     #: Immutable provenance events available to every extractor. Empty means the
     #: extractor must use the conservative session-ledger taint fallback.
     input_event_ids: tuple[str, ...] = ()
+    #: the SDK session id of the session's CLI conversation, so the after-session
+    #: review can resume a fork of it (2026-10-29-cdf-session-review.md §16)
+    sdk_session_id: str | None = None
 
 
 @runtime_checkable

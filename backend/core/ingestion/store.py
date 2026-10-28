@@ -54,6 +54,19 @@ ALTER TABLE ingestion_daily_stats DROP COLUMN llm_calls;
 ALTER TABLE ingestion_daily_stats DROP COLUMN tokens;
 """
 
+
+def _attempts_rebuild() -> str:
+    """v7 widens extraction_attempts.source to S7. SQLite cannot alter a CHECK, so the
+    table is rebuilt from the one definition in api_v2 (same columns, same order)."""
+    import re as _re
+    create = _re.search(r"CREATE TABLE IF NOT EXISTS extraction_attempts \(.*?\n\);",
+                        SCHEMA_V2_DDL, _re.S).group(0)
+    return (create.replace("IF NOT EXISTS extraction_attempts (", "extraction_attempts_v7 (") + "\n"
+            "INSERT INTO extraction_attempts_v7 SELECT * FROM extraction_attempts;\n"
+            "DROP TABLE extraction_attempts;\n"
+            "ALTER TABLE extraction_attempts_v7 RENAME TO extraction_attempts;\n"
+            "CREATE INDEX IF NOT EXISTS ix_attempts_started ON extraction_attempts(started_at);\n")
+
 # v7: S2 extraction jobs (design §12 r16.13). Its own step: v6 drops columns, so a
 # database already at v6 cannot re-run _V6_DDL to pick up a new table.
 _V7_DDL = """
@@ -67,10 +80,13 @@ CREATE TABLE IF NOT EXISTS ingestion_s2_jobs (
   next_attempt_at TEXT,
   started_at TEXT,
   finished_at TEXT,
-  error TEXT
+  error TEXT,
+  sdk_session_id TEXT,   -- for the review's resume; NULL -> S2 main pass instead
+  reviewed_to TEXT,      -- watermark: the last message the review covered
+  again_after TEXT       -- not-before for the extra run a request during a run asks for
 );
 CREATE INDEX IF NOT EXISTS ix_s2_jobs_state ON ingestion_s2_jobs(state, requested_at);
-"""
+""" + _attempts_rebuild()
 
 
 _V2_MIGRATION_DDL = """

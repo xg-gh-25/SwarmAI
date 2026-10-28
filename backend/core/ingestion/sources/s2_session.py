@@ -367,13 +367,19 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
 
 
 def extract_session_sync(session_id: str, *, project_snapshot: dict[str, Any] | None = None,
-                         llm: Any | None = None) -> dict[str, list[Any]]:
-    """Both S2 passes, trusted first, in the calling thread (the S2 job executor)."""
+                         llm: Any | None = None,
+                         passes: tuple[str, ...] = ("user_utterance", "main")) -> dict[str, list[Any]]:
+    """S2 passes, trusted first, in the calling thread (the session job executor).
+
+    The job runs the user-utterance pass for every session and the main pass only when
+    the session cannot be reviewed, or for the measuring sample (session review §10)."""
     transcript = _transcript_sync(session_id)
     rows = _input_rows(session_id)
     claimed = _claimed_by_s1(session_id)
-    trusted = _trusted_pass(session_id, rows, claimed, project_snapshot, llm)
-    main = _main_pass(session_id, transcript, rows, claimed, project_snapshot, llm)
+    trusted = (_trusted_pass(session_id, rows, claimed, project_snapshot, llm)
+               if "user_utterance" in passes else [])
+    main = (_main_pass(session_id, transcript, rows, claimed, project_snapshot, llm)
+            if "main" in passes else [])
     return {"user_utterance": trusted, "main": main}
 
 
@@ -393,7 +399,11 @@ class SessionExtractionHook:
     name = "cdf_v2_session_extraction"
 
     async def execute(self, context: Any) -> None:
-        # Queue only: S2 on a long session outlasts the 180 s hook budget (§12 r16.13).
+        # Queue only (§12 r16.13). The idle hook fires 120 s after the last turn; the job's
+        # not-before waits 8 more minutes and is pushed by later activity (review §16).
         if not context.deleting:
             from core.ingestion import s2_jobs
-            await asyncio.to_thread(s2_jobs.request, context.session_id, "session_end")
+            await asyncio.to_thread(
+                s2_jobs.request, context.session_id, "session_end",
+                sdk_session_id=getattr(context, "sdk_session_id", None),
+                delay=s2_jobs.REVIEW_DELAY)

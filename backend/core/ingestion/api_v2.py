@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS claim_support (
 
 CREATE TABLE IF NOT EXISTS extraction_attempts (
   attempt_id TEXT PRIMARY KEY,
-  source TEXT NOT NULL CHECK (source IN ('S0','S1','S2','S3','S4','S5','S6')),
+  source TEXT NOT NULL CHECK (source IN ('S0','S1','S2','S3','S4','S5','S6','S7')),
   evidence_range TEXT NOT NULL,             -- JSON: {session_id, msg_from, msg_to} | {run_id} | {commits} | {window}
   extractor_version TEXT NOT NULL,
   started_at TEXT NOT NULL,

@@ -250,6 +250,7 @@ class LifecycleManager:
                 session_start_time=session.created_at if session else "",
                 session_title=session.title if session else "Unknown",
                 input_event_ids=session_input_ids(unit.session_id),
+                sdk_session_id=getattr(unit, "_sdk_session_id", None),
             )
         except Exception as exc:
             logger.warning(

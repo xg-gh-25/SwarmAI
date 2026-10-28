@@ -158,3 +158,59 @@ def test_a_v6_database_gains_the_job_table(tmp_path, monkeypatch) -> None:
         assert conn.execute("SELECT COUNT(*) FROM ingestion_s2_jobs").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_review_waits_for_quiet_time_and_keeps_the_sdk_id(conn) -> None:
+    """The idle hook asks with a not-before; more activity pushes it; the button asks
+    with none. The sdk id and the watermark travel with the job."""
+    from datetime import timedelta
+    from core.ingestion import s2_jobs
+    s2_jobs.request("s1", "session_end", sdk_session_id="sdk-1", delay=timedelta(minutes=8))
+    assert s2_jobs.claim(conn) is None                       # not yet quiet long enough
+    s2_jobs.request("s1", "session_end", delay=timedelta(minutes=8))
+    assert s2_jobs.claim(conn) is None                       # pushed, sdk id kept
+    s2_jobs.request("s1", "save_button")                     # no delay: now
+    job = s2_jobs.claim(conn)
+    assert job["sdk_session_id"] == "sdk-1" and job["reviewed_to"] is None
+    s2_jobs.set_watermark(conn, "s1", "2026-10-29T00:00:00|m9")
+    s2_jobs.request("s1", "session_end", delay=timedelta(minutes=8))   # during the run
+    assert s2_jobs.finish(conn, "s1") == "queued"
+    assert s2_jobs.claim(conn) is None                       # the extra run waits too
+    s2_jobs.request("s1", "save_button")
+    assert s2_jobs.claim(conn)["reviewed_to"] == "2026-10-29T00:00:00|m9"
+
+
+def test_v7_attempts_accept_s7(tmp_path, monkeypatch) -> None:
+    data_dir = tmp_path / "d"
+    data_dir.mkdir()
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data_dir))
+    from core.ingestion.api import SCHEMA_DDL, connect_rw
+    from core.ingestion.api_v2 import SCHEMA_V2_DDL
+    from core.ingestion.store import _USAGE_SCHEMA_DDL, _V2_MIGRATION_DDL, _V6_DDL
+    old = SCHEMA_V2_DDL.replace("'S5','S6','S7')", "'S5','S6')")
+    raw = sqlite3.connect(data_dir / "ingestion.db", isolation_level=None)
+    raw.execute("PRAGMA auto_vacuum=2")
+    raw.execute("PRAGMA journal_mode=WAL")
+    raw.executescript(f"BEGIN;{SCHEMA_DDL}{_V2_MIGRATION_DDL}{old}{_USAGE_SCHEMA_DDL}"
+                      f"{_V6_DDL}PRAGMA user_version=6;COMMIT;")
+    raw.execute("INSERT INTO extraction_attempts(attempt_id,source,evidence_range,extractor_version,"
+                "started_at,status) VALUES ('a1','S2','{}','v','t','ok')")
+    raw.close()
+    conn = connect_rw()
+    try:
+        conn.execute("INSERT INTO extraction_attempts(attempt_id,source,evidence_range,"
+                     "extractor_version,started_at,status) VALUES ('a2','S7','{}','v','t','ok')")
+        assert [r[0] for r in conn.execute("SELECT attempt_id FROM extraction_attempts ORDER BY 1")] \
+            == ["a1", "a2"]
+    finally:
+        conn.close()
+
+
+def test_hook_passes_the_sdk_id_and_waits(conn) -> None:
+    from datetime import datetime, timezone
+    from core.ingestion.sources import s2_session
+    asyncio.run(s2_session.SessionExtractionHook().execute(
+        SimpleNamespace(deleting=False, session_id="s8", sdk_session_id="sdk-8")))
+    row = conn.execute("SELECT sdk_session_id, next_attempt_at FROM ingestion_s2_jobs "
+                       "WHERE session_id='s8'").fetchone()
+    assert row[0] == "sdk-8" and row[1] > datetime.now(timezone.utc).isoformat()
