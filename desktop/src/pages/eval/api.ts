@@ -45,6 +45,8 @@ export interface FollowUp {
   severity: 'high' | 'medium' | 'low';
   rule: number;
   what: Bilingual;
+  /** ``what`` without the case names (they are listed by ``case_ids``) */
+  headline?: Bilingual;
   why: string;
   action: Bilingual;
   case_ids: string[];

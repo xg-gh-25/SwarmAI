@@ -1,16 +1,13 @@
-/** Online Eval, Offline Eval and LLM Judges: the calibration buttons only take a
- *  label when the batch accepts one; a failing offline case drills down to its
- *  trajectory and steps (and says why a user case has none); the release record
- *  shows each full run's checks; the judge page reads its numbers and the model
- *  setting from the backend. */
+/** Live sessions and the judges: it leads with how many sessions were corrected; the
+ *  calibration buttons appear only when the batch accepts a label; nothing to score is
+ *  a reason, never a zero; the judge part reads its numbers and the model setting
+ *  from the backend. (Offline cases and the run history are tested with Cases.) */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { routes, reset, show, calls, check, failNext, fakeApi } from './harness';
+import { routes, reset, show, calls, fakeApi } from './harness';
 
 vi.mock('../../../services/api', () => fakeApi());
-vi.mock('../../../utils/openExternal', () => ({ openExternal: vi.fn() }));
 import { OnlineTab } from '../OnlineTab';
-import { OfflineTab } from '../OfflineTab';
 import { JudgesTab } from '../JudgesTab';
 
 beforeEach(() => reset());
@@ -22,31 +19,45 @@ const online = (accepting: boolean, labels: Record<string, string> = {}) => ({
   calibration: { accepting, reason: accepting ? null : 'scored by an older judge prompt', labels },
 });
 
-describe('Online Eval', () => {
-  it('posts a label for a low-scored session and opens it', async () => {
+describe('Live sessions', () => {
+  it('leads with how many sessions you corrected', async () => {
+    routes['GET /eval/session-quality'] = { ...online(true), sessions_checked: 33,
+      checks: { O3_CORRECTIONS: { checked: 33, failed: 14, rate: 0.424, examples: [] } } };
+    show(<OnlineTab />);
+    expect((await screen.findByTestId('online-hero')).textContent).toBe('You corrected the agent in 14 of 33 sessions.');
+  });
+
+  it('posts a label for a low-scored session, opened in place, and opens the session', async () => {
     routes['GET /eval/session-quality'] = online(true);
     routes['POST /eval/calibration'] = { status: 'ok' };
     const { actions } = show(<OnlineTab />);
     const row = await screen.findByTestId('low-session');
+    expect(within(row).queryByTestId('calibrate-disagree')).toBeNull();
+    fireEvent.click(within(row).getByText('Fix the build'));
     fireEvent.click(within(row).getByTestId('calibrate-disagree'));
     await waitFor(() => expect(calls.find((c) => c.url === '/eval/calibration')?.body).toEqual({ session_id: 's1', human: 'disagree' }));
     fireEvent.click(within(row).getByText('Open session'));
     expect(actions.openSession).toHaveBeenCalledWith('s1');
   });
 
-  it('does not take a label from a batch the backend does not accept, and marks one already given', async () => {
+  it('offers no label for a batch the backend does not accept, says why, and marks one already given', async () => {
     routes['GET /eval/session-quality'] = online(false, { s1: 'agree' });
-    show(<OnlineTab />);
+    const { unmount } = show(<OnlineTab />);
     const row = await screen.findByTestId('low-session');
-    const agree = within(row).getByTestId('calibrate-agree') as HTMLButtonElement;
-    expect(agree.disabled).toBe(true);
-    expect(agree.className).toContain('btn-primary');
-    fireEvent.click(agree);
-    expect(calls.some((c) => c.url === '/eval/calibration')).toBe(false);
+    fireEvent.click(within(row).getByText('Fix the build'));
+    expect(within(row).queryByTestId('calibrate-agree')).toBeNull();
+    expect(screen.getByTestId('calibration-closed').textContent).toContain('older judge prompt');
+    expect(within(row).getByTestId('calibrate-label').textContent).toBe('You agreed with the judge.');
+    unmount();
+    routes['GET /eval/session-quality'] = online(true, { s1: 'agree' });
+    show(<OnlineTab />);
+    const again = await screen.findByTestId('low-session');
+    fireEvent.click(within(again).getByText('Fix the build'));
+    expect(within(again).getByTestId('calibrate-agree').className).toContain('btn-primary');
   });
 });
 
-describe('Online Eval: nothing to score is a reason, not a zero', () => {
+describe('Live sessions: nothing to score is a reason, not a zero', () => {
   it('says the judge failed on part of the sample', async () => {
     routes['GET /eval/session-quality'] = { ...online(true), judge_sampled: 5, judge_failed: 2,
       checks: { O4_GOAL: { checked: 3, failed: 1, rate: 0.33, examples: [] } } };
@@ -59,8 +70,8 @@ describe('Online Eval: nothing to score is a reason, not a zero', () => {
       judge_error: '3/3 judged sessions failed: judge call failed',
       checks: { O4_GOAL: { checked: 0, failed: 0, rate: null, examples: [] } } };
     show(<OnlineTab />);
-    expect(await screen.findByText('judge failed')).toBeTruthy();
-    expect(screen.queryByText('0/0 done well')).toBeNull();
+    expect(await screen.findByText(/The judge failed on every sampled session/)).toBeTruthy();
+    expect(screen.queryByText(/0 of 0/)).toBeNull();
   });
 
   it('shows "nothing to score" for an empty code check', async () => {
@@ -68,66 +79,6 @@ describe('Online Eval: nothing to score is a reason, not a zero', () => {
       checks: { O1_LANGUAGE: { checked: 0, failed: 0, rate: null, examples: [] } } };
     show(<OnlineTab />);
     expect(await screen.findByText('nothing to score')).toBeTruthy();
-  });
-});
-
-const offCase = (id: string, origin: string) => ({
-  id, category: 'decision', dimension: 'quality', tier: 'active', eval_method: 'behavior', release_tier: 'watch',
-  _origin: origin, affected_by: [], evaluators: ['trajectory_capture'], purpose: { en: `${id} decides right.` },
-  last_result: { status: 'failed', run_id: 'full1', triggered_at: '2026-10-20T03:00:00+00:00' },
-});
-
-describe('Offline Eval', () => {
-  beforeEach(() => {
-    routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 2, lines: {
-      quick: { last_run: null, passed: null, total: null, days: [] },
-      full: { last_run: '2026-10-20T03:00:00+00:00', release: 'blocked', next_run: null },
-      online: { last_run: null, sessions_checked: 0, next_run: null },
-      golden_set: { product: 1, private: 1, total: 2, product_cap: 60, total_cap: 80 } } };
-    routes['GET /eval/golden-set'] = { total_cases: 2, cases: [offCase('OFF_A', 'product'), offCase('MY_B', 'private')] };
-    routes['GET /eval/history'] = [
-      { run_id: 'probe1', line: 'probe', triggered_by: 'manual', triggered_at: '2026-10-26T12:00:00+00:00', release: 'release', release_reason: '1/1', total_cases: 1, cases_passed: 1, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
-      { run_id: 'canary1', line: 'quick', triggered_by: 'canary', triggered_at: '2026-10-26T09:00:00+00:00', release: 'release', total_cases: 36, cases_passed: 36, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
-      { run_id: 'full1', line: 'full', triggered_by: 'scheduled', triggered_at: '2026-10-20T03:00:00+00:00', release: 'blocked', release_reason: 'gate failed: Q_X',
-        release_checks: [check('redline', true), check('dimensions', false, { cases: [{ id: 'Q_X' }] }), check('denominator', true, { selected: 36, with_result: 36 }), check('record', true)],
-        report: '2026-10-20.html', total_cases: 46, cases_passed: 44, cases_failed: 2, cases_skipped: 0, duration_seconds: 900 },
-      { run_id: 'old1', line: 'full', triggered_by: 'scheduled', triggered_at: '2026-09-01T03:00:00+00:00', release: null, total_cases: 158, cases_passed: 150, cases_failed: 8, cases_skipped: 0, duration_seconds: 900 },
-    ];
-    routes['GET /eval/runs/probe1'] = { run_id: 'probe1', cases: [{ id: 'OFF_A', status: 'passed' }] };
-    routes['GET /eval/runs/full1'] = { run_id: 'full1', cases: [
-      { id: 'OFF_A', status: 'failed', notes: 'trajectory: Read missing', observed_trajectory: ['Grep foo', 'Bash ls'],
-        expected_check: [{ step: 'Grep', found: true }, { step: 'Read', found: false }],
-        steps: [{ tool: 'Grep', input: 'foo', output: '0 hits' }, { tool: 'Bash', input: 'ls', output: 'boom', is_error: true }], final_text: 'I recommend X.' },
-      { id: 'MY_B', status: 'failed', notes: 'judge: wrong option', observed_trajectory: ['Read'] },
-    ] };
-  });
-
-  it('drills a failing case down to session, trajectory and step, from the latest full run (not a newer quick check or probe)', async () => {
-    show(<OfflineTab />);
-    const a = await screen.findByTestId('failing-OFF_A');
-    const dd = within(a).getByTestId('drilldown');
-    await waitFor(() => expect(dd.textContent).toContain('failed · trajectory: Read missing'));
-    expect(dd.textContent).toContain('Expected but not seen: Read');
-    expect(dd.textContent).toContain('2. Bash ls → boom');
-    expect(dd.textContent).toContain('The agent’s final answer');
-    expect(calls.some((c) => c.url === '/eval/runs/full1')).toBe(true);
-    expect(calls.some((c) => c.url === '/eval/runs/probe1')).toBe(false);
-    const b = within(screen.getByTestId('failing-MY_B')).getByTestId('drilldown');
-    expect(b.textContent).toContain('Your own cases keep only tool names');
-  });
-
-  it('the release record lists full runs with a decision; older ones only on request', async () => {
-    show(<OfflineTab />);
-    const rec = await screen.findByTestId('release-record');
-    const rows = rec.querySelectorAll('tbody tr');
-    expect(rows).toHaveLength(1);
-    expect(rows[0].textContent).toContain('1 failed');
-    expect(rows[0].textContent).toContain('36/36');
-    expect(rows[0].textContent).toContain('gate failed: Q_X');
-    expect(rec.textContent).not.toContain('canary');
-    expect(rec.textContent).not.toContain('1/1');
-    fireEvent.click(screen.getByText('Show'));
-    expect(screen.getByTestId('release-record').querySelectorAll('tbody tr')).toHaveLength(2);
   });
 });
 
@@ -140,93 +91,7 @@ const judges = (agentModel: string, temperature = 0) => ({
   ],
 });
 
-describe('a started full run', () => {
-  it('is watched until it is recorded, then everything refreshes', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
-      routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
-      routes['GET /eval/history'] = [];
-      routes['POST /eval/run'] = { status: 'started', run_id: 'new1' };
-      let n = 0;
-      routes['GET /eval/runs/new1'] = () => (++n < 2 ? { run_id: 'new1', status: 'running' } : { run_id: 'new1', cases: [] });
-      show(<OfflineTab />);
-      fireEvent.click(await screen.findByTestId('run-full'));
-      await waitFor(() => expect(calls.some((c) => c.url === '/eval/run')).toBe(true));
-      // disabled from the moment the run id arrives, before the first poll answers
-      await waitFor(() => expect((screen.getByTestId('run-full') as HTMLButtonElement).disabled).toBe(true));
-      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Running…'));
-      expect((screen.getByTestId('run-full') as HTMLButtonElement).disabled).toBe(true);
-      const before = calls.filter((c) => c.url.startsWith('/eval/history')).length;
-      await vi.advanceTimersByTimeAsync(5500);
-      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Run the full set now'));
-      await waitFor(() => expect(calls.filter((c) => c.url.startsWith('/eval/history')).length).toBeGreaterThan(before));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe('a run watch that cannot end on its own', () => {
-  const base = () => {
-    routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
-    routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
-    routes['GET /eval/history'] = [];
-    routes['POST /eval/run'] = { status: 'started', run_id: 'stuck1' };
-  };
-  it('stops at an unknown run instead of polling it', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      base();
-      failNext['GET /eval/runs/stuck1'] = { status: 404, detail: 'Run not found' };
-      show(<OfflineTab />);
-      fireEvent.click(await screen.findByTestId('run-full'));
-      await waitFor(() => expect(calls.some((c) => c.url === '/eval/runs/stuck1')).toBe(true));
-      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Run the full set now'));
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(calls.filter((c) => c.url === '/eval/runs/stuck1')).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-  it('gives up after 30 minutes on a run killed mid-flight (its marker says running forever)', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      base();
-      routes['GET /eval/runs/stuck1'] = { run_id: 'stuck1', status: 'running' };
-      show(<OfflineTab />);
-      fireEvent.click(await screen.findByTestId('run-full'));
-      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Running…'));
-      await vi.advanceTimersByTimeAsync(30 * 60_000 + 1000);
-      await waitFor(() => expect(screen.getByTestId('run-full').textContent).toBe('Run the full set now'));
-      const polls = calls.filter((c) => c.url === '/eval/runs/stuck1').length;
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(calls.filter((c) => c.url === '/eval/runs/stuck1').length).toBe(polls);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe('a started run that crashes', () => {
-  it('says it did not finish, and the release record keeps the crash in view', async () => {
-    routes['GET /eval/health'] = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
-    routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
-    routes['GET /eval/history'] = [{ run_id: 'crash1', line: 'full', status: 'failed', error: 'model backend down',
-      triggered_by: 'manual', triggered_at: '2026-10-26T03:00:00+00:00', release: null, total_cases: 0,
-      cases_passed: 0, cases_failed: 0, cases_skipped: 0, duration_seconds: 0 }];
-    routes['POST /eval/run'] = { status: 'started', run_id: 'new2' };
-    routes['GET /eval/runs/new2'] = { run_id: 'new2', status: 'failed', error: 'model backend down', cases: [] };
-    show(<OfflineTab />);
-    const rec = await screen.findByTestId('release-record');
-    expect(rec.textContent).toContain('did not finish');
-    expect(rec.textContent).toContain('model backend down');
-    fireEvent.click(screen.getByTestId('run-full'));
-    expect((await screen.findByTestId('run-full-failed')).textContent).toContain('model backend down');
-  });
-});
-
-describe('LLM Judges', () => {
+describe('Judges (in Method)', () => {
   it('reads the judge ratio and agreement, and saves a model change through settings', async () => {
     routes['GET /eval/judges'] = judges('gpt-x');
     routes['GET /settings'] = { eval_judge_model: 'claude-sonnet-4-6', available_models: ['claude-sonnet-4-6', 'claude-opus-4-8'] };

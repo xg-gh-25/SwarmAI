@@ -24,8 +24,8 @@ const sources = readdirSync(DIR).filter((f) => f.endsWith('.tsx'))
   .map((f) => ({ f, text: readFileSync(join(DIR, f), 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n') }));
 
 describe('Eval overlay copy', () => {
-  it('reads all six tabs', () => {
-    for (const tab of ['OverviewTab', 'GoldenCasesTab', 'OnlineTab', 'OfflineTab', 'JudgesTab', 'GuideTab'])
+  it('reads every tab', () => {
+    for (const tab of ['OverviewTab', 'CasesTab', 'OnlineTab', 'MethodTab', 'JudgesTab', 'GuideTab'])
       expect(sources.map((s) => s.f)).toContain(`${tab}.tsx`);
   });
 

@@ -319,3 +319,38 @@ def test_the_report_shows_evolution_in_its_own_section():
     html = _render_follow_ups([dict(item, kind="evolution")])
     assert "Evolution suggestion" in html and "Nothing needs handling" in html and "Low &lt;i&gt;" in html
     assert "Evolution suggestion" not in _render_follow_ups([dict(item, kind="eval")])
+
+
+def test_a_follow_up_names_a_case_by_its_title_or_the_first_sentence_of_its_purpose():
+    """Up to three cases share one follow-up line, so each is named short: the
+    English title, else the first sentence (what it protects); the rest of the
+    purpose stays on the case."""
+    case = _stamped({"id": "P1", "tier": "stable", "gating": "gate", "_origin": PRODUCT_ORIGIN,
+                     "evaluators": ["canary_pass"], "eval_method": "programmatic",
+                     "title": "Recall finds memory",
+                     "purpose": {"en": "Recall finds a memory deep in a section. If this breaks, memory is lost.",
+                                 "zh": "召回能找到长段落末尾的记忆。坏了意味着记忆等于丢了。"}})
+    h = _clean_history()
+    h[0] = _run("canary", 0, {"P1": "failed"}, full=False)
+    item = build_follow_ups(h, [case, CASES[1]], ONLINE, NOW)[0]
+    assert item["what"]["en"].endswith(": Recall finds memory")
+    assert item["what"]["zh"].endswith("：召回能找到长段落末尾的记忆。")
+    untitled = dict(case, title=None)
+    untitled["validated_by_4gate"] = compute_case_stamp(untitled)
+    item = build_follow_ups(h, [untitled, CASES[1]], ONLINE, NOW)[0]
+    assert item["what"]["en"].endswith(": Recall finds a memory deep in a section.")
+
+
+def test_a_list_follow_up_has_a_headline_without_the_case_names():
+    """The Overview row shows the names on their own line, so the headline carries
+    the count only; ``what`` keeps the names for the report."""
+    h = [_run("scheduled", 1, {"P1": "passed", "B1": "failed"}),
+         _run("scheduled", 15, {"P1": "passed"}),
+         _run("canary", 0, {"P1": "passed"}, full=False)]
+    h.sort(key=lambda r: r["triggered_at"], reverse=True)
+    item = [i for i in build_follow_ups(h, CASES, ONLINE, NOW) if i["rule"] == 3][0]
+    assert item["headline"]["en"] == "1 new offline case fails on the first run"
+    assert item["headline"]["zh"] == "1 条新离线考题第一次运行没通过"
+    assert "Corrects a wrong premise" in item["what"]["en"]
+    one = build_follow_ups(_clean_history(), CASES, ONLINE, NOW)
+    assert all(i["headline"] == i["what"] for i in one if i["rule"] != 3)

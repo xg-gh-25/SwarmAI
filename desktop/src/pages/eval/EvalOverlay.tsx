@@ -1,9 +1,9 @@
 /**
- * OS Eval overlay — six tabs: Overview (can this version be released, what needs
- * me), Golden Cases (manage the cases), Online Eval (real sessions), Offline Eval
- * (the checks before a release), LLM Judges (where the L2 scores come from), Guide
- * (the Eval-First method). Design: docs/design/2026-10-26-eval-as-product.md §8 and
- * the mock Knowledge/Mockups/2026-10-26-eval-overlay-redesign.html.
+ * OS Eval overlay — four tabs, one question each: Overview (can this version be
+ * used, and what needs me), Cases (the golden set with each case's latest result and
+ * the run history), Live sessions (the owner's real sessions, scored), Method (the
+ * Eval-First guide and the judges). Design: docs/design/2026-10-26-eval-as-product.md
+ * §8 (revision 2026-10-28: the offline results moved into Cases, the judges into Method).
  *
  * Context health and governance proposals live in the C&M overlay, not here.
  * "Let Swarm look" and "open the session" go through the overlay host's bridges
@@ -12,10 +12,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { chatService } from '../../services/chat';
 import { useGoldenSet, useSessionQuality } from './api';
-import { GoldenCasesTab } from './GoldenCasesTab';
-import { GuideTab } from './GuideTab';
-import { JudgesTab } from './JudgesTab';
-import { OfflineTab } from './OfflineTab';
+import { notPassing } from './derive';
+import { CasesTab } from './CasesTab';
+import { MethodTab } from './MethodTab';
 import { OnlineTab } from './OnlineTab';
 import { OverviewTab } from './OverviewTab';
 import { EvalActionsContext, GoContext, useLang, type EvalActions, type TabId } from './ui';
@@ -34,15 +33,25 @@ export default function EvalOverlay({ dispatchPrompt, resumeSession, close, init
   const { t } = useLang();
   const [tab, setTab] = useState<TabId>(initialTab ?? 'overview');
   const [notice, setNotice] = useState<string | null>(null);
+  /** What a cross-link points at inside the tab it opens (an anchor id, or ``case:<id>``). */
+  const [focus, setFocus] = useState<string | undefined>(undefined);
   const gs = useGoldenSet();
   const online = useSessionQuality();
 
   const go = useCallback((to: TabId, anchor?: string) => {
     setTab(to);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (anchor) document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth' });
-      else { const el = document.getElementById('eval-scroll'); if (el) el.scrollTop = 0; }
-    }));
+    setFocus(anchor);
+    // The anchor's section may still be loading (Judges fetches its data on mount):
+    // look for it on each frame for about a second, then stay at the top.
+    const scroll = (framesLeft: number) => requestAnimationFrame(() => {
+      if (anchor && !anchor.startsWith('case:')) {
+        const target = document.getElementById(anchor);
+        if (target) { target.scrollIntoView({ behavior: 'smooth' }); return; }
+        if (framesLeft > 0) { scroll(framesLeft - 1); return; }
+      }
+      const el = document.getElementById('eval-scroll'); if (el) el.scrollTop = 0;
+    });
+    scroll(60);
   }, []);
 
   const actions = useMemo<EvalActions>(() => ({
@@ -61,15 +70,13 @@ export default function EvalOverlay({ dispatchPrompt, resumeSession, close, init
     },
   }), [dispatchPrompt, resumeSession, close, t]);
 
-  const failing = (gs.data?.cases ?? []).filter((c) => c.tier !== 'archived' && c.last_result && c.last_result.status !== 'passed').length;
+  const failing = (gs.data?.cases ?? []).filter(notPassing).length;
   const low = online.data?.low_details?.length ?? 0;
   const tabs: { id: TabId; label: string; n?: number }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'cases', label: 'Golden Cases' },
-    { id: 'online', label: 'Online Eval', n: low },
-    { id: 'offline', label: 'Offline Eval', n: failing },
-    { id: 'judges', label: 'LLM Judges' },
-    { id: 'guide', label: 'Guide' },
+    { id: 'overview', label: t('Overview', '概览') },
+    { id: 'cases', label: t('Cases', '考题'), n: failing },
+    { id: 'online', label: t('Live sessions', '真实会话'), n: low },
+    { id: 'method', label: t('Method', '方法') },
   ];
 
   return (
@@ -97,11 +104,9 @@ export default function EvalOverlay({ dispatchPrompt, resumeSession, close, init
           )}
           <div id="eval-scroll" className="flex-1 min-h-0 overflow-y-auto">
             {tab === 'overview' && <OverviewTab />}
-            {tab === 'cases' && <GoldenCasesTab />}
+            {tab === 'cases' && <CasesTab focus={focus} />}
             {tab === 'online' && <OnlineTab />}
-            {tab === 'offline' && <OfflineTab />}
-            {tab === 'judges' && <JudgesTab />}
-            {tab === 'guide' && <GuideTab />}
+            {tab === 'method' && <MethodTab />}
           </div>
         </div>
       </GoContext.Provider>

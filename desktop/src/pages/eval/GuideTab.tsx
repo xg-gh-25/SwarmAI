@@ -7,7 +7,7 @@
  * the Agent-DLC deck (pages 13–17) for the flywheel, five dimensions, tiers and checks.
  */
 import type { ReactNode } from 'react';
-import { TierTag, useGo, useLang, type TabId } from './ui';
+import { LinkBtn, TierTag, useGo, useLang, type TabId } from './ui';
 
 const SOURCES = [
   { en: 'AWS sample repository for Eval-First enterprise agents (with the four white papers)', zh: 'AWS 官方 Eval-First 示例仓库（含四篇白皮书全文）',
@@ -22,7 +22,7 @@ export function GuideTab() {
   const { t } = useLang();
   const go = useGo();
   const L = ({ to, anchor, children }: { to: TabId; anchor?: string; children: ReactNode }) => (
-    <a className="cursor-pointer text-[var(--color-primary)] hover:underline" onClick={() => go(to, anchor)}>{children}</a>
+    <LinkBtn className="inline text-[var(--color-primary)]" onClick={() => go(to, anchor)}>{children}</LinkBtn>
   );
   const Here = ({ children }: { children: ReactNode }) => (
     <p className="text-small text-[var(--color-text)] mt-3 pl-3 border-l-2 border-[var(--color-brand)]">{children}</p>
@@ -50,12 +50,12 @@ export function GuideTab() {
         <Wheel />
         <div className="space-y-2 text-small flex-1">
           {[
-            [t('Define', '定义'), t('turn the goal into criteria per dimension and a golden test set', '把目标翻译成五维判据和黄金测试集'), <L to="cases">Golden Cases</L>],
+            [t('Define', '定义'), t('turn the goal into criteria per dimension and a golden test set', '把目标翻译成五维判据和黄金测试集'), <L to="cases">{t('Cases', '考题')}</L>],
             [t('Build', '构建'), t('prompts, tools, retrieval, memory: an agent that runs', '提示词、工具、检索、记忆，搭出能跑的 agent'), <span className="text-[var(--color-text-dim)]">{t('your everyday work', '你的日常开发')}</span>],
-            [t('Evaluate', '评估'), t('score against the golden standard; attribute at session, trajectory and step level', '按黄金标准打分，会话 / 轨迹 / 步骤三级归因'), <L to="offline">Offline Eval</L>],
+            [t('Evaluate', '评估'), t('score against the golden standard; attribute at session, trajectory and step level', '按黄金标准打分，会话 / 轨迹 / 步骤三级归因'), <L to="cases">{t('Cases', '考题')}</L>],
             [t('Release', '发布'), t('release only past the bar', '过线才放行'), <L to="overview">{t('Overview · four checks', 'Overview · 四道关')}</L>],
-            [t('Observe', '观测'), t('sample and score real use; watch for silent drift', '对真实使用采样打分，盯住静默漂移'), <L to="online">Online Eval</L>],
-            [t('Improve', '回流'), t('failures go back into the golden standard, which gets harder each turn', '失败样本回到黄金标准，标准越滚越硬'), <L to="overview">Evolution Suggestion</L>],
+            [t('Observe', '观测'), t('sample and score real use; watch for silent drift', '对真实使用采样打分，盯住静默漂移'), <L to="online">{t('Live sessions', '真实会话')}</L>],
+            [t('Improve', '回流'), t('failures go back into the golden standard, which gets harder each turn', '失败样本回到黄金标准，标准越滚越硬'), <L to="overview">{t('Overview · For you', '概览 · 要你处理')}</L>],
           ].map(([a, b, c], i) => <div key={i}><b className="text-[var(--color-text)] mr-2">{a}</b><span className="text-[var(--color-text-muted)]">{b}</span> · {c}</div>)}
         </div>
       </div>
@@ -63,8 +63,8 @@ export function GuideTab() {
         '圆心是"黄金标准"：黄金测试集加五维判据，是你对"什么算好"的共识。定义产出它，评估取用它，回流回灌它。')}</P>
       <P>{t('There are two flywheels: the big one goes round all six steps and moves a version, slow and across a release; the small one sits between evaluate and release, the rework when a bar is missed: score, locate, change one thing, score again, until it passes.',
         '其实有两个飞轮：大飞轮是六环走一圈、升一个版本，慢，跨越上线；小飞轮只在"评估 → 发布"之间，是不过线时的返工：打分、定位、改一处、再打分，转到过线为止。')}</P>
-      <Here>{t('In SwarmAI a person stays in the improvement loop: what the evaluation finds is listed under Evolution Suggestion and never turns into a case or a rule change by itself. Generated cases were too poor; fewer, better cases win.',
-        'SwarmAI 的回流有人在环里：评测发现的问题列在 Evolution Suggestion，不会自动变成 case 或改规则，去向由人决定。自动生成的 case 质量太差，宁缺毋滥。')}</Here>
+      <Here>{t('In SwarmAI a person stays in the improvement loop: what the evaluation finds is listed in Overview under For you and never turns into a case or a rule change by itself. Generated cases were too poor; fewer, better cases win.',
+        'SwarmAI 的回流有人在环里：评测发现的问题列在概览的“要你处理”里，不会自动变成 case 或改规则，去向由人决定。自动生成的 case 质量太差，宁缺毋滥。')}</Here>
     </> },
     { id: 'g-dims', title: t('Five dimensions: each asks one thing', '五个维度：每一维问一件事'), body: <>
       <Two items={[
@@ -115,7 +115,7 @@ export function GuideTab() {
         [t('A person (L3)', '人（L3）'), t('the scarcest, for what matters most: labelling the golden set, spot checks before a release, calibrating the judge. Look at the failures, not everything.', '最稀缺，用在刀刃上：标注 golden set、上线前抽查、校准 judge。只看失败的，不看全部。')],
         [t('The judge can be wrong', 'judge 自己也会错'), t('with an outdated standard it scores a correct answer zero. A judge must first earn it: uncalibrated scores may be shown, never used to release.', '判官用了过期的标准，agent 做对了也会被判零分。评判的人先得自己够格：未校准的分可以公开看，但不能当放行依据。')],
       ]} />
-      <Here>{t('A useful self-check: the lower the share of release-blocking criteria that need a judge, the more solid the criteria. See ', '一个好用的自检指标：拦上线的判据里，用 judge 的比例越低，判据定义得越扎实。详见 ')}<L to="judges">LLM Judges</L>.</Here>
+      <Here>{t('A useful self-check: the lower the share of release-blocking criteria that need a judge, the more solid the criteria. See ', '一个好用的自检指标：拦上线的判据里，用 judge 的比例越低，判据定义得越扎实。详见 ')}<L to="method" anchor="judges">{t('Judges, below', '下面的 Judges')}</L>.</Here>
     </> },
     { id: 'g-tiers', title: t('Three tiers of criteria, four checks to release', '判据分三档，放行要过四道关'), body: <>
       <div className="grid grid-cols-3 gap-6 mt-3 text-small text-[var(--color-text)]">
@@ -130,7 +130,7 @@ export function GuideTab() {
         <li><b>{t('Denominator', '分母核对')}</b>{t(': cases that were skipped, timed out or blocked are not quietly left out. A low score gets investigated, a perfect one does not, so a perfect one needs its denominator checked most.', '：被拦掉、超时、跳过的题不能悄悄排除在外。分数低会有人去查，满分不会，所以满分更要核对分母。')}</li>
         <li><b>{t('Record', '口径留痕')}</b>{t(': write down why this version is released and which known issues it carries.', '：写下这一版为什么放行，带着哪些已知问题。')}</li>
       </ol>
-      <Here>{t('In SwarmAI only code-checked quick checks can be gates; a new case starts as watch; every online measure is watch. Each run’s four checks are at the top of ', 'SwarmAI 里只有代码判的快速检查才能当门禁；新 case 从观测开始；线上项全部是观测。每次运行的四道关在 ')}<L to="overview">Overview</L>{t(' and in the release record of ', ' 顶部和 ')}<L to="offline" anchor="release-record">Offline Eval</L>{t('.', ' 的放行记录里。')}</Here>
+      <Here>{t('In SwarmAI only code-checked quick checks can be gates; a new case starts as watch; every online measure is watch. Each run’s four checks are at the top of ', 'SwarmAI 里只有代码判的快速检查才能当门禁；新 case 从观测开始；线上项全部是观测。每次运行的四道关在 ')}<L to="overview">{t('Overview', '概览')}</L>{t(' and in ', ' 顶部和 ')}<L to="cases" anchor="history">{t('Cases · Run history', '考题 · 运行记录')}</L>{t('.', ' 里。')}</Here>
     </> },
     { id: 'g-onoff', title: t('Offline and online: one prevents, one finds', '离线 vs 线上：一个防，一个查'), body: <>
       <table className="w-full text-small mt-3">
@@ -144,7 +144,7 @@ export function GuideTab() {
           ].map(([a, b, c]) => <tr key={a} className="border-t border-[var(--color-border)]"><td className="py-2 pr-3 text-[var(--color-text-muted)]">{a}</td><td className="py-2 pr-3">{b}</td><td className="py-2">{c}</td></tr>)}
         </tbody>
       </table>
-      <Here>{t('Offline = ', '离线 = ')}<L to="offline">Offline Eval</L>{t(' (quick checks + offline cases); online = ', '（快速检查 + 离线考题）；线上 = ')}<L to="online">Online Eval</L>.</Here>
+      <Here>{t('Offline = ', '离线 = ')}<L to="cases">{t('Cases', '考题')}</L>{t(' (quick checks + offline cases); online = ', '（快速检查 + 离线考题）；线上 = ')}<L to="online">{t('Live sessions', '真实会话')}</L>.</Here>
     </> },
     { id: 'g-golden', title: t('What makes a good golden case', '什么是好的 golden case'), body: <>
       <ul className="list-disc pl-5 text-body text-[var(--color-text)] mt-2 space-y-1">
@@ -155,7 +155,7 @@ export function GuideTab() {
         <li><b>{t('Judge the outcome, not the exact path; ', '判结果，不死抠路径；')}</b>{t('a check needs teeth: break the thing on purpose and it must fail.', '检查要有牙齿：故意弄坏，它必须失败。')}</li>
       </ul>
       <P>{t('Anti-patterns: rubric before data; trusting an uncalibrated judge; a frozen set that never grows; synthetic data covering up real use.', '反模式：先写评分标准再看数据；judge 没校准就上；评测集冻住不长；用合成数据掩盖真实情况。')}</P>
-      <Here>{t('Adding a case runs the checks that code can do (fields, duplicates, empty checks, a negative that must fail, a two-sided rubric, references that exist) before it is saved. See ', '新增 case 时，能用代码检查的几条（字段、重复、空检查、反例必须失败、两面的判定标准、引用存在）在保存前自动检查，见 ')}<L to="cases">Golden Cases</L>.</Here>
+      <Here>{t('Adding a case runs the checks that code can do (fields, duplicates, empty checks, a negative that must fail, a two-sided rubric, references that exist) before it is saved. See ', '新增 case 时，能用代码检查的几条（字段、重复、空检查、反例必须失败、两面的判定标准、引用存在）在保存前自动检查，见 ')}<L to="cases">{t('Cases', '考题')}</L>.</Here>
     </> },
     { id: 'g-fix', title: t('When a bar is missed', '不过线怎么修'), body: <>
       <ol className="list-decimal pl-5 text-body text-[var(--color-text)] mt-2 space-y-1">
@@ -191,8 +191,8 @@ export function GuideTab() {
           '这一页讲 Agent-DLC（Agent Development Lifecycle）这套评估驱动的方法，并在每一节标出它在 SwarmAI 里对应的地方。读完你应该能看懂这个 overlay 里每一个数字的分量，也知道自己的 agent 该怎么评。')}
       </p>
       <nav className="flex flex-wrap gap-x-4 gap-y-1 mt-5 text-small">
-        {sections.map((s) => <a key={s.id} className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                                onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth' })}>{s.title.split(/[:：]/)[0]}</a>)}
+        {sections.map((s) => <LinkBtn key={s.id} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                                onClick={() => document.getElementById(s.id)?.scrollIntoView({ behavior: 'smooth' })}>{s.title.split(/[:：]/)[0]}</LinkBtn>)}
       </nav>
       {sections.map((s) => (
         <section key={s.id} id={s.id} className="mt-12" data-testid={`guide-${s.id}`}>
@@ -210,7 +210,7 @@ function Wheel() {
   const go = useGo();
   const names = [t('Define', '定义'), t('Build', '构建'), t('Evaluate', '评估'), t('Release', '发布'), t('Observe', '观测'), t('Improve', '回流')];
   // where each step lives in this overlay (Build is the agent's own work: no tab)
-  const target: ([TabId, string?] | null)[] = [['cases'], null, ['offline', 'exam'], ['offline', 'release-record'], ['online'], ['overview']];
+  const target: ([TabId, string?] | null)[] = [['cases'], null, ['cases'], ['cases', 'history'], ['online'], ['overview']];
   return (
     <svg width={300} height={320} viewBox="0 0 300 320" role="img" aria-label="Agent-DLC" className="shrink-0">
       <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--color-border)" strokeWidth={1.5} />

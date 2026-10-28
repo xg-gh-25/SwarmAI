@@ -1,11 +1,11 @@
 /**
- * LLM Judges — where the L2 scores come from: the two judges as they run (model,
+ * Judges (the last part of Method) — where the L2 scores come from: the two judges as they run (model,
  * prompt, settings, what each sees and returns), how much of the release depends
  * on a judge, the methodology's requirements for a judge against what we do, and
  * how often the online judge agrees with the owner.
  */
 import { errorDetail, useJudgeModelSetting, useJudges, type JudgeInfo } from './api';
-import { Btn, ErrorState, KV, Loading, Zone, pct, useGo, useLang } from './ui';
+import { Btn, ErrorState, KV, LinkBtn, Loading, Zone, pct, useGo, useLang } from './ui';
 
 export function JudgesTab() {
   const { t } = useLang();
@@ -36,14 +36,14 @@ export function JudgesTab() {
     [t('Judge and agent from different model families', 'judge 和被测 agent 用不同的模型家族'),
       `judge ${J.judge_model}, agent ${J.agent_model ?? '—'}`, sameFamily ? 'gap' : 'ok', sameFamily ? t('same family', '同一家族') : t('done', '做到')],
     [t('Agree with human labels before trusting it', '先和人工判定对齐再信它'),
-      online?.calibration?.labels ? t(`${online.calibration.labels} labels, agreement ${pct(agreement)}`, `${online.calibration.labels} 条标注，一致率 ${pct(agreement)}`) : t('no human labels yet: the agree / disagree buttons in Online Eval collect them', '还没有人工判定；Online Eval 里低分会话的"同意 / 不同意"就是为这个准备的'),
+      online?.calibration?.labels ? t(`${online.calibration.labels} labels, agreement ${pct(agreement)}`, `${online.calibration.labels} 条标注，一致率 ${pct(agreement)}`) : t('no human labels yet: the agree / disagree buttons in Live sessions collect them', '还没有人工判定；真实会话里低分会话的"同意 / 不同意"就是为这个准备的'),
       online?.calibration?.labels ? 'gap' : 'no', online?.calibration?.labels ? t('collecting', '收集中') : t('no data', '没有数据')],
     [t('Reduce judge bias', '减少 judge 的偏差'), t('one judge, no swapped-order scoring, no panel of models; longer answers may score higher', '只有一个 judge，没有双向打分，也没有多模型评审团；偏长的回答可能被打高分'), 'no', t('not done', '没做')],
   ];
   const stateColor = { ok: 'var(--color-status-success)', gap: 'var(--color-status-warning)', no: 'var(--color-status-error)' };
 
   return (
-    <div className="max-w-[900px] mx-auto px-7 pt-10 pb-24" data-testid="eval-judges">
+    <section id="judges" className="mt-16 pt-8 border-t border-[var(--color-border)]" data-testid="eval-judges">
       <div className="text-small text-[var(--color-text-muted)]">{t('Where the L2 scores come from', 'L2 的分数从这里来')}</div>
       <div className="text-display font-semibold text-[var(--color-text)] mt-1">{t(`${J.judges.length} judges, both on ${J.judge_model}`, `${J.judges.length} 个 judge，都用 ${J.judge_model}`)}</div>
       <p className="text-body text-[var(--color-text-muted)] mt-2">
@@ -93,7 +93,7 @@ export function JudgesTab() {
               <td className="py-2 text-right whitespace-nowrap" style={{ color: stateColor[s] }}>{label}</td></tr>
           ))}</tbody>
         </table>
-        <div className="text-small text-[var(--color-text-dim)] mt-2"><a className="cursor-pointer hover:underline" onClick={() => go('guide', 'g-judge')}>{t('Why these? Guide · three ways to score', '为什么要这些？Guide · 三种打分方式')}</a></div>
+        <div className="text-small text-[var(--color-text-dim)] mt-2"><LinkBtn className="inline" onClick={() => go('method', 'g-judge')}>{t('Why these? Guide · three ways to score', '为什么要这些？Guide · 三种打分方式')}</LinkBtn></div>
       </Zone>
 
       <Zone title={t('Calibration · how often the judge agrees with you', '校准 · judge 和你的一致率')}>
@@ -104,13 +104,13 @@ export function JudgesTab() {
           </div>
         ) : (
           <div className="flex items-center gap-4 text-small text-[var(--color-text-muted)]">
-            <span className="flex-1">{t('No data yet. Mark the low-scored sessions in Online Eval with agree / disagree; the agreement appears here. A judge whose agreement holds up may move its items from watch to gate.',
-              '还没有数据。你在 Online Eval 里对低分会话点"同意 / 不同意"，攒够后这里显示一致率。一致率达标的 judge，判的项目才能从观测升门禁。')}</span>
+            <span className="flex-1">{t('No data yet. Mark the low-scored sessions in Live sessions with agree / disagree; the agreement appears here. A judge whose agreement holds up may move its items from watch to gate.',
+              '还没有数据。你在真实会话里对低分会话点"同意 / 不同意"，攒够后这里显示一致率。一致率达标的 judge，判的项目才能从观测升门禁。')}</span>
             <Btn onClick={() => go('online', 'low')}>{t('Go label', '去标注')}</Btn>
           </div>
         )}
       </Zone>
-    </div>
+    </section>
   );
 }
 

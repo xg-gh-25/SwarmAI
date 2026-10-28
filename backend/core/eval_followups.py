@@ -76,10 +76,19 @@ def _first_line(text: Any, limit: int = 200) -> str:
 
 
 def _label(case: Mapping[str, Any] | None, cid: str, lang: str) -> str:
-    purpose = (case or {}).get("purpose")
+    """A case's short name in a follow-up line: its title (English only), else the
+    first sentence of its purpose in ``lang`` (what it protects, without what breaks),
+    else the id. A follow-up names up to three cases in one line, so the whole
+    two-sentence purpose made the line unreadable; the full purpose is on the case."""
+    case = case or {}
+    if lang == "en" and case.get("title"):
+        return str(case["title"])
+    purpose = case.get("purpose")
     if isinstance(purpose, Mapping) and purpose.get(lang):
-        return str(purpose[lang])
-    return str((case or {}).get("title") or cid)
+        text = str(purpose[lang]).strip()
+        m = re.match(r"(.+?(?:[。！？]|[.!?](?=\s|$)))", text, re.S)
+        return m.group(1) if m else text
+    return str(case.get("title") or cid)
 
 
 EVAL, EVOLUTION = "eval", "evolution"
@@ -99,10 +108,20 @@ def _check_name(cid: str, lang: str) -> str:
     return names[0 if lang == "en" else 1] if names else cid
 
 
-def _item(severity, rule, what_en, what_zh, why, action_en, action_zh, case_ids=(), kind=EVAL):
+def _item(severity, rule, what_en, what_zh, why, action_en, action_zh, case_ids=(), kind=EVAL,
+          headline=None):
+    """One follow-up. ``what`` is the full line (the report prints it); ``headline`` is
+    the same line without the case names, for a list that shows the names on their
+    own line; it is ``what`` when the line names no cases."""
+    head_en, head_zh = headline or (what_en, what_zh)
     return {"kind": kind, "severity": severity, "rule": rule, "what": {"en": what_en, "zh": what_zh},
+            "headline": {"en": head_en, "zh": head_zh},
             "why": why, "action": {"en": action_en, "zh": action_zh},
             "case_ids": list(case_ids)[:_MAX_IDS]}
+
+
+def _cases_en(n: int, noun: str = "case") -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 def _is_full(run: Mapping[str, Any]) -> bool:
@@ -218,7 +237,9 @@ def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[
                          f"{len(flipped)} 条离线考题上次通过、这次不通过：{names(flipped, 'zh', '；')}",
                          _first_line(now[flipped[0]].get("notes")),
                          "Read the agent's answer in the run detail; find which rule it no longer follows.",
-                         "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped, kind=EVOLUTION))
+                         "在运行详情里看 agent 的回答，找出它不再遵守的是哪条规则。", flipped, kind=EVOLUTION,
+                         headline=(f"{_cases_en(len(flipped), 'offline case')} passed last time and fail now",
+                                   f"{len(flipped)} 条离线考题上次通过、这次不通过")))
     if new:
         out.append(_item("medium", 3, f"{len(new)} new offline case(s) fail on their first run: "
                                       f"{names(new, 'en', '; ')}",
@@ -226,7 +247,9 @@ def _offline_regressions(full_runs: Sequence[Mapping[str, Any]], by_id) -> list[
                          _first_line(now[new[0]].get("notes")),
                          "Check the case first (can the right answer be reached in the sample "
                          "workspace?), then the agent's answer.",
-                         "先检查 case 本身（样例工作区里能不能做出正确答案），再看 agent 的回答。", new))
+                         "先检查 case 本身（样例工作区里能不能做出正确答案），再看 agent 的回答。", new,
+                         headline=(f"{_cases_en(len(new), 'new offline case')} fail{'s' if len(new) == 1 else ''} on the first run",
+                                   f"{len(new)} 条新离线考题第一次运行没通过")))
     return out
 
 

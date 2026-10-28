@@ -102,3 +102,8 @@ export const formatSeconds = (s: number | null | undefined, zh: boolean) => {
   return zh ? `${m} 分 ${r} 秒` : `${m}m ${r}s`;
 };
 export const formatUsd = (v: number | null | undefined) => (v == null ? '—' : `$${v.toFixed(2)}`);
+
+/** A case whose latest result is anything but a pass. One predicate for the tab
+ *  count and the Cases list, so the two never disagree. */
+export const notPassing = (c: { tier?: string; last_result?: { status: string } | null }) =>
+  c.tier !== 'archived' && !!c.last_result && c.last_result.status !== 'passed';

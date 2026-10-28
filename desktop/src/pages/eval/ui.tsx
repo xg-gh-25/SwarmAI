@@ -7,8 +7,8 @@
  * page; sections are separated by whitespace and a hairline, not boxes; tier and
  * evidence layer keep one colour each across every tab.
  *
- * @exports useLang, labels, TierTag, LayerTag, Tag, Spark, Zone, Item, SidePanel,
- *          EvalActionsContext, useEvalActions, when, pct
+ * @exports useLang, labels, caseName, judgeReason, statusLabel, LinkBtn, TierTag, TierText, LayerTag, Tag, Spark,
+ *          Zone, Row, Seg, SidePanel, EvalActionsContext, useEvalActions, when, pct
  */
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -27,9 +27,43 @@ export const pick = (b: { en?: string; zh?: string } | null | undefined, lang: L
   (b?.[lang] || b?.en || b?.zh || '').trim();
 /** A purpose is "what it protects. What breaks if it fails." — the head and the rest. */
 export function splitPurpose(text: string): [string, string] {
-  const m = text.match(/^(.+?[。.!！?？])\s*(.*)$/s);
+  // the backend's rule (core/eval_followups._label): a CJK stop ends a sentence; a
+  // Latin one only before a space or the end, so "MEMORY.md" is not cut
+  const m = text.match(/^(.+?(?:[。！？]|[.!?](?=\s|$)))\s*(.*)$/s);
   return m ? [m[1], m[2]] : [text, ''];
 }
+/** A case's short name in a list: the title (written in English), else the first
+ *  sentence of its purpose in the user's language, else the id. The full purpose
+ *  is for the case's own page. */
+export function caseName(c: { id: string; title?: string; purpose?: { en?: string; zh?: string } | null }, lang: Lang): string {
+  if (lang === 'en' && c.title) return c.title;
+  const head = splitPurpose(pick(c.purpose, lang))[0];
+  return head || c.title || c.id;
+}
+/** The reason in a run note, without the evaluator's framing: the decision judge
+ *  writes ``… — [decision-judge conf=0.85] <reason>``; anything else keeps its
+ *  first line. The full note stays on the case's page. */
+export function judgeReason(notes?: string | null, lang: Lang = 'en'): string {
+  const text = (notes ?? '').trim();
+  const m = text.match(/\[decision-judge conf=[\d.]+\]\s*(.+)$/s);
+  const body = (m ? m[1] : text.split('\n')[0]).trim();
+  // the trajectory check writes a Python list: "Missing steps: ['Read A', 'Read B']"
+  const miss = body.match(/^Missing steps:\s*\[(.*)\]\s*$/s);
+  if (miss) {
+    const steps = miss[1].split(/,\s*/).map((x) => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    return lang === 'zh' ? `期望的步骤没出现：${steps.join('、')}` : `Expected steps not seen: ${steps.join(', ')}`;
+  }
+  return body.replace(/\.{1,2}\s*All \d+ (expected )?steps found\.?$/, '.').trim();
+}
+
+const STATUS_LABEL: Record<string, { en: string; zh: string }> = {
+  passed: { en: 'Passed', zh: '通过' }, failed: { en: 'Failed', zh: '没通过' },
+  timeout: { en: 'Timed out', zh: '超时' }, error: { en: 'Not measured', zh: '没测成' },
+  skipped: { en: 'Skipped', zh: '跳过' },
+};
+/** A run status in words (the backend writes ``passed`` / ``failed`` / ...). */
+export const statusLabel = (s: string | null | undefined, lang: Lang) =>
+  (s && STATUS_LABEL[s]?.[lang]) || s || '—';
 
 // ─── labels ────────────────────────────────────────────────────────────────
 
@@ -87,6 +121,18 @@ export function TierTag({ tier }: { tier?: ReleaseTier }) {
   const { lang } = useLang();
   const t = tier ?? 'watch';
   return <Tag color={TIER_COLOR[t]} title={TIER_LABEL[t].what[lang]}><span data-tier={t}>{TIER_LABEL[t][lang]}</span></Tag>;
+}
+
+/** The tier as plain text in a list column: only a red line is coloured. */
+export function TierText({ tier }: { tier?: ReleaseTier }) {
+  const { lang } = useLang();
+  const t = tier ?? 'watch';
+  return (
+    <span data-tier={t} title={TIER_LABEL[t].what[lang]} className="text-small whitespace-nowrap"
+          style={{ color: t === 'red' ? 'var(--color-status-error)' : 'var(--color-text-dim)' }}>
+      {TIER_LABEL[t][lang]}
+    </span>
+  );
 }
 
 export function LayerTag({ layer }: { layer: 'L1' | 'L2' }) {
@@ -197,24 +243,53 @@ export function Zone({ id, title, sub, right, children, first }: {
   );
 }
 
-/** One thing to look at: a coloured dot, what, why, optional tags, actions on the right. */
-export function Item({ tone = 'warning', what, why, extra, tags, actions, testId }: {
-  tone?: 'warning' | 'evolution' | 'error'; what: ReactNode; why?: ReactNode; extra?: ReactNode;
-  tags?: ReactNode; actions?: ReactNode; testId?: string;
+/** One row of a list: what (one line), a plain sub-line, actions on the right. The
+ *  whole row can open something; then the actions stop the click. */
+export function Row({ what, sub, right, onOpen, testId, dot }: {
+  what: ReactNode; sub?: ReactNode; right?: ReactNode; onOpen?: () => void; testId?: string;
+  /** a status colour shown before the text (only where status is the point) */
+  dot?: string;
 }) {
-  const color = tone === 'evolution' ? 'var(--color-zone-cognitive)' : tone === 'error' ? 'var(--color-status-error)' : 'var(--color-status-warning)';
-  return (
-    <div data-testid={testId} className="grid grid-cols-[10px_1fr_auto] gap-4 py-4 border-t border-[var(--color-border)] last:border-b items-start">
-      <span className="w-2 h-2 rounded-full mt-1.5" style={{ background: color }} />
-      <div className="min-w-0">
-        <div className="text-body font-semibold text-[var(--color-text)] line-clamp-2" title={typeof what === 'string' ? what : undefined}>{what}</div>
-        {why && <div className="text-small text-[var(--color-text-muted)] mt-0.5 break-words line-clamp-2" title={typeof why === 'string' ? why : undefined}>{why}</div>}
-        {extra}
-        {tags && <div className="flex gap-1.5 flex-wrap mt-2">{tags}</div>}
+  const body = (
+    <>
+      {dot && <span className="w-1.5 h-1.5 rounded-full mt-2 shrink-0" style={{ background: dot }} />}
+      <div className="min-w-0 flex-1">
+        <div className="text-body font-semibold text-[var(--color-text)] line-clamp-2">{what}</div>
+        {sub && <div className="text-small text-[var(--color-text-muted)] mt-0.5 line-clamp-2 break-words">{sub}</div>}
       </div>
-      {actions && <div className="flex gap-2 items-center shrink-0">{actions}</div>}
+      {right && <div className="flex gap-2 items-center shrink-0" onClick={(e) => e.stopPropagation()}>{right}</div>}
+    </>
+  );
+  const cls = 'w-full flex gap-3 items-start py-3.5 border-t border-[var(--color-border)] text-left';
+  return onOpen
+    ? <div role="button" tabIndex={0} data-testid={testId} onClick={onOpen}
+           onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
+           className={`${cls} cursor-pointer hover:bg-[var(--color-hover)]/40`}>{body}</div>
+    : <div data-testid={testId} className={cls}>{body}</div>;
+}
+
+/** A segmented choice (one of a few views or filters). */
+export function Seg<T extends string>({ value, options, onChange, testId }: {
+  value: T; options: [T, string][]; onChange: (v: T) => void; testId?: string;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-[var(--color-border)] overflow-hidden" data-testid={testId}>
+      {options.map(([v, label]) => (
+        <button key={v} type="button" role="radio" aria-checked={value === v} onClick={() => onChange(v)}
+                data-testid={testId ? `${testId}-${v}` : undefined}
+                className={`px-3 py-1 text-small transition-colors ${value === v
+                  ? 'bg-[var(--color-hover)] text-[var(--color-text)]' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+          {label}
+        </button>
+      ))}
     </div>
   );
+}
+
+/** A text link that moves somewhere in the overlay: a real button, so Tab and
+ *  Enter reach it (an ``<a>`` without ``href`` is skipped by the keyboard). */
+export function LinkBtn({ children, onClick, className = '' }: { children: ReactNode; onClick: () => void; className?: string }) {
+  return <button type="button" onClick={onClick} className={`cursor-pointer text-left hover:underline ${className}`}>{children}</button>;
 }
 
 export function Btn({ children, onClick, kind = 'normal', disabled, testId, title }: {
@@ -287,7 +362,7 @@ export const useEvalActions = () => useContext(EvalActionsContext);
 
 /** The tab bar's "go to" (tab + optional anchor), shared by every cross-link. */
 export type GoTo = (tab: TabId, anchor?: string) => void;
-export type TabId = 'overview' | 'cases' | 'online' | 'offline' | 'judges' | 'guide';
+export type TabId = 'overview' | 'cases' | 'online' | 'method';
 export const GoContext = createContext<GoTo>(() => {});
 export const useGo = () => useContext(GoContext);
 

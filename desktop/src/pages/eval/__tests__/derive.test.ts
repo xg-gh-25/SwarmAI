@@ -3,7 +3,7 @@
  *  with a zone are shown in local time. */
 import { describe, it, expect } from 'vitest';
 import { isoWeek, lastWeeks, onlineSeries, runSeries, tierCounts, metricSeries, lastTwo } from '../derive';
-import { when, splitPurpose } from '../ui';
+import { when, splitPurpose, judgeReason, statusLabel } from '../ui';
 import type { EvalRun, OnlineScoring } from '../api';
 
 const run = (at: string, gatePassed: number, gateTotal: number): EvalRun => ({
@@ -55,5 +55,17 @@ describe('derive', () => {
   it('splits a purpose into what it protects and what breaks', () => {
     expect(splitPurpose('Agent looks it up first. If not, archives are lost.')).toEqual(['Agent looks it up first.', 'If not, archives are lost.']);
     expect(splitPurpose('先去找。坏了意味着归档丢了。')).toEqual(['先去找。', '坏了意味着归档丢了。']);
+    // the backend's rule: a Latin stop ends a sentence only before a space or the end
+    expect(splitPurpose('旧记忆仍能通过 library 找到，正在用的 MEMORY.md 也不变。坏了就丢了。')[0]).toBe('旧记忆仍能通过 library 找到，正在用的 MEMORY.md 也不变。');
+    expect(splitPurpose('Reads MEMORY.md first. Else it guesses.')[0]).toBe('Reads MEMORY.md first.');
+  });
+
+  it('says a run note in words: the judge reason without its framing, a missing-steps list as a sentence', () => {
+    expect(judgeReason("Missing steps: ['Read advisory-locks', 'Read RUNBOOK']")).toBe('Expected steps not seen: Read advisory-locks, Read RUNBOOK');
+    expect(judgeReason("Missing steps: ['Read A']", 'zh')).toBe('期望的步骤没出现：Read A');
+    expect(judgeReason('x — [decision-judge conf=0.85] It proposes the pipeline.. All 2 steps found')).toBe('It proposes the pipeline.');
+    expect(statusLabel('timeout', 'en')).toBe('Timed out');
+    expect(statusLabel('failed', 'zh')).toBe('没通过');
+    expect(statusLabel('weird', 'en')).toBe('weird');
   });
 });

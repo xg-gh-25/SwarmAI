@@ -1,13 +1,17 @@
-/** Golden Cases: tiers come from the backend's release_tier (missing = watch, never
- *  gate), a product case is read-only, deleting one of your own needs a second click
- *  and calls DELETE, and the form sends the shape the backend admits and shows each
- *  admission check's own result. */
+/** Cases: tiers come from the backend's release_tier (missing = watch, never gate);
+ *  the cases not passing come first with the reason from their run, the passing ones
+ *  folded by category; a case opened from a cross-link opens on the right; an offline
+ *  case drills down to what it was asked, what it did and its answer; a product case
+ *  is read-only, deleting one of your own needs a second click and calls DELETE, and
+ *  the form sends the shape the backend admits and shows each admission check's own
+ *  result. Run history: the release record and a started or crashed full run. */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { routes, reset, show, calls, failNext, fakeApi } from './harness';
+import { routes, reset, show, calls, check, failNext, fakeApi } from './harness';
 
 vi.mock('../../../services/api', () => fakeApi());
-import { GoldenCasesTab } from '../GoldenCasesTab';
+vi.mock('../../../utils/openExternal', () => ({ openExternal: vi.fn() }));
+import { CasesTab } from '../CasesTab';
 
 const gc = (id: string, extra: Record<string, unknown> = {}) => ({
   id, category: 'recall', dimension: 'cognition', tier: 'active', eval_method: 'programmatic',
@@ -27,33 +31,98 @@ beforeEach(() => {
   ] };
 });
 
-describe('Golden Cases', () => {
+/** A passing or never-run case's row is folded in its category: open the group first. */
+async function row(id: string) {
+  await screen.findByTestId('eval-cases');
+  const hit = screen.queryByTestId(`case-row-${id}`);
+  if (hit) return hit;
+  for (const g of screen.queryAllByTestId(/^(not-run-)?group-/)) {
+    const head = g.querySelector('button[aria-expanded="false"]');
+    if (head) fireEvent.click(head);
+    const r = screen.queryByTestId(`case-row-${id}`);
+    if (r) return r;
+  }
+  throw new Error(`no row ${id}`);
+}
+
+describe('Cases', () => {
   it('counts tiers from release_tier; a case without one is watched, and archived cases are not shown', async () => {
-    show(<GoldenCasesTab />);
-    const sum = await screen.findByTestId('tier-summary');
-    expect(Array.from(sum.querySelectorAll('b')).map((b) => b.textContent)).toEqual(['1', '1', '3']);
-    expect(screen.getByTestId('case-row-NO_TIER').querySelector('[data-tier]')?.getAttribute('data-tier')).toBe('watch');
+    show(<CasesTab />);
+    expect((await screen.findByTestId('tier-summary')).textContent).toContain('2 block a release, 3 are watched.');
+    expect((await row('NO_TIER')).querySelector('[data-tier]')?.getAttribute('data-tier')).toBe('watch');
     expect(screen.queryByTestId('case-row-OLD_1')).toBeNull();
   });
 
-  it('filters by tier and by "failing only"', async () => {
-    show(<GoldenCasesTab />);
-    await screen.findByTestId('tier-summary');
-    fireEvent.click(screen.getAllByText('Failing only')[0]);
-    expect(screen.getByTestId('case-row-GATE_1')).toBeTruthy();
-    expect(screen.queryByTestId('case-row-RED_1')).toBeNull();
-    fireEvent.click(screen.getAllByText('Failing only')[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Red line' }));
-    expect(screen.getByTestId('case-row-RED_1')).toBeTruthy();
-    expect(screen.queryByTestId('case-row-GATE_1')).toBeNull();
+  it('lists the cases not passing first, with the reason from their run, and folds the passing ones', async () => {
+    routes['GET /eval/runs/r'] = { run_id: 'r', cases: [{ id: 'GATE_1', status: 'failed',
+      notes: 'Read occurred but decision went the WRONG way — [decision-judge conf=0.90] The answer proposes the pipeline.. All 1 steps found' }] };
+    show(<CasesTab />);
+    const bad = await screen.findByTestId('not-passing');
+    await waitFor(() => expect(within(bad).getByTestId('case-row-GATE_1').textContent).toContain('Failed · 10-26'));
+    await waitFor(() => expect(within(bad).getByTestId('case-row-GATE_1').textContent).toContain('The answer proposes the pipeline.'));
+    expect(within(bad).getByTestId('case-row-GATE_1').textContent).not.toContain('decision-judge');
+    expect(screen.getByTestId('cases-head').textContent).toContain('1 not passing');
+    expect(screen.queryByTestId('case-row-RED_1')).toBeNull();          // folded
+    expect(screen.getByTestId('not-run-group-recall').textContent).toContain('3');
+    fireEvent.click(screen.getByTestId('cases-line-offline'));
+    expect(screen.queryByTestId('not-passing')).toBeNull();
+    expect(screen.queryByTestId('not-run-group-recall')).toBeNull();
+    expect(screen.getByTestId('not-run-group-decision')).toBeTruthy();
+  });
+
+  it('a case that never ran is not counted as passing, and a search that matches nothing says so', async () => {
+    routes['GET /eval/golden-set'] = { total_cases: 2, cases: [
+      gc('RUN_1', { last_result: { status: 'passed', run_id: 'r', triggered_at: '2026-10-26T10:00:00Z' } }),
+      gc('NEW_1'),
+    ] };
+    show(<CasesTab />);
+    expect((await screen.findByTestId('cases-head')).textContent).toContain('1 not run yet');
+    expect(screen.getByTestId('passing').textContent).toContain('1');
+    expect(screen.getByTestId('not-run').textContent).toContain('Not run yet');
+    expect(screen.getByTestId('not-run').querySelector('[data-testid^="not-run-group-"]')).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('Search…'), { target: { value: 'zzz' } });
+    expect(screen.getByTestId('cases-no-match').textContent).toContain('No case matches “zzz”.');
+    fireEvent.click(within(screen.getByTestId('cases-no-match')).getByText('Clear the filter'));
+    expect(screen.queryByTestId('cases-no-match')).toBeNull();
+    expect(screen.getByTestId('passing')).toBeTruthy();
+  });
+
+  it('a case named in a cross-link opens on the right', async () => {
+    routes['GET /eval/golden-set/RED_1'] = { ...gc('RED_1', { release_tier: 'red' }), history: [] };
+    show(<CasesTab focus="case:RED_1" />);
+    expect((await screen.findByTestId('case-detail')).textContent).toContain('RED_1 protects something.');
+  });
+
+  it('an offline case drills down to what it was asked, what it did and its answer', async () => {
+    routes['GET /eval/golden-set/OFF_1'] = { ...gc('OFF_1', { eval_method: 'behavior', release_tier: 'watch', category: 'decision',
+      scenario: { prompt: 'Fix the typo.' }, expected_trajectory: ['Read README'] }),
+      history: [{ run_id: 'full1', triggered_at: '2026-10-28T02:35:00+00:00', status: 'failed', notes: 'x — [decision-judge conf=0.85] It proposes the pipeline.' },
+                { run_id: 'full0', triggered_at: '2026-10-26T11:00:00+00:00', status: 'passed' }] };
+    routes['GET /eval/runs/full1'] = { run_id: 'full1', cases: [{ id: 'OFF_1', status: 'failed',
+      expected_check: [{ step: 'Read README', found: false }],
+      steps: [{ tool: 'Read', input: '{"file_path": "/tmp/swarm-eval-ws-1/workspace/Projects/Demo/app/README.md"}' }, { tool: 'Bash', input: 'ls', is_error: true, output: 'ls: no such dir' }],
+      final_text: 'I found the typo, but I could not fix it.' }] };
+    show(<CasesTab />);
+    fireEvent.click(await row('OFF_1'));
+    const detail = await screen.findByTestId('case-detail');
+    expect(detail.textContent).toContain('Fix the typo.');
+    expect(screen.getByTestId('case-latest').textContent).toContain('It proposes the pipeline.');
+    expect(screen.getByTestId('case-latest').textContent).toContain('passed on 10-26');
+    const dd = screen.getByTestId('drilldown');
+    await waitFor(() => expect(dd.textContent).toContain('Read Projects/Demo/app/README.md'));
+    expect(dd.textContent).not.toContain('swarm-eval-ws');
+    expect(dd.textContent).toContain('Expected but not seen: Read README');
+    expect(within(dd).getByTestId('step-error').textContent).toContain('2. Bash ls · returned an error: ls: no such dir');
+    expect(screen.getByTestId('case-latest').textContent).toContain('Failed');
+    expect(dd.textContent).toContain('I found the typo');
   });
 
   it('a product case can be copied, not edited or deleted', async () => {
     routes['GET /eval/golden-set/RED_1'] = { ...gc('RED_1', { release_tier: 'red',
       verification: { command: 'probe x', expected_contains: 'X_OK', negative_command: 'probe x negative',
                       negative_expected_contains: 'X_TEETH', timeout: 30, grep: '', corpus: 'docs' } }), history: [] };
-    show(<GoldenCasesTab />);
-    fireEvent.click(await screen.findByTestId('case-row-RED_1'));
+    show(<CasesTab />);
+    fireEvent.click(await row('RED_1'));
     await screen.findByTestId('case-detail');
     expect(screen.getByTestId('case-copy')).toBeTruthy();
     expect(screen.queryByTestId('case-edit')).toBeNull();
@@ -71,8 +140,8 @@ describe('Golden Cases', () => {
   it('deleting my case takes a second click and calls DELETE on it', async () => {
     routes['GET /eval/golden-set/MINE_1'] = { ...gc('MINE_1', { _origin: 'private', release_tier: 'watch' }), history: [] };
     routes['DELETE /eval/golden-set/MINE_1'] = { status: 'deleted' };
-    show(<GoldenCasesTab />);
-    fireEvent.click(await screen.findByTestId('case-row-MINE_1'));
+    show(<CasesTab />);
+    fireEvent.click(await row('MINE_1'));
     fireEvent.click(await screen.findByTestId('case-delete'));
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
     fireEvent.click(screen.getByTestId('case-delete-confirm'));
@@ -84,7 +153,7 @@ describe('Golden Cases', () => {
     routes['POST /eval/golden-set/try'] = { ok: false, trial: null, checks: [
       { name: 'schema', ok: true, errors: [] }, { name: 'offline', ok: false, errors: ['rubric has no FAIL side'] },
     ] };
-    show(<GoldenCasesTab />);
+    show(<CasesTab />);
     fireEvent.click(await screen.findByTestId('add-case'));
     const form = await screen.findByTestId('case-form');
     fireEvent.change(screen.getByTestId('form-id'), { target: { value: 'MY_LOOKUP' } });
@@ -117,8 +186,8 @@ describe('Golden Cases', () => {
     routes['GET /eval/golden-set'] = { total_cases: 1, cases: [gc('MINE_2', { _origin: 'private', release_tier: 'watch', eval_method: 'behavior' })] };
     routes['POST /eval/golden-set/try'] = { ok: true, trial: null, checks: [{ name: 'schema', ok: true, errors: [] }] };
     routes['PUT /eval/golden-set/MINE_2'] = { status: 'updated' };
-    show(<GoldenCasesTab />);
-    fireEvent.click(await screen.findByTestId('case-row-MINE_2'));
+    show(<CasesTab />);
+    fireEvent.click(await row('MINE_2'));
     fireEvent.click(await screen.findByTestId('case-edit'));
     fireEvent.click(screen.getByTestId('form-try'));
     await waitFor(() => expect(screen.getByTestId('form-check-schema').getAttribute('data-state')).toBe('ok'));
@@ -136,8 +205,8 @@ describe('Golden Cases', () => {
     routes['GET /eval/golden-set/MINE_1'] = { ...gc('MINE_1', { _origin: 'private', release_tier: 'watch',
       verification: { command: 'echo ok', expected_contains: 'ok', negative_command: 'echo no', negative_expected_contains: 'no' } }), history: [] };
     failNext['PUT /eval/golden-set/MINE_1'] = { status: 400, detail: 'duplicate: same command as Q_X' };
-    show(<GoldenCasesTab />);
-    fireEvent.click(await screen.findByTestId('case-row-MINE_1'));
+    show(<CasesTab />);
+    fireEvent.click(await row('MINE_1'));
     fireEvent.click(await screen.findByTestId('case-edit'));
     expect((screen.getByTestId('form-id') as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByTestId('form-command') as HTMLInputElement).value).toBe('echo ok');
@@ -148,5 +217,117 @@ describe('Golden Cases', () => {
     expect(put.body).toMatchObject({ eval_method: 'programmatic', verification: { command: 'echo ok', negative_command: 'echo no' } });
     expect((put.body as Record<string, unknown>).id).toBeUndefined();
     expect(screen.getByTestId('case-form')).toBeTruthy();   // a rejected save keeps the form open
+  });
+});
+
+const fullRuns = () => [
+  { run_id: 'probe1', line: 'probe', triggered_by: 'manual', triggered_at: '2026-10-26T12:00:00+00:00', release: 'release', release_reason: '1/1', total_cases: 1, cases_passed: 1, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
+  { run_id: 'canary1', line: 'quick', triggered_by: 'canary', triggered_at: '2026-10-26T09:00:00+00:00', release: 'release', total_cases: 36, cases_passed: 36, cases_failed: 0, cases_skipped: 0, duration_seconds: 9 },
+  { run_id: 'full1', line: 'full', triggered_by: 'scheduled', triggered_at: '2026-10-20T03:00:00+00:00', release: 'blocked', release_reason: 'gate failed: Q_X',
+    release_checks: [check('redline', true), check('dimensions', false, { cases: [{ id: 'Q_X' }] }), check('denominator', true, { selected: 36, with_result: 36 }), check('record', true)],
+    report: '2026-10-20.html', total_cases: 46, cases_passed: 44, cases_failed: 2, cases_skipped: 0, duration_seconds: 900 },
+  { run_id: 'old1', line: 'full', triggered_by: 'scheduled', triggered_at: '2026-09-01T03:00:00+00:00', release: null, total_cases: 158, cases_passed: 150, cases_failed: 8, cases_skipped: 0, duration_seconds: 900 },
+];
+const emptyHealth = { release: null, dimension_summary: {}, last_run: null, total_cases: 0 };
+
+describe('Run history', () => {
+  it('the release record lists full runs with a decision; older ones only on request', async () => {
+    routes['GET /eval/health'] = emptyHealth;
+    routes['GET /eval/history'] = fullRuns();
+    show(<CasesTab focus="history" />);
+    const rec = await screen.findByTestId('release-record');
+    const rows = rec.querySelectorAll('tbody tr');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain('1 failed');
+    expect(rows[0].textContent).toContain('36/36');
+    expect(rows[0].textContent).toContain('gate failed: Q_X');
+    expect(rec.textContent).not.toContain('canary');
+    expect(rec.textContent).not.toContain('1/1');
+    fireEvent.click(screen.getByText('Show'));
+    expect(screen.getByTestId('release-record').querySelectorAll('tbody tr')).toHaveLength(2);
+  });
+
+  it('a crashed full run stays in view, and a started one that crashes says so', async () => {
+    routes['GET /eval/health'] = emptyHealth;
+    routes['GET /eval/history'] = [{ run_id: 'crash1', line: 'full', status: 'failed', error: 'model backend down',
+      triggered_by: 'manual', triggered_at: '2026-10-26T03:00:00+00:00', release: null, total_cases: 0,
+      cases_passed: 0, cases_failed: 0, cases_skipped: 0, duration_seconds: 0 }];
+    routes['POST /eval/run'] = { status: 'started', run_id: 'new2' };
+    routes['GET /eval/runs/new2'] = { run_id: 'new2', status: 'failed', error: 'model backend down', cases: [] };
+    show(<CasesTab focus="history" />);
+    const rec = await screen.findByTestId('release-record');
+    expect(rec.textContent).toContain('did not finish');
+    expect(rec.textContent).toContain('model backend down');
+    fireEvent.click(screen.getByTestId('run-menu'));
+    fireEvent.click(screen.getByTestId('run-full'));
+    expect((await screen.findByTestId('run-full-failed')).textContent).toContain('model backend down');
+  });
+});
+
+describe('a started full run', () => {
+  const base = (runId: string) => {
+    routes['GET /eval/health'] = emptyHealth;
+    routes['GET /eval/golden-set'] = { total_cases: 0, cases: [] };
+    routes['GET /eval/history'] = [];
+    routes['POST /eval/run'] = { status: 'started', run_id: runId };
+  };
+  const start = async () => {
+    fireEvent.click(await screen.findByTestId('run-menu'));
+    fireEvent.click(screen.getByTestId('run-full'));
+  };
+
+  it('is watched until it is recorded, then everything refreshes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      base('new1');
+      let n = 0;
+      routes['GET /eval/runs/new1'] = () => (++n < 2 ? { run_id: 'new1', status: 'running' } : { run_id: 'new1', cases: [] });
+      show(<CasesTab />);
+      await start();
+      await waitFor(() => expect(calls.some((c) => c.url === '/eval/run')).toBe(true));
+      await waitFor(() => expect(screen.getByTestId('run-menu').textContent).toContain('Running…'));
+      fireEvent.click(screen.getByTestId('run-menu'));
+      expect((screen.getByTestId('run-full') as HTMLButtonElement).disabled).toBe(true);   // no second start
+      const before = calls.filter((c) => c.url === '/eval/golden-set').length;
+      await vi.advanceTimersByTimeAsync(5500);
+      await waitFor(() => expect(screen.getByTestId('run-menu').textContent).not.toContain('Running'));
+      await waitFor(() => expect(calls.filter((c) => c.url === '/eval/golden-set').length).toBeGreaterThan(before));   // the list refreshes
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops at an unknown run instead of polling it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      base('stuck1');
+      failNext['GET /eval/runs/stuck1'] = { status: 404, detail: 'Run not found' };
+      show(<CasesTab />);
+      await start();
+      await waitFor(() => expect(calls.some((c) => c.url === '/eval/runs/stuck1')).toBe(true));
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(calls.filter((c) => c.url === '/eval/runs/stuck1')).toHaveLength(1);
+      expect(screen.getByTestId('run-menu').textContent).not.toContain('Running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives up after 30 minutes on a run killed mid-flight (its marker says running forever)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      base('stuck1');
+      routes['GET /eval/runs/stuck1'] = { run_id: 'stuck1', status: 'running' };
+      show(<CasesTab />);
+      await start();
+      await waitFor(() => expect(screen.getByTestId('run-menu').textContent).toContain('Running…'));
+      await vi.advanceTimersByTimeAsync(30 * 60_000 + 1000);
+      await waitFor(() => expect(screen.getByTestId('run-menu').textContent).not.toContain('Running'));
+      const polls = calls.filter((c) => c.url === '/eval/runs/stuck1').length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(calls.filter((c) => c.url === '/eval/runs/stuck1').length).toBe(polls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
