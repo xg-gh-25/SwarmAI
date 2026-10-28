@@ -527,3 +527,30 @@ async def test_a_check_cancelled_before_it_runs_is_not_left_in_flight(monkeypatc
     for t in list(res._tasks):
         t.cancel()
     await asyncio.gather(*list(res._tasks), return_exceptions=True)
+
+
+def test_a_file_written_in_a_declared_repository_is_its_change_not_a_document():
+    repo = {"url": "https://github.com/acme/widget", "ref": "main", "dir": "Hive/repos/github.com/acme/widget",
+            "present": True, "origin_matches": True, "commits_total": 1, "files_total": 1, "added": 2}
+    r = summarize([U(), A({"type": "turn_deliverables", "files": [
+        {"path": "/home/swarm/.swarm-ai/SwarmWS/Hive/repos/github.com/acme/widget/x.txt", "kind": "content"},
+        {"path": "/home/swarm/.swarm-ai/SwarmWS/Knowledge/Notes/n.md", "kind": "content"}]},
+        out(repos=[repo]))])
+    assert [f["path"].rsplit("/", 1)[-1] for f in r["work"]["files"]] == ["n.md"]
+    assert r["kinds"] == ["code", "files"]
+    only = summarize([U(), A({"type": "turn_deliverables", "files": [
+        {"path": "/w/Hive/repos/github.com/acme/widget/x.txt", "kind": "content"}]}, out(repos=[repo]))])
+    assert only["work"]["files"] == [] and only["kinds"] == ["code"]
+
+
+@pytest.mark.asyncio
+async def test_a_result_kept_by_older_summary_rules_is_fetched_again_in_full(hive):
+    seen, _ = hive
+    await res.fetch(ROW)
+    kept = res.load(ROW["dispatch_id"])
+    assert kept["summary_version"] == res.SUMMARY_VERSION
+    res.save({**kept, "summary_version": res.SUMMARY_VERSION - 1})
+    await res.fetch(ROW)
+    assert "if-none-match" not in seen[1].headers
+    await res.fetch(ROW)
+    assert seen[2].headers["if-none-match"] == '"e1"'

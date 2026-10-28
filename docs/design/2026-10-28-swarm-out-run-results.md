@@ -135,7 +135,7 @@ Swarm Out 面板现在能说一个 run 在等人、在跑还是"不在跑了"（
 | `cost_usd` | 按 `turn_outcome` 的顺序求每个 turn 的花费：`cli_pid` 和上一条相同且 `cli_cost_total` 不比上一条小时，取差值，否则（换了进程，或数值变小）取它本身。规则和 `session_quality._turn_costs` 相同，这次把它抽成两边共用的一个函数 |
 | `cost_partial` | 有更早的 turn 没读到，或下面两种情况之一：一是某个用户 turn 后面一个结局都没有（逐个 turn 检查，因为暂停后的续接和注入的 turn 会多出结局，比总数会把缺的盖住）。二是某个结局没带花费（崩溃、被 Stop、合成的 result），而同一进程后面也没有更新的累计值补上（暂停的 turn 由续接的累计值补上，不算）。这时花费仍给出已知部分，界面写"至少 $N"，不把缺的当成 0 |
 | `report` | 最后一个 turn 最后一个助手文本块，前 4000 字。超出时 `report_chars` 给全长，界面写"全文 N 字，去 Hive 页面看"，不悄悄截掉 |
-| `deliverables` | 所有 turn 的 `turn_deliverables` 的 `path`，去重，最多 50 条，超出写 `deliverables_omitted`（再加上各块自己的 `omitted`） |
+| `deliverables` | 所有 turn 的 `turn_deliverables` 的 `path`，去重，最多 50 条，超出写 `deliverables_omitted`（再加上各块自己的 `omitted`）。写在声明仓库目录里的文件不算交付物，它是那个仓库的改动，已经在 `repos` 里 |
 | `changes` | 所有 turn 的 `turn_changes` 合计改了几个文件、增删多少行，以及有没有落地 |
 | `pipeline` | 最后一个 `pipeline_summary` 块：`runId`、`status`、`landing`、`landedSha`、`audit`（五行 `{dim, verdict, detail}`）。不是 pipeline run 时为 null，界面写"不是 pipeline run，没有五维审计"，不写 TBD |
 
@@ -150,7 +150,7 @@ Swarm Out 面板现在能说一个 run 在等人、在跑还是"不在跑了"（
   fetched_at, checked_at, fetch_error: str | null, result: {...} | null }
 ```
 
-为什么要存：Hive 可能被关机或删掉，那之后本机这份就是唯一的副本。所以这些文件**从不自动删除**，和派发记录 `dispatches.jsonl` 一样保留。
+为什么要存：Hive 可能被关机或删掉，那之后本机这份就是唯一的副本。所以这些文件**从不自动删除**，和派发记录 `dispatches.jsonl` 一样保留。每份记录带 `summary_version`。`summarize` 的规则一改就加一，旧版本的记录下次检查时不带 ETag、整份重新取回并重新归纳，不会一直停在旧规则算出的结果上。
 
 **什么时候取：**
 - `list_runs` 算完每行的 `state` 之后，对**运行中的 Hive 上、状态是 `stopped`（原因 `idle` 或 `not_held`）、24 小时内派出**的 run 发起一次带 ETag 的检查。这 24 小时就是面板运行视图本来的时间窗。没变化时是 304，开销是每个 run 一个小请求。

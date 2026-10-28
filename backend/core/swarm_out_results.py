@@ -46,6 +46,10 @@ MAX_CONCURRENT_CHECKS = 2
 REPORT_CHARS = 4000
 MAX_DELIVERABLES = 50
 MAX_TOOL_NAMES = 20
+#: bumped whenever ``summarize`` changes what it derives: a kept result of another
+#: version is fetched again in full (no ETag), so it is re-summarised instead of
+#: staying as the older rules made it
+SUMMARY_VERSION = 2
 
 DISPATCH_ID_RE = re.compile(r"so_[0-9a-f]{12}")
 _SHA_RE = re.compile(r"[0-9a-f]{7,64}")
@@ -287,6 +291,12 @@ def summarize(messages: Any, has_more: bool = False) -> dict[str, Any]:
                     "landed_sha": landed[:12] if isinstance(landed, str) and _SHA_RE.fullmatch(landed) else None,
                     "audit": audit[:5]}
 
+    # a file written inside a declared repository is that repository's change (its
+    # line in ``repos``), not a document of its own
+    repo_dirs = ["/" + r["dir"].strip("/") + "/" for r in repos or [] if isinstance(r.get("dir"), str) and r["dir"]]
+    deliverables = [f for f in deliverables
+                    if not any(rd in "/" + f["path"].lstrip("/") for rd in repo_dirs)]
+
     kinds = []
     if pipeline:
         kinds.append("pipeline")
@@ -400,13 +410,15 @@ async def _fetch(row: dict) -> dict:
     rec = {"dispatch_id": did, "hive_id": row.get("hive_id"), "session_id": sid,
            "etag": prev.get("etag"), "transcript_rev": prev.get("transcript_rev"),
            "fetched_at": prev.get("fetched_at"), "checked_at": _now(),
-           "fetch_error": None, "result": prev.get("result")}
+           "fetch_error": None, "result": prev.get("result"),
+           "summary_version": prev.get("summary_version")}
     if not isinstance(sid, str) or not swarm_out.KEY_RE.fullmatch(sid):
         rec["fetch_error"] = "no session"
         return rec
     try:
         inst = await swarm_out._instance(row.get("hive_id") or "")
-        headers = {"If-None-Match": rec["etag"]} if rec["etag"] and rec["result"] is not None else {}
+        current = prev.get("summary_version") == SUMMARY_VERSION
+        headers = {"If-None-Match": rec["etag"]} if rec["etag"] and rec["result"] is not None and current else {}
         async with swarm_out._client(inst) as client:
             r = await client.get(f"/api/chat/sessions/{sid}/messages",
                                  params={"turns": FETCH_TURNS}, headers=headers)
@@ -422,6 +434,7 @@ async def _fetch(row: dict) -> dict:
                 rec["fetch_error"] = "unexpected_body"
             else:
                 rec["result"] = summarize(body, r.headers.get("x-has-more") == "1")
+                rec["summary_version"] = SUMMARY_VERSION
                 etag = r.headers.get("etag")
                 rec["etag"] = etag[:200] if isinstance(etag, str) else None
                 rev = r.headers.get("x-transcript-rev")
