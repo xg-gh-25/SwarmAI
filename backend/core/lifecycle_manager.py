@@ -237,6 +237,7 @@ class LifecycleManager:
         """
         try:
             from .session_hooks import HookContext
+            from .session_inputs import session_input_ids
             from .session_manager import session_manager
             from database import db
 
@@ -248,6 +249,7 @@ class LifecycleManager:
                 message_count=msg_count,
                 session_start_time=session.created_at if session else "",
                 session_title=session.title if session else "Unknown",
+                input_event_ids=session_input_ids(unit.session_id),
             )
         except Exception as exc:
             logger.warning(
@@ -1849,12 +1851,14 @@ class LifecycleManager:
                     continue  # No real conversation
 
                 from .session_hooks import HookContext
+                from .session_inputs import session_input_ids
                 ctx = HookContext(
                     session_id=sid,
                     agent_id=getattr(session, "agent_id", "default") or "default",
                     message_count=msg_count,
                     session_start_time=created,
                     session_title=getattr(session, "title", "Unknown") or "Unknown",
+                    input_event_ids=session_input_ids(sid),
                 )
                 self.enqueue_hooks(ctx)
                 fired += 1

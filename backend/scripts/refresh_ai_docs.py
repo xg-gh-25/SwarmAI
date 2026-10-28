@@ -97,11 +97,11 @@ STALENESS_CHECKS = [
     },
     {
         "name": "Context files count",
-        "description": "11 context files documented",
+        "description": "12 context files documented",
         "prose_file": "AGENTS.md",
-        "prose_pattern": r"11 source files",
+        "prose_pattern": r"12 source files",
         "code_file": "backend/core/context_directory_loader.py",
-        "code_pattern": r"All 11 context source files",
+        "code_pattern": r"All 12 context source files",
     },
     {
         "name": "Token budget tiers",

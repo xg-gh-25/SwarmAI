@@ -43,10 +43,7 @@ from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
 from core import executors
-from core.context_directory_loader import (
-    EPHEMERAL_HEADROOM,
-    TOKEN_CAP_PER_DAILY_FILE,
-)
+from core.context_directory_loader import EPHEMERAL_HEADROOM
 from core.ddd_paths import ddd_path
 from model_registry import (
     context_window_for,
@@ -171,16 +168,8 @@ def strip_sensitive_mcps(mcp_servers: dict) -> dict:
     return {name: cfg for name, cfg in mcp_servers.items() if not _is_sensitive_mcp(name)}
 
 
-# ── DailyActivity token cap constants ──────────────────────────────
-# Applied ephemerally at prompt-assembly time; disk files are never modified.
-# TOKEN_CAP_PER_DAILY_FILE is imported from context_directory_loader (the budget
-# SoT) — re-exported here so existing `from core.prompt_builder import
-# TOKEN_CAP_PER_DAILY_FILE` importers keep working (run_72ca2a97).
-# A DailyActivity file over its cap shows its newest entries WHOLE and names how many
-# earlier ones are not shown (CDF first principle): an entry is a session block
-# (``<!-- da:… -->`` … ``<!-- /da -->``) or a ``## `` section.
-_DA_OPEN, _DA_CLOSE = "<!-- da:", "<!-- /da -->"
-_FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.S)
+# DailyActivity injection uses ``core.memory_injection.select_daily_activity``.
+# It admits complete rows/day summaries into one 4K budget and never slices text.
 
 # ── Autocompact trigger threshold (NOT a cost cap — STEERING #2) ──────────────
 # The CLI fires autocompact (summarize earlier context + CONTINUE the turn; it
@@ -221,62 +210,6 @@ def _compute_autocompact_window_setting(trigger_tokens: int, context_window: int
     the value honest). 1M model, 750K trigger → 783_000.
     """
     return min(context_window, trigger_tokens + AUTOCOMPACT_CLI_BUFFER)
-
-
-def _daily_entries(content: str) -> list[str]:
-    """The entries of a DailyActivity file in file order (oldest first), frontmatter
-    left out: each session block whole, and the ``## `` sections between blocks."""
-    from .recall_filter import split_sections
-    body = _FRONTMATTER_RE.sub("", content, count=1)
-    units: list[str] = []
-    pos = 0
-    while True:      # linear scan (str.find): a regex over unclosed openers is quadratic
-        start = body.find(_DA_OPEN, pos)
-        end = body.find(_DA_CLOSE, start) if start >= 0 else -1
-        if end < 0:
-            units += split_sections(body[pos:])
-            break
-        units += split_sections(body[pos:start])
-        units.append(body[start:end + len(_DA_CLOSE)])
-        pos = end + len(_DA_CLOSE)
-    return [u.strip() for u in units if u.strip()]
-
-
-def _daily_within_budget(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE,
-                         day: str = "") -> str:
-    """*content* unchanged when it fits *cap* tokens; else its newest entries, each
-    whole and in file order, while they fit, under a line naming how many earlier
-    entries are not shown and where they are. An entry is never cut (CDF first
-    principle): when even the newest one does not fit, none is shown and the line
-    says so. DailyActivity is newest-last (``daily_activity_writer`` appends, and a
-    rewritten session block moves to the end), so the kept entries are the newest.
-
-    Token counts come from ``ContextDirectoryLoader.estimate_tokens``; the result is
-    within *cap*."""
-    from .context_directory_loader import ContextDirectoryLoader
-    from .recall_filter import take_whole
-
-    est = ContextDirectoryLoader.estimate_tokens
-    if est(content) <= cap:
-        return content
-    entries = _daily_entries(content)
-    where = f"Knowledge/DailyActivity/{day}.md" if day else "this day's DailyActivity file"
-    if not entries:          # over the cap, yet no entry: name the file, show nothing
-        return f"[this day's DailyActivity is not shown; read {where}]"
-
-    def note(n: int) -> str:
-        return (f"[{n} earlier {'entry' if n == 1 else 'entries'} of this day not shown, so "
-                f"that each one shown stays whole; read {where}]")
-
-    # estimate_tokens floors two terms (Latin words, CJK characters) per text, each
-    # losing under 1 token, and the joins add no words: the joined text estimates
-    # at most est(note) + sum(est(entry) + 2), so charging est + 2 per entry keeps
-    # the result within cap.
-    room = cap - est(note(len(entries)))
-    newest_first, _ = take_whole(list(reversed(entries)), room, lambda e: est(e) + 2)
-    shown = list(reversed(newest_first))
-    omitted = len(entries) - len(shown)
-    return "\n\n".join([note(omitted), *shown]) if omitted else "\n\n".join(shown)
 
 
 # Human-readable labels for the fullscreen nav overlays (swarm:show-* event ids).
@@ -561,7 +494,13 @@ def with_app_session_id(session_env: "dict | None", session_context: "dict | Non
     from .session_router import PREWARM_SESSION_PREFIX
     if not sid or str(sid).startswith(PREWARM_SESSION_PREFIX):
         return session_env
-    return {**(session_env or {}), "SWARM_APP_SESSION_ID": str(sid)}
+    from .session_inputs import latest_user_event_id
+    latest = latest_user_event_id(str(sid))
+    return {
+        **(session_env or {}),
+        "SWARM_APP_SESSION_ID": str(sid),
+        **({"SWARM_LAST_USER_EVENT_ID": latest} if latest else {}),
+    }
 
 
 class PromptBuilder:
@@ -1334,7 +1273,7 @@ class PromptBuilder:
             # query). Size is governed write-side by the distillation archive valve.
             # OFF-LOOP (run_cc397b0d; pool-scoped run_6a7e5a2f): load_all forks
             # `git status --porcelain` on an L1-cache-miss (context_directory_loader
-            # _is_l1_fresh_uncached) and reads ~11 context files. On the event loop
+            # _is_l1_fresh_uncached) and reads ~12 context files. On the event loop
             # that fork stalls EVERY concurrently-streaming tab's SSE. Dispatched via
             # executors.run_in on the bounded io pool (NOT the default pool) so a
             # blocking fork never saturates the shared default executor (O006/O020).
@@ -1352,7 +1291,7 @@ class PromptBuilder:
             _t_load = time.perf_counter() - _t1
 
             # recall#G ephemeral-budget observability (run_a16d61ad, design §G):
-            # the 11 context files are token-budgeted inside load_all(), but the
+            # the 12 context files are token-budgeted inside load_all(), but the
             # EPHEMERAL sections appended below (DailyActivity, briefing, user
             # suggestions, sibling digest, editor, deferred-MCP) are NOT — they
             # just `+=` onto ephemeral_text against a fixed EPHEMERAL_HEADROOM
@@ -1391,16 +1330,8 @@ class PromptBuilder:
             # for the whole ephemeral-file group, not four) that returns pure strings;
             # the async body only concatenates. Both fault paths are unchanged: an
             # unreadable file is skipped, never fatal.
-            def _read_ephemeral_files() -> tuple[str, list[tuple[str, str]], str]:
-                """(bootstrap_text, [(day_stem, content), ...], needs_distillation_flag_path).
-
-                All blocking reads. The distillation-flag PATH is resolved HERE where
-                `daily_activity_dir` is in scope and returned to the caller — a prior
-                refactor (039c4f32) left the flag check in the outer scope referencing
-                this local, raising NameError on every session with daily files and
-                (via the monolithic try) zeroing out ALL core context. Returning the
-                resolved path keeps the var in the only scope that defines it.
-                """
+            def _read_ephemeral_files() -> tuple[str, str, str]:
+                """Return bootstrap text, selected seven-day activity, and flag path."""
                 bootstrap = ""
                 bootstrap_path = context_dir / "BOOTSTRAP.md"
                 if bootstrap_path.exists():
@@ -1408,30 +1339,17 @@ class PromptBuilder:
                         bootstrap = bootstrap_path.read_text(encoding="utf-8").strip()
                     except (OSError, UnicodeDecodeError):
                         bootstrap = ""
-                dailies: list[tuple[str, str]] = []
-                distill_flag = ""
-                # Only the most recent files are injected. Older actionable items are
-                # already covered by Proactive Briefing (L0-L4) and Memory Index; the
-                # agent can Read older files on demand. Skipped for channel sessions:
-                # quick exchanges don't need logs.
+                daily_activity = ""
                 daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
                 if daily_activity_dir.is_dir() and not is_channel:
-                    da_files = sorted(
-                        [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
-                        key=lambda f: f.stem,
-                        reverse=True,
-                    )[:2]  # last 2 days (pure-filesystem recall design §3.1, DoD3)
-                    for daily_file in da_files:
-                        try:
-                            content = daily_file.read_text(encoding="utf-8").strip()
-                        except (OSError, UnicodeDecodeError):
-                            continue
-                        if content:
-                            dailies.append((daily_file.stem, content))
-                    flag_path = daily_activity_dir / ".needs_distillation"
-                    if flag_path.is_file():
-                        distill_flag = str(flag_path)
-                return bootstrap, dailies, distill_flag
+                    from core.memory_injection import select_daily_activity
+                    selection = select_daily_activity(
+                        Path(working_directory),
+                        today=datetime.now().date(),
+                        estimate=ContextDirectoryLoader.estimate_tokens,
+                    )
+                    daily_activity = selection.text
+                return bootstrap, daily_activity
 
             # ── Ephemeral sections (each isolated) append to `ephemeral_text`,
             #    which is committed to system_prompt ONCE, AFTER core is already
@@ -1448,35 +1366,17 @@ class PromptBuilder:
             ephemeral_text = ""
             try:
                 if include_ephemeral:
-                    _bootstrap_content, _daily_files, _distill_flag = await executors.run_in(
+                    _bootstrap_content, _daily_content = await executors.run_in(
                         "io", _read_ephemeral_files
                     )
                 else:
-                    _bootstrap_content, _daily_files, _distill_flag = "", [], ""
+                    _bootstrap_content, _daily_content = "", ""
 
                 if _bootstrap_content:
-                    # Onboarding is the FIRST content into the (empty) ephemeral
-                    # buffer, so it leads the ephemeral block; daily/briefing/etc.
-                    # append after it below.
                     ephemeral_text = f"## Onboarding\n{_bootstrap_content}"
 
-                for _day_stem, _daily_content in _daily_files:
-                    token_count = ContextDirectoryLoader.estimate_tokens(_daily_content)
-                    if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                        _daily_content = _daily_within_budget(
-                            _daily_content, TOKEN_CAP_PER_DAILY_FILE, _day_stem
-                        )
-                    ephemeral_text += f"\n\n## Daily Activity ({_day_stem})\n{_daily_content}"
-
-                # ── Distillation flag (path resolved in _read_ephemeral_files) ──
-                if _distill_flag:
-                    ephemeral_text += (
-                        "\n\n## Memory Maintenance Required\n"
-                        "Run the s_memory-distill skill now — there are undistilled "
-                        "DailyActivity files that need promotion to MEMORY.md. "
-                        "After distillation completes, delete the flag file at "
-                        f"`{_distill_flag}`."
-                    )
+                if _daily_content:
+                    ephemeral_text += f"\n\n## Daily Activity (last 7 days)\n{_daily_content}"
             except Exception as exc:
                 logger.warning("Ephemeral (bootstrap/daily) injection failed: %s", exc)
 
@@ -1512,24 +1412,6 @@ class PromptBuilder:
                 except Exception as exc:
                     logger.warning("Proactive intelligence injection failed: %s", exc)
             _t_briefing = time.perf_counter() - _t_briefing_start
-
-            # ── UserObserver Suggestions ──
-            # Inject pending USER.md update suggestions if the file exists
-            # and has content. Written by UserObserverHook, consumed here.
-            if include_ephemeral and not is_channel:
-                # OFF-LOOP (run_a1f4c2d8): a read on the session-start path.
-                def _read_user_suggestions() -> str:
-                    suggestions_path = Path(working_directory) / ".context" / "user_suggestions.md"
-                    if not suggestions_path.exists():
-                        return ""
-                    return suggestions_path.read_text(encoding="utf-8").strip()
-
-                try:
-                    suggestions_text = await executors.run_in("io", _read_user_suggestions)
-                    if suggestions_text and len(suggestions_text) < 2048:
-                        ephemeral_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
-                except Exception as exc:
-                    logger.debug("User suggestions injection skipped: %s", exc)
 
             # ── Skill Registry injection removed (2026-04-14) ──
             # The Claude Agent SDK injects a comprehensive skill list via
@@ -1647,7 +1529,7 @@ class PromptBuilder:
                     )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
-            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 11 context files (exists + a full
+            # OFF-LOOP (run_a1f4c2d8): this re-read ALL 12 context files (exists + a full
             # read_text each) inside the async body, purely to compute token counts for a
             # DIAGNOSTIC viewer — the most expensive loop-blocker on the session-start
             # path, and duplicate work on top (the loader already read every one of these

@@ -188,7 +188,8 @@ def _conventions(root: Path, files: list[str], docs: list[dict],
         try:
             import tomllib
             data = tomllib.loads(rr.safe_read_text(root, rel) or "")
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001 — unparsable pyproject: no tool configs from it
+            logger.debug("survey: %s unparsable: %s", rel, exc)
             data = {}
         tool = data.get("tool") if isinstance(data, dict) else None
         for name in _PYPROJECT_TOOLS:
@@ -227,7 +228,8 @@ def _conventions(root: Path, files: list[str], docs: list[dict],
                     if not sections:
                         continue
                 options = sections
-        except Exception:  # noqa: BLE001 — unparsable config: listed, options unknown
+        except Exception as exc:  # noqa: BLE001 — unparsable config: listed, options unknown
+            logger.debug("survey: config %s unparsable, options unknown: %s", rel, exc)
             options = None
         configs.append({"path": rel, "tool": tool, "options": options})
     guides = [d["path"] for d in docs if "contributing" in d["signals"]]

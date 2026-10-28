@@ -51,6 +51,7 @@ GATE_CLASS = {
     "subagent_capture": OBSERVE, "agent_tool_audit": OBSERVE,
     "user_correction_detector": OBSERVE, "high_signal_capture": OBSERVE,
     "observation_recorder": OBSERVE, "observation_completer": OBSERVE,
+    "cdf_usage_observer": OBSERVE,
 }
 
 

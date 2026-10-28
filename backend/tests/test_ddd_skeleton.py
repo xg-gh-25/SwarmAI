@@ -59,8 +59,16 @@ def test_align_appends_only_true_gaps_and_keeps_existing_bytes():
     assert sk.align("TECH.md", new)[0] == []  # idempotent
 
 
-def test_align_project_is_dry_run_by_default(tmp_path):
-    proj = tmp_path / "P"
+def _workspace_project(tmp_path, monkeypatch):
+    """A project inside a test workspace: align --apply writes through governed_edit,
+    which only accepts files of the active workspace."""
+    monkeypatch.setenv("SWARM_WORKSPACE", str(tmp_path / "ws"))
+    monkeypatch.setenv("SWARM_DATA_DIR", str(tmp_path / "data"))
+    return tmp_path / "ws" / "Projects" / "P"
+
+
+def test_align_project_is_dry_run_by_default(tmp_path, monkeypatch):
+    proj = _workspace_project(tmp_path, monkeypatch)
     (proj / "2-understanding").mkdir(parents=True)
     tech = proj / "2-understanding" / "TECH.md"
     tech.write_text("# T\n\n## Architecture\nx\n", encoding="utf-8")
@@ -92,9 +100,9 @@ def test_headings_inside_code_fences_do_not_count():
     assert "Architecture" in sk.missing_sections("TECH.md", text)
 
 
-def test_align_keeps_crlf_line_endings(tmp_path):
-    proj = tmp_path / "P"
-    proj.mkdir()
+def test_align_keeps_crlf_line_endings(tmp_path, monkeypatch):
+    proj = _workspace_project(tmp_path, monkeypatch)
+    proj.mkdir(parents=True)
     tech = proj / "TECH.md"
     tech.write_bytes(b"# T\r\n\r\n## Architecture\r\nbody")
     sk.align_project(proj, apply=True)

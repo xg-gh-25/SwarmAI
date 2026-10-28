@@ -1,31 +1,28 @@
 """LLM-powered memory extraction from chat sessions.
 
 Extracts key decisions, lessons learned, open threads, and context from
-a conversation and writes them to MEMORY.md via ``locked_read_modify_write()``.
+a conversation and submits them to Cognitive Distillation Flow.
 
 This module powers the one-click "Save to Memory" button in the frontend.
-The LLM handles quality control — extracting only genuinely important entries,
-deduplicating against existing MEMORY.md content, and enforcing concise format.
+The LLM only extracts complete candidates; CDF owns admission, deduplication,
+routing, and all governed writes.
 
 Key public symbols:
 
-- ``extract_and_save``      — Main entry point: extract from messages → write to MEMORY.md.
-- ``MemoryExtractionResult`` — Dataclass with counts of saved entries per section.
+- ``extract_and_save``      — Main entry point: extract from messages → enqueue.
+- ``MemoryExtractionResult`` — Dataclass with counts of accepted candidates.
 - ``EXTRACTION_MODEL``       — Default Bedrock model ID for extraction (Sonnet 4.6).
 """
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
-
-# Direct import — avoids sys.executable subprocess which breaks in PyInstaller bundles
-from scripts.locked_write import locked_read_modify_write, LockedWriteError
-from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
 
 logger = logging.getLogger(__name__)
 
@@ -170,67 +167,6 @@ def _extract_sections(prompt: str, config: dict[str, Any] | None = None) -> dict
     return {k: [e for e in data[k] if e.strip()] for k in _SECTIONS}
 
 
-# Map extraction keys to MEMORY.md section headers. Values MUST be current
-# section names from the MEMORY_SECTIONS SSoT — the legacy "Key Decisions" /
-# "Lessons Learned" / "Recent Context" names were removed in PRI01, and writing
-# to a missing section silently orphans the entry into a "## Distilled" fallback
-# that the index/recall/caps never manage (R3 write-target drift fix).
-#   key_decisions  → Decisions
-#   lessons_learned→ Guidelines (a lesson is a guideline in the 7-type schema)
-#   open_threads / recent_context → Processes (Gate-2 F3: NOT "Open Threads" —
-#       that section is structured with ### P0/P1/P2 subsections, and prepend
-#       writes would land an unstructured bullet above the structure, breaking
-#       the format the deleted comment warned about. Processes is a flat bullet
-#       list (process-type), the correct home for unstructured in-flight notes.)
-_SECTION_MAP = {
-    "key_decisions": MEMORY_TYPE_TO_SECTION["decision"],
-    "lessons_learned": MEMORY_TYPE_TO_SECTION["guideline"],
-    "open_threads": MEMORY_TYPE_TO_SECTION["process"],
-    "recent_context": MEMORY_TYPE_TO_SECTION["process"],
-}
-
-
-def _write_entries(
-    entries: list[str],
-    section: str,
-    memory_path: Path,
-) -> bool:
-    """Write extracted entries to MEMORY.md via locked_read_modify_write.
-
-    Each extracted line (``- YYYY-MM-DD: Title — body``) is written as a canonical
-    entry of the section's type (``canonical_entry_from_text``), so the
-    context-health sweep can parse it and remove an exact re-save. All entries for a
-    section are joined into a single prepend call. Calls the function directly
-    instead of spawning a subprocess (which breaks in PyInstaller bundles where
-    ``sys.executable`` points to the bundled binary, not Python).
-
-    Returns:
-        True if write succeeded, False otherwise.
-    """
-    if not entries:
-        return True
-
-    from core.ddd_entry_lifecycle import MEMORY_SECTIONS, canonical_entry_from_text
-    etype = MEMORY_SECTIONS.get(section, {}).get("type", "guideline")
-    today = date.today().isoformat()
-    text = "\n".join(
-        canonical_entry_from_text(e, etype, today, source="manual") for e in entries
-    )
-
-    try:
-        # Written whole: write-time dedup was deleted (design
-        # docs/design/2026-10-25-memory-write-entry-dedup.md); a re-saved entry is an
-        # exact duplicate the sweep removes at session close.
-        locked_read_modify_write(memory_path, section, text, mode="prepend")
-        return True
-    except LockedWriteError as e:
-        logger.error("locked_write failed for section %s: %s", section, e)
-        return False
-    except Exception as e:
-        logger.error("locked_write failed for section %s: %s", section, e)
-        return False
-
-
 async def extract_and_save(
     session_id: str,
     since_message_idx: int = 0,
@@ -297,24 +233,11 @@ async def extract_and_save(
             next_message_idx=total_messages,
         )
 
-    # 5. Load current MEMORY.md for dedup context
-    # OFF-LOOP (run_a1f4c2d8): MEMORY.md is the largest context file in the system and
-    # this read feeds the dedup prompt — exists + read in one hop.
-    def _read_memory() -> str:
-        if not memory_path.exists():
-            return ""
-        return memory_path.read_text(encoding="utf-8")
-
-    memory_content = ""
-    try:
-        memory_content = await asyncio.to_thread(_read_memory)
-    except Exception:
-        pass
-
-    # 6. Build prompt and call LLM
+    # 5. Extract candidate statements. Existing-corpus comparison and all
+    # admission decisions belong to CDF, not this source.
     today = date.today().isoformat()
     prompt = EXTRACTION_PROMPT.format(
-        memory_content=memory_content or "(empty)",
+        memory_content="(CDF performs corpus comparison)",
         conversation=conversation,
         today=today,
     )
@@ -348,108 +271,35 @@ async def extract_and_save(
     # 7. Nothing to save is a valid answer (every section empty)
     if all(len(v) == 0 for v in extracted.values()):
         return MemoryExtractionResult(
-            next_message_idx=total_messages,
-            error="Nothing new to save",
-        )
+            next_message_idx=total_messages, error="Nothing new to save")
 
-    # 7.5 JUDGE GATE (run_04fd397c, XG decision A): the manual "Save to Memory"
-    # button was a MEMORY BACKDOOR — it wrote LLM-extracted entries with only a dedup
-    # check, never the self_adversarial judge, violating "the judge is the sole admit
-    # authority" (P8). Even a user-initiated save now goes through the judge (decision
-    # A: user intent does NOT bypass it; judge fail-closed is the floor). Each entry is
-    # routed through admit_memory_lesson; only verdict=="auto" survives. A judge-discard
-    # is dropped (not written) — logged for observability. Section stays as the LLM
-    # classified it for the manual-save UX (the judge decides admit/reject, not re-route).
-    try:
-        from core.ingestion_gate import admit_memory_lesson
-        from core import executors as _executors
-        gated: dict[str, list[str]] = {}
-        _dropped = 0
-        for key, section_header in _SECTION_MAP.items():
-            kept = []
-            for entry in extracted.get(key, []):
-                # NOTE (adversarial BUG#2, judged unfounded): _sec is deliberately
-                # ignored. The LLM extraction already sorted this entry into `key`,
-                # and _SECTION_MAP[key] is its correct type-section (decisions→Decisions
-                # etc.). The judge's job here is ADMIT/REJECT only — re-routing to the
-                # judge's section would BREAK the extraction bucket→section consistency.
-                # One blocking Bedrock call per entry: the llm pool, never the loop.
-                verdict, _sec, reason, distilled = await _executors.run_in(
-                    "llm", admit_memory_lesson, entry)
-                if verdict == "auto":
-                    # ROOT-FIX (capture-vs-distill): write the DISTILLED rule when the
-                    # gate rewrote a shape-dirty entry; fail-open → distilled=None keeps
-                    # the original. The writer never finalizes its own text.
-                    kept.append(distilled or entry)
-                elif verdict == "pending":
-                    # RECOVERABLE (judge budget-exhausted / infra down) — DEFER to the
-                    # shared distill-pending.jsonl, never drop. Even a user's manual
-                    # "Save to Memory" is not lost when the judge is transiently down;
-                    # the next distillation cycle re-judges it with a fresh budget.
-                    try:
-                        from hooks.distillation_hook import requeue_pending_lesson
-                        requeue_pending_lesson(memory_path.parent, "lesson", entry)
-                        logger.info("memory_extractor: entry deferred (%s): %.80s", reason, entry)
-                    except Exception:  # noqa: BLE001 — defer is best-effort
-                        logger.warning("memory_extractor: pending defer FAILED: %.80s", entry)
-                else:
-                    _dropped += 1
-                    logger.info("memory_extractor: judge DISCARD (%s): %.80s", reason, entry)
-            if kept:
-                gated[key] = kept
-        extracted = gated
-        if _dropped:
-            logger.info("memory_extractor: judge dropped %d entries (session %s)", _dropped, session_id)
-        if not extracted:
-            return MemoryExtractionResult(
-                next_message_idx=total_messages,
-                error="Nothing passed the memory admission judge",
-            )
-    except Exception as exc:  # noqa: BLE001 — gate error must fail-CLOSED (write nothing)
-        logger.error("memory_extractor: judge gate crashed, writing NOTHING (fail-closed): %s", exc)
-        return MemoryExtractionResult(
-            next_message_idx=total_messages,
-            error=f"Memory admission judge failed: {type(exc).__name__}",
-        )
-
-    # 8. Write entries to MEMORY.md
+    from core.ingestion import api
+    from core.session_inputs import derive_envelope
+    envelope = derive_envelope(session_id, (), writer="memory_extractor")
     result = MemoryExtractionResult(next_message_idx=total_messages)
-    write_failures = 0
-
-    for key, section_header in _SECTION_MAP.items():
-        entries = extracted.get(key, [])
-        if entries:
-            try:
-                success = await asyncio.to_thread(
-                    _write_entries, entries, section_header, memory_path
-                )
-            except Exception as exc:
-                logger.error(
-                    "Write thread failed for section %s, session %s: %s",
-                    section_header,
-                    session_id,
-                    exc,
-                    exc_info=True,
-                )
-                success = False
-            if success:
-                count = len(entries)
-                setattr(result, key, count)
-                result.total_saved += count
-            else:
-                write_failures += 1
-
-    if write_failures > 0 and result.total_saved == 0:
-        result.error = "Failed to write to MEMORY.md"
-
-    logger.info(
-        "Memory extraction for session %s: saved %d entries (%d decisions, %d lessons, %d threads, %d context)",
-        session_id,
-        result.total_saved,
-        result.key_decisions,
-        result.lessons_learned,
-        result.open_threads,
-        result.recent_context,
-    )
-
+    type_hints = {
+        "key_decisions": "decision",
+        "lessons_learned": "guideline",
+        "open_threads": "process",
+        "recent_context": "model",
+    }
+    for key, entries in extracted.items():
+        accepted = 0
+        for entry in entries:
+            payload = {"kind": "extracted", "text": entry,
+                       "type_hint": type_hints.get(key)}
+            slot = "entry:" + hashlib.sha256(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            queued = api.enqueue(
+                "memory_extractor", session_id, slot, payload,
+                envelope=envelope, project_snapshot={},
+            )
+            if queued.status in {"queued", "duplicate"}:
+                accepted += 1
+        if hasattr(result, key):
+            setattr(result, key, accepted)
+            result.total_saved += accepted
+    logger.info("Memory extraction for session %s: queued %d entries",
+                session_id, result.total_saved)
     return result

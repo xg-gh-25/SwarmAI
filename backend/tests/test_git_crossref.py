@@ -17,6 +17,11 @@ from unittest.mock import patch
 
 import pytest
 
+from core.session_hooks import HookContext
+
+_CTX = HookContext(session_id="s-crossref", agent_id="a", message_count=1,
+                   session_start_time="2026-10-27T00:00:00+00:00", session_title="t")
+
 import core.ingestion_gate as _ig
 
 # The distillation write path runs an LLM-based self-adversarial noise-filter
@@ -192,9 +197,8 @@ class TestGitSnapshotCapture:
         assert _clean_subject("fix `x`\tthing") == "fix 'x' thing"
         assert len(_clean_subject("y" * 500)) == 120
 
-    def test_format_entry_includes_git_section(self):
-        """Formatted DailyActivity entry should include **Git activity:** section
-        when git commits are available."""
+    def test_format_entry_includes_git_outputs(self):
+        """Git commits are preserved as complete items in the Outputs section."""
         from core.daily_activity_writer import _format_session_entry
         from core.summarization import StructuredSummary
         from core.session_hooks import HookContext
@@ -217,9 +221,9 @@ class TestGitSnapshotCapture:
         )
 
         entry = _format_session_entry(summary, context)
-        assert "**Git activity:**" in entry
-        assert "abc1234" in entry
-        assert "def5678" in entry
+        assert "**Outputs:**" in entry
+        assert "commit: abc1234" in entry
+        assert "commit: def5678" in entry
 
     def test_format_entry_no_git_section_when_empty(self):
         """No **Git activity:** section when git_commits is empty."""
@@ -248,276 +252,15 @@ class TestGitSnapshotCapture:
 # Test Group 2: Git-verified distillation
 # ===========================================================================
 
-class TestGitVerifiedDistillation:
-    """Distillation should verify implementation claims against git."""
-
-    def test_verify_claim_found_in_git(self, git_repo: Path):
-        """Claims matching git log should pass verification."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-        result = hook._verify_claim_against_git(
-            "Proactive Intelligence L0-L4 fully implemented",
-            git_repo,
-        )
-        assert result is True
-
-    def test_verify_claim_not_found_in_git(self, git_repo: Path):
-        """Claims NOT matching git log should fail verification."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-        result = hook._verify_claim_against_git(
-            "MCP Gateway implemented and deployed",
-            git_repo,
-        )
-        assert result is False
-
-    def test_non_implementation_claims_skip_verification(self, git_repo: Path):
-        """Claims without implementation keywords should not be verified
-        (return True by default -- they're not making code claims)."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-        # This is a decision, not an implementation claim
-        result = hook._verify_claim_against_git(
-            "Design principle: prevent, don't handle",
-            git_repo,
-        )
-        assert result is True
-
-    def test_verify_claim_via_file_name(self, git_repo: Path):
-        """Claims should also be verified via git ls-files (file existence)."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-        # signal_fetcher.py exists in the repo
-        result = hook._verify_claim_against_git(
-            "Signal fetcher module created",
-            git_repo,
-        )
-        assert result is True
-
-    def test_verify_claim_via_code_content(self, git_repo: Path):
-        """Claims should be verified via git grep (code content search).
-
-        Even if commit messages and file names don't match, finding the
-        subject word in actual code content should verify the claim.
-        """
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        # Write code content that mentions "proactive" but filename doesn't
-        import subprocess
-        (git_repo / "core.py").write_text("class ProactiveIntelligence:\n    pass\n")
-        subprocess.run(["git", "add", "."], cwd=git_repo, capture_output=True, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "add core module"],
-            cwd=git_repo, capture_output=True, check=True,
-        )
-
-        hook = DistillationTriggerHook()
-        # "ProactiveIntelligence" is in code content but not in
-        # commit message "add core module" or filename "core.py"
-        result = hook._verify_claim_against_git(
-            "ProactiveIntelligence class implemented",
-            git_repo,
-        )
-        assert result is True
-
-    def test_unverified_claims_tagged(self, workspace: Path, git_repo: Path):
-        """Implementation claims that fail git verification should be tagged
-        [UNVERIFIED] in the promoted MEMORY.md entry."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-
-        # Create a DailyActivity file with a false claim
-        da_dir = workspace / "Knowledge" / "DailyActivity"
-        da_file = da_dir / "2026-03-25.md"
-        da_file.write_text(
-            '---\ndate: "2026-03-25"\nsessions_count: 1\ndistilled: false\n---\n'
-            "## 14:30 | test1234 | MCP Gateway\n\n"
-            "**Decisions:**\n"
-            "- MCP Gateway fully implemented and shipped\n\n"
-            "**Lessons:**\n"
-            "- Always test under memory pressure\n"
-        )
-
-        # Distill with git verification against our test repo. Bypass the LLM
-        # noise-filter judge (its own concern) so the git-verify-tagged entry
-        # reaches MEMORY deterministically offline — see module header.
-        with patch.object(
-            DistillationTriggerHook, '_get_source_repo_path',
-            return_value=git_repo,
-        ), patch.object(_ig, "self_adversarial_judge", _JUDGE_PASS):
-            hook._distill_files([da_file], workspace)
-
-        memory = (workspace / ".context" / "MEMORY.md").read_text()
-        # The false implementation claim should be tagged
-        assert "[UNVERIFIED]" in memory
-        # The lesson (not an implementation claim) should NOT be tagged
-        assert "Always test under memory pressure" in memory
-        assert memory.count("[UNVERIFIED]") == 1  # Only the false claim
-
-    def test_verified_claims_not_tagged(self, workspace: Path, git_repo: Path):
-        """Implementation claims that pass git verification should NOT be tagged."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-
-        da_dir = workspace / "Knowledge" / "DailyActivity"
-        da_file = da_dir / "2026-03-25.md"
-        da_file.write_text(
-            '---\ndate: "2026-03-25"\nsessions_count: 1\ndistilled: false\n---\n'
-            "## 14:30 | test1234 | Signal fetcher\n\n"
-            "**Decisions:**\n"
-            "- Signal fetcher service implemented\n\n"
-        )
-
-        with patch.object(
-            DistillationTriggerHook, '_get_source_repo_path',
-            return_value=git_repo,
-        ), patch.object(_ig, "self_adversarial_judge", _JUDGE_PASS):
-            hook._distill_files([da_file], workspace)
-
-        memory = (workspace / ".context" / "MEMORY.md").read_text()
-        # This claim IS in git, so should NOT be tagged
-        assert "signal fetcher" in memory.lower()
-        assert "[UNVERIFIED]" not in memory
-
-    def test_tag_unverified_preserves_entry_format(self, git_repo: Path):
-        """Tagged entries should preserve the '- YYYY-MM-DD: ' prefix format."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-        entries = [
-            "- 2026-03-25: MCP Gateway fully implemented and shipped",
-        ]
-        tagged = hook._tag_unverified_claims(entries, git_repo)
-        assert len(tagged) == 1
-        # Should start with the date prefix and contain [UNVERIFIED]
-        assert tagged[0].startswith("- 2026-03-25:")
-        assert "[UNVERIFIED]" in tagged[0]
 
 
 # ===========================================================================
 # Test Group 3: Multi-project repo discovery
 # ===========================================================================
 
-class TestRepoDiscovery:
-    """Repo path discovery should scan all projects, not just SwarmAI."""
-
-    def test_extract_repo_paths_from_tech_md(self):
-        """_extract_repo_paths should find paths from TECH.md content."""
-        from hooks.distillation_hook import _extract_repo_paths
-
-        content = (
-            "## Codebase Location\n"
-            "- **Local:** `/Users/dev/projects/myapp`\n"
-            "- **Clone:** `git clone https://github.com/org/myapp.git`\n"
-        )
-        paths = _extract_repo_paths(content)
-        assert any(str(p) == "/Users/dev/projects/myapp" for p in paths)
-
-    def test_extract_repo_paths_empty_for_no_paths(self):
-        """No paths extracted from content without repo references."""
-        from hooks.distillation_hook import _extract_repo_paths
-
-        content = "# My Project\n\nJust a description, no paths.\n"
-        paths = _extract_repo_paths(content)
-        assert paths == []
-
-    def test_get_source_repo_scans_all_projects(self, tmp_path: Path, git_repo: Path):
-        """_get_source_repo_path should find repos from any project's TECH.md."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        # Create a fake workspace with two projects
-        ws = tmp_path / "ws"
-        (ws / "Projects" / "ProjectA").mkdir(parents=True)
-        (ws / "Projects" / "ProjectB").mkdir(parents=True)
-
-        # ProjectA has no TECH.md
-        # ProjectB has TECH.md pointing to our git_repo
-        (ws / "Projects" / "ProjectB" / "TECH.md").write_text(
-            f"## Codebase\n- **Local:** `{git_repo}`\n"
-        )
-
-        with patch(
-            "hooks.distillation_hook.initialization_manager"
-        ) as mock_init:
-            mock_init.get_cached_workspace_path.return_value = str(ws)
-            result = DistillationTriggerHook._get_source_repo_path()
-
-        assert result == git_repo
 
 
 # ===========================================================================
 # Test Group 4: Regression -- existing behavior preserved
 # ===========================================================================
 
-class TestDistillationRegression:
-    """Existing distillation behavior must not regress."""
-
-    def test_supersede_by_topic_still_works(self):
-        """_supersede_by_topic should still deduplicate entries by topic."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        entries = [
-            "- 2026-03-14: Proactive Intelligence L0+L1 implemented",
-            "- 2026-03-19: Proactive Intelligence L0-L4 fully implemented",
-        ]
-        result = DistillationTriggerHook._supersede_by_topic(entries)
-        assert len(result) == 1
-        assert "L0-L4" in result[0]
-
-    def test_distill_marks_files_as_distilled(self, workspace: Path):
-        """Files should still get distilled:true frontmatter after processing."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        hook = DistillationTriggerHook()
-
-        da_dir = workspace / "Knowledge" / "DailyActivity"
-        da_file = da_dir / "2026-03-25.md"
-        da_file.write_text(
-            '---\ndate: "2026-03-25"\nsessions_count: 1\ndistilled: false\n---\n'
-            "## 14:30 | test1234 | Test session\n\n"
-            "**Decisions:**\n"
-            "- Design principle: keep it simple\n\n"
-        )
-
-        # Distill — non-implementation claim, no git needed. Mock the judge so no
-        # live Bedrock call is made (determinism/hygiene); the distilled-marking
-        # assertion is independent of the judge verdict.
-        with patch.object(
-            DistillationTriggerHook, '_get_source_repo_path',
-            return_value=None,
-        ), patch.object(_ig, "self_adversarial_judge", _JUDGE_PASS):
-            hook._distill_files([da_file], workspace)
-
-        content = da_file.read_text()
-        assert "distilled: true" in content
-
-    def test_extract_decisions_unchanged(self):
-        """_extract_decisions should still work with existing format."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        body = (
-            "## 14:30 | test | Session\n\n"
-            "**Decisions:**\n"
-            "- Use pytest for all backend tests\n"
-            "- Design principle: prevent errors structurally\n"
-        )
-        decisions = DistillationTriggerHook._extract_decisions(body)
-        assert len(decisions) == 2
-
-    def test_extract_lessons_unchanged(self):
-        """_extract_lessons should still work with existing format."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        body = (
-            "## 14:30 | test | Session\n\n"
-            "**Lessons:**\n"
-            "- Constants correct at one scale become bugs at another\n"
-        )
-        lessons = DistillationTriggerHook._extract_lessons(body)
-        assert len(lessons) == 1

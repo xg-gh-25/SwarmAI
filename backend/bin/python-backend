@@ -6,6 +6,15 @@
 # with it fails later and far from here (an eval probe reporting a missing module).
 here="$(cd "$(dirname "$0")/.." && pwd)"
 py="$here/.venv/bin/python"
+# A git worktree of this repo has no venv of its own: use the main checkout's (the
+# directory holding the shared .git). The code run is still this checkout's
+# desktop_main.py, which puts its own directory first on sys.path.
+if [ ! -x "$py" ]; then
+  common="$(git -C "$here" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  if [ -n "$common" ] && [ -x "$(dirname "$common")/backend/.venv/bin/python" ]; then
+    py="$(dirname "$common")/backend/.venv/bin/python"
+  fi
+fi
 if [ ! -x "$py" ]; then
   echo "python-backend: no virtualenv at $here/.venv. Create it: cd \"$here\" && uv venv .venv && uv pip install -e '.[dev]' (a worktree can symlink the main checkout's backend/.venv)." >&2
   exit 127

@@ -57,16 +57,17 @@ class TestArchiveOldDailyActivity:
         assert not old_file.exists()
         assert (ws / "Knowledge" / "Archives" / old_file.name).exists()
 
-    def test_protect_undistilled_file_between_90_and_180_days(self, hook, ws):
-        """Undistilled files between 90-180 days are protected from archival."""
+    def test_archive_undistilled_file_after_90_days(self, hook, ws):
+        """No distilled gate: nothing marks a day distilled after the CDF cutover,
+        so a 100-day-old day without the flag is archived too."""
         da_dir = ws / "Knowledge" / "DailyActivity"
         old_date = datetime.now() - timedelta(days=100)
         old_file = _create_dated_file(da_dir, old_date)
 
         hook._enforce_retention_policies(str(ws))
 
-        # File should NOT be archived — it's undistilled and within the protection window
-        assert old_file.exists()
+        assert not old_file.exists()
+        assert (ws / "Knowledge" / "Archives" / old_file.name).exists()
 
 
 class TestKeepRecentDailyActivity:
@@ -105,12 +106,13 @@ class TestPreserveMemoryArchives:
         assert mem_file.exists()
 
 
-class TestArchiveResolvedOpenThreads:
-    def test_archive_resolved_open_threads(self, hook, ws):
+class TestResolvedOpenThreadsAreReportedNotMoved:
+    def test_resolved_open_threads_are_reported_and_memory_is_untouched(self, hook, ws):
+        """CDF is MEMORY.md's one writer: the retention pass reports a resolved Open
+        Thread older than 7 days and leaves the file byte-identical, no archive."""
         memory_path = ws / ".context" / "MEMORY.md"
         old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
         today_date = datetime.now().strftime("%Y-%m-%d")
-        # Use real unicode characters
         memory_content = (
             "# MEMORY\n\n"
             "## Open Threads\n"
@@ -119,22 +121,11 @@ class TestArchiveResolvedOpenThreads:
         )
         memory_path.write_text(memory_content)
 
-        hook._enforce_retention_policies(str(ws))
+        findings = hook._enforce_retention_policies(str(ws))
 
-        # Resolved entry should be removed from MEMORY.md
-        content = memory_path.read_text()
-        assert "Resolved task" not in content
-        # Active entry should remain
-        assert "Active task" in content
-        # CYCLE 1': archived OT entry lands in the private, gitignored .context/
-        # (sibling of MEMORY.md, via the archive_raw_lines chokepoint) — NOT the
-        # git-tracked Knowledge/Archives/.
-        archive_files = list((ws / ".context").glob("MEMORY-archive-*.md"))
-        assert len(archive_files) >= 1, "OT archive should be created in .context/"
-        assert not list((ws / "Knowledge" / "Archives").glob("MEMORY-archive-*.md")), \
-            "OT archive must NOT land in git-tracked Knowledge/Archives/"
-        archive_content = archive_files[0].read_text()
-        assert "Resolved task" in archive_content
+        assert memory_path.read_text() == memory_content
+        assert not list((ws / ".context").glob("MEMORY-archive-*.md"))
+        assert any("1 resolved Open Threads entry" in f for f in findings), findings
 
 
 class TestKeepUnresolvedOpenThreads:

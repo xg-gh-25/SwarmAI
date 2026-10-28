@@ -45,7 +45,7 @@ _EMERGENCY_THRESHOLD = EFFECTIVE_1M_BUDGET + EMERGENCY_MARGIN
 
 # filename → 4-way owner category (rail display only — NO logic consumes it; a file's
 # editability/lock comes from `truncatable`, not owner). This is the coarse display
-# bucket for the authoritative ownership column in SWARMAI.md § "My 11 Context Files"
+# bucket for the authoritative ownership column in SWARMAI.md § "My 12 Context Files"
 # (the SSOT — NOT KNOWLEDGE.md, which is now just a directory index).
 # NOTE: SELF.md is authoritatively "runtime-owned" in that table (a write-PATH
 # distinction: human/distill writes only), but is INTENTIONALLY bucketed to "system"

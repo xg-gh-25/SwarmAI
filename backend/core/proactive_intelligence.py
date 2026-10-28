@@ -168,7 +168,34 @@ def _parse_open_threads(memory_text: str) -> list[dict]:
     return threads
 
 
-# ---------------------------------------------------------------------------
+def _merge_coe_threads(threads: list[dict], states: dict) -> list[dict]:
+    """Apply the live COE state (core.coe_threads) to the parsed Open Threads (pure).
+
+    A thread whose title has a COE's ``coe_key`` follows that COE: dropped when the COE
+    is resolved, marked ``coe`` when it is open. Every open COE with no thread is added
+    as a P0 item (COEs are P0). Threads matching no COE are untouched.
+    """
+    from core.coe_threads import coe_key
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for t in threads:
+        st = states.get(coe_key(t.get("title", "")))
+        if st is None:
+            out.append(t)
+            continue
+        seen.add(st.key)
+        if st.open:
+            out.append({**t, "coe": True,
+                        "report_count": max(t.get("report_count", 1), st.reports)})
+    added = [
+        {"priority": "P0", "title": st.title, "report_count": max(st.reports, 1),
+         "coe": True}
+        for st in sorted(states.values(), key=lambda s: (s.last, s.key), reverse=True)
+        if st.open and st.key not in seen
+    ]
+    p0_end = next((i for i, t in enumerate(out) if t.get("priority") != "P0"), len(out))
+    return out[:p0_end] + added + out[p0_end:]# ---------------------------------------------------------------------------
 # DailyActivity "Next" / continue_from parser (L0)
 # ---------------------------------------------------------------------------
 
@@ -374,19 +401,11 @@ def _detect_patterns(
     if rebuild_count > 0:
         signals.append(f"{rebuild_count} fix(es) pending rebuild verification")
 
-    # 3. COE Registry items (only unresolved ones)
-    coe_match = re.search(r"## COE Registry\b", memory_text)
-    if coe_match:
-        coe_section = memory_text[coe_match.end():]
-        next_sec = re.search(r"\n## [^#]", coe_section)
-        if next_sec:
-            coe_section = coe_section[:next_sec.start()]
-        investigating = sum(
-            1 for line in coe_section.splitlines()
-            if "Investigating" in line and "\u2705" not in line and "Resolved" not in line
-        )
-        if investigating > 0:
-            signals.append(f"{investigating} COE(s) still under investigation")
+    # 3. Open COEs — counted from the threads the COE state marked (coe_threads),
+    #    not from the registry's status text, which nothing updates after the cutover.
+    investigating = sum(1 for t in threads if t.get("coe"))
+    if investigating > 0:
+        signals.append(f"{investigating} COE(s) still under investigation")
 
     # 4. Uncommitted work — check for "need git commit" in memory
     if re.search(r"need[s]?\s+(?:git\s+)?commit", memory_text, re.IGNORECASE):
@@ -688,13 +707,20 @@ def build_session_briefing(
 
         # -- Parse components --
         threads = _parse_open_threads(memory_text)
+        # Open COEs are live state rendered from the COE Registry + undistilled
+        # DailyActivity signals (core.coe_threads), never written into Open Threads.
+        from core.coe_threads import coe_states
+        try:
+            threads = _merge_coe_threads(threads, coe_states(workspace))
+        except Exception:  # noqa: BLE001 — briefing never fails on COE state
+            logger.warning("briefing: COE state unavailable", exc_info=True)
         continue_hints = _parse_continue_hints(daily_dir)
         signals = _detect_patterns(threads, daily_dir, memory_text)
 
         # Deliverables are read once and used to drop continue-hints that are
         # already done. Open Threads are not filtered by them: matching a thread
         # title against deliverable lines by word overlap hid real threads and
-        # closed none, so a thread closes only on its COE resolution (distillation).
+        # closed none, so a thread closes only on its COE resolution (core.coe_threads).
         deliverables = _extract_recent_deliverables(daily_dir)
 
         # -- L3: Update learning state from previous session --

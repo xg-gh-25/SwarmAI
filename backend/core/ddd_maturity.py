@@ -348,45 +348,9 @@ def evaluate_demotion(state: MaturityState, health_score: int = 50) -> Optional[
 def promote_section(
     project_dir: Path, doc_name: str, section_name: str, new_level: str
 ) -> bool:
-    """Promote a section's maturity level in the actual .md file.
+    """Retired in CDF stage B; maturity annotations are read-only."""
+    return False
 
-    Reads the doc, updates the annotation, writes back.
-    Returns True on success. Returns False for invalid level.
-    """
-    if new_level not in LEVELS:
-        return False
-
-    doc_path = ddd_path(project_dir, doc_name)
-    if not doc_path.is_file():
-        return False
-
-    # SHARED doc-write lock (run_06350217): this read-modify-write of a DDD doc must
-    # hold the SAME <doc>.md.lock every other writer (apply_to_ddd / orchestrator
-    # decay·auto-apply·llm / retire) uses, or a maturity promotion silently clobbers
-    # a concurrent append/strip. Non-blocking: a promotion is idempotent + retried on
-    # the next health-check, so skip (return False) if another writer holds it.
-    from utils.file_lock import md_lock
-    try:
-        with md_lock(doc_path, blocking=False) as _got:
-            if not _got:
-                return False  # another writer holds the doc — retry next health-check
-            content = doc_path.read_text(encoding="utf-8")
-
-            states = parse_maturity(content)
-            if section_name not in states:
-                return False
-
-            state = states[section_name]
-            state.level = new_level
-            state.last_promoted = datetime.now(timezone.utc)
-            state.days_at_level = 0  # Reset on promotion
-
-            updated = inject_maturity(content, {section_name: state})
-            doc_path.write_text(updated, encoding="utf-8")
-    except OSError:
-        return False
-
-    return True
 
 
 def evaluate_all_promotions(project_dir: Path) -> list[dict]:
@@ -474,69 +438,6 @@ def compute_evidence_from_changelog(project_dir: Path) -> dict[tuple[str, str], 
 
 
 def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
-    """Update maturity evidence in DDD docs from changelog data.
-
-    Scans changelog for distinct source_stages per section,
-    updates source_count AND refreshes days_at_level from last_promoted.
-
-    Returns {"updated": N, "unchanged": M} counts.
-    """
+    """Report observed changelog-backed sections without editing annotations."""
     evidence = compute_evidence_from_changelog(project_dir)
-
-    updated = 0
-    unchanged = 0
-
-    # Process ALL DDD docs (not just those with changelog evidence)
-    # because days_at_level needs refreshing for ALL sections.
-    now = datetime.now(timezone.utc)
-
-    # SHARED doc-write lock (run_06350217): each doc's read-modify-write must hold the
-    # SAME <doc>.md.lock every other DDD-doc writer uses. Non-blocking per doc — a
-    # maturity refresh is idempotent + retried next health-check, so skip a doc held
-    # by another writer rather than block the health-check loop.
-    from utils.file_lock import md_lock
-    for doc_name in DDD_CANONICAL_DOCS:
-        doc_path = ddd_path(project_dir, doc_name)
-        if not doc_path.is_file():
-            continue
-
-        try:
-            with md_lock(doc_path, blocking=False) as _got:
-                if not _got:
-                    continue  # another writer holds this doc — skip, retry next run
-                content = doc_path.read_text(encoding="utf-8")
-
-                states = parse_maturity(content)
-                if not states:
-                    continue
-
-                changed = False
-
-                for section_name, state in states.items():
-                    # Update source_count from changelog evidence
-                    key = (doc_name, section_name)
-                    if key in evidence:
-                        new_count = evidence[key]["source_count"]
-                        if state.source_count != new_count:
-                            state.source_count = new_count
-                            changed = True
-                            updated += 1
-                        else:
-                            unchanged += 1
-
-                    # Fix #2: Refresh days_at_level from last_promoted timestamp
-                    if state.last_promoted:
-                        computed_days = (now - state.last_promoted).days
-                        if state.days_at_level != computed_days:
-                            state.days_at_level = computed_days
-                            changed = True
-
-                if changed:
-                    new_content = inject_maturity(content, states)
-                    # PE-1: Only write if content actually differs — prevents daily git churn
-                    if new_content != content:
-                        doc_path.write_text(new_content, encoding="utf-8")
-        except OSError:
-            continue
-
-    return {"updated": updated, "unchanged": unchanged}
+    return {"updated": 0, "unchanged": len(evidence)}

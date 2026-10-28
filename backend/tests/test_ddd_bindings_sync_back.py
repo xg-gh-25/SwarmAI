@@ -136,7 +136,9 @@ def test_pull_is_hitl_no_git_call(tmp_path, monkeypatch):
     monkeypatch.setattr(_sp, "check_output", _boom)
     b, wt, ws, _ = _setup(tmp_path, "x\ny\n", "x\n")
     out = sync_back(b, wt, ws, now_iso="2026-07-12T00:00:00Z")
-    assert out["pull_command"].startswith("git -C ") and out["pull_command"].endswith(" pull")
+    assert out["pull_command"].startswith("git -C ")
+    assert " pull && " in out["pull_command"]
+    assert '"${SWARM_BACKEND_BIN:?}" ingest sync-record' in out["pull_command"]
 
 
 # ── path traversal guard (Gate-1 must-fix) ───────────────────────────────────

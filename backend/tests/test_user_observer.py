@@ -295,9 +295,3 @@ def test_suggest_updates_max_two(observer: UserObserver):
 # Hook protocol
 # ---------------------------------------------------------------------------
 
-def test_hook_protocol():
-    """UserObserverHook satisfies SessionLifecycleHook protocol."""
-    from hooks.user_observer_hook import UserObserverHook
-    hook = UserObserverHook()
-    assert isinstance(hook, SessionLifecycleHook)
-    assert hook.name == "user-observer"

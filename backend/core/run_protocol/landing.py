@@ -724,6 +724,8 @@ def execute_request(
             payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
                      "detail": str(exc)[:300], "auth_consumed_event_id": consumed["event_id"],
                      **({"unsettled": list(exc.unsettled)} if exc.unsettled else {})})
+        from core.run_protocol.provenance import sync_run_evidence
+        sync_run_evidence(store)
         raise
     if not any(event.get("kind") == "land" and
                event.get("payload", {}).get("auth_consumed_event_id") == consumed["event_id"]
@@ -737,4 +739,6 @@ def execute_request(
                         if getattr(commits, "unsettled", None) else {}),
                      "auth_consumed_event_id": consumed["event_id"]},
         )
+    from core.run_protocol.provenance import sync_run_evidence
+    sync_run_evidence(store)
     return commits

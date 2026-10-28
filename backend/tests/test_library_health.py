@@ -34,6 +34,23 @@ from core.library_health import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _governed_writer(monkeypatch):
+    from core.ingestion import api
+
+    monkeypatch.setattr(api, "revision_of", lambda path: "revision")
+
+    def apply(path, data, *, expected_revision, actor="user"):
+        assert expected_revision == "revision"
+        if data is None:
+            path.unlink()
+            return ""
+        path.write_bytes(data)
+        return "next"
+
+    monkeypatch.setattr(api, "apply_user_edit", apply)
+
+
 def _write(p: Path, content: str = "x" * 500, age_days: float = 0) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
@@ -111,14 +128,14 @@ def test_curated_categories_not_archived(kdir: Path):
     assert f is None  # Notes is curated, not a raw-log category
 
 
-# ── 6. archive moves to Archives/ (reversible) ───────────────────────────────
-def test_archive_moves_to_archives(kdir: Path):
+# ── 6. archive is reported but not moved without a governed file-move API ─────
+def test_archive_move_is_refused_without_mutation(kdir: Path):
     src = _write(kdir / "DailyActivity" / "2026-01-01.md", age_days=OLD_LOG_DAYS + 5)
     result = apply_action(kdir, "archive_old_logs", ["DailyActivity/2026-01-01.md"])
-    assert result["status"] == "success"
-    assert result["applied"] == 1
-    assert not src.exists()  # moved out
-    assert (kdir / ARCHIVE_DIR / "DailyActivity" / "2026-01-01.md").is_file()  # landed
+    assert result["status"] == "partial"
+    assert result["applied"] == 0
+    assert src.exists()
+    assert any("governed archive move is unavailable" in error for error in result["errors"])
 
 
 # ── 7. delete requires confirm ───────────────────────────────────────────────
@@ -154,27 +171,16 @@ def test_stale_path_skipped(kdir: Path):
     assert result["errors"] == []
 
 
-# ── 10. archive collision never clobbers (HIGH fix — unique-name loop) ────────
-def test_archive_collision_never_clobbers(kdir: Path):
-    # A file already sits in Archives/ at the exact dest path AND shares mtime with
-    # the incoming file — the mtime-suffix alone would collide; the loop must find
-    # a free name and preserve BOTH files.
+# ── 10. archive refusal preserves both source and existing archive ───────────
+def test_archive_refusal_never_clobbers(kdir: Path):
     existing = _write(kdir / ARCHIVE_DIR / "DailyActivity" / "2026-01-01.md",
                       content="ARCHIVED-ORIGINAL")
     src = _write(kdir / "DailyActivity" / "2026-01-01.md",
                  content="INCOMING", age_days=OLD_LOG_DAYS + 5)
-    # force src to share existing's exact mtime → the mtime-suffix alone would collide
-    est = existing.stat()
-    os.utime(src, (est.st_atime, est.st_mtime))
     result = apply_action(kdir, "archive_old_logs", ["DailyActivity/2026-01-01.md"])
-    assert result["applied"] == 1
-    assert not src.exists()
-    # original archived file is INTACT (never overwritten)
+    assert result["applied"] == 0
+    assert src.read_text() == "INCOMING"
     assert existing.read_text() == "ARCHIVED-ORIGINAL"
-    # incoming landed under a distinct name
-    archived = list((kdir / ARCHIVE_DIR / "DailyActivity").glob("2026-01-01*.md"))
-    assert len(archived) == 2
-    assert any(p.read_text() == "INCOMING" for p in archived)
 
 
 # ── 11. old AND tiny file listed ONCE (MEDIUM fix — no double-list) ───────────

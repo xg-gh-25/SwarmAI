@@ -168,6 +168,15 @@ def test_agent_bash_call_to_the_decision_endpoint_is_denied():
     assert "answered by a person" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_agent_bash_call_to_the_cdf_redact_endpoint_is_denied():
+    """CDF §13: a tombstone is the person's action only; an agent's Bash call is denied."""
+    command = ("curl -s -X POST http://127.0.0.1:18321/api/ingestion/redact "
+               "-H 'X-Swarm-User-Action: redact' -d '{\"anchor\":\"cand:x\",\"reason\":\"r\"}'")
+    result = gate._decide(OWNER, command, {"command": command})
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "person's action" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 # ── stop and resume ─────────────────────────────────────────────────────────
 
 def test_stop_pauses_active_and_resume_reactivates(run):

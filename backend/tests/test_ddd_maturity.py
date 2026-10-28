@@ -338,60 +338,46 @@ class TestEvidenceAccumulation:
         result = compute_evidence_from_changelog(tmp_path)
         assert result == {}
 
-    def test_update_evidence_writes_to_doc(self, tmp_path):
+    def test_update_evidence_reports_without_editing_doc(self, tmp_path):
         from core.ddd_maturity import update_evidence_from_changelog
 
-        # Create TECH.md with sparse annotation
         tech = tmp_path / "TECH.md"
         tech.write_text(
             "## Architecture\n"
             "<!-- maturity: sparse | sources: 0 | verified: false | used: false | days: 5 | promoted: none -->\n\n"
-            "Content.\n",
-            encoding="utf-8",
-        )
-
-        # Create changelog with 3 distinct sources
+            "Content.\n", encoding="utf-8")
         artifacts = tmp_path / ".artifacts"
         artifacts.mkdir()
-        changelog = artifacts / "ddd-changelog.jsonl"
         entries = [
-            {"target_doc": "TECH.md", "target_section": "Architecture", "source_stage": "reflect"},
-            {"target_doc": "TECH.md", "target_section": "Architecture", "source_stage": "correction"},
-            {"target_doc": "TECH.md", "target_section": "Architecture", "source_stage": "decision"},
+            {"target_doc": "TECH.md", "target_section": "Architecture", "source_stage": source}
+            for source in ("reflect", "correction", "decision")
         ]
-        changelog.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
+        (artifacts / "ddd-changelog.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in entries), encoding="utf-8")
+        before = tech.read_bytes()
 
         result = update_evidence_from_changelog(tmp_path)
-        assert result["updated"] == 1
 
-        # Verify the file was updated
-        updated_content = tech.read_text(encoding="utf-8")
-        states = parse_maturity(updated_content)
-        assert states["Architecture"].source_count == 3
+        assert result == {"updated": 0, "unchanged": 1}
+        assert tech.read_bytes() == before
 
-    def test_days_at_level_refreshed_from_last_promoted(self, tmp_path):
-        """Fix #2: days_at_level must be computed from last_promoted, not stored stale."""
+    def test_days_at_level_are_observed_without_refreshing_doc(self, tmp_path):
+        """Stage B never refreshes maturity annotations in place."""
         from core.ddd_maturity import update_evidence_from_changelog
         from datetime import timedelta
 
-        # Section promoted 35 days ago — stored days=0 (stale)
         promoted_date = (datetime.now(timezone.utc) - timedelta(days=35)).strftime("%Y-%m-%d")
         tech = tmp_path / "TECH.md"
         tech.write_text(
             f"## Architecture\n"
             f"<!-- maturity: growing | sources: 4 | verified: true | used: true | days: 0 | promoted: {promoted_date} -->\n\n"
-            f"Content.\n",
-            encoding="utf-8",
-        )
-        # Need artifacts dir (even if empty changelog)
+            f"Content.\n", encoding="utf-8")
         (tmp_path / ".artifacts").mkdir()
+        before = tech.read_bytes()
 
-        update_evidence_from_changelog(tmp_path)
-
-        # days_at_level should now be ~35
-        updated = tech.read_text(encoding="utf-8")
-        states = parse_maturity(updated)
-        assert states["Architecture"].days_at_level >= 34  # allow 1 day tolerance
+        assert update_evidence_from_changelog(tmp_path) == {"updated": 0, "unchanged": 0}
+        assert tech.read_bytes() == before
+        assert parse_maturity(tech.read_text(encoding="utf-8"))["Architecture"].days_at_level == 0
 
     def test_maturity_promotion_excluded_from_source_count(self, tmp_path):
         """Fix #3: maturity_promotion entries don't inflate source_count."""
@@ -438,25 +424,19 @@ class TestPromotionExecution:
         assert promotions[0]["from_level"] == "sparse"
         assert promotions[0]["to_level"] == "growing"
 
-    def test_promote_section_writes_file(self, tmp_path):
+    def test_promote_section_is_read_only(self, tmp_path):
         from core.ddd_maturity import promote_section
 
         tech = tmp_path / "TECH.md"
         tech.write_text(
             "## Architecture\n"
             "<!-- maturity: sparse | sources: 2 | verified: true | used: false | days: 10 | promoted: none -->\n\n"
-            "Content.\n",
-            encoding="utf-8",
-        )
+            "Content.\n", encoding="utf-8")
+        before = tech.read_bytes()
 
-        result = promote_section(tmp_path, "TECH.md", "Architecture", "growing")
-        assert result is True
-
-        # Verify file updated
-        updated = tech.read_text(encoding="utf-8")
-        states = parse_maturity(updated)
-        assert states["Architecture"].level == "growing"
-        assert states["Architecture"].days_at_level == 0  # Reset on promotion
+        assert promote_section(tmp_path, "TECH.md", "Architecture", "growing") is False
+        assert tech.read_bytes() == before
+        assert parse_maturity(tech.read_text(encoding="utf-8"))["Architecture"].level == "sparse"
 
     def test_promote_section_nonexistent_doc(self, tmp_path):
         from core.ddd_maturity import promote_section

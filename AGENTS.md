@@ -25,7 +25,7 @@ distinction is load-bearing for anyone editing this repo:
   This is why so much of `backend/core/` looks like "guardrails around an LLM" — that
   *is* the product.
 - **Value compounds across sessions.** Sessions are discontinuous; intelligence
-  shouldn't be. Post-session hooks fire *between* runs (distillation, evolution,
+  shouldn't be. Post-session hooks fire *between* runs (ingestion, evolution,
   context-health, cultivation), so the next session starts warmer than the last. Code
   that runs after a session ends is not an afterthought here — it's the mechanism.
 - **A recurring error class gets a structural fix.** When the same mistake shows up
@@ -99,7 +99,7 @@ backend/
 │   ├── session_router.py      # Multi-session routing, dynamic slot management (1-4 tabs via RAM)
 │   ├── session_unit.py        # 5 states: COLD, IDLE, STREAMING, WAITING_INPUT, DEAD (flow: COLD→STREAMING→IDLE, STREAMING↔WAITING_INPUT)
 │   ├── streaming_orchestrator.py # SDK response streaming, SSE event formatting, liveness
-│   ├── prompt_builder.py      # System prompt assembly from 11 context files + MCP tier loading
+│   ├── prompt_builder.py      # System prompt assembly from 12 context files + MCP tier loading
 │   ├── context_directory_loader.py # Loads/orders/budgets the governed context files
 │   ├── lifecycle_manager.py   # 24h idle TTL, orphan reaper, hook enqueue chokepoint
 │   ├── session_healing.py     # HealthSensor + HealingLoop — invisible auto-respawn
@@ -108,12 +108,12 @@ backend/
 │   └── ...                    # code_intel, embedding, knowledge, memory, cultivation, evolution
 ├── database/sqlite.py         # SQLite + WAL + FTS5 + migrations
 ├── utils/file_lock.py         # Cross-platform flock (fcntl/msvcrt) — USE THIS, not raw fcntl
-├── hooks/                     # Post-session hooks (context health, evolution, distillation, etc.)
+├── hooks/                     # Post-session hooks (context health, evolution, ingestion kick, etc.)
 ├── routers/                   # API endpoints
 ├── channels/                  # Slack adapter, channel gateway
 ├── skills/                    # built-in skills (SKILL.md + INSTRUCTIONS.md each)
 ├── jobs/                      # Background job scheduler + handlers
-└── scripts/                   # CLI tools (locked_write.py, verify_build.py, ci_eval_gate.py, etc.)
+└── scripts/                   # CLI tools (verify_build.py, ci_eval_gate.py, etc.)
 ```
 
 ### Frontend Structure
@@ -150,7 +150,7 @@ All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, 
 git-tracked, human-readable. This is the OS's memory; the design goal is that a human can
 `git diff` how the system's judgment changed.
 
-11 source files across 10 priority slots (SOUL and SELF share P2) are assembled into the
+12 source files across 11 priority slots (SOUL and SELF share P2) are assembled into the
 system prompt on every session start, in priority order (the source of truth is
 `CONTEXT_FILES` in `backend/core/context_directory_loader.py`):
 
@@ -162,22 +162,30 @@ system prompt on every session start, in priority order (the source of truth is
 - **P4–P6 (USER, STEERING, TOOLS):** user-customized, copy-only-if-missing (0o644).
 - **P7–P8 (MEMORY, EVOLUTION):** agent-owned cross-session cognition, copy-only-if-missing (0o644).
 - **P9 (KNOWLEDGE):** user-customized domain knowledge, copy-only-if-missing (0o644).
+- **P10 (TIMELINE):** private append-only episodic memory, copy-only-if-missing (0o644);
+  whole-unit selection within a 1.5K-token budget.
 
 Key behaviors:
 - `ContextDirectoryLoader.ensure_directory()` runs at session start — two-mode copy
   (system files overwrite; user/agent files preserve).
 - Dynamic token budget: **150K for ≥500K** models, 50K for ≥200K, 30K for ≥64K, instance
-  default for <64K (L0 compact path). The read-line NEVER truncates — on budget overshoot it
-  only emits an `over_budget` WARNING and returns full content (`_truncate_section` was
-  deleted 2026-08-14). Size is bounded UPSTREAM by the write-side valve (MEMORY distillation +
-  size-valve archival), not by injection-time truncation.
-- L1 cache with budget-tier validation (`<!-- budget:NNNNN -->` header) and git-first
+  default for <64K (L0 compact path). Generic assembly never slices text. MEMORY and
+  EVOLUTION instead select complete units within deterministic 24K/8K caps without changing
+  either source file; meta-cognitive units remain whole, and omitted units remain recallable.
+- Selection is independent of the user query. It is recomputed only when the file hash changes
+  or at a UTC day boundary, persisted in `ingestion.db`, and included in the L1 cache header.
+  Within a day, identical source bytes produce identical fixed-layer prompt bytes.
+- L1 cache with budget-tier and rendering-layout validation (`<!-- budget:NNNNN;… -->` header) and git-first
   freshness check.
-- The `truncatable`/`direction` fields on `ContextFileSpec` are legacy metadata and inert:
-  nothing truncates at read time.
-- DailyActivity: the 2 most recent files loaded ephemerally (2K token cap per file, disk
-  never modified).
-- `locked_write.py`: fcntl.flock for safe MEMORY.md modification by skills.
+- In USER / STEERING / TOOLS, user-written text keeps its normal priority; CDF-extracted
+  rules render from `## 系统追加（自动提取）` with priority below SWARMAI / IDENTITY / SOUL / AGENT.
+- The `truncatable`/`direction` fields on `ContextFileSpec` are legacy metadata and inert.
+  They never slice content; MEMORY, EVOLUTION, and TIMELINE use explicit whole-unit selectors.
+- DailyActivity: today/yesterday inject complete session rows; days 3–7 inject complete
+  day-summary blocks. Whole units are admitted into a 4K-token budget, resolved Next IDs
+  are excluded, and omitted sessions are counted.
+- Writes: CDF's ingestion writer is the only autonomous writer of MEMORY / EVOLUTION / the
+  user context files / DDD docs; skills submit units with `ingest submit`.
 - Memory is **sovereign** — self-owned in `.context/MEMORY.md`, never delegated to a
   provider's memory feature. Recall is pure-filesystem keyword/FTS5/BM25 (no vector DB).
 - Auto-commit: `WorkspaceAutoCommitHook` commits the workspace at **session close**
@@ -208,7 +216,7 @@ The "OS disposes" layer: a family of PreToolUse hooks registered per session in
 `backend/core/hook_builder.py` (`build_hooks`, the source of truth for the list and order;
 implementations in `security_hooks.py`). By category:
 
-1. **Observability** — `pre_tool_logger`: logs every tool invocation; never blocks.
+1. **Observability** — `pre_tool_logger`: logs every tool invocation; never blocks. `cdf_usage_observer` asynchronously records exact governed units reached by Read/Grep; it injects and denies nothing.
 2. **Hang prevention (Bash)** — `background_command_guard` (default-deny backgrounding),
    `bash_syntax_guard` (`bash -n` parse check). No gate touches test commands:
    `pytest_command_guard` and the `test_command_gate` group (`pipeline_test_gate`) were

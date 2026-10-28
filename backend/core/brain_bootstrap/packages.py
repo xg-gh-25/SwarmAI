@@ -13,12 +13,15 @@ neither walk the disk nor make git run anything.
 """
 from __future__ import annotations
 
+import logging
 import fnmatch
 import json
 from collections import Counter
 from pathlib import Path
 
 from .repo_read import is_skipped_dir, list_files, load_yaml, safe_read_text
+
+logger = logging.getLogger(__name__)
 
 LANG_EXTENSIONS = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".tsx": "typescript",
@@ -116,7 +119,8 @@ def _pnpm(root: Path, files: list[str]) -> list[Path]:
         return []
     try:
         data = load_yaml(safe_read_text(root, "pnpm-workspace.yaml") or "")
-    except Exception:  # noqa: BLE001 — a malformed manifest contributes nothing
+    except Exception as exc:  # noqa: BLE001 — a malformed manifest contributes nothing
+        logger.debug("survey: pnpm-workspace.yaml unreadable: %s", exc)
         return []
     pkgs = data.get("packages") if isinstance(data, dict) else None
     return _expand(root, pkgs if isinstance(pkgs, list) else [], files)
@@ -134,7 +138,8 @@ def _cargo(root: Path, files: list[str]) -> list[Path]:
     try:
         import tomllib
         data = tomllib.loads(safe_read_text(root, "Cargo.toml") or "")
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — a malformed manifest contributes nothing
+        logger.debug("survey: Cargo.toml unreadable: %s", exc)
         return []
     ws = data.get("workspace") if isinstance(data, dict) else None
     members = ws.get("members") if isinstance(ws, dict) else None
@@ -175,7 +180,8 @@ def detect_packages(repo_root: str | Path, files: list[str] | None = None) -> li
     for label, reader in _READERS.items():
         try:
             dirs = reader(root, files)
-        except Exception:  # noqa: BLE001 — one malformed manifest must not stop the rest
+        except Exception as exc:  # noqa: BLE001 — one malformed manifest must not stop the rest
+            logger.debug("survey: %s manifest unreadable: %s", label, exc)
             dirs = []
         for d in dirs:
             if d != root:

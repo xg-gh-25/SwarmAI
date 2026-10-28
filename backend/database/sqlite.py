@@ -2103,7 +2103,9 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 13 — drop transcript_chunks / transcript_fts
 # 14 — send_requests: one row per send (client_id), the idempotency ledger (2026-10-22)
 # 15 — transcript revisions: session_revs + transcript_revs, kept by triggers (2026-10-23)
-CURRENT_SCHEMA_VERSION = 15
+# 16 — session_inputs: append-only provenance ledger for CDF (2026-10-27)
+# 17 — session_inputs.root_id + measured trust for CDF v2 (2026-10-27)
+CURRENT_SCHEMA_VERSION = 17
 
 
 # ── Transcript feed (core/transcript_feed) ─────────────────────────────────
@@ -2272,6 +2274,20 @@ class SQLiteDatabase(BaseDatabase):
     -- 12k rows); with it, an index-only SEARCH (~100ms). role FIRST so role='user'
     -- is the index seek prefix.
     CREATE INDEX IF NOT EXISTS idx_messages_role_session ON messages(role, session_id);
+
+    -- Immutable provenance ledger for Cognitive Distillation Flow sources.
+    CREATE TABLE IF NOT EXISTS session_inputs (
+        event_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        trust TEXT NOT NULL CHECK (trust IN ('user', 'external', 'agent', 'measured')),
+        content_hash TEXT NOT NULL,
+        ref TEXT,
+        root_id TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_inputs_session_created
+        ON session_inputs(session_id, created_at);
 
     -- Users table (for local single-user, may only have one record)
     CREATE TABLE IF NOT EXISTS users (
@@ -3401,6 +3417,87 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration v15: transcript revisions")
 
+        if current_version < 16:
+            # Version 16: immutable input-event provenance used by CDF. Keep the
+            # DDL and version bump in one explicit transaction: a failed CREATE
+            # must leave user_version behind so startup retries it.
+            await conn.execute("BEGIN")
+            try:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS session_inputs (
+                        event_id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        trust TEXT NOT NULL CHECK (trust IN ('user', 'external', 'agent', 'measured')),
+                        content_hash TEXT NOT NULL,
+                        ref TEXT,
+                        root_id TEXT,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                await conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_session_inputs_session_created "
+                    "ON session_inputs(session_id, created_at)"
+                )
+                cursor = await conn.execute("PRAGMA user_version")
+                if (await cursor.fetchone())[0] >= 15:
+                    await conn.execute("PRAGMA user_version = 16")
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            logger.info("Migration v16: session input provenance ledger")
+
+
+        if current_version < 17 and (
+                await (await conn.execute("PRAGMA user_version")).fetchone())[0] >= 16:
+            # Version 17: every session input points at its immutable evidence root,
+            # and structured measurements use the already-supported measured trust.
+            columns = await (await conn.execute(
+                "PRAGMA table_info(session_inputs)")).fetchall()
+            names = {row[1] for row in columns}
+            schema_row = await (await conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='session_inputs'"
+            )).fetchone()
+            schema_sql = str(schema_row[0] if schema_row else "")
+            if "root_id" not in names or "'measured'" not in schema_sql:
+                await conn.execute("BEGIN")
+                try:
+                    await conn.execute("ALTER TABLE session_inputs RENAME TO session_inputs_v16")
+                    await conn.execute("DROP INDEX IF EXISTS idx_session_inputs_session_created")
+                    await conn.execute("""
+                        CREATE TABLE session_inputs (
+                            event_id TEXT PRIMARY KEY,
+                            session_id TEXT NOT NULL,
+                            kind TEXT NOT NULL,
+                            trust TEXT NOT NULL CHECK (
+                                trust IN ('user', 'external', 'agent', 'measured')),
+                            content_hash TEXT NOT NULL,
+                            ref TEXT,
+                            root_id TEXT,
+                            created_at TEXT NOT NULL
+                        )
+                    """)
+                    root_expr = "root_id" if "root_id" in names else "NULL"
+                    await conn.execute(
+                        "INSERT INTO session_inputs(event_id,session_id,kind,trust,content_hash,"
+                        "ref,root_id,created_at) SELECT event_id,session_id,kind,trust,content_hash,"
+                        f"ref,{root_expr},created_at FROM session_inputs_v16"
+                    )
+                    await conn.execute("DROP TABLE session_inputs_v16")
+                    await conn.execute(
+                        "CREATE INDEX idx_session_inputs_session_created "
+                        "ON session_inputs(session_id, created_at)"
+                    )
+                    await conn.execute("PRAGMA user_version = 17")
+                    await conn.commit()
+                except Exception:
+                    await conn.rollback()
+                    raise
+            else:
+                await conn.execute("PRAGMA user_version = 17")
+                await conn.commit()
+            logger.info("Migration v17: session input evidence roots")
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
 

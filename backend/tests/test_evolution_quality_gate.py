@@ -1,14 +1,10 @@
-"""Tests for the EVOLUTION.md quality gate in EvolutionMaintenanceHook.
+"""Tests for Stage-B read-only EVOLUTION maintenance.
 
-TDD tests for _quality_gate():
-1. Garbage competence (<20 chars) is removed
-2. Commit-hash-only competence is removed
-3. Valid competence is NOT removed
-4. Duplicate correction IDs are renumbered (second C011 -> C012)
-5. Changes are logged to changelog
+Legacy cleanup candidates such as short competence text, commit-shaped entries,
+and duplicate IDs are observed but never rewritten, removed, renumbered, or logged
+as mutations. Existing valid entries remain byte-identical as well.
 """
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -93,11 +89,12 @@ class TestQualityGateGarbageCompetence:
             {"id": "K001", "date": _days_ago(5), "desc": "short"},
         ]))
 
+        before = evo.read_bytes()
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
 
-        content = evo.read_text()
-        assert "K001" not in content, "Short competence (<20 chars) should be removed"
+        assert evo.read_bytes() == before
+        assert "K001" in evo.read_text(), "Stage B must not remove baseline competence entries"
 
 
 class TestQualityGateCommitHashCompetence:
@@ -116,11 +113,12 @@ class TestQualityGateCommitHashCompetence:
             {"id": "K001", "date": _days_ago(5), "desc": "abc1234 some commit hash entry that is long enough"},
         ]))
 
+        before = evo.read_bytes()
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
 
-        content = evo.read_text()
-        assert "K001" not in content, "Commit-hash-starting competence should be removed"
+        assert evo.read_bytes() == before
+        assert "K001" in evo.read_text(), "Stage B must not rewrite existing EVOLUTION entries"
 
 
 class TestQualityGateValidCompetence:
@@ -166,12 +164,14 @@ class TestQualityGateDuplicateCorrections:
             ],
         ))
 
+        before = evo.read_bytes()
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
 
         content = evo.read_text()
-        assert "C011" in content, "First C011 should remain"
-        assert "C012" in content, "Second duplicate C011 should be renumbered to C012"
+        assert evo.read_bytes() == before
+        assert content.count("### C011") == 2
+        assert "C012" not in content
 
 
 class TestQualityGateChangelog:
@@ -191,11 +191,9 @@ class TestQualityGateChangelog:
             {"id": "K002", "date": _days_ago(5), "desc": "The locked_write pattern uses fcntl for atomic file operations"},
         ]))
 
+        before = evo.read_bytes()
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
 
-        log_lines = [l for l in changelog.read_text().strip().split("\n") if l.strip()]
-        assert len(log_lines) >= 1, "At least one changelog entry for garbage removal"
-        entry = json.loads(log_lines[0])
-        assert entry["action"] == "quality_gate_remove"
-        assert entry["id"] == "K001"
+        assert evo.read_bytes() == before
+        assert changelog.read_text() == ""

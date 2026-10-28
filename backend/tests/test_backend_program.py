@@ -94,6 +94,25 @@ def test_dev_shim_without_a_venv_stops_instead_of_using_another_python(tmp_path)
     assert ".venv" in r.stderr and "uv venv" in r.stderr
 
 
+def test_dev_shim_in_a_git_worktree_uses_the_main_checkouts_venv(tmp_path):
+    """A worktree has no venv of its own: the shim uses the main checkout's (found from
+    the shared git dir) and still runs the worktree's own desktop_main.py."""
+    main = tmp_path / "main"
+    shim_main = _shim_copy(main, venv=True)
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", str(main)], check=True)
+    (main / ".gitignore").write_text(".venv/\n")
+    subprocess.run([*git, "-C", str(main), "add", "-A"], check=True)
+    subprocess.run([*git, "-C", str(main), "commit", "-qm", "x"], check=True)
+    wt = tmp_path / "wt"
+    subprocess.run([*git, "-C", str(main), "worktree", "add", "-q", str(wt)], check=True)
+    shim = wt / "backend" / "bin" / "python-backend"
+    assert not (wt / "backend" / ".venv").exists() and shim.exists()
+    r = subprocess.run([str(shim), "py", "-c", "x"], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == f"venv {wt / 'backend' / 'desktop_main.py'} py -c x"
+    assert shim_main.exists()
+
 def test_backend_bin_packaged_and_dev(monkeypatch, tmp_path):
     from utils import backend_bin as bb
     assert bb.python_argv() == [sys.executable]

@@ -29,7 +29,9 @@ For a ``pipeline_v1.py`` command:
   recorded the person's approval for this exact command: the gate takes the run over
   if needed and writes the ``auth`` event from the run's ``land_request``
   (``_record_approval``).
-- a Bash call to the human-only ``/api/pipelines/<id>/decision`` is denied.
+- a Bash call to the human-only ``/api/pipelines/<id>/decision`` is denied, and so is
+  one to the user-only CDF redaction ``/api/ingestion/redact`` (CDF §13 tombstone: only
+  the person triggers it, from the Flow view).
 
 Fail-open on its own errors (never blocks a command because the gate broke).
 Public: ``create_run_owner_gate``, ``parse_cli_calls``, ``AFTER_APPROVAL``.
@@ -58,6 +60,8 @@ _TAKEOVER = frozenset({
 _V1_MUTATIONS = frozenset({"create", *_TAKEOVER})
 # The daemon's human-only pipeline endpoint (docs/design/pipeline-v1-human-loop.md).
 _HUMAN_ONLY_API_RE = re.compile(r"/api/pipelines/[^\s/'\"]+/decision\b")
+# The user-only CDF tombstone endpoint (CDF design §13; routers/ingestion_redact.py).
+_USER_ONLY_REDACT_RE = re.compile(r"/api/ingestion/redact\b")
 # Actions the person approves first: handled by the
 # phase="approved" registration, after dangerous_command_gate.
 AFTER_APPROVAL = frozenset({"run-land", "accept-finding", "discard-snapshot"})
@@ -349,6 +353,10 @@ def _decide(sid: str, command: str, tool_input: dict,
         return _deny("a pipeline decision is answered by a person (the chat question card "
                      "or the dashboard), never by a command. Ask with AskUserQuestion using "
                      "the run's ask_user_question payload, then wait for the answer.")
+    if _USER_ONLY_REDACT_RE.search(command or ""):
+        return _deny("withdrawing written knowledge is the person's action (the Flow view's "
+                     "撤回 button), never a command. Tell the user which unit you think should "
+                     "be withdrawn and why; they decide.")
     calls, _single = parse_cli_calls(command)
     for c in calls:
         c["cwd"] = cwd

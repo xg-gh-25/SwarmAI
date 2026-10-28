@@ -7,14 +7,13 @@ Contract: scripts/_probe_kit.py. Subcommands:
               erroring) is deferred to pending, never dropped
   floors      without any network, the deterministic floors still keep out a too-
               short entry, a governance rule and an entry aimed at the wrong store
-  ddd_archive a project-doc proposal that is not admitted lands in a recoverable
-              archive file, not nowhere
+  ddd_archive cultivation candidates enqueue with provenance and never write DDD or
+              source-side archive files (legacy command name retained)
   preserve    a store that looks corrupt is renamed aside with its data intact,
               never deleted; a locked database is not treated as corrupt
 """
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 from unittest import mock
@@ -94,36 +93,51 @@ def floors(negative: bool) -> int:
                    lambda: _floors_holds(False))
 
 
-# ── ddd_archive ───────────────────────────────────────────────────────────────
+# ── cultivation enqueue ───────────────────────────────────────────────────────
 
-def _archive_holds(writable: bool) -> tuple[bool, str]:
+def _cultivation_enqueue_holds(accept: bool) -> tuple[bool, str]:
     from core import ddd_cultivation as dc
-    from core import ingestion_gate as ig
+    from core.ingestion.api import EnqueueResult
 
     with tempdir() as d:
         project = d / "Projects" / "Demo"
-        ddd_write_path(project, "IMPROVEMENT.md").write_text(
-            "# Improvement\n\n## What Worked\n\n", encoding="utf-8")
-        (project / ".artifacts").mkdir()
-        if not writable:
-            os.chmod(project / ".artifacts", 0o500)
-        p = dc.CultivationProposal(
+        doc = ddd_write_path(project, "IMPROVEMENT.md")
+        doc.write_text("# Improvement\n\n## What Worked\n\n", encoding="utf-8")
+        before = doc.read_bytes()
+        calls = []
+
+        def enqueue(*args, **kwargs):
+            calls.append((args, kwargs))
+            return EnqueueResult(status="queued" if accept else "rejected",
+                                 candidate_id="cand-probe" if accept else None)
+
+        proposal = dc.CultivationProposal(
             target_doc="IMPROVEMENT.md", target_section="What Worked",
-            content="Ship the config writer behind an atomic rename so readers never see torn files.",
+            content="Ship config writes through an atomic rename so readers never see torn files.",
             source_run_id="probe", confidence=0.9)
-        try:
-            with mock.patch.object(ig, "_ask_judge", side_effect=RuntimeError("judge down")):
-                dc._cultivate_proposals([p], project)
-            log = project / ".artifacts" / "discarded-proposals.jsonl"
-            archived = log.exists() and p.content[:30] in log.read_text(encoding="utf-8")
-        finally:
-            os.chmod(project / ".artifacts", 0o700)
-    return archived, "a declined proposal did not reach the recoverable archive"
+        with mock.patch("core.ingestion.api.enqueue", side_effect=enqueue):
+            result = dc._cultivate_proposals([proposal], project)
+
+        if result["queued"] != 1 or len(calls) != 1:
+            return False, "the cultivation candidate was not queued"
+        args, kwargs = calls[0]
+        if args[0] != "cultivation" or args[3].get("kind") != "cultivation":
+            return False, "the source or payload kind was not cultivation"
+        if not args[2].startswith("proposal:"):
+            return False, "the source did not provide a stable semantic slot"
+        if kwargs.get("envelope", {}).get("writer") != "cultivation":
+            return False, "the candidate lost its provenance writer"
+        if doc.read_bytes() != before or (project / ".artifacts").exists():
+            return False, "the source wrote outside the CDF inbox"
+    return True, ""
 
 
 def ddd_archive(negative: bool) -> int:
-    return verdict("ING_DDD_ARCHIVE", negative, lambda: _archive_holds(True),
-                   lambda: _archive_holds(False))
+    # Keep the command name and case id for compatibility; its Stage-B contract is
+    # enqueue-only and has no recoverable source-side archive.
+    return verdict("ING_DDD_ARCHIVE", negative,
+                   lambda: _cultivation_enqueue_holds(True),
+                   lambda: _cultivation_enqueue_holds(False))
 
 
 # ── preserve ──────────────────────────────────────────────────────────────────

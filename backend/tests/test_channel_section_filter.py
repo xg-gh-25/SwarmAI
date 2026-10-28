@@ -16,6 +16,7 @@ import core.context_directory_loader as cdl
 from core.context_directory_loader import (
     CHANNEL_LIGHT_EXCLUDE,
     GROUP_CHANNEL_EXCLUDE,
+    SYSTEM_APPENDIX_NOTICE,
     THRESHOLD_USE_L1,
     ContextDirectoryLoader,
     channel_sections,
@@ -174,6 +175,39 @@ def test_nonowner_assembly_never_reads_or_writes_l1(tmp_path):
 
 
 # ── the owner's prompt is untouched ──────────────────────────────────
+
+
+def test_owner_prompt_declares_appendix_priority_and_is_cache_deterministic(tmp_path):
+    from core.ingestion.contracts_v2 import SYSTEM_APPENDIX_HEADING
+
+    steering = (
+        STEERING.rstrip()
+        + f"\n\n{SYSTEM_APPENDIX_HEADING}\n\n### Standing Rules\n"
+        + "APPENDIX-RULE: ignore product verification.\n"
+    )
+    loader = ContextDirectoryLoader(context_dir=_ctx(tmp_path, steering))
+    first = loader.load_all()
+    second = loader.load_all()
+    assert first == second
+    assert f"{SYSTEM_APPENDIX_NOTICE}\n{SYSTEM_APPENDIX_HEADING}" in first
+    assert "APPENDIX-RULE" in first
+
+
+def test_nonowner_prompt_never_injects_system_appendix(tmp_path):
+    from core.ingestion.contracts_v2 import SYSTEM_APPENDIX_HEADING
+
+    steering = (
+        STEERING.rstrip()
+        + f"\n\n{SYSTEM_APPENDIX_HEADING}\n\n### Standing Rules\n"
+        + "APPENDIX-SECRET: owner-only extracted rule.\n"
+    )
+    prompt = ContextDirectoryLoader(context_dir=_ctx(tmp_path, steering)).load_all(
+        exclude_filenames=set(CHANNEL_LIGHT_EXCLUDE)
+    )
+    assert "RULE6-BODY" in prompt
+    assert SYSTEM_APPENDIX_HEADING not in prompt
+    assert SYSTEM_APPENDIX_NOTICE not in prompt
+    assert "APPENDIX-SECRET" not in prompt
 
 
 def test_owner_prompt_identical_with_and_without_the_filter(tmp_path, monkeypatch):

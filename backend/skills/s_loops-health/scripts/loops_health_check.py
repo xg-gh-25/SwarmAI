@@ -14,6 +14,7 @@ Usage:
 """
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -22,6 +23,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 
@@ -62,14 +65,11 @@ MEMORY_SECTIONS = [
     "## Principles", "## Corrections", "## Decisions",
     "## Guidelines", "## Pitfalls", "## Open Threads",
 ]
-# Dated-entry sections used for distillation-recency + section-cap checks.
+# Dated-entry sections used for the distillation-recency and dedup checks.
 # Entries look like:  - [DEC01] ... | ..., 2026-06-25, ...
-# Caps set with runway above current live counts (≈ Decisions 36, Guidelines
-# 183, Pitfalls 139, Corrections 4 as of 2026-06-26) so M3 does not immediately
-# false-warn / trigger auto-eviction of real entries on the next distillation.
-MEMORY_ENTRY_SECTIONS = {
-    "Decisions": 60, "Guidelines": 250, "Pitfalls": 200, "Corrections": 30,
-}
+# (No per-section caps: CDF §12 bounds the prompt by selection, nothing trims
+# MEMORY.md.)
+MEMORY_ENTRY_SECTIONS = ("Decisions", "Guidelines", "Pitfalls", "Corrections")
 # EVOLUTION.md correction marker: "C0NN" ids, found both in
 # "### C0NN | YYYY-MM-DD" entries and inline under "### CLASS A/B/C" blocks.
 EVOLUTION_CORRECTION_RE = r"\bC0\d{2}\b"
@@ -80,7 +80,7 @@ EVOLUTION_CLASS_RE = r"^### CLASS [ABC]"
 # emit a P0 finding instead of silently false-passing/failing. Add a row when
 # a check starts depending on a new section/marker.
 PROBE_REGISTRY = [
-    ("M1/M3", "MEMORY.md", "## Decisions"),
+    ("M1", "MEMORY.md", "## Decisions"),
     ("M4", "MEMORY.md", "## Open Threads"),
     # E3/E4 anchor on the stable section, not a single CLASS header: size-valve
     # archival moves whole CLASS blocks into EVOLUTION-archive*.md (### CLASS A
@@ -166,7 +166,7 @@ class SelfLoopsHealthEngine:
         self._check_infrastructure()
 
         if auto_fix:
-            self._auto_remediate()
+            logger.warning("--auto-fix is retired; loops-health is diagnostics-only")
 
         self._record_history()
         return self.report
@@ -284,36 +284,6 @@ class SelfLoopsHealthEngine:
             detail=f"Newest: {newest}, gap: {gap}d",
         ))
 
-        # M2: Undistilled backlog
-        da_dir = KNOWLEDGE_DIR / "DailyActivity"
-        undistilled = 0
-        if da_dir.exists():
-            for f in da_dir.glob("20[0-9][0-9]-*.md"):
-                head = self._read_safe(f, limit=300)
-                if "distilled: true" not in head:
-                    undistilled += 1
-        self.report.findings.append(Finding(
-            id="M2", name="Undistilled backlog", dimension="memory",
-            status="pass" if undistilled == 0 else ("warn" if undistilled <= 3 else "fail"),
-            detail=f"{undistilled} files",
-            auto_fixable=undistilled > 3,
-        ))
-
-        # M3: Section caps (live 7-type sections, not legacy headers)
-        caps = MEMORY_ENTRY_SECTIONS
-        over_cap = []
-        for section_name, cap in caps.items():
-            section = self._extract_section(memory, f"## {section_name}", "## ")
-            entries = [l for l in section.split("\n") if l.strip().startswith("- ")]
-            if len(entries) > cap:
-                over_cap.append(f"{section_name}: {len(entries)}/{cap}")
-        self.report.findings.append(Finding(
-            id="M3", name="Section caps", dimension="memory",
-            status="pass" if not over_cap else "warn",
-            detail=", ".join(over_cap) if over_cap else "All within limits",
-            auto_fixable=bool(over_cap),
-        ))
-
         # M4: Open Threads hygiene (stale >30d)
         ot_section = self._extract_section(memory, "## Open Threads", "## ")
         # Look for dates that are >30d old in OT entries
@@ -325,10 +295,10 @@ class SelfLoopsHealthEngine:
             id="M4", name="Open Threads hygiene", dimension="memory",
             status="pass" if stale == 0 else ("warn" if stale <= 2 else "fail"),
             detail=f"{stale} stale date references in OT" + (f", {resolved_entries} resolved entries" if resolved_entries else ""),
-            auto_fixable=resolved_entries > 0,
         ))
 
         # M5: Archive health
+        da_dir = KNOWLEDGE_DIR / "DailyActivity"
         if da_dir.exists():
             cutoff = (date.today() - timedelta(days=90)).isoformat()
             old = [f.name for f in da_dir.glob("20[0-9][0-9]-*.md") if f.stem < cutoff]
@@ -366,7 +336,6 @@ class SelfLoopsHealthEngine:
             id="M6", name="Content dedup", dimension="memory",
             status="pass" if not dupes_found else "warn",
             detail=", ".join(dupes_found[:3]) if dupes_found else "No duplicates",
-            auto_fixable=bool(dupes_found),
         ))
 
     # ─── Dimension 3: Self-Knowledge ─────────────────────────────────────────
@@ -679,207 +648,6 @@ class SelfLoopsHealthEngine:
 
     # ─── Auto-Remediation ────────────────────────────────────────────────────
 
-    def _auto_remediate(self):
-        for f in self.report.findings:
-            if not f.auto_fixable or f.status == "pass":
-                continue
-            try:
-                if f.id == "C4":
-                    if self._fix_commit_context():
-                        f.fixed = True
-                        f.fix_action = "Auto-committed .context/ files"
-                elif f.id == "M3":
-                    self._fix_cap_enforcement()
-                    f.fixed = True
-                    f.fix_action = "Enforced section caps"
-                elif f.id == "M5":
-                    count = self._fix_archive()
-                    if count:
-                        f.fixed = True
-                        f.fix_action = f"Archived {count} old DailyActivity files"
-                elif f.id == "K1":
-                    # Index refresh is handled by context_health_hook, signal it
-                    f.fix_action = "Index refreshes on next session (context_health_hook)"
-                elif f.id == "B2":
-                    if self._fix_push():
-                        f.fixed = True
-                        f.fix_action = "Pushed to remote"
-                elif f.id == "B4":
-                    if self._fix_commit_context():
-                        f.fixed = True
-                        f.fix_action = "Committed critical files"
-                elif f.id == "M4":
-                    count = self._fix_ot_resolved()
-                    if count:
-                        f.fixed = True
-                        f.fix_action = f"Archived {count} resolved OT entries"
-                elif f.id == "M6":
-                    count = self._fix_content_dedup()
-                    if count:
-                        f.fixed = True
-                        f.fix_action = f"Removed {count} duplicate entries from MEMORY.md"
-                elif f.id == "I5":
-                    count = self._fix_stale_locks()
-                    f.fixed = True
-                    f.fix_action = f"Removed {count} stale lock files"
-                elif f.id == "I6":
-                    count = self._fix_stale_pipelines()
-                    if count:
-                        f.fixed = True
-                        f.fix_action = f"Marked {count} stale pipelines as completed"
-            except Exception as exc:
-                f.fix_action = f"Fix failed: {exc}"
-
-        self.report.fixes_applied = [
-            f.fix_action for f in self.report.findings if f.fixed
-        ]
-    def _fix_commit_context(self) -> bool:
-        """Auto-commit .context/ with integrity check (PE-4)."""
-        # Integrity check: MEMORY.md must have expected headers
-        mem = CONTEXT_DIR / "MEMORY.md"
-        if mem.exists():
-            content = mem.read_text(encoding="utf-8")
-            # Integrity gate against the LIVE 7-type schema. The legacy headers
-            # (Recent Context/Key Decisions/Lessons Learned) were removed (PRI01);
-            # gating on them made this return False unconditionally → auto-commit
-            # was permanently dead. Require the structural anchors that actually
-            # exist today.
-            # Dropped "## Memory Index" (orphan block removed;
-            # regenerated by nothing) — keep the stable structural anchors.
-            required = ["## Decisions", "## Open Threads"]
-            if not all(h in content for h in required):
-                return False  # Possible corruption — don't commit
-            if len(content) < 100:
-                return False
-
-        # Stage .context/ files
-        result = subprocess.run(
-            ["git", "add", ".context/"], cwd=str(WORKSPACE),
-            capture_output=True, timeout=CHECK_TIMEOUT,
-        )
-        if result.returncode != 0:
-            return False
-
-        # Check if there's actually something staged (avoids empty commit failure)
-        status = subprocess.run(
-            ["git", "diff", "--cached", "--quiet", ".context/"],
-            cwd=str(WORKSPACE), capture_output=True, timeout=CHECK_TIMEOUT,
-        )
-        if status.returncode == 0:
-            return True  # Nothing staged — state is already clean
-
-        result = subprocess.run(
-            ["git", "commit", "-m", "chore: auto-commit context (loops-health)"],
-            cwd=str(WORKSPACE), capture_output=True, timeout=CHECK_TIMEOUT,
-        )
-        return result.returncode == 0
-
-    def _fix_cap_enforcement(self):
-        """Trigger cap enforcement via distillation hook."""
-        try:
-            # run by "$SWARM_BACKEND_BIN" py, the backend's packages are importable
-            from hooks.distillation_hook import DistillationTriggerHook
-            DistillationTriggerHook._enforce_section_caps(
-                CONTEXT_DIR / "MEMORY.md", WORKSPACE
-            )
-        except Exception:
-            pass  # Non-critical
-
-    def _fix_archive(self) -> int:
-        """Move old DailyActivity to Archives."""
-        da_dir = KNOWLEDGE_DIR / "DailyActivity"
-        archive_dir = KNOWLEDGE_DIR / "Archives"
-        archive_dir.mkdir(exist_ok=True)
-        cutoff = (date.today() - timedelta(days=90)).isoformat()
-        archived = 0
-        for f in da_dir.glob("20[0-9][0-9]-*.md"):
-            if f.stem < cutoff:
-                head = f.read_text(encoding="utf-8", errors="ignore")[:300]
-                if "distilled: true" in head:
-                    f.rename(archive_dir / f.name)
-                    archived += 1
-        return archived
-
-    def _fix_push(self) -> bool:
-        """Push to remote with dry-run gate."""
-        dry = self._git_cmd(["git", "push", "--dry-run", "origin", "HEAD"], WORKSPACE, allow_fail=True)
-        if "fatal" in dry or "error" in dry.lower():
-            return False
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        result = subprocess.run(
-            ["git", "push", "origin", "HEAD"],
-            cwd=str(WORKSPACE), capture_output=True, text=True, timeout=30, env=env,
-        )
-        return result.returncode == 0
-
-    def _fix_ot_resolved(self) -> int:
-        """Remove resolved (✅) entries from Open Threads section.
-
-        These are already recorded in COE Registry and MEMORY archives.
-        Keeping them in OT causes M4 false positives from stale dates.
-        Uses flock to prevent concurrent write corruption (B1 fix).
-        """
-        mem_path = CONTEXT_DIR / "MEMORY.md"
-        if not mem_path.exists():
-            return 0
-        lock_path = mem_path.with_suffix(".md.lock")
-        fd = None
-        try:
-            from utils.file_lock import flock_exclusive, flock_unlock
-            fd = open(lock_path, "w")
-            flock_exclusive(fd)
-
-            content = mem_path.read_text(encoding="utf-8")
-            ot_start = content.find("## Open Threads")
-            if ot_start < 0:
-                return 0
-            ot_rest = content[ot_start:]
-            next_section = ot_rest.find("\n## ", 4)
-            if next_section < 0:
-                next_section = len(ot_rest)
-            ot_section = ot_rest[:next_section]
-
-            lines = ot_section.split("\n")
-            new_lines = []
-            removed = 0
-            for line in lines:
-                if line.strip().startswith("- ✅"):
-                    removed += 1
-                else:
-                    new_lines.append(line)
-            if removed == 0:
-                return 0
-            new_ot = "\n".join(new_lines)
-            content = content[:ot_start] + new_ot + ot_rest[next_section:]
-            mem_path.write_text(content, encoding="utf-8")
-            return removed
-        except ImportError:
-            # file_lock not available (standalone CLI run) — fall through without lock
-            content = mem_path.read_text(encoding="utf-8")
-            ot_start = content.find("## Open Threads")
-            if ot_start < 0:
-                return 0
-            ot_rest = content[ot_start:]
-            next_section = ot_rest.find("\n## ", 4)
-            if next_section < 0:
-                next_section = len(ot_rest)
-            ot_section = ot_rest[:next_section]
-            lines = ot_section.split("\n")
-            new_lines = [l for l in lines if not l.strip().startswith("- ✅")]
-            removed = len(lines) - len(new_lines)
-            if removed == 0:
-                return 0
-            content = content[:ot_start] + "\n".join(new_lines) + ot_rest[next_section:]
-            mem_path.write_text(content, encoding="utf-8")
-            return removed
-        finally:
-            if fd is not None:
-                try:
-                    flock_unlock(fd)
-                except (OSError, NameError):
-                    pass
-                fd.close()
-
     def _find_stale_pipelines(self) -> list[dict]:
         """Find paused pipelines >14d old where the feature appears shipped in git.
 
@@ -926,90 +694,6 @@ class SelfLoopsHealthEngine:
                 if shipped:
                     stale.append({"id": run_data.get("id", run_dir.name), "requirement": req[:80]})
         return stale
-
-    def _fix_stale_pipelines(self) -> int:
-        """Mark stale paused pipelines as completed."""
-        stale = self._find_stale_pipelines()
-        fixed = 0
-        for item in stale:
-            run_id = item["id"]
-            # Search all projects for this run_id
-            for project_dir in PROJECTS_DIR.iterdir():
-                run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
-                if not run_file.exists():
-                    continue
-                try:
-                    data = json.loads(run_file.read_text())
-                    data["status"] = "completed"
-                    data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    run_file.write_text(json.dumps(data, indent=2))
-                    fixed += 1
-                except (json.JSONDecodeError, OSError):
-                    continue
-                break  # Found the run, no need to check other projects
-        return fixed
-
-    def _fix_content_dedup(self) -> int:
-        """Remove duplicate entries from MEMORY.md body (same bold title = same entry).
-
-        Keeps the FIRST occurrence (which is the newest due to prepend ordering)
-        and removes subsequent duplicates. Only operates BELOW the index marker
-        (MEMORY_INDEX_END) to avoid removing index entries.
-        Uses flock to prevent concurrent write corruption (B1 fix).
-        """
-        mem_path = CONTEXT_DIR / "MEMORY.md"
-        if not mem_path.exists():
-            return 0
-        lock_path = mem_path.with_suffix(".md.lock")
-        fd = None
-        try:
-            from utils.file_lock import flock_exclusive, flock_unlock
-            fd = open(lock_path, "w")
-            flock_exclusive(fd)
-        except ImportError:
-            fd = None  # Standalone CLI — proceed without lock
-
-        try:
-            content = mem_path.read_text(encoding="utf-8")
-            marker = "<!-- MEMORY_INDEX_END -->"
-            marker_pos = content.find(marker)
-            if marker_pos < 0:
-                return 0
-            header = content[:marker_pos + len(marker)]
-            body = content[marker_pos + len(marker):]
-
-            lines = body.split("\n")
-            seen_titles: set[str] = set()
-            new_lines: list[str] = []
-            removed = 0
-            for line in lines:
-                m = re.search(r"\*\*(.+?)\*\*", line)
-                if m and line.strip().startswith("- "):
-                    title = m.group(1).strip().lower()
-                    if title in seen_titles:
-                        removed += 1
-                        continue
-                    seen_titles.add(title)
-                new_lines.append(line)
-            if removed > 0:
-                mem_path.write_text(header + "\n".join(new_lines), encoding="utf-8")
-            return removed
-        finally:
-            if fd is not None:
-                try:
-                    flock_unlock(fd)
-                except (OSError, NameError):
-                    pass
-                fd.close()
-
-    def _fix_stale_locks(self) -> int:
-        """Remove lock files older than 1 hour."""
-        removed = 0
-        for lf in list(WORKSPACE.glob(".*.lock")) + list(CONTEXT_DIR.glob("*.lock")):
-            if lf.exists() and (time.time() - lf.stat().st_mtime) > 3600:
-                lf.unlink()
-                removed += 1
-        return removed
 
     # ─── History & Growth ────────────────────────────────────────────────────
 

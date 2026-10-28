@@ -147,88 +147,43 @@ layer is one of the ✅ (MEMORY/EVOLUTION/DDD/Library) → continue to Step 2** 
 > **YES → MEMORY.md** (cross-project cognitive knowledge)
 > **NO → Projects/<X>/...** (project-specific DDD doc)
 
-## RETIRE / MOVE — the sanctioned "out" side (do NOT hand-Edit to delete)
+## RETIRE / MOVE
 
-Persist has an **out** side, not just in. When an entry is resolved, stale, wrong,
-or belongs in a different home, **retire it via the `ddd-retire` CLI — never a raw
-`Edit`-to-delete.** A hand-Edit skips the archive (→ the entry is lost from FTS5
-recall) and skips the `(title, section)` identity-strip (→ it can silently destroy a
-different entry that merely shares the title). `ddd-retire` archives (recall-preserved)
-+ strips by identity + writes a dated `.bak`, and is **fail-loud** (no match / ambiguous
-duplicate → error, nothing removed).
+Do not invoke a legacy mutator. User-directed retirement and moves go through the
+workspace editor APIs, which require the revision returned by the latest read and use
+`governed_edit`. If a directory contains governed files, edit the files individually;
+only project tree moves are supported atomically.
+
+## How to submit
+
+Sources never choose a file or edit governed content. Build one complete
+`contracts_v2` unit and bind it to the user message that asked for persistence.
+The current event id is exposed as `SWARM_LAST_USER_EVENT_ID`.
 
 ```bash
-# from the swarmai repo root, backend venv active
-# 1) PREVIEW (default dry-run — always look first):
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli ddd-retire \
-  --file .context/MEMORY.md --title "Exact entry title" --section "Open Threads"
-# 2) APPLY:
-"$SWARM_BACKEND_BIN" py -m scripts.artifact_cli ddd-retire \
-  --file Projects/<P>/2-understanding/IMPROVEMENT.md --title "..." --section "What Failed" --apply
-# keep-class (decision/model/principle/correction/COE) is REFUSED unless you add --force
+printf %s '{"kind":"cognition","type":"guideline","scope":"world","title":"<complete title>","what":"<complete claim>","how":"<action when applicable>","why":"<why it matters>","applicability":"<trigger>","evidence":[]}' | \
+  "$SWARM_BACKEND_BIN" ingest submit --source S1 \
+  --evidence "$SWARM_LAST_USER_EVENT_ID" --payload-json - --wait 10
 ```
 
-**RETIRE** = remove one named entry (archive + strip). **MOVE** across files/sections =
-**add-to-target FIRST, retire-from-source SECOND** — so the entry is durable in its new
-home before it leaves the old one (a crash between the two steps then leaves a
-recoverable duplicate, never a loss):
-
-1. `s_persist` the entry into its new home (this file's routing + dedup).
-2. `ddd-retire --apply` the entry from its old home.
-
-This mirrors the governance layer's symmetry (s_self-evolution PROMOTE↔RETIRE) at the
-knowledge layer (s_persist add ↔ ddd-retire out). Autonomous time-based decay
-(`ddd_entry_lifecycle`, 60d→dormant→150d→archived) still handles *un-attended* aging;
-`ddd-retire` is for a *deliberate* "this is done / wrong-home, remove it NOW".
-
-**Undo a retire:** a retire is recoverable, not permanent. The entry is preserved in
-two places — the archive file (`<doc>-archive.md`, e.g. `MEMORY-archive.md`, which stays
-FTS5-recallable) and a dated pre-strip snapshot (`<doc>.<YYYY-MM-DD>.bak`). To restore:
-copy the entry block back from the archive (or the `.bak`) into the source doc's correct
-section, then run `s_persist` on it so routing + dedup re-apply. (There is no `ddd-restore`
-CLI yet — restore is a manual copy-back; the archive/​.bak guarantee it's never lost.)
-
-## How to Write
-
-### Entry format (all targets use same format)
-
-```markdown
-- [type] **Title** — concise description (YYYY-MM-DD)
-  <!-- ref:0 | last:none | decay:active | source:manual -->
-```
-
-Where `[type]` is one of: `guideline`, `pitfall`, `decision`, `principle`, `correction`, `process`, `model`.
-
-### Mechanics
-
-1. Read the target file to find the correct `## Section`
-2. Use the Edit tool to prepend the new entry at the top of the section
-3. Include the metadata comment with `source:manual`
-4. Show the structured receipt to the user
-
-### Receipt format (MANDATORY)
-
-```
-**Persisted:**
-
-> **[type] Title** → `Projects/<P>/2-understanding/IMPROVEMENT.md` § What Failed
-> _(Why: one-sentence reason this knowledge compounds)_
-```
+The CLI validates that the evidence is the latest user event of this turn and
+allows at most three units for it. A cron, auto-nudge, or injected turn has no
+eligible user event and must not call S1. Relay the CLI echo to the user
+**unchanged**, including its complete text, actual destination, and hint. A timeout
+means the candidate is visible in Cognitive Distillation Flow, not that it failed.
 
 ## Rules
 
-- **Always use the Edit tool** — never use Bash scripts for file writes
-- **Always date-prefix** — every entry includes `(YYYY-MM-DD)` at the end
-- **Always add `source:manual` metadata** — distinguishes from auto-cultivated entries
-- **Newest first** — prepend to section, don't append
-- **Don't duplicate** — check if content already exists (match by title/content)
-- **Governance detection** — if it's a behavioral rule / P-level principle / system-identity or product design principle, it has an APPROVAL PATH (Step 1 table): SOUL/AGENT/STEERING → `s_self-evolution` PROMOTE; SWARMAI/IDENTITY → `backend/context/` source-edit + rebuild. Route it there and tell the user the path — don't hand-write the file, and never frame it as "forbidden" (it evolves, via a gate)
-- **Project detection** — infer from: current file being edited, pipeline context, user mention, or ask
+- **Never edit a governed destination directly** — only run `ingest submit`.
+- **Complete claim** — include the conclusion, applicability, and why/how needed to understand it later.
+- **Current evidence** — pass `SWARM_LAST_USER_EVENT_ID`; never cite an older turn.
+- **No pre-routing** — scope and project context are hints; CDF owns the final destination.
+- **Governance detection** — behavioral governance still follows its explicit promotion path.
+- **Project context** — include the relevant project hint when known; do not invent one.
 
 ## Verification
 
-- [ ] **Passed Step 0 admission gate** — decision-relevant AND stable; not a volatile metric (LOC/counts/status/snapshot). If it's a drifting number, stored the method not the value.
-- [ ] Entry saved to correct file + section
-- [ ] `source:manual` metadata tag present
-- [ ] No duplicates (checked before writing)
-- [ ] Receipt shown to user with destination + why
+- [ ] Payload is complete and self-contained.
+- [ ] `--source S1` and `--evidence "$SWARM_LAST_USER_EVENT_ID"` were supplied.
+- [ ] The CLI echo was relayed to the user unchanged.
+- [ ] No governed file was written directly.

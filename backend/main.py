@@ -20,6 +20,8 @@ from config import settings, get_app_data_dir, get_log_file_path, get_swarmws
 from core import session_registry
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, experts_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, attention_router, voice_router, hive_router, apps_router
+from routers.ingestion import router as ingestion_router
+from routers.ingestion_redact import router as ingestion_redact_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
 from routers.pipelines import router as pipelines_router
 from routers.pollinate import router as pollinate_router
@@ -1312,14 +1314,11 @@ async def lifespan(app: FastAPI):
     from core.summarization import SummarizationPipeline
     from core.compliance import ComplianceTracker
     from hooks.daily_activity_hook import DailyActivityExtractionHook
-    from hooks.knowledge_backflow_hook import KnowledgeBackflowHook
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
-    from hooks.code_change_feed import CodeChangeFeed
     from hooks.context_health_hook import ContextHealthHook
-    from hooks.distillation_hook import DistillationTriggerHook
     from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-    from hooks.improvement_writeback_hook import ImprovementWritebackHook
     from hooks.todo_lifecycle_hook import TodoLifecycleHook
+    from core.ingestion.sources.s2_session import SessionExtractionHook
     from routers.memory import set_compliance_tracker
 
     summarization_pipeline = SummarizationPipeline()
@@ -1333,40 +1332,18 @@ async def lifespan(app: FastAPI):
     # Create fire-and-forget executor — hooks never block the chat path
     hook_executor = BackgroundHookExecutor(hook_manager)
 
-    # Order matters: extraction → backflow → commit → distillation → health → evolution → improvement
-    # Distillation BEFORE health so embeddings capture freshly-distilled entries.
+    # Order matters: DailyActivity remains the working-memory product; S2 is the
+    # only semantic session extractor. CDF kick remains last below.
     hook_manager.register(DailyActivityExtractionHook(
         summarization_pipeline=summarization_pipeline,
         compliance_tracker=compliance_tracker,
     ))
-    # Knowledge Backflow: capture high-value analysis outputs as Knowledge/Notes/ pages.
-    # After DailyActivity (shares message read) but before auto-commit (file gets committed).
-    hook_manager.register(KnowledgeBackflowHook())
-    # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention
+    hook_manager.register(SessionExtractionHook())
+    # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention.
     hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
-    # Code Change Feed: analyze post-commit diff → propose TECH.md updates (Channel 1)
-    hook_manager.register(CodeChangeFeed(git_lock=hook_executor.git_lock))
-    hook_manager.register(DistillationTriggerHook())
-    # Context health: light refresh every session (if changed), deep check daily.
-    # Runs AFTER distillation so embedding sync picks up fresh MEMORY.md entries.
     hook_manager.register(ContextHealthHook())
     hook_manager.register(EvolutionMaintenanceHook())
-    # IMPROVEMENT.md write-back: closes the DDD learning loop.
-    # Runs after auto-commit so workspace state is settled.
-    hook_manager.register(ImprovementWritebackHook(
-        workspace_path=app_config.get("workspace_path", str(get_swarmws())),
-    ))
-    # ToDo lifecycle: auto-complete bound todos, implicit file matching
-    # Runs after auto-commit so git log reflects the session's work.
     hook_manager.register(TodoLifecycleHook())
-
-    # UserObserverHook: tracks user interaction patterns for evolution
-    try:
-        from hooks.user_observer_hook import UserObserverHook
-        hook_manager.register(UserObserverHook())
-        logger.info("Registered UserObserverHook")
-    except Exception as exc:
-        logger.warning("UserObserverHook registration failed: %s", exc)
 
     # SkillMetricsHook: records skill invocation metrics post-session
     try:
@@ -1383,6 +1360,11 @@ async def lifespan(app: FastAPI):
     # ── Initialize new session architecture ──────────────────────────
     session_registry.initialize(app_config)
     # Wire hooks AFTER initialize so lifecycle_manager exists
+
+    # CDF kick is intentionally LAST: every source has finished enqueueing first.
+    from hooks.ingestion_session_kick import IngestionSessionKickHook
+    hook_manager.register(IngestionSessionKickHook())
+    logger.info("Registered IngestionSessionKickHook last")
     session_registry.configure_hooks(executor=hook_executor, manager=hook_manager)
     logger.info("SessionRouter architecture initialized")
     await session_registry.start_lifecycle()
@@ -1483,8 +1465,26 @@ async def lifespan(app: FastAPI):
         logger.info("backend.json NOT written (port=%d, mode=%s) — owned by another live backend",
                     backend_port, backend_mode)
 
-    # Resolve the bundled CLI version ONCE at boot (subprocess — must never
-    # run inside the per-request health handler, which is polled every 5s).
+    # CDF runs in every full HTTP mode, but the file lock permits one owner per data dir.
+    _ingestion_handle = None
+    _ingestion_owner = None
+    try:
+        from core.ingestion.owner import acquire as _acquire_ingestion_owner
+        from core.ingestion.worker import WorkerHandle as _IngestionWorkerHandle
+        from core.project_registry import get_swarmws as _ingestion_workspace
+        _ingestion_owner = await asyncio.to_thread(_acquire_ingestion_owner)
+        if _ingestion_owner is not None:
+            _ingestion_handle = _IngestionWorkerHandle(_ingestion_owner, _ingestion_workspace())
+            _ingestion_handle.start()
+            logger.info("CDF ingestion owner worker started")
+        else:
+            logger.info("CDF ingestion owner held by another backend; this process is enqueue/read-only")
+    except Exception:
+        if _ingestion_handle is None and _ingestion_owner is not None:
+            _ingestion_owner.release()
+        logger.exception("CDF ingestion worker startup failed (non-fatal)")
+
+    # Resolve the bundled CLI version once at boot; never run it in /health.
     global _cli_version
     _cli_version = _resolve_cli_version()
     logger.info("runtime versions: sdk=%s cli=%s", _sdk_version, _cli_version)
@@ -1622,6 +1622,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
+    if _ingestion_handle is not None:
+        try:
+            await asyncio.to_thread(_ingestion_handle.stop_and_join)
+            logger.info("CDF ingestion owner worker stopped")
+        except Exception:
+            logger.exception("CDF ingestion worker did not stop cleanly")
     if _readiness_task and not _readiness_task.done():
         _readiness_task.cancel()
         try:
@@ -1754,6 +1760,7 @@ app.add_middleware(
         "Origin",
         "X-Requested-With",
         "X-Request-ID",
+        "X-Swarm-User-Action",
         # Conditional GETs (chat history, workspace tree) send If-None-Match: not a
         # CORS-safelisted header, so its preflight was rejected (400) and every
         # cached re-fetch from the webview failed (2026-10-22: 134 rejected).
@@ -1796,6 +1803,9 @@ app.include_router(workspace_router, prefix="/api/workspace", tags=["workspace"]
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
 app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
+
+from routers.ingestion_wake import router as ingestion_wake_router
+app.include_router(ingestion_wake_router)
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
 app.include_router(todos_router, prefix="/api/todos", tags=["todos"])
@@ -1811,6 +1821,8 @@ app.include_router(jobs_router, tags=["jobs"])  # prefix already set in router
 app.include_router(artifacts_router, prefix="/api", tags=["artifacts"])
 app.include_router(escalations_router, tags=["escalations"])
 app.include_router(attention_router, tags=["attention"])  # prefix /api/attention set in router
+app.include_router(ingestion_router, tags=["ingestion"])  # prefix /api/ingestion set in router
+app.include_router(ingestion_redact_router, tags=["ingestion"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
 from routers.swarm_out import router as swarm_out_router  # noqa: E402
@@ -2064,8 +2076,7 @@ async def get_capabilities():
         caps["slack_bolt"] = False
 
     # Key local modules
-    for mod in ["core.recall_engine", "core.manifest_loader", "core.llm_optimizer",
-                "scripts.locked_write", "hooks.distillation_hook"]:
+    for mod in ["core.recall_engine", "core.manifest_loader", "core.llm_optimizer"]:
         try:
             __import__(mod)
             caps[mod.split(".")[-1]] = True

@@ -757,6 +757,83 @@ def _collect_job_digests(workspace_root: Path) -> list[AttentionItem]:
     return items
 
 
+def _collect_ingestion() -> list[AttentionItem]:
+    """Unresolved CDF anomalies, one item per kind; a missing DB is silent."""
+    import json
+    import sqlite3
+    from contextlib import closing
+    from datetime import datetime, timezone
+
+    titles = {
+        "breaker": "Cognitive Distillation paused a source",
+        "backlog": "Cognitive Distillation has waited over 24 hours",
+        "id_collision": "Cognitive Distillation found an ID collision",
+        "writer_unknown": "A governed file changed outside Cognitive Distillation",
+        "judge_down": "The Cognitive Distillation judge has been down over an hour",
+        "user_race": "A file changed while Cognitive Distillation was writing",
+        "poison": "A Cognitive Distillation item repeatedly failed",
+        "restored_orphan": "A restored file has no matching audit record",
+        "missing_section": "Cognitive Distillation needs a target section",
+    }
+    prompts = {
+        "breaker": "Check why Cognitive Distillation paused a source and tell me how to restore it safely.",
+        "backlog": "Check why Cognitive Distillation has a backlog older than 24 hours and fix the cause.",
+        "id_collision": "Inspect the Cognitive Distillation ID collision and explain which candidate is trustworthy.",
+        "writer_unknown": "Inspect the governed file change that bypassed Cognitive Distillation and tell me what changed.",
+        "judge_down": "Check why the Cognitive Distillation judge has been unavailable for over an hour.",
+        "user_race": "Inspect the Cognitive Distillation user-race record and preserve the user's version.",
+        "poison": "Inspect the repeatedly failing Cognitive Distillation item and identify the root cause.",
+        "restored_orphan": "Inspect the restored Cognitive Distillation orphan without changing the restored file.",
+        "missing_section": "Add the missing governed-file section so Cognitive Distillation can continue.",
+    }
+    try:
+        from core.ingestion.api import connect_ro
+        with closing(connect_ro()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id,at,kind,detail FROM ingestion_events WHERE resolved=0 ORDER BY at DESC,id DESC"
+            ).fetchall()
+    except (OSError, sqlite3.Error):
+        return []
+    except Exception as exc:
+        logger.warning("attention: ingestion source failed: %s", exc)
+        return []
+
+    items: list[AttentionItem] = []
+    seen: set[str] = set()
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        kind = str(row["kind"])
+        if kind not in titles or kind in seen:
+            continue
+        try:
+            detail = json.loads(row["detail"])
+        except (TypeError, ValueError):
+            detail = {"detail": str(row["detail"] or "")}
+        if kind == "backlog" and int(detail.get("oldest_wait_seconds", 0) or 0) <= 86400:
+            continue
+        if kind == "judge_down":
+            try:
+                started = datetime.fromisoformat(str(detail.get("since") or row["at"]).replace("Z", "+00:00"))
+                if (now - started).total_seconds() <= 3600:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        seen.add(kind)
+        summary = _one_line(str(detail.get("summary") or detail.get("reason") or kind))
+        tier = TIER_BLOCKING if kind in {"user_race", "writer_unknown"} else TIER_REVIEW
+        prompt = (str(detail.get("prompt") or "")
+                  if kind == "missing_section" else prompts[kind])
+        items.append(AttentionItem(
+            id=f"ingestion:{kind}:{row['id']}", source="ingestion", tier=tier, brain=None,
+            title=titles[kind], summary=summary, detail=_one_line(json.dumps(detail, ensure_ascii=False), 400),
+            dispatch={"message": _prompt(prompt, [("Recorded detail", summary)],
+                                          [f"ingestion event {row['id']}"]),
+                      "context": {"kind": kind, "event_id": row["id"]}},
+        ))
+    return items
+
+
 # ── Aggregator ───────────────────────────────────────────────────────────────
 
 
@@ -788,6 +865,7 @@ def collect(
     items += _collect_jobs()
     items += _collect_job_digests(workspace_root)
     items += _collect_db_recovery()  # OS-level (brain=None), like governance
+    items += _collect_ingestion()  # OS-level CDF anomalies; missing DB is silent
 
     if brain is not None:
         # Per-brain query: only that brain's items. Governance (brain=None) is

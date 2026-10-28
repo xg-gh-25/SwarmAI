@@ -27,6 +27,7 @@ Key public symbols:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -825,80 +826,23 @@ class EvolutionOptimizer:
     # Production path: atomic_deploy() (module-level function) with
     # atomic writes, post-deploy verification, and rollback.
 
-    def _log_to_evolution(self, result: OptimizationResult) -> None:
-        """Append an optimization entry to EVOLUTION.md (best-effort).
-
-        Uses config-based workspace path resolution first, falls back to
-        relative path heuristics from skills_dir for robustness.
-        """
+    def _log_to_evolution(
+        self, result: OptimizationResult, source_ref: str = "optimizer",
+        *, run_count: int = 2,
+    ) -> None:
+        """Submit cross-run optimization measurements to S5 for judgment."""
         try:
-            evo_path = None
-            # Preferred: resolve via app config (works regardless of skills_dir location)
-            try:
-                from core.app_config_manager import AppConfigManager
-                ws_path = AppConfigManager.instance().get("workspace_path")
-                if ws_path:
-                    candidate = Path(ws_path) / ".context" / "EVOLUTION.md"
-                    if candidate.is_file():
-                        evo_path = candidate
-            except Exception as exc:
-                logger.debug("workspace_path not available, using heuristics: %s", exc)
-
-            # Fallback: relative path heuristics from skills_dir
-            if evo_path is None:
-                for candidate in [
-                    self._skills_dir.parent.parent / ".context" / "EVOLUTION.md",
-                    self._skills_dir.parent / ".context" / "EVOLUTION.md",
-                ]:
-                    if candidate.is_file():
-                        evo_path = candidate
-                        break
-
-            if evo_path is None:
-                return
-
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            changes_summary = "; ".join(c.reason for c in result.changes[:3])
-            entry = (
-                f"\n- **[{today}]** Auto-optimized `{result.skill_name}` "
-                f"(score {result.original_score:.2f} -> {result.optimized_score:.2f}): "
-                f"{changes_summary}\n"
-            )
-
-            # Front-door consistency (P8: one brain, many doors): this was the last
-            # EVOLUTION writer bypassing the admission chokepoint. Route through
-            # ingestion_gate(store=EVOLUTION, trigger=evolution_persist) so EVERY
-            # write to EVOLUTION passes the same gate. evolution_persist =
-            # [noise, thin, dedup] (no judge) — for a machine-generated competence
-            # bullet this is a consistency/telemetry gate, not a quality filter, but
-            # it keeps the door uniform and gives observability. Non-auto verdict →
-            # log+skip (best-effort preserved — the optimizer never blocks).
-            try:
-                from core.ingestion_gate import ingestion_gate
-                verdict = ingestion_gate(
-                    entry.strip(), store="EVOLUTION", trigger="evolution_persist",
-                    context={"section": "Competence Learned"},
-                )
-                if verdict.verdict != "auto":
-                    logger.debug(
-                        "Skipping EVOLUTION competence log (gate=%s: %s)",
-                        verdict.verdict, verdict.reason,
-                    )
-                    return
-            except Exception as gate_exc:  # noqa: BLE001 — gate must never block best-effort log
-                logger.debug("ingestion_gate unavailable for optimizer log: %s", gate_exc)
-
-            # ALWAYS go through locked_read_modify_write (anti-pattern #5: every
-            # MEMORY/EVOLUTION write must be flock-guarded). It appends under
-            # "Competence Learned" when present, and when absent lands the entry
-            # under its managed FALLBACK_SECTION — IN-LOCK — instead of the prior
-            # bare `open(...,"a")` else-branch, which both bypassed the lock (racing
-            # concurrent EVOLUTION writers → interleaved/corrupt entries) AND created
-            # an orphan end-of-file append no section manager ever tracked.
-            from scripts.locked_write import locked_read_modify_write
-            locked_read_modify_write(evo_path, "Competence Learned", entry, "append")
+            from core.ingestion.sources.s5_metrics import extract_metrics
+            changes = "; ".join(change.reason for change in result.changes)
+            extract_metrics(source_ref, {
+                "original_score": result.original_score,
+                "optimized_score": result.optimized_score,
+                "accepted": int(result.accepted),
+                "skill": result.skill_name,
+                "inferred_change_summary": changes,
+            }, run_count=run_count)
         except Exception as exc:
-            logger.debug("Failed to log to EVOLUTION.md: %s", exc)
+            logger.debug("Failed to extract evolution metrics: %s", exc)
 
 
     # _log_to_changelog removed in v2 — was an unlocked write to
@@ -1402,7 +1346,8 @@ def _run_evolution_cycle_locked(
                 # Find the matching opt_result
                 for sn, conf, avg, exs, opt_r in skill_assessments:
                     if sn == deploy_result.skill_name.removeprefix("s_") and opt_r:
-                        optimizer._log_to_evolution(opt_r)
+                        optimizer._log_to_evolution(
+                            opt_r, cycle_id, run_count=max(2, transcripts_scanned))
                         break
 
     health_report_path = evals_dir.parent / "skill_health.json"

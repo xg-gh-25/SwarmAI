@@ -117,66 +117,6 @@ class TestCJKTokenization:
 
 
 # ── NEW ARCHITECTURE (2026-08-14): live MEMORY is ALWAYS full-injected ──────
-class TestFullInjectionArchitecture:
-    """Guards the new-architecture invariants (XG, 2026-08-14):
-      1. select_memory_sections ALWAYS returns the whole body — no selective mode,
-         no keyword scoring, no size threshold.
-      2. The in-prompt index is NEVER injected (it was deleted).
-      3. Injected output == body (size bounded upstream by the size-valve, not here).
-    These replace the retired TestSelectMemorySections / TestEvergreenAlwaysInjected
-    / TestOperationalBodyBM25 (which tested the deleted selective machinery)."""
-
-    def test_returns_whole_body_all_sections_present(self):
-        from core.memory_index import select_memory_sections
-        result = select_memory_sections(memory_content=SAMPLE_MEMORY, user_message="anything")
-        # Every body section is present regardless of the query (full injection).
-        assert "## Principles" in result
-        assert "## Decisions" in result
-        assert "## Guidelines" in result
-        assert "## COE Registry" in result
-        assert "## Open Threads" in result
-
-    def test_query_does_not_change_output(self):
-        """No keyword selection: two different queries yield identical output."""
-        from core.memory_index import select_memory_sections
-        a = select_memory_sections(memory_content=SAMPLE_MEMORY, user_message="credential proxy")
-        b = select_memory_sections(memory_content=SAMPLE_MEMORY, user_message="weather zzz nothing")
-        assert a == b
-
-    def test_no_index_ever_injected(self):
-        """Teeth: the in-prompt index markers must NEVER appear in injected output.
-        Re-adding an index prefix to select_memory_sections makes this go RED."""
-        from core.memory_index import (
-            select_memory_sections, MEMORY_INDEX_START, MEMORY_INDEX_END,
-        )
-        # even given a legacy file that STILL carries an index block, output strips it
-        legacy = MEMORY_INDEX_START + "\n## Memory Index\n- [X] y\n" + MEMORY_INDEX_END + "\n\n" + SAMPLE_MEMORY
-        for mem in (SAMPLE_MEMORY, legacy):
-            out = select_memory_sections(memory_content=mem, user_message="x")
-            assert MEMORY_INDEX_START not in out
-            assert MEMORY_INDEX_END not in out
-            assert "## Memory Index" not in out
-
-    def test_output_equals_body(self):
-        """Injected output == the index-stripped body (no additions, no truncation)."""
-        from core.memory_index import select_memory_sections, extract_body_without_index
-        out = select_memory_sections(memory_content=SAMPLE_MEMORY, user_message="")
-        assert out == extract_body_without_index(SAMPLE_MEMORY).strip() or \
-               out == extract_body_without_index(SAMPLE_MEMORY)
-
-    def test_empty_memory_returns_empty(self):
-        from core.memory_index import select_memory_sections
-        assert select_memory_sections(memory_content="", user_message="x") == ""
-
-    def test_size_valve_is_the_size_lever(self):
-        """The size lever lives in the size-valve, not the injector. A huge body is
-        returned WHOLE by the injector (bounding happens upstream at archive time)."""
-        from core.memory_index import select_memory_sections
-        big = "# Memory\n\n## Guidelines\n" + "\n".join(
-            f"- [GUI{i:04d}] entry {i} " + "pad " * 40 for i in range(500)
-        ) + "\n\n## Open Threads\n- none\n"
-        out = select_memory_sections(memory_content=big, user_message="x")
-        assert "[GUI0499]" in out  # the whole body comes through, nothing dropped
 
 
 class TestBareIndexStripBelowTitle:

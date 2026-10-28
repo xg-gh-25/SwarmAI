@@ -328,7 +328,6 @@ def _compute_engine_level(ws_path: Path) -> dict[str, Any]:
     # L3: Check which features are active
     l3_features = {
         "proactive_gap_detection": False,
-        "stale_correction_detection": False,
         "session_type_detection": False,
         "memory_effectiveness_tracking": False,
         "ddd_auto_update_suggestions": False,
@@ -352,13 +351,6 @@ def _compute_engine_level(ws_path: Path) -> dict[str, Any]:
         if "is_channel" in sig.parameters:
             l3_features["session_type_detection"] = True
     except (ImportError, Exception):
-        pass
-
-    # Stale correction detection — check if distillation does git cross-ref
-    try:
-        from hooks.distillation_hook import _IMPLEMENTATION_KEYWORDS
-        l3_features["stale_correction_detection"] = True
-    except ImportError:
         pass
 
     # Memory effectiveness — this module existing means it's active

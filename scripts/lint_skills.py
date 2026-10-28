@@ -216,14 +216,11 @@ _BINARY_SUFFIXES = frozenset({
 # contract. Rewriting it would make the comment disagree with the format the code
 # actually matches — the lying-comment failure this project already has a rule for.
 BODY_ALLOWLIST: dict[str, set[str]] = {
-    # A CLI help string documenting an entry-id FORMAT. The value is a sample for
-    # the user to imitate, not a citation.
-    "backend/skills/s_persist/scripts/locked_write.py": {"O001"},
     # Comments quoting the on-disk entry shapes this checker parses.
     "backend/skills/s_loops-health/scripts/loops_health_check.py": {"C037", "DEC01"},
-    # The portable twin of s_persist above, provisioned into user DDDs. Same
-    # reason and same shape: an entry-id sample its ``### {entry_id} |`` parser
-    # matches and its CLI help tells the user to imitate. Only ``O001`` is listed
+    # The locked writer s_ddd-persist ships for hosts without SwarmAI. A CLI help
+    # string documenting an entry-id FORMAT: a sample its ``### {entry_id} |`` parser
+    # matches and its CLI help tells the user to imitate, not a citation. Only ``O001`` is listed
     # even though the same lines also read "E001, F001": those two match no pattern
     # here, so exempting them would exempt nothing while reading as though it did.
     "backend/templates/ddd-skills/s_ddd-persist/scripts/locked_write.py": {"O001"},

@@ -114,7 +114,7 @@ class TestCachedPathEqualsExpandedDefault:
 
         expected = fake_expand(swm.DEFAULT_WORKSPACE_CONFIG["file_path"])
 
-        with patch("config.get_app_data_dir", return_value=Path(app_data_dir)):
+        with patch("config.get_app_data_dir", return_value=Path(app_data_dir)), patch.object(InitializationManager, "_persist_workspace_path"):  # the AppConfigManager singleton must not keep a random path
             result = manager.get_cached_workspace_path()
 
         assert result == expected, (
@@ -132,7 +132,7 @@ class TestCachedPathEqualsExpandedDefault:
         manager = InitializationManager()
         manager._cached_workspace_path = None
 
-        with patch("config.get_app_data_dir", return_value=Path(app_data_dir)):
+        with patch("config.get_app_data_dir", return_value=Path(app_data_dir)), patch.object(InitializationManager, "_persist_workspace_path"):  # the AppConfigManager singleton must not keep a random path
             result = manager.get_cached_workspace_path()
 
         assert result.endswith("/SwarmWS"), (
@@ -149,7 +149,7 @@ class TestCachedPathEqualsExpandedDefault:
         manager = InitializationManager()
         manager._cached_workspace_path = None
 
-        with patch("config.get_app_data_dir", return_value=Path(app_data_dir)):
+        with patch("config.get_app_data_dir", return_value=Path(app_data_dir)), patch.object(InitializationManager, "_persist_workspace_path"):  # the AppConfigManager singleton must not keep a random path
             result = manager.get_cached_workspace_path()
 
         # Normalize: Path resolves trailing slashes etc.

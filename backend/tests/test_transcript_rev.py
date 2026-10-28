@@ -90,7 +90,7 @@ async def test_v14_database_migrates_to_v15(tmp_path):
         await conn.commit()
         await d._run_versioned_migrations(conn, 14)
         await d._run_versioned_migrations(conn, 14)
-        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == 15
+        assert (await (await conn.execute("PRAGMA user_version")).fetchone())[0] == 17
         names = {r[0] for r in await (await conn.execute(
             "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE '%rev%'")).fetchall()}
     assert len(names) == 6

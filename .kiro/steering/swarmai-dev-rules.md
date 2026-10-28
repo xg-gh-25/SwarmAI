@@ -66,7 +66,7 @@ key files are in context). Consult BEFORE modifying:
 |------|--------------|-----------|
 | Multi-tab chat isolation | `multi-tab-isolation-principles.md` | ChatPage.tsx, useChatStreamingLifecycle.ts, useUnifiedTabState.ts |
 | Session identity & backend isolation | `session-identity-and-backend-isolation.md` | session_router.py, session_unit.py, lifecycle_manager.py, permission_manager.py, chat.py |
-| Context & memory safety | `context-and-memory-safety.md` | context_directory_loader.py, prompt_builder.py, context_injector.py, hooks/*.py, locked_write.py |
+| Context & memory safety | `context-and-memory-safety.md` | context_directory_loader.py, prompt_builder.py, context_injector.py, hooks/*.py, core/ingestion/writer.py |
 | Self-evolution guardrails | `self-evolution-guardrails.md` | evolution_optimizer.py, evolution_maintenance_hook.py, s_self-evolution/* |
 
 ## Global Anti-Patterns
@@ -79,7 +79,8 @@ key files are in context). Consult BEFORE modifying:
 3. **Overwriting user files**: Never overwrite files with `user_customized=True` in `ensure_directory()`.
 4. **Permission state**: per session only — the prompt board (`open_prompts(session_id)`),
    `approve_command(session_id, …)`. There is no global queue.
-5. **Direct MEMORY.md writes**: Always use `locked_write.py`. Concurrent writes corrupt the file.
+5. **Direct MEMORY.md writes**: never. CDF's ingestion writer is the only writer; submit a
+   unit (`ingest submit` / a source's `enqueue`), or use `governed_edit` for a user edit.
 6. **Raw message writes on the frontend**: all message mutations go through the tab's
    `MessageStore` (e.g. `insertOptimisticMessages`), never a raw `setMessages`.
 

@@ -42,7 +42,15 @@ def brain(tmp_path: Path, monkeypatch):
     from core.swarm_workspace_manager import SwarmWorkspaceManager
     proj = tmp_path / "Projects" / "Acme"
     proj.mkdir(parents=True)
-    asyncio.run(SwarmWorkspaceManager().provision_project_ddd("Acme", workspace_path=str(tmp_path)))
+    # A private loop, not asyncio.run(): asyncio.run() sets the current event loop to
+    # None when it finishes, and later tests in the same process that use the current
+    # loop (test_chat_scenarios_e2e) then fail with "no current event loop".
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(
+            SwarmWorkspaceManager().provision_project_ddd("Acme", workspace_path=str(tmp_path)))
+    finally:
+        loop.close()
     write_setup_state(proj, "setting-up")
     monkeypatch.setattr(survey, "owned_repos",
                         lambda d: [{"name": "acme", "root": str(repo.resolve()), "db_path": None}])

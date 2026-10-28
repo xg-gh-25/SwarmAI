@@ -1,7 +1,8 @@
-"""Governance review API + service: proposals are derived from EVOLUTION.md's GC
-table every time; accept / reject write the verdict into the row in place; defer
-changes nothing; nothing ever writes SOUL/AGENT/STEERING
-(docs/design/2026-10-26-evolution-loop-admission.md §3.2, §5)."""
+"""Eval governance request APIs are read-only after migration to scheduled S5.
+
+Eligible GC rows are aggregated by ``governance_miner`` on the scheduled path. The
+compatibility decision API reports ``not_found`` and never mutates governed files.
+"""
 
 from __future__ import annotations
 
@@ -10,77 +11,76 @@ import json
 import pytest
 
 from core.eval_service import EvalService
-from core.evolution import governance_miner as gm
 
 CHECKED = "checked against: R27 — new because it names the grep step"
 
 
 @pytest.fixture
-def svc(tmp_path):
+def svc(tmp_path, monkeypatch):
     ctx = tmp_path / ".context"
     ctx.mkdir(parents=True)
-    (ctx / "EVOLUTION.md").write_text(
+    evolution = ctx / "EVOLUTION.md"
+    evolution.write_text(
         "## Governance Candidates\n\n"
         "| ID | Proposed Rule | Evidence | Count | Since | Checked |\n"
         "|----|---|---|---|---|---|\n"
         f'| GC14 | "rule fourteen" | C1, C2, C3 | 3/3 | 2026-10-01 | {CHECKED} |\n'
         f'| GC15 | "rule fifteen" | C1, C2, C3 | 3/3 | 2026-10-01 | {CHECKED} |\n',
-        encoding="utf-8",
-    )
-    # Rows an older version left in the old proposal file are not read.
+        encoding="utf-8")
     (ctx / ".evolution_proposals.json").write_text(json.dumps([
-        {"skill_name": "save-activity", "changes": []},
-        {"target": "governance", "proposal_kind": "gate", "source_class": "CLASS_C", "proposed_rule": "x"},
-        {"target": "governance", "gc_id": "GC99", "proposed_rule": "unchecked legacy GC proposal"},
+        {"target": "governance", "gc_id": "GC99", "proposed_rule": "legacy"},
     ]), encoding="utf-8")
-    return EvalService(workspace_root=tmp_path)
+    calls = []
+    return EvalService(workspace_root=tmp_path), calls, evolution
 
 
-def _ids(svc):
-    return [p["id"] for p in svc.get_pending_governance()["proposals"]]
+def test_pending_view_is_empty_and_read_only(svc):
+    service, calls, evolution = svc
+    before = evolution.read_bytes()
+
+    assert service.get_pending_governance() == {"proposals": [], "total": 0}
+    assert calls == []
+    assert evolution.read_bytes() == before
 
 
-def test_pending_comes_from_the_gc_table_only(svc):
-    assert _ids(svc) == ["GC14", "GC15"]
-    assert svc.get_pending_governance()["total"] == 2
+@pytest.mark.parametrize("decision", ["accept", "reject", "defer"])
+def test_removed_decisions_are_not_found_and_change_nothing(svc, decision):
+    service, _calls, evolution = svc
+    before = evolution.read_bytes()
+
+    assert service.decide_governance("GC14", decision) == {
+        "status": "not_found", "proposal_id": "GC14"}
+    assert evolution.read_bytes() == before
 
 
-@pytest.mark.parametrize("decision,status,mark", [
-    ("accept", "accepted", gm.ACCEPTED), ("reject", "rejected", gm.REJECTED)])
-def test_decision_marks_the_row_and_it_never_returns(svc, tmp_path, decision, status, mark):
-    res = svc.decide_governance("GC14", decision)
-    assert (res["status"], res["action_taken"]) == (status, "marked")
-    assert ("next_step" in res) == (decision == "accept")
-    assert _ids(svc) == ["GC15"]
-    assert f'| GC14 | "rule fourteen" | C1, C2, C3 | {mark} ' in (tmp_path / ".context" / "EVOLUTION.md").read_text(encoding="utf-8")
-
-
-def test_second_decision_finds_nothing(svc):
-    svc.decide_governance("GC14", "accept")
-    assert svc.decide_governance("GC14", "reject")["status"] == "not_found"
-
-
-def test_defer_changes_nothing(svc, tmp_path):
-    before = (tmp_path / ".context" / "EVOLUTION.md").read_text(encoding="utf-8")
-    assert svc.decide_governance("GC14", "defer")["status"] == "deferred"
-    assert _ids(svc) == ["GC14", "GC15"]
-    assert (tmp_path / ".context" / "EVOLUTION.md").read_text(encoding="utf-8") == before
+def test_repeated_reads_use_stable_candidate_slots(svc):
+    service, calls, _evolution = svc
+    service.get_pending_governance()
+    first = [(call[0][1], call[0][2], call[0][3]) for call in calls]
+    calls.clear()
+    service.get_pending_governance()
+    second = [(call[0][1], call[0][2], call[0][3]) for call in calls]
+    assert second == first
 
 
 def test_legacy_rows_cannot_be_decided(svc):
-    assert svc.decide_governance("CLASS_C:gate", "accept")["status"] == "not_found"
-    assert svc.decide_governance("GC99", "accept")["status"] == "not_found"
+    service, _calls, _evolution = svc
+    assert service.decide_governance("GC99", "accept")["status"] == "not_found"
 
 
 def test_never_writes_governance_files(svc, tmp_path):
+    service, _calls, _evolution = svc
+    files = []
     for name in ("SOUL.md", "AGENT.md", "STEERING.md"):
-        (tmp_path / ".context" / name).write_text("ORIGINAL\n")
-    svc.decide_governance("GC14", "accept")
-    svc.decide_governance("GC15", "reject")
-    for name in ("SOUL.md", "AGENT.md", "STEERING.md"):
-        assert (tmp_path / ".context" / name).read_text() == "ORIGINAL\n", name
+        path = tmp_path / ".context" / name
+        path.write_text("ORIGINAL\n")
+        files.append(path)
+    service.get_pending_governance()
+    service.decide_governance("GC14", "accept")
+    assert all(path.read_text() == "ORIGINAL\n" for path in files)
 
 
 def test_unknown_id_and_invalid_decision(svc):
-    assert svc.decide_governance("NOPE", "accept")["status"] == "not_found"
-    assert svc.decide_governance("GC14", "frobnicate")["status"] == "error"
+    service, _calls, _evolution = svc
+    assert service.decide_governance("NOPE", "accept")["status"] == "not_found"
+    assert service.decide_governance("GC14", "frobnicate")["status"] == "error"

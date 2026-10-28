@@ -1,0 +1,205 @@
+# CDF governed-write migration inventory. Remove entries as SOURCES routes them through the materializer.
+channels/gateway.py:ChannelGateway._stage_file_to_workspace._stage  # exempt: channel attachment into channel_files/, not a governed file
+core/backup_manager.py:BackupManager._backup_impl  # exempt: backup copy of the workspace into the backup dir
+core/backup_manager.py:BackupManager._cleanup_partial_restore  # exempt: removes a cloned workspace left by an interrupted restore
+core/backup_manager.py:BackupManager._restore_impl  # exempt: fresh-install restore; refuses when MEMORY.md or the DB holds data, so it never rewrites governed content
+core/backup_manager.py:BackupManager._save_state  # exempt: backup state JSON
+core/backup_manager.py:_file_set_token  # exempt: backup token file (0600) under the app data dir
+core/backup_manager.py:_sqlite_backup_store  # writes sqlite backup copies under the backup dir, never a governed corpus file
+core/brain_bootstrap/apply.py:_write_atomic  # pending: New Brain C9 (bootstrap entries move to CDF in New Brain stage two)
+core/brain_size_series.py:append_snapshot  # exempt: brain size series JSONL
+core/code_intel_feed.py:detect_tech_drift  # exempt: code_drift_health.json
+core/context_directory_loader.py:_atomic_write_bytes  # exempt: template seeding; governed context files are written only when absent (first run)
+core/data_safety.py:clear_recovery_marker  # exempt: recovery marker in the app data dir
+core/data_safety.py:isolate_store  # exempt: moves a damaged database aside
+core/data_safety.py:isolate_store._relocate  # exempt: moves a damaged database aside
+core/data_safety.py:write_recovery_marker  # exempt: recovery marker in the app data dir
+core/ddd_auto_approval.py:record_revert  # exempt: append-only revert log under a project's .artifacts/
+core/ddd_bindings.py:_clear_worktree_for_reclone  # exempt: bound repo clone dir
+core/ddd_bindings.py:_open_lock  # exempt: binding lock file
+core/ddd_bindings.py:sync_back  # exempt: sync report file; the DDD changes themselves land via the user's pull + ingest sync-record
+core/ddd_cultivation.py:_log_supersede_delete  # exempt: DDD changelog JSONL
+core/ddd_cultivation.py:log_application  # exempt: DDD changelog JSONL
+core/ddd_cultivation.py:record_cultivation_outcome  # exempt: cultivation outcome JSONL
+core/ddd_cultivation.py:record_workspace_cultivation_health  # exempt: cultivation health JSONL
+core/ddd_health.py:compute_section_health  # exempt: section health state JSON
+core/ddd_job_registry.py:_write_manifest_atomic  # exempt: DDD job manifest
+core/ddd_packager.py:_copy_corpus  # exempt: writes the package output dir
+core/ddd_packager.py:_copy_deliverables  # exempt: writes the package output dir
+core/ddd_packager.py:_copy_gates  # exempt: writes the package output dir
+core/ddd_packager.py:_copy_skill_dirs  # exempt: writes the package output dir
+core/ddd_packager.py:_copy_understanding_orphans  # exempt: writes the package output dir
+core/ddd_packager.py:_emit_gate_sops  # exempt: writes the package output dir
+core/ddd_packager.py:_materialize_shared  # exempt: writes the package output dir
+core/ddd_packager.py:_prune_empty_dirs  # exempt: writes the package output dir
+core/ddd_packager.py:_rewrite_skill_body_refs  # exempt: writes the package output dir
+core/ddd_packager.py:_rewrite_skill_name  # exempt: writes the package output dir
+core/ddd_packager.py:_write_json  # exempt: writes the package output dir
+core/ddd_packager.py:emit_install_script  # exempt: writes the package output dir
+core/ddd_packager.py:emit_target_aim  # exempt: writes the package output dir
+core/ddd_packager.py:emit_target_open_plugin  # exempt: writes the package output dir
+core/ddd_packager.py:package_ddd  # exempt: writes the package output dir
+core/ddd_skill_registry.py:_write_manifest_atomic  # exempt: DDD skill manifest
+core/ddd_usage.py:_atomic_write  # exempt: DDD usage JSON
+core/engine_metrics.py:collect_engine_metrics  # exempt: via load_learning_state: the briefing learning-state JSON, not a governed file
+core/escalation.py:save_escalation  # exempt: escalation JSON under the escalations dir
+core/eval_service.py:EvalService._clear_inflight_marker  # exempt: eval in-flight marker
+core/eval_service.py:EvalService._persist_golden_set  # exempt: private golden set YAML
+core/eval_service.py:EvalService._write_inflight_marker  # exempt: eval in-flight marker
+core/eval_service.py:EvalService._write_partition  # exempt: golden set partition file
+core/eval_service.py:EvalService._write_run_result  # exempt: eval run result under EvalHistory/
+core/eval_service.py:EvalService.record_calibration  # exempt: eval calibration JSONL
+core/evolution_optimizer.py:EvolutionOptimizer._validate_constraints  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/evolution_optimizer.py:_break_stale_lock  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/evolution_optimizer.py:_run_evolution_cycle_locked  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/evolution_optimizer.py:_write_cycle_changelog  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/evolution_optimizer.py:_write_skill_health  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/evolution_optimizer.py:atomic_deploy  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/evolution_optimizer.py:run_evolution_cycle  # exempt: writes SKILL.md, skill_health.json, the cycle changelog and its lock; none is a CDF store (its EVOLUTION findings go through S5)
+core/ingestion/pipeline_v2.py:reinforce_or_reject  # exempt: via store.connect_rw: ingestion.db, CDF's own store
+core/ingestion/pipeline_v2.py:requeue_missing_sections  # exempt: via store.connect_rw: ingestion.db, CDF's own store
+core/ingestion/pipeline_v2.py:requeue_parked  # exempt: via store.connect_rw: ingestion.db, CDF's own store
+core/ingestion/summary_lane.py:append_daily_summary  # exempt: DailyActivity (working memory, not governed); the summary lane is its writer
+core/ingestion/usage.py:record_usage  # exempt: via store.connect_rw: ingestion.db unit_usage
+core/ingestion_gate.py:_write_telemetry_row  # exempt: gate telemetry JSONL
+core/knowledge_graph.py:_locked_read_modify_write  # exempt: .knowledge-graph.yaml (derived relation graph) lock
+core/knowledge_graph.py:save_graph  # exempt: .knowledge-graph.yaml (derived relation graph)
+core/library_health.py:write_report_atomic  # exempt: Knowledge/.library-health.json report
+core/memory_injection.py:select_context_file  # writes only injection_selection in ingestion.db; source MEMORY/EVOLUTION files are read-only
+core/proactive_intelligence.py:build_session_briefing  # exempt: via load_learning_state: the briefing learning-state JSON
+core/product_registry.py:ProductRegistry._atomic_write_json  # exempt: product registry JSON
+core/product_registry.py:ProductRegistry._mutate  # exempt: product registry lock
+core/projection_layer.py:ProjectionLayer._cleanup_stale_entries  # exempt: projected skill copies under .claude/skills/
+core/projection_layer.py:ProjectionLayer.project_skills  # exempt: projected skill copies under .claude/skills/
+core/projection_layer.py:project_experts  # exempt: projected expert prompts under .claude/experts/
+core/runtime_hooks.py:_append_correction  # exempt: corrections JSONL log
+core/runtime_hooks.py:create_agent_tool_audit_hook._hook._classify_and_write  # exempt: agent tool audit record
+core/runtime_hooks.py:create_session_checkpoint._hook._write_checkpoint  # exempt: session checkpoint JSON
+core/runtime_hooks.py:write_session_run_map  # exempt: session-to-run map
+core/security_hooks.py:create_active_run_commit_gate._gate  # exempt: via gate_force: force_bypass audit log
+core/security_hooks.py:create_audit_marker_write_gate.audit_marker_write_gate  # exempt: via gate_force: force_bypass audit log
+core/security_hooks.py:create_pre_tool_logger.pre_tool_logger  # exempt: via sel.append_event: security event log
+core/security_hooks.py:load_dangerous_patterns  # exempt: dangerous_commands.json default
+core/session_router.py:SessionRouter._run_conversation_impl  # exempt: opener.open(session_id, unit) is a session opener, not a file (mode unreadable: flagged fail-closed)
+core/session_state_persistence.py:load_persisted_state  # exempt: session state file
+core/session_state_persistence.py:persist_session_state  # exempt: session state file
+core/session_unit.py:SessionUnit._force_kill  # exempt: via kill_audit.record: kill audit log
+core/session_unit.py:_kill_pids  # exempt: via kill_audit.record: kill audit log
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._cleanup_legacy_content  # exempt: marker-gated one-time legacy cleanup of pre-restructure SwarmWS
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._cleanup_legacy_content._migrate_kb_to_library  # exempt: marker-gated one-time legacy cleanup of pre-restructure SwarmWS
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._ensure_default_project._provision  # exempt: provisioning; creates DDD files only when absent
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._ensure_git_repo  # exempt: workspace .gitignore
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._provision_job_system  # exempt: job system config
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._remove_legacy_scheduler_plist  # exempt: legacy launchd plist
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._seed_hive_from_package  # exempt: fresh-Hive seed; every write is guarded by exists
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._untrack_ai_instruction_files  # exempt: git index marker
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._untrack_private_content  # exempt: git index marker
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._untrack_projections  # exempt: git index marker
+core/swarm_workspace_manager.py:SwarmWorkspaceManager._write_project_metadata  # exempt: .project.json
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.create_folder_structure  # exempt: workspace .gitignore
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.create_project  # exempt: via write_setup_state: project setup-state JSON (DDD files are provisioned only-if-absent)
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_section._migrate_layout_to_numbered._relocate  # exempt: governed docs move through governed_edit.apply_user_edit; shutil.move only for non-governed dirs
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.migrate_project_to_six_section._prune_legacy_scaffold  # exempt: removes shipped legacy README stubs and empty scaffold dirs, none governed
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.provision_project_ddd._create_ddd  # exempt: provisioning; creates DDD files only when absent
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.prune_archives  # exempt: archived DailyActivity (working memory)
+core/swarm_workspace_manager.py:SwarmWorkspaceManager.verify_integrity._append_gitignore  # exempt: workspace .gitignore
+core/swarm_workspace_manager.py:_assert_ai_instruction_sentinels  # exempt: workspace CLAUDE.md / AGENTS.md sentinels
+core/swarm_workspace_manager.py:_batch_remove  # exempt: legacy path removal (one-time cleanup)
+core/swarm_workspace_manager.py:ensure_project_metadata  # exempt: .project.json
+core/turn_changes.py:_tree  # exempt: temp git index copy
+core/user_observer.py:UserObserver.save_observations  # exempt: observations JSONL, not a governed file
+hooks/auto_commit_hook.py:WorkspaceAutoCommitHook._cleanup_stale_git_lock  # exempt: stale .git/index.lock
+hooks/code_change_feed.py:CodeChangeFeed._persist_last_commit  # exempt: last-analyzed commit state
+hooks/context_health_hook.py:ContextHealthHook._check_cache_freshness  # exempt: L1 prompt cache
+hooks/context_health_hook.py:ContextHealthHook._check_git_health  # exempt: stale .git lock
+hooks/context_health_hook.py:ContextHealthHook._deep_check  # exempt: via check_adversarial_health: adversarial health state file; the deep check itself is read-only on governed files
+hooks/context_health_hook.py:ContextHealthHook._enforce_retention_policies  # exempt: DailyActivity archival and Archives cleanup (not governed)
+hooks/context_health_hook.py:ContextHealthHook._log_maturity_promotion  # exempt: DDD changelog JSONL
+hooks/context_health_hook.py:ContextHealthHook._persist_findings  # exempt: health_findings.json
+hooks/context_health_hook.py:ContextHealthHook._run_session_canary  # exempt: .eval-canary.json
+hooks/context_health_hook.py:ContextHealthHook._set_verified_from_pipeline_runs  # exempt: maturity state JSON
+hooks/context_health_hook.py:ContextHealthHook._track_memory_usage  # exempt: memory usage JSON lock
+hooks/context_health_hook.py:ContextHealthHook._track_memory_usage_locked  # exempt: memory usage JSON
+hooks/context_health_hook.py:ContextHealthHook._write_daily_canary_state  # exempt: daily canary state JSON
+hooks/daily_activity_hook.py:DailyActivityExtractionHook._execute_locked  # exempt: crash checkpoint file
+hooks/daily_activity_hook.py:recover_crash_checkpoint  # exempt: crash checkpoint file
+jobs/config_io.py:_write_atomic  # exempt: job config.yaml
+jobs/config_io.py:mutate_config  # exempt: job config.yaml lock
+jobs/executor.py:_handle_agent_task  # exempt: temp MCP config file
+jobs/executor.py:_handle_maintenance  # exempt: job results JSONL trim
+jobs/executor.py:_purge_terminal_todos  # exempt: todo archive and todo dirs
+jobs/executor.py:_send_slack_dm  # exempt: temp MCP config file
+jobs/executor.py:_write_failure_streak_alert  # exempt: job results JSONL
+jobs/executor.py:_write_job_result  # exempt: Knowledge/JobResults (unmanaged log folder)
+jobs/executor.py:execute_job  # exempt: via run_worktree_sweep: pipeline worktrees
+jobs/handlers/code_intel_reindex.py:reindex_projects  # exempt: via doc_index.sync_repo_after_head_move: knowledge index DB and survey.json under .artifacts/
+jobs/handlers/ddd_weekly_report.py:run_ddd_weekly_report  # exempt: writes Knowledge/Reports/ (not a governed store)
+jobs/handlers/memory_health.py:_update_health_findings  # exempt: health_findings.json
+jobs/handlers/memory_health.py:_write_summary_to_daily  # exempt: DailyActivity summary line (working memory)
+jobs/handlers/signal_digest.py:_handle_rollup  # exempt: signal rollup markdown under Services/signals
+jobs/handlers/signal_digest.py:_write_l4_json  # exempt: Services/signals/signal_digest.json
+jobs/handlers/signal_digest.py:handle_signal_digest  # exempt: signal digest markdown under Services/signals
+jobs/scheduler.py:_state_lock  # exempt: scheduler state lock
+jobs/scheduler.py:main  # exempt: via install_scheduler: launchd/systemd unit
+jobs/scheduler.py:save_state  # exempt: scheduler state.json
+jobs/scheduler.py:toggle_job  # exempt: jobs.yaml / user-jobs.yaml
+main.py:_deferred_refresh_defaults  # exempt: via mcp_migration: MCP config
+main.py:_generate_permissions_json  # exempt: permissions.json in the app data dir
+main.py:_purge_corrupt_db  # exempt: a corrupt database file
+main.py:_reseed_from_seed  # exempt: database reseed
+main.py:lifespan  # exempt: via _migrate_legacy_state_dir: legacy state dir move
+main.py:read_backend_json  # exempt: backend.json (reads with a lock opened for write)
+main.py:remove_backend_json  # exempt: backend.json
+main.py:write_backend_json  # exempt: backend.json
+routers/cultivation.py:_proposal_lock  # exempt: proposal lock
+routers/cultivation.py:_update_proposal_status  # exempt: proposal JSON status
+routers/ddd_brain.py:_write_watermark  # exempt: brain watermark file
+routers/pollinate.py:_write_publish_state  # exempt: pollinate publish sidecar
+routers/workspace_api.py:create_file._create  # exempt: non-governed paths only: governed targets go through apply_user_edit
+routers/workspace_api.py:delete_folder._delete  # exempt: non-governed paths only; a dir with governed descendants is refused by forbid_dir_op
+routers/workspace_api.py:put_workspace_file._write  # exempt: non-governed paths only; governed files go through apply_user_edit before this
+routers/workspace_api.py:rename_item._rename  # exempt: non-governed paths only; governed trees go through move_tree
+scripts/artifact_cli.py:cmd_bind  # exempt: via doc_index.sync_project: knowledge index DB and survey.json under .artifacts/
+scripts/artifact_cli.py:cmd_release_gate  # exempt: release gate marker
+scripts/artifact_cli.py:cmd_survey  # exempt: via doc_index.sync_project: knowledge index DB and survey.json under .artifacts/
+scripts/bvt_probe.py:main.broken  # exempt: probe writes into its own temp workspace
+scripts/clean_daily_activity.py:main  # exempt: DailyActivity cleanup tool (working memory)
+scripts/ddd_verbatim_sync.py:sync  # exempt: dev tool; re-copies product template files inside the repo
+scripts/eval_runner.py:eval_trajectory_capture  # exempt: via fixture_workspace: a temp fixture workspace
+scripts/eval_runner.py:generate_html_report  # exempt: eval HTML report
+scripts/eval_runner.py:write_run  # exempt: eval run under EvalHistory/
+scripts/probe_context.py:_cache_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_context.py:_seed_private  # exempt: probe writes into its own temp workspace
+scripts/probe_context.py:order  # exempt: probe writes into its own temp workspace
+scripts/probe_context.py:order.broken  # exempt: probe writes into its own temp workspace
+scripts/probe_ddd.py:_cultivate_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_ddd.py:_noise_verdict  # exempt: probe writes into its own temp workspace
+scripts/probe_ingestion.py:_cultivation_enqueue_holds  # probe seeds a temp workspace fixture, never the live corpus
+scripts/probe_ingestion.py:_preserve_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_ingestion.py:preserve  # exempt: probe writes into its own temp workspace
+scripts/probe_knowledge.py:_mount_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_memory.py:_inject_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_memory.py:_reclaim_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_memory.py:_selection_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_recall.py:_archive_holds  # exempt: probe writes into its own temp workspace
+scripts/probe_recall.py:_seed_projects  # exempt: probe writes into its own temp workspace
+scripts/recall_replay.py:cmd_replay  # exempt: replay output dir
+scripts/recall_replay.py:cmd_sample  # exempt: replay output dir
+scripts/recall_replay.py:cmd_score  # exempt: replay output dir
+scripts/scenario_runner.py:run_scenario_raw  # exempt: temp scenario files
+scripts/seed_corrections.py:write_corrections  # exempt: corrections JSONL output
+scripts/swarm_select_tests.py:_write_json  # exempt: test selector cache
+scripts/update_convergence.py:append_to_convergence  # exempt: release tool; appends to docs/CONVERGENCE.md in the repo
+skills/s_loops-health/scripts/loops_health_check.py:SelfLoopsHealthEngine._record_history  # exempt: loops health history JSON
+skills/s_loops-health/scripts/loops_health_check.py:main  # exempt: loops health report output
+skills/s_pollinate/scripts/publish_to_pages.py:copy_content  # exempt: pages publish repo
+skills/s_pollinate/scripts/publish_to_pages.py:generate_index  # exempt: pages publish repo
+skills/s_pollinate/scripts/publish_to_pages.py:save_manifest  # exempt: pages publish manifest
+skills/s_pollinate/scripts/render_style_thumbnails.py:main  # exempt: style thumbnail output
+skills/s_project-manager/scripts/verify_ddd_complete.py:record_setup_state  # exempt: .artifacts/setup.json
+templates/ddd-skills/s_ddd-persist/scripts/locked_write.py:locked_field_modify  # exempt: runs only on hosts without SwarmAI; refuses when SWARM_BACKEND_BIN is set (CDF writes DDD docs there)
+templates/ddd-skills/s_ddd-persist/scripts/locked_write.py:locked_read_modify_write  # exempt: runs only on hosts without SwarmAI; refuses when SWARM_BACKEND_BIN is set (CDF writes DDD docs there)
+utils/file_lock.py:md_lock  # exempt: the .lock sidecar
+scripts/probe_ddd.py:_bootstrap_holds  # exempt: eval probe fixture in a temp workspace
+scripts/cdf_rehearsal_replay.py:_drain  # exempt: drives CDF's own worker and writer, only on a workspace copy (guard_paths refuses ~/.swarm-ai)
+scripts/cdf_rehearsal_replay.py:main  # exempt: writes the JSON report to --report; governed writes go through _drain

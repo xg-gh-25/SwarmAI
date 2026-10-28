@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -733,7 +734,16 @@ def sync_back(binding: Binding, worktree_root: str | Path, ws_root: str | Path,
     """
     wt = Path(worktree_root).resolve()
     ws = Path(ws_root).resolve()
-    pull_command = f"git -C {wt} pull"   # HITL — surfaced, never executed here
+    mapped_targets = [str(_confine(ws, value, "ws-target"))
+                      for value in (binding.sync_back or {}).values()]
+    pull_command = f"git -C {shlex.quote(str(wt))} pull"
+    if mapped_targets:
+        origin = shlex.quote(f"ddd-binding:{binding.repo}")
+        path_args = " ".join(shlex.quote(value) for value in mapped_targets)
+        pull_command += (
+            f' && "${{SWARM_BACKEND_BIN:?}}" ingest sync-record '
+            f"--origin {origin} --paths {path_args}"
+        )
 
     if not binding.sync_back:
         return {"pull_command": pull_command, "deltas": [], "report_path": None}

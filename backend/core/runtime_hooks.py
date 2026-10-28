@@ -14,6 +14,7 @@ Key public symbols:
 
 import asyncio
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -337,7 +338,7 @@ def create_user_correction_detector(
                 "ts": time.time(),
                 "session_id": sid,
                 "type": "user_correction",
-                "prompt": prompt[:1000],
+                "prompt": prompt,
             }
             _append_correction(path, entry)
             ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
@@ -352,95 +353,25 @@ def create_user_correction_detector(
             # corrections — a recorded mistake. META-only redirects are steering,
             # not pitfalls; recording them would pollute MEMORY with non-pitfalls.
             if is_explicit_error:
-                # NOTE (M5 Part 2, run_0305426d): golden-case seeding was REMOVED
-                # from this hot path. It used to fire seed_from_correction(...,
-                # "UNCLASSIFIED") synchronously on every explicit-error prompt —
-                # BEFORE any classification — which dumped unclassified test-session
-                # noise (GS_C_test-ses_*) straight into golden_set. Seeding from
-                # corrections was then decommissioned altogether. The corrections.jsonl
-                # append above is the durable signal that path consumes.
-
-                # Gap #17: Immediate correction → MEMORY.md.
-                # Best-effort — failure must never break the hook chain.
-                #
-                # JUDGE-GATED (run_04fd397c, XG decision A): this was a MEMORY BACKDOOR —
-                # it wrote via a value-floor (is_memory_worthy_correction) that is NOT the
-                # self_adversarial judge, violating "the judge is the sole admit authority"
-                # (P8). Now routes through admit_memory_lesson — the SAME judge every other
-                # MEMORY door uses. verdict=="auto" → write to the judge-routed section
-                # (fail-closed: judge error/suspect/noise → discard, NOT written). The
-                # corrections.jsonl append above is the durable signal the post-session
-                # classifier consumes, so a judge-discard here loses NO signal, only noise.
                 try:
-                    from core.ingestion_gate import admit_memory_lesson
-                    from scripts.locked_write import locked_read_modify_write
-                    summary = prompt[:150].replace("\n", " ").strip()
-                    # DETERMINISTIC CORRECTION FLOOR (restored — call-out #2): a raw
-                    # correction prompt is a SIGNAL, not automatically a lesson. Strip the
-                    # trigger phrases ("that's wrong", "use X instead"); if the residue
-                    # teaches nothing (< MIN_LESSON_LENGTH) it must NEVER reach MEMORY —
-                    # even if the judge would pass it. 2c8fc37f dropped this floor and left
-                    # the judge as the only guard, so a pure "That's wrong, use async
-                    # instead" would sediment as a [pitfall]. This floor is correction-
-                    # specific (belongs to THIS door, not the shared memory_distill tiers,
-                    # which must not strip trigger phrases from a normal reflection lesson).
-                    # The corrections.jsonl append already happened above — rejecting here
-                    # loses NO signal, only declines to sediment a non-lesson.
-                    try:
-                        from core.ddd_cultivation import is_memory_worthy_correction
-                        _worthy = is_memory_worthy_correction(summary)
-                    except Exception:  # noqa: BLE001 — floor error → fail-closed (don't write)
-                        logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
-                        _worthy = False
-                    if not _worthy:
-                        verdict = "discard"
-                        distilled = None
-                    else:
-                        # Judge decides ADMIT/REJECT only; a correction is semantically a
-                        # [pitfall]→## Pitfalls (its fixed home since Gap #17), so we do NOT
-                        # re-route on the judge's section (that would write "[pitfall]" into
-                        # e.g. ## Corrections — a type/section mismatch, adversarial BUG#1).
-                        # The judge is a blocking Bedrock call (seconds): run it on the
-                        # bounded llm pool so the event loop (/health, SSE) keeps serving.
-                        from core import executors as _executors
-                        verdict, _section, _reason, distilled = await _executors.run_in(
-                            "llm", admit_memory_lesson, summary)
-                    from config import get_swarmws as _get_swarmws
-                    ws = _get_swarmws()
-                    if verdict == "pending":
-                        # RECOVERABLE (judge budget-exhausted / infra down) — DEFER to the
-                        # shared distill-pending.jsonl, never drop. Fixes the silent-drop:
-                        # the SSOT door used to collapse pending→discard, so once the judge
-                        # window filled, every correction was lost with no archive.
-                        try:
-                            from hooks.distillation_hook import requeue_pending_lesson
-                            requeue_pending_lesson(ws / ".context", "lesson", summary)
-                        except Exception:  # noqa: BLE001 — defer is best-effort
-                            logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
-                            pass
-                    elif verdict == "auto":
-                        # ROOT-FIX (capture-vs-distill): if the gate distilled a
-                        # shape-dirty entry, write the DISTILLED rule, never our own
-                        # raw summary (writer≠finalizer). fail-open: distilled=None →
-                        # keep summary.
-                        body = distilled or summary
-                        memory_path = ws / ".context" / "MEMORY.md"
-                        if memory_path.exists():
-                            from core.ddd_entry_lifecycle import canonical_entry_from_text
-                            today = time.strftime("%Y-%m-%d")
-                            # Canonical entry (lead + metadata) so the context-health
-                            # sweep can parse it and remove an exact repeat; written
-                            # whole (no write-time dedup, design
-                            # 2026-10-25-memory-write-entry-dedup §3.3/§3.6).
-                            entry_text = canonical_entry_from_text(
-                                body, "pitfall", today, run_id=sid[:8], source="auto",
-                            )
-                            locked_read_modify_write(
-                                memory_path, "## Pitfalls", entry_text, mode="append",
-                            )
+                    from core.ingestion.sources import s1_user
+                    from core.session_inputs import latest_user_event_id
+                    event_id = latest_user_event_id(sid)
+                    if not event_id:
+                        raise ValueError("current turn has no authenticated user event")
+                    s1_user.submit_units([{
+                        "kind": "cognition",
+                        "type": "correction",
+                        "scope": "agent",
+                        "title": "User correction to the agent's prior response",
+                        "what": prompt.strip(),
+                        "applicability": "When the same situation occurs again.",
+                        "evidence": [f"event:{event_id}"],
+                    }], session_id=sid, evidence=f"event:{event_id}", turn_kind="user",
+                       source_ref=event_id, project_snapshot={})
                 except Exception:
-                    logger.debug("_hook: suppressed exception on a fail-safe path", exc_info=True)
-                    pass  # Non-blocking — MEMORY write is best-effort
+                    logger.debug("correction enqueue failed", exc_info=True)
+
 
         return {}
 
@@ -666,10 +597,9 @@ def create_session_checkpoint(
             if corrections:
                 lines.append(f"**Corrections:** {corrections}\n")
 
+            # bounded by its parts (at most 10 whole file names, then a count), never
+            # cut: a byte cap here split a file name in half (CDF first principle)
             entry = "".join(lines)
-            # Hard cap at 1KB
-            if len(entry.encode("utf-8")) > 1024:
-                entry = entry[:1000] + "\n...(truncated)\n"
 
             # OFF-LOOP (run_a1f4c2d8): the locked read-modify-write goes to a thread.
             await asyncio.to_thread(upsert_session_block, da_file, session_id,
@@ -1724,6 +1654,11 @@ _HIGH_SIGNAL_PATTERNS = re.compile(
 )
 
 
+# A high-signal capture is one DailyActivity line; a longer message is named instead
+# (the whole text is in the session transcript), never cut.
+HIGH_SIGNAL_LINE_MAX = 2000
+
+
 def create_high_signal_capture(
     session_context: Optional[dict] = None,
     workspace_dir: Optional[str] = None,
@@ -1758,7 +1693,8 @@ def create_high_signal_capture(
         # Dedup within session
         if captured_key not in ctx:
             ctx[captured_key] = set()
-        sig = prompt[:100]  # signature for dedup
+        sig = hashlib.sha256(prompt.encode("utf-8")).hexdigest()   # the whole prompt
+        sid = ctx.get("sdk_session_id", "unknown")
         if sig in ctx[captured_key]:
             return {}
         ctx[captured_key].add(sig)
@@ -1770,7 +1706,12 @@ def create_high_signal_capture(
             from datetime import datetime
             from core.daily_activity_writer import append_daily_text
             now = datetime.now()
-            one_line = " ".join(prompt[:500].split())
+            # whole, on one line (whitespace folded so no '## ' line enters the file);
+            # a message too long for a DailyActivity line is named, never cut
+            one_line = " ".join(prompt.split())
+            if len(one_line) > HIGH_SIGNAL_LINE_MAX:
+                one_line = (f"(a {len(one_line)}-character message, not copied here so it "
+                            f"stays whole; it is in session {sid})")
             entry = f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): {one_line}\n"
             da_file = Path(ws) / "Knowledge" / "DailyActivity" / f"{now.strftime('%Y-%m-%d')}.md"
             # OFF-LOOP (run_a1f4c2d8): fires the instant the user hits send.

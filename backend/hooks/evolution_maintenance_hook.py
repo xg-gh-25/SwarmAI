@@ -1,24 +1,17 @@
-"""Post-session evolution maintenance hook.
+"""Post-session EVOLUTION.md maintenance report (read-only).
 
-Runs at session close to perform code-enforced EVOLUTION.md housekeeping
-that was previously prompt-dependent (and never fired in practice):
-
-- ``EvolutionMaintenanceHook``  — Implements ``SessionLifecycleHook``.
-  Scans EVOLUTION.md entries, deprecates idle entries (>30 days),
-  prunes deprecated entries with zero usage, and logs all actions
-  to EVOLUTION_CHANGELOG.jsonl.
-
-This hook uses ``locked_write.py`` functions directly (imported as a
-library) rather than shelling out, for atomicity and testability.
+- ``EvolutionMaintenanceHook`` -- implements ``SessionLifecycleHook``. At session
+  close it counts active entries idle past ``deprecation_days`` with zero usage
+  and logs the count. It never changes EVOLUTION.md: CDF's ingestion writer is
+  the only autonomous writer (design 2026-10-26 §8), and the prompt is bounded by
+  the §12 injection selector, not by evicting entries.
+- ``_parse_entries`` -- the ``### <ID> | <date>`` block reader it uses.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,35 +20,6 @@ from core.session_hooks import HookContext
 logger = logging.getLogger(__name__)
 
 
-def _resolve_transcripts_dir(base_dir: Path) -> Path:
-    """Resolve the transcript directory with most-recent-activity heuristic.
-
-    Instead of picking the first alphabetically-sorted subdirectory,
-    find the subdir whose most recent .jsonl file has the latest mtime.
-    Falls back to ``base_dir`` if no subdirs contain .jsonl files.
-    """
-    if not base_dir.is_dir():
-        return base_dir
-
-    best_dir = None
-    best_mtime = 0.0
-
-    for subdir in base_dir.iterdir():
-        if not subdir.is_dir():
-            continue
-        jsonl_files = list(subdir.glob("*.jsonl"))
-        if not jsonl_files:
-            continue
-        # Find the most recent .jsonl in this subdir
-        latest_mtime = max(f.stat().st_mtime for f in jsonl_files)
-        if latest_mtime > best_mtime:
-            best_mtime = latest_mtime
-            best_dir = subdir
-
-    return best_dir if best_dir is not None else base_dir
-
-
-# Sections that contain entries with Status + Usage Count fields
 _MANAGED_SECTIONS = [
     ("Capabilities Built", "E"),
     ("Competence Learned", "K"),
@@ -82,6 +46,45 @@ def _get_field(entry_block: str, field_name: str) -> str | None:
     match = pattern.search(entry_block)
     return match.group(1).strip() if match else None
 
+def _find_section_range(content: str, section: str):
+    """Find the start and end positions of a markdown section.
+
+    Looks for a ``## Section Name`` header and returns the range from
+    the end of that header line to the start of the next ``##`` header
+    (or end of file).
+
+    Returns:
+        tuple[int, int] | None: (insert_pos, next_header_pos) or None
+            if the section is not found.  ``insert_pos`` is the position
+            right after the section header line (including its newline).
+            ``next_header_pos`` is the start of the next ``##`` header
+            or len(content).
+    """
+    # Strip leading "## " prefix if present, then match exactly
+    clean_section = re.sub(r"^#+\s*", "", section).strip()
+    pattern = re.compile(
+        r"^(##\s+" + re.escape(clean_section) + r")\s*$",
+        re.MULTILINE,
+    )
+    match = pattern.search(content)
+    if match is None:
+        return None
+
+    # Position right after the header line
+    header_end = match.end()
+    # Skip the newline after the header if present
+    if header_end < len(content) and content[header_end] == "\n":
+        header_end += 1
+
+    # Find the next ## header or end of file
+    next_header = re.search(r"^##\s+", content[header_end:], re.MULTILINE)
+    if next_header:
+        next_header_pos = header_end + next_header.start()
+    else:
+        next_header_pos = len(content)
+
+    return (header_end, next_header_pos)
+
 
 def _parse_entries(content: str, section_name: str) -> list[dict]:
     """Parse all entries in a section into structured dicts.
@@ -89,8 +92,6 @@ def _parse_entries(content: str, section_name: str) -> list[dict]:
     Returns a list of dicts with keys: id, date, status, usage_count,
     start_pos, end_pos, block.
     """
-    from scripts.locked_write import _find_section_range
-
     section_range = _find_section_range(content, section_name)
     if section_range is None:
         return []
@@ -130,53 +131,8 @@ def _parse_entries(content: str, section_name: str) -> list[dict]:
     return entries
 
 
-def _append_changelog(
-    changelog_path: Path,
-    action: str,
-    entry_id: str,
-    summary: str,
-    source: str = "maintenance_hook",
-) -> None:
-    """Append a single JSONL line to the evolution changelog.
-
-    Uses ``fcntl.flock`` on a ``.jsonl.lock`` sidecar file to prevent
-    concurrent writes from corrupting the changelog (P0 fix, Req 5.1).
-    Rotates when file exceeds 512 KB (keeps newest 500 entries).
-    """
-    line = json.dumps({
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "action": action,
-        "id": entry_id,
-        "summary": summary,
-        "source": source,
-    })
-    from utils.file_lock import flock_exclusive, flock_unlock
-    lock_path = changelog_path.with_suffix(".jsonl.lock")
-    try:
-        with open(lock_path, "w") as lock_fd:
-            flock_exclusive(lock_fd)
-            try:
-                with open(changelog_path, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
-                # Rotate inside the lock to prevent concurrent rotation
-                from utils.jsonl_rotation import rotate_jsonl_if_oversized
-                rotate_jsonl_if_oversized(changelog_path)
-            finally:
-                flock_unlock(lock_fd)
-    except OSError as exc:
-        logger.warning("Failed to append changelog: %s", exc)
-
-
 class EvolutionMaintenanceHook:
-    """Code-enforced EVOLUTION.md maintenance at session close.
-
-    Performs three operations:
-    1. Deprecation — entries with status=active idle >deprecation_days → deprecated
-    2. Pruning — entries with status=deprecated + usage_count=0 + deprecated >30 days → removed
-    3. Changelog — all actions logged to EVOLUTION_CHANGELOG.jsonl
-
-    Uses locked_write.py's _set_field for atomic field updates.
-    """
+    """Read-only EVOLUTION.md maintenance report at session close."""
 
     name = "evolution_maintenance"
 
@@ -194,772 +150,29 @@ class EvolutionMaintenanceHook:
         return ctx if ctx.is_dir() else None
 
     async def execute(self, context: HookContext) -> None:
-        """Run maintenance on EVOLUTION.md at session close."""
+        """Report maintenance candidates without mutating EVOLUTION.md."""
         ctx_dir = self._resolve_context_dir()
         if ctx_dir is None:
-            logger.debug("No .context directory found, skipping evolution maintenance")
             return
-
         evo_path = ctx_dir / "EVOLUTION.md"
         if not evo_path.is_file():
             return
-
-        changelog_path = ctx_dir / "EVOLUTION_CHANGELOG.jsonl"
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=self._deprecation_days)
-
         try:
             content = evo_path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.warning("Cannot read EVOLUTION.md: %s", exc)
             return
-
-        # Quality gate: remove garbage entries BEFORE deprecation checks
-        content = self._quality_gate(evo_path, content, changelog_path)
-
-        # Data-point family folding: self-prune the NARRATIVE `## Corrections
-        # Captured` region (the append-only landfill the E/K lifecycle below is
-        # structurally blind to). Type-aware + fail-safe; re-reads content after.
-        content = self._fold_corrections(evo_path, content, changelog_path)
-
-        # System-prompt size control (AFTER fold has shrunk the Corrections region):
-        # if EVOLUTION.md still exceeds the injection budget, move the lowest-value
-        # NON-evergreen entries to the monthly shard (recall-backed). Evergreen core
-        # is hard-protected. Runs AFTER fold so it measures the already-shrunk size
-        # (avoids over-archiving). dedup vs the reclaim sweep in context_health_hook is
-        # guaranteed by the shared archive_raw_lines content-signature dedup.
-        try:
-            evicted = self._size_evict(evo_path)
-            if evicted:
-                _append_changelog(
-                    changelog_path, "size_evict", f"{evicted} entries",
-                    f"Moved {evicted} low-value entr"
-                    f"{'y' if evicted == 1 else 'ies'} to monthly shard "
-                    f"(system-prompt size control, recall-backed)",
-                    source="size_valve",
-                )
-                content = evo_path.read_text(encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001 — size control must never break maintenance
-            logger.warning("EVOLUTION size-evict skipped (error): %s", exc)
-
-        deprecated_count = 0
-        pruned_count = 0
-
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self._deprecation_days)
+        stale = 0
         for section_name, _prefix in _MANAGED_SECTIONS:
-            entries = _parse_entries(content, section_name)
-
-            for entry in entries:
+            for entry in _parse_entries(content, section_name):
                 try:
                     entry_date = datetime.strptime(
                         entry["date"], "%Y-%m-%d"
                     ).replace(tzinfo=timezone.utc)
                 except ValueError:
                     continue
-
-                # Deprecation: active + idle > cutoff + usage_count == 0
-                if (
-                    entry["status"] == "active"
-                    and entry_date < cutoff
-                    and entry["usage_count"] == 0
-                ):
-                    self._deprecate_entry(
-                        evo_path, section_name, entry["id"], changelog_path
-                    )
-                    deprecated_count += 1
-                    # Re-read content after modification
-                    content = evo_path.read_text(encoding="utf-8")
-
-                # Pruning: deprecated + usage_count == 0 + old enough
-                elif (
-                    entry["status"] == "deprecated"
-                    and entry["usage_count"] == 0
-                    and entry_date < cutoff
-                ):
-                    self._prune_entry(
-                        evo_path, section_name, entry["id"], changelog_path
-                    )
-                    pruned_count += 1
-                    # Re-read content after modification
-                    content = evo_path.read_text(encoding="utf-8")
-
-        if deprecated_count or pruned_count:
-            logger.info(
-                "Evolution maintenance: deprecated=%d, pruned=%d",
-                deprecated_count,
-                pruned_count,
-            )
-
-        # NOTE: the evolution CYCLE (mine transcripts + Bedrock, ~5 min) is NO
-        # LONGER run here. It was removed (run_6ac3fc0b) because a ~293s job on
-        # the 180s-budget session-close hook timed out before it could advance
-        # .evolution_last_run, re-triggering every session (59x/day) and spawning
-        # uncancellable zombie threads. The cycle is now triggered SOLELY by the
-        # scheduled `evolution-cycle` job (jobs/system_jobs.py). This hook keeps
-        # ONLY the cheap governance work above (quality gate, deprecation,
-        # promotion threshold, v3 classifier — all ~7ms file ops on EVOLUTION.md).
-
-    # Regex: commit hash pattern (7+ hex chars at the start of description)
-    _COMMIT_HASH_RE = re.compile(r"^[a-f0-9]{7}")
-
-    def _quality_gate(
-        self, evo_path: Path, content: str, changelog_path: Path
-    ) -> str:
-        """Quality gate: remove garbage entries and fix duplicate IDs.
-
-        Called from execute() BEFORE deprecation checks.
-
-        1. Acquire flock on EVOLUTION.md
-        2. Re-read file content (authoritative under lock)
-        3. Parse "Competence Learned" — remove entries where description
-           is <20 chars OR starts with a commit hash pattern.
-        4. Parse "Corrections Captured" — detect duplicate IDs, renumber
-           the later occurrence to the next available C ID.
-        5. Log all removals/renumbers to EVOLUTION_CHANGELOG.jsonl.
-        6. Write back and release lock.
-
-        Returns the (possibly modified) content string.
-        """
-        from scripts.locked_write import _find_entry_in_section
-        from utils.file_lock import flock_exclusive, flock_unlock
-
-        lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = None
-        try:
-            fd = open(lock_path, "w")
-            flock_exclusive(fd)
-
-            # Re-read under lock — authoritative content
-            try:
-                content = evo_path.read_text(encoding="utf-8")
-            except OSError as exc:
-                logger.warning("Cannot read EVOLUTION.md under lock: %s", exc)
-                return content
-
-            modified = False
-
-            # ── Step 1: Clean garbage competence entries ──
-            competence_entries = _parse_entries(content, "Competence Learned")
-            garbage_ids: list[str] = []
-
-            for entry in competence_entries:
-                desc = _get_field(entry["block"], "Competence") or ""
-                # Garbage if description has <3 words (PE-review: char count
-                # was fragile — "Use uv" is 6 chars but 2 words and legitimate.
-                # Word count better separates garbage from terse-but-real entries.)
-                if len(desc.split()) < 3:
-                    garbage_ids.append(entry["id"])
-                    continue
-                # Garbage if starts with commit hash pattern
-                if self._COMMIT_HASH_RE.match(desc):
-                    garbage_ids.append(entry["id"])
-                    continue
-
-            # Remove garbage entries (reverse order to preserve positions)
-            for entry_id in reversed(garbage_ids):
-                entry_range = _find_entry_in_section(content, "Competence Learned", entry_id)
-                if entry_range is not None:
-                    start, end = entry_range
-                    content = content[:start] + content[end:]
-                    modified = True
-                    _append_changelog(
-                        changelog_path, "quality_gate_remove", entry_id,
-                        f"Removed garbage competence entry (short or commit-hash)",
-                        source="quality_gate",
-                    )
-                    logger.debug("Quality gate: removed garbage competence %s", entry_id)
-
-            # ── Step 2: Fix duplicate correction IDs ──
-            corrections = _parse_entries(content, "Corrections Captured")
-            seen_ids: dict[str, bool] = {}
-            # Find max existing C-ID for renumbering
-            all_c_ids = re.findall(r"### C(\d+)", content)
-            next_c_num = max((int(x) for x in all_c_ids), default=0) + 1
-
-            for entry in corrections:
-                eid = entry["id"]
-                if eid in seen_ids:
-                    # Duplicate — renumber to next available
-                    new_id = f"C{next_c_num:03d}"
-                    # Find this specific duplicate occurrence in the content.
-                    # Use _find_entry_in_section to locate the entry block precisely,
-                    # then replace the header within that block.  This handles 3+
-                    # duplicates correctly because each iteration re-parses content.
-                    entry_range = _find_entry_in_section(content, "Corrections Captured", eid)
-                    if entry_range is not None:
-                        start, end = entry_range
-                        block = content[start:end]
-                        # Only rename the LAST occurrence of this ID in the section
-                        # (first occurrence keeps the original ID)
-                        all_positions = [m.start() + start for m in re.finditer(
-                            re.escape(f"### {eid} "), content
-                        )]
-                        if len(all_positions) >= 2:
-                            # Replace at the last position (preserves first occurrence)
-                            last_pos = all_positions[-1]
-                            old_header = f"### {eid} "
-                            new_header = f"### {new_id} "
-                            content = (
-                                content[:last_pos]
-                                + new_header
-                                + content[last_pos + len(old_header):]
-                            )
-                            modified = True
-                            _append_changelog(
-                                changelog_path, "quality_gate_renumber", new_id,
-                                f"Renumbered duplicate {eid} -> {new_id}",
-                                source="quality_gate",
-                            )
-                            logger.debug(
-                                "Quality gate: renumbered duplicate %s -> %s",
-                                eid, new_id,
-                            )
-                            next_c_num += 1
-                else:
-                    seen_ids[eid] = True
-
-            if modified:
-                evo_path.write_text(content, encoding="utf-8")
-
-        finally:
-            if fd is not None:
-                try:
-                    flock_unlock(fd)
-                except OSError:
-                    pass
-                fd.close()
-
-        return content
-
-    # Cap: how many foldable data-points to KEEP per family before archiving
-    # the rest. cap=2 = anchor + capstone (leanest); recent-2 fills remaining
-    # slots when no capstone. Set by the goal design (user chose cap=2 for the
-    # leanest live file — folded points remain fully traceable in the archive).
-    _FOLD_CAP = 2
-
-    # System-prompt size control: EVOLUTION.md is injected in FULL every session.
-    # Over this token budget the size-valve moves the LOWEST-value entries to the
-    # monthly shard (recall-backed cold storage — NOT deletion). The always-injected
-    # core (evergreen judgment) stays bounded. XG directive 2026-08-14: raised to 20K/15K
-    # because restored EVOLUTION.md is ~19.5K of dense PROTECTED judgment (C049: file size
-    # = judgment density, not fat); the valve correctly cannot cut it, so the cap rises.
-    _ARCHIVE_THRESHOLD_TOKENS = 20_000   # HIGH watermark — valve TRIGGERS above this
-    # LOW watermark — once triggered, evict DOWN TO this (not just under the trigger).
-    # The 15–20K band is deliberate headroom (5K) so new entries land without re-triggering
-    # the valve every session (the thrash the single-threshold version caused).
-    _ARCHIVE_TARGET_TOKENS = 15_000
-
-    # Markers that make an entry EVERGREEN core — HARD-PROTECTED, never size-evicted
-    # (C046 red-line + O029/L75 lesson: never bury hard-won judgment). Entry-level
-    # (NOT section-level) so the valve can distinguish a load-bearing correction from
-    # a low-value one-liner inside the SAME section (Gate-1-B decidability fix).
-    _EVERGREEN_MARKERS = (
-        "**Pattern**", "**Durable tell**", "CAPSTONE", "METHOD FIX",
-        "DIRECTIVE-OVERRIDE", "META-CORRECTION",
-    )
-
-    # RECENCY WINDOW (days): a correction dated within this many days is in its
-    # ACTIVE-DEFENSE period → resident regardless of markers. Older corrections whose
-    # judgment is NOT marker-bearing (a Pattern/tell skeleton) are archive-eligible —
-    # recall (the .context/*-archive*.md FTS5 leg) is the safety net, so archiving an
-    # old correction ≠ losing it. XG directive 2026-08-14: the previous "any correction
-    # structure is evergreen" rule made the 15.7K Corrections region un-archivable and
-    # DEFEATED the valve (it could never shrink the file even at natural 20K trigger).
-    _EVERGREEN_RECENCY_DAYS = 14
-
-    # Parse a date embedded in a block for the recency window. Two real forms in the
-    # live file: `### C049 | 2026-08-11 [...]` (Cxxx header) and a trailing bracket
-    # `### ROOT-CAUSE — ... [2026-08-10]` / `### DATA-POINT — ... [2026-08-11]`.
-    _BLOCK_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
-
-    @staticmethod
-    def _block_is_recent(entry_block: str, now: "datetime | None" = None) -> bool:
-        """True if the block carries a parseable date within _EVERGREEN_RECENCY_DAYS.
-        NO parseable date → False (a dateless block is NOT kept-by-recency; whether it
-        stays is decided by the marker check alone — so a dateless, marker-less block is
-        archive-eligible, which is the whole point of the fix)."""
-        m = EvolutionMaintenanceHook._BLOCK_DATE_RE.search(entry_block)
-        if not m:
-            return False
-        try:
-            d = datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            return False
-        ref = now or datetime.now(timezone.utc)
-        return (ref - d).days <= EvolutionMaintenanceHook._EVERGREEN_RECENCY_DAYS
-
-    @staticmethod
-    def _is_evergreen(entry_block: str, now: "datetime | None" = None) -> bool:
-        """True if an entry is core judgment → NEVER size-evictable. Resident when
-        EITHER (a) it carries a core marker (**Pattern**/**Durable tell**/CAPSTONE/
-        METHOD FIX/DIRECTIVE-OVERRIDE/META-CORRECTION) — the compiled-judgment skeleton,
-        OR (b) it is a correction dated within _EVERGREEN_RECENCY_DAYS (active-defense
-        window). NEITHER → archive-eligible (recall is the safety net).
-
-        This REPLACES the old blanket "any ### Cxxx / ### CLASS / ### DATA-POINT /
-        ### Standalone structure is evergreen" rule, which protected the entire
-        Corrections region and defeated the valve (XG 2026-08-14). A CLASS母条 stays
-        resident via its **Pattern** skeleton; its FOLDED historical data-points are
-        pruned by _fold_corrections (cap=2) BEFORE the valve runs, so keeping the母条
-        whole is correct — the valve never splits a block. An OLD marker-less individual
-        Cxxx / DATA-POINT / Standalone block is now archive-eligible → recall-backed."""
-        if any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS):
-            return True
-        if EvolutionMaintenanceHook._block_is_recent(entry_block, now):
-            return True
-        return False
-
-    @staticmethod
-    def _block_date_ordinal(entry_block: str) -> int:
-        """The block's first ``YYYY-MM-DD`` as an ordinal (its header date for a
-        ``### Cxxx | date`` entry); 0 when it has none, so a dateless block sorts as
-        the oldest."""
-        m = EvolutionMaintenanceHook._BLOCK_DATE_RE.search(entry_block)
-        if not m:
-            return 0
-        try:
-            return datetime.strptime(m.group(1), "%Y-%m-%d").toordinal()
-        except ValueError:
-            return 0
-
-    @staticmethod
-    def _evict_priority(entry_block: str, now: "datetime | None" = None) -> int:
-        """Eviction PRIORITY (value tier) — lower is evicted FIRST. XG directive
-        2026-08-14: no block is exempt; the valve MUST reach ~15K every run. This
-        REPLACES `_is_evergreen`-as-veto — a skeleton is not un-evictable, only
-        evicted LAST (and recall-backed, so it is retrievable after archiving).
-          0 = non-evergreen (old, marker-less) — least valuable, goes first
-          1 = recent (≤_EVERGREEN_RECENCY_DAYS) but no marker — active-defense window
-          2 = marker-bearing skeleton (Pattern/Durable tell/CAPSTONE/METHOD FIX/
-              DIRECTIVE-OVERRIDE/META-CORRECTION) — most valuable, evicted only if
-              tiers 0+1 didn't free enough to reach target.
-        A block can be both recent AND marker-bearing → tier 2 (highest wins)."""
-        if any(m in entry_block for m in EvolutionMaintenanceHook._EVERGREEN_MARKERS):
-            return 2
-        if EvolutionMaintenanceHook._block_is_recent(entry_block, now):
-            return 1
-        return 0
-
-    @staticmethod
-    def _evolution_archive_shard(today: "date | None" = None) -> str:
-        """Monthly archive shard name — mirrors the proven MEMORY pattern
-        (context_health_hook:2126 f'MEMORY-archive-{today:%Y-%m}.md'). ALL EVOLUTION
-        archive writers (fold, reclaim, size-valve) resolve their target through this
-        one helper so the write-month is computed in ONE place, not per-site."""
-        if today is None:
-            today = datetime.now(timezone.utc).date()
-        return f"EVOLUTION-archive-{today.strftime('%Y-%m')}.md"
-
-    def _fold_corrections(
-        self, evo_path: Path, content: str, changelog_path: Path
-    ) -> str:
-        """Self-prune the `## Corrections Captured` narrative region.
-
-        Folds only data-point sub-bullets that exceed the per-family cap, and only
-        those whose lead marker is on the foldable whitelist. That whitelist lives
-        in `data_point_folding._FOLDABLE_MARKERS` and is documented in that module's
-        docstring — deliberately not restated here, because a marker fact stated
-        outside the one gated enumeration is unreachable by the parity test and would
-        go stale silently. Protects METHOD FIX / capstone / etc. Fail-safe: on ANY
-        error the ORIGINAL content is preserved (never eats correction history).
-        Returns the (possibly-updated) content; re-reads from disk after a write.
-        """
-        try:
-            from hooks.data_point_folding import fold_corrections_section
-            from scripts.locked_write import (
-                locked_read_modify_write, LockedWriteError, _find_section_range,
-            )
-        except ImportError as exc:
-            logger.debug("data-point folding unavailable: %s", exc)
-            return content
-
-        try:
-            result = fold_corrections_section(content, cap=self._FOLD_CAP)
-        except Exception as exc:
-            # Fail-safe (Gate-1 F4): a folding bug must NEVER corrupt EVOLUTION.md.
-            logger.warning("Corrections folding skipped (compute error): %s", exc)
-            return content
-
-        if not result.changed:
-            return content
-
-        # Extract the NEW Corrections body from the folded content so we can
-        # write it back via the same section-range contract locked_write uses.
-        rng = _find_section_range(result.new_content, "Corrections Captured")
-        if rng is None:
-            logger.warning("Corrections folding skipped: section vanished post-fold")
-            return content
-        body_start, body_end = rng
-        new_body = result.new_content[body_start:body_end]
-
-        try:
-            # ORDER MATTERS (Gate-2 HIGH #2): replace the EVOLUTION.md body
-            # FIRST — it carries the `<!-- folded archived=... -->` idempotency
-            # marker. Only AFTER that succeeds do we append to the archive. If
-            # the archive append then fails, we have a marker (so the next run
-            # is still a no-op — no re-fold, no duplicate archive) and the
-            # folded text is recoverable from EVOLUTION's own history. The old
-            # order (archive-first) duplicated archive content on every
-            # failed-replace cycle because the marker was never written.
-            # 1) Replace the Corrections body in EVOLUTION.md (atomic, locked).
-            locked_read_modify_write(
-                evo_path, "Corrections Captured", new_body, mode="replace",
-            )
-            # 2) Append folded blocks to the MONTHLY archive shard via the shared
-            #    archive_raw_lines chokepoint (converged with reclaim + size-valve;
-            #    dedup_by_signature=True makes fold+valve double-move structurally
-            #    impossible). Forward-append recovery path — NOT a backup copy
-            #    (STEERING #2 bans backup-copy reflex). Lands in gitignored .context/
-            #    via source_path (private partition).
-            if result.archived_blocks:
-                from core.ddd_entry_lifecycle import archive_raw_lines
-                shard = self._evolution_archive_shard()
-                header = (
-                    f"<!-- folded {len(result.archived_blocks)} data-point(s) "
-                    f"from Corrections Captured -->"
-                )
-                try:
-                    archive_raw_lines(
-                        evo_path.parent, result.archived_blocks, shard,
-                        source_path=evo_path,
-                        block_header=header,
-                        create_header=(
-                            "# EVOLUTION Archive — folded data-points\n\n"
-                            "Full text of the data-point sub-bullets folded out of "
-                            "EVOLUTION.md's Corrections Captured section to keep the "
-                            "live cognitive file lean. Nothing here was deleted — it "
-                            "stays searchable through recall's `library` domain, which "
-                            "indexes this file. Traceable by run-id."
-                        ),
-                        dedup_by_signature=True,
-                    )
-                except (OSError, ValueError) as arch_exc:
-                    # Body already folded+marked; a failed archive append is NOT
-                    # data loss (folded text lives in EVOLUTION history) and will
-                    # NOT re-fold (marker present). Log and continue.
-                    logger.warning(
-                        "Corrections folded but archive append failed "
-                        "(recoverable, no re-fold): %s", arch_exc,
-                    )
-            _append_changelog(
-                changelog_path, "fold_corrections",
-                f"{result.families_folded} families",
-                f"Folded {result.bullets_archived} data-point(s) to archive "
-                f"across {result.families_folded} families (cap={self._FOLD_CAP})",
-                source="data_point_folding",
-            )
-            logger.info(
-                "Corrections folded: %d data-point(s) archived across %d families",
-                result.bullets_archived, result.families_folded,
-            )
-            return evo_path.read_text(encoding="utf-8")
-        except (OSError, LockedWriteError) as exc:
-            # Fail-safe on write error: keep original in-memory content.
-            logger.warning("Corrections folding write failed: %s", exc)
-            return content
-
-    # ── Low-value ordering for the size-valve (least → most valuable) ──
-    # Sections whose entries are relatively low-value are evicted FIRST. Core
-    # judgment sections (Corrections, Design Philosophy) are last-resort and their
-    # evergreen entries are hard-protected regardless. "Optimizations Learned"
-    # O-Reference one-liners are the author-declared "archived for lookup" content.
-    _EVICT_SECTION_ORDER = (
-        "Failed Evolutions",
-        "Competence Learned",
-        "Capabilities Built",
-        "Optimizations Learned",
-        "Corrections Captured",
-    )
-
-    def _size_evict(self, evo_path: Path, threshold_tokens: int | None = None,
-                    target_tokens: int | None = None) -> int:
-        """System-prompt size control (runs AFTER fold+dedup have shrunk the file).
-
-        HIGH/LOW WATERMARK (hysteresis — Gate-1 refined): the valve TRIGGERS only when
-        tokens exceed the HIGH watermark `threshold` (_ARCHIVE_THRESHOLD_TOKENS=20K), but
-        once triggered it evicts the LOWEST-value NON-evergreen entries DOWN TO the LOW
-        watermark `target` (_ARCHIVE_TARGET_TOKENS=15K) — NOT just until it crosses back
-        under the trigger. The 15–20K band is intentional HEADROOM so new entries land
-        without re-triggering the valve every session (the thrash the single-threshold
-        version caused: it stopped ~89 tok under 15K). Evergreen core is NEVER evicted
-        (P6: only-core-over-target → stop + raise-the-cap log, don't cut judgment).
-
-        Move-not-delete: every evicted block is appended to the shard via the shared
-        archive_raw_lines chokepoint (dedup_by_signature=True → no double-move with
-        fold) BEFORE it is stripped from the live file, so nothing is lost.
-        """
-        from core.context_directory_loader import ContextDirectoryLoader
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        from scripts.locked_write import _find_section_range, LOCK_TIMEOUT
-        from utils.file_lock import flock_exclusive_nb, flock_unlock
-
-        threshold = threshold_tokens if threshold_tokens is not None else self._ARCHIVE_THRESHOLD_TOKENS
-        target = target_tokens if target_tokens is not None else self._ARCHIVE_TARGET_TOKENS
-        # Clamp: the low watermark can never exceed the high one (Gate-1 check 4) — a
-        # threshold override below the default target would otherwise invert the
-        # watermarks (stop-line above trigger-line → evict nothing / instant break).
-        target = min(target, threshold)
-
-        # Gate-2 finding G (HIGH): the read→evict→write critical section MUST hold the
-        # SAME .md.lock flock every other EVOLUTION writer honors (anti-pattern #5) —
-        # else a concurrent writer between our read and write is a lost-update that
-        # silently clobbers the always-injected cognitive file. Mirror _prune_entry:
-        # acquire the flock, re-read INSIDE the lock, mutate, write, release in finally.
-        lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
-        fd = None
-        try:
-            fd = open(lock_path, "w")
-            deadline = time.monotonic() + LOCK_TIMEOUT
-            while True:
-                try:
-                    flock_exclusive_nb(fd)
-                    break
-                except (BlockingIOError, OSError):
-                    if time.monotonic() >= deadline:
-                        logger.warning("Lock timeout in size-evict — skipping (no clobber)")
-                        return 0
-                    time.sleep(0.1)
-
-            # Fresh read UNDER the lock (never trust a pre-lock read — that is the race).
-            try:
-                content = evo_path.read_text(encoding="utf-8")
-            except OSError:
-                return 0
-            if ContextDirectoryLoader.estimate_tokens(content) <= threshold:
-                return 0
-
-            moved = self._size_evict_locked(
-                evo_path, content, threshold, target,
-                ContextDirectoryLoader, archive_raw_lines, _find_section_range,
-            )
-            return moved
-        finally:
-            if fd is not None:
-                try:
-                    flock_unlock(fd)
-                finally:
-                    fd.close()
-
-    # Broad block-boundary matcher for the VALVE ONLY (never the shared
-    # _ENTRY_HEADER_RE, which _parse_entries needs with id/date capture groups).
-    # ANY `### ` line is a block boundary → the valve can NEVER split a multi-line
-    # entry by evicting individual bullets (the corruption this fix removes).
-    _BLOCK_BOUNDARY_RE = re.compile(r"^###\s", re.MULTILINE)
-
-    def _size_evict_locked(
-        self, evo_path, content, threshold, target, ContextDirectoryLoader,
-        archive_raw_lines, _find_section_range,
-    ) -> int:
-        """The size-evict critical section — MUST be called while holding the
-        EVOLUTION.md flock (see _size_evict). Evicts WHOLE ### blocks only, never
-        individual bullets (never splits an entry). Evicts DOWN TO `target` (low
-        watermark), not just under `threshold` — hysteresis headroom.
-
-        Robustness (Gate-1 refinements, run_a0ee2b4f):
-        - Block boundary = broad `^### ` (valve-local), so real correction headers
-          (Cxxx+trailing / ### ROOT-CAUSE / ### DATA-POINT) bound as whole blocks.
-        - A section with NO `### ` header is treated as ONE whole unit — evicted only
-          if the WHOLE unit is non-evergreen; never split into single bullets.
-        - Deletion is SELECT-THEN-DELETE-BOTTOM-UP against absolute offsets so no
-          captured offset goes stale mid-mutation (no content.replace substring race).
-        - All-or-nothing per block; a per-block archive failure skips that block only.
-        """
-        moved = 0
-        shard = self._evolution_archive_shard()
-        cur_tokens = ContextDirectoryLoader.estimate_tokens(content)
-
-        # PHASE 1 — COLLECT every ### block across all evictable sections, tag each with
-        # an EVICTION PRIORITY (value tier). XG directive 2026-08-14: the valve MUST
-        # always reach `target` (~15K) — no block is EXEMPT. `_is_evergreen` is NO LONGER
-        # a VETO (the old bug: it skipped evergreen blocks, so the file could never shrink
-        # past the evergreen floor). It is now only a PRIORITY signal: evergreen skeletons
-        # are evicted LAST, never NEVER. Archive is recall-backed cold storage (the
-        # .context/*-archive*.md FTS5 leg), so an archived Pattern skeleton is retrievable
-        # — moving it out ≠ losing it. Priority tiers (lower = evicted first):
-        #   0 = non-evergreen (old, marker-less)      — least valuable, evict first
-        #   1 = recent (≤_EVERGREEN_RECENCY_DAYS), no marker — active-defense window
-        #   2 = marker-bearing skeleton (Pattern/tell/CAPSTONE/…) — most valuable, evict last
-        # Ties broken by section rank (_EVICT_SECTION_ORDER: least-valuable section first),
-        # then by the block's date, OLDEST first (a dateless block counts as oldest), then
-        # document position — so what SURVIVES is the highest-value ~15K. Position alone
-        # was the old tie-break, and new corrections are written at the TOP of their
-        # section: the valve moved the newest ones out first (2026-10-25: ten corrections,
-        # one written fifteen minutes earlier).
-        candidates: list[tuple[int, int, int, int, str, str]] = []
-        # (priority, section_rank, abs_start, abs_end, text, section)
-        for section_rank, section in enumerate(self._EVICT_SECTION_ORDER):
-            rng = _find_section_range(content, section)
-            if rng is None:
-                continue
-            header_end, next_pos = rng
-            section_text = content[header_end:next_pos]
-            boundaries = list(self._BLOCK_BOUNDARY_RE.finditer(section_text))
-            if not boundaries:
-                # No ### structure → the WHOLE section body is one unit (never split).
-                if section_text.strip():
-                    blk = section_text.rstrip("\n")
-                    if blk:
-                        candidates.append((
-                            self._evict_priority(blk), section_rank,
-                            header_end, next_pos, blk, section,
-                        ))
-                continue
-            # ### -structured: each block runs from its boundary to the next (or section end).
-            for i, m in enumerate(boundaries):
-                b_start = header_end + m.start()
-                b_end = (header_end + boundaries[i + 1].start()
-                         if i + 1 < len(boundaries) else next_pos)
-                block = content[b_start:b_end]
-                candidates.append((
-                    self._evict_priority(block), section_rank,
-                    b_start, b_end, block.rstrip("\n"), section,
-                ))
-
-        # SELECT least-valuable-first until projected <= target. No exemption: if tiers
-        # 0+1 don't free enough, tier-2 skeletons are evicted too (recall-backed) — the
-        # target is non-negotiable (XG: "降不到就是 bug").
-        candidates.sort(key=lambda c: (c[0], c[1], self._block_date_ordinal(c[4]), c[2]))
-        to_evict: list[tuple[int, int, str, str]] = []
-        projected = cur_tokens
-        for _prio, _rank, b_start, b_end, text, section in candidates:
-            if projected <= target:
-                break
-            to_evict.append((b_start, b_end, text, section))
-            projected -= ContextDirectoryLoader.estimate_tokens(text)
-
-        if not to_evict:
-            # Zero candidates while over threshold (an evictable section is empty of
-            # blocks). Alarm against `target` (Gate-2 #7): we only reach here when
-            # cur_tokens > threshold >= target, so an exhausted-candidates state IS the
-            # genuine bug the alarm reports (nothing left to evict yet still over target).
-            self._raise_cap_signal_if_over(cur_tokens, target, exhausted=True)
-            return 0
-
-        # PHASE 2 — ARCHIVE every selected block FIRST (move-not-delete; recall-backed).
-        # Only blocks that archive successfully are eligible for physical deletion.
-        deletable: list[tuple[int, int]] = []
-        for b_start, b_end, text, section in to_evict:
-            try:
-                archive_raw_lines(
-                    evo_path.parent, [text], shard,
-                    source_path=evo_path,
-                    block_header=f"<!-- size-evicted from {section} -->",
-                    create_header=(
-                        "# EVOLUTION Archive — size-evicted entries\n\n"
-                        "Lower-value entries moved out of EVOLUTION.md to keep the "
-                        "always-injected file within the system-prompt budget. "
-                        "Recall-backed cold storage — retrievable on demand."
-                    ),
-                    dedup_by_signature=True,
-                )
-            except (OSError, ValueError) as exc:
-                logger.warning("size-evict archive append failed (skip block): %s", exc)
-                continue
-            deletable.append((b_start, b_end))
-            moved += 1
-
-        # PHASE 3 — DELETE bottom-up (descending start) so earlier offsets stay valid.
-        for b_start, b_end in sorted(deletable, key=lambda p: p[0], reverse=True):
-            content = content[:b_start] + content[b_end:]
-
-        if moved:
-            evo_path.write_text(content, encoding="utf-8")
-
-        final = ContextDirectoryLoader.estimate_tokens(content)
-        if moved:
-            logger.info(
-                "EVOLUTION size-evict: moved %d entr%s to %s (final ~%d tok, target %d)",
-                moved, "y" if moved == 1 else "ies", shard, final, target,
-            )
-        # XG directive 2026-08-14: every run MUST land ~target. If we still exceed
-        # target after evicting everything we selected, that is a genuine BUG (a block
-        # we couldn't archive, a projection/estimation gap) — alarm on `target`, not
-        # `threshold`. No block is exempt, so "only evergreen remains" is no longer a
-        # valid resting state.
-        self._raise_cap_signal_if_over(final, target)
-        return moved
-
-    @staticmethod
-    def _raise_cap_signal_if_over(
-        final_tokens: int, target: int, exhausted: bool = False
-    ) -> None:
-        """BUG alarm (XG 2026-08-14): the valve MUST always reach ~target. If it stops
-        ABOVE target, something is wrong — a block failed to archive, a projection gap,
-        or (if `exhausted`) zero candidates existed while still over target. This is NO
-        LONGER the P6 'raise the cap, don't cut judgment' path — every block is now
-        evictable (recall-backed), so landing over target is a defect to investigate,
-        not a healthy headroom state. A small overshoot (last whole block straddles the
-        target line — we never split a block) is tolerated within one block's worth."""
-        if final_tokens > target:
-            logger.warning(
-                "EVOLUTION size-valve did NOT reach target (%d > %d tok, exhausted=%s) "
-                "— every block is evictable, so this is a BUG (un-archivable block / "
-                "projection gap), not a headroom state. Investigate.",
-                final_tokens, target, exhausted,
-            )
-
-    def _deprecate_entry(
-        self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
-    ) -> None:
-        """Set an entry's Status to deprecated via locked_write."""
-        from scripts.locked_write import locked_field_modify, LockedWriteError
-        try:
-            locked_field_modify(
-                evo_path, section, entry_id, "Status", "set-field", "deprecated"
-            )
-            _append_changelog(
-                changelog_path, "deprecate", entry_id,
-                f"Auto-deprecated: idle >{self._deprecation_days}d with 0 usage"
-            )
-            logger.debug("Deprecated %s in %s", entry_id, section)
-        except (ValueError, LockedWriteError) as exc:
-            logger.warning("Failed to deprecate %s: %s", entry_id, exc)
-
-    # Bias class pattern: [Bias A], [Bias B], etc. in correction headers
-    _BIAS_TAG_RE = re.compile(r"\[Bias ([A-D])\]")
-
-    def _prune_entry(
-        self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
-    ) -> None:
-        """Remove a deprecated entry from EVOLUTION.md with file locking."""
-        from scripts.locked_write import _find_entry_in_section, LOCK_TIMEOUT
-        from utils.file_lock import flock_exclusive_nb, flock_unlock
-
-        lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
-        fd = None
-        try:
-            fd = open(lock_path, "w")
-            deadline = time.monotonic() + LOCK_TIMEOUT
-            while True:
-                try:
-                    flock_exclusive_nb(fd)
-                    break
-                except (BlockingIOError, OSError):
-                    if time.monotonic() >= deadline:
-                        logger.warning("Lock timeout pruning %s", entry_id)
-                        return
-                    time.sleep(0.1)
-
-            content = evo_path.read_text(encoding="utf-8")
-            entry_range = _find_entry_in_section(content, section, entry_id)
-            if entry_range is None:
-                return
-
-            start, end = entry_range
-            new_content = content[:start] + content[end:]
-            evo_path.write_text(new_content, encoding="utf-8")
-
-            _append_changelog(
-                changelog_path, "prune", entry_id,
-                f"Auto-pruned: deprecated + 0 usage + idle >{self._deprecation_days}d"
-            )
-            logger.debug("Pruned %s from %s", entry_id, section)
-        except OSError as exc:
-            logger.warning("Failed to prune %s: %s", entry_id, exc)
-        finally:
-            if fd is not None:
-                try:
-                    flock_unlock(fd)
-                except OSError:
-                    pass
-                fd.close()
+                if entry_date < cutoff and entry["usage_count"] == 0:
+                    stale += 1
+        if stale:
+            logger.info("Evolution maintenance: %d read-only candidate(s)", stale)

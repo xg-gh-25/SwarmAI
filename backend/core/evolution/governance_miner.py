@@ -32,6 +32,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 ACCEPTED = "✔ ACCEPTED"
 REJECTED = "✖ REJECTED"
@@ -117,54 +118,25 @@ def generate_governance_proposals(evolution_md: Path, threshold: int = 3) -> lis
     return out
 
 
+def enqueue_governance_proposals(evolution_md: Path, threshold: int = 3, *,
+                                 llm: Any | None = None) -> int:
+    """Submit eligible cross-run governance measurements through S5."""
+    from core.ingestion.sources.s5_metrics import extract_metrics
+
+    proposals = generate_governance_proposals(evolution_md, threshold)
+    if not proposals:
+        return 0
+    receipts = extract_metrics(
+        "governance-candidates",
+        {"candidate_count": len(proposals),
+         "maximum_occurrences": max(p.occurrence_count for p in proposals),
+         "inferred_candidates": [p.to_proposal_dict() for p in proposals]},
+        run_count=max(p.occurrence_count for p in proposals),
+        llm=llm,
+    )
+    return len(receipts)
+
+
 def mark_gc_decision(evolution_md: Path, gc_id: str, accepted: bool, today: date | None = None) -> bool:
-    """Write the verdict into the Count cell of every UNDECIDED row with this id.
-
-    Runs under EVOLUTION.md's lock (shared with locked_write and the maintenance
-    hook). A row that already carries a verdict is left alone. Line endings, the
-    trailing newline and the file mode are preserved; nothing but those cells
-    changes. Returns True when at least one row was marked.
-    """
-    if not evolution_md.exists():
-        return False
-    from utils.file_lock import flock_exclusive, flock_unlock
-
-    verdict = f"{ACCEPTED if accepted else REJECTED} {(today or date.today()).isoformat()}"
-    lock_path = evolution_md.with_suffix(evolution_md.suffix + ".lock")
-    with open(lock_path, "w") as fd:
-        flock_exclusive(fd)
-        try:
-            with open(evolution_md, encoding="utf-8", newline="") as f:
-                text = f.read()
-            lines = text.split("\n")
-            changed = False
-            for i in _section_lines(lines):
-                m = _GC_ROW.match(lines[i])
-                if not m or m.group(1) != gc_id:
-                    continue
-                spans = [s.start() for s in _CELL_SPLIT.finditer(lines[i])]
-                if len(spans) < 6:
-                    continue
-                a, b = spans[3], spans[4]           # the Count cell lies between pipes 4 and 5
-                if not _COUNT.match(lines[i][a + 1:b]):
-                    continue                         # already decided, or not a count
-                lines[i] = f"{lines[i][:a + 1]} {verdict} {lines[i][b:]}"
-                changed = True
-            if not changed:
-                return False
-            tmp = tempfile.NamedTemporaryFile(
-                "w", dir=evolution_md.parent, suffix=".tmp", delete=False,
-                encoding="utf-8", newline="",
-            )
-            try:
-                tmp.write("\n".join(lines))
-                tmp.close()
-                shutil.copymode(evolution_md, tmp.name)
-                os.replace(tmp.name, evolution_md)
-            except Exception:
-                tmp.close()
-                Path(tmp.name).unlink(missing_ok=True)
-                raise
-            return True
-        finally:
-            flock_unlock(fd)
+    """Retired compatibility API; CDF has no human approval mutation phase."""
+    return False

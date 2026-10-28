@@ -702,15 +702,67 @@ def pytest_runtest_call(item):
     fixture, so on a worker's FIRST test it saw no loop yet; when that test called
     asyncio.run, the session loop was lost for the whole worker (which worker got
     such a first test decided which run went red).
+
+    A FIXTURE that calls asyncio.run() clears the loop during setup, before this
+    hook reads "before" (test_backup_manager, test_brain_bootstrap_apply,
+    test_cdf_v2_e2e's cdf_env did; 13 more fixtures do). So the hook first puts back
+    the newest still-open loop pytest-asyncio itself installed (_PLUGIN_LOOPS): only
+    a loop the plugin owns, never a stray one a test left open.
     """
     import asyncio as _asyncio
 
     local = getattr(_asyncio.get_event_loop_policy(), "_local", None)
+    if local is not None and getattr(local, "_loop", None) is None \
+            and _runs_on_a_shared_loop(item):
+        live = next((loop for loop in reversed(_PLUGIN_LOOPS) if not loop.is_closed()), None)
+        if live is not None:
+            _asyncio.set_event_loop(live)
     before = getattr(local, "_loop", None)
     yield
     if before is not None and not before.is_closed() \
             and getattr(local, "_loop", None) is None:
         _asyncio.set_event_loop(before)
+
+
+# Loops pytest-asyncio installed as the thread's current loop, newest last. Recorded by
+# wrapping asyncio.set_event_loop and keeping only calls made from the plugin, so the
+# repair above can never install a loop some test left open.
+_PLUGIN_LOOPS: list = []
+
+
+def _runs_on_a_shared_loop(item) -> bool:
+    """An async test on a session/package/module/class loop: the only tests that need
+    the plugin's long-lived loop to be current. A sync test or a function-loop test is
+    never handed it."""
+    import inspect
+    fn = getattr(item, "function", None)
+    if fn is None or not inspect.iscoroutinefunction(fn):
+        return False
+    return not _runs_on_its_own_loop(item)
+
+
+def _record_plugin_loops() -> None:
+    import asyncio as _asyncio
+    import sys as _sys
+
+    original = _asyncio.set_event_loop
+    if getattr(original, "_swarm_records_plugin_loops", False):
+        return
+
+    def set_event_loop(loop):
+        if loop is not None:
+            caller = _sys._getframe(1).f_globals.get("__name__", "")
+            if caller.startswith("pytest_asyncio"):
+                _PLUGIN_LOOPS[:] = [l for l in _PLUGIN_LOOPS if not l.is_closed()]
+                if loop not in _PLUGIN_LOOPS:
+                    _PLUGIN_LOOPS.append(loop)
+        return original(loop)
+
+    set_event_loop._swarm_records_plugin_loops = True
+    _asyncio.set_event_loop = set_event_loop
+
+
+_record_plugin_loops()
 
 
 @pytest.fixture(autouse=True)

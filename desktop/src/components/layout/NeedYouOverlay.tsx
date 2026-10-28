@@ -20,9 +20,11 @@
  * AlertsPill's hover); first-load states via OverlayState
  * (docs/design/left-nav-overlay-finish.md §1.3).
  */
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { AttentionEntry } from '../../services/attention';
+import { Tabs } from '../overlay';
+import { CognitiveDistillationFlow } from './CognitiveDistillationFlow';
 import { overlayQuery } from './overlayQueries';
 import { OverlayLoading, OverlayError, OverlayEmpty } from './OverlayState';
 import { NeedsYouRow } from './NeedsYouRow';
@@ -49,7 +51,30 @@ function groupByBrain(items: AttentionEntry[]): Array<[string, AttentionEntry[]]
   return [...groups.entries()];
 }
 
-export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
+type NeedYouTab = 'attention' | 'flow';
+
+export function NeedYouContent(props: NeedYouContentProps) {
+  const [tab, setTab] = useState<NeedYouTab>('attention');
+  return (
+    <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="needs-you-overlay">
+      <Tabs
+        items={[
+          { key: 'attention', label: '需要你', testid: 'need-you-tab' },
+          { key: 'flow', label: 'Cognitive Distillation Flow', testid: 'cdf-tab' },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {tab === 'attention'
+          ? <AttentionQueueContent {...props} />
+          : <CognitiveDistillationFlow />}
+      </div>
+    </div>
+  );
+}
+
+function AttentionQueueContent({ onDispatch, close }: NeedYouContentProps) {
   const q = useQuery(overlayQuery.needsYou());
   const items: AttentionEntry[] = q.data?.items ?? [];
   const loading = q.isPending;
@@ -64,7 +89,7 @@ export function NeedYouContent({ onDispatch, close }: NeedYouContentProps) {
   const review = items.filter((i) => i.tier === 'review');
 
   return (
-    <div className="flex-1 overflow-y-auto p-5" data-testid="needs-you-overlay">
+    <div className="py-4" data-testid="needs-you-attention">
       <div className="mb-4">
         <h2 className="text-heading font-semibold text-[var(--color-text)]">Need You</h2>
         <p className="mt-0.5 text-meta text-[var(--color-text-dim)]">

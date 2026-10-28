@@ -63,29 +63,6 @@ def _read_source_anchor(project_dir: Path) -> "str | None":
         return None
 
 
-def write_source_anchor(project_dir: Path, commit: str) -> None:
-    """Persist the upstream source commit the DDD is now verified against.
-
-    Merge-writes into ``.refresh_state.json`` (preserves any other keys). Public —
-    called by the human/REFRESHER re-verify step (and tests) to CLEAR a drift signal.
-    Best-effort: swallows OSError (an unwritable anchor must never crash cultivation).
-    """
-    p = Path(project_dir) / _REFRESH_STATE_FILENAME
-    try:
-        data = {}
-        if p.exists():
-            try:
-                data = json.loads(p.read_text(encoding="utf-8"))
-                if not isinstance(data, dict):
-                    data = {}
-            except (OSError, ValueError):
-                data = {}
-        data[_SOURCE_ANCHOR_KEY] = commit
-        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except OSError:
-        pass
-
-
 def _upstream_source_head(project_dir: Path) -> "tuple[str, str] | None":
     """Resolve a DDD's bound upstream source repo and read its current git HEAD.
 
@@ -190,11 +167,9 @@ class DddCultivationOrchestrator:
     # Per-channel budget (seconds) for event-driven execution
     _CHANNEL_BUDGETS: dict[str, float] = {
         "ddd_staleness": 2.0,
-        "auto_apply_proposals": 3.0,
         "knowledge_staleness": 1.0,
         "signal_ddd_bridge": 3.0,
         "code_intel_drift": 5.0,
-        "entry_lifecycle": 3.0,
         # mechanical_refresh/memory_refresh/llm_refresh budgets REMOVED (run_781ffbd9)
     }
 
@@ -215,9 +190,6 @@ class DddCultivationOrchestrator:
             ("ddd_staleness", self._ch_ddd_staleness, {
                 EventType.GIT_COMMIT, EventType.TIMER_30MIN,
             }),
-            ("auto_apply_proposals", self._ch_auto_apply, {
-                EventType.PROPOSAL_DECIDED, EventType.SESSION_CLOSE,
-            }),
             ("signal_ddd_bridge", self._ch_signal_bridge, {
                 EventType.SIGNAL_DIGEST,
             }),
@@ -228,9 +200,6 @@ class DddCultivationOrchestrator:
             # pull-only health channels — otherwise the handler is orphaned + drift stops.
             ("code_intel_drift", self._ch_code_intel, {
                 EventType.TIMER_30MIN,
-            }),
-            ("entry_lifecycle", self._ch_entry_lifecycle, {
-                EventType.TIMER_30MIN, EventType.SESSION_CLOSE,
             }),
             # mechanical_refresh / memory_refresh / llm_refresh channels REMOVED
             # (run_781ffbd9): the auto_refresh module produced zero output in 2
@@ -293,8 +262,8 @@ class DddCultivationOrchestrator:
         for name, channel_fn, subscribed_events in self.channels:
             if event_type in subscribed_events:
                 budget = self._CHANNEL_BUDGETS.get(name, 3.0)
-                # Priority mapping: signal/code_intel/auto_apply = 1, staleness = 2, knowledge = 3
-                if name in ("auto_apply_proposals", "signal_ddd_bridge", "code_intel_drift"):
+                # Priority mapping: signal/code_intel = 1, staleness = 2, knowledge = 3
+                if name in ("signal_ddd_bridge", "code_intel_drift"):
                     priority = 1
                 elif name in ("ddd_staleness",):
                     priority = 2
@@ -311,19 +280,6 @@ class DddCultivationOrchestrator:
         return tasks
 
     # ── Helper ─────────────────────────────────────────────────────────────
-
-    def _find_proposals_dir(self, root: Path) -> Path | None:
-        """Locate the proposals directory for the active project."""
-        projects_dir = root / "Projects"
-        if not projects_dir.is_dir():
-            return None
-        for project_dir in projects_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            proposals = project_dir / ".artifacts" / "proposals"
-            if proposals.is_dir() and any(proposals.glob("proposal_*.json")):
-                return proposals
-        return None
 
     def _find_artifacts_dir(self, root: Path, project: str = DEFAULT_PROJECT_NAME) -> Path | None:
         """Locate the .artifacts directory for the specified project.
@@ -458,193 +414,6 @@ class DddCultivationOrchestrator:
 
     # ── Channel 2: Auto-Apply Proposals + Feedback ─────────────────────────
 
-    def _ch_auto_apply(self, root: Path, ws_path: str) -> list[str]:
-        """Auto-apply mechanical DDD refresh proposals + feedback tracking."""
-        self._auto_apply_ddd_proposals(root)
-
-        # After applying proposals, compute channel precision stats
-        try:
-            from core.proposal_feedback import ProposalFeedbackTracker
-
-            proposals_dir = self._find_proposals_dir(root)
-            if proposals_dir and proposals_dir.is_dir():
-                tracker = ProposalFeedbackTracker()
-                artifacts_dir = proposals_dir.parent  # .artifacts/
-                tracker.compute_channel_stats(proposals_dir, persist_to=artifacts_dir)
-                # Admission Component D (AC7, run_8d5fe9d1): CLOSE the calibration loop —
-                # consume the freshly-computed stats' self-correction recommendations
-                # (previously dead code). project_dir = artifacts_dir.parent.
-                from core.ddd_cultivation import apply_channel_self_corrections
-                apply_channel_self_corrections(artifacts_dir.parent)
-        except Exception as exc:
-            logger.debug("ddd_orchestrator: feedback tracking skipped: %s", exc)
-
-        return []  # Side-effect only, no findings
-
-    def _auto_apply_ddd_proposals(self, root: Path) -> None:
-        """Auto-apply mechanical DDD refresh proposals.
-
-        Scans Projects/*/.artifacts/ddd-refresh-*.md for proposals.
-        For each proposal with confidence >= 8:
-        - Parse Current/Proposed code blocks
-        - Classify: mechanical (only adds lines) vs semantic (modifies/deletes)
-        - Skip changes targeting Non-Goals, Vision, or Architecture sections
-        - Apply mechanical changes to the target DDD doc
-        - Rename proposal to .applied after processing
-        - Log applied changes to health_findings.json
-        """
-        projects_dir = root / "Projects"
-        if not projects_dir.is_dir():
-            return
-
-        applied_changes: list[dict] = []
-        gate_mgr = self._get_gate_manager(root)  # Create once, reuse per-trigger
-
-        for project_dir in sorted(projects_dir.iterdir()):
-            if not project_dir.is_dir():
-                continue
-            artifacts_dir = project_dir / ".artifacts"
-            if not artifacts_dir.is_dir():
-                continue
-
-            proposals = sorted(artifacts_dir.glob("ddd-refresh-*.md"))
-            proposals = [p for p in proposals if not p.name.endswith(".applied")]
-
-            for proposal_path in proposals:
-                try:
-                    content = proposal_path.read_text(encoding="utf-8")
-
-                    # Extract confidence score
-                    conf_match = re.search(r"\*\*Confidence:\*\*\s*(\d+)/10", content)
-                    if not conf_match:
-                        continue
-                    confidence = int(conf_match.group(1))
-                    if confidence < 8:
-                        proposal_path.rename(proposal_path.with_suffix(".md.applied"))
-                        # Gate trigger: low-confidence proposal rejected = noise_filter fires
-                        if gate_mgr:
-                            gate_mgr.record_trigger("noise_filter")
-                        continue
-
-                    # Check for semantic section targets
-                    targets_line = ""
-                    for line in content.splitlines():
-                        if "_Targets:" in line or "Targets:" in line:
-                            targets_line = line.lower()
-                            break
-                    targets_semantic = any(
-                        s.lower() in targets_line for s in _SEMANTIC_SECTIONS
-                    )
-
-                    # Parse Current/Proposed blocks
-                    block_pattern = re.compile(
-                        r"\*\*Current:\*\*\s*\n```\n(.*?)\n```\s*\n+"
-                        r"\*\*Proposed:\*\*\s*\n```\n(.*?)\n```",
-                        re.DOTALL,
-                    )
-                    for match in block_pattern.finditer(content):
-                        current_block = match.group(1)
-                        proposed_block = match.group(2)
-
-                        current_lines = current_block.strip().splitlines()
-                        proposed_lines = proposed_block.strip().splitlines()
-
-                        is_mechanical = (
-                            len(proposed_lines) > len(current_lines)
-                            and proposed_lines[:len(current_lines)] == current_lines
-                        )
-
-                        if not is_mechanical or targets_semantic:
-                            # Gate trigger: semantic section or non-mechanical change skipped
-                            if targets_semantic and gate_mgr:
-                                gate_mgr.record_trigger("trust_annotation")
-                            continue
-
-                        # Shared doc-write lock via md_lock (run_06350217): the SAME
-                        # <doc>.md.lock name every other writer of these docs uses,
-                        # so this mechanical writeback mutually excludes concurrent
-                        # apply_to_ddd / decay / retire (was hand-rolled flock_exclusive
-                        # — correct name already, but re-derived; md_lock owns it now).
-                        from utils.file_lock import md_lock
-                        for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
-                            # Resolve via the six-section resolver (strangler): a
-                            # migrated DDD keeps its docs under 2-understanding/, so a
-                            # a bare root read (project_dir joined with the doc name) would miss it and
-                            # mechanical writeback would silently stop applying
-                            # (run_3a636c88). NOTE: local var is `doc_path` — must NOT
-                            # shadow the imported `ddd_path` FUNCTION (it was `ddd_path`
-                            # before, a latent TypeError trap + the root-path bug).
-                            doc_path = ddd_path(project_dir, ddd_name)
-                            if not doc_path.exists():
-                                continue
-                            with md_lock(doc_path, blocking=True):
-                                ddd_content = doc_path.read_text(encoding="utf-8")
-                                if current_block in ddd_content:
-                                    new_content = ddd_content.replace(
-                                        current_block, proposed_block, 1
-                                    )
-                                    doc_path.write_text(new_content, encoding="utf-8")
-                                    applied_changes.append({
-                                        "project": project_dir.name,
-                                        "doc": ddd_name,
-                                        "proposal": proposal_path.name,
-                                        "type": "mechanical_append",
-                                    })
-                                    logger.info(
-                                        "DDD auto-apply: applied mechanical change to %s/%s from %s",
-                                        project_dir.name, ddd_name, proposal_path.name,
-                                    )
-                                    break
-
-                    proposal_path.rename(proposal_path.with_suffix(".md.applied"))
-
-                except Exception as exc:
-                    logger.warning("DDD auto-apply failed for %s: %s", proposal_path.name, exc)
-
-        # Log to health_findings.json
-        if applied_changes:
-            findings_dir = root / "Services" / "swarm-jobs"
-            findings_file = findings_dir / "health_findings.json"
-            if findings_file.exists():
-                try:
-                    data = json.loads(findings_file.read_text(encoding="utf-8"))
-                    for change in applied_changes:
-                        data["findings"].append({
-                            "level": "info",
-                            "message": (
-                                f"DDD-AUTO-APPLY: {change['type']} in "
-                                f"{change['project']}/{change['doc']} "
-                                f"from {change['proposal']}"
-                            ),
-                        })
-                    findings_file.write_text(
-                        json.dumps(data, indent=2, default=str),
-                        encoding="utf-8",
-                    )
-                except (json.JSONDecodeError, OSError) as exc:
-                    logger.warning("Failed to log DDD auto-apply: %s", exc)
-
-        # ── Gap #11: Auto-commit after L2 auto-apply ──────────────────────
-        if applied_changes:
-            try:
-                changed_files = list({
-                    str(project_dir / c["doc"])
-                    for c in applied_changes
-                    for project_dir in [root / "Projects" / c["project"]]
-                })
-                subprocess.run(
-                    ["git", "add"] + changed_files,
-                    cwd=str(root), capture_output=True, timeout=10,
-                )
-                msg = f"chore(ddd): auto-apply {len(applied_changes)} mechanical refresh(es)"
-                subprocess.run(
-                    ["git", "commit", "-m", msg, "--no-verify"],
-                    cwd=str(root), capture_output=True, timeout=10,
-                )
-                logger.info("ddd_orchestrator: auto-committed %d DDD changes", len(applied_changes))
-            except (subprocess.TimeoutExpired, OSError) as exc:
-                logger.debug("ddd_orchestrator: auto-commit skipped: %s", exc)
-
     # ── Channel 5: Entity Index Validation ─────────────────────────────────
     def _ch_signal_bridge(self, root: Path, ws_path: str) -> list[str]:
         """Signal→DDD bridge (high-relevance signals → proposals)."""
@@ -671,192 +440,4 @@ class DddCultivationOrchestrator:
                 drift_count,
             )
         return []
-
-    def _ch_entry_lifecycle(self, root: Path, ws_path: str) -> list[str]:
-        """Channel 8: Per-entry reference bumping, decay assessment, and state transitions.
-
-        Runs on TIMER_30MIN and SESSION_CLOSE. For each project's IMPROVEMENT.md:
-        1. Refresh last_referenced from recall usage (.ddd-usage.json)
-        2. Assess decay transitions (active→dormant→archived)
-        3. MOVE entries that reached end-of-life: archive once, strip from the doc
-        Uses the shared md_lock (utils.file_lock) advisory lock — the SAME
-        <doc>.md.lock name every DDD-doc writer uses — to prevent concurrent
-        read-modify-write (run_06350217).
-        """
-        from datetime import date as _date
-        from core.ddd_entry_lifecycle import (
-            archive_and_strip_lines,
-            assess_decay,
-            inject_entry_metadata,
-            may_leave_live_doc,
-            parse_entries,
-            reclaim_noise_entries,
-        )
-
-        findings: list[str] = []
-        projects_dir = Path(ws_path) / "Projects"
-        if not projects_dir.is_dir():
-            return findings
-
-        today = _date.today()
-        resolved_projects = projects_dir.resolve()
-
-        for project_dir in projects_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            # S1/S3 fix: skip symlinks and validate containment
-            if project_dir.is_symlink():
-                continue
-            if not project_dir.resolve().is_relative_to(resolved_projects):
-                continue
-            imp_path = ddd_path(project_dir, "IMPROVEMENT.md")
-            if not imp_path.is_file():
-                continue
-
-            try:
-                # Shared doc-write lock (run_06350217): lock on the SAME
-                # <doc>.md.lock name every other IMPROVEMENT.md writer uses
-                # (apply_to_ddd, auto-apply, llm-apply, retire) via md_lock — the
-                # old hand-rolled `.IMPROVEMENT.md.lock` name diverged from theirs,
-                # so this decay strip did NOT mutually exclude a concurrent append
-                # → lost-update race. md_lock is co-located (<doc>.md.lock), cross-
-                # platform, non-blocking here (skip the project if another writer
-                # holds it), and never unlinks (inode-race safe, run_24d9f714).
-                from utils.file_lock import md_lock
-                with md_lock(imp_path, blocking=False) as _got:
-                    if not _got:
-                        continue  # another writer holds this doc — skip this project
-
-                    content = imp_path.read_text(encoding="utf-8")
-                    entries = parse_entries(content)
-                    if not entries:
-                        # C2 fix: don't use continue — fall through to finally
-                        pass
-                    else:
-                        # F1 prose-bump REMOVED (R2-prime, run_e50621b6). Bumping ref
-                        # from DailyActivity prose-substring matches was a TOXIC fake
-                        # signal (generic-titled entries gamed it → undeserved decay
-                        # protection). The honest ref producer is
-                        # memory_decay.bump_entry_references (real entry-IDs cited in
-                        # session messages). ref_count + the decay HIGH_REF branch are
-                        # KEPT — only this prose producer is removed. NOTE: this call
-                        # site passed graph_path but NOT context_files, so it never
-                        # triggered the G1 graph auto-extraction (which is gated on
-                        # context_files) — removing it loses no graph behavior.
-                        #
-                        # ACCESS-DECAY bump (run_644bfea6): the HONEST usage signal
-                        # for DDD entries. recall records which entries it actually
-                        # surfaced into .ddd-usage.json (keyed by content anchor);
-                        # here we bump each matching entry's last_referenced to its
-                        # recorded hit date BEFORE assess_decay reads last_referenced
-                        # (ddd_entry_lifecycle.py:695). This keeps genuinely-used
-                        # lessons alive instead of decaying them on age alone.
-                        # Anchor MUST use the same normalizer as the write side.
-                        # best-effort: any failure leaves age-only decay intact.
-                        try:
-                            from core.ddd_usage import (
-                                entry_anchor_text,
-                                load_ddd_usage,
-                            )
-                            _usage = load_ddd_usage(project_dir.name)
-                            if _usage:
-                                for _e in entries:
-                                    # Anchor IS the key (no section — recall and
-                                    # parse_entries disagree on sub-section names,
-                                    # so keying on section silently mismatched).
-                                    _anchor = entry_anchor_text(_e.raw_text)
-                                    _hit = _usage.get(_anchor) if _anchor else None
-                                    if _hit and (
-                                        _e.last_referenced is None
-                                        or _hit > _e.last_referenced
-                                    ):
-                                        _e.last_referenced = _hit
-                        except Exception:  # noqa: BLE001 — best-effort usage bump
-                            pass
-                        original = content
-                        # A live entry still carrying a decay:archived marker (the
-                        # pre-fix runaway shape) is re-decided, not moved on the stale
-                        # marker: reset it to dormant so assess_decay judges it again
-                        # with the fresh usage bump above. Superseded entries keep
-                        # their lineage untouched (assess_decay skips them anyway).
-                        for _e in entries:
-                            if _e.decay_state == "archived" and not _e.superseded_by:
-                                _e.decay_state = "dormant"
-                        # An entry leaves the live doc on decay grounds only through
-                        # may_leave_live_doc, the same rule reclaim uses (real
-                        # created_date past grace, ref 0, not superseded, not
-                        # keep-class). A dormant->archived transition that fails it
-                        # is dropped: the entry keeps its persisted state, so an
-                        # undated or keep-class entry neither leaves the doc nor
-                        # re-fires the same transition on every pass.
-                        to_archive = []
-                        for t in assess_decay(entries, today):
-                            t.entry.decay_state = t.new_state
-                            if t.new_state == "archived" and not may_leave_live_doc(t.entry, today):
-                                t.entry.decay_state = t.old_state
-                                continue
-                            findings.append(
-                                f"ENTRY_DECAY: [{t.entry.entry_type}] "
-                                f"'{t.entry.title[:50]}' "
-                                f"{t.old_state}→{t.new_state} ({t.reason})"
-                            )
-                            if t.new_state == "archived":
-                                to_archive.append(t.entry)
-
-                        # MOVE archived entries: append each to the archive at most
-                        # once, then strip its block (by line) from content. Before
-                        # this, the pass appended and only annotated, so the entry
-                        # stayed live and was re-archived every pass (one entry
-                        # reached 1,375 copies). The append runs first: if it raises,
-                        # nothing is stripped and the doc is not rewritten.
-                        # source_path=imp_path so the archive lands NEXT TO the
-                        # resolved live doc (2-understanding/), not the raw root
-                        # — the split-brain that grew a 17MB orphan (run_f71e5920).
-                        if to_archive:
-                            _n, content = archive_and_strip_lines(
-                                content, to_archive, project_dir,
-                                archive_name="IMPROVEMENT-archive.md",
-                                source_path=imp_path,
-                            )
-                            findings.append(
-                                f"ENTRY_ARCHIVE: {_n} entries moved to the archive "
-                                f"from {project_dir.name}"
-                            )
-
-                        # Write metadata for the surviving entries into the stripped
-                        # content; one write, only if anything changed.
-                        active_entries = [e for e in entries if e.decay_state != "archived"]
-                        updated = inject_entry_metadata(content, active_entries)
-                        if updated != original:
-                            imp_path.write_text(updated, encoding="utf-8")
-                        content = updated  # reclaim operates on the latest content
-
-                        # CLEAN (M0 ②): reclaim stale operational noise — archive
-                        # AND physically strip (inject_entry_metadata only annotates,
-                        # it never removes, so archived entries would otherwise persist
-                        # and keep counting as noise). is_keep_class protects permanent
-                        # knowledge (COE/principle/correction/decision/model/ref>=2).
-                        reclaim_report = reclaim_noise_entries(
-                            content, today, project_dir,
-                            source_path=imp_path, dry_run=False,
-                        )
-                        if reclaim_report.new_content is not None:
-                            # reclaim_noise_entries already wrote imp_path
-                            # (source_path given); recovery is archive + git, no
-                            # .bak (6463e1ab). Just log.
-                            findings.append(
-                                f"ENTRY_RECLAIM: {reclaim_report.archived} stale entries "
-                                f"archived+stripped from {project_dir.name} "
-                                f"({reclaim_report.kept_protected} protected)"
-                            )
-
-            except Exception as exc:
-                logger.debug(
-                    "entry_lifecycle: %s failed: %s",
-                    project_dir.name, type(exc).__name__,
-                )
-            # md_lock (above) released + closed the fd on with-exit; no manual
-            # finally needed (run_06350217 — was a hand-rolled fcntl LOCK_UN).
-
-        return findings
 

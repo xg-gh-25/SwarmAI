@@ -1776,102 +1776,34 @@ class TestMemoryWorthyCorrectionGate:
             "pure correction-signal must NOT be written to MEMORY"
 
     @pytest.mark.asyncio
-    async def test_hook_writes_real_lesson_to_memory(
+    async def test_hook_enqueues_real_correction_without_writing_memory(
         self, corrections_file, session_context, tmp_path, monkeypatch
     ):
-        """AC2 end-to-end: a genuine lesson correction DOES append to MEMORY.
-
-        JUDGE-GATED (run_04fd397c): the correction now routes through the
-        self_adversarial judge (admit_memory_lesson), so the judge must be mocked
-        to a pass — an unmocked test would hit live Bedrock → fail-closed → nothing
-        written. This asserts the judge-PASS path writes; a separate test covers
-        judge-DISCARD dropping the write.
-        """
-        import core.ingestion_gate as ig
-        monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
-        mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
-        mem.parent.mkdir(parents=True)
-        # A correction stays a [pitfall]→## Pitfalls (fixed home; judge admits, not re-routes).
+        from types import SimpleNamespace
+        calls = []
+        monkeypatch.setattr(
+            "core.session_inputs.latest_user_event_id",
+            lambda *a, **k: "input-user-correction",
+        )
+        monkeypatch.setattr(
+            "core.ingestion.sources.s1_user.submit_units",
+            lambda *a, **k: calls.append((a, k)) or [SimpleNamespace(status="queued")],
+        )
+        mem = tmp_path / "MEMORY.md"
         mem.write_text("## Pitfalls\n")
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
-
         real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
-                "environment-fixed updater-signing gap, not a regression; relaunch "
-                "the built app and it runs clean")
+                "environment-fixed updater-signing gap, not a regression; relaunch it")
         from core.runtime_hooks import create_user_correction_detector
         hook = create_user_correction_detector(str(corrections_file), session_context)
         await hook({"prompt": real}, None, MagicMock())
-
-        body = mem.read_text()
-        assert "[pitfall]" in body and "TAURI_SIGNING" in body, \
-            "genuine mid-session lesson (judge-pass) must be written to ## Pitfalls"
-
-    @pytest.mark.asyncio
-    async def test_memory_write_dedups(
-        self, corrections_file, session_context, tmp_path, monkeypatch
-    ):
-        """AC4 (design 2026-10-25-memory-write-entry-dedup): the lesson is written as a
-        canonical entry; a repeat is an exact duplicate the context-health sweep removes
-        (writes no longer dedup line by line).
-
-        JUDGE-GATED (run_04fd397c): judge mocked to pass so the correction reaches
-        the write.
-        """
-        import core.ingestion_gate as ig
-        monkeypatch.setattr(ig, "self_adversarial_judge", lambda *a, **k: ("pass", "judged"))
-        mem = tmp_path / ".swarm-ai" / "SwarmWS" / ".context" / "MEMORY.md"
-        mem.parent.mkdir(parents=True)
-        mem.write_text("## Pitfalls\n")
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
-
-        real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
-                "environment-fixed updater-signing gap, not a regression; relaunch "
-                "the built app and it runs clean")
-        from core.runtime_hooks import create_user_correction_detector
-        hook = create_user_correction_detector(str(corrections_file), session_context)
-        await hook({"prompt": real}, None, MagicMock())
-        await hook({"prompt": real}, None, MagicMock())
-
-        from datetime import date as _date
-        from core.ddd_entry_lifecycle import parse_entries, reclaim_duplicate_entries
-        pits = [e for e in parse_entries(mem.read_text()) if e.section == "Pitfalls"]
-        assert len(pits) == 2 and all(e.entry_type == "pitfall" and e.source == "auto"
-                                      for e in pits)
-        reclaim_duplicate_entries(mem.read_text(), _date.today(), mem.parent,
-                                  archive_name="MEMORY-archive-t.md", source_path=mem,
-                                  dry_run=False)
-        assert mem.read_text().count("TAURI_SIGNING") == 1, \
-            "the sweep must collapse the repeated lesson to one entry"
-
-    @pytest.mark.asyncio
-    async def test_judge_runs_off_event_loop(
-        self, corrections_file, session_context, tmp_path, monkeypatch
-    ):
-        """admit_memory_lesson is a blocking Bedrock call; this UserPromptSubmit hook
-        fires on every correction prompt, so on the loop thread it stalled /health
-        before the turn even started. It must run in a worker thread."""
-        import threading
-        import core.ingestion_gate as ig
-        loop_thread = threading.get_ident()
-        seen: list[int] = []
-
-        def _spy(summary, *a, **k):
-            seen.append(threading.get_ident())
-            return ("discard", None, "test", None)
-
-        monkeypatch.setattr(ig, "admit_memory_lesson", _spy)
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-        monkeypatch.setenv("SWARMWS", str(tmp_path / ".swarm-ai" / "SwarmWS"))  # the one resolver
-        real = ("不对 —— TAURI_SIGNING_PRIVATE_KEY error at build tail is an "
-                "environment-fixed updater-signing gap, not a regression; relaunch "
-                "the built app and it runs clean")
-        from core.runtime_hooks import create_user_correction_detector
-        hook = create_user_correction_detector(str(corrections_file), session_context)
-        await hook({"prompt": real}, None, MagicMock())
-        assert seen, "admit_memory_lesson was not called"
-        assert all(t != loop_thread for t in seen)
+        args, kwargs = calls[0]
+        units = args[0]
+        assert units[0]["kind"] == "cognition"
+        assert units[0]["type"] == "correction"
+        assert kwargs["session_id"] == session_context["sdk_session_id"]
+        assert kwargs["evidence"] == "event:input-user-correction"
+        assert kwargs["turn_kind"] == "user"
+        assert mem.read_text() == "## Pitfalls\n"
 
 
 # ---------------------------------------------------------------------------

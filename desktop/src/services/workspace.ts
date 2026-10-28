@@ -65,6 +65,7 @@ const fileContentToCamelCase = (data: Record<string, unknown>): WorkspaceFileCon
     size: data.size as number,
     mimeType: data.mime_type as string,
     readonly: (data.readonly as boolean | undefined) ?? false,
+    revision: (data.revision as string | undefined) ?? '',
   };
 };
 
@@ -349,12 +350,14 @@ export const workspaceService = {
     agentId: string,
     filename: string,
     content: string,
-    path: string = '.'
+    path: string = '.',
+    expectedRevision?: string,
   ): Promise<{ path: string; filename: string; size: number }> {
     const response = await api.post<Record<string, unknown>>(`/workspace/${agentId}/upload`, {
       filename,
       content,
       path,
+      expected_revision: expectedRevision,
     });
     return {
       path: response.data.path as string,
@@ -375,16 +378,18 @@ export const workspaceService = {
     agentId: string,
     path: string,
     content: string,
-    basePath?: string
-  ): Promise<{ path: string; size: number }> {
+    basePath?: string,
+    expectedRevision?: string,
+  ): Promise<{ path: string; size: number; revision: string }> {
     const response = await api.put<Record<string, unknown>>(
       `/workspace/${agentId}/write`,
-      { path, content },
+      { path, content, expected_revision: expectedRevision },
       { params: basePath ? { base_path: basePath } : undefined }
     );
     return {
       path: response.data.path as string,
       size: response.data.size as number,
+      revision: (response.data.revision as string | undefined) ?? '',
     };
   },
 };

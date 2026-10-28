@@ -165,8 +165,8 @@ def load_project_graphs(project_name: str) -> list[tuple[CodeIntelDb, GraphStore
                 _db_graph_cache.pop(key, None)
                 try:
                     cached[0].close()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 — a stale handle is dropped anyway
+                    logger.debug("code_intel: closing a stale graph handle failed: %s", exc)
                 cached = None
         if cached is not None:
             graph = cached[0]
@@ -223,15 +223,16 @@ def invalidate_cache(project_name: str | None = None):
             try:
                 from jobs.paths import PROJECTS_DIR
                 paths = [str(r.db_path) for r in code_intel_dbs(PROJECTS_DIR / project_name)]
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001 — nothing to evict when the dbs cannot be listed
+                logger.debug("code_intel: listing %s's graph dbs failed: %s", project_name, exc)
                 paths = []
             for key in paths:
                 entry = _db_graph_cache.pop(key, None)
                 if entry:
                     try:
                         entry[0].close()
-                    except Exception:
-                        pass
+                    except Exception as exc:  # noqa: BLE001 — the entry is evicted anyway
+                        logger.debug("code_intel: closing evicted graph %s failed: %s", key, exc)
             to_remove = [k for k, v in _project_path_cache.items() if v == project_name]
             for k in to_remove:
                 del _project_path_cache[k]

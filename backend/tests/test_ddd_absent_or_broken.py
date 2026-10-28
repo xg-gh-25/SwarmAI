@@ -112,7 +112,6 @@ def test_chat_injection_never_raises(ws, state):
 def test_pipeline_readers_never_raise(ws, state, tmp_path):
     from core.run_protocol import run_knowledge as rk
     from core.run_protocol.project_binding import has_ddd_docs
-    from core.run_protocol.reflect_job import candidates_for
     _make(ws, state)
     has = has_ddd_docs(PROJECT)
     for purpose, expected in BY_PURPOSE.items():
@@ -125,8 +124,6 @@ def test_pipeline_readers_never_raise(ws, state, tmp_path):
                                         requirement="swap the operands of add")
     assert status in ("recalled", "none")
     assert (status == "recalled") == bool(ids)
-    out = candidates_for([{"id": "L1", "statement": "operands of add"}], PROJECT)
-    assert isinstance(out.get("L1"), list)
 
 
 def test_a_recall_that_raises_is_unavailable_with_its_reason(ws):

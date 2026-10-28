@@ -126,8 +126,8 @@ class TestEvolutionMaintenanceHook:
     """Integration tests for the full hook lifecycle."""
 
     @pytest.mark.asyncio
-    async def test_deprecates_idle_entry(self, tmp_path):
-        """Active entry idle >30 days with 0 usage → deprecated."""
+    async def test_reports_idle_entry_without_mutating(self, tmp_path):
+        """Active stale entries remain byte-for-byte unchanged in stage B."""
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
         _write_recent_evolution_state(ctx_dir)
@@ -139,17 +139,12 @@ class TestEvolutionMaintenanceHook:
             {"id": "E001", "date": _days_ago(45), "usage": 0, "status": "active"},
         ]))
 
+        before = evo.read_text()
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
 
-        content = evo.read_text()
-        assert "deprecated" in content
-
-        log_lines = changelog.read_text().strip().split("\n")
-        assert len(log_lines) == 1
-        entry = json.loads(log_lines[0])
-        assert entry["action"] == "deprecate"
-        assert entry["id"] == "E001"
+        assert evo.read_text() == before
+        assert changelog.read_text() == ""
 
     @pytest.mark.asyncio
     async def test_skips_entry_with_usage(self, tmp_path):
@@ -173,8 +168,8 @@ class TestEvolutionMaintenanceHook:
         assert changelog.read_text().strip() == ""
 
     @pytest.mark.asyncio
-    async def test_prunes_deprecated_entry(self, tmp_path):
-        """Deprecated entry with 0 usage and old date → removed."""
+    async def test_keeps_deprecated_entry_read_only(self, tmp_path):
+        """Deprecated stale entries are reported but not removed."""
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
         _write_recent_evolution_state(ctx_dir)
@@ -186,16 +181,12 @@ class TestEvolutionMaintenanceHook:
             {"id": "E001", "date": _days_ago(60), "usage": 0, "status": "deprecated"},
         ]))
 
+        before = evo.read_text()
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir, deprecation_days=30)
         await hook.execute(_make_context(tmp_path))
 
-        content = evo.read_text()
-        assert "E001" not in content
-
-        log_lines = changelog.read_text().strip().split("\n")
-        assert len(log_lines) == 1
-        entry = json.loads(log_lines[0])
-        assert entry["action"] == "prune"
+        assert evo.read_text() == before
+        assert changelog.read_text() == ""
 
     @pytest.mark.asyncio
     async def test_no_context_dir_is_noop(self, tmp_path):
@@ -245,345 +236,8 @@ class TestEvolutionWeeklyTriggerRemoved:
         assert not hasattr(EvolutionMaintenanceHook, "_maybe_run_evolution")
 
 
-class TestFoldWritesToMonthlyShard:
-    """Sub-change 2: fold archives to a MONTHLY shard .context/EVOLUTION-archive-{YYYY-MM}.md
-    (mirrors the proven MEMORY pattern context_health_hook:2126), NOT the fixed
-    legacy EVOLUTION-archive.md. Legacy file is left untouched (pre-2026-08 history)."""
-
-    def _evolution_with_foldable_family(self) -> str:
-        # A Corrections family with 3 foldable DATA-POINTs (cap=2 → 1 archived).
-        return (
-            "# SwarmAI Evolution Registry\n\n"
-            "## Corrections Captured\n\n"
-            "### CLASS X: Test Family\n"
-            "- **RECURRENCE DATA-POINT (2026-08-01, run_a)**: first anchor point one.\n"
-            "- **RECURRENCE DATA-POINT (2026-08-02, run_b)**: second point two.\n"
-            "- **RECURRENCE DATA-POINT (2026-08-03, run_c)**: third point three.\n"
-        )
-
-    def test_shard_helper_returns_monthly_name(self):
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from datetime import date
-        hook = EvolutionMaintenanceHook(context_dir=Path("/tmp/x"))
-        shard = hook._evolution_archive_shard(date(2026, 8, 14))
-        assert shard == "EVOLUTION-archive-2026-08.md"
-
-    def test_fold_writes_monthly_shard_not_legacy(self, tmp_path):
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        evo.write_text(self._evolution_with_foldable_family())
-        changelog = ctx / "EVOLUTION_CHANGELOG.jsonl"
-        hook = EvolutionMaintenanceHook(context_dir=ctx)
-        content = evo.read_text()
-        hook._fold_corrections(evo, content, changelog)
-        # New monthly shard exists and holds the archived data-point.
-        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
-        assert shards, "fold must write a monthly EVOLUTION-archive-YYYY-MM.md shard"
-        shard_body = shards[0].read_text()
-        # fold keeps anchor+recent per cap=2, archives the middle data-point(s) —
-        # assert a real DATA-POINT block landed, not which specific one.
-        assert "RECURRENCE DATA-POINT" in shard_body
-        assert "folded" in shard_body
-        # Legacy fixed-name file must NOT be created by fold anymore.
-        assert not (ctx / "EVOLUTION-archive.md").exists(), \
-            "fold must not write the legacy fixed-name archive"
 
 
-class TestSizeValve:
-    """Sub-change 5: system-prompt size control. EVOLUTION.md is injected in full
-    every session; over EVOLUTION_ARCHIVE_THRESHOLD (20K tok) the valve moves the
-    LOWEST-value entries to the monthly shard (recall-backed cold storage, not
-    deletion) so the always-injected core stays bounded. Evergreen core (Pattern/
-    Durable tell/CAPSTONE/METHOD FIX/CLASS parent) is HARD-PROTECTED — never moved."""
-
-    def test_is_evergreen_resident_by_marker_or_recency(self):
-        # NEW判准 (XG 2026-08-14): resident = marker-bearing OR dated within the recency
-        # window. The OLD blanket "any correction structure is evergreen" rule is GONE —
-        # it made the whole Corrections region un-archivable and defeated the valve.
-        from datetime import datetime, timezone
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        h = EvolutionMaintenanceHook(context_dir=Path("/tmp/x"))
-        now = datetime(2026, 8, 20, tzinfo=timezone.utc)
-        # (a) marker-bearing → resident regardless of age.
-        assert h._is_evergreen("### C001 | 2026-03-13\n- **Pattern**: x\n- **Durable tell**: y", now)
-        assert h._is_evergreen("### CLASS A: Confidence\n- **Pattern**: skip-process\n- chain...", now)
-        assert h._is_evergreen("- **METHOD FIX — dive protocol**: observe first", now)
-        assert h._is_evergreen("- **CAPSTONE (2026-08-06)**: the write-side rule", now)
-        # (b) recent (within 14d of 2026-08-20) marker-less correction → resident.
-        assert h._is_evergreen("### C049 | 2026-08-11 [Bias A]\n- **Correction**: recent, no marker", now)
-        # OLD marker-less correction (dated, >14d) → NO LONGER evergreen → archive-eligible.
-        assert not h._is_evergreen("### C001 | 2026-03-13\n- **Correction**: old, no marker", now)
-        # A marker-less ### CLASS with no date → not resident (recall-backed if evicted).
-        assert not h._is_evergreen("### CLASS A: Confidence → Skip Process\n- chain...", now)
-        # A plain O-Reference one-liner → NOT evergreen (evictable low-value).
-        assert not h._is_evergreen("- O001 (CDP), O002 (DOM depth), O004 (nc -z > lsof)", now)
-
-    def test_valve_noop_under_threshold(self, tmp_path):
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        evo.write_text("# EVOLUTION\n\n## Optimizations Learned\n- **O003**: short.\n")
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo, threshold_tokens=15000)
-        assert moved == 0, "under threshold → no eviction"
-        assert not list(ctx.glob("EVOLUTION-archive-*.md")), "no shard written when under threshold"
-
-    def test_hysteresis_evicts_down_to_target_not_just_under_trigger(self, tmp_path):
-        # Hysteresis: valve triggers >20K but evicts DOWN TO the 15K low watermark,
-        # leaving a 5K headroom band — NOT stopping the moment it crosses under 20K
-        # (that left ~89 tok headroom → thrash). Build an >20K file dominated by a
-        # large low-value Reference blob; assert final <= target(15K), not ~20K.
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        ctx = tmp_path / ".context"; ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        big = "\n".join(f"- O{200+i} occasionally-used opt {i} " + "pad " * 50 for i in range(360))
-        evo.write_text(
-            "# EVOLUTION\n\n## Corrections Captured\n"
-            "### C1 | 2026-08-01\n- **Pattern**: keep me\n- **Durable tell**: keep me too\n\n"
-            "## Optimizations Learned\n\n"
-            "**Reference (triggered occasionally, archived for lookup):**\n" + big + "\n"
-        )
-        start = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert start > 20000, f"fixture must exceed trigger (got {start})"
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo)  # default watermarks: trigger 20K / target 15K
-        final = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert moved > 0
-        assert final <= 15000, f"must evict down to target 15K, not stop ~20K (final {final})"
-        # evergreen correction + pattern/tell survive
-        body = evo.read_text()
-        assert "**Pattern**: keep me" in body and "**Durable tell**" in body
-
-    def test_hysteresis_no_evict_in_headroom_band(self, tmp_path):
-        # A file sitting in the 15–20K headroom band on entry must be a NO-OP — the
-        # valve triggers only ABOVE 20K, so new entries have room to land without
-        # re-triggering every session (the anti-thrash guarantee).
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        ctx = tmp_path / ".context"; ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        band = "\n".join(f"- O{300+i} opt {i} " + "pad " * 50 for i in range(150))
-        evo.write_text("# EVOLUTION\n\n## Optimizations Learned\n- **Active:**\n" + band + "\n")
-        tok = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert 15000 < tok <= 20000, f"fixture must sit in 15-20K band (got {tok})"
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo)
-        assert moved == 0, "in-band file must NOT be evicted (headroom preserved, no thrash)"
-        assert not list(ctx.glob("EVOLUTION-archive-*.md"))
-
-    def test_watermark_clamp_prevents_inversion(self, tmp_path):
-        # Gate-1 check-4: a threshold override BELOW the default target must clamp the
-        # target down (target = min(target, threshold)) so the watermarks never invert.
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        ctx = tmp_path / ".context"; ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        blob = "\n".join(f"- O{400+i} opt {i} " + "pad " * 30 for i in range(120))
-        evo.write_text("# EVOLUTION\n\n## Optimizations Learned\n- **Active:**\n" + blob + "\n")
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        # Small override threshold=6000 (< default target 15000): must clamp target to 6000
-        # and evict down to <=6000, NOT try to reach 15000 (which would invert → no-op).
-        moved = h._size_evict(evo, threshold_tokens=6000)
-        final = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert moved > 0 and final <= 6000, f"clamped target must drive eviction to <=6K (final {final})"
-
-    def test_valve_evicts_low_value_preserves_evergreen(self, tmp_path):
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        # Build an over-threshold file: 1 evergreen correction (pattern+tell) that MUST
-        # stay + a large low-value Reference blob that should be evicted first.
-        big_ref = "\n".join(
-            f"- O{100+i} (some occasionally-triggered optimization lesson number {i} "
-            + "padding " * 60 + ")" for i in range(200)
-        )
-        evergreen = (
-            "## Corrections Captured\n"
-            "### C049 | 2026-08-11 [Bias A]\n"
-            "- **Correction**: a load-bearing correction.\n"
-            "- **Pattern**: improve-before-justify.\n"
-            "- **Durable tell**: the clarity-excitement IS the signal.\n\n"
-        )
-        evo.write_text(
-            "# EVOLUTION\n\n" + evergreen
-            + "## Optimizations Learned\n\n"
-            "**Reference (triggered occasionally, archived for lookup):**\n"
-            + big_ref + "\n"
-        )
-        from core.context_directory_loader import ContextDirectoryLoader
-        before = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert before > 15000, f"fixture must exceed threshold (got {before})"
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo, threshold_tokens=15000)
-        assert moved > 0, "over threshold → evicts low-value"
-        body = evo.read_text()
-        # Evergreen correction + its pattern/tell SURVIVE.
-        assert "load-bearing correction" in body
-        assert "**Pattern**: improve-before-justify" in body
-        assert "**Durable tell**" in body
-        # Low-value Reference content moved to the monthly shard (recall-backed).
-        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
-        assert shards, "evicted content must land in a monthly shard"
-        assert "occasionally-triggered optimization lesson" in shards[0].read_text()
-
-    def test_valve_reaches_target_NO_EXEMPTION_even_all_evergreen(self, tmp_path):
-        # XG directive 2026-08-14: NO block is exempt. Every archive run MUST land ~target
-        # — if it stops above, that is a BUG. This REPLACES the old "never evict core →
-        # moved==0" contract (which let the file grow unbounded past the evergreen floor).
-        # A file of ONLY marker-bearing (tier-2) skeletons, over threshold, MUST still be
-        # evicted down to target — archive is recall-backed, so a skeleton moved out is
-        # retrievable, NOT lost.
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        core_blob = "\n".join(
-            f"### C{i:03d} | 2026-08-01\n- **Pattern**: p{i} " + "judgment " * 60 + "\n"
-            f"- **Durable tell**: t{i}\n" for i in range(140)
-        )
-        evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + core_blob)
-        before = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert before > 15000, f"fixture must exceed target (got {before})"
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo, threshold_tokens=15000)
-        final = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        # NO EXEMPTION: even an all-tier-2 file reaches target.
-        assert moved > 0, "all-evergreen over-target file MUST still evict (no exemption)"
-        assert final <= 15000, f"valve must reach target regardless of value tier (final {final})"
-        # The evicted skeletons went to the recall-backed shard (moved, not deleted).
-        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
-        assert shards, "evicted skeletons must land in a recall-backed shard"
-        assert "**Pattern**" in shards[0].read_text(), "tier-2 skeletons ARE evictable (recall-backed)"
-
-    def test_valve_evicts_lowest_value_tier_first(self, tmp_path):
-        # PRIORITY ORDER: with a mix of tiers over target, the valve evicts tier-0
-        # (old marker-less) BEFORE tier-2 (marker skeleton). What SURVIVES is the
-        # highest-value content — the skeleton stays when tier-0 alone frees enough.
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        ctx = tmp_path / ".context"; ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        # One tier-2 skeleton (small) + a large pile of tier-0 old marker-less blocks.
-        skeleton = (
-            "### C049 | 2026-08-11 [Bias A]\n- **Pattern**: keep-me-by-marker.\n"
-            "- **Durable tell**: the marker keeps it resident until tier-0 is exhausted.\n\n"
-        )
-        tier0 = "\n".join(
-            f"### DATA-POINT — old obs {i} [2026-03-10]\n- **note** — body {i} " + "pad " * 40 + "\n"
-            for i in range(150)
-        )
-        evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + skeleton + tier0 + "\n")
-        assert ContextDirectoryLoader.estimate_tokens(evo.read_text()) > 15000
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo, threshold_tokens=15000)
-        body = evo.read_text()
-        assert moved > 0 and ContextDirectoryLoader.estimate_tokens(body) <= 15000
-        # tier-2 skeleton SURVIVES because tier-0 alone freed enough (priority order).
-        assert "keep-me-by-marker" in body, "tier-2 skeleton must survive when tier-0 suffices"
-        # the shard holds tier-0 blocks, NOT the skeleton.
-        shard_text = list(ctx.glob("EVOLUTION-archive-*.md"))[0].read_text()
-        assert "old obs" in shard_text and "keep-me-by-marker" not in shard_text
-
-    def test_valve_never_splits_and_archives_old_marker_less_whole(self, tmp_path):
-        """REGRESSION (entry-splitting) + NEW判准 (XG 2026-08-14): the valve bounds
-        corrections as WHOLE ### blocks and NEVER splits a multi-line entry. Under the
-        NEW rule an OLD marker-less correction is archive-eligible (recall-backed) — but
-        it must be moved as a WHOLE BLOCK (header + all its bullets together), never
-        split. A recent OR marker-bearing correction stays resident. Dates are fixed and
-        far in the past so recency is deterministic (not wall-clock fragile)."""
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        # RESIDENT: a marker-bearing correction (Pattern/tell skeleton) — old date, but
-        # stays because of the marker.
-        resident = (
-            "## Corrections Captured\n"
-            "### C001 | 2026-03-13 [Bias A] — a marker-bearing correction\n"
-            "- **Correction**: the full body of C001 that must never be split off.\n"
-            "- **Pattern**: keep-me-by-marker.\n"
-            "- **Durable tell**: the marker keeps the skeleton resident.\n\n"
-        )
-        # ARCHIVE-ELIGIBLE: many OLD (2026-03) marker-less DATA-POINT/Cxxx blocks — under
-        # the OLD blanket rule these were un-archivable; now they archive WHOLE.
-        old_blocks = "\n".join(
-            f"### DATA-POINT — old observation {i} [2026-03-10]\n"
-            f"- **correction** — body {i} " + "padding " * 40 + "\n"
-            f"- **Status** — resolved {i}\n" for i in range(150)
-        )
-        evo.write_text("# EVOLUTION\n\n" + resident + old_blocks + "\n")
-        start = ContextDirectoryLoader.estimate_tokens(evo.read_text())
-        assert start > 15000
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        moved = h._size_evict(evo, threshold_tokens=15000)
-        body = evo.read_text()
-        final = ContextDirectoryLoader.estimate_tokens(body)
-        # (1) The valve ACTUALLY archived (the bug fix: old marker-less blocks ARE evictable now).
-        assert moved > 0, "old marker-less corrections must now be archive-eligible"
-        assert final <= 15000, f"valve must reach target now that Corrections is evictable (got {final})"
-        # (2) The marker-bearing correction stayed resident, WHOLE.
-        assert "the full body of C001 that must never be split off" in body, "marker-bearing stays"
-        assert "keep-me-by-marker" in body
-        # (3) NEVER-SPLIT: evicted blocks went to the shard as WHOLE units — a header and
-        # its bullets travel together; no orphaned bullet is left behind or split off.
-        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
-        assert shards, "eviction must write a shard"
-        shard_text = shards[0].read_text()
-        # every evicted DATA-POINT header in the shard carries its own body bullet (whole block)
-        import re as _re
-        evicted_ids = _re.findall(r"old observation (\d+)", shard_text)
-        assert evicted_ids, "at least one whole DATA-POINT block archived"
-        for i in evicted_ids:
-            assert f"body {i} " in shard_text, f"block {i} archived WHOLE (header+body together, never split)"
-        # no half-block left in the live file (a header without its body, or vice-versa)
-        for i in evicted_ids:
-            assert f"old observation {i} " not in body, f"evicted block {i} fully removed from live (no split)"
-
-    def test_valve_archive_failure_degrades_gracefully(self, tmp_path):
-        """Gate-2 #1/#3: if archive_raw_lines FAILS for some blocks (disk/OSError), the
-        valve must (a) NOT crash, (b) NOT delete a block it failed to archive (no data
-        loss — move-not-delete), (c) count only successfully-moved blocks in `moved`.
-        The final may then exceed target — which correctly triggers the bug-alarm (a
-        genuinely un-archivable block IS a real failure to report, not wolf-cry)."""
-        from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
-        from core.context_directory_loader import ContextDirectoryLoader
-        from scripts.locked_write import _find_section_range
-        ctx = tmp_path / ".context"; ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        blocks = "\n".join(
-            f"### DATA-POINT — obs {i} [2026-03-10]\n- **note** — body {i} " + "pad " * 40 + "\n"
-            for i in range(150)
-        )
-        evo.write_text("# EVOLUTION\n\n## Corrections Captured\n" + blocks + "\n")
-        content = evo.read_text()
-        h = EvolutionMaintenanceHook(context_dir=ctx)
-        # Stub archive that FAILS every other block (OSError) — the rest succeed.
-        calls = {"n": 0}
-        moved_texts = []
-        def flaky_archive(parent, texts, shard, **kw):
-            calls["n"] += 1
-            if calls["n"] % 2 == 0:
-                raise OSError("simulated disk full")
-            moved_texts.extend(texts)  # record what actually archived
-        moved = h._size_evict_locked(
-            evo, content, 15000, 15000,
-            ContextDirectoryLoader, flaky_archive, _find_section_range,
-        )
-        body = evo.read_text()
-        # (a) no crash (we got here). (b) every block that FAILED to archive is STILL in
-        # the live file (not deleted → no data loss). (c) moved counts only successes.
-        assert moved == len(moved_texts), "moved counts only successfully-archived blocks"
-        assert moved > 0, "the successful half must still be archived+deleted"
-        for t in moved_texts:
-            key = t.split("\n")[0]  # the ### header line
-            assert key not in body, "a successfully-archived block IS removed from live"
 
 
 class TestHookWritesNoGovernanceProposal:

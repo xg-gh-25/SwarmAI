@@ -400,9 +400,7 @@ def _execute_loaded(args, engine: RunEngine) -> dict[str, Any]:
         return {"ok": True, **engine.execute_land_request(
             args.request, message=args.message)}
     if args.command == "reflect-prepare":
-        artifact = _json_arg(args.artifact)
-        # dedup candidates are computed here, not supplied (RF-4, D1)
-        return {"ok": True, "reflect": engine.prepare_reflect(artifact.get("lessons", []))}
+        return {"ok": True, "reflect": engine.prepare_reflect(_json_arg(args.artifact))}
     if args.command == "findings":    # read-only: every finding and what closes it (§3.2)
         from core.run_protocol import review as review_protocol
         events = engine.store.read_events()

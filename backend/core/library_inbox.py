@@ -1,20 +1,12 @@
-"""Library Inbox — a regularized landing zone for single-file drops.
+"""Library Inbox adapter for single external file drops.
 
-Knowledge/Inbox/ is a staging area (design Cycle 6): a SINGLE external file MAY be
-copied in (small, explicit, no-drift-risk — the ONE exception to the never-copy
-rule). An external DIRECTORY is always MOUNTED, never copied. Re-filing out of the
-Inbox is done later by the user or by chat.
-
-This module owns only the mechanical copy + the directory guarantee; the API
-router is a thin wrapper, and the overlay shows Inbox as its own native category.
+The endpoint validates a caller-selected file and submits its complete content to S6.
+Directories remain invalid. No file is copied into governed Knowledge storage.
 """
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
-
-INBOX_NAME = "Inbox"
 
 # Protected system roots — a caller-supplied source under any of these is refused
 # (exfiltration guard). Covers unix + macOS sensitive trees. NOT an exhaustive
@@ -63,20 +55,12 @@ def _is_system_path(resolved: Path) -> bool:
     return False
 
 
-def ensure_inbox(knowledge_dir: Path) -> Path:
-    """Create Knowledge/Inbox/ if absent (idempotent). Returns its path."""
-    inbox = Path(knowledge_dir) / INBOX_NAME
-    inbox.mkdir(parents=True, exist_ok=True)
-    return inbox
+def copy_to_inbox(knowledge_dir: Path, source: Path) -> list:
+    """Validate one external file and submit its complete content through S6.
 
-
-def copy_to_inbox(knowledge_dir: Path, source: Path) -> Path:
-    """Copy a SINGLE file into Knowledge/Inbox/. Returns the landed path.
-
-    Rejects a directory (dirs are MOUNTED, not copied — the core design decision)
-    and a missing source. On a name collision, appends a non-clobbering numeric
-    suffix so an existing Inbox file is never overwritten.
+    The historical function name remains the endpoint entry point; no copy occurs.
     """
+    _ = knowledge_dir
     source = Path(source).expanduser()
     if not source.exists():
         raise FileNotFoundError(f"source does not exist: {source}")
@@ -98,21 +82,13 @@ def copy_to_inbox(knowledge_dir: Path, source: Path) -> Path:
             f"source {source} is under a protected system path — system files "
             f"may not be copied into the Inbox (exfiltration guard)."
         )
-    inbox = ensure_inbox(knowledge_dir)
-    dest = _unique_dest(inbox, source.name)
-    shutil.copy2(source, dest)
-    return dest
+    from core.ingestion import api_v2
+    from core.ingestion.sources.s6_external import extract_external
+    content = resolved.read_text(encoding="utf-8")
+    root_id = api_v2.register_root(
+        "file_revision", f"{resolved}#file", content, "external")
+    return extract_external(
+        f"library-inbox:{resolved}", content,
+        evidence_anchor=f"doc:{root_id}", project_hint=None,
+        root_ids=(root_id,))
 
-
-def _unique_dest(inbox: Path, name: str) -> Path:
-    """A non-clobbering destination path in the inbox for `name`."""
-    dest = inbox / name
-    if not dest.exists():
-        return dest
-    stem, suffix = Path(name).stem, Path(name).suffix
-    i = 1
-    while True:
-        candidate = inbox / f"{stem}-{i}{suffix}"
-        if not candidate.exists():
-            return candidate
-        i += 1

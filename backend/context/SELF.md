@@ -31,13 +31,12 @@ proposes, OS disposes.** (What I *am* as a product → SWARMAI.md; this is how I
 
 ## My Kernel Flows — how the machine actually runs
 Each flow is live-verified; re-trace to source before quoting a detail (drift guard).
-- **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 11
-  governed files (across 10 priority slots; SOUL + SELF share slot 2) by priority, measures a
-  live token budget (never a stored size). The
-  read-line does NOT truncate (2026-06-28 directive; `_truncate_section` deleted 2026-08-14) —
-  on overshoot it only WARNs and returns full; size governance is the write-side's job (the
-  memory size-valve). Applies session-type exclusions (channels drop MEMORY/USER/EVOLUTION
-  wholesale — `WHOLE_FILE_PRIVATE`).
+- **System-prompt build** (`context_directory_loader` → `prompt_builder`) — assembles the 12
+  governed files (across 11 priority slots; SOUL + SELF share slot 2) by priority, measures a
+  live token budget (never a stored size). No file is cut: over budget it WARNs; MEMORY,
+  EVOLUTION, TIMELINE and DailyActivity are injected as whole units chosen within their
+  budgets (Memory management below). Applies session-type exclusions (channels drop
+  MEMORY/USER/EVOLUTION wholesale — `WHOLE_FILE_PRIVATE`).
   Desktop path = fresh assembly (L1 cache bypassed).
 - **Recall — two triggers, and I INVOKE it, not just receive it.** (1) AUTO: session start + the
   first keyword-bearing message inject a `[RECALLED]` block (retrieved prior context, not this-turn
@@ -54,13 +53,19 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   measure only what it did not answer (a stored verdict is still a claim, R30#1). Context-file
   recall is pure keyword / FTS5 / BM25 — **no vector, no graph; never call it hybrid**; the fan-out
   adds a code-graph leg. Command reference: `context_recall_cli.py --help`; domain→store map: `core/recall_multi.py`.
-- **Memory management** (`memory_index` + `distillation_hook`) — two-tier: DailyActivity (raw)
-  → distilled MEMORY. Live MEMORY.md is **ALWAYS full-injected** (2026-08-14 architecture: no
-  selective mode, no section-scoring, no in-prompt index, no injection-time truncation). Size
-  is bounded UPSTREAM by a **size-valve** (`_enforce_size_valve`: body >30K → archive lowest-
-  value operational entries to `.context` until ≤25K); archived content stays reachable by recall
-  **through SEVERAL routes with DIFFERENT preconditions — I have more than I remember, so never
-  talk myself out of one, and never write a closed count here (that error shipped twice)**: the
+- **Memory management** (`core/ingestion` + `core/memory_injection`) — CDF is the one writer of
+  MEMORY / EVOLUTION / TIMELINE / DDD: six sources submit candidates to an Inbox; cards judge
+  type and route, compare with what exists, and the writer appends whole units. MEMORY.md and
+  EVOLUTION.md are injected by **whole-unit selection** (24K / 8K tokens): superseded units
+  out, the meta-cognitive layer whole, the rest by score, file order kept; query-independent,
+  recomputed on a file change or once a UTC day (prefix cache and prewarm stay stable), the
+  choice recorded in `injection_selection`. A unit not selected stays in the file and is
+  reached by the `context_files` recall leg, which reads that record. DailyActivity is
+  injected as whole units too (today's and yesterday's session rows, newest first, then
+  summaries of the five days before; the rest counted). Pre-cutover archive
+  shards (`*-archive*`) stay reachable **through SEVERAL routes with DIFFERENT preconditions
+  — I have more than I remember, so never talk myself out of one, and never write a closed
+  count here (that error shipped twice)**: the
   FTS5 `library` domain — the only one needing no shard name (a desktop session's first
   keyword-bearing recall passes every non-`ddd` domain), ⚠️ but it early-returns unless the
   workspace `Knowledge/` dir exists (a SIBLING dir) and a channel session skips recall entirely;
@@ -69,8 +74,7 @@ Each flow is live-verified; re-trace to source before quoting a detail (drift gu
   parsed") and a BODY-vocabulary query (no section-name boost, so `--query Pitfalls` finds
   nothing); and a direct shard read via `core/archive_browse.list_archive_files`
   (`GET /api/eval/archive-list`), which parses the shapes the `--file` route can't. Per-route
-  detail: `core/memory_index`'s header. Memory is sovereign (local-first, portable, never
-  platform-locked).
+  detail: `core/memory_index`'s header. Memory is sovereign (local-first, portable, never platform-locked).
 - **Self-evolution** (`core/evolution/governance_miner`) — a
   correction becomes a C-entry in EVOLUTION.md; a recurring pattern with specific rule text
   becomes a GC candidate, and only a GC row with a filled "checked against" column and 3×

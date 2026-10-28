@@ -382,7 +382,7 @@ async def test_t9_the_reflect_hook_returns_without_scanning_on_the_loop(tmp_path
         (projects / f"run_{i:05d}").mkdir(parents=True)
     monkeypatch.setattr("core.pipeline_human._workspace", lambda: tmp_path)
     submitted = []
-    monkeypatch.setattr(reflect_job, "_pool", lambda: MagicMock(submit=lambda *a: submitted.append(a)))
+    monkeypatch.setattr(reflect_job, "_POOL", MagicMock(submit=lambda *a: submitted.append(a)))
     hook = reflect_job.create_reflect_trigger({"sdk_session_id": "s-t9"})
     t0 = time.perf_counter()
     await hook({"tool_input": {"command": "python-backend pipeline-v1 land"}}, "tu", None)

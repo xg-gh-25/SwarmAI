@@ -796,19 +796,35 @@ def _render_domain_hits(domain: str, hits: list) -> str:
     return "\n".join(lines)
 
 
-def _memory_outside_prompt(content: str, prompt_text: str) -> str:
-    """The entries of ``content`` (MEMORY.md) that are NOT in ``prompt_text``,
-    regrouped under their ``## section`` headings.
+def _memory_outside_prompt(content: str, prompt_text: str,
+                           memory_path: Path | None = None) -> str:
+    """The entries of ``content`` (MEMORY.md) that were not selected for the prompt.
 
-    A session prompt carries live MEMORY's active entries; what recall can add
-    from the live file is only what the prompt lacks: dormant/archived entries
-    the loader filters out, and entries another session wrote after this prompt
-    was built. Scoring the whole file instead let in-prompt sections take every
-    top slot, then the duplicate filter emptied them (931 raw -> 6 kept), so the
-    out-of-prompt entries could never surface (design 2026-10-26 D4). Entry =
-    what ``ddd_entry_lifecycle._scan_entry`` reads as one (run-knowledge §3.0 R1);
-    lines between entries belong to none.
+    The durable ``injection_selection`` row is authoritative when available. The
+    text-membership fallback remains for CLI/tests and for a file not selected yet.
     """
+    if memory_path is not None:
+        try:
+            from core.memory_injection import recorded_selection
+            selected = recorded_selection(memory_path)
+            if selected is not None:
+                from core.ingestion.units import parse_units
+                chosen = set(selected)
+                units = parse_units(memory_path, root=memory_path.parent.parent)
+                out: list[str] = []
+                section = None
+                for unit in units:
+                    if unit.anchor in chosen:
+                        continue
+                    if unit.section != section:
+                        section = unit.section
+                        if section:
+                            out.append(f"## {section}")
+                    out.append(unit.text)
+                return "\n".join(out)
+        except (OSError, ValueError):
+            logger.debug("recorded MEMORY selection unavailable", exc_info=True)
+
     from core.ddd_entry_lifecycle import _scan_entry
     from core.recall_filter import _norm, in_prompt_text
 
@@ -882,7 +898,7 @@ def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
     except OSError:
         return hits, layer
     if prompt_text is not None:
-        content = _memory_outside_prompt(content, prompt_text)
+        content = _memory_outside_prompt(content, prompt_text, mem_path)
         if not content.strip():
             return hits, "in_prompt"
     res = recall_context("MEMORY.md", query, memory_content=content,
@@ -1522,6 +1538,55 @@ def _project_name_forms(project_name: str) -> set[str]:
     return forms
 
 
+def _knowledge_hit_shape(source_file: str, heading: str, fallback: str) -> dict[str, str]:
+    """Return a whole Knowledge section plus its parent and document metadata."""
+    multi = (source_file.startswith("Library/Links/")
+             or source_file.startswith("Learned/domains/")
+             or source_file.startswith("Learned/repos/")
+             or source_file.startswith("Learned/_common/"))
+    try:
+        from config import get_swarmws
+        knowledge = (Path(get_swarmws()) / "Knowledge").resolve(strict=False)
+        target = (knowledge / source_file).resolve(strict=False)
+        if not target.is_relative_to(knowledge) or not target.is_file():
+            return {"content": fallback, "summary": "", "parent_heading": "",
+                    "reference_kind": ""}
+        text = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError):
+        return {"content": fallback, "summary": "", "parent_heading": "",
+                "reference_kind": ""}
+    frontmatter = text.split("---", 2)[1] if text.startswith("---") and text.count("---") >= 2 else ""
+    def field(name: str) -> str:
+        match = re.search(rf"^{re.escape(name)}:\s*(.+?)\s*$", frontmatter, re.MULTILINE)
+        return match.group(1).strip().strip('"') if match else ""
+    if multi:
+        parent = heading or field("title")
+        return {"content": fallback, "summary": field("summary"),
+                "parent_heading": parent, "reference_kind": field("reference_kind")}
+    headings = list(re.finditer(r"^(#{1,6})[ \t]+(.+?)[ \t]*$", text, re.MULTILINE))
+    selected = next((index for index, match in enumerate(headings)
+                     if match.group(2).strip() == heading), None)
+    if selected is None:
+        return {"content": fallback, "summary": field("summary"),
+                "parent_heading": field("title"), "reference_kind": field("reference_kind")}
+    match = headings[selected]
+    level = len(match.group(1))
+    end = len(text)
+    for following in headings[selected + 1:]:
+        if len(following.group(1)) <= level:
+            end = following.start()
+            break
+    section = text[match.start():end].rstrip()
+    parent = ""
+    for previous in reversed(headings[:selected]):
+        if len(previous.group(1)) < level:
+            parent = previous.group(2).strip()
+            section = previous.group(0) + "\n\n" + section
+            break
+    return {"content": section, "summary": field("summary"),
+            "parent_heading": parent, "reference_kind": field("reference_kind")}
+
+
 _REPO_DOC_TOP_K = 4
 
 
@@ -1572,9 +1637,22 @@ def _recall_library(query: str, allow_embed: bool = False,
     # (run_ccd1b6c5): the bucket dropped content, so rendering it gave the model
     # a bare file list instead of the recalled text — a regression vs the
     # production _recall_for_query which returns full content.
-    hits = [{"source": r.get("source_file", ""), "heading": r.get("heading", ""),
-             "content": r.get("content", ""),
-             "score": round(r.get("recall_score", r.get("fts_score", 0.0)), 4)} for r in results]
+    hits = []
+    for result in results:
+        source = result.get("source_file", "")
+        heading = result.get("heading", "") or ""
+        if is_repo_doc_source(source):
+            # a project's repo document: the indexed chunk as-is (it is not a
+            # Knowledge/ file, and it is rendered in an untrusted block)
+            shaped = {"content": result.get("content", ""), "summary": "",
+                      "parent_heading": "", "reference_kind": ""}
+        else:
+            shaped = _knowledge_hit_shape(source, heading, result.get("content", ""))
+        hits.append({"source": source, "heading": heading,
+                     "content": shaped["content"], "summary": shaped["summary"],
+                     "parent_heading": shaped["parent_heading"],
+                     "reference_kind": shaped["reference_kind"],
+                     "score": round(result.get("recall_score", result.get("fts_score", 0.0)), 4)})
     return hits, "fts"
 
 

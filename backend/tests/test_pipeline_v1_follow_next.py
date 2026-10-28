@@ -43,7 +43,7 @@ def _run(r: Rig, sub: list[str], stage: str, step: int) -> dict:
     if name == "gate0-start":
         return r.v1("gate0-start", "--artifact", r.artifact("requirements", docs["evaluate"]))
     if name == "reflect-prepare":
-        return r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+        return r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     if name == "report-tests":
         return r.v1("report-tests", "--artifact", r.artifact("report", r.report()))
     if name == "land":

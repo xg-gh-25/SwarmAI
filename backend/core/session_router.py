@@ -21,6 +21,7 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from core.awake_clock import awake_time  # liveness durations exclude sleep
@@ -1012,6 +1013,9 @@ def _unified_recall_body(
         result = filter_recall(result, prompt_text, followup=followup)
         graph_context = _graph_enrich_recall(query)
         body = render_recall_body(result, project=project, graph_context=graph_context)
+        if body:
+            from .ingestion.usage import record_recalled_result
+            record_recalled_result(result, exclude_session_id or "", project=project)
         # Structured hits from the SAME result object (the real recalled hits with
         # scores) — for the TSCC panel. Extracted here, before the caller discards
         # `result`. None-safe: on empty body the caller falls back and ignores this.
@@ -2543,6 +2547,22 @@ class SessionRouter:
                 self._note_deliverable(files, event)
             return []
         if etype == "tool_result" and event.get("content"):
+            try:
+                import json as _json
+                from . import executors as _executors
+                from .session_inputs import record_session_input
+                for _block in event["content"]:
+                    _ref = _block.get("tool_use_id") if isinstance(_block, dict) else None
+                    from functools import partial as _partial
+                    await _executors.run_in(
+                        "io", _partial(
+                            record_session_input, session_id, "tool_result",
+                            "external", _json.dumps(_block, ensure_ascii=False, default=str),
+                            ref=_ref,
+                        ),
+                    )
+            except Exception:
+                logger.warning("Failed to record tool-result provenance", exc_info=True)
             pending.extend(self._compact_tool_results(event["content"]))
             return []
         if etype == "assistant" and event.get("content"):
@@ -4224,12 +4244,17 @@ class SessionRouter:
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
         project_agent: Optional[dict] = None,
+        input_origin: str = "system",
     ) -> AsyncIterator[dict]:
         """Entry point for chat requests: one turn, published to the session hub.
 
         ``project_agent``: the pin of a NEW session that works under a Brain's Project
         Agent (core.project_agent_session.make_pin); its hooks enforce it from the
         first tool call and it is recorded on the session.
+
+        ``input_origin`` (CDF §9 provenance): ``"person"`` only for a message the
+        authenticated app user typed (``routers/chat.py``); channel turns derive it
+        from ``channel_context["is_owner"]``; everything else is ``"system"``.
 
         A turn without a client_id of its own (drain, channel, task, skill
         creator) gets a server one, so its persisted assistant rows and a
@@ -4250,7 +4275,8 @@ class SessionRouter:
             session_id=session_id, enable_skills=enable_skills, enable_mcp=enable_mcp,
             channel_context=channel_context, editor_context=editor_context,
             terminal_context=terminal_context, agent_config=agent_config,
-            client_id=client_id, _drained_pending=_drained_pending, writer=writer,
+            client_id=client_id, _drained_pending=_drained_pending,
+            input_origin=input_origin, writer=writer,
             opener=opener, project_agent=project_agent,
         )
         async with aclosing(self._published_turn(
@@ -4534,6 +4560,7 @@ class SessionRouter:
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
+        input_origin: str = "system",
         *,
         writer: TurnWriter,
         opener: Optional[TurnOpener] = None,
@@ -4696,6 +4723,22 @@ class SessionRouter:
                         "created_at": datetime.now().isoformat(),
                         **({"metadata": _msg_metadata} if _msg_metadata else {}),
                     })
+                # Provenance is durable independently of transcript compaction.
+                # Keep synchronous sqlite work off the chat event loop.
+                try:
+                    from . import executors as _executors
+                    from .session_inputs import record_user_input_parts
+                    if channel_context is not None:
+                        _origin = "person" if channel_context.get("is_owner") else "channel_peer"
+                    else:
+                        _origin = input_origin
+                    await _executors.run_in(
+                        "io", functools.partial(
+                            record_user_input_parts, session_id, user_message,
+                            user_content, persisted_msg_id, origin=_origin),
+                    )
+                except Exception:
+                    logger.warning("Failed to record session input provenance", exc_info=True)
                 row_written = True
                 if reserved_send:
                     await send_requests.persisted(reserved_send, persisted_msg_id)

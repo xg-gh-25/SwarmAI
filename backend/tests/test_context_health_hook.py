@@ -174,6 +174,18 @@ class TestDeepCheck:
             hook._deep_check(workspace, str(workspace))
         assert any("MISSING: DailyActivity/" in r.message for r in caplog.records)
 
+    def test_reports_resolved_open_threads_without_writing_memory(self, hook, workspace, caplog):
+        """A resolved Open Thread older than 7 days reaches the deep check's findings
+        (the retention pass returns it) and MEMORY.md is not changed."""
+        memory = workspace / ".context" / "MEMORY.md"
+        content = ("# Memory\n\n## Open Threads\n"
+                   "- 2020-01-01: \u2705 **Old done thing** \u2014 finished\n")
+        memory.write_text(content, encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="hooks.context_health_hook"):
+            hook._deep_check(workspace, str(workspace))
+        assert any("1 resolved Open Threads entry" in r.message for r in caplog.records)
+        assert memory.read_text(encoding="utf-8") == content
+
 
 class TestDddCompleteness:
     """DDD 4-doc completeness detection — the gap that let CMHK_SalesIntel
@@ -419,73 +431,45 @@ class TestAutoSessionSignalCultivation:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         return path
 
-    def test_cultivates_corrections_from_jsonl(self, hook, workspace):
-        """Corrections in JSONL get routed to DDD docs (Ch6)."""
-        # Setup project with IMPROVEMENT.md that has the target sections
+    def test_dailyactivity_corrections_are_not_line_sliced_or_written(self, hook, workspace):
+        """Stage B retires the low-signal per-line correction source."""
         proj = workspace / "Projects" / "SwarmAI"
         proj.mkdir(parents=True, exist_ok=True)
-        (proj / "IMPROVEMENT.md").write_text(
-            "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
-        )
-        (proj / "TECH.md").write_text(
-            "# Tech\n\n## Architecture\n\n- seed\n\n## Runtime Traps\n\n- seed\n\n## Conventions\n\n- seed\n"
-        )
-
-        # Create DailyActivity JSONL with a correction
+        tech = proj / "TECH.md"
+        tech.write_text("# Tech\n\n## Runtime Traps\n\n- seed\n")
+        before = tech.read_bytes()
         da_dir = workspace / "Knowledge" / "DailyActivity"
         da_dir.mkdir(parents=True, exist_ok=True)
         today = date.today().isoformat()
         self._write_jsonl(da_dir, f"{today}.jsonl", [{
-            "session_id": "session_corr_001",
-            "timestamp": "14:00",
-            "corrections": [
-                "Bug: daemon crashed because subprocess.run() blocks the event loop — must use asyncio.to_thread",
-            ],
+            "session_id": "session_corr_001", "timestamp": "14:00",
+            "corrections": ["Bug: blocking calls must run off the event loop"],
             "decisions": [],
         }])
 
-        hook._auto_cultivate_session_signals(workspace)
+        assert hook._auto_cultivate_session_signals(workspace) is False
+        assert tech.read_bytes() == before
+        assert not (workspace / ".context" / ".session_cultivated.json").exists()
 
-        # Verify state file was created with the session ID
-        state_path = workspace / ".context" / ".session_cultivated.json"
-        assert state_path.exists()
-        state = json.loads(state_path.read_text())
-        assert "session_corr_001" in state
-
-    def test_cultivates_decisions_from_jsonl(self, hook, workspace):
-        """Decisions in JSONL get routed to DDD docs (Ch5)."""
+    def test_dailyactivity_decisions_are_left_for_session_distillation(self, hook, workspace):
+        """Stage B leaves complete decision claim-groups to session distillation."""
         proj = workspace / "Projects" / "SwarmAI"
         proj.mkdir(parents=True, exist_ok=True)
-        (proj / "TECH.md").write_text(
-            "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
-        )
-
+        tech = proj / "TECH.md"
+        tech.write_text("# Tech\n\n## Conventions\n\n- seed\n")
+        before = tech.read_bytes()
         da_dir = workspace / "Knowledge" / "DailyActivity"
         da_dir.mkdir(parents=True, exist_ok=True)
         today = date.today().isoformat()
         self._write_jsonl(da_dir, f"{today}.jsonl", [{
-            "session_id": "session_dec_001",
-            "timestamp": "15:00",
+            "session_id": "session_dec_001", "timestamp": "15:00",
             "corrections": [],
-            "decisions": [
-                "Convention: prefer nc -z over lsof for all port checks in daemon scripts — standing rule",
-            ],
+            "decisions": ["Prefer nc -z for port checks because lsof can hang."],
         }])
 
-        # The MEMORY/DDD admission judge is an LLM (Bedrock) call that FAILS CLOSED
-        # to "discard" with no backend (the test env). commit 2c8fc37f routed this
-        # cultivation door through that judge (P8: judge is the sole admit authority),
-        # so the write no longer happens on a raw fixture. Stub the judge to a
-        # deterministic pass — this test asserts the ROUTING/WRITE behavior, not the
-        # judge's semantics (that lives in test_admission_band). Patch at the
-        # ddd_cultivation call site (admission_band → self_adversarial_judge).
-        import core.ddd_cultivation as _dc
-        with patch.object(_dc, "self_adversarial_judge", lambda *a, **k: ("pass", "t")):
-            hook._auto_cultivate_session_signals(workspace)
-
-        # Verify the decision was applied to TECH.md
-        content = (proj / "TECH.md").read_text()
-        assert "nc -z" in content or "port checks" in content
+        assert hook._auto_cultivate_session_signals(workspace) is False
+        assert tech.read_bytes() == before
+        assert not (workspace / ".context" / ".session_cultivated.json").exists()
 
     def test_idempotent_skips_already_cultivated_sessions(self, hook, workspace):
         """Same session is never cultivated twice."""
@@ -542,33 +526,17 @@ class TestAutoSessionSignalCultivation:
             state = json.loads(state_path.read_text())
             assert "session_old_001" not in state
 
-    def test_handles_empty_corrections_and_decisions(self, hook, workspace):
-        """Sessions with no corrections and no decisions are marked done but don't modify DDD."""
+    def test_empty_dailyactivity_signals_are_a_read_only_noop(self, hook, workspace):
+        """The retired source creates neither DDD writes nor bookkeeping files."""
         proj = workspace / "Projects" / "SwarmAI"
         proj.mkdir(parents=True, exist_ok=True)
-        (proj / "TECH.md").write_text("# Tech\n\n## Conventions\n\n- seed\n")
+        tech = proj / "TECH.md"
+        tech.write_text("# Tech\n\n## Conventions\n\n- seed\n")
+        before = tech.read_bytes()
 
-        da_dir = workspace / "Knowledge" / "DailyActivity"
-        da_dir.mkdir(parents=True, exist_ok=True)
-        today = date.today().isoformat()
-        self._write_jsonl(da_dir, f"{today}.jsonl", [{
-            "session_id": "session_empty_001",
-            "timestamp": "11:00",
-            "corrections": [],
-            "decisions": [],
-        }])
-
-        hook._auto_cultivate_session_signals(workspace)
-
-        # Session marked as cultivated (skip in future) but no DDD changes
-        state_path = workspace / ".context" / ".session_cultivated.json"
-        assert state_path.exists()
-        state = json.loads(state_path.read_text())
-        assert "session_empty_001" in state
-
-        # DDD unchanged
-        content = (proj / "TECH.md").read_text()
-        assert content == "# Tech\n\n## Conventions\n\n- seed\n"
+        assert hook._auto_cultivate_session_signals(workspace) is False
+        assert tech.read_bytes() == before
+        assert not (workspace / ".context" / ".session_cultivated.json").exists()
 
     def test_graceful_on_missing_project_dir(self, hook, workspace):
         """Does not crash when Projects/SwarmAI doesn't exist."""
@@ -591,131 +559,10 @@ class TestAutoSessionSignalCultivation:
 # PROJECTS.md refresh after cultivation (line number drift fix)
 # --------------------------------------------------------------------------
 
-class TestMemoryLifecycleHeals:
-    """R-1 C2: the per-session memory lifecycle heals a stacked (orphan) metadata line."""
-
-    def test_memory_lifecycle_auto_heals_stacked_metadata(self, hook, tmp_path):
-        # R-1 Gate-2 #1: collapse_stacked_metadata must be WIRED into the
-        # per-session lifecycle, not just a manually-invoked helper. A MEMORY.md
-        # that already carries an orphan stack must come out healed after one
-        # _run_memory_lifecycle pass.
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        (ctx / "MEMORY.md").write_text(
-            "## Guidelines\n"
-            "_Operational lessons._\n\n"
-            "- [guideline] **Stacked entry** — a lesson (2026-06-01)\n"
-            "  <!-- ref:3 | last:2026-06-20 | decay:active -->\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n"
-        )
-        hook._run_memory_lifecycle(ws)
-        content = (ctx / "MEMORY.md").read_text()
-        import re
-        lines = content.splitlines()
-        stacked = sum(
-            1 for i in range(1, len(lines))
-            if re.match(r"\s*<!-- ref:", lines[i]) and re.match(r"\s*<!-- ref:", lines[i - 1])
-        )
-        assert stacked == 0, f"lifecycle did not auto-heal the orphan:\n{content}"
-        assert "last:2026-06-20" in content, "must keep the real-date meta"
-        assert "last:none" not in content, "must drop the orphan default"
 
 
-class TestEvolutionLifecycle:
-    """run_2816ab1c: EVOLUTION.md wired into the lifecycle as DEDUP-ONLY. It is
-    FULLY evergreen for age-decay (all 7 sections listed) — the O-entries are
-    distilled wisdom, not age-churn (Principle 1: value, not age). So age-decay
-    strips NOTHING; only exact-dup dedup acts. The Corrections narrative is
-    fold_corrections' domain and must be untouched."""
-
-    def test_optimizations_never_age_decayed(self, hook, tmp_path):
-        from datetime import timedelta
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        old = (date.today() - timedelta(days=300)).isoformat()  # ancient + ref:0
-        corrections_marker = "### CLASS A: a permanent judgment narrative"
-        (ctx / "EVOLUTION.md").write_text(
-            "## Optimizations Learned\n"
-            f"- [guideline] **O999 old but load-bearing** — a distilled lesson ({old})\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n\n"
-            "## Corrections Captured\n"
-            f"{corrections_marker}\n"
-            "- **correction** — this is prose narrative, not a - **Title** bullet\n"
-        )
-        hook._run_evolution_lifecycle(ws)
-        content = (ctx / "EVOLUTION.md").read_text()
-        # O-entry SURVIVES despite ancient+ref:0 — fully evergreen, age-decay is inert
-        assert "O999 old but load-bearing" in content, "EVOLUTION age-decay wrongly stripped an O-entry (must be dedup-only)"
-        # Corrections narrative untouched
-        assert corrections_marker in content
-        assert "this is prose narrative" in content
-
-    def test_exact_dup_still_deduped(self, hook, tmp_path):
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        # Two exact-dup plain guidelines in Optimizations Learned → dedup DOES act
-        # (dedup is the one live sweep on EVOLUTION), keeping the higher-ref survivor.
-        (ctx / "EVOLUTION.md").write_text(
-            "## Optimizations Learned\n"
-            "- [guideline] **Dup opt** — identical distilled text (2026-01-01, run_a)\n"
-            "  <!-- ref:4 | last:2026-01-01 | decay:active -->\n"
-            "- [guideline] **Dup opt** — identical distilled text (2026-06-01, run_b)\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n"
-        )
-        hook._run_evolution_lifecycle(ws)
-        content = (ctx / "EVOLUTION.md").read_text()
-        # exactly ONE survives (the exact-dup was archived+stripped)
-        assert content.count("identical distilled text") == 1
-        # Archive is now a MONTHLY shard (unified with fold + size-valve), NOT the
-        # legacy fixed EVOLUTION-archive.md. Legacy file must not be (re)created here.
-        shards = list(ctx.glob("EVOLUTION-archive-*.md"))
-        assert shards, "reclaim must write a monthly EVOLUTION-archive-YYYY-MM.md shard"
-        assert "identical distilled text" in shards[0].read_text()
-        assert not (ctx / "EVOLUTION-archive.md").exists(), \
-            "reclaim must not write the legacy fixed-name archive anymore"
 
 
-class TestNoProseBump:
-    """R2-prime: the toxic prose-substring ref bump is removed. An entry whose
-    title coincidentally appears in DailyActivity prose must NOT get its
-    ref_count bumped — that fake signal protected generic-titled entries
-    (DISCUSSION ref:1009) while real entries starved at ref:0. The honest
-    id-based signal (memory_decay, via distillation) is the only ref producer."""
-
-    def test_prose_mention_does_not_bump_ref(self, hook, tmp_path):
-        ws = tmp_path / "SwarmWS"
-        ctx = ws / ".context"
-        ctx.mkdir(parents=True)
-        # Entry titled "Correction" — a word that appears all over prose.
-        # Use a RECENT date: a hardcoded old date ages past the 45-day dormant
-        # threshold and gets reclaim-stripped before the assertion — a calendar
-        # time-bomb (this fixture's `2026-06-01` broke CI on 2026-07-16, exactly
-        # 45 days later). ref:0 + last:none is preserved (that IS the test).
-        recent = date.today().isoformat()
-        (ctx / "MEMORY.md").write_text(
-            "## Pitfalls\n"
-            "_Operational lessons._\n\n"
-            f"- [pitfall] **Correction** — a specific lesson ({recent})\n"
-            "  <!-- ref:0 | last:none | decay:active -->\n"
-        )
-        # DailyActivity prose that mentions the word "Correction" many times.
-        da = ws / "Knowledge" / "DailyActivity"
-        da.mkdir(parents=True)
-        (da / f"{date.today().isoformat()}-x.md").write_text(
-            "# Activity\n\nCorrection here. Another Correction. Correction again.\n" * 5
-        )
-        hook._run_memory_lifecycle(ws)
-        content = (ctx / "MEMORY.md").read_text()
-        import re
-        m = re.search(r"<!-- ref:(\d+)", content)
-        assert m is not None, f"metadata missing:\n{content}"
-        assert int(m.group(1)) == 0, (
-            f"prose-bump still active — 'Correction' got bumped to ref:{m.group(1)} "
-            f"from DailyActivity prose coincidence:\n{content}"
-        )
 
 
 class TestUsageDecayGate:
@@ -1105,73 +952,6 @@ class TestRecallDegradationReader:
             )
 
 
-class TestExpireStaleProposalsArchives:
-    """run_419ff7d4 (Debt 1): _expire_stale_proposals must RECLAIM terminal proposals
-    (move to proposals/archive/), not just flip status → the file graveyard (514 live)
-    was caused by the old expirer flipping pending→expired but never removing files.
-
-    Extended behavior: terminal (status NOT in {pending,escalated}) + older than the
-    retention window → MOVE to archive/. Live (pending/escalated) → NEVER moved,
-    regardless of age. Malformed/missing created date on a terminal → SKIP (safe)."""
-
-    def _seed(self, proposals_dir, name, *, status, age_days, reset_mtime_days=None):
-        """Seed a proposal whose TRUE age is encoded in the filename stamp
-        (proposal_<name>_YYYYMMDD-HHMMSS.json — the real created time). Optionally
-        set a DIFFERENT (fresher) mtime to simulate the git-checkout/rsync reset
-        that defeated an mtime-based gate (Gate-2 HIGH, run_419ff7d4)."""
-        import json, os, time
-        from datetime import datetime, timedelta, timezone
-        proposals_dir.mkdir(parents=True, exist_ok=True)
-        created = datetime.now(timezone.utc) - timedelta(days=age_days)
-        stamp = created.strftime("%Y%m%d-%H%M%S")
-        f = proposals_dir / f"proposal_{name}_{stamp}.json"
-        f.write_text(json.dumps({"id": f"proposal_{name}", "source_stage": "reflect_feed",
-                                 "status": status, "change_type": "append",
-                                 "created_at": created.isoformat()}), encoding="utf-8")
-        # mtime = the RESET time if given (fresher than real age), else the real age.
-        mt = time.time() - (reset_mtime_days if reset_mtime_days is not None else age_days) * 86400
-        os.utime(f, (mt, mt))
-        return f
-
-    def test_terminal_old_archived_live_kept(self, hook, tmp_path):
-        proposals = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
-        # terminal + old → should move
-        self._seed(proposals, "dismissed_old", status="dismissed", age_days=40)
-        self._seed(proposals, "rejected_old", status="rejected", age_days=40)
-        # live → must stay even when old
-        self._seed(proposals, "escalated_old", status="escalated", age_days=99)
-        self._seed(proposals, "pending_old", status="pending", age_days=99)
-        # terminal but RECENT (within window) → stay
-        self._seed(proposals, "dismissed_recent", status="dismissed", age_days=1)
-
-        hook._expire_stale_proposals(tmp_path)
-
-        archive = proposals / "archive"
-        moved = {p.name for p in archive.glob("proposal_*.json")} if archive.is_dir() else set()
-        live = {p.name for p in proposals.glob("proposal_*.json")}
-        assert any("dismissed_old" in n for n in moved), "terminal+old must be archived"
-        assert any("rejected_old" in n for n in moved), "terminal+old must be archived"
-        assert any("escalated_old" in n for n in live), "escalated is LIVE — never move"
-        assert any("pending_old" in n for n in live), "pending is LIVE — never move"
-        assert any("dismissed_recent" in n for n in live), "terminal but within window — keep"
-
-    def test_reset_mtime_does_not_hide_true_age(self, hook, tmp_path):
-        """Gate-2 HIGH (run_419ff7d4): a terminal proposal created 60d ago but whose
-        mtime was bulk-reset to 5d ago (git checkout / rsync) MUST still be reclaimed —
-        age comes from the filename/created stamp, not the reset mtime. An mtime gate
-        archived 58 of 259 truly-old; this proves the filename gate reclaims it."""
-        proposals = tmp_path / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
-        # created 60d ago (truly old) but mtime reset to 5d ago (looks fresh by mtime)
-        self._seed(proposals, "reset_terminal", status="dismissed", age_days=60, reset_mtime_days=5)
-
-        hook._expire_stale_proposals(tmp_path)
-
-        archive = proposals / "archive"
-        moved = {p.name for p in archive.glob("proposal_*.json")} if archive.is_dir() else set()
-        assert any("reset_terminal" in n for n in moved), (
-            "a 60d-old terminal proposal with a reset (5d) mtime MUST be archived — "
-            "age must derive from the filename/created stamp, NOT mtime"
-        )
 
 
 # --------------------------------------------------------------------------

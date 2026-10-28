@@ -113,14 +113,14 @@ When touching these, you MUST NOT loosen them:
   secret paths (`~/.aws/credentials`, `~/.ssh/**`, and similar).
 - HITL: high-risk / destructive / production actions require explicit user
   confirmation (see actions-with-care steering).
-- `/shutdown` 403 in daemon/hive, `locked_write.py` for MEMORY.md — keep.
+- `/shutdown` 403 in daemon/hive, CDF's single writer for MEMORY.md — keep.
 
 ### B5. Memory / state poisoning
 - MEMORY.md and context files persist across sessions. Untrusted content
   must not be written verbatim into them in a way that becomes a standing
-  instruction next session. Route all MEMORY.md writes through
-  `locked_write.py`; never let external text masquerade as an agent
-  directive in persistent context.
+  instruction next session. MEMORY.md is written only by CDF's writer, whose
+  provenance and trust floor keep external content out of the injected files;
+  never let external text masquerade as an agent directive in persistent context.
 
 ## Part C — Review checklist (use before pushing security-relevant code)
 

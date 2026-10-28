@@ -75,7 +75,7 @@ def test_a_change_in_test_goes_back_to_review_for_an_incremental_review(rig):
     r.spawn_reviewer(handout["prompt"], "NO FINDINGS", "incremental-0")
     assert r.v1("stage-complete").get("ok") is True
     assert len(_review_completions(r)) == 2
-    from tests.test_pipeline_v1_real_e2e import _landed_clean
+    from tests.pipeline_v1_e2e_common import _landed_clean
     _landed_clean(r.drive())
 
 

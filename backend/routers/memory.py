@@ -8,7 +8,7 @@ Key public symbols:
 - ``router``  — FastAPI APIRouter mounted at ``/api``.
 - ``GET /api/memory-compliance``       — Returns extraction metrics.
 - ``GET /api/memory-health``           — Returns full memory pipeline health.
-- ``POST /api/memory/save-session``    — One-click: extract session → MEMORY.md.
+- ``POST /api/memory/save-session``    — One-click: record user intent and run S2.
 """
 
 from __future__ import annotations
@@ -96,39 +96,9 @@ async def get_memory_health():
                 key=lambda f: f.stem,
                 reverse=True,
             )
-            undistilled = 0
-            last_distilled_date = None
-            for f in da_files:
-                try:
-                    content = f.read_text(encoding="utf-8")
-                    if not content.startswith("---"):
-                        undistilled += 1
-                        continue
-                    end = content.find("---", 3)
-                    if end == -1:
-                        undistilled += 1
-                        continue
-                    fm = content[3:end].strip()
-                    if "distilled: true" not in fm:
-                        undistilled += 1
-                    elif last_distilled_date is None:
-                        for line in fm.splitlines():
-                            if line.startswith("distilled_date:"):
-                                last_distilled_date = line.split(":", 1)[1].strip().strip('"\'')
-                                break
-                except (OSError, UnicodeDecodeError):
-                    continue
-
             checks["daily_activity"] = {
                 "total_files": len(da_files),
-                "undistilled_files": undistilled,
                 "last_write_date": da_files[0].stem if da_files else None,
-                "last_distilled_date": last_distilled_date,
-            }
-            flag_path = da_dir / ".needs_distillation"
-            checks["distillation_flag"] = {
-                "flag_exists": flag_path.exists(),
-                "flag_content": flag_path.read_text().strip() if flag_path.exists() else None,
             }
         else:
             checks["daily_activity"] = {"exists": False}
@@ -189,62 +159,38 @@ class SaveSessionResponse(BaseModel):
 
 @router.post("/memory/save-session", response_model=SaveSessionResponse)
 async def save_session_to_memory(req: SaveSessionRequest):
-    """Extract key decisions/lessons from a chat session and save to MEMORY.md.
+    """Record the button click as user evidence, then run both S2 passes.
 
-    This powers the frontend 🧠 "Save to Memory" button. Uses LLM extraction
-    (Sonnet) to identify important entries, then writes them in the canonical
-    entry shape via ``locked_write.py``. Exact duplicates (e.g. a re-saved
-    extraction) are removed by the context-health sweep at session close, not at
-    write time (design docs/design/2026-10-25-memory-write-entry-dedup.md). The LLM
-    prompt also sees existing content as a soft hint.
-
-    The ``since_message_idx`` field enables incremental saves — on a second
-    click within the same session, only new messages are processed.
+    Save to Memory receives no elevated trust. The trusted user-utterance pass and
+    the full-session main pass use the same source and pipeline rules as session end.
+    ``since_message_idx`` remains in the response contract but S2 always reads the
+    complete transcript.
     """
-    from core.memory_extractor import extract_and_save
+    from core.ingestion.sources.s2_session import extract_session
+    from core.session_inputs import record_session_input
 
     try:
-        result = await extract_and_save(
-            session_id=req.session_id,
-            since_message_idx=req.since_message_idx,
-        )
+        await asyncio.to_thread(
+            record_session_input, req.session_id, "user_message", "user",
+            "用户要求保存本会话", ref="save-to-memory")
+        result = await extract_session(req.session_id)
     except Exception as exc:
         logger.error(
-            "Unhandled error in extract_and_save for session %s: %s",
-            req.session_id,
-            exc,
-            exc_info=True,
-        )
+            "S2 extraction failed for session %s: %s",
+            req.session_id, exc, exc_info=True)
         return SaveSessionResponse(
-            status="error",
-            entries={"key_decisions": 0, "lessons_learned": 0, "open_threads": 0, "recent_context": 0},
-            total_saved=0,
+            status="error", entries={}, total_saved=0,
             next_message_idx=req.since_message_idx,
-            message=f"Extraction failed: {type(exc).__name__}. Please try again.",
-        )
+            message=f"Extraction failed: {type(exc).__name__}. Please try again.")
 
-    if result.error:
-        if result.total_saved > 0:
-            # Partial success
-            status = "saved"
-        elif "Not enough" in (result.error or "") or "Nothing new" in (result.error or ""):
-            status = "empty"
-        else:
-            status = "error"
-    else:
-        status = "saved" if result.total_saved > 0 else "empty"
-
+    queued = len(result["user_utterance"]) + len(result["main"])
     return SaveSessionResponse(
-        status=status,
-        entries={
-            "key_decisions": result.key_decisions,
-            "lessons_learned": result.lessons_learned,
-            "open_threads": result.open_threads,
-            "recent_context": result.recent_context,
-        },
-        total_saved=result.total_saved,
-        next_message_idx=result.next_message_idx,
-        message=result.error,
+        status="saved" if queued else "empty",
+        entries={"user_utterance": len(result["user_utterance"]),
+                 "main": len(result["main"])},
+        total_saved=queued,
+        next_message_idx=req.since_message_idx,
+        message="Queued through CDF" if queued else "No durable units extracted",
     )
 
 

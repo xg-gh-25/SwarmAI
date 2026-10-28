@@ -139,8 +139,10 @@ def align_project(project_dir: str | Path, *, apply: bool = False) -> dict:
             text = fh.read()
         to_add, near, new_text = align(doc, text)
         if apply and to_add:
-            with open(path, "w", encoding="utf-8", newline="") as fh:
-                fh.write(new_text)
+            # An explicit command on the user's behalf: a journaled governed edit, so
+            # the CDF baseline follows it (nothing writes a DDD doc around it).
+            from core.ingestion.governed_edit import apply_user_edit, revision_of
+            apply_user_edit(path, new_text.encode("utf-8"), expected_revision=revision_of(path))
         docs[doc] = {"exists": True, "missing": missing_sections(doc, text), "rename": near,
                      "to_add": to_add, "added": to_add if apply else []}
     unresolved = any(not v["exists"] or v.get("rename") for v in docs.values())

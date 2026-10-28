@@ -160,57 +160,5 @@ def _insert(text: str, section: str, statement: str, entry: str, note: str,
 
 def write(workspace: "str | Path", root: str, lesson: Mapping[str, Any], destination: str,
           run_id: str) -> "str | None":
-    from utils.file_lock import flock_exclusive, flock_unlock
-    workspace = Path(workspace)
-    statement = " ".join(str(lesson.get("statement") or "").split())
-    lesson_id = str(lesson.get("id") or "")
-    if not statement or not lesson_id:
-        return None
-    day = datetime.now(timezone.utc).date().isoformat()
-    run_mark = f"{run_id} {lesson_id}"
-    if destination.startswith("domain:"):
-        section, target = LESSONS, destination.split(":", 2)[2]
-    else:
-        section, target = PENDING, destination
-    entry = f"- [{target}] {statement}（{run_mark}，{day}）"
-    note = f"reinforced by {run_mark}（{day}）"
-    try:
-        fd = _dir_fd(workspace)
-    except OSError:
-        return None
-    try:
-        lock_fd = os.open(".lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644, dir_fd=fd)
-        lock = os.fdopen(lock_fd, "w")
-        try:
-            flock_exclusive(lock)
-            name = _name(fd, root)
-            text = _read(fd, name)
-            if text is None:
-                text = _fresh(root)
-            elif _owner(text) != root:
-                return None
-            new = _insert(text, section, statement, entry, note, run_mark)
-            if new is not None:
-                temp = f".{name}.{uuid.uuid4().hex}.tmp"
-                handle = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                 0o644, dir_fd=fd)
-                try:
-                    with os.fdopen(handle, "w", encoding="utf-8") as f:
-                        f.write(new)
-                    os.replace(temp, name, src_dir_fd=fd, dst_dir_fd=fd)
-                except BaseException:
-                    try:
-                        os.unlink(temp, dir_fd=fd)
-                    except OSError:
-                        pass
-                    raise
-        finally:
-            try:
-                flock_unlock(lock)
-            finally:
-                lock.close()
-    except (OSError, UnicodeDecodeError):
-        return None
-    finally:
-        os.close(fd)
-    return f"library:{Path(*SUBDIR) / name}"
+    """Retired compatibility API; REFLECT candidates are enqueued by reflect_job."""
+    return None

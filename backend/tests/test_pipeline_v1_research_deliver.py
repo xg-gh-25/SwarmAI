@@ -12,7 +12,6 @@ Driven through the CLI rig (a separate pipeline-v1 process per command).
 """
 import pytest
 
-from core.run_protocol.reflect import ReflectError, prepare
 from tests.pipeline_v1_rig import Rig
 
 
@@ -21,7 +20,10 @@ def research(tmp_path, monkeypatch):
     r = Rig(tmp_path, monkeypatch, profile="research", with_repo=False)
     r.create()
     r.drive(until="deliver")
-    out = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    out = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {
+        "delivered": [], "decisions": [], "corrections": [],
+        "practices": [], "gaps": [],
+    }))
     assert out.get("ok") is True, out
     yield r
     r.close()
@@ -56,22 +58,4 @@ def test_land_on_a_research_run_is_refused_and_writes_nothing(research):
     assert state["landing"] == "no_code", state
 
 
-EVENT = "e" * 64
 
-
-def _lesson(**over):
-    row = {"id": "L1", "type": "pitfall", "scope": "domain:P", "statement": "a new lesson",
-           "tell": "seen once", "evidence": [EVENT], "relation": {"kind": "new", "entry": None}}
-    row.update(over)
-    return row
-
-
-def test_new_is_accepted_when_candidates_exist_and_they_are_kept():
-    out = prepare([_lesson()], event_ids={EVENT}, candidates={"L1": ["TECH.md#X: old one"]})
-    assert out["lessons"][0]["candidates"] == ["TECH.md#X: old one"]
-
-
-def test_a_target_outside_the_candidates_names_them():
-    with pytest.raises(ReflectError, match="TECH.md#X: old one"):
-        prepare([_lesson(relation={"kind": "refines", "entry": "made up"})],
-                event_ids={EVENT}, candidates={"L1": ["TECH.md#X: old one"]})

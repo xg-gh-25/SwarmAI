@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -200,9 +201,9 @@ class TestSwapCodeValue:
 
 
 class TestOnePlainLine:
-    def test_dated_records_and_fences(self, proj):
+    def test_unsupported_condition_and_fences(self, proj):
         f = {**DROP, "line": "the gate waits until `gate-x` is built, tracked", "span": "until `gate-x` is built"}
-        assert "dated record" in check(proj, f)["reason"]
+        assert "not a waiting condition" in check(proj, f)["reason"]
         f = {**DROP, "line": "fenced: once `security-cr-review` is ready we go", "span": "once `security-cr-review` is ready"}
         assert "code block" in check(proj, f)["reason"]
 
@@ -228,116 +229,6 @@ class TestOnePlainLine:
         assert df.parse_fix({"fix": DROP})["type"] == "drop_condition"
 
 
-class TestApplyAndUndo:
-    def test_backed_up_and_recorded_before_writing_and_undo_sticks(self, proj):
-        r = df.apply_fix(DROP, proj, ws(proj), None, run_id="R1", finding_title="t")
-        assert r["ok"] and r["reason"] == "fixed"
-        assert "required}) — grades the reviewer." in doc(proj).read_text()
-        assert (proj / ".artifacts" / "drift-fix-backups" / "PROJECT.R1.md").read_text() == PROJECT_MD
-        assert [(x["index"], x["undone"]) for x in df.past_fixes(proj)] == [(0, False)]
-        assert df.undo_drift_fix(proj, 0)["ok"] is True
-        assert doc(proj).read_text() == PROJECT_MD
-        assert df.past_fixes(proj)[0]["undone"] is True
-        assert "undid" in check(proj, DROP)["reason"]  # next week does not redo it
-
-    def test_an_undo_whose_write_fails_leaves_the_fix_in_force(self, proj, monkeypatch):
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-
-        def fail(*a):
-            raise OSError("read-only")
-        monkeypatch.setattr(df, "_atomic_write", fail)
-        assert df.undo_drift_fix(proj, 0)["ok"] is False
-        assert df.past_fixes(proj)[0]["undone"] is False
-
-    def test_an_undo_that_cannot_be_recorded_changes_nothing(self, proj, monkeypatch):
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        fixed = doc(proj).read_text()
-
-        def fail(*a):
-            raise OSError("disk full")
-        monkeypatch.setattr(df, "_append_log", fail)
-        assert df.undo_drift_fix(proj, 0)["ok"] is False
-        assert doc(proj).read_text() == fixed
-
-    def test_a_fix_never_undoes_an_earlier_one(self, proj):
-        assert df.apply_fix(SWAP, proj, ws(proj), None, run_id="R1")["ok"]
-        (proj / "assets" / "new-design.md").write_text("> SUPERSEDED by `assets/old-design.md`\n")
-        back = {**SWAP, "path_old": "assets/new-design.md", "path_new": "assets/old-design.md"}
-        assert "undo an earlier" in check(proj, back)["reason"]
-
-    def test_no_backup_or_record_no_write(self, proj, monkeypatch):
-        def fail(*a):
-            raise OSError("disk full")
-        monkeypatch.setattr(df, "_append_log", fail)
-        r = df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        assert r["ok"] is False and "nothing changed" in r["reason"]
-        assert doc(proj).read_text() == PROJECT_MD
-
-    def test_a_failed_write_is_logged_as_failed_and_not_counted(self, proj, monkeypatch):
-        def fail(*a):
-            raise OSError("read-only")
-        monkeypatch.setattr(df, "_atomic_write", fail)
-        assert df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")["ok"] is False
-        assert df.past_fixes(proj) == []
-        monkeypatch.undo()
-        assert check(proj, DROP)["ok"] is True
-
-    def test_a_concurrent_edit_is_not_overwritten(self, proj, monkeypatch):
-        real = df._backup
-
-        def backup_then_edit(project_dir, d, run_id):
-            real(project_dir, d, run_id)
-            time.sleep(0.01)
-            d.write_text(d.read_text() + "\nedited by a person meanwhile\n")
-        monkeypatch.setattr(df, "_backup", backup_then_edit)
-        r = df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        assert r["ok"] is False and "changed while" in r["reason"]
-        assert "edited by a person meanwhile" in doc(proj).read_text()
-
-    def test_rechecks_under_the_lock(self, proj, monkeypatch):
-        real = df.check_fix
-        n = {"i": 0}
-
-        def check_then_dup(*a, **k):
-            n["i"] += 1
-            if n["i"] == 2:
-                doc(proj).write_text(doc(proj).read_text() + "\n" + DROP["line"] + "\n")
-            return real(*a, **k)
-        monkeypatch.setattr(df, "check_fix", check_then_dup)
-        assert "2 times" in df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")["reason"]
-
-    def test_dry_run_changes_nothing(self, proj):
-        r = df.apply_fix(DROP, proj, ws(proj), None, run_id="R1", dry_run=True)
-        assert r["ok"] and r["dry_run"] and r["new_line"]
-        assert doc(proj).read_text() == PROJECT_MD and not (proj / ".artifacts").exists()
-
-    def test_undo_refuses_a_line_edited_since(self, proj):
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        doc(proj).write_text(doc(proj).read_text().replace("grades the reviewer.", "grades the reviewer weekly."))
-        assert "edited since" in df.undo_drift_fix(proj, 0)["reason"]
-
-    def test_backups_keep_the_oldest_and_the_newest(self, proj):
-        d = proj / ".artifacts" / "drift-fix-backups"
-        d.mkdir(parents=True)
-        for i in range(12):
-            p = d / f"PROJECT.old{i:02d}.md"
-            p.write_text("x")
-            os.utime(p, (time.time() - 1000 + i, time.time() - 1000 + i))
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        kept = sorted(p.name for p in d.glob("PROJECT.*.md"))
-        assert len(kept) == 10 and "PROJECT.old00.md" in kept and "PROJECT.R1.md" in kept and "PROJECT.old01.md" not in kept
-
-    def test_the_cli_lists_and_undoes(self, proj, monkeypatch, capsys):
-        import scripts.ddd_drift_fix_cli as cli
-        monkeypatch.setattr(cli, "SWARMWS", ws(proj))
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        assert cli.main(["list", "P"]) == 0
-        assert json.loads(capsys.readouterr().out)[0]["new_line"].endswith("grades the reviewer.")
-        assert cli.main(["undo", "P", "0"]) == 0
-        assert doc(proj).read_text() == PROJECT_MD
-        assert cli.main(["undo", "P", "0"]) == 1
-        for bad in ("", "../x", ".hidden", "a\x00b"):
-            assert cli.main(["list", bad]) == 2
 
 
 def test_first_seen_reads_only_earlier_real_reports(tmp_path):
@@ -464,30 +355,6 @@ class TestSwapValueAttacks:
         assert check(proj, {**VALUE, "line": text, "value_old": vold}, repo)["ok"] is False
 
 
-class TestLogIntegrity:
-    def test_a_separator_in_the_title_does_not_hide_the_fix(self, proj):
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1", finding_title="evil\u2028title\u0085x")
-        assert len(df.past_fixes(proj)) == 1
-
-    def test_undo_refuses_a_forged_row(self, proj):
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        log = proj / ".artifacts" / df.FIX_LOG
-        forged = {"fix_id": "R1:PROJECT.md:000000000000", "status": "applied", "run": "R1", "target_doc": "PROJECT.md",
-                  "old_line": "# Injected heading", "new_line": "- [x] Wrote the `migrations` script"}
-        log.write_text(log.read_text() + json.dumps(forged) + "\n")
-        assert "does not look like" in df.undo_drift_fix(proj, 1)["reason"]
-        # an id computed the same way does not help: the run's backup never held that line
-        forged["fix_id"] = df._fix_id("R1", "PROJECT.md", forged["old_line"], forged["new_line"])
-        log.write_text(log.read_text() + json.dumps(forged) + "\n")
-        assert "backup does not hold" in df.undo_drift_fix(proj, 2)["reason"]
-        assert "# Injected heading" not in doc(proj).read_text()
-
-    def test_an_undone_fix_stays_undone_after_its_line_changes(self, proj):
-        df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
-        df.undo_drift_fix(proj, 0)
-        doc(proj).write_text(doc(proj).read_text().replace("grades the reviewer.", "grades the reviewer weekly."))
-        f = {**DROP, "line": "expectedTools:{required}) once `s_security-cr-review` exists — grades the reviewer weekly."}
-        assert "undid" in check(proj, f)["reason"]
 
 
 def with_done(proj, extra, done):
@@ -532,9 +399,11 @@ class TestR6Sentence:
         doc(proj).write_bytes(body.encode())
         f = {**DROP, "line": "Run the benchmark weekly once `security-cr-review` exists",
              "span": "once `security-cr-review` exists"}
-        assert df.apply_fix(f, proj, ws(proj), None, run_id="R1")["ok"] is True
-        raw = doc(proj).read_bytes()
-        assert b"Run the benchmark weekly\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+        before = doc(proj).read_bytes()
+        result = df.apply_fix(f, proj, ws(proj), None, run_id="R1")
+        assert result["ok"] is True
+        assert result["new_line"] == "Run the benchmark weekly\r"
+        assert doc(proj).read_bytes() == before
 
 
 class TestR6Evidence:
@@ -601,25 +470,15 @@ class TestR6Value:
         assert check(proj, {**VALUE, "code_file": "src/Limits.java"}, repo)["ok"] is True
 
 
-class TestR6Log:
-    def test_a_second_fix_on_the_same_line_in_one_run_waits(self, proj):
-        doc(proj).write_text(PROJECT_MD.replace(
-            "Design doc: `assets/old-design.md` for the engine.",
-            "Read `assets/old-design.md` first once `security-cr-review` exists — then build it."))
-        drop = {**DROP, "line": "Read `assets/old-design.md` first once `security-cr-review` exists — then build it.",
-                "span": "once `security-cr-review` exists"}
-        assert df.apply_fix(drop, proj, ws(proj), None, run_id="R1")["ok"] is True
-        assert "in this run" in df.apply_fix(SWAP, proj, ws(proj), None, run_id="R1")["reason"]
-        assert df.apply_fix(SWAP, proj, ws(proj), None, run_id="R2")["ok"] is True
-        assert df.undo_drift_fix(proj, 1)["ok"] is True and df.undo_drift_fix(proj, 0)["ok"] is True
-        assert doc(proj).read_text() == PROJECT_MD.replace(
-            "Design doc: `assets/old-design.md` for the engine.",
-            "Read `assets/old-design.md` first once `security-cr-review` exists — then build it.")
 
-    def test_a_failed_write_hides_only_its_own_row(self, proj):
-        (proj / ".artifacts").mkdir()
-        rows = [{"fix_id": "R:PROJECT.md:abc", "seq": "a", "status": "applied", "target_doc": "PROJECT.md"},
-                {"fix_id": "R:PROJECT.md:abc", "seq": "a", "status": "failed"},
-                {"fix_id": "R:PROJECT.md:abc", "seq": "b", "status": "applied", "target_doc": "PROJECT.md"}]
-        (proj / ".artifacts" / df.FIX_LOG).write_text("".join(json.dumps(r) + "\n" for r in rows))
-        assert [r["seq"] for r in df.past_fixes(proj)] == ["b"]
+
+def test_apply_fix_returns_computed_line_and_never_writes(proj):
+    before = doc(proj).read_bytes()
+    result = df.apply_fix(DROP, proj, ws(proj), None, run_id="R1")
+    assert result["ok"] and result["reason"] == "computed"
+    assert result["new_line"].endswith("— grades the reviewer.")
+    assert doc(proj).read_bytes() == before
+    assert not (proj / ".artifacts" / "drift-fix-backups").exists()
+    source = Path(df.__file__).read_text(encoding="utf-8")
+    apply_source = source[source.index("def apply_fix"):source.index("def first_seen")]
+    assert "write_" not in apply_source and "os.replace" not in apply_source

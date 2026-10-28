@@ -1125,6 +1125,8 @@ export interface WorkspaceFileContent {
   mimeType: string;
   /** True when the file is a system-default context file (user_customized=False). */
   readonly?: boolean;
+  /** SHA-256 revision used for optimistic saves of governed files. */
+  revision: string;
 }
 
 // ============== Marketplace Types ==============

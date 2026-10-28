@@ -112,7 +112,7 @@ def test_a_partial_land_ends_the_run_not_landed_partial_land(tmp_path, monkeypat
         # CLI runs it in its own process, as the caller session)
         from core.run_protocol import request_ctx
         from tests.pipeline_v1_rig import SESSION
-        r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+        r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
         with request_ctx.active(request_ctx.Request(session_id=SESSION)):
             out = r.engine().normal_land(
                 message="fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")

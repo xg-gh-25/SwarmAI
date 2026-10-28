@@ -216,6 +216,43 @@ def set_backup_token(token: str) -> bool:
     return _file_set_token(token)
 
 
+def _sqlite_backup_store(source: Path, destination: Path) -> bool:
+    """Create a WAL-consistent SQLite snapshot with the online backup API."""
+    import sqlite3
+
+    if not source.is_file():
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp = destination.with_name(destination.name + ".tmp")
+    temp.unlink(missing_ok=True)
+    src = sqlite3.connect(str(source))
+    dst = sqlite3.connect(str(temp))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    os.replace(temp, destination)
+    return True
+
+
+def _sqlite_restore_store(source: Path, destination: Path) -> bool:
+    """Restore a SQLite snapshot through the online backup API."""
+    import sqlite3
+
+    if not source.is_file():
+        return False
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(str(source))
+    dst = sqlite3.connect(str(destination))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # BackupManager
 # ---------------------------------------------------------------------------
@@ -243,6 +280,7 @@ class BackupManager:
             from config import get_swarmws
             self.workspace_dir = get_swarmws()
         self.db_path = Path(db_path or self.swarm_dir / "data.db")
+        self.ingestion_db_path = self.swarm_dir / "ingestion.db"
         self.state_path = self.swarm_dir / "backup_state.json"
         # In-progress marker: written BEFORE clone, removed only on full success.
         # Its PRESENCE means a prior restore was interrupted → the workspace holds
@@ -414,6 +452,10 @@ class BackupManager:
             tables=L2_TABLES,
         )
         result["tables_exported"] = tables_exported
+        ingestion_snapshot = export_dir / "ingestion.db"
+        result["ingestion_exported"] = await executors.run_in(
+            "io", _sqlite_backup_store, self.ingestion_db_path, ingestion_snapshot,
+        )
 
         # 3. Push-destination guard (C050) — verify BEFORE any git op, in the
         # async scope (pure-python: reads origin + state, no subprocess needed).
@@ -551,6 +593,10 @@ class BackupManager:
                 tables_imported = await self.engine.import_db_tables(
                     db_path=self.db_path,
                     export_dir=export_dir,
+                )
+                await executors.run_in(
+                    "io", _sqlite_restore_store,
+                    export_dir / "ingestion.db", self.ingestion_db_path,
                 )
 
             # Stage 4: SCHEMA_MIGRATE

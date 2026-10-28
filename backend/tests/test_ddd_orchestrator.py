@@ -50,51 +50,26 @@ class TestDddDocLockConvergence:
             with md_lock(doc, blocking=False) as got2:
                 assert got2 is False, "second acquire on SAME doc must be excluded"
 
-    def test_apply_to_ddd_skips_when_doc_lock_held(self, tmp_path):
-        """apply_to_ddd (SITE A) must SKIP (return 'locked') when the doc's md_lock
-        is already held — proving it shares the same lock, not a private name."""
-        from utils.file_lock import md_lock
+    def test_legacy_ddd_mutators_are_read_only(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        from core.ingestion import api
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
-        from datetime import datetime, timezone
+        from core.ddd_maturity import promote_section
         doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("# I\n\n## What Worked\n\n- prior\n", encoding="utf-8")
-        prop = CultivationProposal.from_dict({
-            "id": "lk1", "target_doc": "IMPROVEMENT.md", "target_section": "What Worked",
-            "content": "Always validate Path inputs at the boundary before filesystem ops to avoid errors.",
-            "source_run_id": "r", "confidence": 0.9, "status": "escalated",
-            "change_type": "append", "created_at": datetime.now(timezone.utc).isoformat(),
-            "ttl_days": 30,
-        })
-        # Hold the SAME lock apply_to_ddd will try (non-blocking) → it must skip.
-        with md_lock(doc, blocking=False) as got:
-            assert got is True
-            status = apply_to_ddd(prop, tmp_path)
-        assert status == "locked", f"apply_to_ddd must skip when the doc md_lock is held, got {status}"
-
-    def test_promote_section_skips_when_doc_lock_held(self, tmp_path):
-        """SITE G (ddd_maturity.promote_section) must share the same doc md_lock —
-        when held, promotion skips (returns False) instead of clobbering. Before
-        run_06350217 this write was UNLOCKED (Gate-2 meta finding).
-
-        Non-vacuous by construction: the doc is seeded with a REAL maturity state so
-        promote SUCCEEDS (True) when the lock is free — proving it's the LOCK, not a
-        parse-failure, that flips it to False when held. (A divergent lock name →
-        promote acquires its own lock → returns True → this assert goes RED.)"""
-        from utils.file_lock import md_lock
-        from core.ddd_maturity import promote_section, inject_maturity, MaturityState
-        doc = tmp_path / "IMPROVEMENT.md"
-        seeded = inject_maturity(
-            "# I\n\n## What Worked\n\n- x\n", {"What Worked": MaturityState(level="sparse")}
+        doc.write_text("# I\n\n## What Worked\n\n- prior\n")
+        original = doc.read_text()
+        proposal = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content="Validate inputs before filesystem operations.",
+            source_run_id="run-1", confidence=0.9,
         )
-        doc.write_text(seeded, encoding="utf-8")
-        # Control: unheld → promote SUCCEEDS (proves the setup reaches the write).
-        assert promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature") is True
-        # Re-seed, then hold the SAME lock → promote must SKIP (return False).
-        doc.write_text(seeded, encoding="utf-8")
-        with md_lock(doc, blocking=False) as got:
-            assert got is True
-            result = promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature")
-        assert result is False, "promote_section must skip (share the doc md_lock) when held"
+        monkeypatch.setattr(
+            api, "enqueue",
+            lambda *a, **k: SimpleNamespace(status="queued"),
+        )
+        assert apply_to_ddd(proposal, tmp_path) == "queued"
+        assert promote_section(tmp_path, "IMPROVEMENT.md", "What Worked", "mature") is False
+        assert doc.read_text() == original
 
 
 class TestSkillPrefixDerivation:
@@ -148,8 +123,9 @@ class TestOrchestratorExists:
         # membership, not a brittle count: the refresh channels must be GONE and
         # the load-bearing channels must remain.
         assert {"mechanical_refresh", "memory_refresh", "llm_refresh"}.isdisjoint(names)
-        assert {"ddd_staleness", "entry_lifecycle", "code_intel_drift",
+        assert {"ddd_staleness", "code_intel_drift",
                 "signal_ddd_bridge"}.issubset(names)
+        assert {"auto_apply_proposals", "entry_lifecycle"}.isdisjoint(names)
 
 
 class TestChannelIsolation:
@@ -434,48 +410,8 @@ class TestSourceAnchorDrift:
         return proj
 
     # ── Helper unit: anchor round-trip (AC3) ──
-    def test_anchor_round_trip(self, tmp_path):
-        from core.ddd_orchestrator import _read_source_anchor, write_source_anchor
-        proj = tmp_path / "Projects" / "P"
-        proj.mkdir(parents=True)
-        assert _read_source_anchor(proj) is None  # nothing stored yet
-        write_source_anchor(proj, "abc1234def5678")
-        assert _read_source_anchor(proj) == "abc1234def5678"
-        # merge-write preserves other keys
-        (proj / ".refresh_state.json").write_text(
-            json.dumps({"source_anchor_commit": "abc1234def5678", "other": 1}),
-            encoding="utf-8")
-        write_source_anchor(proj, "9999999")
-        data = json.loads((proj / ".refresh_state.json").read_text())
-        assert data["source_anchor_commit"] == "9999999"
-        assert data["other"] == 1
 
     # ── Core: drift FIRES when HEAD advanced past anchor (AC1) ──
-    def test_drift_fires_when_head_moved(self, tmp_path):
-        from core.ddd_orchestrator import (
-            DddCultivationOrchestrator, write_source_anchor,
-        )
-        src = tmp_path / "src"
-        head1 = self._make_source_repo(src)
-        proj = self._make_project(tmp_path, "IVTHubT", src)
-        write_source_anchor(proj, head1)  # anchor == current HEAD → no drift yet
-
-        orch = DddCultivationOrchestrator()
-        findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
-        assert not any("DDD-SOURCE-DRIFT" in f for f in findings), \
-            "anchor==HEAD must NOT drift"
-
-        # advance HEAD
-        (src / "model.smithy").write_text("v2", encoding="utf-8")
-        self._git(src, "add", "-A")
-        self._git(src, "commit", "-qm", "v2")
-
-        findings = orch._ch_ddd_staleness(tmp_path, str(tmp_path))
-        drift = [f for f in findings if "DDD-SOURCE-DRIFT" in f]
-        assert len(drift) == 1, f"expected 1 drift finding, got {findings}"
-        assert "IVTHubT" in drift[0]
-        assert head1[:7] in drift[0]
-        assert "re-verify" in drift[0]
 
     # ── Fail-safe x3: no anchor / bad path / not-a-git-repo → [] no raise (AC2) ──
     def test_failsafe_no_anchor(self, tmp_path):
@@ -486,42 +422,10 @@ class TestSourceAnchorDrift:
         findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
         assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
 
-    def test_failsafe_nonexistent_source_path(self, tmp_path):
-        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
-        proj = self._make_project(tmp_path, "P", tmp_path / "does_not_exist")
-        write_source_anchor(proj, "deadbeef")
-        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
-        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
 
-    def test_failsafe_not_a_git_repo(self, tmp_path):
-        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
-        src = tmp_path / "src"
-        src.mkdir()  # dir exists but is NOT a git repo
-        proj = self._make_project(tmp_path, "P", src)
-        write_source_anchor(proj, "deadbeef")
-        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
-        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
 
-    def test_failsafe_no_bindings_at_all(self, tmp_path):
-        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
-        proj = tmp_path / "Projects" / "P"
-        proj.mkdir(parents=True)
-        (proj / "TECH.md").write_text("# Tech", encoding="utf-8")
-        write_source_anchor(proj, "deadbeef")  # anchor but NO bindings.yaml
-        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
-        assert not any("DDD-SOURCE-DRIFT" in f for f in findings)
 
     # ── Gate-2 F1: uppercase-stored anchor must NOT false-drift (case-insensitive) ──
-    def test_uppercase_anchor_no_false_drift(self, tmp_path):
-        from core.ddd_orchestrator import DddCultivationOrchestrator, write_source_anchor
-        src = tmp_path / "src"
-        head1 = self._make_source_repo(src)  # full 40-char lowercase sha
-        proj = self._make_project(tmp_path, "P", src)
-        # store the SAME commit but UPPERCASED (simulates a tool/UI copy-paste)
-        write_source_anchor(proj, head1.upper())
-        findings = DddCultivationOrchestrator()._ch_ddd_staleness(tmp_path, str(tmp_path))
-        assert not any("DDD-SOURCE-DRIFT" in f for f in findings), \
-            "uppercase anchor of the SAME commit must not fire a false drift"
 
 
 class TestEntryLifecycleArchiveIsAMove:
@@ -560,64 +464,10 @@ class TestEntryLifecycleArchiveIsAMove:
         from core.ddd_orchestrator import DddCultivationOrchestrator
         return DddCultivationOrchestrator()._ch_entry_lifecycle(root, str(root))
 
-    def test_archived_entry_leaves_live_doc_and_lands_in_archive(self, tmp_path):
-        doc = self._doc(tmp_path)
-        self._run(tmp_path)
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
-        assert "Fresh lesson" in doc.read_text(encoding="utf-8")
-        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
 
-    def test_second_pass_appends_nothing(self, tmp_path):
-        doc = self._doc(tmp_path)
-        self._run(tmp_path)
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        after_first = archive.read_text(encoding="utf-8")
-        self._run(tmp_path)
-        assert archive.read_text(encoding="utf-8") == after_first
-        assert after_first.count("Old idle lesson") == 1
-        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
 
-    def test_keep_class_coe_entry_is_never_moved_out_of_the_live_doc(self, tmp_path):
-        doc = self._doc(tmp_path, title="COE07 storage outage lesson")
-        self._run(tmp_path)
-        self._run(tmp_path)
-        assert "COE07 storage outage lesson" in doc.read_text(encoding="utf-8")
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        if archive.exists():
-            assert archive.read_text(encoding="utf-8").count("COE07 storage outage lesson") <= 1
 
-    @pytest.mark.parametrize("kw", [
-        {"dated": False},
-        {"title": "COE07 storage outage lesson"},
-        {"dated": False, "old_meta": "decay:archived"},
-    ], ids=["undated", "keep_class_coe", "undated_stale_archived_marker"])
-    def test_entry_that_may_not_leave_keeps_state(self, tmp_path, kw):
-        doc = self._doc(tmp_path, **kw)
-        title = kw.get("title", "Old idle lesson")
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        first = self._run(tmp_path)
-        after_first = doc.read_text(encoding="utf-8")
-        second = self._run(tmp_path)
-        # Stays live; a stale archived marker is re-decided to dormant once.
-        assert title in after_first
-        assert "decay:dormant" in after_first.split(title, 1)[1].split("\n\n", 1)[0]
-        # Pass 2 changes nothing and the archive never gains the entry.
-        assert doc.read_text(encoding="utf-8") == after_first
-        assert not archive.exists() or title not in archive.read_text(encoding="utf-8")
-        for f in first + second:
-            assert not (f.startswith("ENTRY_DECAY") and title[:30] in f), f
-            assert not f.startswith("ENTRY_ARCHIVE"), f
 
-    def test_dated_pitfall_with_stale_archived_marker_ends_in_archive_once(self, tmp_path):
-        # Full pass, reclaim included: a dated [pitfall] past grace is reclaimable
-        # noise (EVERGREEN_TYPES guards age-decay, not reclaim), so it leaves once.
-        doc = self._doc(tmp_path, entry_type="pitfall", old_meta="decay:archived")
-        self._run(tmp_path)
-        self._run(tmp_path)
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
-        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
 
     def test_decay_move_reclaim_and_gate_select_the_same_entries(self, tmp_path):
         # Parity on a fixture with no duplicate (title, section) pairs.
@@ -643,73 +493,11 @@ class TestEntryLifecycleArchiveIsAMove:
         assert accepted == {"A dated idle", "D dated pitfall"}
         gate = compute_reclaimable_noise(entries, today)
         assert set(gate.noisy_titles) == accepted
-        rep = reclaim_noise_entries(content, today, tmp_path, dry_run=True)
+        rep = reclaim_noise_entries(content, today, tmp_path)
         assert set(rep.candidates) == accepted
 
-    def test_same_title_twins_transition_once_not_every_pass(self, tmp_path):
-        # Date-titled lessons share a title in one section (undated, as in the real
-        # docs, so reclaim leaves them); an idle one going active->dormant must be
-        # persisted so the next pass does not re-fire it.
-        from datetime import date as _d
-        doc = tmp_path / "Projects" / "P" / "2-understanding" / "IMPROVEMENT.md"
-        doc.parent.mkdir(parents=True)
-        today = _d.today().isoformat()
-        doc.write_text(
-            "# Improvement\n\n## What Failed\n\n"
-            "- [guideline] **2026-01-05** (session a): idle lesson.\n"
-            "  <!-- ref:0 | last:2026-01-05 | decay:active -->\n\n"
-            f"- [guideline] **2026-01-05** (session b): used lesson.\n"
-            f"  <!-- ref:0 | last:{today} | decay:active -->\n",
-            encoding="utf-8",
-        )
-        first = [f for f in self._run(tmp_path) if f.startswith("ENTRY_DECAY")]
-        second = [f for f in self._run(tmp_path) if f.startswith("ENTRY_DECAY")]
-        assert len(first) == 1 and "active→dormant" in first[0]
-        assert second == []
-        text = doc.read_text(encoding="utf-8")
-        assert "(session a)" in text and "(session b)" in text
-        assert text.count("decay:dormant") == 1 and text.count("decay:active") == 1
 
-    def test_already_duplicated_archive_gains_no_copy_and_keeps_its_bytes(self, tmp_path):
-        # Today's real shape: the entry is already in the archive several times and
-        # still live. The pass must strip it without appending or rewriting.
-        doc = self._doc(tmp_path)
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        block = f"{self.OLD}\n  <!-- ref:0 | last:none | decay:archived -->\n\n"
-        before = "# Archived Knowledge Entries\n\n" + block * 3
-        archive.write_text(before, encoding="utf-8")
-        self._run(tmp_path)
-        assert archive.read_text(encoding="utf-8") == before
-        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
 
-    def test_reclaimable_entry_is_archived_once_not_twice(self, tmp_path):
-        doc = self._doc(tmp_path, dated=True)
-        self._run(tmp_path)
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
-        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
 
-    def test_live_entry_already_marked_archived_is_moved(self, tmp_path):
-        # assess_decay skips decay:archived entries, so they need their own path out.
-        doc = self._doc(tmp_path, old_meta="decay:archived")
-        self._run(tmp_path)
-        archive = doc.parent / "IMPROVEMENT-archive.md"
-        assert "Old idle lesson" not in doc.read_text(encoding="utf-8")
-        assert archive.read_text(encoding="utf-8").count("Old idle lesson") == 1
 
-    def test_archive_write_failure_leaves_live_doc_untouched(self, tmp_path):
-        doc = self._doc(tmp_path)
-        before = doc.read_text(encoding="utf-8")
-        with patch("core.ddd_entry_lifecycle.archive_entries", side_effect=OSError("disk full")):
-            self._run(tmp_path)
-        assert doc.read_text(encoding="utf-8") == before
 
-    def test_doc_locked_by_another_writer_is_skipped_untouched(self, tmp_path):
-        from utils.file_lock import md_lock
-        doc = self._doc(tmp_path)
-        before = doc.read_text(encoding="utf-8")
-        with md_lock(doc, blocking=True) as got:
-            assert got
-            self._run(tmp_path)
-        assert doc.read_text(encoding="utf-8") == before
-        assert not (doc.parent / "IMPROVEMENT-archive.md").exists()

@@ -51,8 +51,8 @@ INVOCATION = re.compile(
 # (file under the docs root, text on the line): a repository's own code in its own environment,
 # or prose. Everything else runs in SwarmAI's environment and must use py.
 EXEMPT = [
-    ("s_memory-distill/SKILL.md", "never use `python3 locked_write.py`"),  # prose
-    ("s_self-evolution/SKILL.md", "Never `python3 locked_write.py`"),     # prose
+    # the host-without-SwarmAI branch: there is no $SWARM_BACKEND_BIN to run py with
+    ("s_ddd-persist/SKILL.md", "python3 scripts/locked_write.py --file"),
 ]
 
 
@@ -71,7 +71,8 @@ def test_skill_docs_run_python_through_py():
 
 def test_every_exemption_still_matches_a_line():
     for f, s in EXEMPT:
-        assert s in (SKILLS / f).read_text(encoding="utf-8"), (f, s)
+        path = next(root / f for root in DOC_ROOTS if (root / f).is_file())
+        assert s in path.read_text(encoding="utf-8"), (f, s)
 
 
 # --- dependencies --------------------------------------------------------------------------

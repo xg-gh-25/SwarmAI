@@ -672,6 +672,16 @@ async def build_hooks(
             "main_dirty_reporter", matcher="Bash",
         )
 
+    # ── PostToolUse: CDF unit usage observer (Read/Grep) ──
+    # Maps exact governed-file line ranges to parse_units identities off the event
+    # loop. It injects nothing, denies nothing, and fails open.
+    if session_context is not None:
+        from core.ingestion.usage import create_usage_observer
+        registry.register(
+            "PostToolUse", create_usage_observer(session_context),
+            "cdf_usage_observer", matcher="Read|Grep",
+        )
+
     # ── repository guidance (design 2026-10-24-swarmai-usable-by-anyone §3.7) ──
     # Inject-only, never a deny: the first time this session touches a git repo, that
     # repo's AGENTS.md / CLAUDE.md / .swarmai/review.md go into additionalContext

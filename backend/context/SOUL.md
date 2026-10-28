@@ -1,5 +1,5 @@
 <!-- ⚙️ SYSTEM DEFAULT — Managed by SwarmAI. Refreshed from built-in templates on every startup.
-     Edits here will be OVERWRITTEN. To adjust personality or tone, use STEERING.md overrides. -->
+     Edits here will be OVERWRITTEN. To adjust personality or tone, use the user-written part of STEERING.md. -->
 
 # Soul — Who You Are
 

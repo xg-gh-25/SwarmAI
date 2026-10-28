@@ -7,13 +7,10 @@ this is a periodic LLM REVIEW, generalizing the 4-subagent SwarmAI audit to ALL 
 projects under SwarmWS/Projects/.
 
 DESIGN INVARIANTS (Gate-0 run_835f82ff, all live-verified):
-- THE AGENT ONLY READS, structurally: ``--tools Read,Grep,Glob`` (``_build_review_cmd``)
-  — it CANNOT mutate a DDD doc. It emits findings, each optionally with a ``fix``; THIS
-  Python handler decides whether a fix is certain and writes it (core/ddd_drift_fix,
-  design docs/design/2026-10-27-ddd-drift-auto-fix.md). Only three fixes exist, each a
-  fixed grammar the OS checks and computes itself (drop a waiting condition a ticked line
-  shows is done; swap a path for the one its superseded header names; swap a value for the
-  one the code assigns); everything else is reported as "needs you".
+- THE AGENT ONLY READS, structurally: ``--tools Read,Grep,Glob``. It emits findings,
+  each optionally naming one of three deterministic fix grammars. ``ddd_drift_fix``
+  computes the replacement but never writes it; this handler creates a complete S4
+  Cognition refinement with ``supersedes`` metadata. CDF is the only DDD writer.
 - PER-PROJECT focused review (not one diluted 8-in-1 prompt) — one bounded ``claude
   --print`` subprocess per project, looped in-handler (JobSafety.timeout does not bound
   inner spawns; scheduled as a trailing weekly slot per the eval-scheduled precedent).
@@ -283,6 +280,63 @@ def _build_review_cmd(claude_path: str, use_bare: bool, project_name: str,
     return cmd
 
 
+def _refine_candidate(fix: dict, checked: dict, project_name: str,
+                      project_dir: Path, src: Path | None, title: str) -> tuple[dict, tuple[str, ...]] | None:
+    """Build a complete S4 refinement unit plus every provenance root it read."""
+    from core.ingestion import api_v2
+    from core.ingestion.units import parse_units
+
+    doc = Path(checked["doc_path"])
+    units = [unit for unit in parse_units(doc, root=SWARMWS)
+             if checked["old_line"] in unit.text]
+    if len(units) != 1:
+        return None
+    old = units[0]
+    refined = old.text.replace(checked["old_line"], checked["new_line"], 1)
+    if fix["type"] == "drop_condition":
+        evidence_text = fix["done"]
+        locator = f"{doc.resolve()}#done:{evidence_text}"
+        root_id = api_v2.register_root("file_revision", locator, evidence_text, "external")
+        anchor = f"doc:{locator}"
+    elif fix["type"] == "swap_superseded_path":
+        source = project_dir / fix["path_old"]
+        evidence_text = source.read_text(encoding="utf-8")
+        locator = f"{source.resolve()}#superseded-header"
+        root_id = api_v2.register_root("file_revision", locator, evidence_text, "external")
+        anchor = f"doc:{locator}"
+    else:
+        if src is None:
+            return None
+        import subprocess
+        proc = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=20)
+        if proc.returncode != 0:
+            return None
+        sha = proc.stdout.strip()
+        evidence_text = subprocess.run(
+            ["git", "-C", str(src), "show", f"HEAD:{fix['code_file']}"],
+            capture_output=True, timeout=20, check=True).stdout
+        root_id = api_v2.register_root("commit", sha, evidence_text, "external")
+        anchor = f"commit:{sha}"
+    unit = {
+        "kind": "cognition", "type": "correction", "scope": f"project:{project_name}",
+        "title": title or f"Refine {fix['doc']} after verified drift",
+        "what": refined,
+        "how": "Replace only the refuted span while preserving every other claim.",
+        "why": (f"The {fix['type']} evidence proves the old span is stale; the replacement "
+                "is computed by the deterministic drift grammar."),
+        "applicability": f"When the same verified {fix['type']} drift is present.",
+        "evidence": [anchor],
+        "relation_hint": {"kind": "supersedes", "target": old.anchor,
+                          "fix_type": fix["type"],
+                          "refuted_span": (fix.get("span") or fix.get("path_old")
+                                           or fix.get("value_old")),
+                          "replacement": ("" if fix["type"] == "drop_condition" else
+                                          fix.get("path_new") or fix.get("value_new"))},
+    }
+    return unit, (root_id,)
+
+
 def _resolve_findings(findings: list, project_name: str, project_dir: Path, src: Path | None,
                       *, run_id: str, dry_run: bool, today: str) -> list[dict]:
     """Each finding → fixed / would-fix / open, with the reason (core/ddd_drift_fix)."""
@@ -305,10 +359,28 @@ def _resolve_findings(findings: list, project_name: str, project_dir: Path, src:
                                 finding_title=title, dry_run=dry_run)
             except Exception as e:  # noqa: BLE001 — one bad fix must not stop the audit
                 logger.warning("ddd_self_audit: fix for %r failed: %s", title, e)
-                res = {"ok": False, "reason": f"the fix failed to apply ({e.__class__.__name__}); nothing changed"}
-            if res.get("ok"):
-                row.update(outcome="would-fix" if dry_run else "fixed", reason=res.get("reason"),
-                           type=fix["type"], old=res.get("old_line", ""), new=res.get("new_line", ""))
+                res = {"ok": False, "reason": f"the fix could not be computed ({e.__class__.__name__})"}
+            if res.get("ok") and dry_run:
+                row.update(outcome="would-enqueue", reason="computed",
+                           type=fix["type"], old=res.get("old_line", ""),
+                           new=res.get("new_line", ""))
+            elif res.get("ok"):
+                try:
+                    candidate = _refine_candidate(
+                        fix, res, project_name, project_dir, src, title)
+                    if candidate is None:
+                        raise ValueError("the stale line is not exactly one complete DDD unit")
+                    from core.ingestion.sources.s4_code import enqueue_refine_unit
+                    unit, root_ids = candidate
+                    receipt = enqueue_refine_unit(
+                        unit, source_ref=f"ddd-drift:{project_name}:{fix['doc']}:{res['key']}",
+                        project=project_name, read_root_ids=root_ids)
+                    row.update(outcome="queued", reason=getattr(receipt, "status", "queued"),
+                               type=fix["type"], old=res.get("old_line", ""),
+                               new=res.get("new_line", ""))
+                except Exception as e:  # noqa: BLE001 — one finding never aborts the audit
+                    logger.warning("ddd_self_audit: S4 refine for %r failed: %s", title, e)
+                    row.update(outcome="open", reason=f"S4 refine was not queued ({e.__class__.__name__})")
             else:
                 row.update(outcome="open", reason=res.get("reason"))
             needle = fix.get("line") or fix.get("path_old") or ""
@@ -453,7 +525,7 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         outcomes = _resolve_findings(findings, project_name, project_dir, src,
                                      run_id=run_id, dry_run=dry_run, today=start.strftime("%Y-%m-%d"))
         for o in outcomes:
-            if o["outcome"] in ("fixed", "would-fix"):
+            if o["outcome"] in ("queued", "would-enqueue"):
                 n_fixed += 1
                 fixed_lines.append(_fixed_line(project_name, o))
             else:
@@ -471,16 +543,13 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
             report_lines.append(f"<!-- DRIFT_OUTCOMES {blob} -->")
         report_lines.append("")
 
-    fixed_word = "would fix" if dry_run else "fixed"
-    headline = (f"Found {total_findings} · {fixed_word} {n_fixed} · needs you {total_findings - n_fixed}"
+    queued_word = "would enqueue" if dry_run else "queued"
+    headline = (f"Found {total_findings} · {queued_word} {n_fixed} · needs you {total_findings - n_fixed}"
                 f" · reviewed {reviewed}/{len(projects)} projects")
     summary_block = [headline, ""]
     if fixed_lines:
-        summary_block += [f"**{'Would fix (dry run, nothing written)' if dry_run else 'Fixed automatically'}**", *fixed_lines]
-        if not dry_run:
-            summary_block.append("Each fix is recorded with the text it replaced; to put one back: "
-                                 "`py -m scripts.ddd_drift_fix_cli list <project>`, then `undo <project> <index>`.")
-        summary_block.append("")
+        summary_block += [f"**{'Would enqueue (dry run)' if dry_run else 'Queued through CDF S4'}**",
+                          *fixed_lines, ""]
     if open_lines:
         summary_block += ["**Needs you**", *open_lines, ""]
     report_lines[2:2] = summary_block
@@ -518,7 +587,7 @@ def run_ddd_self_audit(config: dict | None = None) -> dict:
         "error": first_failure if status == "failed" else None,
         "projects_reviewed": reviewed,
         "findings": total_findings,
-        "fixed": n_fixed,
+        "queued": n_fixed,
         "dry_run": dry_run,
         "summary": summary,
         "output_path": str(output_path) if output_path else None,

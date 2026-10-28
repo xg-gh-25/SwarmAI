@@ -36,6 +36,10 @@ ALLOWED = {
     "core/backup_manager.py": "a backup's layout under an explicit swarm_dir argument",
     "database/sqlite.py": "legacy cleanup also keeps the default <app data>/SwarmWS",
     "scripts/artifact_cli.py": "asks whether SWARM_WORKSPACE is explicitly set (a test workspace)",
+    "scripts/cdf_cutover_snapshot.py":
+        "sets SWARM_WORKSPACE so config.get_swarmws() is the workspace being snapshotted",
+    "scripts/cdf_rehearsal_replay.py":
+        "sets SWARM_WORKSPACE so config.get_swarmws() is the workspace copy being replayed",
     "scripts/eval_runner.py": "sets SWARM_WORKSPACE/SWARMWS for a check's subprocess",
     "scripts/probe_pipeline.py": "sets SWARM_WORKSPACE/SWARMWS for a sandbox run",
     "skills/s_repo-to-ddd/scripts/ai_ready_helpers.py":

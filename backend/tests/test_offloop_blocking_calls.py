@@ -43,8 +43,7 @@ async def test_run_job_executes_off_event_loop(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_extract_judge_runs_off_event_loop(tmp_path: Path, monkeypatch):
-    import core.ingestion_gate as ig
+async def test_memory_extraction_llm_runs_off_event_loop(tmp_path: Path, monkeypatch):
     import core.memory_extractor as me
     from database import db
 
@@ -53,16 +52,23 @@ async def test_memory_extract_judge_runs_off_event_loop(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(db.messages, "list_by_session", _msgs)
     monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    monkeypatch.setattr(me, "_extract_sections",
-                        lambda *a, **k: {"key_decisions": ["a"], "lessons_learned": ["b"]})
     seen: list[int] = []
 
-    def _judge(entry, *a, **k):
+    def _extract(*_args, **_kwargs):
         seen.append(threading.get_ident())
-        return ("discard", None, "test", None)
+        return {"key_decisions": ["a"], "lessons_learned": ["b"]}
 
-    monkeypatch.setattr(ig, "admit_memory_lesson", _judge)
+    monkeypatch.setattr(me, "_extract_sections", _extract)
+    monkeypatch.setattr("core.session_inputs.derive_envelope", lambda *a, **k: {
+        "source_event_ids": [], "evidence": "inferred", "tainted": True,
+        "writer": "memory_extractor"})
+    monkeypatch.setattr("core.ingestion.api.enqueue", lambda *a, **k: SimpleNamespace(
+        status="queued", candidate_id="cand"))
     loop_thread = threading.get_ident()
-    await me.extract_and_save("s1", workspace_path=tmp_path, config={})
-    assert len(seen) == 2, "the judge must run once per extracted entry"
+
+    result = await me.extract_and_save("s1", workspace_path=tmp_path, config={})
+
+    assert result.total_saved == 2
+    assert len(seen) == 1, "candidate extraction is one batched LLM call"
     assert all(t != loop_thread for t in seen)
+

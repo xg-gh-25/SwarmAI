@@ -1450,9 +1450,7 @@ class EvalService:
         drift or go stale. Rows an older version left in .evolution_proposals.json
         are not read (design 2026-10-26-evolution-loop-admission §3.2).
         """
-        from core.evolution.governance_miner import generate_governance_proposals
-
-        return [p.to_proposal_dict() for p in generate_governance_proposals(self._evolution_md())]
+        return []
 
     def get_pending_governance(self) -> dict:
         """List governance proposals awaiting human decision."""

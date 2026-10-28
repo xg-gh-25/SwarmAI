@@ -384,15 +384,13 @@ async def library_search(q: str = Query(...), scope: str = Query(default="GLOBAL
 
 @router.post("/inbox")
 async def drop_to_inbox(source_path: str = Query(...)) -> dict:
-    """Copy a SINGLE existing file into Knowledge/Inbox/ (the one copy-in exception;
-    directories are mounted, never copied). Returns the landed relative path."""
+    """Submit one existing external file to S6; directories are rejected."""
     from core.library_inbox import copy_to_inbox
-    kdir = _knowledge_dir()
     try:
-        landed = copy_to_inbox(kdir, Path(source_path))
-    except (ValueError, FileNotFoundError) as exc:
+        receipts = copy_to_inbox(_knowledge_dir(), Path(source_path))
+    except (ValueError, FileNotFoundError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"status": "landed", "path": f"Knowledge/{landed.relative_to(kdir).as_posix()}"}
+    return {"status": "queued" if receipts else "no_unit", "units": len(receipts)}
 
 
 from core.library_health import REPORT_FILENAME as _HEALTH_REPORT  # single source of the report filename

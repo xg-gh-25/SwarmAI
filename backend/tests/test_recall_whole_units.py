@@ -165,36 +165,6 @@ def _da_block(i: int, body: str) -> str:
             f"- {body}\n<!-- /da -->")
 
 
-def test_daily_activity_keeps_newest_entries_whole_with_line_breaks():
-    from core.context_directory_loader import ContextDirectoryLoader as C
-    from core.prompt_builder import _daily_within_budget
-    blocks = [_da_block(i, f"entry {i} " + "word " * 300) for i in range(6)]
-    content = "---\ndistilled: false\n---\n" + "\n\n".join(blocks)
-    out = _daily_within_budget(content, 1000, "2026-10-27")
-    assert C.estimate_tokens(out) <= 1000
-    note, *shown = out.split("\n\n<!-- da:")
-    assert note.startswith("[") and "earlier entries of this day not shown" in note
-    assert "Knowledge/DailyActivity/2026-10-27.md" in note
-    shown = ["<!-- da:" + s for s in shown]
-    assert shown and all(s in blocks for s in shown)              # each whole, line breaks kept
-    assert shown == blocks[len(blocks) - len(shown):]              # the newest, in file order
-    assert f"[{len(blocks) - len(shown)} earlier" in note
-
-
-def test_daily_activity_shows_no_part_of_an_entry_too_big_alone():
-    from core.prompt_builder import _daily_within_budget
-    content = _da_block(0, "small") + "\n\n" + _da_block(1, "word " * 3000)
-    out = _daily_within_budget(content, 500, "2026-10-27")
-    assert out == ("[2 earlier entries of this day not shown, so that each one shown stays "
-                   "whole; read Knowledge/DailyActivity/2026-10-27.md]")
-
-
-def test_daily_activity_that_fits_is_unchanged():
-    from core.prompt_builder import _daily_within_budget
-    content = "---\na: b\n---\n" + _da_block(0, "small")
-    assert _daily_within_budget(content, 2000, "d") == content
-
-
 def test_repo_guidance_file_shows_whole_sections_and_names_the_rest():
     from core import repo_guidance as rg
     secs = ["# Title\nintro", "## Small\n" + "s" * 500, "## Huge\n" + "h" * 4000, "## Tail\nt"]
@@ -314,31 +284,6 @@ def test_pipeline_library_leg_names_the_rest_without_an_id(tmp_path, monkeypatch
     assert "Notes/n2.md#H2 (" in note["text"]
 
 
-def test_daily_activity_bound_holds_for_mixed_cjk_entries():
-    import random
-    from core.context_directory_loader import ContextDirectoryLoader as C
-    from core.prompt_builder import _daily_within_budget
-    rnd = random.Random(7)
-    for trial in range(200):
-        blocks = [_da_block(i, " ".join(rnd.choice(["词", "a", "中文b", "x中", "word"])
-                                        for _ in range(rnd.randint(1, 60))))
-                  for i in range(rnd.randint(2, 12))]
-        cap = rnd.randint(20, 400)
-        out = _daily_within_budget("\n\n".join(blocks), cap, "d")
-        assert C.estimate_tokens(out) <= cap or out.startswith("[") and "\n" not in out, trial
-
-
-def test_daily_activity_bound_holds_where_the_estimate_floors_each_part():
-    # 4 words per entry: estimate_tokens floors 4 * 2.2 = 8.8 to 8 per entry, while the
-    # joined text keeps every 0.8: the per-part charge has to cover it
-    from core.context_directory_loader import ContextDirectoryLoader as C
-    from core.prompt_builder import _daily_within_budget
-    content = "\n\n".join(f"## e{i} b c" for i in range(40))
-    for cap in range(60, 300):
-        out = _daily_within_budget(content, cap, "d")
-        assert C.estimate_tokens(out) <= cap, cap
-
-
 # ── review round 1 ───────────────────────────────────────────────────────────
 
 def _git_repo(path, agents):
@@ -426,18 +371,6 @@ def test_a_session_hit_fits_its_share_of_the_session_budget():
         assert sum(len(h["text"]) for h in hits) <= recall_filter.DOMAIN_CHAR_CAPS["session"]
         assert all(len(h["text"]) <= recall_filter.FOLLOWUP_CHAR_CAPS["session"] for h in hits)
         assert all("not shown" in h["text"] for h in hits)
-
-
-def test_daily_activity_entries_split_outside_fences_and_in_linear_time():
-    import time
-    from core.prompt_builder import _daily_entries, _daily_within_budget
-    body = "## a\n```\n## not a heading\n```\n\n## b\nx"
-    assert _daily_entries(body) == ["## a\n```\n## not a heading\n```", "## b\nx"]
-    t = time.perf_counter()
-    _daily_entries("<!-- da:x -->" * 20000)
-    assert time.perf_counter() - t < 1.0
-    assert _daily_within_budget("---\n" + "a: b\n" * 3000 + "---\n", 10, "d").startswith(
-        "[this day's DailyActivity is not shown; read Knowledge/DailyActivity/d.md]")
 
 
 def test_a_note_over_several_untrusted_sources_is_labelled_neutrally():

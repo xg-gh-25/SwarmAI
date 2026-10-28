@@ -544,11 +544,15 @@ class TestSystemPromptFaultIsolation:
                      "## Self-Portrait\n", "## Agent Directives\n"]
 
     def _seed_daily(self, workspace):
-        """Create Knowledge/DailyActivity/<date>.md so the daily for-loop iterates
-        — this is what triggers the L943 NameError path in the buggy code."""
+        """Create a current DailyActivity block so the ephemeral selector runs."""
+        from datetime import date
         da = workspace / "Knowledge" / "DailyActivity"
         da.mkdir(parents=True, exist_ok=True)
-        (da / "2026-08-11.md").write_text("# Today\nDid some work.\n", encoding="utf-8")
+        stem = date.today().isoformat()
+        (da / f"{stem}.md").write_text(
+            "## 10:00 | legacy-session | Work\n**Delivered:**\n- Did some work.\n",
+            encoding="utf-8",
+        )
 
     # ── AC1: the NameError bugfix ────────────────────────────────────────
     def test_ac1_daily_activity_path_no_nameerror_core_intact(self, tmp_path, caplog):
@@ -565,7 +569,7 @@ class TestSystemPromptFaultIsolation:
         for hdr in self._CORE_HEADERS:
             assert hdr in full, f"core section {hdr!r} missing after daily-activity path"
         # The daily section itself should also have made it in.
-        assert "## Daily Activity (2026-08-11)" in full
+        assert "## Daily Activity (last 7 days)" in full
 
     # ── AC2: ephemeral fault isolation ──────────────────────────────────
     def test_ac2_ephemeral_failure_leaves_core_intact(self, tmp_path):
@@ -664,9 +668,11 @@ class TestSystemPromptFaultIsolation:
             f"real session build reported degraded: {cfg.get('_context_degraded')}"
         for hdr in ["## SwarmAI\n", "## Identity\n", "## Soul\n", "## Agent Directives\n"]:
             assert out.count(hdr) == 1, f"required section {hdr!r} count={out.count(hdr)} (want 1)"
-        # The ephemeral seam also reconnected (daily + flag rode through).
-        assert "## Daily Activity (2026-08-11)" in out
-        assert "## Memory Maintenance Required" in out
+        # The ephemeral seam also reconnected (daily rode through). A leftover
+        # .needs_distillation flag no longer asks for a manual distill: the
+        # distillation hook and its fallback were retired at the CDF cutover.
+        assert "## Daily Activity (last 7 days)" in out
+        assert "## Memory Maintenance Required" not in out
 
     # ── AC4: fail-loud ──────────────────────────────────────────────────
     def test_ac4_core_failure_is_loud(self, tmp_path, caplog):

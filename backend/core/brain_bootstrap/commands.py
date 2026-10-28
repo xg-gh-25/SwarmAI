@@ -11,6 +11,7 @@ executed. A CI file's
 """
 from __future__ import annotations
 
+import logging
 import configparser
 import json
 import re
@@ -19,6 +20,8 @@ from pathlib import Path
 import shlex
 
 from .repo_read import load_yaml, safe_read_text
+
+logger = logging.getLogger(__name__)
 
 _MAKE_TARGET_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-/]*)\s*:(?![=:])", re.MULTILINE)
 _JUST_RECIPE_RE = re.compile(r"^@?([A-Za-z0-9][A-Za-z0-9_\-]*)(?:\s+[^:=\n]*)?:(?!=)", re.MULTILINE)
@@ -30,7 +33,8 @@ _NOX_NAME_RE = re.compile(r"name\s*=\s*['\"]([^'\"]+)['\"]")
 def _yaml(text: str):
     try:
         return load_yaml(text)
-    except Exception:  # noqa: BLE001 — malformed CI or a YAML alias → no commands from it
+    except Exception as exc:  # noqa: BLE001 — malformed CI or a YAML alias → no commands from it
+        logger.debug("survey: CI/task YAML unreadable, no commands from it: %s", exc)
         return None
 
 

@@ -25,6 +25,7 @@ Key properties verified:
   when budget mismatch, content when budget matches.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -448,14 +449,13 @@ class TestEffectiveBudgetSingleSource:
     """
 
     def test_ephemeral_headroom_is_formula_derived(self):
-        """EPHEMERAL_HEADROOM = 2*TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_HEADROOM,
-        not a bare 9000 literal (Gate-1 v1 crux: a frozen literal relocates drift)."""
+        """EPHEMERAL_HEADROOM = DailyActivity whole-unit budget + resume headroom."""
         from core.context_directory_loader import (
+            DAILY_ACTIVITY_INJECTION_BUDGET,
             EPHEMERAL_HEADROOM,
             RESUME_CONTEXT_HEADROOM,
-            TOKEN_CAP_PER_DAILY_FILE,
         )
-        assert EPHEMERAL_HEADROOM == 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_HEADROOM
+        assert EPHEMERAL_HEADROOM == DAILY_ACTIVITY_INJECTION_BUDGET + RESUME_CONTEXT_HEADROOM
         assert EPHEMERAL_HEADROOM == 9_000
 
     def test_effective_1m_budget_derived_from_base_minus_headroom(self):
@@ -623,6 +623,7 @@ class TestWriteL1Cache:
             context_dir=context_dir,
             templates_dir=templates_dir,
             token_budget=token_budget,
+            clock=lambda: datetime(2026, 10, 28, tzinfo=timezone.utc),
         )
 
     def test_writes_budget_header_as_first_line(self, tmp_dirs):
@@ -631,7 +632,7 @@ class TestWriteL1Cache:
         loader._write_l1_cache("hello world", budget=40000)
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
-        assert raw.startswith("<!-- budget:40000 -->\n")
+        assert raw.startswith("<!-- budget:40000;timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->\n")
 
     def test_content_follows_header(self, tmp_dirs):
         """Actual content appears after the budget header line."""
@@ -640,7 +641,7 @@ class TestWriteL1Cache:
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
         lines = raw.split("\n", 1)
-        assert lines[0] == "<!-- budget:25000 -->"
+        assert lines[0] == "<!-- budget:25000;timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->"
         assert lines[1] == "my context content"
 
     def test_default_budget_is_default_token_budget(self, tmp_dirs):
@@ -649,7 +650,7 @@ class TestWriteL1Cache:
         loader._write_l1_cache("content")
         l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
         raw = l1_path.read_text(encoding="utf-8")
-        assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET} -->\n")
+        assert raw.startswith(f"<!-- budget:{DEFAULT_TOKEN_BUDGET};timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->\n")
 
     def test_no_temp_file_left_behind(self, tmp_dirs):
         """Atomic write cleans up: only the L1 file exists, no stray temp file.
@@ -796,13 +797,14 @@ class TestLoadL1IfFresh:
             context_dir=context_dir,
             templates_dir=templates_dir,
             token_budget=token_budget,
+            clock=lambda: datetime(2026, 10, 28, tzinfo=timezone.utc),
         )
 
     def _write_cache_with_budget(self, context_dir, budget, content="cached content"):
         """Helper: write an L1 cache file with a budget header."""
         l1_path = context_dir / "L1_SYSTEM_PROMPTS.md"
         l1_path.write_text(
-            f"<!-- budget:{budget} -->\n{content}", encoding="utf-8"
+            f"<!-- budget:{budget};timeline:1500;memory:24000;evolution:8000;selection-day:2026-10-28;layout:3 -->\n{content}", encoding="utf-8"
         )
 
     def test_returns_content_when_budget_matches(self, tmp_dirs):
@@ -821,6 +823,16 @@ class TestLoadL1IfFresh:
         loader._is_l1_fresh = lambda: True
         result = loader._load_l1_if_fresh(expected_budget=25000)
         assert result is None
+
+    def test_returns_none_when_rendering_layout_is_old(self, tmp_dirs):
+        loader = self._make_loader(tmp_dirs)
+        l1_path = tmp_dirs[0] / "L1_SYSTEM_PROMPTS.md"
+        l1_path.write_text(
+            "<!-- budget:40000;timeline:1500;layout:1 -->\nstale layout",
+            encoding="utf-8",
+        )
+        loader._is_l1_fresh = lambda: True
+        assert loader._load_l1_if_fresh(expected_budget=40000) is None
 
     def test_returns_none_when_header_missing(self, tmp_dirs):
         """Returns None for old-format cache without budget header."""
@@ -1114,22 +1126,16 @@ class TestChannelInjectionPrivacy:
             "section, but no 'Slack Bot' section found — carve-out lost its consumer"
         )
 
-    def test_gitignore_private_set_matches_channel_privacy(self):
-        """THE WELD (Gate-1 core fix): the .gitignore .context/*.md private list
-        must equal WHOLE_FILE_PRIVATE ∪ CHANNEL_INJECTION_CARVE_OUTS — a strict
-        two-way equality that catches BOTH drift directions:
-          (a) a private file that fell out of the exclusion set, AND
-          (b) a NEW gitignored private file that never reached the constants.
-        Parses the real SwarmWS .gitignore; skips gracefully when absent (CI)."""
+    def test_gitignore_private_set_matches_channel_privacy(self, tmp_path):
+        """The generated .gitignore private set equals exclusions plus carve-outs."""
         from core.context_directory_loader import (
             WHOLE_FILE_PRIVATE,
             CHANNEL_INJECTION_CARVE_OUTS,
         )
-        gitignore_private = _parse_gitignore_private_context_md()
-        if gitignore_private is None:
-            pytest.skip("SwarmWS .gitignore file absent (CI without workspace)")
-        # NOTE: an EMPTY set is NOT skipped — a present-but-gutted private block is
-        # a boundary collapse the equality check below must FAIL on, not skip.
+        from core.swarm_workspace_manager import GITIGNORE_CONTENT
+        generated = tmp_path / ".gitignore"
+        generated.write_text(GITIGNORE_CONTENT, encoding="utf-8")
+        gitignore_private = _parse_gitignore_private_context_md(generated)
         accounted = set(WHOLE_FILE_PRIVATE) | set(CHANNEL_INJECTION_CARVE_OUTS)
         assert gitignore_private == accounted, (
             "PRIVACY-BOUNDARY DRIFT: .gitignore private-context .md set "
@@ -1407,28 +1413,32 @@ class TestCJKRangeUnification:
         assert est >= 12, f"Kana not counted as CJK: est={est}"
 
 
-class TestInverseTruncationCoherence:
-    """Gate-1 finding A: the inverse-truncation must derive words_to_keep from
-    LATIN_TOKENS_PER_WORD, so a truncated section actually fits its token cap.
-    A hardcoded inverse (old `* 3 / 4`) over-shot by ~65% after recalibration."""
+class TestWholeUnitDailyBudget:
+    """DailyActivity overflow drops complete rows and reports their count."""
 
-    def test_daily_within_budget_fits_cap(self):
-        from core.prompt_builder import _daily_within_budget, TOKEN_CAP_PER_DAILY_FILE
+    def test_daily_selector_never_returns_a_partial_row(self, tmp_path):
+        import json
+        from datetime import date
+        from core.memory_injection import select_daily_activity
         from core.context_directory_loader import ContextDirectoryLoader
-        # Content well over the cap, as whole ``## `` entries
-        big = "\n\n".join(f"## 1{i}:00 | s{i}\n" + " ".join(f"word{j}" for j in range(200))
-                           for i in range(25))
-        assert ContextDirectoryLoader.estimate_tokens(big) > TOKEN_CAP_PER_DAILY_FILE
-        out = _daily_within_budget(big)
-        est = ContextDirectoryLoader.estimate_tokens(out)
-        assert est <= TOKEN_CAP_PER_DAILY_FILE, f"kept content {est} > cap {TOKEN_CAP_PER_DAILY_FILE}"
-        assert out.split("\n\n", 1)[1] in big          # whole entries, as written
 
-    # test_section_truncation_fits_target DELETED 2026-08-14: it exercised the
-    # dead read-line `_truncate_section` (removed — read-line no longer truncates).
-    # The forward/inverse coefficient coherence is still covered by the DailyActivity
-    # truncation test above (prompt_builder._truncate_section_by_tokens, the remaining
-    # inverse path).
+        directory = tmp_path / "Knowledge" / "DailyActivity"
+        directory.mkdir(parents=True)
+        rows = [
+            {"session_id": f"s{i}", "timestamp": "10:00", "title": f"Title {i}",
+             "summary_sentence": f"complete-row-{i}", "next_items": [], "resolves": []}
+            for i in range(3)
+        ]
+        (directory / "2026-10-27.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n"
+        )
+        result = select_daily_activity(
+            tmp_path, today=date(2026, 10, 27),
+            estimate=ContextDirectoryLoader.estimate_tokens, budget=30,
+        )
+        assert result.omitted > 0
+        for i in range(3):
+            assert (f"complete-row-{i}" in result.text) == (f"Title {i}" in result.text)
 
 
 class TestCoreSectionNames:

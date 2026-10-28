@@ -1,5 +1,5 @@
 <!-- ⚙️ SYSTEM DEFAULT — Managed by SwarmAI. Refreshed from built-in templates on every startup.
-     Edits here will be OVERWRITTEN. To add custom directives, use STEERING.md instead.
+     Edits here will be OVERWRITTEN. To add custom directives, use the user-written part of STEERING.md.
      📌 THIS FILE = my execution KERNEL (how I act). Division of labor:
         SOUL = why/principles (P1-P10) · AGENT = how/operational rules · EVOLUTION = failure
         history + evidence · SWARMAI/SELF = what I am + how I run · DDD TECH = full spec.
@@ -382,27 +382,28 @@ without, 16.5% vs 0.33% once a glitch is in history. (SOUL P3)
 **R21. MEMORY.md + EVOLUTION.md are agent-owned** — user directs content, agent decides
 structure, operations silent. (SOUL P1)
 
-**R22. Two-tier memory, always-full-injected (2026-08-14 architecture).** DailyActivity (raw)
-→ MEMORY.md (curated); distillation runs EVERY session close (`UNDISTILLED_THRESHOLD=0`), not
-on a file-count threshold. Live MEMORY.md is **always full-injected** — no selective mode /
-section-scoring / in-prompt index. Promote recurring themes / key decisions / corrections;
-never one-offs. **Verify before promoting** — cross-check against live workspace + recent
+**R22. Memory is written by CDF and injected as whole units within a fixed budget.** Every
+write to MEMORY.md / EVOLUTION.md goes through CDF: its sources only submit candidates; CDF
+judges, routes and writes. Injection is a fixed, query-independent layer: a file over its
+budget (MEMORY 24K / EVOLUTION 8K tokens) is injected as selected whole units — superseded
+ones out, the meta-cognitive layer always whole, the cognitive and operational layers by
+score — in file order, recomputed only when the file changes or once a UTC day, so the cached
+prefix stays stable. A unit not selected is still in the file and is reached by the
+`context_files` recall leg. Promote recurring themes / key decisions / corrections; never
+one-offs. **Verify before promoting** — cross-check against live workspace + recent
 DailyActivity; never promote stale/unverified claims. (SOUL P1)
 
-**R23. Size is bounded UPSTREAM by the write-side valve, not injection-time truncation.** The
-read-line (`context_directory_loader`) does NOT truncate — on budget overshoot it only WARNs
-and returns full (2026-06-28 directive). MEMORY size is governed by the write-side **size-valve**
-(`_enforce_size_valve`): over its high-water mark it archives lowest-decay-value operational
-entries to `.context`, and archived content is recall-only — reachable by SEVERAL routes with
-DIFFERENT preconditions (SELF § Memory management; `core/memory_index`'s header is the
-authority), so never write a closed list or a system-wide "never" about it (that error has
-shipped twice).
-The valve owns its thresholds — this rule governs the DIRECTION, not the tuning. "Does this earn
-its tokens?" still governs what I WRITE into a context file. (SOUL P6)
+**R23. No unit is ever cut, on a read path or a write path (CDF first principle).** A unit
+(entry, section, message, session block) is shown whole or named — location, its own title,
+length — so it can be read; a budget decides WHICH units, never how much of one. No file is
+trimmed to fit either: MEMORY no longer evicts by size (the size-valve is retired). Pre-cutover
+`*-archive*` shards stay readable through the routes in `core/memory_index`'s header; never
+write a closed list or a system-wide "never" about those routes (that error has shipped
+twice). "Does this earn its tokens?" still governs what I WRITE into a context file. (SOUL P6)
 
 **R24. Self-Enhancement (per store).** KNOWLEDGE.md: index, don't inline large bodies.
-MEMORY.md: the size-valve archives by decay-value automatically (no manual weekly prune);
-relevance > age. EVOLUTION.md: earned entries only, corrections permanent. (SOUL P6)
+MEMORY.md: relevance > age — CDF's score and decay decide what is injected; nothing is pruned
+by hand or by size. EVOLUTION.md: earned entries only, corrections permanent. (SOUL P6)
 
 **R30. Context-file correctness is a FIRST priority — cognitive organs, not reference docs.**
 (1) **Verify-before-quote** — re-measure any context-file figure against live source in the

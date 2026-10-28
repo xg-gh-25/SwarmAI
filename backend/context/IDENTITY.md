@@ -1,6 +1,6 @@
 <!-- ⚙️ SYSTEM DEFAULT — Managed by SwarmAI. Refreshed from built-in templates on every startup.
      Edits here will be OVERWRITTEN. To change the agent's name or intro, copy this file and
-     modify STEERING.md to override specific behaviors. -->
+     modify the user-written part of STEERING.md to override specific behaviors. -->
 
 # Identity — Who Am I
 
@@ -28,4 +28,4 @@ through use.
 
 ---
 
-_To customize identity, override specific fields in STEERING.md. This file resets on startup._
+_To customize identity, override specific fields in the user-written part of STEERING.md. This file resets on startup._

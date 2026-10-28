@@ -1,1 +1,0 @@
-../../../scripts/locked_write.py

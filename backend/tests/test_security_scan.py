@@ -264,7 +264,8 @@ def test_private_skill_scope_consistent_across_all_sources():
     # Each private-skill family → a concrete on-disk DIR NAME the scanner would walk.
     # s_cmhk-*/s_internal-* are prefix globs (a real dir is e.g. 's_cmhk-weekly'); _shared
     # is an exact dir name. The sample path is what _cors_fingerprints/detect-secrets sees.
-    families = {"s_cmhk-": "s_cmhk-weekly", "s_internal-": "s_internal-crux", "_shared": "_shared"}
+    families = {"s_cmhk-": "s_cmhk-weekly", "s_internal-": "s_internal-crux", "_shared": "_shared",
+                ".pytest_cache": ".pytest_cache", "__pycache__": "__pycache__"}
     for family, dirname in families.items():
         # BANDIT_EXCLUDES (also the CORS _is_excluded source): a glob 'fam*' or exact match
         covered_bandit = any(

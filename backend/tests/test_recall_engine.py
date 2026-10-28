@@ -185,36 +185,6 @@ class TestRecallKnowledge:
 
 # ── Distillation enrichment (Phase 3) ──
 
-class TestDistillationEnrichment:
-    """Test that distillation entries include source links."""
-
-    def test_format_enriched_entry(self):
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        entry = DistillationTriggerHook._format_enriched_entry(
-            text="Two credential chains coexist on this machine",
-            date_str="2026-03-23",
-            source_file="DailyActivity/2026-03-23.md",
-            commit_hash="aca865b",
-        )
-        assert "2026-03-23" in entry
-        assert "credential" in entry.lower()
-        assert "DailyActivity/2026-03-23.md" in entry
-        assert "aca865b" in entry
-
-    def test_format_enriched_entry_no_commit(self):
-        """Should work without a commit hash."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        entry = DistillationTriggerHook._format_enriched_entry(
-            text="Some lesson learned",
-            date_str="2026-04-01",
-            source_file="DailyActivity/2026-04-01.md",
-            commit_hash=None,
-        )
-        assert "2026-04-01" in entry
-        assert "DailyActivity/2026-04-01.md" in entry
-        assert "commit" not in entry.lower()
 
 
 # ── last_search_errors regression ──

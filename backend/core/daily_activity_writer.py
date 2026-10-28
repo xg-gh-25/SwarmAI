@@ -149,134 +149,55 @@ def _validate_title(
         # Skip pure numbers or very short single-word titles
         if cleaned.isdigit():
             continue
-        return cleaned[:60]
+        return cleaned
 
     # Fallback: use first substantive topic
     for topic in (topics or []):
         if len(topic) >= _TITLE_MIN_LEN and not topic.isdigit():
-            return topic[:60]
+            return topic
 
     return "Untitled"
 
 
 def _format_session_entry(summary: StructuredSummary, context: HookContext) -> str:
-    """Format a StructuredSummary into a markdown session entry.
-
-    Header format: ``## Session — HH:MM | session_id[:8] | Title``
-
-    The format is designed around three questions:
-    1. What was delivered? (deliverables)
-    2. Where are the outputs? (key outputs)
-    3. What did we learn? (lessons)
-
-    Plus COE signal, decisions, and continuation context.
-    Routine/low-signal sections are omitted entirely when empty.
-    """
+    """Render one complete, human-readable DailyActivity v2 session block."""
     lines: list[str] = []
-    short_id = context.session_id[:8] if context.session_id else "unknown"
-    title = _validate_title(
-        summary.session_title, context.session_title, summary.topics
-    )
+    session_id = context.session_id or "unknown"
+    title = _validate_title(summary.session_title, context.session_title, summary.topics)
     ts = summary.timestamp or datetime.now().strftime("%H:%M")
+    sentence = summary.summary_sentence or "Session completed without a substantive update."
 
-    # COE badge in header when applicable
-    coe_badge = ""
-    if summary.coe_signal == "resolution":
-        coe_badge = " 🔴 COE-RESOLUTION"
-    elif summary.coe_signal == "candidate":
-        coe_badge = " 🟡 COE-CANDIDATE"
+    lines.extend([
+        f"## {ts} | {session_id} | {title}",
+        f"Summary: {sentence}",
+    ])
+    if summary.resolves:
+        lines.append("resolves: [" + ", ".join(summary.resolves) + "]")
+    lines.extend(["", "**Delivered:**"])
+    delivered = [*summary.deliverables, *summary.decisions]
+    if not delivered:
+        delivered = list(summary.topics)
+    lines.extend(f"- {item}" for item in delivered)
+    if not delivered:
+        lines.append("- None recorded")
 
-    lines.append(f"## {ts} | {short_id} | {title}{coe_badge}")
+    lines.extend(["", "**Outputs:**"])
+    outputs = list(summary.key_outputs)
+    outputs.extend(f"file: {path}" for path in summary.files_modified)
+    outputs.extend(f"commit: {commit}" for commit in summary.git_commits)
+    lines.extend(f"- {item}" for item in outputs)
+    if not outputs:
+        lines.append("- None recorded")
+
+    lines.extend(["", "**Validation:**"])
+    lines.append(f"- {summary.validation_status}" if summary.validation_status else "- Not recorded")
+
+    lines.extend(["", "**Next:**"])
+    for item in summary.next_items:
+        lines.append(f"- [{item['next_id']}] {item['text']}")
+    if not summary.next_items:
+        lines.append("- None")
     lines.append("")
-
-    # --- Deliverables (what was accomplished — the headline) ---
-    if summary.deliverables:
-        lines.append("**Delivered:**")
-        for d in summary.deliverables:
-            lines.append(f"- {d}")
-        lines.append("")
-    elif summary.topics:
-        # Fallback: use topics if no LLM enrichment
-        lines.append("**What happened:**")
-        for t in summary.topics[:5]:
-            lines.append(f"- {t}")
-        lines.append("")
-
-    # --- Key Outputs (where things went) ---
-    if summary.key_outputs:
-        lines.append("**Outputs:**")
-        for o in summary.key_outputs:
-            lines.append(f"- {o}")
-        lines.append("")
-    elif summary.files_modified:
-        # Fallback: show files modified
-        lines.append("**Files:** " + ", ".join(
-            f"`{f.split('/')[-1]}`" for f in summary.files_modified[:8]
-        ))
-        lines.append("")
-
-    # --- Decisions (only when substantive) ---
-    if summary.decisions:
-        lines.append("**Decisions:**")
-        for d in summary.decisions:
-            lines.append(f"- {d}")
-        lines.append("")
-
-    # --- Lessons (the highest-value content) ---
-    if summary.lessons:
-        lines.append("**Lessons:**")
-        for l in summary.lessons:
-            lines.append(f"- {l}")
-        lines.append("")
-
-    # --- Rejected approaches (what NOT to do) ---
-    if summary.rejected_approaches:
-        lines.append("**Rejected:**")
-        for r in summary.rejected_approaches:
-            lines.append(f"- {r}")
-        lines.append("")
-
-    # --- Corrections (agent behavior corrected by user) ---
-    if summary.corrections:
-        lines.append("**Corrections:**")
-        for c in summary.corrections:
-            lines.append(f"- {c}")
-        lines.append("")
-
-    # --- Signal-driven actions (external signal → session decision causal link) ---
-    if summary.signal_driven_actions:
-        lines.append("**Signal-Driven:**")
-        for action in summary.signal_driven_actions:
-            lines.append(f"- {action}")
-        lines.append("")
-
-    # --- Process reflection (LLM meta-analysis of how the session went) ---
-    if summary.process_reflection:
-        lines.append(f"**Process Reflection:** {summary.process_reflection}")
-        lines.append("")
-
-    # --- Git ground truth (actual commits during session) ---
-    if summary.git_commits:
-        lines.append("**Git activity:**")
-        for c in summary.git_commits[:10]:  # Cap to avoid bloat
-            lines.append(f"- `{c}`")
-        lines.append("")
-
-    # --- COE context (when investigating a problem) ---
-    if summary.coe_signal and summary.coe_topic:
-        lines.append(f"**COE:** `{summary.coe_signal}` — {summary.coe_topic}")
-        lines.append("")
-
-    # --- Continuation context ---
-    tail_parts: list[str] = []
-    if summary.validation_status:
-        tail_parts.append(f"**Validation:** {summary.validation_status}")
-    if summary.continue_from:
-        tail_parts.append(f"**Next:** {summary.continue_from}")
-    if tail_parts:
-        lines.extend(tail_parts)
-        lines.append("")
-
     return "\n".join(lines)
 
 
@@ -397,7 +318,7 @@ def upsert_session_block(
         appended = span is None
         if span is not None:
             # MOVE, not in place: the prompt injects the file's tail as "newest", so a
-            # session's latest write must be last (prompt_builder._daily_within_budget).
+            # session's latest write must be last (memory_injection.select_daily_activity).
             before = content[:span[0]].rstrip("\n")
             after = content[span[1]:].lstrip("\n")
             content = before + ("\n\n" + after if after.strip() else "")
@@ -469,6 +390,9 @@ def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -
         "session_start": context.session_start_time,
         "message_count": context.message_count,
         "title": summary.session_title,
+        "summary_sentence": summary.summary_sentence,
+        "next_items": summary.next_items,
+        "resolves": summary.resolves,
         # Core fields (rule-based)
         "topics": summary.topics,
         "decisions": summary.decisions,
@@ -618,6 +542,34 @@ def _sanitize_summary_injection(summary: StructuredSummary) -> None:
                 setattr(summary, fname, kept)
 
 
+def read_open_next_items(workspace_path: Path, *, days: int = 7) -> list[dict[str, str]]:
+    """Return unresolved Next items from recent JSONL sidecars, oldest first."""
+    directory = Path(workspace_path) / "Knowledge" / "DailyActivity"
+    files = sorted(directory.glob("*.jsonl"), reverse=True)[:days]
+    records = [record for path in reversed(files) for record in read_jsonl_sidecar(path)]
+    resolved = {
+        next_id
+        for record in records
+        for next_id in record.get("resolves", [])
+        if isinstance(next_id, str)
+    }
+    seen: set[str] = set()
+    open_items: list[dict[str, str]] = []
+    for record in records:
+        for item in record.get("next_items", []):
+            if not isinstance(item, dict):
+                continue
+            next_id = item.get("next_id")
+            text = item.get("text")
+            if not isinstance(next_id, str) or not isinstance(text, str):
+                continue
+            if next_id in resolved or next_id in seen:
+                continue
+            seen.add(next_id)
+            open_items.append({"next_id": next_id, "text": text})
+    return open_items
+
+
 async def write_daily_activity(
     summary: StructuredSummary,
     context: HookContext,
@@ -625,17 +577,8 @@ async def write_daily_activity(
 ) -> Path:
     """Upsert this session's summary in today's DailyActivity file + JSONL sidecar.
 
-    Writes two files:
-    1. ``YYYY-MM-DD.md`` — the session's one summary block (always written)
-    2. ``YYYY-MM-DD.jsonl`` — the session's one record (best-effort, non-blocking)
-
-    A session summarized again (the post-session hook can run more than once)
-    replaces its block and record instead of adding another. A session past the
-    hook's message window keeps only its latest window's summary here; the earlier
-    one was already read by distillation (it runs at every session close) and the
-    transcript keeps every message.
-
-    Returns the path to the written markdown file.
+    The markdown is the human-readable primary record. The JSONL sidecar keeps
+    the complete structured fields used by summary and injection readers.
     """
     if workspace_path is None:
         from .initialization_manager import initialization_manager

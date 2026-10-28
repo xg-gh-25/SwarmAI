@@ -1,11 +1,7 @@
 # Manifest for persist (formerly save-memory)
+# No bundled scripts: the skill submits units with `"$SWARM_BACKEND_BIN" ingest submit`
+# and CDF's writer does every write (the old locked_write.py copy was removed at the
+# CDF cutover).
 name: persist
-version: "1.0.0"
+version: "2.0.0"
 tier: always
-
-scripts:
-  - path: scripts/locked_write.py
-    description: "Locked read-modify-write for MEMORY.md and EVOLUTION.md."
-
-resources:
-  - scripts

@@ -15,6 +15,11 @@ system Python:
 - ``hook <event> --host <host>`` — a coding agent host's hook (Claude Code, ...) hands
   its event JSON on stdin (``core/host_hooks.py``). Always exits 0: it never blocks
   the host.
+- ``ingest submit --source S1 --evidence <event-id|last-user> --payload-json JSON`` —
+  enqueue one or more ``contracts_v2`` units tied to the current user turn; optional
+  ``--wait N`` polls the stored outcome. It never processes work.
+- ``ingest wake [--wait N]`` — nudge the daemon's CDF worker and print the 24h Flow
+  overview (s_memory-distill's manual trigger). It never processes work either.
 - ``py <script.py> [args]`` / ``py -m <module> [args]`` / ``py -c <code> [args]`` — run
   Python with the interpreter and modules this program carries (``runpy``). Product code
   that used to spawn a system ``python`` (MCP scripts, the self-upgrader, scheduled jobs,
@@ -138,6 +143,169 @@ def get_log_dir() -> Path:
     return log_dir
 
 
+# ── ingest ────────────────────────────────────────────────────────────────────
+
+def run_ingest(argv: "list[str]") -> int:
+    """Enqueue one CDF candidate and optionally poll its stored outcome."""
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(prog="python-backend ingest")
+    commands = parser.add_subparsers(dest="command", required=True)
+    submit = commands.add_parser("submit")
+    submit.add_argument("--source", choices=("S1",), default="S1")
+    submit.add_argument("--ref", dest="source_ref")
+    submit.add_argument("--payload-json", required=True)
+    submit.add_argument("--evidence", required=True)
+    submit.add_argument("--wait", type=float, default=0.0)
+    sync_record = commands.add_parser("sync-record")
+    sync_record.add_argument("--origin", required=True)
+    sync_record.add_argument("--paths", nargs="+", required=True)
+    wake_cmd = commands.add_parser("wake")
+    wake_cmd.add_argument("--wait", type=float, default=0.0)
+    eval_cmd = commands.add_parser("eval-export")
+    eval_cmd.add_argument("--since", required=True)
+    eval_cmd.add_argument("--until")
+    eval_cmd.add_argument("--out", required=True)
+    args = parser.parse_args(argv)
+
+    if args.command == "eval-export":
+        # Design §14.2: every CDF outcome (judge stage live + archived, extractor
+        # rejects) as JSONL for batch evaluation. Read-only on ingestion.db.
+        import sqlite3
+        from collections import Counter
+        from core.ingestion.api import connect_ro
+        from core.ingestion.eval_log import export
+        try:
+            conn = connect_ro()
+        except (FileNotFoundError, sqlite3.OperationalError):
+            print(json.dumps({"status": "empty", "detail": "no ingestion store yet"}))
+            return 0
+        counts: Counter = Counter()
+        out = Path(args.out).expanduser()
+        try:
+            with out.open("w", encoding="utf-8") as handle:
+                for item in export(conn, args.since, args.until):
+                    counts[(item["stage"], item["state"])] += 1
+                    handle.write(json.dumps(item, ensure_ascii=False, sort_keys=True) + "\n")
+        finally:
+            conn.close()
+        print(json.dumps({"status": "exported", "out": str(out), "records": sum(counts.values()),
+                          "by_stage_state": {f"{k[0]}:{k[1]}": v for k, v in sorted(counts.items())}},
+                         ensure_ascii=False))
+        return 0
+
+    if args.command == "wake":
+        # s_memory-distill's manual trigger: nudge the daemon's worker (it owns the
+        # lanes and the writer; this process never processes work), then print the
+        # Flow overview so the skill can summarise what was audited.
+        from core.ingestion import queries
+        from core.ingestion.wake import wake
+        wake()
+        if args.wait > 0:
+            time.sleep(min(args.wait, 60.0))
+        try:
+            flow = queries.flow_overview("24h")
+        except FileNotFoundError:   # a fresh install: the worker has not created its store yet
+            print(json.dumps({"status": "woken", "flow": None,
+                              "detail": "no ingestion store yet"}, ensure_ascii=False))
+            return 0
+        print(json.dumps({"status": "woken", "flow": flow}, ensure_ascii=False, default=str))
+        return 0
+
+    if args.command == "sync-record":
+        from core.ingestion.governed_edit import (
+            apply_sync, sync_baseline_revision, sync_revision_of,
+        )
+        from core.ingestion.writer import _relative, ensure_baseline
+
+        baseline = ensure_baseline()
+        paths = [Path(value).expanduser().resolve(strict=False) for value in args.paths]
+        before = {_relative(path): sync_baseline_revision(path, baseline) for path in paths}
+        after = {_relative(path): sync_revision_of(path) for path in paths}
+        try:
+            operations = apply_sync(paths, before, after, args.origin)
+        except (OSError, PermissionError, ValueError) as exc:
+            print(json.dumps({"status": "rejected", "detail": str(exc)}, ensure_ascii=False))
+            return 2
+        print(json.dumps({"status": "recorded", "operations": operations}, ensure_ascii=False))
+        return 0
+
+    raw = sys.stdin.read() if args.payload_json == "-" else args.payload_json
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(json.dumps({"status": "rejected", "detail": f"invalid JSON: {exc}"}, ensure_ascii=False))
+        return 2
+
+    session_id = os.environ.get("SWARM_APP_SESSION_ID", "").strip()
+    evidence = args.evidence
+    if evidence == "last-user":
+        from core.session_inputs import latest_user_event_id
+        evidence = latest_user_event_id(session_id) or ""
+    if not session_id or not evidence:
+        print(json.dumps({"status": "rejected", "detail": "current user evidence is required"},
+                         ensure_ascii=False))
+        return 2
+
+    from core.ingestion.sources.s1_user import submit_units
+    payloads = payload if isinstance(payload, list) else [payload]
+    try:
+        results = submit_units(
+            payloads, session_id=session_id, evidence=evidence,
+            turn_kind="user" if os.environ.get("SWARM_LAST_USER_EVENT_ID") else "non_user",
+            source_ref=args.source_ref)
+    except (TypeError, ValueError) as exc:
+        print(json.dumps({"status": "rejected", "detail": str(exc)}, ensure_ascii=False))
+        return 2
+    for result in results:
+        if result.detail:
+            print(result.detail)
+        else:
+            print(json.dumps(result.__dict__, ensure_ascii=False))
+    if not results or not args.wait:
+        return 0 if results else 1
+    result = results[0]
+    if result.status not in {"queued", "duplicate"} or not result.candidate_id:
+        return 1
+
+    deadline = time.monotonic() + max(0.0, args.wait)
+    from core.ingestion.store import connect_ro
+    while time.monotonic() < deadline:
+        try:
+            conn = connect_ro()
+            try:
+                candidate = conn.execute(
+                    "SELECT state, versions FROM ingestion_inbox WHERE id=?", (result.candidate_id,)
+                ).fetchone()
+                units = conn.execute(
+                    "SELECT state, destination, reason FROM ingestion_units WHERE candidate_id=? ORDER BY unit_id",
+                    (result.candidate_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+            if candidate and candidate["state"] == "done":
+                rendered_units = []
+                for unit_row in units:
+                    item = dict(unit_row)
+                    destination = json.loads(item["destination"] or "{}")
+                    item["destination"] = destination
+                    item["text"] = payloads[0] if len(payloads) == 1 else payloads
+                    if destination.get("store") == "COMMON_DDD":
+                        item["hint"] = "要让它每轮生效，请用一句话直接说出这条规则。"
+                    rendered_units.append(item)
+                print(json.dumps({
+                    "status": "done", "candidate_id": result.candidate_id,
+                    "units": rendered_units,
+                }, ensure_ascii=False))
+                return 0
+        except (FileNotFoundError, OSError):
+            pass
+        time.sleep(0.3)
+    print("已收到，结果见 Cognitive Distillation Flow")
+    return 0
+
+
 def write_startup_log(message: str):
     """Write a startup log message before main logging is initialized."""
     try:
@@ -210,6 +378,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return run_hook(argv[1:])
     if argv and argv[0] == "knowledge":
         return run_knowledge(argv[1:])
+    if argv and argv[0] == "ingest":
+        return run_ingest(argv[1:])
     if argv and argv[0] == "daemon":
         argv = argv[1:]
     return run_daemon(argv)

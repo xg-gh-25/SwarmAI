@@ -47,7 +47,7 @@ def test_main_moves_and_the_synced_tree_is_tested_again_before_it_lands(rig):
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     moved = r.commit_on_main({"docs/notes.md": "unrelated\n"})
     out = r.v1("land", "--message", "fix: swap\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     assert _main(r) == moved and r.state()["status"] == "active", out

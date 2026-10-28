@@ -87,7 +87,7 @@ MEMORY_PREFIX_TO_SECTION = {v["prefix"]: k for k, v in MEMORY_SECTIONS.items()}
 # When a new reference section is added to KNOWLEDGE.md, add it here.
 KNOWLEDGE_EVERGREEN_SECTIONS = frozenset({
     "Architecture Overview [model]",
-    "The 11 Context Files [model]",
+    "The 12 Context Files [model]",
     "Claude Code CLI Hidden Defaults [constraint]",
     "Code Documentation Standards [guideline]",
     "Codebase Navigation [model]",
@@ -383,42 +383,6 @@ _BOLD_LEAD_RE = re.compile(r"^\*\*(.+?)\*\*\s*(?:—\s*)?(.*)$")
 _LEAD_SCAFFOLD_RE = re.compile(r"^\s*(?:-\s+)?(?:\d{4}-\d{2}-\d{2}:?\s+)?(?:\[\w+\]\s+)?")
 
 
-def canonical_entry_from_text(
-    text: str,
-    entry_type: str,
-    date_str: str,
-    *,
-    run_id: "str | None" = None,
-    source: str = "auto",
-) -> str:
-    """Build a canonical MEMORY entry (lead + metadata) from free text.
-
-    For writers that receive a plain sentence rather than (title, body) parts —
-    Save-to-Memory extraction (``- 2026-10-25: Title — body``) and the runtime
-    correction pitfall. Strips a leading ``- ``, ``YYYY-MM-DD:`` and ``[type] ``,
-    collapses newlines, splits title/body on the first ``—`` (no dash: title = the
-    first 60 chars, body = the whole text), then calls ``format_memory_entry``. The
-    type is given by the caller and never re-guessed, so a Save-to-Memory bucket
-    keeps its section's type (design 2026-10-25-memory-write-entry-dedup §3.6).
-    """
-    clean = " ".join(text.split())
-    clean = _LEAD_SCAFFOLD_RE.sub("", clean, count=1).strip()
-    bold = _BOLD_LEAD_RE.match(clean)
-    if bold:
-        title, body = bold.group(1).strip(), bold.group(2).strip() or bold.group(1).strip()
-    elif "—" in clean:
-        title, body = (part.strip(" —-") for part in clean.split("—", 1))
-        if not title:
-            title = body[:60].strip()
-        if not body:
-            body = title
-    else:
-        title, body = clean[:60].strip(), clean
-    lead, meta = format_memory_entry(entry_type, title.strip("*"), body, date_str,
-                                     run_id, source=source)
-    return f"{lead}\n{meta}"
-
-
 TAINTS = ("external",)
 
 
@@ -691,11 +655,6 @@ def _scan_entry(lines: "list[str]", start: int) -> "tuple[int, int | None, int]"
            and not _META_RE.match(lines[end]) and not _HEADING_RE.match(lines[end])):
         end += 1
     return text_end, meta, end
-
-
-def entry_span_end(lines: "list[str]", start: int) -> int:
-    """Exclusive end of the entry whose lead bullet is ``lines[start]`` (see _scan_entry)."""
-    return _scan_entry(lines, start)[2]
 
 
 def _h3_span_lines(lines: "list[str]") -> "set[int]":
@@ -1034,50 +993,6 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
     return result
 
 
-def mark_superseded(
-    content: str,
-    old_anchor: str,
-    new_anchor: str,
-    today: date,
-) -> str:
-    """Mark the DDD entry titled ``old_anchor`` as superseded by ``new_anchor``.
-
-    Bi-temporal supersession (方案A, run_24299917) — the DDD-native counterpart of
-    ``memory_index.mark_entry_superseded`` (which is KEY-anchored + down-weights;
-    this is TITLE-anchored + filters). Sets ``valid_until=today`` and
-    ``superseded_by=new_anchor`` on the matching entry, then re-serializes via
-    ``inject_entry_metadata``. The bullet is NEVER stripped or deleted — its
-    lineage is preserved (Principle 1); it is merely filtered from default recall
-    (``recall_multi._ddd_entry_hits``) and skipped by age-decay (``assess_decay``).
-
-    Human/cultivation-marked ONLY — supersession is NOT auto-detected (方案B is
-    out of scope). ``new_anchor`` is a human-readable title-slug pointer to the
-    superseding entry, not a strict FK (appropriate for a human-marked signal).
-
-    Idempotent: re-marking an already-superseded entry UPDATES the pointer
-    (no duplicate entry, no stacked comment). No-op (returns ``content``
-    unchanged) if no entry's title matches ``old_anchor``.
-    """
-    # Guard the anchor grammar (meta-review MED): `|` or `-->` in the anchor would
-    # void the ENTIRE metadata comment on re-parse (the field is pipe/terminator
-    # delimited), silently discarding ref/last/decay. Reject rather than corrupt —
-    # matters once 方案B wires an automated caller.
-    if "|" in new_anchor or "-->" in new_anchor:
-        raise ValueError(
-            f"superseded_by anchor may not contain '|' or '-->': {new_anchor!r}"
-        )
-    entries = parse_entries(content)
-    matched = [e for e in entries if e.title == old_anchor]
-    if not matched:
-        return content  # no-op — nothing matches the anchor
-    for e in matched:
-        e.valid_until = today
-        e.superseded_by = new_anchor
-    # inject_entry_metadata rewrites ONLY the matched entries' comment lines
-    # (each parsed entry by its own bullet line); untouched entries pass through verbatim.
-    return inject_entry_metadata(content, matched)
-
-
 def bump_references(
     entries: list[EntryMetadata],
     text: str,
@@ -1298,95 +1213,6 @@ def _resolve_archive_path(
     return doc_dir / archive_name
 
 
-def archive_entries(
-    project_dir: Path, entries: list[EntryMetadata],
-    archive_name: str = "IMPROVEMENT-archive.md",
-    source_path: "Path | None" = None,
-) -> int:
-    """Append entries to an archive file, at most once each; return the count archived.
-
-    Creates the archive file if it doesn't exist. Appends each entry's full raw_text
-    + metadata comment and marks every passed entry 'archived' in-place. IDEMPOTENT:
-    an entry whose content_signature already matches an entry in the archive (or an
-    earlier entry in the same batch) is not appended again — the comparison is
-    per-entry equality, never a substring of the file, so a short entry contained in
-    a longer archived one is still a different entry. Existing archive content is
-    only ever appended to, never rewritten. This function does NOT remove the
-    entries from their live doc; callers that move an entry use
-    ``archive_and_strip_lines`` (line-precise) or ``_archive_and_strip``.
-
-    Args:
-        project_dir: Path to the project directory (e.g., Projects/SwarmAI/)
-        entries: Entries to archive (should be dormant or otherwise marked)
-        archive_name: Archive filename (default IMPROVEMENT-archive.md;
-            MEMORY.md lifecycle passes "MEMORY-archive.md").
-        source_path: The resolved path of the doc these entries came from. When
-            given, the archive lands as its SIBLING (source_path.parent) — the
-            correct co-location. When omitted, the doc dir is derived from
-            archive_name via ddd_write_path (see _resolve_archive_path). Callers
-            SHOULD pass it (they hold the resolved doc path) so the hot decay path
-            never relies on the fallback.
-
-    Returns:
-        Number of passed entries now present in the archive (newly appended or
-        already there).
-    """
-    if not entries:
-        return 0
-
-    archive_path = _resolve_archive_path(project_dir, archive_name, source_path)
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Function-local import (no cycle: ddd_cultivation imports this module lazily).
-    from core.ddd_cultivation import content_signature  # noqa: PLC0415
-
-    present = set(_archived_signatures(archive_path))
-
-    # Build archive content to append
-    archive_lines: list[str] = []
-    for entry in entries:
-        # Use raw_text if available, otherwise reconstruct
-        text = entry.raw_text or f"- [{entry.entry_type}] **{entry.title}** — (archived)"
-        # Mark archived even when the append is skipped: the entry IS archived.
-        entry.decay_state = "archived"
-        sig = content_signature(text)
-        if sig and sig in present:
-            continue  # already in the archive (or earlier in this batch)
-        if sig:
-            present.add(sig)
-        archive_lines.append(text)
-        archive_lines.append(entry.to_comment())
-        archive_lines.append("")  # Blank separator
-
-    if not archive_lines:
-        return len(entries)
-
-    new_content = "\n".join(archive_lines)
-
-    # Write to archive file (create or APPEND). Append mode never reads or rewrites
-    # the existing bytes (archives can be tens of MB), so existing archive content
-    # cannot be truncated by a failed write of the whole file.
-    if archive_path.exists():
-        with archive_path.open("rb") as fh:
-            fh.seek(0, 2)
-            ends_with_nl = fh.tell() == 0
-            if not ends_with_nl:
-                fh.seek(-1, 2)
-                ends_with_nl = fh.read(1) == b"\n"
-        with archive_path.open("a", encoding="utf-8") as fh:
-            fh.write(("" if ends_with_nl else "\n") + "\n" + new_content)
-    else:
-        header = "# Archived Knowledge Entries\n\n"
-        header += "_Entries archived by the Knowledge Lifecycle decay engine. "
-        header += "These entries had no references for 90+ days._\n\n"
-        archive_path.write_text(
-            header + new_content, encoding="utf-8"
-        )
-    _remember_signatures(archive_path, present)
-
-    return len(entries)
-
-
 # (path, mtime_ns, size) → signatures of that archive. Parsing a large archive costs
 # seconds, and the decay pass and reclaim can both archive in one pass, so the set is
 # cached and refreshed only when the file changes (stat key) or after our own append.
@@ -1429,143 +1255,6 @@ def _remember_signatures(archive_path: Path, sigs: "set[str]") -> None:
     except FileNotFoundError:
         return
     _ARCHIVE_SIG_CACHE[str(archive_path)] = (st.st_mtime_ns, st.st_size, frozenset(sigs))
-
-
-def archive_and_strip_lines(
-    content: str,
-    selected: "list[EntryMetadata]",
-    project_dir: Path,
-    *,
-    archive_name: str = "IMPROVEMENT-archive.md",
-    source_path: "Path | None" = None,
-) -> "tuple[int, str]":
-    """Move ``selected`` entries out of ``content``: archive them, then strip their blocks.
-
-    Line-precise: each entry's block is removed by its own ``line_number`` (as
-    ``parse_entries`` assigned it on this same ``content``), so a same-title twin in
-    the same section stays live. The archive append happens FIRST; if it raises, the
-    exception propagates and nothing is stripped, so an entry is never removed from
-    the live doc without being in the archive. Does NOT write ``content`` back —
-    callers persist the returned string (the decay pass injects metadata into it
-    before its single write).
-
-    Returns:
-        (count archived, content with the selected blocks removed)
-    """
-    if not selected:
-        return 0, content
-    archived = archive_entries(project_dir, selected, archive_name=archive_name,
-                               source_path=source_path)
-    return archived, _strip_entries_by_line(content, {e.line_number for e in selected})
-
-
-def archive_raw_lines(
-    project_dir: Path, lines: list[str], archive_name: str,
-    source_path: "Path | None" = None,
-    block_header: "str | None" = None,
-    create_header: "str | None" = None,
-    dedup_by_signature: bool = False,
-) -> int:
-    """Append pre-formatted raw markdown lines to an archive file (the raw-line
-    sibling of archive_entries).
-
-    THE convergence point for MEMORY-archive writers that operate on raw stripped
-    markdown lines rather than EntryMetadata (distillation RC-archival + section-cap,
-    context_health open-threads). Those writers used to each hardcode
-    ``ws_path/"Knowledge"/"Archives"`` + their own create/append ``write_text`` — a
-    split, git-tracked (public-repo) destination. This routes them ALL through the
-    single ``_resolve_archive_path`` resolver, so passing ``source_path`` =
-    ``.context/MEMORY.md`` lands the archive as its sibling in the gitignored,
-    private ``.context/`` (the privacy partition), never in a tracked dir.
-
-    Unlike archive_entries, this does NOT reconstruct entries from EntryMetadata —
-    it takes the caller's already-stripped lines verbatim (no lossy
-    line→EntryMetadata→line round-trip that would re-run the classifier the wider
-    refactor is fixing).
-
-    Args:
-        project_dir: Project dir (used ONLY by the _resolve_archive_path fallback
-            when source_path is None; ignored when source_path is given).
-        lines: Pre-formatted markdown lines to archive (verbatim).
-        archive_name: Archive filename (e.g. "MEMORY-archive-2026-08.md").
-        source_path: The resolved path of the doc these lines came from. When given,
-            the archive lands as its SIBLING — pass the .context/MEMORY.md path so
-            the archive stays private.
-        block_header: Optional header line prepended before this block (e.g.
-            "### Archived Recent Context (2026-08-14)"). None → no block header.
-        create_header: Optional file header used ONLY when creating the archive.
-            MUST be supplied by the caller for MEMORY archives — do NOT fall back to
-            archive_entries' "no references for 90+ days" decay blurb, which is
-            factually wrong for RC/OT/section-cap content. None → a neutral
-            "# Memory Archive" header.
-        dedup_by_signature: When True, each incoming line whose format-agnostic
-            ``content_signature`` already appears in the existing shard is SKIPPED
-            (not appended). This is the shared append-layer guard that makes
-            fold + size-valve double-move STRUCTURALLY impossible — a lesson already
-            archived (in ANY bullet format) is never written twice, regardless of
-            which writer sends it. Default False preserves the legacy append-always
-            behavior for existing callers (MEMORY reclaim). A block that reduces to
-            an empty signature (no real content) is never treated as a dup.
-
-    Returns:
-        Number of lines archived (0 = no-op, nothing written; dup-skipped lines
-        do not count).
-    """
-    if not lines:
-        return 0
-
-    archive_path = _resolve_archive_path(project_dir, archive_name, source_path)
-    archive_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if dedup_by_signature:
-        # Skip any incoming ITEM whose content_signature already appears in the shard.
-        # An incoming `lines` element may be a MULTI-LINE block (a folded/evicted
-        # entry), and content_signature collapses ALL internal whitespace to single
-        # spaces (ddd_cultivation) — so a block reduces to ONE signature. We must
-        # therefore match that block-signature against a WHOLE-SHARD normalized
-        # haystack (a substring test), NOT against per-line signatures (which could
-        # never reconstruct a multi-line block's sig — the Gate-2 finding B bug).
-        # content_signature is the SSOT for the needle; the haystack applies the SAME
-        # final normalization (drop **, lowercase, collapse whitespace) so the needle,
-        # whose edge markers/attribution are additionally stripped, is a substring.
-        # Function-local import (verified: no cycle — cultivation imports lifecycle).
-        from core.ddd_cultivation import content_signature  # noqa: PLC0415
-        import re as _re  # noqa: PLC0415
-
-        def _normalize_haystack(text: str) -> str:
-            return _re.sub(r"\s+", " ", text.replace("**", " ")).strip().lower()
-
-        haystack = ""
-        if archive_path.exists():
-            haystack = _normalize_haystack(archive_path.read_text(encoding="utf-8"))
-        kept: list[str] = []
-        for item in lines:
-            sig = content_signature(item)
-            if sig and sig in haystack:
-                continue  # already archived (any format) — do not double-move
-            if sig:
-                haystack += " " + sig  # guard intra-batch dups too
-            kept.append(item)
-        lines = kept
-        if not lines:
-            return 0
-
-    block_parts: list[str] = []
-    if block_header:
-        block_parts.append(block_header)
-    block_parts.extend(lines)
-    block = "\n".join(block_parts)
-
-    if archive_path.exists():
-        existing = archive_path.read_text(encoding="utf-8")
-        if not existing.endswith("\n"):
-            existing += "\n"
-        archive_path.write_text(existing + "\n" + block + "\n", encoding="utf-8")
-    else:
-        header = (create_header or "# Memory Archive").rstrip("\n") + "\n\n"
-        archive_path.write_text(header + block + "\n", encoding="utf-8")
-
-    return len(lines)
 
 
 # ── Entry Noise Metric (read-only diagnostic) ─────────────────────────────────
@@ -1841,7 +1530,6 @@ def reclaim_noise_entries(
     evergreen_sections: "frozenset[str] | set[str] | None" = None,
     archive_name: str = "IMPROVEMENT-archive.md",
     source_path: "Path | None" = None,
-    dry_run: bool = True,
     skip_h3_spans: bool = False,
 ) -> ReclaimReport:
     """Reclaim (archive + physically strip) stale operational-noise entries.
@@ -1907,13 +1595,6 @@ def reclaim_noise_entries(
 
     report.candidates = [e.title for e in selected]
 
-    if dry_run or not selected:
-        return report
-
-    # Apply via the shared archive+strip tail (also used by retire_entry;
-    # recovery = archive + git, NO .bak — see _archive_and_strip docstring below).
-    _archive_and_strip(content, selected, today, project_dir, report,
-                       archive_name=archive_name, source_path=source_path)
     return report
 
 
@@ -1925,7 +1606,6 @@ def reclaim_duplicate_entries(
     evergreen_sections: "frozenset[str] | set[str] | None" = None,
     archive_name: str = "IMPROVEMENT-archive.md",
     source_path: "Path | None" = None,
-    dry_run: bool = True,
     skip_h3_spans: bool = False,
 ) -> ReclaimReport:
     """Reclaim ALREADY-ACCUMULATED EXACT duplicates (archive + physically strip).
@@ -1980,7 +1660,7 @@ def reclaim_duplicate_entries(
     # content_signature. Every type is eligible: a second copy of a decision in the
     # same section carries nothing the first lacks, and section scoping keeps a
     # deliberate cross-section repeat. Only the COE Registry is excluded — it is a
-    # keyed record updated in place (distillation _write_coe_registry), not a list.
+    # keyed record (one entry per COE topic, frozen at the CDF cutover), not a list.
     def _dedup_excluded(e: EntryMetadata) -> bool:
         return e.section == "COE Registry"
 
@@ -2019,74 +1699,7 @@ def reclaim_duplicate_entries(
 
     report.candidates = [e.title for e in selected]
 
-    if dry_run or not selected:
-        return report
-
-    # LINE-PRECISE archive+strip (NOT _archive_and_strip's (title,section) set-strip).
-    # A dedup group shares one content_signature — and since content_signature is
-    # title-INCLUSIVE, the non-survivors necessarily share the survivor's
-    # (title, section). So _archive_and_strip's set-strip would remove the SURVIVOR
-    # too (it can't tell them apart by title) — that is exactly the data-loss the
-    # old ambiguous-guard tried to dodge, at the cost of making dedup a permanent
-    # no-op (every real signature-dup is same-title). The correct identity for
-    # dedup is the entry's own line span. archive the non-survivors, then strip
-    # ONLY their blocks by line_number, leaving the survivor untouched.
-    # Strip by the entry's own 0-based line index. parse_entries ALWAYS assigns a
-    # real index (0 is valid — an entry at the very first line), so do NOT filter
-    # `> 0` (that would leave a line-0 dup un-stripped — the invariant-weakening
-    # Gate-2 flagged). `selected` are all parsed entries, so every line_number is
-    # genuine; a synthesized entry (line_number defaulting to 0) never reaches here.
-    report.archived, report.new_content = archive_and_strip_lines(
-        content, selected, project_dir,
-        archive_name=archive_name, source_path=source_path,
-    )
-    if source_path is not None:
-        Path(source_path).write_text(report.new_content, encoding="utf-8")
     return report
-
-
-def _archive_and_strip(
-    content: str,
-    selected: list[EntryMetadata],
-    today: date,
-    project_dir: Path,
-    report: ReclaimReport,
-    *,
-    archive_name: str,
-    source_path: "Path | None",
-    include_prose: bool = False,
-) -> None:
-    """Shared apply-tail for reclaim_noise_entries AND retire_entry (R25 dedup):
-    archive the `selected` entries to `archive_name`, physically strip them from
-    `content` by (title, section) identity, and — if `source_path` is given —
-    persist the stripped content (NO .bak; recovery = archive + git, see below).
-    Mutates `report` (sets .archived + .new_content). Selection is the CALLER's
-    job; this is the common machinery both selection strategies share.
-
-    Strip by (title, section) identity — NOT title alone — so a keep-class entry
-    that merely SHARES a title with a selected one is never deleted (adversarial
-    C1: title-only strip silently destroyed protected knowledge that wasn't even
-    archived).
-
-    Recovery of a stripped entry has TWO independent, live paths — NO dated .bak
-    (run_a6482355): (1) `archive_entries` above appends every stripped entry (full
-    raw_text + metadata) to <archive_name>, which recall/FTS reads — the entry is
-    never lost, only moved; (2) the source doc is git-tracked and the workspace
-    auto-commits many times/minute, so `git show HEAD~N:<file>` recovers any
-    pre-strip whole-file state (dirty window negligible). The old dated .bak was a
-    THIRD copy nobody reads that silted into a graveyard (14 stale .bak purged
-    across DDDs 2026-07-20) — a disaster-recovery copy masquerading as safety
-    (Principle 1 / STEERING #2). Removed: archive + git already make recovery robust.
-    """
-    archived = archive_entries(project_dir, selected, archive_name=archive_name,
-                               source_path=source_path)
-    report.archived = archived
-    report.new_content = _strip_entries(
-        content, {(e.title, e.section) for e in selected},
-        include_prose=include_prose,
-    )
-    if source_path is not None:
-        Path(source_path).write_text(report.new_content, encoding="utf-8")
 
 
 class RetireError(ValueError):
@@ -2104,7 +1717,6 @@ def retire_entry(
     *,
     archive_name: str = "IMPROVEMENT-archive.md",
     source_path: "Path | None" = None,
-    dry_run: bool = True,
     force: bool = False,
     today: "date | None" = None,
     evergreen_sections: "frozenset[str] | set[str] | None" = None,
@@ -2173,176 +1785,10 @@ def retire_entry(
         )
 
     report.candidates = [entry.title]
-    if dry_run:
-        return report
-
-    _archive_and_strip(content, [entry], today=today or date.today(),
-                       project_dir=project_dir, report=report,
-                       archive_name=archive_name, source_path=source_path,
-                       include_prose=True)
     return report
 
 
-def _strip_entries(content: str, keys: "set[tuple[str, str]]", *,
-                   include_prose: bool = False) -> str:
-    """Return content with the bullet blocks for `keys` physically removed.
-
-    `keys` is a set of (title, section) pairs — NOT bare titles. Matching by
-    (title, section) ensures a keep-class entry that merely shares a title with
-    a reclaimed entry in a different section is never deleted (adversarial C1).
-
-    A "block" is the entry bullet line, its continuation/wrapped lines, and the
-    trailing metadata comment (mirrors parse_entries' block boundaries). Section
-    headers and non-matching entries are preserved verbatim.
-
-    include_prose MUST match the value parse_entries used to BUILD `keys` — else
-    the line-scan here and the entry-detection there disagree and a keyed prose
-    entry is never found to strip (archive-without-strip split). The retire path
-    passes include_prose=True on BOTH; autonomous reclaim leaves it False on both.
-    """
-    if not keys:
-        return content
-
-    lines = content.splitlines()
-    result: list[str] = []
-    i = 0
-    n = len(lines)
-    current_section = ""
-
-    while i < n:
-        line = lines[i]
-        # Track section headers exactly as parse_entries does, so the
-        # (title, section) key matches the parsed entry's section.
-        if line.startswith("## ") and not line.startswith("### "):
-            current_section = line[3:].strip()
-            result.append(line)
-            i += 1
-            continue
-        m = _match_entry_line(line, include_prose=include_prose)
-        if m and (m.group(2), current_section) in keys:
-            # Skip this entry's whole span (entry_span_end: the one boundary rule).
-            i = entry_span_end(lines, i)
-            # Drop a single trailing blank separator left behind, to avoid
-            # accumulating blank-line runs across repeated reclaims.
-            if result and result[-1].strip() == "" and i < n and lines[i].strip() == "":
-                i += 1
-            continue
-        result.append(line)
-        i += 1
-
-    trailing = content.endswith("\n")
-    out = "\n".join(result)
-    if trailing and not out.endswith("\n"):
-        out += "\n"
-    return out
-
-
-def _strip_entries_by_line(content: str, start_lines: "set[int]") -> str:
-    """Return content with the bullet blocks that START at `start_lines` removed.
-
-    `start_lines` are 0-based indices into content.splitlines() — the EXACT
-    `EntryMetadata.line_number` values parse_entries assigned. Used (through
-    archive_and_strip_lines) by the orchestrator decay pass and by
-    reclaim_duplicate_entries: a dedup group shares one (title, section) (because
-    content_signature is title-inclusive), so the (title, section) set-strip in
-    _strip_entries CANNOT keep the survivor — it would strip every collider. Line
-    identity is the only precise handle. A "block" is the bullet line + its
-    continuation/wrapped lines + the trailing metadata comment (same boundary as
-    _strip_entries / parse_entries), so the survivor (a different start line) is
-    left fully intact.
-    """
-    if not start_lines:
-        return content
-    lines = content.splitlines()
-    result: list[str] = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        if i in start_lines:
-            # Skip this entry's whole span (entry_span_end: the one boundary rule).
-            i = entry_span_end(lines, i)
-            # Drop a single trailing blank separator to avoid blank-run buildup.
-            if result and result[-1].strip() == "" and i < n and lines[i].strip() == "":
-                i += 1
-            continue
-        result.append(lines[i])
-        i += 1
-    trailing = content.endswith("\n")
-    out = "\n".join(result)
-    if trailing and not out.endswith("\n"):
-        out += "\n"
-    return out
-
-
 # ── Stacked-Metadata Heal (R-1, run_55c02bbe) ─────────────────────────────────
-
-
-def collapse_stacked_metadata(content: str) -> str:
-    """Collapse consecutive ``<!-- ref ... -->`` metadata lines to ONE per entry.
-
-    Heals the orphan-metadata bug: the (since retired) ``_extract_lessons_to_memory``'s off-by-one
-    splice inserted a new entry+meta BETWEEN an existing bullet and its meta,
-    orphaning the existing meta as a 2nd consecutive metadata line.
-    ``inject_entry_metadata`` is orphan-blind (consumes only the first meta), so
-    a dedicated sweep is required.
-
-    Rule: within a run of consecutive metadata lines (no bullet/section between),
-    keep exactly ONE — preferring a real ``last:DATE`` over ``last:none`` (an
-    un-referenced orphan default). When multiple real dates collide, keep the
-    FIRST (it is the entry's own lifecycle-injected meta; later ones are
-    displaced neighbors). Bullets and single-meta entries are untouched.
-
-    Pure function (no I/O). Idempotent: a second call is a no-op.
-    """
-    if not content:
-        return content
-
-    lines = content.splitlines()
-    out: list[str] = []
-    i = 0
-    n = len(lines)
-    while i < n:
-        if _META_RE.match(lines[i]):
-            # Gather the full run of consecutive metadata lines.
-            run = [lines[i]]
-            j = i + 1
-            while j < n and _META_RE.match(lines[j]):
-                run.append(lines[j])
-                j += 1
-            out.append(_pick_meta(run))
-            i = j
-        else:
-            out.append(lines[i])
-            i += 1
-
-    trailing = content.endswith("\n")
-    result = "\n".join(out)
-    if trailing and not result.endswith("\n"):
-        result += "\n"
-    return result
-
-
-def _pick_meta(run: list[str]) -> str:
-    """Pick the surviving metadata line from a run of consecutive metas.
-
-    Priority: among lines with a real ``last:`` date (not ``none``), keep the
-    one with the highest ``ref:`` count (the most-referenced lifecycle meta);
-    ties broken by first occurrence. If every line is ``last:none``, keep the
-    highest-ref one, else the first. This never discards a real date in favour
-    of an orphan default, and prefers the richer (higher-ref) survivor when two
-    real metas ever stack (R-1 Gate-2 #5).
-    """
-    if len(run) == 1:
-        return run[0]
-
-    def ref_of(line: str) -> int:
-        m = _META_RE.match(line)
-        return int(m.group(1)) if m else -1
-
-    real = [ln for ln in run if (_META_RE.match(ln) and _META_RE.match(ln).group(2) != "none")]
-    candidates = real if real else run
-    # max() is stable on ties → keeps first occurrence among equal-ref lines.
-    return max(candidates, key=ref_of)
 
 
 # ── Private Helpers ───────────────────────────────────────────────────────────

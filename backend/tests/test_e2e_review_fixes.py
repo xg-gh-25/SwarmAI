@@ -30,46 +30,33 @@ import pytest
 class TestF1MemoryGuardBypass:
     """All MEMORY.md write paths must go through MemoryGuard sanitization."""
 
-    def test_distillation_run_locked_write_calls_sanitize(self, tmp_path):
-        """_run_locked_write should sanitize content before writing."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        memory_path = tmp_path / "MEMORY.md"
-        memory_path.write_text("## Key Decisions\n\n", encoding="utf-8")
-
-        # Content with an AWS key that should be redacted
-        text = "- 2026-04-10: Used AKIAIOSFODNN7EXAMPLE for auth"
-
-        DistillationTriggerHook._run_locked_write(memory_path, "Key Decisions", text)
-        content = memory_path.read_text(encoding="utf-8")
-        # The AWS key should be redacted by MemoryGuard
-        assert "AKIAIOSFODNN7EXAMPLE" not in content
-        assert "[REDACTED" in content
 
 
-    def test_context_health_archive_ot_sanitizes(self, tmp_path):
-        """_archive_resolved_open_threads should sanitize before writing."""
+    def test_context_health_reports_resolved_threads_without_writing(self, tmp_path):
+        """Resolved Open Threads are reported, never moved (CDF single writer):
+        MEMORY.md is byte-identical after the retention pass."""
         from hooks.context_health_hook import ContextHealthHook
 
         hook = ContextHealthHook()
         memory_path = tmp_path / ".context" / "MEMORY.md"
         memory_path.parent.mkdir(parents=True)
-        # Build content with a resolved OT containing sensitive data
         content = textwrap.dedent("""\
             # Memory
 
             ## Open Threads
 
             ### Resolved
-            - ✅ Thread with key AKIAIOSFODNN7EXAMPLE (2026-01-01)
+            - ✅ Old resolved thread (2026-01-01)
+            - ✅ Recent resolved thread (2026-11-30)
+            - 🟡 Open thread (2026-01-01)
         """)
         memory_path.write_text(content, encoding="utf-8")
-        cutoff = datetime(2026, 12, 1)
-        hook._archive_resolved_open_threads(memory_path, tmp_path, cutoff)
-        # After archival, any written content should not contain raw secrets
-        if memory_path.exists():
-            result = memory_path.read_text(encoding="utf-8")
-            assert "AKIAIOSFODNN7EXAMPLE" not in result or "[REDACTED" in result
+        found = hook._resolved_open_threads(memory_path, datetime(2026, 11, 1))
+        assert found == ["- ✅ Old resolved thread (2026-01-01)"]
+        findings = hook._enforce_retention_policies(str(tmp_path))
+        assert memory_path.read_text(encoding="utf-8") == content
+        assert not hasattr(hook, "_archive_resolved_open_threads")
+        assert all("Open Threads" not in f or "STALE" in f for f in findings)
 
     def test_memory_health_remove_entry_sanitizes(self, tmp_path):
         """memory_health write paths should have MemoryGuard integration."""
@@ -161,38 +148,6 @@ class TestF4SkillRegistrySingleton:
 # ── F5: Transcript dir resolution ────────────────────────────────────
 
 
-class TestF5TranscriptDirResolution:
-    """Transcript dir should use most-recent-activity heuristic."""
-
-    def test_picks_most_recent_subdir(self, tmp_path):
-        """Should pick subdir with most recently modified .jsonl file."""
-        from hooks.evolution_maintenance_hook import _resolve_transcripts_dir
-
-        # Create two subdirs with .jsonl files
-        old_dir = tmp_path / "old-project"
-        old_dir.mkdir()
-        old_jsonl = old_dir / "session.jsonl"
-        old_jsonl.write_text("{}", encoding="utf-8")
-        # Set old mtime
-        os.utime(old_jsonl, (1000000, 1000000))
-
-        new_dir = tmp_path / "new-project"
-        new_dir.mkdir()
-        new_jsonl = new_dir / "session.jsonl"
-        new_jsonl.write_text("{}", encoding="utf-8")
-        # Leave mtime as current (newer)
-
-        result = _resolve_transcripts_dir(tmp_path)
-        assert result == new_dir
-
-    def test_returns_parent_when_no_jsonl(self, tmp_path):
-        """Should return parent dir when no subdirs have .jsonl files."""
-        from hooks.evolution_maintenance_hook import _resolve_transcripts_dir
-
-        empty_dir = tmp_path / "empty"
-        empty_dir.mkdir()
-        result = _resolve_transcripts_dir(tmp_path)
-        assert result == tmp_path
 
 
 # ── F6: SkillGuard at discovery time ─────────────────────────────────

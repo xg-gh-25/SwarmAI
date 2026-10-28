@@ -1092,6 +1092,13 @@ export default function FileEditorCore({
         onClose();
       }
     } catch (error) {
+      const status =
+        (error as { statusCode?: number })?.statusCode ??
+        (error as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        setReloadPending(true);
+        setShowUnsavedWarning(true);
+      }
       console.error('Failed to save file:', error);
     } finally {
       setIsSaving(false);

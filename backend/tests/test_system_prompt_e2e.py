@@ -20,6 +20,7 @@ as ``_build_system_prompt`` (extracted into ``_simulate_build``).
 No database, no async, no mocks of core logic — only filesystem + pure functions.
 """
 
+import json
 import os
 import textwrap
 from pathlib import Path
@@ -151,6 +152,13 @@ TEMPLATES: dict[str, str] = {
 
         - Python, TypeScript, Rust
     """),
+    "TIMELINE.md": textwrap.dedent("""\
+        # Timeline
+
+        ## 2026-03
+        - [event] **Release** Completed release. event_kind: month_summary <!-- cand:t1 -->
+          <!-- ref:0 | last:2026-03-08 | decay:active -->
+    """),
     "PROJECTS.md": textwrap.dedent("""\
         # Projects -- What's In Flight
 
@@ -229,28 +237,19 @@ def _simulate_build(
         if bootstrap_content:
             context_text = f"## Onboarding\n{bootstrap_content}\n\n{context_text}"
 
-    # ── DailyActivity reading ──
+    # ── DailyActivity whole-unit selection ──
     daily_dir = workspace / "Knowledge" / "DailyActivity"
-    if daily_dir.is_dir():
-        da_files = sorted(
-            [f for f in daily_dir.glob("*.md") if f.stem[:4].isdigit()],
-            key=lambda f: f.stem,
-            reverse=True,
-        )[:2]
-        for daily_file in da_files:
-            daily_content = daily_file.read_text(encoding="utf-8").strip()
-            if daily_content:
-                token_count = ContextDirectoryLoader.estimate_tokens(daily_content)
-                if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                    # Drive the REAL production truncation (run_3f25a73a): a local
-                    # copy of the cap*3/4 inverse drifted from the calibrated
-                    # coefficient (Gate-1 finding A). Import the real function so
-                    # this e2e exercises the production path, not a stale copy.
-                    from core.prompt_builder import _daily_within_budget
-                    daily_content = _daily_within_budget(
-                        daily_content, TOKEN_CAP_PER_DAILY_FILE, daily_file.stem
-                    )
-                context_text += f"\n\n## Daily Activity ({daily_file.stem})\n{daily_content}"
+    if daily_dir.is_dir() and channel_context is None:
+        from datetime import date
+        from core.memory_injection import select_daily_activity
+        dated = sorted(f.stem for f in daily_dir.glob("*.md") if f.stem[:4].isdigit())
+        selector_today = date.fromisoformat(dated[-1]) if dated else date.today()
+        selected = select_daily_activity(
+            workspace, today=selector_today,
+            estimate=ContextDirectoryLoader.estimate_tokens,
+        )
+        if selected.text:
+            context_text += f"\n\n## Daily Activity (last 7 days)\n{selected.text}"
 
         # Distillation flag
         flag_path = daily_dir / ".needs_distillation"
@@ -348,6 +347,16 @@ def workspace(tmp_path: Path) -> Path:
         "# 2026-03-08\n\n- Implemented group channel exclusion\n- Added CJK token estimation",
         encoding="utf-8",
     )
+    (da_dir / "2026-03-07.jsonl").write_text(json.dumps({
+        "session_id": "s7", "timestamp": "09:00", "title": "Context architecture",
+        "summary_sentence": "Reviewed context system architecture and fixed token estimation.",
+        "next_items": [], "resolves": [],
+    }) + "\n", encoding="utf-8")
+    (da_dir / "2026-03-08.jsonl").write_text(json.dumps({
+        "session_id": "s8", "timestamp": "10:00", "title": "Channel exclusion",
+        "summary_sentence": "Implemented group channel exclusion and CJK token estimation.",
+        "next_items": [], "resolves": [],
+    }) + "\n", encoding="utf-8")
 
     return ws
 
@@ -390,6 +399,11 @@ def workspace_with_cjk(workspace: Path) -> Path:
         "- 修复了截断检测的正则表达式匹配问题\n",
         encoding="utf-8",
     )
+    da.with_suffix(".jsonl").write_text(json.dumps({
+        "session_id": "s8", "timestamp": "10:00", "title": "群组频道",
+        "summary_sentence": "实现了群组频道排除并添加中日韩文本令牌估算。",
+        "next_items": [], "resolves": [],
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
     return workspace
 
 
@@ -400,11 +414,9 @@ class TestE2EDirectChannel:
     """Full pipeline for a normal direct (1:1) channel session."""
 
     def test_all_context_files_present(self, workspace):
-        """All 11 context files (incl. SELF.md) appear in the assembled prompt.
-
-        (Was 12 before 2026-08-14 — PROJECTS.md removed with the in-prompt index.)"""
+        """All 12 context files (including TIMELINE.md) are inventoried."""
         prompt, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 11
+        assert len(meta["files"]) == 12
         filenames = {f["filename"] for f in meta["files"]}
         expected = {spec.filename for spec in CONTEXT_FILES}
         assert filenames == expected
@@ -422,8 +434,7 @@ class TestE2EDirectChannel:
     def test_daily_activity_injected(self, workspace):
         """DailyActivity files appear as ephemeral sections."""
         prompt, _ = _simulate_build(workspace)
-        assert "## Daily Activity (2026-03-08)" in prompt
-        assert "## Daily Activity (2026-03-07)" in prompt
+        assert "## Daily Activity (last 7 days)" in prompt
         assert "group channel exclusion" in prompt
 
     def test_daily_activity_only_last_2(self, workspace):
@@ -433,8 +444,7 @@ class TestE2EDirectChannel:
         (da_dir / "2026-03-01.md").write_text("# Old\n\n- Ancient activity")
         prompt, _ = _simulate_build(workspace)
         assert "Ancient activity" not in prompt
-        assert "## Daily Activity (2026-03-08)" in prompt
-        assert "## Daily Activity (2026-03-07)" in prompt
+        assert "## Daily Activity (last 7 days)" in prompt
 
     def test_html_comments_stripped(self, workspace):
         """HTML comments from templates are not in the final prompt."""
@@ -610,12 +620,12 @@ class TestE2EGroupChannel:
         # PROJECTS.md was deleted 2026-08-14 — must NOT appear in ANY prompt.
         assert "## Projects" not in prompt
 
-    def test_daily_activity_still_injected_in_group(self, workspace):
-        """DailyActivity is ephemeral content, still injected in group."""
+    def test_daily_activity_not_injected_in_group(self, workspace):
+        """DailyActivity remains behind the desktop-only channel gate."""
         prompt, _ = _simulate_build(
             workspace, channel_context=self._group_context()
         )
-        assert "## Daily Activity (2026-03-08)" in prompt
+        assert "## Daily Activity" not in prompt
 
     def test_owner_dm_includes_memory(self, workspace):
         """An OWNER DM (is_group=False, is_owner=True) still gets MEMORY.md.
@@ -787,31 +797,25 @@ class TestE2ETruncationDetection:
         assert assembled.count("Project details.") > 4000
 
 
-class TestE2EDailyActivityTokenCap:
-    """DailyActivity per-file token cap prevents context blowout."""
+class TestE2EDailyActivityWholeUnitBudget:
+    """DailyActivity budget drops complete session rows and counts omissions."""
 
-    def test_large_daily_file_is_capped(self, workspace):
-        """A huge DailyActivity file is truncated to the token cap."""
+    def test_large_daily_set_drops_whole_rows(self, workspace):
         da_dir = workspace / "Knowledge" / "DailyActivity"
-        # Write a massive daily file (~10K words)
-        huge = "Important observation. " * 5000
-        (da_dir / "2026-03-08.md").write_text(f"# 2026-03-08\n\n{huge}")
-
-        prompt, _ = _simulate_build(workspace)
-        # The daily section should be present but truncated
-        assert "## Daily Activity (2026-03-08)" in prompt
-        # The full 10K words should NOT all be in the prompt
-        daily_section_start = prompt.find("## Daily Activity (2026-03-08)")
-        daily_section_end = prompt.find("\n## ", daily_section_start + 1)
-        if daily_section_end == -1:
-            daily_section = prompt[daily_section_start:]
-        else:
-            daily_section = prompt[daily_section_start:daily_section_end]
-        daily_tokens = ContextDirectoryLoader.estimate_tokens(daily_section)
-        # Should be capped around TOKEN_CAP_PER_DAILY_FILE (2000) + some header
-        assert daily_tokens < TOKEN_CAP_PER_DAILY_FILE + 500, (
-            f"Daily section has {daily_tokens} tokens, expected < {TOKEN_CAP_PER_DAILY_FILE + 500}"
+        rows = [
+            {"session_id": f"s{i}", "timestamp": "10:00", "title": f"Title {i}",
+             "summary_sentence": f"complete-session-{i} " + "detail " * 80,
+             "next_items": [], "resolves": []}
+            for i in range(100)
+        ]
+        (da_dir / "2026-03-08.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n"
         )
+        prompt, _ = _simulate_build(workspace)
+        assert "## Daily Activity (last 7 days)" in prompt
+        assert "session 未注入" in prompt
+        for i in range(100):
+            assert (f"complete-session-{i} " in prompt) == (f"Title {i} |" in prompt)
 
 
 class TestE2EBudgetHeadroom:
@@ -906,11 +910,9 @@ class TestE2EMetadataAccuracy:
     """Prompt metadata is accurate and complete."""
 
     def test_metadata_file_count(self, workspace):
-        """Metadata reports all 11 context files (incl. SELF.md).
-
-        (Was 12 before 2026-08-14 — PROJECTS.md removed with the in-prompt index.)"""
+        """Metadata reports all 12 context files, including TIMELINE."""
         _, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 11
+        assert len(meta["files"]) == 12
 
     def test_metadata_total_tokens_positive(self, workspace):
         """Total tokens is a positive number."""

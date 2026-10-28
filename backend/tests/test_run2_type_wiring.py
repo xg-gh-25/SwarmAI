@@ -64,55 +64,6 @@ class TestRouteLessonType:
 
 
 # ── GAP B: deterministic raw-text recovery (Gate-2 CRIT-1/CRIT-2 regressions) ──
-class TestRawLessonRecovery:
-    """The enriched->raw map was fragile (missed JobResults, broke on the
-    [UNVERIFIED] rewrite). _raw_lesson_text must deterministically recover the
-    raw text so classification is never polluted by provenance."""
-
-    def _hook(self):
-        from hooks.distillation_hook import DistillationTriggerHook
-        return DistillationTriggerHook
-
-    def test_recovers_raw_from_standard_enriched(self):
-        H = self._hook()
-        enriched = H._format_enriched_entry(
-            "A silent race drops a bubble when writes interleave.",
-            "2026-08-09", "DailyActivity/x.md", "abc1234",
-        )
-        assert H._raw_lesson_text(enriched) == "A silent race drops a bubble when writes interleave."
-
-    def test_recovers_raw_from_jobresults_enriched_no_commit(self):
-        # CRIT-2: JobResults entries have no commit hash and were never in the map.
-        H = self._hook()
-        enriched = H._format_enriched_entry(
-            "Chose async over sync for the ingest path.",
-            "2026-08-09", "JobResults/j.jsonl", None,
-        )
-        assert H._raw_lesson_text(enriched) == "Chose async over sync for the ingest path."
-
-    def test_recovers_raw_after_unverified_mutation(self):
-        # CRIT-1: _tag_unverified_claims prepends [UNVERIFIED] AFTER map population.
-        H = self._hook()
-        enriched = H._format_enriched_entry(
-            "Implemented the retry loop.", "2026-08-09", "DailyActivity/x.md", None,
-        )
-        # simulate the mutation _tag_unverified_claims performs on the first line
-        mutated = enriched.replace("2026-08-09: ", "2026-08-09: [UNVERIFIED] ", 1)
-        assert H._raw_lesson_text(mutated) == "Implemented the retry loop."
-
-    def test_raw_text_drives_correct_type_not_provenance(self):
-        # End-to-end: a pitfall lesson, enriched + mutated, still routes to Pitfalls
-        # (would misroute if classification saw the provenance/Detail line).
-        from core.ddd_entry_lifecycle import route_lesson_type
-        H = self._hook()
-        enriched = H._format_enriched_entry(
-            "A silent regression: the guard is bypassed when a fallback is added, a recurring bug.",
-            "2026-08-09", "JobResults/j.jsonl", None,
-        )
-        raw = H._raw_lesson_text(enriched)
-        section, etype = route_lesson_type(raw)
-        assert etype == "pitfall"
-        assert section == "Pitfalls"
 
 
 # ── run_4ad5a44b: route_lesson_type HONORS a declared [type] tag ──────────────

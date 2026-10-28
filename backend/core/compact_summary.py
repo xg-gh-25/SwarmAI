@@ -187,7 +187,23 @@ async def persist(session_id: Optional[str], record: dict) -> bool:
         return False
     try:
         from database import db
-        return bool(await db.insert_compaction(session_id, record))
+        stored = bool(await db.insert_compaction(session_id, record))
+        if stored:
+            try:
+                import json
+                from functools import partial
+                from core import executors
+                from core.session_inputs import record_session_input
+                await executors.run_in(
+                    "io", partial(
+                        record_session_input, session_id, "compaction", "external",
+                        json.dumps(record, ensure_ascii=False, sort_keys=True, default=str),
+                        ref=str(record["id"]),
+                    ),
+                )
+            except Exception:
+                logger.warning("compact_summary provenance write failed", exc_info=True)
+        return stored
     except Exception:  # noqa: BLE001
         logger.warning("compact_summary.persist failed session=%s", session_id, exc_info=True)
         return False

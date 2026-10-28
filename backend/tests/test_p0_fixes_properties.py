@@ -1,18 +1,8 @@
 """Property-based tests for P0 concurrency fixes.
 
-Tests the ``_append_changelog`` function from
-``hooks/evolution_maintenance_hook.py`` under concurrent write pressure
-using Hypothesis-generated inputs and ``asyncio.gather``.
-
 Testing methodology: property-based (Hypothesis) + async concurrency.
-Key properties verified:
-
-- **Property 14: EVOLUTION_CHANGELOG concurrent write safety**
-    — For any set of concurrent ``_append_changelog`` calls writing to the
-      same file, every entry appears exactly once, no entry is corrupted
-      or partially written, and the file is valid JSONL.
-
-# Feature: multi-session-rearchitecture, Property 14: EVOLUTION_CHANGELOG concurrent write safety
+Key property verified: post-session hook executions never overlap
+(``TestHookExecutionSerialization``).
 """
 
 from __future__ import annotations
@@ -25,7 +15,6 @@ from uuid import uuid4
 import pytest
 from hypothesis import given, strategies as st
 
-from hooks.evolution_maintenance_hook import _append_changelog
 from tests.helpers import PROPERTY_SETTINGS
 
 
@@ -58,91 +47,6 @@ changelog_entries = st.lists(changelog_entry, min_size=1, max_size=30)
 # ---------------------------------------------------------------------------
 
 
-class TestChangelogConcurrentWriteSafety:
-    """Property 14: EVOLUTION_CHANGELOG concurrent write safety.
-
-    # Feature: multi-session-rearchitecture, Property 14: EVOLUTION_CHANGELOG concurrent write safety
-
-    *For any* set of concurrent ``_append_changelog`` calls writing to the
-    same EVOLUTION_CHANGELOG.jsonl file, every call's entry must appear
-    exactly once in the final file, and no entry may be corrupted or
-    partially written.  The file must be valid JSONL (one JSON object per
-    line).
-
-    **Validates: Requirements 5.1**
-    """
-
-    @given(entries=changelog_entries)
-    @PROPERTY_SETTINGS
-    @pytest.mark.asyncio
-    async def test_concurrent_writes_produce_valid_complete_jsonl(
-        self,
-        tmp_path: Path,
-        entries: list[tuple[str, str, str]],
-    ):
-        """All concurrent writes land exactly once and produce valid JSONL.
-
-        **Validates: Requirements 5.1**
-        """
-        # Unique dir per Hypothesis example to avoid collisions
-        work_dir = tmp_path / str(uuid4())
-        work_dir.mkdir(parents=True, exist_ok=True)
-        changelog_path = work_dir / "EVOLUTION_CHANGELOG.jsonl"
-
-        # Write all entries concurrently via asyncio.gather
-        async def write_entry(action: str, entry_id: str, summary: str) -> None:
-            await asyncio.to_thread(
-                _append_changelog, changelog_path, action, entry_id, summary
-            )
-
-        await asyncio.gather(
-            *(write_entry(action, eid, summary) for action, eid, summary in entries)
-        )
-
-        # Read the resulting file
-        raw = changelog_path.read_text(encoding="utf-8")
-        lines = raw.strip().split("\n") if raw.strip() else []
-
-        # --- Verify line count matches entry count ---
-        assert len(lines) == len(entries), (
-            f"Expected {len(entries)} lines, got {len(lines)}"
-        )
-
-        # --- Verify every line is valid JSON ---
-        parsed = []
-        for i, line in enumerate(lines):
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError as exc:
-                pytest.fail(f"Line {i} is not valid JSON: {exc}\nContent: {line!r}")
-            parsed.append(obj)
-
-        # --- Verify each parsed object has the expected fields ---
-        for i, obj in enumerate(parsed):
-            assert "ts" in obj, f"Line {i} missing 'ts' field"
-            assert "action" in obj, f"Line {i} missing 'action' field"
-            assert "id" in obj, f"Line {i} missing 'id' field"
-            assert "summary" in obj, f"Line {i} missing 'summary' field"
-            assert "source" in obj, f"Line {i} missing 'source' field"
-
-        # --- Verify every input entry appears exactly once ---
-        # Build a set of (action, id, summary) from the written entries
-        written_tuples = {(obj["action"], obj["id"], obj["summary"]) for obj in parsed}
-        input_tuples = set(entries)
-
-        # Since entries may contain duplicates (same action+id+summary),
-        # compare as sorted lists for exact multiplicity matching
-        written_sorted = sorted((obj["action"], obj["id"], obj["summary"]) for obj in parsed)
-        input_sorted = sorted(entries)
-
-        assert written_sorted == input_sorted, (
-            f"Mismatch between input entries and written entries.\n"
-            f"Missing from file: {sorted(set(input_sorted) - set(written_sorted))}\n"
-            f"Extra in file: {sorted(set(written_sorted) - set(input_sorted))}"
-        )
-
-        # --- Verify file ends with newline (proper JSONL) ---
-        assert raw.endswith("\n"), "JSONL file should end with a newline"
 
 
 # ---------------------------------------------------------------------------

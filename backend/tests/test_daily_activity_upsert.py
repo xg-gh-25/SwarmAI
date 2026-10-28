@@ -90,7 +90,7 @@ def test_sessions_count_grows_once_per_new_summary(tmp_path):
     da = next((ws / "Knowledge" / "DailyActivity").glob("*.md"))
     fm, body = parse_frontmatter(da.read_text(encoding="utf-8"))
     assert fm["sessions_count"] == 2
-    assert body.count("| s-one-00 |") == 1 and body.count("| s-two-00 |") == 1
+    assert body.count("| s-one-0001 |") == 1 and body.count("| s-two-0002 |") == 1
 
 
 def test_jsonl_sidecar_keeps_one_record_per_session_latest_wins(tmp_path):
@@ -159,7 +159,7 @@ def test_long_session_rerun_keeps_one_summary_block(tmp_path):
         asyncio.run(write_daily_activity(_summary(title), ctx, workspace_path=ws))
     da = next((ws / "Knowledge" / "DailyActivity").glob("*.md"))
     text = da.read_text(encoding="utf-8")
-    assert text.count("| long-ses |") == 1 and "Later window title" in text
+    assert text.count("| long-sess-01 |") == 1 and "Later window title" in text
     assert len(read_jsonl_sidecar(da.with_suffix(".jsonl"))) == 1
     fm, _ = parse_frontmatter(text)
     assert fm["sessions_count"] == 1

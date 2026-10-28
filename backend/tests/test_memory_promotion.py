@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from hooks.distillation_hook import DistillationTriggerHook
 
 
 # ---------------------------------------------------------------------------
@@ -19,9 +18,6 @@ from hooks.distillation_hook import DistillationTriggerHook
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def hook():
-    return DistillationTriggerHook()
 
 
 @pytest.fixture
@@ -53,107 +49,6 @@ def _write_da_file(da_dir: Path, date_str: str, body: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-class TestFrequencyGate:
-    """Test _passes_frequency_gate on DistillationTriggerHook."""
-
-    def test_entry_in_one_file_rejected(self, hook, daily_dir):
-        """AC1: Entry appearing in only 1 DA file should NOT pass the gate."""
-        _write_da_file(daily_dir, "2026-04-20", "## 10:00 | abc123\n- Implemented voice input feature")
-        _write_da_file(daily_dir, "2026-04-21", "## 10:00 | def456\n- Fixed memory bug")
-
-        da_files = [
-            {"path": f, "date": f.stem, "body": f.read_text(encoding="utf-8")}
-            for f in sorted(daily_dir.glob("*.md"))
-        ]
-
-        result = hook._passes_frequency_gate(
-            "2026-04-20: **Voice input feature shipped**",
-            da_files,
-        )
-        assert result is False, "Entry in only 1 file should be rejected"
-
-    def test_entry_in_two_files_accepted(self, hook, daily_dir):
-        """AC2: Entry appearing in >=2 DA files should pass the gate."""
-        _write_da_file(daily_dir, "2026-04-20", "## 10:00 | abc123\n- Voice input feature progress")
-        _write_da_file(daily_dir, "2026-04-21", "## 10:00 | def456\n- Voice input feature completed")
-
-        da_files = [
-            {"path": f, "date": f.stem, "body": f.read_text(encoding="utf-8")}
-            for f in sorted(daily_dir.glob("*.md"))
-        ]
-
-        result = hook._passes_frequency_gate(
-            "2026-04-21: **Voice input feature shipped**",
-            da_files,
-        )
-        assert result is True, "Entry in >=2 files should be accepted"
-
-    def test_short_entry_passes_through(self, hook, daily_dir):
-        """Entries too short to fingerprint (< 2 significant words) pass through."""
-        _write_da_file(daily_dir, "2026-04-20", "## 10:00 | abc\n- short")
-
-        da_files = [
-            {"path": f, "date": f.stem, "body": f.read_text(encoding="utf-8")}
-            for f in sorted(daily_dir.glob("*.md"))
-        ]
-
-        # Single significant word → fingerprint too small → passes
-        result = hook._passes_frequency_gate("OK", da_files)
-        assert result is True, "Short entries should pass through"
-
-    def test_empty_da_files_passes_through(self, hook):
-        """No DA files = gate should pass (don't block on empty history)."""
-        result = hook._passes_frequency_gate(
-            "2026-04-20: Important decision", []
-        )
-        assert result is True, "Empty DA list should pass through"
-
-    def test_cold_start_single_file_passes(self, hook, daily_dir):
-        """AC: With only 1 DA file, gate passes unconditionally (cold start safety)."""
-        _write_da_file(daily_dir, "2026-04-20", "## 10:00 | abc\n- Made daemon-first design decision")
-
-        da_files = [
-            {"path": f, "date": f.stem, "body": f.read_text(encoding="utf-8")}
-            for f in sorted(daily_dir.glob("*.md"))
-        ]
-
-        result = hook._passes_frequency_gate(
-            "2026-04-20: **Daemon-first design** — always assume daemon is primary",
-            da_files,
-        )
-        assert result is True, "Cold start (1 file) should pass unconditionally"
-
-    def test_rich_entry_different_wording_accepted(self, hook, daily_dir):
-        """Entries with many words should still match when DA describes same topic differently."""
-        _write_da_file(daily_dir, "2026-04-20", "Implemented OOM cascade fix with proactive RSS threshold")
-        _write_da_file(daily_dir, "2026-04-21", "Fixed memory pressure using OOM cascade approach")
-
-        da_files = [
-            {"path": f, "date": f.stem, "body": f.read_text(encoding="utf-8")}
-            for f in sorted(daily_dir.glob("*.md"))
-        ]
-
-        result = hook._passes_frequency_gate(
-            "2026-04-21: **OOM Cascade Fix shipped** — 3 bugs fixed: retry bypass, threshold below steady state, cost model",
-            da_files,
-        )
-        assert result is True, "Rich entry should match with capped threshold"
-
-    def test_three_files_accepted(self, hook, daily_dir):
-        """Entry in 3+ files passes easily."""
-        for i in range(3):
-            d = f"2026-04-{20+i}"
-            _write_da_file(daily_dir, d, f"## 10:00 | s{i}\n- OOM cascade fix progress")
-
-        da_files = [
-            {"path": f, "date": f.stem, "body": f.read_text(encoding="utf-8")}
-            for f in sorted(daily_dir.glob("*.md"))
-        ]
-
-        result = hook._passes_frequency_gate(
-            "2026-04-22: **OOM cascade fix shipped**", da_files
-        )
-        assert result is True
 
 
 # ---------------------------------------------------------------------------
@@ -232,103 +127,6 @@ class TestMemoryUsageTracking:
 # ---------------------------------------------------------------------------
 
 
-class TestUsageBasedEviction:
-    """Test _enforce_section_caps uses usage data for eviction order."""
-
-    def test_evicts_lowest_usage_first(self, tmp_path):
-        """AC4: When cap exceeded, lowest-decay-score entries evicted before high-score ones.
-
-        Uses inline decay metadata (<!-- ref:N | last:DATE | decay:X | sessions:N -->)
-        which is the format _enforce_section_caps reads for smart eviction.
-        """
-        memory_path = tmp_path / "MEMORY.md"
-
-        # Create MEMORY.md with 5 entries + inline decay metadata.
-        # RC01: high ref count (10 refs, recent) → high decay score → survives
-        # RC02: zero refs → lowest decay score → evicted
-        # RC03: moderate refs (5 refs, recent) → moderate score → survives
-        # RC04: zero refs → lowest decay score → evicted
-        # RC05: good refs (5 refs, recent) → high score → survives
-        from datetime import date, timedelta
-        today = date.today()
-        recent_date = (today - timedelta(days=2)).isoformat()
-        # run_3cb6b9ae Cycle-1: 4-field live metadata (`... | source:X -->`) — the
-        # format _enforce_section_caps now reads (the old 5-field `| sessions:N -->`
-        # matched nothing → silent oldest-first). Decay score is recency-driven:
-        # recent last: → high score (survives); old last: → low (evicted).
-        old_date = "2026-04-01"
-        entries = (
-            "- [RC01] 2026-04-01: Old but heavily used entry\n"
-            f"  <!-- ref:10 | last:{recent_date} | decay:active | source:auto -->\n"
-            "- [RC02] 2026-04-02: Never used entry A\n"
-            f"  <!-- ref:0 | last:{old_date} | decay:active | source:auto -->\n"
-            "- [RC03] 2026-04-03: Moderately used entry\n"
-            f"  <!-- ref:5 | last:{recent_date} | decay:active | source:auto -->\n"
-            "- [RC04] 2026-04-04: Never used entry B\n"
-            f"  <!-- ref:0 | last:{old_date} | decay:active | source:auto -->\n"
-            "- [RC05] 2026-04-05: Recently used entry\n"
-            f"  <!-- ref:5 | last:{recent_date} | decay:active | source:auto -->\n"
-        )
-        memory_path.write_text(
-            "## Recent Context\n\n" + entries,
-            encoding="utf-8",
-        )
-
-        # Evict to cap of 3 (remove 2 entries)
-        # Should remove RC02 and RC04 (zero refs/sessions), keep RC01, RC03, RC05
-        import hooks.distillation_hook as dh
-        original_caps = dh.SECTION_CAPS.copy()
-        try:
-            dh.SECTION_CAPS["Recent Context"] = 3
-            DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
-        finally:
-            # clear() before update(): these tests INSERT a key ("Recent
-            # Context", a section removed in PRI01) that update() alone cannot
-            # remove, leaking a dead key into the module-level SECTION_CAPS and
-            # failing test_distill_write_targets' SSoT-key validation whenever it
-            # ran later in the same process.
-            dh.SECTION_CAPS.clear()
-            dh.SECTION_CAPS.update(original_caps)
-
-        result = memory_path.read_text(encoding="utf-8")
-        assert "[RC01]" in result, "High-usage entry should survive"
-        assert "[RC03]" in result, "Moderate-usage entry should survive"
-        assert "[RC05]" in result, "Recent-usage entry should survive"
-        assert "[RC02]" not in result, "Zero-usage entry should be evicted"
-        assert "[RC04]" not in result, "Zero-usage entry should be evicted"
-
-    def test_falls_back_to_oldest_without_usage_data(self, tmp_path):
-        """Without .memory-usage.json, eviction falls back to oldest-first."""
-        memory_path = tmp_path / "MEMORY.md"
-
-        entries = [
-            "- [RC01] 2026-04-01: Oldest",
-            "- [RC02] 2026-04-02: Middle",
-            "- [RC03] 2026-04-03: Newest",
-        ]
-        memory_path.write_text(
-            "## Recent Context\n\n" + "\n".join(entries) + "\n",
-            encoding="utf-8",
-        )
-
-        import hooks.distillation_hook as dh
-        original_caps = dh.SECTION_CAPS.copy()
-        try:
-            dh.SECTION_CAPS["Recent Context"] = 2
-            DistillationTriggerHook._enforce_section_caps(memory_path, tmp_path)
-        finally:
-            # clear() before update(): these tests INSERT a key ("Recent
-            # Context", a section removed in PRI01) that update() alone cannot
-            # remove, leaking a dead key into the module-level SECTION_CAPS and
-            # failing test_distill_write_targets' SSoT-key validation whenever it
-            # ran later in the same process.
-            dh.SECTION_CAPS.clear()
-            dh.SECTION_CAPS.update(original_caps)
-
-        result = memory_path.read_text(encoding="utf-8")
-        # Without usage data, should fall back to original behavior (keep newest)
-        assert "[RC01]" in result, "First entry should survive (prepend = newest at top)"
-        assert "[RC02]" in result, "Second entry should survive"
 
 
 # ---------------------------------------------------------------------------

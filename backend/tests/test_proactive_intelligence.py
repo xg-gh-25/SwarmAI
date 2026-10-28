@@ -162,8 +162,13 @@ class TestPatternDetection:
         assert any("2 fix(es) pending rebuild" in s for s in signals)
 
     def test_coe_detection(self):
-        signals = _detect_patterns([], Path("/tmp"), SAMPLE_MEMORY)
-        assert any("COE" in s for s in signals)
+        # the open-COE count comes from the threads the COE state marked
+        # (core.coe_threads), not from the registry's status text
+        assert not any("COE" in s for s in _detect_patterns([], Path("/tmp"), SAMPLE_MEMORY))
+        threads = [{"priority": "P0", "title": "streaming froze", "report_count": 1,
+                    "coe": True}]
+        signals = _detect_patterns(threads, Path("/tmp"), SAMPLE_MEMORY)
+        assert any("1 COE(s) still under investigation" in s for s in signals)
 
     def test_uncommitted_work(self):
         signals = _detect_patterns([], Path("/tmp"), SAMPLE_MEMORY)

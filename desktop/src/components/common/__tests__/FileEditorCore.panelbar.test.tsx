@@ -13,7 +13,7 @@
  * Drives the real component; only the workspace-root fetch is stubbed.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import FileEditorCore, { PANEL_FLOAT_PAD } from '../FileEditorCore';
 
 vi.mock('../../../services/api', () => ({
@@ -132,5 +132,21 @@ describe('modal chrome (unchanged)', () => {
     expect(screen.getByTestId('show-changes-toggle').textContent).toContain('Show Changes');
     expect(screen.getByTestId('file-editor-save')).toBeTruthy();
     expect(screen.queryByTestId('editor-panel-bar')).toBeNull();
+  });
+});
+
+
+describe('governed edit conflicts', () => {
+  it('offers reload when save returns 409', async () => {
+    const onSave = vi.fn().mockRejectedValue({ statusCode: 409 });
+    render(<FileEditorCore {...ts} onSave={onSave} variant="panel" />);
+    fireEvent.change(screen.getByTestId('file-editor-textarea'), {
+      target: { value: 'const x = 2;\n' },
+    });
+    fireEvent.click(screen.getByTestId('file-editor-save'));
+    await waitFor(() => {
+      expect(screen.getByTestId('unsaved-warning-discard').textContent)
+        .toMatch(/Discard & Reload/i);
+    });
   });
 });

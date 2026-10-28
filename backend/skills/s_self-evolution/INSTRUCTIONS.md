@@ -19,7 +19,7 @@ Layer 2 — RULES (AGENT.md max 25, STEERING.md max 15)
   User-space. Operationalizes principles.
   Changes here affect specific behavior classes.
 
-Layer 3 — GATES (PreToolUse hooks, pipeline validator, locked_write)
+Layer 3 — GATES (PreToolUse hooks, pipeline validator, the CDF writer)
   Hardware. Code-enforced. Added only when every user benefits (SOUL P7).
   Changes here are mechanical — code PRs with tests.
 ```
@@ -72,7 +72,7 @@ INTAKE CLASSIFICATION:
 **Authority:**
 - User source → surface brief → user decides
 - Agent source with 3x evidence → surface brief → user decides (never auto-written)
-- Agent source with <3x → queue in EVOLUTION.md "Candidates" section
+- Agent source with <3x → nothing to submit; CDF extracts the correction from the session
 - Automation source → propose only, surface in session briefing
 
 ---
@@ -90,7 +90,7 @@ INTAKE CLASSIFICATION:
    - **Bias B (Inference Over Evidence):** asserted without reading, used stale memory
    - **Bias C (Productivity Over Quality):** rushed output, shallow analysis, skipped depth
    - **Bias D (Surrender On Obstacle):** gave up, asked user to compensate, reported "can't"
-4. Write C-entry with bias tag to EVOLUTION.md
+4. Submit the correction with its bias tag (SKILL.md "Writing to EVOLUTION.md"); never edit EVOLUTION.md
 5. Check: does this bias class have 3+ entries now? If yes → trigger PROMOTE
 
 **C-entry format:**
@@ -128,8 +128,8 @@ If count ≥ 3 for any bias class → invoke PROMOTE operation.
 6. On approval:
    - Write rule to AGENT.md (or STEERING.md if user-scope override)
    - Tag with its parent SOUL principle
-   - Update EVOLUTION.md: mark source corrections as `status: promoted`
-   - Append JSONL changelog: `{"action":"promote","id":"C0XX→R24"}`
+   - Submit a unit that marks the source corrections promoted (SKILL.md "Writing to
+     EVOLUTION.md"); CDF links it with `supersedes`
 
 **No auto-promote.** 3x evidence makes a pattern eligible for a proposal; the user approves
 every governance write.
@@ -218,7 +218,8 @@ the shipped fixture workspace (a code change; see `s_golden-case` PROPOSE).
 3. Present to user: "R7 hasn't fired in 45 days. Either internalized or untested. Retire?"
 4. On approval:
    - Remove from AGENT.md/STEERING.md
-   - Add note to EVOLUTION.md: `R7 retired (2026-05-19) — covered by PreToolUse gate`
+   - Submit a unit recording the retirement (`R7 retired (2026-05-19) — covered by
+     PreToolUse gate`) through `ingest submit`
    - Decrement rule count
 
 **Monthly RETIRE scan (via loops-health):** Report all rules >30 days idle.

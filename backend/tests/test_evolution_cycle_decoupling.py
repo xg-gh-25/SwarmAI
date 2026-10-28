@@ -144,19 +144,13 @@ class TestHookDoesNotRunEvolutionCycle:
             "hook must not write .evolution_last_run — the scheduler owns cadence."
         )
 
-    def test_execute_still_runs_cheap_governance(self, tmp_path):
-        """Deletion must be SURGICAL: the cheap governance work (quality gate on
-        garbage competence entries) must still run in execute().
-
-        This guards against over-broad deletion removing the hook's real value.
-        """
+    def test_execute_keeps_cheap_governance_read_only(self, tmp_path):
+        """The session hook may inspect EVOLUTION but cannot mutate governed content."""
         from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
 
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
-        state_file = ctx_dir / ".evolution_last_run"
-        state_file.write_text("2026-06-25", encoding="utf-8")
-        # A garbage competence entry (<3 words) that the quality gate removes.
+        (ctx_dir / ".evolution_last_run").write_text("2026-06-25", encoding="utf-8")
         evo = ctx_dir / "EVOLUTION.md"
         evo.write_text(
             "# SwarmAI Evolution Registry\n\n"
@@ -166,17 +160,11 @@ class TestHookDoesNotRunEvolutionCycle:
             "### K001 | reactive | skill | 2026-01-01\n"
             "- **Competence**: bad\n"
             "- **Usage Count**: 0\n"
-            "- **Status**: active\n\n",
-            encoding="utf-8",
-        )
+            "- **Status**: active\n\n", encoding="utf-8")
+        before = evo.read_bytes()
 
-        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        asyncio.run(hook.execute(_make_context()))
+        asyncio.run(EvolutionMaintenanceHook(context_dir=ctx_dir).execute(_make_context()))
 
-        # The garbage entry (single word "bad") should have been removed by the
-        # quality gate — proving the cheap governance path still executes.
-        # (ID must match _ENTRY_HEADER_RE: ^[EOKCF]\d{3} — K001 qualifies.)
-        assert "K001" not in evo.read_text(encoding="utf-8"), (
-            "quality gate must still run in execute() — deletion was over-broad "
-            "if the garbage competence entry survived."
-        )
+        assert evo.read_bytes() == before
+        assert "K001" in evo.read_text(encoding="utf-8")
+

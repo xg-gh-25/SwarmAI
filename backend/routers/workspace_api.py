@@ -117,12 +117,14 @@ class FolderCreateRequest(BaseModel):
     """Request body for creating a folder."""
     model_config = ConfigDict(extra="forbid")  # a Workspace repo location is read-only
     path: str
+    expected_revision: str | None = None
 
 
 class FolderDeleteRequest(BaseModel):
     """Request body for deleting a folder or file."""
     model_config = ConfigDict(extra="forbid")  # a Workspace repo location is read-only
     path: str
+    expected_revision: str | None = None
 
 
 class FolderRenameRequest(BaseModel):
@@ -130,6 +132,25 @@ class FolderRenameRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a Workspace repo location is read-only
     old_path: str
     new_path: str
+    expected_revision: str | None = None
+
+
+def _cdf_revision(path: Path) -> str:
+    """Use WRITER's revision helper; hash locally only before that workstream lands."""
+    from core.ingestion import api
+    try:
+        return api.revision_of(path)
+    except ModuleNotFoundError:
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+def _cdf_is_governed(path: Path) -> bool:
+    """Use WRITER's runtime classifier; pre-integration branches have no classifier."""
+    from core.ingestion import api
+    try:
+        return api.is_governed(path)
+    except ModuleNotFoundError:
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1153,6 +1174,7 @@ async def get_workspace_file(
             # Never editable as text: saving it back through PUT would overwrite the
             # binary (PUT refuses that too — P0 B1).
             "readonly": True,
+            "revision": _cdf_revision(target),
         }
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
@@ -1175,6 +1197,7 @@ async def get_workspace_file(
         "name": target.name,
         "readonly": is_readonly,
         "encoding": "utf-8",
+        "revision": _cdf_revision(target),
     }
 
 
@@ -1794,6 +1817,30 @@ async def put_workspace_file(
         if _is_readonly_context_file(path):
             raise HTTPException(status_code=403, detail="System-default context files are read-only")
 
+    # Governed corpus writes are optimistic and journaled. Non-governed files
+    # retain the existing editor behavior.
+    from core.ingestion.api import StaleRevision, apply_user_edit
+    if _cdf_is_governed(target):
+        expected = body.get("expected_revision")
+        if not isinstance(expected, str):
+            raise HTTPException(
+                status_code=409,
+                detail="This governed file must be reloaded before saving (expected_revision missing).",
+            )
+        try:
+            revision = await asyncio.to_thread(
+                apply_user_edit, target, body["content"].encode("utf-8"),
+                expected_revision=expected, actor="user",
+            )
+        except StaleRevision:
+            raise HTTPException(
+                status_code=409,
+                detail="This governed file changed on disk. Reload it before saving.",
+            )
+        if not is_external:
+            _invalidate_tree_cache()
+        return {"success": True, "path": path, "revision": revision}
+
     # Never overwrite a binary file with text (docs/design/canvas-file-types.md P0
     # B1): the viewer once opened an unlisted binary as its base64 and Save wrote that
     # text over the file. New files and text files write as before.
@@ -1870,6 +1917,20 @@ async def create_file(request: FolderCreateRequest):
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
 
+    from core.ingestion.api import StaleRevision, apply_user_edit
+    if _cdf_is_governed(target):
+        if request.expected_revision is None:
+            raise HTTPException(status_code=409, detail="expected_revision is required")
+        try:
+            revision = await asyncio.to_thread(
+                apply_user_edit, target, b"", expected_revision=request.expected_revision,
+                actor="user",
+            )
+        except StaleRevision:
+            raise HTTPException(status_code=409, detail="The target revision is stale")
+        _invalidate_tree_cache()
+        return {"path": request.path, "revision": revision}
+
     # mkdir + touch are blocking FS I/O — off the loop in one worker thread (run_6ea3cb12).
     def _create():
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1929,6 +1990,29 @@ async def delete_folder(request: FolderDeleteRequest):
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
+    from core.ingestion.api import StaleRevision, apply_user_edit
+    if target.is_dir():
+        governed = await asyncio.to_thread(
+            lambda: any(_cdf_is_governed(item) for item in target.rglob("*") if item.is_file())
+        )
+        if governed:
+            raise HTTPException(
+                status_code=409,
+                detail="Directory contains governed files; delete files individually.",
+            )
+    elif _cdf_is_governed(target):
+        if request.expected_revision is None:
+            raise HTTPException(status_code=409, detail="expected_revision is required")
+        try:
+            await asyncio.to_thread(
+                apply_user_edit, target, None,
+                expected_revision=request.expected_revision, actor="user",
+            )
+        except StaleRevision:
+            raise HTTPException(status_code=409, detail="The target revision is stale")
+        _invalidate_tree_cache()
+        return Response(status_code=204)
+
     # rmtree / unlink are blocking FS I/O (rmtree recurses a whole tree) — off the
     # event loop in one worker thread (run_6ea3cb12). is_dir() branch runs inside so
     # the whole delete decision is one dispatch.
@@ -1983,6 +2067,29 @@ async def trash_item(request: FolderDeleteRequest):
 
     if not target.exists() and not unresolved_path.is_symlink():
         raise HTTPException(status_code=404, detail="Path not found")
+
+    from core.ingestion.api import StaleRevision, apply_user_edit
+    if target.is_dir():
+        governed = await asyncio.to_thread(
+            lambda: any(_cdf_is_governed(item) for item in target.rglob("*") if item.is_file())
+        )
+        if governed:
+            raise HTTPException(
+                status_code=409,
+                detail="Directory contains governed files; trash files individually.",
+            )
+    elif _cdf_is_governed(target):
+        if request.expected_revision is None:
+            raise HTTPException(status_code=409, detail="expected_revision is required")
+        try:
+            await asyncio.to_thread(
+                apply_user_edit, target, None,
+                expected_revision=request.expected_revision, actor="user",
+            )
+        except StaleRevision:
+            raise HTTPException(status_code=409, detail="The target revision is stale")
+        _invalidate_tree_cache()
+        return {"path": request.path, "trashed": True, "governed": True}
 
     # Symlink guard: if the path is a symlink, remove the link itself — never
     # trash the real target directory.  This prevents accidental data loss when
@@ -2063,6 +2170,21 @@ async def rename_item(request: FolderRenameRequest):
 
     if new_target.exists():
         raise HTTPException(status_code=409, detail=f"Destination already exists: {request.new_path}")
+
+    if old_target.is_dir():
+        governed = await asyncio.to_thread(
+            lambda: any(_cdf_is_governed(item) for item in old_target.rglob("*") if item.is_file())
+        )
+        if governed:
+            raise HTTPException(
+                status_code=409,
+                detail="Directory contains governed files; only project tree moves are supported.",
+            )
+    elif _cdf_is_governed(old_target) or _cdf_is_governed(new_target):
+        raise HTTPException(
+            status_code=409,
+            detail="Governed file rename requires the CDF governed move operation.",
+        )
 
     # If the destination is a directory path, validate depth
     if new_target.suffix == "" or old_target.is_dir():

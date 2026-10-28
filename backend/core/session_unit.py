@@ -280,6 +280,11 @@ def _get_streaming_count() -> int:
     return _streaming_count
 
 
+def is_any_chat_streaming() -> bool:
+    """Whether any chat session is currently producing streamed output."""
+    return _get_streaming_count() > 0
+
+
 # Threshold for a "dumb spawn": a subprocess that entered STREAMING but
 # produced ZERO SDK events since spawn (_last_event_time is None) — alive
 # but silent, with no open tool_use. This is distinct from slow inference
@@ -4050,6 +4055,19 @@ class SessionUnit:
 
         self._wrapper = wrapper
         self._client = client
+        if getattr(options, "resume", None):
+            try:
+                from functools import partial
+                from . import executors
+                from .session_inputs import record_session_input
+                await executors.run_in(
+                    "io", partial(
+                        record_session_input, self.session_id, "resume", "external",
+                        str(options.resume), ref=str(options.resume),
+                    ),
+                )
+            except Exception:
+                logger.warning("session resume provenance write failed", exc_info=True)
         self.last_used = awake_time()
         # The client's one stream consumer, for its whole life (I1). Started
         # before the unit leaves COLD, so no frame (and no control request

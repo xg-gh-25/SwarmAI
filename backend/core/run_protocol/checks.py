@@ -10,11 +10,14 @@ Public symbols:
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from core.run_protocol.lifecycle import PROFILE_STAGES, caps as lifecycle_caps, profiles_where
+
+logger = logging.getLogger(__name__)
 
 EFFECTS = frozenset({"stage", "land", "audit"})
 PROFILES = frozenset(PROFILE_STAGES)
@@ -505,25 +508,17 @@ def _evaluate_check(check_id: str, context: CheckContext) -> Result:
         return _result(ok, "main is still at the run's base" if ok else
                        "main moved since the run's base; sync and test again first")
     if check_id.startswith("RF-"):
-        lessons = context.run.get("lessons")
+        report = context.run.get("reflect_report")
         if check_id == "RF-5":
-            bad = [row for row in lessons or [] if row.get("judge") in ("noise", "suspect")]
-            return _result(not bad, "no noisy lesson" if not bad else "judge flagged lesson")
-        if not isinstance(lessons, list):
-            return False, "lessons must be a list"
-        if check_id == "RF-1":
-            ok = all(isinstance(row, Mapping) and {"id", "type", "scope", "statement",
-                     "tell", "evidence", "relation"} <= set(row) for row in lessons)
-        elif check_id == "RF-2":
-            event_ids = {event["event_id"] for event in context.events}
-            ok = all(row.get("evidence") and set(row["evidence"]) <= event_ids for row in lessons)
-        elif check_id == "RF-3":
-            ok = all(isinstance(row.get("statement"), str)
-                     and len(row["statement"]) <= 400 and "run_" not in row["statement"]
-                     for row in lessons)
-        else:
-            ok = all(isinstance(row.get("relation"), Mapping)
-                     and row["relation"].get("kind") in
-                     ("new", "reinforces", "refines", "contradicts") for row in lessons)
+            return _result(True, "CDF records source outcomes in ingestion audit")
+        try:
+            from core.run_protocol import reflect
+            anchors = {str(anchor) for rows in report.values() for row in rows
+                       for anchor in row.get("evidence", [])}
+            normalized = reflect.prepare(report, allowed_anchors=anchors)
+            ok = normalized["schema"] == reflect.SCHEMA
+        except Exception as exc:
+            logger.warning("REFLECT validation failed for %s: %s", check_id, exc)
+            ok = False
         return _result(ok, f"{check_id} {'passed' if ok else 'failed'}")
     raise CheckError(f"no evaluator for {check_id}")

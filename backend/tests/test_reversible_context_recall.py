@@ -67,29 +67,10 @@ def _large_memory() -> str:
 
 # ── AC1: zero-exclusion sessions add zero manifest tokens ──────────────────
 
-def test_ac1_full_injection_has_no_manifest():
-    """Small MEMORY → full injection → no '[Not loaded' or 'sections not loaded' manifest."""
-    out = memory_index.select_memory_sections(_small_memory(), user_message="anything")
-    assert "Not loaded" not in out
-    assert "sections not loaded" not in out
-    assert "recall_context" not in out
 
 
 # ── NEW ARCHITECTURE (2026-08-14): large MEMORY is ALSO full-injected ───────
 
-def test_large_memory_is_fully_injected_no_manifest():
-    """RETIRED test_ac2_selective_injection_emits_named_manifest. NEW ARCHITECTURE:
-    there is no selective mode — a large MEMORY is full-injected just like a small
-    one. So there is NO "[Not loaded …]" manifest to emit (nothing is excluded),
-    and the whole body comes through. Size is bounded upstream by the size-valve,
-    not by dropping sections at injection time."""
-    mem = _large_memory()
-    out = memory_index.select_memory_sections(mem, user_message="caching prefix")
-    # No selective manifest — nothing is excluded at injection time.
-    assert "Not loaded" not in out
-    assert "sections not loaded" not in out
-    # The whole body is present (all sections), regardless of size or query.
-    assert "COE Registry" in out and "Lessons Learned" in out and "Key Decisions" in out
 
 
 # ── AC3: recall_context returns scoped excluded sections only (<2K tok) ────

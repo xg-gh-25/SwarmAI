@@ -35,18 +35,15 @@ budget and re-fired every session (run_6ac3fc0b).
   are the ONLY source (not configurable; a test guards against a second source).
   Recalibrate them there, with data.
 
-## Maintenance Hook Order (EvolutionMaintenanceHook.execute)
+## Maintenance Hook (EvolutionMaintenanceHook.execute)
 
-1. `_quality_gate` — drops garbage Competence entries (<3 words / commit-hash text), fixes duplicate C-IDs.
-2. `_fold_corrections` — folds data-point families over the cap (`_FOLD_CAP = 2`) into
-   `EVOLUTION-archive-YYYY-MM.md`. The whitelist lives in `data_point_folding._FOLDABLE_MARKERS`.
-3. `_size_evict` — size valve: above 20K tokens, evict lowest-value whole `###` blocks down
-   to 15K, into the monthly shard (recall-backed, not deletion). Marker-bearing blocks
-   (`**Pattern**`, `**Durable tell**`, CAPSTONE, METHOD FIX, …) go last; recent (≤14 days) next.
-4. E/K lifecycle — `Capabilities Built` and `Competence Learned` only: active + idle >30d +
-   usage 0 → deprecated; deprecated + usage 0 + >30d → removed.
-5. Promotion threshold check (3x rule), correction-class auto-resolve (30 days quiet),
-   correction classifier, escalation ladder (proposals to `.evolution_proposals.json` only).
+Read-only since the CDF cutover: it counts active `Capabilities Built` / `Competence
+Learned` entries idle past 30 days with zero usage and logs the count. It never changes
+EVOLUTION.md. The quality gate, correction folding, size valve and E/K lifecycle were
+removed: CDF's ingestion writer is the only autonomous writer (design
+2026-10-26 §8), and the prompt is bounded by whole-entry selection
+(`core/memory_injection`, 8K tokens), not by evicting entries. Do not add a mutating step
+back to this hook.
 
 Every step is error-isolated and runs under the EVOLUTION.md flock; on lock timeout it
 skips rather than clobbering. All mutations log to `EVOLUTION_CHANGELOG.jsonl`
@@ -55,9 +52,9 @@ over-archives.
 
 ## Write Rules
 
-- The skill writes EVOLUTION.md with Read + Edit and must NOT shell out to
-  `locked_write.py` (PyInstaller crash). A changelog append after every mutation is mandatory.
-- Backend code uses `scripts.locked_write` functions as a library under the flock.
+- Nothing edits EVOLUTION.md except CDF's ingestion writer. The skill submits a
+  correction or a status change with `ingest submit --source S1` (s_self-evolution
+  SKILL.md "Writing to EVOLUTION.md"); backend code enqueues through a CDF source (S5).
 - EVOLUTION.md stays at P8 in `CONTEXT_FILES`, `user_customized=True` (copy-if-missing).
 
 ## Configuration Boundaries
@@ -86,8 +83,8 @@ over-archives.
 
 - [ ] The cycle is triggered only by the scheduled job, never by a session hook
 - [ ] Cycle lock, LLM cap, regression revert, and atomic deploy still in place
-- [ ] Maintenance order: quality gate → fold → size valve → lifecycle → governance
-- [ ] Size valve still archives to the monthly shard (never deletes)
+- [ ] EvolutionMaintenanceHook stays read-only (no write to EVOLUTION.md)
+- [ ] EVOLUTION over budget is handled by injection selection, never by evicting entries
 - [ ] Escalation writes proposals only; never SOUL/AGENT/STEERING
 - [ ] `auto_approve_*` defaults remain `false`
 - [ ] EVOLUTION.md still P8, `user_customized=True`

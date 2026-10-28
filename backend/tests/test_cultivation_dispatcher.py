@@ -272,12 +272,12 @@ class TestOrchestratorSubscriptions:
             name for name, _fn, events in orch.channels
             if EventType.SESSION_CLOSE in events
         ]
-        # Only a subset should fire on session_close (not every channel).
-        # (ddd_knowledge_injection + entity_index_validation were removed
-        # 2026-08-14 with the in-prompt index deletion.)
-        assert len(session_close_channels) < len(orch.channels)
-        assert "auto_apply_proposals" in session_close_channels
-        assert "entry_lifecycle" in session_close_channels
+        # Stage B leaves the legacy cultivation orchestrator read-only and removes
+        # both auto-apply and entry-lifecycle mutation channels.
+        assert session_close_channels == []
+        assert {"auto_apply_proposals", "entry_lifecycle"}.isdisjoint(
+            name for name, _fn, _events in orch.channels
+        )
 
     def test_git_commit_subscribers(self):
         from core.ddd_orchestrator import DddCultivationOrchestrator

@@ -247,7 +247,7 @@ class IsolationError(Exception):
 _IRREPLACEABLE_DIR_SEGMENTS = (".context", "projects")  # single-segment markers
 # adjacency pair: Knowledge/Library (a store), not any stray knowledge+library
 _IRREPLACEABLE_DIR_PAIRS = (("knowledge", "library"),)
-_IRREPLACEABLE_NAME_EXACT = ("data.db",)
+_IRREPLACEABLE_NAME_EXACT = ("data.db", "ingestion.db")
 
 # REPLACEABLE: rebuildable from a source of truth → never gated. ANCHORED, not
 # substring: an exact basename or a real suffix, so a store file whose name merely

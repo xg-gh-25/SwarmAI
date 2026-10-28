@@ -20,6 +20,7 @@ read: each becomes a one-line-per-endpoint summary.
 """
 from __future__ import annotations
 
+import logging
 import fnmatch
 import json
 import posixpath
@@ -27,6 +28,8 @@ import re
 from pathlib import Path
 
 from .repo_read import safe_read_text
+
+logger = logging.getLogger(__name__)
 
 DOC_EXTS = frozenset({".md", ".markdown", ".rst", ".adoc", ".txt"})
 _TXT_DOC_STEMS = frozenset({"readme", "changes", "changelog", "history", "news",
@@ -376,7 +379,8 @@ def _api_summary(root: Path, rel: str, fmt: str, short: str) -> dict | None:
         elif fmt == "graphql":
             for m in _GQL_ROOT_RE.finditer(text):
                 items += [f"{m.group(1)}.{f}" for f in _GQL_FIELD_RE.findall(m.group(2))]
-    except Exception:  # noqa: BLE001 — a malformed contract is listed with no items
+    except Exception as exc:  # noqa: BLE001 — a malformed contract is listed with no items
+        logger.debug("survey: contract %s unparsable, listed with no items: %s", rel, exc)
         items = []
     return {"path": rel, "ref": f"{rel}@{short}" if short else rel, "format": fmt,
             "items": items}

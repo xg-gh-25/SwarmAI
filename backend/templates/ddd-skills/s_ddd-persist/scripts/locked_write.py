@@ -1,7 +1,9 @@
-"""Locked read-modify-write for MEMORY.md and EVOLUTION.md.
+"""Locked read-modify-write for a DDD's docs, for hosts WITHOUT SwarmAI.
 
-A CLI script called by the distillation, save-memory, and self-evolution
-skills to safely modify Markdown files under an advisory file lock.
+s_ddd-persist uses it on Kiro, Claude Code or an AIM package, where there is no
+Cognitive Distillation Flow. Inside SwarmAI (``SWARM_BACKEND_BIN`` set) CDF's writer
+is the only one that writes a DDD doc, so ``locked_read_modify_write`` and
+``locked_field_modify`` refuse to run there (``InsideSwarmAI``).
 Inlines the locking logic (fcntl.flock on Unix) — no separate
 FileLockManager module needed.
 
@@ -44,6 +46,19 @@ if not _IS_WINDOWS:
 
 LOCK_TIMEOUT = 5.0  # seconds
 FALLBACK_SECTION = "## Distilled"
+
+
+class InsideSwarmAI(RuntimeError):
+    """Raised when this writer is called where SwarmAI runs: CDF writes DDD docs there."""
+
+
+def _refuse_inside_swarmai() -> None:
+    import os
+    if os.environ.get("SWARM_BACKEND_BIN"):
+        raise InsideSwarmAI(
+            "SwarmAI is running here: submit with "
+            '"$SWARM_BACKEND_BIN" ingest submit --source S1 (see SKILL.md); '
+            "Cognitive Distillation Flow is the only writer of a DDD doc inside SwarmAI.")
 
 
 class LockedWriteError(Exception):
@@ -355,7 +370,9 @@ def locked_field_modify(
     Raises:
         LockedWriteError: On lock timeout or file-not-found.
         ValueError: On field modification error or invalid mode/args.
+        InsideSwarmAI: When SWARM_BACKEND_BIN is set.
     """
+    _refuse_inside_swarmai()
     # ── MemoryGuard: sanitize value before any file I/O ─────────────
     if value is not None:
         try:
@@ -461,7 +478,9 @@ def locked_read_modify_write(
     Raises:
         LockedWriteError: If the lock cannot be acquired within
             ``LOCK_TIMEOUT`` seconds.
+        InsideSwarmAI: When SWARM_BACKEND_BIN is set.
     """
+    _refuse_inside_swarmai()
     # ── MemoryGuard: sanitize content before any file I/O ────────────
     try:
         from core.memory_guard import MemoryGuard, MemoryGuardError
@@ -620,7 +639,7 @@ def main():
                 args.increment_field,
                 "increment-field",
             )
-        except (LockedWriteError, ValueError) as exc:
+        except (LockedWriteError, ValueError, InsideSwarmAI) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         return
@@ -639,7 +658,7 @@ def main():
                 "set-field",
                 args.value,
             )
-        except (LockedWriteError, ValueError) as exc:
+        except (LockedWriteError, ValueError, InsideSwarmAI) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(1)
         return
@@ -657,7 +676,7 @@ def main():
 
     try:
         locked_read_modify_write(args.file, args.section, text, mode)
-    except (LockedWriteError, ValueError) as exc:
+    except (LockedWriteError, ValueError, InsideSwarmAI) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 

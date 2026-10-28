@@ -1,20 +1,21 @@
-"""MEMORY.md Open Threads: how a COE signal opens and closes a thread.
+"""Open COEs: live state rendered from the COE Registry plus undistilled DailyActivity.
 
-A COE ``candidate`` opens a P0 thread; a ``resolution`` closes the matching thread by
-removing it (its history stays in the COE Registry). The thread is the same thread as
-the COE when its title has the same ``coe_key`` — the key the COE Registry uses — never
-because the two share some words. Deliverables never close a thread: matching titles
-against deliverable lines by word overlap closed nothing right and one thing wrong on
-real data, so that path is gone.
+Design B (CDF single writer): nothing writes COE threads into MEMORY.md's Open
+Threads. ``core.coe_threads`` computes which COEs are open from the registry's
+status (the baseline, folded by distillation from distilled days) and the COE
+signals of the days not marked distilled; the briefing renders them as P0 items,
+and a COE-keyed thread already in Open Threads follows that state. A thread is the
+COE's thread only when its title has the same ``coe_key``, never shared words.
+Deliverables never close a thread.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from hooks.distillation_hook import DistillationTriggerHook
-
-apply = DistillationTriggerHook._apply_open_thread_updates
+from core import coe_threads
+from core.proactive_intelligence import _merge_coe_threads, _parse_open_threads
 
 MEMORY = """# Memory
 
@@ -23,65 +24,122 @@ MEMORY = """# Memory
 ### P0 — Blocking
 - 🔴 **streaming freeze + overall slowness** (reported 1x: 2026-10-24)
   Status: COE candidate — auto-promoted from DailyActivity.
-- 🔴 **chat messages showing Interrupted chip** (reported 1x: 2026-10-15)
-  Status: COE candidate — auto-promoted from DailyActivity.
 
 ### P1 — Important
 - 🟡 **Frontend reconcile race** — guarded, prod-verify pending.
 
 ## COE Registry
+- [pitfall] **streaming freeze + overall slowness** — 🔍 Investigating. Sessions: 2026-10-24 (2026-10-24)
+  <!-- ref:0 | last:2026-10-24 | decay:active | source:auto -->
+- [pitfall] **chat messages showing Interrupted chip** — 🔍 Investigating. Sessions: 2026-10-15 (2026-10-15)
+  <!-- ref:0 | last:none | decay:active -->
+- [pitfall] **cultivation self-deletion** — ✅ Resolved. Sessions: 2026-10-25 (2026-10-25)
+  <!-- ref:0 | last:none | decay:active -->
+- [pitfall] **Sev-1: data.db wiped** — post-mortem written by hand, no live status.
+  <!-- ref:0 | last:none | decay:active | source:manual -->
+
+## Other
 """
 
 
-def _threads(text: str) -> list[str]:
-    return [line for line in text.splitlines() if line.startswith(("- 🔴", "- 🟡", "- 🔵"))]
+def _ws(tmp_path: Path, days: dict[str, list[tuple[str, str]]] | None = None,
+        distilled: tuple[str, ...] = ()) -> Path:
+    (tmp_path / ".context").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".context" / "MEMORY.md").write_text(MEMORY, encoding="utf-8")
+    da = tmp_path / "Knowledge" / "DailyActivity"
+    da.mkdir(parents=True, exist_ok=True)
+    for day, sigs in (days or {}).items():
+        flag = "true" if day in distilled else "false"
+        (da / f"{day}.md").write_text(f"---\ndate: {day}\ndistilled: {flag}\n---\n",
+                                      encoding="utf-8")
+        (da / f"{day}.jsonl").write_text("".join(
+            json.dumps({"coe_signal": s, "coe_topic": t}) + "\n" for s, t in sigs),
+            encoding="utf-8")
+    return tmp_path
 
 
-def test_a_resolution_with_no_thread_opens_nothing():
-    out = apply(MEMORY, [("2026-10-27", "resolution", "Pipeline audit reporting 0/N findings closed")])
-    assert out == MEMORY
+def _open(ws: Path) -> list[str]:
+    return [s.title for s in coe_threads.open_coes(ws)]
 
 
-def test_a_candidate_with_no_thread_opens_a_p0_thread():
-    out = apply(MEMORY, [("2026-10-27", "candidate", "demo Hive returns 401 at app layer")])
-    assert "- 🔴 **demo Hive returns 401 at app layer** (reported 1x: 2026-10-27)" in out
-    p0 = out.index("### P0")
-    assert p0 < out.index("demo Hive returns 401") < out.index("### P1")
+def test_the_registry_status_is_the_baseline(tmp_path: Path):
+    ws = _ws(tmp_path)
+    assert _open(ws) == ["streaming freeze + overall slowness",
+                         "chat messages showing Interrupted chip"]
+    # a hand-written post-mortem with no live status is a record, not an open problem
+    assert "sev-1: data.db wiped" not in coe_threads.coe_states(ws)
 
 
-def test_a_resolution_removes_its_thread_and_its_status_line():
-    out = apply(MEMORY, [("2026-10-27", "resolution", "Streaming freeze + overall slowness.")])
-    assert "streaming freeze" not in out
-    assert "chat messages showing Interrupted chip" in out
-    assert out.count("Status: COE candidate") == 1      # the other thread keeps its own
-    assert "Frontend reconcile race" in out
+def test_an_undistilled_resolution_closes_and_a_candidate_opens(tmp_path: Path):
+    ws = _ws(tmp_path, {"2026-10-27": [("resolution", "Streaming freeze + overall slowness."),
+                                       ("candidate", "demo Hive returns 401")]})
+    assert _open(ws) == ["demo Hive returns 401", "chat messages showing Interrupted chip"]
 
 
-def test_a_topic_sharing_words_with_a_thread_is_not_that_thread():
-    """Word overlap ("streaming", "slowness") once made an unrelated COE bump or close
-    another thread; only the same coe_key is the same thread."""
-    out = apply(MEMORY, [("2026-10-27", "resolution", "streaming slowness")])
-    assert "streaming freeze + overall slowness" in out
-    out = apply(MEMORY, [("2026-10-27", "candidate", "streaming slowness")])
-    assert "(reported 1x: 2026-10-24)" in out           # the existing thread is untouched
-    assert "**streaming slowness** (reported 1x: 2026-10-27)" in out
+def test_distilled_days_are_already_in_the_registry_and_not_read_again(tmp_path: Path):
+    ws = _ws(tmp_path, {"2026-10-24": [("resolution", "streaming freeze + overall slowness")]},
+             distilled=("2026-10-24",))
+    assert "streaming freeze + overall slowness" in _open(ws)
 
 
-def test_a_repeated_candidate_counts_on_its_own_thread():
-    out = apply(MEMORY, [("2026-10-27", "candidate", "**Streaming freeze + overall slowness**")])
-    assert "**streaming freeze + overall slowness** (reported 2x:" in out
-    assert len(_threads(out)) == len(_threads(MEMORY))
+def test_signals_fold_in_date_order_and_a_later_candidate_reopens(tmp_path: Path):
+    ws = _ws(tmp_path, {"2026-10-26": [("resolution", "cultivation self-deletion")],
+                        "2026-10-27": [("candidate", "cultivation self-deletion"),
+                                       ("candidate", "cultivation self-deletion")]})
+    st = coe_threads.coe_states(ws)["cultivation self-deletion"]
+    assert st.open and st.reports == 2 and st.last == "2026-10-27"
 
 
-def test_a_candidate_resolved_in_the_same_batch_opens_nothing():
-    out = apply(MEMORY, [("2026-10-26", "candidate", "two-layer auth password out of sync"),
-                         ("2026-10-27", "resolution", "two-layer auth password out of sync")])
-    assert out == MEMORY
+def test_a_candidate_resolved_the_same_day_is_not_open(tmp_path: Path):
+    ws = _ws(tmp_path, {"2026-10-27": [("candidate", "two-layer auth out of sync"),
+                                       ("resolution", "two-layer auth out of sync")]})
+    assert "two-layer auth out of sync" not in _open(ws)
 
 
-def test_deliverables_no_longer_close_threads():
-    assert not hasattr(DistillationTriggerHook, "_reconcile_open_threads_from_deliverables")
-    assert not hasattr(DistillationTriggerHook, "_apply_deliverable_reconciliation")
+def test_a_topic_sharing_words_is_not_the_same_coe(tmp_path: Path):
+    ws = _ws(tmp_path, {"2026-10-27": [("resolution", "streaming slowness")]})
+    assert "streaming freeze + overall slowness" in _open(ws)
+
+
+def test_inner_bold_markers_do_not_change_the_key():
+    assert coe_threads.coe_key("fix **inner** bug.") == coe_threads.coe_key("Fix inner bug")
+
+
+def test_the_briefing_threads_follow_the_coe_state(tmp_path: Path):
+    ws = _ws(tmp_path, {"2026-10-27": [("resolution", "streaming freeze + overall slowness")]})
+    threads = _merge_coe_threads(_parse_open_threads(MEMORY), coe_threads.coe_states(ws))
+    titles = [(t["priority"], t["title"], bool(t.get("coe"))) for t in threads]
+    # the resolved COE's old thread is hidden; the open COE with no thread is a P0
+    # item; a thread that is no COE is untouched
+    assert titles == [("P0", "chat messages showing Interrupted chip", True),
+                      ("P1", "Frontend reconcile race", False)]
+
+
+def test_an_archived_undistilled_day_still_counts(tmp_path: Path):
+    """After the cutover nothing marks a day distilled, and retention archives an
+    undistilled day after 180 days (the .md moves to Knowledge/Archives/, the sidecar
+    stays): its COE signals must still count. A day whose .md is gone everywhere
+    is skipped."""
+    ws = _ws(tmp_path, {"2026-04-01": [("candidate", "archived problem")],
+                        "2026-04-02": [("candidate", "vanished problem")]})
+    da = ws / "Knowledge" / "DailyActivity"
+    (ws / "Knowledge" / "Archives").mkdir()
+    (da / "2026-04-01.md").rename(ws / "Knowledge" / "Archives" / "2026-04-01.md")
+    (da / "2026-04-02.md").unlink()
+    assert "archived problem" in _open(ws)
+    assert "vanished problem" not in _open(ws)
+
+
+
+
+
+
+def test_open_problem_titles_come_from_the_coe_state(tmp_path: Path):
+    from hooks.daily_activity_hook import _open_problem_titles
+    ws = _ws(tmp_path)
+    assert _open_problem_titles(ws) == ["streaming freeze + overall slowness",
+                                        "chat messages showing Interrupted chip"]
+    assert _open_problem_titles(tmp_path / "missing") == []
 
 
 # ── one parser for the DailyActivity "Delivered" sections ──────────────────────
@@ -123,56 +181,9 @@ def test_briefing_hints_see_the_delivered_lines(tmp_path: Path):
         "shipped the open-thread fix", "wrote the hld", "published to pippin"]
 
 
-def test_effectiveness_scoring_sees_the_delivered_lines(tmp_path: Path, monkeypatch):
-    import core.proactive_intelligence as pi
-    seen = {}
-
-    class _State:
-        last_briefing_suggested = ["fix the open threads"]
-        effectiveness: dict = {}
-
-    monkeypatch.setattr(pi, "_load_learning_state", lambda ws: _State())
-    monkeypatch.setattr(pi, "_save_learning_state", lambda ws, st: None)
-    monkeypatch.setattr(pi, "_update_effectiveness",
-                        lambda st, sugg, deliv: seen.setdefault("deliv", list(deliv)))
-    da = tmp_path / "2026-10-27.md"
-    da.write_text(DA, encoding="utf-8")
-    DistillationTriggerHook._update_effectiveness_scoring([da], tmp_path)
-    assert seen["deliv"] == ["shipped the open-thread fix", "wrote the HLD", "published to Pippin"]
 
 
-# ── review round 1 ─────────────────────────────────────────────────────────────
-
-def test_a_title_with_inner_bold_markers_is_found_again():
-    out = apply(MEMORY, [("2026-10-26", "candidate", "fix **inner** bug")])
-    assert "- 🔴 **fix inner bug** (reported 1x: 2026-10-26)" in out
-    out = apply(out, [("2026-10-27", "candidate", "fix **inner** bug")])
-    assert "**fix inner bug** (reported 2x: 2026-10-26, 2026-10-27)" in out
-    assert apply(out, [("2026-10-28", "resolution", "fix **inner** bug")]).count("inner") == 0
-
-
-def test_a_bump_adds_the_new_date():
-    out = apply(MEMORY, [("2026-10-27", "candidate", "streaming freeze + overall slowness")])
-    assert "(reported 2x: 2026-10-24, 2026-10-27)" in out
-
-
-def test_only_the_open_threads_section_is_searched():
-    text = "## Notes\n- 🔴 **a bullet elsewhere** — not a thread\n\n" + MEMORY
-    assert apply(text, [("2026-10-27", "resolution", "a bullet elsewhere")]) == text
-    out = apply(text, [("2026-10-27", "candidate", "a bullet elsewhere")])
-    assert "**a bullet elsewhere** — not a thread" in out          # untouched
-    assert "**a bullet elsewhere** (reported 1x: 2026-10-27)" in out  # its own thread
-
-
-def test_a_resolution_removes_a_body_with_blank_lines_inside():
-    text = MEMORY.replace(
-        "- 🟡 **Frontend reconcile race** — guarded, prod-verify pending.\n",
-        "- 🟡 **Frontend reconcile race** — guarded, prod-verify pending.\n"
-        "  first paragraph\n\n  **second paragraph of the same thread**\n")
-    out = apply(text, [("2026-10-27", "resolution", "Frontend reconcile race")])
-    assert "reconcile race" not in out and "paragraph" not in out
-    assert "## COE Registry" in out
-
+# ── the summariser reuses an open COE title ────────────────────────────────────
 
 def test_the_summariser_is_asked_to_reuse_an_open_problem_title(monkeypatch):
     import core.summarization as sm
@@ -190,19 +201,9 @@ def test_the_summariser_is_asked_to_reuse_an_open_problem_title(monkeypatch):
     msgs = [{"role": "user", "content": "the streaming froze again"},
             {"role": "assistant", "content": "found the stall"}]
     asyncio.run(pipe._enrich_with_llm(summary, msgs,
-                                      open_problems=["streaming freeze + overall slowness"]))
+                                      open_next_items=[], open_problems=["streaming freeze + overall slowness"]))
     assert '"streaming freeze + overall slowness"' in seen["prompt"]
     assert "copy that title exactly" in seen["prompt"]
-
-
-def test_open_problem_titles_come_from_memory(tmp_path: Path):
-    from hooks.daily_activity_hook import _open_problem_titles
-    (tmp_path / ".context").mkdir()
-    (tmp_path / ".context" / "MEMORY.md").write_text(MEMORY, encoding="utf-8")
-    assert _open_problem_titles(tmp_path) == [
-        "streaming freeze + overall slowness", "chat messages showing Interrupted chip",
-        "Frontend reconcile race"]
-    assert _open_problem_titles(tmp_path / "missing") == []
 
 
 def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
@@ -210,7 +211,7 @@ def test_summarize_passes_the_open_problems_to_the_enrichment(monkeypatch):
     import core.summarization as sm
     seen = {}
 
-    async def _enrich(self, summary, messages, *, open_problems=None):
+    async def _enrich(self, summary, messages, *, open_next_items=None, open_problems=None):
         seen["open_problems"] = open_problems
         return summary
     monkeypatch.setattr(sm.SummarizationPipeline, "_enrich_with_llm", _enrich)

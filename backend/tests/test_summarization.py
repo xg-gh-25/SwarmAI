@@ -112,10 +112,10 @@ class TestExtractTopics:
         topics = pipeline._extract_topics(msgs)
         assert len(topics) == 0
 
-    def test_long_message_truncated(self, pipeline: SummarizationPipeline):
-        msgs = [_user("A" * 200 + " some important context")]
-        topics = pipeline._extract_topics(msgs)
-        assert all(len(t) <= 125 for t in topics)  # 120 + "..."
+    def test_long_message_is_complete(self, pipeline: SummarizationPipeline):
+        text = "A" * 200 + " some important context"
+        topics = pipeline._extract_topics([_user(text)])
+        assert topics == [text]
 
     def test_content_list_format(self, pipeline: SummarizationPipeline):
         """Messages with content as list of blocks (API format)."""
@@ -165,14 +165,12 @@ class TestExtractDecisions:
         decisions = pipeline._extract_decisions(msgs)
         assert len(decisions) == 0
 
-    def test_per_message_cap(self, pipeline: SummarizationPipeline):
-        # 5 decision sentences in one message — should be capped at 3
+    def test_all_decisions_are_preserved(self, pipeline: SummarizationPipeline):
         sentences = ". ".join(
             [f"We decided to use approach {i} for component {i}" for i in range(5)]
         )
-        msgs = [_assistant(sentences)]
-        decisions = pipeline._extract_decisions(msgs)
-        assert len(decisions) <= 3
+        decisions = pipeline._extract_decisions([_assistant(sentences)])
+        assert len(decisions) == 5
 
     def test_dedup_decisions(self, pipeline: SummarizationPipeline):
         msgs = [
@@ -239,10 +237,9 @@ class TestDeriveTitle:
         title = pipeline._derive_title(msgs)
         assert "streaming" in title.lower()
 
-    def test_caps_at_60_chars(self, pipeline: SummarizationPipeline):
-        msgs = [_user("A" * 100 + " trailing words")]
-        title = pipeline._derive_title(msgs)
-        assert len(title) <= 63  # 60 + potential "..."
+    def test_keeps_complete_title(self, pipeline: SummarizationPipeline):
+        text = "A" * 100 + " trailing words"
+        assert pipeline._derive_title([_user(text)]) == text
 
     def test_no_user_messages(self, pipeline: SummarizationPipeline):
         msgs = [_assistant("Hello")]
@@ -299,17 +296,19 @@ class TestDeriveContinueFrom:
 # ---------------------------------------------------------------------------
 
 class TestWordLimit:
-    def test_trims_lowest_value_first(self, pipeline: SummarizationPipeline):
+    def test_compatibility_hook_never_drops_entries(self, pipeline: SummarizationPipeline):
         summary = StructuredSummary(
-            topics=["word " * 200],  # ~200 words in topics alone
+            topics=["word " * 800],
             decisions=["important decision"],
             lessons=["critical lesson"],
         )
-        trimmed = pipeline._enforce_word_limit(summary)
-        # Topics (lowest value) should be trimmed before lessons
-        assert trimmed.word_count() <= pipeline.MAX_WORDS_PER_ENTRY
-        # Lessons should survive
-        assert len(trimmed.lessons) >= 1 or len(trimmed.decisions) >= 1
+        original_topics = list(summary.topics)
+        original_decisions = list(summary.decisions)
+        original_lessons = list(summary.lessons)
+        kept = pipeline._enforce_word_limit(summary)
+        assert kept.topics == original_topics
+        assert kept.decisions == original_decisions
+        assert kept.lessons == original_lessons
 
 
 # ---------------------------------------------------------------------------

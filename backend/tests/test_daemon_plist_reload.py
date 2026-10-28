@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -53,9 +54,16 @@ class TestPlistPriority:
 
 
 def _run(script: str, home: Path) -> str:
-    """Source daemon-lib.sh with a temp HOME and run ``script``; return stdout."""
+    """Source daemon-lib.sh with a temp HOME and run ``script``; return stdout.
+
+    PATH starts with this interpreter's directory: daemon-lib.sh calls ``python3``,
+    and on a machine where that is a version-manager shim (mise) a temp HOME makes the
+    shim look for its tools under the temp HOME and never return, so every case timed
+    out at 60 s on clean main. The script under test is unchanged.
+    """
     prelude = f"""
 export HOME="{home}"
+export PATH="{Path(sys.executable).parent}:$PATH"
 PROJECT_ROOT="{home}/repo"; DESKTOP_DIR="{home}/desktop"; LOG_DIR="{home}/logs"
 _log() {{ :; }}; _ok() {{ :; }}; _warn() {{ :; }}; _err() {{ :; }}
 source "{DAEMON_LIB}"

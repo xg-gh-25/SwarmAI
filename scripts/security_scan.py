@@ -85,9 +85,13 @@ SCAN_SUBDIR = "backend"
 # and _cors_fingerprints._is_excluded which derives from it) — it MUST stay in sync with
 # .gitignore's private-skill globs (s_cmhk-* / s_internal-* / _shared); a source that
 # scans a dir .gitignore hides is a leak door (P8: every finding source honors one scope).
-BANDIT_EXCLUDES = "tests,.venv,node_modules,s_cmhk-*,s_internal-*,_shared"
-# detect-secrets `--exclude-files` regex counterpart (same private-skill scope).
-SECRETS_EXCLUDE_RE = r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/s_internal-[^/]*/|/_shared/"
+# Local caches (.pytest_cache, __pycache__) are .gitignored machine state, regenerated
+# per run (e.g. swarm_select_tests' source-graph cache): scanning them makes the result
+# depend on which tests ran on this machine, and bakes local paths into the baseline.
+BANDIT_EXCLUDES = "tests,.venv,node_modules,s_cmhk-*,s_internal-*,_shared,.pytest_cache,__pycache__"
+# detect-secrets `--exclude-files` regex counterpart (same private-skill + cache scope).
+SECRETS_EXCLUDE_RE = (r"\.venv/|node_modules/|/s_cmhk-[^/]*/|/s_internal-[^/]*/|/_shared/"
+                      r"|/\.pytest_cache/|/__pycache__/")
 
 # The single severity/confidence policy — used identically for baseline generation
 # AND compare, so they can never drift (Gate-1 MUST-FIX-5).

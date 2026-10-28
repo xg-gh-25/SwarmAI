@@ -22,32 +22,25 @@ evidence, and only when a fixed grammar matches:
     the value the committed (HEAD) source file declares for it — exactly one top-level
     declaration (a call argument, docstring or block comment does not count).
 
-Every fix also stays inside one plain line of a canonical DDD doc (not front matter, a
-heading, a code block, metadata or a dated lifecycle entry; the doc has no unusual
-separators), never re-applies a fix the user undid (matched by what it does, not by the
-line's text), and never undoes an earlier fix. No free text from the model reaches a
-document: free-text fixes could not be made safe by checks.
+Every fix stays inside one plain line of a canonical DDD doc (not front matter, a
+heading, a code block or metadata; the doc has no unusual separators), never re-proposes
+a fix the user undid, and never undoes an earlier fix. A dated or baseline unit may be
+targeted because CDF appends a complete superseding unit; its existing bytes stay intact.
+No free text from the model reaches a document.
 
-``apply_fix`` re-checks under the shared DDD lock, backs the doc up, records the fix, then
-replaces the line only if the file is unchanged since the re-check; ``undo_drift_fix``
-validates the logged row against the run's backup, records the undo first, then puts
-the line back. Projects other than SwarmAI are not in git: the log
-(``.artifacts/ddd-drift-fixes.jsonl``) and the backups are the only way back. The log is
-not signed: whoever can write ``.artifacts`` can write the DDD docs beside it, and the
-audit agent can write neither.
+``apply_fix`` re-checks the grammar and returns the computed replacement line. It
+never writes the DDD. ``ddd_self_audit`` wraps that result in a complete S4 Cognition
+unit whose relation hint supersedes the old entry. The historical
+``.artifacts/ddd-drift-fixes.jsonl`` remains read-only input: when it says a user
+previously undid the same fix, the grammar refuses to propose it again.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import re
 import subprocess
-import tempfile
 import unicodedata
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 from core.ddd_cultivation import _confined_doc_path
@@ -55,8 +48,6 @@ from core.ddd_entry_lifecycle import parse_entries
 from core.project_registry import DDD_CANONICAL_DOCS
 
 FIX_LOG = "ddd-drift-fixes.jsonl"
-BACKUP_DIR = "drift-fix-backups"
-BACKUPS_KEPT = 10
 FIX_TYPES = ("drop_condition", "swap_superseded_path", "swap_code_value")
 _FIELDS = {
     "drop_condition": ("doc", "line", "span", "done"),
@@ -254,7 +245,7 @@ def _target_line(text: str, needle: str) -> tuple[int, str] | Outcome:
     if text.count(needle) != 1:
         return _open(f"the quoted text appears {text.count(needle)} times in the document")
     idx = text.count("\n", 0, text.index(needle))
-    why = _plain_line(text, idx)
+    why = _plain_line(text, idx, entries=False)
     if why:
         return _open(why)
     return idx, text.split("\n")[idx]
@@ -363,7 +354,7 @@ def _check_swap_path(fix: dict, text: str, project_dir: Path, workspace: Path,
     if total != 1:
         return _open(f"the path appears {total} times in the document")
     idx, line = found[0]
-    why = _plain_line(text, idx)
+    why = _plain_line(text, idx, entries=False)
     if why:
         return _open(why)
     roots = [r for r in (project_dir, workspace, repo) if r is not None]
@@ -557,158 +548,24 @@ def check_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path |
                    old_line=old_line, new_line=new_line, key=key)
 
 
-# ─── writing ───────────────────────────────────────────────────────────────
-
-def _backup_path(project_dir: Path, doc_name: str, run_id: str) -> Path:
-    return project_dir / ".artifacts" / BACKUP_DIR / f"{Path(doc_name).stem}.{run_id}.md"
-
-
-def _backup(project_dir: Path, doc: Path, run_id: str) -> None:
-    """One whole-doc copy per doc per run. Keeps the oldest (before any auto-fix) and the
-    newest BACKUPS_KEPT - 1."""
-    target = _backup_path(project_dir, doc.name, run_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if not target.exists():
-        target.write_bytes(doc.read_bytes())
-    mine = sorted(target.parent.glob(f"{doc.stem}.*.md"), key=lambda p: p.stat().st_mtime)
-    for stale in mine[1:-(BACKUPS_KEPT - 1)] if len(mine) > BACKUPS_KEPT else []:
-        try:
-            stale.unlink()
-        except OSError:
-            pass
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    mode = path.stat().st_mode & 0o7777
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            f.write(text)
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _append_log(project_dir: Path, row: dict) -> None:
-    log = project_dir / ".artifacts" / FIX_LOG
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with open(log, "a", encoding="utf-8") as f:
-        f.write(json.dumps(row) + "\n")  # ASCII-escaped: "\n" is the only line break in the file
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _fix_id(run_id: str, doc: str, old_line: str, new_line: str) -> str:
-    digest = hashlib.sha1(f"{old_line}\x00{new_line}".encode("utf-8")).hexdigest()[:12]
-    return f"{run_id}:{doc}:{digest}"
-
+# ─── computed replacement (no write) ─────────────────────────────────────────
 
 def apply_fix(fix: dict, project_dir: Path, workspace: Path, source_repo: Path | None,
-              *, run_id: str, finding_title: str = "", dry_run: bool = False) -> Outcome:
-    """Check and, when certain, write the fix. Under the lock: re-check, back up, log,
-    then replace the line only if the file is unchanged since the re-check. A failure
-    before the replace changes nothing; a failed replace is logged as failed."""
-    from utils.file_lock import md_lock
+              *, run_id: str = "", finding_title: str = "", dry_run: bool = False) -> Outcome:
+    """Return the deterministic replacement line; never modify any file.
 
-    first = check_fix(fix, project_dir, workspace, source_repo)
-    if not first.get("ok"):
-        return first
-    if dry_run:
-        return Outcome(ok=True, reason="would fix (dry run)", dry_run=True,
-                       old_line=first["old_line"], new_line=first["new_line"])
-    doc = Path(first["doc_path"])
-    with md_lock(doc, blocking=False) as got:
-        if not got:
-            return _open("the document is being written; next run will retry")
-        again = check_fix(fix, project_dir, workspace, source_repo)
-        if not again.get("ok"):
-            return again
-        old_line, new_line = again["old_line"], again["new_line"]
-        if any(r.get("run") == run_id and r.get("target_doc") == fix["doc"] and not r["undone"]
-               and r.get("new_line") == old_line for r in past_fixes(project_dir)):
-            # the run's backup holds the line before the first fix, so this one could not be undone
-            return _open("another fix changed this line in this run; the next run will look at it again")
-        fix_id = _fix_id(run_id, fix["doc"], old_line, new_line)
-        seq = uuid.uuid4().hex[:16]
-        try:
-            _backup(project_dir, doc, run_id)
-            _append_log(project_dir, {"fix_id": fix_id, "seq": seq, "status": "applied", "type": fix["type"], "run": run_id,
-                                      "key": again["key"], "target_doc": fix["doc"], "old_line": old_line,
-                                      "new_line": new_line,
-                                      "evidence": {k: _clean(v) for k, v in fix.items() if k not in ("type", "doc")},
-                                      "finding": _clean(finding_title), "timestamp": _now()})
-        except OSError as e:
-            return _open(f"could not back up or record the fix ({e.__class__.__name__}); nothing changed")
-        try:
-            st = doc.stat()
-            lines = doc.read_bytes().decode("utf-8").split("\n")
-            if (st.st_mtime_ns, st.st_size) != (again["mtime_ns"], again["size"]) or lines.count(old_line) != 1:
-                raise RuntimeError("the document changed while the fix was being written")
-            lines[lines.index(old_line)] = new_line
-            _atomic_write(doc, "\n".join(lines))
-        except (OSError, RuntimeError, UnicodeDecodeError) as e:
-            try:
-                _append_log(project_dir, {"fix_id": fix_id, "seq": seq, "status": "failed", "reason": _clean(e),
-                                          "timestamp": _now()})
-            except OSError:
-                pass
-            return _open(f"the fix was not written: {str(e)[:120]}; nothing changed")
-    return Outcome(ok=True, reason="fixed", fix_id=fix_id, old_line=old_line, new_line=new_line)
-
-
-def undo_drift_fix(project_dir: Path, index: int) -> Outcome:
-    """Put one fix back (``index`` as listed by ``past_fixes``). The row must be genuine —
-    its id matches its lines and the run's backup holds the old line — and the new line
-    must still be in the doc exactly once. The undo is recorded BEFORE the doc changes,
-    so the self-audit never redoes it."""
-    from utils.file_lock import md_lock
-
-    row = {r["index"]: r for r in past_fixes(project_dir)}.get(index)
-    if row is None:
-        return _open("no such fix")
-    if row["undone"]:
-        return _open("already undone")
-    doc_name = str(row.get("target_doc", ""))
-    new, old = str(row.get("new_line", "")), str(row.get("old_line", ""))
-    if doc_name not in DDD_CANONICAL_DOCS or "\n" in old or "\n" in new or _odd_separators(old) \
-            or row.get("fix_id") != _fix_id(str(row.get("run", "")), doc_name, old, new):
-        return _open("the log row does not look like a fix this system wrote; not undone")
-    backup = _read(_backup_path(project_dir, doc_name, str(row.get("run", ""))))
-    if backup is None or old not in backup.split("\n"):
-        return _open("the run's backup does not hold the original line; not undone")
-    doc = _confined_doc_path(project_dir, doc_name)
-    if doc is None:
-        return _open("the document is gone")
-    with md_lock(doc, blocking=True):
-        try:
-            lines = doc.read_bytes().decode("utf-8").split("\n")
-        except (OSError, UnicodeDecodeError):
-            return _open("the document could not be read")
-        if not new or lines.count(new) != 1:
-            return _open("the fixed line was edited since; not undone")
-        try:
-            _append_log(project_dir, {"fix_id": row.get("fix_id"), "seq": row.get("seq"), "status": "undone",
-                                      "timestamp": _now()})
-        except OSError as e:
-            return _open(f"could not record the undo ({e.__class__.__name__}); nothing changed")
-        try:
-            lines[lines.index(new)] = old
-            _atomic_write(doc, "\n".join(lines))
-        except OSError as e:
-            try:
-                _append_log(project_dir, {"fix_id": row.get("fix_id"), "seq": row.get("seq"), "status": "undo_failed",
-                                          "timestamp": _now()})
-            except OSError:
-                pass
-            return _open(f"the undo was not written ({e.__class__.__name__})")
-    return Outcome(ok=True, reason="undone")
+    ``run_id``, ``finding_title`` and ``dry_run`` remain descriptive inputs for the
+    scheduled caller. CDF owns persistence and supersession.
+    """
+    _ = (run_id, finding_title, dry_run)
+    checked = check_fix(fix, project_dir, workspace, source_repo)
+    if not checked.get("ok"):
+        return checked
+    return Outcome(
+        ok=True, reason="computed",
+        doc_path=checked["doc_path"], old_line=checked["old_line"],
+        new_line=checked["new_line"], key=checked["key"], fix_type=fix["type"],
+    )
 
 
 def first_seen(needle: str, reports_dir: Path, *, before: str | None = None) -> str | None:
@@ -730,4 +587,4 @@ def first_seen(needle: str, reports_dir: Path, *, before: str | None = None) -> 
 
 
 __all__ = ["FIX_LOG", "FIX_TYPES", "Outcome", "apply_fix", "check_fix", "first_seen", "parse_fix",
-           "past_fixes", "undo_drift_fix"]
+           "past_fixes"]

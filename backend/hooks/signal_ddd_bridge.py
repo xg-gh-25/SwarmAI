@@ -1,201 +1,63 @@
-"""Signal DDD Bridge — Channel 4 of DDD Cultivation.
+"""External signal and learned-content bridges into CDF v2 S6.
 
-After signal_digest job produces daily digest, bridges high-relevance
-signals (score >= 0.8) into PRODUCT.md proposals. Detects competitive
-moves, market shifts, and technology trends relevant to active projects.
-
-Also serves Channel 2 (learn-content): when invoked directly with a
-knowledge card summary, scores relevance and proposes enrichment.
-
-Trigger: Called by context_health_hook during daily deep check (reads
-signal_digest.json). Not a session hook — runs independently.
+Both bridges read content already present locally and make no network request. Content
+inside an active session or run is rejected here because S2 or S3 owns that evidence.
 """
-
 from __future__ import annotations
 
+import hashlib
 import json
-import logging
-from datetime import datetime, timezone
+import os
 from pathlib import Path
+from typing import Any
+
+from core.ingestion.sources.s6_external import extract_external
 from core.project_registry import DEFAULT_PROJECT_NAME
 
-logger = logging.getLogger(__name__)
-
-# Signal relevance threshold for DDD proposal generation
 _MIN_RELEVANCE_SCORE = 0.8
-
-# Maximum proposals per digest run (avoid flooding)
-_MAX_PROPOSALS_PER_RUN = 3
-
-# Keywords that indicate PRODUCT.md relevance (competitive/strategic)
-_PRODUCT_KEYWORDS = {
-    "competitor", "launch", "funding", "acquisition", "market",
-    "pricing", "enterprise", "startup", "pivot", "strategy",
-    "moat", "disruption", "trend", "adoption",
-}
-
-# Keywords that indicate TECH.md relevance (patterns/libraries/architecture)
-_TECH_KEYWORDS = {
-    "framework", "library", "architecture", "pattern", "protocol",
-    "sdk", "api", "performance", "scaling", "migration",
-    "security", "vulnerability", "deprecated", "release",
-}
+_MAX_ITEMS_PER_RUN = 3
 
 
-def bridge_signals_to_ddd(workspace_path: str) -> int:
-    """Read signal_digest.json, bridge high-relevance signals to DDD proposals.
-
-    Returns the number of proposals generated.
-    """
-    from core.ddd_cultivation import CultivationProposal, write_proposal
-
-    root = Path(workspace_path)
-    digest_path = root / "Services" / "signals" / "signal_digest.json"
-
-    if not digest_path.exists():
+def bridge_signals_to_ddd(workspace_path: str, *, llm: Any | None = None) -> int:
+    """Extract high-relevance out-of-session signal items as S6 References."""
+    digest = Path(workspace_path) / "Services" / "signals" / "signal_digest.json"
+    if not digest.is_file():
         return 0
-
     try:
-        data = json.loads(digest_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.debug("signal_ddd_bridge: cannot read digest: %s", exc)
+        items = json.loads(digest.read_text(encoding="utf-8")).get("items", [])
+    except (OSError, ValueError, AttributeError):
         return 0
-
-    items = data.get("items", [])
-    if not items:
-        return 0
-
-    # Find SwarmAI project dir (primary target)
-    project_dir = root / "Projects" / DEFAULT_PROJECT_NAME
-    if not project_dir.exists():
-        return 0
-
-    proposals_generated = 0
-
-    for item in items:
-        if proposals_generated >= _MAX_PROPOSALS_PER_RUN:
+    queued = 0
+    for index, item in enumerate(items):
+        if index >= _MAX_ITEMS_PER_RUN or not isinstance(item, dict):
             break
-
-        # Support both "score" (test) and "relevance_score" (production)
         score = item.get("relevance_score") or item.get("score") or 0
-        if score < _MIN_RELEVANCE_SCORE:
+        title = str(item.get("title") or "")
+        summary = str(item.get("summary") or item.get("content") or "")
+        if score < _MIN_RELEVANCE_SCORE or not title or not summary:
             continue
-
-        title = item.get("title", "")
-        summary = item.get("summary", "") or item.get("content", "")
-        source_url = item.get("url", "") or item.get("source", "")
-
-        if not title or not summary:
-            continue
-
-        # Determine target doc + section based on content keywords
-        target_doc, target_section = _classify_signal(title, summary)
-
-        content = f"**{title}** (relevance: {score:.1f})\n{summary[:200]}"
-        if source_url:
-            content += f"\nSource: {source_url}"
-
-        proposal = CultivationProposal(
-            target_doc=target_doc,
-            target_section=target_section,
-            content=content,
-            source_run_id=f"signal_digest:{datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-            confidence=min(score, 0.95),  # Cap at 0.95 — signals need human validation
-            source_stage="signal_ddd_bridge",
-        )
-
-        write_proposal(proposal, project_dir)
-        proposals_generated += 1
-        logger.info(
-            "signal_ddd_bridge: proposal for %s#%s (score=%.2f, title=%s)",
-            target_doc, target_section, score, title[:40],
-        )
-
-    return proposals_generated
+        url = str(item.get("url") or item.get("source") or "") or None
+        ref = "signal:" + hashlib.sha256(
+            json.dumps(item, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        anchor = f"web:{url}" if url else f"doc:{digest.resolve()}#item:{index}"
+        queued += len(extract_external(
+            ref, json.dumps(item, ensure_ascii=False), evidence_anchor=anchor,
+            source_url=url, llm=llm))
+    return queued
 
 
-def bridge_learned_content_to_ddd(
-    title: str,
-    summary: str,
-    source_url: str,
-    workspace_path: str,
-    project: str = DEFAULT_PROJECT_NAME,
-) -> bool:
-    """Bridge a learned knowledge card to DDD proposal (Channel 2).
-
-    Called by s_learn-content skill after saving a knowledge card.
-    Scores relevance based on keywords and generates proposal if relevant.
-
-    Returns True if a proposal was generated.
-    """
-    from core.ddd_cultivation import CultivationProposal, write_proposal
-
-    root = Path(workspace_path)
-    project_dir = root / "Projects" / project
-    if not project_dir.exists():
-        return False
-
-    # Score relevance (PE-5: reuse shared helper)
-    product_hits, tech_hits = _score_keywords(title, summary)
-    total_hits = product_hits + tech_hits
-    if total_hits < 2:
-        # Not relevant enough for DDD
-        return False
-
-    # Determine target
-    target_doc, target_section = _classify_signal(title, summary)
-
-    # Confidence based on keyword density
-    confidence = min(0.6 + (total_hits * 0.05), 0.9)
-
-    content = f"**{title}**\n{summary[:300]}"
-    if source_url:
-        content += f"\nSource: {source_url}"
-
-    proposal = CultivationProposal(
-        target_doc=target_doc,
-        target_section=target_section,
-        content=content,
-        source_run_id=f"learn_content:{source_url[:60] if source_url else title[:40]}",
-        confidence=confidence,
-        source_stage="learn_content_bridge",
-    )
-
-    write_proposal(proposal, project_dir)
-    logger.info(
-        "signal_ddd_bridge: learn-content proposal for %s#%s (conf=%.2f)",
-        target_doc, target_section, confidence,
-    )
-    return True
-
-
-def _score_keywords(title: str, summary: str) -> tuple[int, int]:
-    """Score text against PRODUCT and TECH keyword sets.
-
-    PE-5 fix: single helper for keyword scoring (DRY).
-    Returns (product_hits, tech_hits).
-    """
-    text = f"{title} {summary}".lower()
-    product_hits = sum(1 for kw in _PRODUCT_KEYWORDS if kw in text)
-    tech_hits = sum(1 for kw in _TECH_KEYWORDS if kw in text)
-    return product_hits, tech_hits
-
-
-def _classify_signal(title: str, summary: str) -> tuple[str, str]:
-    """Classify a signal into target_doc + target_section.
-
-    Returns (target_doc, target_section).
-    """
-    text = f"{title} {summary}".lower()
-    product_hits, tech_hits = _score_keywords(title, summary)
-
-    if tech_hits > product_hits:
-        # Technical content → TECH.md
-        if any(kw in text for kw in ("pattern", "architecture", "design")):
-            return "TECH.md", "Architecture"
-        return "TECH.md", "Key Subsystems"
-    else:
-        # Strategic/competitive → PRODUCT.md
-        if any(kw in text for kw in ("competitor", "market", "disruption")):
-            return "PRODUCT.md", "What Makes It Different"
-        return "PRODUCT.md", "Vision"
+def bridge_learned_content_to_ddd(title: str, summary: str, source_url: str,
+                                  workspace_path: str, project: str = DEFAULT_PROJECT_NAME,
+                                  *, session_id: str | None = None,
+                                  run_id: str | None = None) -> bool:
+    """Send an out-of-session fetched document to S6; active contexts use S2/S3."""
+    _ = workspace_path
+    session = session_id or os.environ.get("SWARM_APP_SESSION_ID")
+    run = run_id or os.environ.get("SWARM_RUN_ID")
+    content = json.dumps({"title": title, "summary": summary,
+                          "source_url": source_url}, ensure_ascii=False)
+    result = extract_external(
+        "learned:" + hashlib.sha256(content.encode("utf-8")).hexdigest(), content,
+        evidence_anchor=f"web:{source_url}", source_url=source_url,
+        session_id=session, run_id=run, project_hint=project)
+    return bool(result)

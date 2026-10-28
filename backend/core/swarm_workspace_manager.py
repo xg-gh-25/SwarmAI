@@ -783,6 +783,8 @@ Projects/*
 .context/EVOLUTION.md
 .context/STEERING.md
 .context/TOOLS.md
+.context/TIMELINE.md
+.context/KNOWLEDGE.md
 # Online eval scoring of the owner's real sessions (titles, snippets, reasons),
 # and the owner's agree / disagree labels on its low scores.
 .context/.session-quality-state.json
@@ -800,6 +802,8 @@ _PRIVACY_GITIGNORE_RULES = [
     ".context/EVOLUTION.md",
     ".context/STEERING.md",
     ".context/TOOLS.md",
+    ".context/TIMELINE.md",
+    ".context/KNOWLEDGE.md",
     ".context/.session-quality-state.json",
     ".context/.judge-calibration.jsonl",
 ]
@@ -814,6 +818,7 @@ _PRIVATE_CONTEXT_FILES = [
     ".context/EVOLUTION.md",
     ".context/STEERING.md",
     ".context/TOOLS.md",
+    ".context/TIMELINE.md",
 ]
 
 # PUBLIC context files a fresh Hive is seeded with (the system-owned cognition
@@ -1019,25 +1024,6 @@ class SwarmWorkspaceManager:
         return (True, "")
 
     # ── Filesystem helpers ───────────────────────────────────────────────
-
-    def _write_file_if_missing(self, file_path: Path, content: str) -> bool:
-        """Write content to file only if it doesn't already exist.
-
-        This is a synchronous method intended to be called inside
-        ``anyio.to_thread.run_sync()``.
-
-        Args:
-            file_path: Absolute path to the file.
-            content: Text content to write.
-
-        Returns:
-            True if the file was written, False if it already existed.
-        """
-        if not file_path.exists():
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8")
-            return True
-        return False
 
     # ── Folder structure creation ────────────────────────────────────────
 
@@ -1625,7 +1611,16 @@ class SwarmWorkspaceManager:
                     )
                     return
                 new.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old), str(new))
+                from core.ingestion.governed_edit import apply_user_edit, revision_of
+                from core.ingestion.materializer import is_governed
+                if old.is_file() and is_governed(old):
+                    # A governed doc moves as two journaled edits (create, then
+                    # delete), so the baseline follows it and nothing writes a
+                    # governed file outside governed_edit (CDF §3.2).
+                    apply_user_edit(new, old.read_bytes(), expected_revision=revision_of(new))
+                    apply_user_edit(old, None, expected_revision=revision_of(old))
+                else:
+                    shutil.move(str(old), str(new))
                 moved.append(label)
 
             # ② 4 canonical docs → 2-understanding/
@@ -1695,158 +1690,6 @@ class SwarmWorkspaceManager:
         return {"classification": classification, "provisioned": provisioned}
 
     # ── TECH.md auto-population from codebase scan ─────────────────────
-
-    async def scan_and_populate_tech(
-        self,
-        project_name: str,
-        codebase_path: str,
-        workspace_path: str = None,
-    ) -> dict:
-        """Scan a codebase directory and populate TECH.md with detected info.
-
-        Detects: language, framework, test runner, dev commands, git remote.
-        Only fills in sections that are still at template placeholder values.
-
-        Args:
-            project_name: Name of existing project.
-            codebase_path: Absolute path to the codebase directory.
-            workspace_path: Workspace root. If None, uses default.
-
-        Returns:
-            dict with detected info: {language, framework, test_cmd, dev_cmd, git_remote}
-        """
-        workspace_path = self._resolve_workspace_path(workspace_path)
-        project_dir = Path(workspace_path) / "Projects" / project_name
-        tech_path = ddd_path(project_dir, "TECH.md")
-
-        if not project_dir.is_dir():
-            raise ValueError(f"Project '{project_name}' not found")
-
-        cb = Path(codebase_path).expanduser().resolve()
-        if not cb.is_dir():
-            raise ValueError(f"Codebase path not found: {codebase_path}")
-
-        def _scan():
-            detected = {
-                "codebase_path": str(cb),
-                "language": None,
-                "framework": None,
-                "test_cmd": None,
-                "dev_cmd": None,
-                "build_cmd": None,
-                "git_remote": None,
-            }
-
-            # Detect from config files
-            if (cb / "pyproject.toml").exists():
-                detected["language"] = "Python"
-                detected["test_cmd"] = "pytest"
-                toml_text = (cb / "pyproject.toml").read_text(encoding="utf-8", errors="replace")
-                if "fastapi" in toml_text.lower():
-                    detected["framework"] = "FastAPI"
-                elif "django" in toml_text.lower():
-                    detected["framework"] = "Django"
-                elif "flask" in toml_text.lower():
-                    detected["framework"] = "Flask"
-
-            if (cb / "package.json").exists():
-                try:
-                    pkg = json.loads((cb / "package.json").read_text(encoding="utf-8"))
-                    scripts = pkg.get("scripts", {})
-                    deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-
-                    if not detected["language"]:
-                        detected["language"] = "TypeScript" if "typescript" in deps else "JavaScript"
-
-                    if "next" in deps:
-                        detected["framework"] = "Next.js"
-                    elif "react" in deps:
-                        detected["framework"] = (detected["framework"] or "") + " + React" if detected["framework"] else "React"
-                    elif "vue" in deps:
-                        detected["framework"] = "Vue.js"
-
-                    if "vitest" in deps:
-                        detected["test_cmd"] = detected["test_cmd"] or "npx vitest run"
-                    elif "jest" in deps:
-                        detected["test_cmd"] = detected["test_cmd"] or "npx jest"
-
-                    if "dev" in scripts:
-                        detected["dev_cmd"] = scripts["dev"]
-                    if "build" in scripts:
-                        detected["build_cmd"] = scripts["build"]
-                except (json.JSONDecodeError, OSError):
-                    pass
-
-            if (cb / "Cargo.toml").exists():
-                detected["language"] = detected["language"] or "Rust"
-                detected["test_cmd"] = detected["test_cmd"] or "cargo test"
-                detected["build_cmd"] = "cargo build"
-
-            if (cb / "go.mod").exists():
-                detected["language"] = detected["language"] or "Go"
-                detected["test_cmd"] = detected["test_cmd"] or "go test ./..."
-                detected["build_cmd"] = "go build"
-
-            # Git remote
-            git_config = cb / ".git" / "config"
-            if git_config.exists():
-                try:
-                    for line in git_config.read_text(encoding="utf-8").splitlines():
-                        line = line.strip()
-                        if line.startswith("url = "):
-                            detected["git_remote"] = line[6:].strip()
-                            break
-                except OSError:
-                    pass
-
-            return detected
-
-        detected = await anyio.to_thread.run_sync(_scan)
-
-        # Update TECH.md if it exists and has placeholder content
-        if tech_path.exists():
-            def _update_tech():
-                content = tech_path.read_text(encoding="utf-8")
-                modified = False
-
-                # Only update sections that still have placeholder text
-                # Replace codebase placeholder (multiple possible variants)
-                codebase_placeholders = [
-                    "_Absolute path or repo URL to the project's source code._",
-                    "_Set this to your local SwarmAI source path after cloning._",
-                    "_Set this to your project's source path after cloning._",
-                    "_Set this to your local SwarmAI source path, e.g.: /path/to/swarmai/_",
-                    "_Set this to your project's source path._",
-                ]
-                if detected["codebase_path"]:
-                    path_line = detected["codebase_path"]
-                    if detected.get("git_remote"):
-                        path_line += f"\n- **Git:** {detected['git_remote']}"
-                    for placeholder in codebase_placeholders:
-                        if placeholder in content:
-                            content = content.replace(placeholder, path_line)
-                            modified = True
-                            break
-
-                if ("_e.g., Python" in content or "_e.g., FastAPI" in content) and detected.get("language"):
-                    lang = detected["language"]
-                    fw = detected.get("framework", "")
-                    test = detected.get("test_cmd", "")
-                    content = content.replace("_e.g., Python 3.12, TypeScript 5_", lang)
-                    content = content.replace("_e.g., FastAPI, Next.js_", fw or "_not detected_")
-                    content = content.replace("_e.g., SQLite, PostgreSQL_", "_not detected_")
-                    content = content.replace("_e.g., pytest, vitest_", test or "_not detected_")
-                    modified = True
-
-                if modified:
-                    tech_path.write_text(content, encoding="utf-8")
-                return modified
-
-            updated = await anyio.to_thread.run_sync(_update_tech)
-            if updated:
-                logger.info("Auto-populated TECH.md for '%s' from %s", project_name, cb)
-
-        return detected
 
     # ── Git initialization ─────────────────────────────────────────────
 
@@ -2992,7 +2835,8 @@ class SwarmWorkspaceManager:
 
         # Step 2: Rename directory
         def _rename():
-            project_dir.rename(new_dir)
+            from core.ingestion.governed_edit import move_tree  # journaled (CDF §3.2)
+            move_tree(project_dir, new_dir)
 
         try:
             await anyio.to_thread.run_sync(_rename)
@@ -3114,7 +2958,8 @@ class SwarmWorkspaceManager:
                 trash_root = project_dir.parent / ".trash"
                 trash_root.mkdir(exist_ok=True)
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid4().hex[:6]
-                shutil.move(str(project_dir), str(trash_root / f"{name}-{stamp}"))
+                from core.ingestion.governed_edit import move_tree  # journaled (CDF §3.2)
+                move_tree(project_dir, trash_root / f"{name}-{stamp}")
                 return name
 
             deleted_name = await anyio.to_thread.run_sync(_find_and_delete)

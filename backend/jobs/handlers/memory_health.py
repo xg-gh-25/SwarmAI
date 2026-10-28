@@ -4,7 +4,7 @@ Weekly Memory Health — Deterministic Integrity Checks + LLM-Powered Maintenanc
 Runs weekly (Monday 11am ICT via memory-health job). Two phases:
 
 **Phase 1 — Deterministic integrity checks (no LLM, zero cost):**
-  - Body size within full-injection budget (≤ size-valve high-water)
+  - Body size against the prompt's MEMORY injection budget (CDF §12)
   - Required (evergreen) sections present
   - MemoryGuard injection detection (known payloads blocked)
 
@@ -48,29 +48,23 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
     """
     findings: list[dict] = []
 
-    # NEW ARCHITECTURE (2026-08-14): the in-prompt index was DELETED (live MEMORY is
-    # full-injected; recall scans body-BM25). The index-dependent checks —
-    # index_markers, index_roundtrip, duplicate index keys, CJK-alias coverage, and
-    # keyword_relevance recall_accuracy — are RETIRED (they probed a structure that
-    # no longer exists). Replaced by a body-SIZE check (the new size-valve is what
-    # bounds the always-injected prompt). Retained: required_sections + guard.
-
-    # ── 1. Body size within full-injection budget (size-valve high-water) ──
+    # ── 1. Body size against the prompt's MEMORY budget ────────────
+    # Nothing trims MEMORY.md any more (CDF r16.6 §12): over the budget, the
+    # injection selector puts the highest-scoring whole entries in the prompt and
+    # recall reaches the rest. Over budget is reported, not fixed.
     try:
         from core.memory_index import extract_body_without_index
         from core.context_directory_loader import ContextDirectoryLoader
-        from hooks.distillation_hook import SIZE_ARCHIVE_HIGH_WATER
+        from core.memory_injection import MEMORY_INJECTION_BUDGET
         body = extract_body_without_index(memory_content)
         body_tok = ContextDirectoryLoader.estimate_tokens(body)
-        if body_tok <= SIZE_ARCHIVE_HIGH_WATER:
+        if body_tok <= MEMORY_INJECTION_BUDGET:
             findings.append({"check": "body_size", "status": "pass",
-                             "detail": f"{body_tok} tok ≤ {SIZE_ARCHIVE_HIGH_WATER} high-water"})
+                             "detail": f"{body_tok} tok <= {MEMORY_INJECTION_BUDGET} injection budget"})
         else:
-            # over high-water = size-valve should have trimmed it; surface as warn
-            # (the valve runs on maintenance; a transient overshoot is not fatal).
             findings.append({"check": "body_size", "status": "warn",
-                             "detail": f"{body_tok} tok > {SIZE_ARCHIVE_HIGH_WATER} high-water "
-                                       f"— size-valve should archive to low-water"})
+                             "detail": f"{body_tok} tok > {MEMORY_INJECTION_BUDGET} injection budget "
+                                       f"-- the prompt carries a selected subset, recall reaches the rest"})
     except Exception as e:
         findings.append({"check": "body_size", "status": "fail",
                          "detail": f"exception: {e}"})
@@ -180,7 +174,7 @@ def run_memory_health(dry_run: bool = False) -> dict:
     # ── Phase 1b: EVOLUTION auto-compression (deterministic, $0) ──────
     evo_path = CONTEXT_DIR / "EVOLUTION.md"
     compression_result: dict = {"compressed": []}
-    if evo_path.exists() and not dry_run:
+    if evo_path.exists():
         # Derive active bias classes: find entries with both [Bias X] and status=active
         # Parse per-block to avoid cross-entry regex matching
         evo_content = evo_path.read_text(encoding="utf-8")
@@ -218,7 +212,6 @@ def run_memory_health(dry_run: bool = False) -> dict:
             evo_path,
             active_bias_classes=active_biases,
             recent_da_refs=recent_refs,
-            dry_run=False,
         )
 
     # ── Phase 2: LLM-powered maintenance ───────────────────────────
@@ -284,7 +277,17 @@ def run_memory_health(dry_run: bool = False) -> dict:
 
     # ── 4. Apply changes ───────────────────────────────────────────
 
-    actions = _apply_report(report, memory_md, evolution_md)
+    # Stage-B CDF: health is diagnostic-only. It reports proposed maintenance;
+    # it never changes established corpus content.
+    actions = [
+        f"Would review {len(report.get(name, []))} {name.replace('_', ' ')}"
+        for name in (
+            "stale_memories", "resolved_threads", "archived_capabilities",
+            "stale_decisions", "ddd_staleness", "capability_gaps",
+            "stale_corrections",
+        )
+        if report.get(name)
+    ]
 
     # ── 5. Write summary to DailyActivity ──────────────────────────
 
@@ -501,123 +504,6 @@ def _call_llm(prompt: str) -> dict:
     return report
 
 
-# ── Apply Changes ──────────────────────────────────────────────────
-
-
-def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
-    """Apply maintenance actions from the LLM report.
-
-    Uses locked_write.py for safe concurrent writes.
-    Returns list of human-readable action descriptions.
-    """
-    actions = []
-
-    # 1. Remove stale Recent Context entries
-    stale = report.get("stale_memories", [])
-    if stale:
-        for entry in stale[:5]:  # Cap at 5 per run
-            prefix = entry.get("entry_prefix", "")
-            if prefix:
-                removed = _remove_memory_entry(prefix)
-                if removed:
-                    actions.append(f"Removed stale memory: {prefix[:60]}")
-
-    # 2. Resolve Open Threads
-    resolved = report.get("resolved_threads", [])
-    if resolved:
-        for thread in resolved[:3]:  # Cap at 3 per run
-            title = thread.get("title", "")
-            if title:
-                if _resolve_open_thread(title):
-                    actions.append(f"Resolved thread: {title}")
-                else:
-                    actions.append(f"Thread not matched (no such Open Thread line): {title}")
-
-    # 3. Archive stale Evolution entries (remove from EVOLUTION.md)
-    archived = report.get("archived_capabilities", [])
-    if archived:
-        for cap in archived[:3]:
-            cap_id = cap.get("id", "")
-            if cap_id:
-                removed = _remove_evolution_entry(cap_id)
-                if removed:
-                    actions.append(f"Archived: {cap_id} — {cap.get('reason', '')[:80]}")
-                else:
-                    actions.append(f"Flagged for archive (not found): {cap_id}")
-
-    # 4. Stale decisions: mark superseded via temporal validity (P2)
-    # LLM prompt produces {"entry_prefix": "...", "reason": "..."}.
-    # We extract the key (KD07, etc.) by fuzzy-matching entry_prefix
-    # against MEMORY.md content, then mark with superseded_by="STALE".
-    stale_decisions = report.get("stale_decisions", [])
-    if stale_decisions:
-        memory_path = CONTEXT_DIR / "MEMORY.md"
-        memory_content = ""
-        if memory_path.exists():
-            memory_content = memory_path.read_text(encoding="utf-8")
-
-        for dec in stale_decisions[:3]:
-            prefix = dec.get("entry_prefix", "")[:60]
-            if not prefix or not memory_content:
-                actions.append(f"Stale decision flagged: {prefix}")
-                continue
-
-            # Extract key by matching prefix against MEMORY.md entries
-            # Entry format: "- [KD07] 2026-04-01 Single-agent..."
-            # Prefix format: "2026-04-01: Single-agent..."
-            needle = _normalize_prefix(prefix)
-            if len(needle) < 10:
-                actions.append(f"Stale decision flagged: {prefix}")
-                continue
-
-            # Find the entry key by matching normalized prefix against MEMORY.md entries.
-            # Normalize: strip colons after dates, collapse whitespace for fuzzy match.
-            import re as _re
-            norm_needle = _re.sub(r"(\d{4}-\d{2}-\d{2}):?\s*", r"\1 ", needle).strip()
-            # Strip date prefix for matching to avoid false positives on shared date prefixes
-            needle_no_date = _re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", norm_needle).strip()
-            old_key = None
-            for m in _re.finditer(r"- \[([A-Z]{1,4}\d+)\] (.+?)$", memory_content, _re.MULTILINE):
-                entry_text = m.group(2)
-                entry_no_date = _re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", entry_text).strip()
-                if needle_no_date and entry_no_date and (
-                    needle_no_date in entry_no_date or entry_no_date in needle_no_date
-                ):
-                    old_key = m.group(1)
-                    break
-
-            if old_key:
-                try:
-                    from core.memory_index import mark_entry_superseded
-                    updated = mark_entry_superseded(memory_content, old_key, "STALE")
-                    if updated != memory_content:
-                        memory_path.write_text(updated, encoding="utf-8")
-                        memory_content = updated  # Update for next iteration
-                        actions.append(f"Superseded: {old_key} (reason: {dec.get('reason', '')[:40]})")
-                    else:
-                        actions.append(f"Stale decision flagged (no metadata change): {prefix}")
-                except Exception as exc:
-                    logger.warning("Failed to mark %s superseded: %s", old_key, exc)
-                    actions.append(f"Stale decision flagged: {prefix}")
-            else:
-                actions.append(f"Stale decision flagged: {prefix}")
-
-    # 5. Capability gaps (log for briefing, don't auto-act)
-    gaps = report.get("capability_gaps", [])
-    for gap in gaps[:5]:
-        pattern = gap.get("pattern", "")[:80]
-        priority = gap.get("priority", "medium")
-        occurrences = gap.get("occurrences", 0)
-        actions.append(f"Capability gap [{priority}]: {pattern} ({occurrences}x)")
-
-    # 6. Stale corrections (log for briefing)
-    stale_corr = report.get("stale_corrections", [])
-    for corr in stale_corr[:3]:
-        actions.append(f"Stale correction: {corr.get('id', '')} — {corr.get('reason', '')[:60]}")
-
-    return actions
-
-
 # ── Phase 1 Rule 1: EVOLUTION Auto-Compression ───────────────────────
 
 
@@ -625,10 +511,12 @@ def _compress_evolution_entries(
     evo_path: Path,
     active_bias_classes: set[str],
     recent_da_refs: set[str],
-    dry_run: bool = False,
     max_compressions: int = 5,
 ) -> dict:
-    """Compress resolved/mitigated EVOLUTION corrections to 1-line summaries.
+    """Report which resolved/mitigated EVOLUTION corrections could be compressed.
+
+    Report only since the CDF cutover: EVOLUTION.md is written by CDF's writer
+    alone, so nothing here rewrites the file.
 
     Value-based compression:
     - RETAIN if status is "active" (never compress active)
@@ -642,11 +530,10 @@ def _compress_evolution_entries(
             at least one active correction — entries in these classes stay full.
         recent_da_refs: Set of correction IDs referenced in last 60 days of
             DailyActivity (e.g. {"C011", "C025"}).
-        dry_run: If True, report what would compress without writing.
         max_compressions: Safety cap per run (default 5).
 
     Returns:
-        Dict with "compressed" (list of IDs compressed) or "would_compress" (dry_run).
+        Dict with "would_compress" (the IDs) and an empty "compressed".
     """
     if not evo_path.exists():
         return {"compressed": [], "would_compress": []}
@@ -724,357 +611,7 @@ def _compress_evolution_entries(
     # Cap at max_compressions
     to_compress = to_compress[:max_compressions]
 
-    if dry_run:
-        return {"would_compress": [b["id"] for b in to_compress], "compressed": []}
-
-    if not to_compress:
-        return {"compressed": [], "would_compress": []}
-
-    # File lock to prevent race with concurrent writers (context_health_hook,
-    # _remove_evolution_entry, DDD cultivation)
-    from utils.file_lock import flock_exclusive
-
-    lock_path = evo_path.with_suffix(".md.lock")
-    fd = None
-    try:
-        fd = open(lock_path, "w")  # noqa: SIM115
-        flock_exclusive(fd)
-
-        # Re-read under lock (content may have changed since initial read)
-        content = evo_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
-
-        # Create backup (include time to avoid same-day collision)
-        backup_name = f"EVOLUTION.md.pre-compress-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-        backup_path = evo_path.parent / backup_name
-        backup_path.write_text(content, encoding="utf-8")
-
-        # Re-parse blocks under lock (file may have changed)
-        blocks_locked: list[dict] = []
-        current: dict | None = None
-        for i, line in enumerate(lines):
-            m = correction_pattern.match(line)
-            if m:
-                if current:
-                    current["end"] = i
-                    blocks_locked.append(current)
-                current = {
-                    "id": m.group(1), "date": m.group(2),
-                    "bias": m.group(3) or "", "start": i,
-                    "end": len(lines), "status": "unknown",
-                }
-            elif current:
-                sm = status_pattern.search(line)
-                if sm:
-                    current["status"] = sm.group(1).lower()
-                if (line.startswith("## ") and not line.startswith("### ")
-                        or line.strip() == "---"):
-                    current["end"] = i
-                    blocks_locked.append(current)
-                    current = None
-                elif line.startswith("### ") and not correction_pattern.match(line):
-                    current["end"] = i
-                    blocks_locked.append(current)
-                    current = None
-        if current:
-            current["end"] = len(lines)
-            blocks_locked.append(current)
-
-        # Re-filter eligible blocks
-        eligible = [
-            b for b in blocks_locked
-            if b["status"] in ("resolved", "mitigated")
-            and not (b["bias"] and b["bias"] in active_bias_classes)
-            and b["id"] not in recent_da_refs
-        ][:max_compressions]
-
-        # Apply compressions (reverse order to maintain indices)
-        compressed_ids: list[str] = []
-        for block in sorted(eligible, key=lambda b: b["start"], reverse=True):
-            status_upper = block["status"].upper()
-            correction_text = ""
-            for line in lines[block["start"] + 1:block["end"]]:
-                if line.strip().startswith("- **Correction**:"):
-                    correction_text = line.strip().replace("- **Correction**: ", "")[:80]
-                    break
-            one_liner = f"### {block['id']} | {block['date']} — {status_upper}: {correction_text}"
-            lines[block["start"]:block["end"]] = [one_liner, ""]
-            compressed_ids.append(block["id"])
-
-        # Write
-        if compressed_ids:
-            evo_path.write_text("\n".join(lines), encoding="utf-8")
-            logger.info("EVOLUTION auto-compress: %d entries compressed: %s",
-                        len(compressed_ids), compressed_ids)
-
-        return {"compressed": compressed_ids, "would_compress": []}
-    except Exception as exc:
-        logger.warning("EVOLUTION auto-compress failed: %s", exc)
-        return {"compressed": [], "would_compress": []}
-    finally:
-        if fd:
-            fd.close()
-
-
-def _normalize_prefix(prefix: str) -> str:
-    """Strip index formatting so LLM prefixes match file content.
-
-    The LLM returns e.g. ``"RC24 2026-03-13: MCP not working"``
-    but the file has ``"- [RC24] 2026-03-13: MCP not working"``.
-    Extract the date+topic core for fuzzy matching.
-    """
-    import re
-    # Strip leading "- [RC24] " or "RC24 " but NOT dates like "2026-03-13"
-    # Entry IDs are 1-3 uppercase letters + digits (RC24, KD01, COE03, LL12)
-    cleaned = re.sub(r"^-?\s*\[?[A-Z]{1,3}\d+\]?\s*", "", prefix).strip()
-    return cleaned[:50]  # First 50 chars of the content portion
-
-
-def _remove_memory_entry(entry_prefix: str) -> bool:
-    """Remove a specific entry from MEMORY.md (both index and body).
-
-    Uses flock for safe concurrent access. Fuzzy-matches the entry
-    prefix against each line to handle formatting differences between
-    the LLM output and actual file content.
-
-    Returns True if any lines were removed.
-    """
-    memory_path = CONTEXT_DIR / "MEMORY.md"
-    if not memory_path.exists():
-        return False
-
-    needle = _normalize_prefix(entry_prefix)
-    if len(needle) < 10:
-        logger.warning("Prefix too short for safe matching: %r", needle)
-        return False
-
-    lock_path = memory_path.with_suffix(".md.lock")
-    fd = None
-    try:
-        from utils.file_lock import flock_exclusive
-        fd = open(lock_path, "w")  # noqa: SIM115
-        flock_exclusive(fd)
-
-        content = memory_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
-        # Remove WHOLE entries (design 2026-10-25-memory-write-entry-dedup §3.7): a
-        # matching line that starts a parsed entry takes its span (metadata + Detail
-        # tail) with it; any other matching line (legacy un-parsed shapes) goes alone.
-        from core.ddd_entry_lifecycle import parse_entries
-        drop: set[int] = set()
-        inside: set[int] = set()
-        for e in parse_entries(content):
-            inside.update(range(e.line_number, e.end_line + 1))
-            if needle in lines[e.line_number]:
-                drop.update(range(e.line_number, e.end_line + 1))
-        for idx, line in enumerate(lines):
-            if idx not in inside and needle in line:
-                drop.add(idx)
-        new_lines = [l for i, l in enumerate(lines) if i not in drop]
-        removed = len(lines) - len(new_lines)
-
-        if removed > 0:
-            memory_path.write_text(
-                _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
-            )
-            logger.info("Removed %d line(s) matching: %s", removed, needle[:50])
-            return True
-        else:
-            logger.debug("No match for: %s", needle[:50])
-            return False
-    except Exception as e:
-        logger.warning("Failed to remove memory entry: %s", e)
-        return False
-    finally:
-        if fd:
-            fd.close()
-
-
-def _is_open_thread_line(line: str, title: str) -> bool:
-    """True if `line` is an Open-Threads THREAD line matching `title`.
-
-    A thread line is a bold-titled item (``- **X**`` / ``**X**`` / a bulleted
-    emoji item ``- 🟡 **X**``). We require the title substring AND a thread-line
-    shape (emoji OR a bold ``**`` marker) so a bare prose mention of the title
-    elsewhere does not match. Scoping to the Open Threads section (the caller)
-    is the primary guard; this shape check is the secondary one.
-    """
-    if title.lower() not in line.lower():
-        return False
-    has_emoji = "🔵" in line or "🟡" in line or "🔴" in line
-    stripped = line.lstrip(" -")
-    is_bold = stripped.startswith("**") or "- **" in line
-    return has_emoji or is_bold
-
-
-def _resolve_open_thread(title: str) -> bool:
-    """Move an Open Thread to the Resolved section in MEMORY.md.
-
-    Matches an Open-Threads item by title — whether it carries a status emoji
-    (🔵/🟡/🔴) OR is an emoji-less bold-titled item (e.g. the DEAD-resume race
-    entry) — moves it into the ``### Resolved`` section marking it ✅, and
-    carries its immediately-following ``<!-- ... -->`` metadata comment line
-    with it so no orphan is left behind. The match is SCOPED to the
-    ``## Open Threads`` section so a title mention elsewhere in MEMORY.md cannot
-    be falsely resolved.
-
-    Returns True iff a thread was matched and moved; False otherwise (so the
-    caller can log an honest "not matched" instead of a false success).
-    Uses flock for safe concurrent access.
-    """
-    memory_path = CONTEXT_DIR / "MEMORY.md"
-    if not memory_path.exists():
-        return False
-
-    lock_path = memory_path.with_suffix(".md.lock")
-    fd = None
-    try:
-        from utils.file_lock import flock_exclusive
-        fd = open(lock_path, "w")  # noqa: SIM115
-        flock_exclusive(fd)
-
-        content = memory_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
-
-        # Scope the match to the `## Open Threads` section only.
-        ot_start = None
-        for i, line in enumerate(lines):
-            if line.rstrip() == "## Open Threads":
-                ot_start = i
-                break
-        ot_end = len(lines)
-        if ot_start is not None:
-            for j in range(ot_start + 1, len(lines)):
-                if lines[j].startswith("## "):
-                    ot_end = j
-                    break
-
-        # When `## Open Threads` is absent (minimal fixtures, or a MEMORY laid
-        # out differently), fall back to whole-file scope — the thread-line
-        # shape check still guards against prose false-positives. In production
-        # the evergreen `## Open Threads` header always exists, so scoping is
-        # active there (the BLOCKER-#2 false-positive guard).
-        scoped = ot_start is not None
-
-        new_lines: list[str] = []
-        resolved_entry = None
-        i = 0
-        n = len(lines)
-        while i < n:
-            line = lines[i]
-            in_scope = (ot_start <= i < ot_end) if scoped else True
-            if (
-                resolved_entry is None
-                and in_scope
-                and _is_open_thread_line(line, title)
-            ):
-                today = datetime.now(timezone.utc).strftime("%m/%d")
-                entry = line.replace("🔵", "✅").replace("🟡", "✅").replace("🔴", "✅")
-                # No emoji to swap → prepend a ✅ marker for the Resolved convention.
-                if "✅" not in entry:
-                    entry = "- ✅ " + entry.lstrip(" -")
-                resolved_entry = entry.rstrip() + f" (auto-resolved {today})"
-                # Carry the immediately-following metadata comment line, if any,
-                # so it isn't orphaned in Open Threads.
-                if i + 1 < n and lines[i + 1].strip().startswith("<!--") \
-                        and lines[i + 1].strip().endswith("-->"):
-                    resolved_meta = lines[i + 1]
-                    i += 2
-                    resolved_entry = (resolved_entry, resolved_meta)
-                    continue
-                i += 1
-                continue
-            new_lines.append(line)
-            i += 1
-
-        if resolved_entry is None:
-            logger.debug("No Open Thread matched: %s", title[:60])
-            return False
-
-        # Normalize to (entry, meta_or_None)
-        if isinstance(resolved_entry, tuple):
-            entry_line, meta_line = resolved_entry
-        else:
-            entry_line, meta_line = resolved_entry, None
-        to_insert = [entry_line] + ([meta_line] if meta_line else [])
-
-        inserted = False
-        for k, line in enumerate(new_lines):
-            if "### Resolved" in line:
-                if entry_line not in new_lines:  # dedup
-                    new_lines[k + 1:k + 1] = to_insert
-                inserted = True
-                break
-
-        if not inserted:
-            # No "### Resolved" section — append one so the entry isn't dropped.
-            new_lines.append("")
-            new_lines.append("### Resolved")
-            new_lines.extend(to_insert)
-
-        memory_path.write_text(
-            _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
-        )
-        logger.info("Resolved thread: %s", title)
-        return True
-    except Exception as e:
-        logger.warning("Failed to resolve thread: %s", e)
-        return False
-    finally:
-        if fd:
-            fd.close()
-
-
-def _remove_evolution_entry(entry_id: str) -> bool:
-    """Remove an entry block from EVOLUTION.md by its ID (e.g. E003).
-
-    Removes the ``### EXXX | ...`` header and all subsequent lines until
-    the next ``### `` header or section boundary.  Uses flock.
-
-    Returns True if the entry was found and removed.
-    """
-    evo_path = CONTEXT_DIR / "EVOLUTION.md"
-    if not evo_path.exists():
-        return False
-
-    lock_path = evo_path.with_suffix(".md.lock")
-    fd = None
-    try:
-        from utils.file_lock import flock_exclusive
-        fd = open(lock_path, "w")  # noqa: SIM115
-        flock_exclusive(fd)
-
-        content = evo_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
-        new_lines = []
-        skipping = False
-        removed = False
-
-        for line in lines:
-            # Detect entry header: "### E003 | reactive | skill | 2026-03-08"
-            if line.startswith("### ") and f" {entry_id} " in line:
-                skipping = True
-                removed = True
-                continue
-            # Stop skipping at next entry header or section header
-            if skipping and (line.startswith("### ") or line.startswith("## ")):
-                skipping = False
-            if not skipping:
-                new_lines.append(line)
-
-        if removed:
-            evo_path.write_text(
-                _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
-            )
-            logger.info("Removed evolution entry: %s", entry_id)
-            return True
-        return False
-    except Exception as e:
-        logger.warning("Failed to remove evolution entry %s: %s", entry_id, e)
-        return False
-    finally:
-        if fd:
-            fd.close()
+    return {"would_compress": [b["id"] for b in to_compress], "compressed": []}
 
 
 # ── Reporting ──────────────────────────────────────────────────────

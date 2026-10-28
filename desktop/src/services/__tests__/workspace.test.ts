@@ -20,7 +20,7 @@ vi.mock('../api', () => ({
 }));
 
 import api from '../api';
-import { workspaceConfigApiService } from '../workspace';
+import { workspaceConfigApiService, workspaceService } from '../workspace';
 
 const sampleBackendConfig = {
   id: 'ws-001',
@@ -88,5 +88,23 @@ describe('Workspace Config Service - Unit Tests', () => {
       expect(api.put).toHaveBeenCalledWith('/workspace', { icon: '🚀' });
       expect(result.icon).toBe('🚀');
     });
+  });
+});
+
+
+describe('governed workspace saves', () => {
+  it('sends expectedRevision as expected_revision and returns the new revision', async () => {
+    vi.mocked(api.put).mockResolvedValue({
+      data: { path: 'MEMORY.md', size: 3, revision: 'rev-new' },
+    });
+    const result = await workspaceService.writeFile(
+      'default', 'MEMORY.md', 'new', undefined, 'rev-old',
+    );
+    expect(api.put).toHaveBeenCalledWith(
+      '/workspace/default/write',
+      { path: 'MEMORY.md', content: 'new', expected_revision: 'rev-old' },
+      { params: undefined },
+    );
+    expect(result.revision).toBe('rev-new');
   });
 });

@@ -254,32 +254,6 @@ class TestEvolutionAutoCompress:
 - **Status**: active
 """
 
-    def test_compresses_resolved_dormant_entry(self, tmp_path):
-        """Resolved + >60 days dormant + non-protective → compress to 1-line."""
-        from jobs.handlers.memory_health import _compress_evolution_entries
-
-        evo_path = tmp_path / "EVOLUTION.md"
-        evo_path.write_text(self.SAMPLE_EVOLUTION, encoding="utf-8")
-
-        # C001: resolved, Bias B (no active Bias B corrections) → compress
-        # C013: mitigated, Bias D (no active Bias D corrections) → compress
-        result = _compress_evolution_entries(
-            evo_path,
-            active_bias_classes={"A"},  # Only Bias A has active corrections
-            recent_da_refs=set(),  # No recent references
-            dry_run=False,
-        )
-
-        content = evo_path.read_text(encoding="utf-8")
-        # C001 should be compressed to 1-line
-        assert "### C001 | 2025-12-01 — RESOLVED:" in content
-        assert "- **Correction**: Tab-switch" not in content
-        # C013 also compressed (mitigated, Bias D not active)
-        assert "### C013 | 2025-11-15 — MITIGATED:" in content
-        assert "- **Correction**: Ran full test suite" not in content
-        # C011 stays full (active)
-        assert "- **Correction**: Voice Conversation Mode" in content
-        assert set(result["compressed"]) == {"C001", "C013"}
 
     def test_preserves_active_corrections(self, tmp_path):
         """Active corrections are never compressed regardless of age."""
@@ -292,7 +266,7 @@ class TestEvolutionAutoCompress:
             evo_path,
             active_bias_classes={"A"},
             recent_da_refs=set(),
-            dry_run=False,
+
         )
 
         content = evo_path.read_text(encoding="utf-8")
@@ -311,7 +285,7 @@ class TestEvolutionAutoCompress:
             evo_path,
             active_bias_classes={"A", "D"},  # D has active — protects C013
             recent_da_refs=set(),
-            dry_run=False,
+
         )
 
         content = evo_path.read_text(encoding="utf-8")
@@ -319,27 +293,6 @@ class TestEvolutionAutoCompress:
         assert "- **Correction**: Ran full test suite" in content
         assert "C013" not in result["compressed"]
 
-    def test_respects_max_compressions_per_run(self, tmp_path):
-        """Max 5 compressions per run."""
-        from jobs.handlers.memory_health import _compress_evolution_entries
-
-        # Create 8 old resolved corrections
-        entries = []
-        for i in range(8):
-            entries.append(f"""### C{90+i:03d} | 2025-01-{i+1:02d} [Bias B]
-- **Correction**: Old issue {i}.
-- **Pattern**: Pattern {i}.
-- **Status**: resolved — fixed long ago.
-""")
-        evo_content = "# Evolution\n\n## Corrections Captured\n\n" + "\n".join(entries)
-        evo_path = tmp_path / "EVOLUTION.md"
-        evo_path.write_text(evo_content, encoding="utf-8")
-
-        result = _compress_evolution_entries(
-            evo_path, active_bias_classes=set(), recent_da_refs=set(), dry_run=False,
-        )
-        # Max 5
-        assert len(result["compressed"]) == 5
 
     def test_dry_run_no_writes(self, tmp_path):
         """Dry run reports what would compress without writing."""
@@ -350,7 +303,7 @@ class TestEvolutionAutoCompress:
         original = evo_path.read_text()
 
         result = _compress_evolution_entries(
-            evo_path, active_bias_classes={"A"}, recent_da_refs=set(), dry_run=True,
+            evo_path, active_bias_classes={"A"}, recent_da_refs=set()
         )
 
         # File unchanged
@@ -358,17 +311,3 @@ class TestEvolutionAutoCompress:
         # But reports what it would do
         assert len(result["would_compress"]) > 0
 
-    def test_backup_created_before_write(self, tmp_path):
-        """Writes a .pre-compress backup before modifying the file."""
-        from jobs.handlers.memory_health import _compress_evolution_entries
-
-        evo_path = tmp_path / "EVOLUTION.md"
-        evo_path.write_text(self.SAMPLE_EVOLUTION, encoding="utf-8")
-
-        _compress_evolution_entries(
-            evo_path, active_bias_classes={"A"}, recent_da_refs=set(), dry_run=False,
-        )
-
-        # Backup file should exist
-        backups = list(tmp_path.glob("*.pre-compress-*"))
-        assert len(backups) == 1

@@ -1537,6 +1537,24 @@ class ChannelGateway:
                 },
                 "status": "observed",
             })
+            from functools import partial as _partial
+            from core import executors as _executors
+            from core.session_inputs import record_session_input
+            if msg.text:
+                await _executors.run_in(
+                    "io", _partial(
+                        record_session_input, _sid, "channel_message", "user",
+                        msg.text, ref=msg.external_message_id,
+                    ),
+                )
+            for _index, _attachment in enumerate(msg.attachments):
+                await _executors.run_in(
+                    "io", _partial(
+                        record_session_input, _sid, "attachment", "external",
+                        json.dumps(_attachment, ensure_ascii=False, default=str),
+                        ref=f"{msg.external_message_id or 'message'}#attachment-{_index}",
+                    ),
+                )
             logger.info(
                 "channel_gateway.observe_record channel=%s thread=%s tier=%s "
                 "— recorded (no reply)",
@@ -1656,6 +1674,32 @@ class ChannelGateway:
         except Exception:
             logger.exception(f"Failed to resolve session for channel {channel_id}")
             return
+
+        # The caller reached this method only after OWNER/TRUSTED authorization.
+        # Record channel text as user-authored and every attachment as external
+        # before attachment staging can merge them into one prompt string.
+        try:
+            import json as _json
+            from functools import partial as _partial
+            from core import executors as _executors
+            from core.session_inputs import record_session_input
+            if msg.text:
+                await _executors.run_in(
+                    "io", _partial(
+                        record_session_input, session_id, "channel_message", "user",
+                        msg.text, ref=msg.external_message_id,
+                    ),
+                )
+            for _index, _attachment in enumerate(msg.attachments):
+                await _executors.run_in(
+                    "io", _partial(
+                        record_session_input, session_id, "attachment", "external",
+                        _json.dumps(_attachment, ensure_ascii=False, default=str),
+                        ref=f"{msg.external_message_id or 'message'}#attachment-{_index}",
+                    ),
+                )
+        except Exception:
+            logger.warning("channel input provenance write failed", exc_info=True)
 
         # ── Pre-warm adoption: if the owner's session is new (cold)
         # and we have a pre-warmed IDLE subprocess, adopt it to skip

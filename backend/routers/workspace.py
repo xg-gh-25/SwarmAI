@@ -14,6 +14,7 @@ Additional security:
 
 import asyncio
 import base64
+import hashlib
 import logging
 import mimetypes
 from datetime import datetime
@@ -55,6 +56,24 @@ async def ensure_workspace_exists(agent_id: str, workspace_root: Path, base_path
     if base_path:
         # User-selected path doesn't exist - can't auto-create
         raise HTTPException(status_code=404, detail=f"Directory not found: {base_path}")
+
+
+def _cdf_revision(path: Path) -> str:
+    """Use WRITER's revision helper; hash locally until that module lands."""
+    from core.ingestion import api
+    try:
+        return api.revision_of(path)
+    except ModuleNotFoundError:
+        return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+def _cdf_is_governed(path: Path) -> bool:
+    """Use WRITER's classifier; isolated source branches treat paths as ordinary."""
+    from core.ingestion import api
+    try:
+        return api.is_governed(path)
+    except ModuleNotFoundError:
+        return False
 
     # Auto-create workspace directory
     logger.info(f"Auto-creating missing workspace directory for agent {agent_id}")
@@ -559,6 +578,7 @@ async def read_file(
         encoding=encoding,
         size=file_size,
         mime_type=mime_type,
+        revision=_cdf_revision(file_path),
     )
 
 
@@ -689,10 +709,22 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
         counter += 1
 
     # Write file off the event loop (run_b2d3ece0)
-    try:
-        await asyncio.to_thread(target_path.write_bytes, file_bytes)
-    except (PermissionError, OSError) as e:
-        raise HTTPException(status_code=500, detail=f"Failed to write file: {e}")
+    if _cdf_is_governed(target_path):
+        if request.expected_revision is None:
+            raise HTTPException(status_code=409, detail="expected_revision is required")
+        from core.ingestion.api import StaleRevision, apply_user_edit
+        try:
+            await asyncio.to_thread(
+                apply_user_edit, target_path, file_bytes,
+                expected_revision=request.expected_revision, actor="user",
+            )
+        except StaleRevision:
+            raise HTTPException(status_code=409, detail="The target revision is stale")
+    else:
+        try:
+            await asyncio.to_thread(target_path.write_bytes, file_bytes)
+        except (PermissionError, OSError) as e:
+            raise HTTPException(status_code=500, detail=f"Failed to write file: {e}")
 
     # Calculate relative path from workspace root
     try:
@@ -765,6 +797,28 @@ async def write_file(
     if await asyncio.to_thread(lambda: file_path.is_file() and not is_text_on_disk(file_path)):
         raise HTTPException(status_code=409, detail="binary file, not overwritten")
 
+    from core.ingestion.api import StaleRevision, apply_user_edit
+    if _cdf_is_governed(file_path):
+        if request.expected_revision is None:
+            raise HTTPException(status_code=409, detail="expected_revision is required")
+        try:
+            revision = await asyncio.to_thread(
+                apply_user_edit, file_path, content_bytes,
+                expected_revision=request.expected_revision, actor="user",
+            )
+        except StaleRevision:
+            raise HTTPException(
+                status_code=409,
+                detail="This governed file changed on disk. Reload it before saving.",
+            )
+        try:
+            relative_path = file_path.relative_to(workspace_root)
+        except ValueError:
+            relative_path = file_path.resolve().relative_to(workspace_root.resolve())
+        return WorkspaceWriteResponse(
+            path=str(relative_path), size=len(content_bytes), revision=revision,
+        )
+
     # Ensure parent directory exists
     parent_dir = file_path.parent
     if not parent_dir.exists():
@@ -794,5 +848,6 @@ async def write_file(
 
     return WorkspaceWriteResponse(
         path=str(relative_path),
-        size=len(content_bytes)
+        size=len(content_bytes),
+        revision=_cdf_revision(file_path),
     )

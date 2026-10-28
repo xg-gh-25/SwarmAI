@@ -10,7 +10,7 @@ centralized directory.  It is responsible for:
 - ``ContextFileSpec``           — Frozen dataclass defining a source file's
                                   metadata (filename, priority, section_name,
                                   truncatable, user_customized, truncate_from)
-- ``CONTEXT_FILES``             — Ordered list of all 11 ContextFileSpec entries
+- ``CONTEXT_FILES``             — Ordered list of all 12 ContextFileSpec entries
 - ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (30,000)
 - ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (50,000)
 - ``BUDGET_1M_MODEL``           — Token budget for >= 500K models (150,000)
@@ -35,8 +35,9 @@ directory.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 import logging
 import os
 import re
@@ -50,13 +51,37 @@ logger = logging.getLogger(__name__)
 # Token-estimation coefficients — CALIBRATED against the real opus-4-8
 # tokenizer (run_3f25a73a, 2026-06-28; bedrock invoke_model usage.input_tokens,
 # baseline-subtracted). These are the SINGLE SOURCE OF TRUTH: the forward
-# estimate (estimate_tokens) AND prompt_builder's DailyActivity truncation derive
-# from them, so the forward/inverse relationship can never drift (Gate-1 finding A).
+# estimate_tokens is also the admission meter for whole-unit DailyActivity and
+# TIMELINE selectors, so every memory budget uses the same calibrated estimate.
 # (The read-line's own truncator was removed 2026-08-14 — read-line no longer
 # truncates; size governance is the write-side line's job.)
 #
 # Measured: CJK ~1.06-1.11 tok/char, Latin ~2.0-2.5 tok/word (markdown/technical).
 # The OLD values (CJK 0.667, Latin 1.333) under-counted real content ~40-65%.
+
+SYSTEM_APPENDIX_NOTICE = (
+    "以下条目由系统从对话中自动提取，优先级低于产品规则（SWARMAI / IDENTITY / SOUL / AGENT），"
+    "与产品规则冲突时按产品规则执行。"
+)
+_SYSTEM_APPENDIX_FILES = frozenset({"STEERING.md", "USER.md", "TOOLS.md"})
+_L1_LAYOUT_VERSION = 3
+
+
+def _utc_day(value: datetime) -> str:
+    current = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return current.date().isoformat()
+
+
+def split_system_appendix(content: str) -> tuple[str, str]:
+    """Split owner-authored text from the CDF-managed appendix, preserving bytes."""
+    from core.ingestion.contracts_v2 import SYSTEM_APPENDIX_HEADING
+
+    match = re.search(rf"^{re.escape(SYSTEM_APPENDIX_HEADING)}\s*$", content, re.MULTILINE)
+    if match is None:
+        return content, ""
+    return content[:match.start()], content[match.start():]
+
+
 CJK_TOKENS_PER_CHAR = 1.1
 """Estimated tokens per CJK character (calibrated to real opus-4-8 tokenizer)."""
 
@@ -105,16 +130,27 @@ floor so the budget remains strictly inside the model window."""
 # change had to be hand-synced across every mirror (the drift class run_1b2655df hit).
 # Everything below is DERIVED by arithmetic from module constants, so a change to
 # BUDGET_1M_MODEL or TOKEN_CAP_PER_DAILY_FILE propagates to all consumers automatically.
-TOKEN_CAP_PER_DAILY_FILE = 2000
-"""Per-file token cap for injected DailyActivity files (2 files injected)."""
+DAILY_ACTIVITY_INJECTION_BUDGET = 4000
+"""Whole-unit budget for seven days of DailyActivity working memory."""
+
+
+TIMELINE_BUDGET_TOKENS = 1500
+"""Whole-unit budget for current/previous summaries and recent TIMELINE events."""
+
+MEMORY_INJECTION_BUDGET = 24_000
+"""Whole-unit fixed-layer budget for MEMORY.md (CDF design §12)."""
+
+EVOLUTION_INJECTION_BUDGET = 8_000
+"""Whole-unit fixed-layer budget for EVOLUTION.md (CDF design §12)."""
+# Backward-compatible import name; it now denotes the total whole-unit budget,
+# not a per-file truncation cap.
+TOKEN_CAP_PER_DAILY_FILE = DAILY_ACTIVITY_INJECTION_BUDGET
 
 RESUME_CONTEXT_HEADROOM = 5000
 """Reserve for the resume-context block appended after the budgeted assembly."""
 
-EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_HEADROOM
-"""Ephemeral overhead subtracted from the base budget to get the effective
-context-file budget. FORMULA-anchored (never a bare literal) so it tracks its
-inputs: 2×DailyActivity cap + resume headroom = 9,000."""
+EPHEMERAL_HEADROOM = DAILY_ACTIVITY_INJECTION_BUDGET + RESUME_CONTEXT_HEADROOM
+"""Ephemeral overhead: one 4K DailyActivity selector plus resume headroom."""
 
 EFFECTIVE_1M_BUDGET = BUDGET_1M_MODEL - EPHEMERAL_HEADROOM
 """Effective context-file budget for a 1M-context model = 141,000.
@@ -150,7 +186,7 @@ WHOLE_FILE_PRIVATE: frozenset[str] = frozenset({
     # scrubs credential SHAPES (AKIA/PEM/prefixed tokens), NOT bare 12-digit account
     # numbers — so a teammate could ask the channel bot to summarize its tooling and
     # leak infra. It has zero channel-bot value (the bot's rules live in STEERING #6).
-    "TOOLS.md",
+    "TOOLS.md", "TIMELINE.md",
 })
 
 # Channel-injection carve-outs: files that ARE gitignored-private (so they never
@@ -329,8 +365,9 @@ class ContextFileSpec:
         user_customized: ``True`` for user-owned files (copy-only-if-missing,
                          ``0o644``); ``False`` for system defaults
                          (always-overwrite, ``0o444``).
-        truncate_from:   Truncation direction — ``"tail"`` keeps the beginning
-                         (default), ``"head"`` keeps the end (newest content).
+        truncate_from:   Legacy truncation direction metadata.
+        inject_budget_tokens: Optional whole-unit selector budget.
+        selector:         Optional named selector; ``timeline`` selects whole events.
     """
 
     filename: str
@@ -339,6 +376,8 @@ class ContextFileSpec:
     truncatable: bool
     user_customized: bool = False
     truncate_from: Literal["head", "tail"] = "tail"
+    inject_budget_tokens: int | None = None
+    selector: str | None = None
 
 
 # Ownership model:
@@ -375,18 +414,20 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("STEERING.md",          5,  "Steering",           True,  True,  "tail"),
     ContextFileSpec("TOOLS.md",             6,  "Tools",              True,  True,  "tail"),
     # ── Agent-owned (agent writes via hooks, never overwritten) ──────
-    # NOTE (2026-08-14): the `truncatable`/`direction` fields below are LEGACY —
-    # read-line NEVER truncates any file (2026-06-28 directive; _enforce_token_budget
-    # returns full content + a warning, and _truncate_section was deleted 2026-08-14).
-    # `truncatable` is NOT flipped to False here on purpose: core_section_names()
-    # treats `truncatable is False` as "conceptual core" (SWARMAI/IDENTITY/SOUL/SELF/
-    # AGENT), so flipping MEMORY/EVOLUTION would wrongly add them to that set. Size for
-    # MEMORY/EVOLUTION is governed WRITE-SIDE by their archive valves (distillation /
-    # evolution_maintenance _size_evict → move-to-archive), NOT by read-side truncation.
-    ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head"),
-    ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head"),
+    # NOTE: `truncatable`/`direction` remain LEGACY metadata. Generic budget
+    # enforcement never slices a section. MEMORY/EVOLUTION instead use the explicit
+    # CDF selector below: source files stay byte-identical while complete units are
+    # admitted within their per-file budgets. `truncatable` is not flipped to False
+    # because core_section_names() uses that flag for conceptual-core classification.
+    ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head",
+                    inject_budget_tokens=MEMORY_INJECTION_BUDGET, selector="cdf"),
+    ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head",
+                    inject_budget_tokens=EVOLUTION_INJECTION_BUDGET, selector="cdf"),
     # ── Auto-generated (rebuilt from filesystem, never overwritten) ──
     ContextFileSpec("KNOWLEDGE.md",         9,  "Knowledge",          True,  True,  "tail"),
+    # ── Episodic memory: whole-unit selection, private, copy-if-missing ──
+    ContextFileSpec("TIMELINE.md",          10, "Timeline",           True,  True,  "tail",
+                    inject_budget_tokens=TIMELINE_BUDGET_TOKENS, selector="timeline"),
     # PROJECTS.md removed (2026-08-14) — the auto-generated in-prompt project index
     #   was a redundant projection of the Projects/ folder (discoverable via recall +
     #   Glob). All its writers (refresh_projects_index + Entity Index) were deleted;
@@ -397,7 +438,7 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     # EVOLUTION_CHANGELOG.jsonl — agent-managed, seeded on first run via
     #   _AGENT_MANAGED_FILES in ensure_directory().  Not a context file.
 ]
-"""All 11 context source files in ascending priority order across 10 priority
+"""All 12 context source files in ascending priority order across 11 priority
 slots (SOUL.md and SELF.md share priority 2)."""
 
 
@@ -551,6 +592,7 @@ class ContextDirectoryLoader:
         context_dir: Path,
         token_budget: int = DEFAULT_TOKEN_BUDGET,
         templates_dir: Optional[Path] = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         """Initialize the loader.
 
@@ -563,6 +605,7 @@ class ContextDirectoryLoader:
         self.context_dir = context_dir
         self.token_budget = token_budget
         self.templates_dir = templates_dir
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
 
     # ── Class-level compiled regexes ─────────────────────────────────
@@ -976,7 +1019,7 @@ class ContextDirectoryLoader:
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
-        Reads the 11 source files from the context directory in ascending
+        Reads the 12 source files from the context directory in ascending
         priority order (0 first, 9 last).  Each non-empty file gets a
         ``## {section_name}`` header.  Empty or missing files are skipped
         entirely — no empty section headers appear in the output.
@@ -1034,6 +1077,10 @@ class ContextDirectoryLoader:
                 )
                 continue
 
+            appendix_content = ""
+            if spec.filename in _SYSTEM_APPENDIX_FILES:
+                content, appendix_content = split_system_appendix(content)
+
             # Non-owner session (exclusions given): a section-filtered carve-out
             # keeps only the text its owner wrapped in channel markers. Must run on
             # the RAW text — the markers are HTML comments _clean_content strips.
@@ -1059,7 +1106,37 @@ class ContextDirectoryLoader:
             if spec.filename == "MEMORY.md":
                 content = _filter_dormant_entries(content)
 
+            if spec.selector == "cdf":
+                from core.memory_injection import select_context_file
+
+                selection = select_context_file(
+                    filepath,
+                    budget=spec.inject_budget_tokens or 0,
+                    estimate=self.estimate_tokens,
+                    now=self._clock(),
+                )
+                content = selection.text
+
+            if spec.selector == "timeline":
+                from datetime import date
+                from core.memory_injection import select_timeline
+
+                selection = select_timeline(
+                    filepath,
+                    today=date.today(),
+                    estimate=self.estimate_tokens,
+                    budget=spec.inject_budget_tokens or 1500,
+                )
+                content = selection.text
+
             content = self._clean_content(content, spec.section_name)
+            if appendix_content and not exclude_filenames:
+                appendix_rendered = self._clean_content(appendix_content, spec.section_name)
+                if appendix_rendered:
+                    content = "\n\n".join(part for part in (
+                        content,
+                        f"{SYSTEM_APPENDIX_NOTICE}\n{appendix_rendered}",
+                    ) if part)
             if not content:
                 continue
 
@@ -1071,12 +1148,9 @@ class ContextDirectoryLoader:
                 continue
 
             if spec.filename == "MEMORY.md":
-                # MEMORY.md is ALWAYS full-injected (2026-08-14 rewrite). There is NO
-                # selective mode / keyword-section-scoring / embedding — recall is pure
-                # FTS5+BM25 (PRI11). The former `select_memory_sections` selective
-                # branch was inert (it returned the full body minus any stale index
-                # block) and is removed. Size is governed WRITE-SIDE by the distillation
-                # archive valve, not here. We still strip a legacy in-file index block.
+                # CDF §12 already selected complete MEMORY units without consulting
+                # the user query. Strip only the obsolete generated index block; this
+                # does not change unit selection or source-file bytes.
                 try:
                     from .memory_index import extract_body_without_index
                     content = extract_body_without_index(content)
@@ -1242,7 +1316,7 @@ class ContextDirectoryLoader:
         except OSError:
             return False
 
-        # git leg — SCOPED to the 11 context source files ONLY, never the whole
+        # git leg — SCOPED to the 12 context source files ONLY, never the whole
         # .context/ dir. run_0f009a75 root-cause: `.context/` also holds per-session
         # runtime state files that are TRACKED and dirty EVERY session (.memory-usage.json,
         # .eval-canary.json, judge-telemetry.jsonl, …). A dir-wide `git status -- .context/`
@@ -1284,7 +1358,10 @@ class ContextDirectoryLoader:
         """
         l1_path = self.context_dir / L1_CACHE_FILENAME
         try:
-            header = f"<!-- budget:{budget} -->\n"
+            header = (f"<!-- budget:{budget};timeline:{TIMELINE_BUDGET_TOKENS};"
+                      f"memory:{MEMORY_INJECTION_BUDGET};evolution:{EVOLUTION_INJECTION_BUDGET};"
+                      f"selection-day:{_utc_day(self._clock())};"
+                      f"layout:{_L1_LAYOUT_VERSION} -->\n")
             # ATOMIC WRITE (run_cc397b0d): delegate to the module-level
             # _atomic_write_bytes helper (run_b1feca42 — unified the two
             # previously hand-rolled mkstemp/fsync/os.replace blocks). os.replace
@@ -1311,7 +1388,10 @@ class ContextDirectoryLoader:
             logger.warning("Failed to write L1 cache %s: %s", l1_path, exc)
 
     # Regex for parsing the budget header from L1 cache files.
-    _BUDGET_HEADER_RE = re.compile(r"^<!--\s*budget:(\d+)\s*-->")
+    _BUDGET_HEADER_RE = re.compile(
+        r"^<!--\s*budget:(\d+);timeline:(\d+);memory:(\d+);evolution:(\d+);"
+        r"selection-day:(\d{4}-\d{2}-\d{2});layout:(\d+)\s*-->"
+    )
 
     def _load_l1_if_fresh(self, expected_budget: int = DEFAULT_TOKEN_BUDGET) -> Optional[str]:
         """Load L1 cache if fresh and budget-tier matches.
@@ -1350,8 +1430,19 @@ class ContextDirectoryLoader:
             return None  # Missing header (old format) → treat as stale
 
         cached_budget = int(match.group(1))
-        if cached_budget != expected_budget:
-            return None  # Budget mismatch → stale
+        cached_timeline_budget = int(match.group(2))
+        cached_memory_budget = int(match.group(3))
+        cached_evolution_budget = int(match.group(4))
+        cached_selection_day = match.group(5)
+        cached_layout = int(match.group(6))
+        current_day = _utc_day(self._clock())
+        if (cached_budget != expected_budget
+                or cached_timeline_budget != TIMELINE_BUDGET_TOKENS
+                or cached_memory_budget != MEMORY_INJECTION_BUDGET
+                or cached_evolution_budget != EVOLUTION_INJECTION_BUDGET
+                or cached_selection_day != current_day
+                or cached_layout != _L1_LAYOUT_VERSION):
+            return None  # Budget, selector, or rendering-layout mismatch → stale
 
         # Return content after the header line
         return raw[first_newline + 1:]
@@ -1462,14 +1553,11 @@ class ContextDirectoryLoader:
             # L1 cache: skip ONLY when files are excluded (group/non-owner channels
             # produce session-specific content that would poison a shared cache).
             #
-            # (2026-08-14) The former `memory_smart` bypass is GONE: selective MEMORY
-            # injection was removed — MEMORY.md is always full-injected and the
-            # assembled prompt is now a PURE FUNCTION of the on-disk context files
-            # (no session-varying input reaches it). So the desktop main path is
-            # cache-SAFE and now shares L1 like every other full-context session
-            # (it previously forfeited the cache hit for a rationale that no longer
-            # holds). The `exclude_filenames` guard is the only real cache-poison
-            # boundary and is preserved.
+            # CDF selection is a pure function of file bytes, the persisted score
+            # snapshot, and UTC day. It has no session/user-query input, so the desktop
+            # fixed layer remains cache-safe. The selector day and both per-file caps
+            # are part of the cache header; exclusions remain the only session-specific
+            # cache-poison boundary.
             if not exclude_filenames:
                 cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
                 if cached:

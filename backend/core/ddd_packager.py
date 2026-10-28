@@ -675,33 +675,6 @@ def gate_dangling_skill_refs(out_dir: Path) -> list[tuple[str, int, str]]:
     return hits
 
 
-def rewrite_host_paths(tree: Path) -> int:
-    """Explicit, opt-in remediation (M2): rewrite host-path literals to the portable
-    workspace var across the emitted tree. Returns the count of files changed.
-    Separate from ``content_safety_scan`` on purpose — mutation is never implicit.
-
-    This remediation is a PACKAGE-emit path, so it rewrites the dev-command pattern too
-    (run_03c40277: _DEV_COMMAND_PATH_PATTERN was split out of _HOST_PATH_PATTERNS for the
-    scan_context gate; it stays in THIS rewrite set so remediation keeps its pre-split
-    semantics — a shipped package should carry neither real host-paths NOR dev-commands).
-    """
-    changed = 0
-    for path in sorted(tree.rglob("*")):
-        if not path.is_file() or not _is_scannable(path):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        new = text
-        for pat in (*_HOST_PATH_PATTERNS, _DEV_COMMAND_PATH_PATTERN):
-            new = pat.sub(_PORTABLE_WORKSPACE_VAR, new)
-        if new != text:
-            path.write_text(new, encoding="utf-8")
-            changed += 1
-    return changed
-
-
 # ---------------------------------------------------------------------------
 # Deterministic JSON writer (Gate-1 H3)
 # ---------------------------------------------------------------------------
@@ -1852,10 +1825,12 @@ def emit_install_script(out_dir: Path, plugin_name: str, *, is_aim_target: bool)
         "",
         'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
         f'PLUGIN_NAME="{plugin_name}"',
+        'PACKAGE_VERSION="1.0.0"',
         "",
         'if command -v aim >/dev/null 2>&1; then',
         '  echo "[install] aim CLI found — installing capability"',
         '  aim plugins install --local "${SCRIPT_DIR}"',
+        '  DEST="${SWARM_PROJECT_ROOT:-${SCRIPT_DIR}}"',
         "else",
         '  echo "[install] no aim CLI — placing files for a non-AIM host"',
         '  DEST="${SWARM_WORKSPACE:-$HOME/.local/share/ddd-plugins}/${PLUGIN_NAME}"',
@@ -1863,6 +1838,8 @@ def emit_install_script(out_dir: Path, plugin_name: str, *, is_aim_target: bool)
         '  cp -R "${SCRIPT_DIR}/." "${DEST}/"',
         '  echo "[install] placed at ${DEST}"',
         "fi",
+        'mkdir -p "${DEST}/.swarmai"',
+        'printf \'{"name":"%s","version":"%s"}\\n\' "${PLUGIN_NAME}" "${PACKAGE_VERSION}" > "${DEST}/.swarmai/installed-package.json"',
         "",
         'echo "[install] done: ${PLUGIN_NAME}"',
     ]

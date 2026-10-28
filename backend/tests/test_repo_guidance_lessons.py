@@ -49,10 +49,20 @@ def _repo(path):
 
 
 def _lesson(ws, repo, n, statement=None, dest="domain:P:TECH:Conventions", run="run_a"):
-    out = reflect_library.write(ws, str(repo.resolve()),
-                                {"id": f"L{n}", "statement": statement or f"lesson number {n}"},
-                                dest, run)
-    assert out and out.startswith("library:")
+    """Seed the read model directly; production REFLECT now writes only through CDF."""
+    root = str(repo.resolve())
+    path = reflect_library.file_for(ws, root)
+    assert path is not None
+    text = (path.read_text(encoding="utf-8") if path.exists()
+            else reflect_library._fresh(root))
+    statement = statement or f"lesson number {n}"
+    section = reflect_library.LESSONS if dest.startswith("domain:") else reflect_library.PENDING
+    entry = f"- {statement} ({run} L{n})"
+    updated = reflect_library._insert(text, section, statement, entry,
+                                      f"reinforced by {run} L{n}", f"{run} L{n}")
+    assert updated is not None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
 
 
 def _read(path, sid="s1"):

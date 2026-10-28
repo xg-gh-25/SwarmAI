@@ -73,12 +73,23 @@ proposal eligible.
 
 ## Writing to EVOLUTION.md
 
-Use Read + Edit tools. Never `python3 locked_write.py` (PyInstaller crash).
-JSONL changelog append after every mutation (mandatory).
+Never edit EVOLUTION.md: Cognitive Distillation Flow's writer is its only writer.
+- A correction the user just made (CAPTURE), or a status change the user just approved
+  (promoted / retired), is submitted as one complete unit bound to that user message:
+  `"$SWARM_BACKEND_BIN" ingest submit --source S1 --evidence "$SWARM_LAST_USER_EVENT_ID"
+  --payload-json -` with `"kind":"cognition"`, `"scope":"agent"` and `"type":"correction"`
+  (bias tag in the title). A status change is a new unit that names the entry it updates;
+  CDF links it with `supersedes`, the old text stays.
+- Corrections you notice yourself, with no user message to bind, are not submitted: CDF
+  extracts them from the session after it ends.
+- Relay the CLI echo to the user unchanged.
+
+STEERING.md is a user file: change it only through the workspace editor API with the
+`expected_revision` of its latest GET, after the user approves the text.
 
 ## Verification
 
-- [ ] **Correction captured with bias tag** — C-entry has [Bias A/B/C/D]
+- [ ] **Correction submitted with bias tag** — `ingest submit --source S1` unit, bias in the title
 - [ ] **Classification brief output** — before any governance file write
 - [ ] **Admission passed** — overlap listed, fold-or-new-axis stated, size delta shown
-- [ ] **JSONL changelog updated** — after every EVOLUTION.md mutation
+- [ ] **EVOLUTION.md not edited directly** — every change went through `ingest submit`

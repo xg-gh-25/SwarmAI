@@ -63,7 +63,14 @@ def backup_env(tmp_path):
             )
             await conn.commit()
 
-    asyncio.run(_setup_db())
+    # A private loop, not asyncio.run(): asyncio.run() sets the current event loop to
+    # None when it finishes, and later tests in the same process that use the current
+    # loop (test_chat_scenarios_e2e) then fail with "no current event loop".
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_setup_db())
+    finally:
+        loop.close()
 
     # Init git repo in workspace
     subprocess.run(["git", "init", str(ws)], capture_output=True, check=True)

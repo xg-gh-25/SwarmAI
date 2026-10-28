@@ -71,7 +71,7 @@ def test_a_doc_change_in_deliver_still_fails_lg1(rig):
     r.create()
     r.drive(until="deliver")
     r.edit({"README.md": "late note\n"})
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     out = r.v1("land", "--message", "fix: x\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     assert out.get("ok") is not True or out.get("state", {}).get("landing") != "landed", out
     assert "LG-1" in json.dumps(out), out

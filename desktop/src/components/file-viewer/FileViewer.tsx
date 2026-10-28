@@ -116,6 +116,7 @@ interface FileResponse {
   name: string;
   path: string;
   readonly?: boolean;
+  revision?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -175,6 +176,8 @@ function FileViewerImpl({
         size: number;
         mimeType?: string;
         readonly?: boolean;
+        /** Last revision read from disk; sent back on governed saves. */
+        revision?: string;
         /** Shown as the info card although its route has a renderer: a text route
          *  whose file is not text (the server's 415), or an image this system
          *  cannot draw (canvas-file-types.md P0 / P2). */
@@ -397,6 +400,7 @@ function FileViewerImpl({
             encoding: d.encoding ?? 'utf-8',
             size: d.size ?? new TextEncoder().encode(d.content).length,
             readonly: d.readonly,
+            revision: d.revision,
             committedContent,
             baselinePending: !waitForBaseline && isEditableType(tab.viewType),
           };
@@ -569,14 +573,33 @@ function FileViewerImpl({
   const handleSave = useCallback(
     async (content: string) => {
       if (!activeTab) return;
-      await api.put('/workspace/file', { content }, {
-        params: { path: activeTab.filePath },
-      });
-      // Update cache with new content
       const cached = contentCache.current[activeTab.filePath];
+      let response;
+      try {
+        response = await api.put<{ revision?: string }>(
+          '/workspace/file',
+          { content, expected_revision: cached?.revision ?? '' },
+          { params: { path: activeTab.filePath } },
+        );
+      } catch (error) {
+        const status =
+          (error as { statusCode?: number })?.statusCode ??
+          (error as { response?: { status?: number } })?.response?.status;
+        if (status === 409 && cached) {
+          try {
+            const fresh = await api.get<FileResponse>('/workspace/file', {
+              params: { path: activeTab.filePath, text_only: 1 },
+            });
+            cached.revision = fresh.data.revision;
+          } catch { /* keep the original conflict */ }
+        }
+        throw error;
+      }
+      // Update cache with new content and the server-confirmed revision.
       if (cached) {
         cached.content = content;
         cached.size = new TextEncoder().encode(content).length;
+        cached.revision = response.data.revision ?? cached.revision;
       }
       markDirty(activeTab.id, false);
     },

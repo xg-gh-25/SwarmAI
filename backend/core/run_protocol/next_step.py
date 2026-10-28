@@ -229,7 +229,11 @@ def next_step(engine, *, previous_stage: str | None = None,
         if not _reflect_prepared(engine.store.read_events(), state):
             out.update(action="write_artifact",
                        command=_cmd(engine, "reflect-prepare --artifact -"),
-                       why="record the run's lessons (zero is allowed) before landing")
+                       why=("record the five-part CDF report before landing: delivered "
+                            "(Event plus optional architecture Cognition), decisions "
+                            "(decision), corrections (correction or pitfall), practices "
+                            "(guideline or process), and gaps (Gap); every row is a "
+                            "contracts_v2 unit with run evidence, and any section may be empty"))
         elif lifecycle.deliver_route(state) == "finish":
             # nothing lands: research (no code) or the not-landed path (two-ends §5)
             out.update(action="run", command=_cmd(engine, "stage-complete"),

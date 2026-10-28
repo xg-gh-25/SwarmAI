@@ -397,7 +397,8 @@ def update_effectiveness(
 ) -> None:
     """Compare what was suggested vs what was actually done. Update effectiveness stats.
 
-    Called during distillation when DailyActivity deliverables are available.
+    Called from update_learning_from_activity, once per new DailyActivity
+    session (the same dedup guard), when the briefing is built.
     A suggestion is "followed" if any deliverable title fuzzy-matches it
     (case-insensitive substring match in either direction).
     """
@@ -487,6 +488,10 @@ def update_learning_from_activity(
     deliverables = extract_deliverables(daily_dir)
     if not deliverables:
         return state  # no deliverables to compare
+
+    # L4 effectiveness (follow rate / trend). It used to run in the retired
+    # distillation hook; it rides on this pass so it counts each session once.
+    update_effectiveness(state, state.last_briefing_suggested, deliverables)
 
     # Classify the overall work type from deliverables
     combined = " ".join(deliverables)

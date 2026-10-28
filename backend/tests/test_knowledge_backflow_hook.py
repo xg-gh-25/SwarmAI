@@ -18,7 +18,6 @@ from hooks.knowledge_backflow_hook import (
     _extract_title,
     _build_knowledge_page,
     _sanitize_yaml_string,
-    _atomic_write,
 )
 
 
@@ -247,23 +246,6 @@ class TestKnowledgePageGeneration:
         assert title_line.startswith('title: "')
 
 
-class TestAtomicWrite:
-    """Tests for atomic file writing."""
-
-    def test_writes_file_successfully(self, tmp_path):
-        filepath = tmp_path / "test.md"
-        _atomic_write(filepath, "hello world")
-        assert filepath.read_text() == "hello world"
-
-    def test_no_temp_file_left_on_success(self, tmp_path):
-        filepath = tmp_path / "test.md"
-        _atomic_write(filepath, "content")
-        # Only the target file should exist
-        files = list(tmp_path.iterdir())
-        assert len(files) == 1
-        assert files[0].name == "test.md"
-
-
 # ─── AC4: Hook registered in chain (verified by import test) ───
 
 
@@ -307,87 +289,3 @@ class TestIsolation:
                 side_effect=Exception("DB error")
             )
             await hook.execute(context)
-
-    @pytest.mark.asyncio
-    async def test_list_type_content_extracted(self):
-        """Hook correctly handles list-type message content (Claude API format)."""
-        hook = KnowledgeBackflowHook()
-        context = MagicMock()
-        context.session_id = "test_list_content"
-
-        # Claude API returns content as list of blocks
-        analysis_text = (
-            "## Analysis\n\n"
-            "After examining the architecture deeply, we find key patterns. " * 60
-            + "\n\n## Recommendation\n\n"
-            "Based on this analysis, the recommended approach is clear and well-supported. " * 10
-        )
-        messages = [
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": analysis_text},
-                    {"type": "tool_use", "name": "Bash", "input": {}},
-                ],
-            }
-        ]
-
-        with patch("hooks.knowledge_backflow_hook.db") as mock_db, \
-             patch("hooks.knowledge_backflow_hook.SWARMWS", str(Path("/tmp/test_backflow"))):
-            mock_db.messages.list_by_session_paginated = AsyncMock(return_value=messages)
-            # Create temp dir
-            notes_dir = Path("/tmp/test_backflow/Knowledge/Notes")
-            notes_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                await hook.execute(context)
-                # Check a file was written
-                files = list(notes_dir.glob("*.md"))
-                assert len(files) == 1
-                content = files[0].read_text()
-                assert "## Analysis" in content
-                assert "session_id: test_list_content" in content
-            finally:
-                # Cleanup
-                import shutil
-                shutil.rmtree("/tmp/test_backflow", ignore_errors=True)
-
-    @pytest.mark.asyncio
-    async def test_integration_file_written(self, tmp_path):
-        """Integration test: qualifying message -> file written with correct format."""
-        hook = KnowledgeBackflowHook()
-        context = MagicMock()
-        context.session_id = "test_integration"
-
-        analysis = (
-            "## Deep Architecture Analysis\n\n"
-            "The system has several key properties worth examining. " * 50
-            + "\n\n## Conclusion\n\n"
-            "Based on this analysis, the evidence suggests the approach is sound."
-        )
-        messages = [
-            {"role": "user", "content": "Analyze the architecture"},
-            {"role": "assistant", "content": analysis},
-        ]
-
-        with patch("hooks.knowledge_backflow_hook.db") as mock_db, \
-             patch("hooks.knowledge_backflow_hook.SWARMWS", str(tmp_path)):
-            mock_db.messages.list_by_session_paginated = AsyncMock(return_value=messages)
-            notes_dir = tmp_path / "Knowledge" / "Notes"
-            notes_dir.mkdir(parents=True)
-
-            await hook.execute(context)
-
-            files = list(notes_dir.glob("*.md"))
-            assert len(files) == 1
-
-            content = files[0].read_text()
-            # Verify frontmatter
-            assert content.startswith("---\n")
-            assert "session_id: test_integration" in content
-            assert "auto_captured: true" in content
-            assert 'title: "Deep Architecture Analysis"' in content
-            # Verify body preserved
-            assert "## Deep Architecture Analysis" in content
-            # Verify filename format
-            assert files[0].name.startswith(datetime.now().strftime("%Y-%m-%d"))
-            assert "deep-architecture-analysis" in files[0].name

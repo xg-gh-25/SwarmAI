@@ -36,6 +36,7 @@ class WorkspaceFileResponse(BaseModel):
     encoding: str  # "utf-8" or "base64"
     size: int
     mime_type: str
+    revision: str = ""
 
 
 class WorkspaceUploadRequest(BaseModel):
@@ -44,6 +45,7 @@ class WorkspaceUploadRequest(BaseModel):
     filename: str  # Original filename
     content: str  # Base64 encoded file content
     path: str = "."  # Relative path within workspace (default: root)
+    expected_revision: str | None = None
 
 
 class WorkspaceUploadResponse(BaseModel):
@@ -59,6 +61,7 @@ class WorkspaceWriteRequest(BaseModel):
 
     path: str  # Relative path to the file
     content: str  # File content (UTF-8 text)
+    expected_revision: str | None = None
 
 
 class WorkspaceWriteResponse(BaseModel):
@@ -66,3 +69,4 @@ class WorkspaceWriteResponse(BaseModel):
 
     path: str  # Relative path to the written file
     size: int  # Size in bytes
+    revision: str = ""

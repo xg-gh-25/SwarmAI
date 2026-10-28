@@ -694,15 +694,10 @@ def cmd_ddd_health(args, reg) -> None:
 
 
 def cmd_ddd_retire(args, reg) -> None:
-    """Agent-directed RETIRE of ONE named (title, section) knowledge entry — the
-    sanctioned 'out' side of the knowledge layer (the counterpart to s_persist's
-    add). Archives the entry (stays FTS5-recallable) + physically strips it from
-    the doc by (title, section) identity + writes a dated .bak. Default is a
-    dry-run preview; pass --apply to persist.
+    """Report the one named retirement candidate without mutating the corpus.
 
-    This exists so removals do NOT go through a raw Edit-to-delete (which skips
-    the archive → lost from recall, and can destroy a same-title sibling).
-    Fail-loud: no match / ambiguous duplicate → error, exit 1.
+    CDF stage B retires the legacy apply path. User edits go through
+    governed_edit and automated maintenance is read-only.
     """
     from core.ddd_entry_lifecycle import retire_entry, RetireError, MEMORY_EVERGREEN_SECTIONS
 
@@ -722,8 +717,8 @@ def cmd_ddd_retire(args, reg) -> None:
         report = retire_entry(
             content, title=args.title, section=args.section,
             project_dir=p.parent, archive_name=archive_name,
-            source_path=p if args.apply else None,
-            dry_run=not args.apply, force=bool(args.force),
+            source_path=None,
+            dry_run=True, force=bool(args.force),
             # MEMORY.md's evergreen sections (Open Threads, Standing Preferences,
             # etc.) need --force parity with the autonomous reclaim path.
             evergreen_sections=MEMORY_EVERGREEN_SECTIONS if p.name == "MEMORY.md" else None,
@@ -733,13 +728,12 @@ def cmd_ddd_retire(args, reg) -> None:
         sys.exit(1)
 
     print(json.dumps({
-        "retired": bool(args.apply),
-        "dry_run": not args.apply,
+        "retired": False,
+        "dry_run": True,
         "candidate": report.candidates[0] if report.candidates else None,
-        "archived": report.archived,
+        "archived": [],
         "archive_file": archive_name,
-        "hint": ("preview only — pass --apply to persist" if not args.apply
-                 else f"retired to {archive_name} (dated .bak written)"),
+        "hint": "report only — edit through governed workspace APIs",
     }))
 
 
@@ -902,12 +896,11 @@ def main() -> None:
     p_ddd_health.add_argument("--project", required=True)
 
     # ddd-retire (run_186a5f15: agent-directed named-entry RETIRE — knowledge 'out' side)
-    p_ddd_retire = sub.add_parser("ddd-retire", help="Retire ONE named (title,section) knowledge entry: archive + strip (dry-run unless --apply)")
+    p_ddd_retire = sub.add_parser("ddd-retire", help="Report ONE named (title,section) retirement candidate; never mutates")
     p_ddd_retire.add_argument("--file", required=True, help="Doc path (relative to workspace or absolute), e.g. .context/MEMORY.md or Projects/X/IMPROVEMENT.md")
     p_ddd_retire.add_argument("--title", required=True, help="Exact entry title (the bold text after the [type] tag)")
     p_ddd_retire.add_argument("--section", required=True, help="Exact '## Section' the entry lives under")
     p_ddd_retire.add_argument("--archive-name", dest="archive_name", default=None, help="Archive filename (default MEMORY-archive.md for MEMORY.md, else IMPROVEMENT-archive.md)")
-    p_ddd_retire.add_argument("--apply", action="store_true", help="Persist the retire (default is dry-run preview)")
     p_ddd_retire.add_argument("--force", action="store_true", help="Retire even a keep-class entry (decision/model/principle/correction/COE)")
 
     # ddd-noise (M0 ②: per-doc reclaimable-noise gate)

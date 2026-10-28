@@ -65,23 +65,5 @@ def test_closure_refusals_name_the_finding_and_what_is_allowed():
         fd._proof(row, proof, {})
 
 
-@pytest.mark.parametrize("statement,needle", [
-    ("x" * 401, "at most 400"), ("see run_abc123 for it", "run_abc123"),
-    ("two\nlines", "line break"), ("   ", "empty")])
-def test_reflect_refusals_give_the_rule(statement, needle):
-    lesson = {"id": "L1", "type": "pitfall", "scope": "project", "statement": statement,
-              "tell": "t", "evidence": ["e1"], "relation": {"kind": "new", "entry": None}}
-    with pytest.raises(reflect.ReflectError, match=needle):
-        reflect.prepare([lesson], event_ids={"e1"}, candidates={})
 
 
-def test_reflect_refusals_for_fields_tell_and_evidence():
-    base = {"id": "L1", "type": "pitfall", "scope": "project", "statement": "s",
-            "tell": "t", "evidence": ["e1"], "relation": {"kind": "new", "entry": None}}
-    with pytest.raises(reflect.ReflectError, match=r"missing \['tell'\]"):
-        reflect.prepare([{k: v for k, v in base.items() if k != "tell"}], event_ids={"e1"},
-                        candidates={})
-    with pytest.raises(reflect.ReflectError, match="at most 400"):
-        reflect.prepare([{**base, "tell": "t" * 401}], event_ids={"e1"}, candidates={})
-    with pytest.raises(reflect.ReflectError, match=r"not in this run: \['zz'\]"):
-        reflect.prepare([{**base, "evidence": ["zz"]}], event_ids={"e1"}, candidates={})

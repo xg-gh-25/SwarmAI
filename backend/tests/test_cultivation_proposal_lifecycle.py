@@ -323,51 +323,37 @@ class TestProjectParamTraversalGuard:
             )
 
 
-class TestApplyToDddLeavesLock:
-    """Bug 4 (run_24d9f714) — apply_to_ddd must NOT unlink the flock'd doc .lock.
-
-    Drives the REAL apply_to_ddd through its full write path. To reach line 783 (where
-    the .lock is created) the proposal must clear all four early returns (Gate-1 Fix C):
-      - change_type='append'                        (else :751 not_safe)
-      - target IMPROVEMENT.md / 'What Worked'        (safe-append, NOT a protected zone)
-      - the doc exists on disk at the ddd_path       (else :776 doc_missing)
-      - content ≥30 chars AND passes is_quality_lesson (else :766 rejected_low_value)
-    Then assert the .lock sidecar PERSISTS after return. Restoring the unlink → RED.
-    """
+class TestApplyToDddEnqueues:
+    """The compatibility entry point hands work to CDF and touches no DDD file."""
 
     def _make_proposal(self) -> CultivationProposal:
         return CultivationProposal.from_dict({
-            "id": "applock1",
-            "target_doc": "IMPROVEMENT.md",
+            "id": "applock1", "target_doc": "IMPROVEMENT.md",
             "target_section": "What Worked",
-            # ≥30 chars, ≥5 words, a real declarative lesson (clears the value floor).
-            "content": "Always validate Path inputs at the boundary before filesystem "
-                       "operations to avoid a str-division TypeError.",
-            "source_run_id": "run_test",
-            "confidence": 0.9,
-            "status": "escalated",
-            "change_type": "append",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "content": "Always validate Path inputs at the boundary before filesystem operations.",
+            "source_run_id": "run_test", "confidence": 0.9, "status": "escalated",
+            "change_type": "append", "created_at": datetime.now(timezone.utc).isoformat(),
             "ttl_days": 30,
         })
 
-    def test_apply_to_ddd_leaves_lock_and_applies(self, tmp_path):
-        # Real target doc on disk with the whitelisted heading (else doc_missing/created_section).
+    def test_apply_to_ddd_enqueues_without_writing_or_locking(self, tmp_path, monkeypatch):
+        from core.ingestion.api import EnqueueResult
+
+        calls = []
+        monkeypatch.setattr(
+            "core.ingestion.api.enqueue",
+            lambda *args, **kwargs: calls.append((args, kwargs)) or EnqueueResult(
+                status="queued", candidate_id="cand-1"),
+        )
         doc = tmp_path / "IMPROVEMENT.md"
         doc.write_text("# IMPROVEMENT\n\n## What Worked\n\n- prior lesson\n", encoding="utf-8")
+        before = doc.read_bytes()
 
-        status = apply_to_ddd(self._make_proposal(), tmp_path)
-
-        # Reached the write path and succeeded (proves the .lock was actually created).
-        assert status in ("applied", "created_section"), f"unexpected early-return: {status}"
-        # The fix: the .lock sidecar must PERSIST (md_lock never unlinks — run_24d9f714).
-        # run_06350217: apply_to_ddd now locks via md_lock, whose name is
-        # <doc>.md.lock (IMPROVEMENT.md.lock), NOT the old with_suffix(".lock")
-        # (IMPROVEMENT.lock) — the convergence onto ONE lock name per doc.
-        lock_file = doc.with_suffix(doc.suffix + ".lock")  # IMPROVEMENT.md.lock
-        assert lock_file.exists(), "apply_to_ddd must lock via md_lock (<doc>.md.lock) and NOT unlink it"
-        # And the content actually landed.
-        assert "str-division TypeError" in doc.read_text(encoding="utf-8")
+        assert apply_to_ddd(self._make_proposal(), tmp_path) == "queued"
+        assert calls[0][0][0] == "cultivation"
+        assert calls[0][0][3]["kind"] == "cultivation"
+        assert doc.read_bytes() == before
+        assert not doc.with_suffix(doc.suffix + ".lock").exists()
 
 
 class TestRemovedRetireShapeIsNotActionable:
@@ -393,35 +379,3 @@ class TestRemovedRetireShapeIsNotActionable:
         _write_proposal(tmp_path / "Projects" / "P", "a2", status="pending")
         ids = {p.id for p in read_pending_proposals(tmp_path, "P")}
         assert ids == {"a2"}
-
-
-@pytest.mark.asyncio
-async def test_redirected_approve_does_not_strip_in_the_new_doc(tmp_path, monkeypatch):
-    """The contradiction flag names an entry in the doc the lesson was proposed for.
-    Approving into a different doc must not strip a same-titled entry there, which
-    was never polarity-checked against this lesson."""
-    project = "P"
-    pdir = tmp_path / "Projects" / project
-    fp = _write_proposal(pdir, "rd1", status="pending")
-    data = json.loads(fp.read_text(encoding="utf-8"))
-    data.update({
-        "target_doc": "TECH.md",
-        "content": "Always validate untrusted input at the boundary now",
-        "contradiction_flag": {"conflicting_title": "Never trust the cache blindly here",
-                               "section": "What Worked", "flip": ["never", "always"],
-                               "shared_topic": "input"},
-    })
-    fp.write_text(json.dumps(data), encoding="utf-8")
-    (pdir / "IMPROVEMENT.md").write_text(
-        "## What Worked\n\n"
-        "- [decision] **Never trust the cache blindly here** — unrelated decision.\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        m.initialization_manager, "get_cached_workspace_path", lambda: str(tmp_path)
-    )
-    await m.approve_proposal(proposal_id="rd1", project=project,
-                             target_doc="IMPROVEMENT.md", target_section="What Worked")
-    doc = (pdir / "IMPROVEMENT.md").read_text(encoding="utf-8")
-    assert "unrelated decision" in doc
-    assert "Always validate untrusted input at the boundary" in doc

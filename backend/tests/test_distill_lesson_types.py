@@ -20,7 +20,6 @@ import pytest
 
 from core.summarization import SummarizationPipeline, StructuredSummary, VALID_TYPE_SET
 from core.daily_activity_writer import _summary_to_jsonl_record
-from hooks.distillation_hook import DistillationTriggerHook
 
 
 # ── AC1/AC2: parse binds + normalizes lessons↔lesson_types ──────────────────
@@ -109,32 +108,3 @@ class TestJsonlRecordBinding:
 
 
 # ── AC5/AC6/AC3: distillation canonicalization honors + strips ──────────────
-class TestCanonicalizeHonorsAndStrips:
-    def test_declared_type_honored_and_stripped_from_body(self):
-        # A lesson whose PROSE screams "pitfall" (bug/wrong) but declared [principle].
-        # Honor path must route it as principle AND the body must NOT carry [principle].
-        enriched = "- 2026-08-15: [principle] The bug was wrong but the rule is sound"
-        out = DistillationTriggerHook._canonicalize_entry(enriched, "Principles")
-        assert out.startswith("- [principle]"), out
-        # AC3: no double/triple tag — the body after the title must not repeat [principle]
-        assert out.count("[principle]") == 1, out
-
-    def test_process_reflection_correction_tag(self):
-        enriched = "- 2026-08-15: [correction] Same file edited 4 rounds — upfront thinking would help"
-        out = DistillationTriggerHook._canonicalize_entry(enriched, "Corrections")
-        assert out.startswith("- [correction]"), out
-        assert out.count("[correction]") == 1, out
-
-    def test_untagged_lesson_falls_back_no_crash(self):
-        # Legacy / undeclared: no [type] → keyword classify, no crash, single tag.
-        enriched = "- 2026-08-15: Never trust char-count estimation for tokens"
-        out = DistillationTriggerHook._canonicalize_entry(enriched, "Guidelines")
-        assert out.startswith("- ["), out
-        # exactly one bracket-tag at the entry head
-        assert out.count("**") >= 2  # has a title
-
-    def test_non_type_bracket_lead_not_stripped(self):
-        # A legitimate [TODO]-style lead is NOT in VALID_TYPES → must survive in body.
-        enriched = "- 2026-08-15: [TODO] wire the retry path"
-        out = DistillationTriggerHook._canonicalize_entry(enriched, "Guidelines")
-        assert "TODO" in out, out

@@ -61,7 +61,8 @@ Browse-tab search box shows.
 
 ## Boundaries
 - **Never copy** an external directory into the workspace — mount = pointer + index.
-- A single file → tell the user it goes to the **Inbox** (drag it, or the Inbox
-  endpoint), not a mount. A **URL** → **s_learn-content**.
+- A single file → submit through the **Inbox endpoint**, which validates it and
+  sends the complete content to S6; it does not copy the file. A URL the user
+  explicitly asks to save → **s_learn-content**, which submits a Reference through S1.
 - Ownership is **per-scope** — a mount registered under one project scope does not
   authorize another (the cross-project contamination guard stays intact).

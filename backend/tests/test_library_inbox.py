@@ -1,99 +1,43 @@
-"""Cycle 6 — Inbox landing zone (single-file drops into Knowledge/Inbox/).
+"""Library Inbox to CDF v2 S6 tests.
 
-The Inbox is a regularized staging area: a SINGLE external file MAY be copied in
-(small, explicit, no drift risk — the design's one exception to never-copy; an
-external DIRECTORY is always MOUNTED, never copied). Re-filing happens later, by
-the user or chat. The Inbox appears as its own native category with a count.
-
-Tested at the library_inbox module level (copy logic + path safety), not the HTTP
-layer — the endpoint is a thin wrapper.
-
-Properties:
-  1. ensure_inbox creates Knowledge/Inbox/ (idempotent)
-  2. copy_to_inbox copies a single file in, returns the landed path
-  3. NEGATIVE: a duplicate name gets a non-clobbering unique suffix
-  4. NEGATIVE: a directory source is rejected (dirs are mounted, not copied)
-  5. NEGATIVE: a missing source is rejected
+A selected external text file is validated and submitted in full. No Inbox directory
+or governed file is created; directories and protected paths remain rejected.
 """
-
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from core.library_inbox import ensure_inbox, copy_to_inbox
+from core import library_inbox
 
 
-def test_ensure_inbox_creates_dir(tmp_path: Path) -> None:
-    kdir = tmp_path / "Knowledge"; kdir.mkdir()
-    inbox = ensure_inbox(kdir)
-    assert inbox.is_dir()
-    assert inbox.name == "Inbox"
-    # idempotent
-    assert ensure_inbox(kdir) == inbox
+def test_single_file_is_submitted_in_full_without_copy(tmp_path, monkeypatch):
+    knowledge = tmp_path / "Knowledge"; knowledge.mkdir()
+    source = tmp_path / "report.md"; source.write_text("complete external report")
+    calls = []
+    monkeypatch.setattr("core.ingestion.sources.s6_external.extract_external",
+                        lambda *a, **k: calls.append((a, k)) or [object()])
+    result = library_inbox.copy_to_inbox(knowledge, source)
+    assert len(result) == 1
+    assert calls[0][0][1] == "complete external report"
+    assert calls[0][1]["evidence_anchor"].startswith("doc:")
+    assert not (knowledge / "Inbox").exists()
 
 
-def test_copy_single_file_in(tmp_path: Path) -> None:
-    kdir = tmp_path / "Knowledge"; kdir.mkdir()
-    src = tmp_path / "report.md"; src.write_text("hello")
-    landed = copy_to_inbox(kdir, src)
-    assert landed.exists()
-    assert landed.parent.name == "Inbox"
-    assert landed.read_text() == "hello"
-
-
-def test_duplicate_name_gets_unique_suffix(tmp_path: Path) -> None:
-    """NEGATIVE: a second file of the same name does NOT clobber the first."""
-    kdir = tmp_path / "Knowledge"; kdir.mkdir()
-    a = tmp_path / "a" ; a.mkdir(); (a / "note.md").write_text("first")
-    b = tmp_path / "b" ; b.mkdir(); (b / "note.md").write_text("second")
-    l1 = copy_to_inbox(kdir, a / "note.md")
-    l2 = copy_to_inbox(kdir, b / "note.md")
-    assert l1 != l2
-    assert l1.read_text() == "first"
-    assert l2.read_text() == "second"  # not clobbered
-
-
-def test_directory_source_rejected(tmp_path: Path) -> None:
-    """NEGATIVE: a directory is MOUNTED, never copied into Inbox."""
-    kdir = tmp_path / "Knowledge"; kdir.mkdir()
-    d = tmp_path / "adir"; d.mkdir()
+def test_directory_and_missing_source_are_rejected(tmp_path):
+    knowledge = tmp_path / "Knowledge"; knowledge.mkdir()
+    directory = tmp_path / "directory"; directory.mkdir()
     with pytest.raises(ValueError):
-        copy_to_inbox(kdir, d)
+        library_inbox.copy_to_inbox(knowledge, directory)
+    with pytest.raises(FileNotFoundError):
+        library_inbox.copy_to_inbox(knowledge, tmp_path / "missing")
 
 
-def test_missing_source_rejected(tmp_path: Path) -> None:
-    kdir = tmp_path / "Knowledge"; kdir.mkdir()
-    with pytest.raises((ValueError, FileNotFoundError)):
-        copy_to_inbox(kdir, tmp_path / "nope.md")
-
-
-def test_system_path_source_refused(tmp_path: Path) -> None:
-    """SECURITY (adversarial): a host system file outside the user home must NOT be
-    copyable into the workspace (system-path exfiltration guard). Forces the escape:
-    /etc/hosts exists on every unix host and is outside ~."""
-    kdir = tmp_path / "Knowledge"; kdir.mkdir()
+def test_system_path_source_refused(tmp_path):
     system_file = Path("/etc/hosts")
-    if not system_file.exists():  # pragma: no cover — non-unix
+    if not system_file.exists():
         pytest.skip("/etc/hosts not present")
+    knowledge = tmp_path / "Knowledge"; knowledge.mkdir()
     with pytest.raises(ValueError):
-        copy_to_inbox(kdir, system_file)
-
-
-def test_home_secret_dir_refused(monkeypatch):
-    """SECURITY: a credential/key store under ~ (~/.ssh, ~/.aws) must be refused
-    even though it's inside the home carve-out (Gate-2: home-dir ≠ safe). Uses the
-    REAL home so Path.home() resolves it; only writes into a Knowledge tmp dest."""
-    import tempfile
-    real_home = Path.home()
-    ssh_dir = real_home / ".ssh"
-    if not ssh_dir.exists():  # pragma: no cover — most dev machines have ~/.ssh
-        pytest.skip("no ~/.ssh on this host")
-    # Any real file under ~/.ssh (config/known_hosts) — do NOT create/modify one.
-    victim = next((p for p in ssh_dir.iterdir() if p.is_file()), None)
-    if victim is None:  # pragma: no cover
-        pytest.skip("~/.ssh has no file to test against")
-    kdir = Path(tempfile.mkdtemp()) / "Knowledge"; kdir.mkdir(parents=True)
-    with pytest.raises(ValueError):
-        copy_to_inbox(kdir, victim)
+        library_inbox.copy_to_inbox(knowledge, system_file)

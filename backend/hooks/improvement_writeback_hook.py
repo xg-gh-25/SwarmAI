@@ -31,56 +31,15 @@ MIN_MESSAGES_FOR_EXTRACTION = 8
 
 
 def _gate_and_apply_writeback(proposal, project_dir: Path) -> str:
-    """Run a writeback proposal through the unified admission gate, then apply or discard.
+    """Enqueue one writeback candidate; CDF owns every admission decision.
 
-    C4a (run_0d60e04e) + AUTONOMY-FIRST (run_86f44f35): the single DDD ingestion path that
-    used to bypass admission_band. admission_band + apply_to_ddd are SYNC — this whole
-    function is offloaded via one asyncio.to_thread by the caller (off the event loop).
-
-    Returns the outcome token: apply_to_ddd's status on `auto` (applied / created_section
-    / duplicate / rejected_low_value / …), else "discard" — the gate did NOT auto-admit
-    (judge non-pass, below-floor, or a gate error). There is NO human-review queue: a
-    non-auto lesson is archived to a recoverable JSONL (never silently lost) and dropped.
+    The caller runs this synchronous enqueue boundary in ``asyncio.to_thread`` so
+    session-close hooks never block the event loop. No source-side judge, archive,
+    proposal queue, or governed-file mutation remains in Stage B.
     """
-    from core.ddd_cultivation import admission_band, apply_to_ddd
+    from core.ddd_cultivation import apply_to_ddd
 
-    verdict, reason = admission_band(proposal, project_dir)
-    if verdict == "auto":
-        return apply_to_ddd(proposal, project_dir)
-    # AUTONOMY-FIRST (run_86f44f35): admission_band no longer returns "review" for a
-    # trust/judge outcome — only a genuine gate ERROR fails closed to "review". Either way
-    # (judge non-pass discard, or gate-error), there is NO human queue: archive to a
-    # recoverable failsafe (a session lesson is never silently lost) and drop. The archive
-    # is a safety net nobody must process — not a review queue.
-    _failsafe_persist(proposal, project_dir, reason)
-    return "discard"
-
-
-def _failsafe_persist(proposal, project_dir: Path, reason: str = "") -> bool:
-    """AUTONOMY-FIRST (run_86f44f35) recoverable archive for a writeback lesson the gate
-    did NOT auto-admit (judge non-pass, or a gate error). NOT a human-review queue — a
-    safety net so a session lesson is never SILENTLY lost. Append to a recoverable JSONL.
-    Returns True if written. Best-effort — never raises."""
-    import json
-    from datetime import datetime, timezone
-    try:
-        fs_dir = project_dir / ".artifacts"
-        fs_dir.mkdir(parents=True, exist_ok=True)
-        with (fs_dir / "discarded-writeback.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "reason": reason,
-                "target_doc": proposal.target_doc,
-                "target_section": proposal.target_section,
-                "content": (proposal.content or "")[:2000],
-                "source_run_id": proposal.source_run_id,
-                "source_stage": proposal.source_stage,
-            }, ensure_ascii=False) + "\n")
-        return True
-    except OSError as exc2:
-        logger.error("writeback: discard archive FAILED (%s) — lesson lost: %s",
-                     type(exc2).__name__, (proposal.content or "")[:80])
-        return False
+    return apply_to_ddd(proposal, project_dir)
 
 
 class ImprovementWritebackHook:
@@ -327,23 +286,12 @@ class ImprovementWritebackHook:
         lessons: dict,
         context: HookContext,
     ) -> None:
-        """Route extracted lessons through the SHARED cultivation admission path.
+        """Enqueue extracted lessons through the CDF cultivation source.
 
-        UNIFIED INTAKE (run_4c5f81ce): this hook no longer writes IMPROVEMENT.md
-        with its own ``_insert_after_header`` + bespoke dedup. It builds an append
-        ``CultivationProposal`` per lesson and applies it via ``apply_to_ddd`` —
-        the SAME single chokepoint pipeline REFLECT uses. Why:
-          - After this change there is ONE live writer format (cultivation's), so
-            this hook's lessons dedup against REFLECT entries via the shared
-            content_signature. The old split — this hook's OWN front-prefix format
-            + blind dedup — silted 43K archive dups; content_signature still
-            normalizes that legacy front-prefix so incoming lessons also dedup
-            against the pre-existing corpus.
-          - ``source_stage="writeback"`` keeps the attribution honest (NOT
-            "auto-cultivated"/reflect — that would misattribute hook output).
-          - ``apply_to_ddd`` is SYNC (fcntl.flock + read + atomic rename); this
-            hook is awaited directly on the event loop (session_hooks.py:577), so
-            each call is offloaded with ``asyncio.to_thread`` to avoid blocking it.
+        Each lesson becomes a cultivation payload with ``source_stage=writeback``.
+        ``apply_to_ddd`` is now a compatibility enqueue boundary; it performs no
+        source-side judgment or governed-file write. The synchronous short DB
+        operation stays in ``asyncio.to_thread`` so the hook never blocks chat.
         """
         from core.ddd_cultivation import CultivationProposal
 
@@ -366,25 +314,13 @@ class ImprovementWritebackHook:
                     confidence=0.5,
                     source_stage="writeback",
                 )
-                # UNIFIED GATE (run_0d60e04e C4a): writeback was the ONE DDD ingestion
-                # path that bypassed admission_band — it blind-called apply_to_ddd, so a
-                # session-sourced (trust=n/a) lesson auto-wrote IMPROVEMENT.md with no
-                # adversarial check. Now it routes through the SAME decision gate REFLECT
-                # uses: admission_band decides auto/review/discard (a trust=n/a
-                # non-protected lesson gets the self_adversarial judge), and only an
-                # `auto` verdict reaches the apply executor. `review` escalates to the
-                # human proposal queue (never blind-applied, never silently dropped);
-                # `discard` is noise. Both gate + apply are sync → offloaded together off
-                # the event loop the hook is awaited on (session_hooks.py:577).
+                # The compatibility call is synchronous and may briefly touch the
+                # CDF inbox, so keep it off the event loop.
                 outcome = await asyncio.to_thread(
                     _gate_and_apply_writeback, proposal, project_dir
                 )
-                # "duplicate"/"rejected_low_value" = the chokepoint working (dedup + value
-                # floor). "discard" = the admission gate working (non-pass → archived).
-                # Only an unexpected apply fault (doc_missing / locked / not_safe) warns.
-                if outcome not in ("applied", "created_section", "duplicate",
-                                   "rejected_low_value", "discard"):
+                if outcome not in ("queued", "rejected"):
                     logger.warning(
-                        "writeback: gate+apply returned %s for a %s lesson (session %s)",
+                        "writeback: enqueue returned %s for a %s lesson (session %s)",
                         outcome, section, context.session_id[:8],
                     )

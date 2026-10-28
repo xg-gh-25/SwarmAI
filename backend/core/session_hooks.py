@@ -61,6 +61,9 @@ class HookContext:
     #: set by DELETE /sessions/{id}: the session's records are being deleted while
     #: the hooks run (a hook that reads them would see a half-deleted session)
     deleting: bool = False
+    #: Immutable provenance events available to every extractor. Empty means the
+    #: extractor must use the conservative session-ledger taint fallback.
+    input_event_ids: tuple[str, ...] = ()
 
 
 @runtime_checkable

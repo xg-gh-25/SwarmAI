@@ -1,0 +1,138 @@
+"""CDF v2 S2 session-source tests.
+
+A paged transcript fixture contains user, assistant, and tool records. All v2 API
+functions are monkeypatched so tests assert only the source boundary.
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from core.ingestion import api_v2
+from core.ingestion.sources import s2_session
+
+
+class FakeLLM:
+    def __init__(self, replies):
+        self.replies = list(replies)
+
+    def extract(self, prompt):
+        return SimpleNamespace(value=self.replies.pop(0), raw="raw")
+
+
+def _cognition(evidence, what="Prefer a single source of truth for persistent facts."):
+    return {"kind": "cognition", "type": "guideline", "scope": "user",
+            "user_kind": "preference", "title": "Single source of truth",
+            "what": what, "applicability": "When persistent facts are designed.",
+            "evidence": evidence}
+
+
+@pytest.mark.asyncio
+async def test_s2_two_passes_order_read_sets_and_s1_exclusion(monkeypatch):
+    transcript = [
+        {"id": "m1", "role": "user", "content": "Do not patch symptoms."},
+        {"id": "m2", "role": "assistant", "content": "I will redesign it."},
+        {"id": "m3", "role": "tool", "content": "external output"},
+    ]
+    monkeypatch.setattr(s2_session, "_whole_transcript", lambda sid: _async(transcript))
+    rows = [
+        {"event_id": "u1", "kind": "user_message"},
+        {"event_id": "u2", "kind": "user_message"},
+        {"event_id": "t1", "kind": "tool_text"},
+    ]
+    monkeypatch.setattr(s2_session, "_input_rows", lambda sid: rows)
+    monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: {"u1"})
+    monkeypatch.setattr(s2_session, "_root_ids", lambda ids: tuple("root:" + i for i in ids))
+    monkeypatch.setattr("core.session_inputs.user_authored_text",
+                        lambda event: "Do not patch symptoms." if event == "u2" else None,
+                        raising=False)
+    calls, attempts = [], []
+    monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k:
+                        calls.append((a, k)) or SimpleNamespace(status="queued"))
+    monkeypatch.setattr(api_v2, "record_extraction_attempt", lambda *a, **k:
+                        attempts.append((a, k)) or "a")
+    llm = FakeLLM([
+        [_cognition(["event:u2"])],
+        [_cognition(["event:u2", "event:t1"])],
+    ])
+    result = await s2_session.extract_session("session-1", llm=llm)
+    assert list(result) == ["user_utterance", "main"]
+    assert [call[1]["extraction_pass"] for call in calls] == ["user_utterance", "main"]
+    assert calls[0][1]["read_root_ids"] == ("root:u2",)
+    assert calls[1][1]["read_root_ids"] == ("root:u2", "root:t1")
+    assert all("u1" not in str(call) for call in calls)
+    assert len(attempts) == 2
+
+
+async def _async(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_s2_records_both_empty_passes(monkeypatch):
+    monkeypatch.setattr(s2_session, "_whole_transcript", lambda sid: _async([]))
+    monkeypatch.setattr(s2_session, "_input_rows", lambda sid: [])
+    monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: set())
+    attempts = []
+    monkeypatch.setattr(api_v2, "record_extraction_attempt", lambda *a, **k:
+                        attempts.append((a, k)) or "a")
+    result = await s2_session.extract_session("session-1", llm=FakeLLM([]))
+    assert result == {"user_utterance": [], "main": []}
+    assert [row[1]["status"] for row in attempts] == ["no_unit", "no_unit"]
+
+
+@pytest.mark.asyncio
+async def test_user_pass_drops_not_self_contained(monkeypatch):
+    monkeypatch.setattr(s2_session, "_whole_transcript", lambda sid: _async([]))
+    rows = [{"event_id": "u2", "kind": "user_message"}]
+    monkeypatch.setattr(s2_session, "_input_rows", lambda sid: rows)
+    monkeypatch.setattr(s2_session, "_claimed_by_s1", lambda sid: set())
+    monkeypatch.setattr(s2_session, "_root_ids", lambda ids: tuple(ids))
+    monkeypatch.setattr("core.session_inputs.user_authored_text", lambda event: "按 A", raising=False)
+    enqueued, attempts = [], []
+    monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k: enqueued.append(1))
+    monkeypatch.setattr(api_v2, "record_extraction_attempt", lambda *a, **k:
+                        attempts.append((a, k)) or "a")
+    llm = FakeLLM([[_cognition(["event:u2"], "按 A")]])
+    await s2_session.extract_session("session-1", llm=llm)
+    assert enqueued == []
+    assert attempts[0][1]["invalid_units"][0]["reason"] == "not_self_contained"
+
+
+@pytest.mark.asyncio
+async def test_whole_transcript_reads_every_page(monkeypatch):
+    pages = {
+        None: [{"id": f"m{i}"} for i in range(201, 401)],
+        "m201": [{"id": f"m{i}"} for i in range(1, 201)],
+        "m1": [],
+    }
+    calls = []
+
+    async def page(session_id, limit, before_id):
+        calls.append(before_id)
+        return pages[before_id]
+
+    monkeypatch.setattr("database.db.messages.list_by_session_paginated", page)
+    rows = await s2_session._whole_transcript("session-1")
+    assert len(rows) == 400 and rows[0]["id"] == "m1" and rows[-1]["id"] == "m400"
+    assert calls == [None, "m201", "m1"]
+
+
+def test_read_roots_fail_closed_when_an_event_has_no_bound_root(tmp_path, monkeypatch):
+    """§9 anti selective citation: an unbound event, a missing data.db or a read error
+    keeps the raw id in the read set (provenance then marks the unit tainted); the read
+    set never shrinks silently."""
+    import sqlite3
+    from core import session_inputs
+
+    missing = tmp_path / "absent.db"
+    monkeypatch.setattr(session_inputs, "_db_path", lambda: missing)
+    assert s2_session._root_ids(("e1", "e2")) == ("e1", "e2")
+
+    db = tmp_path / "data.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE session_inputs(event_id TEXT, root_id TEXT)")
+        conn.execute("INSERT INTO session_inputs VALUES('e1','root-1'),('e2',NULL)")
+    monkeypatch.setattr(session_inputs, "_db_path", lambda: db)
+    assert s2_session._root_ids(("e1", "e2", "e3")) == ("root-1", "e2", "e3")

@@ -12,10 +12,12 @@ smarter. **But persisting is a judgment, not a reflex** — most passing facts s
 SKIPPED (see Step 0).
 
 > **DDD-native decouple of SwarmAI's `s_persist`.** Same routing discipline + admission
-> philosophy, re-homed to the DDD's own files. The locked read-modify-write engine ships
-> bundled (`scripts/locked_write.py`, pure-stdlib + fcntl); the SwarmAI injection-guards
-> (`core.memory_guard`) are fail-soft absent — a DDD's docs aren't SwarmAI's always-injected
-> MEMORY.md. No `data.db`, no SwarmAI memory index, no backend.
+> philosophy, re-homed to the DDD's own files. It runs in two places:
+> - **Inside SwarmAI** (`$SWARM_BACKEND_BIN` is set): submit to Cognitive Distillation Flow
+>   (below). CDF's writer is the only one that writes a DDD doc there, and
+>   `scripts/locked_write.py` refuses to run.
+> - **On a host without SwarmAI** (Kiro, Claude Code, an AIM package): there is no CDF,
+>   so write with the bundled `scripts/locked_write.py` (pure-stdlib + fcntl lock).
 
 ## The Routing Decision Tree (3 steps — do them in order)
 
@@ -74,65 +76,42 @@ via the 养成 ladder, not dropped into a knowledge section. Only NON-rule knowl
 > by *which kind of judgment* it informs (product / technical / lesson / decision), per the
 > table above. If it's not about THIS DDD's domain at all → it probably fails Step 0.
 
-## How to write (use the bundled locked engine — never a raw Edit for appends)
+## Inside SwarmAI: submit to Cognitive Distillation Flow
+
+Use this whenever `$SWARM_BACKEND_BIN` is set. Do not write a DDD document or proposal
+file. Build one complete project-scoped `contracts_v2` unit. The current user event is
+exposed as `SWARM_LAST_USER_EVENT_ID` and is the only evidence S1 accepts.
 
 ```bash
-"$SWARM_BACKEND_BIN" py scripts/locked_write.py --file <ddd>/2-understanding/IMPROVEMENT.md --section "What Failed" \
-  --prepend '- [pitfall] **Title** — concise description (YYYY-MM-DD)
-  <!-- ref:0 | last:none | decay:active | source:manual -->'
-```
-`locked_write.py` does an fcntl-locked read-modify-write so concurrent
-writers never corrupt a section. `--prepend` = newest-first. Modes: `--append` / `--prepend`
-/ `--replace`.
-
-**Entry format** (all targets, same shape):
-```markdown
-- [type] **Title** — concise description (YYYY-MM-DD)
-  <!-- ref:0 | last:none | decay:active | source:manual -->
-```
-`[type]` ∈ `guideline · pitfall · decision · principle · process · model`.
-
-**Receipt (MANDATORY — show the user):**
-```
-**Persisted:**
-> **[pitfall] Title** → `IMPROVEMENT.md` § What Failed
-> _(Why: one-sentence reason this knowledge compounds for THIS DDD)_
+printf %s '{"kind":"cognition","type":"guideline","scope":"project:<project>","title":"<complete title>","what":"<complete claim>","how":"<reusable method>","why":"<why it compounds>","applicability":"<trigger>","evidence":[]}' | \
+  "$SWARM_BACKEND_BIN" ingest submit --source S1 \
+  --evidence "$SWARM_LAST_USER_EVENT_ID" --payload-json - --wait 10
 ```
 
-## RETIRE / MOVE — the sanctioned "out" side (persist has an OUT, not just IN)
+A cron, auto-nudge, or injected turn has no eligible user event and must not call
+S1. Relay the CLI echo to the user **unchanged**, including the complete text,
+actual destination, and hint. No human approval queue is created.
 
-When an entry is resolved / stale / wrong / belongs elsewhere, **retire it deliberately —
-do NOT hand-Edit-to-delete**. A raw delete skips the archive (lost from recall) and can
-destroy a different entry that merely shares the title.
+User edits, retirements and moves go through the workspace editor API with the
+`expected_revision` returned by its latest GET. A stale revision returns 409 and must be
+reloaded. Directory operations containing governed files are refused; project
+rename/delete use the governed tree-move operation.
 
-- **RETIRE** = remove one named entry: archive it (recall-preserved) + strip by
-  `(title, section)` identity + write a dated `.bak`. Fail-loud on no-match / ambiguous.
-- **MOVE** across files/sections = **add-to-target FIRST, retire-from-source SECOND** — so
-  the entry is durable in its new home before it leaves the old (a crash between the two
-  leaves a recoverable duplicate, never a loss).
-- **Undo** = the entry survives in the archive + the `.bak`; copy it back, re-persist.
+## On a host without SwarmAI: locked write
 
-(On SwarmAI this is the `ddd-retire` CLI; a portable DDD without that CLI does the same by
-hand: copy the block to the doc's `-archive.md` first, then remove from source — never a
-bare delete.)
+When `$SWARM_BACKEND_BIN` is not set, append the entry to the section Step 2 chose with
+the bundled writer. It holds an advisory lock for the read-modify-write, so two writers
+cannot lose each other's entry. It only adds; it never rewrites an existing entry.
 
-## Rules
-
-- **Additive, never destructive** — append/prepend; a human-authored block (`<!-- user -->`)
-  is sovereign, preserved byte-for-byte.
-- **Confident-only** — persist what's verified; tag speculation `[UNVERIFIED]`, don't assert it.
-- **Newest-first** — prepend to the section.
-- **Don't duplicate** — the engine writes exactly what you give it; check by title before writing.
-- **Source-stamp** — every entry carries `(YYYY-MM-DD)` + `source:manual`.
-- **The 养成 ladder** — a recurring pitfall climbs: prose (here, IMPROVEMENT.md) → rule →
-  (3× recurrence) an executable ③ `gates/` gate with a knockout test. This skill writes the
-  prose rungs; promoting a rung to a gate is a dev-loop act (whatever pipeline the host
-  runtime runs over this DDD).
+```bash
+python3 scripts/locked_write.py --file 2-understanding/TECH.md \
+  --section "Runtime Traps" --prepend "- **<complete title>** — <claim>. Why: <why>."
+```
 
 ## Verification
 
-- [ ] Passed Step 0 (decision-relevant AND stable; not a volatile metric)
-- [ ] Not a behavioral rule (else → governance, Step 1)
-- [ ] Routed to the correct doc + section (Step 2 table)
-- [ ] Written via `locked_write.py`, newest-first, `source:manual` stamped
-- [ ] No duplicate; receipt shown to the user
+- [ ] The entry is decision-relevant, stable, self-contained, and includes why.
+- [ ] Inside SwarmAI: `ingest submit --source S1 --evidence "$SWARM_LAST_USER_EVENT_ID"`
+      was used, the CLI echo was relayed unchanged, and no DDD file was written directly.
+- [ ] Outside SwarmAI: the entry went through `scripts/locked_write.py` into the section
+      Step 2 chose.

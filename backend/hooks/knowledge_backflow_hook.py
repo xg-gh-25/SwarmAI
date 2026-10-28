@@ -5,8 +5,8 @@ good answers get filed back into the wiki as new pages, so explorations
 compound in the knowledge base just like ingested sources do.
 
 Fires after DailyActivity extraction. Scans assistant messages for
-high-value outputs (deep analyses, comparisons, syntheses) and persists
-them as Knowledge/Notes/ pages with source metadata.
+high-value outputs (deep analyses, comparisons, syntheses) and submits
+self-contained Backflow candidates to Cognitive Distillation Flow.
 
 Key public symbols:
 
@@ -20,16 +20,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
-import tempfile
 import unicodedata
 from datetime import datetime
-from pathlib import Path
 
 from core.session_hooks import HookContext
 from database import db
-from jobs.paths import SWARMWS
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Minimum word count for high-value consideration (prose only, excluding code)
 _MIN_WORDS = 500
+_TITLE_MAX = 120          # a first line longer than this is not used as a title
 
 # Structural markers that indicate analytical content (not just prose)
 _ANALYSIS_MARKERS = re.compile(
@@ -144,11 +141,12 @@ def _extract_title(content: str) -> str:
     if heading:
         return heading.group(1).strip()
 
-    # Fallback: first non-empty line that's not a markdown marker
+    # Fallback: the first non-empty line that is not a markdown marker, whole, when it
+    # is short enough to be a title; a title is never a cut-down sentence
     for line in prose.splitlines():
         line = line.strip()
         if line and not line.startswith(("```", "---", "|", ">")):
-            return line[:80]
+            return line if len(line) <= _TITLE_MAX else "Session Insight"
 
     return "Session Insight"
 
@@ -203,26 +201,6 @@ def _build_knowledge_page(
     return frontmatter + content
 
 
-def _atomic_write(filepath: Path, content: str) -> None:
-    """Write content to file atomically via temp file + rename.
-
-    Prevents partial/corrupted files if process is killed mid-write.
-    """
-    dir_path = filepath.parent
-    fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        os.replace(tmp_path, str(filepath))
-    except Exception:
-        # Clean up temp file on failure
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
 class KnowledgeBackflowHook:
     """Captures high-value session outputs as persistent Knowledge pages.
 
@@ -252,17 +230,16 @@ class KnowledgeBackflowHook:
 
     async def _execute_inner(self, context: HookContext) -> None:
         """Core logic — isolated for testability."""
-        # 1. Retrieve conversation messages (same limit as DailyActivity hook —
-        #    intentional: 500 most recent messages covers typical sessions)
-        messages = await db.messages.list_by_session_paginated(
-            context.session_id, limit=500
-        )
+        # 1. Every message of the session, in order (the DailyActivity hook's reader):
+        #    the 500 most recent left an earlier message of a long session unread
+        from hooks.daily_activity_hook import _read_complete_transcript
+        messages = await _read_complete_transcript(context.session_id, repo=db.messages)
 
         if not messages:
             return
 
         # 2. Scan assistant messages for high-value content
-        candidates: list[tuple[str, str]] = []  # (content, title)
+        candidates: list[tuple[str, str, str]] = []  # (content, title, message_id)
 
         for msg in messages:
             if msg.get("role") != "assistant":
@@ -282,52 +259,36 @@ class KnowledgeBackflowHook:
 
             if _is_high_value_output(content):
                 title = _extract_title(content)
-                candidates.append((content, title))
+                message_id = str(msg.get("id") or hashlib.sha256(content.encode()).hexdigest())
+                candidates.append((content, title, message_id))
 
         if not candidates:
             return
 
-        # 3. Write top candidates (capped at MAX per session)
-        #    Prefer LATER messages (tend to be more refined/final versions)
+        # 3. Enqueue top candidates (capped at MAX per session). Prefer later
+        # messages because they tend to be the refined/final version. Backflow
+        # cannot yet map an assistant row to exact input events, so §9 requires
+        # the conservative whole-session ledger fallback.
+        from core.ingestion import api
+        from core.session_inputs import derive_envelope
+
         candidates = candidates[-_MAX_CAPTURES_PER_SESSION:]
-
-        notes_dir = Path(SWARMWS) / _NOTES_DIR
-        notes_dir.mkdir(parents=True, exist_ok=True)
-
-        # Compute date_str ONCE to avoid TOCTOU race at midnight
-        date_str = datetime.now().strftime("%Y-%m-%d")
-        captured = 0
-
-        for content, title in candidates:
-            slug = _generate_slug(title)
-            # Include content hash for dedup — different content with same title
-            # gets separate files; same content on re-run is deduplicated.
-            content_hash = hashlib.sha256(content.encode()).hexdigest()[:6]
-            filename = f"{date_str}-{slug}-{content_hash}.md"
-            filepath = notes_dir / filename
-
-            # Dedup: skip if file already exists (same day + slug + content hash)
-            if filepath.exists():
-                logger.debug(
-                    "Knowledge backflow: %s already exists, skipping", filename
-                )
-                continue
-
-            page = _build_knowledge_page(
-                content=content,
-                session_id=context.session_id,
-                title=title,
-                date_str=date_str,
+        envelope = derive_envelope(context.session_id, (), writer="backflow")
+        queued = 0
+        for content, title, message_id in candidates:
+            result = api.enqueue(
+                "backflow",
+                message_id,
+                "document",
+                {"kind": "backflow", "title": title, "body": content,
+                 "message_id": message_id},
+                envelope=envelope,
+                project_snapshot={},
             )
-
-            _atomic_write(filepath, page)
-            captured += 1
+            if result.status in {"queued", "duplicate"}:
+                queued += 1
+        if queued:
             logger.info(
-                "Knowledge backflow: captured '%s' → %s", title, filename
-            )
-
-        if captured:
-            logger.info(
-                "KnowledgeBackflowHook: %d page(s) captured for session %s",
-                captured, context.session_id,
+                "KnowledgeBackflowHook: %d candidate(s) queued for session %s",
+                queued, context.session_id,
             )

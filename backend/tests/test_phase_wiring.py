@@ -3,10 +3,6 @@ from __future__ import annotations
 
 
 
-class TestUserObserverHookImportable:
-    def test_user_observer_hook_importable(self):
-        from hooks.user_observer_hook import UserObserverHook
-        assert UserObserverHook is not None
 
 
 class TestSessionRecallImportable:

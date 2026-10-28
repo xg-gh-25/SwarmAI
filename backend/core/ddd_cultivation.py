@@ -22,6 +22,7 @@ Public API:
     cultivate_from_decisions(decisions, session_id, project, project_dir) → dict
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -182,7 +183,7 @@ class CultivationProposal:
             return True  # Treat unparseable dates as expired (safe default)
 
     # is_safe_append() REMOVED (run_8d5fe9d1, Component C): its sole job was the
-    # hardcoded doc/section whitelist (_PROTECTED_ZONES + SAFE_APPEND_SECTIONS), which
+    # hardcoded doc/section allowlist (_PROTECTED_ZONES + SAFE_APPEND_SECTIONS), which
     # trust replaces. The auto decision now lives in admission_band() (trust=passed +
     # quality checks); the writer apply_to_ddd no longer re-gates (human-approve of a
     # REVIEW proposal is a separate authority). No callers remain.
@@ -332,7 +333,7 @@ def _confined_doc_path(project_dir: "Path | str", target_doc: str) -> "Path | No
 
     This is PATH CONFINEMENT (where may we write), which is orthogonal to ADMISSION
     AUTHORITY (what is worth writing). It deliberately does NOT re-introduce the
-    doc-identity whitelist that ``admission_band`` removed on purpose — any doc
+    doc-identity allowlist that ``admission_band`` removed on purpose — any doc
     inside the project stays writable.
 
     Three failure modes are handled because each was measured, not theorised:
@@ -879,260 +880,14 @@ def _normalize_cultivated_bullet(content: str, entry_type: str) -> "str | None":
 
 
 def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
-    """Apply an additive proposal directly to the target DDD document.
-
-    Appends a bullet point under the target section (newest first).
-    Only works for (doc, section) pairs in SAFE_APPEND_SECTIONS.
-    Uses fcntl advisory lock to prevent concurrent write corruption.
-
-    Returns a status string (NOT a bool — callers must compare explicitly):
-      - "applied"           — entry written under a pre-existing section heading
-      - "created_section"   — the allowlisted section heading was ABSENT, so it
-                              was auto-created at end-of-doc and the entry written
-                              under it. This makes section-name drift structurally
-                              harmless: a lesson is NEVER dropped just because the
-                              doc heading is missing. The section name is TRUSTED
-                              (sourced from ROUTING_TABLE via SAFE_APPEND_SECTIONS,
-                              never user input), so creating it is safe. Surfaced
-                              (logged) so latent drift is still visible.
-                              (run_45ab67c7 root cause — structural fix.)
-      - "duplicate"         — benign no-op, content already present ANYWHERE in the
-                              doc (DOC-WIDE content-signature match, run_e9cb7e2a)
-      - "rejected_low_value"— failed the value FLOOR (empty / instance-log /
-                              narration / <30 chars / <5-word fragment). The gate
-                              working as intended, not an error (run_e9cb7e2a).
-      - "not_safe"          — target doc/section not in SAFE_APPEND_SECTIONS
-      - "doc_missing"       — target document file does not exist
-      - "locked"            — another process holds the write lock (retry later)
-
-    Note: "section_not_found" is NO LONGER returned — a missing allowlisted
-    section is auto-created rather than treated as a drop. The drift is still
-    observable via the "created_section" status (logged by callers).
-    """
-    # NOTE (run_8d5fe9d1, Component C): apply_to_ddd is the WRITER, not the decision.
-    # It does NOT re-check trust — the auto/review/discard authority lives in
-    # admission_band (auto path) and in the human-approve endpoint (routers/cultivation:
-    # a human approving a REVIEW proposal IS the authority, and those proposals are
-    # trust=n/a by construction — re-gating trust here would make human approval
-    # impossible). The old is_safe_append() doc-whitelist gate is removed. Noise/quality
-    # already filtered upstream at _classify_lesson.
-
-    # VALUE FLOOR at the chokepoint (run_e9cb7e2a). apply_to_ddd is the ONE gate
-    # every write path crosses — but the writeback hook reaches it DIRECTLY,
-    # bypassing _classify_lesson where is_quality_lesson/MIN_LESSON_LENGTH lived.
-    # So an empty / instance-log / narration / sub-5-word fragment could enter the
-    # brain ungated. Enforce the SAME floor here so all paths share it. This is a
-    # FLOOR, not a taste judge: is_quality_lesson errs toward ACCEPT when ambiguous
-    # (knowledge-loss > noise), and MIN_LESSON_LENGTH is the existing 30-char bar.
-    # (Not the fix for the 170K silt — that's the doc-wide dedup below; this closes
-    # the orthogonal "junk fragment via writeback" hole.)
-    _candidate = proposal.content.strip()
-    if len(_candidate) < MIN_LESSON_LENGTH or not is_quality_lesson(_candidate):
-        return "rejected_low_value"
-
-    # Six-section resolver (READ, strangler-aware): a migrated DDD keeps canonical
-    # docs under 2-understanding/; a bare `project_dir / doc` would hit the empty
-    # root → doc_missing → cultivation silently stops sedimenting. ddd_path returns
-    # the new location when it exists, else the old root (un-migrated DDDs). We both
-    # READ and WRITE-BACK this same resolved path below, so reads/writes never
-    # diverge (no split-brain) — ddd_path (not ddd_write_path) is correct here.
-    # PATH CONFINEMENT before ANY read, lock, or write: target_doc is caller-supplied
-    # (an approve-time re-target, or an LLM-emitted field on the conversation path), and
-    # ddd_path's unknown-key pass-through preserves traversal — so without this the
-    # append landed wherever target_doc pointed, including a governance file outside the
-    # project. Ordered ahead of the lock deliberately: a refusal must not create a
-    # `<victim>.md.lock` sidecar next to a file we are declining to touch.
-    doc_path = _confined_doc_path(project_dir, proposal.target_doc)
-    if doc_path is None:
-        # Not reachable, not a regular file, or outside the project tree. Reported as
-        # doc_missing (an existing status every caller already treats as a failure)
-        # rather than a new string, so no caller's success test has to change.
-        logger.warning(
-            "apply_to_ddd: refused target outside the project tree or not a file (%r)",
-            proposal.target_doc,
-        )
-        return "doc_missing"
-
-    # STRUCTURE HYGIENE on every caller-supplied field that reaches the document. The
-    # class is "a caller-supplied string is interpolated into a structured file", so
-    # BOTH fields that land there are checked against the lexer that parses it —
-    # guarding only one of them left the same forgery reachable through the other.
-    # Refused as not_safe (the existing status for "not an acceptable destination").
-    if not _is_safe_section_name(proposal.target_section):
-        logger.warning(
-            "apply_to_ddd: refused a structurally-unsafe section name (%r)",
-            proposal.target_section,
-        )
-        return "not_safe"
-    if not _is_safe_entry_content(proposal.content):
-        logger.warning(
-            "apply_to_ddd: refused entry content that would forge document structure "
-            "(a heading, a second entry bullet, lifecycle metadata, or a maturity "
-            "annotation) at target %s#%s",
-            proposal.target_doc, proposal.target_section,
-        )
-        return "not_safe"
-
-    # Advisory doc-write lock via the SHARED helper (run_06350217): EVERY writer of
-    # this doc — apply_to_ddd, orchestrator auto-apply/decay/llm-apply, retire —
-    # must lock on the SAME <doc>.md.lock name, or they don't mutually exclude
-    # (the old with_suffix(".lock")=IMPROVEMENT.lock diverged from the orchestrator's
-    # IMPROVEMENT.md.lock → a lost-update race). md_lock owns the ONE derivation,
-    # is cross-platform, and never unlinks (preserves run_24d9f714's inode-race fix).
-    # Non-blocking: skip (return "locked") if another writer holds it — retry next run.
-    from utils.file_lock import md_lock
-
-    with md_lock(doc_path, blocking=False) as _got:
-        if not _got:
-            return "locked"
-        content = doc_path.read_text(encoding="utf-8")
-
-        # ── SUPERSEDE (run_6ac7a760, XG-directed) ───────────────────────────────
-        # When this lesson polarity-flips a same-topic curated entry
-        # (detect_contradiction set proposal.contradiction_flag), the new entry
-        # REPLACES the old: every entry with that (title, section) is stripped, of
-        # any type, permanent ones included. 宁缺毋滥 — a contradicted entry is
-        # removed, never flagged or queued for a human (2026-10-24, XG).
-        #
-        # MUST run HERE — after read, BEFORE section_re/body_start: _strip_entries
-        # mutates `content` in-memory so downstream offsets are computed on the
-        # STRIPPED string. include_prose=True is MANDATORY (the flag's key came from
-        # parse_entries(include_prose=True)). NO archive (XG: git is the only
-        # recovery). .get()-guarded.
-        # The strip is logged only after the new content is written (below): a
-        # "duplicate" return leaves the doc untouched, so nothing was removed.
-        _stripped = None
-        cf = proposal.contradiction_flag
-        if cf and cf.get("conflicting_title") and cf.get("section"):
-            from core.ddd_entry_lifecycle import _strip_entries, parse_entries
-            _old_title, _old_section = cf["conflicting_title"], cf["section"]
-            _matches = [
-                e for e in parse_entries(content, include_prose=True)
-                if e.title == _old_title and e.section == _old_section
-            ]
-            if _matches:
-                content = _strip_entries(content, {(_old_title, _old_section)},
-                                         include_prose=True)
-                _stripped = (_old_title, _old_section, _matches, cf.get("flip"))
-
-        # Emit the canonical `- [type] **Title** — body (date, run, label)` shape.
-        # Normalize (INSERT-ONLY) so the lifecycle engine's _ENTRY_RE can parse/decay/
-        # reclaim/retire it — a raw untitled bullet (the pre-run_3e43c7ee format) is
-        # structurally invisible to every autonomous path. _normalize_cultivated_bullet
-        # is lossless + signature-invariant; None = degenerate → keep content unchanged.
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        source_label = f"{proposal.source_stage}" if proposal.source_stage != "reflect" else "auto-cultivated"
-        # Prefer the author's DECLARED [type] over a prose guess (root-fix
-        # run_c7e1e39d). The lesson's type is known at author-time; re-guessing it
-        # from prose is the lossy-re-derivation root that skewed the corpus toward
-        # pitfall/guideline. classify_entry_type is now the FALLBACK, fired only when
-        # no valid declaration is present — mirroring ddd_entry_lifecycle.py:546's
-        # `if not entry_type: guess`. (_normalize_cultivated_bullet:675 also honors
-        # the tag, so all three type-parse sites now agree on the declared value.)
-        from core.ddd_entry_lifecycle import classify_entry_type, VALID_TYPES
-        _decl = re.match(r"^\[(\w+)\]\s+", proposal.content)
-        if _decl and _decl.group(1).lower() in VALID_TYPES:
-            _etype = _decl.group(1).lower()
-        else:
-            _etype = classify_entry_type(proposal.content)
-        _normalized = _normalize_cultivated_bullet(proposal.content, _etype)
-        _entry_body = _normalized if _normalized is not None else proposal.content
-        entry = f"- {_entry_body} ({date_str}, {proposal.source_run_id}, {source_label})\n"
-
-        # M1 fix: match section header at line start (## level only, not ###)
-        section_re = re.compile(
-            r"^## " + re.escape(proposal.target_section) + r"\s*$", re.MULTILINE
-        )
-        match = section_re.search(content)
-
-        if match:
-            # Compute body_start (the section's insert point) — used only to choose
-            # WHERE to insert the new entry (newest-first under this
-            # heading). The duplicate check itself is DOC-WIDE, not scoped here.
-            line_end = content.find("\n", match.start())
-            if line_end == -1:
-                line_end = len(content)
-            body_start = line_end + 1
-            while body_start < len(content) and content[body_start] == "\n":
-                body_start += 1
-
-            # DOC-WIDE duplicate detection (root-cause fix, run_e9cb7e2a; measured
-            # 2026-07-20: 170K archived bullets deduped to ~700 unique — 99.6% were
-            # the SAME lesson re-written, many under DIFFERENT sections/dates/session
-            # ids). A section-scoped check let the same lesson re-accumulate under a
-            # different heading — the direct source of the silt. So sign EVERY `- `
-            # bullet in the WHOLE document, not just this section.
-            #   • content_signature() is FORMAT-AGNOSTIC — normalizes cultivation
-            #     `- text (date,run)` AND writeback `- **date** (session): text` AND
-            #     `[type]` markers to the same key, so a lesson dedups regardless of
-            #     which writer/format/date/section produced it.
-            #   • Signing BOTH sides (existing bullets AND incoming content) is what
-            #     catches the writeback-format corpus (signing one side is a no-op).
-            #   • Whole-STRING signature (not prefix / not substring) — a genuinely
-            #     distinct lesson does NOT collide (guards the old adversarial HIGH:
-            #     no dropping short lessons that are substrings of a longer one).
-            # This is the ONE chokepoint every write path crosses (writeback /
-            # reflect / HTTP), so doc-wide dedup here covers them
-            # all — no per-path patching.
-            existing_sigs = {
-                content_signature(ln)
-                for ln in content.splitlines()
-                if ln.lstrip().startswith("- ")
-            }
-            existing_sigs.discard("")  # never dedup against empty (blank bullets)
-            if content_signature("- " + proposal.content.strip()) in existing_sigs:
-                return "duplicate"
-
-            new_content = content[:body_start] + entry + content[body_start:]
-            result_status = "applied"
-        else:
-            # Structural drift fix (run_45ab67c7): the allowlisted section is
-            # absent (doc heading drifted from / never matched the routing table).
-            # CREATE it at end-of-doc rather than DROP the lesson. The section
-            # name is TRUSTED — is_safe_append() already confirmed the (doc,
-            # section) PAIR is in SAFE_APPEND_SECTIONS (derived from ROUTING_TABLE),
-            # not user input. Makes section-name drift structurally harmless across
-            # ALL projects, not just ones whose headings happen to match.
-            base = content.rstrip("\n")
-            prefix = f"{base}\n\n" if base else ""
-            new_content = f"{prefix}## {proposal.target_section}\n\n{entry}"
-            result_status = "created_section"
-
-        # Atomic write: write to temp, rename over original (inside the md_lock).
-        tmp_path = doc_path.with_suffix(".tmp")
-        tmp_path.write_text(new_content, encoding="utf-8")
-        os.replace(str(tmp_path), str(doc_path))
-        if _stripped is not None:
-            _old_title, _old_section, _matches, _flip = _stripped
-            logger.warning(
-                "[AUTO-SUPERSEDE] new lesson polarity-flips %d curated entr%s "
-                "— STRIPPED (git-recoverable, no archive): %s § %s | flip=%s | "
-                "conflicting_title=%r | run=%s",
-                len(_matches), "y" if len(_matches) == 1 else "ies",
-                proposal.target_doc, _old_section, _flip,
-                _old_title, proposal.source_run_id,
-            )
-            # Durable record in the changelog (the DDD weekly report lists
-            # removals); body recovery stays git-only (XG).
-            _log_supersede_delete(
-                proposal, project_dir,
-                stripped_title=_old_title, stripped_section=_old_section,
-                stripped_body="\n".join(e.raw_text for e in _matches),
-            )
-        return result_status
-    # md_lock releases + closes the fd on exit and NEVER unlinks the sidecar
-    # (run_24d9f714 inode-race fix, preserved by construction).
+    """Compatibility entry point: enqueue; only the CDF writer may mutate DDD."""
+    result = _cultivate_proposals([proposal], project_dir)
+    return "queued" if result.get("queued") else "rejected"
 
 
-# ── Topic tokenizer used by detect_contradiction (module-level since run_171a17c2).
-# Generic DDD/engineering vocabulary that co-occurs across unrelated entries and
-# carries no TOPIC identity. Gate-2 HIGH (run_b8f10185): without this filter a
-# lesson about topic A matched topic B on shared structural words ("recovery"+
-# "pattern"). NOTE (run_171a17c2): this denylist DELIBERATELY includes the
-# polarity words never/always/should/would — they carry no *topic* identity, so
-# they MUST be stripped for topic-matching. This is exactly why detect_contradiction
-# runs its polarity test on RAW text, never on _entry_tokens output (Gate-1 FATAL
-# catch: tokenizing would delete the very never/always the flip test needs).
+
+
+
 _ENTRY_GENERIC = frozenset({
     "pattern", "patterns", "recovery", "approach", "works", "worked",
     "fix", "fixes", "fixed", "issue", "issues", "problem", "problems",
@@ -1143,8 +898,6 @@ _ENTRY_GENERIC = frozenset({
     "using", "used", "when", "with", "that", "this", "from", "into", "must",
     "should", "would", "never", "always", "before", "after", "than", "then",
 })
-
-
 def _entry_tokens(text: str) -> set[str]:
     """Lowercase topic tokens (Latin ≥4 chars / CJK ≥2 chars) minus _ENTRY_GENERIC.
     Used for TOPIC identity only — NOT for polarity (polarity words are in the
@@ -1560,7 +1313,7 @@ def admission_band(
     """The Knowledge Admission decision band (Component C). Returns (verdict, reason)
     where verdict ∈ {"auto", "review", "discard"}.
 
-    TRUST IS THE SOLE AUTHORITY (AC11) — there is NO hardcoded doc/section whitelist.
+    TRUST IS THE SOLE AUTHORITY (AC11) — there is NO hardcoded doc/section allowlist.
     A ``trust=passed`` proposal (its source run cleared Gate-2) may AUTO-apply into ANY
     doc, INCLUDING SELF.md / PRODUCT.md / TECH.md/Architecture — the zones the old
     ``_check_safe_doc``/``SAFE_APPEND_SECTIONS``/``_PROTECTED_ZONES`` hardcoded shut.
@@ -1570,7 +1323,7 @@ def admission_band(
     Bands:
       • DISCARD — is_noise (machine broadcast / instance-log / fragment).
       • AUTO    — trust=passed AND reused quality checks clean (magnitude + circuit
-                  breaker; the doc-whitelist check is DROPPED) AND confidence ≥ the
+                  breaker; the doc-allowlist check is DROPPED) AND confidence ≥ the
                   auto threshold.
       • REVIEW  — everything else: trust∈{failed,n/a}, a hard quality block, a gate
                   error (FAIL-CLOSED — DEC19), or confidence below the auto floor.
@@ -1603,7 +1356,7 @@ def admission_band(
         proposal.passed_adversarial_gate = "passed"
         proposal.trust_source = "self_adversarial"
 
-    # 3. reused quality checks — but WITHOUT the doc-whitelist (that is what trust
+    # 3. reused quality checks — but WITHOUT the doc-allowlist (that is what trust
     #    replaces). Fail-closed: any gate error → review, never auto.
     try:
         from core.ddd_auto_approval import evaluate_auto_approval
@@ -1619,7 +1372,7 @@ def admission_band(
     # HARD quality/safety blocks — AUTONOMY-FIRST (run_86f44f35): these are NOT the judge,
     # so a block here → DISCARD (recoverable archive), NOT review. There is no human queue;
     # the judge is the sole admit authority and these floors only gate the auto-WRITE.
-    # (safe_target_doc is DELIBERATELY excluded — the judge supersedes any doc whitelist.
+    # (safe_target_doc is DELIBERATELY excluded — the judge supersedes any doc allowlist.
     # maturity/conflict/precision stay SOFT: logged, not blocking, as in the prior gate.)
     if not criteria.get("small_magnitude", True):
         return ("discard", "too_large")
@@ -1692,91 +1445,6 @@ def _signed_run_audit(run_id: str, project_dir: Path) -> dict:
 _TERMINAL_STATUSES = frozenset({"applied", "rejected", "expired", "dismissed"})
 
 
-def backfill_proposals(project_dir: "Path", dry_run: bool = False) -> dict:
-    """One-time migration (step-final, AC12): reconcile the inherited proposal pile with
-    the NEW admission rules — WITHOUT irrecoverable data loss (STEERING "trash > rm").
-
-    Two operations, deliberately asymmetric on reversibility:
-      • **GC terminal files** (applied/rejected/expired/dismissed / is_expired) — these
-        are DONE; deleting them is the safe disk-hygiene win. Unlinked directly.
-      • **Re-stamp SURVIVORS** (pending/escalated) — re-derive trust from the source run
-        (a stored stamp may predate Component B) and PERSIST the corrected proposal, but
-        do NOT unlink or auto-write during the migration. A survivor that is now-noise or
-        now-auto is left in place with corrected trust; the NEXT normal cultivation cycle
-        (or human review) acts on it under the new rules. This avoids (a) silently
-        deleting a pending proposal a human never saw if is_noise false-positives, and
-        (b) a batch migration silently auto-writing into DDD docs.
-
-    A now-noise survivor is FLAGGED (counted + logged) so its removal is a visible,
-    reviewable follow-up — never an unlogged rm. Idempotent + fail-safe per file.
-    ``dry_run=True`` reports the plan (counts) without touching disk.
-    Returns {"gc_removed", "flagged_noise", "kept_review", "would_auto"}.
-    """
-    result = {"gc_removed": 0, "flagged_noise": 0, "kept_review": 0, "would_auto": 0}
-    proposals_dir = Path(project_dir) / ".artifacts" / "proposals"
-    if not proposals_dir.is_dir():
-        return result
-    for fp in sorted(proposals_dir.glob("*.json")):
-        try:
-            data = json.loads(fp.read_text(encoding="utf-8"))
-            proposal = CultivationProposal.from_dict(data)
-        except (json.JSONDecodeError, OSError, KeyError, TypeError):
-            continue  # skip a malformed file (never abort the sweep)
-        # 1. GC terminal files (safe: they are DONE)
-        if proposal.status in _TERMINAL_STATUSES or proposal.is_expired():
-            if not dry_run:
-                try:
-                    fp.unlink()
-                except OSError:
-                    continue
-            result["gc_removed"] += 1
-            continue
-        # 2. re-stamp survivors (re-derive trust; a stored stamp may predate Component B).
-        #    A fresh "passed" here is a re-derivation from the source run.json → INHERITED
-        #    gate2 authority; keep trust_source in lockstep with the stamp (else a re-stamped
-        #    "passed" with a stale/blank trust_source would be barred from — or worse, if the
-        #    stored source were self_adversarial, wrongly evaluated against — protected zones).
-        fresh_trust = stamp_trust_from_run(proposal.source_run_id, project_dir)
-        _fresh_source = "inherited_gate2" if fresh_trust == "passed" else "none"
-        if (fresh_trust != proposal.passed_adversarial_gate
-                or _fresh_source != proposal.trust_source) and not dry_run:
-            proposal.passed_adversarial_gate = fresh_trust
-            proposal.trust_source = _fresh_source
-            try:
-                fp.write_text(json.dumps(proposal.to_dict(), indent=2), encoding="utf-8")
-            except OSError:
-                pass
-        verdict, _reason = admission_band(proposal, project_dir)
-        if verdict == "discard":
-            # AUTONOMY-FIRST (run_86f44f35): a discard is ARCHIVED (recoverable) + UNLINKED —
-            # NOT flagged-and-kept. XG directive: noise is dropped, never a human queue.
-            # The archive (discarded-proposals.jsonl) makes it recoverable, satisfying the
-            # "never an unlogged rm" concern without keeping it in the live pending set.
-            result["flagged_noise"] += 1  # keep the counter name for callers; = discarded
-            if not dry_run:
-                _archive_discarded_proposal(proposal, project_dir, f"backfill:{_reason}")
-                try:
-                    fp.unlink()
-                except OSError:
-                    pass
-            logger.info(
-                "backfill: DISCARD now-noise survivor (archived + removed from queue): "
-                "%s § %s (%s): %.80s",
-                proposal.target_doc, proposal.target_section, _reason, proposal.content,
-            )
-        elif verdict == "auto":
-            # now auto-eligible under new rules — do NOT auto-write during migration;
-            # the next cultivation cycle applies it. Count for visibility.
-            result["would_auto"] += 1
-        else:
-            result["kept_review"] += 1
-    logger.info(
-        "backfill_proposals(%s, dry_run=%s): %s",
-        Path(project_dir).name, dry_run, result,
-    )
-    return result
-
-
 def _archive_discarded_proposal(proposal: "CultivationProposal", project_dir: Path,
                                 reason: str) -> bool:
     """AUTONOMY-FIRST (run_86f44f35) recoverable archive for a DDD proposal the gate did
@@ -1804,53 +1472,10 @@ def _archive_discarded_proposal(proposal: "CultivationProposal", project_dir: Pa
 
 
 def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
-    """Write a proposal as an atomic JSON file (escalation path).
+    """Compatibility chokepoint: enqueue directly; no proposal file is created."""
+    _cultivate_proposals([proposal], project_dir)
+    return project_dir / ".artifacts" / "proposals" / f"{proposal.id}.cdf"
 
-    Used only for RISKY changes that need human approval.
-    Creates .artifacts/proposals/ directory if needed.
-    """
-    proposals_dir = project_dir / ".artifacts" / "proposals"
-    proposals_dir.mkdir(parents=True, exist_ok=True)
-
-    # Generation-side dedup (run_97519f7c, Gate-1 root-fix): the churn ROOT was that
-    # write_proposal wrote a fresh timestamped JSON unconditionally, so a re-scan of the
-    # same reflect input re-emitted the same-content lesson under a NEW id every run —
-    # read_pending_proposals only dedups at DISPLAY, the on-disk pending set kept silting.
-    # Skip the write if an AWAITING-human proposal with the same content_signature already
-    # exists. Only vs live (pending/escalated) proposals — a terminal (rejected/applied)
-    # one is not a live dup, so a genuinely-recurring lesson can re-surface after triage.
-    new_sig = content_signature("- " + (proposal.content or "").strip())
-    if new_sig:
-        for existing in proposals_dir.glob("*.json"):
-            try:
-                data = json.loads(existing.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                continue
-            if data.get("status") not in AWAITING_HUMAN_STATUSES:
-                continue
-            if content_signature("- " + str(data.get("content", "")).strip()) == new_sig:
-                return existing  # idempotent — the live pending proposal already carries it
-
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    filename = f"{proposal.id}_{ts}.json"
-    filepath = proposals_dir / filename
-
-    # Atomic write
-    content = json.dumps(proposal.to_dict(), indent=2, ensure_ascii=False)
-    fd, tmp_path = tempfile.mkstemp(dir=str(proposals_dir), suffix=".tmp")
-    try:
-        os.write(fd, content.encode("utf-8"))
-        os.close(fd)
-        os.rename(tmp_path, str(filepath))
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        if Path(tmp_path).exists():
-            os.unlink(tmp_path)
-        raise
-    return filepath
 
 
 def is_addition_proposal(data: dict) -> bool:
@@ -2107,179 +1732,44 @@ def read_workspace_cultivation_health(root: Path, window_days: int = 7) -> dict:
 def _cultivate_proposals(
     proposals: List[CultivationProposal], project_dir: Path
 ) -> dict:
-    """Apply or escalate a list of proposals. Shared by all cultivate_from_* entry points.
+    """Enqueue cultivation candidates; never judge, propose, or mutate DDD files."""
+    from core.ingestion import api
 
-    The auto/review/discard decision is admission_band (run_8d5fe9d1, Component C): trust
-    (passed_adversarial_gate) gates the zone; ddd_auto_approval's magnitude/circuit-breaker
-    are the surviving hard quality checks; the calibrated per-channel confidence floor
-    (Component D) gates value. (The old is_safe_append doc-whitelist was removed.)
-
-    Returns:
-        {"applied": N, "escalated": M, "rejected": K, "write_failed": W,
-         "skipped_protected": S, "drift_errors": [...]}
-
-    skipped_protected (run_97519f7c): proposals dropped because their target is a
-    protected zone (human-distill-only) — NOT escalated (that would be a
-    dead-on-approve queue entry), NOT a failure. A healthy admission decision.
-
-    write_failed (run_abf49550 M0): apply_to_ddd returned "locked"/"doc_missing" —
-    a genuine WRITE FAILURE (learning organ could not write), kept DISTINCT from
-    "rejected" (healthy discern: duplicate/low_value/not_safe). Pre-M0 both
-    collapsed into "rejected", making a broken write indistinguishable from a
-    discerning one — the exact learning-fidelity blind spot M0 exists to remove.
-
-    drift_errors surfaces section-name drift LOUDLY (a config bug where a
-    allowlisted routing section has no matching heading in the doc) instead of
-    silently counting it as a benign "rejected". See apply_to_ddd docstring /
-    run_45ab67c7 root cause.
-    """
-    applied = 0
-    escalated = 0
+    queued = 0
     rejected = 0
-    write_failed = 0
-    skipped_protected = 0
-    # A DECLINED entry is an outcome, not an absence of one. Every discard site below
-    # archives the entry to a recoverable sink and continues; before these counters
-    # existed none of them incremented anything, so an all-declined batch returned a
-    # dict of zeros and the caller guard read it as "no work happened".
-    discarded = 0
-    discard_reasons: dict[str, int] = {}
-    drift_errors: List[str] = []
-
-    def _count_discard(reason: str) -> None:
-        """Tally one declined entry under its reason CATEGORY.
-
-        admission_band returns reasons shaped ``category`` or ``category:detail``
-        (e.g. ``below_auto_threshold``, ``judge:suspect:<why>``, ``noise:<which>``).
-        Bucketing on the part before the first colon keeps the breakdown a small
-        fixed set of causes instead of an unbounded spray of one-off strings — the
-        question it must answer is "is the bar too high, or is the judge refusing?",
-        which a per-detail histogram obscures.
-        """
-        nonlocal discarded
-        discarded += 1
-        cat = reason.split(":", 1)[0] or "unknown"
-        discard_reasons[cat] = discard_reasons.get(cat, 0) + 1
-
     for proposal in proposals:
-        # AUTONOMY-FIRST (run_86f44f35): the protected-zone pre-drop + candidates sink are
-        # DELETED. There is no human-distill zone — admission_band's judge decides every
-        # proposal (pass→auto any doc incl SELF/PRODUCT/TECH, non-pass→discard). No
-        # sediment-to-human step remains.
-
-        # 宁缺毋滥 — conversation-derived knowledge is NEVER auto-written
-        # (capability C, run_e346b8ed). The "settled decision vs chatter?"
-        # judgment is an LLM call UPSTREAM (conversation_extract); the
-        # STRUCTURAL guarantee that a wrong judgment can't silently land in DDD
-        # lives HERE: force this source down the escalate branch regardless of
-        # target section, so it always requires XG's approve-time confirmation
-        # (routers/cultivation.py). A safe-append target would otherwise
-        # auto-apply and silently defeat the human-gate. DEC19: False > Stale >
-        # Imperfect — a wrong DDD entry is worse than a missing one.
-        if proposal.source_stage == "conversation":
-            proposal.status = "escalated"
-            write_proposal(proposal, project_dir)
-            escalated += 1
-            continue
-        # ── Admission decision band (Component C, run_8d5fe9d1) ──────────────────
-        # TRUST replaces the old doc-whitelist (is_safe_append/_PROTECTED_ZONES): a
-        # trust=passed proposal may auto-apply into ANY doc incl SELF.md; else review;
-        # noise → discard. Fail-closed (gate error → review). admission_band owns the
-        # whole auto/review/discard decision for appends now.
-        _verdict, _breason = admission_band(proposal, project_dir)
-        if _verdict == "discard":
-            # AUTONOMY-FIRST (run_86f44f35): not auto → archive to a RECOVERABLE sink
-            # (Gate-2: a fallible-judge / below-floor drop must be recoverable, not a
-            # silent permanent loss), then drop. No human queue.
-            _archive_discarded_proposal(proposal, project_dir, _breason)
-            _count_discard(_breason)
-            logger.info(
-                "admission: DISCARD %s § %s (%s, archived): %.80s",
-                proposal.target_doc, proposal.target_section, _breason, proposal.content,
-            )
-            continue
-        if _verdict == "review":
-            # admission_band only returns "review" on a genuine gate ERROR now (never a
-            # trust/judge outcome). No human queue — but a gate-error entry MUST be
-            # archived (Gate-2 #2: a gate crash was silently losing the entry), then dropped.
-            _archive_discarded_proposal(proposal, project_dir, f"gate_error:{_breason}")
-            _count_discard(f"gate_error:{_breason}")
-            logger.warning(
-                "admission: gate-error → archived + dropped (no human queue) %s § %s (%s): %.80s",
-                proposal.target_doc, proposal.target_section, _breason, proposal.content,
-            )
-            continue
-        if _verdict == "auto":
-            status = apply_to_ddd(proposal, project_dir)
-            if status == "applied":
-                proposal.status = STATUS_APPROVED
-                log_application(proposal, project_dir)
-                applied += 1
-            elif status == "created_section":
-                # The lesson WAS applied (not dropped) — the allowlisted section
-                # heading was absent so it was auto-created. Count as applied, but
-                # surface the drift as observable (latent doc/table divergence) so
-                # it can be reconciled. NOT an error — the lesson is safe.
-                # Sanitize proposal-derived fields (untrusted: from on-disk
-                # proposal JSON / reflect lessons) before they reach log/stderr/
-                # HTTP sinks — prevents CRLF log-injection (a forged source_run_id
-                # with newlines could forge log records or break log parsers).
-                def _safe(v: str) -> str:
-                    return str(v).replace("\n", "\\n").replace("\r", "\\r")
-                msg = (
-                    f"DDD drift (auto-healed): created missing allowlisted section "
-                    f"'{_safe(proposal.target_doc)} § {_safe(proposal.target_section)}' "
-                    f"(run {_safe(proposal.source_run_id)}). Lesson applied to the new "
-                    f"section. Reconcile the doc template / ROUTING_TABLE to avoid drift."
-                )
-                logger.warning(msg)
-                drift_errors.append(msg)
-                proposal.status = STATUS_APPROVED
-                log_application(proposal, project_dir, created_section=True)
-                applied += 1
-            elif status in ("locked", "doc_missing"):
-                # WRITE FAILURE (run_abf49550 M0 / AC3) — the lesson was NOT
-                # applied because cultivation COULD NOT WRITE: another writer held
-                # the lock ("locked"), or the target doc is missing ("doc_missing").
-                # This is the learning organ FAILING, categorically distinct from a
-                # HEALTHY reject below. Counting it as "rejected" (the pre-M0 bug)
-                # made a broken brain indistinguishable from a discerning one.
-                write_failed += 1
-            else:
-                # Healthy reject: "duplicate", "rejected_low_value", "not_safe" —
-                # the brain DISCERNED and declined to write. Nothing failed.
-                rejected += 1
-            continue
-
-    result = {
-        "applied": applied,
-        "escalated": escalated,
-        "rejected": rejected,
-        "write_failed": write_failed,
-        "skipped_protected": skipped_protected,
-        # NOT merged into "rejected". A reject is the brain reading the entry and
-        # declining it on content; a discard is the ADMISSION BAND refusing to judge
-        # it at all (below the confidence bar, judged suspect, noise, oversized).
-        # Collapsing them would hide the case that matters: a bar so high that
-        # nothing is ever judged reads exactly like a discerning brain.
-        "discarded": discarded,
-        "discard_reasons": discard_reasons,
-        "drift_errors": drift_errors,
+        payload = {
+            "kind": "cultivation",
+            "proposal": {
+                "doc_hint": proposal.target_doc,
+                "section_hint": proposal.target_section,
+                "text": proposal.content,
+                "why": (
+                    f"{proposal.source_stage} evidence for project "
+                    f"{project_dir.name}; source confidence {proposal.confidence:.2f}"
+                ),
+            },
+        }
+        slot = "proposal:" + hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        result = api.enqueue(
+            "cultivation", proposal.source_run_id, slot, payload,
+            envelope={"source_event_ids": [], "evidence": "inferred",
+                      "tainted": True, "writer": "cultivation"},
+            project_snapshot={"project": project_dir.name,
+                              "path": str(project_dir)},
+        )
+        if result.status in {"queued", "duplicate"}:
+            queued += 1
+        else:
+            rejected += 1
+    return {
+        "queued": queued, "applied": 0, "escalated": 0,
+        "rejected": rejected, "write_failed": 0,
+        "skipped_protected": 0, "discarded": 0,
+        "discard_reasons": {}, "drift_errors": [],
     }
-    # M0 (run_abf49550): persist this batch's outcome to the durable per-project
-    # sink so learning-fidelity is observable (AC2). Best-effort — never breaks
-    # cultivation. Skip a fully-empty batch (nothing to observe).
-    # skipped_protected included (Gate-2 red-team MED, run_97519f7c): an all-skipped
-    # batch (only protected-zone lessons) must still record — else the volume of
-    # auto-dropped architecture/SELF lessons is invisible to the weekly learning report.
-    # discarded included for the same reason skipped_protected was: an all-DISCARDED
-    # batch is the single most important one to record, and it was precisely the one
-    # this guard threw away — every other outcome was zero, so the batch looked empty
-    # while the recoverable archive filled up unobserved.
-    if (applied or escalated or rejected or write_failed
-            or skipped_protected or discarded):
-        record_cultivation_outcome(project_dir, result)
-    return result
 
 
 def cultivate_from_corrections(

@@ -364,6 +364,8 @@ def _open_asks(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
         try:
             body = json.loads(s3.get_object(Bucket=bucket, Key=base + "closed/" + rel)["Body"].read(4096))
         except Exception:   # unreadable: treated as an ordinary close
+            logger.debug("swarm out: close record %s unreadable, treated as ordinary",
+                         rel, exc_info=True)
             return False
         return isinstance(body, dict) and body.get("why") == "answer_refused"
 

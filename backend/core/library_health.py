@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -227,21 +226,14 @@ def apply_action(knowledge_dir: Path, kind: ActionKind, paths: list[str],
 
         try:
             if kind == "archive_old_logs":
-                dest = knowledge_dir / ARCHIVE_DIR / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                # collision-safe: never overwrite an existing archived file. A
-                # single mtime-suffix is NOT unique (two sources can share a name
-                # AND mtime), so loop to the first genuinely-free name.
-                if dest.exists():
-                    stem, suffix = dest.stem, dest.suffix
-                    n = 1
-                    while dest.exists():
-                        dest = dest.with_name(f"{stem}.{n}{suffix}")
-                        n += 1
-                shutil.move(str(target), str(dest))
-                applied += 1
+                errors.append(
+                    f"{rel}: governed archive move is unavailable; use an individual editor move"
+                )
             elif kind == "delete_empty":
-                target.unlink()
+                from core.ingestion.api import apply_user_edit, revision_of
+                apply_user_edit(
+                    target, None, expected_revision=revision_of(target), actor="user",
+                )
                 applied += 1
         except OSError as exc:
             errors.append(f"{rel}: {exc}")

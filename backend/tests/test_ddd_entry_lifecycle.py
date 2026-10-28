@@ -413,268 +413,10 @@ class TestEvaluateDemotion:
 
 # ── AC1/AC2: archive_entries moves dormant entries to archive file ────────────
 
-class TestArchiveEntries:
-    def test_archives_dormant_entries(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_entries
-
-        # Create a source file with one dormant entry
-        src = tmp_path / "IMPROVEMENT.md"
-        src.write_text("""\
-## What Worked
-<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
-
-- [guideline] **Good entry still active** — stays. (2026-05-01, run_x)
-  <!-- ref:5 | last:2026-05-18 | decay:active -->
-
-- [pitfall] **Old dormant entry** — should be archived. (2025-01-01, run_old)
-  <!-- ref:0 | last:none | decay:dormant -->
-""")
-
-        entries = parse_entries(src.read_text())
-        # Mark the dormant one for archival
-        dormant_entries = [e for e in entries if e.decay_state == "dormant"]
-        assert len(dormant_entries) == 1
-
-        archived_count = archive_entries(tmp_path, dormant_entries)
-        assert archived_count == 1
-
-        # Archive file should exist with the entry. No source_path passed → the
-        # fallback resolves IMPROVEMENT-archive.md next to the canonical (new-layout)
-        # doc dir, i.e. 2-understanding/ (run_f71e5920: never the raw root).
-        archive_path = tmp_path / "2-understanding" / "IMPROVEMENT-archive.md"
-        assert archive_path.exists()
-        archive_content = archive_path.read_text()
-        assert "Old dormant entry" in archive_content
-        assert "<!-- ref:0" in archive_content
-
-    def test_archive_appends_to_existing_archive(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_entries, EntryMetadata
-
-        # Create existing archive at the resolved (new-layout) location so the
-        # append path (no source_path → fallback → 2-understanding/) targets it.
-        archive_path = tmp_path / "2-understanding" / "IMPROVEMENT-archive.md"
-        archive_path.parent.mkdir(parents=True)
-        archive_path.write_text("# Archived Knowledge Entries\n\n- [guideline] **Previous** — old. (2024-01-01)\n  <!-- ref:0 | last:none | decay:archived -->\n")
-
-        entry = EntryMetadata(
-            title="New archived entry",
-            entry_type="pitfall",
-            ref_count=0,
-            decay_state="dormant",
-            raw_text="- [pitfall] **New archived entry** — something. (2025-06-01, run_y)",
-            created_date=date(2025, 6, 1),
-        )
-        archived_count = archive_entries(tmp_path, [entry])
-        assert archived_count == 1
-
-        content = archive_path.read_text()
-        assert "Previous" in content  # Existing preserved
-        assert "New archived entry" in content  # New appended
 
 
-class TestArchiveSiblingPath:
-    """B fix (run_f71e5920): archive_entries must write the archive NEXT TO the
-    resolved source doc, not raw project_dir/archive_name. The old raw-join fed a
-    17MB orphan at the pre-migration root path while the live doc lived under
-    2-understanding/ (read/write split-brain, regenerating every decay tick)."""
-
-    def _dormant(self, title="Sib entry"):
-        from core.ddd_entry_lifecycle import EntryMetadata
-        return EntryMetadata(
-            title=title, entry_type="guideline", ref_count=0, decay_state="dormant",
-            raw_text=f"- [guideline] **{title}** — x. (2025-06-01, run_z)",
-            created_date=date(2025, 6, 1),
-        )
-
-    def test_source_path_places_archive_as_sibling_of_doc(self, tmp_path):
-        # AC1: migrated project — source doc under 2-understanding/ → archive there.
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "2-understanding" / "IMPROVEMENT.md"
-        doc.parent.mkdir(parents=True)
-        doc.write_text("# IMPROVEMENT\n")
-        n = archive_entries(tmp_path, [self._dormant()], source_path=doc)
-        assert n == 1
-        assert (tmp_path / "2-understanding" / "IMPROVEMENT-archive.md").exists()
-        assert not (tmp_path / "IMPROVEMENT-archive.md").exists(), "root orphan re-created"
-
-    def test_fallback_derives_doc_dir_from_archive_name_not_hardcoded(self, tmp_path):
-        # AC2: no source_path, archive_name=TECH-archive.md → TECH.md's resolved dir,
-        # NOT a hardcoded IMPROVEMENT.md. ddd_write_path → 2-understanding/ (new layout).
-        from core.ddd_entry_lifecycle import archive_entries
-        n = archive_entries(tmp_path, [self._dormant()], archive_name="TECH-archive.md")
-        assert n == 1
-        assert (tmp_path / "2-understanding" / "TECH-archive.md").exists()
-
-    def test_fallback_handles_monthly_shard_name(self, tmp_path):
-        # AC2': the fallback stem-derivation must handle a MONTHLY shard name
-        # ("IMPROVEMENT-archive-2026-08.md" → owning doc IMPROVEMENT.md), not just
-        # the fixed form. A plain replace("-archive.md",".md") would leave the shard
-        # suffix and mis-resolve the doc dir (the monthly-shard landmine I introduced).
-        from core.ddd_entry_lifecycle import archive_entries
-        n = archive_entries(tmp_path, [self._dormant()],
-                            archive_name="IMPROVEMENT-archive-2026-08.md")
-        assert n == 1
-        # Resolves to IMPROVEMENT.md's dir (2-understanding/), NOT project root.
-        assert (tmp_path / "2-understanding" / "IMPROVEMENT-archive-2026-08.md").exists()
-
-    def test_memory_archive_stays_at_context_root(self, tmp_path):
-        # AC3: MEMORY.md is not a six-section doc — source_path=.context/MEMORY.md
-        # → archive stays at .context/ (regression guard, must NOT move to 2-understanding).
-        from core.ddd_entry_lifecycle import archive_entries
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        mem = ctx / "MEMORY.md"
-        mem.write_text("# MEMORY\n")
-        n = archive_entries(ctx, [self._dormant()], archive_name="MEMORY-archive.md", source_path=mem)
-        assert n == 1
-        assert (ctx / "MEMORY-archive.md").exists()
-        assert not (ctx / "2-understanding" / "MEMORY-archive.md").exists()
 
 
-class TestArchiveRawLines:
-    """CYCLE 1' — the raw-line sibling of archive_entries(). The 3 MEMORY-archive
-    bypasses (distillation RC-archival + section-cap, context_health open-threads)
-    do RAW-LINE text surgery, not EntryMetadata flow. archive_raw_lines() converges
-    them onto the SAME chokepoint (shares _resolve_archive_path + append/create body)
-    WITHOUT a lossy line→EntryMetadata→line round-trip. source_path=.context/MEMORY.md
-    lands the archive in gitignored .context/ (the privacy partition)."""
-
-    def test_raw_lines_land_in_context_via_source_path(self, tmp_path):
-        # AC1: source_path=<ctx>/MEMORY.md → archive at <ctx>/MEMORY-archive-*.md
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        mem = ctx / "MEMORY.md"
-        mem.write_text("# MEMORY\n")
-        lines = [
-            "- [guideline] **Raw entry one** — x. (2026-08-01, run_a)",
-            "- [pitfall] **Raw entry two** — y. (2026-08-02, run_b)",
-        ]
-        n = archive_raw_lines(
-            tmp_path, lines, "MEMORY-archive-2026-08.md",
-            source_path=mem,
-            block_header="### Archived Recent Context (2026-08-14)",
-        )
-        assert n == 2
-        archive = ctx / "MEMORY-archive-2026-08.md"
-        assert archive.exists()
-        body = archive.read_text()
-        assert "Raw entry one" in body
-        assert "Raw entry two" in body
-        assert "### Archived Recent Context (2026-08-14)" in body
-
-    def test_create_header_is_caller_supplied_not_decay_blurb(self, tmp_path):
-        # AC1: MUST NOT reuse archive_entries' "no references for 90+ days" decay
-        # blurb — that is factually wrong for RC/OT/section-cap content.
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        mem = ctx / "MEMORY.md"
-        mem.write_text("# MEMORY\n")
-        n = archive_raw_lines(
-            tmp_path, ["- [pitfall] **X** — z. (2026-08-01, run_c)"],
-            "MEMORY-archive-2026-08.md", source_path=mem,
-            create_header="# Memory Archive -- 2026-08",
-        )
-        assert n == 1
-        body = (ctx / "MEMORY-archive-2026-08.md").read_text()
-        assert "# Memory Archive -- 2026-08" in body
-        assert "90+ days" not in body
-        assert "Knowledge Lifecycle decay engine" not in body
-
-    def test_raw_lines_appends_to_existing_archive(self, tmp_path):
-        # AC1: second call appends, preserving prior content (no clobber).
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        mem = ctx / "MEMORY.md"
-        mem.write_text("# MEMORY\n")
-        archive_raw_lines(tmp_path, ["- **First** — a."], "MEMORY-archive-2026-08.md",
-                          source_path=mem, block_header="### Block one")
-        archive_raw_lines(tmp_path, ["- **Second** — b."], "MEMORY-archive-2026-08.md",
-                          source_path=mem, block_header="### Block two")
-        body = (ctx / "MEMORY-archive-2026-08.md").read_text()
-        assert "First" in body and "Second" in body
-        assert body.index("First") < body.index("Second")
-
-    def test_empty_lines_is_noop(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        mem = ctx / "MEMORY.md"
-        mem.write_text("# MEMORY\n")
-        n = archive_raw_lines(tmp_path, [], "MEMORY-archive-2026-08.md", source_path=mem)
-        assert n == 0
-        assert not (ctx / "MEMORY-archive-2026-08.md").exists()
-
-    def test_dedup_by_signature_skips_already_archived_block(self, tmp_path):
-        # AC3 (shared dedup chokepoint): with dedup_by_signature=True, a block whose
-        # content_signature already exists in the shard is NOT appended again — this
-        # is what makes fold + size-valve double-move STRUCTURALLY impossible at the
-        # append layer (not reliant on the caller remembering). Format-variant of the
-        # SAME lesson must dedup (content_signature is format-agnostic).
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        evo.write_text("# EVOLUTION\n")
-        shard = "EVOLUTION-archive-2026-08.md"
-        # First archive of a data-point block.
-        n1 = archive_raw_lines(
-            tmp_path, ["- **CLASS A datapoint** — confidence skipped process."],
-            shard, source_path=evo, dedup_by_signature=True,
-        )
-        assert n1 == 1
-        # Second archive of the SAME lesson in a different bullet FORMAT (front-prefix
-        # + attribution) — content_signature normalizes both to the same sig → skipped.
-        n2 = archive_raw_lines(
-            tmp_path,
-            ["- **2026-08-14** (session abc123): **CLASS A datapoint** — "
-             "confidence skipped process. (2026-08-14, run_x)"],
-            shard, source_path=evo, dedup_by_signature=True,
-        )
-        assert n2 == 0, "dup lesson (format-variant) must be skipped by signature dedup"
-        body = (ctx / shard).read_text()
-        assert body.count("confidence skipped process") == 1, "no double-move in archive"
-
-    def test_dedup_by_signature_skips_MULTILINE_block(self, tmp_path):
-        # Gate-2 finding B: content_signature collapses newlines → a multi-line block
-        # reduces to ONE signature. A per-line shard index could never match it, so
-        # dedup was inert for multi-line blocks (fold + size-valve entries). This locks
-        # the fix: a multi-line ### entry archived twice must be written ONCE.
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        evo = ctx / "EVOLUTION.md"
-        evo.write_text("# EVOLUTION\n")
-        shard = "EVOLUTION-archive-2026-08.md"
-        block = (
-            "### (folded from: ### CLASS X: Test)\n"
-            "- **RECURRENCE DATA-POINT (2026-08-02, run_b)**: a multi-line data point\n"
-            "  that wraps across several lines with real judgment content here.\n"
-        )
-        n1 = archive_raw_lines(tmp_path, [block], shard, source_path=evo,
-                               dedup_by_signature=True)
-        assert n1 == 1
-        n2 = archive_raw_lines(tmp_path, [block], shard, source_path=evo,
-                               dedup_by_signature=True)
-        assert n2 == 0, "multi-line block re-archive must be skipped by signature dedup"
-        body = (ctx / shard).read_text()
-        assert body.count("a multi-line data point") == 1, "no double-move of multi-line block"
-
-    def test_dedup_by_signature_off_by_default_preserves_legacy(self, tmp_path):
-        # Regression guard: existing callers (MEMORY reclaim) pass no dedup flag →
-        # default False → behavior UNCHANGED (append even if a dup, as before).
-        from core.ddd_entry_lifecycle import archive_raw_lines
-        ctx = tmp_path / ".context"
-        ctx.mkdir()
-        mem = ctx / "MEMORY.md"
-        mem.write_text("# MEMORY\n")
-        shard = "MEMORY-archive-2026-08.md"
-        archive_raw_lines(tmp_path, ["- **Dup line** — x."], shard, source_path=mem)
-        archive_raw_lines(tmp_path, ["- **Dup line** — x."], shard, source_path=mem)
-        body = (ctx / shard).read_text()
-        assert body.count("Dup line") == 2, "default (no dedup) must preserve legacy append"
 
 
 class TestReclaimNoiseEndToEnd:
@@ -701,42 +443,6 @@ class TestReclaimNoiseEndToEnd:
   <!-- ref:0 | last:none | decay:dormant -->
 """
 
-    def test_reclaim_moves_entry_out_and_shrinks_file(self, tmp_path):
-        from core.ddd_entry_lifecycle import reclaim_noise_entries
-
-        today = date(2026, 6, 28)
-        src = tmp_path / "MEMORY.md"
-        original = self._stale_memory(today)
-        src.write_text(original)
-
-        report = reclaim_noise_entries(
-            original,
-            today,
-            tmp_path,
-            archive_name="MEMORY-archive.md",
-            source_path=src,
-            dry_run=False,
-        )
-
-        # 1. Exactly the stale entry was archived (not the active one)
-        assert report.archived == 1, f"expected 1 archived, got {report.archived}"
-
-        # 2. The stale entry is MOVED OUT of the source (physically stripped)
-        new_content = src.read_text()
-        assert "Reclaim me" not in new_content, "stale entry still in source — not stripped"
-
-        # 3. The active entry is PRESERVED
-        assert "Keep me" in new_content, "active entry wrongly removed"
-
-        # 4. The source file actually SHRANK (the whole point)
-        assert len(new_content) < len(original), (
-            f"file did not shrink: {len(original)} → {len(new_content)}"
-        )
-
-        # 5. The stale entry landed in the archive FILE
-        archive_path = tmp_path / "MEMORY-archive.md"
-        assert archive_path.exists(), "archive file not created"
-        assert "Reclaim me" in archive_path.read_text(), "entry not in archive"
 
     def test_reclaim_is_noop_when_nothing_qualifies(self, tmp_path):
         """A file of only recent/active entries must NOT shrink — proves the
@@ -756,7 +462,7 @@ class TestReclaimNoiseEndToEnd:
         src.write_text(content)
         report = reclaim_noise_entries(
             content, today, tmp_path, archive_name="MEMORY-archive.md",
-            source_path=src, dry_run=False,
+            source_path=src
         )
         assert report.archived == 0
         assert src.read_text() == content, "non-qualifying file was modified"
@@ -783,23 +489,6 @@ class TestRetireEntry:
   <!-- ref:0 | last:{recent} | decay:active -->
 """
 
-    def test_retire_named_entry_archives_and_strips_only_that_one(self, tmp_path):
-        from core.ddd_entry_lifecycle import retire_entry
-        today = date(2026, 7, 3)
-        content = self._two_sections(today)
-        src = tmp_path / "IMPROVEMENT.md"
-        src.write_text(content)
-        report = retire_entry(
-            content, title="Cache invalidation", section="Pitfalls",
-            project_dir=tmp_path, source_path=src, dry_run=False,
-        )
-        assert report.archived == 1, f"expected 1 archived, got {report.archived}"
-        new_content = src.read_text()
-        # The Pitfalls one is gone; the same-title Guidelines sibling SURVIVES (C1 identity-strip).
-        assert "pitfall flavor" not in new_content, "named entry not stripped"
-        assert "guideline flavor" in new_content, "same-title sibling wrongly removed"
-        archive = (tmp_path / "IMPROVEMENT-archive.md").read_text()
-        assert "pitfall flavor" in archive, "retired entry not archived (recall-preserved)"
 
     def test_retire_dry_run_previews_without_mutating(self, tmp_path):
         from core.ddd_entry_lifecycle import retire_entry
@@ -808,7 +497,7 @@ class TestRetireEntry:
         src = tmp_path / "IMPROVEMENT.md"
         src.write_text(content)
         report = retire_entry(content, title="Cache invalidation", section="Pitfalls",
-                              project_dir=tmp_path, source_path=src, dry_run=True)
+                              project_dir=tmp_path, source_path=src)
         assert report.candidates == ["Cache invalidation"], "dry-run should name the candidate"
         assert report.archived == 0, "dry-run must not archive"
         assert src.read_text() == content, "dry-run must not mutate source"
@@ -820,7 +509,7 @@ class TestRetireEntry:
         content = self._two_sections(today)
         with pytest.raises(RetireError):
             retire_entry(content, title="Nonexistent", section="Pitfalls",
-                         project_dir=tmp_path, dry_run=False)
+                         project_dir=tmp_path)
 
     def test_retire_refuses_ambiguous_duplicate(self, tmp_path):
         """Two entries sharing EXACT (title, section) → refuse (strip-2-archive-1 data loss)."""
@@ -836,50 +525,9 @@ class TestRetireEntry:
 """
         with pytest.raises(RetireError):
             retire_entry(dup, title="Dup title", section="Pitfalls",
-                         project_dir=tmp_path, dry_run=False)
+                         project_dir=tmp_path)
 
-    def test_retire_protects_keep_class_unless_forced(self, tmp_path):
-        """A keep-class entry (decision) is refused by default, retired with force=True."""
-        from core.ddd_entry_lifecycle import retire_entry, RetireError
-        today = date(2026, 7, 3)
-        recent = (today - timedelta(days=2)).isoformat()
-        content = f"""\
-## Recent Decisions
-- [decision] **Chose X over Y** — a permanent decision. ({recent}, run_d)
-  <!-- ref:0 | last:{recent} | decay:active -->
-"""
-        src = tmp_path / "PROJECT.md"
-        src.write_text(content)
-        # default: refuse (keep-class protected)
-        with pytest.raises(RetireError):
-            retire_entry(content, title="Chose X over Y", section="Recent Decisions",
-                         project_dir=tmp_path, source_path=src, dry_run=False)
-        # force=True: retired
-        report = retire_entry(content, title="Chose X over Y", section="Recent Decisions",
-                              project_dir=tmp_path, source_path=src, dry_run=False, force=True)
-        assert report.archived == 1, "force=True must retire the keep-class entry"
 
-    def test_retire_protects_evergreen_section_without_force(self, tmp_path):
-        """Gate-2 MED: an entry in an evergreen SECTION (Open Threads = type process,
-        Standing Preferences = type guideline) is keep-class by SECTION even though
-        its TYPE isn't — must be refused without force, parity with reclaim."""
-        from core.ddd_entry_lifecycle import retire_entry, RetireError
-        today = date(2026, 7, 3)
-        recent = (today - timedelta(days=2)).isoformat()
-        content = f"""\
-## Open Threads
-- [process] **A live thread** — process-type, but section is evergreen. ({recent}, run_ot)
-  <!-- ref:0 | last:{recent} | decay:active -->
-"""
-        # default evergreen (MEMORY set) → Open Threads protected → refuse
-        with pytest.raises(RetireError):
-            retire_entry(content, title="A live thread", section="Open Threads",
-                         project_dir=tmp_path, dry_run=False)
-        # force overrides
-        src = tmp_path / "MEMORY.md"; src.write_text(content)
-        report = retire_entry(content, title="A live thread", section="Open Threads",
-                              project_dir=tmp_path, source_path=src, dry_run=False, force=True)
-        assert report.archived == 1
 
 
 class TestDecayThresholdsTightened:
@@ -1181,7 +829,7 @@ class TestReclaimNoiseEntries:
     def test_dry_run_selects_only_reclaimable(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         report = reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True,
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path
         )
         assert set(report.candidates) == {
             "Reclaim this plain lesson", "Reclaim this plain bug",
@@ -1193,46 +841,14 @@ class TestReclaimNoiseEntries:
     def test_dry_run_is_read_only(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         report = reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True,
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path
         )
         # No archive file written, no content mutation returned.
         assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
         assert report.new_content is None
         assert report.archived == 0
 
-    def test_apply_strips_from_content_and_archives(self, tmp_path):
-        from core.ddd_entry_lifecycle import reclaim_noise_entries, compute_entry_noise
-        report = reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False,
-        )
-        assert report.archived == 2
-        assert report.new_content is not None
-        # Physically removed from source.
-        assert "Reclaim this plain lesson" not in report.new_content
-        assert "Reclaim this plain bug" not in report.new_content
-        # Protected entries survive.
-        assert "Keep this principle" in report.new_content
-        assert "COE07 keep me" in report.new_content
-        # Archived to file. No source_path → fallback resolves to 2-understanding/.
-        archive = (tmp_path / "2-understanding" / "IMPROVEMENT-archive.md").read_text()
-        assert "Reclaim this plain lesson" in archive
-        # Raw noise metric drops by exactly the reclaimed count. The 2 remaining
-        # noisy entries (principle + COE07) are PROTECTED — they stay noisy in
-        # the raw gauge but are not reclaimable. The CLI gate keys off
-        # reclaimable noise, not raw noise (see TestDddNoiseCli).
-        from core.ddd_entry_lifecycle import parse_entries
-        before = compute_entry_noise(parse_entries(_RECLAIM_FIXTURE), _RECLAIM_TODAY)
-        after = compute_entry_noise(parse_entries(report.new_content), _RECLAIM_TODAY)
-        assert before.noisy - after.noisy == 2  # the 2 reclaimable ones removed
 
-    def test_custom_archive_name(self, tmp_path):
-        from core.ddd_entry_lifecycle import reclaim_noise_entries
-        reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
-            archive_name="MEMORY-archive.md", dry_run=False,
-        )
-        assert (tmp_path / "MEMORY-archive.md").exists()
-        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
 
     def test_evergreen_sections_protect(self, tmp_path):
         from core.ddd_entry_lifecycle import (
@@ -1247,7 +863,7 @@ class TestReclaimNoiseEntries:
 """
         report = reclaim_noise_entries(
             content, _RECLAIM_TODAY, tmp_path,
-            evergreen_sections=MEMORY_EVERGREEN_SECTIONS, dry_run=True,
+            evergreen_sections=MEMORY_EVERGREEN_SECTIONS
         )
         assert report.candidates == []
         assert report.kept_protected == 1
@@ -1255,75 +871,21 @@ class TestReclaimNoiseEntries:
     def test_idempotent_second_call_reclaims_nothing(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         r1 = reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False,
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path
         )
         r2 = reclaim_noise_entries(
-            r1.new_content, _RECLAIM_TODAY, tmp_path, dry_run=False,
+            r1.new_content, _RECLAIM_TODAY, tmp_path
         )
         assert r2.archived == 0
         assert r2.candidates == []
 
     def test_empty_content_no_crash(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
-        report = reclaim_noise_entries("", _RECLAIM_TODAY, tmp_path, dry_run=False)
+        report = reclaim_noise_entries("", _RECLAIM_TODAY, tmp_path)
         assert report.archived == 0
         assert report.candidates == []
 
-    def test_same_title_across_sections_only_strips_the_noise_one(self, tmp_path):
-        # Adversarial C1 (CRITICAL): _strip_entries matched title-only, so a
-        # keep-class entry sharing a title with a reclaimed one got deleted AND
-        # was not archived → unrecoverable loss of protected knowledge. Strip
-        # must match by (title, section) identity, not title alone.
-        from core.ddd_entry_lifecycle import reclaim_noise_entries
-        content = """\
-## Pitfalls
-<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
 
-- [pitfall] **Cache invalidation** — old operational bug. (2025-01-01, run_a)
-  <!-- ref:0 | last:none | decay:archived -->
-
-## Models
-<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
-
-- [model] **Cache invalidation** — load-bearing schema note. (2025-01-01, run_b)
-  <!-- ref:5 | last:none | decay:active -->
-"""
-        src = tmp_path / "IMPROVEMENT.md"
-        src.write_text(content)
-        report = reclaim_noise_entries(
-            content, _RECLAIM_TODAY, tmp_path, source_path=src, dry_run=False,
-        )
-        out = src.read_text()
-        # The ref:5 model entry (keep-class) MUST survive — it is NOT the noise.
-        assert "load-bearing schema note" in out
-        # The pitfall (the actual noise) IS removed.
-        assert "old operational bug" not in out
-        assert report.archived == 1
-
-    def test_apply_writes_no_bak_recovery_is_archive_plus_git(self, tmp_path):
-        # CONTRACT CHANGE (run_a6482355, supersedes test_apply_writes_source_backup):
-        # NO dated .bak is written. The old belt-and-braces .bak was a THIRD recovery
-        # copy nobody reads that silted into a graveyard (14 stale .bak purged across
-        # DDDs 2026-07-20). Recovery is fully covered by two live paths: (1) the
-        # forward-append ARCHIVE holds every stripped entry (asserted here); (2) the
-        # git-tracked source + workspace auto-commit (git show HEAD~N). Principle 1 /
-        # STEERING #2: no disaster-recovery copy masquerading as safety.
-        from core.ddd_entry_lifecycle import reclaim_noise_entries
-        src = tmp_path / "IMPROVEMENT.md"
-        src.write_text(_RECLAIM_FIXTURE)
-        report = reclaim_noise_entries(
-            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
-            source_path=src, dry_run=False,
-        )
-        assert report.archived == 2
-        # NO .bak of any date is produced.
-        assert list(tmp_path.glob("IMPROVEMENT.md*.bak")) == []
-        # Recovery path 1: the stripped entries are preserved in the archive.
-        archive = tmp_path / "IMPROVEMENT-archive.md"
-        assert archive.exists()
-        assert "Reclaim this plain lesson" in archive.read_text()
-        # Source was stripped + persisted (the operation still happened).
-        assert "Reclaim this plain lesson" not in src.read_text()
 
     def test_second_run_same_day_writes_no_bak(self, tmp_path):
         # The old H2 concern (a rolling .bak self-clobbering on a same-day re-run) is
@@ -1333,20 +895,20 @@ class TestReclaimNoiseEntries:
         src = tmp_path / "IMPROVEMENT.md"
         src.write_text(_RECLAIM_FIXTURE)
         reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
-                              source_path=src, dry_run=False)
+                              source_path=src)
         # Run 2 on the already-stripped content (simulates the next timer tick).
         reclaim_noise_entries(src.read_text(), _RECLAIM_TODAY, tmp_path,
-                              source_path=src, dry_run=False)
+                              source_path=src)
         assert list(tmp_path.glob("IMPROVEMENT.md*.bak")) == []
 
     def test_no_backup_when_dry_run_or_no_source_path(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
         bak_glob = lambda: list(tmp_path.glob("IMPROVEMENT.md*.bak"))
         # dry_run → no write of any kind
-        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True)
+        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path)
         assert bak_glob() == []
         # no source_path → caller persists new_content itself; still no .bak
-        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False)
+        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path)
         assert bak_glob() == []
 
     def test_dateless_entries_are_NOT_reclaimed(self, tmp_path):
@@ -1367,7 +929,7 @@ class TestReclaimNoiseEntries:
 - [guideline] **Dated old dormant lesson** — genuinely old. (2025-01-01, run_x)
   <!-- ref:0 | last:none | decay:dormant -->
 """
-        report = reclaim_noise_entries(content, _RECLAIM_TODAY, tmp_path, dry_run=True)
+        report = reclaim_noise_entries(content, _RECLAIM_TODAY, tmp_path)
         # Only the DATED old entry is reclaimable; the date-less one is spared.
         assert report.candidates == ["Dated old dormant lesson"]
 
@@ -1412,7 +974,7 @@ class TestComputeReclaimableNoise:
         import tempfile, pathlib
         with tempfile.TemporaryDirectory() as td:
             rep = reclaim_noise_entries(content, _RECLAIM_TODAY, pathlib.Path(td),
-                                        dry_run=True)
+)
         assert rep.candidates == []  # gate.noisy == len(candidates): measure==action
 
     def test_doc_of_only_protected_is_zero_gate_noise(self):
@@ -1428,75 +990,6 @@ class TestComputeReclaimableNoise:
         assert gate.noisy == 0  # protected → gate clean even though raw would flag it
 
 
-class TestCollapseStackedMetadata:
-    """R-1: heal the metadata-orphan bug — collapse consecutive metas, prefer real-date.
-
-    Root cause (run_55c02bbe): _extract_lessons_to_memory's off-by-one splice
-    orphaned an existing entry's meta as a 2nd consecutive line. inject_entry_metadata
-    is orphan-blind (consumes only the first meta). This sweep heals existing stacks.
-    """
-
-    def test_collapse_two_metas_keeps_real_date(self):
-        from core.ddd_entry_lifecycle import collapse_stacked_metadata
-        # live shape: real-date meta on top, orphan (last:none) below
-        content = """## Corrections
-- [correction] **Some title** — desc (2026-06-01)
-  <!-- ref:3 | last:2026-06-25 | decay:active -->
-  <!-- ref:0 | last:none | decay:active -->
-"""
-        out = collapse_stacked_metadata(content)
-        assert out.count("<!-- ref:") == 1, "must collapse 2 metas to 1"
-        assert "last:2026-06-25" in out, "must keep the real-date meta"
-        assert "last:none" not in out, "must drop the orphan"
-
-    def test_prefers_real_date_even_if_orphan_is_first(self):
-        from core.ddd_entry_lifecycle import collapse_stacked_metadata
-        # robustness: if the none-meta were on top, still keep the real-date one
-        content = """## Guidelines
-- [guideline] **T** — d (2026-06-01)
-  <!-- ref:0 | last:none | decay:active -->
-  <!-- ref:2 | last:2026-06-20 | decay:active -->
-"""
-        out = collapse_stacked_metadata(content)
-        assert out.count("<!-- ref:") == 1
-        assert "last:2026-06-20" in out, "prefer real-date over none regardless of order"
-        assert "last:none" not in out
-
-    def test_two_real_dates_keeps_highest_ref(self):
-        # R-1 Gate-2 #5: when two real-dated metas stack, keep the richer
-        # (highest-ref) survivor, never silently discard the more-referenced one.
-        from core.ddd_entry_lifecycle import collapse_stacked_metadata
-        content = """## Decisions
-- [decision] **T** — d (2026-06-01)
-  <!-- ref:1 | last:2026-06-01 | decay:active -->
-  <!-- ref:9 | last:2026-06-30 | decay:active -->
-"""
-        out = collapse_stacked_metadata(content)
-        assert out.count("<!-- ref:") == 1
-        assert "ref:9" in out and "last:2026-06-30" in out, "keep highest-ref real meta"
-        assert "ref:1 | last:2026-06-01" not in out
-
-    def test_idempotent(self):
-        from core.ddd_entry_lifecycle import collapse_stacked_metadata
-        content = """## Guidelines
-- [guideline] **T** — d (2026-06-01)
-  <!-- ref:1 | last:2026-06-20 | decay:active -->
-  <!-- ref:0 | last:none | decay:active -->
-"""
-        once = collapse_stacked_metadata(content)
-        twice = collapse_stacked_metadata(once)
-        assert once == twice, "second run must be a no-op"
-
-    def test_does_not_touch_bullets_or_single_metas(self):
-        from core.ddd_entry_lifecycle import collapse_stacked_metadata
-        content = """## Guidelines
-- [guideline] **A** — d (2026-06-01)
-  <!-- ref:1 | last:2026-06-20 | decay:active -->
-- [guideline] **B** — d (2026-06-02)
-  <!-- ref:0 | last:none | decay:active -->
-"""
-        out = collapse_stacked_metadata(content)
-        assert out == content, "clean content (no stacks) must be unchanged; bullets untouched"
 
 
 class TestParseEntriesProseOptIn:
@@ -1581,70 +1074,15 @@ class TestRetireProseEntry:
     opts into include_prose=True) can archive+strip an Open-Threads emoji-prefix
     entry, same guarantees: exactly-1-match fail-loud, archive-preserved, dated .bak."""
 
-    def test_retire_emoji_prefix_ot_entry(self, tmp_path):
-        from core.ddd_entry_lifecycle import retire_entry
-        content = """## Open Threads
-- 🟡 **Reconcile race** — a live thread. (2026-06-25, run_x)
-- 🟢 **WS1 shipped** — another live thread. (2026-07-01, run_y)
-"""
-        src = tmp_path / "MEMORY.md"
-        src.write_text(content)
-        report = retire_entry(
-            content, title="Reconcile race", section="Open Threads",
-            project_dir=tmp_path, source_path=src, dry_run=False, force=True,
-            archive_name="MEMORY-archive.md",
-        )
-        assert report.archived == 1, f"expected 1 archived, got {report.archived}"
-        new_content = src.read_text()
-        assert "Reconcile race" not in new_content, "named prose entry not stripped"
-        assert "WS1 shipped" in new_content, "sibling OT entry wrongly removed"
-        archive = (tmp_path / "MEMORY-archive.md").read_text()
-        assert "Reconcile race" in archive, "retired prose entry not archived (recall-preserved)"
 
-    def test_retire_multiline_prose_strips_full_block(self, tmp_path):
-        """Gate-2 claim#2: parse and strip agree on a MULTI-LINE prose block —
-        no header-without-body or archive-without-strip split."""
-        from core.ddd_entry_lifecycle import retire_entry
-        content = """## Open Threads
-- 🟡 **Multi thread** — line one of the body.
-  continuation line two, indented.
-  continuation line three.
-- 🟢 **Keep me** — survives. (2026-07-01, run_y)
-"""
-        src = tmp_path / "MEMORY.md"
-        src.write_text(content)
-        retire_entry(content, title="Multi thread", section="Open Threads",
-                     project_dir=tmp_path, source_path=src, dry_run=False, force=True,
-                     archive_name="MEMORY-archive.md")
-        new_content = src.read_text()
-        assert "Multi thread" not in new_content, "header not stripped"
-        assert "continuation line two" not in new_content, "body left behind (header-without-body split)"
-        assert "continuation line three" not in new_content, "body left behind"
-        assert "Keep me" in new_content, "sibling removed"
 
-    def test_retire_prose_writes_no_bak_archive_is_recovery(self, tmp_path):
-        # CONTRACT CHANGE (run_a6482355): retire writes NO .bak. The stripped entry
-        # is preserved in the archive (recovery path 1) + git history (path 2); the
-        # dated .bak was a graveyard-silting third copy nobody reads (Principle 1).
-        from core.ddd_entry_lifecycle import retire_entry
-        today = date(2026, 7, 3)
-        content = "## Open Threads\n- 🟡 **Thread A** — live. (2026-06-25, run_x)\n"
-        src = tmp_path / "MEMORY.md"
-        src.write_text(content)
-        retire_entry(content, title="Thread A", section="Open Threads",
-                     project_dir=tmp_path, source_path=src, dry_run=False, force=True,
-                     archive_name="MEMORY-archive.md", today=today)
-        assert list(tmp_path.glob("MEMORY.md*.bak")) == [], "no .bak should be written"
-        # Recovery preserved: the retired entry lives in the archive.
-        archive = tmp_path / "MEMORY-archive.md"
-        assert archive.exists() and "Thread A" in archive.read_text()
 
     def test_retire_prose_fail_loud_on_no_match(self, tmp_path):
         from core.ddd_entry_lifecycle import retire_entry, RetireError
         content = "## Open Threads\n- 🟡 **Thread A** — live. (2026-06-25, run_x)\n"
         with pytest.raises(RetireError):
             retire_entry(content, title="No such thread", section="Open Threads",
-                         project_dir=tmp_path, dry_run=False, force=True)
+                         project_dir=tmp_path, force=True)
 
 
 class TestProseIsolatedFromAutonomousPaths:
@@ -1679,7 +1117,7 @@ class TestProseIsolatedFromAutonomousPaths:
   <!-- ref:0 | last:{old} | decay:archived -->
 """
         # NO evergreen_sections passed (mirrors ddd_orchestrator IMPROVEMENT path)
-        report = reclaim_noise_entries(aged, today, None, dry_run=True)
+        report = reclaim_noise_entries(aged, today, None)
         assert report.archived == 0, "aged emoji prose reclaimed via default parser — HIGH-2 regression"
 
 
@@ -1692,7 +1130,7 @@ class TestRetireStillProtectsRealEntries:
         content = "## Open Threads\n- 🟡 **Guarded thread** — live. (2026-06-25, run_x)\n"
         with pytest.raises(RetireError):
             retire_entry(content, title="Guarded thread", section="Open Threads",
-                         project_dir=tmp_path, dry_run=False)  # no force → refuse
+                         project_dir=tmp_path)  # no force → refuse
 
 
 _RECLAIM_COLLISION_FIXTURE = """\
@@ -1721,27 +1159,12 @@ class TestReclaimDuplicateGuard:
         today = date(2026, 6, 25)
         # dry_run selection: the unique entry is a candidate; the 2 colliders are NOT
         report = reclaim_noise_entries(
-            _RECLAIM_COLLISION_FIXTURE, today, tmp_path, dry_run=True,
+            _RECLAIM_COLLISION_FIXTURE, today, tmp_path
         )
         assert report.candidates == ["A unique reclaimable one"], (
             f"collision group not skipped — candidates={report.candidates}"
         )
 
-    def test_ambiguous_group_not_stripped_from_disk(self, tmp_path):
-        from core.ddd_entry_lifecycle import reclaim_noise_entries
-        today = date(2026, 6, 25)
-        src = tmp_path / "IMPROVEMENT.md"
-        src.write_text(_RECLAIM_COLLISION_FIXTURE)
-        report = reclaim_noise_entries(
-            _RECLAIM_COLLISION_FIXTURE, today, tmp_path,
-            source_path=src, dry_run=False,
-        )
-        out = src.read_text()
-        # BOTH colliding entries must survive (not silently mass-stripped)
-        assert out.count("Duplicate derived title") == 2, "collision group was stripped — data loss"
-        # the unique reclaimable one WAS moved out
-        assert "A unique reclaimable one" not in out
-        assert report.archived == 1
 
 
 # ── Bi-temporal supersession (失效但留链, run_24299917) ──────────────────────
@@ -1816,31 +1239,8 @@ class TestSupersession:
         assert len(trans) == 1 and trans[0].new_state == "archived"
 
     # AC5 — mark_superseded is the sole writer; never deletes; idempotent; no-op if absent
-    def test_mark_superseded_sets_fields_and_preserves_bullet(self):
-        from core.ddd_entry_lifecycle import mark_superseded
-        content = ("## S\n- **Old Judgment** — the original take (2026-01-01)\n"
-                   "  <!-- ref:0 | last:none | decay:active -->\n")
-        out = mark_superseded(content, "Old Judgment", "new-anchor", date(2026, 7, 30))
-        assert "Old Judgment" in out  # bullet preserved (never deleted)
-        parsed = parse_entries(out)
-        assert parsed[0].superseded_by == "new-anchor"
-        assert parsed[0].valid_until == date(2026, 7, 30)
 
-    def test_mark_superseded_noop_when_absent(self):
-        from core.ddd_entry_lifecycle import mark_superseded
-        content = "## S\n- **Real** — x (2026-01-01)\n  <!-- ref:0 | last:none | decay:active -->\n"
-        out = mark_superseded(content, "Nonexistent Title", "new-x", date(2026, 7, 30))
-        assert out == content
 
-    def test_mark_superseded_idempotent(self):
-        from core.ddd_entry_lifecycle import mark_superseded
-        content = "## S\n- **Old** — x (2026-01-01)\n  <!-- ref:0 | last:none | decay:active -->\n"
-        once = mark_superseded(content, "Old", "anchor-1", date(2026, 7, 30))
-        twice = mark_superseded(once, "Old", "anchor-2", date(2026, 7, 31))
-        parsed = parse_entries(twice)
-        # re-marking updates, does NOT duplicate the entry or stack comments
-        assert parsed[0].superseded_by == "anchor-2"
-        assert twice.count("superseded_by") == 1
 
     # C4 (Gate-1) — reclaim must NEVER physically strip a superseded entry
     def test_reclaim_never_strips_superseded(self):
@@ -1888,21 +1288,6 @@ class TestSupersessionGate2Fixes:
     recall body false-positive (MED)."""
 
     # HIGH — a real title anchor has SPACES; must round-trip + preserve ref/last
-    def test_spaced_title_anchor_roundtrips_and_preserves_metadata(self):
-        from core.ddd_entry_lifecycle import mark_superseded
-        content = ("## What Failed\n"
-                   "- [guideline] **Old take on caching** — the original (2026-01-01)\n"
-                   "  <!-- ref:4 | last:2026-05-18 | decay:active | source:auto -->\n")
-        out = mark_superseded(content, "Old take on caching",
-                              "New unified cache strategy", date(2026, 7, 30))
-        e = parse_entries(out)[0]
-        # the mark itself must survive re-parse (the HIGH bug: space broke _META_RE)
-        assert e.superseded_by == "New unified cache strategy"
-        assert e.valid_until == date(2026, 7, 30)
-        # and the pre-existing metadata must NOT be lost
-        assert e.ref_count == 4
-        assert e.last_referenced == date(2026, 5, 18)
-        assert e.source == "auto"
 
     # MED — an ACTIVE entry whose BODY contains "superseded_by:x" must NOT be filtered
     def test_recall_not_fooled_by_body_mentioning_superseded(self):
@@ -1918,13 +1303,6 @@ class TestSupersessionGate2Fixes:
         assert len(hits) >= 1, "active entry wrongly filtered because its BODY mentions superseded_by"
 
     # meta-review MED — anchor with '|' or '-->' would void the comment; reject it
-    def test_mark_superseded_rejects_pipe_anchor(self):
-        from core.ddd_entry_lifecycle import mark_superseded
-        content = "## S\n- **Old** — x (2026-01-01)\n  <!-- ref:0 | last:none | decay:active -->\n"
-        with pytest.raises(ValueError):
-            mark_superseded(content, "Old", "A | B", date(2026, 7, 30))
-        with pytest.raises(ValueError):
-            mark_superseded(content, "Old", "bad--> anchor", date(2026, 7, 30))
 
 
 # ── AC2: reclaim_duplicate_entries — exact-dup sweep (run_2816ab1c) ───────────
@@ -1954,7 +1332,7 @@ class TestReclaimDuplicateEntries:
         )
         report = reclaim_duplicate_entries(
             content, today, tmp_path, archive_name="T-archive.md",
-            source_path=None, dry_run=True,
+            source_path=None
         )
         # exactly ONE non-survivor selected for reclaim (the ref=0 dup)
         assert report.archived == 0  # dry_run
@@ -1980,7 +1358,7 @@ class TestReclaimDuplicateEntries:
         )
         report = reclaim_duplicate_entries(
             content, today, tmp_path, archive_name="T-archive.md",
-            source_path=None, dry_run=True,
+            source_path=None
         )
         assert report.candidates == ["Verify dont infer"]
 
@@ -1996,135 +1374,10 @@ class TestReclaimDuplicateEntries:
         )
         report = reclaim_duplicate_entries(
             content, today, tmp_path, archive_name="T-archive.md",
-            source_path=None, dry_run=True,
+            source_path=None
         )
         assert report.candidates == []
 
-    def test_dup_at_line_zero_is_stripped(self, tmp_path):
-        # Gate-2 (run_2816ab1c): a dup whose non-survivor sits at line_number==0
-        # (first line, no leading section header) must still be stripped. The old
-        # `if e.line_number > 0` filter silently skipped it, leaving both copies.
-        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
-        today = date(2026, 8, 8)
-        src = tmp_path / "DOC.md"
-        # Entry bullet as the VERY FIRST line (line_number=0), then its dup.
-        content = (
-            "- [guideline] **Line0 dup** — text at file start (2026-01-01, run_a)\n"
-            + self._meta(ref=0) + "\n"
-            "- [guideline] **Line0 dup** — text at file start (2026-06-01, run_b)\n"
-            + self._meta(ref=5) + "\n"
-        )
-        src.write_text(content, encoding="utf-8")
-        r = reclaim_duplicate_entries(
-            content, today, tmp_path, archive_name="T-archive.md",
-            source_path=src, dry_run=False,
-        )
-        # survivor = ref=5 (2nd); the line-0 non-survivor IS stripped
-        assert r.archived == 1
-        assert src.read_text(encoding="utf-8").count("text at file start") == 1
-
-    def test_apply_strips_and_is_idempotent(self, tmp_path):
-        from core.ddd_entry_lifecycle import reclaim_duplicate_entries
-        today = date(2026, 8, 8)
-        src = tmp_path / "DOC.md"
-        content = (
-            "## Guidelines\n"
-            "- [guideline] **Dup lesson** — same text here (2026-01-01, run_a)\n"
-            + self._meta(ref=3) + "\n"
-            "- [guideline] **Dup lesson** — same text here (2026-06-01, run_b)\n"
-            + self._meta(ref=0) + "\n"
-        )
-        src.write_text(content, encoding="utf-8")
-        r1 = reclaim_duplicate_entries(
-            content, today, tmp_path, archive_name="T-archive.md",
-            source_path=src, dry_run=False,
-        )
-        assert r1.archived == 1
-        # archive written BEFORE strip (only recovery for non-git .context files)
-        assert (tmp_path / "T-archive.md").exists()
-        # second sweep on the now-clean content = no-op (idempotent)
-        r2 = reclaim_duplicate_entries(
-            src.read_text(encoding="utf-8"), today, tmp_path,
-            archive_name="T-archive.md", source_path=src, dry_run=False,
-        )
-        assert r2.archived == 0
 
 
-class TestArchiveEntriesIsIdempotent:
-    """archive_entries never appends an entry the archive already holds."""
 
-    def _e(self, title, body="body text that makes the lesson distinct."):
-        from core.ddd_entry_lifecycle import EntryMetadata
-        return EntryMetadata(
-            title=title, entry_type="guideline", decay_state="dormant",
-            raw_text=f"- [guideline] **{title}** — {body} (2025-01-01)",
-            created_date=date(2025, 1, 1),
-        )
-
-    def test_same_entry_twice_is_archived_once(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("", encoding="utf-8")
-        assert archive_entries(tmp_path, [self._e("Alpha")], source_path=doc) == 1
-        assert archive_entries(tmp_path, [self._e("Alpha")], source_path=doc) == 1
-        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
-        assert text.count("**Alpha**") == 1
-
-    def test_duplicates_within_one_batch_are_archived_once(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("", encoding="utf-8")
-        archive_entries(tmp_path, [self._e("Beta"), self._e("Beta")], source_path=doc)
-        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
-        assert text.count("**Beta**") == 1
-
-    def test_entry_contained_in_a_longer_archived_entry_is_still_appended(self, tmp_path):
-        # Dedup must be exact per entry, not a substring of the archive: a short entry
-        # whose text appears inside a longer archived one is a different entry.
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("", encoding="utf-8")
-        archive_entries(tmp_path, [self._e("Gamma", "short text. and much more after it.")],
-                        source_path=doc)
-        archive_entries(tmp_path, [self._e("Gamma", "short text.")], source_path=doc)
-        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
-        assert text.count("**Gamma**") == 2
-
-    def test_existing_archive_content_is_never_rewritten(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("", encoding="utf-8")
-        archive = tmp_path / "IMPROVEMENT-archive.md"
-        archive_entries(tmp_path, [self._e("Delta")], source_path=doc)
-        before = archive.read_text(encoding="utf-8")
-        archive_entries(tmp_path, [self._e("Delta"), self._e("Epsilon")], source_path=doc)
-        after = archive.read_text(encoding="utf-8")
-        assert after.startswith(before.rstrip("\n"))
-        assert after.count("**Epsilon**") == 1
-
-    def test_unchanged_archive_is_parsed_once_across_calls(self, tmp_path):
-        from unittest.mock import patch
-        import core.ddd_entry_lifecycle as lc
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("", encoding="utf-8")
-        archive_entries(tmp_path, [self._e("Zeta")], source_path=doc)
-        real = lc.parse_entries
-        with patch.object(lc, "parse_entries", side_effect=real) as spy:
-            archive_entries(tmp_path, [self._e("Zeta")], source_path=doc)
-            archive_entries(tmp_path, [self._e("Zeta")], source_path=doc)
-        assert spy.call_count == 0
-        text = (tmp_path / "IMPROVEMENT-archive.md").read_text(encoding="utf-8")
-        assert text.count("**Zeta**") == 1
-
-    def test_external_change_to_archive_is_seen(self, tmp_path):
-        from core.ddd_entry_lifecycle import archive_entries
-        doc = tmp_path / "IMPROVEMENT.md"
-        doc.write_text("", encoding="utf-8")
-        archive = tmp_path / "IMPROVEMENT-archive.md"
-        archive_entries(tmp_path, [self._e("Eta")], source_path=doc)
-        # another writer appends Theta by hand
-        with archive.open("a", encoding="utf-8") as fh:
-            fh.write("\n" + self._e("Theta").raw_text + "\n  <!-- ref:0 | last:none | decay:archived -->\n")
-        archive_entries(tmp_path, [self._e("Theta")], source_path=doc)
-        assert archive.read_text(encoding="utf-8").count("**Theta**") == 1

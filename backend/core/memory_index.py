@@ -1,13 +1,10 @@
 """MEMORY.md parsing + BM25 keyword scoring for recall.
 
-ARCHITECTURE (2026-08-14): live MEMORY.md is ALWAYS fully injected — there is
-NO in-prompt index, NO selective/section-scored injection, NO L0/L1 tiering.
-The old 3-layer "L0 Compact Index / L1 Section Selection" system and its
-generator functions (generate_memory_index / keyword_relevance /
-inject_index_into_memory / extract_index_from_memory) were DELETED. Size is
-bounded on the WRITE side (distillation caps + the size-valve archiver), not by
-injection-time section dropping. Recall is keyword-only — the vector leg was
-removed the same day.
+ARCHITECTURE: there is NO in-prompt index and NO L0/L1 tiering (the generator
+functions were DELETED 2026-08-14). Injection is not this module's job any more:
+``core.memory_injection.select_context_file`` puts MEMORY.md in the prompt whole when
+it fits, otherwise by query-free whole-entry selection (CDF r16.6 §12). Nothing trims
+the file. Recall is keyword-only.
 
 ARCHIVE REACHABILITY — several routes reach ``.context/*-archive*.md``, and the
 recurring defect here is not naming the wrong one, it is writing a CLOSED list or a
@@ -64,9 +61,6 @@ Public symbols:
 - ``parse_memory_sections``        — Split MEMORY.md into named sections
 - ``extract_body_without_index``   — Strip a legacy index block (still stripped
                                       on read; no longer generated)
-- ``select_memory_sections``       — DEGRADED pass-through (returns the full
-                                      body; kept as a contract-lock guard so a
-                                      selective-mode regression is caught by tests)
 - ``MEMORY_INDEX_START`` / ``MEMORY_INDEX_END`` — legacy block markers (used only
                                       to strip a legacy block, not to generate one)
 """
@@ -116,11 +110,6 @@ ACTIVE_SECTIONS = MEMORY_ACTIVE_SECTIONS
 # English body silently omitted the whole Principles section).
 ALWAYS_LOAD_SECTIONS = set(MEMORY_EVERGREEN_SECTIONS)
 
-# Inert default retained only as select_memory_sections' now-inert max_tokens
-# param default (MEMORY.md is ALWAYS full-injected — 2026-08-14; no selective
-# mode). Kept because that function is a live contract-lock guard (its tests
-# assert it returns the full body); its signature default must resolve.
-DEFAULT_MAX_TOKENS = 50_000
 
 # Prefix patterns: derived from single source of truth
 SECTION_KEY_PREFIX = {
@@ -541,7 +530,7 @@ def _get_session_recall(db_path: Path) -> object:
     """Return a cached SessionRecall instance for the given DB path.
 
     Avoids re-creating the object (and its sqlite connections) on every
-    ``select_memory_sections()`` call.
+    past-session recall (``recall_multi``).
     """
     key = str(db_path)
     if key not in _session_recall_cache:
@@ -682,46 +671,6 @@ def _extract_superseded_keys(memory_content: str) -> set[str]:
 # ── Memory Injection ──────────────────────────────────────────────────
 
 
-def select_memory_sections(
-    memory_content: str,
-    user_message: str = "",
-    session_signals: Optional[dict] = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
-    context_percent_used: float = 0.0,
-    memory_embeddings: bool = False,
-) -> str:
-    """Assemble live MEMORY.md for system-prompt injection = the WHOLE body.
-
-    NEW ARCHITECTURE (2026-08-14, XG): live MEMORY.md is ALWAYS full-injected
-    regardless of size — there is NO selective mode, NO keyword/section scoring,
-    NO in-prompt index, NO channel-minimal, NO adaptive-budget truncation. Size is
-    bounded UPSTREAM by the size-valve (distillation_hook._enforce_size_valve:
-    body >30K → archive lowest-value operational to .context until ≤25K), and
-    archived content stays reachable via recall by SEVERAL routes — see this module's
-    header for the enumeration and the code as the authority; do not restate a closed
-    list here. So the injector's ONLY job is: return the body.
-
-    This deliberately RETIRED (old selective machinery, all removed): body-BM25
-    section selection, _channel_minimal, _adaptive_max_tokens, EntryRefs 1-hop,
-    SessionRecall injection, the in-prompt index block, and the "[Not loaded …]"
-    manifest. Their value is now carried by full-injection (nothing is excluded to
-    announce) + recall (past sessions / archived sections retrieved on demand).
-
-    Channel privacy is enforced UPSTREAM, not here: group/non-owner sessions drop
-    MEMORY.md wholesale via context_directory_loader.WHOLE_FILE_PRIVATE, so this
-    function is never reached for them (the old is_channel branch was redundant).
-
-    The extra params (user_message / session_signals / max_tokens /
-    context_percent_used / memory_embeddings) are retained ONLY for call-site +
-    test signature compatibility and are now INERT.
-
-    Returns the full MEMORY body (index block stripped if a legacy file still
-    carries one), or "" if empty.
-    """
-    body = extract_body_without_index(memory_content)
-    return body if body.strip() else ""
-
-
 # ── Index Injection / Extraction ──────────────────────────────────────
 
 
@@ -793,7 +742,7 @@ def extract_body_without_index(content: str) -> str:
 # ── Temporal Validity (P2) ───────────────────────────────────────────
 # HTML comment metadata on MEMORY.md entries:
 #   <!-- valid_from: YYYY-MM-DD | superseded_by: KEY | confidence: high -->
-# Superseded entries score 0.1x weight in select_memory_sections().
+# Superseded entries score 0.1x weight in recall scoring.
 
 _TEMPORAL_RE = re.compile(
     r"<!--\s*valid_from:\s*(\S+)\s*\|\s*superseded_by:\s*(\S+)\s*\|\s*confidence:\s*(\S+)\s*-->"

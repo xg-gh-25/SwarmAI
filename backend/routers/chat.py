@@ -480,6 +480,7 @@ async def chat_stream(request: Request):
                 terminal_context=chat_request.terminal_context.model_dump() if chat_request.terminal_context else None,
                 client_id=chat_request.client_id,
                 project_agent=project_agent_pin,
+                input_origin="person",
             )
             async for msg in _turn_stream:
                 if captured_session_id is None:
@@ -1433,6 +1434,7 @@ async def delete_session(session_id: str):
         session = await session_manager.get_session(session_id)
         if session:
             from core.session_hooks import HookContext
+            from core.session_inputs import session_input_ids
             message_count = await db.messages.count_by_session(session_id)
             context = HookContext(
                 session_id=session_id,
@@ -1441,6 +1443,7 @@ async def delete_session(session_id: str):
                 session_start_time=session.created_at,
                 session_title=session.title,
                 deleting=True,
+                input_event_ids=session_input_ids(session_id),
             )
             _get_router()  # Ensure initialized
             if _lifecycle_manager:

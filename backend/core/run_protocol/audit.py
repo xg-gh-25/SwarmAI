@@ -488,6 +488,7 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                "unclosed_high": [row["canonical_id"] for row in findings if push_effect(row)],
                # direct: the user's words are the requirement (no REQUIREMENTS doc)
                "requirement": contract.get("requirement"),
+               "ddd_stale_since": contract.get("ddd_stale_since"),
                "retained": [dict(row) for row in retained],
                "manual": dict(manual) if manual else None,
                "title": title or run_id,
@@ -721,6 +722,9 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         lines += ["", f"Review answers: {relayed} of {total} relayed by the agent "
                   "(no host hook recorded them)"]
     lines += ["", "Full machine-readable audit is stored with this run."]
+    if details.get("ddd_stale_since"):
+        lines += ["", "DDD status: this run started with the prior DDD because S3 for "
+                  f"{_text(details['ddd_stale_since'], 100)} was still processing; the run did not wait."]
     if details.get("validation"):
         lines += [""] + [str(line) for line in details["validation"]]
     for repo, commands in (details.get("test_reports") or {}).items():

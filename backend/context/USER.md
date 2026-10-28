@@ -3,7 +3,7 @@
 
 # User — About You
 
-> **What this file is:** USER.md is context-file slot 4 of SwarmAI's 11 governed context
+> **What this file is:** USER.md is context-file slot 4 of SwarmAI's 12 governed context
 > files — your profile, so I can personalize how I help. It's YOURS: edit it directly, or
 > just tell me things and I'll fill it in. Facts about YOU live here; standing rules about
 > how I should WORK go in STEERING.md; tool/environment setup goes in TOOLS.md.

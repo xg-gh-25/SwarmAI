@@ -59,7 +59,7 @@ class TestW1TranscriptIndexRemoved:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         conn.close()
         assert names == set(), names
-        assert version == 15   # v13 dropped them; v14, v15 chain on
+        assert version == 17   # v13 dropped them; v14-v17 chain on
 
 
 # ── W2: select_memory_sections applies temporal weight ───────────────
@@ -112,84 +112,9 @@ class TestW2TemporalWeightInScoring:
 # ── W3: distillation_hook adds valid_from ────────────────────────────
 
 
-class TestW3DistillationTemporalMetadata:
-    """Verify distillation output includes temporal metadata."""
-
-    def test_format_enriched_entry_has_temporal(self):
-        """_format_enriched_entry output must include valid_from comment."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        entry = DistillationTriggerHook._format_enriched_entry(
-            text="**New decision** — something important",
-            date_str="2026-04-11",
-            source_file="DailyActivity/2026-04-11.md",
-            commit_hash="abc1234",
-        )
-        assert "<!-- valid_from: 2026-04-11" in entry
-        assert "superseded_by: null" in entry
-        # Original content preserved
-        assert "New decision" in entry
-        assert "Detail:" in entry
-
-    def test_format_enriched_entry_no_double_metadata(self):
-        """Calling twice with same date should not produce duplicate metadata."""
-        from hooks.distillation_hook import DistillationTriggerHook
-
-        entry = DistillationTriggerHook._format_enriched_entry(
-            text="**Test** — test",
-            date_str="2026-04-11",
-            source_file="DailyActivity/2026-04-11.md",
-        )
-        # Count valid_from occurrences
-        assert entry.count("valid_from:") == 1
 
 
 # ── W4: memory_health uses mark_entry_superseded ─────────────────────
-
-
-class TestW4MemoryHealthSupersede:
-    """Verify memory_health marks stale decisions instead of removing."""
-
-    def test_apply_report_uses_supersede(self):
-        """_apply_report stale_decisions path should call mark_entry_superseded."""
-        import inspect
-        from jobs.handlers.memory_health import _apply_report
-        source = inspect.getsource(_apply_report)
-        assert "mark_entry_superseded" in source, \
-            "_apply_report must use mark_entry_superseded for stale decisions"
-
-    def test_apply_report_parses_key_from_prefix(self, tmp_path):
-        """_apply_report should extract entry key from entry_prefix via fuzzy match."""
-        from jobs.handlers.memory_health import _apply_report
-
-        # Create a MEMORY.md with a known entry
-        memory = tmp_path / "MEMORY.md"
-        memory.write_text(
-            "## Key Decisions\n\n"
-            "- [KD07] 2026-04-01 Single-agent with role-switching\n",
-            encoding="utf-8",
-        )
-
-        # LLM report uses entry_prefix (not key) — this is the real schema
-        report = {
-            "stale_memories": [],
-            "resolved_threads": [],
-            "archived_capabilities": [],
-            "stale_decisions": [
-                {"entry_prefix": "2026-04-01: Single-agent with role-switching",
-                 "reason": "contradicted by new multi-agent approach"}
-            ],
-            "capability_gaps": [],
-            "stale_corrections": [],
-        }
-
-        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
-            actions = _apply_report(report, memory.read_text(), "")
-
-        # Should have found and marked KD07
-        superseded_action = [a for a in actions if "Superseded" in a or "KD07" in a]
-        assert len(superseded_action) > 0, \
-            f"Expected KD07 to be marked superseded, got actions: {actions}"
 
 
 # ── W5: prompt_builder RecallEngine gets additional_stores ───────────

@@ -7,8 +7,8 @@ Contract: scripts/_probe_kit.py. Subcommands:
              and the three default skills; creating the same name again is refused
   noise      the noise check tells a healthy doc from one full of stale notes,
              and does not count dormant principles as noise
-  cultivate  a session lesson written into a project lands only inside that project,
-             is not written twice, and a path that escapes the project is refused
+  cultivate  a session lesson is handed to CDF with a stable slot and project
+             snapshot, and no governed project file is written directly
   bootstrap  a new brain's first entries (the fixture repo repos/tokensign, surveyed,
              then a fixed entries file) are written typed, tainted and in their
              sections, the P6 knowledge check passes, an entry without its required
@@ -128,42 +128,47 @@ def noise(negative: bool) -> int:
 
 # ── cultivate ─────────────────────────────────────────────────────────────────
 
-def _cultivate_holds(target_doc_escape: str) -> tuple[bool, str]:
+def _cultivate_holds(accept: bool) -> tuple[bool, str]:
     from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+    from core.ingestion.api import EnqueueResult
 
     with tempdir() as d:
         project = d / "Projects" / "Demo"
-        ddd_write_path(project, "IMPROVEMENT.md").write_text(
-            "# Improvement\n\n## What Worked\n\n", encoding="utf-8")
+        doc = ddd_write_path(project, "IMPROVEMENT.md")
+        doc.write_text("# Improvement\n\n## What Worked\n\n", encoding="utf-8")
         outside = d / "AGENT.md"
         outside.write_text("# outside the project\n", encoding="utf-8")
-        lesson = "Write config files through an atomic rename so readers never see torn state."
+        before_doc, before_outside = doc.read_bytes(), outside.read_bytes()
+        calls = []
 
-        def prop(doc):
-            return CultivationProposal(target_doc=doc, target_section="What Worked",
-                                       content=lesson, source_run_id="probe", confidence=0.9)
-        first = apply_to_ddd(prop("IMPROVEMENT.md"), project)
-        second = apply_to_ddd(prop("IMPROVEMENT.md"), project)
-        escape = apply_to_ddd(prop(target_doc_escape), project)
-        if first not in ("applied", "created_section"):
-            return False, f"a lesson was not written into the project ({first})"
-        if second != "duplicate":
-            return False, f"the same lesson was written twice ({second})"
-        if escape in ("applied", "created_section") or lesson in outside.read_text(encoding="utf-8"):
-            return False, f"a path outside the project was written ({escape})"
+        def enqueue(*args, **kwargs):
+            calls.append((args, kwargs))
+            return EnqueueResult(status="queued" if accept else "rejected",
+                                 candidate_id="cand" if accept else None)
+
+        lesson = "Write config files through an atomic rename so readers never see torn state."
+        proposal = CultivationProposal(
+            target_doc="IMPROVEMENT.md", target_section="What Worked",
+            content=lesson, source_run_id="probe", confidence=0.9)
+        with mock.patch("core.ingestion.api.enqueue", side_effect=enqueue):
+            first = apply_to_ddd(proposal, project)
+            second = apply_to_ddd(proposal, project)
+
+        if first != "queued" or second != "queued" or len(calls) != 2:
+            return False, "the compatibility entry point did not enqueue both attempts"
+        if calls[0][0][2:] != calls[1][0][2:]:
+            return False, "a replay changed its semantic slot or payload"
+        if calls[0][1]["project_snapshot"].get("project") != "Demo":
+            return False, "the candidate lost its project snapshot"
+        if doc.read_bytes() != before_doc or outside.read_bytes() != before_outside:
+            return False, "apply_to_ddd mutated a governed file directly"
     return True, ""
 
 
 def cultivate(negative: bool) -> int:
-    from core import ddd_cultivation as dc
-
-    import itertools
-    counter = itertools.count()
-
-    def broken():  # duplicate detection switched off: every signature is unique
-        with mock.patch.object(dc, "content_signature", lambda line: f"sig{next(counter)}"):
-            return _cultivate_holds("../../AGENT.md")
-    return verdict("DDD_CULTIVATE", negative, lambda: _cultivate_holds("../../AGENT.md"), broken)
+    return verdict("DDD_CULTIVATE", negative,
+                   lambda: _cultivate_holds(True),
+                   lambda: _cultivate_holds(False))
 
 
 # ── bootstrap ─────────────────────────────────────────────────────────────────

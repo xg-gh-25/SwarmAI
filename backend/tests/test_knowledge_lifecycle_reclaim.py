@@ -62,44 +62,6 @@ def hook():
     return ContextHealthHook()
 
 
-class TestKnowledgeReclaim:
-    def test_old_disposable_stripped(self, hook, ws):
-        """AC3/AC5: an old dormant guideline in a NON-evergreen section is
-        archived+stripped."""
-        hook._run_knowledge_lifecycle(ws)
-        content = (ws / ".context" / "KNOWLEDGE.md").read_text(encoding="utf-8")
-        assert "old disposable note" not in content, (
-            "old non-evergreen note should be archived+stripped"
-        )
-
-    def test_stripped_entry_archived(self, hook, ws):
-        """AC3: stripped entry preserved in KNOWLEDGE-archive.md (reversible)."""
-        hook._run_knowledge_lifecycle(ws)
-        archive = ws / ".context" / "KNOWLEDGE-archive.md"
-        assert archive.exists(), "KNOWLEDGE-archive.md should be created"
-        assert "old disposable note" in archive.read_text(encoding="utf-8")
-
-    def test_evergreen_reference_protected(self, hook, ws):
-        """AC5 (the CRITICAL Gate-1 finding): a load-bearing reference entry in
-        an evergreen section is NEVER stripped, even when old+dormant+guideline."""
-        hook._run_knowledge_lifecycle(ws)
-        content = (ws / ".context" / "KNOWLEDGE.md").read_text(encoding="utf-8")
-        assert "load bearing arch fact" in content, (
-            "evergreen Architecture Overview entry must NOT be stripped"
-        )
-
-    def test_fresh_entry_kept(self, hook, ws):
-        """AC5: fresh entry within grace is kept."""
-        hook._run_knowledge_lifecycle(ws)
-        content = (ws / ".context" / "KNOWLEDGE.md").read_text(encoding="utf-8")
-        assert "fresh disposable note" in content
-
-    def test_no_double_archive(self, hook, ws):
-        """Regression guard (same class as MEMORY): reclaim is the single archive
-        authority — a stripped entry appears exactly once in the archive."""
-        hook._run_knowledge_lifecycle(ws)
-        archive = (ws / ".context" / "KNOWLEDGE-archive.md").read_text(encoding="utf-8")
-        assert archive.count("old disposable note") == 1
 
 
 class TestKnowledgeMdLock:

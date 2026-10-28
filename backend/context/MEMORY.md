@@ -18,17 +18,17 @@ _Curated long-term memory. Distilled from DailyActivity, not raw logs._
 2. **Curated, not raw.** Only distilled, high-value content belongs here. Session details, transient context, and one-off observations stay in DailyActivity.
 3. **Verify before trusting.** Memory can be stale. Before promoting claims from DailyActivity, verify against workspace files and recent activity. Stale memory that gets distilled becomes a self-reinforcing false belief.
 4. **Recency over volume.** When sections grow long, archive resolved items and compress old entries. A lean memory is more useful than a complete one.
-5. **Open Threads are live.** Check them every session start. Increment report counts. Promote recurring issues. Resolve what's done. Stale open threads erode trust.
-6. **COEs are mandatory.** Any problem investigated across 2+ sessions or reported 3+ times gets a COE entry. COEs auto-promote to P0.
+5. **Open Threads are live.** Check them every session start. Resolve what's done. Stale open threads erode trust. Open COEs are not written here: the session briefing lists them as P0 from the COE signals, and a COE's thread here follows that state.
+6. **COEs are mandatory.** Any problem investigated across 2+ sessions or reported 3+ times gets a COE entry. An open COE is a P0 item in the session briefing.
 7. **Corrections are permanent.** Never delete a correction — they're the most valuable entries. Archive to a summary only when the pattern is fully internalized.
 
 ## How This Works
 
-**Two-tier memory model:**
-- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw daily logs. Written during every session.
-- **MEMORY.md** (this file) — Curated long-term memory. Distilled from DailyActivity.
+**Memory model:**
+- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Working memory: what each session did, written as it happens.
+- **MEMORY.md** (this file) — Long-term memory. Every entry is written by the knowledge flow (CDF): what I learn in sessions, runs and your instructions is submitted as a candidate, judged, and added here whole, or not at all. Recurring themes, key decisions, lessons and corrections earn a place; one-off observations stay in DailyActivity.
 
-**Distillation:** At every session close (UNDISTILLED_THRESHOLD=0), I review and promote recurring themes, key decisions, lessons learned, and corrections. One-off observations stay in DailyActivity or get archived.
+**What reaches each session:** this file, whole when it fits its budget; otherwise its most load-bearing entries, each whole, and the rest stay here, reachable by recall. Nothing is cut or pruned to fit.
 
 ## Recent Context
 

@@ -879,16 +879,16 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | 没有专属 DDD 的 Cognition | `Knowledge/Learned/repos/<slug>.md` 或 `domains/<slug>.md`（文件名按 §5.10 的封闭列表和 slug 规则确定），section 按下面的 DDD 段矩阵 |
 | 被污染、目的地是每轮注入文件的 Cognition | user → `Knowledge/Learned/_common/user.md`；agent → `_common/agent.md`；world 全局 → `_common/world.md`；段沿用原目的地的段名，带 taint（§9.1） |
 
-**DDD 段矩阵**：段名取自 `backend/templates/ddd/*.md`。
+**DDD 段矩阵**：段名取自每个 brain 共用的骨架 `backend/templates/ddd-skeleton/*.md`（新 brain 设计 §5.11 C1、C2）。
 
 | topic \ type | principle / model | decision | guideline / process | pitfall / correction |
 |---|---|---|---|---|
 | decision | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions | `PROJECT.md` § Recent Decisions |
-| product | `PRODUCT.md` § Vision（principle）/ § What Makes … Different（model） | `PRODUCT.md` § Strategic Priorities | `PRODUCT.md` § Success Criteria | `PRODUCT.md` § Non-Goals |
-| architecture | `TECH.md` § Architecture（principle）/ § Key Subsystems (architecture shape)（model） | `TECH.md` § Architecture | `TECH.md` § Conventions | `TECH.md` § Runtime Traps |
+| product | `PRODUCT.md` § Vision（principle）/ § What Makes It Different（model） | `PRODUCT.md` § Strategic Priorities | `PRODUCT.md` § Success Criteria | `PRODUCT.md` § Non-Goals |
+| architecture | `TECH.md` § Architecture（principle）/ § Key Subsystems（model） | `TECH.md` § Architecture | `TECH.md` § Conventions | `TECH.md` § Runtime Traps |
 | lesson | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Worked | `IMPROVEMENT.md` § What Failed |
 
-- 这张矩阵的唯一真实来源是契约，文档里这一份是从契约生成的。测试要求矩阵里每个段名都和模板里的标题**逐字相同**（只做空白归一化），模板标题一旦改动，测试就会变红。DDD 模板也只保留一个来源 `backend/templates/ddd/*.md`：`swarm_workspace_manager.py:379-467` 里内嵌的那份 `DDD_TEMPLATES` 改成从这些文件读取。测试检查矩阵里的每个段在模板里都存在。
+- 这张矩阵的唯一真实来源是契约，文档里这一份是从契约生成的。测试要求矩阵里每个段名都和模板里的标题**逐字相同**（只做空白归一化），模板标题一旦改动，测试就会变红。段名的唯一来源是骨架 `backend/templates/ddd-skeleton/*.md`，`validate_ddd_matrix` 默认读它；骨架标题改了而矩阵没跟着改，测试变红。`backend/templates/swarmai-seed/` 是 SwarmAI 默认项目的种子内容，不是模板。原先内嵌在 `swarm_workspace_manager.py` 的 `DDD_TEMPLATES` 已经删除。
 - 写入前解析目标文件里实际存在的标题。找不到目标段就 `DEFER missing_section`，不会自己新建段。用户的项目如果删过段，这条候选会留在审计里，看得见。
 - 层由 `layer_for(target_section, type)` 唯一决定（§7.3）。
 
@@ -1002,6 +1002,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
     - 链损坏（端点解析不出来）时，按"无生效头"处理，同时在 Need You 里出一条提示。
 - **读取侧**：命中一个被取代的单元时，把分数和命中理由转给 `active_head`，同一个链头被命中多次时取最高分。被取代的单元本身不进入输出。所以查询只匹配旧措辞时，模型看到的是当前有效的那一条，不会同时看到新旧两种说法。
 - **Library 文件**：frontmatter 里写 `ontology_types:`，可以为空。
+- **已知限制：bullet 单元是单行的**。MEMORY、DDD 和公共 DDD 的 bullet 单元，按 `ddd_entry_lifecycle._scan_entry` 读取，遇到空行就结束；写入（add，`ddd_entry_lifecycle.render_ddd_unit` 的 `_one_line`）和 refine 合并旧正文与新内容（`writer._plain_unit_body`）时，都把空白折叠成单个空格。字一个不少，但换行和列表这类多行结构会丢失。这不违反第一准则（没有语义被截断），但要求 Cognition 单元写成一条简短的主张。需要多行结构的内容走 Reference，写进 Knowledge 的整节。以后要改，必须 add 和 refine 一起改（保留非空续行并缩进，只去掉空行），并验证 `parse_units`、recall 和 §12 的注入选取都能读回多行单元；只改 refine 会让同一个文件里出现两种写法。
 - **跨项目**：不建跨项目边。相关的每个项目各写一条完整单元，共用证据根；`claim_support` 和卡 3 把它们识别为同源（§5.10）。
 
 ## 8. 写入者迁移：source 只入队，worker 是唯一的自主写入者
@@ -1025,6 +1026,7 @@ agent 调用 `"$SWARM_BACKEND_BIN" ingest submit --source remember --wait 10`。
 | 每周 Memory Health 的修改阶段（`memory_health.py:584`、`796`、`867`、`1005`、`1056`）、EVOLUTION prune 和维护（`evolution_maintenance_hook.py:422`、`866`、`950`）、context health 里的修改（`context_health_hook.py` 中写 MEMORY、EVOLUTION、KNOWLEDGE、DDD 的各处，行号由扫描器生成）、DDD 矛盾剥离、size valve 驱逐基线单元、`locked_write` 清理旧索引 | 这些都会改动已沉淀的内容，和 §13 冲突，**在阶段 B 全部关成只读**，只留下只读统计。size 控制改成只作用于 `cand:` 单元，并放进读取侧的注入预算（§12） |
 | `ddd_orchestrator` 的机械替换、`ddd_maturity` 的成熟度注释 | 首版改成只读，不再写入 |
 | DDD 漂移自动修正（`ddd_drift_fix.apply_fix`，由每周的 `ddd_self_audit` 触发） | 改成 S4 的一部分，修正作为 **refine 单元**入队：`ddd_drift_fix` 仍然按三种固定语法（`drop_condition`、`swap_superseded_path`、`swap_code_value`）确定性地算出新文本，但不再改文件。新文本作为一条完整的新单元，`relation_hint` 为 `supersedes` 指向原条目的锚点；证据是被引用的完成条目、文件头的 SUPERSEDED 行或 HEAD 源文件的 `file_revision` / `commit` 根，因此通常带 taint，按 §9 写进项目 DDD。卡 3b 校验：旧条目的每条主张都要保留，只有修正类型声明的那一处（等待条件、旧路径、旧值）由证据判为 `refute`。原条目不改，读取侧沿 `supersedes` 看到新的那条。原来的直接替换、备份目录和 `undo_drift_fix` 删掉：用户要撤销，用 `governed_edit` 或墓碑；`.artifacts/ddd-drift-fixes.jsonl` 只作为"用户撤销过的修正不再提出"的去重依据保留 |
+| MEMORY `## Open Threads` 里 COE thread 的自动开、合并、关闭（distillation 的 `_update_open_threads`），以及 briefing 按 COE Registry 状态文字计数 | 删除写入者。COE 的开 / 关是实时状态，不是认知，不写进 MEMORY。`core/coe_threads.py` 在读取时计算：以 MEMORY `## COE Registry` 里条目的状态（🔍 Investigating / ✅ Resolved）为基线，叠加 DailyActivity 中未标 `distilled` 的那些天的 `coe_signal`，按日期顺序折叠，只按 `coe_key` 匹配。切换后 distillation 不再运行，Registry 成为冻结的基线，之后每一天都在叠加部分。session briefing 把开着的 COE 列为 P0；Open Threads 里已有的同 key thread 跟随这个状态（关了就不显示，原文不改）；摘要器复用开着的 COE 标题以保持同一个 key。叠加部分按 DailyActivity 的 `.md`（在原目录或 `Knowledge/Archives/`）上的 `distilled` 标记划界；`.md` 归档一年后删除，所以一年没有任何信号的 COE 不再显示。Registry 的旧写入者（`merge_coe_section`、`_write_coe_registry`）和把 COE 信号当 pitfall 入队的那段一并删除。Open Threads 只剩用户手写的条目：`memory_health` 的 `_apply_report` / `_resolve_open_thread` 等改写函数删除（stage B 已经只做诊断）；`context_health_hook` 不再把已解决的条目移走，改为在 health findings 里报告"N 条已解决超过 7 天"，由用户自己整理 |
 | DailyActivity、checkpoint、JobResults、Signals、Reports | 它们是日志，不进 Inbox。新的 checkpoint 写到恢复文件，不再写进 DailyActivity |
 
 **写入者的边界靠 materializer 保证**（§3.2）。AST 扫描证明不了"所有写入点都找到了"，因为路径是在运行时拼出来的。所以分两层来做：
@@ -1284,14 +1286,14 @@ ingestion 是认知系统的核心流程，所以放在这里，不另开新页�
 
      | 指标 | 单位 | 分母 | 门槛（下界） | 预注册分母 | 需要对的数 |
      |---|---|---|---|---|---|
-     | 写入精确率 | 单元 | 判为写入的单元 | ≥ 93% | 210 | 202 |
+     | 写入精确率 | 单元 | 判为写入的单元 | ≥ 88%（r16.10，原 93%） | 220 | 202 |
      | 该写的召回率 | 单元 | 标签为该写的单元 | ≥ 75% | 180 | 145 |
      | 项目专属内容送到正确的 DDD | 单元 | 标签为项目专属的单元 | ≥ 80% | 150 | 129 |
      | D1 拦住缺 why 的条目 | 单元 | 标签为缺 why 的决定类条目 | ≥ 90% | 130 | 123 |
      | 重复且证据根相同 → `already_exists` | 对 | 标签为重复、证据根相同的对 | ≥ 90% | 90 | 86 |
      | 重复但有新的独立证据根 → `reinforced` | 对 | 标签为重复、带新独立根的对 | ≥ 90% | 90 | 86 |
 
-     预注册分母是保守取值：在真实准确率比门槛高 4 到 8 个点的前提下（精确率 97%、召回率 83%、路由 88%、D1 96%、重复 97%），通过的概率约为 82%、84%、81%、85%、87%。满足同样功效的最小分母更小一些，约为 185、167、135、116、76。计算脚本是 `scripts/ingestion_holdout_size.py`，它的输出由测试固定下来。作为参照：全对时，要证明 93% 至少需要 42 个样本，证明 90% 至少需要 29 个；现有的 15 篇 backflow 即使全对，下界也只有约 82%。缺 why 的条目和重复对这两类，真实样本不够时，可以通过改写真实条目来补，但补的部分不能超过分母的一半，并且单独报告。
+     写入精确率的门槛在 r16.10 由 93% 降到 88%（§14.1 T5）：多数票标签约 4.2% 出错，93% 在这个噪声下测不出；按真实 97%、噪声 4.2% 计算，220 个样本中至少 202 个一致时下界达到 88%，通过概率约 81%。其余指标的标签噪声还没测，下面的数字按无噪声计算。预注册分母是保守取值：在真实准确率比门槛高 4 到 8 个点的前提下（精确率 97%、召回率 83%、路由 88%、D1 96%、重复 97%），通过的概率约为 82%、84%、81%、85%、87%。满足同样功效的最小分母更小一些，约为 185、167、135、116、76。计算脚本是 `scripts/ingestion_holdout_size.py`，它的输出由测试固定下来。作为参照：全对时，要证明 93% 至少需要 42 个样本，证明 90% 至少需要 29 个；现有的 15 篇 backflow 即使全对，下界也只有约 82%。缺 why 的条目和重复对这两类，真实样本不够时，可以通过改写真实条目来补，但补的部分不能超过分母的一半，并且单独报告。
    - **"被污染的 rule 不会进入每轮注入的文件"不做抽样统计**，因为有限样本证明不了"等于 0"。这一条改成安全不变量来保证：对形状、信任级别和去向的全部组合做全枚举测试和属性测试，并做 mutation 检查，要求零违规。
 3a. **holdout 标注协议的补充**（r15.2，阶段 A 实际执行中发现）：
    - **排除自身来源**：从语料里抽出的候选（DDD 条目、EVOLUTION 记录），它在语料里的原文就是它自己。标注者和引擎都必须把这一条排除在比对之外（引擎用 `--exclude-origin`），否则会被判成"已存在"。阶段 A 第一轮标注没有这条说明，209 条 DDD/EVOLUTION 候选里有 132 条被三方一致判成"已存在"，重标后 DDD 的"该写"从 25 条变成 93 条。
@@ -1387,7 +1389,7 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 
 ### 14.1 调优待办（单独窗口做；用户 2026-10-27 决定先完成 E2E，接受跳过 go/no-go 的风险）
 
-阶段 A 的离线判定还没完成。E2E 先按当前 prompt v3 打通；在下面这些项目做完、go/no-go 通过之前，**不 rebuild 上线**。
+阶段 A 的离线判定没有做完，**也不再是上线的前提**（r16.11，用户 2026-10-28）：一份离线 holdout 一次做不准（T5：标签本身约 4% 出错；旧 holdout 的数据随临时目录丢失，而且是 v1 提取方式）。改为上线后在真实数据上批量评测、陆续调整，见 §14.2。下表 T1、T3 转为 §14.2 的评测内容；T2、T4、T6、T7 照旧。
 
 | # | 待办 | 现状 / 入口 |
 |---|---|---|
@@ -1395,9 +1397,45 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
 | T2 | 在 dev 上调 prompt | 基线：用户在自己终端跑的 2b（prompt v2）。当前 v3给卡 1 加了来源上下文，并明确了"有依据"的定义。原因是冒烟测试里 4/5 被判成"推测" |
 | T3 | holdout 在线回放一次，打分 | `cdf_go_no_go.py`，按 §14 的门槛判定；评分脚本已经用合成数据验证过 |
 | T4 | 42 条 shape 分歧 | 暂时采用 另一个模型 的裁定，标为模型裁定；重标时一并复核 |
-| T5 | 标签噪声和精确率门槛 | 多数票的 should_write 错误率约 4.2%，集中在 2 比 1 的条目。**在 T1 之前**，先在 `ingestion_holdout_size.py` 加标签噪声参数，算出 4.2% 噪声下 93% 精确率下界能否测出；测不出就先改门槛或标注方式 |
+| T5 | 标签噪声和精确率门槛 | 多数票的 should_write 错误率约 4.2%，集中在 2 比 1 的条目。**在 T1 之前**，先在 `ingestion_holdout_size.py` 加标签噪声参数，算出 4.2% 噪声下 93% 精确率下界能否测出；测不出就先改门槛或标注方式。**结果（r16.10，`tests/test_cdf_holdout_noise.py` 固定）：测不出。** 模型：每条多数票标签以概率 e 出错，与判官对错无关，holdout 看到的一致率是 p(1−e)+(1−p)e。e=4.2%、真实精确率 97% 时看到的是 93.05%，n=210 的通过概率只有 4%；判官全对也只能看到 95.8%，n=210 时任何真实精确率都到不了 80% 功效，判官全对时约需 450 个。n=210 能容忍的噪声在 0.1% 精度上是 0。其余指标同样掉到 19%–50%。n=210、e=4.2% 时能以 80% 功效证明的精确率门槛约 88%。**决定（用户，2026-10-28）：门槛降到 88%**，预注册分母改为 220、需要对 202 个。其余指标在同样噪声下功效也会下降，它们的标签噪声在 T1 重标时一并测出后再定 |
 | T6 | 各 source 的"该写"比例 | E2E 上线后按 source 统计；低于 5% 的 source 要改提取方式 |
 | T7 | 卡 3 / 卡 3b 的真实判官质量 | dev 冒烟只走到卡 1，卡 3 和 3b 还没有真实回复 |
+
+### 14.2 上线后评测：每个结果都留记录（r16.11）
+
+**目标**：上线后 CDF 的每一个判断都能事后拿出来批量评测，评测结果再用来调 prompt 和规则。评测是离线的，从不在写入路径上（§10 的原则不变）。
+
+**每个结果的记录在哪里**（任一时刻每条只在一处）：
+
+| 结果 | 前 30 天 | 30 天后 | 保留 |
+|---|---|---|---|
+| 提取阶段被拒的单元（`invalid_units`） | `extraction_attempts` | 同左 | 180 天 |
+| 判官阶段的每个结果：写入、拒绝、已存在、强化、延后、失败、过期 | `ingestion_units` + `ingestion_inbox` | `ingestion_eval_log`（清理时整条移入） | 180 天 |
+
+- `ingestion_eval_log` 每行一个单元：`unit_id`、`at`（候选创建时间）、`source`、`state`、`reason`，以及一个 `record` JSON：候选原文（payload）、lane、单元 kind、提取 pass、项目、去向、每张卡的回答、版本向量、尝试次数和错误类。写入成功的也存：只看判不过的，测不出"写进去的靠不靠谱"。
+- 移入发生在 `cleanup_expired` 删除候选的同一个事务里，所以不会有一条既在原表又在存档里，也不会两边都没有。
+- 180 天的清理放在同一个 maintenance 步骤里，`extraction_attempts` 一并按 `started_at` 清理（之前它一直不删）。
+- 撤回（§13）只改受管文件，不改这些记录，存档沿用。
+
+**导出**：`ingest eval-export --since YYYY-MM-DD [--until …] --out <file>`，只读，把三处合并成一个 JSONL，每行带 `stage`（`extraction` / `judge`）和 `origin`（`live` / `archive`）。批量评测读这个文件。
+
+**批量评测**：`backend/scripts/cdf_batch_eval.py`，离线、手动运行，五步，结果都在一个评测目录里：
+
+1. `sample`：读 eval-export 的 JSONL，按（阶段、source、结果组）分层，每层最多抽 N 条（默认 15），固定种子。结果组：`write`（written）、`reinforce`、`exists`（already_exists）、`reject`（其他拒绝）、`hold`（延后、失败、过期）、`extract_reject`（提取阶段被拒）。`items.jsonl` 只给标注者看原文、source 和候选项目，不给系统的结果；系统结果放在 `key.jsonl`；`sample.json` 记下输入文件哈希、种子和每层的总数与抽样数。
+2. `label --model <Bedrock 模型> --labeler <名字> --max-usd <上限>`：一个标注者把每条标一遍，问三件事：该不该写（下次遇到类似情况会不会改变做法，并且脱离原对话也读得懂）、归属（user / agent / world / project:<名字>）、如果是决定类，是否缺 why。可以中断续跑，超过花费上限就停。至少用 3 个不同的模型，判官本身的模型不能当标注者。
+3. `aggregate`：每个字段按多数票定标签，生成 `review.html` 给用户：没有多数的条目，加上每个字段随机抽 15 条已有多数的作为抽查。页面默认"同意多数"，用户只改不同意的，导出 `adjudication.json`。
+4. `score [--human adjudication.json]`：用户的选择覆盖多数票；没有多数又没被裁定的条目不计入，单独报数。指标：
+   - 写入精确率：系统写入的条目里，标签为该写的比例。
+   - 该写的召回率：标签为该写的条目里，系统写入、强化或判为已存在的比例。各层按总数加权，只给点估计，不给精确下界（加权后 Clopper–Pearson 不成立）。
+   - 项目路由：系统写入且标签为项目专属的条目里，写进对应项目的比例。
+   - D1：标签为缺 why 的条目里，系统没有写入的比例。
+   - 提取阶段丢失：提取阶段被拒的条目里，标签为该写的比例。
+   - 不加权的指标给 n、k、点估计和单侧 95% Clopper–Pearson 下界，门槛取 `ingestion_holdout_size.ROWS`。
+   - **标签错误率**：抽查里多数票和用户选择不一致的比例，按字段分别算（这就是 T5 要的各项噪声）。
+   - 重复判断（already_exists 对不对）要成对比较，这个脚本不算。
+5. `failures.md`（`score` 一起生成）：系统结果和最终标签不一致的每一条，按系统给的原因分组，列出原文、系统结果和标注理由。调 prompt 和规则从这里看。
+
+评测数据只在评测目录里，不写回 `ingestion.db`。
 
 ## 15. 不做
 
@@ -1471,6 +1509,10 @@ MEMORY 和 EVOLUTION 的确定性注入预算（§12）改的是读取侧，按�
   - r9 到 r12：卡的维度和路由表、7 种形状、两个纯函数、来源和污染、基线、注入预算，经过四轮独立评审。
   - r12 里为"多个写入者各自当场写"设计的准备→提交、租约、三层强制、分布式配额计数，都已经作废；不要按这些说法实现。原文在 git 历史里可以查到（r13 之前的版本）。
 
+- **r16.9**（用户）：§7.3 记下已知限制：bullet 单元是单行的，add 和 refine 合并都折叠换行，字不少但多行结构丢失；多行内容走 Reference；以后要改必须 add 和 refine 一起改。
+- **r16.10**（用户）：T5 算出多数票标签约 4.2% 出错时 93% 写入精确率测不出（`ingestion_holdout_size.py` 加标签噪声参数，`test_cdf_holdout_noise.py` 固定）。门槛降到 88%，预注册分母 220、需对 202 个。Flow 的 LLM 用量改记在 `ingestion_llm_usage`（schema v6）。
+- **r16.11**（用户）：离线 go/no-go 不再是上线前提，改为上线后批量评测（§14.2）。判官阶段的结果 30 天后移入 `ingestion_eval_log` 保留 180 天，`extraction_attempts` 同样 180 天；新增 `ingest eval-export`。
+- **r16.8**（用户）：r16.7 合 main：COE Open Threads 按方案 B 移出 MEMORY，开着的 COE 由 COE Registry 基线加未蒸馏的 DailyActivity 信号在读取时算出（§8 新增一行）；按新 brain 设计 §5.11 做 C1-C4：段名通用化，`validate_ddd_matrix` 默认读 `templates/ddd-skeleton/`（§7.1 那句更正），writer 的 DDD 分支调用 `ddd_entry_lifecycle.render_ddd_unit`，基线读 `EntryMetadata.taint`。
 - **r16.7**（对齐 Agent 认知系统高层设计 HLD）：
   - §7.2 C3、§11 第 6 条：CDF 写进 STEERING / USER / TOOLS 的条目只进单独的"系统追加（自动提取）"段，prompt 组装时标明来源并声明优先级低于产品规则；SWARMAI 等产品文件里描述优先级的地方同步改。
   - §9.2：确定性安全边界从三条改为四条，加上"自动写入的条目优先级低于产品规则"；写明蕴含判官误放的最坏结果；加行为类评测用例和 C3 写入位置的 mutation 检查。

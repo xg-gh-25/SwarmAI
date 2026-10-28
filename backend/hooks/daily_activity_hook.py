@@ -258,14 +258,12 @@ def _session_run_evidence(session_id: str, workspace: "Path | None" = None,
 
 
 def _open_problem_titles(workspace: "Path | None" = None) -> list[str]:
-    """Titles of MEMORY.md Open Threads, for the summariser to reuse verbatim when a
-    session reports or resolves one of them (the COE topic then matches its thread
-    by coe_key). Unreadable or absent → [] (the summary is written as before)."""
+    """Titles of the open COEs (core.coe_threads), for the summariser to reuse
+    verbatim when a session reports or resolves one of them, so the COE topic keeps
+    its coe_key. Unavailable -> [] (the summary is written as before)."""
     try:
-        from core.proactive_intelligence import _parse_open_threads
-        ws = workspace or SWARMWS
-        text = (Path(ws) / ".context" / "MEMORY.md").read_text(encoding="utf-8")
-        return [t["title"] for t in _parse_open_threads(text) if t.get("title")]
+        from core.coe_threads import open_coe_titles
+        return open_coe_titles(workspace or SWARMWS)
     except Exception:  # noqa: BLE001 — a hint for the summariser, never a blocker
         logger.debug("open problem titles unavailable", exc_info=True)
         return []
@@ -340,6 +338,29 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
         return False
 
 
+
+async def _read_complete_transcript(session_id: str, page_size: int = 200,
+                                    repo=None) -> list[dict]:
+    """Read every persisted message in stable chronological order, one page at a time.
+    *repo*: the caller's messages repository (default ``db.messages``)."""
+    repo = repo if repo is not None else db.messages
+    pages: list[list[dict]] = []
+    before_id: str | None = None
+    while True:
+        page = await repo.list_by_session_paginated(
+            session_id, limit=page_size, before_id=before_id
+        )
+        if not page:
+            break
+        pages.append(page)
+        if len(page) < page_size:
+            break
+        oldest_id = page[0].get("id")
+        if not oldest_id or oldest_id == before_id:
+            raise RuntimeError("DailyActivity transcript pagination did not advance")
+        before_id = oldest_id
+    return [message for page in reversed(pages) for message in page]
+
 class DailyActivityExtractionHook:
     """Extracts conversation summaries into DailyActivity files.
 
@@ -384,10 +405,8 @@ class DailyActivityExtractionHook:
         _checkpoint_path = STATE_DIR / "session_checkpoint.json"
         _checkpoint_path.unlink(missing_ok=True)
 
-        # 1. Retrieve conversation log (capped for memory safety)
-        messages = await db.messages.list_by_session_paginated(
-            context.session_id, limit=500
-        )
+        # 1. Retrieve the complete conversation log in bounded pages.
+        messages = await _read_complete_transcript(context.session_id)
 
         if not messages:
             logger.info(
@@ -396,12 +415,21 @@ class DailyActivityExtractionHook:
             )
             return
 
-        # 2. Summarize — minimal for short conversations
+        from core.daily_activity_writer import read_open_next_items
+        from core.initialization_manager import initialization_manager
+        activity_workspace = Path(initialization_manager.get_cached_workspace_path())
+        open_next_items = read_open_next_items(activity_workspace, days=7)
         if len(messages) < 3:
-            summary = self._pipeline.minimal_summary(messages)
+            summary = self._pipeline.minimal_summary(
+                messages, session_id=context.session_id
+            )
         else:
             summary = await self._pipeline.summarize(
-                messages, open_problems=_open_problem_titles())
+                messages,
+                session_id=context.session_id,
+                open_next_items=open_next_items,
+                open_problems=_open_problem_titles(),
+            )
 
         # 2b. Capture git ground truth — actual commits during session
         # This prevents COE C005: DailyActivity text claims vs git reality diverging.

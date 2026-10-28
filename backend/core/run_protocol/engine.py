@@ -475,6 +475,9 @@ class RunEngine:
         if any(not valid_session_id(value) for value in transcript_ids):
             raise EngineError("invalid transcript id")
         workspace_path, data_path = Path(workspace), Path(data_dir)
+        from core.ingestion.sources.s3_run import previous_pending_run
+        ddd_stale_since = previous_pending_run(
+            data_path, workspace_path, project, run_id)
         run_dir = workspace_path / "Projects" / project / ".artifacts" / "runs" / run_id
         # The run comes into existence in ONE step (B-e review HIGH): its audit
         # directory (contract, run_create) is built in a staging directory
@@ -519,6 +522,7 @@ class RunEngine:
                         "transcript_ids": list(dict.fromkeys(transcript_ids)),
                         "event_authority_id": authority.authority_id,
                         "created_at": _now(), "stage_attempt_cap": 3,
+                        **({"ddd_stale_since": ddd_stale_since} if ddd_stale_since else {}),
                         # reference lines, never limits: the p95 of this install's own
                         # landed runs of the profile (review-closure §6.2); null = none yet
                         **_budgets(audit_root / "runs", profile)}
@@ -858,7 +862,7 @@ class RunEngine:
                "stale_closures": sorted(facts.stale_closures(
                    finding_protocol.fold(list(events), self.authority), events, code_trees,
                    blob_of=lambda repo, tree, path: _blob_id(repos.get(repo), tree, path))),
-               "lessons": self._read_json(self.run_dir / "artifacts" / "reflect.json", {}).get("lessons", []),
+               "reflect_report": self.read_reflect_report(),
                "agent_after_cap": _agent_after_cap(requirements, design)}
         return checks.make_context(
             profile=profile, requirement_variant=req_variant, design_variant=design_variant,
@@ -2939,27 +2943,35 @@ class RunEngine:
         failed = {key: detail for key, (passed, detail) in results.items() if not passed}
         return {"open": failed, "checks": results}
 
+    def read_reflect_report(self) -> dict[str, Any]:
+        """Return the validated five-part report body, or five empty sections."""
+        from core.run_protocol.reflect import SECTIONS
+        value = self._read_json(self.run_dir / "artifacts" / "reflect.json", {}) or {}
+        sections = value.get("sections") if isinstance(value, Mapping) else None
+        if not isinstance(sections, Mapping):
+            return {name: [] for name in SECTIONS}
+        return {name: list(sections.get(name) or []) for name in SECTIONS}
+
     @_one_operation
-    def prepare_reflect(self, lessons: Sequence[Mapping[str, Any]],
-                        candidates: Mapping[str, Sequence[str]] | None = None) -> dict[str, Any]:
-        """Write reflect.json and evaluate RF-1~4 as a DELIVER attempt (design §A1.2).
-        RF never blocks landing: the third failure drops the lessons to zero and
-        records ``reflect: degraded``; DELIVER continues."""
+    def prepare_reflect(self, report: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate and record the five-part CDF report during DELIVER.
+
+        Any section may be empty. Old lesson-list artifacts are intentionally rejected.
+        RF failures never block landing; the third failure stores an empty report.
+        """
         from core.run_protocol import reflect
+        from core.run_protocol.provenance import sync_run_evidence
+        from core.ingestion.sources.s3_run import _roots
         state = self.projection()
         if state["status"] != "active" or state["stage"] != "deliver":
             raise EngineError("reflect-prepare requires active DELIVER")
         if state.get("reflect") == "degraded":
-            return {"lessons": [], "degraded": True}
-        from core.run_protocol import reflect_job
-        event_ids = {event["event_id"] for event in self.store.read_events()}
-        if candidates is None:      # the CLI's own recall (RF-4): the agent cannot pick them
-            candidates = reflect_job.candidates_for(
-                list(lessons), self.project,
-                knowledge=[row for r in self._knowledge_records() for row in r.get("ddd") or ()
-                           if isinstance(row, Mapping)])
-        document = reflect.prepare(lessons, event_ids=event_ids, candidates=candidates,
-                                   repos=set(self.contract.get("expected_repos") or ()))
+            return {"schema": reflect.SCHEMA,
+                    "sections": {name: [] for name in reflect.SECTIONS},
+                    "degraded": True}
+        sync_run_evidence(self.store, self.run_dir)
+        anchors, _root_ids = _roots(self)
+        document = reflect.prepare(report, allowed_anchors=set(anchors))
         path = self.run_dir / "artifacts" / "reflect.json"
         DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False, sort_keys=True,
                                                indent=2))
@@ -2969,7 +2981,8 @@ class RunEngine:
                                 check_ids=sorted(lifecycle.RF_CHECKS))
         self._settle(); self.write_projection()
         if self.projection().get("reflect") == "degraded":
-            document = {**document, "lessons": []}
+            document = {"schema": reflect.SCHEMA,
+                        "sections": {name: [] for name in reflect.SECTIONS}}
             DocumentStore._atomic(path, json.dumps(document, ensure_ascii=False,
                                                    sort_keys=True, indent=2))
         return {**document, "checks": result["checks"], "passed": result["passed"]}
@@ -3329,6 +3342,8 @@ class RunEngine:
                 payload={"landed": dict(sorted(exc.landed.items())), "failed": exc.failed,
                          "detail": str(exc)[:300], "stage_attempt_event_id": attempt_event_id,
                          **({"unsettled": list(exc.unsettled)} if exc.unsettled else {})})
+            from core.run_protocol.provenance import sync_run_evidence
+            sync_run_evidence(self.store, self.run_dir)
             self._settle()
             finished = self.finish_not_landed()
             return dict(exc.landed), {**finished, "ok": False, "landing": "not_landed",
@@ -3343,6 +3358,8 @@ class RunEngine:
                      "commits": dict(sorted(commits.items())),
                      **({"unsettled": list(commits.unsettled)} if commits.unsettled else {}),
                      "stage_attempt_event_id": attempt_event_id})
+        from core.run_protocol.provenance import sync_run_evidence
+        sync_run_evidence(self.store, self.run_dir)
         return commits, None
 
     def _copy_report(self, blob_sha: str | None = None, *, text: str | None = None) -> None:
@@ -3382,6 +3399,8 @@ class RunEngine:
         self._record_usage("reflect")
         self.store.append_new(writer=self.authority.writer("hook"), kind=kind, at=_now(),
                               ordinal=NEXT, payload=payload)
+        from core.run_protocol.provenance import sync_run_evidence
+        sync_run_evidence(self.store, self.run_dir)
         self._settle()
         self._refresh_completed_audit()
         return self.projection()

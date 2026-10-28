@@ -419,6 +419,8 @@ class KnowledgeStore:
         content: str,
         content_hash: str,
         metadata: Optional[dict] = None,
+        *,
+        commit: bool = True,
     ) -> int:
         """Insert or update a chunk. Returns the chunk rowid."""
         metadata_json = json.dumps(metadata) if metadata else None
@@ -480,7 +482,8 @@ class KnowledgeStore:
              expand_cjk(source_file)),
         )
 
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return rowid
 
     def get_existing_hashes(self, source_file: str) -> dict[int, str]:
@@ -491,7 +494,8 @@ class KnowledgeStore:
         ).fetchall()
         return {row[0]: row[1] for row in rows}
 
-    def remove_stale_chunks(self, source_file: str, keep_indexes: set[int]) -> int:
+    def remove_stale_chunks(self, source_file: str, keep_indexes: set[int], *,
+                            commit: bool = True) -> int:
         """Remove chunks not in keep_indexes. Returns count removed."""
         # Read the *_seg values: 'delete' reverses postings using the values it
         # is given, and the index holds segmented text.
@@ -513,7 +517,7 @@ class KnowledgeStore:
                 self._conn.execute("DELETE FROM knowledge_chunks WHERE id = ?", (rowid,))
                 removed += 1
 
-        if removed:
+        if removed and commit:
             self._conn.commit()
         return removed
 
@@ -999,3 +1003,70 @@ def sync_knowledge_index(
         stats["chunks_removed"] += removed
 
     return stats
+
+
+def _cdf_chunks_for_file(path: Path, source_file: str, content: str) -> list[dict]:
+    """Chunk CDF multi-unit files by parse_units boundaries; other files by heading."""
+    multi = (source_file.startswith("Library/Links/")
+             or source_file.startswith("Learned/domains/")
+             or source_file.startswith("Learned/repos/")
+             or source_file.startswith("Learned/_common/"))
+    if not multi:
+        return chunk_markdown(content, source_file)
+    from core.ingestion.units import parse_units
+
+    chunks = []
+    root_index = max(0, len(Path(source_file).parts) - 1)
+    for index, unit in enumerate(parse_units(path, root=path.parents[root_index])):
+        text = unit.text
+        chunks.append({
+            "source_file": source_file,
+            "chunk_index": index,
+            "heading": unit.section or unit.title,
+            "content": text,
+            "content_hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        })
+    return chunks
+
+
+def sync_knowledge_file(path: Path | str) -> dict[str, int]:
+    """Transactionally replace the derived index rows for one Knowledge file."""
+    from config import get_app_data_dir, get_swarmws
+    from core.vec_db import open_vec_db
+
+    target = Path(path).resolve(strict=False)
+    knowledge = (Path(get_swarmws()) / "Knowledge").resolve(strict=False)
+    try:
+        source_file = target.relative_to(knowledge).as_posix()
+    except ValueError as exc:
+        raise ValueError("knowledge file must be under Knowledge/") from exc
+    content = target.read_text(encoding="utf-8") if target.is_file() else ""
+    chunks = _cdf_chunks_for_file(target, source_file, content) if target.is_file() else []
+    db_path = Path(get_app_data_dir()) / "data.db"
+    with open_vec_db(db_path) as conn:
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = store.get_existing_hashes(source_file)
+            kept: set[int] = set()
+            added = skipped = 0
+            for chunk in chunks:
+                index = int(chunk["chunk_index"])
+                kept.add(index)
+                if existing.get(index) == chunk["content_hash"]:
+                    skipped += 1
+                    continue
+                store.upsert_chunk(
+                    source_file=source_file, chunk_index=index,
+                    heading=chunk.get("heading"), content=chunk["content"],
+                    content_hash=chunk["content_hash"], commit=False,
+                )
+                added += 1
+            removed = store.remove_stale_chunks(source_file, kept, commit=False)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+    return {"chunks_added": added, "chunks_skipped": skipped,
+            "chunks_removed": removed}

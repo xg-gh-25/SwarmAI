@@ -1,4 +1,4 @@
-"""Pipeline v1 real end-to-end tests: REFLECT runs inside the landing; lessons and their outcomes.
+"""Pipeline v1 real end-to-end tests: REFLECT runs inside the landing (CDF S3 report enqueue).
 
 Split from test_pipeline_v1_real_e2e.py (design 2026-10-27-pipeline-hygiene §2);
 shared fixture and helpers: tests/pipeline_v1_e2e_common.py. Invariant checked
@@ -23,7 +23,7 @@ def test_the_agent_cannot_complete_reflect_and_the_landing_does(rig):
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     out = r.v1("reflect-complete")
     assert out.get("ok") is not True                       # the command is gone
     # the landing's own command runs REFLECT before it returns (standalone §4.6)
@@ -34,33 +34,13 @@ def test_the_agent_cannot_complete_reflect_and_the_landing_does(rig):
     assert len(complete) == 1 and complete[0]["producer"] == "hook"
 
 
-def test_lessons_cite_events_listed_by_the_cli_and_are_routed_with_an_outcome(rig):
-    import json
-    from core.run_protocol import reflect_job
-    r = rig("direct")
-    r.create()
-    r.drive(until="deliver")
-    ids = [e["event_id"] for e in r.v1("events")["events"]]
-    lesson = {"id": "L1", "type": "pitfall", "scope": "instance",
-              "statement": "Run the whole test file, not one node, before leaving BUILD.",
-              "tell": "BX-2 refused a single node", "evidence": ids[:1],
-              "relation": {"kind": "new", "entry": None}}
-    out = r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": [lesson]}))
-    assert out.get("ok") is True, out
-    r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
-    reflect_job.process_run(r.engine())
-    doc = json.loads((r.engine().run_dir / "artifacts" / "reflect.json").read_text())
-    outcome = doc["lessons"][0]["outcome"]
-    assert outcome["status"] in ("applied", "noise", "suspect"), outcome
-
-
 def test_measuring_after_the_daemon_completed_reflect_refreshes_the_final_audit(rig, monkeypatch):
     import json
     from core.run_protocol import reflect_job, usage
     r = rig("direct")
     r.create()
     r.drive(until="deliver")
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     r.v1("land", "--message", "fix: swap the operands\n\nCo-Authored-By: Swarm <swarm@swarmai.dev>")
     reflect_job.process_run(r.engine())
     engine = r.engine()

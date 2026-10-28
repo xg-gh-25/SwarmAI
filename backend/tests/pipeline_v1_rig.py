@@ -185,6 +185,10 @@ class Rig:
                             tmp_path / "data" / "state" / "pipeline_agent_audit")
         from core import pipeline_human
         monkeypatch.setattr(pipeline_human, "_workspace", lambda: self.ws)
+        from core.ingestion.sources import common as ingestion_source_common
+        from core.ingestion.sources.extract_llm import ExtractResult
+        monkeypatch.setattr(
+            ingestion_source_common, "extract_units", lambda *a, **k: ExtractResult())
         self.ctx: dict[str, Any] = {"sdk_session_id": SESSION}
         self.run_id: str | None = None
         self.worktree: Path | None = None
@@ -448,7 +452,10 @@ class Rig:
         if stage == "test":
             return self.report_and_complete()
         if stage == "deliver":
-            self.v1("reflect-prepare", "--artifact", self.artifact("reflect", {"lessons": []}))
+            self.v1("reflect-prepare", "--artifact", self.artifact("reflect", {
+                "delivered": [], "decisions": [], "corrections": [],
+                "practices": [], "gaps": [],
+            }))
             if self.repo is None:
                 return self.v1("stage-complete")
             out = self.v1("land", "--message", "fix: swap the operands" + SWARM)

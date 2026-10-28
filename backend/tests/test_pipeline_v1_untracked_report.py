@@ -194,10 +194,13 @@ def test_normal_land_reports_untracked_files_after_completion(tmp_path, monkeypa
         _git(r.worktree, "add", "backend/core/staged.py")
         r._edited = True
         r.drive(until="deliver")
-        r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+        r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
         worktree = r.worktree
         out = r.v1("land", "--message", "fix: swap the operands" + SWARM)
         assert out.get("ok") is True, out
+        from core.run_protocol import reflect_job
+        reflect_job.process_run(r.engine())
+        r.engine().release_landed_worktrees()
         state = r.state()
         assert (state["status"], state["landing"]) == ("completed", "landed"), state
         assert not worktree.exists()

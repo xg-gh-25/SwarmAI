@@ -1,11 +1,8 @@
-"""DoD3 (run_e346b8ed): dormant digest trigger + approve-time re-target.
+"""Conversation digest remains dormant until channels are explicitly enabled.
 
-Two structural guarantees:
-  1. The conversation-digest job is DORMANT by default — with no opt-in config
-     it returns `skipped` WITHOUT touching the DB, extractor, or LLM. This is
-     how capability C ships inert (C037 §7).
-  2. The cultivation approve endpoint honors an approve-time target override
-     (§9-D1) — attribution is decided by XG at approve, not guessed at extract.
+The active-path tests cover per-channel extraction isolation. Stage B removed the
+cultivation approval and approve-time retarget lifecycle; those assertions have no
+replacement because CDF performs autonomous routing and disposition.
 """
 
 import asyncio
@@ -147,78 +144,3 @@ def test_one_channel_failure_does_not_abort_others(tmp_path):
     assert "cs_good" in seen, "a failing channel must not abort the rest"
     assert result["status"] == "success"
     assert result["escalated"] == 1  # only cs_good's proposal
-
-
-# ── Approve-time re-target (§9-D1) ────────────────────────────────────────────
-
-def test_approve_retarget_overrides_proposal_target(tmp_path, monkeypatch):
-    """approve_proposal applies to the OVERRIDDEN target when supplied."""
-    from core.ddd_cultivation import CultivationProposal, write_proposal
-    import routers.cultivation as cult
-
-    proj = tmp_path / "Projects" / "SwarmAI"
-    (proj / ".artifacts" / "proposals").mkdir(parents=True)
-    (proj / "IMPROVEMENT.md").write_text("# IMPROVEMENT\n\n## What to Watch For\n\n")
-    (proj / "PROJECT.md").write_text("# PROJECT\n\n## Recent Decisions\n\n")
-
-    # A conversation proposal with a SUGGESTED target of PROJECT.md/Recent Decisions
-    # Content is realistic (>= MIN_LESSON_LENGTH): apply_to_ddd enforces the value
-    # floor on EVERY write path (run_e9cb7e2a chokepoint), incl. human-approved
-    # proposals — a real approved proposal is a full sentence, not a 3-word stub.
-    p = CultivationProposal(
-        target_doc="PROJECT.md", target_section="Recent Decisions",
-        content="Adopt the daily conversation digest job so decisions surface without manual review.",
-        source_run_id="cs_1",
-        confidence=0.3, source_stage="conversation",
-    )
-    write_proposal(p, proj)
-
-    # Point the router's workspace resolution at tmp
-    monkeypatch.setattr(
-        cult.initialization_manager, "get_cached_workspace_path", lambda: str(tmp_path)
-    )
-
-    # Approve with an override target → should land in IMPROVEMENT.md / What to Watch For
-    resp = asyncio.run(cult.approve_proposal(
-        p.id, project="SwarmAI",
-        target_doc="IMPROVEMENT.md", target_section="What to Watch For",
-    ))
-    assert resp["status"] == "applied"
-    assert resp["target"] == "IMPROVEMENT.md#What to Watch For"
-    assert "daily conversation digest" in (proj / "IMPROVEMENT.md").read_text()
-
-
-def test_approve_without_override_keeps_suggested_target(tmp_path, monkeypatch):
-    """A bare approve (no override) applies to the proposal's suggested target
-    when that target is itself safe-appliable (IMPROVEMENT.md/What to Watch For).
-
-    Note: apply_to_ddd re-checks is_safe_append (defense-in-depth), so a
-    proposal suggesting a NON-safe doc (e.g. PROJECT.md) cannot be bare-approved
-    — XG must re-target it to a safe section. That is the intended §9-D1 flow
-    (XG decides the real destination), covered by the re-target test above."""
-    from core.ddd_cultivation import CultivationProposal, write_proposal
-    import routers.cultivation as cult
-
-    proj = tmp_path / "Projects" / "SwarmAI"
-    (proj / ".artifacts" / "proposals").mkdir(parents=True)
-    (proj / "IMPROVEMENT.md").write_text("# IMPROVEMENT\n\n## What to Watch For\n\n")
-
-    # Realistic content (>= MIN_LESSON_LENGTH) — see note in the retarget test above.
-    p = CultivationProposal(
-        target_doc="IMPROVEMENT.md", target_section="What to Watch For",
-        content="Keep the digest proposal's suggested target when the human approves without an override.",
-        source_run_id="cs_2",
-        confidence=0.3, source_stage="conversation",
-    )
-    write_proposal(p, proj)
-    monkeypatch.setattr(
-        cult.initialization_manager, "get_cached_workspace_path", lambda: str(tmp_path)
-    )
-
-    # Pass None explicitly — FastAPI injects None at runtime; a direct call
-    # would otherwise receive the Query(...) sentinel objects.
-    resp = asyncio.run(cult.approve_proposal(
-        p.id, project="SwarmAI", target_doc=None, target_section=None,
-    ))
-    assert resp["target"] == "IMPROVEMENT.md#What to Watch For"
-    assert "suggested target when the human approves" in (proj / "IMPROVEMENT.md").read_text()

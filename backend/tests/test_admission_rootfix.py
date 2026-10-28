@@ -21,75 +21,68 @@ from unittest.mock import patch
 import pytest
 
 
-# ── Fix 1: write_proposal generation-side dedup by content_signature ──────────
-class TestWriteProposalDedup:
-    def test_write_proposal_is_idempotent_by_content(self):
-        """Writing the SAME-content proposal twice yields ONE pending file."""
+# ── Stage B: write_proposal is an enqueue-only compatibility entry point ─────
+class TestWriteProposalEnqueue:
+    @staticmethod
+    def _capture(monkeypatch):
+        from core.ingestion.api import EnqueueResult
+
+        calls = []
+        seen = set()
+
+        def enqueue(*args, **kwargs):
+            calls.append((args, kwargs))
+            key = (args[0], args[1], args[2])
+            status = "duplicate" if key in seen else "queued"
+            seen.add(key)
+            return EnqueueResult(status=status, candidate_id="cand-test")
+
+        monkeypatch.setattr("core.ingestion.api.enqueue", enqueue)
+        return calls
+
+    def test_write_proposal_uses_one_stable_slot_for_same_content(self, tmp_path, monkeypatch):
+        """Equivalent content gets one stable CDF slot and creates no proposal file."""
         from core.ddd_cultivation import CultivationProposal, write_proposal
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            content = "A shared close-primitive that broadcasts an EVENT beats per-event others-lists."
-            p1 = CultivationProposal(
-                target_doc="TECH.md", target_section="Conventions",
-                content=content, source_run_id="run_a", confidence=0.7,
-            )
-            p2 = CultivationProposal(
-                target_doc="TECH.md", target_section="Conventions",
-                content=content, source_run_id="run_b", confidence=0.7,
-            )
-            write_proposal(p1, project_dir)
-            write_proposal(p2, project_dir)
-            proposals_dir = project_dir / ".artifacts" / "proposals"
-            files = list(proposals_dir.glob("*.json"))
-            assert len(files) == 1, f"expected 1 deduped proposal, got {len(files)}"
+        calls = self._capture(monkeypatch)
+        content = "A shared close-primitive broadcasts one event to every listener."
+        for run_id in ("run_a", "run_a"):
+            write_proposal(CultivationProposal(
+                target_doc="TECH.md", target_section="Conventions", content=content,
+                source_run_id=run_id, confidence=0.7), tmp_path)
 
-    def test_write_proposal_distinct_content_not_deduped(self):
-        """Two DIFFERENT-content proposals both persist (dedup must not over-collapse)."""
+        assert len(calls) == 2
+        assert calls[0][0][2] == calls[1][0][2]
+        assert not (tmp_path / ".artifacts" / "proposals").exists()
+
+    def test_write_proposal_uses_distinct_slots_for_distinct_content(self, tmp_path, monkeypatch):
+        """Different semantic payloads remain distinct CDF candidates."""
         from core.ddd_cultivation import CultivationProposal, write_proposal
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            p1 = CultivationProposal(
-                target_doc="TECH.md", target_section="Conventions",
-                content="First distinct lesson about event broadcasting.",
-                source_run_id="run_a", confidence=0.7,
-            )
-            p2 = CultivationProposal(
-                target_doc="TECH.md", target_section="Conventions",
-                content="Second unrelated lesson about lock ordering.",
-                source_run_id="run_b", confidence=0.7,
-            )
-            write_proposal(p1, project_dir)
-            write_proposal(p2, project_dir)
-            files = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert len(files) == 2
+        calls = self._capture(monkeypatch)
+        for content in ("First lesson about event broadcasting.",
+                        "Second lesson about lock ordering."):
+            write_proposal(CultivationProposal(
+                target_doc="TECH.md", target_section="Conventions", content=content,
+                source_run_id="run_a", confidence=0.7), tmp_path)
 
-    def test_write_proposal_dedup_ignores_terminal_status(self):
-        """A REJECTED proposal with same content does NOT block a new write.
+        assert calls[0][0][2] != calls[1][0][2]
+        assert [call[0][3]["kind"] for call in calls] == ["cultivation", "cultivation"]
+        assert not (tmp_path / ".artifacts" / "proposals").exists()
 
-        Dedup is only vs AWAITING-human proposals; a terminal one is not a live dup.
-        """
+    def test_legacy_status_does_not_change_the_cdf_slot(self, tmp_path, monkeypatch):
+        """Retired approval status is not part of the Stage-B candidate identity."""
         from core.ddd_cultivation import CultivationProposal, write_proposal
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            project_dir = Path(tmpdir)
-            content = "A lesson that was previously rejected and may recur."
-            p1 = CultivationProposal(
-                target_doc="TECH.md", target_section="Conventions",
-                content=content, source_run_id="run_a", confidence=0.7,
-                status="rejected",
-            )
-            write_proposal(p1, project_dir)
-            p2 = CultivationProposal(
-                target_doc="TECH.md", target_section="Conventions",
-                content=content, source_run_id="run_b", confidence=0.7,
-                status="pending",
-            )
-            write_proposal(p2, project_dir)
-            # a rejected file + a fresh pending = both on disk (rejected is not a live dup)
-            files = list((project_dir / ".artifacts" / "proposals").glob("*.json"))
-            assert len(files) == 2
+        calls = self._capture(monkeypatch)
+        content = "A recurring lesson keeps the same ingestion identity."
+        for status in ("rejected", "pending"):
+            write_proposal(CultivationProposal(
+                target_doc="TECH.md", target_section="Conventions", content=content,
+                source_run_id="run_a", confidence=0.7, status=status), tmp_path)
+
+        assert calls[0][0][2] == calls[1][0][2]
+        assert calls[0][0][3] == calls[1][0][3]
 
 
 # ── AUTONOMY-FIRST (run_86f44f35): protected zones DELETED ────────────────────

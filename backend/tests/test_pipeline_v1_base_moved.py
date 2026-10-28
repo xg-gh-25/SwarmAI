@@ -83,7 +83,7 @@ def test_main_moving_three_times_then_the_run_lands(rig):
     r = rig
     r.create()
     r.drive(until="deliver")
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     for i in range(3):
         r.commit_on_main({f"other{i}.py": f"x = {i}\n", "backend/core/big.py":
                           BIG.replace("value_38 = 38", "value_38 = 380")}
@@ -104,7 +104,7 @@ def test_a_report_stale_before_the_sync_gets_no_prefix(rig):
     r = rig
     r.create()
     r.drive(until="deliver")
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     r.edit({"backend/core/other.py": "def other():\n    return 2\n"})   # after TEST
     r.commit_on_main({"elsewhere.py": "y = 1\n"})
     out = _land(r)
@@ -116,7 +116,7 @@ def test_a_failing_report_before_the_sync_gets_no_prefix(rig):
     r = rig
     r.create()
     r.drive(until="deliver")
-    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"lessons": []}))
+    r.v1("reflect-prepare", "--artifact", r.artifact("reflect", {"delivered": [], "decisions": [], "corrections": [], "practices": [], "gaps": []}))
     r.v1("report-tests", "--artifact", r.artifact("red", r.report("fail")))
     r.commit_on_main({"elsewhere.py": "y = 1\n"})
     out = _land(r)

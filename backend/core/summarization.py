@@ -52,16 +52,18 @@ _STR_LIST = {"type": "array", "items": {"type": "string"}}
 _ENRICHMENT_SCHEMA = {
     "type": "object",
     "properties": {
-        "deliverables": _STR_LIST, "key_outputs": _STR_LIST, "lessons": _STR_LIST,
-        "lesson_types": _STR_LIST, "rejected_approaches": _STR_LIST,
-        "corrections": _STR_LIST, "process_reflection": {"type": "string"},
-        "signal_driven_actions": _STR_LIST, "continue_from": {"type": "string"},
-        "validation_status": {"type": "string"}, "coe_signal": {"type": "string"},
-        "coe_topic": {"type": "string"},
+        "summary_sentence": {"type": "string"},
+        "deliverables": _STR_LIST, "key_outputs": _STR_LIST,
+        "validation_status": {"type": "string"}, "next_items": _STR_LIST, "resolves": _STR_LIST,
+        "rejected_approaches": _STR_LIST, "corrections": _STR_LIST,
+        "process_reflection": {"type": "string"}, "signal_driven_actions": _STR_LIST,
+        "coe_signal": {"type": "string"}, "coe_topic": {"type": "string"},
+        # Not asked for by the CDF working-memory prompt; still read when present.
+        "lessons": _STR_LIST, "lesson_types": _STR_LIST, "continue_from": {"type": "string"},
     },
-    "required": ["deliverables", "key_outputs", "lessons", "lesson_types",
-                 "rejected_approaches", "corrections", "continue_from",
-                 "validation_status", "coe_signal", "coe_topic"],
+    "required": ["summary_sentence", "deliverables", "key_outputs", "validation_status",
+                 "next_items", "resolves", "rejected_approaches", "corrections",
+                 "coe_signal", "coe_topic"],
 }
 
 # Centralized patterns — shared with distillation_hook.py to prevent drift.
@@ -153,6 +155,12 @@ class StructuredSummary:
     reasoning: list[str] = field(default_factory=list)
     session_title: str = ""
     timestamp: str = ""  # HH:MM format
+    # DailyActivity v2 fields. ``summary_sentence`` is generated as a complete
+    # sentence, never sliced from another field. ``next_items`` is populated as
+    # ``[{"next_id": ..., "text": ...}]`` once the session id is known.
+    summary_sentence: str = ""
+    next_items: list[dict[str, str]] = field(default_factory=list)
+    resolves: list[str] = field(default_factory=list)
 
     def word_count(self) -> int:
         """Total word count across all text fields."""
@@ -170,82 +178,52 @@ class StructuredSummary:
 
 
 _ENRICHMENT_PROMPT = """\
-You are extracting a high-signal activity summary from a chat session. \
-This is NOT a transcript — it's a decision log for future reference. \
-Focus on outcomes, outputs, and lessons — skip routine activities.
+You are extracting a high-signal activity summary from a complete chat session. This is a
+working-memory handoff, not a transcript and not a source of durable lessons.
 
 ## Conversation:
 {conversation}
 
-## Already extracted (rule-based):
+## Already extracted:
 - Topics: {topics}
 - Decisions: {decisions}
 - Files modified: {files}
 
-## Your task:
-Answer three questions about this session. Be concise — max 120 chars per entry. \
-Only include sections with real content. Empty arrays for sections with nothing notable.
+## Open Next items from the previous 7 days
+{open_next_items}
 
-1. **What was delivered?** (deliverables — concrete outcomes, not "what happened")
-2. **Where are the outputs?** (key_outputs — "file: path → description" or "sent X to person")
-3. **What did we learn?** (lessons — insights, highlights, mistakes, things worth remembering)
-   ALSO output `lesson_types`: a parallel array (SAME length + SAME order as `lessons`), \
-one type label per lesson, using EXACTLY one of these 7 labels — \
-`guideline` (a rule/pattern that works), `pitfall` (a trap/bug/failure mode to avoid), \
-`principle` (a first-principle/philosophy), `correction` (a fix to a wrong belief/behavior), \
-`decision` (a choice made + rationale), `model` (how something is structured/works), \
-`process` (a step-by-step procedure). If unsure for an entry, use `guideline`.
+Record the summary with the summary tool. Preserve every complete semantic item; never
+truncate a sentence or add an ellipsis. Include empty arrays when a section has no content.
+- summary_sentence: one complete sentence describing the session, 30–50 Chinese characters,
+  or equivalent length in the session language. Write it directly at that length.
+- deliverables: concrete outcomes.
+- key_outputs: output locations and descriptions.
+- validation_status: what was validated and what remains unvalidated.
+- next_items: complete follow-up actions. Do not assign ids; the server assigns stable ids.
+- resolves: only ids from the open list whose completion is explicit in this transcript.
+  Do not infer completion from similarity or plans.
+- coe_signal: "", "candidate", or "resolution".
+- coe_topic: the investigated problem, or "". If it is the same problem as one of these
+  open problems, copy that title exactly, character for character, so the earlier
+  report and this one are recognised as one problem: {open_problems}
+- corrections, rejected_approaches, process_reflection, and signal_driven_actions may be
+  included for their existing downstream consumers. Do not emit a lessons section.
 
-Also assess:
-- Was this a debugging/investigation session? If yes, set coe_signal.
-- coe_signal: "" if routine, "candidate" if investigating a bug/issue, "resolution" if root cause was found and fixed
-- coe_topic: the problem being investigated (e.g., "streaming not working", "context files silently dropped"). \
-If it is the same problem as one of these open problems, copy that title exactly, character for \
-character, so the earlier report and this one are recognised as one problem: {open_problems}
-- Did the user correct the agent's behavior? Look for patterns like: "don't ask me, just do it", \
-"I already told you", "stop repeating", "that's wrong", "not what I asked", user re-explaining \
-after agent misunderstood, user expressing frustration with agent approach. Each correction \
-should capture: what the agent did wrong + what the user wanted instead.
-
-4. **Process reflection** — Step back from WHAT was discussed and analyze HOW the session went. \
-Look for these meta-patterns:
-- **Iteration churn**: Was the same file/component modified multiple rounds? Was each round fixing \
-a fundamentally different class of issue (sign of insufficient upfront thinking) or normal refinement?
-- **Perspective gap**: Did the agent operate from only one viewpoint (e.g., code correctness) \
-while missing another (e.g., user experience, error handling, edge cases)?
-- **Late discovery**: Were the most important findings/bugs discovered in the last round? \
-What question, asked earlier, would have surfaced them sooner?
-- **User pushback signal**: Did the user challenge quality, ask "are you sure?", \
-or redirect the approach? What assumption was wrong?
-- If no process issues: set to "" (most sessions are fine — only flag real patterns).
-- Keep it to 1-2 sentences. Focus on the reusable lesson, not the specific instance.
-
-5. **Signal-driven actions** — Did any external signal (news article, product release, \
-announcement, competitive move) directly trigger or influence a decision or action in this session? \
-Look for references to news, announcements, releases, competitors, or external events that \
-led to a concrete action (code change, architecture decision, feature addition, priority shift). \
-Format each as "Signal: <what was the external event> → Action: <what was decided/done>". \
-Empty array if no external signals influenced this session (most sessions are purely internal).
-
-## Answer
-Record the summary with the summary tool. An example answer (the contents show the expected style):
+An example answer (the contents show the expected style):
 {{
-  "deliverables": ["Built X feature", "Fixed Y bug — root cause was Z", "Diagnosed P issue"],
-  "key_outputs": ["code: agent_manager.py → StreamEvent handling", "sent: summary email to person@email"],
-  "lessons": ["SDK has include_partial_messages flag (default False)", "Never trust char-count estimation for tokens"],
-  "lesson_types": ["model", "pitfall"],
-  "rejected_approaches": ["Tried X but rejected because Y"],
-  "corrections": ["Agent asked for confirmation on internal action — user said just do it", "Agent repeated user's words back — user said stop repeating"],
-  "process_reflection": "Same file edited 4 rounds — each round found a different class of bug (layout, then error handling, then UX). Upfront user-scenario walkthrough would have caught all in round 1.",
-  "signal_driven_actions": ["Signal: Bedrock 1M context GA → Action: updated context window configs to 1M for Claude 4.6 models"],
-  "continue_from": "specific next step for the next session (one sentence)",
-  "validation_status": "what was tested vs untested (one sentence)",
+  "summary_sentence": "本次完成了会话工作记忆改造，并验证完整语义不会在生成和注入时被截断。",
+  "deliverables": [],
+  "key_outputs": [],
+  "validation_status": "",
+  "next_items": [],
+  "resolves": [],
+  "rejected_approaches": [],
+  "corrections": [],
+  "process_reflection": "",
+  "signal_driven_actions": [],
   "coe_signal": "",
   "coe_topic": ""
 }}"""
-
-# Max chars of conversation to send to LLM for enrichment
-_ENRICHMENT_MAX_CHARS = 25_000
 
 
 def _bash_written_files(cmd: str, *, truncated: bool) -> list[str]:
@@ -288,10 +266,13 @@ class SummarizationPipeline:
     Ordering: all lists preserve chronological order.
     """
 
-    MAX_WORDS_PER_ENTRY = 700  # Increased from 500 to accommodate enriched fields
-
     async def summarize(
-        self, messages: list[dict], *, open_problems: "list[str] | None" = None,
+        self,
+        messages: list[dict],
+        *,
+        session_id: str = "",
+        open_next_items: list[dict[str, str]] | None = None,
+        open_problems: list[str] | None = None,
     ) -> StructuredSummary:
         """Full summarization for conversations with 3+ messages.
 
@@ -299,7 +280,7 @@ class SummarizationPipeline:
         attempts LLM enrichment for handoff-level detail. Falls back to
         rule-based summary on LLM failure.
 
-        ``open_problems``: titles of the problems still open (MEMORY.md Open Threads).
+        ``open_problems``: titles of the COEs still open (core.coe_threads).
         The enrichment is asked to copy one exactly when this session reports or
         resolves the same problem, so the COE topic matches its thread by key.
         """
@@ -327,22 +308,31 @@ class SummarizationPipeline:
         if len(messages) > LLM_ENRICHMENT_THRESHOLD:
             try:
                 summary = await self._enrich_with_llm(
-                    summary, messages, open_problems=open_problems or [])
+                    summary, messages, open_next_items=open_next_items or [],
+                    open_problems=open_problems or [],
+                )
             except Exception as exc:
                 logger.warning(
                     "LLM enrichment failed, using rule-based summary: %s", exc
                 )
 
-        # Mandatory continue_from — rule-based fallback if LLM didn't generate one
+        if not self._summary_sentence_is_valid(summary.summary_sentence):
+            summary.summary_sentence = self._derive_summary_sentence(summary)
         if not summary.continue_from:
             summary.continue_from = self._derive_continue_from(summary)
+        if not summary.next_items and summary.continue_from:
+            summary.next_items = [{"text": summary.continue_from}]
+        self._assign_next_ids(summary, session_id)
+        allowed_resolutions = {
+            item.get("next_id", "") for item in (open_next_items or [])
+        }
+        summary.resolves = [item for item in summary.resolves if item in allowed_resolutions]
+        return summary
 
-        return self._enforce_word_limit(summary)
-
-    def minimal_summary(self, messages: list[dict]) -> StructuredSummary:
-        """Minimal summary (topics only) for short conversations (<3 msgs)."""
+    def minimal_summary(self, messages: list[dict], *, session_id: str = "") -> StructuredSummary:
+        """Minimal summary for a short conversation without dropping semantic content."""
         topics = self._extract_topics(messages)
-        return StructuredSummary(
+        summary = StructuredSummary(
             topics=topics,
             decisions=[],
             files_modified=[],
@@ -350,6 +340,12 @@ class SummarizationPipeline:
             session_title=self._derive_title(messages),
             timestamp=datetime.now().strftime("%H:%M"),
         )
+        summary.summary_sentence = self._derive_summary_sentence(summary)
+        summary.continue_from = self._derive_continue_from(summary)
+        if summary.continue_from:
+            summary.next_items = [{"text": summary.continue_from}]
+        self._assign_next_ids(summary, session_id)
+        return summary
 
     def _extract_topics(self, messages: list[dict]) -> list[str]:
         """Extract meaningful topics from user messages.
@@ -368,7 +364,7 @@ class SummarizationPipeline:
             if msg.get("role") != "user":
                 # Flush pending short messages when non-user message arrives
                 if pending_short:
-                    merged = "; ".join(pending_short)[:150]
+                    merged = "; ".join(pending_short)
                     if merged not in seen:
                         seen.add(merged)
                         topics.append(merged)
@@ -392,7 +388,7 @@ class SummarizationPipeline:
             if len(sentence) < 40:
                 pending_short.append(sentence)
                 if len(pending_short) >= 3:
-                    merged = "; ".join(pending_short)[:150]
+                    merged = "; ".join(pending_short)
                     if merged not in seen:
                         seen.add(merged)
                         topics.append(merged)
@@ -400,7 +396,7 @@ class SummarizationPipeline:
             else:
                 # Flush any pending shorts first
                 if pending_short:
-                    merged = "; ".join(pending_short)[:150]
+                    merged = "; ".join(pending_short)
                     if merged not in seen:
                         seen.add(merged)
                         topics.append(merged)
@@ -412,7 +408,7 @@ class SummarizationPipeline:
 
         # Flush remaining
         if pending_short:
-            merged = "; ".join(pending_short)[:150]
+            merged = "; ".join(pending_short)
             if merged not in seen:
                 topics.append(merged)
 
@@ -420,26 +416,12 @@ class SummarizationPipeline:
 
     @staticmethod
     def _extract_first_sentence(text: str) -> str:
-        """Extract the first meaningful sentence from text.
-
-        Uses sentence boundaries (period, question mark, exclamation,
-        or newline) and caps at 120 chars.
-        """
-        # Split on sentence boundaries
-        parts = re.split(r"[.!?\n]", text, maxsplit=1)
-        sentence = parts[0].strip()
-
-        # Cap length
-        if len(sentence) > 120:
-            # Try to break at a word boundary
-            truncated = sentence[:120]
-            last_space = truncated.rfind(" ")
-            if last_space > 80:
-                sentence = truncated[:last_space] + "..."
-            else:
-                sentence = truncated + "..."
-
-        return sentence
+        """Return the first complete sentence or line without slicing it."""
+        match = re.search(r"[.!?\n]", text)
+        if match is None:
+            return text.strip()
+        end = match.end()
+        return text[:end].strip()
 
     def _extract_decisions(self, messages: list[dict]) -> list[str]:
         """Extract sentences with decision-indicator patterns from assistant msgs.
@@ -455,7 +437,6 @@ class SummarizationPipeline:
             text = self._get_text_content(msg)
             if not text:
                 continue
-            msg_decisions = 0
             for sentence in re.split(r"[.!?\n]", text):
                 sentence = sentence.strip()
                 if not sentence or len(sentence) < 20:
@@ -472,12 +453,7 @@ class SummarizationPipeline:
                         continue
                     seen_normalized.add(normalized)
 
-                    if len(sentence) > 150:
-                        sentence = sentence[:150] + "..."
                     decisions.append(sentence)
-                    msg_decisions += 1
-                    if msg_decisions >= 3:  # Cap per message
-                        break
 
         return decisions
 
@@ -577,7 +553,7 @@ class SummarizationPipeline:
                         inp = block.get("input", {})
                         q = inp.get("question", "")
                         if q:
-                            questions.append(q[:200])
+                            questions.append(q)
         return questions
 
     @staticmethod
@@ -625,14 +601,6 @@ class SummarizationPipeline:
 
         # Extract first sentence and clean up
         title = SummarizationPipeline._extract_first_sentence(best_text)
-        # Cap at 60 chars for title
-        if len(title) > 60:
-            truncated = title[:60]
-            last_space = truncated.rfind(" ")
-            if last_space > 40:
-                title = truncated[:last_space]
-            else:
-                title = truncated
         return title.rstrip(".")
 
     @staticmethod
@@ -646,44 +614,63 @@ class SummarizationPipeline:
         4. Fallback → "Ongoing: <session_title>"
         """
         if summary.open_questions:
-            return f"Resolve: {summary.open_questions[0][:100]}"
+            return f"Resolve: {summary.open_questions[0]}"
         if summary.validation_status and "untest" in summary.validation_status.lower():
-            return f"Verify: {summary.validation_status[:100]}"
+            return f"Verify: {summary.validation_status}"
         if summary.coe_signal == "candidate" and summary.coe_topic:
-            return f"Investigate: {summary.coe_topic[:100]}"
+            return f"Investigate: {summary.coe_topic}"
         if summary.session_title and summary.session_title != "Untitled session":
-            return f"Ongoing: {summary.session_title[:100]}"
+            return f"Ongoing: {summary.session_title}"
         return ""
 
-    def _enforce_word_limit(self, summary: StructuredSummary) -> StructuredSummary:
-        """Trim fields to stay within MAX_WORDS_PER_ENTRY.
+    @staticmethod
+    def _summary_sentence_is_valid(text: str) -> bool:
+        """Validate a complete one-sentence summary without modifying it."""
+        if not text or "\n" in text or text.rstrip().endswith(("...", "…")):
+            return False
+        cjk = len(re.findall(r"[\u3400-\u9fff]", text))
+        if cjk:
+            return 30 <= len(text) <= 50
+        words = text.split()
+        return 8 <= len(words) <= 18
 
-        Trims from lowest-value lists first: topics (raw user messages),
-        then open_questions, then other fields. Preserves deliverables,
-        lessons, and key_outputs as long as possible.
-        """
-        while summary.word_count() > self.MAX_WORDS_PER_ENTRY:
-            # Trim from longest list first, lowest-value lists preferred
-            lists = [
-                ("topics", summary.topics),
-                ("open_questions", summary.open_questions),
-                ("rejected_approaches", summary.rejected_approaches),
-                ("corrections", summary.corrections),
-                ("decisions", summary.decisions),
-                ("key_outputs", summary.key_outputs),
-                ("deliverables", summary.deliverables),
-                ("lessons", summary.lessons),
-            ]
-            longest = max(lists, key=lambda x: len(x[1]))
-            if longest[1]:
-                longest[1].pop()
-            else:
-                break
+    @staticmethod
+    def _derive_summary_sentence(summary: StructuredSummary) -> str:
+        """Generate one complete language-matched fallback at the target length."""
+        source = " ".join([*summary.deliverables, *summary.topics, summary.session_title])
+        if re.search(r"[\u3400-\u9fff]", source):
+            return "本次会话已记录主要工作，并完整保留交付结果、输出位置、验证状态与后续事项。"
+        return "This session recorded its work, outputs, validation status, and remaining next steps."
+
+    @staticmethod
+    def _assign_next_ids(summary: StructuredSummary, session_id: str) -> None:
+        """Assign stable short ids from session identity, ordinal, and full text."""
+        import hashlib
+
+        assigned: list[dict[str, str]] = []
+        for ordinal, item in enumerate(summary.next_items, 1):
+            text = item.get("text", "") if isinstance(item, dict) else str(item)
+            text = text.strip()
+            if not text:
+                continue
+            material = f"{session_id}\0{ordinal}\0{text}".encode("utf-8")
+            assigned.append({
+                "next_id": hashlib.sha256(material).hexdigest()[:12],
+                "text": text,
+            })
+        summary.next_items = assigned
+
+    def _enforce_word_limit(self, summary: StructuredSummary) -> StructuredSummary:
+        """Compatibility no-op: DailyActivity v2 never drops semantic entries."""
         return summary
 
     async def _enrich_with_llm(
-        self, summary: StructuredSummary, messages: list[dict],
-        *, open_problems: "list[str] | None" = None,
+        self,
+        summary: StructuredSummary,
+        messages: list[dict],
+        *,
+        open_next_items: list[dict[str, str]],
+        open_problems: list[str] | None = None,
     ) -> StructuredSummary:
         """Enrich a rule-based summary with LLM-extracted context.
 
@@ -697,10 +684,11 @@ class SummarizationPipeline:
 
         prompt = _ENRICHMENT_PROMPT.format(
             conversation=conversation,
-            topics="; ".join(summary.topics[:10]) or "(none)",
-            decisions="; ".join(summary.decisions[:5]) or "(none)",
-            files="; ".join(summary.files_modified[:10]) or "(none)",
-            open_problems="; ".join(f'"{t}"' for t in (open_problems or [])) or "(none)",
+            topics="; ".join(summary.topics) or "(none)",
+            decisions="; ".join(summary.decisions) or "(none)",
+            files="; ".join(summary.files_modified) or "(none)",
+            open_next_items=json.dumps(open_next_items, ensure_ascii=False),
+            open_problems="; ".join(f'"{x}"' for x in (open_problems or [])) or "(none)",
         )
 
         # Dedicated 'llm' pool (run_c8ad52f8), not the default ThreadPoolExecutor:
@@ -732,6 +720,11 @@ class SummarizationPipeline:
         summary.validation_status = enriched.get("validation_status", "")
         summary.coe_signal = enriched.get("coe_signal", "")
         summary.coe_topic = enriched.get("coe_topic", "")
+        summary.summary_sentence = enriched.get("summary_sentence", "")
+        summary.next_items = [
+            {"text": item} for item in enriched.get("next_items", [])
+        ]
+        summary.resolves = enriched.get("resolves", [])
 
         return summary
 
@@ -765,15 +758,7 @@ class SummarizationPipeline:
             prefix = "User" if role == "user" else "Assistant"
             lines.append(f"{prefix}: {content.strip()}")
 
-        result = "\n\n".join(lines)
-
-        if len(result) > _ENRICHMENT_MAX_CHARS:
-            result = (
-                "...[truncated older messages]...\n\n"
-                + result[-_ENRICHMENT_MAX_CHARS:]
-            )
-
-        return result
+        return "\n\n".join(lines)
 
     @staticmethod
     def _call_enrichment_llm(prompt: str) -> dict:
@@ -833,7 +818,7 @@ class SummarizationPipeline:
         result: dict[str, Any] = {}
         for key in ("deliverables", "key_outputs",
                      "rejected_approaches", "corrections",
-                     "actions_taken", "reasoning"):  # legacy
+                     "actions_taken", "reasoning", "next_items", "resolves"):  # legacy
             entries = data.get(key, [])
             if isinstance(entries, list):
                 result[key] = [e for e in entries if isinstance(e, str) and e.strip()]
@@ -868,7 +853,8 @@ class SummarizationPipeline:
         result["lessons"] = lessons_out
         result["lesson_types"] = types_out
 
-        for key in ("continue_from", "validation_status", "coe_signal", "coe_topic"):
+        for key in ("continue_from", "validation_status", "coe_signal", "coe_topic",
+                    "summary_sentence"):
             val = data.get(key, "")
             result[key] = val if isinstance(val, str) else ""
 

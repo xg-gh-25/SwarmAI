@@ -241,21 +241,9 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: session signal cultivation skipped: %s", exc)
 
-        # T4: Maturity evidence update + promotion evaluation.
-        # Runs AFTER cultivation so new changelog entries are counted.
-        try:
-            self._update_maturity(root, _deadline=_cultivation_deadline)
-        except Exception as exc:
-            logger.debug("context_health: maturity update skipped: %s", exc)
+        # DDD maturity annotation writes are retired in CDF stage B.
 
-        # Memory usage tracking — scan recent DailyActivity for memory key
-        # references ([RC04], [KD05], etc.) and write counts to
-        # .context/.memory-usage.json.  Used by distillation for smart
-        # eviction (lowest-usage entries evicted first instead of oldest).
-        try:
-            self._track_memory_usage(root)
-        except Exception as exc:
-            logger.debug("context_health: memory usage tracking skipped: %s", exc)
+        # Legacy memory-usage tracking writes are retired in CDF stage B.
 
         # NEW ARCHITECTURE (2026-08-14): the in-prompt MEMORY index was DELETED
         # (live MEMORY is full-injected; recall scans body-BM25). No index to
@@ -279,36 +267,7 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: DDD job registry refresh failed: %s", exc)
 
-        # ── MEMORY.md lifecycle: ref bump + decay (same engine as DDD) ──
-        # Extends ddd_entry_lifecycle to MEMORY.md. Same parse/bump/decay.
-        try:
-            self._run_memory_lifecycle(root)
-        except Exception as exc:
-            logger.debug("context_health: MEMORY.md lifecycle skipped: %s", exc)
-
-        # ── KNOWLEDGE.md lifecycle: ref bump + decay (Gap #5) ──
-        # Same engine as MEMORY.md — extends coverage to KNOWLEDGE.md.
-        try:
-            self._run_knowledge_lifecycle(root)
-        except Exception as exc:
-            logger.debug("context_health: KNOWLEDGE.md lifecycle skipped: %s", exc)
-
-        # ── EVOLUTION.md lifecycle: decay + reclaim + dedup (run_2816ab1c) ──
-        # Same engine as MEMORY/KNOWLEDGE — closes the last un-governed context
-        # file. Only "Optimizations Learned" decays; fold_corrections (a separate
-        # hook) still owns the Corrections narrative.
-        try:
-            self._run_evolution_lifecycle(root)
-        except Exception as exc:
-            logger.debug("context_health: EVOLUTION.md lifecycle skipped: %s", exc)
-
-        # ── TTL proposals: archive stale queued proposals (Gap #22) ──
-        try:
-            self._expire_stale_proposals(root)
-        except Exception as exc:
-            logger.debug("context_health: proposal TTL skipped: %s", exc)
-
-
+        # Governed corpus lifecycle and proposal mutations are retired in CDF stage B.
 
         # Knowledge Library + Transcript FTS5 indexing runs OUTSIDE
         # the git-rev gate.  These stores have their own delta-sync via
@@ -820,175 +779,16 @@ class ContextHealthHook:
     # State file: tracks which JSONL session records have been cultivated
     _SESSION_CULTIVATED_STATE = ".context/.session_cultivated.json"
 
-    def _auto_cultivate_session_signals(self, root: Path, *, _deadline: float = 0) -> bool:
-        """Auto-cultivate corrections and decisions from DailyActivity JSONL into DDD docs.
+    def _auto_cultivate_session_signals(
+        self, root: Path, *, _deadline: float = 0,
+    ) -> bool:
+        """Retired: session distillation now extracts complete claim groups.
 
-        Reads recent DailyActivity JSONL sidecars (last 7 days), extracts
-        corrections (Ch6 — highest priority) and decisions (Ch5), feeds them
-        through the same keyword classifier REFLECT lessons once went through.
-
-        Idempotency: tracks cultivated session_ids in a state file. Each session
-        is processed at most once. State file is a simple JSON list of session IDs.
-
-        Capped at 10 sessions per invocation, sharing the same cooperative time
-        budget mindset as pipeline cultivation.
-
-        Returns:
-            True if any DDD docs were modified (total_applied > 0), False otherwise.
+        The former per-line DailyActivity decisions/corrections path had a
+        measured keep rate below one percent and also mutated DDD files.
         """
-        da_dir = root / "Knowledge" / "DailyActivity"
-        if not da_dir.is_dir():
-            return False
+        return False
 
-        from core.ddd_cultivation import cultivate_from_corrections, cultivate_from_decisions
-
-        # Load cultivated state (ordered list of session_ids already processed).
-        # Uses a list to preserve insertion order — capping takes oldest first.
-        state_path = root / self._SESSION_CULTIVATED_STATE
-        cultivated_list: list = []
-        if state_path.is_file():
-            try:
-                cultivated_list = json.loads(state_path.read_text(encoding="utf-8"))
-                if not isinstance(cultivated_list, list):
-                    cultivated_list = []
-            except (json.JSONDecodeError, OSError):
-                cultivated_list = []
-        cultivated_ids: set = set(cultivated_list)  # O(1) lookup
-
-        # Scan JSONL sidecars from last 7 days
-        today = date.today()
-        cutoff = today - timedelta(days=7)
-
-        jsonl_files = sorted(da_dir.glob("*.jsonl"))
-        # Filter to recent files by filename date prefix
-        recent_jsonls = []
-        for jf in jsonl_files:
-            try:
-                file_date = date.fromisoformat(jf.stem[:10])
-                if file_date >= cutoff:
-                    recent_jsonls.append(jf)
-            except (ValueError, IndexError):
-                continue
-
-        if not recent_jsonls:
-            return False
-
-        # Determine project directory for cultivation target.
-        # Default to SwarmAI (the workspace project — corrections about the
-        # agent itself are the most common signal). Future: infer from session
-        # topics or files_modified.
-        projects_dir = root / "Projects"
-        default_project = DEFAULT_PROJECT_NAME
-        default_project_dir = projects_dir / default_project
-        if not default_project_dir.is_dir():
-            return False
-
-        _MAX_SESSIONS = 10
-        # PE-4: use shared deadline from _light_refresh (25s total for all cultivation)
-        _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 15.0)
-        processed = 0
-        total_applied = 0
-        total_escalated = 0
-
-        from core.daily_activity_writer import read_jsonl_sidecar
-
-        for jsonl_path in recent_jsonls:
-            if processed >= _MAX_SESSIONS:
-                break
-            if time.monotonic() > _effective_deadline:
-                break
-
-            records = read_jsonl_sidecar(jsonl_path)
-            for record in records:
-                if processed >= _MAX_SESSIONS:
-                    break
-                if time.monotonic() > _effective_deadline:
-                    break
-
-                session_id = record.get("session_id", "")
-                if not session_id or session_id in cultivated_ids:
-                    continue
-
-                corrections = record.get("corrections", [])
-                decisions = record.get("decisions", [])
-
-                if not corrections and not decisions:
-                    cultivated_ids.add(session_id)
-                    # Don't count empty sessions toward _MAX_SESSIONS —
-                    # only actual cultivations should consume the budget.
-                    continue
-
-                # Cultivate corrections (Ch6 — highest priority per HLD)
-                if corrections:
-                    try:
-                        result = cultivate_from_corrections(
-                            corrections, session_id, default_project, default_project_dir
-                        )
-                        total_applied += result.get("applied", 0)
-                        total_escalated += result.get("escalated", 0)
-                        for _drift in result.get("drift_errors", []):
-                            logger.error("context_health: %s", _drift)
-                    except Exception as exc:
-                        logger.debug(
-                            "context_health: session correction cultivation failed "
-                            "for %s: %s", session_id[:8], exc,
-                        )
-
-                # Cultivate decisions (Ch5) — pre-filter pipeline-internal noise
-                if decisions:
-                    filtered_decisions = [
-                        d for d in decisions
-                        if isinstance(d, str)
-                        and len(d) >= 30
-                        and not any(d.strip().startswith(pfx) for pfx in _DECISION_NOISE_PREFIXES)
-                    ]
-                    if filtered_decisions:
-                        try:
-                            result = cultivate_from_decisions(
-                                filtered_decisions, session_id, default_project, default_project_dir
-                            )
-                            total_applied += result.get("applied", 0)
-                            total_escalated += result.get("escalated", 0)
-                            for _drift in result.get("drift_errors", []):
-                                logger.error("context_health: %s", _drift)
-                        except Exception as exc:
-                            logger.debug(
-                                "context_health: session decision cultivation failed "
-                                "for %s: %s", session_id[:8], exc,
-                            )
-
-                cultivated_ids.add(session_id)
-                processed += 1
-
-        # Persist state — cap at 500 most recent to prevent unbounded growth.
-        # Atomic write (tmp + os.replace) prevents corruption on crash/SIGKILL.
-        # Persist whenever new IDs were added (including empty-signal sessions).
-        if len(cultivated_ids) > len(cultivated_list):
-            # Rebuild ordered list: old (from file) + newly added, deduped, capped
-            new_ids = [sid for sid in cultivated_list if sid in cultivated_ids]
-            existing_set = set(new_ids)  # PE-2: O(1) lookup, built once
-            for sid in cultivated_ids:
-                if sid not in existing_set:
-                    new_ids.append(sid)
-            capped_ids = new_ids[-500:]  # Keep 500 newest (oldest evicted first)
-            try:
-                state_path.parent.mkdir(parents=True, exist_ok=True)
-                tmp_path = state_path.with_suffix(".tmp")
-                tmp_path.write_text(
-                    json.dumps(capped_ids, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                os.replace(tmp_path, state_path)
-            except OSError as exc:
-                logger.debug("context_health: failed to persist cultivation state: %s", exc)
-
-            logger.info(
-                "context_health: session signal cultivation — "
-                "processed=%d, applied=%d, escalated=%d",
-                processed, total_applied, total_escalated,
-            )
-
-        return total_applied > 0
 
     # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)
     _COMPACT_INDEX_DIRS = {"DailyActivity", "JobResults", "Signals"}
@@ -1391,543 +1191,6 @@ class ContextHealthHook:
             except OSError:
                 pass
 
-    def _run_memory_lifecycle(self, root: Path) -> None:
-        """Run DDD lifecycle engine on MEMORY.md: ref bump + decay.
-
-        Same engine as DDD IMPROVEMENT.md — extends coverage to MEMORY.md.
-        Uses existing parse_entries/bump_references/assess_decay/inject_entry_metadata.
-        Bumps refs from recent DailyActivity text. Decays unreferenced entries.
-        Evergreen: COE Registry, Standing Preferences (immune to decay).
-        """
-        from core.ddd_entry_lifecycle import (
-            assess_decay,
-            collapse_stacked_metadata,
-            inject_entry_metadata,
-            parse_entries,
-        )
-
-        memory_path = root / ".context" / "MEMORY.md"
-        if not memory_path.exists():
-            return
-
-        from core.ddd_entry_lifecycle import (
-            MEMORY_EVERGREEN_SECTIONS,
-            reclaim_duplicate_entries,
-            reclaim_noise_entries,
-        )
-        evergreen = MEMORY_EVERGREEN_SECTIONS
-
-        # H1 (adversarial): MEMORY.md is user-owned and concurrently written
-        # (Edit tool, locked_write.py, distillation). The whole read-modify-write
-        # — bump, decay, AND the destructive reclaim — MUST hold the same
-        # MEMORY.md.lock that other writers use, else a reclaim overwrite races
-        # a concurrent edit (lost update). Read content INSIDE the lock so the
-        # strip is computed from the locked snapshot.
-        from utils.file_lock import flock_exclusive_nb, flock_unlock
-        lock_path = memory_path.with_suffix(".md.lock")
-        lock_fd = None
-        try:
-            lock_fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive_nb(lock_fd)
-        except OSError:
-            if lock_fd:
-                lock_fd.close()
-            logger.debug("context_health: MEMORY.md lock busy, skipping lifecycle")
-            return
-
-        try:
-            content = memory_path.read_text(encoding="utf-8")
-
-            # ── HEAL (R-1, run_55c02bbe): collapse any stacked/orphaned metadata
-            # before parse. A historical off-by-one splice could orphan an
-            # existing entry's meta as a 2nd consecutive line; parse_entries +
-            # inject_entry_metadata are orphan-blind, so this dedicated sweep is
-            # the auto-heal that keeps new orphans from accumulating. Pure +
-            # idempotent: a no-op once clean. Runs under the same MEMORY.md.lock.
-            healed = collapse_stacked_metadata(content)
-            if healed != content:
-                memory_path.write_text(healed, encoding="utf-8")
-                content = healed
-                logger.info("context_health: MEMORY.md healed stacked metadata")
-
-            entries = parse_entries(content)
-            if not entries:
-                return
-
-            today = date.today()
-
-            # run_3cb6b9ae Cycle-3 (#2): the usage→ref bridge was REMOVED. It mapped
-            # `.memory-usage.json` numeric-ID counts onto body entries via the
-            # `- [KD01] title` index shape — a shape ONLY the deleted in-prompt index
-            # carried (#6). With the index gone, build_usage_ref_map returned {}
-            # permanently (dead by starvation), so no entry was ever bumped. The
-            # producer (_track_memory_usage → .memory-usage.json) is KEPT — it still
-            # feeds the loops-health `memory_precision` signal — only the dead
-            # index-ID→body-ref bridge is gone. ref_count for reclaim protection now
-            # comes solely from the metadata already on each entry.
-            bumped = 0
-
-            # ── Decay: assess state transitions ──
-            # A2 (run_55cb38d6): MEMORY.md uses a FASTER 45d dormant threshold.
-            # The fast-churn operational type is GUIDELINE — written faster than the
-            # 60d global decay can reclaim it. NOTE (run_123652ae): pitfall is NO
-            # LONGER fast-decayed here — it is now EVERGREEN by type (assess_decay
-            # EVERGREEN_TYPES), because the MEMORY [PIT##] entries are real hard-won
-            # judgment (e.g. "removing a shared-helper is a contract change"), not
-            # churn — the original "GUI/PIT are fast-churn noise" framing was wrong
-            # about PIT. So the 45d threshold now only bites guideline/process.
-            # KNOWLEDGE.md (below) + IMPROVEMENT/DDD keep 60d global. dormant→archived
-            # stays 150d for all. (thresholds tightened 90/180 -> 60/150, run_186a5f15.)
-            transitions = assess_decay(
-                entries, today, evergreen_sections=evergreen, dormant_days=45
-            )
-
-            # APPLY the transitions to the entry objects. assess_decay RETURNS
-            # transitions but does NOT mutate entries — without this loop the
-            # persisted metadata keeps the stale "active" state, so a
-            # dormant/archived transition is logged but never written, and reclaim
-            # (which requires decay∈{dormant,archived}) can never select the entry.
-            # This was the root cause of MEMORY.md never shrinking (9 transitions
-            # logged, 0 persisted).
-            #
-            # We do NOT archive here (unlike ddd_orchestrator, which lacks a
-            # guaranteed reclaim pass). The MEMORY path ALWAYS runs
-            # reclaim_noise_entries below, and reclaim archives+strips BOTH
-            # dormant AND archived entries (_NOISY_DECAY_STATES) via
-            # _archive_and_strip. So we persist EVERY transitioned state (incl.
-            # archived) through inject_entry_metadata — which only annotates,
-            # never removes (verified: an entry excluded from the list keeps its
-            # OLD metadata in the body) — and let reclaim be the SINGLE archive+
-            # strip authority. This avoids the double-archive that a separate
-            # archive_entries here would cause (archive_entries has no dedup, and
-            # inject can't strip the just-archived bullet, so reclaim would archive
-            # it a second time).
-            for t in transitions:
-                t.entry.decay_state = t.new_state
-
-            # Only write if something changed
-            if bumped > 0 or transitions:
-                updated = inject_entry_metadata(content, entries)
-                memory_path.write_text(updated, encoding="utf-8")
-                content = updated  # reclaim operates on the latest content
-                if transitions:
-                    logger.info(
-                        "context_health: MEMORY.md lifecycle — %d bumped, %d transitions (%s)",
-                        bumped, len(transitions),
-                        ", ".join(f"{t.entry.title[:30]}:{t.old_state}→{t.new_state}" for t in transitions[:3]),
-                    )
-
-            # ── CLEAN (M0 ②): reclaim stale operational noise from MEMORY.md ──
-            # Archive to .context/MEMORY-archive-YYYY-MM.md and physically strip (decay +
-            # inject_entry_metadata never remove bullets). Evergreen sections
-            # (Principles/Corrections/COE Registry/...) AND keep-class types are
-            # protected — only plain dormant operational entries are reclaimed.
-            reclaim_report = reclaim_noise_entries(
-                content, today, memory_path.parent,
-                evergreen_sections=evergreen,
-                archive_name=f"MEMORY-archive-{today.strftime('%Y-%m')}.md",
-                source_path=memory_path,
-                dry_run=False,
-            )
-            if reclaim_report.new_content is not None:
-                # reclaim wrote memory_path + dated .bak (source_path given). NEW
-                # ARCHITECTURE (2026-08-14): the in-prompt index was DELETED, so
-                # there is no index to rebuild after the strip — the stripped
-                # content reclaim already wrote to disk IS the final state.
-                logger.info(
-                    "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
-                    reclaim_report.archived, reclaim_report.kept_protected,
-                )
-
-            # ── DEDUP (run_2816ab1c): archive+strip EXACT duplicates the age-based
-            # reclaim above can't see (a fresh dup is still `active`). Same lock,
-            # same evergreen/keep-class protection. Runs on the latest content.
-            content = memory_path.read_text(encoding="utf-8")
-            dup_report = reclaim_duplicate_entries(
-                content, today, memory_path.parent,
-                evergreen_sections=evergreen,
-                archive_name=f"MEMORY-archive-{today.strftime('%Y-%m')}.md",
-                source_path=memory_path,
-                dry_run=False,
-            )
-            if dup_report.new_content is not None:
-                # NEW ARCHITECTURE: no index to rebuild — reclaim_duplicate_entries
-                # already wrote the stripped content to disk.
-                logger.info(
-                    "context_health: MEMORY.md dedup — %d exact-dup archived+stripped",
-                    dup_report.archived,
-                )
-
-            # ── ORPHAN-INDEX STRIP (no-index architecture consistency) ──
-            # reclaim_*_entries write via a bare source_path.write_text (NOT the
-            # locked_write / _write_memory_stripped chokepoint that strips the legacy
-            # `<!-- MEMORY_INDEX_START -->` block), so a stripped BODY entry leaves its
-            # `- [ID] title` line ORPHANED in the retired index block (the in-prompt
-            # Memory Index was retired 2026-08-14 — nothing rebuilds it). Route the
-            # final content through the same extract_body_without_index SSOT that every
-            # recall/injection read uses, so the MEMORY-specific index block never
-            # survives a strip. Idempotent: a no-index file returns byte-identical, so
-            # this is a no-op write we skip entirely. This lives in the MEMORY-specific
-            # method (NOT the shared ddd_entry_lifecycle engine — the index block is a
-            # MEMORY-only concept; KNOWLEDGE/IMPROVEMENT must not be touched, P8/R25).
-            content = memory_path.read_text(encoding="utf-8")
-            from core.memory_index import extract_body_without_index
-            stripped = extract_body_without_index(content)
-            if stripped != content:
-                memory_path.write_text(stripped, encoding="utf-8")
-                logger.info(
-                    "context_health: MEMORY.md — stripped orphan legacy index block "
-                    "after reclaim (no-index architecture)",
-                )
-        finally:
-            flock_unlock(lock_fd)
-            lock_fd.close()
-
-    def _run_knowledge_lifecycle(self, root: Path) -> None:
-        """Run DDD lifecycle engine on KNOWLEDGE.md: decay + archive + strip.
-
-        Same engine + machinery as MEMORY.md. assess_decay computes transitions;
-        this method APPLIES them (mirror _run_memory_lifecycle) then runs
-        reclaim_noise_entries to archive+strip dormant NON-evergreen entries
-        (KNOWLEDGE-archive.md + dated .bak). KNOWLEDGE is almost entirely
-        load-bearing reference, so KNOWLEDGE_EVERGREEN_SECTIONS protects every
-        reference section by name — only genuinely disposable sections decay
-        (Gate-1 CRITICAL, run_a1ec08e7: without this the runtime Self-Identity /
-        arch / pipeline facts would be stripped).
-
-        Concurrency: the whole read-modify-write is under md_lock(KNOWLEDGE.md.lock,
-        blocking=False) — a file lock protects a doc ONLY if EVERY writer holds it.
-        (The in-prompt index writers that shared this lock were removed 2026-08-14;
-        the lock now only serializes this reclaim against concurrent readers.)
-        Non-blocking here (skip-if-busy) mirrors
-        _run_memory_lifecycle: a destructive strip must never wait on a held lock
-        inside the <30s hook. (The old prose ref-bump was removed in R2-prime —
-        honest ref comes from the id-based producer, so `bumped` is always 0.)
-        """
-        from core.ddd_entry_lifecycle import (
-            KNOWLEDGE_EVERGREEN_SECTIONS,
-            assess_decay,
-            inject_entry_metadata,
-            parse_entries,
-            reclaim_duplicate_entries,
-            reclaim_noise_entries,
-        )
-        from utils.file_lock import md_lock
-
-        knowledge_path = root / ".context" / "KNOWLEDGE.md"
-        if not knowledge_path.exists():
-            return
-
-        evergreen = KNOWLEDGE_EVERGREEN_SECTIONS
-        with md_lock(knowledge_path, blocking=False) as got_lock:
-            if not got_lock:
-                logger.debug("context_health: KNOWLEDGE.md lock busy, skipping lifecycle")
-                return
-
-            content = knowledge_path.read_text(encoding="utf-8")
-            entries = parse_entries(content)
-            if not entries:
-                return
-
-            today = date.today()
-            bumped = 0
-
-            # Decay: evergreen reference sections are immune (Gate-1 CRITICAL).
-            transitions = assess_decay(
-                entries, today, evergreen_sections=evergreen
-            )
-
-            # APPLY transitions to entry objects before inject (same missing-apply
-            # bug fixed in _run_memory_lifecycle — assess_decay returns transitions
-            # but does not mutate entries). We do NOT archive here; reclaim below is
-            # the SINGLE archive+strip authority (avoids the double-archive that a
-            # separate archive_entries would cause — inject can't strip a bullet, so
-            # reclaim would re-archive it).
-            for t in transitions:
-                t.entry.decay_state = t.new_state
-
-            if bumped > 0 or transitions:
-                updated = inject_entry_metadata(content, entries)
-                knowledge_path.write_text(updated, encoding="utf-8")
-                content = updated  # reclaim operates on the latest content
-                if transitions:
-                    logger.info(
-                        "context_health: KNOWLEDGE.md lifecycle — %d bumped, %d transitions",
-                        bumped, len(transitions),
-                    )
-
-            # CLEAN: archive+strip dormant NON-evergreen operational entries.
-            # source_path gives the dated .bak; no reindex (KNOWLEDGE has no
-            # MEMORY_INDEX block, and the ## Knowledge Index auto-nav was removed
-            # 2026-08-14 — KNOWLEDGE.md is now hand-written above the entry store).
-            reclaim_report = reclaim_noise_entries(
-                content, today, knowledge_path.parent,
-                evergreen_sections=evergreen,
-                archive_name="KNOWLEDGE-archive.md",
-                source_path=knowledge_path,
-                dry_run=False,
-            )
-            if reclaim_report.new_content is not None:
-                logger.info(
-                    "context_health: KNOWLEDGE.md reclaim — %d archived+stripped, %d protected",
-                    reclaim_report.archived, reclaim_report.kept_protected,
-                )
-
-            # DEDUP (run_2816ab1c): exact-dup sweep, same lock + evergreen guard.
-            content = knowledge_path.read_text(encoding="utf-8")
-            dup_report = reclaim_duplicate_entries(
-                content, today, knowledge_path.parent,
-                evergreen_sections=evergreen,
-                archive_name="KNOWLEDGE-archive.md",
-                source_path=knowledge_path,
-                dry_run=False,
-            )
-            if dup_report.new_content is not None:
-                logger.info(
-                    "context_health: KNOWLEDGE.md dedup — %d exact-dup archived+stripped",
-                    dup_report.archived,
-                )
-
-    def _run_evolution_lifecycle(self, root: Path) -> None:
-        """Run DDD lifecycle engine on EVOLUTION.md: DEDUP ONLY (no age-decay).
-
-        EVOLUTION.md had ZERO lifecycle before run_2816ab1c — it accreted forever
-        (its Corrections Captured section is folded SEPARATELY by
-        evolution_maintenance_hook.fold_corrections; that hook does NOT age-decay).
-
-        DESIGN DECISION (user directive, run_2816ab1c): EVOLUTION is FULLY evergreen
-        for age-decay — EVOLUTION_EVERGREEN_SECTIONS lists ALL 7 sections, so
-        assess_decay + reclaim_noise_entries transition/strip NOTHING here. The O-
-        entries are distilled operational wisdom (value, not age-churn — Principle
-        1); size control is fold_corrections + dedup, never age-death. So this method
-        runs ONLY the exact-dup DEDUP sweep. (assess_decay/reclaim are still invoked
-        with the all-evergreen set — they are cheap no-ops that keep the code path
-        identical to MEMORY/KNOWLEDGE, and self-document that decay is intentionally
-        inert here rather than silently absent.)
-
-        Concurrency (Gate-1 Axis E): EVOLUTION.md is also written by
-        evolution_maintenance_hook (fold_corrections, via locked_write). The whole
-        read-modify-write MUST hold EVOLUTION.md.lock so the dedup strip never races
-        that fold. Non-blocking skip-if-busy mirrors MEMORY (a strip must not wait on
-        a held lock inside the <30s hook).
-        """
-        from core.ddd_entry_lifecycle import (
-            EVOLUTION_EVERGREEN_SECTIONS,
-            assess_decay,
-            inject_entry_metadata,
-            parse_entries,
-            reclaim_duplicate_entries,
-            reclaim_noise_entries,
-        )
-        from utils.file_lock import flock_exclusive_nb, flock_unlock
-
-        evolution_path = root / ".context" / "EVOLUTION.md"
-        if not evolution_path.exists():
-            return
-
-        evergreen = EVOLUTION_EVERGREEN_SECTIONS
-        lock_path = evolution_path.with_suffix(".md.lock")
-        lock_fd = None
-        try:
-            lock_fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive_nb(lock_fd)
-        except OSError:
-            if lock_fd:
-                lock_fd.close()
-            logger.debug("context_health: EVOLUTION.md lock busy, skipping lifecycle")
-            return
-
-        try:
-            content = evolution_path.read_text(encoding="utf-8")
-            # skip_h3_spans: a ### Cnnn / ### CLASS block is one record; its field
-            # bullets are not entries (design 2026-10-25-memory-write-entry-dedup §3.4).
-            entries = parse_entries(content, skip_h3_spans=True)
-            if not entries:
-                return
-
-            today = date.today()
-
-            # Decay: only "Optimizations Learned" (plain operational) is eligible;
-            # every other section is evergreen. dormant_days defaults to the global
-            # 60 (EVOLUTION is not fast-churn like MEMORY's 45).
-            transitions = assess_decay(
-                entries, today, evergreen_sections=evergreen
-            )
-            for t in transitions:
-                t.entry.decay_state = t.new_state
-
-            if transitions:
-                updated = inject_entry_metadata(content, entries)
-                evolution_path.write_text(updated, encoding="utf-8")
-                content = updated
-                logger.info(
-                    "context_health: EVOLUTION.md lifecycle — %d transitions",
-                    len(transitions),
-                )
-
-            # CLEAN: archive+strip dormant NON-evergreen (Optimizations Learned only).
-            # Monthly shard (mirrors MEMORY:2126) — unifies all EVOLUTION archive
-            # writers onto EVOLUTION-archive-{YYYY-MM}.md (legacy fixed file is
-            # pre-2026-08 history, never written to again).
-            evo_shard = f"EVOLUTION-archive-{today.strftime('%Y-%m')}.md"
-            reclaim_report = reclaim_noise_entries(
-                content, today, evolution_path.parent,
-                evergreen_sections=evergreen,
-                archive_name=evo_shard,
-                source_path=evolution_path,
-                dry_run=False,
-                skip_h3_spans=True,
-            )
-            if reclaim_report.new_content is not None:
-                content = reclaim_report.new_content
-                logger.info(
-                    "context_health: EVOLUTION.md reclaim — %d archived+stripped, %d protected",
-                    reclaim_report.archived, reclaim_report.kept_protected,
-                )
-
-            # DEDUP: exact-dup sweep, same lock + evergreen guard. Same monthly shard.
-            content = evolution_path.read_text(encoding="utf-8")
-            dup_report = reclaim_duplicate_entries(
-                content, today, evolution_path.parent,
-                evergreen_sections=evergreen,
-                archive_name=evo_shard,
-                source_path=evolution_path,
-                dry_run=False,
-                skip_h3_spans=True,
-            )
-            if dup_report.new_content is not None:
-                logger.info(
-                    "context_health: EVOLUTION.md dedup — %d exact-dup archived+stripped",
-                    dup_report.archived,
-                )
-        finally:
-            flock_unlock(lock_fd)
-            lock_fd.close()
-
-    @staticmethod
-    def _proposal_age_seconds(proposal_file: Path, data: dict, now: float) -> float:
-        """Age of a proposal in seconds from its TRUE creation time.
-
-        mtime is an UNRELIABLE age proxy (git checkout / rsync / status-rewrite
-        resets it — run_419ff7d4 Gate-2 HIGH). Prefer, in order:
-          1. the filename stamp `proposal_<id>_YYYYMMDD-HHMMSS.json` (set at write,
-             never rewritten — the reliable source),
-          2. the JSON `created_at` field,
-          3. file mtime (last resort — only when neither above parses).
-        Returns the LARGEST age the reliable sources support (so a reset mtime can
-        only ever make a proposal look OLDER-or-equal, never spuriously younger).
-        """
-        candidates: list[float] = []
-        m = re.search(r"_(\d{8})-(\d{6})\.json$", proposal_file.name)
-        if m:
-            try:
-                ts = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").replace(
-                    tzinfo=timezone.utc
-                )
-                candidates.append(now - ts.timestamp())
-            except ValueError:
-                pass
-        created = data.get("created_at")
-        if created:
-            try:
-                dt = datetime.fromisoformat(created)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                candidates.append(now - dt.timestamp())
-            except (ValueError, TypeError):
-                pass
-        if candidates:
-            return max(candidates)  # trust the oldest reliable signal, ignore reset mtime
-        try:
-            return now - proposal_file.stat().st_mtime  # last resort
-        except OSError:
-            return 0.0  # unknowable → treat as fresh (never reclaim on doubt)
-
-    def _expire_stale_proposals(self, root: Path) -> None:
-        """Expire + RECLAIM stale cultivation proposals across ALL projects.
-
-        TWO actions (run_419ff7d4 — the old version only did #1, which flipped
-        status but NEVER removed files → the proposals dir grew unbounded, 514
-        files / 351 terminal observed):
-          1. EXPIRE: a still-pending/queued proposal older than 14 days →
-             status flipped to "expired" in place (was the only behavior).
-          2. RECLAIM (the fix): a TERMINAL proposal (status NOT in
-             AWAITING_HUMAN_STATUSES — i.e. applied/rejected/dismissed/expired)
-             whose file is older than the RETENTION window → MOVED to a sibling
-             `archive/` subdir. ARCHIVE, never delete: ProposalFeedbackTracker
-             still counts archived proposals for reject-precision (its glob is
-             widened to scan archive/ too), and recall stays intact.
-
-        Safety (Gate-1 run_419ff7d4):
-          - LIVE (pending/escalated) proposals are NEVER moved, at any age — the
-            terminal check gates first, so an unparseable/missing status (defaults
-            to a non-terminal read) is left untouched.
-          - The RETENTION window (30d) >> any in-flight approve/reject, so a
-            proposal being actively written (fresh mtime) is never mid-write-moved
-            (no lock needed: age gate excludes the hot file).
-          - Malformed JSON / bad mtime → skip (leave the file), never move on doubt.
-        """
-        import shutil
-        from core.ddd_cultivation import AWAITING_HUMAN_STATUSES
-        projects_dir = root / "Projects"
-        if not projects_dir.is_dir():
-            return
-
-        now = time.time()
-        expire_ttl = 14 * 24 * 60 * 60       # 14 days: pending → expired (action 1)
-        retention = 30 * 24 * 60 * 60        # 30 days: terminal → archive (action 2)
-        # >2× the 14d TTL and far beyond any in-flight approve, so archiving never
-        # races a live write and never reclaims a still-referenced proposal.
-        expired = 0
-        reclaimed = 0
-
-        for project_dir in projects_dir.iterdir():
-            proposals_dir = project_dir / ".artifacts" / "proposals"
-            if not proposals_dir.is_dir():
-                continue
-            archive_dir = proposals_dir / "archive"
-
-            for proposal_file in proposals_dir.glob("*.json"):
-                try:
-                    data = json.loads(proposal_file.read_text(encoding="utf-8"))
-                    status = data.get("status", "pending")
-
-                    # AGE from the proposal's TRUE creation time, NOT file mtime
-                    # (Gate-2 HIGH, run_419ff7d4): mtime is an UNRELIABLE age proxy —
-                    # a git checkout / rsync / bulk status-rewrite resets it, so a
-                    # 60-day-old terminal proposal can look 22 days old by mtime and
-                    # escape reclaim (live: 253 files shared one reset mtime → an
-                    # mtime gate archived 58 of 259 truly-old). The filename carries
-                    # the real created stamp: proposal_<id>_YYYYMMDD-HHMMSS.json.
-                    # Fallback to created_at, then mtime, only when the name lacks it.
-                    file_age = self._proposal_age_seconds(proposal_file, data, now)
-
-                    # Action 1 — EXPIRE a stale still-open proposal (flip in place).
-                    if status in ("pending", "queued") and file_age >= expire_ttl:
-                        data["status"] = "expired"
-                        data["expired_reason"] = "14-day TTL exceeded"
-                        proposal_file.write_text(
-                            json.dumps(data, indent=2), encoding="utf-8"
-                        )
-                        expired += 1
-                        continue  # newly-expired: reclaim on a later sweep
-
-                    # Action 2 — RECLAIM a terminal proposal past the retention window.
-                    # LIVE (AWAITING_HUMAN_STATUSES) is never moved, regardless of age.
-                    if status not in AWAITING_HUMAN_STATUSES and file_age >= retention:
-                        archive_dir.mkdir(parents=True, exist_ok=True)
-                        shutil.move(str(proposal_file), str(archive_dir / proposal_file.name))
-                        reclaimed += 1
-                except (OSError, json.JSONDecodeError, ValueError):
-                    continue  # skip on any doubt — never move a file we can't read
-
-        if expired or reclaimed:
-            logger.info(
-                "context_health: expired %d stale proposals (>14d), "
-                "reclaimed %d terminal proposals to archive/ (>30d)",
-                expired, reclaimed,
-            )
-
     def _refresh_ddd_registry(self, root: Path) -> None:
         """Rebuild the DDD skill-registry manifest from every DDD's aim.json.
 
@@ -2141,18 +1404,8 @@ class ContextHealthHook:
         if da_dir.is_dir() and not today_file.exists():
             findings.append(f"MISSING: DailyActivity/{today_file.name} (no session logged today)")
 
-        # 5. Enforce section caps on MEMORY.md (daily, not just post-distillation)
+        # 5. MEMORY capacity is diagnostic-only; CDF never evicts baseline units.
         memory_path = context_dir / "MEMORY.md"
-        if memory_path.exists():
-            try:
-                from hooks.distillation_hook import DistillationTriggerHook
-                DistillationTriggerHook._enforce_section_caps(memory_path, root)
-                # Size-driven archive (hysteresis) after count-caps: the token-size
-                # lever that keeps the always-injected live MEMORY.md bounded
-                # (>30K body → archive lowest-value operational to 25K). Runs daily.
-                DistillationTriggerHook._enforce_size_valve(memory_path, root)
-            except Exception as exc:
-                logger.warning("context_health: section cap enforcement failed: %s", exc)
 
         # 6. Memory consistency — detect stale claims in MEMORY.md body
         if memory_path.exists():
@@ -2163,7 +1416,7 @@ class ContextHealthHook:
 
         # 8. Enforce retention policies (archive/delete old files)
         try:
-            self._enforce_retention_policies(ws_path)
+            findings += self._enforce_retention_policies(ws_path)
         except Exception as exc:
             logger.warning("context_health: retention policy enforcement failed: %s", exc)
 
@@ -2474,11 +1727,6 @@ class ContextHealthHook:
         from core.ddd_orchestrator import DddCultivationOrchestrator
         return DddCultivationOrchestrator()._ch_ddd_staleness(root, ws_path)
 
-    def _auto_apply_ddd_proposals(self, root: Path) -> None:
-        """Thin wrapper for individual channel invocation (used by tests)."""
-        from core.ddd_orchestrator import DddCultivationOrchestrator
-        DddCultivationOrchestrator()._auto_apply_ddd_proposals(root)
-
     @staticmethod
     def _detect_stale_memory_claims(memory_path: Path) -> list[str]:
         """Detect stale or inconsistent claims in MEMORY.md body.
@@ -2782,71 +2030,28 @@ class ContextHealthHook:
         return findings
 
     def _check_write_governance(self, context_dir: Path) -> list[str]:
-        """Write-side governance health (R3). Zero-LLM, entry-count based.
+        """Write-side governance health (R3). Zero-LLM.
 
-        Catches the drift class that silently rotted memory governance:
-          1. caps-key validity  — every SECTION_CAPS key is a real current
-             section (a dead key = that section is silently uncapped).
-          2. section over-cap   — any section whose live entry count exceeds
-             its cap with no reclaim progress (membership bloat).
-          3. orphan sections    — duplicate/orphan "## Distilled" sections (the
-             fallback target when a write goes to a non-existent section).
-
-        Counts ENTRIES, never tokens (R3-8: the token estimator is ~33% off;
-        gating governance on it would be building on a broken ruler). A finding
-        is a smoke alarm surfaced to the briefing, never an auto-mutation.
+        Flags duplicate/orphan "## Distilled" sections in MEMORY.md: the fallback
+        target when a write went to a section that does not exist. Per-section
+        entry caps are gone with the size valve (CDF r16.6 §12: nothing trims
+        MEMORY.md; the injection selector bounds the prompt). A finding is a smoke
+        alarm surfaced to the briefing, never an auto-mutation.
         """
         findings: list[str] = []
         memory_path = context_dir / "MEMORY.md"
         if not memory_path.exists():
             return findings
-
-        try:
-            from hooks.distillation_hook import SECTION_CAPS
-            from core.ddd_entry_lifecycle import MEMORY_SECTION_NAMES
-        except Exception as exc:  # pragma: no cover — SSoT import should succeed
-            return [f"[write-gov] could not load SSoT for write-governance check: {exc}"]
-
-        # 1. caps-key validity (defense against BROKEN-1 recurrence)
-        dead_keys = [k for k in SECTION_CAPS if k not in MEMORY_SECTION_NAMES]
-        if dead_keys:
-            findings.append(
-                f"[write-gov] SECTION_CAPS dead keys (section silently uncapped): {dead_keys}"
-            )
-
         try:
             content = memory_path.read_text(encoding="utf-8")
         except OSError:
             return findings
-
-        # Count entries per section (bullets directly under each "## <name>").
-        import re as _re
-        section_counts: dict[str, int] = {}
-        current: str | None = None
-        for line in content.splitlines():
-            if line.startswith("## "):
-                current = line[3:].strip()
-                section_counts.setdefault(current, 0)
-            elif current and _re.match(r"^- (?!\[Archived\])", line.strip()):
-                section_counts[current] = section_counts.get(current, 0) + 1
-
-        # 2. section over-cap (entry count, not token)
-        for sec, cap in SECTION_CAPS.items():
-            n = section_counts.get(sec, 0)
-            if n > cap:
-                findings.append(
-                    f"[write-gov] section '{sec}' over cap: {n}/{cap} entries "
-                    f"(reclaim/decay not keeping up)"
-                )
-
-        # 3. orphan "## Distilled" sections (misfile fallback signature)
         distilled = content.count("\n## Distilled")
         if distilled:
             findings.append(
                 f"[write-gov] {distilled} orphan '## Distilled' section(s) — "
                 f"a write targeted a non-existent section (drift); reconcile into real sections"
             )
-
         return findings
 
     def _check_governance_budgets(self, root: Path, context_dir: Path) -> list[str]:
@@ -2968,13 +2173,13 @@ class ContextHealthHook:
     # Retention Policies
     # ------------------------------------------------------------------
 
-    def _enforce_retention_policies(self, ws_path: str) -> None:
-        """Enforce time-based archival and cleanup.
+    def _enforce_retention_policies(self, ws_path: str) -> list[str]:
+        """Enforce time-based archival and cleanup; return findings for the report.
 
         1. DailyActivity >90 days -> move to Knowledge/Archives/
         2. Archives >365 days -> delete (except MEMORY-archive-*.md)
-        3. Open Threads with resolved marker >7 days -> log for manual review
-           (actual removal is handled by section cap enforcement, not here)
+        3. Open Threads with resolved marker >7 days -> reported only (MEMORY.md is
+           written by CDF alone; the user archives them)
         """
         root = Path(ws_path)
         da_dir = root / "Knowledge" / "DailyActivity"
@@ -2991,15 +2196,8 @@ class ContextHealthHook:
                 try:
                     file_date = datetime.strptime(f.stem, "%Y-%m-%d")
                     if file_date < cutoff_90:
-                        # Protect undistilled files from archival — but only up to
-                        # 180 days.  Beyond that, archive regardless to prevent
-                        # unbounded DailyActivity growth from distillation failures.
-                        cutoff_180 = datetime.now() - timedelta(days=180)
-                        if file_date >= cutoff_180:
-                            content = f.read_text(encoding="utf-8")
-                            if "distilled: true" not in content[:500]:  # check frontmatter only
-                                logger.warning("Skipping undistilled file %s (>90d but not yet distilled)", f.name)
-                                continue
+                        # No "distilled" gate: distillation is retired (CDF reads
+                        # sessions directly), so nothing marks a day distilled.
                         dest = archive_dir / f.name
                         f.rename(dest)
                         logger.info("Archived DailyActivity: %s", f.name)
@@ -3023,12 +2221,17 @@ class ContextHealthHook:
                 except (ValueError, IndexError):
                     continue
 
-        # 3. Archive resolved Open Threads >7 days — remove from MEMORY.md
-        #    and append to MEMORY-archive-YYYY-MM.md (same pattern as
-        #    _enforce_section_caps in distillation_hook.py).
+        # 3. Resolved Open Threads >7 days: reported, never moved (CDF single writer).
         memory_path = root / ".context" / "MEMORY.md"
+        findings: list[str] = []
         if memory_path.exists():
-            self._archive_resolved_open_threads(memory_path, root, cutoff_7)
+            resolved = self._resolved_open_threads(memory_path, cutoff_7)
+            if resolved:
+                findings.append(
+                    f"STALE: {len(resolved)} resolved Open Threads entr"
+                    f"{'y' if len(resolved) == 1 else 'ies'} older than 7 days in MEMORY.md "
+                    "(archive them by editing MEMORY.md)")
+        return findings
 
     # ------------------------------------------------------------------
     # Open Thread archival
@@ -3062,97 +2265,31 @@ class ContextHealthHook:
                 pass
         return None
 
-    def _archive_resolved_open_threads(
-        self, memory_path: Path, root: Path, cutoff: datetime
-    ) -> None:
-        """Remove resolved OT entries >cutoff from MEMORY.md, append to archive.
+    def _resolved_open_threads(self, memory_path: Path, cutoff: datetime) -> list[str]:
+        """Resolved (✅) Open Threads entries dated before *cutoff* (read-only).
 
-        Uses flock on the MEMORY.md.lock sidecar file, matching the
-        locking pattern in distillation_hook._enforce_section_caps and
-        scripts/locked_write.py.
+        Open Threads holds only what the user wrote (COE threads are computed on read,
+        core.coe_threads), and CDF is the one writer of MEMORY.md: nothing here moves
+        an entry. A resolved entry older than the cutoff is reported as a health
+        finding so the user can archive it with governed_edit.
         """
-        from utils.file_lock import flock_exclusive, flock_unlock
-
-        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = None
         try:
-            fd = open(lock_path, "w")  # noqa: SIM115
-            flock_exclusive(fd)
-            try:
-                content = memory_path.read_text(encoding="utf-8")
-                ot_match = re.search(
-                    r"(## Open Threads\n)(.*?)(?=\n## |\Z)",
-                    content, re.DOTALL,
-                )
-                if not ot_match:
-                    return
-
-                ot_header = ot_match.group(1)
-                ot_body = ot_match.group(2)
-                lines = ot_body.split("\n")
-                keep_lines: list[str] = []
-                archived_lines: list[str] = []
-
-                for line in lines:
-                    stripped = line.strip()
-                    if not stripped.startswith("- ") or "\u2705" not in stripped:
-                        keep_lines.append(line)
-                        continue
-                    entry_date = self._parse_ot_entry_date(stripped)
-                    if entry_date is None or entry_date >= cutoff:
-                        keep_lines.append(line)
-                        continue
-                    # Resolved and older than cutoff — archive it
-                    archived_lines.append(stripped)
-                    logger.info("Archiving resolved OT entry: %s", stripped[:80])
-
-                if not archived_lines:
-                    return
-
-                # Rewrite MEMORY.md without the archived entries
-                new_ot_body = "\n".join(keep_lines)
-                new_content = (
-                    content[:ot_match.start()]
-                    + ot_header + new_ot_body
-                    + content[ot_match.end():]
-                )
-                # MemoryGuard: sanitize before writing
-                try:
-                    from core.memory_guard import MemoryGuard
-                    new_content = MemoryGuard().sanitize(new_content)
-                except ImportError:
-                    pass  # memory_guard module not available yet
-                except Exception as guard_exc:
-                    logger.warning(
-                        "context_health: MemoryGuard failed during OT archival: %s",
-                        guard_exc,
-                    )
-                memory_path.write_text(new_content, encoding="utf-8")
-
-                # Archive via the single chokepoint → gitignored private .context/
-                # (source_path=memory_path lands it as MEMORY.md's sibling, NEVER the
-                # git-tracked Knowledge/Archives/ — CYCLE 1').
-                from core.ddd_entry_lifecycle import archive_raw_lines
-                today = date.today()
-                archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
-                archive_raw_lines(
-                    root, archived_lines, archive_name,
-                    source_path=memory_path,
-                    block_header=f"### Archived Open Threads ({today.isoformat()})",
-                    create_header=f"# Memory Archive — {today.strftime('%Y-%m')}",
-                )
-                logger.info(
-                    "context_health: archived %d resolved OT entries to .context/%s",
-                    len(archived_lines), archive_name,
-                )
-            finally:
-                flock_unlock(fd)
-        except Exception as exc:
-            logger.warning("context_health: OT archival failed: %s", exc)
-        finally:
-            if fd:
-                fd.close()
+            content = memory_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("context_health: cannot read MEMORY.md for Open Threads: %s", exc)
+            return []
+        ot_match = re.search(r"(## Open Threads\n)(.*?)(?=\n## |\Z)", content, re.DOTALL)
+        if not ot_match:
+            return []
+        out: list[str] = []
+        for line in ot_match.group(2).split("\n"):
+            stripped = line.strip()
+            if not stripped.startswith("- ") or "\u2705" not in stripped:
+                continue
+            entry_date = self._parse_ot_entry_date(stripped)
+            if entry_date is not None and entry_date < cutoff:
+                out.append(stripped)
+        return out
 
     # ------------------------------------------------------------------
     # Helpers

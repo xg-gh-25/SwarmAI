@@ -332,3 +332,42 @@ class TestParseableFindingCount:
 
     def test_no_block_counts_zero(self):
         assert _count_parseable_findings("clean review, no drift") == []
+
+
+class TestS4RefineBoundary:
+    def test_certain_fix_enqueues_complete_refine_without_writing(self, tmp_path, monkeypatch):
+        import jobs.handlers.ddd_self_audit as mod
+        from core.ingestion import api_v2
+        from core.ingestion.sources import s4_code
+
+        ws = tmp_path / "ws"; project = ws / "Projects/P"; docs = project / "2-understanding"
+        docs.mkdir(parents=True)
+        target = docs / "TECH.md"
+        target.write_text("# Tech\n\n## Conventions\n\n- [guideline] **Gate rollout** Run benchmark once `gate-tool` exists.\n"
+                          "- [x] Built and shipped `gate-tool` for benchmark use.\n")
+        monkeypatch.setattr(mod, "SWARMWS", ws)
+        registered, enqueued, attempts = [], [], []
+        monkeypatch.setattr(api_v2, "register_root", lambda *a, **k:
+                            registered.append((a, k)) or "root:file")
+        monkeypatch.setattr(api_v2, "enqueue_unit", lambda *a, **k:
+                            enqueued.append((a, k)) or MagicMock(status="queued"))
+        monkeypatch.setattr(api_v2, "record_extraction_attempt", lambda *a, **k:
+                            attempts.append((a, k)) or "attempt")
+        finding = {"title": "Gate condition is complete", "fix": {
+            "type": "drop_condition", "doc": "TECH.md",
+            "line": "Run benchmark once `gate-tool` exists.",
+            "span": "once `gate-tool` exists",
+            "done": "- [x] Built and shipped `gate-tool` for benchmark use."}}
+        before = target.read_bytes()
+        rows = mod._resolve_findings([finding], "P", project, None,
+                                     run_id="audit", dry_run=False, today="2026-10-27")
+        assert rows[0]["outcome"] == "queued", rows[0].get("reason")
+        assert target.read_bytes() == before
+        assert registered[0][0][0] == "file_revision"
+        unit = enqueued[0][0][2]
+        assert unit.kind == "cognition" and unit.scope == "project:P"
+        assert "once `gate-tool` exists" not in unit.what
+        assert unit.relation_hint["kind"] == "supersedes"
+        assert unit.relation_hint["refuted_span"] == "once `gate-tool` exists"
+        assert enqueued[0][1]["read_root_ids"] == ("root:file",)
+        assert len(attempts) == 1
