@@ -7,12 +7,11 @@
 
 from __future__ import annotations
 
-import json
 import platform
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
-from jobs.bedrock import build_timeout_client, get_model_id
+from jobs.bedrock import StructuredOutputError, get_model_id, text
 
 from . import llm_usage
 from .contracts import CONTRACT_VERSION, NORMALIZER_VERSION, PROMPT_VERSION, RULES_VERSION, Card1Answer, Card3bAnswer, HitJudgment
@@ -42,27 +41,29 @@ class BedrockJudge:
     top_p = None
     seed = None
 
+    max_tokens = 4096
+    read_timeout = 25
+
     def __init__(self, model_id: str | None = None) -> None:
         self.model_id = model_id or get_model_id("claude-sonnet-4-6")
-        self._client = build_timeout_client(read_timeout=25, max_attempts=2)
 
     def _invoke(self, prompt: str, parser: Any) -> JudgeResult[Any]:
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "temperature": self.temperature,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        response = self._client.invoke_model(
-            modelId=self.model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(body),
-        )
-        decoded = json.loads(response["body"].read())
-        llm_usage.record(decoded.get("usage") or {})
-        blocks = decoded.get("content", [])
-        raw = blocks[0].get("text", "") if blocks and blocks[0].get("type") == "text" else ""
+        """One call through jobs.bedrock.text(); the card's strict parser types the reply.
+
+        A reply cut at max_tokens, or an empty one, is UntypedOutput with its kind in the
+        message: deterministic for the same input, so it is not retried (design
+        2026-10-28-structured-model-output §5.4).
+        """
+        usage: dict[str, int] = {}
+        try:
+            raw = text(prompt, model_id=self.model_id, max_tokens=self.max_tokens,
+                       temperature=self.temperature, read_timeout=self.read_timeout,
+                       max_attempts=2, usage=usage)
+        except StructuredOutputError as exc:
+            raise UntypedOutput(f"reply {exc.kind}: {exc.detail}", raw=exc.raw) from exc
+        finally:
+            if usage:
+                llm_usage.record(usage)
         try:
             value = parser(raw)
         except UntypedOutput as exc:

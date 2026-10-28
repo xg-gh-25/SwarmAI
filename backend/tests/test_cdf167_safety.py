@@ -405,3 +405,26 @@ def test_apply_sync_records_completed_directory_move(
     connection.close()
     moved = ensure_baseline()["files"]["Projects/New/2-understanding/TECH.md"]
     assert moved["units"][0]["trust"] == "external"
+
+
+def test_cutover_snapshot_runs_as_a_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rehearsal runs the snapshot as `python scripts/cdf_cutover_snapshot.py` from any
+    directory; it must import this checkout's backend, not fail on `core` (found in the
+    2026-10-28 rehearsal: every module-import test above passed while the CLI could not)."""
+    import subprocess
+    import sys
+    data, workspace = tmp_path / "data", tmp_path / "SwarmWS"
+    (workspace / ".context").mkdir(parents=True)
+    data.mkdir()
+    (workspace / ".context" / "MEMORY.md").write_text("# Memory\n")
+    monkeypatch.setenv("SWARM_DATA_DIR", str(data))
+    from core.ingestion.store import connect_rw
+    connect_rw().close()
+    script = Path(__file__).resolve().parents[1] / "scripts" / "cdf_cutover_snapshot.py"
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env.update(SWARM_DATA_DIR=str(data), SWARM_WORKSPACE=str(workspace))
+    result = subprocess.run(
+        [sys.executable, str(script), "--data-dir", str(data), "--workspace", str(workspace),
+         "snapshot"], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    assert "No module named" not in result.stderr, result.stderr[-800:]
+    assert result.returncode == 0, result.stderr[-800:]

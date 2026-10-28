@@ -11,8 +11,6 @@ What is tested:
 """
 from __future__ import annotations
 
-import io
-import json
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -28,21 +26,15 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return data
 
 
-class _Client:
-    """Fake bedrock-runtime client returning a fixed usage block."""
-
-    def __init__(self, text: str, tokens_in: int, tokens_out: int) -> None:
-        self.text, self.tokens_in, self.tokens_out = text, tokens_in, tokens_out
-
-    def invoke_model(self, **_: Any) -> dict[str, Any]:
-        body = {"content": [{"type": "text", "text": self.text}],
-                "usage": {"input_tokens": self.tokens_in, "output_tokens": self.tokens_out}}
-        return {"body": io.BytesIO(json.dumps(body).encode())}
-
-
 def _judge(monkeypatch: pytest.MonkeyPatch, tokens_in: int, tokens_out: int):
+    """BedrockJudge whose jobs.bedrock.text() call is faked, filling usage like the real one."""
     from core.ingestion import llm
-    monkeypatch.setattr(llm, "build_timeout_client", lambda **_: _Client("{}", tokens_in, tokens_out))
+
+    def fake_text(prompt, *, usage, **_):
+        usage.update(input_tokens=tokens_in, output_tokens=tokens_out)
+        return "{}"
+
+    monkeypatch.setattr(llm, "text", fake_text)
     return llm.BedrockJudge(model_id="test-model")
 
 
@@ -103,6 +95,22 @@ def test_worker_attributes_each_candidate_to_its_source(monkeypatch) -> None:
     worker.process_candidate(None, None, {"source": "remember", "source_v2": "S3"}, Path("."), None)
     worker.process_candidate(None, None, {"source": "remember", "source_v2": None}, Path("."), None)
     assert seen == ["S3", "remember"]
+
+
+def test_truncated_reply_is_untyped_and_still_recorded(data_dir, monkeypatch) -> None:
+    from core.ingestion import llm
+    from core.ingestion.prompts import UntypedOutput
+    from jobs.bedrock import StructuredOutputError
+
+    def cut(prompt, *, usage, **_):
+        usage.update(input_tokens=500, output_tokens=4096)
+        raise StructuredOutputError("truncated", "half a reply", "reply reached max_tokens=4096")
+
+    monkeypatch.setattr(llm, "text", cut)
+    with pytest.raises(UntypedOutput) as caught:
+        llm.BedrockJudge(model_id="m")._invoke("p", lambda raw: raw)
+    assert "truncated" in str(caught.value) and caught.value.raw == "half a reply"
+    assert _rows(data_dir) == [("-", 1, 500, 4096)]
 
 
 def test_recording_fails_open(data_dir, monkeypatch) -> None:

@@ -5,7 +5,7 @@ Five steps, all inside one eval directory:
   draw up to N per stratum with a fixed seed. ``items.jsonl`` is the blind view (text,
   source, project candidates); ``key.jsonl`` holds the system outcome; ``sample.json``
   records the input hash, seed and per-stratum population/sample counts.
-- ``label``: one labeler (a Bedrock model via the Converse API) labels every item:
+- ``label``: one labeler (a Bedrock model, through jobs.bedrock.structured) labels every item:
   should_write, scope, missing_why. Resumable; stops at ``--max-usd``.
 - ``aggregate``: majority per field; ``review.html`` for the user carries every item with
   no majority plus a random spot check per field; it exports ``adjudication.json``.
@@ -123,11 +123,10 @@ Answer three questions:
 2. scope: "user" (about this person's preferences or rules), "agent" (how the agent
    should work), "world" (general facts), or "project:<name>" (specific to one project;
    use a name from the candidates when one fits).
-3. missing_why (true/false/null): if the text records a decision, does it leave out WHY
-   the decision was made? null when the text is not a decision.
+3. missing_why ("true"/"false"/"not_a_decision"): if the text records a decision, does
+   it leave out WHY the decision was made?
 
-Reply with ONLY a JSON object:
-{"should_write": bool, "scope": str, "missing_why": bool|null, "reason": "<one sentence, Chinese>"}"""
+Record your answer with the answer tool; write the reason in one Chinese sentence."""
 
 
 def _prompt(item: dict[str, Any]) -> str:
@@ -136,45 +135,52 @@ def _prompt(item: dict[str, Any]) -> str:
             f"<candidate>\n{item['text']}\n</candidate>")
 
 
-def parse_label(raw: str) -> dict[str, Any]:
-    """Strict parse of one labeler reply; raises ValueError on anything else."""
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        text = text[text.index("{"):] if "{" in text else text
-    start, end = text.find("{"), text.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError("no JSON object")
-    value = json.loads(text[start:end + 1])
-    if not isinstance(value.get("should_write"), bool):
-        raise ValueError("should_write must be a boolean")
-    scope = value.get("scope")
+LABEL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reason": {"type": "string"},
+        "should_write": {"type": "boolean"},
+        "scope": {"type": "string"},
+        "missing_why": {"type": "string", "enum": ["true", "false", "not_a_decision"]},
+    },
+    "required": ["reason", "should_write", "scope", "missing_why"],
+}
+
+
+def parse_label(answer: dict[str, Any]) -> dict[str, Any]:
+    """Check one labeler answer (already schema-shaped); raises ValueError otherwise."""
+    scope = answer.get("scope")
     if not (scope in ("user", "agent", "world") or (isinstance(scope, str) and scope.startswith("project:")
                                                     and len(scope) > len("project:"))):
         raise ValueError(f"bad scope {scope!r}")
-    if value.get("missing_why") not in (True, False, None):
-        raise ValueError("missing_why must be true, false or null")
-    return {"should_write": value["should_write"], "scope": scope,
-            "missing_why": value.get("missing_why"), "reason": str(value.get("reason") or "")}
+    if not isinstance(answer.get("should_write"), bool):
+        raise ValueError("should_write must be a boolean")
+    why = {"true": True, "false": False, "not_a_decision": None}
+    if answer.get("missing_why") not in why:
+        raise ValueError("missing_why must be true, false or not_a_decision")
+    return {"should_write": answer["should_write"], "scope": scope,
+            "missing_why": why[answer["missing_why"]], "reason": str(answer.get("reason") or "")}
 
 
-def bedrock_caller(model_id: str) -> Callable[[str], tuple[str, int, int]]:
-    """Converse API caller: returns (text, input_tokens, output_tokens)."""
-    from jobs.bedrock import build_timeout_client
-    client = build_timeout_client(read_timeout=60, max_attempts=2)
+def bedrock_caller(model_id: str) -> Callable[[str], tuple[dict[str, Any], int, int]]:
+    """One labeler call through jobs.bedrock.structured(): (answer, input, output tokens).
 
-    def call(prompt: str) -> tuple[str, int, int]:
-        response = client.converse(
-            modelId=model_id, messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": 512, "temperature": 0.0})
-        blocks = response["output"]["message"]["content"]
-        usage = response.get("usage") or {}
-        return ("".join(b.get("text", "") for b in blocks),
-                int(usage.get("inputTokens") or 0), int(usage.get("outputTokens") or 0))
+    A truncated, missing or invalid answer comes back as {"error": kind, "raw": ...}.
+    """
+    from jobs.bedrock import StructuredOutputError, structured
+
+    def call(prompt: str) -> tuple[dict[str, Any], int, int]:
+        usage: dict[str, int] = {}
+        try:
+            answer = structured(prompt, schema=LABEL_SCHEMA, model_id=model_id, max_tokens=1000,
+                                read_timeout=60, max_attempts=2, usage=usage)
+        except StructuredOutputError as exc:
+            answer = {"error": exc.kind, "raw": exc.raw}
+        return answer, int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0)
     return call
 
 
-def label(eval_dir: Path, labeler: str, call: Callable[[str], tuple[str, int, int]], *,
+def label(eval_dir: Path, labeler: str, call: Callable[[str], tuple[dict[str, Any], int, int]], *,
           max_usd: float, price_in: float = 3.0, price_out: float = 15.0) -> dict[str, Any]:
     """Label every item not yet labeled by ``labeler``; stop before exceeding max_usd."""
     if not labeler.replace("-", "").replace("_", "").isalnum():
@@ -191,13 +197,15 @@ def label(eval_dir: Path, labeler: str, call: Callable[[str], tuple[str, int, in
             if spent >= max_usd:
                 counts["budget_stop"] += 1
                 break
-            raw, tokens_in, tokens_out = call(_prompt(item))
+            answer, tokens_in, tokens_out = call(_prompt(item))
             spent += (tokens_in * price_in + tokens_out * price_out) / 1_000_000
             try:
-                row = {"id": item["id"], **parse_label(raw)}
+                if "error" in answer:
+                    raise ValueError(f"reply {answer['error']}")
+                row = {"id": item["id"], **parse_label(answer)}
                 counts["labeled"] += 1
-            except (ValueError, json.JSONDecodeError) as exc:
-                row = {"id": item["id"], "error": str(exc), "raw": raw}
+            except ValueError as exc:
+                row = {"id": item["id"], "error": str(exc), "raw": answer.get("raw", answer)}
                 counts["unparsed"] += 1
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
             handle.flush()

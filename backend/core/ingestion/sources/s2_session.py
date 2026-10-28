@@ -2,6 +2,13 @@
 
 The source reads every transcript page, excludes user events already claimed by S1,
 enqueues the trusted pass before the main pass, and records zero-output attempts.
+
+- ``windows`` splits a pass's input into consecutive windows of at most
+  ``WINDOW_CHARS`` serialized characters along item boundaries; one item larger than a
+  window is cut into numbered ``part`` fragments. Nothing is dropped. Each window is one
+  extraction call with its own attempt record (found in the 2026-10-28 rehearsal: 15 of
+  37 real sessions in a week were over 200K tokens, 3 over 1M, so one call per session
+  failed). A unit repeated across windows is deduplicated by the writer as usual.
 """
 from __future__ import annotations
 
@@ -21,6 +28,37 @@ from .extract_llm import EXTRACTOR_VERSION
 logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 200
+# 150,000 characters stays under a 200K-token window even if every character is CJK
+# (about one token each), with room for the prompt, schema and reply.
+WINDOW_CHARS = 150_000
+
+
+def windows(items: list[dict[str, Any]], key: str, *, limit: int = WINDOW_CHARS
+            ) -> list[list[dict[str, Any]]]:
+    """Consecutive windows of ``items``; ``key`` names an item's id for its fragments."""
+    out: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    size = 0
+    for item in items:
+        text = json.dumps(item, ensure_ascii=False, default=str)
+        if len(text) > limit:
+            if current:
+                out.append(current)
+                current, size = [], 0
+            step = limit - 200  # room for the fragment's own fields
+            pieces = [text[i:i + step] for i in range(0, len(text), step)]
+            for index, piece in enumerate(pieces, 1):
+                out.append([{"part_of": item.get(key), "part": index, "parts": len(pieces),
+                             "json_fragment": piece}])
+            continue
+        if current and size + len(text) + 2 > limit:
+            out.append(current)
+            current, size = [], 0
+        current.append(item)
+        size += len(text) + 2
+    if current:
+        out.append(current)
+    return out
 _ALLOWED = ("cognition", "event", "reference")
 
 
@@ -147,13 +185,20 @@ def _trusted_pass(session_id: str, rows: list[dict[str, Any]], claimed: set[str]
     if not parts:
         _record_empty(session_id, "user_utterance", evidence_range)
         return []
-    return common.extract_and_enqueue(
-        "S2", session_id, json.dumps(parts, ensure_ascii=False), tuple(anchors),
-        evidence_range=evidence_range, session_id=session_id,
-        read_root_ids=_root_ids(tuple(row["event_id"] for row in selected)),
-        project_snapshot=project_snapshot, extraction_pass="user_utterance",
-        allowed_kinds=_ALLOWED, llm=llm,
-        unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None)
+    chunks = windows(parts, "event_id")
+    outcomes: list[Any] = []
+    for index, chunk in enumerate(chunks, 1):
+        events = sorted({str(p.get("event_id") or p.get("part_of")) for p in chunk})
+        outcomes += common.extract_and_enqueue(
+            "S2", session_id, json.dumps(chunk, ensure_ascii=False),
+            tuple(f"event:{event}" for event in events),
+            evidence_range={**evidence_range, "events": events,
+                            "window": index, "windows": len(chunks)},
+            session_id=session_id, read_root_ids=_root_ids(tuple(events)),
+            project_snapshot=project_snapshot, extraction_pass="user_utterance",
+            allowed_kinds=_ALLOWED, llm=llm,
+            unit_filter=lambda unit: "not_self_contained" if _obviously_deictic(unit) else None)
+    return outcomes
 
 
 def _main_pass(session_id: str, transcript: list[dict[str, Any]],
@@ -166,12 +211,19 @@ def _main_pass(session_id: str, transcript: list[dict[str, Any]],
     if not transcript:
         _record_empty(session_id, "main", evidence_range)
         return []
-    return common.extract_and_enqueue(
-        "S2", session_id, json.dumps(transcript, ensure_ascii=False, default=str), evidence,
-        evidence_range=evidence_range, session_id=session_id,
-        read_root_ids=_root_ids(tuple(row["event_id"] for row in owned)),
-        project_snapshot=project_snapshot, extraction_pass="main",
-        allowed_kinds=_ALLOWED, llm=llm)
+    # Every window keeps the whole session's read set: the conservative lineage (a unit
+    # can be no cleaner than anything the session read), not a per-window guess.
+    roots = _root_ids(tuple(row["event_id"] for row in owned))
+    chunks = windows(transcript, "id")
+    outcomes: list[Any] = []
+    for index, chunk in enumerate(chunks, 1):
+        outcomes += common.extract_and_enqueue(
+            "S2", session_id, json.dumps(chunk, ensure_ascii=False, default=str), evidence,
+            evidence_range={**evidence_range, "window": index, "windows": len(chunks)},
+            session_id=session_id, read_root_ids=roots,
+            project_snapshot=project_snapshot, extraction_pass="main",
+            allowed_kinds=_ALLOWED, llm=llm)
+    return outcomes
 
 
 async def extract_session(session_id: str, *, project_snapshot: dict[str, Any] | None = None,

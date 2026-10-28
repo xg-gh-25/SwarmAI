@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Import this checkout's backend, not whatever the venv's editable install points at.
+import sys
+_BACKEND = Path(__file__).resolve().parents[1]
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
 from utils.file_lock import flock_exclusive_nb, flock_unlock
 
 

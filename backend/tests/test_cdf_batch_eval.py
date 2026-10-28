@@ -39,8 +39,9 @@ EXPORT = [
      "record": {"raw": {"what": "lost lesson"}}},
 ]
 
-L = lambda w, s, m="null", r="理由": json.dumps(  # noqa: E731
-    {"should_write": w, "scope": s, "missing_why": json.loads(m), "reason": r})
+_WHY = {"null": "not_a_decision", "true": "true", "false": "false"}
+L = lambda w, s, m="null", r="理由": {  # noqa: E731
+    "should_write": w, "scope": s, "missing_why": _WHY[m], "reason": r}
 VOTES = {
     "A": {"rule A": L(True, "project:SwarmAI", "false"), "progress note": L(False, "agent"),
           "should keep": L(True, "agent", "true"), "known fact": L(True, "world"),
@@ -50,7 +51,7 @@ VOTES = {
           "pending thing": L(False, "agent"), "lost lesson": L(True, "user")},
     "C": {"rule A": L(True, "project:SwarmAI", "false"), "progress note": L(True, "agent"),
           "should keep": L(False, "agent", "true"), "known fact": L(True, "agent"),
-          "pending thing": "not json", "lost lesson": L(True, "user")},
+          "pending thing": {"error": "missing", "raw": ""}, "lost lesson": L(True, "user")},
 }
 
 
@@ -89,7 +90,7 @@ def test_unparsed_reply_is_retried_and_budget_stops(eval_dir: Path) -> None:
     try:
         assert be.label(eval_dir, "C", _caller("C"), max_usd=5)["labeled"] == 1
     finally:
-        VOTES["C"]["pending thing"] = "not json"
+        VOTES["C"]["pending thing"] = {"error": "missing", "raw": ""}
     fresh = eval_dir / "labels"
     (fresh / "D.jsonl").unlink(missing_ok=True)
     result = be.label(eval_dir, "D", _caller("A"), max_usd=0.004)  # one call costs 0.0045
@@ -98,10 +99,33 @@ def test_unparsed_reply_is_retried_and_budget_stops(eval_dir: Path) -> None:
 
 
 def test_parse_label_is_strict() -> None:
-    assert be.parse_label("```json\n" + L(True, "world") + "\n```")["scope"] == "world"
-    for bad in ('{"should_write": "yes", "scope": "world"}', L(True, "team"), "nothing"):
+    assert be.parse_label(L(True, "world"))["scope"] == "world"
+    assert be.parse_label(L(True, "world"))["missing_why"] is None
+    for bad in ({**L(True, "world"), "should_write": "yes"}, L(True, "team"),
+                {**L(True, "world"), "missing_why": "maybe"}):
         with pytest.raises(ValueError):
             be.parse_label(bad)
+
+
+def test_labeler_asks_through_structured(monkeypatch) -> None:
+    import jobs.bedrock as jb
+    seen = {}
+
+    def fake(prompt, *, schema, model_id, usage, **kw):
+        seen.update(schema=schema, model=model_id)
+        usage.update(input_tokens=7, output_tokens=3)
+        return L(False, "agent")
+
+    monkeypatch.setattr(jb, "structured", fake)
+    answer, tokens_in, tokens_out = be.bedrock_caller("labeler-model")("p")
+    assert seen == {"schema": be.LABEL_SCHEMA, "model": "labeler-model"}
+    assert (answer["scope"], tokens_in, tokens_out) == ("agent", 7, 3)
+
+    def cut(prompt, **kw):
+        raise jb.StructuredOutputError("truncated", "half", "max_tokens")
+
+    monkeypatch.setattr(jb, "structured", cut)
+    assert be.bedrock_caller("m")("p")[0] == {"error": "truncated", "raw": "half"}
 
 
 def test_judge_model_is_refused(eval_dir: Path, monkeypatch) -> None:
