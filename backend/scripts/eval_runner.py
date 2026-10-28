@@ -1788,7 +1788,8 @@ def _bootstrap_entries_failures(repo_rel: str, final_text: str) -> list[str]:
             srcs = entry.get("sources") if isinstance(entry, dict) else None
             for src in srcs if isinstance(srcs, list) else []:
                 if isinstance(src, str) and (src.strip() == "user" or src.strip().startswith(("url:", "file:"))):
-                    raise ap.Rejected(f"source {src!r}: only a file of the repo is evidence here")
+                    raise ap.Rejected(f"source {src!r}: only a file of the repo is evidence here",
+                                      ap.EVIDENCE)
             ap.check_entry(entry, evidence, stamp)
         except ValueError as exc:  # Rejected is a ValueError
             bad.append(f"#{i}: {exc}")

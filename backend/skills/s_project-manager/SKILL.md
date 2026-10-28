@@ -129,7 +129,7 @@ preserving all hand-authored ②/⑤ content. Safe to re-run; done per-project o
 |-------|----|----------------------------------|
 | **P0 — DEFINE (资产定形)** ⭐ | Before touching content, write the **governed-asset inventory**: `0..N` assets, each with a `kind` (`code-repo` / `data-source` / `skill-set` / `document-corpus` / `external-service` / `process` / …). This one decision determines the shape of ⑤ and whether ⑥ does anything. | An explicit asset list exists (a 0-asset pure-knowledge brain is a valid, complete answer — write "0 assets"). |
 | **P1 — CREATE** | `create_project` scaffolds the six-section skeleton (the four docs come from the one skeleton, `backend/templates/ddd-skeleton/`) + copies the native skills. | Six-section skeleton present (verified by P6's ① / ③ / ④ checks). |
-| **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** ask the person only about the PRODUCT sections it reports in `ask` (at most 3 questions); every section left without evidence gets a gap. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); PRODUCT, TECH and IMPROVEMENT each hold a typed entry, and every empty PRODUCT section has its gap (content). |
+| **P2 — KNOWLEDGE (the moat)** | **A repo is bound (P3) before P2:** the survey and `bootstrap-apply` only see repos the brain owns, so entries citing an unbound repo are all rejected and the person gets asked what the README already says. Learn the material, then write typed entries — the model judges, a deterministic tool writes. **P2a** survey the repos (`artifact_cli bind` does it; else `artifact_cli survey`) and read the DISTILL material whole. **P2b** get the format (`artifact_cli entry-contract`), then write `.artifacts/bootstrap/bootstrap-entries.json` section by section (§ "Writing a new brain's first entries" below). **P2c** `artifact_cli bootstrap-apply` checks and writes them; fix what it rejects and re-run. **P2d** ask the person only about the PRODUCT sections it reports in `ask` (at most 3 questions); every section left without evidence gets a gap. Never invent content to fill a section. | P6 ②: every skeleton section present (structure); PRODUCT, TECH and IMPROVEMENT each hold a typed entry, and every empty PRODUCT section has its gap (content). |
 | **P3 — BIND** *(CONDITIONAL)* | **Only if P0 listed assets. Run it right after P1, before P2** (the bind surveys the repo P2 reads). Declare each asset in `bindings.yaml`: a `code-repo` → a `bindings:` entry + `delivery_contract`; a `data-source` / `skill-set` → a `governed_assets:` entry. A **0-asset brain SKIPS this** (no `bindings.yaml`). | Every P0 asset appears in `bindings.yaml` (P6 ⑤ check). 0-asset → ⑤ is N/A, which passes. |
 | **P3b — PROJECT AGENT** ⭐ | **Every brain.** Generate `project-agent.yaml` (next to `bindings.yaml`, section ⑤) from what this brain now knows — see "Generating the Project Agent" below. Show it to the person as a short table and ask them to confirm or change it. They review and revise; they never fill it in. Set `status: reviewed` and `reviewed_at` only after they confirm. | P6 ⑤ Project Agent check: present with only supported profiles and placements → PASS; missing → PENDING. |
 | **P4 — REFRESHER (code graph)** *(CONDITIONAL)* | **Only for a `kind: code-repo` asset.** `artifact_cli bind <project>` (P3's bind) clones the repo and builds its code graph; the reindex job keeps it current on each commit. Nothing else to write. **`data-source` / `skill-set` / `document-corpus` / 0-asset → NO-OP.** | P6 ⑥ check: code-repo asset + a code graph that opens, holds indexed files and was built from the brain's own repo → PASS; not bound yet / empty / foreign → **PENDING (not a failure)**; no code-repo asset → **N/A**. |
@@ -319,9 +319,14 @@ Never read a repo with `head`/`cat` snippets: a cut README or the first five fil
 
 #### Writing a new brain's first entries (P2b)
 
-Write `Projects/<P>/.artifacts/bootstrap/bootstrap-entries.json`: one valid JSON list, one
-object per entry, the objects separated by commas. The file is parsed as one JSON document,
-so bare objects one after another (JSON Lines) are refused. Two kinds:
+First get the format: `"$SWARM_BACKEND_BIN" py scripts/artifact_cli.py entry-contract
+--project <P>` prints it and writes `Projects/<P>/.artifacts/bootstrap/entry-contract.json`.
+It is generated from the rules `bootstrap-apply` enforces: the file's shape, the fields of
+each kind, the fields each type requires and what they mean, the types each section takes,
+the source forms, the limits, and `repos.owned` — the repos this brain can cite (none, for
+a pure-knowledge brain: cite only `file:`, `url:` or `user`). Follow it; this skill does
+not repeat it. Then write
+`Projects/<P>/.artifacts/bootstrap/bootstrap-entries.json`. Two kinds of entry:
 
 ```json
 [
@@ -336,33 +341,30 @@ so bare objects one after another (JSON Lines) are refused. Two kinds:
 ]
 ```
 
-Fields: `title` (one line, ≤200 characters, no `**` or `|`), `what`, and by type `how`,
-`why`, `applicability`, `rejected_alternatives`. **Required:** a `decision` has `why`
-and `rejected_alternatives` ("none" is an answer); a `pitfall` has `applicability` (the
-trigger); a `process` has `how` (the command). **Sources** (every cognition entry):
-`<path>#heading` or `<path>:line` of a tracked file of the brain's repo (prefix
-`<repo>:` when it owns several), `file:<absolute path>` for a DISTILL file, `url:<link>`,
-`user` for what the person said. Content from a repo, file or link is written as
-outside content (`taint:external`); only `user` is not.
+Which source to cite: a repo file as `<path>#heading` or `<path>:line`, a document the
+person gave as `file:<absolute path>`, a web page as `url:`, what the person said as
+`user`. Content from a repo, file or link is written as outside content
+(`taint:external`); only `user` is not.
 
-Section by section — the type column is enforced (it is where CDF routes that type):
+Section by section, where to take the content from (the types each section takes are in
+the contract; they are where CDF routes that type):
 
-| Section | Type | Take it from |
-|---|---|---|
-| PRODUCT Vision | principle | the README's positioning, the package description |
-| PRODUCT What Makes It Different | model | comparisons with alternatives the docs make |
-| PRODUCT Strategic Priorities | decision | priorities the docs state; **none stated → leave it empty** |
-| PRODUCT Success Criteria | guideline / process | criteria the docs state; else empty |
-| PRODUCT Non-Goals | pitfall / correction | what the docs say is out of scope; else empty |
-| TECH Architecture | principle / decision | ARCHITECTURE / design documents; the entry points |
-| TECH Key Subsystems | model | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |
-| TECH Conventions | guideline / process | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` = the CI / Makefile / package.json that declares it) |
-| TECH Runtime Traps | pitfall / correction | each `history.hotspots` file with its commit subjects; security / bugfix CHANGELOG entries; SECURITY.md |
-| IMPROVEMENT What Worked | guideline / principle / decision / model / process | usually empty at birth |
-| IMPROVEMENT What Failed | pitfall / correction | reverts and repeated fixes, citing the commits' files |
-| IMPROVEMENT What to Watch For | gap only | what has no evidence: untested entry points, a doc that disagrees with the code, an empty PRODUCT section |
-| PROJECT Recent Decisions | decision | accepted ADRs and design-document decisions (`why`, `rejected_alternatives`) |
-| PROJECT Current Focus / Open Items / Blocked By | — | the person's live state: never written here |
+| Section | Take it from |
+|---|---|
+| PRODUCT Vision | the README's positioning, the package description |
+| PRODUCT What Makes It Different | comparisons with alternatives the docs make |
+| PRODUCT Strategic Priorities | priorities the docs state; **none stated → leave it empty** |
+| PRODUCT Success Criteria | criteria the docs state; else empty |
+| PRODUCT Non-Goals | what the docs say is out of scope; else empty |
+| TECH Architecture | ARCHITECTURE / design documents; the entry points |
+| TECH Key Subsystems | one per `code_shape.graph_clusters` cluster that matters: responsibility, entry point, what it depends on; `sources` = the cluster's `files` (never a graph id) |
+| TECH Conventions | CONTRIBUTING, the `conventions` configs; one process per dev command (`how` = the command, `sources` = the CI / Makefile / package.json that declares it) |
+| TECH Runtime Traps | each `history.hotspots` file with its commit subjects; security / bugfix CHANGELOG entries; SECURITY.md |
+| IMPROVEMENT What Worked | usually empty at birth |
+| IMPROVEMENT What Failed | reverts and repeated fixes, citing the commits' files |
+| IMPROVEMENT What to Watch For | gaps only: what has no evidence (untested entry points, a doc that disagrees with the code, an empty PRODUCT section) |
+| PROJECT Recent Decisions | accepted ADRs and design-document decisions (`why`, `rejected_alternatives`) |
+| PROJECT Current Focus / Open Items / Blocked By | the person's live state: never written here |
 
 Good: *"[pitfall] Changing the default digest invalidates every issued token … Applies
 when upgrading or configuring the digest"* — a trigger, a consequence, a source.
@@ -378,9 +380,12 @@ anything no source supports.
 
 It writes only while the brain is setting up, only into docs that hold nothing but the
 skeleton and earlier bootstrap entries, and only appends at the end of each entry's
-section. The report lists `rejected` entries with the reason (wrong section for the
-type, a missing required field, a source that is not a tracked repo file, too long —
-split it, never shorten it): fix them in the entries file and re-run; entries already
+section. The report lists `rejected` entries with the reason and its `kind`: `shape` (wrong
+section for the type, a missing required field, too long — split it, never shorten it)
+or `evidence` (a source that is not a tracked repo file, an existing file or a URL): fix
+them in the entries file and re-run. A file that is not one JSON document stops the whole
+run: status `refused`, exit 2, and the `reason` names the line and column. A `doc` row is
+not fixed in the file (see `refused_docs` below); entries already
 written are skipped. `refused_docs` names a doc that already holds the person's own
 writing: nothing was added to it. Tell them so in their words ("you have already written
 in PRODUCT.md, so I added nothing there"), show the entries you would have added, and

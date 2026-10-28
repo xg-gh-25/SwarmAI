@@ -568,6 +568,32 @@ def cmd_bootstrap_apply(args, reg) -> None:
         sys.exit(1)
 
 
+def cmd_entry_contract(args, reg) -> None:
+    """Print a brain's entry contract and write it to .artifacts/bootstrap/entry-contract.json.
+
+    Design 2026-10-27-new-brain-initial-ddd r12: the format of bootstrap-entries.json,
+    generated from the rules bootstrap-apply enforces (core.brain_bootstrap.apply
+    .entry_contract), so the agent reads the rules themselves, not a copy. Works for
+    every brain, with or without a repo. Exit 2 when the project does not exist.
+    """
+    if "/" in args.project or "\\" in args.project or args.project in ("", ".", ".."):
+        print(json.dumps({"error": f"invalid project name '{args.project}'"}), file=sys.stderr)
+        sys.exit(2)
+    project_dir = _get_workspace() / "Projects" / args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project '{args.project}' not found"}), file=sys.stderr)
+        sys.exit(2)
+    from core.brain_bootstrap.apply import entry_contract, write_entry_contract
+    try:
+        path = write_entry_contract(project_dir)
+    except OSError as exc:
+        print(json.dumps({"error": f"cannot write the contract: {type(exc).__name__}: {exc}"}),
+              file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps({"project": args.project, "written": str(path),
+                      "contract": entry_contract(project_dir)}, indent=2, ensure_ascii=False))
+
+
 def cmd_classify_starter(args, reg) -> None:
     """Which role a New Brain starter path takes: GOVERN (a repo: an asset to bind),
     DISTILL (a single file: read it into entries) or SHELF (a folder of documents: mount
@@ -809,6 +835,10 @@ def main() -> None:
     p_bapply.add_argument("--entries", default=None, help="Entries file (default: .artifacts/bootstrap/bootstrap-entries.json)")
     p_bapply.add_argument("--dry-run", action="store_true", help="Check and report; write nothing")
 
+    # entry-contract (design 2026-10-27 r12: the entries file's format, from bootstrap-apply's rules)
+    p_contract = sub.add_parser("entry-contract", help="Print and write a brain's bootstrap entry contract")
+    p_contract.add_argument("--project", required=True)
+
     # classify-starter (design 2026-10-27 §5.10: GOVERN / DISTILL / SHELF for a starter path)
     p_cls = sub.add_parser("classify-starter", help="GOVERN / DISTILL / SHELF for a New Brain starter path")
     p_cls.add_argument("path")
@@ -858,6 +888,7 @@ def main() -> None:
         "bind": cmd_bind,
         "survey": cmd_survey,
         "bootstrap-apply": cmd_bootstrap_apply,
+        "entry-contract": cmd_entry_contract,
         "classify-starter": cmd_classify_starter,
         "ddd-skeleton-align": cmd_ddd_skeleton_align,
         "ddd-health": cmd_ddd_health,

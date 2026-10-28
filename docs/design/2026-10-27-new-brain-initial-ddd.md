@@ -735,7 +735,7 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 
 **第一层：条目契约只定义一次（产品，每种 brain 都适用）**
 - `apply.entry_contract()` 从上面那些常量生成契约（JSON）：每种 kind 的字段、每种类型的必填字段、哪些字段只收文字、每段允许的类型、gap 只进 What to Watch For、出处的写法（`<path>#heading`、`<path>:line`、`<repo>:<path>`、`file:<绝对路径>`、`url:`、`user`）、长度上限、文件必须是一个 JSON 列表（或 `{"entries": [...]}`）。不另写规则：契约就是校验用的同一批常量。
-- **写入方**：新命令 `artifact_cli entry-contract --project <P>` 打印契约并写到 `.artifacts/bootstrap/entry-contract.json`（P2b 第一步跑它）；`bootstrap-apply`（含 `--dry-run`）每次也重写一次。纯知识 brain 没有 survey，一样能跑这条命令。不在 `create_project` 里写：那会让 workspace manager 依赖 brain_bootstrap，老 brain 也会读到旧契约（评审 LOW，P9）。
+- **写入方**：新命令 `artifact_cli entry-contract --project <P>` 打印契约并写到 `.artifacts/bootstrap/entry-contract.json`（P2b 第一步跑它）；`bootstrap-apply` 每次运行也重写一次（`--dry-run` 什么都不写，契约也不写）。纯知识 brain 没有 survey，一样能跑这条命令。不在 `create_project` 里写：那会让 workspace manager 依赖 brain_bootstrap，老 brain 也会读到旧契约（评审 LOW，P9）。
 - **读取方**：agent（SKILL P2b 改为"按 entry-contract.json 写"，字段规则段删除，只保留"Take it from"表和好坏例子，这些是判断）；eval 夹具（由生成脚本用同一个函数写出，测试比对）。
 - **两处校验调整**：`rejected_alternatives` 接受文字或非空字符串列表，列表用"; "连成一句渲染（契约里写明）——判断交给模型，形状交给 OS；文件读不成 JSON 时，拒绝原因带行号和列号。
 - **拒绝分两类**：`Rejected` 必须带 `kind`：`shape`（字段、类型、段、长度、文件格式，以及渲染器抛的 `ValueError`：P2c 回合能改好的）和 `evidence`（出处指向不存在或不允许的东西，包括 eval 更严的出处规则）。报告和 eval 都按这两类统计。
@@ -783,4 +783,12 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 **落地顺序**：第一层 → 第三层 → 第二层，每层单独提交。
 
 **r12 的评审**（correctness，零上下文，评设计前提和关于代码的说法）：前提成立，没有说法被证伪；两处说法不精确，已改（检查还受轨迹检查限制；手抄漏的是形状而不是字段名）。HIGH 两条：形状错的条目出处不查、空段检查被形状拒绝盖住，改为每条原始条目单独查内容；埋的指令改回判官判，不做关键词匹配。MED：流水账内容交给判官的 `facts`；保留判官窗口检查；`file:` 只认 `material` 里的文档并由运行时传入工作区路径；结果字段改名 `bootstrap_counts` 并加进记录；检查参数写进 case 让 stamp 覆盖；确定性失败不被判官出错盖住。LOW：`Rejected` 必须带 kind；契约由命令写而不是 `create_project`；生成器合并成一个；隐藏只靠路径；最后一个名额。这些都已写进上面各段。
+
+**r12 第一层实施**：
+- `apply.entry_contract(project_dir)` 和 `write_entry_contract`；`artifact_cli entry-contract --project <P>`；`bootstrap-apply`（非 dry-run）每次重写契约。契约带 `repos.owned`：没有 repo 的 brain 明说只能引用 `file:`、`url:`、`user`。必填字段来自 `_KIND_REQUIRED` 和 `_REQUIRED`，字段含义（"none" 也算 `rejected_alternatives` 的答案等）来自 `_REQUIRED_MEANING`；标题禁用字符和注释标记来自 `ddd_entry_lifecycle.TITLE_FORBIDDEN` / `COMMENT_MARKERS`。
+- 拒绝种类定为四种（`REFUSALS`，契约原样列出）：条目的 `shape`、`evidence`；整篇 doc 的 `doc`（人写过，不在文件里改）；整次运行的 `state`（brain 不在 setting-up）。`Rejected` 的 kind 必须显式给出，eval 更严的出处规则记为 `evidence`。文件不是一个 JSON 文档时整次拒绝，报告和 `rejected.json` 都带一行 `shape`，原因里有行号和列号。
+- 顺带修复：`type` 不是文字时原来抛 `TypeError`，整次运行崩掉；现在是 `shape` 拒绝。
+- SKILL.md P2b 不再列字段规则；"Take it from"表去掉 Type 列（那一列是 `SECTION_TYPES` 的又一份手抄，PROJECT Recent Decisions 已经和代码不一致：表里写 decision，代码收全部类型）。
+- **评审**：api-contract 一轮，两个 MED（`doc` 行没有定义；kind 有默认值，eval 的出处拒绝被记成 `shape`）和六个 LOW（`state` 被记成 `shape`；SKILL 对 JSON 报错的描述和实际报告不符；丢了"none 也算答案"等含义；没有 repo 的 brain 没被告知能引用什么；契约措辞和代码有四处不符；CLI 写失败直接抛栈），加一个改动前就有的 LOW（非文字 `type` 崩溃），一次修完。
+- mutation：第一轮 10 处、修复 7 处，全部抓到。
 

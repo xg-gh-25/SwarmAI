@@ -6,6 +6,10 @@ this module decides, deterministically, which of those entries reach the four do
 The model judges what to write; this code owns where it goes, its shape, its evidence
 and whether the doc may be touched at all.
 
+The format below is also written for the agent, generated from the same constants
+(``entry_contract()``, ``.artifacts/bootstrap/entry-contract.json``): there is no second
+copy of these rules to drift.
+
 Entry (one JSON object; unknown keys are refused, so a misspelt field is caught)::
 
     {"kind": "cognition", "type": "<VALID_TYPES>", "section": "<skeleton section>",
@@ -18,7 +22,8 @@ Rules (each refusal names its reason in ``rejected.json``):
 - the section is a skeleton section and admits the type (``ddd_skeleton.SECTION_TYPES``,
   CDF's routing matrix reversed); a gap goes to What to Watch For only;
 - a decision has ``why`` and ``rejected_alternatives`` ("none" is an answer, empty is
-  not); a pitfall has ``applicability``; a process has ``how``;
+  not; text, or a list of texts written joined with "; "); a pitfall has
+  ``applicability``; a process has ``how``;
 - every cognition entry cites at least one source, and each source is checkable:
   ``<path>[#heading|:line]`` (``<repo>:<path>…`` when the brain owns several repos) must
   be a tracked file of a repo the brain owns; ``file:<absolute path>`` an existing,
@@ -31,6 +36,12 @@ Rules (each refusal names its reason in ``rejected.json``):
   entry's first line is one ``applied.json`` recorded, and removing those entries'
   two rendered lines leaves exactly the skeleton. A doc the person (or any other writer) has written in, an edited bootstrap
   entry included, is reported and left alone.
+
+Every refusal has a ``kind`` (``REFUSALS``): an entry is refused for its ``shape``
+(fields, type, section, length — or the file's format: what a fix-and-re-run settles)
+or its ``evidence`` (a source that points at nothing this brain may cite); a whole doc
+for holding the person's writing (``doc``); the whole run when the brain is not setting
+up (``state``).
 
 Writes only insert, at the end of the entry's section; every existing byte, line
 endings included, is kept. An entry whose rendered line is already in its section is
@@ -63,6 +74,7 @@ logger = logging.getLogger(__name__)
 
 BOOTSTRAP_DIR = Path(".artifacts") / "bootstrap"
 ENTRIES_FILE = BOOTSTRAP_DIR / "bootstrap-entries.json"
+CONTRACT_FILE = BOOTSTRAP_DIR / "entry-contract.json"
 APPLIED_FILE = BOOTSTRAP_DIR / "applied.json"
 REJECTED_FILE = BOOTSTRAP_DIR / "rejected.json"
 MAX_TITLE = 200
@@ -74,11 +86,41 @@ _COGNITION_KEYS = {"kind", "type", "section", "title", "what", "how", "why",
 _GAP_KEYS = {"kind", "section", "title", "what", "why", "proposed_next", "sources"}
 _REQUIRED = {"decision": ("why", "rejected_alternatives"), "pitfall": ("applicability",),
              "process": ("how",)}
+# What each required-by-type field means (stated in the contract).
+_REQUIRED_MEANING = {"why": "why it was decided", "rejected_alternatives":
+                     "what was considered and not chosen ('none' is an answer, empty is not)",
+                     "applicability": "when it bites (the trigger)", "how": "the command"}
+# Fields every entry of a kind must have (``validate`` checks exactly these).
+_KIND_REQUIRED = {"cognition": ("kind", "type", "section", "title", "what", "sources"),
+                  "gap": ("kind", "section", "title", "what")}
+# Fields that also take a list of texts, written joined with this separator.
+_LIST_FIELDS = {"rejected_alternatives": "; "}
 _ANCHOR_RE = re.compile(r"^(?P<path>[^#]+?)(?:#.+|:\d+(?:-\d+)?)?$")
 
 
+SHAPE, EVIDENCE = "shape", "evidence"
+# A report row can also be about a whole doc or the whole run, never fixed in the file:
+DOC, STATE = "doc", "state"
+REFUSALS = {
+    SHAPE: "a field, type, section or length, or the file's format: fix the entries file "
+           "and run bootstrap-apply again",
+    EVIDENCE: "a source that points at nothing this brain may cite: cite a real one, or "
+              "drop the claim",
+    DOC: "the doc already holds the person's own writing: nothing was added; show them "
+         "the entry and ask (never edit the entries file for it)",
+    STATE: "the brain is not setting up: bootstrap writes only a newborn brain",
+}
+
+
 class Rejected(ValueError):
-    """An entry this tool will not write; the message is the reason."""
+    """An entry this tool will not write; the message is the reason and ``kind`` is
+    ``shape`` or ``evidence``."""
+
+    def __init__(self, reason: str, kind: str) -> None:
+        if kind not in (SHAPE, EVIDENCE):
+            raise ValueError(f"unknown refusal kind {kind!r}")
+        super().__init__(reason)
+        self.kind = kind
 
 
 # ── sources ──────────────────────────────────────────────────────────────────
@@ -110,7 +152,7 @@ class Evidence:
             return False
         if s.startswith("url:"):
             if not re.match(r"^https?://\S+$", s[4:]):
-                raise Rejected(f"source {s!r}: url: needs an http(s) URL")
+                raise Rejected(f"source {s!r}: url: needs an http(s) URL", EVIDENCE)
             return True
         if s.startswith("file:"):
             try:
@@ -119,7 +161,8 @@ class Evidence:
             except (OSError, RuntimeError, ValueError):
                 ok = False
             if not ok:
-                raise Rejected(f"source {s!r}: file: needs an existing, absolute, non-secret file")
+                raise Rejected(f"source {s!r}: file: needs an existing, absolute, non-secret file",
+                               EVIDENCE)
             return True
         repo, rest = None, s
         head, sep, tail = s.partition(":")
@@ -132,10 +175,10 @@ class Evidence:
             candidates = []
         if not candidates:
             raise Rejected(f"source {s!r}: not a tracked file of a repo this brain owns "
-                           "(use <path>#heading, <repo>:<path>, file:, url: or user)")
+                           "(use <path>#heading, <repo>:<path>, file:, url: or user)", EVIDENCE)
         if len(candidates) > 1:
             raise Rejected(f"source {s!r}: in several repos ({', '.join(sorted(candidates))}); "
-                           "prefix it with the repo name")
+                           "prefix it with the repo name", EVIDENCE)
         return True
 
 
@@ -145,12 +188,17 @@ def _text(entry: dict, key: str) -> str:
     v = entry.get(key)
     if v is None:
         return ""
+    if key in _LIST_FIELDS and isinstance(v, list):
+        if not v or not all(isinstance(x, str) and x.strip() for x in v):
+            raise Rejected(f"{key} must be text or a list of non-empty texts", SHAPE)
+        v = _LIST_FIELDS[key].join(x.strip() for x in v)
     if not isinstance(v, str):
-        raise Rejected(f"{key} must be text")
+        raise Rejected(f"{key} must be text"
+                       + (" or a list of texts" if key in _LIST_FIELDS else ""), SHAPE)
     v = v.strip()
     limit = MAX_TITLE if key == "title" else MAX_FIELD
     if len(v) > limit:
-        raise Rejected(f"{key} is {len(v)} characters (limit {limit}); split the entry")
+        raise Rejected(f"{key} is {len(v)} characters (limit {limit}); split the entry", SHAPE)
     return v
 
 
@@ -159,44 +207,46 @@ def validate(entry, evidence: Evidence) -> dict:
     Rejected."""
     from core.ddd_skeleton import GAP_SECTION, SECTION_TYPES, locate_section
     if not isinstance(entry, dict):
-        raise Rejected("an entry must be a JSON object")
+        raise Rejected("an entry must be a JSON object", SHAPE)
     kind = entry.get("kind")
     if kind not in ("cognition", "gap"):
-        raise Rejected("kind must be 'cognition' or 'gap'")
+        raise Rejected("kind must be 'cognition' or 'gap'", SHAPE)
     unknown = set(entry) - (_COGNITION_KEYS if kind == "cognition" else _GAP_KEYS)
     if unknown:
-        raise Rejected(f"unknown field(s): {', '.join(sorted(unknown))}")
+        raise Rejected(f"unknown field(s): {', '.join(sorted(unknown))}", SHAPE)
     place = locate_section(str(entry.get("section") or ""))
     if place is None:
-        raise Rejected(f"section {entry.get('section')!r} is not a skeleton section")
+        raise Rejected(f"section {entry.get('section')!r} is not a skeleton section", SHAPE)
     title, what = _text(entry, "title"), _text(entry, "what")
     if not title or not what:
-        raise Rejected("title and what are required")
+        raise Rejected("title and what are required", SHAPE)
     sources = entry.get("sources") or []
     if not isinstance(sources, list) or not all(isinstance(s, str) and s.strip() for s in sources):
-        raise Rejected("sources must be a list of non-empty strings")
+        raise Rejected("sources must be a list of non-empty strings", SHAPE)
 
     if kind == "gap":
         if place != GAP_SECTION:
-            raise Rejected(f"a gap goes to {GAP_SECTION[1]}, not {place[1]}")
+            raise Rejected(f"a gap goes to {GAP_SECTION[1]}, not {place[1]}", SHAPE)
         render = {"type": "gap", "title": title, "what": what, "why": _text(entry, "why")}
         nxt = _text(entry, "proposed_next")
         if nxt:
             render["what"] = f"{what} Next: {nxt}"
     else:
         etype = entry.get("type")
+        if not isinstance(etype, str):
+            raise Rejected("type must be text", SHAPE)
         allowed = SECTION_TYPES.get(place)
         if allowed is None:
             raise Rejected(f"{place[1]} takes no bootstrap entry"
-                           + (" (gaps only)" if place == GAP_SECTION else " (the person's live state)"))
+                           + (" (gaps only)" if place == GAP_SECTION else " (the person's live state)"), SHAPE)
         if etype not in allowed:
             raise Rejected(f"type {etype!r} does not belong in {place[1]} "
-                           f"(allowed: {', '.join(sorted(allowed))})")
+                           f"(allowed: {', '.join(sorted(allowed))})", SHAPE)
         for key in _REQUIRED.get(etype, ()):
             if not _text(entry, key):
-                raise Rejected(f"a {etype} needs {key}")
+                raise Rejected(f"a {etype} needs {key}", SHAPE)
         if not sources:
-            raise Rejected("a cognition entry needs at least one source")
+            raise Rejected("a cognition entry needs at least one source", SHAPE)
         render = {"type": etype, "title": title, "what": what, "how": _text(entry, "how"),
                   "why": _text(entry, "why"), "applicability": _text(entry, "applicability"),
                   "rejected": _text(entry, "rejected_alternatives")}
@@ -208,14 +258,96 @@ def validate(entry, evidence: Evidence) -> dict:
 
 def check_entry(entry, evidence: Evidence, stamp: str) -> dict:
     """``validate`` plus the rendered block (``block``): exactly what a run does to
-    one entry before it is placed. Raises Rejected (or ValueError from the renderer,
-    e.g. a title that is not one line). The eval's ``bootstrap_entries`` check calls
+    one entry before it is placed. Raises Rejected; the renderer's own ValueError
+    (e.g. a title that is not one line) becomes a ``shape`` refusal. The eval's ``bootstrap_entries`` check calls
     this too, so an agent's answer is judged by the rules that would write it."""
     from core.ddd_entry_lifecycle import render_ddd_unit
     v = validate(entry, evidence)
-    v["block"] = render_ddd_unit(v["render"], date_str=stamp, source="bootstrap",
-                                 taint=v["taint"])
+    try:
+        v["block"] = render_ddd_unit(v["render"], date_str=stamp, source="bootstrap",
+                                     taint=v["taint"])
+    except Rejected:
+        raise
+    except ValueError as exc:  # the renderer's own shape rules (e.g. a one-line title)
+        raise Rejected(str(exc), SHAPE) from exc
     return v
+
+
+# ── the contract ─────────────────────────────────────────────────────────────
+
+def entry_contract(project_dir: str | Path | None = None) -> dict:
+    """The entry format, for the agent that writes the entries file: generated from the
+    constants ``validate`` and the renderer enforce (tests hold each rule to its
+    enforcement), so it says nothing they do not. With *project_dir* it also names the
+    repos that brain owns — none means only ``file:``, ``url:`` and ``user`` can be
+    cited. Written to ``CONTRACT_FILE`` by ``write_entry_contract``."""
+    from core.ddd_entry_lifecycle import COMMENT_MARKERS, TITLE_FORBIDDEN
+    from core.ddd_skeleton import GAP_SECTION, SECTION_TYPES, skeleton_sections, DOCS
+    typed = {place: sorted(types) for place, types in SECTION_TYPES.items()}
+    repos = None
+    if project_dir is not None:
+        from .survey import owned_repos
+        names = sorted(r["name"] for r in owned_repos(Path(project_dir)))
+        repos = {"owned": names} if names else {
+            "owned": [], "note": "this brain owns no repo: cite file:, url: or user"}
+    sections = []
+    for doc in DOCS:
+        for name in skeleton_sections(doc):
+            place = (doc, name)
+            if place in typed:
+                takes = {"cognition_types": typed[place]}
+            elif place == GAP_SECTION:
+                takes = {"gaps_only": True}
+            else:
+                takes = {"nothing": "the person's live state"}
+            sections.append({"doc": doc, "section": name, **takes})
+    return {
+        "schema": "swarmai.bootstrap-entry-contract", "version": 1,
+        "file": ENTRIES_FILE.as_posix(),
+        "file_format": "one JSON document: a list of entry objects separated by commas "
+                       "(or {\"entries\": [...]}); bare objects one after another (JSON "
+                       f"Lines) are refused; at most {MAX_ENTRIES} entries",
+        "kinds": {
+            "cognition": {"fields": sorted(_COGNITION_KEYS),
+                          "required": list(_KIND_REQUIRED["cognition"]),
+                          "required_by_type": {t: list(keys) for t, keys in _REQUIRED.items()},
+                          "meaning": dict(_REQUIRED_MEANING),
+                          "type": "one of the section's cognition_types"},
+            "gap": {"fields": sorted(_GAP_KEYS), "required": list(_KIND_REQUIRED["gap"]),
+                    "section": GAP_SECTION[1],
+                    "title_convention": "<Section>: no evidence yet — the form that marks a "
+                                        "PRODUCT section as explained (need_gap)"},
+        },
+        "values": {
+            "text": "every field is text, except sources and the list fields below",
+            "lists": {k: f"text, or a list of texts (written joined with {sep!r})"
+                      for k, sep in _LIST_FIELDS.items()},
+            "sources": "a list of non-empty texts",
+            "title": f"one line, at most {MAX_TITLE} characters, without "
+                     + " or ".join(repr(x) for x in TITLE_FORBIDDEN),
+            "other_fields": f"at most {MAX_FIELD} characters",
+            "over_a_limit": "refused, never cut: split the entry",
+            "never": "an HTML comment marker (" + ", ".join(COMMENT_MARKERS) + ") in any field",
+        },
+        "sources": {
+            "<path>, <path>#heading, <path>:line or <path>:line-line":
+                "a tracked file of a repo this brain owns",
+            "<repo>:<path>": "the same, when the brain owns several repos",
+            "file:<absolute path>": "an existing, non-secret file (a document the person gave)",
+            "url:<http(s) URL>": "a web page",
+            "user": "the person's own answer (the only source that is not outside content)",
+        },
+        "sections": sections,
+        "refusals": dict(REFUSALS),
+        **({} if project_dir is None else {"repos": repos}),
+    }
+
+
+def write_entry_contract(project_dir: str | Path) -> Path:
+    """Write ``entry_contract()`` to the brain's ``CONTRACT_FILE``; returns the path."""
+    path = Path(project_dir) / CONTRACT_FILE
+    _write_json(path, entry_contract(project_dir))
+    return path
 
 
 # ── docs ─────────────────────────────────────────────────────────────────────
@@ -268,7 +400,7 @@ def _append_to_section(text: str, section: str, blocks: list[str]) -> str:
     lines = text.splitlines(keepends=True)
     span = _section_span(lines, section)
     if span is None:
-        raise Rejected(f"## {section} is not in the doc")
+        raise Rejected(f"## {section} is not in the doc", SHAPE)
     start, end = span
     at = end
     while at > start + 1 and not lines[at - 1].strip():
@@ -312,17 +444,22 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
     project_dir = Path(project_dir)
     name = project_dir.name
 
-    def _refuse(reason: str) -> dict:
+    def _refuse(reason: str, kind: str = SHAPE) -> dict:
+        row = {"index": None, "title": None, "kind": kind, "reason": reason}
         if not dry_run:
-            _write_json(project_dir / REJECTED_FILE,
-                        [{"index": None, "title": None, "reason": reason}])
-        return {"status": "refused", "reason": reason}
+            _write_json(project_dir / REJECTED_FILE, [row])
+        return {"status": "refused", "kind": kind, "reason": reason, "rejected": [row]}
 
     if read_setup_state(project_dir) != "setting-up":
-        return _refuse("the brain is not setting up; bootstrap writes only a newborn brain")
+        return _refuse("the brain is not setting up; bootstrap writes only a newborn brain", STATE)
+    if not dry_run:
+        write_entry_contract(project_dir)   # brains made before the contract get it here
     path = Path(entries_path) if entries_path else project_dir / ENTRIES_FILE
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return _refuse(f"{path.name} is not one JSON document: {exc.msg} at line {exc.lineno}, "
+                       f"column {exc.colno} (a JSON list of entries, separated by commas)")
     except (OSError, ValueError) as exc:
         return _refuse(f"cannot read {path.name}: {type(exc).__name__}")
     items = raw.get("entries") if isinstance(raw, dict) else raw
@@ -345,9 +482,9 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
     for i, entry in enumerate(items):
         try:
             v = check_entry(entry, evidence, stamp)
-        except (Rejected, ValueError) as exc:
+        except Rejected as exc:
             rejected.append({"index": i, "title": (entry or {}).get("title") if isinstance(entry, dict) else None,
-                             "reason": str(exc)})
+                             "kind": exc.kind, "reason": str(exc)})
             continue
         by_doc.setdefault(v["doc"], []).append((i, v))
 
@@ -368,7 +505,7 @@ def apply_entries(project_dir: str | Path, entries_path: str | Path | None = Non
             refused_docs[doc] = ("already holds the person's own writing (or an edited "
                                  "bootstrap entry); nothing added")
             for i, v in by_doc[doc]:
-                rejected.append({"index": i, "title": v["render"]["title"],
+                rejected.append({"index": i, "title": v["render"]["title"], "kind": DOC,
                                  "reason": f"{doc} already holds the person's own writing; "
                                            "not added — show it to them and ask"})
             continue

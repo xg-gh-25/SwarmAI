@@ -324,3 +324,163 @@ def test_a_crash_between_log_and_doc_write_is_recovered(brain: Path, monkeypatch
     monkeypatch.setattr(ap, "_write_atomic", real)
     report = _run(brain, GOOD)
     assert report["refused_docs"] == {} and report["rejected"] == []
+
+
+# ── r12: one entry contract, generated from the rules it describes ──────────
+
+def _valid_cognition(etype: str, section: str) -> dict:
+    e = {"kind": "cognition", "type": etype, "section": section, "title": "A real trap",
+         "what": "Something the repo states.", "sources": ["user"]}
+    for key in ap.entry_contract()["kinds"]["cognition"]["required_by_type"].get(etype, []):
+        e[key] = "stated"
+    return e
+
+
+def _verdict(entry: dict):
+    """None when the entry passes, else the refusal's kind."""
+    try:
+        ap.check_entry(entry, ap.Evidence({}), "2026-10-28")
+        return None
+    except ap.Rejected as exc:
+        return exc.kind
+
+
+def test_every_section_admits_exactly_the_types_the_contract_lists() -> None:
+    contract = ap.entry_contract()
+    every = set(contract["kinds"]["cognition"]["required_by_type"]) | {
+        t for s in contract["sections"] for t in s.get("cognition_types", [])}
+    assert len(contract["sections"]) == sum(len(sk.skeleton_sections(d)) for d in sk.DOCS)
+    for s in contract["sections"]:
+        listed = set(s.get("cognition_types", []))
+        for etype in every:
+            got = _verdict(_valid_cognition(etype, s["section"]))
+            assert (got is None) == (etype in listed), (s, etype, got)
+            if got is not None:
+                assert got == ap.SHAPE
+        gap = {"kind": "gap", "section": s["section"], "title": "Vision: no evidence yet",
+               "what": "Nothing says it."}
+        assert (_verdict(gap) is None) == bool(s.get("gaps_only")), s
+
+
+def test_every_required_field_in_the_contract_is_enforced() -> None:
+    contract = ap.entry_contract()
+    for etype, keys in contract["kinds"]["cognition"]["required_by_type"].items():
+        section = next(s["section"] for s in contract["sections"]
+                       if etype in s.get("cognition_types", []))
+        for key in keys:
+            e = _valid_cognition(etype, section)
+            del e[key]
+            assert _verdict(e) == ap.SHAPE, (etype, key)
+    for kind, spec in contract["kinds"].items():
+        base = (_valid_cognition("model", "Key Subsystems") if kind == "cognition" else
+                {"kind": "gap", "section": "What to Watch For", "title": "t", "what": "w"})
+        assert _verdict(base) is None
+        for key in spec["required"]:
+            e = {k: v for k, v in base.items() if k != key}
+            assert _verdict(e) is not None, (kind, key)
+        assert _verdict({**base, "no_such_field": "x"}) == ap.SHAPE
+        assert set(base) <= set(spec["fields"])
+
+
+@pytest.mark.parametrize("change", [
+    {"title": "t" * (ap.MAX_TITLE + 1)}, {"what": "w" * (ap.MAX_FIELD + 1)},
+    {"title": "a ** b"}, {"title": "a | b"}, {"title": "two\nlines"}, {"what": "x <!-- y"},
+])
+def test_the_value_rules_in_the_contract_are_enforced(change) -> None:
+    contract = ap.entry_contract()
+    assert str(ap.MAX_TITLE) in contract["values"]["title"]
+    assert str(ap.MAX_FIELD) in contract["values"]["other_fields"]
+    assert _verdict({**_valid_cognition("model", "Key Subsystems"), **change}) == ap.SHAPE
+
+
+def test_rejected_alternatives_takes_a_list_written_as_one_sentence() -> None:
+    e = _valid_cognition("decision", "Recent Decisions")
+    e["rejected_alternatives"] = ["gRPC", " Redis "]
+    block = ap.check_entry(e, ap.Evidence({}), "2026-10-28")["block"]
+    assert "gRPC; Redis" in block
+    for bad in ([], ["x", ""], ["x", 3], 7):
+        assert _verdict({**e, "rejected_alternatives": bad}) == ap.SHAPE, bad
+    assert _verdict({**e, "why": ["a list where text is required"]}) == ap.SHAPE
+
+
+@pytest.mark.parametrize("source, kind", [
+    ("user", None), ("url:https://example.com/x", None), ("url:ftp://x", ap.EVIDENCE),
+    ("nope.md", ap.EVIDENCE), ("file:/no/such/file.md", ap.EVIDENCE), ("file:relative.md", ap.EVIDENCE),
+])
+def test_each_source_form_in_the_contract(source, kind) -> None:
+    assert _verdict({**_valid_cognition("model", "Key Subsystems"), "sources": [source]}) == kind
+
+
+def test_a_file_that_is_not_one_json_document_says_where(brain: Path) -> None:
+    p = brain / ap.ENTRIES_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('[\n{"kind": "gap"}\n{"kind": "gap"}\n]', encoding="utf-8")
+    report = ap.apply_entries(brain)
+    assert report["status"] == "refused" and report["kind"] == ap.SHAPE
+    assert "line 3, column 1" in report["reason"] and "separated by commas" in report["reason"]
+    assert json.loads((brain / ap.REJECTED_FILE).read_text())[0]["kind"] == ap.SHAPE
+
+
+def test_every_refusal_in_the_report_has_its_kind(brain: Path) -> None:
+    report = _run(brain, [{**GOOD[0], "sources": ["nope.md"]}, {**GOOD[0], "type": "model"}])
+    assert [r["kind"] for r in report["rejected"]] == [ap.EVIDENCE, ap.SHAPE]
+
+
+def test_the_contract_is_written_for_every_brain(brain: Path, tmp_path: Path, monkeypatch) -> None:
+    # a brain that owns a repo: written by bootstrap-apply (not by a dry run)
+    ap.apply_entries(brain, dry_run=True)
+    assert not (brain / ap.CONTRACT_FILE).exists()
+    _run(brain, GOOD)
+    written = json.loads((brain / ap.CONTRACT_FILE).read_text())
+    assert written == ap.entry_contract(brain) and written["repos"]["owned"] == ["acme"]
+    # a pure-knowledge brain (no repo, no survey): written by the command
+    from scripts import artifact_cli as cli
+    lone = tmp_path / "Projects" / "Notes"
+    lone.mkdir(parents=True)
+    monkeypatch.setattr(cli, "_get_workspace", lambda: tmp_path)
+    import argparse
+    monkeypatch.setattr(survey, "owned_repos", lambda d: [])
+    cli.cmd_entry_contract(argparse.Namespace(project="Notes"), None)
+    written = json.loads((lone / ap.CONTRACT_FILE).read_text())
+    assert written == ap.entry_contract(lone)
+    assert written["repos"]["owned"] == [] and "file:, url: or user" in written["repos"]["note"]
+
+
+def test_the_skills_example_follows_the_contract(tmp_path: Path) -> None:
+    import re
+    skill = (Path(__file__).resolve().parents[1] / "skills" / "s_project-manager" / "SKILL.md").read_text()
+    part = skill[skill.index("#### Writing a new brain's first entries (P2b)"):]
+    example = json.loads(re.search(r"```json\n(.*?)```", part, re.S).group(1))
+    repo = tmp_path / "lib"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "concepts.rst").write_text("x")
+    (repo / "CHANGES.rst").write_text("x")
+    for entry in example:
+        ap.check_entry(entry, ap.Evidence({"lib": repo}), "2026-10-28")
+
+
+def test_every_kind_a_report_can_carry_is_explained_in_the_contract(brain: Path) -> None:
+    contract = ap.entry_contract()
+    assert set(contract["refusals"]) == {ap.SHAPE, ap.EVIDENCE, ap.DOC, ap.STATE}
+    assert set(contract["kinds"]["cognition"]["meaning"]) == {
+        k for keys in contract["kinds"]["cognition"]["required_by_type"].values() for k in keys}
+    # doc: the person wrote in the doc
+    prod = ddd_path(brain, "PRODUCT.md")
+    prod.write_text(prod.read_text() + "\nMy own note.\n")
+    assert {r["kind"] for r in _run(brain, [GOOD[0]])["rejected"]} == {ap.DOC}
+    # state: the brain is no longer setting up
+    write_setup_state(brain, "ready")
+    report = _run(brain, GOOD)
+    assert report["status"] == "refused" and report["kind"] == ap.STATE
+
+
+@pytest.mark.parametrize("bad", [["model"], {"t": 1}, 3])
+def test_a_type_that_is_not_text_is_refused_not_a_crash(bad) -> None:
+    assert _verdict({**_valid_cognition("model", "Key Subsystems"), "type": bad}) == ap.SHAPE
+
+
+def test_a_refusal_must_name_its_kind() -> None:
+    with pytest.raises(TypeError):
+        ap.Rejected("no kind")  # type: ignore[call-arg]
+    with pytest.raises(ValueError):
+        ap.Rejected("bad kind", "doc")

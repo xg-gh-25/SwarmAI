@@ -421,6 +421,12 @@ def canonical_entry_from_text(
 TAINTS = ("external",)
 
 
+# What a rendered entry may not contain (render_ddd_unit refuses it; the bootstrap
+# entry contract states it from these same constants).
+TITLE_FORBIDDEN = ("**", "|")
+COMMENT_MARKERS = ("<!--", "-->")
+
+
 def render_ddd_unit(entry: dict, *, date_str: str, source: str = "bootstrap",
                     taint: "str | None" = None) -> str:
     """THE one renderer of a DDD knowledge entry (entry line + metadata line).
@@ -455,12 +461,12 @@ def render_ddd_unit(entry: dict, *, date_str: str, source: str = "bootstrap",
         raise ValueError(f"unknown entry type {entry.get('type')!r}")
     title = str(entry.get("title", "")).strip()
     # splitlines(), not "\n": U+2028, \x85, \x0c … also end a line for the parser.
-    if not title or len(title.splitlines()) != 1 or any(bad in title for bad in ("**", "|")):
+    if not title or len(title.splitlines()) != 1 or any(bad in title for bad in TITLE_FORBIDDEN):
         raise ValueError("entry title must be one non-empty line without '**' or '|'")
     if not str(entry.get("what", "")).strip():
         raise ValueError("entry 'what' must not be empty")
     for key in ("title", "what", "how", "why", "rejected", "applicability", "sources"):
-        if any(c in str(entry.get(key, "")) for c in ("<!--", "-->")):
+        if any(c in str(entry.get(key, "")) for c in COMMENT_MARKERS):
             raise ValueError(f"entry {key} must not contain an HTML comment marker")
     if taint is not None and taint not in TAINTS:
         raise ValueError(f"unknown taint {taint!r} (known: {', '.join(TAINTS)})")
