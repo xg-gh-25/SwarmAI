@@ -263,7 +263,8 @@ run 2 依赖 run 1 的 `unit_id`、`ddd_map`、`knowledge`；run 3 的 linter �
 8. pipeline knowledge 文件：有 DDD 时含 `map(full)`、无 DDD 时不含；not-shown / pinned / pointer 行是存在的绝对路径。
 9. repo_guidance：lessons 吃满预算时 DDD 那一行仍送达；放不下时不记 `seen`、下次再试。
 10. 聊天：命中给条目标题 + `绝对路径:行号`；无条目命中时一行项目指针。
-. `knowledge find --in ddd` 能命中只在 `*-archive.md`、`2-understanding/knowledge/`、`data-contract/` 里的条目；返回的行号指向该单元第一行。
+11. 非 owner 渠道：`knowledge` 只放行 shareable 项目。
+12. `knowledge find --in ddd` 能命中只在 `*-archive.md`、`2-understanding/knowledge/`、`data-contract/` 里的条目；返回的行号指向该单元第一行。
 13. DESIGN_SPEC full 和 lite 都接受 `knowledge_checked`、形状错误报 DS-5；REPORT 只出"是否为空"的计数。
 
 现有测试一并跑：`run_knowledge`、`recall_multi`（recall_ddd）、engine / hook_bridge / answers 的 knowledge_ref、`repo_guidance`、
