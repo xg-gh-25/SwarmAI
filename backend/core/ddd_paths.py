@@ -206,6 +206,17 @@ def ddd_asset_path(project_dir, kind: str, *, old_rel: str | None = None) -> Pat
     return new_path
 
 
+
+# The data-source asset's legacy home, before governed assets moved under assets/.
+_DATA_SOURCE_OLD_REL = "4-capabilities/s_cmhk-data-proxy"
+
+
+def data_contract_dir(project_dir) -> Path:
+    """The data-source asset's ``data-contract/`` dir (READ, strangler-aware): where a
+    data-agent DDD keeps its data-semantic contract. One place for every reader (the
+    recall leg, the knowledge unit table), so they cannot disagree about where it is."""
+    return ddd_asset_path(project_dir, "data-source", old_rel=_DATA_SOURCE_OLD_REL) / "data-contract"
+
 def ddd_asset_write_path(project_dir, kind: str) -> Path:
     """Resolve a governed asset dir → assets/<kind>/ (WRITE — always new).
 

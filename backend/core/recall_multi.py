@@ -1280,8 +1280,8 @@ def _recall_ddd(query: str, project: Optional[str],
     # are denser/less narrative) + WEIGHTED LOWER (supporting reference, must not
     # crowd the 4 judgment docs — Gate-0 anti-pollution). rel-path carries the
     # assets/ prefix so it can never alias a Knowledge/ file (no double-count).
-    from core.ddd_paths import ddd_asset_path
-    dc_dir = ddd_asset_path(base, "data-source", old_rel="4-capabilities/s_cmhk-data-proxy") / "data-contract"
+    from core.ddd_paths import data_contract_dir
+    dc_dir = data_contract_dir(base)
     if dc_dir.is_dir():
         from core import memory_index
         _DC_MAX_FILES = 20          # a data-contract is fewer/smaller files than Knowledge/
