@@ -418,6 +418,22 @@ async def chat_stream(request: Request):
         except _task_repos.TaskRepoError as e:
             raise ValidationException(message="Invalid task repositories", detail=str(e))
 
+    # Project Agent (design 2026-10-28-project-agent-flow §8): a new session that works
+    # under a Brain's Project Agent is pinned before the turn starts, so its hooks
+    # enforce the definition from the first tool call.
+    project_agent_pin = None
+    if chat_request.project_agent and chat_request.session_id is None:
+        from core.project_agent_session import PinError, make_pin
+        from core.project_registry import get_swarmws
+        pa = chat_request.project_agent
+        try:
+            project_agent_pin = await asyncio.to_thread(
+                make_pin, get_swarmws(), str(pa.get("brain") or ""),
+                pa.get("mode") if isinstance(pa.get("mode"), str) else None,
+                pa.get("revision") if isinstance(pa.get("revision"), str) else None)
+        except PinError as e:
+            raise ValidationException(message="Invalid Project Agent", detail=str(e))
+
     _get_router()  # Ensure session infrastructure initialized
 
     # Verify agent exists (lightweight check — no config assembly)
@@ -463,6 +479,7 @@ async def chat_stream(request: Request):
                 editor_context=chat_request.editor_context.model_dump() if chat_request.editor_context else None,
                 terminal_context=chat_request.terminal_context.model_dump() if chat_request.terminal_context else None,
                 client_id=chat_request.client_id,
+                project_agent=project_agent_pin,
             )
             async for msg in _turn_stream:
                 if captured_session_id is None:

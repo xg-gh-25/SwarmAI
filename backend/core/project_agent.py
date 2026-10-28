@@ -209,18 +209,34 @@ def _tree_files(root: Path) -> list[Path]:
 
 def _hash_files(h: "hashlib._Hash", base: Path, files: Iterable[Path]) -> None:
     for f in files:
-        h.update(str(f.relative_to(base)).encode("utf-8") + b"\0")
-        h.update(f.read_bytes())
-        h.update(b"\0")
+        _hash_one(h, str(f.relative_to(base)), f.read_bytes())
+
+
+def _hash_one(h: "hashlib._Hash", rel: str, data: bytes) -> None:
+    h.update(rel.encode("utf-8") + b"\0")
+    h.update(data)
+    h.update(b"\0")
+
+
+def gates_snapshot(project_dir: Path) -> tuple[str, dict[str, bytes]]:
+    """(digest, {path relative to 3-gates/: bytes}) of every file under 3-gates/ (not
+    ``__pycache__``), each read once: a gate that runs is run from these bytes, so it
+    is the content the digest covers."""
+    root = _gates_dir(project_dir)
+    h = hashlib.sha256()
+    files: dict[str, bytes] = {}
+    for f in _tree_files(root):
+        rel = str(f.relative_to(root))
+        data = f.read_bytes()
+        _hash_one(h, rel, data)
+        files[rel] = data
+    return h.hexdigest(), files
 
 
 def gates_digest(project_dir: Path) -> str:
-    """sha256 of every file under 3-gates/ (not ``__pycache__``): the value a Hive
-    compares before it runs any of this Brain's gates."""
-    root = _gates_dir(project_dir)
-    h = hashlib.sha256()
-    _hash_files(h, root, _tree_files(root))
-    return h.hexdigest()
+    """sha256 of every file under 3-gates/ (not ``__pycache__``): the value a session
+    pins and compares before it runs any of this Brain's gates."""
+    return gates_snapshot(project_dir)[0]
 
 
 # ── validate ─────────────────────────────────────────────────────────────────

@@ -528,6 +528,18 @@ async def build_hooks(
     registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash", no_timeout=True)
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
 
+    # ── PreToolUse: Brain gates of a Project Agent session (design
+    # 2026-10-28-project-agent-flow §8.2) ──
+    # Every session registers it; outside a Project Agent session it does nothing.
+    # A matcher of its own (sole occupant of its group) and no_timeout: its gates are
+    # bounded one by one (GATE_TIMEOUT_S each) and a slow gate must be REFUSED by that
+    # bound, never let through by the chain's 5s cut-off.
+    from core.project_agent_session import create_brain_gate_hook
+    registry.register(
+        "PreToolUse", create_brain_gate_hook(hook_session_context), "brain_gate",
+        matcher="Bash|Write|Edit|MultiEdit|NotebookEdit", no_timeout=True,
+    )
+
     # ── PreToolUse: run-owner gate, approved phase (Bash-scoped) ──
     # A command the user approves first (run-land / accept-finding / discard-snapshot
     # --request): its approval is recorded HERE, after the approval above, not in the

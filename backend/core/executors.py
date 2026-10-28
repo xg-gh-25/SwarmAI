@@ -106,6 +106,9 @@ _POOL_SPECS: dict[str, int] = {
                       # Community, Jobs, ToDo, Pollinate, Hive, C&M, the Workspace tree):
                       # a slow overlay waits here, never ahead of chat or /health. Small
                       # on purpose: it also bounds how much nav Python competes for the GIL.
+    "brain_gate": 2,  # core/project_agent_session: a Project Agent session's Brain gates
+                      # (one short subprocess per gate per Bash / Write / Edit call). Only
+                      # those sessions use it, so other sessions' gates never wait on it.
     "discard": 2,     # dangerous_command_gate's discard check: fresh `git status` over
                       # the repos other sessions wrote in (seconds when there are several).
                       # Only discard commands use it, so it never holds a 'gate' worker

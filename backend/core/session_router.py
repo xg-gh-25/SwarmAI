@@ -4193,8 +4193,13 @@ class SessionRouter:
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
         _drained_pending: bool = False,
+        project_agent: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """Entry point for chat requests: one turn, published to the session hub.
+
+        ``project_agent``: the pin of a NEW session that works under a Brain's Project
+        Agent (core.project_agent_session.make_pin); its hooks enforce it from the
+        first tool call and it is recorded on the session.
 
         A turn without a client_id of its own (drain, channel, task, skill
         creator) gets a server one, so its persisted assistant rows and a
@@ -4216,7 +4221,7 @@ class SessionRouter:
             channel_context=channel_context, editor_context=editor_context,
             terminal_context=terminal_context, agent_config=agent_config,
             client_id=client_id, _drained_pending=_drained_pending, writer=writer,
-            opener=opener,
+            opener=opener, project_agent=project_agent,
         )
         async with aclosing(self._published_turn(
             agen, session_id=session_id,
@@ -4502,6 +4507,7 @@ class SessionRouter:
         *,
         writer: TurnWriter,
         opener: Optional[TurnOpener] = None,
+        project_agent: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """One chat turn (called through ``run_conversation``).
 
@@ -4634,6 +4640,12 @@ class SessionRouter:
             row_written = False
             try:
                 await session_manager.store_session(session_id, agent_id, title)
+                if project_agent is not None:
+                    # recorded before the slot wait: a send that is queued (and then
+                    # delivered by the drain, which carries no pin) is still pinned
+                    from .project_agent_session import record_pin
+                    if not await record_pin(session_id, project_agent):
+                        raise RuntimeError("the Project Agent pin could not be recorded")
                 _msg_metadata = {"client_id": client_id} if client_id else None
                 persisted_msg_id = str(uuid4())
                 # Strip raw tool-call leaks before persisting — symmetric with the
@@ -4659,6 +4671,15 @@ class SessionRouter:
                     await send_requests.persisted(reserved_send, persisted_msg_id)
             except Exception as exc:
                 persisted_msg_id = None
+                if project_agent is not None:
+                    # the rules of a Project Agent session must survive a restart, so
+                    # a session whose pin is not on its record does not start
+                    logger.error("Project Agent session %s not started: %s", session_id, exc)
+                    yield _build_error_event(
+                        code="PROJECT_AGENT_NOT_RECORDED",
+                        message="This Project Agent session could not be recorded; try again.",
+                    )
+                    return
                 # Non-fatal: proceed even if persist fails.  The message
                 # will still be sent to the agent (just not in DB for
                 # future cold resume).  Log at ERROR so it's visible.

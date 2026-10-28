@@ -230,6 +230,18 @@ def _classify_by_name(tool_name: str) -> RiskClass:
     return RiskClass.READ
 
 
+def is_unknown_mcp(tool_name: str) -> bool:
+    """True for an MCP tool whose name carries no verb of the taxonomy: ``classify``
+    lets it through as READ (fail-open), and a session that reserves external
+    messages for a person treats it as EXTERNAL instead (design
+    2026-10-28-project-agent-flow §8.1)."""
+    tokens = _mcp_tokens(tool_name)
+    if tokens is None:
+        return False
+    t = set(tokens)
+    return not (t & _MCP_READ_VERBS or t & _MCP_LOCAL_WRITE_VERBS or t & _MCP_EXTERNAL_VERBS)
+
+
 def is_external(tool_name: str, metadata: Any = None) -> bool:
     """Convenience: True iff the tool has an off-machine side effect (approval-gated)."""
     return classify(tool_name, metadata) is RiskClass.EXTERNAL

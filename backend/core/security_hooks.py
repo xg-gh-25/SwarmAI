@@ -34,7 +34,7 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Optional
 from uuid import uuid4
 
 from config import get_app_data_dir
@@ -571,6 +571,178 @@ def _is_irreversible_external_op(command: str) -> bool:
         # a read-only `git log`).
         return bool(_IRREVERSIBLE_FALLBACK_RE.search(command))
     return any(_segment_is_irreversible(seg) for seg in segments)
+
+
+# ── Project Agent reserved actions (design 2026-10-28-project-agent-flow §8.1) ──
+
+#: command word -> the subcommands that publish (found past global options, see
+#: _publishes; ``docker image push`` too)
+_PUBLISHERS: dict[str, frozenset[str]] = {
+    "npm": frozenset({"publish"}), "pnpm": frozenset({"publish"}), "yarn": frozenset({"publish"}),
+    "bun": frozenset({"publish"}), "uv": frozenset({"publish"}), "poetry": frozenset({"publish"}),
+    "hatch": frozenset({"publish"}), "twine": frozenset({"upload"}), "cargo": frozenset({"publish"}),
+    "gem": frozenset({"push"}), "docker": frozenset({"push"}), "podman": frozenset({"push"}),
+}
+#: words after which a later "publish" / "push" is an argument, not the subcommand
+_RUNNERS = frozenset({"run", "run-script", "exec", "dlx"})
+#: a wrapper that runs the rest of its line as a command (after its own options)
+_RUNS_A_COMMAND = frozenset({"exec", "xargs", "sudo", "doas", "env", "command", "nice", "no" + "hup",
+                             "time", "timeout", "watch", "stdbuf", "ionice", "chrt", "caffeinate"})
+_COMMAND_WORDS = frozenset({"git", "gh", *_PUBLISHERS})
+#: gh options that take the next token as their value
+_GH_VALUE_OPTS = frozenset({"-H", "--header", "-X", "--method", "-f", "-F", "--field", "--raw-field",
+                            "--input", "-q", "--jq", "-t", "--template", "-p", "--preview",
+                            "--hostname", "--cache", "-R", "--repo"})
+_GH_FIELD_OPTS = ("-f", "-F", "--field", "--raw-field", "--input")
+_SEP = r"[^\n;|&]*?"
+_RESERVED_FALLBACK_RE = {
+    "push": re.compile(r"\bgit\b" + _SEP + r"\b(?:push|send-pack)\b|\balias\."),
+    "open_pr": re.compile(r"\bgh\b" + _SEP + r"\bpr\b" + _SEP + r"\b(?:create|merge|ready)\b"
+                          r"|\bgh\s+api\b" + _SEP + r"(?:/pulls|pullrequest)", re.IGNORECASE),
+    "publish_release": re.compile(
+        r"\bgh\b" + _SEP + r"\brelease\b" + _SEP + r"\b(?:create|upload|edit)\b"
+        r"|\bgh\s+api\b" + _SEP + r"release"
+        r"|\b(?:npm|pnpm|yarn|bun|uv|poetry|hatch|cargo)\b" + _SEP + r"\bpublish\b"
+        r"|\btwine\b" + _SEP + r"\bupload\b|\b(?:gem|docker|podman)\b" + _SEP + r"\bpush\b",
+        re.IGNORECASE),
+}
+
+
+def _positional(tokens: list[str], value_opts: frozenset[str]) -> list[str]:
+    """The tokens that are neither an option nor an option's value."""
+    out: list[str] = []
+    skip = False
+    for t in tokens:
+        if skip:
+            skip = False
+        elif t in value_opts:
+            skip = True
+        elif not t.startswith("-"):
+            out.append(t)
+    return out
+
+
+def _gh_api_writes(rest: list[str]) -> set[str]:
+    """Reserved actions of ``gh api …`` (*rest* = the args after ``api``): a write
+    (a non-GET method, or a field or input, which makes gh send POST) to ``…/pulls``
+    or ``…/releases``, or a GraphQL mutation on a pull request or a release."""
+    method = None
+    fields = False
+    for j, t in enumerate(rest):
+        if t in ("-X", "--method") and j + 1 < len(rest):
+            method = rest[j + 1].upper()
+        elif t.startswith("--method="):
+            method = t.split("=", 1)[1].upper()
+        elif t.startswith("-X") and len(t) > 2:
+            method = t[2:].lstrip("=").upper()
+        elif t in _GH_FIELD_OPTS or t.startswith(("--field=", "--raw-field=", "--input=")) or (
+                t[:2] in ("-f", "-F") and len(t) > 2):
+            fields = True
+    writes = method != "GET" if method is not None else fields
+    if not writes:
+        return set()
+    pos = _positional(rest, _GH_VALUE_OPTS)
+    endpoint = pos[0] if pos else ""
+    out: set[str] = set()
+    if endpoint == "graphql":
+        text = " ".join(rest).lower()
+        if "mutation" in text:
+            if "pullrequest" in text:
+                out.add("open_pr")
+            if "release" in text:
+                out.add("publish_release")
+        return out
+    if "/pulls" in endpoint:
+        out.add("open_pr")
+    if "/releases" in endpoint:
+        out.add("publish_release")
+    return out
+
+
+def _publishes(word: str, args: list[str]) -> bool:
+    """``<word> … publish`` — the publishing subcommand anywhere among the positional
+    words (``pnpm -r publish``, ``cargo +nightly publish``, ``docker image push``),
+    unless a script runner comes first (``npm run publish``)."""
+    for t in args:
+        if t == "--":
+            return False
+        if t.startswith(("-", "+")):
+            continue
+        if t in _RUNNERS:
+            return False
+        if t in _PUBLISHERS[word]:
+            return True
+    return False
+
+
+def _segment_reserved(tokens: list[str]) -> set[str]:
+    """The reserved actions one command segment performs."""
+    from core.shell_segments import command_tokens, git_subcommand_index
+    # environment assignments are read before they are dropped: git takes aliases
+    # from GIT_CONFIG_KEY_<n> / GIT_CONFIG_PARAMETERS too
+    env_alias = any("=" in t and t.split("=", 1)[0].startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_PARAMETERS"))
+                    and "alias." in t for t in tokens)
+    tokens = command_tokens(tokens)
+    if not tokens:
+        return set()
+    word = tokens[0].rsplit("/", 1)[-1]
+    if word in _RUNS_A_COMMAND or word.startswith("-"):
+        # a wrapper with its own options (`sudo -u me git push`, `xargs -n1 git push`,
+        # `timeout 5 npm publish`): judge from the command word it runs
+        j = next((i for i, t in enumerate(tokens[1:], 1) if t.rsplit("/", 1)[-1] in _COMMAND_WORDS), None)
+        return _segment_reserved(tokens[j:]) if j is not None else set()
+    out: set[str] = set()
+    if word == "git":
+        k = git_subcommand_index(tokens)
+        sub = tokens[k] if k < len(tokens) else ""
+        globals_ = tokens[1:k]
+        # an alias defined on the command line, in the environment or in the config
+        # can hide a push
+        if sub in ("push", "send-pack") or env_alias or any("alias." in t for t in globals_):
+            out.add("push")
+        if sub == "config" and any(t.startswith("alias.") for t in tokens[k + 1:]):
+            out.add("push")
+        if sub == "subtree" and "push" in tokens[k + 1:]:
+            out.add("push")
+    elif word == "gh" and len(tokens) > 1:
+        pos = _positional(tokens[1:], _GH_VALUE_OPTS)
+        noun = pos[0] if pos else ""
+        verb = pos[1] if len(pos) > 1 else ""
+        if noun == "pr" and verb in ("create", "merge", "ready"):
+            out.add("open_pr")
+        if noun == "release" and verb in ("create", "upload", "edit"):
+            out.add("publish_release")
+        if noun == "api":
+            out |= _gh_api_writes(tokens[tokens.index("api") + 1:])
+    elif word in _PUBLISHERS and _publishes(word, tokens[1:]):
+        out.add("publish_release")
+    return out
+
+
+def _is_reserved_action(command: str, reserved: "list[str] | set[str]") -> Optional[str]:
+    """The first action in *reserved* that *command* performs, or None. Same
+    tokenisation as ``_is_irreversible_external_op`` (segments, env assignments and
+    wrapper words, git global options); input that does not tokenise is matched
+    against the raw text, so it is asked rather than let through. A wrapper with its
+    own options (``sudo -u x``, ``timeout 5``, ``xargs -n1``) is judged by the
+    command word it runs; publish verbs are found past global options.
+
+    Known gaps, as for the other predicates: a subshell or command substitution, an
+    alias already in a git config file (``git p`` after ``alias.p`` was set earlier),
+    or an interpreter running the command (``python -c
+    'subprocess.run(["git", "push"])'``) are not seen; the credentials a session gets
+    are the control behind this one."""
+    wanted = [a for a in ("push", "open_pr", "publish_release") if a in set(reserved or ())]
+    if not wanted:
+        return None
+    from core.shell_segments import split_segments
+    segments = split_segments(command)
+    if segments is None:
+        return next((a for a in wanted if _RESERVED_FALLBACK_RE[a].search(command)), None)
+    found: set[str] = set()
+    for seg in segments:
+        found |= _segment_reserved(seg)
+    return next((a for a in wanted if a in found), None)
 
 
 def _segment_is_irreversible(tokens: list[str]) -> bool:
@@ -1719,6 +1891,17 @@ def create_dangerous_command_gate(
         # irreversible external op (C041), rm/mv of DDD/Library/.context
         # (run_a456640f), a v1 authorization).
         hit = _danger_match(command, patterns, cwd)
+        # An action the session's Project Agent reserves for a person (§8.1): asked
+        # every time, never answered from the approval cache.
+        reserved_action = None
+        from core.project_agent_session import current_pin
+        pin = await current_pin(session_context)
+        if pin and not pin.get("broken"):
+            reserved_action = _is_reserved_action(command, pin.get("reserved") or [])
+            if reserved_action and hit is None:
+                hit = {"rule": "reserved_action", "match": _excerpt(command),
+                       "why": f"the {pin.get('brain')} Project Agent reserves "
+                              f"'{reserved_action}' for you: asked every time"}
         is_dangerous = hit is not None
         # A command that discards uncommitted working-tree changes (reset --hard,
         # checkout -- <path>, restore, clean -f, worktree remove --force, …) is asked
@@ -1769,7 +1952,7 @@ def create_dangerous_command_gate(
         # Check session approvals. A v1 authorization is asked every time: each one is
         # a person's decision about one logged request; so is a discard, which is a
         # decision about the files its card listed, not about the command text.
-        if not _is_v1_land_request(command) and not discard_reason \
+        if not _is_v1_land_request(command) and not discard_reason and not reserved_action \
                 and permission_mgr.is_command_approved(session_key, command):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
             return {"decision": "approve"}
@@ -1827,7 +2010,7 @@ def create_dangerous_command_gate(
                     input_data, actual_session_id, reason_text)
 
         if decision == "approve":
-            if not discard_reason:
+            if not discard_reason and not reserved_action:
                 permission_mgr.approve_command(session_key, command)
             if _is_v1_land_request(command):
                 record_land_approval(tool_use_id, command)
@@ -1900,9 +2083,19 @@ def create_external_approval_gate(
         if tool_name == "Bash":
             return {"decision": "approve"}
 
-        # Only EXTERNAL (off-machine) tools are gated. READ / WRITE_LOCAL pass freely.
+        # Only EXTERNAL (off-machine) tools are gated. READ / WRITE_LOCAL pass freely —
+        # except, under a Project Agent that reserves external messages for a person,
+        # an MCP tool whose name says nothing about what it does (§8.1), unless the
+        # user classified it themselves.
         if classify(tool_name, overrides=user_overrides) is not RiskClass.EXTERNAL:
-            return {"decision": "approve"}
+            from core.project_agent_session import current_pin
+            from core.tool_risk import is_unknown_mcp
+            pin = await current_pin(session_context)
+            # a broken pin may hide a reservation: asked too (fail closed)
+            reserves = bool(pin) and (bool(pin.get("broken"))
+                                      or "send_external_message" in (pin.get("reserved") or []))
+            if not (reserves and is_unknown_mcp(tool_name) and user_overrides(tool_name) is None):
+                return {"decision": "approve"}
 
         # Gate-1 B4: without a tool_use_id we cannot correlate a durable approval
         # (idempotency key is (session_id, tool_call_id)). Approve + skip tracking

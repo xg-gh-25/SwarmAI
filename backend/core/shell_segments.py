@@ -78,9 +78,10 @@ def git_subcommand_index(tokens: list[str]) -> int:
     k = 1
     while k < len(tokens):
         t = tokens[k]
-        if t in ("-C", "-c", "--namespace"):
-            k += 2  # option that consumes a value
-        elif t.startswith(("--git-dir", "--work-tree", "--namespace=", "-C", "-c")):
+        if t in ("-C", "-c", "--namespace", "--git-dir", "--work-tree", "--config-env",
+                 "--exec-path", "--super-prefix"):
+            k += 2  # option that consumes a value (given as the next token)
+        elif t.startswith(("--git-dir=", "--work-tree=", "--namespace=", "--config-env=", "-C", "-c")):
             k += 1  # =form, self-contained
         elif t.startswith("-"):
             k += 1  # any other global flag
