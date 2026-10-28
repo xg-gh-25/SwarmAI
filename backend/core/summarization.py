@@ -22,7 +22,6 @@ Used by the automatic ``DailyActivityExtractionHook``.
 from __future__ import annotations
 
 import re
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -38,16 +37,32 @@ logger = logging.getLogger(__name__)
 # Threshold: sessions with more messages than this get LLM enrichment
 LLM_ENRICHMENT_THRESHOLD = 8
 
-# Output budget for the enrichment JSON. It was 512, and the 12-field JSON
-# (Chinese entries cost ~1 token/char) routinely ran past it: the response was
-# cut mid-JSON, and since the schema has no nested objects a cut response has
-# no closing brace, so _parse_enrichment returned {} WITHOUT logging -- ~90% of
-# entries from 2026-10-20 on had no Delivered/Lessons, and distillation had
-# nothing to promote. 2048 leaves headroom; the hook's budget is 180 s
-# (main.py SessionLifecycleHookManager), so the read timeout below can cover a
-# full-length generation.
+# Output budget for the enrichment answer. At 512 the 12-field answer (Chinese
+# entries cost ~1 token/char) was routinely cut; 2048 leaves headroom. A reply that
+# still reaches it is reported as truncated (jobs.bedrock.structured) and the
+# rule-based summary stands. The hook's budget is 180 s (main.py
+# SessionLifecycleHookManager), so the read timeout covers a full-length generation.
 _ENRICHMENT_MAX_TOKENS = 2048
 _ENRICHMENT_READ_TIMEOUT_S = 90
+
+# The enrichment answer, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md). lesson_types and coe_signal stay
+# plain strings: an unknown label is normalized below, not a reason to lose the answer.
+_STR_LIST = {"type": "array", "items": {"type": "string"}}
+_ENRICHMENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "deliverables": _STR_LIST, "key_outputs": _STR_LIST, "lessons": _STR_LIST,
+        "lesson_types": _STR_LIST, "rejected_approaches": _STR_LIST,
+        "corrections": _STR_LIST, "process_reflection": {"type": "string"},
+        "signal_driven_actions": _STR_LIST, "continue_from": {"type": "string"},
+        "validation_status": {"type": "string"}, "coe_signal": {"type": "string"},
+        "coe_topic": {"type": "string"},
+    },
+    "required": ["deliverables", "key_outputs", "lessons", "lesson_types",
+                 "rejected_approaches", "corrections", "continue_from",
+                 "validation_status", "coe_signal", "coe_topic"],
+}
 
 # Centralized patterns — shared with distillation_hook.py to prevent drift.
 # Summarization uses the BROAD variant (runs on raw conversation).
@@ -212,7 +227,8 @@ led to a concrete action (code change, architecture decision, feature addition, 
 Format each as "Signal: <what was the external event> → Action: <what was decided/done>". \
 Empty array if no external signals influenced this session (most sessions are purely internal).
 
-## Output (valid JSON only, no markdown fences):
+## Answer
+Record the summary with the summary tool. An example answer (the contents show the expected style):
 {{
   "deliverables": ["Built X feature", "Fixed Y bug — root cause was Z", "Diagnosed P issue"],
   "key_outputs": ["code: agent_manager.py → StreamEvent handling", "sent: summary email to person@email"],
@@ -256,52 +272,6 @@ def _bash_written_files(cmd: str, *, truncated: bool) -> list[str]:
             continue
         out.append(t)
     return out
-
-
-def _salvage_truncated_json(text: str) -> "dict | None":
-    """Parse the longest complete prefix of a JSON object cut off mid-way.
-
-    Scans once, tracking string/escape state and the open-bracket stack, and
-    records every point where a value has just completed. From the last such
-    point backwards, it closes the open brackets and tries to parse; the first
-    success wins. An unfinished last string or array element is dropped, never
-    guessed. Returns None when nothing usable survives.
-    """
-    stack: list[str] = []
-    cuts: list[tuple[int, str]] = []  # (end index, closing suffix)
-    in_str = esc = False
-    for i, ch in enumerate(text):
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-                if stack:
-                    cuts.append((i + 1, "".join("}" if c == "{" else "]" for c in reversed(stack))))
-            continue
-        if ch == '"':
-            in_str = True
-        elif ch in "{[":
-            stack.append(ch)
-        elif ch in "}]":
-            if not stack:
-                break
-            stack.pop()
-            if not stack:
-                cuts.append((i + 1, ""))
-                break
-            cuts.append((i + 1, "".join("}" if c == "{" else "]" for c in reversed(stack))))
-    for end, suffix in reversed(cuts):
-        candidate = text[:end].rstrip().rstrip(",") + suffix
-        try:
-            data = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(data, dict) and data:
-            return data
-    return None
 
 
 class SummarizationPipeline:
@@ -738,19 +708,16 @@ class SummarizationPipeline:
         # a message during it, a default-pool LLM call would compete with the
         # readiness sampler. The dedicated pool insulates it.
         from core import executors
-        raw = await executors.run_in("llm", self._call_enrichment_llm, prompt)
-        if not raw or raw == "{}":
+        answer = await executors.run_in("llm", self._call_enrichment_llm, prompt)
+        if not answer:
             return summary  # the call failed; _call_enrichment_llm logged why
-
-        enriched = self._parse_enrichment(raw)
-        if not enriched:
-            return summary  # unparseable; _parse_enrichment logged why
+        enriched = self._normalize_enrichment(answer)
 
         # Merge enriched fields into summary
         summary.deliverables = enriched.get("deliverables", [])
         summary.key_outputs = enriched.get("key_outputs", [])
         summary.lessons = enriched.get("lessons", [])
-        # lesson_types is normalized to len(lessons) in _parse_enrichment (bound
+        # lesson_types is normalized to len(lessons) in _normalize_enrichment (bound
         # as pairs), so index alignment holds. Fallback: if absent (shouldn't be),
         # pad to guideline so downstream zip never misaligns.
         _lt = enriched.get("lesson_types", [])
@@ -808,99 +775,41 @@ class SummarizationPipeline:
 
         return result
 
-    # Cached boto3 bedrock-runtime client (thread-safe for invoke_model).
-    # Created lazily on first enrichment call, reused across sessions.
-    _bedrock_client = None
-    _bedrock_client_region: str | None = None
-
-    @classmethod
-    def _get_bedrock_client(cls, region: str):
-        """Return a cached boto3 bedrock-runtime client.
-
-        Creates a new client only if the region changed or no client exists.
-        boto3 clients are thread-safe for ``invoke_model`` calls.
-        """
-        import boto3
-        from botocore.config import Config as BotoConfig
-
-        if cls._bedrock_client is not None and cls._bedrock_client_region == region:
-            return cls._bedrock_client
-
-        boto_config = BotoConfig(
-            retries={"max_attempts": 1, "mode": "adaptive"},
-            connect_timeout=5,
-            # invoke_model is not streamed: the read waits for the WHOLE
-            # generation, so this must cover _ENRICHMENT_MAX_TOKENS of output.
-            read_timeout=_ENRICHMENT_READ_TIMEOUT_S,
-        )
-        cls._bedrock_client = boto3.client(
-            "bedrock-runtime",
-            region_name=region,
-            config=boto_config,
-        )
-        cls._bedrock_client_region = region
-        return cls._bedrock_client
-
     @staticmethod
-    def _call_enrichment_llm(prompt: str) -> str:
-        """Make a Bedrock API call for enrichment extraction.
+    def _call_enrichment_llm(prompt: str) -> dict:
+        """The model's enrichment answer for *prompt*, or {} when there is none.
 
-        Budget: runs inside DailyActivityExtractionHook, whose per-hook
-        timeout is 180 s (main.py), in the background after the session ends.
-
-        Timeouts:
-        - connect_timeout=5s, read_timeout=_ENRICHMENT_READ_TIMEOUT_S (the
-          response is not streamed, so the read covers the whole generation)
-        - Single attempt (no retry) — enrichment is best-effort, rule-based
-          summary is the safety net
-        - boto3 adaptive retry handles transient AWS errors internally
-
-        Reads model and region from the user's AppConfigManager so
-        enrichment works regardless of the user's configured region.
-        Uses Sonnet for quality. Only runs for sessions >8 messages.
+        Budget: runs inside DailyActivityExtractionHook, whose per-hook timeout is
+        180 s (main.py), in the background after the session ends. Asked through
+        jobs.bedrock.structured() with a fail-fast client (read timeout
+        _ENRICHMENT_READ_TIMEOUT_S, no boto retry); best-effort: on any failure the
+        rule-based summary is the safety net. Model and region come from the user's
+        AppConfigManager, so enrichment works in whatever region is configured.
         """
-        # Read region and model from user config (same source of truth
-        # as the main agent).  Falls back to defaults if config not loaded.
         try:
             from core.app_config_manager import AppConfigManager
             cfg = AppConfigManager.instance()
             region = cfg.get("aws_region") or "us-east-1"
-            bedrock_map = cfg.get("bedrock_model_map") or {}
-            model_id = bedrock_map.get(
-                "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6"
-            )
+            model_id = (cfg.get("bedrock_model_map") or {}).get(
+                "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6")
         except Exception:
             region = "us-east-1"
             model_id = "us.anthropic.claude-sonnet-4-6"
 
+        from jobs.bedrock import StructuredOutputError, structured
         try:
-            client = SummarizationPipeline._get_bedrock_client(region)
-            response = client.invoke_model(
-                modelId=model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": _ENRICHMENT_MAX_TOKENS,
-                    "temperature": 0,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                }),
-            )
-            result = json.loads(response["body"].read())
-            if result.get("stop_reason") == "max_tokens":
-                logger.warning(
-                    "Enrichment output hit max_tokens=%d (cut mid-JSON); "
-                    "salvaging the complete part", _ENRICHMENT_MAX_TOKENS)
-            content = result.get("content", [])
-            if content and isinstance(content, list):
-                return content[0].get("text", "{}")
-            logger.warning("Enrichment LLM returned no text content")
-            return "{}"
+            return structured(prompt, schema=_ENRICHMENT_SCHEMA, model_id=model_id,
+                              max_tokens=_ENRICHMENT_MAX_TOKENS, temperature=0.0,
+                              name="summary", description="Record the session summary.",
+                              region=region, read_timeout=_ENRICHMENT_READ_TIMEOUT_S,
+                              max_attempts=1)
+        except StructuredOutputError as e:
+            logger.warning("Enrichment reply %s (%s); keeping the rule-based summary: %.200s",
+                           e.kind, e.detail, e.raw)
+            return {}
         except Exception as e:
             # Read/connection timeouts to Bedrock are transient and harmless
-            # here — enrichment is best-effort and the caller degrades to "{}".
+            # here — enrichment is best-effort and the caller keeps the summary.
             # Log those at INFO to stop the recurring WARNING noise (×7/day);
             # keep genuine (non-transient) failures at WARNING.
             _name = type(e).__name__
@@ -913,40 +822,14 @@ class SummarizationPipeline:
                 )
             else:
                 logger.warning("Enrichment LLM call failed: %s", e)
-            return "{}"
+            return {}
 
     @staticmethod
-    def _parse_enrichment(raw: str) -> dict[str, Any]:
-        """Parse the LLM enrichment JSON response."""
-        text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        start = text.find("{")
-        if start == -1:
-            logger.warning("Enrichment output has no JSON object (%d chars)", len(text))
-            return {}
-        end = text.rfind("}") + 1
-        data = None
-        if end > start:
-            try:
-                data = json.loads(text[start:end])
-            except json.JSONDecodeError:
-                data = None
-        if not isinstance(data, dict):
-            # A cut response (max_tokens, dropped connection) has no closing
-            # brace or ends inside a string. Keep every field that completed.
-            data = _salvage_truncated_json(text[start:])
-            if data is None:
-                logger.warning("Failed to parse enrichment JSON (%d chars, unsalvageable)",
-                               len(text))
-                return {}
-            logger.warning("Enrichment JSON was cut; kept %d complete field(s): %s",
-                           len(data), ", ".join(sorted(data)))
-
+    def _normalize_enrichment(data: dict) -> dict[str, Any]:
+        """The fields of an enrichment answer the summary takes, normalized: empty
+        entries dropped, lessons and lesson_types bound as pairs, an unknown type or
+        coe_signal reset. (process_reflection and signal_driven_actions are asked for
+        but not taken here; see the known issue in the design's implementation notes.)"""
         result: dict[str, Any] = {}
         for key in ("deliverables", "key_outputs",
                      "rejected_approaches", "corrections",

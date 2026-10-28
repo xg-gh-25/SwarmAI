@@ -376,7 +376,7 @@ class TestEvalJudgeModelValidation:
         assert resp.status_code == 200, resp.text
 
     def test_global_prefixed_id_is_accepted(self, client):
-        """model_registry._ID_PREFIXES supports global.anthropic.* too."""
+        """model_registry._ID_PREFIX supports global.anthropic.* too."""
         resp = client.put("/api/settings", json={
             "eval_judge_model": "global.anthropic.claude-opus-4-6-v1",
         })

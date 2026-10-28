@@ -146,6 +146,24 @@ class TestRunDddRefresh:
         assert result["status"] == "success"
         assert result["proposals_written"] == 0
 
+    def test_a_failed_proposal_call_is_counted_not_hidden(self, project_dir, monkeypatch):
+        """An unusable reply is an exception now; the run reports it instead of
+        looking the same as "no changes needed"."""
+        from jobs.bedrock import StructuredOutputError
+        monkeypatch.setattr(
+            "jobs.handlers.ddd_refresh._check_staleness",
+            lambda d: {"stale": True, "age_days": 14, "commit_count": 10},
+        )
+        monkeypatch.setattr("jobs.handlers.ddd_refresh._gather_project_context", lambda d, i: {})
+
+        def _cut(name, context):
+            raise StructuredOutputError("truncated")
+
+        monkeypatch.setattr("jobs.handlers.ddd_refresh._generate_proposal", _cut)
+        result = run_ddd_refresh()
+        assert result["proposals_failed"] == 1
+        assert "1 proposal calls failed" in result["summary"]
+
     def test_dry_run_doesnt_call_llm(self, project_dir, monkeypatch):
         """Dry run should detect staleness but not call LLM."""
         monkeypatch.setattr(

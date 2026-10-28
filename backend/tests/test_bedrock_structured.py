@@ -223,3 +223,46 @@ def test_a_non_integer_is_refused(client, given) -> None:
 def test_a_malformed_schema_is_a_value_error(schema) -> None:
     with pytest.raises(ValueError):
         b._check_schema(schema)
+
+
+def test_a_model_that_rejects_a_forced_choice_is_told_to_use_the_tool(client) -> None:
+    # Measured 2026-10-28: claude-opus-5-5 400s on toolChoice "tool"; it answers through
+    # the tool under "auto" (after its thinking or some text, both ignored here).
+    c = client({"stopReason": "tool_use", "output": {"message": {"content": [
+        {"reasoningContent": {"reasoningText": {"text": "thinking"}}},
+        {"text": "Let me check."},
+        {"toolUse": {"toolUseId": "t", "name": "answer", "input": GOOD}}]}}})
+    got = b.structured("p", schema=VERDICT, model_id="us.anthropic.claude-opus-5-5",
+                       max_tokens=9, system="be precise")
+    assert got["verdict"] == "failed"
+    (kw,) = c.calls
+    assert kw["toolConfig"]["toolChoice"] == {"auto": {}}
+    assert kw["system"] == [{"text": "be precise\n\nAnswer only by calling the answer tool."}]
+    assert "temperature" not in kw["inferenceConfig"]   # opus 4.7+ reject one
+
+
+@pytest.mark.parametrize("model_id", ["eu.anthropic.claude-opus-5-5", "apac.anthropic.claude-opus-5-5"])
+def test_any_geography_of_a_model_gets_its_capabilities(client, model_id) -> None:
+    # A deployment's bedrock_model_map may name any geography; the checks read the full ID.
+    c = client(_tool_reply(GOOD))
+    b.structured("p", schema=VERDICT, model_id=model_id, max_tokens=9, temperature=0.2)
+    (kw,) = c.calls
+    assert kw["toolConfig"]["toolChoice"] == {"auto": {}}
+    assert "temperature" not in kw["inferenceConfig"]
+
+
+def test_a_model_that_accepts_temperature_gets_it(client) -> None:
+    c = client(_tool_reply(GOOD))
+    b.structured("p", schema=VERDICT, model_id="us.anthropic.claude-sonnet-4-6", max_tokens=9,
+                 temperature=0.2)
+    assert c.calls[0]["inferenceConfig"]["temperature"] == 0.2
+    assert c.calls[0]["toolConfig"]["toolChoice"] == {"tool": {"name": "answer"}}
+
+
+@pytest.mark.parametrize("model, forced", [
+    ("claude-opus-5-5", False), ("us.anthropic.claude-opus-5-5", False),
+    ("claude-opus-5", True), ("claude-opus-4-8", True), ("claude-sonnet-4-6", True), (None, True),
+])
+def test_forced_tool_choice_follows_the_measured_table(model, forced) -> None:
+    from model_registry import supports_forced_tool_choice
+    assert supports_forced_tool_choice(model) is forced

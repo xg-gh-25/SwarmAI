@@ -1,30 +1,26 @@
-"""LLM-based skill optimization via Bedrock Opus API.
+"""LLM-based skill optimization via Bedrock (the configured default model).
 
 Replaces the heuristic optimizer's blind append/remove with semantic
 understanding of corrections. Takes skill text + correction evidence,
-asks Opus to propose specific TextChange objects.
+asks the model to propose specific TextChange objects.
 
-Zero new dependencies — uses existing boto3/Bedrock connection.
-Returns empty list on any failure (timeout, malformed response, API error)
-so the caller can fall back to heuristic optimization.
+The answer comes through jobs.bedrock.structured() (design
+docs/design/2026-10-28-structured-model-output.md). Returns an empty list on any
+failure (timeout, unusable reply, API error) so the caller can fall back to
+heuristic optimization.
 
-All functions are synchronous — boto3.converse() is a sync API, wrapping
-it in async would be fake async adding complexity for no benefit.
+All functions are synchronous — the Converse call is a sync API, wrapping it in
+async would be fake async adding complexity for no benefit.
 
 Key public symbols:
 - ``optimize_skill_with_llm``  -- Main entry point. Sync.
-- ``_call_bedrock_opus``       -- Low-level Bedrock invoke (mockable).
+- ``_ask_changes``             -- The model call (mockable).
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 from dataclasses import dataclass
-
-import boto3
-from botocore.config import Config as BotoConfig
 
 from core.evolution_optimizer import TextChange
 from model_registry import (
@@ -94,55 +90,10 @@ Rules:
 - Do NOT change YAML frontmatter (the --- block at the top)
 - The "original" field must be EXACT text copied from the instructions — character-for-character
 
-Return ONLY valid JSON (no markdown wrapping, no explanation):
-{"changes": [{"original": "exact text to find and replace", "replacement": "new text", "reason": "why this change"}]}
-
-For append-only changes (new instructions), use empty string for "original":
-{"changes": [{"original": "", "replacement": "- New instruction here", "reason": "why"}]}
+Record the changes with the changes tool: each with "original" (exact text to find and
+replace), "replacement" (the new text) and "reason". For an append-only change (a new
+instruction), "original" is the empty string.
 """
-
-
-# ── Bedrock client singleton with TTL ──
-
-import threading
-
-_bedrock_client = None
-_bedrock_client_created_at: float = 0.0
-_CLIENT_TTL_SECONDS = 3600  # Re-create client hourly (credential rotation)
-_client_lock = threading.Lock()  # Thread safety for shared client (Finding 2, adversarial review)
-
-
-def _get_bedrock_client():
-    """Lazy singleton with 1-hour TTL — re-creates after credential rotation.
-
-    Thread-safe: protected by _client_lock to prevent race between
-    reset_bedrock_client() and concurrent callers (LLMJudge + optimizer).
-    """
-    global _bedrock_client, _bedrock_client_created_at
-    import time
-
-    with _client_lock:
-        now = time.monotonic()
-        if _bedrock_client is None or (now - _bedrock_client_created_at) > _CLIENT_TTL_SECONDS:
-            region = os.environ.get(
-                "AWS_REGION",
-                os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
-            )
-            _bedrock_client = boto3.client(
-                "bedrock-runtime",
-                region_name=region,
-                config=BotoConfig(read_timeout=30, connect_timeout=10, retries={"max_attempts": 1}),
-            )
-            _bedrock_client_created_at = now
-        return _bedrock_client
-
-
-def reset_bedrock_client():
-    """Force re-creation on next call. Called by _run_evolution_cycle_locked at cycle start."""
-    global _bedrock_client, _bedrock_client_created_at
-    with _client_lock:
-        _bedrock_client = None
-        _bedrock_client_created_at = 0.0
 
 
 # ── Token usage tracking ──
@@ -206,129 +157,50 @@ Current instructions:
 User corrections (where the AI went wrong):
 {corrections_block}
 {trace_block}
-Propose specific text changes to improve these instructions. Return JSON only."""
+Propose specific text changes to improve these instructions."""
 
 
-def _parse_llm_response(response: str) -> list[TextChange]:
-    """Parse LLM response into TextChange objects.
+# The answer, shaped by the API.
+_S = {"type": "string"}
+_CHANGES_SCHEMA = {
+    "type": "object",
+    "properties": {"changes": {"type": "array", "items": {
+        "type": "object", "properties": {"original": _S, "replacement": _S, "reason": _S},
+        "required": ["original", "replacement"]}}},
+    "required": ["changes"],
+}
+_MAX_TOKENS = 2000  # changes are small
+# Fail-fast transport: a reply still unread after this is a hang.
+_READ_TIMEOUT = 60
 
-    Handles: raw JSON, JSON wrapped in ```json ... ```, partial JSON.
-    Returns empty list on any parse failure.
-    """
-    text = response.strip()
 
-    # Strip markdown code fences if present
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if fence_match:
-        text = fence_match.group(1).strip()
-
-    # Extract the first valid JSON object using raw_decode — handles
-    # unbalanced braces inside JSON string values (code snippets, f-strings)
-    # that break naive depth-counting. See B1 fix.
-    brace_start = text.find("{")
-    if brace_start == -1:
-        logger.warning("LLM optimizer: no JSON object found in response")
-        return []
-
-    decoder = json.JSONDecoder()
-    try:
-        data, _ = decoder.raw_decode(text, brace_start)
-    except json.JSONDecodeError as exc:
-        logger.warning("LLM optimizer: JSON parse failed: %s", exc)
-        return []
-
-    if not isinstance(data, dict) or "changes" not in data:
-        logger.warning("LLM optimizer: response missing 'changes' key")
-        return []
-
+def _changes_from(data: dict) -> list[TextChange]:
+    """The usable changes of an answer: at most MAX_CHANGES, no-ops and empties dropped."""
     changes = []
     for item in data["changes"][:MAX_CHANGES]:
-        if not isinstance(item, dict):
+        original, replacement = item["original"], item["replacement"]
+        if original == replacement or (not original and not replacement):
             continue
-        original = item.get("original", "")
-        replacement = item.get("replacement", "")
-        reason = item.get("reason", "LLM-proposed change")
-
-        # Skip no-op changes
-        if original == replacement:
-            continue
-        # Skip empty changes (both empty = nothing to do)
-        if not original and not replacement:
-            continue
-
-        changes.append(TextChange(
-            original=str(original),
-            replacement=str(replacement),
-            reason=str(reason),
-        ))
-
+        changes.append(TextChange(original=original, replacement=replacement,
+                                  reason=item.get("reason") or "LLM-proposed change"))
     return changes
 
 
-# Effort level for direct Bedrock API calls (internal LLM-as-judge utilities).
-# "low" = skip extended thinking, fast + cheap. These are structured eval tasks
-# that don't benefit from deep reasoning chains.
-BEDROCK_EFFORT = "low"
+def _ask_changes(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[dict, LLMUsage]:
+    """The model's {"changes": [...]} for *prompt*, and the call's token usage.
+    Model from config.json default_model (_resolve_bedrock_model). Raises
+    jobs.bedrock.StructuredOutputError or a Bedrock error."""
+    from jobs.bedrock import structured
 
-
-def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, LLMUsage]:
-    """Invoke Bedrock Opus and return (response_text, usage).
-
-    Sync call — boto3.converse() is a sync API.
-    Max tokens: 2000 (changes are small).
-    Uses ``BEDROCK_EFFORT`` to control thinking depth (default: low).
-    Model resolved from config.json default_model (single source of truth).
-    """
-    client = _get_bedrock_client()
-    model_id, supports_temperature = _resolve_bedrock_model()
-
-    inference_config: dict = {"maxTokens": 2000}
-    if supports_temperature:
-        inference_config["temperature"] = 0.3  # Low temp for precise, structured output
-
-    response = client.converse(
-        modelId=model_id,
-        messages=[{"role": "user", "content": [{"text": prompt}]}],
-        system=[{"text": system}],
-        inferenceConfig=inference_config,
-        additionalModelRequestFields={
-            "thinking": {"type": "adaptive"},
-            "output_config": {"effort": BEDROCK_EFFORT},
-        },
-    )
-
-    # Extract usage
-    usage_data = response.get("usage", {})
-    usage = LLMUsage(
-        input_tokens=usage_data.get("inputTokens", 0),
-        output_tokens=usage_data.get("outputTokens", 0),
-    )
-
-    # Extract text from response (skip reasoningContent blocks from adaptive thinking)
-    output = response.get("output", {})
-    message = output.get("message", {})
-    content_blocks = message.get("content", [])
-    for block in content_blocks:
-        if "text" in block:
-            return block["text"], usage
-
-    # Distinguish the two empty-return causes at the source so a future
-    # "LLM optimization silently degraded" incident is diagnosable from the log
-    # alone. The caller no longer adds a generic "empty response" line — that
-    # double-logged the thinking-only case and was the zero-block case's only
-    # signal. The exception path logs its own distinct signal in the caller.
-    if content_blocks:
-        logger.warning(
-            "LLM optimizer: Bedrock returned %d block(s) but no text block "
-            "(thinking-only response) — no changes extracted",
-            len(content_blocks),
-        )
-    else:
-        logger.warning(
-            "LLM optimizer: Bedrock returned zero content blocks "
-            "(empty response) — no changes extracted",
-        )
-    return "", usage
+    model_id, _ = _resolve_bedrock_model()
+    raw_usage: dict = {}
+    data = structured(prompt, schema=_CHANGES_SCHEMA, system=system, model_id=model_id,
+                      max_tokens=_MAX_TOKENS, temperature=0.3, name="changes",
+                      description="Record the proposed text changes.",
+                      region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),
+                      read_timeout=_READ_TIMEOUT, max_attempts=1, usage=raw_usage)
+    return data, LLMUsage(input_tokens=raw_usage["input_tokens"],
+                          output_tokens=raw_usage["output_tokens"])
 
 
 def optimize_skill_with_llm(
@@ -337,10 +209,10 @@ def optimize_skill_with_llm(
     skill_name: str,
     execution_traces: list[str] | None = None,
 ) -> tuple[list[TextChange], LLMUsage]:
-    """Optimize a skill's instructions using Bedrock Opus.
+    """Optimize a skill's instructions using the configured Bedrock model.
 
     Takes the skill body text and all correction evidence (high + low confidence),
-    asks Opus to propose specific text changes that address the correction patterns.
+    asks the model to propose specific text changes that address the correction patterns.
 
     v2.3: Added execution_traces parameter. GEPA-inspired trace-guided mutation:
     feeding the agent's reasoning during failed executions gives the optimizer
@@ -363,15 +235,19 @@ def optimize_skill_with_llm(
 
     prompt = _build_prompt(skill_text, corrections, skill_name, execution_traces)
 
-    try:
-        response_text, usage = _call_bedrock_opus(prompt)
-        if not response_text:
-            # _call_bedrock_opus already logged the specific empty cause
-            # (thinking-only vs zero-content-blocks). Falls back to heuristic
-            # via the caller in evolution_optimizer.
-            return empty
+    from jobs.bedrock import StructuredOutputError
 
-        changes = _parse_llm_response(response_text)
+    try:
+        data, usage = _ask_changes(prompt)
+    except StructuredOutputError as exc:
+        logger.warning("LLM optimizer reply %s for %s (%s)", exc.kind, skill_name, exc.detail)
+        return empty
+    except Exception as exc:
+        logger.warning("LLM optimizer failed for %s: %s", skill_name, exc)
+        return empty
+
+    try:
+        changes = _changes_from(data)
 
         # Pre-validate: drop changes whose 'original' doesn't exist in skill text.
         # LLM often returns approximate quotes that don't match character-for-character.

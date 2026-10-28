@@ -144,12 +144,6 @@ class TestApplyReport:
         assert any("Removed stale" in a for a in actions)
         assert any("Resolved thread" in a for a in actions)
 
-    def test_apply_report_parse_error(self):
-        from jobs.handlers.memory_health import _apply_report
-        report = {"parse_error": True, "summary": "bad json"}
-        actions = _apply_report(report, "", "")
-        assert len(actions) == 1
-        assert "parse error" in actions[0]
 
     def test_apply_report_empty(self):
         from jobs.handlers.memory_health import _apply_report

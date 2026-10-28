@@ -17,7 +17,6 @@ Key public symbols:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -62,8 +61,8 @@ conversation for long-term memory storage.
   - open_threads: unfinished work, pending investigations, follow-ups needed
   - recent_context: current project status, what was worked on
 
-## Output (valid JSON only, no markdown fences, no explanation):
-{{"key_decisions": [], "lessons_learned": [], "open_threads": [], "recent_context": []}}"""
+## Answer
+Record what to save with the save tool (an empty list for a section with nothing to save)."""
 
 
 @dataclass
@@ -138,163 +137,37 @@ def _format_conversation(messages: list[dict], since_idx: int = 0) -> str:
     return result
 
 
-_LLM_MAX_RETRIES = 3
-_LLM_RETRY_DELAY = 1.0  # seconds, doubles each retry
+# The four sections the extraction answers, shaped by the API
+# (jobs.bedrock.structured(); design docs/design/2026-10-28-structured-model-output.md).
+_SECTIONS = ("key_decisions", "lessons_learned", "open_threads", "recent_context")
+_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {k: {"type": "array", "items": {"type": "string"}} for k in _SECTIONS},
+    "required": list(_SECTIONS),
+}
+_EXTRACTION_MAX_TOKENS = 1024
+# Transport: a fail-fast client (30 s read) with boto's standard retry, which backs
+# off on throttling and transient network errors; a credential error is retried once
+# with fresh credentials (jobs.bedrock.converse_with_retry).
+_EXTRACTION_TRANSPORT = {"read_timeout": 30, "max_attempts": 3}
 
-# Module-level client cache — avoids recreating boto3 client on every call.
-# Each (region, model) combo gets its own cached client.  Thread-safe because
-# boto3 clients are safe for concurrent use after construction.
-_bedrock_clients: dict[str, Any] = {}
 
+def _extract_sections(prompt: str, config: dict[str, Any] | None = None) -> dict[str, list[str]]:
+    """The model's answer to the extraction *prompt*: section -> non-empty entries.
 
-def _get_bedrock_client(region: str) -> Any:
-    """Return a cached bedrock-runtime client for the given region.
-
-    Creates a new client on first call, reuses on subsequent calls.
-    Mirrors the caching pattern in ``SummarizationPipeline._get_bedrock_client()``.
+    Model and region come from *config* (``memory_extraction_model``, ``aws_region``).
+    Raises jobs.bedrock.StructuredOutputError for an unusable reply and a Bedrock
+    error as is; the caller reports either, never as "nothing to save".
     """
-    import boto3
-    from botocore.config import Config as BotoConfig
+    from jobs.bedrock import structured
 
-    if region not in _bedrock_clients:
-        boto_config = BotoConfig(
-            retries={"max_attempts": 2, "mode": "adaptive"},
-            connect_timeout=10,
-            read_timeout=30,
-        )
-        _bedrock_clients[region] = boto3.client(
-            "bedrock-runtime",
-            region_name=region,
-            config=boto_config,
-        )
-    return _bedrock_clients[region]
-
-
-def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
-    """Make a direct Bedrock API call for extraction with retry.
-
-    Uses boto3 bedrock-runtime to invoke the model.  Retries up to
-    ``_LLM_MAX_RETRIES`` times on transient errors (network, throttling,
-    zlib decompression failures from corrupted HTTP responses).
-
-    Uses a module-level cached client to avoid ~200-500ms overhead of
-    boto3 client construction (credential chain, STS call, session) on
-    every invocation.
-
-    Args:
-        prompt: The fully formatted extraction prompt.
-        config: Optional app config dict for model/region overrides.
-
-    Returns:
-        Raw LLM response text, or ``"{}"`` if all retries fail.
-    """
-    import time
-
-    region = "us-east-1"
-    model_id = EXTRACTION_MODEL
-
-    if config:
-        region = config.get("aws_region", region)
-        model_id = config.get("memory_extraction_model", model_id)
-
-    last_error: Exception | None = None
-    delay = _LLM_RETRY_DELAY
-
-    for attempt in range(1, _LLM_MAX_RETRIES + 1):
-        # Fetch client at top of each iteration so cache eviction
-        # (on auth errors below) takes effect on the next retry.
-        client = _get_bedrock_client(region)
-        try:
-            response = client.invoke_model(
-                modelId=model_id,
-                contentType="application/json",
-                accept="application/json",
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1024,
-                    "temperature": 0,
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                }),
-            )
-            result = json.loads(response["body"].read())
-            content = result.get("content", [])
-            if content and isinstance(content, list):
-                return content[0].get("text", "{}")
-            return "{}"
-        except Exception as e:
-            last_error = e
-            # Evict cached client on auth/credential errors so next
-            # retry creates a fresh one with refreshed credentials.
-            err_name = type(e).__name__
-            if "Expired" in err_name or "Credential" in err_name or "Auth" in err_name:
-                _bedrock_clients.pop(region, None)
-            if attempt < _LLM_MAX_RETRIES:
-                logger.warning(
-                    "LLM extraction attempt %d/%d failed: %s — retrying in %.1fs",
-                    attempt,
-                    _LLM_MAX_RETRIES,
-                    e,
-                    delay,
-                )
-                time.sleep(delay)
-                delay *= 2  # exponential backoff
-            else:
-                logger.error(
-                    "LLM extraction failed after %d attempts: %s",
-                    _LLM_MAX_RETRIES,
-                    e,
-                    exc_info=True,
-                )
-
-    return "{}"
-
-
-def _parse_extraction(raw: str) -> dict[str, list[str]]:
-    """Parse the LLM's JSON response into section -> entries mapping.
-
-    Handles common LLM output quirks: markdown fences, trailing commas,
-    extra text before/after JSON.
-
-    Returns:
-        Dict with keys: key_decisions, lessons_learned, open_threads, recent_context.
-        Each value is a list of entry strings. Empty dict on parse failure.
-    """
-    # Strip markdown fences if present
-    text = raw.strip()
-    if text.startswith("```"):
-        # Remove opening fence (with optional language tag)
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    text = text.strip()
-
-    # Try to find JSON object in the text
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start == -1 or end == 0:
-        logger.warning("No JSON object found in LLM response")
-        return {}
-
-    json_str = text[start:end]
-
-    try:
-        data = json.loads(json_str)
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse extraction JSON: %s", e)
-        return {}
-
-    # Validate structure
-    result: dict[str, list[str]] = {}
-    valid_sections = {"key_decisions", "lessons_learned", "open_threads", "recent_context"}
-    for section in valid_sections:
-        entries = data.get(section, [])
-        if isinstance(entries, list):
-            # Filter to only valid string entries
-            result[section] = [e for e in entries if isinstance(e, str) and e.strip()]
-
-    return result
+    config = config or {}
+    data = structured(prompt, schema=_EXTRACTION_SCHEMA,
+                      model_id=config.get("memory_extraction_model", EXTRACTION_MODEL),
+                      max_tokens=_EXTRACTION_MAX_TOKENS, temperature=0.0, name="save",
+                      description="Record what to save to memory.",
+                      region=config.get("aws_region", "us-east-1"), **_EXTRACTION_TRANSPORT)
+    return {k: [e for e in data[k] if e.strip()] for k in _SECTIONS}
 
 
 # Map extraction keys to MEMORY.md section headers. Values MUST be current
@@ -449,14 +322,20 @@ async def extract_and_save(
     # Run LLM call on the dedicated 'llm' pool (run_c8ad52f8), NOT the default
     # ThreadPoolExecutor — a background memory-extraction burst must never
     # saturate the default pool the readiness sampler shares (→ false offline).
+    from jobs.bedrock import StructuredOutputError
     try:
         from core import executors
-        raw_response = await executors.run_in("llm", _call_llm, prompt, config)
+        extracted = await executors.run_in("llm", _extract_sections, prompt, config)
+    except StructuredOutputError as exc:
+        logger.warning("Memory extraction reply %s for session %s (%s): %.200s",
+                       exc.kind, session_id, exc.detail, exc.raw)
+        return MemoryExtractionResult(
+            next_message_idx=total_messages,
+            error=f"LLM extraction reply {exc.kind}",
+        )
     except Exception as exc:
-        # Catch errors that bypass _call_llm's internal try/except
-        # (e.g. zlib decompression errors from boto3/urllib3 response handling)
         logger.error(
-            "LLM thread call failed for session %s: %s",
+            "LLM extraction failed for session %s: %s",
             session_id,
             exc,
             exc_info=True,
@@ -466,9 +345,8 @@ async def extract_and_save(
             error=f"LLM extraction failed: {type(exc).__name__}",
         )
 
-    # 7. Parse extraction result
-    extracted = _parse_extraction(raw_response)
-    if not extracted or all(len(v) == 0 for v in extracted.values()):
+    # 7. Nothing to save is a valid answer (every section empty)
+    if all(len(v) == 0 for v in extracted.values()):
         return MemoryExtractionResult(
             next_message_idx=total_messages,
             error="Nothing new to save",

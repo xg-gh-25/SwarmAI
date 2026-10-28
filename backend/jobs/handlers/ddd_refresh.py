@@ -43,6 +43,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
         return {"status": "skipped", "reason": "no Projects/ directory"}
 
     proposals_written = 0
+    proposals_failed = 0
     projects_checked = 0
     health_refreshed = 0
 
@@ -109,6 +110,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
             proposal = _generate_proposal(project_dir.name, context)
         except Exception as e:
             logger.error("LLM call failed for %s: %s", project_dir.name, e)
+            proposals_failed += 1
             continue
 
         # Write proposal
@@ -119,6 +121,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
     summary = (
         f"Checked {projects_checked} projects, refreshed {health_refreshed} health, "
         f"wrote {proposals_written} proposals"
+        + (f", {proposals_failed} proposal calls failed" if proposals_failed else "")
         if projects_checked > 0
         else "No projects with DDD docs found"
     )
@@ -129,6 +132,7 @@ def run_ddd_refresh(dry_run: bool = False) -> dict:
         "projects_checked": projects_checked,
         "health_refreshed": health_refreshed,
         "proposals_written": proposals_written,
+        "proposals_failed": proposals_failed,
         "summary": summary,
     }
 
@@ -236,35 +240,44 @@ def _gather_project_context(project_dir: Path, stale_info: dict) -> dict:
 # -- LLM Proposal Generation --
 
 
+# The proposal, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md).
+_S = {"type": "string"}
+_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "no_changes": {"type": "boolean"}, "reason": _S, "summary": _S,
+        "tech_md_updates": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"section": _S, "action": {"type": "string", "enum": ["add", "modify", "remove"]},
+                           "current_text": _S, "proposed_text": _S, "reason": _S},
+            "required": ["section", "action", "reason"]}},
+        "improvement_md_updates": {"type": "array", "items": {
+            "type": "object", "properties": {"section": _S, "entry": _S, "reason": _S},
+            "required": ["section", "entry", "reason"]}},
+        "confidence": {"type": "number", "description": "1 to 10"},
+    },
+    "required": ["no_changes"],
+}
+
+
 def _generate_proposal(project_name: str, context: dict) -> dict:
-    """Call Bedrock Sonnet 4.6 to generate DDD doc update proposals."""
-    from jobs.bedrock import invoke
+    """Call Bedrock Sonnet 4.6 for DDD doc update proposals. Raises for a Bedrock
+    error or an unusable reply (jobs.bedrock.StructuredOutputError)."""
+    from jobs.bedrock import get_model_id, structured
 
-    prompt = _build_prompt(project_name, context)
-
-    content, input_tokens, output_tokens = invoke(
-        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2,
-    )
-
+    usage: dict = {}
+    proposal = structured(_build_prompt(project_name, context), schema=_PROPOSAL_SCHEMA,
+                          model_id=get_model_id(), max_tokens=MAX_OUTPUT_TOKENS,
+                          temperature=0.2, name="proposal",
+                          description="Record the proposed DDD doc updates.",
+                          record_usage=True, usage=usage)
     logger.info(
         "DDD refresh LLM: %d input tokens, %d output tokens (~$%.3f)",
-        input_tokens, output_tokens,
-        input_tokens * 3.0 / 1_000_000 + output_tokens * 15.0 / 1_000_000,
+        usage["input_tokens"], usage["output_tokens"],
+        usage["input_tokens"] * 3.0 / 1_000_000 + usage["output_tokens"] * 15.0 / 1_000_000,
     )
-
-    # Parse JSON response
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse DDD refresh JSON, returning raw")
-        return {"raw_response": text, "parse_error": True}
+    return proposal
 
 
 def _build_prompt(project_name: str, context: dict) -> str:
@@ -294,16 +307,16 @@ def _build_prompt(project_name: str, context: dict) -> str:
 
 ## Your Task
 
-Compare the current TECH.md against the recent code changes. Produce a JSON object with proposed updates.
+Compare the current TECH.md against the recent code changes. Record your proposed updates with the proposal tool.
 
 Rules:
 - Only propose changes where the doc is ACTUALLY wrong or missing significant new information
 - Preserve the existing structure and style of TECH.md
 - Don't rewrite sections that are still accurate
 - Be specific: show the exact text to add/modify, not vague suggestions
-- If no changes are needed, return {{"no_changes": true, "reason": "docs are current"}}
+- If no changes are needed, record no_changes true with the reason (e.g. "docs are current")
 
-Output JSON:
+The fields, with an example:
 {{
   "no_changes": false,
   "summary": "1-2 sentence description of what changed",
@@ -324,9 +337,7 @@ Output JSON:
     }}
   ],
   "confidence": 8
-}}
-
-Only output the JSON, nothing else."""
+}}"""
 
 
 # -- Proposal Output --

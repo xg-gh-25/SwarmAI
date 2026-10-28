@@ -248,6 +248,20 @@ def handle_signal_digest(
     )
 
 
+# The relevance scores, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md). urgency stays a plain string:
+# an unknown value counts as low below rather than losing every score.
+_SCORES_SCHEMA = {
+    "type": "object",
+    "properties": {"scores": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"idx": {"type": "integer"}, "relevance_score": {"type": "number"},
+                       "urgency": {"type": "string"}, "summary": {"type": "string"}},
+        "required": ["idx", "relevance_score"]}}},
+    "required": ["scores"],
+}
+
+
 def _llm_digest(
     signals: list[RawSignal], user_context: str
 ) -> tuple[str, list[dict], int]:
@@ -257,7 +271,7 @@ def _llm_digest(
     Returns:
         (markdown_content, scored_items, tokens_used)
     """
-    from jobs.bedrock import invoke
+    from jobs.bedrock import StructuredOutputError, get_model_id, structured, text
 
     # Tier descriptions for prompt context
     tier_labels = {
@@ -324,47 +338,43 @@ signals if relevant. Be ruthless — a shorter digest that surfaces the 3 things
 matter beats a complete one nobody reads.
 YAML frontmatter: date ({today}), signals_count, sources."""
 
-    markdown_part, md_in, md_out = invoke(
-        md_prompt, max_tokens=MAX_OUTPUT_TOKENS_MD, temperature=0.3,
-    )
+    md_usage: dict = {"input_tokens": 0, "output_tokens": 0}
+    try:
+        markdown_part = text(md_prompt, model_id=get_model_id(), max_tokens=MAX_OUTPUT_TOKENS_MD,
+                             temperature=0.3, record_usage=True, usage=md_usage)
+    except StructuredOutputError as e:
+        # The tokens were spent: keep them in the total, and still run the scores call.
+        logger.warning("LLM digest reply %s (%s); using the simple digest", e.kind, e.detail)
+        markdown_part = _simple_digest(signals)
 
-    # ── Call 2: JSON scores (separate call = never truncated) ────────
+    # ── Call 2: JSON scores (a separate call, so the markdown cannot crowd it out) ──
     json_prompt = f"""Score these signals for relevance. User context:
 {ctx}
 
 Signals:
 {signal_text}
 
-Output ONLY a JSON array — no markdown, no explanation:
-[{{"idx": 0, "relevance_score": 0.85, "urgency": "high", "summary": "one-line"}}]
+Record the scores with the scores tool, one item per relevant signal, e.g.
+{{"idx": 0, "relevance_score": 0.85, "urgency": "high", "summary": "one-line"}}
 
 Rules:
 - relevance_score: 0.0–1.0 based on relevance to user context
 - urgency: "high" / "medium" / "low"
 - Skip completely irrelevant signals (don't include idx)
-- Include Chinese signals if they match user interests (中文AI, 具身智能, 大模型)
-- Output valid JSON only"""
+- Include Chinese signals if they match user interests (中文AI, 具身智能, 大模型)"""
 
-    json_content, js_in, js_out = invoke(
-        json_prompt, max_tokens=MAX_OUTPUT_TOKENS_JSON, temperature=0.1,
-    )
-    total_tokens = md_in + md_out + js_in + js_out
-
-    # Parse JSON scores
+    js_usage: dict = {"input_tokens": 0, "output_tokens": 0}
     scored_items: list[dict] = []
     try:
-        json_text = json_content.strip()
-        # Strip markdown code fences if LLM wraps output
-        if json_text.startswith("```"):
-            json_text = json_text.split("\n", 1)[-1]
-        if json_text.endswith("```"):
-            json_text = json_text.rsplit("```", 1)[0]
-        raw_scores = json.loads(json_text.strip())
+        raw_scores = structured(json_prompt, schema=_SCORES_SCHEMA, model_id=get_model_id(),
+                                max_tokens=MAX_OUTPUT_TOKENS_JSON, temperature=0.1,
+                                name="scores", description="Record the signal scores.",
+                                record_usage=True, usage=js_usage)["scores"]
         for score_obj in raw_scores:
             idx = score_obj.get("idx", -1)
             if 0 <= idx < len(sampled):
                 s = sampled[idx]
-                raw_score = min(max(float(score_obj.get("relevance_score", 0.5)), 0), 1.0)
+                raw_score = min(max(float(score_obj["relevance_score"]), 0), 1.0)
                 tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
                 weighted_score = min(raw_score * tier_weight, 1.0)
                 urgency = score_obj.get("urgency", "low")
@@ -387,9 +397,11 @@ Rules:
                     "rank": 0,
                     "region": "cn" if s.feed_id in TRENDING_FEED_IDS else "",
                 })
-    except (json.JSONDecodeError, ValueError, IndexError) as e:
-        logger.warning(f"Failed to parse LLM JSON scores: {e}")
+    except StructuredOutputError as e:
+        logger.warning("LLM scores reply %s (%s); scoring by keyword", e.kind, e.detail)
         scored_items = _keyword_scored_items(signals, ctx)
+    total_tokens = (md_usage["input_tokens"] + md_usage["output_tokens"]
+                    + js_usage["input_tokens"] + js_usage["output_tokens"])
 
     if not scored_items:
         scored_items = _keyword_scored_items(signals, ctx)
@@ -398,7 +410,7 @@ Rules:
 
 
 def _keyword_scored_items(signals: list[RawSignal], user_context: str = "") -> list[dict]:
-    """Smart fallback: keyword-match scoring when LLM JSON parsing fails.
+    """Smart fallback: keyword-match scoring when the scores reply is unusable.
 
     Instead of flat 0.5 for everything, checks signal title + summary against
     keywords extracted from user_context. Matched signals get 0.7, unmatched
@@ -664,11 +676,7 @@ def _handle_rollup(
         rollup_md, tokens_used = _llm_rollup(combined, user_context, window_days)
     except Exception as e:
         logger.warning(f"LLM rollup failed, using concatenation: {e}")
-        rollup_md = (
-            f"# Weekly Signal Rollup — {window_days} days\n\n"
-            f"*LLM rollup unavailable. Raw digests concatenated below.*\n\n"
-            f"{combined}"
-        )
+        rollup_md = _concatenated_rollup(combined, window_days)
 
     # Write rollup file
     SIGNALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -691,9 +699,18 @@ def _handle_rollup(
     )
 
 
+def _concatenated_rollup(combined: str, window_days: int) -> str:
+    """Fallback rollup: the daily digests, concatenated."""
+    return (
+        f"# Weekly Signal Rollup — {window_days} days\n\n"
+        f"*LLM rollup unavailable. Raw digests concatenated below.*\n\n"
+        f"{combined}"
+    )
+
+
 def _llm_rollup(combined_digests: str, user_context: str, window_days: int) -> tuple[str, int]:
-    """Use Bedrock Sonnet 4.6 to produce a weekly rollup summary."""
-    from jobs.bedrock import invoke
+    """Ask the model for a weekly rollup summary; on an unusable reply, concatenate."""
+    from jobs.bedrock import StructuredOutputError, get_model_id, text
 
     # Truncate to fit context
     truncated = combined_digests[:8000]
@@ -715,9 +732,16 @@ Create a concise weekly summary with:
 
 Be concise. This is a rollup, not a repeat — synthesize patterns, don't list individual signals."""
 
-    content, input_tokens, output_tokens = invoke(
-        prompt, max_tokens=MAX_OUTPUT_TOKENS_MD, temperature=0.3,
-    )
+    usage: dict = {"input_tokens": 0, "output_tokens": 0}
+    try:
+        content = text(prompt, model_id=get_model_id(), max_tokens=MAX_OUTPUT_TOKENS_MD,
+                       temperature=0.3, record_usage=True, usage=usage)
+    except StructuredOutputError as e:
+        # The tokens were spent: return them with the concatenation fallback.
+        logger.warning("LLM rollup reply %s (%s); using concatenation", e.kind, e.detail)
+        return _concatenated_rollup(combined_digests, window_days), (
+            usage["input_tokens"] + usage["output_tokens"])
+    input_tokens, output_tokens = usage["input_tokens"], usage["output_tokens"]
 
     header = (
         f"---\ndate: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n"

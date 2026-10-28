@@ -6,7 +6,6 @@ pre-validation, token tracking, skill text truncation.
 """
 from __future__ import annotations
 
-import json
 from unittest.mock import patch, MagicMock
 
 
@@ -23,15 +22,15 @@ class TestOptimizeSkillWithLLM:
         """Valid LLM JSON response → list of TextChange objects."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        mock_response = json.dumps({"changes": [
+        mock_response = {"changes": [
             {
                 "original": "Always include verbose output.",
                 "replacement": "Only include verbose output when --verbose flag is set.",
                 "reason": "Users corrected: don't include verbose output by default",
             }
-        ]})
+        ]}
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             mock_call.return_value = (mock_response, LLMUsage(500, 200))
             changes, usage = optimize_skill_with_llm(
                 skill_text="Always include verbose output.\nRun deployment.",
@@ -49,12 +48,13 @@ class TestOptimizeSkillWithLLM:
         assert usage.input_tokens == 500
         assert usage.output_tokens == 200
 
-    def test_returns_empty_on_malformed_json(self):
-        """Malformed LLM response → empty list, no crash."""
+    def test_returns_empty_on_an_unusable_reply(self):
+        """An unusable reply (truncated / missing / invalid) → empty list, no crash."""
         from core.llm_optimizer import optimize_skill_with_llm
+        from jobs.bedrock import StructuredOutputError
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
-            mock_call.return_value = ("This is not valid JSON at all", LLMUsage())
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
+            mock_call.side_effect = StructuredOutputError("invalid", "raw", "why")
             changes, usage = optimize_skill_with_llm(
                 skill_text="Do the thing.",
                 corrections=[("don't do it wrong", "remove", "high")],
@@ -67,7 +67,7 @@ class TestOptimizeSkillWithLLM:
         """Bedrock API failure → empty list, no crash."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             mock_call.side_effect = Exception("Bedrock throttling")
             changes, usage = optimize_skill_with_llm(
                 skill_text="Do the thing.",
@@ -82,12 +82,12 @@ class TestOptimizeSkillWithLLM:
         """LLM proposes >5 changes → capped at 5."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        mock_response = json.dumps({"changes": [
+        mock_response = {"changes": [
             {"original": "", "replacement": f"- Rule {i}", "reason": f"reason {i}"}
             for i in range(10)
-        ]})
+        ]}
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             mock_call.return_value = (mock_response, LLMUsage(100, 100))
             changes, _ = optimize_skill_with_llm(
                 skill_text="Do stuff.",
@@ -96,23 +96,6 @@ class TestOptimizeSkillWithLLM:
             )
 
         assert len(changes) <= 5
-
-    def test_handles_json_wrapped_in_markdown(self):
-        """LLM wraps JSON in ```json ... ``` code block → still parses."""
-        from core.llm_optimizer import optimize_skill_with_llm
-
-        mock_response = '```json\n{"changes": [{"original": "X", "replacement": "Y", "reason": "Z"}]}\n```'
-
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
-            mock_call.return_value = (mock_response, LLMUsage(80, 50))
-            changes, _ = optimize_skill_with_llm(
-                skill_text="X is here.",
-                corrections=[("fix X", "add", "high")],
-                skill_name="wrapped",
-            )
-
-        assert len(changes) == 1
-        assert changes[0].replacement == "Y"
 
 
 # ── F3: Pre-validation — drop changes whose original doesn't exist ──
@@ -124,12 +107,12 @@ class TestPreValidation:
         """LLM proposes change for text not in skill → dropped."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        mock_response = json.dumps({"changes": [
+        mock_response = {"changes": [
             {"original": "This text does NOT exist in the skill", "replacement": "New text", "reason": "fix"},
             {"original": "", "replacement": "- Appended rule", "reason": "add"},
-        ]})
+        ]}
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             mock_call.return_value = (mock_response, LLMUsage(100, 100))
             changes, _ = optimize_skill_with_llm(
                 skill_text="Do stuff correctly.",
@@ -146,11 +129,11 @@ class TestPreValidation:
         """LLM proposes change for text that exists → kept."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        mock_response = json.dumps({"changes": [
+        mock_response = {"changes": [
             {"original": "Do stuff correctly.", "replacement": "Do stuff very carefully.", "reason": "improve"},
-        ]})
+        ]}
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             mock_call.return_value = (mock_response, LLMUsage(100, 100))
             changes, _ = optimize_skill_with_llm(
                 skill_text="Do stuff correctly.",
@@ -184,7 +167,7 @@ class TestFallbackBehavior:
         """No corrections → no LLM call needed → empty changes."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             changes, usage = optimize_skill_with_llm(
                 skill_text="Do stuff.", corrections=[], skill_name="empty",
             )
@@ -207,9 +190,9 @@ class TestPromptQuality:
         def capture_prompt(prompt: str, **kwargs):
             nonlocal captured_prompt
             captured_prompt = prompt
-            return ('{"changes": []}', LLMUsage(50, 10))
+            return ({"changes": []}, LLMUsage(50, 10))
 
-        with patch("core.llm_optimizer._call_bedrock_opus", side_effect=capture_prompt):
+        with patch("core.llm_optimizer._ask_changes", side_effect=capture_prompt):
             optimize_skill_with_llm(
                 skill_text="Always use verbose mode.",
                 corrections=[
@@ -250,8 +233,8 @@ class TestTokenTracking:
         """Successful call returns token counts."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
-            mock_call.return_value = ('{"changes": []}', LLMUsage(1234, 567))
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
+            mock_call.return_value = ({"changes": []}, LLMUsage(1234, 567))
             _, usage = optimize_skill_with_llm(
                 skill_text="Do stuff.",
                 corrections=[("fix", "add", "high")],
@@ -265,7 +248,7 @@ class TestTokenTracking:
         """Failed call returns zero usage."""
         from core.llm_optimizer import optimize_skill_with_llm
 
-        with patch("core.llm_optimizer._call_bedrock_opus") as mock_call:
+        with patch("core.llm_optimizer._ask_changes") as mock_call:
             mock_call.side_effect = Exception("boom")
             _, usage = optimize_skill_with_llm(
                 skill_text="Do stuff.",
@@ -277,77 +260,57 @@ class TestTokenTracking:
         assert usage.output_tokens == 0
 
 
-# ── Empty-return log-signal distinguishability (observability) ──
+# ── The real call: through jobs.bedrock.structured() ──────────────────────────
 #
-# _call_bedrock_opus returns "" for TWO distinct causes; the caller adds a THIRD
-# generic log. These tests drive the REAL _call_bedrock_opus (mocking only the
-# boto3 client boundary) and the REAL caller, asserting each empty cause emits ONE
-# distinguishable, greppable signal — no double-logging, no silent case.
+# Drives the REAL _ask_changes and optimize_skill_with_llm, mocking only the boto3
+# client boundary (jobs.bedrock.build_timeout_client).
 
-def _mock_bedrock_client(content_blocks):
-    """A boto3-client stand-in whose converse() returns the given content blocks."""
+def _client(content_blocks, stop="tool_use"):
     client = MagicMock()
     client.converse.return_value = {
-        "usage": {"inputTokens": 10, "outputTokens": 0},
+        "stopReason": stop, "usage": {"inputTokens": 10, "outputTokens": 4},
         "output": {"message": {"content": content_blocks}},
     }
     return client
 
 
-class TestEmptyReturnLogSignals:
-    """Each empty-return cause must be told apart in the logs (observability only)."""
+def _run(client, caplog):
+    import logging
+    from core.llm_optimizer import optimize_skill_with_llm
 
-    def test_thinking_only_logs_distinct_signal(self, caplog):
-        """Blocks present but none has 'text' → ONE thinking-only signal."""
-        import logging
-        from core.llm_optimizer import _call_bedrock_opus
+    with patch("jobs.bedrock.build_timeout_client", return_value=client), \
+         patch("core.llm_optimizer._resolve_bedrock_model",
+               return_value=("us.anthropic.claude-opus-5-5", False)), \
+         caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
+        return optimize_skill_with_llm(skill_text="Do stuff.", corrections=[("fix", "add", "high")],
+                                       skill_name="real")
 
-        # reasoningContent-only response (adaptive thinking, no text block)
-        client = _mock_bedrock_client([{"reasoningContent": {"text": "thinking..."}}])
-        with patch("core.llm_optimizer._get_bedrock_client", return_value=client):
-            with caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
-                text, _ = _call_bedrock_opus("prompt")
 
-        assert text == ""
-        msgs = [r.getMessage() for r in caplog.records]
-        thinking = [m for m in msgs if "thinking-only" in m.lower()]
-        assert len(thinking) == 1, f"expected exactly one thinking-only signal, got: {msgs}"
+def test_the_answer_comes_through_the_changes_tool(caplog):
+    client = _client([{"reasoningContent": {"reasoningText": {"text": "hmm"}}},
+                      {"toolUse": {"name": "changes", "input": {"changes": [
+                          {"original": "Do stuff.", "replacement": "Do stuff well.", "reason": "r"}]}}}])
+    changes, usage = _run(client, caplog)
+    assert [c.replacement for c in changes] == ["Do stuff well."]
+    assert (usage.input_tokens, usage.output_tokens) == (10, 4)
+    kw = client.converse.call_args.kwargs
+    # claude-opus-5-5 rejects a forced tool choice and a custom temperature
+    assert kw["toolConfig"]["toolChoice"] == {"auto": {}}
+    assert "temperature" not in kw["inferenceConfig"]
 
-    def test_zero_content_blocks_logs_distinct_signal(self, caplog):
-        """Zero content blocks → a DISTINCT non-thinking-only signal (was silent)."""
-        import logging
-        from core.llm_optimizer import _call_bedrock_opus
 
-        client = _mock_bedrock_client([])
-        with patch("core.llm_optimizer._get_bedrock_client", return_value=client):
-            with caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
-                text, _ = _call_bedrock_opus("prompt")
+import pytest  # noqa: E402
 
-        assert text == ""
-        msgs = [r.getMessage() for r in caplog.records]
-        # The zero-block case must produce SOME warning at the source (previously silent)…
-        assert msgs, f"zero-content-blocks was silent at source: {msgs}"
-        # …and it must NOT be mislabeled as thinking-only (that would be a wrong signal).
-        assert not any("thinking-only" in m.lower() for m in msgs), (
-            f"zero-block wrongly labeled thinking-only: {msgs}"
-        )
 
-    def test_thinking_only_not_double_logged_through_caller(self, caplog):
-        """A thinking-only response must NOT be logged twice (source + caller)."""
-        import logging
-        from core.llm_optimizer import optimize_skill_with_llm
-
-        client = _mock_bedrock_client([{"reasoningContent": {"text": "hmm"}}])
-        with patch("core.llm_optimizer._get_bedrock_client", return_value=client):
-            with caplog.at_level(logging.WARNING, logger="core.llm_optimizer"):
-                changes, _ = optimize_skill_with_llm(
-                    skill_text="Do stuff.",
-                    corrections=[("fix", "add", "high")],
-                    skill_name="thinky",
-                )
-
-        assert changes == []  # empty return → heuristic fallback path unaffected
-        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-        # Exactly ONE empty-cause warning — the source signal, not source + generic caller.
-        empty_cause = [m for m in warnings if "thinking-only" in m.lower() or "empty response" in m.lower()]
-        assert len(empty_cause) == 1, f"empty cause double-logged: {empty_cause}"
+@pytest.mark.parametrize("blocks, stop, kind", [
+    ([{"reasoningContent": {"reasoningText": {"text": "thinking..."}}}], "end_turn", "missing"),
+    ([], "end_turn", "missing"),
+    ([{"toolUse": {"name": "changes", "input": {}}}], "max_tokens", "truncated"),
+    ([{"toolUse": {"name": "changes", "input": {"changes": "x"}}}], "tool_use", "invalid"),
+])
+def test_an_unusable_reply_is_one_warning_that_names_it(caplog, blocks, stop, kind):
+    import logging
+    changes, _ = _run(_client(blocks, stop), caplog)
+    assert changes == []  # empty return → heuristic fallback path unaffected
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warnings) == 1 and f"reply {kind}" in warnings[0], warnings

@@ -25,7 +25,6 @@ Key public symbols:
 """
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -194,7 +193,7 @@ Rules for judging:
 - Consider the correction context: if the user corrected the agent, the output
   was wrong — factor that into your score
 
-Return ONLY valid JSON: {"score": 0.7, "justification": "One sentence explaining the score."}
+Record it with the score tool: one sentence of justification, then the score.
 """
 
 
@@ -204,21 +203,35 @@ class LLMJudge:
     Evaluates (skill_text, expected, actual) triples against a quality rubric.
     Returns 0.0-1.0 score with justification text.
 
-    Uses Opus for quality (KD28: power over token budget). Same model as
-    llm_optimizer — one model everywhere, zero complexity.
-    Falls back to None on any failure (timeout, API error, parse failure).
+    Uses the configured default model (KD28: power over token budget), the same as
+    llm_optimizer, asked through jobs.bedrock.structured() (design
+    docs/design/2026-10-28-structured-model-output.md). Falls back to None on any
+    failure (timeout, API error, unusable reply).
     """
 
-    EFFORT = "low"  # Internal judge — structured eval, no deep reasoning needed
     TIMEOUT_SECONDS = 30
+    MAX_TOKENS = 1000
+    SCHEMA = {
+        "type": "object",
+        "properties": {"justification": {"type": "string"},
+                       "score": {"type": "number", "description": "0.0 to 1.0"}},
+        "required": ["justification", "score"],
+    }
 
-    def __init__(self):
-        pass  # Uses shared Bedrock client from llm_optimizer
+    def _ask(self, prompt: str) -> dict:
+        """The judge's {justification, score} for *prompt* (mockable). Raises
+        jobs.bedrock.StructuredOutputError or a Bedrock error."""
+        import os
 
-    def _get_client(self):
-        """Use the shared Bedrock client from llm_optimizer (one client, one TTL)."""
-        from core.llm_optimizer import _get_bedrock_client
-        return _get_bedrock_client()
+        from core.llm_optimizer import _resolve_bedrock_model
+        from jobs.bedrock import structured
+
+        model_id, _ = _resolve_bedrock_model()
+        return structured(prompt, schema=self.SCHEMA, system=_JUDGE_SYSTEM_PROMPT,
+                          model_id=model_id, max_tokens=self.MAX_TOKENS, temperature=0.1,
+                          name="score", description="Record the score of the output.",
+                          region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),
+                          read_timeout=self.TIMEOUT_SECONDS, max_attempts=1)
 
     def _build_judge_prompt(
         self,
@@ -241,7 +254,7 @@ class LLMJudge:
         if correction_context:
             parts.append(f"\n## User Correction (agent was wrong)\n{correction_context[:500]}")
 
-        parts.append("\nScore this output. Return JSON only.")
+        parts.append("\nScore this output.")
         return "\n".join(parts)
 
     def score(
@@ -253,67 +266,24 @@ class LLMJudge:
     ) -> float | None:
         """Score a single (expected, actual) pair using LLM judge.
 
-        Returns 0.0-1.0 on success, None on failure (timeout, parse error, etc.).
+        Returns 0.0-1.0 on success, None on failure (timeout, unusable reply, etc.).
         """
         if not expected and not actual:
             return 1.0  # Both empty = trivially correct
 
         prompt = self._build_judge_prompt(skill_text, expected, actual, correction_context)
 
+        from jobs.bedrock import StructuredOutputError
+
         try:
-            from core.llm_optimizer import _resolve_bedrock_model
-
-            client = self._get_client()
-            model_id, supports_temperature = _resolve_bedrock_model()
-
-            inference_config: dict = {"maxTokens": 200}
-            if supports_temperature:
-                inference_config["temperature"] = 0.1  # Low temp for precise judge scoring
-
-            response = client.converse(
-                modelId=model_id,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                system=[{"text": _JUDGE_SYSTEM_PROMPT}],
-                inferenceConfig=inference_config,
-                additionalModelRequestFields={
-                    "thinking": {"type": "adaptive"},
-                    "output_config": {"effort": self.EFFORT},
-                },
-            )
-
-            # Extract text (skip reasoningContent blocks from adaptive thinking)
-            content_blocks = response.get("output", {}).get("message", {}).get("content", [])
-            text = ""
-            for block in content_blocks:
-                if "text" in block:
-                    text = block["text"]
-                    break
-
-            if not text:
-                if content_blocks:
-                    logger.warning(
-                        "LLMJudge: %d block(s) but no text (thinking-only response) "
-                        "— no score returned",
-                        len(content_blocks),
-                    )
-                else:
-                    logger.warning(
-                        "LLMJudge: zero content blocks (empty response) "
-                        "— no score returned",
-                    )
-                return None
-
-            # Parse JSON response
-            data = json.loads(text.strip())
-            score_val = float(data.get("score", 0.0))
-            return max(0.0, min(1.0, score_val))
-
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            logger.warning("LLM judge parse error: %s", exc)
+            answer = self._ask(prompt)
+        except StructuredOutputError as exc:
+            logger.warning("LLM judge reply %s (%s)", exc.kind, exc.detail)
             return None
         except Exception as exc:
             logger.warning("LLM judge call failed: %s", exc)
             return None
+        return max(0.0, min(1.0, answer["score"]))
 
     def score_batch(
         self,

@@ -1,20 +1,21 @@
-"""Tests for the enrichment-truncation fix in core/summarization.py.
+"""Session enrichment asks the model through jobs.bedrock.structured() (design
+docs/design/2026-10-28-structured-model-output.md). Properties checked:
+- a complete answer reaches the summary normalized;
+- a reply cut at max_tokens, with no answer or off-schema, leaves the rule-based
+  summary unchanged and logs which kind it was (the old text parser dropped a cut
+  reply without a line, and its 13 recorded failures were unescaped strings);
+- the output budget and read timeout fit a full-length generation and the 180 s
+  hook budget.
 
-The enrichment JSON was cut at max_tokens=512 and, having no closing brace,
-was dropped without a log line. Properties checked:
-- a cut response keeps every field that completed (salvage), never a guess;
-- an unfinished last string / array element is dropped;
-- a complete response parses unchanged;
-- nothing usable -> {} WITH a warning;
-- the output budget and read timeout fit a full-length generation and the
-  180 s hook budget.
+Mock boundary: the bedrock-runtime client (jobs.bedrock.build_timeout_client).
 """
 
-import json
+import asyncio
 import logging
+from unittest.mock import patch
 
 from core import summarization as S
-from core.summarization import SummarizationPipeline, _salvage_truncated_json
+from core.summarization import StructuredSummary, SummarizationPipeline
 
 FULL = {
     "deliverables": ["修复召回截断", "Fixed Y"],
@@ -32,48 +33,66 @@ FULL = {
 }
 
 
-def _cut(at: str) -> str:
-    text = json.dumps(FULL, ensure_ascii=False, indent=2)
-    return text[: text.index(at)]
+class _Client:
+    def __init__(self, reply):
+        self.reply, self.calls = reply, []
+
+    def converse(self, **kw):
+        self.calls.append(kw)
+        return self.reply
 
 
-def test_cut_inside_a_later_field_keeps_the_complete_ones():
-    data = _salvage_truncated_json(_cut('"rejected_approaches"'))
-    assert data["deliverables"] == FULL["deliverables"]
-    assert data["lessons"] == FULL["lessons"]
-    assert data["lesson_types"] == FULL["lesson_types"]
-    assert "rejected_approaches" not in data
+def _tool(answer, stop="tool_use"):
+    return {"stopReason": stop, "output": {"message": {"content": [
+        {"toolUse": {"toolUseId": "t", "name": "summary", "input": answer}}]}}}
 
 
-def test_cut_inside_a_string_drops_only_the_unfinished_element():
-    text = json.dumps(FULL, ensure_ascii=False)
-    cut = text[: text.index("Never trust") + 5]  # inside the 2nd lesson
-    data = _salvage_truncated_json(cut)
-    assert data["deliverables"] == FULL["deliverables"]
-    assert data["lessons"] == ["先量再改"]
+def _enrich(reply):
+    client = _Client(reply)
+    summary = StructuredSummary(topics=["t"], decisions=[], files_modified=[],
+                                open_questions=[], session_title="t", timestamp="10:00")
+    msgs = [{"role": "user", "content": "fix the recall"}, {"role": "assistant", "content": "done"}]
+
+    async def _run_in(_pool, fn, *a):
+        return fn(*a)
+    with patch("jobs.bedrock.build_timeout_client", return_value=client), \
+         patch("core.executors.run_in", _run_in):
+        out = asyncio.run(SummarizationPipeline()._enrich_with_llm(summary, msgs))
+    return out, client
 
 
-def test_parse_enrichment_uses_salvage_and_logs(caplog):
-    caplog.set_level(logging.WARNING)
-    out = SummarizationPipeline._parse_enrichment(_cut('"continue_from"'))
-    assert out["deliverables"] == FULL["deliverables"]
-    assert out["lessons"] == FULL["lessons"]
-    assert any("was cut" in r.message for r in caplog.records)
+def test_a_complete_answer_reaches_the_summary():
+    out, client = _enrich(_tool(FULL))
+    assert out.deliverables == ["修复召回截断", "Fixed Y"]
+    assert list(zip(out.lessons, out.lesson_types)) == [("先量再改", "guideline"),
+                                                        ("Never trust char counts", "pitfall")]
+    assert out.validation_status == "tests green"
+    (kw,) = client.calls
+    assert kw["toolConfig"]["toolChoice"] == {"tool": {"name": "summary"}}
+    assert kw["inferenceConfig"]["maxTokens"] == S._ENRICHMENT_MAX_TOKENS
 
 
-def test_complete_json_parses_unchanged():
-    out = SummarizationPipeline._parse_enrichment(json.dumps(FULL, ensure_ascii=False))
-    assert out["lessons"] == FULL["lessons"] and out["continue_from"] == "next"
+def test_a_cut_reply_keeps_the_rule_based_summary_and_says_so(caplog):
+    with caplog.at_level(logging.WARNING, logger="core.summarization"):
+        out, _ = _enrich(_tool({}, stop="max_tokens"))
+    assert out.deliverables == [] and out.lessons == []
+    assert "Enrichment reply truncated" in caplog.text
 
 
-def test_nothing_usable_is_logged_not_silent(caplog):
-    caplog.set_level(logging.WARNING)
-    assert SummarizationPipeline._parse_enrichment('{"deliverables": ["unfinish') == {}
-    assert SummarizationPipeline._parse_enrichment("no json here") == {}
-    assert len([r for r in caplog.records if "nrichment" in r.message]) == 2
+def test_an_answer_off_its_schema_keeps_the_rule_based_summary(caplog):
+    with caplog.at_level(logging.WARNING, logger="core.summarization"):
+        out, _ = _enrich(_tool({**FULL, "lessons": "not a list"}))
+    assert out.lessons == [] and "Enrichment reply invalid" in caplog.text
+
+
+def test_a_text_reply_is_missing(caplog):
+    reply = {"stopReason": "end_turn", "output": {"message": {"content": [{"text": "{\"deliverables\": [\"x\"]}"}]}}}
+    with caplog.at_level(logging.WARNING, logger="core.summarization"):
+        out, _ = _enrich(reply)
+    assert out.deliverables == [] and "Enrichment reply missing" in caplog.text
 
 
 def test_budget_fits_a_full_generation():
     assert S._ENRICHMENT_MAX_TOKENS >= 2048
-    # invoke_model is not streamed: the read waits for the whole output.
+    # The reply is not streamed: the read waits for the whole output.
     assert 60 <= S._ENRICHMENT_READ_TIMEOUT_S < 180

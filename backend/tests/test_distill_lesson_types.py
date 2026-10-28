@@ -2,7 +2,7 @@
 
 What is tested — the "source-side type declaration" root fix for the 82%
 keyword-classifier skew:
-  1. _parse_enrichment binds lessons↔lesson_types as normalized equal-length pairs
+  1. _normalize_enrichment binds lessons↔lesson_types as normalized equal-length pairs
      (short→pad guideline, long→truncate, invalid→guideline, empty-lesson pairs
      dropped together — the index-alignment fragility Gate-1 flagged).
   2. _summary_to_jsonl_record emits a BOUND `lessons_typed` structure.
@@ -26,8 +26,7 @@ from hooks.distillation_hook import DistillationTriggerHook
 # ── AC1/AC2: parse binds + normalizes lessons↔lesson_types ──────────────────
 class TestParseEnrichmentBinding:
     def _parse(self, obj: dict) -> dict:
-        import json
-        return SummarizationPipeline._parse_enrichment(json.dumps(obj))
+        return SummarizationPipeline._normalize_enrichment(obj)
 
     def test_equal_length_honored(self):
         out = self._parse({

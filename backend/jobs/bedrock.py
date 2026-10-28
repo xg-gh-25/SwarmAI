@@ -11,12 +11,14 @@ Credential strategy (same as the main SwarmAI app):
   3. Pre-resolve credentials and inject them explicitly into the boto3
      client — avoids credential_process resolution at call time.
 
-Usage::
+A model's answer goes through ``structured()`` (an object shaped by a JSON schema,
+the format guaranteed by the API) or ``text()`` (plain text); both report a reply cut
+at max_tokens instead of returning it (design
+docs/design/2026-10-28-structured-model-output.md)::
 
-    from jobs.bedrock import get_client, get_model_id
+    from jobs.bedrock import get_model_id, structured
 
-    client = get_client()
-    response = client.invoke_model(modelId=get_model_id(), body=...)
+    answer = structured(prompt, schema=SCHEMA, model_id=get_model_id(), max_tokens=1000)
 """
 
 from __future__ import annotations
@@ -36,8 +38,8 @@ _client_created_at: float = 0.0  # monotonic timestamp
 _CLIENT_TTL: float = 1800.0  # 30 minutes — STS temporary creds have 1-12h TTL
 
 # Substrings (lowercased) that mark a bedrock error as a transient credential/auth
-# failure worth ONE evict-and-retry. Single source of truth — used by both invoke()
-# and converse_with_retry() so the retry predicate can never drift between them.
+# failure worth ONE evict-and-retry. Single source of truth for converse_with_retry()'s
+# two paths (cached client and fail-fast client), so the predicate cannot drift.
 _RETRIABLE_AUTH_KEYWORDS: tuple[str, ...] = (
     "credential", "expired", "token", "unauthorized",
     "accessdenied", "security",
@@ -314,75 +316,6 @@ def _record_usage_sync(
         logger.debug("Failed to record background job token usage", exc_info=True)
 
 
-def invoke(
-    prompt: str,
-    *,
-    model_key: str = "claude-sonnet-4-6",
-    max_tokens: int = 2048,
-    temperature: float = 0.2,
-) -> tuple[str, int, int]:
-    """High-level invoke: prompt in, text + token counts out.
-
-    Handles credential eviction + single retry on auth errors.
-
-    Returns:
-        (response_text, input_tokens, output_tokens)
-
-    Raises:
-        Exception: If both attempts fail.
-    """
-    import json
-
-    model_id = get_model_id(model_key)
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-    })
-
-    for attempt in range(2):
-        try:
-            client = get_client(force_new=(attempt > 0))
-            response = client.invoke_model(modelId=model_id, body=body)
-            result = json.loads(response["body"].read())
-
-            text = result["content"][0]["text"]
-            input_tok = result.get("usage", {}).get("input_tokens", 0)
-            output_tok = result.get("usage", {}).get("output_tokens", 0)
-
-            logger.info(
-                "Bedrock invoke: model=%s, %d in / %d out tokens",
-                model_id, input_tok, output_tok,
-            )
-
-            # Fire-and-forget token recording for background jobs.
-            # bedrock.invoke() is sync, so we record via a sync helper
-            # (spawns a short-lived asyncio.run). Never breaks the job.
-            try:
-                _record_usage_sync(
-                    input_tokens=input_tok,
-                    output_tokens=output_tok,
-                    model=model_id,
-                )
-            except Exception:
-                pass  # fire-and-forget
-
-            return text, input_tok, output_tok
-
-        except Exception as e:
-            err_str = str(e).lower()
-            retriable = any(kw in err_str for kw in _RETRIABLE_AUTH_KEYWORDS)
-            if retriable and attempt == 0:
-                logger.warning(
-                    "Bedrock auth error (attempt %d), evicting client: %s",
-                    attempt + 1, e,
-                )
-                evict_client()
-                continue
-            raise
-
-
 def _converse_kwargs(model_id: str, messages: list, system: list,
                      inference_config: dict, tool_config: dict | None) -> dict:
     kw: dict = {"modelId": model_id, "messages": messages, "inferenceConfig": inference_config}
@@ -406,13 +339,12 @@ def converse_with_retry(
 ) -> dict:
     """client.converse() with credential eviction + a single auth-error retry.
 
-    The converse-API sibling of invoke() (which uses the older invoke_model API
-    and cannot carry a separate system prompt). Used by the OS-Eval LLM judge so
-    a transient stale-credential moment self-heals instead of zeroing out every
+    The transport under structured() and text(), so every model answer gets it: a
+    transient stale-credential moment self-heals instead of zeroing out every
     LLM-judged golden case (90/147 errored in the 2026-06-28 nightly, all the
     same "unable to assume credentials" failure with no recovery).
 
-    Same evict-and-retry-ONCE discipline as invoke(): retry only on the first
+    Evict-and-retry ONCE: retry only on the first
     attempt, only for a credential/auth error (`_RETRIABLE_AUTH_KEYWORDS` — the
     single shared predicate), with a freshly-resolved client. A non-auth error
     raises immediately (never masks a real bug, never loops). Bounded at 2 total
@@ -611,16 +543,26 @@ def _record(resp: dict, model_id: str) -> None:
 
 def _call(prompt: str, *, model_id: str, max_tokens: int, system: str, temperature: float,
           region: str | None, read_timeout: int | None, max_attempts: int | None,
-          tool_config: dict | None, record_usage: bool) -> tuple[str, list]:
+          tool_config: dict | None, record_usage: bool,
+          usage: dict | None = None) -> tuple[str, list]:
+    from model_registry import supports_custom_temperature
+
+    inference: dict = {"maxTokens": max_tokens}
+    if supports_custom_temperature(model_id):  # opus 4.7+ reject a custom temperature
+        inference["temperature"] = temperature
     resp = converse_with_retry(
         messages=[{"role": "user", "content": [{"text": prompt}]}],
         system=[{"text": system}] if system else [],
-        inference_config={"maxTokens": max_tokens, "temperature": temperature},
+        inference_config=inference,
         model_id=model_id, region=region, read_timeout=read_timeout,
         max_attempts=max_attempts, tool_config=tool_config,
     )
     if record_usage:
         _record(resp, model_id)
+    if usage is not None:
+        u = (resp or {}).get("usage") or {}
+        usage["input_tokens"] = int(u.get("inputTokens") or 0)
+        usage["output_tokens"] = int(u.get("outputTokens") or 0)
     return _reply_parts(resp)
 
 
@@ -638,25 +580,39 @@ def structured(
     read_timeout: int | None = None,
     max_attempts: int | None = None,
     record_usage: bool = False,
+    usage: dict | None = None,
 ) -> dict:
     """A model's answer to *prompt* as a dict matching *schema* (an object schema).
 
     The model is made to call one tool, *name*, whose input schema is *schema*, so
-    the reply is an object, never text to parse. Put a free-text field such as
+    the reply is an object, never text to parse (forced where the model allows it,
+    model_registry.supports_forced_tool_choice; otherwise the model is told to).
+    *temperature* is sent only to a model that accepts one
+    (model_registry.supports_custom_temperature). Put a free-text field such as
     ``reasoning`` first in a verdict schema: the model writes its analysis there
     instead of before the answer. Raises StructuredOutputError (truncated / missing /
     invalid); a Bedrock error propagates as from converse_with_retry. *record_usage*
-    records token usage the way the background jobs always have.
+    records token usage the way the background jobs always have; a dict passed as
+    *usage* is filled with this call's input_tokens and output_tokens.
     """
+    from model_registry import supports_forced_tool_choice
+
     _check_schema(schema)
     if schema["type"] != "object":
         raise ValueError("an answer schema is an object")
     tool = {"toolSpec": {"name": name, "description": description,
                          "inputSchema": {"json": schema}}}
+    if supports_forced_tool_choice(model_id):
+        choice: dict = {"tool": {"name": name}}
+    else:
+        # A model that rejects a forced choice picks the tool itself; it is told to,
+        # and a reply without the call is "missing" as on any other model.
+        choice = {"auto": {}}
+        system = (system + "\n\n" if system else "") + f"Answer only by calling the {name} tool."
     stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
                          temperature=temperature, region=region, read_timeout=read_timeout,
-                         max_attempts=max_attempts, record_usage=record_usage,
-                         tool_config={"tools": [tool], "toolChoice": {"tool": {"name": name}}})
+                         max_attempts=max_attempts, record_usage=record_usage, usage=usage,
+                         tool_config={"tools": [tool], "toolChoice": choice})
     import json as _json
     raw = _json.dumps(blocks, ensure_ascii=False, default=str)
     if stop == "max_tokens":
@@ -683,13 +639,15 @@ def text(
     read_timeout: int | None = None,
     max_attempts: int | None = None,
     record_usage: bool = False,
+    usage: dict | None = None,
 ) -> str:
     """A model's plain-text answer to *prompt*. A reply cut by max_tokens raises
     StructuredOutputError("truncated") instead of being returned as if complete; an
-    empty reply raises ("missing")."""
+    empty reply raises ("missing"). *record_usage* and *usage* as in structured()."""
     stop, blocks = _call(prompt, model_id=model_id, max_tokens=max_tokens, system=system,
                          temperature=temperature, region=region, read_timeout=read_timeout,
-                         max_attempts=max_attempts, tool_config=None, record_usage=record_usage)
+                         max_attempts=max_attempts, tool_config=None, record_usage=record_usage,
+                         usage=usage)
     out = "".join(b["text"] for b in blocks if isinstance(b, dict) and isinstance(b.get("text"), str))
     if stop == "max_tokens":
         raise StructuredOutputError("truncated", out, f"reply reached max_tokens={max_tokens}")

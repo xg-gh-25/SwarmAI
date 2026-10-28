@@ -112,84 +112,64 @@ class TestLLMJudge:
         result = judge.score("skill text", "", "")
         assert result == 1.0
 
-    @patch("core.skill_fitness.LLMJudge._get_client")
-    def test_score_success(self, mock_get_client, judge):
-        """Successful judge call returns parsed score."""
-        mock_client = MagicMock()
-        mock_client.converse.return_value = {
-            "output": {"message": {"content": [{"text": '{"score": 0.8, "justification": "Good output."}'}]}},
-            "usage": {"inputTokens": 100, "outputTokens": 50},
-        }
-        mock_get_client.return_value = mock_client
+    @staticmethod
+    def _client(reply=None, error=None):
+        """A bedrock-runtime client stand-in (the jobs.bedrock.build_timeout_client
+        boundary): the judge answers through its forced "score" tool."""
+        client = MagicMock()
+        if error is not None:
+            client.converse.side_effect = error
+        else:
+            client.converse.return_value = reply
+        return client
 
+    @staticmethod
+    def _tool(answer, stop="tool_use"):
+        return {"stopReason": stop, "usage": {"inputTokens": 100, "outputTokens": 50},
+                "output": {"message": {"content": [{"toolUse": {"name": "score", "input": answer}}]}}}
+
+    @patch("core.llm_optimizer._resolve_bedrock_model", return_value=("us.anthropic.claude-sonnet-4-6", True))
+    @patch("jobs.bedrock.build_timeout_client")
+    def test_score_success(self, mock_build, _model, judge):
+        """Successful judge call returns the score from the tool answer."""
+        mock_build.return_value = client = self._client(self._tool({"justification": "Good output.", "score": 0.8}))
         result = judge.score(
             skill_text="Create files and validate output.",
             expected="File created successfully with validation.",
             actual="Created the file and ran validation checks.",
         )
         assert result == pytest.approx(0.8)
-        mock_client.converse.assert_called_once()
+        (call,) = client.converse.call_args_list
+        assert call.kwargs["toolConfig"]["toolChoice"] == {"tool": {"name": "score"}}
+        assert "additionalModelRequestFields" not in call.kwargs  # no thinking with a forced tool
 
-    @patch("core.skill_fitness.LLMJudge._get_client")
-    def test_score_api_failure_returns_none(self, mock_get_client, judge):
+    @patch("jobs.bedrock.build_timeout_client")
+    def test_score_api_failure_returns_none(self, mock_build, judge):
         """API failure returns None (graceful fallback)."""
-        mock_client = MagicMock()
-        mock_client.converse.side_effect = Exception("Bedrock timeout")
-        mock_get_client.return_value = mock_client
+        mock_build.return_value = self._client(error=Exception("Bedrock timeout"))
+        assert judge.score("skill", "expected", "actual") is None
 
-        result = judge.score("skill", "expected", "actual")
-        assert result is None
-
-    @patch("core.skill_fitness.LLMJudge._get_client")
-    def test_score_invalid_json_returns_none(self, mock_get_client, judge):
-        """Malformed JSON response returns None."""
-        mock_client = MagicMock()
-        mock_client.converse.return_value = {
-            "output": {"message": {"content": [{"text": "not json at all"}]}},
-        }
-        mock_get_client.return_value = mock_client
-
-        result = judge.score("skill", "expected", "actual")
-        assert result is None
-
-    @patch("core.skill_fitness.LLMJudge._get_client")
-    def test_score_zero_content_blocks_logs_distinct_signal(self, mock_get_client, judge, caplog):
-        """Zero content blocks → None + a DISTINCT (non-thinking-only) log signal.
-
-        Guards the empty-cause else-branch: previously a zero-block response was
-        silent at this site (only the thinking-only case logged). Mirrors
-        test_llm_optimizer.TestEmptyReturnLogSignals — drives the REAL score()
-        path, mocking only the boto3 client boundary.
-        """
+    @pytest.mark.parametrize("reply, kind", [
+        ({"output": {"message": {"content": [{"text": "not json at all"}]}}}, "missing"),
+        ({"output": {"message": {"content": []}}}, "missing"),
+        ({"stopReason": "max_tokens", "output": {"message": {"content": [
+            {"toolUse": {"name": "score", "input": {}}}]}}}, "truncated"),
+        ({"stopReason": "tool_use", "output": {"message": {"content": [
+            {"toolUse": {"name": "score", "input": {"justification": "x", "score": "high"}}}]}}}, "invalid"),
+    ])
+    @patch("jobs.bedrock.build_timeout_client")
+    def test_an_unusable_reply_returns_none_and_says_which(self, mock_build, reply, kind, judge, caplog):
         import logging
-
-        mock_client = MagicMock()
-        mock_client.converse.return_value = {
-            "output": {"message": {"content": []}},  # zero content blocks
-        }
-        mock_get_client.return_value = mock_client
-
+        mock_build.return_value = self._client(reply)
         with caplog.at_level(logging.WARNING, logger="core.skill_fitness"):
-            result = judge.score("skill", "expected", "actual")
+            assert judge.score("skill", "expected", "actual") is None
+        assert f"LLM judge reply {kind}" in caplog.text
 
-        assert result is None
-        msgs = [r.getMessage() for r in caplog.records]
-        assert msgs, f"zero-content-blocks was silent at source: {msgs}"
-        assert not any("thinking-only" in m.lower() for m in msgs), (
-            f"zero-block wrongly labeled thinking-only: {msgs}"
-        )
-
-    @patch("core.skill_fitness.LLMJudge._get_client")
-    def test_score_clamps_to_range(self, mock_get_client, judge):
+    @patch("jobs.bedrock.build_timeout_client")
+    def test_score_clamps_to_range(self, mock_build, judge):
         """Score outside [0,1] gets clamped."""
-        mock_client = MagicMock()
-        mock_client.converse.return_value = {
-            "output": {"message": {"content": [{"text": '{"score": 1.5, "justification": "Overshot."}'}]}},
-        }
-        mock_get_client.return_value = mock_client
-
-        result = judge.score("skill", "expected", "actual")
-        assert result == 1.0
+        mock_build.return_value = self._client(self._tool({"justification": "Overshot.", "score": 1.5}))
+        assert judge.score("skill", "expected", "actual") == 1.0
 
     @patch("core.skill_fitness.LLMJudge.score")
     def test_score_batch_combined(self, mock_score, judge):

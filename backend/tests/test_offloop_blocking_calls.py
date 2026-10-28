@@ -53,9 +53,8 @@ async def test_memory_extract_judge_runs_off_event_loop(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(db.messages, "list_by_session", _msgs)
     monkeypatch.setattr(me, "_format_conversation", lambda *a, **k: "conversation")
-    monkeypatch.setattr(me, "_call_llm", lambda *a, **k: "{}")
-    monkeypatch.setattr(me, "_parse_extraction",
-                        lambda raw: {"key_decisions": ["a"], "lessons_learned": ["b"]})
+    monkeypatch.setattr(me, "_extract_sections",
+                        lambda *a, **k: {"key_decisions": ["a"], "lessons_learned": ["b"]})
     seen: list[int] = []
 
     def _judge(entry, *a, **k):

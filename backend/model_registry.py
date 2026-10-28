@@ -40,6 +40,8 @@ makes the next model release a one-line edit here.
 """
 from __future__ import annotations
 
+import re
+
 # ---------------------------------------------------------------------------
 # The registry — short name -> Bedrock inference-profile ID
 # ---------------------------------------------------------------------------
@@ -136,8 +138,11 @@ DEFAULT_JUDGE_MODEL: str = "claude-sonnet-4-6"
 # Families whose gen-4-and-later models support the 1M context window.
 _LARGE_CONTEXT_FAMILIES: tuple[str, ...] = ("claude-opus-", "claude-sonnet-")
 
-# Bedrock ID prefixes / suffixes to strip before a short-name lookup.
-_ID_PREFIXES: tuple[str, ...] = ("us.anthropic.", "global.anthropic.")
+# Bedrock ID prefix to strip before a short-name lookup: "anthropic." optionally led by
+# a geography ("us.", "global.", "eu.", "apac.", ...). A deployment's bedrock_model_map
+# may name any geography, and jobs.bedrock decides temperature and tool choice from
+# the full ID, so every geography has to reduce to the same short name.
+_ID_PREFIX = re.compile(r"^(?:[a-z]{2,8}\.)?anthropic\.")
 
 
 def normalize_short_name(model: str | None) -> str:
@@ -154,11 +159,7 @@ def normalize_short_name(model: str | None) -> str:
     """
     if not model:
         return ""
-    base = model
-    for prefix in _ID_PREFIXES:
-        if base.startswith(prefix):
-            base = base[len(prefix):]
-            break
+    base = _ID_PREFIX.sub("", model, count=1)
     # Literal suffixes only — never str.rstrip(":0"), which is a character-class
     # strip that would eat a trailing "0" of a date-suffixed id
     # (claude-sonnet-4-20250510 -> ...2025051) or mangle "-10" -> "-1".
@@ -363,6 +364,28 @@ def supports_disabled_thinking(model: str | None) -> bool:
     if version is None:
         return True
     return version < _MIN_OPUS_REJECTING_DISABLED_THINKING
+
+
+# Models that reject a forced tool choice (Converse toolChoice "tool" / "any": a 400
+# "tool_choice: type "tool" and "any" are not supported for this model"). MEASURED on
+# Bedrock, 2026-10-28: claude-opus-5-5 rejects it; claude-opus-5, claude-opus-4-8,
+# claude-opus-4-6 and claude-sonnet-4-6 accept it. Not a version rule: no rule fits
+# (opus-5 accepts, opus-5-5 does not), and the capability does not follow
+# supports_disabled_thinking either. A model missing here that rejects it fails loudly
+# (a ValidationException on the first structured call), never silently.
+_REJECTS_FORCED_TOOL_CHOICE: frozenset[str] = frozenset({"claude-opus-5-5"})
+
+
+def supports_forced_tool_choice(model: str | None) -> bool:
+    """Return True when ``model`` accepts a forced tool choice (Converse
+    ``toolChoice`` "tool"). ``jobs.bedrock.structured`` forces its answer tool on
+    such a model and lets any other model choose ("auto") while telling it to answer
+    through the tool.
+
+    Args:
+        model: Short name, full Bedrock ID, or ``None``.
+    """
+    return normalize_short_name(model) not in _REJECTS_FORCED_TOOL_CHOICE
 
 
 THINKING_MODES: tuple[str, ...] = ("adaptive", "enabled", "disabled")

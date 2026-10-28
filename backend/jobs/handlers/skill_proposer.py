@@ -94,11 +94,11 @@ def run_skill_proposer(
     # 5. Gather context for LLM
     context = _gather_skill_context(target)
 
-    # 6. Call Opus 4.6
+    # 6. Call the model
     try:
         proposal = _generate_skill_proposal(target, context)
     except Exception as e:
-        logger.error("Opus call failed: %s", e)
+        logger.error("Skill proposal call failed: %s", e)
         return {"status": "error", "error": str(e)}
 
     # 7. Confidence gate
@@ -272,52 +272,40 @@ def _gather_skill_context(gap: dict) -> dict:
 # LLM proposal generation
 # ---------------------------------------------------------------------------
 
+# The proposal, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md).
+_PROPOSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "skill_name": {"type": "string"},
+        "skill_md": {"type": "string", "description": "the full SKILL.md"},
+        "trigger_patterns": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "number", "description": "1 to 10"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["skill_name", "skill_md", "trigger_patterns", "confidence", "reasoning"],
+}
+
+
 def _generate_skill_proposal(gap: dict, context: dict) -> dict:
-    """Call Bedrock Opus 4.6 to generate a SKILL.md proposal."""
-    from jobs.bedrock import invoke
+    """Call Bedrock Sonnet 4.6 for a SKILL.md proposal. Raises for a Bedrock error or an
+    unusable reply (jobs.bedrock.StructuredOutputError): a SKILL.md cut at the limit is
+    never proposed."""
+    from jobs.bedrock import get_model_id, structured
 
-    prompt = _build_prompt(gap, context)
-
-    content, input_tokens, output_tokens = invoke(
-        prompt, model_key="claude-sonnet-4-6", max_tokens=MAX_OUTPUT_TOKENS,
-        temperature=0.3,
-    )
-
+    usage: dict = {}
+    proposal = structured(_build_prompt(gap, context), schema=_PROPOSAL_SCHEMA,
+                          model_id=get_model_id("claude-sonnet-4-6"),
+                          max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3, name="proposal",
+                          description="Record the proposed skill.", record_usage=True,
+                          usage=usage)
     # Sonnet 4.6 pricing: $3/1M input, $15/1M output
-    cost = input_tokens * 3.0 / 1_000_000 + output_tokens * 15.0 / 1_000_000
-
+    cost = usage["input_tokens"] * 3.0 / 1_000_000 + usage["output_tokens"] * 15.0 / 1_000_000
     logger.info(
         "Skill proposer LLM (Sonnet): %d input, %d output tokens (~$%.3f)",
-        input_tokens, output_tokens, cost,
+        usage["input_tokens"], usage["output_tokens"], cost,
     )
-
-    # Parse JSON — strip markdown fences, handle truncated output
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Truncated output (hit max_tokens) — try to extract key fields
-        # from partial JSON so we still get confidence + skill_name
-        logger.warning("JSON parse failed — attempting partial extraction")
-        result: dict = {"parse_error": True}
-        for field in ("skill_name", "confidence", "reasoning"):
-            match = re.search(rf'"{field}"\s*:\s*(".*?"|[\d]+)', text)
-            if match:
-                val = match.group(1).strip('"')
-                result[field] = int(val) if val.isdigit() else val
-        # If we got skill_md content (even truncated), keep it
-        md_match = re.search(r'"skill_md"\s*:\s*"(.*?)(?:"\s*[,}]|\Z)', text, re.DOTALL)
-        if md_match:
-            result["skill_md"] = md_match.group(1).replace("\\n", "\n").replace('\\"', '"')
-        if "confidence" not in result:
-            result["confidence"] = 0
-        return result
+    return proposal
 
 
 def _build_prompt(gap: dict, context: dict) -> str:
@@ -359,7 +347,7 @@ Design a SKILL.md that addresses the capability gap. The skill should:
 4. Include 2-3 concrete examples based on the evidence
 5. List sibling skills (what NOT to use this for)
 
-Output a single JSON object:
+Record it with the proposal tool. The fields, with an example:
 
 {{
   "skill_name": "s_descriptive-name",
@@ -375,9 +363,7 @@ Rules:
 - Include a "Why?" line explaining the problem this solves
 - Include Guardrails section with specific DO NOT rules based on the evidence
 - confidence 1-10: how well does this skill address the root cause?
-- If the gap is too vague to build a useful skill, set confidence to 3 and explain why
-
-Only output the JSON, nothing else."""
+- If the gap is too vague to build a useful skill, set confidence to 3 and explain why"""
 
 
 # ---------------------------------------------------------------------------

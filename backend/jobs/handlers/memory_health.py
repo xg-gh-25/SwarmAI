@@ -406,9 +406,9 @@ def _build_prompt(
 {daily_activity or "(no activity)"}
 
 ## Your Task
-Analyze the context files against recent activity and produce a JSON maintenance report. Be conservative — only flag items you're confident about.
+Analyze the context files against recent activity and record a maintenance report with the report tool. Be conservative — only flag items you're confident about.
 
-Output a single JSON object with these fields:
+The report's fields, with an example:
 
 {{
   "stale_memories": [
@@ -449,42 +449,56 @@ Rules:
 - "ddd_staleness": Only flag if you see clear evidence of code changes that invalidate docs.
 - "capability_gaps": Look for PATTERNS across DailyActivity — the same CLASS of error, lesson, or workaround appearing 2+ times in different sessions. Evidence must cite specific sessions. Do NOT flag one-off issues. Focus on: (a) repeated errors/crashes with similar root cause, (b) tasks attempted multiple times without a skill to automate them, (c) corrections that keep getting re-triggered because the underlying pattern wasn't addressed.
 - "stale_corrections": Corrections in EVOLUTION.md that reference code/features that no longer exist (check git log for deletions/renames).
-- Empty arrays are fine. Don't invent issues.
+- Empty arrays are fine. Don't invent issues."""
 
-Output ONLY the JSON object, nothing else."""
+
+_S = {"type": "string"}
+
+
+def _items(**props) -> dict:
+    """An array of objects whose every listed field is required: a report that names an
+    entry to act on without its key fields is refused whole, and nothing is changed."""
+    return {"type": "array", "items": {"type": "object", "properties": props,
+                                       "required": list(props)}}
+
+
+# The maintenance report, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md). Strict on purpose: this report
+# drives edits to MEMORY.md and EVOLUTION.md.
+_REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stale_memories": _items(section=_S, entry_prefix=_S, reason=_S),
+        "resolved_threads": _items(title=_S, evidence=_S),
+        "archived_capabilities": _items(id=_S, reason=_S),
+        "stale_decisions": _items(entry_prefix=_S, reason=_S),
+        "ddd_staleness": _items(project=_S, doc=_S, reason=_S),
+        "capability_gaps": _items(pattern=_S, evidence={"type": "array", "items": _S},
+                                  occurrences={"type": "integer"}, suggested_action=_S,
+                                  priority=_S),
+        "stale_corrections": _items(id=_S, reason=_S),
+        "summary": _S,
+    },
+    "required": ["stale_memories", "resolved_threads", "archived_capabilities",
+                 "stale_decisions", "ddd_staleness", "capability_gaps",
+                 "stale_corrections", "summary"],
+}
 
 
 def _call_llm(prompt: str) -> dict:
-    """Call Bedrock Sonnet 4.6 and parse the JSON response.
+    """The maintenance report for *prompt* from Bedrock Sonnet 4.6. Raises for a
+    Bedrock error or an unusable reply (jobs.bedrock.StructuredOutputError); the
+    caller then changes nothing."""
+    from jobs.bedrock import get_model_id, structured
 
-    Uses the shared jobs.bedrock client (same credential chain as the
-    SwarmAI app — AppConfigManager region, proper timeouts, credential
-    eviction on auth errors).
-    """
-    from jobs.bedrock import invoke
-
-    content, input_tokens, output_tokens = invoke(
-        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2,
-    )
-
-    logger.info(
-        "LLM response: %d input tokens, %d output tokens",
-        input_tokens, output_tokens,
-    )
-
-    # Parse JSON — handle markdown code fences
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse LLM JSON response, returning raw")
-        return {"summary": text, "parse_error": True}
+    usage: dict = {}
+    report = structured(prompt, schema=_REPORT_SCHEMA, model_id=get_model_id(),
+                        max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2, name="report",
+                        description="Record the memory maintenance report.",
+                        record_usage=True, usage=usage)
+    logger.info("LLM response: %d input tokens, %d output tokens",
+                usage["input_tokens"], usage["output_tokens"])
+    return report
 
 
 # ── Apply Changes ──────────────────────────────────────────────────
@@ -497,10 +511,6 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
     Returns list of human-readable action descriptions.
     """
     actions = []
-
-    if report.get("parse_error"):
-        actions.append("LLM response parse error — no actions taken")
-        return actions
 
     # 1. Remove stale Recent Context entries
     stale = report.get("stale_memories", [])

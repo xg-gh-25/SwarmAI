@@ -181,7 +181,7 @@ def test_the_summariser_is_asked_to_reuse_an_open_problem_title(monkeypatch):
 
     async def _run_in(pool, fn, prompt):
         seen["prompt"] = prompt
-        return "{}"
+        return {}
     monkeypatch.setattr(executors, "run_in", _run_in)
     import asyncio
     pipe = sm.SummarizationPipeline()

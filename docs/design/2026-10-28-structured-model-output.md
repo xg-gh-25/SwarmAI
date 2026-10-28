@@ -187,3 +187,33 @@ structured(prompt, *, schema: dict, system: str, model_id: str, max_tokens: int,
     - 入库判官的三处文档改为新的失败原因。
   - 修复本身做了 mutation 8 处，全部抓到；其中一条测试原来两边常量值相同、区分不出用的是哪个，已改为能区分。
   - **没修的**：rubric 判官没有出现在判官页上，这是改动前就有的问题。
+
+**第 3 步**（提取类九处和纯文本调用）：
+- 九处都改用 `structured()`，各自的私有解析一起删掉：`_salvage_truncated_json`、`_parse_enrichment`（改为 `_normalize_enrichment`，只做字段归一）、`memory_extractor._call_llm` / `_parse_extraction`（合成 `_extract_sections`）、`conversation_extract` 的 `invoke_fn` 注入和 `_parse_candidates`、llm_optimizer 的 `_call_bedrock_opus` / `_parse_llm_response`，以及 llm_optimizer、skill_fitness 各自的 Bedrock 客户端缓存和 `reset_bedrock_client`。
+- **失败后的处理**：
+  - memory_extractor：原来回复不能用时显示"Nothing new to save"，现在返回带原因的错误；真的没有内容可存才算"没有可存的"。
+  - memory_health：原来把 parse_error 当成"没有动作"应用，现在返回 error，不改任何东西。
+  - skill_proposer：截断的半截提案不再写出，报错。
+  - ddd_refresh：回复不能用时记一次失败，汇总里写"N proposal calls failed"，不再和"文档都是新的"看起来一样。
+  - conversation_extract 和 LLMJudge 仍然返回 0 个候选 / None，llm_optimizer 仍然返回空并走启发式；日志写明失败种类。
+  - signal_digest：markdown 摘要被截断时改用简单摘要，评分调用照样跑；周汇总被截断时改用拼接。两种情况下已花掉的 token 都计入 `monthly_tokens_used`。
+- **强制 tool 的例外**：Bedrock 上实测 `claude-opus-5-5` 拒绝 `toolChoice: tool`（400），opus-5、opus-4-8、opus-4-6、sonnet-4-6 都接受。`model_registry.supports_forced_tool_choice` 用一张实测表记下；不接受的模型用 `auto`，system 里加一句"只通过 answer tool 回答"。llm_optimizer 和 LLMJudge 原来开着 adaptive thinking（effort low）；强制 tool 和 thinking 不能同时用，这两个设置删掉了。
+- `structured()` / `text()` 增加 `usage` 参数：调用方传一个 dict，抛错前也会填好，job 的月度预算由此照常累加。
+- `model_registry.normalize_short_name` 现在去掉任何地域的 `anthropic.` 前缀（`eu.`、`apac.` 等，以及不带地域的）。原来只认 `us.` 和 `global.`；temperature 和 tool choice 现在按完整 ID 判断，`bedrock_model_map` 里配了别的地域时会判错。
+- 共用的 `jobs.bedrock.invoke()` 没有调用方了，删掉。
+- 参数：llm_optimizer 上限 2000、读超时 60 秒；LLMJudge 上限 1000；memory_extractor 上限 1024；其余沿用原来的上限。
+- **已知的取舍**：enrichment 被截断时，原来能靠 salvage 保住已写完的字段，现在整条丢掉，只留规则生成的摘要，日志里有警告。
+
+**第 4 步**（只有一个入口）：
+- `tests/test_model_answer_single_entry.py` 用 AST 扫 `backend/`：`converse`、`converse_stream`、`invoke_model`、`invoke_model_with_response_stream` 的调用，以及 `boto3.client("bedrock-runtime")`（位置参数或 `service_name=`），只能出现在 `jobs/bedrock.py`。白名单只有 `routers/system.py` 的连通性检查。另一条测试保证白名单里的文件确实会被扫到，入口文件本身也被扫到。
+- 看不到的：手工签名的 HTTP 请求。`core/bedrock_thinking_gateway.py` 就是这样转发 CLI 自己的流量，它不解析回答，不在范围内。
+
+**第 3、4 步的验证**：
+- mutation 16 处（含白名单失效的一处），全部抓到。
+- 直接调用方的已有测试约 1000 条，全部通过；其中一条（`test_offloop_blocking_calls`）还在替换已删掉的 `_call_llm`，改成替换 `_extract_sections`。
+- **评审**：correctness 一轮，没有 HIGH，问题已一次修完：
+  - **MEDIUM**：signal_digest 的 markdown 和周汇总被截断时，已花的 token 没进月度预算，评分调用也被跳过。已改，见上。
+  - **MEDIUM**：非 `us.` / `global.` 地域的模型 ID 认不出来，temperature 和 tool choice 会判错。已改，见上。
+  - **LOW**：ddd_refresh 失败不可见；AST 测试漏掉 `service_name=` 写法；几处 docstring 还在说"JSON 解析失败"或"Opus"。都已改。
+  - 这几处修复做了 mutation 5 处，全部抓到。
+

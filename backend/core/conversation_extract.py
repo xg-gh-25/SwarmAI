@@ -108,28 +108,42 @@ For each qualifying candidate output an object with:
   - "evidence": the VERBATIM conversation line(s) that prove owner ratification.
   - "confidence": 0.0-1.0.
 
-Output ONLY a JSON object: {{"candidates": [ ... ]}}. If nothing qualifies,
-output {{"candidates": []}} — that is the EXPECTED result for most conversations.
+Record them with the candidates tool. If nothing qualifies, record an empty list —
+that is the EXPECTED result for most conversations.
 
 Conversation:
 {transcript}
 """
 
 
-def _parse_candidates(text: str) -> list[dict]:
-    """Parse the LLM JSON response (tolerant of markdown fences)."""
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.split("\n", 1)[1] if "\n" in t else t[3:]
-        if t.endswith("```"):
-            t = t[:-3]
-        t = t.strip()
-    try:
-        obj = json.loads(t)
-    except json.JSONDecodeError:
-        logger.warning("conversation_extract: unparseable LLM response — 0 candidates")
-        return []
-    cands = obj.get("candidates", []) if isinstance(obj, dict) else []
+# The answer, shaped by the API (jobs.bedrock.structured(); design
+# docs/design/2026-10-28-structured-model-output.md). A candidate's fields are not
+# required here: one missing content or evidence is dropped below, alone, rather than
+# making the whole answer invalid.
+_CANDIDATES_SCHEMA = {
+    "type": "object",
+    "properties": {"candidates": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"content": {"type": "string"}, "target_doc": {"type": "string"},
+                       "target_section": {"type": "string"}, "evidence": {"type": "string"},
+                       "confidence": {"type": "number"}}}}},
+    "required": ["candidates"],
+}
+
+
+def _ask(prompt: str) -> dict:
+    """The model's {"candidates": [...]} for *prompt* (the default ask_fn).
+    Raises jobs.bedrock.StructuredOutputError or a Bedrock error."""
+    from jobs.bedrock import get_model_id, structured
+    return structured(prompt, schema=_CANDIDATES_SCHEMA, model_id=get_model_id(),
+                      max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2, name="candidates",
+                      description="Record the owner-ratified DDD candidates.",
+                      record_usage=True)
+
+
+def _clean_candidates(cands: list) -> list[dict]:
+    """The candidates of an answer that may be written: untrusted model output, so each
+    is checked here (see below)."""
     # Fail-closed hygiene: drop any candidate missing content or evidence.
     #
     # target_doc is ALSO validated here, because the model's output is untrusted DATA:
@@ -196,16 +210,17 @@ def extract_candidates(
     rows: list[dict],
     project: str,
     *,
-    invoke_fn=None,
+    ask_fn=None,
 ) -> list[dict]:
     """Extract DDD candidates from a batch of channel_messages rows.
 
     Args:
         rows: channel_messages rows (from list_by_session) for one conversation.
         project: the project these candidates are (tentatively) for.
-        invoke_fn: LLM boundary (prompt -> (text, in_tok, out_tok)). Injectable
-            for tests; defaults to jobs.bedrock.invoke. This is the ONLY external
-            boundary — everything else is pure.
+        ask_fn: LLM boundary (prompt -> the answer dict {"candidates": [...]},
+            raising jobs.bedrock.StructuredOutputError for an unusable reply).
+            Injectable for tests; defaults to _ask (jobs.bedrock.structured). This
+            is the ONLY external boundary — everything else is pure.
 
     Returns:
         A (possibly empty) list of candidate dicts ready for
@@ -224,19 +239,19 @@ def extract_candidates(
     if len(msgs) > MAX_BATCH_MESSAGES:
         msgs = msgs[-MAX_BATCH_MESSAGES:]  # keep the most recent (the conclusion end)
 
-    if invoke_fn is None:
-        from jobs.bedrock import invoke as invoke_fn  # noqa: N806
+    from jobs.bedrock import StructuredOutputError
 
     prompt = _build_prompt(msgs, project)
     try:
-        content, _in_tok, _out_tok = invoke_fn(
-            prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2
-        )
+        answer = (ask_fn or _ask)(prompt)
+    except StructuredOutputError as exc:
+        logger.warning("conversation_extract: LLM reply %s (%s) — 0 candidates", exc.kind, exc.detail)
+        return []
     except Exception as exc:  # noqa: BLE001 — LLM boundary; fail-closed to 0 candidates
         logger.warning("conversation_extract: LLM invoke failed (%s) — 0 candidates", exc)
         return []
 
-    candidates = _parse_candidates(content)
+    candidates = _clean_candidates(answer.get("candidates") or [])
     logger.info("conversation_extract: %d candidate(s) from %d authorized msgs",
                 len(candidates), len(msgs))
     return candidates
