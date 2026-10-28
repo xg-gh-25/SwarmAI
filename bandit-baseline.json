@@ -48,7 +48,7 @@
     "8e5017f339b933c30ae91ddb12b695d7c35c52093be8dc6ce5f345b850570cf1": {
       "test_id": "B602",
       "file": "backend/scripts/eval_runner.py",
-      "line": 643,
+      "line": 683,
       "text": "subprocess call with shell=True identified, security issue."
     },
     "f9fbf45868a551ec39993202046e33a9e58c9e4d83e715371c43f0cc14949276": {
