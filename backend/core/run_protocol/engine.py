@@ -1105,6 +1105,7 @@ class RunEngine:
             except DocumentError as exc:
                 raise EngineError(str(exc)) from exc
             docs.write_requirements(requirements, variant="full", profile=state["profile"])
+            self._record_citations(requirements)
         value = self._read_json(self.run_dir / "artifacts" / "requirements.json", {})
         readings = ((value.get("understanding") or {}).get("readings")
                     if isinstance(value, Mapping) else None)
@@ -2105,6 +2106,7 @@ class RunEngine:
                 self._check_knowledge_refs(artifact, "RQ-5")
                 docs.write_requirements(artifact, variant="full", profile=profile,
                                         blocking=roster)
+                self._record_citations(artifact)
             elif stage == "plan":
                 requirements = self._read_json(
                     self.run_dir / "artifacts" / "requirements.json", {})
@@ -2115,6 +2117,7 @@ class RunEngine:
                                   requirement_variant="full",
                                   existing_files=self.check_context().existing_files,
                                   blocking=roster)
+                self._record_citations(artifact)
         except DocumentError as exc:
             forced = exc.issues or {next(iter(sorted(roster))): str(exc)}
             result = complete_stage(self.store, profile=profile, stage=stage, variant=variant,
@@ -2341,20 +2344,54 @@ class RunEngine:
             return {"status": "unavailable", "entries": 0, "error": "not recorded"}
         return {"file": str(path), "status": k.status, "entries": len(k.items)}
 
+    def _recalled_ids(self) -> set[str]:
+        """Ids of the entries recalled for this run (the contract and each
+        knowledge_recalled event, which the agent cannot edit)."""
+        return {str(i) for r in self._knowledge_records() for i in r.get("items") or ()}
+
+    def _ddd_unit_ids(self) -> set[str]:
+        """Ids of every unit in the run's project DDD now, archives included (knowledge
+        addressing §2.5): what the agent may cite after finding it with ``knowledge
+        find`` / ``get``. Empty for a run whose project has no DDD (the contract's
+        has_ddd). Read once per engine."""
+        if not self.contract.get("has_ddd"):
+            return set()
+        cached = getattr(self, "_unit_ids_cache", None)
+        if cached is None:
+            try:
+                from core import addressing
+                cached = addressing.unit_ids(self.project)
+            except Exception:  # noqa: BLE001 -- an unreadable DDD leaves the recalled ids
+                logger.warning("run %s: DDD unit ids unavailable", self.run_id, exc_info=True)
+                cached = set()
+            self._unit_ids_cache = cached
+        return cached
+
     def _check_knowledge_refs(self, document: Mapping[str, Any] | None, check_id: str) -> None:
-        """Every id in *document*'s ``knowledge_refs`` names an entry recalled at create
-        (the contract's list, which the agent cannot edit). Raises DocumentError."""
+        """Every id in *document*'s ``knowledge_refs`` names an entry recalled for this run
+        or a unit of the project's DDD (``_ddd_unit_ids``). Raises DocumentError."""
         from core.run_protocol.documents import DocumentError
         refs = (document or {}).get("knowledge_refs") if isinstance(document, Mapping) else None
         if not isinstance(refs, list):
             return                      # absent, or a shape error the schema reports
-        known = {str(i) for r in self._knowledge_records() for i in r.get("items") or ()}
-        unknown = sorted({str(r) for r in refs} - known)
+        unknown = sorted({str(r) for r in refs} - self._recalled_ids())
+        if unknown and self.contract.get("has_ddd"):
+            unknown = sorted(set(unknown) - self._ddd_unit_ids())
         if unknown:
             message = (f"knowledge_refs {', '.join(unknown)} are not entries of this run's "
                        "knowledge files (artifacts/knowledge.md and, after EVALUATE, "
-                       "artifacts/knowledge_design.md list each entry's id)")
+                       "artifacts/knowledge_design.md list each entry's id) nor units of the "
+                       "project's DDD (an id changes when its entry is rewritten: find it "
+                       "again with `knowledge find` / `knowledge get`)")
             raise DocumentError(f"{check_id} knowledge_refs: {message}", {check_id: message})
+
+    def _record_citations(self, document: Mapping[str, Any] | None) -> None:
+        """After *document* is written: the DDD units it cites were used (decay keeps
+        them). Best-effort, never fails the stage."""
+        refs = (document or {}).get("knowledge_refs") if isinstance(document, Mapping) else None
+        if isinstance(refs, list) and refs and self.contract.get("has_ddd"):
+            from core import addressing
+            addressing.record_cited(self.project, refs)
 
     def _render_failed(self, document: str, exc: Exception) -> None:
         """A Markdown projection failed (K4, F23): one ``render_failed`` event; the
@@ -2589,6 +2626,9 @@ class RunEngine:
                 if knowledge[0]:
                     review_input = knowledge[0] + "\n\n" + review_input
                     items = knowledge[1]
+            ddd_map = self._expert_map(item["id"])
+            if ddd_map:
+                review_input = ddd_map + "\n\n" + review_input
             if item.get("high_risk"):
                 review_input = review.high_risk_notice(item["reason"]) + review_input
             mine = [h for h in prior if h["payload"]["expert_id"] == item["id"]]
@@ -2608,7 +2648,8 @@ class RunEngine:
             handouts.append(orchestrator.handout(
                 expert_id=item["id"], stage="review", round=1, attempt=expert_attempt,
                 at=_now(), expert_instructions=instructions,
-                review_input=review_input, code_trees=trees, knowledge_items=items))
+                review_input=review_input, code_trees=trees, knowledge_items=items,
+                knowledge_project=self._knowledge_project()))
         if not handouts:
             self._write_review_documents()
         return {"reviewers": roster, "handouts": handouts}
@@ -2621,6 +2662,30 @@ class RunEngine:
         return run_knowledge.expert_block(
             project=self.project, has_ddd=bool(self.contract.get("has_ddd")),
             paths=[row["path"] for row in changed], requirement=self.contract.get("requirement"))
+
+    def _knowledge_project(self) -> str | None:
+        """The project whose DDD units a finding may cite (recorded in the handout,
+        where the expert cannot change it), or None when the project has no DDD."""
+        return self.project if self.contract.get("has_ddd") else None
+
+    def _expert_map(self, expert_id: str) -> str:
+        """What the project's DDD holds, for an expert's handout (knowledge addressing
+        §3): the full map for correctness (with its recalled block), the brief one for
+        the others. A sub-agent has no system prompt, so this is its only way to know
+        where to look. Empty without a DDD; never raises."""
+        if not self.contract.get("has_ddd"):
+            return ""
+        try:
+            from core import addressing
+            text = addressing.ddd_map(self.project, "full" if expert_id == "correctness" else "brief")
+        except Exception:  # noqa: BLE001 -- a handout without the map is still a handout
+            logger.warning("run %s: DDD map for %s unavailable", self.run_id, expert_id, exc_info=True)
+            return ""
+        if not text:
+            return ""
+        return ("PROJECT DDD MAP (what the project's DDD holds; look things up only when a "
+                "finding needs it -- each lookup spends one of your tool calls. Cite a unit "
+                "you used by its id in the finding's knowledge_ref.)\n" + text)
 
     def _repo_guidance(self, per_repo: Mapping[str, Mapping[str, Any]]) -> dict[str, dict]:
         """Each repo's ``.swarmai/review.md`` at the run's base (§3.5.2: a run cannot
@@ -2702,6 +2767,9 @@ class RunEngine:
                 continue
             attempt = max((int(e["attempt"]) for e in mine), default=0) + 1
             block = knowledge[0] if expert == "correctness" and knowledge[0] else ""
+            ddd_map = self._expert_map(expert)
+            if ddd_map:
+                block = (block + "\n\n" + ddd_map) if block else ddd_map
             handouts.append(orchestrator.handout(
                 expert_id=expert, stage="review", round=1, attempt=attempt, at=_now(),
                 expert_instructions=review.expert_prompt(expert),
@@ -2711,7 +2779,8 @@ class RunEngine:
                              + "INCREMENTAL REVIEW: only the change since the last review.\n\n"
                              + "\n\n".join(diffs),
                 code_trees=trees, incremental_from={k: last[k] for k in trees if k in last},
-                knowledge_items=knowledge[1] if block else ()))
+                knowledge_items=knowledge[1] if knowledge[0] and expert == "correctness" else (),
+                knowledge_project=self._knowledge_project()))
         return {"reviewers": [{"id": e, "reason": "incremental review"} for e in roster],
                 "handouts": handouts, "incremental": True}
 
@@ -2800,16 +2869,22 @@ class RunEngine:
         if not records:
             return None
         known = {str(i) for r in records for i in r.get("items") or ()}
-        cited: set[str] = set()
+        refs: set[str] = set()
+        searches: int | None = None
         for name in ("requirements.json", "design_spec.json"):
             value = self._read_json(self.run_dir / "artifacts" / name, {})
             if isinstance(value, Mapping) and isinstance(value.get("knowledge_refs"), list):
-                cited |= {str(r) for r in value["knowledge_refs"]} & known
-        # a finding's ref names an entry of its handout's block (checked when the hook
-        # wrote it), not necessarily of a knowledge file
-        cited |= {str(e["payload"]["knowledge_ref"]) for e in rows
-                  if e.get("kind") == "finding_occ" and e.get("payload", {}).get("knowledge_ref")}
+                refs |= {str(r) for r in value["knowledge_refs"]}
+            if isinstance(value, Mapping) and isinstance(value.get("knowledge_checked"), list):
+                searches = (searches or 0) + len(value["knowledge_checked"])
+        # a finding's ref names an entry of its handout's block or a unit of the project's
+        # DDD (checked when the hook wrote it)
+        refs |= {str(e["payload"]["knowledge_ref"]) for e in rows
+                 if e.get("kind") == "finding_occ" and e.get("payload", {}).get("knowledge_ref")}
+        cited = refs & known
+        on_demand = (refs - known) & self._ddd_unit_ids() if refs - known else set()
         return {"status": records[0].get("status"), "entries": len(known), "cited": sorted(cited),
+                "cited_on_demand": sorted(on_demand), "searches": searches,
                 "parts": [{"purpose": str(r.get("purpose") or "requirement"),
                            "status": str(r.get("status") or "none"),
                            "entries": len(r.get("items") or ())} for r in records]}

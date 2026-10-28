@@ -248,8 +248,15 @@ def _lessons_block(path: str, text: str, budget: int) -> str:
 
 
 def _ddd_block(project: str, docs: list) -> str:
-    return (f"\n[Project DDD] This repository is bound to project {project}. Before "
-            "changing code here, read its DDD documents: " + ", ".join(docs) + ".")
+    """One line: which project this repo is bound to, where its DDD is, and how to look
+    things up in it. It used to list the four document paths and say "read" them --
+    about 2MB for SwarmAI, which nobody can read (knowledge addressing §3)."""
+    from core.project_registry import get_swarmws
+    root = os.path.join(str(get_swarmws()), "Projects", project)
+    return (f"\n[Project DDD] This repository is bound to project {project}; its DDD is at "
+            f"{root} (layout: SWARMAI.md, My Workspace). Before a change that depends on the "
+            f"domain, look it up: \"$SWARM_BACKEND_BIN\" knowledge find --project {project} "
+            "--query \"<words of your change>\".")
 
 
 def _bash_dirs(command: str, cwd: str) -> list:
@@ -409,20 +416,26 @@ def _judge(session_id: str, input_data: dict) -> "str | None":
         if project:
             state["bound_project"] = project     # the last bound repo touched
         extras = []
+        # the DDD line first: one line, so the lessons block (which takes what is left of
+        # the budget) can never crowd it out
+        docs = _ddd_docs(project) if project else []
+        ddd_key = ddd_text = None
+        if docs:
+            key = hashlib.sha256("\n".join([project] + docs).encode()).hexdigest()
+            if seen.get("@ddd") != key:
+                ddd_key, ddd_text = key, _ddd_block(project, docs)
+                extras.append(lambda b, s=ddd_text: s)
         got = _lessons(main)
         if got is not None:
             sha = hashlib.sha256(got[1].encode("utf-8", "replace")).hexdigest()
             if seen.get("@lessons") != sha:
                 seen["@lessons"] = sha
                 extras.append(lambda b, got=got: _lessons_block(got[0], got[1], b))
-        docs = _ddd_docs(project) if project else []
-        if docs:
-            key = hashlib.sha256("\n".join([project] + docs).encode()).hexdigest()
-            if seen.get("@ddd") != key:
-                seen["@ddd"] = key
-                extras.append(lambda b, p=project, d=docs: _ddd_block(p, d))
         if fresh or extras:
-            out.append((root, _render(root, fresh, bool(project), extras), before))
+            rendered = _render(root, fresh, bool(project), extras)
+            if ddd_key and ddd_text in rendered:
+                seen["@ddd"] = ddd_key           # marked only once it was shown
+            out.append((root, rendered, before))
     if written is not None:
         state["written"].add(written)     # after judging: a first write still gets guidance
     # Several repos in one call: each repo's block whole while they fit MAX_BLOCK_CHARS

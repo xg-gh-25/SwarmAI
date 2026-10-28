@@ -38,6 +38,11 @@ One sub-agent per expert, in parallel, with the Agent tool:
   files (or the exact `git diff` command), what the change is for, and anything in
   `.swarmai/review.md`. Ask for findings with severity (CRITICAL / HIGH / MEDIUM / LOW),
   file:line, the failure it causes, and a fix.
+- When the repository is bound to a project with a DDD, paste the output of
+  `"$SWARM_BACKEND_BIN" knowledge map --project <P> --brief` into the prompt and say it may
+  look things up there with `knowledge find --project <P> --query "<words>"` when a finding
+  needs it. An expert is a sub-agent: it does not get your system prompt, so this is its
+  only way to know the project's domain knowledge exists.
 
 Example prompt:
 

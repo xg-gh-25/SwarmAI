@@ -1,6 +1,6 @@
 # EVALUATE
 
-Read `artifacts/knowledge.md` first: what the project DDD (PRODUCT, PROJECT) and the Library hold for this request. They are leads; check them against the code. List the ids of entries you relied on in `knowledge_refs` (optional; an id not in that file is refused).
+Read `artifacts/knowledge.md` first: what the project DDD (PRODUCT, PROJECT) and the Library hold for this request, and a map of everything the DDD holds. It is a starting set, not the whole DDD: when a requirement depends on the domain, look it up with your own words (`"$SWARM_BACKEND_BIN" knowledge find --project <P> --query "<words>"`). Entries are leads; check them against the code. List the ids of entries you relied on in `knowledge_refs` (optional): an id from knowledge.md or from `knowledge find` / `get`; any other id is refused.
 
 If the request has parts that can each be committed and verified on their own, make each part its own run, one after another; do not finish one large run and split it afterwards.
 

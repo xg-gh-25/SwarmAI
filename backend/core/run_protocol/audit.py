@@ -523,7 +523,11 @@ def build(*, run_id: str, projection: Mapping[str, Any], events: Sequence[Mappin
                               "entries": int(knowledge.get("entries") or 0),
                               "parts": [dict(p) for p in knowledge.get("parts") or ()
                                         if isinstance(p, Mapping)],
-                              "cited": sorted({str(i) for i in knowledge.get("cited") or ()})}
+                              "cited": sorted({str(i) for i in knowledge.get("cited") or ()}),
+                              "cited_on_demand": sorted({str(i) for i in
+                                                         knowledge.get("cited_on_demand") or ()}),
+                              "searches": (int(knowledge["searches"])
+                                           if isinstance(knowledge.get("searches"), int) else None)}
                              if isinstance(knowledge, Mapping) else None)}
     audit = {"run_id": run_id, "audit_through": audit_through, "card": None,
              "outcome": outcome,
@@ -706,7 +710,10 @@ def render(audit: Mapping[str, Any], *, fmt: str) -> str:
         lines += ["", "Knowledge: " + " · ".join(
             f"{_text(p.get('purpose'), 12)} {_text(p.get('status'), 20)} · "
             f"{int(p.get('entries') or 0)}" for p in parts)
-            + f" · cited {len(known.get('cited') or ())}"]
+            + f" · cited {len(known.get('cited') or ())}"
+            + (f" (+{len(known['cited_on_demand'])} found on demand)" if known.get("cited_on_demand") else "")
+            + (f" · searched the DDD {known['searches']}×" if isinstance(known.get("searches"), int)
+               else "")]
     sources = details.get("answer_sources") or {}
     relayed = int(sources.get("relayed") or 0) if isinstance(sources, Mapping) else 0
     if relayed:

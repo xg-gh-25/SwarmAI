@@ -1768,6 +1768,25 @@ def _format_ttft_line(
     )
 
 
+def _ddd_hit_line(project: str, base, docs_text: dict, hit: dict) -> str:
+    """One chat DDD hit as a pointer: an entry by its own title (its first line, no
+    longer than 160 characters) and where it is, a section by its heading line. Falls
+    back to ``doc § section`` when the doc's file is not known."""
+    from core.ddd_paths import ddd_path
+    from core.recall_filter import unit_title
+    from core.recall_multi import _locator
+    doc, sec = str(hit.get("doc") or "?"), str(hit.get("section") or "")
+    content = str(hit.get("content") or "")
+    text = docs_text.get(doc) if docs_text else None
+    if base is None or text is None:
+        return f"- **{doc}** § {sec}"
+    where = _locator(doc, ddd_path(base, doc), text)(sec, content)
+    if content:
+        title = unit_title(content) or content.strip().splitlines()[0][:160]
+        return f"- {title[:160]} — {where}"
+    return f"- § {sec} — {where}"
+
+
 def _inject_ddd_for_active_project(
     options: Any,
     user_message: str,
@@ -1810,6 +1829,7 @@ def _inject_ddd_for_active_project(
     keywords = _extract_query_keywords(user_message)
     _ddd_t0 = time.perf_counter()
     ddd_hits: list = []
+    base, docs_text = None, {}      # read below when there are keywords; the no-hit pointer uses base
     if keywords:
         result = recall_all(keywords, project=project, domains=("ddd",))
         raw_hits = result.buckets.get("ddd", []) if hasattr(result, "buckets") else []
@@ -1847,28 +1867,32 @@ def _inject_ddd_for_active_project(
             return
         # The project is known (the user is in it) but no section is about this
         # message: say where its brain is, nothing more (~250 chars).
+        if base is None:
+            from core.addressing import project_root
+            base = project_root(project)
+        root = base if base is not None else f"Projects/{project}"
         deliver((
             f"\n\n## Project DDD — [DDD:{project}]\n"
             f"> **[DDD:{project}]** You are working in project {project} "
-            f"(detected via {signal}). Its domain docs are under "
-            f"`Projects/{project}/` (PRODUCT / TECH / IMPROVEMENT / PROJECT); read the "
-            f"relevant one before acting on project-specific decisions.\n"))
+            f"(detected via {signal}). Its DDD is at `{root}` (layout: SWARMAI.md, My "
+            f"Workspace); before a project-specific decision, look it up: "
+            f"`\"$SWARM_BACKEND_BIN\" knowledge find --project {project} --query \"<words>\"`.\n"))
         _record_ddd_inject("injected_pointer_only")
         logger.info("DDD detected project=%s (%s): no section matched the message "
                     "-- injected the project pointer only", project, signal)
         return
 
-    # Render top sections with a [DDD:<project>] provenance prefix (distinct
-    # token from [RECALLED] — E1/E4 assert on THIS, not string length).
-    lines = [
-        f"- **{h.get('doc', '?')}** § {h.get('section', '?')}"
-        for h in ddd_hits
-    ]
+    # Render the hits with a [DDD:<project>] provenance prefix (distinct token from
+    # [RECALLED] — E1/E4 assert on THIS, not string length). Each line says where to
+    # read: an entry by its title and file:line, a section by its heading line
+    # (knowledge addressing §2.6 -- a bare "TECH.md § Architecture" named a 110K
+    # section in a file the agent's cwd may not even contain).
+    lines = [_ddd_hit_line(project, base, docs_text, h) for h in ddd_hits]
     block = (
         f"\n\n## Project DDD — [DDD:{project}]\n"
         f"> **[DDD:{project}]** Retrieved from this project's DDD docs "
-        f"(detected via {signal}). Read the cited section(s) for authoritative "
-        f"project context before acting.\n\n"
+        f"(detected via {signal}). Read the ones that bear on this before acting "
+        f"(at that line, or `\"$SWARM_BACKEND_BIN\" knowledge get --project {project} <path>:<line>`).\n\n"
         + "\n".join(lines)
     )
     deliver(block)

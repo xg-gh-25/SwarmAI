@@ -94,12 +94,14 @@ EVENT_SPECS: dict[str, EventSpec] = {
                      # spawn_prompt / spawn_sha: the four lines the expert is spawned
                      # with (PROMPT-FILE = the prompt blob); absent on older handouts
                      # knowledge_items: ids of the DDD entries in the prompt (run-knowledge §3.4)
+                     # knowledge_project: the project whose DDD units (knowledge find / get)
+                     # a finding may cite besides knowledge_items (knowledge addressing §2.5)
                      # allowed_status: R2 only, {finding id: the words its state takes};
                      # redispatch_of: R2 only, the answer whose wrong words this re-asks
                      {"finding_ids": list, "prompt_sha": str, "prompt": (str, dict),
                       "allowed_status": dict, "redispatch_of": str,
                       "code_trees": dict, "incremental_from": dict, "nonce": str,
-                      "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list}),
+                      "spawn_prompt": str, "spawn_sha": str, "knowledge_items": list, "knowledge_project": str}),
     # a host hook saw an expert spawned with exactly a handout's spawn prompt
     # (standalone §4.3, handout-by-file design §3.2)
     "spawn": _spec("hook", ("payload.tool_use_id",), None,

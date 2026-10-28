@@ -3,7 +3,7 @@ docs/design/2026-10-25-knowledge-delivery-gaps.md §3.2, part A / G2).
 
 What is tested (§4 G2):
 - the first touch of a repo that has a lessons file and is bound to a DDD project
-  injects the lesson entries (newest first), the file's full path and the DDD doc paths;
+  injects the lesson entries (newest first), the file's full path and where its DDD is;
 - a second touch injects nothing; after the lessons file changes, the next touch does;
 - a touch inside a run worktree finds the MAIN checkout's lessons and binding;
 - too many lessons are cut (newest kept) and the full path is named;
@@ -84,8 +84,10 @@ def test_first_touch_brings_lessons_and_ddd_paths_then_only_after_a_change(
     text = _read(repo / "src.py")
     assert "always run the migration check" in text
     assert str(lessons) in text
-    assert str(proj / "TECH.md") in text and str(proj / "PRODUCT.md") in text
-    assert "P" in text
+    # the bound DDD is one line: where it is and how to look things up (knowledge
+    # addressing §3), ahead of the lessons so the lessons block cannot crowd it out
+    assert f"its DDD is at {proj}" in text and "knowledge find --project P" in text
+    assert text.index("[Project DDD]") < text.index("always run the migration check")
 
     assert _read(repo / "src.py") == ""                       # once
     _lesson(ws, repo, 2, "never edit generated files", run="run_b")
@@ -104,7 +106,7 @@ def test_a_run_worktree_finds_its_main_checkout(tmp_path, monkeypatch, _iso):
                     str(wt)], check=True)
     text = _read(wt / "src.py")
     assert "the main checkout lesson" in text
-    assert str(ws / "Projects" / "P" / "TECH.md") in text
+    assert f"its DDD is at {ws / 'Projects' / 'P'}" in text
 
 
 def test_too_many_lessons_are_cut_newest_first_with_the_path(tmp_path, monkeypatch, _iso):
@@ -139,3 +141,20 @@ def test_bound_projects_names_the_project(tmp_path, monkeypatch):
     monkeypatch.setattr(repo_changes, "_bindings",
                         lambda: {str(repo.resolve()): ("r", "Proj")})
     assert _bound_projects() == {str(repo.resolve()): "Proj"}
+
+
+
+def test_the_ddd_line_is_not_marked_seen_when_it_did_not_fit(tmp_path, monkeypatch, _iso):
+    """A DDD line that did not fit the block must come back on the next touch: it used
+    to be marked seen before the fit check, and was then never shown."""
+    from core import repo_guidance
+    ws = _iso["ws"]
+    repo = _repo(tmp_path / "proj")
+    _bind(monkeypatch, ws, repo)
+    monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 620)  # the header fits, the DDD line not
+    first = _read(repo / "src.py")
+    assert "Repository guidance" in first and "[Project DDD]" not in first
+    monkeypatch.setattr(repo_guidance, "MAX_BLOCK_CHARS", 7_500)
+    (repo / "src.py").write_text("x = 2\n")
+    second = _read(repo / "src.py")
+    assert "[Project DDD]" in second

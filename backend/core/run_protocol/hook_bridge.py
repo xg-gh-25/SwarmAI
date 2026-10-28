@@ -38,6 +38,7 @@ Public symbols: ``handout_line``, ``parse_binding``, ``prompt_sha``, ``store_for
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from pathlib import Path
@@ -45,6 +46,8 @@ from typing import Any, Mapping
 
 from core.run_protocol.answers import parse_answer
 from core.run_protocol.store import AuditStore, StoreError
+
+logger = logging.getLogger(__name__)
 
 _LINE = re.compile(r"^PIPELINE-HANDOUT: (run_[A-Za-z0-9_-]{1,64}) ([0-9a-f]{32})\s*$",
                    re.MULTILINE)
@@ -244,24 +247,38 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
     # instead of the whole write being refused (ced6caa3)
     statuses, notes = _applicable_statuses(store, parsed, payload.get("allowed_status"))
 
+    cited_refs: list[str] = []      # filled by children(); recorded once the write lands
+
     def children(answer: dict[str, Any]) -> list[dict[str, Any]]:
         if parsed.state not in ("parsed", "partial"):
             return []   # an unparsed answer is no usable output (§A3.2)
         common = {"at": completed_at, "stage": stage, "round": review_round,
                   "attempt": attempt}
         carried = set(payload.get("knowledge_items") or ())
+        if payload.get("knowledge_project") and parsed.state in ("parsed", "partial") and any(
+                f.get("knowledge_ref") for f in parsed.findings):
+            # a finding may cite any unit of the project's DDD the expert found on demand
+            # (knowledge find / get), not only the handout's block (addressing §2.5)
+            try:
+                from core import addressing
+                carried |= addressing.unit_ids(str(payload["knowledge_project"]))
+            except Exception:  # noqa: BLE001 -- an unreadable DDD leaves the block's ids
+                logger.warning("hook_bridge: DDD unit ids unavailable", exc_info=True)
 
         def _occ(finding: Mapping[str, Any]) -> dict[str, Any]:
             row = {"answer_event_id": answer["event_id"], "expert": expert,
                    "severity": finding["severity"], "finding_kind": finding["kind"],
                    "file": finding["file"], "line": finding["line"],
                    "claim": finding["claim"], "fix": finding["fix"]}
-            # a citation counts only for an entry this handout carried (§3.4)
+            # a citation counts only for an entry this handout carried (§3.4) or a unit
+            # of its project's DDD (addressing §2.5); anything else is dropped
             if finding.get("knowledge_ref") in carried:
                 row["knowledge_ref"] = finding["knowledge_ref"]
             return row
         rows = [{**common, "kind": "finding_occ", "ordinal": ordinal, "payload": _occ(finding)}
                 for ordinal, finding in enumerate(parsed.findings, 1)]
+        cited_refs[:] = sorted({r["payload"]["knowledge_ref"] for r in rows
+                                if r["payload"].get("knowledge_ref")})
         rows += [{**common, "kind": "finding_status", "ordinal": ordinal, "payload": {
                     "answer_event_id": answer["event_id"],
                     "canonical_id": status["finding_id"], "status": status["status"],
@@ -291,6 +308,9 @@ def _write(store, handout, final_text, *, call, source, producer, completed_at, 
         raise
     if session_id:
         store.copy_to_session(session_id, answer)
+    if cited_refs and payload.get("knowledge_project"):
+        from core import addressing          # the cited units were used (decay keeps them)
+        addressing.record_cited(str(payload["knowledge_project"]), cited_refs)
     return {"answer": answer, "parsed": parsed}
 
 

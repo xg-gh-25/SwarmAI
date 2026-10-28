@@ -397,12 +397,14 @@ class ReviewOrchestrator:
                 finding_ids: Sequence[str] = (),
                 code_trees: Mapping[str, Any] | None = None,
                 incremental_from: Mapping[str, Any] | None = None,
-                knowledge_items: Sequence[str] = ()) -> dict[str, Any]:
+                knowledge_items: Sequence[str] = (),
+                knowledge_project: str | None = None) -> dict[str, Any]:
         spec, prepared = self.handout_spec(
             expert_id=expert_id, stage=stage, round=round, attempt=attempt, at=at,
             expert_instructions=expert_instructions, review_input=review_input,
             finding_ids=finding_ids, code_trees=code_trees,
-            incremental_from=incremental_from, knowledge_items=knowledge_items)
+            incremental_from=incremental_from, knowledge_items=knowledge_items,
+            knowledge_project=knowledge_project)
         spec = dict(spec)
         event, _ = self.store.append_new(writer=self.store.authority.writer("cli"),
                                          kind=spec.pop("kind"), at=spec.pop("at"),
@@ -424,6 +426,7 @@ class ReviewOrchestrator:
                      code_trees: Mapping[str, Any] | None = None,
                      incremental_from: Mapping[str, Any] | None = None,
                      knowledge_items: Sequence[str] = (),
+                     knowledge_project: str | None = None,
                      allowed_status: Mapping[str, Sequence[str]] | None = None,
                      redispatch_of: str | None = None,
                      ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -467,6 +470,8 @@ class ReviewOrchestrator:
             payload["incremental_from"] = dict(incremental_from)
         if knowledge_items:     # the PROJECT KNOWLEDGE entries this prompt carries (§3.4)
             payload["knowledge_items"] = list(knowledge_items)
+        if knowledge_project:   # the DDD whose units a finding may also cite (addressing §2.5)
+            payload["knowledge_project"] = str(knowledge_project)
         spec = {"kind": "handout", "at": at, "stage": stage, "round": round,
                 "attempt": attempt, "payload": payload}
         return spec, {"name": f"{expert_id}-r{round}-a{attempt}.md", "full": prompt,

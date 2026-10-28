@@ -297,6 +297,14 @@ def _render(k: Knowledge, rows: list[dict], *, project: str, has_ddd: bool, quer
              "ones that did not fit are listed under \"not shown\" with where to read them.",
              ""]
     body = []
+    ddd_map = _ddd_map_text(project) if has_ddd else ""
+    if ddd_map:
+        # what the project's DDD holds beyond this starting set (knowledge addressing §2.3);
+        # a unit found with `knowledge find` is cited by its id like a recalled one
+        body.append("## What the project's DDD holds\n\nThe entries below are a starting set, "
+                    "not the whole DDD. When a decision depends on the domain, search it with "
+                    "the words of your solution and cite what you use by its id.\n\n"
+                    + "<recalled>\n" + _unfenced(ddd_map).strip() + "\n</recalled>\n")
     for kind in ("ddd", "library", "lesson"):
         group = [r for r in rows if r["kind"] == kind]
         trusted = [r for r in group if not is_external_source(r["source"])]
@@ -310,6 +318,17 @@ def _render(k: Knowledge, rows: list[dict], *, project: str, has_ddd: bool, quer
                 label = f"`{r['id']}`" if r["id"] is not None else "not shown"
                 body.append(f"- {label} · {r['source']}\n\n<recalled>\n{text}\n</recalled>\n")
     return "\n".join(head + body).rstrip() + "\n"
+
+
+def _ddd_map_text(project: str) -> str:
+    """``addressing.ddd_map(project, "full")``, or "" when it cannot be made (never raises:
+    knowledge never stops a run)."""
+    try:
+        from core import addressing
+        return addressing.ddd_map(project, "full")
+    except Exception:  # noqa: BLE001
+        logger.warning("run knowledge: DDD map of %s unavailable", project, exc_info=True)
+        return ""
 
 
 # ── REVIEW: the correctness expert's DDD block (§3.4) ────────────────────────

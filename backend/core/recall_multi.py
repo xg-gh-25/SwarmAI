@@ -1091,7 +1091,29 @@ def _section_named(sections: dict, name: str) -> Optional[str]:
     return None
 
 
-def _take_whole(doc: str, group: list[dict], cap: int) -> list[dict]:
+def _locator(doc: str, path: Optional[Path], text: str):
+    """Where to read a unit or a section of *doc* in full: ``<absolute path>:<line> #<section>``
+    when the doc's file is known (the reader's cwd is often another repo, where a bare
+    doc name resolves to nothing), else ``<doc>#<section>``. *text* is the doc's text."""
+    from core import memory_index
+    lines = text.splitlines()
+    heads = {name: first for name, first, _end in memory_index.section_spans(text)}
+
+    def locate(section: str, unit: str = "") -> str:
+        where = f"{doc}#{section}" if section else doc
+        if path is None:
+            return where
+        line = 0
+        if unit:
+            first = unit.strip().splitlines()[0] if unit.strip() else ""
+            line = next((i + 1 for i, ln in enumerate(lines) if ln.strip() == first.strip()), 0)
+        if not line and section in heads:
+            line = heads[section]            # the heading's own line (1-based)
+        return f"{path}:{line} #{section}" if line and section else (f"{path}:{line}" if line else str(path))
+    return locate
+
+
+def _take_whole(doc: str, group: list[dict], cap: int, locate=None) -> list[dict]:
     """*group* (pinned, pointers, then ranked units) with ``shown`` set: each unit whole.
 
     Pinned sections first, whole, or named when longer than ``PINNED_MAX`` (they are
@@ -1107,7 +1129,7 @@ def _take_whole(doc: str, group: list[dict], cap: int) -> list[dict]:
             text = _readable(h["content"])
             if len(text) > PINNED_MAX:
                 text = (f"## {h['section']} (not shown: {len(text)} characters; "
-                        f"read {doc}#{h['section']})")
+                        f"read {locate(h['section']) if locate else doc + '#' + h['section']})")
                 h["kind"] = "pointer"
             h["shown"] = text
         elif h["kind"] == "pointer":
@@ -1123,7 +1145,8 @@ def _take_whole(doc: str, group: list[dict], cap: int) -> list[dict]:
         out.append(h)
     if omitted:
         note = not_shown_note(
-            [(f"{doc}#{h['section']}" if h["section"] else doc, unit_title(h["content"]),
+            [((locate(h["section"], h["content"]) if locate else
+               (f"{doc}#{h['section']}" if h["section"] else doc)), unit_title(h["content"]),
               len(_readable(h["content"]))) for h in omitted], where=doc)
         out.append({"doc": doc, "section": "", "kind": "omitted", "score": 0.0,
                     "content": note, "shown": note})
@@ -1185,6 +1208,8 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
         if not text:
             continue
         try:
+            from core.ddd_paths import ddd_path
+            locate = _locator(doc, ddd_path(_base, doc) if _base is not None else None, text)
             sections = _parse_docs_sections({doc: text}).get(doc) or {}
             group: list[dict] = []
             pinned = [_section_named(sections, n) for n in cfg.get("pinned", {}).get(doc, ())]
@@ -1194,7 +1219,7 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
                               "content": f"## {name}\n{sections[name].strip()}"})
             for name in (p for p in pointers if p):
                 group.append({"doc": doc, "section": name, "kind": "pointer", "score": 1.0,
-                              "content": f"## {name} (not shown: read {doc}#{name})"})
+                              "content": f"## {name} (not shown: read {locate(name)})"})
             if has_query:
                 if mode == "block":
                     group += _doc_blocks(query, doc, sections, quota,
@@ -1203,7 +1228,7 @@ def recall_ddd(query: str, project: Optional[str], purpose: str,
                 else:
                     group += _doc_entries(query, doc, text, sections, quota,
                                           tuple(cfg.get("weighted", ())), w)
-            out += _take_whole(doc, group, cap)
+            out += _take_whole(doc, group, cap, locate)
         except Exception:  # noqa: BLE001 -- one doc that fails is skipped alone
             logger.warning("recall_ddd: %s of project %s skipped", doc, project, exc_info=True)
             continue

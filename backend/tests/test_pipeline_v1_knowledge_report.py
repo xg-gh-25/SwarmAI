@@ -73,6 +73,16 @@ def test_report_has_one_knowledge_line_and_no_recalled_text():
     assert a["details"]["knowledge"]["cited"] == ["0a1b2c3d", "1b2c3d4e"]
 
 
+def test_report_counts_units_found_on_demand_and_searches():
+    a = _build(status="recalled", entries=3, cited=["0a1b2c3d"], cited_on_demand=["2c3d4e5f", "3d4e5f6a"],
+               searches=4)
+    text = audit.render(a, fmt="report")
+    assert "· cited 1 (+2 found on demand) · searched the DDD 4×" in text
+    assert a["details"]["knowledge"]["cited_on_demand"] == ["2c3d4e5f", "3d4e5f6a"]
+    plain = audit.render(_build(status="recalled", entries=3, cited=[]), fmt="report")
+    assert "found on demand" not in plain and "searched the DDD" not in plain
+
+
 def test_no_knowledge_line_for_an_older_run():
     assert "Knowledge:" not in audit.render(_build(), fmt="report")
 

@@ -336,6 +336,27 @@ def _knowledge_refs(obj: Mapping[str, Any], out: list[SchemaIssue], check: str) 
             _issue(out, check, f"knowledge_refs[{i}]", "must be an 8-character entry id from knowledge.md")
 
 
+def _knowledge_checked(obj: Mapping[str, Any], out: list[SchemaIssue], check: str) -> None:
+    """Optional ``knowledge_checked``: what the agent searched for on demand before
+    deciding the design (knowledge addressing §2.7) -- ``[{"query": str, "result_ids":
+    [8-character ids]}]``, ``[]`` when it searched nothing. Only the shape is checked;
+    nothing requires it (no gate decides whether the agent should have searched)."""
+    if "knowledge_checked" not in obj:
+        return
+    rows = _list(obj.get("knowledge_checked"), out, check, "knowledge_checked") or []
+    for i, row in enumerate(rows):
+        where = f"knowledge_checked[{i}]"
+        if not isinstance(row, Mapping) or set(row) - {"query", "result_ids"}:
+            _issue(out, check, where, "must be {query, result_ids}")
+            continue
+        if not isinstance(row.get("query"), str) or not row["query"].strip():
+            _issue(out, check, f"{where}.query", "must be the words searched for")
+        ids = row.get("result_ids", [])
+        if not isinstance(ids, list) or any(not isinstance(x, str) or not _KNOWLEDGE_ID.fullmatch(x)
+                                            for x in ids):
+            _issue(out, check, f"{where}.result_ids", "must be a list of 8-character unit ids")
+
+
 def _id_rows(value: Any, out: list[SchemaIssue], *, check: str, path: str,
              pattern: re.Pattern[str], allowed: set[str], required: set[str]) -> list[Mapping[str, Any]]:
     rows = _list(value, out, check, path) or []
@@ -491,10 +512,12 @@ def validate_design_spec(document: Any, *, variant: str,
     if variant not in ("full", "lite"):
         return [SchemaIssue("DS-5", "$", f"unknown design variant {variant!r}")]
     common = {"properties", "failure_modes", "tasks", "exit_criteria", "consumers",
-              "no_contract_change_reason", "security_boundaries", "knowledge_refs"}
+              "no_contract_change_reason", "security_boundaries", "knowledge_refs",
+              "knowledge_checked"}
     allowed = common | ({"alternatives", "chosen", "design"} if variant == "full" else set())
     _strict(obj, allowed, out, "DS-5", "$")
     _knowledge_refs(obj, out, "DS-5")
+    _knowledge_checked(obj, out, "DS-5")
     if not isinstance(requirement_ids, set) or any(not isinstance(x, str) for x in requirement_ids):
         _issue(out, "DS-5", "requirement_ids", "must be a set of requirement IDs")
         requirement_ids = set()
