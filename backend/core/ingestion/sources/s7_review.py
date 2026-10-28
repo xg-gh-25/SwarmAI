@@ -118,6 +118,26 @@ def sampled(session_id: str) -> bool:
 
 # ── evidence: read set and index ─────────────────────────────────────────────
 
+def measured_from_ref(ref: str, message: dict[str, Any]) -> tuple[str, Any] | None:
+    """(field path, value) of the measured root registered under *ref*, read back from
+    the transcript *message* it came from. The store keeps only the hash, so this is the
+    one way to get the value (ref: ``s2:<message id>#<block>:<type>#field:<path>``)."""
+    from core import session_inputs
+    try:
+        head, path = str(ref).split("#field:", 1)
+        _message_id, block = head[len(s2_session._S2_REF):].rsplit("#", 1)
+        content = s2_session._blocks(message)[int(block.split(":", 1)[0])][1]
+        value = json.loads(content) if isinstance(content, str) else content
+        fields = dict(session_inputs._measured_fields(value))
+    except (KeyError, ValueError, IndexError, TypeError):
+        return None
+    return (path, fields[path]) if path in fields else None
+
+
+def message_id_of(ref: str) -> str:
+    return str(ref)[len(s2_session._S2_REF):].split("#", 1)[0]
+
+
 def _measured(session_id: str, rows: list[dict[str, Any]],
               event_ids: tuple[str, ...]) -> list[tuple[str, str, Any]]:
     """(anchor, field path, value) for the measured roots registered for *rows*. The
@@ -134,16 +154,10 @@ def _measured(session_id: str, rows: list[dict[str, Any]],
     by_id = {str(item.get("id")): item for item in rows}
     out = []
     for event_id, ref in found:
-        try:   # ref: s2:<message id>#<block index>:<block type>#field:<path>
-            head, path = str(ref).split("#field:", 1)
-            message_id, block = head[len(s2_session._S2_REF):].rsplit("#", 1)
-            content = s2_session._blocks(by_id[message_id])[int(block.split(":", 1)[0])][1]
-            value = json.loads(content) if isinstance(content, str) else content
-            fields = dict(session_inputs._measured_fields(value))
-        except (KeyError, ValueError, IndexError, TypeError):
-            continue
-        if path in fields:
-            out.append((f"event:{event_id}", path, fields[path]))
+        message = by_id.get(message_id_of(ref))
+        found_value = measured_from_ref(ref, message) if message else None
+        if found_value:
+            out.append((f"event:{event_id}", *found_value))
     return out[:INDEX_MEASURED_LIMIT]
 
 

@@ -252,10 +252,9 @@ CDF 现在靠 S2 主提取沉淀会话里的判断：会话结束后，另一个
 - **运行方式**：在执行线程里用 `asyncio.run` 调 SDK 的 `query()`，参数为 `resume`、`fork_session=True`、`tools=[]`（`--tools ""`，真正不给工具；`allowed_tools=[]` 在这个 SDK 里等于全部允许）、`output_format`、`cwd`、`max_turns=1`、`strict_mcp_config=True`、`setting_sources=[]`。CLI 路径和环境变量复用后台任务的 `jobs.executor._resolve_claude_cli` 和 `_build_cli_env`。超时 300 秒。
 - **证据索引**（补上 §6.4 的缺口）：分叉里的聊天记录看不到证据编号。复盘提示末尾附一份索引：水位之后每条用户消息的锚点和开头 120 个字，以及每个 measured 根的锚点、字段名和值。证据清单 = 索引里的锚点。复盘的读取集 = 这个会话的全部用户根，加上水位之后所有窗口登记的根（`window_roots`）。
 - **每次任务做什么**：先跑 S2 用户原话那一遍（每个会话都跑）；再复盘；恢复不了就跑 S2 主提取；会话 id 哈希落在 10% 里，再额外跑一遍 S2 主提取（测量用）。
-- **§9 新规则的实现**：在 `pipeline_v2` 里，路由之前判断。S7、`scope=agent`、类型属于 correction、pitfall、guideline、process、model 的 Cognition：如果它引用的根里至少有一个 `user` 或 `measured` 根，就用现有的蕴含判断卡，拿这些根的原文（用户写的字、measured 字段的值）去判断；判为蕴含，这个单元按不污染路由；否则照旧按污染处理。判断卡不可用时推迟（和 S1 一致）。
-- **度量**：每次复盘的 attempt 在 `evidence_range` 里记会话类型（有代码改动 / 写过非代码文件 / 只有对话）、是否抽样、各项信号的数值，token 记在 `ingestion_llm_usage` 的 S7 行。Flow 健康区按会话类型显示复盘次数、产出、被拒、抽样会话数和漏记率（`queries.review_health`：抽样会话里 S2 主提取的单元，最后写成新条目的算漏记，被强化、合并或判为已存在的算已覆盖），以及 Agent 自身认知写入 EVOLUTION / MEMORY 的条数。用户撤回的比例等第一次批量评测时加。
+- **§9 新规则的实现**：在 `pipeline_v2` 里，路由之前判断。S7、`scope=agent`、类型属于 correction、pitfall、guideline、process、model 的 Cognition：如果它引用的根里至少有一个 `user` 或 `measured` 根，就用现有的蕴含判断卡判断。判断的输入是用户写的字，以及 `measured <字段> = <值>`。measured 根在库里只有哈希，值从它所在的那条聊天记录里按 ref 读回（`s7_review.measured_from_ref`，复盘提示里的证据索引用的是同一个函数）。判为蕴含，这个单元按不污染路由；否则照旧按污染处理。判断卡不可用时推迟（和 S1 一致）。
+- **度量**：每次复盘的 attempt 在 `evidence_range` 里记会话类型（有代码改动 / 写过非代码文件 / 只有对话）、是否抽样、各项信号的数值，token 记在 `ingestion_llm_usage` 的 S7 行。Flow 健康区按会话类型显示复盘次数、产出、被拒、抽样会话数和漏记率（`queries.review_health`：抽样会话里 S2 主提取的单元，最后写成新条目的算漏记，被强化、合并或判为已存在的算已覆盖），以及 Agent 自身认知写入 EVOLUTION / MEMORY 的条数、其中被用户撤回的条数和比例（撤回 = 一次完成的 `user_redact`，它的锚点是这个单元写入时产生的锚点）。
 - **分叉的会话记录**：每次复盘会在 CLI 的会话目录里留下分叉自己的记录文件。复盘结束后删掉这个文件，原会话的文件不动。
-- **measured 证据的边界**：库里只存 measured 根的哈希，不存值。所以 §9 的蕴含检查只能拿用户原话去比，只有 measured 证据的 Agent 经验暂时留在 DDD，进不了 EVOLUTION 和 MEMORY。复盘提示里的证据索引能显示 measured 的值，因为值可以从这一段聊天记录里读回来。
 - **恢复不了的会话**：退回 S2 主提取时，读的是整个会话，不只是水位之后的部分；重复的单元照常由写入端判为已存在。
 - **按钮**：Save to Memory 不看门槛，有新内容就复盘。
 - **第 0 步**要真的调模型，沙箱里没有 AWS 凭证。代码里的运行方式可以注入；第 0 步由用户在 dev backend 上执行（命令见交付说明）。

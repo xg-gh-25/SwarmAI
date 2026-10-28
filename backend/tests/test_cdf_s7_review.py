@@ -277,3 +277,69 @@ def test_review_health_reports_miss_rate_per_session_type(cdf_env) -> None:
     assert (code["missed"], code["covered"], code["miss_rate"]) == (1, 2, 0.333)
     assert out["by_type"]["conversation"]["miss_rate"] is None
     assert out["agent_self_written"] == 1
+
+
+def test_agent_pitfall_grounded_in_a_measured_result_reaches_evolution(
+        cdf_env, tmp_path, monkeypatch) -> None:
+    """§9: a measured result (here a test run's exit code and failure count) is enough
+    grounding; the entailment judge sees its value, read back from the transcript."""
+    sdk = _cli_transcript(tmp_path, monkeypatch)
+    _conversation(cdf_env)
+    asyncio.run(cdf_env["db"].messages.put({
+        "id": "r3", "session_id": SESSION, "role": "assistant",
+        "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "pytest"}},
+                    {"type": "tool_result", "content": json.dumps({"exit_code": 1, "failed": 3})}]}))
+    seen = {}
+
+    def runner(sdk_id, cwd, prompt, schema):
+        anchor = next(line.split()[1] for line in prompt.splitlines()
+                      if "(measured exit_code)" in line)
+        seen["prompt_has_value"] = "(measured exit_code): 1" in prompt
+        return {"units": [{
+            "kind": "cognition", "type": "pitfall", "scope": "agent",
+            "title": "Run the suite before claiming done",
+            "what": "Run the test suite before saying a change is finished.",
+            "why": "I said it was done and the run then failed.",
+            "applicability": "When about to report a code change as finished.",
+            "evidence": [anchor]}]}
+
+    s7_review.review_session(SESSION, sdk_session_id=sdk, watermark=None, runner=runner)
+    assert seen["prompt_has_value"]
+
+    class Seeing(Judge):
+        def entailment(self, text, *rest):
+            seen["grounding"] = text
+            return super().entailment(text, *rest)
+
+    _drain(cdf_env, Seeing(entailed=True))
+    assert "measured exit_code = 1" in seen["grounding"]
+    evolution = (cdf_env["workspace"] / ".context" / "EVOLUTION.md").read_text(encoding="utf-8")
+    memory = (cdf_env["workspace"] / ".context" / "MEMORY.md").read_text(encoding="utf-8")
+    assert "Run the test suite before saying a change is finished" in evolution + memory
+
+
+def test_review_health_counts_what_the_user_withdrew(cdf_env) -> None:
+    from core.ingestion import queries
+    from core.ingestion.api import connect_rw
+    conn = connect_rw()
+    try:
+        for uid, anchor in (("k1", "unit:kept"), ("w1", "unit:gone")):
+            conn.execute("INSERT INTO ingestion_inbox(id,idem_key,source,source_ref,lane,payload,"
+                         "payload_schema,content_hash,envelope,project_snapshot,created_at,source_v2,"
+                         "extraction_pass) VALUES (?,?,'S7','s','session','{}','v','h','{}','{}',"
+                         "'2099-01-01T00:00:00','S7','main')", (uid, uid))
+            conn.execute("INSERT INTO ingestion_units(unit_id,candidate_id,claim_group,state,"
+                         "destination,updated_at) VALUES (?,?,'{}','written','{\"store\": \"MEMORY\"}',"
+                         "'2099-01-01T00:00:00')", (uid + ".u", uid))
+            conn.execute("INSERT INTO ingestion_writes(op_id,op_kind,unit_id,target_path,"
+                         "anchors_present,step,created_at,updated_at) VALUES "
+                         "(?,'ingestion_unit',?,'MEMORY.md',?,'done','t','t')",
+                         ("op-" + uid, uid + ".u", json.dumps([anchor])))
+        conn.execute("INSERT INTO ingestion_writes(op_id,op_kind,target_path,relations,step,"
+                     "created_at,updated_at) VALUES ('r1','user_redact','MEMORY.md',?,'done','t','t')",
+                     (json.dumps([{"redact_anchor": "unit:gone"}]),))
+        out = queries.review_health(conn, "2000-01-01")
+    finally:
+        conn.close()
+    assert (out["agent_self_written"], out["agent_self_withdrawn"],
+            out["agent_self_withdrawn_rate"]) == (2, 1, 0.5)

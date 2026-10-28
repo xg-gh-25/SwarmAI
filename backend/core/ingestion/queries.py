@@ -478,7 +478,8 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
       that reached a final state, the share written as new is what the review missed
       (``written``); ``reinforced`` / ``merged`` / rejected ``already_exists`` were
       already covered. None when nothing is final yet.
-    - agent_self: S7 units written to EVOLUTION or MEMORY.
+    - agent_self: S7 units written to EVOLUTION or MEMORY, and how many of them the
+      user withdrew (a finished user_redact of an anchor the unit's write produced).
     """
     by_type = {kind: {"reviews": 0, "units": 0, "invalid": 0, "sampled": 0,
                       "missed": 0, "covered": 0} for kind in REVIEW_TYPES}
@@ -488,7 +489,8 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
         # a pre-v2 database (only old fixtures): nothing to report
         for entry in by_type.values():
             entry["miss_rate"] = None
-        return {"by_type": by_type, "agent_self_written": 0}
+        return {"by_type": by_type, "agent_self_written": 0, "agent_self_withdrawn": 0,
+                "agent_self_withdrawn_rate": None}
     for row in conn.execute("""SELECT evidence_range, units_emitted, units_invalid
                                FROM extraction_attempts WHERE source='S7' AND started_at>=?""",
                             (since,)):
@@ -517,12 +519,26 @@ def review_health(conn: sqlite3.Connection, since: str) -> dict[str, Any]:
     for entry in by_type.values():
         final = entry["missed"] + entry["covered"]
         entry["miss_rate"] = round(entry["missed"] / final, 3) if final else None
-    agent_self = conn.execute(
-        """SELECT COUNT(*) FROM ingestion_units u JOIN ingestion_inbox i ON i.id=u.candidate_id
+    written = conn.execute(
+        """SELECT u.unit_id, w.anchors_present FROM ingestion_units u
+           JOIN ingestion_inbox i ON i.id=u.candidate_id
+           LEFT JOIN ingestion_writes w ON w.unit_id=u.unit_id AND w.op_kind='ingestion_unit'
            WHERE i.source_v2='S7' AND u.state='written' AND i.created_at>=?
              AND (u.destination LIKE '%EVOLUTION%' OR u.destination LIKE '%MEMORY%')""",
-        (since,)).fetchone()[0]
-    return {"by_type": by_type, "agent_self_written": int(agent_self)}
+        (since,)).fetchall()
+    redacted: set[str] = set()
+    for (relations,) in conn.execute(
+            "SELECT relations FROM ingestion_writes WHERE op_kind='user_redact' AND step='done'"):
+        for item in _json(relations, []):
+            if isinstance(item, dict) and item.get("redact_anchor"):
+                redacted.add(str(item["redact_anchor"]))
+    units: dict[str, set[str]] = {}
+    for unit_id, anchors in written:
+        units.setdefault(str(unit_id), set()).update(str(a) for a in _json(anchors, []))
+    withdrawn = sum(1 for anchors in units.values() if anchors & redacted)
+    return {"by_type": by_type, "agent_self_written": len(units),
+            "agent_self_withdrawn": withdrawn,
+            "agent_self_withdrawn_rate": round(withdrawn / len(units), 3) if units else None}
 
 
 def health() -> dict[str, Any]:

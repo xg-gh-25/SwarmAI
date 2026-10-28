@@ -47,7 +47,7 @@ const healthData = { lanes: { immediate: { backlog: 0, oldestWaitSeconds: null }
     lastIntervalSeconds: 259200, beforeRatePerDay: 1, afterRatePerDay: 0.2,
     launchAt: '2026-10-20T00:00:00Z', launchSource: 'correction_unit_write' }],
   llmBySource: [{ utcDay: '2026-10-27', source: 'S2', calls: 3, inputTokens: 2400, outputTokens: 310 }],
-  review: { agentSelfWritten: 2, byType: {
+  review: { agentSelfWritten: 2, agentSelfWithdrawn: 1, agentSelfWithdrawnRate: 0.5, byType: {
     code: { reviews: 4, units: 9, invalid: 1, sampled: 1, missed: 1, covered: 3, missRate: 0.25 },
     files: { reviews: 2, units: 3, invalid: 0, sampled: 0, missed: 0, covered: 0, missRate: null },
     conversation: { reviews: 5, units: 7, invalid: 2, sampled: 1, missed: 0, covered: 2, missRate: 0 } } } };
@@ -87,7 +87,7 @@ describe('Need You Flow tabs', () => {
     // after-session review metrics, per session type (session review §12)
     expect(screen.getByText('写过非代码文件')).toBeInTheDocument();
     expect(screen.getByText('25%（1/4）')).toBeInTheDocument();
-    expect(screen.getByText(/Agent 自身认知写入 EVOLUTION \/ MEMORY：2/)).toBeInTheDocument();
+    expect(screen.getByText(/Agent 自身认知写入 EVOLUTION \/ MEMORY：2，被撤回：1（50%）/)).toBeInTheDocument();
   });
 
   it('renders the candidate and its full detail after selection', async () => {

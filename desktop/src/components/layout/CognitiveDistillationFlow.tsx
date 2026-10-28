@@ -203,7 +203,9 @@ export function CognitiveDistillationFlow() {
           rows={health.data.llmBySource.map((row) => [row.utcDay, row.source, String(row.calls), String(row.inputTokens), String(row.outputTokens)])}
         />}
         {health.data?.review && <HealthTable
-          title={`会后复盘（30 天，Agent 自身认知写入 EVOLUTION / MEMORY：${health.data.review.agentSelfWritten}）`}
+          title={`会后复盘（30 天，Agent 自身认知写入 EVOLUTION / MEMORY：${health.data.review.agentSelfWritten}，`
+            + `被撤回：${health.data.review.agentSelfWithdrawn}${health.data.review.agentSelfWithdrawnRate == null ? ''
+              : `（${(health.data.review.agentSelfWithdrawnRate * 100).toFixed(0)}%）`}）`}
           headers={['会话类型', '复盘', '产出单元', '被拒', '抽样会话', '抽样漏记率']}
           rows={(['code', 'files', 'conversation'] as const).map((kind) => {
             const row = health.data.review!.byType[kind];

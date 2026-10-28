@@ -85,27 +85,43 @@ class ReinforcementResult:
 AGENT_SELF_TYPES = frozenset({"correction", "pitfall", "guideline", "process", "model"})
 
 
-def _user_grounding(anchors: list[str]) -> str:
-    """The user-written text of the cited user-message events (empty when none).
-
-    Measured roots also count as evidence (design §9), but the store keeps only their
-    hash, so there is no text to check entailment against: a unit grounded only in
-    measured results stays tainted (session review §16)."""
+def _grounding(anchors: list[str]) -> str:
+    """The evidence the agent's own cognition may rest on (session review §9): the
+    user-written text of cited user messages, and ``measured <path> = <value>`` for cited
+    measured results. Empty when the unit cites neither."""
     import sqlite3
     from core import session_inputs
+    from core.ingestion.sources import s7_review
     ids = [a[len("event:"):] for a in anchors if a.startswith("event:")]
     path = session_inputs._db_path()
     if not ids or not path.exists():
         return ""
     marks = ",".join("?" * len(ids))
+    texts: list[str] = []
     try:
         with sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=1.0) as conn:
-            users = [r[0] for r in conn.execute(
-                f"SELECT event_id FROM session_inputs WHERE kind='user_message' AND trust='user' "
-                f"AND event_id IN ({marks})", ids)]
+            rows = conn.execute(
+                f"SELECT event_id, kind, ref FROM session_inputs WHERE event_id IN ({marks}) "
+                f"AND ((kind='user_message' AND trust='user') OR "
+                f"(kind='measured_field' AND trust='measured'))", ids).fetchall()
+            for event_id, kind, ref in rows:
+                if kind == "user_message":
+                    texts.append(session_inputs.user_authored_text(event_id) or "")
+                    continue
+                found = conn.execute("SELECT id, content FROM messages WHERE id=?",
+                                     (s7_review.message_id_of(ref),)).fetchone()
+                if found is None:
+                    continue
+                content = found[1]
+                try:
+                    content = json.loads(content) if isinstance(content, str) and content[:1] in "[{" else content
+                except ValueError:
+                    pass
+                value = s7_review.measured_from_ref(ref, {"id": found[0], "content": content})
+                if value:
+                    texts.append(f"measured {value[0]} = {json.dumps(value[1])}")
     except sqlite3.Error:
         return ""
-    texts = [session_inputs.user_authored_text(event) or "" for event in users]
     return "\n\n".join(t for t in texts if t.strip())
 
 def _get(row: Any, key: str, default: Any = None) -> Any:
@@ -457,7 +473,7 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
     if (resolved.tainted and str(_get(row, "source_v2", _get(row, "source", ""))) == "S7"
             and isinstance(unit, CognitionUnit) and unit.scope == "agent"
             and unit.type in AGENT_SELF_TYPES):
-        grounding = _user_grounding(unit.evidence)
+        grounding = _grounding(unit.evidence)
         if grounding:
             try:
                 verdict = _unwrap(judge.entailment(grounding, unit.what, unit.how, unit.why), vectors)
@@ -467,8 +483,9 @@ def run_unit_v2(row: Any, workspace_root: Path | str, judge: Any) -> UnitDecisio
                 return _decision(unit_id, "defer", "defer", "entailment_unavailable",
                                  vectors=vectors, card0=card0)
             if verdict.entailed:
-                # The agent's own cognition, backed by what the user said (session review
-                # §9): routed as untainted so it can reach EVOLUTION and MEMORY.
+                # The agent's own cognition, backed by what the user said or a measured
+                # result (session review §9): routed as untainted, so it can reach
+                # EVOLUTION and MEMORY.
                 resolved = api_v2.ResolvedEvidence(
                     root_ids=resolved.root_ids, lineage_root_ids=resolved.lineage_root_ids,
                     strength=resolved.strength, tainted=False, unresolved=resolved.unresolved)

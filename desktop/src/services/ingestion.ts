@@ -113,6 +113,8 @@ export interface ReviewTypeStats {
 export interface ReviewHealth {
   byType: Record<'code' | 'files' | 'conversation', ReviewTypeStats>;
   agentSelfWritten: number;
+  agentSelfWithdrawn: number;
+  agentSelfWithdrawnRate: number | null;
 }
 
 export interface IngestionHealth {
