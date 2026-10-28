@@ -115,3 +115,22 @@ def test_s2_sample_spreads_over_size_smallest_first(tmp_path: Path) -> None:
     assert picked == ["s9", "s6", "s3", "s0"]          # smallest .. largest, both ends kept
     assert replay_mod.sample_by_size(tmp_path, sessions, 0) == sorted(
         sessions, key=lambda s: -int(s[1:]))            # all, smallest first
+
+
+def test_backfill_records_old_user_messages_once(cdf_env) -> None:
+    """A session sent before session_inputs existed gets the user events the send path
+    records today (ref = message id, quotes split out as external), exactly once."""
+    data = cdf_env["data"]
+    with sqlite3.connect(data / "data.db") as conn:
+        conn.execute("INSERT INTO messages(id, session_id, role, content, created_at, updated_at) VALUES "
+                     "('old-1', ?, 'user', ?, '2026-10-20T00:00:00', '2026-10-20T00:00:00')",
+                     (SESSION, '[{"type": "text", "text": "Always run the linter first.\\n> pasted"}]'))
+        conn.execute("INSERT INTO messages(id, session_id, role, content, created_at, updated_at) VALUES "
+                     "('old-2', ?, 'assistant', 'ok', '2026-10-20T00:00:01', '2026-10-20T00:00:01')", (SESSION,))
+    assert replay_mod.backfill_user_inputs(data, SESSION) == 1
+    with sqlite3.connect(data / "data.db") as conn:
+        rows = conn.execute("SELECT kind, trust, ref FROM session_inputs WHERE session_id=? "
+                            "ORDER BY kind", (SESSION,)).fetchall()
+    assert ("user_message", "user", "old-1") in rows
+    assert all(ref.startswith("old-1") for _, _, ref in rows)
+    assert replay_mod.backfill_user_inputs(data, SESSION) == 0

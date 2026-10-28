@@ -200,6 +200,36 @@ def migrate_app_db() -> None:
     asyncio.run(db.initialize(skip_init=True))
 
 
+def backfill_user_inputs(data_dir: Path, session_id: str) -> int:
+    """Record a historical session's user messages as the send path records them now.
+
+    The copy comes from a daemon older than session_inputs (v16): its sessions have no
+    user events, so S2 had nothing it could cite and nothing for the user-utterance
+    pass (rehearsal 2026-10-29). Every sent user row is taken as person-typed; old
+    rows do not say whether a person or a system prompt sent them, so the rehearsal
+    over-counts user trust for system-sent rows. Production does not backfill: only
+    sessions sent after the upgrade carry user events. Returns messages recorded."""
+    from core import session_inputs
+    with sqlite3.connect(data_dir / "data.db") as conn:
+        if conn.execute("SELECT 1 FROM session_inputs WHERE session_id=? AND kind='user_message' "
+                        "LIMIT 1", (session_id,)).fetchone():
+            return 0
+        rows = conn.execute(
+            "SELECT id, content FROM messages WHERE session_id=? AND role='user' "
+            "AND (sent IS NULL OR sent != 0) ORDER BY created_at, rowid", (session_id,)).fetchall()
+    for message_id, raw in rows:
+        value: Any = raw
+        if isinstance(raw, str) and raw[:1] in ("[", "{"):
+            try:
+                value = json.loads(raw)
+            except ValueError:
+                pass
+        session_inputs.record_user_input_parts(
+            session_id, value if isinstance(value, str) else None,
+            value if isinstance(value, list) else None, ref=message_id, origin="person")
+    return len(rows)
+
+
 def replay(data_dir: Path, workspace: Path, *, days: int = 7,
            sources: tuple[str, ...] = SOURCES, max_usd: float = 0.0,
            price_in: float = 3.0, price_out: float = 15.0, dry_run: bool = False,
@@ -234,6 +264,9 @@ def replay(data_dir: Path, workspace: Path, *, days: int = 7,
                 report["stopped"] = f"budget: ${spent:.2f} spent before {source}"
                 break
             try:
+                if source == "s2":
+                    entry["backfilled_user_messages"] = (
+                        entry.get("backfilled_user_messages", 0) + backfill_user_inputs(data_dir, item))
                 entry["receipts"] += _enqueue(source, item, workspace, llm)
                 if "done" in entry:
                     entry["done"].append(item)
