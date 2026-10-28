@@ -6018,15 +6018,63 @@ def create_governance_file_gate() -> Callable[..., Any]:
     return governance_file_gate
 
 
+_KNOWLEDGE_MODULE_RE = re.compile(
+    r"knowledge_cli|core[./]addressing|from\s+core\s+import\s+[^;\n]*\baddressing\b")
+_KNOWLEDGE_CMD_RE = re.compile(r"\bknowledge\s+(?:map|find|get)\b|" + _KNOWLEDGE_MODULE_RE.pattern)
+
+
+def restricted_knowledge_denial(command: str, allowed_projects: "frozenset[str]") -> "str | None":
+    """Why a Bash *command* that reads knowledge through the backend program's
+    ``knowledge`` command (or its module) must be denied in a restricted session, or
+    None. The command names no file, so the path check below never sees it: without
+    this, a non-owner channel user could read any project's DDD and the Library. Only
+    ``--project <name>`` for a name in *allowed_projects* (the shared projects) passes;
+    ``--projects`` (every project's name), ``--in library`` and a missing project do not.
+    Decided from the parsed command, inside the daemon: a flag or environment variable
+    the agent writes into its own command cannot widen it. Knowledge addressing §2.4."""
+    if not _KNOWLEDGE_CMD_RE.search(command or ""):
+        return None
+    if _KNOWLEDGE_MODULE_RE.search(command):
+        return "the knowledge module may only be used through the knowledge command here"
+    if re.search(r"--projects\b", command):
+        return "listing every project is not available in this session"
+    if re.search(r"--in(?:\s+|=)library\b", command):
+        return "the Library is not shared with this session"
+    names = re.findall(r"--project(?:\s+|=)(['\"]?)([^\s'\";|&]+)\1", command)
+    if not names:
+        return "name a shared project with --project"
+    blocked = sorted({n for _q, n in names if n not in allowed_projects})
+    if blocked:
+        return f"project {', '.join(blocked)} is not shared with this session"
+    if len(re.findall(r"\bknowledge\s+(?:map|find|get)\b", command)) != len(names):
+        return "every knowledge command here must name a shared project with --project"
+    return None
+
+
+def shared_project_names(readonly_files: "list[str] | None") -> "frozenset[str]":
+    """The projects whose DDD files are granted read-only (the directory right under
+    ``Projects/`` in each granted path)."""
+    names = set()
+    for f in readonly_files or ():
+        parts = Path(os.path.realpath(f)).parts
+        if "Projects" in parts and parts.index("Projects") + 1 < len(parts):
+            names.add(parts[parts.index("Projects") + 1])
+    return frozenset(names)
+
+
 def create_file_access_permission_handler(
     allowed_directories: list[str],
     readonly_files: list[str] | None = None,
+    knowledge_projects: "frozenset[str] | None" = None,
 ) -> Callable[..., Any]:
     """Create a file access permission handler with allowed paths bound.
 
     Args:
         allowed_directories: Directory paths allowed for file access. The grant
             is RECURSIVE (any file at any depth under the dir) and READ+WRITE.
+        knowledge_projects: when not None (a non-owner channel), the only projects a
+            Bash ``knowledge map|find|get`` command may name (restricted_knowledge_denial).
+            None = the command is not restricted (it reads the owner's own workspace).
         readonly_files: EXACT file paths granted READ-ONLY access (Read/Glob/Grep
             allowed; Write/Edit denied). Unlike ``allowed_directories`` this is an
             EXACT-match, non-recursive grant — used for the L3 shared lane
@@ -6122,6 +6170,13 @@ def create_file_access_permission_handler(
 
             if not command:
                 return {"behavior": "allow"}
+
+            if knowledge_projects is not None:
+                why = restricted_knowledge_denial(command, knowledge_projects)
+                if why:
+                    logger.warning(f"[KNOWLEDGE COMMAND DENIED] {why}: {command[:100]}")
+                    return {"behavior": "deny", "message": f"Knowledge command denied: {why}",
+                            "interrupt": False}
 
             # Extract potential file paths from bash commands
             # Match common file access patterns

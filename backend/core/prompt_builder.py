@@ -2337,9 +2337,11 @@ class PromptBuilder:
             # corrupted (both were adversarial-found leaks in the dir-grant
             # design that this replaces).
             shared_ddd_files = await self._collect_shareable_ddd_paths()
+            from core.security_hooks import shared_project_names
             file_access_handler = create_file_access_permission_handler(
                 [_channel_sender_dir],
                 readonly_files=shared_ddd_files,
+                knowledge_projects=shared_project_names(shared_ddd_files),
             )
             logger.info(
                 "Non-owner channel: file_access scoped to [%s] + %d shared DDD "
