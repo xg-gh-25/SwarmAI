@@ -1212,11 +1212,12 @@ class TestG7PreUpdateBackup:
         assert "Rolling back" in source or "rolling back" in source
 
 
-class TestG8NightlyBackup:
-    """G8: user_data.py must install nightly backup cron."""
+class TestG8NoNightlyBackup:
+    """The nightly workspace backup was removed: the Hive role never had write access
+    to backups/, so it never succeeded. New Hives must not get it, and an update must
+    remove it from Hives provisioned before."""
 
-    def test_user_data_has_backup_cron(self):
-        """Nightly backup cron must be in user_data template."""
+    def test_user_data_installs_no_backup_cron(self):
         from hive.user_data import render_user_data
 
         result = render_user_data(
@@ -1224,8 +1225,15 @@ class TestG8NightlyBackup:
             auth_user="admin", auth_hash="$2a$14$test",
             region="us-east-1",
         )
-        assert "swarmai-backup" in result
-        assert "cron.daily" in result
+        assert "swarmai-backup" not in result
+        assert "backups/" not in result
+
+    def test_update_removes_an_old_backup_cron(self):
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "rm -f /etc/cron.daily/swarmai-backup" in source
 
 
 class TestG9PythonPasswordRewrite:
@@ -1527,7 +1535,7 @@ class TestH5CleanupTerminalStatus:
 
 
 class TestM7BucketConfigFile:
-    """M7: Backup cron must read bucket from config file, not log."""
+    """M7: the bucket name is a deploy-time file, not parsed from a log."""
 
     def test_user_data_writes_hive_bucket(self):
         """user_data template must write bucket name to .hive-bucket."""
@@ -1539,15 +1547,18 @@ class TestM7BucketConfigFile:
         )
         assert ".hive-bucket" in result
 
-    def test_backup_cron_reads_hive_bucket(self):
-        """Backup cron must read from .hive-bucket file."""
+    def test_the_bridge_reads_the_file_user_data_writes(self):
+        """The Swarm Out bridge reads the bucket from the path user_data writes."""
+        from core import swarm_out_bridge
         from hive.user_data import render_user_data
         result = render_user_data(
             s3_bucket="test-bucket", version="1.0.0",
             auth_user="admin", auth_hash="$2a$14$test",
             region="us-east-1",
         )
-        assert "cat /opt/swarmai/.hive-bucket" in result
+        assert 'INSTALL_DIR="/opt/swarmai"' in result
+        assert '> "$INSTALL_DIR/.hive-bucket"' in result
+        assert str(swarm_out_bridge._BUCKET_FILE) == "/opt/swarmai/.hive-bucket"
 
 
 # ═══════════════════════════════════════════════════════════════════

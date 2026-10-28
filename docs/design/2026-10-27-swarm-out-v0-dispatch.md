@@ -1,7 +1,7 @@
 ---
 title: "Swarm Out v0：把任务派到 Hive worker 上跑完，人工介入走云存储 bridge"
 created: 2026-10-27
-updated: 2026-10-27
+updated: 2026-10-28
 project: SwarmAI
 status: v0 已实现（2026-10-27）；§8 记录实现时对设计的改动
 tags: [swarm-out, hive, dispatch, bridge, autonomy]
@@ -142,5 +142,5 @@ XG 2026-10-27 定的范围：**把任务派发出去，在 Hive worker 上跑完
 - **没有专用 worker agent**：无人值守的说明作为任务正文的开头一起发出（`UNATTENDED_PREAMBLE`），用 Hive 的 default agent。
 - **Host 把 Hive 写的问题按已知字段重建**，`hive` 字段用 Host 自己记录的名字；回答用 S3 条件写（`IfNoneMatch`），两个回答同时到时第二个被拒绝。
 - **IAM**：发布包读权限收窄到 `v*`；bridge 读写按 `${aws:PrincipalTag/HiveName}` 限定；每次 update 都重写整份策略并补 `HiveName` tag。
-- **已知、不在 v0**：桌面 daemon 没有 Host 头校验（DNS rebinding，之前就有）；夜间备份到 `backups/` 没有写权限（之前就有）；`bridge/` 前缀没有 lifecycle 规则（改它会整体替换桶上已有的规则）。
+- **已知、不在 v0**：`bridge/` 前缀没有 lifecycle 规则（改它会整体替换桶上已有的规则）。当时还记了两条，2026-10-28 已处理：桌面 daemon 的 Host 头校验已加上（DNS rebinding）。夜间备份从来没写进过 `backups/`（角色没有写权限），已删掉，更新 Hive 时会清掉旧实例上的 cron。
 - **没有可用 Hive 时的引导**（之后补的）：`/api/swarm-out/hives`（CLI `hives`）只给 Hive 的名字、状态、region，不给地址和凭证。面板没有 running 的 Hive 时，用设置引导替换「真实派发」一节（没有 Hive：三步设置；有但都没在运行：列出状态，提示启动），按钮打开 Hive overlay；查询失败不当作"没有 Hive"。示例数据上方标明「还没正式上线，敬请期待」。chat 里的 agent 靠 `s_swarm-out` skill 知道怎么查 Hive、怎么在你确认后派发。

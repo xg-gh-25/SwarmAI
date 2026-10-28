@@ -39,7 +39,7 @@ aws s3 cp "s3://$HIVE_S3_BUCKET/v$HIVE_VERSION/swarmai-hive-v$HIVE_VERSION-linux
 tar xzf /tmp/hive.tar.gz --strip-components=1 -C "$INSTALL_DIR"
 chown -R "$SWARM_USER:$SWARM_USER" "$INSTALL_DIR"
 rm /tmp/hive.tar.gz
-# M7: Persist bucket name for backup cron (avoid parsing log files)
+# M7: Persist the bucket name for the Swarm Out bridge (core/swarm_out_bridge.py).
 echo "$HIVE_S3_BUCKET" > "$INSTALL_DIR/.hive-bucket"
 
 # ── 4. Python venv + deps ──
@@ -213,23 +213,6 @@ tee /etc/logrotate.d/swarmai > /dev/null << 'LOGROTATE'
     copytruncate
 }
 LOGROTATE
-
-# ── 10. Nightly workspace backup (G8) ──
-# Tar /home/swarm/.swarm-ai/ to S3 daily. 7-day retention via lifecycle.
-cat > /etc/cron.daily/swarmai-backup << 'BACKUP'
-#!/bin/bash
-BACKUP_FILE="/tmp/swarm-backup-$(date +%Y%m%d).tar.gz"
-tar czf "$BACKUP_FILE" -C /home/swarm .swarm-ai/ 2>/dev/null
-BUCKET=$(cat /opt/swarmai/.hive-bucket 2>/dev/null)
-REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/placement/region)
-if [ -n "$BUCKET" ] && [ -n "$REGION" ]; then
-    aws s3 cp "$BACKUP_FILE" "s3://$BUCKET/backups/$(hostname)/$(basename "$BACKUP_FILE")" --region "$REGION" --sse 2>/dev/null
-fi
-rm -f "$BACKUP_FILE"
-# Prune backups older than 7 days
-find /tmp -name 'swarm-backup-*.tar.gz' -mtime +7 -delete 2>/dev/null
-BACKUP
-chmod +x /etc/cron.daily/swarmai-backup
 
 echo "=== Hive Setup Complete — status=$TAG_STATUS — $(date) ==="
 """

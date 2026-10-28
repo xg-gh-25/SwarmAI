@@ -1342,6 +1342,10 @@ if ! cmp -s /opt/swarmai/hive/swarmai-hive.service /etc/systemd/system/swarmai-h
   systemctl daemon-reload
 fi
 
+# The nightly workspace backup cron is gone: the Hive role never had write access to
+# backups/, so it never succeeded. A Hive provisioned before its removal still has it.
+rm -f /etc/cron.daily/swarmai-backup /tmp/swarm-backup-*.tar.gz
+
 systemctl restart swarmai-hive --no-block
 echo "Waiting for swarmai-hive to start..."
 for i in $(seq 1 30); do
