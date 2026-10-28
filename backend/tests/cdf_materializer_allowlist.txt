@@ -206,3 +206,4 @@ core/project_agent.py:check_sources  # exempt: project-agent source-check JSON (
 core/project_agent_draft.py:apply  # exempt: project-agent definition draft (YAML) awaiting the Brain Hub review card, not governed knowledge
 routers/ddd_brain.py:_confirm_agent  # exempt: confirms that project-agent draft on the review card (calls project_agent_draft.confirm)
 scripts/eval_runner.py:write_gate_manifest  # exempt: eval gate input-hash manifest
+core/project_agent_session.py:_run_one  # exempt: the gate subprocess I/O files in its own temp dir (in.json / err.txt)
