@@ -21,6 +21,12 @@ export interface SwarmOutRun {
   running: boolean | null;
   /** the Hive never named the session (the dispatch timed out): it may be running */
   session_unknown?: boolean;
+  /** From the Hive's own report of the session (backend swarm_out.run_state). "stopped"
+   *  = not working now: the Host cannot tell finished from failed or stopped. */
+  state?: 'waiting' | 'running' | 'stopped' | 'unknown';
+  /** why: e.g. waiting_input, question, preparing, idle, not_held, hive_stopped,
+   *  hive_silent, no_session_id */
+  state_reason?: string;
 }
 
 export interface SwarmOutQuestion {
@@ -67,12 +73,36 @@ export interface SwarmOutHive {
   region: string | null;
 }
 
+/** One Hive in the panel's fleet: names, status and the load a running one reports
+ *  (null when it is not running, or did not answer). Never an address or credential. */
+export interface SwarmOutFleetHive extends SwarmOutHive {
+  version: string | null;
+  instance_type: string | null;
+  /** null for a Hive that is not running */
+  reachable: boolean | null;
+  /** every session streaming on the Hive (its own jobs and web sessions too) */
+  streaming: number | null;
+  max_concurrent: number | null;
+  saturated: boolean | null;
+}
+
+export interface SwarmOutFleet {
+  hives: SwarmOutFleetHive[];
+  running: number;
+}
+
 export interface SwarmOutHives {
   hives: SwarmOutHive[];
   running: number;
 }
 
 export const swarmOutService = {
+  /** Every Hive with its load: what the panel's fleet and free slots read. No address
+   *  or credential (the rows are built from an allow-list of keys). */
+  async fleet(): Promise<SwarmOutFleet> {
+    const { data } = await api.get('/swarm-out/fleet');
+    return data as SwarmOutFleet;
+  },
   /** Names and status only: the panel never sees a Hive's address or credentials. */
   async hives(): Promise<SwarmOutHives> {
     const { data } = await api.get('/swarm-out/hives');

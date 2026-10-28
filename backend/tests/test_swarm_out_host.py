@@ -12,11 +12,11 @@ from hive import provisioner
 
 @pytest.fixture(autouse=True)
 def _no_running_hives_from_the_store(monkeypatch):
-    """list_runs also reads the running Hives from the Host's store; these tests give
-    their Hives through the dispatch log (a test that needs a store Hive sets it)."""
-    async def none():
-        return []
-    monkeypatch.setattr(swarm_out, "_running_hive_ids", none)
+    """list_runs also reads the Hives' status from the Host's store: here the tests'
+    Hive h1 is running (a test that needs another store sets it)."""
+    async def h1_running():
+        return {"h1": "running"}
+    monkeypatch.setattr(swarm_out, "_hive_statuses", h1_running)
 
 INST = {"id": "h1", "name": "worker-1", "status": "running", "cloudfront_domain": "abc123.cloudfront.net",
         "s3_bucket": "swarmai-hive-2361-us-east-1", "region": "us-east-1",
@@ -69,7 +69,7 @@ def patched(monkeypatch, tmp_path):
 
 
 def _use(monkeypatch, handler):
-    def client(inst):
+    def client(inst, timeout=None):
         return httpx.AsyncClient(base_url=swarm_out._base(inst), headers=swarm_out._auth(inst),
                                  transport=httpx.MockTransport(handler))
     monkeypatch.setattr(swarm_out, "_client", client)
@@ -419,7 +419,10 @@ def test_list_runs_leaves_running_unknown_when_the_hive_does_not_answer(monkeypa
         raise httpx.ConnectError("unreachable")
     _runs_env(monkeypatch, tmp_path, down, [OPEN_ASK])
     out = asyncio.run(swarm_out.list_runs())
-    assert all(r["running"] is None for r in out["runs"])
+    by = {r["session_id"]: r for r in out["runs"]}
+    # the Hive did not say: an open mirrored question still says waiting, the rest unknown
+    assert by["sess-1"]["state"] == "waiting" and by["sess-1"]["running"] is False
+    assert by["sess-2"]["running"] is None and by["sess-3"]["state"] == "unknown"
     assert len(out["asks"]) == 1                  # questions still listed
 
     def broken(request):

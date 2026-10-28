@@ -34,7 +34,9 @@ Each prints JSON; a refusal is `{"ok": false, "detail": "..."}`: tell the person
    and the title, and that its questions will appear in the Swarm Out panel. If it says
    the task "may be running", do not send it again: tell the person to check the Hive's
    own page first (a second dispatch would run the task twice).
-5. **Status.** `runs` lists what was sent and which are waiting on the person. A row
+5. **Status.** `runs` lists what was sent; each row's `state` is `waiting` (on the
+   person), `running`, `stopped` (not working now: finished, failed or stopped, the Host
+   cannot tell which) or `unknown` (the Hive did not answer), with `state_reason`. A row
    with `session_unknown` is a dispatch whose session the Hive never named.
 
 Never answer a Hive's question or approve its command yourself: there is no command for

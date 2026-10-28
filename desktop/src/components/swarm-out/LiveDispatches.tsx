@@ -1,19 +1,21 @@
 /**
- * LiveDispatches — the real part of the Swarm Out dashboard (v0).
+ * LiveDispatches — the run view of the Swarm Out panel, on real data only
+ * (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
  *
- * Reads /api/swarm-out/runs: the tasks this Host dispatched to Hives, and the
- * questions those Hives are waiting on (mirrored to S3 by the Hive's bridge).
- * The decision this panel answers is "does a Hive need me?", so open questions come
- * first, each with its answer controls; dispatched runs follow as one line each.
+ * It answers three things, in this order: does a Hive need me (the questions waiting,
+ * each with its answer controls — the one thing in the accent colour), can I send
+ * more work (the fleet and its free slots), and how are the runs I sent (running,
+ * stopped in the last 24 h, state unknown). What has no data source yet says TBD and
+ * which source is missing; nothing on this view is a sample.
  *
  * Everything a Hive wrote (question text, command, reason) is shown as plain text,
- * never rendered as markdown or HTML. Polls every 30 s while the dashboard is shown.
- * Design: docs/design/2026-10-27-swarm-out-v0-dispatch.md §3.4.
+ * never rendered as markdown or HTML. Polls /api/swarm-out/runs every 30 s while shown;
+ * the fleet comes from the panel (one poll of /api/swarm-out/fleet).
  */
-import { useCallback, useEffect, useState } from 'react';
-import { swarmOutService, type SwarmOutAsk, type SwarmOutQuestion, type SwarmOutRuns } from '../../services/swarmOut';
+import { useState } from 'react';
+import { swarmOutService, type SwarmOutAsk, type SwarmOutFleet, type SwarmOutQuestion, type SwarmOutRun } from '../../services/swarmOut';
+import { errorLabel, hiveStatusLabel, panelNumbers, runGroups, stateLabel, useRuns } from './live';
 
-const POLL_MS = 30_000;
 const card = 'rounded-xl border border-[var(--color-border)] bg-[var(--color-card)]';
 const muted = 'text-[var(--color-text-muted)]';
 const btn = 'px-2.5 py-1 rounded-md text-[12.5px] border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50';
@@ -140,57 +142,161 @@ function AskCard({ ask, onDone }: { ask: SwarmOutAsk; onDone: () => void }) {
   );
 }
 
-export function LiveDispatches({ hidden = false }: { hidden?: boolean }) {
-  const [data, setData] = useState<SwarmOutRuns | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      setData(await swarmOutService.runs());
-      setFailed(false);
-    } catch {
-      setFailed(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (hidden) return undefined;
-    void load();
-    const id = window.setInterval(() => { void load(); }, POLL_MS);
-    return () => window.clearInterval(id);
-  }, [hidden, load]);
-
-  const asks = data?.asks ?? [];
-  const runs = data?.runs ?? [];
+/** A part with no data source yet: its title and what is missing, demoted. */
+export function Tbd({ title, missing, testId }: { title: string; missing: string; testId?: string }) {
   return (
-    <section className="mb-4" data-testid="swarm-out-live">
-      <div className="flex items-baseline gap-2 mb-2">
-        <h3 className="m-0 text-[13px] font-semibold">真实派发</h3>
-        <span className={`text-[12px] ${muted}`}>
-          {asks.length ? `${asks.length} 个在等你` : '没有在等你的问题'} · 共 {runs.length} 个任务
-        </span>
-        <button type="button" className={`ml-auto ${btn}`} onClick={() => { void load(); }}>刷新</button>
+    <section className="mt-5" data-testid={testId ?? 'swarm-out-tbd'}>
+      <h3 className={`m-0 text-[13px] font-semibold ${muted}`}>{title}</h3>
+      <div className="mt-1 text-[12px] text-[var(--color-text-dim)]">TBD：{missing}</div>
+    </section>
+  );
+}
+
+function Num({ value, label, accent, testId }: { value: React.ReactNode; label: string; accent?: boolean; testId: string }) {
+  return (
+    <div className={`${card} px-4 py-3`} data-testid={testId}>
+      <div className={`text-[24px] font-semibold leading-none tabular-nums ${accent ? 'text-[var(--color-status-warning)]' : ''}`}>{value}</div>
+      <div className={`text-[12px] mt-1.5 ${muted}`}>{label}</div>
+    </div>
+  );
+}
+
+function Fleet({ fleet, failed }: { fleet: SwarmOutFleet | null; failed?: boolean }) {
+  const hives = fleet?.hives ?? [];
+  return (
+    <section className={`${card} mt-5`} data-testid="swarm-out-fleet">
+      <div className="flex items-baseline gap-2 px-4 pt-3 pb-1">
+        <h3 className="m-0 text-[13px] font-semibold">机群</h3>
+        <span className={`ml-auto text-[12px] ${muted}`}>占用 = Hive 上所有在跑的会话，包括它自己的</span>
       </div>
-      {failed && <div className={`text-[12px] ${muted}`}>读不到派发记录，稍后自动重试</div>}
-      {(data?.errors ?? []).map((e) => <div key={e} className="text-[12px] text-[var(--color-status-warning)]">{e}</div>)}
-      <div className="flex flex-col gap-2">
-        {asks.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={() => { void load(); }} />)}
-      </div>
-      {runs.length > 0 && (
-        <div className={`${card} mt-2 divide-y divide-[var(--color-border)]`}>
-          {runs.slice(0, 20).map((r) => (
-            <div key={r.dispatch_id} className="px-4 py-2 flex items-baseline gap-2 min-w-0" data-testid="swarm-out-run">
-              <span className="font-medium truncate min-w-0" title={r.title}>{r.title}</span>
-              {r.waiting && <span className="text-[12px] text-[var(--color-status-warning)] flex-shrink-0">在等你</span>}
-              {r.session_unknown && <span className={`text-[12px] flex-shrink-0 ${muted}`} data-testid="swarm-out-run-unknown">会话未确认，可能在跑</span>}
-              <span className={`ml-auto text-[12px] flex-shrink-0 ${muted}`}>{r.hive} · {when(r.sent_at)}</span>
-            </div>
-          ))}
+      {failed && <div className={`px-4 text-[12px] ${muted}`} data-testid="swarm-out-fleet-failed">读不到机群，稍后自动重试</div>}
+      {fleet === null ? (!failed && <div className={`px-4 pb-3 text-[12px] ${muted}`}>正在读…</div>) : (
+        <div className="grid grid-cols-[minmax(80px,180px)_minmax(0,1fr)_minmax(0,max-content)] items-center gap-x-3 gap-y-2 px-4 pt-1.5 pb-3">
+          {hives.map((h) => {
+            const up = h.status === 'running' && h.reachable && h.max_concurrent != null;
+            const status = h.status !== 'running' ? hiveStatusLabel(h.status)
+              : !h.reachable ? '连不上' : h.saturated ? `忙满 · 占用 ${h.streaming}/${h.max_concurrent}` : `占用 ${h.streaming}/${h.max_concurrent}`;
+            const filled = h.saturated ? (h.max_concurrent ?? 0) : (h.streaming ?? 0);
+            return (
+              <div key={h.name} className="contents" data-testid="swarm-out-fleet-hive">
+                <div className="font-medium min-w-0 truncate" title={h.name}>{h.name}
+                  <div className={`text-[11.5px] font-normal truncate ${muted}`}>{[h.version, h.instance_type].filter(Boolean).join(' · ')}</div>
+                </div>
+                <div className="flex gap-[4px] min-w-0" style={{ opacity: up ? 1 : 0.4 }}>
+                  {up && Array.from({ length: Math.min(h.max_concurrent ?? 0, 32) }, (_, i) => (
+                    <span key={i} className={`flex-1 min-w-[8px] max-w-[26px] h-[12px] rounded-[3px] border ${i < filled ? 'bg-[var(--color-status-success)] border-[var(--color-status-success)]' : 'bg-[var(--color-hover)] border-[var(--color-border)]'}`} />
+                  ))}
+                </div>
+                <div className={`text-[12px] text-right truncate min-w-0 ${h.status === 'running' && !h.reachable ? 'text-[var(--color-status-warning)]' : muted}`} title={status} data-testid="swarm-out-fleet-status">{status}</div>
+              </div>
+            );
+          })}
         </div>
       )}
-      {data && runs.length === 0 && (
-        <div className={`text-[12px] ${muted}`}>还没有派发过任务。在右边的对话里说要做什么，Swarm 会帮你派出去。</div>
+    </section>
+  );
+}
+
+function RunCard({ r }: { r: SwarmOutRun }) {
+  return (
+    <div className={`${card} px-3.5 py-3 min-w-0`} data-testid="swarm-out-run" data-state={r.state ?? 'unknown'}>
+      <div className="flex items-start gap-2 min-w-0">
+        <span className="font-medium min-w-0 flex-1 line-clamp-2 leading-[18px]" title={r.title}>{r.title}</span>
+        <span className={`text-[11.5px] whitespace-nowrap tabular-nums flex-shrink-0 ${muted}`}>{when(r.sent_at)}</span>
+      </div>
+      <div className={`text-[11.5px] mt-0.5 truncate ${muted}`}>
+        {r.hive} · <span data-testid={r.session_unknown ? 'swarm-out-run-unknown' : 'swarm-out-run-state'}>{stateLabel(r)}</span>
+      </div>
+    </div>
+  );
+}
+
+const runGrid = { gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))' };
+
+function RunGroup({ title, rows, empty }: { title: string; rows: SwarmOutRun[]; empty: string }) {
+  return (
+    <section className="mt-5" data-testid="swarm-out-run-group" data-group={title}>
+      <div className="flex items-baseline gap-2 mb-2">
+        <h3 className="m-0 text-[13px] font-semibold">{title}</h3>
+        {rows.length > 0 && <span className="text-[12px] text-[var(--color-text-dim)] tabular-nums">{rows.length}</span>}
+      </div>
+      {rows.length === 0 ? <div className={`text-[12.5px] ${muted}`}>{empty}</div> : (
+        <div className="grid gap-3" style={runGrid}>
+          {rows.map((r) => <RunCard key={r.dispatch_id} r={r} />)}
+        </div>
       )}
     </section>
+  );
+}
+
+function OpenHive({ onOpenHive }: { onOpenHive?: () => void }) {
+  return onOpenHive ? <button type="button" className={`ml-2 ${btn}`} onClick={onOpenHive} data-testid="swarm-out-open-hive-admin">打开 Hive 管理</button> : null;
+}
+
+export function LiveDispatches({ hidden = false, fleet = null, fleetFailed = false, onOpenHive, now }: {
+  hidden?: boolean; fleet?: SwarmOutFleet | null; fleetFailed?: boolean; onOpenHive?: () => void; now?: number;
+}) {
+  const { data, failed, reload } = useRuns(hidden);
+  const at = now ?? Date.now();
+  const asks = data?.asks ?? [];
+  const open = asks.filter((a) => !a.refused);
+  const refused = asks.filter((a) => a.refused);
+  const n = panelNumbers(data, fleet);
+  const groups = runGroups(data?.runs ?? [], at, asks);
+  const noRuns = !!data && data.runs.length === 0;
+  const dash = '—';
+  return (
+    <div data-testid="swarm-out-live">
+      {failed && <div className={`text-[12px] mb-2 ${muted}`}>读不到派发记录，稍后自动重试</div>}
+      {(data?.errors ?? []).map((e) => <div key={e} className="text-[12px] mb-1 text-[var(--color-status-warning)]">{errorLabel(e)}</div>)}
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }} data-testid="kpi-grid">
+        <Num testId="kpi-waiting" label="等你回答" accent={!!n.waiting || !!n.onHivePage}
+             value={<>{n.waiting ?? dash}{n.onHivePage ? <span className="text-[12.5px] font-medium ml-2" data-testid="kpi-on-hive-page">+{n.onHivePage} 个要去 Hive 页面处理</span> : null}</>} />
+        <Num testId="kpi-free" label="空位，可以马上派"
+             value={n.capacity ? <>{n.capacity.free}<span className={`text-[13px] font-medium ml-1 ${muted}`}>/ {n.capacity.total}</span></> : dash} />
+        <Num testId="kpi-running" label="我派出的，在跑" value={n.running ?? dash} />
+      </div>
+
+      <section className="mt-5" data-testid="swarm-out-waiting">
+        <div className="flex items-baseline gap-2 mb-2">
+          <h3 className="m-0 text-[13px] font-semibold">等你</h3>
+          <button type="button" className={`ml-auto ${btn}`} onClick={reload}>刷新</button>
+        </div>
+        {data && open.length === 0 && groups.waitingUnasked.length === 0 && <div className={`text-[12.5px] ${muted}`}>没有在等你的问题</div>}
+        <div className="flex flex-col gap-2">
+          {open.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
+        </div>
+        {groups.waitingUnasked.length > 0 && (
+          <div className="mt-2" data-testid="swarm-out-waiting-unasked">
+            <div className={`text-[12px] mb-1.5 ${muted}`}>Hive 说这些在等人，但问题还没传到这里：去 Hive 页面处理<OpenHive onOpenHive={onOpenHive} /></div>
+            <div className="grid gap-3" style={runGrid}>
+              {groups.waitingUnasked.map((r) => <RunCard key={r.dispatch_id} r={r} />)}
+            </div>
+          </div>
+        )}
+        {refused.length > 0 && (
+          <div className="mt-3" data-testid="swarm-out-refused-group">
+            <div className={`text-[12px] mb-1.5 ${muted}`}>要去 Hive 页面处理（回答没有送达，这里不能再回答）<OpenHive onOpenHive={onOpenHive} /></div>
+            <div className="flex flex-col gap-2">
+              {refused.map((a) => <AskCard key={`${a.hive_id}/${a.request_id}`} ask={a} onDone={reload} />)}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <Fleet fleet={fleet} failed={fleetFailed} />
+
+      {noRuns ? (
+        <div className={`mt-5 text-[12px] ${muted}`}>还没有派发过任务。在右边的对话里说要做什么，Swarm 会帮你派出去。</div>
+      ) : (
+        <>
+          <RunGroup title="在跑" rows={groups.running} empty="没有在跑的任务" />
+          <RunGroup title="不在跑了（24 小时内派出的）" rows={groups.stopped} empty="24 小时内派出的都还在跑，或在等你" />
+          {groups.unknown.length > 0 && <RunGroup title="状态未知" rows={groups.unknown} empty="" />}
+        </>
+      )}
+      <Tbd title="run 的结果、五维审计和 trace" missing="本机还没有从 Hive 取回每个 run 的结果和审计：不在跑了的 run 说不出是做完、失败还是被停" />
+      <Tbd title="已安排" missing="还没有定时派发" />
+    </div>
   );
 }

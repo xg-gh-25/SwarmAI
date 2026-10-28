@@ -11,7 +11,7 @@
  */
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import type { RunTrace } from './mockData';
+import type { RunTrace } from './shapes';
 import { POPOVER_CLASS, usePopover } from './usePopover';
 
 const muted = 'text-[var(--color-text-muted)]';

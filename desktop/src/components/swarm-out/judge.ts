@@ -4,7 +4,7 @@
  * BLOCK (Run Isolation and Quality are hard constraints), otherwise the number of
  * WARNs, otherwise PASS; N/A and PENDING do not count.
  */
-import { DIMENSIONS, type RunJudge, type Verdict } from './mockData';
+import { DIMENSIONS, type RunJudge, type Verdict } from './shapes';
 
 export type JudgeState = 'PASS' | 'WARN' | 'BLOCK';
 

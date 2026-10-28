@@ -55,6 +55,16 @@ SESSION_ID_WAIT_S = 60       # hang-guard: the Hive names the session within sec
 # its markers say (e.g. the Hive was destroyed before it could write closed/).
 ASK_MAX_AGE_S = 4 * 3600 + 5 * 60
 HTTP_TIMEOUT_S = 20
+# A status probe (session state, admission state) is a hang-guard too: a Hive that does
+# not answer within this is reported as not reachable, so one dead Hive never holds
+# up the panel's or the tab badge's poll.
+PROBE_TIMEOUT_S = 5
+# Sanity bound on the counts a Hive reports (Hive-written data is untrusted).
+MAX_REPORTED_SESSIONS = 1000
+# The S3 read of one Hive's questions, bounded for the same reason as the probes.
+QUESTIONS_TIMEOUT_S = 10
+# A session activity the Hive reports (a word like idle, streaming, preparing).
+_ACTIVITY_RE = re.compile(r"^[a-z_]{1,32}$")
 
 UNATTENDED_PREAMBLE = (
     "[Swarm Out] This task was dispatched to you and runs unattended: nobody is "
@@ -100,14 +110,14 @@ async def hives() -> dict[str, Any]:
     return {"hives": rows, "running": sum(1 for r in rows if r["status"] == "running")}
 
 
-async def _running_hive_ids() -> list[str]:
-    """Every Hive this Host knows that is running: each one's questions are listed,
+async def _hive_statuses() -> dict[str, str]:
+    """Every Hive this Host knows, id -> status. Each running one's questions are listed,
     whether or not anything was ever dispatched to it from here."""
     import aiosqlite
     async with aiosqlite.connect(_db_path()) as conn:
         await conn.execute("PRAGMA busy_timeout = 3000")
-        cur = await conn.execute("SELECT id FROM hive_instances WHERE status = 'running'")
-        return [r[0] for r in await cur.fetchall()]
+        cur = await conn.execute("SELECT id, status FROM hive_instances")
+        return {r[0]: r[1] for r in await cur.fetchall()}
 
 
 async def _instance(hive_ref: str) -> dict[str, Any]:
@@ -141,9 +151,9 @@ def _validate_instance(inst: dict[str, Any], acct: Optional[dict[str, Any]]) -> 
     return {**inst, "cloudfront_domain": domain, "_account": acct}
 
 
-def _client(inst: dict[str, Any]) -> httpx.AsyncClient:
+def _client(inst: dict[str, Any], timeout: float = HTTP_TIMEOUT_S) -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=_base(inst), headers=_auth(inst),
-                             timeout=HTTP_TIMEOUT_S, follow_redirects=False)
+                             timeout=timeout, follow_redirects=False)
 
 
 def _auth(inst: dict[str, Any]) -> dict[str, str]:
@@ -359,68 +369,136 @@ def _open_asks(s3, bucket: str, hive: str) -> list[dict[str, Any]]:
     return out
 
 
-async def _streaming_sessions(inst: dict[str, Any]) -> Optional[set[str]]:
-    """The session ids streaming on the Hive now (its own streaming-state endpoint, the
-    same one its tabs read), or None when the Hive did not say."""
-    async with _client(inst) as client:
+async def _session_states(inst: dict[str, Any]) -> Optional[dict[str, dict[str, Any]]]:
+    """Each session the Hive holds, from its own streaming-state endpoint (the one its
+    tabs read): ``{session_id: {streaming, waiting_input, activity}}``, or None when the
+    Hive did not say. Only those three fields are kept, and only with the expected
+    types (Hive-written data)."""
+    async with _client(inst, PROBE_TIMEOUT_S) as client:
         r = await client.get("/api/chat/sessions/streaming-state")
     if r.status_code != 200:
         return None
     sessions = r.json().get("sessions")
     if not isinstance(sessions, dict):
         return None
-    return {sid for sid, e in sessions.items() if isinstance(e, dict) and e.get("streaming") is True}
+    out: dict[str, dict[str, Any]] = {}
+    for sid, e in sessions.items():
+        if not isinstance(sid, str) or not isinstance(e, dict):
+            continue
+        activity = e.get("activity")
+        out[sid] = {"streaming": e.get("streaming") is True,
+                    "waiting_input": e.get("waiting_input") is True,
+                    "activity": activity if isinstance(activity, str) and _ACTIVITY_RE.match(activity) else None}
+    return out
+
+
+def run_state(row: dict[str, Any], hive_status: Optional[str],
+              sessions: Optional[dict[str, dict[str, Any]]], has_open_ask: bool) -> tuple[str, str]:
+    """(state, reason) of one dispatched run: waiting | running | stopped | unknown.
+
+    The Hive's own report of the session decides when there is one; an open (not
+    refused) mirrored question decides ``waiting`` only when the Hive could not be
+    asked. "stopped" means the session is not working now: the Host cannot tell a
+    finished run from a failed or stopped one."""
+    if hive_status == "gone":
+        return "stopped", "hive_gone"
+    if hive_status is not None and hive_status != "running":
+        return "stopped", "hive_stopped"
+    if not row.get("session_id"):
+        return "unknown", "no_session_id"
+    if sessions is None:
+        return ("waiting", "question") if has_open_ask else ("unknown", "hive_silent")
+    e = sessions.get(row["session_id"])
+    if e is None:
+        return "stopped", "not_held"
+    if e["waiting_input"]:
+        return "waiting", "waiting_input"
+    if e["streaming"] or e["activity"] not in (None, "idle", "waiting_input"):
+        return "running", e["activity"] if e["activity"] not in (None, "idle") else "streaming"
+    return "stopped", "idle"
+
+
+async def _read_hive(hive_id: str) -> tuple[list[dict[str, Any]], Optional[dict[str, dict[str, Any]]], list[str]]:
+    """One running Hive's open questions and session states, and what went wrong."""
+    errors: list[str] = []
+    asks: list[dict[str, Any]] = []
+    try:
+        inst = await _instance(hive_id)
+    except SwarmOutError as e:
+        return [], None, [str(e)]
+    except Exception as e:                          # store unreadable: show it, keep the list
+        logger.warning("swarm_out: reading the Hive record failed (%s)", type(e).__name__)
+        return [], None, ["could not read a Hive record"]
+
+    def read_asks() -> list[dict[str, Any]]:
+        s3 = _s3(inst)
+        return _open_asks(s3, inst["s3_bucket"], inst["name"])  # cleaned
+
+    async def questions() -> None:
+        try:
+            # bounded like the probes: a slow S3 must not hold up the others' poll (the
+            # worker thread may finish later; its answer is then dropped)
+            for rec in await asyncio.wait_for(asyncio.to_thread(read_asks), QUESTIONS_TIMEOUT_S):
+                rec["hive_id"] = inst["id"]
+                asks.append(rec)
+        except SwarmOutError as e:
+            errors.append(str(e))
+        except Exception as e:                      # S3 unreachable or slow: show it, keep the list
+            logger.warning("swarm_out: listing questions failed (%s)", type(e).__name__)
+            errors.append(f"could not read the questions of Hive {inst['name']}")
+
+    async def states() -> Optional[dict[str, dict[str, Any]]]:
+        try:
+            return await _session_states(inst)
+        except Exception as e:                      # Hive unreachable: state unknown
+            logger.warning("swarm_out: reading session state failed (%s)", type(e).__name__)
+            return None
+
+    _, sessions = await asyncio.gather(questions(), states())
+    return asks, sessions, errors
+
+
+async def _statuses_or_none(errors: list[str]) -> Optional[dict[str, str]]:
+    try:
+        return await _hive_statuses()
+    except Exception as e:                          # store unreadable: the log's Hives only
+        logger.warning("swarm_out: listing the Hives failed (%s)", type(e).__name__)
+        errors.append("could not list the running Hives")
+        return None
 
 
 async def list_runs() -> dict[str, Any]:
     """Dispatch log rows (newest first) and the open questions of every running Hive
     and of every Hive in the log.
 
-    Each row says ``waiting`` (its session has an open question) and ``running`` (its
-    session is streaming on the Hive now): True / False, or None when that Hive could
-    not be asked, never a guess. A session the Hive no longer holds is not running."""
+    Each row has ``state`` / ``state_reason`` (run_state) and, derived from it,
+    ``waiting`` and ``running`` (True / False, or None when the state is unknown,
+    never a guess). The Hives are read concurrently, each status probe bounded by
+    PROBE_TIMEOUT_S."""
     rows = list(reversed(await asyncio.to_thread(_read_log)))
-    asks: list[dict[str, Any]] = []
     errors: list[str] = []
-    streaming: dict[str, Optional[set[str]]] = {}
-    try:
-        running = await _running_hive_ids()
-    except Exception as e:                          # store unreadable: the log's Hives only
-        logger.warning("swarm_out: listing running Hives failed (%s)", type(e).__name__)
-        errors.append("could not list the running Hives")
-        running = []
-    # every running Hive, plus a Hive in the log that is not running (it says so)
-    for hive_id in sorted({r["hive_id"] for r in rows} | set(running)):
-        try:
-            inst = await _instance(hive_id)
-        except SwarmOutError as e:
-            errors.append(str(e))
-            continue
-        except Exception as e:                      # store unreadable: show it, keep the list
-            logger.warning("swarm_out: reading the Hive record failed (%s)", type(e).__name__)
-            errors.append("could not read questions from one Hive")
-            continue
-        try:
-            s3 = await asyncio.to_thread(_s3, inst)
-            for rec in await asyncio.to_thread(_open_asks, s3, inst["s3_bucket"], inst["name"]):  # cleaned
-                rec["hive_id"] = inst["id"]
-                asks.append(rec)
-        except SwarmOutError as e:
-            errors.append(str(e))
-        except Exception as e:                      # S3 unreachable: show it, keep the list
-            logger.warning("swarm_out: listing questions failed (%s)", type(e).__name__)
-            errors.append("could not read questions from one Hive")
-        try:
-            streaming[hive_id] = await _streaming_sessions(inst)
-        except Exception as e:                      # Hive unreachable: running unknown
-            logger.warning("swarm_out: reading session state failed (%s)", type(e).__name__)
-            streaming[hive_id] = None
-    by_session = {(a["hive_id"], a.get("session_id")): a for a in asks if not a.get("refused")}
+    statuses = await _statuses_or_none(errors)
+    if statuses is None:                            # store unreadable: ask the log's Hives
+        status_of = {r["hive_id"]: None for r in rows}
+    else:                                           # a log Hive the store no longer has is gone
+        status_of = {**{r["hive_id"]: "gone" for r in rows}, **statuses}
+    # every running Hive, and the log's Hives when the store could not say
+    targets = sorted(h for h, st in status_of.items() if st in ("running", None))
+    results = await asyncio.gather(*(_read_hive(h) for h in targets))
+    asks: list[dict[str, Any]] = []
+    sessions_of: dict[str, Optional[dict[str, dict[str, Any]]]] = {}
+    for hive_id, (hive_asks, sessions, errs) in zip(targets, results):
+        asks.extend(hive_asks)
+        sessions_of[hive_id] = sessions
+        errors.extend(errs)
+    open_asks = {(a["hive_id"], a.get("session_id")) for a in asks if not a.get("refused")}
     for r in rows:
-        r["waiting"] = (r["hive_id"], r["session_id"]) in by_session
-        live = streaming.get(r["hive_id"])
-        # a dispatch whose session was never named cannot be looked up: unknown
-        r["running"] = None if live is None or not r.get("session_id") else r["session_id"] in live
+        state, reason = run_state(r, status_of.get(r["hive_id"]),
+                                  sessions_of.get(r["hive_id"]),
+                                  (r["hive_id"], r.get("session_id")) in open_asks)
+        r["state"], r["state_reason"] = state, reason
+        r["waiting"] = state == "waiting"
+        r["running"] = None if state == "unknown" else state == "running"
     # every prompt on the Hive is mirrored (its own jobs and web sessions too): each
     # ask names the dispatch it belongs to, or None for one this Host did not send.
     # A dispatch whose session was never named (it timed out) may own an unmatched
@@ -435,6 +513,62 @@ async def list_runs() -> dict[str, Any]:
         a["dispatch_title"] = titles.get((a["hive_id"], a.get("session_id")))
         a["possible_dispatch_title"] = unnamed.get(a["hive_id"]) if a["dispatch_title"] is None else None
     return {"runs": rows, "asks": asks, "errors": errors}
+
+
+FLEET_KEYS = ("name", "status", "version", "region", "instance_type",
+              "reachable", "streaming", "max_concurrent", "saturated")
+
+
+def _count(v: Any, low: int) -> Optional[int]:
+    return v if isinstance(v, int) and not isinstance(v, bool) and low <= v <= MAX_REPORTED_SESSIONS else None
+
+
+async def _admission(hive_id: str) -> Optional[dict[str, Any]]:
+    """A running Hive's admission state, validated, or None when it did not answer
+    properly within PROBE_TIMEOUT_S."""
+    try:
+        inst = await _instance(hive_id)
+        async with _client(inst, PROBE_TIMEOUT_S) as client:
+            r = await client.get("/api/chat/sessions/admission-state")
+        if r.status_code != 200:
+            return None
+        d = r.json()
+    except Exception as e:                          # unreachable, timed out, not JSON
+        logger.warning("swarm_out: admission probe failed (%s)", type(e).__name__)
+        return None
+    if not isinstance(d, dict):
+        return None
+    streaming, cap, saturated = _count(d.get("streaming_count"), 0), _count(d.get("max_concurrent"), 1), d.get("saturated")
+    if streaming is None or cap is None or not isinstance(saturated, bool):
+        return None
+    return {"streaming": streaming, "max_concurrent": cap, "saturated": saturated}
+
+
+async def fleet() -> dict[str, Any]:
+    """Every Hive this Host knows, with what a running one reports about its load:
+    the Swarm Out panel's fleet. Each row is built from FLEET_KEYS only, never an
+    address or a credential. Running Hives are probed concurrently."""
+    import aiosqlite
+    async with aiosqlite.connect(_db_path()) as conn:
+        await conn.execute("PRAGMA busy_timeout = 3000")
+        cur = await conn.execute(
+            "SELECT id, name, status, version, region, instance_type FROM hive_instances ORDER BY name")
+        found = [dict(zip(("id", "name", "status", "version", "region", "instance_type"), r))
+                 for r in await cur.fetchall()]
+    running = [h for h in found if h["status"] == "running"]
+    probes = dict(zip([h["id"] for h in running],
+                      await asyncio.gather(*(_admission(h["id"]) for h in running))))
+    out = []
+    for h in found:
+        row = {k: h.get(k) for k in ("name", "status", "version", "region", "instance_type")}
+        if h["status"] == "running":
+            p = probes.get(h["id"])
+            row.update({"reachable": p is not None, "streaming": p and p["streaming"],
+                        "max_concurrent": p and p["max_concurrent"], "saturated": p and p["saturated"]})
+        else:
+            row.update({"reachable": None, "streaming": None, "max_concurrent": None, "saturated": None})
+        out.append({k: row[k] for k in FLEET_KEYS})
+    return {"hives": out, "running": len(running)}
 
 
 def _check_answer(rec: dict[str, Any], answers: Any, decision: Any) -> dict[str, Any]:

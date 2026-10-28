@@ -63,6 +63,12 @@ async def hives() -> dict[str, Any]:
     return await _call(swarm_out.hives())
 
 
+@router.get("/fleet")
+async def fleet() -> dict[str, Any]:
+    _require_desktop()
+    return await _call(swarm_out.fleet())
+
+
 @router.get("/runs")
 async def runs() -> dict[str, Any]:
     _require_desktop()

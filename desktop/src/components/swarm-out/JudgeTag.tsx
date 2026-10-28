@@ -8,7 +8,7 @@
  * Popover behaviour (placement, Escape, focus, scroll) is shared: ./usePopover.
  */
 import { createPortal } from 'react-dom';
-import { DIMENSIONS, DIMENSION_ROLE, type RunJudge, type Verdict } from './mockData';
+import { DIMENSIONS, DIMENSION_ROLE, type RunJudge, type Verdict } from './shapes';
 import { judgeState, judgeSummary } from './judge';
 import { POPOVER_CLASS, usePopover } from './usePopover';
 
@@ -72,8 +72,8 @@ export function JudgeTag({ judge, title }: { judge: RunJudge; title: string }) {
               ))}
             </tbody>
           </table>
-          {/* every judge shown today is sample data (mockData): the popover must not
-              claim a source it does not have yet (fixing spec J4) */}
+          {/* no judge has a real source yet (run audits do not come back from the Hive,
+              and the live panel renders none): the popover must not claim one (fixing spec J4) */}
           <div className="mt-2 text-[11.5px] text-[var(--color-text-dim)]" data-testid="judge-source">
             示例数据，还没正式上线。上线后由代码从 run 事件生成，不做综合分，任一硬约束 BLOCK 整体 BLOCK。
           </div>

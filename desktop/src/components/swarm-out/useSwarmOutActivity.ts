@@ -2,13 +2,16 @@
  * What the pinned Swarm Out tab shows about the work on the Hives: how many dispatched
  * runs are running there now, and how many questions are waiting for the person.
  *
- * Read from /api/swarm-out/runs, the same source as the dashboard's 真实派发 section:
- * `waiting` = open questions (asks) the person can still answer here: an ask whose answer
- * the Hive refused is listed as not delivered but is not waiting (it is settled on the
- * Hive's own page or expires). `running` = runs whose session is streaming on its
- * Hive (`running === true`). A run waiting on a question is not running, and a run
- * whose Hive could not be asked (`running` null) is not counted: the tab never claims
- * work it has not seen.
+ * Read from /api/swarm-out/runs, the same source as the panel (live.ts uses this
+ * function for its own numbers):
+ * - `waiting` = what waits on the person: the open questions (asks), plus a run the
+ *   Hive says is waiting whose question has not been mirrored here (no ask at all). An
+ *   ask whose answer the Hive refused is listed as not delivered but does not count
+ *   here: it is settled on the Hive's own page or expires.
+ * - `running` = runs whose state is running on their Hive (backend run_state: streaming,
+ *   preparing, starting or stopping). A run waiting on the person is not running, and a
+ *   run whose state is unknown (`running` null) is not counted: the tab never claims
+ *   work it has not seen.
  *
  * It polls while the tab exists, also when Swarm Out is not the active tab — that is
  * when the signal matters. Null until the first answer; a failed poll keeps the last
@@ -24,9 +27,15 @@ export interface SwarmOutActivity {
   waiting: number;
 }
 
+/** Runs the Hive says wait on the person whose question has not reached this Host. */
+export function waitingUnasked(d: SwarmOutRuns) {
+  const asked = new Set(d.asks.map((a) => `${a.hive_id}/${a.session_id}`));
+  return d.runs.filter((r) => (r.state ? r.state === 'waiting' : r.waiting) && !asked.has(`${r.hive_id}/${r.session_id}`));
+}
+
 export function activityOf(d: SwarmOutRuns): SwarmOutActivity {
   return {
-    waiting: d.asks.filter((a) => !a.refused).length,
+    waiting: d.asks.filter((a) => !a.refused).length + waitingUnasked(d).length,
     running: d.runs.filter((r) => r.running === true && !r.waiting).length,
   };
 }

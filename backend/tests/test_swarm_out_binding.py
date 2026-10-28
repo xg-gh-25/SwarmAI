@@ -23,11 +23,11 @@ from core.swarm_out_bridge import MAX_COMMAND_CHARS, _ask_record, approval_diges
 
 @pytest.fixture(autouse=True)
 def _no_running_hives_from_the_store(monkeypatch):
-    """list_runs also reads the running Hives from the Host's store; these tests give
-    their Hives through the dispatch log (a test that needs a store Hive sets it)."""
-    async def none():
-        return []
-    monkeypatch.setattr(swarm_out, "_running_hive_ids", none)
+    """list_runs also reads the Hives' status from the Host's store: here the tests'
+    Hive h1 is running (a test that needs another store sets it)."""
+    async def h1_running():
+        return {"h1": "running"}
+    monkeypatch.setattr(swarm_out, "_hive_statuses", h1_running)
 
 NOW = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 INST = {"id": "h1", "name": "worker-1", "status": "running", "cloudfront_domain": "abc123.cloudfront.net",
@@ -186,7 +186,7 @@ def test_a_read_timeout_is_recorded_like_a_timeout(monkeypatch, tmp_path):
         if request.url.path == "/api/chat/sessions/admission-state":
             return httpx.Response(200, json={"saturated": False})
         raise httpx.ReadTimeout("slow", request=request)
-    monkeypatch.setattr(swarm_out, "_client", lambda inst: httpx.AsyncClient(
+    monkeypatch.setattr(swarm_out, "_client", lambda inst, timeout=None: httpx.AsyncClient(
         base_url=swarm_out._base(inst), transport=httpx.MockTransport(handler)))
     with pytest.raises(swarm_out.SwarmOutError, match="may be running"):
         asyncio.run(swarm_out.dispatch("worker-1", "Fix it", "do X"))
@@ -277,11 +277,11 @@ def test_a_dispatch_with_no_session_id_is_not_reported_as_stopped(monkeypatch):
         return swarm_out._validate_instance(INST, {"id": "a1"})
 
     async def live(inst):
-        return {"s1"}
+        return {"s1": {"streaming": True, "waiting_input": False, "activity": "streaming"}}
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [])
-    monkeypatch.setattr(swarm_out, "_streaming_sessions", live)
+    monkeypatch.setattr(swarm_out, "_session_states", live)
     out = asyncio.run(swarm_out.list_runs())
     assert {r["dispatch_id"]: r["running"] for r in out["runs"]} == {"d1": True, "d2": None}
 
@@ -290,19 +290,19 @@ def test_a_running_hive_never_dispatched_to_still_shows_its_questions(monkeypatc
     monkeypatch.setattr(swarm_out, "_read_log", lambda: [])
 
     async def running():
-        return ["h1"]
+        return {"h1": "running"}
 
     async def fake_instance(ref):
         return swarm_out._validate_instance(INST, {"id": "a1"})
 
     async def live(inst):
-        return set()
-    monkeypatch.setattr(swarm_out, "_running_hive_ids", running)
+        return {}
+    monkeypatch.setattr(swarm_out, "_hive_statuses", running)
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [
         {"kind": "approval", "session_id": "s7", "request_id": "r7"}])
-    monkeypatch.setattr(swarm_out, "_streaming_sessions", live)
+    monkeypatch.setattr(swarm_out, "_session_states", live)
     out = asyncio.run(swarm_out.list_runs())
     assert [a["request_id"] for a in out["asks"]] == ["r7"]
     assert out["asks"][0]["dispatch_title"] is None and out["errors"] == []
@@ -317,7 +317,7 @@ def test_an_unreadable_store_keeps_the_logs_hives(monkeypatch):
 
     async def fake_instance(ref):
         return swarm_out._validate_instance(INST, {"id": "a1"})
-    monkeypatch.setattr(swarm_out, "_running_hive_ids", broken)
+    monkeypatch.setattr(swarm_out, "_hive_statuses", broken)
     monkeypatch.setattr(swarm_out, "_instance", fake_instance)
     monkeypatch.setattr(swarm_out, "_s3", lambda inst: None)
     monkeypatch.setattr(swarm_out, "_open_asks", lambda s3, b, h: [

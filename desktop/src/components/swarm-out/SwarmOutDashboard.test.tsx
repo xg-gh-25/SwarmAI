@@ -1,137 +1,200 @@
 /**
- * Swarm Out dashboard + Autonomy Judge tag.
+ * Swarm Out panel on real data (design docs/design/2026-10-28-swarm-out-live-dashboard.md).
  *
- * Questions: does the tag show the worst verdict (any BLOCK → BLOCK, else the WARN
- * count, else ✓; N/A and PENDING not counted) rather than an average; does a click
- * open the five-dimension matrix and Esc close it; does the dashboard say its data is
- * a sample and switch between its two views; does every prepared run carry its trace
- * (Brain → Agent → Context → Hive → Report + time and tokens), with a missing part
- * saying so (无 Brain, Report 生成中) instead of vanishing; with no running Hive,
- * does the run view show the setup guide in place of the live section, opening the Hive
- * surface from its button, and does the header count only real Hives.
+ * Questions: with no running Hive, does the setup guide replace the run view (and the
+ * header count only real Hives, from the fleet); are the four numbers the panel's
+ * rules over /runs and /fleet (and the waiting / running ones the tab badge's own);
+ * does each run sit in the group of its state; does the fleet say what each Hive
+ * reports (occupied, full, unreachable, stopped); is every part without a data source
+ * marked TBD with what is missing, and no sample left anywhere; does the history count
+ * runs per local day and list the week's runs by Hive.
  */
-import { describe, it, expect, vi } from 'vitest';
-import { swarmOutService } from '../../services/swarmOut';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { JudgeTag } from './JudgeTag';
-import { judgeState, judgeSummary } from './judge';
+// Local-day bucketing is only tested if local time is not UTC.
+process.env.TZ = 'Asia/Shanghai';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { swarmOutService, type SwarmOutFleet, type SwarmOutRun, type SwarmOutRuns } from '../../services/swarmOut';
 import { SwarmOutDashboard } from './SwarmOutDashboard';
-import { TraceTags } from './TraceTags';
-import { BY_TYPE, HISTORY_RUNS, type HistoryRun, type RunJudge, type RunTrace } from './mockData';
-import { groupHistory, NO_AGENT, NO_BRAIN } from './history';
+import { capacity, dailySent, panelNumbers, runGroups } from './live';
+import { activityOf, waitingUnasked } from './useSwarmOutActivity';
 
-// The dashboard's live section polls /api/swarm-out/runs; these tests cover the sample
-// parts, so the service answers with nothing (LiveDispatches.test.tsx covers the live part).
 vi.mock('../../services/swarmOut', () => ({
-  swarmOutService: {
-    runs: vi.fn(async () => ({ runs: [], asks: [], errors: [] })),
-    answer: vi.fn(),
-    hives: vi.fn(async () => ({ hives: [{ name: 'w1', status: 'running', region: 'us-east-1' }], running: 1 })),
-  },
+  swarmOutService: { runs: vi.fn(), fleet: vi.fn(), answer: vi.fn(), hives: vi.fn() },
 }));
 
-const judge = (verdicts: RunJudge['verdicts']): RunJudge => ({
-  outcome: 'COMPLETED · NOT_LANDED · NOT PUSH READY',
-  verdicts,
-  numbers: ['iso', 'q', 'a', 's', 't'],
+const NOW = new Date(2026, 9, 28, 12, 0).getTime();   // local time
+const ago = (h: number) => new Date(NOW - h * 3600_000).toISOString();
+
+const run = (id: string, state: SwarmOutRun['state'], over: Partial<SwarmOutRun> = {}): SwarmOutRun => ({
+  dispatch_id: id, hive_id: 'h1', hive: 'explorer', session_id: `s-${id}`, title: `task ${id}`,
+  origin: 'swarm-out', sent_at: ago(1), state, state_reason: state === 'running' ? 'streaming' : 'idle',
+  waiting: state === 'waiting', running: state === 'unknown' ? null : state === 'running', ...over,
 });
 
-describe('judgeState — the worst verdict, never an average', () => {
-  it('all PASS → PASS', () => {
-    expect(judgeState(['PASS', 'PASS', 'PASS', 'PASS', 'PASS'])).toEqual({ state: 'PASS', warns: 0 });
+const hive = (name: string, over: Partial<SwarmOutFleet['hives'][number]> = {}) => ({
+  name, status: 'running', region: 'us-east-1', version: '2.3.0-hive2', instance_type: 'm7g.xlarge',
+  reachable: true, streaming: 1, max_concurrent: 4, saturated: false, ...over,
+});
+
+const FLEET: SwarmOutFleet = {
+  running: 3,
+  hives: [hive('explorer'), hive('demo', { streaming: 4, saturated: true }), hive('flaky', { reachable: false, streaming: null, max_concurrent: null, saturated: null }),
+    hive('old', { status: 'stopped', reachable: null, streaming: null, max_concurrent: null, saturated: null })],
+};
+
+const ask = (id: string, refused = false) => ({
+  kind: 'approval' as const, hive: 'explorer', hive_id: 'h1', session_id: `s-${id}`, request_id: id,
+  asked_at: ago(1), command: 'ls', reason: 'r', tool_name: 'Bash', truncated: false, shown_sha256: 'x',
+  dispatch_title: `task ${id}`, ...(refused ? { refused: true } : {}),
+});
+
+const RUNS: SwarmOutRuns = {
+  runs: [run('a', 'running'), run('b', 'waiting'), run('c', 'stopped'), run('d', 'stopped', { sent_at: ago(30) }),
+    run('e', 'unknown', { state_reason: 'hive_silent' }), run('f', 'stopped', { state_reason: 'hive_stopped' })],
+  asks: [ask('b'), ask('z', true)],
+  errors: [],
+};
+
+beforeEach(() => {
+  vi.mocked(swarmOutService.runs).mockResolvedValue(RUNS);
+  vi.mocked(swarmOutService.fleet).mockResolvedValue(FLEET);
+});
+
+describe('the panel numbers', () => {
+  it('free slots: over the running Hives that answered, a full one has none, never negative', () => {
+    expect(capacity(FLEET)).toEqual({ free: 3, total: 8 });
+    expect(capacity({ running: 1, hives: [hive('x', { streaming: 6, max_concurrent: 4, saturated: false })] })).toEqual({ free: 0, total: 4 });
+    expect(capacity({ running: 1, hives: [hive('x', { reachable: false })] })).toBeNull();
   });
-  it('N/A and PENDING do not count against the run', () => {
-    expect(judgeState(['PASS', 'NA', 'PASS', 'PASS', 'PENDING'])).toEqual({ state: 'PASS', warns: 0 });
+
+  it('waiting and running are the tab badge\'s counts; a refused ask is apart', () => {
+    const n = panelNumbers(RUNS, FLEET);
+    expect({ waiting: n.waiting, running: n.running }).toEqual(activityOf(RUNS));
+    expect(n.waiting).toBe(1);          // b; the refused ask z is not waiting here
+    expect(n.onHivePage).toBe(1);
+    expect(n.running).toBe(1);
+    expect(runGroups(RUNS.runs, NOW, RUNS.asks).stopped.map((r) => r.dispatch_id)).toEqual(['c', 'f']);   // d: 30 h ago
   });
-  it('WARNs are counted', () => {
-    expect(judgeState(['PASS', 'WARN', 'PASS', 'PASS', 'WARN'])).toEqual({ state: 'WARN', warns: 2 });
+
+  it('a run waiting with no question mirrored counts as waiting and is listed; a refused one is not', () => {
+    const d: SwarmOutRuns = { runs: [run('w1', 'waiting'), run('w2', 'waiting')], asks: [ask('w2', true)], errors: [] };
+    expect(waitingUnasked(d).map((r) => r.dispatch_id)).toEqual(['w1']);
+    expect(activityOf(d).waiting).toBe(1);
+    expect(runGroups(d.runs, NOW, d.asks).waitingUnasked.map((r) => r.dispatch_id)).toEqual(['w1']);
   });
-  it('one BLOCK makes the run BLOCK, whatever else passes', () => {
-    expect(judgeState(['PASS', 'BLOCK', 'PASS', 'PASS', 'PASS']).state).toBe('BLOCK');
+
+  it('a run in an unknown state is in no number; shown within 24 h, or when its session was never named', () => {
+    const g = runGroups([run('u1', 'unknown'), run('u2', 'unknown', { sent_at: ago(40) }),
+      run('u3', 'unknown', { sent_at: ago(40), session_id: null, session_unknown: true })], NOW);
+    expect(g.unknown.map((r) => r.dispatch_id)).toEqual(['u1', 'u3']);
+    const n = panelNumbers({ runs: [run('u1', 'unknown')], asks: [], errors: [] }, null);
+    expect([n.running, n.waiting]).toEqual([0, 0]);
+  });
+
+  it('a run from an older daemon (no state) is grouped by its booleans, as the badge counts it', () => {
+    const old = run('o', undefined, { state: undefined, running: true, waiting: false });
+    expect(runGroups([old], NOW).running).toHaveLength(1);
+    expect(activityOf({ runs: [old], asks: [], errors: [] }).running).toBe(1);
+  });
+
+  it('runs per local day, a run just after local midnight on that day', () => {
+    const justAfterMidnight = new Date(2026, 9, 28, 0, 30).toISOString();
+    const lateYesterday = new Date(2026, 9, 27, 23, 30).toISOString();
+    const days = dailySent([run('a', 'stopped', { sent_at: justAfterMidnight }), run('b', 'stopped', { sent_at: lateYesterday })], NOW);
+    expect(days).toHaveLength(14);
+    expect(days[13]).toEqual({ label: '10/28', count: 1 });
+    expect(days[12]).toEqual({ label: '10/27', count: 1 });
   });
 });
 
-describe('judgeSummary', () => {
-  it('names only the dimensions that did not pass, with their numbers', () => {
-    const s = judgeSummary(judge(['PASS', 'WARN', 'PASS', 'PASS', 'PASS']));
-    expect(s).toContain('Quality WARN：q');
-    expect(s).not.toContain('Run Isolation');
+describe('the run view', () => {
+  it('shows the numbers waiting first, the waiting question first, refused ones apart', async () => {
+    render(<SwarmOutDashboard now={NOW} />);
+    expect((await screen.findByTestId('kpi-free')).textContent).toContain('3/ 8');
+    const tiles = screen.getByTestId('kpi-grid').children;
+    expect(tiles[0].getAttribute('data-testid')).toBe('kpi-waiting');
+    expect(screen.getByTestId('kpi-waiting').textContent).toMatch(/^1\+1 个要去 Hive 页面处理/);
+    expect(screen.getByTestId('kpi-running').textContent).toContain('1');
+    const waiting = screen.getByTestId('swarm-out-waiting');
+    expect(within(waiting).getAllByTestId('swarm-out-ask')).toHaveLength(2);
+    expect(within(screen.getByTestId('swarm-out-refused-group')).getAllByTestId('swarm-out-ask')).toHaveLength(1);
   });
 
-  it('never says Speed / Token are within their line when they are N/A', () => {
-    const s = judgeSummary(judge(['PASS', 'PASS', 'PASS', 'NA', 'NA']));
-    expect(s).not.toContain('警戒线内');
-    expect(s).toContain('Speed、Token Cost 暂无参考线');
-    const w = judgeSummary(judge(['PASS', 'WARN', 'PASS', 'NA', 'PASS']));
-    expect(w).toContain('Speed 暂无参考线');
+  it('puts each run in the group of its state', async () => {
+    render(<SwarmOutDashboard now={NOW} />);
+    await screen.findByTestId('kpi-free');
+    const group = (title: string) => screen.getAllByTestId('swarm-out-run-group').find((g) => g.getAttribute('data-group') === title)!;
+    const titles = (g: HTMLElement) => within(g).queryAllByTestId('swarm-out-run').map((c) => c.getAttribute('data-state') + ':' + c.textContent?.split(/\d/)[0].trim());
+    expect(titles(group('在跑'))).toEqual(['running:task a']);
+    expect(titles(group('不在跑了（24 小时内派出的）'))).toEqual(['stopped:task c', 'stopped:task f']);
+    expect(within(group('不在跑了（24 小时内派出的）')).getAllByTestId('swarm-out-run-state')[1].textContent).toContain('Hive 已关机');
+    expect(titles(group('状态未知'))).toEqual(['unknown:task e']);
+  });
+
+  it('says what each Hive reports', async () => {
+    render(<SwarmOutDashboard now={NOW} />);
+    const rows = await screen.findAllByTestId('swarm-out-fleet-status');
+    expect(rows.map((r) => r.textContent)).toEqual(['占用 1/4', '忙满 · 占用 4/4', '连不上', '已关机']);
+  });
+
+  it('a failed fleet read says so instead of loading forever', async () => {
+    vi.mocked(swarmOutService.fleet).mockRejectedValue(new Error('down'));
+    render(<SwarmOutDashboard now={NOW} />);
+    expect((await screen.findByTestId('swarm-out-fleet-failed')).textContent).toContain('读不到机群');
+    expect(screen.getByTestId('kpi-free').textContent).toContain('—');
+  });
+
+  it('with no runs at all, one line says so (not three empty groups)', async () => {
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ runs: [], asks: [], errors: [] });
+    render(<SwarmOutDashboard now={NOW} />);
+    expect(await screen.findByText(/还没有派发过任务/)).toBeTruthy();
+    expect(screen.queryAllByTestId('swarm-out-run-group')).toHaveLength(0);
+  });
+
+  it('says in Chinese which Hive\'s questions could not be read', async () => {
+    vi.mocked(swarmOutService.runs).mockResolvedValue({ ...RUNS, errors: ['could not read the questions of Hive demo'] });
+    render(<SwarmOutDashboard now={NOW} />);
+    expect(await screen.findByText('读不到 Hive demo 的问题：「等你」可能不全')).toBeTruthy();
+  });
+
+  it('marks every part without a data source TBD, and no sample is left', async () => {
+    render(<SwarmOutDashboard now={NOW} />);
+    await screen.findByTestId('kpi-free');
+    const tbd = screen.getAllByTestId('swarm-out-tbd').map((t) => t.textContent ?? '');
+    expect(tbd.some((t) => t.includes('已安排') && t.includes('TBD：还没有定时派发'))).toBe(true);
+    expect(tbd.some((t) => t.includes('五维审计') && t.includes('TBD：'))).toBe(true);
+    expect(screen.queryByTestId('swarm-out-sample-notice')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/示例|敬请期待/);
   });
 });
 
-describe('JudgeTag', () => {
-  it('a click opens the five-dimension matrix; Esc closes it', () => {
-    render(<JudgeTag judge={judge(['PASS', 'WARN', 'PASS', 'PASS', 'WARN'])} title="Run X" />);
-    expect(screen.getByTestId('judge-tag').textContent).toContain('! 2 WARN');
-    fireEvent.click(screen.getByTestId('judge-tag'));
-    const pop = screen.getByTestId('judge-popover');
-    for (const d of ['Run Isolation', 'Quality', 'Autonomy', 'Speed', 'Token Cost']) expect(pop.textContent).toContain(d);
-    expect(pop.textContent).toContain('COMPLETED · NOT_LANDED · NOT PUSH READY');
-    fireEvent.keyDown(document, { key: 'Escape' });
-    expect(screen.queryByTestId('judge-popover')).toBeNull();
-  });
-});
-
-describe('JudgeTag keyboard', () => {
-  it('Escape closes only the popover (does not reach a global handler) and returns focus to the tag', () => {
-    const globalEsc = vi.fn();
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') globalEsc(); };
-    window.addEventListener('keydown', onKey);
-    try {
-      render(<JudgeTag judge={judge(['PASS', 'PASS', 'PASS', 'PASS', 'PASS'])} title="Run Y" />);
-      fireEvent.click(screen.getByTestId('judge-tag'));
-      const pop = screen.getByTestId('judge-popover');
-      expect(document.activeElement).toBe(pop);
-      fireEvent.keyDown(pop, { key: 'Escape' });
-      expect(screen.queryByTestId('judge-popover')).toBeNull();
-      expect(globalEsc).not.toHaveBeenCalled();
-      expect(document.activeElement).toBe(screen.getByTestId('judge-tag'));
-    } finally {
-      window.removeEventListener('keydown', onKey);
-    }
-  });
-
-  it('scrolling closes the popover', () => {
-    render(<JudgeTag judge={judge(['PASS', 'PASS', 'PASS', 'PASS', 'PASS'])} title="Run Z" />);
-    fireEvent.click(screen.getByTestId('judge-tag'));
-    fireEvent.scroll(window);
-    expect(screen.queryByTestId('judge-popover')).toBeNull();
-  });
-});
-
-describe('SwarmOutDashboard', () => {
-  it('says its data is a sample, shows the run view first, switches to history', () => {
-    render(<SwarmOutDashboard />);
-    expect(screen.getByTestId('swarm-out-dashboard').textContent).toContain('示例数据');
-    expect(screen.getByTestId('swarm-out-overview')).toBeTruthy();
+describe('the history view', () => {
+  it('counts runs per day, lists the week by Hive, and marks the audit parts TBD', async () => {
+    render(<SwarmOutDashboard now={NOW} />);
     fireEvent.click(screen.getByRole('button', { name: '历史' }));
-    expect(screen.getByTestId('swarm-out-history')).toBeTruthy();
-    expect(screen.queryByTestId('swarm-out-overview')).toBeNull();
+    const groups = await screen.findAllByTestId('history-group');
+    expect(groups.map((g) => g.getAttribute('data-group'))).toEqual(['explorer']);
+    expect(within(groups[0]).getAllByTestId('history-run')).toHaveLength(6);
+    const days = screen.getAllByTestId('swarm-out-day').map((d) => Number(d.getAttribute('data-count')));
+    expect(days.reduce((a, b) => a + b, 0)).toBe(6);
+    for (const id of ['verdict', 'dimensions', 'occupancy', 'type']) {
+      expect(screen.getByTestId(`swarm-out-tbd-${id}`).textContent).toContain('TBD：');
+    }
+    expect(document.body.textContent).not.toMatch(/示例|敬请期待/);
   });
 });
 
 describe('SwarmOutDashboard and the Hives it can dispatch to', () => {
-  const hivesAre = (hives: { name: string; status: string; region: string }[]) => {
-    vi.mocked(swarmOutService.hives).mockResolvedValue(
-      { hives, running: hives.filter((h) => h.status === 'running').length });
+  const fleetIs = (hives: ReturnType<typeof hive>[]) => {
+    vi.mocked(swarmOutService.fleet).mockResolvedValue({ hives, running: hives.filter((h) => h.status === 'running').length });
   };
 
-  it('with no Hive: the guide replaces the live section and its button opens Hive', async () => {
-    hivesAre([]);
+  it('with no Hive: the guide replaces the run view and its button opens Hive', async () => {
+    fleetIs([]);
     const onOpenHive = vi.fn();
-    render(<SwarmOutDashboard onOpenHive={onOpenHive} />);
+    render(<SwarmOutDashboard onOpenHive={onOpenHive} now={NOW} />);
     const guide = await screen.findByTestId('swarm-out-hive-guide');
     expect(guide.getAttribute('data-case')).toBe('no-hive');
-    expect(guide.textContent).toContain('Add Account');
-    expect(guide.textContent).toContain('Deploy Hive');
     expect(screen.queryByTestId('swarm-out-live')).toBeNull();
     expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('还没有 Hive');
     fireEvent.click(screen.getByTestId('swarm-out-open-hive'));
@@ -139,202 +202,43 @@ describe('SwarmOutDashboard and the Hives it can dispatch to', () => {
   });
 
   it('with Hives but none running: names them and says to start one', async () => {
-    hivesAre([{ name: 'w1', status: 'stopped', region: 'us-east-1' }]);
-    render(<SwarmOutDashboard />);
+    fleetIs([hive('w1', { status: 'stopped', reachable: null })]);
+    render(<SwarmOutDashboard now={NOW} />);
     const guide = await screen.findByTestId('swarm-out-hive-guide');
     expect(guide.getAttribute('data-case')).toBe('none-running');
     expect(guide.textContent).toContain('w1（stopped）');
     expect(screen.getByTestId('swarm-out-hive-count').textContent).toBe('1 台 Hive，都没在运行');
   });
 
-  it('with a running Hive: the live section, no guide, the real count', async () => {
-    hivesAre([{ name: 'w1', status: 'running', region: 'us-east-1' }, { name: 'w2', status: 'stopped', region: 'us-east-1' }]);
-    render(<SwarmOutDashboard />);
-    expect((await screen.findByTestId('swarm-out-hive-count')).textContent).toContain('1 台 Hive 在运行');
-    expect(screen.getByTestId('swarm-out-live')).toBeTruthy();
-    expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
-  });
-
-  it('before the Hives are known, shows no guide and no count (an unreachable daemon is not "no Hive")', () => {
-    vi.mocked(swarmOutService.hives).mockReturnValue(new Promise(() => {}));
-    render(<SwarmOutDashboard />);
+  it('before the fleet is known, shows no guide and no count (an unreachable daemon is not "no Hive")', () => {
+    vi.mocked(swarmOutService.fleet).mockReturnValue(new Promise(() => {}));
+    render(<SwarmOutDashboard now={NOW} />);
     expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
     expect(screen.queryByTestId('swarm-out-hive-count')).toBeNull();
     expect(screen.getByTestId('swarm-out-live')).toBeTruthy();
   });
 
-  it('a failed Hive lookup is not "no Hive": no guide', async () => {
-    vi.mocked(swarmOutService.hives).mockRejectedValue(new Error('daemon down'));
-    render(<SwarmOutDashboard />);
-    await Promise.resolve();
+  it('a failed fleet lookup is not "no Hive": no guide', async () => {
+    vi.mocked(swarmOutService.fleet).mockRejectedValue(new Error('daemon down'));
+    render(<SwarmOutDashboard now={NOW} />);
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByTestId('swarm-out-hive-guide')).toBeNull();
     expect(screen.getByTestId('swarm-out-live')).toBeTruthy();
   });
-
-  it('marks the sample data as not launched yet, in both views', () => {
-    render(<SwarmOutDashboard />);
-    expect(screen.getByTestId('swarm-out-sample-notice').textContent).toContain('还没正式上线，敬请期待');
-    fireEvent.click(screen.getByRole('button', { name: '历史' }));
-    expect(screen.getByTestId('swarm-out-sample-notice').textContent).toContain('敬请期待');
-  });
 });
 
-const trace = (over: Partial<RunTrace> = {}): RunTrace => ({
-  brain: { name: 'SwarmAI', version: 'v3', docs: ['TECH.md'] },
-  agent: { name: 'swarmai-agent', status: 'reviewed', profile: 'bugfix', rule: '有复现的缺陷', validations: ['pytest'], placement: 'hive', landing: '自动落到 main' },
-  context: { goal: '修 X', acceptance: '测试绿', slices: [{ source: 'TECH.md § Recall', score: 0.82 }], memory: 2, tokens: '6.1k', packedAt: '22:19' },
-  hive: { instance: 'explorer', slot: 1, session: 'ses_1', run: 'run_1' },
-  startedAt: '22:20', endedAt: '22:58', duration: '38 分', tokens: '519k',
-  report: { outcome: 'COMPLETED · LANDED', deliverables: ['commit abc'], turns: 14, flowedBack: ['IMPROVEMENT.md 1 条'], path: 'records/ses_1/report.md' },
-  ...over,
-});
-
-describe('TraceTags', () => {
-  it('each prepared part opens its detail', () => {
-    render(<TraceTags trace={trace()} />);
-    fireEvent.click(screen.getByTestId('trace-context'));
-    const ctx = screen.getByTestId('trace-context-popover');
-    expect(ctx.textContent).toContain('TECH.md § Recall');
-    expect(ctx.textContent).toContain('0.82');
-    fireEvent.click(screen.getByTestId('trace-agent'));
-    expect(screen.getByTestId('trace-agent-popover').textContent).toContain('有复现的缺陷');
-    fireEvent.click(screen.getByTestId('trace-report'));
-    expect(screen.getByTestId('trace-report-popover').textContent).toContain('IMPROVEMENT.md 1 条');
-  });
-
-  it('a task with no brain says 无 Brain and has nothing to open', () => {
-    render(<TraceTags trace={trace({ brain: undefined, agent: undefined })} />);
-    const tag = screen.getByTestId('trace-brain');
-    expect(tag.textContent).toContain('无 Brain');
-    expect(tag.tagName).not.toBe('BUTTON');
-    expect(screen.getByTestId('trace-agent').textContent).toContain('通用 Agent');
-  });
-
-  it('a running run shows Report 生成中, not an openable report', () => {
-    render(<TraceTags trace={trace({ report: undefined, endedAt: undefined })} />);
-    const tag = screen.getByTestId('trace-report');
-    expect(tag.textContent).toContain('Report 生成中');
-    expect(tag.tagName).not.toBe('BUTTON');
-  });
-});
-
-describe('SwarmOutDashboard run rows', () => {
-  it('every run that was sent out has a trace line; scheduled runs do not', () => {
-    render(<SwarmOutDashboard />);
-    const rows = screen.getAllByTestId('run-row');
-    const traces = screen.getAllByTestId('run-trace-row');
-    // 2 waiting + 2 running + 4 ended were prepared; 2 scheduled were not
-    expect(rows).toHaveLength(10);
-    expect(traces).toHaveLength(8);
-    const metas = screen.getAllByTestId('trace-meta').map((m) => m.textContent ?? '');
-    expect(metas).toContain('22:20 → 22:58 · 38 分 · 519k tokens');
-    expect(metas).toContain('23:41 开始 · 已跑 12 分 · 还要 10–20 分 · 141k tokens');
-  });
-});
-
-describe('SwarmOutDashboard on a narrow panel', () => {
-  function withPanelWidth(width: number, fn: () => void) {
-    const orig = globalThis.ResizeObserver;
-    class FakeRO {
-      constructor(private cb: ResizeObserverCallback) {}
-      observe() { this.cb([{ contentRect: { width } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
-      unobserve() {}
-      disconnect() {}
-    }
-    globalThis.ResizeObserver = FakeRO as unknown as typeof ResizeObserver;
-    try { fn(); } finally { globalThis.ResizeObserver = orig; }
-  }
-
-  it('wide: run cards in an auto-fill grid, four KPI tiles in a row', () => {
-    withPanelWidth(1100, () => {
-      render(<SwarmOutDashboard />);
-      expect(screen.getByTestId('swarm-out-dashboard').dataset.compact).toBeUndefined();
-      expect(screen.getByTestId('kpi-grid').style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))');
-      // runs are cards in a grid that fits as many columns as the width allows
-      const grid = screen.getAllByTestId('run-grid')[0];
-      // (jsdom drops min() from inline styles, so the card minimum is read from the grid's attribute)
-      expect(grid.dataset.cardMin).toBe('300');
-      expect(grid.querySelector('table')).toBeNull();
-      expect(grid.querySelectorAll('[data-testid="run-row"]').length).toBeGreaterThan(0);
-    });
-  });
-
-  it('narrow: the same run cards and traces, KPI tiles 2×2', () => {
-    withPanelWidth(500, () => {
-      render(<SwarmOutDashboard />);
-      expect(screen.getByTestId('swarm-out-dashboard').dataset.compact).toBe('true');
-      expect(screen.getByTestId('kpi-grid').style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
-      const rows = screen.getAllByTestId('run-row');
-      expect(rows).toHaveLength(10);
-      expect(screen.getAllByTestId('run-trace-row')).toHaveLength(8);
-      // the Autonomy Judge tag is still on every judged run
-      expect(screen.getAllByTestId('judge-tag').length).toBeGreaterThan(0);
-    });
-  });
-});
-
-describe('Run history by brain / Project Agent', () => {
-  // Questions: is every run in exactly one group, the brains that drove the most first and
-  // the runs with no brain (no agent) in their own group, last; does the agent view name
-  // each run's brain; does a group cap at 5 rows and open the rest; does the sample agree
-  // with 按类型 (one sample, not two that drift apart).
-  const groupsOf = () => screen.getAllByTestId('history-group');
-  const openHistory = () => {
-    render(<SwarmOutDashboard />);
-    fireEvent.click(screen.getByRole('button', { name: '历史' }));
-  };
-
-  it('pure grouping: unassigned last whatever its size, then by run count', () => {
-    const run = (id: string, brain?: string): HistoryRun => ({ id, when: '', title: id, type: '定时', brain, outcome: 'done', result: '', duration: '', tokensK: 1 });
-    const g = groupHistory([run('a'), run('b'), run('c'), run('d', 'X'), run('e', 'Y'), run('f', 'Y')], 'brain');
-    expect(g.map((x) => x.name)).toEqual(['Y', 'X', NO_BRAIN]);
-    expect(g[2].unassigned).toBe(true);
-    expect(groupHistory([run('a', 'X')], 'agent').map((x) => x.name)).toEqual([NO_AGENT]);
-  });
-
-  it('by brain: every run once, the no-brain group last', () => {
-    openHistory();
-    const groups = groupsOf();
-    expect(groups.at(-1)?.dataset.group).toBe(NO_BRAIN);
-    expect(groups.filter((x) => x.dataset.unassigned)).toHaveLength(1);
-    const counts = groups.map((x) => Number(x.querySelector('[data-testid="history-group-count"]')?.textContent?.split(' ')[0]));
-    expect(counts.reduce((a, b) => a + b, 0)).toBe(HISTORY_RUNS.length);
-    expect(groups[0].dataset.group).toBe('SwarmAI');
-  });
-
-  it('by Project Agent: the no-agent group last; the brain named once per agent, per run without one', () => {
-    openHistory();
-    fireEvent.click(screen.getByRole('button', { name: '按 Project Agent' }));
-    const groups = groupsOf();
-    expect(groups.at(-1)?.dataset.group).toBe(NO_AGENT);
-    // an agent's brain is named once in its heading, not on every run
-    expect(groups[0].querySelector('h4')?.parentElement?.textContent).toContain('大脑 SwarmAI');
-    expect(groups[0].querySelector('[data-testid="history-run"]')?.textContent).not.toContain('大脑');
-    // runs with no agent come from different brains (or none): each run names its own
-    expect(groups.at(-1)?.textContent).toContain('大脑 SwarmAI');
-  });
-
-  it('Run 记录 is the last section of the history view', () => {
-    openHistory();
-    expect(screen.getByTestId('swarm-out-history').lastElementChild).toBe(screen.getByTestId('run-history'));
-  });
-
-  it('a group shows 5 runs and opens the rest', () => {
-    openHistory();
-    const big = groupsOf()[0];
-    const total = HISTORY_RUNS.filter((r) => r.brain === 'SwarmAI').length;
-    expect(total).toBeGreaterThan(5);
-    expect(big.querySelectorAll('[data-testid="history-run"]')).toHaveLength(5);
-    fireEvent.click(screen.getByRole('button', { name: `再显示 ${total - 5} 个` }));
-    expect(groupsOf()[0].querySelectorAll('[data-testid="history-run"]')).toHaveLength(total);
-  });
-
-  it('the sample runs add up to 按类型', () => {
-    for (const t of BY_TYPE) expect(HISTORY_RUNS.filter((r) => r.type === t.key)).toHaveLength(t.runs);
-    for (const t of BY_TYPE.filter((x) => x.qualified !== 'N/A')) {
-      const rs = HISTORY_RUNS.filter((r) => r.type === t.key);
-      expect(`${rs.filter((r) => r.outcome === 'landed').length} / ${rs.length}`).toBe(t.qualified);
-    }
+describe('the runs poll', () => {
+  it('an older answer arriving after a newer one does not overwrite it', async () => {
+    const { renderHook, act, waitFor } = await import('@testing-library/react');
+    const { useRuns } = await import('./live');
+    let resolveOld: (v: SwarmOutRuns) => void = () => {};
+    vi.mocked(swarmOutService.runs)
+      .mockImplementationOnce(() => new Promise((r) => { resolveOld = r; }))
+      .mockResolvedValueOnce({ runs: [run('new', 'running')], asks: [], errors: [] });
+    const { result } = renderHook(() => useRuns(false));
+    act(() => result.current.reload());
+    await waitFor(() => expect(result.current.data?.runs[0].dispatch_id).toBe('new'));
+    await act(async () => { resolveOld({ runs: [run('old', 'running')], asks: [], errors: [] }); });
+    expect(result.current.data?.runs[0].dispatch_id).toBe('new');
   });
 });
