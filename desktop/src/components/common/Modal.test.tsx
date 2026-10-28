@@ -18,7 +18,7 @@
  * run synchronously so the enter class applies without a real paint loop.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, act, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup, fireEvent } from '@testing-library/react';
 import Modal from './Modal';
 
 // Run rAF callbacks synchronously (double-rAF enter would otherwise never fire
@@ -121,5 +121,75 @@ describe('Modal — Esc + scroll lock (gate on isOpen)', () => {
     // lock released on isOpen=false (ref-count → 0)
     expect(document.body.style.overflow).toBe('');
     act(() => { vi.advanceTimersByTime(310); });
+  });
+});
+
+describe('Modal — a layer: focus, Tab, Escape (hooks/useLayer)', () => {
+  it('is a labelled modal dialog, focus moves in, Tab stays inside, and focus returns to the opener on close', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const { rerender } = render(<Modal isOpen onClose={noop} title="Rename"><input data-testid="a" /><button>OK</button></Modal>);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(screen.getByRole('dialog', { name: 'Rename' })).toBe(dialog);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    screen.getByText('OK').focus();                       // the last control
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'common.button.close' }));
+    rerender(<Modal isOpen={false} onClose={noop} title="Rename"><input data-testid="a" /><button>OK</button></Modal>);
+    expect(document.activeElement).toBe(opener);           // at once, while the exit plays
+    opener.remove();
+  });
+
+  it('a field with autoFocus keeps the focus, and focus still returns to the opener on close', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const { rerender } = render(<Modal isOpen onClose={noop} title="T"><input data-testid="name" autoFocus /></Modal>);
+    expect(document.activeElement).toBe(screen.getByTestId('name'));
+    rerender(<Modal isOpen={false} onClose={noop} title="T"><input data-testid="name" autoFocus /></Modal>);
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it('with a dialog open over another, Tab stays inside the upper one', () => {
+    render(<>
+      <Modal isOpen onClose={noop} title="Lower"><button>Lower OK</button></Modal>
+      <Modal isOpen onClose={noop} title="Upper"><button>Upper A</button><button>Upper B</button></Modal>
+    </>);
+    const upper = screen.getByRole('dialog', { name: 'Upper' });
+    // From a middle control the trap stays out of the way: the browser moves focus
+    // (not prevented), and nothing pulls it anywhere — the lower dialog's trap least.
+    const a = screen.getByText('Upper A');
+    a.focus();
+    expect(fireEvent.keyDown(a, { key: 'Tab' })).toBe(true);
+    expect(document.activeElement).toBe(a);
+    expect(fireEvent.keyDown(a, { key: 'Tab', shiftKey: true })).toBe(true);
+    expect(document.activeElement).toBe(a);
+    screen.getByText('Upper B').focus();                                          // the last control
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
+    expect(upper.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(screen.getByText('Lower OK'));
+  });
+
+  it('Escape closes the dialog and stops there: an overlay behind it (listening on document) is not closed', () => {
+    const onClose = vi.fn();
+    const host = vi.fn();
+    document.addEventListener('keydown', host);
+    render(<Modal isOpen onClose={onClose} title="T"><input data-testid="x" /></Modal>);
+    fireEvent.keyDown(screen.getByTestId('x'), { key: 'Escape' });
+    document.removeEventListener('keydown', host);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(host).not.toHaveBeenCalled();
+  });
+
+  it('with two dialogs open, Escape closes only the top one', () => {
+    const lower = vi.fn();
+    const upper = vi.fn();
+    render(<><Modal isOpen onClose={lower} title="Lower"><span /></Modal><Modal isOpen onClose={upper} title="Upper"><span /></Modal></>);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(upper).toHaveBeenCalledTimes(1);
+    expect(lower).not.toHaveBeenCalled();
   });
 });

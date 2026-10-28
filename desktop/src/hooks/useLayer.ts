@@ -28,33 +28,51 @@ function reachable(el: HTMLElement): boolean {
 export const focusables = (root: HTMLElement | null) =>
   root ? Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(reachable) : [];
 
+const trapStack: object[] = [];
+
 /** Focus for a layer, one mechanism for every layer in the overlay:
  *  - it moves in when the layer opens (to the layer, or to its first control with
- *    ``first``), and again when ``resetKey`` changes (the panel swapped a case for the
+ *    ``first``; a control inside that already has focus, an autoFocus field, keeps
+ *    it), and again when ``resetKey`` changes (the panel swapped a case for the
  *    form and the focused button is gone);
- *  - Tab stays inside. The trap listens on the window, not on the layer, so it still
- *    holds when focus has dropped to <body> because the focused control was removed;
+ *  - Tab stays inside the topmost layer. The trap listens on the window, not on the
+ *    layer, so it still holds when focus has dropped to <body> because the focused
+ *    control was removed;
  *  - focus returns to what opened the layer, or to ``fallback()`` when that is gone
  *    (the layer was opened from a place that no longer exists). */
 export function useLayerFocus(open: boolean, ref: RefObject<HTMLElement | null>,
   opts: { resetKey?: string; first?: boolean; fallback?: () => HTMLElement | null } = {}) {
   const opener = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
   const { resetKey, first } = opts;
   const fallback = useRef(opts.fallback);
   fallback.current = opts.fallback;
+  // The opener is read in the render that opens the layer: by the time an effect runs,
+  // a field inside with autoFocus has already taken focus and the opener is unknown.
+  if (open && !wasOpen.current && !opener.current) {
+    const active = typeof document === 'undefined' ? null : document.activeElement as HTMLElement | null;
+    if (active && !ref.current?.contains(active)) opener.current = active;
+  }
+  wasOpen.current = open;
   useEffect(() => {
     if (!open) return;
     // the opener is taken once per opening: on a resetKey change the focused button
     // may already be gone, and focus sits on <body>
     const active = document.activeElement as HTMLElement | null;
     if (!opener.current && !ref.current?.contains(active)) opener.current = active;
+    // a control inside that already took focus (an autoFocus field) keeps it
+    if (ref.current?.contains(active) && active !== ref.current) return;
     const target = (first && focusables(ref.current)[0]) || ref.current;
     target?.focus();
   }, [open, resetKey, first, ref]);
   useEffect(() => {
     if (!open) return;
+    // Only the topmost layer traps Tab: with a confirm open over a dialog, the dialog's
+    // trap would otherwise pull focus back into itself on every Tab.
+    const token = {};
+    trapStack.push(token);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab' || !ref.current) return;
+      if (e.key !== 'Tab' || !ref.current || trapStack[trapStack.length - 1] !== token) return;
       const items = focusables(ref.current);
       const at = document.activeElement;
       if (!items.length) { e.preventDefault(); ref.current.focus(); return; }
@@ -64,7 +82,11 @@ export function useLayerFocus(open: boolean, ref: RefObject<HTMLElement | null>,
       else if (!e.shiftKey && at === tail) { e.preventDefault(); head.focus(); }
     };
     window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      const i = trapStack.lastIndexOf(token);
+      if (i >= 0) trapStack.splice(i, 1);
+    };
   }, [open, ref]);
   useEffect(() => {
     if (open) return;

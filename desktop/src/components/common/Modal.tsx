@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
+import { useEscape, useLayerFocus } from '../../hooks/useLayer';
 
 interface ModalProps {
   isOpen: boolean;
@@ -37,7 +39,10 @@ export default function Modal({
   children,
   size = 'md',
 }: ModalProps) {
+  const { t } = useTranslation();
   const overlayRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const unmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // `isRendering` keeps the modal in the DOM through its exit transition.
@@ -82,15 +87,19 @@ export default function Modal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  // ---- Esc + body-scroll-lock — gate on isOpen (intent), NOT isRendering,
-  // so a modal mid-exit doesn't keep the lock/listener alive (Gate-1 #4). ----
+  // ---- Escape and focus (hooks/useLayer), gated on isOpen (intent) like the scroll
+  // lock: Escape goes to the topmost layer only, so a dialog opened inside an
+  // overlay (Settings → Skills) closes without closing the overlay behind it, which
+  // also listens on document. Focus moves into the dialog once it is in the DOM
+  // (isRendering lags isOpen by one render on open), Tab stays inside it, and focus
+  // goes back to what opened it as soon as it starts to close. ----
+  useEscape(isOpen, onClose);
+  useLayerFocus(isOpen && isRendering, dialogRef);
+
+  // ---- body-scroll-lock — gate on isOpen (intent), NOT isRendering,
+  // so a modal mid-exit doesn't keep the lock alive (Gate-1 #4). ----
   useEffect(() => {
     if (!isOpen) return;
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleEscape);
 
     // Ref-counted scroll lock: multiple modals (one closing while another opens)
     // must not prematurely unlock (Gate-1 #4a).
@@ -99,11 +108,10 @@ export default function Modal({
     document.body.style.overflow = 'hidden';
 
     return () => {
-      document.removeEventListener('keydown', handleEscape);
       w.__modalLockCount = Math.max(0, (w.__modalLockCount ?? 1) - 1);
       if (w.__modalLockCount === 0) document.body.style.overflow = '';
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   // Final cleanup: clear any timer on unmount.
   useEffect(() => {
@@ -131,8 +139,13 @@ export default function Modal({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className={clsx(
-          'flex flex-col bg-[var(--color-card)] border shadow-2xl',
+          'flex flex-col bg-[var(--color-card)] border shadow-2xl outline-none',
           'transition-[transform,opacity] duration-[280ms] ease-[cubic-bezier(.16,1,.3,1)]',
           'w-full rounded-xl border-[var(--color-border)] max-h-[90vh]',
           entered ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-[22px] scale-[0.96]',
@@ -142,12 +155,14 @@ export default function Modal({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] shrink-0">
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">{title}</h2>
+          <h2 id={titleId} className="text-lg font-semibold text-[var(--color-text)]">{title}</h2>
           <button
+            type="button"
+            aria-label={t('common.button.close')}
             onClick={onClose}
             className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           >
-            <span className="material-symbols-outlined icon-md">close</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">close</span>
           </button>
         </div>
 

@@ -25,6 +25,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
+import { useEscape } from '../../hooks/useLayer';
 import hljs from 'highlight.js';
 import { getApiBaseUrl } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -154,10 +155,11 @@ const MermaidModal = memo(function MermaidModal({
     }
   }, [isOpen, svg]);
 
+  // The viewer is a layer: it takes Escape from the shared stack, so opened from a
+  // dialog it closes itself, not the dialog under it.
+  useEscape(isOpen, onClose);
+
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
@@ -166,16 +168,14 @@ const MermaidModal = memo(function MermaidModal({
       }
     };
     if (isOpen) {
-      document.addEventListener('keydown', handleEscape);
       document.addEventListener('wheel', handleWheel, { passive: false });
       document.body.style.overflow = 'hidden';
     }
     return () => {
-      document.removeEventListener('keydown', handleEscape);
       document.removeEventListener('wheel', handleWheel);
       document.body.style.overflow = '';
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   const handleZoomIn = () => setScale((prev) => Math.min(prev + ZOOM_STEP, MAX_ZOOM));
   const handleZoomOut = () => setScale((prev) => Math.max(prev - ZOOM_STEP, MIN_ZOOM));
