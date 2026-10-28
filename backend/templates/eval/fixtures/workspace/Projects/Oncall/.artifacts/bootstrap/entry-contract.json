@@ -1,0 +1,218 @@
+{
+ "schema": "swarmai.bootstrap-entry-contract",
+ "version": 1,
+ "file": ".artifacts/bootstrap/bootstrap-entries.json",
+ "file_format": "one JSON document: a list of entry objects separated by commas (or {\"entries\": [...]}); bare objects one after another (JSON Lines) are refused; at most 500 entries",
+ "kinds": {
+  "cognition": {
+   "fields": [
+    "applicability",
+    "how",
+    "kind",
+    "rejected_alternatives",
+    "section",
+    "sources",
+    "title",
+    "type",
+    "what",
+    "why"
+   ],
+   "required": [
+    "kind",
+    "type",
+    "section",
+    "title",
+    "what",
+    "sources"
+   ],
+   "required_by_type": {
+    "decision": [
+     "why",
+     "rejected_alternatives"
+    ],
+    "pitfall": [
+     "applicability"
+    ],
+    "process": [
+     "how"
+    ]
+   },
+   "meaning": {
+    "why": "why it was decided",
+    "rejected_alternatives": "what was considered and not chosen ('none' is an answer, empty is not)",
+    "applicability": "when it bites (the trigger)",
+    "how": "the command"
+   },
+   "type": "one of the section's cognition_types"
+  },
+  "gap": {
+   "fields": [
+    "kind",
+    "proposed_next",
+    "section",
+    "sources",
+    "title",
+    "what",
+    "why"
+   ],
+   "required": [
+    "kind",
+    "section",
+    "title",
+    "what"
+   ],
+   "section": "What to Watch For",
+   "title_convention": "<Section>: no evidence yet — the form that marks a PRODUCT section as explained (need_gap)"
+  }
+ },
+ "values": {
+  "text": "every field is text, except sources and the list fields below",
+  "lists": {
+   "rejected_alternatives": "text, or a list of texts (written joined with '; ')"
+  },
+  "sources": "a list of non-empty texts",
+  "title": "one line, at most 200 characters, without '**' or '|'",
+  "other_fields": "at most 4000 characters",
+  "over_a_limit": "refused, never cut: split the entry",
+  "never": "an HTML comment marker (<!--, -->) in any field"
+ },
+ "sources": {
+  "<path>, <path>#heading, <path>:line or <path>:line-line": "a tracked file of a repo this brain owns",
+  "<repo>:<path>": "the same, when the brain owns several repos",
+  "file:<absolute path>": "an existing, non-secret file (a document the person gave)",
+  "url:<http(s) URL>": "a web page",
+  "user": "the person's own answer (the only source that is not outside content)"
+ },
+ "sections": [
+  {
+   "doc": "PRODUCT.md",
+   "section": "Vision",
+   "cognition_types": [
+    "principle"
+   ]
+  },
+  {
+   "doc": "PRODUCT.md",
+   "section": "What Makes It Different",
+   "cognition_types": [
+    "model"
+   ]
+  },
+  {
+   "doc": "PRODUCT.md",
+   "section": "Strategic Priorities",
+   "cognition_types": [
+    "decision"
+   ]
+  },
+  {
+   "doc": "PRODUCT.md",
+   "section": "Success Criteria",
+   "cognition_types": [
+    "guideline",
+    "process"
+   ]
+  },
+  {
+   "doc": "PRODUCT.md",
+   "section": "Non-Goals",
+   "cognition_types": [
+    "correction",
+    "pitfall"
+   ]
+  },
+  {
+   "doc": "TECH.md",
+   "section": "Architecture",
+   "cognition_types": [
+    "decision",
+    "principle"
+   ]
+  },
+  {
+   "doc": "TECH.md",
+   "section": "Key Subsystems",
+   "cognition_types": [
+    "model"
+   ]
+  },
+  {
+   "doc": "TECH.md",
+   "section": "Conventions",
+   "cognition_types": [
+    "guideline",
+    "process"
+   ]
+  },
+  {
+   "doc": "TECH.md",
+   "section": "Runtime Traps",
+   "cognition_types": [
+    "correction",
+    "pitfall"
+   ]
+  },
+  {
+   "doc": "IMPROVEMENT.md",
+   "section": "What Worked",
+   "cognition_types": [
+    "decision",
+    "guideline",
+    "model",
+    "principle",
+    "process"
+   ]
+  },
+  {
+   "doc": "IMPROVEMENT.md",
+   "section": "What Failed",
+   "cognition_types": [
+    "correction",
+    "pitfall"
+   ]
+  },
+  {
+   "doc": "IMPROVEMENT.md",
+   "section": "What to Watch For",
+   "gaps_only": true
+  },
+  {
+   "doc": "PROJECT.md",
+   "section": "Current Focus",
+   "nothing": "the person's live state"
+  },
+  {
+   "doc": "PROJECT.md",
+   "section": "Recent Decisions",
+   "cognition_types": [
+    "correction",
+    "decision",
+    "guideline",
+    "model",
+    "pitfall",
+    "principle",
+    "process"
+   ]
+  },
+  {
+   "doc": "PROJECT.md",
+   "section": "Open Items",
+   "nothing": "the person's live state"
+  },
+  {
+   "doc": "PROJECT.md",
+   "section": "Blocked By",
+   "nothing": "the person's live state"
+  }
+ ],
+ "refusals": {
+  "shape": "a field, type, section or length, or the file's format: fix the entries file and run bootstrap-apply again",
+  "evidence": "a source that points at nothing this brain may cite: cite a real one, or drop the claim",
+  "doc": "the doc already holds the person's own writing: nothing was added; show them the entry and ask (never edit the entries file for it)",
+  "state": "the brain is not setting up: bootstrap writes only a newborn brain"
+ },
+ "repos": {
+  "owned": [],
+  "note": "this brain owns no repo: cite file:, url: or user"
+ }
+}

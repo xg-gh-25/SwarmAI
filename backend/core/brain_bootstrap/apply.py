@@ -259,8 +259,9 @@ def validate(entry, evidence: Evidence) -> dict:
 def check_entry(entry, evidence: Evidence, stamp: str) -> dict:
     """``validate`` plus the rendered block (``block``): exactly what a run does to
     one entry before it is placed. Raises Rejected; the renderer's own ValueError
-    (e.g. a title that is not one line) becomes a ``shape`` refusal. The eval's ``bootstrap_entries`` check calls
-    this too, so an agent's answer is judged by the rules that would write it."""
+    (e.g. a title that is not one line) becomes a ``shape`` refusal. The eval's
+    ``bootstrap_counts`` calls this too, to count the shape refusals an agent's answer
+    would get from the rules that would write it."""
     from core.ddd_entry_lifecycle import render_ddd_unit
     v = validate(entry, evidence)
     try:
@@ -275,19 +276,23 @@ def check_entry(entry, evidence: Evidence, stamp: str) -> dict:
 
 # ── the contract ─────────────────────────────────────────────────────────────
 
-def entry_contract(project_dir: str | Path | None = None) -> dict:
+def entry_contract(project_dir: str | Path | None = None, *,
+                   repo_names: list[str] | None = None) -> dict:
     """The entry format, for the agent that writes the entries file: generated from the
     constants ``validate`` and the renderer enforce (tests hold each rule to its
     enforcement), so it says nothing they do not. With *project_dir* it also names the
     repos that brain owns — none means only ``file:``, ``url:`` and ``user`` can be
-    cited. Written to ``CONTRACT_FILE`` by ``write_entry_contract``."""
+    cited; *repo_names* gives those names directly (the eval fixtures, whose brains are
+    not bound). Written to ``CONTRACT_FILE`` by ``write_entry_contract``."""
     from core.ddd_entry_lifecycle import COMMENT_MARKERS, TITLE_FORBIDDEN
     from core.ddd_skeleton import GAP_SECTION, SECTION_TYPES, skeleton_sections, DOCS
     typed = {place: sorted(types) for place, types in SECTION_TYPES.items()}
     repos = None
-    if project_dir is not None:
-        from .survey import owned_repos
-        names = sorted(r["name"] for r in owned_repos(Path(project_dir)))
+    if project_dir is not None or repo_names is not None:
+        if repo_names is None:
+            from .survey import owned_repos
+            repo_names = [r["name"] for r in owned_repos(Path(project_dir))]
+        names = sorted(repo_names)
         repos = {"owned": names} if names else {
             "owned": [], "note": "this brain owns no repo: cite file:, url: or user"}
     sections = []
@@ -339,7 +344,7 @@ def entry_contract(project_dir: str | Path | None = None) -> dict:
         },
         "sections": sections,
         "refusals": dict(REFUSALS),
-        **({} if project_dir is None else {"repos": repos}),
+        **({} if repos is None else {"repos": repos}),
     }
 
 

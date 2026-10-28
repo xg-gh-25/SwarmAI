@@ -1,0 +1,89 @@
+# Answer key for the New Brain offline case on the ledgerd fixture repo.
+# Read only by scripts/eval_fixture_brains.py, which generates the case from it
+# (prompt, rubric, deterministic check); the eval itself never reads this file.
+# Every `where` is relative to the workspace; every `quote` must appear in that file
+# (tests/test_eval_bootstrap_entries.py checks it).
+brain: Ledgerd
+case:
+  id: OFF_BRAIN_FIRST_ENTRIES_ADR
+  title: A new brain records accepted decisions, not rejected ones
+  purpose:
+    en: A new brain for a Go service records accepted ADRs with why and rejected options, never a rejected ADR
+      as the plan, and finds the deploy and lock traps. If this breaks, brains teach unmade decisions.
+    zh: 给带 ADR 的 Go 服务新建 brain，记下已接受的决策及理由和被否方案，不把被否的 ADR 当计划，还找出部署和加锁的坑。坏了意味着新 brain 教的是团队没做过的决策。
+  expected_trajectory:
+  - Read entry-contract.json
+  - Read survey.json
+  - Read advisory-locks
+  - Read RUNBOOK
+material:
+  repo: repos/ledgerd
+must_have:
+- claim: a decision for the per-account advisory locks, with its why and Redis locks or SERIALIZABLE as a
+    rejected alternative
+  where: repos/ledgerd/docs/adr/0001-postgres-advisory-locks.md
+  quote: 'Status: Accepted'
+- claim: a decision for the Idempotency-Key, with the duplicate-transfer why and the 60-second amount-window
+    dedupe as rejected
+  where: repos/ledgerd/docs/adr/0002-idempotency-keys.md
+  quote: within 60 seconds
+- claim: a transfer locks the lower account id first
+  where: repos/ledgerd/docs/ARCHITECTURE.md
+  quote: lower account id first
+- claim: a migration must stay compatible with the old binary during a rolling deploy
+  where: repos/ledgerd/docs/RUNBOOK.md
+  quote: old binary
+facts:
+- where: repos/ledgerd/README.md
+  says: a double-entry ledger of transfers between accounts, every transfer two postings that sum to zero, a
+    balance the sum of an account's postings; an HTTP+JSON API on port 9180; everything in Postgres; make run
+    needs DATABASE_URL
+- where: repos/ledgerd/docs/ARCHITECTURE.md
+  says: cmd/ledgerd starts the server (internal/api), which calls internal/ledger for the transfer rules;
+    internal/store is the only package that talks to Postgres; amounts are int64 minor units (cents), never
+    float64, or rounding breaks the zero sum and the ledger refuses the transfer; a transfer locks both accounts
+    before reading balances, always the lower account id first, else two opposite transfers deadlock
+- where: repos/ledgerd/docs/RUNBOOK.md
+  says: migrations run before the new binary starts and the old binary serves until the rolling deploy ends, so
+    a migration never drops or renames a column the old binary reads (add, deploy, remove in a later release)
+- where: repos/ledgerd/docs/adr/0001-postgres-advisory-locks.md
+  says: 'Accepted: per-account transaction-scoped Postgres advisory locks (pg_advisory_xact_lock) before reading
+    balances, because concurrent transfers could overdraw an account; why: Postgres is already the source of
+    truth, the lock ends with the transaction, no other service; rejected: Redis locks (another service, timing
+    assumptions) and SERIALIZABLE for every transfer (most failed and retried under load)'
+  quote: Redis
+- where: repos/ledgerd/docs/adr/0002-idempotency-keys.md
+  says: 'Accepted: POST /transfers requires an Idempotency-Key, the response stored 24 hours and replayed,
+    because retried requests created second transfers; rejected: treating the same (from, to, amount) within
+    60 seconds as a duplicate (genuine identical transfers were dropped)'
+- where: repos/ledgerd/docs/adr/0003-grpc-api.md
+  says: 'Rejected: gRPC; the API stays HTTP+JSON because partner banks can only make HTTPS JSON requests'
+  quote: 'Status: Rejected'
+- where: repos/ledgerd/Makefile
+  says: make test runs go test -race ./..., make lint runs golangci-lint
+- where: repos/ledgerd/cmd/ledgerd/main.go
+  says: the server listens on :9180
+  quote: ':9180'
+- where: repos/ledgerd/internal/api/transfers.go
+  says: POST /transfers answers 400 when the Idempotency-Key header is missing, else 201; a stored response for
+    the key is kept 24 hours
+  quote: StatusBadRequest
+- where: repos/ledgerd/internal/ledger/ledger.go
+  says: a Posting is an account and an int64 amount in minor units; Transfer builds the two postings and returns
+    ErrUnbalanced when they do not sum to zero
+- where: repos/ledgerd/internal/store/locks.go
+  says: LockAccounts sorts the account ids ascending and takes pg_advisory_xact_lock on each
+  quote: ids[i] < ids[j]
+- where: repos/ledgerd/go.mod
+  says: module example.com/ledgerd, Go 1.22
+empty_sections:
+- Strategic Priorities
+- Success Criteria
+status_sources:
+- path: repos/ledgerd/notes/sprint-14.md
+  quote: on call
+traps:
+- where: repos/ledgerd/docs/adr/0003-grpc-api.md
+  what: a rejected ADR; an entry that presents gRPC as used or planned, or Redis as used, takes a
+    rejected option for the plan
+  quote: 'Status: Rejected'

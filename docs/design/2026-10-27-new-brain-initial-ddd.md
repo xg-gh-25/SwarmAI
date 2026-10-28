@@ -792,3 +792,14 @@ watcher、reindex 增量、health hook、`code_change_feed`、`POST /reindex` �
 - **评审**：api-contract 一轮，两个 MED（`doc` 行没有定义；kind 有默认值，eval 的出处拒绝被记成 `shape`）和六个 LOW（`state` 被记成 `shape`；SKILL 对 JSON 报错的描述和实际报告不符；丢了"none 也算答案"等含义；没有 repo 的 brain 没被告知能引用什么；契约措辞和代码有四处不符；CLI 写失败直接抛栈），加一个改动前就有的 LOW（非文字 `type` 崩溃），一次修完。
 - mutation：第一轮 10 处、修复 7 处，全部抓到。
 
+**r12 第三层实施**：
+- **生成器** `scripts/eval_fixture_brains.py`（由 `eval_fixture_surveys.py` 扩展改名）：对 `templates/eval/fixtures/answer-keys/` 下每份标准答案，生成夹具 brain 的 `entry-contract.json`（`apply.entry_contract(repo_names=…)`）、有 repo 时的 `survey.json`，以及整条 case（prompt、rubric、`bootstrap_check`），经 `golden_case_validator.validate_case` 盖 stamp 后写进 golden_set.yaml。写之前重新加载核对，结果不等于预期就不写；一个 case 块止于它最后一行缩进内容，后面的注释和下一个 case 不受影响。两份标准答案用同一个 case id、标准答案删了留下的夹具文件，都会报出来。
+- **三份标准答案**：`Tokensign`（case LIB）、`Ledgerd`（case ADR）照原 rubric 的事实整理；新的 `Oncall`（case KNOWLEDGE）是没有 repo 的 brain，材料是 `workspace/inbox/oncall/` 下的值班手册、事故复盘和一份周报，周报是流水账，手册末尾埋了一条给 AI 的指令。产品集 50 条，正好到上限。
+- **确定性检查** `eval_runner.bootstrap_counts`，取代原来的 `bootstrap_entries:<repo>` 字符串检查：
+  - 在临时工作区还在时运行，只对产品 case 运行（用户自己的 case 声明了它就直接判失败：它的材料是产品夹具）；检查自身崩溃记为 `error`。
+  - 逐条原始条目查内容，读字段时按"改一轮之后会是什么样"宽松地读：`kind` 拼错或缺失照样按 cognition 查空段；`sources` 是单个字符串也按列表查，列表里不是字符串的项直接判失败；`empty_sections` 按骨架的规范段名比较，验证器也要求标准答案用规范段名。`bootstrap-apply` 会以 `evidence` 拒绝、而内容检查没抓到的出处，也记为失败。
+  - 失败时不再调判官，`bootstrap_counts` 照样写进运行记录。
+- **评审**：correctness 一轮，3 个 MED（拼错的 `kind`、非列表的 `sources`、非规范段名都能绕过检查）和 5 个 LOW（`check_entry` 的 evidence 拒绝被丢掉；失败后仍调判官、检查崩溃会让整条 case 崩掉；生成器块边界、写后不核对；重复 id 和遗留文件；插入位置的测试是空的），一次修完。
+- mutation：第一轮 12 处、修复 11 处，全部抓到。
+- **没跑的**：`test_eval_fresh_install` 要把所有 probe 正反都跑一遍，这台机器上超时；这一层没改任何 probe，`DDD_BOOTSTRAP` 已单独跑过。
+

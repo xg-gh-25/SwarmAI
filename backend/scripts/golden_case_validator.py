@@ -330,7 +330,40 @@ def gate_offline(case: dict) -> tuple[bool, list[str]]:
     if rubric.strip() and not (_RUBRIC_PASS.search(rubric) and _RUBRIC_FAIL.search(rubric)):
         errs.append('offline: decision_rubric must say when it passes and when it fails '
                     '("PASS only if …; FAIL if …")')
+    errs += _bootstrap_check_errors(case.get("bootstrap_check"))
     return (not errs, errs)
+
+
+def _bootstrap_check_errors(check) -> list[str]:
+    """A New Brain case's ``bootstrap_check`` (eval_runner.bootstrap_counts): a brain,
+    exactly one kind of material (a repo folder or a list of documents, relative to the
+    fixture workspace, with no ``..``), skeleton section names and status files that are
+    part of the material. Fail-closed: a malformed check would judge nothing."""
+    if check is None:
+        return []
+    from core.ddd_skeleton import locate_section
+    if not isinstance(check, dict):
+        return ["offline: bootstrap_check must be a mapping"]
+    errs = []
+    if not str(check.get("brain") or "").strip():
+        errs.append("offline: bootstrap_check.brain is empty")
+    repo, docs = check.get("repo"), check.get("documents")
+    if bool(repo) == bool(docs):
+        errs.append("offline: bootstrap_check needs exactly one of repo / documents")
+    paths = ([repo] if isinstance(repo, str) else []) + (docs if isinstance(docs, list) else [])
+    for path in paths + list(check.get("status_sources") or []):
+        if not isinstance(path, str) or not path or path.startswith("/") or ".." in Path(path).parts:
+            errs.append(f"offline: bootstrap_check path {path!r} must be relative to the workspace")
+    for section in check.get("empty_sections") or []:
+        place = locate_section(str(section))
+        if place is None or place[1] != section:
+            errs.append(f"offline: bootstrap_check.empty_sections: {section!r} is not a skeleton "
+                        "section name as the skeleton spells it")
+    for path in check.get("status_sources") or []:
+        if isinstance(path, str) and not (path in (docs or [])
+                                          or (isinstance(repo, str) and path.startswith(repo + "/"))):
+            errs.append(f"offline: bootstrap_check status source {path!r} is not in the material")
+    return errs
 
 
 def privacy_scan(case: dict) -> tuple[bool, list[str]]:

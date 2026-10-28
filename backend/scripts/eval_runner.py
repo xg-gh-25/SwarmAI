@@ -1450,12 +1450,13 @@ _STEP_MAX_CHARS = 240
 _FINAL_TEXT_MAX = _JUDGE_TEXT_MAX  # the record keeps what the judge read
 # The per-case fields a run record keeps beyond status / notes: an offline case's
 # trajectory, expected steps, tool steps and final answer (the drill-down).
-_RECORD_DETAIL = ("observed_trajectory", "expected_check", "steps", "final_text")
+_RECORD_DETAIL = ("observed_trajectory", "expected_check", "steps", "final_text",
+                  "bootstrap_counts")
 # The two that carry text the agent read or wrote. A product case runs in the shipped
 # fixture workspace, so its text is shipped content; a user's own case runs in their
 # real workspace (MEMORY, USER, project docs) and the run record is a git-tracked file
 # in that workspace, so it keeps only tool names and the expected-step check.
-_RECORD_TEXT_DETAIL = ("steps", "final_text")
+_RECORD_TEXT_DETAIL = ("steps", "final_text", "bootstrap_counts")
 
 
 def _record_detail(r: dict, product: bool) -> dict:
@@ -1611,11 +1612,26 @@ def eval_trajectory_capture(case: dict) -> dict:
     from core.golden_set_store import fixture_workspace, is_product_case
     system = (case.get("scenario") or {}).get("system", "bare")
     workspace = fixture_workspace() if is_product_case(case) else contextlib.nullcontext()
+    counts = None
     try:
         with workspace as ws:
             actual, final_text, stdout = run_scenario_raw(
                 prompt, allowed_tools=allowed_tools, timeout=timeout, system=system,
                 workspace=ws)
+            # The deterministic New Brain check runs here, while the workspace the agent
+            # cited its file: sources from still exists, and whatever the trajectory or
+            # the judge say later.
+            if case.get("bootstrap_check"):
+                if not is_product_case(case):
+                    counts = {"entries": 0, "shape_refused": 0, "shape_reasons": [], "failures": [
+                        "bootstrap_check runs only on a product case: its material is the "
+                        "shipped fixture workspace"]}
+                else:
+                    try:
+                        counts = bootstrap_counts(case["bootstrap_check"], final_text or "", ws)
+                    except Exception as e:  # noqa: BLE001 — the check's own failure is not the agent's
+                        return {"status": "error", "observed_trajectory": [],
+                                "notes": f"bootstrap check crashed: {type(e).__name__}: {e}"}
     except ScenarioInfraError as e:
         return {"status": "error", "notes": f"scenario infra failure: {e}",
                 "observed_trajectory": []}
@@ -1648,7 +1664,9 @@ def eval_trajectory_capture(case: dict) -> dict:
     # rubric. This is NOT circular: it judges the actual produced output, not a
     # hypothetical "would a compliant agent…". Judge-infra failure → error (not
     # failed), so throttling can't lie the score (eval_llm_judge lesson).
-    if result.get("status") == "passed" and case.get("decision_rubric"):
+    # A New Brain case whose deterministic half already failed is decided: no judge call.
+    if (result.get("status") == "passed" and case.get("decision_rubric")
+            and not (counts and counts["failures"])):
         dj = _judge_decision_direction(case, final_text or "")
         # a judge was asked: its error is the judge's, never a spawn flake
         # (eval_scheduled alerts on judged cases that errored)
@@ -1676,6 +1694,14 @@ def eval_trajectory_capture(case: dict) -> dict:
         if failed:
             result["status"] = "failed"
             result["notes"] = f"check failed: {'; '.join(failed)}. {result.get('notes', '')}".strip()
+    # The New Brain check is decided first (the judge is not asked once it failed): its
+    # failure is `failed` whatever the trajectory says; its counts are always kept.
+    if counts is not None:
+        result["bootstrap_counts"] = counts
+        if counts["failures"]:
+            result["status"] = "failed"
+            result["notes"] = (f"bootstrap check failed: {'; '.join(counts['failures'][:5])}. "
+                               f"{result.get('notes', '')}").strip()
     return result
 
 
@@ -1712,11 +1738,7 @@ def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[
       restatement before the first (AGENT R20). Requires at least one tool call.
     - ``no_next_steps_block``: the answer carries no ```next-steps block
       (STEERING #7 / R18: none when there is no real next step).
-    - ``bootstrap_entries:<repo dir in the fixture workspace>``: the answer's JSON list
-      of a new brain's first entries passes bootstrap-apply's own rules (each section
-      admits its type, required fields are there, every source is a file of that repo)
-      and lies wholly within what the judge reads. Product cases only: the repo is read
-      from the shipped fixture workspace.
+    (A New Brain case's own check is ``bootstrap_check``, see ``bootstrap_counts``.)
     Unknown names fail closed, so a typo cannot silently pass.
     """
     out: list[str] = []
@@ -1736,8 +1758,6 @@ def _behavior_check_failures(checks: list, final_text: str, pre_tool_text: list[
         elif name == "no_next_steps_block":
             if "```next-steps" in final_text:
                 out.append("no_next_steps_block")
-        elif name.startswith("bootstrap_entries:"):
-            out.extend(_bootstrap_entries_failures(name.split(":", 1)[1], final_text))
         else:
             out.append(f"unknown check {name!r}")
     return out
@@ -1757,45 +1777,112 @@ def _answer_json(text: str) -> tuple[object, int]:
         return None, 0
 
 
-def _bootstrap_entries_failures(repo_rel: str, final_text: str) -> list[str]:
-    """``bootstrap_entries:<repo>``: every entry passes ``apply.check_entry`` with the
-    sources checked against the files of ``<repo>`` in the shipped fixture workspace.
-    Stricter than bootstrap-apply in two ways, because the case's only evidence is the
-    repo and its judge reads only the answer: a source must be a repo file (``user``,
-    ``url:`` and ``file:`` are refused, there is no person and no other file), and the
-    whole list must end within the part of the answer the judge reads
-    (``_JUDGE_TEXT_MAX``), so no entry escapes the judge."""
-    from datetime import date
+def _source_path(src: str) -> str:
+    """The file part of a repo source: ``<repo>:<path>#heading`` / ``<path>:12-14`` → path."""
     from core.brain_bootstrap import apply as ap
+    m = ap._ANCHOR_RE.match(src.strip())
+    return m.group("path") if m else src.strip()
+
+
+def bootstrap_counts(check: dict, final_text: str, workspace: Path | None) -> dict:
+    """The deterministic half of a New Brain offline case (design 2026-10-27 r12).
+
+    *check* is the case's ``bootstrap_check``: ``brain``, the material (``repo``: a repo
+    folder, or ``documents``: files, both relative to the workspace), ``empty_sections``
+    (nothing in the material supports them) and ``status_sources`` (status logs).
+    *workspace* is the temporary copy the agent ran in (its ``file:`` sources point
+    into it). Returns ``{entries, shape_refused, shape_reasons, failures}``.
+
+    Every raw entry's CONTENT is checked on its own, never through ``validate()``'s
+    order (which checks shape first and sources last, so a shape error would hide a
+    made-up source): each source must be the material (a file of the repo, or one of
+    the documents; ``user`` and ``url:`` are not, here: there is no person and no web);
+    no cognition entry may sit in an empty section, whatever its type; no source may be
+    a status log. These, a missing entry list and a list past the judge's window are
+    ``failures``. Shape refusals (what bootstrap-apply's fix-and-re-run settles) are only
+    counted."""
+    from core.brain_bootstrap import apply as ap
+    from core.ddd_skeleton import locate_section
     from utils.backend_bin import bundled_path
-    base = Path(bundled_path("templates", "eval", "fixtures", "workspace")).resolve()
-    root = (base / repo_rel).resolve()
-    if not root.is_dir() or root == base or base not in root.parents:
-        return [f"bootstrap_entries ({repo_rel!r} is not a repo of the fixture workspace)"]
+
+    out = {"entries": 0, "shape_refused": 0, "shape_reasons": [], "failures": []}
     entries, end = _answer_json(final_text)
     if isinstance(entries, dict):
         entries = entries.get("entries")
     if not isinstance(entries, list) or not entries:
-        return ["bootstrap_entries (no JSON list of entries in the answer)"]
+        out["failures"].append("no JSON list of entries in the answer")
+        return out
+    out["entries"] = len(entries)
     if end > _JUDGE_TEXT_MAX:
-        return [f"bootstrap_entries (the list ends at character {end}; the judge reads "
-                f"only the first {_JUDGE_TEXT_MAX})"]
-    evidence = ap.Evidence({root.name: root})
-    stamp = date.today().isoformat()
-    bad = []
-    for i, entry in enumerate(entries):
+        out["failures"].append(f"the list ends at character {end}; the judge reads only the "
+                               f"first {_JUDGE_TEXT_MAX}")
+    base = Path(bundled_path("templates", "eval", "fixtures", "workspace")).resolve()
+    repo = check.get("repo")
+    documents = set(check.get("documents") or [])
+    status = set(check.get("status_sources") or [])
+    empty = {p[1] for s in check.get("empty_sections") or [] if (p := locate_section(str(s)))}
+    evidence = ap.Evidence({Path(repo).name: base / repo} if repo else {})
+    ws = Path(workspace).resolve() if workspace else None
+
+    def material_of(src: str) -> tuple[str | None, str]:
+        """``(workspace-relative path, "")`` for a source in the material, else
+        ``(None, why)``."""
+        s = src.strip()
+        if s == "user" or s.startswith("url:"):
+            return None, "only the material is evidence here"
+        if s.startswith("file:"):
+            try:
+                rel = Path(s[5:]).expanduser().resolve().relative_to(ws).as_posix() if ws else None
+            except (ValueError, OSError, RuntimeError):
+                rel = None
+            if rel is None or rel not in documents:
+                return None, "not one of the documents given"
+            return rel, ""
+        if not repo:
+            return None, "this brain owns no repo"
         try:
-            srcs = entry.get("sources") if isinstance(entry, dict) else None
-            for src in srcs if isinstance(srcs, list) else []:
-                if isinstance(src, str) and (src.strip() == "user" or src.strip().startswith(("url:", "file:"))):
-                    raise ap.Rejected(f"source {src!r}: only a file of the repo is evidence here",
-                                      ap.EVIDENCE)
-            ap.check_entry(entry, evidence, stamp)
-        except ValueError as exc:  # Rejected is a ValueError
-            bad.append(f"#{i}: {exc}")
-    if bad:
-        return [f"bootstrap_entries ({len(bad)}/{len(entries)} refused: {'; '.join(bad[:3])})"]
-    return []
+            evidence.check(s)
+        except ap.Rejected as exc:
+            return None, str(exc)
+        path = _source_path(s.split(":", 1)[1] if s.split(":", 1)[0] == Path(repo).name else s)
+        return f"{repo}/{path}", ""
+
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            out["failures"].append(f"#{i}: not an entry object")
+            continue
+        before = len(out["failures"])
+        # Read the raw fields as leniently as a fix-and-re-run would end up reading them:
+        # a misspelt kind or a bare-string source is a shape problem, and must not hide
+        # what the entry claims or cites.
+        sources = entry.get("sources")
+        if isinstance(sources, str):
+            sources = [sources]
+        for src in sources if isinstance(sources, list) else []:
+            if not isinstance(src, str):
+                out["failures"].append(f"#{i}: a source that is not text: {src!r}")
+                continue
+            if not src.strip():
+                continue
+            rel, why = material_of(src)
+            if rel is None:
+                out["failures"].append(f"#{i}: source {src!r}: {why}")
+            elif rel in status:
+                out["failures"].append(f"#{i}: source {src!r} is a status log")
+        place = locate_section(str(entry.get("section") or ""))
+        is_gap = str(entry.get("kind") or "").strip().lower() == "gap"
+        if not is_gap and place and place[1] in empty:
+            out["failures"].append(f"#{i}: a cognition entry in {place[1]}, which nothing in "
+                                   "the material supports")
+        try:
+            ap.check_entry(entry, evidence, "2026-01-01")
+        except ap.Rejected as exc:
+            if exc.kind == ap.SHAPE:
+                out["shape_refused"] += 1
+                out["shape_reasons"].append(f"#{i}: {exc}")
+            elif len(out["failures"]) == before:   # bootstrap-apply refuses a source we let by
+                out["failures"].append(f"#{i}: {exc}")
+    return out
 
 
 # Judge-model resolution logging. A dedicated logger (this script has no
